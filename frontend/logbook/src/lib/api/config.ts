@@ -11,6 +11,7 @@
 */
 
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import type { ForwarderInfo } from '../utils/uploadStatus';
 
 export interface MailerInfo {
     /** SMTP is configured + enabled on the daemon; gates the email controls. */
@@ -39,4 +40,34 @@ export async function fetchMailer(signal?: AbortSignal): Promise<MailerOutcome> 
                 typeof mailer.default_recipient === 'string' ? mailer.default_recipient : '',
         },
     };
+}
+
+export type ForwardersOutcome =
+    | { kind: 'ok'; forwarders: ForwarderInfo[] }
+    | { kind: 'error'; message: string };
+
+/**
+ * Read the masked `forwarders` block from /v1/config — the set of configured
+ * forwarders (name/type/enabled) that drives the upload-status colour (the
+ * ENABLED ones are E) and the destination picker. The block is present only when
+ * ≥1 forwarder is configured; absent/garbled → empty list (no colour, no picker),
+ * never an error — browsing is unaffected.
+ */
+export async function fetchForwarders(signal?: AbortSignal): Promise<ForwardersOutcome> {
+    const fetched = await safeFetch('/v1/config', { signal });
+    if (!fetched.ok) {
+        return { kind: 'error', message: fetched.message };
+    }
+    if (!fetched.response.ok) {
+        return { kind: 'error', message: `HTTP ${fetched.response.status}` };
+    }
+    const body = await readJsonBody(fetched.response);
+    const raw = isPlainObject(body) && Array.isArray(body.forwarders) ? body.forwarders : [];
+    const forwarders: ForwarderInfo[] = [];
+    for (const f of raw) {
+        if (isPlainObject(f) && typeof f.name === 'string' && typeof f.type === 'string') {
+            forwarders.push({ name: f.name, type: f.type, enabled: f.enabled === true });
+        }
+    }
+    return { kind: 'ok', forwarders };
 }

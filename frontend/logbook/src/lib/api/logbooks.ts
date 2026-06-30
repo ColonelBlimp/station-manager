@@ -73,9 +73,18 @@ export async function fetchLogbooks(signal?: AbortSignal): Promise<LogbooksOutco
     return { kind: 'ok', logbooks: body as Logbook[] };
 }
 
-/** Total QSO count for a logbook (the "of N"). */
-export async function fetchLogbookCount(id: number, signal?: AbortSignal): Promise<CountOutcome> {
-    const fetched = await safeFetch(`/v1/logbook/${id}/count`, { signal });
+/** Total QSO count for a logbook (the "of N"). `missingFrom` (a forwarder name)
+ *  restricts the count to QSOs not yet uploaded to that destination, matching the
+ *  filtered page. */
+export async function fetchLogbookCount(
+    id: number,
+    missingFrom?: string,
+    signal?: AbortSignal
+): Promise<CountOutcome> {
+    const q = new URLSearchParams();
+    if (missingFrom) q.set('missing_from', missingFrom);
+    const qs = q.toString();
+    const fetched = await safeFetch(`/v1/logbook/${id}/count${qs ? `?${qs}` : ''}`, { signal });
     if (!fetched.ok) return { kind: 'error', message: transportMessage(fetched.kind) };
     if (!fetched.response.ok)
         return { kind: 'error', message: `Daemon error (${fetched.response.status}).` };
@@ -87,15 +96,18 @@ export async function fetchLogbookCount(id: number, signal?: AbortSignal): Promi
 }
 
 /** One cursor-paginated QSO page. `after` is the opaque cursor from a prior page's
- *  next_cursor; omit for the first page. */
+ *  next_cursor; omit for the first page. `missingFrom` (a forwarder name) restricts
+ *  the page to QSOs not yet uploaded to that destination (ADR 0039 backfill). */
 export async function fetchQsoPage(
     id: number,
     limit: number,
     after?: string,
+    missingFrom?: string,
     signal?: AbortSignal
 ): Promise<QsoPageOutcome> {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set('after', after);
+    if (missingFrom) q.set('missing_from', missingFrom);
     const fetched = await safeFetch(`/v1/logbook/${id}/qso?${q}`, { signal });
     if (!fetched.ok) return { kind: 'error', message: transportMessage(fetched.kind) };
     if (!fetched.response.ok)

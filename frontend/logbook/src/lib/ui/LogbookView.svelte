@@ -11,18 +11,19 @@
     import EditQsoModal from './EditQsoModal.svelte';
     import LogbookEmailControls from './LogbookEmailControls.svelte';
     import type { LogbookQso } from '../api/logbooks';
+    import { uploadState, uploadTooltip, uploadColorClass } from '../utils/uploadStatus';
 
     onMount(() => void logbookState.init());
 
-    // Callsign tint: red when the QSO hasn't been forwarded/uploaded ANYWHERE yet
-    // (a quick "still needs sending" cue, mirroring the v1 logbook), green once it
-    // has. Status fields are "Y" when done.
-    function handled(row: LogbookQso): boolean {
-        return (
-            row.sm_fwrd_by_email_status === 'Y' ||
-            row.qrzcom_qso_upload_status === 'Y' ||
-            row.clublog_qso_upload_status === 'Y'
-        );
+    // Tri-state callsign colour against the ENABLED forwarders E (ADR 0039):
+    // green = on all of E, amber = on some, red = on none, default = no enabled
+    // forwarders (the cue means nothing). The tooltip names which it's on/missing.
+    function callClass(row: LogbookQso): string {
+        return uploadColorClass(uploadState(row, logbookState.enabledForwarders));
+    }
+    function callTitle(row: LogbookQso): string | undefined {
+        const t = uploadTooltip(row, logbookState.enabledForwarders);
+        return t === '' ? undefined : t;
     }
 </script>
 
@@ -59,6 +60,37 @@
                 </select>
             </label>
 
+            <!-- Backfill destination (ADR 0039): pick a service to see the QSOs not
+                 yet uploaded to it and to target the Upload action. "All" = plain
+                 browse. "Show uploaded" reveals the whole logbook while keeping the
+                 destination as the upload target. -->
+            {#if logbookState.enabledForwarders.length > 0}
+                <label class="flex items-center gap-2 text-sm">
+                    <span class="text-gray-600">Uploads</span>
+                    <select
+                        class="rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                        value={logbookState.selectedDestination}
+                        onchange={(e) => logbookState.selectDestination(e.currentTarget.value)}
+                    >
+                        <option value="">All</option>
+                        {#each logbookState.enabledForwarders as f (f.name)}
+                            <option value={f.name}>Not on {f.name}</option>
+                        {/each}
+                    </select>
+                </label>
+                {#if logbookState.hasDestination}
+                    <label class="flex items-center gap-2 text-sm text-gray-600">
+                        <input
+                            type="checkbox"
+                            class="cursor-pointer"
+                            checked={logbookState.showUploaded}
+                            onchange={() => logbookState.toggleShowUploaded()}
+                        />
+                        Show uploaded
+                    </label>
+                {/if}
+            {/if}
+
             <!-- Selection toolbar: count + email-out + Clear. Email posts the selected
                  rows' UUIDs to /v1/session/email (LogbookEmailControls). The other bulk
                  actions (forward / export / upload-selected) are a follow-up. -->
@@ -67,6 +99,17 @@
                     <span class="font-medium text-indigo-700"
                         >{logbookState.selectedCount.toLocaleString()} selected</span
                     >
+                    {#if logbookState.hasDestination}
+                        <button
+                            type="button"
+                            class="cursor-pointer rounded-md border border-green-600 bg-green-50 px-2 py-1 font-medium text-green-800 hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={logbookState.uploading}
+                            onclick={() => logbookState.uploadSelected()}
+                            >{logbookState.uploading
+                                ? 'Uploading…'
+                                : `Upload ${logbookState.selectedCount} to ${logbookState.selectedDestination}`}</button
+                        >
+                    {/if}
                     <LogbookEmailControls />
                     <button
                         type="button"
@@ -76,6 +119,14 @@
                 </div>
             {/if}
         </div>
+
+        {#if logbookState.notice !== null}
+            <p
+                class="mb-3 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800"
+            >
+                {logbookState.notice}
+            </p>
+        {/if}
 
         {#if logbookState.error !== null}
             <p class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -133,13 +184,8 @@
                                 </td>
                                 <td class="">{formatQsoDate(row.qso_date)}</td>
                                 <td class="">{formatTime(row.time_on)}</td>
-                                <td
-                                    class="font-semibold {handled(row)
-                                        ? 'text-green-800'
-                                        : 'text-red-700'}"
-                                    title={handled(row)
-                                        ? undefined
-                                        : 'Not yet forwarded or uploaded'}>{row.call ?? ''}</td
+                                <td class="font-semibold {callClass(row)}" title={callTitle(row)}
+                                    >{row.call ?? ''}</td
                                 >
                                 <td class="">{row.band ?? ''}</td>
                                 <td class="">{formatFreq(row.freq)}</td>

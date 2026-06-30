@@ -20,7 +20,9 @@ import {
     type LogbookQso,
 } from '../api/logbooks';
 import { patchQso, type QsoPatch } from '../api/qso';
-import { fetchMailer } from '../api/config';
+import { fetchMailer, fetchForwarders } from '../api/config';
+import { enqueueUploads } from '../api/uploads';
+import type { ForwarderInfo } from '../utils/uploadStatus';
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
@@ -69,6 +71,21 @@ class LogbookState {
     mailerEnabled: boolean = $state(false);
     mailerDefaultRecipient: string = $state('');
 
+    // Configured forwarders (from /v1/config), for the upload-status colour and
+    // the backfill destination picker (ADR 0039). The ENABLED subset is E.
+    forwarders: ForwarderInfo[] = $state([]);
+    // The destination picker value: '' = All (no upload context), else a forwarder
+    // NAME. Driving both the "missing from X" filter and the upload target.
+    selectedDestination: string = $state('');
+    // When a destination is picked, hide already-uploaded rows (filter to gaps) by
+    // default; the operator can flip this to see the whole logbook while keeping the
+    // upload target. No effect when no destination is selected.
+    showUploaded: boolean = $state(false);
+    // True while a manual backfill upload is in flight (disables the button).
+    uploading: boolean = $state(false);
+    // Transient success notice after an upload (e.g. "Queued 12 to QRZ"), or null.
+    notice: string | null = $state(null);
+
     // The `after` cursor for each loaded page index (cursors[0] = null = first page).
     // Non-reactive: pure navigation bookkeeping, never rendered.
     #cursors: (string | null)[] = [null];
@@ -93,6 +110,26 @@ class LogbookState {
     }
     get selectedLogbook(): Logbook | undefined {
         return this.logbooks.find((l) => l.id === this.selectedId);
+    }
+
+    /** Enabled forwarders (E) — drives the upload-status colour + the picker. */
+    get enabledForwarders(): ForwarderInfo[] {
+        return this.forwarders.filter((f) => f.enabled);
+    }
+
+    /** The `missing_from` query value for the current view: the selected
+     *  destination when one is picked and "show uploaded" is off, else undefined
+     *  (no filter — All, or showing the whole logbook). */
+    get missingFromParam(): string | undefined {
+        return this.selectedDestination !== '' && !this.showUploaded
+            ? this.selectedDestination
+            : undefined;
+    }
+
+    /** True when a destination is picked, so the Upload action + show-uploaded
+     *  toggle are relevant. */
+    get hasDestination(): boolean {
+        return this.selectedDestination !== '';
     }
 
     /** How many rows are selected (across all pages). */
@@ -213,6 +250,7 @@ class LogbookState {
         this.loading = true;
         this.error = null;
         void this.loadMailer();
+        void this.loadForwarders();
         const out = await fetchLogbooks();
         if (out.kind !== 'ok') {
             this.error = out.message;
@@ -235,6 +273,66 @@ class LogbookState {
             this.mailerEnabled = out.mailer.enabled;
             this.mailerDefaultRecipient = out.mailer.defaultRecipient;
         }
+    }
+
+    /** Read the configured forwarders from /v1/config for the upload-status colour
+     *  + destination picker. Best-effort: a failure leaves the list empty (no
+     *  colour, no picker), never an error — browsing is unaffected. */
+    async loadForwarders(): Promise<void> {
+        const out = await fetchForwarders();
+        if (out.kind === 'ok') this.forwarders = out.forwarders;
+    }
+
+    /** Pick a backfill destination (forwarder name, or '' for All). Resets the
+     *  "show uploaded" toggle to the gap-filtered default and reloads. */
+    async selectDestination(name: string): Promise<void> {
+        if (name === this.selectedDestination) return;
+        this.selectedDestination = name;
+        this.showUploaded = false;
+        this.notice = null;
+        this.#resetPaging();
+        await Promise.all([this.#loadCount(), this.#loadPage(0)]);
+    }
+
+    /** Toggle showing already-uploaded rows (only meaningful with a destination
+     *  picked); reloads with/without the missing_from filter. */
+    async toggleShowUploaded(): Promise<void> {
+        this.showUploaded = !this.showUploaded;
+        this.#resetPaging();
+        await Promise.all([this.#loadCount(), this.#loadPage(0)]);
+    }
+
+    /**
+     * Queue the selected QSOs for upload to the picked destination (ADR 0039
+     * backfill). On success: a notice with the daemon's summary, the selection is
+     * cleared, and the page+count reload (already-uploaded rows the daemon skipped,
+     * and the just-queued ones, stay visible until the worker stamps them, so the
+     * gap list shrinks as uploads complete). A no-destination/empty-selection call
+     * is a no-op. force is false — never silently re-send.
+     */
+    async uploadSelected(): Promise<void> {
+        if (this.selectedDestination === '' || this.selectedUuids.length === 0) return;
+        const dest = this.selectedDestination;
+        const uuids = this.selectedUuids;
+        this.uploading = true;
+        this.error = null;
+        this.notice = null;
+        const out = await enqueueUploads(dest, uuids, false);
+        this.uploading = false;
+        if (out.kind !== 'ok') {
+            this.error = out.message;
+            return;
+        }
+        const r = out.result;
+        const bits = [`Queued ${r.enqueued} to ${dest}`];
+        if (r.skipped_uploaded > 0) bits.push(`${r.skipped_uploaded} already uploaded`);
+        const skippedDeleted = r.skipped_deleted?.length ?? 0;
+        if (skippedDeleted > 0) bits.push(`${skippedDeleted} deleted (skipped)`);
+        const notFound = r.not_found?.length ?? 0;
+        if (notFound > 0) bits.push(`${notFound} not found`);
+        this.notice = bits.join(' · ') + '.';
+        this.clearSelection();
+        await Promise.all([this.#loadCount(), this.#loadPage(this.pageIndex)]);
     }
 
     /** Switch logbooks: reset paging, refresh count + first page. */
@@ -272,7 +370,7 @@ class LogbookState {
 
     async #loadCount(): Promise<void> {
         if (this.selectedId === null) return;
-        const out = await fetchLogbookCount(this.selectedId);
+        const out = await fetchLogbookCount(this.selectedId, this.missingFromParam);
         if (out.kind === 'ok') this.count = out.count;
         // A count failure is non-fatal — the table still works; just no "of N".
     }
@@ -282,7 +380,12 @@ class LogbookState {
         this.loading = true;
         this.error = null;
         const after = this.#cursors[index] ?? undefined;
-        const out = await fetchQsoPage(this.selectedId, this.pageSize, after ?? undefined);
+        const out = await fetchQsoPage(
+            this.selectedId,
+            this.pageSize,
+            after ?? undefined,
+            this.missingFromParam
+        );
         if (out.kind === 'ok') {
             this.rows = out.items;
             this.pageIndex = index;
