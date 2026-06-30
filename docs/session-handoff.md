@@ -169,15 +169,6 @@ Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the 
 - **REAL FIX (added after operator pushback — the SPA guard/label didn't address it).** The operator confirmed the SPA *displayed* the right freq, so the bug wasn't a stale SPA mirror — it was the **logged** freq: a **start-time snapshot** (`operating_freq_mhz` → `s.dialFreqMHz`) used verbatim by `BuildQso`, and **for Call CQ captured ONCE and reused for the whole pile-up** (`caller_sequencer.go:59`). So a session started before the IC-7300's freq poll landed logged the placeholder for every QSO. Fix: the daemon now logs the **rig's live dial from the bridge at completion** — new `bridge.Service.CurrentDialMHz()` (rolling `lastVfoA/lastVfoB/lastSelectedVfo/dialKnown` snapshot, fed by `captureDialFreq` in the read loop next to `captureTuneSnapshot`, mu-guarded, cleared in `clearTuneOnDisconnect`); the `cmd/smd` e4 sink prefers it over `c.DialFreqMHz`, SPA value as fallback. Same injection pattern as `CurrentPowerW` → `internal/ft8` stays bridge-import-clean (boundary test green). Tests: `TestCurrentDialMHz`, `TestClearTuneOnDisconnect_ForgetsDial`. Verified: bridge `-race`, ft8/api/bridge suites, CGO-off build, vet, gofmt. SPA freq label + freqKnown guard KEPT (operator: keep the guard).
 - **Possible follow-up (not done):** why the IC-7300 freq poll can lag for many slots at session start — worth a look in the bridge CI-V poll, but the bridge-sourced-at-completion freq + the guard make it safe regardless.
 
-### Session 180 (2026-06-17) — **FT8 "work a caller": work stations calling YOU, picked from the pile-up (ADR 0033 amendment).** ALL GREEN: full `go test ./...`; SPA check/lint/format + 824 vitest. (Gates were briefly blocked by a classifier outage mid-session; re-run clean after it cleared.)
-- **The gap:** you could answer a CQ or Call-CQ-and-auto-work-the-first-answerer, but a station *calling you directly* (`7Q5MLV PA3KUS JO21`) — e.g. tail-enders after you answered someone — was not actionable. Now it is: pick it from the Band-Activity pile-up and work it. Chosen scope = the focused "work-a-caller" increment (the full Call-CQ `operator_pick` stack still pending; this is its manual, no-CQ sibling + foundation).
-- **Daemon (`internal/ft8`, narrow scope intact):** new mode **`seqWorking`** + **`Sequencer.StartWorkCaller`** + **`onSlotWorking`** (new file `work_sequencer.go`) — reuses `CallerExchange` (we report first → R-report → RR73 → log), but with **no CQ phase** and an **idle terminal** (on RR73 logs + goes idle; on max-repeats abandons — unlike Call-CQ which loops to CQ). `fireOpening` gained a `seqWorking` case (opening report can fire same-slot). `statusLocked` gained a `seqWorking` branch (role `caller`, cap on the pre-RR73 rung). The report we send = our SNR of the picked decode (SPA passes `their_snr`).
-- **Daemon gate + API:** `Service.StartWorkCaller` (arm/identity/`TxReady` gate, mirrors `StartQso`); **`POST /v1/ft8/qso/work`** `{their_call, their_grid, their_snr, slot_utc, offset_hz, operating_freq_mhz}` → 202; abandon via the shared `qso/abandon`.
-- **SPA:** `ft8Message.ts` `parseDirectedToMe(text, myCall)` (matches ONLY the grid-bearing opening, not mid-exchange `R-12`/`RR73`/`73`); `ft8qso.ts` `startFt8WorkCaller`; `Ft8Panel.svelte` tints directed-at-you decodes **amber** (live, even mid-contact) and makes them **clickable when armed + idle** → `workCaller` (live-but-not-clickable-until-idle, the operator's pick). Directed-at-you calls also get the flag/worked-before enrichment.
-- Tests: Go `TestWorkCaller_*` (happy path / max-repeats→idle / start errors / unencodable caller / abandon), `TestStartWorkCaller_Gating`, `TestHandleFt8QsoWork`; SPA `parseDirectedToMe` describe (10 cases). Docs: ADR 0033 amendment, `docs/ft8.md`, `api-endpoints.md`.
-- **`RR73` Maidenhead collision fix (caught by the SPA test):** `RR73` satisfies the grid regex `^[A-R]{2}[0-9]{2}$` (R,R ∈ A–R; 7,3 ∈ 0–9), so `parseDirectedToMe` first read `<me> <them> RR73` (a roger, mid-QSO) as a fresh caller. Excluded `RR73` explicitly, mirroring the daemon parser (`sequence.go` checks RRR/RR73/73 before `isGrid4`). RRR/73/R-report don't match the regex, so RR73 is the only clash.
-- **On-air validated 2026-06-17** (operator worked 9A4ZM via the pile-up). One display wrinkle found + fixed: a work-a-caller session reused the **Call-CQ ladder**, showing a spurious `tx CQ …` row that never happened + an unfilled `<GRID>` opening. Fix: `seqWorking` now publishes a distinct **`role: "worker"`** + `QsoStatus.TheirGrid` (carried for all roles); the SPA renders a dedicated **no-CQ work ladder** (opening = their call to us, real grid) and fills `<GRID>` from `qso.their_grid` on the caller ladder too. Daemon role const + the `their_grid` field; SPA `Ft8MsgPanel` `workLadder`/`workStep` routed by role. All green: SPA check/lint/format + 824 vitest; Go ft8/api. **Committed** (the e2e feature); this ladder fix is uncommitted pending the operator's next commit.
-
 ## Next steps (priority order)
 
 > **⚠️ CURRENT NEXT STEPS (as of session 195, 2026-06-30) — the items deeper below are
@@ -225,8 +216,8 @@ Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the 
 >    *you*) and **generalize to a spot-submitter registry only when a 2nd destination (DX
 >    cluster) lands**.
 >
-> *(Maintenance: no roll-off needed — live list is 180–193 = 14 entries, under the ~15
-> threshold.)*
+> *(Maintenance: rolled Session 180 → archive 2026-06-30 when adding 195; live list is now
+> 181–195 = 15 entries, at the ~15 threshold.)*
 >
 > The FT8-TX items further below are STALE — TX (a)–(e) + answer-a-CQ + caller-side +
 > work-a-caller + pile-up stacking all shipped; "auto-sequence" is OUT OF SCOPE /
@@ -489,4 +480,5 @@ guide — use this, not an inferred version):
 - Update this file at the end of every session.
 - **Roll-off:** when the live `### Session N` list passes ~15 entries, move the
   oldest block into `session-handoff-archive.md` (newest-first, verbatim). Last
-  roll-off: 2026-06-24 (Sessions 172–175 → archive; live kept 176–190).
+  roll-off: 2026-06-30 (Session 180 → archive; live kept 181–195). Prior:
+  2026-06-24 (Sessions 172–175 → archive; live kept 176–190).
