@@ -578,13 +578,12 @@ func DefaultConfig(dataDir string) Config {
 	// explicit operator false doesn't get silently rewritten on every
 	// load — same rationale as the Logging.* booleans above.
 	cfg.Smtp.StartTLS = true
-	// No default forwarder entries per ADR 0022: "defined in
-	// config.json" carries operator intent ("I want this destination"),
-	// so the daemon must not pre-populate the slice. Operators add
-	// destinations they actually want, either by hand or via a future
-	// setup affordance. The pre-ADR-0022 disabled-QRZ template lived
-	// here as a UX convenience but produced the 3B8IDX bug class
-	// (rows enqueued for destinations the operator never chose to use).
+	// Base default is empty; the non-sparse seed happens in applyDefaults
+	// (ADR 0039), which ADDS a disabled entry per registered forwarder type
+	// the operator hasn't configured. Seeding here in the base wouldn't
+	// survive the operator-file overlay (a JSON array replaces, not merges),
+	// so it has to be an add-missing pass after load. `enabled` now gates
+	// enqueue, so a disabled seed entry queues nothing (no 3B8IDX bug class).
 	cfg.Forwarders = nil
 	// Hamnut country provider — disabled by default, prepopulated
 	// with the canonical public endpoint. Operator flips enabled=true
@@ -954,6 +953,24 @@ func applyDefaults(cfg *Config, baseDir string) {
 		cfg.DefaultRigID = defaultRigID
 	}
 
+	// Non-sparse seeding (ADR 0039): ensure every registered forwarder TYPE has
+	// a config entry. For each registered default the operator hasn't already
+	// configured (matched by type — one instance per type, per the
+	// ham-services-singleton model), append a disabled seed. The loop below
+	// then fills its tick/batch/endpoint defaults. This makes the config
+	// non-sparse so the operator toggles `enabled` + supplies credentials
+	// rather than hand-adding entries. With an empty registry (config unit
+	// tests that don't import the forwarder packages) this is a no-op.
+	haveType := map[string]bool{}
+	for _, fc := range cfg.Forwarders {
+		haveType[fc.Type] = true
+	}
+	for _, seed := range forwarding.DefaultForwarderConfigs() {
+		if !haveType[seed.Type] {
+			cfg.Forwarders = append(cfg.Forwarders, seed)
+		}
+	}
+
 	// Forwarder defaults — see docs/v2-design/forwarding.md §4.
 	// Zero-valued tunables pick up the operator-environment defaults; a
 	// nil Retry stays nil so the forwarder package supplies its own
@@ -965,6 +982,15 @@ func applyDefaults(cfg *Config, baseDir string) {
 		}
 		if fc.BatchSize == 0 {
 			fc.BatchSize = defaultForwarderBatchSize
+		}
+		// Seed the per-type default endpoints when the operator set none, so the
+		// URLs are visible + overridable in config.json (ADR 0039). A
+		// partially-set map is left as-is — the forwarder constructor falls back
+		// to its package const for any missing key.
+		if len(fc.Endpoints) == 0 {
+			if eps, ok := forwarding.DefaultEndpointsFor(fc.Type); ok {
+				fc.Endpoints = eps
+			}
 		}
 		if len(fc.ActionFilter) == 0 {
 			// Default an omitted filter to the forwarder's SUPPORTED action

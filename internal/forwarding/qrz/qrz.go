@@ -99,6 +99,13 @@ var DefaultRetry = types.RetryConfig{
 func init() {
 	forwarding.Register(Type, New)
 	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
+	// One API URL serves all actions; seed it under each so the config is
+	// config-driven + overridable (ADR 0039). New resolves the URL from config.
+	forwarding.RegisterDefaultEndpoints(Type, map[string]string{
+		action.Insert.String(): DefaultEndpoint,
+		action.Update.String(): DefaultEndpoint,
+		action.Delete.String(): DefaultEndpoint,
+	})
 	// QRZ's Logbook API supports the full insert/update/delete lifecycle. The
 	// descriptor drives the config SPA's add-forwarder form: one API-key field.
 	forwarding.RegisterForwarderType(Type, "QRZ Logbook",
@@ -143,7 +150,12 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 		return nil, errors.New(op).WithMsg("credentials.api_key is required")
 	}
 
-	return newWithEndpoint(creds.APIKey, DefaultEndpoint, &http.Client{
+	// QRZ uses one endpoint for every action; take the first the operator set
+	// (or the package default). Config-driven so the URL can change without a
+	// recompile (ADR 0039).
+	endpoint := forwarding.ResolveEndpoint(fc.Endpoints, DefaultEndpoint,
+		action.Insert.String(), action.Update.String(), action.Delete.String())
+	return newWithEndpoint(creds.APIKey, endpoint, &http.Client{
 		Timeout: DefaultHTTPTimeout,
 	}), nil
 }

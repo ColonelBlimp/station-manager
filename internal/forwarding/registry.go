@@ -17,11 +17,12 @@ import (
 type Constructor func(types.ForwarderConfig) (Forwarder, error)
 
 var (
-	registryMu       sync.Mutex
-	registry         = map[string]Constructor{}
-	defaultRetryMap  = map[string]types.RetryConfig{}
-	supportedActions = map[string][]Action{}
-	descriptors      = map[string]TypeDescriptor{}
+	registryMu          sync.Mutex
+	registry            = map[string]Constructor{}
+	defaultRetryMap     = map[string]types.RetryConfig{}
+	supportedActions    = map[string][]Action{}
+	descriptors         = map[string]TypeDescriptor{}
+	defaultEndpointsMap = map[string]map[string]string{}
 )
 
 // Register adds a forwarder constructor under the given type name.
@@ -180,6 +181,93 @@ func SupportedActionsFor(typeName string) ([]Action, bool) {
 		return nil, false
 	}
 	return append([]Action(nil), a...), true
+}
+
+// RegisterDefaultEndpoints records a forwarder type's default upstream URLs,
+// keyed by the action they serve ("insert"/"update"/"delete"). The daemon seeds
+// these into a forwarder's config (config.applyDefaults) so the endpoints are
+// config-driven + overridable without a recompile (ADR 0039), while the package
+// const stays the canonical default. From the forwarder package's init().
+//
+// Panics on the usual programmer errors (empty type/map, empty key or value,
+// duplicate registration) — all binary bugs.
+func RegisterDefaultEndpoints(typeName string, endpoints map[string]string) {
+	if typeName == "" {
+		panic("forwarding.RegisterDefaultEndpoints: empty type name")
+	}
+	if len(endpoints) == 0 {
+		panic("forwarding.RegisterDefaultEndpoints: empty endpoint map for " + typeName)
+	}
+	for k, v := range endpoints {
+		if k == "" || v == "" {
+			panic("forwarding.RegisterDefaultEndpoints: empty key/value for " + typeName)
+		}
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, exists := defaultEndpointsMap[typeName]; exists {
+		panic("forwarding.RegisterDefaultEndpoints: type already registered: " + typeName)
+	}
+	cp := make(map[string]string, len(endpoints))
+	for k, v := range endpoints {
+		cp[k] = v
+	}
+	defaultEndpointsMap[typeName] = cp
+}
+
+// DefaultEndpointsFor returns a copy of the registered default endpoint map for
+// typeName, or (nil, false) if none was registered.
+func DefaultEndpointsFor(typeName string) (map[string]string, bool) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	m, ok := defaultEndpointsMap[typeName]
+	if !ok {
+		return nil, false
+	}
+	cp := make(map[string]string, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	return cp, true
+}
+
+// ResolveEndpoint returns the first non-empty endpoint among keys in m, falling
+// back to def. Forwarder constructors use it to read a config-supplied URL
+// (keyed by action) with the package default const as the fallback, so an
+// old/sparse config — or any key the operator left unset — never breaks (ADR 0039).
+func ResolveEndpoint(m map[string]string, def string, keys ...string) string {
+	for _, k := range keys {
+		if v := m[k]; v != "" {
+			return v
+		}
+	}
+	return def
+}
+
+// DefaultForwarderConfigs returns one disabled seed entry per registered
+// forwarder TYPE (those with an editor descriptor — RegisterForwarderType'd),
+// sorted by type. It is the non-sparse default set ADR 0039 calls for: the
+// daemon seeds these into config so the operator toggles `enabled` + supplies
+// credentials rather than hand-adding an entry. Name defaults to the type
+// (single instance per type, per the ham-services-singleton model). Retry/tick/
+// batch are left zero so config.applyDefaults fills them; Endpoints carry the
+// registered defaults so they're visible + overridable.
+func DefaultForwarderConfigs() []types.ForwarderConfig {
+	descs := ForwarderTypes() // sorted, deep-copied
+	out := make([]types.ForwarderConfig, 0, len(descs))
+	for _, d := range descs {
+		fc := types.ForwarderConfig{
+			Name:         d.Type,
+			Type:         d.Type,
+			Enabled:      false,
+			ActionFilter: append([]string(nil), d.SupportedActions...),
+		}
+		if eps, ok := DefaultEndpointsFor(d.Type); ok {
+			fc.Endpoints = eps
+		}
+		out = append(out, fc)
+	}
+	return out
 }
 
 // CredentialField describes one credential input a forwarder type needs, so the

@@ -133,6 +133,13 @@ var DefaultRetry = types.RetryConfig{
 func init() {
 	forwarding.Register(Type, New)
 	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
+	// Per-action endpoints: insert → realtime, delete → delete. Seeded into
+	// config so they're config-driven + overridable without a recompile (ADR
+	// 0039); New resolves each from config with these as fallbacks.
+	forwarding.RegisterDefaultEndpoints(Type, map[string]string{
+		action.Insert.String(): DefaultRealtimeEndpoint,
+		action.Delete.String(): DefaultDeleteEndpoint,
+	})
 	// ClubLog real-time supports insert + delete only — it cannot edit a
 	// logged QSO's fields (see Submit). Registering the supported set means
 	// an omitted action_filter defaults to insert/delete (not all three),
@@ -200,7 +207,11 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 		return nil, errors.New(op).WithMsg("credentials.api is required")
 	}
 
-	return newWithEndpoints(creds, DefaultRealtimeEndpoint, DefaultDeleteEndpoint, &http.Client{
+	// Config-driven per-action endpoints, with the package consts as fallbacks
+	// (ADR 0039).
+	realtime := forwarding.ResolveEndpoint(fc.Endpoints, DefaultRealtimeEndpoint, action.Insert.String())
+	deleteURL := forwarding.ResolveEndpoint(fc.Endpoints, DefaultDeleteEndpoint, action.Delete.String())
+	return newWithEndpoints(creds, realtime, deleteURL, &http.Client{
 		Timeout: DefaultHTTPTimeout,
 	}), nil
 }

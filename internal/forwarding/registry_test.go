@@ -339,3 +339,92 @@ func TestRegisterForwarderType_Panics(t *testing.T) {
 		})
 	}
 }
+
+// ---- ResolveEndpoint / RegisterDefaultEndpoints / DefaultForwarderConfigs (ADR 0039) ----
+
+func TestResolveEndpoint(t *testing.T) {
+	m := map[string]string{"insert": "https://up/realtime", "delete": "https://up/delete"}
+
+	// First non-empty key wins.
+	if got := ResolveEndpoint(m, "https://default", "update", "insert"); got != "https://up/realtime" {
+		t.Errorf("got %q, want the insert URL (first non-empty)", got)
+	}
+	// Falls back to def when no key is present/non-empty.
+	if got := ResolveEndpoint(m, "https://default", "update"); got != "https://default" {
+		t.Errorf("got %q, want the default fallback", got)
+	}
+	// Nil/empty map → default.
+	if got := ResolveEndpoint(nil, "https://default", "insert"); got != "https://default" {
+		t.Errorf("got %q, want default for nil map", got)
+	}
+}
+
+func TestRegisterDefaultEndpoints_And_Lookup(t *testing.T) {
+	RegisterDefaultEndpoints("endpointtest-ok", map[string]string{
+		"insert": "https://x/realtime",
+		"delete": "https://x/delete",
+	})
+	got, ok := DefaultEndpointsFor("endpointtest-ok")
+	if !ok {
+		t.Fatal("DefaultEndpointsFor returned ok=false after register")
+	}
+	if got["insert"] != "https://x/realtime" || got["delete"] != "https://x/delete" {
+		t.Fatalf("endpoints = %v, want the registered pair", got)
+	}
+	// Mutating the returned copy must not affect the registry.
+	got["insert"] = "tampered"
+	again, _ := DefaultEndpointsFor("endpointtest-ok")
+	if again["insert"] != "https://x/realtime" {
+		t.Error("DefaultEndpointsFor returned a non-copy; registry was mutated")
+	}
+}
+
+func TestDefaultEndpointsFor_UnknownType(t *testing.T) {
+	if _, ok := DefaultEndpointsFor("endpointtest-never"); ok {
+		t.Error("ok=true for an unregistered type")
+	}
+}
+
+func TestRegisterDefaultEndpoints_PanicsOnDuplicate(t *testing.T) {
+	RegisterDefaultEndpoints("endpointtest-dup", map[string]string{"insert": "u"})
+	defer func() {
+		if recover() == nil {
+			t.Fatal("duplicate RegisterDefaultEndpoints did not panic")
+		}
+	}()
+	RegisterDefaultEndpoints("endpointtest-dup", map[string]string{"insert": "u"})
+}
+
+func TestDefaultForwarderConfigs_SeedsRegisteredType(t *testing.T) {
+	RegisterForwarderType("seedtest", "Seed Test",
+		[]Action{action.Insert, action.Delete},
+		[]CredentialField{{Key: "api", Label: "API", Kind: "password"}})
+	RegisterDefaultEndpoints("seedtest", map[string]string{
+		"insert": "https://seed/realtime",
+		"delete": "https://seed/delete",
+	})
+
+	var seed *types.ForwarderConfig
+	for _, fc := range DefaultForwarderConfigs() {
+		if fc.Type == "seedtest" {
+			f := fc
+			seed = &f
+			break
+		}
+	}
+	if seed == nil {
+		t.Fatal("DefaultForwarderConfigs did not include the registered seedtest type")
+	}
+	if seed.Name != "seedtest" {
+		t.Errorf("Name = %q, want the type name", seed.Name)
+	}
+	if seed.Enabled {
+		t.Error("seed entry must be disabled by default")
+	}
+	if strings.Join(seed.ActionFilter, ",") != "insert,delete" {
+		t.Errorf("ActionFilter = %v, want [insert delete] (the supported set)", seed.ActionFilter)
+	}
+	if seed.Endpoints["insert"] != "https://seed/realtime" || seed.Endpoints["delete"] != "https://seed/delete" {
+		t.Errorf("Endpoints = %v, want the registered defaults", seed.Endpoints)
+	}
+}

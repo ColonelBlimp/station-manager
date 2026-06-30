@@ -443,3 +443,26 @@ func TestSubmit_UnknownAction_IsTerminal(t *testing.T) {
 		t.Fatalf("outcome = %q, want terminal on unknown action", res.Outcome)
 	}
 }
+
+func TestNew_UsesConfigEndpoint(t *testing.T) {
+	var rec captured
+	srv := newTestServer(t, http.StatusOK, "RESULT=OK&LOGID=99", &rec)
+
+	// Build via the production constructor with a config-supplied endpoint
+	// (ADR 0039) instead of the hardcoded DefaultEndpoint.
+	fwd, err := New(types.ForwarderConfig{
+		Name: "qrz", Type: Type, Credentials: validCreds(t),
+		Endpoints: map[string]string{action.Insert.String(): srv.URL},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	res := fwd.Submit(context.Background(), sampleQso(), action.Insert, "")
+	if res.Outcome != forwarding.OutcomeSuccess {
+		t.Fatalf("outcome = %q, want success (config endpoint should have been hit)", res.Outcome)
+	}
+	if rec.method != http.MethodPost {
+		t.Fatalf("test server saw method %q, want POST — config endpoint not used?", rec.method)
+	}
+}

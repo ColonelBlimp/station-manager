@@ -21,15 +21,25 @@ import "encoding/json"
 //
 // Retry is optional; when nil, the forwarder package supplies its own
 // type-specific retry defaults (see §5 of the same doc).
+//
+// Endpoints carries the destination's upstream URLs, keyed by the action they
+// serve ("insert" / "update" / "delete") — so a forwarder with per-action URLs
+// (ClubLog: insert→realtime, delete→delete) and one with a single shared URL
+// (QRZ: all actions → the same API URL) use the same shape (ADR 0039). Config
+// is the runtime source so an endpoint can change without a recompile;
+// applyDefaults seeds the per-type defaults daemon-side, and a forwarder
+// constructor falls back to its package default const for any key the operator
+// left unset. The operator never needs to type a URL for the common case.
 type ForwarderConfig struct {
-	Name            string          `json:"name"`
-	Type            string          `json:"type"`
-	Enabled         bool            `json:"enabled"`
-	Credentials     json.RawMessage `json:"credentials,omitempty"`
-	ActionFilter    []string        `json:"action_filter,omitempty"`
-	TickIntervalSec int             `json:"tick_interval_sec,omitempty"`
-	BatchSize       int             `json:"batch_size,omitempty"`
-	Retry           *RetryConfig    `json:"retry,omitempty"`
+	Name            string            `json:"name"`
+	Type            string            `json:"type"`
+	Enabled         bool              `json:"enabled"`
+	Credentials     json.RawMessage   `json:"credentials,omitempty"`
+	ActionFilter    []string          `json:"action_filter,omitempty"`
+	Endpoints       map[string]string `json:"endpoints,omitempty"`
+	TickIntervalSec int               `json:"tick_interval_sec,omitempty"`
+	BatchSize       int               `json:"batch_size,omitempty"`
+	Retry           *RetryConfig      `json:"retry,omitempty"`
 }
 
 // RetryConfig overrides the forwarder package's built-in retry defaults.
