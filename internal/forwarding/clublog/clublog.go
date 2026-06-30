@@ -248,15 +248,15 @@ func (f *Forwarder) AdifPrefix() string { return AdifFieldPrefix }
 //	update → Terminal (Club Log real-time can't edit QSO fields)
 //	delete → delete.php, matched by dxcall + datetime + bandid
 //
-// priorUpstreamID is ignored: Club Log returns no upstream record id, so
-// a delete is identified by the QSO's own fields. If the 403 circuit
-// breaker has tripped, every action short-circuits to Terminal without
-// touching the network.
+// The interface's priorUpstreamID arg is ignored (hence `_`): Club Log returns
+// no upstream record id, so a delete is identified by the QSO's own fields. If
+// the 403 circuit breaker has tripped, every action short-circuits to Terminal
+// without touching the network.
 func (f *Forwarder) Submit(
 	ctx context.Context,
 	qso types.Qso,
 	act forwarding.Action,
-	priorUpstreamID string,
+	_ string,
 ) forwarding.Result {
 	const op errors.Op = "clublog.Submit"
 

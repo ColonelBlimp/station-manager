@@ -50,7 +50,7 @@ in-memory `config.Config` loaded from it — not the file as found on disk.
 | Operator identity (ADIF `MY_*`) | config.json | `Config.LoggingStation` (`types.LoggingStation`) | `MyLat`/`MyLon` daemon-derived from `MyGridsquare` on PUT |
 | Station prefs (amp, default power) | config.json | `Config.Station` (`types.StationConfig`) | |
 | Enrichment providers + TTLs | config.json | `Config.Lookup` (`types.EnrichmentConfig`) | |
-| Forwarder destinations | config.json | `Config.Forwarders` | Presence = intent (ADR 0022) |
+| Forwarder destinations | config.json | `Config.Forwarders` | `enabled` gates enqueue (ADR 0039); non-sparse (seeded per registered type); per-action `endpoints` |
 | SMTP / mailer | config.json | `Config.Smtp` (`types.SmtpConfig`) | No PUT path; file-only |
 | **Rig capability** (CAT cmds/states, serial defaults, **mode-mapping defaults**) | **rigdefs (immutable)** | `internal/cat/rigs/*.json` via `cat.rigDB` | Operator overrides layer on top in config.json |
 | Rig identity/selection (model, port, audio) | config.json | `Config.Rigs[]` (`types.RigConfig`) + `DefaultRigID` | Catalogue is authoritative; **no DB rows for rigs** |
@@ -84,7 +84,7 @@ secretly are) rig-specific.
 | `Server` | D (api) | start (+ per-op page/rate limits) | — | See ServerConfig |
 | `Datastore` | D (sqlite) | start | — | |
 | `Logging` | D (logger) | start | — | |
-| `Forwarders[]` | D (forwarder workers) | start | — | One worker per entry |
+| `Forwarders[]` | D (forwarder workers) | start | — | One worker per **enabled** entry; disabled queues nothing (ADR 0039) |
 | `LoggingStation` | both | per-op + served; PUT-writable | — | ADIF `MY_*`; daemon derives lat/lon |
 | `SetupComplete` | both | served; server-managed | — | Handler flips false→true on first callsign |
 | `DefaultLogbookID` | both | per-op | — | Selector; row metadata in DB |
@@ -189,12 +189,33 @@ const is a *ceiling*, not a default, and must stay non-overridable.
 | `defaultAmpMultiplier` | 1.0 | `station.amp_multiplier` |
 | `defaultLogbookID` / `defaultRigID` | 1 / 1 | `default_logbook_id` / `default_rig_id` |
 | `defaultForwarderTickIntervalSec` / `BatchSize` | 120 / 5 | `forwarders[].tick_interval_sec` / `batch_size` |
+| (per-type, registry-seeded) `endpoints` / `action_filter` / `retry` | each forwarder package registers its defaults (`RegisterDefaultEndpoints` / `RegisterSupportedActions` / `RegisterDefaultRetry`) | `forwarders[].endpoints` (action-keyed URLs) / `action_filter` / `retry` (ADR 0039) |
 | `defaultCountryTTLDays` / `StationTTLDays` / `RefreshMaxInFlight` | 365 / 90 / 4 | `lookup.country_ttl_days` / `station_ttl_days` / `refresh_max_in_flight` |
 | `defaultLookupHTTPTimeoutSec` | 10 | `lookup.hamnut.timeout_sec`, `lookup.chain[].timeout_sec` |
 | `defaultSmtpPort` / `defaultSmtpTimeoutSec` | 587 / 30 | `smtp.port` / `smtp.timeout_sec` |
 | (inline) protocol / socket | `tcp` / `127.0.0.1:8080` (tcp) or `$TMP/smd.sock` | `server.protocol` / `socket_path` |
 | (inline) datastore driver / path | `sqlite` / `${DataDir}/db/station-manager.db` | `datastore.driver` / `path` |
 | (inline) logging level / dir | `info` / `log` | `logging.level` / `rel_log_file_dir` |
+
+### (a″) forwarders are non-sparse + config-driven (ADR 0039)
+
+`applyDefaults` does an **add-missing-by-type** merge: for every registered
+forwarder type (`forwarding.DefaultForwarderConfigs()`) the operator hasn't
+configured, it appends a **disabled** seed entry (name = type, supported-action
+`action_filter`, default `endpoints`). So the config is non-sparse — the operator
+flips `enabled` + supplies credentials rather than hand-adding an entry. It runs
+*after* the operator-file overlay (a JSON array replaces, not merges, so a base
+seed wouldn't survive) and is a no-op when the registry is empty (config unit
+tests that don't import the forwarder packages). `cfg.Forwarders = nil` stays the
+base default.
+
+`endpoints` is an **action-keyed** map (`insert`/`update`/`delete` → URL) so
+single-URL (QRZ) and per-action (ClubLog) forwarders share one shape; the value
+lives in config (overridable without a recompile) with the package
+`DefaultEndpoint` const as the fallback for any key left unset. `enabled` now
+**gates enqueue** (disabled = don't queue; startup discards a disabled
+forwarder's pending/failed rows) — superseding ADR 0022's presence-gating; see
+ADR 0039.
 
 ### (a′) first-run seed defaults — set in `DefaultConfig`, NOT `applyDefaults`
 
