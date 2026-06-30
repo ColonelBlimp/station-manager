@@ -249,9 +249,9 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to update QSO")
 	}
 
-	// Enqueue one qso_upload row per CONFIGURED forwarder whose action_filter
-	// includes 'update' (ADR 0022: gated by config presence + action_filter,
-	// not the Enabled flag). Same tx as the QSO update per the one-fails-all-fail
+	// Enqueue one qso_upload row per ENABLED forwarder whose action_filter
+	// includes 'update' (ADR 0039: `enabled` gates enqueue). Same tx as the QSO
+	// update per the one-fails-all-fail
 	// invariant. If the destination's filter is ["insert"] (LoTW-style write-
 	// once), no row is inserted for it and the edit simply doesn't propagate
 	// there — which matches the operator's declared intent.

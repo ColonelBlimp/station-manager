@@ -318,13 +318,12 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to insert QSO")
 	}
 
-	// Insert upload-queue rows for each CONFIGURED forwarder whose
-	// action_filter includes 'insert' (ADR 0022: enqueue is gated by config
-	// presence + action_filter, NOT the Enabled flag — Enabled gates only
-	// worker lifecycle, so a disabled forwarder still accrues pending rows).
+	// Insert upload-queue rows for each ENABLED forwarder whose action_filter
+	// includes 'insert' (ADR 0039: `enabled` gates enqueue — a disabled
+	// forwarder gets no rows; the queued-but-not-uploaded state is gone).
 	// Inside the same transaction as the QSO insert per the one-fails-all-fail
-	// invariant (see docs/v2-design/forwarding.md §1). Zero forwarders
-	// configured → the loop is a no-op and only the QSO row is committed.
+	// invariant (see docs/v2-design/forwarding.md §1). No enabled forwarders →
+	// the loop is a no-op and only the QSO row is committed.
 	for _, fwd := range s.Config.Forwarders() {
 		if !shouldEnqueue(fwd, action.Insert) {
 			continue

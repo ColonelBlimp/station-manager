@@ -2216,6 +2216,45 @@ func (s *Service) ResetOrphanedUploadsWithContext(ctx context.Context) (int64, e
 	return n, nil
 }
 
+// DiscardQueuedUploadsForForwarderWithContext deletes the not-yet-uploaded rows
+// (pending / in_progress / failed) for a single forwarder, leaving 'uploaded'
+// rows untouched. Run at daemon startup for each DISABLED forwarder (ADR 0039):
+// `enabled` gates enqueue, so a disabled forwarder must not retain a queue — but
+// its 'uploaded' rows are kept because they carry upstream_id (the remote LOGID
+// needed to forward a later edit as an update if the forwarder is re-enabled).
+// The affected QSOs revert to "not uploaded to X" — the ADIF upload stamp, not
+// the queue row, is the source of truth — and are recoverable via the logbook
+// SPA's manual upload. Returns the number of rows discarded, for logging.
+func (s *Service) DiscardQueuedUploadsForForwarderWithContext(ctx context.Context, forwarderName string) (int64, error) {
+	const op errors.Op = "sqlite.Service.DiscardQueuedUploadsForForwarderWithContext"
+	if err := checkService(op, s); err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(forwarderName) == "" {
+		return 0, errors.New(op).WithMsg("forwarderName is empty")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	n, err := models.QsoUploads(
+		models.QsoUploadWhere.ForwarderName.EQ(forwarderName),
+		models.QsoUploadWhere.Status.IN([]string{
+			status.Pending.String(),
+			status.InProgress.String(),
+			status.Failed.String(),
+		}),
+	).DeleteAll(ctx, h)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("discard queued uploads for forwarder")
+	}
+	return n, nil
+}
+
 // FetchUploadsByQsoIDWithContext returns every qso_upload row for the
 // given QSO, ordered by (forwarder_name, action), so the output is
 // stable across calls. Drives the GET /v1/qso/:id/uploads endpoint.

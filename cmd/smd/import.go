@@ -226,10 +226,13 @@ func runImport(args []string) error {
 
 	// ---- --forward: forwarder names to QUEUE the imported QSOs for upload to.
 	// DEFAULT IS NONE — import uploads nothing unless the operator opts in here,
-	// so seeding a historical log never re-sends it (ADR 0022). Validate each
-	// name against the configured forwarders (enabled or not — a row enqueued
-	// for a disabled-but-present forwarder drains when it's re-enabled, ADR
-	// 0022). Matched case-insensitively; passed to SubmitImport as forwardTo.
+	// so seeding a historical log never re-sends it (operator-driven backfill,
+	// the rule ADR 0039 keeps from ADR 0022). Validate each name against the
+	// configured forwarders, matched case-insensitively; passed to SubmitImport
+	// as forwardTo. NB under ADR 0039 `enabled` gates enqueue and the daemon
+	// discards a disabled forwarder's queued rows at startup, so --forward to a
+	// *disabled* forwarder is futile — tightening this validation to require
+	// enabled is a pending follow-up.
 	var forwardTo []string
 	if s := strings.TrimSpace(forwardFwds); s != "" {
 		configured := map[string]bool{}

@@ -7,15 +7,16 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
-// shouldEnqueue's contract per ADR 0022:
-//   - presence in config.json (i.e. reaching this function at all) is
-//     what gates enqueue
-//   - Enabled is a worker-lifecycle signal, NOT an enqueue gate
-//   - action_filter is the only field shouldEnqueue itself filters on
+// shouldEnqueue's contract per ADR 0039 (supersedes ADR 0022's enqueue rule):
+//   - `enabled` GATES enqueue — a disabled forwarder enqueues nothing (no more
+//     "suspended" queued-but-not-uploaded state; ADR 0038's forever-retry
+//     removed its only use case)
+//   - action_filter further restricts which actions an enabled forwarder takes
 //
-// These tests defend the ADR-0022 semantics against any future
-// well-meaning "but disabled forwarders shouldn't enqueue, right?"
-// regression.
+// These tests defend the ADR-0039 semantics. The earlier 3B8IDX incident
+// (disabled forwarder enqueued nothing, surprising on re-enable) is no longer a
+// bug: under 0039 that's intended — re-uploading what was logged while disabled
+// is a deliberate logbook-SPA backfill, not an automatic drain.
 
 func TestShouldEnqueue_EnabledForwarderWithMatchingAction(t *testing.T) {
 	fc := types.ForwarderConfig{
@@ -27,18 +28,17 @@ func TestShouldEnqueue_EnabledForwarderWithMatchingAction(t *testing.T) {
 	}
 }
 
-func TestShouldEnqueue_DisabledForwarderStillEnqueues(t *testing.T) {
-	// The load-bearing case per ADR 0022 — disabled forwarders MUST
-	// still enqueue so rows accumulate for the worker to drain after
-	// re-enable + restart. Pre-ADR-0022 this returned false and was
-	// the root cause of the 3B8IDX dogfood incident.
+func TestShouldEnqueue_DisabledForwarderDoesNotEnqueue(t *testing.T) {
+	// The load-bearing case per ADR 0039 — a disabled forwarder enqueues
+	// nothing, even for actions its filter would otherwise accept. (Startup
+	// reconciliation additionally discards any queued rows it still holds.)
 	fc := types.ForwarderConfig{
 		Enabled:      false,
 		ActionFilter: []string{"insert", "update", "delete"},
 	}
 	for _, act := range []action.Action{action.Insert, action.Update, action.Delete} {
-		if !shouldEnqueue(fc, act) {
-			t.Errorf("disabled forwarder, action=%s: want true (rows accumulate), got false", act)
+		if shouldEnqueue(fc, act) {
+			t.Errorf("disabled forwarder, action=%s: want false (enabled gates enqueue), got true", act)
 		}
 	}
 }

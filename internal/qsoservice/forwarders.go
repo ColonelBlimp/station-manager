@@ -10,18 +10,20 @@ import (
 
 // shouldEnqueue reports whether a configured forwarder should receive a
 // qso_upload row for the given QSO lifecycle action. Used at each
-// ingest site (submit, update, delete) to filter out destinations whose
-// action_filter excludes this action.
+// ingest site (submit, update, delete).
 //
-// Per ADR 0022, the Enabled flag is purely a worker-lifecycle signal —
-// disabled forwarders accumulate `pending` rows that drain when the
-// operator re-enables them and restarts. Presence in config.json is
-// what gates enqueue; the caller's `s.Config.Forwarders()` loop
-// already only iterates defined forwarders.
+// Per ADR 0039, `enabled` GATES enqueue: a disabled forwarder gets no rows at
+// all (and the daemon discards any queued rows it still holds at startup). This
+// reverses ADR 0022's presence-gating — once ADR 0038 made connectivity outages
+// retry forever while enabled, the queued-but-not-uploaded "suspended" state
+// lost its only use case. QSOs not queued (logged while a forwarder was
+// disabled, or pre-dating it) are uploaded later via the logbook SPA's manual
+// backfill, never automatically.
 //
-// See docs/v2-design/forwarding.md §6, §8, and ADR 0022.
+// See docs/decisions/0039-forwarder-enabled-gates-enqueue-config-driven.md
+// (and ADR 0038, ADR 0022).
 func shouldEnqueue(fc types.ForwarderConfig, act action.Action) bool {
-	return slices.Contains(fc.ActionFilter, act.String())
+	return fc.Enabled && slices.Contains(fc.ActionFilter, act.String())
 }
 
 // forwarderNamed reports whether name is in the (case-insensitive) set names.

@@ -1525,6 +1525,61 @@ func TestResetOrphanedUploads_NoOrphans_ReturnsZero(t *testing.T) {
 	}
 }
 
+// TestDiscardQueuedUploadsForForwarder defends ADR 0039's startup
+// reconciliation: a disabled forwarder's not-yet-uploaded rows (pending /
+// in_progress / failed) are deleted, its 'uploaded' rows are KEPT (upstream_id
+// provenance), and other forwarders are untouched.
+func TestDiscardQueuedUploadsForForwarder(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	ctx := context.Background()
+
+	// qrz pending — should be discarded.
+	qPending, _ := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	enqueueUpload(t, svc, qPending, "qrz", "qrz", action.Insert)
+
+	// qrz failed — should be discarded.
+	qFailed, _ := svc.InsertQso(validTestQso(lbID, "EA1B", "10m", "SSB", "20250508", "0930"))
+	enqueueUpload(t, svc, qFailed, "qrz", "qrz", action.Insert)
+	upF, _ := svc.FetchUploadsByQsoIDWithContext(ctx, qFailed)
+	if err := svc.MarkUploadFailedWithContext(ctx, upF[0].ID, "bad data"); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+
+	// qrz uploaded — MUST survive (carries upstream_id).
+	qUploaded, _ := svc.InsertQso(validTestQso(lbID, "G3XYZ", "20m", "SSB", "20250508", "0900"))
+	enqueueUpload(t, svc, qUploaded, "qrz", "qrz", action.Insert)
+	upU, _ := svc.FetchUploadsByQsoIDWithContext(ctx, qUploaded)
+	if err := svc.MarkUploadSuccessWithContext(ctx, upU[0].ID, "logid-1"); err != nil {
+		t.Fatalf("mark uploaded: %v", err)
+	}
+
+	// clublog pending — different forwarder, MUST be untouched.
+	qOther, _ := svc.InsertQso(validTestQso(lbID, "F5ABC", "15m", "SSB", "20250508", "0915"))
+	enqueueUpload(t, svc, qOther, "clublog", "clublog", action.Insert)
+
+	discarded, err := svc.DiscardQueuedUploadsForForwarderWithContext(ctx, "qrz")
+	if err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if discarded != 2 {
+		t.Fatalf("discarded = %d, want 2 (qrz pending + failed)", discarded)
+	}
+
+	if rows, _ := svc.FetchUploadsByQsoIDWithContext(ctx, qPending); len(rows) != 0 {
+		t.Errorf("qrz pending row not discarded: %d remain", len(rows))
+	}
+	if rows, _ := svc.FetchUploadsByQsoIDWithContext(ctx, qFailed); len(rows) != 0 {
+		t.Errorf("qrz failed row not discarded: %d remain", len(rows))
+	}
+	if rows, _ := svc.FetchUploadsByQsoIDWithContext(ctx, qUploaded); len(rows) != 1 || rows[0].Status != "uploaded" {
+		t.Errorf("qrz uploaded row should survive, got %+v", rows)
+	}
+	if rows, _ := svc.FetchUploadsByQsoIDWithContext(ctx, qOther); len(rows) != 1 {
+		t.Errorf("clublog row should be untouched, got %d rows", len(rows))
+	}
+}
+
 func TestFetchUploadsByQsoID_Empty(t *testing.T) {
 	svc := testService(t)
 	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})

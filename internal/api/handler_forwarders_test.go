@@ -64,15 +64,15 @@ func TestSubmit_EnqueuesRowsForEnabledForwarders(t *testing.T) {
 	}
 }
 
-func TestSubmit_DisabledForwarder_StillEnqueues(t *testing.T) {
-	// Per ADR 0022: presence in config.json gates enqueue; Enabled is
-	// purely a worker-lifecycle signal. A disabled forwarder MUST still
-	// receive a qso_upload row so the queue is drained on the worker's
-	// first tick after re-enable + restart. Pre-ADR-0022 this test
-	// pinned the opposite (and-was-the-bug) behaviour.
+func TestSubmit_DisabledForwarder_DoesNotEnqueue(t *testing.T) {
+	// Per ADR 0039 (supersedes ADR 0022's enqueue rule): `enabled` GATES
+	// enqueue. A disabled forwarder receives NO qso_upload row — the
+	// queued-but-not-uploaded "suspended" state is gone (ADR 0038's
+	// forever-retry removed its only use case). QSOs logged while a forwarder
+	// is disabled are uploaded later via the logbook SPA's manual backfill.
 	srv := serverWithForwarders(t,
 		forwarderCfg("qrz", "qrz", true, "insert"),
-		forwarderCfg("clublog", "clublog", false, "insert"), // enabled=false → STILL enqueues
+		forwarderCfg("clublog", "clublog", false, "insert"), // enabled=false → does NOT enqueue
 	)
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 
@@ -82,15 +82,11 @@ func TestSubmit_DisabledForwarder_StillEnqueues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch uploads: %v", err)
 	}
-	if len(uploads) != 2 {
-		t.Fatalf("len = %d, want 2 (both enabled and disabled forwarders enqueue per ADR 0022)", len(uploads))
+	if len(uploads) != 1 {
+		t.Fatalf("len = %d, want 1 (only the enabled qrz forwarder enqueues)", len(uploads))
 	}
-	seen := map[string]bool{}
-	for _, u := range uploads {
-		seen[u.ForwarderName] = true
-	}
-	if !seen["qrz"] || !seen["clublog"] {
-		t.Fatalf("forwarder_names = %v, want both qrz and clublog", seen)
+	if uploads[0].ForwarderName != "qrz" {
+		t.Fatalf("forwarder_name = %q, want qrz (clublog disabled → no row)", uploads[0].ForwarderName)
 	}
 }
 

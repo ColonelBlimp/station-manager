@@ -441,6 +441,30 @@ func run() error {
 		loggerSvc.InfoWith().Int64("reset", n).Msg("forwarder: orphaned in_progress rows reset to pending")
 	}
 
+	// ADR 0039: `enabled` gates enqueue, so a forwarder that is now disabled
+	// must not retain a queue (the suspended state is gone). Discard its
+	// not-yet-uploaded rows at startup — keeping 'uploaded' rows for upstream_id
+	// provenance. The affected QSOs revert to "not uploaded to X" and are
+	// recoverable via the logbook SPA. Logged loudly so the discard is never
+	// silent ("disable" is now stop+drop, not pause).
+	for _, fc := range cfg.Forwarders {
+		if fc.Enabled {
+			continue
+		}
+		discardCtx, discardCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		discarded, derr := dbSvc.DiscardQueuedUploadsForForwarderWithContext(discardCtx, fc.Name)
+		discardCancel()
+		if derr != nil {
+			return errors.New(op).WithErr(derr).WithMsgf("discard queued uploads for disabled forwarder %q", fc.Name)
+		}
+		if discarded > 0 {
+			loggerSvc.WarnWith().
+				Str("forwarder", fc.Name).
+				Int64("discarded", discarded).
+				Msg("forwarder disabled; discarded queued uploads (re-upload via the logbook app)")
+		}
+	}
+
 	// workerCtx is the parent context for all forwarder workers. It is
 	// cancelled at shutdown, thus Run's select can observe it; each worker
 	// then finishes its current processRow and exits.
