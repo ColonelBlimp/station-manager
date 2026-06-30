@@ -428,3 +428,18 @@ func TestDefaultForwarderConfigs_SeedsRegisteredType(t *testing.T) {
 		t.Errorf("Endpoints = %v, want the registered defaults", seed.Endpoints)
 	}
 }
+
+func TestDefaultForwarderConfigs_ExcludesTypesWithoutEndpoints(t *testing.T) {
+	// A type with a descriptor but NO registered default endpoint (e.g. the
+	// dev/test stub) must NOT be auto-seeded into the non-sparse config.
+	RegisterForwarderType("seedtest-noeps", "Seed Test No Endpoints",
+		[]Action{action.Insert},
+		[]CredentialField{{Key: "k", Label: "K", Kind: "text"}})
+	// Deliberately no RegisterDefaultEndpoints for this type.
+
+	for _, fc := range DefaultForwarderConfigs() {
+		if fc.Type == "seedtest-noeps" {
+			t.Fatal("a descriptor-only type (no default endpoints) must not be auto-seeded")
+		}
+	}
+}

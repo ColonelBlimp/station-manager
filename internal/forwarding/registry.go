@@ -245,8 +245,12 @@ func ResolveEndpoint(m map[string]string, def string, keys ...string) string {
 }
 
 // DefaultForwarderConfigs returns one disabled seed entry per registered
-// forwarder TYPE (those with an editor descriptor — RegisterForwarderType'd),
-// sorted by type. It is the non-sparse default set ADR 0039 calls for: the
+// forwarder type that has BOTH an editor descriptor (RegisterForwarderType) AND
+// a registered canonical endpoint (RegisterDefaultEndpoints) — i.e. a real
+// network destination, sorted by type. A descriptor-only type (the dev/test
+// stub, or a future operator-must-supply-URL forwarder) is deliberately
+// excluded: it stays addable via its descriptor but is not auto-seeded into the
+// non-sparse config. It is the non-sparse default set ADR 0039 calls for: the
 // daemon seeds these into config so the operator toggles `enabled` + supplies
 // credentials rather than hand-adding an entry. Name defaults to the type
 // (single instance per type, per the ham-services-singleton model). Retry/tick/
@@ -256,16 +260,21 @@ func DefaultForwarderConfigs() []types.ForwarderConfig {
 	descs := ForwarderTypes() // sorted, deep-copied
 	out := make([]types.ForwarderConfig, 0, len(descs))
 	for _, d := range descs {
-		fc := types.ForwarderConfig{
+		// Seed only types with a registered canonical endpoint — a real network
+		// destination. A type without one (the dev/test stub, or a future
+		// operator-must-supply-URL forwarder) stays addable via its descriptor
+		// but is not auto-seeded into the non-sparse config.
+		eps, ok := DefaultEndpointsFor(d.Type)
+		if !ok {
+			continue
+		}
+		out = append(out, types.ForwarderConfig{
 			Name:         d.Type,
 			Type:         d.Type,
 			Enabled:      false,
 			ActionFilter: append([]string(nil), d.SupportedActions...),
-		}
-		if eps, ok := DefaultEndpointsFor(d.Type); ok {
-			fc.Endpoints = eps
-		}
-		out = append(out, fc)
+			Endpoints:    eps,
+		})
 	}
 	return out
 }
