@@ -832,9 +832,10 @@ class ConfigState {
         return this.forwarderTypes.find((t) => t.type === type);
     }
 
-    /** True when the forwarders draft diverges from the loaded list — a
-     *  structural change (add/remove/rename/type/enabled/action) OR any typed
-     *  credential value. Drives Save/Cancel. */
+    /** True when the forwarders draft diverges from the loaded list — an
+     *  enabled toggle OR any typed credential value. (Per ADR 0039 the config is
+     *  non-sparse: the list is fixed, so there is no add/remove/rename.) Drives
+     *  Save/Cancel. */
     get forwardersDirty(): boolean {
         const draftKeys = this.forwarderDraft.map(forwarderStructKey);
         const loadedKeys = this.forwarders.map((f) => forwarderStructKey(forwarderDraftFrom(f)));
@@ -842,31 +843,6 @@ class ConfigState {
         return this.forwarderDraft.some((f) =>
             Object.values(f.credentials).some((v) => v.trim() !== '')
         );
-    }
-
-    /** Append a destination of the given type — name defaults to a unique handle
-     *  (type, then type-2…), action_filter to the type's supported actions, and
-     *  enabled true. */
-    addForwarder(type: string): void {
-        const used = new Set(this.forwarderDraft.map((f) => f.name));
-        let name = type;
-        for (let n = 2; used.has(name); n++) name = `${type}-${n}`;
-        const td = this.forwarderTypeFor(type);
-        this.forwarderDraft = [
-            ...this.forwarderDraft,
-            {
-                name,
-                type,
-                enabled: true,
-                action_filter: td ? [...td.supported_actions] : [],
-                credentialsSet: [],
-                credentials: {},
-            },
-        ];
-    }
-
-    removeForwarder(index: number): void {
-        this.forwarderDraft = this.forwarderDraft.filter((_, i) => i !== index);
     }
 
     /**

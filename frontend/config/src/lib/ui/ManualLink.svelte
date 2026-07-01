@@ -2,14 +2,12 @@
 
 <!--
     Fixed top-right "Manual" link — opens the embedded operator manual (served by the
-    daemon at GET /manual/) in a NEW TAB. Identical across all three SPAs (logging /
-    config / logbook); they are separate Vite projects, so this small component is
-    duplicated rather than shared via a package — a little duplication is cheaper than
-    a cross-project shared lib (project lesson "build specific, not generic"). If you
-    change one copy, change the other two.
-
-    This corner is the planned home of the cross-SPA navigation cluster (→ logging /
-    config / logbook — backlog "Cross-SPA navigation links"); manual-only for now.
+    daemon at GET /manual/) in a NEW TAB. This is the CONFIG SPA's copy: Manual-only,
+    with no Config link (it would be self-referential here). The logging/logbook
+    copies add a Config link alongside (the cross-SPA nav cluster) — mirror any
+    styling change to those two. Duplicated per SPA (separate Vite projects) rather
+    than shared via a package — a little duplication is cheaper than a cross-project
+    shared lib (project lesson "build specific, not generic").
 
     - href is an absolute root path, so it resolves the same from every SPA base
       (/, /config/, /logbook/); the daemon serves it whenever the SPAs are served.

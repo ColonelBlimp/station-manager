@@ -1,21 +1,18 @@
 <script lang="ts">
-    // Forwarding tab — manage the operator's forwarding destinations (QRZ,
-    // ClubLog, …). Data-driven: the credential fields per destination come from
-    // GET /v1/forwarder-types (no hardcoded per-type forms). Secrets are
-    // masked-on-GET — an already-set credential shows a placeholder; leaving a
-    // field blank keeps the stored secret (the daemon merges on PUT). Forwarder
-    // changes are restart-only (the worker binds config at startup).
+    // Forwarding tab — enable/configure the operator's forwarding destinations
+    // (QRZ, ClubLog, …). Per ADR 0039 the config is NON-SPARSE: the daemon seeds
+    // an entry for every supported destination (disabled) and re-adds any missing
+    // one on load, so this tab presents a FIXED list — the operator flips Enabled
+    // and enters credentials. There is deliberately no add/remove: a removed entry
+    // would just be re-seeded on the next restart, and a destination is turned
+    // "off" by disabling it, not deleting it. Credential fields are data-driven
+    // from GET /v1/forwarder-types (no hardcoded per-type forms); secrets are
+    // masked-on-GET (leave a field blank to keep the stored value — the daemon
+    // merges on PUT). Forwarder changes are restart-only (the worker binds config
+    // at startup).
     import { configState } from '../../states/config.svelte';
     import TabFooter from '../TabFooter.svelte';
     import PasswordField from '../PasswordField.svelte';
-
-    // Add-destination type picker (defaults to the first available type).
-    let addType: string = $state('');
-    $effect(() => {
-        if (addType === '' && configState.forwarderTypes.length > 0) {
-            addType = configState.forwarderTypes[0].type;
-        }
-    });
 
     function isSet(f: { credentialsSet: string[] }, key: string): boolean {
         return f.credentialsSet.includes(key);
@@ -27,52 +24,38 @@
 {:else}
     <div class="mx-auto max-w-2xl space-y-5">
         <p class="text-sm text-gray-500">
-            Forwarding uploads each new QSO to the services you configure here. Adding a destination
-            queues <em>future</em> QSOs; credentials are stored on the daemon and never sent back to the
-            browser (leave a field blank to keep the saved value).
+            Every supported destination is listed below. Enable the ones you use and enter their
+            credentials — forwarding then uploads each <em>new</em> QSO to the enabled destinations. Credentials
+            are stored on the daemon and never sent back to the browser (leave a field blank to keep the
+            saved value). QSOs logged while a destination was off aren't sent automatically — upload those
+            from the logbook app's backfill.
         </p>
 
         {#if configState.forwarderDraft.length === 0}
-            <p class="text-sm text-gray-400">No destinations configured yet.</p>
+            <p class="text-sm text-gray-400">
+                No forwarder destinations available from the daemon.
+            </p>
         {/if}
 
-        {#each configState.forwarderDraft as f, i (i)}
+        {#each configState.forwarderDraft as f (f.type + ':' + f.name)}
             {@const td = configState.forwarderTypeFor(f.type)}
             <div class="rounded-md border border-gray-200 p-4">
                 <div class="flex items-center justify-between gap-3">
-                    <div class="flex items-center gap-3">
+                    <div class="flex items-baseline gap-2">
                         <span class="font-semibold text-gray-800">{td?.display_name ?? f.type}</span
                         >
-                        <input
-                            type="text"
-                            bind:value={f.name}
-                            aria-label="Destination name"
-                            class="w-40 rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                        />
+                        <span class="font-mono text-xs text-gray-400">{f.name}</span>
                     </div>
-                    <div class="flex items-center gap-3">
-                        <label class="flex items-center gap-1.5 text-sm text-gray-700">
-                            <input
-                                type="checkbox"
-                                bind:checked={f.enabled}
-                                class="cursor-pointer"
-                            />
-                            Enabled
-                        </label>
-                        <button
-                            type="button"
-                            onclick={() => configState.removeForwarder(i)}
-                            class="cursor-pointer rounded-md px-2 py-1 text-sm font-medium text-red-600 hover:bg-red-50"
-                        >
-                            ✕ Remove
-                        </button>
-                    </div>
+                    <label class="flex items-center gap-1.5 text-sm text-gray-700">
+                        <input type="checkbox" bind:checked={f.enabled} class="cursor-pointer" />
+                        Enabled
+                    </label>
                 </div>
 
                 {#if !td}
                     <p class="mt-3 text-sm text-amber-700">
-                        This forwarder type isn't supported by this daemon build — it can be removed
-                        or left as-is, but its credentials can't be edited here.
+                        This forwarder type isn't supported by this daemon build — its credentials
+                        can't be edited here.
                     </p>
                 {:else}
                     <div class="mt-4 space-y-3">
@@ -111,30 +94,6 @@
                 {/if}
             </div>
         {/each}
-
-        <!-- Add destination -->
-        <div class="flex items-center gap-3">
-            {#if configState.forwarderTypes.length === 0}
-                <p class="text-sm text-gray-400">No forwarder types available from the daemon.</p>
-            {:else}
-                <select
-                    bind:value={addType}
-                    aria-label="New destination type"
-                    class="rounded-md border border-gray-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                >
-                    {#each configState.forwarderTypes as t (t.type)}
-                        <option value={t.type}>{t.display_name}</option>
-                    {/each}
-                </select>
-                <button
-                    type="button"
-                    onclick={() => configState.addForwarder(addType)}
-                    class="cursor-pointer rounded-md border border-dashed border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-600 hover:border-gray-400 hover:bg-gray-50"
-                >
-                    + Add destination
-                </button>
-            {/if}
-        </div>
 
         {#if configState.forwardersDirty}
             <div
