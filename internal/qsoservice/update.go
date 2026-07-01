@@ -20,6 +20,19 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
+// preserveSeconds protects stored seconds on an edit: when an incoming time
+// arrives at coarse HHMM precision but the stored value has HHMMSS for the SAME
+// minute, the stored (seconds-bearing) value is kept — editing an unrelated
+// field must never silently drop precision the QSO already had. An incoming
+// value that changes the minute, or that itself carries seconds, wins. Empty
+// incoming falls through to the caller's required-field validation.
+func preserveSeconds(incoming, existing string) string {
+	if len(incoming) == 4 && len(existing) == 6 && existing[:4] == incoming {
+		return existing
+	}
+	return incoming
+}
+
 // Update overlays a JSON patch body onto existing, validates the merged
 // QSO, recomputes the dedupe key if any of its inputs changed (and rejects
 // on collision), then persists. Returns the updated QSO.
@@ -79,10 +92,14 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	} else {
 		merged.QsoDetails.QsoDateOff = ""
 	}
-	// Narrow to HHMM for storage (schema length 4): accepted HHMMSS has its
-	// seconds dropped so it can't fail at update as a generic 500 (M2).
-	merged.QsoDetails.TimeOn = utils.TimeToHHMM(utils.SanitizeTimeToADIF(strings.TrimSpace(merged.QsoDetails.TimeOn)))
-	merged.QsoDetails.TimeOff = utils.TimeToHHMM(utils.SanitizeTimeToADIF(strings.TrimSpace(merged.QsoDetails.TimeOff)))
+	// Store time at native precision (HHMM or HHMMSS) — no longer truncated. An
+	// edit that arrives at coarser HHMM for the SAME minute keeps the stored
+	// seconds (preserveSeconds), so editing an unrelated field on an FT8 QSO can't
+	// silently drop its seconds. A changed minute, or supplied seconds, wins.
+	merged.QsoDetails.TimeOn = preserveSeconds(
+		utils.SanitizeTimeToADIF(strings.TrimSpace(merged.QsoDetails.TimeOn)), existing.QsoDetails.TimeOn)
+	merged.QsoDetails.TimeOff = preserveSeconds(
+		utils.SanitizeTimeToADIF(strings.TrimSpace(merged.QsoDetails.TimeOff)), existing.QsoDetails.TimeOff)
 	merged.QsoDetails.RstSent = strings.TrimSpace(merged.QsoDetails.RstSent)
 	merged.QsoDetails.RstRcvd = strings.TrimSpace(merged.QsoDetails.RstRcvd)
 	merged.ContactedStation.Country = strings.TrimSpace(merged.ContactedStation.Country)
@@ -155,7 +172,9 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	}
 
 	// ---- Time coherence ----
-	if merged.QsoDetails.TimeOn > merged.QsoDetails.TimeOff {
+	// Minute precision so a mixed HHMM/HHMMSS pair can't trip a false overnight
+	// error via lexical comparison of unequal widths.
+	if utils.TimeToHHMM(merged.QsoDetails.TimeOn) > utils.TimeToHHMM(merged.QsoDetails.TimeOff) {
 		if merged.QsoDetails.QsoDateOff == "" || merged.QsoDetails.QsoDateOff == merged.QsoDetails.QsoDate {
 			return types.Qso{}, &SubmitError{
 				Code:    "invalid_time_range",
@@ -174,12 +193,14 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	}
 
 	// ---- Dedupe recompute + collision check ----
+	// TimeOn compared at minute precision — the dedupe key is minute-based, so a
+	// seconds-only edit doesn't change the key and needn't trigger a recompute.
 	dedupeChanged := merged.ContactedStation.Call != existing.ContactedStation.Call ||
 		merged.QsoDetails.Band != existing.QsoDetails.Band ||
 		merged.QsoDetails.Mode != existing.QsoDetails.Mode ||
 		merged.QsoDetails.Freq != existing.QsoDetails.Freq ||
 		merged.QsoDetails.QsoDate != existing.QsoDetails.QsoDate ||
-		merged.QsoDetails.TimeOn != existing.QsoDetails.TimeOn
+		utils.TimeToHHMM(merged.QsoDetails.TimeOn) != utils.TimeToHHMM(existing.QsoDetails.TimeOn)
 
 	if dedupeChanged {
 		// Hash input uses the int-kHz string for determinism — the same
@@ -192,7 +213,7 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 			merged.QsoDetails.Mode,
 			strconv.FormatInt(kHz, 10),
 			merged.QsoDetails.QsoDate,
-			merged.QsoDetails.TimeOn,
+			utils.TimeToHHMM(merged.QsoDetails.TimeOn),
 		)
 		// Pre-tx collision check is a fast-path optimization: it avoids
 		// the BeginTx + UpdateQsoTx + rollback round-trip in the common

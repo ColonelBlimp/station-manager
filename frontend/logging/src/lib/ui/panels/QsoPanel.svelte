@@ -358,8 +358,11 @@
                 qth: qsoDraft.qth.trim(),
                 comment: qsoDraft.comment.trim(),
                 qsoDate: qsoDraft.qsoDate,
-                timeOn: qsoDraft.timeOn,
-                timeOff: qsoDraft.timeOff,
+                // HH:MM:SS — the visible fields stay HH:MM, but the stored/exported
+                // TIME_ON/TIME_OFF carry the real captured seconds (M0URX OQRS
+                // matches on the full timestamp).
+                timeOn: qsoDraft.submitTimeOn(),
+                timeOff: qsoDraft.submitTimeOff(),
                 mode: resolved.mode,
                 subMode: resolved.subMode,
                 txFreqHz,

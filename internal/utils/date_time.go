@@ -76,15 +76,15 @@ func IsValidTimeADIF(s string) bool {
 	return true
 }
 
-// TimeToHHMM narrows an ADIF time to the HHMM storage form the sqlite schema
-// requires (length(time_on)=4). IsValidTimeADIF / SanitizeTimeToADIF accept the
-// optional-seconds HHMMSS form per the ADIF spec, but the storage layer, the
-// FT8 logging path, and the SPA all work to minute precision — so a body with
-// HHMMSS would otherwise validate and then fail at insert as a generic 500.
-// Truncating the seconds here keeps the documented "API accepts HHMMSS"
-// contract while storing to the minute (review 2026-06-19 M2). A 6-digit input
-// has its trailing seconds dropped; anything else is returned unchanged (the
-// caller validates the result).
+// TimeToHHMM narrows an ADIF time to minute precision (HHMM). Times are now
+// STORED at their native precision — HHMM or HHMMSS (the schema CHECK accepts
+// either, and FT8/imports keep their real seconds) — so this is no longer a
+// storage step. It is the normaliser for the two places that must stay
+// minute-precise regardless of stored precision: the dedupe key (so a
+// seconds-stripped QRZ re-import still matches a stored HHMMSS QSO) and the
+// overnight time-coherence comparison (so a mixed-width pair doesn't compare
+// lexically wrong). A 6-digit input has its trailing seconds dropped; anything
+// else is returned unchanged.
 func TimeToHHMM(s string) string {
 	if len(s) == 6 {
 		return s[:4]

@@ -38,20 +38,21 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 	q.Mode = "FT8"
 	q.Freq = freq
 	q.Band = utils.FrequencyToBand(freq)
-	// time_on/time_off are HHMM (the storage schema's CHECK constraint requires
-	// exactly 4 chars, matching the rest of the logging path — not ADIF's optional
-	// HHMMSS). TIME_ON is the contact's start instant (c.StartedAt, stamped when the
-	// session began); now is the completion instant (final rung sent), the TIME_OFF.
-	// A path that failed to stamp a start (zero) falls back to the completion instant
-	// — an FT8 exchange spans ~2 min, well inside QSL time-matching tolerance.
+	// time_on/time_off are HHMMSS — FT8 has the exact slot instant, so we keep the
+	// real seconds (the storage CHECK now accepts HHMM or HHMMSS, and the QSL
+	// manager's OQRS matches on the full timestamp; dedupe stays minute-precision
+	// in qsoservice). TIME_ON is the contact's start instant (c.StartedAt, stamped
+	// when the session began); now is the completion instant (final rung sent), the
+	// TIME_OFF. A path that failed to stamp a start (zero) falls back to the
+	// completion instant.
 	start := c.StartedAt
 	if start.IsZero() {
 		start = now
 	}
 	start = start.UTC()
 	q.QsoDate = start.Format("20060102")
-	q.TimeOn = start.Format("1504")
-	q.TimeOff = now.Format("1504")
+	q.TimeOn = start.Format("150405")
+	q.TimeOff = now.Format("150405")
 	if c.HasOurReport {
 		q.RstSent = strconv.Itoa(c.OurReport)
 	}
@@ -119,9 +120,12 @@ func NewLoggedQso(q types.Qso, uuid string) LoggedQso {
 	if mhz, err := strconv.ParseFloat(q.Freq, 64); err == nil {
 		freqHz = int64(mhz*1_000_000 + 0.5)
 	}
+	// Display is HH:MM (compact session list) regardless of whether the stored
+	// value is HHMM or HHMMSS — the seconds live in the stored/exported record,
+	// not this UI field.
 	timeOn := q.TimeOn
-	if len(timeOn) == 4 {
-		timeOn = timeOn[:2] + ":" + timeOn[2:]
+	if len(timeOn) >= 4 {
+		timeOn = timeOn[:2] + ":" + timeOn[2:4]
 	}
 	qsoDate := q.QsoDate
 	if len(qsoDate) == 8 {

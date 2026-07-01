@@ -478,7 +478,10 @@ func TestMigrate_DownRestoresRSTLengthConstraint(t *testing.T) {
 	enqueueUpload(t, svc, qsoID, "qrz-main", "qrz", action.Insert)
 	insertQsoHistory(t, svc, qso.UUID, action.Update, source.API, []byte(`{"call":"M0CMC"}`))
 
-	applyMigrationSteps(t, svc, -1)
+	// Step down TWO: past 0003 (allow_time_seconds) then 0002 (relax_rst_length),
+	// so the strict pre-0002 RST constraint is restored. (0003 was added on top of
+	// 0002, so a single step down would only revert the time-seconds relaxation.)
+	applyMigrationSteps(t, svc, -2)
 
 	uploads, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
 	if err != nil {
@@ -499,6 +502,49 @@ func TestMigrate_DownRestoresRSTLengthConstraint(t *testing.T) {
 	wide.QsoDetails.RstRcvd = "4657"
 	if _, err := svc.InsertQsoWithContext(context.Background(), wide); err == nil {
 		t.Fatal("insert with four-character RST_RCVD succeeded after down migration; want old constraint restored")
+	}
+}
+
+// TestMigrate_AllowsHHMMSSTime: after 0003 the time_on/time_off CHECK accepts
+// HHMMSS (6-digit) as well as HHMM, and stores it verbatim; an invalid seconds
+// value is still rejected.
+func TestMigrate_AllowsHHMMSSTime(t *testing.T) {
+	svc := testServiceWithoutMigrations(t)
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("sqlite migrate: %v", err)
+	}
+	logbookID, err := svc.InsertLogbookWithContext(context.Background(), types.Logbook{
+		Name: "Test", Callsign: "G4ABC",
+	})
+	if err != nil {
+		t.Fatalf("insert logbook: %v", err)
+	}
+
+	// HHMMSS inserts cleanly and round-trips with seconds intact.
+	withSecs := validTestQso(logbookID, "K1ABC", "20m", "FT8", "20260101", "084500")
+	secsID, err := svc.InsertQsoWithContext(context.Background(), withSecs)
+	if err != nil {
+		t.Fatalf("insert HHMMSS qso: %v", err)
+	}
+	got, err := svc.FetchQsoByIdWithContext(context.Background(), secsID)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got.QsoDetails.TimeOn != "084500" || got.QsoDetails.TimeOff != "084500" {
+		t.Fatalf("stored time = on %q off %q, want 084500 (seconds preserved)",
+			got.QsoDetails.TimeOn, got.QsoDetails.TimeOff)
+	}
+
+	// HHMM still accepted.
+	hhmm := validTestQso(logbookID, "K2BBB", "20m", "FT8", "20260101", "0846")
+	if _, err := svc.InsertQsoWithContext(context.Background(), hhmm); err != nil {
+		t.Fatalf("insert HHMM qso: %v", err)
+	}
+
+	// An invalid seconds field (SS=60) must still be rejected by the CHECK.
+	badSecs := validTestQso(logbookID, "K3CCC", "20m", "FT8", "20260101", "084560")
+	if _, err := svc.InsertQsoWithContext(context.Background(), badSecs); err == nil {
+		t.Fatal("insert with SS=60 succeeded; want CHECK rejection")
 	}
 }
 

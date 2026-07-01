@@ -1009,6 +1009,29 @@ when it ships — don't let this rot into a graveyard.
   the repo (deploy tokens → Pages/CI secret store); state content licensing in its README
   (project code GPL; prose/screenshots possibly CC-BY). Its own workstream — plan when picked up.
 
+## Platform / online store (future — revisits ADR 0016)
+
+- **SM online database — durable backup now, community platform later** (captured
+  2026-07-01; NOT started, needs its own design session). Two-phase: (1) durable
+  **off-site backup** of the operator's authoritative log so a QRZ round-trip or a
+  dead disk can't be ground truth; (2) later **expansion into a community platform**
+  (shape TBD). **Real, lived driver:** v0/v1 SM stored QSO times to HH:MM:SS and
+  emailed them to the QSL manager (M0URX, who still has them); a later **QRZ import
+  destroyed the local seconds** (QRZ stores only HH:MM). Data the operator already
+  had was lost to a lossy round-trip. **Design principles from the framing chat:** a
+  pure off-site *file* backup is a dead-end for phase 2 (can't build community on an
+  opaque SQLite blob), so phase 1's store should already be an **authoritative,
+  queryable, UUID-keyed online store** phase 2 grows out of — while phase 1 stays
+  **useful standalone** (backup you'd want even if the platform never ships).
+  Groundwork shipped as ADR 0016 prep (UUIDv7 IDs + qso_history audit); home is the
+  owned `station-manager.org`. Load-bearing phase-1 choices: store+sync tech that
+  scales single-op → multi-user (Postgres, or libSQL/Turso); an **auth model** —
+  even backup needs authentication, so the deferred **security assessment** finally
+  has to land here; sync direction + conflict model (UUIDv7 makes merges
+  collision-free). **Revisits ADR 0016** (which deferred a multi-tenant *product*;
+  this is narrower — single-operator backup first). Do NOT start without a go-ahead
+  + a dedicated design pass. See memory `project_sm_online_db_community`.
+
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
 - **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the

@@ -15,9 +15,11 @@
  *     here means the SPA ↔ daemon contract is one shape end-to-end.
  *   - Frequency in MHz with 6 decimal places: `(hz / 1_000_000).toFixed(6)`.
  *   - `QSO_DATE` is YYYYMMDD (input `YYYY-MM-DD` minus the dashes).
- *   - `TIME_ON` / `TIME_OFF` is HHMM (input `HH:MM` minus the colon).
- *     4-digit HHMM is sufficient for personal logging; the 6-digit
- *     HHMMSS variant is not used.
+ *   - `TIME_ON` / `TIME_OFF` is HHMM or HHMMSS (input `HH:MM` or
+ *     `HH:MM:SS` minus the colons). The visible form fields stay `HH:MM`;
+ *     qsoDraft.submitTimeOn/Off() supply the seconds-bearing `HH:MM:SS` at
+ *     submit so the exported record carries the real seconds (the QSL
+ *     manager's OQRS matches on the full timestamp).
  *   - `TX_PWR` is the EFFECTIVE radiated power (rig power × amp
  *     multiplier, per `displayedState.effectivePower`), rounded to
  *     integer. Omitted when 0 (means "not yet reported / not set").
@@ -40,9 +42,9 @@ export interface AdifQsoFields {
     rstRcvd: string;
     /** ADIF QSO_DATE — required. Input format YYYY-MM-DD; emitted YYYYMMDD. */
     qsoDate: string;
-    /** ADIF TIME_ON — required. Input format HH:MM; emitted HHMM. */
+    /** ADIF TIME_ON — required. HH:MM or HH:MM:SS; emitted HHMM/HHMMSS. */
     timeOn: string;
-    /** ADIF TIME_OFF — required. Input format HH:MM; emitted HHMM. */
+    /** ADIF TIME_OFF — required. HH:MM or HH:MM:SS; emitted HHMM/HHMMSS. */
     timeOff: string;
     /** ADIF MODE — required. Pass-through. */
     mode: string;

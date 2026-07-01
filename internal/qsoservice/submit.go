@@ -151,13 +151,17 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "QSO_DATE is not a valid date (expected YYYYMMDD)"}
 	}
 
+	// Store the validated time at its native precision — HHMM or HHMMSS (ADIF
+	// allows either). Seconds are preserved (FT8's real slot seconds, imported
+	// HHMMSS) rather than truncated, so downstream matching (the QSL manager's
+	// OQRS, LoTW's time window, chronological order) keeps the fidelity. Dedupe
+	// stays at minute precision — see the dedupe key below.
 	timeOn = utils.SanitizeTimeToADIF(timeOn)
 	if timeOn == "" || !utils.IsValidTimeADIF(timeOn) {
 		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "TIME_ON is not a valid time (expected HHMM or HHMMSS)"}
 	}
-	timeOn = utils.TimeToHHMM(timeOn)
 
-	timeOff := utils.TimeToHHMM(utils.SanitizeTimeToADIF(strings.TrimSpace(rec.TimeOff)))
+	timeOff := utils.SanitizeTimeToADIF(strings.TrimSpace(rec.TimeOff))
 	if timeOff == "" {
 		timeOff = timeOn
 	}
@@ -165,7 +169,9 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 	qsoDateOff := utils.SanitizeDateToYYYYMMDD(strings.TrimSpace(rec.QsoDateOff))
 
 	// ---- Validate time coherence ----
-	if timeOn > timeOff {
+	// Compare at minute precision so a mixed HHMM/HHMMSS pair can't trip a false
+	// "TIME_ON after TIME_OFF" via lexical string comparison of unequal widths.
+	if utils.TimeToHHMM(timeOn) > utils.TimeToHHMM(timeOff) {
 		if qsoDateOff == "" || qsoDateOff == qsoDate {
 			return types.Qso{}, "", &SubmitError{
 				Code:    "invalid_time_range",
@@ -220,7 +226,11 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 	}
 
 	// ---- Dedupe key ----
-	dedupeKey := ComputeDedupeKey(call, band, mode, strconv.FormatInt(freqKHz, 10), qsoDate, timeOn)
+	// Minute precision (TimeToHHMM) so dedupe behaviour is unchanged by the move
+	// to HHMMSS storage: a QRZ re-import (HHMM, seconds stripped) of a QSO stored
+	// with HHMMSS hashes identically and is caught as a duplicate — it never
+	// overwrites the seconds. Existing stored dedupe keys stay valid too.
+	dedupeKey := ComputeDedupeKey(call, band, mode, strconv.FormatInt(freqKHz, 10), qsoDate, utils.TimeToHHMM(timeOn))
 	if force {
 		// Force mode: a random key so the UNIQUE index never blocks the insert
 		// (this QSO won't be deduplicated).

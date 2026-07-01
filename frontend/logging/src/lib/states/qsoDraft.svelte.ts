@@ -42,7 +42,7 @@
 import { displayedState } from './displayed.svelte';
 import { isValidCallsign } from '../validators/callsign';
 import { isValidRst } from '../validators/rst';
-import { formatUtcDate, formatUtcTime } from '../utils/time';
+import { formatUtcDate, formatUtcTime, formatUtcClock } from '../utils/time';
 
 /**
  * RST default values — voice modes use the two-digit Readability /
@@ -126,6 +126,18 @@ class QsoDraft {
     timeOff: string = $state(formatUtcTime(new Date()));
 
     /**
+     * Full-precision UTC capture of the QSO-start instant, `HH:MM:SS`. Pinned at
+     * `startQso()` and reset alongside the HH:MM fields. The visible `timeOn` stays
+     * `HH:MM` for the uncluttered time input; `submitTimeOn()` reconciles the two so
+     * the STORED/EXPORTED TIME_ON carries the real seconds when the minute is
+     * unchanged (`:00` when the operator hand-edited the minute). The QSL manager's
+     * OQRS matches on the full timestamp, so the seconds are load-bearing even
+     * though they never show in the form. Imperative-only (read at submit), so a
+     * plain field — no reactive consumer.
+     */
+    timeOnFull: string = formatUtcClock(new Date());
+
+    /**
      * Lifecycle flag — true once the operator has Tabbed off a valid
      * callsign. Read only by imperative method bodies; no reactive
      * consumer, so plain field (no `$state` overhead).
@@ -201,6 +213,7 @@ class QsoDraft {
         const freshTime = formatUtcTime(fresh);
         this.timeOn = freshTime;
         this.timeOff = freshTime;
+        this.timeOnFull = formatUtcClock(fresh);
     }
 
     /**
@@ -216,6 +229,7 @@ class QsoDraft {
         const freshTime = formatUtcTime(fresh);
         this.timeOn = freshTime;
         this.timeOff = freshTime;
+        this.timeOnFull = formatUtcClock(fresh); // pin the real start second
         this.qsoStarted = true;
     }
 
@@ -236,6 +250,7 @@ class QsoDraft {
         const freshTime = formatUtcTime(fresh);
         this.timeOn = freshTime;
         this.timeOff = freshTime;
+        this.timeOnFull = formatUtcClock(fresh);
         this.qsoStarted = false;
     }
 
@@ -259,10 +274,44 @@ class QsoDraft {
         if (!this.qsoStarted) {
             const utcDate = formatUtcDate(now);
             if (utcDate !== this.qsoDate) this.qsoDate = utcDate;
-            if (utcTime !== this.timeOn) this.timeOn = utcTime;
+            if (utcTime !== this.timeOn) {
+                this.timeOn = utcTime;
+                this.timeOnFull = formatUtcClock(now);
+            }
         }
         if (utcTime !== this.timeOff) this.timeOff = utcTime;
     }
+
+    /**
+     * TIME_ON for storage/export as `HH:MM:SS`. Reconciles the visible `HH:MM`
+     * with the full-precision start capture (`timeOnFull`): same minute → the real
+     * seconds; a hand-edited minute → `:00`. Called at submit only.
+     */
+    submitTimeOn(): string {
+        return reconcileSeconds(this.timeOn, this.timeOnFull);
+    }
+
+    /**
+     * TIME_OFF for storage/export as `HH:MM:SS`. TIME_OFF is the log instant, so
+     * the seconds are captured NOW at submit: if the visible minute still matches
+     * the current minute, the real current seconds; otherwise `:00`.
+     */
+    submitTimeOff(): string {
+        return reconcileSeconds(this.timeOff, formatUtcClock(new Date()));
+    }
+}
+
+/**
+ * Combine a visible `HH:MM` with a full-precision `HH:MM:SS` capture: same minute
+ * → return the seconds-bearing capture; otherwise the minute was hand-changed, so
+ * return `HH:MM:00`. A non-`HH:MM` visible value (blank/partial) is returned
+ * unchanged — the form's presence gate handles emptiness. The ADIF submit strips
+ * the colons, so `HH:MM:SS` → `HHMMSS`.
+ */
+function reconcileSeconds(visible: string, full: string): string {
+    if (visible.length !== 5) return visible;
+    if (full.length === 8 && full.slice(0, 5) === visible) return full;
+    return visible + ':00';
 }
 
 export const qsoDraft = new QsoDraft();

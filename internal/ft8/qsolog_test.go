@@ -40,12 +40,11 @@ func TestBuildQso(t *testing.T) {
 	require.Equal(t, "14.074000", q.Freq)
 	require.Equal(t, "20m", q.Band)
 	require.Equal(t, "20260610", q.QsoDate)
-	// HHMM, not HHMMSS — the qso table's time_on/time_off CHECK constraint requires
-	// exactly 4 chars (length(time_on) = 4). The constraint guard here also pins the
-	// regression that silently failed every FT8 QSO insert until 2026-06-12.
-	// TIME_ON is the contact START (14:28), TIME_OFF the completion instant (14:30).
-	require.Equal(t, "1428", q.TimeOn)
-	require.Equal(t, "1430", q.TimeOff)
+	// HHMMSS — FT8 keeps its real slot seconds now (the CHECK accepts HHMM or
+	// HHMMSS; dedupe stays minute-precision in qsoservice). TIME_ON is the contact
+	// START (14:28:30), TIME_OFF the completion instant (14:30:45).
+	require.Equal(t, "142830", q.TimeOn)
+	require.Equal(t, "143045", q.TimeOff)
 	require.Equal(t, "-12", q.RstSent) // we sent
 	require.Equal(t, "-10", q.RstRcvd) // they sent us
 }
@@ -58,8 +57,8 @@ func TestBuildQso_TimeOn(t *testing.T) {
 		c := base
 		c.StartedAt = time.Date(2026, 6, 10, 14, 28, 30, 0, time.UTC)
 		q := BuildQso(c, station, 1, time.Date(2026, 6, 10, 14, 30, 15, 0, time.UTC))
-		require.Equal(t, "1428", q.TimeOn)
-		require.Equal(t, "1430", q.TimeOff)
+		require.Equal(t, "142830", q.TimeOn)
+		require.Equal(t, "143015", q.TimeOff)
 		require.Equal(t, "20260610", q.QsoDate)
 	})
 
@@ -69,14 +68,14 @@ func TestBuildQso_TimeOn(t *testing.T) {
 		c := base
 		c.StartedAt = time.Date(2026, 6, 10, 16, 28, 30, 0, loc)
 		q := BuildQso(c, station, 1, time.Date(2026, 6, 10, 16, 30, 0, 0, loc))
-		require.Equal(t, "1428", q.TimeOn)
-		require.Equal(t, "1430", q.TimeOff)
+		require.Equal(t, "142830", q.TimeOn)
+		require.Equal(t, "143000", q.TimeOff)
 	})
 
 	t.Run("a zero start falls back to the completion instant", func(t *testing.T) {
 		q := BuildQso(base, station, 1, time.Date(2026, 6, 10, 14, 30, 0, 0, time.UTC))
-		require.Equal(t, "1430", q.TimeOn)
-		require.Equal(t, "1430", q.TimeOff)
+		require.Equal(t, "143000", q.TimeOn)
+		require.Equal(t, "143000", q.TimeOff)
 		require.Equal(t, "20260610", q.QsoDate)
 	})
 
@@ -85,8 +84,8 @@ func TestBuildQso_TimeOn(t *testing.T) {
 		c.StartedAt = time.Date(2026, 6, 10, 23, 59, 30, 0, time.UTC)
 		q := BuildQso(c, station, 1, time.Date(2026, 6, 11, 0, 0, 13, 0, time.UTC))
 		require.Equal(t, "20260610", q.QsoDate) // start date, not completion date
-		require.Equal(t, "2359", q.TimeOn)
-		require.Equal(t, "0000", q.TimeOff)
+		require.Equal(t, "235930", q.TimeOn)
+		require.Equal(t, "000013", q.TimeOff)
 	})
 }
 
@@ -171,7 +170,7 @@ func TestNewLoggedQso(t *testing.T) {
 	require.Equal(t, int64(14_074_000), l.FreqHz) // dial 14.074 MHz → Hz (TX offset not added)
 	require.Equal(t, "20m", l.Band)
 	require.Equal(t, "FT8", l.Mode)
-	require.Equal(t, "09:05", l.TimeOn)       // HHMM → HH:MM
+	require.Equal(t, "09:05", l.TimeOn)       // stored HHMMSS → compact HH:MM for the session list
 	require.Equal(t, "2026-06-10", l.QsoDate) // YYYYMMDD → YYYY-MM-DD
 	require.Equal(t, "-12", l.RstSent)
 	require.Equal(t, "-10", l.RstRcvd)

@@ -212,11 +212,12 @@ func TestUpdate_FreqEditDerivesBand(t *testing.T) {
 	require.Equal(t, "14.250", updated.QsoDetails.Freq)
 }
 
-// TestSubmit_HHMMSSStoredAsHHMM guards review 2026-06-19 M2: an ADIF body with
-// HHMMSS times validates and is then narrowed to HHMM for storage (the schema
-// requires length 4), so it stores cleanly instead of failing at insert as a
-// generic 500.
-func TestSubmit_HHMMSSStoredAsHHMM(t *testing.T) {
+// TestSubmit_HHMMSSPreserved: an ADIF body with HHMMSS times stores at full
+// second precision (the schema CHECK now accepts HHMM or HHMMSS). Seconds are no
+// longer truncated — FT8's real slot seconds and imported HHMMSS survive for
+// downstream OQRS/LoTW matching. Dedupe stays minute-precision (see
+// TestSubmit_DedupeIgnoresSeconds).
+func TestSubmit_HHMMSSPreserved(t *testing.T) {
 	s := newTestService(t)
 	lbID := seedLogbook(t, s, "Main", "M0ABC")
 	ctx := context.Background()
@@ -230,12 +231,75 @@ func TestSubmit_HHMMSSStoredAsHHMM(t *testing.T) {
 		LoggingStation: types.LoggingStation{StationCallsign: "M0ABC"},
 	}
 	res, err := s.Submit(ctx, lbID, rec, false)
-	require.NoError(t, err, "HHMMSS must not fail at insert")
+	require.NoError(t, err)
 
 	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
 	require.NoError(t, err)
-	require.Equal(t, "0845", existing.QsoDetails.TimeOn, "TIME_ON narrowed to HHMM")
-	require.Equal(t, "0850", existing.QsoDetails.TimeOff, "TIME_OFF narrowed to HHMM")
+	require.Equal(t, "084500", existing.QsoDetails.TimeOn, "TIME_ON keeps its seconds")
+	require.Equal(t, "085030", existing.QsoDetails.TimeOff, "TIME_OFF keeps its seconds")
+}
+
+// TestSubmit_DedupeIgnoresSeconds: two submits of the same contact in the same
+// minute — one HHMMSS, one seconds-stripped HHMM (as a QRZ re-import would be) —
+// dedupe to ONE QSO, because the dedupe key is minute-precision. The HHMM
+// re-import is caught as a duplicate and never overwrites the stored seconds.
+func TestSubmit_DedupeIgnoresSeconds(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	mk := func(timeOn string) adif.Record {
+		return adif.Record{
+			ContactedStation: types.ContactedStation{Call: "K1ABC"},
+			QsoDetails: types.QsoDetails{
+				Band: "20m", Mode: "SSB", Freq: "14.074", QsoDate: "20260101",
+				TimeOn: timeOn, TimeOff: timeOn,
+			},
+			LoggingStation: types.LoggingStation{StationCallsign: "M0ABC"},
+		}
+	}
+
+	first, err := s.Submit(ctx, lbID, mk("084500"), false)
+	require.NoError(t, err)
+	require.Equal(t, "stored", first.Status)
+
+	// Same minute, seconds stripped (a QRZ re-import) → duplicate, not a new row.
+	second, err := s.Submit(ctx, lbID, mk("0845"), false)
+	require.NoError(t, err)
+	require.Equal(t, "duplicate", second.Status)
+	require.Equal(t, first.UUID, second.UUID)
+
+	// The stored QSO still carries its seconds — the re-import didn't clobber it.
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, first.ID)
+	require.NoError(t, err)
+	require.Equal(t, "084500", existing.QsoDetails.TimeOn)
+}
+
+// TestPreserveSeconds pins the edit-time data-preservation guard: an edit that
+// arrives at coarse HHMM for the same minute keeps the stored HHMMSS, so editing
+// an unrelated field can't silently drop an FT8 QSO's seconds. A changed minute
+// or supplied seconds wins.
+func TestPreserveSeconds(t *testing.T) {
+	cases := []struct {
+		name               string
+		incoming, existing string
+		want               string
+	}{
+		{"same minute coarser incoming keeps seconds", "1423", "142347", "142347"},
+		{"changed minute wins", "1500", "142347", "1500"},
+		{"incoming carries its own seconds wins", "150030", "142347", "150030"},
+		{"unchanged hhmmss", "142347", "142347", "142347"},
+		{"both hhmm", "1423", "1423", "1423"},
+		{"empty incoming falls through", "", "142347", ""},
+		{"existing has no seconds", "1423", "1423", "1423"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := preserveSeconds(c.incoming, c.existing); got != c.want {
+				t.Errorf("preserveSeconds(%q, %q) = %q, want %q", c.incoming, c.existing, got, c.want)
+			}
+		})
+	}
 }
 
 // TestSubmit_AcceptsVHFBand guards review 2026-06-19 (frontend M2): a 2m QSO —
