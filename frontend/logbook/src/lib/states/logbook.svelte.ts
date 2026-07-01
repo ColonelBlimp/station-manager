@@ -81,6 +81,11 @@ class LogbookState {
     // default; the operator can flip this to see the whole logbook while keeping the
     // upload target. No effect when no destination is selected.
     showUploaded: boolean = $state(false);
+    // Client-side filter: hide QSOs already sent via email (sm_fwrd_by_email_status
+    // = "Y") from the current page — the "what still needs emailing" view. Purely
+    // client-side (filters the loaded page), so it needs no reload; fine for the
+    // common case of a handful of recent QSOs sitting on the first page.
+    notEmailedOnly: boolean = $state(false);
     // True while a manual backfill upload is in flight (disables the button).
     uploading: boolean = $state(false);
     // Transient success notice after an upload (e.g. "Queued 12 to QRZ"), or null.
@@ -132,17 +137,28 @@ class LogbookState {
         return this.selectedDestination !== '';
     }
 
+    /** Rows to display: the loaded page, minus already-emailed rows when
+     *  `notEmailedOnly` is on. Everything that renders + the select-all helpers key
+     *  off this, so "visible" consistently means "what the operator can see". */
+    get visibleRows(): LogbookQso[] {
+        return this.notEmailedOnly
+            ? this.rows.filter((r) => r.sm_fwrd_by_email_status !== 'Y')
+            : this.rows;
+    }
+
     /** How many rows are selected (across all pages). */
     get selectedCount(): number {
         return this.selected.size;
     }
-    /** True when every row on the current page is selected (and there is at least one). */
+    /** True when every VISIBLE row is selected (and there is at least one). */
     get allVisibleSelected(): boolean {
-        return this.rows.length > 0 && this.rows.every((r) => this.selected.has(r.id));
+        return (
+            this.visibleRows.length > 0 && this.visibleRows.every((r) => this.selected.has(r.id))
+        );
     }
     /** True when some — but not all — visible rows are selected (header checkbox indeterminate). */
     get someVisibleSelected(): boolean {
-        return this.rows.some((r) => this.selected.has(r.id)) && !this.allVisibleSelected;
+        return this.visibleRows.some((r) => this.selected.has(r.id)) && !this.allVisibleSelected;
     }
 
     /** UUIDs of the selected rows (skips any row lacking a UUID — e.g. a pre-UUID
@@ -170,16 +186,22 @@ class LogbookState {
     /** Header checkbox: select all visible rows, or clear them if all are already selected. */
     toggleAllVisible(): void {
         if (this.allVisibleSelected) {
-            for (const r of this.rows) {
+            for (const r of this.visibleRows) {
                 this.selected.delete(r.id);
                 this.#selectedUuids.delete(r.id);
             }
         } else {
-            for (const r of this.rows) {
+            for (const r of this.visibleRows) {
                 this.selected.add(r.id);
                 if (r.uuid) this.#selectedUuids.set(r.id, r.uuid);
             }
         }
+    }
+
+    /** Flip the client-side "not emailed only" page filter. No reload — it just
+     *  hides emailed rows from the loaded page. */
+    toggleNotEmailedOnly(): void {
+        this.notEmailedOnly = !this.notEmailedOnly;
     }
     /** Drop the entire selection. */
     clearSelection(): void {

@@ -91,6 +91,18 @@
                 {/if}
             {/if}
 
+            <!-- "Still needs emailing" filter — client-side, hides already-emailed
+                 rows on the current page (see logbook.svelte.ts notEmailedOnly). -->
+            <label class="flex items-center gap-2 text-sm text-gray-600">
+                <input
+                    type="checkbox"
+                    class="cursor-pointer"
+                    checked={logbookState.notEmailedOnly}
+                    onchange={() => logbookState.toggleNotEmailedOnly()}
+                />
+                Not emailed only
+            </label>
+
             <!-- Selection toolbar: count + email-out + Clear. Email posts the selected
                  rows' UUIDs to /v1/session/email (LogbookEmailControls). The other bulk
                  actions (forward / export / upload-selected) are a follow-up. -->
@@ -148,7 +160,7 @@
                                     aria-label="Select all rows on this page"
                                     checked={logbookState.allVisibleSelected}
                                     indeterminate={logbookState.someVisibleSelected}
-                                    disabled={logbookState.rows.length === 0}
+                                    disabled={logbookState.visibleRows.length === 0}
                                     onchange={() => logbookState.toggleAllVisible()}
                                 />
                             </th>
@@ -161,11 +173,12 @@
                             <th class="w-32">Country</th>
                             <th class="w-32">Name</th>
                             <th class="pl-4">Comment</th>
+                            <th class="w-16 text-center">Email</th>
                             <th class="w-14"><span class="sr-only">Edit</span></th>
                         </tr>
                     </thead>
                     <tbody>
-                        {#each logbookState.rows as row (row.id)}
+                        {#each logbookState.visibleRows as row (row.id)}
                             <tr
                                 class="h-6 font-mono border-b border-gray-300 last:border-b-0 text-gray-700 whitespace-nowrap hover:bg-gray-100 {logbookState.selected.has(
                                     row.id
@@ -200,6 +213,15 @@
                                     class="pl-4 overflow-hidden text-ellipsis"
                                     title={row.comment ?? ''}>{row.comment ?? ''}</td
                                 >
+                                <td class="text-center">
+                                    {#if row.sm_fwrd_by_email_status === 'Y'}
+                                        <span class="text-green-700" title="Sent via email">✓</span>
+                                    {:else}
+                                        <span class="text-gray-300" title="Not sent via email"
+                                            >–</span
+                                        >
+                                    {/if}
+                                </td>
                                 <td class="pr-3 text-right">
                                     <button
                                         type="button"
@@ -214,11 +236,18 @@
                                 </td>
                             </tr>
                         {/each}
-                        {#if logbookState.rows.length === 0 && !logbookState.loading}
+                        {#if logbookState.visibleRows.length === 0 && !logbookState.loading}
                             <tr>
-                                <td colspan="11" class="px-3 py-6 text-center text-sm text-gray-400"
-                                    >No QSOs in this logbook.</td
+                                <td
+                                    colspan="12"
+                                    class="px-3 py-6 text-center text-sm text-gray-400"
                                 >
+                                    {#if logbookState.rows.length === 0}
+                                        No QSOs in this logbook.
+                                    {:else}
+                                        All QSOs on this page have been emailed.
+                                    {/if}
+                                </td>
                             </tr>
                         {/if}
                     </tbody>
