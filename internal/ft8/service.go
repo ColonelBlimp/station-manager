@@ -599,6 +599,16 @@ func (s *Service) Stop() error {
 		bgCancel := s.bgCancel
 		s.mu.Unlock()
 
+		// Drain the capture goroutines OUTSIDE s.mu. If Stop raced an in-flight
+		// linger-expiry release, that release's releaseCaptureLocked no-op'd above
+		// (the `releasing` guard) and is draining s.wg on the time.AfterFunc
+		// goroutine — which nothing else waits on (unlike reconcileCat, covered by
+		// bgWg). stopped=true blocks any re-acquire and multiple WaitGroup waiters
+		// are fine, so Stop honours its "drains the scheduler + decode goroutines"
+		// contract regardless of which release owns the drain. A no-op when Stop's
+		// own release already drained.
+		s.wg.Wait()
+
 		// Stop the CAT-reconcile loop (if running) and wait for it to exit —
 		// OUTSIDE s.mu, since the loop takes s.mu each tick (waiting under the lock
 		// would deadlock).
