@@ -231,8 +231,7 @@ func runImport(args []string) error {
 	// configured forwarders, matched case-insensitively; passed to SubmitImport
 	// as forwardTo. NB under ADR 0039 `enabled` gates enqueue and the daemon
 	// discards a disabled forwarder's queued rows at startup, so --forward to a
-	// *disabled* forwarder is futile — tightening this validation to require
-	// enabled is a pending follow-up.
+	// *disabled* forwarder is futile — the loop below rejects it.
 	var forwardTo []string
 	if s := strings.TrimSpace(forwardFwds); s != "" {
 		present := map[string]bool{}

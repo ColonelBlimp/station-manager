@@ -40,10 +40,9 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// per-rig override, else its rigdef Name. Authoritative — clients no longer
 	// set MY_RIG, and the single injection point covers both the phone/CW handler
 	// and the FT8 e4 sink. SubmitImport deliberately does NOT stamp (it preserves
-	// an imported QSO's own MY_RIG). nil-safe for test wiring without a config.
-	if s.Config != nil {
-		rec.MyRig = s.Config.Snapshot().ResolveMyRig()
-	}
+	// an imported QSO's own MY_RIG). Config is required (Initialize enforces it)
+	// and submit() dereferences it unconditionally, so there's no nil-guard here.
+	rec.MyRig = s.Config.Snapshot().ResolveMyRig()
 	return s.submit(ctx, logbookID, rec, force, false, nil)
 }
 
@@ -166,7 +165,14 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 		timeOff = timeOn
 	}
 
-	qsoDateOff := utils.SanitizeDateToYYYYMMDD(strings.TrimSpace(rec.QsoDateOff))
+	rawDateOff := strings.TrimSpace(rec.QsoDateOff)
+	qsoDateOff := utils.SanitizeDateToYYYYMMDD(rawDateOff)
+	// A non-empty value that sanitizes to empty is a malformed date — reject it
+	// rather than silently dropping it (which would then mis-report an overnight
+	// QSO as "TIME_ON is after TIME_OFF without a QSO_DATE_OFF").
+	if rawDateOff != "" && qsoDateOff == "" {
+		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "QSO_DATE_OFF is not a valid date"}
+	}
 
 	// ---- Validate time coherence ----
 	// Compare at minute precision so a mixed HHMM/HHMMSS pair can't trip a false
@@ -320,9 +326,24 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 			if ferr == nil {
 				return SubmitResult{Status: "duplicate", UUID: existing.UUID, ID: existing.ID}, nil
 			}
-			// If the row isn't there on the follow-up query, something
-			// stranger is going on — fall through to surface the
-			// original insert error.
+			// The dedupe refetch missed, so the violated index wasn't
+			// (logbook_id, dedupe_key) — it's the global UNIQUE(uuid). Only
+			// the import/restore path preserves a supplied UUID, so only it
+			// can collide here: re-importing an exported log whose QSO was
+			// edited after export (dedupe key changed, UUID unchanged).
+			// Classify as a per-record uuid_conflict so a batch import reports
+			// the one offender and continues (importBatchFallback) instead of
+			// aborting the whole run. Restore-from-export is the designed P1
+			// backup workflow (ADR 0016 / ADR 0040), so this path is real.
+			if isImport {
+				return SubmitResult{}, &SubmitError{
+					Code:    "uuid_conflict",
+					Message: "a QSO with this UUID already exists",
+				}
+			}
+			// For a public submit (fresh-minted UUID) a missing row on the
+			// follow-up query is a genuine anomaly — fall through to surface
+			// the original insert error.
 		}
 
 		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to insert QSO")

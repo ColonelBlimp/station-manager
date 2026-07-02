@@ -101,3 +101,46 @@ func TestSubmitImportBatch_ForwardSelection(t *testing.T) {
 	require.Equal(t, 1, res.Stored)
 	require.Equal(t, 0, uploadCount("K2BBB"), "unnamed → no upload rows")
 }
+
+// TestSubmitImportBatch_UUIDCollisionReportedNotFatal guards F3 (review
+// 2026-07-02): restore-from-export (the SM Cloud P1 workflow) can re-import a QSO
+// whose dedupe fields were edited after export — same UUID, different dedupe key.
+// That collides on the UNIQUE(uuid) index, not the dedupe index, so the dedupe
+// refetch misses and it must be classified as a per-record uuid_conflict that is
+// reported and SKIPPED — not a raw error that aborts the whole import mid-run.
+func TestSubmitImportBatch_UUIDCollisionReportedNotFatal(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	const uuid = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+	rec := func(uid, call, timeOn string) adif.Record {
+		return adif.Record{
+			AppSmQsoID:       uid,
+			ContactedStation: types.ContactedStation{Call: call},
+			QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "14.074", QsoDate: "20260101", TimeOn: timeOn},
+			LoggingStation:   types.LoggingStation{StationCallsign: "G0XYZ"},
+		}
+	}
+
+	// Pre-store a QSO with the known UUID (import preserves supplied UUIDs).
+	pre, err := s.SubmitImport(ctx, lbID, rec(uuid, "K1AAA", "1200"), false, nil)
+	require.NoError(t, err)
+	require.Equal(t, "stored", pre.Status)
+
+	// Batch (batchSize=2): a good record, then the UUID collision (different
+	// dedupe fields), then another good record AFTER it — the last one storing
+	// proves the run did not abort at the collision.
+	recs := []adif.Record{
+		rec("", "K2BBB", "1300"),   // 0 stored
+		rec(uuid, "K3CCC", "1400"), // 1 UUID collision (dedupe key differs)
+		rec("", "K4DDD", "1500"),   // 2 stored AFTER the collision
+	}
+
+	res, err := s.SubmitImportBatch(ctx, lbID, recs, nil, 2, nil)
+	require.NoError(t, err, "a UUID collision must not abort the whole import")
+	require.Equal(t, 2, res.Stored, "K2BBB + K4DDD stored around the collision")
+	require.Len(t, res.Errors, 1)
+	require.Equal(t, 1, res.Errors[0].Index, "the colliding record's input index")
+	require.Contains(t, res.Errors[0].Reason, "uuid_conflict")
+}

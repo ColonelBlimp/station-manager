@@ -84,8 +84,9 @@ func formatUUID(b [16]byte) string {
 }
 
 // IsValidUUIDv7 reports whether s is a canonical-form UUIDv7 string:
-// 36 characters, lowercase hex, standard hyphenation, version nibble
-// = 7, and variant bits = 0b10.
+// 36 characters, hex (either case — hex.DecodeString accepts upper or
+// lower), standard hyphenation, version nibble = 7, and variant bits
+// = 0b10.
 //
 // Used by tests and by the API edge to reject obviously-malformed IDs
 // before a DB lookup. Not authoritative for "is this a UUID *we*

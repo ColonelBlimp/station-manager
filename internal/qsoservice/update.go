@@ -74,6 +74,13 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	merged.SmFwrdByEmailStatus = existing.SmFwrdByEmailStatus
 	merged.QrzComUploadDate = existing.QrzComUploadDate
 	merged.QrzComUploadStatus = existing.QrzComUploadStatus
+	merged.ClubLogUploadDate = existing.ClubLogUploadDate
+	// clublog_qso_upload_status is the JSON path the ADR-0039 stamp machinery
+	// reads (HasUploadStamp / missing_from filter), so a client must not be able
+	// to forge or clear the "already uploaded" signal that drives the backfill.
+	merged.ClubLogUploadStatus = existing.ClubLogUploadStatus
+	// QRZ Logbook per-QSO LOGID is imported provenance, not client-editable.
+	merged.QrzlogLogid = existing.QrzlogLogid
 	// Enrichment — populated by services, not user input.
 	merged.CountryDetails = existing.CountryDetails
 	merged.ContactHistory = existing.ContactHistory
@@ -88,7 +95,13 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	merged.QsoDetails.Submode = strings.TrimSpace(merged.QsoDetails.Submode)
 	merged.QsoDetails.QsoDate = utils.SanitizeDateToYYYYMMDD(strings.TrimSpace(merged.QsoDetails.QsoDate))
 	if raw := strings.TrimSpace(merged.QsoDetails.QsoDateOff); raw != "" {
+		// A non-empty value that sanitizes to empty is malformed — reject it
+		// rather than silently blanking it (which would then mis-report an
+		// overnight QSO as missing its QSO_DATE_OFF).
 		merged.QsoDetails.QsoDateOff = utils.SanitizeDateToYYYYMMDD(raw)
+		if merged.QsoDetails.QsoDateOff == "" {
+			return types.Qso{}, &SubmitError{Code: "invalid_field_value", Message: "qso_date_off is not a valid date"}
+		}
 	} else {
 		merged.QsoDetails.QsoDateOff = ""
 	}
@@ -139,11 +152,15 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	if !modes.IsValidMode(merged.QsoDetails.Mode) {
 		return types.Qso{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("mode %q is not a recognised mode", merged.QsoDetails.Mode)}
 	}
+	// FREQ is required, mirroring Submit. A PATCH with an empty/whitespace freq
+	// skips the normalization above and would otherwise reach the dedupe-key
+	// ParseFreqMHz with an empty string, failing deep in the adapter as a 500
+	// instead of a clean 400.
+	if merged.QsoDetails.Freq == "" {
+		return types.Qso{}, &SubmitError{Code: "missing_required_field", Message: "freq cannot be empty"}
+	}
 	if merged.QsoDetails.QsoDate == "" || !utils.IsValidDateYYYYMMDD(merged.QsoDetails.QsoDate) {
 		return types.Qso{}, &SubmitError{Code: "invalid_field_value", Message: "qso_date is not a valid date (expected YYYYMMDD)"}
-	}
-	if merged.QsoDetails.QsoDateOff != "" && !utils.IsValidDateYYYYMMDD(merged.QsoDetails.QsoDateOff) {
-		return types.Qso{}, &SubmitError{Code: "invalid_field_value", Message: "qso_date_off is not a valid date (expected YYYYMMDD)"}
 	}
 	if merged.QsoDetails.TimeOn == "" || !utils.IsValidTimeADIF(merged.QsoDetails.TimeOn) {
 		return types.Qso{}, &SubmitError{Code: "invalid_field_value", Message: "time_on is not a valid time (expected HHMM or HHMMSS)"}
@@ -253,8 +270,8 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	if err = s.DB.UpdateQsoTx(ctx, tx, merged); err != nil {
 		_ = tx.Rollback()
 
-		// Race window symmetric with Submit (submit.go:202–224): the
-		// pre-tx FetchQsoByDedupeKey at line 169 above can return
+		// Race window symmetric with Submit's post-InsertQsoTx UNIQUE
+		// handler: the pre-tx dedupe-collision check above can return
 		// ErrNotFound while a concurrent Submit/Update is committing
 		// the same dedupe key, then this UPDATE hits the UNIQUE index
 		// on (logbook_id, dedupe_key) WHERE deleted_at IS NULL. From

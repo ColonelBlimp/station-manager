@@ -342,3 +342,99 @@ func TestSubmit_RejectsNonPositiveFreq(t *testing.T) {
 	require.ErrorAs(t, err, &se, "must be a SubmitError (→ 400), not a late storage failure")
 	require.Equal(t, "invalid_field_value", se.Code)
 }
+
+// TestUpdate_EmptyFreqRejectedCleanly guards F1 (review 2026-07-02): a PATCH that
+// clears FREQ must be a clean invalid-request, not a 500 from a deep insert
+// failure (the required-field check was missing on the Update path).
+func TestUpdate_EmptyFreqRejectedCleanly(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "14.250", QsoDate: "20260101", TimeOn: "1200"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+
+	_, err = s.Update(ctx, existing, []byte(`{"freq":""}`), source.API)
+	require.Error(t, err)
+	var se *SubmitError
+	require.ErrorAs(t, err, &se, "empty freq must be a SubmitError (→ 400), not a late storage failure")
+	require.Equal(t, "missing_required_field", se.Code)
+}
+
+// TestUpdate_ForwardingStampsImmutable guards F2 (review 2026-07-02): a client
+// PATCH must not forge the ClubLog upload stamp (the ADR-0039 backfill skip-check
+// reads clublog_qso_upload_status) or rewrite the QRZ Logbook LOGID, while a
+// legitimate field still edits.
+func TestUpdate_ForwardingStampsImmutable(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "14.250", QsoDate: "20260101", TimeOn: "1200"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+
+	patch := []byte(`{"clublog_qso_upload_status":"Y","clublog_qso_upload_date":"20250101","app_qrzlog_logid":"forged-123","comment":"legit edit"}`)
+	updated, err := s.Update(ctx, existing, patch, source.API)
+	require.NoError(t, err)
+	require.Empty(t, updated.ClubLogUploadStatus, "PATCH must not forge the ClubLog upload status")
+	require.Empty(t, updated.ClubLogUploadDate, "PATCH must not forge the ClubLog upload date")
+	require.Empty(t, updated.QrzlogLogid, "PATCH must not rewrite the QRZ Logbook LOGID")
+	require.Equal(t, "legit edit", updated.QsoDetails.Comment, "a legitimate field still edits")
+}
+
+// TestSubmit_RejectsMalformedQsoDateOff and its Update twin guard F4 (review
+// 2026-07-02): a non-empty-but-malformed QSO_DATE_OFF is rejected rather than
+// silently blanked (which would then mis-report an overnight QSO as missing its
+// QSO_DATE_OFF).
+func TestSubmit_RejectsMalformedQsoDateOff(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "14.250", QsoDate: "20260101", TimeOn: "1200", QsoDateOff: "not-a-date"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	_, err := s.Submit(ctx, lbID, rec, false)
+	require.Error(t, err)
+	var se *SubmitError
+	require.ErrorAs(t, err, &se)
+	require.Equal(t, "invalid_field_value", se.Code)
+}
+
+func TestUpdate_RejectsMalformedQsoDateOff(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "14.250", QsoDate: "20260101", TimeOn: "1200"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+
+	_, err = s.Update(ctx, existing, []byte(`{"qso_date_off":"not-a-date"}`), source.API)
+	require.Error(t, err)
+	var se *SubmitError
+	require.ErrorAs(t, err, &se)
+	require.Equal(t, "invalid_field_value", se.Code)
+}
