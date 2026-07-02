@@ -166,6 +166,52 @@ func TestCapture_LingerSurvivesReconnect(t *testing.T) {
 	require.Equal(t, 0, src.stopCount(), "reconnect must cancel the pending release")
 }
 
+// TestCapture_StartLockedNoOpsWhenCapturing guards F1 (review 2026-07-02): a
+// reconnect during a release's disarm window can reach startCaptureLocked while a
+// session is still live (subCount 0→1, lingerTimer already nil). The guard must
+// keep the live session — starting a second would orphan the first device + pump
+// and later deadlock the release drain.
+func TestCapture_StartLockedNoOpsWhenCapturing(t *testing.T) {
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub := s.Subscribe()
+	defer unsub()
+	require.Equal(t, 1, src.startCount(), "first subscriber acquires capture")
+
+	// Model the in-window reconnect reaching startCaptureLocked with a live session.
+	s.mu.Lock()
+	s.startCaptureLocked()
+	s.mu.Unlock()
+	require.Equal(t, 1, src.startCount(), "must not start a second capture session while one is live")
+}
+
+// TestCapture_ReleaseReacquiresIfSubscriberPresent guards F2 (review 2026-07-02):
+// the drain now runs with s.mu dropped, so a subscriber that reconnects during it
+// is left present with no capture — release must re-acquire at the end. Calling
+// release with a subscriber still counted models that end state.
+func TestCapture_ReleaseReacquiresIfSubscriberPresent(t *testing.T) {
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub := s.Subscribe()
+	defer unsub()
+	require.Equal(t, 1, src.startCount())
+
+	s.mu.Lock()
+	s.releaseCaptureLocked() // subCount==1 → drain (s.mu dropped) then re-acquire
+	s.mu.Unlock()
+
+	require.Equal(t, 1, src.stopCount(), "the live session is drained")
+	require.Equal(t, 2, src.startCount(), "release re-acquires while a subscriber is present")
+}
+
 // TestCapture_DisarmsTxWhenLastSubscriberLeaves covers the attended-only rule:
 // TX must not stay armed after the operator's browser closes. Arming, then losing
 // the last /v1/ft8/events subscriber past the linger window, disarms TX — so a

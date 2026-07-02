@@ -82,6 +82,7 @@ type Service struct {
 	// previous session's goroutines before mu is dropped.
 	subCount      int                // live /v1/ft8/events subscribers
 	capturing     bool               // a capture session is currently running
+	releasing     bool               // a release is draining s.wg with s.mu dropped (F2)
 	captureCancel context.CancelFunc // cancels the current capture run
 	lingerTimer   *time.Timer        // pending release after the last unsubscribe
 	wg            sync.WaitGroup     // scheduler + decoder of the current session
@@ -416,6 +417,16 @@ func (s *Service) reconcileCat() {
 // capturing=false (the subsystem stays idle, logged) rather than erroring.
 // Caller holds s.mu.
 func (s *Service) startCaptureLocked() {
+	// Already capturing — keep the live session, don't start a second (F1). A
+	// reconnect during a release's linger/disarm window (onLingerExpired clears
+	// lingerTimer, drops s.mu across disarmTx, ~13s) can drive subCount 0→1 with
+	// lingerTimer already nil and reach here while session 1 is still live.
+	// Starting a second session would orphan the first device+pump (malgoSource.
+	// Start overwrites its fields) and later deadlock the release drain. Keeping
+	// the live session is exactly what the linger design intends.
+	if s.capturing {
+		return
+	}
 	// CAT-liveness gate: never grab the microphone when the rig is off / CAT
 	// isn't live, even with a subscriber present. The catReconcile loop reacquires
 	// once CAT comes up. A nil gate (no CAT configured, or tests) means
@@ -500,15 +511,27 @@ func (s *Service) onCaptureLoopExit(runCtx context.Context, who string) {
 	}
 }
 
-// releaseCaptureLocked cancels the current capture session, releases the
-// device, and drains the scheduler + decode goroutines before returning, so
-// the next acquisition never overlaps a still-running session. No-op when not
-// capturing. Caller holds s.mu (the drain happens under the lock, which serial-
-// ises a racing onSubscriberAdded behind it — bounded by one in-flight decode).
+// releaseCaptureLocked cancels the current capture session, releases the device,
+// and drains the scheduler + decode goroutines before returning, so the next
+// acquisition never overlaps a still-running session. No-op when not capturing,
+// or when a release is already draining. Caller holds s.mu.
+//
+// The drain (s.wg.Wait) runs with s.mu DROPPED (F2): holding it across the wait
+// deadlocks a capture loop that died on its OWN (a USB unplug closes the source →
+// Scheduler.Run returns → onCaptureLoopExit passes its runCtx.Err()==nil check,
+// then blocks entering s.mu.Lock() — held by this release, which is waiting on
+// that very goroutine). Same unlock-then-Wait shape as Stop / the bridge. Across
+// the drop, `capturing` stays TRUE and `releasing` is set, so a racing
+// onSubscriberAdded → startCaptureLocked no-ops (F1 guard) instead of starting a
+// second session on the shared s.wg, and a re-entrant release returns early. A
+// subscriber that reconnected during the drain is re-acquired at the end.
 func (s *Service) releaseCaptureLocked() {
-	if !s.capturing {
+	if !s.capturing || s.releasing {
 		return
 	}
+	s.releasing = true
+	// Cancel + stop the source under s.mu so a loop that then checks runCtx.Err()
+	// takes onCaptureLoopExit's no-op teardown branch (skips s.mu).
 	if s.captureCancel != nil {
 		s.captureCancel()
 		s.captureCancel = nil
@@ -516,11 +539,17 @@ func (s *Service) releaseCaptureLocked() {
 	if err := s.src.Stop(); err != nil {
 		s.log.WarnWith().Err(err).Msg("ft8: capture stop error")
 	}
+
+	// Drain with s.mu dropped (F2 — see the doc comment).
+	s.mu.Unlock()
 	s.wg.Wait()
+	s.mu.Lock()
+
 	s.capturing = false
-	// Close the decode log AFTER the decode goroutine has drained (s.wg.Wait above),
-	// so no RX write is in flight. A late TX write is safe regardless — DecodeLog
-	// serialises writes against Close and no-ops after it.
+	s.releasing = false
+	// Close the decode log AFTER the decode goroutine has drained, so no RX write
+	// is in flight. A late TX write is safe regardless — DecodeLog serialises
+	// writes against Close and no-ops after it.
 	if dl := s.decLog.Swap(nil); dl != nil {
 		dl.Close()
 	}
@@ -529,6 +558,14 @@ func (s *Service) releaseCaptureLocked() {
 	// would show stale decodes when the rig is off and capture can't reacquire).
 	s.hub.clearActivity()
 	s.log.InfoWith().Msg("ft8: no subscribers; capture released")
+
+	// A subscriber that reconnected while we drained (s.mu was dropped) is now
+	// present with no capture — re-acquire for it. Skipped when stopping (Stop's
+	// release must not re-acquire); startCaptureLocked's CAT gate also defers
+	// reconcileCat's drop-mic release when the rig is off.
+	if s.subCount > 0 && !s.stopped {
+		s.startCaptureLocked()
+	}
 }
 
 // osdEnabled resolves the OSD decode option. nil (config absent) → true, the
