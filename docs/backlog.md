@@ -11,6 +11,21 @@ when it ships — don't let this rot into a graveyard.
 
 ## Bugs
 
+- **FT8/tune guaranteed-stop F1(b): defensive unkey on reconnect after a dead-port strand.**
+  Filed 2026-07-02 (bridge safety review); **design recorded in ADR 0042.** F1(a)
+  (teardown unkey on the healthy-port daemon-shutdown case) SHIPPED + **bench-
+  validated 2026-07-02** (`systemctl restart` drops PTT on the FTdx10); **F1(b) is
+  DECIDED but NOT built.** When F1(a)'s teardown `tx_off` write *fails* — a
+  dead-port exit mid-tune/FT8-TX (write-watchdog close or EIO) — the rig may still
+  be CAT-keyed and the supervisor reopens the port with it transmitting. Fix
+  (flag-based, per ADR 0042): set an in-memory `strandedKeyed` flag when the
+  teardown unkey write fails; the next pipeline instance sends one defensive
+  `tx_off` right after identity-confirm, then clears it. In-memory only (the
+  dead-port-*at-shutdown*→restart residual is accepted — attended operator + rig
+  TOT). Needs a test (mirror `TestUnkeyOnTeardown`) + on-air validation. Surfaces:
+  `internal/bridge/pipeline.go` (teardown flag-set + post-identity hook),
+  `tune.go`/`ft8tx.go`. See ADR 0042.
+
 - **`PUT /v1/config` contract: omitted blocks zeroed (+ `default_logbook.id` unwired).**
   Filed from the `internal/api` review (2026-06-14, M4 + M5). **Partially addressed:**
   M4's `default_rig_id` half shipped with the config-SPA Rigs tab (`req.DefaultRigID`
