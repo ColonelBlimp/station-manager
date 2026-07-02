@@ -671,3 +671,21 @@ describe('formatAdifRecord — UTF-8 length prefixes', () => {
         expect(adif).toContain('<NAME:3>Bob');
     });
 });
+
+describe('formatAdifRecord — QSO_DATE_OFF (midnight rollover)', () => {
+    it('emits QSO_DATE_OFF (dashes stripped) when the QSO crossed midnight', () => {
+        const adif = formatAdifRecord({
+            ...baseFields,
+            qsoDate: '2026-05-02',
+            timeOn: '23:59',
+            timeOff: '00:03',
+            qsoDateOff: '2026-05-03',
+        });
+        expect(adif).toContain('<QSO_DATE_OFF:8>20260503');
+    });
+
+    it('omits QSO_DATE_OFF when the field is absent or empty (builder is generic; the live path always supplies it)', () => {
+        expect(formatAdifRecord(baseFields)).not.toContain('<QSO_DATE_OFF:');
+        expect(formatAdifRecord({ ...baseFields, qsoDateOff: '' })).not.toContain('<QSO_DATE_OFF:');
+    });
+});

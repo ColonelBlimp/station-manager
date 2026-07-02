@@ -95,6 +95,13 @@
     $effect(() => {
         if (band !== '' && band !== lastBand) {
             ft8State.clearDecodes();
+            // On a genuine band-to-band change (not the initial mount record, when
+            // lastBand is still ''), also drop the pile-up queue: callers were heard
+            // on the previous band's watering hole and aren't workable here — and
+            // workedThisSession is band-scoped, so a stale caller wouldn't even read
+            // as a dupe on the new band. Guarded on lastBand so a view remount (the
+            // stack is a persistent module singleton) never wipes a live queue.
+            if (lastBand !== '') ft8PileupStack.clear();
             lastBand = band;
         }
     });
@@ -317,17 +324,16 @@
         if (!already && ft8PileupStack.items.length === 0 && !ft8State.qso.active) {
             ft8PileupStack.clearLock();
         }
-        // Single-parity rule: reject a wrong-parity add (re-adds of an already-queued
-        // station are fine — same call, already the right parity). Wrong-parity callers
-        // transmit when we do, so they can't be worked on this run.
-        if (
-            !already &&
-            ft8PileupStack.lockedParity !== '' &&
-            parity !== '' &&
-            parity !== ft8PileupStack.lockedParity
-        ) {
+        // Single-parity rule: reject a wrong-parity add. Anchor on workableParity
+        // (the locked run parity, or the active contact's RX parity when the lock
+        // isn't set yet) so this matches exactly what the UI greys — a plain-click
+        // QSO leaves the lock empty, so guarding on lockedParity alone would wrongly
+        // ACCEPT a wrong-parity caller during an active contact and invert the run's
+        // parity. Re-adds of an already-queued station are fine (same call, already
+        // the right parity). Wrong-parity callers transmit when we do.
+        if (!already && workableParity !== '' && parity !== '' && parity !== workableParity) {
             toasts.info(
-                `${parity} slot — can't add to this ${ft8PileupStack.lockedParity} run. Finish or Abandon first.`
+                `${parity} slot — can't add to this ${workableParity} run. Finish or Abandon first.`
             );
             return;
         }
@@ -408,6 +414,14 @@
         if (!ft8State.tx.armed || !freqKnown || ft8State.selectedOffset === null) return;
         const head = ft8PileupStack.peek();
         if (!head) return;
+        // Don't re-work a station already logged this session — a manual work during
+        // an Abandon pause can leave a now-duplicate entry in the queue. Drop it and
+        // let the dequeue re-fire this effect for the next head (mirrors the
+        // workedThisSession guards on answerCq / workCaller / enqueue).
+        if (workedThisSession(head.call)) {
+            ft8PileupStack.dequeue();
+            return;
+        }
         draining = true;
         const offset = ft8State.selectedOffset;
         void startFt8WorkCaller(

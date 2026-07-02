@@ -299,6 +299,20 @@ class QsoDraft {
     submitTimeOff(): string {
         return reconcileSeconds(this.timeOff, formatUtcClock(new Date()));
     }
+
+    /**
+     * QSO_DATE_OFF (`YYYY-MM-DD`) — the date at TIME_OFF, always populated: the day
+     * after QSO_DATE when TIME_OFF's minute is earlier than TIME_ON's (the contact
+     * crossed UTC midnight), otherwise QSO_DATE itself. The minute-precision rollover
+     * test mirrors the daemon's coherence check, so a genuine midnight Phone/CW QSO
+     * carries a next-day QSO_DATE_OFF and logs instead of bouncing with
+     * invalid_time_range. Read at submit only.
+     */
+    submitQsoDateOff(): string {
+        return this.submitTimeOff().slice(0, 5) < this.submitTimeOn().slice(0, 5)
+            ? nextUtcDate(this.qsoDate)
+            : this.qsoDate;
+    }
 }
 
 /**
@@ -312,6 +326,19 @@ function reconcileSeconds(visible: string, full: string): string {
     if (visible.length !== 5) return visible;
     if (full.length === 8 && full.slice(0, 5) === visible) return full;
     return visible + ':00';
+}
+
+/**
+ * The UTC calendar day after a `YYYY-MM-DD` string, in the same format. A blank or
+ * unparseable input returns '' so a malformed date never fabricates a bogus
+ * QSO_DATE_OFF.
+ */
+function nextUtcDate(date: string): string {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+    if (!m) return '';
+    // Day + 1 with no mutation — Date.UTC normalises the overflow (e.g. Dec 32 →
+    // Jan 1), which also keeps the no-mutable-Date lint rule happy.
+    return formatUtcDate(new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1)));
 }
 
 export const qsoDraft = new QsoDraft();

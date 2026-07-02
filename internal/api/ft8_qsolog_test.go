@@ -118,3 +118,48 @@ func TestFt8CallerBareRogerNoFalseRst(t *testing.T) {
 		t.Fatalf("stored rst_sent = %q, want -10 (our sent report preserved)", got.RstSent)
 	}
 }
+
+// TestFt8MidnightQsoLogsToDB guards the UTC-midnight data-drop (review 2026-07-02):
+// an FT8 exchange that starts before 00:00 UTC and completes after it produces
+// TIME_ON > TIME_OFF (e.g. 235940 > 000020). Without a QSO_DATE_OFF on the following
+// day, qsoservice.Submit's time-coherence check rejects it as invalid_time_range and
+// the e4 sink silently drops the completed on-air QSO. BuildQso now stamps
+// QSO_DATE_OFF on a date rollover; this runs the real submit path to prove the QSO
+// stores instead of being dropped.
+func TestFt8MidnightQsoLogsToDB(t *testing.T) {
+	srv := testServer(t)
+	lbID := createTestLogbook(t, srv, "FT8", "7Q5MLV")
+
+	c := ft8.CompletedQso{
+		TheirCall:    "DL9UW",
+		TheirGrid:    "JO41",
+		OurReport:    -10,
+		HasOurReport: true,
+		DialFreqMHz:  28.074,
+		StartedAt:    time.Date(2026, 6, 12, 23, 59, 40, 0, time.UTC),
+	}
+	station := types.LoggingStation{StationCallsign: "7Q5MLV", Operator: "7Q5MLV", MyGridsquare: "KH78"}
+	now := time.Date(2026, 6, 13, 0, 0, 20, 0, time.UTC) // completes just after midnight
+
+	q := ft8.BuildQso(c, station, lbID, now)
+	rec := adif.QsoToRecord(q)
+	res, err := srv.qso.Submit(context.Background(), lbID, rec, false)
+	if err != nil {
+		t.Fatalf("midnight-spanning FT8 QSO failed to submit (QSO_DATE_OFF regression): %v", err)
+	}
+	if res.Status != "stored" || res.ID < 1 {
+		t.Fatalf("submit result = %+v, want stored with a positive id", res)
+	}
+
+	got, err := srv.db.FetchQsoById(res.ID)
+	if err != nil {
+		t.Fatalf("fetch stored qso: %v", err)
+	}
+	if got.QsoDate != "20260612" || got.QsoDateOff != "20260613" {
+		t.Fatalf("stored qso_date/qso_date_off = %q/%q, want 20260612/20260613",
+			got.QsoDate, got.QsoDateOff)
+	}
+	if got.TimeOn != "235940" || got.TimeOff != "000020" {
+		t.Fatalf("stored time_on/time_off = %q/%q, want 235940/000020", got.TimeOn, got.TimeOff)
+	}
+}

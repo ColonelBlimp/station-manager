@@ -363,6 +363,9 @@
                 // matches on the full timestamp).
                 timeOn: qsoDraft.submitTimeOn(),
                 timeOff: qsoDraft.submitTimeOff(),
+                // Next-day QSO_DATE_OFF when the contact crossed UTC midnight (else
+                // empty) — without it the daemon rejects TIME_ON > TIME_OFF.
+                qsoDateOff: qsoDraft.submitQsoDateOff(),
                 mode: resolved.mode,
                 subMode: resolved.subMode,
                 txFreqHz,

@@ -46,6 +46,15 @@ export interface AdifQsoFields {
     timeOn: string;
     /** ADIF TIME_OFF — required. HH:MM or HH:MM:SS; emitted HHMM/HHMMSS. */
     timeOff: string;
+    /**
+     * ADIF QSO_DATE_OFF — the date at TIME_OFF, input YYYY-MM-DD → emitted
+     * YYYYMMDD. The live-logging path always supplies it (QSO_DATE for a same-day
+     * contact, the next day when the exchange crossed UTC midnight); the builder
+     * emits it only when non-empty. A next-day value is what lets the daemon accept
+     * a midnight-spanning QSO (TIME_ON > TIME_OFF) instead of rejecting it as
+     * invalid_time_range.
+     */
+    qsoDateOff?: string;
     /** ADIF MODE — required. Pass-through. */
     mode: string;
     /** ADIF BAND — required. */
@@ -213,6 +222,13 @@ export function formatAdifRecord(f: AdifQsoFields): string {
     lines.push(adifTag('BAND', f.band));
     lines.push(adifTag('RST_SENT', f.rstSent));
     lines.push(adifTag('RST_RCVD', f.rstRcvd));
+
+    // QSO_DATE_OFF — only when the contact crossed UTC midnight (TIME_OFF is on the
+    // following day). The daemon's time-coherence check requires it when
+    // TIME_ON > TIME_OFF; omitted for the common same-day QSO.
+    if (f.qsoDateOff && f.qsoDateOff.length > 0) {
+        lines.push(adifTag('QSO_DATE_OFF', f.qsoDateOff.replace(/-/g, '')));
+    }
 
     // Optional fields, conditional, fixed order.
     if (f.subMode && f.subMode.length > 0) {

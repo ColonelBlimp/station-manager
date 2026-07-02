@@ -41,3 +41,32 @@ describe('qsoDraft submit-time seconds reconciliation', () => {
         });
     });
 });
+
+// A Phone/CW QSO that crosses UTC midnight has TIME_OFF on an earlier minute than
+// TIME_ON; without a next-day QSO_DATE_OFF the daemon rejects it as
+// invalid_time_range, so the operator can't log the contact.
+describe('qsoDraft submitQsoDateOff — midnight rollover', () => {
+    it('returns the day after QSO_DATE when TIME_OFF is an earlier minute than TIME_ON', () => {
+        qsoDraft.qsoDate = '2026-07-02';
+        qsoDraft.timeOn = '23:59';
+        qsoDraft.timeOnFull = '23:59:40';
+        qsoDraft.timeOff = '00:00';
+        expect(qsoDraft.submitQsoDateOff()).toBe('2026-07-03');
+    });
+
+    it('is QSO_DATE for a same-day QSO (TIME_OFF at/after TIME_ON)', () => {
+        qsoDraft.qsoDate = '2026-07-02';
+        qsoDraft.timeOn = '14:23';
+        qsoDraft.timeOnFull = '14:23:00';
+        qsoDraft.timeOff = '14:25';
+        expect(qsoDraft.submitQsoDateOff()).toBe('2026-07-02');
+    });
+
+    it('rolls a year boundary (Dec 31 -> Jan 1)', () => {
+        qsoDraft.qsoDate = '2026-12-31';
+        qsoDraft.timeOn = '23:58';
+        qsoDraft.timeOnFull = '23:58:00';
+        qsoDraft.timeOff = '00:02';
+        expect(qsoDraft.submitQsoDateOff()).toBe('2027-01-01');
+    });
+});

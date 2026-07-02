@@ -40,6 +40,7 @@ func TestBuildQso(t *testing.T) {
 	require.Equal(t, "14.074000", q.Freq)
 	require.Equal(t, "20m", q.Band)
 	require.Equal(t, "20260610", q.QsoDate)
+	require.Equal(t, "20260610", q.QsoDateOff) // always populated; same day here
 	// HHMMSS — FT8 keeps its real slot seconds now (the CHECK accepts HHMM or
 	// HHMMSS; dedupe stays minute-precision in qsoservice). TIME_ON is the contact
 	// START (14:28:30), TIME_OFF the completion instant (14:30:45).
@@ -86,6 +87,17 @@ func TestBuildQso_TimeOn(t *testing.T) {
 		require.Equal(t, "20260610", q.QsoDate) // start date, not completion date
 		require.Equal(t, "235930", q.TimeOn)
 		require.Equal(t, "000013", q.TimeOff)
+		// QSO_DATE_OFF must be the following day — without it submit's coherence
+		// check reads TIME_ON (2359) > TIME_OFF (0000) as an invalid range and the
+		// completed QSO is silently dropped.
+		require.Equal(t, "20260611", q.QsoDateOff)
+	})
+
+	t.Run("a same-day QSO sets QSO_DATE_OFF equal to QSO_DATE (always populated)", func(t *testing.T) {
+		c := base
+		c.StartedAt = time.Date(2026, 6, 10, 14, 28, 30, 0, time.UTC)
+		q := BuildQso(c, station, 1, time.Date(2026, 6, 10, 14, 30, 15, 0, time.UTC))
+		require.Equal(t, "20260610", q.QsoDateOff)
 	})
 }
 

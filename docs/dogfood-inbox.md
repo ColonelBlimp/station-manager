@@ -52,7 +52,7 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-06-27] let's revisit the need for the E/O in the band activity now that the display lock to whatever parity you are TX'ing on
 - [2026-06-28] correct the ladder display for the ARRL FD
 - [2026-06-29] logbook - need to able to edit more fields of a QSO: notes, LP/SP
-- [2026-06-29] logbook: date_off = should it be populated always?
+- ~~[2026-06-29] logbook: date_off = should it be populated always?~~ **RESOLVED 2026-07-02 — yes, always.** `QSO_DATE_OFF` (the date at `TIME_OFF`) is now populated on both logging paths: FT8 `BuildQso` sets it unconditionally, and the logging SPA's `submitQsoDateOff` sends it (= `QSO_DATE` same-day, next day on a UTC-midnight rollover). This also fixes a midnight-crossing QSO being rejected `invalid_time_range` (Phone/CW) or silently dropped (FT8). New QSOs only; imports carry the source's value.
 - [2026-06-29] logbook - qso list should indicate if it has been sent via email
 - [2026-06-29] logbook - need to able to export selected/all
 - [2026-06-29] logbook - maybe move the email option to a dialog overlay - same with export?

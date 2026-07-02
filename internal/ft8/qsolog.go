@@ -53,6 +53,13 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 	q.QsoDate = start.Format("20060102")
 	q.TimeOn = start.Format("150405")
 	q.TimeOff = now.Format("150405")
+	// QSO_DATE_OFF is always populated — the date at TIME_OFF: the same day as
+	// QSO_DATE for a normal contact, the following day when the exchange crossed
+	// 00:00 UTC. `now` is the completion instant, so its date IS the TIME_OFF date.
+	// Always setting it also satisfies submit's time-coherence check, which would
+	// otherwise read a midnight-crossing TIME_ON > TIME_OFF as an invalid range and
+	// drop the completed QSO.
+	q.QsoDateOff = now.Format("20060102")
 	if c.HasOurReport {
 		q.RstSent = strconv.Itoa(c.OurReport)
 	}
