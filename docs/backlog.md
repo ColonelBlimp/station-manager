@@ -11,11 +11,13 @@ when it ships — don't let this rot into a graveyard.
 
 ## Bugs
 
-- **FT8/tune guaranteed-stop F1(b): defensive unkey on reconnect after a dead-port strand.**
-  Filed 2026-07-02 (bridge safety review); **design recorded in ADR 0042.** F1(a)
+- ~~**FT8/tune guaranteed-stop F1(b): defensive unkey on reconnect after a dead-port strand.**~~
+  **SHIPPED 2026-07-02** (`markStrandedKeyed` + `defensiveUnkeyIfStranded` in
+  `internal/bridge/pipeline.go`, ADR 0042; test `TestDefensiveUnkeyIfStranded`).
+  Filed 2026-07-02 (bridge safety review); design recorded in ADR 0042. F1(a)
   (teardown unkey on the healthy-port daemon-shutdown case) SHIPPED + **bench-
-  validated 2026-07-02** (`systemctl restart` drops PTT on the FTdx10); **F1(b) is
-  DECIDED but NOT built.** When F1(a)'s teardown `tx_off` write *fails* — a
+  validated 2026-07-02** (`systemctl restart` drops PTT on the FTdx10); F1(b) now
+  built too (flag-based reconnect unkey). When F1(a)'s teardown `tx_off` write *fails* — a
   dead-port exit mid-tune/FT8-TX (write-watchdog close or EIO) — the rig may still
   be CAT-keyed and the supervisor reopens the port with it transmitting. Fix
   (flag-based, per ADR 0042): set an in-memory `strandedKeyed` flag when the

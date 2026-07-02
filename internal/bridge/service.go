@@ -241,6 +241,12 @@ type Service struct {
 	ft8TxActive      bool
 	ft8TxRestoreMode string
 	ft8TxTimer       *time.Timer
+
+	// strandedKeyed (mu-guarded) records that a pipeline teardown could NOT unkey
+	// a keyed rig — F1(a)'s teardown tx_off write failed (a dead port), so the rig
+	// may still be transmitting. The next pipeline instance sends one defensive
+	// tx_off after identity confirms and clears this (F1(b), ADR 0042).
+	strandedKeyed bool
 }
 
 // New constructs a Service from the operator's bridge config and a

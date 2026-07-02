@@ -657,3 +657,84 @@ func TestUnkeyOnTeardown(t *testing.T) {
 		}
 	})
 }
+
+// TestDefensiveUnkeyIfStranded guards F1(b) (ADR 0042): when a teardown can't
+// unkey a keyed rig (dead port → write fails), the next pipeline instance sends
+// a defensive tx_off once identity is confirmed, then clears the flag.
+func TestDefensiveUnkeyIfStranded(t *testing.T) {
+	def, ok := cat.Lookup("yaesu-ftdx10")
+	if !ok {
+		t.Fatal("yaesu-ftdx10 rigdef not found")
+	}
+
+	t.Run("teardown arms strandedKeyed when the unkey write fails (dead port)", func(t *testing.T) {
+		s, f := tuneTestService(t)
+		s.mu.Lock()
+		s.tuneActive = true
+		s.mu.Unlock()
+		_ = f.Close() // dead port: WriteCommandBytes now returns ErrClosed
+		s.unkeyOnTeardown(def, f)
+		s.mu.Lock()
+		stranded := s.strandedKeyed
+		s.mu.Unlock()
+		if !stranded {
+			t.Fatal("a failed teardown unkey (dead port) must arm strandedKeyed for F1(b)")
+		}
+	})
+
+	t.Run("a successful teardown does NOT arm strandedKeyed", func(t *testing.T) {
+		s, f := tuneTestService(t)
+		s.mu.Lock()
+		s.ft8TxActive = true
+		s.mu.Unlock()
+		s.unkeyOnTeardown(def, f) // healthy port → write succeeds
+		s.mu.Lock()
+		stranded := s.strandedKeyed
+		s.mu.Unlock()
+		if stranded {
+			t.Fatal("a successful teardown unkey must not arm strandedKeyed")
+		}
+	})
+
+	t.Run("fires a defensive tx_off once identity is confirmed, one-shot", func(t *testing.T) {
+		s, f := tuneTestService(t) // identityConfirmed=true
+		s.mu.Lock()
+		s.strandedKeyed = true
+		s.mu.Unlock()
+		s.defensiveUnkeyIfStranded(def, f)
+		if w := lastWrite(f); w != "TX0;" {
+			t.Fatalf("stranded + confirmed must send tx_off; last write = %q, want TX0;", w)
+		}
+		s.mu.Lock()
+		stranded := s.strandedKeyed
+		s.mu.Unlock()
+		if stranded {
+			t.Fatal("strandedKeyed must clear after firing")
+		}
+		// One-shot: a second call writes nothing more.
+		n := len(f.recordedWrites())
+		s.defensiveUnkeyIfStranded(def, f)
+		if len(f.recordedWrites()) != n {
+			t.Fatal("defensiveUnkeyIfStranded must be one-shot — no write after the flag clears")
+		}
+	})
+
+	t.Run("waits for identity: no unkey while unconfirmed (H2)", func(t *testing.T) {
+		s, f := tuneTestService(t)
+		s.mu.Lock()
+		s.strandedKeyed = true
+		s.identityConfirmed = false
+		s.mu.Unlock()
+		before := len(f.recordedWrites())
+		s.defensiveUnkeyIfStranded(def, f)
+		if n := len(f.recordedWrites()); n != before {
+			t.Fatalf("must not unkey an unconfirmed rig (H2); got %d new writes", n-before)
+		}
+		s.mu.Lock()
+		stranded := s.strandedKeyed
+		s.mu.Unlock()
+		if !stranded {
+			t.Fatal("strandedKeyed must persist until identity confirms")
+		}
+	})
+}

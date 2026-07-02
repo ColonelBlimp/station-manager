@@ -365,13 +365,55 @@ func (s *Service) unkeyOnTeardown(def cat.RigDefinition, client serial.Client) {
 	txOff, err := cat.Encode(def, tuneTxOffCommand)
 	if err != nil {
 		s.logger.WarnWith().Err(err).Msg("bridge: teardown unkey encode failed")
+		s.markStrandedKeyed() // couldn't unkey → arm F1(b) on the next instance
 		return
 	}
 	if err := client.WriteCommandBytes(context.Background(), txOff); err != nil {
 		s.logger.WarnWith().Err(err).Msg("bridge: teardown unkey write failed (rig may be gone)")
+		s.markStrandedKeyed() // dead port → arm F1(b) on the next instance
 		return
 	}
 	s.logger.InfoWith().Msg("bridge: unkeyed TX on pipeline teardown (guaranteed stop)")
+}
+
+// markStrandedKeyed records that a teardown could not confirm the unkey (encode
+// or write failed while keyed), so the rig may still be transmitting. The next
+// pipeline instance clears it via defensiveUnkeyIfStranded (F1(b), ADR 0042).
+func (s *Service) markStrandedKeyed() {
+	s.mu.Lock()
+	s.strandedKeyed = true
+	s.mu.Unlock()
+}
+
+// defensiveUnkeyIfStranded is F1(b) (ADR 0042): a prior pipeline instance tore
+// down while keyed but couldn't unkey (dead port), so the rig may still be
+// transmitting. Once the new instance has CONFIRMED identity (the H2 gate — never
+// write to an unrecognised/wrong rig), send one defensive tx_off and clear the
+// flag. One-shot: the flag clears regardless of the write outcome (identity just
+// confirmed, so the port is live and the write should land; if it somehow doesn't,
+// the rig's own TOT + the attended operator are the backstop — the accepted
+// residual). No-op unless both stranded and confirmed. Runs on every readLoop
+// push (cheap flag check) but fires at most once per instance.
+func (s *Service) defensiveUnkeyIfStranded(def cat.RigDefinition, client serial.Client) {
+	s.mu.Lock()
+	fire := s.strandedKeyed && s.identityConfirmed
+	if fire {
+		s.strandedKeyed = false
+	}
+	s.mu.Unlock()
+	if !fire {
+		return
+	}
+	txOff, err := cat.Encode(def, tuneTxOffCommand)
+	if err != nil {
+		s.logger.WarnWith().Err(err).Msg("bridge: stranded-unkey encode failed")
+		return
+	}
+	if err := client.WriteCommandBytes(context.Background(), txOff); err != nil {
+		s.logger.WarnWith().Err(err).Msg("bridge: stranded-unkey write failed")
+		return
+	}
+	s.logger.InfoWith().Msg("bridge: sent defensive tx_off on reconnect (prior teardown may have left the rig keyed)")
 }
 
 // runPollLoop fires the rigdef's POLL read-list on a low-rate ticker to mirror
@@ -631,6 +673,11 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 				}
 			}
 		}
+
+		// F1(b) (ADR 0042): now that identity is (re)confirmed, unkey the rig if a
+		// prior instance tore down while keyed but couldn't (dead port). No-op
+		// unless stranded; one-shot per instance.
+		s.defensiveUnkeyIfStranded(def, client)
 
 		payload, hasFields := mapStatusToPayload(status)
 		if !hasFields {

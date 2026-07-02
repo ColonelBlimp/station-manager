@@ -41,12 +41,13 @@ Two layers.
   `pipeline.go`; test `TestUnkeyOnTeardown`. **Bench-validated 2026-07-02:**
   `systemctl restart smd` while keyed drops PTT on the FTdx10.
 
-- **F1(b) — flag-based reconnect unkey (ACCEPTED, not yet built).** When F1(a)'s
+- **F1(b) — flag-based reconnect unkey (SHIPPED 2026-07-02).** When F1(a)'s
   teardown unkey *write fails* (the dead-port case — the rig may still be keyed),
-  set an in-memory `strandedKeyed` flag. The next pipeline instance, right after
-  identity confirms (the H2 write gate), sends one defensive `tx_off`, then clears
-  the flag. Surgical: the daemon unkeys only when it *knows* it stranded the rig
-  this session.
+  `markStrandedKeyed` sets an in-memory `strandedKeyed` flag. The next pipeline
+  instance's `readLoop`, once identity confirms (the H2 write gate),
+  `defensiveUnkeyIfStranded` sends one defensive `tx_off` and clears the flag
+  (one-shot). Surgical: the daemon unkeys only when it *knows* it stranded the rig
+  this session. Test `TestDefensiveUnkeyIfStranded`.
 
 ## Alternatives considered
 
@@ -72,7 +73,7 @@ present), and the rig's own TOT is the backstop of last resort. In-memory only.
 - The healthy-port exit (the common, routine `systemctl restart` /
   `task deploy:local:dev`) is fully covered — F1(a) bench-validated on the FTdx10
   2026-07-02 (`systemctl restart smd` while keyed drops PTT).
-- F1(b) will cover the realistic dead-port case: a transient port blip mid-tune
+- F1(b) covers the realistic dead-port case: a transient port blip mid-tune
   within the same process, where the supervisor reconnects and clears the
   stranding on the next identity-confirm.
 - **Residual (accepted):** a dead port *exactly at daemon shutdown* followed by a
@@ -80,8 +81,11 @@ present), and the rig's own TOT is the backstop of last resort. In-memory only.
   attended operator + rig TOT are the fallback.
 - F1(a) and F1(b) dovetail: F1(a) tries to unkey; only its *failure* arms F1(b).
   No double-unkey, and F1(b) fires only when it's genuinely needed.
-- F1(b) needs a test (a `strandedKeyed`-set → next-instance-unkeys assertion,
-  mirroring `TestUnkeyOnTeardown`) and the same on-air validation as F1(a).
+- F1(b) is logic-tested (`TestDefensiveUnkeyIfStranded`: teardown-write-fail arms
+  the flag; a confirmed reconnect fires one `tx_off` and clears it, one-shot; no
+  unkey while unconfirmed). It reuses F1(a)'s already-bench-validated `tx_off`
+  write, so the wire behaviour is proven; a full dead-port→reconnect on-air
+  rehearsal is hard to stage deliberately and not required for the flag logic.
 
 ## Triggers to revisit
 
