@@ -100,6 +100,18 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 		encoded[i] = encodedCommand{op: c.Op, value: c.Value, bytes: b}
 	}
 
+	// Serialize the transmission-busy check + the write against key/release
+	// transitions (F2). Without keyMu the txBusy snapshot below is check-then-
+	// act: a StartTune / KeyFt8Tx that keys in the gap between the snapshot and
+	// the write would let a generic command (including the Exposed set_power)
+	// reach the wire mid-transmission and defeat the tune-power clamp — the very
+	// scenario the txBusy guard exists to prevent. StartTune/releaseTune hold
+	// keyMu for their whole bodies, so taking it here makes the exclusion total.
+	// Lock order keyMu → cmdMu → mu is preserved (both are acquired inside,
+	// never the reverse).
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+
 	s.mu.Lock()
 	cl := s.activeClient
 	idOK := s.identityConfirmed

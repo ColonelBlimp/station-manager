@@ -143,7 +143,7 @@ const pollCommandName = "POLL"
 //
 //   - Parent ctx cancelled (Service.Stop / daemon shutdown):
 //     exitContextCancelled, no publish (deliberate shutdown).
-//   - 30s without a line from the rig: publish rig-disconnected
+//   - The liveness timeout (5s default) without a line from the rig: publish rig-disconnected
 //     once and keep waiting in the read loop. If data resumes,
 //     subsequent rig-state events implicitly tell the SPA the rig
 //     is alive again (bridge.svelte.ts flips rigResponding=true on
@@ -244,13 +244,13 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		return exitTransient
 	}
 	defer func() {
-		// Clear activeClient under mu BEFORE closing the port. This
-		// makes the invariant "if a TriggerBootstrap caller captured
-		// a non-nil cl, the underlying port is still open"
-		// enforceable by ordering rather than incidental. A late
-		// caller that races us takes the mu, sees nil, returns the
-		// no-op branch — no chance of writing to a closed port.
-		// Reordered per internal-bridge-pipeline.md review #3.
+		// Clear activeClient under mu BEFORE closing the port. This NARROWS
+		// the window for "a caller captured a non-nil cl, then wrote to a
+		// closed port": a late caller that races us takes the mu, sees nil,
+		// and returns the no-op branch. It does NOT fully close the window — a
+		// caller that already captured cl before this clear can still write to
+		// the now-closed port, and that write just fails with a logged error
+		// (benign).
 		s.mu.Lock()
 		s.activeClient = nil
 		s.bootstrapBytes = nil
@@ -261,13 +261,15 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		// must not inherit the previous run's confirmation (H2).
 		s.identityConfirmed = false
 		s.mu.Unlock()
+		// Guaranteed stop on the daemon's OWN exit too (F1): unkey while the
+		// port is still writable, before Close. See unkeyOnTeardown.
+		s.unkeyOnTeardown(def, client)
 		_ = client.Close()
-		// Release any active tune — the carrier physically dropped with the
-		// rig; clear state, cancel the backstop, forget the stale snapshot,
-		// and tell the SPA (ADR 0027).
+		// Release any active tune — the carrier is down (we just unkeyed above,
+		// or it dropped with the rig); clear state, cancel the backstop, forget
+		// the stale snapshot, and tell the SPA (ADR 0027).
 		s.clearTuneOnDisconnect()
-		// Release any active FT8 TX the same way — PTT dropped with the rig
-		// (ADR 0030).
+		// Release any active FT8 TX the same way — PTT dropped (ADR 0030).
 		s.clearFt8TxOnDisconnect()
 	}()
 
@@ -341,6 +343,35 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	}
 
 	return s.readLoop(ctx, client, def, initBytes, readBytes)
+}
+
+// unkeyOnTeardown is the guaranteed stop for the daemon's OWN exit (F1). When
+// runPipeline tears down mid-tune / mid-FT8-TX via ctx cancel (Service.Stop — a
+// systemctl restart or task deploy), the rig is HEALTHY, the port is still open,
+// and PTT is CAT-keyed up: the carrier does NOT drop with us and the auto-off
+// timer dies with the process. So before the port closes, best-effort write
+// tx_off. The rig-died paths (dead / closed port) can't be served — that write
+// just fails harmlessly — and clearTune/clearFt8 reconcile state on every path.
+// tx_off encodes here for the same reason the pre-key gate proves it encodable
+// before keying. Runs on context.Background(): the request/parent ctx is already
+// cancelled by the time we tear down, and the unkey must not be skipped for that.
+func (s *Service) unkeyOnTeardown(def cat.RigDefinition, client serial.Client) {
+	s.mu.Lock()
+	keyed := s.tuneActive || s.ft8TxActive
+	s.mu.Unlock()
+	if !keyed {
+		return
+	}
+	txOff, err := cat.Encode(def, tuneTxOffCommand)
+	if err != nil {
+		s.logger.WarnWith().Err(err).Msg("bridge: teardown unkey encode failed")
+		return
+	}
+	if err := client.WriteCommandBytes(context.Background(), txOff); err != nil {
+		s.logger.WarnWith().Err(err).Msg("bridge: teardown unkey write failed (rig may be gone)")
+		return
+	}
+	s.logger.InfoWith().Msg("bridge: unkeyed TX on pipeline teardown (guaranteed stop)")
 }
 
 // runPollLoop fires the rigdef's POLL read-list on a low-rate ticker to mirror

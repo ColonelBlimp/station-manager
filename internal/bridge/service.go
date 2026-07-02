@@ -298,7 +298,7 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 // resolveTimeout converts a config-supplied milliseconds value to a
 // time.Duration, falling back to the package-level default when the
 // config value is zero (the operator omitted the key — daemon picks
-// the built-in default). Centralised so the four call sites in New
+// the built-in default). Centralised so the call sites in New
 // stay terse.
 func resolveTimeout(cfgMs int, defaultDur time.Duration) time.Duration {
 	if cfgMs > 0 {

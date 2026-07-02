@@ -24,8 +24,9 @@ const (
 	// EventRigDisconnected fires when the bridge concludes the rig
 	// is no longer alive — no data has flowed for the timeout window
 	// (ADR 0010 passive liveness) or the serial port returns
-	// EIO/closed. Payload is {Reason string} for the SPA to surface
-	// as a toast. A CAT identity *mismatch* is NOT this event: it
+	// EIO/closed. Payload is {code, details} (rendered by the SPA's
+	// i18n catalogue) for the SPA to surface as a toast. A CAT
+	// identity *mismatch* is NOT this event: it
 	// halts the pipeline as a permanent EventBridgeError instead (an
 	// unrecognised — not definitely-wrong — ID is an advisory
 	// EventBridgeError that keeps reading state).
@@ -34,7 +35,7 @@ const (
 	// EventBridgeError surfaces operator-actionable bridge-side
 	// errors (port permission denied, rig identification failed,
 	// baud-rate mismatch, etc.). NOT used for transient retries or
-	// per-frame protocol hiccups. Payload is {Message string}.
+	// per-frame protocol hiccups. Payload is {code, details}.
 	EventBridgeError EventName = "bridge-error"
 
 	// EventTuneState carries the daemon-owned tune-carrier state (ADR

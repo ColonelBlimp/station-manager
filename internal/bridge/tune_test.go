@@ -608,3 +608,52 @@ func TestClearTuneOnDisconnect_ForgetsDial(t *testing.T) {
 		t.Fatal("dial must be forgotten on disconnect")
 	}
 }
+
+// TestUnkeyOnTeardown guards F1 (review 2026-07-02): the daemon's OWN shutdown
+// (ctx cancel) mid-tune / mid-FT8-TX must unkey the rig before the port closes —
+// a healthy CAT-keyed rig otherwise keeps transmitting after the daemon exits.
+func TestUnkeyOnTeardown(t *testing.T) {
+	def, ok := cat.Lookup("yaesu-ftdx10")
+	if !ok {
+		t.Fatal("yaesu-ftdx10 rigdef not found")
+	}
+
+	t.Run("writes tx_off when a tune is active", func(t *testing.T) {
+		s, f := tuneTestService(t)
+		s.mu.Lock()
+		s.tuneActive = true
+		s.mu.Unlock()
+		before := len(f.recordedWrites())
+		s.unkeyOnTeardown(def, f)
+		sawOff := false
+		for _, w := range f.recordedWrites()[before:] {
+			if string(w) == "TX0;" {
+				sawOff = true
+			}
+		}
+		if !sawOff {
+			t.Fatalf("teardown must write tx_off (TX0;) while a tune is keyed; new writes = %v",
+				f.recordedWrites()[before:])
+		}
+	})
+
+	t.Run("writes tx_off when FT8 TX is active", func(t *testing.T) {
+		s, f := tuneTestService(t)
+		s.mu.Lock()
+		s.ft8TxActive = true
+		s.mu.Unlock()
+		s.unkeyOnTeardown(def, f)
+		if w := lastWrite(f); w != "TX0;" {
+			t.Fatalf("teardown must unkey an active FT8 TX; last write = %q, want TX0;", w)
+		}
+	})
+
+	t.Run("no write when PTT isn't up", func(t *testing.T) {
+		s, f := tuneTestService(t)
+		before := len(f.recordedWrites())
+		s.unkeyOnTeardown(def, f)
+		if n := len(f.recordedWrites()); n != before {
+			t.Fatalf("no unkey write expected when not keyed; got %d new writes", n-before)
+		}
+	})
+}
