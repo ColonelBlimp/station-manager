@@ -52,7 +52,7 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Request:** Content-Type `application/x-adif` / `text/plain` / empty (other → 415 `unsupported_media_type`). Body = a single-record ADIF doc, must contain `STATION_CALLSIGN`. Query: `logbook` (int, **required**, ≥1; must exist and its callsign must match `STATION_CALLSIGN`), `force` (bool, optional — bypass dedupe).
 - **Response:** **201** on store / **200** on duplicate. Body `{"status": "stored"|"duplicate", "uuid": string, "id": int64}`.
 - **Errors:** 400 `invalid_adif`, `too_many_records`, `missing_required_field`, `invalid_field_value`, `missing_required_param`, `invalid_id`, `callsign_mismatch`, `invalid_query_param`, `invalid_time_range`; 404 `logbook_not_found`; 429 `rate_limited`; 503 `server_busy`; 500 `submit_failed`/`db_error`.
-- **Notes:** One-fails-all-fail atomic write (QSO row + upload-queue rows in one tx). Idempotent dedupe — a known duplicate returns 200 with the existing UUID/ID.
+- **Notes:** One-fails-all-fail atomic write (QSO row + upload-queue rows in one tx). Idempotent dedupe — a known duplicate returns 200 with the existing UUID/ID. **Dedupe is minute-precision** (`CALL|BAND|MODE|FREQ|QSO_DATE|TIME_ON`, TIME_ON truncated to HHMM), so two contacts in the same minute collide — even though times are **stored and exported at full `HH:MM:SS`** where supplied (ADIF `HHMMSS` preserved since migration 0003; seconds matter to QSL managers matching on exact timestamp).
 
 ### `GET /v1/qso/{uuid}`
 - **Purpose:** Fetch one QSO by canonical UUIDv7 (SPA edit/detail).
@@ -211,7 +211,7 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Purpose:** Liveness/readiness (DB reachability). **Always-on.** **200** `{"status": "ok"}`; **503** `db_unavailable` if the DB ping fails.
 
 ### `GET /v1/version`
-- **Purpose:** Daemon build / Go runtime / DB schema version. **Always-on.** **200** `{"daemon": string, "go": string, "schema": {"version": uint64, "dirty": bool}?}` (always 200; `schema` omitted + warn-logged if the schema query fails).
+- **Purpose:** Daemon build / Go runtime / build environment / DB schema version. **Always-on.** **200** `{"daemon": string, "go": string, "env": "dev"|"release", "schema": {"version": uint64, "dirty": bool}?}` (always 200; `schema` omitted + warn-logged if the schema query fails). `env` is `dev` for any source build (incl. `task run:smd`) and `release` only for a packaged binary (the RPM build stamps `-X …/internal/buildinfo.Env=release`); the SPAs flag a `dev` daemon with a DEV pill + a tab-title prefix so it's distinguishable from the deployed one on the same `:8080`.
 
 ---
 

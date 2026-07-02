@@ -45,14 +45,27 @@ when it ships — don't let this rot into a graveyard.
   `TestRigConnected` + `TestRigConnected_NoDataDisconnect` + the strike assertion in
   `TestPipeline_DisconnectAnnouncedOnce` (bridge).
 
-- **Rx Frequency table shows duplicate rows when feed mode ≠ "single".** With the
-  FT8 display feed mode set to anything other than `single` (i.e. `accumulate`),
-  duplicate entries appear in the Rx Frequency pane. Likely the `rxDecodes` filter
-  in `Ft8Panel.svelte` surfaces the same station decoded across multiple
-  accumulated slots (filter is by callsign in-QSO / offset±tol idle, with no
-  per-call/per-offset dedup), which reads as duplicates. Investigate: confirm
-  whether it's genuine repeat decodes across slots vs. a keying/accumulation bug,
-  and decide whether the Rx pane should collapse to the latest decode per station.
+- **FT8 accumulate-mode "duplicate rows" → slot-grouped display (NOT dedup).**
+  Reframed 2026-07-02 (was "Rx Frequency shows duplicate rows when feed ≠ single").
+  The apparent duplicates in `accumulate` feed mode are *legitimate* — the same
+  station decoded across multiple 15 s slots — so the fix is **presentation (group
+  by slot)**, not dedup (dedup would hide the useful "still calling / SNR-trend"
+  signal). **Discovery 2026-07-02:** Band Activity **already has a slot divider** —
+  `slotSeparator` (`Ft8Panel.svelte` ~758) draws one on each slot change showing the
+  slot's UTC **time + band** (e.g. `14:30:15 · 20m`), gated on
+  `feedMode === 'accumulate' && !cqToTop`. So it's largely done for the
+  accumulate + non-cqToTop case (the time is already there). **Decided (operator,
+  remote): keep the Band Activity divider; Rx pane left OPEN pending dogfood.**
+  **Todo next:**
+  1. Add **parity** (even/odd) to the `slotSeparator` label — `slotParity(utc)`
+     already exists → e.g. `14:30:15 · 20m · even`. SPA-only, ~1 line.
+  2. Confirm whether the "duplicate rows" were seen under **`cqToTop`** — that
+     ordering **suppresses the divider** (decodes get reordered, so slot-grouping
+     can't apply). Decide: WAI, or should grouping still apply under cqToTop?
+  3. **Dogfood** the divider (with parity added) to get a better story, THEN decide
+     whether the **Rx Frequency pane** needs its own grouping/time or is fine as-is
+     (no dedup today; `rxDecodes` ~520, filters by worked-call / offset±tol). Rx
+     stays open until then.
 
 - ~~**Fresh-install `config.json` shape (design decision pending).**~~ **RESOLVED
   2026-06-23** — all three sub-issues below are closed (dangling `default_rig_id`
@@ -140,7 +153,12 @@ when it ships — don't let this rot into a graveyard.
   queued. Requires the parity-label work (next item) so the operator can SEE why a station
   is/ isn't clickable — the two ship together.
 
-- **FT8 Call-CQ + pile-up queue = two controllers fighting over the rig.** Filed 2026-06-27
+- ~~**FT8 Call-CQ + pile-up queue = two controllers fighting over the rig.**~~
+  **SHIPPED 2026-06-27** (commit `865819b5`): during an active Call-CQ session the
+  pile-up queue is disabled — ctrl+click enqueue is gated off (`callerActive` in
+  `Ft8Panel.svelte`) with visible "Calling CQ — pile-up queue disabled. Abandon to
+  work stations by hand." feedback; Abandon is the single stop, exactly the agreed
+  interim posture. Original diagnosis kept for the trail. Filed 2026-06-27
   (operator observed live). During an auto Call-CQ session the daemon's `auto_first` is the
   "who's next" engine (picks each answerer by decode order, loops until Abandon). But the
   SPA pile-up queue is still live: ctrl+clicking answering stations into it **flips the run
@@ -658,18 +676,17 @@ when it ships — don't let this rot into a graveyard.
     external WSJT-X→Grafana request (they could point existing WSJT-X-consuming
     tools straight at SM).
 
-- **Cross-SPA navigation links (all SPAs) — PARTIAL: manual link + the corner shipped 2026-06-28.**
-  From dogfood-inbox 2026-06-24. The three SPAs (logging at `/`, config at `/config/`,
-  logbook at `/logbook/`) have no links between them — the operator hops by editing
-  the URL. **Shipped:** a **fixed top-right corner** `ManualLink` (identical component
-  in each SPA — `*/src/lib/ui/ManualLink.svelte`) opening the embedded manual at
-  `/manual/` in a new tab; this corner is now the chosen home for the rest of the
-  cluster (the config header was nudged `pr-32` so its status cluster clears it). The
-  component is **duplicated** across the three Vite projects by design (no shared
-  package). **Remaining:** the sibling-SPA links themselves — static `<a href>`s to
-  the known mount paths (logging ↔ config ↔ logbook ↔ future db-manager), added into
-  the same corner cluster, no router. Decide the set once so all three stay identical.
-  When that lands, fold the three `ManualLink` copies into the shared cluster component.
+- ~~**Cross-SPA navigation links (all SPAs).**~~ **SHIPPED 2026-07-02.** From
+  dogfood-inbox 2026-06-24. The top-right `ManualLink` corner (identical per SPA —
+  `*/src/lib/ui/ManualLink.svelte`) now carries the full sibling switcher —
+  logging ↔ config ↔ logbook — built as a `navLink` snippet with icons. App links
+  navigate **same-tab** (only the Manual opens a new tab); that same-tab choice also
+  fixed a real hang — new-tab nav accumulated a tab per click, each holding
+  long-lived SSE, starving the browser's ~6-connection-per-host limit (see the SSE
+  consolidation item). A build-env `DEV` pill also lives in the cluster. Still
+  **duplicated** across the three Vite projects by design. Remaining (minor,
+  deferred): a db-manager link when that SPA exists; optionally folding the three
+  copies into a shared component.
 
 - **UI themes + dark mode (all SPAs).** From dogfood-inbox 2026-06-24. Today the
   SPAs are light-only with hardcoded Tailwind colour classes (`text-gray-700`,
@@ -1007,47 +1024,33 @@ when it ships — don't let this rot into a graveyard.
 
 ## Website / public presence
 
-- **Landing page for `station-manager.org`** (flagged 2026-06-30; domain purchased,
-  10-yr reg). Static marketing page — NOT a docs site. Job #1 is positioning: "Station
-  Manager — **free, open-source** Linux ham-radio station management," which is what
-  differentiates it from the paid service **Station Master** without naming them (see
-  [[project_sm_name_decision]] / the dogfood-inbox name note). Content priority: (1)
-  what-it-is + who-for in one line, (2) screenshots (logging SPA, rig control, FT8),
-  (3) free/OSS/GPL-3.0 + GitHub link, (4) get-it (RPM install), (5) manual link + honest
-  "alpha" status. Decided leanings (not yet built): reuse the **Hugo** toolchain the
-  manual already uses (ADR 0036) for visual-identity consistency + no new stack; host
-  static on GitHub/Cloudflare/Netlify Pages with the custom domain (no server). **Decided
-  2026-06-30: a SEPARATE public repo** (not a subdir of this one) — the deciding factor is
-  CI: this repo's `ci.yml` is a heavy merge gate (`go test -race`, three SPA builds, embed
-  build), and a landing-page copy tweak must not run that or be blocked by a flaky daemon
-  test. A separate repo gets its own trivial Hugo build + Pages deploy. (Binary bloat is NOT
-  a factor — only `manual/public/` is `//go:embed`'d; a non-embedded subdir wouldn't ship in
-  the binary anyway.) Reuse the manual's Hugo theme/identity by copying. Keep secrets out of
-  the repo (deploy tokens → Pages/CI secret store); state content licensing in its README
-  (project code GPL; prose/screenshots possibly CC-BY). Its own workstream — plan when picked up.
+- ~~**Landing page for `station-manager.org`**~~ **MVP LIVE 2026-07-02.** Domain
+  purchased (10-yr reg); the static page is deployed and live — HTTPS (Let's
+  Encrypt), Hugo, GitHub Pages via Actions, Namecheap DNS — in a **separate public
+  repo** (`station-manager-www`, as decided 2026-06-30 to keep this repo's heavy CI
+  gate off a copy tweak). Carries the positioning line ("Station Manager — free,
+  open-source Linux ham-radio station management," differentiating from the paid
+  **Station Master** without naming it), logo/favicon, and the GPL-3.0 + GitHub link,
+  reusing the manual's Hugo identity. **Remaining (content polish, as it comes):**
+  screenshots (logging / rig control / FT8), a get-it/RPM-install section (pairs with
+  the download-site install-page item), a manual link, and an honest "alpha" status
+  banner.
 
 ## Platform / online store (future — revisits ADR 0016)
 
-- **SM online database — durable backup now, community platform later** (captured
-  2026-07-01; NOT started, needs its own design session). Two-phase: (1) durable
-  **off-site backup** of the operator's authoritative log so a QRZ round-trip or a
-  dead disk can't be ground truth; (2) later **expansion into a community platform**
-  (shape TBD). **Real, lived driver:** v0/v1 SM stored QSO times to HH:MM:SS and
-  emailed them to the QSL manager (M0URX, who still has them); a later **QRZ import
-  destroyed the local seconds** (QRZ stores only HH:MM). Data the operator already
-  had was lost to a lossy round-trip. **Design principles from the framing chat:** a
-  pure off-site *file* backup is a dead-end for phase 2 (can't build community on an
-  opaque SQLite blob), so phase 1's store should already be an **authoritative,
-  queryable, UUID-keyed online store** phase 2 grows out of — while phase 1 stays
-  **useful standalone** (backup you'd want even if the platform never ships).
-  Groundwork shipped as ADR 0016 prep (UUIDv7 IDs + qso_history audit); home is the
-  owned `station-manager.org`. Load-bearing phase-1 choices: store+sync tech that
-  scales single-op → multi-user (Postgres, or libSQL/Turso); an **auth model** —
-  even backup needs authentication, so the deferred **security assessment** finally
-  has to land here; sync direction + conflict model (UUIDv7 makes merges
-  collision-free). **Revisits ADR 0016** (which deferred a multi-tenant *product*;
-  this is narrower — single-operator backup first). Do NOT start without a go-ahead
-  + a dedicated design pass. See memory `project_sm_online_db_community`.
+- ~~**SM online database — durable backup now, community platform later**~~
+  **DESIGNED 2026-07-02 (ADR 0040 + `docs/v2-design/sm-cloud-p1.md`); NOT built.**
+  Captured 2026-07-01, designed in a full session 2026-07-02. **SM Cloud P1** =
+  full-fidelity off-site backup + restore, launched single-tenant but
+  multi-tenant-ready (onboard 7Q8AC next, gated on the security assessment).
+  Transport = a new `smcloud` **forwarder** (upsert-by-UUID, full `types.Qso` JSON,
+  ADR-0038 retry); store = **Postgres**; same repo `cmd/smcloud`; split-ownership
+  directionality (content up / confirmation down at P3); soft-delete tombstone;
+  reconcile on `(UUID, modified_at)`; restore = full-JSON round-trip. Phase arc: P1
+  backup → P2 7Q8AC → P3 auto-confirm → P4 community. Driver: a QRZ round-trip
+  destroyed local HH:MM:SS. **Revisits ADR 0016.** Next step on go-ahead = implement
+  per the plan (S1–S6); NOT building yet. See ADR 0040, `sm-cloud-p1.md`, memory
+  `project_sm_online_db_community`.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 

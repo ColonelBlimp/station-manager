@@ -7,6 +7,12 @@ date: 2026-05-06
 
 # 0016 — SM Cloud deferred; two cheap-now schema decisions captured
 
+> **Update 2026-07-02:** the deferral is lifted for a first phase. SM Cloud P1
+> (full-fidelity backup + restore, single-tenant launch) is designed in **ADR
+> 0040**. This ADR's prep decisions (UUIDv7, `qso_history`) remain load-bearing;
+> the full multi-tenant SaaS is now *sequenced* (single-tenant first), not
+> indefinitely deferred.
+
 ## Context
 
 The operator surfaced a future shape they have always had in mind: an **SM
