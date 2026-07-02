@@ -18,12 +18,16 @@
     snippet — so styling/markup changes happen once; each node supplies its
     href/label/title + an icon snippet.
 
-    All open in a NEW TAB: the operator keeps their current session (and any
-    in-progress QSO draft) alive while the other apps open alongside.
+    App links navigate in the SAME tab (you're switching apps, not spawning copies);
+    only the Manual opens in a new tab. This matters: each SPA holds long-lived SSE
+    streams and a browser caps ~6 connections per host, so opening every nav click in
+    a new tab piled up SSE connections until the browser starved and hung. Same-tab
+    nav keeps ONE SPA (hence one set of SSE) live at a time; the Manual is static (no
+    SSE), so a new tab for it can't starve.
 
-    - hrefs are absolute root paths, so they resolve the same from every SPA base
+    - hrefs are absolute root paths, resolving the same from every SPA base
       (/, /config/, /logbook/); the daemon serves them whenever the SPAs are served.
-    - rel="noopener" drops the new tab's window.opener handle (target=_blank hygiene).
+    - rel="noopener" (new-tab links only) drops the window.opener handle.
 -->
 
 {#snippet cogIcon()}
@@ -85,11 +89,11 @@
     </svg>
 {/snippet}
 
-{#snippet navLink(href: string, label: string, title: string, icon: Snippet)}
+{#snippet navLink(href: string, label: string, title: string, icon: Snippet, newTab: boolean)}
     <a
         {href}
-        target="_blank"
-        rel="noopener"
+        target={newTab ? '_blank' : undefined}
+        rel={newTab ? 'noopener' : undefined}
         {title}
         aria-label={title}
         class="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white/95 px-2.5 py-1 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
@@ -108,22 +112,7 @@
             DEV
         </span>
     {/if}
-    {@render navLink(
-        '/config/',
-        'Config',
-        'Open Station Manager configuration in a new tab',
-        cogIcon
-    )}
-    {@render navLink(
-        '/logbook/',
-        'Logbook',
-        'Open the Station Manager logbook in a new tab',
-        listIcon
-    )}
-    {@render navLink(
-        '/manual/',
-        'Manual',
-        'Open the Station Manager manual in a new tab',
-        bookIcon
-    )}
+    {@render navLink('/config/', 'Config', 'Open Station Manager configuration', cogIcon, false)}
+    {@render navLink('/logbook/', 'Logbook', 'Open the Station Manager logbook', listIcon, false)}
+    {@render navLink('/manual/', 'Manual', 'Open the manual in a new tab', bookIcon, true)}
 </nav>

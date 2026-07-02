@@ -988,6 +988,23 @@ when it ships — don't let this rot into a graveyard.
   live — no coupling into log/forward internals. Build alongside the DB-manager SPA
   workstream.
 
+- **SPA SSE consolidation — one multiplexed event stream (all SPAs).** The logging
+  SPA opens 2-3 long-lived **SSE** streams per tab (`/v1/rig/events`,
+  `/v1/ft8/events`, and the `/v1/events` firehose). Browsers cap **~6 connections
+  per host** over HTTP/1.1, so several SM tabs each holding these **starve the
+  browser** — new connections (a fresh tab, or even the SPA's own fetches) queue
+  forever → "Connecting…" / frozen tab. Surfaced 2026-07-02: the (then new-tab)
+  cross-SPA nav accumulated a tab per click and hung Firefox after 5-7 clicks.
+  **Immediate fix shipped:** cross-SPA nav now navigates **same-tab** (only Manual
+  opens a new tab), so only one SPA's SSE set is live at a time — removes the
+  auto-accumulation. **Residual risk:** manually opening ~3+ logging tabs can still
+  brush the 6-connection limit. **Durable fix:** collapse the per-topic SSE into ONE
+  multiplexed stream (e.g. `GET /v1/stream` carrying rig/ft8/qso/bridge events tagged
+  by type, SPA fans out client-side) so a tab holds ONE SSE regardless of how many
+  event topics it watches — the events hub already multiplexes internally, so this
+  is mostly a new combined endpoint + a client demultiplexer. NOT urgent (same-tab
+  nav covers normal use); revisit if tab-starvation recurs or before a wider release.
+
 ## Website / public presence
 
 - **Landing page for `station-manager.org`** (flagged 2026-06-30; domain purchased,

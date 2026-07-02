@@ -18,7 +18,10 @@
     snippet — so styling/markup changes happen once; each node supplies its
     href/label/title + an icon snippet.
 
-    All open in a NEW TAB, so the current session stays alive alongside.
+    App links navigate in the SAME tab; only the Manual opens a new tab. Each SPA
+    holds long-lived SSE streams and a browser caps ~6 connections per host, so
+    opening every nav click in a new tab piled up SSE until the browser starved
+    (hang). Same-tab keeps one SPA's SSE live at a time; the Manual is static (no SSE).
     - hrefs are absolute root paths, resolving the same from every SPA base.
     - rel="noopener" drops the new tab's window.opener handle.
 -->
@@ -77,11 +80,11 @@
     </svg>
 {/snippet}
 
-{#snippet navLink(href: string, label: string, title: string, icon: Snippet)}
+{#snippet navLink(href: string, label: string, title: string, icon: Snippet, newTab: boolean)}
     <a
         {href}
-        target="_blank"
-        rel="noopener"
+        target={newTab ? '_blank' : undefined}
+        rel={newTab ? 'noopener' : undefined}
         {title}
         aria-label={title}
         class="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white/95 px-2.5 py-1 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
@@ -100,17 +103,7 @@
             DEV
         </span>
     {/if}
-    {@render navLink('/', 'Logging', 'Open Station Manager logging in a new tab', pencilIcon)}
-    {@render navLink(
-        '/logbook/',
-        'Logbook',
-        'Open the Station Manager logbook in a new tab',
-        listIcon
-    )}
-    {@render navLink(
-        '/manual/',
-        'Manual',
-        'Open the Station Manager manual in a new tab',
-        bookIcon
-    )}
+    {@render navLink('/', 'Logging', 'Open Station Manager logging', pencilIcon, false)}
+    {@render navLink('/logbook/', 'Logbook', 'Open the Station Manager logbook', listIcon, false)}
+    {@render navLink('/manual/', 'Manual', 'Open the manual in a new tab', bookIcon, true)}
 </nav>
