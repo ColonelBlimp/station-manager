@@ -55,13 +55,15 @@ func TestFt8CompletedQsoLogsToDB(t *testing.T) {
 		t.Fatalf("submit result = %+v, want stored with a positive id", res)
 	}
 
-	// Round-trip: both times persist as HHMM (the schema constraint), from now.
+	// Round-trip: both times persist as HHMMSS — FT8 keeps its real slot seconds
+	// (the CHECK now accepts HHMM or HHMMSS). Start is zero here, so TIME_ON falls
+	// back to the completion instant (now = 09:10:15), same as TIME_OFF.
 	got, err := srv.db.FetchQsoById(res.ID)
 	if err != nil {
 		t.Fatalf("fetch stored qso: %v", err)
 	}
-	if got.TimeOn != "0910" || got.TimeOff != "0910" {
-		t.Fatalf("stored time_on/time_off = %q/%q, want 0910/0910", got.TimeOn, got.TimeOff)
+	if got.TimeOn != "091015" || got.TimeOff != "091015" {
+		t.Fatalf("stored time_on/time_off = %q/%q, want 091015/091015", got.TimeOn, got.TimeOff)
 	}
 	if got.Call != "DL9UW" || got.Band != "10m" || got.Mode != "FT8" {
 		t.Fatalf("stored qso = call %q / band %q / mode %q, want DL9UW / 10m / FT8",

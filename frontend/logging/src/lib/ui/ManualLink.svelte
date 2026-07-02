@@ -1,5 +1,9 @@
 <script lang="ts">
+    import { onMount } from 'svelte';
     import type { Snippet } from 'svelte';
+    import { buildEnv } from '../states/buildEnv.svelte';
+
+    onMount(() => void buildEnv.load());
 </script>
 
 <!--
@@ -96,6 +100,14 @@
 {/snippet}
 
 <nav class="fixed top-2 right-3 z-50 flex flex-col items-center gap-1.5">
+    {#if buildEnv.isDev}
+        <span
+            class="rounded-md border border-amber-400 bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800 shadow-sm"
+            title="Development daemon (task run:smd) — not the deployed build"
+        >
+            DEV
+        </span>
+    {/if}
     {@render navLink(
         '/config/',
         'Config',

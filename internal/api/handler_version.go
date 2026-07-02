@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"runtime"
+
+	"github.com/ColonelBlimp/station-manager/internal/buildinfo"
 )
 
 // handleVersion returns daemon-build, Go-runtime, and schema-migration
@@ -13,6 +15,7 @@ import (
 //
 //	{
 //	  "daemon":  "1.2.3" | "dev",
+//	  "env":     "dev" | "release",   // build provenance (source vs packaged)
 //	  "go":      "go1.24.0",
 //	  "schema":  { "version": 1, "dirty": false }
 //	}
@@ -27,12 +30,14 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	type versionResponse struct {
 		Daemon string      `json:"daemon"`
+		Env    string      `json:"env"`
 		Go     string      `json:"go"`
 		Schema *schemaInfo `json:"schema,omitempty"`
 	}
 
 	resp := versionResponse{
 		Daemon: s.daemonVersion,
+		Env:    buildinfo.Env,
 		Go:     runtime.Version(),
 	}
 

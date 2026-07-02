@@ -95,7 +95,7 @@ mkdir -p build/bin
 # which feeds both the User-Agent header on outbound HTTP and the
 # PROGRAMVERSION field on ADIF exports.
 CGO_ENABLED=$CGO_VAL go build -trimpath "${TAGS_ARG[@]}" \
-    -ldflags="-s -w -X main.Version=${VERSION}" \
+    -ldflags="-s -w -X main.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release" \
     -o build/bin/smd ./cmd/smd
 
 echo "── [3/3] Packaging RPM → build/release/ (RPM version: ${RPM_VERSION}) ──"

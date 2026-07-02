@@ -4,6 +4,16 @@ Documentation=https://github.com/ColonelBlimp/station-manager
 After=network-online.target
 Wants=network-online.target
 
+# Bound the restart flap. Without this the default limit (5/10s) never trips —
+# RestartSec=5s spaces restarts ~5-6s apart, so only ~1 lands in each 10s window
+# and a daemon that can't start (e.g. :8080 already held by a dev `task run:smd`,
+# or a corrupt config) respawns FOREVER every few seconds. With a 120s window,
+# 5 rapid failures trip the limit and the unit enters `failed` and STOPS, instead
+# of hammering the machine. A genuine one-off transient (slow boot) still
+# recovers. Recover a tripped unit with: systemctl --user reset-failed smd.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
 [Service]
 Type=simple
 # The daemon resolves its working directory via $SM_WORKING_DIR — see

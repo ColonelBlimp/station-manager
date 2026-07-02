@@ -31,6 +31,12 @@ func TestVersion_HappyPath(t *testing.T) {
 		t.Fatalf("body = %q, want go:%q", body, runtime.Version())
 	}
 
+	// env: buildinfo.Env defaults to "dev" (the test binary isn't built with the
+	// RPM's -X …buildinfo.Env=release), so the SPAs would flag this as a dev build.
+	if !strings.Contains(body, `"env":"dev"`) {
+		t.Fatalf("body = %q, want env:dev", body)
+	}
+
 	// schema version: migrations ran in testServer's setup, so schema should be
 	// at the latest migration and not dirty. Bump this with each new migration —
 	// currently 3 (0001_init + 0002_relax_rst_length + 0003_allow_time_seconds).

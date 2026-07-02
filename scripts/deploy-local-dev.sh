@@ -5,6 +5,8 @@
 # locally-installed copy with minimum ceremony.
 #
 # What runs:
+#   0. Preflight — abort if :8080 is held by a foreign process (a dev
+#      `task run:smd`); the dogfood + dev daemons can't run together.
 #   1. scripts/dev-rpm.sh  — SPA build → Go build → nfpm pack
 #   2. systemctl --user stop smd  (only if currently active)
 #   3. sudo rpm -Uvh --replacepkgs build/release/station-manager-dev.x86_64.rpm
@@ -58,6 +60,29 @@ note() {
 }
 
 RPM_PATH="build/release/station-manager-dev.x86_64.rpm"
+
+# Preflight: refuse to deploy into a running dev daemon. `task run:smd` holds
+# :8080 (and the audio/serial devices); the systemd smd this script starts would
+# then fail to bind and restart-flap. We stop the systemd smd ourselves below, so
+# if :8080 is held while the systemd unit is NOT active, the holder is a foreign
+# process — almost certainly a dev `task run:smd`. Fail fast, before the build.
+step "Preflight  Check for a conflicting dev daemon on :8080"
+if ss -Hltn 'sport = :8080' 2>/dev/null | grep -q .; then
+    if systemctl --user is-active --quiet smd; then
+        note ":8080 held by the systemd smd — it'll be stopped in step 2."
+    else
+        cat >&2 <<'EOF'
+error: 127.0.0.1:8080 is already in use, but the systemd smd service is NOT
+running — a dev daemon (task run:smd) is almost certainly holding the port
+(and the audio + serial devices). The dogfood and dev daemons cannot run at the
+same time. Stop the dev daemon first (Ctrl-C in its terminal, or kill the
+`go run … ./cmd/smd`), then re-run this deploy.
+EOF
+        exit 1
+    fi
+else
+    note ":8080 free."
+fi
 
 step "1/5  Build dev RPM"
 bash scripts/dev-rpm.sh
