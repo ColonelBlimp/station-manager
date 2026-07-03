@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
   <head>
-	<meta name="generator" content="Hugo 0.162.1">
+	<meta name="generator" content="Hugo 0.126.2">
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Station Manager — Operator Manual</title>
@@ -360,14 +360,14 @@ transmitters plus a category letter, e.g. <code>2A</code>) and its <strong>ARRL/
 <p>Before operating Field Day you must tell Station Manager your own class and section.
 These live in the configuration file (<code>config.json</code>) under <code>ft8.field_day</code> — stop the
 daemon, edit, and restart:</p>
-<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-jsonc" data-lang="jsonc"><span style="display:flex;"><span><span style="color:#e6db74">&#34;ft8&#34;</span><span style="color:#960050;background-color:#1e0010">:</span> {
-</span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;field_day&#34;</span>: {
-</span></span><span style="display:flex;"><span>    <span style="color:#f92672">&#34;class&#34;</span>:            <span style="color:#e6db74">&#34;1D&#34;</span>,   <span style="color:#75715e">// your entry: &lt;transmitters&gt;&lt;category&gt;, e.g. 2A, 5F
-</span></span></span><span style="display:flex;"><span>    <span style="color:#f92672">&#34;section&#34;</span>:          <span style="color:#e6db74">&#34;DX&#34;</span>,   <span style="color:#75715e">// your ARRL/RAC section, or DX outside US/Canada
-</span></span></span><span style="display:flex;"><span>    <span style="color:#f92672">&#34;default_rst_rcvd&#34;</span>: <span style="color:#e6db74">&#34;59&#34;</span>    <span style="color:#75715e">// see &#34;Signal reports&#34; below
-</span></span></span><span style="display:flex;"><span>  }
-</span></span><span style="display:flex;"><span>}
-</span></span></code></pre></div><p>If your class or section is not set, Station Manager will refuse to start a Field Day
+<pre tabindex="0"><code class="language-jsonc" data-lang="jsonc">&#34;ft8&#34;: {
+  &#34;field_day&#34;: {
+    &#34;class&#34;:            &#34;1D&#34;,   // your entry: &lt;transmitters&gt;&lt;category&gt;, e.g. 2A, 5F
+    &#34;section&#34;:          &#34;DX&#34;,   // your ARRL/RAC section, or DX outside US/Canada
+    &#34;default_rst_rcvd&#34;: &#34;59&#34;    // see &#34;Signal reports&#34; below
+  }
+}
+</code></pre><p>If your class or section is not set, Station Manager will refuse to start a Field Day
 contact (and tell you why) rather than send an incomplete exchange.</p>
 <h3 id="operating">Operating</h3>
 <ul>
@@ -423,42 +423,42 @@ systemctl --user start smd
 </code></pre></blockquote>
 <p>Each entry in <code>forwarders</code> describes one destination:</p>
 <table>
-	<thead>
-			<tr>
-					<th>Field</th>
-					<th>Meaning</th>
-			</tr>
-	</thead>
-	<tbody>
-			<tr>
-					<td><code>name</code></td>
-					<td>A label you choose (e.g. <code>&quot;qrz&quot;</code>). Used in logs and status.</td>
-			</tr>
-			<tr>
-					<td><code>type</code></td>
-					<td>The service: <code>&quot;qrz&quot;</code> or <code>&quot;clublog&quot;</code>.</td>
-			</tr>
-			<tr>
-					<td><code>enabled</code></td>
-					<td><code>true</code> to upload new QSOs to this service. <code>false</code> means <em>don&rsquo;t queue anything</em> for it — see &ldquo;Turning a destination off&rdquo; below.</td>
-			</tr>
-			<tr>
-					<td><code>credentials</code></td>
-					<td>The login details for that service (differs per type — see below).</td>
-			</tr>
-			<tr>
-					<td><code>action_filter</code></td>
-					<td>Which changes to send: <code>&quot;insert&quot;</code>, <code>&quot;update&quot;</code>, <code>&quot;delete&quot;</code>. Optional — if you leave it out, it defaults to what the service actually supports.</td>
-			</tr>
-			<tr>
-					<td><code>tick_interval_sec</code></td>
-					<td>How often the uploader checks for new QSOs. Default <code>120</code> (every 2 minutes).</td>
-			</tr>
-			<tr>
-					<td><code>batch_size</code></td>
-					<td>How many QSOs to send per check. Default <code>5</code>.</td>
-			</tr>
-	</tbody>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td>A label you choose (e.g. <code>&quot;qrz&quot;</code>). Used in logs and status.</td>
+</tr>
+<tr>
+<td><code>type</code></td>
+<td>The service: <code>&quot;qrz&quot;</code> or <code>&quot;clublog&quot;</code>.</td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td><code>true</code> to upload new QSOs to this service. <code>false</code> means <em>don&rsquo;t queue anything</em> for it — see &ldquo;Turning a destination off&rdquo; below.</td>
+</tr>
+<tr>
+<td><code>credentials</code></td>
+<td>The login details for that service (differs per type — see below).</td>
+</tr>
+<tr>
+<td><code>action_filter</code></td>
+<td>Which changes to send: <code>&quot;insert&quot;</code>, <code>&quot;update&quot;</code>, <code>&quot;delete&quot;</code>. Optional — if you leave it out, it defaults to what the service actually supports.</td>
+</tr>
+<tr>
+<td><code>tick_interval_sec</code></td>
+<td>How often the uploader checks for new QSOs. Default <code>120</code> (every 2 minutes).</td>
+</tr>
+<tr>
+<td><code>batch_size</code></td>
+<td>How many QSOs to send per check. Default <code>5</code>.</td>
+</tr>
+</tbody>
 </table>
 <p>The defaults for <code>tick_interval_sec</code> and <code>batch_size</code> are deliberately
 gentle — they suit a slow or unreliable connection. You rarely need to
@@ -467,7 +467,7 @@ change them.</p>
 <p>QRZ needs a single <strong>logbook API key</strong>. Each QRZ logbook has its own key,
 found on the logbook&rsquo;s settings page on QRZ.com. That one key both
 authenticates you and selects which logbook the QSO lands in.</p>
-<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>{
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>{
 </span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;name&#34;</span>: <span style="color:#e6db74">&#34;qrz&#34;</span>,
 </span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;type&#34;</span>: <span style="color:#e6db74">&#34;qrz&#34;</span>,
 </span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;enabled&#34;</span>: <span style="color:#66d9ef">true</span>,
@@ -491,7 +491,7 @@ Club Log needs both. You obtain one key at
 <a href="https://clublog.org/requestapikey.php">clublog.org/requestapikey.php</a>.</li>
 </ul>
 <p><code>callsign</code> selects which of your account&rsquo;s logs receives the QSO.</p>
-<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>{
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>{
 </span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;name&#34;</span>: <span style="color:#e6db74">&#34;clublog&#34;</span>,
 </span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;type&#34;</span>: <span style="color:#e6db74">&#34;clublog&#34;</span>,
 </span></span><span style="display:flex;"><span>  <span style="color:#f92672">&#34;enabled&#34;</span>: <span style="color:#66d9ef">true</span>,
