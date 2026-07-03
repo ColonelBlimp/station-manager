@@ -162,10 +162,12 @@ func newResponseRecorder(w http.ResponseWriter) *responseRecorder {
 	return &responseRecorder{ResponseWriter: w, status: http.StatusOK}
 }
 
-// noteError records the error envelope's classification. First call
+// NoteError records the error envelope's classification. First call
 // wins (handlers should only call writeError once per request; the
-// guard is defence-in-depth).
-func (r *responseRecorder) noteError(code, message, op string) {
+// guard is defence-in-depth). Exported to satisfy httpkit.ErrorNoter so
+// httpkit.WriteError can stash the classification without importing this
+// package (ADR 0043).
+func (r *responseRecorder) NoteError(code, message, op string) {
 	if r.errCode == "" {
 		r.errCode = code
 		r.errMessage = message

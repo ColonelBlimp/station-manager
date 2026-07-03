@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/frontend"
+	"github.com/ColonelBlimp/station-manager/internal/api/httpkit"
 	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
@@ -38,7 +39,7 @@ type Server struct {
 	bridge                   *bridge.Service
 	ft8                      *ft8.Service
 	limits                   *loadLimiter
-	maxBodyBytes             int64
+	kit                      *httpkit.Kit
 	protocol                 string
 	socketPath               string
 	defaultPageLimit         int
@@ -84,7 +85,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		bridge:                   br,
 		ft8:                      ft8Svc,
 		limits:                   newLoadLimiter(cfg.Server.MaxConcurrentRequests, cfg.Server.MaxEventSubscribers, cfg.Server.SubmitRatePerSec, cfg.Server.SubmitRateBurst),
-		maxBodyBytes:             cfg.Server.MaxBodyBytes,
+		kit:                      httpkit.New(logger, cfg.Server.MaxBodyBytes),
 		protocol:                 cfg.Server.Protocol,
 		defaultPageLimit:         cfg.Server.DefaultPageLimit,
 		maxPageLimit:             cfg.Server.MaxPageLimit,

@@ -261,7 +261,7 @@ func TestCreateLogbook_DuplicateName(t *testing.T) {
 // honour Server.MaxBodyBytes the same way the QSO handlers do.
 func TestCreateLogbook_BodyTooLarge(t *testing.T) {
 	srv := testServer(t)
-	srv.maxBodyBytes = 50
+	srv.kit.SetMaxBody(50)
 
 	body := `{"name":"` + strings.Repeat("X", 200) + `","callsign":"G4ABC"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/logbook", strings.NewReader(body))
@@ -280,7 +280,7 @@ func TestCreateLogbook_BodyTooLarge(t *testing.T) {
 func TestUpdateLogbook_BodyTooLarge(t *testing.T) {
 	srv := testServer(t)
 	id := createTestLogbook(t, srv, "Old Name", "G4ABC")
-	srv.maxBodyBytes = 50
+	srv.kit.SetMaxBody(50)
 
 	body := `{"name":"` + strings.Repeat("X", 200) + `"}`
 	req := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/v1/logbook/%d", id), strings.NewReader(body))
@@ -486,7 +486,7 @@ func TestSubmitQso_BodyTooLarge(t *testing.T) {
 	// Create the logbook at default cap, THEN drop the cap — otherwise the
 	// M1 fix would also block the test's logbook POST.
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
-	srv.maxBodyBytes = 10
+	srv.kit.SetMaxBody(10)
 
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/qso?logbook=%d", lbID),
 		strings.NewReader(strings.Repeat("X", 100)))

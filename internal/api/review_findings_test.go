@@ -45,7 +45,7 @@ func TestSessionEmail_OversizeBody_Returns413(t *testing.T) {
 	srv := testServerWithMailer(t, types.SmtpConfig{
 		Enabled: true, Host: "x", Port: 25, From: "f@x", TimeoutSec: 5,
 	})
-	big := bytes.Repeat([]byte("a"), int(srv.maxBodyBytes)+1024)
+	big := bytes.Repeat([]byte("a"), int(srv.kit.MaxBody())+1024)
 	req := httptest.NewRequest(http.MethodPost, "/v1/session/email", bytes.NewReader(big))
 	w := httptest.NewRecorder()
 
