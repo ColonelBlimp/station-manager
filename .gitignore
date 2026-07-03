@@ -48,3 +48,4 @@ config.json
 /log
 /.claude/commands/log.md
 /catcli
+.claude
