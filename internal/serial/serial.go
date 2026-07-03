@@ -125,17 +125,23 @@ type Port struct {
 // go.bug.st PortError-code and ENOENT knowledge here contains the driver/OS
 // detail in the package that owns it, rather than leaking it to every caller.
 func classifyOpenError(err error) error {
-	var pe *serial.PortError
-	if stderr.As(err, &pe) {
+	if pe, ok := stderr.AsType[*serial.PortError](err); ok {
 		switch pe.Code() {
 		case serial.PermissionDenied:
 			return ErrPermissionDenied
 		case serial.PortBusy:
 			return ErrPortBusy
+		case serial.PortNotFound:
+			return ErrPortNotFound
+		default:
+			// A PortError we don't map to an actionable sentinel — let the
+			// caller fall back to the generic open-failed message.
+			return nil
 		}
 	}
 	// go.bug.st maps only EBUSY/EACCES to a PortError on Linux; a missing
-	// device path (rig off / cable out) surfaces as a raw ENOENT.
+	// device path (rig off / cable out) surfaces as a raw ENOENT, not a
+	// PortError, so it's matched here rather than in the switch above.
 	if stderr.Is(err, fs.ErrNotExist) {
 		return ErrPortNotFound
 	}
