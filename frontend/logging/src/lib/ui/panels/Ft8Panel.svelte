@@ -785,7 +785,7 @@
      mode shows no divider — the footer already carries the one slot's time. -->
 {#snippet slotSeparator(utc: string)}
     {@const parity = slotParity(utc)}
-    <li class="mt-0.5 bg-gray-400 pl-2 pt-0.5 text-gray-700 first:mt-0 first:pt-0">
+    <li class="mt-0.5 bg-gray-300 pl-2 pt-0.5 text-gray-700 first:mt-0 rounded-xs">
         {formatUtcClock(
             new Date(utc)
         )}{#if band}&nbsp;·&nbsp;{band}{/if}{#if parity}&nbsp;·&nbsp;{parity}{/if}
