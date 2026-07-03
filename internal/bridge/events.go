@@ -132,8 +132,13 @@ const (
 	// can't bootstrap on SSE-open. Details: {"driver": "<id>"}.
 	BridgeErrCodeMissingRead BridgeErrorCode = "missing_read_command"
 	// BridgeErrCodeSerialOpenFailed — serial.Open returned an error
-	// (permission, device-not-found, etc.). Details: {"port", "error"}.
+	// (device-not-found, busy, etc.). Details: {"port", "error"}.
 	BridgeErrCodeSerialOpenFailed BridgeErrorCode = "serial_open_failed"
+	// BridgeErrCodeSerialPermissionDenied — serial.Open failed with EACCES:
+	// the OS denied access to the device, typically because the daemon's user
+	// is not in the 'dialout' group. Split out from serial_open_failed so the
+	// SPA can render the actionable fix (add to dialout). Details: {"port"}.
+	BridgeErrCodeSerialPermissionDenied BridgeErrorCode = "serial_permission_denied"
 	// BridgeErrCodeInitWriteFailed — INIT byte-write failed. Details:
 	// {"driver", "error"}.
 	BridgeErrCodeInitWriteFailed BridgeErrorCode = "init_write_failed"
@@ -156,7 +161,8 @@ const (
 // permanent fault never produces a rig-state so it stays cached regardless.
 //
 // Mirrors the pipeline's exit classification (runPipeline): only
-// serial_open_failed and init_write_failed return exitTransient. The
+// serial_open_failed, serial_permission_denied, and init_write_failed return
+// exitTransient. The
 // identity codes are advisory (publishBridgeError, no exit) and are NOT
 // transient — they are operator-actionable, so they must survive a
 // rig-state. The default is non-transient: a new code stays cached (errs
@@ -164,7 +170,7 @@ const (
 // real fault) until it's deliberately classified here.
 func (c BridgeErrorCode) isTransient() bool {
 	switch c {
-	case BridgeErrCodeSerialOpenFailed, BridgeErrCodeInitWriteFailed:
+	case BridgeErrCodeSerialOpenFailed, BridgeErrCodeSerialPermissionDenied, BridgeErrCodeInitWriteFailed:
 		return true
 	default:
 		return false

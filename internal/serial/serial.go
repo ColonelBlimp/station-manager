@@ -145,6 +145,20 @@ type Port struct {
 func (p *Port) DroppedLines() uint64 { return p.droppedLines.Load() }
 
 // Open initializes and opens a serial port based on the given Config. It returns a Port or an error if unsuccessful.
+// ErrPermissionDenied is wrapped into the error returned by Open when the OS
+// denies access to the serial device (EACCES) — typically the daemon's user is
+// not in the 'dialout' group. Callers can errors.Is() this to surface an
+// actionable fix instead of leaking the raw OS error.
+var ErrPermissionDenied = stderr.New("permission denied opening serial port")
+
+// isPermissionDenied reports whether err is go.bug.st/serial's EACCES case.
+// Keeping the PortError-code knowledge here contains the go.bug.st dependency
+// in the package that owns it, rather than leaking it to every caller.
+func isPermissionDenied(err error) bool {
+	var pe *serial.PortError
+	return stderr.As(err, &pe) && pe.Code() == serial.PermissionDenied
+}
+
 func Open(cfg Config) (*Port, error) {
 	const op errors.Op = "serial.Open"
 
@@ -188,6 +202,11 @@ func Open(cfg Config) (*Port, error) {
 
 	p, err := serial.Open(ncfg.PortName, mode)
 	if err != nil {
+		if isPermissionDenied(err) {
+			// Map EACCES to the sentinel so the bridge can render an actionable
+			// "add your user to dialout" message rather than the raw OS error.
+			return nil, errors.New(op).WithErr(ErrPermissionDenied)
+		}
 		return nil, errors.New(op).WithErr(err)
 	}
 

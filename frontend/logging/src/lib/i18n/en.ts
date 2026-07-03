@@ -55,6 +55,8 @@ export const en: Record<string, string> = {
     // doesn't act on (and is ~95 chars of toast noise); the daemon still logs it
     // via the payload's `port`. Keep only the actionable cause in the UI.
     'bridge.error.serial_open_failed': 'Could not open the rig serial port ({error})',
+    'bridge.error.serial_permission_denied':
+        'Permission denied opening the rig serial port {port}. The daemon user needs access to the device — add it to the "dialout" group: run "sudo usermod -aG dialout $USER", then log out and back in (or reboot).',
     'bridge.error.init_write_failed': 'Could not enable push-state on driver "{driver}": {error}',
     'bridge.error.identity_unrecognised':
         'The connected rig\'s ID is not recognised by driver "{driver}" — check bridge.cat.driver matches your rig',

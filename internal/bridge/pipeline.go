@@ -237,7 +237,13 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 			Str("port", serialCfg.PortName).
 			Int("baud", serialCfg.BaudRate).
 			Msg("bridge: serial open failed; pipeline not started")
-		s.publishExitBridgeError(BridgeErrCodeSerialOpenFailed, map[string]string{"port": serialCfg.PortName, "error": errMessage(err)})
+		if stderr.Is(err, serial.ErrPermissionDenied) {
+			// Distinct, actionable code — the raw OS error is unhelpful ("permission
+			// denied"); the SPA renders the dialout-group fix keyed on this code.
+			s.publishExitBridgeError(BridgeErrCodeSerialPermissionDenied, map[string]string{"port": serialCfg.PortName})
+		} else {
+			s.publishExitBridgeError(BridgeErrCodeSerialOpenFailed, map[string]string{"port": serialCfg.PortName, "error": errMessage(err)})
+		}
 		// Port file may appear later (FTdx10 / FT-710 with built-in
 		// USB CAT exposes /dev/ttyUSBn only when powered on) — let
 		// the supervisor retry.
