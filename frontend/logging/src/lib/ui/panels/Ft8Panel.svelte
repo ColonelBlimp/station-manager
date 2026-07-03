@@ -372,6 +372,12 @@
                 toasts.info(`Already worked ${toMe.call} this session.`);
                 return;
             }
+            // Already in the queue: ctrl+click is a no-op. Give feedback (the ✓ marker
+            // already shows it) rather than silently refreshing the existing entry.
+            if (toMe && ft8PileupStack.items.some((x) => x.call === toMe.call)) {
+                toasts.info(`${toMe.call} is already in the pile-up.`);
+                return;
+            }
             // The single-parity rule (reject a wrong-parity add) lives in enqueueCaller,
             // against the queue's stable locked parity.
             enqueueCaller(d);
@@ -699,9 +705,9 @@
     {@const wrongForQueue =
         toMe !== null && workableParity !== '' && parity !== '' && parity !== workableParity}
     <!-- A station calling US (toMe) gets a distinct amber tint so it stands out from
-         band chatter. The row is ALWAYS clickable: Ctrl/Cmd+click adds it to the pile-
-         up stack (any state — pure capture), plain click works it now (when armed+idle).
-         A ✓ marks one already on the stack. -->
+         band chatter. Ctrl/Cmd+click adds it to the pile-up stack (any state — pure
+         capture), plain click works it now (when armed+idle). Once queued it shows a ✓
+         and loses its hover/add affordance — a further Ctrl+click just says "already in". -->
     <li
         class="cursor-default flex gap-2 whitespace-nowrap {isWorking
             ? 'rounded bg-indigo-50 ring-1 ring-indigo-200'
@@ -742,13 +748,17 @@
         {:else if toMe}
             <button
                 type="button"
-                class="truncate text-left font-medium cursor-pointer hover:underline"
+                class="truncate text-left font-medium cursor-pointer {queued
+                    ? ''
+                    : 'hover:underline'}"
                 style:color={configState.ft8Display.highlightCalling}
-                title={wrongForQueue
-                    ? `${lineCall} is on the ${parity} slot — wrong parity for this ${workableParity} run; can't add to the pile-up`
-                    : canAnswer
-                      ? `Work ${lineCall} now · Ctrl+click to add to the pile-up stack`
-                      : `${lineCall} is calling you · Ctrl+click to add to the pile-up stack`}
+                title={queued
+                    ? `${lineCall} is already queued in the pile-up`
+                    : wrongForQueue
+                      ? `${lineCall} is on the ${parity} slot — wrong parity for this ${workableParity} run; can't add to the pile-up`
+                      : canAnswer
+                        ? `Work ${lineCall} now · Ctrl+click to add to the pile-up stack`
+                        : `${lineCall} is calling you · Ctrl+click to add to the pile-up stack`}
                 onclick={(e) => onCallerClick(e, d)}>{d.text}</button
             >
         {:else}

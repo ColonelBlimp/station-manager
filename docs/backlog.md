@@ -1061,14 +1061,16 @@ when it ships — don't let this rot into a graveyard.
   vs per-QSO. Surfaces: `Ft8MsgPanel` (Next control), `ft8.svelte.ts`, possibly the
   sequencer rung count.
 
-- **FT8: suppress the ctrl-click affordance on an already-queued Band Activity row.**
-  Filed 2026-06-27 (dogfood), triaged 2026-07-03. Functional double-add is already
-  prevented (`ft8PileupStack.push` refreshes an existing call in place, never appends a
-  duplicate) and a queued row carries a `✓` marker — but the row still shows the
-  clickable/hover affordance, so a ctrl/cmd-click on an already-queued station silently
-  refreshes it with no visible effect. Polish: on a queued row, drop the hover cue and
-  make the ctrl-click a no-op (or a brief "already queued" toast). Cosmetic; SPA-only
-  (`Ft8Panel.svelte` Band Activity row).
+- ~~**FT8: suppress the ctrl-click affordance on an already-queued Band Activity row.**~~
+  **SHIPPED 2026-07-03.** A queued row now drops its `hover:underline` "add" cue, its
+  tooltip reads "already queued in the pile-up", and a ctrl/cmd-click on it is a no-op
+  with an "X is already in the pile-up" toast (was a silent in-place refresh) —
+  `Ft8Panel.svelte` (`onCallerClick` guard, mirroring the sibling in-flight/session-dupe
+  guards, + conditional row class/title). Original note below. Filed 2026-06-27 (dogfood),
+  triaged 2026-07-03. Functional double-add is already prevented (`ft8PileupStack.push`
+  refreshes an existing call in place, never appends a duplicate) and a queued row carries
+  a `✓` marker — but the row still showed the clickable/hover affordance, so a ctrl/cmd-click
+  on an already-queued station silently refreshed it with no visible effect.
 
 - **FT8: pile-up drawer header wraps to two lines.** Filed 2026-06-27 (dogfood),
   triaged 2026-07-03. The `Ft8PileupDrawer` header ("Pile-up (N) · even · paused") can
