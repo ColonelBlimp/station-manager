@@ -1075,12 +1075,13 @@ when it ships — don't let this rot into a graveyard.
   a `✓` marker — but the row still showed the clickable/hover affordance, so a ctrl/cmd-click
   on an already-queued station silently refreshed it with no visible effect.
 
-- **FT8: pile-up drawer header wraps to two lines.** Filed 2026-06-27 (dogfood),
-  triaged 2026-07-03. The `Ft8PileupDrawer` header ("Pile-up (N) · even · paused") can
-  wrap in the narrow `w-33` drawer. A `whitespace-nowrap` fix was applied 2026-07-03 then
-  reverted at operator request (it came bundled with a `bg-gray-500` background experiment
-  that was the part being undone). Re-file as header-only: `whitespace-nowrap` (or
-  truncate) with **no** background change. SPA-only.
+- ~~**FT8: pile-up drawer header wraps to two lines.**~~ **SHIPPED 2026-07-03 (operator).**
+  Solved by making the header `<h2>` a `flex flex-col` with two spans — "Pile-up (N) ·
+  parity" on line 1 and "Paused" on its own line 2 — so the count+parity never wraps
+  mid-phrase (`Ft8PileupDrawer.svelte`). An earlier `whitespace-nowrap`+`bg-gray-500`
+  attempt was reverted; this is the kept fix. Original note below. Filed 2026-06-27
+  (dogfood), triaged 2026-07-03. The header ("Pile-up (N) · even · paused") could wrap in
+  the narrow drawer.
 
 - **FT8 Field Day — FD-aware Operate ladder render (+ remaining FD UI).** Filed
   2026-06-28 (dogfood "correct the ladder display for the ARRL FD"), triaged 2026-07-03.
