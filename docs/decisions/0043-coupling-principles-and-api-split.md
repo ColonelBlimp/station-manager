@@ -29,12 +29,26 @@ subsystem (`ft8`, churn 224) is loosely coupled (no `qsoservice`/`bridge`
 import; injected seams; SSE). That contrast is the whole lesson, and it wasn't
 written down anywhere as doctrine.
 
-Separately, `bridge` already announces state via the events hub, but
-`qsoservice` does **not** announce after a submit (Phone/CW QSOs are logged by
-command; FT8 QSOs announce via `ft8.PublishQsoLogged` — an asymmetry), and the
-forwarding worker drains the durable `qso_upload` table on a `time.Ticker`
-poll. The upload-queue row is written atomically with the QSO row (one-fails-
-all-fail, per the invariant). These facts shape how far "event-based" can go.
+Separately, the announcement infrastructure is further along than a first
+reading suggested. `bridge` announces rig state, and `qsoservice` **already
+publishes** `qso.stored`/`qso.updated`/`qso.deleted` on the main `events.Hub`
+for every QSO (submit/update/delete alike). Those payloads are deliberately
+minimal (`{qso_id, logbook_id}` — "clients re-query for details") and currently
+have **no SPA consumer**: the logging SPA subscribes only to `/v1/rig/events`
+and `/v1/ft8/events`. The session log is therefore populated by two *other*
+paths — Phone/CW rows added client-side from the `POST /v1/qso` response, FT8
+rows from the rich `ft8-logged` event on the FT8 hub. The forwarding worker
+drains the durable `qso_upload` table on a `time.Ticker` poll; the upload-queue
+row is written atomically with the QSO row (one-fails-all-fail, per the
+invariant). These facts shape how far "event-based" can go — and mean the
+useful change-notification primitive already exists, in the right minimal shape.
+
+> **Correction (2026-07-03).** An earlier draft of this ADR asserted
+> "`qsoservice` does not announce after a submit." That was **wrong** — it
+> publishes `qso.stored`/`updated`/`deleted`. The error was caught while
+> implementing ADR 0043 (reading the code directly rather than trusting a grep).
+> The Consequences "announce" item is reframed accordingly: the spine exists and
+> is correctly minimal; the open work is a *consumer*, deferred.
 
 ## Decision
 
@@ -128,11 +142,17 @@ differs from any domain type (rig command, `/ft8/qso/start`, `config` PUT).
   root `api` (acyclic; they may import only `httpkit`); (3) **the anti-regression
   ratchet** — each `api/<surface>` imports **at most one** subsystem service
   package, so a handler group growing a second dependency fails CI.
-- **Two concrete announce-don't-command moves** (best-effort, outside the tx):
-  `qsoservice` announces `qso-logged` for *all* QSOs (retiring the FT8-only
-  `PublishQsoLogged` special case), and a best-effort "enqueued" notification
-  wakes the forwarding worker so latency isn't bounded by the poll `Tick` (the
-  poll stays as the durable fallback).
+- **Announce-don't-command — spine present, consumer deferred.** The change
+  primitive already exists: `qsoservice` publishes minimal `qso.stored`/
+  `updated`/`deleted` on the main hub. It is intentionally left **unconsumed and
+  minimal** — a change-notify + re-query shape, which is the *correct* primitive
+  for future live-sync (fat events are a sync anti-pattern), so it should not be
+  fattened. Unifying the session log onto it (making the SPA subscribe, retiring
+  the `POST`-response add and `ft8-logged`) is DRY-against-two-working-paths and
+  is **deferred** until a real second consumer (live multi-device sync, *beyond*
+  the ADR-0040 P1 backup/restore scope) pulls the shape. A best-effort "enqueued"
+  notification to wake the forwarding worker (currently `Tick`-polled) stays a
+  noted optional latency optimization, not worth it on a single-user install now.
 - **Cost — the test suite:** ~9,000 lines of api tests are built around
   constructing one `Server`. Migration is incremental, not big-bang (see below);
   during transition the root `Server` delegates to the extracted groups so tests
