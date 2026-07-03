@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	stderr "errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -80,6 +81,16 @@ type ConfigResponse struct {
 	// rejected at Call-CQ start), so the wire surface only ever carries the two
 	// attended auto modes.
 	Ft8CallerAnswerMode *string `json:"ft8_caller_answer_mode,omitempty"`
+	// Ft8MaxRepeats is the FT8 sequencer's unanswered-rung repeat cap
+	// (ft8.tx.max_repeats): how many times an unanswered rung is re-sent before the
+	// exchange gives up so the operator's Next can advance — the "N calls" readout.
+	// Always served RESOLVED on GET (default 6, clamped [1, Ft8MaxRepeatsCeiling]) for
+	// the logging SPA's FT8 Settings tab. Operator-writable and applied LIVE: a PUT
+	// persists it AND pushes it into the running sequencer (Service.SetMaxRepeats), so
+	// lowering it drops a dead contact sooner mid-pile-up without a restart. This is
+	// the one /v1/config field with a live side-effect (config.md §11). **Presence-
+	// aware** on PUT; pointer-typed so the handler tells "sent" from "absent".
+	Ft8MaxRepeats *int `json:"ft8_max_repeats,omitempty"`
 	// Ft8FieldDay is the operator's ARRL Field Day exchange (class + ARRL/RAC
 	// section), sent when answering a CQ FD over FT8. Served on GET as the stored
 	// block (empty `{}` when unset — FD is once a year, so empty is normal).
@@ -400,6 +411,23 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		candidate.Ft8.TX.CallerAnswerMode = mode
 	}
+	// FT8 unanswered-rung repeat cap — presence-aware (logging SPA FT8 Settings tab).
+	// Validated to [1, Ft8MaxRepeatsCeiling] here as a loud 400 rather than leaning on
+	// the resolver's silent clamp, matching caller_answer_mode's strict-wire contract.
+	// Applied LIVE after the persist commits (below), so the change reaches the running
+	// sequencer without a restart.
+	if req.Ft8MaxRepeats != nil {
+		n := *req.Ft8MaxRepeats
+		if n < 1 || n > types.Ft8MaxRepeatsCeiling {
+			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+				fmt.Sprintf("ft8_max_repeats must be between 1 and %d", types.Ft8MaxRepeatsCeiling), op)
+			return
+		}
+		if candidate.Ft8.TX == nil {
+			candidate.Ft8.TX = &types.Ft8TXConfig{}
+		}
+		candidate.Ft8.TX.MaxRepeats = n
+	}
 	// FT8 Field Day exchange — presence-aware (config SPA FT8 tab). Normalised to
 	// upper-case (TrimSpace+ToUpper) here so "2a"/"dx" store canonically; the shared
 	// Validate then rejects a malformed class/section as a 400 (validateFt8FieldDay).
@@ -554,6 +582,14 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Live-apply the FT8 repeat cap to the running sequencer — the one config field
+	// that takes effect without a restart, so the operator can dial it down mid-pile-up.
+	// After the persist so a rejected/failed write never applies; nil-safe when FT8 is
+	// off (s.ft8 == nil).
+	if req.Ft8MaxRepeats != nil {
+		s.ft8.SetMaxRepeats(*req.Ft8MaxRepeats)
+	}
+
 	resp, err := s.buildConfigResponse(r, s.cfg.Snapshot())
 	if err != nil {
 		s.writeServerError(w, op, err, "db_error", "database operation failed")
@@ -688,6 +724,11 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// the SPA dropdown only offers the two auto modes and a PUT rejects anything else.
 	callerMode := types.ResolveFt8CallerAnswerMode(cfg.Ft8.TX)
 	resp.Ft8CallerAnswerMode = &callerMode
+
+	// FT8 unanswered-rung repeat cap, resolved (default 6, clamp [1, Ft8MaxRepeatsCeiling])
+	// so the Settings-tab field shows the effective value even on a fresh config.
+	maxRepeats := types.ResolveFt8MaxRepeats(cfg.Ft8.TX)
+	resp.Ft8MaxRepeats = &maxRepeats
 
 	// FT8 Field Day exchange — served as the stored block, or an empty `{}` when
 	// unset, so the SPA always reads a stable {class, section} shape (no defaults to

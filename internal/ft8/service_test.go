@@ -374,3 +374,28 @@ func TestCapture_NoCatGate_DemandDriven(t *testing.T) {
 	defer unsub()
 	require.True(t, src.wasStarted(), "no CAT gate → subscriber acquires capture immediately")
 }
+
+// TestSetMaxRepeats: the live unanswered-rung repeat cap clamps to the same
+// [1, ceiling] range as the config resolver, is stored on the sequencer, and the
+// Service passthrough is nil-safe (the api Server calls it even when FT8 is disabled).
+func TestSetMaxRepeats(t *testing.T) {
+	// Sequencer-level clamp + live store.
+	r := &seqRecorder{}
+	seq := newSequencer(r.transmit, r.publish, 6, nil)
+	seq.SetMaxRepeats(3)
+	require.Equal(t, 3, seq.maxRepeats)
+	seq.SetMaxRepeats(types.Ft8MaxRepeatsCeiling + 5)
+	require.Equal(t, types.Ft8MaxRepeatsCeiling, seq.maxRepeats, "above the ceiling clamps down")
+	seq.SetMaxRepeats(0)
+	require.Equal(t, defaultSeqMaxRepeats, seq.maxRepeats, "<=0 restores the default")
+
+	// Service forwards to its sequencer.
+	svc := newService(types.Ft8Config{}, logging.Noop(), nil)
+	svc.SetMaxRepeats(4)
+	require.Equal(t, 4, svc.seq.maxRepeats)
+
+	// nil-safe: the config PUT handler calls this unconditionally, even when FT8 is
+	// off and the api Server holds a nil *Service.
+	var nilSvc *Service
+	require.NotPanics(t, func() { nilSvc.SetMaxRepeats(3) })
+}

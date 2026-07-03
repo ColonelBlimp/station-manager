@@ -10,8 +10,8 @@
 > rewire — see §12 status). **§13 versioning/migration scaffold SHIPPED** (§13.6). **§15 persistence
 > shape SETTLED** — sparse-on-disk rejected; filled-on-disk kept, default-value drift handled by a
 > §13 migration with the equals-old-default guard (no code — §15.2/§15.4). **§11 reload — decided,
-> implementation GATED on the config-SPA write path** (no runtime writer touches a hot-reloadable
-> field today — see §11.5). **§14 defaults — §14a consolidation shipped; §14b `*T` fold stays
+> general OnChange/Reload mechanism GATED on the config-SPA write path** (see §11.5); one field,
+> `ft8_max_repeats`, is live-applied today via a targeted setter (2026-07-03), not the general mechanism. **§14 defaults — §14a consolidation shipped; §14b `*T` fold stays
 > deferred** (sparse was its only justification — see §14.5 / §15.2); §14's defaults-fill
 > consolidation is the only remaining optional code item. Multi-rig / N-writer parked (§8).
 >
@@ -255,7 +255,7 @@ would let config create an unsafe state.
 | Tune duration ≤ 30 s | `bridge.Service` construction | const 15 s default, clamped ≤ 30 |
 | Tune restore-settle ≤ 2 s | `bridge.Service` construction | const 150 ms default, clamped ≤ 2 s |
 | FT8 TX hard auto-off (`ft8TxMaxDuration`) | `internal/bridge/ft8tx.go` | 18 s, not operator-overridable |
-| FT8 sequencer repeat cap ≤ 10 (`Ft8MaxRepeatsCeiling`) | `types.ResolveFt8MaxRepeats` | const 6 default, config `ft8.tx.max_repeats` clamped ≤ 10 |
+| FT8 sequencer repeat cap ≤ 10 (`Ft8MaxRepeatsCeiling`) | `types.ResolveFt8MaxRepeats` | const 6 default, config `ft8.tx.max_repeats` clamped ≤ 10; surfaced on `/v1/config` as `ft8_max_repeats` (logging FT8 Settings tab) + **applied live** via `Service.SetMaxRepeats` (§11.5) |
 | Band-activity `history_max` clamp [10, 2000] | `ResolveFt8Display` | both a default *and* a clamp |
 | Bridge timeout sane range [50 ms, 1 h] | `validateBridge` | rejects out-of-range as a typo guard |
 
@@ -658,11 +658,19 @@ When the implementation was scoped, every runtime config-write path was traced: 
 writes only `LoggingStation` / `Station` / `ft8_display` / active-rig `mode_mappings` (all
 **already-live** classes 1–2 — read-at-use or SPA-re-read-on-response, needing no reload), and the
 two `cmd/smd` startup writes (`UserAgent`, default-logbook self-heal) fire before subsystems exist.
-**No runtime writer touches a class-3 (hot-reloadable) field** — forwarder config, SMTP creds,
+**Almost no runtime writer touches a class-3 (hot-reloadable) field** — forwarder config, SMTP creds,
 enrichment/lookup, `ft8.enabled`/`device`/`ft8_mode` are all edited the "stop → edit config.json →
 restart" way. So building `OnChange` + the four `Reload`s now would be the mechanism *ahead of its
 trigger*: the hook would fire on every My Station save and every subsystem `Reload` would no-op,
 and it couldn't be tested end-to-end (no runtime writer to exercise it).
+
+**The one exception (2026-07-03): `ft8_max_repeats`** — the FT8 sequencer's unanswered-rung repeat
+cap — is applied live by a **targeted `s.ft8.SetMaxRepeats` call in the `PUT /v1/config` handler**
+(the sequencer's own `mu` makes the write safe mid-contact), NOT via the general `OnChange`/`Reload`
+mechanism, which stays deferred. It's a bespoke live field because the operator needs to dial the
+cap down *mid-pile-up* to stop wasting slots on a dead contact — a per-QSO operating adjustment that
+doesn't justify standing up the whole reload machinery. If a second such field appears, that's the
+signal to revisit the general mechanism.
 
 The trigger is the **config-SPA** (§10.6, separate workstream): that's what makes
 forwarder/mailer/enrichment/rig-hardware editable at runtime. §11 lands *with* it — editor and

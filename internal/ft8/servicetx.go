@@ -591,6 +591,18 @@ func (s *Service) SetExchangePath(path string) {
 	s.txMu.Unlock()
 }
 
+// SetMaxRepeats retunes the live unanswered-rung repeat cap (ft8.tx.max_repeats),
+// applied immediately to the running sequencer so the operator can dial it down
+// mid-pile-up without a restart (wired from the /v1/config PUT). nil-safe: a no-op
+// when FT8 is disabled (the api Server holds a nil *Service) or before the sequencer
+// exists.
+func (s *Service) SetMaxRepeats(n int) {
+	if s == nil || s.seq == nil {
+		return
+	}
+	s.seq.SetMaxRepeats(n)
+}
+
 // exchangePath returns the active exchange's antenna path, "S" or "L"
 // (short when unset).
 func (s *Service) exchangePath() string {

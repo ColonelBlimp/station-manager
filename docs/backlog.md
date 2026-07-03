@@ -1052,7 +1052,14 @@ when it ships — don't let this rot into a graveyard.
   is mostly a new combined endpoint + a client demultiplexer. NOT urgent (same-tab
   nav covers normal use); revisit if tab-starvation recurs or before a wider release.
 
-- **FT8: operator-adjustable attempt limit before Next.** Filed 2026-06-27 (dogfood),
+- **FT8: operator-adjustable attempt limit before Next.** **Daemon side SHIPPED
+  2026-07-03** — `ft8.tx.max_repeats` is surfaced on `/v1/config` as `ft8_max_repeats`
+  ([1–10], resolved default 6) and **applied live** to the running sequencer via
+  `Service.SetMaxRepeats`/`Sequencer.SetMaxRepeats` (mutex-guarded, affects an in-flight
+  contact on its next slot — no restart). Decided: **logging FT8 Settings tab, live**
+  (not the config SPA). Tests: sequencer clamp + service forward/nil-safe (`ft8`),
+  GET/PUT/400/omit round-trip (`api`); docs: api-endpoints.md + config.md §11.5 (the one
+  live-applied config field). **SPA field still pending.** Filed 2026-06-27 (dogfood),
   triaged 2026-07-03. In a big pile-up, if a station stops hearing you the sequencer
   works the full rung count (daemon-set `maxRepeats`) before the operator's Next can
   advance — wasting slots on a non-responder. The "N calls left" readout is display-only

@@ -243,6 +243,20 @@ func newSequencer(transmit func(string, float64, float64, func(ok bool)) error, 
 	}
 }
 
+// SetMaxRepeats retunes the unanswered-rung repeat cap while the sequencer runs
+// (ft8.tx.max_repeats, edited from the FT8 Settings tab). Takes s.mu because
+// maxRepeats is read on the slot goroutine; the next OnSlot rung check uses the new
+// value, so LOWERING it mid-pile-up drops a dead contact sooner (and raising it lets
+// it call longer). Clamped via the shared config resolver ([1, Ft8MaxRepeatsCeiling];
+// ≤0 → default) so there's one clamp truth. The change is picked up on the next slot;
+// the fresh cap is republished then, so no forced re-publish here.
+func (s *Sequencer) SetMaxRepeats(n int) {
+	resolved := types.ResolveFt8MaxRepeats(&types.Ft8TXConfig{MaxRepeats: n})
+	s.mu.Lock()
+	s.maxRepeats = resolved
+	s.mu.Unlock()
+}
+
 // StartQso begins answering a CQ. theirSlotUTC is the RFC3339 start of the slot
 // the CQ was heard in (it fixes the worked station's parity — we transmit in the
 // opposite one). offsetHz is the operator-picked clear offset. Idempotency: only

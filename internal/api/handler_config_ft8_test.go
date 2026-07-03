@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -139,6 +140,62 @@ func TestConfig_Ft8CallerAnswerMode_InvalidValue400(t *testing.T) {
 		if code := decodeErrCode(t, w); code != "invalid_field_value" {
 			t.Errorf("PUT %q code = %q, want invalid_field_value", bad, code)
 		}
+	}
+}
+
+// GET serves the resolved default repeat cap (6) on a fresh config, so the Settings-
+// tab field has a value to render without a prior save.
+func TestConfig_Ft8MaxRepeats_GetReturnsDefault(t *testing.T) {
+	srv := testServer(t)
+	resp := ft8GetConfig(t, srv)
+	if resp.Ft8MaxRepeats == nil {
+		t.Fatal("ft8_max_repeats absent on GET; want resolved default")
+	}
+	if *resp.Ft8MaxRepeats != types.DefaultFt8MaxRepeats {
+		t.Errorf("max_repeats = %d, want default %d", *resp.Ft8MaxRepeats, types.DefaultFt8MaxRepeats)
+	}
+}
+
+// A PUT carrying ft8_max_repeats persists it; a follow-up GET reflects it.
+func TestConfig_Ft8MaxRepeats_PutUpdates(t *testing.T) {
+	srv := testServer(t)
+	if w := ft8PutConfig(t, srv, `{"ft8_max_repeats":3}`); w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, body %s", w.Code, w.Body.String())
+	}
+	resp := ft8GetConfig(t, srv)
+	if resp.Ft8MaxRepeats == nil || *resp.Ft8MaxRepeats != 3 {
+		t.Fatalf("after PUT, ft8_max_repeats = %v, want 3", resp.Ft8MaxRepeats)
+	}
+}
+
+// Out-of-range values are a loud 400 (strict-wire contract), not silently clamped:
+// below 1 and above the hard ceiling both reject.
+func TestConfig_Ft8MaxRepeats_InvalidValue400(t *testing.T) {
+	srv := testServer(t)
+	for _, bad := range []int{0, types.Ft8MaxRepeatsCeiling + 1} {
+		w := ft8PutConfig(t, srv, `{"ft8_max_repeats":`+strconv.Itoa(bad)+`}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("PUT %d = %d, want 400 (body %s)", bad, w.Code, w.Body.String())
+		}
+		if code := decodeErrCode(t, w); code != "invalid_field_value" {
+			t.Errorf("PUT %d code = %q, want invalid_field_value", bad, code)
+		}
+	}
+}
+
+// A PUT that omits ft8_max_repeats leaves a previously-stored value untouched —
+// the presence-aware contract.
+func TestConfig_Ft8MaxRepeats_OmittedPutDoesNotClobber(t *testing.T) {
+	srv := testServer(t)
+	if w := ft8PutConfig(t, srv, `{"ft8_max_repeats":4}`); w.Code != http.StatusOK {
+		t.Fatalf("seed PUT = %d, body %s", w.Code, w.Body.String())
+	}
+	if w := ft8PutConfig(t, srv, `{"ft8_display":{"feed_mode":"single"}}`); w.Code != http.StatusOK {
+		t.Fatalf("display PUT = %d, body %s", w.Code, w.Body.String())
+	}
+	resp := ft8GetConfig(t, srv)
+	if resp.Ft8MaxRepeats == nil || *resp.Ft8MaxRepeats != 4 {
+		t.Fatalf("ft8_max_repeats clobbered by an omitted PUT: %v", resp.Ft8MaxRepeats)
 	}
 }
 
