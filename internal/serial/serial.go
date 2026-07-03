@@ -21,40 +21,18 @@ const (
 	// line before it is dropped (the reader keeps running for subsequent
 	// well-formed lines).
 	maxLineSize = 4096
+
+	// defaultBufSize is the reader loop's per-Read buffer size.
+	defaultBufSize = 512
 )
 
 // Client is the high-level interface for sending CAT commands and
 // receiving responses over a serial port. It is safe for concurrent use
-// by multiple goroutines *for writes* via WriteCommand; all writes are
+// by multiple goroutines *for writes* via WriteCommandBytes; all writes are
 // serialized internally. Reads are delivered on a single background
 // reader goroutine and must be consumed by at most one goroutine at a
-// time via ReadResponse/Exec.
+// time via ReadResponseBytes/ExecBytes.
 type Client interface {
-	// WriteCommand writes a single CAT command string to the port.
-	// Implementations will append the configured line delimiter if missing.
-	//
-	// WriteCommand is safe to call concurrently from multiple goroutines;
-	// the implementation will serialize writes on the underlying port.
-	WriteCommand(ctx context.Context, cmd string) error
-
-	// ReadResponse reads a single response line terminated by the
-	// configured delimiter and returns it as a string. This is a
-	// convenience wrapper over ReadResponseBytes and interprets the
-	// response bytes as UTF-8 text without validation.
-	//
-	// ReadResponse is not safe to call concurrently from multiple
-	// goroutines on the same Client. Use a single reader goroutine to
-	// consume responses and fan them out if needed.
-	ReadResponse(ctx context.Context) (string, error)
-
-	// Exec is a convenience that writes a command then reads one response
-	// as a string. It wraps ExecBytes and converts the returned bytes to a
-	// string without validating UTF-8.
-	//
-	// Like ReadResponse, Exec must not be invoked concurrently by multiple
-	// goroutines on the same Client.
-	Exec(ctx context.Context, cmd string) (string, error)
-
 	// WriteCommandBytes writes a single CAT command as an opaque byte
 	// slice to the port. Implementations will append the configured line
 	// delimiter if it is not already present as the final byte.
@@ -82,7 +60,7 @@ type Client interface {
 	// command just written. It is only meaningful against a rig speaking
 	// strictly request/response: if the rig is in AUTO/Transceive mode, an
 	// unsolicited push already buffered will be returned as "the response".
-	// The bridge never uses Exec for this reason (it owns its own read loop).
+	// The bridge never uses ExecBytes for this reason (it owns its own read loop).
 	ExecBytes(ctx context.Context, cmd []byte) ([]byte, error)
 
 	// Close closes the underlying port. It is safe to call multiple times.
@@ -238,14 +216,6 @@ func newPort(sp SerialPort, cfg Config) *Port {
 	return po
 }
 
-// WriteCommand implements Client, delegating to WriteCommandBytes.
-func (p *Port) WriteCommand(ctx context.Context, cmd string) error {
-	if len(cmd) == 0 {
-		return nil
-	}
-	return p.WriteCommandBytes(ctx, []byte(cmd))
-}
-
 // WriteCommandBytes implements the byte-oriented write for Client.
 func (p *Port) WriteCommandBytes(ctx context.Context, cmd []byte) error {
 	const op errors.Op = "serial.WriteCommandBytes"
@@ -337,18 +307,6 @@ func (p *Port) writeAll(ctx context.Context, cmd []byte) error {
 	return nil
 }
 
-// ReadResponse implements Client, delegating to ReadResponseBytes and
-// converting the returned bytes to a string.
-func (p *Port) ReadResponse(ctx context.Context) (string, error) {
-	const op errors.Op = "serial.ReadResponse"
-
-	b, err := p.ReadResponseBytes(ctx)
-	if err != nil {
-		return "", errors.New(op).WithErr(err)
-	}
-	return string(b), nil
-}
-
 // ReadResponseBytes implements the byte-oriented read for Client.
 func (p *Port) ReadResponseBytes(ctx context.Context) ([]byte, error) {
 	const op errors.Op = "serial.ReadResponseBytes"
@@ -378,18 +336,6 @@ func (p *Port) ReadResponseBytes(ctx context.Context) ([]byte, error) {
 		}
 		return line, nil
 	}
-}
-
-// Exec implements Client, delegating to ExecBytes and converting the
-// response bytes to a string.
-func (p *Port) Exec(ctx context.Context, cmd string) (string, error) {
-	const op errors.Op = "serial.Exec"
-
-	b, err := p.ExecBytes(ctx, []byte(cmd))
-	if err != nil {
-		return "", errors.New(op).WithErr(err)
-	}
-	return string(b), nil
 }
 
 // ExecBytes implements the byte-oriented Exec for Client.
@@ -444,8 +390,9 @@ func (p *Port) readerLoop() {
 	defer close(p.doneCh)
 	defer close(p.responses)
 
-	buf := getReadBuf()
-	defer putReadBuf(buf)
+	// One buffer for this Port's whole lifetime (allocated once per reader
+	// goroutine); no pool — reconnects are rare, so pooling this saved nothing.
+	buf := make([]byte, defaultBufSize)
 
 	var lineBuf []byte
 	// discarding is set when the current line exceeds maxLineSize.

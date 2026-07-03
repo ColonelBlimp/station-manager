@@ -70,10 +70,6 @@ func (f *fakeSerial) recordedWrites() [][]byte {
 	return out
 }
 
-func (f *fakeSerial) WriteCommand(ctx context.Context, cmd string) error {
-	return f.WriteCommandBytes(ctx, []byte(cmd))
-}
-
 func (f *fakeSerial) WriteCommandBytes(ctx context.Context, cmd []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -94,11 +90,6 @@ func (f *fakeSerial) WriteCommandBytes(ctx context.Context, cmd []byte) error {
 	return nil
 }
 
-func (f *fakeSerial) ReadResponse(ctx context.Context) (string, error) {
-	b, err := f.ReadResponseBytes(ctx)
-	return string(b), err
-}
-
 func (f *fakeSerial) ReadResponseBytes(ctx context.Context) ([]byte, error) {
 	select {
 	case <-ctx.Done():
@@ -109,13 +100,6 @@ func (f *fakeSerial) ReadResponseBytes(ctx context.Context) ([]byte, error) {
 		}
 		return line, nil
 	}
-}
-
-func (f *fakeSerial) Exec(ctx context.Context, cmd string) (string, error) {
-	if err := f.WriteCommand(ctx, cmd); err != nil {
-		return "", err
-	}
-	return f.ReadResponse(ctx)
 }
 
 func (f *fakeSerial) ExecBytes(ctx context.Context, cmd []byte) ([]byte, error) {

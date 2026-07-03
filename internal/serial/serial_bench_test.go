@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// BenchmarkExec measures the cost of a typical Exec call against a mock port.
+// BenchmarkExec measures the cost of a typical ExecBytes call against a mock port.
 func BenchmarkExec(b *testing.B) {
 	mp := newMockPort()
 	cfg := Config{
@@ -29,7 +29,7 @@ func BenchmarkExec(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if _, err := c.Exec(ctx, "FA"); err != nil {
+		if _, err := c.ExecBytes(ctx, []byte("FA")); err != nil {
 			b.Fatalf("Exec error: %v", err)
 		}
 	}
@@ -59,7 +59,7 @@ func BenchmarkReaderLoop(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := c.ReadResponse(ctx); err != nil {
+		if _, err := c.ReadResponseBytes(ctx); err != nil {
 			b.Fatalf("ReadResponse error: %v", err)
 		}
 	}

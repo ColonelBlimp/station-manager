@@ -80,11 +80,8 @@ func validateConfig(cfg Config) (Config, error) {
 	if cfg.DataBits == 0 {
 		cfg.DataBits = 8
 	}
-	if cfg.StopBits == 0 {
-		cfg.StopBits = serial.OneStopBit
-	}
-	if cfg.Parity == 0 {
-		cfg.Parity = serial.NoParity
-	}
+	// StopBits and Parity intentionally have no default block: go.bug.st's
+	// OneStopBit and NoParity are both the zero value, so "cfg.X == 0 → set to
+	// the zero value" would be a no-op. The zero value is the desired default.
 	return cfg, nil
 }

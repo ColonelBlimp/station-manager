@@ -25,11 +25,11 @@ func Example() {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	resp, err := client.Exec(ctx, "FA")
+	resp, err := client.ExecBytes(ctx, []byte("FA"))
 	if err != nil {
 		fmt.Println("exec error:", err)
 		return
 	}
 
-	fmt.Println("response:", resp)
+	fmt.Println("response:", string(resp))
 }

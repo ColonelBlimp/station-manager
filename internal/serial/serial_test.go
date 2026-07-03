@@ -82,11 +82,11 @@ func TestExecSingleCommand(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	resp, err := c.Exec(ctx, "FA")
+	resp, err := c.ExecBytes(ctx, []byte("FA"))
 	if err != nil {
 		t.Fatalf("Exec error: %v", err)
 	}
-	if resp != "OK" {
+	if string(resp) != "OK" {
 		t.Fatalf("expected response OK, got %q", resp)
 	}
 
@@ -118,7 +118,7 @@ func TestConcurrentWrites(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_ = c.WriteCommand(ctx, "CMD")
+			_ = c.WriteCommandBytes(ctx, []byte("CMD"))
 		}(i)
 	}
 
@@ -144,7 +144,7 @@ func TestReadResponseTimeout(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := c.ReadResponse(ctx)
+	_, err := c.ReadResponseBytes(ctx)
 	if err == nil {
 		t.Fatalf("expected timeout error, got nil")
 	}
@@ -171,10 +171,10 @@ func TestCloseWhileReading(t *testing.T) {
 	go func() {
 		defer close(done)
 		close(ready)
-		_, _ = c.ReadResponse(ctx)
+		_, _ = c.ReadResponseBytes(ctx)
 	}()
 
-	// Wait for the goroutine to be scheduled and about to block in ReadResponse.
+	// Wait for the goroutine to be scheduled and about to block in ReadResponseBytes.
 	<-ready
 
 	if err := c.Close(); err != nil {
@@ -207,10 +207,10 @@ func TestCloseUnblocksRead(t *testing.T) {
 	go func() {
 		defer close(done)
 		close(ready)
-		_, _ = c.ReadResponse(ctx)
+		_, _ = c.ReadResponseBytes(ctx)
 	}()
 
-	// Wait for the goroutine to be scheduled and about to block in ReadResponse.
+	// Wait for the goroutine to be scheduled and about to block in ReadResponseBytes.
 	<-ready
 
 	if err := c.Close(); err != nil {
@@ -293,7 +293,7 @@ func TestValidateConfigFailures(t *testing.T) {
 
 // zeroWritePort is a SerialPort implementation that always reports
 // success but writes 0 bytes, which should be treated as an error by
-// WriteCommand to avoid spinning indefinitely.
+// WriteCommandBytes to avoid spinning indefinitely.
 type zeroWritePort struct{}
 
 func (z *zeroWritePort) Read(p []byte) (int, error)           { return 0, context.Canceled }
@@ -315,7 +315,7 @@ func TestWriteCommandZeroWriteIsError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	if err := c.WriteCommand(ctx, "CMD"); err == nil {
+	if err := c.WriteCommandBytes(ctx, []byte("CMD")); err == nil {
 		t.Fatalf("expected error when underlying Write returns 0 bytes, got nil")
 	}
 }
@@ -369,11 +369,11 @@ func TestOversizedLineDroppedAndFramingResumes(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	resp, err := c.ReadResponse(ctx)
+	resp, err := c.ReadResponseBytes(ctx)
 	if err != nil {
 		t.Fatalf("ReadResponse error: %v", err)
 	}
-	if resp != "OK" {
+	if string(resp) != "OK" {
 		t.Fatalf("expected %q (oversized line dropped), got %q", "OK", resp)
 	}
 }
@@ -394,7 +394,7 @@ func TestOversizedLineDoesNotHideTerminalError(t *testing.T) {
 	o.readCh <- []byte(";OK;")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if got, err := c.ReadResponse(ctx); err != nil || got != "OK" {
+	if got, err := c.ReadResponseBytes(ctx); err != nil || string(got) != "OK" {
 		t.Fatalf("framing did not resume after oversized drop: got %q err %v", got, err)
 	}
 
@@ -416,7 +416,7 @@ func TestOversizedLineDoesNotHideTerminalError(t *testing.T) {
 }
 
 // TestConcurrentReadResponseCalls documents and exercises the current
-// behavior when ReadResponse is called concurrently from multiple
+// behavior when ReadResponseBytes is called concurrently from multiple
 // goroutines. The implementation does not guarantee safe concurrent
 // reads, but this test ensures that, at minimum, the calls do not
 // deadlock or panic under moderate contention.
@@ -447,7 +447,7 @@ func TestConcurrentReadResponseCalls(t *testing.T) {
 	for range 5 {
 		wg.Go(func() {
 			for {
-				_, err := c.ReadResponse(ctx)
+				_, err := c.ReadResponseBytes(ctx)
 				if err != nil {
 					return
 				}
@@ -837,11 +837,11 @@ func TestFramingResumesAfterOversizedLine(t *testing.T) {
 	// its delimiter must all frame correctly and in order.
 	expected := []string{"FIRST", "SECOND", "THIRD"}
 	for _, want := range expected {
-		got, err := c.ReadResponse(ctx)
+		got, err := c.ReadResponseBytes(ctx)
 		if err != nil {
-			t.Fatalf("ReadResponse(%q) error: %v", want, err)
+			t.Fatalf("ReadResponseBytes(%q) error: %v", want, err)
 		}
-		if got != want {
+		if string(got) != want {
 			t.Fatalf("expected %q, got %q", want, got)
 		}
 	}
@@ -944,7 +944,7 @@ func TestWriteCommandEmptyStringReturnsNil(t *testing.T) {
 	}
 	c := newPort(mp, cfg)
 
-	if err := c.WriteCommand(context.Background(), ""); err != nil {
+	if err := c.WriteCommandBytes(context.Background(), []byte("")); err != nil {
 		t.Fatalf("WriteCommand('') should return nil, got %v", err)
 	}
 	if len(mp.writes) != 0 {
@@ -1006,7 +1006,7 @@ func TestNewPortDefaultLineDelimiter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	if err := c.WriteCommand(ctx, "FA"); err != nil {
+	if err := c.WriteCommandBytes(ctx, []byte("FA")); err != nil {
 		t.Fatalf("WriteCommand error: %v", err)
 	}
 	if len(mp.writes) != 1 {
@@ -1039,11 +1039,11 @@ func TestReaderLoopContinuesOnTimeoutError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	resp, err := c.ReadResponse(ctx)
+	resp, err := c.ReadResponseBytes(ctx)
 	if err != nil {
 		t.Fatalf("expected response after timeout recovery, got error: %v", err)
 	}
-	if resp != "OK" {
+	if string(resp) != "OK" {
 		t.Fatalf("expected %q, got %q", "OK", resp)
 	}
 }
@@ -1091,11 +1091,11 @@ func TestReaderLoopZeroByteReadContinues(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	resp, err := c.ReadResponse(ctx)
+	resp, err := c.ReadResponseBytes(ctx)
 	if err != nil {
 		t.Fatalf("ReadResponse error: %v", err)
 	}
-	if resp != "DATA" {
+	if string(resp) != "DATA" {
 		t.Fatalf("expected %q, got %q", "DATA", resp)
 	}
 }
@@ -1159,22 +1159,6 @@ func TestWriteCommandBytesWriteError(t *testing.T) {
 }
 
 // 10. validateConfig defaults StopBits and Parity correctly.
-func TestValidateConfigDefaultStopBitsAndParity(t *testing.T) {
-	got, err := validateConfig(Config{
-		PortName: "ttyS0",
-		BaudRate: 9600,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.StopBits != serial.OneStopBit {
-		t.Fatalf("expected StopBits default OneStopBit, got %v", got.StopBits)
-	}
-	if got.Parity != serial.NoParity {
-		t.Fatalf("expected Parity default NoParity, got %v", got.Parity)
-	}
-}
-
 // 11. validateConfig preserves explicitly set values.
 func TestValidateConfigPreservesExplicitValues(t *testing.T) {
 	in := Config{
@@ -1199,25 +1183,6 @@ func TestValidateConfigPreservesExplicitValues(t *testing.T) {
 	}
 }
 
-// 12. putReadBuf rejects a buffer with the wrong capacity.
-func TestPutReadBufRejectsWrongCapacity(t *testing.T) {
-	// Get a correctly-sized buffer and return it.
-	correct := getReadBuf()
-	putReadBuf(correct)
-
-	// Put a wrongly-sized buffer — it should be silently discarded.
-	wrong := make([]byte, defaultBufSize+1)
-	putReadBuf(wrong)
-
-	// Next get must return a buffer with the default capacity, not the
-	// wrong one.
-	b := getReadBuf()
-	defer putReadBuf(b)
-	if cap(b) != defaultBufSize {
-		t.Fatalf("expected buf cap %d, got %d", defaultBufSize, cap(b))
-	}
-}
-
 // 13. Close while the responses channel is full does not deadlock.
 func TestCloseWhileResponseChannelFull(t *testing.T) {
 	mp := newMockPort()
@@ -1239,7 +1204,7 @@ func TestCloseWhileResponseChannelFull(t *testing.T) {
 	// the state we want to test Close against.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := c.ReadResponse(ctx); err != nil {
+	if _, err := c.ReadResponseBytes(ctx); err != nil {
 		t.Fatalf("ReadResponse error: %v", err)
 	}
 

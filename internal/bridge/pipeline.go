@@ -595,6 +595,14 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 			// reopens the port. Recovery is automatic — operator
 			// reseats cable / powers rig back on, supervisor's next
 			// open attempt succeeds and the session resumes.
+			//
+			// Log the real cause here: the pipeline returns only an exit
+			// classification (not err) to the supervisor, and the SPA renders
+			// serial_port_error from the code (ignoring details.error), so this
+			// is the one place the underlying reason (now carried out of the
+			// reader loop via ReadResponseBytes) reaches smd.log for debugging.
+			s.logger.WarnWith().Err(err).Str("driver", def.ID).
+				Msg("bridge: rig serial read failed; tearing down for supervisor reopen")
 			s.publishExitDisconnect(RigCodeSerialError, map[string]string{"error": errMessage(err)})
 			return exitTransient
 		}
