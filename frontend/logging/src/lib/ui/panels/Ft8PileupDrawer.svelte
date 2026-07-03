@@ -56,11 +56,18 @@
 </script>
 
 {#if ft8PileupStack.items.length > 0}
-    <div class="w-33 max-h-166 overflow-y-auto rounded-xl border border-line-soft px-3">
+    <div class="w-38 max-h-166 overflow-y-auto rounded-xl border border-line-soft px-3">
         <div class="flex flex-row items-center justify-between">
-            <h2 class="mt-2.5 text-xs font-semibold uppercase tracking-tight text-orange-600">
-                Pile-up ({ft8PileupStack.count}){#if runParity}&nbsp;· {runParity}{/if}{#if !ft8PileupStack.enabled}&nbsp;·
-                    paused{/if}
+            <h2
+                class="flex flex-col mt-2.5 text-xs font-semibold uppercase tracking-tight text-orange-600"
+            >
+                <span
+                    >Pile-up ({ft8PileupStack.count}){#if runParity}
+                        · {runParity}{/if}</span
+                >
+                <span
+                    >{#if !ft8PileupStack.enabled}Paused{/if}</span
+                >
             </h2>
             <div class="flex items-center">
                 {#if !ft8PileupStack.enabled}
