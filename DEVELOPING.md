@@ -167,6 +167,18 @@ task frontend:install
 task
 ```
 
+### Git identity (fresh install)
+
+A brand-new install has no git identity, so the first `git commit` fails with
+`Author identity unknown`. Set yours once — use the name and address your
+commits should be attributed to (e.g. your GitHub username and its noreply
+address, so pushes attribute correctly):
+
+```bash
+git config --global user.name  "Your Name"
+git config --global user.email "you@example.com"
+```
+
 ### The `.env` file
 
 The Taskfile loads `.env` from the repo root (`dotenv: ['.env']`). Create one:

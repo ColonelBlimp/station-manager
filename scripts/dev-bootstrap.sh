@@ -17,6 +17,10 @@
 #   4. go install task + nfpm       — into ~/go/bin.
 #   5. sudo usermod -aG dialout     — serial (rig CAT) access.
 #   6. scaffold .env if missing     — SM_WORKING_DIR runtime data dir.
+#   7. check git identity           — warn (do NOT set) if user.name/email unset;
+#                                     a fresh install has none, so the first
+#                                     `git commit` would fail. Left to the human
+#                                     because the identity is personal.
 #
 # sudo is used for steps 1, 2, 3 (writes /usr/local), 5. It will prompt for a
 # password. Everything else runs as the invoking user.
@@ -110,6 +114,15 @@ SM_WORKING_DIR=${HOME}/.local/share/station-manager
 # QRZ_TEST_API_KEY=
 # QRZ_TEST_CALLSIGN=
 EOF
+fi
+
+# --- 7. Git identity (warn only — personal, so we never set it for you) ------
+if ! git config --get user.name >/dev/null 2>&1 || ! git config --get user.email >/dev/null 2>&1; then
+  warn "git identity is not set — the first 'git commit' will fail. Set it with:"
+  printf '    git config --global user.name  "Your Name"\n'
+  printf '    git config --global user.email "you@example.com"\n'
+else
+  say "git identity: $(git config --get user.name) <$(git config --get user.email)>"
 fi
 
 # --- Done --------------------------------------------------------------------
