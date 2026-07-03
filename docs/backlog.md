@@ -74,8 +74,11 @@ when it ships — don't let this rot into a graveyard.
   accumulate + non-cqToTop case (the time is already there). **Decided (operator,
   remote): keep the Band Activity divider; Rx pane left OPEN pending dogfood.**
   **Todo next:**
-  1. Add **parity** (even/odd) to the `slotSeparator` label — `slotParity(utc)`
-     already exists → e.g. `14:30:15 · 20m · even`. SPA-only, ~1 line.
+  1. ~~Add **parity** (even/odd) to the `slotSeparator` label.~~ **DONE 2026-07-03.**
+     The divider now reads `14:30:15 · 20m · even` (`slotParity(utc)`), and took a
+     styling pass at the operator's request the same day: filled `bg-gray-400` bar,
+     `text-gray-700`, left pad `pl-2`, top border removed. `Ft8Panel.svelte`
+     `slotSeparator`.
   2. Confirm whether the "duplicate rows" were seen under **`cqToTop`** — that
      ordering **suppresses the divider** (decodes get reordered, so slot-grouping
      can't apply). Decide: WAI, or should grouping still apply under cqToTop?

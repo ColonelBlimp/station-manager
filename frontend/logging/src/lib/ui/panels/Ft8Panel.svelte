@@ -784,10 +784,11 @@
      "14:30:15 · 20m"); the rows below keep SNR / freq / flag / message. Single-slot
      mode shows no divider — the footer already carries the one slot's time. -->
 {#snippet slotSeparator(utc: string)}
-    <li
-        class="mt-0.5 border-t border-gray-200 pt-0.5 text-gray-400 first:mt-0 first:border-t-0 first:pt-0"
-    >
-        {formatUtcClock(new Date(utc))}{#if band}&nbsp;·&nbsp;{band}{/if}
+    {@const parity = slotParity(utc)}
+    <li class="mt-0.5 bg-gray-400 pl-2 pt-0.5 text-gray-700 first:mt-0 first:pt-0">
+        {formatUtcClock(
+            new Date(utc)
+        )}{#if band}&nbsp;·&nbsp;{band}{/if}{#if parity}&nbsp;·&nbsp;{parity}{/if}
     </li>
 {/snippet}
 
