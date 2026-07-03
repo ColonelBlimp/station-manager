@@ -14,9 +14,8 @@
 //
 // Writes auto-append Config.LineDelimiter if the command's last byte is not
 // already the delimiter. Reads are framed on the delimiter and returned
-// stripped of it. Lines longer than 4096 bytes are dropped with a best-effort
-// notification on the Errors() channel; the reader keeps running for
-// subsequent well-formed lines.
+// stripped of it. Lines longer than 4096 bytes are dropped and the reader
+// keeps running for subsequent well-formed lines.
 //
 // # Concurrency: one reader, many writers
 //
@@ -32,20 +31,16 @@
 //
 // Every public operation wraps failures with an internal/errors.Op tag
 // (serial.Open, serial.ReadResponseBytes, serial.WriteCommandBytes, etc.).
-// Use errors.Is to test for the package sentinel ErrClosed or for
-// context.Canceled / context.DeadlineExceeded — all are preserved through
-// the wrapping chain.
+// Use errors.Is to test for the package sentinels — ErrClosed, ErrWriteTimeout,
+// or the Open sentinels ErrPermissionDenied / ErrPortBusy / ErrPortNotFound —
+// or for context.Canceled / context.DeadlineExceeded; all are preserved
+// through the wrapping chain.
 //
-// The Errors() channel carries at most one terminal error from the
-// background reader loop and is closed when the reader exits. A graceful
-// Close may close it without producing a value. A typical supervisor reads
-// from it to trigger reconnection:
-//
-//	go func() {
-//	    if err, ok := <-port.Errors(); ok && err != nil {
-//	        // log and trigger reconnect
-//	    }
-//	}()
+// When the background reader loop dies on a terminal I/O fault (cable yank,
+// EIO, driver error), the cause is delivered to the single reader through the
+// next ReadResponseBytes/ReadResponse call: it returns the wrapped cause
+// instead of a bare ErrClosed, so a supervisor sees the real reason. A graceful
+// Close yields ErrClosed (no cause).
 //
 // # Lifecycle
 //

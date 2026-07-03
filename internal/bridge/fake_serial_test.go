@@ -21,7 +21,6 @@ type fakeSerial struct {
 	mu     sync.Mutex
 	lines  chan []byte
 	writes [][]byte
-	errCh  chan error
 	closed bool
 
 	// onWrite, when set, is called for each WriteCommandBytes with a copy of the
@@ -36,7 +35,6 @@ type fakeSerial struct {
 func newFakeSerial() *fakeSerial {
 	return &fakeSerial{
 		lines: make(chan []byte, 64),
-		errCh: make(chan error, 1),
 	}
 }
 
@@ -127,10 +125,6 @@ func (f *fakeSerial) ExecBytes(ctx context.Context, cmd []byte) ([]byte, error) 
 	return f.ReadResponseBytes(ctx)
 }
 
-func (f *fakeSerial) Errors() <-chan error {
-	return f.errCh
-}
-
 func (f *fakeSerial) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -139,7 +133,6 @@ func (f *fakeSerial) Close() error {
 	}
 	f.closed = true
 	close(f.lines)
-	close(f.errCh)
 	return nil
 }
 

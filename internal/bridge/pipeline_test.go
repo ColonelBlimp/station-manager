@@ -916,56 +916,70 @@ func TestPipeline_BridgeError_OpenFailure(t *testing.T) {
 	}
 }
 
-// TestPipeline_BridgeError_PermissionDenied covers the EACCES case: when
-// serial.Open reports permission denied (daemon user not in 'dialout'), the
-// pipeline emits the distinct, actionable serial_permission_denied code with
-// only {port} in the details — not the generic serial_open_failed with a raw
-// OS error string. The SPA renders the dialout fix keyed on the code.
-func TestPipeline_BridgeError_PermissionDenied(t *testing.T) {
-	s := New(types.BridgeConfig{
-		Enabled: true,
-		Serial:  &types.BridgeSerialConfig{Port: "/dev/no-such-port"},
-		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
-	}, &logging.Service{})
-	if err := s.Initialize(); err != nil {
-		t.Fatalf("Initialize: %v", err)
+// TestPipeline_BridgeError_OpenClassification covers the serial-open failures
+// that serial recognises: when Open returns one of the errors.Is-matchable
+// sentinels (EACCES / EBUSY / ENOENT), the pipeline emits the distinct,
+// actionable code with only {port} in the details — not the generic
+// serial_open_failed with a raw OS error string. The SPA renders the specific
+// fix keyed on the code.
+func TestPipeline_BridgeError_OpenClassification(t *testing.T) {
+	cases := []struct {
+		name     string
+		openErr  error
+		wantCode BridgeErrorCode
+	}{
+		{"permission_denied", serial.ErrPermissionDenied, BridgeErrCodeSerialPermissionDenied},
+		{"port_busy", serial.ErrPortBusy, BridgeErrCodeSerialPortBusy},
+		{"port_not_found", serial.ErrPortNotFound, BridgeErrCodeSerialPortNotFound},
 	}
-	// Mirror what serial.Open returns for EACCES (errors.Is-matchable sentinel).
-	s.openClient = func(_ serial.Config) (serial.Client, error) {
-		return nil, serial.ErrPermissionDenied
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := New(types.BridgeConfig{
+				Enabled: true,
+				Serial:  &types.BridgeSerialConfig{Port: "/dev/no-such-port"},
+				Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
+			}, &logging.Service{})
+			if err := s.Initialize(); err != nil {
+				t.Fatalf("Initialize: %v", err)
+			}
+			// Mirror what serial.Open returns for this cause (Is-matchable sentinel).
+			s.openClient = func(_ serial.Config) (serial.Client, error) {
+				return nil, tc.openErr
+			}
 
-	if err := s.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer func() { _ = s.Stop() }()
+			if err := s.Start(context.Background()); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer func() { _ = s.Stop() }()
 
-	ch, unsub := s.Subscribe()
-	defer unsub()
+			ch, unsub := s.Subscribe()
+			defer unsub()
 
-	select {
-	case evt, ok := <-ch:
-		if !ok {
-			t.Fatal("subscriber channel closed before bridge-error")
-		}
-		if evt.Name != EventBridgeError {
-			t.Errorf("evt.Name = %q, want %q", evt.Name, EventBridgeError)
-		}
-		p, ok := evt.Payload.(BridgeErrorPayload)
-		if !ok {
-			t.Fatalf("payload type = %T, want BridgeErrorPayload", evt.Payload)
-		}
-		if p.Code != BridgeErrCodeSerialPermissionDenied {
-			t.Errorf("Code = %q, want %q", p.Code, BridgeErrCodeSerialPermissionDenied)
-		}
-		if p.Details["port"] != "/dev/no-such-port" {
-			t.Errorf("Details[port] = %q, want the bad port", p.Details["port"])
-		}
-		if _, hasErr := p.Details["error"]; hasErr {
-			t.Errorf("Details should not leak a raw 'error' for the permission code; got %v", p.Details)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("no bridge-error event within 1s")
+			select {
+			case evt, ok := <-ch:
+				if !ok {
+					t.Fatal("subscriber channel closed before bridge-error")
+				}
+				if evt.Name != EventBridgeError {
+					t.Errorf("evt.Name = %q, want %q", evt.Name, EventBridgeError)
+				}
+				p, ok := evt.Payload.(BridgeErrorPayload)
+				if !ok {
+					t.Fatalf("payload type = %T, want BridgeErrorPayload", evt.Payload)
+				}
+				if p.Code != tc.wantCode {
+					t.Errorf("Code = %q, want %q", p.Code, tc.wantCode)
+				}
+				if p.Details["port"] != "/dev/no-such-port" {
+					t.Errorf("Details[port] = %q, want the bad port", p.Details["port"])
+				}
+				if _, hasErr := p.Details["error"]; hasErr {
+					t.Errorf("classified code should not leak a raw 'error'; got %v", p.Details)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("no bridge-error event within 1s")
+			}
+		})
 	}
 }
 

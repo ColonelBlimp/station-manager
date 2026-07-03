@@ -54,9 +54,17 @@ export const en: Record<string, string> = {
     // The full /dev/serial/by-id/... path is implementation detail the operator
     // doesn't act on (and is ~95 chars of toast noise); the daemon still logs it
     // via the payload's `port`. Keep only the actionable cause in the UI.
-    'bridge.error.serial_open_failed': 'Could not open the rig serial port ({error})',
+    // No raw {error}: the underlying Go/OS string is jargon to the operator and
+    // stays in smd.log for debugging — matching serial_port_error above. The
+    // common causes (permission / busy / not-found) get their own codes below.
+    'bridge.error.serial_open_failed':
+        'Could not open the rig serial port {port} — check the cable and that the rig is on.',
     'bridge.error.serial_permission_denied':
         'Permission denied opening the rig serial port {port}. The daemon user needs access to the device — add it to the "dialout" group: run "sudo usermod -aG dialout $USER", then log out and back in (or reboot).',
+    'bridge.error.serial_port_busy':
+        'The rig serial port {port} is already in use by another program (WSJT-X, another logger, or a second Station Manager). Close it, then retry.',
+    'bridge.error.serial_port_not_found':
+        'The rig serial port {port} was not found — is the rig powered on and the USB cable connected?',
     'bridge.error.init_write_failed': 'Could not enable push-state on driver "{driver}": {error}',
     'bridge.error.identity_unrecognised':
         'The connected rig\'s ID is not recognised by driver "{driver}" — check bridge.cat.driver matches your rig',

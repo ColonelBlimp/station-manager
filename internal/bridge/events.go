@@ -139,6 +139,14 @@ const (
 	// is not in the 'dialout' group. Split out from serial_open_failed so the
 	// SPA can render the actionable fix (add to dialout). Details: {"port"}.
 	BridgeErrCodeSerialPermissionDenied BridgeErrorCode = "serial_permission_denied"
+	// BridgeErrCodeSerialPortBusy — serial.Open failed with EBUSY: the device
+	// is already open in another process (WSJT-X, another logger, a second
+	// Station Manager). Actionable: close the other program. Details: {"port"}.
+	BridgeErrCodeSerialPortBusy BridgeErrorCode = "serial_port_busy"
+	// BridgeErrCodeSerialPortNotFound — serial.Open failed with ENOENT: the
+	// device path doesn't exist, typically the rig is powered off or the USB
+	// cable is unplugged. Actionable: power on / reconnect. Details: {"port"}.
+	BridgeErrCodeSerialPortNotFound BridgeErrorCode = "serial_port_not_found"
 	// BridgeErrCodeInitWriteFailed — INIT byte-write failed. Details:
 	// {"driver", "error"}.
 	BridgeErrCodeInitWriteFailed BridgeErrorCode = "init_write_failed"
@@ -160,9 +168,9 @@ const (
 // stale and must not toast a tab that opens after recovery, while a
 // permanent fault never produces a rig-state so it stays cached regardless.
 //
-// Mirrors the pipeline's exit classification (runPipeline): only
-// serial_open_failed, serial_permission_denied, and init_write_failed return
-// exitTransient. The
+// Mirrors the pipeline's exit classification (runPipeline): the serial-open
+// codes (serial_open_failed + its permission/busy/not-found refinements) and
+// init_write_failed return exitTransient. The
 // identity codes are advisory (publishBridgeError, no exit) and are NOT
 // transient — they are operator-actionable, so they must survive a
 // rig-state. The default is non-transient: a new code stays cached (errs
@@ -170,7 +178,8 @@ const (
 // real fault) until it's deliberately classified here.
 func (c BridgeErrorCode) isTransient() bool {
 	switch c {
-	case BridgeErrCodeSerialOpenFailed, BridgeErrCodeSerialPermissionDenied, BridgeErrCodeInitWriteFailed:
+	case BridgeErrCodeSerialOpenFailed, BridgeErrCodeSerialPermissionDenied,
+		BridgeErrCodeSerialPortBusy, BridgeErrCodeSerialPortNotFound, BridgeErrCodeInitWriteFailed:
 		return true
 	default:
 		return false

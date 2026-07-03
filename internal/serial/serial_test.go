@@ -225,10 +225,10 @@ func TestCloseUnblocksRead(t *testing.T) {
 	}
 }
 
-// TestErrorsStreamClosesOnCloseWithoutError verifies that the Errors
-// channel is closed when the port is closed without a terminal read
-// error, so callers can reliably range over it.
-func TestErrorsStreamClosesOnCloseWithoutError(t *testing.T) {
+// TestGracefulCloseReturnsErrClosed verifies that after a graceful Close (no
+// terminal read error), ReadResponseBytes reports ErrClosed rather than a
+// terminal cause.
+func TestGracefulCloseReturnsErrClosed(t *testing.T) {
 	mp := newMockPort()
 	cfg := Config{
 		PortName:      "mock",
@@ -244,13 +244,8 @@ func TestErrorsStreamClosesOnCloseWithoutError(t *testing.T) {
 		t.Fatalf("Close error: %v", err)
 	}
 
-	select {
-	case _, ok := <-c.Errors():
-		if ok {
-			t.Fatalf("expected Errors() channel to be closed without value after Close")
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatalf("timed out waiting for Errors() channel to close after Close")
+	if _, err := c.ReadResponseBytes(context.Background()); !stderr.Is(err, ErrClosed) {
+		t.Fatalf("ReadResponseBytes after graceful Close = %v, want ErrClosed", err)
 	}
 }
 
@@ -351,10 +346,10 @@ func feedOverflow(readCh chan<- []byte) {
 	}
 }
 
-// TestOversizedLineCountedAndDropped: an oversized line is COUNTED via
-// DroppedLines (recoverable diagnostic, review 2026-06-19 M1) and discarded —
-// no response is delivered for it.
-func TestOversizedLineCountedAndDropped(t *testing.T) {
+// TestOversizedLineDroppedAndFramingResumes: an oversized line (no delimiter
+// within maxLineSize) is dropped — no response is delivered for it — and the
+// next well-formed line is framed correctly.
+func TestOversizedLineDroppedAndFramingResumes(t *testing.T) {
 	o := newOverflowPort()
 	cfg := Config{
 		PortName:      "mock",
@@ -366,68 +361,57 @@ func TestOversizedLineCountedAndDropped(t *testing.T) {
 
 	c := newPort(o, cfg)
 
-	// Feed enough data to exceed maxLineSize (4096) without any delimiter, then
-	// end the oversized line with its delimiter.
+	// Oversized line (no delimiter) terminated by its delimiter, then a normal
+	// line. The oversized line must be dropped, so the first delivered response
+	// is "OK" — never a spurious partial from the discarded line.
 	feedOverflow(o.readCh)
-	o.readCh <- []byte(";")
+	o.readCh <- []byte(";OK;")
 
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for c.DroppedLines() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("oversized line was not counted (DroppedLines still 0)")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	// No response line: the oversized line was dropped, not delivered.
-	if _, err := c.ReadResponse(ctx); err == nil {
-		t.Fatalf("expected error or timeout when reading after oversized line; got nil")
+	resp, err := c.ReadResponse(ctx)
+	if err != nil {
+		t.Fatalf("ReadResponse error: %v", err)
+	}
+	if resp != "OK" {
+		t.Fatalf("expected %q (oversized line dropped), got %q", "OK", resp)
 	}
 }
 
-// TestOversizedLineDoesNotHideTerminalError is the M1 regression: a recoverable
-// oversized-line drop is counted (NOT placed on the one-slot terminal errCh), so
-// a subsequent non-timeout read error is still delivered on Errors() rather than
-// dropped because a warning had filled the slot.
+// TestOversizedLineDoesNotHideTerminalError is the M1 regression: an oversized-
+// line drop is fully recoverable and must NOT prevent a subsequent terminal
+// read error from reaching the reader. After the drop, an injected terminal
+// error still surfaces via ReadResponseBytes.
 func TestOversizedLineDoesNotHideTerminalError(t *testing.T) {
 	o := newOverflowPort()
 	cfg := Config{PortName: "mock", BaudRate: 9600, LineDelimiter: ';'}
 	c := newPort(o, cfg)
 
-	// Oversized line (no delimiter) → counted + discarding.
+	// Oversized line, its terminating delimiter, then a good line. Reading the
+	// good line back proves the reader consumed the whole overflow and resumed
+	// framing — a clean synchronisation point with no counter.
 	feedOverflow(o.readCh)
-
-	// Wait for the overflow to register BEFORE injecting the terminal error —
-	// mockPort.Read checks errToReturn before readCh, so setting it too early
-	// would short-circuit the buffered overflow chunks and skip the count.
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for c.DroppedLines() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("oversized line was not counted before error injection")
-		}
-		time.Sleep(5 * time.Millisecond)
+	o.readCh <- []byte(";OK;")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if got, err := c.ReadResponse(ctx); err != nil || got != "OK" {
+		t.Fatalf("framing did not resume after oversized drop: got %q err %v", got, err)
 	}
 
-	// Inject a terminal read error, then wake the reader with one more discarded
-	// chunk so its NEXT Read returns the injected error.
+	// Now inject a terminal read error; it must still surface (the earlier
+	// oversized drop must not have hidden it). Setting errToReturn is safe now
+	// that the overflow is fully consumed; the wake chunk (or the reader's next
+	// Read) returns the injected error.
 	injected := stderr.New("device removed")
 	o.mu.Lock()
 	o.errToReturn = injected
 	o.mu.Unlock()
-	o.readCh <- []byte("noise-no-delim")
+	o.readCh <- []byte("wake-no-delim")
 
-	select {
-	case err, ok := <-c.Errors():
-		if !ok || !stderr.Is(err, injected) {
-			t.Fatalf("expected the injected terminal error, got ok=%v err=%v", ok, err)
-		}
-	case <-time.After(time.Second):
-		t.Fatalf("terminal read error was not delivered (hidden by the oversized drop?)")
-	}
-	if c.DroppedLines() == 0 {
-		t.Errorf("oversized line should have been counted in DroppedLines")
+	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+	defer cancel2()
+	if _, err := c.ReadResponseBytes(ctx2); !stderr.Is(err, injected) {
+		t.Fatalf("terminal error hidden by the oversized drop: got %v", err)
 	}
 }
 
@@ -805,19 +789,11 @@ func TestOversizedLineTailIsDiscarded(t *testing.T) {
 	// would be emitted as a spurious response.
 	o.readCh <- []byte("TAIL;GOOD;")
 
-	// The oversized line is counted, not sent on Errors() (review M1).
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for c.DroppedLines() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("oversized line was not counted (DroppedLines still 0)")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	// The first response must be "GOOD", not "TAIL".
+	// The first response must be "GOOD", not "TAIL" — reading it back also
+	// confirms the reader consumed and dropped the oversized line first.
 	resp, err := c.ReadResponseBytes(ctx)
 	if err != nil {
 		t.Fatalf("ReadResponseBytes error: %v", err)
@@ -854,19 +830,11 @@ func TestFramingResumesAfterOversizedLine(t *testing.T) {
 	o.readCh <- []byte("OND;")
 	o.readCh <- []byte("THIRD;")
 
-	// The oversized line is COUNTED (recoverable), not sent on the terminal
-	// Errors() channel (review 2026-06-19 M1). Wait for the drop to register.
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for c.DroppedLines() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("oversized line was not counted (DroppedLines still 0)")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
+	// The oversized line is dropped (recoverable); the well-formed lines after
+	// its delimiter must all frame correctly and in order.
 	expected := []string{"FIRST", "SECOND", "THIRD"}
 	for _, want := range expected {
 		got, err := c.ReadResponse(ctx)
@@ -1080,7 +1048,9 @@ func TestReaderLoopContinuesOnTimeoutError(t *testing.T) {
 	}
 }
 
-// 6. readerLoop surfaces a non-timeout Read error on Errors().
+// 6. readerLoop surfaces a non-timeout Read error to the reader through
+// ReadResponseBytes: the terminal cause replaces the bare ErrClosed a caller
+// would otherwise see when the reader dies.
 func TestReaderLoopSurfacesNonTimeoutReadError(t *testing.T) {
 	mp := newMockPort()
 	cfg := Config{
@@ -1095,22 +1065,13 @@ func TestReaderLoopSurfacesNonTimeoutReadError(t *testing.T) {
 	mp.errToReturn = injectedErr
 	mp.mu.Unlock()
 
-	// Unblock the reader after the error path (Read returns errToReturn,
-	// then the loop exits; it won't read from readCh again).
-	// The mockPort.Read would block on readCh after errToReturn is consumed,
-	// but the loop returns on non-timeout errors, so we just need to
-	// drain Errors().
-
-	select {
-	case err, ok := <-c.Errors():
-		if !ok {
-			t.Fatalf("expected error before channel close")
-		}
-		if !stderr.Is(err, injectedErr) {
-			t.Fatalf("expected injected error, got %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatalf("timed out waiting for error on Errors()")
+	// The reader's first Read returns errToReturn, so it records the terminal
+	// cause and exits (closing responses); ReadResponseBytes then returns that
+	// cause wrapped, not a bare ErrClosed.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := c.ReadResponseBytes(ctx); !stderr.Is(err, injectedErr) {
+		t.Fatalf("ReadResponseBytes = %v, want the injected terminal cause", err)
 	}
 }
 

@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	stderr "errors"
+	"io/fs"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -18,7 +18,8 @@ const (
 	responsesBufSize = 64
 
 	// maxLineSize is the maximum number of bytes buffered for a single framed
-	// line before it is dropped and an error is emitted on Errors().
+	// line before it is dropped (the reader keeps running for subsequent
+	// well-formed lines).
 	maxLineSize = 4096
 )
 
@@ -76,25 +77,13 @@ type Client interface {
 	//
 	// Like ReadResponseBytes, ExecBytes must not be invoked concurrently
 	// by multiple goroutines on the same Client.
+	//
+	// ExecBytes returns the next framed line, with NO correlation to the
+	// command just written. It is only meaningful against a rig speaking
+	// strictly request/response: if the rig is in AUTO/Transceive mode, an
+	// unsolicited push already buffered will be returned as "the response".
+	// The bridge never uses Exec for this reason (it owns its own read loop).
 	ExecBytes(ctx context.Context, cmd []byte) ([]byte, error)
-
-	// Errors returns a receive-only channel that will yield at most one
-	// terminal error from the reader loop, if any, and is closed when the
-	// reader loop exits. Callers should not assume it will always produce
-	// a value; a graceful close may result in the channel closing without
-	// an error.
-	//
-	// A typical usage pattern is to run a small supervisor goroutine that
-	// watches the channel and triggers a reconnection or shutdown when a
-	// non-nil error is received:
-	//
-	//   go func() {
-	//       if err, ok := <-c.Errors(); ok && err != nil {
-	//           // log and trigger reconnect
-	//       }
-	//   }()
-	//
-	Errors() <-chan error
 
 	// Close closes the underlying port. It is safe to call multiple times.
 	Close() error
@@ -122,43 +111,41 @@ type Port struct {
 	closeCh   chan struct{}
 	doneCh    chan struct{}
 
-	// errCh carries a single terminal error from the reader loop, if any.
-	// It is closed when readerLoop exits. Recoverable diagnostics (an
-	// oversized-line drop) are NOT sent here — they're counted in droppedLines —
-	// so a recoverable warning can never fill the one slot and hide the terminal
-	// error (review 2026-06-19 M1).
-	errCh chan error
-
-	// droppedLines counts lines discarded for exceeding maxLineSize. Recoverable
-	// (the reader keeps running); exposed via DroppedLines for observability
-	// instead of riding the terminal errCh.
-	droppedLines atomic.Uint64
-
 	closed bool
-	mu     sync.RWMutex
+	// termErr holds the terminal reader-loop cause (EIO, ENODEV, cable yank)
+	// so ReadResponseBytes returns the real reason instead of a bare ErrClosed
+	// once the reader dies. It is set once, before the reader closes responses;
+	// nil for a graceful Close. Guarded by mu.
+	termErr error
+	mu      sync.RWMutex
 }
 
-// DroppedLines returns the cumulative count of reader-loop lines discarded for
-// exceeding maxLineSize (4096 bytes) on a noisy/corrupt serial line. Recoverable
-// — the reader keeps running; this is a diagnostic counter, separate from the
-// terminal Errors() channel (review 2026-06-19 M1).
-func (p *Port) DroppedLines() uint64 { return p.droppedLines.Load() }
-
-// Open initializes and opens a serial port based on the given Config. It returns a Port or an error if unsuccessful.
-// ErrPermissionDenied is wrapped into the error returned by Open when the OS
-// denies access to the serial device (EACCES) — typically the daemon's user is
-// not in the 'dialout' group. Callers can errors.Is() this to surface an
-// actionable fix instead of leaking the raw OS error.
-var ErrPermissionDenied = stderr.New("permission denied opening serial port")
-
-// isPermissionDenied reports whether err is go.bug.st/serial's EACCES case.
-// Keeping the PortError-code knowledge here contains the go.bug.st dependency
-// in the package that owns it, rather than leaking it to every caller.
-func isPermissionDenied(err error) bool {
+// classifyOpenError maps a serial.Open failure to one of the package's Open
+// sentinels (errors.go) when it recognises the cause, else nil. Keeping the
+// go.bug.st PortError-code and ENOENT knowledge here contains the driver/OS
+// detail in the package that owns it, rather than leaking it to every caller.
+func classifyOpenError(err error) error {
 	var pe *serial.PortError
-	return stderr.As(err, &pe) && pe.Code() == serial.PermissionDenied
+	if stderr.As(err, &pe) {
+		switch pe.Code() {
+		case serial.PermissionDenied:
+			return ErrPermissionDenied
+		case serial.PortBusy:
+			return ErrPortBusy
+		}
+	}
+	// go.bug.st maps only EBUSY/EACCES to a PortError on Linux; a missing
+	// device path (rig off / cable out) surfaces as a raw ENOENT.
+	if stderr.Is(err, fs.ErrNotExist) {
+		return ErrPortNotFound
+	}
+	return nil
 }
 
+// Open initializes and opens a serial port based on the given Config. It returns
+// a Port or an error if unsuccessful. Recognised failure causes are wrapped as
+// one of the errors.Is-matchable Open sentinels (ErrPermissionDenied,
+// ErrPortBusy, ErrPortNotFound) so callers can render an actionable message.
 func Open(cfg Config) (*Port, error) {
 	const op errors.Op = "serial.Open"
 
@@ -202,10 +189,11 @@ func Open(cfg Config) (*Port, error) {
 
 	p, err := serial.Open(ncfg.PortName, mode)
 	if err != nil {
-		if isPermissionDenied(err) {
-			// Map EACCES to the sentinel so the bridge can render an actionable
-			// "add your user to dialout" message rather than the raw OS error.
-			return nil, errors.New(op).WithErr(ErrPermissionDenied)
+		if sentinel := classifyOpenError(err); sentinel != nil {
+			// Wrap the recognised cause so the bridge renders an actionable
+			// message (join dialout / close the other program / power on the
+			// rig) instead of the raw OS/driver error.
+			return nil, errors.New(op).WithErr(sentinel)
 		}
 		return nil, errors.New(op).WithErr(err)
 	}
@@ -237,9 +225,6 @@ func newPort(sp SerialPort, cfg Config) *Port {
 		responses:    make(chan []byte, responsesBufSize),
 		closeCh:      make(chan struct{}),
 		doneCh:       make(chan struct{}),
-		// errCh is buffered by one so the reader loop can report a terminal
-		// error without blocking; it is closed when readerLoop exits.
-		errCh: make(chan error, 1),
 	}
 
 	go po.readerLoop()
@@ -289,9 +274,14 @@ func (p *Port) WriteCommandBytes(ctx context.Context, cmd []byte) error {
 	// SetReadTimeout), so a blocking port.Write on a driver/HW fault can't be
 	// interrupted by ctx — the loop checks ctx only between Write calls. Run the
 	// write off-goroutine; if it overruns writeTimeout, close the port. Closing
-	// errors the stuck syscall, so the goroutine unwinds and reports on the
-	// buffered channel (no leak); the now-closed port makes the bridge's
-	// supervisor tear down and reopen, which also releases any active tune.
+	// is a best-effort unblock: when the fault itself errors the write (USB
+	// removal does), the goroutine unwinds and reports on the buffered `done`
+	// channel; on a truly wedged driver, close(fd) does not interrupt a thread
+	// already in write(2), so worst case one bounded goroutine parks until the
+	// driver gives up (never a deadlock — Write holds no lock Close needs, and
+	// the buffered channel means the parked goroutine leaks nothing else). Either
+	// way the caller gets ErrWriteTimeout on time and the now-closed port makes
+	// the bridge's supervisor tear down and reopen, releasing any active tune.
 	// This bounds WriteCommandBytes so a hung write can never wedge writeMu (and
 	// with it the tune guaranteed-stop) forever (review 2026-06-04 H4).
 	done := make(chan error, 1)
@@ -369,6 +359,15 @@ func (p *Port) ReadResponseBytes(ctx context.Context) ([]byte, error) {
 		return nil, errors.New(op).WithErr(ctx.Err())
 	case line, ok := <-p.responses:
 		if !ok {
+			// responses closed: either a graceful Close (termErr nil → ErrClosed)
+			// or the reader died with a terminal cause (return it, wrapped, so
+			// the bridge logs "EIO"/"no such device" instead of "port closed").
+			p.mu.RLock()
+			te := p.termErr
+			p.mu.RUnlock()
+			if te != nil {
+				return nil, errors.New(op).WithErr(te)
+			}
 			return nil, errors.New(op).WithErr(ErrClosed)
 		}
 		return line, nil
@@ -397,23 +396,14 @@ func (p *Port) ExecBytes(ctx context.Context, cmd []byte) ([]byte, error) {
 	return p.ReadResponseBytes(ctx)
 }
 
-// Errors implements Client.
-//
-// The returned channel will yield at most one non-timeout error from the
-// background reader loop (for example, a permanent I/O error or a dropped
-// over-long line) and is then closed when the reader exits. In the case of
-// a graceful Close, the channel may close without producing any value.
-//
-// Callers typically spawn a goroutine to supervise this channel and decide
-// whether to log the error, reconnect, or shut down:
-//
-//	go func() {
-//	    if err, ok := <-port.Errors(); ok && err != nil {
-//	        // handle terminal reader error
-//	    }
-//	}()
-func (p *Port) Errors() <-chan error {
-	return p.errCh
+// setTermErr records the reader loop's terminal cause once, before the reader
+// closes responses, so ReadResponseBytes can hand it to the blocked reader.
+func (p *Port) setTermErr(err error) {
+	p.mu.Lock()
+	if p.termErr == nil {
+		p.termErr = err
+	}
+	p.mu.Unlock()
 }
 
 // Close implements Client.
@@ -447,7 +437,6 @@ func (p *Port) Close() error {
 func (p *Port) readerLoop() {
 	defer close(p.doneCh)
 	defer close(p.responses)
-	defer close(p.errCh)
 
 	buf := getReadBuf()
 	defer putReadBuf(buf)
@@ -482,11 +471,11 @@ func (p *Port) readerLoop() {
 			default:
 			}
 
-			// Non-timeout error: surface it to callers, then exit.
-			select {
-			case p.errCh <- errors.New(errors.Op("serial.readerLoop")).WithErr(err):
-			default:
-			}
+			// Non-timeout terminal error: record the real cause so the reader
+			// blocked on ReadResponseBytes gets it (EIO, ENODEV, cable yank)
+			// instead of a bare ErrClosed, then exit — the deferred
+			// close(responses) unblocks that reader.
+			p.setTermErr(errors.New(errors.Op("serial.readerLoop")).WithErr(err))
 			return
 		}
 		if n == 0 {
@@ -504,13 +493,12 @@ func (p *Port) readerLoop() {
 				}
 				lineBuf = append(lineBuf, chunk...)
 				if len(lineBuf) > maxLineSize {
-					// Drop the overly long line and keep running. This is
-					// recoverable, so it must NOT ride the terminal errCh (a
-					// best-effort send there could fill the one slot and hide a
-					// later terminal read error) — count it instead (review M1).
+					// Drop the overly long line and keep running (recoverable).
+					// This deliberately touches nothing that could hide a later
+					// terminal read error — it just resets the frame buffer and
+					// skips to the next delimiter (review 2026-06-19 M1).
 					lineBuf = lineBuf[:0]
 					discarding = true
-					p.droppedLines.Add(1)
 				}
 				break
 			}
