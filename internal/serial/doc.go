@@ -5,10 +5,10 @@
 //
 // # API shape
 //
-// Byte-oriented methods (WriteCommandBytes, ReadResponseBytes, ExecBytes) are
-// the real API. The string-oriented wrappers (WriteCommand, ReadResponse,
-// Exec) convert without validating UTF-8. Prefer the byte variants for new
-// code — CAT parsing inspects specific byte offsets and Icom CI-V is binary.
+// The API is byte-oriented: WriteCommandBytes, ReadResponseBytes, ExecBytes.
+// Bytes (not strings) are deliberate — CAT parsing inspects specific byte
+// offsets and Icom CI-V is binary, so a string layer would add nothing and its
+// UTF-8 assumption would be wrong.
 //
 // # Line delimiter
 //
@@ -22,8 +22,8 @@
 // Writes are safe to call concurrently from any number of goroutines; the
 // underlying port is serialised internally. Reads are not — framed responses
 // come from a single background goroutine and must be consumed by at most
-// one goroutine at a time (via ReadResponse, ReadResponseBytes, Exec, or
-// ExecBytes). The canonical pattern is a single dedicated reader goroutine
+// one goroutine at a time (via ReadResponseBytes or ExecBytes). The canonical
+// pattern is a single dedicated reader goroutine
 // that forwards lines to the rest of the application; writers elsewhere
 // call WriteCommandBytes freely.
 //
@@ -38,7 +38,7 @@
 //
 // When the background reader loop dies on a terminal I/O fault (cable yank,
 // EIO, driver error), the cause is delivered to the single reader through the
-// next ReadResponseBytes/ReadResponse call: it returns the wrapped cause
+// next ReadResponseBytes call: it returns the wrapped cause
 // instead of a bare ErrClosed, so a supervisor sees the real reason. A graceful
 // Close yields ErrClosed (no cause).
 //

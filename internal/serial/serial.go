@@ -70,10 +70,9 @@ type Client interface {
 // Port is the concrete implementation of Client backed by go.bug.st/serial.
 //
 // Port implements the same concurrency guarantees as Client: it permits
-// multiple concurrent calls to WriteCommand/WriteCommandBytes, which are
-// serialized on the underlying SerialPort, but requires that
-// ReadResponse/ReadResponseBytes and Exec/ExecBytes are used from at most
-// one goroutine at a time.
+// multiple concurrent calls to WriteCommandBytes, which are serialized on the
+// underlying SerialPort, but requires that ReadResponseBytes and ExecBytes are
+// used from at most one goroutine at a time.
 type Port struct {
 	port SerialPort
 
@@ -338,7 +337,7 @@ func (p *Port) ReadResponseBytes(ctx context.Context) ([]byte, error) {
 	}
 }
 
-// ExecBytes implements the byte-oriented Exec for Client.
+// ExecBytes writes a command then reads one framed response, both as bytes.
 func (p *Port) ExecBytes(ctx context.Context, cmd []byte) ([]byte, error) {
 	const op errors.Op = "serial.ExecBytes"
 

@@ -30,7 +30,7 @@ func BenchmarkExec(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		if _, err := c.ExecBytes(ctx, []byte("FA")); err != nil {
-			b.Fatalf("Exec error: %v", err)
+			b.Fatalf("ExecBytes error: %v", err)
 		}
 	}
 }
@@ -60,7 +60,7 @@ func BenchmarkReaderLoop(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := c.ReadResponseBytes(ctx); err != nil {
-			b.Fatalf("ReadResponse error: %v", err)
+			b.Fatalf("ReadResponseBytes error: %v", err)
 		}
 	}
 }

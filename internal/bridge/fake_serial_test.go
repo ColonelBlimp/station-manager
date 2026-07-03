@@ -58,8 +58,7 @@ func (f *fakeSerial) feedLine(line []byte) bool {
 }
 
 // recordedWrites returns a snapshot of the bytes the pipeline has
-// written via WriteCommand / WriteCommandBytes. Used to assert the
-// INIT command was sent.
+// written via WriteCommandBytes. Used to assert the INIT command was sent.
 func (f *fakeSerial) recordedWrites() [][]byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()

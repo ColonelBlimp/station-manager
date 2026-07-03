@@ -84,7 +84,7 @@ func TestExecSingleCommand(t *testing.T) {
 
 	resp, err := c.ExecBytes(ctx, []byte("FA"))
 	if err != nil {
-		t.Fatalf("Exec error: %v", err)
+		t.Fatalf("ExecBytes error: %v", err)
 	}
 	if string(resp) != "OK" {
 		t.Fatalf("expected response OK, got %q", resp)
@@ -149,7 +149,7 @@ func TestReadResponseTimeout(t *testing.T) {
 		t.Fatalf("expected timeout error, got nil")
 	}
 	if time.Since(start) < 10*time.Millisecond {
-		t.Fatalf("ReadResponse returned too early for timeout")
+		t.Fatalf("ReadResponseBytes returned too early for timeout")
 	}
 }
 
@@ -185,7 +185,7 @@ func TestCloseWhileReading(t *testing.T) {
 	case <-done:
 		// ok
 	case <-time.After(100 * time.Millisecond):
-		t.Fatalf("ReadResponse goroutine did not exit after Close")
+		t.Fatalf("ReadResponseBytes goroutine did not exit after Close")
 	}
 }
 
@@ -221,7 +221,7 @@ func TestCloseUnblocksRead(t *testing.T) {
 	case <-done:
 		// ok
 	case <-time.After(100 * time.Millisecond):
-		t.Fatalf("ReadResponse did not unblock after Close")
+		t.Fatalf("ReadResponseBytes did not unblock after Close")
 	}
 }
 
@@ -371,7 +371,7 @@ func TestOversizedLineDroppedAndFramingResumes(t *testing.T) {
 	defer cancel()
 	resp, err := c.ReadResponseBytes(ctx)
 	if err != nil {
-		t.Fatalf("ReadResponse error: %v", err)
+		t.Fatalf("ReadResponseBytes error: %v", err)
 	}
 	if string(resp) != "OK" {
 		t.Fatalf("expected %q (oversized line dropped), got %q", "OK", resp)
@@ -934,8 +934,8 @@ func (f *failWritePort) Write(p []byte) (int, error) {
 // New tests
 // ---------------------------------------------------------------------------
 
-// 1. WriteCommand early-return for empty string (distinct from WriteCommandBytes).
-func TestWriteCommandEmptyStringReturnsNil(t *testing.T) {
+// 1. WriteCommandBytes returns nil with no write for an empty command.
+func TestWriteCommandBytesEmptyReturnsNil(t *testing.T) {
 	mp := newMockPort()
 	cfg := Config{
 		PortName:      "mock",
@@ -945,7 +945,7 @@ func TestWriteCommandEmptyStringReturnsNil(t *testing.T) {
 	c := newPort(mp, cfg)
 
 	if err := c.WriteCommandBytes(context.Background(), []byte("")); err != nil {
-		t.Fatalf("WriteCommand('') should return nil, got %v", err)
+		t.Fatalf("WriteCommandBytes('') should return nil, got %v", err)
 	}
 	if len(mp.writes) != 0 {
 		t.Fatalf("expected 0 writes for empty string, got %d", len(mp.writes))
@@ -1007,7 +1007,7 @@ func TestNewPortDefaultLineDelimiter(t *testing.T) {
 	defer cancel()
 
 	if err := c.WriteCommandBytes(ctx, []byte("FA")); err != nil {
-		t.Fatalf("WriteCommand error: %v", err)
+		t.Fatalf("WriteCommandBytes error: %v", err)
 	}
 	if len(mp.writes) != 1 {
 		t.Fatalf("expected 1 write, got %d", len(mp.writes))
@@ -1093,7 +1093,7 @@ func TestReaderLoopZeroByteReadContinues(t *testing.T) {
 
 	resp, err := c.ReadResponseBytes(ctx)
 	if err != nil {
-		t.Fatalf("ReadResponse error: %v", err)
+		t.Fatalf("ReadResponseBytes error: %v", err)
 	}
 	if string(resp) != "DATA" {
 		t.Fatalf("expected %q, got %q", "DATA", resp)
@@ -1205,7 +1205,7 @@ func TestCloseWhileResponseChannelFull(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if _, err := c.ReadResponseBytes(ctx); err != nil {
-		t.Fatalf("ReadResponse error: %v", err)
+		t.Fatalf("ReadResponseBytes error: %v", err)
 	}
 
 	// Now close — this must not deadlock.
