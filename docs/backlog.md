@@ -904,6 +904,16 @@ when it ships — don't let this rot into a graveyard.
       presence; retrospective upload of an existing log is explicitly this app's job —
       see the forwarder-enqueue memory + the "clear queued-upload backlog" item, its
       inverse).
+  - **Per-row edit — more fields (from dogfood-inbox 2026-06-29).** Extend the edit
+    form beyond today's set with **notes** (distinct from `comment`) and
+    **long-path/short-path (LP/SP)** propagation info.
+  - **"Emailed" column (from dogfood-inbox 2026-06-29).** Surface per-QSO whether it's
+    been sent via session email-out — mirror the SessionPanel "Emailed" column
+    (`SmFwrdByEmail*` in `additional_data`) in the logbook table. (Sent-flag *edits*
+    are already noted as future logbook work — memory `project_sm_session_email_sent_status`.)
+  - **Bulk email / export as a dialog overlay (from dogfood-inbox 2026-06-29).** When
+    the export-selected / email-selected bulk actions (above) land, present them in a
+    dialog overlay rather than inline — operator UX preference.
   - **Search / filter** — by callsign / date range / band / mode / country. Needs new
     daemon query params on the QSO-list endpoint (today it's cursor paging only, no
     filters) — a wire + validation + test change, so design it WITH the SPA.
@@ -1038,6 +1048,54 @@ when it ships — don't let this rot into a graveyard.
   event topics it watches — the events hub already multiplexes internally, so this
   is mostly a new combined endpoint + a client demultiplexer. NOT urgent (same-tab
   nav covers normal use); revisit if tab-starvation recurs or before a wider release.
+
+- **FT8: operator-adjustable attempt limit before Next.** Filed 2026-06-27 (dogfood),
+  triaged 2026-07-03. In a big pile-up, if a station stops hearing you the sequencer
+  works the full rung count (daemon-set `maxRepeats`) before the operator's Next can
+  advance — wasting slots on a non-responder. The "N calls left" readout is display-only
+  today (`Ft8Panel` Working banner, from `ft8State.qso.maxRepeats`, set by the daemon per
+  rung — not SPA-editable). Add an operator control to **cap the attempts before
+  auto-advancing** (a small numeric field beside Next, or a session default in the FT8
+  Settings tab) so a dead contact is dropped sooner. Design points: SPA-only nudge of an
+  early-Next threshold vs a daemon `max_repeats` override on `/v1/ft8/qso/*`; per-session
+  vs per-QSO. Surfaces: `Ft8MsgPanel` (Next control), `ft8.svelte.ts`, possibly the
+  sequencer rung count.
+
+- **FT8: suppress the ctrl-click affordance on an already-queued Band Activity row.**
+  Filed 2026-06-27 (dogfood), triaged 2026-07-03. Functional double-add is already
+  prevented (`ft8PileupStack.push` refreshes an existing call in place, never appends a
+  duplicate) and a queued row carries a `✓` marker — but the row still shows the
+  clickable/hover affordance, so a ctrl/cmd-click on an already-queued station silently
+  refreshes it with no visible effect. Polish: on a queued row, drop the hover cue and
+  make the ctrl-click a no-op (or a brief "already queued" toast). Cosmetic; SPA-only
+  (`Ft8Panel.svelte` Band Activity row).
+
+- **FT8: pile-up drawer header wraps to two lines.** Filed 2026-06-27 (dogfood),
+  triaged 2026-07-03. The `Ft8PileupDrawer` header ("Pile-up (N) · even · paused") can
+  wrap in the narrow `w-33` drawer. A `whitespace-nowrap` fix was applied 2026-07-03 then
+  reverted at operator request (it came bundled with a `bg-gray-500` background experiment
+  that was the part being undone). Re-file as header-only: `whitespace-nowrap` (or
+  truncate) with **no** background change. SPA-only.
+
+- **FT8 Field Day — FD-aware Operate ladder render (+ remaining FD UI).** Filed
+  2026-06-28 (dogfood "correct the ladder display for the ARRL FD"), triaged 2026-07-03.
+  FD-over-FT8 shipped + on-air-validated 2026-06-28 (ADR 0037, both directions), but the
+  **Operate-tab message ladder still renders the standard exchange placeholders**
+  (`<DX>`/`<GRID>`/`<RST>`), not the FD class+section exchange — so the ladder is wrong
+  for an FD QSO. This is the documented FD remainder set (CLAUDE.md + memory
+  `project_sm_ft8_field_day`): (1) the **FD-aware ladder render**; (2) **FD pile-up
+  Ctrl-click** (enqueue an FD caller); and (3) the **config-SPA section dropdown**
+  (`ft8.field_day.section`, validated by `goft8.ValidARRLFieldDaySection`). SPA-side for
+  (1)/(2); config-SPA for (3). The daemon FD path is done — this is presentation/entry.
+
+- **Settings help tooltips + beginner/expert mode (all SPAs).** Filed 2026-07-02
+  (dogfood), triaged 2026-07-03. Many FT8 (and other) settings knobs are terse; add
+  larger explanatory tooltips/help text, with an operator toggle to switch them off
+  (**beginner ↔ expert** mode) so an experienced op isn't nagged. Cross-cutting UI: the
+  beginner/expert flag is a durable pref → daemon `config.json` (settings-in-config
+  rule), natural home the config-SPA General tab; the tooltip copy lives per component.
+  Start with the FT8 Settings tab (densest), extend as friction surfaces. Pairs with the
+  shared-theme / cross-SPA-shell work.
 
 ## Website / public presence
 
