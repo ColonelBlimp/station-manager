@@ -18,10 +18,10 @@ For project conventions, invariants, and the documentation map, read
 
 | Tool | Version | Why it's needed |
 |------|---------|-----------------|
-| **Go** | 1.26.2 (see `go.mod`) | The daemon and all `cmd/...` tools. |
+| **Go** | 1.26.2 (see `go.mod`) — install **upstream**; Fedora 41's packaged 1.24.10 is too old | The daemon and all `cmd/...` tools. |
 | **gcc** + C toolchain | any recent | CGO builds — live FT8 audio capture (miniaudio) and the optional PocketFFT FFT backend. The default dev build (`task build`) is **CGO-on**. |
 | **Node.js + npm** | Node ≥ 22 | The three Svelte SPAs (`frontend/logging`, `frontend/config`, `frontend/logbook`). |
-| **Hugo (extended)** | 0.162.1 | The operator manual (`manual/`), embedded into the daemon via `go:embed`. The daemon build compiles against it, so it must be built first. |
+| **Hugo (extended)** | 0.126+ (Fedora 41's repo build is sufficient) | The operator manual (`manual/`), embedded into the daemon via `go:embed`. The daemon build compiles against it, so it must be built first. |
 | **Task** (go-task) | v3 | The task runner — every build/run/test entrypoint is a `task` target (`Taskfile.yml`). |
 | **nfpm** | latest | Builds the dev/release RPMs without `rpmbuild`. Only needed for `task rpm:dev` / `deploy:local:dev`. |
 | **podman** | any | Release-only — the shipped RPM is built in an AlmaLinux 8 container (`scripts/release.sh`). Not needed for day-to-day dev. |
@@ -31,17 +31,45 @@ For project conventions, invariants, and the documentation map, read
 
 ## 2. Fedora: install everything
 
+> **Reproducible shortcut:** every non-interactive step in this section is
+> scripted in [`scripts/dev-bootstrap.sh`](scripts/dev-bootstrap.sh). Read this
+> section for the *why*; run the script for the *how*. It was walked
+> command-by-command against a clean **Fedora 41** install on 2026-07-03.
+
+### First: update the base system
+
+A freshly-installed Fedora ships the anaconda base packages, which lag the
+`updates` repo. **Update before installing anything else** — skip it and
+Fedora's `nodejs` breaks on first run:
+
+```bash
+sudo dnf upgrade -y
+```
+
+Why it matters: the clean-install base `sqlite-libs` (`3.46.1-1.fc41`) does not
+export `sqlite3session_attach`, yet Fedora's `libnode` links the SQLite session
+extension against it. Without the upgrade, `node`/`npm` die immediately with:
+
+```
+node: symbol lookup error: /lib64/libnode.so.127: undefined symbol: sqlite3session_attach
+```
+
+The fix is `sqlite-libs-3.46.1-5.fc41` from `updates` — a full `dnf upgrade`
+pulls it (or `sudo dnf upgrade -y sqlite-libs` for just that).
+
 ### System packages (dnf)
 
 ```bash
 sudo dnf install -y \
   git \
   gcc \
-  golang \
   nodejs npm \
   hugo \
   pipewire-libs
 ```
+
+(`golang` is intentionally omitted — Fedora's is too old; install upstream Go in
+§2.1. It still arrives transitively as a `hugo` dependency, which is harmless.)
 
 Notes:
 
@@ -49,24 +77,32 @@ Notes:
   dev build enables CGO for live FT8 audio capture. Without it,
   `task build` fails with `cgo: C compiler "gcc" not found`. (You can still
   build the CGO-free static shape with `task build:smd:static`.)
-- **`golang`** from Fedora's repos tracks recent Go closely. If `go version`
-  is older than the `go.mod` line (`go 1.26.2`), install the upstream
-  toolchain instead — see §2.1.
+- **Go is deliberately *not* in the list.** Fedora 41's `golang` is 1.24.10 —
+  older than the `go.mod` line (`go 1.26.2`), so it cannot build the daemon.
+  Install the upstream toolchain in §2.1 (**required**, not optional). Fedora's
+  `golang` still comes in transitively via `hugo`; that's harmless as long as
+  upstream Go is first on `PATH` (§2.1) so it shadows it. (`go version` will then
+  report `go1.26.2`; if it reports `1.24.x` your `PATH` isn't picking up the
+  upstream install.)
 - **`hugo`** in Fedora's repos is the *extended* build, which is what's
-  needed. If it lags behind 0.162.1 and a template breaks, grab the pinned
-  release the way CI does:
+  needed. Fedora 41's is **0.126.2** and builds `manual/` fine (verified
+  2026-07-03) — the repo version is sufficient. Only if a future template
+  breaks against it, grab a pinned release the way CI does:
   ```bash
   HUGO_VERSION=0.162.1
   curl -fsSL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz" \
     | sudo tar -xz -C /usr/local/bin hugo
   ```
 - **`pipewire-libs`** is the *runtime* audio backend. miniaudio `dlopen`s an
-  audio backend at run time for live FT8 capture; on Fedora 43 that's PipeWire.
+  audio backend at run time for live FT8 capture; on modern Fedora that's PipeWire.
   It's almost always already installed as part of the desktop — listed here for
   a truly minimal install. No `-devel` headers are needed (miniaudio bundles its
   own C).
 
-### 2.1 Go toolchain (if Fedora's is too old)
+### 2.1 Go toolchain (upstream — required on Fedora 41)
+
+Fedora 41's packaged Go (1.24.10) is older than `go.mod`'s `go 1.26.2`, so the
+upstream toolchain is **required**, not a fallback:
 
 ```bash
 GO_VERSION=1.26.2
