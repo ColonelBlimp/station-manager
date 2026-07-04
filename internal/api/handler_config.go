@@ -45,11 +45,17 @@ import (
 // join are server-managed/read-only — the handler ignores them on PUT
 // and reasserts the authoritative state in the response.
 type ConfigResponse struct {
-	SetupComplete  bool                 `json:"setup_complete"`
-	LoggingStation types.LoggingStation `json:"logging_station"`
-	DefaultLogbook types.Logbook        `json:"default_logbook"`
-	DefaultRig     DefaultRigInfo       `json:"default_rig"`
-	Station        types.StationConfig  `json:"station"`
+	SetupComplete bool `json:"setup_complete"`
+	// LoggingStation / Station are the operator-identity blocks (source: config.json).
+	// Pointer-typed and **presence-aware on PUT** — like Qsl / Ft8Display below: a body
+	// that omits a block leaves the stored one untouched. This closes a data-loss
+	// footgun — as value types they were copied unconditionally, so a save carrying
+	// only one block (e.g. a Station-tab save omitting logging_station) zeroed the
+	// other's operator identity. Always populated (non-nil) on GET.
+	LoggingStation *types.LoggingStation `json:"logging_station"`
+	DefaultLogbook types.Logbook         `json:"default_logbook"`
+	DefaultRig     DefaultRigInfo        `json:"default_rig"`
+	Station        *types.StationConfig  `json:"station"`
 	// Qsl is the operator's standing outgoing-QSL defaults (QSL_VIA / QSLMSG /
 	// QSL_SENT_VIA). Like Ft8Display it is **presence-aware** on PUT — a body that
 	// omits it leaves the stored block untouched; one that includes it replaces it
@@ -385,8 +391,16 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// so editing the candidate would corrupt the running config before the change
 	// is even validated or committed.
 	candidate := current.Clone()
-	candidate.LoggingStation = req.LoggingStation
-	candidate.Station = req.Station
+	// LoggingStation / Station — presence-aware (like the pointer blocks below): only
+	// overlaid when the body carried them, so a save touching one identity block can't
+	// zero the other. The SPAs currently always bundle both, but an omitted block MUST
+	// be a no-op, not a wipe (the data-loss footgun this fixes).
+	if req.LoggingStation != nil {
+		candidate.LoggingStation = *req.LoggingStation
+	}
+	if req.Station != nil {
+		candidate.Station = *req.Station
+	}
 	// FT8 display prefs — presence-aware: only touched when the body carried
 	// `ft8_display` (a My Station save omits it, leaving it alone). Stored RAW
 	// here so Validate can reject an invalid feed_mode (config.md §12 option A);
@@ -698,10 +712,10 @@ func bridgeInfoFor(cfg config.Config) BridgeInfo {
 func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (ConfigResponse, error) {
 	resp := ConfigResponse{
 		SetupComplete:  cfg.SetupComplete,
-		LoggingStation: cfg.LoggingStation,
+		LoggingStation: &cfg.LoggingStation,
 		DefaultLogbook: types.Logbook{ID: cfg.DefaultLogbookID},
 		DefaultRig:     DefaultRigInfo{ID: cfg.DefaultRigID},
-		Station:        cfg.Station,
+		Station:        &cfg.Station,
 		Bridge:         bridgeInfoFor(cfg),
 		Mailer: MailerInfo{
 			Enabled:          s.mailer.Enabled(),

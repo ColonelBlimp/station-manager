@@ -262,6 +262,63 @@ func TestHandlePutConfig_SetupCompleteIdempotent(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_OmittedBlocksPreserved is the regression test for the
+// data-loss footgun: LoggingStation and Station were value-typed and copied
+// unconditionally, so a PUT that omitted one block zeroed it. Now both are
+// pointer-typed and presence-aware — an omitted block must be a no-op, not a wipe.
+func TestHandlePutConfig_OmittedBlocksPreserved(t *testing.T) {
+	srv := testServer(t)
+
+	// Seed both identity blocks: logging_station (callsign) + station (amp settings).
+	seed := `{"logging_station": {"station_callsign": "M0XYZ", "my_gridsquare": "IO91"},` +
+		` "station": {"amp_enabled": true, "amp_multiplier": 10}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(seed))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("seed PUT status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// A PUT that omits BOTH identity blocks (e.g. an FT8-settings save) must leave
+	// them untouched — the core of the bug.
+	only := `{"ft8_max_repeats": 4}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(only))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("omit-both PUT status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+	var resp ConfigResponse
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp)
+	if resp.LoggingStation.StationCallsign != "M0XYZ" {
+		t.Errorf("logging_station zeroed by an FT8-only PUT: StationCallsign = %q, want M0XYZ",
+			resp.LoggingStation.StationCallsign)
+	}
+	if !resp.Station.AmpEnabled || resp.Station.AmpMultiplier != 10 {
+		t.Errorf("station zeroed by an FT8-only PUT: got %+v, want amp_enabled + multiplier 10", resp.Station)
+	}
+
+	// A logging_station-only PUT must not zero station (the cross-block direction).
+	stationless := `{"logging_station": {"station_callsign": "G0ABC"}}`
+	req3 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(stationless))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	srv.handlePutConfig(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("station-less PUT status = %d, body = %s", w3.Code, w3.Body.String())
+	}
+	var resp2 ConfigResponse
+	_ = json.Unmarshal(w3.Body.Bytes(), &resp2)
+	if resp2.LoggingStation.StationCallsign != "G0ABC" {
+		t.Errorf("logging_station not applied: StationCallsign = %q, want G0ABC", resp2.LoggingStation.StationCallsign)
+	}
+	if !resp2.Station.AmpEnabled {
+		t.Error("station wiped by a logging_station-only PUT; presence-aware apply failed")
+	}
+}
+
 // TestHandlePutConfig_FirstSetup_MaterialisesOperatorAndOwner covers
 // the ADIF-identity seed: on the false→true setup transition, when the
 // request body doesn't supply Operator / OwnerCallsign, the daemon
