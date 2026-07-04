@@ -15,6 +15,8 @@
 #      (Fedora 41's 1.24.10 is too old to build the daemon). PATH added to
 #      ~/.bashrc, upstream first so it shadows the transitive Fedora golang.
 #   4. go install task + nfpm       — into ~/go/bin.
+#   4b. OPT-IN (SM_SMCLOUD=1)        — podman + sqlboiler + migrate for the smcloud
+#      Postgres subsystem (ADR 0040). Skipped by default; the daemon is SQLite-only.
 #   5. sudo usermod -aG dialout     — serial (rig CAT) access.
 #   6. scaffold .env if missing     — SM_WORKING_DIR runtime data dir.
 #   7. check git identity           — warn (do NOT set) if user.name/email unset;
@@ -92,6 +94,20 @@ say "Go: $(go version)"
 say "Installing Task (go-task/v3) and nfpm into ~/go/bin"
 go install github.com/go-task/task/v3/cmd/task@latest
 go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+# --- 4b. SM Cloud (smcloud) dev tooling — OPT-IN (SM_SMCLOUD=1) ---------------
+# Postgres + sqlboiler + migrate, needed ONLY to work on internal/cloud/store /
+# cmd/smcloud (SM Cloud P1, ADR 0040). The daemon is SQLite-only and needs none of
+# it, so it's skipped unless asked for: SM_SMCLOUD=1 bash scripts/dev-bootstrap.sh
+if [ "${SM_SMCLOUD:-}" = "1" ]; then
+  say "SM_SMCLOUD=1 — installing smcloud dev tooling (podman + sqlboiler + migrate)"
+  sudo dnf install -y podman
+  go install github.com/aarondl/sqlboiler/v4@latest
+  go install github.com/aarondl/sqlboiler/v4/drivers/sqlboiler-psql@latest
+  go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+else
+  say "Skipping smcloud dev tooling (set SM_SMCLOUD=1 to add podman + sqlboiler + migrate)"
+fi
 
 # --- 5. Serial (rig CAT) group ----------------------------------------------
 if id -nG "$USER" | tr ' ' '\n' | grep -qx dialout; then

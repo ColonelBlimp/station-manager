@@ -1,0 +1,21 @@
+# sqlboiler config for the smcloud Postgres store (ADR 0040 S1). Mirrors the
+# sqlite config (internal/database/sqlite/sqlboiler.toml): generated models are
+# read-only artifacts — regenerate via `task models:cloud` against a migrated dev
+# Postgres, never hand-edit. add-soft-deletes makes the qsos.deleted_at tombstone
+# soft-delete-aware for free.
+pkgname = "models"
+output = "models"
+no-tests = true
+wipe = true
+no-hooks = true
+add-enum-types = true
+add-soft-deletes = true
+
+[psql]
+dbname   = "smcloud"
+host     = "localhost"
+port     = 5432
+user     = "smcloud"
+pass     = "smcloud"
+sslmode  = "disable"
+blacklist = ["schema_migrations"]

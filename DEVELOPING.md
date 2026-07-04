@@ -144,6 +144,39 @@ sudo usermod -aG dialout $USER
 Without this, the daemon can't open the serial port and the bridge/CAT
 subsystem stays disconnected.
 
+### 2.4 SM Cloud (smcloud) — optional, only if working on the cloud service
+
+The `internal/cloud/store` + `cmd/smcloud` subsystem (SM Cloud P1, ADR 0040) uses
+**Postgres**. The daemon itself is SQLite-only and needs **none** of this — install
+it only to run smcloud's codegen or integration tests.
+
+```bash
+# Container runtime for the throwaway dev Postgres (Fedora-native, rootless). The
+# Taskfile defaults to podman; override with PG_RUNTIME=docker if you use Docker.
+sudo dnf install -y podman
+
+# sqlboiler + its Postgres driver — regenerates the models (task models:cloud).
+go install github.com/aarondl/sqlboiler/v4@latest
+go install github.com/aarondl/sqlboiler/v4/drivers/sqlboiler-psql@latest
+
+# golang-migrate CLI — applies the Postgres migrations (task migrate:cloud:up).
+go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+```
+
+Dev loop, from the repo root:
+
+```bash
+task db:pg:up            # start a throwaway Postgres container (user/pass/db = smcloud)
+task migrate:cloud:up    # apply internal/cloud/store/migrations
+task models:cloud        # regenerate the sqlboiler models (read-only artifacts)
+# ... smcloud integration tests connect to the same DB ...
+task db:pg:down          # tear it down
+```
+
+> No container runtime? A native `sudo dnf install postgresql-server` + `initdb`
+> works too — just point the Taskfile DSN at it. Podman is preferred: throwaway,
+> isolated, no host state, and it's what CI would use.
+
 ### Debian/Ubuntu equivalents
 
 `gcc` → `build-essential`; `nodejs npm` (use NodeSource for Node ≥ 22);

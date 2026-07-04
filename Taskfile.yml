@@ -8,6 +8,9 @@ vars:
   # builds — feeds cmd/smd main.Version → User-Agent + ADIF PROGRAMVERSION.
   SM_VERSION:
     sh: bash -c '. scripts/version.sh && sm_git_version'
+  # Container runtime for the smcloud dev Postgres. Defaults to podman (Fedora-
+  # native, rootless); override with `PG_RUNTIME=docker task db:pg:up`.
+  PG_RUNTIME: '{{default "podman" .PG_RUNTIME}}'
 
 tasks:
   default:
@@ -24,6 +27,34 @@ tasks:
     cmds:
       - CGO_ENABLED=1 go build ./...
       - CGO_ENABLED=1 go build -tags dev -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
+
+  # --- SM Cloud P1 (ADR 0040) — dev Postgres + sqlboiler codegen -------------
+  # Workflow: `task db:pg:up && task migrate:cloud:up && task models:cloud`.
+  # CLI tools (install once):
+  #   sqlboiler + psql driver: go install github.com/aarondl/sqlboiler/v4@latest
+  #                            go install github.com/aarondl/sqlboiler/v4/drivers/sqlboiler-psql@latest
+  #   golang-migrate:          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+  db:pg:up:
+    desc: Start a local Postgres for smcloud codegen + integration tests ({{.PG_RUNTIME}}; user/pass/db = smcloud)
+    cmds:
+      - '{{.PG_RUNTIME}} run -d --name sm-pg -e POSTGRES_USER=smcloud -e POSTGRES_PASSWORD=smcloud -e POSTGRES_DB=smcloud -p 5432:5432 postgres:16'
+      - 'until {{.PG_RUNTIME}} exec sm-pg pg_isready -U smcloud >/dev/null 2>&1; do sleep 0.5; done'
+
+  db:pg:down:
+    desc: Stop + remove the local smcloud Postgres
+    cmds:
+      - '{{.PG_RUNTIME}} rm -f sm-pg'
+
+  migrate:cloud:up:
+    desc: Apply smcloud Postgres migrations to the local dev DB (needs the golang-migrate CLI)
+    cmds:
+      - migrate -path internal/cloud/store/migrations -database "postgres://smcloud:smcloud@localhost:5432/smcloud?sslmode=disable" up
+
+  models:cloud:
+    desc: Regenerate smcloud sqlboiler models from the migrated dev Postgres (read-only artifacts)
+    dir: internal/cloud/store
+    cmds:
+      - sqlboiler psql
 
   frontend:install:
     desc: Install logging-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
