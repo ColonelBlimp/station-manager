@@ -88,7 +88,7 @@
      right-slot. The header gets extra right padding (pr-32) so its status cluster
      clears the fixed link. -->
 <ManualLink />
-<div class="flex min-h-screen flex-col bg-gray-50 font-sans text-gray-900">
+<div class="flex flex-col min-h-screen mx-auto w-300  bg-gray-50 font-sans text-gray-900">
     <header
         class="flex items-center justify-between border-b border-gray-300 bg-white py-3 pl-6 pr-32"
     >
