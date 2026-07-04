@@ -192,7 +192,7 @@
              edge. Self-guards on a non-empty ft8PileupStack, so it shows only in FT8 mode
              with queued callers (the two never coincide in practice — one operating mode
              is used at a time). -->
-        <div class="absolute top-0 -right-40 z-10">
+        <div class="absolute top-24 -right-40 z-10">
             <Ft8PileupDrawer />
         </div>
     </main>
