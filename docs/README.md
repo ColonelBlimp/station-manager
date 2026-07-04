@@ -19,9 +19,9 @@ the code is a bug to fix.
 | Doc | Owns |
 |---|---|
 | [`../CLAUDE.md`](../CLAUDE.md) | Agent working doc: load-bearing **invariants**, code style/idioms, project conventions, and the pointer to this map. Read by Claude Code every session; humans welcome. |
-| [`session-handoff.md`](session-handoff.md) | Rolling cross-session state + **next steps**. Read at session start, update at session end. Keeps ~15 `### Session N` entries; older ones roll to the archive. |
-| [`backlog.md`](backlog.md) | Cross-cutting **deferred work** — known bugs/enhancements that are real but deliberately not-now. Add when found-and-shelved; strike/remove when it ships. |
-| [`dogfood-inbox.md`](dogfood-inbox.md) | Raw operating-time capture (the `/log` in-tray). **Capture-only**, not triaged here — items graduate to a fix or `backlog.md`. |
+| [`session-handoff.md`](session-handoff.md) | **Rolling session state + the active cycle.** Where the repo is now + the 1–3 items in flight *right now* (pulled from the top of `backlog.md`; it does NOT re-rank the queue). Read at session start, update at session end. Keeps ~15 `### Session N` entries; older ones roll to the archive. |
+| [`backlog.md`](backlog.md) | **The definitive ranked worklist** — the one priority-ordered list of every triaged, not-yet-done cross-cutting item. Owns the ranking (Worklist index at the top). "What's next, and in what order" is answered here. Strike/remove when it ships. |
+| [`dogfood-inbox.md`](dogfood-inbox.md) | **Raw capture only** (the `/log` in-tray). Un-triaged notes jotted mid-operation; NOT ranked or acted on here — each **graduates** to a fix, a `backlog.md` entry, or struck as a non-issue. |
 | [`v2-design/api-endpoints.md`](v2-design/api-endpoints.md) | **Canonical, complete HTTP endpoint reference** — every route, full request/response/error/gating detail. Update in the same commit as any route change. |
 | [`v2-design/config.md`](v2-design/config.md) | **Canonical config reference** — `config.json` shape, validation rules, safety ceilings. Decided + implemented. |
 | [`ft8.md`](ft8.md) | FT8 operator & contributor guide — the single capture point for the FT8 picture (enabling/CGO, SPA panels + SSE wire, occupancy/TX). Keep current as FT8 evolves. |
@@ -29,6 +29,25 @@ the code is a bug to fix.
 | [`../manual/`](../manual/) | **Operator manual source** — per-chapter markdown built by Hugo into a single self-contained zero-JS page (ADR 0036), embedded in the daemon and served at `/manual`, and shipped on disk in the RPM for `file://` reading. The built site is a shipped artifact; keep the manual's self-contained tables in step with the code (release-checklist re-sync). |
 | [`keyboard-shortcuts.md`](keyboard-shortcuts.md) | Running inventory of every SPA keyboard shortcut. Update in the same commit as any binding change. |
 | [`licensing.md`](licensing.md) | Current licensing rules (GPL-3.0-only; see ADR 0023). |
+
+### How work flows through the docs
+
+Each work-tracking doc has **one job**; work moves between them in one direction,
+so nothing gets lost in a document and nothing is tracked in two places at once:
+
+```
+notice it → dogfood-inbox.md (raw capture)
+          → triage → backlog.md (ranked — the definitive "what's next")
+                   → pull top items → session-handoff.md (active cycle: doing it now)
+                                    → ship → MOVE detail to backlog-archive.md + log in handoff
+  durable fact (preference/invariant/state)? → memory files (~/.claude/.../memory/)
+  decision with weighed alternatives?        → decisions/ (ADR)
+  FT8-internal mechanics?                     → ft8.md
+```
+
+The discipline this enforces: a new idea goes to the **inbox**, not straight into
+whatever's open; priority is decided **once**, in the backlog ranking; and the
+active cycle stays small (1–3 items) so work gets *finished* rather than scattered.
 
 ## Tier 2 — historical / append-only (NOT current state)
 
@@ -42,6 +61,7 @@ them as references for "how it works now"; the code + Tier 1 are that.
 | [`v1-analysis/`](v1-analysis/) | Pre-v2 analysis baseline (`invariants.md`, `lessons-for-v2.md`, `design-decisions-log.md`, `bug-inventory.md`, `architecture-map.md`). Frozen — it fed the v2 rewrite decision. The invariants/lessons remain the rules to apply, but the docs themselves are not edited. |
 | [`v2-design/`](v2-design/) *(except `api-endpoints.md` + `config.md`)* | **Pre/mid-build design briefs** — `structure.md`, `api.md`, `bridge.md`, `enrichment.md`, `forwarding.md`, `forwarding-implementation.md`, `frontend-spa.md`, `milestones.md`, `topology.md`, `ui-toolkit.md`, `rig-profiles.md`, `cat-serial-reuse.md`, `cat-performance.md`, `release-acceptance.md`, `sm-cloud-p1.md`. These describe *intent*; the **shipped code + ADRs are the current truth**. Each gets a one-line "historical design — current state is X" banner as it's touched (see Maintenance). |
 | [`session-handoff-archive.md`](session-handoff-archive.md) | Rolled-off `### Session N` entries (grep-able convenience; git history is authoritative). |
+| [`backlog-archive.md`](backlog-archive.md) | Shipped / resolved / ruled-out `backlog.md` items, **moved** here (not struck in place) so the live backlog stays lean. Not read at session start; open it for an item's history. |
 | [`reviews/`](reviews/) + [`reviews/archive/`](reviews/archive/) | Code-review artifacts, each with a point-in-time `## Resolution` section. Archived once actioned. |
 | [`reports/`](reports/), [`research-pipeline.md`](research-pipeline.md) | Historical reports / notes. |
 

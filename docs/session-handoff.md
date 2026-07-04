@@ -193,10 +193,27 @@ Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the 
 - **⇒ OPEN DESIGN (this session, not built): Band Activity prefix/substring filter.** Session-scoped (in-memory like the selected offset, NOT config). Open points: match target (callsign vs whole text), prefix vs substring, placement, interaction with float-CQ-to-top. Pin design → then build.
 - **Uncommitted** (toggle + docs + backlog).
 
-## Next steps (priority order)
+## Active cycle (the 1–3 things in flight now)
 
-> **⚠️ CURRENT NEXT STEPS (as of session 197, 2026-07-03) — items deeper below are STALE
-> history (operator_pick SUPERSEDED, IC-7300 arc closed; kept for the trail):**
+> **The full ranked queue lives in `docs/backlog.md` → "Worklist index".** This
+> section is ONLY what's actively in flight — it does **not** re-rank the backlog
+> (that's the backlog's job; this doc points at it).
+>
+> **▶ Focus (set 2026-07-04): _Next shippable state for 7Q8AC._** The goal is a
+> release the external operator (7Q8AC, Malawi, offline-first) can run; "stabilise &
+> finish in-flight" is the means. The P0/P1 items below ARE the ship gate — clear them
+> before opening any new P2 workstream (theming included):
+> - **P0** — `PUT /v1/config` omitted blocks zeroed (+ `default_logbook.id` unwired).
+> - **P1** — FT8 caller + Field Day flows: on-air validation (both shipped).
+> - **P1** — multiple browser tabs share one rig → operating-lock arbitration (safety).
+> - **P1** — behavioural retest of the shipped session-192/193 daemon changes on the dogfood daemon (detail: items 1–2 below).
+> - **P1** — bridge review F3/F4 small deferred fixes (detail: item 0a3 below).
+>
+> **Parked big workstreams (built on go-ahead, NOT this cycle — see backlog):**
+> `internal/api` split (ADR 0043, opportunistic), SM Cloud P1 (ADR 0040), DB-manager SPA.
+>
+> The numbered items below are the **detail / trail** behind the above (some
+> superseded — operator_pick, IC-7300 arc — kept for history):
 > 0aa. **`internal/api` split — continue opportunistically (ADR 0043; NOT a standalone project).**
 >    Session 197 shipped `httpkit` + the import-freeze ratchet. The bulk per-surface split (ports,
 >    per-surface packages, sibling-isolation boundary tests) is **deferred until smcloud pulls the
