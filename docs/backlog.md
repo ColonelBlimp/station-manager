@@ -47,7 +47,7 @@ next, and in what order" is answered.
 **P2 — next features (open one workstream per active focus)**
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
 - _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW)
-- _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
+- _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field · **QRZ enrichment resilience on flaky links (7Q8AC-relevant)** · QRZ credentials logged in cleartext
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
@@ -782,6 +782,31 @@ next, and in what order" is answered.
   reuses the same `actions/rigControl` handler (routing set_freq/set_freq_b by selected VFO
   as today) and which FT8 focus contexts should capture the keys without clashing with FT8's
   own Shift+Ctrl shortcuts. Small, but needs a keymap-collision check against the FT8 panel.
+
+- **QRZ enrichment resilience on flaky/contended links (7Q8AC-relevant).** Found on-air
+  2026-07-04 (7Q5MLV FT8 pile-up in Malawi, during a `dnf upgrade` that saturated the link —
+  an accidental but perfect stress-test of 7Q8AC's *normal* bandwidth-contended state).
+  Evidence (smd.log): `dial tcp <qrz>:443: i/o timeout` on the **session-key login** at daemon
+  start → **QRZ disabled itself for the ENTIRE run** (`QRZ session key fetch failed; service
+  disabled` + `chain provider disabled itself during init`), so **no QSO got a name** all
+  session (hamnut country only — e.g. PY2DN logged `country:Brazil`, no name); plus intermittent
+  per-lookup `i/o timeout`s in an earlier run. The "enrichment never blocks logging" invariant
+  held (QSOs logged + forwarded fine), so this is **completeness, not correctness** — but the
+  failure mode IS 7Q8AC's environment. **Fixes:** (1) **[the big one] don't permanently disable
+  QRZ on a boot-time session-key timeout** — re-attempt the session key lazily (next lookup) or
+  periodically, so one blip doesn't kill names for hours; (2) **retry/backoff on individual
+  lookups** + revisit the HTTP timeout (a single i/o timeout shouldn't lose a name); (3) **don't
+  cache a nameless result as final** — re-lookup on a name-miss so recovery repairs it; pairs
+  with the re-enrich-from-edit-overlay repair path (inbox). Surfaces: `internal/lookup/qrz`
+  (session-key lifecycle + timeout/retry), the orchestrator provider-disable logic, the
+  `contacted_station` cache write. **P2, but consider pulling toward the 7Q8AC ship gate** — it's
+  the exact offline-first case the project targets, and names are a big part of the log's value.
+
+- **QRZ credentials logged in cleartext.** The `QRZ session key fetch failed` warn logs the full
+  request URL, which carries `username` + `password` in the query string (`internal/lookup/qrz`).
+  Redact credentials from logged URLs — log host/op, or mask the `password`/`s=` params. Secrets
+  in logs is poor hygiene (invariant: don't leak secrets); low exploitability (local `smd.log`)
+  but shouldn't be there. Small, self-contained fix. P2.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
