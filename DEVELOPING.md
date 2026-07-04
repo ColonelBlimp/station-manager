@@ -46,6 +46,14 @@ Fedora's `nodejs` breaks on first run:
 sudo dnf upgrade -y
 ```
 
+> ⚠️ **This upgrades your *entire* system, not just SM's dependencies.** It's
+> written for a **clean install**, where a full upgrade is exactly what you want.
+> On an *existing* machine where you don't want everything bumped, run only the
+> one package that actually blocks the build instead:
+> `sudo dnf upgrade -y sqlite-libs`. (`scripts/dev-bootstrap.sh` does the full
+> `dnf upgrade` — it assumes a fresh box, so run it knowingly on a machine that
+> isn't one.)
+
 Why it matters: the clean-install base `sqlite-libs` (`3.46.1-1.fc41`) does not
 export `sqlite3session_attach`, yet Fedora's `libnode` links the SQLite session
 extension against it. Without the upgrade, `node`/`npm` die immediately with:

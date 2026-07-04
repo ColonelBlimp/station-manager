@@ -50,6 +50,11 @@ if [ -r /etc/os-release ] && ! grep -qi '^ID=fedora' /etc/os-release; then
 fi
 
 # --- 1. Update the base system (fixes the node/sqlite session-symbol break) --
+# NOTE: this is a FULL `dnf upgrade` — it bumps every package on the system, not
+# just SM's deps. That's intended for the clean-install target. On an existing
+# machine where you don't want everything upgraded, Ctrl-C now and run only the
+# blocking fix by hand: `sudo dnf upgrade -y sqlite-libs`.
+warn "Step 1 runs a FULL 'sudo dnf upgrade' (whole system, not just SM's deps) — intended for a clean install."
 say "Updating base system (sudo dnf upgrade)"
 sudo dnf upgrade -y
 

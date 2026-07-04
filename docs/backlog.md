@@ -741,6 +741,15 @@ next, and in what order" is answered.
   early-Next threshold vs a daemon `max_repeats` override on `/v1/ft8/qso/*`; per-session
   vs per-QSO. Surfaces: `Ft8MsgPanel` (Next control), `ft8.svelte.ts`, possibly the
   sequencer rung count.
+  **Config default + INFINITE option (2026-07-04):** resolved default is **6**, current
+  clamp **[1–10]**. Add an **infinite / keep-going** option — never auto-abandon a contact,
+  chase until answered or Abandoned (for a rare/weak/fading station worth staying on).
+  *Encoding wrinkle:* `0`/absent already means "use default 6", so infinite needs its own
+  value (e.g. `-1`, or a `max_repeats: "infinite"` literal) — don't overload `0`. *Caveat:*
+  infinite chases a *silent* contact forever, blocking the pile-up on one non-responder — a
+  deliberate choice; the operator still has Next/Abandon. NB this is the **contact** off-ramp;
+  **CQ itself is already uncapped** by design (`caller_sequencer.go`: "calling CQ is the
+  operator's standing intent — keep calling until answered or Abandoned").
 
 - **FT8 Field Day — FD-aware Operate ladder render (+ remaining FD UI). PARKED — blocked until the next Field Day contest.**
   Parked 2026-07-04: the FD UI can only be meaningfully exercised on-air during a Field
