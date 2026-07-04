@@ -498,7 +498,32 @@ func (s *Service) RigConnected() bool {
 // already-closed channel so the SSE handler's range loop exits
 // immediately.
 func (s *Service) Subscribe() (<-chan Event, func()) {
-	return s.hub.subscribe()
+	ch, unsub := s.hub.subscribe()
+	// Advisory multi-tab awareness (EventRigClients): announce the subscriber count
+	// ONLY when it signals a multi-tab situation, so the common single-tab case (and
+	// every single-subscriber path) never sees this event — the SPA defaults to
+	// "one tab, no banner". On join we announce once the count reaches >= 2 (a second
+	// tab appeared, so both should warn); on leave we announce whenever >= 1 tab
+	// remains, which can only happen after a teardown that had been multi-tab, so the
+	// remaining tab's banner clears. A lone tab from start to finish gets nothing.
+	if n := s.hub.subscriberCount(); n >= 2 {
+		s.publishClientCount(n)
+	}
+	wrapped := func() {
+		unsub() // idempotent
+		if n := s.hub.subscriberCount(); n >= 1 {
+			s.publishClientCount(n)
+		}
+	}
+	return ch, wrapped
+}
+
+// publishClientCount fans the given rig-event subscriber count out to every tab.
+// Advisory only; the count is snapshotted then broadcast in two hub calls, so it
+// may momentarily lag a concurrent join/leave — harmless for a banner, and the
+// next transition re-broadcasts the correct value.
+func (s *Service) publishClientCount(n int) {
+	s.hub.publish(Event{Name: EventRigClients, Payload: RigClientsPayload{Count: n}})
 }
 
 // TriggerBootstrap writes the rigdef's READ command to the rig so a

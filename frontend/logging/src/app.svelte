@@ -4,7 +4,7 @@
     import ManualLink from './lib/ui/ManualLink.svelte';
     import { fetchConfig, putConfig } from './lib/api/config';
     import { configState } from './lib/states/config.svelte';
-    import { startBridge } from './lib/states/bridge.svelte';
+    import { startBridge, bridgeState } from './lib/states/bridge.svelte';
     import { toasts } from './lib/states/toasts.svelte';
     import { onMount } from 'svelte';
     import { isValidCallsign } from './lib/validators/callsign';
@@ -172,6 +172,19 @@
     and inherit unrelated layout rules.
 -->
 {#snippet main_app()}
+    <!-- Multi-tab awareness (advisory, not a lock): the daemon reports >1 rig-event
+         subscriber, so another browser tab can move this same radio. Full operating-lock
+         is future work; the dangerous cases (double-key, mic-steal, TX) are already
+         prevented daemon-side. -->
+    {#if bridgeState.tabCount > 1}
+        <div
+            class="mx-auto mt-6 w-fit max-w-200 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-center text-sm text-amber-800"
+            role="status"
+        >
+            ⚠ Another tab is controlling this rig ({bridgeState.tabCount} tabs open) — a
+            frequency, band, or mode change here moves the same radio.
+        </div>
+    {/if}
     <main class="relative rounded-xl border border-line-soft h-166 w-fit mx-auto mt-12">
         <LoggingCard />
         <StackingDrawer />

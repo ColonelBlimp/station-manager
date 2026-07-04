@@ -17,6 +17,17 @@ need the history of a specific item ("when/how did X ship?").
 
 ## Bugs (detail)
 
+- ~~**Multi-tab rig awareness banner.**~~ **SHIPPED 2026-07-04.** The advisory half of
+  the multi-tab operating-lock (the full lock stays live in `backlog.md` P2). Daemon:
+  `internal/bridge` emits a `rig-clients {count}` SSE event on multi-tab transitions only
+  (`EventRigClients` + `RigClientsPayload`; `Service.Subscribe` announces when the
+  subscriber count reaches ≥2 on join, and the decrement back to ≥1 on leave so the banner
+  clears — a lone tab gets nothing, so the single-subscriber event stream is untouched).
+  SPA (logging only — the only rig-controlling SPA): `bridgeState.tabCount` + a `rig-clients`
+  listener in `bridge.svelte.ts`, and a passive amber banner in `app.svelte` when tabCount
+  > 1. Advisory only — no write is gated (that's the deferred lock). Tests:
+  `TestSubscribe_BroadcastsClientCount` (bridge). Design/dig notes in the P2 backlog entry.
+
 - ~~**`PUT /v1/config` contract: omitted blocks zeroed (M5).**~~ **FIXED 2026-07-04.**
   Filed from the `internal/api` review (2026-06-14, M4 + M5). M4's `default_rig_id`
   half shipped with the config-SPA Rigs tab (`req.DefaultRigID` presence-aware,

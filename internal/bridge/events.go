@@ -44,6 +44,16 @@ const (
 	// trigger. Added after the original three; the SPA's EventSource
 	// consumer handles it the same way.
 	EventTuneState EventName = "tune-state"
+
+	// EventRigClients carries the count of browser tabs currently subscribed to
+	// the rig event stream: {count int}. It is advisory multi-tab AWARENESS, not
+	// arbitration — the SPA warns the operator when more than one tab is open on
+	// the one rig (a change in either tab moves the same radio). Emitted on every
+	// subscribe/unsubscribe so each tab, including a just-opened one, learns the
+	// current count. A full operating-lock (ownership + take-over) is future work;
+	// the dangerous cases (double-key, mic-steal, write-mid-TX) are already
+	// prevented by the keyMu/ErrTxActive single-flight, independent of this.
+	EventRigClients EventName = "rig-clients"
 )
 
 // Event is one bridge → SSE-subscriber message. Name is the SSE
@@ -215,4 +225,13 @@ type BridgeErrorPayload struct {
 // SSE subscriber learns an in-progress tune.
 type TuneStatePayload struct {
 	Active bool `json:"active"`
+}
+
+// RigClientsPayload is the shape under EventRigClients: how many browser tabs are
+// currently subscribed to the rig event stream. The SPA shows a passive "another
+// tab is controlling this rig" banner when count > 1. Not cached for replay — a
+// new subscriber's own join re-broadcasts the current count to everyone (see
+// Service.Subscribe), so a late-opening tab always learns it without a cache slot.
+type RigClientsPayload struct {
+	Count int `json:"count"`
 }

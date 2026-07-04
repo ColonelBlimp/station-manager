@@ -67,6 +67,16 @@ class BridgeState {
      * button reflects this; there is no optimistic local flip.
      */
     tuneActive: boolean = $state(false);
+    /**
+     * How many browser tabs are currently subscribed to the rig event stream —
+     * advisory multi-tab awareness (mirrors `internal/bridge.RigClientsPayload`).
+     * The daemon only emits `rig-clients` for multi-tab situations, so a lone tab
+     * never receives it and this stays 1. When > 1, the SPA shows a passive
+     * "another tab is controlling this rig" banner — a change here moves the one
+     * shared radio. NOT a lock (the daemon still accepts writes from any tab);
+     * a full operating-lock is future work.
+     */
+    tabCount: number = $state(1);
 }
 
 export const bridgeState = new BridgeState();
@@ -96,6 +106,11 @@ interface BridgeErrorPayload {
 /** Payload shape mirrors `internal/bridge.TuneStatePayload`. */
 interface TuneStatePayload {
     active: boolean;
+}
+
+/** Payload shape mirrors `internal/bridge.RigClientsPayload`. */
+interface RigClientsPayload {
+    count: number;
 }
 
 let activeSource: EventSource | null = null;
@@ -283,6 +298,20 @@ function openSource(): void {
         // a hard auto-off / disconnect-release the operator didn't trigger.
         bridgeState.tuneActive = payload.active;
     });
+
+    src.addEventListener('rig-clients', (ev: MessageEvent<string>) => {
+        let payload: RigClientsPayload;
+        try {
+            payload = JSON.parse(ev.data) as RigClientsPayload;
+        } catch (e) {
+            console.warn('[bridge] rig-clients JSON parse failed', e);
+            return;
+        }
+        // Advisory only: the daemon emits this solely for multi-tab situations
+        // (>= 2 tabs, and the drop back to 1 so the banner clears). A lone tab
+        // never receives it, so tabCount stays at its default 1.
+        bridgeState.tabCount = payload.count;
+    });
 }
 
 function closeSource(): void {
@@ -296,6 +325,9 @@ function closeSource(): void {
     // auto-reconnect): the daemon stays authoritative and replays the cached
     // tune-state on reconnect.
     bridgeState.tuneActive = false;
+    // Forget the multi-tab count on deliberate teardown so a re-open starts clean
+    // (single-tab default); the daemon re-announces if it's still multi-tab.
+    bridgeState.tabCount = 1;
     // Drop both disconnect-toast trackers so a future startBridge
     // after a stopBridge doesn't carry stale state.
     //

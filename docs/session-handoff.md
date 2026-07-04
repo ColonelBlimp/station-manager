@@ -204,8 +204,12 @@ Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the 
 > finish in-flight" is the means. The P0/P1 items below ARE the ship gate — clear them
 > before opening any new P2 workstream (theming included):
 > - **P0** — `PUT /v1/config` omitted blocks zeroed (+ `default_logbook.id` unwired).
-> - **P1** — FT8 caller + Field Day flows: on-air validation (both shipped).
-> - **P1** — multiple browser tabs share one rig → operating-lock arbitration (safety).
+> - **P1** — FT8 caller-side sequencing (Call CQ pile-up): on-air validation (shipped).
+>   (FT8 **Field Day** UI + further FD validation are **PARKED** — testable only during a
+>   Field Day contest; ARRL/RAC-only, so not a 7Q8AC concern. See backlog Parked tier.)
+> - ~~**P1** — multi-tab rig hazard~~ **awareness banner SHIPPED 2026-07-04** (daemon
+>   `rig-clients` SSE + logging-SPA banner; `TestSubscribe_BroadcastsClientCount`). Full
+>   operating-lock (ownership/take-over) → **P2** — not a single-op 7Q8AC blocker.
 > - **P1** — behavioural retest of the shipped session-192/193 daemon changes on the dogfood daemon (detail: items 1–2 below).
 > - **P1** — bridge review F3/F4 small deferred fixes (detail: item 0a3 below).
 >

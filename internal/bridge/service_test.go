@@ -257,3 +257,63 @@ func TestSubscribe_AfterStop_ReturnsClosedChannel(t *testing.T) {
 		t.Fatal("post-Stop Subscribe channel neither closed nor delivered")
 	}
 }
+
+// readClientCount reads the next event, asserts it is a rig-clients broadcast,
+// and returns its count. Fails on a wrong event type or timeout.
+func readClientCount(t *testing.T, ch <-chan Event) int {
+	t.Helper()
+	select {
+	case evt := <-ch:
+		if evt.Name != EventRigClients {
+			t.Fatalf("event = %q, want rig-clients", evt.Name)
+		}
+		p, ok := evt.Payload.(RigClientsPayload)
+		if !ok {
+			t.Fatalf("payload = %T, want RigClientsPayload", evt.Payload)
+		}
+		return p.Count
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for rig-clients event")
+		return 0
+	}
+}
+
+// TestSubscribe_BroadcastsClientCount is the multi-tab-awareness regression: the
+// rig-clients event fires ONLY for multi-tab situations. A lone tab gets nothing
+// (so the single-subscriber event stream every other test relies on is untouched);
+// a second tab makes both tabs learn count 2; and when it leaves, the remaining tab
+// learns count 1 so its banner clears. Advisory only — no write is gated on it
+// (that's the future operating-lock).
+func TestSubscribe_BroadcastsClientCount(t *testing.T) {
+	s := newTestService(t, types.BridgeConfig{Enabled: true})
+
+	// First tab: lone, so NO rig-clients event.
+	ch1, unsub1 := s.Subscribe()
+	assertNoEvent(t, ch1)
+
+	// Second tab: now multi-tab — it learns count 2, AND the first tab is notified.
+	ch2, unsub2 := s.Subscribe()
+	if got := readClientCount(t, ch2); got != 2 {
+		t.Fatalf("second subscriber count = %d, want 2", got)
+	}
+	if got := readClientCount(t, ch1); got != 2 {
+		t.Fatalf("first tab not notified of second; count = %d, want 2", got)
+	}
+
+	// Second tab closes: the remaining tab learns count dropped to 1 (banner clears).
+	unsub2()
+	if got := readClientCount(t, ch1); got != 1 {
+		t.Fatalf("count after unsub = %d, want 1", got)
+	}
+	unsub1()
+}
+
+// assertNoEvent fails if any event arrives within a short settle window.
+func assertNoEvent(t *testing.T, ch <-chan Event) {
+	t.Helper()
+	select {
+	case evt := <-ch:
+		t.Fatalf("expected no event, got %q", evt.Name)
+	case <-time.After(50 * time.Millisecond):
+	}
+}

@@ -42,16 +42,15 @@ next, and in what order" is answered.
 - _None currently open._ (Last cleared: `PUT /v1/config` omitted-blocks-zeroed, FIXED 2026-07-04 → archive.)
 
 **P1 — finish in-flight / validate (small; closes open arcs)**
-- FT8 caller-side + Field Day flows — on-air validation (both shipped)
-- Multiple browser tabs share one rig — operating-lock arbitration (safety)
+- FT8 caller-side sequencing (Call CQ pile-up) — on-air validation (shipped)
 - Behavioural retest of shipped daemon changes on the dogfood daemon (session 192/193 batch)
 - Bridge review F3/F4 — small deferred fixes (detached-ctx post-unkey restore; `deliverAck` comment)
 
 **P2 — next features (open one workstream per active focus)**
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
-- _FT8:_ type-4 compound + free-text · FD Operate ladder render · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW)
+- _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW)
 - _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
-- _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening
+- _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
 
@@ -61,9 +60,10 @@ next, and in what order" is answered.
 **Designed workstreams — built on go-ahead (not queued)**
 - SM Cloud P1 (ADR 0040 + `docs/v2-design/sm-cloud-p1.md`) · DB-manager SPA (4th SPA)
 
-**Parked / out of scope (not work — do not pick up)**
-- FT8 automatic / unattended sequencing — OUT OF SCOPE (the FT8 spec forbids it; SM is attended-only)
-- "Design our own sequencing / timing" — future thinking only
+**Parked — blocked or out of scope (do not pick up now)**
+- _Blocked on external event:_ **FT8 Field Day UI** (FD-aware Operate ladder render · pile-up Ctrl-click · config-SPA section dropdown) + any further FD on-air validation — the FD path can only be exercised **during a Field Day contest**, so it waits for the next one. Flows already shipped + on-air-validated 2026-06-28. NOT a 7Q8AC ship concern (ARRL/RAC-only; a Malawi op doesn't run FD).
+- _Out of scope (never):_ FT8 automatic / unattended sequencing — the FT8 spec forbids it; SM is attended-only.
+- _Future thinking:_ "design our own sequencing / timing".
 
 ## Bugs (detail)
 
@@ -99,23 +99,26 @@ next, and in what order" is answered.
      (no dedup today; `rxDecodes` ~520, filters by worked-call / offset±tol). Rx
      stays open until then.
 
-- **Multiple browser tabs share one rig with no arbitration — operating-lock needed.**
-  Filed 2026-06-27 (operator flagged as a real risk to mitigate). The SPA is multi-tab:
-  every tab subscribes to `/v1/rig/events` and any tab can `POST /v1/rig/command` —
-  there is **no "which tab owns the rig" concept**. Command writes are serialised only
-  at the CAT-line level (`bridge` `cmdMu`), and TX is single-flight (`keyMu`/`ErrTxActive`,
-  shared by tune + FT8-TX) so two tabs physically can't double-key or steal the mic
-  (FT8 capture is refcounted on `/v1/ft8/events` subscribers, which a Phone/CW tab
-  doesn't hold). The unmitigated hazard is the **shared VFO/mode**: a frequency/band/mode
-  change in one tab physically moves the one radio the other tab is operating on — e.g. a
-  Phone/CW tab retuning mid-FT8-QSO. Two control surfaces, one rig, no coordination.
-  Direction to design (UX-first per the rule): a daemon-tracked **active operating client
-  / rig lock** — one tab "holds" the rig for operating; others go read-only (state display
-  still live) or must explicitly take over; surfaced in the SPA so the operator knows which
-  tab is in control. Related dogfood notes (same root — uncoordinated control during an
-  active exchange): "Next during TX moves on mid-transmit", "currently-worked station still
-  clickable in Band Activity". Touches `internal/bridge` (ownership/lease), the rig command
-  handler (reject/queue non-owner writes), and all three SPAs (lock indicator + take-over).
+- **Multi-tab operating-lock — ownership + take-over (P2; awareness banner already shipped).**
+  Filed 2026-06-27 (operator flagged as a real risk). The SPA is multi-tab: every tab
+  subscribes to `/v1/rig/events` and any tab can `POST /v1/rig/command` — no "which tab
+  owns the rig" concept. The *dangerous* cases are already prevented daemon-side: writes
+  serialise at `cmdMu`; TX is single-flight (`keyMu`/`ErrTxActive`, shared by tune + FT8-TX)
+  so two tabs can't double-key or steal the mic. The only residual is the **soft** hazard —
+  a freq/band/mode change in one tab moves the one radio another tab is operating on.
+  **Advisory awareness shipped 2026-07-04** (see backlog-archive): the daemon emits a
+  `rig-clients {count}` SSE event on multi-tab transitions and the logging SPA shows a
+  passive banner when >1 tab is open — enough for the single-op 7Q8AC ship. **Remaining
+  (the real lock, P2):** a daemon-tracked owner so a non-owner's write is *rejected*
+  (read-only), with explicit take-over. Design facts from the 2026-07-04 dig: there is NO
+  client/tab identity on any rig endpoint today (all anonymous; `EventSource` can't send
+  headers), so it needs a per-tab id (body/query on commands + a correlating handshake on
+  the SSE), a new `ErrNotRigOwner` gate in `SendCommands` (mirroring the `ErrTxActive`
+  check + 409 mapping), a `POST /v1/rig/control` acquire/release/take-over endpoint, an
+  owner-broadcast SSE event, and lock UI in the logging SPA (only SPA that controls the
+  rig). Only worth it when multi-tab / multi-op is real (e.g. alongside a 2nd operator or
+  smcloud). Related dogfood notes (same root): "Next during TX moves on mid-transmit",
+  "currently-worked station still clickable in Band Activity".
 
 - **`internal/iocdi` contract hardening (concurrency + build-time validation).**
   Filed from the `internal/iocdi` review (2026-06-19, M1 + M3 + M4); deferred
@@ -741,7 +744,10 @@ next, and in what order" is answered.
   vs per-QSO. Surfaces: `Ft8MsgPanel` (Next control), `ft8.svelte.ts`, possibly the
   sequencer rung count.
 
-- **FT8 Field Day — FD-aware Operate ladder render (+ remaining FD UI).** Filed
+- **FT8 Field Day — FD-aware Operate ladder render (+ remaining FD UI). PARKED — blocked until the next Field Day contest.**
+  Parked 2026-07-04: the FD UI can only be meaningfully exercised on-air during a Field
+  Day contest, so it waits for the next one; ARRL/RAC-only, so it is not a 7Q8AC
+  ship-gate item. Filed
   2026-06-28 (dogfood "correct the ladder display for the ARRL FD"), triaged 2026-07-03.
   FD-over-FT8 shipped + on-air-validated 2026-06-28 (ADR 0037, both directions), but the
   **Operate-tab message ladder still renders the standard exchange placeholders**

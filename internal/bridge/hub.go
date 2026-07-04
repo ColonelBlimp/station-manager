@@ -218,9 +218,11 @@ func (h *hub) close() {
 	}
 }
 
-// subscriberCount returns the number of active subscribers. Test-only
-// helper for "wait until the handler has subscribed before publishing"
-// barriers. Production code should not branch on it.
+// subscriberCount returns the number of active subscribers. Used by tests as a
+// "wait until the handler has subscribed before publishing" barrier, and by
+// Service.publishClientCount to report the advisory multi-tab count on the SSE
+// stream. Report it (EventRigClients) but do NOT gate rig writes on it — that is
+// the future operating-lock's job, not an anonymous count's.
 func (h *hub) subscriberCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
