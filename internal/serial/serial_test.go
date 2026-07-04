@@ -3,6 +3,8 @@ package serial
 import (
 	"context"
 	stderr "errors"
+	"fmt"
+	"io/fs"
 	"sync"
 	"testing"
 	"time"
@@ -1158,7 +1160,6 @@ func TestWriteCommandBytesWriteError(t *testing.T) {
 	}
 }
 
-// 10. validateConfig defaults StopBits and Parity correctly.
 // 11. validateConfig preserves explicitly set values.
 func TestValidateConfigPreservesExplicitValues(t *testing.T) {
 	in := Config{
@@ -1355,5 +1356,46 @@ func TestWriteCommandBytesWatchdogAllowsFastWrite(t *testing.T) {
 	// Port still usable.
 	if err := c.WriteCommandBytes(context.Background(), []byte("FB;")); err != nil {
 		t.Errorf("second write failed; watchdog wrongly closed the port: %v", err)
+	}
+}
+
+// classifyOpenError's go.bug.st PortError switch arms (PermissionDenied,
+// PortBusy, PortNotFound) are NOT unit-tested here: serial.PortError has
+// unexported fields and no exported constructor, so a *serial.PortError with a
+// chosen code can't be synthesised from this package. Those sentinel mappings
+// are exercised end-to-end by internal/bridge's pipeline test, which injects the
+// sentinels directly. The paths this function reaches OUTSIDE the switch are
+// constructible and covered below — including the Linux ENOENT case, which is
+// the everyday "rig off / cable unplugged" open failure and is matched via
+// fs.ErrNotExist rather than a PortError.
+func TestClassifyOpenError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want error // nil means "no actionable sentinel"
+	}{
+		{
+			name: "bare ENOENT maps to port-not-found",
+			err:  fs.ErrNotExist,
+			want: ErrPortNotFound,
+		},
+		{
+			name: "wrapped ENOENT is unwrapped and mapped",
+			err:  fmt.Errorf("open /dev/ttyUSB0: %w", fs.ErrNotExist),
+			want: ErrPortNotFound,
+		},
+		{
+			name: "unrecognised error yields no sentinel",
+			err:  stderr.New("some other failure"),
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyOpenError(tt.err)
+			if !stderr.Is(got, tt.want) {
+				t.Fatalf("classifyOpenError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
