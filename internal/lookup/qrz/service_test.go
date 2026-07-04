@@ -40,6 +40,26 @@ func initializedService(t *testing.T, url string, client *http.Client) *Service 
 	return s
 }
 
+// uninitializedService builds a qrz.Service with a live URL + client but NO session
+// key and NOT yet initialized — for exercising Initialize and the lazy session-key
+// (ensureSessionKey) recovery path. (initializedService pre-sets a key + isInitialized,
+// so it can't drive these.)
+func uninitializedService(url string, client *http.Client) *Service {
+	return &Service{
+		LoggerService: &logging.Service{},
+		Config: &types.LookupConfig{
+			Name:           ServiceName,
+			Enabled:        true,
+			URL:            url,
+			Username:       "tester",
+			Password:       "secret",
+			HttpTimeoutSec: 5,
+		},
+		UserAgent: "smd/test",
+		client:    client,
+	}
+}
+
 // ---- Initialize ----
 
 func TestInitialize_MissingLogger(t *testing.T) {
@@ -103,14 +123,7 @@ func TestInitialize_SessionKeyFailureStaysEnabled(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := &Service{
-		LoggerService: &logging.Service{},
-		Config: &types.LookupConfig{
-			Enabled: true, URL: srv.URL, Username: "tester", Password: "wrong", HttpTimeoutSec: 5,
-		},
-		UserAgent: "smd/test",
-		client:    srv.Client(),
-	}
+	s := uninitializedService(srv.URL, srv.Client())
 	if err := s.Initialize(context.Background()); err != nil {
 		t.Fatalf("session-fetch failure must be soft (nil err), not a hard startup error; got %v", err)
 	}
@@ -152,14 +165,7 @@ func TestLazySessionKey_RecoversAfterBootFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := &Service{
-		LoggerService: &logging.Service{},
-		Config: &types.LookupConfig{
-			Enabled: true, URL: srv.URL, Username: "tester", Password: "secret", HttpTimeoutSec: 5,
-		},
-		UserAgent: "smd/test",
-		client:    srv.Client(),
-	}
+	s := uninitializedService(srv.URL, srv.Client())
 	if err := s.Initialize(context.Background()); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -194,14 +200,7 @@ func TestLazySessionKey_CooldownSuppressesRetry(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := &Service{
-		LoggerService: &logging.Service{},
-		Config: &types.LookupConfig{
-			Enabled: true, URL: srv.URL, Username: "tester", Password: "secret", HttpTimeoutSec: 5,
-		},
-		UserAgent: "smd/test",
-		client:    srv.Client(),
-	}
+	s := uninitializedService(srv.URL, srv.Client())
 	_ = s.Initialize(context.Background()) // boot session fails; leaves lastAuthAttempt zero
 	sessionReqs.Store(0)                   // count only post-Initialize attempts
 
@@ -211,6 +210,56 @@ func TestLazySessionKey_CooldownSuppressesRetry(t *testing.T) {
 	_, _ = s.LookupWithContext(context.Background(), "BB2BB")
 	if got := sessionReqs.Load(); got != 1 {
 		t.Fatalf("session-key requests across 2 lookups = %d, want 1 (cooldown suppresses the 2nd)", got)
+	}
+}
+
+// TestLazySessionKey_RetriesAfterCooldown covers the self-healing branch: after a
+// failed lazy login the cooldown suppresses retries, but once it elapses the next
+// lookup retries — and if the link has recovered, gets the key. Shortens
+// sessionRetryCooldown (the reason it's a var) so the test isn't slow.
+func TestLazySessionKey_RetriesAfterCooldown(t *testing.T) {
+	orig := sessionRetryCooldown
+	sessionRetryCooldown = 20 * time.Millisecond
+	t.Cleanup(func() { sessionRetryCooldown = orig })
+
+	var failSession atomic.Bool
+	failSession.Store(true)
+	var sessionReqs atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.URL.Query().Get("username") != "" {
+			sessionReqs.Add(1)
+			if failSession.Load() {
+				_, _ = w.Write([]byte(`<QRZDatabase><Session><Error>session timeout</Error></Session></QRZDatabase>`))
+				return
+			}
+			_, _ = w.Write([]byte(`<QRZDatabase><Session><Key>good-key</Key></Session></QRZDatabase>`))
+			return
+		}
+		_, _ = w.Write([]byte(`<QRZDatabase><Callsign><call>K1ABC</call><fname>Ann</fname></Callsign><Session><Key>good-key</Key></Session></QRZDatabase>`))
+	}))
+	defer srv.Close()
+
+	s := uninitializedService(srv.URL, srv.Client())
+	_ = s.Initialize(context.Background()) // boot login fails; lastAuthAttempt stays zero
+	sessionReqs.Store(0)
+
+	// Lookup 1 retries the login (cooldown not started) and fails.
+	if _, err := s.LookupWithContext(context.Background(), "K1ABC"); err == nil {
+		t.Fatal("lookup 1 should fail (still no key)")
+	}
+	// Link recovers; wait out the (tiny) cooldown so the next lookup is allowed to retry.
+	failSession.Store(false)
+	time.Sleep(40 * time.Millisecond)
+	st, err := s.LookupWithContext(context.Background(), "K1ABC")
+	if err != nil {
+		t.Fatalf("lookup after cooldown + recovery: %v", err)
+	}
+	if st.Name != "Ann" {
+		t.Fatalf("Name = %q, want Ann (login retried once the cooldown elapsed)", st.Name)
+	}
+	if got := sessionReqs.Load(); got < 2 {
+		t.Fatalf("session attempts = %d, want >= 2 (one failed, then a post-cooldown retry)", got)
 	}
 }
 

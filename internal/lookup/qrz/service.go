@@ -82,6 +82,12 @@ type Service struct {
 // returning, sparse enough not to hammer QRZ. A var so tests can shorten it.
 var sessionRetryCooldown = 30 * time.Second
 
+// errAuthInProgress is returned by ensureSessionKey to a follower that couldn't
+// take authMu (another lookup is already acquiring the key). The caller fail-softs
+// on it like any other lookup error — the orchestrator falls through to the next
+// provider — rather than blocking on the in-flight login.
+var errAuthInProgress = stderr.New("qrz: session key acquisition in progress")
+
 // NewService constructs a Service with the given dependencies. Used
 // by tests that need a custom *http.Client pointing at httptest;
 // production wiring uses zero-value initialization + DI tag
@@ -99,11 +105,15 @@ func NewService(logger *logging.Service, cfgSvc *config.Service, cfg *types.Look
 func (s *Service) Name() string { return ServiceName }
 
 // Initialize wires the Service against its dependencies and fetches
-// the session key. Idempotent. If session-key fetch fails the service
-// is marked disabled (any subsequent Lookup short-circuits) — that
-// matches v1's "any error here and we should disable the service"
-// behaviour and matches ADR 0017's implicit-fall-through model: if
-// QRZ auth is broken at startup, the chain runner skips QRZ.
+// the session key. Idempotent. If the session-key fetch fails the
+// service stays ENABLED but keyless (it does NOT self-disable): a
+// boot-time login failure on a flaky link must not kill enrichment for
+// the whole run. Lookups then lazily re-fetch the key (ensureSessionKey,
+// cooldown-bounded) so QRZ revives on its own once the link recovers,
+// without a daemon restart. Until then enrichment fails soft and the
+// chain falls through to the other providers (fixed on-air 2026-07-04).
+// A genuinely invalid *config* (missing/short credentials, bad URL) still
+// fails validateConfig as a hard error before this point.
 //
 // ctx is the daemon-lifecycle context — propagated into the
 // session-key HTTP call so daemon shutdown can interrupt a stuck
@@ -229,18 +239,23 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 	// that started keyless after a boot-time login failure, without a restart. On a
 	// still-failing link this returns fail-soft (the orchestrator falls through to
 	// the next provider), never blocking the log.
-	if err := s.ensureSessionKey(ctx); err != nil {
+	if err := s.ensureSessionKey(); err != nil {
 		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("no QRZ session key (will retry)")
 	}
 
 	station, err := s.lookupOnce(ctx, callsign)
 	if err != nil && stderr.Is(err, errSessionExpired) {
-		// The session key expired mid-session. Re-authenticate once and retry
-		// the lookup once (review 2026-06-04 M1). No loop: a second expiry
-		// means credentials / QRZ are genuinely broken, not a stale key.
-		if rerr := s.requestAndSetSessionKey(ctx); rerr != nil {
-			s.LoggerService.WarnWith().Err(rerr).Msg("QRZ session re-auth failed after expiry")
-			return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("session expired and re-auth failed")
+		// The session key expired / was invalidated mid-session. Force a re-acquire
+		// through the SAME cooled, single-flighted path as a cold start: clear the
+		// stale key (else ensureSessionKey short-circuits on it), then re-fetch. The
+		// old direct requestAndSetSessionKey here bypassed authMu + the cooldown and,
+		// on a failed re-auth, left the stale key so every later lookup hammered QRZ
+		// with an uncooled login (two HTTP calls/lookup, N-parallel) — the exact thing
+		// the cooldown exists to prevent, just on the expiry path.
+		s.setSessionKey("")
+		if rerr := s.ensureSessionKey(); rerr != nil {
+			s.LoggerService.WarnWith().Err(rerr).Msg("QRZ session re-auth after expiry unavailable (will retry)")
+			return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("session expired and re-auth unavailable")
 		}
 		s.LoggerService.InfoWith().Msg("QRZ session re-authenticated after expiry; retrying lookup")
 		station, err = s.lookupOnce(ctx, callsign)
@@ -283,7 +298,8 @@ func (s *Service) lookupOnce(ctx context.Context, callsign string) (types.Contac
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("failed to perform HTTP GET request")
+		// scrub: the transport *url.Error embeds the URL incl. the session key (s=).
+		return types.ContactedStation{}, errors.New(op).WithErr(scrubURLError(err)).WithMsg("failed to perform HTTP GET request")
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -324,20 +340,36 @@ func (s *Service) setSessionKey(key string) {
 // of concurrent lookups makes at most one login attempt; the rest see the fresh key
 // or the cooldown. A non-empty key short-circuits — including one that later proves
 // expired, which LookupWithContext handles via its own re-auth path.
-func (s *Service) ensureSessionKey(ctx context.Context) error {
+func (s *Service) ensureSessionKey() error {
 	if s.getSessionKey() != "" {
 		return nil
 	}
-	s.authMu.Lock()
+	// TryLock, not Lock: only the leader attempts the login. Concurrent lookups (an
+	// FT8 enrich burst) fail-soft IMMEDIATELY instead of blocking behind a slow auth
+	// on a flaky link — they degrade to the other providers and pick up the key once
+	// the leader sets it. This both single-flights the login and keeps the operator's
+	// interactive path from stalling on a follower.
+	if !s.authMu.TryLock() {
+		return errAuthInProgress
+	}
 	defer s.authMu.Unlock()
-	// A concurrent lookup may have acquired a key while we waited on authMu.
+	// The leader may have set a key between our getSessionKey check and TryLock.
 	if s.getSessionKey() != "" {
 		return nil
 	}
 	if !s.lastAuthAttempt.IsZero() && time.Since(s.lastAuthAttempt) < sessionRetryCooldown {
-		return s.lastAuthErr // recent failure — don't hammer QRZ; wait out the cooldown
+		return s.lastAuthErr // recent failure — wait out the cooldown; don't hammer QRZ
 	}
+	// Detached context: the session key is SHARED state, not tied to whichever caller
+	// triggered the fetch. Using the caller's request ctx would abort a healthy login
+	// when that client disconnects (tab close / reload) AND cache context.Canceled,
+	// burning the whole cooldown on a good link. The HTTP client's own timeout still
+	// bounds the call.
+	err := s.requestAndSetSessionKey(context.Background())
+	s.lastAuthErr = err
+	// Stamp at COMPLETION, not start: a login lasting >= the cooldown must not let
+	// queued waiters past the cooldown check and fire their own serial logins. Boot
+	// leaves lastAuthAttempt zero, so the first lookup still retries immediately.
 	s.lastAuthAttempt = time.Now()
-	s.lastAuthErr = s.requestAndSetSessionKey(ctx)
-	return s.lastAuthErr
+	return err
 }

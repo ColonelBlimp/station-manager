@@ -1172,11 +1172,13 @@ func buildEnrichment(
 			if err := qrzSvc.Initialize(workerCtx); err != nil {
 				return nil, nil, errors.New(op).WithErr(err).WithMsgf("initialize chain provider %q", entry.Name)
 			}
-			// QRZ Initialize disables itself on session-fetch failure
-			// rather than returning an error — the Enabled flag may
-			// have flipped under our feet. Skip in that case.
+			// Skip QRZ only when it's DISABLED IN CONFIG (Initialize doesn't
+			// fetch a session key then). A session-key FAILURE no longer flips
+			// this flag — QRZ stays enabled and lazily re-auths on lookups (see
+			// qrz.Initialize), so a flaky-link blip at boot can't silently drop
+			// the provider from the chain for the whole run.
 			if !qrzSvc.Config.Enabled {
-				loggerSvc.WarnWith().Str("provider", entry.Name).Msg("lookup: chain provider disabled itself during init")
+				loggerSvc.InfoWith().Str("provider", entry.Name).Msg("lookup: chain provider disabled in config; skipping")
 				continue
 			}
 			chain = append(chain, qrzSvc)

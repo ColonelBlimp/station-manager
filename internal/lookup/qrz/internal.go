@@ -57,6 +57,24 @@ func readLimitedBody(r io.Reader) ([]byte, error) {
 	return body, nil
 }
 
+// scrubURLError redacts the query string from a *url.Error's URL before it enters
+// a logged or cached error path. Go's url.Error masks userinfo but NOT query
+// params — and QRZ carries the username+password (session request) and the session
+// key (lookup) in the query, which would otherwise leak into the daemon log on
+// every transport failure. That matters especially now the provider stays in the
+// chain on a flaky link: the failure recurs once per enriched callsign, not once
+// per boot. Non-url.Error values (and unparseable URLs) pass through unchanged.
+func scrubURLError(err error) error {
+	var ue *url.Error
+	if stderr.As(err, &ue) {
+		if u, perr := url.Parse(ue.URL); perr == nil {
+			u.RawQuery = ""
+			ue.URL = u.String()
+		}
+	}
+	return err
+}
+
 // requestAndSetSessionKey fetches a session key from QRZ.com using
 // configured username/password and stores it on the Service for
 // subsequent lookup calls.
@@ -97,7 +115,8 @@ func (s *Service) requestAndSetSessionKey(ctx context.Context) error {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("failed to perform HTTP GET request")
+		// scrub: the transport *url.Error embeds the full auth URL incl. the password.
+		return errors.New(op).WithErr(scrubURLError(err)).WithMsg("failed to perform HTTP GET request")
 	}
 	defer func() { _ = resp.Body.Close() }()
 

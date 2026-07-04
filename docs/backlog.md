@@ -47,7 +47,7 @@ next, and in what order" is answered.
 **P2 — next features (open one workstream per active focus)**
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
 - _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW)
-- _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field · **QRZ enrichment resilience on flaky links (7Q8AC-relevant)** · QRZ credentials logged in cleartext
+- _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field · **QRZ enrichment resilience on flaky links (7Q8AC-relevant; fix (1) shipped, (2)/(3) remain)**
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
@@ -798,17 +798,25 @@ next, and in what order" is answered.
   the key on lookups (cooldown-bounded `sessionRetryCooldown` 30s, single-flighted via `authMu`),
   so QRZ revives on its own once the link returns — no daemon restart. Tests
   `TestInitialize_SessionKeyFailureStaysEnabled` / `TestLazySessionKey_RecoversAfterBootFailure` /
-  `…CooldownSuppressesRetry`. **Still open:** (2) **retry/backoff on individual lookups** + revisit
+  `…CooldownSuppressesRetry` / `…RetriesAfterCooldown`. **Review-hardened same day** (a multi-agent
+  review found real gaps in the first cut, all fixed): the expired-key re-auth path now routes through
+  the SAME cooled/single-flighted `ensureSessionKey` (was bypassing it + leaving a stale key that
+  hammered QRZ); `authMu` uses `TryLock` so followers fail-soft instead of blocking the interactive
+  path; the login runs on a DETACHED context (a client disconnect no longer aborts it or caches
+  `context.Canceled`); the cooldown is stamped at completion (a login ≥ the cooldown no longer lets
+  waiters through); credential-in-log scrubbed (above). **Still open:** (2) **retry/backoff on individual lookups** + revisit
   the HTTP timeout (a single i/o timeout shouldn't lose a name); (3) **don't cache a nameless
   result as final** — re-lookup on a name-miss so recovery repairs it; pairs with the
   re-enrich-from-edit-overlay repair path (inbox). Surfaces: `internal/lookup/qrz`, the
   `contacted_station` cache write. Residual is still **P2, 7Q8AC-relevant.**
 
-- **QRZ credentials logged in cleartext.** The `QRZ session key fetch failed` warn logs the full
-  request URL, which carries `username` + `password` in the query string (`internal/lookup/qrz`).
-  Redact credentials from logged URLs — log host/op, or mask the `password`/`s=` params. Secrets
-  in logs is poor hygiene (invariant: don't leak secrets); low exploitability (local `smd.log`)
-  but shouldn't be there. Small, self-contained fix. P2.
+- ~~**QRZ credentials logged in cleartext.**~~ **FIXED 2026-07-04** (surfaced by the review of the
+  resilience fix, which noted keeping the provider in-chain amplified the leak from once-per-boot to
+  once-per-enriched-callsign). `scrubURLError` (`internal/lookup/qrz/internal.go`) strips the query
+  string from the transport `*url.Error` at both `client.Do` sites before it enters the logged/cached
+  error path — Go's `url.Error` masks userinfo but NOT query params, and QRZ carried
+  `username`+`password` (session request) and the session key (lookup) there. → move to archive on
+  next tidy.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
