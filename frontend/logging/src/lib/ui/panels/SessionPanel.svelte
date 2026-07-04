@@ -160,7 +160,7 @@
     </svg>
 {/snippet}
 
-<div class="px-2 {cssTableHeight}">
+<div class="pl-2 {cssTableHeight}">
     {#if rows.length === 0}
         <p class="text-sm text-gray-500 italic px-1 py-2 {cssTableHeight}">
             No QSOs logged this session.
@@ -177,10 +177,10 @@
             here keeps the card — and the tab strip — at a stable width.
         -->
         <div class="overflow-x-auto overflow-y-scroll {cssTableHeight}">
-            <table class="w-full text-left text-sm tabular-nums">
-                <thead class="border-b border-gray-300">
+            <table class="table-fixed w-230 text-left text-sm tabular-nums">
+                <thead class="bg-white border-b border-gray-300 sticky top-0 z-10">
                     <tr class="text-gray-700 font-semibold py-1">
-                        <th class="w-26">Callsign</th>
+                        <th class="w-20">Callsign</th>
                         <th class="w-32">Name</th>
                         <th class="w-20">Freq</th>
                         <th class="w-12">Band</th>
@@ -190,19 +190,14 @@
                         <th class="w-32">Time On</th>
                         <th class="w-36">Country</th>
                         <th class="w-22">Distance</th>
-                        <!-- Envelope icon instead of an "Emailed" text label —
-                             tracks whether the QSO has been forwarded to the QSL
-                             manager by email. Only shown when the mailer is
-                             enabled (no SMTP → nothing to email → column hidden),
-                             matching the InfoPanel email controls. -->
                         {#if configState.mailer.enabled}
-                            <th class="pt-1">
+                            <th class="w-6 pt-1">
                                 <span class="inline-flex" title="Emailed" aria-label="Emailed">
                                     {@render envelopeIcon()}
                                 </span>
                             </th>
                         {/if}
-                        <th class="w-8 sr-only">Actions</th>
+                        <th class="w-12 sr-only">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -218,19 +213,19 @@
                         keyboard target than a row-wide hit area.
                     -->
                         <tr class="border-b border-line-soft last:border-0">
-                            <td class="w-26 py-1 font-semibold">{row.callsign}</td>
-                            <td class="w-32 text-nowrap overflow-hidden text-ellipsis">{row.name}</td>
-                            <td class="">{formatFrequency(row.freqHz)}</td>
-                            <td class="">{row.band}</td>
-                            <td class="">{row.rstSent}</td>
-                            <td class="">{row.rstRcvd}</td>
-                            <td class="">{row.mode}</td>
-                            <td class="">
+                            <td class="py-1 font-semibold">{row.callsign}</td>
+                            <td class="overflow-x-hidden text-nowrap text-ellipsis">{row.name}</td>
+                            <td>{formatFrequency(row.freqHz)}</td>
+                            <td>{row.band}</td>
+                            <td>{row.rstSent}</td>
+                            <td>{row.rstRcvd}</td>
+                            <td>{row.mode}</td>
+                            <td>
                                 {formatDate(row.qsoDate)}
                                 {formatTime(row.timeOn)}
                             </td>
-                            <td class="text-nowrap overflow-hidden text-ellipsis">{row.country}</td>
-                            <td class="text-nowrap overflow-hidden text-ellipsis">{formatDistance(row.distanceKm)}</td>
+                            <td class="w-36 text-nowrap overflow-hidden text-ellipsis">{row.country}</td>
+                            <td class="w-22 text-nowrap overflow-hidden text-ellipsis">{formatDistance(row.distanceKm)}</td>
                             {#if configState.mailer.enabled}
                                 <td class="w-6 pl-1">
                                     {#if row.emailedDate}
@@ -247,7 +242,7 @@
                                     {/if}
                                 </td>
                             {/if}
-                            <td class="w-9">
+                            <td class="pl-2">
                                 <button
                                     type="button"
                                     class="font-bold text-indigo-700 hover:text-indigo-900 cursor-pointer"
