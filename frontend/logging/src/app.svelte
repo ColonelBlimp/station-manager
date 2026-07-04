@@ -192,7 +192,7 @@
              edge. Self-guards on a non-empty ft8PileupStack, so it shows only in FT8 mode
              with queued callers (the two never coincide in practice — one operating mode
              is used at a time). -->
-        <div class="absolute top-0 -right-37 z-10">
+        <div class="absolute top-0 -right-20 z-10">
             <Ft8PileupDrawer />
         </div>
     </main>
@@ -264,16 +264,16 @@
 {#snippet setup_done()}
     <main class="rounded-xl border border-line-soft h-120 w-200 mx-auto mt-12 p-8">
         <h1 class="text-center font-semibold text-2xl">
-            ✓ Setup complete{configState.loggingStation.stationCallsign
+            <span class="text-green-500">✓</span> Setup complete{configState.loggingStation.stationCallsign
                 ? ` — ${configState.loggingStation.stationCallsign}`
                 : ''}
         </h1>
         <div class="py-4 text-center">
             <p>Your default logbook is ready and you can start logging right away.</p>
-            <p class="mt-3">
-                Want to finish setting up your station first? The <i>Config</i> app is where you set up
-                your rig (CAT), QSO forwarding (QRZ, ClubLog…), session email, FT8, and the rest of your
-                station details.
+            <p class="mt-3">Want to finish setting up your station first?</p>
+            <p>The <i>Config</i> app is where you set up your rig (CAT),
+                QSO forwarding (QRZ, ClubLog…), session email, FT8, and the rest of your
+                    station details.
             </p>
         </div>
         <div class="flex flex-col items-center space-y-3 pt-2">
