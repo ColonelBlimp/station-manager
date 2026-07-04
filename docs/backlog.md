@@ -44,7 +44,6 @@ next, and in what order" is answered.
 **P1 — finish in-flight / validate (small; closes open arcs)**
 - FT8 caller-side sequencing (Call CQ pile-up) — on-air validation (shipped)
 - Behavioural retest of shipped daemon changes on the dogfood daemon (session 192/193 batch)
-- Bridge review F3/F4 — small deferred fixes (detached-ctx post-unkey restore; `deliverAck` comment)
 
 **P2 — next features (open one workstream per active focus)**
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title

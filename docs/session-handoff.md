@@ -210,6 +210,8 @@ Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the 
 > - ~~**P1** — multi-tab rig hazard~~ **awareness banner SHIPPED 2026-07-04** (daemon
 >   `rig-clients` SSE + logging-SPA banner; `TestSubscribe_BroadcastsClientCount`). Full
 >   operating-lock (ownership/take-over) → **P2** — not a single-op 7Q8AC blocker.
+> - ~~**P1** — bridge review F3/F4~~ **DONE 2026-07-04** (see backlog-archive): F3 tune-restore
+>   detached from the request ctx (regression test); F4 `deliverAck` accepted-limitation comment.
 > - **P1** — behavioural retest of the shipped session-192/193 daemon changes on the dogfood daemon (detail: items 1–2 below).
 > - **P1** — bridge review F3/F4 small deferred fixes (detail: item 0a3 below).
 >

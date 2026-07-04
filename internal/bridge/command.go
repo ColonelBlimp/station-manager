@@ -278,6 +278,19 @@ func (s *Service) readBackAfterCommand(ctx context.Context, cl serial.Client) {
 // deliverAck routes a CI-V ACK from the readLoop to the SendCommands waiter.
 // The channel is buffered (1) and we send non-blocking, so a stray ACK with no
 // waiter (or a duplicate) is dropped rather than stalling the read loop.
+//
+// Protocol-inherent limitation (F4, review 2026-07-01, accepted not fixed): CI-V
+// FB/FA ACKs carry no correlation id, so a LATE ack — one that arrives after its
+// command already timed out (ErrCommandNoAck) and cleared its waiter — cannot be
+// told apart from the next command's ack. If the next command has by then
+// installed its pendingAck, this late ack is delivered to IT, so that command can
+// see a spurious accept. The window is narrow and bounded: cmdMu serialises whole
+// batches, clearPendingAck nils the waiter the instant a command completes (so a
+// late ack landing before the successor installs its channel is dropped here as
+// "no waiter"), and civAckTimeout is set generously so a real ack is almost never
+// late. It cannot be closed in code without per-command sequencing the protocol
+// does not provide; documented rather than papered over. Yaesu/Kenwood rigs use
+// the fire-and-forget path and never reach here.
 func (s *Service) deliverAck(accepted bool) {
 	s.mu.Lock()
 	ch := s.pendingAck

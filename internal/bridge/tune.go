@@ -241,21 +241,22 @@ func (s *Service) releaseTune(ctx context.Context, reason string) error {
 		return errors.New(errOp).WithErr(err).WithMsg("write tune-off")
 	}
 
-	// Carrier is down. Step 2 — settle, then best-effort restore. Respect ctx
-	// cancellation during the pause (e.g. shutdown / client disconnect): the
-	// carrier is already down, so skipping the restore is safe.
+	// Carrier is down. Step 2 — settle, then best-effort restore. DETACHED from the
+	// caller's ctx (F3): a cancelled request — e.g. the browser disconnecting during
+	// the settle — must NOT skip the restore and strand the rig in RTTY / tune-power.
+	// Like the auto-off backstop (which already passes context.Background), the
+	// restore of the operator's pre-tune mode + power is a correctness action that
+	// must complete regardless of the HTTP request's lifetime. Step 1's unkey stays
+	// on the caller's ctx (a cancel there just re-arms the backstop, which is safe);
+	// only this best-effort restore detaches. The restore write is still bounded by
+	// the serial write watchdog, so detaching cannot hang teardown.
 	if settle > 0 {
-		select {
-		case <-time.After(settle):
-		case <-ctx.Done():
-			s.finishTune()
-			return nil
-		}
+		time.Sleep(settle)
 	}
 	if restore := encodeTuneRestore(def, restoreMode, restorePower); len(restore) > 0 {
 		// Best-effort: the carrier is already down, so a failed/un-ACked restore is
 		// logged, never surfaced (CI-V waits for the ACK; Yaesu fire-and-forget).
-		if err := s.writeKeyedLine(ctx, def, cl, restore, "tune restore"); err != nil {
+		if err := s.writeKeyedLine(context.Background(), def, cl, restore, "tune restore"); err != nil {
 			s.logger.WarnWith().Err(err).Str("reason", reason).
 				Msg("bridge: tune mode/power restore write failed (carrier already down)")
 		}

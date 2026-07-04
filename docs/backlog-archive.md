@@ -17,6 +17,19 @@ need the history of a specific item ("when/how did X ship?").
 
 ## Bugs (detail)
 
+- ~~**Bridge review F3/F4 (Low, deferred from the session-196 guaranteed-stop review).**~~
+  **DONE 2026-07-04.** **F3** — the tune-off mode/power restore ran on the caller's ctx, so
+  a request cancelled during the ~150 ms settle skipped the restore and stranded the rig in
+  RTTY / tune-power (`releaseTune`, `tune.go`). Fixed by detaching step 2 (settle + restore)
+  onto `context.Background()` — like the auto-off backstop — while the unkey (step 1) stays
+  on the caller's ctx (a cancel there just re-arms the backstop). Regression test
+  `TestStopTune_CtxCancelDuringSettleStillRestores` (inverted from the old
+  `…SkipsRestore`; proven to fail pre-fix). **F4** — protocol-inherent: an uncorrelated CI-V
+  FB/FA ack arriving late (after its command timed out) can be delivered to the next
+  command's waiter. Cannot be closed in code (CI-V has no per-command sequencing); resolved
+  as an accepted-limitation comment on `deliverAck` (`command.go`). No behaviour change; the
+  FTdx10/Yaesu station uses the fire-and-forget path and never reaches it.
+
 - ~~**Multi-tab rig awareness banner.**~~ **SHIPPED 2026-07-04.** The advisory half of
   the multi-tab operating-lock (the full lock stays live in `backlog.md` P2). Daemon:
   `internal/bridge` emits a `rig-clients {count}` SSE event on multi-tab transitions only

@@ -442,13 +442,15 @@ func TestStopTune_IdempotentWhenIdle(t *testing.T) {
 	}
 }
 
-// TestStopTune_CtxCancelDuringSettleSkipsRestore covers the settle's ctx
-// handling (task #270): if the context is cancelled while we're waiting for the
-// rig to return to RX, the best-effort restore is skipped — but the carrier is
-// already down (unkey went out first), so the tune still finishes cleanly.
-func TestStopTune_CtxCancelDuringSettleSkipsRestore(t *testing.T) {
+// TestStopTune_CtxCancelDuringSettleStillRestores is the F3 regression: the
+// post-unkey mode/power restore is DETACHED from the caller's ctx, so a cancelled
+// request — e.g. the browser disconnecting during the settle — must NOT skip the
+// restore and strand the rig in RTTY / tune-power. Both writes go out: the unkey
+// (TX0;) and, after the settle, the restore (PC…;MD…;). (Before F3 the restore was
+// skipped on a cancelled ctx, task #270 — that was the bug.)
+func TestStopTune_CtxCancelDuringSettleStillRestores(t *testing.T) {
 	s, f := tuneTestService(t)
-	s.tuneRestoreSettle = 500 * time.Millisecond // long enough to cancel mid-settle
+	s.tuneRestoreSettle = 5 * time.Millisecond
 	ch, unsub := s.Subscribe()
 	defer unsub()
 
@@ -457,22 +459,31 @@ func TestStopTune_CtxCancelDuringSettleSkipsRestore(t *testing.T) {
 	}
 	awaitTuneState(t, ch, true, time.Second)
 
-	// Cancels ~20ms in: after the immediate unkey write, during the settle.
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
+	// An already-cancelled context stands in for a request that died before the
+	// restore ran. Under the old behaviour the settle bailed on ctx.Done and
+	// skipped the restore; now step 2 is detached and completes regardless.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	if err := s.StopTune(ctx); err != nil {
 		t.Fatalf("StopTune: %v", err)
 	}
-	// Unkey went out; the restore was skipped on ctx cancel — last write is the
-	// bare unkey, not the restore line.
-	if got := lastWrite(f); got != "TX0;" {
-		t.Errorf("last write = %q, want %q (unkey only; restore skipped on cancel)", got, "TX0;")
+
+	writes := f.recordedWrites()
+	if len(writes) < 2 {
+		t.Fatalf("want unkey + restore writes, got %d: %q", len(writes), writes)
 	}
+	if got := string(writes[len(writes)-2]); got != "TX0;" {
+		t.Errorf("unkey write = %q, want %q", got, "TX0;")
+	}
+	if got := string(writes[len(writes)-1]); got != "PC100;MD02;" {
+		t.Errorf("restore skipped on a cancelled ctx = %q, want %q (F3: restore is detached)", got, "PC100;MD02;")
+	}
+
 	s.mu.Lock()
 	active := s.tuneActive
 	s.mu.Unlock()
 	if active {
-		t.Error("tuneActive = true after a ctx-cancelled stop; carrier wrongly reported up")
+		t.Error("tuneActive = true after stop; carrier wrongly reported up")
 	}
 	awaitTuneState(t, ch, false, time.Second)
 }
