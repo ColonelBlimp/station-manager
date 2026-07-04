@@ -792,15 +792,17 @@ next, and in what order" is answered.
   session (hamnut country only — e.g. PY2DN logged `country:Brazil`, no name); plus intermittent
   per-lookup `i/o timeout`s in an earlier run. The "enrichment never blocks logging" invariant
   held (QSOs logged + forwarded fine), so this is **completeness, not correctness** — but the
-  failure mode IS 7Q8AC's environment. **Fixes:** (1) **[the big one] don't permanently disable
-  QRZ on a boot-time session-key timeout** — re-attempt the session key lazily (next lookup) or
-  periodically, so one blip doesn't kill names for hours; (2) **retry/backoff on individual
-  lookups** + revisit the HTTP timeout (a single i/o timeout shouldn't lose a name); (3) **don't
-  cache a nameless result as final** — re-lookup on a name-miss so recovery repairs it; pairs
-  with the re-enrich-from-edit-overlay repair path (inbox). Surfaces: `internal/lookup/qrz`
-  (session-key lifecycle + timeout/retry), the orchestrator provider-disable logic, the
-  `contacted_station` cache write. **P2, but consider pulling toward the 7Q8AC ship gate** — it's
-  the exact offline-first case the project targets, and names are a big part of the log's value.
+  failure mode IS 7Q8AC's environment. **Fixes:** (1) **[SHIPPED 2026-07-04 — the big one] don't
+  permanently disable QRZ on a boot-time session-key timeout** — `Initialize` no longer flips
+  `Enabled=false`; the service stays enabled but keyless, and `ensureSessionKey` lazily re-fetches
+  the key on lookups (cooldown-bounded `sessionRetryCooldown` 30s, single-flighted via `authMu`),
+  so QRZ revives on its own once the link returns — no daemon restart. Tests
+  `TestInitialize_SessionKeyFailureStaysEnabled` / `TestLazySessionKey_RecoversAfterBootFailure` /
+  `…CooldownSuppressesRetry`. **Still open:** (2) **retry/backoff on individual lookups** + revisit
+  the HTTP timeout (a single i/o timeout shouldn't lose a name); (3) **don't cache a nameless
+  result as final** — re-lookup on a name-miss so recovery repairs it; pairs with the
+  re-enrich-from-edit-overlay repair path (inbox). Surfaces: `internal/lookup/qrz`, the
+  `contacted_station` cache write. Residual is still **P2, 7Q8AC-relevant.**
 
 - **QRZ credentials logged in cleartext.** The `QRZ session key fetch failed` warn logs the full
   request URL, which carries `username` + `password` in the query string (`internal/lookup/qrz`).

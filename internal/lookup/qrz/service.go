@@ -66,7 +66,21 @@ type Service struct {
 	// mid-session re-auth path (review 2026-06-04 M1) and read by every lookup.
 	sessionMu  sync.Mutex
 	sessionKey string
+
+	// authMu single-flights lazy session-key (re)acquisition (ensureSessionKey) so
+	// a burst of concurrent lookups triggers at most one QRZ login at a time.
+	// lastAuth* (guarded by authMu) drive the retry cooldown.
+	authMu          sync.Mutex
+	lastAuthAttempt time.Time
+	lastAuthErr     error
 }
+
+// sessionRetryCooldown bounds how often a keyless service re-attempts the QRZ
+// session-key login (ensureSessionKey): a persistent failure (prolonged outage,
+// bad credentials) then retries at most once per cooldown instead of once per
+// lookup — quick enough to recover names within a slot or two of a flaky link
+// returning, sparse enough not to hammer QRZ. A var so tests can shorten it.
+var sessionRetryCooldown = 30 * time.Second
 
 // NewService constructs a Service with the given dependencies. Used
 // by tests that need a custom *http.Client pointing at httptest;
@@ -135,32 +149,21 @@ func (s *Service) Initialize(ctx context.Context) error {
 
 		if s.Config.Enabled {
 			if err := s.requestAndSetSessionKey(ctx); err != nil {
-				// Soft-disable on session-fetch failure (network
-				// timeout, DNS failure, QRZ.com itself down, or
-				// invalid credentials). The "Enrichment never blocks
-				// logging" invariant says external-service failures
-				// must not prevent the operator from logging — and
-				// blocking daemon startup is an even stronger break
-				// of that rule than blocking a single Lookup. So we
-				// log loudly, flip Enabled=false (Lookup short-
-				// circuits cleanly), and return nil so the daemon
-				// continues starting. cmd/smd checks Config.Enabled
-				// after Initialize and skips the provider when
-				// false. Operator sees the warning in the log; if
-				// it's credentials they fix config.json; if it's
-				// network they wait for it to come back (a future
-				// retry-on-first-lookup or periodic-reconnect path
-				// can revive the provider without a daemon restart,
-				// but that's a separate piece of work).
-				s.Config.Enabled = false
+				// Do NOT disable on a startup session-key failure. On a flaky /
+				// bandwidth-contended link — the target operating environment
+				// (7Q8AC, and the author's own Malawi station) — one boot-time
+				// timeout must not kill enrichment for the whole run: that turned a
+				// single blip into hours of nameless QSOs with no recovery short of a
+				// daemon restart (found on-air 2026-07-04). Instead we stay Enabled
+				// with no key; lookups lazily re-fetch it (ensureSessionKey, cooldown-
+				// bounded), so QRZ revives on its own once the link recovers. Until
+				// then enrichment degrades to the other providers (country still
+				// resolves) — the "enrichment never blocks logging" invariant holds.
+				// Note: leaving lastAuthAttempt zero means the FIRST lookup retries
+				// immediately (fast recovery) rather than waiting out a cooldown.
 				s.LoggerService.WarnWith().
 					Err(err).
-					Msg("QRZ session key fetch failed; service disabled (operator can still log QSOs; check credentials or network)")
-				// Fall through to isInitialized.Store(true): a soft-disabled
-				// provider must still report the disabled sentinel from
-				// LookupWithContext, not "service is not initialized" (review
-				// 2026-06-04 M2). cmd/smd still skips it (Config.Enabled=false);
-				// a direct/late caller gets the clean disabled sentinel.
+					Msg("QRZ session key fetch failed at startup; will retry lazily on lookups (names degrade to other providers until the link recovers)")
 			}
 		} else {
 			s.LoggerService.InfoWith().Msg("QRZ.com lookup is disabled in the config")
@@ -220,6 +223,14 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 	}
 	if callsign == "" {
 		return types.ContactedStation{}, errors.New(op).WithMsg("callsign cannot be empty")
+	}
+
+	// Lazily (re)acquire the session key if we don't have one — recovers a service
+	// that started keyless after a boot-time login failure, without a restart. On a
+	// still-failing link this returns fail-soft (the orchestrator falls through to
+	// the next provider), never blocking the log.
+	if err := s.ensureSessionKey(ctx); err != nil {
+		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("no QRZ session key (will retry)")
 	}
 
 	station, err := s.lookupOnce(ctx, callsign)
@@ -303,4 +314,30 @@ func (s *Service) setSessionKey(key string) {
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
 	s.sessionKey = key
+}
+
+// ensureSessionKey makes sure a session key is available before a lookup, lazily
+// (re)fetching it when absent — the recovery path for a service that started with
+// no key (a boot-time login failure on a flaky link) so it revives without a daemon
+// restart. Bounded by sessionRetryCooldown so a persistent failure retries at most
+// once per cooldown, not once per lookup. authMu single-flights the fetch: a burst
+// of concurrent lookups makes at most one login attempt; the rest see the fresh key
+// or the cooldown. A non-empty key short-circuits — including one that later proves
+// expired, which LookupWithContext handles via its own re-auth path.
+func (s *Service) ensureSessionKey(ctx context.Context) error {
+	if s.getSessionKey() != "" {
+		return nil
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	// A concurrent lookup may have acquired a key while we waited on authMu.
+	if s.getSessionKey() != "" {
+		return nil
+	}
+	if !s.lastAuthAttempt.IsZero() && time.Since(s.lastAuthAttempt) < sessionRetryCooldown {
+		return s.lastAuthErr // recent failure — don't hammer QRZ; wait out the cooldown
+	}
+	s.lastAuthAttempt = time.Now()
+	s.lastAuthErr = s.requestAndSetSessionKey(ctx)
+	return s.lastAuthErr
 }

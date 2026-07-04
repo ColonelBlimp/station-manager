@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,58 +89,128 @@ func TestInitialize_RejectsBrokenConfig(t *testing.T) {
 	}
 }
 
-func TestInitialize_SessionKeyFailureDisablesService(t *testing.T) {
+// TestInitialize_SessionKeyFailureStaysEnabled pins the flaky-link fix (found
+// on-air 2026-07-04): a startup session-key failure no longer PERMANENTLY disables
+// QRZ. It stays Enabled with no key, so lookups can lazily re-fetch it and revive
+// the provider without a daemon restart — instead of one boot-time timeout killing
+// enrichment for the whole run. (Was TestInitialize_SessionKeyFailureDisablesService,
+// which asserted the old permanent-disable behaviour.)
+func TestInitialize_SessionKeyFailureStaysEnabled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		_, _ = w.Write([]byte(`<?xml version="1.0"?>
-			<QRZDatabase>
-				<Session>
-					<Error>Username/password incorrect</Error>
-				</Session>
-			</QRZDatabase>`))
+			<QRZDatabase><Session><Error>Username/password incorrect</Error></Session></QRZDatabase>`))
 	}))
 	defer srv.Close()
 
 	s := &Service{
 		LoggerService: &logging.Service{},
 		Config: &types.LookupConfig{
-			Enabled:        true,
-			URL:            srv.URL,
-			Username:       "tester",
-			Password:       "wrong",
-			HttpTimeoutSec: 5,
+			Enabled: true, URL: srv.URL, Username: "tester", Password: "wrong", HttpTimeoutSec: 5,
 		},
 		UserAgent: "smd/test",
 		client:    srv.Client(),
 	}
-	err := s.Initialize(context.Background())
-	// New contract (2026-05-12): session-fetch failure is a soft
-	// disable, not a hard error. The "Enrichment never blocks
-	// logging" invariant says external-service failures (network
-	// timeout, DNS failure, QRZ.com down, or bad credentials) must
-	// not prevent the operator from starting the daemon or logging
-	// QSOs. Initialize logs a warning, flips Enabled=false, and
-	// returns nil so the cmd/smd startup path continues. The
-	// orchestrator skips disabled providers in the chain.
-	if err != nil {
-		t.Fatalf("expected nil err on session-fetch failure (soft-disable contract); got %v", err)
+	if err := s.Initialize(context.Background()); err != nil {
+		t.Fatalf("session-fetch failure must be soft (nil err), not a hard startup error; got %v", err)
 	}
-	if s.Config.Enabled {
-		t.Fatal("Config.Enabled should be false after session-fetch failure")
+	if !s.Config.Enabled {
+		t.Fatal("Config.Enabled must STAY true after a session-fetch failure (the fix: lazy retry, never permanent disable)")
 	}
-	// M2 fix (review 2026-06-04): a soft-disabled service must still be marked
-	// initialized, so a direct/late LookupWithContext returns the disabled
-	// sentinel — (ContactedStation{Call:callsign}, nil) — rather than the
-	// misleading "service is not initialized" error.
 	if !s.isInitialized.Load() {
-		t.Fatal("soft-disabled service should be marked initialized")
+		t.Fatal("service should be marked initialized")
 	}
-	st, lerr := s.LookupWithContext(context.Background(), "M0CMC")
-	if lerr != nil {
-		t.Fatalf("disabled LookupWithContext should return the sentinel, got err: %v", lerr)
+	if s.getSessionKey() != "" {
+		t.Fatal("no session key should be set after a failed fetch")
 	}
-	if st.Call != "M0CMC" {
-		t.Errorf("sentinel Call = %q, want M0CMC (the supplied callsign)", st.Call)
+	// A lookup on the keyless-but-enabled service fail-softs (attempts the session
+	// key, still fails, returns an error the orchestrator falls through on) — it must
+	// NOT block or panic.
+	if _, err := s.LookupWithContext(context.Background(), "M0CMC"); err == nil {
+		t.Fatal("lookup with an unrecoverable session should fail-soft with an error, not succeed")
+	}
+}
+
+// TestLazySessionKey_RecoversAfterBootFailure: the session login fails at startup
+// (flaky link), the service stays enabled, and once the link recovers the very next
+// lookup lazily fetches the key and returns the name — no daemon restart.
+func TestLazySessionKey_RecoversAfterBootFailure(t *testing.T) {
+	var failSession atomic.Bool
+	failSession.Store(true) // boot login fails
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.URL.Query().Get("username") != "" { // session-key request
+			if failSession.Load() {
+				_, _ = w.Write([]byte(`<QRZDatabase><Session><Error>session timeout</Error></Session></QRZDatabase>`))
+				return
+			}
+			_, _ = w.Write([]byte(`<QRZDatabase><Session><Key>good-key</Key></Session></QRZDatabase>`))
+			return
+		}
+		// lookup request
+		_, _ = w.Write([]byte(`<QRZDatabase><Callsign><call>PY2DN</call><fname>Roberto</fname><name>Zunta</name></Callsign><Session><Key>good-key</Key></Session></QRZDatabase>`))
+	}))
+	defer srv.Close()
+
+	s := &Service{
+		LoggerService: &logging.Service{},
+		Config: &types.LookupConfig{
+			Enabled: true, URL: srv.URL, Username: "tester", Password: "secret", HttpTimeoutSec: 5,
+		},
+		UserAgent: "smd/test",
+		client:    srv.Client(),
+	}
+	if err := s.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if !s.Config.Enabled {
+		t.Fatal("must stay enabled after a boot session failure")
+	}
+
+	failSession.Store(false) // link recovers
+	st, err := s.LookupWithContext(context.Background(), "PY2DN")
+	if err != nil {
+		t.Fatalf("lookup after recovery: %v", err)
+	}
+	if st.Name != "Roberto Zunta" {
+		t.Fatalf("Name = %q, want %q (lazy session recovery)", st.Name, "Roberto Zunta")
+	}
+}
+
+// TestLazySessionKey_CooldownSuppressesRetry: while the session login keeps failing,
+// lazy re-fetch is bounded by sessionRetryCooldown — a burst of lookups triggers at
+// most one login per cooldown, not one per lookup (so an outage/bad-creds doesn't
+// hammer QRZ).
+func TestLazySessionKey_CooldownSuppressesRetry(t *testing.T) {
+	var sessionReqs atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.URL.Query().Get("username") != "" {
+			sessionReqs.Add(1)
+			_, _ = w.Write([]byte(`<QRZDatabase><Session><Error>session timeout</Error></Session></QRZDatabase>`))
+			return
+		}
+		_, _ = w.Write([]byte(`<QRZDatabase><Callsign><call>X</call></Callsign></QRZDatabase>`))
+	}))
+	defer srv.Close()
+
+	s := &Service{
+		LoggerService: &logging.Service{},
+		Config: &types.LookupConfig{
+			Enabled: true, URL: srv.URL, Username: "tester", Password: "secret", HttpTimeoutSec: 5,
+		},
+		UserAgent: "smd/test",
+		client:    srv.Client(),
+	}
+	_ = s.Initialize(context.Background()) // boot session fails; leaves lastAuthAttempt zero
+	sessionReqs.Store(0)                   // count only post-Initialize attempts
+
+	// First lookup attempts the login (cooldown not started) and fails; the second,
+	// immediately after, is inside the cooldown and must NOT hit the session endpoint.
+	_, _ = s.LookupWithContext(context.Background(), "AA1AA")
+	_, _ = s.LookupWithContext(context.Background(), "BB2BB")
+	if got := sessionReqs.Load(); got != 1 {
+		t.Fatalf("session-key requests across 2 lookups = %d, want 1 (cooldown suppresses the 2nd)", got)
 	}
 }
 
@@ -254,13 +325,13 @@ func TestInitialize_RespectsContextCancellation(t *testing.T) {
 	go func() { done <- s.Initialize(ctx) }()
 
 	select {
-	case err := <-done:
-		// Initialize either errors (preferred — auth failure due to
-		// transport cancellation) or self-disables (also acceptable
-		// — that's the existing failure-disables-the-service contract).
-		if err == nil && s.Config.Enabled {
-			t.Fatal("Initialize neither errored nor disabled service after ctx cancellation")
-		}
+	case <-done:
+		// Reaching here before the 2s timeout IS the assertion: Initialize saw the
+		// cancellation and returned promptly instead of waiting the full 60s
+		// HttpTimeoutSec. Under the flaky-link fix it returns SOFT (nil, still
+		// Enabled) — a startup session-key failure (here from the cancelled
+		// transport) no longer disables the provider; lookups lazily re-fetch the
+		// key later. So we assert responsiveness, not disable-on-failure.
 	case <-time.After(2 * time.Second):
 		t.Fatal("Initialize ignored ctx cancellation — would have blocked daemon shutdown")
 	}
