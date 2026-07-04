@@ -170,6 +170,14 @@ type Service struct {
 	// happens-before contract as qsoLogger / decodeSink).
 	stationCall func() string
 
+	// lastTxSlotUTC is the StartUTC of the most recent slot the FT8 TX controller
+	// keyed (via txCtrl.onTransmit). decodeLoop skips occupancy for that slot: the
+	// captured audio is our own transmission (rig TX-audio bleed), which the raw-
+	// spectrum energy detector would otherwise read as a busy band right on our own
+	// offset — the occupancy sibling of the self-decode filter. Guarded by txSlotMu.
+	txSlotMu      sync.Mutex
+	lastTxSlotUTC string
+
 	// decLog is the optional JTDX-style ALL.TXT decode log (ft8.decode_log.enabled).
 	// Opened at capture-start and closed at capture-release (and on an unexpected
 	// capture-loop exit), so it follows the demand-driven capture lifecycle.
@@ -646,6 +654,22 @@ func (s *Service) Enabled() bool {
 // loop; the safego wrapper around this loop is belt-and-braces. Occupancy is
 // cheap (one averaged FFT per slot, ~tens of ms) next to the decode, so it
 // adds negligible time to the slot budget.
+// markTxSlot records the slot boundary the TX controller just keyed (wired via
+// txCtrl.onTransmit). decodeLoop consults wasTxSlot to skip occupancy for it.
+func (s *Service) markTxSlot(boundary time.Time) {
+	s.txSlotMu.Lock()
+	s.lastTxSlotUTC = SlotRefFromTime(boundary).StartUTC
+	s.txSlotMu.Unlock()
+}
+
+// wasTxSlot reports whether startUTC is the slot we most recently transmitted in —
+// its captured audio is our own signal, so occupancy for it is meaningless.
+func (s *Service) wasTxSlot(startUTC string) bool {
+	s.txSlotMu.Lock()
+	defer s.txSlotMu.Unlock()
+	return startUTC != "" && startUTC == s.lastTxSlotUTC
+}
+
 func (s *Service) decodeLoop(slots <-chan Slot) {
 	osd := s.osdEnabled()
 	// Previously-recommended top offset, carried across slots for the
@@ -676,14 +700,23 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 			s.decodeSink(report)
 		}
 
-		rep := Occupancy(ref, slot.Samples, msgs, s.occCfg)
-		rep.Suggested = stickySuggested(rep.Suggested, rep.Occupied, s.occCfg, prevTop)
-		if len(rep.Suggested) > 0 {
-			prevTop = rep.Suggested[0]
-		} else {
-			prevTop = 0
+		// Skip occupancy for a slot we transmitted in: the captured audio is our own
+		// TX (rig bleed), so the raw-spectrum energy detector would mark our own
+		// offset "busy" and the readout would flicker busy↔clear in lockstep with
+		// TX/RX (the occupancy sibling of the self-decode filter). Occupancy measured
+		// while we transmit is meaningless — leave the prior RX-slot report standing
+		// on the SPA (no publish this slot).
+		var rep OccupancyReport
+		if !s.wasTxSlot(ref.StartUTC) {
+			rep = Occupancy(ref, slot.Samples, msgs, s.occCfg)
+			rep.Suggested = stickySuggested(rep.Suggested, rep.Occupied, s.occCfg, prevTop)
+			if len(rep.Suggested) > 0 {
+				prevTop = rep.Suggested[0]
+			} else {
+				prevTop = 0
+			}
+			s.hub.publish(hubEvent{name: EventOccupancy, payload: rep})
 		}
-		s.hub.publish(hubEvent{name: EventOccupancy, payload: rep})
 
 		// Drive the manual sequencer (ADR 0031): feed this slot's decodes to the
 		// active exchange and let it transmit the next rung in the current

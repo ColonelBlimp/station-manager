@@ -154,6 +154,9 @@ func (s *Service) armTx() error {
 
 	s.txDevice = player
 	s.txCtrl = NewTxController(s.keyer, player, s.txMode(), s.log)
+	// Record each keyed slot so decodeLoop skips occupancy for it (the slot's
+	// captured audio is our own TX — see markTxSlot / the self-decode filter).
+	s.txCtrl.onTransmit = s.markTxSlot
 	s.txArmed = true
 	s.txLastErr = ""
 	s.txMu.Unlock()

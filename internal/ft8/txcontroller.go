@@ -45,6 +45,13 @@ type TxController struct {
 	player slotPlayer
 	mode   string // rig data-mode literal to switch to before keying; "" = leave as-is
 	log    logging.Logger
+
+	// onTransmit, when set, is invoked with the slot boundary just before a
+	// transmission is keyed. The FT8 service wires this to record which slot we
+	// keyed so the decode loop can skip occupancy for it — the captured audio of a
+	// slot we transmitted in is our own signal (rig TX bleed), meaningless for
+	// channel occupancy. Nil (default) = no-op.
+	onTransmit func(boundary time.Time)
 }
 
 // NewTxController builds the controller from an injected keyer (PTT) and player
@@ -126,6 +133,11 @@ func (c *TxController) transmitAligned(ctx context.Context, waveform []int16, bo
 	wave := truncateHead(waveform, skip)
 	if len(wave) == 0 {
 		return errors.New(op).WithMsg("too late in slot; nothing left to transmit")
+	}
+	// Record the slot we're about to key (committed to transmitting now) so the
+	// decode loop skips occupancy for it — see onTransmit.
+	if c.onTransmit != nil {
+		c.onTransmit(boundary)
 	}
 	return c.transmit(ctx, wave)
 }

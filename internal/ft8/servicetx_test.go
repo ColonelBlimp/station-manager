@@ -335,3 +335,26 @@ func TestTxState_ReplayedToLateSubscriber(t *testing.T) {
 	st := drainTxState(t, ch, nil) // first event is the replayed cache
 	require.True(t, st.Armed)
 }
+
+// TestTxSlotTracking covers the occupancy self-TX fix: markTxSlot (wired to the TX
+// controller's onTransmit) records the keyed slot, and wasTxSlot matches the SAME
+// slot's capture ref — so decodeLoop skips occupancy for a slot we transmitted in.
+// The boundary (TX) and the capture StartUTC must reduce to the same RFC3339 string.
+func TestTxSlotTracking(t *testing.T) {
+	s := &Service{}
+	boundary := time.Date(2026, 7, 4, 15, 5, 30, 0, time.UTC)
+	s.markTxSlot(boundary)
+
+	// The captured slot's ref for the same boundary must match.
+	if ref := SlotRefFromTime(boundary); !s.wasTxSlot(ref.StartUTC) {
+		t.Fatalf("wasTxSlot(%q) = false, want true (the slot we keyed)", ref.StartUTC)
+	}
+	// The adjacent (RX) slot must NOT match — its occupancy is real and published.
+	if other := SlotRefFromTime(boundary.Add(SlotDuration)); s.wasTxSlot(other.StartUTC) {
+		t.Fatalf("wasTxSlot(%q) = true, want false (a different slot)", other.StartUTC)
+	}
+	// Empty never matches (defensive; before any TX).
+	if s.wasTxSlot("") {
+		t.Fatal(`wasTxSlot("") should be false`)
+	}
+}
