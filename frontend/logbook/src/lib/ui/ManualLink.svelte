@@ -99,7 +99,11 @@
     </a>
 {/snippet}
 
-<nav class="fixed top-2 right-3 z-50 flex flex-col items-center gap-1.5">
+<!-- z-40 keeps this fixed nav BELOW modal overlays (the QSO edit modal is z-50).
+     At z-50 the nav shared the modal's layer and, painting later, stayed on top —
+     its links remained clickable/tabbable over an open modal. Must stay < the
+     modal layer; still well above page content (which tops out at z-20). -->
+<nav class="fixed top-2 right-3 z-40 flex flex-col items-center gap-1.5">
     {#if buildEnv.isDev}
         <span
             class="rounded-md border border-amber-400 bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800 shadow-sm"

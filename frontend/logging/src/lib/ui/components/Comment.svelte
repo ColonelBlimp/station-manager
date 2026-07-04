@@ -35,6 +35,12 @@
          * append); this component only surfaces the selection.
          */
         onpick?: (text: string) => void;
+        /**
+         * Show the rig-control Tune button in the label row. Default true
+         * for the live logging form; the QSO edit overlay passes false —
+         * tuning a carrier has no place while editing an already-logged QSO.
+         */
+        showTune?: boolean;
     }
 
     let {
@@ -45,6 +51,7 @@
         widthClass = 'w-63.5',
         history = [],
         onpick,
+        showTune = true,
     }: Props = $props();
 
     let open = $state(false);
@@ -122,7 +129,7 @@
                 />
             </svg>
         </button>
-        <TuneButton />
+        {#if showTune}<TuneButton />{/if}
     </div>
     <div class="relative mt-1">
         <textarea

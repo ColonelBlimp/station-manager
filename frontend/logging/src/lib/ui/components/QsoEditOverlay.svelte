@@ -418,6 +418,7 @@
                             id="edit-comment"
                             label="Comment"
                             bind:value={qsoEditState.comment}
+                            showTune={false}
                         />
                     </div>
 

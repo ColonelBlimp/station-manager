@@ -551,6 +551,7 @@ function openSource(): void {
                 qso_date: string;
                 gridsquare: string;
                 country: string;
+                name: string;
             }>;
             const uuid = p.uuid ?? '';
             if (uuid === '' || sessionQsosState.items.some((q) => q.uuid === uuid)) return;
@@ -562,7 +563,7 @@ function openSource(): void {
             sessionQsosState.add({
                 uuid,
                 callsign: call,
-                name: '',
+                name: p.name ?? '',
                 freqHz: p.freq_hz ?? 0,
                 band,
                 rstSent: p.rst_sent ?? '',
