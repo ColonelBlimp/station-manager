@@ -2,6 +2,7 @@ package ft8
 
 import (
 	stderrors "errors"
+	"strings"
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -27,6 +28,30 @@ type DecodeLine struct {
 	FreqHz float64 `json:"freq_hz"`
 	DTSec  float64 `json:"dt_s"`
 	SNR    int     `json:"snr"`
+}
+
+// dropOwnTransmissions removes decodes whose sender (the DE callsign) is our own
+// station call — SM decoding its OWN FT8 transmission, which the rig loops back
+// into the capture input while keyed (monitor / USB-audio TX bleed). A legitimate
+// decode is never FROM our own call, so this is unconditionally safe: it declutters
+// Band Activity (our own CQ/RR73 appearing as a phantom station on our TX offset)
+// and keeps our own signal out of the sequencer + occupancy. ownCall "" → no-op.
+func dropOwnTransmissions(msgs []goft8.DecodedMessage, ownCall string) []goft8.DecodedMessage {
+	ownCall = strings.ToUpper(strings.TrimSpace(ownCall))
+	if ownCall == "" {
+		return msgs
+	}
+	out := make([]goft8.DecodedMessage, 0, len(msgs))
+	for _, m := range msgs {
+		// parseMessage upper-cases; from is the transmitting station (the second call
+		// of a directed message, the caller of a CQ) — empty for free text / hashed
+		// calls, which never match a non-empty ownCall and so pass through.
+		if parseMessage(m.Text).from == ownCall {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // newDecodeReport projects go-ft8's decodes into the wire DTO for one slot.

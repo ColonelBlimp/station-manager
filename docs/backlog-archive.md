@@ -17,6 +17,24 @@ need the history of a specific item ("when/how did X ship?").
 
 ## Bugs (detail)
 
+- ~~**FT8 caller-side sequencing (Call CQ) — on-air validation.**~~ **PASSED 2026-07-04.**
+  ADR 0033 Call-CQ auto-worked pile-up validated live on 17 m as 7Q5MLV: called CQ →
+  large real pile-up (Middle East + Asia) → worked answerers through the full ladder
+  (report → R-report → RR73) → logged with name+country enrichment (this session's fix,
+  e.g. "Mr Xiao / China") → auto-resumed CQ. 33 QSOs in ~74 min, clean PTT cycling.
+  **Guaranteed-stop confirmed:** rig powered off mid-TX → warning + TX stops
+  (release-on-disconnect). Only issue found was the self-decode (fixed same session, below).
+
+- ~~**FT8: SM self-decodes its own TX slot.**~~ **FIXED 2026-07-04.** During a Call-CQ
+  pile-up the operator's OWN transmission decoded off the rig's TX-audio bleed at the TX
+  offset (e.g. `JA2ICB 7Q5MLV RR73`, DE = own call) and appeared as a phantom station in
+  Band Activity + Rx Frequency. Fixed with `dropOwnTransmissions` (`internal/ft8/decode.go`):
+  the decode loop drops any decode whose sender/DE equals the operator's own call, wired via
+  `Service.SetStationCall` (provider from live config, no restart to change call). Filters at
+  source, so Band Activity, occupancy, AND the sequencer never see our own signal — a
+  legitimate decode is never FROM our own call, so it's unconditionally safe. Test
+  `TestDropOwnTransmissions`. Found on-air during the caller-side validation above.
+
 - ~~**Bridge review F3/F4 (Low, deferred from the session-196 guaranteed-stop review).**~~
   **DONE 2026-07-04.** **F3** — the tune-off mode/power restore ran on the caller's ctx, so
   a request cancelled during the ~150 ms settle skipped the restore and stranded the rig in

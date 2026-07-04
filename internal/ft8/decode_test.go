@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 
@@ -139,5 +140,49 @@ func writeTestWAV(t *testing.T, path string, rate uint32, channels, bits uint16,
 
 	if err := os.WriteFile(path, buf, 0o600); err != nil {
 		t.Fatalf("write test wav: %v", err)
+	}
+}
+
+// TestDropOwnTransmissions covers the self-decode filter: SM decodes its own FT8
+// TX off the rig's audio bleed, so a keyed slot yields a decode whose sender (DE)
+// is our own call. Those must be dropped; everything else (answerers, others' CQs,
+// free text) passes. A legitimate decode is never FROM our own call, so filtering
+// is unconditionally safe.
+func TestDropOwnTransmissions(t *testing.T) {
+	msgs := []goft8.DecodedMessage{
+		{Text: "CQ 7Q5MLV KH78"},     // our own CQ (self-decode) → drop
+		{Text: "BI4JJO 7Q5MLV RR73"}, // our own RR73 (self-decode) → drop
+		{Text: "7Q5MLV JQ3UGN PM74"}, // an answerer calling us → keep
+		{Text: "7Q5MLV BI4JJO R-02"}, // the worked station rogering us → keep
+		{Text: "CQ A61DI LL64"},      // someone else's CQ → keep
+		{Text: "TU 73 GL"},           // free text, no resolvable sender → keep
+	}
+	want := []string{
+		"7Q5MLV JQ3UGN PM74",
+		"7Q5MLV BI4JJO R-02",
+		"CQ A61DI LL64",
+		"TU 73 GL",
+	}
+
+	got := dropOwnTransmissions(msgs, "7Q5MLV")
+	if len(got) != len(want) {
+		t.Fatalf("kept %d messages, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i].Text != w {
+			t.Errorf("kept[%d] = %q, want %q", i, got[i].Text, w)
+		}
+	}
+
+	// Own call is matched case-insensitively.
+	if n := len(dropOwnTransmissions(msgs, "7q5mlv")); n != len(want) {
+		t.Errorf("lowercase ownCall kept %d, want %d", n, len(want))
+	}
+	// Empty / blank own call → no filtering (nothing to compare against).
+	if n := len(dropOwnTransmissions(msgs, "")); n != len(msgs) {
+		t.Errorf("empty ownCall kept %d, want %d (no-op)", n, len(msgs))
+	}
+	if n := len(dropOwnTransmissions(msgs, "   ")); n != len(msgs) {
+		t.Errorf("blank ownCall kept %d, want %d (no-op)", n, len(msgs))
 	}
 }

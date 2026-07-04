@@ -162,6 +162,14 @@ type Service struct {
 	// consumer (one-way import), same as qsoLogger.
 	decodeSink func(DecodeReport)
 
+	// stationCall returns the operator's own callsign, used to drop SM's OWN
+	// transmissions from the decode feed (self-decode filter — the rig loops TX
+	// audio back into capture). Injected via SetStationCall before Start; nil → no
+	// filtering. A provider (not a static string) so a My Station callsign change
+	// takes effect without a restart. Read in decodeLoop (set-before-Start, same
+	// happens-before contract as qsoLogger / decodeSink).
+	stationCall func() string
+
 	// decLog is the optional JTDX-style ALL.TXT decode log (ft8.decode_log.enabled).
 	// Opened at capture-start and closed at capture-release (and on an unexpected
 	// capture-loop exit), so it follows the demand-driven capture lifecycle.
@@ -647,6 +655,12 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 	prevTop := 0
 	for slot := range slots {
 		msgs := DecodeSlot(slot.Samples, osd, s.log)
+		// Drop our own transmissions self-decoded off the rig's TX-audio bleed, so
+		// Band Activity / occupancy / the sequencer never see our own signal. No-op
+		// when idle (nothing keyed decodes as us) or no station call is wired.
+		if s.stationCall != nil {
+			msgs = dropOwnTransmissions(msgs, s.stationCall())
+		}
 		ref := SlotRefFromTime(slot.StartUTC)
 
 		// JTDX ALL.TXT RX lines (ft8.decode_log) — independent of the daemon log

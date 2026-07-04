@@ -42,7 +42,6 @@ next, and in what order" is answered.
 - _None currently open._ (Last cleared: `PUT /v1/config` omitted-blocks-zeroed, FIXED 2026-07-04 → archive.)
 
 **P1 — finish in-flight / validate (small; closes open arcs)**
-- FT8 caller-side sequencing (Call CQ pile-up) — on-air validation (shipped)
 - Behavioural retest of shipped daemon changes on the dogfood daemon (session 192/193 batch)
 
 **P2 — next features (open one workstream per active focus)**

@@ -202,7 +202,7 @@
                                 </span>
                             </th>
                         {/if}
-                        <th class="sr-only">Actions</th>
+                        <th class="w-8 sr-only">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -218,8 +218,8 @@
                         keyboard target than a row-wide hit area.
                     -->
                         <tr class="border-b border-line-soft last:border-0">
-                            <td class="py-1 font-semibold">{row.callsign}</td>
-                            <td class="text-nowrap overflow-hidden text-ellipsis">{row.name}</td>
+                            <td class="w-26 py-1 font-semibold">{row.callsign}</td>
+                            <td class="w-32 text-nowrap overflow-hidden text-ellipsis">{row.name}</td>
                             <td class="">{formatFrequency(row.freqHz)}</td>
                             <td class="">{row.band}</td>
                             <td class="">{row.rstSent}</td>
@@ -247,7 +247,7 @@
                                     {/if}
                                 </td>
                             {/if}
-                            <td class="w-8">
+                            <td class="w-9">
                                 <button
                                     type="button"
                                     class="font-bold text-indigo-700 hover:text-indigo-900 cursor-pointer"

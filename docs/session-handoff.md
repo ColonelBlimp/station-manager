@@ -204,8 +204,11 @@ Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the 
 > finish in-flight" is the means. The P0/P1 items below ARE the ship gate — clear them
 > before opening any new P2 workstream (theming included):
 > - **P0** — `PUT /v1/config` omitted blocks zeroed (+ `default_logbook.id` unwired).
-> - **P1** — FT8 caller-side sequencing (Call CQ pile-up): on-air validation (shipped).
->   (FT8 **Field Day** UI + further FD validation are **PARKED** — testable only during a
+> - ~~**P1** — FT8 caller-side sequencing (Call CQ pile-up): on-air validation~~ **PASSED
+>   2026-07-04** — 33 QSOs / ~74 min on 17 m, full ladder + auto-resume + enrichment;
+>   guaranteed-stop confirmed (rig off → warn + TX stop). One bug found + fixed same session:
+>   **FT8 self-decode** (`dropOwnTransmissions`, `TestDropOwnTransmissions`). See archive.
+>   (FT8 **Field Day** UI + further FD validation remain **PARKED** — testable only during a
 >   Field Day contest; ARRL/RAC-only, so not a 7Q8AC concern. See backlog Parked tier.)
 > - ~~**P1** — multi-tab rig hazard~~ **awareness banner SHIPPED 2026-07-04** (daemon
 >   `rig-clients` SSE + logging-SPA banner; `TestSubscribe_BroadcastsClientCount`). Full

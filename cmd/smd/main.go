@@ -569,6 +569,11 @@ func run() error {
 	// scope by import graph). Only meaningful when the bridge is enabled and a
 	// rig is connected; otherwise TxReady() stays false and arming is refused.
 	ft8Svc.SetTxKeyer(ft8Keyer{bridgeSvc})
+	// Self-decode filter: drop SM's own transmissions from the decode feed (the rig
+	// loops TX audio back into capture, so a keyed slot decodes as our own call on
+	// our TX offset). Provider reads live config so a My Station callsign change
+	// applies without a restart.
+	ft8Svc.SetStationCall(func() string { return cfgSvc.Snapshot().LoggingStation.StationCallsign })
 	// Gate FT8 capture on the rig/CAT being live — only when the bridge is
 	// enabled (CAT configured). Without it, the daemon would grab the microphone
 	// as soon as the FT8 view opens (e.g. SPA reopens to FT8 on PC boot) even with
