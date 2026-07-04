@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -260,6 +261,83 @@ func TestLazySessionKey_RetriesAfterCooldown(t *testing.T) {
 	}
 	if got := sessionReqs.Load(); got < 2 {
 		t.Fatalf("session attempts = %d, want >= 2 (one failed, then a post-cooldown retry)", got)
+	}
+}
+
+// TestClearSessionKeyIf covers the compare-and-clear fix for the overlapping-expiry
+// race: a stale lookup reacting to an expired key must wipe ONLY the key it used, so
+// it can't clobber a fresh key a concurrent lookup just acquired (which would strand
+// both keyless for a cooldown window).
+func TestClearSessionKeyIf(t *testing.T) {
+	s := &Service{}
+	s.setSessionKey("K2") // a concurrent lookup already re-authed to K2
+	s.clearSessionKeyIf("K1")
+	if got := s.getSessionKey(); got != "K2" {
+		t.Fatalf("clearSessionKeyIf wiped a key it didn't own: got %q, want K2", got)
+	}
+	s.clearSessionKeyIf("K2") // the lookup that actually used K2 clears it
+	if got := s.getSessionKey(); got != "" {
+		t.Fatalf("clearSessionKeyIf failed to clear its own key: got %q", got)
+	}
+}
+
+// TestEnsureSessionKey_NilCooldownDoesNotFakeSuccess covers the other half of the
+// race fix: after a SUCCESS (lastAuthErr==nil) the cooldown must not be applied — a
+// keyless service with a recent successful attempt (the post-race state) must
+// attempt a real login rather than returning nil "success" with no key.
+func TestEnsureSessionKey_NilCooldownDoesNotFakeSuccess(t *testing.T) {
+	var reqs atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.URL.Query().Get("username") != "" {
+			reqs.Add(1)
+			_, _ = w.Write([]byte(`<QRZDatabase><Session><Key>fresh-key</Key></Session></QRZDatabase>`))
+		}
+	}))
+	defer srv.Close()
+
+	s := uninitializedService(srv.URL, srv.Client())
+	// Force the post-race state: keyless, but the last attempt SUCCEEDED (nil err)
+	// and was recent — a naive cooldown would suppress and fake success.
+	s.lastAuthErr = nil
+	s.lastAuthAttempt = time.Now()
+
+	if err := s.ensureSessionKey(); err != nil {
+		t.Fatalf("ensureSessionKey: %v", err)
+	}
+	if s.getSessionKey() == "" {
+		t.Fatal("ensureSessionKey reported success but set no key (nil-cooldown faked success)")
+	}
+	if got := reqs.Load(); got != 1 {
+		t.Fatalf("expected 1 real login attempt, got %d", got)
+	}
+}
+
+// TestScrubURLError covers the credential-leak fix: a transport *url.Error must come
+// back with its query (which carries the QRZ password / session key) stripped, while
+// non-url.Error and unparseable-URL values pass through unchanged.
+func TestScrubURLError(t *testing.T) {
+	ue := &url.Error{
+		Op:  "Get",
+		URL: "https://xmldata.qrz.com/xml/current?username=7Q5MLV&password=SECRET&agent=smd",
+		Err: stderrors.New("dial tcp: i/o timeout"),
+	}
+	got := scrubURLError(ue).Error()
+	if strings.Contains(got, "SECRET") || strings.Contains(got, "password") {
+		t.Fatalf("scrubbed error still leaks credentials: %q", got)
+	}
+	if !strings.Contains(got, "xmldata.qrz.com") {
+		t.Fatalf("scrubbed error dropped the host too: %q", got)
+	}
+
+	plain := stderrors.New("some other failure")
+	if scrubURLError(plain) != plain {
+		t.Fatal("non-url.Error should pass through unchanged")
+	}
+	// Unparseable URL: leave the error intact rather than panic.
+	bad := &url.Error{Op: "Get", URL: "://nope", Err: stderrors.New("x")}
+	if scrubURLError(bad) == nil {
+		t.Fatal("unparseable URL should pass through, not become nil")
 	}
 }
 

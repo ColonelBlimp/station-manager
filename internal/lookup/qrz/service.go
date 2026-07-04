@@ -243,16 +243,18 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("no QRZ session key (will retry)")
 	}
 
+	keyBefore := s.getSessionKey()
 	station, err := s.lookupOnce(ctx, callsign)
 	if err != nil && stderr.Is(err, errSessionExpired) {
 		// The session key expired / was invalidated mid-session. Force a re-acquire
 		// through the SAME cooled, single-flighted path as a cold start: clear the
 		// stale key (else ensureSessionKey short-circuits on it), then re-fetch. The
 		// old direct requestAndSetSessionKey here bypassed authMu + the cooldown and,
-		// on a failed re-auth, left the stale key so every later lookup hammered QRZ
-		// with an uncooled login (two HTTP calls/lookup, N-parallel) — the exact thing
-		// the cooldown exists to prevent, just on the expiry path.
-		s.setSessionKey("")
+		// on a failed re-auth, left the stale key so every later lookup hammered QRZ.
+		// Compare-and-clear on keyBefore: wipe only the key WE used — if a concurrent
+		// expired lookup already re-authed (the key changed), keep its fresh key and
+		// just retry, rather than clobbering it back to empty and stranding both.
+		s.clearSessionKeyIf(keyBefore)
 		if rerr := s.ensureSessionKey(); rerr != nil {
 			s.LoggerService.WarnWith().Err(rerr).Msg("QRZ session re-auth after expiry unavailable (will retry)")
 			return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("session expired and re-auth unavailable")
@@ -332,6 +334,18 @@ func (s *Service) setSessionKey(key string) {
 	s.sessionKey = key
 }
 
+// clearSessionKeyIf clears the session key ONLY if it still equals expected — an
+// atomic compare-and-clear so a lookup reacting to an expired key can't wipe a fresh
+// key that a concurrent lookup just acquired (which would strand both). If the key
+// changed out from under us, someone already re-authed; leave theirs in place.
+func (s *Service) clearSessionKeyIf(expected string) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	if s.sessionKey == expected {
+		s.sessionKey = ""
+	}
+}
+
 // ensureSessionKey makes sure a session key is available before a lookup, lazily
 // (re)fetching it when absent — the recovery path for a service that started with
 // no key (a boot-time login failure on a flaky link) so it revives without a daemon
@@ -357,7 +371,12 @@ func (s *Service) ensureSessionKey() error {
 	if s.getSessionKey() != "" {
 		return nil
 	}
-	if !s.lastAuthAttempt.IsZero() && time.Since(s.lastAuthAttempt) < sessionRetryCooldown {
+	// Suppress only after an actual FAILURE. A nil lastAuthErr means the last attempt
+	// SUCCEEDED — there is nothing to wait out, so attempt the login. This is the path
+	// that heals a key wiped by a concurrent expired-lookup race: without the nil
+	// guard the cooldown would return nil ("success") while keyless, stranding the
+	// service for a whole window.
+	if s.lastAuthErr != nil && !s.lastAuthAttempt.IsZero() && time.Since(s.lastAuthAttempt) < sessionRetryCooldown {
 		return s.lastAuthErr // recent failure — wait out the cooldown; don't hammer QRZ
 	}
 	// Detached context: the session key is SHARED state, not tied to whichever caller
