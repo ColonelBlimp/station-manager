@@ -45,6 +45,7 @@ next, and in what order" is answered.
 - Behavioural retest of shipped daemon changes on the dogfood daemon (session 192/193 batch)
 
 **P2 — next features (open one workstream per active focus)**
+- **▶ NEXT SESSION (bumped 2026-07-05):** _Re-enrich a logged QSO — in the **logbook SPA**._ The repair path for names dropped by a flaky-link QRZ timeout at log time (2nd confirmed occurrence — 3/52 nameless on 2026-07-05; recurring 7Q8AC/Malawi condition). Companion: a **manual FAQ** on the cause + remedy. See detail.
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
 - _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW) · work-path opening: prefer clean next-slot start over truncated immediate fire
 - _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
@@ -1020,6 +1021,38 @@ next, and in what order" is answered.
   the differentiation is local; decide whether the caller-side Call-CQ opening wants the same
   treatment. Purely a TX-quality nicety — the current behaviour is correct and on-air-validated,
   just not optimal for the no-time-pressure work case.
+
+- **Re-enrich a logged QSO — in the logbook SPA (BUMPED 2026-07-05; next session).**
+  From dogfood-inbox 2026-07-04, **bumped out of P2/P3 parking** after a second flaky-link
+  occurrence: **there is no UI way to re-run enrichment on an already-logged QSO**, so a name
+  dropped by a QRZ timeout at log time stays dropped with no backfill path. **Justification
+  (why it's more than a nicety):** this is the recurring 7Q8AC/Malawi operating condition —
+  on a flaky link, QRZ lookups intermittently time out during logging, and while the
+  "enrichment never blocks logging" invariant holds (the QSO logs fine) + the QRZ resilience
+  recovers per-lookup (no permanent disable, session-198 work), a few QSOs slip through
+  nameless each bad-internet session. Measured 2026-07-05: **3/52 nameless** (RG6S, R2BNC,
+  SP9SOF) during the 13:00–14:00 UTC timeout window; a 128-QSO FT8 pile-up earlier lost more.
+  Hand-editing each is the only fix today. **Decision (operator, 2026-07-05): implement in the
+  LOGBOOK SPA** (the QSO management surface — where you go to fix up historical rows), not just
+  the logging SPA's session-tab edit overlay. **Approach:** in the logbook SPA's per-row edit
+  modal (`EditQsoModal` already exists), add a **"Re-enrich"** action that calls
+  `/v1/enrich/callsign` for the row's call and merges the result (name, QTH, country, grid,
+  DXCC/zones) into the editable fields, which the operator then saves via the existing
+  `patchQso` PATCH. Progressive + fail-soft (a re-enrich that times out changes nothing).
+  Reuses the exact endpoint the new-QSO `Callsign` component uses; no daemon change. Consider
+  a bulk "re-enrich selected" once the logbook multi-select bulk-actions land (folds into
+  "Logbook SPA — the management surface"). **Companion doc task (below).**
+
+- **Manual FAQ: "Why is a QSO logged without a name, and how do I fix it?" (operator, 2026-07-05).**
+  Document the name-missing cause + remedy in the operator manual (Hugo, ADR 0036) as an FAQ /
+  troubleshooting entry. **Cause:** on a poor internet link the QRZ callsign lookup can time out
+  at the moment you log — SM deliberately logs the QSO anyway (enrichment must never block
+  logging) rather than making you wait or lose the contact, so the name/QTH just aren't filled
+  in for that one. It is NOT a lost QSO and NOT a credentials problem; the lookup service
+  recovers on its own for the next contacts. **Remedy:** re-run enrichment on the row once the
+  link is back (the logbook-SPA "Re-enrich" action above), or hand-edit the name. Pairs with the
+  re-enrich feature — write the FAQ so its "remedy" references that button once it ships (until
+  then: hand-edit). Keep it operator-plain (no "QRZ session key / i/o timeout" jargon).
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
