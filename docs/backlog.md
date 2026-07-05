@@ -51,6 +51,7 @@ next, and in what order" is answered.
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
 - _Data / SM-Cloud prep (do before S3):_ **migration 0004 AUTHORED 2026-07-05** (up/down + `TestMigrate0004`; trigger/default `localtime`→UTC rebuild + normalise pre-fix timestamp debris — **awaiting operator review + deploy against the live DB**; see detail) · `internal/database` review lows (cold-insert retry, bootstrap stale-table detection, + 5 nits)
 - _Code-review lows (2026-07-05 `internal/api` review):_ disabled-subsystem routes return 200-HTML/405 instead of 404 (one `spaHandler` guard, also closes the `/assets/` directory-listing nit) · negative server-limit panics at startup (→ validation error) · credential-clear asymmetry (forwarder clears on blank, SMTP/lookup keep) — unify or document side-by-side · stale `middleware.go` Unwrap comment
+- _Code-review nits (2026-07-05 `internal/qsoservice` review):_ `uuid_conflict` classification unreachable under `force` (`submit.go:322`, drop `&& !force` — trap for a future `--force` import) · `importBatchFallback` publishes Hub events, contradicting `SubmitImportBatch`'s "does NOT publish" doc (note the fallback exception) · best-effort `contacted_station` cache warm-up uses the request ctx (a detached short-timeout ctx would make it client-independent, like the dedupe refetch)
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
 - _Code-review lows (2026-07-05 SPA review):_ 13 verified low-severity fixes (the fetch-timeout standout was promoted to P1 and SHIPPED 2026-07-05 → archive) — TX_PWR sub-0.5 W rounding (durable ADIF) · state-reset gaps (tabCount / freqKnown / stale decodes / enrich zombies) · FT8 UI nits (bearing 360°, drain-abort, FD tooltip, isWorking split, canAnswer TX-guard) · edit-overlay mode dropdown
@@ -975,6 +976,26 @@ next, and in what order" is answered.
       it (folds into the `/v1/` guard fix).
     - Stale comment: `middleware.go:206-216` (Unwrap) still says the bridge SSE handler "clears
       its write deadline at stream open" — it arms per-write deadlines now. Doc drift only.
+
+- **`internal/qsoservice` review nits (2026-07-05).** The review's two LOW findings +
+  the #3 pinning test were FIXED 2026-07-05 (audit `before_image` now marshalled before
+  the merge so a `contact_history` body can't taint it via the shared `ContactHistory`
+  backing array — protects the SM Cloud sync input, ADR 0016; `EnqueueUploads` doc
+  corrected to describe the actual per-TYPE ADIF-stamp check; `TestUpdate_RestoresAllForwarderStamps`
+  reflects over `types.Qso` stamp tags and pins the immutable-restore list against drift).
+  None ship-gating. Residual nits:
+  - **`uuid_conflict` classification unreachable under `force`** (`submit.go:322`): the guard
+    is `IsUniqueConstraintError(err) && !force`, so a forced re-import of an exported log (UUID
+    collision, random dedupe key) aborts with a generic error instead of the per-record
+    `uuid_conflict` report. Unreachable today (batch path hardwires `force=false`,
+    `SubmitImport` has no non-test caller) but a trap for whoever wires a `--force` import.
+    Dropping `&& !force` is safe.
+  - **`importBatchFallback` publishes Hub events** (via `s.submit`), contradicting
+    `SubmitImportBatch`'s "does NOT publish" doc — harmless (import runs daemon-offline) but the
+    doc should flag the fallback as the exception.
+  - **Best-effort `contacted_station` cache warm-up uses the request ctx** — a client that
+    disconnects right after commit skips the cache write. Deliberately best-effort; a detached
+    short-timeout ctx (like the dedupe refetch already uses) would make it client-independent.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 

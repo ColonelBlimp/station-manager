@@ -35,12 +35,14 @@ type EnqueueResult struct {
 //     discarded at startup (ADR 0039), so enqueuing to one would strand the rows —
 //     reject up front (forwarder_unavailable).
 //   - Already-uploaded QSOs are skipped unless force, so a repeat backfill fills
-//     only genuine gaps instead of re-sending. "Already uploaded" = an existing
-//     insert-upload row for this destination at status=uploaded; that row is
-//     written atomically with the ADIF stamp and is preserved across the disable
-//     discard, so it is the durable per-destination "done" signal. Keying the
-//     check on forwarder_name (not a per-type ADIF prefix) keeps it N-agnostic —
-//     a new forwarder type needs no change here.
+//     only genuine gaps instead of re-sending. "Already uploaded" is keyed on the
+//     destination's ADIF stamp prefix (AdifPrefixForType + HasUploadStamp), NOT on
+//     the queue row: the stamp is written into the QSO's additional_data atomically
+//     with a successful upload and survives the disable-discard, so it is the
+//     durable per-TYPE "done" signal (consistent with the missing_from filter and
+//     the SPA's "uploaded" colour). Consequence of keying on type, not name: two
+//     configured forwarders of the SAME type (e.g. qrz-primary + qrz-backup) share
+//     one stamp, so a backfill to the second skips what is already on the first.
 //   - Soft-deleted and unknown QSOs are reported, never fatal — one bad UUID in a
 //     large selection must not fail the rest (per-QSO best-effort).
 //

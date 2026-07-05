@@ -55,6 +55,19 @@ func preserveSeconds(incoming, existing string) string {
 func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, src source.Source) (types.Qso, error) {
 	const op errors.Op = "qsoservice.Update"
 
+	// Snapshot the pre-edit state for the audit row NOW, before the merge below.
+	// The merge unmarshals into a shallow copy of `existing`, and the one
+	// reference-typed field (ContactHistory []ContactHistory) shares its backing
+	// array — so a `contact_history` body would decode in place and mutate
+	// `existing`'s elements. Marshalling here (not after the merge) captures the
+	// true pre-edit state, which the audit row exists to record and which SM Cloud
+	// sync consumes (ADR 0016). Latent today (stored rows carry no contact_history),
+	// but cheap insurance.
+	beforeImage, err := json.Marshal(existing)
+	if err != nil {
+		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to marshal pre-edit snapshot")
+	}
+
 	merged := existing
 	if err := json.Unmarshal(body, &merged); err != nil {
 		return types.Qso{}, &SubmitError{Code: "invalid_json", Message: "failed to parse request body"}
@@ -303,15 +316,11 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 		}
 	}
 
-	// Append the audit row inside the same tx (ADR 0016 prep #2). The
-	// snapshot is the pre-edit state — json.Marshal(existing), not
-	// json.Marshal(merged) — so replaying audit reconstructs each
-	// state the row passed through.
-	beforeImage, err := json.Marshal(existing)
-	if err != nil {
-		_ = tx.Rollback()
-		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to marshal pre-edit snapshot")
-	}
+	// Append the audit row inside the same tx (ADR 0016 prep #2). beforeImage was
+	// marshalled at the top of Update — BEFORE the merge that can mutate existing's
+	// shared ContactHistory backing array — so it holds the true pre-edit state,
+	// not json.Marshal(merged). Replaying audit reconstructs each state the row
+	// passed through.
 	if err = s.DB.InsertQsoHistoryTx(ctx, tx, existing.UUID, action.Update, src, beforeImage); err != nil {
 		_ = tx.Rollback()
 		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to insert qso_history row")
