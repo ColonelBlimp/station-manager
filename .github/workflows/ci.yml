@@ -38,6 +38,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # Dev Postgres for the smcloud store integration tests
+    # (internal/cloud/store). Those tests skip-gate on a reachable DB (they ping
+    # localhost:5432 and t.Skip when it is down), so without this service they
+    # silently skip in CI and the reconcile invariants — the stale/tenant upsert
+    # guards, µs modified_at canonicalisation, tombstone semantics — go
+    # undefended. The tests self-apply the schema from migrations/, so no
+    # migrate step is needed here; ports:5432 maps the service onto localhost,
+    # which is the tests' default DSN (smcloud/smcloud/smcloud), so no
+    # SMCLOUD_TEST_DSN override is required either. Short image name resolves
+    # fine — GitHub runners use Docker, not podman (cf. Taskfile db:pg:up, which
+    # must fully-qualify it for rootless podman).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: smcloud
+          POSTGRES_PASSWORD: smcloud
+          POSTGRES_DB: smcloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U smcloud"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -181,6 +205,10 @@ jobs:
       # 5-minute budget (and starve neighbouring packages' timing-
       # sensitive tests of CPU). Those decode tests run in the non-race
       # step below instead.
+      #
+      # This step is also where the internal/cloud/store integration tests
+      # run for real — the `postgres` service above is what stops them
+      # skip-gating; keep the service as long as those tests exist.
       - name: go test (race detector, -short)
         run: go test -race -short -timeout 5m $(go list ./... | grep -v /node_modules/)
 
