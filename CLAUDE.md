@@ -31,6 +31,18 @@ which docs are *live* (Tier 1, kept current and checked against the code) versus
 *historical* (Tier 2, a frozen reasoning trail, never edited to reflect current
 state). Read it to find the right doc; don't maintain a second index here.
 
+**Session-start orientation is automated.** A `SessionStart` hook
+(`.claude/settings.json` → `scripts/session-status.sh`, committed so it reaches
+every machine) injects `docs/session-handoff.md`'s Current-state block on every
+resume — and prints a **RECONCILE warning when commits exist after the
+handoff's "as of" date**, because only `CLAUDE.md` + `MEMORY.md` auto-load and a
+stale handoff/backlog once led a resume to re-open finished work (2026-07-05).
+So: **at session end, update `session-handoff.md`'s Current state AND bump its
+"(as of YYYY-MM-DD)" date** — the hook's staleness check keys off that date, and
+a skipped update is exactly what the guard exists to catch. If a resume shows the
+RECONCILE warning, check `git log` and confirm an item is still open before
+acting on any backlog "open" line.
+
 Before a non-trivial design choice, the load-bearing reads are still the
 v1-analysis baseline — **`docs/v1-analysis/invariants.md`** (rules that must
 carry forward; check proposals against it) and **`docs/v1-analysis/lessons-for-v2.md`**

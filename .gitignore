@@ -48,4 +48,8 @@ config.json
 /log
 /.claude/commands/log.md
 /catcli
-.claude
+# Ignore .claude/ contents (local commands, settings.local.json, caches) but
+# SHARE the committed hook config so the session-start orientation hook reaches
+# every machine. Negation works only because the directory itself isn't excluded.
+/.claude/*
+!/.claude/settings.json
