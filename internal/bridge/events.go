@@ -4,8 +4,9 @@ package bridge
 const ServiceName = "bridgeservice"
 
 // EventName identifies the kind of event flowing from the bridge to
-// SSE subscribers. Four values: three per ADR 0010, plus tune-state per
-// ADR 0027. Extending this set is a wire-protocol change that requires
+// SSE subscribers. Five values: three per ADR 0010, plus tune-state
+// (ADR 0027) and rig-clients (multi-tab awareness). Extending this set
+// is a wire-protocol change that requires
 // updating the SPA's EventSource consumer in
 // `frontend/logging/src/lib/states/bridge.svelte.ts` and revising the
 // relevant ADR.

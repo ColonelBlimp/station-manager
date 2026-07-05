@@ -114,12 +114,22 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 	// is the unchanged fire-and-forget write. The mode frame (if any) ACKs before
 	// tx_on is written, so tx_on never follows an unconfirmed mode switch.
 	if err := s.writeKeyedLine(ctx, def, cl, on, "ft8 tx-on"); err != nil {
+		// The write may have keyed the rig even though it returned an error: a
+		// CI-V no-ACK (ErrCommandNoAck — "may or may not have applied") or a
+		// watchdog-closed port that flushed the frame first. Rolling straight
+		// back to idle would strand a possibly-live PTT with NO daemon backstop
+		// — the auto-off timer is cancelled, and unkeyOnTeardown skips a rig it
+		// believes is idle. So arm the ADR 0042 stranded-keyed flag:
+		// defensiveUnkeyIfStranded then fires a guaranteed tx_off on the next
+		// confirmed frame (this instance if the rig is still pushing, else the
+		// next instance on reconnect). A no-op if the key never landed.
 		s.mu.Lock()
 		s.ft8TxActive = false
 		if s.ft8TxTimer != nil {
 			s.ft8TxTimer.Stop()
 			s.ft8TxTimer = nil
 		}
+		s.strandedKeyed = true
 		s.mu.Unlock()
 		return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-on")
 	}

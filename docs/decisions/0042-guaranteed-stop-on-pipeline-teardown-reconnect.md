@@ -49,6 +49,59 @@ Two layers.
   (one-shot). Surgical: the daemon unkeys only when it *knows* it stranded the rig
   this session. Test `TestDefensiveUnkeyIfStranded`.
 
+## Amendment (2026-07-05) — F1(b) also arms on a failed *key* write
+
+A follow-up `internal/bridge` review found a third path into the same "the rig may
+be keyed but the daemon thinks it's idle" state that F1(b) was built to cover —
+one the original decision didn't wire in. F1(b) armed `strandedKeyed` only when
+F1(a)'s *teardown unkey* write failed. But the **key-on** write in `StartTune` /
+`KeyFt8Tx` can also return an error while having reached the rig:
+
+- **CI-V no-ACK (the plausible one):** `writeKeyedLine` → `writeCIVFramesAwaitAck`
+  writes the `tx_on` frame (the rig keys), then the FB/FA is lost/garbled/late →
+  `ErrCommandNoAck`, whose own doc says *"the command may or may not have
+  applied."*
+- **Watchdog-closed port:** a hung `port.Write` flushes bytes to the driver before
+  the 2 s close → `ErrWriteTimeout`.
+
+The original rollback on that error cleared `tuneActive`/`ft8TxActive` + stopped
+the auto-off timer and returned — so the auto-off backstop was cancelled,
+`unkeyOnTeardown` skipped a rig it believed idle (it gates on
+`tuneActive || ft8TxActive`), and F1(b) never armed. Net: a possibly-keyed carrier
+with **no daemon backstop at all** — the exact residual F1(b) exists to shrink,
+reachable from an ordinary dropped ACK.
+
+**Decision:** the failed-key-write rollback in `StartTune` and `KeyFt8Tx` now also
+sets `strandedKeyed = true` (under the same `mu` critical section as the state
+rollback), routing the possibly-stranded carrier into the existing F1(b) path.
+`defensiveUnkeyIfStranded` then fires a guaranteed `tx_off` on the next
+confirmed frame — this pipeline instance if the rig is still pushing (the common
+no-ACK-but-live case, resolved within ~one slot), or the next instance on
+reconnect (dead-port case). A no-op if the key never landed. This stays inside
+F1(b)'s founding principle — *unkey only when the daemon knows it may have
+stranded the rig this session* — so the "no unconditional unkey" and "in-memory
+only, no persistence" alternatives above are unchanged; this only broadens the set
+of events that arm the flag. The mode/power half of the atomic key line may also
+have applied; the stranded path unkeys only (carrier-down is the safety priority)
+and the post-INIT READ / attended operator reconciles mode+power.
+
+Bus-discipline hardening landed in the same change (review finding #2): both
+`unkeyOnTeardown` and `defensiveUnkeyIfStranded` now take `cmdMu` (via
+`underCmdMuCIV`) so the defensive `tx_off` can't interleave frames with an
+in-flight command/key sequence on the half-duplex CI-V bus, and its FB can't be
+misrouted by `deliverAck` to a pending command waiter. The defensive fire also
+re-checks `tuneActive || ft8TxActive` *under* `cmdMu` before writing, so a
+`StartTune`/`KeyFt8Tx` racing in the gap after identity-confirm unlocks the write
+paths can't be cut short (the key write serialises on the same `cmdMu`, making the
+ordering decisive).
+
+Tests: `TestStartTune_FailedKeyWriteArmsStranded`,
+`TestKeyFt8Tx_FailedKeyWriteArmsStranded` (a failing key write rolls back
+`active` + clears the timer but arms `strandedKeyed`), alongside the existing
+teardown/defensive-unkey coverage. The three low-severity findings from the same
+review (auto-off retry timer-clobber, garbled-first-IDENTITY write-block,
+`bridge.New` nil-trust) were triaged to `docs/backlog.md`, not fixed here.
+
 ## Alternatives considered
 
 ### F1(b): unconditional defensive `tx_off` on every identity-confirm
@@ -101,7 +154,11 @@ present), and the rig's own TOT is the backstop of last resort. In-memory only.
 
 - ADR 0027 (tune-carrier guaranteed stop), ADR 0030 (FT8-TX PTT seam), ADR 0020
   (pipeline supervisor / reconnect), ADR 0019 (read-only bridge).
-- `internal/bridge/pipeline.go` (`unkeyOnTeardown`), `tune.go`/`ft8tx.go`
-  (`clearTuneOnDisconnect`/`clearFt8TxOnDisconnect`), `tune_test.go`
-  (`TestUnkeyOnTeardown`).
+- `internal/bridge/pipeline.go` (`unkeyOnTeardown`, `defensiveUnkeyIfStranded`,
+  `markStrandedKeyed`), `tune.go`/`ft8tx.go`
+  (`clearTuneOnDisconnect`/`clearFt8TxOnDisconnect`; and — per the 2026-07-05
+  amendment — the failed-key-write `strandedKeyed` arming in `StartTune`/
+  `KeyFt8Tx`), `tune_test.go` (`TestUnkeyOnTeardown`,
+  `TestStartTune_FailedKeyWriteArmsStranded`), `ft8tx_test.go`
+  (`TestKeyFt8Tx_FailedKeyWriteArmsStranded`).
 - Memory `project_sm_serial_bridge`.

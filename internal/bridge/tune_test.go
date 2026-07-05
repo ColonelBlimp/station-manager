@@ -315,6 +315,38 @@ func TestStartTune_RefusesNotConnected(t *testing.T) {
 	}
 }
 
+// TestStartTune_FailedKeyWriteArmsStranded covers the guaranteed-stop gap
+// (bridge review 2026-07-05 #1): a key write can return an error yet have reached
+// the rig (CI-V no-ACK — "may or may not have applied" — or a watchdog-closed
+// port that flushed the frame first). Rolling straight back to idle would strand
+// a possibly-live carrier with NO backstop: the auto-off timer is cancelled and
+// unkeyOnTeardown skips a rig it believes is idle. So on a failed tune-on write
+// the tune state rolls back BUT strandedKeyed is armed, so defensiveUnkeyIfStranded
+// fires a guaranteed tx_off on the next confirmed frame.
+func TestStartTune_FailedKeyWriteArmsStranded(t *testing.T) {
+	s, f := tuneTestService(t)
+	_ = f.Close() // key write now returns ErrClosed
+
+	if err := s.StartTune(context.Background()); err == nil {
+		t.Fatal("StartTune with a failing key write = nil, want error")
+	}
+
+	s.mu.Lock()
+	active := s.tuneActive
+	stranded := s.strandedKeyed
+	timer := s.tuneTimer
+	s.mu.Unlock()
+	if active {
+		t.Error("tuneActive = true after a failed key write; want rolled back to false")
+	}
+	if !stranded {
+		t.Error("strandedKeyed = false after a failed key write; a possibly-keyed carrier has no backstop")
+	}
+	if timer != nil {
+		t.Error("tuneTimer not cleared after a failed key write")
+	}
+}
+
 func TestStartTune_SingleFlight(t *testing.T) {
 	s, f := tuneTestService(t)
 

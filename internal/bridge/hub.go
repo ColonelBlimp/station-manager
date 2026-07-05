@@ -10,10 +10,9 @@ import "sync"
 const subscriberBufferSize = 64
 
 // hub is a bridge-internal pub/sub fan-out. One publisher (the
-// serial+CAT decode loop, future M3a.2; the stub-event ticker in
-// M3a.1), N subscribers (one per open SSE connection). Mirrors the
-// shape of internal/events.Hub but typed for bridge.Event so callers
-// don't have to type-assert payloads.
+// serial+CAT decode loop), N subscribers (one per open SSE connection).
+// Mirrors the shape of internal/events.Hub but typed for bridge.Event so
+// callers don't have to type-assert payloads.
 //
 // Build-specific-not-generic: the project already had events.Hub but
 // it's typed for the QSO-stored event vocabulary; threading a

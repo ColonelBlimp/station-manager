@@ -53,6 +53,7 @@ next, and in what order" is answered.
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
 - _Code-review lows (2026-07-05 SPA review):_ 13 verified low-severity fixes (the fetch-timeout standout promoted to P1 above) — TX_PWR sub-0.5 W rounding (durable ADIF) · state-reset gaps (tabCount / freqKnown / stale decodes / enrich zombies) · FT8 UI nits (bearing 360°, drain-abort, FD tooltip, isWorking split, canAnswer TX-guard) · edit-overlay mode dropdown
+- _Bridge/TX hardening (2026-07-05 `internal/bridge` review):_ 3 low fail-safe items — auto-off retry can clobber a fresh key's timer (per-key generation counter) · garbled first IDENTITY permanently write-blocks the instance (let a later exact match confirm) · `bridge.New` trusts Serial/Cat non-nil (nil-check in Initialize)
 
 **P3 — deferred / large / needs a trigger**
 - CAT poll mode (ADR 0034) · FT8 semi-auto watch-list (SET ASIDE) · spot-submitter registry (on 2nd destination) · operator / user profiles · outbound UDP telemetry (WSJT-X-compatible) · FT8 occupancy waterfall render · POTA fields · config hot-reload · settings help tooltips + beginner/expert mode · FT8 Monitor/Listen toggle (DISCUSSION) · download-site install page · `PUT /v1/config` `default_logbook.id` wiring (no consumer yet)
@@ -858,6 +859,43 @@ next, and in what order" is answered.
   the "Verified sound" list from that review (ADIF byte-length prefixes,
   enrichment-never-blocks invariant, midnight rollover, i18n catalogue, EventSource
   lifecycles, mode.ts submode table) was checked hard and should NOT be re-flagged.
+
+- **Bridge / TX-safety hardening batch (2026-07-05 `internal/bridge` review).** The
+  three verified LOW findings from the bridge-subsystem review; its MEDIUM-HIGH (#1,
+  stranded-key backstop on a failed key write) + LOW-MED (#2, defensive/teardown
+  unkey bypassing cmdMu) + doc nits (#6) shipped the same day. All three below are
+  fail-safe-directioned (they fail toward unkey / write-block, never toward a stuck
+  carrier), which is why they're LOW despite touching TX code. Verify each still
+  applies before fixing — the #1/#2 fixes moved nearby code.
+  - **Auto-off retry re-arm can clobber a fresh key's timer** (`tune.go` ~292–302 /
+    `ft8tx.go` ~236–246). `tuneAutoOff`/`ft8TxAutoOff` release `keyMu` inside
+    `releaseTune`/`releaseFt8Tx`, then take `mu` to re-arm the retry. Interleaving:
+    release fails → operator StopTune succeeds → operator StartTune keys anew with a
+    fresh timer → the old callback resumes, sees `active=true`, overwrites the timer
+    with a 1 s retry → the new tune is cut at ~1 s and the orphaned original timer
+    fires a redundant release later. Fail-safe (unkeys early, never strands). Fix: a
+    per-key **generation counter** captured at key time and re-checked in the callback
+    before re-arming.
+  - **A garbled first IDENTITY permanently write-blocks the pipeline instance**
+    (`pipeline.go` ~660–696). `identityVerified` latches on the FIRST IDENTITY
+    response; if startup serial noise corrupts the ID digits it decodes to "" →
+    `identityUnrecognised` → toast + write paths blocked, and because the latch is set
+    a later clean matching IDENTITY can never upgrade to confirmed. Recovery needs a
+    pipeline restart that may never come on a healthy link. Fail-closed is the right
+    default; the fix is to let a later **exact-match** IDENTITY confirm while KEEPING
+    the mismatch-halts semantics (only the unrecognised→confirmed upgrade opens up).
+    Shipped rigdefs can't produce a false `identityMismatch`, so only the unrecognised
+    path is exposed.
+  - **`bridge.New` trusts `Serial`/`Cat` non-nil** (`pipeline.go` ~174 derefs
+    `*s.cfg.Serial`; every write path derefs `s.cfg.Cat`). Safe today because
+    `config.ActiveBridge()` always populates both, but nothing in the package enforces
+    it — a future caller/test passing `Enabled: true` with raw config panics inside the
+    supervisor goroutine and kills the daemon. Fix: a two-line nil check in
+    `Initialize()` (which today only checks the logger) to make the invariant local.
+  - Also noted (not a fix, just a documented window): a slow/wedged tab evicted by the
+    hub keeps the other tabs' `rig-clients` count stale until its handler goroutine
+    hits the 10 s SSE write deadline and its deferred unsub broadcasts — bounded and
+    advisory.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 

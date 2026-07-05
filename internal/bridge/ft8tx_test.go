@@ -50,6 +50,37 @@ func TestKeyFt8Tx_HappyPath(t *testing.T) {
 	}
 }
 
+// TestKeyFt8Tx_FailedKeyWriteArmsStranded is the FT8-TX sibling of
+// TestStartTune_FailedKeyWriteArmsStranded (bridge review 2026-07-05 #1): a
+// tx-on write that errors may still have keyed PTT (CI-V no-ACK / watchdog-closed
+// port). The FT8 TX state rolls back to idle, but strandedKeyed is armed so
+// defensiveUnkeyIfStranded guarantees a later tx_off rather than leaving a
+// possibly-live PTT with the auto-off timer cancelled.
+func TestKeyFt8Tx_FailedKeyWriteArmsStranded(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	s.lastMode = "USB"
+	_ = fake.Close() // tx-on write now returns ErrClosed
+
+	if err := s.KeyFt8Tx(context.Background(), "DATA-U"); err == nil {
+		t.Fatal("KeyFt8Tx with a failing key write = nil, want error")
+	}
+
+	s.mu.Lock()
+	active := s.ft8TxActive
+	stranded := s.strandedKeyed
+	timer := s.ft8TxTimer
+	s.mu.Unlock()
+	if active {
+		t.Error("ft8TxActive = true after a failed key write; want rolled back to false")
+	}
+	if !stranded {
+		t.Error("strandedKeyed = false after a failed key write; a possibly-keyed PTT has no backstop")
+	}
+	if timer != nil {
+		t.Error("ft8TxTimer not cleared after a failed key write")
+	}
+}
+
 // TestKeyFt8Tx_NoMode: with mode empty, KeyFt8Tx keys tx_on only and UnkeyFt8Tx
 // drops tx_off only — no mode switch/restore (the operator manages mode).
 func TestKeyFt8Tx_NoMode(t *testing.T) {

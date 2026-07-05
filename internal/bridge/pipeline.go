@@ -381,7 +381,13 @@ func (s *Service) unkeyOnTeardown(def cat.RigDefinition, client serial.Client) {
 		s.markStrandedKeyed() // couldn't unkey → arm F1(b) on the next instance
 		return
 	}
-	if err := client.WriteCommandBytes(context.Background(), txOff); err != nil {
+	// Take cmdMu on CI-V (half-duplex bus guard) so the unkey frame can't
+	// interleave with an in-flight command/key sequence. The poll loop is
+	// already drained by this point in teardown, so this can't stall.
+	civ := def.Protocol == cat.ProtocolIcomCIV
+	if err := s.underCmdMuCIV(civ, func() error {
+		return client.WriteCommandBytes(context.Background(), txOff)
+	}); err != nil {
 		s.logger.WarnWith().Err(err).Msg("bridge: teardown unkey write failed (rig may be gone)")
 		s.markStrandedKeyed() // dead port → arm F1(b) on the next instance
 		return
@@ -409,12 +415,19 @@ func (s *Service) markStrandedKeyed() {
 // push (cheap flag check) but fires at most once per instance.
 func (s *Service) defensiveUnkeyIfStranded(def cat.RigDefinition, client serial.Client) {
 	s.mu.Lock()
-	fire := s.strandedKeyed && s.identityConfirmed
-	if fire {
+	armed := s.strandedKeyed && s.identityConfirmed
+	// Clear once identity is confirmed: we either fire the defensive tx_off
+	// below, or a live tune/FT8 TX's own guaranteed-stop will unkey the carrier
+	// when it releases. Stay armed only while identity is unconfirmed — the H2
+	// gate forbids writing to an unverified rig, so the flag must survive to a
+	// later confirmed frame. A failed write does NOT re-arm (accepted ADR 0042
+	// residual: identity is confirmed so the port is live; the rig TOT + the
+	// attended operator are the final backstop).
+	if armed {
 		s.strandedKeyed = false
 	}
 	s.mu.Unlock()
-	if !fire {
+	if !armed {
 		return
 	}
 	txOff, err := cat.Encode(def, tuneTxOffCommand)
@@ -422,8 +435,31 @@ func (s *Service) defensiveUnkeyIfStranded(def cat.RigDefinition, client serial.
 		s.logger.WarnWith().Err(err).Msg("bridge: stranded-unkey encode failed")
 		return
 	}
-	if err := client.WriteCommandBytes(context.Background(), txOff); err != nil {
-		s.logger.WarnWith().Err(err).Msg("bridge: stranded-unkey write failed")
+	// Take cmdMu on CI-V (half-duplex bus guard, review 2026-06-19 M2) so the
+	// defensive frame can't interleave with an in-flight command/key sequence
+	// and its FB can't be misrouted by deliverAck to a pending command waiter.
+	// Under cmdMu — which the tune/FT8 key write also takes — re-check that no
+	// legitimate TX has since taken the PTT: this fires right after identity
+	// (re)confirmation unlocks the write paths, so a StartTune/KeyFt8Tx racing
+	// in the gap between the arm-check above and here would otherwise be cut
+	// short by our tx_off.
+	civ := def.Protocol == cat.ProtocolIcomCIV
+	skipped := false
+	werr := s.underCmdMuCIV(civ, func() error {
+		s.mu.Lock()
+		busy := s.tuneActive || s.ft8TxActive
+		s.mu.Unlock()
+		if busy {
+			skipped = true
+			return nil
+		}
+		return client.WriteCommandBytes(context.Background(), txOff)
+	})
+	if skipped {
+		return
+	}
+	if werr != nil {
+		s.logger.WarnWith().Err(werr).Msg("bridge: stranded-unkey write failed")
 		return
 	}
 	s.logger.InfoWith().Msg("bridge: sent defensive tx_off on reconnect (prior teardown may have left the rig keyed)")
