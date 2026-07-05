@@ -478,10 +478,11 @@ func TestMigrate_DownRestoresRSTLengthConstraint(t *testing.T) {
 	enqueueUpload(t, svc, qsoID, "qrz-main", "qrz", action.Insert)
 	insertQsoHistory(t, svc, qso.UUID, action.Update, source.API, []byte(`{"call":"M0CMC"}`))
 
-	// Step down TWO: past 0003 (allow_time_seconds) then 0002 (relax_rst_length),
-	// so the strict pre-0002 RST constraint is restored. (0003 was added on top of
-	// 0002, so a single step down would only revert the time-seconds relaxation.)
-	applyMigrationSteps(t, svc, -2)
+	// Step down THREE: past 0004 (utc_timestamps), 0003 (allow_time_seconds), then
+	// 0002 (relax_rst_length), so the strict pre-0002 RST constraint is restored.
+	// (Each later migration was added on top, so the count tracks the number of
+	// migrations above the 0002 target — bump it when a new migration lands.)
+	applyMigrationSteps(t, svc, -3)
 
 	uploads, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
 	if err != nil {

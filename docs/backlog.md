@@ -49,7 +49,7 @@ next, and in what order" is answered.
 - _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW)
 - _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
-- _Data / SM-Cloud prep (do before S3):_ **STAGED migration 0004** — trigger/default `localtime`→UTC rebuild + normalise pre-fix timestamp debris rows (the fix-forward half shipped 2026-07-05; see detail) · `internal/database` review lows (cold-insert retry, bootstrap stale-table detection, + 5 nits)
+- _Data / SM-Cloud prep (do before S3):_ **migration 0004 AUTHORED 2026-07-05** (up/down + `TestMigrate0004`; trigger/default `localtime`→UTC rebuild + normalise pre-fix timestamp debris — **awaiting operator review + deploy against the live DB**; see detail) · `internal/database` review lows (cold-insert retry, bootstrap stale-table detection, + 5 nits)
 - _Code-review lows (2026-07-05 `internal/api` review):_ disabled-subsystem routes return 200-HTML/405 instead of 404 (one `spaHandler` guard, also closes the `/assets/` directory-listing nit) · negative server-limit panics at startup (→ validation error) · credential-clear asymmetry (forwarder clears on blank, SMTP/lookup keep) — unify or document side-by-side · stale `middleware.go` Unwrap comment
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
@@ -888,9 +888,20 @@ next, and in what order" is answered.
     hits the 10 s SSE write deadline and its deferred unsub broadcasts — bounded and
     advisory.
 
-- **STAGED — migration 0004: timestamp `localtime`→UTC + normalise pre-fix debris rows.**
-  From the 2026-07-05 `internal/database` review (finding 1, MEDIUM-HIGH). The **fix-forward
-  half shipped 2026-07-05** (`_time_format=sqlite` on `getDsn`/`bootstrapDSN` + `time.Now().UTC()`
+- **migration 0004: timestamp `localtime`→UTC + normalise pre-fix debris rows — AUTHORED
+  2026-07-05, awaiting operator review + deploy.** Files:
+  `migrations/log/0004_utc_timestamps.{up,down}.sql`; test `TestMigrate0004_NormalisesTimestampsToUTC`
+  (seeds all three formats → asserts canonical UTC). Full `internal/database` suite green under
+  `-race` (incl. the down path via `TestMigrate_DownRestoresRSTLengthConstraint`, step count bumped
+  −2→−3). **Empirical scoping correction to the original spec:** the 2h-off taint is NARROWER than
+  first assumed — `boil` defaults to **UTC**, so sqlboiler (`created_at`/`deleted_at`) and the Go
+  writers (`modified_at`) already store UTC; only the SQL **DEFAULTs** (`qso_upload.created_at`,
+  `qso_history.at`; `qso.created_at`'s default is dead) and the two **triggers** stamped local. The
+  migration rebuilds the three tables with `datetime('now')` (UTC) defaults + UTC triggers, and
+  normalises every existing value during the copy (`… +00:00` left; else `datetime(substr(v,1,19),
+  '-2 hours')`). **Still pending YOUR go-ahead to deploy** — eyeball the SQL against the live DB
+  first; it auto-runs on the next `smd` start once committed. Original staged spec follows for
+  reference. The **fix-forward half shipped 2026-07-05** (`_time_format=sqlite` on `getDsn`/`bootstrapDSN` + `time.Now().UTC()`
   on the 10 `null.Time` DATETIME writers → every *Go-written* stamp is now SQLite-canonical UTC;
   `TestModifiedAt_StoredCanonicalUTC` locks it). This migration is the **staged half** — deliberately
   separate so it can be eyeballed against the live dogfood DB before it runs. Do **before SM Cloud
