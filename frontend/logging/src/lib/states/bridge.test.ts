@@ -505,10 +505,14 @@ describe('bridge SSE consumer — bridge-error', () => {
         );
         expect(toastsState.items).toHaveLength(1);
         expect(toastsState.items[0].level).toBe('error');
-        // The UI message is deliberately short — it omits the long by-id port path
-        // (kept in the daemon logs) and surfaces only the underlying error detail.
-        expect(toastsState.items[0].message).toContain('permission denied');
-        expect(toastsState.items[0].message).not.toContain('/dev/ttyUSB0');
+        // The UI renders the actionable i18n template with the {port} detail
+        // substituted; the raw OS error (details.error) is deliberately kept OUT of
+        // the toast and stays in smd.log — see lib/i18n/en.ts serial_open_failed
+        // (jargon-free, house-style matching serial_port_error). A permission
+        // failure now arrives under its own serial_permission_denied code with
+        // dialout guidance, so this generic code never needs to surface the error.
+        expect(toastsState.items[0].message).toContain('/dev/ttyUSB0');
+        expect(toastsState.items[0].message).not.toContain('permission denied');
     });
 
     it('does not change bridgeState flags', () => {

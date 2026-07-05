@@ -707,8 +707,27 @@
         Digit0: '6m',
     };
 
+    // Native text-editing gestures must win when focus is inside a field:
+    // Shift+Arrow is select-to-line and Shift+Ctrl+Arrow is select-word, both of
+    // which this window-level handler otherwise preventDefaults into a stack-pop /
+    // freq-step — hijacking selection and, for the freq-step, silently detuning the
+    // rig or corrupting the logged FREQ. The arrow families below are suppressed
+    // while typing; the explicit shortcuts (F2/F3/Ctrl+Enter/Shift+Enter/Escape)
+    // and the non-arrow rig controls (band digits, VFO swap, band up/down) have no
+    // text-editing meaning, so they stay live even in a field — keyboard-first
+    // logging keeps working while the callsign input is focused.
+    function isTextEntry(target: EventTarget | null): boolean {
+        if (!(target instanceof HTMLElement)) return false;
+        const tag = target.tagName;
+        return (
+            tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable
+        );
+    }
+
     function handleKeydown(e: KeyboardEvent): void {
         if (qsoEditState.open) return;
+
+        const typing = isTextEntry(e.target);
 
         if (e.key === 'Escape') {
             clearForm();
@@ -727,13 +746,14 @@
             return;
         }
         // Shift+ArrowUp/Down pop the stack — but NOT with Ctrl held, which is
-        // the rig-control freq-step family below (Shift+Ctrl+Arrow = ±10 Hz).
-        if (e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowUp') {
+        // the rig-control freq-step family below (Shift+Ctrl+Arrow = ±10 Hz), and
+        // NOT while typing, where Shift+Arrow is native select-to-line.
+        if (!typing && e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowUp') {
             e.preventDefault();
             handlePopTop();
             return;
         }
-        if (e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowDown') {
+        if (!typing && e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowDown') {
             e.preventDefault();
             handlePopBottom();
             return;
@@ -789,24 +809,27 @@
             // Firefox's Ctrl+Shift+PageUp/Down move-tab won't yield to
             // preventDefault.) CAT-on/off routing + capability gating live in
             // nudgeFreq.
-            if (e.code === 'ArrowUp') {
+            // Freq-step arrows are gated on !typing: Shift+Ctrl+Arrow is native
+            // select-word in a field, so suppressing them here lets selection work
+            // while still driving the rig when focus is outside any input.
+            if (!typing && e.code === 'ArrowUp') {
                 e.preventDefault();
                 if (e.altKey) nudgeFreqJump(1);
                 else nudgeFreqCoarse(1);
                 return;
             }
-            if (e.code === 'ArrowDown') {
+            if (!typing && e.code === 'ArrowDown') {
                 e.preventDefault();
                 if (e.altKey) nudgeFreqJump(-1);
                 else nudgeFreqCoarse(-1);
                 return;
             }
-            if (e.code === 'ArrowRight') {
+            if (!typing && e.code === 'ArrowRight') {
                 e.preventDefault();
                 nudgeFreqFine(1);
                 return;
             }
-            if (e.code === 'ArrowLeft') {
+            if (!typing && e.code === 'ArrowLeft') {
                 e.preventDefault();
                 nudgeFreqFine(-1);
                 return;

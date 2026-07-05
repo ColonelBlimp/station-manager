@@ -32,6 +32,12 @@
         the drain + clears — no daemon call.
     */
     const canAbandon = $derived(ft8State.tx.armed && ft8State.qso.active);
+    // A Call-CQ run owns the rig via the daemon's auto-pick, so the pile-up drain
+    // must stay paused: Resume would un-pause it and start a second, competing
+    // controller against the caller session (same trap the Operate-tab Next guards).
+    // A pre-existing queue can still render here during a run, so the button is
+    // hidden while callerActive.
+    const callerActive = $derived(ft8State.qso.active && ft8State.qso.role === 'caller');
     // The whole queue is single-parity (enforced at enqueue), so its parity is the
     // head's. Shown in the header to reinforce "this is the {even|odd} run".
     const runParity = $derived(
@@ -70,7 +76,7 @@
                 >
             </h2>
             <div class="flex items-center">
-                {#if !ft8PileupStack.enabled}
+                {#if !ft8PileupStack.enabled && !callerActive}
                     <button
                         type="button"
                         class="cursor-pointer text-xs font-medium text-indigo-600 hover:underline"

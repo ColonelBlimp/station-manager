@@ -41,8 +41,9 @@
 
 import { displayedState } from './displayed.svelte';
 import { isValidCallsign } from '../validators/callsign';
-import { isValidRst } from '../validators/rst';
-import { formatUtcDate, formatUtcTime, formatUtcClock } from '../utils/time';
+import { isValidRst, isValidSignalReport } from '../validators/rst';
+import { usesSignalReport } from '../utils/mode';
+import { formatUtcDate, formatUtcTime, formatUtcClock, deriveQsoDateOff } from '../utils/time';
 
 /**
  * RST default values — voice modes use the two-digit Readability /
@@ -176,18 +177,30 @@ class QsoDraft {
      * callsign (non-empty + valid), rstSent / rstRcvd (non-empty +
      * valid), qsoDate / timeOn / timeOff (non-empty). Mode is always
      * set (defaults). Frequency is always set (VFO defaults).
+     *
+     * The report validator MUST track the mode the same way Rst.svelte does
+     * (`usesSignalReport(displayedState.subMode || displayedState.mode)`): for
+     * the WSJT-X weak-signal modes (FT8/FT4/JT*) a report is a signed dB SNR
+     * ("-12"), which the digits-only isValidRst rejects. Gating on isValidRst
+     * unconditionally left the field showing valid while Log Contact stayed
+     * disabled — a dead form for manual weak-signal entry.
      */
-    canSubmit: boolean = $derived(
-        this.callsign.trim() !== '' &&
+    canSubmit: boolean = $derived.by(() => {
+        const validReport = usesSignalReport(displayedState.subMode || displayedState.mode)
+            ? isValidSignalReport
+            : isValidRst;
+        return (
+            this.callsign.trim() !== '' &&
             isValidCallsign(this.callsign) === null &&
             this.rstSent.trim() !== '' &&
-            isValidRst(this.rstSent) === null &&
+            validReport(this.rstSent) === null &&
             this.rstRcvd.trim() !== '' &&
-            isValidRst(this.rstRcvd) === null &&
+            validReport(this.rstRcvd) === null &&
             this.qsoDate !== '' &&
             this.timeOn !== '' &&
             this.timeOff !== ''
-    );
+        );
+    });
 
     /**
      * Reset every draft field to its initial value. Date / time are
@@ -309,9 +322,11 @@ class QsoDraft {
      * invalid_time_range. Read at submit only.
      */
     submitQsoDateOff(): string {
-        return this.submitTimeOff().slice(0, 5) < this.submitTimeOn().slice(0, 5)
-            ? nextUtcDate(this.qsoDate)
-            : this.qsoDate;
+        return deriveQsoDateOff(
+            this.qsoDate,
+            this.submitTimeOn().slice(0, 5),
+            this.submitTimeOff().slice(0, 5)
+        );
     }
 }
 
@@ -326,19 +341,6 @@ function reconcileSeconds(visible: string, full: string): string {
     if (visible.length !== 5) return visible;
     if (full.length === 8 && full.slice(0, 5) === visible) return full;
     return visible + ':00';
-}
-
-/**
- * The UTC calendar day after a `YYYY-MM-DD` string, in the same format. A blank or
- * unparseable input returns '' so a malformed date never fabricates a bogus
- * QSO_DATE_OFF.
- */
-function nextUtcDate(date: string): string {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
-    if (!m) return '';
-    // Day + 1 with no mutation — Date.UTC normalises the overflow (e.g. Dec 32 →
-    // Jan 1), which also keeps the no-mutable-Date lint rule happy.
-    return formatUtcDate(new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1)));
 }
 
 export const qsoDraft = new QsoDraft();

@@ -22,6 +22,11 @@
     let invalid = $state(false);
     let inputElement: HTMLInputElement;
 
+    // Set by the Escape handler so the blur it triggers reverts instead of
+    // committing. Plain (non-reactive) flag: it's read-once control flow between
+    // the keydown and the blur it fires, never rendered.
+    let escaping = false;
+
     function handleFocus(): void {
         editing = true;
         editValue = value;
@@ -55,6 +60,13 @@
 
     function handleBlur(): void {
         editing = false;
+        // Escape asked to abandon the edit: revert (the input falls back to the
+        // authoritative `value` once editing is false) and do NOT commit editValue.
+        if (escaping) {
+            escaping = false;
+            invalid = false;
+            return;
+        }
         commit();
     }
 
@@ -63,8 +75,13 @@
             commit();
             inputElement?.blur();
         } else if (e.key === 'Escape') {
+            // Abandon the edit without committing (handleBlur checks `escaping`),
+            // and stop the event before it bubbles to QsoPanel's window handler,
+            // whose own Escape → clearForm() would wipe the entire QSO draft.
+            escaping = true;
             editing = false;
             invalid = false;
+            e.stopPropagation();
             inputElement?.blur();
         }
     }

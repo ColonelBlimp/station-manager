@@ -49,3 +49,29 @@ export function formatDurationHms(ms: number): string {
     const seconds = totalSeconds % 60;
     return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
+
+/**
+ * The UTC calendar day after a `YYYY-MM-DD` string, in the same format. A blank
+ * or unparseable input returns '' so a malformed date never fabricates a bogus
+ * next-day value.
+ */
+export function nextUtcDate(date: string): string {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+    if (!m) return '';
+    // Day + 1 with no mutation — Date.UTC normalises the overflow (e.g. Dec 32 →
+    // Jan 1), which also keeps the no-mutable-Date lint rule happy.
+    return formatUtcDate(new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1)));
+}
+
+/**
+ * QSO_DATE_OFF (`YYYY-MM-DD`) — the date at TIME_OFF, given QSO_DATE and the
+ * on/off times at MINUTE precision (`HH:MM`). Returns the day after qsoDate when
+ * TIME_OFF is earlier than TIME_ON (the contact crossed UTC midnight), otherwise
+ * qsoDate itself. The minute-precision rollover test mirrors the daemon's
+ * coherence check, so a genuine midnight QSO carries a next-day QSO_DATE_OFF and
+ * logs instead of bouncing with invalid_time_range. Shared by the live-log
+ * submit path and the edit overlay so the two can't drift apart.
+ */
+export function deriveQsoDateOff(qsoDate: string, timeOnHHMM: string, timeOffHHMM: string): string {
+    return timeOffHHMM < timeOnHHMM ? nextUtcDate(qsoDate) : qsoDate;
+}

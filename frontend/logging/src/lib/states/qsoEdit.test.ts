@@ -205,7 +205,9 @@ describe('qsoEditState', () => {
                 freq_rx: '14.260',
                 band: '20m',
                 qso_date: '2026-05-09',
-                qso_date_off: '',
+                // Recomputed from date + on/off times (not the fetched value): this
+                // same-day contact (14:32→14:38, no midnight crossing) → qso_date.
+                qso_date_off: '2026-05-09',
                 time_on: '14:32',
                 time_off: '14:38',
                 comment: 'great copy',
@@ -213,6 +215,20 @@ describe('qsoEditState', () => {
                 rx_pwr: '100',
                 notes: 'first contact',
             });
+        });
+
+        it('recomputes qso_date_off from edited times (never the stale fetched value)', () => {
+            // Fetched as a same-day contact; operator edits it to cross UTC midnight
+            // (time_off earlier than time_on). qso_date_off must roll to the next day
+            // — the overlay has no editor for it, and sending the stale fetched value
+            // would falsely span, or wrongly not span, midnight (finding 4).
+            qsoEditState.populate(makeDaemonQso());
+            flushSync();
+            qsoEditState.timeOn = '23:50';
+            qsoEditState.timeOff = '00:05';
+            const body = qsoEditState.toPatchBody();
+            expect(body.qso_date).toBe('2026-05-09');
+            expect(body.qso_date_off).toBe('2026-05-10');
         });
 
         it('reflects post-populate operator edits', () => {

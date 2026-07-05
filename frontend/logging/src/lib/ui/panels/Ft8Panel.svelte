@@ -216,9 +216,25 @@
     // the placeholder band (the 14.250 bug). Better to leave the row un-clickable — the
     // freq label below the Main-Freq buttons shows "waiting for rig" so the reason is
     // visible — than to record a wrong-band contact.
+    // In-flight latch for the MANUAL TX-start paths (answerCq / workCaller). Set
+    // synchronously before the start POST and folded into canAnswer, so a second
+    // click — or picking a different row — in the POST→SSE window can't fire a
+    // second TX-initiating request. Clears when the daemon confirms the QSO is
+    // active (effect below) or when the start fails (in the handlers). The daemon
+    // single-flights + 409s the loser too, but the latch avoids the wasted second
+    // POST and the confusing conflict toast. Mirrors the drain path's `draining`.
+    let starting = $state(false);
     const canAnswer = $derived(
-        ft8State.tx.armed && ft8State.selectedOffset !== null && !ft8State.qso.active && freqKnown
+        ft8State.tx.armed &&
+            ft8State.selectedOffset !== null &&
+            !ft8State.qso.active &&
+            freqKnown &&
+            !starting
     );
+    // The start landed: the daemon pushed qso.active, so release the manual latch.
+    $effect(() => {
+        if (ft8State.qso.active) starting = false;
+    });
     // A Call-CQ session is running (we are the caller). In this mode the daemon's
     // auto-pick is the single "who's next" engine, so the pile-up queue is DISABLED:
     // letting the operator enqueue here builds a second, competing controller — and
@@ -269,6 +285,7 @@
         // needs the dial freq in MHz.
         // A CQ FD answers with the operator's Field Day exchange (class/section from
         // daemon config), not a standard grid/report; the daemon reads our identity.
+        starting = true; // latch before the POST; released on qso.active or below
         const out = await startFt8Qso(
             cq.call,
             cq.grid,
@@ -278,7 +295,10 @@
             isCqFd(d.text) ? 'fd' : 'standard',
             d.snr // our SNR of their CQ — logged as RST_SENT for FD (no report exchanged)
         );
-        if (out.kind !== 'ok') toasts.error(out.message);
+        if (out.kind !== 'ok') {
+            starting = false;
+            toasts.error(out.message);
+        }
     }
 
     // Working a station calling US (ADR 0033 "work a caller"): a directed-at-me row is
@@ -295,6 +315,7 @@
             toasts.info(`Already worked ${toMe.call} this session.`);
             return;
         }
+        starting = true; // latch before the POST; released on qso.active or below
         const out = await startFt8WorkCaller(
             toMe.call,
             toMe.grid,
@@ -304,7 +325,10 @@
             opFreq / 1_000_000,
             fd ? { class: fd.class, section: fd.section } : undefined
         );
-        if (out.kind !== 'ok') toasts.error(out.message);
+        if (out.kind !== 'ok') {
+            starting = false;
+            toasts.error(out.message);
+        }
     }
 
     // Pile-up stacking: Ctrl/Cmd+click a calling-you decode to ENQUEUE it (pure

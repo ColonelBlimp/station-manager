@@ -62,13 +62,17 @@
     // Abandon is enabled whenever a sequenced session is active (answer-a-CQ or
     // call-CQ) and TX is armed — abandonFt8Qso drops either.
     const canAbandon = $derived(tx.armed && qso.active);
-    // "Next" is offered only mid-contact AND with stations still queued — it drops
-    // the current exchange and lets the drain advance to the next caller.
-    const canNext = $derived(canAbandon && ft8PileupStack.count > 0);
     // A Call-CQ session is in progress (we are the caller, looping the pile-up). The
     // Call CQ button turns red while this holds so "I'm running CQ" is unmistakable —
     // distinct from the per-slot ON AIR indicator (Ft8Panel) that pulses during TX.
     const callerActive = $derived(qso.active && qso.role === 'caller');
+    // "Next" is offered only mid-contact AND with stations still queued — it drops
+    // the current exchange and lets the drain advance to the next caller. NOT in a
+    // Call-CQ run (!callerActive): the daemon's auto-pick is the sole controller
+    // there, so a leftover pile-up queue must not light Next — clicking it abandons
+    // the whole CQ run and hands the rig to a drain that never resumes CQ. Enqueueing
+    // is already blocked in caller mode; this guards a pre-existing queue.
+    const canNext = $derived(canAbandon && ft8PileupStack.count > 0 && !callerActive);
 
     // ---- Message ladder --------------------------------------------------------
     // One slot per row, top to bottom: our TX messages interleaved with the remote

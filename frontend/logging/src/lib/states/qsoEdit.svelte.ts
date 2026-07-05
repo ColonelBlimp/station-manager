@@ -35,6 +35,7 @@
 export type { DaemonQsoForEdit } from '../api/qso-update';
 import type { DaemonQsoForEdit } from '../api/qso-update';
 import { resolveModeAndSubmode } from '../utils/mode';
+import { deriveQsoDateOff } from '../utils/time';
 
 /**
  * Convert ADIF canonical date `YYYYMMDD` → `YYYY-MM-DD`. Defensive
@@ -220,6 +221,16 @@ class QsoEditState {
         // so omitting submode (the old behaviour) left stale data behind
         // (review 2026-06-04 H3).
         const resolved = resolveModeAndSubmode(this.mode);
+        // QSO_DATE_OFF is not directly editable in the overlay — recompute it from
+        // the (possibly edited) date + on/off times, same rule as the live-log path
+        // (deriveQsoDateOff). Sending the fetched value verbatim made an edited date
+        // falsely span midnight (or blocked a legitimate midnight-crossing edit with
+        // the daemon's invalid_time_range). Minute precision matches the daemon check.
+        const qsoDateOff = deriveQsoDateOff(
+            this.qsoDate,
+            this.timeOn.slice(0, 5),
+            this.timeOff.slice(0, 5)
+        );
         return {
             app_sm_request_qsl: this.requestQsl,
             call: this.callsign,
@@ -234,7 +245,7 @@ class QsoEditState {
             freq_rx: this.freqRx,
             band: this.band,
             qso_date: this.qsoDate,
-            qso_date_off: this.qsoDateOff,
+            qso_date_off: qsoDateOff,
             time_on: this.timeOn,
             time_off: this.timeOff,
             comment: this.comment,

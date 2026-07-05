@@ -11,60 +11,107 @@
     import ValidatedInput from '../components/ValidatedInput.svelte';
 
     /*
-        Update flow. PUT /v1/config with the current logging-station
-        snapshot; on success re-hydrate from the response so the
-        daemon's normalisations land in the UI:
+        Update flow. This panel edits a LOCAL form snapshot, never
+        configState directly — because configState mirrors the daemon's
+        persisted view and `submitQso` reads the MY_* identity fields from
+        it live at log time (see qsoDraft.svelte.ts). Binding the editors
+        straight into configState let a half-typed grid, an abandoned
+        edit, or a failed PUT contaminate the next logged QSO's
+        MY_GRIDSQUARE / MY_RIG / TX_PWR — durable data forwarded to
+        QRZ/ClubLog. So: edit `form`, PUT from `form`, and push into
+        configState ONLY via applyResponse after the daemon confirms —
+        then re-seed `form` so the daemon's normalisations land in the UI:
           - station_callsign upper-cased
           - my_gridsquare canonicalised (upper field, lower subsquare)
           - my_lat / my_lon derived from my_gridsquare
-        The local input bindings are mutated in-place by configState's
-        reactivity, so the operator sees the canonical form appear
-        without a manual refresh. my_lat / my_lon are NOT sent —
-        they're daemon-derived and the wire write of stale values
-        would just be wasted bytes.
+        my_lat / my_lon are NOT sent — daemon-derived; a wire write of
+        stale values would just be wasted bytes. Fields with no editor
+        here (morse keys, postal address, zones/DXCC — moved to the config
+        SPA) are round-tripped unchanged from configState in the PUT so
+        the daemon's full-replace of logging_station doesn't clear them;
+        they can't be dirty here, so reading them from configState is safe.
     */
+    interface StationForm {
+        stationCallsign: string;
+        ownerCallsign: string;
+        operator: string;
+        myName: string;
+        myGridsquare: string;
+        myAltitude: string;
+        myRig: string;
+        myAntenna: string;
+        ampEnabled: boolean;
+        ampMultiplier: number;
+        defaultPower: number;
+    }
+
+    // Snapshot the editable fields off configState. Called at init and again
+    // after a confirmed save (so the daemon's canonicalised values replace the
+    // typed ones). configState is hydrated before the logging UI mounts, so the
+    // init-time read sees real values.
+    function seedForm(): StationForm {
+        const ls = configState.loggingStation;
+        const st = configState.station;
+        return {
+            stationCallsign: ls.stationCallsign,
+            ownerCallsign: ls.ownerCallsign,
+            operator: ls.operator,
+            myName: ls.myName,
+            myGridsquare: ls.myGridsquare,
+            myAltitude: ls.myAltitude,
+            myRig: ls.myRig,
+            myAntenna: ls.myAntenna,
+            ampEnabled: st.ampEnabled,
+            ampMultiplier: st.ampMultiplier,
+            defaultPower: st.defaultPower,
+        };
+    }
+
+    let form = $state(seedForm());
     let saving = $state(false);
 
     async function onUpdate(): Promise<void> {
         if (saving) return;
         saving = true;
         try {
+            // Pass-through fields with no editor here (morse keys, postal address,
+            // zones, DXCC) come straight from configState — untouched by this panel,
+            // so they're never dirty. The daemon full-replaces logging_station on
+            // PUT, so omitting them would clear the stored values.
             const ls = configState.loggingStation;
 
-            // The morse-key fields no longer have an editor here (they
-            // moved to the config SPA's Station tab), but they're still
-            // sent unchanged from configState: the daemon does a full
-            // replace of logging_station on PUT, so omitting them would
-            // clear the stored values.
             const outcome = await putConfig({
                 logging_station: {
-                    station_callsign: ls.stationCallsign,
-                    operator: ls.operator,
-                    owner_callsign: ls.ownerCallsign,
-                    my_name: ls.myName,
-                    my_gridsquare: ls.myGridsquare,
+                    station_callsign: form.stationCallsign,
+                    operator: form.operator,
+                    owner_callsign: form.ownerCallsign,
+                    my_name: form.myName,
+                    my_gridsquare: form.myGridsquare,
                     my_street: ls.myStreet,
                     my_city: ls.myCity,
                     my_postal_code: ls.myPostalCode,
                     my_country: ls.myCountry,
-                    my_altitude: ls.myAltitude,
+                    my_altitude: form.myAltitude,
                     my_cq_zone: ls.myCqZone,
                     my_itu_zone: ls.myItuZone,
                     my_dxcc: ls.myDxcc,
-                    my_rig: ls.myRig,
-                    my_antenna: ls.myAntenna,
+                    my_rig: form.myRig,
+                    my_antenna: form.myAntenna,
                     my_morse_key_type: ls.myMorseKeyType,
                     my_morse_key_info: ls.myMorseKeyInfo,
                 },
                 station: {
-                    amp_enabled: configState.station.ampEnabled,
-                    amp_multiplier: configState.station.ampMultiplier,
-                    default_power: configState.station.defaultPower,
+                    amp_enabled: form.ampEnabled,
+                    amp_multiplier: form.ampMultiplier,
+                    default_power: form.defaultPower,
                 },
             });
             switch (outcome.kind) {
                 case 'ok':
                     configState.applyResponse(outcome.config);
+                    // Re-seed so the daemon's normalisations (upper-cased call,
+                    // canonical grid, derived lat/lon) replace what was typed.
+                    form = seedForm();
                     if (qsoDefaults.notifyConfigSaved) {
                         toasts.info('Station updated.');
                     }
@@ -224,7 +271,7 @@
                         <ValidatedInput
                             id="station-callsign"
                             label="Station Callsign"
-                            bind:value={configState.loggingStation.stationCallsign}
+                            bind:value={form.stationCallsign}
                             validator={isValidCallsign}
                             widthClass="w-fit"
                             inputClass="w-38"
@@ -232,7 +279,7 @@
                         <ValidatedInput
                             id="owner-callsign"
                             label="Owner's Callsign"
-                            bind:value={configState.loggingStation.ownerCallsign}
+                            bind:value={form.ownerCallsign}
                             validator={isValidCallsign}
                             widthClass="w-fit"
                             inputClass="w-38"
@@ -242,7 +289,7 @@
                         <ValidatedInput
                             id="operator"
                             label="Operator"
-                            bind:value={configState.loggingStation.operator}
+                            bind:value={form.operator}
                             validator={isValidCallsign}
                             widthClass="w-fit"
                             inputClass="w-38"
@@ -250,7 +297,7 @@
                         <ValidatedInput
                             id="my-name"
                             label="Operator Name"
-                            bind:value={configState.loggingStation.myName}
+                            bind:value={form.myName}
                             validator={passthrough}
                             widthClass="w-fit"
                             inputClass="w-38"
@@ -278,7 +325,7 @@
                         <ValidatedInput
                             id="my-gridsquare"
                             label="Grid Square"
-                            bind:value={configState.loggingStation.myGridsquare}
+                            bind:value={form.myGridsquare}
                             validator={isValidMaidenhead}
                             widthClass="w-fit"
                             inputClass="w-38"
@@ -286,7 +333,7 @@
                         <ValidatedInput
                             id="my-altitude"
                             label="Altitude (m)"
-                            bind:value={configState.loggingStation.myAltitude}
+                            bind:value={form.myAltitude}
                             validator={passthrough}
                             widthClass="w-fit"
                             inputClass="w-38"
@@ -335,7 +382,7 @@
                             <ValidatedInput
                                 id="my-rig"
                                 label="Rig"
-                                bind:value={configState.loggingStation.myRig}
+                                bind:value={form.myRig}
                                 validator={passthrough}
                                 widthClass="w-fit"
                                 inputClass="w-38"
@@ -344,7 +391,7 @@
                         <ValidatedInput
                             id="my-antenna"
                             label="Antenna"
-                            bind:value={configState.loggingStation.myAntenna}
+                            bind:value={form.myAntenna}
                             validator={passthrough}
                             widthClass="w-fit"
                             inputClass="w-38"
@@ -372,16 +419,12 @@
                                 class="input-base w-38 mt-1 {displayedState.isLive
                                     ? 'bg-surface-disabled cursor-default'
                                     : ''}"
-                                value={displayedState.isLive
-                                    ? catState.power
-                                    : configState.station.defaultPower}
+                                value={displayedState.isLive ? catState.power : form.defaultPower}
                                 readonly={displayedState.isLive}
                                 title={displayedState.isLive ? 'From CAT (PC)' : ''}
                                 oninput={(e) => {
                                     if (!displayedState.isLive) {
-                                        configState.station.defaultPower = Number(
-                                            e.currentTarget.value
-                                        );
+                                        form.defaultPower = Number(e.currentTarget.value);
                                     }
                                 }}
                             />
@@ -432,7 +475,7 @@
                             <input
                                 id="amp-enabled"
                                 type="checkbox"
-                                bind:checked={configState.station.ampEnabled}
+                                bind:checked={form.ampEnabled}
                             />
                             <label for="amp-enabled" class="text-sm"
                                 >Use linear amp multiplier</label
@@ -447,8 +490,8 @@
                                 min="0"
                                 max="1000"
                                 class="input-base w-fit mt-1"
-                                bind:value={configState.station.ampMultiplier}
-                                disabled={!configState.station.ampEnabled}
+                                bind:value={form.ampMultiplier}
+                                disabled={!form.ampEnabled}
                             />
                         </div>
                     </div>
