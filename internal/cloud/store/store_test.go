@@ -1,0 +1,399 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	stderr "errors"
+	"os"
+	"testing"
+	"time"
+
+	_ "github.com/lib/pq"
+)
+
+// These are INTEGRATION tests against a real Postgres — the reconcile invariants
+// they defend (the ON CONFLICT ... WHERE stale/tenant guards, µs timestamp
+// canonicalisation, JSONB round-trip) are Postgres semantics that a mock would
+// only re-implement wrongly. Per the project rule ("integration tests are the
+// default for anything touching storage"), there are no mocks here.
+//
+// They run against the dev Postgres from `task db:pg:up` (user/pass/db =
+// smcloud). When no DB is reachable — CI without a database, a dev box that
+// hasn't started the container — every test skips rather than fails. Point it at
+// a different instance with SMCLOUD_TEST_DSN.
+
+const defaultTestDSN = "postgres://smcloud:smcloud@localhost:5432/smcloud?sslmode=disable"
+
+// testStore connects to the dev Postgres, lays down a CLEAN schema from the
+// migration files (so the test is independent of migrate:cloud:up and of any
+// prior run's rows), and returns a Store. Skips when no dev DB is reachable.
+func testStore(t *testing.T) *Store {
+	t.Helper()
+	dsn := os.Getenv("SMCLOUD_TEST_DSN")
+	if dsn == "" {
+		dsn = defaultTestDSN
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Skipf("smcloud store tests need a dev Postgres (task db:pg:up): open: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		t.Skipf("smcloud store tests need a dev Postgres (task db:pg:up): ping: %v", err)
+	}
+	// Clean slate: down (IF EXISTS, safe on first run) then up.
+	execSQLFile(t, db, "migrations/0001_init.down.sql")
+	execSQLFile(t, db, "migrations/0001_init.up.sql")
+	t.Cleanup(func() {
+		execSQLFile(t, db, "migrations/0001_init.down.sql")
+		_ = db.Close()
+	})
+	return New(db)
+}
+
+// execSQLFile runs a whole migration file. lib/pq's parameterless Exec uses the
+// simple query protocol, which accepts the file's multiple statements in one go.
+func execSQLFile(t *testing.T, db *sql.DB, path string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if _, err := db.Exec(string(b)); err != nil {
+		t.Fatalf("exec %s: %v", path, err)
+	}
+}
+
+func seedTenantLogbook(t *testing.T, s *Store, callsign string) (int64, int64) {
+	t.Helper()
+	ctx := context.Background()
+	tid, err := s.EnsureTenant(ctx, callsign, callsign)
+	if err != nil {
+		t.Fatalf("EnsureTenant(%q): %v", callsign, err)
+	}
+	lid, err := s.EnsureLogbook(ctx, tid, "main")
+	if err != nil {
+		t.Fatalf("EnsureLogbook: %v", err)
+	}
+	return tid, lid
+}
+
+func rec(uuid string, tid, lid int64, mod time.Time, deleted *time.Time, payload string) Record {
+	return Record{
+		UUID:       uuid,
+		TenantID:   tid,
+		LogbookID:  lid,
+		ModifiedAt: mod,
+		DeletedAt:  deleted,
+		Payload:    json.RawMessage(payload),
+	}
+}
+
+// A few stable UUIDs — the qsos.uuid column is a Postgres UUID, so these must parse.
+const (
+	uuidA = "01910d3a-7000-7abc-8def-000000000001"
+	uuidB = "01910d3a-7000-7abc-8def-000000000002"
+	uuidC = "01910d3a-7000-7abc-8def-000000000003"
+)
+
+var baseTime = time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
+
+// TestUpsert_StaleGuard: the modified_at guard rejects an older push, applies an
+// equal one (idempotent re-push still writes), and applies a newer one — and the
+// returned applied count reflects exactly which writes landed.
+func TestUpsert_StaleGuard(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+
+	// Insert at baseTime.
+	applied, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{"v":1}`)})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("insert applied = %d, want 1", applied)
+	}
+
+	// Older push: rejected, applied 0, stored payload unchanged.
+	applied, err = s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime.Add(-time.Minute), nil, `{"v":2}`)})
+	if err != nil {
+		t.Fatalf("stale push: %v", err)
+	}
+	if applied != 0 {
+		t.Errorf("stale push applied = %d, want 0 (older modified_at must be ignored)", applied)
+	}
+	if got := payloadV(t, mustGet(t, s, uuidA)); got != 1 {
+		t.Errorf("payload v after stale push = %d, want 1 (original preserved)", got)
+	}
+
+	// Equal push: applies (>= is inclusive so a re-push is idempotent-but-writes).
+	applied, err = s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{"v":3}`)})
+	if err != nil {
+		t.Fatalf("equal push: %v", err)
+	}
+	if applied != 1 {
+		t.Errorf("equal push applied = %d, want 1 (equal modified_at must apply)", applied)
+	}
+
+	// Newer push: applies.
+	applied, err = s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime.Add(time.Minute), nil, `{"v":4}`)})
+	if err != nil {
+		t.Fatalf("newer push: %v", err)
+	}
+	if applied != 1 {
+		t.Errorf("newer push applied = %d, want 1", applied)
+	}
+}
+
+// TestUpsert_TenantScope: a push carrying an existing UUID but a DIFFERENT
+// tenant_id (even with a newer modified_at) is rejected — it can't hijack another
+// tenant's row. Applied 0, ownership + payload unchanged.
+func TestUpsert_TenantScope(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tidA, lidA := seedTenantLogbook(t, s, "7Q8AC")
+	tidB, lidB := seedTenantLogbook(t, s, "7Q5MLV")
+
+	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tidA, lidA, baseTime, nil, `{"owner":"A"}`)}); err != nil {
+		t.Fatalf("seed A: %v", err)
+	}
+
+	// Tenant B tries to overwrite A's UUID with a newer record.
+	applied, err := s.Upsert(ctx, []Record{rec(uuidA, tidB, lidB, baseTime.Add(time.Hour), nil, `{"owner":"B"}`)})
+	if err != nil {
+		t.Fatalf("hijack push: %v", err)
+	}
+	if applied != 0 {
+		t.Errorf("cross-tenant push applied = %d, want 0 (must not hijack)", applied)
+	}
+	got := mustGet(t, s, uuidA)
+	if got.TenantID != tidA {
+		t.Errorf("tenant after hijack = %d, want %d (A still owns the row)", got.TenantID, tidA)
+	}
+}
+
+// TestUpsert_TombstoneRoundTripAndResurrect pins the delete semantics (ADR 0040
+// retentive superset): a tombstone round-trips, a NEWER non-tombstone resurrects
+// by recency (edit-after-delete wins), but a STALE missed-delete push does NOT
+// resurrect (the tombstone holds).
+func TestUpsert_TombstoneRoundTripAndResurrect(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+
+	// Live row.
+	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{"v":1}`)}); err != nil {
+		t.Fatalf("insert live: %v", err)
+	}
+
+	// Tombstone (newer).
+	del := baseTime.Add(time.Minute)
+	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, del, &del, `{"v":1}`)}); err != nil {
+		t.Fatalf("tombstone: %v", err)
+	}
+	if got := mustGet(t, s, uuidA); got.DeletedAt == nil {
+		t.Fatal("DeletedAt nil after tombstone push; want a tombstone")
+	}
+	if !manifestDeleted(t, s, lid, uuidA) {
+		t.Error("manifest Deleted = false after tombstone; want true")
+	}
+
+	// STALE non-tombstone (older than the tombstone): must NOT resurrect.
+	applied, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{"v":2}`)})
+	if err != nil {
+		t.Fatalf("stale un-delete: %v", err)
+	}
+	if applied != 0 {
+		t.Errorf("stale un-delete applied = %d, want 0 (tombstone must hold)", applied)
+	}
+	if got := mustGet(t, s, uuidA); got.DeletedAt == nil {
+		t.Error("row resurrected by a STALE push; the tombstone should have held")
+	}
+
+	// NEWER non-tombstone: resurrects by recency (edit-after-delete wins).
+	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime.Add(2*time.Minute), nil, `{"v":3}`)}); err != nil {
+		t.Fatalf("resurrect: %v", err)
+	}
+	if got := mustGet(t, s, uuidA); got.DeletedAt != nil {
+		t.Error("DeletedAt non-nil after a newer non-tombstone push; want resurrected (nil)")
+	}
+	if manifestDeleted(t, s, lid, uuidA) {
+		t.Error("manifest Deleted = true after resurrect; want false")
+	}
+}
+
+// TestUpsert_PrecisionCanonicalised: a nanosecond-precision modified_at is stored
+// at the µs canonical precision, so a peer that truncates the same way sees an
+// equal value (the reconcile hash doesn't churn — finding 3).
+func TestUpsert_PrecisionCanonicalised(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+
+	nanos := time.Date(2026, 7, 5, 12, 0, 0, 123456789, time.UTC)
+	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, nanos, nil, `{"v":1}`)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	got := mustGet(t, s, uuidA)
+	if !got.ModifiedAt.Equal(canonicalTime(nanos)) {
+		t.Errorf("stored modified_at = %v, want µs-truncated %v", got.ModifiedAt.UTC(), canonicalTime(nanos))
+	}
+	// Sub-µs nanoseconds must be gone.
+	if got.ModifiedAt.Nanosecond()%1000 != 0 {
+		t.Errorf("stored modified_at carries sub-µs nanoseconds: %d", got.ModifiedAt.Nanosecond())
+	}
+}
+
+// TestEnsureTenant_IdempotentPreservesName: re-ensuring is idempotent (same id)
+// and an EMPTY name on re-ensure does NOT wipe the stored name; a non-empty name
+// updates it (finding 5).
+func TestEnsureTenant_IdempotentPreservesName(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	id1, err := s.EnsureTenant(ctx, "7Q8AC", "Marc")
+	if err != nil {
+		t.Fatalf("ensure 1: %v", err)
+	}
+	id2, err := s.EnsureTenant(ctx, "7Q8AC", "")
+	if err != nil {
+		t.Fatalf("ensure 2 (empty name): %v", err)
+	}
+	if id1 != id2 {
+		t.Errorf("ids differ: %d vs %d (must be idempotent)", id1, id2)
+	}
+	if got := tenantName(t, s, id1); got != "Marc" {
+		t.Errorf("name after empty re-ensure = %q, want %q (empty must not wipe)", got, "Marc")
+	}
+	if _, err := s.EnsureTenant(ctx, "7Q8AC", "Updated"); err != nil {
+		t.Fatalf("ensure 3 (new name): %v", err)
+	}
+	if got := tenantName(t, s, id1); got != "Updated" {
+		t.Errorf("name after non-empty re-ensure = %q, want %q", got, "Updated")
+	}
+}
+
+// TestEnsureLogbook_Idempotent: same (tenant, name) → same id.
+func TestEnsureLogbook_Idempotent(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, _ := seedTenantLogbook(t, s, "7Q8AC")
+	id1, err := s.EnsureLogbook(ctx, tid, "contest")
+	if err != nil {
+		t.Fatalf("ensure 1: %v", err)
+	}
+	id2, err := s.EnsureLogbook(ctx, tid, "contest")
+	if err != nil {
+		t.Fatalf("ensure 2: %v", err)
+	}
+	if id1 != id2 {
+		t.Errorf("logbook ids differ: %d vs %d", id1, id2)
+	}
+}
+
+func TestGet_NotFound(t *testing.T) {
+	s := testStore(t)
+	_, err := s.Get(context.Background(), uuidC)
+	if !stderr.Is(err, ErrNotFound) {
+		t.Fatalf("Get(absent) err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestUpsert_EmptyPayload: a nil payload is caught with a typed error before it
+// hits the NOT NULL constraint (finding 7).
+func TestUpsert_EmptyPayload(t *testing.T) {
+	s := testStore(t)
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+	applied, err := s.Upsert(context.Background(), []Record{
+		{UUID: uuidA, TenantID: tid, LogbookID: lid, ModifiedAt: baseTime, Payload: nil},
+	})
+	if !stderr.Is(err, ErrEmptyPayload) {
+		t.Fatalf("empty-payload Upsert err = %v, want ErrEmptyPayload", err)
+	}
+	if applied != 0 {
+		t.Errorf("applied = %d on error, want 0", applied)
+	}
+}
+
+// TestManifest returns the logbook's rows ordered by uuid with correct deleted flags.
+func TestManifest(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+	del := baseTime.Add(time.Minute)
+	_, err := s.Upsert(ctx, []Record{
+		rec(uuidB, tid, lid, baseTime, nil, `{"v":1}`),
+		rec(uuidA, tid, lid, baseTime, &del, `{"v":1}`),
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	entries, err := s.Manifest(ctx, lid)
+	if err != nil {
+		t.Fatalf("Manifest: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("manifest len = %d, want 2", len(entries))
+	}
+	// Ordered by uuid: A before B.
+	if entries[0].UUID != uuidA || entries[1].UUID != uuidB {
+		t.Errorf("manifest order = %s,%s, want %s,%s", entries[0].UUID, entries[1].UUID, uuidA, uuidB)
+	}
+	if !entries[0].Deleted {
+		t.Error("uuidA Deleted = false, want true (it's a tombstone)")
+	}
+	if entries[1].Deleted {
+		t.Error("uuidB Deleted = true, want false")
+	}
+}
+
+func mustGet(t *testing.T, s *Store, uuid string) Record {
+	t.Helper()
+	r, err := s.Get(context.Background(), uuid)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", uuid, err)
+	}
+	return r
+}
+
+func manifestDeleted(t *testing.T, s *Store, logbookID int64, uuid string) bool {
+	t.Helper()
+	entries, err := s.Manifest(context.Background(), logbookID)
+	if err != nil {
+		t.Fatalf("Manifest: %v", err)
+	}
+	for _, e := range entries {
+		if e.UUID == uuid {
+			return e.Deleted
+		}
+	}
+	t.Fatalf("uuid %s not in manifest", uuid)
+	return false
+}
+
+// payloadV unmarshals {"v":N} from a record's JSONB payload (Postgres reformats
+// JSONB whitespace, so compare on the parsed value, not the raw bytes).
+func payloadV(t *testing.T, r Record) int {
+	t.Helper()
+	var p struct {
+		V int `json:"v"`
+	}
+	if err := json.Unmarshal(r.Payload, &p); err != nil {
+		t.Fatalf("unmarshal payload %s: %v", r.Payload, err)
+	}
+	return p.V
+}
+
+func tenantName(t *testing.T, s *Store, id int64) string {
+	t.Helper()
+	var name string
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT name FROM tenants WHERE id = $1`, id).Scan(&name); err != nil {
+		t.Fatalf("read tenant name: %v", err)
+	}
+	return name
+}

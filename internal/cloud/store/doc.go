@@ -20,10 +20,14 @@
 //
 // The hot-path operations — batch upsert-by-UUID and the (uuid, modified_at)
 // manifest — are hand-written SQL. Postgres UPSERT and JSONB are outside
-// sqlboiler's generated CRUD, so the ORM (sqlboiler.toml + `task models:cloud`)
-// covers the relational scaffolding (tenants/logbooks) and the qsos read model,
-// while these core ops stay explicit. This is deliberate, not a workaround: an
-// ORM buys little for a JSONB upsert store.
+// sqlboiler's generated CRUD, so these core ops stay explicit. This is
+// deliberate, not a workaround: an ORM buys little for a JSONB upsert store.
+//
+// sqlboiler is CONFIGURED (sqlboiler.toml) but not yet generated — the
+// `task models:cloud` step (run against a migrated dev DB) would produce the
+// relational scaffolding (tenants/logbooks) + a qsos read model if a consumer
+// needs typed CRUD beyond the hand-written ops. Until then no models/ package
+// exists in-tree and nothing imports it.
 //
 // # Driver + migrations
 //

@@ -41,8 +41,10 @@ CREATE TABLE qsos (
     payload     JSONB       NOT NULL
 );
 
--- Manifest read: (uuid, modified_at) for a logbook, tombstones included. Covering
--- index serves the list without touching the JSONB payload.
-CREATE INDEX qsos_logbook_manifest ON qsos (logbook_id, uuid, modified_at);
+-- Manifest read: (uuid, modified_at, deleted flag) for a logbook. The manifest
+-- SELECTs deleted_at too, so it is carried as an INCLUDE payload column — that
+-- keeps the read a true index-only scan (no heap fetch, JSONB untouched) rather
+-- than the index only covering the key columns.
+CREATE INDEX qsos_logbook_manifest ON qsos (logbook_id, uuid, modified_at) INCLUDE (deleted_at);
 -- Cross-logbook recency scans (housekeeping / future sync windows).
 CREATE INDEX qsos_modified_at ON qsos (modified_at);

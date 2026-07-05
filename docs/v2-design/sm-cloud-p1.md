@@ -51,6 +51,28 @@ Each step is independently testable. The data path is verified offline
 `payload JSONB` (the full `types.Qso`). Migrations. Integration-tested against a
 real Postgres (project rule: integration over mocks).
 
+**Canonical `modified_at` precision = microseconds (protocol boundary — pin
+BOTH ends).** Postgres `TIMESTAMPTZ` stores microseconds; Go `time.Time` and the
+local SQLite side carry nanoseconds. Because reconcile diffs a
+`hash-of-sorted-(UUID|modified_at)` (S4 / ADR 0040), a nanosecond local value
+that never equals its microsecond-truncated stored form would make the hashes
+disagree every cycle and re-push the *whole* logbook — the exact full-payload
+waste the flaky-link constraint rules out. The store truncates `modified_at` /
+`deleted_at` to microseconds on write (`store.canonicalTime`, so the stored value
+is what Postgres would keep anyway); **the S4 reconcile peer MUST apply the same
+microsecond truncation to its local values before it hashes/compares**, or the
+churn returns from the local side. Pinned by `TestUpsert_PrecisionCanonicalised`.
+
+**Upsert guards (reconcile soundness).** The `ON CONFLICT (uuid) DO UPDATE`
+applies only `WHERE EXCLUDED.modified_at >= qsos.modified_at` (a stale/reordered
+push can't clobber a newer row; `>=` keeps an identical re-push idempotent) `AND
+qsos.tenant_id = EXCLUDED.tenant_id` (a push carrying another tenant's client-
+generated UUID can't hijack the row once multi-tenant — a no-op today, one line
+now vs a semantics migration later). A newer non-tombstone over a tombstone
+resurrects by recency (edit-after-delete wins, local authoritative); a stale
+missed-delete is rejected by the modified_at guard, so the tombstone holds.
+`Upsert` returns the applied-row count (pushed − stale) for sync telemetry.
+
 ### S2 — Cloud HTTP API
 
 `cmd/smcloud` + `internal/cloud/server`:

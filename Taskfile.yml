@@ -37,7 +37,11 @@ tasks:
   db:pg:up:
     desc: Start a local Postgres for smcloud codegen + integration tests ({{.PG_RUNTIME}}; user/pass/db = smcloud)
     cmds:
-      - '{{.PG_RUNTIME}} run -d --name sm-pg -e POSTGRES_USER=smcloud -e POSTGRES_PASSWORD=smcloud -e POSTGRES_DB=smcloud -p 5432:5432 postgres:16'
+      # Fully-qualified image: podman's short-name resolution needs a TTY to
+      # prompt for a registry, which a `task` run has not — so `postgres:16`
+      # fails with "short-name resolution enforced but cannot prompt". docker
+      # accepts the qualified name unchanged.
+      - '{{.PG_RUNTIME}} run -d --name sm-pg -e POSTGRES_USER=smcloud -e POSTGRES_PASSWORD=smcloud -e POSTGRES_DB=smcloud -p 5432:5432 docker.io/library/postgres:16'
       - 'until {{.PG_RUNTIME}} exec sm-pg pg_isready -U smcloud >/dev/null 2>&1; do sleep 0.5; done'
 
   db:pg:down:

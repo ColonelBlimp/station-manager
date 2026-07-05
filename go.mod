@@ -11,6 +11,7 @@ require (
 	github.com/gen2brain/malgo v0.11.25
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/golang-migrate/migrate/v4 v4.19.1
+	github.com/lib/pq v1.12.3
 	github.com/rs/zerolog v1.35.0
 	github.com/stretchr/testify v1.11.1
 	go.bug.st/serial v1.6.4
@@ -33,7 +34,6 @@ require (
 	github.com/gofrs/uuid v4.2.0+incompatible // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
-	github.com/lib/pq v1.12.3 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
