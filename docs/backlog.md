@@ -43,7 +43,6 @@ next, and in what order" is answered.
 
 **P1 — finish in-flight / validate (small; closes open arcs)**
 - Behavioural retest of shipped daemon changes on the dogfood daemon (session 192/193 batch)
-- SPA `fetch` calls have no timeout — a half-open daemon connection wedges boot + the submit latch (flaky-link ship risk; `safeFetch` already has the unused `AbortSignal.timeout()` seam)
 
 **P2 — next features (open one workstream per active focus)**
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
@@ -52,7 +51,7 @@ next, and in what order" is answered.
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
-- _Code-review lows (2026-07-05 SPA review):_ 13 verified low-severity fixes (the fetch-timeout standout promoted to P1 above) — TX_PWR sub-0.5 W rounding (durable ADIF) · state-reset gaps (tabCount / freqKnown / stale decodes / enrich zombies) · FT8 UI nits (bearing 360°, drain-abort, FD tooltip, isWorking split, canAnswer TX-guard) · edit-overlay mode dropdown
+- _Code-review lows (2026-07-05 SPA review):_ 13 verified low-severity fixes (the fetch-timeout standout was promoted to P1 and SHIPPED 2026-07-05 → archive) — TX_PWR sub-0.5 W rounding (durable ADIF) · state-reset gaps (tabCount / freqKnown / stale decodes / enrich zombies) · FT8 UI nits (bearing 360°, drain-abort, FD tooltip, isWorking split, canAnswer TX-guard) · edit-overlay mode dropdown
 - _Bridge/TX hardening (2026-07-05 `internal/bridge` review):_ 3 low fail-safe items — auto-off retry can clobber a fresh key's timer (per-key generation counter) · garbled first IDENTITY permanently write-blocks the instance (let a later exact match confirm) · `bridge.New` trusts Serial/Cat non-nil (nil-check in Initialize)
 
 **P3 — deferred / large / needs a trigger**
@@ -797,22 +796,12 @@ next, and in what order" is answered.
   as today) and which FT8 focus contexts should capture the keys without clashing with FT8's
   own Shift+Ctrl shortcuts. Small, but needs a keymap-collision check against the FT8 panel.
 
-- **SPA `fetch` calls have no timeout (P1 — flaky-link ship risk).** Promoted out
-  of the 2026-07-05 SPA-review low batch (below) on the 7Q8AC ship weighting: the
-  reviewer rated it low on generic grounds, but a half-open link is exactly the
-  Malawi failure mode. `AbortSignal.timeout()` support already exists in `safeFetch`
-  but no call passes a timeout, so a daemon that accepts a connection but never
-  responds leaves boot stuck on a blank page and `submitQso`'s in-flight latch
-  wedged for minutes — with no signal to the operator. Fix: pass a sane per-call
-  timeout into the existing `AbortSignal.timeout()` seam (a short one for reads /
-  boot, a longer one for the log-contact POST); on timeout, surface a retriable
-  error rather than hanging. Small change, high robustness payoff on a flaky link.
-
 - **SPA code-review low-severity batch (2026-07-05 review).** The verified LOW
   findings from the same review whose highs/mediums (findings 1–7) shipped
   2026-07-05. Each was confirmed by the slice reviewers; none is ship-gate. The
-  one standout (SPA fetch timeouts) was promoted to P1 — its own entry above. The
-  rest are grouped as the reviewer grouped them; each line leads with its surface
+  one standout (SPA fetch timeouts) was promoted to P1 and SHIPPED 2026-07-05 (see
+  backlog-archive). The rest are grouped as the reviewer grouped them; each line
+  leads with its surface
   so it's greppable. Batch them in a dedicated cleanup pass (mostly one-liners);
   pull an individual item forward if a related file is already open.
 

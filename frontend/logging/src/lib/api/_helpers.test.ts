@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isPlainObject, isShape, readJsonBody, safeFetch } from './_helpers';
+import { DEFAULT_TIMEOUT_MS, isPlainObject, isShape, readJsonBody, safeFetch } from './_helpers';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -117,7 +117,10 @@ describe('safeFetch', () => {
         expect(out).toEqual({ ok: false, kind: 'aborted', message: 'aborted by caller' });
     });
 
-    it('returns kind=aborted on TimeoutError (AbortSignal.timeout)', async () => {
+    it('returns kind=network on a fired timeout (TimeoutError), not aborted', async () => {
+        // A timeout is a FAILURE, not an operator cancel — it must surface as
+        // retriable 'network' so a caller that silently drops 'aborted' can't
+        // swallow a hung request (the blank-boot / stuck-latch bug).
         const timeoutErr = new Error('timed out');
         timeoutErr.name = 'TimeoutError';
         vi.stubGlobal(
@@ -126,7 +129,11 @@ describe('safeFetch', () => {
         );
 
         const out = await safeFetch('/anywhere');
-        expect(out).toEqual({ ok: false, kind: 'aborted', message: 'timed out' });
+        expect(out).toEqual({
+            ok: false,
+            kind: 'network',
+            message: `request timed out after ${DEFAULT_TIMEOUT_MS} ms`,
+        });
     });
 
     it('returns kind=aborted when the signal was aborted even if the error name is generic', async () => {
@@ -144,13 +151,66 @@ describe('safeFetch', () => {
         expect(out).toEqual({ ok: false, kind: 'aborted', message: 'generic' });
     });
 
-    it('passes init through to fetch', async () => {
-        const fetchSpy = vi.fn(() => Promise.resolve(new Response('', { status: 200 })));
+    it('passes init through to fetch, with a timeout signal injected', async () => {
+        const fetchSpy = vi.fn(
+            (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+                Promise.resolve(new Response('', { status: 200 }))
+        );
         vi.stubGlobal('fetch', fetchSpy);
 
-        const init = { method: 'POST', body: 'payload' };
-        await safeFetch('/anywhere', init);
+        await safeFetch('/anywhere', { method: 'POST', body: 'payload' });
 
-        expect(fetchSpy).toHaveBeenCalledWith('/anywhere', init);
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        const [url, init] = fetchSpy.mock.calls[0];
+        expect(url).toBe('/anywhere');
+        expect(init).toMatchObject({ method: 'POST', body: 'payload' });
+        // The default timeout is applied by injecting an AbortSignal.
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('injects a timeout AbortSignal when the caller passes none', async () => {
+        const fetchSpy = vi.fn(
+            (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+                Promise.resolve(new Response('', { status: 200 }))
+        );
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await safeFetch('/anywhere');
+
+        const [, init] = fetchSpy.mock.calls[0];
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('composes the caller signal with the timeout so operator-cancel still fires', async () => {
+        const fetchSpy = vi.fn(
+            (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+                Promise.resolve(new Response('', { status: 200 }))
+        );
+        vi.stubGlobal('fetch', fetchSpy);
+
+        const ctrl = new AbortController();
+        await safeFetch('/anywhere', { signal: ctrl.signal });
+
+        const [, init] = fetchSpy.mock.calls[0];
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        // AbortSignal.any returns a NEW combined signal (not the caller's own),
+        // but the caller's abort still propagates through it.
+        expect(init?.signal).not.toBe(ctrl.signal);
+        ctrl.abort();
+        expect(init?.signal?.aborted).toBe(true);
+    });
+
+    it('opts out of the timeout when timeoutMs <= 0 (no signal injected)', async () => {
+        const fetchSpy = vi.fn(
+            (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+                Promise.resolve(new Response('', { status: 200 }))
+        );
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await safeFetch('/anywhere', undefined, { timeoutMs: 0 });
+
+        // No caller signal + timeout opted out → init passed through untouched.
+        const [, init] = fetchSpy.mock.calls[0];
+        expect(init).toBeUndefined();
     });
 });

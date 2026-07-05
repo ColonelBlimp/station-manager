@@ -29,7 +29,7 @@
                        DNS, CORS preflight failure). Draft preserved.
 */
 
-import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import { isPlainObject, readJsonBody, safeFetch, WRITE_TIMEOUT_MS } from './_helpers';
 
 export type SubmitOutcome =
     | { kind: 'stored'; uuid: string }
@@ -63,12 +63,19 @@ export async function submitQso(
 ): Promise<SubmitOutcome> {
     const params = new URLSearchParams({ logbook: String(logbookID) });
     if (options.force) params.set('force', '1');
-    const fetched = await safeFetch(`/v1/qso?${params.toString()}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-adif' },
-        body: adif,
-        signal: options.signal,
-    });
+    const fetched = await safeFetch(
+        `/v1/qso?${params.toString()}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-adif' },
+            body: adif,
+            signal: options.signal,
+        },
+        // Logging a QSO is a write: a timed-out POST is ambiguous (the daemon
+        // may have committed it), so use the longer write timeout to give it
+        // room to complete before the latch releases, rather than the default.
+        { timeoutMs: WRITE_TIMEOUT_MS }
+    );
     if (!fetched.ok) {
         return { kind: fetched.kind, message: fetched.message };
     }

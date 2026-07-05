@@ -196,7 +196,12 @@ describe('fetchConfig', () => {
         const ctrl = new AbortController();
         await fetchConfig(ctrl.signal);
         const [, init] = fetchSpy.mock.calls[0];
-        expect(init?.signal).toBe(ctrl.signal);
+        // safeFetch composes the caller signal with a timeout, so fetch receives
+        // a new combined signal — the operator's cancel still propagates through it.
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        expect(init?.signal).not.toBe(ctrl.signal);
+        ctrl.abort();
+        expect(init?.signal?.aborted).toBe(true);
     });
 });
 
@@ -312,6 +317,11 @@ describe('putConfig', () => {
         const ctrl = new AbortController();
         await putConfig({}, ctrl.signal);
         const [, init] = fetchSpy.mock.calls[0];
-        expect(init?.signal).toBe(ctrl.signal);
+        // safeFetch composes the caller signal with a timeout, so fetch receives
+        // a new combined signal — the operator's cancel still propagates through it.
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        expect(init?.signal).not.toBe(ctrl.signal);
+        ctrl.abort();
+        expect(init?.signal?.aborted).toBe(true);
     });
 });

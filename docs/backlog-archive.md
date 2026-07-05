@@ -17,6 +17,22 @@ need the history of a specific item ("when/how did X ship?").
 
 ## Bugs (detail)
 
+- ~~**SPA `fetch` calls have no timeout (P1 — flaky-link ship risk).**~~ **SHIPPED
+  2026-07-05.** No `safeFetch` call passed a timeout, so a wedged / half-open daemon
+  (accepts the connection, never responds) hung boot on a blank page and `submitQso`'s
+  in-flight latch for minutes, with no operator signal. Fix: `safeFetch` now applies a
+  default `AbortSignal.timeout()` (`DEFAULT_TIMEOUT_MS` 15 s) to every call, composing
+  it with any caller signal via `AbortSignal.any` so operator-cancel still works;
+  `WRITE_TIMEOUT_MS` (30 s) on the QSO-log POST (a timed-out write is ambiguous, so
+  give it room before the latch releases). A fired timeout now surfaces as retriable
+  `'network'` (was misfiled as `'aborted'`, which callers drop silently — it would have
+  swallowed the hang). `internal/cloud` unaffected; SPA-only. Tests: `_helpers.test.ts`
+  (timeout→network, default-signal injection, caller-signal composition, opt-out) +
+  five caller tests updated from signal-identity to signal-propagation assertions. Full
+  suite 876 green, type-check/lint/prettier clean. NB the earlier commit `e0b860f0`
+  titled "add fetch timeouts" only committed the backlog triage note — the actual
+  wiring landed here.
+
 - ~~**FT8 caller-side sequencing (Call CQ) — on-air validation.**~~ **PASSED 2026-07-04.**
   ADR 0033 Call-CQ auto-worked pile-up validated live on 17 m as 7Q5MLV: called CQ →
   large real pile-up (Middle East + Asia) → worked answerers through the full ladder
