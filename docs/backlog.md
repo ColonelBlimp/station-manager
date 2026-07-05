@@ -49,6 +49,7 @@ next, and in what order" is answered.
 - _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW)
 - _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
+- _Data / SM-Cloud prep (do before S3):_ **STAGED migration 0004** — trigger/default `localtime`→UTC rebuild + normalise pre-fix timestamp debris rows (the fix-forward half shipped 2026-07-05; see detail) · `internal/database` review lows (cold-insert retry, bootstrap stale-table detection, + 5 nits)
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
 - _Code-review lows (2026-07-05 SPA review):_ 13 verified low-severity fixes (the fetch-timeout standout was promoted to P1 and SHIPPED 2026-07-05 → archive) — TX_PWR sub-0.5 W rounding (durable ADIF) · state-reset gaps (tabCount / freqKnown / stale decodes / enrich zombies) · FT8 UI nits (bearing 360°, drain-abort, FD tooltip, isWorking split, canAnswer TX-guard) · edit-overlay mode dropdown
@@ -885,6 +886,57 @@ next, and in what order" is answered.
     hub keeps the other tabs' `rig-clients` count stale until its handler goroutine
     hits the 10 s SSE write deadline and its deferred unsub broadcasts — bounded and
     advisory.
+
+- **STAGED — migration 0004: timestamp `localtime`→UTC + normalise pre-fix debris rows.**
+  From the 2026-07-05 `internal/database` review (finding 1, MEDIUM-HIGH). The **fix-forward
+  half shipped 2026-07-05** (`_time_format=sqlite` on `getDsn`/`bootstrapDSN` + `time.Now().UTC()`
+  on the 10 `null.Time` DATETIME writers → every *Go-written* stamp is now SQLite-canonical UTC;
+  `TestModifiedAt_StoredCanonicalUTC` locks it). This migration is the **staged half** — deliberately
+  separate so it can be eyeballed against the live dogfood DB before it runs. Do **before SM Cloud
+  S3** (reconcile diffs `qso.modified_at` across hosts; the Postgres store canonicalises to µs UTC).
+  Empirically verified against modernc v1.48.1 (scratch probes):
+  - **Trigger/default change:** `datetime('now','localtime')` → `datetime('now')` (UTC) on
+    `qso.created_at` + `qso_history.at` defaults and the `trg_qso_set_modified_at` /
+    `trg_qso_upload_set_updated_at` trigger bodies. SQLite can't alter a default/trigger in place →
+    **table rebuild**, same pattern migrations 0002/0003 already use (FK re-point, trigger + index
+    recreate, `qso_history` append-only guards).
+  - **Normalise existing rows (per-format — single-TZ CAT assumption):**
+    - *Naive-local strings* (`YYYY-MM-DD HH:MM:SS`, no offset/`T`/`Z` — trigger/default writes):
+      written as CAT local, scanned back as UTC → **2 h off**. Shift to UTC (`datetime(col,'-2 hours')`
+      for the fixed +02:00 CAT), format-gated so only these rows are touched.
+    - *Go monotonic-debris strings* (`… +0200 CAT m=+…` — pre-fix `time.Time.String()`): offset-aware
+      so **correct-instant** but `datetime()`-unparseable; strip to canonical UTC (offset embedded, so
+      no shift — just reformat). Pure-SQL string surgery is fiddly; a Go-side migration step may be
+      cleaner. Bounded set (only pre-fix updates).
+    - *Already-canonical* (`…+00:00`, post-fix): leave.
+  - **Decision to confirm before authoring:** the −2 h shift assumes ALL historical naive-local rows
+    were written in CAT — correct for the single-operator dogfood DB; **confirm that's the only DB with
+    pre-fix data** (7Q8AC hasn't onboarded). If any row was written elsewhere the blanket shift is wrong.
+  - **Test:** seed a table with one row of each format, run the migration, assert all rows end
+    canonical UTC + correct instant (extend `review_findings_test.go` / a migration test).
+  - NB after the fix-forward but before this migration, `created_at` + trigger-written `modified_at`
+    stay naive-local (2 h off) while Go-written `modified_at` is clean UTC — a known, harmless-today
+    interim (ordering works on the prefix; nothing external reads these yet).
+
+- **`internal/database` review low-severity batch (2026-07-05).** Verified LOW findings from the
+  same review; none ship-gate, none touch the reconcile invariant (that's finding 1, above).
+  - **Cold-insert race → retry instead of erroring** (`api_context.go:1311-1368`, `writeContactedStation`):
+    two concurrent enrichment writes for the same callsign can both miss the fetch and both insert; the
+    loser hits the UNIQUE index and the error propagates. Enrichment is fail-soft so logging is never
+    blocked, but `IsUniqueConstraintError` exists exactly for this — catch it and retry as the
+    update-merge branch (turns a spurious warning into correct behaviour). Read-merge-write is also
+    last-write-wins under concurrency — acceptable for a cache, noted.
+  - **Bootstrap split-detection can leave a stale table** (`bootstrap.go:56-61`): the "already split?"
+    check keys on the `country` table alone, but the drops run `country` then `contacted_station`; a
+    crash between them leaves a stale `contacted_station` in the log DB forever (data safe — already
+    copied to reference.db). Detect on *either* table.
+  - **Nits:** `FetchAllLogbooksWithContext` fails the whole list on one bad adapter row while every QSO
+    list path warns-and-skips — pick one policy · `MarkSessionEmailedWithContext` builds an unbounded
+    `IN (?)` list (fine at session scale; guard-comment before anything import-sized feeds it) ·
+    `getDsn`/`bootstrapDSN` interpolate the file path raw into `file:%s?…` — a path with `?`/`#` breaks
+    the DSN, one `url.PathEscape` away · `DeleteLogbookByIDWithContext` check-then-act window (concurrent
+    QSO submit between Exists and soft-delete orphans a QSO under a deleted logbook — negligible single-op)
+    · `Ping` sleeps 25 ms once more after its final failed attempt (cosmetic).
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 

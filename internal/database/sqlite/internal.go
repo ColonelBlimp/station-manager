@@ -50,6 +50,17 @@ func (s *Service) getDsn() (string, error) {
 	opts := map[string]string{}
 	maps.Copy(opts, s.DatabaseConfig.Options)
 
+	// _time_format=sqlite forces modernc to serialise time.Time in SQLite's
+	// canonical layout (2006-01-02 15:04:05.999999999-07:00) instead of its
+	// default Go time.Time.String() — which bakes in the monotonic-clock suffix
+	// (`m=+…`, meaningless across processes) and a local-zone name, a string
+	// SQLite's own datetime() can't even parse. Set AFTER the operator merge and
+	// unconditionally (NOT operator-overridable): SM Cloud reconcile compares
+	// qso.modified_at across hosts, so the on-disk timestamp format is a
+	// correctness invariant, not a preference. The companion trigger/default
+	// UTC change + debris-row normalisation ship in a staged migration.
+	opts["_time_format"] = "sqlite"
+
 	// Driver-default PRAGMAs, applied per-connection via modernc's
 	// `_pragma=name(value)` query-param convention. Each `_pragma`
 	// runs on every new connection from the pool — load-bearing

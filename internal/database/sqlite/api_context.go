@@ -506,7 +506,7 @@ func (s *Service) UpdateQsoWithContext(ctx context.Context, qso types.Qso) error
 		return errors.New(op).WithErr(err)
 	}
 
-	model.ModifiedAt = null.TimeFrom(time.Now())
+	model.ModifiedAt = null.TimeFrom(time.Now().UTC())
 
 	return updateActiveQso(ctx, h, model)
 }
@@ -939,7 +939,7 @@ func (s *Service) UpdateContactedStationWithContext(ctx context.Context, station
 	if model.ID < 1 {
 		return errors.New(op).WithMsg(errMsgInvalidId)
 	}
-	model.ModifiedAt = null.TimeFrom(time.Now())
+	model.ModifiedAt = null.TimeFrom(time.Now().UTC())
 
 	// Active-row update (review 2026-06-19 M1, same shape as updateActiveQso /
 	// UpdateLogbook): the `id = ? AND deleted_at IS NULL` predicate is in the
@@ -1132,7 +1132,7 @@ func (s *Service) UpdateCountryWithContext(ctx context.Context, country types.Co
 	if model.ID < 1 {
 		return errors.New(op).WithMsg(errMsgInvalidId)
 	}
-	model.ModifiedAt = null.TimeFrom(time.Now())
+	model.ModifiedAt = null.TimeFrom(time.Now().UTC())
 
 	// Active-row update (review 2026-06-19 M1) — see UpdateContactedStation:
 	// soft-deleted rows are not written through, and a missing id is ErrNotFound.
@@ -1240,7 +1240,7 @@ func (s *Service) UpsertCountryWithContext(ctx context.Context, country types.Co
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	country.LastRefreshedAt = time.Now()
+	country.LastRefreshedAt = time.Now().UTC()
 
 	// Preserve the existing PK on conflict so sqlboiler's Upsert generates
 	// a stable update path; new rows let AUTOINCREMENT assign.
@@ -1254,7 +1254,7 @@ func (s *Service) UpsertCountryWithContext(ctx context.Context, country types.Co
 	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
-	model.ModifiedAt = null.TimeFrom(time.Now())
+	model.ModifiedAt = null.TimeFrom(time.Now().UTC())
 
 	if err = model.Upsert(
 		ctx, h,
@@ -1338,13 +1338,13 @@ func (s *Service) writeContactedStation(ctx context.Context, station types.Conta
 			row = mergeContactedStation(existing, station)
 		}
 		row.CSID = existing.CSID
-		row.LastRefreshedAt = time.Now()
+		row.LastRefreshedAt = time.Now().UTC()
 
 		model, mErr := adapters.ContactedStationTypeToModel(row)
 		if mErr != nil {
 			return errors.New(op).WithErr(mErr)
 		}
-		model.ModifiedAt = null.TimeFrom(time.Now())
+		model.ModifiedAt = null.TimeFrom(time.Now().UTC())
 		if _, uErr := model.Update(ctx, h, boil.Infer()); uErr != nil {
 			return errors.New(op).WithErr(uErr).WithMsg("updating contacted_station failed")
 		}
@@ -1352,7 +1352,7 @@ func (s *Service) writeContactedStation(ctx context.Context, station types.Conta
 
 	case stderr.Is(ferr, errors.ErrNotFound):
 		// Cold insert — no existing row to merge or replace.
-		station.LastRefreshedAt = time.Now()
+		station.LastRefreshedAt = time.Now().UTC()
 		model, mErr := adapters.ContactedStationTypeToModel(station)
 		if mErr != nil {
 			return errors.New(op).WithErr(mErr)
@@ -1702,7 +1702,7 @@ func (s *Service) UpdateLogbookWithContext(ctx context.Context, logbook types.Lo
 		models.LogbookColumns.Name:        logbook.Name,
 		models.LogbookColumns.Callsign:    logbook.Callsign,
 		models.LogbookColumns.Description: null.StringFrom(logbook.Description),
-		models.LogbookColumns.ModifiedAt:  null.TimeFrom(time.Now()),
+		models.LogbookColumns.ModifiedAt:  null.TimeFrom(time.Now().UTC()),
 	}
 	n, err := models.Logbooks(
 		models.LogbookWhere.ID.EQ(logbook.ID),
@@ -2564,7 +2564,7 @@ func (s *Service) UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) er
 		return errors.New(op).WithErr(err)
 	}
 
-	model.ModifiedAt = null.TimeFrom(time.Now())
+	model.ModifiedAt = null.TimeFrom(time.Now().UTC())
 
 	return updateActiveQso(ctx, tx, model)
 }

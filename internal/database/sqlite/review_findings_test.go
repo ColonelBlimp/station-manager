@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	stderr "errors"
+	"strings"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
@@ -166,6 +168,67 @@ func TestUpdateCountry_RejectsSoftDeletedAndMissing(t *testing.T) {
 	}
 	if err := svc.UpdateCountryWithContext(ctx, types.Country{ID: id, Prefix: "K", Name: "zombie"}); !stderr.Is(err, errors.ErrNotFound) {
 		t.Errorf("update of soft-deleted row: got %v, want ErrNotFound", err)
+	}
+}
+
+// --- Timestamp storage: Go-written DATETIME values are SQLite-canonical UTC ---
+// (review 2026-07-05 finding 1, fix-forward half). modernc's DEFAULT time.Time
+// serialisation baked in the monotonic-clock suffix (`m=+…`, meaningless across
+// processes) and a local-zone name — a string SQLite's own datetime() returns
+// NULL on, and the wrong basis for the SM Cloud reconcile on qso.modified_at.
+// The `_time_format=sqlite` DSN option + `time.Now().UTC()` writers make every
+// Go-written stamp canonical UTC. (The trigger/default `localtime`→UTC change +
+// the normalisation of pre-fix debris rows ship in a STAGED migration — this
+// test covers only the Go-writer fix-forward.)
+func TestModifiedAt_StoredCanonicalUTC(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+
+	lbID, err := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	if err != nil {
+		t.Fatalf("insert logbook: %v", err)
+	}
+	id, err := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	if err != nil {
+		t.Fatalf("insert qso: %v", err)
+	}
+	qso := validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845")
+	qso.ID = id
+	// An operator edit is the Go writer path that sets modified_at = time.Now().UTC().
+	qso.QsoDetails.RstRcvd = "599"
+	if err := svc.UpdateQsoWithContext(ctx, qso); err != nil {
+		t.Fatalf("update qso: %v", err)
+	}
+
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer cancel()
+	// quote() returns the RAW stored bytes — the on-disk format the SM Cloud
+	// reconcile reads. (Scanning `modified_at` into a Go string would show
+	// modernc's RFC3339 re-render of the parsed time, not what's on disk.)
+	var stored string
+	var parsed sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		`SELECT quote(modified_at), datetime(modified_at) FROM qso WHERE id = ?`, id,
+	).Scan(&stored, &parsed); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("read modified_at: %v", err)
+	}
+	_ = tx.Rollback()
+
+	// No monotonic-clock debris (the old time.Time.String() shape).
+	if strings.Contains(stored, "m=+") || strings.Contains(stored, " m=") {
+		t.Errorf("modified_at carries monotonic-clock debris: %s", stored)
+	}
+	// SQLite can parse its own column — datetime() returned NULL on the old format.
+	if !parsed.Valid || parsed.String == "" {
+		t.Errorf("datetime(modified_at) is NULL — value not SQLite-canonical: stored=%s", stored)
+	}
+	// Serialised as UTC (+00:00), not the writer's local zone.
+	if !strings.Contains(stored, "+00:00") {
+		t.Errorf("modified_at not stored as UTC (+00:00): %s", stored)
 	}
 }
 

@@ -154,9 +154,13 @@ func BootstrapReferenceSplit(logPath, refPath, backupDir string, log *logging.Se
 // the same load-bearing PRAGMAs the Service uses (busy_timeout, WAL,
 // foreign_keys, synchronous). Kept separate from Service.getDsn because the
 // bootstrap runs before any Service is open and takes a bare path.
+//
+// _time_format=sqlite matches getDsn — canonical SQLite timestamp serialisation
+// (see the note there); the bootstrap copies rows between DBs, so it must write
+// the same format the runtime does.
 func bootstrapDSN(path string) string {
 	return fmt.Sprintf(
-		"file:%s?_pragma=busy_timeout(%d)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=synchronous(normal)",
+		"file:%s?_pragma=busy_timeout(%d)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(on)&_pragma=synchronous(normal)&_time_format=sqlite",
 		path, busyTimeoutMS,
 	)
 }
