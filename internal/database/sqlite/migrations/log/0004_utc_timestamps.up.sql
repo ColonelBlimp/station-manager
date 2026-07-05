@@ -20,13 +20,20 @@
 -- Normalisation is single-timezone (CAT, UTC+2, no DST) — verified safe because the
 -- dogfood DB (7Q5MLV) is the ONLY database with pre-fix rows; 7Q8AC and any later
 -- install start on the fix-forward build (UTC from row one), so no blanket-shift DB
--- ever carries mixed-offset history. The rule per value:
---   * already canonical UTC (`…+00:00`, from sqlboiler / the Go writers) → leave;
---   * anything else (naive-local from a DEFAULT/trigger, OR pre-fix Go
---     `time.Time.String()` debris `… +0200 CAT m=+…`) → its first 19 chars are the
---     LOCAL wall time, so `datetime(substr(v,1,19),'-2 hours')` yields UTC. This
---     drops sub-second precision on the shifted rows — acceptable for historical
---     rows (dedupe is minute-precision) and correct for reconcile (instant match).
+-- ever carries mixed-offset history. THREE value classes — the first two are
+-- already-UTC and must NOT be shifted, only the third moves:
+--   * `…+00:00` (post-fix sqlboiler + Go writers, canonical) → leave verbatim;
+--   * `… +0000 UTC` (PRE-fix sqlboiler `created_at`/`deleted_at` — `boil`'s timestamp
+--     location is UTC, but modernc's pre-`_time_format` default rendered it via Go's
+--     time.Time.String()). Its first 19 chars are ALREADY the UTC wall time, so
+--     `datetime(substr(v,1,19))` reformats it canonically WITHOUT a shift. (Missing
+--     this arm was a bug caught in staged review — the −2h arm would have made every
+--     pre-fix created_at 2 h wrong.)
+--   * anything else — naive-local from a DEFAULT/trigger, OR pre-fix Go modified_at
+--     debris `… +0200 CAT m=+…` — has a LOCAL wall-time prefix, so
+--     `datetime(substr(v,1,19),'-2 hours')` yields UTC.
+-- The reformat/shift arms drop sub-second precision — acceptable for historical rows
+-- (dedupe is minute-precision) and correct for reconcile (instant match).
 
 DROP TRIGGER IF EXISTS trg_qso_history_no_delete;
 DROP TRIGGER IF EXISTS trg_qso_history_no_update;
@@ -109,9 +116,15 @@ INSERT INTO qso (
 )
 SELECT
     id,
-    CASE WHEN created_at  IS NULL OR created_at  LIKE '%+00:00' THEN created_at  ELSE datetime(substr(created_at,  1, 19), '-2 hours') END,
-    CASE WHEN modified_at IS NULL OR modified_at LIKE '%+00:00' THEN modified_at ELSE datetime(substr(modified_at, 1, 19), '-2 hours') END,
-    CASE WHEN deleted_at  IS NULL OR deleted_at  LIKE '%+00:00' THEN deleted_at  ELSE datetime(substr(deleted_at,  1, 19), '-2 hours') END,
+    CASE WHEN created_at  IS NULL OR created_at  LIKE '%+00:00'  THEN created_at
+         WHEN created_at  LIKE '% +0000 UTC%'                    THEN datetime(substr(created_at,  1, 19))
+         ELSE datetime(substr(created_at,  1, 19), '-2 hours') END,
+    CASE WHEN modified_at IS NULL OR modified_at LIKE '%+00:00'  THEN modified_at
+         WHEN modified_at LIKE '% +0000 UTC%'                    THEN datetime(substr(modified_at, 1, 19))
+         ELSE datetime(substr(modified_at, 1, 19), '-2 hours') END,
+    CASE WHEN deleted_at  IS NULL OR deleted_at  LIKE '%+00:00'  THEN deleted_at
+         WHEN deleted_at  LIKE '% +0000 UTC%'                    THEN datetime(substr(deleted_at,  1, 19))
+         ELSE datetime(substr(deleted_at,  1, 19), '-2 hours') END,
     uuid, call, band, mode, freq,
     qso_date, time_on, time_off, rst_sent, rst_rcvd, country,
     additional_data, dedupe_key, logbook_id
@@ -145,8 +158,12 @@ INSERT INTO qso_upload (
 )
 SELECT
     id,
-    CASE WHEN created_at  IS NULL OR created_at  LIKE '%+00:00' THEN created_at  ELSE datetime(substr(created_at,  1, 19), '-2 hours') END,
-    CASE WHEN modified_at IS NULL OR modified_at LIKE '%+00:00' THEN modified_at ELSE datetime(substr(modified_at, 1, 19), '-2 hours') END,
+    CASE WHEN created_at  IS NULL OR created_at  LIKE '%+00:00'  THEN created_at
+         WHEN created_at  LIKE '% +0000 UTC%'                    THEN datetime(substr(created_at,  1, 19))
+         ELSE datetime(substr(created_at,  1, 19), '-2 hours') END,
+    CASE WHEN modified_at IS NULL OR modified_at LIKE '%+00:00'  THEN modified_at
+         WHEN modified_at LIKE '% +0000 UTC%'                    THEN datetime(substr(modified_at, 1, 19))
+         ELSE datetime(substr(modified_at, 1, 19), '-2 hours') END,
     qso_id, forwarder_name, forwarder_type,
     action, status, attempts, last_attempt_at, next_attempt_at, last_error, upstream_id
 FROM qso_upload_old;
@@ -172,7 +189,9 @@ CREATE TABLE qso_history
 INSERT INTO qso_history (id, qso_uuid, op, at, source, before_image)
 SELECT
     id, qso_uuid, op,
-    CASE WHEN at LIKE '%+00:00' THEN at ELSE datetime(substr(at, 1, 19), '-2 hours') END,
+    CASE WHEN at LIKE '%+00:00'      THEN at
+         WHEN at LIKE '% +0000 UTC%' THEN datetime(substr(at, 1, 19))
+         ELSE datetime(substr(at, 1, 19), '-2 hours') END,
     source, before_image
 FROM qso_history_old;
 

@@ -890,19 +890,28 @@ next, and in what order" is answered.
     advisory.
 
 - **migration 0004: timestamp `localtime`→UTC + normalise pre-fix debris rows — AUTHORED
-  2026-07-05, awaiting operator review + deploy.** Files:
+  2026-07-05, ONE STAGED-REVIEW BUG CAUGHT + FIXED, awaiting operator review + deploy.** Files:
   `migrations/log/0004_utc_timestamps.{up,down}.sql`; test `TestMigrate0004_NormalisesTimestampsToUTC`
-  (seeds all three formats → asserts canonical UTC). Full `internal/database` suite green under
+  (seeds all FOUR formats → asserts canonical UTC). Full `internal/database` suite green under
   `-race` (incl. the down path via `TestMigrate_DownRestoresRSTLengthConstraint`, step count bumped
-  −2→−3). **Empirical scoping correction to the original spec:** the 2h-off taint is NARROWER than
-  first assumed — `boil` defaults to **UTC**, so sqlboiler (`created_at`/`deleted_at`) and the Go
-  writers (`modified_at`) already store UTC; only the SQL **DEFAULTs** (`qso_upload.created_at`,
-  `qso_history.at`; `qso.created_at`'s default is dead) and the two **triggers** stamped local. The
-  migration rebuilds the three tables with `datetime('now')` (UTC) defaults + UTC triggers, and
-  normalises every existing value during the copy (`… +00:00` left; else `datetime(substr(v,1,19),
-  '-2 hours')`). **Still pending YOUR go-ahead to deploy** — eyeball the SQL against the live DB
-  first; it auto-runs on the next `smd` start once committed. Original staged spec follows for
-  reference. The **fix-forward half shipped 2026-07-05** (`_time_format=sqlite` on `getDsn`/`bootstrapDSN` + `time.Now().UTC()`
+  −2→−3). **HIGH bug caught in staged review (2026-07-05) BEFORE deploy — the reason the staged
+  gate exists:** the normalisation CASE had only two arms (`… +00:00` keep / else −2h), but
+  **PRE-fix** sqlboiler stored UTC `created_at`/`deleted_at` via Go's `time.Time.String()` as
+  `'… +0000 UTC'` (UTC-correct, but not `+00:00`), so the −2h arm would have shifted every pre-fix
+  `created_at` (≈ every QSO since April) 2 h WRONG. Fixed with a **third CASE arm**
+  `WHEN v LIKE '% +0000 UTC%' THEN datetime(substr(v,1,19))` (reformat, no shift — first 19 chars
+  are already UTC wall time), applied to all six normalised columns + a `seed(4)` regression case.
+  The down path stays coherent (post-up rows are naive-UTC; its `+2 hours` arm round-trips).
+  **Empirical scoping:** `boil` defaults to **UTC**, so sqlboiler (`created_at`/`deleted_at`) and
+  the Go writers (`modified_at`) store UTC POST-fix; only the SQL **DEFAULTs**
+  (`qso_upload.created_at`, `qso_history.at`) + the two **triggers** stamped local, and PRE-fix
+  sqlboiler UTC wore the `+0000 UTC` skin (the caught bug). The migration rebuilds the three tables
+  with `datetime('now')` (UTC) defaults + UTC triggers, normalising every value during the copy.
+  **Still pending YOUR go-ahead to deploy** — eyeball the SQL against the live DB first; it
+  auto-runs on the next `smd` start once committed. **Deploy safety (reviewer advice):** golang-migrate
+  gives no rollback net, so **back up the DB first** (a `VACUUM INTO` like the bootstrap split does)
+  and **spot-check a known QSO's `created_at` against its `qso_date`/`time_on` after** it runs.
+  Original staged spec follows for reference. The **fix-forward half shipped 2026-07-05** (`_time_format=sqlite` on `getDsn`/`bootstrapDSN` + `time.Now().UTC()`
   on the 10 `null.Time` DATETIME writers → every *Go-written* stamp is now SQLite-canonical UTC;
   `TestModifiedAt_StoredCanonicalUTC` locks it). This migration is the **staged half** — deliberately
   separate so it can be eyeballed against the live dogfood DB before it runs. Do **before SM Cloud

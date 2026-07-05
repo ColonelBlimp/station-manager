@@ -37,13 +37,16 @@ func TestMigrate0004_NormalisesTimestampsToUTC(t *testing.T) {
 		}
 	}
 	seed(1, "2026-07-05 14:00:00")                            // naive-local (DEFAULT/trigger)
-	seed(2, "2026-07-05 14:00:00.123456789 +0200 CAT m=+0.5") // pre-fix Go debris
+	seed(2, "2026-07-05 14:00:00.123456789 +0200 CAT m=+0.5") // pre-fix Go modified_at debris (LOCAL)
 	seed(3, "2026-07-05 12:00:00.123456+00:00")               // already canonical UTC
+	seed(4, "2026-07-05 12:00:00.123456789 +0000 UTC")        // PRE-fix sqlboiler UTC — must NOT shift
 
 	applyMigrationSteps(t, svc, 1) // apply 0004
 
-	// All three formats resolve to the same UTC instant, debris-free and parseable.
-	for _, id := range []int{1, 2, 3} {
+	// All four formats resolve to the SAME UTC instant (12:00:00), debris-free and
+	// parseable — including the `+0000 UTC` row, which is already UTC and must be
+	// reformatted, not shifted (the staged-review bug).
+	for _, id := range []int{1, 2, 3, 4} {
 		for _, col := range []string{"created_at", "modified_at", "deleted_at"} {
 			var raw string
 			var dt sql.NullString
