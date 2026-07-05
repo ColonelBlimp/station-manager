@@ -1205,7 +1205,7 @@ func (s *Service) FetchCountryByPrefixWithContext(ctx context.Context, prefix st
 
 // UpsertCountryWithContext writes the hamnut result for a prefix —
 // inserts on conflict-free, full-row replaces on conflict. Sets
-// last_refreshed_at to time.Now() before write so the orchestrator's
+// last_refreshed_at to time.Now().UTC() before write so the orchestrator's
 // staleness check sees a fresh row immediately after.
 //
 // Per ADR 0017 #2 + #4, hamnut is the only writer of country data;
@@ -1279,7 +1279,7 @@ func (s *Service) UpsertCountryWithContext(ctx context.Context, country types.Co
 // in SQL because most fields live in additional_data JSON, where SQL-
 // level merging is awkward.
 //
-// last_refreshed_at is set to time.Now() on every write — both insert
+// last_refreshed_at is set to time.Now().UTC() on every write — both insert
 // and update — so the orchestrator's staleness check works uniformly.
 //
 // Per ADR 0017 #11, when both old and new have a value for the same
