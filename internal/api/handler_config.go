@@ -370,6 +370,126 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
+// errPutValidation is a sentinel the PUT /v1/config commit callback returns when
+// the fully-overlaid config fails Validate under the lock. The blocking Finding is
+// captured separately (it carries richer fields than an error string) so the
+// handler maps it to a 400.
+var errPutValidation = stderr.New("api: config validation failed")
+
+// firstBlockingFinding returns the first non-warning (fatal) finding, or nil when
+// the config produced only advisories. A fatal finding is a 400 at PUT.
+func firstBlockingFinding(findings []config.Finding) *config.Finding {
+	for i := range findings {
+		if !findings[i].Warning {
+			return &findings[i]
+		}
+	}
+	return nil
+}
+
+// overlayConfig applies the request's operator-writable fields onto base,
+// presence-aware: a field is touched ONLY when the body carried it, so a save
+// scoped to one surface (My Station, or Forwarding) can't zero another. base
+// doubles as the merge source for the blank-keep credential merges
+// (forwarders/lookup/smtp), so those keep whatever secret is CURRENTLY on base.
+//
+// Run INSIDE config.Update's callback against the fresh, lock-held clone (config
+// review 2026-07-05 finding 1): overlaying onto the live config under the lock —
+// rather than wholesale-replacing it with a value derived from a pre-lock
+// Snapshot() — is what stops two concurrent saves to different surfaces from
+// clobbering each other (the second's replace reverting the first). Assumes the
+// request-only field validations (caller_answer_mode, max_repeats, mode-mapping
+// driver) already passed in the handler. FT8 display is stored RAW so Validate can
+// reject a bad feed_mode; the caller resolves it AFTER validation passes.
+func overlayConfig(base *config.Config, req *ConfigResponse) {
+	if req.LoggingStation != nil {
+		base.LoggingStation = *req.LoggingStation
+	}
+	if req.Station != nil {
+		base.Station = *req.Station
+	}
+	if req.Ft8Display != nil {
+		base.Ft8.Display = req.Ft8Display
+	}
+	if req.Ft8CallerAnswerMode != nil {
+		if base.Ft8.TX == nil {
+			base.Ft8.TX = &types.Ft8TXConfig{}
+		}
+		base.Ft8.TX.CallerAnswerMode = *req.Ft8CallerAnswerMode
+	}
+	if req.Ft8MaxRepeats != nil {
+		if base.Ft8.TX == nil {
+			base.Ft8.TX = &types.Ft8TXConfig{}
+		}
+		base.Ft8.TX.MaxRepeats = *req.Ft8MaxRepeats
+	}
+	if req.Ft8FieldDay != nil {
+		base.Ft8.FieldDay = &types.Ft8FieldDayConfig{
+			Class:   strings.ToUpper(strings.TrimSpace(req.Ft8FieldDay.Class)),
+			Section: strings.ToUpper(strings.TrimSpace(req.Ft8FieldDay.Section)),
+			// RST_RCVD default is an operator-chosen report (e.g. "59", "-15") —
+			// trimmed but NOT upper-cased; case is meaningless for a report.
+			DefaultRstRcvd: strings.TrimSpace(req.Ft8FieldDay.DefaultRstRcvd),
+		}
+	}
+	if req.Qsl != nil {
+		base.Qsl = *req.Qsl
+	}
+	if req.Rigs != nil {
+		base.Rigs = append([]types.RigConfig(nil), (*req.Rigs)...)
+	}
+	if req.DefaultRigID != nil {
+		base.DefaultRigID = *req.DefaultRigID
+	}
+	if req.Forwarders != nil {
+		base.Forwarders = mergeForwarders(req.Forwarders, base.Forwarders)
+	}
+	if req.Lookup != nil {
+		base.Lookup = mergeLookup(*req.Lookup, base.Lookup)
+	}
+	if req.Smtp != nil {
+		base.Smtp = mergeSmtp(*req.Smtp, base.Smtp)
+	}
+	if req.PskReporter != nil {
+		base.PskReporter = *req.PskReporter
+	}
+	if req.Ft8DecodeLog != nil {
+		base.Ft8.DecodeLog = req.Ft8DecodeLog
+	}
+	if req.BridgeEnabled != nil {
+		base.Bridge.Enabled = *req.BridgeEnabled
+	}
+	if req.Ft8Enabled != nil {
+		base.Ft8.Enabled = *req.Ft8Enabled
+	}
+	if req.RestoreRigOnModeSwitch != nil {
+		base.RestoreRigOnModeSwitch = req.RestoreRigOnModeSwitch
+	}
+	// Mode-mapping overrides: diff the incoming set against the rigdef's shipped
+	// defaults so only operator deviations persist, stored on the active rig
+	// (config.md §10). The driver was validated in the handler.
+	if req.Bridge.Driver != "" && req.Bridge.ModeMappings != nil {
+		def, _ := cat.Lookup(req.Bridge.Driver)
+		overrides := make(map[string]types.ModeMapping)
+		for lit, mm := range req.Bridge.ModeMappings {
+			if shipped, shippedOk := def.ModeMappings[lit]; !shippedOk || shipped != mm {
+				overrides[lit] = mm
+			}
+		}
+		// Copy the rig slice before mutating so the active rig's mappings don't
+		// alias the live config. Base off base.Rigs (not a snapshot) so a `rigs`
+		// block applied just above isn't clobbered by this overlay.
+		base.Rigs = append([]types.RigConfig(nil), base.Rigs...)
+		if rc := base.RigByID(base.DefaultRigID); rc != nil {
+			if len(overrides) > 0 {
+				rc.ModeMappings = overrides
+			} else {
+				rc.ModeMappings = nil
+			}
+		}
+	}
+}
+
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handlePutConfig"
 
@@ -380,218 +500,103 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 
 	current := s.cfg.Snapshot()
 
-	// Build the candidate config: the current snapshot with the request's
-	// operator-writable fields overlaid, then run it through the ONE config
-	// pipeline — Normalize + Validate (config.md §12), the same Load runs — before
-	// persisting. A value rejected here would also be rejected at Load.
-	//
-	// Clone (deep copy), not the shallow Snapshot value: Normalize mutates the
-	// candidate in place (e.g. normalizeRigOverrides nils per-rig overrides), and
-	// a shallow copy still aliases the live config's Rigs/slice backing arrays —
-	// so editing the candidate would corrupt the running config before the change
-	// is even validated or committed.
-	candidate := current.Clone()
-	// LoggingStation / Station — presence-aware (like the pointer blocks below): only
-	// overlaid when the body carried them, so a save touching one identity block can't
-	// zero the other. The SPAs currently always bundle both, but an omitted block MUST
-	// be a no-op, not a wipe (the data-loss footgun this fixes).
-	if req.LoggingStation != nil {
-		candidate.LoggingStation = *req.LoggingStation
-	}
-	if req.Station != nil {
-		candidate.Station = *req.Station
-	}
-	// FT8 display prefs — presence-aware: only touched when the body carried
-	// `ft8_display` (a My Station save omits it, leaving it alone). Stored RAW
-	// here so Validate can reject an invalid feed_mode (config.md §12 option A);
-	// resolution (clamp colours/cap, default feed_mode) happens after validation.
-	if req.Ft8Display != nil {
-		candidate.Ft8.Display = req.Ft8Display
-	}
-	// FT8 caller-answer mode — presence-aware (logging SPA FT8 Settings tab). Only
-	// the two attended auto modes are accepted over the wire; operator_pick is a
-	// config.json-only literal (rejected at Call-CQ start), so the SPA can't set it.
-	// Validated here rather than via config.Validate (which tolerates an invalid
-	// value → default) so a bad value is a loud 400, matching feed_mode's contract.
+	// Request-only field validations — hoisted ahead of the commit so the in-lock
+	// overlay stays pure and a bad field is a loud 400 before we take the config
+	// lock. Each checks the request value in isolation (it doesn't consult stored
+	// config), matching feed_mode's strict-wire contract (vs Validate, which
+	// tolerates a bad value → default).
 	if req.Ft8CallerAnswerMode != nil {
-		mode := *req.Ft8CallerAnswerMode
-		if mode != types.Ft8CallerAnswerAutoFirst && mode != types.Ft8CallerAnswerAutoStrongest {
+		if m := *req.Ft8CallerAnswerMode; m != types.Ft8CallerAnswerAutoFirst && m != types.Ft8CallerAnswerAutoStrongest {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 				"ft8_caller_answer_mode must be auto_first or auto_strongest", op)
 			return
 		}
-		if candidate.Ft8.TX == nil {
-			candidate.Ft8.TX = &types.Ft8TXConfig{}
-		}
-		candidate.Ft8.TX.CallerAnswerMode = mode
 	}
-	// FT8 unanswered-rung repeat cap — presence-aware (logging SPA FT8 Settings tab).
-	// Validated to [1, Ft8MaxRepeatsCeiling] here as a loud 400 rather than leaning on
-	// the resolver's silent clamp, matching caller_answer_mode's strict-wire contract.
-	// Applied LIVE after the persist commits (below), so the change reaches the running
-	// sequencer without a restart.
 	if req.Ft8MaxRepeats != nil {
-		n := *req.Ft8MaxRepeats
-		if n < 1 || n > types.Ft8MaxRepeatsCeiling {
+		if n := *req.Ft8MaxRepeats; n < 1 || n > types.Ft8MaxRepeatsCeiling {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 				fmt.Sprintf("ft8_max_repeats must be between 1 and %d", types.Ft8MaxRepeatsCeiling), op)
 			return
 		}
-		if candidate.Ft8.TX == nil {
-			candidate.Ft8.TX = &types.Ft8TXConfig{}
-		}
-		candidate.Ft8.TX.MaxRepeats = n
 	}
-	// FT8 Field Day exchange — presence-aware (config SPA FT8 tab). Normalised to
-	// upper-case (TrimSpace+ToUpper) here so "2a"/"dx" store canonically; the shared
-	// Validate then rejects a malformed class/section as a 400 (validateFt8FieldDay).
-	// An empty block (both fields blank) is the valid "FD identity not set" state.
-	if req.Ft8FieldDay != nil {
-		candidate.Ft8.FieldDay = &types.Ft8FieldDayConfig{
-			Class:   strings.ToUpper(strings.TrimSpace(req.Ft8FieldDay.Class)),
-			Section: strings.ToUpper(strings.TrimSpace(req.Ft8FieldDay.Section)),
-			// RST_RCVD default is an operator-chosen report value (e.g. "59", "-15") —
-			// trimmed but NOT upper-cased; case is meaningless for a report.
-			DefaultRstRcvd: strings.TrimSpace(req.Ft8FieldDay.DefaultRstRcvd),
-		}
-	}
-	// QSL defaults — presence-aware, same rationale as ft8_display: a My Station
-	// save omits `qsl` and must leave it alone.
-	if req.Qsl != nil {
-		candidate.Qsl = *req.Qsl
-	}
-	// Rig catalogue + active-rig selector — presence-aware (config SPA Rigs tab).
-	// Applied BEFORE the mode-mapping overlay (which bases off candidate.Rigs)
-	// and before Normalize+Validate, so validateRigs catches a bad catalogue
-	// (duplicate/non-positive ids, empty model, dangling default_rig_id) as a 400.
-	// A fresh slice so the candidate never aliases the request's backing array.
-	if req.Rigs != nil {
-		candidate.Rigs = append([]types.RigConfig(nil), (*req.Rigs)...)
-	}
-	if req.DefaultRigID != nil {
-		candidate.DefaultRigID = *req.DefaultRigID
-	}
-	// Forwarders — presence-aware (config SPA Forwarding tab). A body carrying
-	// `forwarders` REPLACES the whole list; each entry's credentials are MERGED
-	// onto the stored values (matched by name) so a field the operator left blank
-	// keeps its secret (masked-on-GET means the SPA never had it to echo). The
-	// advanced knobs (tick/batch/retry) carry over from the matched existing entry
-	// too. Validated through validateForwarders below (dup names / unknown type /
-	// unsupported action).
-	if req.Forwarders != nil {
-		candidate.Forwarders = mergeForwarders(req.Forwarders, current.Forwarders)
-	}
-	// Enrichment (config SPA Enrichment tab) — presence-aware; provider passwords
-	// merged onto the stored values by name (blank = keep). Normalize stamps the
-	// default provider URLs; validateLookup gates the result.
-	if req.Lookup != nil {
-		candidate.Lookup = mergeLookup(*req.Lookup, current.Lookup)
-	}
-	// SMTP (config SPA Email tab) — presence-aware; the password is merged onto the
-	// stored value (blank = keep, masked-on-GET means the SPA never had it to echo).
-	// validateSmtp (in the pipeline below) gates the merged block: an enabled block
-	// missing host/from or with a malformed address is a 400.
-	if req.Smtp != nil {
-		candidate.Smtp = mergeSmtp(*req.Smtp, current.Smtp)
-	}
-	// PSK Reporter (config SPA FT8 tab) — presence-aware; no secrets, so the block
-	// is taken as-sent (validatePskReporter gates the port below). Stored sparse:
-	// an empty host/port round-trips to the runtime default.
-	if req.PskReporter != nil {
-		candidate.PskReporter = *req.PskReporter
-	}
-	// FT8 decode log (config SPA FT8 tab) — presence-aware; no secrets, stored as
-	// sent. Pointer block, so a disabled log can persist as {enabled:false} or be
-	// dropped — either reads as "no file" at service start.
-	if req.Ft8DecodeLog != nil {
-		candidate.Ft8.DecodeLog = req.Ft8DecodeLog
-	}
-	// Master subsystem switches — presence-aware (config SPA Rigs / FT8 tabs).
-	// validateBridge below enforces port+driver when bridge is enabled.
-	if req.BridgeEnabled != nil {
-		candidate.Bridge.Enabled = *req.BridgeEnabled
-	}
-	if req.Ft8Enabled != nil {
-		candidate.Ft8.Enabled = *req.Ft8Enabled
-	}
-	// Mode-switch rig-restore preference — presence-aware (stored as-sent; the SPA
-	// reads it and gates the live re-tune). Omit → untouched.
-	if req.RestoreRigOnModeSwitch != nil {
-		candidate.RestoreRigOnModeSwitch = req.RestoreRigOnModeSwitch
-	}
-	// Mode-mapping overrides: diff the incoming set against the rigdef's shipped
-	// defaults so only operator deviations persist, stored on the active rig
-	// (config.md §10). Bad ADIF in the result is caught by Validate below.
 	if req.Bridge.Driver != "" && req.Bridge.ModeMappings != nil {
-		def, ok := cat.Lookup(req.Bridge.Driver)
-		if !ok {
+		if _, ok := cat.Lookup(req.Bridge.Driver); !ok {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 				"bridge.driver does not match a known rigdef", op)
 			return
 		}
-		overrides := make(map[string]types.ModeMapping)
-		for lit, mm := range req.Bridge.ModeMappings {
-			if shipped, shippedOk := def.ModeMappings[lit]; !shippedOk || shipped != mm {
-				overrides[lit] = mm
-			}
-		}
-		// Copy the rig slice before mutating so the active rig's mappings don't
-		// alias the live config. Base off candidate.Rigs (not current.Rigs) so a
-		// `rigs` block applied just above isn't clobbered by the mode-mapping overlay.
-		candidate.Rigs = append([]types.RigConfig(nil), candidate.Rigs...)
-		if rc := candidate.RigByID(candidate.DefaultRigID); rc != nil {
-			if len(overrides) > 0 {
-				rc.ModeMappings = overrides
-			} else {
-				rc.ModeMappings = nil
-			}
-		}
 	}
 
-	// Normalize + validate through the single config pipeline. The first error
-	// finding becomes a 400 carrying its stable code + message (ADR 0010).
-	config.Normalize(&candidate)
-	for _, f := range config.Validate(candidate) {
-		if !f.Warning {
+	// First-run setup transition (single-operator; the first PUT carrying a
+	// callsign). Seed the default logbook OUTSIDE the config lock — DB I/O must not
+	// run under the config mutex — gated on a dry-run validation of the overlaid
+	// config so an invalid first save doesn't proceed. seedDefaultLogbook is
+	// idempotent, so a later retry reuses the row. This one-time path is NOT the
+	// concurrent-write race the in-lock overlay below fixes.
+	var setupLogbookID int64
+	completingSetup := !current.SetupComplete &&
+		req.LoggingStation != nil && req.LoggingStation.StationCallsign != ""
+	if completingSetup {
+		dry := current.Clone()
+		overlayConfig(&dry, &req)
+		config.Normalize(&dry)
+		if f := firstBlockingFinding(config.Validate(dry)); f != nil {
 			s.writeError(w, http.StatusBadRequest, f.Code, f.Message, op)
 			return
 		}
-	}
-
-	// FT8 display passed validation — now resolve to the stored shape (clamps
-	// colours / row cap; feed_mode was already validated raw above). Stored
-	// normalised so the on-disk value matches what GET would serve.
-	if req.Ft8Display != nil {
-		resolved := types.ResolveFt8Display(req.Ft8Display)
-		candidate.Ft8.Display = &resolved
-	}
-
-	// Setup transition (after validation passes): the first PUT with a non-empty
-	// callsign completes setup — seed the default logbook row, flip SetupComplete,
-	// and materialise OPERATOR / OWNER_CALLSIGN from the callsign when unset.
-	if !current.SetupComplete && candidate.LoggingStation.StationCallsign != "" {
-		id, err := s.seedDefaultLogbook(r, candidate.DefaultLogbookID, candidate.LoggingStation.StationCallsign)
+		id, err := s.seedDefaultLogbook(r, dry.DefaultLogbookID, dry.LoggingStation.StationCallsign)
 		if err != nil {
 			s.writeServerError(w, op, err, "db_error", "failed to seed default logbook")
 			return
 		}
-		candidate.SetupComplete = true
-		if id != 0 {
-			candidate.DefaultLogbookID = id
-		}
-		call := candidate.LoggingStation.StationCallsign
-		if candidate.LoggingStation.Operator == "" {
-			candidate.LoggingStation.Operator = call
-		}
-		if candidate.LoggingStation.OwnerCallsign == "" {
-			candidate.LoggingStation.OwnerCallsign = call
-		}
+		setupLogbookID = id
 	}
 
+	// Commit under the config lock. The overlay is applied to the FRESH clone
+	// config.Update hands us — NOT a pre-lock Snapshot() — so two SPAs saving
+	// different surfaces at once can't clobber each other (the lost-update fix;
+	// config review 2026-07-05 finding 1). Validate is authoritative here: a
+	// concurrent change to another surface could invalidate this overlay (e.g. a
+	// removed rig this body's default_rig_id points at), so it re-checks under the
+	// lock and a failure aborts the write → 400, live config untouched.
+	var blocking *config.Finding
 	if err := s.cfg.Update(func(cfg *config.Config) error {
-		*cfg = candidate
+		overlayConfig(cfg, &req)
+		config.Normalize(cfg)
+		if f := firstBlockingFinding(config.Validate(*cfg)); f != nil {
+			blocking = f
+			return errPutValidation
+		}
+		// FT8 display passed validation — resolve to the stored shape (clamp
+		// colours / row cap; feed_mode already validated raw). Stored normalised so
+		// GET serves what's on disk.
+		if req.Ft8Display != nil {
+			resolved := types.ResolveFt8Display(req.Ft8Display)
+			cfg.Ft8.Display = &resolved
+		}
+		// Complete setup (after validation passes): flip the flag, adopt the seeded
+		// logbook id, and materialise OPERATOR / OWNER_CALLSIGN from the callsign
+		// when unset. Guarded on cfg.SetupComplete (the fresh value) so a racing
+		// setup can't double-apply.
+		if completingSetup && !cfg.SetupComplete {
+			cfg.SetupComplete = true
+			if setupLogbookID != 0 {
+				cfg.DefaultLogbookID = setupLogbookID
+			}
+			call := cfg.LoggingStation.StationCallsign
+			if cfg.LoggingStation.Operator == "" {
+				cfg.LoggingStation.Operator = call
+			}
+			if cfg.LoggingStation.OwnerCallsign == "" {
+				cfg.LoggingStation.OwnerCallsign = call
+			}
+		}
 		return nil
 	}); err != nil {
+		if stderr.Is(err, errPutValidation) {
+			s.writeError(w, http.StatusBadRequest, blocking.Code, blocking.Message, op)
+			return
+		}
 		s.writeServerError(w, op, err, "config_write_error", "failed to persist config update")
 		return
 	}

@@ -50,6 +50,7 @@ next, and in what order" is answered.
 - _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
 - _Data / SM-Cloud prep (do before S3):_ **STAGED migration 0004** — trigger/default `localtime`→UTC rebuild + normalise pre-fix timestamp debris rows (the fix-forward half shipped 2026-07-05; see detail) · `internal/database` review lows (cold-insert retry, bootstrap stale-table detection, + 5 nits)
+- _Code-review lows (2026-07-05 `internal/api` review):_ disabled-subsystem routes return 200-HTML/405 instead of 404 (one `spaHandler` guard, also closes the `/assets/` directory-listing nit) · negative server-limit panics at startup (→ validation error) · credential-clear asymmetry (forwarder clears on blank, SMTP/lookup keep) — unify or document side-by-side · stale `middleware.go` Unwrap comment
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
 - _Code-review lows (2026-07-05 SPA review):_ 13 verified low-severity fixes (the fetch-timeout standout was promoted to P1 and SHIPPED 2026-07-05 → archive) — TX_PWR sub-0.5 W rounding (durable ADIF) · state-reset gaps (tabCount / freqKnown / stale decodes / enrich zombies) · FT8 UI nits (bearing 360°, drain-abort, FD tooltip, isWorking split, canAnswer TX-guard) · edit-overlay mode dropdown
@@ -937,6 +938,32 @@ next, and in what order" is answered.
     the DSN, one `url.PathEscape` away · `DeleteLogbookByIDWithContext` check-then-act window (concurrent
     QSO submit between Exists and soft-delete orphans a QSO under a deleted logbook — negligible single-op)
     · `Ping` sleeps 25 ms once more after its final failed attempt (cosmetic).
+
+- **`internal/api` review low-severity batch (2026-07-05).** Verified LOW findings; the
+  MEDIUM (PUT /v1/config lost-update race between the two SPAs) shipped 2026-07-05 (see
+  backlog-archive). None below is ship-gate.
+  - **Disabled-subsystem routes return misleading statuses** (`server.go` / `spaHandler`). With
+    the bridge or FT8 disabled and the SPA served, `GET /v1/rig/events` matches the `GET /`
+    catch-all → **200 + index.html**, and `POST /v1/rig/command` → **405** (method mismatch vs
+    `GET /`), never the 404 the code's own comment claims. The SPAs are unaffected (they gate on
+    `/v1/config` enablement flags; EventSource rejects the HTML MIME), but curl/script consumers
+    get nonsense, and every typo'd `/v1/...` GET returns a 200 HTML page. **Fix:** one guard in
+    `spaHandler` — path starts with `/v1/` → real 404 — restores honest statuses everywhere and
+    fixes the comment. **Same guard closes the directory-listing nit below.**
+  - **Nits:**
+    - Negative server-limit config panics at startup: `Normalize` defaults only `== 0`, so
+      `max_concurrent_requests: -1` reaches `make(chan struct{}, -1)` in `newLoadLimiter` → panic
+      (`limits.go:47`). A validation error would be kinder than a loud crash.
+    - Credential-clear semantics differ across masked surfaces: **forwarder** creds treat an
+      empty-string value as overwrite-with-empty (clearable), while **SMTP/lookup** passwords
+      treat blank as keep (not clearable via the API). Each is locally documented, but the
+      asymmetry invites a confused bug report — unify, or document side-by-side in api.md.
+    - `spaHandler` serves **directory listings** for real embed-FS dirs (e.g. `GET /assets/`
+      lists the bundle — no index.html there, so `http.FileServer` renders a listing). Trivial
+      disclosure on a LAN-exposed TCP deployment; treating a directory hit as SPA-fallback closes
+      it (folds into the `/v1/` guard fix).
+    - Stale comment: `middleware.go:206-216` (Unwrap) still says the bridge SSE handler "clears
+      its write deadline at stream open" — it arms per-write deadlines now. Doc drift only.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 

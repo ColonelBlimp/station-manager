@@ -17,6 +17,24 @@ need the history of a specific item ("when/how did X ship?").
 
 ## Bugs (detail)
 
+- ~~**`PUT /v1/config` lost-update race between the two SPAs.**~~ **SHIPPED 2026-07-05**
+  (`internal/api` review finding 1, LOW-MEDIUM, data-loss). The handler built a `candidate`
+  from a pre-lock `Snapshot()`, overlaid the request, then committed with
+  `Update(func(cfg){ *cfg = candidate })` — wholesale-replacing the fresh locked clone with a
+  stale-snapshot-derived value. Two SPAs saving different surfaces concurrently (logging SPA My
+  Station / FT8 settings + config SPA Rigs / Forwarding / SMTP) could interleave snapshot A,
+  snapshot B, commit A, commit B → commit B silently reverts everything A changed. Real for the
+  7Q8AC deployment (a second operator with the config SPA open while the operator logs). **Fix:**
+  the presence-aware overlay + `Normalize` + `Validate` now run **inside** the `Update` callback,
+  against the fresh lock-held clone (extracted to `overlayConfig`); the blank-keep credential
+  merges base off the current stored value; request-only field validations (caller_answer_mode,
+  max_repeats, mode-mapping driver) hoisted ahead of the lock as loud 400s; in-lock `Validate`
+  failure → sentinel `errPutValidation` → 400 with the live config untouched. The first-run setup
+  seed stays outside the lock (DB I/O; single-operator, not the race). Regression test
+  `TestHandlePutConfig_ConcurrentCrossSurfaceNoClobber` (30×2 concurrent cross-surface PUTs under
+  `-race`, both survive). `internal/api` full suite green under `-race`. Findings #2 + nits triaged
+  to backlog.
+
 - ~~**SPA `fetch` calls have no timeout (P1 — flaky-link ship risk).**~~ **SHIPPED
   2026-07-05.** No `safeFetch` call passed a timeout, so a wedged / half-open daemon
   (accepts the connection, never responds) hung boot on a blank page and `submitQso`'s

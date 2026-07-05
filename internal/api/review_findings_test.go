@@ -3,14 +3,85 @@ package api
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
+
+// --- Config PUT: concurrent cross-surface saves don't clobber ----------------
+// (config review 2026-07-05 finding 1). Both SPAs write through the one
+// PUT /v1/config endpoint. The old handler built a candidate from a pre-lock
+// Snapshot() and wholesale-replaced the config under the lock, so an interleaving
+// (snapshot A, snapshot B, commit A, commit B) let the second commit revert the
+// first's other-surface changes. The fix overlays each request onto the FRESH
+// clone INSIDE the Update lock. This drives two goroutines saving disjoint
+// surfaces and asserts the final config carries BOTH sides' last write.
+func TestHandlePutConfig_ConcurrentCrossSurfaceNoClobber(t *testing.T) {
+	srv := testServer(t)
+
+	// Complete setup first so both goroutines take the steady-state (non-setup) path.
+	putConfigOK(t, srv, `{"logging_station":{"station_callsign":"M0XYZ","my_gridsquare":"AA00"},`+
+		`"station":{"amp_enabled":true,"amp_multiplier":1}}`)
+
+	const rounds = 30
+	var wg sync.WaitGroup
+	wg.Add(2)
+	// A: keep re-writing logging_station.my_gridsquare (station omitted).
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			putConfigOK(t, srv, fmt.Sprintf(
+				`{"logging_station":{"station_callsign":"M0XYZ","my_gridsquare":"AA%02d"}}`, i))
+		}
+	}()
+	// B: keep re-writing station.amp_multiplier (logging_station omitted).
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= rounds; i++ {
+			putConfigOK(t, srv, fmt.Sprintf(
+				`{"station":{"amp_enabled":true,"amp_multiplier":%d}}`, i))
+		}
+	}()
+	wg.Wait()
+
+	// Both surfaces' LAST write must survive — neither goroutine's save reverted
+	// the other's surface to a stale base.
+	final := srv.cfg.Snapshot()
+	if want := fmt.Sprintf("AA%02d", rounds-1); final.LoggingStation.MyGridsquare != want {
+		t.Errorf("grid = %q, want %q — station saves reverted logging_station to a stale base",
+			final.LoggingStation.MyGridsquare, want)
+	}
+	if final.Station.AmpMultiplier != float64(rounds) {
+		t.Errorf("amp_multiplier = %v, want %d — logging_station saves reverted station to a stale base",
+			final.Station.AmpMultiplier, rounds)
+	}
+	// The identities on each surface weren't lost either.
+	if final.LoggingStation.StationCallsign != "M0XYZ" {
+		t.Errorf("station_callsign lost: %q", final.LoggingStation.StationCallsign)
+	}
+	if !final.Station.AmpEnabled {
+		t.Error("amp_enabled lost")
+	}
+}
+
+// putConfigOK PUTs a config body and fails (non-fatally, so it's goroutine-safe)
+// unless the handler returns 200.
+func putConfigOK(t *testing.T, srv *Server, body string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("PUT status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
 
 // --- H1: session-email archive filename can't escape the archive dir --------
 
