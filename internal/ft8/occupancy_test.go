@@ -498,6 +498,33 @@ func TestSlotRefFromTime_EvenOdd(t *testing.T) {
 	}
 }
 
+// TestSlotRefFromTime_FloorsToLattice pins the 15 s flooring: a mid-slot time must
+// yield the SAME StartUTC (and period) as its slot boundary. wasTxSlot's exact-string
+// match depends on this — a keyed boundary and the captured slot's ref reduce to one
+// string even if a producer ever passes a non-aligned time. Sub-second and monotonic
+// components are dropped too.
+func TestSlotRefFromTime_FloorsToLattice(t *testing.T) {
+	boundary := time.Date(2026, 7, 5, 14, 30, 30, 0, time.UTC) // :30 → even slot start
+	want := SlotRefFromTime(boundary)
+
+	// Any instant within the slot [30s, 45s) floors to the same boundary.
+	for _, off := range []time.Duration{
+		1 * time.Second,
+		7*time.Second + 500*time.Millisecond,
+		14*time.Second + 999*time.Millisecond,
+	} {
+		got := SlotRefFromTime(boundary.Add(off))
+		if got.StartUTC != want.StartUTC || got.Period != want.Period {
+			t.Fatalf("+%s → {%q,%q}, want {%q,%q}",
+				off, got.StartUTC, got.Period, want.StartUTC, want.Period)
+		}
+	}
+	// The next slot's start (:45) must NOT collapse into this one.
+	if next := SlotRefFromTime(boundary.Add(SlotDuration)); next.StartUTC == want.StartUTC {
+		t.Fatalf("next slot floored into this one: both %q", want.StartUTC)
+	}
+}
+
 func TestResolveOccupancyConfig(t *testing.T) {
 	def := DefaultOccupancyConfig()
 
