@@ -499,6 +499,42 @@ need the history of a specific item ("when/how did X ship?").
   (dogfood), triaged 2026-07-03. The header ("Pile-up (N) · even · paused") could wrap in
   the narrow drawer.
 
+- ~~**QRZ enrichment resilience on flaky/contended links (7Q8AC-relevant).**~~ **CLOSED
+  2026-07-05 (operator).** Fix (1) — the big one — SHIPPED 2026-07-04 and is the whole
+  shipped scope; the residual ideas ((2) per-lookup retry/backoff + HTTP-timeout revisit,
+  (3) don't cache a nameless result as final) are **dropped, not pending** — re-open only
+  via a fresh dogfood-inbox note if flaky-link name-loss recurs in practice. Original
+  entry: found on-air 2026-07-04 (7Q5MLV FT8 pile-up in Malawi, during a `dnf upgrade`
+  that saturated the link — an accidental but perfect stress-test of 7Q8AC's *normal*
+  bandwidth-contended state). Evidence (smd.log): `dial tcp <qrz>:443: i/o timeout` on the
+  **session-key login** at daemon start → **QRZ disabled itself for the ENTIRE run**
+  (`QRZ session key fetch failed; service disabled` + `chain provider disabled itself
+  during init`), so **no QSO got a name** all session (hamnut country only — e.g. PY2DN
+  logged `country:Brazil`, no name); plus intermittent per-lookup `i/o timeout`s in an
+  earlier run. The "enrichment never blocks logging" invariant held (QSOs logged +
+  forwarded fine), so this was **completeness, not correctness** — but the failure mode IS
+  7Q8AC's environment. **Fix (1) as shipped:** don't permanently disable QRZ on a
+  boot-time session-key timeout — `Initialize` no longer flips `Enabled=false`; the
+  service stays enabled but keyless, and `ensureSessionKey` lazily re-fetches the key on
+  lookups (cooldown-bounded `sessionRetryCooldown` 30s, single-flighted via `authMu`), so
+  QRZ revives on its own once the link returns — no daemon restart. Tests
+  `TestInitialize_SessionKeyFailureStaysEnabled` / `TestLazySessionKey_RecoversAfterBootFailure`
+  / `…CooldownSuppressesRetry` / `…RetriesAfterCooldown`. **Review-hardened same day** (a
+  multi-agent review found real gaps in the first cut, all fixed): the expired-key re-auth
+  path routes through the SAME cooled/single-flighted `ensureSessionKey` (was bypassing it
+  + leaving a stale key that hammered QRZ); `authMu` uses `TryLock` so followers fail-soft
+  instead of blocking the interactive path; the login runs on a DETACHED context (a client
+  disconnect no longer aborts it or caches `context.Canceled`); the cooldown is stamped at
+  completion (a login ≥ the cooldown no longer lets waiters through); credential-in-log
+  scrubbed (next item). Commits `431b7eca`/`e04d643a`/`25e10f84`.
+
+- ~~**QRZ credentials logged in cleartext.**~~ **FIXED 2026-07-04** (surfaced by the review of the
+  resilience fix, which noted keeping the provider in-chain amplified the leak from once-per-boot to
+  once-per-enriched-callsign). `scrubURLError` (`internal/lookup/qrz/internal.go`) strips the query
+  string from the transport `*url.Error` at both `client.Do` sites before it enters the logged/cached
+  error path — Go's `url.Error` masks userinfo but NOT query params, and QRZ carried
+  `username`+`password` (session request) and the session key (lookup) there.
+
 ## Website / public presence
 
 - ~~**Landing page for `station-manager.org`**~~ **MVP LIVE 2026-07-02.** Domain

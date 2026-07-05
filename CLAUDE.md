@@ -26,6 +26,13 @@
 
 ## Where the durable project context lives
 
+> **⏸ Current status (2026-07-05): PAUSED — next work is gated on the upcoming
+> go-ft8 release** (bug fixes + compound-callsign support, e.g. PJ4/NA2AA). The
+> in-flight arcs are closed; on a "resume", read `docs/session-handoff.md` FIRST
+> and do not re-open anything that merely *looks* unfinished (a stale backlog
+> line is not an invitation). When the go-ft8 drop lands: bump the dep and
+> re-check slash-aware callsign parsing. Remove this note when work resumes.
+
 **[`docs/README.md`](docs/README.md) is the authoritative documentation map** —
 which docs are *live* (Tier 1, kept current and checked against the code) versus
 *historical* (Tier 2, a frozen reasoning trail, never edited to reflect current

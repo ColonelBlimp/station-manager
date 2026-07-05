@@ -47,7 +47,7 @@ next, and in what order" is answered.
 **P2 — next features (open one workstream per active focus)**
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
 - _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW)
-- _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field · **QRZ enrichment resilience on flaky links (7Q8AC-relevant; fix (1) shipped, (2)/(3) remain)**
+- _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
@@ -782,41 +782,6 @@ next, and in what order" is answered.
   reuses the same `actions/rigControl` handler (routing set_freq/set_freq_b by selected VFO
   as today) and which FT8 focus contexts should capture the keys without clashing with FT8's
   own Shift+Ctrl shortcuts. Small, but needs a keymap-collision check against the FT8 panel.
-
-- **QRZ enrichment resilience on flaky/contended links (7Q8AC-relevant).** Found on-air
-  2026-07-04 (7Q5MLV FT8 pile-up in Malawi, during a `dnf upgrade` that saturated the link —
-  an accidental but perfect stress-test of 7Q8AC's *normal* bandwidth-contended state).
-  Evidence (smd.log): `dial tcp <qrz>:443: i/o timeout` on the **session-key login** at daemon
-  start → **QRZ disabled itself for the ENTIRE run** (`QRZ session key fetch failed; service
-  disabled` + `chain provider disabled itself during init`), so **no QSO got a name** all
-  session (hamnut country only — e.g. PY2DN logged `country:Brazil`, no name); plus intermittent
-  per-lookup `i/o timeout`s in an earlier run. The "enrichment never blocks logging" invariant
-  held (QSOs logged + forwarded fine), so this is **completeness, not correctness** — but the
-  failure mode IS 7Q8AC's environment. **Fixes:** (1) **[SHIPPED 2026-07-04 — the big one] don't
-  permanently disable QRZ on a boot-time session-key timeout** — `Initialize` no longer flips
-  `Enabled=false`; the service stays enabled but keyless, and `ensureSessionKey` lazily re-fetches
-  the key on lookups (cooldown-bounded `sessionRetryCooldown` 30s, single-flighted via `authMu`),
-  so QRZ revives on its own once the link returns — no daemon restart. Tests
-  `TestInitialize_SessionKeyFailureStaysEnabled` / `TestLazySessionKey_RecoversAfterBootFailure` /
-  `…CooldownSuppressesRetry` / `…RetriesAfterCooldown`. **Review-hardened same day** (a multi-agent
-  review found real gaps in the first cut, all fixed): the expired-key re-auth path now routes through
-  the SAME cooled/single-flighted `ensureSessionKey` (was bypassing it + leaving a stale key that
-  hammered QRZ); `authMu` uses `TryLock` so followers fail-soft instead of blocking the interactive
-  path; the login runs on a DETACHED context (a client disconnect no longer aborts it or caches
-  `context.Canceled`); the cooldown is stamped at completion (a login ≥ the cooldown no longer lets
-  waiters through); credential-in-log scrubbed (above). **Still open:** (2) **retry/backoff on individual lookups** + revisit
-  the HTTP timeout (a single i/o timeout shouldn't lose a name); (3) **don't cache a nameless
-  result as final** — re-lookup on a name-miss so recovery repairs it; pairs with the
-  re-enrich-from-edit-overlay repair path (inbox). Surfaces: `internal/lookup/qrz`, the
-  `contacted_station` cache write. Residual is still **P2, 7Q8AC-relevant.**
-
-- ~~**QRZ credentials logged in cleartext.**~~ **FIXED 2026-07-04** (surfaced by the review of the
-  resilience fix, which noted keeping the provider in-chain amplified the leak from once-per-boot to
-  once-per-enriched-callsign). `scrubURLError` (`internal/lookup/qrz/internal.go`) strips the query
-  string from the transport `*url.Error` at both `client.Do` sites before it enters the logged/cached
-  error path — Go's `url.Error` masks userinfo but NOT query params, and QRZ carried
-  `username`+`password` (session request) and the session key (lookup) there. → move to archive on
-  next tidy.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
