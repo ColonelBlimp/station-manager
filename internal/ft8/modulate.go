@@ -129,8 +129,14 @@ func Modulate(tones []uint8, offsetHz float64) []float32 {
 // offline building block the round-trip test uses and the shape the live TX
 // path (steps c/d) will stream; offsetHz is the base-tone audio frequency.
 //
-// Errors only if the message isn't an encodable standard message
-// (goft8.EncodeStandardMessage rejects free text / compound calls).
+// Errors only if the message isn't an encodable standard message.
+// goft8 (v0.5.0) encodes standard messages, /P and /R suffix calls, ARRL
+// Field Day exchanges, and type-4 compound/nonstandard calls — but a type-4
+// message carries only CQ/RR73/73 with the partner call hashed, so a
+// prefix-compound directed message that needs a grid or report (e.g.
+// "PJ4/NA2AA 7Q5MLV KH53") is still rejected. Free text is rejected too. Note
+// a /R message encodes here but goft8 does not yet DECODE it, so it won't pass
+// the offline round-trip gate — don't transmit /R until that lands.
 func EncodeToSlot(text string, offsetHz, dtSec float64) ([]int16, error) {
 	const op errors.Op = "ft8.EncodeToSlot"
 	enc, err := goft8.EncodeStandardMessage(text)
