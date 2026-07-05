@@ -261,12 +261,23 @@ next, and in what order" is answered.
     guards pass it through with **no SM code change** (the encode-check seam was designed
     for exactly this). Proven offline: `internal/ft8/modulate_test.go`
     (`TestEncodeStandardMessage_Portable` + `TestModulate_RoundTrip_Portable`).
-  - **Still unsupported (deliberately skipped):** **type-4 compound / nonstandard calls**
-    (`PJ4/K1ABC`, `K1ABC/4`, `/MM`, …) which need the WSJT-X hashed-callsign type-1/type-2
-    scheme (the 22-bit hash + shared hash table — real protocol work, gated on go-ft8
-    exposing an encode path for it); and **free text** (71-bit) encode + a UX to enter it.
-    Until go-ft8 supports those encodes, the skip behaviour stays correct. Capture point:
-    `docs/ft8.md`; see ADR 0029 (the `EncodeStandardMessage` seam).
+  - **type-4 compound / nonstandard calls (`PJ4/NA2AA`, `K1ABC/4`, …) — go-ft8 v0.5.0
+    LANDED the encode/decode (2026-07-05), so this is now buildable, not blocked.** State
+    after the v0.5.0 bump (session 199): **RX works** — a type-4 CQ (`CQ PJ4/NA2AA`) and
+    directed type-4 (`PJ4/NA2AA <...> RR73`) now decode and reach Band Activity (round-trip
+    tested, `TestCompoundCQ_Decodes`). **TX does NOT yet run a full QSO:** type-4 carries
+    only `CQ`/`RR73`/`73` with the partner call HASHED to `<...>` — there is **no type-4
+    grid/report form** — so SM's standard grid→report→R-report→73 ladder can't be walked
+    with a prefix-compound partner, and `StartQso`/`StartQsoFd` correctly fail soft
+    (`ErrTxBadMessage`). **The remaining work is a reduced type-4 QSO flow** (a distinct
+    hashed CQ→RR73→73 ladder in the sequencer + the shared 22-bit hash table so the hashed
+    `<...>` resolves back to the real call for logging/display) — this is real protocol work,
+    now unblocked. `TestPrefixCompound_EncoderBoundary` pins the encoder boundary and will
+    flip if a later go-ft8 adds the grid/report forms. **`/R` suffix:** encodes in v0.5.0 but
+    go-ft8 does NOT yet DECODE it ("RTTY Roundup … not yet unpacked"), so it fails the
+    round-trip gate — do not transmit `/R` until decode lands. **Free text** (71-bit) encode +
+    an entry UX is still separate work. Capture point: `docs/ft8.md`; see ADR 0029 (the
+    `EncodeStandardMessage` seam).
 
 - **FT8 caller-side sequencing — BOTH flows SHIPPED; only on-air validation remains.**
   `auto_first` (Call CQ, ADR 0033) shipped 2026-06-12 and the operator-pick experience

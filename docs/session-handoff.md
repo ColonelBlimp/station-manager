@@ -32,14 +32,27 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-05)
 
-> **⏸ PAUSED (2026-07-05): active work is gated on the next go-ft8 release**
-> (bug fixes + compound-callsign support, e.g. PJ4/NA2AA — memory
-> `sm-waiting-goft8-release`). The session-198 arcs below are CLOSED per the
-> operator — do not re-open the QRZ-resilience residuals or the FT8 self-TX-slot
-> work. When the go-ft8 drop lands: bump the dependency, re-check slash-aware
-> callsign parsing, then pull the next item from `backlog.md`.
+> **Recent arc (session 199, 2026-07-05):** the go-ft8 release SM was paused on
+> LANDED (v0.5.0, tagged same day) and was **adopted** — pause LIFTED. Bumped
+> `go.mod` v0.4.0→v0.5.0 (type-4 compound/nonstandard-call + `/R` encode/decode,
+> upstream fixes) and audited the callsign seams. **Honest outcome — the win is
+> mostly RX:** a type-4 compound-call CQ (a DXpedition's `CQ PJ4/NA2AA`) now
+> **decodes** and reaches Band Activity, where before v0.5.0 it was silently
+> missed. Round-trip verified; the parse/self-filter/SPA seams were already
+> slash-tolerant, so no SM code change was needed for that. **TX stays
+> protocol-limited:** a full standard-ladder QSO with a *prefix*-compound partner
+> is still impossible — type-4 carries only CQ/RR73/73 with the partner hashed,
+> no grid/report form — so the ladder's opening rung is unencodable and SM keeps
+> failing soft (`StartQso → ErrTxBadMessage`; no regression). The reduced type-4
+> QSO flow is now unblocked at the library level but is a **separate backlog
+> feature**. Corrections to earlier framing: the standard `/P` suffix already
+> worked since the v0.3.5 bump (not new here — now a regression lock); `/R`
+> *encodes* but go-ft8 does NOT yet decode it, so it fails the round-trip gate and
+> must not be transmitted. RF-safety gate added (`TestCompoundCQ_Decodes` +
+> `TestPortableP_RoundTrip` + `TestPrefixCompound_EncoderBoundary`). Commit
+> `54f1b59c`. Active cycle returns to the 7Q8AC ship goal + `backlog.md` P-tiers.
 >
-> **Recent arc (session 198, 2026-07-04→05):** QRZ flaky-link resilience +
+> **Earlier arc (session 198, 2026-07-04→05):** QRZ flaky-link resilience +
 > FT8 self-transmitted-slot accuracy, both shipped and closed. **(1) QRZ:** no
 > permanent self-disable on a boot-time session-key failure (lazy, cooldown-bounded
 > re-auth on lookups; single-flighted via `authMu` TryLock; detached login context;
@@ -143,6 +156,8 @@ Out of tree:
 **Licence: GPL-3.0-only as of 2026-05-31 (was MIT).** Linking go-ft8 (a GPL-3.0-only WSJT-X derivative) pulls SM under copyleft. See ADR 0023 + `docs/licensing.md` + memory `project_sm_license_gplv3`.
 
 Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
+
+### Session 199 (2026-07-05) — **go-ft8 v0.5.0 adopted → compound-call CQs now DECODE (RX win); full compound TX still a backlog feature; pause lifted.** The release SM was paused on landed (v0.5.0, tagged same day: type-4 compound/nonstandard-call encode+decode, `/R` suffix, upstream bug fixes). Bumped `go.mod` v0.4.0→v0.5.0 (`go mod tidy`, CGO build clean) and ran the callsign-seam audit the pause note called for. **Honest finding — the practical win is mostly RX, not TX:** **(a) type-4 compound-call CQs now DECODE.** A DXpedition's `CQ PJ4/NA2AA` (and directed type-4 like `PJ4/NA2AA <...> RR73`) now round-trips through the shipped decoder and would reach Band Activity; before v0.5.0 the unpacker had no type-4 path, so those CQs were silently **missed**. The parse/self-filter/SPA seams the pause note flagged (`callRe`, `parseMessage`, `dropOwnTransmissions`, SPA `parseCqCall`) were already slash-tolerant, so no SM code change was needed to surface them. **(b) A full standard-ladder QSO with a PREFIX-compound partner is still impossible.** Type-4 messages carry only `CQ`/`RR73`/`73` with the partner call HASHED to `<...>`; there is no type-4 grid/report form, so the ladder's opening `<them> <us> <grid>` rung won't encode. SM already fails soft — the M1-review guard in `StartQso`/`StartQsoFd` returns `ErrTxBadMessage` before publishing a dead ladder — so **no regression**. The reduced type-4 QSO flow (hashed CQ→RR73→73) is now unblocked at the library level but is a genuine **new SM feature** (backlog P2 "type-4 compound + free-text" refreshed). **Two earlier-framing corrections made after empirical probing:** the standard `/P` suffix already worked from the v0.3.5 bump (2026-06-18) — NOT new here, now a regression lock (`TestPortableP_RoundTrip`); and `/R` *encodes* but go-ft8 does NOT yet decode it (package doc: "RTTY Roundup … not yet unpacked"), so it fails the round-trip gate and **must not be transmitted** (noted in `EncodeToSlot` + the boundary test). **RF-safety gate added** (offline, zero RF): `TestCompoundCQ_Decodes` (type-4 CQ + hashed RR73 round-trip — the new capability), `TestPortableP_RoundTrip` (the /P ladder regression lock), `TestPrefixCompound_EncoderBoundary` (pins which prefix-compound / `/R` forms encode vs reject; flips the day go-ft8 adds the grid/report forms → the signal to lift the guard + build the type-4 flow). Full FT8 suite (incl. heavy round-trips) + whole-module short sweep green; `gofmt`/`vet` clean. Commit `54f1b59c`; docs/pause-banner removal + memory update this session. **Pending on-air:** validate a full QSO with a real `/P` station (offline-verified only). Memory `sm-waiting-goft8-release` updated. **Next:** back to the 7Q8AC ship goal — pull from `backlog.md` P-tiers.
 
 ### Session 198 (2026-07-04→05) — **QRZ flaky-link resilience (shipped + review-hardened, arc CLOSED) + FT8 self-transmitted-slot decode/occupancy fixes. Project then PAUSED pending the next go-ft8 release.** *(Entry reconstructed 2026-07-05 from git + backlog — the session ended without a handoff update.)* **(1) QRZ enrichment resilience on flaky links** (found on-air 2026-07-04, 7Q8AC-relevant): `Initialize` no longer permanently disables QRZ on a boot-time session-key timeout — the service stays enabled but keyless and `ensureSessionKey` lazily re-fetches (30 s cooldown, single-flighted `authMu.TryLock`, detached login context, cooldown stamped at completion); expired-key re-auth routes through the same path with compare-and-clear (`clearSessionKeyIf`) so concurrent expiry races can't strand a fresh key; credentials redacted from transport-error logs (`scrubURLError`). Commits `431b7eca` → `e04d643a` → `25e10f84`. **Arc declared complete by the operator 2026-07-05** — the backlog's residual ideas ((2) per-lookup retry, (3) nameless-cache-row re-lookup) are dropped, not pending; re-open only via a fresh dogfood-inbox note if flaky-link name-loss recurs in practice. **(2) FT8 self-transmitted slots:** decode + occupancy now skip slots SM itself transmitted in (was: false "busy" readouts + garbled ghost rows in Band Activity from our own signal); `TxController` records a TX slot only after successful PTT engagement; a ring buffer tracks recent TX slots for consecutive transmissions; `SlotRefFromTime` floors timestamps to the 15 s lattice (+ `TestSlotRefFromTime_FloorsToLattice`). Commits `0ec9328c`/`98d7beab`/`f51542c3`. **(3)** dev-bootstrap warning for full system upgrades (`3e84dd30`). **Next:** nothing — waiting on the go-ft8 release (bug fixes + compound-callsign support); on arrival bump the dep + re-check slash-aware parsing (memory `sm-waiting-goft8-release`).
 
