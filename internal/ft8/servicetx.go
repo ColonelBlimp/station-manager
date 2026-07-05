@@ -166,6 +166,35 @@ func (s *Service) armTx() error {
 	return nil
 }
 
+// markTxSlot records a slot boundary the TX controller just keyed (wired via
+// txCtrl.onTransmit, invoked only AFTER PTT engages — a failed key must not mark
+// the slot, or decodeLoop would skip the occupancy of a genuine RX slot).
+// decodeLoop consults wasTxSlot to skip decode + occupancy for the slot: its
+// captured audio is our own signal. A ring so a second TX keyed close behind
+// can't evict the first before decodeLoop processes it.
+func (s *Service) markTxSlot(boundary time.Time) {
+	utc := SlotRefFromTime(boundary).StartUTC
+	s.txSlotMu.Lock()
+	s.txSlots[s.txSlotIx] = utc
+	s.txSlotIx = (s.txSlotIx + 1) % len(s.txSlots)
+	s.txSlotMu.Unlock()
+}
+
+// wasTxSlot reports whether startUTC is one of the recent slots we transmitted in.
+func (s *Service) wasTxSlot(startUTC string) bool {
+	if startUTC == "" {
+		return false
+	}
+	s.txSlotMu.Lock()
+	defer s.txSlotMu.Unlock()
+	for _, u := range s.txSlots {
+		if u == startUTC {
+			return true
+		}
+	}
+	return false
+}
+
 // disarmTx tears down the TX path: aborts any in-flight transmission, drains
 // the TX goroutine, and closes the output device. closing=true also latches the
 // subsystem so it can never be re-armed (used by Stop). Idempotent. Also abandons

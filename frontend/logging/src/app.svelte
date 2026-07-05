@@ -181,8 +181,8 @@
             class="mx-auto mt-6 w-fit max-w-200 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-center text-sm text-amber-800"
             role="status"
         >
-            ⚠ Another tab is controlling this rig ({bridgeState.tabCount} tabs open) — a
-            frequency, band, or mode change here moves the same radio.
+            ⚠ Another tab is controlling this rig ({bridgeState.tabCount} tabs open) — a frequency, band,
+            or mode change here moves the same radio.
         </div>
     {/if}
     <main class="relative rounded-xl border border-line-soft h-166 w-fit mx-auto mt-12">
@@ -264,16 +264,17 @@
 {#snippet setup_done()}
     <main class="rounded-xl border border-line-soft h-120 w-200 mx-auto mt-12 p-8">
         <h1 class="text-center font-semibold text-2xl">
-            <span class="text-green-500">✓</span> Setup complete{configState.loggingStation.stationCallsign
+            <span class="text-green-500">✓</span> Setup complete{configState.loggingStation
+                .stationCallsign
                 ? ` — ${configState.loggingStation.stationCallsign}`
                 : ''}
         </h1>
         <div class="py-4 text-center">
             <p>Your default logbook is ready and you can start logging right away.</p>
             <p class="mt-3">Want to finish setting up your station first?</p>
-            <p>The <i>Config</i> app is where you set up your rig (CAT),
-                QSO forwarding (QRZ, ClubLog…), session email, FT8, and the rest of your
-                    station details.
+            <p>
+                The <i>Config</i> app is where you set up your rig (CAT), QSO forwarding (QRZ, ClubLog…),
+                session email, FT8, and the rest of your station details.
             </p>
         </div>
         <div class="flex flex-col items-center space-y-3 pt-2">

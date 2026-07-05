@@ -224,8 +224,12 @@
                                 {formatDate(row.qsoDate)}
                                 {formatTime(row.timeOn)}
                             </td>
-                            <td class="w-36 text-nowrap overflow-hidden text-ellipsis">{row.country}</td>
-                            <td class="w-22 text-nowrap overflow-hidden text-ellipsis">{formatDistance(row.distanceKm)}</td>
+                            <td class="w-36 text-nowrap overflow-hidden text-ellipsis"
+                                >{row.country}</td
+                            >
+                            <td class="w-22 text-nowrap overflow-hidden text-ellipsis"
+                                >{formatDistance(row.distanceKm)}</td
+                            >
                             {#if configState.mailer.enabled}
                                 <td class="w-6 pl-1">
                                     {#if row.emailedDate}

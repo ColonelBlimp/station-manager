@@ -342,16 +342,26 @@ func TestTxState_ReplayedToLateSubscriber(t *testing.T) {
 // The boundary (TX) and the capture StartUTC must reduce to the same RFC3339 string.
 func TestTxSlotTracking(t *testing.T) {
 	s := &Service{}
-	boundary := time.Date(2026, 7, 4, 15, 5, 30, 0, time.UTC)
-	s.markTxSlot(boundary)
+	b1 := time.Date(2026, 7, 4, 15, 5, 30, 0, time.UTC)
+	s.markTxSlot(b1)
 
 	// The captured slot's ref for the same boundary must match.
-	if ref := SlotRefFromTime(boundary); !s.wasTxSlot(ref.StartUTC) {
+	if ref := SlotRefFromTime(b1); !s.wasTxSlot(ref.StartUTC) {
 		t.Fatalf("wasTxSlot(%q) = false, want true (the slot we keyed)", ref.StartUTC)
 	}
-	// The adjacent (RX) slot must NOT match — its occupancy is real and published.
-	if other := SlotRefFromTime(boundary.Add(SlotDuration)); s.wasTxSlot(other.StartUTC) {
-		t.Fatalf("wasTxSlot(%q) = true, want false (a different slot)", other.StartUTC)
+
+	// A second TX slot keyed close behind is ALSO remembered — the ring means marking
+	// b2 doesn't evict b1 before decodeLoop reads it (the overwrite race the fix closes).
+	b2 := b1.Add(SlotDuration)
+	s.markTxSlot(b2)
+	r1, r2 := SlotRefFromTime(b1), SlotRefFromTime(b2)
+	if !s.wasTxSlot(r1.StartUTC) || !s.wasTxSlot(r2.StartUTC) {
+		t.Fatal("both recent TX slots must match after two marks (ring, not a single slot)")
+	}
+
+	// A slot we never transmitted in must NOT match — its occupancy is real and published.
+	if other := SlotRefFromTime(b2.Add(SlotDuration)); s.wasTxSlot(other.StartUTC) {
+		t.Fatalf("wasTxSlot(%q) = true, want false (a slot we never keyed)", other.StartUTC)
 	}
 	// Empty never matches (defensive; before any TX).
 	if s.wasTxSlot("") {

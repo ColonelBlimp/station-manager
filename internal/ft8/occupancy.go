@@ -172,7 +172,10 @@ func Occupancy(slot SlotRef, samples []int16, decodes []goft8.DecodedMessage, cf
 // even/odd 15-second alternation aligned to the UTC minute: :00 and :30 are
 // "even", :15 and :45 are "odd" (the WSJT-X convention).
 func SlotRefFromTime(start time.Time) SlotRef {
-	start = start.UTC()
+	// Floor to the 15 s slot lattice so a mid-slot time yields the same StartUTC as
+	// its boundary. Every producer today already passes an aligned boundary; this
+	// only hardens against misuse and keeps wasTxSlot's exact-string match robust.
+	start = start.UTC().Truncate(SlotDuration)
 	period := "even"
 	if (start.Unix()/slotSeconds)%2 != 0 {
 		period = "odd"

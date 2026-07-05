@@ -99,7 +99,7 @@ func TestTransmit_HappyPath(t *testing.T) {
 	wave := []int16{1, 2, 3}
 	go p.finishPlayback() // playback completes promptly
 
-	require.NoError(t, c.transmit(context.Background(), wave))
+	require.NoError(t, c.transmit(context.Background(), wave, nil))
 	require.Equal(t, 1, k.keys())
 	require.Equal(t, "DATA-U", k.keyMode)
 	require.Equal(t, 1, p.plays())
@@ -116,7 +116,7 @@ func TestTransmit_KeyError(t *testing.T) {
 	p := newFakePlayer()
 	c := NewTxController(k, p, "", logging.Noop())
 
-	require.Error(t, c.transmit(context.Background(), []int16{1}))
+	require.Error(t, c.transmit(context.Background(), []int16{1}, nil))
 	require.Equal(t, 0, p.plays(), "must not play after a failed key")
 	require.Equal(t, 0, k.unkeys(), "must not unkey when key never succeeded")
 }
@@ -129,7 +129,7 @@ func TestTransmit_PlayError(t *testing.T) {
 	p := &fakePlayer{playErr: stderrors.New("device busy")}
 	c := NewTxController(k, p, "", logging.Noop())
 
-	require.Error(t, c.transmit(context.Background(), []int16{1}))
+	require.Error(t, c.transmit(context.Background(), []int16{1}, nil))
 	require.Equal(t, 1, k.keys())
 	require.Equal(t, 1, k.unkeys(), "must unkey after a play error")
 }
@@ -145,7 +145,7 @@ func TestTransmit_ContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
 
-	require.Error(t, c.transmit(ctx, []int16{1}))
+	require.Error(t, c.transmit(ctx, []int16{1}, nil))
 	require.Equal(t, 1, k.unkeys(), "must unkey on cancel")
 	require.GreaterOrEqual(t, p.stops(), 1, "must stop the player on cancel")
 }

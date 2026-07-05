@@ -711,6 +711,12 @@ subscriber would duplicate a session-list row):
 Per completed slot, the detector turns audio + that slot's decodes into the
 `OccupancyReport` the picker consumes. It is **data, not a spectrogram.**
 
+A slot the daemon **transmitted in is skipped entirely** — no decode, no
+`ft8-occupancy` event — because its captured audio is our own signal (rig TX-audio
+bleed). The SPA holds the prior RX-slot occupancy report and keeps its slot clock
+ticking from the (empty) `ft8-decode` event that still fires; this is why the
+busy/clear readout no longer flickers in lockstep with TX/RX.
+
 1. **Spectrum** — Hann-windowed, 50 %-overlap Welch average over the slot, FFT
    size 3840 (3.125 Hz bins, half an FT8 tone).
 2. **Two occupancy tiers**, merged into one `occupied` list:

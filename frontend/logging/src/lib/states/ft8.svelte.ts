@@ -1,12 +1,14 @@
 /**
  * FT8 occupancy SSE transport — EventSource consumer for `GET /v1/ft8/events`.
  *
- * The daemon's FT8 subsystem publishes one SSE event type, `ft8-occupancy`, a
+ * The daemon's FT8 subsystem publishes an `ft8-occupancy` SSE event per slot — a
  * per-slot `OccupancyReport` (ADR 0029 step a): which audio offsets are busy
  * and a daemon-ranked list of clear offsets for TX-frequency selection. This is
  * decision data, NOT a spectrogram — a single static frame that replaces itself
- * once per 15-second slot, so there is no animation or canvas, just a reactive
- * `$state` the display reads.
+ * each 15-second slot, so there is no animation or canvas, just a reactive
+ * `$state` the display reads. (A slot we transmitted in emits no occupancy event —
+ * its audio is our own signal — so the slot clock is driven from `ft8-decode`,
+ * which fires every slot; the prior RX-slot occupancy report stays on screen.)
  *
  * Far simpler than `bridge.svelte.ts`: one event type, read-only, no toast
  * state machine and no manual-state snapshot. The daemon's hub replays the
@@ -443,6 +445,12 @@ function openSource(): void {
             console.warn('[ft8] decode JSON parse failed', e);
             return;
         }
+        // Slot heartbeat: the decode feed fires every slot (the daemon skips the
+        // ft8-occupancy event on our own TX slots), so drive the footer slot clock /
+        // parity from here too — before the empty-slot early-return, so a silent or
+        // own-TX slot still advances the clock.
+        if (report.slot) ft8State.slot = report.slot;
+
         const lines = report.decodes ?? [];
         if (lines.length === 0) return; // silent slot — nothing to add
 

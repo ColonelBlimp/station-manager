@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
@@ -170,13 +171,17 @@ type Service struct {
 	// happens-before contract as qsoLogger / decodeSink).
 	stationCall func() string
 
-	// lastTxSlotUTC is the StartUTC of the most recent slot the FT8 TX controller
-	// keyed (via txCtrl.onTransmit). decodeLoop skips occupancy for that slot: the
-	// captured audio is our own transmission (rig TX-audio bleed), which the raw-
-	// spectrum energy detector would otherwise read as a busy band right on our own
-	// offset — the occupancy sibling of the self-decode filter. Guarded by txSlotMu.
-	txSlotMu      sync.Mutex
-	lastTxSlotUTC string
+	// txSlots is a small ring of the StartUTCs of recent slots the FT8 TX controller
+	// keyed (via txCtrl.onTransmit, recorded only after PTT engages). decodeLoop skips
+	// decode + occupancy for those slots: the captured audio is our own transmission
+	// (rig TX-audio bleed), which the decoder would surface as ghost Band Activity rows
+	// and the raw-spectrum energy detector would read as a busy band right on our own
+	// offset — the occupancy sibling of the self-decode filter. A ring (not one slot)
+	// so a second TX keyed close behind can't evict the first before its slot is
+	// processed (the occupancy check runs ~1 s after the slot ends). Guarded by txSlotMu.
+	txSlotMu sync.Mutex
+	txSlots  [3]string
+	txSlotIx int
 
 	// decLog is the optional JTDX-style ALL.TXT decode log (ft8.decode_log.enabled).
 	// Opened at capture-start and closed at capture-release (and on an unexpected
@@ -647,29 +652,16 @@ func (s *Service) Enabled() bool {
 	return s != nil && s.cfg.Enabled
 }
 
-// decodeLoop consumes completed slots and decodes each, then computes the
-// per-slot occupancy report (the clear-offset picker's input) from the same
-// samples + decodes and publishes it as the latest. DecodeSlot is itself
-// fail-soft (it recovers per-slot panics), so a bad slot can't break the
-// loop; the safego wrapper around this loop is belt-and-braces. Occupancy is
-// cheap (one averaged FFT per slot, ~tens of ms) next to the decode, so it
-// adds negligible time to the slot budget.
-// markTxSlot records the slot boundary the TX controller just keyed (wired via
-// txCtrl.onTransmit). decodeLoop consults wasTxSlot to skip occupancy for it.
-func (s *Service) markTxSlot(boundary time.Time) {
-	s.txSlotMu.Lock()
-	s.lastTxSlotUTC = SlotRefFromTime(boundary).StartUTC
-	s.txSlotMu.Unlock()
-}
-
-// wasTxSlot reports whether startUTC is the slot we most recently transmitted in —
-// its captured audio is our own signal, so occupancy for it is meaningless.
-func (s *Service) wasTxSlot(startUTC string) bool {
-	s.txSlotMu.Lock()
-	defer s.txSlotMu.Unlock()
-	return startUTC != "" && startUTC == s.lastTxSlotUTC
-}
-
+// decodeLoop consumes completed slots: it decodes each, publishes the decode feed
+// (live Band Activity) and the per-slot occupancy report (the clear-offset picker's
+// input) from the same samples + decodes, and drives the sequencer. A slot we
+// transmitted in (wasTxSlot) is skipped for BOTH decode and occupancy — its captured
+// audio is our own signal — but still emits an empty decode report so the SPA's slot
+// clock keeps ticking, and leaves the prior RX-slot occupancy report standing.
+// DecodeSlot is itself fail-soft (it recovers per-slot panics), so a bad slot can't
+// break the loop; the safego wrapper around this loop is belt-and-braces. Occupancy
+// is cheap (one averaged FFT per slot, ~tens of ms) next to the decode, so it adds
+// negligible time to the slot budget.
 func (s *Service) decodeLoop(slots <-chan Slot) {
 	osd := s.osdEnabled()
 	// Previously-recommended top offset, carried across slots for the
@@ -678,36 +670,42 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 	// slot. Loop-local, so it resets naturally when a new capture session starts.
 	prevTop := 0
 	for slot := range slots {
-		msgs := DecodeSlot(slot.Samples, osd, s.log)
-		// Drop our own transmissions self-decoded off the rig's TX-audio bleed, so
-		// Band Activity / occupancy / the sequencer never see our own signal. No-op
-		// when idle (nothing keyed decodes as us) or no station call is wired.
-		if s.stationCall != nil {
-			msgs = dropOwnTransmissions(msgs, s.stationCall())
-		}
 		ref := SlotRefFromTime(slot.StartUTC)
+		txSlot := s.wasTxSlot(ref.StartUTC)
+
+		// Skip decode + occupancy for a slot we transmitted in: the captured audio is
+		// our own TX (rig bleed). Decoding it wastes ~1 s and can surface garbled bleed
+		// as ghost Band Activity rows; the raw-spectrum energy detector would mark our
+		// own offset "busy" and flicker the readout busy↔clear in lockstep with TX/RX
+		// (the occupancy sibling of the self-decode filter). WSJT-X likewise doesn't
+		// decode its own TX slot.
+		var msgs []goft8.DecodedMessage
+		if !txSlot {
+			msgs = DecodeSlot(slot.Samples, osd, s.log)
+			// Drop our own transmissions self-decoded off residual rig TX-audio bleed,
+			// so Band Activity / the sequencer never see our own signal. No-op when idle
+			// (nothing keyed decodes as us) or no station call is wired.
+			if s.stationCall != nil {
+				msgs = dropOwnTransmissions(msgs, s.stationCall())
+			}
+		}
 
 		// JTDX ALL.TXT RX lines (ft8.decode_log) — independent of the daemon log
-		// level. nil-safe no-op when the decode log is disabled.
+		// level. nil-safe no-op when the decode log is disabled (and on a TX slot,
+		// msgs is empty so nothing is written).
 		s.decLog.Load().WriteRx(slot.StartUTC, msgs)
 
-		// Publish the decode feed (live Band Activity) and the occupancy report
-		// (TX-offset picker) for the same slot. Independent SSE events on one
-		// stream; order between them doesn't matter to the SPA.
+		// Publish the decode feed every slot (empty on our TX slots) so the SPA's slot
+		// clock stays live; the decode + occupancy publish independent SSE events on
+		// one stream, order between them doesn't matter to the SPA.
 		report := newDecodeReport(ref, msgs)
 		s.hub.publish(hubEvent{name: EventDecode, payload: report})
 		if s.decodeSink != nil {
 			s.decodeSink(report)
 		}
 
-		// Skip occupancy for a slot we transmitted in: the captured audio is our own
-		// TX (rig bleed), so the raw-spectrum energy detector would mark our own
-		// offset "busy" and the readout would flicker busy↔clear in lockstep with
-		// TX/RX (the occupancy sibling of the self-decode filter). Occupancy measured
-		// while we transmit is meaningless — leave the prior RX-slot report standing
-		// on the SPA (no publish this slot).
 		var rep OccupancyReport
-		if !s.wasTxSlot(ref.StartUTC) {
+		if !txSlot {
 			rep = Occupancy(ref, slot.Samples, msgs, s.occCfg)
 			rep.Suggested = stickySuggested(rep.Suggested, rep.Occupied, s.occCfg, prevTop)
 			if len(rep.Suggested) > 0 {
@@ -720,11 +718,13 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 
 		// Drive the manual sequencer (ADR 0031): feed this slot's decodes to the
 		// active exchange and let it transmit the next rung in the current
-		// (opposite-parity) slot. No-op when no QSO is active.
+		// (opposite-parity) slot. No-op when no QSO is active; on our own TX slot the
+		// decodes are empty and the parity-matched handler bails.
 		s.seq.OnSlot(ref, msgs, time.Now().UTC())
 
 		s.log.DebugWith().
 			Str("slot", ref.StartUTC).
+			Bool("tx_slot", txSlot).
 			Int("decodes", len(msgs)).
 			Int("occupied", len(rep.Occupied)).
 			Int("suggested", len(rep.Suggested)).

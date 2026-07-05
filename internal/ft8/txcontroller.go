@@ -46,11 +46,11 @@ type TxController struct {
 	mode   string // rig data-mode literal to switch to before keying; "" = leave as-is
 	log    logging.Logger
 
-	// onTransmit, when set, is invoked with the slot boundary just before a
-	// transmission is keyed. The FT8 service wires this to record which slot we
-	// keyed so the decode loop can skip occupancy for it — the captured audio of a
-	// slot we transmitted in is our own signal (rig TX bleed), meaningless for
-	// channel occupancy. Nil (default) = no-op.
+	// onTransmit, when set, is invoked with the slot boundary immediately after PTT
+	// keys successfully (not before — a failed key must not mark the slot). The FT8
+	// service wires this to record which slot we keyed so the decode loop can skip
+	// decode + occupancy for it — the captured audio of a slot we transmitted in is
+	// our own signal (rig TX bleed), meaningless for channel occupancy. Nil = no-op.
 	onTransmit func(boundary time.Time)
 }
 
@@ -134,24 +134,33 @@ func (c *TxController) transmitAligned(ctx context.Context, waveform []int16, bo
 	if len(wave) == 0 {
 		return errors.New(op).WithMsg("too late in slot; nothing left to transmit")
 	}
-	// Record the slot we're about to key (committed to transmitting now) so the
-	// decode loop skips occupancy for it — see onTransmit.
-	if c.onTransmit != nil {
-		c.onTransmit(boundary)
-	}
-	return c.transmit(ctx, wave)
+	// Record this slot ONLY after PTT keys successfully (onKeyed, below) — not here.
+	// A failed key (single-flight held by a tune carrier, a rig blip in the boundary
+	// wait) means no RF went out, so the slot is a normal RX slot; marking it would
+	// make decodeLoop wrongly skip its occupancy. onTransmit records the slot so the
+	// decode loop skips its own-TX audio — see the TxController.onTransmit doc.
+	return c.transmit(ctx, wave, func() {
+		if c.onTransmit != nil {
+			c.onTransmit(boundary)
+		}
+	})
 }
 
 // transmit is the key → play → unkey core, independent of slot timing so it is
-// unit-testable. PTT is unkeyed on EVERY return path (success, play error, or
-// ctx cancel) via a deferred guard, on a background context so a cancelled
-// parent ctx can't skip the unkey — the bridge's auto-off backstop is the
-// further safety net.
-func (c *TxController) transmit(ctx context.Context, waveform []int16) error {
+// unit-testable. onKeyed, if non-nil, is invoked exactly once immediately after
+// KeyTx succeeds (before audio) — the caller uses it to mark the slot only once
+// RF is actually going out. PTT is unkeyed on EVERY return path (success, play
+// error, or ctx cancel) via a deferred guard, on a background context so a
+// cancelled parent ctx can't skip the unkey — the bridge's auto-off backstop is
+// the further safety net.
+func (c *TxController) transmit(ctx context.Context, waveform []int16, onKeyed func()) error {
 	const op errors.Op = "ft8.TxController.transmit"
 
 	if err := c.keyer.KeyTx(ctx, c.mode); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("key tx")
+	}
+	if onKeyed != nil {
+		onKeyed()
 	}
 	unkeyed := false
 	unkey := func() {
