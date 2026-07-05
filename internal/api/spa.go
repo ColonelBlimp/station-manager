@@ -18,7 +18,10 @@ import (
 // pattern-matched routes priority over the bare "/" catch-all, so any
 // request matching a /v1/* pattern is dispatched there before reaching
 // this handler. The catch-all is therefore naturally bounded to "paths
-// that match nothing else."
+// that match nothing else." A /v1/* path that matches NO registered
+// pattern (a disabled subsystem like bridge/FT8, or a typo) DOES reach
+// here — and gets an honest 404, not an SPA-fallback 200, so API misses
+// stay truthful for curl/script/EventSource/fetch consumers.
 //
 // See docs/v2-design/frontend-spa.md for the full design.
 func spaHandler(spa fs.FS) http.Handler {
@@ -34,6 +37,16 @@ func spaHandler(spa fs.FS) http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		// http.FS opens paths relative to the FS root. The leading
 		// "/" is stripped so e.g. "/assets/main.js" → "assets/main.js".
+		// A /v1/* path reaching this catch-all matched no API route — a disabled
+		// subsystem (bridge/FT8 off) or a typo. Return a real 404 rather than
+		// SPA-falling-through to a 200 index.html: /v1/* is the API namespace,
+		// never an SPA client route, and a 200 HTML page misleads every
+		// curl/script/EventSource/fetch consumer (a disabled GET /v1/rig/events
+		// would otherwise 200-HTML; POST /v1/rig/command would 405 vs GET /).
+		if strings.HasPrefix(r.URL.Path, "/v1/") {
+			http.NotFound(w, r)
+			return
+		}
 		clean := strings.TrimPrefix(r.URL.Path, "/")
 		if clean == "" {
 			fileServer.ServeHTTP(w, r)
@@ -47,6 +60,13 @@ func spaHandler(spa fs.FS) http.Handler {
 			// fileServer; nothing downstream observes the rewrite.)
 			r.URL.Path = "/"
 		} else {
+			// A real DIRECTORY (e.g. /assets/) has no index.html, so
+			// http.FileServer would render a directory listing — a minor
+			// disclosure once served over LAN TCP. Treat it as an SPA route too;
+			// only a real FILE is served directly.
+			if info, serr := f.Stat(); serr == nil && info.IsDir() {
+				r.URL.Path = "/"
+			}
 			_ = f.Close()
 		}
 		fileServer.ServeHTTP(w, r)

@@ -46,11 +46,11 @@ next, and in what order" is answered.
 
 **P2 — next features (open one workstream per active focus)**
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
-- _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW)
+- _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW) · work-path opening: prefer clean next-slot start over truncated immediate fire
 - _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
-- _Data / SM-Cloud prep (do before S3):_ **migration 0004 AUTHORED 2026-07-05** (up/down + `TestMigrate0004`; trigger/default `localtime`→UTC rebuild + normalise pre-fix timestamp debris — **awaiting operator review + deploy against the live DB**; see detail) · `internal/database` review lows (cold-insert retry, bootstrap stale-table detection, + 5 nits)
-- _Code-review lows (2026-07-05 `internal/api` review):_ disabled-subsystem routes return 200-HTML/405 instead of 404 (one `spaHandler` guard, also closes the `/assets/` directory-listing nit) · negative server-limit panics at startup (→ validation error) · credential-clear asymmetry (forwarder clears on blank, SMTP/lookup keep) — unify or document side-by-side · stale `middleware.go` Unwrap comment
+- _Data / SM-Cloud prep (do before S3):_ ~~migration 0004~~ **DEPLOYED + VERIFIED 2026-07-05** on the live 5,148-QSO dogfood DB (`schema_migrations_log` v4 clean; 0 debris/unparseable rows; `created_at` matches `qso_date`/`time_on` in UTC) → move to archive · `internal/database` review lows (cold-insert retry, bootstrap stale-table detection, + 5 nits) — still open
+- _Code-review lows (2026-07-05 `internal/api` review):_ ~~disabled-subsystem routes 200-HTML/405 + `/assets/` listing~~ **FIXED 2026-07-05** (`spaHandler` `/v1/`→404 guard + directory→SPA-fallback; tests) · negative server-limit panics at startup (→ validation error) · credential-clear asymmetry (forwarder clears on blank, SMTP/lookup keep) — unify or document side-by-side · stale `middleware.go` Unwrap comment
 - _Code-review nits (2026-07-05 `internal/qsoservice` review):_ `uuid_conflict` classification unreachable under `force` (`submit.go:322`, drop `&& !force` — trap for a future `--force` import) · `importBatchFallback` publishes Hub events, contradicting `SubmitImportBatch`'s "does NOT publish" doc (note the fallback exception) · best-effort `contacted_station` cache warm-up uses the request ctx (a detached short-timeout ctx would make it client-independent, like the dedupe refetch)
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
@@ -963,14 +963,12 @@ next, and in what order" is answered.
 - **`internal/api` review low-severity batch (2026-07-05).** Verified LOW findings; the
   MEDIUM (PUT /v1/config lost-update race between the two SPAs) shipped 2026-07-05 (see
   backlog-archive). None below is ship-gate.
-  - **Disabled-subsystem routes return misleading statuses** (`server.go` / `spaHandler`). With
-    the bridge or FT8 disabled and the SPA served, `GET /v1/rig/events` matches the `GET /`
-    catch-all → **200 + index.html**, and `POST /v1/rig/command` → **405** (method mismatch vs
-    `GET /`), never the 404 the code's own comment claims. The SPAs are unaffected (they gate on
-    `/v1/config` enablement flags; EventSource rejects the HTML MIME), but curl/script consumers
-    get nonsense, and every typo'd `/v1/...` GET returns a 200 HTML page. **Fix:** one guard in
-    `spaHandler` — path starts with `/v1/` → real 404 — restores honest statuses everywhere and
-    fixes the comment. **Same guard closes the directory-listing nit below.**
+  - ~~**Disabled-subsystem routes return misleading statuses** (`server.go` / `spaHandler`).~~
+    **FIXED 2026-07-05.** A `/v1/*` path reaching the SPA catch-all (disabled bridge/FT8, or a
+    typo) now returns an honest 404 instead of 200-HTML/405; and a real directory (`/assets/`)
+    SPA-falls-through to index.html instead of an `http.FileServer` listing (the disclosure nit,
+    closed by the same change). `spaHandler` `/v1/`-guard + `f.Stat().IsDir()` rewrite; tests
+    `TestSpaHandler_ApiPathReturns404` + `TestSpaHandler_DirectoryServesIndexNotListing`.
   - **Nits:**
     - Negative server-limit config panics at startup: `Normalize` defaults only `== 0`, so
       `max_concurrent_requests: -1` reaches `make(chan struct{}, -1)` in `newLoadLimiter` → panic
@@ -979,10 +977,8 @@ next, and in what order" is answered.
       empty-string value as overwrite-with-empty (clearable), while **SMTP/lookup** passwords
       treat blank as keep (not clearable via the API). Each is locally documented, but the
       asymmetry invites a confused bug report — unify, or document side-by-side in api.md.
-    - `spaHandler` serves **directory listings** for real embed-FS dirs (e.g. `GET /assets/`
-      lists the bundle — no index.html there, so `http.FileServer` renders a listing). Trivial
-      disclosure on a LAN-exposed TCP deployment; treating a directory hit as SPA-fallback closes
-      it (folds into the `/v1/` guard fix).
+    - ~~`spaHandler` serves **directory listings** for real embed-FS dirs~~ **FIXED 2026-07-05**
+      (same change — a directory hit now SPA-falls-through to index.html).
     - Stale comment: `middleware.go:206-216` (Unwrap) still says the bridge SSE handler "clears
       its write deadline at stream open" — it arms per-write deadlines now. Doc drift only.
 
@@ -1005,6 +1001,25 @@ next, and in what order" is answered.
   - **Best-effort `contacted_station` cache warm-up uses the request ctx** — a client that
     disconnects right after commit skips the cache write. Deliberately best-effort; a detached
     short-timeout ctx (like the dedupe refetch already uses) would make it client-independent.
+
+- **FT8 work-a-caller / Resume opening — prefer a clean next-slot start over a truncated
+  immediate fire.** From dogfood-inbox 2026-07-05 ("abandon while TX → Resume immediately
+  starts TX — too late into the slot?"), triaged + **confirmed WAI (not a bug)**: the immediate
+  TX is gated by `fireOpening` (`sequencer.go:805-816`) — it keys immediately ONLY within the
+  first `txLateWindowSec` (4.5 s) of an our-parity slot, where ADR 0032 truncate-don't-shift keeps
+  the signal decodable; past 4.5 s (or in the partner's parity) it defers to the next slot. So it
+  never actually fires "too late." **The enhancement:** `fireOpening` is SHARED by the answer-a-CQ
+  path (which legitimately NEEDS the truncated immediate fire — a DXpedition moves on if you're a
+  slot late) and the **work-a-caller / pile-up-drain** path (`StartWorkCaller` → `fireOpening`,
+  reached on Resume). But a station you're *working* is calling YOU and will keep calling — there
+  is no tight reply window — so a truncated opening (up to ~36 % of symbols dropped at 4.5 s) is
+  arguably worse than just waiting one slot for a clean, full-length start. Consider gating the
+  **opening rung on the work path** (`seqWorking`, and maybe the caller-side too) to skip the
+  immediate-truncate and wait for the next clean our-parity `OnSlot`, while leaving the answer-a-CQ
+  opening's immediate fire unchanged. `fireOpening` is per-mode already (the `switch s.mode`), so
+  the differentiation is local; decide whether the caller-side Call-CQ opening wants the same
+  treatment. Purely a TX-quality nicety — the current behaviour is correct and on-air-validated,
+  just not optimal for the no-time-pressure work case.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
