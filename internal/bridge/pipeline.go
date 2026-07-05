@@ -383,7 +383,10 @@ func (s *Service) unkeyOnTeardown(def cat.RigDefinition, client serial.Client) {
 	}
 	// Take cmdMu on CI-V (half-duplex bus guard) so the unkey frame can't
 	// interleave with an in-flight command/key sequence. The poll loop is
-	// already drained by this point in teardown, so this can't stall.
+	// already drained by this point in teardown; the only remaining cmdMu
+	// holder is an in-flight SendCommands awaiting an ACK the now-dead readLoop
+	// won't deliver, so this waits at most civAckTimeout per frame — bounded,
+	// not unbounded.
 	civ := def.Protocol == cat.ProtocolIcomCIV
 	if err := s.underCmdMuCIV(civ, func() error {
 		return client.WriteCommandBytes(context.Background(), txOff)

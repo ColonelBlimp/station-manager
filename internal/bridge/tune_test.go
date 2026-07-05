@@ -780,4 +780,28 @@ func TestDefensiveUnkeyIfStranded(t *testing.T) {
 			t.Fatal("strandedKeyed must persist until identity confirms")
 		}
 	})
+
+	t.Run("skips the defensive unkey while a legitimate TX owns the PTT", func(t *testing.T) {
+		// A real tune keyed after the flag was armed (e.g. the operator started a
+		// tune the instant identity re-confirmed). The defensive tx_off must NOT
+		// fire — it would cut the live carrier; the tune's own guaranteed-stop
+		// unkeys on release. The flag still clears: ownership of the stop has
+		// passed to the active TX.
+		s, f := tuneTestService(t) // identityConfirmed=true
+		s.mu.Lock()
+		s.strandedKeyed = true
+		s.tuneActive = true
+		s.mu.Unlock()
+		before := len(f.recordedWrites())
+		s.defensiveUnkeyIfStranded(def, f)
+		if n := len(f.recordedWrites()); n != before {
+			t.Fatalf("must not send a defensive tx_off while a TX is active; got %d new writes", n-before)
+		}
+		s.mu.Lock()
+		stranded := s.strandedKeyed
+		s.mu.Unlock()
+		if stranded {
+			t.Fatal("strandedKeyed must clear when the stop is handed off to a live TX")
+		}
+	})
 }

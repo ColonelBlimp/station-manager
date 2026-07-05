@@ -92,8 +92,15 @@ in-flight command/key sequence on the half-duplex CI-V bus, and its FB can't be
 misrouted by `deliverAck` to a pending command waiter. The defensive fire also
 re-checks `tuneActive || ft8TxActive` *under* `cmdMu` before writing, so a
 `StartTune`/`KeyFt8Tx` racing in the gap after identity-confirm unlocks the write
-paths can't be cut short (the key write serialises on the same `cmdMu`, making the
-ordering decisive).
+paths can't be cut short **on a CI-V rig** — there the key write also takes
+`cmdMu`, so the busy re-check and the key serialise and the ordering is decisive.
+On Yaesu/Kenwood the key write takes no `cmdMu` (fire-and-forget), so a narrow
+window remains: the busy re-check can pass just as a `StartTune`/`KeyFt8Tx` keys,
+and the defensive `tx_off` then lands after the `tx_on`, cutting the new
+transmission short. It is fail-safe in direction (carrier down; the ≤15 s auto-off
+timer reconciles) and needs a stranded flag *and* an operator keying in the same
+instant to line up — accepted rather than closed, since closing it would mean
+threading the non-CI-V key path through `cmdMu` purely for this race.
 
 Tests: `TestStartTune_FailedKeyWriteArmsStranded`,
 `TestKeyFt8Tx_FailedKeyWriteArmsStranded` (a failing key write rolls back
