@@ -43,6 +43,7 @@ next, and in what order" is answered.
 
 **P1 — finish in-flight / validate (small; closes open arcs)**
 - Behavioural retest of shipped daemon changes on the dogfood daemon (session 192/193 batch)
+- SPA `fetch` calls have no timeout — a half-open daemon connection wedges boot + the submit latch (flaky-link ship risk; `safeFetch` already has the unused `AbortSignal.timeout()` seam)
 
 **P2 — next features (open one workstream per active focus)**
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
@@ -51,6 +52,7 @@ next, and in what order" is answered.
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
+- _Code-review lows (2026-07-05 SPA review):_ 13 verified low-severity fixes (the fetch-timeout standout promoted to P1 above) — TX_PWR sub-0.5 W rounding (durable ADIF) · state-reset gaps (tabCount / freqKnown / stale decodes / enrich zombies) · FT8 UI nits (bearing 360°, drain-abort, FD tooltip, isWorking split, canAnswer TX-guard) · edit-overlay mode dropdown
 
 **P3 — deferred / large / needs a trigger**
 - CAT poll mode (ADR 0034) · FT8 semi-auto watch-list (SET ASIDE) · spot-submitter registry (on 2nd destination) · operator / user profiles · outbound UDP telemetry (WSJT-X-compatible) · FT8 occupancy waterfall render · POTA fields · config hot-reload · settings help tooltips + beginner/expert mode · FT8 Monitor/Listen toggle (DISCUSSION) · download-site install page · `PUT /v1/config` `default_logbook.id` wiring (no consumer yet)
@@ -793,6 +795,69 @@ next, and in what order" is answered.
   reuses the same `actions/rigControl` handler (routing set_freq/set_freq_b by selected VFO
   as today) and which FT8 focus contexts should capture the keys without clashing with FT8's
   own Shift+Ctrl shortcuts. Small, but needs a keymap-collision check against the FT8 panel.
+
+- **SPA `fetch` calls have no timeout (P1 — flaky-link ship risk).** Promoted out
+  of the 2026-07-05 SPA-review low batch (below) on the 7Q8AC ship weighting: the
+  reviewer rated it low on generic grounds, but a half-open link is exactly the
+  Malawi failure mode. `AbortSignal.timeout()` support already exists in `safeFetch`
+  but no call passes a timeout, so a daemon that accepts a connection but never
+  responds leaves boot stuck on a blank page and `submitQso`'s in-flight latch
+  wedged for minutes — with no signal to the operator. Fix: pass a sane per-call
+  timeout into the existing `AbortSignal.timeout()` seam (a short one for reads /
+  boot, a longer one for the log-contact POST); on timeout, surface a retriable
+  error rather than hanging. Small change, high robustness payoff on a flaky link.
+
+- **SPA code-review low-severity batch (2026-07-05 review).** The verified LOW
+  findings from the same review whose highs/mediums (findings 1–7) shipped
+  2026-07-05. Each was confirmed by the slice reviewers; none is ship-gate. The
+  one standout (SPA fetch timeouts) was promoted to P1 — its own entry above. The
+  rest are grouped as the reviewer grouped them; each line leads with its surface
+  so it's greppable. Batch them in a dedicated cleanup pass (mostly one-liners);
+  pull an individual item forward if a related file is already open.
+
+  **Standout still in the batch:**
+  - **`TX_PWR` in (0, 0.5) W rounds to the `0` sentinel while passing the `> 0`
+    omit-guard (`adif.ts:240`).** Durable outbound ADIF data — a fractional
+    QRP power emits a wrong `0`. Fix: round before the omit gate, not after.
+
+  **States (`lib/states/`):**
+  - `bridge.svelte.ts:182–193` — `tabCount` not reset on SSE error, so the
+    "another tab is operating" banner stays stuck after a daemon restart.
+  - `bridge.svelte.ts` (~330) — `closeSource()` doesn't clear
+    `catState.freqKnown`, unlike both involuntary-disconnect paths (inconsistent
+    reset → a stale freq can read as known after a voluntary close).
+  - `ft8.svelte.ts:454` — single-feed mode keeps the prior slot's decodes on a
+    silent slot (should clear to reflect "nothing this slot").
+  - `ft8Enrich` — `ft8EnrichState.clear()` doesn't invalidate in-flight lookups,
+    so a lookup resolving after view-close re-inserts a zombie cache row.
+
+  **FT8 UI:**
+  - `Ft8PileupDrawer` — drawer-close can't abort an in-flight drain start; the
+    `AbortSignal` param exists but is unused.
+  - FD callers advertise "Ctrl+click to add to pile-up" in the tooltip, but
+    `enqueueCaller` parses with `parseDirectedToMe` only → silent no-op (FD
+    pile-up is listed pending in CLAUDE.md / the parked FD-UI item). Hide the
+    affordance until FD pile-up Ctrl-click actually lands.
+  - `bearing.ts:105` — bearing rounds *after* normalisation, so 359.97° renders
+    `360` instead of `000`. Normalise after rounding.
+  - `Ft8Panel.svelte:698` — `isWorking` splits on `' '` where sibling parsers use
+    `/\s+/` (inconsistent whitespace handling).
+  - `canAnswer` omits `!tx.transmitting` unlike `canSend` (a TX-in-progress guard
+    the sibling has).
+
+  **QSO UI:**
+  - Edit-overlay mode dropdown renders blank for stored modes outside its static
+    9-entry list (QsoPanel's own `modeList` appends the stored value; the overlay
+    doesn't). Mirror the append so an out-of-list mode still shows.
+  - Session-row fields re-read from live state *after* the `await`, so a CAT push
+    mid-POST can skew the Session-tab display. Snapshot before the await.
+  - F3 "Stop" re-snaps Time On to now — documented design, but a real data trap;
+    worth a confirm or a relabel so it can't silently overwrite a set Time On.
+
+  This whole batch, plus the two standouts, came from the 2026-07-05 SPA review;
+  the "Verified sound" list from that review (ADIF byte-length prefixes,
+  enrichment-never-blocks invariant, midnight rollover, i18n catalogue, EventSource
+  lifecycles, mode.ts submode table) was checked hard and should NOT be re-flagged.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
