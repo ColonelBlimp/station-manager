@@ -3,6 +3,9 @@
     // router). This pass: the Phone/CW entry card; FT8 is a placeholder. The right
     // util rail + CAT gate land in later increments.
     import { router } from '../router.svelte';
+    import UtilRail from './UtilRail.svelte';
+    import InfoPanel from './InfoPanel.svelte';
+    import PileupDrawer from './PileupDrawer.svelte';
 
     let callsign = $state('');
     let rstSent = $state('59');
@@ -16,7 +19,7 @@
 </script>
 
 {#if router.mode === 'phone'}
-    <div class="mx-auto w-fit">
+    <div class="operate-center">
         <div class="card w-[42rem]">
             <div class="flex items-end gap-4">
                 <div>
@@ -47,6 +50,8 @@
                 <button class="btn btn-primary" onclick={logQso} disabled={!canLog}>Log QSO</button>
             </div>
         </div>
+
+        <InfoPanel />
     </div>
 {:else}
     <div class="mx-auto max-w-3xl">
@@ -57,5 +62,11 @@
                 pass.
             </p>
         </div>
+
+        <InfoPanel />
     </div>
 {/if}
+
+<!-- Rail + drawer are shown for the whole Operate view (both modes). -->
+<UtilRail />
+<PileupDrawer />

@@ -181,6 +181,14 @@ html[data-nav='narrow'] .nav-operate:focus-within .op-flyout {
     .op-flyout-item[data-active='true'] {
         @apply bg-nav-accent-bg text-nav-accent-fg;
     }
+
+    /* Right util rail buttons — same shape/accent as the nav. */
+    .rail-item {
+        @apply flex w-full cursor-pointer items-center gap-x-3 rounded-md p-2 text-left text-sm/6 font-semibold text-nav-fg hover:bg-nav-accent-bg hover:text-nav-accent-fg;
+    }
+    .rail-item[data-active='true'] {
+        @apply bg-nav-accent-bg text-nav-accent-fg;
+    }
 }
 .nav-item svg {
     color: var(--color-nav-icon);
@@ -188,4 +196,101 @@ html[data-nav='narrow'] .nav-operate:focus-within .op-flyout {
 .nav-item:hover svg,
 .nav-item[data-active='true'] svg {
     color: var(--color-nav-accent-fg);
+}
+
+/* --- Right util rail + collapse (Operate → Phone/CW only) ------------------
+   Shown only when [data-rail='on']; --util-rail-w resizes the rail + the content
+   offset; narrow hides labels and centres the icons (data-util). */
+:root {
+    --util-rail-w: 12rem; /* full (default expanded) */
+}
+html[data-util='narrow'] {
+    --util-rail-w: 3.5rem; /* icon rail */
+}
+.util-rail {
+    position: fixed;
+    top: 4rem; /* below the header */
+    bottom: 0;
+    right: 0;
+    z-index: 30;
+    width: var(--util-rail-w);
+    display: none;
+    transition: width 0.2s ease;
+}
+html[data-rail='on'] .util-rail {
+    display: block;
+}
+html[data-rail='on'] .content-wrap {
+    padding-right: var(--util-rail-w);
+}
+html[data-rail='on'] header {
+    margin-right: calc(-1 * var(--util-rail-w)); /* span the top-right over the rail */
+}
+.rail-item svg {
+    color: var(--color-nav-icon);
+}
+.rail-item:hover svg,
+.rail-item[data-active='true'] svg {
+    color: var(--color-nav-accent-fg);
+}
+html[data-util='narrow'] .rail-label {
+    display: none;
+}
+html[data-util='narrow'] .rail-item {
+    justify-content: center;
+    gap: 0;
+}
+.util-chevron {
+    transition: transform 0.2s ease;
+}
+html[data-util='narrow'] .util-chevron {
+    transform: rotate(180deg);
+}
+
+/* Keep the logging card stationary as the sidebars collapse/expand *when there's
+   room*: anchor it to the viewport (independent of --sidebar-w / --util-rail-w)
+   instead of centring in the resizing content area. The `- var(--sidebar-w)`
+   cancels the content-wrap's left offset; matching the content-wrap's 0.2s
+   transition keeps it fixed during the collapse animation too. Clamps to the
+   content-left when the viewport is too narrow (not enough acreage). 21rem = half
+   the 42rem card. */
+.operate-center {
+    width: fit-content;
+    margin-left: max(0px, calc(50vw - 21rem - var(--sidebar-w)));
+    transition: margin 0.2s ease;
+}
+
+/* --- Pile-up drawer -------------------------------------------------------
+   Emerges from the RH rail's inner edge (right: var(--util-rail-w)), not the
+   window edge, since it's launched from the rail. Closed: translated its own
+   width to the right so it tucks BEHIND the rail (z below the rail) — hidden.
+   Open: slides left out from behind the rail. `right` transitions in lockstep
+   with the rail width (both 0.2s) so the closed drawer stays behind the rail
+   during a collapse/expand → no flash. (The ≥2rem "never overlap the logging
+   card" refinement is a later pass.) */
+.pileup-drawer {
+    position: fixed;
+    top: 4rem;
+    bottom: 0;
+    right: var(--util-rail-w);
+    z-index: 20; /* below the rail (z-30) so the closed drawer hides behind it */
+    width: 100%;
+    max-width: 15.75rem;
+    transform: translateX(100%);
+    transition:
+        transform 0.4s ease,
+        right 0.2s ease;
+    pointer-events: none;
+}
+.pileup-drawer[data-open='true'] {
+    transform: translateX(0);
+    pointer-events: auto;
+}
+html[data-drawer='open'] .content-wrap {
+    padding-right: calc(var(--util-rail-w) + 15.75rem);
+}
+/* Keep the header spanning to the edge when the drawer is open — extend it by
+   the FULL offset (rail + drawer), not just the rail. */
+html[data-drawer='open'] header {
+    margin-right: calc(-1 * (var(--util-rail-w) + 15.75rem));
 }
