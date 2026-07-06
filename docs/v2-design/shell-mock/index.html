@@ -250,10 +250,67 @@
         <!-- header content deferred -->
       </header>
 
-      <!-- Content region — blank; a dashed placeholder marks the canvas. -->
+      <!-- Content region — one <section data-panel> per destination; show() swaps
+           them. Only Operate is mocked; the rest are blank placeholders. -->
       <main class="bg-canvas py-10">
         <div class="px-4 sm:px-6 lg:px-8">
-          <div class="h-[60vh] rounded-xl border border-dashed border-line"></div>
+          <!-- Dashboard -->
+          <section data-panel="dashboard">
+            <div class="h-[60vh] rounded-xl border border-dashed border-line"></div>
+          </section>
+
+          <!-- Operate: Phone/CW <-> FT8 segmented control + a pane each -->
+          <section data-panel="operate" hidden>
+            <div class="mb-6">
+              <div
+                id="opMode"
+                role="tablist"
+                aria-label="Operating mode"
+                class="inline-flex rounded-lg bg-gray-200 p-1 dark:bg-white/5"
+              >
+                <button type="button" role="tab" data-mode="phone" class="op-seg">
+                  <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+                  </svg>
+                  Phone / CW
+                </button>
+                <button type="button" role="tab" data-mode="ft8" class="op-seg">
+                  <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.348 14.651a3.75 3.75 0 0 1 0-5.303m5.304 0a3.75 3.75 0 0 1 0 5.303m-7.425 2.122a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.808-3.808-9.98 0-13.789m13.788 0c3.808 3.808 3.808 9.981 0 13.79M12 12h.008v.008H12V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                  </svg>
+                  FT8
+                </button>
+              </div>
+            </div>
+
+            <div data-op="phone" class="op-pane">
+              <div class="flex h-[55vh] flex-col items-center justify-center rounded-xl border border-dashed border-line text-center">
+                <p class="text-sm font-semibold text-ink">Phone / CW</p>
+                <p class="mt-1 max-w-sm text-sm text-muted">
+                  Manual QSO entry — callsign + exchange, rig control, and the shared session log.
+                </p>
+              </div>
+            </div>
+            <div data-op="ft8" class="op-pane" hidden>
+              <div class="flex h-[55vh] flex-col items-center justify-center rounded-xl border border-dashed border-line text-center">
+                <p class="text-sm font-semibold text-ink">FT8</p>
+                <p class="mt-1 max-w-sm text-sm text-muted">
+                  Band activity, occupancy / offset picker, and the sequencer ladder — writing to the
+                  same session log.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <!-- Logbook -->
+          <section data-panel="logbook" hidden>
+            <div class="h-[60vh] rounded-xl border border-dashed border-line"></div>
+          </section>
+
+          <!-- Settings -->
+          <section data-panel="config" hidden>
+            <div class="h-[60vh] rounded-xl border border-dashed border-line"></div>
+          </section>
         </div>
       </main>
     </div>
@@ -270,6 +327,17 @@
         }
         .nav-item[data-active='true'] {
           @apply bg-nav-accent-bg text-nav-accent-fg;
+        }
+
+        /* Operate mode segmented control — TWP toggle idiom: a neutral container
+           with a raised white active segment. Literal TWP utilities + dark:
+           variants, contained to this component (tokenise later if reused). */
+        .op-seg {
+          @apply inline-flex items-center gap-x-2 rounded-md px-3 py-1.5 text-sm font-medium
+          text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200;
+        }
+        .op-seg[data-active='true'] {
+          @apply bg-white text-gray-900 shadow-sm dark:bg-white/10 dark:text-white;
         }
       }
       /* Icons ride currentColor: muted at rest, accent on hover/active — the TWP
@@ -322,18 +390,37 @@
         localStorage.setItem('sm-nav', next);
       });
 
-      // --- Nav: swap the active item (content stays blank for now). Stands in for
-      //     the shell's client-side router (real: History-API paths).
+      // --- Nav: swap the active item AND the matching content panel. Stands in
+      //     for the shell's client-side router (real: History-API paths).
       const nav = document.getElementById('nav');
+      const panels = document.querySelectorAll('[data-panel]');
       function show(view) {
         nav
           .querySelectorAll('.nav-item')
           .forEach((b) => b.setAttribute('data-active', String(b.dataset.view === view)));
+        panels.forEach((p) => (p.hidden = p.dataset.panel !== view));
       }
       nav.addEventListener('click', (e) => {
         const btn = e.target.closest('.nav-item');
-        if (btn) show(btn.dataset.view);
+        if (btn && btn.dataset.view) show(btn.dataset.view);
       });
+
+      // --- Operate: Phone/CW <-> FT8 segmented control, last choice persisted.
+      const opMode = document.getElementById('opMode');
+      const opPanes = document.querySelectorAll('[data-op]');
+      function showMode(mode) {
+        opMode
+          .querySelectorAll('.op-seg')
+          .forEach((b) => b.setAttribute('data-active', String(b.dataset.mode === mode)));
+        opPanes.forEach((p) => (p.hidden = p.dataset.op !== mode));
+        localStorage.setItem('sm-op-mode', mode);
+      }
+      opMode.addEventListener('click', (e) => {
+        const btn = e.target.closest('.op-seg');
+        if (btn) showMode(btn.dataset.mode);
+      });
+      showMode(localStorage.getItem('sm-op-mode') || 'phone');
+
       show('dashboard');
     </script>
   </body>
