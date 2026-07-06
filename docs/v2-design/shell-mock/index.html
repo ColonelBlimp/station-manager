@@ -14,9 +14,11 @@
   [data-theme] custom-property swap and the markup stays clean — no dark:
   littering, no literal palette classes in the nav.
 
-  Desktop-oriented: the sidebar shows at ≥lg (1024px), matching TWP 03; the
-  TWP mobile dialog (needs @tailwindplus/elements) is omitted from the mock —
-  view maximised.
+  Desktop-only: a min-width floor (64rem) keeps the full layout at all times —
+  sidebar always shown, content always offset; below the floor the page scrolls
+  horizontally rather than reflowing. No mobile/tablet state — a tablet can't host
+  the deployment (serial CAT / audio / CGO need a real machine), and real mobile
+  support is a separate design effort, deliberately out of scope for this mock.
 
   How to view: open in a browser (pulls the Tailwind v4 browser build from a CDN —
   needs internet once; the shipped SPA compiles Tailwind at build time, no CDN).
@@ -89,6 +91,7 @@
          gray-900 in dark, per Tailwind Plus's off-white-background shell. */
       body {
         background-color: var(--color-canvas);
+        min-width: 64rem; /* desktop-only floor: scroll below it, never reflow to mobile */
       }
 
       /* --- Collapsible sidebar (full <-> icon-only rail) --------------------
@@ -96,10 +99,14 @@
          the sidebar and the content offset; narrow hides labels + trailing/meta
          and centres the icons. Same nav markup, no second sidebar. */
       :root {
-        --sidebar-w: 18rem; /* full: w-72 */
+        --sidebar-w: 18rem; /* left nav — full */
+        --util-rail-w: 12rem; /* right rail — full (default expanded) */
       }
       html[data-nav='narrow'] {
-        --sidebar-w: 5rem; /* rail: w-20 */
+        --sidebar-w: 5rem; /* left nav — collapsed rail */
+      }
+      html[data-util='narrow'] {
+        --util-rail-w: 3.5rem; /* right rail — collapsed icon rail */
       }
       .sidebar-wrap,
       .content-wrap {
@@ -141,7 +148,7 @@
     <!-- ============================ APP SHELL (TWP 03) ============================ -->
 
     <!-- Fixed sidebar (desktop ≥lg) -->
-    <div class="sidebar-wrap hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-[var(--sidebar-w)] lg:flex-col">
+    <div class="sidebar-wrap fixed inset-y-0 z-50 flex w-[var(--sidebar-w)] flex-col">
       <div class="sidebar-inner flex grow flex-col gap-y-5 overflow-y-auto border-r border-line bg-surface px-6 pb-4">
         <!-- Brand header -->
         <div class="brand flex h-16 shrink-0 items-center gap-2">
@@ -271,7 +278,7 @@
     </div>
 
     <!-- Content column, offset past the fixed sidebar -->
-    <div class="content-wrap lg:pl-[var(--sidebar-w)]">
+    <div class="content-wrap pl-[var(--sidebar-w)]">
       <!-- Sticky header bar — intentionally EMPTY for now (SM's search /
            notifications / profile equivalents aren't relevant yet). Kept as the
            frame to populate later. -->
@@ -285,19 +292,86 @@
            them. Only Operate is mocked; the rest are blank placeholders. -->
       <main class="bg-canvas py-10">
         <div class="px-4 sm:px-6 lg:px-8">
-          <!-- Dashboard -->
+          <!-- Dashboard — constrained page container (max-w-7xl) + card grid -->
           <section data-panel="dashboard">
-            <div class="h-[60vh] rounded-xl border border-dashed border-line"></div>
+            <div class="mx-auto max-w-7xl">
+              <h1 class="text-2xl font-semibold text-ink">Dashboard</h1>
+              <p class="mt-1 text-sm text-muted">Station status at a glance.</p>
+
+              <div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <div class="card">
+                  <p class="stat-label">Rig</p>
+                  <p class="mt-2 text-2xl font-semibold text-ink">14.074 MHz</p>
+                  <p class="mt-1 text-sm text-muted">USB · 20 m · FTdx10</p>
+                  <p class="mt-3 flex items-center gap-1.5 text-xs text-muted">
+                    <span class="size-2 rounded-full bg-green-500"></span> CAT connected
+                  </p>
+                </div>
+                <div class="card">
+                  <p class="stat-label">Forwarding queue</p>
+                  <p class="mt-2 text-2xl font-semibold text-ink">0 pending</p>
+                  <p class="mt-1 text-sm text-muted">QRZ · ClubLog up to date</p>
+                  <p class="mt-3 text-xs text-muted">Last upload 4 min ago</p>
+                </div>
+                <div class="card">
+                  <p class="stat-label">Today</p>
+                  <p class="mt-2 text-2xl font-semibold text-ink">12 QSOs</p>
+                  <p class="mt-1 text-sm text-muted">8 FT8 · 4 SSB</p>
+                  <p class="mt-3 text-xs text-muted">Session: 52</p>
+                </div>
+                <div class="card">
+                  <p class="stat-label">FT8 activity</p>
+                  <p class="mt-2 text-2xl font-semibold text-ink">14 / slot</p>
+                  <p class="mt-1 text-sm text-muted">3 new · 2 CQ</p>
+                  <p class="mt-3 text-xs text-muted">Next slot in 6 s</p>
+                </div>
+              </div>
+
+              <!-- A wider card, to show a full-row panel on the same canvas -->
+              <div class="card mt-4">
+                <p class="stat-label">Recent QSOs</p>
+                <div class="mt-3 h-40 rounded-lg border border-dashed border-line"></div>
+              </div>
+            </div>
           </section>
 
           <!-- Operate: Phone/CW <-> FT8 segmented control + a pane each -->
           <section data-panel="operate" hidden>
             <div data-op="phone" class="op-pane">
-              <div class="flex h-[55vh] flex-col items-center justify-center rounded-xl border border-dashed border-line text-center">
-                <p class="text-sm font-semibold text-ink">Phone / CW</p>
-                <p class="mt-1 max-w-sm text-sm text-muted">
-                  Manual QSO entry — callsign + exchange, rig control, and the shared session log.
-                </p>
+              <div class="mx-auto w-fit">
+                <!-- Fixed-size logging card (no resize). -->
+                <div class="card w-[42rem]">
+                  <div class="flex items-end gap-4">
+                    <div>
+                      <label for="callsignInput" class="block text-sm font-medium text-ink">Callsign</label>
+                      <input id="callsignInput" type="text" autocomplete="off" spellcheck="false" placeholder="Callsign" class="input w-20 uppercase" />
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-ink">RST Sent</label>
+                      <input class="input w-6" placeholder="59" />
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-ink">RST Rcvd</label>
+                      <input class="input w-6" placeholder="59" />
+                    </div>
+                  </div>
+                  <div class="mt-4 h-20 rounded-lg border border-dashed border-line"></div>
+                </div>
+
+                <!-- Info panel (card below) — toggled by the right rail; auto-opens
+                     to Worked when a callsign is entered. -->
+                <div id="infoPanel" class="card mt-4 w-[42rem]" hidden>
+                  <div class="flex items-center justify-between">
+                    <h3 id="infoTitle" class="text-sm font-semibold text-ink">Worked</h3>
+                    <button type="button" id="infoClose" class="cursor-pointer rounded-md text-muted hover:text-ink" title="Close">
+                      <span class="sr-only">Close panel</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" class="size-5">
+                        <path d="M6 18 18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div class="mt-3 h-40 rounded-lg border border-dashed border-line"></div>
+                </div>
               </div>
             </div>
             <div data-op="ft8" class="op-pane" hidden>
@@ -323,6 +397,63 @@
         </div>
       </main>
     </div>
+
+    <!-- Pile-up drawer (Phone/CW) — non-modal slide-over from the right edge. -->
+    <aside id="pileup" class="pileup-drawer" data-open="false" aria-label="Pile-up">
+      <div class="flex h-full flex-col border-l border-line bg-surface shadow-xl">
+        <div class="flex items-start justify-between px-4 py-4 sm:px-6">
+          <h2 class="text-base font-semibold text-ink">Pile-up</h2>
+          <button type="button" id="pileupClose" class="cursor-pointer rounded-md text-muted hover:text-ink" title="Close">
+            <span class="sr-only">Close panel</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" class="size-6">
+              <path d="M6 18 18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+        <div class="flex-1 overflow-y-auto px-4 sm:px-6">
+          <!-- Empty for now — stacked calls will list here. -->
+        </div>
+      </div>
+    </aside>
+
+    <!-- Right info-panel rail (Operate context): Worked / Session / Details toggle a
+         card below the logging card; Pile-up opens the drawer (inboard of this rail). -->
+    <aside class="util-rail" aria-label="Info panels">
+      <div class="flex h-full flex-col gap-1 border-l border-line bg-surface px-2 py-4">
+        <button type="button" data-panel-btn="worked" class="rail-item" title="Worked">
+          <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </svg>
+          <span class="rail-label">Worked</span>
+        </button>
+        <button type="button" data-panel-btn="session" class="rail-item" title="Session">
+          <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" />
+          </svg>
+          <span class="rail-label">Session</span>
+        </button>
+        <button type="button" data-panel-btn="details" class="rail-item" title="Details">
+          <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Zm6-10.125a1.875 1.875 0 1 1-3.75 0 1.875 1.875 0 0 1 3.75 0ZM10.5 15.375a3 3 0 0 0-6 0v.75c0 .621.504 1.125 1.125 1.125h3.75c.621 0 1.125-.504 1.125-1.125v-.75Z" />
+          </svg>
+          <span class="rail-label">Details</span>
+        </button>
+        <div class="mt-auto flex flex-col gap-1">
+          <button type="button" id="pileupOpen" class="rail-item" title="Pile-up">
+            <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 6.878V6a2.25 2.25 0 0 1 2.25-2.25h7.5A2.25 2.25 0 0 1 18 6v.878m-12 0c.235-.083.487-.128.75-.128h10.5c.263 0 .515.045.75.128m-12 0A2.25 2.25 0 0 0 4.5 9v.878m13.5-3A2.25 2.25 0 0 1 19.5 9v.878m0 0a2.246 2.246 0 0 0-.75-.128H5.25c-.263 0-.515.045-.75.128m15 0A2.25 2.25 0 0 1 21 12v6a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 18v-6c0-.98.626-1.813 1.5-2.122" />
+            </svg>
+            <span class="rail-label">Pile-up</span>
+          </button>
+          <button type="button" id="utilCollapse" class="rail-item" title="Collapse">
+            <svg class="util-chevron size-6 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="m5.25 4.5 7.5 7.5-7.5 7.5m6-15 7.5 7.5-7.5 7.5" />
+            </svg>
+            <span class="rail-label">Collapse</span>
+          </button>
+        </div>
+      </div>
+    </aside>
 
     <!-- Shared component classes (mirror app.css @layer components idiom) -->
     <style type="text/tailwindcss">
@@ -363,6 +494,29 @@
         .op-flyout-item[data-active='true'] {
           @apply bg-nav-accent-bg text-nav-accent-fg;
         }
+
+        /* Content cards — bg-surface panels that lift off the canvas. The default
+           building block for view content (FT8 goes full-bleed instead). */
+        .card {
+          @apply rounded-xl border border-line bg-surface p-5 shadow-sm;
+        }
+        .stat-label {
+          @apply text-xs font-semibold tracking-wide text-muted uppercase;
+        }
+        .btn {
+          @apply inline-flex cursor-pointer items-center gap-x-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-semibold text-ink shadow-sm hover:bg-surface-muted;
+        }
+        /* Right rail buttons — icon-only, same accent behaviour as the nav. */
+        .rail-item {
+          @apply flex w-full cursor-pointer items-center gap-x-3 rounded-md p-2 text-left text-sm/6 font-semibold text-nav-fg hover:bg-nav-accent-bg hover:text-nav-accent-fg;
+        }
+        .rail-item[data-active='true'] {
+          @apply bg-nav-accent-bg text-nav-accent-fg;
+        }
+        /* Form inputs — mirrors the real app.css .input-base (outline, not border). */
+        .input {
+          @apply mt-1 block w-full rounded-md bg-surface px-3 py-1.5 text-sm text-ink outline-1 -outline-offset-1 outline-line placeholder:text-muted focus:outline-2 focus:-outline-offset-2 focus:outline-focus;
+        }
       }
       /* Disclosure chevron on the Operate section rotates when expanded. */
       .nav-chevron {
@@ -402,6 +556,73 @@
       /* A click on a mode dismisses the flyout until the pointer leaves + returns. */
       html[data-nav='narrow'] .nav-operate[data-flyout-dismissed] .op-flyout {
         display: none;
+      }
+
+      /* Pile-up drawer: non-modal slide-over from the right edge. */
+      .pileup-drawer {
+        position: fixed;
+        inset-block: 0;
+        right: var(--util-rail-w); /* open inboard of the util rail so the rail stays visible */
+        z-index: 50;
+        width: 100%;
+        max-width: 15.75rem; /* 28rem → 21rem → 15.75rem (−1/4 twice) */
+        transform: translateX(calc(100% + var(--util-rail-w))); /* fully off-screen, past the rail */
+        transition: transform 0.4s ease;
+        pointer-events: none; /* click-through when closed so it can't block the rail */
+      }
+      .pileup-drawer[data-open='true'] {
+        transform: translateX(0);
+        pointer-events: auto;
+      }
+      /* Push, don't overlap: when the drawer is open (lg+), reserve its width on
+         the right so the content area shrinks and the card re-centres in the
+         remaining space (mx-auto). Taller content then scrolls-y with the page. */
+      html[data-drawer='open'] .content-wrap {
+        padding-right: calc(var(--util-rail-w) + 15.75rem); /* rail + drawer width */
+      }
+      /* Right info-panel rail — fixed, narrow; starts below the header (h-16).
+         Shown ONLY in Operate → Phone/CW (html[data-rail='on']); the content
+         offset + header extension are gated on the same flag, so every other view
+         uses the full width. */
+      .util-rail {
+        position: fixed;
+        top: 4rem; /* = header h-16, so the rail tucks under it, not overlapping */
+        bottom: 0;
+        right: 0;
+        z-index: 30;
+        width: var(--util-rail-w);
+        display: none;
+        transition: width 0.2s ease;
+      }
+      html[data-rail='on'] .util-rail {
+        display: block;
+      }
+      html[data-rail='on'] .content-wrap {
+        padding-right: var(--util-rail-w);
+      }
+      html[data-rail='on'] header {
+        margin-right: calc(-1 * var(--util-rail-w)); /* span the top-right over the rail */
+      }
+      /* Right rail collapse full <-> narrow (mirrors the left nav). */
+      .rail-item svg {
+        color: var(--color-nav-icon);
+      }
+      .rail-item:hover svg,
+      .rail-item[data-active='true'] svg {
+        color: var(--color-nav-accent-fg);
+      }
+      html[data-util='narrow'] .rail-label {
+        display: none;
+      }
+      html[data-util='narrow'] .rail-item {
+        justify-content: center;
+        gap: 0;
+      }
+      .util-chevron {
+        transition: transform 0.2s ease;
+      }
+      html[data-util='narrow'] .util-chevron {
+        transform: rotate(180deg); /* points to expand */
       }
     </style>
 
@@ -444,6 +665,14 @@
         localStorage.setItem('sm-nav', next);
       });
 
+      // --- Right util rail collapse full <-> narrow (independent, default expanded).
+      root.setAttribute('data-util', localStorage.getItem('sm-util') || 'full');
+      document.getElementById('utilCollapse').addEventListener('click', () => {
+        const next = root.getAttribute('data-util') === 'narrow' ? 'full' : 'narrow';
+        root.setAttribute('data-util', next);
+        localStorage.setItem('sm-util', next);
+      });
+
       // --- Nav: swap the active item AND the matching content panel. Stands in
       //     for the shell's client-side router (real: History-API paths).
       const nav = document.getElementById('nav');
@@ -484,12 +713,23 @@
           );
         panels.forEach((p) => (p.hidden = p.dataset.panel !== view));
         refreshSub();
+        updateRail();
       }
       function showMode(mode) {
         currentMode = mode;
         opPanes.forEach((p) => (p.hidden = p.dataset.op !== mode));
         localStorage.setItem('sm-op-mode', mode);
         refreshSub();
+        updateRail();
+      }
+      // The right rail is shown only in Operate → Phone/CW.
+      function updateRail() {
+        const on = currentView === 'operate' && currentMode === 'phone';
+        root.dataset.rail = on ? 'on' : '';
+        if (!on) {
+          setPileup(false);
+          closeInfo();
+        }
       }
 
       nav.addEventListener('click', (e) => {
@@ -519,6 +759,60 @@
 
       // Re-arm the rail flyout once the pointer leaves Operate (a click dismisses it).
       opLi.addEventListener('mouseleave', () => opLi.removeAttribute('data-flyout-dismissed'));
+
+      // --- Pile-up drawer: non-modal slide-over, toggled by button + Esc.
+      const pileup = document.getElementById('pileup');
+      const setPileup = (open) => {
+        pileup.setAttribute('data-open', String(open));
+        root.dataset.drawer = open ? 'open' : ''; // drives the content push (lg+)
+      };
+      document.getElementById('pileupOpen').addEventListener('click', () => setPileup(true));
+      document.getElementById('pileupClose').addEventListener('click', () => setPileup(false));
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') setPileup(false);
+      });
+
+      // --- Right util rail: Worked/Session/Details toggle the info card-below.
+      //     Worked also auto-opens when a callsign is entered (the courtesy check).
+      const infoPanel = document.getElementById('infoPanel');
+      const infoTitle = document.getElementById('infoTitle');
+      const railBtns = document.querySelectorAll('[data-panel-btn]');
+      const infoLabels = { worked: 'Worked', session: 'Session', details: 'Details' };
+      let activeInfo = null;
+      function setInfo(panel) {
+        activeInfo = panel;
+        infoTitle.textContent = infoLabels[panel];
+        infoPanel.hidden = false;
+        railBtns.forEach((b) =>
+          b.setAttribute('data-active', String(b.dataset.panelBtn === panel)),
+        );
+      }
+      function closeInfo() {
+        activeInfo = null;
+        infoPanel.hidden = true;
+        railBtns.forEach((b) => b.setAttribute('data-active', 'false'));
+      }
+      railBtns.forEach((b) =>
+        b.addEventListener('click', () => {
+          show('operate');
+          showMode('phone'); // these panels belong to the logging surface
+          if (activeInfo === b.dataset.panelBtn) closeInfo();
+          else setInfo(b.dataset.panelBtn);
+        }),
+      );
+      document.getElementById('infoClose').addEventListener('click', closeInfo);
+
+      // Auto-open Worked once the callsign reaches 3 chars; reset when cleared.
+      let workedAutoShown = false;
+      document.getElementById('callsignInput').addEventListener('input', (e) => {
+        const len = e.target.value.trim().length;
+        if (len >= 3 && !workedAutoShown) {
+          setInfo('worked');
+          workedAutoShown = true;
+        } else if (len === 0) {
+          workedAutoShown = false;
+        }
+      });
 
       showMode(currentMode); // prime the panes
       show('dashboard');
