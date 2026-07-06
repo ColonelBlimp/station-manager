@@ -32,6 +32,75 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-06)
 
+> **Session 203 (2026-07-06) — started BUILDING ADR 0044's consolidated SPA at
+> `frontend/app/`** (Svelte 5 + Vite, dev port 5176). Post-ship, **additive** — a
+> new dir that does not touch the shipping `frontend/logging/`; **ship gate
+> unchanged.** Everything is frontend-first with STUBS (no `/v1` wiring yet). Built
+> this session, in order:
+>
+> - **Scaffold + shell chrome:** `Sidebar` (collapsible left nav, brand + `Logo`,
+>   theme toggle), `Header` (empty placeholder), `App` composer. Theme
+>   (`data-theme`) + nav collapse (`data-nav`) reflected onto `<html>` via `$effect`,
+>   persisted (`sm-theme`/`sm-nav`), with an anti-FOUC inline script in `index.html`.
+>   State in `lib/ui/state.svelte.ts`.
+> - **History-API client router** (`lib/router.svelte.ts`): views
+>   dashboard/operate/logbook/config; **Operate has sub-routes** `/operate/phone` +
+>   `/operate/ft8` (`setMode`, persisted `sm-op-mode`, bare `/operate` normalises);
+>   `popstate` sync; SPA index-fallback (Vite + daemon `spaHandler`). Routes are
+>   client-side view-switching only — data comes from `/v1/*` later.
+> - **Expandable Operate nav** (`lib/ui/OperateNav.svelte`): Phone/CW + FT8 inline
+>   sub-items in the full rail, **hover flyout** in the narrow rail.
+> - **Right util rail** (`lib/operate/UtilRail.svelte`): Worked/Session/Details/Rig
+>   + Pile-up + Collapse; shown across **ALL of Operate (both modes)**; collapsible
+>   full↔narrow (`sm-util`, `data-util`). `InfoPanel` (card-below, placeholder),
+>   `PileupDrawer` (docked, **emerges from the rail's inner edge**, tucks behind rail
+>   when closed → no flash; shadow only when open). Panel/pileup state in
+>   `lib/operate/state.svelte.ts`.
+> - **Responsive Operate layout:** (1) effective-vs-preference **auto-collapse**
+>   (`matchMedia` util<72rem, nav<61rem; the saved preference is never clobbered,
+>   restores on widen); (2) `<main>` is now the **horizontal-scroll container**
+>   bounded by the rail offsets, so the fixed rails can **never overlap the logging
+>   card** — it scrolls within the region (**replaced** the `min-width:64rem` page
+>   floor); (3) **stationary logging card** anchored to the viewport
+>   (`margin-left: max(0px, 50vw − var(--card-w)/2 − var(--sidebar-w))`).
+> - **Logging card = the spine (ADR 0045 first real demo).** `lib/operate/qso.svelte.ts`
+>   holds the shared `draft` (callsign, rstSent/rcvd, name, qth, gridsquare,
+>   dateOn/timeOn/dateOff/timeOff, comment) + `resetDraft`/`canLog`/`stampOn`/`stampOff`
+>   + an **injected submit seam** (`setSubmit` → `logDraft`, mirrors the daemon's
+>   `SetQsoLogger`). `lib/operate/LoggingCard.svelte` = self-contained fast-path card
+>   (callsign/RST · date/time on+off · name · comment), **two-column** with a blank
+>   grayed **enrichment square** on the right, **golden-ratio** width
+>   (`--card-w: 573px` = φ × 354px height, defined on `.operate-center`). **QTH + grid
+>   are NOT on the card** — grid is enrichment-filled, QTH is Details-card (rarely
+>   touched); `onMount` stamps on-time, log stamps off-time.
+> - **ADR 0045 written (Accepted):** "Frontend component architecture — decoupled,
+>   relocatable by construction" — the client-side parallel to ADR 0043; 5 principles
+>   (presentation≠state, data-in-nothing-reached-out, backend injected/subscribed, no
+>   positioning assumptions, DRY-not-generic). Forcing function = the draggable-cards
+>   idea.
+> - **`docs/dogfood-inbox.md` notes added:** draggable/pinnable cards (+ the DRY
+>   architecture driver), rotator control (enrichment SP/LP heading → future daemon
+>   subsystem, blocked on kit purchase), operator-profiles contesting lens.
+>
+> **NEXT:** build the **enrichment** into the square — an `EnrichmentStrip`/`Card`
+> reading `draft.callsign` + a stubbed `enrich()` seam → flag / DXCC + **NEW?** /
+> **bearing SP-LP** / distance (bearing kept as a first-class value for the future
+> rotator button), decoupled per ADR 0045. Then Worked (reads `draft.callsign`,
+> auto-open), Session (receives logged QSOs via the sink), Details (QTH/grid/comment
+> + enrichment detail), Rig panel + **CAT gate**. Wire real `/v1` + SSE after the
+> stubbed interactions are proven.
+>
+> **DOC DEBT (do when next in the docs):** update the **ADR 0044** 2026-07-06
+> amendment — the rail is now **all of Operate** (not "Phone/CW-scoped"), the
+> `min-width:64rem` floor was **removed** (superseded by the `<main>` scroll
+> container), and niggle **#2b** (card-never-overlapped) is **implemented +
+> generalised** to the rails; add the ADR 0045 cross-ref.
+>
+> **COMMIT STATE:** the shell chrome + Operate flyout were committed mid-session by
+> the operator; **everything from the RH util rail onward (responsive layout,
+> logging card + draft spine, ADR 0045, inbox notes, this handoff) is UNCOMMITTED**
+> for his review.
+
 > **Design note (session 202, 2026-07-06):** designed the **post-ship** SPA
 > consolidation — **ADR 0044** (merge logging/config/logbook into one Svelte
 > shell; manual stays zero-JS per ADR 0036; client-side mirror of ADR 0043)
