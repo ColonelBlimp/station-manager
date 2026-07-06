@@ -28,6 +28,12 @@
     <!-- Design tokens — copied verbatim from frontend/logging/src/styles/app.css
          @theme block (light values), plus one mock-only muted accent. -->
     <style type="text/tailwindcss">
+      /* Make the `dark:` variant follow our [data-theme] toggle (attribute
+         strategy) rather than the OS prefers-color-scheme default — so dark:
+         utilities respond to the in-page switch and compose with the token
+         swap below. */
+      @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
       @theme {
         /* Surfaces / chrome (from app.css) */
         --color-surface: #fff; /* tw white */
@@ -79,8 +85,7 @@
       >
         <!-- Brand -->
         <div class="flex items-center gap-2 px-4 py-4">
-          <span class="text-xl">📻</span>
-          <span class="font-semibold">Station Manager</span>
+          <span class="font-semibold text-indigo-400">Station Manager</span>
           <span
             class="ml-auto rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-[var(--color-muted)]"
             >MOCK</span
@@ -88,11 +93,32 @@
         </div>
 
         <!-- Primary nav — the shell destinations (ADR 0044) -->
-        <nav class="flex flex-col gap-0.5 px-2" id="nav">
-          <button data-view="dashboard" class="nav-item">📊 <span>Dashboard</span></button>
-          <button data-view="operate" class="nav-item">🎙️ <span>Operate</span></button>
-          <button data-view="logbook" class="nav-item">📖 <span>Logbook</span></button>
-          <button data-view="config" class="nav-item">⚙️ <span>Config</span></button>
+        <nav class="flex flex-col gap-y-1 px-2" id="nav">
+          <button data-view="dashboard" class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" data-slot="icon" aria-hidden="true" class="size-5.5">
+              <path d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            Dashboard
+          </button>
+          <button data-view="operate" class="nav-item">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6 shrink-0">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3-3 3" />
+            </svg>
+            Operate
+          </button>
+          <button data-view="logbook" class="nav-item">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+            </svg>
+            Logbook
+          </button>
+          <button data-view="config" class="nav-item">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 0 1 1.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.559.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.894.149c-.424.07-.764.383-.929.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 0 1-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.398.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 0 1-.12-1.45l.527-.737c.25-.35.272-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125 1.125 0 0 1 .12-1.45l.773-.773a1.125 1.125 0 0 1 1.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894Z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+            </svg>
+            Settings
+          </button>
         </nav>
 
         <div class="mx-3 my-2 border-t border-line-soft"></div>
@@ -101,8 +127,16 @@
         <a
           href="#"
           class="mx-2 flex items-center gap-2 rounded-md px-3 py-2 text-sm text-[var(--color-muted)] hover:bg-surface-muted"
-          >📄 <span>Manual</span><span class="ml-auto text-xs">↗</span></a
-        >
+          >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+            <path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
+          </svg>
+
+          Manual<span class="ml-auto text-xs">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-3">
+  <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 19.5 15-15m0 0H8.25m11.25 0v11.25" />
+</svg>
+        </span></a>
 
         <!-- Footer: build chip + theme toggle -->
         <div class="mt-auto flex items-center gap-2 px-3 py-3">
@@ -114,7 +148,11 @@
             class="ml-auto rounded-md border border-line px-2 py-1 text-sm hover:bg-surface-muted"
             title="Toggle light / dark"
           >
-            <span id="themeIcon">🌙</span>
+            <span id="themeIcon">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
+              </svg>
+            </span>
           </button>
         </div>
       </aside>
@@ -139,10 +177,11 @@
     <style type="text/tailwindcss">
       @layer components {
         .nav-item {
-          @apply flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium hover:bg-surface-muted;
+          @apply flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium hover:bg-surface-muted
+          dark:text-gray-400 dark:hover:text-white;
         }
         .nav-item[data-active='true'] {
-          @apply bg-surface-muted text-focus;
+          @apply bg-surface-muted text-focus dark:text-white;
         }
       }
     </style>
@@ -152,13 +191,24 @@
       //     Defaults to the OS preference on first visit (ADR 0044 mechanism).
       const root = document.documentElement;
       const icon = document.getElementById('themeIcon');
+
+      // Heroicons (outline). Mapping per request: light mode → sun, dark mode →
+      // moon (the button shows the CURRENT mode's glyph). To show the TARGET mode
+      // instead, flip the ternary in applyTheme.
+      const SUN = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
+      </svg>`;
+      const MOON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
+      </svg>`;
+
       const stored = localStorage.getItem('sm-theme');
       const initial =
         stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       applyTheme(initial);
       function applyTheme(t) {
         root.setAttribute('data-theme', t);
-        icon.textContent = t === 'dark' ? '☀️' : '🌙';
+        icon.innerHTML = t === 'dark' ? MOON : SUN;
       }
       document.getElementById('themeToggle').addEventListener('click', () => {
         const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
