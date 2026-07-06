@@ -126,6 +126,30 @@ tasks:
     cmds:
       - npm run build
 
+  frontend:app:install:
+    desc: Install app-SPA dependencies (the consolidated shell, ADR 0044); `npm ci` if a lockfile is present, else `npm install`
+    dir: frontend/app
+    cmds:
+      - sh -c 'if [ -f package-lock.json ]; then npm ci; else npm install; fi'
+
+  frontend:app:dev:
+    desc: Run the consolidated app SPA (ADR 0044) Vite dev server with HMR on :5176 (proxies /v1/* to daemon on :8080; runs alongside the other frontend:*:dev servers)
+    dir: frontend/app
+    cmds:
+      - npm run dev
+
+  frontend:app:build:
+    desc: Production build of the consolidated app SPA (ADR 0044). Not yet embedded — add to frontend:build:all when the go:embed is wired.
+    dir: frontend/app
+    cmds:
+      - npm run build
+
+  frontend:app:check:
+    desc: Type-check the consolidated app SPA (svelte-check)
+    dir: frontend/app
+    cmds:
+      - npm run check
+
   frontend:build:all:
     desc: Build every embedded SPA (logging + config + logbook). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
     deps: [frontend:build, frontend:config:build, frontend:logbook:build]

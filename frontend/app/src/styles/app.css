@@ -65,3 +65,63 @@ html[data-theme='dark'] {
         min-width: 64rem; /* desktop-only floor — no mobile/tablet layout (ADR 0044) */
     }
 }
+
+/* --- Left nav rail + collapse (full <-> icon rail) -------------------------
+   --sidebar-w resizes both the fixed sidebar and the content offset; narrow
+   hides labels and centres the icons. Driven by [data-nav] on <html>. */
+:root {
+    --sidebar-w: 15rem; /* full */
+}
+html[data-nav='narrow'] {
+    --sidebar-w: 5rem; /* icon rail */
+}
+.sidebar-wrap,
+.content-wrap {
+    transition:
+        width 0.2s ease,
+        padding 0.2s ease;
+}
+.collapse-chevron {
+    transition: transform 0.2s ease;
+}
+html[data-nav='narrow'] .brand-text,
+html[data-nav='narrow'] .nav-label,
+html[data-nav='narrow'] .nav-trailing,
+html[data-nav='narrow'] .footer-version {
+    display: none;
+}
+html[data-nav='narrow'] .brand,
+html[data-nav='narrow'] .nav-item,
+html[data-nav='narrow'] .footer-meta {
+    justify-content: center;
+    gap: 0;
+}
+html[data-nav='narrow'] .footer-meta .theme-toggle {
+    margin-left: 0; /* neutralise ml-auto so it centres in the rail */
+}
+html[data-nav='narrow'] .sidebar-inner {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+}
+html[data-nav='narrow'] .collapse-chevron {
+    transform: rotate(180deg); /* points to expand */
+}
+
+@layer components {
+    /* Nav items — semantic tokens carry the palette; icons are a touch more
+       muted than labels, both jump to the accent on hover/active. No literal
+       colours, no dark: variants. */
+    .nav-item {
+        @apply flex w-full cursor-pointer items-center gap-x-3 rounded-md p-2 text-left text-sm/6 font-semibold text-nav-fg hover:bg-nav-accent-bg hover:text-nav-accent-fg;
+    }
+    .nav-item[data-active='true'] {
+        @apply bg-nav-accent-bg text-nav-accent-fg;
+    }
+}
+.nav-item svg {
+    color: var(--color-nav-icon);
+}
+.nav-item:hover svg,
+.nav-item[data-active='true'] svg {
+    color: var(--color-nav-accent-fg);
+}

@@ -1,10 +1,37 @@
 <script lang="ts">
-    // Scaffold placeholder. The consolidated shell (ADR 0044) gets built up from
-    // here step by step — sidebars, routing, operating surface, the CAT-gate
-    // state model in runes. Visual spec: docs/v2-design/shell-mock/index.html.
+    import Sidebar from './lib/ui/Sidebar.svelte';
+    import Header from './lib/ui/Header.svelte';
+    import { ui, THEME_KEY, NAV_KEY, type View } from './lib/ui/state.svelte';
+
+    // Reflect shell state onto <html> (drives the token swap + collapse rules)
+    // and persist it. Initial attributes are set pre-mount in index.html, so
+    // these run in sync on the very first pass — no flash.
+    $effect(() => {
+        document.documentElement.dataset.theme = ui.theme;
+        localStorage.setItem(THEME_KEY, ui.theme);
+    });
+    $effect(() => {
+        document.documentElement.dataset.nav = ui.navMode;
+        localStorage.setItem(NAV_KEY, ui.navMode);
+    });
+
+    const titles: Record<View, string> = {
+        dashboard: 'Dashboard',
+        operate: 'Operate',
+        logbook: 'Logbook',
+        config: 'Settings',
+    };
 </script>
 
-<main class="p-8">
-    <h1 class="text-2xl font-semibold text-focus">Station Manager</h1>
-    <p class="mt-2 text-sm text-muted">app shell — scaffold</p>
-</main>
+<Sidebar />
+
+<div class="content-wrap pl-[var(--sidebar-w)]">
+    <Header />
+    <main class="bg-canvas py-10">
+        <div class="px-4 sm:px-6 lg:px-8">
+            <!-- Placeholder content per view; real surfaces land in later passes. -->
+            <h1 class="text-2xl font-semibold text-ink">{titles[ui.view]}</h1>
+            <div class="mt-6 h-[60vh] rounded-xl border border-dashed border-line"></div>
+        </div>
+    </main>
+</div>

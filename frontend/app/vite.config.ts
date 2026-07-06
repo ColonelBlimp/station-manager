@@ -6,7 +6,9 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
     plugins: [svelte(), svelteTesting(), tailwindcss()],
     server: {
-        port: 5174,
+        // 5173 logging · 5174 config · 5175 logbook · 5176 app (avoid clashes so
+        // they can run side by side during the consolidation).
+        port: 5176,
         proxy: {
             '/v1': 'http://localhost:8080',
         },
