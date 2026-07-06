@@ -30,8 +30,16 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-05)
+## Current state (as of 2026-07-06)
 
+> **Design note (session 202, 2026-07-06):** designed the **post-ship** SPA
+> consolidation — **ADR 0044** (merge logging/config/logbook into one Svelte
+> shell; manual stays zero-JS per ADR 0036; client-side mirror of ADR 0043)
+> drafted `Proposed`, with a P2 backlog entry gated behind the 7Q8AC ship and
+> sub-decisions endorsed (History-API routing · lean status-home dashboard +
+> `startup_view` pref · config-as-route). Docs-only, uncommitted; ship gate
+> unchanged.
+>
 > **Recent arc (session 201, 2026-07-05):** the review-hardening arc continued
 > through three more packages, and the timestamp migration went live. **(1)
 > `internal/database` timestamps:** the fix-forward (`_time_format=sqlite` +
