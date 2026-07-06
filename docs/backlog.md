@@ -46,7 +46,7 @@ next, and in what order" is answered.
 
 **P2 — next features (open one workstream per active focus)**
 - **▶ NEXT SESSION (bumped 2026-07-05):** _Re-enrich a logged QSO — in the **logbook SPA**._ The repair path for names dropped by a flaky-link QRZ timeout at log time (2nd confirmed occurrence — 3/52 nameless on 2026-07-05; recurring 7Q8AC/Malawi condition). Companion: a **manual FAQ** on the cause + remedy. See detail.
-- _SPA architecture (post-ship · ADR 0044):_ consolidate logging+config+logbook into **one app shell** (dashboard + Operate[Phone/CW+FT8] + Logbook + Config; manual stays zero-JS — 3→1). **Subsumes** the _UI cohesion_ cluster below (theme built into the shell from the first commit). Gated behind the 7Q8AC ship.
+- _SPA architecture (post-ship · ADR 0044):_ consolidate logging+config+logbook into **one app shell** (dashboard + Operate[Phone/CW+FT8] + Logbook + Settings; manual stays zero-JS — 3→1). **Subsumes** the _UI cohesion_ cluster below (theme built into the shell from the first commit). Gated behind the 7Q8AC ship.
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
 - _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW) · work-path opening: prefer clean next-slot start over truncated immediate fire
 - _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
@@ -414,7 +414,8 @@ next, and in what order" is answered.
   Svelte SPAs (`frontend/{logging,config,logbook}`) into one Vite + Svelte 5 app
   (`frontend/app/`) with a persistent shell — dashboard/status home, **Operate**
   (Phone/CW + FT8 as sibling modes over the shared session log), **Logbook**,
-  **Config**, and a link out to the zero-JS **manual** (which stays separate per
+  **Settings** (the config surface; route stays `/config`), and a link out to the
+  zero-JS **manual** (which stays separate per
   ADR 0036 — this is **3→1, not 4→1**). Drivers: the FT8/logging seam is wrong
   (FT8 uses logging but isn't logging — they're siblings over one session log);
   plumbing is triplicated and drifting (three `_helpers.ts`; the session-198

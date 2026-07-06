@@ -2,17 +2,21 @@
 <!--
   Station Manager — SPA SHELL MOCK (throwaway design aid for ADR 0044).
 
-  Scope right now: JUST THE BLANK SHELL — the persistent frame (sidebar nav +
-  topbar + empty content region) and the theme system (light/dark via one
-  [data-theme] custom-property swap). No dashboard content yet; views are empty.
-  Fill destinations in incrementally from here.
+  Scope: the persistent shell FRAME, structured after Tailwind Plus's
+  "03-sidebar-with-header" application shell (the variant the operator chose) —
+  a fixed w-72 sidebar (brand + nav + bottom utilities) and a content column with
+  a sticky top header bar over <main>. The header bar is intentionally EMPTY for
+  now: SM's equivalents of search / notifications / profile aren't relevant yet,
+  so it's kept only as the frame to populate later. Content region is blank.
 
-  Substrate fidelity (ADR 0044 build-approach note): renders in the SAME substrate
-  the real shell will use — Tailwind v4 + the logging app's @theme tokens (copied
-  verbatim from frontend/logging/src/styles/app.css) — so look + token vocabulary
-  are a direct reference. Dark mode is the shell's real mechanism in miniature: one
-  [data-theme="dark"] block overrides the colour custom-properties, no per-utility
-  edits.
+  Substrate + theming: renders in the real substrate (Tailwind v4) with tokens
+  carrying Tailwind Plus's proven sidebar values, so light/dark is one
+  [data-theme] custom-property swap and the markup stays clean — no dark:
+  littering, no literal palette classes in the nav.
+
+  Desktop-oriented: the sidebar shows at ≥lg (1024px), matching TWP 03; the
+  TWP mobile dialog (needs @tailwindplus/elements) is omitted from the mock —
+  view maximised.
 
   How to view: open in a browser (pulls the Tailwind v4 browser build from a CDN —
   needs internet once; the shipped SPA compiles Tailwind at build time, no CDN).
@@ -25,164 +29,202 @@
     <title>SM Shell Mock — ADR 0044</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 
-    <!-- Design tokens — copied verbatim from frontend/logging/src/styles/app.css
-         @theme block (light values), plus one mock-only muted accent. -->
     <style type="text/tailwindcss">
       /* Make the `dark:` variant follow our [data-theme] toggle (attribute
-         strategy) rather than the OS prefers-color-scheme default — so dark:
-         utilities respond to the in-page switch and compose with the token
-         swap below. */
+         strategy) rather than the OS prefers-color-scheme default. */
       @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
       @theme {
-        /* Surfaces / chrome (from app.css) */
-        --color-surface: #fff; /* tw white */
-        --color-surface-muted: oklch(92.8% 0.006 264.531); /* tw gray-200 */
-        --color-surface-disabled: oklch(96.7% 0.003 264.542); /* tw gray-100 */
-        --color-line: oklch(87.2% 0.01 258.338); /* tw gray-300 */
-        --color-line-soft: oklch(87.2% 0.01 258.338); /* tw gray-200 */
-        --color-ink: oklch(21% 0.034 264.665); /* tw gray-900 */
+        /* Surfaces (light values; dark overrides in the [data-theme=dark] block).
+           Values lifted from Tailwind Plus's sidebar shells so the look tracks a
+           proven design; the tokens exist so the MARKUP stays clean — no dark:
+           littering, the swap below handles light/dark. */
+        --color-canvas: oklch(98.5% 0.002 247.839); /* tw gray-50 — app / <main> bg (TWP off-white shell) */
+        --color-surface: #fff; /* tw white — sidebar, header, cards */
+        --color-surface-muted: oklch(96.7% 0.003 264.542); /* tw gray-100 — chips / subtle fills */
+        --color-surface-disabled: oklch(96.7% 0.003 264.542); /* tw gray-100 — disabled input bg */
+        --color-line: oklch(92.8% 0.006 264.531); /* tw gray-200 — borders (TWP border-gray-200) */
+        --color-line-soft: oklch(92.8% 0.006 264.531); /* tw gray-200 */
+        --color-ink: oklch(21% 0.034 264.665); /* tw gray-900 — primary text */
+        --color-muted: oklch(55.1% 0.027 264.364); /* tw gray-500 — secondary text */
 
-        /* Status / interaction (from app.css) */
+        /* Status / interaction */
         --color-focus: oklch(51.1% 0.262 276.966); /* tw indigo-600 */
         --color-focus-ring: oklch(58.5% 0.233 277.117); /* tw indigo-500 */
         --color-invalid: oklch(57.7% 0.245 27.325); /* tw red-600 */
 
-        /* Mock-only muted accent (secondary text) */
-        --color-muted: oklch(55.1% 0.027 264.364); /* gray-500 */
+        /* Sidebar nav (TWP simple-sidebar values): resting → hover/active. Icons
+           are a touch more muted than labels (nav-icon) then jump to the accent. */
+        --color-nav-fg: oklch(37.3% 0.034 259.733); /* tw gray-700 — resting label */
+        --color-nav-icon: oklch(70.7% 0.022 261.325); /* tw gray-400 — resting icon */
+        --color-nav-accent-bg: oklch(98.5% 0.002 247.839); /* tw gray-50 — hover/active pill */
+        --color-nav-accent-fg: oklch(51.1% 0.262 276.966); /* tw indigo-600 — hover/active label + icon */
       }
     </style>
 
-    <!-- Dark theme: override the colour custom-properties only. Higher specificity
-         than :root so it wins; everything drawn with bg-surface/text-ink/etc. flips
-         with no per-utility edits. This IS the shell's theming mechanism in miniature. -->
+    <!-- Dark theme: override the colour custom-properties only. -->
     <style>
       html[data-theme='dark'] {
-        --color-surface: #14161b;
-        --color-surface-muted: #1d212a;
-        --color-surface-disabled: #23272f;
-        --color-line: #333a46;
-        --color-line-soft: #2a2f39;
-        --color-ink: #e7e9ee;
-        --color-focus: #818cf8; /* indigo-400 */
-        --color-focus-ring: #a5b4fc; /* indigo-300 */
-        --color-invalid: #fb7185; /* rose-400 */
-        --color-muted: #8b93a3;
+        /* Dark values from Tailwind Plus's dark sidebar: page = gray-900,
+           elevated chrome/cards = gray-800 (lift), borders = white/10, muted
+           text = gray-400, nav accent = white on white/5. */
+        --color-canvas: #101828; /* tw gray-900 — app / <main> bg */
+        --color-surface: #1e2939; /* tw gray-800 — elevated: sidebar, header, cards */
+        --color-surface-muted: #364153; /* tw gray-700 — chips / subtle fills */
+        --color-surface-disabled: #1e2939; /* tw gray-800 */
+        --color-line: rgba(255, 255, 255, 0.1); /* white/10 — borders (TWP) */
+        --color-line-soft: rgba(255, 255, 255, 0.08); /* white/8 */
+        --color-ink: #e7e9ee; /* near-white — primary text */
+        --color-muted: #99a1af; /* tw gray-400 — secondary text */
+        --color-focus: #818cf8; /* tw indigo-400 */
+        --color-focus-ring: #a5b4fc; /* tw indigo-300 */
+        --color-invalid: #fb7185; /* tw rose-400 */
+        --color-nav-fg: #99a1af; /* tw gray-400 — resting label */
+        --color-nav-icon: #99a1af; /* tw gray-400 — resting icon */
+        --color-nav-accent-bg: rgba(255, 255, 255, 0.05); /* white/5 — hover/active pill */
+        --color-nav-accent-fg: #ffffff; /* white — hover/active label + icon */
       }
-      /* App background sits one step below card surfaces in both themes. */
+      /* The app canvas (<main> + page). Sidebar/header use bg-surface, so the
+         content area reads as its own surface — off-white (gray-50) in light,
+         gray-900 in dark, per Tailwind Plus's off-white-background shell. */
       body {
-        background-color: var(--color-surface-muted);
+        background-color: var(--color-canvas);
       }
     </style>
   </head>
 
   <body class="text-ink">
-    <!-- ============================ APP SHELL ============================ -->
-    <div class="min-h-screen md:grid md:grid-cols-[15rem_1fr]">
-      <!-- ---------- Sidebar (persistent nav) ---------- -->
-      <aside
-        class="flex flex-col border-b border-line-soft bg-surface md:h-screen md:border-r md:border-b-0"
-      >
-        <!-- Brand -->
-        <div class="flex items-center gap-2 px-4 py-4">
-          <span class="font-semibold text-indigo-400">Station Manager</span>
+    <!-- ============================ APP SHELL (TWP 03) ============================ -->
+
+    <!-- Fixed sidebar (desktop ≥lg) -->
+    <div class="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col">
+      <div class="flex grow flex-col gap-y-5 overflow-y-auto border-r border-line bg-surface px-6 pb-4">
+        <!-- Brand header -->
+        <div class="flex h-16 shrink-0 items-center gap-2">
+          <span class="font-semibold">Station Manager</span>
           <span
-            class="ml-auto rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-[var(--color-muted)]"
+            class="ml-auto rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-muted"
             >MOCK</span
           >
         </div>
 
-        <!-- Primary nav — the shell destinations (ADR 0044) -->
-        <nav class="flex flex-col gap-y-1 px-2" id="nav">
-          <button data-view="dashboard" class="nav-item">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" data-slot="icon" aria-hidden="true" class="size-5.5">
-              <path d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-            Dashboard
-          </button>
-          <button data-view="operate" class="nav-item">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6 shrink-0">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3-3 3" />
-            </svg>
-            Operate
-          </button>
-          <button data-view="logbook" class="nav-item">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
-            </svg>
-            Logbook
-          </button>
-          <button data-view="config" class="nav-item">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 0 1 1.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.559.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.894.149c-.424.07-.764.383-.929.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 0 1-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.398.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 0 1-.12-1.45l.527-.737c.25-.35.272-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125 1.125 0 0 1 .12-1.45l.773-.773a1.125 1.125 0 0 1 1.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894Z" />
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-            </svg>
-            Settings
-          </button>
+        <!-- Nav -->
+        <nav class="flex flex-1 flex-col">
+          <ul role="list" class="flex flex-1 flex-col gap-y-7">
+            <!-- Primary destinations (ADR 0044) -->
+            <li>
+              <ul role="list" class="-mx-2 space-y-1" id="nav">
+                <li>
+                  <button data-view="dashboard" class="nav-item">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" class="size-6 shrink-0">
+                      <path d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    Dashboard
+                  </button>
+                </li>
+                <li>
+                  <button data-view="operate" class="nav-item">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3-3 3" />
+                    </svg>
+                    Operate
+                  </button>
+                </li>
+                <li>
+                  <button data-view="logbook" class="nav-item">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+                    </svg>
+                    Logbook
+                  </button>
+                </li>
+                <li>
+                  <button data-view="config" class="nav-item">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 0 1 1.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.559.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.894.149c-.424.07-.764.383-.929.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 0 1-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.398.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 0 1-.12-1.45l.527-.737c.25-.35.272-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125 1.125 0 0 1 .12-1.45l.773-.773a1.125 1.125 0 0 1 1.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894Z" />
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    </svg>
+                    Settings
+                  </button>
+                </li>
+              </ul>
+            </li>
+
+            <!-- Bottom utilities: Manual (separate zero-JS site, ADR 0036) + build
+                 chip + theme toggle. mt-auto pins the group to the sidebar bottom. -->
+            <li class="mt-auto -mx-2">
+              <a href="#" class="nav-item">
+                <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
+                </svg>
+                Manual
+                <span class="ml-auto">
+                  <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-4">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 19.5 15-15m0 0H8.25m11.25 0v11.25" />
+                  </svg>
+                </span>
+              </a>
+              <div class="mt-2 flex items-center gap-2 px-2">
+                <span class="rounded bg-surface-muted px-2 py-1 text-[11px] text-muted">v2.0.0-alpha.1</span>
+                <button
+                  id="themeToggle"
+                  class="ml-auto rounded-md border border-line px-2 py-1 text-muted hover:bg-surface-muted hover:text-ink"
+                  title="Toggle light / dark"
+                >
+                  <span id="themeIcon">
+                    <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
+                    </svg>
+                  </span>
+                </button>
+              </div>
+            </li>
+          </ul>
         </nav>
-
-        <div class="mx-3 my-2 border-t border-line-soft"></div>
-
-        <!-- Manual stays a separate zero-JS site (ADR 0036) — linked, not a route -->
-        <a
-          href="#"
-          class="mx-2 flex items-center gap-2 rounded-md px-3 py-2 text-sm text-[var(--color-muted)] hover:bg-surface-muted"
-          >
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
-            <path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
-          </svg>
-
-          Manual<span class="ml-auto text-xs">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-3">
-  <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 19.5 15-15m0 0H8.25m11.25 0v11.25" />
-</svg>
-        </span></a>
-
-        <!-- Footer: build chip + theme toggle -->
-        <div class="mt-auto flex items-center gap-2 px-3 py-3">
-          <span class="rounded bg-surface-muted px-2 py-1 text-[11px] text-[var(--color-muted)]"
-            >v2.0.0-alpha.1</span
-          >
-          <button
-            id="themeToggle"
-            class="ml-auto rounded-md border border-line px-2 py-1 text-sm hover:bg-surface-muted"
-            title="Toggle light / dark"
-          >
-            <span id="themeIcon">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
-              </svg>
-            </span>
-          </button>
-        </div>
-      </aside>
-
-      <!-- ---------- Main column ---------- -->
-      <div class="flex min-w-0 flex-col">
-        <!-- Topbar -->
-        <header
-          class="sticky top-0 z-10 flex items-center gap-3 border-b border-line-soft bg-surface px-5 py-3"
-        >
-          <h1 id="viewTitle" class="text-lg font-semibold">Dashboard</h1>
-        </header>
-
-        <!-- Empty content region — fill per view from here. -->
-        <main class="flex-1 overflow-y-auto p-5">
-          <!-- intentionally blank -->
-        </main>
       </div>
+    </div>
+
+    <!-- Content column, offset past the fixed sidebar -->
+    <div class="lg:pl-72">
+      <!-- Sticky header bar — intentionally EMPTY for now (SM's search /
+           notifications / profile equivalents aren't relevant yet). Kept as the
+           frame to populate later. -->
+      <header
+        class="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-line bg-surface px-4 sm:gap-x-6 sm:px-6 lg:px-8"
+      >
+        <!-- header content deferred -->
+      </header>
+
+      <!-- Content region — blank; a dashed placeholder marks the canvas. -->
+      <main class="py-10">
+        <div class="px-4 sm:px-6 lg:px-8">
+          <div class="h-[60vh] rounded-xl border border-dashed border-line"></div>
+        </div>
+      </main>
     </div>
 
     <!-- Shared component classes (mirror app.css @layer components idiom) -->
     <style type="text/tailwindcss">
       @layer components {
+        /* Decluttered: semantic tokens carry the TWP nav palette, so the markup
+           has NO literal colours and NO dark: variants — the token swap does
+           light/dark. Spacing/type match TWP (gap-x-3, p-2, text-sm/6). */
         .nav-item {
-          @apply flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium hover:bg-surface-muted
-          dark:text-gray-400 dark:hover:text-white;
+          @apply flex w-full items-center gap-x-3 rounded-md p-2 text-left text-sm/6 font-semibold
+          text-nav-fg hover:bg-nav-accent-bg hover:text-nav-accent-fg;
         }
         .nav-item[data-active='true'] {
-          @apply bg-surface-muted text-focus dark:text-white;
+          @apply bg-nav-accent-bg text-nav-accent-fg;
         }
+      }
+      /* Icons ride currentColor: muted at rest, accent on hover/active — the TWP
+         nav treatment, with zero per-icon classes. */
+      .nav-item svg {
+        color: var(--color-nav-icon);
+      }
+      .nav-item:hover svg,
+      .nav-item[data-active='true'] svg {
+        color: var(--color-nav-accent-fg);
       }
     </style>
 
@@ -193,8 +235,8 @@
       const icon = document.getElementById('themeIcon');
 
       // Heroicons (outline). Mapping per request: light mode → sun, dark mode →
-      // moon (the button shows the CURRENT mode's glyph). To show the TARGET mode
-      // instead, flip the ternary in applyTheme.
+      // moon (the button shows the CURRENT mode's glyph). Flip the ternary in
+      // applyTheme to show the TARGET mode instead.
       const SUN = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
       </svg>`;
@@ -216,16 +258,13 @@
         localStorage.setItem('sm-theme', next);
       });
 
-      // --- Nav: swap active item + title (content stays blank for now).
-      //     Stands in for the shell's client-side router (real: History-API paths).
+      // --- Nav: swap the active item (content stays blank for now). Stands in for
+      //     the shell's client-side router (real: History-API paths).
       const nav = document.getElementById('nav');
-      const title = document.getElementById('viewTitle');
-      const labels = { dashboard: 'Dashboard', operate: 'Operate', logbook: 'Logbook', config: 'Config' };
       function show(view) {
-        nav.querySelectorAll('.nav-item').forEach((b) =>
-          b.setAttribute('data-active', String(b.dataset.view === view)),
-        );
-        title.textContent = labels[view];
+        nav
+          .querySelectorAll('.nav-item')
+          .forEach((b) => b.setAttribute('data-active', String(b.dataset.view === view)));
       }
       nav.addEventListener('click', (e) => {
         const btn = e.target.closest('.nav-item');

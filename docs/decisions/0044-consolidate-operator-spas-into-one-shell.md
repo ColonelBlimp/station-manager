@@ -62,8 +62,10 @@ the shell, not absorbed into it. Consolidation is therefore **3 → 1, not 4 →
 
 The shell's destinations mirror the ADR-0043 API surfaces: **Dashboard**,
 **Operate** (Phone/CW + FT8 as sibling modes over the shared session log),
-**Logbook**, **Config**, and a link out to the **Manual**. First-run setup
-becomes a shell-level gate/route rather than logic embedded in the logging app.
+**Logbook**, **Settings** (the config surface — nav label "Settings"; route stays
+`/config`, and the sub-decisions below still call it "config"), and a link out to
+the **Manual**. First-run setup becomes a shell-level gate/route rather than logic
+embedded in the logging app.
 
 The **shared theme system is built as the shell's foundation, from the first
 commit** — one set of semantic design tokens, a dark-mode variant, and a single
