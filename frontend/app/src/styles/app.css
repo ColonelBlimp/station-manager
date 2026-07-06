@@ -1,0 +1,67 @@
+@import 'tailwindcss';
+
+/*
+    Design system — carried 1:1 from the validated shell mock
+    (docs/v2-design/shell-mock/index.html), which itself lifted values from
+    Tailwind Plus's sidebar shells. The whole UI themes off these tokens: light
+    values in @theme, a dark override block, and one custom-variant so `dark:`
+    utilities follow the [data-theme] attribute rather than the OS preference.
+
+    Component classes (.nav-item, .card, .rail-item, .btn, …) are added as the
+    components that use them land — kept out of the scaffold to stay lean.
+*/
+
+/* Make the `dark:` variant follow the in-app [data-theme] toggle. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+@theme {
+    /* Surfaces / chrome (light; dark overrides below) */
+    --color-canvas: oklch(96.7% 0.003 264.542); /* gray-100 — app / page bg */
+    --color-surface: #fff; /* white — sidebars, header, cards */
+    --color-surface-muted: oklch(96.7% 0.003 264.542); /* gray-100 — chips / subtle fills */
+    --color-surface-disabled: oklch(96.7% 0.003 264.542); /* gray-100 — disabled input bg */
+    --color-line: oklch(92.8% 0.006 264.531); /* gray-200 — borders */
+    --color-line-soft: oklch(92.8% 0.006 264.531); /* gray-200 */
+    --color-ink: oklch(21% 0.034 264.665); /* gray-900 — primary text */
+    --color-muted: oklch(55.1% 0.027 264.364); /* gray-500 — secondary text */
+
+    /* Status / interaction */
+    --color-focus: oklch(51.1% 0.262 276.966); /* indigo-600 */
+    --color-focus-ring: oklch(58.5% 0.233 277.117); /* indigo-500 */
+    --color-invalid: oklch(57.7% 0.245 27.325); /* red-600 */
+
+    /* Sidebar nav (resting → hover/active); icons a touch more muted than labels */
+    --color-nav-fg: oklch(37.3% 0.034 259.733); /* gray-700 */
+    --color-nav-icon: oklch(70.7% 0.022 261.325); /* gray-400 */
+    --color-nav-accent-bg: oklch(98.5% 0.002 247.839); /* gray-50 */
+    --color-nav-accent-fg: oklch(51.1% 0.262 276.966); /* indigo-600 */
+}
+
+/* Dark theme — override the colour custom-properties only (TWP dark sidebar). */
+html[data-theme='dark'] {
+    --color-canvas: #101828; /* gray-900 */
+    --color-surface: #1e2939; /* gray-800 — elevated */
+    --color-surface-muted: #364153; /* gray-700 */
+    --color-surface-disabled: #1e2939; /* gray-800 */
+    --color-line: rgba(255, 255, 255, 0.1); /* white/10 */
+    --color-line-soft: rgba(255, 255, 255, 0.08); /* white/8 */
+    --color-ink: #e7e9ee; /* near-white */
+    --color-muted: #99a1af; /* gray-400 */
+    --color-focus: #818cf8; /* indigo-400 */
+    --color-focus-ring: #a5b4fc; /* indigo-300 */
+    --color-invalid: #fb7185; /* rose-400 */
+    --color-nav-fg: #99a1af; /* gray-400 */
+    --color-nav-icon: #99a1af; /* gray-400 */
+    --color-nav-accent-bg: rgba(255, 255, 255, 0.05); /* white/5 */
+    --color-nav-accent-fg: #ffffff; /* white */
+}
+
+@layer base {
+    html {
+        @apply text-ink;
+    }
+    body {
+        background-color: var(--color-canvas);
+        min-width: 64rem; /* desktop-only floor — no mobile/tablet layout (ADR 0044) */
+    }
+}

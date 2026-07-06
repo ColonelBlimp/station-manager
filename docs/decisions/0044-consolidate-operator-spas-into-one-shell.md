@@ -268,3 +268,62 @@ not evidence the consolidation is de-risked.
 - Shell mock (build-approach artifact): `docs/v2-design/shell-mock/index.html` —
   the throwaway static Tailwind-v4 + `@theme`-tokens prototype for settling IA +
   the theme system before the `lib/` merge. Delete once the real shell ships.
+
+## Amendment (2026-07-06) — operating-surface design settled via the shell mock
+
+An extended mock-iteration session settled the shell's IA and the operating
+surface's interaction model well beyond what the original ADR sketched. The mock
+(`docs/v2-design/shell-mock/index.html`) is the **visual spec**; this amendment is
+the **behaviour spec** for the Svelte build. Decisions:
+
+- **Three-column shell.** Left **nav rail** (destinations) · centre **content** ·
+  right **util rail** (operating info panels). Both rails **collapse full↔narrow**,
+  **independently**, **persisted** to `localStorage`; both **default expanded**
+  (labels help new operators). Narrow = icon-only rail with hover flyouts.
+- **Right util rail is Operate → Phone/CW-scoped.** Hidden on Dashboard / Logbook /
+  Settings / FT8; its content offset + the header's top-right extension are gated
+  on the same flag so other views use full width. Panels: **Worked · Session ·
+  Details · Rig · Pile-up**.
+- **Panel model.** Worked/Session/Details/Rig open a **card *below* a compact,
+  fixed-size logging card** (one panel at a time; the rail button highlights).
+  **Auto-open on the relevant event:** Worked on **callsign entry**; Rig on a
+  **CAT change** (as a **badge** on the rail button, never a force-takeover of the
+  card, so it can't yank away a panel you're reading).
+- **CAT / rig gate.** A header **freq/mode/band chip** is the always-visible glance
+  anchor *and* the gate's status light (live / manual / warning). The rig fields
+  (freq/mode/band/power) live in the **Rig panel**, editable. **When CAT is off,**
+  entering Operate **auto-opens the Rig card and blocks logging until an explicit
+  Set/Confirm** — confirm **once per band** (pre-filled from last session, so it's
+  a fast confirm not data entry), the gate **auto-lifts if CAT comes online**, and
+  the chip shows the state throughout. When CAT is on, values are read-mostly and
+  correct automatically. (Generalises to a "confirm must-be-right session state
+  before logging" pattern — e.g. operator profile in a contest.)
+- **Desktop-only.** 64rem `min-width` floor; below it the page scrolls, never
+  reflows. No mobile/tablet layout — a tablet can't host the daemon (serial/audio/
+  CGO), and real mobile is a separate effort tied to online/smcloud access.
+- **Theme.** One `@theme` token system, `[data-theme]` dark swap, `@custom-variant`
+  so `dark:` follows the attribute. Values from Tailwind Plus, adapted to tokens.
+
+**Pile-up drawer — implementation requirements** (captured from mock niggles;
+deliberately *not* solved in the throwaway mock — they need reactive layout):
+
+- **Docked, not transient**: opened from the right rail; **stays open while the
+  queue has items**. Starts at the **header bottom** (`top: header-height`), not
+  full height.
+- **Never overlaps the logging card** — maintain a **≥2rem gap**. When width
+  tightens, **the content/card moves (and/or scrolls), the drawer holds position**;
+  the fixed-size logging card must remain **fully visible and accessible** (you log
+  *from* the card while working the queue *in* the drawer — non-negotiable).
+- **No flash on rail collapse**: don't tie the closed drawer's rest transform to an
+  animating variable (the rail-width var), or it re-animates when the rail
+  collapses. Park it off-screen by a fixed amount / gate its transition to
+  open↔close only.
+
+**Build.** `frontend/app/` (Vite + Svelte 5) scaffolded 2026-07-06 — a clean-slate
+consolidated SPA (the three existing SPAs had bloated / drifted). Design system
+carried 1:1 from the mock (`src/styles/app.css`). Built up step by step: shell
+chrome → routing → operating surface → the CAT-gate **state model in runes**
+(`$state`/`$derived` — the mock's growing vanilla-JS state was the signal to
+switch) against **stubbed data**; backend plumbed later. `frontend/app/` is a new
+directory — it does not touch the shipping `frontend/logging/`, so it can't
+destabilise the 7Q8AC release; the only cost is attention.
