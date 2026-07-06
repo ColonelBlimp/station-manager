@@ -282,10 +282,17 @@
       <!-- Sticky header bar — intentionally EMPTY for now (SM's search /
            notifications / profile equivalents aren't relevant yet). Kept as the
            frame to populate later. -->
-      <header
-        class="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-line bg-surface px-4 sm:gap-x-6 sm:px-6 lg:px-8"
-      >
-        <!-- header content deferred -->
+      <header class="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-line bg-surface px-4 sm:gap-x-6 sm:px-6 lg:px-8">
+        <!-- Always-visible rig chip (glance anchor + gate status light). -->
+        <div class="flex items-center gap-2 rounded-md border border-line px-3 py-1.5 text-sm">
+          <span id="rigChipDot" class="size-2 rounded-full bg-green-500"></span>
+          <span id="rigChipText" class="font-medium text-ink">14.074 · USB · 20m</span>
+        </div>
+        <!-- Dev controls (mock only) to exercise the CAT flow. -->
+        <div class="ml-auto flex items-center gap-2">
+          <button type="button" id="catToggle" class="btn">CAT: on</button>
+          <button type="button" id="catChange" class="btn">Simulate CAT change</button>
+        </div>
       </header>
 
       <!-- Content region — one <section data-panel> per destination; show() swaps
@@ -344,18 +351,21 @@
                   <div class="flex items-end gap-4">
                     <div>
                       <label for="callsignInput" class="block text-sm font-medium text-ink">Callsign</label>
-                      <input id="callsignInput" type="text" autocomplete="off" spellcheck="false" placeholder="Callsign" class="input w-20 uppercase" />
+                      <input id="callsignInput" type="text" autocomplete="off" spellcheck="false" placeholder="Callsign" class="input w-34 uppercase" />
                     </div>
                     <div>
                       <label class="block text-sm font-medium text-ink">RST Sent</label>
-                      <input class="input w-6" placeholder="59" />
+                      <input class="input w-14" placeholder="59" />
                     </div>
                     <div>
                       <label class="block text-sm font-medium text-ink">RST Rcvd</label>
-                      <input class="input w-6" placeholder="59" />
+                      <input class="input w-14" placeholder="59" />
                     </div>
                   </div>
                   <div class="mt-4 h-20 rounded-lg border border-dashed border-line"></div>
+                  <div class="mt-4 flex justify-end">
+                    <button type="button" id="logBtn" class="btn btn-primary">Log QSO</button>
+                  </div>
                 </div>
 
                 <!-- Info panel (card below) — toggled by the right rail; auto-opens
@@ -370,7 +380,31 @@
                       </svg>
                     </button>
                   </div>
-                  <div class="mt-3 h-40 rounded-lg border border-dashed border-line"></div>
+                  <div id="infoGeneric" class="mt-3 h-40 rounded-lg border border-dashed border-line"></div>
+                  <div id="infoRig" class="mt-3" hidden>
+                    <div class="flex flex-wrap items-end gap-4">
+                      <div>
+                        <label class="block text-sm font-medium text-ink">Frequency</label>
+                        <input class="input w-32" placeholder="14.074.00" />
+                      </div>
+                      <div>
+                        <label class="block text-sm font-medium text-ink">Mode</label>
+                        <input class="input w-24" placeholder="USB" />
+                      </div>
+                      <div>
+                        <label class="block text-sm font-medium text-ink">Band</label>
+                        <input class="input w-16" placeholder="20m" />
+                      </div>
+                      <div>
+                        <label class="block text-sm font-medium text-ink">Power</label>
+                        <input class="input w-20" placeholder="50 W" />
+                      </div>
+                    </div>
+                    <div class="mt-4 flex items-center gap-3">
+                      <button type="button" id="rigSet" class="btn btn-primary">Set</button>
+                      <span id="rigHint" class="text-sm text-muted"></span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -438,6 +472,13 @@
           </svg>
           <span class="rail-label">Details</span>
         </button>
+        <button type="button" data-panel-btn="rig" class="rail-item relative" title="Rig">
+          <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.348 14.651a3.75 3.75 0 0 1 0-5.303m5.304 0a3.75 3.75 0 0 1 0 5.303m-7.425 2.122a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.808-3.808-9.98 0-13.789m13.788 0c3.808 3.808 3.808 9.981 0 13.79M12 12h.008v.008H12V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+          </svg>
+          <span class="rail-label">Rig</span>
+          <span id="rigBadge" class="rail-badge" hidden></span>
+        </button>
         <div class="mt-auto flex flex-col gap-1">
           <button type="button" id="pileupOpen" class="rail-item" title="Pile-up">
             <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
@@ -504,7 +545,13 @@
           @apply text-xs font-semibold tracking-wide text-muted uppercase;
         }
         .btn {
-          @apply inline-flex cursor-pointer items-center gap-x-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-semibold text-ink shadow-sm hover:bg-surface-muted;
+          @apply inline-flex cursor-pointer items-center gap-x-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-semibold text-ink shadow-sm hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50;
+        }
+        .btn-primary {
+          @apply border-transparent bg-focus text-white hover:bg-focus-ring;
+        }
+        .rail-badge {
+          @apply absolute top-1 right-1 size-2 rounded-full bg-amber-500;
         }
         /* Right rail buttons — icon-only, same accent behaviour as the nav. */
         .rail-item {
@@ -729,7 +776,10 @@
         if (!on) {
           setPileup(false);
           closeInfo();
+        } else if (!rigReady()) {
+          setInfo('rig'); // CAT-off gate: force the Rig card open on entry
         }
+        updateGate();
       }
 
       nav.addEventListener('click', (e) => {
@@ -777,12 +827,18 @@
       const infoPanel = document.getElementById('infoPanel');
       const infoTitle = document.getElementById('infoTitle');
       const railBtns = document.querySelectorAll('[data-panel-btn]');
-      const infoLabels = { worked: 'Worked', session: 'Session', details: 'Details' };
+      const infoLabels = { worked: 'Worked', session: 'Session', details: 'Details', rig: 'Rig' };
+      const infoGeneric = document.getElementById('infoGeneric');
+      const infoRig = document.getElementById('infoRig');
+      const rigBadge = document.getElementById('rigBadge');
       let activeInfo = null;
       function setInfo(panel) {
         activeInfo = panel;
         infoTitle.textContent = infoLabels[panel];
         infoPanel.hidden = false;
+        infoGeneric.hidden = panel === 'rig';
+        infoRig.hidden = panel !== 'rig';
+        if (panel === 'rig') rigBadge.hidden = true; // opening the panel clears the badge
         railBtns.forEach((b) =>
           b.setAttribute('data-active', String(b.dataset.panelBtn === panel)),
         );
@@ -812,6 +868,46 @@
         } else if (len === 0) {
           workedAutoShown = false;
         }
+      });
+
+      // --- CAT / rig-state gate (chip + Rig panel + confirm-before-log). A light
+      //     vanilla demo of the flow; the real state belongs in Svelte ($derived).
+      let catOnline = true;
+      let rigConfirmed = true; // CAT online ⇒ effectively confirmed
+      const rigChipDot = document.getElementById('rigChipDot');
+      const rigChipText = document.getElementById('rigChipText');
+      const logBtn = document.getElementById('logBtn');
+      const rigHint = document.getElementById('rigHint');
+      function rigReady() {
+        return catOnline || rigConfirmed;
+      }
+      function updateGate() {
+        if (catOnline) {
+          rigChipDot.className = 'size-2 rounded-full bg-green-500';
+          rigChipText.textContent = '14.074 · USB · 20m';
+        } else if (rigConfirmed) {
+          rigChipDot.className = 'size-2 rounded-full bg-gray-400';
+          rigChipText.textContent = '14.074 · USB · 20m · manual';
+        } else {
+          rigChipDot.className = 'size-2 rounded-full bg-amber-500';
+          rigChipText.textContent = '⚠ Set rig to log';
+        }
+        logBtn.disabled = !rigReady();
+        rigHint.textContent = rigReady() ? '' : 'Confirm your rig settings to enable logging.';
+      }
+      document.getElementById('rigSet').addEventListener('click', () => {
+        rigConfirmed = true;
+        updateGate();
+      });
+      document.getElementById('catToggle').addEventListener('click', (e) => {
+        catOnline = !catOnline;
+        rigConfirmed = catOnline; // CAT owns it when on; you must re-confirm when off
+        e.target.textContent = 'CAT: ' + (catOnline ? 'on' : 'off');
+        rigBadge.hidden = true;
+        updateRail(); // re-evaluate the gate; auto-opens the Rig card if CAT is off
+      });
+      document.getElementById('catChange').addEventListener('click', () => {
+        if (catOnline) rigBadge.hidden = false; // badge the Rig rail button
       });
 
       showMode(currentMode); // prime the panes
