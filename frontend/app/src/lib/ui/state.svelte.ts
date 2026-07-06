@@ -42,3 +42,25 @@ export function toggleNav(): void {
 export function toggleUtil(): void {
     ui.utilMode = ui.utilMode === 'narrow' ? 'full' : 'narrow';
 }
+
+// --- Responsive auto-collapse ------------------------------------------------
+// Below these widths a rail is forced narrow regardless of the saved preference,
+// to keep the logging card fitting as the window shrinks. The util rail (secondary)
+// collapses first, then the left nav. The *preference* (ui.navMode/utilMode) is
+// never touched — so widening the window restores whatever the operator had set.
+// effective = preference-narrow OR forced-by-width.
+// (Keep these thresholds in sync with the pre-paint script in index.html.)
+const navMq = window.matchMedia('(max-width: 61rem)');
+const utilMq = window.matchMedia('(max-width: 72rem)');
+
+const forced = $state({ nav: navMq.matches, util: utilMq.matches });
+navMq.addEventListener('change', (e) => (forced.nav = e.matches));
+utilMq.addEventListener('change', (e) => (forced.util = e.matches));
+
+export function effectiveNav(): NavMode {
+    return ui.navMode === 'narrow' || forced.nav ? 'narrow' : 'full';
+}
+
+export function effectiveUtil(): NavMode {
+    return ui.utilMode === 'narrow' || forced.util ? 'narrow' : 'full';
+}

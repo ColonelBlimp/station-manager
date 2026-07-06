@@ -2,7 +2,14 @@
     import Sidebar from './lib/ui/Sidebar.svelte';
     import Header from './lib/ui/Header.svelte';
     import Operate from './lib/operate/Operate.svelte';
-    import { ui, THEME_KEY, NAV_KEY, UTIL_KEY } from './lib/ui/state.svelte';
+    import {
+        ui,
+        THEME_KEY,
+        NAV_KEY,
+        UTIL_KEY,
+        effectiveNav,
+        effectiveUtil,
+    } from './lib/ui/state.svelte';
     import { router, type View } from './lib/router.svelte';
     import { operate } from './lib/operate/state.svelte';
 
@@ -13,12 +20,14 @@
         document.documentElement.dataset.theme = ui.theme;
         localStorage.setItem(THEME_KEY, ui.theme);
     });
+    // Apply the EFFECTIVE collapse (preference or forced-by-width) to <html>, but
+    // persist only the operator's PREFERENCE so widening restores it.
     $effect(() => {
-        document.documentElement.dataset.nav = ui.navMode;
+        document.documentElement.dataset.nav = effectiveNav();
         localStorage.setItem(NAV_KEY, ui.navMode);
     });
     $effect(() => {
-        document.documentElement.dataset.util = ui.utilMode;
+        document.documentElement.dataset.util = effectiveUtil();
         localStorage.setItem(UTIL_KEY, ui.utilMode);
     });
     // The right util rail (and its content offset / pile-up push) exists in
@@ -39,10 +48,13 @@
 
 <Sidebar />
 
-<div class="content-wrap pl-[var(--sidebar-w)]">
+<div class="content-wrap flex h-screen flex-col pl-[var(--sidebar-w)]">
     <Header />
-    <main class="bg-canvas py-10">
-        <div class="px-4 sm:px-6 lg:px-8">
+    <!-- main is the horizontal (and vertical) scroll container. Its width is
+         bounded by the rail offsets (content-wrap pl/pr), so a min-width card
+         scrolls WITHIN it and the fixed rails can't scroll over the card. -->
+    <main class="flex-1 overflow-auto bg-canvas">
+        <div class="px-4 py-10 sm:px-6 lg:px-8">
             {#if router.view === 'operate'}
                 <Operate />
             {:else}

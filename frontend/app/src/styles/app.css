@@ -62,7 +62,15 @@ html[data-theme='dark'] {
     }
     body {
         background-color: var(--color-canvas);
-        min-width: 64rem; /* desktop-only floor — no mobile/tablet layout (ADR 0044) */
+        /* No page-level min-width floor: the content region (<main>) is the
+           horizontal-scroll container instead, so the fixed rails never scroll
+           over the logging card — it scrolls within the region. Rails auto-collapse
+           first (ui/state.svelte). Desktop-only stance unchanged (no mobile layout). */
+    }
+    /* Full-height app shell: fixed rails + header, scrollable main. */
+    html,
+    body {
+        height: 100%;
     }
 }
 

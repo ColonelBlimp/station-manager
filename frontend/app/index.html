@@ -9,14 +9,21 @@
          flash. The Svelte app keeps them in sync afterwards (App.svelte). -->
     <script>
       (function () {
+        var d = document.documentElement.dataset;
         var t = localStorage.getItem('sm-theme');
         if (t !== 'light' && t !== 'dark')
           t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-        document.documentElement.dataset.theme = t;
-        document.documentElement.dataset.nav =
-          localStorage.getItem('sm-nav') === 'narrow' ? 'narrow' : 'full';
-        document.documentElement.dataset.util =
-          localStorage.getItem('sm-util') === 'narrow' ? 'narrow' : 'full';
+        d.theme = t;
+        // effective = saved-narrow OR forced-narrow-by-width (keep thresholds in
+        // sync with lib/ui/state.svelte).
+        d.nav =
+          localStorage.getItem('sm-nav') === 'narrow' || matchMedia('(max-width: 61rem)').matches
+            ? 'narrow'
+            : 'full';
+        d.util =
+          localStorage.getItem('sm-util') === 'narrow' || matchMedia('(max-width: 72rem)').matches
+            ? 'narrow'
+            : 'full';
       })();
     </script>
   </head>
