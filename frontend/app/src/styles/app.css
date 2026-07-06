@@ -263,7 +263,7 @@ html[data-util='narrow'] .util-chevron {
    content-left when the viewport is too narrow (not enough acreage). The centre
    offset is half the card (--card-w), so width changes stay in sync. */
 .operate-center {
-    --card-w: 320px; /* logging-card width — LoggingCard reads it via w-[var(--card-w)] */
+    --card-w: 573px; /* logging-card width — golden ratio (φ × 354px height); LoggingCard reads it via w-[var(--card-w)] */
     width: fit-content;
     margin-left: max(0px, calc(50vw - var(--card-w) / 2 - var(--sidebar-w)));
     transition: margin 0.2s ease;

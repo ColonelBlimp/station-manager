@@ -16,7 +16,7 @@ export interface QsoDraft {
     timeOn: string; // ADIF TIME_ON — UTC, HH:MM:SS
     dateOff: string; // ADIF QSO_DATE_OFF
     timeOff: string; // ADIF TIME_OFF
-    comment: string; // ADIF COMMENT / notes — edited in the Details card (deliberate, e.g. a rag-chew), not on the fast-path card
+    comment: string; // ADIF COMMENT / notes
 }
 
 function blank(): QsoDraft {
