@@ -1,0 +1,187 @@
+<!doctype html>
+<!--
+  Station Manager — SPA SHELL MOCK (throwaway design aid for ADR 0044).
+
+  Scope right now: JUST THE BLANK SHELL — the persistent frame (sidebar nav +
+  topbar + empty content region) and the theme system (light/dark via one
+  [data-theme] custom-property swap). No dashboard content yet; views are empty.
+  Fill destinations in incrementally from here.
+
+  Substrate fidelity (ADR 0044 build-approach note): renders in the SAME substrate
+  the real shell will use — Tailwind v4 + the logging app's @theme tokens (copied
+  verbatim from frontend/logging/src/styles/app.css) — so look + token vocabulary
+  are a direct reference. Dark mode is the shell's real mechanism in miniature: one
+  [data-theme="dark"] block overrides the colour custom-properties, no per-utility
+  edits.
+
+  How to view: open in a browser (pulls the Tailwind v4 browser build from a CDN —
+  needs internet once; the shipped SPA compiles Tailwind at build time, no CDN).
+  NOT shipping UI; delete once the real shell lands.
+-->
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SM Shell Mock — ADR 0044</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+    <!-- Design tokens — copied verbatim from frontend/logging/src/styles/app.css
+         @theme block (light values), plus one mock-only muted accent. -->
+    <style type="text/tailwindcss">
+      @theme {
+        /* Surfaces / chrome (from app.css) */
+        --color-surface: #fff; /* tw white */
+        --color-surface-muted: oklch(92.8% 0.006 264.531); /* tw gray-200 */
+        --color-surface-disabled: oklch(96.7% 0.003 264.542); /* tw gray-100 */
+        --color-line: oklch(87.2% 0.01 258.338); /* tw gray-300 */
+        --color-line-soft: oklch(87.2% 0.01 258.338); /* tw gray-200 */
+        --color-ink: oklch(21% 0.034 264.665); /* tw gray-900 */
+
+        /* Status / interaction (from app.css) */
+        --color-focus: oklch(51.1% 0.262 276.966); /* tw indigo-600 */
+        --color-focus-ring: oklch(58.5% 0.233 277.117); /* tw indigo-500 */
+        --color-invalid: oklch(57.7% 0.245 27.325); /* tw red-600 */
+
+        /* Mock-only muted accent (secondary text) */
+        --color-muted: oklch(55.1% 0.027 264.364); /* gray-500 */
+      }
+    </style>
+
+    <!-- Dark theme: override the colour custom-properties only. Higher specificity
+         than :root so it wins; everything drawn with bg-surface/text-ink/etc. flips
+         with no per-utility edits. This IS the shell's theming mechanism in miniature. -->
+    <style>
+      html[data-theme='dark'] {
+        --color-surface: #14161b;
+        --color-surface-muted: #1d212a;
+        --color-surface-disabled: #23272f;
+        --color-line: #333a46;
+        --color-line-soft: #2a2f39;
+        --color-ink: #e7e9ee;
+        --color-focus: #818cf8; /* indigo-400 */
+        --color-focus-ring: #a5b4fc; /* indigo-300 */
+        --color-invalid: #fb7185; /* rose-400 */
+        --color-muted: #8b93a3;
+      }
+      /* App background sits one step below card surfaces in both themes. */
+      body {
+        background-color: var(--color-surface-muted);
+      }
+    </style>
+  </head>
+
+  <body class="text-ink">
+    <!-- ============================ APP SHELL ============================ -->
+    <div class="min-h-screen md:grid md:grid-cols-[15rem_1fr]">
+      <!-- ---------- Sidebar (persistent nav) ---------- -->
+      <aside
+        class="flex flex-col border-b border-line-soft bg-surface md:h-screen md:border-r md:border-b-0"
+      >
+        <!-- Brand -->
+        <div class="flex items-center gap-2 px-4 py-4">
+          <span class="text-xl">📻</span>
+          <span class="font-semibold">Station Manager</span>
+          <span
+            class="ml-auto rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-[var(--color-muted)]"
+            >MOCK</span
+          >
+        </div>
+
+        <!-- Primary nav — the shell destinations (ADR 0044) -->
+        <nav class="flex flex-col gap-0.5 px-2" id="nav">
+          <button data-view="dashboard" class="nav-item">📊 <span>Dashboard</span></button>
+          <button data-view="operate" class="nav-item">🎙️ <span>Operate</span></button>
+          <button data-view="logbook" class="nav-item">📖 <span>Logbook</span></button>
+          <button data-view="config" class="nav-item">⚙️ <span>Config</span></button>
+        </nav>
+
+        <div class="mx-3 my-2 border-t border-line-soft"></div>
+
+        <!-- Manual stays a separate zero-JS site (ADR 0036) — linked, not a route -->
+        <a
+          href="#"
+          class="mx-2 flex items-center gap-2 rounded-md px-3 py-2 text-sm text-[var(--color-muted)] hover:bg-surface-muted"
+          >📄 <span>Manual</span><span class="ml-auto text-xs">↗</span></a
+        >
+
+        <!-- Footer: build chip + theme toggle -->
+        <div class="mt-auto flex items-center gap-2 px-3 py-3">
+          <span class="rounded bg-surface-muted px-2 py-1 text-[11px] text-[var(--color-muted)]"
+            >v2.0.0-alpha.1</span
+          >
+          <button
+            id="themeToggle"
+            class="ml-auto rounded-md border border-line px-2 py-1 text-sm hover:bg-surface-muted"
+            title="Toggle light / dark"
+          >
+            <span id="themeIcon">🌙</span>
+          </button>
+        </div>
+      </aside>
+
+      <!-- ---------- Main column ---------- -->
+      <div class="flex min-w-0 flex-col">
+        <!-- Topbar -->
+        <header
+          class="sticky top-0 z-10 flex items-center gap-3 border-b border-line-soft bg-surface px-5 py-3"
+        >
+          <h1 id="viewTitle" class="text-lg font-semibold">Dashboard</h1>
+        </header>
+
+        <!-- Empty content region — fill per view from here. -->
+        <main class="flex-1 overflow-y-auto p-5">
+          <!-- intentionally blank -->
+        </main>
+      </div>
+    </div>
+
+    <!-- Shared component classes (mirror app.css @layer components idiom) -->
+    <style type="text/tailwindcss">
+      @layer components {
+        .nav-item {
+          @apply flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium hover:bg-surface-muted;
+        }
+        .nav-item[data-active='true'] {
+          @apply bg-surface-muted text-focus;
+        }
+      }
+    </style>
+
+    <script>
+      // --- Theme toggle: set [data-theme] on <html>, persist to localStorage.
+      //     Defaults to the OS preference on first visit (ADR 0044 mechanism).
+      const root = document.documentElement;
+      const icon = document.getElementById('themeIcon');
+      const stored = localStorage.getItem('sm-theme');
+      const initial =
+        stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      applyTheme(initial);
+      function applyTheme(t) {
+        root.setAttribute('data-theme', t);
+        icon.textContent = t === 'dark' ? '☀️' : '🌙';
+      }
+      document.getElementById('themeToggle').addEventListener('click', () => {
+        const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+        localStorage.setItem('sm-theme', next);
+      });
+
+      // --- Nav: swap active item + title (content stays blank for now).
+      //     Stands in for the shell's client-side router (real: History-API paths).
+      const nav = document.getElementById('nav');
+      const title = document.getElementById('viewTitle');
+      const labels = { dashboard: 'Dashboard', operate: 'Operate', logbook: 'Logbook', config: 'Config' };
+      function show(view) {
+        nav.querySelectorAll('.nav-item').forEach((b) =>
+          b.setAttribute('data-active', String(b.dataset.view === view)),
+        );
+        title.textContent = labels[view];
+      }
+      nav.addEventListener('click', (e) => {
+        const btn = e.target.closest('.nav-item');
+        if (btn) show(btn.dataset.view);
+      });
+      show('dashboard');
+    </script>
+  </body>
+</html>

@@ -53,3 +53,4 @@ config.json
 # every machine. Negation works only because the directory itself isn't excluded.
 /.claude/*
 !/.claude/settings.json
+.tailwindplus

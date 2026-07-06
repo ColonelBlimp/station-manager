@@ -188,7 +188,14 @@ complexity for a partial win.
 in the target substrate** — Tailwind v4 + the logging app's `@theme` tokens, with
 a working `data-theme` dark toggle — to settle IA/nav, the dashboard tile set, the
 `startup_view` landing options, and the theme system *before* the `lib/` merge
-(honours the project's "design SPA UX before building" rule). The mock is
+(honours the project's "design SPA UX before building" rule). **Tailwind Plus**
+(personal license; the gitignored `.tailwindplus/` archive) is used as a
+**layout/IA reference** for the shell frame + destinations — patterns adapted into
+SM's own `@theme`-token markup, **not** committed verbatim. This is both
+licence-clean (SM is a functional open-source End Product, which the Tailwind Plus
+license expressly permits — what it forbids is redistributing the components
+*separately* as extractable assets) and consistent with the theming-first
+foundation (adapting to tokens is what buys dark mode + one vocabulary). The mock is
 question-scoped and throwaway; it de-risks the cheap half (layout, theme) and by
 design says nothing about the expensive half (the three-`lib/` merge without
 state-model collisions; per-route code-splitting holding the Operate first-load
@@ -256,3 +263,6 @@ not evidence the consolidation is de-risked.
   `frontend/logging/src/app.svelte` (the informal shell/gate + config hand-off
   link this ADR formalizes); `frontend/{logging,config,logbook}/src/lib/api/
   _helpers.ts` (the triplicated, drifting client layer).
+- Shell mock (build-approach artifact): `docs/v2-design/shell-mock/index.html` —
+  the throwaway static Tailwind-v4 + `@theme`-tokens prototype for settling IA +
+  the theme system before the `lib/` merge. Delete once the real shell ships.
