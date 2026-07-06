@@ -1,56 +1,17 @@
 <script lang="ts">
-    // Operate surface. Renders the active sub-mode (Phone/CW ↔ FT8, from the
-    // router). This pass: the Phone/CW entry card; FT8 is a placeholder. The right
-    // util rail + CAT gate land in later increments.
+    // Operate surface — a thin composer. Renders the active sub-mode (Phone/CW ↔
+    // FT8, from the router) plus the shared right-rail chrome. The cards are
+    // self-contained (ADR 0045); this file only positions them.
     import { router } from '../router.svelte';
+    import LoggingCard from './LoggingCard.svelte';
     import UtilRail from './UtilRail.svelte';
     import InfoPanel from './InfoPanel.svelte';
     import PileupDrawer from './PileupDrawer.svelte';
-
-    let callsign = $state('');
-    let rstSent = $state('59');
-    let rstRcvd = $state('59');
-
-    const canLog = $derived(callsign.trim() !== '');
-
-    function logQso(): void {
-        // Stub — assembled + submitted to the daemon in a later pass.
-    }
 </script>
 
 {#if router.mode === 'phone'}
     <div class="operate-center">
-        <div class="card w-[42rem]">
-            <div class="flex items-end gap-4">
-                <div>
-                    <label for="callsign" class="block text-sm font-medium text-ink">Callsign</label>
-                    <input
-                        id="callsign"
-                        class="input w-32 uppercase"
-                        autocomplete="off"
-                        spellcheck="false"
-                        placeholder="Callsign"
-                        bind:value={callsign}
-                    />
-                </div>
-                <div>
-                    <label for="rst-sent" class="block text-sm font-medium text-ink">RST Sent</label>
-                    <input id="rst-sent" class="input w-12" bind:value={rstSent} />
-                </div>
-                <div>
-                    <label for="rst-rcvd" class="block text-sm font-medium text-ink">RST Rcvd</label>
-                    <input id="rst-rcvd" class="input w-12" bind:value={rstRcvd} />
-                </div>
-            </div>
-
-            <!-- Rest of the entry form lands here (name, QTH, exchange, comment…). -->
-            <div class="mt-4 h-20 rounded-lg border border-dashed border-line"></div>
-
-            <div class="mt-4 flex justify-end">
-                <button class="btn btn-primary" onclick={logQso} disabled={!canLog}>Log QSO</button>
-            </div>
-        </div>
-
+        <LoggingCard />
         <InfoPanel />
     </div>
 {:else}

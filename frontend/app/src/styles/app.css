@@ -260,11 +260,12 @@ html[data-util='narrow'] .util-chevron {
    instead of centring in the resizing content area. The `- var(--sidebar-w)`
    cancels the content-wrap's left offset; matching the content-wrap's 0.2s
    transition keeps it fixed during the collapse animation too. Clamps to the
-   content-left when the viewport is too narrow (not enough acreage). 21rem = half
-   the 42rem card. */
+   content-left when the viewport is too narrow (not enough acreage). The centre
+   offset is half the card (--card-w), so width changes stay in sync. */
 .operate-center {
+    --card-w: 320px; /* logging-card width — LoggingCard reads it via w-[var(--card-w)] */
     width: fit-content;
-    margin-left: max(0px, calc(50vw - 21rem - var(--sidebar-w)));
+    margin-left: max(0px, calc(50vw - var(--card-w) / 2 - var(--sidebar-w)));
     transition: margin 0.2s ease;
 }
 
