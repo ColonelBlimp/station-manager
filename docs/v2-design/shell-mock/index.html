@@ -113,6 +113,8 @@
       html[data-nav='narrow'] .brand-text,
       html[data-nav='narrow'] .nav-label,
       html[data-nav='narrow'] .nav-trailing,
+      html[data-nav='narrow'] .nav-chevron,
+      html[data-nav='narrow'] .op-submenu,
       html[data-nav='narrow'] .footer-version {
         display: none;
       }
@@ -171,13 +173,42 @@
                     <span class="nav-label">Dashboard</span>
                   </button>
                 </li>
-                <li>
-                  <button data-view="operate" class="nav-item" title="Operate">
+                <li class="nav-operate relative">
+                  <button data-view="operate" class="nav-item" title="Operate" aria-expanded="false" aria-controls="op-submenu">
                     <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3-3 3" />
                     </svg>
                     <span class="nav-label">Operate</span>
+                    <svg class="nav-chevron ml-auto size-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                    </svg>
                   </button>
+                  <ul id="op-submenu" class="op-submenu mt-1 space-y-1" hidden>
+                    <li>
+                      <button data-mode="phone" class="nav-subitem"><span class="nav-label">Phone / CW</span></button>
+                    </li>
+                    <li>
+                      <button data-mode="ft8" class="nav-subitem"><span class="nav-label">FT8</span></button>
+                    </li>
+                  </ul>
+                  <!-- Rail flyout: shown on hover/focus ONLY when the sidebar is collapsed. -->
+                  <div class="op-flyout">
+                    <div class="op-flyout-panel">
+                      <p class="op-flyout-header">Operate</p>
+                      <button data-mode="phone" class="op-flyout-item">
+                        <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-5 shrink-0">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+                        </svg>
+                        Phone / CW
+                      </button>
+                      <button data-mode="ft8" class="op-flyout-item">
+                        <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-5 shrink-0">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M9.348 14.651a3.75 3.75 0 0 1 0-5.303m5.304 0a3.75 3.75 0 0 1 0 5.303m-7.425 2.122a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.808-3.808-9.98 0-13.789m13.788 0c3.808 3.808 3.808 9.981 0 13.79M12 12h.008v.008H12V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                        </svg>
+                        FT8
+                      </button>
+                    </div>
+                  </div>
                 </li>
                 <li>
                   <button data-view="logbook" class="nav-item" title="Logbook">
@@ -223,7 +254,7 @@
                 <span class="footer-version rounded bg-surface-muted px-2 py-1 text-[11px] text-muted">v2.0.0-alpha.1</span>
                 <button
                   id="themeToggle"
-                  class="ml-auto rounded-md border border-line px-2 py-1 text-muted hover:bg-surface-muted hover:text-ink"
+                  class="ml-auto cursor-pointer rounded-md border border-line px-2 py-1 text-muted hover:bg-surface-muted hover:text-ink"
                   title="Toggle light / dark"
                 >
                   <span id="themeIcon">
@@ -261,28 +292,6 @@
 
           <!-- Operate: Phone/CW <-> FT8 segmented control + a pane each -->
           <section data-panel="operate" hidden>
-            <div class="mb-6">
-              <div
-                id="opMode"
-                role="tablist"
-                aria-label="Operating mode"
-                class="inline-flex rounded-lg bg-gray-200 p-1 dark:bg-white/5"
-              >
-                <button type="button" role="tab" data-mode="phone" class="op-seg">
-                  <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-5">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
-                  </svg>
-                  Phone / CW
-                </button>
-                <button type="button" role="tab" data-mode="ft8" class="op-seg">
-                  <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-5">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.348 14.651a3.75 3.75 0 0 1 0-5.303m5.304 0a3.75 3.75 0 0 1 0 5.303m-7.425 2.122a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.808-3.808-9.98 0-13.789m13.788 0c3.808 3.808 3.808 9.981 0 13.79M12 12h.008v.008H12V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
-                  </svg>
-                  FT8
-                </button>
-              </div>
-            </div>
-
             <div data-op="phone" class="op-pane">
               <div class="flex h-[55vh] flex-col items-center justify-center rounded-xl border border-dashed border-line text-center">
                 <p class="text-sm font-semibold text-ink">Phone / CW</p>
@@ -322,23 +331,45 @@
            has NO literal colours and NO dark: variants — the token swap does
            light/dark. Spacing/type match TWP (gap-x-3, p-2, text-sm/6). */
         .nav-item {
-          @apply flex w-full items-center gap-x-3 rounded-md p-2 text-left text-sm/6 font-semibold
+          @apply flex w-full cursor-pointer items-center gap-x-3 rounded-md p-2 text-left text-sm/6 font-semibold
           text-nav-fg hover:bg-nav-accent-bg hover:text-nav-accent-fg;
         }
         .nav-item[data-active='true'] {
           @apply bg-nav-accent-bg text-nav-accent-fg;
         }
 
-        /* Operate mode segmented control — TWP toggle idiom: a neutral container
-           with a raised white active segment. Literal TWP utilities + dark:
-           variants, contained to this component (tokenise later if reused). */
-        .op-seg {
-          @apply inline-flex items-center gap-x-2 rounded-md px-3 py-1.5 text-sm font-medium
-          text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200;
+        /* Operate sub-items (Phone/CW, FT8) revealed by the expandable Operate
+           section. Indented to align past the parent's icon; same accent tokens
+           as the nav, so no literal colours. */
+        .nav-subitem {
+          @apply flex w-full cursor-pointer items-center rounded-md py-2 pr-2 pl-11 text-left text-sm/6 font-medium
+          text-nav-fg hover:bg-nav-accent-bg hover:text-nav-accent-fg;
         }
-        .op-seg[data-active='true'] {
-          @apply bg-white text-gray-900 shadow-sm dark:bg-white/10 dark:text-white;
+        .nav-subitem[data-active='true'] {
+          @apply bg-nav-accent-bg text-nav-accent-fg;
         }
+
+        /* Rail flyout (collapsed Operate) — a floating menu of the modes. */
+        .op-flyout-panel {
+          @apply min-w-44 rounded-md border border-line bg-surface p-1 shadow-lg;
+        }
+        .op-flyout-header {
+          @apply px-2 py-1 text-xs font-semibold text-muted;
+        }
+        .op-flyout-item {
+          @apply flex w-full cursor-pointer items-center gap-x-2 rounded-md px-2 py-1.5 text-sm/6 font-medium
+          text-nav-fg hover:bg-nav-accent-bg hover:text-nav-accent-fg;
+        }
+        .op-flyout-item[data-active='true'] {
+          @apply bg-nav-accent-bg text-nav-accent-fg;
+        }
+      }
+      /* Disclosure chevron on the Operate section rotates when expanded. */
+      .nav-chevron {
+        transition: transform 0.15s ease;
+      }
+      [aria-expanded='true'] > .nav-chevron {
+        transform: rotate(90deg);
       }
       /* Icons ride currentColor: muted at rest, accent on hover/active — the TWP
          nav treatment, with zero per-icon classes. */
@@ -348,6 +379,29 @@
       .nav-item:hover svg,
       .nav-item[data-active='true'] svg {
         color: var(--color-nav-accent-fg);
+      }
+
+      /* Operate rail flyout: shown on hover/focus ONLY when collapsed, positioned
+         to the right of the rail. The rail's overflow is opened so the pop-out
+         isn't clipped (the mock's nav is short, so no scroll is lost). */
+      .op-flyout {
+        position: absolute;
+        top: 0;
+        left: 100%;
+        z-index: 50;
+        display: none;
+        padding-left: 0.5rem; /* gap + keeps hover contiguous from icon to panel */
+      }
+      html[data-nav='narrow'] .sidebar-inner {
+        overflow: visible;
+      }
+      html[data-nav='narrow'] .nav-operate:hover .op-flyout,
+      html[data-nav='narrow'] .nav-operate:focus-within .op-flyout {
+        display: block;
+      }
+      /* A click on a mode dismisses the flyout until the pointer leaves + returns. */
+      html[data-nav='narrow'] .nav-operate[data-flyout-dismissed] .op-flyout {
+        display: none;
       }
     </style>
 
@@ -394,33 +448,79 @@
       //     for the shell's client-side router (real: History-API paths).
       const nav = document.getElementById('nav');
       const panels = document.querySelectorAll('[data-panel]');
+      const opPanes = document.querySelectorAll('[data-op]');
+      const opBtn = nav.querySelector('[data-view="operate"]');
+      const opSubmenu = document.getElementById('op-submenu');
+      const opLi = opBtn.closest('.nav-operate');
+      let currentView = 'dashboard';
+      let currentMode = localStorage.getItem('sm-op-mode') || 'phone';
+
+      // Sub-items highlight only while Operate is the active view.
+      function refreshSub() {
+        nav
+          .querySelectorAll('[data-mode]')
+          .forEach((b) =>
+            b.setAttribute(
+              'data-active',
+              String(currentView === 'operate' && b.dataset.mode === currentMode),
+            ),
+          );
+      }
+      function expandOperate(open) {
+        opBtn.setAttribute('aria-expanded', String(open));
+        opSubmenu.hidden = !open;
+      }
       function show(view) {
+        currentView = view;
+        // Operate is an expandable parent — never highlight it; the active
+        // sub-item (Phone/CW or FT8) carries the highlight instead.
         nav
           .querySelectorAll('.nav-item')
-          .forEach((b) => b.setAttribute('data-active', String(b.dataset.view === view)));
+          .forEach((b) =>
+            b.setAttribute(
+              'data-active',
+              String(b.dataset.view === view && b.dataset.view !== 'operate'),
+            ),
+          );
         panels.forEach((p) => (p.hidden = p.dataset.panel !== view));
+        refreshSub();
       }
-      nav.addEventListener('click', (e) => {
-        const btn = e.target.closest('.nav-item');
-        if (btn && btn.dataset.view) show(btn.dataset.view);
-      });
-
-      // --- Operate: Phone/CW <-> FT8 segmented control, last choice persisted.
-      const opMode = document.getElementById('opMode');
-      const opPanes = document.querySelectorAll('[data-op]');
       function showMode(mode) {
-        opMode
-          .querySelectorAll('.op-seg')
-          .forEach((b) => b.setAttribute('data-active', String(b.dataset.mode === mode)));
+        currentMode = mode;
         opPanes.forEach((p) => (p.hidden = p.dataset.op !== mode));
         localStorage.setItem('sm-op-mode', mode);
+        refreshSub();
       }
-      opMode.addEventListener('click', (e) => {
-        const btn = e.target.closest('.op-seg');
-        if (btn) showMode(btn.dataset.mode);
-      });
-      showMode(localStorage.getItem('sm-op-mode') || 'phone');
 
+      nav.addEventListener('click', (e) => {
+        // Mode sub-item: go to Operate + select that mode, keep the section open.
+        const sub = e.target.closest('[data-mode]');
+        if (sub) {
+          show('operate');
+          showMode(sub.dataset.mode);
+          expandOperate(true);
+          sub.blur(); // drop focus so focus-within can't re-open the rail flyout
+          opLi.setAttribute('data-flyout-dismissed', ''); // close it now, even while hovered
+          return;
+        }
+        // Top-level nav item.
+        const btn = e.target.closest('.nav-item');
+        if (!btn || !btn.dataset.view) return;
+        if (btn.dataset.view === 'operate') {
+          // From elsewhere: navigate + open. Already on Operate + open: collapse.
+          const collapse = currentView === 'operate' && opBtn.getAttribute('aria-expanded') === 'true';
+          show('operate');
+          showMode(currentMode);
+          expandOperate(!collapse);
+        } else {
+          show(btn.dataset.view);
+        }
+      });
+
+      // Re-arm the rail flyout once the pointer leaves Operate (a click dismisses it).
+      opLi.addEventListener('mouseleave', () => opLi.removeAttribute('data-flyout-dismissed'));
+
+      showMode(currentMode); // prime the panes
       show('dashboard');
     </script>
   </body>
