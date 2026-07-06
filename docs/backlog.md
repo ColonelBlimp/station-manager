@@ -46,6 +46,7 @@ next, and in what order" is answered.
 
 **P2 — next features (open one workstream per active focus)**
 - **▶ NEXT SESSION (bumped 2026-07-05):** _Re-enrich a logged QSO — in the **logbook SPA**._ The repair path for names dropped by a flaky-link QRZ timeout at log time (2nd confirmed occurrence — 3/52 nameless on 2026-07-05; recurring 7Q8AC/Malawi condition). Companion: a **manual FAQ** on the cause + remedy. See detail.
+- _SPA architecture (post-ship · ADR 0044):_ consolidate logging+config+logbook into **one app shell** (dashboard + Operate[Phone/CW+FT8] + Logbook + Config; manual stays zero-JS — 3→1). **Subsumes** the _UI cohesion_ cluster below (theme built into the shell from the first commit). Gated behind the 7Q8AC ship.
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
 - _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW) · work-path opening: prefer clean next-slot start over truncated immediate fire
 - _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
@@ -409,7 +410,40 @@ next, and in what order" is answered.
   a direction, not a commitment. Depends on the config-SPA workstream existing
   first (that's where profile CRUD would live).
 
-- **UI consistency across SPAs — shared theme layer.** THIS IS THE LOAD-BEARING
+- **SPA consolidation — one app shell (ADR 0044, post-ship).** Merge the three
+  Svelte SPAs (`frontend/{logging,config,logbook}`) into one Vite + Svelte 5 app
+  (`frontend/app/`) with a persistent shell — dashboard/status home, **Operate**
+  (Phone/CW + FT8 as sibling modes over the shared session log), **Logbook**,
+  **Config**, and a link out to the zero-JS **manual** (which stays separate per
+  ADR 0036 — this is **3→1, not 4→1**). Drivers: the FT8/logging seam is wrong
+  (FT8 uses logging but isn't logging — they're siblings over one session log);
+  plumbing is triplicated and drifting (three `_helpers.ts`; the session-198
+  fetch-timeout fix reached only logging's copy); theming/dark-mode is re-authored
+  per app. It is the **client-side mirror of ADR 0043**'s per-surface `internal/api`
+  split. Design is settled in the ADR; three sub-decisions **endorsed 2026-07-06**
+  (History-API real-path routing [provisional] · lean status-home dashboard ·
+  config-as-route) — with one open finer point: the **default landing view is an
+  operator preference** (a `startup_view` config setting — dashboard / operate→FT8
+  / operate→phone / last-used; dashboard stays the default), settled at build. Key
+  constraints baked into the ADR: **per-route code-splitting
+  is a requirement, not an optimisation** (one bundle now spans all surfaces — the
+  7Q8AC link); the **theme system is built first** from logging's tokens as the
+  baseline (utility *nomenclature* open to a rationalisation pass during the merge);
+  **API endpoint count is unchanged** — usage simplifies (one hydration, one stream
+  lifecycle, a natural first consumer for the deferred 0043 `qso.*` events spine) —
+  and **resist a bespoke `GET /v1/dashboard` aggregate** (compose existing +
+  subscribe, per 0043). **Subsumes** the three _UI cohesion_ items below (shared
+  theme layer · UI themes + dark mode · version-in-tab-title): they become work
+  *inside* the shell build, not separate cross-SPA passes. **Post-ship — gated
+  behind the 7Q8AC release; do NOT open before the ship gate clears.** See
+  `docs/decisions/0044-consolidate-operator-spas-into-one-shell.md`.
+
+- **UI consistency across SPAs — shared theme layer.** _(Reframed 2026-07-06 by
+  ADR 0044 — see "SPA consolidation" above: once the three SPAs become one app,
+  the "lift logging's `@theme` into a file all three import" step is **absorbed**
+  and the token-convergence sweep happens *inside* the single-shell migration. The
+  measurements + safety-rail below stay accurate and load-bearing for that sweep.)_
+  THIS IS THE LOAD-BEARING
   WORK — theming (dark mode / selectable palettes, see "UI themes + dark mode")
   is the *carrot*, not the task; converging on one token layer is what actually
   tidies the CSS, and it pays off even if a theme picker never ships.
