@@ -184,6 +184,17 @@ complexity for a partial win.
   consolidation is API-surface-*additive* here — the one place the "consolidation
   shrinks the API" intuition inverts.
 
+**Build approach:** prototype the shell + dashboard as a **static HTML/CSS mock
+in the target substrate** — Tailwind v4 + the logging app's `@theme` tokens, with
+a working `data-theme` dark toggle — to settle IA/nav, the dashboard tile set, the
+`startup_view` landing options, and the theme system *before* the `lib/` merge
+(honours the project's "design SPA UX before building" rule). The mock is
+question-scoped and throwaway; it de-risks the cheap half (layout, theme) and by
+design says nothing about the expensive half (the three-`lib/` merge without
+state-model collisions; per-route code-splitting holding the Operate first-load
+down on a poor link), which is de-risked in code, not HTML — a polished mock is
+not evidence the consolidation is de-risked.
+
 **Sub-decisions (endorsed 2026-07-06 by the operator; finer points settle at build):**
 
 - **Routing model — History-API real paths** (`/`, `/operate`, `/logbook`,
