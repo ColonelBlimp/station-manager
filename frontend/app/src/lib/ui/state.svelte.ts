@@ -6,7 +6,6 @@
 
 export type Theme = 'light' | 'dark';
 export type NavMode = 'full' | 'narrow';
-export type View = 'dashboard' | 'operate' | 'logbook' | 'config';
 
 export const THEME_KEY = 'sm-theme';
 export const NAV_KEY = 'sm-nav';
@@ -24,7 +23,6 @@ function initialNav(): NavMode {
 export const ui = $state({
     theme: initialTheme(),
     navMode: initialNav(),
-    view: 'dashboard' as View,
 });
 
 export function toggleTheme(): void {

@@ -1,6 +1,7 @@
 <script lang="ts">
     import Logo from './Logo.svelte';
-    import { ui, toggleTheme, toggleNav, type View } from './state.svelte';
+    import { ui, toggleTheme, toggleNav } from './state.svelte';
+    import { router, navigate, type View } from '../router.svelte';
 
     const nav: { view: View; label: string }[] = [
         { view: 'dashboard', label: 'Dashboard' },
@@ -100,8 +101,8 @@
                                 <button
                                     class="nav-item"
                                     title={item.label}
-                                    data-active={ui.view === item.view ? 'true' : 'false'}
-                                    onclick={() => (ui.view = item.view)}
+                                    data-active={router.view === item.view ? 'true' : 'false'}
+                                    onclick={() => navigate(item.view)}
                                 >
                                     {@render navIcon(item.view)}
                                     <span class="nav-label">{item.label}</span>

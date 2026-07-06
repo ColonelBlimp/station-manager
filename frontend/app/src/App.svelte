@@ -1,7 +1,8 @@
 <script lang="ts">
     import Sidebar from './lib/ui/Sidebar.svelte';
     import Header from './lib/ui/Header.svelte';
-    import { ui, THEME_KEY, NAV_KEY, type View } from './lib/ui/state.svelte';
+    import { ui, THEME_KEY, NAV_KEY } from './lib/ui/state.svelte';
+    import { router, type View } from './lib/router.svelte';
 
     // Reflect shell state onto <html> (drives the token swap + collapse rules)
     // and persist it. Initial attributes are set pre-mount in index.html, so
@@ -30,7 +31,7 @@
     <main class="bg-canvas py-10">
         <div class="px-4 sm:px-6 lg:px-8">
             <!-- Placeholder content per view; real surfaces land in later passes. -->
-            <h1 class="text-2xl font-semibold text-ink">{titles[ui.view]}</h1>
+            <h1 class="text-2xl font-semibold text-ink">{titles[router.view]}</h1>
             <div class="mt-6 h-[60vh] rounded-xl border border-dashed border-line"></div>
         </div>
     </main>
