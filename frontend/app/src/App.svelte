@@ -1,6 +1,7 @@
 <script lang="ts">
     import Sidebar from './lib/ui/Sidebar.svelte';
     import Header from './lib/ui/Header.svelte';
+    import Operate from './lib/operate/Operate.svelte';
     import { ui, THEME_KEY, NAV_KEY } from './lib/ui/state.svelte';
     import { router, type View } from './lib/router.svelte';
 
@@ -30,9 +31,13 @@
     <Header />
     <main class="bg-canvas py-10">
         <div class="px-4 sm:px-6 lg:px-8">
-            <!-- Placeholder content per view; real surfaces land in later passes. -->
-            <h1 class="text-2xl font-semibold text-ink">{titles[router.view]}</h1>
-            <div class="mt-6 h-[60vh] rounded-xl border border-dashed border-line"></div>
+            {#if router.view === 'operate'}
+                <Operate />
+            {:else}
+                <!-- Placeholder for views not yet built. -->
+                <h1 class="text-2xl font-semibold text-ink">{titles[router.view]}</h1>
+                <div class="mt-6 h-[60vh] rounded-xl border border-dashed border-line"></div>
+            {/if}
         </div>
     </main>
 </div>

@@ -1,5 +1,6 @@
 <script lang="ts">
     import Logo from './Logo.svelte';
+    import OperateNav from './OperateNav.svelte';
     import { ui, toggleTheme, toggleNav } from './state.svelte';
     import { router, navigate, type View } from '../router.svelte';
 
@@ -97,17 +98,23 @@
                 <li>
                     <ul role="list" class="-mx-2 space-y-1">
                         {#each nav as item (item.view)}
-                            <li>
-                                <button
-                                    class="nav-item"
-                                    title={item.label}
-                                    data-active={router.view === item.view ? 'true' : 'false'}
-                                    onclick={() => navigate(item.view)}
-                                >
-                                    {@render navIcon(item.view)}
-                                    <span class="nav-label">{item.label}</span>
-                                </button>
-                            </li>
+                            {#if item.view === 'operate'}
+                                <OperateNav />
+                            {:else}
+                                <li>
+                                    <button
+                                        class="nav-item"
+                                        title={item.label}
+                                        data-active={router.view === item.view
+                                            ? 'true'
+                                            : 'false'}
+                                        onclick={() => navigate(item.view)}
+                                    >
+                                        {@render navIcon(item.view)}
+                                        <span class="nav-label">{item.label}</span>
+                                    </button>
+                                </li>
+                            {/if}
                         {/each}
                     </ul>
                 </li>
