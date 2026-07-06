@@ -90,6 +90,48 @@
       body {
         background-color: var(--color-canvas);
       }
+
+      /* --- Collapsible sidebar (full <-> icon-only rail) --------------------
+         Driven by [data-nav] on <html>. One --sidebar-w variable resizes both
+         the sidebar and the content offset; narrow hides labels + trailing/meta
+         and centres the icons. Same nav markup, no second sidebar. */
+      :root {
+        --sidebar-w: 18rem; /* full: w-72 */
+      }
+      html[data-nav='narrow'] {
+        --sidebar-w: 5rem; /* rail: w-20 */
+      }
+      .sidebar-wrap,
+      .content-wrap {
+        transition:
+          width 0.2s ease,
+          padding 0.2s ease;
+      }
+      .collapse-chevron {
+        transition: transform 0.2s ease;
+      }
+      html[data-nav='narrow'] .brand-text,
+      html[data-nav='narrow'] .nav-label,
+      html[data-nav='narrow'] .nav-trailing,
+      html[data-nav='narrow'] .footer-version {
+        display: none;
+      }
+      html[data-nav='narrow'] .brand,
+      html[data-nav='narrow'] .nav-item,
+      html[data-nav='narrow'] .footer-meta {
+        justify-content: center;
+        gap: 0;
+      }
+      html[data-nav='narrow'] .footer-meta #themeToggle {
+        margin-left: 0; /* neutralise ml-auto so it centres in the rail */
+      }
+      html[data-nav='narrow'] .sidebar-inner {
+        padding-left: 0.75rem; /* px-3 — w-20 rail is too tight for px-6 */
+        padding-right: 0.75rem;
+      }
+      html[data-nav='narrow'] .collapse-chevron {
+        transform: rotate(180deg); /* points -> to expand */
+      }
     </style>
   </head>
 
@@ -97,15 +139,22 @@
     <!-- ============================ APP SHELL (TWP 03) ============================ -->
 
     <!-- Fixed sidebar (desktop ≥lg) -->
-    <div class="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col">
-      <div class="flex grow flex-col gap-y-5 overflow-y-auto border-r border-line bg-surface px-6 pb-4">
+    <div class="sidebar-wrap hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-[var(--sidebar-w)] lg:flex-col">
+      <div class="sidebar-inner flex grow flex-col gap-y-5 overflow-y-auto border-r border-line bg-surface px-6 pb-4">
         <!-- Brand header -->
-        <div class="flex h-16 shrink-0 items-center gap-2">
-          <span class="font-semibold">Station Manager</span>
-          <span
-            class="ml-auto rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-muted"
-            >MOCK</span
-          >
+        <div class="brand flex h-16 shrink-0 items-center gap-2">
+          <svg viewBox="0 0 512 512" class="size-8 shrink-0 text-focus" aria-hidden="true">
+            <g transform="translate(0,512) scale(0.1,-0.1)" fill="currentColor" stroke="currentColor" stroke-width="160" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke">
+              <path d="M1193 5038 c-84 -89 -137 -165 -202 -295 -120 -242 -178 -545 -152 -806 33 -347 155 -638 358 -857 30 -33 59 -60 64 -60 5 0 -8 26 -30 58 -176 258 -281 624 -281 982 0 348 102 717 269 970 52 79 52 80 48 80 -2 0 -35 -33 -74 -72z"/>
+              <path d="M3856 5100 c5 -8 25 -40 45 -70 167 -253 269 -622 269 -970 0 -358 -105 -724 -281 -982 -22 -32 -35 -58 -30 -58 17 0 132 133 187 216 211 318 289 744 208 1144 -36 178 -126 392 -225 535 -41 60 -197 227 -173 185z"/>
+              <path d="M1549 4733 c-102 -95 -194 -261 -241 -434 -20 -72 -23 -106 -22 -244 1 -143 4 -170 27 -250 52 -172 152 -343 253 -429 l45 -39 -46 72 c-114 175 -169 392 -168 656 1 269 65 507 179 668 19 26 32 47 29 47 -3 0 -28 -21 -56 -47z"/>
+              <path d="M3543 4733 c173 -243 230 -679 136 -1039 -24 -91 -77 -218 -116 -275 -46 -69 -48 -73 -16 -50 97 72 205 255 259 436 37 127 44 311 16 445 -36 174 -117 338 -224 455 -69 76 -100 91 -55 28z"/>
+              <path d="M1965 4418 c-73 -38 -173 -137 -204 -202 -35 -75 -45 -144 -32 -216 26 -148 116 -252 271 -311 28 -10 50 -17 50 -14 0 3 -16 20 -36 37 -60 53 -133 166 -156 241 -42 140 4 290 132 430 34 37 56 67 48 67 -7 -1 -40 -15 -73 -32z"/>
+              <path d="M2443 4436 c-104 -34 -194 -114 -241 -216 -22 -47 -26 -69 -26 -155 -1 -88 2 -107 26 -157 15 -32 39 -73 55 -93 33 -43 131 -111 172 -120 34 -7 35 16 -10 -255 -167 -993 -658 -2259 -1282 -3305 -40 -66 -73 -123 -75 -127 -2 -5 46 -8 107 -8 l111 0 0 54 c0 30 -4 56 -10 58 -5 1 14 44 42 93 29 50 98 173 153 275 l100 185 468 3 467 2 0 -280 0 -280 -55 0 -55 0 0 -55 0 -55 170 0 170 0 0 55 0 55 -55 0 -55 0 0 280 0 280 467 -2 468 -3 89 -165 c48 -91 117 -214 152 -275 35 -60 59 -111 54 -113 -6 -2 -10 -28 -10 -58 l0 -54 111 0 c61 0 109 3 107 8 -1 4 -42 72 -89 152 -117 196 -219 383 -348 640 -477 945 -798 1874 -930 2695 -12 72 -24 144 -26 161 -5 29 -3 32 34 43 45 13 126 71 165 118 159 190 86 496 -143 601 -68 32 -209 41 -278 18z m53 -1423 c-2 -3 -13 -3 -23 -1 -19 3 -19 5 1 98 l21 95 3 -94 c1 -51 1 -96 -2 -98z m154 75 l17 -78 -23 0 c-24 0 -24 1 -23 98 1 53 3 88 6 77 3 -11 13 -55 23 -97z m-150 -473 l0 -275 -115 0 c-63 0 -115 2 -115 5 0 2 22 78 49 167 27 90 62 211 77 271 l28 107 38 0 38 0 0 -275z m229 147 c19 -70 52 -185 74 -257 22 -71 42 -138 44 -147 5 -16 -5 -18 -111 -18 l-116 0 0 275 0 275 38 0 37 0 34 -128z m-229 -872 l0 -330 -260 0 c-143 0 -260 2 -260 4 0 2 11 28 24 57 28 65 138 353 176 464 15 44 33 92 39 108 l11 27 135 0 135 0 0 -330z m460 140 c61 -167 97 -262 159 -417 l21 -53 -260 0 -260 0 0 330 0 331 136 -3 137 -3 67 -185z m-460 -920 l0 -330 -440 0 -440 0 59 118 c52 103 169 357 229 495 l21 47 285 0 286 0 0 -330z m757 180 c35 -80 104 -227 153 -327 l89 -183 -440 0 -439 0 0 330 0 330 286 -2 286 -3 65 -145z"/>
+              <path d="M3130 4383 c129 -143 174 -290 132 -430 -24 -77 -101 -195 -157 -240 -48 -39 -44 -46 15 -24 153 58 244 161 271 305 6 32 7 81 4 108 -11 77 -67 179 -132 238 -51 47 -157 110 -184 110 -6 0 17 -30 51 -67z"/>
+            </g>
+          </svg>
+          <span class="brand-text text-lg font-semibold text-focus">Station Manager</span>
         </div>
 
         <!-- Nav -->
@@ -115,36 +164,36 @@
             <li>
               <ul role="list" class="-mx-2 space-y-1" id="nav">
                 <li>
-                  <button data-view="dashboard" class="nav-item">
+                  <button data-view="dashboard" class="nav-item" title="Dashboard">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" class="size-6 shrink-0">
                       <path d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" stroke-linecap="round" stroke-linejoin="round" />
                     </svg>
-                    Dashboard
+                    <span class="nav-label">Dashboard</span>
                   </button>
                 </li>
                 <li>
-                  <button data-view="operate" class="nav-item">
+                  <button data-view="operate" class="nav-item" title="Operate">
                     <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3-3 3" />
                     </svg>
-                    Operate
+                    <span class="nav-label">Operate</span>
                   </button>
                 </li>
                 <li>
-                  <button data-view="logbook" class="nav-item">
+                  <button data-view="logbook" class="nav-item" title="Logbook">
                     <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
                     </svg>
-                    Logbook
+                    <span class="nav-label">Logbook</span>
                   </button>
                 </li>
                 <li>
-                  <button data-view="config" class="nav-item">
+                  <button data-view="config" class="nav-item" title="Settings">
                     <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 0 1 1.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.559.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.894.149c-.424.07-.764.383-.929.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 0 1-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.398.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 0 1-.12-1.45l.527-.737c.25-.35.272-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125 1.125 0 0 1 .12-1.45l.773-.773a1.125 1.125 0 0 1 1.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894Z" />
                       <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
                     </svg>
-                    Settings
+                    <span class="nav-label">Settings</span>
                   </button>
                 </li>
               </ul>
@@ -153,19 +202,25 @@
             <!-- Bottom utilities: Manual (separate zero-JS site, ADR 0036) + build
                  chip + theme toggle. mt-auto pins the group to the sidebar bottom. -->
             <li class="mt-auto -mx-2">
-              <a href="#" class="nav-item">
+              <a href="#" class="nav-item" title="Manual">
                 <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-6 shrink-0">
                   <path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
                 </svg>
-                Manual
-                <span class="ml-auto">
+                <span class="nav-label">Manual</span>
+                <span class="nav-trailing ml-auto">
                   <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" class="size-4">
                     <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 19.5 15-15m0 0H8.25m11.25 0v11.25" />
                   </svg>
                 </span>
               </a>
-              <div class="mt-2 flex items-center gap-2 px-2">
-                <span class="rounded bg-surface-muted px-2 py-1 text-[11px] text-muted">v2.0.0-alpha.1</span>
+              <button id="collapseToggle" class="nav-item" title="Collapse sidebar">
+                <svg class="collapse-chevron size-6 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="m18.75 4.5-7.5 7.5 7.5 7.5m-6-15L5.25 12l7.5 7.5" />
+                </svg>
+                <span class="nav-label">Collapse</span>
+              </button>
+              <div class="footer-meta mt-2 flex items-center gap-2 px-2">
+                <span class="footer-version rounded bg-surface-muted px-2 py-1 text-[11px] text-muted">v2.0.0-alpha.1</span>
                 <button
                   id="themeToggle"
                   class="ml-auto rounded-md border border-line px-2 py-1 text-muted hover:bg-surface-muted hover:text-ink"
@@ -185,7 +240,7 @@
     </div>
 
     <!-- Content column, offset past the fixed sidebar -->
-    <div class="lg:pl-72">
+    <div class="content-wrap lg:pl-[var(--sidebar-w)]">
       <!-- Sticky header bar — intentionally EMPTY for now (SM's search /
            notifications / profile equivalents aren't relevant yet). Kept as the
            frame to populate later. -->
@@ -256,6 +311,15 @@
         const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
         applyTheme(next);
         localStorage.setItem('sm-theme', next);
+      });
+
+      // --- Collapsible sidebar: toggle [data-nav] full <-> narrow, persist choice.
+      const navMode = localStorage.getItem('sm-nav') || 'full';
+      root.setAttribute('data-nav', navMode);
+      document.getElementById('collapseToggle').addEventListener('click', () => {
+        const next = root.getAttribute('data-nav') === 'narrow' ? 'full' : 'narrow';
+        root.setAttribute('data-nav', next);
+        localStorage.setItem('sm-nav', next);
       });
 
       // --- Nav: swap the active item (content stays blank for now). Stands in for
