@@ -70,7 +70,10 @@
     {#if enrich.status === 'done' && enrich.data !== null}
         <div class="flex items-center gap-x-2">
             {#if flag !== ''}
-                <span class="text-5xl leading-none text-nowrap, overflow-x-hidden, text-ellipsis" title={enrich.data.country}>{flag}</span>
+                <span
+                    class="text-5xl leading-none text-nowrap, overflow-x-hidden, text-ellipsis"
+                    title={enrich.data.country}>{flag}</span
+                >
             {/if}
             <div class="min-w-0">
                 <div class="truncate text-base font-semibold text-ink">{enrich.data.country}</div>
@@ -92,7 +95,7 @@
         <div class="mt-3 space-y-1 text-sm">
             {#if shown !== null}
                 <div class="text-center">
-                        <span class="tabular-nums text-ink font-semibold">
+                    <span class="tabular-nums text-ink font-semibold">
                         {shown.bearing.toFixed(0)}° · {shown.km.toLocaleString()} km
                     </span>
                 </div>
@@ -131,7 +134,6 @@
                 </div>
             {/if}
         </div>
-
     {:else if enrich.status === 'pending'}
         <div class="flex h-full items-center justify-center text-sm text-muted">
             Looking up {enrich.call}…

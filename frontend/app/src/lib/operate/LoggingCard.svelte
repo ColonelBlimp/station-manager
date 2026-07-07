@@ -13,11 +13,18 @@
     // positioned (ADR 0045). Rig fields (freq/mode/band) belong to the Rig panel.
     import { onMount } from 'svelte';
     import { draft, canLog, logDraft, resetDraft, stampOn } from './qso.svelte';
+    import { observeWorked } from './worked.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
 
     function upperCall(): void {
         draft.callsign = draft.callsign.toUpperCase();
     }
+
+    // The worked-before lookup is driven here, not in WorkedPanel: it must run
+    // while the panel is CLOSED so a hit can auto-open it. This card owns the
+    // callsign field, so it hosts the observation. (Enrichment observes from
+    // EnrichmentCard, which is always mounted.)
+    $effect(() => observeWorked(draft.callsign));
 
     // QSO start = when the card appears. Time off is stamped at log.
     onMount(stampOn);
