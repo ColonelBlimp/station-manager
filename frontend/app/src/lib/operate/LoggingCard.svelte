@@ -14,6 +14,7 @@
     import { onMount } from 'svelte';
     import { draft, canLog, logDraft, resetDraft, stampOn } from './qso.svelte';
     import { observeWorked } from './worked.svelte';
+    import { rigReady } from './rig.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
 
     function upperCall(): void {
@@ -132,7 +133,13 @@
             </div>
             <div class="flex mt-auto justify-end gap-x-2">
                 <button class="btn" onclick={resetDraft}>Clear</button>
-                <button class="btn btn-primary" onclick={logDraft} disabled={!canLog()}
+                <!-- CAT gate: a lost rig link blocks logging (the band/mode on
+                     record could be stale); CAT-off manual entry logs fine. -->
+                <button
+                    class="btn btn-primary"
+                    onclick={logDraft}
+                    disabled={!canLog() || !rigReady()}
+                    title={!rigReady() ? 'CAT link lost — rig context may be stale' : undefined}
                     >Log QSO</button
                 >
             </div>

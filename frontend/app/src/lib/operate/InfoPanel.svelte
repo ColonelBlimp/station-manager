@@ -1,11 +1,12 @@
 <script lang="ts">
     // The card-below the logging card. Shows whichever info panel the rail has
-    // active (Worked/Session/Details/Rig). Worked + Session are live; Details
-    // and the Rig fields + CAT gate come in later passes.
+    // active (Worked/Session/Details/Rig). All four are live (on stubbed data
+    // seams until the /v1 wiring).
     import { operate, closePanel } from './state.svelte';
     import WorkedPanel from './WorkedPanel.svelte';
     import SessionPanel from './SessionPanel.svelte';
     import DetailsPanel from './DetailsPanel.svelte';
+    import RigPanel from './RigPanel.svelte';
 
     const titles: Record<string, string> = {
         worked: 'Worked',
@@ -45,7 +46,7 @@
             {:else if operate.panel === 'details'}
                 <DetailsPanel />
             {:else}
-                <div class="h-40 rounded-lg border border-dashed border-line"></div>
+                <RigPanel />
             {/if}
         </div>
     </div>
