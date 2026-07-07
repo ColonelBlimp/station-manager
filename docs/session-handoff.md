@@ -30,7 +30,73 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-06)
+## Current state (as of 2026-07-07)
+
+> **Session 204 (2026-07-07) — `frontend/app/` Operate surface is now
+> INTERACTION-COMPLETE on stubbed seams.** Continued the ADR 0044/0045 build from
+> session 203 (post-ship, additive, ship gate unchanged). Built, in order:
+>
+> - **Enrichment card (the session-203 NEXT item).** `lib/operate/enrich.svelte.ts`
+>   = state + **injected `setEnricher` seam** (mirrors `setSubmit`; dev stub now,
+>   `/v1/enrich/callsign` later), 400 ms debounce, min 3 chars, **monotonic seq
+>   token** (slow lookup can't overwrite a newer call), fail-soft (error = done-
+>   with-nothing). On resolve it **back-fills the draft**: `gridsquare` AND `name`
+>   (guarded: call still matches + field empty — operator entry always wins).
+>   `EnrichmentCard.svelte` renders flag / country / DXCC + **NEW badge** /
+>   **SP–LP radio group** (choice in `enrich.prefs.path` — shared state, sticky
+>   across lookups, the future **rotator** reads the same selection) / bearing ·
+>   distance for the selected path / **"Their time"** destination clock
+>   (longitude-derived solar offset from their grid, 15°/hr — approximation by
+>   design, noted in-code; 15 s ticker gated on data showing). Op name + grid
+>   were **removed from the display** (name lives on the card, grid in Details) —
+>   the data still flows. Hosted in the logging card's right square; positionless
+>   per ADR 0045 (radio `name` namespaced via `$props.id()`).
+> - **Utils ported verbatim from `frontend/logging` WITH their tests** (39 pass):
+>   `utils/bearing.ts` (pathInfo — battle-tested v1 port), `utils/flag.ts`
+>   (ccode→emoji), `validators/maidenhead.ts`.
+> - **Worked panel.** `worked.svelte.ts` (same seam/debounce/seq discipline;
+>   `setHistory` stub) + `WorkedPanel.svelte` (Date/Time/Band/Mode/Sent/Rcvd/Name
+>   table). **Auto-open** on history hit — only if no panel is open, once per
+>   call; **auto-close** only if it auto-opened (manual opens stay). The
+>   observation lives in **LoggingCard** (must run while the panel is closed).
+> - **Session panel + THE SUBMIT SINK WIRED.** `session.svelte.ts` (in-memory by
+>   design — daemon owns the durable log; later fed from POST response +
+>   `ft8-logged` SSE) + `SessionPanel.svelte` (Time/Call/**Band**/**Mode**/RST/
+>   Name/Country — Band+Mode added because **FT8 + Phone/CW share one session
+>   list**). `main.ts` `setSubmit` composes draft + displayed enrichment
+>   (country only if `enrich.call` matches — a fast log can outrun the debounce)
+>   + **rig context merged at log time** — the same composition-at-the-wiring-
+>   layer shape as the daemon's e4 sink.
+> - **`rig.svelte.ts`** — rig context (band/mode/freq) EXCLUDED from the draft by
+>   design, merged at log; **CAT gate** `off|connected|lost`: off = manual entry
+>   trusted (audio-only fine), **lost blocks logging** (stale context), fields
+>   lock when connected. `RigPanel.svelte` = Band/Mode/Freq + status pill + a
+>   **dev sim select** (stands in for the bridge SSE; removed at wiring). The
+>   ADR 0044 confirm-once-per-band gate flow is the target at SSE-wiring time.
+> - **Details panel.** QTH + Gridsquare over the draft (grid enrichment-filled,
+>   corrected here; live Maidenhead validation, non-blocking). Deliberately
+>   minimal — operator: "features and functions later" (Rig panel likewise).
+> - **Tailwind v4 gotcha (recorded for reuse):** `w-[--card-w]` (v3 shorthand)
+>   silently compiles to invalid `width:--card-w` in v4 — **`w-(--card-w)`
+>   parens is the v4 shorthand**; square brackets only with full `var(...)`.
+>   Was the root cause of the "card lost its width" mystery.
+> - **Drag/pin chrome decision** (agreed, inbox `[2026-07-07]` note): NO baked-in
+>   titlebars — a uniform **wrapper frame** (CardFrame-style) supplied by the
+>   layout layer, revealed in an explicit **arrange-layout mode**; cards
+>   contribute only a display name.
+> - **DOC DEBT CLEARED:** ADR 0044 got a **2026-07-07 build-reconciliation
+>   amendment** (rail = all Operate; 64rem floor removed → main-scroll-container
+>   model; CAT-gate first pass vs confirm-per-band target; ADR 0045 cross-ref).
+>
+> **NEXT: the `/v1` wiring arc** — replace the `main.ts` stubs with real API
+> clients + the bridge rig-state SSE (endpoints exist; each seam is one `set*()`
+> swap): enrich → `/v1/enrich/callsign`, history → contact-history, submit →
+> `POST /v1/qso` (session row from response), rig ← `/v1/rig/events` SSE +
+> config (`my_gridsquare` → `setMyGrid`). Then the fuller CAT confirm gate, and
+> the FT8 surface. **COMMIT STATE: all sessions-203–204 SPA work is COMMITTED**
+> (operator committed incrementally through `14f0aa01` "feat: add Rig panel");
+> only the ADR 0044 amendment + this handoff update remain uncommitted for
+> review.
 
 > **Session 203 (2026-07-06) — started BUILDING ADR 0044's consolidated SPA at
 > `frontend/app/`** (Svelte 5 + Vite, dev port 5176). Post-ship, **additive** — a

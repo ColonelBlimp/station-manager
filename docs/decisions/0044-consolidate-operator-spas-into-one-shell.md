@@ -327,3 +327,37 @@ chrome → routing → operating surface → the CAT-gate **state model in runes
 switch) against **stubbed data**; backend plumbed later. `frontend/app/` is a new
 directory — it does not touch the shipping `frontend/logging/`, so it can't
 destabilise the 7Q8AC release; the only cost is attention.
+
+## Amendment (2026-07-07) — build reconciliation
+
+The Svelte build (sessions 203–204) settled several points differently from the
+2026-07-06 amendment; where they conflict, **this section wins**:
+
+- **Right util rail scope: ALL of Operate (both modes),** not Phone/CW-scoped.
+  FT8 shares the rail (and the shared Session list — FT8 + Phone/CW QSOs land in
+  one session view, disambiguated by the Mode column). Still hidden on
+  Dashboard / Logbook / Settings.
+- **The 64rem `min-width` floor is REMOVED,** superseded by a stronger model:
+  `<main>` is a **horizontal-scroll container bounded by the rail offsets**, so
+  the fixed rails can never overlap the content — the logging card scrolls
+  within the region instead. Combined with **effective-vs-preference rail
+  auto-collapse** (media-query forced-narrow that never clobbers the operator's
+  saved preference) and a **viewport-anchored stationary logging card**. This
+  *implements and generalises* the pile-up-drawer "never overlaps the logging
+  card" requirement to the rails as well.
+- **CAT gate, first pass:** the built gate is `off | connected | lost` — CAT-off
+  manual entry logs freely (audio-only setups), `lost` blocks logging (stale rig
+  context). The amendment's fuller **confirm-once-per-band flow** (CAT-off entry
+  auto-opens Rig, explicit Set/Confirm, auto-lift when CAT arrives, header chip
+  as status light) **remains the design target** — it lands with the `/v1`/SSE
+  wiring, when there is a real bridge state to gate on.
+- **Component doctrine:** the build follows **ADR 0045** (decoupled, relocatable
+  components; state in rune modules; backend coupling injected/subscribed) —
+  written after this ADR's amendment, forcing-function detail there.
+
+Build state as of 2026-07-07: the Operate surface is **interaction-complete on
+stubbed seams** — logging card + shared QSO draft, enrichment card (flag/DXCC+NEW/
+SP-LP bearing+distance/destination clock), Worked (auto-open), Session (submit
+sink), Details (QTH/grid), Rig (band/mode/freq + CAT link) — every backend
+touchpoint is one injected `set*()` in `main.ts`; the `/v1` wiring is the next
+arc.
