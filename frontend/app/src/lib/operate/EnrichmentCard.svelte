@@ -70,7 +70,7 @@
     {#if enrich.status === 'done' && enrich.data !== null}
         <div class="flex items-center gap-x-2">
             {#if flag !== ''}
-                <span class="text-5xl leading-none" title={enrich.data.country}>{flag}</span>
+                <span class="text-5xl leading-none text-nowrap, overflow-x-hidden, text-ellipsis" title={enrich.data.country}>{flag}</span>
             {/if}
             <div class="min-w-0">
                 <div class="truncate text-base font-semibold text-ink">{enrich.data.country}</div>
@@ -139,7 +139,7 @@
     {:else}
         <!-- idle, or done-with-nothing (fail-soft / unknown call) -->
         <div class="flex h-full items-center justify-center text-sm text-muted">
-            {enrich.status === 'done' ? 'No match' : '—'}
+            {enrich.status === 'done' ? 'No match' : ''}
         </div>
     {/if}
 </div>
