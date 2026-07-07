@@ -161,7 +161,7 @@
 
         <!-- Right: always-on enrichment (relocatable — this square is just its first host) -->
         <div class="flex flex-col">
-            <div class="flex w-56 h-43 shrink-0 mt-0">
+            <div class="flex w-56 h-45 shrink-0 mt-0">
                 <EnrichmentCard />
             </div>
             <div class="flex mt-auto justify-end gap-x-2">

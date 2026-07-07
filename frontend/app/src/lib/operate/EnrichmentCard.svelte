@@ -70,9 +70,9 @@
     {#if enrich.status === 'done' && enrich.data !== null}
         <div class="flex items-center gap-x-2">
             {#if flag !== ''}
-                <span
-                    class="overflow-x-hidden text-5xl leading-none text-nowrap text-ellipsis"
-                    title={enrich.data.country}>{flag}</span
+                <div
+                    class="cursor-default overflow-x-hidden size-15 text-5xl leading-none text-nowrap text-ellipsis"
+                    title={enrich.data.country}>{flag}</div
                 >
             {/if}
             <div class="min-w-0">
@@ -92,7 +92,7 @@
             </div>
         </div>
 
-        <div class="mt-3 space-y-1 text-sm">
+        <div class="mt-2 space-y-1 text-sm">
             {#if shown !== null}
                 <div class="text-center">
                     <span class="tabular-nums text-ink font-semibold">
