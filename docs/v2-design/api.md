@@ -535,7 +535,7 @@ paths.
     "country": {
       "name": "England",
       "prefix": "M",
-      "ccode": "GBR",
+      "ccode": "GB",
       "continent": "EU",
       "cq_zone": "14",
       "itu_zone": "27",

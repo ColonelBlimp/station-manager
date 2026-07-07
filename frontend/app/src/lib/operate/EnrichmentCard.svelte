@@ -71,13 +71,13 @@
         <div class="flex items-center gap-x-2">
             {#if flag !== ''}
                 <span
-                    class="text-5xl leading-none text-nowrap, overflow-x-hidden, text-ellipsis"
+                    class="overflow-x-hidden text-5xl leading-none text-nowrap text-ellipsis"
                     title={enrich.data.country}>{flag}</span
                 >
             {/if}
             <div class="min-w-0">
                 <div class="truncate text-base font-semibold text-ink">{enrich.data.country}</div>
-                {#if enrich.data.dxcc !== null}
+                {#if enrich.data.dxcc !== ''}
                     <div class="text-sm text-muted">
                         DXCC {enrich.data.dxcc}
                         {#if enrich.data.isNewEntity === true}

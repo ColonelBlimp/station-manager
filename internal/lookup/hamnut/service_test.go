@@ -98,7 +98,7 @@ func TestLookup_HappyPath(t *testing.T) {
 			"ituZone": 27,
 			"prefix": "M",
 			"primaryDXCCPrefix": "G",
-			"countryCode": "GBR"
+			"countryCode": "GB"
 		}`))
 	}))
 	defer srv.Close()
@@ -124,8 +124,12 @@ func TestLookup_HappyPath(t *testing.T) {
 	if got.DXCCPrefix != "G" {
 		t.Errorf("DXCCPrefix = %q, want G", got.DXCCPrefix)
 	}
-	if got.Ccode != "GBR" {
-		t.Errorf("Ccode = %q, want GBR", got.Ccode)
+	// Live hamnut emits ISO-3166 alpha-2 (verified 2026-07-07: 232/232 cached
+	// country rows are two-letter; the SPAs' flag rendering depends on it).
+	// The fixture previously said "GBR", which documented a wire shape hamnut
+	// doesn't send.
+	if got.Ccode != "GB" {
+		t.Errorf("Ccode = %q, want GB", got.Ccode)
 	}
 	// Per ADR 0017's M0CMC example — hamnut should NOT be telling us
 	// this English call is in CQ Zone 37 (Malawi). The test fixture

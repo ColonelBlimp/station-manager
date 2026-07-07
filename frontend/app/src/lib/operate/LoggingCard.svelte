@@ -11,8 +11,16 @@
     // Reads/writes the shared QSO draft (qso.svelte); it does NOT submit directly
     // (logDraft() calls the injected sink) and makes no assumption about where it's
     // positioned (ADR 0045). Rig fields (freq/mode/band) belong to the Rig panel.
-    import { onMount } from 'svelte';
-    import { draft, canLog, logDraft, resetDraft, stampOn } from './qso.svelte';
+    import {
+        draft,
+        canLog,
+        logDraft,
+        clearDraft,
+        startQso,
+        holdOffTimes,
+        submitState,
+        draftProblems,
+    } from './qso.svelte';
     import { observeWorked } from './worked.svelte';
     import { rigReady } from './rig.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
@@ -21,14 +29,21 @@
         draft.callsign = draft.callsign.toUpperCase();
     }
 
+    // Tab out of the callsign field = "I'm working this station": stamps
+    // Date/Time On and starts the ticking Time Off (the QSO timer). Tab is not
+    // swallowed — focus moves on to RST as normal.
+    function callKeydown(e: KeyboardEvent): void {
+        if (e.key === 'Tab' && !e.shiftKey && draft.callsign.trim() !== '') startQso();
+    }
+
     // The worked-before lookup is driven here, not in WorkedPanel: it must run
     // while the panel is CLOSED so a hit can auto-open it. This card owns the
     // callsign field, so it hosts the observation. (Enrichment observes from
     // EnrichmentCard, which is always mounted.)
     $effect(() => observeWorked(draft.callsign));
 
-    // QSO start = when the card appears. Time off is stamped at log.
-    onMount(stampOn);
+    // Per-field malformed flags → red outlines; canLog() blocks on any of them.
+    const p = $derived(draftProblems());
 </script>
 
 <div class="card w-(--card-w)">
@@ -41,22 +56,34 @@
                     <input
                         id="lc-call"
                         class="input w-32 uppercase"
+                        class:input-error={p.callsign}
                         autocomplete="off"
                         spellcheck="false"
                         placeholder="Callsign"
                         bind:value={draft.callsign}
                         oninput={upperCall}
+                        onkeydown={callKeydown}
                     />
                 </div>
                 <div>
                     <label for="lc-rst-s" class="block text-sm font-medium text-ink">RST Sent</label
                     >
-                    <input id="lc-rst-s" class="input w-15" bind:value={draft.rstSent} />
+                    <input
+                        id="lc-rst-s"
+                        class="input w-15"
+                        class:input-error={p.rstSent}
+                        bind:value={draft.rstSent}
+                    />
                 </div>
                 <div>
                     <label for="lc-rst-r" class="block text-sm font-medium text-ink">RST Rcvd</label
                     >
-                    <input id="lc-rst-r" class="input w-15" bind:value={draft.rstRcvd} />
+                    <input
+                        id="lc-rst-r"
+                        class="input w-15"
+                        class:input-error={p.rstRcvd}
+                        bind:value={draft.rstRcvd}
+                    />
                 </div>
             </div>
 
@@ -68,6 +95,7 @@
                     <input
                         id="lc-date-on"
                         class="input w-32"
+                        class:input-error={p.dateOn}
                         placeholder="YYYY-MM-DD"
                         bind:value={draft.dateOn}
                     />
@@ -79,6 +107,7 @@
                     <input
                         id="lc-time-on"
                         class="input w-24"
+                        class:input-error={p.timeOn}
                         placeholder="HH:MM:SS"
                         bind:value={draft.timeOn}
                     />
@@ -93,8 +122,10 @@
                     <input
                         id="lc-date-off"
                         class="input w-32"
+                        class:input-error={p.dateOff}
                         placeholder="YYYY-MM-DD"
                         bind:value={draft.dateOff}
+                        oninput={holdOffTimes}
                     />
                 </div>
                 <div>
@@ -104,8 +135,10 @@
                     <input
                         id="lc-time-off"
                         class="input w-24"
+                        class:input-error={p.timeOff}
                         placeholder="HH:MM:SS"
                         bind:value={draft.timeOff}
+                        oninput={holdOffTimes}
                     />
                 </div>
             </div>
@@ -132,17 +165,32 @@
                 <EnrichmentCard />
             </div>
             <div class="flex mt-auto justify-end gap-x-2">
-                <button class="btn" onclick={resetDraft}>Clear</button>
+                <button class="btn" onclick={clearDraft}>Clear</button>
                 <!-- CAT gate: a lost rig link blocks logging (the band/mode on
-                     record could be stale); CAT-off manual entry logs fine. -->
+                     record could be stale); CAT-off manual entry logs fine.
+                     busy = in-flight POST (double-log guard). -->
                 <button
                     class="btn btn-primary"
-                    onclick={logDraft}
-                    disabled={!canLog() || !rigReady()}
+                    onclick={() => logDraft()}
+                    disabled={!canLog() || !rigReady() || submitState.busy}
                     title={!rigReady() ? 'CAT link lost — rig context may be stale' : undefined}
-                    >Log QSO</button
+                    >{submitState.busy ? 'Logging…' : 'Log QSO'}</button
                 >
             </div>
+            {#if submitState.error !== ''}
+                <p class="mt-2 max-w-56 text-right text-xs text-invalid">{submitState.error}</p>
+                {#if submitState.duplicate}
+                    <div class="mt-1 flex justify-end">
+                        <button class="btn text-xs" onclick={() => logDraft(true)}>
+                            Log anyway
+                        </button>
+                    </div>
+                {/if}
+            {:else if submitState.logged !== ''}
+                <p class="mt-2 max-w-56 text-right text-xs text-logged">
+                    Logged {submitState.logged} ✓
+                </p>
+            {/if}
         </div>
     </div>
 </div>

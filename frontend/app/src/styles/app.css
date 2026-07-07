@@ -29,6 +29,7 @@
     --color-focus: oklch(51.1% 0.262 276.966); /* indigo-600 */
     --color-focus-ring: oklch(58.5% 0.233 277.117); /* indigo-500 */
     --color-invalid: oklch(57.7% 0.245 27.325); /* red-600 */
+    --color-logged: oklch(62.7% 0.194 149.214); /* green-600 — QSO-logged confirmation */
 
     /* Sidebar nav (resting → hover/active); icons a touch more muted than labels */
     --color-nav-fg: oklch(37.3% 0.034 259.733); /* gray-700 */
@@ -50,6 +51,7 @@ html[data-theme='dark'] {
     --color-focus: #818cf8; /* indigo-400 */
     --color-focus-ring: #a5b4fc; /* indigo-300 */
     --color-invalid: #fb7185; /* rose-400 */
+    --color-logged: #4ade80; /* green-400 */
     --color-nav-fg: #99a1af; /* gray-400 */
     --color-nav-icon: #99a1af; /* gray-400 */
     --color-nav-accent-bg: rgba(255, 255, 255, 0.05); /* white/5 */
@@ -161,6 +163,12 @@ html[data-nav='narrow'] .nav-operate:focus-within .op-flyout {
         @apply mt-1 block w-full rounded-md bg-surface px-3 py-1.5 text-sm text-ink outline-1 -outline-offset-1 outline-line placeholder:text-muted focus:outline-2 focus:-outline-offset-2 focus:outline-focus;
     }
 
+    /* Malformed-field state — overrides .input's outline (defined after it
+       so it wins at equal specificity). */
+    .input-error {
+        @apply outline-invalid focus:outline-invalid;
+    }
+
     /* Buttons — secondary (default) + primary (accent). */
     .btn {
         @apply inline-flex cursor-pointer items-center gap-x-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-semibold text-ink shadow-sm hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50;
@@ -263,7 +271,7 @@ html[data-util='narrow'] .util-chevron {
    content-left when the viewport is too narrow (not enough acreage). The centre
    offset is half the card (--card-w), so width changes stay in sync. */
 .operate-center {
-    --card-w: 573px; /* logging-card width — golden ratio (φ × 354px height); LoggingCard reads it via w-(--card-w) */
+    --card-w: 558px; /* logging-card width — golden ratio (φ × 354px height); LoggingCard reads it via w-(--card-w) */
     width: fit-content;
     margin-left: max(0px, calc(50vw - var(--card-w) / 2 - var(--sidebar-w)));
     transition: margin 0.2s ease;

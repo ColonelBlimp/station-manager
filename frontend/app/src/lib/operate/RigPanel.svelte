@@ -4,11 +4,21 @@
     // connected: the rig owns them (SSE-driven later), so they lock. Pure
     // presentation over rig.svelte; fills whatever host it's given (ADR 0045).
     import { rig } from './rig.svelte';
+    import { frequencyToBand } from '../utils/frequency';
 
     const BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m'];
     const MODES = ['SSB', 'CW', 'AM', 'FM'];
 
     const locked = $derived(rig.cat === 'connected');
+
+    // Band follows the frequency (IARU allocations) so the two can't disagree
+    // on the logged QSO; the select stays usable for an out-of-band/odd value.
+    function syncBand(): void {
+        const mhz = Number.parseFloat(rig.freq);
+        if (!Number.isFinite(mhz)) return;
+        const band = frequencyToBand(Math.round(mhz * 1_000_000));
+        if (band !== '') rig.band = band;
+    }
 </script>
 
 <div class="flex items-end gap-x-4">
@@ -38,6 +48,7 @@
             placeholder="14.255"
             disabled={locked}
             bind:value={rig.freq}
+            oninput={syncBand}
         />
     </div>
 
