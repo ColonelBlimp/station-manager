@@ -23,7 +23,7 @@
     onMount(stampOn);
 </script>
 
-<div class="card w-[--card-w)]">
+<div class="card w-(--card-w)">
     <div class="flex gap-x-6">
         <!-- Left: fast-path entry fields -->
         <div class="flex flex-col">
