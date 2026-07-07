@@ -7,8 +7,10 @@
 // logging, and a daemon hiccup is never an operator-facing error here.
 
 import { enrichCallsign } from './enrichment';
+import { fetchContactHistory, type ContactHistory } from './contact-history';
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
 import type { Enrichment } from '../operate/enrich.svelte';
+import type { WorkedQso } from '../operate/worked.svelte';
 
 /** Real enricher for setEnricher — GET /v1/enrich/callsign. The signal lets a
  *  superseded lookup cancel its in-flight daemon/upstream request. */
@@ -30,6 +32,39 @@ export async function apiEnrich(call: string, signal?: AbortSignal): Promise<Enr
         name: station?.name ?? '',
         qth: station?.qth ?? '',
     };
+}
+
+// ADIF wire formats → the panel's display formats. Pass unrecognised values
+// through unchanged — a surprising daemon value should show up looking odd,
+// not vanish into ''.
+export function adifDateToDisplay(d: string): string {
+    return /^\d{8}$/.test(d) ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}` : d;
+}
+
+export function adifTimeToDisplay(t: string): string {
+    // HHMM or HHMMSS; the panel shows minute precision.
+    return /^\d{4}(\d{2})?$/.test(t) ? `${t.slice(0, 2)}:${t.slice(2, 4)}` : t;
+}
+
+export function toWorkedQso(row: ContactHistory): WorkedQso {
+    return {
+        date: adifDateToDisplay(row.qso_date),
+        timeOn: adifTimeToDisplay(row.time_on),
+        band: row.band,
+        mode: row.mode,
+        rstSent: row.rst_sent,
+        rstRcvd: row.rst_rcvd,
+        name: row.name,
+    };
+}
+
+/** Real history lookup for setHistory — GET /v1/contact-history. Fail-soft:
+ *  any non-ok outcome is an empty history (the panel just doesn't open);
+ *  worked-before is a convenience, never a gate. */
+export async function apiHistory(call: string, signal?: AbortSignal): Promise<WorkedQso[]> {
+    const out = await fetchContactHistory(call, signal);
+    if (out.kind !== 'ok') return [];
+    return out.items.map(toWorkedQso);
 }
 
 /**

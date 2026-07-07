@@ -29,7 +29,7 @@ export const worked: { status: WorkedStatus; call: string; qsos: WorkedQso[] } =
     qsos: [],
 });
 
-export type HistoryFn = (call: string) => Promise<WorkedQso[]>;
+export type HistoryFn = (call: string, signal?: AbortSignal) => Promise<WorkedQso[]>;
 let history: HistoryFn | null = null;
 
 export function setHistory(fn: HistoryFn): void {
@@ -37,13 +37,15 @@ export function setHistory(fn: HistoryFn): void {
 }
 
 // Same settle discipline as enrich.svelte: one lookup per station, not per
-// keystroke, and a monotonic token so a slow lookup for the previous call can
-// never overwrite the current one.
+// keystroke, a monotonic token so a slow lookup for the previous call can
+// never overwrite the current one, and an AbortController so the superseded
+// request is cancelled at the wire rather than run to completion.
 const DEBOUNCE_MS = 400;
 const MIN_CALL_LEN = 3;
 
 let timer: ReturnType<typeof setTimeout> | undefined;
 let seq = 0;
+let inflight: AbortController | null = null;
 // The call the panel was auto-opened for. '' = the operator opened (or never
 // auto-opened) — auto-close must never take a panel the operator asked for.
 let autoOpenedFor = '';
@@ -54,6 +56,7 @@ export function observeWorked(raw: string): void {
 
     if (call.length < MIN_CALL_LEN) {
         seq++;
+        inflight?.abort();
         // The auto-opened panel leaves with the callsign that summoned it
         // (draft logged or cleared); a manually-opened panel stays put.
         if (operate.panel === 'worked' && autoOpenedFor !== '' && autoOpenedFor === worked.call) {
@@ -74,13 +77,15 @@ async function lookup(call: string): Promise<void> {
     if (history === null) return; // seam not wired — stay idle
 
     const mine = ++seq;
+    inflight?.abort();
+    inflight = new AbortController();
     worked.status = 'pending';
     worked.call = call;
     worked.qsos = [];
 
     let rows: WorkedQso[] = [];
     try {
-        rows = await history(call);
+        rows = await history(call, inflight.signal);
     } catch {
         // fail-soft: shows as "no previous QSOs"
     }

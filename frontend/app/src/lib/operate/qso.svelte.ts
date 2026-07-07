@@ -6,7 +6,9 @@
 // operator-entered per-QSO data only. Presentation (LoggingCard) is separate.
 
 import { isValidCallsign } from '../validators/callsign';
-import { isValidRst } from '../validators/rst';
+import { isValidRst, isValidSignalReport } from '../validators/rst';
+import { usesSignalReport } from '../utils/mode';
+import { rig } from './rig.svelte';
 
 export interface QsoDraft {
     callsign: string;
@@ -134,10 +136,15 @@ export interface DraftProblems {
 /** Per-field validity (true = malformed) for the card's red outlines. */
 export function draftProblems(): DraftProblems {
     const bad = (re: RegExp, v: string): boolean => v !== '' && !re.test(v.trim());
+    // The report validator tracks the rig's mode (the one rig read in this
+    // module — mode drives validation, it never enters the draft): WSJT-X
+    // weak-signal modes report a signed dB SNR ("-12"), which the digits-only
+    // RST check rejects — leaving Log dead for manual FT8/FT4 entry.
+    const report = usesSignalReport(rig.mode) ? isValidSignalReport : isValidRst;
     return {
         callsign: isValidCallsign(draft.callsign) !== null,
-        rstSent: isValidRst(draft.rstSent) !== null,
-        rstRcvd: isValidRst(draft.rstRcvd) !== null,
+        rstSent: report(draft.rstSent) !== null,
+        rstRcvd: report(draft.rstRcvd) !== null,
         dateOn: bad(DATE_RE, draft.dateOn),
         timeOn: bad(TIME_RE, draft.timeOn),
         dateOff: bad(DATE_RE, draft.dateOff),

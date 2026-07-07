@@ -32,6 +32,61 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-07)
 
+> **Session 205 (2026-07-07, same day) — `frontend/app/` Log-QSO side FINISHED:
+> enrichment lookup gate + the mode.ts port + mode-aware report validation.**
+> Closed out session 204's first NEXT item and two follow-ons:
+>
+> - **Enrichment lookup gate (flaky-link motivation):** `observeCall` now
+>   clears/idles on any input failing `isValidCallsign`, so malformed partials
+>   never reach the daemon (or onward to QRZ). Known floor, noted in-code: the
+>   validator (deliberately mirroring the daemon's) passes any ≥3-char
+>   letter+digit string, so a partial like `DL3` is structurally valid — only
+>   the 400 ms debounce suppresses those. Per-character behaviour verified:
+>   fast typing = exactly ONE lookup (for the final call); slow typing lets
+>   partials through, where the country layer prefix-matches the cache (232
+>   rows → ~always a hit) but the station layer's exact-match miss runs the
+>   QRZ chain (not-found, uncached by design); SPA abort propagates to the
+>   handler ctx so a superseded partial's upstream call is cancelled.
+>   `DEBOUNCE_MS` 400→~700 is the next knob if live monitoring warrants.
+> - **`utils/mode.ts` PORTED verbatim + tests** (SUBMODE_TO_MODE /
+>   `resolveModeAndSubmode` / `usesSignalReport`); **Rig panel dropdown = the
+>   shipping nine** (USB LSB CW FM AM RTTY FT8 FT4 PSK31 — sidebands, not
+>   families; default USB); the `main.ts` sink resolves before building ADIF,
+>   so **USB now logs MODE=SSB SUBMODE=USB** (was bare SSB, sideband lost).
+>   `adif.ts` already had subMode support. Session rows keep the operator
+>   literal (USB) — more informative at a glance.
+> - **Mode-aware report validation wired** (`draftProblems` picks
+>   `isValidSignalReport` vs `isValidRst` by `usesSignalReport(rig.mode)`), so
+>   manual FT8/FT4 entry with signed-dB reports (−12/+04) isn't a dead form.
+>   One-way `qso → rig` sibling import (mode drives validation, never enters
+>   the draft). **Integration tests added at the operator's request**
+>   (`qso.svelte.test.ts`, 7 tests over the REAL state modules + the injected
+>   submit seam — this path is never driven by hand, so the tests are its only
+>   routine exercise). Rune modules test fine (svelte plugin is in the vitest
+>   config). 214 tests green.
+> - **Verified while wiring (both operator questions):** (1) the daemon has
+>   NO RST shape validation — presence-only for non-FT8 + the `59` default
+>   fill; the SPA gate is the ONLY report-shape defence. Asymmetry noted (not
+>   filed): daemon keys on literal `Mode=="FT8"` while the SPA's
+>   SIGNAL_REPORT_MODES is broader (FT4/JT*/JS8…). (2) the **FT8 Field-Day
+>   path is untouched** — `BuildQso` sets RST_SENT=SNR / RST_RCVD empty, the
+>   e4 sink back-fills `ft8.field_day.default_rst_rcvd`, and `Submit` skips
+>   both RST checks for FT8; this session touched zero Go files and the FT8
+>   flow never passes through a SPA form.
+> - **Deliberately NOT ported:** the shipping mode-appropriate RST default
+>   fill (CW→599 + the default-tracking effects) — belongs with the rig-SSE
+>   work. Operator hand-tuned card layout + fixed the `accent-[--color-focus]`
+>   v3-shorthand (v4 gotcha strikes again — spotted in review, he fixed).
+>
+> **NEXT:** the remaining seams — **history** (Worked panel — still
+> `lib/dev/historyStub.ts`) and the **rig SSE** (`/v1/rig/events` → rig state,
+> the fuller ADR 0044 confirm-per-band CAT gate, the CAT-live
+> `bridge.mode_mappings` literal-resolution path from `/v1/config`, and the
+> rstDefaultFor machinery); then the FT8 surface. **COMMIT STATE: committed
+> through `aedc4da9` (mode.ts port); UNCOMMITTED = the usesSignalReport wiring
+> (`qso.svelte.ts`) + its tests (`qso.svelte.test.ts`) + this handoff.** The
+> local daemon is still the DEV daemon.
+
 > **Session 204 (2026-07-07) — `frontend/app/` Operate surface is now
 > INTERACTION-COMPLETE on stubbed seams.** Continued the ADR 0044/0045 build from
 > session 203 (post-ship, additive, ship gate unchanged). Built, in order:

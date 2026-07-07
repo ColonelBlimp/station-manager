@@ -5,20 +5,19 @@ import { setHistory } from './lib/operate/worked.svelte';
 import { setSubmit } from './lib/operate/qso.svelte';
 import { addSessionQso } from './lib/operate/session.svelte';
 import { rig } from './lib/operate/rig.svelte';
-import { apiEnrich, fetchStationContext, type StationContext } from './lib/api/seams';
+import { apiEnrich, apiHistory, fetchStationContext, type StationContext } from './lib/api/seams';
 import { submitQso } from './lib/api/qso';
 import { formatAdifRecord } from './lib/utils/adif';
 import { resolveModeAndSubmode } from './lib/utils/mode';
 import { pathInfo } from './lib/utils/bearing';
-import { stubHistory } from './lib/dev/historyStub';
 import './styles/app.css';
 
 // Backend seams (ADR 0045: coupling is injected here, never imported by
-// components). Enrichment, station context and QSO submit are LIVE against
-// the daemon; history is still a dev stub — it goes live by swapping its
-// set*() argument.
+// components). Enrichment, worked-before history, station context and QSO
+// submit are all LIVE against the daemon; the remaining stub surface is the
+// rig state (dev sim select in the Rig panel, replaced by the rig SSE).
 setEnricher(apiEnrich);
-setHistory(stubHistory);
+setHistory(apiHistory);
 
 // Station facts a submit needs (grid / callsigns / default logbook), fetched
 // once at boot. Zero-values on failure: the submit sink refuses with a clear
