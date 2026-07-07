@@ -11,6 +11,7 @@
 // A failed lookup resolves to "done with nothing" — the operator can always log.
 
 import { draft } from './qso.svelte';
+import { isValidCallsign } from '../validators/callsign';
 
 // The facets the UI renders. Mirrors the useful subset of the daemon's
 // /v1/enrich/callsign response (country + station), kept flat for the card.
@@ -86,14 +87,18 @@ let inflight: AbortController | null = null;
 
 /**
  * Feed the current callsign-field value. Idempotent per rendered frame — the
- * card calls it from an $effect on draft.callsign. Too-short input clears the
- * enrichment (this is also how a logged/cleared draft resets the card).
+ * card calls it from an $effect on draft.callsign. Too-short or shape-invalid
+ * input clears the enrichment (this is also how a logged/cleared draft resets
+ * the card). The validity gate keeps malformed partials off the wire — on a
+ * flaky link every skipped daemon round-trip (and possible upstream QRZ miss)
+ * matters. Note the validator's floor: a digit-bearing partial like "DL3" is
+ * a structurally valid call, so only the debounce stops those.
  */
 export function observeCall(raw: string): void {
     const call = raw.trim().toUpperCase();
     clearTimeout(timer);
 
-    if (call.length < MIN_CALL_LEN) {
+    if (call.length < MIN_CALL_LEN || isValidCallsign(call) !== null) {
         seq++;
         inflight?.abort();
         retractWrites();
