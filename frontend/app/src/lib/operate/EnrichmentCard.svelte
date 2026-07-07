@@ -108,7 +108,7 @@
                                 name="{uid}-path"
                                 value="sp"
                                 bind:group={prefs.path}
-                                class="accent-[--color-focus]"
+                                class="accent-(--color-focus)"
                             />
                             Short Path
                         </label>
@@ -118,7 +118,7 @@
                                 name="{uid}-path"
                                 value="lp"
                                 bind:group={prefs.path}
-                                class="accent-[--color-focus]"
+                                class="accent-(--color-focus)"
                             />
                             Long Path
                         </label>
