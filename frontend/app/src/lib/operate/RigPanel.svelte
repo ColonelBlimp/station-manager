@@ -7,7 +7,10 @@
     import { frequencyToBand } from '../utils/frequency';
 
     const BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m'];
-    const MODES = ['SSB', 'CW', 'AM', 'FM'];
+    // Operator-friendly mode names (sidebands, not families — matches the
+    // shipping SPA's baseModes). resolveModeAndSubmode maps them to canonical
+    // ADIF (MODE, SUBMODE) at submit time; the daemon rejects e.g. MODE=USB.
+    const MODES = ['USB', 'LSB', 'CW', 'FM', 'AM', 'RTTY', 'FT8', 'FT4', 'PSK31'];
 
     const locked = $derived(rig.cat === 'connected');
 

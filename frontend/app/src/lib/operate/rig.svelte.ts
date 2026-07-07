@@ -10,7 +10,7 @@ export type CatLink = 'off' | 'connected' | 'lost';
 
 export const rig: { band: string; mode: string; freq: string; cat: CatLink } = $state({
     band: '20m',
-    mode: 'SSB',
+    mode: 'USB', // operator-friendly literal (sideband, not ADIF family) — resolved at submit
     freq: '14.255',
     cat: 'off',
 });

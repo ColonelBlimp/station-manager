@@ -8,6 +8,7 @@ import { rig } from './lib/operate/rig.svelte';
 import { apiEnrich, fetchStationContext, type StationContext } from './lib/api/seams';
 import { submitQso } from './lib/api/qso';
 import { formatAdifRecord } from './lib/utils/adif';
+import { resolveModeAndSubmode } from './lib/utils/mode';
 import { pathInfo } from './lib/utils/bearing';
 import { stubHistory } from './lib/dev/historyStub';
 import './styles/app.css';
@@ -61,6 +62,10 @@ setSubmit(async (q, opts) => {
               ? path.shortPathBearing
               : path.longPathBearing;
 
+    // The rig state holds the operator-friendly literal (USB, PSK31); ADIF
+    // wants the canonical (MODE, SUBMODE) pair — the daemon 400s on MODE=USB.
+    const { mode, subMode } = resolveModeAndSubmode(rig.mode);
+
     const adif = formatAdifRecord({
         callsign: call,
         rstSent: q.rstSent,
@@ -69,7 +74,8 @@ setSubmit(async (q, opts) => {
         timeOn: q.timeOn,
         timeOff: q.timeOff,
         qsoDateOff: q.dateOff || undefined,
-        mode: rig.mode,
+        mode,
+        subMode: subMode || undefined,
         band: rig.band,
         txFreqHz: Math.round(freqMHz * 1_000_000),
         name: q.name || undefined,
