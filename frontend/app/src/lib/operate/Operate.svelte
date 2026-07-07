@@ -19,8 +19,8 @@
         <div class="card">
             <h2 class="text-sm font-semibold text-ink">FT8</h2>
             <p class="mt-1 text-sm text-muted">
-                Band activity, occupancy / offset picker, and the sequencer ladder — built in a later
-                pass.
+                Band activity, occupancy / offset picker, and the sequencer ladder — built in a
+                later pass.
             </p>
         </div>
 

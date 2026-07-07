@@ -105,9 +105,7 @@
                                     <button
                                         class="nav-item"
                                         title={item.label}
-                                        data-active={router.view === item.view
-                                            ? 'true'
-                                            : 'false'}
+                                        data-active={router.view === item.view ? 'true' : 'false'}
                                         onclick={() => navigate(item.view)}
                                     >
                                         {@render navIcon(item.view)}

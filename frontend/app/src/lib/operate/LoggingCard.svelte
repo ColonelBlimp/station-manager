@@ -3,15 +3,17 @@
     // name) plus a comment line. Rarely-touched lookups (QTH, grid) live in the
     // Details card; grid is enrichment-filled into the draft, not typed here.
     //
-    // The right column is the always-on enrichment area (flag / DXCC + NEW / bearing
-    // SP-LP / distance — mirrors the FT8 Band-Activity enrichment). Placeholder for
-    // now; wired to the enrichment state module next.
+    // The right column hosts EnrichmentCard (flag / DXCC + NEW / bearing SP-LP /
+    // distance — mirrors the FT8 Band-Activity enrichment). This card is only its
+    // host, not its owner: EnrichmentCard fills whatever box it's given, so a
+    // future drag/pin layout can relocate it without touching either component.
     //
     // Reads/writes the shared QSO draft (qso.svelte); it does NOT submit directly
     // (logDraft() calls the injected sink) and makes no assumption about where it's
     // positioned (ADR 0045). Rig fields (freq/mode/band) belong to the Rig panel.
     import { onMount } from 'svelte';
     import { draft, canLog, logDraft, resetDraft, stampOn } from './qso.svelte';
+    import EnrichmentCard from './EnrichmentCard.svelte';
 
     function upperCall(): void {
         draft.callsign = draft.callsign.toUpperCase();
@@ -39,34 +41,64 @@
                     />
                 </div>
                 <div>
-                    <label for="lc-rst-s" class="block text-sm font-medium text-ink">RST Sent</label>
+                    <label for="lc-rst-s" class="block text-sm font-medium text-ink">RST Sent</label
+                    >
                     <input id="lc-rst-s" class="input w-15" bind:value={draft.rstSent} />
                 </div>
                 <div>
-                    <label for="lc-rst-r" class="block text-sm font-medium text-ink">RST Rcvd</label>
+                    <label for="lc-rst-r" class="block text-sm font-medium text-ink">RST Rcvd</label
+                    >
                     <input id="lc-rst-r" class="input w-15" bind:value={draft.rstRcvd} />
                 </div>
             </div>
 
             <div class="mt-2 flex items-end gap-x-2">
                 <div>
-                    <label for="lc-date-on" class="block text-sm font-medium text-ink">Date On</label>
-                    <input id="lc-date-on" class="input w-32" placeholder="YYYY-MM-DD" bind:value={draft.dateOn} />
+                    <label for="lc-date-on" class="block text-sm font-medium text-ink"
+                        >Date On</label
+                    >
+                    <input
+                        id="lc-date-on"
+                        class="input w-32"
+                        placeholder="YYYY-MM-DD"
+                        bind:value={draft.dateOn}
+                    />
                 </div>
                 <div>
-                    <label for="lc-time-on" class="block text-sm font-medium text-ink">Time On</label>
-                    <input id="lc-time-on" class="input w-24" placeholder="HH:MM:SS" bind:value={draft.timeOn} />
+                    <label for="lc-time-on" class="block text-sm font-medium text-ink"
+                        >Time On</label
+                    >
+                    <input
+                        id="lc-time-on"
+                        class="input w-24"
+                        placeholder="HH:MM:SS"
+                        bind:value={draft.timeOn}
+                    />
                 </div>
             </div>
 
             <div class="mt-2 flex items-end gap-2">
                 <div>
-                    <label for="lc-date-off" class="block text-sm font-medium text-ink">Date Off</label>
-                    <input id="lc-date-off" class="input w-32" placeholder="YYYY-MM-DD" bind:value={draft.dateOff} />
+                    <label for="lc-date-off" class="block text-sm font-medium text-ink"
+                        >Date Off</label
+                    >
+                    <input
+                        id="lc-date-off"
+                        class="input w-32"
+                        placeholder="YYYY-MM-DD"
+                        bind:value={draft.dateOff}
+                    />
                 </div>
                 <div>
-                    <label for="lc-time-off" class="block text-sm font-medium text-ink">Time Off</label>
-                    <input id="lc-time-off" class="input w-24" placeholder="HH:MM:SS" bind:value={draft.timeOff} />
+                    <label for="lc-time-off" class="block text-sm font-medium text-ink"
+                        >Time Off</label
+                    >
+                    <input
+                        id="lc-time-off"
+                        class="input w-24"
+                        placeholder="HH:MM:SS"
+                        bind:value={draft.timeOff}
+                    />
                 </div>
             </div>
 
@@ -77,18 +109,25 @@
 
             <div class="mt-2">
                 <label for="lc-comment" class="block text-sm font-medium text-ink">Comment</label>
-                <input id="lc-comment" class="input w-60" autocomplete="off" bind:value={draft.comment} />
+                <input
+                    id="lc-comment"
+                    class="input w-60"
+                    autocomplete="off"
+                    bind:value={draft.comment}
+                />
             </div>
         </div>
 
-        <!-- Right: enrichment area (placeholder — blank grayed square for now) -->
+        <!-- Right: always-on enrichment (relocatable — this square is just its first host) -->
         <div class="flex flex-col">
             <div class="flex size-56 shrink-0 mt-3">
-                <div class="aspect-square w-full rounded-lg border border-line bg-surface-muted"></div>
+                <EnrichmentCard />
             </div>
             <div class="flex mt-auto justify-end gap-x-2">
                 <button class="btn" onclick={resetDraft}>Clear</button>
-                <button class="btn btn-primary" onclick={logDraft} disabled={!canLog()}>Log QSO</button>
+                <button class="btn btn-primary" onclick={logDraft} disabled={!canLog()}
+                    >Log QSO</button
+                >
             </div>
         </div>
     </div>
