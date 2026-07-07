@@ -48,6 +48,7 @@ describe('ADIF wire → display conversions', () => {
 
     it('maps a wire row to the panel shape', () => {
         expect(toWorkedQso(makeRow())).toEqual({
+            uuid: '00000000-0000-7000-8000-000000000001',
             date: '2026-05-08',
             timeOn: '14:30',
             band: '20m',

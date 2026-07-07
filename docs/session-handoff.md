@@ -77,15 +77,45 @@ precisely so we don't re-derive state or redo finished work.
 >   fill (CW→599 + the default-tracking effects) — belongs with the rig-SSE
 >   work. Operator hand-tuned card layout + fixed the `accent-[--color-focus]`
 >   v3-shorthand (v4 gotcha strikes again — spotted in review, he fixed).
+> - **HISTORY SEAM LIVE (`GET /v1/contact-history`).** Ported
+>   `api/contact-history.ts` verbatim + its 14 tests (incl. the
+>   malformed-200 guard); `seams.ts` gained `apiHistory` + the pure
+>   wire→display mappers (`20260508`→`2026-05-08`, `1430`/`143045`→`14:30`,
+>   unrecognised values pass through — odd beats invisible) + `seams.test.ts`.
+>   Fail-soft: any non-ok outcome = empty history (worked-before is a
+>   convenience, never a gate). `HistoryFn` now takes an **AbortSignal**
+>   (same inflight-AbortController discipline as enrich). **The dev-stub
+>   layer is GONE** — `historyStub.ts` + `lib/dev/` deleted; the last stub
+>   surface is the Rig panel's sim select (goes with the rig SSE).
+>   Live-verified against the dev daemon (port 8080, `SM_WORKING_DIR=build/`
+>   — its own DB, so production calls come back empty; dev-DB test calls:
+>   M0CMC, 7Q7EB, 9Q1AAA…).
+> - **WorkedPanel polish (operator) + a real crash fix:** operator added the
+>   scrollable body + sticky header + fixed column widths; review caught the
+>   each-key (`date+timeOn+band+mode`) colliding on **force-logged
+>   duplicates** — exactly what "Log anyway" creates — and Svelte 5 THROWS on
+>   duplicate keys. `WorkedQso` now carries **`uuid`** (mapped from the wire)
+>   and the panel keys on it.
+> - **Config-secrets assessment DECIDED (operator question after a config
+>   dump exposed the SMTP app password into the session transcript):**
+>   encryption-at-rest **REJECTED** — key-beside-ciphertext is obfuscation;
+>   the accepted posture is plaintext + enforced 0600 (WriteJSON tightens,
+>   never loosens) + API redaction (`password_set`, GET never carries values
+>   — verified live for smtp AND lookup providers) + revocable app passwords
+>   + FDE for the stolen-machine case. `internal/config/doc.go` now records
+>   the assessment (was "deferred pending a security assessment"); upgrade
+>   path if multi-user hosting ever appears = opt-in systemd LoadCredential.
+>   **Operator action item: rotate the exposed Fastmail app password.**
 >
-> **NEXT:** the remaining seams — **history** (Worked panel — still
-> `lib/dev/historyStub.ts`) and the **rig SSE** (`/v1/rig/events` → rig state,
-> the fuller ADR 0044 confirm-per-band CAT gate, the CAT-live
-> `bridge.mode_mappings` literal-resolution path from `/v1/config`, and the
-> rstDefaultFor machinery); then the FT8 surface. **COMMIT STATE: committed
-> through `aedc4da9` (mode.ts port); UNCOMMITTED = the usesSignalReport wiring
-> (`qso.svelte.ts`) + its tests (`qso.svelte.test.ts`) + this handoff.** The
-> local daemon is still the DEV daemon.
+> **NEXT: the rig SSE** — the last seam: `/v1/rig/events` → rig state (replace
+> the sim select; shipping `bridge.svelte.ts` is the reference, incl. ~800 ms
+> flash suppression), the CAT-live `bridge.mode_mappings` literal-resolution
+> path from `/v1/config`, the fuller ADR 0044 confirm-per-band CAT gate, and
+> the rstDefaultFor machinery (CW→599 defaults). Then the FT8 surface.
+> **COMMIT STATE: committed through `70f4f8e6` (history seam);
+> UNCOMMITTED = the WorkedPanel uuid-key fix round (worked.svelte.ts /
+> seams.ts / seams.test.ts / WorkedPanel.svelte), `internal/config/doc.go`,
+> and this handoff.** The local daemon is still the DEV daemon.
 
 > **Session 204 (2026-07-07) — `frontend/app/` Operate surface is now
 > INTERACTION-COMPLETE on stubbed seams.** Continued the ADR 0044/0045 build from

@@ -12,6 +12,9 @@ import { operate } from './state.svelte';
 // One previous contact, in display form. Mirrors the useful subset of the
 // daemon's per-QSO record; the logbook SPA owns the full view.
 export interface WorkedQso {
+    // Render key: force-logged duplicates share date/time/band/mode (the
+    // dedupe tuple), and Svelte 5 throws on duplicate each-keys.
+    uuid: string;
     date: string; // YYYY-MM-DD (UTC)
     timeOn: string; // HH:MM
     band: string;

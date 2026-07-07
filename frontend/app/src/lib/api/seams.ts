@@ -48,6 +48,7 @@ export function adifTimeToDisplay(t: string): string {
 
 export function toWorkedQso(row: ContactHistory): WorkedQso {
     return {
+        uuid: row.uuid,
         date: adifDateToDisplay(row.qso_date),
         timeOn: adifTimeToDisplay(row.time_on),
         band: row.band,

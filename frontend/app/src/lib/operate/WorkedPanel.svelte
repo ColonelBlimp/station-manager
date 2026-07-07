@@ -7,32 +7,34 @@
 </script>
 
 {#if worked.status === 'done' && worked.qsos.length > 0}
-    <table class="w-full text-left text-sm">
-        <thead>
-            <tr class="border-b border-line text-xs text-muted">
-                <th class="py-1.5 pr-4 font-medium">Date</th>
-                <th class="py-1.5 pr-4 font-medium">Time</th>
-                <th class="py-1.5 pr-4 font-medium">Band</th>
-                <th class="py-1.5 pr-4 font-medium">Mode</th>
-                <th class="py-1.5 pr-4 font-medium">Sent</th>
-                <th class="py-1.5 pr-4 font-medium">Rcvd</th>
-                <th class="py-1.5 font-medium">Name</th>
-            </tr>
-        </thead>
-        <tbody>
-            {#each worked.qsos as q (q.date + q.timeOn + q.band + q.mode)}
-                <tr class="border-b border-line-soft text-ink last:border-0">
-                    <td class="py-1.5 pr-4 tabular-nums">{q.date}</td>
-                    <td class="py-1.5 pr-4 tabular-nums">{q.timeOn}</td>
-                    <td class="py-1.5 pr-4">{q.band}</td>
-                    <td class="py-1.5 pr-4">{q.mode}</td>
-                    <td class="py-1.5 pr-4 tabular-nums">{q.rstSent}</td>
-                    <td class="py-1.5 pr-4 tabular-nums">{q.rstRcvd}</td>
-                    <td class="py-1.5">{q.name}</td>
+    <div class="h-55 overflow-y-scroll">
+        <table class="table-fixed">
+            <thead class="bg-surface sticky top-0 z-10">
+                <tr class="text-xs text-muted text-left font-medium">
+                    <th class="w-24 pb-1">Date</th>
+                    <th class="w-14">Time</th>
+                    <th class="w-12">Band</th>
+                    <th class="w-14">Mode</th>
+                    <th class="w-10">Sent</th>
+                    <th class="w-10">Rcvd</th>
+                    <th class="w-40">Name</th>
                 </tr>
-            {/each}
-        </tbody>
-    </table>
+            </thead>
+            <tbody>
+                {#each worked.qsos as q (q.uuid)}
+                    <tr class="border-b border-line-soft text-ink last:border-0">
+                        <td class="py-0.5 tabular-nums">{q.date}</td>
+                        <td class="tabular-nums">{q.timeOn}</td>
+                        <td class="">{q.band}</td>
+                        <td class="">{q.mode}</td>
+                        <td class="tabular-nums">{q.rstSent}</td>
+                        <td class="tabular-nums">{q.rstRcvd}</td>
+                        <td class="">{q.name}</td>
+                    </tr>
+                {/each}
+            </tbody>
+        </table>
+    </div>
 {:else if worked.status === 'pending'}
     <div class="flex h-24 items-center justify-center text-sm text-muted">
         Checking {worked.call}…
