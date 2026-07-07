@@ -88,15 +88,71 @@ precisely so we don't re-derive state or redo finished work.
 >   amendment** (rail = all Operate; 64rem floor removed → main-scroll-container
 >   model; CAT-gate first pass vs confirm-per-band target; ADR 0045 cross-ref).
 >
-> **NEXT: the `/v1` wiring arc** — replace the `main.ts` stubs with real API
-> clients + the bridge rig-state SSE (endpoints exist; each seam is one `set*()`
-> swap): enrich → `/v1/enrich/callsign`, history → contact-history, submit →
-> `POST /v1/qso` (session row from response), rig ← `/v1/rig/events` SSE +
-> config (`my_gridsquare` → `setMyGrid`). Then the fuller CAT confirm gate, and
-> the FT8 surface. **COMMIT STATE: all sessions-203–204 SPA work is COMMITTED**
-> (operator committed incrementally through `14f0aa01` "feat: add Rig panel");
-> only the ADR 0044 amendment + this handoff update remain uncommitted for
-> review.
+> **Second half of the session — the `/v1` WIRING ARC is substantially DONE**
+> (operator switched the local daemon to the DEV daemon for safe write-testing):
+>
+> - **Enrichment LIVE**: ported `lib/api/{_helpers,enrichment}.ts` verbatim (+
+>   `_helpers` tests) from frontend/logging; `lib/api/seams.ts` adapts wire →
+>   card shape. Live-test surfaced fixes: **retract-writes** (enrichment
+>   remembers what it wrote into the draft — name/grid/qth — and retracts on
+>   call-change ONLY if the field still holds its value, so a previous
+>   station's name can't leak into the next QSO and operator entry always
+>   survives); **QTH mapped + back-filled**; **DXCC falls back to
+>   `country.dxcc_prefix`** (numeric `station.dxcc` is absent on most cache
+>   hits).
+> - **External review round fixed 4 findings:** (1) `stampOff` is
+>   **fill-if-empty per field** (manual off times survive submit); (2)
+>   `clearDraft` restamps/disarms so a post-Clear QSO can't log blank times +
+>   `canLog` requires dateOn/timeOn; (3) the "GBR flags" finding was
+>   **INVERTED** — live-verified hamnut emits **alpha-2** (232/232 cached
+>   country rows), so `api.md`'s example + the hamnut test fixture were fixed
+>   GBR→GB (daemon test green), flag helper untouched; (4) **AbortSignal
+>   threaded** through the enrich seam (superseded lookups cancel the upstream
+>   request, not just the UI write).
+> - **Submit LIVE** — `POST /v1/qso`: ported `utils/adif.ts` (+74 tests) +
+>   `api/qso.ts`; `fetchStationContext()` (grid/callsigns/default logbook from
+>   /v1/config); the `main.ts` sink composes draft + rig + enrichment →
+>   `formatAdifRecord` (incl. **ANT_AZ/ANT_PATH** from the card's bearing +
+>   SP/LP choice; numeric-only DXCC) → submit. **`logDraft` is async**: only a
+>   stored QSO clears the card (draft PRESERVED on refusal, message shown);
+>   busy latch (in-flight POST disables the button — a click-handler bug where
+>   the MouseEvent landed in the `force` param and would have force-logged
+>   EVERY click was caught + fixed); session row only on confirmed store, now
+>   carries the daemon **UUID**. **Verified end-to-end WITHOUT pollution** via
+>   a duplicate-echo POST of an existing QSO (full daemon pipeline → 200
+>   duplicate, row count unchanged).
+> - **Log-QSO tidy pass:** green "Logged CALL ✓" line (`--color-logged`
+>   token); ported `validators/{callsign,rst}` + `utils/frequency` (+tests) —
+>   malformed fields get red outlines (`.input-error`) and block `canLog`;
+>   **duplicate → "Log anyway"** (force=1) affordance; **band follows
+>   frequency** in the Rig panel (IARU table).
+> - **QSO clock (operator's flow):** the QSO starts on **Tab out of the
+>   callsign field** (not card-mount) — stamps Date/Time On, populates
+>   Date/Time Off and **ticks Time Off every second** (the visible QSO
+>   timer; midnight rollover handled). Hand-editing an off field **stops the
+>   ticker** (correction survives); typo-fix re-Tab can't reset TIME_ON;
+>   Clear disarms; before first Tab, Log is blocked (blank times).
+> - **Modes/bands investigation** (operator question): shipping SPA gets modes
+>   from `/v1/config` `bridge.rig_modes` (CAT-live literals) + a hardcoded
+>   CAT-off list + the `SUBMODE_TO_MODE` mirror in `utils/mode.ts`; bands are
+>   never fetched — derived from freq via the hardcoded ADIF-envelope table.
+>   **Inbox notes filed:** (a) DXCC enrichment fill — CORRECTED: the
+>   prefix→number table **already exists** (`internal/enums/dxcc`), the gap is
+>   only the enrichment handler not filling `country.dxcc`; (b) band data —
+>   single-source the 3 hand-synced band tables daemon-side + the operator's
+>   design catch that **regional/jurisdiction band plans** are a different
+>   dataset the future operating aids (band-edge warnings, FT8 band-hop
+>   legality) must be designed against.
+>
+> **NEXT (agreed, next session): finish the Log-QSO side** — align the Rig
+> panel's base mode list with the shipping nine + port `utils/mode.ts` so
+> `USB` logs as `SSB/USB` (today it submits bare `SSB` and loses the
+> sideband); then the remaining seams: **history** (Worked panel — still the
+> dev stub) and the **rig SSE** (`/v1/rig/events` → rig state + the fuller
+> ADR 0044 confirm-per-band CAT gate); then the FT8 surface. **COMMIT STATE:
+> everything through the QSO clock is COMMITTED (`880ebdad`); uncommitted =
+> the 2 dogfood-inbox notes + this handoff/memory update.** NOTE: the local
+> daemon is currently the DEV daemon (operator switched for write-testing).
 
 > **Session 203 (2026-07-06) — started BUILDING ADR 0044's consolidated SPA at
 > `frontend/app/`** (Svelte 5 + Vite, dev port 5176). Post-ship, **additive** — a
