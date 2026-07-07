@@ -5,6 +5,7 @@
     import { operate, closePanel } from './state.svelte';
     import WorkedPanel from './WorkedPanel.svelte';
     import SessionPanel from './SessionPanel.svelte';
+    import DetailsPanel from './DetailsPanel.svelte';
 
     const titles: Record<string, string> = {
         worked: 'Worked',
@@ -41,6 +42,8 @@
                 <WorkedPanel />
             {:else if operate.panel === 'session'}
                 <SessionPanel />
+            {:else if operate.panel === 'details'}
+                <DetailsPanel />
             {:else}
                 <div class="h-40 rounded-lg border border-dashed border-line"></div>
             {/if}

@@ -116,16 +116,16 @@ async function lookup(call: string): Promise<void> {
     enrich.data = result;
     enrich.status = 'done';
 
-    // Write the looked-up grid back into the QSO draft (GRIDSQUARE is
-    // enrichment-filled, never typed on the card). Guarded: only while the
+    // Write looked-up facts back into the QSO draft: the grid (GRIDSQUARE is
+    // enrichment-filled, corrected in Details — never typed on the card) and
+    // the operator's name into the card's Name field. Guarded: only while the
     // draft still holds the call this lookup was for, and never over a value
-    // the Details card set by hand.
-    if (
-        result !== null &&
-        result.grid !== '' &&
-        draft.gridsquare === '' &&
-        draft.callsign.trim().toUpperCase() === call
-    ) {
+    // the operator already entered.
+    if (result === null || draft.callsign.trim().toUpperCase() !== call) return;
+    if (result.grid !== '' && draft.gridsquare === '') {
         draft.gridsquare = result.grid;
+    }
+    if (result.name !== '' && draft.name === '') {
+        draft.name = result.name;
     }
 }
