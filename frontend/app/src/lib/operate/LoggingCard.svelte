@@ -1,7 +1,7 @@
 <script lang="ts">
     // Phone/CW logging card — the fast-path entry fields (callsign, RST, time,
-    // name) plus a comment line. Rarely-touched lookups (QTH, grid) live in the
-    // Details card; grid is enrichment-filled into the draft, not typed here.
+    // name) plus a comment line. Rarely touched lookups (QTH, grid) live in the
+    // Details card; the grid is enrichment-filled into the draft, not typed here.
     //
     // The right column hosts EnrichmentCard (flag / DXCC + NEW / bearing SP-LP /
     // distance — mirrors the FT8 Band-Activity enrichment). This card is only its
