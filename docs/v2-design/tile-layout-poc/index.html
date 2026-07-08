@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Tile-layout POC — Station Manager Operate surface</title>
+        <!--
+            Draggable/pinnable TILE layout — proof-of-concept (NOT frontend/app).
+
+            Proves the interaction we settled on in design discussion (2026-07-08):
+              - Fixed-size tiles that MOVE/REORDER but never RESIZE.
+              - No overlap: tiles PACK into columns and REFLOW on drop. Overlap is
+                reserved for overlays (modals) — not modelled here.
+              - Default layout is always the fallback.
+              - GLOBAL pin (one switch for the whole arrangement), not per-card:
+                  * Unpinned = session-only; a restart returns to Default.
+                  * Pinned   = the arrangement is "saved" and survives a restart.
+              - Arrange chrome (grip/title/hide) shows ONLY in an explicit
+                "Arrange layout" mode; during operation tiles are clean.
+
+            State-driven on purpose: the layout is a PLAIN SERIALISABLE VALUE
+            (ordered tile ids per column + a hidden set) — NOT pixel coordinates.
+            The drag handler mutates that value and re-renders; this is the exact
+            model we lift into a frontend/app rune module later. Persistence is
+            deliberately NOT wired (see README) — "Simulate restart" fakes it in
+            memory so the pin semantics can be felt without a storage backend.
+        -->
+        <style>
+            :root {
+                --canvas: oklch(96.7% 0.003 264.542);
+                --surface: #fff;
+                --surface-muted: oklch(96.7% 0.003 264.542);
+                --line: oklch(92.8% 0.006 264.531);
+                --ink: oklch(21% 0.034 264.665);
+                --muted: oklch(55.1% 0.027 264.364);
+                --accent: oklch(51.1% 0.262 276.966);
+                --accent-soft: oklch(93% 0.03 277 / 0.6);
+            }
+            @media (prefers-color-scheme: dark) {
+                :root {
+                    --canvas: #101828;
+                    --surface: #1e2939;
+                    --surface-muted: #364153;
+                    --line: rgba(255, 255, 255, 0.12);
+                    --ink: #e7e9ee;
+                    --muted: #99a1af;
+                    --accent: #818cf8;
+                    --accent-soft: rgba(129, 140, 248, 0.18);
+                }
+            }
+            * {
+                box-sizing: border-box;
+            }
+            html,
+            body {
+                margin: 0;
+                height: 100%;
+            }
+            body {
+                background: var(--canvas);
+                color: var(--ink);
+                font:
+                    14px/1.4 ui-sans-serif,
+                    system-ui,
+                    -apple-system,
+                    Segoe UI,
+                    Roboto,
+                    sans-serif;
+            }
+
+            /* ---- Top bar ------------------------------------------------- */
+            .topbar {
+                position: sticky;
+                top: 0;
+                z-index: 40;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                height: 56px;
+                padding: 0 20px;
+                background: var(--surface);
+                border-bottom: 1px solid var(--line);
+            }
+            .topbar .title {
+                font-weight: 600;
+            }
+            .topbar .spacer {
+                flex: 1;
+            }
+            .arrange-only {
+                display: none;
+                align-items: center;
+                gap: 10px;
+            }
+            body.arranging .arrange-only {
+                display: flex;
+            }
+            .pinstatus {
+                font-size: 12px;
+                color: var(--muted);
+                min-width: 220px;
+                text-align: right;
+            }
+            .pinstatus.pinned {
+                color: var(--accent);
+                font-weight: 600;
+            }
+
+            button {
+                font: inherit;
+                cursor: pointer;
+                border: 1px solid var(--line);
+                background: var(--surface);
+                color: var(--ink);
+                border-radius: 8px;
+                padding: 6px 12px;
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+            }
+            button:hover {
+                background: var(--surface-muted);
+            }
+            button.primary {
+                border-color: transparent;
+                background: var(--accent);
+                color: #fff;
+            }
+            button.primary:hover {
+                filter: brightness(1.08);
+            }
+            button.active {
+                border-color: var(--accent);
+                color: var(--accent);
+            }
+            button:disabled {
+                opacity: 0.45;
+                cursor: not-allowed;
+            }
+
+            /* ---- Add-tile dropdown -------------------------------------- */
+            .add-wrap {
+                position: relative;
+            }
+            .add-menu {
+                position: absolute;
+                top: 110%;
+                left: 0;
+                min-width: 180px;
+                background: var(--surface);
+                border: 1px solid var(--line);
+                border-radius: 10px;
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+                padding: 6px;
+                display: none;
+                z-index: 50;
+            }
+            .add-menu.open {
+                display: block;
+            }
+            .add-menu button {
+                width: 100%;
+                border: none;
+                justify-content: flex-start;
+                padding: 8px 10px;
+            }
+            .add-menu .empty {
+                padding: 8px 10px;
+                color: var(--muted);
+                font-size: 13px;
+            }
+
+            /* ---- Hint banner -------------------------------------------- */
+            .hint {
+                margin: 16px 20px 0;
+                padding: 10px 14px;
+                font-size: 13px;
+                color: var(--muted);
+                background: var(--surface);
+                border: 1px dashed var(--line);
+                border-radius: 10px;
+            }
+            .hint b {
+                color: var(--ink);
+            }
+
+            /* ---- Board: columns of tiles -------------------------------- */
+            .board {
+                display: flex;
+                gap: 20px;
+                align-items: flex-start;
+                padding: 20px;
+            }
+            .col {
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+                min-width: 240px;
+                border-radius: 12px;
+            }
+            body.arranging .col {
+                outline: 1px dashed var(--line);
+                outline-offset: 8px;
+                min-height: 80px;
+            }
+
+            /* ---- Tile --------------------------------------------------- */
+            .tile {
+                background: var(--surface);
+                border: 1px solid var(--line);
+                border-radius: 12px;
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+                overflow: hidden;
+                /* fixed width per tile (set inline from JS) — tiles never resize */
+            }
+            body.arranging .tile {
+                cursor: grab;
+                border-color: var(--accent);
+                touch-action: none; /* pointer-drag owns the gesture */
+            }
+            /* The dragged tile, floated under the pointer (position from JS). */
+            .tile.ghost {
+                position: fixed;
+                z-index: 1000;
+                margin: 0;
+                pointer-events: none;
+                cursor: grabbing;
+                opacity: 0.95;
+                box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+            }
+            .frame {
+                display: none;
+                align-items: center;
+                gap: 8px;
+                padding: 6px 10px;
+                background: var(--accent-soft);
+                border-bottom: 1px solid var(--line);
+                font-size: 12px;
+                font-weight: 600;
+            }
+            body.arranging .frame {
+                display: flex;
+            }
+            .grip {
+                color: var(--muted);
+                letter-spacing: -2px;
+                cursor: grab;
+            }
+            .frame .ftitle {
+                flex: 1;
+            }
+            .frame .hide {
+                border: none;
+                background: transparent;
+                padding: 2px 6px;
+                color: var(--muted);
+                border-radius: 6px;
+            }
+            .frame .hide:hover {
+                background: rgba(0, 0, 0, 0.08);
+                color: var(--ink);
+            }
+            .body {
+                padding: 14px;
+            }
+            .body h3 {
+                margin: 0 0 8px;
+                font-size: 13px;
+                color: var(--muted);
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+            }
+            .fld {
+                height: 30px;
+                border-radius: 6px;
+                background: var(--surface-muted);
+                margin-bottom: 8px;
+            }
+            .row {
+                display: flex;
+                gap: 8px;
+                margin-bottom: 8px;
+                font-size: 13px;
+            }
+            .row .k {
+                color: var(--muted);
+                width: 64px;
+            }
+            .chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                background: var(--surface-muted);
+                border-radius: 999px;
+                padding: 4px 10px;
+                font-size: 12px;
+            }
+            .placeholder {
+                border: 2px dashed var(--accent);
+                border-radius: 12px;
+                background: var(--accent-soft);
+            }
+        </style>
+    </head>
+    <body>
+        <div class="topbar">
+            <span class="title">Operate — tile-layout POC</span>
+            <span class="spacer"></span>
+
+            <span class="arrange-only">
+                <span class="add-wrap">
+                    <button id="addBtn">+ Add tile ▾</button>
+                    <div class="add-menu" id="addMenu"></div>
+                </span>
+                <button id="resetBtn" title="Discard the arrangement, return to the built-in Default">
+                    Reset to Default
+                </button>
+                <button
+                    id="restartBtn"
+                    title="Fake a fresh launch: pinned → your saved layout; unpinned → Default"
+                >
+                    ⟳ Simulate restart
+                </button>
+                <span class="pinstatus" id="pinStatus"></span>
+                <button id="pinBtn" class="primary"></button>
+            </span>
+
+            <button id="arrangeBtn">Arrange layout</button>
+        </div>
+
+        <div class="hint" id="hint"></div>
+        <div class="board" id="board"></div>
+
+        <script>
+            // ---- Tile catalogue ------------------------------------------------
+            // Each tile: a display name, a fixed width (tiles NEVER resize), and a
+            // body renderer. The catalogue is the universe of cards; the LAYOUT
+            // (below) decides which are shown and where.
+            const TILES = {
+                logging: { name: 'Logging', w: 340, body: loggingBody },
+                worked: { name: 'Worked', w: 300, body: workedBody },
+                session: { name: 'Session', w: 300, body: sessionBody },
+                rig: { name: 'Rig', w: 260, body: rigBody },
+                enrich: { name: 'Enrichment', w: 220, body: enrichBody },
+                ft8band: { name: 'FT8 Band Activity', w: 320, body: ft8Body },
+            };
+
+            // ---- Layout = PLAIN SERIALISABLE VALUE ----------------------------
+            // Ordered tile ids per column + a hidden set. No coordinates. This is
+            // the shape that would persist to localStorage today or a config.json
+            // op-profile field later — the drag handler only ever mutates THIS.
+            const DEFAULT_LAYOUT = {
+                columns: [['logging'], ['worked', 'session'], ['rig', 'enrich']],
+                hidden: ['ft8band'],
+            };
+
+            const clone = (l) => ({
+                columns: l.columns.map((c) => c.slice()),
+                hidden: l.hidden.slice(),
+            });
+
+            // Runtime state. `saved` stands in for persisted-per-profile storage;
+            // it is intentionally in-memory (the POC does not touch a backend).
+            const state = {
+                arranging: false,
+                pinned: false,
+                current: clone(DEFAULT_LAYOUT),
+                saved: null,
+            };
+
+            // ---- Render (state -> DOM) ----------------------------------------
+            const board = document.getElementById('board');
+
+            function render() {
+                document.body.classList.toggle('arranging', state.arranging);
+                board.innerHTML = '';
+                state.current.columns.forEach((ids, colIdx) => {
+                    const col = document.createElement('div');
+                    col.className = 'col';
+                    col.dataset.col = colIdx;
+                    ids.forEach((id) => col.appendChild(tileEl(id)));
+                    board.appendChild(col);
+                });
+                renderChrome();
+            }
+
+            function tileEl(id) {
+                const t = TILES[id];
+                const el = document.createElement('div');
+                el.className = 'tile';
+                el.dataset.id = id;
+                el.style.width = t.w + 'px';
+                el.innerHTML =
+                    `<div class="frame"><span class="grip">⠿</span>` +
+                    `<span class="ftitle">${t.name}</span>` +
+                    `<button class="hide" title="Hide tile" data-hide="${id}">✕</button></div>` +
+                    `<div class="body">${t.body()}</div>`;
+                wireTile(el);
+                return el;
+            }
+
+            // ---- Pointer-drag to reorder (no overlap, reflow on drop) ---------
+            // Pointer Events, not HTML5 DnD (cross-browser reliable; the mechanism
+            // we'd use in frontend/app too). The tile itself floats under the
+            // pointer; a placeholder holds its slot in the flow; pointerup commits.
+            let dragId = null; // id of the tile being dragged
+            let ph = null; // placeholder occupying the tile's slot
+            let ghost = null; // the floated tile that tracks the pointer
+            let dragOffX = 0,
+                dragOffY = 0; // pointer offset within the tile
+
+            function wireTile(el) {
+                el.addEventListener('pointerdown', (e) => {
+                    if (!state.arranging || e.button !== 0) return;
+                    if (e.target.closest('[data-hide]')) return; // let the hide click through
+                    e.preventDefault();
+                    startDrag(el, e);
+                });
+                const hide = el.querySelector('[data-hide]');
+                hide.addEventListener('click', () => hideTile(el.dataset.id));
+            }
+
+            function startDrag(el, e) {
+                dragId = el.dataset.id;
+                const r = el.getBoundingClientRect();
+                dragOffX = e.clientX - r.left;
+                dragOffY = e.clientY - r.top;
+
+                // Placeholder holds the slot the tile leaves behind.
+                ph = document.createElement('div');
+                ph.className = 'placeholder';
+                ph.style.width = r.width + 'px';
+                ph.style.height = r.height + 'px';
+                el.parentNode.insertBefore(ph, el);
+
+                // Float the actual tile under the pointer (moved to <body> so it
+                // escapes the column and sits above everything).
+                ghost = el;
+                ghost.classList.add('ghost');
+                ghost.style.width = r.width + 'px';
+                moveGhost(e.clientX, e.clientY);
+                document.body.appendChild(ghost);
+                document.body.style.userSelect = 'none';
+
+                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointerup', onUp, { once: true });
+            }
+
+            function moveGhost(x, y) {
+                ghost.style.left = x - dragOffX + 'px';
+                ghost.style.top = y - dragOffY + 'px';
+            }
+
+            function onMove(e) {
+                if (!dragId) return;
+                moveGhost(e.clientX, e.clientY);
+                const col = columnAt(e.clientX);
+                if (!col) return;
+                const after = afterElement(col, e.clientY);
+                if (after == null) col.appendChild(ph);
+                else col.insertBefore(ph, after);
+            }
+
+            function onUp() {
+                window.removeEventListener('pointermove', onMove);
+                document.body.style.userSelect = '';
+                // Read the new order from the DOM (placeholder = dragged id), then
+                // rebuild from that value. The ghost lives in <body>, not a column,
+                // so it is never double-counted.
+                const columns = readColumns();
+                ghost.remove();
+                if (ph.parentNode) ph.remove();
+                state.current.columns = columns;
+                dragId = ghost = ph = null;
+                saveIfPinned();
+                render();
+            }
+
+            function readColumns() {
+                return [...board.querySelectorAll('.col')].map((col) => {
+                    const ids = [];
+                    for (const child of col.children) {
+                        if (child === ph) ids.push(dragId);
+                        else if (child.classList.contains('tile')) ids.push(child.dataset.id);
+                    }
+                    return ids;
+                });
+            }
+
+            // The column whose horizontal span contains x, else the nearest by
+            // centre (so a drop in the inter-column gap still resolves to a column).
+            function columnAt(x) {
+                const cols = [...board.querySelectorAll('.col')];
+                let best = null,
+                    bestDist = Infinity;
+                for (const c of cols) {
+                    const r = c.getBoundingClientRect();
+                    if (x >= r.left && x <= r.right) return c;
+                    const d = Math.abs(x - (r.left + r.width / 2));
+                    if (d < bestDist) {
+                        bestDist = d;
+                        best = c;
+                    }
+                }
+                return best;
+            }
+
+            // The tile the pointer sits ABOVE (insert the placeholder before it);
+            // null => past the last tile, so append.
+            function afterElement(col, y) {
+                const tiles = [...col.querySelectorAll('.tile:not(.ghost)')];
+                for (const t of tiles) {
+                    const r = t.getBoundingClientRect();
+                    if (y < r.top + r.height / 2) return t;
+                }
+                return null;
+            }
+
+            // ---- Show / hide tiles --------------------------------------------
+            function hideTile(id) {
+                state.current.columns = state.current.columns.map((c) =>
+                    c.filter((x) => x !== id)
+                );
+                if (!state.current.hidden.includes(id)) state.current.hidden.push(id);
+                saveIfPinned();
+                render();
+            }
+
+            function showTile(id) {
+                state.current.hidden = state.current.hidden.filter((x) => x !== id);
+                // Add to the shortest column so it packs sensibly.
+                let target = 0,
+                    min = Infinity;
+                state.current.columns.forEach((c, i) => {
+                    if (c.length < min) {
+                        min = c.length;
+                        target = i;
+                    }
+                });
+                state.current.columns[target].push(id);
+                saveIfPinned();
+                render();
+            }
+
+            // ---- Global pin / unpin -------------------------------------------
+            function saveIfPinned() {
+                if (state.pinned) state.saved = clone(state.current);
+            }
+            function togglePin() {
+                state.pinned = !state.pinned;
+                if (state.pinned) {
+                    state.saved = clone(state.current); // "save all"
+                } else {
+                    state.saved = null;
+                    state.current = clone(DEFAULT_LAYOUT); // unpin -> back to Default
+                }
+                render();
+            }
+            function resetToDefault() {
+                state.current = clone(DEFAULT_LAYOUT);
+                saveIfPinned();
+                render();
+            }
+            // Fake a fresh launch to feel the pin semantics without persistence.
+            function simulateRestart() {
+                state.current = state.pinned && state.saved ? clone(state.saved) : clone(DEFAULT_LAYOUT);
+                render();
+            }
+
+            // ---- Chrome (top bar) ---------------------------------------------
+            const arrangeBtn = document.getElementById('arrangeBtn');
+            const pinBtn = document.getElementById('pinBtn');
+            const pinStatus = document.getElementById('pinStatus');
+            const addBtn = document.getElementById('addBtn');
+            const addMenu = document.getElementById('addMenu');
+            const hint = document.getElementById('hint');
+
+            function renderChrome() {
+                arrangeBtn.textContent = state.arranging ? 'Done' : 'Arrange layout';
+                arrangeBtn.classList.toggle('active', state.arranging);
+                pinBtn.textContent = state.pinned ? 'Unpin' : 'Pin layout';
+                pinStatus.classList.toggle('pinned', state.pinned);
+                pinStatus.textContent = state.pinned
+                    ? '● Pinned — layout saved (survives restart)'
+                    : '○ Unpinned — session only (restart → Default)';
+                hint.innerHTML = state.arranging
+                    ? 'Arrange mode: <b>drag a tile</b> by anywhere on it to reorder or move between columns — neighbours reflow, nothing overlaps. <b>✕</b> hides a tile; <b>+ Add tile</b> brings it back. <b>Pin</b> saves this arrangement; <b>Simulate restart</b> shows pinned-vs-unpinned behaviour.'
+                    : 'Operating view — tiles are clean (no drag chrome). Click <b>Arrange layout</b> to rearrange. This is a POC, not frontend/app.';
+                renderAddMenu();
+            }
+
+            function renderAddMenu() {
+                addBtn.disabled = state.current.hidden.length === 0;
+                addMenu.innerHTML = '';
+                if (state.current.hidden.length === 0) {
+                    addMenu.classList.remove('open');
+                    return;
+                }
+                state.current.hidden.forEach((id) => {
+                    const b = document.createElement('button');
+                    b.textContent = TILES[id].name;
+                    b.addEventListener('click', () => {
+                        showTile(id);
+                        addMenu.classList.remove('open');
+                    });
+                    addMenu.appendChild(b);
+                });
+            }
+
+            arrangeBtn.addEventListener('click', () => {
+                state.arranging = !state.arranging;
+                render();
+            });
+            pinBtn.addEventListener('click', togglePin);
+            document.getElementById('resetBtn').addEventListener('click', resetToDefault);
+            document.getElementById('restartBtn').addEventListener('click', simulateRestart);
+            addBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                addMenu.classList.toggle('open');
+            });
+            document.addEventListener('click', () => addMenu.classList.remove('open'));
+
+            // ---- Representative tile bodies (visual filler only) --------------
+            function loggingBody() {
+                return (
+                    '<h3>Log a QSO</h3>' +
+                    '<div class="fld" style="width:60%"></div>' +
+                    '<div class="fld"></div><div class="fld"></div>' +
+                    '<div class="fld" style="width:40%"></div>'
+                );
+            }
+            function workedBody() {
+                return (
+                    '<h3>Worked before</h3>' +
+                    '<div class="row"><span class="k">Date</span> 2026-07-02 · 20m</div>' +
+                    '<div class="row"><span class="k">Date</span> 2025-11-18 · 40m</div>' +
+                    '<div class="row"><span class="k">Date</span> 2025-03-09 · 15m</div>'
+                );
+            }
+            function sessionBody() {
+                return (
+                    '<h3>Session</h3>' +
+                    '<div class="row">DL1ABC · 20m · 59/59</div>' +
+                    '<div class="row">EA4XY · 20m · 599/579</div>' +
+                    '<div class="row">G7QQQ · 40m · 59/57</div>'
+                );
+            }
+            function rigBody() {
+                return (
+                    '<h3>Rig</h3>' +
+                    '<div class="chip">● 14.199.950</div> ' +
+                    '<div class="chip">USB</div> <div class="chip">20m</div>'
+                );
+            }
+            function enrichBody() {
+                return (
+                    '<h3>Enrichment</h3>' +
+                    '<div style="font-size:32px">🇩🇪</div>' +
+                    '<div class="row">Germany · DXCC 230</div>' +
+                    '<div class="row">47° · 812 km</div>'
+                );
+            }
+            function ft8Body() {
+                return (
+                    '<h3>FT8 band activity</h3>' +
+                    '<div class="row">CQ DL9ABC JO31</div>' +
+                    '<div class="row">CQ F5XYZ IN95</div>' +
+                    '<div class="row">CQ EA1QQ IN71</div>'
+                );
+            }
+
+            render();
+        </script>
+    </body>
+</html>
