@@ -30,7 +30,70 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-07)
+## Current state (as of 2026-07-08)
+
+> **Session 206 (2026-07-08) — `frontend/app/` RIG SSE SEAM LIVE + validated on
+> the FTdx10: the Operate surface now has NO stub seams left.** Closed session
+> 205's NEXT item:
+>
+> - **The SSE transport + CAT-link state machine.** `lib/api/rig-sse.ts` (new)
+>   is a thin EventSource wrapper for `/v1/rig/events` — parse-guards each
+>   event, hands payloads to injected handlers (ADR 0045; `tune-state` /
+>   `rig-clients` deliberately not consumed yet). The transitions live in
+>   `rig.svelte.ts` as `catLink`, pure + transport-free: partial-payload VFO
+>   merge → freq/band; rig mode literal → operator-friendly form via the
+>   injected `bridge.mode_mappings` table (`submode||mode`; unmapped passes
+>   raw and the panel's select grows the odd value); the shipping **800 ms
+>   flash suppression** (`rig-disconnected` only schedules the
+>   connected→lost flip; a rig-state inside the window cancels silently);
+>   transport error flips a live link immediately. **A never-connected stream
+>   stays `off`** — the daemon's replayed `rig_no_data` on subscribe (rig-off
+>   day) means manual logging, not a blocked form. `goManual()` = the interim
+>   stand-in for the ADR 0044 confirm flow (on `lost`, take ownership, keep
+>   last values; a returning rig auto-lifts). `bridge-error` shows raw
+>   code+details under the pill (no i18n catalogue in this SPA yet).
+>   `StationContext` gained `catEnabled` + narrowed `modeMappings`
+>   (`/v1/config` bridge block); `main.ts` opens the stream only when CAT is
+>   enabled (config fetched once at boot — re-wiring on config change comes
+>   with this SPA's config surface). **The Rig panel's dev sim select is
+>   deleted — no stub surface remains anywhere.**
+> - **LIVE PASS on the FTdx10 (dev daemon, port 8080), all green:** freq
+>   tracks the dial; `DATA-U`→**FT8** (mode_mappings resolution, which also
+>   flips the report validators); VFO-B tracks; rig-off → pill red within
+>   ~6 s (5 s liveness + suppression), Log blocked, **auto-lift** to green on
+>   power-up with no operator action (wire capture confirmed the daemon side:
+>   `rig-disconnected` on power-off, full INIT replay 65 s later). Idle
+>   flicker-watch implicitly good (long connected stretches, no churn) —
+>   watch during dogfooding; `FLASH_SUPPRESS_MS` is the knob.
+> - **Frequency display converged on the SM dot-grouped convention** after
+>   two operator catches (`14.19995` → `14.199.950`): ported
+>   `validators/frequency.ts` **verbatim + tests** from shipping (parses
+>   dot-grouped AND decimal MHz unambiguously to Hz, 100 kHz–30 GHz);
+>   `rig.freq` is always dot-grouped when rig-fed (Go-manual continuity reads
+>   like the rig); **every `parseFloat(rig.freq)` is gone** (submit sink +
+>   band-sync via `parseFrequency` — parseFloat reads the grouped form as
+>   14.199); ADIF `TX_FREQ` is now exact Hz, not a float round-trip.
+> - **Panel polish (operator-driven):** CAT-locked view shows **both VFOs**
+>   as dot-grouped read-outs with a selection dot (read-only by design —
+>   click-to-swap needs the ADR 0026 command path, lands with rig control);
+>   manual/lost keeps the single freq entry (no VFO concept by hand). Header
+>   now reads **"Rig · FTdx10 · ● CAT connected"** (`rig.identity` from the
+>   wire, kept across a loss; pill moved from the panel body to InfoPanel's
+>   header). Icon swaps: Operate parent nav = the broadcast-arcs glyph (was
+>   Rig's), Rig rail = arrows-right-left (operator-supplied), Sidebar's
+>   shadowed operate branch synced. Rename "Rig"→"Rig Control" agreed for
+>   WHEN control ops land (inbox note names the two touch points).
+> - 284 SPA tests green (was 234 at session start: +CAT-link machine,
+>   +transport, +bridge-block parsing, +frequency validator's 27).
+>
+> **NEXT (frontend/app):** the fuller **confirm-once-per-band CAT gate**
+> (ADR 0044 — Go manual is the interim), the **rstDefaultFor** machinery
+> (CW→599 mode-tracking defaults, parked three times now), **rig control**
+> (ADR 0026 ops: VFO click-to-swap, band step, set_mode — brings the "Rig
+> Control" rename), then the **FT8 surface**.
+> **COMMIT STATE: committed through `98522683` (rig SSE round);
+> UNCOMMITTED = this handoff only.** The local daemon is still the DEV
+> daemon (`build/` working dir).
 
 > **Session 205 (2026-07-07, same day) — `frontend/app/` Log-QSO side FINISHED:
 > enrichment lookup gate + the mode.ts port + mode-aware report validation.**
