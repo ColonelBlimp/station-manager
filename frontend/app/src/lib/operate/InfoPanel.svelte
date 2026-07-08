@@ -23,8 +23,9 @@
          to the logging card's LEFT edge, so a wider card must overhang
          symmetrically — half the width difference as a negative left margin.
          (Falls back to 0 outside operate-center, e.g. the FT8 branch, via
-         the var() default.) Keep the 42rem here and in w-[42rem] in step. -->
-    <div class="card mt-4 w-[42rem] ml-[calc((var(--card-w,42rem)-42rem)/2)]">
+         the var() default.) Keep the 42rem calc in step with w-2xl
+         (= --container-2xl = 42rem). -->
+    <div class="card mt-4 w-2xl ml-[calc((var(--card-w,42rem)-42rem)/2)]">
         <div class="flex items-center justify-between">
             <div class="flex items-center gap-x-3">
                 <h3 class="text-sm font-semibold text-ink">{titles[operate.panel]}</h3>
@@ -58,7 +59,7 @@
                      the log table stays clean. Disabled with an empty log. -->
                 {#if operate.panel === 'session'}
                     <button
-                        class="btn text-xs"
+                        class="btn text-xs -mt-3"
                         disabled={session.qsos.length === 0}
                         onclick={openExport}
                     >

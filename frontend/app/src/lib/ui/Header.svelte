@@ -37,7 +37,7 @@
             stroke="currentColor"
             stroke-width="1.5"
             aria-hidden="true"
-            class="size-4 text-muted"
+            class="size-5 text-muted"
         >
             <path
                 d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"

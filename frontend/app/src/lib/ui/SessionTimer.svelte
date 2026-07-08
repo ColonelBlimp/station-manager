@@ -52,4 +52,4 @@
     const elapsed = $derived(formatDurationHms(now - startedAt));
 </script>
 
-<span class="tabular-nums">{elapsed}</span>
+<span class="tabular-nums text-base">{elapsed}</span>
