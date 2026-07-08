@@ -158,6 +158,21 @@ precisely so we don't re-derive state or redo finished work.
 >   why-comment left in Operate.svelte so it doesn't get re-added). Also
 >   kills the boot-window flash from the known-softness list. "Logged" toast
 >   tick dropped (icon carries success). 311 SPA tests green.
+> - **Panel polish (operator) + focus hand-back seam:** operator gave
+>   Session/Worked matching fixed-height bodies (`h-55` via a `tableHeight`
+>   const, all empty/pending states same height — no more panel-height
+>   jumps), switched both to `overflow-y-auto`, and applied the review
+>   catch (SessionPanel's `<thead>` now `bg-surface sticky top-0 z-10`
+>   like Worked's, so the header holds while a long session scrolls).
+>   NEW **focus hand-back seam** (`operate/state.svelte.ts`
+>   `registerCallsignInput`/`focusCallsign`): clicking **Worked/Session**
+>   on the rail (open OR close — deliberate acts on read-only panels)
+>   returns focus to the callsign field; **Details/Rig keep focus** (opened
+>   to use their own inputs); the Worked panel's AUTO-open on a lookup hit
+>   deliberately does NOT touch focus (it fires mid-typing and would steal
+>   the cursor). LoggingCard registers its input on mount / unregisters on
+>   unmount — the rail never reaches into another component's DOM
+>   (ADR 0045).
 > - **Narrow-rail Operate flyout stuck-open FIXED (operator catch):** the
 >   flyout is CSS `:hover`/`:focus-within`-driven, so a click never closed
 >   it — pointer still hovering AND the clicked button keeps focus. Fix in
@@ -174,13 +189,9 @@ precisely so we don't re-derive state or redo finished work.
 > **NEXT (frontend/app):** **rig control** (ADR 0026 ops: VFO
 > click-to-swap, band step, set_mode — brings the "Rig Control" rename
 > from the inbox), then the **FT8 surface**.
-> **COMMIT STATE: committed through `eafb73a4` (flyout fix); UNCOMMITTED =
-> the toast + shortcut round (`lib/ui/toasts.svelte.ts` + tests /
-> `Toasts.svelte` + test / `App.svelte` / `qso.svelte.ts` + tests /
-> `LoggingCard.svelte` / `Operate.svelte` / `test/setup.ts` /
-> `EnrichmentCard.svelte` prettier), operator's own `SessionPanel.svelte` +
-> `WorkedPanel.svelte` edits, and this handoff.** The local daemon is
-> still the DEV daemon (`build/` working dir).
+> **COMMIT STATE: committed through `139102a2` (toast system + shortcuts +
+> panel polish + focus seam); UNCOMMITTED = this handoff only.** The local
+> daemon is still the DEV daemon (`build/` working dir).
 
 > **Session 205 (2026-07-07, same day) — `frontend/app/` Log-QSO side FINISHED:
 > enrichment lookup gate + the mode.ts port + mode-aware report validation.**
