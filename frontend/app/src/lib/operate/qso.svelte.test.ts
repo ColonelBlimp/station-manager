@@ -14,6 +14,7 @@ import {
     logDraft,
     setSubmit,
     submitState,
+    dismissDuplicate,
     rstDefaultFor,
     DEFAULT_RST_VOICE,
     DEFAULT_RST_CW,
@@ -174,6 +175,16 @@ describe('submit outcomes: toasts for messages, card-local for the duplicate act
         expect(submitState.duplicate).toBe(true);
         expect(submitState.error).toBe('Duplicate.');
         expect(draft.callsign).toBe('DL3YA');
+    });
+
+    it('dismissDuplicate drops the refusal and keeps the draft', async () => {
+        fillDraft();
+        setSubmit(() => Promise.resolve({ ok: false, message: 'Duplicate.', duplicate: true }));
+        await logDraft();
+        dismissDuplicate();
+        expect(submitState.duplicate).toBe(false);
+        expect(submitState.error).toBe('');
+        expect(draft.callsign).toBe('DL3YA'); // draft survives the cancel
     });
 });
 

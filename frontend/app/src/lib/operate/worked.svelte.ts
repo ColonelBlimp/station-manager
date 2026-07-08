@@ -8,6 +8,7 @@
 // error the operator has to deal with mid-QSO.
 
 import { operate } from './state.svelte';
+import { isValidCallsign } from '../validators/callsign';
 
 // One previous contact, in display form. Mirrors the useful subset of the
 // daemon's per-QSO record; the logbook SPA owns the full view.
@@ -57,7 +58,10 @@ export function observeWorked(raw: string): void {
     const call = raw.trim().toUpperCase();
     clearTimeout(timer);
 
-    if (call.length < MIN_CALL_LEN) {
+    // Same gate as enrich (2026-07-08 QA catch): the daemon 400s a call that
+    // fails ITS validator (no digit, etc.) — fail-soft hid it, but malformed
+    // partials shouldn't reach the wire at all.
+    if (call.length < MIN_CALL_LEN || isValidCallsign(call) !== null) {
         seq++;
         inflight?.abort();
         // The auto-opened panel leaves with the callsign that summoned it

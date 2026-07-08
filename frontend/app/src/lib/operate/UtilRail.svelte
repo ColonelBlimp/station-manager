@@ -5,13 +5,18 @@
     // (the render gate is in Operate; visibility/offset are gated on data-rail).
     import { toggleUtil } from '../ui/state.svelte';
     import { operate, togglePanel, setPileup, focusCallsign, type Panel } from './state.svelte';
+    import { rig } from './rig.svelte';
 
     // Worked/Session are read-only: after toggling them the operator's next
-    // act is typing, so focus goes home to the callsign field. Details/Rig
-    // keep focus — they're opened to interact with their own inputs.
+    // act is typing, so focus goes home to the callsign field. The Rig panel
+    // is read-only too while CAT is live (fields locked) — same hand-back;
+    // CAT-off/lost it keeps focus (opened to edit values or confirm).
+    // Details always keeps focus (opened to type QTH/grid).
     function onPanelClick(p: Panel): void {
         togglePanel(p);
-        if (p === 'worked' || p === 'session') focusCallsign();
+        const readOnly =
+            p === 'worked' || p === 'session' || (p === 'rig' && rig.cat === 'connected');
+        if (readOnly) focusCallsign();
     }
 
     const panels: { key: Panel; label: string }[] = [

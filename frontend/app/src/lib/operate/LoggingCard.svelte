@@ -16,11 +16,13 @@
         canLog,
         logDraft,
         clearDraft,
+        dismissDuplicate,
         startQso,
         holdOffTimes,
         submitState,
         draftProblems,
     } from './qso.svelte';
+    import DuplicateDialog from './DuplicateDialog.svelte';
     import { observeWorked } from './worked.svelte';
     import { rigReady, rigGate } from './rig.svelte';
     import { registerCallsignInput } from './state.svelte';
@@ -52,6 +54,17 @@
     }
 
     function windowKeydown(e: KeyboardEvent): void {
+        // Duplicate dialog open: it owns the keys. Esc dismisses the DIALOG
+        // (never the draft underneath); Ctrl+Enter is inert so a key-repeat
+        // can't accidentally force-log. Enter acts on the focused button.
+        if (submitState.duplicate) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                dismissDuplicate();
+                callInput?.focus();
+            }
+            return;
+        }
         if (e.key === 'Enter' && e.ctrlKey && !e.altKey && !e.shiftKey) {
             e.preventDefault();
             void logAndRefocus();
@@ -89,6 +102,8 @@
 </script>
 
 <svelte:window onkeydown={windowKeydown} />
+
+<DuplicateDialog />
 
 <div class="card w-(--card-w)">
     <div class="flex gap-x-6">
@@ -230,30 +245,6 @@
                     title={gateTitle ?? 'Ctrl+Enter'}
                     >{submitState.busy ? 'Logging…' : 'Log QSO'}</button
                 >
-                {#if submitState.duplicate}
-                    <!-- The one card-local outcome (its action belongs beside
-                         the Log button); everything else is a toast. Anchored
-                         popover — absolute, so appearing/clearing never moves
-                         the buttons. -->
-                    <div
-                        class="absolute top-full right-0 z-20 mt-2 w-56 rounded-md border border-line bg-surface p-2 shadow-md"
-                    >
-                        <p class="text-xs text-invalid">{submitState.error}</p>
-                        <div class="mt-1 flex justify-end">
-                            <!-- Same CAT gate as the primary button — a force
-                                 retry must not slip past it if the rig link
-                                 drops between the refusal and the click. -->
-                            <button
-                                class="btn text-xs"
-                                onclick={() => logDraft(true)}
-                                disabled={!rigReady() || submitState.busy}
-                                title={gateTitle}
-                            >
-                                Log anyway
-                            </button>
-                        </div>
-                    </div>
-                {/if}
             </div>
         </div>
     </div>

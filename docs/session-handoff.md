@@ -32,6 +32,50 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-08)
 
+> **Session 207 (2026-07-08, same day) — clean-DB live QA run of the
+> `frontend/app/` logging flow on the FTdx10.** Parked the QSO DB in
+> `build/db/backups/pre-qa-20260708/`, bootstrapped a fresh one (daemon
+> self-seeded the default logbook — "config marked setup complete but DB had
+> no row"), ran real QSOs and checked daemon log + DB row each time. **The
+> clean dev daemon runs in the background under this session** (`task
+> run:smd`, `2.0.0-alpha.1-532`), reading its own stdout + `build/log/smd.log`.
+>
+> - **Verified correct end-to-end:** USB QSO stores `mode=SSB submode=USB`;
+>   CW QSO stores bare `mode=CW` (no submode) with **599/599** — the
+>   rig-driven `rstDefaultFor` proven on the wire; duplicate flow is
+>   minute-precision dedupe (same call/band/mode/freq/minute) → `200`
+>   refusal → force sends a **random nonce dedupe key** (daemon
+>   `submit.go:243`) so the forced row coexists under the unique constraint.
+>   Same call across SSB/CW = two rows (mode is in the key), correct.
+> - **3 SPA fixes this run:** (1) `observeWorked` now gates on
+>   `isValidCallsign` like enrich — malformed partials were 400ing the
+>   daemon (fail-soft hid it); (2) Rig-panel rail click hands focus back to
+>   the callsign field when CAT is `connected` (fields locked = read-only),
+>   keeps focus CAT-off/lost; (3) **the duplicate refusal is now a centred
+>   modal + backdrop** (`DuplicateDialog.svelte`, TWP modal-dialogs ref) —
+>   the off-centre anchored popover is gone. Esc dismisses the DIALOG only
+>   (LoggingCard's window handler intercepts + returns before clear-draft);
+>   Ctrl+Enter inert while open (no blind force on key-repeat); Cancel is
+>   the focused safe default; backdrop-click cancels; draft preserved.
+>   `dismissDuplicate()` added. 323 SPA tests green.
+> - **2 daemon items INBOXED (not fixed — daemon out of this SPA's scope):**
+>   (a) client-aborted enrichments log at WARN with full error chains
+>   (`context canceled` from superseded /v1/enrich aborts) — noise that
+>   masks real warns, fix = debug-level when cause is ctx.Canceled;
+>   (b) MY_RIG design Q — stored blob carried `Yaesu FT-710` (stale config)
+>   while the FTdx10 was on CAT; should rig-identity win when connected?
+> - **Operator to-do noticed:** `build/config.json` `my_rig` is stale
+>   (FT-710) — edit + restart for correct QA rows. Parked QA DB restorable
+>   from `build/db/backups/pre-qa-20260708/`.
+>
+> **COMMIT STATE: committed through `8c8e23ef` (InfoPanel centring);
+> UNCOMMITTED = the duplicate-modal round (`DuplicateDialog.svelte` +
+> test / `qso.svelte.ts` + tests / `LoggingCard.svelte`), the Worked gate
+> (`worked.svelte.ts`), the Rig focus tweak (`UtilRail.svelte`), the two
+> inbox notes (`dogfood-inbox.md`), operator's own `SessionPanel.svelte` +
+> `WorkedPanel.svelte` edits (SessionPanel has prettier drift to clean),
+> and this handoff.**
+
 > **Session 206 (2026-07-08) — `frontend/app/` RIG SSE SEAM LIVE + validated on
 > the FTdx10: the Operate surface now has NO stub seams left.** Closed session
 > 205's NEXT item:

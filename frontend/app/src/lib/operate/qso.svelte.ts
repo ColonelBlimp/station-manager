@@ -233,6 +233,13 @@ export const submitState = $state({ busy: false, error: '', duplicate: false });
 
 /** Returns true when the QSO was stored (callers refocus the callsign field
  *  on success); false on refusal or when the gate/busy latch blocked it. */
+/** Operator declined the force (dialog Cancel / Esc / backdrop): drop the
+ *  refusal, keep the draft — nothing typed is lost. */
+export function dismissDuplicate(): void {
+    submitState.error = '';
+    submitState.duplicate = false;
+}
+
 export async function logDraft(force = false): Promise<boolean> {
     // The CAT/rig gate is enforced HERE, not only on the buttons — a
     // button-level-only guard grew a bypass once already (the duplicate
