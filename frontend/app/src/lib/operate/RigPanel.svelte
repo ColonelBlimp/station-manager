@@ -6,6 +6,7 @@
     // (ADR 0045).
     import { rig, rigGate, confirmRig } from './rig.svelte';
     import { hideTile } from './layout.svelte';
+    import { focusCallsign } from './state.svelte';
     import { formatFrequency, frequencyToBand } from '../utils/frequency';
     import { parseFrequency } from '../validators/frequency';
 
@@ -64,7 +65,10 @@
             class="ml-auto cursor-pointer rounded-md text-muted hover:text-ink"
             title="Hide"
             aria-label="Hide Rig"
-            onclick={() => hideTile('rig')}
+            onclick={() => {
+                hideTile('rig');
+                focusCallsign();
+            }}
         >
             <svg
                 viewBox="0 0 24 24"

@@ -4,7 +4,7 @@
     // (ADR 0045/0046): owns its own header (title + the Export… action, which
     // used to live on the InfoPanel wrapper).
     import { session } from './session.svelte';
-    import { openExport } from './state.svelte';
+    import { openExport, focusCallsign } from './state.svelte';
     import { hideTile } from './layout.svelte';
     const tableHeight = 'h-55';
 </script>
@@ -21,7 +21,10 @@
                 class="cursor-pointer rounded-md text-muted hover:text-ink"
                 title="Hide"
                 aria-label="Hide Session"
-                onclick={() => hideTile('session')}
+                onclick={() => {
+                    hideTile('session');
+                    focusCallsign();
+                }}
             >
                 <svg
                     viewBox="0 0 24 24"

@@ -21,11 +21,13 @@
         holdOffTimes,
         submitState,
         draftProblems,
+        qsoClock,
     } from './qso.svelte';
     import DuplicateDialog from './DuplicateDialog.svelte';
     import { observeWorked, openWorkedForQso } from './worked.svelte';
     import { rigReady, rigGate } from './rig.svelte';
     import { operate, closeContact, registerCallsignInput } from './state.svelte';
+    import { toasts } from '../ui/toasts.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
 
     // Why the Log button is gated, for the tooltip (undefined when it isn't).
@@ -89,11 +91,21 @@
     // Tab out of the callsign field = "I'm working this station": stamps
     // Date/Time On and starts the ticking Time Off (the QSO timer), and surfaces
     // the worked-before panel if nothing is open. Tab is not swallowed — focus
-    // moves on to RST as normal.
+    // moves on to RST as normal. If the rig gate isn't confirmed the QSO still
+    // starts (the clock runs), but it CAN'T be logged — so warn at start rather
+    // than let the operator discover it only at the disabled Log button.
     function callKeydown(e: KeyboardEvent): void {
         if (e.key === 'Tab' && !e.shiftKey && draft.callsign.trim() !== '') {
+            const fresh = !qsoClock.started;
             startQso();
             openWorkedForQso(draft.callsign);
+            if (fresh && !rigReady()) {
+                toasts.warn(
+                    rigGate() === 'lost'
+                        ? 'CAT link lost — confirm the rig in the Rig panel before you can log this QSO.'
+                        : 'Rig not confirmed — confirm the band in the Rig panel before you can log this QSO.'
+                );
+            }
         }
     }
 

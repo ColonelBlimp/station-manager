@@ -5,7 +5,7 @@
     // View… contact overlay action, which used to live on the InfoPanel wrapper).
     import { worked } from './worked.svelte';
     import { qsoClock } from './qso.svelte';
-    import { openContact } from './state.svelte';
+    import { openContact, focusCallsign } from './state.svelte';
     import { hideTile } from './layout.svelte';
     const tableHeight = 'h-55';
 </script>
@@ -27,7 +27,10 @@
                 class="cursor-pointer rounded-md text-muted hover:text-ink"
                 title="Hide"
                 aria-label="Hide Worked"
-                onclick={() => hideTile('worked')}
+                onclick={() => {
+                    hideTile('worked');
+                    focusCallsign();
+                }}
             >
                 <svg
                     viewBox="0 0 24 24"
