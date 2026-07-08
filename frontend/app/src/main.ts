@@ -9,6 +9,7 @@ import { apiEnrich, apiHistory, fetchStationContext, type StationContext } from 
 import { submitQso } from './lib/api/qso';
 import { formatAdifRecord } from './lib/utils/adif';
 import { resolveModeAndSubmode } from './lib/utils/mode';
+import { isValidMaidenhead } from './lib/validators/maidenhead';
 import { pathInfo } from './lib/utils/bearing';
 import './styles/app.css';
 
@@ -80,7 +81,13 @@ setSubmit(async (q, opts) => {
         name: q.name || undefined,
         qth: q.qth || undefined,
         comment: q.comment || undefined,
-        gridsquare: q.gridsquare || undefined,
+        // An invalid grid is omitted, never a block: the grid can arrive via
+        // enrichment, and gating Log on it would let a bad upstream value
+        // stop logging (invariant). The Details panel shows the warning.
+        gridsquare:
+            q.gridsquare !== '' && isValidMaidenhead(q.gridsquare) === null
+                ? q.gridsquare
+                : undefined,
         country: e?.country || undefined,
         // ADIF DXCC is the numeric entity; our display value may be a prefix
         // fallback (e.g. "G") — only emit real numbers.

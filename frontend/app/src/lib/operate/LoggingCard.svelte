@@ -181,7 +181,17 @@
                 <p class="mt-2 max-w-56 text-right text-xs text-invalid">{submitState.error}</p>
                 {#if submitState.duplicate}
                     <div class="mt-1 flex justify-end">
-                        <button class="btn text-xs" onclick={() => logDraft(true)}>
+                        <!-- Same CAT gate as the primary button — a force retry
+                             must not slip past it if the rig link drops between
+                             the duplicate refusal and the click. -->
+                        <button
+                            class="btn text-xs"
+                            onclick={() => logDraft(true)}
+                            disabled={!rigReady() || submitState.busy}
+                            title={!rigReady()
+                                ? 'CAT link lost — rig context may be stale'
+                                : undefined}
+                        >
                             Log anyway
                         </button>
                     </div>
