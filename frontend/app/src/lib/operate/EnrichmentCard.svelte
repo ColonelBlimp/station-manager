@@ -72,8 +72,10 @@
             {#if flag !== ''}
                 <div
                     class="cursor-default overflow-x-hidden size-15 text-5xl leading-none text-nowrap text-ellipsis"
-                    title={enrich.data.country}>{flag}</div
+                    title={enrich.data.country}
                 >
+                    {flag}
+                </div>
             {/if}
             <div class="min-w-0">
                 <div class="truncate text-base font-semibold text-ink">{enrich.data.country}</div>

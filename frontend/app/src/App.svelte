@@ -1,6 +1,7 @@
 <script lang="ts">
     import Sidebar from './lib/ui/Sidebar.svelte';
     import Header from './lib/ui/Header.svelte';
+    import Toasts from './lib/ui/Toasts.svelte';
     import Operate from './lib/operate/Operate.svelte';
     import {
         ui,
@@ -47,6 +48,10 @@
 </script>
 
 <Sidebar />
+
+<!-- System messages (info/warn/error) — single mount, fixed overlay, never
+     reflows the working surface. Pushed via lib/ui/toasts.svelte.ts. -->
+<Toasts />
 
 <div class="content-wrap flex h-screen flex-col pl-[var(--sidebar-w)]">
     <Header />

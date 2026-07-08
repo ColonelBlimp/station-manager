@@ -3,21 +3,15 @@
     // FT8, from the router) plus the shared right-rail chrome. The cards are
     // self-contained (ADR 0045); this file only positions them.
     import { router } from '../router.svelte';
-    import { operate } from './state.svelte';
-    import { rigReady } from './rig.svelte';
     import LoggingCard from './LoggingCard.svelte';
     import UtilRail from './UtilRail.svelte';
     import InfoPanel from './InfoPanel.svelte';
     import PileupDrawer from './PileupDrawer.svelte';
 
-    // ADR 0044: entering Operate with the rig gate blocked (CAT off and the
-    // band unconfirmed, or link lost) auto-opens the Rig card so the confirm
-    // is one click away — but never over a panel the operator already chose.
-    // Runs once per entry (component init), not reactively: a mid-session
-    // gate change gets a rail badge, not a panel takeover (deferred).
-    if (!rigReady() && operate.panel === null) {
-        operate.panel = 'rig';
-    }
+    // Deliberately NO auto-open of the Rig panel on a blocked gate (tried
+    // 2026-07-08, operator found it annoying): the header chip is the
+    // always-visible gate status AND the one-click route to the Rig panel —
+    // ADR 0044's intent is served without moving panels under the operator.
 </script>
 
 {#if router.mode === 'phone'}

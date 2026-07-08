@@ -117,6 +117,47 @@ precisely so we don't re-derive state or redo finished work.
 > - 292 SPA tests green (was 234 at session start: +CAT-link machine,
 >   +transport, +bridge-block parsing, +frequency validator's 27, +RST
 >   defaults, +gate).
+> - **TOAST SYSTEM + system-message routing (operator: the in-card
+>   "Logged…" message reflowed the Clear/Log buttons — find messages a
+>   better home):** ported `toasts.svelte.ts` + tests VERBATIM from shipping
+>   (info/warn/error, TTL 4/6/8 s, ttl=0 sticky, max stack 5) into
+>   `lib/ui/`; NEW `Toasts.svelte` renderer styled to the operator-picked
+>   **Tailwind Plus overlays/notifications/01-simple** reference (adapted to
+>   @theme tokens per the TWP licence rule — surface panel, leading level
+>   icon green-check/amber-triangle/red-x, sr-only severity prefix,
+>   per-toast live-region roles), single-mounted in App.svelte.
+>   **Bottom-centre placement** (operator choice after a
+>   placement-conventions discussion; shipping's top-centre rationale noted
+>   as the fallback if toasts get missed). Routing: success + non-duplicate
+>   refusals = toasts; the **duplicate refusal stays card-local** (its "Log
+>   anyway" action belongs beside the button) as an absolutely-positioned
+>   anchored popover — **nothing reflows the card anymore**. `submitState`
+>   slimmed to `{busy, error, duplicate}` (error = duplicate-only now).
+> - **"No toast seen" bug → Vite HMR lesson (durable, now in memory):**
+>   module-level `$state` singletons duplicate across HMR generations — the
+>   submit path pushed into one toast-queue instance while the mounted
+>   renderer read another; hard reload fixed it. Proven code-side via a NEW
+>   component test (`Toasts.svelte.test.ts`: render + push + assert DOM) +
+>   an `Element.animate` stub in `src/test/setup.ts` (jsdom lacks the Web
+>   Animations API that `transition:fade` needs). Rule: hard-reload before
+>   diagnosing cross-module state bugs; trust a component test over the
+>   hot-swapped tab.
+> - **Keyboard fast path (operator-specified):** **Ctrl+Enter** = log —
+>   `logDraft` now returns a stored/refused boolean, and focus returns to
+>   the callsign field ONLY on success (a refusal leaves the cursor where
+>   the operator is fixing); **Esc** = clear + focus callsign (also
+>   dismisses the duplicate popover via the submitState reset); the Clear
+>   button click refocuses too; **the card mount-focuses the callsign
+>   input** (covers app load, view switches, FT8→Phone/CW). Listener is
+>   `<svelte:window>` INSIDE LoggingCard, so the shortcuts live and die
+>   with the card (Phone/CW only). Tooltips advertise them (Log =
+>   "Ctrl+Enter" when not gate-blocked, Clear = "Esc").
+> - **Rig-panel auto-open on a blocked gate REMOVED** (operator: annoying —
+>   the header chip already shows the state and click-opens the panel; the
+>   chip serves ADR 0044's intent without moving panels under the operator;
+>   why-comment left in Operate.svelte so it doesn't get re-added). Also
+>   kills the boot-window flash from the known-softness list. "Logged" toast
+>   tick dropped (icon carries success). 311 SPA tests green.
 > - **Narrow-rail Operate flyout stuck-open FIXED (operator catch):** the
 >   flyout is CSS `:hover`/`:focus-within`-driven, so a click never closed
 >   it — pointer still hovering AND the clicked button keeps focus. Fix in
@@ -133,10 +174,13 @@ precisely so we don't re-derive state or redo finished work.
 > **NEXT (frontend/app):** **rig control** (ADR 0026 ops: VFO
 > click-to-swap, band step, set_mode — brings the "Rig Control" rename
 > from the inbox), then the **FT8 surface**.
-> **COMMIT STATE: committed through `6e10b9df` (handoff for defaults +
-> gate); UNCOMMITTED = the flyout fix (`OperateNav.svelte` / `app.css`)
-> and this handoff.** The local daemon is still the DEV daemon (`build/`
-> working dir).
+> **COMMIT STATE: committed through `eafb73a4` (flyout fix); UNCOMMITTED =
+> the toast + shortcut round (`lib/ui/toasts.svelte.ts` + tests /
+> `Toasts.svelte` + test / `App.svelte` / `qso.svelte.ts` + tests /
+> `LoggingCard.svelte` / `Operate.svelte` / `test/setup.ts` /
+> `EnrichmentCard.svelte` prettier), operator's own `SessionPanel.svelte` +
+> `WorkedPanel.svelte` edits, and this handoff.** The local daemon is
+> still the DEV daemon (`build/` working dir).
 
 > **Session 205 (2026-07-07, same day) — `frontend/app/` Log-QSO side FINISHED:
 > enrichment lookup gate + the mode.ts port + mode-aware report validation.**

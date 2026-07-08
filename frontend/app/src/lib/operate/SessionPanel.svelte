@@ -3,39 +3,42 @@
     // over the session state (the submit sink adds rows); fills whatever host
     // it's given (ADR 0045) — today the InfoPanel below the logging card.
     import { session } from './session.svelte';
+    const tableHeight = 'h-55';
 </script>
 
 {#if session.qsos.length > 0}
-    <table class="w-full text-left text-sm">
-        <thead>
-            <tr class="border-b border-line text-xs text-muted">
-                <th class="py-1.5 pr-4 font-medium">Time</th>
-                <th class="py-1.5 pr-4 font-medium">Callsign</th>
-                <th class="py-1.5 pr-4 font-medium">Band</th>
-                <th class="py-1.5 pr-4 font-medium">Mode</th>
-                <th class="py-1.5 pr-4 font-medium">Sent</th>
-                <th class="py-1.5 pr-4 font-medium">Rcvd</th>
-                <th class="py-1.5 pr-4 font-medium">Name</th>
-                <th class="py-1.5 font-medium">Country</th>
-            </tr>
-        </thead>
-        <tbody>
-            {#each session.qsos as q (q.id)}
-                <tr class="border-b border-line-soft text-ink last:border-0">
-                    <td class="py-1.5 pr-4 tabular-nums">{q.timeOn}</td>
-                    <td class="py-1.5 pr-4 font-medium">{q.callsign}</td>
-                    <td class="py-1.5 pr-4">{q.band}</td>
-                    <td class="py-1.5 pr-4">{q.mode}</td>
-                    <td class="py-1.5 pr-4 tabular-nums">{q.rstSent}</td>
-                    <td class="py-1.5 pr-4 tabular-nums">{q.rstRcvd}</td>
-                    <td class="max-w-32 truncate py-1.5 pr-4">{q.name}</td>
-                    <td class="max-w-40 truncate py-1.5">{q.country}</td>
+    <div class="{tableHeight} overflow-y-auto">
+        <table class="">
+            <thead class="bg-surface sticky top-0 z-10">
+                <tr class="text-xs text-muted text-left font-medium">
+                    <th class="w-20">Time</th>
+                    <th class="w-28 overflow-x-hidden text-nowrap text-ellipsis">Callsign</th>
+                    <th class="w-12">Band</th>
+                    <th class="w-14">Mode</th>
+                    <th class="w-10">Sent</th>
+                    <th class="w-10">Rcvd</th>
+                    <th class="w-32 overflow-x-hidden text-nowrap text-ellipsis">Name</th>
+                    <th class="w-32 overflow-x-hidden text-nowrap text-ellipsis">Country</th>
                 </tr>
-            {/each}
-        </tbody>
-    </table>
+            </thead>
+            <tbody>
+                {#each session.qsos as q (q.id)}
+                    <tr class="border-b border-line-soft text-ink last:border-0">
+                        <td class="tabular-nums">{q.timeOn}</td>
+                        <td class="font-medium">{q.callsign}</td>
+                        <td class="">{q.band}</td>
+                        <td class="">{q.mode}</td>
+                        <td class="tabular-nums">{q.rstSent}</td>
+                        <td class="tabular-nums">{q.rstRcvd}</td>
+                        <td class="truncate">{q.name}</td>
+                        <td class="truncate" >{q.country}</td>
+                    </tr>
+                {/each}
+            </tbody>
+        </table>
+    </div>
 {:else}
-    <div class="flex h-24 items-center justify-center text-sm text-muted">
+    <div class="flex {tableHeight} items-center justify-center text-sm text-muted">
         No QSOs logged this session.
     </div>
 {/if}

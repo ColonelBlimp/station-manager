@@ -23,6 +23,7 @@
     } from './qso.svelte';
     import { observeWorked } from './worked.svelte';
     import { rigReady, rigGate } from './rig.svelte';
+    import { registerCallsignInput } from './state.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
 
     // Why the Log button is gated, for the tooltip (undefined when it isn't).
@@ -36,6 +37,29 @@
 
     function upperCall(): void {
         draft.callsign = draft.callsign.toUpperCase();
+    }
+
+    // Keyboard fast path (card-scoped: the svelte:window listener lives and
+    // dies with this card, so the shortcuts exist only on Phone/CW):
+    //   Ctrl+Enter — log; on SUCCESS focus returns to the callsign field for
+    //                the next contact (a refusal leaves focus where the
+    //                operator is fixing things).
+    //   Escape     — clear the draft and start over at the callsign field.
+    let callInput: HTMLInputElement | undefined;
+
+    async function logAndRefocus(): Promise<void> {
+        if (await logDraft()) callInput?.focus();
+    }
+
+    function windowKeydown(e: KeyboardEvent): void {
+        if (e.key === 'Enter' && e.ctrlKey && !e.altKey && !e.shiftKey) {
+            e.preventDefault();
+            void logAndRefocus();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            clearDraft();
+            callInput?.focus();
+        }
     }
 
     // Tab out of the callsign field = "I'm working this station": stamps
@@ -53,7 +77,18 @@
 
     // Per-field malformed flags → red outlines; canLog() blocks on any of them.
     const p = $derived(draftProblems());
+
+    // Entering Phone/CW = about to log: start at the callsign field. Runs on
+    // mount only (callInput is bound once), same landing spot as Esc/log.
+    // Registration lets the util rail hand focus back here (state.svelte).
+    $effect(() => {
+        registerCallsignInput(callInput ?? null);
+        callInput?.focus();
+        return () => registerCallsignInput(null);
+    });
 </script>
+
+<svelte:window onkeydown={windowKeydown} />
 
 <div class="card w-(--card-w)">
     <div class="flex gap-x-6">
@@ -69,6 +104,7 @@
                         autocomplete="off"
                         spellcheck="false"
                         placeholder="Callsign"
+                        bind:this={callInput}
                         bind:value={draft.callsign}
                         oninput={upperCall}
                         onkeydown={callKeydown}
@@ -173,8 +209,15 @@
             <div class="flex w-56 h-45 shrink-0 mt-0">
                 <EnrichmentCard />
             </div>
-            <div class="flex mt-auto justify-end gap-x-2">
-                <button class="btn" onclick={clearDraft}>Clear</button>
+            <div class="relative mt-auto flex justify-end gap-x-2">
+                <button
+                    class="btn"
+                    title="Esc"
+                    onclick={() => {
+                        clearDraft();
+                        callInput?.focus();
+                    }}>Clear</button
+                >
                 <!-- CAT/rig gate (ADR 0044): 'lost' and 'unconfirmed' block
                      logging — the context may be stale or never asserted;
                      'live' and confirmed-'manual' log. Enforced in logDraft
@@ -182,34 +225,36 @@
                      busy = in-flight POST (double-log guard). -->
                 <button
                     class="btn btn-primary"
-                    onclick={() => logDraft()}
+                    onclick={() => logAndRefocus()}
                     disabled={!canLog() || !rigReady() || submitState.busy}
-                    title={gateTitle}
+                    title={gateTitle ?? 'Ctrl+Enter'}
                     >{submitState.busy ? 'Logging…' : 'Log QSO'}</button
                 >
-            </div>
-            {#if submitState.error !== ''}
-                <p class="mt-2 max-w-56 text-right text-xs text-invalid">{submitState.error}</p>
                 {#if submitState.duplicate}
-                    <div class="mt-1 flex justify-end">
-                        <!-- Same CAT gate as the primary button — a force retry
-                             must not slip past it if the rig link drops between
-                             the duplicate refusal and the click. -->
-                        <button
-                            class="btn text-xs"
-                            onclick={() => logDraft(true)}
-                            disabled={!rigReady() || submitState.busy}
-                            title={gateTitle}
-                        >
-                            Log anyway
-                        </button>
+                    <!-- The one card-local outcome (its action belongs beside
+                         the Log button); everything else is a toast. Anchored
+                         popover — absolute, so appearing/clearing never moves
+                         the buttons. -->
+                    <div
+                        class="absolute top-full right-0 z-20 mt-2 w-56 rounded-md border border-line bg-surface p-2 shadow-md"
+                    >
+                        <p class="text-xs text-invalid">{submitState.error}</p>
+                        <div class="mt-1 flex justify-end">
+                            <!-- Same CAT gate as the primary button — a force
+                                 retry must not slip past it if the rig link
+                                 drops between the refusal and the click. -->
+                            <button
+                                class="btn text-xs"
+                                onclick={() => logDraft(true)}
+                                disabled={!rigReady() || submitState.busy}
+                                title={gateTitle}
+                            >
+                                Log anyway
+                            </button>
+                        </div>
                     </div>
                 {/if}
-            {:else if submitState.logged !== ''}
-                <p class="mt-2 max-w-56 text-right text-xs text-logged">
-                    Logged {submitState.logged} ✓
-                </p>
-            {/if}
+            </div>
         </div>
     </div>
 </div>

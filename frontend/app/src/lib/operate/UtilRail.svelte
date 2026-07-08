@@ -4,7 +4,15 @@
     // full↔narrow like the left nav (data-util). Shown only in Operate → Phone/CW
     // (the render gate is in Operate; visibility/offset are gated on data-rail).
     import { toggleUtil } from '../ui/state.svelte';
-    import { operate, togglePanel, setPileup, type Panel } from './state.svelte';
+    import { operate, togglePanel, setPileup, focusCallsign, type Panel } from './state.svelte';
+
+    // Worked/Session are read-only: after toggling them the operator's next
+    // act is typing, so focus goes home to the callsign field. Details/Rig
+    // keep focus — they're opened to interact with their own inputs.
+    function onPanelClick(p: Panel): void {
+        togglePanel(p);
+        if (p === 'worked' || p === 'session') focusCallsign();
+    }
 
     const panels: { key: Panel; label: string }[] = [
         { key: 'worked', label: 'Worked' },
@@ -85,7 +93,7 @@
                 class="rail-item"
                 title={p.label}
                 data-active={operate.panel === p.key ? 'true' : 'false'}
-                onclick={() => togglePanel(p.key)}
+                onclick={() => onPanelClick(p.key)}
             >
                 {@render railIcon(p.key)}
                 <span class="rail-label">{p.label}</span>

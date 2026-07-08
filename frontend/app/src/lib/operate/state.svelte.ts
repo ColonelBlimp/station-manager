@@ -21,3 +21,18 @@ export function closePanel(): void {
 export function setPileup(open: boolean): void {
     operate.pileup = open;
 }
+
+// Focus hand-back seam: LoggingCard registers its callsign input; chrome
+// (UtilRail) returns focus there after a DELIBERATE panel action on the
+// read-only panels (Worked/Session). Deliberate-click only — the Worked
+// panel also auto-opens when a lookup lands, and stealing focus then would
+// yank the cursor out of whatever field the operator is typing in.
+let callsignInput: HTMLInputElement | null = null;
+
+export function registerCallsignInput(el: HTMLInputElement | null): void {
+    callsignInput = el;
+}
+
+export function focusCallsign(): void {
+    callsignInput?.focus();
+}

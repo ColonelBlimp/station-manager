@@ -13,12 +13,14 @@ import {
     canLog,
     logDraft,
     setSubmit,
+    submitState,
     rstDefaultFor,
     DEFAULT_RST_VOICE,
     DEFAULT_RST_CW,
     type QsoDraft,
 } from './qso.svelte';
 import { rig, confirmRig } from './rig.svelte';
+import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
 
 // A loggable draft, minus the report fields under test. Times are set
 // directly (not via startQso) so no interval ticks over the values.
@@ -34,6 +36,7 @@ beforeEach(() => {
     confirmRig(); // satisfy the ADR 0044 gate — logDraft refuses unconfirmed CAT-off
     flushSync(); // settle the RST default-fill effect before the case starts
     clearDraft(); // also resets rstSent/rstRcvd to the mode default
+    resetToasts();
 });
 
 describe('report validation follows rig mode', () => {
@@ -123,6 +126,38 @@ describe('RST defaults follow the rig mode (default-fill effect)', () => {
         clearDraft();
         expect(draft.rstSent).toBe('599');
         expect(draft.rstRcvd).toBe('599');
+    });
+});
+
+describe('submit outcomes: toasts for messages, card-local for the duplicate action', () => {
+    it('success pushes an info toast, clears the draft, and returns true (refocus signal)', async () => {
+        fillDraft();
+        setSubmit(() => Promise.resolve({ ok: true }));
+        expect(await logDraft()).toBe(true);
+        expect(toastsState.items).toHaveLength(1);
+        expect(toastsState.items[0]).toMatchObject({ level: 'info', message: 'Logged DL3YA' });
+        expect(draft.callsign).toBe(''); // next QSO starts clean
+    });
+
+    it('a non-duplicate refusal is an error toast; the draft is preserved', async () => {
+        fillDraft();
+        setSubmit(() => Promise.resolve({ ok: false, message: 'daemon says no' }));
+        expect(await logDraft()).toBe(false); // no refocus on refusal
+        expect(toastsState.items).toHaveLength(1);
+        expect(toastsState.items[0]).toMatchObject({ level: 'error', message: 'daemon says no' });
+        expect(submitState.duplicate).toBe(false);
+        expect(submitState.error).toBe('');
+        expect(draft.callsign).toBe('DL3YA'); // nothing typed is lost
+    });
+
+    it('a duplicate refusal stays card-local (it carries the Log-anyway action) — no toast', async () => {
+        fillDraft();
+        setSubmit(() => Promise.resolve({ ok: false, message: 'Duplicate.', duplicate: true }));
+        await logDraft();
+        expect(toastsState.items).toHaveLength(0);
+        expect(submitState.duplicate).toBe(true);
+        expect(submitState.error).toBe('Duplicate.');
+        expect(draft.callsign).toBe('DL3YA');
     });
 });
 

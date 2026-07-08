@@ -9,6 +9,7 @@ import { isValidCallsign } from '../validators/callsign';
 import { isValidRst, isValidSignalReport } from '../validators/rst';
 import { usesSignalReport } from '../utils/mode';
 import { rig, rigReady } from './rig.svelte';
+import { toasts } from '../ui/toasts.svelte';
 
 export interface QsoDraft {
     callsign: string;
@@ -156,7 +157,6 @@ export function clearDraft(): void {
     resetClock();
     submitState.error = '';
     submitState.duplicate = false;
-    submitState.logged = '';
 }
 
 // Format checks for the card's free-text date/time fields (what the ADIF
@@ -218,22 +218,26 @@ export function setSubmit(fn: SubmitFn): void {
     submit = fn;
 }
 
-// Submit progress + outcome surface for the card. busy doubles as the
-// double-click latch: a write POST is ambiguous on timeout, so firing a
-// second submit while one is in flight risks a double log.
-export const submitState = $state({ busy: false, error: '', duplicate: false, logged: '' });
+// Submit progress + the ONE outcome that stays card-local: the duplicate
+// refusal (its "Log anyway" action belongs next to the Log button). All
+// other outcomes — success, non-duplicate refusals — go through toasts so
+// nothing reflows the card. busy doubles as the double-click latch: a write
+// POST is ambiguous on timeout, so firing a second submit while one is in
+// flight risks a double log.
+export const submitState = $state({ busy: false, error: '', duplicate: false });
 
-export async function logDraft(force = false): Promise<void> {
+/** Returns true when the QSO was stored (callers refocus the callsign field
+ *  on success); false on refusal or when the gate/busy latch blocked it. */
+export async function logDraft(force = false): Promise<boolean> {
     // The CAT/rig gate is enforced HERE, not only on the buttons — a
     // button-level-only guard grew a bypass once already (the duplicate
     // "Log anyway" path, 2026-07-08 review finding).
-    if (!canLog() || !rigReady() || submitState.busy) return;
+    if (!canLog() || !rigReady() || submitState.busy) return false;
     stampOff(); // QSO end = now, unless the operator entered one
     const call = draft.callsign.trim().toUpperCase();
     submitState.busy = true;
     submitState.error = '';
     submitState.duplicate = false;
-    submitState.logged = '';
     let res: SubmitResult;
     try {
         res = (await submit?.({ ...draft }, { force })) ?? { ok: true };
@@ -244,11 +248,17 @@ export async function logDraft(force = false): Promise<void> {
     }
     if (res.ok) {
         clearDraft(); // next QSO starts now
-        submitState.logged = call; // set after clearDraft (which resets it)
-    } else {
-        // Draft is preserved so nothing typed is lost; the operator fixes,
-        // retries, or — on a duplicate — forces.
-        submitState.error = res.message;
-        submitState.duplicate = res.duplicate ?? false;
+        toasts.info(`Logged ${call}`);
+        return true;
     }
+    if (res.duplicate) {
+        // Card-local: the refusal with a follow-up action. Draft preserved.
+        submitState.error = res.message;
+        submitState.duplicate = true;
+    } else {
+        // Draft is preserved so nothing typed is lost; the operator fixes
+        // and retries. The message itself is a toast — off the card.
+        toasts.error(res.message);
+    }
+    return false;
 }

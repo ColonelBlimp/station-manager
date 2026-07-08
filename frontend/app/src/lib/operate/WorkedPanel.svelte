@@ -4,10 +4,11 @@
     // lookup); fills whatever host it's given (ADR 0045) — today the InfoPanel
     // below the logging card.
     import { worked } from './worked.svelte';
+    const tableHeight = 'h-55';
 </script>
 
 {#if worked.status === 'done' && worked.qsos.length > 0}
-    <div class="h-55 overflow-y-scroll">
+    <div class="{tableHeight} overflow-y-auto">
         <table class="table-fixed">
             <thead class="bg-surface sticky top-0 z-10">
                 <tr class="text-xs text-muted text-left font-medium">
@@ -36,15 +37,15 @@
         </table>
     </div>
 {:else if worked.status === 'pending'}
-    <div class="flex h-24 items-center justify-center text-sm text-muted">
+    <div class="flex {tableHeight} items-center justify-center text-sm text-muted">
         Checking {worked.call}…
     </div>
 {:else if worked.status === 'done'}
-    <div class="flex h-24 items-center justify-center text-sm text-muted">
+    <div class="flex {tableHeight} items-center justify-center text-sm text-muted">
         No previous QSOs with {worked.call}.
     </div>
 {:else}
-    <div class="flex h-24 items-center justify-center text-sm text-muted">
+    <div class="flex {tableHeight} items-center justify-center text-sm text-muted">
         Previous QSOs appear here as you type a callsign.
     </div>
 {/if}
