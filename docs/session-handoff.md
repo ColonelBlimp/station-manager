@@ -83,15 +83,45 @@ precisely so we don't re-derive state or redo finished work.
 >   Rig's), Rig rail = arrows-right-left (operator-supplied), Sidebar's
 >   shadowed operate branch synced. Rename "Rig"→"Rig Control" agreed for
 >   WHEN control ops land (inbox note names the two touch points).
-> - 284 SPA tests green (was 234 at session start: +CAT-link machine,
->   +transport, +bridge-block parsing, +frequency validator's 27).
+> - **`rstDefaultFor` SHIPPED (the thrice-parked item):** CW→`599`, else
+>   `59` (shipping parity incl. the '59'-passes-SNR-pattern quirk). A
+>   module-level fill effect overwrites both report fields ONLY when the
+>   default changes — it tracks a memoized `$derived`, not `rig.mode`, so
+>   USB↔LSB↔FT8 hops never clobber a typed report; only a CW↔voice boundary
+>   crossing rewrites (deliberate clobber, shipping tradeoff, documented
+>   in-code). `clearDraft` resets to the CURRENT mode default. Shipping's
+>   no-empty-refill lesson preserved. **Live-verified: CW-U on the rig flips
+>   the form to 599/599.** The rig SSE made this urgent — mode changes under
+>   the operator now.
+> - **Confirm-once-per-band CAT gate SHIPPED + operator-tested (ADR 0044's
+>   full design target — the first-pass `off|connected|lost` gate is
+>   superseded):** `rigGate()` = `live` / `manual` (off + THIS band
+>   confirmed) / `unconfirmed` (off, not asserted — blocks) / `lost`
+>   (blocks). Enforced in `logDraft` itself, not only the buttons (the
+>   Log-anyway bypass lesson). Decisions: **single-slot confirm memory**
+>   (any band change re-arms, including returns — simpler + safer than a
+>   session set); **Go manual merged into Confirm** (on `lost` the button is
+>   "Go manual — confirm": ownership + assertion in one act); **values
+>   persist, confirmation doesn't** (band/mode/freq → localStorage
+>   `sm.rig.context` for the fast next-session prefill; the confirm is a
+>   per-session assertion by design). Surface: **header chip** live
+>   (always-visible `freq · mode · band` + status dot, click → Rig panel —
+>   the Header's "lands with the operating surface" placeholder is
+>   fulfilled); InfoPanel pill gained amber "Manual — confirm to log";
+>   entering Operate with a blocked gate **auto-opens the Rig panel** (only
+>   if no panel is open — never a takeover; mid-session gate changes = the
+>   deferred rail badge). Known softness, noted: on boot with CAT up
+>   there's a sub-second `unconfirmed` window before the first rig-state,
+>   so the Rig panel auto-opens then the gate lifts green — harmless,
+>   fix-if-annoying (delay the auto-open check).
+> - 292 SPA tests green (was 234 at session start: +CAT-link machine,
+>   +transport, +bridge-block parsing, +frequency validator's 27, +RST
+>   defaults, +gate).
 >
-> **NEXT (frontend/app):** the fuller **confirm-once-per-band CAT gate**
-> (ADR 0044 — Go manual is the interim), the **rstDefaultFor** machinery
-> (CW→599 mode-tracking defaults, parked three times now), **rig control**
-> (ADR 0026 ops: VFO click-to-swap, band step, set_mode — brings the "Rig
-> Control" rename), then the **FT8 surface**.
-> **COMMIT STATE: committed through `98522683` (rig SSE round);
+> **NEXT (frontend/app):** **rig control** (ADR 0026 ops: VFO
+> click-to-swap, band step, set_mode — brings the "Rig Control" rename
+> from the inbox), then the **FT8 surface**.
+> **COMMIT STATE: committed through `7837ee48` (defaults + confirm gate);
 > UNCOMMITTED = this handoff only.** The local daemon is still the DEV
 > daemon (`build/` working dir).
 
