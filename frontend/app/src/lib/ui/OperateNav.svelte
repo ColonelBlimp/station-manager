@@ -8,6 +8,12 @@
     // Start expanded when we're already on Operate.
     let open = $state(router.view === 'operate');
 
+    // Narrow-rail flyout is CSS :hover/:focus-within-driven, so after a click
+    // the pointer is still hovering and the clicked button still has focus —
+    // it would sit open until the mouse wanders off. Suppress it on any click
+    // (parent or flyout item); the pointer leaving the item re-arms hover.
+    let flyoutSuppressed = $state(false);
+
     const modes: { mode: OpMode; label: string }[] = [
         { mode: 'phone', label: 'Phone / CW' },
         { mode: 'ft8', label: 'FT8' },
@@ -52,14 +58,23 @@
     {/if}
 {/snippet}
 
-<li class="nav-operate relative">
+<li
+    class="nav-operate relative"
+    class:flyout-suppressed={flyoutSuppressed}
+    onmouseleave={() => (flyoutSuppressed = false)}
+>
     <button
         class="nav-item"
         title="Operate"
         aria-expanded={open}
-        onclick={() => {
+        onclick={(e) => {
             navigate('operate');
             open = !open;
+            flyoutSuppressed = true;
+            // A mouse click leaves the button focused, so :focus-within would
+            // reopen the flyout the moment mouseleave clears the suppression —
+            // drop the focus. Keyboard activation (detail === 0) keeps it.
+            if (e.detail > 0) e.currentTarget.blur();
         }}
     >
         <svg
@@ -112,7 +127,10 @@
                 <button
                     class="op-flyout-item"
                     data-active={isActive(m.mode) ? 'true' : 'false'}
-                    onclick={() => setMode(m.mode)}
+                    onclick={() => {
+                        setMode(m.mode);
+                        flyoutSuppressed = true;
+                    }}
                 >
                     {@render modeIcon(m.mode)}
                     {m.label}

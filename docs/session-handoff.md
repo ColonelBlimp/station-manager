@@ -117,13 +117,26 @@ precisely so we don't re-derive state or redo finished work.
 > - 292 SPA tests green (was 234 at session start: +CAT-link machine,
 >   +transport, +bridge-block parsing, +frequency validator's 27, +RST
 >   defaults, +gate).
+> - **Narrow-rail Operate flyout stuck-open FIXED (operator catch):** the
+>   flyout is CSS `:hover`/`:focus-within`-driven, so a click never closed
+>   it — pointer still hovering AND the clicked button keeps focus. Fix in
+>   `OperateNav.svelte` + `app.css`: a `flyout-suppressed` class set on any
+>   click (parent or flyout item), CSS override placed AFTER the show rules
+>   (wins by source order at equal specificity), cleared on mouseleave to
+>   re-arm hover — PLUS a mouse-click blur on the parent (`e.detail > 0`
+>   distinguishes mouse from keyboard activation), because retained focus
+>   re-opened the flyout via `:focus-within` the moment mouseleave cleared
+>   the suppression. Keyboard activation keeps focus (a11y); known limit
+>   noted in-code: a keyboard user's suppression only re-arms on a pointer
+>   move.
 >
 > **NEXT (frontend/app):** **rig control** (ADR 0026 ops: VFO
 > click-to-swap, band step, set_mode — brings the "Rig Control" rename
 > from the inbox), then the **FT8 surface**.
-> **COMMIT STATE: committed through `7837ee48` (defaults + confirm gate);
-> UNCOMMITTED = this handoff only.** The local daemon is still the DEV
-> daemon (`build/` working dir).
+> **COMMIT STATE: committed through `6e10b9df` (handoff for defaults +
+> gate); UNCOMMITTED = the flyout fix (`OperateNav.svelte` / `app.css`)
+> and this handoff.** The local daemon is still the DEV daemon (`build/`
+> working dir).
 
 > **Session 205 (2026-07-07, same day) — `frontend/app/` Log-QSO side FINISHED:
 > enrichment lookup gate + the mode.ts port + mode-aware report validation.**

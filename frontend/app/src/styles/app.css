@@ -141,6 +141,12 @@ html[data-nav='narrow'] .nav-operate:hover .op-flyout,
 html[data-nav='narrow'] .nav-operate:focus-within .op-flyout {
     display: block;
 }
+/* Post-click suppression (OperateNav sets the class): equal specificity to
+   the show rules above, so source order makes it win — keep it AFTER them.
+   Cleared on mouseleave, which re-arms the hover open. */
+html[data-nav='narrow'] .nav-operate.flyout-suppressed .op-flyout {
+    display: none;
+}
 
 @layer components {
     /* Nav items — semantic tokens carry the palette; icons are a touch more
