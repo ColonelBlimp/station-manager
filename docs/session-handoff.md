@@ -32,6 +32,37 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-08)
 
+> **Session 209 (2026-07-08, same day) — `frontend/app` Operate polish +
+> the draggable/pinnable tile-layout decision (ADR 0046 + POC).** Reuse-first
+> ([[sm-reuse-dogfood-spas-first]]) throughout.
+>
+> - **Contact overlay replaces the Details card.** The always-on Details panel
+>   + its rail glyph are **gone** (`DetailsPanel.svelte` deleted, `'details'`
+>   off the `Panel` type). A new **`ContactDialog.svelte`** overlay opens from
+>   the **Worked** card's **View…** button — enabled only when a QSO is underway
+>   (`qsoClock.started`). It shows ONLY what isn't already on the logging card /
+>   header (no repeats): **QRZ page link, email, CQ/ITU zone** (read-only
+>   enrichment) + **Gridsquare, QTH, Rig, Notes** (operator fields). **View-only
+>   by default; a pencil Edit glyph** unlocks the operator fields (grid included
+>   — its only editing home now, off the fast path). Plumbing: `notes` + `rig`
+>   added to `QsoDraft`; the submit sink now emits ADIF `RIG`/`NOTES`/`CQZ`/`ITUZ`;
+>   `Enrichment` gained `email`/`cqZone`/`ituZone` (mapped in `apiEnrich` from
+>   `station.email` + `country.cq_zone`/`itu_zone`). check/lint/336 tests green.
+> - **Smaller Operate tweaks:** favicon stroke thinned (150→130, `public/logo.svg`
+>   only — in-app `Logo.svelte` untouched); Worked-card **View…** button; Worked
+>   panel auto-opens on Tab (QSO start) if nothing's open; the unconfirmed-CAT
+>   Log-QSO tooltip now states the block ("Cannot log yet — confirm…").
+> - **Tile-layout feature DECIDED (not built): [ADR 0046](decisions/0046-operate-tile-layout.md).**
+>   Resolves ADR 0044's deferred content-model fork toward a **tiling** model —
+>   fixed-size tiles, **no overlap** (reflow), non-destructive Default, **single
+>   global pin** (not per-card), cards unchanged in size/content, CardFrame chrome
+>   only in an explicit arrange mode, rail → show/hide-a-tile. Validated by a
+>   pointer-drag **POC at `docs/v2-design/tile-layout-poc/`** (interaction only —
+>   no persistence, no Svelte). Design guards recorded so per-op-profile
+>   persistence is later *wiring*, not a refactor. Deferred to lift time: one
+>   shared arrangement vs per-Operate-sub-mode; adaptive column count. **The lift
+>   into `frontend/app` is the next larger build for this arc.**
+>
 > **Session 208 (2026-07-08, same day) — session export/email + session timer
 > for `frontend/app`; a hard reuse-first lesson.** The operator drove a
 > **reuse-the-dogfood-SPAs-first** principle (now memory
