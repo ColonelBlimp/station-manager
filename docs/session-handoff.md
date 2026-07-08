@@ -81,8 +81,21 @@ precisely so we don't re-derive state or redo finished work.
 >   profile-keyed). `layout.svelte.test.ts` (5) locks show/hide + reset + pin;
 >   check/lint/**341** tests/build green. Known: cross-column drag of the logging
 >   tile briefly remounts it (Svelte each-block boundary) → refocuses callsign;
->   harmless in arrange. Captured this session (inbox, not acted): log-anyway
->   rig-gate warning, ADIF export missing MY_* fields, close-card→refocus callsign.
+>   harmless in arrange.
+> - **Two dogfood fixes (frontend/app):** (1) Tab-to-start a QSO now **warns via
+>   toast** when the rig gate is unconfirmed/lost (clock still starts; explains
+>   the disabled Log button); (2) each info-card's **X refocuses the callsign
+>   input** (`hideTile`→`focusCallsign`). check/lint/341 green.
+> - **Inbox TRIAGED (2026-07-08).** Everything untriaged dispositioned; only #73
+>   (name-overflow, in progress) left plain. → `backlog.md`: **P1** stale
+>   `TestVersion_HappyPath` (schema 3→4); **P2** new _Daemon/data_ line — ADIF
+>   export omits `MY_*` (investigate, possible data-loss) · fill `country.dxcc`
+>   number · enrich abort-WARN→debug · RST-validator backport to logging SPA ·
+>   "Rig"→"Rig Control" rename with rig-control; **P3** MY_RIG follow-CAT ·
+>   single-source freq→band · tune-carrier occupancy (pending HW) · world map ·
+>   FT8 band-hop · voice-keyer/copilot · movable nav. **Struck as scope-notes**
+>   (decided, not backlog): DX-cluster (don't build) · MQTT (P4 only) · app-name
+>   (keep). Draggable-card notes marked IMPLEMENTED.
 >
 > **Session 208 (2026-07-08, same day) — session export/email + session timer
 > for `frontend/app`; a hard reuse-first lesson.** The operator drove a
