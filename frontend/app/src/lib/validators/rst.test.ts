@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isValidRst, isValidSignalReport } from './rst';
+import { isValidRs, isValidRst, isValidSignalReport } from './rst';
 
 describe('isValidRst', () => {
     it('accepts a 2-digit RST', () => {
@@ -28,6 +28,46 @@ describe('isValidRst', () => {
 
     it('rejects letters', () => {
         expect(isValidRst('5A9')).toBe('validators.rst');
+    });
+
+    // The scale, not just the shape (operator catch 2026-07-08).
+    it('rejects readability above 5', () => {
+        expect(isValidRst('77')).toBe('validators.rst');
+        expect(isValidRst('69')).toBe('validators.rst');
+    });
+
+    it('rejects zero in any position', () => {
+        expect(isValidRst('000')).toBe('validators.rst');
+        expect(isValidRst('50')).toBe('validators.rst');
+        expect(isValidRst('09')).toBe('validators.rst');
+        expect(isValidRst('590')).toBe('validators.rst');
+    });
+
+    it('accepts honest weak-signal reports', () => {
+        expect(isValidRst('31')).toBeNull();
+        expect(isValidRst('44')).toBeNull();
+        expect(isValidRst('339')).toBeNull();
+    });
+});
+
+describe('isValidRs (voice / non-CW digital — no tone digit)', () => {
+    it('accepts two-digit RS on the scale', () => {
+        expect(isValidRs('59')).toBeNull();
+        expect(isValidRs('31')).toBeNull();
+    });
+
+    it('rejects a three-digit report — tone is CW-only', () => {
+        expect(isValidRs('599')).toBe('validators.rs');
+    });
+
+    it('rejects off-scale values and zeros', () => {
+        expect(isValidRs('77')).toBe('validators.rs');
+        expect(isValidRs('00')).toBe('validators.rs');
+        expect(isValidRs('50')).toBe('validators.rs');
+    });
+
+    it('treats empty as not-invalid (presence is a separate concern)', () => {
+        expect(isValidRs('')).toBeNull();
     });
 });
 

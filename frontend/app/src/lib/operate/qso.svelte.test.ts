@@ -49,6 +49,22 @@ describe('report validation follows rig mode', () => {
         expect(p.rstRcvd).toBe(true);
     });
 
+    it('the tone digit is CW-only: 599 passes on CW, fails on USB and RTTY', () => {
+        draft.rstSent = '599';
+        rig.mode = 'CW';
+        expect(draftProblems().rstSent).toBe(false);
+        rig.mode = 'USB';
+        expect(draftProblems().rstSent).toBe(true);
+        rig.mode = 'RTTY';
+        expect(draftProblems().rstSent).toBe(true);
+    });
+
+    it('CW also accepts a tone-less RS report', () => {
+        rig.mode = 'CW';
+        draft.rstSent = '59';
+        expect(draftProblems().rstSent).toBe(false);
+    });
+
     it('FT8 accepts signed dB SNR reports', () => {
         rig.mode = 'FT8';
         for (const report of ['-12', '+04', '0', '15']) {

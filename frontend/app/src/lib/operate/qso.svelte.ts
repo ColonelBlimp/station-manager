@@ -6,7 +6,7 @@
 // operator-entered per-QSO data only. Presentation (LoggingCard) is separate.
 
 import { isValidCallsign } from '../validators/callsign';
-import { isValidRst, isValidSignalReport } from '../validators/rst';
+import { isValidRs, isValidRst, isValidSignalReport } from '../validators/rst';
 import { usesSignalReport } from '../utils/mode';
 import { rig, rigReady } from './rig.svelte';
 import { toasts } from '../ui/toasts.svelte';
@@ -180,9 +180,14 @@ export function draftProblems(): DraftProblems {
     const bad = (re: RegExp, v: string): boolean => v !== '' && !re.test(v.trim());
     // The report validator tracks the rig's mode (the one rig read in this
     // module — mode drives validation, it never enters the draft): WSJT-X
-    // weak-signal modes report a signed dB SNR ("-12"), which the digits-only
-    // RST check rejects — leaving Log dead for manual FT8/FT4 entry.
-    const report = usesSignalReport(rig.mode) ? isValidSignalReport : isValidRst;
+    // weak-signal modes report a signed dB SNR ("-12"); CW reports RST (tone
+    // optional); everything else reports RS — the tone digit only exists on
+    // CW, so 599 on USB is malformed.
+    const report = usesSignalReport(rig.mode)
+        ? isValidSignalReport
+        : rig.mode === 'CW'
+          ? isValidRst
+          : isValidRs;
     return {
         callsign: isValidCallsign(draft.callsign) !== null,
         rstSent: report(draft.rstSent) !== null,

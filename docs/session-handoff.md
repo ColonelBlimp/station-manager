@@ -173,6 +173,18 @@ precisely so we don't re-derive state or redo finished work.
 >   the cursor). LoggingCard registers its input on mount / unregisters on
 >   unmount — the rail never reaches into another component's DOM
 >   (ADR 0045).
+> - **RST validators tightened to the actual scale (operator catch: 77 and
+>   000 passed in USB):** the ported shape-only pattern (`[0-9]{2,3}`)
+>   became scale-aware — R 1–5, S 1–9, T 1–9, zero invalid in every
+>   position — AND mode-aware in digit count after the operator ruling
+>   **"tone is only relevant to CW"**: `isValidRst` (CW — tone optional,
+>   59 and 599 both fine) + NEW `isValidRs` (voice/RTTY/PSK31 — exactly two
+>   digits, so 599-on-USB is malformed) + the unchanged signed-dB validator
+>   for the WSJT-X family; `draftProblems` picks by rig mode. Lines up with
+>   `rstDefaultFor` (RTTY/PSK31 already defaulted to 59). 320 SPA tests
+>   green. **Backport note filed in the inbox** — shipping still carries
+>   the loose pattern (low urgency: entry-error protection, daemon is
+>   presence-only either way).
 > - **Narrow-rail Operate flyout stuck-open FIXED (operator catch):** the
 >   flyout is CSS `:hover`/`:focus-within`-driven, so a click never closed
 >   it — pointer still hovering AND the clicked button keeps focus. Fix in
@@ -189,9 +201,11 @@ precisely so we don't re-derive state or redo finished work.
 > **NEXT (frontend/app):** **rig control** (ADR 0026 ops: VFO
 > click-to-swap, band step, set_mode — brings the "Rig Control" rename
 > from the inbox), then the **FT8 surface**.
-> **COMMIT STATE: committed through `139102a2` (toast system + shortcuts +
-> panel polish + focus seam); UNCOMMITTED = this handoff only.** The local
-> daemon is still the DEV daemon (`build/` working dir).
+> **COMMIT STATE: committed through `8c1b208c` (handoff for focus/panel
+> work); UNCOMMITTED = the RST-validator round (`validators/rst.ts` +
+> tests / `qso.svelte.ts` + tests), the inbox backport note, and this
+> handoff.** The local daemon is still the DEV daemon (`build/` working
+> dir).
 
 > **Session 205 (2026-07-07, same day) — `frontend/app/` Log-QSO side FINISHED:
 > enrichment lookup gate + the mode.ts port + mode-aware report validation.**
