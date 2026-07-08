@@ -2,10 +2,13 @@
     // Sticky top bar. Carries the ADR 0044 rig chip — the always-visible
     // freq/mode/band glance anchor AND the CAT gate's status light (green
     // live / grey confirmed-manual / amber confirm-needed / red lost).
-    // Clicking it jumps to the Rig panel, where the gate is acted on.
+    // Clicking it jumps to the Rig panel, where the gate is acted on. Leading
+    // (left) is the operating-session timer — the other always-visible ambient
+    // readout, at the opposite end so the eye finds each.
     import { rig, rigGate } from '../operate/rig.svelte';
     import { operate } from '../operate/state.svelte';
     import { navigate } from '../router.svelte';
+    import SessionTimer from './SessionTimer.svelte';
 
     const gateLabel = $derived(
         rigGate() === 'live'
@@ -26,6 +29,25 @@
 <header
     class="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-line bg-surface px-4 sm:gap-x-6 sm:px-6 lg:px-8"
 >
+    <!-- Leading: operating-session timer (ambient, always visible). -->
+    <span class="flex items-center gap-x-1.5 text-sm font-medium text-ink" title="Session length">
+        <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            aria-hidden="true"
+            class="size-4 text-muted"
+        >
+            <path
+                d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            />
+        </svg>
+        <SessionTimer />
+    </span>
+
     <button
         class="ml-auto flex cursor-pointer items-center gap-x-2 rounded-full bg-surface-muted px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-muted/70"
         title="Rig panel"

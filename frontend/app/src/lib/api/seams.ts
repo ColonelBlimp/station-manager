@@ -86,6 +86,10 @@ export interface StationContext {
     logbookId: number;
     catEnabled: boolean;
     modeMappings: Record<string, AdifModePair>;
+    /** Mailer projection (daemon-managed, read-only): the Export dialog gates
+     *  the email path on `mailerEnabled` and seeds the recipient. */
+    mailerEnabled: boolean;
+    mailerDefaultRecipient: string;
 }
 
 export async function fetchStationContext(): Promise<StationContext> {
@@ -96,6 +100,8 @@ export async function fetchStationContext(): Promise<StationContext> {
         logbookId: 0,
         catEnabled: false,
         modeMappings: {},
+        mailerEnabled: false,
+        mailerDefaultRecipient: '',
     };
     const fetched = await safeFetch('/v1/config', { method: 'GET' });
     if (!fetched.ok || !fetched.response.ok) return none;
@@ -105,6 +111,7 @@ export async function fetchStationContext(): Promise<StationContext> {
     const ls = isPlainObject(body.logging_station) ? body.logging_station : {};
     const lb = isPlainObject(body.default_logbook) ? body.default_logbook : {};
     const br = isPlainObject(body.bridge) ? body.bridge : {};
+    const ml = isPlainObject(body.mailer) ? body.mailer : {};
     const str = (v: unknown): string => (typeof v === 'string' ? v : '');
     return {
         myGrid: str(ls.my_gridsquare),
@@ -113,6 +120,8 @@ export async function fetchStationContext(): Promise<StationContext> {
         logbookId: typeof lb.id === 'number' ? lb.id : 0,
         catEnabled: br.enabled === true,
         modeMappings: toModeMappings(br.mode_mappings),
+        mailerEnabled: ml.enabled === true,
+        mailerDefaultRecipient: str(ml.default_recipient),
     };
 }
 

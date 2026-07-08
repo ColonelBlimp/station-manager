@@ -2,8 +2,9 @@
     // The card-below the logging card. Shows whichever info panel the rail has
     // active (Worked/Session/Details/Rig). All four are live (on stubbed data
     // seams until the /v1 wiring).
-    import { operate, closePanel } from './state.svelte';
+    import { operate, closePanel, openExport } from './state.svelte';
     import { rig, rigGate } from './rig.svelte';
+    import { session } from './session.svelte';
     import WorkedPanel from './WorkedPanel.svelte';
     import SessionPanel from './SessionPanel.svelte';
     import DetailsPanel from './DetailsPanel.svelte';
@@ -51,23 +52,41 @@
                     </span>
                 {/if}
             </div>
-            <button
-                class="cursor-pointer rounded-md text-muted hover:text-ink"
-                title="Close"
-                onclick={closePanel}
-            >
-                <span class="sr-only">Close panel</span>
-                <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    aria-hidden="true"
-                    class="size-5"
+            <div class="flex items-center gap-x-2">
+                <!-- Session-panel header action: the deliberate export/email
+                     lives here (not on the card body, not a rail submenu) so
+                     the log table stays clean. Disabled with an empty log. -->
+                {#if operate.panel === 'session'}
+                    <button
+                        class="btn text-xs"
+                        disabled={session.qsos.length === 0}
+                        onclick={openExport}
+                    >
+                        Export…
+                    </button>
+                {/if}
+                <button
+                    class="cursor-pointer rounded-md text-muted hover:text-ink"
+                    title="Close"
+                    onclick={closePanel}
                 >
-                    <path d="M6 18 18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-            </button>
+                    <span class="sr-only">Close panel</span>
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.5"
+                        aria-hidden="true"
+                        class="size-5"
+                    >
+                        <path
+                            d="M6 18 18 6M6 6l12 12"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        />
+                    </svg>
+                </button>
+            </div>
         </div>
         <div class="mt-3">
             {#if operate.panel === 'worked'}

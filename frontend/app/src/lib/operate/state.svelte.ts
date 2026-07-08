@@ -8,7 +8,17 @@ export type Panel = 'worked' | 'session' | 'details' | 'rig';
 export const operate = $state({
     panel: null as Panel | null,
     pileup: false,
+    // Export/email dialog (opened from the Session panel's header action).
+    exportOpen: false,
 });
+
+export function openExport(): void {
+    operate.exportOpen = true;
+}
+
+export function closeExport(): void {
+    operate.exportOpen = false;
+}
 
 export function togglePanel(p: Panel): void {
     operate.panel = operate.panel === p ? null : p;

@@ -132,6 +132,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// SMTP creds; SPA owns the session list. Body shape and contract
 	// in handler_session_email.go.
 	mux.HandleFunc("POST /v1/session/email", s.handleSessionEmail)
+	mux.HandleFunc("POST /v1/session/export", s.handleSessionExport)
 
 	// Event stream (SSE firehose — see docs/v2-design/api.md §4.5).
 	// Wrapped with its own subscriber cap (NOT counted against the

@@ -157,6 +157,14 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Errors:** 503 `mailer_disabled`; 400 `invalid_json`/`missing_required_field`/`invalid_field_value`/`no_qsos`; 500 `fetch_failed`/`adif_compose_failed`; 502 `smtp_failure`.
 - **Notes:** Daemon rebuilds ADIF from live DB rows (not the client blob), archives it under `<workingDir>/exports/sent-adif/` (best-effort), then stamps `sm_fwrd_by_email_*` on the rows. Unknown UUIDs are skipped with a warning.
 
+### `POST /v1/session/export`
+- **Purpose:** Download a session's QSOs as an ADIF file (Export dialog "Download ADIF"). Same rebuild-from-DB path as `email` minus the SMTP send — so the download carries the fully enriched stored record, not the SPA's pre-submit subset.
+- **Gating:** Always-on route (no mailer gating).
+- **Request:** Body `{"uuids": []string (req, non-empty), "filename"?}` (filename defaulted `session-YYYYMMDD-HHMMSS.adi`; an operator-supplied name is a bare attachment name — traversal rejected).
+- **Response:** **200** `application/x-adif` with `Content-Disposition: attachment; filename="…"`; body is the composed ADIF document.
+- **Errors:** 400 `invalid_json`/`missing_required_field`/`invalid_field_value`/`no_qsos`; 500 `fetch_failed`/`adif_compose_failed`.
+- **Notes:** Daemon rebuilds via `adif.ComposeToAdifString(FetchQsoByUUID…)` and archives a backup under `<workingDir>/exports/sent-adif/` (best-effort, same dir as email — backup-on-export). Unknown UUIDs are skipped with a warning. Does **not** stamp rows (only an email marks "forwarded"). Fetch loop shared with `email` via `Server.fetchSessionQsos`.
+
 ---
 
 ## Config & hardware

@@ -4,6 +4,7 @@ import { enrich, prefs, setEnricher, setMyGrid } from './lib/operate/enrich.svel
 import { setHistory } from './lib/operate/worked.svelte';
 import { setSubmit } from './lib/operate/qso.svelte';
 import { addSessionQso } from './lib/operate/session.svelte';
+import { setMailer } from './lib/operate/mailer.svelte';
 import { rig, catLink, setModeMappings } from './lib/operate/rig.svelte';
 import { openRigEvents } from './lib/api/rig-sse';
 import { apiEnrich, apiHistory, fetchStationContext, type StationContext } from './lib/api/seams';
@@ -32,6 +33,8 @@ const ctx: StationContext = {
     logbookId: 0,
     catEnabled: false,
     modeMappings: {},
+    mailerEnabled: false,
+    mailerDefaultRecipient: '',
 };
 void fetchStationContext().then((c) => {
     Object.assign(ctx, c);
@@ -42,6 +45,7 @@ void fetchStationContext().then((c) => {
     // surface will re-wire that when it lands. The page unload closes the
     // EventSource; the browser owns transient reconnects.
     setModeMappings(c.modeMappings);
+    setMailer(c.mailerEnabled, c.mailerDefaultRecipient);
     if (c.catEnabled) openRigEvents(catLink);
 });
 

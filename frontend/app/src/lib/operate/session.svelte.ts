@@ -6,8 +6,8 @@
 
 export interface SessionQso {
     id: number;
-    /** Canonical daemon UUIDv7 (ADR 0016) — present once submits are live; the
-     *  future edit / email-out actions key off it. */
+    /** Canonical daemon UUIDv7 (ADR 0016) — the email-out marks + a future edit
+     *  action key off it. */
     uuid?: string;
     callsign: string;
     timeOn: string; // HH:MM:SS (UTC)

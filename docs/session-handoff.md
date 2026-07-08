@@ -32,6 +32,61 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-08)
 
+> **Session 208 (2026-07-08, same day) — session export/email + session timer
+> for `frontend/app`; a hard reuse-first lesson.** The operator drove a
+> **reuse-the-dogfood-SPAs-first** principle (now memory
+> [[sm-reuse-dogfood-spas-first]]): the frontend/app work is primarily
+> restyling battle-tested behaviour — study `frontend/logging` + the daemon
+> for the existing mechanism BEFORE building.
+>
+> - **Session export/email (Export dialog, off the Session card).** An
+>   **Export…** button in the InfoPanel header (Session panel only) opens a
+>   modal (same pattern as DuplicateDialog) with **Download ADIF** + **Send
+>   to QSL manager** — decided over an on-card control or a rail submenu
+>   (header-action keeps the log table clean; the rail stays uniform).
+>   **Email** = `session-email.ts` ported verbatim from logging → the
+>   existing `POST /v1/session/email`.
+> - **Reuse lesson (cost me two corrections):** I first built a
+>   **client-side ADIF exporter** — WRONG. It came out sparse because the
+>   daemon back-fills the record at submit (MY_* block, DXCC, zones,
+>   lat/lon); the client's pre-submit copy can't carry that. The dogfood
+>   SPAs never build ADIF client-side — they send UUIDs and the daemon
+>   rebuilds (that's what produces the rich `exports/sent-adif/` archives).
+>   Fix: **NEW daemon `POST /v1/session/export`** — reuses the *existing*
+>   `adif.ComposeToAdifString` + `archiveSessionAdif` (so a download also
+>   backs up to `exports/sent-adif/`, operator ask); the email + export
+>   handlers now share `Server.fetchSessionQsos` (honest DRY, 2 real
+>   consumers; email tests confirm the refactor). Returns `application/x-adif`
+>   attachment. SPA "Download ADIF" streams it; the client-side
+>   `adifExport.ts` + `session.adif` stash + `markEmailed`/`emailedDate` were
+>   **deleted**. **QSL column removed** from the Session card (operator).
+>   Archive-filename collision (email vs export share
+>   `session-YYYYMMDD-HHMMSS.adi`) assessed as harmless — second-precision +
+>   identical content on a same-session collision; optional `export-` prefix
+>   noted, not done.
+> - **Session timer ported** (`SessionTimer.svelte` verbatim from logging —
+>   sessionStorage `sm.session.startedAt`, survives F5, resets on tab close,
+>   per-tab) + `formatDurationHms` (+ tests) into a lean `utils/time.ts`.
+>   Placed **leading-left in the Header** (opposite the trailing rig chip —
+>   the two always-visible ambient readouts); app-wide (operator choice).
+>   The logging SPA put it in its card because that SPA had no shell; the new
+>   app's header is the better home.
+> - 336 SPA tests + 4 new Go handler tests green. Two inbox notes filed
+>   (client-aborted enrich WARN noise; stale `TestVersion_HappyPath` schema
+>   3-vs-4). `api-endpoints.md` updated for the export route.
+> - **COMMIT STATE: committed through `f7d680d7` (duplicate modal);
+>   UNCOMMITTED = the whole export/email feature (daemon
+>   `handler_session_export.go` + test, `handler_session_email.go` refactor,
+>   `server.go` route; SPA `ExportDialog.svelte`, `session-export.ts` +
+>   test, `session-email.ts`, `mailer.svelte.ts`, `seams.ts`,
+>   `session.svelte.ts`, `state.svelte.ts`, `InfoPanel.svelte`,
+>   `Operate.svelte`, `SessionPanel.svelte`, `main.ts`), the session timer
+>   (`SessionTimer.svelte`, `utils/time.ts` + test, `Header.svelte`),
+>   `DuplicateDialog.svelte` ($state cancelBtn tidy), `api-endpoints.md`,
+>   `dogfood-inbox.md`, and this handoff.** Dev daemon RESTARTED for the new
+>   route (go-run builds need a restart for daemon changes — SPA hot-reloads,
+>   daemon doesn't); still the DEV daemon (`build/` working dir), QA DB intact.
+
 > **Session 207 (2026-07-08, same day) — clean-DB live QA run of the
 > `frontend/app/` logging flow on the FTdx10.** Parked the QSO DB in
 > `build/db/backups/pre-qa-20260708/`, bootstrapped a fresh one (daemon

@@ -13,7 +13,6 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/email"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
-	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // sessionAdifArchiveDir is the working-dir-relative location where each
@@ -122,32 +121,24 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	// now. A UUID that no longer resolves (QSO soft-deleted since the
 	// SPA snapshotted the session) is skipped with a warning — the send
 	// proceeds with the rows that remain. Order follows the request so
-	// the QSL manager sees the operator's submit order.
-	qsos := make(types.QsoSlice, 0, len(reqUUIDs))
-	stampIDs := make([]int64, 0, len(reqUUIDs))
-	emailed := make([]string, 0, len(reqUUIDs))
-	for _, uuid := range reqUUIDs {
-		q, err := s.db.FetchQsoByUUIDWithContext(r.Context(), uuid)
-		if err != nil {
-			if stderrs.Is(err, errors.ErrNotFound) {
-				s.logger.WarnWith().Str("uuid", uuid).
-					Msg("session email: QSO not found, skipping")
-				continue
-			}
-			s.logger.ErrorWith().Err(err).Str("uuid", uuid).
-				Msg("session email: failed to fetch QSO")
-			s.writeError(w, http.StatusInternalServerError, "fetch_failed",
-				"failed to load session QSOs", op)
-			return
-		}
-		qsos = append(qsos, q)
-		stampIDs = append(stampIDs, q.ID)
-		emailed = append(emailed, q.UUID)
+	// the QSL manager sees the operator's submit order. Shared with the
+	// export handler via fetchSessionQsos.
+	qsos, ferr := s.fetchSessionQsos(r.Context(), reqUUIDs, "session email")
+	if ferr != nil {
+		s.writeError(w, http.StatusInternalServerError, "fetch_failed",
+			"failed to load session QSOs", op)
+		return
 	}
 	if len(qsos) == 0 {
 		s.writeError(w, http.StatusBadRequest, "no_qsos",
 			"none of the supplied QSOs could be found", op)
 		return
+	}
+	stampIDs := make([]int64, 0, len(qsos))
+	emailed := make([]string, 0, len(qsos))
+	for _, q := range qsos {
+		stampIDs = append(stampIDs, q.ID)
+		emailed = append(emailed, q.UUID)
 	}
 
 	adifBody, err := adif.ComposeToAdifString(qsos)

@@ -31,7 +31,7 @@
                         <td class="tabular-nums">{q.rstSent}</td>
                         <td class="tabular-nums">{q.rstRcvd}</td>
                         <td class="truncate">{q.name}</td>
-                        <td class="truncate" >{q.country}</td>
+                        <td class="truncate">{q.country}</td>
                     </tr>
                 {/each}
             </tbody>

@@ -16,7 +16,8 @@
     import { focusCallsign } from './state.svelte';
     import { rigReady, rigGate } from './rig.svelte';
 
-    let cancelBtn: HTMLButtonElement | undefined;
+    // $state so the focus effect re-runs once bind:this populates it.
+    let cancelBtn = $state<HTMLButtonElement>();
 
     // Focus lands on the safe action when the dialog appears.
     $effect(() => {
