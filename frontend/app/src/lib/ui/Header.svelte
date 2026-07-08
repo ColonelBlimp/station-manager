@@ -20,6 +20,17 @@
                 : 'lost'
     );
 
+    // Short hover label, keyed to the gate state.
+    const chipTitle = $derived(
+        rigGate() === 'live'
+            ? 'CAT active'
+            : rigGate() === 'manual'
+              ? 'Manual — confirmed'
+              : rigGate() === 'unconfirmed'
+                ? 'Waiting for confirmation'
+                : 'CAT link lost'
+    );
+
     function openRigPanel(): void {
         navigate('operate');
         showTile('rig'); // reveal the Rig tile if it's hidden
@@ -50,7 +61,7 @@
 
     <button
         class="ml-auto flex cursor-pointer items-center gap-x-2 rounded-full bg-surface-muted px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-muted/70"
-        title="Rig panel"
+        title={chipTitle}
         onclick={openRigPanel}
     >
         <span

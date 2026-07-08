@@ -33,6 +33,43 @@
         const band = frequencyToBand(hz);
         if (band !== '') rig.band = band;
     }
+
+    // #1 — a representative default frequency per band (CAT-off). Picking a band
+    // jumps the freq here so band + freq can't silently disagree (changing band
+    // otherwise leaves the freq on the old band). A general-portion centre only —
+    // the operator fine-tunes; mode/region-aware defaults are the band-plan
+    // feature (backlog), not this. Values in Hz; shown dot-grouped.
+    const BAND_DEFAULT_HZ: Record<string, number> = {
+        '160m': 1_900_000,
+        '80m': 3_700_000,
+        '60m': 5_357_000,
+        '40m': 7_100_000,
+        '30m': 10_125_000,
+        '20m': 14_200_000,
+        '17m': 18_130_000,
+        '15m': 21_300_000,
+        '12m': 24_950_000,
+        '10m': 28_400_000,
+        '6m': 50_150_000,
+    };
+    // Read the new band from the event target (not rig.band) so it's correct
+    // regardless of bind:value-vs-handler ordering.
+    function onBandChange(e: Event): void {
+        const hz = BAND_DEFAULT_HZ[(e.currentTarget as HTMLSelectElement).value];
+        if (hz !== undefined) rig.freq = formatFrequency(hz);
+    }
+
+    // #2 (region-AGNOSTIC) — the typed freq doesn't fall in the SELECTED band's
+    // ADIF widest envelope (`frequencyToBand`, no region data). Catches the gross
+    // band/freq mismatch (e.g. 40m selected, 14.2 MHz typed) + out-of-any-band
+    // typos. TX-legality per IARU region + national band plan is the separate
+    // band-plan feature. CAT-live: the rig owns the freq, so never flagged.
+    const freqOutOfBand = $derived.by(() => {
+        if (locked || rig.freq.trim() === '') return false;
+        const hz = parseFrequency(rig.freq);
+        if (hz === null) return false; // malformed, not an out-of-band case
+        return frequencyToBand(hz) !== rig.band;
+    });
 </script>
 
 <div class="card w-2xl">
@@ -86,7 +123,13 @@
     <div class="flex items-end gap-x-4">
         <div>
             <label for="rp-band" class="block text-sm font-medium text-ink">Band</label>
-        <select id="rp-band" class="input w-24" disabled={locked} bind:value={rig.band}>
+        <select
+            id="rp-band"
+            class="input w-24"
+            disabled={locked}
+            bind:value={rig.band}
+            onchange={onBandChange}
+        >
             {#each BANDS as b (b)}
                 <option value={b}>{b}</option>
             {/each}
@@ -131,6 +174,7 @@
             <input
                 id="rp-freq"
                 class="input w-32 tabular-nums"
+                class:input-error={freqOutOfBand}
                 autocomplete="off"
                 spellcheck="false"
                 placeholder="14.255.000"
@@ -140,24 +184,35 @@
         </div>
     {/if}
 
-    <!-- Link status is in this tile's own header (title · rig name · CAT pill);
-         only the gate affordances render here. -->
-    <div class="ml-auto flex flex-col items-end gap-y-1">
-        {#if rigGate() === 'unconfirmed' || rigGate() === 'lost'}
-            <!-- Set/Confirm (ADR 0044): the operator asserts the values are
-                 right — once per band per session. On 'lost' it also takes
-                 manual ownership (keeps the last rig values); a returning
-                 rig auto-lifts either way. -->
-            <button class="btn btn-primary text-xs" onclick={confirmRig}>
-                {rigGate() === 'lost' ? 'Go manual — confirm' : 'Confirm'}
-            </button>
-            <p class="max-w-48 text-right text-xs text-muted">
-                Logging is blocked until the band is confirmed.
-            </p>
-        {/if}
-        {#if rig.linkError !== ''}
-            <p class="max-w-56 text-right text-xs text-invalid">Bridge: {rig.linkError}</p>
-        {/if}
     </div>
-    </div>
+
+    <!-- Validation messages sit in their own row BELOW the inputs, so the error
+         text can't push the freq field out of the items-end row alignment. -->
+    {#if freqOutOfBand}
+        <p class="mt-1 text-xs text-invalid">Outside the {rig.band} band</p>
+    {/if}
+
+    <!-- Gate affordances at the card's bottom-right: message ABOVE the button.
+         Link status is in the tile header (title · rig name · CAT pill). -->
+    {#if rigGate() === 'unconfirmed' || rigGate() === 'lost' || rig.linkError !== ''}
+        <div class="mt-4 flex flex-col items-end gap-y-1">
+            {#if rig.linkError !== ''}
+                <p class="max-w-56 text-right text-xs text-invalid">Bridge: {rig.linkError}</p>
+            {/if}
+            {#if rigGate() === 'unconfirmed' || rigGate() === 'lost'}
+                <!-- Confirm (ADR 0044): the operator asserts the QSO settings
+                     (band / mode / freq) are right — once per band per session.
+                     Changing band does NOT move the freq, so this confirms the
+                     whole setting, not just the band. On 'lost' it also takes
+                     manual ownership (keeps the last rig values); a returning rig
+                     auto-lifts either way. -->
+                <p class="max-w-56 text-right text-xs text-muted">
+                    Logging is blocked until the QSO settings are confirmed.
+                </p>
+                <button class="btn btn-primary text-xs" onclick={confirmRig}>
+                    {rigGate() === 'lost' ? 'Go manual — confirm' : 'Confirm'}
+                </button>
+            {/if}
+        </div>
+    {/if}
 </div>
