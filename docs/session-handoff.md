@@ -111,6 +111,20 @@ precisely so we don't re-derive state or redo finished work.
 >   break the `items-end` alignment. **Explicitly NOT built:** region-aware
 >   TX-legality (needs IARU region + national band plan → the backlogged
 >   band-plan item). check/lint/341 green.
+> - **Code-review fixes (pasted review; fixed 1–3, skipped 4).** **#1 (High):**
+>   `LoggingCard.windowKeydown` now guards `operate.exportOpen` (Esc closes it,
+>   log/clear inert) and `operate.pileup` (inert; `PileupDrawer` owns its Esc) —
+>   was clearing the draft / logging behind an open Export modal or pile-up.
+>   **#2 (Med):** RigPanel gained a `bandOptions` derived (mirrors `modeOptions`)
+>   so a CAT/`frequencyToBand` VHF-UHF band (2m/70cm…) joins the `<select>`
+>   instead of rendering blank. **#3 (Med):** `apiHistory` drops non-object rows
+>   + rows without a unique non-empty uuid before mapping (Svelte keyed-each
+>   safety) — new test + a fixed unrealistic fixture. **#4 (Low, storage-guard
+>   wrapper) skipped** (can't bite this operator; widest change).
+> - **Worked-before list gained a Notes column** (operator added the header): `notes`
+>   plumbed through `WorkedQso` + `toWorkedQso` (`row.notes`), rendered truncated
+>   with a title tooltip. check/lint/**342** green. Inbox note (not acted): the
+>   contact-detail overlay (from the Worked panel) needs re-organising.
 >
 > **Session 208 (2026-07-08, same day) — session export/email + session timer
 > for `frontend/app`; a hard reuse-first lesson.** The operator drove a

@@ -87,3 +87,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - ~~[2026-07-08]~~ **→ backlog P2 (triage 2026-07-08, needs investigation).** ADIF export does not contain all the populated MY_ fields
 - ~~[2026-07-08] can start a QSO... but cannot log it (rig not confirmed) — want a warning~~ **FIXED 2026-07-08 (session 209):** Tab-to-start now warns via toast when the rig gate is unconfirmed/lost ("confirm the band in the Rig panel before you can log this QSO"); the QSO still starts (clock runs), the warning explains why the Log button is disabled.
 - ~~[2026-07-08] when closing a card (worked, session, etc), focus should return to the callsign input~~ **FIXED 2026-07-08 (session 209):** each info-card's hide (X) now calls `focusCallsign()` after `hideTile`, so focus returns to the callsign field.
+- [2026-07-08] contact view (from working panel) needs to be re-organized

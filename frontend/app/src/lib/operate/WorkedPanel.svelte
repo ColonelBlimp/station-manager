@@ -58,19 +58,23 @@
                             <th class="w-14">Mode</th>
                             <th class="w-10">Sent</th>
                             <th class="w-10">Rcvd</th>
-                            <th class="w-40">Name</th>
+                            <th class="w-32">Name</th>
+                            <th class="w-40">Notes</th>
                         </tr>
                     </thead>
                     <tbody>
                         {#each worked.qsos as q (q.uuid)}
-                            <tr class="border-b border-line-soft text-ink last:border-0">
+                            <tr class="text-sm border-b border-line-soft text-ink last:border-0">
                                 <td class="py-0.5 tabular-nums">{q.date}</td>
                                 <td class="tabular-nums">{q.timeOn}</td>
                                 <td class="">{q.band}</td>
                                 <td class="">{q.mode}</td>
                                 <td class="tabular-nums">{q.rstSent}</td>
                                 <td class="tabular-nums">{q.rstRcvd}</td>
-                                <td class="">{q.name}</td>
+                                <td class="overflow-x-hidden text-nowrap text-ellipsis">{q.name}</td>
+                                <td class="overflow-x-hidden text-nowrap text-ellipsis" title={q.notes}
+                                    >{q.notes}</td
+                                >
                             </tr>
                         {/each}
                     </tbody>

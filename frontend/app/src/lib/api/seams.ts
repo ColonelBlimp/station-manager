@@ -63,6 +63,7 @@ export function toWorkedQso(row: ContactHistory): WorkedQso {
         rstSent: row.rst_sent,
         rstRcvd: row.rst_rcvd,
         name: row.name,
+        notes: row.notes ?? '',
     };
 }
 
@@ -72,7 +73,20 @@ export function toWorkedQso(row: ContactHistory): WorkedQso {
 export async function apiHistory(call: string, signal?: AbortSignal): Promise<WorkedQso[]> {
     const out = await fetchContactHistory(call, signal);
     if (out.kind !== 'ok') return [];
-    return out.items.map(toWorkedQso);
+    // contact-history only validated `items` is an array, so a row could be
+    // malformed. WorkedPanel keys its {#each} on uuid — a missing uuid renders
+    // undefined data and a duplicate uuid trips Svelte 5's duplicate-key throw.
+    // Drop non-object rows + any without a unique, non-empty string uuid.
+    const rows: WorkedQso[] = [];
+    const seen: string[] = [];
+    for (const raw of out.items as unknown[]) {
+        if (!raw || typeof raw !== 'object') continue;
+        const uuid = (raw as { uuid?: unknown }).uuid;
+        if (typeof uuid !== 'string' || uuid === '' || seen.includes(uuid)) continue;
+        seen.push(uuid);
+        rows.push(toWorkedQso(raw as ContactHistory));
+    }
+    return rows;
 }
 
 /**

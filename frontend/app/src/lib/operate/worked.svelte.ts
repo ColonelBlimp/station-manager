@@ -23,6 +23,7 @@ export interface WorkedQso {
     rstSent: string;
     rstRcvd: string;
     name: string;
+    notes: string; // operator's private NOTES for that contact
 }
 
 export type WorkedStatus = 'idle' | 'pending' | 'done';

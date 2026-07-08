@@ -62,6 +62,7 @@ describe('ADIF wire → display conversions', () => {
             rstSent: '59',
             rstRcvd: '57',
             name: 'Test',
+            notes: '',
         });
     });
 });
@@ -79,10 +80,32 @@ describe('apiHistory (stubbed fetch)', () => {
     }
 
     it('returns mapped rows on 200', async () => {
-        mockFetchJSON(200, { items: [makeRow(), makeRow({ qso_date: '20251102' })] });
+        mockFetchJSON(200, {
+            items: [
+                makeRow(),
+                makeRow({ uuid: '00000000-0000-7000-8000-000000000002', qso_date: '20251102' }),
+            ],
+        });
         const rows = await apiHistory('M0XYZ');
         expect(rows).toHaveLength(2);
         expect(rows[1].date).toBe('2025-11-02');
+    });
+
+    it('drops rows without a valid uuid and dedupes duplicates (keyed-each safety)', async () => {
+        mockFetchJSON(200, {
+            items: [
+                makeRow(), // uuid …001
+                makeRow({ uuid: '' }), // missing uuid → dropped
+                null, // malformed row → dropped
+                makeRow({ qso_date: '20251102' }), // duplicate uuid …001 → dropped
+                makeRow({ uuid: '00000000-0000-7000-8000-000000000002' }), // kept
+            ],
+        });
+        const rows = await apiHistory('M0XYZ');
+        expect(rows.map((r) => r.uuid)).toEqual([
+            '00000000-0000-7000-8000-000000000001',
+            '00000000-0000-7000-8000-000000000002',
+        ]);
     });
 
     it('is fail-soft: any non-ok outcome is an empty history', async () => {

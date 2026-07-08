@@ -24,6 +24,11 @@
     // renders blank, so the current value always joins the list.
     const modeOptions = $derived(MODES.includes(rig.mode) ? MODES : [...MODES, rig.mode]);
 
+    // Same guard for the band: frequencyToBand (and CAT) can yield a VHF/UHF band
+    // (2m, 70cm, …) outside the manual HF..6m list; join the current value so the
+    // select never renders blank.
+    const bandOptions = $derived(BANDS.includes(rig.band) ? BANDS : [...BANDS, rig.band]);
+
     // Band follows the frequency (IARU allocations) so the two can't disagree
     // on the logged QSO; the select stays usable for an out-of-band/odd value.
     // parseFrequency accepts the dot-grouped display form AND decimal MHz.
@@ -130,7 +135,7 @@
             bind:value={rig.band}
             onchange={onBandChange}
         >
-            {#each BANDS as b (b)}
+            {#each bandOptions as b (b)}
                 <option value={b}>{b}</option>
             {/each}
         </select>

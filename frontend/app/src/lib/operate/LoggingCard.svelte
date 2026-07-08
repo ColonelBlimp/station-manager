@@ -26,7 +26,7 @@
     import DuplicateDialog from './DuplicateDialog.svelte';
     import { observeWorked, openWorkedForQso } from './worked.svelte';
     import { rigReady, rigGate } from './rig.svelte';
-    import { operate, closeContact, registerCallsignInput } from './state.svelte';
+    import { operate, closeContact, closeExport, registerCallsignInput } from './state.svelte';
     import { toasts } from '../ui/toasts.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
 
@@ -67,6 +67,15 @@
             }
             return;
         }
+        // Export modal open: it owns the keys. Esc closes it; the log/clear
+        // shortcuts are inert so they can't act on the card behind the modal.
+        if (operate.exportOpen) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeExport();
+            }
+            return;
+        }
         // Duplicate dialog open: it owns the keys. Esc dismisses the DIALOG
         // (never the draft underneath); Ctrl+Enter is inert so a key-repeat
         // can't accidentally force-log. Enter acts on the focused button.
@@ -78,6 +87,10 @@
             }
             return;
         }
+        // Pile-up drawer open: it owns its own Escape (PileupDrawer's window
+        // handler closes it), so the logging shortcuts just stay inert here —
+        // otherwise Esc would ALSO clear the draft, and Ctrl+Enter would log.
+        if (operate.pileup) return;
         if (e.key === 'Enter' && e.ctrlKey && !e.altKey && !e.shiftKey) {
             e.preventDefault();
             void logAndRefocus();
