@@ -104,6 +104,8 @@ setSubmit(async (q, opts) => {
         name: q.name || undefined,
         qth: q.qth || undefined,
         comment: q.comment || undefined,
+        rig: q.rig || undefined,
+        notes: q.notes || undefined,
         // An invalid grid is omitted, never a block: the grid can arrive via
         // enrichment, and gating Log on it would let a bad upstream value
         // stop logging (invariant). The Details panel shows the warning.
@@ -115,6 +117,9 @@ setSubmit(async (q, opts) => {
         // ADIF DXCC is the numeric entity; our display value may be a prefix
         // fallback (e.g. "G") — only emit real numbers.
         dxcc: e !== null && /^\d+$/.test(e.dxcc) ? e.dxcc : undefined,
+        // Contacted-station zones from the country enrichment (display + log).
+        cqZone: e?.cqZone || undefined,
+        ituZone: e?.ituZone || undefined,
         stationCallsign: ctx.stationCallsign,
         operator: ctx.operator || undefined,
         myGridSquare: ctx.myGrid || undefined,

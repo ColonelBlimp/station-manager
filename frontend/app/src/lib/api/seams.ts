@@ -32,6 +32,12 @@ export async function apiEnrich(call: string, signal?: AbortSignal): Promise<Enr
         grid: station?.gridsquare ?? '',
         name: station?.name ?? '',
         qth: station?.qth ?? '',
+        email: station?.email ?? '',
+        // Zones come from the country layer (matches the shipping SPA's
+        // DetailsPanel — the station object also carries cqz/ituz, but the
+        // country entity is the authoritative source).
+        cqZone: country?.cq_zone ?? '',
+        ituZone: country?.itu_zone ?? '',
     };
 }
 

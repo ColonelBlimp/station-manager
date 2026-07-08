@@ -1,19 +1,18 @@
 <script lang="ts">
     // The card-below the logging card. Shows whichever info panel the rail has
-    // active (Worked/Session/Details/Rig). All four are live (on stubbed data
-    // seams until the /v1 wiring).
-    import { operate, closePanel, openExport } from './state.svelte';
+    // active (Worked/Session/Rig). All live (on stubbed data seams until the
+    // /v1 wiring).
+    import { operate, closePanel, openExport, openContact } from './state.svelte';
     import { rig, rigGate } from './rig.svelte';
     import { session } from './session.svelte';
+    import { qsoClock } from './qso.svelte';
     import WorkedPanel from './WorkedPanel.svelte';
     import SessionPanel from './SessionPanel.svelte';
-    import DetailsPanel from './DetailsPanel.svelte';
     import RigPanel from './RigPanel.svelte';
 
     const titles: Record<string, string> = {
         worked: 'Worked',
         session: 'Session',
-        details: 'Details',
         rig: 'Rig',
     };
 </script>
@@ -27,7 +26,7 @@
          (= --container-2xl = 42rem). -->
     <div class="card mt-4 w-2xl ml-[calc((var(--card-w,42rem)-42rem)/2)]">
         <div class="flex items-center justify-between">
-            <div class="flex items-center gap-x-3">
+            <div class="flex items-center gap-x-3 -mt-1">
                 <h3 class="text-sm font-semibold text-ink">{titles[operate.panel]}</h3>
                 {#if operate.panel === 'rig'}
                     {#if rig.identity !== ''}
@@ -53,13 +52,27 @@
                     </span>
                 {/if}
             </div>
-            <div class="flex items-center gap-x-2">
+            <div class="flex items-center gap-x-2 -mt-1">
+                <!-- Worked-panel header action: the contact-detail overlay
+                     (everything we know + deliberate edit). Only meaningful once
+                     a QSO is underway (a contact to view), same slot as the
+                     Session panel's Export so header actions stay consistent. -->
+                {#if operate.panel === 'worked'}
+                    <button
+                        class="btn text-xs"
+                        disabled={!qsoClock.started}
+                        title={qsoClock.started ? undefined : 'Start a QSO to view contact details'}
+                        onclick={openContact}
+                    >
+                        View…
+                    </button>
+                {/if}
                 <!-- Session-panel header action: the deliberate export/email
                      lives here (not on the card body, not a rail submenu) so
                      the log table stays clean. Disabled with an empty log. -->
                 {#if operate.panel === 'session'}
                     <button
-                        class="btn text-xs -mt-3"
+                        class="btn text-xs"
                         disabled={session.qsos.length === 0}
                         onclick={openExport}
                     >
@@ -94,8 +107,6 @@
                 <WorkedPanel />
             {:else if operate.panel === 'session'}
                 <SessionPanel />
-            {:else if operate.panel === 'details'}
-                <DetailsPanel />
             {:else}
                 <RigPanel />
             {/if}

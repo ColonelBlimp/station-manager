@@ -32,8 +32,14 @@ export interface Enrichment {
     grid: string;
     /** Operator name from the lookup, '' when unknown. */
     name: string;
-    /** Their QTH from the lookup — back-filled into the draft (Details card). '' when unknown. */
+    /** Their QTH from the lookup — back-filled into the draft. '' when unknown. */
     qth: string;
+    /** Their email from the station lookup — display only (contact overlay). '' when unknown. */
+    email: string;
+    /** CQ zone (country layer). Displayed + logged as ADIF CQZ. '' when unknown. */
+    cqZone: string;
+    /** ITU zone (country layer). Displayed + logged as ADIF ITUZ. '' when unknown. */
+    ituZone: string;
 }
 
 export type EnrichStatus = 'idle' | 'pending' | 'done';

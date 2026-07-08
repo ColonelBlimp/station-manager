@@ -1,8 +1,10 @@
 <script lang="ts">
-    // Right util rail — logging info panels (Worked/Session/Details/Rig toggle a
-    // card below the logging card) + Pile-up (opens the drawer). Collapsible
+    // Right util rail — logging info panels (Worked/Session/Rig toggle a card
+    // below the logging card) + Pile-up (opens the drawer). Collapsible
     // full↔narrow like the left nav (data-util). Shown only in Operate → Phone/CW
     // (the render gate is in Operate; visibility/offset are gated on data-rail).
+    // (Details is gone — its per-QSO fields now live in the Worked card's
+    // on-demand contact overlay, not an always-on panel.)
     import { toggleUtil } from '../ui/state.svelte';
     import { operate, togglePanel, setPileup, focusCallsign, type Panel } from './state.svelte';
     import { rig } from './rig.svelte';
@@ -11,7 +13,6 @@
     // act is typing, so focus goes home to the callsign field. The Rig panel
     // is read-only too while CAT is live (fields locked) — same hand-back;
     // CAT-off/lost it keeps focus (opened to edit values or confirm).
-    // Details always keeps focus (opened to type QTH/grid).
     function onPanelClick(p: Panel): void {
         togglePanel(p);
         const readOnly =
@@ -22,7 +23,6 @@
     const panels: { key: Panel; label: string }[] = [
         { key: 'worked', label: 'Worked' },
         { key: 'session', label: 'Session' },
-        { key: 'details', label: 'Details' },
         { key: 'rig', label: 'Rig' },
     ];
 </script>
@@ -56,21 +56,6 @@
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z"
-            />
-        </svg>
-    {:else if key === 'details'}
-        <svg
-            class="size-6 shrink-0"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke-width="1.5"
-            stroke="currentColor"
-            aria-hidden="true"
-        >
-            <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Zm6-10.125a1.875 1.875 0 1 1-3.75 0 1.875 1.875 0 0 1 3.75 0ZM10.5 15.375a3 3 0 0 0-6 0v.75c0 .621.504 1.125 1.125 1.125h3.75c.621 0 1.125-.504 1.125-1.125v-.75Z"
             />
         </svg>
     {:else}

@@ -8,6 +8,7 @@
     import InfoPanel from './InfoPanel.svelte';
     import PileupDrawer from './PileupDrawer.svelte';
     import ExportDialog from './ExportDialog.svelte';
+    import ContactDialog from './ContactDialog.svelte';
 
     // Deliberately NO auto-open of the Rig panel on a blocked gate (tried
     // 2026-07-08, operator found it annoying): the header chip is the
@@ -38,3 +39,4 @@
 <UtilRail />
 <PileupDrawer />
 <ExportDialog />
+<ContactDialog />

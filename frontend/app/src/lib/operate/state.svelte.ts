@@ -3,13 +3,17 @@
 // PileupDrawer. (Left-nav + theme + right-rail collapse live in lib/ui/state;
 // this is the per-surface state.)
 
-export type Panel = 'worked' | 'session' | 'details' | 'rig';
+export type Panel = 'worked' | 'session' | 'rig';
 
 export const operate = $state({
     panel: null as Panel | null,
     pileup: false,
     // Export/email dialog (opened from the Session panel's header action).
     exportOpen: false,
+    // Contact-detail overlay (opened from the Worked panel's View action while
+    // a QSO is underway) — the everything-we-know view, and the deliberate
+    // edit-any-field surface that replaced the always-on Details card.
+    contactOpen: false,
 });
 
 export function openExport(): void {
@@ -18,6 +22,14 @@ export function openExport(): void {
 
 export function closeExport(): void {
     operate.exportOpen = false;
+}
+
+export function openContact(): void {
+    operate.contactOpen = true;
+}
+
+export function closeContact(): void {
+    operate.contactOpen = false;
 }
 
 export function togglePanel(p: Panel): void {

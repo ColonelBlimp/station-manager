@@ -80,6 +80,18 @@ export function observeWorked(raw: string): void {
     timer = setTimeout(() => void lookup(call), DEBOUNCE_MS);
 }
 
+// Tab out of the callsign field = "I'm working this station": surface the
+// worked-before panel if nothing is open. Marked as auto-opened for this call
+// so it leaves with the station on the next contact (same auto-close path as a
+// lookup-driven open); a panel the operator opened by hand is left untouched.
+export function openWorkedForQso(raw: string): void {
+    const call = raw.trim().toUpperCase();
+    if (operate.panel === null) {
+        operate.panel = 'worked';
+        autoOpenedFor = call;
+    }
+}
+
 async function lookup(call: string): Promise<void> {
     if (history === null) return; // seam not wired — stay idle
 

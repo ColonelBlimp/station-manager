@@ -23,9 +23,9 @@
         draftProblems,
     } from './qso.svelte';
     import DuplicateDialog from './DuplicateDialog.svelte';
-    import { observeWorked } from './worked.svelte';
+    import { observeWorked, openWorkedForQso } from './worked.svelte';
     import { rigReady, rigGate } from './rig.svelte';
-    import { registerCallsignInput } from './state.svelte';
+    import { operate, closeContact, registerCallsignInput } from './state.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
 
     // Why the Log button is gated, for the tooltip (undefined when it isn't).
@@ -33,7 +33,7 @@
         rigGate() === 'lost'
             ? 'CAT link lost — rig context may be stale'
             : rigGate() === 'unconfirmed'
-              ? 'Confirm band/mode/frequency in the Rig panel'
+              ? 'Cannot log yet — confirm band/mode/frequency in the Rig panel first'
               : undefined
     );
 
@@ -54,6 +54,17 @@
     }
 
     function windowKeydown(e: KeyboardEvent): void {
+        // Contact overlay open: it owns the keys. Esc closes the OVERLAY (never
+        // clears the draft underneath); log/clear shortcuts are inert so a
+        // key-repeat can't act on the card behind it.
+        if (operate.contactOpen) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeContact();
+                callInput?.focus();
+            }
+            return;
+        }
         // Duplicate dialog open: it owns the keys. Esc dismisses the DIALOG
         // (never the draft underneath); Ctrl+Enter is inert so a key-repeat
         // can't accidentally force-log. Enter acts on the focused button.
@@ -76,10 +87,14 @@
     }
 
     // Tab out of the callsign field = "I'm working this station": stamps
-    // Date/Time On and starts the ticking Time Off (the QSO timer). Tab is not
-    // swallowed — focus moves on to RST as normal.
+    // Date/Time On and starts the ticking Time Off (the QSO timer), and surfaces
+    // the worked-before panel if nothing is open. Tab is not swallowed — focus
+    // moves on to RST as normal.
     function callKeydown(e: KeyboardEvent): void {
-        if (e.key === 'Tab' && !e.shiftKey && draft.callsign.trim() !== '') startQso();
+        if (e.key === 'Tab' && !e.shiftKey && draft.callsign.trim() !== '') {
+            startQso();
+            openWorkedForQso(draft.callsign);
+        }
     }
 
     // The worked-before lookup is driven here, not in WorkedPanel: it must run

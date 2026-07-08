@@ -22,7 +22,11 @@ export interface QsoDraft {
     timeOn: string; // ADIF TIME_ON — UTC, HH:MM:SS
     dateOff: string; // ADIF QSO_DATE_OFF
     timeOff: string; // ADIF TIME_OFF
-    comment: string; // ADIF COMMENT / notes
+    comment: string; // ADIF COMMENT — things shared during the QSO (logging card)
+    // Rarely-touched per-contact fields — off the fast-path logging card, edited
+    // on demand in the contact overlay (ContactDialog).
+    rig: string; // ADIF RIG — contacted station's rig / working conditions
+    notes: string; // ADIF NOTES — operator's PRIVATE notes (distinct from COMMENT)
 }
 
 /**
@@ -50,6 +54,8 @@ function blank(): QsoDraft {
         dateOff: '',
         timeOff: '',
         comment: '',
+        rig: '',
+        notes: '',
     };
 }
 
