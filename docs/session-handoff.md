@@ -96,6 +96,21 @@ precisely so we don't re-derive state or redo finished work.
 >   FT8 band-hop · voice-keyer/copilot · movable nav. **Struck as scope-notes**
 >   (decided, not backlog): DX-cluster (don't build) · MQTT (P4 only) · app-name
 >   (keep). Draggable-card notes marked IMPLEMENTED.
+> - **Rig-panel polish + band/freq consistency (frontend/app).** Header rig-chip
+>   tooltip is gate-aware + terse ("Waiting for confirmation" when unconfirmed).
+>   RigPanel: **Confirm** moved to the card's bottom-right with the message
+>   **above** it; message reworded to "Logging is blocked until the **QSO
+>   settings** are confirmed" (band/mode/freq — changing band doesn't move the
+>   freq). **#1 default freq per band (CAT-off):** picking a band jumps the freq
+>   to a representative centre (`BAND_DEFAULT_HZ`, editable) so band+freq can't
+>   silently disagree; pairs with the existing `syncBand` (freq→band).
+>   **#2 region-AGNOSTIC out-of-band flag:** freq input red-outlines + "Outside
+>   the {band} band" when the freq isn't in the selected band's ADIF envelope
+>   (`frequencyToBand`, no region data) — catches the 40m/14.2 mismatch + out-of-
+>   any-band typos; the message sits in its OWN row below the inputs so it can't
+>   break the `items-end` alignment. **Explicitly NOT built:** region-aware
+>   TX-legality (needs IARU region + national band plan → the backlogged
+>   band-plan item). check/lint/341 green.
 >
 > **Session 208 (2026-07-08, same day) — session export/email + session timer
 > for `frontend/app`; a hard reuse-first lesson.** The operator drove a
