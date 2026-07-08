@@ -185,6 +185,18 @@ precisely so we don't re-derive state or redo finished work.
 >   green. **Backport note filed in the inbox** — shipping still carries
 >   the loose pattern (low urgency: entry-error protection, daemon is
 >   presence-only either way).
+> - **InfoPanel card centred on the logging card's axis (operator ask):**
+>   `.operate-center` anchors children to the logging card's LEFT edge (the
+>   stationary-card centring mechanism), so the wider 42rem info card stuck
+>   out to the right. Fix: a computed negative side margin —
+>   `ml-[calc((var(--card-w,42rem)-42rem)/2)]` (−57 px at the 558 px card
+>   width) — so it overhangs symmetrically; the `var()` fallback makes it a
+>   no-op outside operate-center (FT8 branch). Two noted consequences:
+>   Details rides along (one card, per-panel centring would jolt on tab
+>   switch), and at cramped widths the 57 px left overhang can clip beyond
+>   the scroll origin (the container's left stop protects the logging card;
+>   rail auto-collapse largely prevents reaching it). The 42rem appears in
+>   both `w-[42rem]` and the margin calc — keep in step (in-code comment).
 > - **Narrow-rail Operate flyout stuck-open FIXED (operator catch):** the
 >   flyout is CSS `:hover`/`:focus-within`-driven, so a click never closed
 >   it — pointer still hovering AND the clicked button keeps focus. Fix in
@@ -201,9 +213,8 @@ precisely so we don't re-derive state or redo finished work.
 > **NEXT (frontend/app):** **rig control** (ADR 0026 ops: VFO
 > click-to-swap, band step, set_mode — brings the "Rig Control" rename
 > from the inbox), then the **FT8 surface**.
-> **COMMIT STATE: committed through `8c1b208c` (handoff for focus/panel
-> work); UNCOMMITTED = the RST-validator round (`validators/rst.ts` +
-> tests / `qso.svelte.ts` + tests), the inbox backport note, and this
+> **COMMIT STATE: committed through `cc1ac6d7` (RST validators);
+> UNCOMMITTED = the InfoPanel centring (`InfoPanel.svelte`) and this
 > handoff.** The local daemon is still the DEV daemon (`build/` working
 > dir).
 
