@@ -71,21 +71,21 @@ precisely so we don't re-derive state or redo finished work.
 >   the two always-visible ambient readouts); app-wide (operator choice).
 >   The logging SPA put it in its card because that SPA had no shell; the new
 >   app's header is the better home.
+> - **Operator polish (post-build tweaks):** InfoPanel card width
+>   `w-[42rem]` → **`w-2xl`** (Tailwind v4 `--container-2xl` = 42rem —
+>   equivalent, named token; verified in built CSS, centring calc unchanged;
+>   comment updated to name `w-2xl`) + Export button `-mt-3` nudge; session
+>   timer bumped to **`text-lg`** with the header glyph at **`size-5`**.
 > - 336 SPA tests + 4 new Go handler tests green. Two inbox notes filed
 >   (client-aborted enrich WARN noise; stale `TestVersion_HappyPath` schema
 >   3-vs-4). `api-endpoints.md` updated for the export route.
-> - **COMMIT STATE: committed through `f7d680d7` (duplicate modal);
->   UNCOMMITTED = the whole export/email feature (daemon
->   `handler_session_export.go` + test, `handler_session_email.go` refactor,
->   `server.go` route; SPA `ExportDialog.svelte`, `session-export.ts` +
->   test, `session-email.ts`, `mailer.svelte.ts`, `seams.ts`,
->   `session.svelte.ts`, `state.svelte.ts`, `InfoPanel.svelte`,
->   `Operate.svelte`, `SessionPanel.svelte`, `main.ts`), the session timer
->   (`SessionTimer.svelte`, `utils/time.ts` + test, `Header.svelte`),
->   `DuplicateDialog.svelte` ($state cancelBtn tidy), `api-endpoints.md`,
->   `dogfood-inbox.md`, and this handoff.** Dev daemon RESTARTED for the new
->   route (go-run builds need a restart for daemon changes — SPA hot-reloads,
->   daemon doesn't); still the DEV daemon (`build/` working dir), QA DB intact.
+> - **COMMIT STATE: committed through `ae894b9d` (session export/email +
+>   timer + duplicate modal all landed); UNCOMMITTED = the operator polish
+>   tweaks (`InfoPanel.svelte` w-2xl + comment + button nudge,
+>   `Header.svelte` glyph size, `SessionTimer.svelte` text-lg) and this
+>   handoff.** Dev daemon RESTARTED for the export route (go-run builds need
+>   a restart for daemon changes — SPA hot-reloads, daemon doesn't); still
+>   the DEV daemon (`build/` working dir), QA DB intact.
 
 > **Session 207 (2026-07-08, same day) — clean-DB live QA run of the
 > `frontend/app/` logging flow on the FTdx10.** Parked the QSO DB in
