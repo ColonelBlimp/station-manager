@@ -269,18 +269,91 @@ html[data-util='narrow'] .util-chevron {
     transform: rotate(180deg);
 }
 
-/* Keep the logging card stationary as the sidebars collapse/expand *when there's
-   room*: anchor it to the viewport (independent of --sidebar-w / --util-rail-w)
-   instead of centring in the resizing content area. The `- var(--sidebar-w)`
-   cancels the content-wrap's left offset; matching the content-wrap's 0.2s
-   transition keeps it fixed during the collapse animation too. Clamps to the
-   content-left when the viewport is too narrow (not enough acreage). The centre
-   offset is half the card (--card-w), so width changes stay in sync. */
-.operate-center {
-    --card-w: 558px; /* logging-card width — golden ratio (φ × 354px height); LoggingCard reads it via w-(--card-w) */
+/* --- Operate tile board (ADR 0046) ----------------------------------------
+   Fixed-size tiles that pack into columns and never overlap; the drag engine
+   (TileBoard.svelte) reorders them live. --card-w is the logging-card width
+   (golden ratio, φ × 354px); LoggingCard reads it via w-(--card-w). Cards keep
+   their own size — the board only positions them. */
+:root {
+    --card-w: 558px;
+}
+.tile-board {
+    display: flex;
+    gap: 1.25rem;
+    align-items: flex-start;
+    /* Centred when it fits; auto margins clamp to 0 when the board is wider than
+       the content region, so it left-aligns and <main> scrolls (as the old
+       operate-center did). */
     width: fit-content;
-    margin-left: max(0px, calc(50vw - var(--card-w) / 2 - var(--sidebar-w)));
-    transition: margin 0.2s ease;
+    margin-inline: auto;
+}
+.tile-col {
+    display: flex;
+    flex-direction: column;
+    /* Centre tiles on a shared axis: a wider card (e.g. the 42rem info panels)
+       overhangs a narrower one (the 558px logging card) symmetrically, as the
+       old InfoPanel did — rather than left-aligning and extending right. */
+    align-items: center;
+    gap: 1rem;
+    min-width: 0;
+    border-radius: 0.75rem;
+}
+/* In arrange mode every column is a visible drop zone (incl. empty ones). */
+.tile-board.arranging .tile-col {
+    outline: 1px dashed var(--color-line);
+    outline-offset: 0.5rem;
+    min-width: 12rem;
+    min-height: 4rem;
+}
+.tile {
+    position: relative;
+    width: fit-content;
+}
+.tile-board.arranging .tile {
+    outline: 1px solid var(--color-focus);
+    outline-offset: 2px;
+    border-radius: 0.75rem;
+}
+.tile-dragging {
+    opacity: 0.4;
+}
+/* Drag chrome (arrange mode) + the floating ghost. */
+.tile-frame {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    padding: 0.25rem 0.625rem;
+    background: var(--color-surface-muted);
+    border: 1px solid var(--color-line);
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-ink);
+}
+.tile-grip {
+    cursor: grab;
+    color: var(--color-muted);
+    background: none;
+    border: none;
+    padding: 0 0.25rem;
+    letter-spacing: -2px;
+    font-size: 1rem;
+    line-height: 1;
+}
+.tile-fname {
+    flex: 1;
+}
+.tile-ghost {
+    position: fixed;
+    z-index: 60;
+    pointer-events: none;
+    opacity: 0.95;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+.tile-ghost .tile-frame {
+    margin-bottom: 0;
+    background: var(--color-surface);
 }
 
 /* --- Pile-up drawer -------------------------------------------------------

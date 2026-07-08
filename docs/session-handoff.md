@@ -60,8 +60,29 @@ precisely so we don't re-derive state or redo finished work.
 >   pointer-drag **POC at `docs/v2-design/tile-layout-poc/`** (interaction only —
 >   no persistence, no Svelte). Design guards recorded so per-op-profile
 >   persistence is later *wiring*, not a refactor. Deferred to lift time: one
->   shared arrangement vs per-Operate-sub-mode; adaptive column count. **The lift
->   into `frontend/app` is the next larger build for this arc.**
+>   shared arrangement vs per-Operate-sub-mode; adaptive column count.
+> - **Tile-layout LIFTED into `frontend/app` + browser-validated (same session).**
+>   New `layout.svelte.ts` (serialisable layout value — ordered tile ids per
+>   column + hidden set; actions; **injected persistence seam** `setLayoutPersistence`
+>   wired in `main.ts` to localStorage `sm.layout.default.phone`; tile registry),
+>   `CardFrame.svelte` (drag grip, arrange-mode only), `TileBoard.svelte`
+>   (Pointer-Events drag engine, live reorder, no overlap), `ArrangeBar.svelte`
+>   (global Pin/Unpin · Reset · Done — **fixed near the window bottom**). The
+>   single-slot `panel` model is gone: `worked.svelte` auto-open drives tile
+>   visibility, `Header` rig chip shows the Rig tile, `UtilRail` toggles tile
+>   show/hide + Arrange, the three panels are self-contained tiles (own header +
+>   action + an **always-visible X to hide**, logging excluded), `InfoPanel.svelte`
+>   deleted, `app.css` swapped `operate-center` for the board. **Decisions:**
+>   Default = logging only, info tiles **stack BELOW logging** (its column) on
+>   show — faithful to today; **centred on a shared axis** (`align-items:center`);
+>   cards keep exact size (info tiles `w-2xl`); board centres when it fits, else
+>   left-aligns + `<main>` scrolls; FT8 untouched (own tile surface = FT8 pass).
+>   Guards honoured (data-not-coords, state-driven, injected persistence,
+>   profile-keyed). `layout.svelte.test.ts` (5) locks show/hide + reset + pin;
+>   check/lint/**341** tests/build green. Known: cross-column drag of the logging
+>   tile briefly remounts it (Svelte each-block boundary) → refocuses callsign;
+>   harmless in arrange. Captured this session (inbox, not acted): log-anyway
+>   rig-gate warning, ADIF export missing MY_* fields, close-card→refocus callsign.
 >
 > **Session 208 (2026-07-08, same day) — session export/email + session timer
 > for `frontend/app`; a hard reuse-first lesson.** The operator drove a

@@ -5,6 +5,7 @@
     // Pure presentation over rig.svelte; fills whatever host it's given
     // (ADR 0045).
     import { rig, rigGate, confirmRig } from './rig.svelte';
+    import { hideTile } from './layout.svelte';
     import { formatFrequency, frequencyToBand } from '../utils/frequency';
     import { parseFrequency } from '../validators/frequency';
 
@@ -33,9 +34,54 @@
     }
 </script>
 
-<div class="flex items-end gap-x-4">
-    <div>
-        <label for="rp-band" class="block text-sm font-medium text-ink">Band</label>
+<div class="card w-2xl">
+    <!-- Self-contained tile header (ADR 0045/0046): title · rig name · CAT gate
+         pill — the glance/status that used to live on the InfoPanel wrapper. -->
+    <div class="mb-3 flex items-center gap-x-3">
+        <h3 class="text-sm font-semibold text-ink">Rig</h3>
+        {#if rig.identity !== ''}
+            <span class="text-sm text-muted">{rig.identity}</span>
+        {/if}
+        <span
+            class="flex items-center gap-x-1.5 rounded-full bg-surface-muted px-2.5 py-1 text-xs font-medium text-ink"
+        >
+            <span
+                class="size-2 rounded-full"
+                class:bg-green-500={rigGate() === 'live'}
+                class:bg-gray-400={rigGate() === 'manual'}
+                class:bg-amber-500={rigGate() === 'unconfirmed'}
+                class:bg-red-500={rigGate() === 'lost'}
+            ></span>
+            {rigGate() === 'live'
+                ? 'CAT connected'
+                : rigGate() === 'manual'
+                  ? 'Manual — confirmed'
+                  : rigGate() === 'unconfirmed'
+                    ? 'Manual — confirm to log'
+                    : 'CAT link lost'}
+        </span>
+        <button
+            class="ml-auto cursor-pointer rounded-md text-muted hover:text-ink"
+            title="Hide"
+            aria-label="Hide Rig"
+            onclick={() => hideTile('rig')}
+        >
+            <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                aria-hidden="true"
+                class="size-5"
+            >
+                <path d="M6 18 18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+        </button>
+    </div>
+
+    <div class="flex items-end gap-x-4">
+        <div>
+            <label for="rp-band" class="block text-sm font-medium text-ink">Band</label>
         <select id="rp-band" class="input w-24" disabled={locked} bind:value={rig.band}>
             {#each BANDS as b (b)}
                 <option value={b}>{b}</option>
@@ -90,8 +136,8 @@
         </div>
     {/if}
 
-    <!-- Link status lives in the host's header (InfoPanel: title · rig name ·
-         CAT pill); only the gate affordances render here. -->
+    <!-- Link status is in this tile's own header (title · rig name · CAT pill);
+         only the gate affordances render here. -->
     <div class="ml-auto flex flex-col items-end gap-y-1">
         {#if rigGate() === 'unconfirmed' || rigGate() === 'lost'}
             <!-- Set/Confirm (ADR 0044): the operator asserts the values are
@@ -108,5 +154,6 @@
         {#if rig.linkError !== ''}
             <p class="max-w-56 text-right text-xs text-invalid">Bridge: {rig.linkError}</p>
         {/if}
+    </div>
     </div>
 </div>

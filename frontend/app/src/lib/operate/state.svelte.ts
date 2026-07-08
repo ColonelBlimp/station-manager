@@ -1,16 +1,13 @@
-// Operate-surface UI state: which info panel (card-below) is open, and whether
-// the pile-up drawer is open. Shared across Operate / UtilRail / InfoPanel /
-// PileupDrawer. (Left-nav + theme + right-rail collapse live in lib/ui/state;
-// this is the per-surface state.)
-
-export type Panel = 'worked' | 'session' | 'rig';
+// Operate-surface UI state: the pile-up drawer, and the two overlays (export /
+// contact). Tile visibility + arrangement live in lib/operate/layout.svelte
+// (ADR 0046) — the single-slot `panel` model was retired with the tile board.
+// (Left-nav + theme + right-rail collapse live in lib/ui/state.)
 
 export const operate = $state({
-    panel: null as Panel | null,
     pileup: false,
-    // Export/email dialog (opened from the Session panel's header action).
+    // Export/email dialog (opened from the Session tile's header action).
     exportOpen: false,
-    // Contact-detail overlay (opened from the Worked panel's View action while
+    // Contact-detail overlay (opened from the Worked tile's View action while
     // a QSO is underway) — the everything-we-know view, and the deliberate
     // edit-any-field surface that replaced the always-on Details card.
     contactOpen: false,
@@ -30,14 +27,6 @@ export function openContact(): void {
 
 export function closeContact(): void {
     operate.contactOpen = false;
-}
-
-export function togglePanel(p: Panel): void {
-    operate.panel = operate.panel === p ? null : p;
-}
-
-export function closePanel(): void {
-    operate.panel = null;
 }
 
 export function setPileup(open: boolean): void {

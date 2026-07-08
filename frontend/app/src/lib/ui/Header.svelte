@@ -6,7 +6,7 @@
     // (left) is the operating-session timer — the other always-visible ambient
     // readout, at the opposite end so the eye finds each.
     import { rig, rigGate } from '../operate/rig.svelte';
-    import { operate } from '../operate/state.svelte';
+    import { showTile } from '../operate/layout.svelte';
     import { navigate } from '../router.svelte';
     import SessionTimer from './SessionTimer.svelte';
 
@@ -22,7 +22,7 @@
 
     function openRigPanel(): void {
         navigate('operate');
-        operate.panel = 'rig';
+        showTile('rig'); // reveal the Rig tile if it's hidden
     }
 </script>
 

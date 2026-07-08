@@ -7,7 +7,7 @@
 // Fail-soft like enrichment: a failed lookup is "done with nothing" — never an
 // error the operator has to deal with mid-QSO.
 
-import { operate } from './state.svelte';
+import { isVisible, showTile, hideTile } from './layout.svelte';
 import { isValidCallsign } from '../validators/callsign';
 
 // One previous contact, in display form. Mirrors the useful subset of the
@@ -64,10 +64,10 @@ export function observeWorked(raw: string): void {
     if (call.length < MIN_CALL_LEN || isValidCallsign(call) !== null) {
         seq++;
         inflight?.abort();
-        // The auto-opened panel leaves with the callsign that summoned it
-        // (draft logged or cleared); a manually-opened panel stays put.
-        if (operate.panel === 'worked' && autoOpenedFor !== '' && autoOpenedFor === worked.call) {
-            operate.panel = null;
+        // The auto-shown tile leaves with the callsign that summoned it (draft
+        // logged or cleared); a tile the operator opened by hand stays put.
+        if (isVisible('worked') && autoOpenedFor !== '' && autoOpenedFor === worked.call) {
+            hideTile('worked');
         }
         autoOpenedFor = '';
         worked.status = 'idle';
@@ -86,8 +86,8 @@ export function observeWorked(raw: string): void {
 // lookup-driven open); a panel the operator opened by hand is left untouched.
 export function openWorkedForQso(raw: string): void {
     const call = raw.trim().toUpperCase();
-    if (operate.panel === null) {
-        operate.panel = 'worked';
+    if (!isVisible('worked')) {
+        showTile('worked');
         autoOpenedFor = call;
     }
 }
@@ -113,11 +113,11 @@ async function lookup(call: string): Promise<void> {
     worked.qsos = rows;
     worked.status = 'done';
 
-    // Found history → surface it, but never steal the stage: only when no
-    // panel is open, and at most once per call (a re-open the operator closed
-    // stays closed for this station).
-    if (rows.length > 0 && operate.panel === null && autoOpenedFor !== call) {
-        operate.panel = 'worked';
+    // Found history → surface it, but never steal the stage: only when the
+    // worked tile is hidden, and at most once per call (a tile the operator
+    // hid stays hidden for this station).
+    if (rows.length > 0 && !isVisible('worked') && autoOpenedFor !== call) {
+        showTile('worked');
         autoOpenedFor = call;
     }
 }
