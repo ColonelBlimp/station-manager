@@ -4,7 +4,7 @@
     // connected: the rig owns them (rig-state SSE via catLink), so they lock.
     // Pure presentation over rig.svelte; fills whatever host it's given
     // (ADR 0045).
-    import { rig, goManual } from './rig.svelte';
+    import { rig, rigGate, confirmRig } from './rig.svelte';
     import { formatFrequency, frequencyToBand } from '../utils/frequency';
     import { parseFrequency } from '../validators/frequency';
 
@@ -91,13 +91,19 @@
     {/if}
 
     <!-- Link status lives in the host's header (InfoPanel: title · rig name ·
-         CAT pill); only the lost-state affordances render here. -->
+         CAT pill); only the gate affordances render here. -->
     <div class="ml-auto flex flex-col items-end gap-y-1">
-        {#if rig.cat === 'lost'}
-            <!-- Minimal stand-in for the ADR 0044 confirm flow: the operator
-                 takes manual ownership (keeps the last rig values, unblocks
-                 logging); a returning rig auto-lifts back to connected. -->
-            <button class="btn text-xs" onclick={goManual}>Go manual</button>
+        {#if rigGate() === 'unconfirmed' || rigGate() === 'lost'}
+            <!-- Set/Confirm (ADR 0044): the operator asserts the values are
+                 right — once per band per session. On 'lost' it also takes
+                 manual ownership (keeps the last rig values); a returning
+                 rig auto-lifts either way. -->
+            <button class="btn btn-primary text-xs" onclick={confirmRig}>
+                {rigGate() === 'lost' ? 'Go manual — confirm' : 'Confirm'}
+            </button>
+            <p class="max-w-48 text-right text-xs text-muted">
+                Logging is blocked until the band is confirmed.
+            </p>
         {/if}
         {#if rig.linkError !== ''}
             <p class="max-w-56 text-right text-xs text-invalid">Bridge: {rig.linkError}</p>

@@ -5,6 +5,7 @@
 // surface), so these tests are the only thing exercising it routinely.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { flushSync } from 'svelte';
 import {
     draft,
     clearDraft,
@@ -12,9 +13,12 @@ import {
     canLog,
     logDraft,
     setSubmit,
+    rstDefaultFor,
+    DEFAULT_RST_VOICE,
+    DEFAULT_RST_CW,
     type QsoDraft,
 } from './qso.svelte';
-import { rig } from './rig.svelte';
+import { rig, confirmRig } from './rig.svelte';
 
 // A loggable draft, minus the report fields under test. Times are set
 // directly (not via startQso) so no interval ticks over the values.
@@ -25,9 +29,11 @@ function fillDraft(): void {
 }
 
 beforeEach(() => {
-    clearDraft(); // also resets rstSent/rstRcvd to the '59' default
     rig.mode = 'USB';
     rig.cat = 'off';
+    confirmRig(); // satisfy the ADR 0044 gate — logDraft refuses unconfirmed CAT-off
+    flushSync(); // settle the RST default-fill effect before the case starts
+    clearDraft(); // also resets rstSent/rstRcvd to the mode default
 });
 
 describe('report validation follows rig mode', () => {
@@ -72,6 +78,51 @@ describe('report validation follows rig mode', () => {
         expect(draftProblems().rstSent).toBe(true);
         rig.mode = 'PSK31';
         expect(draftProblems().rstSent).toBe(true);
+    });
+});
+
+describe('RST defaults follow the rig mode (default-fill effect)', () => {
+    it('rstDefaultFor: CW gets the tone digit, everything else R/S', () => {
+        expect(rstDefaultFor('CW')).toBe(DEFAULT_RST_CW);
+        expect(rstDefaultFor('USB')).toBe(DEFAULT_RST_VOICE);
+        expect(rstDefaultFor('FT8')).toBe(DEFAULT_RST_VOICE); // '59' also passes the SNR pattern
+    });
+
+    it('refills both fields when the mode crosses the CW ↔ voice boundary', () => {
+        rig.mode = 'CW';
+        flushSync();
+        expect(draft.rstSent).toBe('599');
+        expect(draft.rstRcvd).toBe('599');
+        rig.mode = 'USB';
+        flushSync();
+        expect(draft.rstSent).toBe('59');
+        expect(draft.rstRcvd).toBe('59');
+    });
+
+    it('a same-family mode change never touches an operator-typed report', () => {
+        draft.rstSent = '57';
+        rig.mode = 'LSB'; // default stays '59' → memoized derived → no re-fire
+        flushSync();
+        expect(draft.rstSent).toBe('57');
+        rig.mode = 'FT8'; // still '59' — USB/LSB/FT8 share the default
+        flushSync();
+        expect(draft.rstSent).toBe('57');
+    });
+
+    it('the boundary flip deliberately clobbers a typed value (59 is meaningless on CW)', () => {
+        draft.rstSent = '47';
+        rig.mode = 'CW';
+        flushSync();
+        expect(draft.rstSent).toBe('599');
+    });
+
+    it('clearDraft resets to the CURRENT mode default, not a hardcoded 59', () => {
+        rig.mode = 'CW';
+        flushSync();
+        draft.rstSent = '579';
+        clearDraft();
+        expect(draft.rstSent).toBe('599');
+        expect(draft.rstRcvd).toBe('599');
     });
 });
 

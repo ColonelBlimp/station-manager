@@ -3,7 +3,7 @@
     // active (Worked/Session/Details/Rig). All four are live (on stubbed data
     // seams until the /v1 wiring).
     import { operate, closePanel } from './state.svelte';
-    import { rig } from './rig.svelte';
+    import { rig, rigGate } from './rig.svelte';
     import WorkedPanel from './WorkedPanel.svelte';
     import SessionPanel from './SessionPanel.svelte';
     import DetailsPanel from './DetailsPanel.svelte';
@@ -31,15 +31,18 @@
                     >
                         <span
                             class="size-2 rounded-full"
-                            class:bg-gray-400={rig.cat === 'off'}
-                            class:bg-green-500={rig.cat === 'connected'}
-                            class:bg-red-500={rig.cat === 'lost'}
+                            class:bg-green-500={rigGate() === 'live'}
+                            class:bg-gray-400={rigGate() === 'manual'}
+                            class:bg-amber-500={rigGate() === 'unconfirmed'}
+                            class:bg-red-500={rigGate() === 'lost'}
                         ></span>
-                        {rig.cat === 'off'
-                            ? 'CAT off — manual entry'
-                            : rig.cat === 'connected'
-                              ? 'CAT connected'
-                              : 'CAT link lost'}
+                        {rigGate() === 'live'
+                            ? 'CAT connected'
+                            : rigGate() === 'manual'
+                              ? 'Manual — confirmed'
+                              : rigGate() === 'unconfirmed'
+                                ? 'Manual — confirm to log'
+                                : 'CAT link lost'}
                     </span>
                 {/if}
             </div>

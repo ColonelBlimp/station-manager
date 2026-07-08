@@ -8,7 +8,7 @@
 import { isValidCallsign } from '../validators/callsign';
 import { isValidRst, isValidSignalReport } from '../validators/rst';
 import { usesSignalReport } from '../utils/mode';
-import { rig } from './rig.svelte';
+import { rig, rigReady } from './rig.svelte';
 
 export interface QsoDraft {
     callsign: string;
@@ -24,11 +24,23 @@ export interface QsoDraft {
     comment: string; // ADIF COMMENT / notes
 }
 
+/**
+ * RST default values — voice modes use the two-digit Readability/Strength
+ * scale; CW adds a third tone digit. (Ported from the shipping SPA; the
+ * WSJT-X modes keep '59', which happens to also pass the SNR pattern.)
+ */
+export const DEFAULT_RST_VOICE = '59';
+export const DEFAULT_RST_CW = '599';
+
+export function rstDefaultFor(mode: string): string {
+    return mode === 'CW' ? DEFAULT_RST_CW : DEFAULT_RST_VOICE;
+}
+
 function blank(): QsoDraft {
     return {
         callsign: '',
-        rstSent: '59',
-        rstRcvd: '59',
+        rstSent: rstDefaultFor(rig.mode),
+        rstRcvd: rstDefaultFor(rig.mode),
         name: '',
         qth: '',
         gridsquare: '',
@@ -101,6 +113,36 @@ export function stampOff(): void {
 }
 
 export const draft = $state<QsoDraft>(blank());
+
+// Memoized on purpose: the fill effect below tracks THIS, not rig.mode, so it
+// only re-fires when the default actually changes (mode crosses the CW ↔
+// voice boundary) — never on a same-family change like USB ↔ LSB, where an
+// operator-typed report must survive.
+const defaultRst = $derived(rstDefaultFor(rig.mode));
+
+/*
+    RST default-fill effect (shipping rule). $effect.root because this runs at
+    module level, outside a component lifecycle — alive for the page lifetime.
+
+    Mode-flip overwrite: refill BOTH fields when defaultRst changes. The
+    tradeoff — an operator-typed value gets clobbered if the mode flips after
+    they typed — is deliberate: '59' is meaningless on CW and '599' on voice,
+    and reports are typically set once the mode is settled. With the rig SSE
+    live this matters daily: spinning the rig to CW-U must not leave 59/59.
+
+    Intentionally NOT here (shipping learned this): an "empty → refill"
+    effect. It snapped the field back to the default the moment the operator
+    deleted the last digit mid-edit. A deliberately-blanked report still
+    submits — the daemon default-fills '59' for non-FT8 blanks, the decided
+    posture (2026-07-08 review, finding 3 skipped).
+*/
+$effect.root(() => {
+    $effect(() => {
+        const d = defaultRst;
+        draft.rstSent = d;
+        draft.rstRcvd = d;
+    });
+});
 
 export function resetDraft(): void {
     Object.assign(draft, blank());
@@ -182,7 +224,10 @@ export function setSubmit(fn: SubmitFn): void {
 export const submitState = $state({ busy: false, error: '', duplicate: false, logged: '' });
 
 export async function logDraft(force = false): Promise<void> {
-    if (!canLog() || submitState.busy) return;
+    // The CAT/rig gate is enforced HERE, not only on the buttons — a
+    // button-level-only guard grew a bypass once already (the duplicate
+    // "Log anyway" path, 2026-07-08 review finding).
+    if (!canLog() || !rigReady() || submitState.busy) return;
     stampOff(); // QSO end = now, unless the operator entered one
     const call = draft.callsign.trim().toUpperCase();
     submitState.busy = true;

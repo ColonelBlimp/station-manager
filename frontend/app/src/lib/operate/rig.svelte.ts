@@ -15,6 +15,30 @@ import type { RigStatePayload, BridgeCodePayload } from '../api/rig-sse';
 
 export type CatLink = 'off' | 'connected' | 'lost';
 
+// "Pre-filled from last session, so it's a fast confirm not data entry"
+// (ADR 0044): the operating context persists across sessions. The
+// CONFIRMATION deliberately does not — the gate is a per-session assertion
+// that the values are right NOW.
+const RIG_CTX_KEY = 'sm.rig.context';
+
+function loadRigContext(): { band: string; mode: string; freq: string } {
+    const fallback = { band: '20m', mode: 'USB', freq: '14.255.000' };
+    try {
+        const raw = localStorage.getItem(RIG_CTX_KEY);
+        if (raw === null) return fallback;
+        const p: unknown = JSON.parse(raw);
+        if (typeof p !== 'object' || p === null) return fallback;
+        const o = p as Record<string, unknown>;
+        return {
+            band: typeof o.band === 'string' && o.band !== '' ? o.band : fallback.band,
+            mode: typeof o.mode === 'string' && o.mode !== '' ? o.mode : fallback.mode,
+            freq: typeof o.freq === 'string' && o.freq !== '' ? o.freq : fallback.freq,
+        };
+    } catch {
+        return fallback; // corrupt storage never blocks boot
+    }
+}
+
 export const rig: {
     band: string;
     mode: string;
@@ -24,21 +48,22 @@ export const rig: {
     selectedVfo: 'A' | 'B';
     identity: string;
     cat: CatLink;
+    confirmedBand: string | null;
     linkError: string;
 } = $state({
-    band: '20m',
-    mode: 'USB', // operator-friendly literal (sideband, not ADIF family) — resolved at submit
+    // band/mode: operator-friendly literals (mode is a sideband, not an ADIF
+    // family — resolved at submit). freq is the SELECTED VFO's frequency in
+    // the SM dot-grouped display form ("14.199.950"). Manual entry accepts
+    // that OR decimal MHz ("14.255") — both parse unambiguously to Hz via
+    // validators/frequency parseFrequency, which every consumer uses (never
+    // parseFloat: it reads the grouped form as 14.199). Rig-pushed values are
+    // always written in the grouped form, so a confirmed-manual field starts
+    // out reading like the rig it mirrors.
+    ...loadRigContext(),
     // Rig name from the wire's rigIdentity (e.g. "FTdx10"); '' until a rig has
     // been seen. Kept across a loss — naming the rig that went away beats a
     // blank — and cleared only by the test reset.
     identity: '',
-    // The SELECTED VFO's frequency in the SM dot-grouped display form
-    // ("14.199.950"). Manual entry accepts this OR decimal MHz ("14.255") —
-    // both parse unambiguously to Hz via validators/frequency parseFrequency,
-    // which every consumer uses (never parseFloat: it reads the grouped form
-    // as 14.199). Rig-pushed values are always written in the grouped form,
-    // so a Go-manual field starts out reading like the rig it mirrors.
-    freq: '14.255.000',
     // Per-VFO Hz + selection, straight from the merge of partial rig-state
     // payloads (null until the rig reports one). The CAT-locked panel shows
     // both; freq above stays the SELECTED VFO's derivation — the value that
@@ -47,17 +72,60 @@ export const rig: {
     vfoB: null,
     selectedVfo: 'A',
     cat: 'off',
+    // The band the operator last confirmed (Set/Confirm). null = nothing
+    // confirmed this session; a band change re-arms the gate by comparison.
+    confirmedBand: null,
     linkError: '',
 });
 
-// The CAT gate for logging. 'off' = no bridge (or operator went manual), the
-// values are the operator's own entry — trusted. 'connected' = rig-pushed —
-// trusted. 'lost' = the rig WAS live this session and went away: the displayed
-// context may be stale, so logging blocks rather than record a QSO against a
-// wrong band/mode. A bridge-enabled stream that never saw the rig stays 'off'
-// — CAT configured but rig off is a manual-logging day, not a fault.
+// Persist the operating context on every change so the next session's
+// confirm is one click over familiar values, not data entry.
+$effect.root(() => {
+    $effect(() => {
+        localStorage.setItem(
+            RIG_CTX_KEY,
+            JSON.stringify({ band: rig.band, mode: rig.mode, freq: rig.freq })
+        );
+    });
+});
+
+/**
+ * The CAT / rig gate (ADR 0044, full confirm-once-per-band flow):
+ *
+ *   'live'        — rig-pushed values, correct automatically. Logs.
+ *   'manual'      — CAT off AND the operator confirmed THIS band. Logs.
+ *   'unconfirmed' — CAT off, this band not confirmed this session: the
+ *                   pre-filled context might be last week's. Blocks until
+ *                   Set/Confirm; auto-lifts if CAT comes online.
+ *   'lost'        — the rig WAS live and went away: the context may be
+ *                   stale. Blocks; Confirm takes manual ownership.
+ */
+export type RigGate = 'live' | 'manual' | 'unconfirmed' | 'lost';
+
+export function rigGate(): RigGate {
+    if (rig.cat === 'connected') return 'live';
+    if (rig.cat === 'lost') return 'lost';
+    return rig.confirmedBand === rig.band ? 'manual' : 'unconfirmed';
+}
+
 export function rigReady(): boolean {
-    return rig.cat !== 'lost';
+    const g = rigGate();
+    return g === 'live' || g === 'manual';
+}
+
+/**
+ * Set/Confirm: the operator asserts the displayed band/mode/freq are right.
+ * On 'lost' this also takes manual ownership (cat → 'off', keeping the last
+ * rig values — continuity beats defaults); a returning rig auto-lifts back
+ * to 'live' either way. Confirmation is per-band: changing band re-arms.
+ */
+export function confirmRig(): void {
+    if (rig.cat === 'connected') return; // nothing to assert — the rig speaks for itself
+    if (rig.cat === 'lost') {
+        cancelPendingLost();
+        rig.cat = 'off';
+    }
+    rig.confirmedBand = rig.band;
 }
 
 /** ADIF (MODE, SUBMODE) pair — the value shape of the bridge mode_mappings table. */
@@ -101,15 +169,6 @@ function cancelPendingLost(): void {
         clearTimeout(pendingLostTimer);
         pendingLostTimer = null;
     }
-}
-
-/** Operator takes manual ownership after a loss ('lost' → 'off'). The last
- *  rig-pushed values stay — continuity beats defaults — and a returning rig
- *  auto-lifts back to 'connected' (ADR 0044). */
-export function goManual(): void {
-    if (rig.cat !== 'lost') return;
-    cancelPendingLost();
-    rig.cat = 'off';
 }
 
 /** CAT-link state transitions, fed by the SSE transport injected in main.ts. */
@@ -173,6 +232,7 @@ export function resetCatLink(): void {
     cancelPendingLost();
     modeMappings = {};
     rig.cat = 'off';
+    rig.confirmedBand = null;
     rig.vfoA = null;
     rig.vfoB = null;
     rig.selectedVfo = 'A';

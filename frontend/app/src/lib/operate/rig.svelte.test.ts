@@ -5,11 +5,13 @@
 // link, so these tests are its routine exercise.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { flushSync } from 'svelte';
 import {
     rig,
     rigReady,
+    rigGate,
+    confirmRig,
     catLink,
-    goManual,
     setModeMappings,
     resetCatLink,
     FLASH_SUPPRESS_MS,
@@ -104,7 +106,9 @@ describe('disconnect flash suppression', () => {
         catLink.onRigDisconnected({ code: 'rig_no_data' });
         vi.advanceTimersByTime(FLASH_SUPPRESS_MS + 1);
         expect(rig.cat).toBe('off');
-        expect(rigReady()).toBe(true); // manual logging day, not a fault
+        expect(rigGate()).toBe('unconfirmed'); // not 'lost' — a fault would be
+        confirmRig();
+        expect(rigReady()).toBe(true); // manual logging day after one confirm
     });
 
     it('a blip recovered inside the window never drops the link', () => {
@@ -157,20 +161,50 @@ describe('transport error', () => {
     });
 });
 
-describe('goManual', () => {
-    it('takes manual ownership after a loss, keeping the last rig values', () => {
+describe('confirm-once-per-band gate (ADR 0044)', () => {
+    it('CAT-off blocks until the band is confirmed; a band change re-arms', () => {
+        expect(rigGate()).toBe('unconfirmed');
+        expect(rigReady()).toBe(false);
+        confirmRig();
+        expect(rigGate()).toBe('manual');
+        expect(rigReady()).toBe(true);
+        rig.band = '40m'; // single-slot memory: ANY band change re-arms
+        expect(rigGate()).toBe('unconfirmed');
+        expect(rigReady()).toBe(false);
+    });
+
+    it('confirming after a loss takes manual ownership, keeping the last rig values', () => {
         catLink.onRigState({ vfoA: 7_074_000, mode: 'USB' });
         catLink.onTransportError();
-        goManual();
+        expect(rigGate()).toBe('lost');
+        confirmRig();
         expect(rig.cat).toBe('off');
+        expect(rigGate()).toBe('manual');
         expect(rig.freq).toBe('7.074.000'); // continuity beats defaults
         expect(rigReady()).toBe(true);
     });
 
-    it('is a no-op unless lost — a live link cannot be dismissed', () => {
+    it('is a no-op while connected — the rig speaks for itself', () => {
         catLink.onRigState({ vfoA: 14_255_000 });
-        goManual();
-        expect(rig.cat).toBe('connected');
+        confirmRig();
+        expect(rig.confirmedBand).toBeNull();
+        expect(rigGate()).toBe('live');
+    });
+
+    it('CAT coming online auto-lifts an unconfirmed gate', () => {
+        expect(rigReady()).toBe(false);
+        catLink.onRigState({ vfoA: 14_255_000 });
+        expect(rigGate()).toBe('live');
+        expect(rigReady()).toBe(true);
+    });
+
+    it('persists the operating context for the next-session prefill (never the confirmation)', () => {
+        rig.band = '40m';
+        rig.mode = 'CW';
+        rig.freq = '7.030.000';
+        flushSync(); // run the persistence effect
+        const stored = JSON.parse(localStorage.getItem('sm.rig.context') ?? '{}') as unknown;
+        expect(stored).toEqual({ band: '40m', mode: 'CW', freq: '7.030.000' });
     });
 });
 

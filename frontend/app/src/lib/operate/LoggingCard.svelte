@@ -22,8 +22,17 @@
         draftProblems,
     } from './qso.svelte';
     import { observeWorked } from './worked.svelte';
-    import { rigReady } from './rig.svelte';
+    import { rigReady, rigGate } from './rig.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
+
+    // Why the Log button is gated, for the tooltip (undefined when it isn't).
+    const gateTitle = $derived(
+        rigGate() === 'lost'
+            ? 'CAT link lost — rig context may be stale'
+            : rigGate() === 'unconfirmed'
+              ? 'Confirm band/mode/frequency in the Rig panel'
+              : undefined
+    );
 
     function upperCall(): void {
         draft.callsign = draft.callsign.toUpperCase();
@@ -166,14 +175,16 @@
             </div>
             <div class="flex mt-auto justify-end gap-x-2">
                 <button class="btn" onclick={clearDraft}>Clear</button>
-                <!-- CAT gate: a lost rig link blocks logging (the band/mode on
-                     record could be stale); CAT-off manual entry logs fine.
+                <!-- CAT/rig gate (ADR 0044): 'lost' and 'unconfirmed' block
+                     logging — the context may be stale or never asserted;
+                     'live' and confirmed-'manual' log. Enforced in logDraft
+                     too; this disabled state is the UX face of it.
                      busy = in-flight POST (double-log guard). -->
                 <button
                     class="btn btn-primary"
                     onclick={() => logDraft()}
                     disabled={!canLog() || !rigReady() || submitState.busy}
-                    title={!rigReady() ? 'CAT link lost — rig context may be stale' : undefined}
+                    title={gateTitle}
                     >{submitState.busy ? 'Logging…' : 'Log QSO'}</button
                 >
             </div>
@@ -188,9 +199,7 @@
                             class="btn text-xs"
                             onclick={() => logDraft(true)}
                             disabled={!rigReady() || submitState.busy}
-                            title={!rigReady()
-                                ? 'CAT link lost — rig context may be stale'
-                                : undefined}
+                            title={gateTitle}
                         >
                             Log anyway
                         </button>
