@@ -106,16 +106,30 @@ precisely so we don't re-derive state or redo finished work.
 >   the assessment (was "deferred pending a security assessment"); upgrade
 >   path if multi-user hosting ever appears = opt-in systemd LoadCredential.
 >   **Operator action item: rotate the exposed Fastmail app password.**
+> - **Review-findings round (operator ran a review, pasted 3 findings; fixed
+>   2, skipped 1 deliberately):** (1) the duplicate **"Log anyway" button now
+>   carries the same CAT gate** (`!rigReady() || busy` + stale-CAT tooltip) as
+>   the primary Log button — it went straight to `logDraft(true)`, so a CAT
+>   drop between the duplicate refusal and the retry click could log stale rig
+>   context (academic until the rig SSE lands; fixed now so the SSE inherits a
+>   correct gate). (2) **invalid gridsquare is now omitted at the submit sink**
+>   (`main.ts`: emit only when `isValidMaidenhead` passes) — NOT blocked at
+>   `canLog()`, because enrichment writes the grid into the draft and gating
+>   Log on it would let a bad upstream value stop logging (invariant); the
+>   DetailsPanel warning stays the operator-facing signal. (3) blank-RST →
+>   daemon back-fills 59: **skipped, working as designed** — blanks only exist
+>   if the operator clears the '59' default, and the daemon presence-default
+>   is the decided posture (same as shipping + what FD relies on). 234 tests
+>   green, check + lint clean.
 >
 > **NEXT: the rig SSE** — the last seam: `/v1/rig/events` → rig state (replace
 > the sim select; shipping `bridge.svelte.ts` is the reference, incl. ~800 ms
 > flash suppression), the CAT-live `bridge.mode_mappings` literal-resolution
 > path from `/v1/config`, the fuller ADR 0044 confirm-per-band CAT gate, and
 > the rstDefaultFor machinery (CW→599 defaults). Then the FT8 surface.
-> **COMMIT STATE: committed through `70f4f8e6` (history seam);
-> UNCOMMITTED = the WorkedPanel uuid-key fix round (worked.svelte.ts /
-> seams.ts / seams.test.ts / WorkedPanel.svelte), `internal/config/doc.go`,
-> and this handoff.** The local daemon is still the DEV daemon.
+> **COMMIT STATE: committed through `3bd9872b` (review-fixes round —
+> everything above is in, incl. `internal/config/doc.go`); UNCOMMITTED =
+> this handoff only.** The local daemon is still the DEV daemon.
 
 > **Session 204 (2026-07-07) — `frontend/app/` Operate surface is now
 > INTERACTION-COMPLETE on stubbed seams.** Continued the ADR 0044/0045 build from

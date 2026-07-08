@@ -11,6 +11,7 @@ import { fetchContactHistory, type ContactHistory } from './contact-history';
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
 import type { Enrichment } from '../operate/enrich.svelte';
 import type { WorkedQso } from '../operate/worked.svelte';
+import type { AdifModePair } from '../operate/rig.svelte';
 
 /** Real enricher for setEnricher — GET /v1/enrich/callsign. The signal lets a
  *  superseded lookup cancel its in-flight daemon/upstream request. */
@@ -71,19 +72,31 @@ export async function apiHistory(call: string, signal?: AbortSignal): Promise<Wo
 /**
  * The station facts a submit needs, from GET /v1/config: my grid (also the
  * near end of the enrichment bearing), the station/operator callsigns for the
- * ADIF record, and the default logbook the POST targets. Zero-values on any
- * failure — the submit sink refuses with a clear message rather than posting
- * a QSO against the wrong logbook.
+ * ADIF record, and the default logbook the POST targets — plus the bridge
+ * facts the rig seam needs (CAT enabled gates opening the SSE; mode_mappings
+ * is the merged rigdef+override table resolving rig mode literals).
+ * Zero-values on any failure — the submit sink refuses with a clear message
+ * rather than posting a QSO against the wrong logbook, and a config failure
+ * leaves the rig surface fully manual.
  */
 export interface StationContext {
     myGrid: string;
     stationCallsign: string;
     operator: string;
     logbookId: number;
+    catEnabled: boolean;
+    modeMappings: Record<string, AdifModePair>;
 }
 
 export async function fetchStationContext(): Promise<StationContext> {
-    const none: StationContext = { myGrid: '', stationCallsign: '', operator: '', logbookId: 0 };
+    const none: StationContext = {
+        myGrid: '',
+        stationCallsign: '',
+        operator: '',
+        logbookId: 0,
+        catEnabled: false,
+        modeMappings: {},
+    };
     const fetched = await safeFetch('/v1/config', { method: 'GET' });
     if (!fetched.ok || !fetched.response.ok) return none;
     const body = await readJsonBody(fetched.response);
@@ -91,11 +104,29 @@ export async function fetchStationContext(): Promise<StationContext> {
 
     const ls = isPlainObject(body.logging_station) ? body.logging_station : {};
     const lb = isPlainObject(body.default_logbook) ? body.default_logbook : {};
+    const br = isPlainObject(body.bridge) ? body.bridge : {};
     const str = (v: unknown): string => (typeof v === 'string' ? v : '');
     return {
         myGrid: str(ls.my_gridsquare),
         stationCallsign: str(ls.station_callsign),
         operator: str(ls.operator),
         logbookId: typeof lb.id === 'number' ? lb.id : 0,
+        catEnabled: br.enabled === true,
+        modeMappings: toModeMappings(br.mode_mappings),
     };
+}
+
+/** Narrow the wire's mode_mappings to well-formed entries; anything odd is
+ *  dropped (an unmapped literal then passes through raw downstream). */
+function toModeMappings(v: unknown): Record<string, AdifModePair> {
+    if (!isPlainObject(v)) return {};
+    const out: Record<string, AdifModePair> = {};
+    for (const [literal, pair] of Object.entries(v)) {
+        if (!isPlainObject(pair) || typeof pair.mode !== 'string') continue;
+        out[literal] = {
+            mode: pair.mode,
+            submode: typeof pair.submode === 'string' ? pair.submode : undefined,
+        };
+    }
+    return out;
 }

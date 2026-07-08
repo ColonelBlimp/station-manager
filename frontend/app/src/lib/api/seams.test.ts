@@ -3,7 +3,13 @@
 // covered by contact-history.test.ts; these pin the seam's conversions.
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { adifDateToDisplay, adifTimeToDisplay, toWorkedQso, apiHistory } from './seams';
+import {
+    adifDateToDisplay,
+    adifTimeToDisplay,
+    toWorkedQso,
+    apiHistory,
+    fetchStationContext,
+} from './seams';
 import type { ContactHistory } from './contact-history';
 
 afterEach(() => {
@@ -88,5 +94,50 @@ describe('apiHistory (stubbed fetch)', () => {
             vi.fn(() => Promise.reject(new TypeError('network down')))
         );
         expect(await apiHistory('M0XYZ')).toEqual([]);
+    });
+});
+
+describe('fetchStationContext bridge block (stubbed fetch)', () => {
+    function mockConfig(body: unknown): void {
+        const response = new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+        });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(response))
+        );
+    }
+
+    it('parses catEnabled + well-formed mode_mappings, dropping malformed entries', async () => {
+        mockConfig({
+            logging_station: { my_gridsquare: 'KH66', station_callsign: '7Q5MLV' },
+            default_logbook: { id: 3 },
+            bridge: {
+                enabled: true,
+                mode_mappings: {
+                    USB: { mode: 'SSB', submode: 'USB' },
+                    'CW-U': { mode: 'CW' },
+                    BROKEN: { submode: 'no-mode-field' },
+                    ALSO_BROKEN: 'not-an-object',
+                },
+            },
+        });
+        const ctx = await fetchStationContext();
+        expect(ctx.catEnabled).toBe(true);
+        expect(ctx.modeMappings).toEqual({
+            USB: { mode: 'SSB', submode: 'USB' },
+            'CW-U': { mode: 'CW', submode: undefined },
+        });
+    });
+
+    it('defaults to CAT-off with no mappings when the bridge block is absent', async () => {
+        mockConfig({
+            logging_station: { my_gridsquare: 'KH66', station_callsign: '7Q5MLV' },
+            default_logbook: { id: 3 },
+        });
+        const ctx = await fetchStationContext();
+        expect(ctx.catEnabled).toBe(false);
+        expect(ctx.modeMappings).toEqual({});
     });
 });

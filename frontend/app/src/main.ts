@@ -4,29 +4,45 @@ import { enrich, prefs, setEnricher, setMyGrid } from './lib/operate/enrich.svel
 import { setHistory } from './lib/operate/worked.svelte';
 import { setSubmit } from './lib/operate/qso.svelte';
 import { addSessionQso } from './lib/operate/session.svelte';
-import { rig } from './lib/operate/rig.svelte';
+import { rig, catLink, setModeMappings } from './lib/operate/rig.svelte';
+import { openRigEvents } from './lib/api/rig-sse';
 import { apiEnrich, apiHistory, fetchStationContext, type StationContext } from './lib/api/seams';
 import { submitQso } from './lib/api/qso';
 import { formatAdifRecord } from './lib/utils/adif';
 import { resolveModeAndSubmode } from './lib/utils/mode';
 import { isValidMaidenhead } from './lib/validators/maidenhead';
+import { parseFrequency } from './lib/validators/frequency';
 import { pathInfo } from './lib/utils/bearing';
 import './styles/app.css';
 
 // Backend seams (ADR 0045: coupling is injected here, never imported by
-// components). Enrichment, worked-before history, station context and QSO
-// submit are all LIVE against the daemon; the remaining stub surface is the
-// rig state (dev sim select in the Rig panel, replaced by the rig SSE).
+// components). Enrichment, worked-before history, station context, QSO submit
+// and the rig SSE are all LIVE against the daemon — no stub surface remains.
 setEnricher(apiEnrich);
 setHistory(apiHistory);
 
-// Station facts a submit needs (grid / callsigns / default logbook), fetched
-// once at boot. Zero-values on failure: the submit sink refuses with a clear
-// message instead of posting against the wrong logbook.
-const ctx: StationContext = { myGrid: '', stationCallsign: '', operator: '', logbookId: 0 };
+// Station facts a submit needs (grid / callsigns / default logbook) plus the
+// bridge facts the rig seam needs, fetched once at boot. Zero-values on
+// failure: the submit sink refuses with a clear message instead of posting
+// against the wrong logbook, and the rig surface stays fully manual.
+const ctx: StationContext = {
+    myGrid: '',
+    stationCallsign: '',
+    operator: '',
+    logbookId: 0,
+    catEnabled: false,
+    modeMappings: {},
+};
 void fetchStationContext().then((c) => {
     Object.assign(ctx, c);
     setMyGrid(c.myGrid); // '' on failure → bearing row hides, fail-soft
+    // The operator's "CAT enabled" intent gates the stream (shipping rule):
+    // when false the SPA stays manual and never opens it. Config is fetched
+    // once at boot, so no enable/disable tracking here — this SPA's config
+    // surface will re-wire that when it lands. The page unload closes the
+    // EventSource; the browser owns transient reconnects.
+    setModeMappings(c.modeMappings);
+    if (c.catEnabled) openRigEvents(catLink);
 });
 
 // Submit sink: draft + rig context + displayed enrichment → one ADIF record →
@@ -44,8 +60,11 @@ setSubmit(async (q, opts) => {
     if (ctx.logbookId < 1 || ctx.stationCallsign === '') {
         return refuse('Daemon config unavailable — QSO not logged. Check the daemon and reload.');
     }
-    const freqMHz = Number.parseFloat(rig.freq);
-    if (!Number.isFinite(freqMHz) || freqMHz <= 0) {
+    // rig.freq is the dot-grouped display form when rig-fed ("14.199.950"),
+    // decimal MHz when hand-typed — parseFrequency takes both; parseFloat
+    // would silently misread the grouped form.
+    const freqHz = parseFrequency(rig.freq);
+    if (freqHz === null) {
         return refuse('Rig frequency is not set — enter it in the Rig panel.');
     }
 
@@ -77,7 +96,7 @@ setSubmit(async (q, opts) => {
         mode,
         subMode: subMode || undefined,
         band: rig.band,
-        txFreqHz: Math.round(freqMHz * 1_000_000),
+        txFreqHz: freqHz,
         name: q.name || undefined,
         qth: q.qth || undefined,
         comment: q.comment || undefined,

@@ -3,6 +3,7 @@
     // active (Worked/Session/Details/Rig). All four are live (on stubbed data
     // seams until the /v1 wiring).
     import { operate, closePanel } from './state.svelte';
+    import { rig } from './rig.svelte';
     import WorkedPanel from './WorkedPanel.svelte';
     import SessionPanel from './SessionPanel.svelte';
     import DetailsPanel from './DetailsPanel.svelte';
@@ -19,7 +20,29 @@
 {#if operate.panel}
     <div class="card mt-4 w-[42rem]">
         <div class="flex items-center justify-between">
-            <h3 class="text-sm font-semibold text-ink">{titles[operate.panel]}</h3>
+            <div class="flex items-center gap-x-3">
+                <h3 class="text-sm font-semibold text-ink">{titles[operate.panel]}</h3>
+                {#if operate.panel === 'rig'}
+                    {#if rig.identity !== ''}
+                        <span class="text-sm text-muted">{rig.identity}</span>
+                    {/if}
+                    <span
+                        class="flex items-center gap-x-1.5 rounded-full bg-surface-muted px-2.5 py-1 text-xs font-medium text-ink"
+                    >
+                        <span
+                            class="size-2 rounded-full"
+                            class:bg-gray-400={rig.cat === 'off'}
+                            class:bg-green-500={rig.cat === 'connected'}
+                            class:bg-red-500={rig.cat === 'lost'}
+                        ></span>
+                        {rig.cat === 'off'
+                            ? 'CAT off — manual entry'
+                            : rig.cat === 'connected'
+                              ? 'CAT connected'
+                              : 'CAT link lost'}
+                    </span>
+                {/if}
+            </div>
             <button
                 class="cursor-pointer rounded-md text-muted hover:text-ink"
                 title="Close"
