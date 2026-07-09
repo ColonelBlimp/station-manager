@@ -16,6 +16,10 @@ import {
     setOperatingBands,
 } from './lib/operate/rig.svelte';
 import { openRigEvents } from './lib/api/rig-sse';
+import { openFt8Events } from './lib/api/ft8-sse';
+import { setFt8Transport, setFt8OperatorCall, setFt8MyGrid } from './lib/operate/ft8.svelte';
+import { setFt8Enricher, setFt8Dupe } from './lib/operate/ft8Enrich.svelte';
+import { fetchContestDupe } from './lib/api/contest-dupe';
 import { sendRigTune } from './lib/api/rig-tune';
 import { sendRigCommand } from './lib/api/rig-command';
 import { apiEnrich, apiHistory, fetchStationContext, type StationContext } from './lib/api/seams';
@@ -32,6 +36,16 @@ import './styles/app.css';
 // and the rig SSE are all LIVE against the daemon — no stub surface remains.
 setEnricher(apiEnrich);
 setHistory(apiHistory);
+
+// FT8 SSE transport (ADR 0045: the ft8 state module never imports lib/api). The
+// FT8 view opens/closes it view-scoped via startFt8/stopFt8 — this only injects
+// the opener. Display prefs + the logged sink are wired in following increments.
+setFt8Transport(openFt8Events);
+
+// Band Activity flag enricher (ADR 0045) — the same /v1/enrich/callsign lookup
+// the logging card uses; fail-soft (a miss leaves the row undecorated). The
+// worked-before dupe seam is wired below, where the default logbook id is known.
+setFt8Enricher(apiEnrich);
 
 // Tile-layout persistence (ADR 0046) — localStorage today; the seam swaps to a
 // config.json op-profile field later without touching the layout module. The
@@ -80,6 +94,16 @@ const ctx: StationContext = {
     mailerEnabled: false,
     mailerDefaultRecipient: '',
 };
+
+// Worked-before dupe seam (/v1/contest-dupe), closing over ctx so it reads the
+// resolved default-logbook id at lookup time. No logbook → unknown (skip).
+setFt8Dupe((call, band, mode) => {
+    if (ctx.logbookId < 1) return Promise.resolve(null);
+    return fetchContestDupe({ logbook: ctx.logbookId, call, band, mode })
+        .then((o) => (o.kind === 'ok' ? o.duplicate : null))
+        .catch(() => null);
+});
+
 void fetchStationContext().then((c) => {
     Object.assign(ctx, c);
     setMyGrid(c.myGrid); // '' on failure → bearing row hides, fail-soft
@@ -110,6 +134,10 @@ void fetchStationContext().then((c) => {
         return o.kind === 'ok' ? { ok: true, message: '' } : { ok: false, message: o.message };
     });
     setMailer(c.mailerEnabled, c.mailerDefaultRecipient);
+    // Operator callsign → Band Activity flags decodes calling US (`<me> <them>`).
+    setFt8OperatorCall(c.stationCallsign);
+    // Operator grid → the near end of Band Activity's per-CQ short-path bearing.
+    setFt8MyGrid(c.myGrid);
     if (c.catEnabled) openRigEvents(catLink);
 });
 

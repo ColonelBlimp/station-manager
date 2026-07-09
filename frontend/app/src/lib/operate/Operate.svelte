@@ -11,21 +11,14 @@
     import ExportDialog from './ExportDialog.svelte';
     import ContactDialog from './ContactDialog.svelte';
     import RigKeys from './RigKeys.svelte';
+    import Ft8View from './Ft8View.svelte';
 </script>
 
 {#if router.mode === 'phone'}
     <TileBoard />
     <ArrangeBar />
 {:else}
-    <div class="mx-auto max-w-3xl">
-        <div class="card">
-            <h2 class="text-sm font-semibold text-ink">FT8</h2>
-            <p class="mt-1 text-sm text-muted">
-                Band activity, occupancy / offset picker, and the sequencer ladder — built in a
-                later pass (its own tile surface).
-            </p>
-        </div>
-    </div>
+    <Ft8View />
 {/if}
 
 <!-- Rail + drawer + overlays for the whole Operate view. -->

@@ -33,8 +33,9 @@ precisely so we don't re-derive state or redo finished work.
 ## Current state (as of 2026-07-09)
 
 > **Session 210 (2026-07-09) — `frontend/app` RIG CONTROL arc COMPLETE
-> (Slices 1–4) + configurable operating-bands (daemon + SPA); then FT8 UI DESIGN
-> settled (ADR 0047 + throwaway mock).** Goal changed
+> (Slices 1–4) + configurable operating-bands (daemon + SPA); FT8 UI DESIGN
+> settled (ADR 0047 + throwaway mock); then FT8 BUILD STARTED (increments 1–3:
+> SSE/state foundation, Band Activity + enrichment, Operate/ladder display).** Goal changed
 > this session: 7Q8AC is shipped, so `frontend/app` is now the **full-replacement
 > daily-driver target** (no external clock — build it right). Reuse-first
 > throughout ([[sm-reuse-dogfood-spas-first]]). Decided up front: **extend the
@@ -117,12 +118,36 @@ precisely so we don't re-derive state or redo finished work.
 >   pile-up drawer (Ctrl+click capture + daemon auto-drain). Cost flagged: reuse
 >   needs `EnrichmentCard`'s observed-call made a **prop** (ADR 0045). Mock is
 >   throwaway (delete on ship); ADR + mock agree.
-> - **NEXT: the FT8 BUILD** — its own arc, on this substrate + ADR 0047. The cheap
->   half (layout) is de-risked in the mock; the expensive half: split
->   `Ft8Panel.svelte` (1131L) + `ft8.svelte.ts` (643L) into presentation + injected
->   seams (ADR 0045); **view-scoped SSE** (demand-driven audio device); 5 named
->   `/v1/ft8/events` (`ft8-logged` NOT replay-cached); make `EnrichmentCard`'s call
->   a prop. **First move: extract the shared rig-control card.**
+> - **FT8 BUILD STARTED (same session) — increments 1–3 landed, all green
+>   (397 tests / check / lint / build), UNCOMMITTED.** Building the FT8 view in
+>   `frontend/app` in verifiable increments:
+>   - **(1) SSE + state foundation** — the ADR-0045 split of the shipping 643-line
+>     `ft8.svelte.ts` monolith: `lib/api/ft8-sse.ts` (pure transport, all 5 named
+>     events → injected handlers, mirrors `rig-sse.ts`) + `lib/operate/ft8.svelte.ts`
+>     (pure `ft8State`: decodes/occupancy/tx/qso + decode feed accumulate/single/cap;
+>     **view-scoped `startFt8`/`stopFt8`** for the demand-driven mic; injected seams
+>     `setFt8Transport`/`DisplayPrefs`/`LoggedSink`/`OperatorCall`/`MyGrid`).
+>   - **(2) Band Activity + enrichment** — `Ft8View.svelte` (the three-anchor shell,
+>     view-scoped lifecycle) + `Ft8BandActivity.svelte` (slot-grouped feed, sticky
+>     column header, CQ/calling tints, **flag** + **bearing** columns, **worked-aware
+>     tint**, ★ NEW). Ported verbatim: `ft8Message.ts`, `ft8Parity.ts`,
+>     `api/contest-dupe.ts`; ported `ft8Enrich.svelte.ts` with injected enricher+dupe
+>     seams (reuses `apiEnrich` + `/v1/contest-dupe`). Wired in `main.ts`;
+>     `Operate.svelte` FT8 branch → `<Ft8View>` (placeholder gone).
+>   - **(3) Operate/ladder pane (display)** — `ft8Ladder.ts` (pure role-aware ladder
+>     builder: answerer/caller/worker + FD twins + `rowFor` current-row) +
+>     `Ft8Operate.svelte` (working-station, **live slot pill** TX-red/listen-green +
+>     1 s countdown, message ladder w/ ✓/highlight/`sent ×N`). Occupancy still stub.
+>   - **Deferred (flagged in code):** `markWorked`→`ft8-logged` (session increment);
+>     the `EnrichmentCard`-as-prop reuse (Operate uses a lean working block for now);
+>     `ft8_display` config read (defaults for now).
+> - **NEXT: the FT8 TX increment (first RF from this SPA)** — the Operate control bar
+>   (**Arm / Call CQ / Abandon / Next**, ports `api/ft8tx.ts`+`ft8qso.ts` as injected
+>   action seams) + **Band-Activity click-to-answer / Ctrl-click-to-pile-up**. Its own
+>   increment + on-air validation (same care as the tune button). Then: Occupancy pane,
+>   the `ft8-logged` session wiring, the shared-rig-card extraction, and FT8 band
+>   buttons (watering-hole `onPick`). Remaining shipping refs: `Ft8MsgPanel` (controls),
+>   `Ft8OccupancyStrip`/`Spectrum`, `ft8PileupStack`.
 
 > **Session 209 (2026-07-08, same day) — `frontend/app` Operate polish +
 > the draggable/pinnable tile-layout decision (ADR 0046 + POC).** Reuse-first
