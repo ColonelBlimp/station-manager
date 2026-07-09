@@ -30,7 +30,80 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-08)
+## Current state (as of 2026-07-09)
+
+> **Session 210 (2026-07-09) — `frontend/app` RIG CONTROL arc COMPLETE
+> (Slices 1–4) + configurable operating-bands (daemon + SPA).** Goal changed
+> this session: 7Q8AC is shipped, so `frontend/app` is now the **full-replacement
+> daily-driver target** (no external clock — build it right). Reuse-first
+> throughout ([[sm-reuse-dogfood-spas-first]]). Decided up front: **extend the
+> single `rig` object, do NOT re-import the shipping four-object CAT model**
+> (ADR 0009); and the rig-control *substrate* comes before the FT8 port because
+> FT8's band-tuning + TX sit on it. Built in vertical slices, each dogfoodable:
+> - **Slice 0/1 — capability advertisement + Tune.** `fetchStationContext`/
+>   `StationContext` now carry `ops[]`/`tune`/`rigModes[]` from `BridgeInfo`
+>   (JSON tags `ops`/`tune`/`rig_modes`, all `omitempty` → default closed);
+>   `rigCaps` + `hasOp()` gate every control (hidden, not disabled, when the rig
+>   doesn't expose it). New `rig-tune.ts` client + `tune-state` SSE listener
+>   (added to `rig-sse.ts`) + `catLink.onTuneState` → `rig.tuneActive`
+>   (confirm-by-push, no optimistic flip). Tune button in RigPanel (red-pulse
+>   when keyed). **Validated on-air (operator: "Tune works").**
+> - **Slice 2 — VFO swap.** `rig-command.ts` client (`POST /v1/rig/command`) +
+>   injected `setCommandSender`; `selectVfo`/`swapVfo` with the optimistic
+>   `vfoB` mirror + rollback (dual-VFO rig overwrites via push; single-RX rig
+>   shows it at once; rejection rolls back). CAT-locked VFO read-outs are now
+>   click-to-swap. **Validated on-air ("Swap works").**
+> - **Slice 3 — band selector + live mode.** Live Option-A mode dropdown (rig's
+>   own `rigModes` literals → `set_mode`; added `rig.modeLiteral` beside the
+>   friendly `rig.mode`; optimistic + rollback). Band started as ▲▼ steppers,
+>   then — per operator ("stepping 160→10 is friction") — replaced with a
+>   **button-per-band grid** (direct jump; the active highlight follows
+>   `rig.band`, so confirm-by-push has no snap-back). Live click → `set_band`
+>   (rig restores that band's stack freq+mode); manual → band + default freq.
+> - **Configurable operating-bands (daemon + SPA).** New station-level
+>   `station.operating_bands []string` (`internal/types/station.go`), validated
+>   at BOTH load + PUT (`validateStationPrefs` via `enums/bands`: known band, no
+>   dupes; `validate_station_test.go`; `config.md` §5). Served/PUT for free (the
+>   `station` block is whole-overlay). SPA: `StationContext.operatingBands` →
+>   `setOperatingBands`/`operatingBands()` in `rig.svelte.ts`; **empty = the
+>   HF..6m default** (additive — fresh installs write NONE and resolve to all,
+>   NOT an empty grid). The band grid + (Slice 4) the digit-jump read this ONE
+>   list. **Dogfood now:** hand-edit `config.json` `station.operating_bands` +
+>   restart; Settings-tab checkbox editor is deferred to the Settings arc.
+> - **Slice 4 — freq nudge + keyboard (arc close).** `nudgeFreq` (coarse ±100 /
+>   fine ±10 / jump ±5 kHz) with the per-VFO optimistic-target burst window so
+>   key-repeat tracks despite push lag; routes `set_freq`(A)/`set_freq_b`(B).
+>   **`RigKeys.svelte`** = the Operate-wide keyboard host (mounted in
+>   `Operate.svelte`, NOT the Phone/CW-only LoggingCard) so the SAME keystroke
+>   drives the rig in **both Phone/CW and FT8** — the operator's
+>   "consistent across operations" rule, free because shortcuts bind to the
+>   shared `rig.svelte.ts` actions. `Ctrl+Shift`+ `\`=swap, `]`/`[`=band step,
+>   digits=band jump (**`bandForDigit` follows `operating_bands` order** — digit
+>   1 = first configured band), arrows=freq step (Alt+↑↓=jump). Firefox
+>   Page-keys avoided; modal overlays suppress; freq-arrows gated on `!typing`
+>   (word-select still works in a field — swap/band/digit fire regardless).
+>   `selectBand` absorbed the band→default-freq so grid + keyboard match.
+> - **Decisions banked (design chats, NOT built):** (a) one **shared rig-control
+>   card** across Phone/CW + FT8 is the end state, but EXTRACT it as the first
+>   move of the FT8 pass (both consumers real then), not now — the shared seam
+>   is the *actions*, presentation differs. (b) **Global keybindings** (not
+>   op-profile) — a per-profile overlay is a deliberately-open door, unbuilt;
+>   TX-adjacent keys must stay stable across a profile switch. (c) Keybindings
+>   stay a **literal handler in `RigKeys.svelte`** until the config feature
+>   proper (global `keybindings` block + Settings editor); the clean refactor is
+>   lifting the if-chain to a `code→action-id` table then. Inbox: configurable
+>   operating-bands + user-configurable digit→band map ([2026-07-09]).
+> - **Verify:** frontend 370 tests / check / lint / build all green; daemon
+>   `go build ./...` + `internal/config` green + gofmt clean. **Uncommitted.**
+>   Pre-existing red: `internal/api` `TestVersion_HappyPath` (backlog P1, schema
+>   v3→v4 stale test — unrelated). Non-transmitting shortcuts (swap/band/freq)
+>   safe to validate live; only Tune transmits (already validated).
+> - **NEXT:** the **FT8 port** — its own arc, builds on this substrate. Study
+>   report already in hand: `Ft8Panel.svelte` (1131L) + `ft8.svelte.ts` (643L)
+>   must be split into presentation + injected seams (ADR 0045); FT8 gets its
+>   own tile surface + view-scoped SSE (demand-driven audio device); 5 named
+>   `/v1/ft8/events` (`ft8-logged` NOT replay-cached). First move: extract the
+>   shared rig-control card.
 
 > **Session 209 (2026-07-08, same day) — `frontend/app` Operate polish +
 > the draggable/pinnable tile-layout decision (ADR 0046 + POC).** Reuse-first

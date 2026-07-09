@@ -30,6 +30,9 @@ import {
     setOperatingBands,
     operatingBands,
     DEFAULT_BANDS,
+    nudgeFreqCoarse,
+    nudgeFreqFine,
+    bandForDigit,
 } from './rig.svelte';
 
 beforeEach(() => {
@@ -404,14 +407,16 @@ describe('band + mode control (ADR 0026)', () => {
         expect(rig.mode).toBe('USB');
     });
 
-    it('selectBand sends set_band with the band NAME when live, sets locally when off', async () => {
-        // Off-CAT: local only.
+    it('selectBand sends set_band with the band NAME when live, sets band + default freq when off', async () => {
+        // Off-CAT: local band + the band's general-portion default freq (so band
+        // and freq can't disagree), no command.
         const off = recorder();
         await selectBand('40m');
         expect(rig.band).toBe('40m');
+        expect(rig.freq).toBe('7.100.000');
         expect(off.sent).toEqual([]);
 
-        // Live: drive the rig.
+        // Live: drive the rig (freq comes from the rig's band stack, not us).
         catLink.onRigState({ vfoA: 14_100_000 });
         setRigCaps({ ops: ['set_band'], tune: false, rigModes: [] });
         const on = recorder();
@@ -467,5 +472,74 @@ describe('operating bands (station.operating_bands)', () => {
     it('an empty configured list falls back to the default', () => {
         setOperatingBands([]);
         expect(operatingBands()).toEqual(DEFAULT_BANDS);
+    });
+});
+
+describe('band-jump digit mapping (Ctrl+Shift+digit)', () => {
+    it('follows the configured operating_bands order (digit 1 = first band)', () => {
+        setOperatingBands(['80m', '40m', '20m', '15m', '10m']);
+        expect(bandForDigit('Digit1')).toBe('80m');
+        expect(bandForDigit('Digit5')).toBe('10m');
+        expect(bandForDigit('Digit6')).toBeUndefined(); // past the configured list
+        expect(bandForDigit('Enter')).toBeUndefined(); // not a digit code
+    });
+
+    it('maps against the default set when unset (digit 0 = the 10th band)', () => {
+        setOperatingBands([]);
+        expect(bandForDigit('Digit1')).toBe('160m');
+        expect(bandForDigit('Digit0')).toBe('10m'); // index 9 of DEFAULT_BANDS
+    });
+});
+
+describe('frequency nudge (Ctrl+Shift arrows)', () => {
+    function recorder(): { sent: { op: string; value?: string | number }[] } {
+        const sent: { op: string; value?: string | number }[] = [];
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve({ ok: true, message: '' });
+        });
+        return { sent };
+    }
+
+    it('CAT-off nudge adjusts the single manual freq field, sends nothing', async () => {
+        rig.freq = '14.255'; // 14.255 MHz
+        const { sent } = recorder();
+        await nudgeFreqCoarse(1); // +100 Hz
+        expect(rig.freq).toBe('14.255.100');
+        expect(sent).toEqual([]);
+    });
+
+    it('live nudge drives set_freq (VFO-A) / set_freq_b (VFO-B) by selection', async () => {
+        catLink.onRigState({ vfoA: 14_100_000, vfoB: 7_100_000, selectedVfo: 'A' });
+        setRigCaps({ ops: ['set_freq', 'set_freq_b'], tune: false, rigModes: [] });
+        const { sent } = recorder();
+
+        await nudgeFreqFine(1); // VFO-A +10
+        expect(sent).toEqual([{ op: 'set_freq', value: '14100010' }]);
+
+        catLink.onRigState({ selectedVfo: 'B' });
+        await nudgeFreqFine(-1); // VFO-B -10
+        expect(sent[1]).toEqual({ op: 'set_freq_b', value: '7099990' });
+    });
+
+    it('key-repeat computes from the previous target, not the (lagging) pushed freq', async () => {
+        // Fake timers (beforeEach) freeze Date.now(), so successive nudges are one
+        // burst — the second must base off the first target, not the stale vfoA.
+        catLink.onRigState({ vfoA: 14_100_000, selectedVfo: 'A' });
+        setRigCaps({ ops: ['set_freq'], tune: false, rigModes: [] });
+        const { sent } = recorder();
+        await nudgeFreqCoarse(1);
+        await nudgeFreqCoarse(1);
+        await nudgeFreqCoarse(1);
+        expect(sent.map((s) => s.value)).toEqual(['14100100', '14100200', '14100300']);
+    });
+
+    it('live nudge is a silent no-op when the rig cannot tune that VFO', async () => {
+        catLink.onRigState({ vfoA: 14_100_000, selectedVfo: 'A' });
+        setRigCaps({ ops: [], tune: false, rigModes: [] }); // no set_freq
+        const { sent } = recorder();
+        const r = await nudgeFreqCoarse(1);
+        expect(r.ok).toBe(true);
+        expect(sent).toEqual([]);
     });
 });

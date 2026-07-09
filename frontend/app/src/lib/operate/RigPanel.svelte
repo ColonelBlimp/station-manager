@@ -63,37 +63,10 @@
         if (band !== '') rig.band = band;
     }
 
-    // #1 — a representative default frequency per band (CAT-off). Picking a band
-    // jumps the freq here so band + freq can't silently disagree (changing band
-    // otherwise leaves the freq on the old band). A general-portion centre only —
-    // the operator fine-tunes; mode/region-aware defaults are the band-plan
-    // feature (backlog), not this. Values in Hz; shown dot-grouped.
-    const BAND_DEFAULT_HZ: Record<string, number> = {
-        '160m': 1_900_000,
-        '80m': 3_700_000,
-        '60m': 5_357_000,
-        '40m': 7_100_000,
-        '30m': 10_125_000,
-        '20m': 14_200_000,
-        '17m': 18_130_000,
-        '15m': 21_300_000,
-        '12m': 24_950_000,
-        '10m': 28_400_000,
-        '6m': 50_150_000,
-    };
-    // Pick a band directly (button grid — no stepping). CAT off: set the band +
-    // jump the freq to its general-portion default (band + freq can't disagree).
-    // CAT live: drive the rig's set_band — the FTdx10 restores that band's
-    // stack (its own last freq + mode) and pushes them back, so the read-out +
-    // active-band highlight update via confirm-by-push (no optimistic write, so
-    // the highlight simply follows rig.band rather than snapping back).
+    // Pick a band directly (button grid — no stepping). The band+freq behaviour
+    // (off-CAT default-freq jump vs live set_band) lives in the shared selectBand
+    // action, so the grid and the Ctrl+Shift+digit keyboard jump behave the same.
     async function onPickBand(band: string): Promise<void> {
-        if (!locked) {
-            rig.band = band;
-            const hz = BAND_DEFAULT_HZ[band];
-            if (hz !== undefined) rig.freq = formatFrequency(hz);
-            return;
-        }
         const r = await selectBand(band);
         if (!r.ok) toasts.error(r.message);
     }

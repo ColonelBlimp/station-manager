@@ -10,6 +10,7 @@
     import PileupDrawer from './PileupDrawer.svelte';
     import ExportDialog from './ExportDialog.svelte';
     import ContactDialog from './ContactDialog.svelte';
+    import RigKeys from './RigKeys.svelte';
 </script>
 
 {#if router.mode === 'phone'}
@@ -32,3 +33,5 @@
 <PileupDrawer />
 <ExportDialog />
 <ContactDialog />
+<!-- Rig-control keyboard shortcuts — Operate-wide (Phone/CW + FT8). -->
+<RigKeys />

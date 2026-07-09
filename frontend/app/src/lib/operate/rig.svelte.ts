@@ -11,6 +11,7 @@
 // goes through the bridge mode_mappings table injected from /v1/config.
 
 import { formatFrequency, frequencyToBand } from '../utils/frequency';
+import { parseFrequency } from '../validators/frequency';
 import type { RigStatePayload, BridgeCodePayload, TuneStatePayload } from '../api/rig-sse';
 
 export type CatLink = 'off' | 'connected' | 'lost';
@@ -283,20 +284,67 @@ export async function setMode(value: string): Promise<RigWriteResult> {
     return r;
 }
 
+// Representative default frequency per band (CAT-off), so picking a band can't
+// leave the freq parked on the old band. A general-portion centre only — the
+// operator fine-tunes; mode/region-aware defaults are the band-plan feature
+// (backlog). Lives here (not the panel) so the band-selector grid AND the
+// keyboard digit-jump apply it identically. Values in Hz.
+const BAND_DEFAULT_HZ: Record<string, number> = {
+    '160m': 1_900_000,
+    '80m': 3_700_000,
+    '60m': 5_357_000,
+    '40m': 7_100_000,
+    '30m': 10_125_000,
+    '20m': 14_200_000,
+    '17m': 18_130_000,
+    '15m': 21_300_000,
+    '12m': 24_950_000,
+    '10m': 28_400_000,
+    '6m': 50_150_000,
+};
+
 /**
- * Jump straight to a band by name ("20m") via set_band — the Ctrl+Shift+digit
- * shortcuts and (later) the FT8 band buttons. The rig restores that band's
- * stack memory and pushes the new freq, which re-derives the displayed band, so
- * no optimistic band write is needed here (pure confirm-by-push). CAT off →
- * local band set. Live + set_band exposed → drive the rig; else fail soft.
+ * Jump straight to a band by name ("20m") via set_band — the band-selector grid,
+ * the Ctrl+Shift+digit shortcuts, and (later) the FT8 band buttons. CAT off →
+ * set the band + jump the freq to its general-portion default (band + freq can't
+ * disagree). CAT live → drive set_band: the rig restores that band's stack (its
+ * own last freq + mode) and pushes them back, so the displayed band updates via
+ * confirm-by-push (no optimistic write). Else fail soft.
  */
 export async function selectBand(band: string): Promise<RigWriteResult> {
     if (rig.cat !== 'connected') {
         rig.band = band;
+        const hz = BAND_DEFAULT_HZ[band];
+        if (hz !== undefined) rig.freq = formatFrequency(hz);
         return { ok: true, message: '' };
     }
     if (!hasOp('set_band')) return { ok: false, message: 'This rig cannot jump bands.' };
     return driveRig('set_band', band);
+}
+
+// Physical digit-key codes in the operator's finger order (1..9 then 0), mapped
+// by INDEX onto operatingBands() — so the Ctrl+Shift+digit band-jump follows the
+// operator's configured band list (digit 1 = first configured band …), not a
+// fixed 160m..6m table. A digit past the end of the list maps to nothing.
+const DIGIT_CODES = [
+    'Digit1',
+    'Digit2',
+    'Digit3',
+    'Digit4',
+    'Digit5',
+    'Digit6',
+    'Digit7',
+    'Digit8',
+    'Digit9',
+    'Digit0',
+];
+
+/** The band a Ctrl+Shift+digit selects, from operatingBands() order — or
+ *  undefined for a non-digit code or a digit past the configured list. */
+export function bandForDigit(code: string): string | undefined {
+    const idx = DIGIT_CODES.indexOf(code);
+    if (idx < 0) return undefined;
+    return operatingBands()[idx];
 }
 
 /**
@@ -317,6 +365,91 @@ async function stepBand(op: 'band_up' | 'band_down'): Promise<RigWriteResult> {
     if (rig.cat !== 'connected') return { ok: true, message: '' }; // nothing to step off-CAT
     if (!hasOp(op)) return { ok: false, message: 'This rig cannot step bands.' };
     return driveRig(op);
+}
+
+// Frequency-step sizes (Hz) for the tuning shortcuts. Three tiers on the arrow
+// cluster: fine (±10 Hz, →/←), coarse (±100 Hz, ↑/↓), and a ±5 kHz jump
+// (Ctrl+Shift+Alt+↑/↓) for hopping across a band quickly.
+const FREQ_STEP_COARSE_HZ = 100;
+const FREQ_STEP_FINE_HZ = 10;
+const FREQ_STEP_JUMP_HZ = 5_000;
+const MAX_FREQ_HZ = 999_999_999; // the rigdef set_freq field (FA/FB, pad 9) ceiling
+
+// Optimistic-target window for live key-repeat tuning. Each live step computes
+// an absolute set_freq from the PREVIOUS target, not the displayed freq, because
+// the confirming FA/FB push lags key-repeat — reading the pushed VFO every press
+// would compute several steps off one stale value and stutter. After a pause (no
+// step within the window) or a VFO switch, it re-syncs to the pushed freq, so a
+// physical-knob turn between bursts is picked up.
+const FREQ_REPEAT_WINDOW_MS = 350;
+const pendingFreqHz: { A: number | null; B: number | null } = { A: null, B: null };
+let lastFreqNudgeAt = 0;
+let lastFreqVfo: 'A' | 'B' | null = null;
+
+function clampFreq(hz: number): number {
+    if (hz < 0) return 0;
+    if (hz > MAX_FREQ_HZ) return MAX_FREQ_HZ;
+    return hz;
+}
+
+/**
+ * Nudge the selected VFO's frequency by deltaHz — the Ctrl+Shift arrow tuning.
+ * CAT off → adjust the single manual freq field (parse → add → reformat). CAT
+ * live → drive the rig: set_freq (FA) for VFO-A, set_freq_b (FB) for VFO-B, each
+ * capability-gated (silent no-op if the rig can't tune that VFO). Uses an
+ * optimistic per-VFO target so fast key-repeat tracks cleanly despite the
+ * confirm-by-push lag. Off-CAT / not-exposed / no-known-freq are silent
+ * (ok:true, no toast) — only a genuine command rejection surfaces.
+ */
+export async function nudgeFreq(deltaHz: number): Promise<RigWriteResult> {
+    const vfo = rig.selectedVfo;
+
+    if (rig.cat !== 'connected') {
+        const cur = parseFrequency(rig.freq);
+        if (cur === null) return { ok: true, message: '' }; // nothing to nudge
+        rig.freq = formatFrequency(clampFreq(cur + deltaHz));
+        return { ok: true, message: '' };
+    }
+
+    const op = vfo === 'A' ? 'set_freq' : 'set_freq_b';
+    if (!hasOp(op)) return { ok: true, message: '' }; // rig can't tune this VFO — silent
+
+    const now = Date.now();
+    const prev = pendingFreqHz[vfo];
+    const inBurst =
+        prev !== null && lastFreqVfo === vfo && now - lastFreqNudgeAt <= FREQ_REPEAT_WINDOW_MS;
+    const base = inBurst ? prev : vfo === 'A' ? rig.vfoA : rig.vfoB;
+    if (base === null) return { ok: true, message: '' }; // no known freq yet
+
+    const target = clampFreq(base + deltaHz);
+    pendingFreqHz[vfo] = target;
+    lastFreqNudgeAt = now;
+    lastFreqVfo = vfo;
+    return driveRig(op, String(target));
+}
+
+/** Coarse (±100 Hz) nudge — Ctrl+Shift+ArrowUp/Down. dir is +1/-1. */
+export function nudgeFreqCoarse(dir: 1 | -1): Promise<RigWriteResult> {
+    return nudgeFreq(dir * FREQ_STEP_COARSE_HZ);
+}
+
+/** Fine (±10 Hz) nudge — Ctrl+Shift+ArrowRight/Left. dir is +1/-1. */
+export function nudgeFreqFine(dir: 1 | -1): Promise<RigWriteResult> {
+    return nudgeFreq(dir * FREQ_STEP_FINE_HZ);
+}
+
+/** Jump (±5 kHz) band hop — Ctrl+Shift+Alt+ArrowUp/Down. dir is +1/-1. */
+export function nudgeFreqJump(dir: 1 | -1): Promise<RigWriteResult> {
+    return nudgeFreq(dir * FREQ_STEP_JUMP_HZ);
+}
+
+/** Test seam — clear the optimistic freq-step state between cases so a prior
+ *  test's pending target can't leak into the next within the repeat window. */
+export function resetFreqStep(): void {
+    pendingFreqHz.A = null;
+    pendingFreqHz.B = null;
+    lastFreqNudgeAt = 0;
+    lastFreqVfo = null;
 }
 
 // Persist the operating context on every change so the next session's
@@ -489,6 +622,7 @@ export function resetCatLink(): void {
     rigCaps.tune = false;
     rigCaps.rigModes = [];
     bandPrefs.list = [];
+    resetFreqStep();
     rig.cat = 'off';
     rig.confirmedBand = null;
     rig.vfoA = null;

@@ -72,6 +72,53 @@ so a keyboard-only operator never gets stuck.
 | FT8 pile-up drawer header `×`              | **Click**             | Clear all & abandon                                 | Clears the whole queue (drawer auto-hides, visibility is `ft8PileupStack.items.length > 0`) **and** abandons the run — aborts the active exchange if one is in flight (armed + active → `abandonFt8Qso`; else just halts the auto-drain). Self-contained, since the drawer is mounted at the card level (a right-edge rail beside the Phone/CW Call Stack), not inside the Operate-tab panel. | `frontend/logging/src/lib/ui/panels/Ft8PileupDrawer.svelte` — `handleClose` |
 | FT8 pile-up drawer **Resume**              | **Click**             | Resume the paused drain                             | Shown only when the drain is paused (after Abandon, queue kept). Re-enables auto-draining of the queue. Equivalent to Ctrl/Cmd+clicking another caller, minus the enqueue. | `frontend/logging/src/lib/ui/panels/Ft8PileupDrawer.svelte` — `ft8PileupStack.resume()` |
 
+## frontend/app — consolidated SPA (ADR 0044, in build)
+
+The tables above are the **shipping logging SPA** (`frontend/logging`). The
+consolidated replacement at **`frontend/app`** (ADR 0044; will eventually retire
+the three shipping SPAs) re-implements the **rig-control keyboard family** with
+the **same key assignments**, but in its own handler and with two deliberate
+differences (band-jump is configurable; the host is Operate-wide). This section
+tracks that implementation; keep it in sync as `frontend/app` grows.
+
+**Where:** `frontend/app/src/lib/operate/RigKeys.svelte` — a single
+`<svelte:window onkeydown>` mounted in `Operate.svelte`, so the shortcuts are
+**Operate-wide: identical in Phone/CW AND FT8** (they bind to the shared actions
+in `frontend/app/src/lib/operate/rig.svelte.ts`, so there is one behaviour, not a
+per-mode keymap). The Phone/CW-only logging shortcuts (Esc = clear, Ctrl+Enter =
+log, Tab = start QSO) live separately in `LoggingCard.svelte` — a distinct
+modifier namespace, so the two window handlers never collide. Rig-control writes
+go through injected seams (`setCommandSender` → `POST /v1/rig/command`,
+`setTuneSender` → `POST /v1/rig/tune`); capability-gated on `BridgeInfo.ops`
+(`hasOp`) — an op the rig doesn't expose is a silent no-op.
+
+| Keys | Action | Notes | Source (`frontend/app`) |
+| --- | --- | --- | --- |
+| **Shift + Ctrl + \\** | Swap the VFOs (A↔B) | Same as clicking the unselected VFO box. CAT live + `swap_vfo` → `SV;` (optimistic `vfoB` mirror + rollback, confirm-by-push); CAT off → toggles local selection; no capability → silent no-op. Fires regardless of focus. | `RigKeys.svelte` — `onKeydown`; action `rig.svelte.ts` — `swapVfo`/`selectVfo` |
+| **Shift + Ctrl + ]** / **[** | Band up / down | `band_up`/`band_down` (`BU0;`/`BD0;`); the rig restores that band's stack, new band shows via the freq push. CAT-live + capable only. Regardless of focus. | `RigKeys.svelte`; actions `rig.svelte.ts` — `bandUp`/`bandDown` |
+| **Shift + Ctrl + 1…0** | Jump to band (direct) | **DIVERGES from the shipping fixed table.** The digit→band map **follows the operator's `station.operating_bands` order** (digit 1 = first configured band …), not a fixed 160m…6m table — so a pruned band list gets clean digits. `set_band` → `BS<code>;` with the band NAME. Matched on physical digit (`e.code`). **Default-set caveat:** with no `operating_bands` configured, digits map onto the HF..6m default in order (digit 0 = 10m); **6m is index 10 → not reachable by a single digit until the operator configures their bands** (accepted — config is the intended path). CAT-live + `set_band`. | `RigKeys.svelte`; `rig.svelte.ts` — `bandForDigit` (reads `operatingBands()`) → `selectBand` |
+| **Shift + Ctrl + ↑** / **↓** | Tune selected VFO ±100 Hz (coarse) | `set_freq`(FA)/`set_freq_b`(FB) by selected VFO, capability-gated; per-VFO optimistic-target burst window (~350 ms) so key-repeat tracks despite push lag. CAT off → adjusts the single manual freq field. **Gated on `!typing`** — suppressed while a text field is focused (Shift+Ctrl+Arrow stays native word-select there), so it fires only when focus is outside an input. | `RigKeys.svelte`; `rig.svelte.ts` — `nudgeFreqCoarse` (→ `nudgeFreq`) |
+| **Shift + Ctrl + →** / **←** | Tune selected VFO ±10 Hz (fine) | Same routing/guard as coarse, 10 Hz per press. Arrow cluster only (Page keys avoided — Firefox move-tab won't yield to `preventDefault`). | `RigKeys.svelte`; `rig.svelte.ts` — `nudgeFreqFine` |
+| **Shift + Ctrl + Alt + ↑** / **↓** | Tune selected VFO ±5 kHz (band hop) | Same as coarse/fine, ±5 kHz, `Alt` inside the same arrow branch. (Linux WM may grab `Ctrl+Alt+↑/↓`.) | `RigKeys.svelte`; `rig.svelte.ts` — `nudgeFreqJump` |
+
+> **Tune carrier stays click-only** in `frontend/app` too — no shortcut, same
+> safety choice as shipping (keying TX is a deliberate, visible action). The Tune
+> button lives in `RigPanel.svelte`.
+
+**Guards.** The whole family is `Ctrl+Shift`+`e.code` (physical key, since Shift
+mutates the character). Swap / band / digit fire regardless of focus; the
+freq-step **arrows** stand down while a text field is focused (`!typing`). A modal
+overlay open (`contactOpen` / `exportOpen` / duplicate dialog) suppresses the
+whole family; the docked pile-up drawer does not. Only a genuine command
+rejection toasts (silent no-ops don't), so key-repeat never spams.
+
+**Configurability status (2026-07-09).** These are **hardcoded defaults** — the
+key→action map is a literal if-chain in `RigKeys.svelte`; only the digit→band
+piece is data-driven (from `operating_bands`). A **global** user-configurable
+keybinding block (config.json + a Settings editor) is deferred (NOT op-profile —
+TX-adjacent keys must stay stable across a profile switch). When it lands, lift
+the if-chain to a `code → action-id` table the config can override.
+
 ## Browser / native (called out for completeness)
 
 These are not project-wired but worth documenting for the user manual:
