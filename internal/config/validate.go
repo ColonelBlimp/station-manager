@@ -7,6 +7,7 @@ import (
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -260,6 +261,22 @@ func validateStationPrefs(s types.StationConfig) []Finding {
 	if s.DefaultPower < 0 || s.DefaultPower > maxDefaultPowerW {
 		out = append(out, Finding{Field: "station.default_power", Code: "invalid_field_value",
 			Message: fmt.Sprintf("station.default_power must be between 0 and %d", maxDefaultPowerW)})
+	}
+	// operating_bands: every entry must be a known band. An empty list means
+	// "all bands" (the SPA defaults), so only non-empty entries are checked;
+	// an unknown band is a config typo that would render a dead selector button.
+	seen := make(map[string]bool, len(s.OperatingBands))
+	for _, b := range s.OperatingBands {
+		if !bands.IsValidBand(b) {
+			out = append(out, Finding{Field: "station.operating_bands", Code: "invalid_field_value",
+				Message: fmt.Sprintf("station.operating_bands contains an unknown band %q", b)})
+			continue
+		}
+		if seen[b] {
+			out = append(out, Finding{Field: "station.operating_bands", Code: "invalid_field_value",
+				Message: fmt.Sprintf("station.operating_bands lists %q more than once", b)})
+		}
+		seen[b] = true
 	}
 	return out
 }

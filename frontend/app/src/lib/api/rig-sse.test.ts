@@ -38,6 +38,7 @@ function makeHandlers(): RigEventHandlers {
         onRigState: vi.fn(),
         onRigDisconnected: vi.fn(),
         onBridgeError: vi.fn(),
+        onTuneState: vi.fn(),
     };
 }
 
@@ -73,6 +74,9 @@ describe('openRigEvents', () => {
             code: 'port_permission',
             details: { port: '/dev/ttyUSB0' },
         });
+
+        src.emit('tune-state', '{"active":true}');
+        expect(h.onTuneState).toHaveBeenCalledWith({ active: true });
 
         src.emit('error');
         expect(h.onTransportError).toHaveBeenCalledOnce();

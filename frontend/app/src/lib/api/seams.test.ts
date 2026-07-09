@@ -163,4 +163,16 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect(ctx.catEnabled).toBe(false);
         expect(ctx.modeMappings).toEqual({});
     });
+
+    it('reads station.operating_bands (empty when the station block is absent)', async () => {
+        mockConfig({
+            logging_station: { station_callsign: '7Q5MLV' },
+            station: { operating_bands: ['80m', '40m', '20m', '15m', '10m'] },
+        });
+        const ctx = await fetchStationContext();
+        expect(ctx.operatingBands).toEqual(['80m', '40m', '20m', '15m', '10m']);
+
+        mockConfig({ logging_station: { station_callsign: '7Q5MLV' } });
+        expect((await fetchStationContext()).operatingBands).toEqual([]);
+    });
 });

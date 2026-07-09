@@ -4,13 +4,24 @@
     // connected: the rig owns them (rig-state SSE via catLink), so they lock.
     // Pure presentation over rig.svelte; fills whatever host it's given
     // (ADR 0045).
-    import { rig, rigGate, confirmRig } from './rig.svelte';
+    import {
+        rig,
+        rigCaps,
+        rigGate,
+        confirmRig,
+        toggleTune,
+        selectVfo,
+        setMode,
+        selectBand,
+        operatingBands,
+        hasOp,
+    } from './rig.svelte';
     import { hideTile } from './layout.svelte';
     import { focusCallsign } from './state.svelte';
+    import { toasts } from '../ui/toasts.svelte';
     import { formatFrequency, frequencyToBand } from '../utils/frequency';
     import { parseFrequency } from '../validators/frequency';
 
-    const BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m'];
     // Operator-friendly mode names (sidebands, not families — matches the
     // shipping SPA's baseModes). resolveModeAndSubmode maps them to canonical
     // ADIF (MODE, SUBMODE) at submit time; the daemon rejects e.g. MODE=USB.
@@ -24,10 +35,23 @@
     // renders blank, so the current value always joins the list.
     const modeOptions = $derived(MODES.includes(rig.mode) ? MODES : [...MODES, rig.mode]);
 
-    // Same guard for the band: frequencyToBand (and CAT) can yield a VHF/UHF band
-    // (2m, 70cm, …) outside the manual HF..6m list; join the current value so the
-    // select never renders blank.
-    const bandOptions = $derived(BANDS.includes(rig.band) ? BANDS : [...BANDS, rig.band]);
+    // The bands the grid offers = the operator's configured operating_bands (or
+    // the HF..6m default when unset). The CAT-pushed band can fall outside that
+    // list (rig on a band the operator didn't configure); join the current value
+    // so the active band always shows + can be highlighted.
+    const bandOptions = $derived.by(() => {
+        const list = operatingBands();
+        return list.includes(rig.band) ? list : [...list, rig.band];
+    });
+
+    // Live mode dropdown (Option A): the rig's OWN literals (rigCaps.rigModes,
+    // e.g. LSB/USB/CW-U/DATA-U). Join the current literal if the caps list
+    // somehow omits it, so the select never renders blank.
+    const liveModeOptions = $derived(
+        rig.modeLiteral === '' || rigCaps.rigModes.includes(rig.modeLiteral)
+            ? rigCaps.rigModes
+            : [...rigCaps.rigModes, rig.modeLiteral]
+    );
 
     // Band follows the frequency (IARU allocations) so the two can't disagree
     // on the logged QSO; the select stays usable for an out-of-band/odd value.
@@ -57,11 +81,21 @@
         '10m': 28_400_000,
         '6m': 50_150_000,
     };
-    // Read the new band from the event target (not rig.band) so it's correct
-    // regardless of bind:value-vs-handler ordering.
-    function onBandChange(e: Event): void {
-        const hz = BAND_DEFAULT_HZ[(e.currentTarget as HTMLSelectElement).value];
-        if (hz !== undefined) rig.freq = formatFrequency(hz);
+    // Pick a band directly (button grid — no stepping). CAT off: set the band +
+    // jump the freq to its general-portion default (band + freq can't disagree).
+    // CAT live: drive the rig's set_band — the FTdx10 restores that band's
+    // stack (its own last freq + mode) and pushes them back, so the read-out +
+    // active-band highlight update via confirm-by-push (no optimistic write, so
+    // the highlight simply follows rig.band rather than snapping back).
+    async function onPickBand(band: string): Promise<void> {
+        if (!locked) {
+            rig.band = band;
+            const hz = BAND_DEFAULT_HZ[band];
+            if (hz !== undefined) rig.freq = formatFrequency(hz);
+            return;
+        }
+        const r = await selectBand(band);
+        if (!r.ok) toasts.error(r.message);
     }
 
     // #2 (region-AGNOSTIC) — the typed freq doesn't fall in the SELECTED band's
@@ -75,6 +109,35 @@
         if (hz === null) return false; // malformed, not an out-of-band case
         return frequencyToBand(hz) !== rig.band;
     });
+
+    // Tune carrier (ADR 0027) — daemon-owned; the SPA sends an intent and the
+    // button reflects rig.tuneActive (confirm-by-push). Shown only when the rig
+    // supports tune (rigCaps.tune); enabled only when CAT is live (tuning a
+    // non-live rig is impossible — the daemon refuses). A failed toggle toasts;
+    // the on/off state still comes from the tune-state SSE, not this call.
+    async function onTune(): Promise<void> {
+        const r = await toggleTune();
+        if (!r.ok) toasts.error(r.message);
+    }
+
+    // Click-to-swap (ADR 0026): with two VFOs, "select the other" === swap_vfo
+    // (SV;) — clicking the non-selected box swaps A↔B. Only offered when the rig
+    // is live AND exposes swap_vfo; otherwise the boxes stay plain read-outs.
+    const canSwap = $derived(locked && hasOp('swap_vfo'));
+
+    async function onSelectVfo(v: 'A' | 'B'): Promise<void> {
+        const r = await selectVfo(v);
+        if (!r.ok) toasts.error(r.message);
+    }
+
+    // Live mode pick (CAT connected) → drive the rig with the chosen literal;
+    // confirm-by-push (optimistic in setMode) repaints. Manual mode uses a plain
+    // bind:value select (no command).
+    async function onModeSelect(e: Event): Promise<void> {
+        const r = await setMode((e.currentTarget as HTMLSelectElement).value);
+        if (!r.ok) toasts.error(r.message);
+    }
+
 </script>
 
 <div class="card w-2xl">
@@ -125,52 +188,86 @@
         </button>
     </div>
 
+    <!-- Band — a button-per-band grid (direct jump, no stepping). The active
+         band highlight follows rig.band: off-CAT it moves at once; on a live
+         set_band it updates when the rig confirms (confirm-by-push), so no
+         snap-back. Live → set_band (rig restores that band's freq + mode from
+         its own stack); manual → set band + default freq. -->
+    <div class="mb-4">
+        <span class="mb-1 block text-sm font-medium text-ink">Band</span>
+        <div class="flex flex-wrap gap-1">
+            {#each bandOptions as b (b)}
+                <button
+                    type="button"
+                    class="min-w-11 cursor-pointer rounded-md border px-2 py-1 text-xs font-medium transition-colors {rig.band ===
+                    b
+                        ? 'border-focus bg-focus text-white'
+                        : 'border-line text-ink hover:bg-surface-muted'}"
+                    aria-pressed={rig.band === b}
+                    onclick={() => onPickBand(b)}
+                >
+                    {b}
+                </button>
+            {/each}
+        </div>
+    </div>
+
     <div class="flex items-end gap-x-4">
         <div>
-            <label for="rp-band" class="block text-sm font-medium text-ink">Band</label>
-        <select
-            id="rp-band"
-            class="input w-24"
-            disabled={locked}
-            bind:value={rig.band}
-            onchange={onBandChange}
-        >
-            {#each bandOptions as b (b)}
-                <option value={b}>{b}</option>
-            {/each}
-        </select>
-    </div>
-    <div>
-        <label for="rp-mode" class="block text-sm font-medium text-ink">Mode</label>
-        <select id="rp-mode" class="input w-24" disabled={locked} bind:value={rig.mode}>
-            {#each modeOptions as m (m)}
-                <option value={m}>{m}</option>
-            {/each}
-        </select>
-    </div>
+            {#if locked}
+                <!-- Live: Option A — the rig's OWN mode literals; a pick sends
+                     set_mode with the literal (one-way value; setMode is
+                     optimistic so there's no snap-back on the push). -->
+                <span class="block text-sm font-medium text-ink">Mode</span>
+                <select
+                    class="input w-24"
+                    disabled={!hasOp('set_mode')}
+                    value={rig.modeLiteral}
+                    onchange={onModeSelect}
+                >
+                    {#each liveModeOptions as m (m)}
+                        <option value={m}>{m}</option>
+                    {/each}
+                </select>
+            {:else}
+                <label for="rp-mode" class="block text-sm font-medium text-ink">Mode</label>
+                <select id="rp-mode" class="input w-24" bind:value={rig.mode}>
+                    {#each modeOptions as m (m)}
+                        <option value={m}>{m}</option>
+                    {/each}
+                </select>
+            {/if}
+        </div>
     {#if locked}
         <!-- CAT-locked: both VFOs, SM dot-grouped display (14.199.950 —
              matches the rig + the shipping VFO box), the selected one dotted.
-             Read-outs only: click-to-select/swap needs the inbound command
-             path (ADR 0026) and lands with rig control. -->
+             When the rig exposes swap_vfo, each box is a button: clicking the
+             non-selected one swaps A↔B (ADR 0026); otherwise it's a read-out. -->
         {#each VFOS as v (v)}
             {@const hz = v === 'A' ? rig.vfoA : rig.vfoB}
+            {@const shown = hz === null ? '—' : formatFrequency(hz)}
             <div>
-                <label
-                    for={`rp-vfo-${v}`}
-                    class="flex items-center gap-x-1.5 text-sm font-medium text-ink"
-                >
+                <span class="flex items-center gap-x-1.5 text-sm font-medium text-ink">
                     VFO-{v}
                     {#if rig.selectedVfo === v}
                         <span class="size-2 rounded-full bg-green-500" title="Selected"></span>
                     {/if}
-                </label>
-                <input
-                    id={`rp-vfo-${v}`}
-                    class="input w-32 tabular-nums"
-                    disabled
-                    value={hz === null ? '—' : formatFrequency(hz)}
-                />
+                </span>
+                {#if canSwap}
+                    <button
+                        type="button"
+                        class="input w-32 cursor-pointer text-left tabular-nums hover:outline-focus"
+                        aria-pressed={rig.selectedVfo === v}
+                        onclick={() => onSelectVfo(v)}
+                        title={rig.selectedVfo === v
+                            ? 'Selected VFO'
+                            : 'Click to swap onto this VFO'}
+                    >
+                        {shown}
+                    </button>
+                {:else}
+                    <input class="input w-32 tabular-nums" disabled value={shown} />
+                {/if}
             </div>
         {/each}
     {:else}
@@ -189,6 +286,29 @@
         </div>
     {/if}
 
+    {#if rigCaps.tune}
+        <!-- Tune carrier: bottom-aligned on the input baseline. Active goes
+             solid red + pulses so a keyed carrier is unmistakable. Click-only
+             (no shortcut) — starting a transmission is a deliberate action. -->
+        <div class="flex flex-col justify-end">
+            <button
+                type="button"
+                class="btn text-sm {rig.tuneActive
+                    ? 'border-red-600 bg-red-600 text-white hover:bg-red-700 animate-pulse'
+                    : ''}"
+                disabled={rig.cat !== 'connected'}
+                aria-pressed={rig.tuneActive}
+                onclick={onTune}
+                title={rig.tuneActive
+                    ? 'Transmitting tune carrier — click to stop'
+                    : rig.cat === 'connected'
+                      ? 'Key a reduced-power tune carrier to tune the amp'
+                      : 'Tune needs a live CAT connection'}
+            >
+                {rig.tuneActive ? 'Tuning…' : 'Tune'}
+            </button>
+        </div>
+    {/if}
     </div>
 
     <!-- Validation messages sit in their own row BELOW the inputs, so the error

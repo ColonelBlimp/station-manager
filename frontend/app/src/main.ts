@@ -6,8 +6,18 @@ import { setSubmit } from './lib/operate/qso.svelte';
 import { addSessionQso } from './lib/operate/session.svelte';
 import { setMailer } from './lib/operate/mailer.svelte';
 import { setLayoutPersistence, type LayoutValue } from './lib/operate/layout.svelte';
-import { rig, catLink, setModeMappings } from './lib/operate/rig.svelte';
+import {
+    rig,
+    catLink,
+    setModeMappings,
+    setRigCaps,
+    setTuneSender,
+    setCommandSender,
+    setOperatingBands,
+} from './lib/operate/rig.svelte';
 import { openRigEvents } from './lib/api/rig-sse';
+import { sendRigTune } from './lib/api/rig-tune';
+import { sendRigCommand } from './lib/api/rig-command';
 import { apiEnrich, apiHistory, fetchStationContext, type StationContext } from './lib/api/seams';
 import { submitQso } from './lib/api/qso';
 import { formatAdifRecord } from './lib/utils/adif';
@@ -63,6 +73,10 @@ const ctx: StationContext = {
     logbookId: 0,
     catEnabled: false,
     modeMappings: {},
+    ops: [],
+    tune: false,
+    rigModes: [],
+    operatingBands: [],
     mailerEnabled: false,
     mailerDefaultRecipient: '',
 };
@@ -75,6 +89,26 @@ void fetchStationContext().then((c) => {
     // surface will re-wire that when it lands. The page unload closes the
     // EventSource; the browser owns transient reconnects.
     setModeMappings(c.modeMappings);
+    // Bridge capabilities gate the rig-control surfaces (Tune button, and the
+    // VFO/band/freq/mode ops in later slices). Set unconditionally: they're
+    // valid whether or not the rig is CURRENTLY connected — a supported-but-
+    // offline rig shows its Tune button disabled, not absent.
+    setRigCaps({ ops: c.ops, tune: c.tune, rigModes: c.rigModes });
+    // Operator's configured bands drive the band selector (+ later FT8 buttons
+    // and the keyboard band-jump). Empty → the module's HF..6m default.
+    setOperatingBands(c.operatingBands);
+    // Tune-carrier write seam: adapt the rich rig-tune outcome to {ok,message}.
+    // The daemon owns keying + the guaranteed stop; the SPA sends only intent.
+    setTuneSender(async (active) => {
+        const o = await sendRigTune(active);
+        return o.kind === 'ok' ? { ok: true, message: '' } : { ok: false, message: o.message };
+    });
+    // Rig command write seam (VFO swap now; band/freq/mode in later slices) —
+    // adapt the rich command outcome to {ok,message}, same shape as tune.
+    setCommandSender(async (op, value) => {
+        const o = await sendRigCommand(op, value);
+        return o.kind === 'ok' ? { ok: true, message: '' } : { ok: false, message: o.message };
+    });
     setMailer(c.mailerEnabled, c.mailerDefaultRecipient);
     if (c.catEnabled) openRigEvents(catLink);
 });

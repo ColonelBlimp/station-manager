@@ -40,4 +40,16 @@ type StationConfig struct {
 	// max in most jurisdictions ≈ 1500W; the cap allows headroom
 	// for amp output before the multiplier is applied).
 	DefaultPower float64 `json:"default_power"`
+
+	// OperatingBands is the operator's list of bands they actually work
+	// (antenna coverage varies — many stations skip, e.g., 160/60/30).
+	// One source for every band surface: the SPA's band-selector grid,
+	// the FT8 band buttons, and the keyboard band-jump all read it, so a
+	// band change is consistent whichever way the operator operates.
+	// Order is preserved as the operator listed it (the SPA renders the
+	// grid — and later assigns the digit shortcuts — in this order).
+	// Empty/unset means "all bands" (the SPA falls back to its default
+	// HF..6m set), so an existing config is unaffected. Each entry must
+	// be a known band (enums/bands); validated at load + on PUT.
+	OperatingBands []string `json:"operating_bands,omitempty"`
 }

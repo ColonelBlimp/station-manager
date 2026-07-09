@@ -274,10 +274,12 @@ paths** (a divergence, §7).
   `cmd/smd`: `Service.Initialize()` checks (bridge logger; ft8 logger + capture source).
 - **PUT-400** (`internal/api/handler_config.go`, runtime, non-fatal): callsign (3–32 +
   digit), maidenhead (4/6/8 + lat/lon derivation), CQ zone [1–40], ITU zone [1–90], DXCC
-  [0–522], amp multiplier [0–1000], default power [0–2000], bridge mode-mappings (driver
-  known, valid ADIF, diffed to overrides), ft8_display feed-mode enum. **This is a
-  separate validator from the startup ones — overlapping fields are checked in two
-  places with no shared function.**
+  [0–522], amp multiplier [0–1000], default power [0–2000], `station.operating_bands`
+  (each a known band per `enums/bands`, no duplicates; empty = "all bands" — the SPA
+  defaults its band selector to HF..6m), bridge mode-mappings (driver known, valid ADIF,
+  diffed to overrides), ft8_display feed-mode enum. **This is a separate validator from
+  the startup ones — overlapping fields are checked in two places with no shared
+  function.** `validateStationPrefs` runs on BOTH paths (startup + PUT).
 - **Soft-fail** (degrade, daemon continues): QRZ session-key fetch failure at provider
   `Initialize` → provider disabled + warning (`internal/lookup/qrz`).
 - **Advisory** (`config.Warnings`, non-fatal, logged once): e.g. `protocol=tcp` with a

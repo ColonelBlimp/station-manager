@@ -6,9 +6,10 @@
 // supported topology. The browser owns reconnect on transient drops — no
 // retry loop here.
 //
-// tune-state and rig-clients are daemon events this SPA doesn't consume yet
-// (no Tune button / multi-tab banner in frontend/app) — they arrive on the
-// same stream and are simply not listened for.
+// rig-clients is a daemon event this SPA doesn't consume yet (no multi-tab
+// banner in frontend/app) — it arrives on the same stream and is not listened
+// for. tune-state IS consumed (ADR 0027 tune carrier — the Tune button
+// reflects it, confirm-by-push).
 
 /** Mirrors internal/bridge.RigStatePayload — all fields optional (partial merge). */
 export interface RigStatePayload {
@@ -28,6 +29,12 @@ export interface BridgeCodePayload {
     details?: Record<string, string>;
 }
 
+/** Mirrors internal/bridge.TuneStatePayload (ADR 0027) — the daemon-owned
+ *  tune-carrier state. The Tune button reflects this, never an optimistic flip. */
+export interface TuneStatePayload {
+    active: boolean;
+}
+
 export interface RigEventHandlers {
     onOpen: () => void;
     /** Transport-level failure (stream down / reconnecting). */
@@ -35,6 +42,7 @@ export interface RigEventHandlers {
     onRigState: (payload: RigStatePayload) => void;
     onRigDisconnected: (payload: BridgeCodePayload) => void;
     onBridgeError: (payload: BridgeCodePayload) => void;
+    onTuneState: (payload: TuneStatePayload) => void;
 }
 
 function parse<T>(ev: MessageEvent<string>, label: string): T | null {
@@ -69,6 +77,11 @@ export function openRigEvents(handlers: RigEventHandlers): () => void {
     src.addEventListener('bridge-error', (ev: MessageEvent<string>) => {
         const p = parse<BridgeCodePayload>(ev, 'bridge-error');
         if (p !== null) handlers.onBridgeError(p);
+    });
+
+    src.addEventListener('tune-state', (ev: MessageEvent<string>) => {
+        const p = parse<TuneStatePayload>(ev, 'tune-state');
+        if (p !== null) handlers.onTuneState(p);
     });
 
     return () => src.close();

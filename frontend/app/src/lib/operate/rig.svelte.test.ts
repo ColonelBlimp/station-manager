@@ -15,6 +15,21 @@ import {
     setModeMappings,
     resetCatLink,
     FLASH_SUPPRESS_MS,
+    rigCaps,
+    setRigCaps,
+    hasOp,
+    setTuneSender,
+    toggleTune,
+    setCommandSender,
+    selectVfo,
+    swapVfo,
+    setMode,
+    selectBand,
+    bandUp,
+    bandDown,
+    setOperatingBands,
+    operatingBands,
+    DEFAULT_BANDS,
 } from './rig.svelte';
 
 beforeEach(() => {
@@ -219,5 +234,238 @@ describe('bridge-error', () => {
     it('renders a details-free payload as the bare code', () => {
         catLink.onBridgeError({ code: 'unknown_driver' });
         expect(rig.linkError).toBe('unknown_driver');
+    });
+});
+
+describe('bridge capabilities (BridgeInfo)', () => {
+    it('setRigCaps populates ops/tune/rigModes and hasOp reads membership', () => {
+        setRigCaps({ ops: ['set_freq', 'swap_vfo'], tune: true, rigModes: ['LSB', 'USB'] });
+        expect(rigCaps.tune).toBe(true);
+        expect(rigCaps.rigModes).toEqual(['LSB', 'USB']);
+        expect(hasOp('swap_vfo')).toBe(true);
+        expect(hasOp('set_mode')).toBe(false);
+    });
+
+    it('resetCatLink clears caps back to closed', () => {
+        setRigCaps({ ops: ['set_freq'], tune: true, rigModes: ['USB'] });
+        resetCatLink();
+        expect(rigCaps).toEqual({ ops: [], tune: false, rigModes: [] });
+        expect(hasOp('set_freq')).toBe(false);
+    });
+});
+
+describe('tune carrier (ADR 0027)', () => {
+    it('onTuneState mirrors the daemon-pushed state (confirm-by-push)', () => {
+        expect(rig.tuneActive).toBe(false);
+        catLink.onTuneState({ active: true });
+        expect(rig.tuneActive).toBe(true);
+        catLink.onTuneState({ active: false }); // e.g. hard auto-off the operator didn't click
+        expect(rig.tuneActive).toBe(false);
+    });
+
+    it('toggleTune sends the OPPOSITE of the pushed state, never an optimistic flip', async () => {
+        const sent: boolean[] = [];
+        setTuneSender((active) => {
+            sent.push(active);
+            return Promise.resolve({ ok: true, message: '' });
+        });
+
+        // Carrier down → toggle asks to key it; state does NOT flip until a push.
+        const r1 = await toggleTune();
+        expect(r1.ok).toBe(true);
+        expect(sent).toEqual([true]);
+        expect(rig.tuneActive).toBe(false);
+
+        // The daemon confirms the carrier is up; now a toggle asks to drop it.
+        catLink.onTuneState({ active: true });
+        await toggleTune();
+        expect(sent).toEqual([true, false]);
+    });
+
+    it('toggleTune fails soft when no sender is wired', async () => {
+        // resetCatLink() in beforeEach clears the injected sender.
+        const r = await toggleTune();
+        expect(r.ok).toBe(false);
+        expect(r.message).not.toBe('');
+    });
+});
+
+describe('VFO swap / select (ADR 0026)', () => {
+    // Put the rig live with a two-VFO snapshot + swap_vfo exposed.
+    function live(): { sent: { op: string; value?: string | number }[] } {
+        catLink.onRigState({ vfoA: 14_100_000, vfoB: 14_200_000, selectedVfo: 'A' });
+        setRigCaps({ ops: ['swap_vfo'], tune: false, rigModes: [] });
+        const sent: { op: string; value?: string | number }[] = [];
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve({ ok: true, message: '' });
+        });
+        return { sent };
+    }
+
+    it('CAT-off swapVfo toggles the local selection, sends nothing', async () => {
+        const sent: unknown[] = [];
+        setCommandSender((op) => {
+            sent.push(op);
+            return Promise.resolve({ ok: true, message: '' });
+        });
+        expect(rig.cat).toBe('off');
+        rig.selectedVfo = 'A';
+        await swapVfo();
+        expect(rig.selectedVfo).toBe('B');
+        expect(sent).toEqual([]);
+    });
+
+    it('live swap optimistically mirrors VFO-B ← VFO-A and drives swap_vfo', async () => {
+        const { sent } = live();
+        const p = swapVfo();
+        // Optimistic mirror is synchronous, before the await resolves: a
+        // single-RX rig that never pushes VFO-B still shows the swap at once.
+        expect(rig.vfoB).toBe(14_100_000);
+        await p;
+        expect(sent).toEqual([{ op: 'swap_vfo', value: undefined }]);
+    });
+
+    it('rolls the optimistic VFO-B back when the command is rejected', async () => {
+        catLink.onRigState({ vfoA: 14_100_000, vfoB: 14_200_000, selectedVfo: 'A' });
+        setRigCaps({ ops: ['swap_vfo'], tune: false, rigModes: [] });
+        setCommandSender(() => Promise.resolve({ ok: false, message: 'rig_not_connected' }));
+        const r = await swapVfo();
+        expect(r.ok).toBe(false);
+        expect(rig.vfoB).toBe(14_200_000); // restored, not left showing the false swap
+    });
+
+    it('selectVfo of the already-selected VFO is a no-op', async () => {
+        const { sent } = live(); // selectedVfo A
+        const r = await selectVfo('A');
+        expect(r.ok).toBe(true);
+        expect(sent).toEqual([]);
+    });
+
+    it('selectVfo of the other VFO swaps', async () => {
+        const { sent } = live(); // selectedVfo A
+        await selectVfo('B');
+        expect(sent).toEqual([{ op: 'swap_vfo', value: undefined }]);
+    });
+
+    it('live swap fails soft (no command) when the rig lacks swap_vfo', async () => {
+        catLink.onRigState({ vfoA: 14_100_000, vfoB: 14_200_000, selectedVfo: 'A' });
+        setRigCaps({ ops: [], tune: false, rigModes: [] });
+        const sent: unknown[] = [];
+        setCommandSender((op) => {
+            sent.push(op);
+            return Promise.resolve({ ok: true, message: '' });
+        });
+        const r = await swapVfo();
+        expect(r.ok).toBe(false);
+        expect(sent).toEqual([]);
+    });
+});
+
+describe('band + mode control (ADR 0026)', () => {
+    function recorder(): { sent: { op: string; value?: string | number }[] } {
+        const sent: { op: string; value?: string | number }[] = [];
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve({ ok: true, message: '' });
+        });
+        return { sent };
+    }
+
+    it('CAT-off setMode writes the friendly mode locally, sends nothing', async () => {
+        const { sent } = recorder();
+        await setMode('CW');
+        expect(rig.mode).toBe('CW');
+        expect(sent).toEqual([]);
+    });
+
+    it('live setMode sends the rig literal and optimistically reflects literal + friendly', async () => {
+        setModeMappings(FTDX10_MAPPINGS);
+        catLink.onRigState({ mode: 'USB' });
+        setRigCaps({ ops: ['set_mode'], tune: false, rigModes: ['USB', 'DATA-U'] });
+        const { sent } = recorder();
+
+        const r = await setMode('DATA-U');
+        expect(r.ok).toBe(true);
+        expect(sent).toEqual([{ op: 'set_mode', value: 'DATA-U' }]);
+        expect(rig.modeLiteral).toBe('DATA-U');
+        expect(rig.mode).toBe('FT8'); // friendlyMode(DATA-U) via the mappings
+    });
+
+    it('live setMode rolls back the optimistic mode on rejection', async () => {
+        setModeMappings(FTDX10_MAPPINGS);
+        catLink.onRigState({ mode: 'USB' });
+        setRigCaps({ ops: ['set_mode'], tune: false, rigModes: ['USB', 'DATA-U'] });
+        setCommandSender(() => Promise.resolve({ ok: false, message: 'rig_command_rejected' }));
+
+        const r = await setMode('DATA-U');
+        expect(r.ok).toBe(false);
+        expect(rig.modeLiteral).toBe('USB'); // restored
+        expect(rig.mode).toBe('USB');
+    });
+
+    it('selectBand sends set_band with the band NAME when live, sets locally when off', async () => {
+        // Off-CAT: local only.
+        const off = recorder();
+        await selectBand('40m');
+        expect(rig.band).toBe('40m');
+        expect(off.sent).toEqual([]);
+
+        // Live: drive the rig.
+        catLink.onRigState({ vfoA: 14_100_000 });
+        setRigCaps({ ops: ['set_band'], tune: false, rigModes: [] });
+        const on = recorder();
+        await selectBand('15m');
+        expect(on.sent).toEqual([{ op: 'set_band', value: '15m' }]);
+    });
+
+    it('bandUp / bandDown drive band_up / band_down live and no-op off-CAT', async () => {
+        // Off-CAT: silent no-op (ok, no command) so nothing toasts.
+        const off = recorder();
+        const r0 = await bandUp();
+        expect(r0.ok).toBe(true);
+        expect(off.sent).toEqual([]);
+
+        catLink.onRigState({ vfoA: 14_100_000 });
+        setRigCaps({ ops: ['band_up', 'band_down'], tune: false, rigModes: [] });
+        const on = recorder();
+        await bandUp();
+        await bandDown();
+        expect(on.sent).toEqual([
+            { op: 'band_up', value: undefined },
+            { op: 'band_down', value: undefined },
+        ]);
+    });
+
+    it('live band/mode fail soft (no command) when the rig lacks the op', async () => {
+        catLink.onRigState({ vfoA: 14_100_000 });
+        setRigCaps({ ops: [], tune: false, rigModes: [] });
+        const { sent } = recorder();
+        expect((await selectBand('20m')).ok).toBe(false);
+        expect((await bandUp()).ok).toBe(false);
+        expect((await setMode('USB')).ok).toBe(false);
+        expect(sent).toEqual([]);
+    });
+});
+
+describe('operating bands (station.operating_bands)', () => {
+    it('defaults to the full HF..6m set when unset', () => {
+        // resetCatLink() in beforeEach clears any configured list.
+        expect(operatingBands()).toEqual(DEFAULT_BANDS);
+    });
+
+    it('uses the configured list, preserving order', () => {
+        setOperatingBands(['80m', '40m', '20m', '10m']);
+        expect(operatingBands()).toEqual(['80m', '40m', '20m', '10m']);
+    });
+
+    it('drops blanks and dedupes (keeping first occurrence)', () => {
+        setOperatingBands(['20m', '', '40m', '20m', '15m']);
+        expect(operatingBands()).toEqual(['20m', '40m', '15m']);
+    });
+
+    it('an empty configured list falls back to the default', () => {
+        setOperatingBands([]);
+        expect(operatingBands()).toEqual(DEFAULT_BANDS);
     });
 });

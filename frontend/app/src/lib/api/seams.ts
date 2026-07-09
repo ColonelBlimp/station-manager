@@ -106,6 +106,19 @@ export interface StationContext {
     logbookId: number;
     catEnabled: boolean;
     modeMappings: Record<string, AdifModePair>;
+    /** Bridge capability advertisement (BridgeInfo, ADR 0026): which rig-control
+     *  ops the configured rig exposes (`set_freq`, `swap_vfo`, …), whether it
+     *  supports the tune carrier (ADR 0027), and the rig's own mode literals for
+     *  the live mode dropdown (Option A). Empty when the bridge is disabled or
+     *  config is unavailable, so every control surface gates closed. */
+    ops: string[];
+    tune: boolean;
+    rigModes: string[];
+    /** The operator's configured operating bands (station.operating_bands) —
+     *  one source for the band selector, FT8 band buttons, and (later) the
+     *  keyboard band-jump. Empty = unset → the UI falls back to its default
+     *  HF..6m set, so an existing config is unaffected. */
+    operatingBands: string[];
     /** Mailer projection (daemon-managed, read-only): the Export dialog gates
      *  the email path on `mailerEnabled` and seeds the recipient. */
     mailerEnabled: boolean;
@@ -120,6 +133,10 @@ export async function fetchStationContext(): Promise<StationContext> {
         logbookId: 0,
         catEnabled: false,
         modeMappings: {},
+        ops: [],
+        tune: false,
+        rigModes: [],
+        operatingBands: [],
         mailerEnabled: false,
         mailerDefaultRecipient: '',
     };
@@ -132,6 +149,7 @@ export async function fetchStationContext(): Promise<StationContext> {
     const lb = isPlainObject(body.default_logbook) ? body.default_logbook : {};
     const br = isPlainObject(body.bridge) ? body.bridge : {};
     const ml = isPlainObject(body.mailer) ? body.mailer : {};
+    const st = isPlainObject(body.station) ? body.station : {};
     const str = (v: unknown): string => (typeof v === 'string' ? v : '');
     return {
         myGrid: str(ls.my_gridsquare),
@@ -140,9 +158,22 @@ export async function fetchStationContext(): Promise<StationContext> {
         logbookId: typeof lb.id === 'number' ? lb.id : 0,
         catEnabled: br.enabled === true,
         modeMappings: toModeMappings(br.mode_mappings),
+        // ops/tune/rig_modes carry `omitempty`, so they're simply absent when
+        // the rig exposes none — toStringArray/=== true default them closed.
+        ops: toStringArray(br.ops),
+        tune: br.tune === true,
+        rigModes: toStringArray(br.rig_modes),
+        operatingBands: toStringArray(st.operating_bands),
         mailerEnabled: ml.enabled === true,
         mailerDefaultRecipient: str(ml.default_recipient),
     };
+}
+
+/** Keep only the string members of a wire array; anything else (or a non-array)
+ *  yields an empty list — a malformed caps advertisement gates every control
+ *  surface closed rather than throwing. */
+function toStringArray(v: unknown): string[] {
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 }
 
 /** Narrow the wire's mode_mappings to well-formed entries; anything odd is
