@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FT8 operating view — mock (ADR 0047)</title>
+<style>
+  /*
+    Throwaway layout mock for ADR 0047 — the FT8 operating view.
+    Colours mirror frontend/app/src/styles/app.css @theme tokens (light + dark).
+    NOT production markup: a strawman to settle the deferred placement calls
+    (Rx-Freq home, slot-countdown placement, Rig/Session pin, anchor geometry)
+    in context before any Svelte. Delete once the real FT8 view ships.
+  */
+  :root {
+    --canvas:#f3f4f6; --surface:#fff; --surface-muted:#f3f4f6; --line:#e5e7eb;
+    --ink:#111827; --muted:#6b7280; --focus:#4f46e5; --focus-ring:#6366f1;
+    --invalid:#dc2626; --logged:#16a34a; --nav-fg:#374151; --nav-icon:#9ca3af;
+    --nav-accent-bg:#eef2ff; --nav-accent-fg:#4f46e5;
+    --cq:#fef9c3; --cq-line:#eab308;         /* un-worked CQ attention */
+    --calling:#dbeafe; --calling-line:#3b82f6; /* someone calling you */
+    --dupe:#9ca3af;                            /* worked-before muted */
+    --busy:#94a3b8; --clear:#16a34a; --star:#4f46e5;
+    --note:#f59e0b;
+  }
+  :root[data-theme="dark"] {
+    --canvas:#0b1220; --surface:#1f2937; --surface-muted:#374151; --line:#374151;
+    --ink:#f9fafb; --muted:#9ca3af; --focus:#818cf8; --focus-ring:#6366f1;
+    --invalid:#f87171; --logged:#4ade80; --nav-fg:#d1d5db; --nav-icon:#6b7280;
+    --nav-accent-bg:#312e81; --nav-accent-fg:#c7d2fe;
+    --cq:#3f3a10; --cq-line:#a16207; --calling:#172554; --calling-line:#3b82f6;
+    --dupe:#6b7280; --busy:#64748b; --clear:#4ade80; --star:#a5b4fc; --note:#f59e0b;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font:13px/1.4 ui-sans-serif,system-ui,sans-serif; color:var(--ink);
+         background:var(--canvas); height:100vh; overflow:hidden; }
+  .mono { font-family:ui-monospace,"SF Mono",Menlo,monospace; }
+
+  /* Shell frame */
+  .app { display:grid; grid-template-columns:200px 1fr; height:100vh; }
+  .sidebar { background:var(--surface); border-right:1px solid var(--line); padding:14px 10px; }
+  .logo { font-weight:700; font-size:14px; padding:6px 8px 14px; }
+  .nav a { display:flex; gap:8px; align-items:center; padding:7px 10px; border-radius:7px;
+           color:var(--nav-fg); text-decoration:none; font-weight:500; }
+  .nav a.active { background:var(--nav-accent-bg); color:var(--nav-accent-fg); }
+  .nav .dot { width:16px; text-align:center; color:var(--nav-icon); }
+  .nav a.active .dot { color:var(--nav-accent-fg); }
+  .nav .sub { padding-left:26px; font-size:12px; }
+
+  .main { display:flex; flex-direction:column; min-width:0; }
+  .header { display:flex; align-items:center; gap:14px; padding:10px 16px;
+            background:var(--surface); border-bottom:1px solid var(--line); }
+  .header .timer { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .spacer { flex:1; }
+  .chip { display:inline-flex; align-items:center; gap:8px; padding:5px 12px;
+          border-radius:999px; background:var(--surface-muted); font-weight:600;
+          font-variant-numeric:tabular-nums; }
+  .chip .cat { width:8px; height:8px; border-radius:50%; background:var(--logged); }
+  /* FT8 slot-timing indicator — sits directly above the ladder rungs (the slots).
+     Transmit vs Listen are colour-coded AND labelled, so the state is obvious. */
+  .slot-ind { display:inline-flex; align-items:center; gap:9px; padding:5px 15px; border-radius:999px;
+              font-weight:700; font-size:12.5px; font-variant-numeric:tabular-nums;
+              border:1px solid transparent; }
+  .slot-ind .dot { width:9px; height:9px; border-radius:50%; }
+  .slot-ind b { font-weight:800; }
+  /* Transmit = solid red, unmistakable "on air". */
+  .slot-ind.tx { background:var(--invalid); color:#fff; }
+  .slot-ind.tx .dot { background:#fff; }
+  /* Listen = calm green, receiving. */
+  .slot-ind.rx { background:color-mix(in oklab,var(--logged) 15%,var(--surface)); color:var(--logged);
+                 border-color:color-mix(in oklab,var(--logged) 40%,transparent); }
+  .slot-ind.rx .dot { background:var(--logged); }
+  .slot-compare { font-size:10px; color:var(--muted); font-weight:400; margin-top:5px; }
+  .toggles button { border:1px solid var(--line); background:var(--surface); color:var(--ink);
+                    border-radius:7px; padding:5px 9px; cursor:pointer; font-size:12px; }
+
+  /* Work area: two anchors on top, occupancy strip across the bottom, util rail on the right */
+  .work { flex:1; display:grid;
+          grid-template-columns:1fr 470px 52px;   /* band-activity | ladder | rail */
+          grid-template-rows:1fr 170px;
+          grid-template-areas:"ba ladder rail" "occ occ rail";
+          gap:12px; padding:12px; min-height:0; }
+  .panel { background:var(--surface); border:1px solid var(--line); border-radius:12px;
+           display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+  .panel > h3 { font-size:12px; font-weight:700; padding:9px 12px; border-bottom:1px solid var(--line);
+                display:flex; align-items:center; gap:8px; }
+  .panel .body { padding:8px 10px; overflow:auto; min-height:0; }
+  .tag { font-size:10px; font-weight:700; padding:2px 6px; border-radius:999px;
+         background:var(--nav-accent-bg); color:var(--nav-accent-fg); }
+  .anchor { outline:2px solid var(--focus); outline-offset:-2px; }
+  .anchor-tag { background:var(--focus); color:#fff; }
+
+  #ba { grid-area:ba; }
+  #ladder { grid-area:ladder; }
+  #occ { grid-area:occ; }
+  #rail { grid-area:rail; }
+
+  /* Band Activity */
+  .ba-tools { margin-left:auto; display:flex; gap:6px; color:var(--muted); font-weight:500; }
+  .ba-tools .funnel { border:1px solid var(--line); border-radius:6px; padding:1px 7px; cursor:pointer; }
+  #ba .body { padding-top:0; }   /* let the sticky header sit flush */
+  table.feed { width:100%; border-collapse:collapse; }
+  table.feed td { padding:3px 6px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  /* Sticky column header for the decode feed. */
+  .feed-head th { position:sticky; top:0; z-index:3; background:var(--surface); color:var(--muted);
+                  font-weight:700; font-size:10px; letter-spacing:.03em; text-transform:uppercase;
+                  text-align:left; padding:6px; border-bottom:1px solid var(--line); }
+  /* Flag column indented a touch off the panel edge. */
+  .feed td:first-child, .feed-head th:first-child { padding-left:12px; }
+  .slotdiv td { background:var(--surface-muted); color:var(--muted); font-weight:600; font-size:11px; }
+  .row-cq { background:var(--cq); box-shadow:inset 2px 0 var(--cq-line); }
+  .row-call { background:var(--calling); box-shadow:inset 2px 0 var(--calling-line); }
+  .row-dupe { color:var(--dupe); }
+  .bearing { color:var(--focus); font-weight:600; }
+  .snr { color:var(--muted); }
+
+  /* Operate / ladder */
+  .role { margin-left:auto; font-weight:600; color:var(--muted); }
+  .working-hdr { font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .working-hdr b { font-size:16px; color:var(--ink); letter-spacing:.5px; }
+  /* Reused EnrichmentCard (real fields: flag · country · DXCC+NEW · bearing ·
+     SP/LP · their time). No name/QTH — those aren't in the component.
+     Sized IDENTICALLY to the Phone/CW host box: w-56 h-45 = 224 × 180 px. */
+  .enrich-card { width:224px; height:180px; background:var(--surface-muted);
+                 border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
+  .ec-top { display:flex; align-items:center; gap:10px; }
+  .ec-flag { font-size:34px; line-height:1; }
+  .ec-country { font-size:15px; font-weight:700; }
+  .ec-dxcc { font-size:12px; color:var(--muted); }
+  .ec-new { background:var(--focus); color:#fff; font-size:9px; font-weight:800; text-transform:uppercase;
+            border-radius:4px; padding:1px 5px; margin-left:4px; letter-spacing:.5px; }
+  .ec-bearing { text-align:center; font-weight:700; margin-top:8px; font-variant-numeric:tabular-nums; }
+  .ec-path { display:flex; gap:14px; justify-content:center; margin-top:6px; color:var(--muted); font-size:12px; }
+  .ec-path input { accent-color:var(--focus); }
+  .ec-time { display:flex; justify-content:space-between; margin-top:8px; font-size:12px; color:var(--muted); }
+  .ec-time b { color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; }
+  /* Top row: enrichment card (fixed 224×180) + station/timing column beside it */
+  .op-top { display:flex; gap:14px; margin-bottom:12px; }
+  .op-info { flex:1; display:flex; flex-direction:column; }
+  .oi-call { font-size:22px; font-weight:800; letter-spacing:.5px; }
+  .oi-role { font-size:12px; color:var(--muted); font-weight:600; margin-top:2px; }
+  .oi-foot { margin-top:auto; }
+  .oi-count { font-size:14px; font-weight:700; }
+  .oi-count b { color:var(--focus); }
+  .oi-seq { font-size:11px; color:var(--focus); font-weight:600; margin-top:3px; }
+  .op-divider { height:1px; background:var(--line); margin:0 0 10px; }
+  .ladder-head { font-size:11px; font-weight:700; color:var(--muted); margin-bottom:7px;
+                 text-align:center; }
+  .seq-head { display:flex; justify-content:space-between; font-size:11px; font-weight:600;
+              color:var(--muted); padding:2px 2px 6px; }
+  .seq-count { color:var(--focus); }
+  .rungs { list-style:none; }
+  .rungs li { padding:7px 10px; border-radius:7px; display:flex; justify-content:space-between;
+              align-items:center; border:1px solid transparent; }
+  .rungs li + li { margin-top:2px; }
+  .rungs li.done { color:var(--muted); }
+  .rungs li.now { background:var(--nav-accent-bg); color:var(--nav-accent-fg); font-weight:700;
+                  border-color:var(--focus); }
+  .rungs li .tick { color:var(--logged); font-size:11px; }
+  .rungs li .live { font-size:11px; color:var(--nav-accent-fg); font-weight:700; }
+  .pile-next { display:flex; justify-content:space-between; align-items:center; margin-top:12px;
+               padding:8px 10px; border:1px dashed var(--line); border-radius:9px; font-size:11px;
+               color:var(--muted); }
+  .pile-next b { color:var(--ink); }
+  .txbar { margin-top:auto; padding:10px; border-top:1px solid var(--line);
+           display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .tx-hint { flex-basis:100%; color:var(--muted); font-size:10.5px; }
+  .arm-sep { height:1px; background:var(--line); }
+  .arm-wrap { padding:10px; }
+  .arm-btn { width:100%; justify-content:center; }
+  .btn { border:1px solid var(--line); background:var(--surface); color:var(--ink);
+         border-radius:8px; padding:6px 12px; font-weight:600; cursor:pointer; }
+  .btn.primary { background:var(--focus); border-color:var(--focus); color:#fff; }
+  .btn.danger { border-color:var(--invalid); color:var(--invalid); }
+  .splp { margin-left:auto; display:flex; gap:4px; align-items:center; color:var(--muted); }
+  .splp b { color:var(--ink); }
+  .splp .seg { border:1px solid var(--line); border-radius:6px; overflow:hidden; display:flex; }
+  .splp .seg span { padding:2px 8px; cursor:pointer; }
+  .splp .seg .on { background:var(--focus); color:#fff; }
+
+  /* Occupancy */
+  .occ-head { display:flex; align-items:center; gap:10px; padding:9px 12px; border-bottom:1px solid var(--line); }
+  .views { display:flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+  .views span { padding:3px 10px; font-size:11px; font-weight:600; cursor:pointer; color:var(--muted); }
+  .views span.on { background:var(--focus); color:#fff; }
+  .views span.future { opacity:.55; }
+  .countdown { margin-left:auto; color:var(--muted); font-weight:600; font-variant-numeric:tabular-nums; }
+  .rxdetail { color:var(--ink); font-size:11px; border-left:1px solid var(--line); padding-left:10px; }
+  .spectrum { position:relative; flex:1; margin:10px 12px; border-radius:8px;
+              background:linear-gradient(var(--surface-muted),var(--surface-muted));
+              border:1px solid var(--line); overflow:hidden; }
+  .sig { position:absolute; bottom:0; width:9px; background:var(--busy); border-radius:2px 2px 0 0; opacity:.75; }
+  .mark { position:absolute; bottom:-2px; transform:translateX(-50%); font-size:11px; }
+  .mark.clear { color:var(--clear); }
+  .mark.star { color:var(--star); font-size:13px; }
+  .axis { position:absolute; bottom:2px; left:6px; right:6px; display:flex;
+          justify-content:space-between; color:var(--muted); font-size:10px; }
+
+  /* Util rail */
+  #rail { align-items:center; gap:6px; padding:10px 0; }
+  .rail-btn { width:38px; height:38px; border-radius:9px; border:1px solid transparent;
+              display:flex; align-items:center; justify-content:center; cursor:pointer;
+              color:var(--nav-fg); font-size:16px; position:relative; }
+  .rail-btn.on { background:var(--nav-accent-bg); color:var(--nav-accent-fg); border-color:var(--line); }
+  .rail-btn .badge { position:absolute; top:-2px; right:-2px; background:var(--invalid); color:#fff;
+                     font-size:9px; font-weight:700; border-radius:999px; padding:0 4px; }
+  .rail-sep { width:24px; height:1px; background:var(--line); margin:4px 0; }
+
+  /* Pile-up drawer (docked, shown open) */
+  .drawer { position:absolute; top:120px; right:64px; width:210px; background:var(--surface);
+            border:1px solid var(--line); border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.18); }
+  .drawer h4 { font-size:12px; font-weight:700; padding:8px 10px; border-bottom:1px solid var(--line);
+               display:flex; justify-content:space-between; }
+  .drawer .q { padding:6px 10px; display:flex; justify-content:space-between; border-bottom:1px solid var(--line);
+               font-variant-numeric:tabular-nums; }
+  .drawer .q:first-child { font-weight:700; }
+  .drawer .foot { padding:7px 10px; color:var(--muted); font-size:11px; }
+
+  /* Floating shared cards (Rig shown pinned as an example) */
+  .float { position:absolute; background:var(--surface); border:1px solid var(--line);
+           border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.16); width:290px; }
+  #rigcard { top:70px; right:290px; }
+  #rigcard .body { padding:10px 12px; }
+  .bandgrid { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
+  .bandgrid button { border:1px solid var(--line); background:var(--surface); color:var(--ink);
+                     border-radius:7px; padding:3px 9px; font-size:11px; font-weight:600; cursor:pointer; }
+  .bandgrid button.on { background:var(--focus); border-color:var(--focus); color:#fff; }
+  .rigrow { display:flex; gap:12px; margin-top:10px; align-items:end; }
+  .rigrow label { font-size:11px; color:var(--muted); display:block; }
+  .rigrow .val { font-weight:700; font-variant-numeric:tabular-nums; }
+
+  /* Annotation callouts */
+  .note { position:absolute; background:var(--note); color:#1a1300; font-size:10.5px; font-weight:700;
+          border-radius:6px; padding:2px 7px; box-shadow:0 3px 10px rgba(0,0,0,.25); z-index:20; }
+  .legend { position:fixed; bottom:12px; left:212px; right:12px; background:var(--surface);
+            border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:11px;
+            display:none; gap:18px; flex-wrap:wrap; z-index:30; box-shadow:0 -4px 20px rgba(0,0,0,.12); }
+  .legend.show { display:flex; }
+  .legend b { color:var(--nav-accent-fg); }
+  .keydrop span { display:inline-block; margin-right:10px; }
+  .k { color:var(--logged); } .d { color:var(--invalid); } .m { color:var(--focus); }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="logo">Station Manager</div>
+    <nav class="nav">
+      <a href="#"><span class="dot">▦</span> Dashboard</a>
+      <a href="#" class="active"><span class="dot">◉</span> Operate</a>
+      <a href="#" class="sub active" style="color:var(--nav-accent-fg)"><span class="dot">·</span> FT8</a>
+      <a href="#" class="sub"><span class="dot">·</span> Phone / CW</a>
+      <a href="#"><span class="dot">▤</span> Logbook</a>
+      <a href="#"><span class="dot">⚙</span> Settings</a>
+    </nav>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="header">
+      <span class="timer mono">Session 01:24:37</span>
+      <div class="spacer"></div>
+      <span class="chip mono">14.074.000 &nbsp;·&nbsp; USB-D &nbsp;·&nbsp; 20m <span class="cat"></span> CAT</span>
+      <div class="toggles">
+        <button onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme==='dark'?'light':'dark'">◐ theme</button>
+        <button onclick="document.querySelector('.legend').classList.toggle('show')">▤ decisions</button>
+      </div>
+    </div>
+
+    <div class="work">
+      <!-- ANCHOR 1: Band Activity (front & centre) -->
+      <section class="panel anchor" id="ba">
+        <h3>Band Activity <span class="tag anchor-tag">anchor</span>
+          <span class="ba-tools"><span class="funnel">▽ filter</span> <span>cq→top</span></span>
+        </h3>
+        <div class="body mono">
+          <table class="feed">
+            <thead class="feed-head">
+              <tr><th></th><th>Message</th><th>Grid/Rpt</th><th>Brg</th><th>SNR</th><th>Hz</th></tr>
+            </thead>
+            <tbody>
+            <tr class="slotdiv"><td colspan="6">14:30:15 · 20m · even</td></tr>
+            <tr class="row-cq"><td>🇺🇸</td><td>CQ W1ABC</td><td>FN42</td><td class="bearing">312°</td><td class="snr">-12</td><td>1102Hz</td></tr>
+            <tr class="row-call"><td>🇩🇪</td><td>K1ABC DL9UW</td><td>-08</td><td class="bearing">041°</td><td class="snr">+02</td><td>1498Hz</td></tr>
+            <tr class="row-cq"><td>🇯🇵</td><td>CQ JA1XYZ</td><td>PM95</td><td class="bearing">028°</td><td class="snr">-15</td><td>0784Hz</td></tr>
+            <tr class="row-dupe"><td>🇬🇧</td><td>CQ G3ABC</td><td>IO91</td><td class="bearing">352°</td><td class="snr">-06</td><td>2210Hz</td></tr>
+            <tr class="slotdiv"><td colspan="6">14:30:30 · 20m · odd</td></tr>
+            <tr class="row-cq"><td>🇨🇦</td><td>CQ VE3XYZ</td><td>FN03</td><td class="bearing">305°</td><td class="snr">-09</td><td>1660Hz</td></tr>
+            <tr class="row-call"><td>🇧🇷</td><td>K1ABC PY2ABC</td><td>R-14</td><td class="bearing">198°</td><td class="snr">-17</td><td>1500Hz</td></tr>
+            <tr class="row-cq"><td>🇮🇹</td><td>CQ I2ABC</td><td>JN45</td><td class="bearing">018°</td><td class="snr">-11</td><td>0940Hz</td></tr>
+            <tr class="row-dupe"><td>🇪🇸</td><td>CQ EA4ABC</td><td>IN80</td><td class="bearing">340°</td><td class="snr">-03</td><td>2050Hz</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ANCHOR 2: Operate / ladder (most-watched control center) -->
+      <section class="panel anchor" id="ladder">
+        <h3>Operate <span class="tag anchor-tag">anchor · most-watched</span></h3>
+        <div class="body">
+          <!-- Top row: reused EnrichmentCard (fixed 224×180, same as Phone/CW)
+               on the left; the worked call + role + timing fill the widened gap. -->
+          <div class="op-top">
+            <div class="enrich-card">
+              <div class="ec-top">
+                <div class="ec-flag">🇧🇶</div>
+                <div>
+                  <div class="ec-country">Bonaire</div>
+                  <div class="ec-dxcc">DXCC 520 <span class="ec-new">New</span></div>
+                </div>
+              </div>
+              <div class="ec-bearing mono">096° · 7,180 km</div>
+              <div class="ec-path">
+                <label><input type="radio" name="mp" checked> Short Path</label>
+                <label><input type="radio" name="mp"> Long Path</label>
+              </div>
+              <div class="ec-time"><span>Their time</span><b class="mono">09:42 · UTC−4</b></div>
+            </div>
+            <div class="op-info">
+              <div class="oi-call mono">PJ4/NA2AA</div>
+              <div class="oi-role">Answering a CQ</div>
+            </div>
+          </div>
+
+          <!-- Divider between the enrichment/station block and the message ladder -->
+          <div class="op-divider"></div>
+
+          <!-- Slot-timing indicator, directly above the rungs (which ARE the
+               slots) — replaces the redundant "rung N of M" progress text. -->
+          <div class="ladder-head">
+            <div style="display:flex;justify-content:center;gap:10px;flex-wrap:wrap">
+              <span class="slot-ind tx"><span class="dot"></span> Transmit slot · listen in <b>7s</b></span>
+              <span class="slot-ind rx"><span class="dot"></span> Listen slot · transmit in <b>7s</b></span>
+            </div>
+            <div class="slot-compare">both shown to compare colours — only the current slot's pill appears live</div>
+          </div>
+
+          <ul class="rungs mono">
+            <li class="done">CQ K1ABC FN42 <span class="tick">✓ sent</span></li>
+            <li class="done">PJ4/NA2AA K1ABC −12 <span class="tick">✓ rcvd</span></li>
+            <li class="now">K1ABC PJ4/NA2AA R−08 <span class="live">◀ transmitting · sent ×1</span></li>
+            <li>PJ4/NA2AA K1ABC RR73</li>
+            <li>73 <span style="color:var(--muted);font-size:11px">→ logs the QSO</span></li>
+          </ul>
+
+          <!-- Pile-up context: who's next when this QSO completes -->
+          <div class="pile-next">
+            <span>Pile-up · 3 waiting · auto-advancing</span>
+            <span class="mono">next ▸ <b>DL9UW</b> +02</span>
+          </div>
+        </div>
+        <div class="txbar">
+          <button class="btn">Call CQ</button>
+          <button class="btn danger">Abandon</button>
+          <button class="btn">Next ▸</button>
+          <span class="tx-hint">Next is shown only mid pile-up contact with more queued (and not while
+            Calling CQ); disabled during TX — advances in the RX half. SP/LP lives in the enrichment card.</span>
+        </div>
+        <!-- Arm/disarm is the master TX enable — separated from the action
+             buttons by a divider, on its own at the very bottom. -->
+        <div class="arm-sep"></div>
+        <div class="arm-wrap">
+          <button class="btn primary arm-btn">● Armed — click to disarm</button>
+        </div>
+      </section>
+
+      <!-- ANCHOR 3: Occupancy — full-width bottom strip, 3-view switcher -->
+      <section class="panel anchor" id="occ">
+        <div class="occ-head">
+          <strong style="font-size:12px">Occupancy</strong>
+          <div class="views">
+            <span class="future">Waterfall ◔</span><span class="on">Spectrum</span><span>Channels</span>
+          </div>
+          <span class="rxdetail mono" style="margin-left:auto">on your offset (1500 Hz): DL9UW −8 · PY2ABC −17</span>
+        </div>
+        <div class="spectrum" id="spectrum"></div>
+        <div style="padding:0 12px 8px; color:var(--muted); font-size:11px">
+          signals at true positions · ▾ clear offsets · ★ recommended · click anywhere to set TX offset
+        </div>
+      </section>
+
+      <!-- Util rail (mode-aware: FT8 items) -->
+      <aside class="panel" id="rail" style="border-radius:12px">
+        <div class="rail-btn on" title="Pile-up">≡<span class="badge">3</span></div>
+        <div class="rail-btn" title="Rig (toggle)">📻</div>
+        <div class="rail-btn" title="Session (toggle)">▤</div>
+        <div class="rail-sep"></div>
+        <div class="rail-btn" title="Settings">⚙</div>
+        <div class="rail-btn" title="Arrange">⇲</div>
+        <div class="rail-sep"></div>
+        <div class="rail-btn" title="Collapse">⟨</div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<!-- Rig + Session are rail-toggled (resolved): shown collapsed on the rail, opened
+     on demand so the two anchors keep the acreage. The header chip is the glance. -->
+
+<!-- Pile-up drawer omitted from THIS mock so it doesn't overlay the Operate panel.
+     It stays in the design (ADR 0047: keep) — rail button ≡ (badge 3) toggles it. -->
+
+<!-- All placement calls settled (see legend). No open callouts. -->
+
+<!-- Decisions ledger -->
+<div class="legend">
+  <div class="keydrop">
+    <b>ADR 0047 ledger</b><br>
+    <span class="k">KEEP</span> Operate-ladder (anchor) ·
+    <span class="k">KEEP</span> Band Activity (anchor, bearing col) ·
+    <span class="k">KEEP</span> Occupancy (bottom strip · Waterfall/Spectrum/Channels) ·
+    <span class="k">KEEP</span> Rig + Session (shared cards) ·
+    <span class="m">MOVE</span> Settings → rail ·
+    <span class="k">KEEP</span> Pile-up (capture + auto-drain) ·
+    <span class="k">KEEP+UPGRADE</span> filter ·
+    <span class="d">DROP</span> sub-tabs ·
+    <span class="d">DROP</span> Clear-Offsets list ·
+    <span class="k">KEEP</span> Enrichment (reused card, top of Operate — carries SP/LP) ·
+    <span class="k">✓</span> anchor geometry = side-by-side ·
+    <span class="k">✓</span> Rig/Session = rail-toggled ·
+    <span class="k">✓</span> enrichment = reused card (top-left of Operate) ·
+    <span class="k">✓</span> countdown = Operate top-right ·
+    <span class="k">✓</span> Rx-Freq folded into Occupancy header
+  </div>
+</div>
+
+<script>
+  // Populate the spectrum with signal blobs + clear (▾) / recommended (★) markers.
+  const spec = document.getElementById('spectrum');
+  const sigs = [ [8,60],[9,45],[10,80],[11,55],[24,70],[25,40],[41,90],[42,65],[43,50],
+                 [58,35],[59,55],[72,75],[73,45],[80,60] ];
+  sigs.forEach(([p,h]) => { const d=document.createElement('div'); d.className='sig';
+    d.style.left=p+'%'; d.style.height=h+'%'; spec.appendChild(d); });
+  const clears=[18,34,52,66,88]; const star=52;
+  clears.forEach(p => { const m=document.createElement('div');
+    m.className='mark clear'+(p===star?' star':''); m.textContent=(p===star?'★':'▾');
+    m.style.left=p+'%'; spec.appendChild(m); });
+  const ax=document.createElement('div'); ax.className='axis mono';
+  ax.innerHTML='<span>200</span><span>1000</span><span>1500</span><span>2000</span><span>3000 Hz</span>';
+  spec.appendChild(ax);
+</script>
+</body>
+</html>

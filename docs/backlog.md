@@ -593,6 +593,20 @@ next, and in what order" is answered.
      is open), plus scaling/contrast (AGC) + slot-time gridlines for readability.
      **De-risk by spiking the Canvas render with synthetic rows first** (an afternoon,
      no daemon work) before building the FFT-streaming pipeline.
+     - **FFT choice — gonum vs PocketFFT (noted 2026-07-09, operator raised).** Don't
+       assume CGO/PocketFFT is *needed*: the waterfall's is a **lightweight display FFT**
+       (a few-thousand-point real FFT for magnitude bins, ~10–20 fps → tens of µs each,
+       <1 ms/s of CPU in gonum) — a different, far lighter workload than the heavy
+       *decode* FFT (jt9-style demod that must finish inside the 15 s slot, which is why
+       decode already uses PocketFFT). The scary "~150×" is 150× a once-per-15s baseline
+       = still only ~10–20 small FFTs/s. **But it's a cheap, reversible call because CGO
+       is already in the picture:** the shipped build is CGO + PocketFFT, and **live FT8
+       already REQUIRES CGO** (audio capture), so the waterfall is *de-facto CGO-gated*
+       already — using PocketFFT for its bins costs nothing new and loses no static-build
+       capability (that build has no live FT8 anyway). **Approach:** build the waterfall
+       FFT behind the existing `gonum`-default / `pocketfft`-opt-in seam (same as decode),
+       **measure at target fps + resolution, switch only if gonum shows in the profile.**
+       Don't pre-optimise; the PocketFFT door is open and free if measurement says so.
 
 - **FT8 Spectrum view — colour revision.** Filed 2026-06-26. The Spectrum occupancy
   view (`Ft8OccupancySpectrum.svelte`) shipped with first-pass colours: soft slate

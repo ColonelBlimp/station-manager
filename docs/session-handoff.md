@@ -33,7 +33,8 @@ precisely so we don't re-derive state or redo finished work.
 ## Current state (as of 2026-07-09)
 
 > **Session 210 (2026-07-09) — `frontend/app` RIG CONTROL arc COMPLETE
-> (Slices 1–4) + configurable operating-bands (daemon + SPA).** Goal changed
+> (Slices 1–4) + configurable operating-bands (daemon + SPA); then FT8 UI DESIGN
+> settled (ADR 0047 + throwaway mock).** Goal changed
 > this session: 7Q8AC is shipped, so `frontend/app` is now the **full-replacement
 > daily-driver target** (no external clock — build it right). Reuse-first
 > throughout ([[sm-reuse-dogfood-spas-first]]). Decided up front: **extend the
@@ -98,12 +99,30 @@ precisely so we don't re-derive state or redo finished work.
 >   Pre-existing red: `internal/api` `TestVersion_HappyPath` (backlog P1, schema
 >   v3→v4 stale test — unrelated). Non-transmitting shortcuts (swap/band/freq)
 >   safe to validate live; only Tune transmits (already validated).
-> - **NEXT:** the **FT8 port** — its own arc, builds on this substrate. Study
->   report already in hand: `Ft8Panel.svelte` (1131L) + `ft8.svelte.ts` (643L)
->   must be split into presentation + injected seams (ADR 0045); FT8 gets its
->   own tile surface + view-scoped SSE (demand-driven audio device); 5 named
->   `/v1/ft8/events` (`ft8-logged` NOT replay-cached). First move: extract the
->   shared rig-control card.
+> - **FT8 UI DESIGN settled (same session) — [ADR 0047](decisions/0047-ft8-operating-view-layout.md)
+>   + throwaway mock `docs/v2-design/ft8-mock/index.html`.** Walked the shipping
+>   `Ft8Panel` part-by-part with the operator (heavy FT8 op) and pruned. Result:
+>   a **three-anchor fixed layout, NO sub-tabs** — **Band Activity** (front &
+>   centre, sticky column header, per-CQ bearing) + **Operate/ladder** (co-primary,
+>   the most-watched control center) side-by-side up top; **Occupancy** full-width
+>   bottom strip (3-view switcher Waterfall·Spectrum·Channels; ▾/★ markers kept;
+>   Clear-Offsets *list* dropped; **Rx-Freq folded into its header**). Operate
+>   panel = reused **`EnrichmentCard`** (top-left, 224×180 like Phone/CW — carries
+>   SP/LP + bearing + their-time; enrichment flipped from "conditional drop" to
+>   KEEP-by-reuse) + worked-call/role → divider → **slot-timing pill** ("Transmit
+>   slot"=red / "Listen slot"=green, above the rungs, replacing the redundant
+>   "rung N of M"; repeats shown on the active rung) → pile-up next-up → actions
+>   (**Call CQ · Abandon · Next**) → divider → **Arm** on its own at the very
+>   bottom. **Rig + Session = rail-toggled** shared cards; **Settings → RH rail**;
+>   pile-up drawer (Ctrl+click capture + daemon auto-drain). Cost flagged: reuse
+>   needs `EnrichmentCard`'s observed-call made a **prop** (ADR 0045). Mock is
+>   throwaway (delete on ship); ADR + mock agree.
+> - **NEXT: the FT8 BUILD** — its own arc, on this substrate + ADR 0047. The cheap
+>   half (layout) is de-risked in the mock; the expensive half: split
+>   `Ft8Panel.svelte` (1131L) + `ft8.svelte.ts` (643L) into presentation + injected
+>   seams (ADR 0045); **view-scoped SSE** (demand-driven audio device); 5 named
+>   `/v1/ft8/events` (`ft8-logged` NOT replay-cached); make `EnrichmentCard`'s call
+>   a prop. **First move: extract the shared rig-control card.**
 
 > **Session 209 (2026-07-08, same day) — `frontend/app` Operate polish +
 > the draggable/pinnable tile-layout decision (ADR 0046 + POC).** Reuse-first
