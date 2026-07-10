@@ -47,14 +47,16 @@
                     <thead class="bg-surface sticky top-0 z-10">
                         <tr class="text-xs text-muted text-left font-medium">
                             <th class="w-20">Time</th>
-                            <th class="w-28 overflow-x-hidden text-nowrap text-ellipsis">Callsign</th
+                            <th class="w-28 overflow-x-hidden text-nowrap text-ellipsis"
+                                >Callsign</th
                             >
                             <th class="w-12">Band</th>
                             <th class="w-14">Mode</th>
                             <th class="w-10">Sent</th>
                             <th class="w-10">Rcvd</th>
                             <th class="w-32 overflow-x-hidden text-nowrap text-ellipsis">Name</th>
-                            <th class="w-32 overflow-x-hidden text-nowrap text-ellipsis">Country</th>
+                            <th class="w-32 overflow-x-hidden text-nowrap text-ellipsis">Country</th
+                            >
                         </tr>
                     </thead>
                     <tbody>

@@ -63,13 +63,19 @@ describe('openFt8Events', () => {
         src.emit('open');
         expect(h.onOpen).toHaveBeenCalledOnce();
 
-        src.emit('ft8-decode', '{"slot":{"start_utc":"2026-07-09T14:30:15Z","period":"even"},"decodes":null}');
+        src.emit(
+            'ft8-decode',
+            '{"slot":{"start_utc":"2026-07-09T14:30:15Z","period":"even"},"decodes":null}'
+        );
         expect(h.onDecode).toHaveBeenCalledWith({
             slot: { start_utc: '2026-07-09T14:30:15Z', period: 'even' },
             decodes: null,
         });
 
-        src.emit('ft8-occupancy', '{"slot":{"start_utc":"x","period":"odd"},"passband":{"low_hz":200,"high_hz":3000},"signal_width_hz":50,"occupied":[],"suggested":[1500]}');
+        src.emit(
+            'ft8-occupancy',
+            '{"slot":{"start_utc":"x","period":"odd"},"passband":{"low_hz":200,"high_hz":3000},"signal_width_hz":50,"occupied":[],"suggested":[1500]}'
+        );
         expect(h.onOccupancy).toHaveBeenCalledOnce();
 
         src.emit('ft8-tx', '{"armed":true,"transmitting":false}');

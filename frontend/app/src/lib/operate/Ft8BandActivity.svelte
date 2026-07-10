@@ -15,12 +15,7 @@
     import { ft8EnrichState } from './ft8Enrich.svelte';
     import { rig } from './rig.svelte';
     import { session } from './session.svelte';
-    import {
-        parseCq,
-        parseDirectedToMe,
-        parseDirectedToMeFd,
-        isCqFd,
-    } from '../utils/ft8Message';
+    import { parseCq, parseDirectedToMe, parseDirectedToMeFd, isCqFd } from '../utils/ft8Message';
     import { slotParity } from '../utils/ft8Parity';
     import { pathInfo } from '../utils/bearing';
     import { parseFrequency } from '../validators/frequency';
@@ -207,11 +202,16 @@
             Decodes appear here as slots are received.
         </div>
     {:else}
-        <div class="flex-1 overflow-auto">
+        <!-- Margin-inset scroll box: its OWN edges sit inside the card (margin all
+             round), so scrolled rows clip at this box's bottom — leaving a gap to the
+             card edge — instead of bleeding to the border. Padding on a scroll box is
+             dropped at scroll end, hence the margin holds the inset. -->
+        <div class="mx-3 mb-3 min-h-0 flex-1 overflow-auto">
             <table class="w-full font-mono text-sm tabular-nums">
                 <thead>
                     <tr class="text-[10px] font-bold tracking-wide text-muted uppercase">
-                        <th class="sticky top-0 z-10 border-b border-line bg-surface py-1.5 pr-2 pl-3"
+                        <th
+                            class="sticky top-0 z-10 border-b border-line bg-surface py-1.5 pr-2 pl-3"
                         ></th>
                         <th
                             class="sticky top-0 z-10 border-b border-line bg-surface px-2 py-1.5 text-left"
@@ -239,9 +239,15 @@
                             </td>
                         </tr>
                         {#each g.decodes as row (row.d.id)}
-                            {@const info = row.kind === 'cq' ? ft8EnrichState.info(row.call, rig.band) : undefined}
+                            {@const info =
+                                row.kind === 'cq'
+                                    ? ft8EnrichState.info(row.call, rig.band)
+                                    : undefined}
                             <tr class="text-ink {rowClass(row.kind, info?.worked)}">
-                                <td class="py-0.5 pr-1 pl-3 text-base leading-none" title={info?.country}>
+                                <td
+                                    class="py-0.5 pr-1 pl-3 text-base leading-none"
+                                    title={info?.country}
+                                >
                                     {info?.flag ?? ''}
                                 </td>
                                 <td

@@ -39,7 +39,9 @@
     // Enrichment facts, only when they belong to the call in the draft (a fast
     // edit can outrun the debounced lookup).
     const e = $derived(enrich.call === call ? enrich.data : null);
-    const qrzUrl = $derived(call === '' ? null : `https://www.qrz.com/db/${encodeURIComponent(call)}`);
+    const qrzUrl = $derived(
+        call === '' ? null : `https://www.qrz.com/db/${encodeURIComponent(call)}`
+    );
     const workedCount = $derived(worked.status === 'done' ? worked.qsos.length : null);
     const gridInvalid = $derived(
         draft.gridsquare !== '' && isValidMaidenhead(draft.gridsquare) !== null

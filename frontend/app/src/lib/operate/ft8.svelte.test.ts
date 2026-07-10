@@ -26,7 +26,10 @@ beforeEach(() => {
     resetFt8ForTests();
 });
 
-function decodeSlot(startUtc: string, lines: { text: string; freq_hz: number; snr: number }[]): DecodeReport {
+function decodeSlot(
+    startUtc: string,
+    lines: { text: string; freq_hz: number; snr: number }[]
+): DecodeReport {
     return {
         slot: { start_utc: startUtc, period: 'even' },
         decodes: lines.map((l) => ({ ...l, dt_s: 0.1 })),
@@ -101,7 +104,12 @@ describe('occupancy + status mirrors', () => {
     });
 
     it('onTx / onQso mirror the wire payload (snake → camel)', () => {
-        ft8Link.onTx({ armed: true, transmitting: true, offset_hz: 1500, message: 'K1ABC PJ4 R-08' });
+        ft8Link.onTx({
+            armed: true,
+            transmitting: true,
+            offset_hz: 1500,
+            message: 'K1ABC PJ4 R-08',
+        });
         expect(ft8State.tx.armed).toBe(true);
         expect(ft8State.tx.offsetHz).toBe(1500);
 

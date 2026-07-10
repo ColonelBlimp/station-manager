@@ -31,12 +31,12 @@
     .ft8-grid {
         display: grid;
         gap: 0.75rem;
-        grid-template-columns: minmax(0, 1fr) 470px;
+        grid-template-columns: minmax(470px, 1fr) 470px;
         grid-template-rows: minmax(0, 1fr) 180px;
         grid-template-areas:
             'ba op'
             'occ occ';
-        height: calc(100vh - 9rem);
+        height: calc(100vh - 8rem);
     }
     .ft8-stub {
         display: flex;

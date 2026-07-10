@@ -21,10 +21,7 @@
         </span>
         <span class="flex-1"></span>
         <button class="btn text-xs" onclick={resetToDefault}>Reset to Default</button>
-        <button
-            class="btn text-xs {layout.pinned ? '' : 'btn-primary'}"
-            onclick={togglePin}
-        >
+        <button class="btn text-xs {layout.pinned ? '' : 'btn-primary'}" onclick={togglePin}>
             {layout.pinned ? 'Unpin' : 'Pin layout'}
         </button>
         <button class="btn text-xs" onclick={() => setArranging(false)}>Done</button>

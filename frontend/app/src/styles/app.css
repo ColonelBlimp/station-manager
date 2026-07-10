@@ -390,3 +390,47 @@ html[data-drawer='open'] .content-wrap {
 html[data-drawer='open'] header {
     margin-right: calc(-1 * (var(--util-rail-w) + 15.75rem));
 }
+
+/*
+    Cursor convention. The base cursor is the arrow — plain text, table cells,
+    emoji (e.g. Band Activity flags) no longer show the text I-beam. Text fields
+    keep the caret; genuinely-clickable elements opt into the pointer. All in
+    @layer base so any explicit Tailwind cursor-* utility (a conditionally-
+    clickable button, a decorative cursor-default) still wins.
+*/
+@layer base {
+    body {
+        cursor: default;
+    }
+    /* Where the user actually types/selects text. */
+    input:where(
+        [type='text'],
+        [type='search'],
+        [type='email'],
+        [type='url'],
+        [type='tel'],
+        [type='number'],
+        [type='password'],
+        :not([type])
+    ),
+    textarea,
+    [contenteditable]:where(:not([contenteditable='false'])) {
+        cursor: text;
+    }
+    /* Clickable affordances. */
+    button:where(:not(:disabled)),
+    a[href],
+    select,
+    summary,
+    [role='button']:where(:not([aria-disabled='true'])),
+    label:where(:has(input:where([type='checkbox'], [type='radio']))),
+    input:where(
+            [type='checkbox'],
+            [type='radio'],
+            [type='button'],
+            [type='submit'],
+            [type='reset']
+        ):where(:not(:disabled)) {
+        cursor: pointer;
+    }
+}

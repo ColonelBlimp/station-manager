@@ -71,9 +71,11 @@
                                 <td class="">{q.mode}</td>
                                 <td class="tabular-nums">{q.rstSent}</td>
                                 <td class="tabular-nums">{q.rstRcvd}</td>
-                                <td class="overflow-x-hidden text-nowrap text-ellipsis">{q.name}</td>
-                                <td class="overflow-x-hidden text-nowrap text-ellipsis" title={q.notes}
-                                    >{q.notes}</td
+                                <td class="overflow-x-hidden text-nowrap text-ellipsis">{q.name}</td
+                                >
+                                <td
+                                    class="overflow-x-hidden text-nowrap text-ellipsis"
+                                    title={q.notes}>{q.notes}</td
                                 >
                             </tr>
                         {/each}

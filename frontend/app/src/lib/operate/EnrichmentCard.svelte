@@ -5,19 +5,22 @@
     // heading), and the destination's local clock. Reads the shared enrich state
     // and the QSO draft's callsign; owns no lookup logic (enrich.svelte does) and
     // makes no positioning assumptions (ADR 0045) — it fills whatever box the
-    // host gives it. First host: the logging card's right-hand square; cards will
-    // be repositionable later, so nothing here may depend on that placement.
-    import { draft } from './qso.svelte';
+    // host gives it. The observed call is a PROP so the card is host-agnostic:
+    // the Phone/CW logging card passes its draft callsign, the FT8 Operate panel
+    // passes the worked station — same card, different source. An empty call
+    // renders the blank frame (observeCall resets to idle).
     import { enrich, station, prefs, observeCall } from './enrich.svelte';
     import { ccodeToFlag } from '../utils/flag';
     import { pathInfo, gridToDecimal } from '../utils/bearing';
+
+    const { call }: { call: string } = $props();
 
     // Namespaces the radio group per instance, so a relocated/duplicated card
     // can't capture another instance's SP/LP clicks.
     const uid = $props.id();
 
-    // The card is the consumer of the callsign field — it drives the lookup.
-    $effect(() => observeCall(draft.callsign));
+    // The card is the consumer of the callsign — it drives the lookup off the prop.
+    $effect(() => observeCall(call));
 
     const flag = $derived(ccodeToFlag(enrich.data?.ccode));
     // Bearing/distance need both ends; null (→ hidden) when either grid is

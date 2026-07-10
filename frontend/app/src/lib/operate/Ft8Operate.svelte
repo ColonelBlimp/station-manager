@@ -7,9 +7,9 @@
     import { ft8State, ft8OperatorCall, ft8MyGrid, armTx, callCq, abandonQso } from './ft8.svelte';
     import { rig } from './rig.svelte';
     import { buildLadder } from './ft8Ladder';
-    import { pathInfo } from '../utils/bearing';
     import { parseFrequency } from '../validators/frequency';
     import { toasts } from '../ui/toasts.svelte';
+    import EnrichmentCard from './EnrichmentCard.svelte';
 
     const qso = $derived(ft8State.qso);
     const tx = $derived(ft8State.tx);
@@ -32,36 +32,25 @@
 
     const ladder = $derived(buildLadder(qso, tx.transmitting, ft8OperatorCall(), ft8MyGrid()));
 
-    // Short-path bearing to the worked station (their grid → our grid).
-    const bearing = $derived.by(() => {
-        const my = ft8MyGrid();
-        if (qso.theirGrid === '' || my === '') return null;
-        try {
-            const p = pathInfo(my, qso.theirGrid);
-            return p && Number.isFinite(p.shortPathBearing) ? Math.round(p.shortPathBearing) : null;
-        } catch {
-            return null;
-        }
-    });
-
-    // ---- Slot-timing pill: a live 1 s ticker off the latest slot's start. ----
+    // ---- Slot-timing pill: a live countdown to the next 15 s UTC boundary. ----
+    // FT8 slots are wall-clock aligned (:00/:15/:30/:45 UTC), so the countdown is a
+    // pure function of NOW — NOT ft8State.slot, which lags (it only updates when a
+    // decode lands ~13 s into the slot, so counting to that slot's end reads 0 almost
+    // at once). Tick sub-second so the boundary flip is caught promptly.
     let now = $state(Date.now());
     $effect(() => {
-        const t = setInterval(() => (now = Date.now()), 1000);
+        const t = setInterval(() => (now = Date.now()), 250);
         return () => clearInterval(t);
     });
-    // Seconds remaining in the current 15 s slot (0–15), or null with no slot yet.
+    // Whole seconds until the next slot boundary (1–15), off the UTC-aligned 15 s grid.
     const secsLeft = $derived.by(() => {
-        if (ft8State.slot === null) return null;
-        const start = Date.parse(ft8State.slot.start_utc);
-        if (Number.isNaN(start)) return null;
-        const left = Math.ceil((start + 15_000 - now) / 1000);
-        return Math.max(0, Math.min(15, left));
+        const boundary = Math.floor(now / 15_000) * 15_000;
+        return Math.max(1, Math.min(15, Math.ceil((boundary + 15_000 - now) / 1000)));
     });
     // 'tx' = transmitting this slot; 'rx' = active but receiving; 'idle' = no session.
     const pillMode = $derived(tx.transmitting ? 'tx' : qso.active ? 'rx' : 'idle');
     const pillText = $derived(
-        secsLeft === null
+        !ft8State.connected
             ? 'Waiting for slot…'
             : pillMode === 'tx'
               ? `Transmit slot · listen in ${secsLeft}s`
@@ -166,19 +155,26 @@
     </div>
 
     <div class="flex-1 overflow-auto p-4">
-        <!-- Worked station -->
-        {#if qso.active && qso.theirCall !== ''}
-            <div class="font-mono text-lg font-extrabold tracking-wide text-ink">
-                {qso.theirCall}
+        <!-- Enrichment zone — reserved at the enrichment-panel height (h-45 / 180px)
+             so the slot pill + ladder below never reflow. The reused EnrichmentCard
+             (same w-56 h-45 frame the logging card gives it) sits on the left,
+             observing the worked station (blank when idle, exactly like Phone/CW);
+             the worked call + role sit in the column beside it. -->
+        <div class="flex h-45 gap-x-3">
+            <div class="w-56 shrink-0">
+                <EnrichmentCard call={qso.theirCall} />
             </div>
-            <div class="mt-0.5 text-xs text-muted">
-                {roleLabel}{bearing !== null ? ` · ${bearing}° short-path` : ''}
+            <div class="min-w-0 flex-1">
+                {#if qso.active && qso.theirCall !== ''}
+                    <div class="font-mono text-lg font-extrabold tracking-wide text-ink">
+                        {qso.theirCall}
+                    </div>
+                    <div class="mt-0.5 text-xs text-muted">{roleLabel}</div>
+                {:else}
+                    <div class="text-sm text-muted">No active contact</div>
+                {/if}
             </div>
-        {:else}
-            <div class="text-sm text-muted">
-                No active contact — answer a CQ from Band Activity, or Call CQ.
-            </div>
-        {/if}
+        </div>
 
         <hr class="my-3 border-line" />
 
@@ -265,13 +261,13 @@
         <hr class="my-3 border-line" />
         <button
             type="button"
-            class="w-full rounded-md px-3 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50 {tx.armed
-                ? 'bg-red-600 text-white hover:bg-red-700'
-                : 'border border-focus text-focus hover:bg-nav-accent-bg'}"
+            class="w-full rounded-md border px-3 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50 {tx.armed
+                ? 'border-red-600 bg-red-600 text-white hover:bg-red-700'
+                : 'border-focus text-focus hover:bg-nav-accent-bg'}"
             onclick={onArm}
             disabled={!canArm || arming}
         >
-            {tx.armed ? 'Armed — click to disable TX' : 'Enable TX'}
+            {tx.armed ? 'Disable TX' : 'Enable TX'}
         </button>
     </div>
 </section>

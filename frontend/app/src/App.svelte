@@ -59,7 +59,7 @@
          bounded by the rail offsets (content-wrap pl/pr), so a min-width card
          scrolls WITHIN it and the fixed rails can't scroll over the card. -->
     <main class="flex-1 overflow-auto bg-canvas">
-        <div class="px-4 py-10 sm:px-6 lg:px-8">
+        <div class="p-4 sm:p-6 lg:p-8">
             {#if router.view === 'operate'}
                 <Operate />
             {:else}

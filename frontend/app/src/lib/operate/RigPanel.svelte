@@ -110,7 +110,6 @@
         const r = await setMode((e.currentTarget as HTMLSelectElement).value);
         if (!r.ok) toasts.error(r.message);
     }
-
 </script>
 
 <div class="card w-2xl">
@@ -211,77 +210,79 @@
                 </select>
             {/if}
         </div>
-    {#if locked}
-        <!-- CAT-locked: both VFOs, SM dot-grouped display (14.199.950 —
+        {#if locked}
+            <!-- CAT-locked: both VFOs, SM dot-grouped display (14.199.950 —
              matches the rig + the shipping VFO box), the selected one dotted.
              When the rig exposes swap_vfo, each box is a button: clicking the
              non-selected one swaps A↔B (ADR 0026); otherwise it's a read-out. -->
-        {#each VFOS as v (v)}
-            {@const hz = v === 'A' ? rig.vfoA : rig.vfoB}
-            {@const shown = hz === null ? '—' : formatFrequency(hz)}
-            <div>
-                <span class="flex items-center gap-x-1.5 text-sm font-medium text-ink">
-                    VFO-{v}
-                    {#if rig.selectedVfo === v}
-                        <span class="size-2 rounded-full bg-green-500" title="Selected"></span>
+            {#each VFOS as v (v)}
+                {@const hz = v === 'A' ? rig.vfoA : rig.vfoB}
+                {@const shown = hz === null ? '—' : formatFrequency(hz)}
+                <div>
+                    <span class="flex items-center gap-x-1.5 text-sm font-medium text-ink">
+                        VFO-{v}
+                        {#if rig.selectedVfo === v}
+                            <span class="size-2 rounded-full bg-green-500" title="Selected"></span>
+                        {/if}
+                    </span>
+                    {#if canSwap}
+                        <button
+                            type="button"
+                            class="input w-32 cursor-pointer text-left tabular-nums hover:outline-focus"
+                            aria-pressed={rig.selectedVfo === v}
+                            onclick={() => onSelectVfo(v)}
+                            title={rig.selectedVfo === v
+                                ? 'Selected VFO'
+                                : 'Click to swap onto this VFO'}
+                        >
+                            {shown}
+                        </button>
+                    {:else}
+                        <input class="input w-32 tabular-nums" disabled value={shown} />
                     {/if}
-                </span>
-                {#if canSwap}
-                    <button
-                        type="button"
-                        class="input w-32 cursor-pointer text-left tabular-nums hover:outline-focus"
-                        aria-pressed={rig.selectedVfo === v}
-                        onclick={() => onSelectVfo(v)}
-                        title={rig.selectedVfo === v
-                            ? 'Selected VFO'
-                            : 'Click to swap onto this VFO'}
-                    >
-                        {shown}
-                    </button>
-                {:else}
-                    <input class="input w-32 tabular-nums" disabled value={shown} />
-                {/if}
+                </div>
+            {/each}
+        {:else}
+            <div>
+                <label for="rp-freq" class="block text-sm font-medium text-ink"
+                    >Frequency (MHz)</label
+                >
+                <input
+                    id="rp-freq"
+                    class="input w-32 tabular-nums"
+                    class:input-error={freqOutOfBand}
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="14.255.000"
+                    bind:value={rig.freq}
+                    oninput={syncBand}
+                />
             </div>
-        {/each}
-    {:else}
-        <div>
-            <label for="rp-freq" class="block text-sm font-medium text-ink">Frequency (MHz)</label>
-            <input
-                id="rp-freq"
-                class="input w-32 tabular-nums"
-                class:input-error={freqOutOfBand}
-                autocomplete="off"
-                spellcheck="false"
-                placeholder="14.255.000"
-                bind:value={rig.freq}
-                oninput={syncBand}
-            />
-        </div>
-    {/if}
+        {/if}
 
-    {#if rigCaps.tune}
-        <!-- Tune carrier: bottom-aligned on the input baseline. Active goes
+        {#if rigCaps.tune}
+            <!-- Tune carrier: bottom-aligned on the input baseline. Active goes
              solid red + pulses so a keyed carrier is unmistakable. Click-only
              (no shortcut) — starting a transmission is a deliberate action. -->
-        <div class="flex flex-col justify-end">
-            <button
-                type="button"
-                class="btn text-sm {rig.tuneActive
-                    ? 'border-red-600 bg-red-600 text-white hover:bg-red-700 animate-pulse'
-                    : ''}"
-                disabled={rig.cat !== 'connected'}
-                aria-pressed={rig.tuneActive}
-                onclick={onTune}
-                title={rig.tuneActive
-                    ? 'Transmitting tune carrier — click to stop'
-                    : rig.cat === 'connected'
-                      ? 'Key a reduced-power tune carrier to tune the amp'
-                      : 'Tune needs a live CAT connection'}
-            >
-                {rig.tuneActive ? 'Tuning…' : 'Tune'}
-            </button>
-        </div>
-    {/if}
+            <div class="flex flex-col justify-end">
+                <button
+                    type="button"
+                    class="btn text-sm {rig.tuneActive
+                        ? 'border-red-600 bg-red-600 text-white hover:bg-red-700 animate-pulse'
+                        : ''}"
+                    disabled={rig.cat !== 'connected'}
+                    aria-pressed={rig.tuneActive}
+                    onclick={onTune}
+                    title={rig.tuneActive
+                        ? 'Transmitting tune carrier — click to stop'
+                        : rig.cat === 'connected'
+                          ? 'Key a reduced-power tune carrier to tune the amp'
+                          : 'Tune needs a live CAT connection'}
+                >
+                    {rig.tuneActive ? 'Tuning…' : 'Tune'}
+                </button>
+            </div>
+        {/if}
     </div>
 
     <!-- Validation messages sit in their own row BELOW the inputs, so the error

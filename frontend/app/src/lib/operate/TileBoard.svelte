@@ -5,13 +5,7 @@
     // {#each}, so Svelte repositions the node rather than rebuilding it), while a
     // lightweight ghost tracks the pointer. Pointer Events, not HTML5 DnD
     // (cross-browser reliable — the POC established this).
-    import {
-        layout,
-        TILES,
-        setColumnsLive,
-        commitLayout,
-        type TileId,
-    } from './layout.svelte';
+    import { layout, TILES, setColumnsLive, commitLayout, type TileId } from './layout.svelte';
     import CardFrame from './CardFrame.svelte';
 
     let boardEl: HTMLDivElement;

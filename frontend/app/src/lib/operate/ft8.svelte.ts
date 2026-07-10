@@ -228,7 +228,11 @@ export interface Ft8WorkArgs {
 
 export interface Ft8TxActions {
     arm(armed: boolean): Promise<Ft8TxResult>;
-    callCq(offsetHz: number, opFreqMHz: number, parity: 'next' | 'even' | 'odd'): Promise<Ft8TxResult>;
+    callCq(
+        offsetHz: number,
+        opFreqMHz: number,
+        parity: 'next' | 'even' | 'odd'
+    ): Promise<Ft8TxResult>;
     answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult>;
     workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult>;
     abandon(): Promise<Ft8TxResult>;
@@ -253,7 +257,9 @@ export function callCq(
     opFreqMHz: number,
     parity: 'next' | 'even' | 'odd'
 ): Promise<Ft8TxResult> {
-    return txActions ? txActions.callCq(offsetHz, opFreqMHz, parity) : Promise.resolve(txUnavailable);
+    return txActions
+        ? txActions.callCq(offsetHz, opFreqMHz, parity)
+        : Promise.resolve(txUnavailable);
 }
 
 /** Start answering a CQ (standard or FD) from a clicked Band Activity decode. */
@@ -321,8 +327,7 @@ export const ft8Link: Ft8EventHandlers = {
             }));
         // `single` shows only this slot; `accumulate` prepends onto prior slots.
         // Either way cap to the row limit (also a safety bound for a busy slot).
-        const next =
-            displayPrefs.feedMode === 'single' ? fresh : [...fresh, ...ft8State.decodes];
+        const next = displayPrefs.feedMode === 'single' ? fresh : [...fresh, ...ft8State.decodes];
         ft8State.decodes = next.slice(0, displayPrefs.historyMax);
     },
 
