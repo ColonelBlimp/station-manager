@@ -30,12 +30,13 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-09)
+## Current state (as of 2026-07-10)
 
-> **Session 210 (2026-07-09) — `frontend/app` RIG CONTROL arc COMPLETE
+> **Session 210 (2026-07-09→10) — `frontend/app` RIG CONTROL arc COMPLETE
 > (Slices 1–4) + configurable operating-bands (daemon + SPA); FT8 UI DESIGN
-> settled (ADR 0047 + throwaway mock); then FT8 BUILD STARTED (increments 1–3:
-> SSE/state foundation, Band Activity + enrichment, Operate/ladder display).** Goal changed
+> settled (ADR 0047 + throwaway mock); then FT8 BUILD (increments 1–3:
+> SSE/state foundation, Band Activity + enrichment, Operate/ladder display;
+> then increment 4: FT8 TX — first RF from this SPA).** Goal changed
 > this session: 7Q8AC is shipped, so `frontend/app` is now the **full-replacement
 > daily-driver target** (no external clock — build it right). Reuse-first
 > throughout ([[sm-reuse-dogfood-spas-first]]). Decided up front: **extend the
@@ -138,16 +139,42 @@ precisely so we don't re-derive state or redo finished work.
 >     builder: answerer/caller/worker + FD twins + `rowFor` current-row) +
 >     `Ft8Operate.svelte` (working-station, **live slot pill** TX-red/listen-green +
 >     1 s countdown, message ladder w/ ✓/highlight/`sent ×N`). Occupancy still stub.
->   - **Deferred (flagged in code):** `markWorked`→`ft8-logged` (session increment);
->     the `EnrichmentCard`-as-prop reuse (Operate uses a lean working block for now);
->     `ft8_display` config read (defaults for now).
-> - **NEXT: the FT8 TX increment (first RF from this SPA)** — the Operate control bar
->   (**Arm / Call CQ / Abandon / Next**, ports `api/ft8tx.ts`+`ft8qso.ts` as injected
->   action seams) + **Band-Activity click-to-answer / Ctrl-click-to-pile-up**. Its own
->   increment + on-air validation (same care as the tune button). Then: Occupancy pane,
->   the `ft8-logged` session wiring, the shared-rig-card extraction, and FT8 band
->   buttons (watering-hole `onPick`). Remaining shipping refs: `Ft8MsgPanel` (controls),
->   `Ft8OccupancyStrip`/`Spectrum`, `ft8PileupStack`.
+>   - **Deferred (flagged in code):** the `EnrichmentCard`-as-prop reuse (Operate uses
+>     a lean working block for now); `ft8_display` config read (defaults for now).
+> - **(4) FT8 TX increment (2026-07-10) — FIRST RF FROM THIS SPA, all green
+>   (405 tests / check / lint / build), UNCOMMITTED.** The first `frontend/app` path
+>   that keys the rig; built with tune-button care. Reused the shipping mechanism in shape:
+>   - **API clients** `lib/api/ft8tx.ts` (`armFt8Tx` → `POST /v1/ft8/tx/arm`) +
+>     `lib/api/ft8qso.ts` (`startFt8Qso`/`startFt8WorkCaller`/`startFt8Cq`/`abandonFt8Qso`)
+>     — thin daemon wrappers, `{code,message}` outcomes. Send endpoint NOT ported (messages
+>     are daemon-sequenced, not SPA-queued).
+>   - **State (`ft8.svelte.ts`, ADR 0045 seams):** `selectedOffset` + `txParity` fields;
+>     `get effectiveOffset()` (operator pick → daemon `suggested[0]` → null — ONE place
+>     answers "where will I transmit"); `Ft8TxActions` seam (`setFt8TxActions`) + thin
+>     wrappers `armTx/callCq/answerCq/workCaller/abandonQso` (state module still never
+>     imports `lib/api`). `stopFt8` KEEPS `selectedOffset` (operator pick ≠ stream data).
+>   - **Operate control bar (`Ft8Operate.svelte`):** replaced the placeholder footer —
+>     TX-offset readout (`· auto` when it's the daemon fallback) + CQ-slot parity select;
+>     **Call CQ / Abandon** row; divider; **Enable TX / Armed — click to disable TX** alone
+>     at the bottom (operator's layout). Confirm-by-push (buttons reflect `ft8State.tx/qso`).
+>   - **Band-Activity click-to-work:** CQ rows → `answerCq` (FD-aware via `isCqFd`),
+>     directed-at-me rows → `workCaller` (FD-aware). Guards w/ toasts: not-armed / rig-off /
+>     session-busy / no-offset / **same-session-band dupe** (`session.qsos`).
+>   - **`ft8-logged` session wiring (`main.ts`):** the deferred item, now done — completed
+>     exchange → shared session log (FT8 rows beside Phone/CW) + `markWorked` greys the
+>     station + "QSO logged" toast; **uuid-dedupe** guards a stray re-delivery.
+>   - **`Next` deferred, correctly:** in the shipping SPA `Next` only lights with a pile-up
+>     (`pileupStack.count > 0`) — it's the operator_pick drain control. With the pile-up
+>     stack out of scope it would never show, so it's LEFT OUT (documented seam), not dead.
+>   - **Tests +8** (397→405): `effectiveOffset`, TX-wrapper forwarding + unavailable-when-
+>     unwired, and 4 Band-Activity click-path component tests (answer-CQ args incl. dial-freq
+>     NOT dial+offset, work-caller SNR→report, disarmed-blocks, dupe-blocks).
+> - **NEXT: on-air validation of FT8 TX** (it transmits — same care as the tune button; TX
+>   only fires armed + CAT-connected, on the auto offset until the picker lands). Then the
+>   **Occupancy pane** (Spectrum/Channels + waterfall-ready → sets `selectedOffset`, removing
+>   the `· auto` fallback), the **operator_pick pile-up stack** (+ its `Next`), the
+>   **shared-rig-card extraction**, and **FT8 band buttons** (watering-hole `onPick`).
+>   Remaining shipping refs: `Ft8OccupancyStrip`/`Spectrum`, `Ft8PileupDrawer`/`ft8PileupStack`.
 
 > **Session 209 (2026-07-08, same day) — `frontend/app` Operate polish +
 > the draggable/pinnable tile-layout decision (ADR 0046 + POC).** Reuse-first
