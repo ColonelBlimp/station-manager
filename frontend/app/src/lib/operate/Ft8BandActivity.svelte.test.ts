@@ -4,20 +4,55 @@
 // ft8.svelte.test.ts).
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Ft8BandActivity from './Ft8BandActivity.svelte';
-import { ft8Link, setFt8OperatorCall, setFt8MyGrid, resetFt8ForTests } from './ft8.svelte';
+import {
+    ft8State,
+    ft8Link,
+    setFt8OperatorCall,
+    setFt8MyGrid,
+    setFt8TxActions,
+    resetFt8ForTests,
+    type Ft8AnswerArgs,
+    type Ft8WorkArgs,
+    type Ft8TxResult,
+    type Ft8TxActions,
+} from './ft8.svelte';
 import { setFt8Enricher, resetFt8EnrichForTests } from './ft8Enrich.svelte';
 import { rig } from './rig.svelte';
+import { session } from './session.svelte';
+import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
 import type { DecodeReport } from '../api/ft8-sse';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+const okResult = (): Promise<Ft8TxResult> => Promise.resolve({ ok: true, message: '' });
+
+// A TX-action recorder with all seams stubbed ok; individual tests capture the one
+// they exercise. Also puts the rig + TX state into a "ready to transmit" shape.
+function armReady(over: Partial<Ft8TxActions> = {}): void {
+    setFt8TxActions({
+        arm: okResult,
+        callCq: okResult,
+        answerCq: okResult,
+        workCaller: okResult,
+        abandon: okResult,
+        ...over,
+    });
+    rig.cat = 'connected';
+    rig.freq = '14.074.000';
+    ft8State.selectedOffset = 1500;
+    ft8State.tx.armed = true;
+}
 
 beforeEach(() => {
     resetFt8ForTests();
     resetFt8EnrichForTests();
+    resetToasts();
+    session.qsos.length = 0;
     rig.band = '20m';
+    rig.cat = 'off';
+    rig.freq = '14.255.000';
 });
 
 function decode(
@@ -92,5 +127,102 @@ describe('Ft8BandActivity renderer', () => {
         await flush();
         flushSync();
         expect(screen.getByText('CQ W1ABC FN42').closest('tr')?.textContent).toContain('🇺🇸');
+    });
+});
+
+describe('Ft8BandActivity click-to-work (first RF path)', () => {
+    it('answering a CQ: clicking an armed+ready CQ row calls answerCq with the parsed exchange', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const calls: Ft8AnswerArgs[] = [];
+        armReady({
+            answerCq: (a) => {
+                calls.push(a);
+                return okResult();
+            },
+        });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }]));
+        flushSync();
+
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0].theirCall).toBe('W1ABC');
+        expect(calls[0].theirGrid).toBe('FN42');
+        expect(calls[0].offsetHz).toBe(1500);
+        expect(calls[0].opFreqMHz).toBeCloseTo(14.074, 3); // dial freq, not dial+offset
+        expect(calls[0].fd).toBe(false);
+    });
+
+    it('working a caller: clicking a directed-at-me row calls workCaller with our SNR as the report', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const calls: Ft8WorkArgs[] = [];
+        armReady({
+            workCaller: (a) => {
+                calls.push(a);
+                return okResult();
+            },
+        });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }]));
+        flushSync();
+
+        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'));
+        await flush();
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0].theirCall).toBe('PA3KUS');
+        expect(calls[0].theirGrid).toBe('JO21');
+        expect(calls[0].theirSnr).toBe(2);
+    });
+
+    it('does NOT transmit when TX is disarmed', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        let answered = 0;
+        armReady({
+            answerCq: () => {
+                answered++;
+                return okResult();
+            },
+        });
+        ft8State.tx.armed = false; // disarmed — the whole point of the gate
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }]));
+        flushSync();
+
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+        expect(answered).toBe(0);
+    });
+
+    it('does NOT re-work a station already logged this session on this band', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        let answered = 0;
+        armReady({
+            answerCq: () => {
+                answered++;
+                return okResult();
+            },
+        });
+        session.qsos.push({
+            id: 1,
+            callsign: 'W1ABC',
+            timeOn: '14:00:00',
+            band: '20m',
+            mode: 'FT8',
+            rstSent: '',
+            rstRcvd: '',
+            name: '',
+            country: '',
+            comment: '',
+        });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }]));
+        flushSync();
+
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+        expect(answered).toBe(0); // dupe guard blocked it
     });
 });

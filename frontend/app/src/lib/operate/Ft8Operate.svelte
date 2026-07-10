@@ -4,9 +4,12 @@
     // (working station · slot-timing pill · role-aware message ladder); the TX
     // control bar (Arm / Call CQ / Abandon / Next) + click-to-start is the next
     // increment (first RF from this SPA), kept a deliberate boundary.
-    import { ft8State, ft8OperatorCall, ft8MyGrid } from './ft8.svelte';
+    import { ft8State, ft8OperatorCall, ft8MyGrid, armTx, callCq, abandonQso } from './ft8.svelte';
+    import { rig } from './rig.svelte';
     import { buildLadder } from './ft8Ladder';
     import { pathInfo } from '../utils/bearing';
+    import { parseFrequency } from '../validators/frequency';
+    import { toasts } from '../ui/toasts.svelte';
 
     const qso = $derived(ft8State.qso);
     const tx = $derived(ft8State.tx);
@@ -78,6 +81,82 @@
             ? ` · sent ×${qso.repeats}`
             : ''
     );
+
+    // ---- TX control bar (ADR 0029/0030/0031/0033) — first RF from this SPA -----
+    // The daemon owns arming + the guaranteed stop + the CQ→73 sequencing; these
+    // controls send only intent and reflect confirm-by-push state (ft8State.tx/qso).
+    const myCall = $derived(ft8OperatorCall().trim().toUpperCase());
+    // CAT connected ⇒ the daemon pushed real rig state, so band/freq are the rig's
+    // (not the manual fallback) and the rig can key. All TX gates require it —
+    // arming a disconnected rig just 503s.
+    const catLive = $derived(rig.cat === 'connected');
+    // Dial frequency (selected VFO) in Hz — the daemon logs the contact at the dial
+    // (FT8 convention), passed as MHz. parseFrequency takes the rig's dot-grouped
+    // form or a hand-typed decimal; parseFloat would misread the grouped form.
+    const opFreqHz = $derived(parseFrequency(rig.freq));
+    // Where TX will land: the operator's pick, else the daemon's top clear offset.
+    const offset = $derived(ft8State.effectiveOffset);
+    const offsetAuto = $derived(ft8State.selectedOffset === null);
+    const offsetLabel = $derived(
+        offset === null ? 'no clear channel yet' : `${offset} Hz${offsetAuto ? ' · auto' : ''}`
+    );
+
+    // Arm whenever CAT is live. Call CQ needs armed + idle + a known offset & dial
+    // freq + our callsign. Abandon drops any active sequenced session.
+    const canArm = $derived(catLive);
+    const canSend = $derived(
+        tx.armed &&
+            !tx.transmitting &&
+            !qso.active &&
+            offset !== null &&
+            opFreqHz !== null &&
+            myCall !== '' &&
+            catLive
+    );
+    const canAbandon = $derived(tx.armed && qso.active);
+    // A Call-CQ run is in progress (we are the caller, looping the pile-up) — the
+    // Call CQ button goes red so "I'm running CQ" is unmistakable.
+    const callerActive = $derived(qso.active && qso.role === 'caller');
+
+    // Per-action in-flight latches. The daemon single-flights competing starts and
+    // 409s the loser, so these mainly stop a double-tap issuing a wasted second POST.
+    let arming = $state(false);
+    let sending = $state(false);
+    let abandoning = $state(false);
+
+    async function onArm(): Promise<void> {
+        if (arming) return;
+        arming = true;
+        try {
+            const r = await armTx(!tx.armed);
+            if (!r.ok) toasts.error(r.message);
+            // The armed state itself arrives via the ft8-tx SSE (confirm-by-push).
+        } finally {
+            arming = false;
+        }
+    }
+
+    async function onCallCq(): Promise<void> {
+        if (sending || offset === null || opFreqHz === null || myCall === '') return;
+        sending = true;
+        try {
+            const r = await callCq(offset, opFreqHz / 1_000_000, ft8State.txParity);
+            if (!r.ok) toasts.error(r.message);
+        } finally {
+            sending = false;
+        }
+    }
+
+    async function onAbandon(): Promise<void> {
+        if (abandoning) return;
+        abandoning = true;
+        try {
+            const r = await abandonQso();
+            if (!r.ok) toasts.error(r.message);
+        } finally {
+            abandoning = false;
+        }
+    }
 </script>
 
 <section class="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface">
@@ -140,9 +219,59 @@
         </ul>
     </div>
 
-    <!-- TX control bar (Arm / Call CQ / Abandon / Next) lands in the next
-         increment — the first RF path from this SPA, deliberately separate. -->
-    <div class="border-t border-line px-4 py-2 text-center text-[11px] text-muted">
-        TX controls — next increment
+    <!-- TX control bar (ADR 0029/0030/0031/0033) — first RF from this SPA. Call CQ /
+         Abandon drive the sequenced session; Arm sits alone at the bottom (its own
+         divider) as the operator's explicit consent to key. The pile-up "Next"
+         button lands with the operator_pick stack (a later increment). -->
+    <div class="border-t border-line px-4 py-3">
+        <div class="mb-2 flex items-center justify-between gap-x-2 text-xs">
+            <span class="text-muted"
+                >TX offset <span class="font-mono text-ink">{offsetLabel}</span></span
+            >
+            <label class="flex items-center gap-x-1 text-muted">
+                <span>CQ slot</span>
+                <select
+                    class="rounded border border-line bg-surface px-1 py-0.5 text-xs text-ink disabled:opacity-50"
+                    bind:value={ft8State.txParity}
+                    disabled={qso.active}
+                    aria-label="Call CQ slot parity"
+                >
+                    <option value="next">Next</option>
+                    <option value="even">Even</option>
+                    <option value="odd">Odd</option>
+                </select>
+            </label>
+        </div>
+        <div class="flex gap-x-2">
+            <button
+                type="button"
+                class="flex-1 rounded-md px-3 py-1.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 {callerActive
+                    ? 'bg-red-600 text-white hover:bg-red-700'
+                    : 'bg-focus text-surface hover:opacity-90'}"
+                onclick={onCallCq}
+                disabled={!canSend || sending}
+            >
+                {callerActive ? 'Calling CQ…' : 'Call CQ'}
+            </button>
+            <button
+                type="button"
+                class="flex-1 rounded-md border border-line px-3 py-1.5 text-sm font-semibold text-ink hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
+                onclick={onAbandon}
+                disabled={!canAbandon || abandoning}
+            >
+                Abandon
+            </button>
+        </div>
+        <hr class="my-3 border-line" />
+        <button
+            type="button"
+            class="w-full rounded-md px-3 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50 {tx.armed
+                ? 'bg-red-600 text-white hover:bg-red-700'
+                : 'border border-focus text-focus hover:bg-nav-accent-bg'}"
+            onclick={onArm}
+            disabled={!canArm || arming}
+        >
+            {tx.armed ? 'Armed — click to disable TX' : 'Enable TX'}
+        </button>
     </div>
 </section>

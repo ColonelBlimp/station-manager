@@ -111,10 +111,24 @@ class Ft8State {
     signalWidth = $state(50);
     /** Band Activity typed filter (funnel popover); session-scoped, empty = no filter. */
     bandFilter = $state('');
+    /** Operator-picked TX audio offset (Hz), or null before a pick. Set by the
+     *  Occupancy picker (next increment); until then TX falls back to the daemon's
+     *  top-ranked clear offset via effectiveOffset. */
+    selectedOffset: number | null = $state(null);
+    /** Call-CQ slot parity (WSJT-X "Tx even/1st"). 'next' = fire next slot regardless. */
+    txParity: 'next' | 'even' | 'odd' = $state('next');
     /** Transmit status (ft8-tx). */
     tx: Ft8TxStatus = $state(emptyTxStatus());
     /** Manual sequencer status (ft8-qso). */
     qso: Ft8QsoStatus = $state(emptyQsoStatus());
+
+    /** The offset TX will actually use: the operator's explicit pick, else the
+     *  daemon's best-ranked clear offset, else null (no clear channel known yet —
+     *  the TX surface gates off). Both the Operate readout and the click-to-answer
+     *  handlers read this, so "where will I transmit" is answered in one place. */
+    get effectiveOffset(): number | null {
+        return this.selectedOffset ?? this.suggested[0] ?? null;
+    }
 
     /** Drop the accumulated feed — a band change makes prior rows misleading. */
     clearDecodes(): void {
@@ -172,6 +186,89 @@ let loggedSink: ((p: LoggedPayload) => void) | null = null;
 
 export function setFt8LoggedSink(fn: (p: LoggedPayload) => void): void {
     loggedSink = fn;
+}
+
+/*
+    TX action seam (ADR 0045 + ADR 0029/0030/0031/0033). This is the first path
+    from this SPA that keys the rig, so it goes through the daemon exactly like the
+    tune carrier: the SPA sends an INTENT (arm, call CQ, answer, work, abandon); the
+    daemon owns arming, the guaranteed stop, and the CQ→73 sequencing, then confirms
+    by push (ft8-tx / ft8-qso SSE). No optimistic local state — the buttons reflect
+    ft8State.tx / ft8State.qso. main.ts injects the actions (adapting lib/api
+    ft8tx/ft8qso), so this module never imports the api layer.
+
+    Result is {ok,message}: the caller (control bar / Band Activity click) toasts on
+    failure; the daemon single-flights competing starts and 409s the loser, so the
+    per-component in-flight latches are a nicety over the daemon's own guarantee.
+*/
+export type Ft8TxResult = { ok: boolean; message: string };
+
+export interface Ft8AnswerArgs {
+    theirCall: string;
+    theirGrid: string;
+    slotUtc: string;
+    offsetHz: number;
+    opFreqMHz: number;
+    fd: boolean;
+    /** Our SNR of their CQ — logged as RST_SENT for an FD answer (no report exchanged). */
+    theirSnr: number;
+}
+
+export interface Ft8WorkArgs {
+    theirCall: string;
+    theirGrid: string;
+    /** Our SNR of their call to us — the report we send back (RST_SENT). */
+    theirSnr: number;
+    slotUtc: string;
+    offsetHz: number;
+    opFreqMHz: number;
+    /** Present when the caller sent an FD exchange — work them Field Day style. */
+    fd?: { class: string; section: string };
+}
+
+export interface Ft8TxActions {
+    arm(armed: boolean): Promise<Ft8TxResult>;
+    callCq(offsetHz: number, opFreqMHz: number, parity: 'next' | 'even' | 'odd'): Promise<Ft8TxResult>;
+    answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult>;
+    workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult>;
+    abandon(): Promise<Ft8TxResult>;
+}
+
+let txActions: Ft8TxActions | null = null;
+
+export function setFt8TxActions(a: Ft8TxActions): void {
+    txActions = a;
+}
+
+const txUnavailable: Ft8TxResult = { ok: false, message: 'FT8 transmit is unavailable.' };
+
+/** Arm (true) or disarm (false) the TX path — the operator's consent to key. */
+export function armTx(armed: boolean): Promise<Ft8TxResult> {
+    return txActions ? txActions.arm(armed) : Promise.resolve(txUnavailable);
+}
+
+/** Start a Call-CQ session on the given offset + dial frequency and slot parity. */
+export function callCq(
+    offsetHz: number,
+    opFreqMHz: number,
+    parity: 'next' | 'even' | 'odd'
+): Promise<Ft8TxResult> {
+    return txActions ? txActions.callCq(offsetHz, opFreqMHz, parity) : Promise.resolve(txUnavailable);
+}
+
+/** Start answering a CQ (standard or FD) from a clicked Band Activity decode. */
+export function answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult> {
+    return txActions ? txActions.answerCq(a) : Promise.resolve(txUnavailable);
+}
+
+/** Start working a station calling us from a clicked directed-at-me decode. */
+export function workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult> {
+    return txActions ? txActions.workCaller(a) : Promise.resolve(txUnavailable);
+}
+
+/** Abandon any active sequenced session. */
+export function abandonQso(): Promise<Ft8TxResult> {
+    return txActions ? txActions.abandon() : Promise.resolve(txUnavailable);
 }
 
 /*
@@ -300,6 +397,8 @@ export function stopFt8(): void {
     ft8State.occupied = [];
     ft8State.suggested = [];
     ft8State.decodes = [];
+    // Keep selectedOffset across a re-open — it's an operator pick, not stream data;
+    // clearing it would silently drop the chosen TX channel on a view toggle.
     ft8State.tx = emptyTxStatus();
     ft8State.qso = emptyQsoStatus();
 }
@@ -309,6 +408,7 @@ export function resetFt8ForTests(): void {
     opener = null;
     closeFn = null;
     loggedSink = null;
+    txActions = null;
     operatorCall = '';
     myGrid = '';
     displayPrefs = { feedMode: 'accumulate', historyMax: 100 };
@@ -318,6 +418,8 @@ export function resetFt8ForTests(): void {
     ft8State.suggested = [];
     ft8State.decodes = [];
     ft8State.bandFilter = '';
+    ft8State.selectedOffset = null;
+    ft8State.txParity = 'next';
     ft8State.tx = emptyTxStatus();
     ft8State.qso = emptyQsoStatus();
 }

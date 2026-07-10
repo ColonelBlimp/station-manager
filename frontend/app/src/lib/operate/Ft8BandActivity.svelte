@@ -4,12 +4,27 @@
     // from the ft8Enrich cache (lookup-once, fail-soft), and the per-CQ short-path
     // bearing is computed from the decode's grid + the operator's grid. Slot
     // dividers group the accumulated newest-first feed.
-    import { ft8State, ft8OperatorCall, ft8MyGrid, type DecodeEntry } from './ft8.svelte';
+    import {
+        ft8State,
+        ft8OperatorCall,
+        ft8MyGrid,
+        answerCq,
+        workCaller,
+        type DecodeEntry,
+    } from './ft8.svelte';
     import { ft8EnrichState } from './ft8Enrich.svelte';
     import { rig } from './rig.svelte';
-    import { parseCq, parseDirectedToMe } from '../utils/ft8Message';
+    import { session } from './session.svelte';
+    import {
+        parseCq,
+        parseDirectedToMe,
+        parseDirectedToMeFd,
+        isCqFd,
+    } from '../utils/ft8Message';
     import { slotParity } from '../utils/ft8Parity';
     import { pathInfo } from '../utils/bearing';
+    import { parseFrequency } from '../validators/frequency';
+    import { toasts } from '../ui/toasts.svelte';
 
     interface DecodeRow {
         d: DecodeEntry;
@@ -83,6 +98,103 @@
         if (kind === 'cq') return worked ? 'text-muted' : 'bg-amber-50 dark:bg-amber-500/10';
         return '';
     }
+
+    // ---- Click to work (ADR 0033) — first RF-initiating clicks from this SPA -----
+    // A CQ row answers the CQ; a directed-at-me row works the caller. Both go through
+    // the daemon (armed gate + guaranteed stop + sequencing); this only sends intent.
+    const me = $derived(ft8OperatorCall().trim().toUpperCase());
+    const catLive = $derived(rig.cat === 'connected');
+    // A row is workable only when armed + CAT live + no session already in flight; a
+    // plain row (kind '') is never clickable.
+    const canStart = $derived(ft8State.tx.armed && catLive && !ft8State.qso.active);
+
+    // In-flight latch for the click-start POST→SSE window: set synchronously so a
+    // second click can't fire a second start. Released when the daemon confirms the
+    // session is active (below) or the start fails.
+    let starting = $state(false);
+    $effect(() => {
+        if (ft8State.qso.active) starting = false;
+    });
+
+    // Same-session dupe (band-scoped): a call already logged this session on this
+    // band is skipped. A prior-session/durable-log contact is fine — only a repeat
+    // WITHIN this sitting is blocked. Cross-band the same call is not a dupe.
+    function workedThisSession(call: string): boolean {
+        return session.qsos.some((q) => q.callsign === call && q.band === rig.band);
+    }
+
+    async function onRowClick(row: DecodeRow): Promise<void> {
+        if (row.kind === '' || starting) return;
+        // Explain why nothing happened rather than silently no-op'ing on a click.
+        if (!ft8State.tx.armed) {
+            toasts.info('Enable TX first (Operate panel).');
+            return;
+        }
+        if (!catLive) {
+            toasts.info('Rig not connected — cannot transmit.');
+            return;
+        }
+        if (ft8State.qso.active) {
+            toasts.info('Finish or Abandon the current contact first.');
+            return;
+        }
+        const offset = ft8State.effectiveOffset;
+        if (offset === null) {
+            toasts.info('No clear TX offset yet — pick one in Occupancy.');
+            return;
+        }
+        const opHz = parseFrequency(rig.freq);
+        if (opHz === null) {
+            toasts.info('Rig frequency is not known yet.');
+            return;
+        }
+        if (workedThisSession(row.call)) {
+            toasts.info(`Already worked ${row.call} this session.`);
+            return;
+        }
+        const opMHz = opHz / 1_000_000;
+        starting = true;
+        let r;
+        if (row.kind === 'cq') {
+            const cq = parseCq(row.d.text);
+            if (!cq) {
+                starting = false;
+                return;
+            }
+            // A CQ FD answers with the operator's Field Day exchange (daemon config);
+            // theirSnr (our SNR of their CQ) is logged as RST_SENT for FD.
+            r = await answerCq({
+                theirCall: cq.call,
+                theirGrid: cq.grid,
+                slotUtc: row.d.startUtc,
+                offsetHz: offset,
+                opFreqMHz: opMHz,
+                fd: isCqFd(row.d.text),
+                theirSnr: row.d.snr,
+            });
+        } else {
+            // Work a caller: try the FD shape first (more specific), else standard.
+            const fd = parseDirectedToMeFd(row.d.text, me);
+            const toMe = fd ?? parseDirectedToMe(row.d.text, me);
+            if (!toMe) {
+                starting = false;
+                return;
+            }
+            r = await workCaller({
+                theirCall: toMe.call,
+                theirGrid: toMe.grid,
+                theirSnr: row.d.snr, // our SNR of their call → RST_SENT
+                slotUtc: row.d.startUtc,
+                offsetHz: offset,
+                opFreqMHz: opMHz,
+                fd: fd ? { class: fd.class, section: fd.section } : undefined,
+            });
+        }
+        if (!r.ok) {
+            starting = false;
+            toasts.error(r.message);
+        }
+    }
 </script>
 
 <section class="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface">
@@ -137,7 +249,16 @@
                                     ''
                                         ? 'font-semibold'
                                         : ''}"
-                                    >{row.d.text}{#if info?.isNewEntity}<span
+                                    >{#if row.kind !== ''}<button
+                                            type="button"
+                                            class="text-left {canStart
+                                                ? 'cursor-pointer hover:underline'
+                                                : 'cursor-default'}"
+                                            title={row.kind === 'cq'
+                                                ? 'Answer this CQ'
+                                                : 'Work this station calling you'}
+                                            onclick={() => onRowClick(row)}>{row.d.text}</button
+                                        >{:else}{row.d.text}{/if}{#if info?.isNewEntity}<span
                                             class="ml-1 text-focus"
                                             title="New DXCC entity">★</span
                                         >{/if}</td

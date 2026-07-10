@@ -9,9 +9,16 @@ import {
     setFt8DisplayPrefs,
     setFt8LoggedSink,
     setFt8Transport,
+    setFt8TxActions,
+    armTx,
+    callCq,
+    answerCq,
+    workCaller,
+    abandonQso,
     startFt8,
     stopFt8,
     resetFt8ForTests,
+    type Ft8TxActions,
 } from './ft8.svelte';
 import type { DecodeReport } from '../api/ft8-sse';
 
@@ -108,6 +115,79 @@ describe('occupancy + status mirrors', () => {
         setFt8LoggedSink((p) => seen.push(p.uuid ?? ''));
         ft8Link.onLogged({ uuid: 'u-1', callsign: 'PJ4/NA2AA' });
         expect(seen).toEqual(['u-1']);
+    });
+});
+
+describe('effectiveOffset', () => {
+    it('prefers the operator pick, else the daemon top clear offset, else null', () => {
+        expect(ft8State.effectiveOffset).toBeNull(); // nothing known yet
+        ft8State.suggested = [1400, 900];
+        expect(ft8State.effectiveOffset).toBe(1400); // daemon's best
+        ft8State.selectedOffset = 2100;
+        expect(ft8State.effectiveOffset).toBe(2100); // explicit pick wins
+    });
+
+    it('survives a view toggle (stopFt8 keeps the operator pick, clears stream data)', () => {
+        ft8State.selectedOffset = 1750;
+        ft8State.suggested = [800];
+        stopFt8();
+        expect(ft8State.selectedOffset).toBe(1750); // pick retained
+        expect(ft8State.suggested).toEqual([]); // stream data cleared
+    });
+});
+
+describe('TX action wrappers', () => {
+    function recorder(): { calls: string[]; actions: Ft8TxActions } {
+        const calls: string[] = [];
+        const ok = Promise.resolve({ ok: true, message: '' });
+        return {
+            calls,
+            actions: {
+                arm: (a) => (calls.push(`arm:${a}`), ok),
+                callCq: (o, f, p) => (calls.push(`cq:${o}:${f}:${p}`), ok),
+                answerCq: (a) => (calls.push(`answer:${a.theirCall}:${a.fd}`), ok),
+                workCaller: (a) => (calls.push(`work:${a.theirCall}`), ok),
+                abandon: () => (calls.push('abandon'), ok),
+            },
+        };
+    }
+
+    it('forward to the injected actions', async () => {
+        const { calls, actions } = recorder();
+        setFt8TxActions(actions);
+        await armTx(true);
+        await callCq(1500, 14.074, 'odd');
+        await answerCq({
+            theirCall: 'W1ABC',
+            theirGrid: 'FN42',
+            slotUtc: 't',
+            offsetHz: 1500,
+            opFreqMHz: 14.074,
+            fd: false,
+            theirSnr: -12,
+        });
+        await workCaller({
+            theirCall: 'DL9UW',
+            theirGrid: 'JO21',
+            theirSnr: -5,
+            slotUtc: 't',
+            offsetHz: 1500,
+            opFreqMHz: 14.074,
+        });
+        await abandonQso();
+        expect(calls).toEqual([
+            'arm:true',
+            'cq:1500:14.074:odd',
+            'answer:W1ABC:false',
+            'work:DL9UW',
+            'abandon',
+        ]);
+    });
+
+    it('return an unavailable result when no actions are wired', async () => {
+        const r = await armTx(true); // resetFt8ForTests cleared the seam
+        expect(r.ok).toBe(false);
+        expect(r.message).toMatch(/unavailable/i);
     });
 });
 

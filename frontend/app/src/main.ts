@@ -3,7 +3,7 @@ import App from './App.svelte';
 import { enrich, prefs, setEnricher, setMyGrid } from './lib/operate/enrich.svelte';
 import { setHistory } from './lib/operate/worked.svelte';
 import { setSubmit } from './lib/operate/qso.svelte';
-import { addSessionQso } from './lib/operate/session.svelte';
+import { addSessionQso, session } from './lib/operate/session.svelte';
 import { setMailer } from './lib/operate/mailer.svelte';
 import { setLayoutPersistence, type LayoutValue } from './lib/operate/layout.svelte';
 import {
@@ -17,9 +17,25 @@ import {
 } from './lib/operate/rig.svelte';
 import { openRigEvents } from './lib/api/rig-sse';
 import { openFt8Events } from './lib/api/ft8-sse';
-import { setFt8Transport, setFt8OperatorCall, setFt8MyGrid } from './lib/operate/ft8.svelte';
-import { setFt8Enricher, setFt8Dupe } from './lib/operate/ft8Enrich.svelte';
+import {
+    setFt8Transport,
+    setFt8OperatorCall,
+    setFt8MyGrid,
+    setFt8TxActions,
+    setFt8LoggedSink,
+    type Ft8TxResult,
+} from './lib/operate/ft8.svelte';
+import { setFt8Enricher, setFt8Dupe, ft8EnrichState } from './lib/operate/ft8Enrich.svelte';
 import { fetchContestDupe } from './lib/api/contest-dupe';
+import { armFt8Tx, type Ft8TxOutcome } from './lib/api/ft8tx';
+import {
+    startFt8Qso,
+    startFt8WorkCaller,
+    startFt8Cq,
+    abandonFt8Qso,
+    type Ft8QsoOutcome,
+} from './lib/api/ft8qso';
+import { toasts } from './lib/ui/toasts.svelte';
 import { sendRigTune } from './lib/api/rig-tune';
 import { sendRigCommand } from './lib/api/rig-command';
 import { apiEnrich, apiHistory, fetchStationContext, type StationContext } from './lib/api/seams';
@@ -39,8 +55,69 @@ setHistory(apiHistory);
 
 // FT8 SSE transport (ADR 0045: the ft8 state module never imports lib/api). The
 // FT8 view opens/closes it view-scoped via startFt8/stopFt8 — this only injects
-// the opener. Display prefs + the logged sink are wired in following increments.
+// the opener.
 setFt8Transport(openFt8Events);
+
+// FT8 TX action seam (ADR 0029/0030/0031/0033) — the first RF path from this SPA.
+// The daemon owns arming + the guaranteed stop + the CQ→73 sequencing; the SPA
+// sends only intent, so these adapt the rich lib/api ft8tx/ft8qso outcomes to the
+// {ok,message} the control bar / Band Activity clicks expect. Confirm-by-push:
+// TX / QSO progress arrives over the ft8-tx / ft8-qso SSE, never these responses.
+const toTxResult = (o: Ft8TxOutcome | Ft8QsoOutcome): Ft8TxResult =>
+    o.kind === 'ok' ? { ok: true, message: '' } : { ok: false, message: o.message };
+setFt8TxActions({
+    arm: (armed) => armFt8Tx(armed).then(toTxResult),
+    callCq: (offsetHz, opFreqMHz, parity) =>
+        startFt8Cq(offsetHz, opFreqMHz, parity).then(toTxResult),
+    answerCq: (a) =>
+        startFt8Qso(
+            a.theirCall,
+            a.theirGrid,
+            a.slotUtc,
+            a.offsetHz,
+            a.opFreqMHz,
+            a.fd ? 'fd' : 'standard',
+            a.theirSnr
+        ).then(toTxResult),
+    workCaller: (a) =>
+        startFt8WorkCaller(
+            a.theirCall,
+            a.theirGrid,
+            a.theirSnr,
+            a.slotUtc,
+            a.offsetHz,
+            a.opFreqMHz,
+            a.fd
+        ).then(toTxResult),
+    abandon: () => abandonFt8Qso().then(toTxResult),
+});
+
+// Completed-FT8-QSO sink (ft8-logged SSE): a finished exchange is logged daemon-side
+// (no form to submit), so route it into the shared session log — FT8 rows sit
+// alongside Phone/CW ones — grey the station out in Band Activity so it can't be
+// re-worked, and toast (the only "it's logged" signal for FT8). The event is
+// one-shot (not replay-cached); the uuid guard still defends against a stray
+// double-delivery duplicating a session row.
+setFt8LoggedSink((p) => {
+    const uuid = p.uuid ?? '';
+    if (uuid !== '' && session.qsos.some((q) => q.uuid === uuid)) return;
+    const call = p.callsign ?? '';
+    const band = p.band ?? '';
+    addSessionQso({
+        uuid: uuid || undefined,
+        callsign: call,
+        timeOn: p.time_on ?? '',
+        band,
+        mode: p.mode ?? 'FT8',
+        rstSent: p.rst_sent ?? '',
+        rstRcvd: p.rst_rcvd ?? '',
+        name: p.name ?? '',
+        country: p.country ?? '',
+        comment: '',
+    });
+    if (call !== '') ft8EnrichState.markWorked(call, band);
+    toasts.info(call !== '' ? `QSO logged — ${call}${band ? ` (${band})` : ''}` : 'QSO logged');
+});
 
 // Band Activity flag enricher (ADR 0045) — the same /v1/enrich/callsign lookup
 // the logging card uses; fail-soft (a miss leaves the row undecorated). The
