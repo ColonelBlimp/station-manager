@@ -112,11 +112,16 @@ class Ft8State {
     /** Band Activity typed filter (funnel popover); session-scoped, empty = no filter. */
     bandFilter = $state('');
     /** Operator-picked TX audio offset (Hz), or null before a pick. Set by the
-     *  Occupancy picker (next increment); until then TX falls back to the daemon's
+     *  Occupancy picker (selectOffset); until then TX falls back to the daemon's
      *  top-ranked clear offset via effectiveOffset. */
     selectedOffset: number | null = $state(null);
     /** Call-CQ slot parity (WSJT-X "Tx even/1st"). 'next' = fire next slot regardless. */
     txParity: 'next' | 'even' | 'odd' = $state('next');
+    /** Which Occupancy presentation the operator prefers — 'channels' (discrete
+     *  ~50 Hz strip) or 'spectrum' (continuous click-anywhere bar). Both render the
+     *  same snapshot and write the same selectedOffset; this is just the view. In-
+     *  memory (survives a view toggle; resets on a full refresh). */
+    occupancyView: 'channels' | 'spectrum' = $state('channels');
     /** Transmit status (ft8-tx). */
     tx: Ft8TxStatus = $state(emptyTxStatus());
     /** Manual sequencer status (ft8-qso). */
@@ -128,6 +133,18 @@ class Ft8State {
      *  handlers read this, so "where will I transmit" is answered in one place. */
     get effectiveOffset(): number | null {
         return this.selectedOffset ?? this.suggested[0] ?? null;
+    }
+
+    /** Commit the operator's TX-offset pick (Hz). One mutation point so both
+     *  Occupancy views funnel through here; picking pins effectiveOffset, ending the
+     *  daemon-suggested auto fallback (which otherwise moves each slot). */
+    selectOffset(hz: number): void {
+        this.selectedOffset = hz;
+    }
+
+    /** Switch the Occupancy presentation (persists only in memory). */
+    setOccupancyView(v: 'channels' | 'spectrum'): void {
+        this.occupancyView = v;
     }
 
     /** Drop the accumulated feed — a band change makes prior rows misleading. */
@@ -425,6 +442,7 @@ export function resetFt8ForTests(): void {
     ft8State.bandFilter = '';
     ft8State.selectedOffset = null;
     ft8State.txParity = 'next';
+    ft8State.occupancyView = 'channels';
     ft8State.tx = emptyTxStatus();
     ft8State.qso = emptyQsoStatus();
 }

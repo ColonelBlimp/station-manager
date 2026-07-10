@@ -142,6 +142,24 @@ describe('effectiveOffset', () => {
         expect(ft8State.selectedOffset).toBe(1750); // pick retained
         expect(ft8State.suggested).toEqual([]); // stream data cleared
     });
+
+    it('selectOffset pins the pick, ending the auto fallback', () => {
+        ft8State.suggested = [900];
+        expect(ft8State.effectiveOffset).toBe(900); // auto
+        ft8State.selectOffset(1234);
+        expect(ft8State.selectedOffset).toBe(1234);
+        expect(ft8State.effectiveOffset).toBe(1234); // pinned
+    });
+});
+
+describe('occupancy view toggle', () => {
+    it('defaults to channels and switches presentation without touching the pick', () => {
+        expect(ft8State.occupancyView).toBe('channels');
+        ft8State.selectedOffset = 1500;
+        ft8State.setOccupancyView('spectrum');
+        expect(ft8State.occupancyView).toBe('spectrum');
+        expect(ft8State.selectedOffset).toBe(1500); // view choice ≠ offset pick
+    });
 });
 
 describe('TX action wrappers', () => {
