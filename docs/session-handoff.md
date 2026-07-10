@@ -169,6 +169,31 @@ precisely so we don't re-derive state or redo finished work.
 >   - **Tests +8** (397→405): `effectiveOffset`, TX-wrapper forwarding + unavailable-when-
 >     unwired, and 4 Band-Activity click-path component tests (answer-CQ args incl. dial-freq
 >     NOT dial+offset, work-caller SNR→report, disarmed-blocks, dupe-blocks).
+> - **(5) FT8 view UI-polish pass (2026-07-10, live tweak loop on :5176) — all green,
+>   UNCOMMITTED.** Visual/interaction tuning of the FT8 view, plus one deferred item cleared:
+>   - **`EnrichmentCard`-as-prop reuse DONE (was deferred).** `EnrichmentCard` now takes the
+>     observed call as a **prop** (was reading `draft.callsign` directly), so it's host-agnostic
+>     — LoggingCard passes `draft.callsign`, FT8 Operate passes `qso.theirCall`. Dropped into a
+>     reserved **h-45 (180px) box** at the top-left of the Operate panel (its exact `w-56 h-45`
+>     Phone/CW frame), blank when idle, live for the worked station. The box is fixed-height so
+>     the slot pill + ladder below never reflow. Worked call + role sit in the column beside it.
+>   - **Slot countdown fix (real bug).** The pill counted to `ft8State.slot.start_utc + 15s`, but
+>     `slot` lags (only updates when a decode lands ~13 s in) → it read 0 almost at once. Now a
+>     pure wall-clock countdown to the next UTC 15 s boundary (:00/:15/:30/:45), 250 ms tick →
+>     a real 15→1 countdown.
+>   - **Global cursor convention** (`app.css` `@layer base`): base cursor = arrow (`default`) so
+>     text/table cells/flag emoji no longer show the I-beam; text caret on real text inputs;
+>     pointer on clickables. In `@layer base` so any Tailwind `cursor-*` utility still wins.
+>   - Smaller tweaks: **Disable TX** button label (was "Armed — click to disable TX") + matching
+>     border so it doesn't jump height on toggle; **"No active contact"** trimmed; Band Activity
+>     table given a **margin-inset scroll box** (`mx-3 mb-3`) so rows stop short of the card edge
+>     (trailing padding on a scroll box is dropped at scroll end); **uniform shell padding**
+>     (`p-4 sm:p-6 lg:p-8`, Ft8View height → `100vh - 8rem`) so the FT8 cards have an equal gap
+>     all round — NOTE this wrapper is shared with the Phone/CW tile board; Band Activity given a
+>     **470px min-width floor** (matches the Operate card) so it stops collapsing on narrow windows.
+>   - **Verify:** full gate green — format:check clean (whole tree prettier-formatted, incl. 7
+>     pre-existing-drift files), check 0/0, lint clean, 405 tests, build ok. Deferred-now: only
+>     `ft8_display` config read (defaults for now) remains from increment-4's deferred list.
 > - **NEXT: on-air validation of FT8 TX** (it transmits — same care as the tune button; TX
 >   only fires armed + CAT-connected, on the auto offset until the picker lands). Then the
 >   **Occupancy pane** (Spectrum/Channels + waterfall-ready → sets `selectedOffset`, removing
