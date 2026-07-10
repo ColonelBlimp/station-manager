@@ -34,9 +34,10 @@ precisely so we don't re-derive state or redo finished work.
 
 > **Session 210 (2026-07-09→10) — `frontend/app` RIG CONTROL arc COMPLETE
 > (Slices 1–4) + configurable operating-bands (daemon + SPA); FT8 UI DESIGN
-> settled (ADR 0047 + throwaway mock); then FT8 BUILD (increments 1–3:
-> SSE/state foundation, Band Activity + enrichment, Operate/ladder display;
-> then increment 4: FT8 TX — first RF from this SPA).** Goal changed
+> settled (ADR 0047 + throwaway mock); then FT8 BUILD (increments 1–6:
+> SSE/state foundation, Band Activity + enrichment, Operate/ladder display,
+> FT8 TX — first RF from this SPA, UI-polish pass, Occupancy TX-offset picker).**
+> Goal changed
 > this session: 7Q8AC is shipped, so `frontend/app` is now the **full-replacement
 > daily-driver target** (no external clock — build it right). Reuse-first
 > throughout ([[sm-reuse-dogfood-spas-first]]). Decided up front: **extend the
@@ -194,11 +195,36 @@ precisely so we don't re-derive state or redo finished work.
 >   - **Verify:** full gate green — format:check clean (whole tree prettier-formatted, incl. 7
 >     pre-existing-drift files), check 0/0, lint clean, 405 tests, build ok. Deferred-now: only
 >     `ft8_display` config read (defaults for now) remains from increment-4's deferred list.
+> - **(6) Occupancy pane — TX-offset picker (2026-07-10), all green (417 tests / check /
+>   lint / build), UNCOMMITTED.** Fills the last stub in the FT8 view (`occ` full-width slot).
+>   Reuse-first: ported the shipping SPA's two switchable views + pure maths, re-themed to the
+>   app's `--color-*` tokens (+ `dark:` variants) instead of hardcoded grays:
+>   - **`Ft8Occupancy.svelte`** (card + Channels/Spectrum toggle, `occupancyView` in-memory) →
+>     **`Ft8OccupancyStrip.svelte`** (discrete ~50 Hz cells: red=busy / green=clear, ▼/▲ brackets
+>     the pick, **amber underline = daemon recommendation**) + **`Ft8OccupancySpectrum.svelte`**
+>     (continuous click-anywhere/drag bar, graded **clear/near/sharing**, ▼ ticks + **★ top pick**).
+>   - **`utils/ft8Spectrum.ts`** (pure `signalProximity`/`offsetFromFraction`/`clampOffset`) +
+>     its test, ported verbatim. State: `occupancyView` + `setOccupancyView` + `selectOffset`
+>     added to `ft8.svelte.ts`; a pick pins `selectedOffset` (survives view toggles already).
+>   - **Auto-pick KEPT deliberately (operator ask 2026-07-10):** `effectiveOffset`'s
+>     `selectedOffset ?? suggested[0]` fallback stays; both views read **"auto — daemon pick"**
+>     and mark `suggested[0]`, whose marker **hops slot-to-slot on a busy band** — kept visible so
+>     the operator can judge how stable the recommendation is *before* trusting it (operator wants
+>     to test crowded-band behaviour). Picking a channel ends the auto and pins the offset.
+>   - Tweaks during the live loop: bar height `h-8`→`h-11`; busy/clear cell colours re-tuned to
+>     the slot-pill's green family then made a little more vivid (`red-500/65` · `green-700/75`
+>     + dark variants). **KNOWN ISSUE (inbox 2026-07-10):** the Occupancy colours only read right
+>     in **dark** mode — light-mode busy/clear fills + spectrum tints wash out; needs a light pass.
+>   - **Tests +12** (405→417): `ft8Spectrum` maths (7), `selectOffset`/view-toggle state (2),
+>     `Ft8Occupancy` render/click/toggle component (3).
 > - **NEXT: on-air validation of FT8 TX** (it transmits — same care as the tune button; TX
->   only fires armed + CAT-connected, on the auto offset until the picker lands). Then the
->   **Occupancy pane** (Spectrum/Channels + waterfall-ready → sets `selectedOffset`, removing
->   the `· auto` fallback), the **operator_pick pile-up stack** (+ its `Next`), the
->   **shared-rig-card extraction**, and **FT8 band buttons** (watering-hole `onPick`).
+>   only fires armed + CAT-connected; now on the picked offset, else the auto fallback). Do it
+>   **against a scratch `SM_WORKING_DIR`** (isolated DB + forwarding off) via `go run` — but the
+>   *first real QSO* is a keeper (production DB, forwarding on): the counterparty logs it and
+>   expects LoTW/QRZ confirmation, so validate the TX *path* into a **dummy load with self-decode**
+>   first, never a throwaway real contact. Then the **Occupancy light-mode colour fix** (inbox),
+>   the **operator_pick pile-up stack** (+ its `Next`), the **shared-rig-card extraction**, and
+>   **FT8 band buttons** (watering-hole `onPick`).
 >   Remaining shipping refs: `Ft8OccupancyStrip`/`Spectrum`, `Ft8PileupDrawer`/`ft8PileupStack`.
 
 > **Session 209 (2026-07-08, same day) — `frontend/app` Operate polish +
