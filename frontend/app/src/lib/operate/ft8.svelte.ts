@@ -240,26 +240,28 @@ export const ft8State = new Ft8State();
 */
 
 /** Band Activity display prefs (config.json ft8.display). Defaults until /v1/config
- *  loads: accumulate the feed, cap at 100 rows, don't float CQ rows to the top. */
-let displayPrefs: {
+ *  loads: accumulate the feed, cap at 100 rows, don't float CQ rows to the top.
+ *  `$state` because /v1/config is fetched async — on a hard reload it lands AFTER
+ *  first paint, and readers (cq-to-top ordering, hide-hashed filter) must re-derive
+ *  when it does. (A plain `let` self-heals only on the next decode; empty until then.) */
+let displayPrefs = $state<{
     feedMode: 'accumulate' | 'single';
     historyMax: number;
     cqToTop: boolean;
     hideHashedCalls: boolean;
-} = {
+}>({
     feedMode: 'accumulate',
     historyMax: 100,
     cqToTop: false,
     hideHashedCalls: false,
-};
+});
 
 export function setFt8DisplayPrefs(p: Partial<typeof displayPrefs>): void {
     displayPrefs = { ...displayPrefs, ...p };
 }
 
 /** Whether Band Activity floats CQ rows above the rest (config ft8.display.cq_to_top).
- *  Read by the Band Activity renderer; injected once at boot like the feed prefs, so a
- *  plain accessor (not reactive $state) matches this SPA's fetch-config-once contract. */
+ *  Read by the Band Activity renderer; reactive so a late /v1/config re-orders the feed. */
 export function ft8CqToTop(): boolean {
     return displayPrefs.cqToTop;
 }
@@ -272,9 +274,12 @@ export function ft8HideHashed(): boolean {
 }
 
 /** The operator's station callsign (config), so Band Activity can flag decodes
- *  that are calling US (`<me> <them> <grid>`). Injected once at boot; '' matches
- *  nothing. Kept here (not a prop drilled through the view) as an injected seam. */
-let operatorCall = '';
+ *  that are calling US (`<me> <them> <grid>`). Injected from `/v1/config`, which is
+ *  fetched async — so a hard reload (cache bypassed) sets this AFTER first paint.
+ *  `$state` so late-arriving config re-derives readers (e.g. the Operate ladder's
+ *  CQ rung); a plain `let` left the ladder showing a bare `CQ` with no callsign.
+ *  '' matches nothing. An injected seam, not a prop drilled through the view. */
+let operatorCall = $state('');
 
 export function setFt8OperatorCall(c: string): void {
     operatorCall = c;
@@ -285,8 +290,10 @@ export function ft8OperatorCall(): string {
 }
 
 /** The operator's Maidenhead grid (config), the near end of Band Activity's
- *  per-CQ short-path bearing. Injected once at boot; '' → no bearing shown. */
-let myGrid = '';
+ *  per-CQ short-path bearing + the ladder's CQ-rung grid. Injected async from
+ *  `/v1/config` (see operatorCall) — `$state` so a late set re-derives readers.
+ *  '' → no bearing shown. */
+let myGrid = $state('');
 
 export function setFt8MyGrid(g: string): void {
     myGrid = g;

@@ -361,3 +361,30 @@ describe('Ft8BandActivity pile-up enqueue (Ctrl+click)', () => {
         expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['PA3KUS']);
     });
 });
+
+describe('Ft8BandActivity row markers', () => {
+    it('marks a queued caller (Q) and the currently-worked station (working dot)', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('2026-07-09T14:30:00Z', [
+                { text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }, // caller → queued
+                { text: '7Q5MLV DL1XYZ JO31', freq_hz: 900, snr: 1 }, // caller → will be worked
+            ])
+        );
+        flushSync();
+
+        // Queue PA3KUS → Q badge, and nothing is being worked yet.
+        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'), { ctrlKey: true });
+        flushSync();
+        expect(screen.getByTitle('In the pile-up queue')).toBeInTheDocument();
+        expect(screen.queryByTitle('Working now')).toBeNull();
+
+        // A QSO with DL1XYZ goes active → its row gets the working dot; PA3KUS keeps Q.
+        ft8State.qso.active = true;
+        ft8State.qso.theirCall = 'DL1XYZ';
+        flushSync();
+        expect(screen.getByTitle('Working now')).toBeInTheDocument();
+        expect(screen.getByTitle('In the pile-up queue')).toBeInTheDocument();
+    });
+});

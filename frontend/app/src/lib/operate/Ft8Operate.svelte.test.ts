@@ -181,6 +181,26 @@ describe('Ft8Operate pile-up drain', () => {
     });
 });
 
+describe('Ft8Operate ladder reactivity', () => {
+    // Regression: a hard reload (cache bypassed) resolves /v1/config AFTER first paint,
+    // so the operator call/grid seams are set late. They must be reactive $state or the
+    // idle caller-preview ladder stays stuck showing a bare "CQ" (no callsign) forever —
+    // the derived never re-runs because nothing else it depends on changes while idle.
+    it('CQ rung fills in when the operator call/grid arrive late', () => {
+        armReady();
+        setFt8OperatorCall(''); // pre-config: seams empty
+        setFt8MyGrid('');
+        const { container } = render(Ft8Operate);
+        flushSync();
+        expect(container.textContent).not.toContain('CQ 7Q5MLV KH33');
+        // Config lands after first paint.
+        setFt8OperatorCall('7Q5MLV');
+        setFt8MyGrid('KH33');
+        flushSync();
+        expect(container.textContent).toContain('CQ 7Q5MLV KH33');
+    });
+});
+
 describe('Ft8Operate Next control', () => {
     it('is hidden when the pile-up is empty', () => {
         armReady();

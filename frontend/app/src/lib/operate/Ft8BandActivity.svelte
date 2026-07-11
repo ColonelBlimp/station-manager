@@ -397,8 +397,11 @@
                                         >{:else}{row.d.text}{/if}{#if info?.isNewEntity}<span
                                             class="ml-1 text-focus"
                                             title="New DXCC entity">★</span
-                                        >{/if}{#if row.kind === 'call' && ft8PileupStack.items.some((x) => x.call === row.call)}<span
-                                            class="ml-1 rounded bg-focus/15 px-1 text-[10px] font-semibold text-focus"
+                                        >{/if}{#if row.call !== '' && ft8State.qso.active && row.call === ft8State.qso.theirCall}<span
+                                            class="ml-1 rounded bg-green-600 px-1 text-[10px] font-bold text-white"
+                                            title="Working now">●</span
+                                        >{:else if row.kind === 'call' && ft8PileupStack.items.some((x) => x.call === row.call)}<span
+                                            class="ml-1 rounded bg-focus px-1 text-[10px] font-bold text-white"
                                             title="In the pile-up queue">Q</span
                                         >{/if}</td
                                 >
