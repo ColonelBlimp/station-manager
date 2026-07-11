@@ -4,8 +4,18 @@
     // (working station · slot-timing pill · role-aware message ladder); the TX
     // control bar (Arm / Call CQ / Abandon / Next) + click-to-start is the next
     // increment (first RF from this SPA), kept a deliberate boundary.
-    import { ft8State, ft8OperatorCall, ft8MyGrid, armTx, callCq, abandonQso } from './ft8.svelte';
+    import {
+        ft8State,
+        ft8OperatorCall,
+        ft8MyGrid,
+        armTx,
+        callCq,
+        abandonQso,
+        workCaller,
+    } from './ft8.svelte';
     import { rig } from './rig.svelte';
+    import { session } from './session.svelte';
+    import { ft8PileupStack } from './ft8Pileup.svelte';
     import { buildLadder } from './ft8Ladder';
     import { parseFrequency } from '../validators/frequency';
     import { toasts } from '../ui/toasts.svelte';
@@ -149,6 +159,91 @@
             abandoning = false;
         }
     }
+
+    // ---- Pile-up drain (SPA-only) ---------------------------------------------
+    // The operator curates a FIFO of stations calling them (Ctrl+click in Band
+    // Activity → ft8PileupStack). Whenever the rig is armed + CAT-live + idle + an
+    // offset & dial freq are known + auto-drain is enabled, work the head via the
+    // work-a-caller path, advancing as each contact completes. The queue lives
+    // wholly in the SPA; the daemon is untouched (the same workCaller start the
+    // click-to-work path uses). `draining` latches from the workCaller call until
+    // qso.active confirms, so the effect can't double-fire in the window before the
+    // daemon pushes the active state.
+    let draining = false;
+    // Re-fire trigger + per-head retry counter for transient start failures. Right
+    // after a contact completes (or Abandon/Next), the rig is briefly not ready —
+    // the TX→RX settle — so an immediate work gets a rig_not_ready. That is
+    // transient: keep the head and re-attempt rather than dropping the caller AND
+    // stalling the drain (nothing reactive would otherwise re-fire this effect).
+    // retryTick is reactive so a scheduled bump re-runs the drain. The TX seam
+    // flattens the daemon's {kind,code} to {ok,message}, so we can't tell a
+    // transient rig settle from a hard reject here — treat every failure as
+    // retryable up to the cap, then pause (keeping the queue) so no caller is lost.
+    const WORK_RETRY_MS = 1500;
+    const MAX_WORK_RETRIES = 6; // ~9s of settle before concluding the rig is really down
+    let retryTick = $state(0);
+    let workRetries = 0;
+
+    // Same-session dupe (band-scoped) — mirrors the click-to-work guard so the drain
+    // never re-works a station already logged this session on this band.
+    function workedThisSession(call: string): boolean {
+        return session.qsos.some((q) => q.callsign === call && q.band === rig.band);
+    }
+
+    $effect(() => {
+        // Touch retryTick so a scheduled bump re-runs this effect (registers the dep).
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+        retryTick;
+        // A contact is active → never drain, and clear the latch: our start landed.
+        if (qso.active) {
+            draining = false;
+            return;
+        }
+        if (draining) return;
+        if (!ft8PileupStack.enabled || ft8PileupStack.items.length === 0) return;
+        if (!tx.armed || !catLive || opFreqHz === null || offset === null) return;
+        const head = ft8PileupStack.peek();
+        if (!head) return;
+        // Don't re-work a station already logged this session — a manual work during
+        // an Abandon pause can leave a now-duplicate entry. Drop it; the dequeue
+        // re-fires this effect for the next head.
+        if (workedThisSession(head.call)) {
+            ft8PileupStack.dequeue();
+            return;
+        }
+        draining = true;
+        const off = offset;
+        const opMHz = opFreqHz / 1_000_000;
+        void workCaller({
+            theirCall: head.call,
+            theirGrid: head.grid,
+            theirSnr: head.snr,
+            slotUtc: head.slotUtc,
+            offsetHz: off,
+            opFreqMHz: opMHz,
+        }).then((r) => {
+            if (r.ok) {
+                // Now being worked — remove from the queue. The latch clears when
+                // qso.active flips true (above).
+                ft8PileupStack.dequeue();
+                workRetries = 0;
+                return;
+            }
+            draining = false;
+            if (workRetries < MAX_WORK_RETRIES) {
+                // Keep the head; re-attempt shortly (TX→RX settle after a contact).
+                workRetries++;
+                setTimeout(() => retryTick++, WORK_RETRY_MS);
+                return;
+            }
+            workRetries = 0;
+            toasts.error(r.message || 'Could not work the pile-up head.');
+            // Still failing after several tries → pause (keep the queue) so the
+            // operator can fix the rig / remove the stuck entry and Resume, rather
+            // than losing callers.
+            ft8PileupStack.pause();
+        });
+    });
 </script>
 
 <section class="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface">
