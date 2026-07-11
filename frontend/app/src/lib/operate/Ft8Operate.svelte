@@ -10,6 +10,8 @@
     import { parseFrequency } from '../validators/frequency';
     import { toasts } from '../ui/toasts.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
+    import { session } from './session.svelte';
+    import { openExport } from './state.svelte';
 
     const qso = $derived(ft8State.qso);
     const tx = $derived(ft8State.tx);
@@ -154,7 +156,17 @@
 <section class="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface">
     <div class="flex items-center gap-x-3 border-b border-line px-4 py-2">
         <h3 class="text-sm font-semibold text-ink">Operate</h3>
-        <span class="ml-auto text-xs font-semibold text-muted">{roleLabel}</span>
+        <!-- The FT8 view has no Session tile, so this opens the shared session
+             review + export/email dialog (the operator's end-of-session send). -->
+        <button
+            class="btn ml-auto text-xs"
+            disabled={session.qsos.length === 0}
+            onclick={openExport}
+            title="Review + export/email this session's contacts"
+        >
+            Session ({session.qsos.length})
+        </button>
+        <span class="text-xs font-semibold text-muted">{roleLabel}</span>
     </div>
 
     <div class="flex-1 overflow-auto p-4">
