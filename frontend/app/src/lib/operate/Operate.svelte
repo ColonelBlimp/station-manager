@@ -12,6 +12,8 @@
     import ContactDialog from './ContactDialog.svelte';
     import RigKeys from './RigKeys.svelte';
     import Ft8View from './Ft8View.svelte';
+    import SessionPanel from './SessionPanel.svelte';
+    import { isVisible } from './layout.svelte';
 </script>
 
 {#if router.mode === 'phone'}
@@ -26,5 +28,16 @@
 <PileupDrawer />
 <ExportDialog />
 <ContactDialog />
+
+<!-- FT8 has no tile board, so the rail-toggled Session panel (QSO list + its own
+     Export… button) renders here as an overlay when shown. Phone/CW shows the same
+     panel in the TileBoard instead; the rail's Session icon toggles both via the
+     shared tile-visibility state, so its X (hideTile) closes this too. -->
+{#if router.mode !== 'phone' && isVisible('session')}
+    <div class="fixed top-20 right-16 z-40 max-h-[calc(100vh-6rem)] overflow-auto">
+        <SessionPanel />
+    </div>
+{/if}
+
 <!-- Rig-control keyboard shortcuts — Operate-wide (Phone/CW + FT8). -->
 <RigKeys />

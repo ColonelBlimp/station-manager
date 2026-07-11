@@ -1,51 +1,45 @@
-// The Export/Session dialog doubles as the FT8 view's session panel (the FT8
-// layout has no Session tile), so it must LIST the session's contacts — not just
-// a count — for the operator to review before exporting/emailing.
+// The export dialog is the end-of-session action surface (download ADIF + email to
+// QSL manager). The contact LIST lives on the Session panel, not here — this just
+// summarises the count and gates the actions on it.
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import ExportDialog from './ExportDialog.svelte';
 import { operate, closeExport } from './state.svelte';
-import { session, addSessionQso } from './session.svelte';
+import { addSessionQso, _resetSessionForTests } from './session.svelte';
 
 beforeEach(() => {
-    session.qsos.length = 0;
+    _resetSessionForTests();
     closeExport();
 });
 
-function logged(over: Partial<Parameters<typeof addSessionQso>[0]> = {}) {
-    addSessionQso({
-        callsign: 'W1ABC',
-        timeOn: '14:30:00',
-        band: '20m',
-        mode: 'FT8',
-        rstSent: '-12',
-        rstRcvd: '-08',
-        name: '',
-        country: 'United States',
-        comment: '',
-        ...over,
-    });
-}
-
-describe('ExportDialog session review', () => {
-    it('lists the session contacts when open', () => {
-        logged();
-        logged({ callsign: 'G3XYZ', band: '40m', country: 'England' });
+describe('ExportDialog', () => {
+    it('summarises the session count when open', () => {
+        addSessionQso({
+            callsign: 'W1ABC',
+            timeOn: '14:30:00',
+            band: '20m',
+            mode: 'FT8',
+            rstSent: '',
+            rstRcvd: '',
+            name: '',
+            country: 'United States',
+            comment: '',
+        });
         operate.exportOpen = true;
         render(ExportDialog);
-
-        expect(screen.getByText(/2 QSOs logged/)).toBeInTheDocument();
-        expect(screen.getByText('W1ABC')).toBeInTheDocument();
-        expect(screen.getByText('United States')).toBeInTheDocument();
-        expect(screen.getByText('G3XYZ')).toBeInTheDocument();
+        expect(screen.getByText(/1 QSO logged/)).toBeInTheDocument();
+        expect(screen.getByText('Export session')).toBeInTheDocument();
     });
 
-    it('shows the empty count and no contact rows for an empty session', () => {
+    it('shows the empty count for an empty session', () => {
         operate.exportOpen = true;
         render(ExportDialog);
-
         expect(screen.getByText(/0 QSOs logged/)).toBeInTheDocument();
-        expect(screen.queryByText('W1ABC')).toBeNull();
+    });
+
+    it('renders nothing while closed', () => {
+        render(ExportDialog);
+        expect(screen.queryByText('Export session')).toBeNull();
     });
 });

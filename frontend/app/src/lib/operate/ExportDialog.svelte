@@ -145,36 +145,6 @@
                     {count} QSO{count === 1 ? '' : 's'} logged this session.
                 </p>
 
-                <!-- The session's contacts — review before exporting/emailing. Shared
-                     FT8 + Phone/CW list (the FT8 view has no Session tile, so this
-                     doubles as its session panel). -->
-                {#if count > 0}
-                    <div class="mt-3 max-h-40 overflow-y-auto rounded-md border border-line">
-                        <table class="w-full text-xs">
-                            <thead class="bg-surface-muted sticky top-0 text-muted">
-                                <tr class="text-left">
-                                    <th class="px-2 py-1 font-medium">Time</th>
-                                    <th class="px-2 py-1 font-medium">Call</th>
-                                    <th class="px-2 py-1 font-medium">Band</th>
-                                    <th class="px-2 py-1 font-medium">Mode</th>
-                                    <th class="px-2 py-1 font-medium">Country</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {#each session.qsos as q (q.id)}
-                                    <tr class="border-t border-line-soft text-ink">
-                                        <td class="px-2 py-1 tabular-nums">{q.timeOn}</td>
-                                        <td class="px-2 py-1 font-medium">{q.callsign}</td>
-                                        <td class="px-2 py-1">{q.band}</td>
-                                        <td class="px-2 py-1">{q.mode}</td>
-                                        <td class="truncate px-2 py-1">{q.country}</td>
-                                    </tr>
-                                {/each}
-                            </tbody>
-                        </table>
-                    </div>
-                {/if}
-
                 <!-- Download ADIF (offline, no daemon) -->
                 <div class="mt-4 border-t border-line pt-4">
                     <h4 class="text-sm font-medium text-ink">Download</h4>
