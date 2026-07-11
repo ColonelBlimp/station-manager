@@ -152,6 +152,12 @@ precisely so we don't re-derive state or redo finished work.
 >   existing **Q**; both badges went from faint 15%-tint to **solid fills, white bold text**
 >   so the queue (blue Q) and the on-air station (green ●) read at a glance. Mutually
 >   exclusive per row (a worked caller is dequeued).
+> - **Session-count pill on the RH rail** — the **Session** rail button gains a live count
+>   oval (same blue `bg-focus` pill as the Pile-up depth badge) showing `session.qsos.length`
+>   when >0, singular/plural tooltip; reactive off the shared session store (updates on every
+>   logged QSO, FT8 + Phone/CW, both modes). Added `UtilRail.svelte.test.ts` + a shared
+>   `window.matchMedia` stub in `src/test/setup.ts` (so chrome components reading the theme at
+>   import can mount in tests). **496 SPA tests.**
 > - **Abandon now STOPS the run (fix)** — `onAbandon` pauses the drain (+ clears any armed
 >   skip) on success, so Abandon = full stop (drop TX, halt the pile-up, **keep the queue**
 >   for Resume). Root cause it fixes: without the pause, abandoning a pile-up contact handed
