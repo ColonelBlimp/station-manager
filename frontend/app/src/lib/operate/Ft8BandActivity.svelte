@@ -85,15 +85,13 @@
             .filter((r) => {
                 if (r.kind === 'call') return true; // calling us — always show
                 if (hideHashed && r.d.text.includes('<...>')) return false;
-                if (
+                return !(
                     filter !== '' &&
                     !r.d.text
                         .toUpperCase()
                         .split(/\s+/)
                         .some((t) => t.startsWith(filter))
-                )
-                    return false;
-                return true;
+                );
             });
         if (ft8CqToTop()) {
             const cq = rows.filter((r) => r.kind === 'cq');
