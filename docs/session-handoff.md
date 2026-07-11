@@ -30,7 +30,57 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-10)
+## Current state (as of 2026-07-11)
+
+> **Session 211 (2026-07-11) — `frontend/app` DOGFOODING STARTED: embedded +
+> served at `/app/`, and FT8 TX ON-AIR VALIDATED — the operator answered CQs and
+> logged real QSOs (US + Greek stations) live from the app. All committed +
+> pushed; 432 SPA tests green.** The answer-a-CQ → daemon-sequenced → logged +
+> forwarded path works end-to-end from `frontend/app`. Work this session:
+> - **`/app/` embed + serve.** `AppFS()` in `frontend/embed.go`
+>   (`//go:embed all:app/dist`), `GET /app/` StripPrefix mount in
+>   `internal/api/server.go`, `base:'/app/'` in the app's `vite.config.ts`,
+>   committed `dist/index.html` placeholder (gitignore exception),
+>   `frontend:app:build` folded into `frontend:build:all`, App-SPA CI gate +
+>   npm-cache path, `/app/` in `api-endpoints.md`, `TestSpaHandler_ServesAppIndex`
+>   guards it. Dogfood at **http://localhost:8080/app/** after `task
+>   deploy:local:dev`. A separate commit fixed a **pre-existing** red test —
+>   `TestVersion_HappyPath` expected schema 3, it's at 4 (`0004_utc_timestamps`).
+> - **`ft8.display.feed_mode`+`cq_to_top` were IGNORED** in the app
+>   (`setFt8DisplayPrefs` never called from `/v1/config`) → wired via `seams.ts`
+>   + `main.ts`; Band Activity honours `cqToTop` (float CQ rows, drop dividers).
+> - **Header station identity** — logbook name + rig name always-visible
+>   (`station.svelte.ts` reactive `$state`, `default_logbook.name`/`bridge.rig_name`),
+>   plus a **live logbook QSO count "(n)"** (`fetchLogbookCount` →
+>   `/v1/logbook/{id}/count`, re-fetched after every logged QSO — FT8 + Phone/CW).
+> - **Toast contrast fix** — the QSO-logged toast was `bg-surface` (same token as
+>   the cards under it) → camouflaged; now per-level theme-aware tints
+>   (green/amber/red). TTL stays 4s (operator: no dismiss friction).
+> - **DXCC populate-everywhere (daemon).** `MergeStationFromCountry`
+>   (`internal/lookup/orchestrator.go`) now fills `ContactedStation.DXCC` with the
+>   numeric entity from the country prefix via `enums/dxcc` — it was deliberately
+>   left empty for QRZ to resolve; operator's call: compute it ourselves so records
+>   are complete even with no online services ([[sm-populate-data-ourselves]]).
+>   Fixes display + logged/uploaded QSOs. App `seams.ts` drops the prefix fallback;
+>   **calling-station enrichment** now gets flag + country + DXCC in the tooltip
+>   (was CQ-only). Prefix→number verified (K→291, G→223, VK→150; unmapped→empty).
+> - **Band Activity** columns → Hz·Flag·Brg·SNR·Message + **`table-fixed`** (auto
+>   layout jittered left↔right each parity). **FT8 layout** — Band Activity +
+>   Operate fixed 470px centred via 1fr gutter columns, Occupancy full-width.
+> - **`selectedOffset` persists** to localStorage (`sm.ft8.selectedOffset`) so a
+>   page reload / daemon redeploy keeps the TX-offset pick.
+> - **Parity indicators (#1 of the parity-aware-occupancy plan).** Timing pill
+>   shows the live current-slot parity (`Transmit/Listen slot (even/odd)`);
+>   Occupancy header labels the snapshot's parity (daemon `slot.period`) — the
+>   occupancy is a single latest-slot snapshot that alternates even/odd every 15 s.
+>
+> **NEXT (frontend/app):** **parity-aware occupancy (#2)** — hold BOTH last-even +
+> last-odd snapshots, show the one matching the TX parity (opposite the worked
+> station) or a toggle (label #1 done this session). Then: operator_pick **pile-up
+> stack** (+ its `Next`), **shared-rig-card extraction** (first move of further FT8
+> rig work), remaining `ft8_display` fields (**highlight colours** + **hide_hashed_calls**,
+> still hardcoded in the app), **FT8 band buttons**. Inbox: Occupancy **light-mode
+> colour fix**, **DXCC backfill** on existing blank-DXCC QSOs.
 
 > **Session 210 (2026-07-09→10) — `frontend/app` RIG CONTROL arc COMPLETE
 > (Slices 1–4) + configurable operating-bands (daemon + SPA); FT8 UI DESIGN

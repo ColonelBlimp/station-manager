@@ -180,12 +180,18 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
     it('reads ft8_display feed_mode / history_max / cq_to_top', async () => {
         mockConfig({
             logging_station: { station_callsign: '7Q5MLV' },
-            ft8_display: { feed_mode: 'single', history_max: 250, cq_to_top: true },
+            ft8_display: {
+                feed_mode: 'single',
+                history_max: 250,
+                cq_to_top: true,
+                hide_hashed_calls: true,
+            },
         });
         const ctx = await fetchStationContext();
         expect(ctx.ft8FeedMode).toBe('single');
         expect(ctx.ft8HistoryMax).toBe(250);
         expect(ctx.ft8CqToTop).toBe(true);
+        expect(ctx.ft8HideHashed).toBe(true);
     });
 
     it('defaults ft8_display to accumulate / 100 / no-cq-float when the block is absent', async () => {
@@ -194,6 +200,7 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect(ctx.ft8FeedMode).toBe('accumulate');
         expect(ctx.ft8HistoryMax).toBe(100);
         expect(ctx.ft8CqToTop).toBe(false);
+        expect(ctx.ft8HideHashed).toBe(false);
     });
 
     it('falls back to accumulate for an unknown feed_mode literal', async () => {

@@ -187,6 +187,40 @@ describe('Ft8BandActivity renderer', () => {
         expect(title).toContain('Netherlands');
         expect(title).toContain('263');
     });
+
+    it('typed filter hides non-matching rows; a station calling you always shows', () => {
+        setFt8OperatorCall('7Q5MLV');
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('t1', [
+                { text: 'CQ VK3ABC QF22', freq_hz: 1500, snr: -5 },
+                { text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -8 },
+                { text: '7Q5MLV DL1XYZ JO31', freq_hz: 800, snr: 2 }, // calling us
+            ])
+        );
+        ft8State.bandFilter = 'VK';
+        flushSync();
+
+        expect(screen.getByText('CQ VK3ABC QF22')).toBeInTheDocument(); // token starts with VK
+        expect(screen.queryByText('CQ W1ABC FN42')).toBeNull(); // filtered out
+        expect(screen.getByText('7Q5MLV DL1XYZ JO31')).toBeInTheDocument(); // caller bypasses the filter
+    });
+
+    it('hide-hashed (config) drops <...> decodes but keeps identifiable ones', () => {
+        setFt8OperatorCall('7Q5MLV');
+        setFt8DisplayPrefs({ hideHashedCalls: true });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('t1', [
+                { text: 'CQ <...> FN42', freq_hz: 1500, snr: -5 },
+                { text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -8 },
+            ])
+        );
+        flushSync();
+
+        expect(screen.queryByText('CQ <...> FN42')).toBeNull();
+        expect(screen.getByText('CQ W1ABC FN42')).toBeInTheDocument();
+    });
 });
 
 describe('Ft8BandActivity click-to-work (first RF path)', () => {

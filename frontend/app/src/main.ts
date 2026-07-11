@@ -182,6 +182,7 @@ const ctx: StationContext = {
     ft8FeedMode: 'accumulate',
     ft8HistoryMax: 100,
     ft8CqToTop: false,
+    ft8HideHashed: false,
     logbookName: '',
     rigName: '',
 };
@@ -255,6 +256,7 @@ void fetchStationContext().then((c) => {
         feedMode: c.ft8FeedMode,
         historyMax: c.ft8HistoryMax,
         cqToTop: c.ft8CqToTop,
+        hideHashedCalls: c.ft8HideHashed,
     });
     if (c.catEnabled) openRigEvents(catLink);
 });

@@ -90,6 +90,11 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 // superseded daemon/upstream request instead of letting it run to completion.
 let seq = 0;
 let inflight: AbortController | null = null;
+// The last station we snapped the SP/LP path back to short for. Each NEW station
+// (Phone/CW callsign or FT8 worked call — both drive observeCall via the shared
+// EnrichmentCard) starts on short path; deduped so it fires once per station, not
+// on every keystroke of the same call, and never fights the operator's own toggle.
+let lastPathResetCall = '';
 
 /**
  * Feed the current callsign-field value. Idempotent per rendered frame — the
@@ -111,10 +116,19 @@ export function observeCall(raw: string): void {
         enrich.status = 'idle';
         enrich.call = '';
         enrich.data = null;
+        lastPathResetCall = ''; // a cleared draft → the next valid call is a new QSO
         return;
     }
     // Already resolved or resolving this exact call — nothing to do.
     if (call === enrich.call && enrich.status !== 'idle') return;
+
+    // A new station is being worked → start it on short path; don't carry the
+    // previous QSO's long-path choice over. Fires once per station (deduped), so
+    // it never overrides the operator toggling LP for the SAME call.
+    if (call !== lastPathResetCall) {
+        prefs.path = 'sp';
+        lastPathResetCall = call;
+    }
 
     timer = setTimeout(() => void lookup(call), DEBOUNCE_MS);
 }

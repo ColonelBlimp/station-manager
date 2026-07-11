@@ -191,10 +191,16 @@ export const ft8State = new Ft8State();
 
 /** Band Activity display prefs (config.json ft8.display). Defaults until /v1/config
  *  loads: accumulate the feed, cap at 100 rows, don't float CQ rows to the top. */
-let displayPrefs: { feedMode: 'accumulate' | 'single'; historyMax: number; cqToTop: boolean } = {
+let displayPrefs: {
+    feedMode: 'accumulate' | 'single';
+    historyMax: number;
+    cqToTop: boolean;
+    hideHashedCalls: boolean;
+} = {
     feedMode: 'accumulate',
     historyMax: 100,
     cqToTop: false,
+    hideHashedCalls: false,
 };
 
 export function setFt8DisplayPrefs(p: Partial<typeof displayPrefs>): void {
@@ -206,6 +212,13 @@ export function setFt8DisplayPrefs(p: Partial<typeof displayPrefs>): void {
  *  plain accessor (not reactive $state) matches this SPA's fetch-config-once contract. */
 export function ft8CqToTop(): boolean {
     return displayPrefs.cqToTop;
+}
+
+/** Whether Band Activity hides decodes with an unresolved hashed call ("<...>")
+ *  (config ft8.display.hide_hashed_calls). Config-read like the feed prefs; the
+ *  live toggle UI arrives with the app's config-editing surface. */
+export function ft8HideHashed(): boolean {
+    return displayPrefs.hideHashedCalls;
 }
 
 /** The operator's station callsign (config), so Band Activity can flag decodes
@@ -470,7 +483,12 @@ export function resetFt8ForTests(): void {
     txActions = null;
     operatorCall = '';
     myGrid = '';
-    displayPrefs = { feedMode: 'accumulate', historyMax: 100, cqToTop: false };
+    displayPrefs = {
+        feedMode: 'accumulate',
+        historyMax: 100,
+        cqToTop: false,
+        hideHashedCalls: false,
+    };
     ft8State.connected = false;
     ft8State.slot = null;
     ft8State.occupied = [];

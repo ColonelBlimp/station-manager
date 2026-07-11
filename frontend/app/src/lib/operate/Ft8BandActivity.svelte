@@ -9,6 +9,7 @@
         ft8OperatorCall,
         ft8MyGrid,
         ft8CqToTop,
+        ft8HideHashed,
         answerCq,
         workCaller,
         type DecodeEntry,
@@ -21,6 +22,7 @@
     import { pathInfo } from '../utils/bearing';
     import { parseFrequency } from '../validators/frequency';
     import { toasts } from '../ui/toasts.svelte';
+    import Ft8BandFilter from './Ft8BandFilter.svelte';
 
     interface DecodeRow {
         d: DecodeEntry;
@@ -69,9 +71,30 @@
     // instead floated above the rest (stable within each partition) so the answerable
     // stations sit together at the top — the feed is no longer slot-ordered, so it
     // renders as ONE header-less group (a group with time === '' skips its divider).
+    //
+    // Funnel filters (both HIDE rows) run first: the typed token-prefix filter
+    // (ft8State.bandFilter — "show calls starting with VK") and hide-hashed
+    // (ft8.display.hide_hashed_calls — drop unidentifiable "<...>" calls). A station
+    // CALLING US always shows through — missing a caller is costly.
     const groups = $derived.by<SlotGroup[]>(() => {
         const me = ft8OperatorCall();
-        const rows = ft8State.decodes.map((d) => classify(d, me));
+        const filter = ft8State.bandFilter.trim().toUpperCase();
+        const hideHashed = ft8HideHashed();
+        const rows = ft8State.decodes
+            .map((d) => classify(d, me))
+            .filter((r) => {
+                if (r.kind === 'call') return true; // calling us — always show
+                if (hideHashed && r.d.text.includes('<...>')) return false;
+                if (
+                    filter !== '' &&
+                    !r.d.text
+                        .toUpperCase()
+                        .split(/\s+/)
+                        .some((t) => t.startsWith(filter))
+                )
+                    return false;
+                return true;
+            });
         if (ft8CqToTop()) {
             const cq = rows.filter((r) => r.kind === 'cq');
             const rest = rows.filter((r) => r.kind !== 'cq');
@@ -223,8 +246,9 @@
 </script>
 
 <section class="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface">
-    <div class="flex items-center border-b border-line px-4 py-2">
+    <div class="flex items-center gap-1.5 border-b border-line px-4 py-2">
         <h3 class="text-sm font-semibold text-ink">Band Activity</h3>
+        <Ft8BandFilter />
     </div>
 
     {#if groups.length === 0}

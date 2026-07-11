@@ -137,10 +137,12 @@ export interface StationContext {
      *  up / single shows only the current slot; `cqToTop` floats CQ rows above the
      *  rest; `historyMax` caps the feed. Defaults match the daemon's when the block
      *  or a field is absent (older daemon / unset), so an existing config is honoured
-     *  and a missing one is inert. */
+     *  and a missing one is inert. `hideHashed` drops decodes with an unresolved
+     *  hashed call ("<...>") from Band Activity. */
     ft8FeedMode: 'accumulate' | 'single';
     ft8HistoryMax: number;
     ft8CqToTop: boolean;
+    ft8HideHashed: boolean;
 }
 
 export async function fetchStationContext(): Promise<StationContext> {
@@ -160,6 +162,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8FeedMode: 'accumulate',
         ft8HistoryMax: 100,
         ft8CqToTop: false,
+        ft8HideHashed: false,
         logbookName: '',
         rigName: '',
     };
@@ -195,6 +198,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8FeedMode: fd.feed_mode === 'single' ? 'single' : 'accumulate',
         ft8HistoryMax: typeof fd.history_max === 'number' ? fd.history_max : 100,
         ft8CqToTop: fd.cq_to_top === true,
+        ft8HideHashed: fd.hide_hashed_calls === true,
         logbookName: str(lb.name),
         rigName: str(br.rig_name),
     };
