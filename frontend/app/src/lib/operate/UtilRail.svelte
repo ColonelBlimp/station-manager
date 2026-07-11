@@ -7,6 +7,7 @@
     import { toggleUtil } from '../ui/state.svelte';
     import { setPileup, focusCallsign } from './state.svelte';
     import { operate } from './state.svelte';
+    import { ft8PileupStack } from './ft8Pileup.svelte';
     import {
         layout,
         toggleTile,
@@ -124,7 +125,7 @@
                 <span class="rail-label">Arrange</span>
             </button>
             <button
-                class="rail-item"
+                class="rail-item relative"
                 title="Pile-up"
                 data-active={operate.pileup ? 'true' : 'false'}
                 onclick={() => setPileup(!operate.pileup)}
@@ -144,6 +145,14 @@
                     />
                 </svg>
                 <span class="rail-label">Pile-up</span>
+                {#if ft8PileupStack.count > 0}
+                    <span
+                        class="absolute top-0.5 left-6 min-w-4 rounded-full bg-focus px-1 text-center text-[10px] font-bold text-white tabular-nums"
+                        title={`${ft8PileupStack.count} caller${ft8PileupStack.count === 1 ? '' : 's'} queued`}
+                    >
+                        {ft8PileupStack.count}
+                    </span>
+                {/if}
             </button>
             <button class="rail-item" title="Collapse" onclick={toggleUtil}>
                 <svg
