@@ -35,7 +35,7 @@ precisely so we don't re-derive state or redo finished work.
 > **Session 211 (2026-07-11) — `frontend/app` DOGFOODING STARTED: embedded +
 > served at `/app/`, and FT8 TX ON-AIR VALIDATED — the operator answered CQs and
 > logged real QSOs (US + Greek stations) live from the app. All committed +
-> pushed; 432 SPA tests green.** The answer-a-CQ → daemon-sequenced → logged +
+> pushed; 454 SPA tests green.** The answer-a-CQ → daemon-sequenced → logged +
 > forwarded path works end-to-end from `frontend/app`. Work this session:
 > - **`/app/` embed + serve.** `AppFS()` in `frontend/embed.go`
 >   (`//go:embed all:app/dist`), `GET /app/` StripPrefix mount in
@@ -73,14 +73,48 @@ precisely so we don't re-derive state or redo finished work.
 >   shows the live current-slot parity (`Transmit/Listen slot (even/odd)`);
 >   Occupancy header labels the snapshot's parity (daemon `slot.period`) — the
 >   occupancy is a single latest-slot snapshot that alternates even/odd every 15 s.
+> - **Band Activity funnel filter (shipping parity).** `Ft8BandFilter.svelte` popover
+>   beside the header: typed token-prefix filter (`ft8State.bandFilter`, "show calls
+>   starting with VK", live/session-scoped) + `hide_hashed_calls` (config-read). A
+>   station CALLING US always shows through; the filter runs before cq-to-top order.
+> - **SP/LP path resets to short per new station.** `prefs.path` carried a previous
+>   QSO's long-path pick over; now `observeCall` (the single reaction both the Phone/CW
+>   callsign and the FT8 worked-call drive via `EnrichmentCard`) snaps it back to short
+>   on each NEW station, deduped so it never fights the operator's own toggle.
+> - **Parity-aware occupancy (#2) — DONE.** `ft8State` keeps per-parity snapshots
+>   (`occupiedByParity`/`suggestedByParity`, null=unseen); `shownParity` = OPPOSITE the
+>   worked station during a QSO (locked, "· TX" cue), else the manual Even/Odd toggle
+>   (labelled **"TX slot"** so its purpose is obvious). `occupied`/`suggested` became
+>   getters over the shown parity, so `effectiveOffset`'s auto-pick draws from the
+>   TX-parity snapshot. Correct by design — the daemon skips occupancy on own-TX slots,
+>   so the TX-parity snapshot is the last seen before keying, exactly what to pick from.
+> - **FT8 Session panel (rail-toggled) + session persistence.** The RH-rail Session
+>   icon was DEAD in FT8 (it toggles a Phone/CW-only tile that has no renderer there).
+>   Fixed: `Operate.svelte` renders the self-contained `SessionPanel` (QSO list + its
+>   own Export… button) as a stacked overlay in FT8 when `isVisible('session')` — same
+>   tile-visibility state, so the rail icon + the card's X drive it. Export… → the
+>   `ExportDialog` (download ADIF + email QSL manager). The session log now persists to
+>   **sessionStorage** (`sm.session.qsos`) so a reload/redeploy keeps the sitting's rows.
+> - **Router `/app/` base-path fix.** The client router built/parsed ABSOLUTE paths, so
+>   on load at `/app/` it `replaceState`d the URL to `/` (the *logging* SPA's root, a
+>   different app). Now base-aware (`import.meta.env.BASE_URL`, `subPathOf`/`urlOf`):
+>   strips the base on read, re-adds on write; base-agnostic if it ever moves to root.
+> - **Shared rig-card extraction (+ FT8 rig panel).** `RigPanel` was already self-
+>   contained; parameterised the one mode-specific bit — the band `pickBand` prop
+>   (defaults to `selectBand`, so the Phone/CW tile is a **pure refactor**; FT8 will
+>   pass a watering-hole pick once `ft8_frequencies` is surfaced). Stood it up in FT8:
+>   the rail **Rig** icon now shows the full rig card (band/mode/VFO/freq/Tune/CAT gate)
+>   stacked with Session in the overlay.
 >
-> **NEXT (frontend/app):** **parity-aware occupancy (#2)** — hold BOTH last-even +
-> last-odd snapshots, show the one matching the TX parity (opposite the worked
-> station) or a toggle (label #1 done this session). Then: operator_pick **pile-up
-> stack** (+ its `Next`), **shared-rig-card extraction** (first move of further FT8
-> rig work), remaining `ft8_display` fields (**highlight colours** + **hide_hashed_calls**,
-> still hardcoded in the app), **FT8 band buttons**. Inbox: Occupancy **light-mode
-> colour fix**, **DXCC backfill** on existing blank-DXCC QSOs.
+> **NEXT (frontend/app):** **FT8 watering-hole `pickBand`** — surface `ft8_frequencies`
+> into the app so the FT8 rig card's band buttons drive `set_freq`+`set_mode` (a
+> one-line `pickBand=` on the FT8 `<RigPanel />`; the seam is in place). Then:
+> operator_pick **pile-up stack** (+ its `Next`), remaining `ft8_display` fields
+> (**highlight colours** + a live **hide-hashed toggle** — hide-hashed is config-read
+> only now), and (optional) the rail **Worked** panel in FT8. Inbox: Occupancy
+> **light-mode colour fix**, **DXCC backfill** on existing blank-DXCC QSOs. Dogfood
+> gotcha: `/app/` is `//go:embed`'d — **redeploy, don't just reload**
+> ([[sm-app-embed-redeploy-gotcha]]).
 
 > **Session 210 (2026-07-09→10) — `frontend/app` RIG CONTROL arc COMPLETE
 > (Slices 1–4) + configurable operating-bands (daemon + SPA); FT8 UI DESIGN
