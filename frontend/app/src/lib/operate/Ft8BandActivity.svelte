@@ -8,6 +8,7 @@
         ft8State,
         ft8OperatorCall,
         ft8MyGrid,
+        ft8CqToTop,
         answerCq,
         workCaller,
         type DecodeEntry,
@@ -53,23 +54,43 @@
         }
     }
 
-    // Group the flat newest-first feed by slot; classify + pre-parse each decode.
+    // Classify + pre-parse one decode into a display row.
+    function classify(d: DecodeEntry, me: string): DecodeRow {
+        const called = parseDirectedToMe(d.text, me);
+        const cq = called ? null : parseCq(d.text);
+        const kind: DecodeRow['kind'] = called ? 'call' : cq ? 'cq' : '';
+        const call = called?.call ?? cq?.call ?? '';
+        const grid = called?.grid ?? cq?.grid ?? '';
+        return { d, kind, call, bearing: bearingFor(grid) };
+    }
+
+    // The Band Activity feed. Normally the newest-first decode list grouped by slot
+    // (a header row per slot). With config ft8.display.cq_to_top on, CQ rows are
+    // instead floated above the rest (stable within each partition) so the answerable
+    // stations sit together at the top — the feed is no longer slot-ordered, so it
+    // renders as ONE header-less group (a group with time === '' skips its divider).
     const groups = $derived.by<SlotGroup[]>(() => {
-        const out: SlotGroup[] = [];
         const me = ft8OperatorCall();
+        const rows = ft8State.decodes.map((d) => classify(d, me));
+        if (ft8CqToTop()) {
+            const cq = rows.filter((r) => r.kind === 'cq');
+            const rest = rows.filter((r) => r.kind !== 'cq');
+            return [{ key: 'cq-top', time: '', parity: '', decodes: [...cq, ...rest] }];
+        }
+        const out: SlotGroup[] = [];
         let cur: SlotGroup | null = null;
-        for (const d of ft8State.decodes) {
-            const key = `d:${d.startUtc}`;
+        for (const row of rows) {
+            const key = `d:${row.d.startUtc}`;
             if (cur === null || cur.key !== key) {
-                cur = { key, time: clock(d.startUtc), parity: slotParity(d.startUtc), decodes: [] };
+                cur = {
+                    key,
+                    time: clock(row.d.startUtc),
+                    parity: slotParity(row.d.startUtc),
+                    decodes: [],
+                };
                 out.push(cur);
             }
-            const called = parseDirectedToMe(d.text, me);
-            const cq = called ? null : parseCq(d.text);
-            const kind: DecodeRow['kind'] = called ? 'call' : cq ? 'cq' : '';
-            const call = called?.call ?? cq?.call ?? '';
-            const grid = called?.grid ?? cq?.grid ?? '';
-            cur.decodes.push({ d, kind, call, bearing: bearingFor(grid) });
+            cur.decodes.push(row);
         }
         return out;
     });
@@ -233,11 +254,13 @@
                 </thead>
                 <tbody>
                     {#each groups as g (g.key)}
-                        <tr class="bg-surface-muted text-muted">
-                            <td colspan="5" class="py-0.5 pl-3 text-xs font-semibold">
-                                {g.time}{g.parity ? ` · ${g.parity}` : ''}
-                            </td>
-                        </tr>
+                        {#if g.time !== ''}
+                            <tr class="bg-surface-muted text-muted">
+                                <td colspan="5" class="py-0.5 pl-3 text-xs font-semibold">
+                                    {g.time}{g.parity ? ` · ${g.parity}` : ''}
+                                </td>
+                            </tr>
+                        {/if}
                         {#each g.decodes as row (row.d.id)}
                             {@const info =
                                 row.kind === 'cq'

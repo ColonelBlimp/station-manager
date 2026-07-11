@@ -23,6 +23,7 @@ import {
     setFt8MyGrid,
     setFt8TxActions,
     setFt8LoggedSink,
+    setFt8DisplayPrefs,
     type Ft8TxResult,
 } from './lib/operate/ft8.svelte';
 import { setFt8Enricher, setFt8Dupe, ft8EnrichState } from './lib/operate/ft8Enrich.svelte';
@@ -170,6 +171,9 @@ const ctx: StationContext = {
     operatingBands: [],
     mailerEnabled: false,
     mailerDefaultRecipient: '',
+    ft8FeedMode: 'accumulate',
+    ft8HistoryMax: 100,
+    ft8CqToTop: false,
 };
 
 // Worked-before dupe seam (/v1/contest-dupe), closing over ctx so it reads the
@@ -215,6 +219,15 @@ void fetchStationContext().then((c) => {
     setFt8OperatorCall(c.stationCallsign);
     // Operator grid → the near end of Band Activity's per-CQ short-path bearing.
     setFt8MyGrid(c.myGrid);
+    // FT8 Band Activity display prefs (config ft8.display): feed_mode drives the
+    // decode-feed roll (accumulate vs single-slot) in the state module; cq_to_top
+    // + history_max shape the Band Activity render. Injected once at boot — this
+    // SPA fetches config once (no live reload yet).
+    setFt8DisplayPrefs({
+        feedMode: c.ft8FeedMode,
+        historyMax: c.ft8HistoryMax,
+        cqToTop: c.ft8CqToTop,
+    });
     if (c.catEnabled) openRigEvents(catLink);
 });
 

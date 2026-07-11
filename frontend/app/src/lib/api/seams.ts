@@ -123,6 +123,15 @@ export interface StationContext {
      *  the email path on `mailerEnabled` and seeds the recipient. */
     mailerEnabled: boolean;
     mailerDefaultRecipient: string;
+    /** FT8 Band Activity display prefs (config.json ft8.display, daemon-resolved
+     *  so always present on a current daemon). `feedMode` accumulate rolls slots
+     *  up / single shows only the current slot; `cqToTop` floats CQ rows above the
+     *  rest; `historyMax` caps the feed. Defaults match the daemon's when the block
+     *  or a field is absent (older daemon / unset), so an existing config is honoured
+     *  and a missing one is inert. */
+    ft8FeedMode: 'accumulate' | 'single';
+    ft8HistoryMax: number;
+    ft8CqToTop: boolean;
 }
 
 export async function fetchStationContext(): Promise<StationContext> {
@@ -139,6 +148,9 @@ export async function fetchStationContext(): Promise<StationContext> {
         operatingBands: [],
         mailerEnabled: false,
         mailerDefaultRecipient: '',
+        ft8FeedMode: 'accumulate',
+        ft8HistoryMax: 100,
+        ft8CqToTop: false,
     };
     const fetched = await safeFetch('/v1/config', { method: 'GET' });
     if (!fetched.ok || !fetched.response.ok) return none;
@@ -150,6 +162,7 @@ export async function fetchStationContext(): Promise<StationContext> {
     const br = isPlainObject(body.bridge) ? body.bridge : {};
     const ml = isPlainObject(body.mailer) ? body.mailer : {};
     const st = isPlainObject(body.station) ? body.station : {};
+    const fd = isPlainObject(body.ft8_display) ? body.ft8_display : {};
     const str = (v: unknown): string => (typeof v === 'string' ? v : '');
     return {
         myGrid: str(ls.my_gridsquare),
@@ -166,6 +179,11 @@ export async function fetchStationContext(): Promise<StationContext> {
         operatingBands: toStringArray(st.operating_bands),
         mailerEnabled: ml.enabled === true,
         mailerDefaultRecipient: str(ml.default_recipient),
+        // feed_mode is a strict enum daemon-side ("accumulate"|"single"); anything
+        // else (absent, older daemon, malformed) falls back to accumulate.
+        ft8FeedMode: fd.feed_mode === 'single' ? 'single' : 'accumulate',
+        ft8HistoryMax: typeof fd.history_max === 'number' ? fd.history_max : 100,
+        ft8CqToTop: fd.cq_to_top === true,
     };
 }
 

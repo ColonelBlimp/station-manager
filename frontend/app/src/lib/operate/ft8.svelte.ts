@@ -161,14 +161,22 @@ export const ft8State = new Ft8State();
 */
 
 /** Band Activity display prefs (config.json ft8.display). Defaults until /v1/config
- *  loads: accumulate the feed, cap at 100 rows. */
-let displayPrefs: { feedMode: 'accumulate' | 'single'; historyMax: number } = {
+ *  loads: accumulate the feed, cap at 100 rows, don't float CQ rows to the top. */
+let displayPrefs: { feedMode: 'accumulate' | 'single'; historyMax: number; cqToTop: boolean } = {
     feedMode: 'accumulate',
     historyMax: 100,
+    cqToTop: false,
 };
 
 export function setFt8DisplayPrefs(p: Partial<typeof displayPrefs>): void {
     displayPrefs = { ...displayPrefs, ...p };
+}
+
+/** Whether Band Activity floats CQ rows above the rest (config ft8.display.cq_to_top).
+ *  Read by the Band Activity renderer; injected once at boot like the feed prefs, so a
+ *  plain accessor (not reactive $state) matches this SPA's fetch-config-once contract. */
+export function ft8CqToTop(): boolean {
+    return displayPrefs.cqToTop;
 }
 
 /** The operator's station callsign (config), so Band Activity can flag decodes
@@ -433,7 +441,7 @@ export function resetFt8ForTests(): void {
     txActions = null;
     operatorCall = '';
     myGrid = '';
-    displayPrefs = { feedMode: 'accumulate', historyMax: 100 };
+    displayPrefs = { feedMode: 'accumulate', historyMax: 100, cqToTop: false };
     ft8State.connected = false;
     ft8State.slot = null;
     ft8State.occupied = [];

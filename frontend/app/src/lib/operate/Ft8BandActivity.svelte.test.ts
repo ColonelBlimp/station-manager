@@ -13,6 +13,7 @@ import {
     setFt8OperatorCall,
     setFt8MyGrid,
     setFt8TxActions,
+    setFt8DisplayPrefs,
     resetFt8ForTests,
     type Ft8AnswerArgs,
     type Ft8WorkArgs,
@@ -94,6 +95,32 @@ describe('Ft8BandActivity renderer', () => {
         expect(cqRow?.className).toContain('amber');
         const callRow = screen.getByText('7Q5MLV PA3KUS JO21').closest('tr');
         expect(callRow?.className).toContain('blue');
+    });
+
+    it('floats CQ rows to the top and drops slot dividers when cq_to_top is set', () => {
+        setFt8OperatorCall('7Q5MLV');
+        setFt8DisplayPrefs({ cqToTop: true });
+        render(Ft8BandActivity);
+
+        // Older slot carries a CQ; the newer slot a plain third-party exchange
+        // (neither a CQ nor directed at us). Newest-first, the plain row would
+        // normally sit above the CQ — cq_to_top must invert that.
+        ft8Link.onDecode(
+            decode('2026-07-09T14:30:00Z', [{ text: 'CQ W1ABC FN42', freq_hz: 1500, snr: -12 }])
+        );
+        ft8Link.onDecode(
+            decode('2026-07-09T14:30:30Z', [{ text: 'PA3KUS DL1ABC -07', freq_hz: 1400, snr: -3 }])
+        );
+        flushSync();
+
+        // No slot-divider rows in cq-to-top mode (the feed is no longer slot-ordered).
+        expect(screen.queryByText('14:30:00')).toBeNull();
+        expect(screen.queryByText('14:30:30')).toBeNull();
+
+        // The CQ (older slot) is floated ABOVE the newer plain exchange.
+        const cq = screen.getByText('CQ W1ABC FN42');
+        const plain = screen.getByText('PA3KUS DL1ABC -07');
+        expect(cq.compareDocumentPosition(plain) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it('shows a per-CQ short-path bearing from the operator grid + decode grid', () => {
