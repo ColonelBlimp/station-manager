@@ -21,9 +21,9 @@ export interface Enrichment {
     /** ISO-3166 alpha-2 code (hamnut ccode) — drives the flag. '' when unknown. */
     ccode: string;
     /**
-     * DXCC entity for display: the numeric entity when the wire has it, else
-     * the entity prefix (country.dxcc_prefix, e.g. "G") — the daemon rarely
-     * sends the number on cache hits. '' when unknown.
+     * Numeric DXCC entity code for display (e.g. "291"). The daemon populates
+     * station.dxcc from its curated prefix→entity map, so this is the real
+     * number, not the alphabetic prefix. '' when the entity is unknown.
      */
     dxcc: string;
     /** true = this DXCC entity has never been worked (a "new one"). null = unknown. */

@@ -185,14 +185,21 @@ func MergeStationFromCountry(s types.ContactedStation, c types.Country) types.Co
 	if c.ITUZone != "" && c.ITUZone != s.ITUZ {
 		s.ITUZ = c.ITUZone
 	}
-	// DXCC is deliberately NOT merged from c.DXCCPrefix. The ADIF DXCC
-	// field (ContactedStation.DXCC) is the numeric DXCC *entity code*
-	// (e.g. 291 for the USA); c.DXCCPrefix is the alphabetic *prefix*
-	// ("K", "VK"). Mapping the prefix into the numeric field made
-	// uploaders like QRZ reject the value and file the QSO as NON-DXCC.
-	// The prefix's home is Country.DXCCPrefix (country_details), which is
-	// not ADIF-emitted. With DXCC left empty, QRZ resolves the entity
-	// from the callsign, which is correct.
+	// Populate the ADIF DXCC field (ContactedStation.DXCC) — the numeric DXCC
+	// *entity code* (e.g. "291" for the USA) — from the country's alphabetic
+	// prefix via the curated enums/dxcc map. SM computes and stores it rather
+	// than leaving it empty for an uploader to backfill: some services don't,
+	// and an operator who uses no online services would otherwise never get a
+	// DXCC. The alphabetic prefix ("K"/"VK") is NEVER written into this numeric
+	// field — that would make QRZ file the QSO as NON-DXCC (the isAsciiDigits
+	// guard in the ADIF emitter is the belt-and-suspenders backstop); an
+	// unmapped prefix leaves DXCC empty (graceful degradation). Only fill when
+	// empty so a genuine numeric DXCC from an upstream is never overwritten.
+	if s.DXCC == "" {
+		if code, ok := dxcc.DXCCForPrefix(c.DXCCPrefix); ok {
+			s.DXCC = code
+		}
+	}
 	return s
 }
 

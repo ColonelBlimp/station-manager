@@ -11,6 +11,9 @@
     import { navigate } from '../router.svelte';
     import SessionTimer from './SessionTimer.svelte';
 
+    // Thousands-grouped QSO count (e.g. "1,234") beside the logbook name.
+    const countFmt = new Intl.NumberFormat();
+
     const gateLabel = $derived(
         rigGate() === 'live'
             ? 'CAT'
@@ -71,6 +74,9 @@
         <span>
             <span class="text-muted">Logbook</span>
             <span class="font-medium text-ink">{station.logbookName || '—'}</span>
+            {#if station.logbookName}<span class="text-muted"
+                    >({countFmt.format(station.logbookQsoCount)})</span
+                >{/if}
         </span>
         <span>
             <span class="text-muted">Rig</span>

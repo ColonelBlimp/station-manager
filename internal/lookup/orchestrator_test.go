@@ -478,11 +478,13 @@ func TestEnrich_ColdMiss_ChainAndHamnut_MergesAndStoresHamnutTruth(t *testing.T)
 	if got.Station.ITUZ != "27" {
 		t.Errorf("Station.ITUZ = %q, want \"27\" (not QRZ's bogus 53)", got.Station.ITUZ)
 	}
-	// DXCC (the numeric ADIF entity field) must stay empty — hamnut's
-	// alphabetic prefix is NOT a valid DXCC entity code, so it is no
-	// longer merged onto the station. The prefix lives on Country.DXCCPrefix.
-	if got.Station.DXCC != "" {
-		t.Errorf("Station.DXCC = %q, want \"\" (prefix must not fill the numeric DXCC field)", got.Station.DXCC)
+	// DXCC (the numeric ADIF entity field) is POPULATED from the country's
+	// prefix via the curated enums/dxcc map — SM computes and stores the entity
+	// code rather than leaving it for an uploader to backfill. "G" → 223
+	// (England). The alphabetic prefix itself is never written here; it lives on
+	// Country.DXCCPrefix.
+	if got.Station.DXCC != "223" {
+		t.Errorf("Station.DXCC = %q, want \"223\" (England entity, populated from prefix G)", got.Station.DXCC)
 	}
 	if got.Country.DXCCPrefix != "G" {
 		t.Errorf("Country.DXCCPrefix = %q, want G", got.Country.DXCCPrefix)
@@ -684,9 +686,25 @@ func TestMergeStationFromCountry(t *testing.T) {
 			"empty station fills from country",
 			types.ContactedStation{Name: "Marc"},
 			types.Country{Name: "England", CQZone: "14", ITUZone: "27", Continent: "EU", DXCCPrefix: "G"},
-			// DXCCPrefix is intentionally NOT merged onto the station's
-			// numeric DXCC field (it's an alphabetic prefix, not an entity code).
-			types.ContactedStation{Name: "Marc", Country: "England", CQZ: "14", ITUZ: "27", Cont: "EU"},
+			// DXCC is populated as the numeric ENTITY code, mapped from the
+			// country's prefix via enums/dxcc ("G" → "223"). The alphabetic prefix
+			// itself is never written into the numeric field.
+			types.ContactedStation{Name: "Marc", Country: "England", CQZ: "14", ITUZ: "27", Cont: "EU", DXCC: "223"},
+		},
+		{
+			// Graceful degradation: a prefix not in the enums/dxcc map leaves DXCC
+			// empty (an uploader can still resolve it) rather than guessing.
+			"unmapped prefix leaves DXCC empty",
+			types.ContactedStation{Name: "Marc"},
+			types.Country{Name: "Nowhere", DXCCPrefix: "ZZZ9"},
+			types.ContactedStation{Name: "Marc", Country: "Nowhere"},
+		},
+		{
+			// A genuine numeric DXCC already on the station is never overwritten.
+			"existing numeric DXCC is preserved",
+			types.ContactedStation{DXCC: "999"},
+			types.Country{Name: "England", DXCCPrefix: "G"},
+			types.ContactedStation{Country: "England", DXCC: "999"},
 		},
 		{
 			"only when different — same value is a no-op",

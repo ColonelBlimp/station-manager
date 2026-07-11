@@ -25,9 +25,12 @@ export async function apiEnrich(call: string, signal?: AbortSignal): Promise<Enr
     return {
         country: country?.name ?? '',
         ccode: country?.ccode ?? '',
-        // The numeric entity (station.dxcc) is usually absent on cache hits;
-        // the entity prefix is the reliable identity on the wire.
-        dxcc: station?.dxcc ?? country?.dxcc_prefix ?? '',
+        // The numeric DXCC entity code (e.g. "291"). The daemon now populates
+        // station.dxcc from its curated prefix→entity map, so this carries the
+        // real number. No fall-back to country.dxcc_prefix: an alphabetic prefix
+        // ("K") is NOT the DXCC identifier, and showing it under a "DXCC" label
+        // misleads — '' instead hides the readout when the entity is unknown.
+        dxcc: /^\d+$/.test(station?.dxcc ?? '') ? (station?.dxcc ?? '') : '',
         isNewEntity: country?.is_new_entity ?? null,
         grid: station?.gridsquare ?? '',
         name: station?.name ?? '',
@@ -195,6 +198,21 @@ export async function fetchStationContext(): Promise<StationContext> {
         logbookName: str(lb.name),
         rigName: str(br.rig_name),
     };
+}
+
+/**
+ * Total QSO count for a logbook (GET /v1/logbook/{id}/count) — the header's live
+ * "Logbook (n)" readout. Fail-soft: any non-ok outcome (network blip, daemon
+ * restart) returns null so the caller keeps the last good count on screen rather
+ * than flashing a wrong value. id < 1 (pre-setup) → null.
+ */
+export async function fetchLogbookCount(logbookId: number): Promise<number | null> {
+    if (logbookId < 1) return null;
+    const fetched = await safeFetch(`/v1/logbook/${logbookId}/count`, { method: 'GET' });
+    if (!fetched.ok || !fetched.response.ok) return null;
+    const body = await readJsonBody(fetched.response);
+    if (!isPlainObject(body)) return null;
+    return typeof body.count === 'number' ? body.count : null;
 }
 
 /** Keep only the string members of a wire array; anything else (or a non-array)

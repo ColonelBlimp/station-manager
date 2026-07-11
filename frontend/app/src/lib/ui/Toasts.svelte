@@ -24,6 +24,17 @@
         warn: 'Warning: ',
         error: 'Error: ',
     };
+
+    // Per-level tinted panel so a toast stands OFF the surface it floats over — a
+    // neutral bg-surface toast camouflages against the same-token cards/canvas
+    // underneath. Theme-aware (the shipping SPA's light-only indigo/amber/rose tints
+    // would be wrong in dark mode): a pale tint + saturated border in light, a deep
+    // tint + brighter border in dark. Colours track the level icons (green/amber/red).
+    const panelClass: Record<ToastLevel, string> = {
+        info: 'bg-green-50 outline-green-400 dark:bg-green-900 dark:outline-green-600',
+        warn: 'bg-amber-50 outline-amber-400 dark:bg-amber-900 dark:outline-amber-600',
+        error: 'bg-red-50 outline-red-400 dark:bg-red-900 dark:outline-red-600',
+    };
 </script>
 
 {#snippet levelIcon(level: ToastLevel)}
@@ -84,7 +95,9 @@
     <div class="flex w-full flex-col items-center space-y-4">
         {#each toastsState.items as toast (toast.id)}
             <div
-                class="pointer-events-auto w-full max-w-sm rounded-lg bg-surface shadow-lg outline-1 outline-line"
+                class="pointer-events-auto w-full max-w-sm rounded-lg shadow-xl outline-2 {panelClass[
+                    toast.level
+                ]}"
                 role={toast.level === 'error' ? 'alert' : 'status'}
                 transition:fade={{ duration: 150 }}
             >

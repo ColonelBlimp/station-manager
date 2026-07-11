@@ -26,7 +26,7 @@ import {
     setFt8DisplayPrefs,
     type Ft8TxResult,
 } from './lib/operate/ft8.svelte';
-import { setStationInfo } from './lib/operate/station.svelte';
+import { setStationInfo, setLogbookCount } from './lib/operate/station.svelte';
 import { setFt8Enricher, setFt8Dupe, ft8EnrichState } from './lib/operate/ft8Enrich.svelte';
 import { fetchContestDupe } from './lib/api/contest-dupe';
 import { armFt8Tx, type Ft8TxOutcome } from './lib/api/ft8tx';
@@ -40,7 +40,13 @@ import {
 import { toasts } from './lib/ui/toasts.svelte';
 import { sendRigTune } from './lib/api/rig-tune';
 import { sendRigCommand } from './lib/api/rig-command';
-import { apiEnrich, apiHistory, fetchStationContext, type StationContext } from './lib/api/seams';
+import {
+    apiEnrich,
+    apiHistory,
+    fetchStationContext,
+    fetchLogbookCount,
+    type StationContext,
+} from './lib/api/seams';
 import { submitQso } from './lib/api/qso';
 import { formatAdifRecord } from './lib/utils/adif';
 import { resolveModeAndSubmode } from './lib/utils/mode';
@@ -119,6 +125,7 @@ setFt8LoggedSink((p) => {
     });
     if (call !== '') ft8EnrichState.markWorked(call, band);
     toasts.info(call !== '' ? `QSO logged — ${call}${band ? ` (${band})` : ''}` : 'QSO logged');
+    refreshLogbookCount(); // header "(n)" ticks up on each logged FT8 QSO
 });
 
 // Band Activity flag enricher (ADR 0045) — the same /v1/enrich/callsign lookup
@@ -179,6 +186,18 @@ const ctx: StationContext = {
     rigName: '',
 };
 
+// Live logbook QSO count for the header "(n)" readout. Fire-and-forget: seeded
+// once config resolves and re-fetched after every logged QSO (FT8 + Phone/CW),
+// so the count ticks up as stations are worked. Closes over ctx for the current
+// default-logbook id; fail-soft (a blip leaves the last good count on screen).
+// Hoisted so the ft8-logged sink registered above can call it.
+function refreshLogbookCount(): void {
+    if (ctx.logbookId < 1) return;
+    void fetchLogbookCount(ctx.logbookId).then((n) => {
+        if (n !== null) setLogbookCount(n);
+    });
+}
+
 // Worked-before dupe seam (/v1/contest-dupe), closing over ctx so it reads the
 // resolved default-logbook id at lookup time. No logbook → unknown (skip).
 setFt8Dupe((call, band, mode) => {
@@ -222,6 +241,8 @@ void fetchStationContext().then((c) => {
     // writes to and which rig is configured (both config, not CAT — visible before
     // the rig connects).
     setStationInfo({ logbookName: c.logbookName, rigName: c.rigName });
+    // Seed the header's live logbook count now that the default-logbook id is known.
+    refreshLogbookCount();
     // Operator callsign → Band Activity flags decodes calling US (`<me> <them>`).
     setFt8OperatorCall(c.stationCallsign);
     // Operator grid → the near end of Band Activity's per-CQ short-path bearing.
@@ -330,6 +351,7 @@ setSubmit(async (q, opts) => {
             country: e?.country ?? '',
             comment: q.comment,
         });
+        refreshLogbookCount(); // header "(n)" ticks up on each logged Phone/CW QSO
         return { ok: true };
     }
     if (out.kind === 'duplicate') {

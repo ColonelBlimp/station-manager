@@ -9,6 +9,7 @@ import {
     toWorkedQso,
     apiHistory,
     fetchStationContext,
+    fetchLogbookCount,
 } from './seams';
 import type { ContactHistory } from './contact-history';
 
@@ -219,5 +220,32 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         const ctx = await fetchStationContext();
         expect(ctx.logbookName).toBe('');
         expect(ctx.rigName).toBe('');
+    });
+});
+
+describe('fetchLogbookCount (stubbed fetch)', () => {
+    function mockFetchJSON(status: number, body: unknown): void {
+        const response = new Response(JSON.stringify(body), {
+            status,
+            headers: { 'Content-Type': 'application/json' },
+        });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(response))
+        );
+    }
+
+    it('returns the count on 200', async () => {
+        mockFetchJSON(200, { logbook_id: 3, count: 1234 });
+        expect(await fetchLogbookCount(3)).toBe(1234);
+    });
+
+    it('is fail-soft: any non-ok outcome is null (keep the last good count)', async () => {
+        mockFetchJSON(500, { code: 'db_error', message: 'boom' });
+        expect(await fetchLogbookCount(3)).toBeNull();
+    });
+
+    it('skips the fetch for an unset logbook (id < 1)', async () => {
+        expect(await fetchLogbookCount(0)).toBeNull();
     });
 });
