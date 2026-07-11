@@ -155,6 +155,38 @@ describe('Ft8BandActivity renderer', () => {
         flushSync();
         expect(screen.getByText('CQ W1ABC FN42').closest('tr')?.textContent).toContain('🇺🇸');
     });
+
+    it('enriches a station calling you — flag rendered + country/DXCC in the tooltip', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        setFt8Enricher(() =>
+            Promise.resolve({
+                country: 'Netherlands',
+                ccode: 'NL',
+                dxcc: '263',
+                isNewEntity: false,
+                grid: 'JO21',
+                name: '',
+                qth: '',
+                email: '',
+                cqZone: '',
+                ituZone: '',
+            })
+        );
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }]));
+        flushSync();
+        await flush();
+        flushSync();
+
+        // A calling station now gets a flag (previously CQ-only).
+        const btn = screen.getByText('7Q5MLV PA3KUS JO21');
+        expect(btn.closest('tr')?.textContent).toContain('🇳🇱');
+        // …and its work tooltip carries the country + DXCC entity.
+        const title = btn.getAttribute('title') ?? '';
+        expect(title).toContain('Work this station calling you');
+        expect(title).toContain('Netherlands');
+        expect(title).toContain('263');
+    });
 });
 
 describe('Ft8BandActivity click-to-work (first RF path)', () => {

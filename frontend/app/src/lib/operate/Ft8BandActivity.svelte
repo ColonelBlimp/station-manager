@@ -13,7 +13,7 @@
         workCaller,
         type DecodeEntry,
     } from './ft8.svelte';
-    import { ft8EnrichState } from './ft8Enrich.svelte';
+    import { ft8EnrichState, type Ft8CallInfo } from './ft8Enrich.svelte';
     import { rig } from './rig.svelte';
     import { session } from './session.svelte';
     import { parseCq, parseDirectedToMe, parseDirectedToMeFd, isCqFd } from '../utils/ft8Message';
@@ -95,17 +95,26 @@
         return out;
     });
 
-    // Kick the flag + worked-before lookups for every visible CQ call on the
-    // current band (idempotent — cached/in-flight is a no-op). A side effect, so
-    // it lives here, not in the pure derived above.
+    // Kick the flag + worked-before lookups for every visible CQ AND calling-you
+    // row on the current band (idempotent — cached/in-flight is a no-op), so a
+    // station calling us also gets a flag + country + DXCC. A side effect, so it
+    // lives here, not in the pure derived above.
     $effect(() => {
         const band = rig.band;
         for (const g of groups) {
             for (const row of g.decodes) {
-                if (row.kind === 'cq' && row.call !== '') ft8EnrichState.observe(row.call, band);
+                if (row.kind !== '' && row.call !== '') ft8EnrichState.observe(row.call, band);
             }
         }
     });
+
+    // Country (+ DXCC entity, once resolved) for the hover tooltip on the flag and
+    // the work/answer button — so a station calling you shows where it is and its
+    // DXCC on hover. '' when the country isn't known yet.
+    function enrichHover(info: Ft8CallInfo | undefined): string {
+        if (!info?.country) return '';
+        return info.dxcc ? `${info.country} · DXCC ${info.dxcc}` : info.country;
+    }
 
     // Full literal class strings (not class: directives — those can't express a
     // `dark:` variant); Tailwind's scanner still finds these in-source.
@@ -232,12 +241,11 @@
                 <thead>
                     <tr class="text-[10px] font-bold tracking-wide text-muted uppercase">
                         <th
-                            class="sticky top-0 z-10 border-b border-line bg-surface py-1.5 pr-2 pl-3"
-                        ></th>
-                        <th
-                            class="sticky top-0 z-10 border-b border-line bg-surface px-2 py-1.5 text-left"
-                            >Message</th
+                            class="sticky top-0 z-10 border-b border-line bg-surface py-1.5 pr-2 pl-3 text-right"
+                            >Hz</th
                         >
+                        <th class="sticky top-0 z-10 border-b border-line bg-surface px-2 py-1.5"
+                        ></th>
                         <th
                             class="sticky top-0 z-10 border-b border-line bg-surface px-2 py-1.5 text-right"
                             >Brg</th
@@ -247,8 +255,8 @@
                             >SNR</th
                         >
                         <th
-                            class="sticky top-0 z-10 border-b border-line bg-surface px-2 py-1.5 text-right"
-                            >Hz</th
+                            class="sticky top-0 z-10 border-b border-line bg-surface px-2 py-1.5 text-left"
+                            >Message</th
                         >
                     </tr>
                 </thead>
@@ -263,16 +271,24 @@
                         {/if}
                         {#each g.decodes as row (row.d.id)}
                             {@const info =
-                                row.kind === 'cq'
+                                row.kind !== ''
                                     ? ft8EnrichState.info(row.call, rig.band)
                                     : undefined}
+                            {@const hover = enrichHover(info)}
                             <tr class="text-ink {rowClass(row.kind, info?.worked)}">
+                                <td class="py-0.5 pr-2 pl-3 text-right"
+                                    >{Math.round(row.d.freqHz)}</td
+                                >
                                 <td
-                                    class="py-0.5 pr-1 pl-3 text-base leading-none"
-                                    title={info?.country}
+                                    class="px-2 py-0.5 text-base leading-none"
+                                    title={hover || undefined}
                                 >
                                     {info?.flag ?? ''}
                                 </td>
+                                <td class="px-2 text-right text-focus"
+                                    >{row.bearing !== null ? `${Math.round(row.bearing)}°` : ''}</td
+                                >
+                                <td class="px-2 text-right text-muted">{row.d.snr}</td>
                                 <td
                                     class="overflow-hidden px-2 text-nowrap text-ellipsis {row.kind !==
                                     ''
@@ -283,20 +299,16 @@
                                             class="text-left {canStart
                                                 ? 'cursor-pointer hover:underline'
                                                 : 'cursor-default'}"
-                                            title={row.kind === 'cq'
+                                            title={(row.kind === 'cq'
                                                 ? 'Answer this CQ'
-                                                : 'Work this station calling you'}
+                                                : 'Work this station calling you') +
+                                                (hover ? ` — ${hover}` : '')}
                                             onclick={() => onRowClick(row)}>{row.d.text}</button
                                         >{:else}{row.d.text}{/if}{#if info?.isNewEntity}<span
                                             class="ml-1 text-focus"
                                             title="New DXCC entity">★</span
                                         >{/if}</td
                                 >
-                                <td class="px-2 text-right text-focus"
-                                    >{row.bearing !== null ? `${Math.round(row.bearing)}°` : ''}</td
-                                >
-                                <td class="px-2 text-right text-muted">{row.d.snr}</td>
-                                <td class="px-2 text-right">{Math.round(row.d.freqHz)}</td>
                             </tr>
                         {/each}
                     {/each}

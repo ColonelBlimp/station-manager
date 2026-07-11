@@ -20,6 +20,8 @@ export interface Ft8CallInfo {
     flag?: string;
     /** Country name for the flag's hover tooltip. undefined when unknown/pending. */
     country?: string;
+    /** Numeric DXCC entity code (e.g. "291"). undefined = pending; '' when unknown. */
+    dxcc?: string;
     /** true = this DXCC entity has never been worked (a "new one"). undefined = pending. */
     isNewEntity?: boolean;
     /** Operator name (enrichment). undefined = pending; '' when none. */
@@ -91,6 +93,7 @@ class Ft8EnrichState {
                           merge({
                               flag: ccodeToFlag(e.ccode),
                               country: e.country,
+                              dxcc: e.dxcc,
                               isNewEntity: e.isNewEntity ?? undefined,
                               opName: e.name,
                               grid: e.grid,

@@ -31,7 +31,12 @@
     .ft8-grid {
         display: grid;
         gap: 0.75rem;
-        grid-template-columns: minmax(470px, 1fr) 470px;
+        /* Band Activity and Operate are the same fixed width (470px each);
+           justify-content centres the pair (and the full-width Occupancy row,
+           which spans both tracks) in the shell rather than stretching Band
+           Activity to fill. Narrower viewports scroll via the main container. */
+        grid-template-columns: 470px 470px;
+        justify-content: center;
         grid-template-rows: minmax(0, 1fr) 180px;
         grid-template-areas:
             'ba op'
