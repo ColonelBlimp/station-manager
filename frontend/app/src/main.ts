@@ -26,6 +26,7 @@ import {
     setFt8DisplayPrefs,
     type Ft8TxResult,
 } from './lib/operate/ft8.svelte';
+import { setStationInfo } from './lib/operate/station.svelte';
 import { setFt8Enricher, setFt8Dupe, ft8EnrichState } from './lib/operate/ft8Enrich.svelte';
 import { fetchContestDupe } from './lib/api/contest-dupe';
 import { armFt8Tx, type Ft8TxOutcome } from './lib/api/ft8tx';
@@ -174,6 +175,8 @@ const ctx: StationContext = {
     ft8FeedMode: 'accumulate',
     ft8HistoryMax: 100,
     ft8CqToTop: false,
+    logbookName: '',
+    rigName: '',
 };
 
 // Worked-before dupe seam (/v1/contest-dupe), closing over ctx so it reads the
@@ -215,6 +218,10 @@ void fetchStationContext().then((c) => {
         return o.kind === 'ok' ? { ok: true, message: '' } : { ok: false, message: o.message };
     });
     setMailer(c.mailerEnabled, c.mailerDefaultRecipient);
+    // Always-visible station identity in the header: which logbook this session
+    // writes to and which rig is configured (both config, not CAT — visible before
+    // the rig connects).
+    setStationInfo({ logbookName: c.logbookName, rigName: c.rigName });
     // Operator callsign → Band Activity flags decodes calling US (`<me> <them>`).
     setFt8OperatorCall(c.stationCallsign);
     // Operator grid → the near end of Band Activity's per-CQ short-path bearing.

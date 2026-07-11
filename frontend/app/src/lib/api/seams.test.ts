@@ -202,4 +202,22 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         });
         expect((await fetchStationContext()).ft8FeedMode).toBe('accumulate');
     });
+
+    it('reads default_logbook.name and bridge.rig_name for the header identity', async () => {
+        mockConfig({
+            logging_station: { station_callsign: '7Q5MLV' },
+            default_logbook: { id: 3, name: 'Malawi 2026' },
+            bridge: { enabled: true, rig_name: 'FTdx10' },
+        });
+        const ctx = await fetchStationContext();
+        expect(ctx.logbookName).toBe('Malawi 2026');
+        expect(ctx.rigName).toBe('FTdx10');
+    });
+
+    it('defaults logbook/rig names to empty when the blocks are absent', async () => {
+        mockConfig({ logging_station: { station_callsign: '7Q5MLV' } });
+        const ctx = await fetchStationContext();
+        expect(ctx.logbookName).toBe('');
+        expect(ctx.rigName).toBe('');
+    });
 });

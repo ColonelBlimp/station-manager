@@ -6,6 +6,7 @@
     // (left) is the operating-session timer — the other always-visible ambient
     // readout, at the opposite end so the eye finds each.
     import { rig, rigGate } from '../operate/rig.svelte';
+    import { station } from '../operate/station.svelte';
     import { showTile } from '../operate/layout.svelte';
     import { navigate } from '../router.svelte';
     import SessionTimer from './SessionTimer.svelte';
@@ -59,8 +60,28 @@
         <SessionTimer />
     </span>
 
+    <!-- Station identity: the logbook this session writes to + the configured rig.
+         Config-sourced (not CAT), so it's the operator's always-on "am I logging
+         into the right book, on the right radio?" check — across Phone/CW AND FT8.
+         Hidden on the narrowest widths to keep the chip + timer readable. -->
+    <div
+        class="ml-auto hidden flex-col items-end text-xs leading-tight sm:flex"
+        title="Logbook + rig this session logs to (from config)"
+    >
+        <span>
+            <span class="text-muted">Logbook</span>
+            <span class="font-medium text-ink">{station.logbookName || '—'}</span>
+        </span>
+        <span>
+            <span class="text-muted">Rig</span>
+            <span class={station.rigName ? 'font-medium text-ink' : 'text-muted italic'}
+                >{station.rigName || 'not set'}</span
+            >
+        </span>
+    </div>
+
     <button
-        class="ml-auto flex cursor-pointer items-center gap-x-2 rounded-full bg-surface-muted px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-muted/70"
+        class="ml-auto flex cursor-pointer items-center gap-x-2 rounded-full bg-surface-muted px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-muted/70 sm:ml-4"
         title={chipTitle}
         onclick={openRigPanel}
     >

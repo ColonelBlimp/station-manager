@@ -123,6 +123,12 @@ export interface StationContext {
      *  the email path on `mailerEnabled` and seeds the recipient. */
     mailerEnabled: boolean;
     mailerDefaultRecipient: string;
+    /** Always-visible station identity for the header: the default logbook this
+     *  session writes to (`default_logbook.name`) and the configured rig
+     *  (`bridge.rig_name`). Config-sourced (not CAT), so both show even before the
+     *  rig connects — the operator can always see which book + radio is in play. */
+    logbookName: string;
+    rigName: string;
     /** FT8 Band Activity display prefs (config.json ft8.display, daemon-resolved
      *  so always present on a current daemon). `feedMode` accumulate rolls slots
      *  up / single shows only the current slot; `cqToTop` floats CQ rows above the
@@ -151,6 +157,8 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8FeedMode: 'accumulate',
         ft8HistoryMax: 100,
         ft8CqToTop: false,
+        logbookName: '',
+        rigName: '',
     };
     const fetched = await safeFetch('/v1/config', { method: 'GET' });
     if (!fetched.ok || !fetched.response.ok) return none;
@@ -184,6 +192,8 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8FeedMode: fd.feed_mode === 'single' ? 'single' : 'accumulate',
         ft8HistoryMax: typeof fd.history_max === 'number' ? fd.history_max : 100,
         ft8CqToTop: fd.cq_to_top === true,
+        logbookName: str(lb.name),
+        rigName: str(br.rig_name),
     };
 }
 
