@@ -35,7 +35,7 @@ precisely so we don't re-derive state or redo finished work.
 > **Session 211 (2026-07-11) — `frontend/app` DOGFOODING STARTED: embedded +
 > served at `/app/`, and FT8 TX ON-AIR VALIDATED — the operator answered CQs and
 > logged real QSOs (US + Greek stations) live from the app. All committed +
-> pushed; 454 SPA tests green.** The answer-a-CQ → daemon-sequenced → logged +
+> pushed; 459 SPA tests green.** The answer-a-CQ → daemon-sequenced → logged +
 > forwarded path works end-to-end from `frontend/app`. Work this session:
 > - **`/app/` embed + serve.** `AppFS()` in `frontend/embed.go`
 >   (`//go:embed all:app/dist`), `GET /app/` StripPrefix mount in
@@ -105,16 +105,21 @@ precisely so we don't re-derive state or redo finished work.
 >   pass a watering-hole pick once `ft8_frequencies` is surfaced). Stood it up in FT8:
 >   the rail **Rig** icon now shows the full rig card (band/mode/VFO/freq/Tune/CAT gate)
 >   stacked with Session in the overlay.
+> - **FT8 watering-hole band buttons — DONE.** The FT8 rig card's band buttons were
+>   doing `selectBand` (`set_band` → the rig's band-stack / *phone* freq); now the FT8
+>   host passes `pickBand={ft8SelectBand}` → looks up the configured
+>   `ft8_frequencies[band]` (already on `/v1/config`: WSJT-X defaults + operator
+>   overrides) and drives a new absolute **`setFreq(hz)`** (CAT-live `set_freq`/
+>   `set_freq_b`, CAT-off manual). So 40m → 7.074, 20m → 14.074, etc. `ft8_frequencies`
+>   surfaced via `seams.ts` + `main.ts`. (set_freq only — the operator is already in
+>   FT8 mode, so no `set_mode` on a band hop; a mode-assert is a small future add.)
 >
-> **NEXT (frontend/app):** **FT8 watering-hole `pickBand`** — surface `ft8_frequencies`
-> into the app so the FT8 rig card's band buttons drive `set_freq`+`set_mode` (a
-> one-line `pickBand=` on the FT8 `<RigPanel />`; the seam is in place). Then:
-> operator_pick **pile-up stack** (+ its `Next`), remaining `ft8_display` fields
-> (**highlight colours** + a live **hide-hashed toggle** — hide-hashed is config-read
-> only now), and (optional) the rail **Worked** panel in FT8. Inbox: Occupancy
-> **light-mode colour fix**, **DXCC backfill** on existing blank-DXCC QSOs. Dogfood
-> gotcha: `/app/` is `//go:embed`'d — **redeploy, don't just reload**
-> ([[sm-app-embed-redeploy-gotcha]]).
+> **NEXT (frontend/app):** operator_pick **pile-up stack** (+ its `Next` button),
+> remaining `ft8_display` fields (**highlight colours** + a live **hide-hashed toggle**
+> — hide-hashed is config-read only now), and (optional) the rail **Worked** panel in
+> FT8 + the FT8 band-jump also asserting FT8 mode. Inbox: Occupancy **light-mode colour
+> fix**, **DXCC backfill** on existing blank-DXCC QSOs. Dogfood gotcha: `/app/` is
+> `//go:embed`'d — **redeploy, don't just reload** ([[sm-app-embed-redeploy-gotcha]]).
 
 > **Session 210 (2026-07-09→10) — `frontend/app` RIG CONTROL arc COMPLETE
 > (Slices 1–4) + configurable operating-bands (daemon + SPA); FT8 UI DESIGN
