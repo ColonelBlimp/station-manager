@@ -49,14 +49,17 @@
     });
     // 'tx' = transmitting this slot; 'rx' = active but receiving; 'idle' = no session.
     const pillMode = $derived(tx.transmitting ? 'tx' : qso.active ? 'rx' : 'idle');
+    // Parity of the slot currently in progress — same 15 s grid as slotParity / the
+    // daemon (:00/:30 even, :15/:45 odd). Live off `now`, so it flips at the boundary.
+    const nowParity = $derived(Math.floor(now / 15_000) % 2 === 0 ? 'even' : 'odd');
     const pillText = $derived(
         !ft8State.connected
             ? 'Waiting for slot…'
             : pillMode === 'tx'
-              ? `Transmit slot · listen in ${secsLeft}s`
+              ? `Transmit slot (${nowParity}) · listen in ${secsLeft}s`
               : pillMode === 'rx'
-                ? `Listen slot · transmit in ${secsLeft}s`
-                : `Listen · next slot ${secsLeft}s`
+                ? `Listen slot (${nowParity}) · transmit in ${secsLeft}s`
+                : `Listen · ${nowParity} slot · next ${secsLeft}s`
     );
     const pillClass = $derived(
         pillMode === 'tx'

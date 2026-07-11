@@ -31,12 +31,11 @@
     .ft8-grid {
         display: grid;
         gap: 0.75rem;
-        /* Band Activity (510px) is a touch wider than Operate (470px) for the
-           decode table; both are centred by the 1fr gutter columns on either side.
-           Occupancy spans ALL four tracks, so it stays full width edge-to-edge
-           below them. Narrower viewports scroll via the main container (the 1fr
-           gutters collapse to 0 first). */
-        grid-template-columns: 1fr 510px 470px 1fr;
+        /* Band Activity + Operate are a fixed 470px each, centred by the 1fr
+           gutter columns on either side. Occupancy spans ALL four tracks, so it
+           stays full width edge-to-edge below them. Narrower viewports scroll via
+           the main container (the 1fr gutters collapse to 0 first). */
+        grid-template-columns: 1fr 470px 470px 1fr;
         grid-template-rows: minmax(0, 1fr) 180px;
         grid-template-areas:
             '. ba op .'

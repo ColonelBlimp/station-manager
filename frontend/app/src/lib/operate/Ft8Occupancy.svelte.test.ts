@@ -31,6 +31,13 @@ describe('Ft8Occupancy picker', () => {
         expect(screen.getByText(/Waiting for slot/)).toBeInTheDocument();
     });
 
+    it('labels the header with the snapshot parity (daemon slot.period)', () => {
+        ft8Link.onOccupancy(occupancy()); // period: 'even'
+        flushSync();
+        render(Ft8Occupancy);
+        expect(screen.getByText('even slot')).toBeInTheDocument();
+    });
+
     it('clicking a channel pins selectedOffset (ending the auto fallback)', async () => {
         ft8Link.onOccupancy(occupancy());
         flushSync();

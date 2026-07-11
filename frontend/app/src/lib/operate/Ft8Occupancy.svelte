@@ -13,11 +13,22 @@
     // Daemon's #1 ranked clear offset (suggested[0]) — both views mark it (★ /
     // amber underline) as the recommendation the auto fallback would use.
     const topPick = $derived(ft8State.suggested[0] ?? null);
+
+    // Parity of the snapshot on show — the occupancy is a SINGLE latest-slot
+    // snapshot that overwrites each slot, so it alternates even/odd every 15 s and
+    // may be the opposite parity to the one you'll TX on. Label it (daemon-provided
+    // slot.period) so the operator knows which parity's channels they're reading.
+    const snapParity = $derived(ft8State.slot?.period ?? '');
 </script>
 
 <section class="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface">
     <div class="flex items-center justify-between border-b border-line px-4 py-2">
-        <h3 class="text-sm font-semibold text-ink">Occupancy</h3>
+        <div class="flex items-baseline gap-2">
+            <h3 class="text-sm font-semibold text-ink">Occupancy</h3>
+            {#if snapParity}
+                <span class="text-xs text-muted">{snapParity} slot</span>
+            {/if}
+        </div>
         <div class="inline-flex overflow-hidden rounded-md border border-line text-xs">
             <button
                 type="button"
