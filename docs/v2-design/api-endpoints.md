@@ -7,8 +7,9 @@
 > `internal/api/handler_*.go`. Update this file in the same commit as any route change.
 
 All application endpoints live under the `/v1/*` prefix (API versioning — unrelated to
-the project's v1/v2 distinction). The embedded SPAs are served at `/`, `/config/`, and
-`/logbook/`; the operator manual at `/manual/`; profiling at `/debug/pprof/*`.
+the project's v1/v2 distinction). The embedded SPAs are served at `/`, `/config/`,
+`/logbook/`, and `/app/` (the consolidated full-replacement client, ADR 0044); the
+operator manual at `/manual/`; profiling at `/debug/pprof/*`.
 
 ## Conventions
 

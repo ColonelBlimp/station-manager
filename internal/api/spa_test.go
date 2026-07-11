@@ -61,6 +61,27 @@ func TestSpaHandler_ServesLogbookIndex(t *testing.T) {
 	}
 }
 
+// TestSpaHandler_ServesAppIndex confirms the consolidated app SPA's (ADR 0044)
+// embedded index.html is reachable through its filesystem, and that it carries
+// the /app/ base path its /app/ mount depends on. Guards both the committed
+// dist/index.html placeholder against being stripped from git (which would
+// break //go:embed all:app/dist) and a regression of `base: '/app/'` in the
+// app's vite.config.ts (which would 404 the bundle at runtime).
+func TestSpaHandler_ServesAppIndex(t *testing.T) {
+	h := spaHandler(frontend.AppFS())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "/app/assets/index.js") {
+		t.Fatalf("body missing /app/ base-path marker; got: %s", rec.Body.String())
+	}
+}
+
 // TestSpaHandler_ApiPathReturns404 confirms a /v1/* path that reached the SPA
 // catch-all (no API route matched it — a disabled subsystem or a typo) gets an
 // honest 404, NOT an SPA-fallback 200 index.html. Otherwise a disabled

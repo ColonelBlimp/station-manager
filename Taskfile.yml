@@ -139,7 +139,7 @@ tasks:
       - npm run dev
 
   frontend:app:build:
-    desc: Production build of the consolidated app SPA (ADR 0044). Not yet embedded — add to frontend:build:all when the go:embed is wired.
+    desc: Production build of the consolidated app SPA (ADR 0044); embedded by the daemon and served at /app/.
     dir: frontend/app
     cmds:
       - npm run build
@@ -151,8 +151,8 @@ tasks:
       - npm run check
 
   frontend:build:all:
-    desc: Build every embedded SPA (logging + config + logbook). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
-    deps: [frontend:build, frontend:config:build, frontend:logbook:build]
+    desc: Build every embedded SPA (logging + config + logbook + app). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
+    deps: [frontend:build, frontend:config:build, frontend:logbook:build, frontend:app:build]
 
   manual:build:
     desc: Build the operator manual (Hugo → manual/public/) for the daemon's go:embed. Single self-contained zero-JS page (ADR 0036).

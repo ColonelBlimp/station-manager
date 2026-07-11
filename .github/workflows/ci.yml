@@ -81,6 +81,7 @@ jobs:
             frontend/logging/package-lock.json
             frontend/config/package-lock.json
             frontend/logbook/package-lock.json
+            frontend/app/package-lock.json
 
       # ─── SPA gate ───────────────────────────────────────────────
       # Run SPA-side checks BEFORE the Go build so the daemon embed
@@ -153,6 +154,30 @@ jobs:
 
       - name: Logbook SPA build (produces dist/ for daemon embed)
         working-directory: frontend/logbook
+        run: npm run build
+
+      # ─── App SPA gate ───────────────────────────────────────────
+      # The consolidated app client (frontend/app/, ADR 0044) is a separate
+      # embedded SPA served at /app/. Same lint → type-check → test → build order.
+
+      - name: App SPA install
+        working-directory: frontend/app
+        run: npm ci
+
+      - name: App SPA lint
+        working-directory: frontend/app
+        run: npm run lint
+
+      - name: App SPA type-check
+        working-directory: frontend/app
+        run: npx svelte-check --fail-on-warnings
+
+      - name: App SPA tests
+        working-directory: frontend/app
+        run: npx vitest run
+
+      - name: App SPA build (produces dist/ for daemon embed)
+        working-directory: frontend/app
         run: npm run build
 
       # The operator manual is a static Hugo site embedded into the daemon

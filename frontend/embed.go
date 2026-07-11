@@ -42,6 +42,14 @@ var configSPA embed.FS
 //go:embed all:logbook/dist
 var logbookSPA embed.FS
 
+// appSPA holds the built consolidated app SPA's static assets (ADR 0044)
+// — the full-replacement operator client, served by the daemon under the
+// /app/ sub-path while the logging SPA still owns the root during the
+// consolidation. Same `all:` rationale as loggingSPA.
+//
+//go:embed all:app/dist
+var appSPA embed.FS
+
 // LoggingFS returns the logging SPA's filesystem rooted at the dist/
 // directory so http.FileServer treats index.html as the root document.
 //
@@ -79,6 +87,17 @@ func LogbookFS() fs.FS {
 	sub, err := fs.Sub(logbookSPA, "logbook/dist")
 	if err != nil {
 		panic("frontend: fs.Sub on embedded logbookSPA failed: " + err.Error())
+	}
+	return sub
+}
+
+// AppFS returns the consolidated app SPA's filesystem rooted at its dist/
+// directory. Same infallible-at-runtime contract as LoggingFS — the
+// embed directive guarantees the path at compile time.
+func AppFS() fs.FS {
+	sub, err := fs.Sub(appSPA, "app/dist")
+	if err != nil {
+		panic("frontend: fs.Sub on embedded appSPA failed: " + err.Error())
 	}
 	return sub
 }

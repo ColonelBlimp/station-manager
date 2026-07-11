@@ -269,6 +269,11 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// Logbook SPA at the /logbook/ sub-path — same StripPrefix +
 		// subtree-redirect rationale as the config SPA above.
 		mux.Handle("GET /logbook/", http.StripPrefix("/logbook", spaHandler(frontend.LogbookFS())))
+		// Consolidated app SPA (ADR 0044) at the /app/ sub-path — the
+		// full-replacement operator client, dogfoodable on the embedded daemon
+		// alongside the shipping SPAs during the consolidation. Same StripPrefix
+		// + subtree-redirect rationale as the config SPA above.
+		mux.Handle("GET /app/", http.StripPrefix("/app", spaHandler(frontend.AppFS())))
 		// Operator manual at /manual/ — a static, zero-JS Hugo page (ADR 0036),
 		// NOT an SPA, so it uses manualHandler (plain file server, real 404s) not
 		// spaHandler. Same StripPrefix + subtree-redirect rationale as the SPAs.

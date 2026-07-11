@@ -23,11 +23,13 @@ build/
 frontend/logging/node_modules/
 frontend/logging/dist/*
 !frontend/logging/dist/index.html
-# Consolidated app SPA (ADR 0044) — node_modules never tracked; dist/ built by
-# Vite. Not yet embedded, so the whole dist/ is ignored for now; add the
-# `!frontend/app/dist/index.html` exception when the //go:embed is wired.
+# Consolidated app SPA (ADR 0044) — same rule as logging: node_modules
+# untracked, dist/ built by Vite, but dist/index.html IS committed so
+# `//go:embed all:app/dist` compiles before the first local build. Safe for the
+# same reason — stable hash-free entry names (assets/index.js + index.css).
 frontend/app/node_modules/
-frontend/app/dist/
+frontend/app/dist/*
+!frontend/app/dist/index.html
 # Config SPA — same rule as logging: node_modules untracked, dist/ built by
 # Vite, dist/index.html committed so `//go:embed all:config/dist` compiles.
 frontend/config/node_modules/

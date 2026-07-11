@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/app/logo.svg" />
+    <title>Station Manager</title>
+    <!-- Set the theme + nav-collapse attributes before paint so there's no
+         flash. The Svelte app keeps them in sync afterwards (App.svelte). -->
+    <script>
+      (function () {
+        var d = document.documentElement.dataset;
+        var t = localStorage.getItem('sm-theme');
+        if (t !== 'light' && t !== 'dark')
+          t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        d.theme = t;
+        // effective = saved-narrow OR forced-narrow-by-width (keep thresholds in
+        // sync with lib/ui/state.svelte).
+        d.nav =
+          localStorage.getItem('sm-nav') === 'narrow' || matchMedia('(max-width: 61rem)').matches
+            ? 'narrow'
+            : 'full';
+        d.util =
+          localStorage.getItem('sm-util') === 'narrow' || matchMedia('(max-width: 72rem)').matches
+            ? 'narrow'
+            : 'full';
+      })();
+    </script>
+    <script type="module" crossorigin src="/app/assets/index.js"></script>
+    <link rel="stylesheet" crossorigin href="/app/assets/index.css">
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>
