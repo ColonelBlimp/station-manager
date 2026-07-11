@@ -150,6 +150,14 @@ describe('effectiveOffset', () => {
         expect(ft8State.selectedOffset).toBe(1234);
         expect(ft8State.effectiveOffset).toBe(1234); // pinned
     });
+
+    it('persists the pick to localStorage so it survives a page reload (daemon redeploy)', () => {
+        ft8State.selectOffset(1234);
+        expect(localStorage.getItem('sm.ft8.selectedOffset')).toBe('1234');
+        // The reset seam clears it too, so a fresh session starts on auto.
+        resetFt8ForTests();
+        expect(localStorage.getItem('sm.ft8.selectedOffset')).toBeNull();
+    });
 });
 
 describe('occupancy view toggle', () => {

@@ -31,16 +31,16 @@
     .ft8-grid {
         display: grid;
         gap: 0.75rem;
-        /* Band Activity and Operate are the same fixed width (470px each);
-           justify-content centres the pair (and the full-width Occupancy row,
-           which spans both tracks) in the shell rather than stretching Band
-           Activity to fill. Narrower viewports scroll via the main container. */
-        grid-template-columns: 470px 470px;
-        justify-content: center;
+        /* Band Activity (510px) is a touch wider than Operate (470px) for the
+           decode table; both are centred by the 1fr gutter columns on either side.
+           Occupancy spans ALL four tracks, so it stays full width edge-to-edge
+           below them. Narrower viewports scroll via the main container (the 1fr
+           gutters collapse to 0 first). */
+        grid-template-columns: 1fr 510px 470px 1fr;
         grid-template-rows: minmax(0, 1fr) 180px;
         grid-template-areas:
-            'ba op'
-            'occ occ';
+            '. ba op .'
+            'occ occ occ occ';
         height: calc(100vh - 8rem);
     }
 </style>

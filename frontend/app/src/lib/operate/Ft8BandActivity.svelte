@@ -237,21 +237,26 @@
              card edge — instead of bleeding to the border. Padding on a scroll box is
              dropped at scroll end, hence the margin holds the inset. -->
         <div class="mx-3 mb-3 min-h-0 flex-1 overflow-auto">
-            <table class="w-full font-mono text-sm tabular-nums">
+            <!-- table-fixed + explicit column widths: FT8 slots alternate parity and
+                 their content differs (SNR sign, freq digits, flag presence), so an
+                 auto layout re-sized the columns each slot and the table jittered
+                 left↔right. Fixed widths pin every column; Message takes the rest. -->
+            <table class="w-full table-fixed font-mono text-sm tabular-nums">
                 <thead>
                     <tr class="text-[10px] font-bold tracking-wide text-muted uppercase">
                         <th
-                            class="sticky top-0 z-10 border-b border-line bg-surface py-1.5 pr-2 pl-3 text-right"
+                            class="sticky top-0 z-10 w-16 border-b border-line bg-surface py-1.5 pr-2 pl-3 text-right"
                             >Hz</th
                         >
-                        <th class="sticky top-0 z-10 border-b border-line bg-surface px-2 py-1.5"
+                        <th
+                            class="sticky top-0 z-10 w-8 border-b border-line bg-surface px-2 py-1.5"
                         ></th>
                         <th
-                            class="sticky top-0 z-10 border-b border-line bg-surface px-2 py-1.5 text-right"
+                            class="sticky top-0 z-10 w-14 border-b border-line bg-surface px-2 py-1.5 text-right"
                             >Brg</th
                         >
                         <th
-                            class="sticky top-0 z-10 border-b border-line bg-surface px-2 py-1.5 text-right"
+                            class="sticky top-0 z-10 w-12 border-b border-line bg-surface px-2 py-1.5 text-right"
                             >SNR</th
                         >
                         <th

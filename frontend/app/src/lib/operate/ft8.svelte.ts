@@ -93,6 +93,33 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
 // matters and 2^53 ids outlast any session.
 let decodeSeq = 0;
 
+// The operator's TX-offset pick persists across a page reload (localStorage) so a
+// daemon redeploy — which reloads /app/ to pick up the new build — doesn't silently
+// drop the chosen channel. Best-effort: private-mode / disabled storage falls back
+// to session-only. It's an audio offset within the FT8 passband (band-independent),
+// so a saved value stays valid across bands.
+const OFFSET_KEY = 'sm.ft8.selectedOffset';
+
+function loadSelectedOffset(): number | null {
+    try {
+        const raw = localStorage.getItem(OFFSET_KEY);
+        if (raw === null) return null;
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : null;
+    } catch {
+        return null;
+    }
+}
+
+function saveSelectedOffset(hz: number | null): void {
+    try {
+        if (hz === null) localStorage.removeItem(OFFSET_KEY);
+        else localStorage.setItem(OFFSET_KEY, String(hz));
+    } catch {
+        // storage unavailable — the pick becomes session-only, which is fine
+    }
+}
+
 class Ft8State {
     /** Transport OPEN — says nothing about whether slots are flowing. */
     connected = $state(false);
@@ -113,8 +140,9 @@ class Ft8State {
     bandFilter = $state('');
     /** Operator-picked TX audio offset (Hz), or null before a pick. Set by the
      *  Occupancy picker (selectOffset); until then TX falls back to the daemon's
-     *  top-ranked clear offset via effectiveOffset. */
-    selectedOffset: number | null = $state(null);
+     *  top-ranked clear offset via effectiveOffset. Seeded from localStorage so a
+     *  page reload (e.g. a daemon redeploy) keeps the chosen channel. */
+    selectedOffset: number | null = $state(loadSelectedOffset());
     /** Call-CQ slot parity (WSJT-X "Tx even/1st"). 'next' = fire next slot regardless. */
     txParity: 'next' | 'even' | 'odd' = $state('next');
     /** Which Occupancy presentation the operator prefers — 'channels' (discrete
@@ -140,6 +168,7 @@ class Ft8State {
      *  daemon-suggested auto fallback (which otherwise moves each slot). */
     selectOffset(hz: number): void {
         this.selectedOffset = hz;
+        saveSelectedOffset(hz);
     }
 
     /** Switch the Occupancy presentation (persists only in memory). */
@@ -449,6 +478,7 @@ export function resetFt8ForTests(): void {
     ft8State.decodes = [];
     ft8State.bandFilter = '';
     ft8State.selectedOffset = null;
+    saveSelectedOffset(null);
     ft8State.txParity = 'next';
     ft8State.occupancyView = 'channels';
     ft8State.tx = emptyTxStatus();
