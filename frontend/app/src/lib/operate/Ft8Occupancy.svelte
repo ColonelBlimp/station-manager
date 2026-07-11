@@ -14,19 +14,48 @@
     // amber underline) as the recommendation the auto fallback would use.
     const topPick = $derived(ft8State.suggested[0] ?? null);
 
-    // Parity of the snapshot on show — the occupancy is a SINGLE latest-slot
-    // snapshot that overwrites each slot, so it alternates even/odd every 15 s and
-    // may be the opposite parity to the one you'll TX on. Label it (daemon-provided
-    // slot.period) so the operator knows which parity's channels they're reading.
-    const snapParity = $derived(ft8State.slot?.period ?? '');
+    // Which parity's occupancy is on show. The panel keeps a per-parity snapshot and
+    // shows the one matching the slot you'll TRANSMIT in (opposite the worked station)
+    // during a QSO — occupancyParityLocked — else the operator's manual Even/Odd pick.
+    const shown = $derived(ft8State.shownParity);
+    const locked = $derived(ft8State.occupancyParityLocked);
 </script>
 
 <section class="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface">
     <div class="flex items-center justify-between border-b border-line px-4 py-2">
-        <div class="flex items-baseline gap-2">
+        <div class="flex items-center gap-2">
             <h3 class="text-sm font-semibold text-ink">Occupancy</h3>
-            {#if snapParity}
-                <span class="text-xs text-muted">{snapParity} slot</span>
+            {#if locked}
+                <!-- During a QSO the view is forced to the TX slot (opposite the worked
+                     station); the manual toggle is replaced by this read-only cue. -->
+                <span
+                    class="text-xs font-medium text-focus"
+                    title="Showing the slot you transmit in (opposite the worked station)"
+                    >{shown} · TX</span
+                >
+            {:else}
+                <div
+                    class="inline-flex overflow-hidden rounded-md border border-line text-xs"
+                    role="group"
+                    aria-label="Occupancy slot parity"
+                >
+                    <button
+                        type="button"
+                        class="cursor-pointer px-2 py-0.5 {shown === 'even'
+                            ? 'bg-focus text-white'
+                            : 'text-muted hover:bg-surface-muted'}"
+                        aria-pressed={shown === 'even'}
+                        onclick={() => ft8State.setOccupancyParity('even')}>Even</button
+                    >
+                    <button
+                        type="button"
+                        class="cursor-pointer border-l border-line px-2 py-0.5 {shown === 'odd'
+                            ? 'bg-focus text-white'
+                            : 'text-muted hover:bg-surface-muted'}"
+                        aria-pressed={shown === 'odd'}
+                        onclick={() => ft8State.setOccupancyParity('odd')}>Odd</button
+                    >
+                </div>
             {/if}
         </div>
         <div class="inline-flex overflow-hidden rounded-md border border-line text-xs">
@@ -60,7 +89,7 @@
                 suggested={ft8State.suggested}
                 recommended={topPick}
                 selected={ft8State.selectedOffset}
-                hasSlot={ft8State.slot !== null}
+                hasSlot={ft8State.hasOccupancy}
                 onselect={(hz: number) => ft8State.selectOffset(hz)}
             />
         {:else}
@@ -71,7 +100,7 @@
                 occupied={ft8State.occupied}
                 recommended={topPick}
                 selected={ft8State.selectedOffset}
-                hasSlot={ft8State.slot !== null}
+                hasSlot={ft8State.hasOccupancy}
                 onselect={(hz: number) => ft8State.selectOffset(hz)}
             />
         {/if}

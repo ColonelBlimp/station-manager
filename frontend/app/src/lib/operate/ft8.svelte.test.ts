@@ -126,10 +126,66 @@ describe('occupancy + status mirrors', () => {
     });
 });
 
+describe('parity-aware occupancy', () => {
+    function occ(
+        period: 'even' | 'odd',
+        occupied: { low_hz: number; high_hz: number }[],
+        suggested: number[]
+    ) {
+        return {
+            slot: { start_utc: 't', period },
+            passband: { low_hz: 200, high_hz: 3000 },
+            signal_width_hz: 50,
+            occupied,
+            suggested,
+        };
+    }
+
+    it('keeps even + odd snapshots apart and shows the manual pick when idle', () => {
+        ft8Link.onOccupancy(occ('even', [{ low_hz: 1000, high_hz: 1050 }], [1500]));
+        ft8Link.onOccupancy(occ('odd', [], [2000]));
+
+        expect(ft8State.shownParity).toBe('even'); // idle default
+        expect(ft8State.occupied).toHaveLength(1);
+        expect(ft8State.suggested).toEqual([1500]);
+
+        ft8State.setOccupancyParity('odd');
+        expect(ft8State.shownParity).toBe('odd');
+        expect(ft8State.occupied).toEqual([]);
+        expect(ft8State.suggested).toEqual([2000]);
+        expect(ft8State.effectiveOffset).toBe(2000); // auto-pick follows the shown parity
+    });
+
+    it('during a QSO the shown parity LOCKS to the TX slot (opposite the worked station)', () => {
+        ft8Link.onOccupancy(occ('even', [], [1500]));
+        ft8Link.onOccupancy(occ('odd', [], [2000]));
+        ft8State.setOccupancyParity('even'); // manual pick would be even…
+
+        // …but their CQ is on even → we TX on odd → show odd, toggle locked.
+        ft8Link.onQso({
+            active: true,
+            role: 'answerer',
+            their_call: 'W1ABC',
+            their_period: 'even',
+        });
+        expect(ft8State.occupancyParityLocked).toBe(true);
+        expect(ft8State.shownParity).toBe('odd');
+        expect(ft8State.suggested).toEqual([2000]); // odd snapshot, not the manual even
+    });
+
+    it('hasOccupancy is false until the SHOWN parity has a snapshot', () => {
+        expect(ft8State.hasOccupancy).toBe(false); // nothing yet (shown even)
+        ft8Link.onOccupancy(occ('odd', [], [2000])); // only odd arrived
+        expect(ft8State.hasOccupancy).toBe(false); // still showing even → no snapshot
+        ft8State.setOccupancyParity('odd');
+        expect(ft8State.hasOccupancy).toBe(true);
+    });
+});
+
 describe('effectiveOffset', () => {
     it('prefers the operator pick, else the daemon top clear offset, else null', () => {
         expect(ft8State.effectiveOffset).toBeNull(); // nothing known yet
-        ft8State.suggested = [1400, 900];
+        ft8State.suggestedByParity.even = [1400, 900]; // idle shows the even snapshot
         expect(ft8State.effectiveOffset).toBe(1400); // daemon's best
         ft8State.selectedOffset = 2100;
         expect(ft8State.effectiveOffset).toBe(2100); // explicit pick wins
@@ -137,14 +193,14 @@ describe('effectiveOffset', () => {
 
     it('survives a view toggle (stopFt8 keeps the operator pick, clears stream data)', () => {
         ft8State.selectedOffset = 1750;
-        ft8State.suggested = [800];
+        ft8State.suggestedByParity.even = [800];
         stopFt8();
         expect(ft8State.selectedOffset).toBe(1750); // pick retained
         expect(ft8State.suggested).toEqual([]); // stream data cleared
     });
 
     it('selectOffset pins the pick, ending the auto fallback', () => {
-        ft8State.suggested = [900];
+        ft8State.suggestedByParity.even = [900];
         expect(ft8State.effectiveOffset).toBe(900); // auto
         ft8State.selectOffset(1234);
         expect(ft8State.selectedOffset).toBe(1234);

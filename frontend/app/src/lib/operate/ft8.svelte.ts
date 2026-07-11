@@ -127,10 +127,24 @@ class Ft8State {
     slot: Ft8SlotRef | null = $state(null);
     /** Rolling decode history for Band Activity — newest slot on top, freq-ascending within a slot. */
     decodes: DecodeEntry[] = $state([]);
-    /** Merged busy bands from the latest occupancy report (Occupancy panel). */
-    occupied: Ft8Band[] = $state([]);
-    /** Daemon-ranked clear base offsets (Hz), best first (▾/★ markers). */
-    suggested: number[] = $state([]);
+    /** Per-parity occupancy snapshots (Occupancy panel). The daemon emits one report
+     *  per RX slot and slots alternate parity, so we keep the last EVEN and last ODD
+     *  and show the one matching the TX slot (opposite the worked station) during a
+     *  QSO, or the operator's manual pick when idle — see shownParity. null = that
+     *  parity not seen yet. The daemon also skips occupancy on our own TX slots, so
+     *  the TX-parity snapshot is the last one seen before keying, which is exactly the
+     *  state to pick a clear offset from (you can't measure a slot you transmit in). */
+    occupiedByParity: { even: Ft8Band[] | null; odd: Ft8Band[] | null } = $state({
+        even: null,
+        odd: null,
+    });
+    suggestedByParity: { even: number[] | null; odd: number[] | null } = $state({
+        even: null,
+        odd: null,
+    });
+    /** The parity the operator is VIEWING when idle (manual Even/Odd toggle); during a
+     *  QSO the shown parity is forced to the TX parity. */
+    occupancyParity: 'even' | 'odd' = $state('even');
     /** Audio passband the picker spans (Hz); daemon standard 200–3000 until the first report. */
     passbandLow = $state(200);
     passbandHigh = $state(3000);
@@ -163,6 +177,37 @@ class Ft8State {
         return this.selectedOffset ?? this.suggested[0] ?? null;
     }
 
+    /** Parity of the slot the operator will TRANSMIT in — the occupancy that actually
+     *  matters. During a QSO it's the OPPOSITE of the worked station's parity (you TX
+     *  on the alternate slot); idle, it's the manual Even/Odd pick. */
+    get shownParity(): 'even' | 'odd' {
+        const tp = this.qso.active ? this.qso.theirPeriod : '';
+        if (tp === 'even') return 'odd';
+        if (tp === 'odd') return 'even';
+        return this.occupancyParity;
+    }
+
+    /** True while a QSO forces the shown parity (the Even/Odd toggle is locked to TX). */
+    get occupancyParityLocked(): boolean {
+        const tp = this.qso.active ? this.qso.theirPeriod : '';
+        return tp === 'even' || tp === 'odd';
+    }
+
+    /** Busy bands for the SHOWN parity — the Occupancy components read this. */
+    get occupied(): Ft8Band[] {
+        return this.occupiedByParity[this.shownParity] ?? [];
+    }
+
+    /** Daemon-ranked clear offsets for the SHOWN parity, best first. Feeds effectiveOffset. */
+    get suggested(): number[] {
+        return this.suggestedByParity[this.shownParity] ?? [];
+    }
+
+    /** Whether the shown parity has received a snapshot yet (gates "Waiting for slot"). */
+    get hasOccupancy(): boolean {
+        return this.occupiedByParity[this.shownParity] !== null;
+    }
+
     /** Commit the operator's TX-offset pick (Hz). One mutation point so both
      *  Occupancy views funnel through here; picking pins effectiveOffset, ending the
      *  daemon-suggested auto fallback (which otherwise moves each slot). */
@@ -174,6 +219,11 @@ class Ft8State {
     /** Switch the Occupancy presentation (persists only in memory). */
     setOccupancyView(v: 'channels' | 'spectrum'): void {
         this.occupancyView = v;
+    }
+
+    /** Switch the manually-viewed occupancy parity (idle only; a QSO overrides it). */
+    setOccupancyParity(p: 'even' | 'odd'): void {
+        this.occupancyParity = p;
     }
 
     /** Drop the accumulated feed — a band change makes prior rows misleading. */
@@ -362,8 +412,19 @@ export const ft8Link: Ft8EventHandlers = {
 
     onOccupancy(p: OccupancyPayload): void {
         ft8State.slot = p.slot ?? null;
-        ft8State.occupied = p.occupied ?? [];
-        ft8State.suggested = p.suggested ?? [];
+        // Route the snapshot into its parity slot (daemon-provided slot.period) so the
+        // even and odd views stay distinct. A period-less payload (shouldn't happen)
+        // fills both so it still shows.
+        const occ = p.occupied ?? [];
+        const sug = p.suggested ?? [];
+        const period = p.slot?.period;
+        if (period === 'even' || period === 'odd') {
+            ft8State.occupiedByParity[period] = occ;
+            ft8State.suggestedByParity[period] = sug;
+        } else {
+            ft8State.occupiedByParity = { even: occ, odd: occ };
+            ft8State.suggestedByParity = { even: sug, odd: sug };
+        }
         if (p.passband) {
             ft8State.passbandLow = p.passband.low_hz;
             ft8State.passbandHigh = p.passband.high_hz;
@@ -466,8 +527,8 @@ export function stopFt8(): void {
     // for tx/qso and the hub replays them on the next connect.
     ft8State.connected = false;
     ft8State.slot = null;
-    ft8State.occupied = [];
-    ft8State.suggested = [];
+    ft8State.occupiedByParity = { even: null, odd: null };
+    ft8State.suggestedByParity = { even: null, odd: null };
     ft8State.decodes = [];
     // Keep selectedOffset across a re-open — it's an operator pick, not stream data;
     // clearing it would silently drop the chosen TX channel on a view toggle.
@@ -491,8 +552,9 @@ export function resetFt8ForTests(): void {
     };
     ft8State.connected = false;
     ft8State.slot = null;
-    ft8State.occupied = [];
-    ft8State.suggested = [];
+    ft8State.occupiedByParity = { even: null, odd: null };
+    ft8State.suggestedByParity = { even: null, odd: null };
+    ft8State.occupancyParity = 'even';
     ft8State.decodes = [];
     ft8State.bandFilter = '';
     ft8State.selectedOffset = null;

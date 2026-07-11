@@ -31,11 +31,30 @@ describe('Ft8Occupancy picker', () => {
         expect(screen.getByText(/Waiting for slot/)).toBeInTheDocument();
     });
 
-    it('labels the header with the snapshot parity (daemon slot.period)', () => {
+    it('idle: an Even/Odd toggle switches which parity snapshot is shown', async () => {
         ft8Link.onOccupancy(occupancy()); // period: 'even'
         flushSync();
         render(Ft8Occupancy);
-        expect(screen.getByText('even slot')).toBeInTheDocument();
+
+        // Even active by default; switching to Odd changes the shown parity.
+        await fireEvent.click(screen.getByRole('button', { name: 'Odd' }));
+        flushSync();
+        expect(ft8State.shownParity).toBe('odd');
+    });
+
+    it('during a QSO the toggle is replaced by a locked TX-parity cue', () => {
+        ft8Link.onOccupancy(occupancy()); // even
+        ft8Link.onQso({
+            active: true,
+            role: 'answerer',
+            their_call: 'W1ABC',
+            their_period: 'even',
+        });
+        flushSync();
+        render(Ft8Occupancy);
+
+        expect(screen.queryByRole('button', { name: 'Even' })).toBeNull(); // no toggle
+        expect(screen.getByText(/odd · TX/)).toBeInTheDocument(); // TX slot = opposite even
     });
 
     it('clicking a channel pins selectedOffset (ending the auto fallback)', async () => {
