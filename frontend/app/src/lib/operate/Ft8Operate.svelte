@@ -119,12 +119,19 @@
     // A Call-CQ run is in progress (we are the caller, looping the pile-up) — the
     // Call CQ button goes red so "I'm running CQ" is unmistakable.
     const callerActive = $derived(qso.active && qso.role === 'caller');
+    // Next — drop the in-flight contact and advance to the next queued caller.
+    // Available whenever a contact is active AND the pile-up has someone waiting,
+    // INCLUDING during a Call-CQ run: the operator chose "keep the queue-takes-over-CQ
+    // behaviour", so Next abandons the CQ run and hands the rig to the drain (unlike
+    // the shipping SPA, which hides Next during a caller run to forbid the takeover).
+    const canNext = $derived(tx.armed && qso.active && ft8PileupStack.count > 0);
 
     // Per-action in-flight latches. The daemon single-flights competing starts and
     // 409s the loser, so these mainly stop a double-tap issuing a wasted second POST.
     let arming = $state(false);
     let sending = $state(false);
     let abandoning = $state(false);
+    let nexting = $state(false);
 
     async function onArm(): Promise<void> {
         if (arming) return;
@@ -157,6 +164,29 @@
             if (!r.ok) toasts.error(r.message);
         } finally {
             abandoning = false;
+        }
+    }
+
+    // Next — abort the in-flight contact and move straight to the next queued caller.
+    // Only acts BETWEEN transmissions (gated on !tx.transmitting, here and on the
+    // button): advancing mid-slot would run the tail of one station's message straight
+    // into a transmission for the next callsign. The current station was dequeued when
+    // it started, so aborting just drops it. Unlike Abandon, Next then RESUMES the
+    // drain — this is what makes the queue take over a Call-CQ run (that run leaves the
+    // drain paused): once the abandon lands and the contact goes idle, the drain effect
+    // works the next head. Resume is a no-op for a normal pile-up (already enabled).
+    async function onNext(): Promise<void> {
+        if (nexting || tx.transmitting) return;
+        nexting = true;
+        try {
+            const r = await abandonQso();
+            if (!r.ok) {
+                toasts.error(r.message);
+                return;
+            }
+            ft8PileupStack.resume();
+        } finally {
+            nexting = false;
         }
     }
 
@@ -314,9 +344,9 @@
     </div>
 
     <!-- TX control bar (ADR 0029/0030/0031/0033) — first RF from this SPA. Call CQ /
-         Abandon drive the sequenced session; Arm sits alone at the bottom (its own
-         divider) as the operator's explicit consent to key. The pile-up "Next"
-         button lands with the operator_pick stack (a later increment). -->
+         Abandon drive the sequenced session; Next advances the pile-up (shown only
+         when a caller is queued); Arm sits alone at the bottom (its own divider) as
+         the operator's explicit consent to key. -->
     <div class="border-t border-line px-4 py-3">
         <div class="mb-2 flex items-center justify-between gap-x-2 text-xs">
             <span class="text-muted"
@@ -355,6 +385,19 @@
             >
                 Abandon
             </button>
+            {#if canNext}
+                <button
+                    type="button"
+                    class="flex-1 rounded-md border border-line px-3 py-1.5 text-sm font-semibold text-ink hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
+                    title={tx.transmitting
+                        ? 'Wait for receive — Next advances between transmissions'
+                        : 'Drop this station and work the next in the pile-up'}
+                    onclick={onNext}
+                    disabled={nexting || tx.transmitting}
+                >
+                    Next
+                </button>
+            {/if}
         </div>
         <hr class="my-3 border-line" />
         <button

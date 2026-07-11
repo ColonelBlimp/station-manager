@@ -113,9 +113,36 @@ precisely so we don't re-derive state or redo finished work.
 >   `set_freq_b`, CAT-off manual). So 40m → 7.074, 20m → 14.074, etc. `ft8_frequencies`
 >   surfaced via `seams.ts` + `main.ts`. (set_freq only — the operator is already in
 >   FT8 mode, so no `set_mode` on a band hop; a mode-assert is a small future add.)
+> - **FT8 pile-up stack — COMPLETE (SPA-only, 5 increments; NOT the daemon's
+>   `operator_pick` sequencer — that's a separate, still-unbuilt daemon mode).** An
+>   operator-curated FIFO of stations calling you, drained oldest-first via the
+>   existing work-a-caller path — the daemon is untouched. **(1)**
+>   `ft8Pileup.svelte.ts` — `ft8PileupStack` singleton (push/dedup-refresh, peek,
+>   dequeue, remove, moveUp, clear, pause/resume, single-parity `lockedParity` set by
+>   the first add). **(2)** `Ft8BandActivity` **Ctrl/Cmd+click** a calling-you decode
+>   enqueues (pure capture in any TX state; wrong-parity + dupe + already-queued +
+>   callerActive guards; a **Q** badge marks queued rows). **(3)** the drain `$effect`
+>   in `Ft8Operate` — armed + CAT-live + idle + offset & freq known + auto-drain
+>   enabled + queue non-empty → works the head, dequeues on start, advances as each
+>   contact completes; a `draining` latch + reactive `retryTick` recover the
+>   post-contact TX→RX settle. NB the app's TX seam flattens the daemon's `{kind,code}`
+>   to `{ok,message}`, so the drain can't tell a transient settle from a hard reject →
+>   it retries every failure (~1.5s×6) then **pauses** (keeps the queue) — simpler than
+>   the shipping's drop-hard-rejects, and lossless. **(4)** `PileupDrawer` body — list
+>   (head first, no move-up on head), per-row ↑/×, footer Resume (paused + not
+>   callerActive only) + **Clear & abandon**; the slide-over header × only CLOSES (run
+>   intact) — distinct from the shipping card's ×-clears-all; `UtilRail` Pile-up button
+>   gains a live **count badge**. **(5)** the **Next** control in the Operate TX bar —
+>   `canNext = armed && qso.active && count>0` (shown during a Call-CQ run too);
+>   `onNext` abandons the contact + **resumes the drain** (`!tx.transmitting` gated).
+>   **Deliberate divergence from the shipping SPA:** it HIDES Next during a caller run
+>   to forbid the takeover; the operator chose to **keep the queue-takes-over-CQ
+>   behaviour**, so a pre-existing queue's Next abandons the CQ run and the drain takes
+>   over. All green: **490 SPA tests** (new `ft8Pileup`/`PileupDrawer`/`Ft8Operate`
+>   suites). **Uncommitted — needs `task deploy:local:dev` + on-air validation.**
 >
-> **NEXT (frontend/app):** operator_pick **pile-up stack** (+ its `Next` button),
-> remaining `ft8_display` fields (**highlight colours** + a live **hide-hashed toggle**
+> **NEXT (frontend/app):** deploy + on-air-validate the pile-up stack; remaining
+> `ft8_display` fields (**highlight colours** + a live **hide-hashed toggle**
 > — hide-hashed is config-read only now), and (optional) the rail **Worked** panel in
 > FT8 + the FT8 band-jump also asserting FT8 mode. Inbox: Occupancy **light-mode colour
 > fix**, **DXCC backfill** on existing blank-DXCC QSOs. Dogfood gotcha: `/app/` is

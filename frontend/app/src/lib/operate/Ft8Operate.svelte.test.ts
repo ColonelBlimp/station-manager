@@ -5,7 +5,7 @@
 // ft8Pileup.svelte.test.ts; the click-to-enqueue wiring in Ft8BandActivity's test.
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render } from '@testing-library/svelte';
+import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Ft8Operate from './Ft8Operate.svelte';
 import {
@@ -178,5 +178,78 @@ describe('Ft8Operate pile-up drain', () => {
         expect(worked.length).toBe(1);
         expect(ft8PileupStack.items.length).toBe(1);
         expect(ft8PileupStack.enabled).toBe(true);
+    });
+});
+
+describe('Ft8Operate Next control', () => {
+    it('is hidden when the pile-up is empty', () => {
+        armReady();
+        ft8State.qso.active = true;
+        ft8State.qso.role = 'worker';
+        render(Ft8Operate);
+        flushSync();
+        expect(screen.queryByRole('button', { name: 'Next' })).toBeNull();
+    });
+
+    it('is hidden when idle even with a queue (nothing to advance from)', () => {
+        armReady();
+        ft8PileupStack.pause(); // keep the queue static (idle)
+        ft8PileupStack.push(caller('K1ABC'));
+        render(Ft8Operate);
+        flushSync();
+        expect(screen.queryByRole('button', { name: 'Next' })).toBeNull();
+    });
+
+    it('abandons the contact and resumes the drain (queue takes over)', async () => {
+        let abandoned = 0;
+        armReady({
+            abandon: () => {
+                abandoned++;
+                return okResult();
+            },
+        });
+        ft8State.qso.active = true;
+        ft8State.qso.role = 'worker';
+        ft8PileupStack.pause();
+        ft8PileupStack.push(caller('K1ABC'));
+        render(Ft8Operate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        await flush();
+        expect(abandoned).toBe(1);
+        expect(ft8PileupStack.enabled).toBe(true); // drain resumed → next head worked
+    });
+
+    it('is available during a Call-CQ run (queue-takes-over-CQ kept)', async () => {
+        let abandoned = 0;
+        armReady({
+            abandon: () => {
+                abandoned++;
+                return okResult();
+            },
+        });
+        ft8State.qso.active = true;
+        ft8State.qso.role = 'caller';
+        ft8PileupStack.pause();
+        ft8PileupStack.push(caller('K1ABC'));
+        render(Ft8Operate);
+        flushSync();
+        const next = screen.getByRole('button', { name: 'Next' });
+        expect(next).toBeInTheDocument();
+        await fireEvent.click(next);
+        await flush();
+        expect(abandoned).toBe(1);
+        expect(ft8PileupStack.enabled).toBe(true);
+    });
+
+    it('is disabled while transmitting (advances only between transmissions)', () => {
+        armReady();
+        ft8State.qso.active = true;
+        ft8State.qso.role = 'worker';
+        ft8State.tx.transmitting = true;
+        ft8PileupStack.push(caller('K1ABC'));
+        render(Ft8Operate);
+        flushSync();
+        expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
     });
 });
