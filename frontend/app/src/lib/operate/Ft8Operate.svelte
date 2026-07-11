@@ -157,10 +157,12 @@
     <div class="flex items-center gap-x-3 border-b border-line px-4 py-2">
         <h3 class="text-sm font-semibold text-ink">Operate</h3>
         <!-- The FT8 view has no Session tile, so this opens the shared session
-             review + export/email dialog (the operator's end-of-session send). -->
+             review + export/email dialog (the operator's end-of-session send).
+             Always enabled — the panel is viewable even when empty (the session
+             list is in-memory and resets on reload); Download/Send gate on count
+             inside the dialog. -->
         <button
             class="btn ml-auto text-xs"
-            disabled={session.qsos.length === 0}
             onclick={openExport}
             title="Review + export/email this session's contacts"
         >
