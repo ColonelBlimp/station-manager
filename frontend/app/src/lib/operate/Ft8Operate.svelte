@@ -119,12 +119,26 @@
     // A Call-CQ run is in progress (we are the caller, looping the pile-up) — the
     // Call CQ button goes red so "I'm running CQ" is unmistakable.
     const callerActive = $derived(qso.active && qso.role === 'caller');
-    // Next — drop the in-flight contact and advance to the next queued caller.
-    // Available whenever a contact is active AND the pile-up has someone waiting,
-    // INCLUDING during a Call-CQ run: the operator chose "keep the queue-takes-over-CQ
-    // behaviour", so Next abandons the CQ run and hands the rig to the drain (unlike
-    // the shipping SPA, which hides Next during a caller run to forbid the takeover).
+    // Next — advance the pile-up. Available whenever a contact is active AND the
+    // pile-up has someone waiting, INCLUDING during a Call-CQ run (the operator chose
+    // to keep the queue-takes-over-CQ behaviour). Its ACTION differs by mode:
+    //   - Call-CQ run: an immediate takeover — abandon the CQ run, hand the rig to the
+    //     drain (there's no specific reply to wait on while calling CQ).
+    //   - working/answering a specific station: a DEFERRED "skip if no reply" (below).
     const canNext = $derived(tx.armed && qso.active && ft8PileupStack.count > 0);
+
+    // Deferred "skip if no reply" (the Next control while working a station). Rather
+    // than abandoning immediately — which skips before you can see whether your last
+    // TX was heard — Next ARMS a skip that resolves on the RX outcome: if the worked
+    // station comes back (the rung advances) we keep working them; if the RX slot is
+    // silent (the daemon repeats the rung, so qso.repeats ticks up) we drop this
+    // no-show and advance to the next queued caller. armedFor/armedState/armedRepeats
+    // snapshot the contact at arm time so the resolve effect can tell "advanced"
+    // (heard) from "repeated" (silent) and ignore a stale arm once the contact changes.
+    let skipArmed = $state(false);
+    let armedFor = '';
+    let armedState = '';
+    let armedRepeats = 0;
 
     // Per-action in-flight latches. The daemon single-flights competing starts and
     // 409s the loser, so these mainly stop a double-tap issuing a wasted second POST.
@@ -156,27 +170,72 @@
         }
     }
 
+    // Abandon — the full stop. Drop the in-flight TX (the daemon cancels it + idles the
+    // sequencer) AND pause the drain so the queue does NOT immediately take over: the
+    // operator regains control, the queue is kept, and Resume (drawer) continues it.
+    // Also clears any armed skip — Abandon supersedes it. Without the pause, abandoning
+    // a pile-up contact just handed straight to the drain (the next caller's opening
+    // fired in the same slot, within the sequencer's ~4.5s late window) — i.e. Abandon
+    // behaved like Next.
     async function onAbandon(): Promise<void> {
         if (abandoning) return;
         abandoning = true;
+        skipArmed = false;
         try {
             const r = await abandonQso();
             if (!r.ok) toasts.error(r.message);
+            else ft8PileupStack.pause();
         } finally {
             abandoning = false;
         }
     }
 
-    // Next — abort the in-flight contact and move straight to the next queued caller.
-    // Only acts BETWEEN transmissions (gated on !tx.transmitting, here and on the
-    // button): advancing mid-slot would run the tail of one station's message straight
-    // into a transmission for the next callsign. The current station was dequeued when
-    // it started, so aborting just drops it. Unlike Abandon, Next then RESUMES the
-    // drain — this is what makes the queue take over a Call-CQ run (that run leaves the
-    // drain paused): once the abandon lands and the contact goes idle, the drain effect
-    // works the next head. Resume is a no-op for a normal pile-up (already enabled).
-    async function onNext(): Promise<void> {
-        if (nexting || tx.transmitting) return;
+    // Next — advance the pile-up (see canNext). A click while a skip is already armed
+    // cancels it. During a Call-CQ run it's an immediate takeover; otherwise it arms a
+    // deferred skip that the resolve effect below fires only once the RX outcome is
+    // known — so Next never keys the next caller "blind" right after your TX.
+    function onNext(): void {
+        if (nexting) return;
+        if (skipArmed) {
+            skipArmed = false; // second click cancels the pending skip
+            return;
+        }
+        if (!canNext) return;
+        if (callerActive) {
+            void doSkip(qso.theirCall); // Call-CQ: abandon the run, drain takes over
+            return;
+        }
+        armedFor = qso.theirCall;
+        armedState = qso.state;
+        armedRepeats = qso.repeats;
+        skipArmed = true;
+    }
+
+    // Resolve an armed skip against the live QSO state (confirm-by-push from the
+    // daemon): disarm if the contact ends/changes; keep working on a heard reply (the
+    // rung advanced); skip to the next queued caller on a silent RX slot (repeats up).
+    $effect(() => {
+        if (!skipArmed) return;
+        if (!qso.active || qso.theirCall !== armedFor) {
+            skipArmed = false;
+            return;
+        }
+        if (qso.state !== armedState) {
+            skipArmed = false; // rung advanced → they came back; stay on them
+            toasts.info(`${armedFor} replied — continuing.`);
+            return;
+        }
+        if (qso.repeats > armedRepeats) {
+            const who = armedFor; // silent RX slot → drop the no-show, advance
+            skipArmed = false;
+            void doSkip(who, true);
+        }
+    });
+
+    // Shared advance: abandon the current contact and (re-)enable the drain so it works
+    // the next queued head. Used by the Call-CQ takeover and the deferred skip.
+    async function doSkip(who: string, silent = false): Promise<void> {
+        if (nexting) return;
         nexting = true;
         try {
             const r = await abandonQso();
@@ -184,6 +243,7 @@
                 toasts.error(r.message);
                 return;
             }
+            if (silent) toasts.info(`No reply from ${who} — next.`);
             ft8PileupStack.resume();
         } finally {
             nexting = false;
@@ -385,17 +445,21 @@
             >
                 Abandon
             </button>
-            {#if canNext}
+            {#if canNext || skipArmed}
                 <button
                     type="button"
-                    class="flex-1 rounded-md border border-line px-3 py-1.5 text-sm font-semibold text-ink hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
-                    title={tx.transmitting
-                        ? 'Wait for receive — Next advances between transmissions'
-                        : 'Drop this station and work the next in the pile-up'}
+                    class="flex-1 rounded-md border px-3 py-1.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 {skipArmed
+                        ? 'border-amber-500 bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                        : 'border-line text-ink hover:bg-surface-muted'}"
+                    title={skipArmed
+                        ? 'Skip armed — advances to the next caller if this station is silent this slot; click to cancel'
+                        : callerActive
+                          ? 'Abandon the CQ run and work the pile-up queue'
+                          : "Skip this station if it doesn't reply this slot"}
                     onclick={onNext}
-                    disabled={nexting || tx.transmitting}
+                    disabled={nexting}
                 >
-                    Next
+                    {skipArmed ? 'Skip if silent…' : 'Next'}
                 </button>
             {/if}
         </div>

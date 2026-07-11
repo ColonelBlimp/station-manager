@@ -201,7 +201,17 @@ describe('Ft8Operate ladder reactivity', () => {
     });
 });
 
-describe('Ft8Operate Next control', () => {
+// A worked-station contact with someone queued behind it — the state Next acts on.
+function workingWithQueue(theirCall = 'K1ABC', queued = '9A4ZM'): void {
+    ft8State.qso.active = true;
+    ft8State.qso.role = 'worker';
+    ft8State.qso.theirCall = theirCall;
+    ft8State.qso.state = 'calling';
+    ft8State.qso.repeats = 0;
+    ft8PileupStack.push(caller(queued));
+}
+
+describe('Ft8Operate Next control (deferred skip-if-silent)', () => {
     it('is hidden when the pile-up is empty', () => {
         armReady();
         ft8State.qso.active = true;
@@ -220,7 +230,7 @@ describe('Ft8Operate Next control', () => {
         expect(screen.queryByRole('button', { name: 'Next' })).toBeNull();
     });
 
-    it('abandons the contact and resumes the drain (queue takes over)', async () => {
+    it('arms a deferred skip (no immediate abandon), then advances on a silent RX slot', async () => {
         let abandoned = 0;
         armReady({
             abandon: () => {
@@ -228,19 +238,68 @@ describe('Ft8Operate Next control', () => {
                 return okResult();
             },
         });
-        ft8State.qso.active = true;
-        ft8State.qso.role = 'worker';
-        ft8PileupStack.pause();
-        ft8PileupStack.push(caller('K1ABC'));
+        workingWithQueue();
         render(Ft8Operate);
         flushSync();
+        // Click Next → arms; it must NOT abandon yet (that was the eager-skip bug).
         await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        flushSync();
+        expect(abandoned).toBe(0);
+        expect(screen.getByRole('button', { name: /Skip if silent/ })).toBeInTheDocument();
+        // Silent RX slot: the daemon repeats the rung → qso.repeats ticks up.
+        ft8State.qso.repeats = 1;
+        flushSync();
         await flush();
         expect(abandoned).toBe(1);
         expect(ft8PileupStack.enabled).toBe(true); // drain resumed → next head worked
     });
 
-    it('is available during a Call-CQ run (queue-takes-over-CQ kept)', async () => {
+    it('a reply (rung advances) disarms the skip and keeps working the station', async () => {
+        let abandoned = 0;
+        armReady({
+            abandon: () => {
+                abandoned++;
+                return okResult();
+            },
+        });
+        workingWithQueue();
+        render(Ft8Operate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        flushSync();
+        expect(screen.getByRole('button', { name: /Skip if silent/ })).toBeInTheDocument();
+        // They came back → the rung advances; the armed skip must clear, not fire.
+        ft8State.qso.state = 'reporting';
+        flushSync();
+        await flush();
+        expect(abandoned).toBe(0);
+        expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument(); // disarmed
+    });
+
+    it('clicking Next again cancels the armed skip', async () => {
+        let abandoned = 0;
+        armReady({
+            abandon: () => {
+                abandoned++;
+                return okResult();
+            },
+        });
+        workingWithQueue();
+        render(Ft8Operate);
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        flushSync();
+        await fireEvent.click(screen.getByRole('button', { name: /Skip if silent/ }));
+        flushSync();
+        expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
+        // A later silent slot must NOT skip — the arm was cancelled.
+        ft8State.qso.repeats = 1;
+        flushSync();
+        await flush();
+        expect(abandoned).toBe(0);
+    });
+
+    it('during a Call-CQ run, Next is an immediate takeover (abandon + resume)', async () => {
         let abandoned = 0;
         armReady({
             abandon: () => {
@@ -254,22 +313,24 @@ describe('Ft8Operate Next control', () => {
         ft8PileupStack.push(caller('K1ABC'));
         render(Ft8Operate);
         flushSync();
-        const next = screen.getByRole('button', { name: 'Next' });
-        expect(next).toBeInTheDocument();
-        await fireEvent.click(next);
+        await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
         await flush();
         expect(abandoned).toBe(1);
         expect(ft8PileupStack.enabled).toBe(true);
     });
+});
 
-    it('is disabled while transmitting (advances only between transmissions)', () => {
-        armReady();
+describe('Ft8Operate Abandon', () => {
+    it('pauses the drain (stops the run) and keeps the queue', async () => {
+        armReady({ abandon: () => okResult() });
         ft8State.qso.active = true;
         ft8State.qso.role = 'worker';
-        ft8State.tx.transmitting = true;
         ft8PileupStack.push(caller('K1ABC'));
         render(Ft8Operate);
         flushSync();
-        expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+        await fireEvent.click(screen.getByRole('button', { name: 'Abandon' }));
+        await flush();
+        expect(ft8PileupStack.enabled).toBe(false); // paused → no takeover
+        expect(ft8PileupStack.items.length).toBe(1); // queue kept for Resume
     });
 });
