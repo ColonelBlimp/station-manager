@@ -132,16 +132,54 @@ precisely so we don't re-derive state or redo finished work.
 >   (head first, no move-up on head), per-row ↑/×, footer Resume (paused + not
 >   callerActive only) + **Clear & abandon**; the slide-over header × only CLOSES (run
 >   intact) — distinct from the shipping card's ×-clears-all; `UtilRail` Pile-up button
->   gains a live **count badge**. **(5)** the **Next** control in the Operate TX bar —
->   `canNext = armed && qso.active && count>0` (shown during a Call-CQ run too);
->   `onNext` abandons the contact + **resumes the drain** (`!tx.transmitting` gated).
->   **Deliberate divergence from the shipping SPA:** it HIDES Next during a caller run
+>   gains a live **count badge**. **(5)** the **Next** control in the Operate TX bar
+>   (shown during a Call-CQ run too, `canNext = armed && qso.active && count>0`) —
+>   **deliberate divergence from the shipping SPA:** it HIDES Next during a caller run
 >   to forbid the takeover; the operator chose to **keep the queue-takes-over-CQ
->   behaviour**, so a pre-existing queue's Next abandons the CQ run and the drain takes
->   over. All green: **490 SPA tests** (new `ft8Pileup`/`PileupDrawer`/`Ft8Operate`
->   suites). **Uncommitted — needs `task deploy:local:dev` + on-air validation.**
+>   behaviour**. (Next semantics were then refined — see the deferred-skip bullet.)
+>   Baseline was **490 SPA tests** (new `ft8Pileup`/`PileupDrawer`/`Ft8Operate` suites).
+> - **On-air validated 2026-07-11** — pile-up dogfooded live (redeploy landed at 15:20;
+>   earlier "Deployed" hadn't restarted `smd`, so the served bundle was stale — verify
+>   `smd` timestamp + served bytes before on-air, [[sm-app-embed-redeploy-gotcha]]).
+> - **Ladder callsign reactivity fix** — on a HARD reload (cache bypassed), `/v1/config`
+>   lands AFTER first paint; the operator-call/grid seams (and `displayPrefs`) were plain
+>   module `let`s, so the idle ladder stayed stuck on a bare `CQ` (no callsign) — nothing
+>   it depends on changes while idle. Made them **reactive `$state`** (`ft8.svelte.ts`) so
+>   a late config re-derives the ladder + Band Activity cq-to-top/hide-hashed. Regression
+>   test added.
+> - **Band Activity "now working" marker + badge contrast** — a solid green **●** ("Working
+>   now") marks the station in the active QSO (`row.call === qso.theirCall`), beside the
+>   existing **Q**; both badges went from faint 15%-tint to **solid fills, white bold text**
+>   so the queue (blue Q) and the on-air station (green ●) read at a glance. Mutually
+>   exclusive per row (a worked caller is dequeued).
+> - **Abandon now STOPS the run (fix)** — `onAbandon` pauses the drain (+ clears any armed
+>   skip) on success, so Abandon = full stop (drop TX, halt the pile-up, **keep the queue**
+>   for Resume). Root cause it fixes: without the pause, abandoning a pile-up contact handed
+>   straight to the drain — the next caller's opening fired **in the same slot** within the
+>   sequencer's **`txLateWindowSec` (~4.5s)** late window (the "delta" gate — there is no
+>   2.5s constant), i.e. Abandon behaved like Next.
+> - **Next → deferred "skip if no reply" (feature)** — replaced the eager immediate skip.
+>   While working a station Next **arms** (amber "Skip if silent…"), then resolves off the
+>   confirm-by-push QSO state: rung advances (`qso.state` changes) → **heard, keep working
+>   + disarm**; RX slot silent (`qso.repeats` ticks up) → **drop the no-show + advance**.
+>   Second click cancels. Call-CQ run keeps the immediate takeover. `!tx.transmitting` gate
+>   dropped (arming is timing-free). **SPA-only limit:** the daemon repeats atomically on
+>   the first silent slot (`onSlotAnswering`), so the station gets exactly ONE extra call
+>   before the skip fires; a zero-repeat skip would need a daemon "no-repeat on first
+>   silence" assist. **494 SPA tests. Uncommitted — needs deploy + on-air validation.**
+> - **go-ft8 v0.7.0 (type-4) assessment — NOT bumped.** Current pin v0.6.0; v0.7.0 is
+>   **API-compatible** (empty exported-API diff; +52 lines in `pack.go` only — WSJT-X
+>   type-4 packer hardening) and SM builds + the full `compound_roundtrip_test.go` suite
+>   pass under a temp bump. BUT the tripwire `TestPrefixCompound_EncoderBoundary` still
+>   **passes unchanged** → the encoder boundary did NOT move: compound grid/report forms
+>   are still unencodable, so v0.7.0 does **not** unblock the full compound-call QSO flow
+>   (still needs the reduced hashed `CQ→RR73→73` ladder — a backlog feature buildable on
+>   v0.6.0 already). Take the bump as its own commit when convenient; it ships no
+>   user-visible feature alone.
 >
-> **NEXT (frontend/app):** deploy + on-air-validate the pile-up stack; remaining
+> **NEXT (frontend/app):** deploy + on-air-validate the pile-up stack (incl. the Abandon
+> stop + deferred skip-if-silent Next); consider the reduced type-4 compound ladder +
+> the isolated go-ft8 v0.7.0 bump; remaining
 > `ft8_display` fields (**highlight colours** + a live **hide-hashed toggle**
 > — hide-hashed is config-read only now), and (optional) the rail **Worked** panel in
 > FT8 + the FT8 band-jump also asserting FT8 mode. Inbox: Occupancy **light-mode colour

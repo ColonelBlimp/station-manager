@@ -17,6 +17,7 @@
         type TileId,
     } from './layout.svelte';
     import { rig } from './rig.svelte';
+    import { session } from './session.svelte';
 
     // Worked/Session are read-only: after showing one the operator's next act is
     // typing, so focus goes home to the callsign field. The Rig tile is read-only
@@ -91,13 +92,21 @@
     <div class="flex h-full flex-col gap-1 border-l border-line bg-surface px-2 py-4">
         {#each RAIL_TILES as key (key)}
             <button
-                class="rail-item"
+                class="rail-item relative"
                 title="{labels[key]} — {isVisible(key) ? 'hide' : 'show'}"
                 data-active={isVisible(key) ? 'true' : 'false'}
                 onclick={() => onTileClick(key)}
             >
                 {@render railIcon(key)}
                 <span class="rail-label">{labels[key]}</span>
+                {#if key === 'session' && session.qsos.length > 0}
+                    <span
+                        class="absolute top-0.5 left-6 min-w-4 rounded-full bg-focus px-1 text-center text-[10px] font-bold text-white tabular-nums"
+                        title={`${session.qsos.length} QSO${session.qsos.length === 1 ? '' : 's'} this session`}
+                    >
+                        {session.qsos.length}
+                    </span>
+                {/if}
             </button>
         {/each}
 
