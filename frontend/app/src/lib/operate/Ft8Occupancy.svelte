@@ -30,10 +30,18 @@
                      station); the manual toggle is replaced by this read-only cue. -->
                 <span
                     class="text-xs font-medium text-focus"
-                    title="Showing the slot you transmit in (opposite the worked station)"
+                    title="Showing the slot you transmit in — the opposite of the station you're working. Set automatically for the duration of the QSO."
                     >{shown} · TX</span
                 >
             {:else}
+                <!-- Idle: label the toggle so its purpose is obvious — it's the slot the
+                     operator will TRANSMIT in, not an abstract parity switch. During a
+                     QSO it sets itself (above); here it's for pre-scouting / Call CQ. -->
+                <span
+                    class="text-xs text-muted"
+                    title="The slot you'll transmit in. It sets itself while you're working a station (the opposite slot); pick it here to pre-scout a clear offset, or to match the slot you'll Call CQ in."
+                    >TX slot</span
+                >
                 <div
                     class="inline-flex overflow-hidden rounded-md border border-line text-xs"
                     role="group"

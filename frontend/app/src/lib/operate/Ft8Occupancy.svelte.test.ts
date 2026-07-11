@@ -36,6 +36,8 @@ describe('Ft8Occupancy picker', () => {
         flushSync();
         render(Ft8Occupancy);
 
+        // The toggle is labelled as the TX slot so its purpose is obvious.
+        expect(screen.getByText('TX slot')).toBeInTheDocument();
         // Even active by default; switching to Odd changes the shown parity.
         await fireEvent.click(screen.getByRole('button', { name: 'Odd' }));
         flushSync();
