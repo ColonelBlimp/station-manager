@@ -47,14 +47,38 @@ function pathFor(view: View, mode: OpMode): string {
     }
 }
 
-const initial = parse(window.location.pathname, storedMode());
+// The daemon serves this SPA UNDER a base path (/app/ — Vite's BASE_URL) while the
+// shipping logging SPA still owns '/'. Real-path routing must therefore live under
+// that base: strip it before parsing, re-add it before writing. Without this the
+// initial normalise turned '/app/…' into a bare '/operate/ft8' etc. and, for the
+// default view, into '/' — which is a DIFFERENT SPA, so the URL reverted off /app/.
+// BASE is '' when served at the root (no base), so this is base-agnostic.
+const BASE = import.meta.env.BASE_URL.replace(/\/+$/, '');
+
+// The path WITHIN the app's base — what parse() understands. Pure + base-explicit
+// so it's testable without stubbing import.meta.env: '/app/operate/ft8' →
+// '/operate/ft8'; '/app/' or '/app' → '/'.
+export function subPathOf(pathname: string, base: string): string {
+    const sub = pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
+    return sub === '' ? '/' : sub;
+}
+
+// The full URL (base + route) to push/replace into the address bar. Pure + base-explicit.
+export function urlOf(view: View, mode: OpMode, base: string): string {
+    return base + pathFor(view, mode);
+}
+
+const subPath = (): string => subPathOf(window.location.pathname, BASE);
+const urlFor = (view: View, mode: OpMode): string => urlOf(view, mode, BASE);
+
+const initial = parse(subPath(), storedMode());
 export const router = $state<Loc>(initial);
 localStorage.setItem(MODE_KEY, router.mode); // remember a deep-linked mode
 
-// Normalise the URL (e.g. a bare /operate) to the canonical path without adding a
-// history entry.
+// Normalise the URL (e.g. a bare /operate, or /app → /app/) to the canonical path
+// without adding a history entry.
 {
-    const canonical = pathFor(router.view, router.mode);
+    const canonical = urlFor(router.view, router.mode);
     if (window.location.pathname !== canonical) {
         window.history.replaceState({}, '', canonical);
     }
@@ -62,7 +86,7 @@ localStorage.setItem(MODE_KEY, router.mode); // remember a deep-linked mode
 
 export function navigate(view: View): void {
     router.view = view;
-    const path = pathFor(view, router.mode);
+    const path = urlFor(view, router.mode);
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
 }
 
@@ -70,13 +94,13 @@ export function setMode(mode: OpMode): void {
     router.view = 'operate';
     router.mode = mode;
     localStorage.setItem(MODE_KEY, mode);
-    const path = pathFor('operate', mode);
+    const path = urlFor('operate', mode);
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
 }
 
 // Sync on browser back/forward.
 window.addEventListener('popstate', () => {
-    const loc = parse(window.location.pathname, router.mode);
+    const loc = parse(subPath(), router.mode);
     router.view = loc.view;
     router.mode = loc.mode;
 });
