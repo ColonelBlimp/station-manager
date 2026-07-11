@@ -39,9 +39,10 @@ func TestVersion_HappyPath(t *testing.T) {
 
 	// schema version: migrations ran in testServer's setup, so schema should be
 	// at the latest migration and not dirty. Bump this with each new migration —
-	// currently 3 (0001_init + 0002_relax_rst_length + 0003_allow_time_seconds).
-	if !strings.Contains(body, `"schema":{"version":3,"dirty":false}`) {
-		t.Fatalf("body = %q, want schema:{version:3,dirty:false}", body)
+	// currently 4 (0001_init + 0002_relax_rst_length + 0003_allow_time_seconds +
+	// 0004_utc_timestamps).
+	if !strings.Contains(body, `"schema":{"version":4,"dirty":false}`) {
+		t.Fatalf("body = %q, want schema:{version:4,dirty:false}", body)
 	}
 }
 
