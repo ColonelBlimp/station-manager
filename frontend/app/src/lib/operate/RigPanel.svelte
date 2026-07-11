@@ -15,12 +15,24 @@
         selectBand,
         operatingBands,
         hasOp,
+        type RigWriteResult,
     } from './rig.svelte';
     import { hideTile } from './layout.svelte';
     import { focusCallsign } from './state.svelte';
     import { toasts } from '../ui/toasts.svelte';
     import { formatFrequency, frequencyToBand } from '../utils/frequency';
     import { parseFrequency } from '../validators/frequency';
+
+    // The rig card is shared across modes; the ONE mode-specific behaviour is the
+    // band-button pick. Phone/CW passes selectBand (SM is passive — the rig restores
+    // that band's freq+mode from its own band-stack); FT8 will pass a watering-hole
+    // pick (SM drives set_freq + set_mode) once ft8_frequencies is surfaced. Defaults
+    // to selectBand so the Phone/CW tile — rendered prop-less by the TileBoard — is
+    // unchanged (pure refactor); everything else is identical between modes.
+    interface Props {
+        pickBand?: (band: string) => Promise<RigWriteResult>;
+    }
+    let { pickBand = selectBand }: Props = $props();
 
     // Operator-friendly mode names (sidebands, not families — matches the
     // shipping SPA's baseModes). resolveModeAndSubmode maps them to canonical
@@ -67,7 +79,7 @@
     // (off-CAT default-freq jump vs live set_band) lives in the shared selectBand
     // action, so the grid and the Ctrl+Shift+digit keyboard jump behave the same.
     async function onPickBand(band: string): Promise<void> {
-        const r = await selectBand(band);
+        const r = await pickBand(band);
         if (!r.ok) toasts.error(r.message);
     }
 
