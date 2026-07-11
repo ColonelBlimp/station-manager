@@ -54,9 +54,8 @@
                             <th class="w-14">Mode</th>
                             <th class="w-10">Sent</th>
                             <th class="w-10">Rcvd</th>
-                            <th class="w-32 overflow-x-hidden text-nowrap text-ellipsis">Name</th>
-                            <th class="w-32 overflow-x-hidden text-nowrap text-ellipsis">Country</th
-                            >
+                            <th class="w-32">Name</th>
+                            <th class="w-32">Country</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -68,8 +67,8 @@
                                 <td class="">{q.mode}</td>
                                 <td class="tabular-nums">{q.rstSent}</td>
                                 <td class="tabular-nums">{q.rstRcvd}</td>
-                                <td class="truncate">{q.name}</td>
-                                <td class="truncate">{q.country}</td>
+                                <td class="w-32 truncate">{q.country}</td>
+                                <td class="w-32 truncate">{q.name}</td>
                             </tr>
                         {/each}
                     </tbody>

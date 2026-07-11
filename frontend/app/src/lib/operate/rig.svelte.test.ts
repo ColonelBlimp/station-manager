@@ -33,6 +33,8 @@ import {
     nudgeFreqCoarse,
     nudgeFreqFine,
     bandForDigit,
+    setFt8Frequencies,
+    ft8SelectBand,
 } from './rig.svelte';
 
 beforeEach(() => {
@@ -541,5 +543,37 @@ describe('frequency nudge (Ctrl+Shift arrows)', () => {
         const r = await nudgeFreqCoarse(1);
         expect(r.ok).toBe(true);
         expect(sent).toEqual([]);
+    });
+});
+
+describe('ft8SelectBand — FT8 watering-hole band pick', () => {
+    it('CAT-off: jumps to the configured FT8 dial freq (band follows)', async () => {
+        setFt8Frequencies({ '20m': 14074000, '40m': 7074000 });
+        // rig.cat is off after resetCatLink()
+        const r = await ft8SelectBand('40m');
+        expect(r.ok).toBe(true);
+        expect(rig.freq).toBe('7.074.000');
+        expect(rig.band).toBe('40m');
+    });
+
+    it('CAT-live: drives set_freq to the watering-hole (NOT set_band)', async () => {
+        setFt8Frequencies({ '40m': 7074000 });
+        setRigCaps({ ops: ['set_freq'], tune: false, rigModes: [] });
+        catLink.onRigState({ vfoA: 14255000, selectedVfo: 'A' }); // connects on VFO-A
+        const sent: { op: string; value?: string | number }[] = [];
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve({ ok: true, message: '' });
+        });
+
+        const r = await ft8SelectBand('40m');
+        expect(r.ok).toBe(true);
+        expect(sent).toEqual([{ op: 'set_freq', value: '7074000' }]);
+    });
+
+    it('errors when the band has no configured FT8 frequency', async () => {
+        setFt8Frequencies({ '20m': 14074000 });
+        const r = await ft8SelectBand('6m');
+        expect(r.ok).toBe(false);
     });
 });

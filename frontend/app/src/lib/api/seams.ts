@@ -143,6 +143,10 @@ export interface StationContext {
     ft8HistoryMax: number;
     ft8CqToTop: boolean;
     ft8HideHashed: boolean;
+    /** Per-band FT8 dial frequencies (config `ft8_frequencies`, band→Hz — WSJT-X
+     *  defaults + operator overrides, merged daemon-side). Drives the FT8 rig card's
+     *  band buttons (jump to the watering-hole, not the rig's band-stack freq). */
+    ft8Frequencies: Record<string, number>;
 }
 
 export async function fetchStationContext(): Promise<StationContext> {
@@ -163,6 +167,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8HistoryMax: 100,
         ft8CqToTop: false,
         ft8HideHashed: false,
+        ft8Frequencies: {},
         logbookName: '',
         rigName: '',
     };
@@ -199,9 +204,21 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8HistoryMax: typeof fd.history_max === 'number' ? fd.history_max : 100,
         ft8CqToTop: fd.cq_to_top === true,
         ft8HideHashed: fd.hide_hashed_calls === true,
+        ft8Frequencies: toNumberMap(body.ft8_frequencies),
         logbookName: str(lb.name),
         rigName: str(br.rig_name),
     };
+}
+
+/** Keep only the number-valued members of a wire object (band→Hz); anything else
+ *  (or a non-object) yields an empty map, so a malformed config is simply inert. */
+function toNumberMap(v: unknown): Record<string, number> {
+    if (!isPlainObject(v)) return {};
+    const out: Record<string, number> = {};
+    for (const [k, val] of Object.entries(v)) {
+        if (typeof val === 'number') out[k] = val;
+    }
+    return out;
 }
 
 /**

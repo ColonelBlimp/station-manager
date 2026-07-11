@@ -211,6 +211,20 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect((await fetchStationContext()).ft8FeedMode).toBe('accumulate');
     });
 
+    it('reads ft8_frequencies (band→Hz), dropping non-number values', async () => {
+        mockConfig({
+            logging_station: { station_callsign: '7Q5MLV' },
+            ft8_frequencies: { '20m': 14074000, '40m': 7074000, bogus: 'nope' },
+        });
+        const ctx = await fetchStationContext();
+        expect(ctx.ft8Frequencies).toEqual({ '20m': 14074000, '40m': 7074000 });
+    });
+
+    it('defaults ft8_frequencies to an empty map when absent', async () => {
+        mockConfig({ logging_station: { station_callsign: '7Q5MLV' } });
+        expect((await fetchStationContext()).ft8Frequencies).toEqual({});
+    });
+
     it('reads default_logbook.name and bridge.rig_name for the header identity', async () => {
         mockConfig({
             logging_station: { station_callsign: '7Q5MLV' },

@@ -443,6 +443,53 @@ export function nudgeFreqJump(dir: 1 | -1): Promise<RigWriteResult> {
     return nudgeFreq(dir * FREQ_STEP_JUMP_HZ);
 }
 
+// FT8 watering-hole frequencies (config ft8_frequencies, band→Hz — the WSJT-X FT8
+// dial freqs plus operator overrides, merged daemon-side). Injected once at boot;
+// the FT8 rig card's band buttons jump straight to these.
+let ft8Frequencies: Record<string, number> = {};
+
+export function setFt8Frequencies(f: Record<string, number>): void {
+    ft8Frequencies = f;
+}
+
+/**
+ * Set the selected VFO to an ABSOLUTE frequency (Hz). CAT off → the manual freq
+ * field (band follows the freq); CAT live → set_freq (VFO-A) / set_freq_b (VFO-B),
+ * capability-gated. Seeds the nudge-burst target so a following key-repeat re-syncs
+ * from here rather than the lagging confirm-by-push.
+ */
+export async function setFreq(hz: number): Promise<RigWriteResult> {
+    const target = clampFreq(hz);
+    if (rig.cat !== 'connected') {
+        rig.freq = formatFrequency(target);
+        const b = frequencyToBand(target);
+        if (b !== '') rig.band = b;
+        return { ok: true, message: '' };
+    }
+    const vfo = rig.selectedVfo;
+    const op = vfo === 'A' ? 'set_freq' : 'set_freq_b';
+    if (!hasOp(op)) return { ok: false, message: 'This rig cannot set the frequency.' };
+    pendingFreqHz[vfo] = target;
+    lastFreqVfo = vfo;
+    lastFreqNudgeAt = Date.now();
+    return driveRig(op, String(target));
+}
+
+/**
+ * FT8 band pick — jump to that band's configured FT8 watering-hole frequency
+ * (config ft8_frequencies) rather than the rig's band-stack freq. `selectBand`
+ * (Phone/CW) does set_band, which restores whatever the rig last had on that band
+ * (typically the phone freq); FT8 wants the WSJT-X dial freq instead. The FT8 rig
+ * card passes this as its `pickBand`.
+ */
+export async function ft8SelectBand(band: string): Promise<RigWriteResult> {
+    const hz = ft8Frequencies[band];
+    if (hz === undefined) {
+        return { ok: false, message: `No FT8 frequency configured for ${band}.` };
+    }
+    return setFreq(hz);
+}
+
 /** Test seam — clear the optimistic freq-step state between cases so a prior
  *  test's pending target can't leak into the next within the repeat window. */
 export function resetFreqStep(): void {

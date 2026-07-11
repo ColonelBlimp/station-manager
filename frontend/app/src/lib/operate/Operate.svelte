@@ -15,6 +15,7 @@
     import SessionPanel from './SessionPanel.svelte';
     import RigPanel from './RigPanel.svelte';
     import { isVisible } from './layout.svelte';
+    import { ft8SelectBand } from './rig.svelte';
 </script>
 
 {#if router.mode === 'phone'}
@@ -33,14 +34,15 @@
 <!-- FT8 has no tile board, so the rail-toggled info panels (Rig · Session) render
      here as a stacked overlay when shown. Phone/CW shows the same self-contained
      cards in the TileBoard instead; the rail icons toggle both hosts via the shared
-     tile-visibility state, and each card's X (hideTile) closes it here too. RigPanel
-     takes the default selectBand pick for now — the FT8 watering-hole pick lands
-     with the ft8_frequencies config. -->
+     tile-visibility state, and each card's X (hideTile) closes it here too. In FT8
+     the rig card's band buttons jump to the configured FT8 watering-hole freq
+     (ft8SelectBand → set_freq of ft8_frequencies[band]), not the rig's band-stack
+     freq that Phone/CW's default selectBand restores. -->
 {#if router.mode !== 'phone' && (isVisible('rig') || isVisible('session'))}
     <div
         class="fixed top-20 right-16 z-40 flex max-h-[calc(100vh-6rem)] flex-col gap-3 overflow-auto"
     >
-        {#if isVisible('rig')}<RigPanel />{/if}
+        {#if isVisible('rig')}<RigPanel pickBand={ft8SelectBand} />{/if}
         {#if isVisible('session')}<SessionPanel />{/if}
     </div>
 {/if}

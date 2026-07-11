@@ -14,6 +14,7 @@ import {
     setTuneSender,
     setCommandSender,
     setOperatingBands,
+    setFt8Frequencies,
 } from './lib/operate/rig.svelte';
 import { openRigEvents } from './lib/api/rig-sse';
 import { openFt8Events } from './lib/api/ft8-sse';
@@ -183,6 +184,7 @@ const ctx: StationContext = {
     ft8HistoryMax: 100,
     ft8CqToTop: false,
     ft8HideHashed: false,
+    ft8Frequencies: {},
     logbookName: '',
     rigName: '',
 };
@@ -225,6 +227,9 @@ void fetchStationContext().then((c) => {
     // Operator's configured bands drive the band selector (+ later FT8 buttons
     // and the keyboard band-jump). Empty → the module's HF..6m default.
     setOperatingBands(c.operatingBands);
+    // Per-band FT8 watering-hole freqs → the FT8 rig card's band buttons jump to the
+    // configured dial freq (set_freq) instead of the rig's band-stack freq.
+    setFt8Frequencies(c.ft8Frequencies);
     // Tune-carrier write seam: adapt the rich rig-tune outcome to {ok,message}.
     // The daemon owns keying + the guaranteed stop; the SPA sends only intent.
     setTuneSender(async (active) => {
