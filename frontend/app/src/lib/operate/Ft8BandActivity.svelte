@@ -15,6 +15,7 @@
         type DecodeEntry,
     } from './ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from './ft8Enrich.svelte';
+    import { ft8PileupStack } from './ft8Pileup.svelte';
     import { rig } from './rig.svelte';
     import { session } from './session.svelte';
     import { parseCq, parseDirectedToMe, parseDirectedToMeFd, isCqFd } from '../utils/ft8Message';
@@ -154,6 +155,15 @@
     // plain row (kind '') is never clickable.
     const canStart = $derived(ft8State.tx.armed && catLive && !ft8State.qso.active);
 
+    // Pile-up queue anchors. workableParity = the run's locked slot parity, or (before
+    // anything's queued) the live contact's caller parity — a wrong-parity add is
+    // rejected in enqueueCaller. callerActive = WE'RE running Call CQ (queue disabled
+    // then: the caller sequencer owns the rig, a competing queue would fight it).
+    const workableParity = $derived(
+        ft8PileupStack.lockedParity || (ft8State.qso.active ? ft8State.qso.theirPeriod : '')
+    );
+    const callerActive = $derived(ft8State.qso.active && ft8State.qso.role === 'caller');
+
     // In-flight latch for the click-start POST→SSE window: set synchronously so a
     // second click can't fire a second start. Released when the daemon confirms the
     // session is active (below) or the start fails.
@@ -169,7 +179,60 @@
         return session.qsos.some((q) => q.callsign === call && q.band === rig.band);
     }
 
-    async function onRowClick(row: DecodeRow): Promise<void> {
+    // Ctrl/Cmd+click a calling-you row → PILE-UP queue (pure capture, works in ANY TX
+    // state, so callers spotted mid-QSO aren't lost). The Operate view drains it FIFO
+    // (increment 3). Single-parity run: the first add locks the parity; a wrong-parity
+    // add is rejected with an explain-toast.
+    function enqueueCaller(row: DecodeRow): void {
+        const toMe = parseDirectedToMe(row.d.text, me);
+        if (!toMe) return;
+        const call = toMe.call;
+        if (callerActive) {
+            toasts.info('Calling CQ — pile-up queue disabled. Abandon to work stations by hand.');
+            return;
+        }
+        // Never re-queue the station in flight (its grid re-calls still decode).
+        if (ft8State.qso.active && call === ft8State.qso.theirCall) {
+            toasts.info(`Already working ${call}.`);
+            return;
+        }
+        if (workedThisSession(call)) {
+            toasts.info(`Already worked ${call} this session.`);
+            return;
+        }
+        if (ft8PileupStack.items.some((x) => x.call === call)) {
+            toasts.info(`${call} is already in the pile-up.`);
+            return;
+        }
+        // Fresh run? Empty queue + no contact → the previous run is over, so unlock; the
+        // first add sets a new parity. A live run holds the lock across the drain.
+        if (ft8PileupStack.items.length === 0 && !ft8State.qso.active) {
+            ft8PileupStack.clearLock();
+        }
+        const parity = slotParity(row.d.startUtc);
+        if (workableParity !== '' && parity !== '' && parity !== workableParity) {
+            toasts.info(
+                `${parity} slot — can't add to this ${workableParity} run. Finish or Abandon first.`
+            );
+            return;
+        }
+        const added = ft8PileupStack.push({
+            call,
+            grid: toMe.grid,
+            snr: row.d.snr,
+            slotUtc: row.d.startUtc,
+        });
+        // Only a genuinely NEW caller resumes a paused drain (Abandon stays in control).
+        if (added) ft8PileupStack.resume();
+    }
+
+    async function onRowClick(e: MouseEvent, row: DecodeRow): Promise<void> {
+        // Ctrl/Cmd+click a calling-you row queues it (capture only). A modifier click
+        // NEVER triggers a work-now TX.
+        if (e.ctrlKey || e.metaKey) {
+            if (row.kind === 'call') enqueueCaller(row);
+            return;
+        }
         if (row.kind === '' || starting) return;
         // Explain why nothing happened rather than silently no-op'ing on a click.
         if (!ft8State.tx.armed) {
@@ -328,12 +391,15 @@
                                                 : 'cursor-default'}"
                                             title={(row.kind === 'cq'
                                                 ? 'Answer this CQ'
-                                                : 'Work this station calling you') +
+                                                : 'Work this station calling you (Ctrl+click to queue)') +
                                                 (hover ? ` — ${hover}` : '')}
-                                            onclick={() => onRowClick(row)}>{row.d.text}</button
+                                            onclick={(e) => onRowClick(e, row)}>{row.d.text}</button
                                         >{:else}{row.d.text}{/if}{#if info?.isNewEntity}<span
                                             class="ml-1 text-focus"
                                             title="New DXCC entity">★</span
+                                        >{/if}{#if row.kind === 'call' && ft8PileupStack.items.some((x) => x.call === row.call)}<span
+                                            class="ml-1 rounded bg-focus/15 px-1 text-[10px] font-semibold text-focus"
+                                            title="In the pile-up queue">Q</span
                                         >{/if}</td
                                 >
                             </tr>

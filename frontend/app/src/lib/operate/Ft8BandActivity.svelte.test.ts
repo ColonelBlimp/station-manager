@@ -21,6 +21,7 @@ import {
     type Ft8TxActions,
 } from './ft8.svelte';
 import { setFt8Enricher, resetFt8EnrichForTests } from './ft8Enrich.svelte';
+import { ft8PileupStack, _resetPileupForTests } from './ft8Pileup.svelte';
 import { rig } from './rig.svelte';
 import { session } from './session.svelte';
 import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
@@ -49,6 +50,7 @@ function armReady(over: Partial<Ft8TxActions> = {}): void {
 beforeEach(() => {
     resetFt8ForTests();
     resetFt8EnrichForTests();
+    _resetPileupForTests();
     resetToasts();
     session.qsos.length = 0;
     rig.band = '20m';
@@ -317,5 +319,45 @@ describe('Ft8BandActivity click-to-work (first RF path)', () => {
         await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
         await flush();
         expect(answered).toBe(0); // dupe guard blocked it
+    });
+});
+
+describe('Ft8BandActivity pile-up enqueue (Ctrl+click)', () => {
+    it('Ctrl+clicking a calling-you row queues it; a CQ row is not queued', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('2026-07-09T14:30:00Z', [
+                { text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }, // calling us
+                { text: 'CQ W1ABC FN42', freq_hz: 1500, snr: -12 }, // a CQ, not a caller
+            ])
+        );
+        flushSync();
+
+        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'), { ctrlKey: true });
+        expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['PA3KUS']);
+
+        // Ctrl+click on a CQ row does NOT queue (only callers do).
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'), { ctrlKey: true });
+        expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['PA3KUS']);
+    });
+
+    it('rejects a wrong-parity add (single-parity run)', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('2026-07-09T14:30:00Z', [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
+        );
+        ft8Link.onDecode(
+            decode('2026-07-09T14:30:15Z', [{ text: '7Q5MLV DL1XYZ JO31', freq_hz: 900, snr: 1 }])
+        );
+        flushSync();
+
+        // First (even :00) locks the run to even.
+        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'), { ctrlKey: true });
+        expect(ft8PileupStack.lockedParity).toBe('even');
+        // An odd (:15) caller is rejected — the queue stays single-parity.
+        await fireEvent.click(screen.getByText('7Q5MLV DL1XYZ JO31'), { ctrlKey: true });
+        expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['PA3KUS']);
     });
 });
