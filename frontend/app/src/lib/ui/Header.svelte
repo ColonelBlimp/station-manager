@@ -8,31 +8,43 @@
     import { rig, rigGate } from '../operate/rig.svelte';
     import { station } from '../operate/station.svelte';
     import { showTile } from '../operate/layout.svelte';
-    import { navigate } from '../router.svelte';
+    import { navigate, router } from '../router.svelte';
     import SessionTimer from './SessionTimer.svelte';
 
     // Thousands-grouped QSO count (e.g. "1,234") beside the logbook name.
     const countFmt = new Intl.NumberFormat();
 
+    // FT8 can't operate without CAT, so the Rig panel shows "CAT required"
+    // there instead of the manual/confirm states (its requiresCat lockout).
+    // Mirror that here — the header light must never claim a usable manual
+    // state the FT8 view rejects. 'lost' keeps its own label in both places.
+    const catRequired = $derived(
+        router.mode !== 'phone' && (rigGate() === 'manual' || rigGate() === 'unconfirmed')
+    );
+
     const gateLabel = $derived(
         rigGate() === 'live'
             ? 'CAT'
-            : rigGate() === 'manual'
-              ? 'manual'
-              : rigGate() === 'unconfirmed'
-                ? 'confirm'
-                : 'lost'
+            : rigGate() === 'lost'
+              ? 'lost'
+              : catRequired
+                ? 'CAT required'
+                : rigGate() === 'manual'
+                  ? 'manual'
+                  : 'confirm'
     );
 
     // Short hover label, keyed to the gate state.
     const chipTitle = $derived(
         rigGate() === 'live'
             ? 'CAT active'
-            : rigGate() === 'manual'
-              ? 'Manual — confirmed'
-              : rigGate() === 'unconfirmed'
-                ? 'Waiting for confirmation'
-                : 'CAT link lost'
+            : rigGate() === 'lost'
+              ? 'CAT link lost'
+              : catRequired
+                ? 'FT8 needs a live CAT connection'
+                : rigGate() === 'manual'
+                  ? 'Manual — confirmed'
+                  : 'Waiting for confirmation'
     );
 
     function openRigPanel(): void {
@@ -94,9 +106,9 @@
         <span
             class="size-2 shrink-0 rounded-full"
             class:bg-green-500={rigGate() === 'live'}
-            class:bg-gray-400={rigGate() === 'manual'}
-            class:bg-amber-500={rigGate() === 'unconfirmed'}
-            class:bg-red-500={rigGate() === 'lost'}
+            class:bg-gray-400={rigGate() === 'manual' && !catRequired}
+            class:bg-amber-500={rigGate() === 'unconfirmed' && !catRequired}
+            class:bg-red-500={rigGate() === 'lost' || catRequired}
         ></span>
         <span class="tabular-nums">{rig.freq}</span>
         <span class="text-muted">·</span>

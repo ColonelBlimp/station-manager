@@ -7,9 +7,13 @@ import { render, screen } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Header from './Header.svelte';
 import { setStationInfo, setLogbookCount, _resetStationForTests } from '../operate/station.svelte';
+import { rig } from '../operate/rig.svelte';
+import { router } from '../router.svelte';
 
 beforeEach(() => {
     _resetStationForTests();
+    router.mode = 'phone';
+    rig.cat = 'off';
 });
 
 describe('Header station identity', () => {
@@ -45,5 +49,33 @@ describe('Header station identity', () => {
         flushSync();
         expect(screen.getByText('Field Day')).toBeInTheDocument();
         expect(screen.getByText('IC-7300')).toBeInTheDocument();
+    });
+});
+
+// The CAT chip must agree with the Rig panel's pill: in FT8 the manual/confirm
+// states are meaningless (FT8 can't run without CAT — the panel's requiresCat
+// lockout), so the chip shows "CAT required" there instead of manual/confirm.
+describe('Header CAT chip vs FT8', () => {
+    it('Phone/CW keeps the manual/confirm labels', () => {
+        rig.cat = 'off';
+        render(Header);
+        expect(screen.getByText(/manual|confirm/)).toBeInTheDocument();
+        expect(screen.queryByText('CAT required')).toBeNull();
+    });
+
+    it('FT8 with CAT away shows "CAT required" (matches the Rig panel)', () => {
+        router.mode = 'ft8';
+        rig.cat = 'off';
+        render(Header);
+        expect(screen.getByText('CAT required')).toBeInTheDocument();
+        expect(screen.getByTitle('FT8 needs a live CAT connection')).toBeInTheDocument();
+    });
+
+    it('FT8 with CAT live shows the normal CAT label', () => {
+        router.mode = 'ft8';
+        rig.cat = 'connected';
+        render(Header);
+        expect(screen.getByText('CAT')).toBeInTheDocument();
+        expect(screen.queryByText('CAT required')).toBeNull();
     });
 });
