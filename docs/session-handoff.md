@@ -215,10 +215,14 @@ precisely so we don't re-derive state or redo finished work.
 >   the day's backfill). Nothing writes until Save. **531 SPA tests** (ported
 >   state tests + render/edit/re-enrich smokes). NOT yet dogfooded.
 
-> **NEXT (session 212 carry-over):** commit the day's work (operator) —
-> includes the extended `dxcc-entities.json` baseline + the RPM-script fix;
-> confirm the ~742 QRZ update uploads finished (≈ 4.6 h drain; check
-> `qso_upload` or re-run `qso-audit`); then the session-211 NEXT below still
+> **NEXT (session 212 carry-over):** commit the logbook-page work (operator;
+> the morning's work is already committed+pushed). ~~confirm the QRZ update
+> drain~~ **DRAIN COMPLETE ~12:40 — all 742 backfill updates uploaded, 0
+> failed; post-drain `qso-audit --last 90` shows zero pending warnings (only
+> the known QRZ-profile gaps + the closed rst_rcvd row). Bonus validation:
+> the operator's first live logbook-page EDIT (JH4BYZ #4831, ~10:22)
+> re-armed its QRZ update row exactly as designed — edit→re-forward works
+> end-to-end.** Then the session-211 NEXT below still
 > stands (pile-up refinement validation, reduced type-4 ladder, `ft8_display`
 > remainders). RigKeys FT8-without-CAT no-op is a small follow-up. The
 > empty-`rst_rcvd` rows were triaged NOT-A-BUG (operator: the other station
