@@ -35,8 +35,9 @@ precisely so we don't re-derive state or redo finished work.
 > **Session 212 (2026-07-13) — DATA-CORRUPTING ENRICHMENT BUG found, FIXED +
 > LIVE-DATA REPAIRED (U-prefix country-cache poisoning: 26 Ukrainian QSOs were
 > stored + QRZ-uploaded as "European Russia"); new `qso-audit` CLI + Claude
-> skill; two `frontend/app` FT8 Rig-card fixes. ALL UNCOMMITTED — operator
-> commits. Deployed to dogfood (`2.0.0-alpha.1-589-g4e2660d0-dirty`).**
+> skill; two `frontend/app` FT8 Rig-card fixes; afternoon tweak arc + the FT8
+> DIRECTED-CALL feature + go-ft8 v0.7.0. ALL COMMITTED + PUSHED (end of
+> session, per-unit commits). Deployed to dogfood throughout.**
 > - **`frontend/app` FT8 Rig card: CAT-required lockout.** Bug (operator): FT8
 >   cannot operate without CAT, so the Rig card's manual/"Confirm" path was a
 >   dead-end promise in the FT8 view. `RigPanel` gained a `requiresCat` prop
