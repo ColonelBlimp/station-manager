@@ -337,7 +337,9 @@
 </script>
 
 <section class="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface">
-    <div class="flex items-center gap-x-3 border-b border-line px-4 py-2">
+    <!-- h-10: fixed header height shared with Band Activity (see its header
+         comment) so the two cards' header rules align. -->
+    <div class="flex h-10 shrink-0 items-center gap-x-3 border-b border-line px-4">
         <h3 class="text-sm font-semibold text-ink">Operate</h3>
         <span class="ml-auto text-xs font-semibold text-muted">{roleLabel}</span>
     </div>

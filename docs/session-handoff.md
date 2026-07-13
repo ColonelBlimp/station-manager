@@ -136,9 +136,31 @@ precisely so we don't re-derive state or redo finished work.
 >   07-04); later triaged NOT-A-BUG (operator: the other station never sent
 >   the report — SM logged what was exchanged; closed in the inbox).
 
-> **NEXT (session 212 carry-over):** on-air/visual check of the FT8 Rig-card
-> lockout + overlay position (deployed, not yet eyeballed); commit the day's
-> work (operator) — includes the extended `dxcc-entities.json` baseline;
+> - **Afternoon tweak arc (operator-driven, all deployed + eyeballed):**
+>   **(1) Worked rail button DISABLED in FT8** (dimmed + "not available in
+>   FT8" title) — the panel is Phone/CW-only (Band Activity already carries
+>   worked-before context), and clicking it in FT8 silently flipped the
+>   Phone/CW tile board's visibility state; resolves the session-211 "rail
+>   Worked panel in FT8" open item as disable-not-build. **(2) Occupancy
+>   default view = SPECTRUM** (`ft8State.occupancyView` initial + reset;
+>   Channels one click away; view choice still separate from the offset
+>   pick). **(3) Header CAT chip now mirrors the Rig panel's pill** — in FT8
+>   with the rig away it showed grey "manual"/amber "confirm" while the panel
+>   said red "CAT required"; the chip derived purely from `rigGate()` with no
+>   mode awareness (same gap as the panel pre-requiresCat, in its second
+>   consumer). **505 SPA tests.** **(4) THE LOAD-BEARING FIND — RPM scripts
+>   never rebuilt the app SPA:** the operator deployed per-fix and the chip
+>   stayed stale — `scripts/dev-rpm.sh`'s rebuild loop (and
+>   `release-rpm.sh`'s SM_SKIP_SPA check + build loop, and `release.sh`'s
+>   host loop) still said `logging config logbook` — **`app` was never added
+>   when it was embedded (session 211)**, so every `/app/` deploy silently
+>   shipped whatever `frontend/app/dist` last held (CI stayed green because
+>   `frontend:build:all` DID include app — different code path). All four
+>   loops fixed; without this the next release RPM would have shipped a
+>   stale `/app/` too.
+
+> **NEXT (session 212 carry-over):** commit the day's work (operator) —
+> includes the extended `dxcc-entities.json` baseline + the RPM-script fix;
 > confirm the ~742 QRZ update uploads finished (≈ 4.6 h drain; check
 > `qso_upload` or re-run `qso-audit`); then the session-211 NEXT below still
 > stands (pile-up refinement validation, reduced type-4 ladder, `ft8_display`

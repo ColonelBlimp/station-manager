@@ -307,7 +307,10 @@
 </script>
 
 <section class="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface">
-    <div class="flex items-center gap-1.5 border-b border-line px-4 py-2">
+    <!-- h-10 (not py-2): a fixed header height shared with the Operate panel, so
+         the two cards' header rules align regardless of contents (the filter
+         button here is taller than Operate's text-only row). -->
+    <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-line px-4">
         <h3 class="text-sm font-semibold text-ink">Band Activity</h3>
         <Ft8BandFilter />
     </div>
