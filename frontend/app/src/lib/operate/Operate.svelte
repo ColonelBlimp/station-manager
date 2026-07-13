@@ -37,12 +37,17 @@
      tile-visibility state, and each card's X (hideTile) closes it here too. In FT8
      the rig card's band buttons jump to the configured FT8 watering-hole freq
      (ft8SelectBand → set_freq of ft8_frequencies[band]), not the rig's band-stack
-     freq that Phone/CW's default selectBand restores. -->
+     freq that Phone/CW's default selectBand restores, and requiresCat disables the
+     card's controls with the rig away (FT8 can't run without CAT, so the manual/
+     confirm path is meaningless here). -->
 {#if router.mode !== 'phone' && (isVisible('rig') || isVisible('session'))}
+    <!-- Anchored to the rail's INNER edge (right: rail width + 1rem) so the gap
+         beside the rail matches the 1rem below the 4rem header (top-20), at
+         either rail width — a fixed right offset only matched the narrow rail. -->
     <div
-        class="fixed top-20 right-16 z-40 flex max-h-[calc(100vh-6rem)] flex-col gap-3 overflow-auto"
+        class="fixed top-20 right-[calc(var(--util-rail-w)+1rem)] z-40 flex max-h-[calc(100vh-6rem)] flex-col gap-3 overflow-auto"
     >
-        {#if isVisible('rig')}<RigPanel pickBand={ft8SelectBand} />{/if}
+        {#if isVisible('rig')}<RigPanel pickBand={ft8SelectBand} requiresCat />{/if}
         {#if isVisible('session')}<SessionPanel />{/if}
     </div>
 {/if}

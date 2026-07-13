@@ -23,16 +23,17 @@
     import { formatFrequency, frequencyToBand } from '../utils/frequency';
     import { parseFrequency } from '../validators/frequency';
 
-    // The rig card is shared across modes; the ONE mode-specific behaviour is the
-    // band-button pick. Phone/CW passes selectBand (SM is passive — the rig restores
-    // that band's freq+mode from its own band-stack); FT8 will pass a watering-hole
-    // pick (SM drives set_freq + set_mode) once ft8_frequencies is surfaced. Defaults
-    // to selectBand so the Phone/CW tile — rendered prop-less by the TileBoard — is
-    // unchanged (pure refactor); everything else is identical between modes.
+    // The rig card is shared across modes; the mode-specific behaviour arrives via
+    // props. pickBand: Phone/CW passes selectBand (SM is passive — the rig restores
+    // that band's freq+mode from its own band-stack); FT8 passes the watering-hole
+    // pick (set_freq of ft8_frequencies). requiresCat: FT8 sets it because FT8 can't
+    // run without CAT — see catMissing below. Defaults keep the Phone/CW tile —
+    // rendered prop-less by the TileBoard — unchanged.
     interface Props {
         pickBand?: (band: string) => Promise<RigWriteResult>;
+        requiresCat?: boolean;
     }
-    let { pickBand = selectBand }: Props = $props();
+    let { pickBand = selectBand, requiresCat = false }: Props = $props();
 
     // Operator-friendly mode names (sidebands, not families — matches the
     // shipping SPA's baseModes). resolveModeAndSubmode maps them to canonical
@@ -41,6 +42,13 @@
     const VFOS = ['A', 'B'] as const;
 
     const locked = $derived(rig.cat === 'connected');
+
+    // FT8 cannot operate without CAT (capture is gated daemon-side on the rig
+    // being connected), so the manual-entry/confirm path is a dead end there.
+    // The FT8 host sets requiresCat: with the rig away, every control disables
+    // and the card says why — the only unblock is the rig coming online, so
+    // offering a Confirm would promise something it can't deliver.
+    const catMissing = $derived(requiresCat && !locked);
 
     // A CAT-pushed mode can fall outside the manual nine (an unmapped rig
     // literal passes through raw); a select with a value not among its options
@@ -138,17 +146,19 @@
             <span
                 class="size-2 rounded-full"
                 class:bg-green-500={rigGate() === 'live'}
-                class:bg-gray-400={rigGate() === 'manual'}
-                class:bg-amber-500={rigGate() === 'unconfirmed'}
-                class:bg-red-500={rigGate() === 'lost'}
+                class:bg-gray-400={rigGate() === 'manual' && !catMissing}
+                class:bg-amber-500={rigGate() === 'unconfirmed' && !catMissing}
+                class:bg-red-500={rigGate() === 'lost' || catMissing}
             ></span>
             {rigGate() === 'live'
                 ? 'CAT connected'
-                : rigGate() === 'manual'
-                  ? 'Manual — confirmed'
-                  : rigGate() === 'unconfirmed'
-                    ? 'Manual — confirm to log'
-                    : 'CAT link lost'}
+                : rigGate() === 'lost'
+                  ? 'CAT link lost'
+                  : catMissing
+                    ? 'CAT required'
+                    : rigGate() === 'manual'
+                      ? 'Manual — confirmed'
+                      : 'Manual — confirm to log'}
         </span>
         <button
             class="ml-auto cursor-pointer rounded-md text-muted hover:text-ink"
@@ -183,11 +193,12 @@
             {#each bandOptions as b (b)}
                 <button
                     type="button"
-                    class="min-w-11 cursor-pointer rounded-md border px-2 py-1 text-xs font-medium transition-colors {rig.band ===
+                    class="min-w-11 cursor-pointer rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 {rig.band ===
                     b
                         ? 'border-focus bg-focus text-white'
                         : 'border-line text-ink hover:bg-surface-muted'}"
                     aria-pressed={rig.band === b}
+                    disabled={catMissing}
                     onclick={() => onPickBand(b)}
                 >
                     {b}
@@ -215,7 +226,7 @@
                 </select>
             {:else}
                 <label for="rp-mode" class="block text-sm font-medium text-ink">Mode</label>
-                <select id="rp-mode" class="input w-24" bind:value={rig.mode}>
+                <select id="rp-mode" class="input w-24" disabled={catMissing} bind:value={rig.mode}>
                     {#each modeOptions as m (m)}
                         <option value={m}>{m}</option>
                     {/each}
@@ -266,6 +277,7 @@
                     autocomplete="off"
                     spellcheck="false"
                     placeholder="14.255.000"
+                    disabled={catMissing}
                     bind:value={rig.freq}
                     oninput={syncBand}
                 />
@@ -305,12 +317,16 @@
 
     <!-- Gate affordances at the card's bottom-right: message ABOVE the button.
          Link status is in the tile header (title · rig name · CAT pill). -->
-    {#if rigGate() === 'unconfirmed' || rigGate() === 'lost' || rig.linkError !== ''}
+    {#if catMissing || rigGate() === 'unconfirmed' || rigGate() === 'lost' || rig.linkError !== ''}
         <div class="mt-4 flex flex-col items-end gap-y-1">
             {#if rig.linkError !== ''}
                 <p class="max-w-56 text-right text-xs text-invalid">Bridge: {rig.linkError}</p>
             {/if}
-            {#if rigGate() === 'unconfirmed' || rigGate() === 'lost'}
+            {#if catMissing}
+                <p class="max-w-56 text-right text-xs text-muted">
+                    FT8 needs a live CAT connection — controls are disabled until the rig connects.
+                </p>
+            {:else if rigGate() === 'unconfirmed' || rigGate() === 'lost'}
                 <!-- Confirm (ADR 0044): the operator asserts the QSO settings
                      (band / mode / freq) are right — once per band per session.
                      Changing band does NOT move the freq, so this confirms the
