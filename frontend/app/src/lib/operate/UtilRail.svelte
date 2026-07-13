@@ -39,11 +39,13 @@
         rig: 'Rig',
     };
 
-    // The Worked panel is a Phone/CW tile only — FT8's Band Activity already
-    // carries worked-before context (dupe tint + the Q/● badges), so the panel
-    // adds nothing there (operator, 2026-07-13). Disabled rather than wired:
-    // clicking it in FT8 would silently flip the Phone/CW tile board's state.
-    const workedDisabled = $derived(router.mode !== 'phone');
+    // The Worked panel and Arrange are Phone/CW-only — Worked because FT8's
+    // Band Activity already carries worked-before context (dupe tint + the
+    // Q/● badges), Arrange because FT8's layout is deliberately FIXED (no
+    // tile board; the panel positions are workflow muscle memory) (operator,
+    // 2026-07-13). Disabled rather than wired: clicking either in FT8 would
+    // silently flip Phone/CW tile-board state with no visible effect here.
+    const phoneOnly = $derived(router.mode !== 'phone');
 </script>
 
 {#snippet railIcon(key: string)}
@@ -98,7 +100,7 @@
 <aside class="util-rail" aria-label="Info panels">
     <div class="flex h-full flex-col gap-1 border-l border-line bg-surface px-2 py-4">
         {#each RAIL_TILES as key (key)}
-            {@const offHere = key === 'worked' && workedDisabled}
+            {@const offHere = key === 'worked' && phoneOnly}
             <button
                 class="rail-item relative disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                 title={offHere
@@ -123,9 +125,10 @@
 
         <div class="mt-auto flex flex-col gap-1">
             <button
-                class="rail-item"
-                title="Arrange layout"
-                data-active={layout.arranging ? 'true' : 'false'}
+                class="rail-item disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                title={phoneOnly ? 'Arrange — not available in FT8' : 'Arrange layout'}
+                data-active={!phoneOnly && layout.arranging ? 'true' : 'false'}
+                disabled={phoneOnly}
                 onclick={toggleArranging}
             >
                 <svg

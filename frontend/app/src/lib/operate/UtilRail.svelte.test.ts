@@ -50,6 +50,26 @@ describe('UtilRail Worked button per mode', () => {
     });
 });
 
+// Arrange drives the Phone/CW tile board's drag/pin mode — FT8's layout is
+// deliberately fixed, so the button disables there (same pattern as Worked).
+describe('UtilRail Arrange button per mode', () => {
+    it('is enabled in Phone/CW', () => {
+        render(UtilRail);
+        flushSync();
+        expect(screen.getByRole('button', { name: /Arrange/ })).not.toBeDisabled();
+    });
+
+    it('is disabled in FT8 with an explanatory title', () => {
+        router.mode = 'ft8';
+        render(UtilRail);
+        flushSync();
+        const btn = screen.getByRole('button', { name: /Arrange/ });
+        expect(btn).toBeDisabled();
+        expect(btn).toHaveAttribute('title', 'Arrange — not available in FT8');
+        expect(btn).toHaveAttribute('data-active', 'false');
+    });
+});
+
 describe('UtilRail session count badge', () => {
     it('shows no badge when the session is empty', () => {
         render(UtilRail);

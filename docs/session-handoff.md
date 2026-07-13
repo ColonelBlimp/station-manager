@@ -157,7 +157,11 @@ precisely so we don't re-derive state or redo finished work.
 >   shipped whatever `frontend/app/dist` last held (CI stayed green because
 >   `frontend:build:all` DID include app — different code path). All four
 >   loops fixed; without this the next release RPM would have shipped a
->   stale `/app/` too.
+>   stale `/app/` too. **(5) Band Activity / Operate header alignment** — both
+>   FT8 card headers pinned to a shared fixed `h-10` (Band Activity's filter
+>   button made it 4px taller than Operate's text-only row); fixed height, not
+>   padding, so they can't drift as contents change. All five verified
+>   deployed by the operator.
 
 > **NEXT (session 212 carry-over):** commit the day's work (operator) —
 > includes the extended `dxcc-entities.json` baseline + the RPM-script fix;
