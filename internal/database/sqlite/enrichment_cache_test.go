@@ -144,8 +144,33 @@ func TestUpsertCountry_RejectsLikeWildcardPrefix(t *testing.T) {
 	}
 
 	// And confirm valid alphanumeric prefixes still go through.
-	if err := svc.UpsertCountry(types.Country{Name: "Englandland", Prefix: "M"}); err != nil {
+	if err := svc.UpsertCountry(types.Country{Name: "Englandland", Prefix: "MW"}); err != nil {
 		t.Fatalf("valid prefix rejected: %v", err)
+	}
+}
+
+// TestUpsertCountry_RejectsSingleCharPrefix pins the U-block fix: ITU
+// one-letter blocks span multiple DXCC entities ('U' = European/Asiatic
+// Russia + Ukraine + Uzbekistan + Kazakhstan), so a one-char row over-matches
+// every callsign in the block on the longest-prefix read. A cached
+// prefix='U' → "European Russia" row misfiled every Ukrainian call between
+// 2026-06-26 and 2026-07-11; the write gate (plus reference migration 0002
+// for already-cached rows) closes that class.
+func TestUpsertCountry_RejectsSingleCharPrefix(t *testing.T) {
+	svc := testService(t)
+
+	for _, p := range []string{"U", "R", "F", "u", " U "} {
+		t.Run(p, func(t *testing.T) {
+			err := svc.UpsertCountry(types.Country{Name: "European Russia", Prefix: p})
+			if err == nil {
+				t.Fatalf("expected error for single-char prefix %q", p)
+			}
+		})
+	}
+
+	// Two-char prefixes are the shortest accepted key.
+	if err := svc.UpsertCountry(types.Country{Name: "Ukraine", Prefix: "UR"}); err != nil {
+		t.Fatalf("two-char prefix rejected: %v", err)
 	}
 }
 

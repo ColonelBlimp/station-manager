@@ -1064,10 +1064,34 @@ func (s *Service) FetchCountryByNameWithContext(ctx context.Context, name string
 // Centralised here and called from EVERY durable country writer (insert /
 // update / upsert) so the invariant can't be bypassed via a direct helper
 // (review L1). Writes the trimmed value back through the pointer.
+// IsCacheableCountryPrefix reports whether a hamnut country prefix is safe to
+// use as a longest-prefix-match cache key. A single-character prefix never is:
+// ITU one-letter blocks routinely span multiple DXCC entities ('U' covers
+// European/Asiatic Russia AND Ukraine, Uzbekistan, Kazakhstan; 'G' covers
+// England AND Scotland/Wales/NI/Jersey/Guernsey/IoM), so a one-char row
+// silently claims every callsign in the block. Not hypothetical: a cached
+// prefix='U' → "European Russia" row (hamnut's group prefix, cached
+// 2026-06-25) misfiled every Ukrainian UR–UZ call until reference migration
+// 0002 purged it. Skipping the cache costs only a per-call hamnut lookup for
+// calls in those blocks — the enrich result itself is always hamnut's
+// per-call resolution — so correctness wins. Exported so the enrichment
+// orchestrator can skip the writeback quietly instead of logging a warn per
+// cold miss; validateCountryPrefix enforces the same rule as the durable
+// invariant at every country writer.
+func IsCacheableCountryPrefix(prefix string) bool {
+	return len(strings.TrimSpace(prefix)) >= 2
+}
+
 func validateCountryPrefix(op errors.Op, country *types.Country) error {
 	prefix := strings.TrimSpace(country.Prefix)
 	if prefix == "" {
 		return errors.New(op).WithMsg("country.Prefix cannot be empty")
+	}
+	// See IsCacheableCountryPrefix for why one-char prefixes are poison.
+	if !IsCacheableCountryPrefix(prefix) {
+		return errors.New(op).WithMsgf(
+			"country.Prefix %q is a single character; one-letter ITU blocks span multiple DXCC entities and would over-match on the longest-prefix read",
+			prefix)
 	}
 	if strings.ContainsAny(prefix, `%_\`) {
 		return errors.New(op).WithMsgf(

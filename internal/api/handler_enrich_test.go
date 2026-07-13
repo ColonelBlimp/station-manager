@@ -84,7 +84,7 @@ func TestEnrich_HappyPath_ReturnsMergedResult(t *testing.T) {
 		name: "hamnut",
 		result: types.Country{
 			Name:    "England",
-			Prefix:  "M",
+			Prefix:  "M0",
 			CQZone:  "14",
 			ITUZone: "27",
 		},
@@ -254,7 +254,7 @@ func TestEnrich_RefreshTrue_BypassesFreshCache(t *testing.T) {
 		name: "hamnut",
 		result: types.Country{
 			Name:   "England",
-			Prefix: "M",
+			Prefix: "M0",
 		},
 	}
 	srv := testServerWithEnrichment(t, hamnut, nil)
@@ -263,7 +263,7 @@ func TestEnrich_RefreshTrue_BypassesFreshCache(t *testing.T) {
 	// fetch on regular Enrich would return this and skip hamnut.
 	if err := srv.db.UpsertCountry(types.Country{
 		Name:   "OldName",
-		Prefix: "M",
+		Prefix: "M0",
 	}); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
@@ -298,10 +298,10 @@ func TestEnrich_RefreshTrue_BypassesFreshCache(t *testing.T) {
 func TestEnrich_RefreshOmitted_UsesCacheAsBefore(t *testing.T) {
 	hamnut := &stubCountryProvider{
 		name:   "hamnut",
-		result: types.Country{Name: "England", Prefix: "M"},
+		result: types.Country{Name: "England", Prefix: "M0"},
 	}
 	srv := testServerWithEnrichment(t, hamnut, nil)
-	if err := srv.db.UpsertCountry(types.Country{Name: "Cached", Prefix: "M"}); err != nil {
+	if err := srv.db.UpsertCountry(types.Country{Name: "Cached", Prefix: "M0"}); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
 
@@ -330,10 +330,10 @@ func TestEnrich_RefreshNonTrueValues_TreatedAsDefault(t *testing.T) {
 		t.Run("refresh="+v, func(t *testing.T) {
 			hamnut := &stubCountryProvider{
 				name:   "hamnut",
-				result: types.Country{Name: "England", Prefix: "M"},
+				result: types.Country{Name: "England", Prefix: "M0"},
 			}
 			srv := testServerWithEnrichment(t, hamnut, nil)
-			if err := srv.db.UpsertCountry(types.Country{Name: "Cached", Prefix: "M"}); err != nil {
+			if err := srv.db.UpsertCountry(types.Country{Name: "Cached", Prefix: "M0"}); err != nil {
 				t.Fatalf("seed cache: %v", err)
 			}
 			url := "/v1/enrich/callsign?call=M0CMC"

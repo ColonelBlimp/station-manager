@@ -150,23 +150,23 @@ func TestUpdateCountry_RejectsSoftDeletedAndMissing(t *testing.T) {
 	svc := testService(t)
 	ctx := context.Background()
 
-	id, err := svc.InsertCountryWithContext(ctx, types.Country{Prefix: "K", Name: "United States"})
+	id, err := svc.InsertCountryWithContext(ctx, types.Country{Prefix: "K1", Name: "United States"})
 	if err != nil {
 		t.Fatalf("insert country: %v", err)
 	}
 
-	if err := svc.UpdateCountryWithContext(ctx, types.Country{ID: id, Prefix: "K", Name: "USA"}); err != nil {
+	if err := svc.UpdateCountryWithContext(ctx, types.Country{ID: id, Prefix: "K1", Name: "USA"}); err != nil {
 		t.Fatalf("active update should succeed: %v", err)
 	}
 
-	if err := svc.UpdateCountryWithContext(ctx, types.Country{ID: 999999, Prefix: "K", Name: "x"}); !stderr.Is(err, errors.ErrNotFound) {
+	if err := svc.UpdateCountryWithContext(ctx, types.Country{ID: 999999, Prefix: "K1", Name: "x"}); !stderr.Is(err, errors.ErrNotFound) {
 		t.Errorf("update of missing id: got %v, want ErrNotFound", err)
 	}
 
 	if _, e := svc.handle.Exec("UPDATE country SET deleted_at = datetime('now') WHERE id = ?", id); e != nil {
 		t.Fatalf("soft delete: %v", e)
 	}
-	if err := svc.UpdateCountryWithContext(ctx, types.Country{ID: id, Prefix: "K", Name: "zombie"}); !stderr.Is(err, errors.ErrNotFound) {
+	if err := svc.UpdateCountryWithContext(ctx, types.Country{ID: id, Prefix: "K1", Name: "zombie"}); !stderr.Is(err, errors.ErrNotFound) {
 		t.Errorf("update of soft-deleted row: got %v, want ErrNotFound", err)
 	}
 }
@@ -306,7 +306,7 @@ func TestCountryWriters_RejectWildcardPrefix(t *testing.T) {
 	}
 
 	// A plain alphanumeric prefix is accepted by the durable writer.
-	if err := svc.UpsertCountryWithContext(ctx, types.Country{Prefix: "K", Name: "United States"}); err != nil {
+	if err := svc.UpsertCountryWithContext(ctx, types.Country{Prefix: "K1", Name: "United States"}); err != nil {
 		t.Errorf("UpsertCountry rejected a valid prefix: %v", err)
 	}
 }

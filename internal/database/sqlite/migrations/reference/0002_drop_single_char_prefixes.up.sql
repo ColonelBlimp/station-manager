@@ -1,0 +1,13 @@
+-- Purge single-character country-cache prefixes.
+--
+-- The country read path is a longest-prefix match
+-- (<callsign> LIKE prefix || '%'), and ITU one-letter blocks span multiple
+-- DXCC entities — 'U' covers European/Asiatic Russia AND Ukraine, Uzbekistan,
+-- Kazakhstan — so a one-char row silently claims every callsign in the block.
+-- A cached prefix='U' → "European Russia" row (hamnut's group prefix, written
+-- 2026-06-25) misfiled every Ukrainian UR–UZ call as European Russia.
+-- validateCountryPrefix now rejects one-char prefixes at write time; this
+-- migration removes any already cached. Deleting a cache row is safe — the
+-- next lookup cold-misses to hamnut and re-caches under the (now-validated)
+-- prefix.
+DELETE FROM country WHERE LENGTH(TRIM(prefix)) <= 1;

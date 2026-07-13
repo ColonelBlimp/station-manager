@@ -334,11 +334,21 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	// keep a miswired/test Orchestrator (nil DB) from panicking here — the async
 	// readCountry/readStation already run under safego, but these run inline
 	// (review 2026-06-19 L1). Production wiring in cmd/smd always supplies DB.
+	// One-char prefixes are skipped, not attempted-and-warned: hamnut returns
+	// them for whole ITU blocks (G/M/U/R…) that span multiple DXCC entities,
+	// so they can never be cached (sqlite.IsCacheableCountryPrefix) — and
+	// calls in those blocks are common enough that a warn per cold miss would
+	// be steady-state log noise. The result still reaches the caller; only
+	// the cache row is forgone.
 	now := time.Now()
 	if c.coldMiss && c.data.Prefix != "" && o.DB != nil {
-		if werr := o.DB.UpsertCountryWithContext(ctx, c.data); werr != nil {
-			o.warn("country upsert failed", werr)
+		if sqlsvc.IsCacheableCountryPrefix(c.data.Prefix) {
+			if werr := o.DB.UpsertCountryWithContext(ctx, c.data); werr != nil {
+				o.warn("country upsert failed", werr)
+			}
 		}
+		// Stamped even when the write is skipped — the response's freshness
+		// timestamp matches the cache-hit shape either way (H2).
 		c.data.LastRefreshedAt = now
 	}
 	if s.coldMiss && !IsEmpty(s.data) && o.DB != nil {
@@ -622,7 +632,10 @@ func (o *Orchestrator) scheduleCountryRefresh(callsign string) {
 			// again. ADR 0017 #7 implicit fall-through.
 			return
 		}
-		if res.Name == "Unknown" || res.Prefix == "" {
+		// The uncacheable-prefix skip mirrors the sync writeback: hamnut may
+		// return a one-char block prefix on a refresh even when the stale row's
+		// own prefix was longer; leave the stale row rather than warn per fire.
+		if res.Name == "Unknown" || !sqlsvc.IsCacheableCountryPrefix(res.Prefix) {
 			return
 		}
 		if werr := o.DB.UpsertCountryWithContext(ctx, res); werr != nil {

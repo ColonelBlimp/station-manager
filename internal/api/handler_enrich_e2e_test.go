@@ -74,7 +74,7 @@ func TestE2E_Enrich_HappyPath_RealProviders(t *testing.T) {
 			"countryName": "England",
 			"cqZone": 14,
 			"ituZone": 27,
-			"prefix": "M",
+			"prefix": "M0",
 			"primaryDXCCPrefix": "G",
 			"countryCode": "GBR"
 		}`))
@@ -167,7 +167,7 @@ func TestE2E_Enrich_HappyPath_RealProviders(t *testing.T) {
 	}
 
 	// Cache writes: both layers persist for next-Tab fast path.
-	stored, err := srv.db.FetchCountryByPrefixWithContext(context.Background(), "M")
+	stored, err := srv.db.FetchCountryByPrefixWithContext(context.Background(), "M0")
 	if err != nil {
 		t.Fatalf("country not persisted: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestE2E_Enrich_NextTabIsCacheHit(t *testing.T) {
 	hamnutSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hamnutCalls++
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"OK","found":true,"countryName":"England","prefix":"M","cqZone":14,"ituZone":27,"primaryDXCCPrefix":"G","countryCode":"GBR","continent":"EU"}`))
+		_, _ = w.Write([]byte(`{"status":"OK","found":true,"countryName":"England","prefix":"M0","cqZone":14,"ituZone":27,"primaryDXCCPrefix":"G","countryCode":"GBR","continent":"EU"}`))
 	}))
 	defer hamnutSrv.Close()
 

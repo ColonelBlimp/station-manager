@@ -300,7 +300,7 @@ func TestResult_MarshalJSON_IncludesPresentLayer(t *testing.T) {
 // value, so the response matches the cache-hit path.
 func TestEnrich_ColdMiss_CarriesLastRefreshedAt(t *testing.T) {
 	db := newTestSqlite(t)
-	hamnut := &stubCountryProvider{name: "hamnut", result: types.Country{Name: "England", Prefix: "M"}}
+	hamnut := &stubCountryProvider{name: "hamnut", result: types.Country{Name: "England", Prefix: "M0"}}
 	o := &lookup.Orchestrator{
 		DB:         db,
 		Country:    hamnut,
@@ -317,6 +317,51 @@ func TestEnrich_ColdMiss_CarriesLastRefreshedAt(t *testing.T) {
 	}
 }
 
+// TestEnrich_ColdMiss_OneCharPrefix_ReturnsButNeverCaches pins the U-block
+// poisoning fix at the orchestrator: hamnut's one-char block prefixes (G, M,
+// U, R…) span multiple DXCC entities, so they must never become
+// longest-prefix cache keys — a cached 'U' → "European Russia" row misfiled
+// every Ukrainian call. The per-call result still reaches the caller (with
+// the H2 freshness stamp); the writeback is skipped quietly, so every new
+// call in the block pays a hamnut lookup instead of being served wrong data.
+func TestEnrich_ColdMiss_OneCharPrefix_ReturnsButNeverCaches(t *testing.T) {
+	db := newTestSqlite(t)
+	hamnut := &stubCountryProvider{
+		name:   "hamnut",
+		result: types.Country{Name: "European Russia", Prefix: "U", CQZone: "16", ITUZone: "29"},
+	}
+	o := &lookup.Orchestrator{
+		DB:         db,
+		Country:    hamnut,
+		CountryTTL: time.Hour,
+		StationTTL: time.Hour,
+		Refresher:  &syncRefresher{},
+	}
+
+	got := o.Enrich(context.Background(), "UA3ABC")
+	if got.CountrySource != lookup.SourceHamnut || got.Country.Name != "European Russia" {
+		t.Fatalf("cold miss should still return hamnut's per-call result, got %q/%q",
+			got.CountrySource, got.Country.Name)
+	}
+	if got.Country.LastRefreshedAt.IsZero() {
+		t.Error("skipped-writeback cold miss should still carry LastRefreshedAt (H2)")
+	}
+	if _, err := db.FetchCountryByPrefix("U"); err == nil {
+		t.Fatal("one-char prefix must not be cached")
+	}
+
+	// A different call in the same block goes upstream again — served fresh,
+	// never from an over-matching block row.
+	got2 := o.Enrich(context.Background(), "UR7XX")
+	if got2.CountrySource != lookup.SourceHamnut {
+		t.Errorf("second block call: CountrySource = %q, want hamnut (no cache row to hit)",
+			got2.CountrySource)
+	}
+	if hamnut.calls != 2 {
+		t.Errorf("hamnut calls = %d, want 2 (one per call, nothing cached)", hamnut.calls)
+	}
+}
+
 // ----- cold-miss paths -----
 
 func TestEnrich_ColdMiss_HamnutHit_StoresAndReturns(t *testing.T) {
@@ -325,7 +370,7 @@ func TestEnrich_ColdMiss_HamnutHit_StoresAndReturns(t *testing.T) {
 		name: "hamnut",
 		result: types.Country{
 			Name:      "England",
-			Prefix:    "M",
+			Prefix:    "M0",
 			CQZone:    "14",
 			ITUZone:   "27",
 			Continent: "EU",
@@ -354,7 +399,7 @@ func TestEnrich_ColdMiss_HamnutHit_StoresAndReturns(t *testing.T) {
 
 	// Row was written through to the cache — the next Tab against the
 	// same prefix should hit fresh and skip the upstream call.
-	stored, err := db.FetchCountryByPrefix("M")
+	stored, err := db.FetchCountryByPrefix("M0")
 	if err != nil {
 		t.Fatalf("country not persisted: %v", err)
 	}
@@ -445,7 +490,7 @@ func TestEnrich_ColdMiss_ChainAndHamnut_MergesAndStoresHamnutTruth(t *testing.T)
 		name: "hamnut",
 		result: types.Country{
 			Name:       "England",
-			Prefix:     "M",
+			Prefix:     "M0",
 			Continent:  "EU",
 			CQZone:     "14",
 			ITUZone:    "27",
@@ -516,7 +561,7 @@ func TestEnrich_ColdStation_FreshCountry_MergesFromCache(t *testing.T) {
 	db := newTestSqlite(t)
 	if err := db.UpsertCountry(types.Country{
 		Name:    "England",
-		Prefix:  "M",
+		Prefix:  "M0",
 		CQZone:  "14",
 		ITUZone: "27",
 	}); err != nil {
@@ -560,7 +605,7 @@ func TestEnrich_FreshStation_FreshCountry_MergeIsNoOp(t *testing.T) {
 	db := newTestSqlite(t)
 	if err := db.UpsertCountry(types.Country{
 		Name:    "England",
-		Prefix:  "M",
+		Prefix:  "M0",
 		CQZone:  "14",
 		ITUZone: "27",
 	}); err != nil {
@@ -609,7 +654,7 @@ func TestEnrich_StaleStation_FreshCountry_AsyncRefreshReMerges(t *testing.T) {
 	db := newTestSqlite(t)
 	if err := db.UpsertCountry(types.Country{
 		Name:    "England",
-		Prefix:  "M",
+		Prefix:  "M0",
 		CQZone:  "14",
 		ITUZone: "27",
 	}); err != nil {
@@ -825,7 +870,7 @@ func TestEnrich_ColdMiss_HamnutDown_NoRow(t *testing.T) {
 		t.Errorf("CountrySource = %q, want %q (transport failure → empty per ADR 0017 #7)",
 			got.CountrySource, lookup.SourceNone)
 	}
-	if _, err := db.FetchCountryByPrefix("M"); err == nil {
+	if _, err := db.FetchCountryByPrefix("M0"); err == nil {
 		t.Error("country row written despite upstream failure")
 	}
 }
@@ -856,7 +901,7 @@ func TestEnrich_FreshHit_NoUpstreamCall(t *testing.T) {
 	db := newTestSqlite(t)
 	if err := db.UpsertCountry(types.Country{
 		Name:   "England",
-		Prefix: "M",
+		Prefix: "M0",
 		CQZone: "14",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -897,7 +942,7 @@ func TestEnrich_StaleHit_ServesStaleAndSchedulesRefresh(t *testing.T) {
 	// but-positive.)
 	if err := db.UpsertCountry(types.Country{
 		Name:   "England",
-		Prefix: "M",
+		Prefix: "M0",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -906,7 +951,7 @@ func TestEnrich_StaleHit_ServesStaleAndSchedulesRefresh(t *testing.T) {
 		name: "hamnut",
 		result: types.Country{
 			Name:    "England",
-			Prefix:  "M",
+			Prefix:  "M0",
 			CQZone:  "14",
 			ITUZone: "27",
 		},
@@ -1320,7 +1365,7 @@ func TestEnrichRefresh_BypassesFreshCache_CallsUpstreamAndOverwrites(t *testing.
 	// overwrite landed.
 	if err := db.UpsertCountry(types.Country{
 		Name:   "OldName",
-		Prefix: "M",
+		Prefix: "M0",
 		CQZone: "0",
 	}); err != nil {
 		t.Fatalf("seed country: %v", err)
@@ -1337,7 +1382,7 @@ func TestEnrichRefresh_BypassesFreshCache_CallsUpstreamAndOverwrites(t *testing.
 		name: "hamnut",
 		result: types.Country{
 			Name:    "England",
-			Prefix:  "M",
+			Prefix:  "M0",
 			CQZone:  "14",
 			ITUZone: "27",
 		},
@@ -1414,7 +1459,7 @@ func TestEnrichRefresh_UpstreamDown_ReturnsNoneWithoutFallback(t *testing.T) {
 	db := newTestSqlite(t)
 	if err := db.UpsertCountry(types.Country{
 		Name:   "England",
-		Prefix: "M",
+		Prefix: "M0",
 	}); err != nil {
 		t.Fatalf("seed country: %v", err)
 	}
@@ -1464,7 +1509,7 @@ func TestEnrichRefresh_NoCacheRow_BehavesLikeColdMiss(t *testing.T) {
 		name: "hamnut",
 		result: types.Country{
 			Name:   "England",
-			Prefix: "M",
+			Prefix: "M0",
 		},
 	}
 	qrz := &stubCallsignProvider{
