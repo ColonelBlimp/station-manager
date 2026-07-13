@@ -180,6 +180,16 @@ precisely so we don't re-derive state or redo finished work.
 >   for TX). The ● working-now marker extends to the worked station's plain
 >   (mid-exchange) rows. **520 SPA tests** (9 parser + 4 component new). Detail
 >   in `docs/ft8.md` (e3 initiation section). NOT yet on-air validated.
+> - **go-ft8 BUMPED v0.6.0 → v0.7.0** (operator-approved, own-commit
+>   discipline). v0.7.0 = type-4 nonstandard-call encoding ALIGNED WITH WSJT-X
+>   (bracket-aware hash routing, ≤6-char affixes, CQ path accepting
+>   `CQ PJ4/NA2AA` / `CQ R/KL7ABC`) through the SAME `EncodeStandardMessage`
+>   entry point — the RF-interop foundation the **reduced type-4 ladder**
+>   backlog item sits on (hash/packing disagreement with the reference would
+>   make our future type-4 TX undecodable). Bump alone does NOT deliver
+>   compound QSOs — SM still needs the reduced ladder + relaxing StartQso's
+>   compound-call fail-fast + display. Verified: full `go test -race ./...`,
+>   FT8 offline round-trip gates, CGO-free static build.
 
 > **NEXT (session 212 carry-over):** commit the day's work (operator) —
 > includes the extended `dxcc-entities.json` baseline + the RPM-script fix;
