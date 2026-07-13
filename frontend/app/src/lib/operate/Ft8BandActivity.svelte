@@ -18,7 +18,13 @@
     import { ft8PileupStack } from './ft8Pileup.svelte';
     import { rig } from './rig.svelte';
     import { session } from './session.svelte';
-    import { parseCq, parseDirectedToMe, parseDirectedToMeFd, isCqFd } from '../utils/ft8Message';
+    import {
+        parseCq,
+        parseDirectedToMe,
+        parseDirectedToMeFd,
+        parseSender,
+        isCqFd,
+    } from '../utils/ft8Message';
     import { slotParity } from '../utils/ft8Parity';
     import { pathInfo } from '../utils/bearing';
     import { parseFrequency } from '../validators/frequency';
@@ -30,6 +36,11 @@
         kind: '' | 'cq' | 'call'; // cq = calling CQ · call = calling us
         call: string; // the other station (for enrichment / worked lookup)
         bearing: number | null; // short-path °, from the decode's grid
+        // Directed-call target for plain (kind '') rows: the decode's SENDER —
+        // double-click starts calling them without waiting for their CQ (a DX
+        // running a pile-up can go many minutes between CQs). null when the
+        // sender isn't callable (hashed, or no parseable call).
+        dx: { call: string; grid: string } | null;
     }
     interface SlotGroup {
         key: string;
@@ -64,7 +75,8 @@
         const kind: DecodeRow['kind'] = called ? 'call' : cq ? 'cq' : '';
         const call = called?.call ?? cq?.call ?? '';
         const grid = called?.grid ?? cq?.grid ?? '';
-        return { d, kind, call, bearing: bearingFor(grid) };
+        const dx = kind === '' ? parseSender(d.text) : null;
+        return { d, kind, call, bearing: bearingFor(grid), dx };
     }
 
     // The Band Activity feed. Normally the newest-first decode list grouped by slot
@@ -226,6 +238,66 @@
         if (added) ft8PileupStack.resume();
     }
 
+    // The guard chain every TX-starting row interaction runs — each miss explains
+    // itself (toast) rather than silently no-op'ing on a click.
+    function txPreflight(call: string): { offset: number; opMHz: number } | null {
+        if (!ft8State.tx.armed) {
+            toasts.info('Enable TX first (Operate panel).');
+            return null;
+        }
+        if (!catLive) {
+            toasts.info('Rig not connected — cannot transmit.');
+            return null;
+        }
+        if (ft8State.qso.active) {
+            toasts.info('Finish or Abandon the current contact first.');
+            return null;
+        }
+        const offset = ft8State.effectiveOffset;
+        if (offset === null) {
+            toasts.info('No clear TX offset yet — pick one in Occupancy.');
+            return null;
+        }
+        const opHz = parseFrequency(rig.freq);
+        if (opHz === null) {
+            toasts.info('Rig frequency is not known yet.');
+            return null;
+        }
+        if (workedThisSession(call)) {
+            toasts.info(`Already worked ${call} this session.`);
+            return null;
+        }
+        return { offset, opMHz: opHz / 1_000_000 };
+    }
+
+    // Directed call (WSJT-X double-click semantic): call the SENDER of a plain
+    // decode row — no CQ needed. A DX running a pile-up can go many minutes
+    // between CQs; waiting for one costs the contact (the T22TT case,
+    // 2026-07-13). The decode's slot fixes their parity (we TX opposite, i.e.
+    // their RX slot); the opening message is identical to answering a CQ, so
+    // the daemon sequencer (StartQso) is reused unchanged. Double-click, not
+    // single: plain rows are dense non-actionable text, and starting a
+    // transmission from them must be a deliberate gesture.
+    async function onRowDblClick(row: DecodeRow): Promise<void> {
+        if (row.kind !== '' || row.dx === null || starting) return;
+        const pre = txPreflight(row.dx.call);
+        if (!pre) return;
+        starting = true;
+        const r = await answerCq({
+            theirCall: row.dx.call,
+            theirGrid: row.dx.grid,
+            slotUtc: row.d.startUtc,
+            offsetHz: pre.offset,
+            opFreqMHz: pre.opMHz,
+            fd: false,
+            theirSnr: row.d.snr,
+        });
+        if (!r.ok) {
+            starting = false;
+            toasts.error(r.message);
+        }
+    }
+
     async function onRowClick(e: MouseEvent, row: DecodeRow): Promise<void> {
         // Ctrl/Cmd+click a calling-you row queues it (capture only). A modifier click
         // NEVER triggers a work-now TX.
@@ -234,34 +306,9 @@
             return;
         }
         if (row.kind === '' || starting) return;
-        // Explain why nothing happened rather than silently no-op'ing on a click.
-        if (!ft8State.tx.armed) {
-            toasts.info('Enable TX first (Operate panel).');
-            return;
-        }
-        if (!catLive) {
-            toasts.info('Rig not connected — cannot transmit.');
-            return;
-        }
-        if (ft8State.qso.active) {
-            toasts.info('Finish or Abandon the current contact first.');
-            return;
-        }
-        const offset = ft8State.effectiveOffset;
-        if (offset === null) {
-            toasts.info('No clear TX offset yet — pick one in Occupancy.');
-            return;
-        }
-        const opHz = parseFrequency(rig.freq);
-        if (opHz === null) {
-            toasts.info('Rig frequency is not known yet.');
-            return;
-        }
-        if (workedThisSession(row.call)) {
-            toasts.info(`Already worked ${row.call} this session.`);
-            return;
-        }
-        const opMHz = opHz / 1_000_000;
+        const pre = txPreflight(row.call);
+        if (!pre) return;
+        const { offset, opMHz } = pre;
         starting = true;
         let r;
         if (row.kind === 'cq') {
@@ -397,10 +444,19 @@
                                                 : 'Work this station calling you (Ctrl+click to queue)') +
                                                 (hover ? ` — ${hover}` : '')}
                                             onclick={(e) => onRowClick(e, row)}>{row.d.text}</button
+                                        >{:else if row.dx !== null}<button
+                                            type="button"
+                                            class="text-left {canStart
+                                                ? 'cursor-pointer hover:underline decoration-dotted'
+                                                : 'cursor-default'}"
+                                            title="Double-click to call {row.dx
+                                                .call} (directed call — no CQ needed)"
+                                            ondblclick={() => onRowDblClick(row)}
+                                            >{row.d.text}</button
                                         >{:else}{row.d.text}{/if}{#if info?.isNewEntity}<span
                                             class="ml-1 text-focus"
                                             title="New DXCC entity">★</span
-                                        >{/if}{#if row.call !== '' && ft8State.qso.active && row.call === ft8State.qso.theirCall}<span
+                                        >{/if}{#if ft8State.qso.active && ft8State.qso.theirCall !== '' && (row.call === ft8State.qso.theirCall || row.dx?.call === ft8State.qso.theirCall)}<span
                                             class="ml-1 rounded bg-green-600 px-1 text-[10px] font-bold text-white"
                                             title="Working now">●</span
                                         >{:else if row.kind === 'call' && ft8PileupStack.items.some((x) => x.call === row.call)}<span

@@ -1018,6 +1018,25 @@ read by the e2 resolver. Step (e) breaks into increments:
   SSE. **SPA:** initiation = **click a CQ row in Band Activity** (clickable when TX
   armed + an offset picked + no QSO running → `startFt8Qso`); the Operate tab shows
   the live rung / next message / Abandon (`ft8State.qso`).
+  - **Directed call — double-click ANY plain decode row (frontend/app, 2026-07-13).**
+    The WSJT-X double-click semantic: the operator calls the **sender** of a plain
+    (non-CQ, not-calling-you) line without waiting for their CQ — a DX running a
+    pile-up can go many minutes between CQs, and waiting costs the contact (the
+    operator's T22TT case). **No daemon change**: the opening message of a directed
+    call is identical to answering a CQ, and `Sequencer.StartQso` never required the
+    heard message to BE a CQ — it takes their call + the slot they transmitted in
+    (fixing their parity; we TX opposite, i.e. into their RX slot) + the offset. SPA:
+    `parseSender` (`utils/ft8Message.ts`) extracts the sender (+ their grid when the
+    payload is one; RR73 excluded; **hashed senders rejected** — `<...>` has no
+    known callsign to encode); `Ft8BandActivity` plain rows with a callable sender
+    render as buttons (dotted-underline hover, "Double-click to call X" title) wired
+    to the same `answerCq` action with `fd:false`. **Double-click, not single** —
+    plain rows are dense non-actionable text; starting a transmission from them must
+    be a deliberate gesture (single-click stays inert). Same guard chain as
+    answer-a-CQ (TX armed, CAT live, no active QSO, offset picked, freq known,
+    not-worked-this-session), extracted as `txPreflight`. The ● "working now" row
+    marker also lights on the worked station's plain transmissions (mid-exchange
+    lines aren't addressed to us, so they'd otherwise lose the marker).
 - **e4 — QSO completion → log: SHIPPED 2026-06-10.** On the 73, the sequencer
   captures a `CompletedQso` and hands it to an **injected sink** (`SetQsoLogger`):
   `internal/ft8/qsolog.go`'s pure `BuildQso(c, station, logbookID, now)` assembles

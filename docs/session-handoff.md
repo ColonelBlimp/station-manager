@@ -160,8 +160,26 @@ precisely so we don't re-derive state or redo finished work.
 >   stale `/app/` too. **(5) Band Activity / Operate header alignment** — both
 >   FT8 card headers pinned to a shared fixed `h-10` (Band Activity's filter
 >   button made it 4px taller than Operate's text-only row); fixed height, not
->   padding, so they can't drift as contents change. All five verified
+>   padding, so they can't drift as contents change. **(6) Arrange rail button
+>   DISABLED in FT8** (operator + assessment agreed: FT8's layout is
+>   deliberately fixed — no tile board; same dimmed+tooltip pattern as Worked,
+>   shared `phoneOnly` derivation; also kills the stealth
+>   return-to-Phone/CW-in-arranging-mode side effect). Items 1–5 verified
 >   deployed by the operator.
+> - **NEW FEATURE — FT8 directed call (double-click any plain Band Activity
+>   row), operator-requested:** call a station WITHOUT waiting for its CQ (a DX
+>   working a pile-up can go many minutes between CQs — the operator's T22TT
+>   case). **Zero daemon change** — the directed opening is identical to
+>   answering a CQ and `Sequencer.StartQso` never required the heard message to
+>   be a CQ (their call + their-TX-slot parity + offset suffice). SPA:
+>   `parseSender` (new, `utils/ft8Message.ts` — sender + optional grid, RR73
+>   excluded, hashed senders rejected), plain rows with a callable sender become
+>   dotted-underline buttons ("Double-click to call X" title) → same `answerCq`
+>   action, `fd:false`; guard chain extracted as `txPreflight` (shared with
+>   answer-a-CQ/work-a-caller); double-click NOT single (deliberate-gesture rule
+>   for TX). The ● working-now marker extends to the worked station's plain
+>   (mid-exchange) rows. **520 SPA tests** (9 parser + 4 component new). Detail
+>   in `docs/ft8.md` (e3 initiation section). NOT yet on-air validated.
 
 > **NEXT (session 212 carry-over):** commit the day's work (operator) —
 > includes the extended `dxcc-entities.json` baseline + the RPM-script fix;

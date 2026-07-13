@@ -388,3 +388,97 @@ describe('Ft8BandActivity row markers', () => {
         expect(screen.getByTitle('In the pile-up queue')).toBeInTheDocument();
     });
 });
+
+// Directed call (WSJT-X double-click): the SENDER of a plain decode row is
+// callable without waiting for their CQ — a DX running a pile-up can go many
+// minutes between CQs (the T22TT case, 2026-07-13). Double-click only; a
+// single click on a plain row must never start a transmission.
+describe('Ft8BandActivity directed call (double-click a plain row)', () => {
+    it('double-click calls the sender via answerCq with the decode slot + fd:false', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({
+            answerCq: (a) => (got.push(a), okResult()),
+        });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('2026-07-09T14:30:00Z', [{ text: 'K1ABC T22TT RI91', freq_hz: 1200, snr: -7 }])
+        );
+        flushSync();
+
+        const rowBtn = screen.getByTitle(
+            'Double-click to call T22TT (directed call — no CQ needed)'
+        );
+        await fireEvent.dblClick(rowBtn);
+        await flush();
+
+        expect(got).toHaveLength(1);
+        expect(got[0]).toMatchObject({
+            theirCall: 'T22TT',
+            theirGrid: 'RI91',
+            slotUtc: '2026-07-09T14:30:00Z',
+            offsetHz: 1500,
+            fd: false,
+            theirSnr: -7,
+        });
+    });
+
+    it('a single click on a plain row never transmits', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('2026-07-09T14:30:00Z', [{ text: 'K1ABC T22TT -05', freq_hz: 1200, snr: -7 }])
+        );
+        flushSync();
+
+        await fireEvent.click(
+            screen.getByTitle('Double-click to call T22TT (directed call — no CQ needed)')
+        );
+        await flush();
+        expect(got).toHaveLength(0);
+    });
+
+    it('a hashed sender is not callable — the row stays plain text', () => {
+        setFt8OperatorCall('7Q5MLV');
+        armReady();
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('2026-07-09T14:30:00Z', [{ text: 'K1ABC <T22TT> R-07', freq_hz: 1200, snr: -7 }])
+        );
+        flushSync();
+
+        expect(screen.getByText('K1ABC <T22TT> R-07')).toBeInTheDocument();
+        expect(screen.queryByTitle(/Double-click to call/)).toBeNull();
+    });
+
+    it('worked-this-session guard blocks the directed call', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        session.qsos.push({
+            id: 1,
+            callsign: 'T22TT',
+            timeOn: '14:00:00',
+            band: '20m',
+            mode: 'FT8',
+            rstSent: '-05',
+            rstRcvd: '-07',
+            name: '',
+            country: '',
+            comment: '',
+        });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode('2026-07-09T14:30:00Z', [{ text: 'K1ABC T22TT RI91', freq_hz: 1200, snr: -7 }])
+        );
+        flushSync();
+
+        await fireEvent.dblClick(
+            screen.getByTitle('Double-click to call T22TT (directed call — no CQ needed)')
+        );
+        await flush();
+        expect(got).toHaveLength(0);
+    });
+});

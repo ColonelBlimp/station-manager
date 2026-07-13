@@ -113,6 +113,30 @@ export function parseDirectedToMe(
     return { call: toks[1], grid: toks[2] };
 }
 
+/**
+ * parseSender returns the SENDING station's callsign AND grid from a plain
+ * directed decode — `<to> <from> <payload>` (e.g. `K1ABC T22TT -05`, or
+ * `K1ABC T22TT RI91` where the grid is the sender's) — or null for CQs,
+ * too-short lines, and hashed senders (`<...>` can't be called back — the
+ * real callsign is unknown).
+ *
+ * This is the directed-call ("call an interesting station") seam: a DX
+ * working a pile-up can go many minutes between CQs, so the operator calls
+ * the sender of ANY heard line in its owner's RX slot — the WSJT-X
+ * double-click semantic. The addressee may be a hashed token (`<KH1/KH7Z>`);
+ * only the sender must be a real, encodable-looking call. RR73 in the payload
+ * slot is a roger, not the sender's grid (the Maidenhead collision).
+ */
+export function parseSender(text: string): { call: string; grid: string } | null {
+    const toks = text.trim().toUpperCase().split(/\s+/);
+    if (toks.length < 2 || toks[0] === 'CQ') return null;
+    if (!looksLikeCall(toks[0]) && !/^<.+>$/.test(toks[0])) return null;
+    if (!looksLikeCall(toks[1])) return null;
+    const p = toks[2] ?? '';
+    const grid = p !== 'RR73' && GRID4.test(p) ? p : '';
+    return { call: toks[1], grid };
+}
+
 const FD_CLASS = /^[0-9]{1,2}[A-F]$/;
 const FD_SECTION = /^[A-Z]{2,4}$/;
 
