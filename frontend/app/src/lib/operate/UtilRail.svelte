@@ -5,6 +5,7 @@
     // Collapsible full↔narrow like the left nav (data-util); shown only in
     // Operate → Phone/CW (render gate in Operate; visibility on data-rail).
     import { toggleUtil } from '../ui/state.svelte';
+    import { router } from '../router.svelte';
     import { setPileup, focusCallsign } from './state.svelte';
     import { operate } from './state.svelte';
     import { ft8PileupStack } from './ft8Pileup.svelte';
@@ -37,6 +38,12 @@
         session: 'Session',
         rig: 'Rig',
     };
+
+    // The Worked panel is a Phone/CW tile only — FT8's Band Activity already
+    // carries worked-before context (dupe tint + the Q/● badges), so the panel
+    // adds nothing there (operator, 2026-07-13). Disabled rather than wired:
+    // clicking it in FT8 would silently flip the Phone/CW tile board's state.
+    const workedDisabled = $derived(router.mode !== 'phone');
 </script>
 
 {#snippet railIcon(key: string)}
@@ -91,10 +98,14 @@
 <aside class="util-rail" aria-label="Info panels">
     <div class="flex h-full flex-col gap-1 border-l border-line bg-surface px-2 py-4">
         {#each RAIL_TILES as key (key)}
+            {@const offHere = key === 'worked' && workedDisabled}
             <button
-                class="rail-item relative"
-                title="{labels[key]} — {isVisible(key) ? 'hide' : 'show'}"
-                data-active={isVisible(key) ? 'true' : 'false'}
+                class="rail-item relative disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                title={offHere
+                    ? 'Worked — not available in FT8'
+                    : `${labels[key]} — ${isVisible(key) ? 'hide' : 'show'}`}
+                data-active={!offHere && isVisible(key) ? 'true' : 'false'}
+                disabled={offHere}
                 onclick={() => onTileClick(key)}
             >
                 {@render railIcon(key)}
