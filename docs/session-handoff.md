@@ -108,14 +108,43 @@ precisely so we don't re-derive state or redo finished work.
 >   FT8)") — the concrete active-vs-idle form + discovery ("where do I find
 >   them"); freq inherits the staleness stamp (a stale freq misleads worse
 >   than a stale decode list). Inbox entry updated.
+> - **Full-logbook audit (5,342 QSOs) + DXCC BACKFILL RUN (operator-ordered,
+>   RST explicitly untouched).** The full audit corrected an assumption: blank
+>   dxcc is NOT historical — the 2026-06-25 import (ids 1–4521) carries dxcc
+>   from QRZ (1 blank); the **716 blanks were live-pipeline QSOs ids
+>   4522–5255 (06-25 → 07-11)**, everything logged between the enrichment
+>   rework and the populate-everywhere fix. Import-era "failures" (missing
+>   my_*, no upload rows, qso_date≠created_at) are era effects — a possible
+>   import-aware audit mode noted. Backfill = per-call re-enrich
+>   (refresh=true for R/U-block calls whose cached station rows carried
+>   poison-row data) + per-QSO PATCH of dxcc, plus country/zones/cont ONLY
+>   where fresh enrichment disagreed; **683 + 33 = 716 repaired, 0 errors**.
+>   The drift log exposed the one-char poisoning's full blast radius beyond
+>   Ukraine: 12× European→**Asiatic Russia**, 2× →**Kazakhstan**,
+>   UK7AL→**Uzbekistan**, RN2F→**Kaliningrad**, 4× England→**Scotland/
+>   Wales/NI**, GD7DUZ→**Isle of Man**, 11× Italy→**Sicily**, and US
+>   **K/W-block zone defaults** (cqz 5/ituz 8 → per-call real zones) — all
+>   corrected. **dxcc-entities.json baseline 154→166** (GD/UA2/YV/IT9/3A/T2/
+>   UK/A9/XU/5N/9J/HI; numbers verified vs ADIF 3.1.5 + log-authoritative
+>   import rows; IT9 maps to 248 — Sicily has no separate DXCC entity) + a
+>   **runtime override** at `~/.local/share/station-manager/dxcc-entities.json`
+>   so the installed daemon resolves them without a redeploy (delete once a
+>   release embeds the new baseline). Verified: 0 pipeline blank-dxcc; RST
+>   empty-counts unchanged (13 sent / 7 rcvd). **742 QRZ `update` uploads
+>   queued — drain ≈ 4.6 h** (tick 120 s × batch 5); durable queue, no action
+>   needed. Second empty-`rst_rcvd` pipeline instance found (#5147 SV1NQT,
+>   07-04); later triaged NOT-A-BUG (operator: the other station never sent
+>   the report — SM logged what was exchanged; closed in the inbox).
 
 > **NEXT (session 212 carry-over):** on-air/visual check of the FT8 Rig-card
 > lockout + overlay position (deployed, not yet eyeballed); commit the day's
-> work (operator); watch the 26 QRZ updates finish draining (`qso-audit
-> --last 90` should drop the pending warnings); then the session-211 NEXT
-> below still stands (pile-up refinement validation, reduced type-4 ladder,
-> `ft8_display` remainders, dxcc baseline regen / backfill now has an extra
-> reason). RigKeys FT8-without-CAT no-op is a small follow-up.
+> work (operator) — includes the extended `dxcc-entities.json` baseline;
+> confirm the ~742 QRZ update uploads finished (≈ 4.6 h drain; check
+> `qso_upload` or re-run `qso-audit`); then the session-211 NEXT below still
+> stands (pile-up refinement validation, reduced type-4 ladder, `ft8_display`
+> remainders). RigKeys FT8-without-CAT no-op is a small follow-up. The
+> empty-`rst_rcvd` rows were triaged NOT-A-BUG (operator: the other station
+> never sent the report; SM logged what was exchanged — closed in the inbox).
 
 > **Session 211 (2026-07-11) — `frontend/app` DOGFOODING STARTED: embedded +
 > served at `/app/`, and FT8 TX ON-AIR VALIDATED — the operator answered CQs and
