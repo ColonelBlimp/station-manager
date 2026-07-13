@@ -3,6 +3,7 @@
     import Header from './lib/ui/Header.svelte';
     import Toasts from './lib/ui/Toasts.svelte';
     import Operate from './lib/operate/Operate.svelte';
+    import Logbook from './lib/logbook/Logbook.svelte';
     import {
         ui,
         THEME_KEY,
@@ -62,6 +63,8 @@
         <div class="p-4 sm:p-6 lg:p-8">
             {#if router.view === 'operate'}
                 <Operate />
+            {:else if router.view === 'logbook'}
+                <Logbook />
             {:else}
                 <!-- Placeholder for views not yet built. -->
                 <h1 class="text-2xl font-semibold text-ink">{titles[router.view]}</h1>

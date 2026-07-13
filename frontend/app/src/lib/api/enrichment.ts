@@ -108,12 +108,20 @@ interface DaemonError {
 
 export async function enrichCallsign(
     callsign: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    opts?: { refresh?: boolean }
 ): Promise<EnrichOutcome> {
-    const fetched = await safeFetch(`/v1/enrich/callsign?call=${encodeURIComponent(callsign)}`, {
-        method: 'GET',
-        signal,
-    });
+    // refresh=true is the operator's cache-bypass escape valve ("the cached row
+    // is wrong") — forces fresh hamnut + provider-chain lookups and overwrites
+    // the caches on success. Used by the logbook page's Re-enrich repair path.
+    const refresh = opts?.refresh ? '&refresh=true' : '';
+    const fetched = await safeFetch(
+        `/v1/enrich/callsign?call=${encodeURIComponent(callsign)}${refresh}`,
+        {
+            method: 'GET',
+            signal,
+        }
+    );
     if (!fetched.ok) {
         return { kind: fetched.kind, message: fetched.message };
     }

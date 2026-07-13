@@ -192,6 +192,29 @@ precisely so we don't re-derive state or redo finished work.
 >   compound-call fail-fast + display. Verified: full `go test -race ./...`,
 >   FT8 offline round-trip gates, CGO-free static build.
 
+> - **LOGBOOK PAGE built in `frontend/app` (all four increments, one sitting;
+>   the ADR 0044 consolidation's next surface).** Reuse-first port of the
+>   shipping logbook SPA's battle-tested behaviour, restyled onto the app
+>   shell's theme tokens (light + dark — the shipping SPA was light-only).
+>   Lives in `lib/logbook/` (state + view + modal + email controls +
+>   uploadStatus/format helpers) with API clients in `lib/api/`
+>   (`logbooks`, `qso-patch`, `uploads`, `config-blocks`; `session-email` was
+>   already byte-identical). Wired at `/app/logbook` (router + Sidebar entry
+>   pre-existed). **(1) Browse:** selector, cursor-paged table
+>   (First/Prev/Next, of-N), page size. **(2) Selection + bulk:** cross-page
+>   multi-select, ADR 0039 destination picker + upload-selected + notice,
+>   not-emailed filter, tri-state upload tints (now theme-aware).
+>   **(3) Edit modal:** PATCH flow, ESC/Ctrl+Enter, daemon re-validates +
+>   stash-restores immutables. Email-out controls in the toolbar
+>   (inline result, faithful port). **(4) NEW — Re-enrich in the edit modal
+>   (backlog P2, the flaky-link repair path):** fetch-and-REVIEW —
+>   `enrichCallsign` gained `{refresh:true}` (cache-bypass escape valve);
+>   fills country/name (grid only when empty — on-air grid stays
+>   authoritative, the FT8-sink rule) and stashes dxcc/cqz/ituz/cont extras
+>   onto the eventual Save (QsoPatch extended; PATCH-writability proven by
+>   the day's backfill). Nothing writes until Save. **531 SPA tests** (ported
+>   state tests + render/edit/re-enrich smokes). NOT yet dogfooded.
+
 > **NEXT (session 212 carry-over):** commit the day's work (operator) —
 > includes the extended `dxcc-entities.json` baseline + the RPM-script fix;
 > confirm the ~742 QRZ update uploads finished (≈ 4.6 h drain; check
