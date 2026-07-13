@@ -11,6 +11,7 @@
         armTx,
         callCq,
         abandonQso,
+        skipQso,
         workCaller,
     } from './ft8.svelte';
     import { rig } from './rig.svelte';
@@ -127,18 +128,18 @@
     //   - working/answering a specific station: a DEFERRED "skip if no reply" (below).
     const canNext = $derived(tx.armed && qso.active && ft8PileupStack.count > 0);
 
-    // Deferred "skip if no reply" (the Next control while working a station). Rather
-    // than abandoning immediately — which skips before you can see whether your last
-    // TX was heard — Next ARMS a skip that resolves on the RX outcome: if the worked
-    // station comes back (the rung advances) we keep working them; if the RX slot is
-    // silent (the daemon repeats the rung, so qso.repeats ticks up) we drop this
-    // no-show and advance to the next queued caller. armedFor/armedState/armedRepeats
-    // snapshot the contact at arm time so the resolve effect can tell "advanced"
-    // (heard) from "repeated" (silent) and ignore a stale arm once the contact changes.
-    let skipArmed = $state(false);
-    let armedFor = '';
-    let armedState = '';
-    let armedRepeats = 0;
+    // Deferred "skip if no reply" (the Next control while working a station) —
+    // DAEMON-SIDE since 2026-07-13: Next arms skip_if_silent on the sequencer,
+    // which ends the session INSTEAD of keying the repeat when the station stays
+    // silent (the old SPA-side resolve could only abandon a repeat already on
+    // the air — an audible PTT tick + wasted RF at a no-show). The armed state
+    // renders from the ft8-qso SSE (confirm-by-push); the watcher effect below
+    // turns its falling edge into the operator toasts + the drain hand-off.
+    const skipArmed = $derived(qso.skipArmed);
+    // The watcher's own memory (deliberately plain lets, not $state — nothing
+    // renders from them; they exist to detect the falling edge).
+    let prevSkipArmed = false;
+    let prevSkipCall = '';
 
     // Per-action in-flight latches. The daemon single-flights competing starts and
     // 409s the loser, so these mainly stop a double-tap issuing a wasted second POST.
@@ -180,7 +181,10 @@
     async function onAbandon(): Promise<void> {
         if (abandoning) return;
         abandoning = true;
-        skipArmed = false;
+        // Abandon supersedes an armed skip: the daemon clears the arm itself; the
+        // watcher must NOT read that falling edge as "skip fired" (it would toast
+        // and resume the drain that Abandon is about to pause).
+        prevSkipArmed = false;
         try {
             const r = await abandonQso();
             if (!r.ok) toasts.error(r.message);
@@ -197,7 +201,7 @@
     function onNext(): void {
         if (nexting) return;
         if (skipArmed) {
-            skipArmed = false; // second click cancels the pending skip
+            void setSkip(false); // second click cancels the pending skip
             return;
         }
         if (!canNext) return;
@@ -205,31 +209,33 @@
             void doSkip(qso.theirCall); // Call-CQ: abandon the run, drain takes over
             return;
         }
-        armedFor = qso.theirCall;
-        armedState = qso.state;
-        armedRepeats = qso.repeats;
-        skipArmed = true;
+        void setSkip(true);
     }
 
-    // Resolve an armed skip against the live QSO state (confirm-by-push from the
-    // daemon): disarm if the contact ends/changes; keep working on a heard reply (the
-    // rung advanced); skip to the next queued caller on a silent RX slot (repeats up).
+    async function setSkip(armed: boolean): Promise<void> {
+        const r = await skipQso(armed);
+        if (!r.ok) toasts.error(r.message);
+        // The armed state itself arrives via the ft8-qso SSE (confirm-by-push).
+    }
+
+    // Skip-outcome watcher (the resolve logic lives daemon-side now): a falling
+    // skip_armed edge means either the skip FIRED (session ended without a repeat
+    // — toast + hand the drain the next caller) or the station REPLIED (the
+    // daemon disarmed; keep working them). Abandon suppresses the edge above.
     $effect(() => {
-        if (!skipArmed) return;
-        if (!qso.active || qso.theirCall !== armedFor) {
-            skipArmed = false;
-            return;
+        const armed = qso.skipArmed;
+        const active = qso.active;
+        const call = qso.theirCall;
+        if (prevSkipArmed && !armed) {
+            if (!active) {
+                toasts.info(`No reply from ${prevSkipCall} — next.`);
+                ft8PileupStack.resume();
+            } else if (call === prevSkipCall) {
+                toasts.info(`${call} replied — continuing.`);
+            }
         }
-        if (qso.state !== armedState) {
-            skipArmed = false; // rung advanced → they came back; stay on them
-            toasts.info(`${armedFor} replied — continuing.`);
-            return;
-        }
-        if (qso.repeats > armedRepeats) {
-            const who = armedFor; // silent RX slot → drop the no-show, advance
-            skipArmed = false;
-            void doSkip(who, true);
-        }
+        prevSkipArmed = armed;
+        if (armed) prevSkipCall = call;
     });
 
     // Shared advance: abandon the current contact and (re-)enable the drain so it works

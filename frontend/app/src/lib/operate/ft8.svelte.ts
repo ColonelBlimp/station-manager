@@ -60,6 +60,9 @@ export interface Ft8QsoStatus {
     nextMessage: string;
     repeats: number;
     maxRepeats: number;
+    /** Daemon-armed skip-if-silent (deferred Next): a silent cycle ends the
+     *  session instead of keying the repeat. Confirm-by-push via ft8-qso. */
+    skipArmed: boolean;
     ourReport: string;
     theirReport: string;
     theirPeriod: string;
@@ -79,6 +82,7 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     nextMessage: '',
     repeats: 0,
     maxRepeats: 0,
+    skipArmed: false,
     ourReport: '',
     theirReport: '',
     theirPeriod: '',
@@ -361,6 +365,7 @@ export interface Ft8TxActions {
     answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult>;
     workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult>;
     abandon(): Promise<Ft8TxResult>;
+    skip(armed: boolean): Promise<Ft8TxResult>;
 }
 
 let txActions: Ft8TxActions | null = null;
@@ -400,6 +405,13 @@ export function workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult> {
 /** Abandon any active sequenced session. */
 export function abandonQso(): Promise<Ft8TxResult> {
     return txActions ? txActions.abandon() : Promise.resolve(txUnavailable);
+}
+
+/** Arm/disarm skip-if-silent on the active session (deferred Next, daemon-side):
+ *  armed, a silent cycle ends the session instead of keying the repeat. The armed
+ *  state renders from qso.skipArmed (confirm-by-push via ft8-qso). */
+export function skipQso(armed: boolean): Promise<Ft8TxResult> {
+    return txActions ? txActions.skip(armed) : Promise.resolve(txUnavailable);
 }
 
 /*
@@ -486,6 +498,7 @@ export const ft8Link: Ft8EventHandlers = {
             state: p.state ?? '',
             nextMessage: p.next_message ?? '',
             repeats: p.repeats ?? 0,
+            skipArmed: p.skip_armed ?? false,
             maxRepeats: p.max_repeats ?? 0,
             ourReport: p.our_report ?? '',
             theirReport: p.their_report ?? '',

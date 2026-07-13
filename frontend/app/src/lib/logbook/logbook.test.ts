@@ -68,3 +68,98 @@ describe('logbook selection → email UUIDs', () => {
         expect(logbookState.rows[1].sm_fwrd_by_email_status).toBeUndefined();
     });
 });
+
+// Bulk Re-enrich: the backfill pattern as a toolbar action. The load-bearing
+// policy is skip-if-unchanged — every PATCH re-arms that QSO's QRZ update
+// upload, so an already-correct row must never fire a no-op re-upload. Grid
+// fills only when the stored one is empty (on-air grid stays authoritative).
+import { vi } from 'vitest';
+
+function enrichBody(call: string, station: Record<string, string>) {
+    return {
+        callsign: call,
+        station: { call, ...station },
+        country_source: 'hamnut',
+        station_source: 'qrzlookupservice',
+    };
+}
+
+describe('bulk re-enrich (skip-if-unchanged)', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        logbookState.clearSelection();
+        logbookState.rows = [];
+        logbookState.notice = null;
+    });
+
+    it('patches only rows whose enrichment differs; unchanged and off-page are counted, not written', async () => {
+        const patched: { url: string; body: Record<string, unknown> }[] = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+                const url = String(input);
+                if (url.startsWith('/v1/enrich/callsign')) {
+                    const call = new URL(url, 'http://x').searchParams.get('call') ?? '';
+                    expect(url).toContain('refresh=true');
+                    // Fresh data: name + dxcc for both calls; UR7MA's stored row
+                    // already matches, EA1AAA's is missing its name.
+                    const data =
+                        call === 'UR7MA'
+                            ? {
+                                  name: 'Vladimir',
+                                  country: 'Ukraine',
+                                  dxcc: '288',
+                                  gridsquare: 'KN59',
+                              }
+                            : { name: 'Ana', country: 'Spain', dxcc: '281', gridsquare: 'IN52' };
+                    return Promise.resolve(
+                        new Response(JSON.stringify(enrichBody(call, data)), { status: 200 })
+                    );
+                }
+                if (url.startsWith('/v1/qso/') && init?.method === 'PATCH') {
+                    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+                    patched.push({ url, body });
+                    return Promise.resolve(
+                        new Response(
+                            JSON.stringify({ id: 2, uuid: 'u-2', call: 'EA1AAA', ...body }),
+                            {
+                                status: 200,
+                            }
+                        )
+                    );
+                }
+                return Promise.resolve(new Response('nf', { status: 404 }));
+            })
+        );
+
+        logbookState.rows = [
+            // Already correct — must be SKIPPED (no PATCH, no QRZ re-upload).
+            {
+                id: 1,
+                uuid: 'u-1',
+                call: 'UR7MA',
+                name: 'Vladimir',
+                country: 'Ukraine',
+                dxcc: '288',
+                gridsquare: 'KN59RB', // stored grid non-empty → never touched
+            },
+            // Missing name + dxcc — must be PATCHED with just the deltas.
+            { id: 2, uuid: 'u-2', call: 'EA1AAA', country: 'Spain', gridsquare: '' },
+        ];
+        logbookState.toggleRow(logbookState.rows[0]);
+        logbookState.toggleRow(logbookState.rows[1]);
+        // A third selected id with no row on this page → "skipped" count.
+        logbookState.selected.add(999);
+
+        await logbookState.reEnrichSelected();
+
+        expect(patched).toHaveLength(1);
+        expect(patched[0].url).toBe('/v1/qso/u-2');
+        expect(patched[0].body).toEqual({ name: 'Ana', dxcc: '281', gridsquare: 'IN52' });
+        expect(logbookState.notice).toBe(
+            'Re-enriched 1 · 1 unchanged · 1 selected on other pages skipped.'
+        );
+        // The patched row was replaced in place with the daemon's canonical merge.
+        expect(logbookState.rows[1].name).toBe('Ana');
+    });
+});

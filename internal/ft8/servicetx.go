@@ -671,6 +671,16 @@ func (s *Service) resetExchangePath() {
 // the operator can call CQ or answer again. (disarmTx is the harder stop that
 // also closes the device.) The cancelled transmission's goroutine clears
 // txCancel/txInFlight and publishes the final ft8-tx state on its own path.
+// SetQsoSkip arms/disarms skip-if-silent on the active sequenced session (the
+// deferred Next, daemon-side): armed, a silent cycle ends the session instead
+// of keying the repeat. Nil sequencer → ErrNoActiveQso (nothing to arm).
+func (s *Service) SetQsoSkip(armed bool) error {
+	if s.seq == nil {
+		return ErrNoActiveQso
+	}
+	return s.seq.SetSkipIfSilent(armed)
+}
+
 func (s *Service) AbandonQso() {
 	if s.seq != nil {
 		s.seq.Abandon()

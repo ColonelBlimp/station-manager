@@ -35,6 +35,7 @@ function armReady(over: Partial<Ft8TxActions> = {}): void {
         answerCq: okResult,
         workCaller: okResult,
         abandon: okResult,
+        skip: okResult,
         ...over,
     });
     rig.cat = 'connected';
@@ -230,9 +231,18 @@ describe('Ft8Operate Next control (deferred skip-if-silent)', () => {
         expect(screen.queryByRole('button', { name: 'Next' })).toBeNull();
     });
 
-    it('arms a deferred skip (no immediate abandon), then advances on a silent RX slot', async () => {
+    // The skip decision lives DAEMON-side (2026-07-13): Next POSTs the arm; the
+    // armed rendering follows the ft8-qso SSE (skip_armed); the daemon ends the
+    // session INSTEAD of keying the repeat, so the SPA never abandons — it just
+    // reacts to the falling edge (toast + hand the drain the next caller).
+    it('Next arms the daemon-side skip; the SSE renders the armed state', async () => {
+        const skips: boolean[] = [];
         let abandoned = 0;
         armReady({
+            skip: (a) => {
+                skips.push(a);
+                return okResult();
+            },
             abandon: () => {
                 abandoned++;
                 return okResult();
@@ -241,62 +251,57 @@ describe('Ft8Operate Next control (deferred skip-if-silent)', () => {
         workingWithQueue();
         render(Ft8Operate);
         flushSync();
-        // Click Next → arms; it must NOT abandon yet (that was the eager-skip bug).
+
         await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
         flushSync();
-        expect(abandoned).toBe(0);
+        expect(skips).toEqual([true]); // intent POSTed…
+        expect(abandoned).toBe(0); // …and nothing abandoned client-side
+
+        // Confirm-by-push: the armed rendering follows the SSE, not the POST.
+        ft8State.qso.skipArmed = true;
+        flushSync();
         expect(screen.getByRole('button', { name: /Skip if silent/ })).toBeInTheDocument();
-        // Silent RX slot: the daemon repeats the rung → qso.repeats ticks up.
-        ft8State.qso.repeats = 1;
+
+        // Daemon fires the skip (silent cycle): session ends WITHOUT a repeat.
+        ft8State.qso = { ...ft8State.qso, active: false, skipArmed: false, theirCall: '' };
         flushSync();
         await flush();
-        expect(abandoned).toBe(1);
+        expect(abandoned).toBe(0); // the daemon ended it — no client abandon
         expect(ft8PileupStack.enabled).toBe(true); // drain resumed → next head worked
     });
 
-    it('a reply (rung advances) disarms the skip and keeps working the station', async () => {
-        let abandoned = 0;
-        armReady({
-            abandon: () => {
-                abandoned++;
-                return okResult();
-            },
-        });
+    it('a reply disarms the skip daemon-side and the button returns to Next', async () => {
+        armReady();
         workingWithQueue();
         render(Ft8Operate);
         flushSync();
-        await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        ft8State.qso.skipArmed = true;
         flushSync();
         expect(screen.getByRole('button', { name: /Skip if silent/ })).toBeInTheDocument();
-        // They came back → the rung advances; the armed skip must clear, not fire.
-        ft8State.qso.state = 'reporting';
+
+        // They came back: the daemon clears skip_armed with the session still live.
+        ft8State.qso.skipArmed = false;
         flushSync();
-        await flush();
-        expect(abandoned).toBe(0);
-        expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument(); // disarmed
+        expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
     });
 
-    it('clicking Next again cancels the armed skip', async () => {
-        let abandoned = 0;
+    it('clicking the armed button POSTs the disarm', async () => {
+        const skips: boolean[] = [];
         armReady({
-            abandon: () => {
-                abandoned++;
+            skip: (a) => {
+                skips.push(a);
                 return okResult();
             },
         });
         workingWithQueue();
         render(Ft8Operate);
         flushSync();
-        await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        ft8State.qso.skipArmed = true;
         flushSync();
+
         await fireEvent.click(screen.getByRole('button', { name: /Skip if silent/ }));
         flushSync();
-        expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
-        // A later silent slot must NOT skip — the arm was cancelled.
-        ft8State.qso.repeats = 1;
-        flushSync();
-        await flush();
-        expect(abandoned).toBe(0);
+        expect(skips).toEqual([false]); // cancel = disarm intent; SSE clears the amber
     });
 
     it('during a Call-CQ run, Next is an immediate takeover (abandon + resume)', async () => {

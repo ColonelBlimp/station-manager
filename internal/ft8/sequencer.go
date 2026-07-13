@@ -49,6 +49,10 @@ var (
 	// ErrFdIdentityUnset: StartQsoFd without the operator's Field Day class+section
 	// (ft8.field_day) — we can't transmit an FD exchange without our own identity.
 	ErrFdIdentityUnset = stderrors.New("ft8: Field Day class/section not configured")
+
+	// ErrNoActiveQso: SetSkipIfSilent when no skippable session is active (idle, or
+	// a Call-CQ run — whose Next is an immediate takeover, not a deferred skip).
+	ErrNoActiveQso = stderrors.New("ft8: no active QSO to arm a skip on")
 )
 
 // seqMode is the active sequencer session: idle, answering a CQ (ex drives), or
@@ -103,6 +107,9 @@ type QsoStatus struct {
 	State       string `json:"state,omitempty"`
 	NextMessage string `json:"next_message,omitempty"`
 	Repeats     int    `json:"repeats,omitempty"`
+	// SkipArmed — the operator armed skip-if-silent on this session (deferred
+	// Next): a silent cycle ends the session instead of keying the repeat.
+	SkipArmed bool `json:"skip_armed,omitempty"`
 	// MaxRepeats — the unanswered-rung repeat cap, set ONLY while the current rung is
 	// actually subject to it (an answerer pre-73, or a caller working an answerer
 	// pre-RR73). Zero (omitted) on the uncapped rungs (calling CQ) and the one-shot
@@ -204,7 +211,15 @@ type Sequencer struct {
 	dialFreqMHz float64   // rig dial freq at start, for the logged QSO frequency
 	startedAt   time.Time // contact start, stamped as the logged QSO's TIME_ON
 	repeats     int
-	maxRepeats  int
+	// skipIfSilent — operator-armed "drop this contact instead of repeating an
+	// unanswered rung" (the SPA's deferred Next, moved daemon-side 2026-07-13).
+	// Checked at the silent-repeat sites BEFORE the repeat keys, so a skip never
+	// transmits at a station we've decided to drop (the SPA-side version could
+	// only abandon a repeat already on the air — an audible PTT tick and wasted
+	// RF). Cleared when the partner advances us (they came back), on every
+	// session start, and on Abandon.
+	skipIfSilent bool
+	maxRepeats   int
 
 	// sessionGen is bumped on every session-identity change (StartQso /
 	// StartCallCq commit, Abandon). A final-rung onDone closure captures the gen
@@ -287,6 +302,7 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 		return ErrQsoInProgress
 	}
 	s.mode = seqAnswering
+	s.skipIfSilent = false
 	s.sessionGen++
 	s.ex = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
@@ -339,6 +355,7 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 		return ErrQsoInProgress
 	}
 	s.mode = seqAnsweringFd
+	s.skipIfSilent = false
 	s.sessionGen++
 	s.fdEx = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
@@ -369,11 +386,34 @@ func (s *Sequencer) Abandon() {
 	s.fdWork = nil
 	s.caller = nil
 	s.repeats = 0
+	s.skipIfSilent = false
 	s.mu.Unlock()
 	if was {
 		s.log.InfoWith().Msg("ft8 seq: session abandoned")
 		s.publish(QsoStatus{Active: false})
 	}
+}
+
+// SetSkipIfSilent arms (or disarms) the skip-if-silent intent on the active
+// session: when armed, a silent cycle on an already-transmitted rung ends the
+// session INSTEAD of keying the repeat. Arming requires a skippable session
+// (answering / working, standard or FD) — a Call-CQ run's Next is an immediate
+// takeover, and idle has nothing to skip (ErrNoActiveQso). Disarming is always
+// accepted (idempotent — the session may have ended between the operator's
+// click and the request). Publishes the updated status (confirm-by-push).
+func (s *Sequencer) SetSkipIfSilent(armed bool) error {
+	s.mu.Lock()
+	skippable := s.mode == seqAnswering || s.mode == seqAnsweringFd ||
+		s.mode == seqWorking || s.mode == seqWorkingFd
+	if armed && !skippable {
+		s.mu.Unlock()
+		return ErrNoActiveQso
+	}
+	s.skipIfSilent = armed && skippable
+	st := s.statusLocked()
+	s.mu.Unlock()
+	s.publish(st)
+	return nil
 }
 
 // Active reports whether a session (answering or calling CQ) is in progress.
@@ -450,6 +490,9 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 			Str("now_rung", s.ex.State.label()).
 			Msg("ft8 seq: decode from worked station")
 	}
+	if advanced {
+		s.skipIfSilent = false // they came back — an armed skip no longer applies
+	}
 
 	msg, ok := s.ex.TxMessage()
 	if !ok { // exchange already done — shouldn't happen here; clear defensively.
@@ -479,6 +522,18 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 
 	confirming := s.ex.State == txConfirming
 	if !confirming {
+		// Operator-armed skip: a full silent cycle on an already-sent rung
+		// (repeats > 0 — never before the opening has even transmitted) ends
+		// the session INSTEAD of keying the repeat — no RF at a no-show.
+		if s.skipIfSilent && !advanced && s.repeats > 0 {
+			s.ex = nil
+			s.mode = seqIdle
+			s.skipIfSilent = false
+			s.mu.Unlock()
+			s.log.InfoWith().Msg("ft8 seq: skip-if-silent — no reply; ending without repeat")
+			s.publish(QsoStatus{Active: false})
+			return
+		}
 		// Calling / Reporting wait for the partner; cap the repeats (off-ramp).
 		if s.repeats >= s.maxRepeats {
 			s.ex = nil
@@ -602,6 +657,9 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		s.log.InfoWith().Str("from_worked", heard).Bool("advanced", advanced).
 			Str("now_rung", s.fdEx.State.label()).Msg("ft8 seq: FD decode from worked station")
 	}
+	if advanced {
+		s.skipIfSilent = false // they came back — an armed skip no longer applies
+	}
 
 	msg, ok := s.fdEx.TxMessage()
 	if !ok { // already done — clear defensively.
@@ -628,6 +686,16 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 
 	confirming := s.fdEx.State == fdRogering
 	if !confirming {
+		// Operator-armed skip — see onSlotAnswering; same semantics.
+		if s.skipIfSilent && !advanced && s.repeats > 0 {
+			s.fdEx = nil
+			s.mode = seqIdle
+			s.skipIfSilent = false
+			s.mu.Unlock()
+			s.log.InfoWith().Msg("ft8 seq: FD skip-if-silent — no reply; ending without repeat")
+			s.publish(QsoStatus{Active: false})
+			return
+		}
 		if s.repeats >= s.maxRepeats {
 			s.fdEx = nil
 			s.mode = seqIdle
@@ -835,7 +903,16 @@ func (s *Sequencer) fireOpening(now time.Time) {
 }
 
 // statusLocked builds the QsoStatus snapshot for the active session. Caller holds s.mu.
+// statusLocked decorates the per-mode status with the session-wide flags.
 func (s *Sequencer) statusLocked() QsoStatus {
+	st := s.statusModeLocked()
+	if st.Active {
+		st.SkipArmed = s.skipIfSilent
+	}
+	return st
+}
+
+func (s *Sequencer) statusModeLocked() QsoStatus {
 	switch s.mode {
 	case seqAnswering:
 		if s.ex == nil {

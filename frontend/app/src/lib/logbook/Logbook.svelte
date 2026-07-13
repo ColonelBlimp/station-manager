@@ -10,6 +10,7 @@
     import { logbookState } from './logbook.svelte';
     import { formatQsoDate, formatTime, formatFreq, formatMode } from './format';
     import { uploadState, uploadTooltip, uploadColorClass } from './uploadStatus';
+    import { dxccFlag } from '../utils/dxccFlag';
     import EditQsoModal from './EditQsoModal.svelte';
     import LogbookEmailControls from './LogbookEmailControls.svelte';
     import type { LogbookQso } from '../api/logbooks';
@@ -121,6 +122,16 @@
                             : `Upload ${logbookState.selectedCount} to ${logbookState.selectedDestination}`}</button
                     >
                 {/if}
+                <button
+                    type="button"
+                    class="btn text-xs"
+                    disabled={logbookState.reEnriching}
+                    title="Fresh lookup for each selected row on this page; writes (and re-forwards) only rows whose enrichment actually changed"
+                    onclick={() => logbookState.reEnrichSelected()}
+                    >{logbookState.reEnriching
+                        ? `Re-enriching ${logbookState.reEnrichProgress}…`
+                        : 'Re-enrich'}</button
+                >
                 <LogbookEmailControls />
                 <button
                     type="button"
@@ -171,8 +182,8 @@
                         <th class="w-13">Band</th>
                         <th class="w-18">Freq</th>
                         <th class="w-32">Mode</th>
-                        <th class="w-32">Country</th>
-                        <th class="w-32">Name</th>
+                        <th class="w-34">Country</th>
+                        <th class="w-32 pl-1">Name</th>
                         <th class="pl-4">Comment</th>
                         <th class="w-16 text-center">Email</th>
                         <th class="w-14"><span class="sr-only">Edit</span></th>
@@ -204,10 +215,15 @@
                             <td>{row.band ?? ''}</td>
                             <td>{formatFreq(row.freq)}</td>
                             <td>{formatMode(row.mode, row.submode)}</td>
-                            <td class="overflow-hidden text-ellipsis" title={row.country ?? ''}
-                                >{row.country ?? ''}</td
+                            <td
+                                class="overflow-hidden whitespace-nowrap text-ellipsis"
+                                title={row.country ?? ''}
+                                >{#if dxccFlag(row.dxcc) !== ''}<span
+                                        class="mr-1 text-base leading-none"
+                                        >{dxccFlag(row.dxcc)}</span
+                                    >{/if}{row.country ?? ''}</td
                             >
-                            <td class="overflow-hidden text-ellipsis" title={row.name ?? ''}
+                            <td class="overflow-hidden pl-1 text-ellipsis" title={row.name ?? ''}
                                 >{row.name ?? ''}</td
                             >
                             <td class="overflow-hidden pl-4 text-ellipsis" title={row.comment ?? ''}

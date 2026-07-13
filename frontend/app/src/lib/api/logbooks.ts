@@ -43,6 +43,14 @@ export interface LogbookQso {
     name?: string;
     gridsquare?: string;
     comment?: string;
+    // Enrichment-derived fields (flat on the wire like everything else) — read
+    // by the bulk Re-enrich's skip-if-unchanged comparison, so an already-
+    // correct row never fires a no-op PATCH (each PATCH re-arms a QRZ update
+    // upload).
+    dxcc?: string;
+    cqz?: string;
+    ituz?: string;
+    cont?: string;
     // Upload/forward status (e.g. "Y") — drive the callsign tint.
     sm_fwrd_by_email_status?: string;
     qrzcom_qso_upload_status?: string;

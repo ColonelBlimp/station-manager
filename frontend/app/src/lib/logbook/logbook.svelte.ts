@@ -23,6 +23,7 @@ import {
 import { patchQso, type QsoPatch } from '../api/qso-patch';
 import { fetchMailer, fetchForwarders } from '../api/config-blocks';
 import { enqueueUploads } from '../api/uploads';
+import { enrichCallsign } from '../api/enrichment';
 import type { ForwarderInfo } from './uploadStatus';
 
 const PAGE_SIZES = [25, 50, 100] as const;
@@ -89,6 +90,10 @@ class LogbookState {
     notEmailedOnly: boolean = $state(false);
     // True while a manual backfill upload is in flight (disables the button).
     uploading: boolean = $state(false);
+    // True while a bulk re-enrich sweep runs (disables its button);
+    // reEnrichProgress carries the "12/47" counter for the button label.
+    reEnriching: boolean = $state(false);
+    reEnrichProgress: string = $state('');
     // Transient success notice after an upload (e.g. "Queued 12 to QRZ"), or null.
     notice: string | null = $state(null);
 
@@ -356,6 +361,94 @@ class LogbookState {
         this.notice = bits.join(' · ') + '.';
         this.clearSelection();
         await Promise.all([this.#loadCount(), this.#loadPage(this.pageIndex)]);
+    }
+
+    /**
+     * Bulk Re-enrich (the backfill pattern as a toolbar action): for each
+     * SELECTED row on the CURRENT page, force-refresh the enrichment
+     * (refresh=true — cache-bypass) and PATCH only what actually changed.
+     * Policies, both proven by the 2026-07-13 backfill:
+     *   - skip-if-unchanged: a PATCH re-arms that QSO's QRZ update upload, so
+     *     an already-correct row must not fire a no-op re-upload;
+     *   - only non-empty fresh values are written (never blank a stored
+     *     field), and gridsquare fills ONLY when the stored one is empty —
+     *     the on-air grid is authoritative over a profile locator.
+     * Scope is the current page because the comparison needs live row data;
+     * selected rows on other pages are reported as skipped, not silently
+     * dropped. Sequential (one lookup at a time) — natural pacing for the
+     * upstream providers.
+     */
+    async reEnrichSelected(): Promise<void> {
+        if (this.reEnriching) return;
+        const onPage = this.rows.filter((r) => this.selected.has(r.id));
+        const targets = onPage.filter((r) => r.uuid && (r.call ?? '').trim() !== '');
+        const offPage = this.selected.size - onPage.length;
+        if (targets.length === 0) {
+            this.notice = 'No selected rows on this page to re-enrich.';
+            return;
+        }
+        this.reEnriching = true;
+        this.notice = null;
+        this.error = null;
+        let changed = 0;
+        let unchanged = 0;
+        let noData = 0;
+        let failed = 0;
+        for (let i = 0; i < targets.length; i++) {
+            const row = targets[i];
+            this.reEnrichProgress = `${i + 1}/${targets.length}`;
+            const out = await enrichCallsign((row.call ?? '').trim(), undefined, {
+                refresh: true,
+            });
+            if (out.kind !== 'ok') {
+                failed++;
+                continue;
+            }
+            const st = out.result.station ?? {};
+            const co = out.result.country;
+            // Candidate fresh values (empty = no data for that field).
+            const fresh: Partial<Record<keyof QsoPatch, string>> = {
+                country: st.country ?? co?.name ?? '',
+                name: st.name ?? '',
+                dxcc: st.dxcc ?? '',
+                cqz: st.cqz ?? co?.cq_zone ?? '',
+                ituz: st.ituz ?? co?.itu_zone ?? '',
+                cont: st.cont ?? co?.continent ?? '',
+            };
+            if ((row.gridsquare ?? '').trim() === '') {
+                fresh.gridsquare = st.gridsquare ?? '';
+            }
+            if (Object.values(fresh).every((v) => v === '')) {
+                noData++;
+                continue;
+            }
+            const patch: QsoPatch = {};
+            for (const [k, v] of Object.entries(fresh) as [keyof QsoPatch, string][]) {
+                if (v !== '' && v !== ((row as unknown as Record<string, unknown>)[k] ?? '')) {
+                    patch[k] = v;
+                }
+            }
+            if (Object.keys(patch).length === 0) {
+                unchanged++;
+                continue;
+            }
+            const res = await patchQso(row.uuid as string, patch);
+            if (res.kind !== 'ok') {
+                failed++;
+                continue;
+            }
+            const idx = this.rows.findIndex((r) => r.id === row.id);
+            if (idx !== -1) this.rows[idx] = res.qso;
+            changed++;
+        }
+        this.reEnriching = false;
+        this.reEnrichProgress = '';
+        const bits = [`Re-enriched ${changed}`];
+        if (unchanged > 0) bits.push(`${unchanged} unchanged`);
+        if (noData > 0) bits.push(`${noData} no data`);
+        if (failed > 0) bits.push(`${failed} failed`);
+        if (offPage > 0) bits.push(`${offPage} selected on other pages skipped`);
+        this.notice = bits.join(' \u00b7 ') + '.';
     }
 
     /** Switch logbooks: reset paging, refresh count + first page. */

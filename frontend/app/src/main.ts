@@ -36,6 +36,7 @@ import {
     startFt8WorkCaller,
     startFt8Cq,
     abandonFt8Qso,
+    skipFt8Qso,
     type Ft8QsoOutcome,
 } from './lib/api/ft8qso';
 import { toasts } from './lib/ui/toasts.svelte';
@@ -99,6 +100,7 @@ setFt8TxActions({
             a.fd
         ).then(toTxResult),
     abandon: () => abandonFt8Qso().then(toTxResult),
+    skip: (armed) => skipFt8Qso(armed).then(toTxResult),
 });
 
 // Completed-FT8-QSO sink (ft8-logged SSE): a finished exchange is logged daemon-side

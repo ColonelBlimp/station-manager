@@ -70,6 +70,7 @@ export interface QsoPayload {
     next_message?: string;
     repeats?: number;
     max_repeats?: number;
+    skip_armed?: boolean;
     our_report?: string;
     their_report?: string;
     their_period?: string;

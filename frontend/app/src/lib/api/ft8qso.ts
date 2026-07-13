@@ -148,3 +148,11 @@ export function startFt8Cq(
 export function abandonFt8Qso(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
     return postFt8Qso('/v1/ft8/qso/abandon', {}, signal);
 }
+
+/** Arm/disarm skip-if-silent on the active session (the deferred Next,
+ *  daemon-side): armed, a silent cycle ends the session INSTEAD of keying the
+ *  repeat — no RF at a station the operator decided to drop. The armed state
+ *  comes back via the ft8-qso SSE (skip_armed). */
+export function skipFt8Qso(armed: boolean, signal?: AbortSignal): Promise<Ft8QsoOutcome> {
+    return postFt8Qso('/v1/ft8/qso/skip', { armed }, signal);
+}

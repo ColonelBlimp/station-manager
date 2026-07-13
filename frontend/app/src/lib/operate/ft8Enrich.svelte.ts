@@ -134,7 +134,27 @@ class Ft8EnrichState {
         this.observe(c, band);
         const key = cacheKey(c, band);
         const prev = this.cache[key] ?? {};
-        this.cache = { ...this.cache, [key]: { ...prev, worked: true } };
+        this.cache = { ...this.cache, [key]: { ...prev, worked: true, isNewEntity: false } };
+        // A worked new-entity is new no longer — the ★ must drop from EVERY
+        // cached call of the same entity, on every band (the daemon's
+        // is_new_entity flips the moment the QSO stores; this mirrors that
+        // onto the lookup-once cache, which would otherwise show stale stars
+        // all session). Sweep by the worked call's dxcc when it's known; if
+        // its enrich is still pending, other entries can't be matched — but
+        // any FUTURE lookup gets the fresh (false) flag from the daemon, so
+        // only pre-cached same-entity stars could linger in that edge.
+        const dx = prev.dxcc ?? '';
+        if (dx !== '') {
+            const swept = { ...this.cache };
+            let hit = false;
+            for (const [k, v] of Object.entries(swept)) {
+                if (v.dxcc === dx && v.isNewEntity === true) {
+                    swept[k] = { ...v, isNewEntity: false };
+                    hit = true;
+                }
+            }
+            if (hit) this.cache = swept;
+        }
     }
 
     /** Drop all decorations — called on FT8-view close so a re-open starts clean. */

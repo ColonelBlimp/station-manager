@@ -465,7 +465,19 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   lands cleanly and the next caller opens on the following TX slot; clicking it mid-slot
   used to abandon the contact while the current slot played out *and* then key the next
   caller, running one station's message tail straight into a transmission for a different
-  callsign. And a **message ladder**
+  callsign. **Deferred skip → DAEMON-SIDE (frontend/app, 2026-07-13):** the app SPA first
+  made Next a deferred "skip if silent" (arm, resolve on the RX outcome), then moved
+  the whole mechanism into the sequencer: `POST /v1/ft8/qso/skip {armed}` sets
+  `skip_if_silent`, and a silent cycle on an already-transmitted rung ends the session
+  **instead of keying the repeat**. Why: the SPA-side resolve could only observe the
+  silent cycle via the `ft8-qso` status published *after* the daemon had already keyed
+  the repeat — so every skip cut a just-started transmission (an audible PTT
+  "tick-tick" and a fraction of a second of RF at a station already being dropped).
+  The arm clears when the partner replies, on session start, and on Abandon; it rides
+  the `ft8-qso` SSE as `skip_armed` (confirm-by-push renders the amber button);
+  applies to answering + working sessions (standard and FD) — a Call-CQ run's Next
+  stays an immediate takeover. Guard: the skip never fires before the rung has
+  transmitted at least once (`repeats > 0`). And a **message ladder**
   rendering the exchange one slot per row — our TX messages interleaved with the
   remote's expected responses (`rx`), unknowns as placeholders `<DX>` / `<GRID>` /
   `<RST>` — the **reports fill in live** from `qso.our_report`/`their_report` once the

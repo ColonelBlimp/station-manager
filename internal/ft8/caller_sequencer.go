@@ -51,6 +51,7 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 		return ErrQsoInProgress
 	}
 	s.mode = seqCalling
+	s.skipIfSilent = false
 	s.sessionGen++
 	s.caller = nil
 	s.ourCall = call

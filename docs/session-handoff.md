@@ -213,7 +213,59 @@ precisely so we don't re-derive state or redo finished work.
 >   authoritative, the FT8-sink rule) and stashes dxcc/cqz/ituz/cont extras
 >   onto the eventual Save (QsoPatch extended; PATCH-writability proven by
 >   the day's backfill). Nothing writes until Save. **531 SPA tests** (ported
->   state tests + render/edit/re-enrich smokes). NOT yet dogfooded.
+>   state tests + render/edit/re-enrich smokes). Dogfooded same day: edit +
+>   Re-enrich VALIDATED live (the JH4BYZ edit re-armed its QRZ update row —
+>   edit→re-forward works end-to-end; RG6S can't be name-repaired — not on
+>   QRZ, the only callsign provider; HamQTH second-chain-link seed in inbox).
+> - **BULK Re-enrich on the selection toolbar (operator-requested, same
+>   day).** `logbookState.reEnrichSelected()`: per selected row on the
+>   CURRENT page, force-refresh enrich → PATCH **only the fields that
+>   actually differ** — the load-bearing policy is **skip-if-unchanged**
+>   (every PATCH re-arms that QSO's QRZ update upload, so already-correct
+>   rows must not fire no-op re-uploads); only non-empty fresh values write
+>   (never blanks a stored field); grid fills only when stored-empty (on-air
+>   authoritative). Off-page selected rows are REPORTED skipped, not silent
+>   (comparison needs live row data). Progress counter on the button
+>   ("Re-enriching 12/47…"), summary notice ("Re-enriched N · M unchanged ·
+>   …"). `LogbookQso` gained dxcc/cqz/ituz/cont for the comparison.
+>   Plus operator polish: **country flags in the Country column** via new
+>   `utils/dxccFlag.ts` — a static numeric-DXCC → ISO alpha-2 map (165
+>   entities, everything in the log; splits collapse to ISO parent —
+>   England/Scotland/Wales/NI→GB, Sardinia→IT, Eu/As-Russia→RU; unmapped →
+>   no flag). Keyed on numeric dxcc because rows carry no ccode and names
+>   vary by source — the morning's backfill is what made dxcc a reliable
+>   key. Country column w-32→w-34; Name column pl-1 (was visually bleeding
+>   into Country). **535 SPA tests.** Not yet dogfooded.
+> - **SKIP-IF-SILENT MOVED DAEMON-SIDE (operator's "tick-tick" PTT report →
+>   sanity check → build).** Root cause confirmed in code: the SPA's deferred
+>   Next could only resolve on the `ft8-qso` status published AFTER the
+>   sequencer had already keyed the repeat to the silent station
+>   (`transmit()` before `publish(st)` in every onSlot handler) — so each
+>   skip cut a just-started transmission: one key/unkey relay cycle (the
+>   tick-tick) + a fraction of a second of RF at a no-show. Fix: the
+>   sequencer owns the arm — new `skipIfSilent` flag checked at all four
+>   silent-repeat sites (answering/working × standard/FD; NOT the Call-CQ
+>   run, whose Next is an immediate takeover) that ends the session INSTEAD
+>   of keying the repeat; never fires before the rung transmitted once
+>   (`repeats > 0`); clears on reply / session start / Abandon.
+>   `SetSkipIfSilent` + `ErrNoActiveQso`; `QsoStatus.skip_armed`;
+>   **`POST /v1/ft8/qso/skip {armed}`** (202; 409 `ft8_no_active_qso` arming
+>   idle/caller; disarm idempotent). SPA: `skipQso` action seam, armed button
+>   renders from SSE (confirm-by-push), falling-edge watcher does the
+>   toasts + drain hand-off (Abandon suppresses the edge so it can't
+>   fake-resume the drain it just paused). 4 new sequencer tests + rewritten
+>   Ft8Operate tests; api-endpoints.md + ft8.md same-change. **536 SPA tests;
+>   full Go suite green.** Not yet on-air validated (listen for NO tick).
+> - **BUG FIX (operator): worked new-entity kept its ★ all session.** The FT8
+>   enrich cache is lookup-once, so `is_new_entity` captured before the QSO
+>   never refreshed. `markWorked` (fires on every `ft8-logged`) now clears
+>   the star on the worked call AND sweeps every cached call of the SAME
+>   dxcc on any band (another station from that entity isn't "new" either) —
+>   mirroring the daemon's flip onto the cache. Edge: if the worked call's
+>   own enrich is still pending at log time the sweep can't match by dxcc;
+>   fresh lookups get the daemon's false anyway. NOTE: `frontend/logging`
+>   shares this bug (same ported module) — not fixed there; it's on the
+>   ADR 0044 retirement path. **536 SPA tests.**
 
 > **NEXT (session 212 carry-over):** commit the logbook-page work (operator;
 > the morning's work is already committed+pushed). ~~confirm the QRZ update

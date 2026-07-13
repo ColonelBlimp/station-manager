@@ -29,6 +29,7 @@ beforeEach(() => {
         answerCq: okResult,
         workCaller: okResult,
         abandon: okResult,
+        skip: okResult,
     });
 });
 

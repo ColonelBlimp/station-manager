@@ -297,3 +297,74 @@ func TestSequencer_TransmitCarriesSessionDial(t *testing.T) {
 		require.Equal(t, 14.074, d, "transmit must carry the accepted session dial")
 	}
 }
+
+// TestSequencer_SkipIfSilent_EndsWithoutRepeat — the operator's deferred Next,
+// moved daemon-side (2026-07-13): armed mid-contact, a silent cycle on an
+// already-sent rung ends the session with NO repeat transmission. (The prior
+// SPA-side skip could only abandon a repeat the daemon had already keyed —
+// an audible PTT tick and a fraction of a second of RF at a no-show.)
+func TestSequencer_SkipIfSilent_EndsWithoutRepeat(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+
+	driveTheir(s, 30, nil) // opening transmitted (repeats=1)
+	require.NoError(t, s.SetSkipIfSilent(true))
+	require.True(t, r.lastStatus().SkipArmed, "arm must publish skip_armed (confirm-by-push)")
+
+	driveTheir(s, 60, nil) // silent cycle → skip fires INSTEAD of the repeat
+	require.Equal(t, []string{"K1ABC G0XYZ IO91"}, r.sentMsgs(), "no repeat transmission")
+	require.False(t, s.Active(), "session ended by the skip")
+	require.False(t, r.lastStatus().Active)
+}
+
+// A reply after arming disarms the skip (they came back) — the contact
+// continues, and a LATER silent cycle repeats normally (no stale skip).
+func TestSequencer_SkipIfSilent_DisarmsOnReply(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+
+	driveTheir(s, 30, nil) // opening
+	require.NoError(t, s.SetSkipIfSilent(true))
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)}) // they reply
+	require.True(t, s.Active(), "reply keeps the contact")
+	require.False(t, r.lastStatus().SkipArmed, "reply disarms the skip")
+
+	driveTheir(s, 90, nil) // silent — but the skip is gone: normal repeat
+	require.Equal(t, []string{
+		"K1ABC G0XYZ IO91",
+		"K1ABC G0XYZ R-12",
+		"K1ABC G0XYZ R-12",
+	}, r.sentMsgs())
+	require.True(t, s.Active())
+}
+
+// Arming needs a skippable session; disarm is always accepted (idempotent).
+func TestSequencer_SkipIfSilent_ArmRequiresSession(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.ErrorIs(t, s.SetSkipIfSilent(true), ErrNoActiveQso)
+	require.NoError(t, s.SetSkipIfSilent(false))
+}
+
+// An arm placed before the opening ever transmits must not fire on the first
+// their-slot (repeats=0 — there is nothing to skip yet): the opening goes out,
+// THEN a silent cycle skips.
+func TestSequencer_SkipIfSilent_NeverFiresBeforeFirstTransmit(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	require.NoError(t, s.SetSkipIfSilent(true))
+
+	driveTheir(s, 30, nil) // first cycle: opening MUST transmit
+	require.Equal(t, []string{"K1ABC G0XYZ IO91"}, r.sentMsgs())
+	require.True(t, s.Active())
+
+	driveTheir(s, 60, nil) // now a silent cycle on a sent rung → skip
+	require.Equal(t, []string{"K1ABC G0XYZ IO91"}, r.sentMsgs())
+	require.False(t, s.Active())
+}

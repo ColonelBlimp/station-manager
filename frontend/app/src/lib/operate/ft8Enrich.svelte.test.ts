@@ -91,4 +91,35 @@ describe('ft8EnrichState', () => {
         ft8EnrichState.markWorked('W1ABC', '20m');
         expect(ft8EnrichState.info('W1ABC', '20m')?.worked).toBe(true);
     });
+
+    // Operator bug 2026-07-13: a worked new-entity kept its ★ all session —
+    // the lookup-once cache held is_new_entity captured BEFORE the QSO. After
+    // a log, the star must drop from the worked call AND every other cached
+    // call of the same entity (same dxcc, any band).
+    it('markWorked clears the new-entity star for the whole entity', async () => {
+        setFt8Enricher((call) =>
+            Promise.resolve(
+                enrichment({
+                    country: 'Tuvalu',
+                    ccode: 'TV',
+                    dxcc: call.startsWith('T2') ? '282' : '291',
+                    isNewEntity: call.startsWith('T2'),
+                })
+            )
+        );
+        // Three cached rows: two Tuvalu calls (one on another band) + a US call.
+        ft8EnrichState.observe('T22TT', '20m');
+        ft8EnrichState.observe('T20AA', '15m');
+        ft8EnrichState.observe('W1ABC', '20m');
+        await flush();
+        expect(ft8EnrichState.info('T22TT', '20m')?.isNewEntity).toBe(true);
+        expect(ft8EnrichState.info('T20AA', '15m')?.isNewEntity).toBe(true);
+
+        ft8EnrichState.markWorked('T22TT', '20m');
+
+        expect(ft8EnrichState.info('T22TT', '20m')?.isNewEntity).toBe(false);
+        expect(ft8EnrichState.info('T20AA', '15m')?.isNewEntity).toBe(false); // same entity
+        expect(ft8EnrichState.info('W1ABC', '20m')?.isNewEntity).toBe(false); // was never new
+        expect(ft8EnrichState.info('T22TT', '20m')?.worked).toBe(true);
+    });
 });

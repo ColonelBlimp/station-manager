@@ -318,6 +318,13 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 ### `POST /v1/ft8/qso/abandon`
 - **Purpose:** Drop any active sequenced session (answer-a-CQ or Call-CQ). **Only when FT8 is enabled.** No body. **202 Accepted**, idempotent (no-op while idle). No error codes.
 
+### `POST /v1/ft8/qso/skip`
+- **Purpose:** Arm/disarm **skip-if-silent** on the active sequenced session (the operator's deferred Next, daemon-side): armed, a silent cycle on an already-transmitted rung ends the session **instead of keying the repeat** — no RF at a station the operator has decided to drop. **Only when FT8 is enabled.**
+- **Request:** Body `{"armed": bool}`.
+- **Response:** **202 Accepted**. The armed state rides the `ft8-qso` SSE as `skip_armed` (confirm-by-push); the skip firing publishes the idle status.
+- **Errors:** 400 malformed body; **409 `ft8_no_active_qso`** when arming with nothing skippable (idle, or a Call-CQ run — its Next is an immediate takeover). Disarm is idempotent (accepted even when idle).
+- **Notes:** The arm clears itself when the partner replies (they came back), on session start, and on Abandon. Applies to answering + working sessions, standard and FD.
+
 ---
 
 ## Diagnostics & SPA

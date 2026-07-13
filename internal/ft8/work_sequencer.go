@@ -60,6 +60,7 @@ func (s *Sequencer) StartWorkCaller(ourCall, theirCall, theirGrid string, theirS
 		return ErrQsoInProgress
 	}
 	s.mode = seqWorking
+	s.skipIfSilent = false
 	s.sessionGen++
 	s.caller = &c
 	s.ourCall = call
@@ -133,6 +134,9 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		s.log.InfoWith().Str("from_worked", heard).Bool("advanced", advanced).
 			Str("now_rung", rung).Msg("ft8 seq: working caller — decode from worked station")
 	}
+	if advanced {
+		s.skipIfSilent = false // they came back — an armed skip no longer applies
+	}
 
 	// Late-window guard (ADR 0032): too late into our slot and head-truncation loses
 	// too much; skip this slot and retry next cycle.
@@ -154,6 +158,16 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	// it completes on our own transmit.
 	confirming := s.caller.State == cqRogering
 	if !confirming {
+		// Operator-armed skip — see onSlotAnswering; same semantics.
+		if s.skipIfSilent && !advanced && s.repeats > 0 {
+			s.caller = nil
+			s.mode = seqIdle
+			s.skipIfSilent = false
+			s.mu.Unlock()
+			s.log.InfoWith().Msg("ft8 seq: working caller — skip-if-silent; ending without repeat")
+			s.publish(QsoStatus{Active: false})
+			return
+		}
 		if s.repeats >= s.maxRepeats {
 			s.caller = nil
 			s.mode = seqIdle
@@ -262,6 +276,7 @@ func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, 
 		return ErrQsoInProgress
 	}
 	s.mode = seqWorkingFd
+	s.skipIfSilent = false
 	s.sessionGen++
 	s.fdWork = &c
 	s.ourCall = call
@@ -329,6 +344,9 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.log.InfoWith().Str("from_worked", heard).Bool("advanced", advanced).
 			Str("now_rung", rung).Msg("ft8 seq: working caller (FD) — decode from worked station")
 	}
+	if advanced {
+		s.skipIfSilent = false // they came back — an armed skip no longer applies
+	}
 
 	curStart, perr := time.Parse(time.RFC3339, ref.StartUTC)
 	if perr != nil {
@@ -345,6 +363,16 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 
 	confirming := s.fdWork.State == fdwRogering
 	if !confirming {
+		// Operator-armed skip — see onSlotAnswering; same semantics.
+		if s.skipIfSilent && !advanced && s.repeats > 0 {
+			s.fdWork = nil
+			s.mode = seqIdle
+			s.skipIfSilent = false
+			s.mu.Unlock()
+			s.log.InfoWith().Msg("ft8 seq: working caller (FD) — skip-if-silent; ending without repeat")
+			s.publish(QsoStatus{Active: false})
+			return
+		}
 		if s.repeats >= s.maxRepeats {
 			s.fdWork = nil
 			s.mode = seqIdle

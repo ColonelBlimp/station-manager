@@ -275,6 +275,28 @@ func (s *Server) handleFt8QsoPath(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// handleFt8QsoSkip arms/disarms skip-if-silent on the active session (the
+// deferred Next moved daemon-side, 2026-07-13): armed, a silent cycle on an
+// already-sent rung ends the session INSTEAD of keying the repeat — so a skip
+// never puts RF at a station the operator has decided to drop. Body
+// {"armed": bool}. 409 ft8_no_active_qso when arming with nothing skippable
+// (idle, or a Call-CQ run — its Next is an immediate takeover); disarm is
+// idempotent. The armed state comes back via the ft8-qso SSE (skip_armed).
+func (s *Server) handleFt8QsoSkip(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleFt8QsoSkip"
+	var req struct {
+		Armed bool `json:"armed"`
+	}
+	if !s.readJSONBody(w, r, op, &req) {
+		return // readJSONBody already wrote the error envelope
+	}
+	if err := s.ft8.SetQsoSkip(req.Armed); err != nil {
+		s.writeFt8QsoError(w, op, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
 // handleFt8QsoAbandon drops any active sequenced session — answer-a-CQ or Call-CQ.
 // Idempotent — abandoning when idle is a 202 no-op.
 func (s *Server) handleFt8QsoAbandon(w http.ResponseWriter, _ *http.Request) {
@@ -290,6 +312,9 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 	case stderr.Is(err, ft8.ErrTxNotReady):
 		s.writeError(w, http.StatusServiceUnavailable, "rig_not_ready",
 			"rig not connected or identity unverified; try again in a moment", op)
+	case stderr.Is(err, ft8.ErrNoActiveQso):
+		s.writeError(w, http.StatusConflict, "ft8_no_active_qso",
+			"no active QSO to arm a skip on", op)
 	case stderr.Is(err, ft8.ErrQsoInProgress):
 		s.writeError(w, http.StatusConflict, "ft8_qso_in_progress",
 			"a QSO is already in progress; abandon it first", op)
