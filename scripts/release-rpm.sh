@@ -45,15 +45,15 @@ echo "── [1/3] Building SPAs → frontend/{logging,config,logbook}/dist/ + m
 # builds the SPAs on the host so the build container needs no Node). Bare runs
 # still build them.
 if [ "${SM_SKIP_SPA:-}" = "1" ]; then
-  for spa in logging config logbook; do
+  for spa in logging config logbook app; do
     if [ ! -d "frontend/${spa}/dist" ]; then
       echo "error: SM_SKIP_SPA=1 but frontend/${spa}/dist/ is missing — build the SPAs first" >&2
       exit 1
     fi
   done
-  echo "  (SM_SKIP_SPA=1 — using pre-built frontend/{logging,config,logbook}/dist/)"
+  echo "  (SM_SKIP_SPA=1 — using pre-built frontend/{logging,config,logbook,app}/dist/)"
 else
-  for spa in logging config logbook; do
+  for spa in logging config logbook app; do
     echo "  • frontend/${spa}"
     (cd "frontend/${spa}" && npm run build)
   done

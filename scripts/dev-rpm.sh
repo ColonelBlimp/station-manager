@@ -40,11 +40,13 @@ VERSION=$(sm_git_version)
 RPM_VERSION=$(sm_rpm_version "$VERSION")
 OUTPUT=build/release/station-manager-dev.x86_64.rpm
 
-echo "── [1/3] Building SPAs → frontend/{logging,config,logbook}/dist/ + manual → manual/public/ ──"
+echo "── [1/3] Building SPAs → frontend/{logging,config,logbook,app}/dist/ + manual → manual/public/ ──"
 # Every embedded SPA (frontend/embed.go //go:embed all:<spa>/dist) must be rebuilt
 # here — the Go build embeds whatever is already in each dist/, so skipping one
 # silently ships a STALE bundle for that client (e.g. config-SPA toggles missing).
-for spa in logging config logbook; do
+# `app` (ADR 0044) was missed when it was embedded (2026-07-11) — a day of /app/
+# dogfood deploys silently shipped whatever dist/ last held (found 2026-07-13).
+for spa in logging config logbook app; do
   echo "  • frontend/${spa}"
   (cd "frontend/${spa}" && npm run build)
 done
