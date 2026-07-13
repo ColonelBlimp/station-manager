@@ -409,7 +409,8 @@ func (s *Sequencer) SetSkipIfSilent(armed bool) error {
 		s.mu.Unlock()
 		return ErrNoActiveQso
 	}
-	s.skipIfSilent = armed && skippable
+	// Reaching here: either a valid arm (skippable) or a disarm (always ok).
+	s.skipIfSilent = armed
 	st := s.statusLocked()
 	s.mu.Unlock()
 	s.publish(st)
