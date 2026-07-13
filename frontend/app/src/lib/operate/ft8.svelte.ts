@@ -159,11 +159,12 @@ class Ft8State {
     selectedOffset: number | null = $state(loadSelectedOffset());
     /** Call-CQ slot parity (WSJT-X "Tx even/1st"). 'next' = fire next slot regardless. */
     txParity: 'next' | 'even' | 'odd' = $state('next');
-    /** Which Occupancy presentation the operator prefers — 'channels' (discrete
-     *  ~50 Hz strip) or 'spectrum' (continuous click-anywhere bar). Both render the
-     *  same snapshot and write the same selectedOffset; this is just the view. In-
-     *  memory (survives a view toggle; resets on a full refresh). */
-    occupancyView: 'channels' | 'spectrum' = $state('channels');
+    /** Which Occupancy presentation the operator prefers — 'spectrum' (continuous
+     *  click-anywhere bar, the default — operator 2026-07-13) or 'channels'
+     *  (discrete ~50 Hz strip). Both render the same snapshot and write the same
+     *  selectedOffset; this is just the view. In-memory (survives a view toggle;
+     *  resets on a full refresh). */
+    occupancyView: 'channels' | 'spectrum' = $state('spectrum');
     /** Transmit status (ft8-tx). */
     tx: Ft8TxStatus = $state(emptyTxStatus());
     /** Manual sequencer status (ft8-qso). */
@@ -567,7 +568,7 @@ export function resetFt8ForTests(): void {
     ft8State.selectedOffset = null;
     saveSelectedOffset(null);
     ft8State.txParity = 'next';
-    ft8State.occupancyView = 'channels';
+    ft8State.occupancyView = 'spectrum';
     ft8State.tx = emptyTxStatus();
     ft8State.qso = emptyQsoStatus();
 }

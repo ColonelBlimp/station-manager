@@ -217,11 +217,11 @@ describe('effectiveOffset', () => {
 });
 
 describe('occupancy view toggle', () => {
-    it('defaults to channels and switches presentation without touching the pick', () => {
-        expect(ft8State.occupancyView).toBe('channels');
+    it('defaults to spectrum and switches presentation without touching the pick', () => {
+        expect(ft8State.occupancyView).toBe('spectrum'); // operator default, 2026-07-13
         ft8State.selectedOffset = 1500;
-        ft8State.setOccupancyView('spectrum');
-        expect(ft8State.occupancyView).toBe('spectrum');
+        ft8State.setOccupancyView('channels');
+        expect(ft8State.occupancyView).toBe('channels');
         expect(ft8State.selectedOffset).toBe(1500); // view choice ≠ offset pick
     });
 });

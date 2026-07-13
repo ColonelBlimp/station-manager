@@ -65,6 +65,8 @@ describe('Ft8Occupancy picker', () => {
         expect(ft8State.effectiveOffset).toBe(1500); // auto = suggested[0]
 
         render(Ft8Occupancy);
+        // Spectrum is the default — switch to Channels for the discrete markers.
+        await fireEvent.click(screen.getByRole('button', { name: 'Channels' }));
         await fireEvent.click(screen.getByLabelText('Select TX offset 700 hertz'));
         flushSync();
 
@@ -72,20 +74,20 @@ describe('Ft8Occupancy picker', () => {
         expect(ft8State.effectiveOffset).toBe(700); // pinned, no longer the daemon's pick
     });
 
-    it('toggles to the Spectrum view without disturbing the pick', async () => {
+    it('toggles to the Channels view without disturbing the pick', async () => {
         ft8Link.onOccupancy(occupancy());
         ft8State.selectedOffset = 1234;
         flushSync();
 
         render(Ft8Occupancy);
-        // Channels is the default — the continuous slider is absent.
-        expect(screen.queryByLabelText('TX offset (continuous)')).toBeNull();
+        // Spectrum is the default (operator, 2026-07-13) — the slider renders at once.
+        expect(screen.getByLabelText('TX offset (continuous)')).toBeInTheDocument();
 
-        await fireEvent.click(screen.getByRole('button', { name: 'Spectrum' }));
+        await fireEvent.click(screen.getByRole('button', { name: 'Channels' }));
         flushSync();
 
-        expect(ft8State.occupancyView).toBe('spectrum');
-        expect(screen.getByLabelText('TX offset (continuous)')).toBeInTheDocument();
+        expect(ft8State.occupancyView).toBe('channels');
+        expect(screen.queryByLabelText('TX offset (continuous)')).toBeNull();
         expect(ft8State.selectedOffset).toBe(1234); // view choice ≠ offset pick
     });
 });
