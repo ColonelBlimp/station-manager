@@ -1510,6 +1510,17 @@ Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the 
 > section is ONLY what's actively in flight — it does **not** re-rank the backlog
 > (that's the backlog's job; this doc points at it).
 >
+> **▶ NEXT (set 2026-07-14, operator directive): _FT8 — reduced type-4 hashed QSO
+> ladder._** Build the type-4 `CQ→RR73→73` flow + the 22-bit hash table so SM can
+> complete a QSO with any **nonstandard call** (`/D`, `/M`, prefix-compound). It's a
+> **distinct sequencer path** — the standard grid/report ladder can't encode a hashed
+> partner. Unblocked at the library level (go-ft8 v0.7.0). Full detail + the 2026-07-14
+> `/D` probe: `docs/backlog.md` → "FT8 — work type-4 compound calls"; design + weighed
+> alternatives in **ADR 0048** (status Proposed → flip to Accepted after the offline
+> round-trip gate + on-air validation). **The 7Q8AC-ship
+> focus below is CLEARED** (shipped 2026-07-09); the daily-driver track is now
+> `frontend/app` (memory `sm-frontend-app-consolidation`).
+>
 > **▶ Focus (set 2026-07-04): _Next shippable state for 7Q8AC._** The goal is a
 > release the external operator (7Q8AC, Malawi, offline-first) can run; "stabilise &
 > finish in-flight" is the means. The P0/P1 items below ARE the ship gate — clear them

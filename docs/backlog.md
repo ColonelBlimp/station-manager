@@ -46,10 +46,11 @@ next, and in what order" is answered.
 - Fix stale test `internal/api` `TestVersion_HappyPath` — expects schema v3, the DB now migrates to v4 (log migration `0004_utc_timestamps`); bump the expected version in `handler_version_test.go`. Quick; greens the full api suite. (dogfood triage 2026-07-08)
 
 **P2 — next features (open one workstream per active focus)**
-- **▶ NEXT SESSION (bumped 2026-07-05):** _Re-enrich a logged QSO — in the **logbook SPA**._ The repair path for names dropped by a flaky-link QRZ timeout at log time (2nd confirmed occurrence — 3/52 nameless on 2026-07-05; recurring 7Q8AC/Malawi condition). Companion: a **manual FAQ** on the cause + remedy. See detail.
+- **▶ NEXT (set 2026-07-14, operator directive): _FT8 — reduced type-4 hashed QSO ladder._** Build the type-4 `CQ→RR73→73` flow + the 22-bit hash table so SM can complete a QSO with any **nonstandard call** (`/D`, `/M`, prefix-compound `PJ4/NA2AA`) — the one FT8-side gap that blocks finishing such a contact today. Unblocked at the library level (go-ft8 v0.7.0 has type-4 encode/decode); the standard grid/report ladder can't encode a hashed partner, so it's a **distinct sequencer path**. Detail + the 2026-07-14 `/D` probe under "FT8 — work type-4 compound calls".
+- **▶ was-NEXT (bumped 2026-07-05):** _Re-enrich a logged QSO._ **SHIPPED as the frontend/app logbook-page Re-enrich repair path (session 212, 2026-07-13).** Companion **manual FAQ** on the name-missing cause/remedy still open (small). _(Relocate this line to the archive once the FAQ lands.)_
 - _SPA architecture (post-ship · ADR 0044):_ consolidate logging+config+logbook into **one app shell** (dashboard + Operate[Phone/CW+FT8] + Logbook + Settings; manual stays zero-JS — 3→1). **Subsumes** the _UI cohesion_ cluster below (theme built into the shell from the first commit). Gated behind the 7Q8AC ship.
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
-- _FT8:_ type-4 compound + free-text · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW) · work-path opening: prefer clean next-slot start over truncated immediate fire
+- _FT8:_ **▶ reduced type-4 compound QSO ladder (`/D` / prefix-compound) — PRIORITISED NEXT 2026-07-14** · type-4 free-text messages · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW) · work-path opening: prefer clean next-slot start over truncated immediate fire
 - _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
 - _Data / SM-Cloud prep (do before S3):_ ~~migration 0004~~ **DEPLOYED + VERIFIED 2026-07-05** on the live 5,148-QSO dogfood DB (`schema_migrations_log` v4 clean; 0 debris/unparseable rows; `created_at` matches `qso_date`/`time_on` in UTC) → move to archive · `internal/database` review lows (cold-insert retry, bootstrap stale-table detection, + 5 nits) — still open
@@ -64,7 +65,7 @@ next, and in what order" is answered.
 
 **P3 — deferred / large / needs a trigger**
 - CAT poll mode (ADR 0034) · FT8 semi-auto watch-list (SET ASIDE) · spot-submitter registry (on 2nd destination) · operator / user profiles (contesting lens: bundle op-identity + contest params, swap mid-event — dogfood 2026-07-06) · outbound UDP telemetry (WSJT-X-compatible) · FT8 occupancy waterfall render · POTA fields · config hot-reload · settings help tooltips + beginner/expert mode · FT8 Monitor/Listen toggle (DISCUSSION) · download-site install page · `PUT /v1/config` `default_logbook.id` wiring (no consumer yet)
-- _Deferred features / design (dogfood triage 2026-07-08):_ `MY_RIG` follow the CAT-identified rig when connected (config = fallback) · single-source the freq→band table + regional band-plan design (three hand-synced copies today) · FT8 tune-carrier occupancy-skip (pending HW check on whether the RTTY tune tone bleeds into RX audio) · QSO / dashboard world map (Natural Earth, offline, geodesic via `pathInfo`) · FT8 auto band-hop / "run the bands" · voice keyer + phone/CW auto-CQ + QSO copilot (crosses the v1 "no phone/CW PTT-for-operating" line — post-ship) · movable / dockable nav · propagation / conditions panel (external online data source — dogfood 2026-07-09) · 2nd callsign-enrichment provider (HamQTH fallback link in the lookup chain, catches QRZ-absent calls — dogfood 2026-07-13) · smcloud "am I being heard?" pile-up status site (community-phase, capture-don't-build — dogfood 2026-07-11)
+- _Deferred features / design (dogfood triage 2026-07-08):_ `MY_RIG` follow the CAT-identified rig when connected (config = fallback) · single-source the freq→band table + regional band-plan design (three hand-synced copies today) · FT8 tune-carrier occupancy-skip (pending HW check on whether the RTTY tune tone bleeds into RX audio) · QSO contacts map — **session-first** (Operate/Session panel list⇄map toggle), whole-log dashboard map as phase 2 (Natural Earth bundled, d3-geo, offline; scoped 2026-07-14) · FT8 auto band-hop / "run the bands" · voice keyer + phone/CW auto-CQ + QSO copilot (crosses the v1 "no phone/CW PTT-for-operating" line — post-ship) · movable / dockable nav · propagation / conditions panel (external online data source — dogfood 2026-07-09) · 2nd callsign-enrichment provider (HamQTH fallback link in the lookup chain, catches QRZ-absent calls — dogfood 2026-07-13) · smcloud "am I being heard?" pile-up status site (community-phase, capture-don't-build — dogfood 2026-07-11)
 
 **Designed workstreams — built on go-ahead (not queued)**
 - SM Cloud P1 (ADR 0040 + `docs/v2-design/sm-cloud-p1.md`) · DB-manager SPA (4th SPA — incl. a data-validation / DXCC-consistency-checker surface mirroring `scripts/qso-audit.py`, dogfood 2026-07-13)
@@ -261,7 +262,20 @@ next, and in what order" is answered.
   exact callsign vs prefix/wildcard. Whether it also feeds AP-hint *de*-prioritising
   (ADR 0025) is a later question, not v1.
 
-- **FT8 — work type-4 compound calls + free-text messages.** The answer-a-CQ,
+- **FT8 — work type-4 compound calls + free-text messages.**
+  **▶ PRIORITISED NEXT (2026-07-14, operator directive):** build the **reduced type-4
+  hashed QSO ladder** so SM can complete a contact with any nonstandard call (`/D`,
+  `/M`, prefix-compound `PJ4/NA2AA`). Empirically confirmed 2026-07-14 (probe against
+  go-ft8 v0.7.0): a `/D` suffix packs **type-4**, identical to a prefix-compound —
+  `CQ` / `RR73` / `73` encode (partner hashed to `<...>`) but the `CQ`+grid /
+  opening-call+grid / report / rogered-report rungs are **rejected** ("unsupported
+  standard message" — no type-4 grid/report form), so SM's standard grid→report→73
+  ladder can't be walked and the sequencer fails soft (`ErrTxBadMessage`). `/P` is the
+  exception — it packs *standard*, carries grid+report, and already works end-to-end.
+  **Design + alternatives recorded in ADR 0048** (spelled-partner matching · degraded
+  FD-style logging · FD-clone isolated path · answer+work-only v1). The build shape is
+  in the type-4 sub-bullet below.
+  The answer-a-CQ,
   work-a-caller, and Call-CQ paths work any station whose exchange encodes as a
   **standard structured FT8 message**; the sequencer defensively **skips** anything
   else (the dynamic "reply does not encode" guard — every site tries
@@ -475,6 +489,65 @@ next, and in what order" is answered.
   Sits with the SM Cloud P1 designed workstream (ADR 0040) + the P4 community bucket;
   orthogonal to the frontend/app daily-driver work. Full note: `docs/dogfood-inbox.md`
   2026-07-11.
+
+- **QSO contacts map — session-first, then whole-log (P3 · frontend/app; scoped 2026-07-14).**
+  A great-circle map from the operator's QTH to worked stations — a loved ham feature
+  (WSJT-X / QRZ / Log4OM all have one), not eye candy. **Decision: build it SESSION-scoped
+  first** (map the current session's QSOs), which removes the biggest cost and lands the
+  reusable render engine on a tiny dataset before the whole-log version.
+  - **Data readiness (verified against the live 5,418-QSO dogfood DB, 2026-07-14):**
+    contacted `gridsquare` 98.6%, `dxcc` 100%, `my_gridsquare` 100%; the `additional_data`
+    blob already carries **pre-computed `lat`/`lon` + `my_lat`/`my_lon`** (+ `distance`,
+    `cont`) — the daemon has done the geo math. So the map is almost pure rendering.
+  - **Primitives we HAVE** (`frontend/app/src/lib/utils/bearing.ts`): `gridToDecimal`
+    (grid→lat/lon), `pathInfo` (short/long-path bearing + distance), Maidenhead validation.
+    Rendering idiom is SVG/DOM (no canvas anywhere) — a vector map fits. **Need to add:**
+    a projection (lat/lon→x/y), a great-circle **arc sampler** (`pathInfo` gives endpoints
+    only; nothing samples a polyline today), a bundled **basemap**, and a host component.
+  - **v1 = session map (SPA-only, no daemon change).** Data source is the in-memory
+    `session.qsos` (`session.svelte.ts` `sessionQosState`) — already `$state`-reactive and
+    `sessionStorage`-persisted, exactly what the shared Session panel renders. **Home:** the
+    shared Session panel (FT8 + Phone/CW both) as a **list ⇄ map toggle**, next to the log it
+    draws. **Origin:** config `myGrid` (fixed per session). At session scale (tens–hundreds
+    of rows) draw the **arcs from the start** (skip dots-first). **Live payoff:** arcs appear
+    as each QSO is logged — a compelling operating-moment view during a run/pile-up.
+    **Fail-soft:** rows without a grid just aren't plotted (show "N of M plotted").
+  - **The one plumbing gap:** `SessionQso` (`session.svelte.ts:10`) carries callsign/band/
+    mode/rst/name/country but **not `gridsquare`** — even though both sources have it. FT8's
+    `ft8-logged` SSE payload **already carries `gridsquare`** (`api/ft8-sse.ts:96`) — free,
+    just store it; the Phone/CW path has the grid in the client-side enrichment draft before
+    submit. So: add `gridsquare?` to `SessionQso` + populate it in the two `addSessionQso`
+    (`session.svelte.ts:67`) call sites. A handful of lines, SPA-only.
+  - **Decisions (would carry into an ADR-lite):**
+    - **Add `d3-geo` + `topojson-client`.** The one call that pushes against minimize-deps —
+      but hand-rolling a spherical projection + antimeridian clipping + `geoInterpolate` arc
+      sampling is exactly the fiddly, well-solved math a focused lib should own (~30 KB gz,
+      MIT → GPL-clean). Alternative (zero-dep equirectangular + hand-rolled slerp) saves the
+      dep but reinvents antimeridian handling and looks flatter. Lean d3-geo.
+    - **Basemap = Natural Earth 110m TopoJSON** (public domain → GPL-clean, no ODbL
+      share-alike), **`import`ed so Vite bundles it** into `app/dist` → shipped in the binary
+      by `//go:embed all:app/dist` (`frontend/embed.go`), **never fetched** — same offline-first
+      posture as the emoji-flag util. ~100 KB. AVOID OSM/ODbL-derived data (share-alike).
+  - **Phase 2 — whole-log Dashboard map (later).** The `frontend/app` dashboard route is an
+    empty placeholder (`App.svelte` `{:else}`) wanting a first tenant. The whole-log map
+    reuses the SAME render engine; the only new piece is the data source — a small aggregate
+    endpoint **`GET /v1/logbook/{id}/map`** returning dedup'd plot coords
+    (`[{grid,lat,lon,dxcc,cont,bands[],modes[],count}]`; 5.4k QSOs → a few hundred unique
+    grids / ~150 DXCC → one tiny offline-friendly request), rather than paging the cursor API
+    over a flaky link. NB this bespoke aggregate slightly tensions with the ADR 0043/0044
+    "compose existing + subscribe, resist aggregates" guidance — justified because a
+    coordinate projection is a genuinely different shape than paginated rows and is the
+    flaky-link-correct choice; record the exception if built.
+  - **Per-QSO origin (refinement):** v1 uses a single fixed `myGrid`. Per-QSO `my_gridsquare`
+    (100% populated in the blob, but not on the typed client row) would let a roving/multi-site
+    log draw per-QSO origins — deferred; not needed for a fixed-location or DXpedition op.
+  - **Effort:** engine (d3-geo + basemap + projection + country render) ~1 day · session arcs
+    + markers + hover tooltip (call/grid/distance/bearing from `pathInfo`) ~1 day · Session-panel
+    toggle + `gridsquare` plumbing + light/dark theming + tests ~0.5–1 day → **~2.5–3 days for
+    the session map**, after which the Dashboard map is "swap the data source." **Stays P3** — a
+    delight feature competing with the type-4 ladder; a shovel-ready block for a UI cycle.
+    Related: the LSPA "future POTA fields", the FT8 session log, `docs/dogfood-inbox.md`
+    2026-07-04 + 2026-07-06 (original map notes).
 
 - **SPA consolidation — one app shell (ADR 0044, post-ship).** Merge the three
   Svelte SPAs (`frontend/{logging,config,logbook}`) into one Vite + Svelte 5 app
