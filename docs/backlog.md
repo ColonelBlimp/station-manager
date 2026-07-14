@@ -495,6 +495,68 @@ next, and in what order" is answered.
   (WSJT-X / QRZ / Log4OM all have one), not eye candy. **Decision: build it SESSION-scoped
   first** (map the current session's QSOs), which removes the biggest cost and lands the
   reusable render engine on a tiny dataset before the whole-log version.
+  - **▶ DESIGN REFINED 2026-07-14 → recorded in ADR 0049 (Daemon-owned operating sessions).**
+    The "SPA-only, no daemon change" framing below is **superseded**: a decent map needs the
+    whole working space, an in-app overlay blocks operating, and a separate tab can't see the
+    operating tab's in-memory `session.qsos`. So the map is delivered as a **separate
+    daemon-served tab** fed by `GET /v1/session/{id}/qsos`, which requires **daemon-owned
+    sessions** (a `sessions` table + a promoted `session_id` column stamped server-side on
+    every QSO). That structural change is independently justified (session reconstruction +
+    the operator/contest-profiles item) — the map is its first tenant. The render-engine
+    notes below (d3-geo, Natural Earth basemap, arc sampler, projection, fail-soft "N of M
+    plotted") still stand; only the data-source + delivery changed. **Full design +
+    weighed alternatives: ADR 0049.**
+  - **▶ IMPLEMENTATION PLAN (ADR 0049; drafted 2026-07-14). Critical path to "session map
+    from a real sitting" = Phases 0→1→2→3; Phase 4 is the durable-value tail. Each phase is
+    provable in isolation before the next depends on it — the daemon spine is fully tested
+    before any map pixel.**
+    - **Phase 0 — schema + types (pure plumbing, no behaviour change).** New migration
+      `migrations/log/0005_sessions.{up,down}.sql`: `CREATE TABLE sessions` (`uuid` PK with the
+      same UUIDv7 CHECK as `qso.uuid`; `started_at`, `ended_at` nullable; `operator_call`,
+      `operator_name`, `label`; `created_at`/`modified_at`) + `ALTER TABLE qso ADD COLUMN
+      session_id TEXT` + index (nullable → no table rebuild). Add `sessions` to
+      `coreTablesBySet[MigrationSetLog]` (`migrations.go:37`). sqlboiler regen. `types.Qso`
+      gains `SessionID string` (omitempty); new `types.Session`. Adapter edits (`type_to_model.go`
+      set column, `model_to_type.go` overlay authoritative) mirroring the `last_refreshed_at`
+      precedent. **Proof:** migration up/down test; a `Qso` with a hand-set `SessionID`
+      round-trips.
+    - **Phase 1 — session lifecycle (daemon owns "the current session").** New DI-registered
+      session store (`Initialize/Open/Close`): `CurrentOrOpen(now)` returns the open session or
+      creates one; **lazy auto-close** — if the gap since the open session's last QSO exceeds the
+      idle threshold, close it (`ended_at`) + open a fresh one (lazy-on-next-QSO beats a ticker:
+      no timer, inherently restart-safe — the open row IS the state). **Restart resilience:** on
+      boot, current = most recent `ended_at IS NULL` row, else none. Config
+      `sessions.idle_gap_minutes` (default ~60, TBD). Stamp in `prepareQso` (`submit.go`, beside
+      `resolveSubmitUUID`): resolve/create the current session **before** the QSO tx, stamp
+      `qso.SessionID`, **best-effort** (session-bookkeeping failure logs + stamps empty; the QSO
+      still logs — honours "only a broken local DB stops logging"). **Proof:** first QSO opens a
+      session; subsequent share it; a QSO past the idle gap opens a new one; simulated restart
+      resumes the open session.
+    - **Phase 2 — query endpoint (the map's data source).** `GET /v1/session/{id}/qsos` +
+      `GET /v1/session/current` (so the map tab knows what to open). Handlers in a new
+      `internal/api/handler_session_map.go`, **named to not collide** with the existing
+      client-list `SessionEmailRequest`/`SessionExportRequest`; registered in `server.go`'s
+      session block; ids via `parsePathUUID`/`IsValidUUIDv7`. **Proof:** returns exactly the
+      session's rows; unknown/invalid id → 404/400; empty session → empty list. **← daemon spine
+      complete + fully tested here; the ADR's Proposed→Accepted "sessions stamp correctly"
+      trigger is met before any UI.**
+    - **Phase 3 — SPA session map (the payoff).** Add `d3-geo` + `topojson-client`; bundle Natural
+      Earth 110m TopoJSON (`import`ed → Vite bundles → `//go:embed`'d, never fetched). Reusable
+      render engine: projection, country render, great-circle **arc sampler** (`geoInterpolate`),
+      fed by the precomputed `lat`/`lon`/`my_lat`/`my_lon` in `additional_data`. New **full-window
+      route** in `frontend/app` (empty dashboard `{:else}` is a candidate host), opened in its own
+      tab; fetches `/v1/session/current` → `/v1/session/{id}/qsos`; arcs + markers + hover tooltip
+      (call/grid/distance/bearing via `pathInfo`); theme-aware; fail-soft "N of M plotted". An
+      **"Open map ↗"** button in the shared Session tile opens the tab. **Proof:** engine unit
+      tests (projection, arc sampler) + component render over a fixture session.
+    - **Phase 4 — lifecycle control + reconstruction (follow-on, NOT needed for map v1).**
+      `POST /v1/session/start` (name, operator identity), `POST /v1/session/{id}/end`,
+      `GET /v1/sessions` (list). SPA start/name/end control + a session **picker** so the map can
+      show past sittings; the operator-identity fields wire toward the operator/contest-profiles
+      item. This is where the contest/multi-op payoff + "map last night's run" land.
+    - **Open calls at Phase 0/1 start:** idle-gap default (~60 min?) · lazy-close (recommended,
+      restart-safe) vs a background ticker (only if a session must *visibly* self-close while idle
+      with no new QSO).
   - **Data readiness (verified against the live 5,418-QSO dogfood DB, 2026-07-14):**
     contacted `gridsquare` 98.6%, `dxcc` 100%, `my_gridsquare` 100%; the `additional_data`
     blob already carries **pre-computed `lat`/`lon` + `my_lat`/`my_lon`** (+ `distance`,
@@ -518,7 +580,7 @@ next, and in what order" is answered.
     just store it; the Phone/CW path has the grid in the client-side enrichment draft before
     submit. So: add `gridsquare?` to `SessionQso` + populate it in the two `addSessionQso`
     (`session.svelte.ts:67`) call sites. A handful of lines, SPA-only.
-  - **Decisions (would carry into an ADR-lite):**
+  - **Decisions (now recorded in ADR 0049 — the daemon-session decisions — plus these render choices):**
     - **Add `d3-geo` + `topojson-client`.** The one call that pushes against minimize-deps —
       but hand-rolling a spherical projection + antimeridian clipping + `geoInterpolate` arc
       sampling is exactly the fiddly, well-solved math a focused lib should own (~30 KB gz,
