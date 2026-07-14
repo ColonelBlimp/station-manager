@@ -56,6 +56,7 @@ next, and in what order" is answered.
 - _Code-review lows (2026-07-05 `internal/api` review):_ ~~disabled-subsystem routes 200-HTML/405 + `/assets/` listing~~ **FIXED 2026-07-05** (`spaHandler` `/v1/`→404 guard + directory→SPA-fallback; tests) · negative server-limit panics at startup (→ validation error) · credential-clear asymmetry (forwarder clears on blank, SMTP/lookup keep) — unify or document side-by-side · stale `middleware.go` Unwrap comment
 - _Code-review nits (2026-07-05 `internal/qsoservice` review):_ `uuid_conflict` classification unreachable under `force` (`submit.go:322`, drop `&& !force` — trap for a future `--force` import) · `importBatchFallback` publishes Hub events, contradicting `SubmitImportBatch`'s "does NOT publish" doc (note the fallback exception) · best-effort `contacted_station` cache warm-up uses the request ctx (a detached short-timeout ctx would make it client-independent, like the dedupe refetch)
 - _Daemon / data (dogfood triage 2026-07-08):_ **ADIF export omits populated `MY_*` fields** — investigate the compose/export path (`/v1/session/export` + email; possible data-loss) · fill `country.dxcc` entity number in enrichment (`DXCCForPrefix` on `dxcc_prefix`; ~38% of QSOs otherwise carry no DXCC number for awards) · downgrade client-abort enrichment WARN→debug when the cause is request-ctx cancellation (flaky-link log noise) · backport the tightened RST validators (scale + mode-aware) from frontend/app to the shipping logging SPA (entry-error protection) · rename the Operate "Rig" panel → "Rig Control" when rig-control ops land in frontend/app
+- _Rig / bands (dogfood triage 2026-07-14):_ **configurable operating bands** — a `config.json` `operating_bands` list feeding the Phone/CW band grid + FT8 buttons + manual dropdown from ONE source (default 160–6m; additive, = today's behaviour); build BEFORE/WITH the rig-control band-jump so the Ctrl+Shift+digit map follows the configured list, not a hardcoded table · **contact view (working panel) re-organise** (frontend/app Operate UI)
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
 - _Code-review lows (2026-07-05 SPA review):_ 13 verified low-severity fixes (the fetch-timeout standout was promoted to P1 and SHIPPED 2026-07-05 → archive) — TX_PWR sub-0.5 W rounding (durable ADIF) · state-reset gaps (tabCount / freqKnown / stale decodes / enrich zombies) · FT8 UI nits (bearing 360°, drain-abort, FD tooltip, isWorking split, canAnswer TX-guard) · edit-overlay mode dropdown
@@ -63,10 +64,10 @@ next, and in what order" is answered.
 
 **P3 — deferred / large / needs a trigger**
 - CAT poll mode (ADR 0034) · FT8 semi-auto watch-list (SET ASIDE) · spot-submitter registry (on 2nd destination) · operator / user profiles (contesting lens: bundle op-identity + contest params, swap mid-event — dogfood 2026-07-06) · outbound UDP telemetry (WSJT-X-compatible) · FT8 occupancy waterfall render · POTA fields · config hot-reload · settings help tooltips + beginner/expert mode · FT8 Monitor/Listen toggle (DISCUSSION) · download-site install page · `PUT /v1/config` `default_logbook.id` wiring (no consumer yet)
-- _Deferred features / design (dogfood triage 2026-07-08):_ `MY_RIG` follow the CAT-identified rig when connected (config = fallback) · single-source the freq→band table + regional band-plan design (three hand-synced copies today) · FT8 tune-carrier occupancy-skip (pending HW check on whether the RTTY tune tone bleeds into RX audio) · QSO / dashboard world map (Natural Earth, offline, geodesic via `pathInfo`) · FT8 auto band-hop / "run the bands" · voice keyer + phone/CW auto-CQ + QSO copilot (crosses the v1 "no phone/CW PTT-for-operating" line — post-ship) · movable / dockable nav
+- _Deferred features / design (dogfood triage 2026-07-08):_ `MY_RIG` follow the CAT-identified rig when connected (config = fallback) · single-source the freq→band table + regional band-plan design (three hand-synced copies today) · FT8 tune-carrier occupancy-skip (pending HW check on whether the RTTY tune tone bleeds into RX audio) · QSO / dashboard world map (Natural Earth, offline, geodesic via `pathInfo`) · FT8 auto band-hop / "run the bands" · voice keyer + phone/CW auto-CQ + QSO copilot (crosses the v1 "no phone/CW PTT-for-operating" line — post-ship) · movable / dockable nav · propagation / conditions panel (external online data source — dogfood 2026-07-09) · 2nd callsign-enrichment provider (HamQTH fallback link in the lookup chain, catches QRZ-absent calls — dogfood 2026-07-13) · smcloud "am I being heard?" pile-up status site (community-phase, capture-don't-build — dogfood 2026-07-11)
 
 **Designed workstreams — built on go-ahead (not queued)**
-- SM Cloud P1 (ADR 0040 + `docs/v2-design/sm-cloud-p1.md`) · DB-manager SPA (4th SPA)
+- SM Cloud P1 (ADR 0040 + `docs/v2-design/sm-cloud-p1.md`) · DB-manager SPA (4th SPA — incl. a data-validation / DXCC-consistency-checker surface mirroring `scripts/qso-audit.py`, dogfood 2026-07-13)
 
 **Parked — blocked or out of scope (do not pick up now)**
 - _Blocked on external event:_ **FT8 Field Day UI** (FD-aware Operate ladder render · pile-up Ctrl-click · config-SPA section dropdown) + any further FD on-air validation — the FD path can only be exercised **during a Field Day contest**, so it waits for the next one. Flows already shipped + on-air-validated 2026-06-28. NOT a 7Q8AC ship concern (ARRL/RAC-only; a Malawi op doesn't run FD).
@@ -413,6 +414,68 @@ next, and in what order" is answered.
   a direction, not a commitment. Depends on the config-SPA workstream existing
   first (that's where profile CRUD would live).
 
+- **Configurable operating bands (P2 · daemon + all band surfaces).** Filed from
+  dogfood 2026-07-09. Antenna coverage varies and many ops don't work all bands
+  (7Q5MLV skips 160/60/30), so add a station-level **`operating_bands`** list to
+  `config.json` and drive EVERY band surface from that one source for consistency:
+  the Phone/CW band-button grid, the FT8 band buttons, and the manual band
+  dropdown. Default when unset = full 160m..6m (additive — today's behaviour);
+  render canonical low→high. Keep **distinct** from `ft8_frequencies` (FT8 buttons =
+  `operating_bands` ∩ ft8-freq bands). **Sequencing catch — do this BEFORE/WITH the
+  rig-control band-jump (Slice 4):** the shipping SPA's Ctrl+Shift+[digit] band-jump
+  maps digits 1–0 → 160m..6m as a FIXED table; with configurable bands the digit→band
+  mapping must become configurable too (simplest = digits follow `operating_bands`
+  order; fuller = an explicit digit→band map). Build the band-jump against the
+  configured list rather than a hardcoded table, so it isn't hardcode-then-rework.
+  Editor home is the Settings card (config surface, not yet in frontend/app); the
+  dogfood shortcut is to add the daemon field + wire the grid consumer FIRST
+  (config.json hand-editable), Settings checkboxes follow as polish.
+
+- **2nd callsign-enrichment provider (HamQTH fallback link).** Filed from dogfood
+  2026-07-13 when the live re-enrich flow was validated but couldn't name-repair
+  **RG6S** — the callsign isn't on QRZ.com, and QRZ is the only callsign-class
+  provider configured (not a flow bug; no source had the data, and the country layer
+  still repaired country/dxcc/zones via hamnut). The enrichment orchestrator already
+  runs a provider **chain** (`o.Chain`) with QRZ as its only link, so a second
+  callsign provider (e.g. HamQTH, free tier) as a fallback would catch some
+  QRZ-absent calls (Russian/CIS calls are a common QRZ gap). Needs: a provider client
+  + chain config + the ADR 0017 cache semantics it already gets for free. Flaky-link /
+  Malawi-relevant (more sources = more complete offline records). Untriaged detail was
+  in the inbox 2026-07-13.
+
+- **smcloud "am I being heard?" pile-up status site (P3 · community phase, capture-don't-build).**
+  Filed 2026-07-11, refined across that session. When running a pile-up, SM (local)
+  publishes to a PUBLIC website; a caller opens the page, types their callsign, and
+  sees their **status** — no SM install needed caller-side. **Publish STATUS, not
+  queue rank** (the critical reframe): data source = the DECODE FEED (everyone SM
+  decoded calling the op this session), NOT the operator's curated Ctrl-click stack
+  (most callers aren't in it → stack lookup returns "not found" for the common case).
+  States: **worked ✓** / **heard — not yet worked** (decoded this session) / **not
+  heard**. Avoid a "#N position" — FT8 pile-ups aren't ordered queues, so a rank
+  promises a fairness the op won't honour. **Unique niche:** ClubLog Live Stream shows
+  the DX's LOG (worked-✓ half); PSK Reporter shows where MONITORS heard you; NEITHER
+  shows "the DX's own receiver is hearing you" — that middle state is the gap SM can
+  own (it has the decode feed + session log locally). Also show **on-air + frequency**
+  now ("7Q8AC is on-air: 14.074 MHz (20m FT8)") so the page is discovery, not just
+  status — data is already local (CAT dial freq + FT8 band/mode). **Cost:** local side
+  mostly exists; new work = smcloud (a small endpoint taking per-slot snapshots
+  `{dx_call, on_air, freq, band, mode, decoded[], worked[]}` + a lookup page
+  `?dx=7Q8AC&me=G4XYZ`) — ~weekend MVP, not a platform. **Caveats:** best-effort
+  publish (enrichment-never-blocks discipline — a failed push never touches the QSO);
+  FLAKY-LINK staleness is the real risk (a stale freq/decode misleads worse than
+  nothing → a prominent "updated Ns ago / STALE" stamp is mandatory, and an explicit
+  active-vs-idle concept: idle shows "last operated Xh ago"). **Distribution:** embed
+  as a QRZ.com bio `<iframe>` (callers reflexively open qrz.com/db/<dx>) — MAKE-OR-BREAK
+  UNKNOWN = whether QRZ permits iframes in bios AND whether HTML-bio editing needs paid
+  QRZ XP; fallback = a prominent link/button. **Notifications guardrail:** do NOT
+  auto-email callers (spam — GDPR/PECR + CAN-SPAM + QRZ ToS + deliverability; link-only
+  email doesn't fix the unsolicited SEND, and the QRZ-embed already puts the link where
+  callers go). The only legitimate shape = CALLER-initiated opt-in ON smcloud ("notify
+  me when 7Q8AC works me", 1:1, transactional-after-a-real-QSO, with unsubscribe).
+  Sits with the SM Cloud P1 designed workstream (ADR 0040) + the P4 community bucket;
+  orthogonal to the frontend/app daily-driver work. Full note: `docs/dogfood-inbox.md`
+  2026-07-11.
+
 - **SPA consolidation — one app shell (ADR 0044, post-ship).** Merge the three
   Svelte SPAs (`frontend/{logging,config,logbook}`) into one Vite + Svelte 5 app
   (`frontend/app/`) with a persistent shell — dashboard/status home, **Operate**
@@ -616,6 +679,12 @@ next, and in what order" is answered.
   the eventual shared theme layer / dark-mode work (the FT8 highlight colours are
   already operator-configurable daemon config `ft8.display`; consider whether the
   Spectrum palette should join that or stay component-level). Cosmetic; no logic change.
+  **Light-mode half (dogfood 2026-07-14, P2):** the **frontend/app** Occupancy pane
+  (`Ft8OccupancyStrip` / `Ft8OccupancySpectrum`) colours only read correctly in dark
+  mode — the busy/clear cell fills + amber recommendation markers wash out or look
+  wrong on the light surface (red-500 / green-700 opacities tuned for the dark canvas).
+  Needs a light-mode pass on the cell fills + spectrum tints; fold into this colour
+  revision so both SPAs' occupancy palettes are reconciled at once.
 
 - **LSPA → My Station → Location: future POTA fields.** Filed from dogfood-inbox
   2026-06-25, alongside the Location-tab field trim (the trim itself is the
