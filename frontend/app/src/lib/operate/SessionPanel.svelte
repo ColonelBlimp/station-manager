@@ -60,7 +60,7 @@
                     </thead>
                     <tbody>
                         {#each session.qsos as q (q.id)}
-                            <tr class="border-b border-line-soft text-ink last:border-0">
+                            <tr class="border-b text-sm border-line-soft text-ink last:border-0">
                                 <td class="tabular-nums">{q.timeOn}</td>
                                 <td class="font-medium">{q.callsign}</td>
                                 <td class="">{q.band}</td>
