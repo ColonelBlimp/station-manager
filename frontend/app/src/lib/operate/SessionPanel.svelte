@@ -68,7 +68,7 @@
                                 <td class="tabular-nums">{q.rstSent}</td>
                                 <td class="tabular-nums">{q.rstRcvd}</td>
                                 <td class="w-32 truncate">{q.country}</td>
-                                <td class="w-32 truncate">{q.name}</td>
+                                <td class="w-32 truncate pl-1">{q.name}</td>
                             </tr>
                         {/each}
                     </tbody>
