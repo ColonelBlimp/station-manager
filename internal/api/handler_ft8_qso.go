@@ -56,10 +56,12 @@ type ft8QsoStartRequest struct {
 	OperatingFreqMHz float64 `json:"operating_freq_mhz"`
 	// Mode selects the exchange: "" / "standard" is the normal grid+report answer;
 	// "fd" answers a CQ FD with the operator's ARRL Field Day exchange (class+section
-	// from ft8.field_day config). The SPA sets "fd" when the clicked decode is a CQ FD.
+	// from ft8.field_day config); "type4" answers a NONSTANDARD/compound-call CQ with the
+	// reduced bare-calls→RR73→73 ladder (ADR 0048 — no grid/report on the wire). The SPA
+	// sets the mode from the shape of the clicked decode.
 	Mode string `json:"mode,omitempty"`
-	// TheirSnr — our SNR of the clicked CQ FD decode. Used only for mode "fd": FD
-	// exchanges no report on the air, so we log this measured SNR as RST_SENT (standard
+	// TheirSnr — our SNR of the clicked decode. Used for modes "fd" and "type4": neither
+	// exchanges a report on the air, so we log this measured SNR as RST_SENT (standard
 	// answer-a-CQ derives its report from the exchange, so this is ignored there).
 	TheirSnr int `json:"their_snr,omitempty"`
 }
@@ -103,12 +105,18 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var err error
-	if strings.EqualFold(strings.TrimSpace(req.Mode), "fd") {
+	switch strings.ToLower(strings.TrimSpace(req.Mode)) {
+	case "fd":
 		// ARRL Field Day: our class+section come from ft8.field_day config (read by
 		// the Service), not the client. theirGrid is still logged (bearing/enrichment).
 		err = s.ft8.StartQsoFd(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
 			req.OffsetHz, req.OperatingFreqMHz)
-	} else {
+	case "type4":
+		// Reduced type-4 (nonstandard/compound call, ADR 0048): no grid/report on the
+		// wire, so we log the measured SNR as RST_SENT (like FD).
+		err = s.ft8.StartQsoT4(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
+			req.OffsetHz, req.OperatingFreqMHz)
+	default:
 		err = s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
 			req.OffsetHz, req.OperatingFreqMHz)
 	}
@@ -189,8 +197,9 @@ type ft8QsoWorkRequest struct {
 	OperatingFreqMHz float64 `json:"operating_freq_mhz"`
 	// Mode "fd" works a caller who called us with a Field Day exchange (the SPA parsed
 	// their class+section from "<ourCall> <theirCall> <class> <section>" and sends them
-	// here); "" / "standard" is the normal grid/report work. Our own class+section come
-	// from ft8.field_day config, not the client.
+	// here); "type4" works a NONSTANDARD/compound caller with the reduced RR73 ladder
+	// (ADR 0048 — no report, so their_snr is logged as RST_SENT); "" / "standard" is the
+	// normal grid/report work. Our own class+section come from ft8.field_day config.
 	Mode         string `json:"mode,omitempty"`
 	TheirClass   string `json:"their_class,omitempty"`
 	TheirSection string `json:"their_section,omitempty"`
@@ -236,11 +245,16 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var err error
-	if strings.EqualFold(strings.TrimSpace(req.Mode), "fd") {
+	switch strings.ToLower(strings.TrimSpace(req.Mode)) {
+	case "fd":
 		// Field Day: their class+section came from the picked call; ours from config.
 		err = s.ft8.StartWorkCallerFd(ourCall, req.TheirCall, req.TheirGrid,
 			req.TheirClass, req.TheirSection, req.TheirSnr, req.SlotUTC, req.OffsetHz, req.OperatingFreqMHz)
-	} else {
+	case "type4":
+		// Reduced type-4 (nonstandard/compound caller, ADR 0048): no report on the wire.
+		err = s.ft8.StartWorkCallerT4(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
+			req.OffsetHz, req.OperatingFreqMHz)
+	default:
 		err = s.ft8.StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
 			req.OffsetHz, req.OperatingFreqMHz)
 	}

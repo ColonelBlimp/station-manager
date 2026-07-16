@@ -592,6 +592,57 @@ func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, t
 		theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
 }
 
+// StartQsoT4 begins a reduced type-4 answer-a-CQ exchange (ADR 0048): the operator picked
+// a station with a NONSTANDARD/compound call (e.g. "CQ PJ4/NA2AA"), which cannot walk the
+// standard grid/report ladder. theirSnr is our SNR of their CQ (logged as RST_SENT, since
+// type-4 exchanges no report on the air). Needs no config identity — our own call is
+// standard. Requires TX armed, same gating as StartQso.
+func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
+	const op errors.Op = "ft8.Service.StartQsoT4"
+	if err := s.validateTxOffset(op, offsetHz); err != nil {
+		return err
+	}
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+	s.txMu.Lock()
+	armed := s.txArmed
+	ready := s.keyer != nil && s.keyer.TxReady()
+	s.txMu.Unlock()
+	if !armed {
+		return errors.New(op).WithErr(ErrTxNotArmed)
+	}
+	if !ready {
+		return errors.New(op).WithErr(ErrTxNotReady)
+	}
+	s.resetExchangePath()
+	return s.seq.StartQsoT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+}
+
+// StartWorkCallerT4 begins working a NONSTANDARD/compound station that called us (the
+// type-4 twin of StartWorkCaller, ADR 0048): the operator picked a bare directed call
+// ("<ourCall> <theirCall>") whose sender's call is nonstandard. theirSnr is our SNR of it
+// (RST_SENT). Needs no config identity. Requires TX armed.
+func (s *Service) StartWorkCallerT4(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64) error {
+	const op errors.Op = "ft8.Service.StartWorkCallerT4"
+	if err := s.validateTxOffset(op, offsetHz); err != nil {
+		return err
+	}
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+	s.txMu.Lock()
+	armed := s.txArmed
+	ready := s.keyer != nil && s.keyer.TxReady()
+	s.txMu.Unlock()
+	if !armed {
+		return errors.New(op).WithErr(ErrTxNotArmed)
+	}
+	if !ready {
+		return errors.New(op).WithErr(ErrTxNotReady)
+	}
+	s.resetExchangePath()
+	return s.seq.StartWorkCallerT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+}
+
 // SetQsoLogger injects the sink that logs a completed FT8 exchange (ADR 0029
 // step e4) — the daemon (cmd/smd) wires it to qsoservice. Called once during
 // wiring, before Start. A nil logger (e.g. tests) means completed exchanges are

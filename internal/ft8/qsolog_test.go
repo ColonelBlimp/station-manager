@@ -50,6 +50,35 @@ func TestBuildQso(t *testing.T) {
 	require.Equal(t, "-10", q.RstRcvd) // they sent us
 }
 
+// TestBuildQso_Type4 locks the degraded reduced-type-4 row (ADR 0048): a nonstandard
+// SPELLED call, our SNR as RST_SENT, a BLANK RST_RCVD (no report is exchanged), no grid,
+// and no contest fields — the shape a completed type-4 exchange produces.
+func TestBuildQso_Type4(t *testing.T) {
+	station := types.LoggingStation{StationCallsign: "7Q5MLV", Operator: "7Q5MLV", MyGridsquare: "KH53"}
+	c := CompletedQso{
+		TheirCall:    "PJ4/NA2AA",
+		TheirGrid:    "", // type-4 CQ carries no grid
+		OurReport:    -12,
+		HasOurReport: true,
+		// HasTheirReport deliberately false — no report on the wire.
+		StartedAt:   time.Date(2026, 7, 16, 14, 28, 30, 0, time.UTC),
+		OffsetHz:    1500,
+		DialFreqMHz: 14.074,
+	}
+	now := time.Date(2026, 7, 16, 14, 30, 0, 0, time.UTC)
+
+	q := BuildQso(c, station, 3, now)
+
+	require.Equal(t, "PJ4/NA2AA", q.Call, "the spelled nonstandard call is logged, not a hash")
+	require.Equal(t, "FT8", q.Mode)
+	require.Equal(t, "-12", q.RstSent, "our SNR of them → RST_SENT")
+	require.Empty(t, q.RstRcvd, "no report is exchanged in type-4 — RST_RCVD stays blank")
+	require.Empty(t, q.Gridsquare, "type-4 carries no grid")
+	require.Empty(t, q.ContestId, "type-4 is not a contest exchange")
+	require.Empty(t, q.Class)
+	require.Empty(t, q.ArrlSect)
+}
+
 func TestBuildQso_TimeOn(t *testing.T) {
 	station := types.LoggingStation{Operator: "G0XYZ"}
 	base := CompletedQso{TheirCall: "K1ABC", DialFreqMHz: 14.074}
