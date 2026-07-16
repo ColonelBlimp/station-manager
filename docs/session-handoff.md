@@ -30,7 +30,52 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-13)
+## Current state (as of 2026-07-16)
+
+> **Session 213 (2026-07-16) — FT8 REDUCED TYPE-4 (nonstandard/compound-call) LADDER
+> BUILT end-to-end (ADR 0048), offline-gated; COMMITTED (per-unit, local — NOT pushed),
+> NOT yet on air, NOT yet dogfood-deployed.** The one FT8 gap that blocked finishing a QSO with a `/D` / prefix-
+> compound station (operator hit it on air 2026-07-14) is closed at the code level. Built
+> as an **isolated parallel path** (the Field Day pattern, ADR 0037):
+> - **Daemon:** `internal/ft8/type4.go` (`T4Exchange` answer + `T4WorkExchange` work — pure
+>   value-returning state machines; `parseType4` accepts the hashed `<...>` token the
+>   standard parser drops; matching is on the **spelled** partner, presumed-us for the
+>   hashed addressee) + `type4_sequencer.go` (`seqAnsweringT4`/`seqWorkingT4`,
+>   `onSlotAnsweringT4`/`onSlotWorkingT4`, `StartQsoT4`/`StartWorkCallerT4`, completion
+>   snapshots). Reduced ladder: **answer** = bare opening → their roger → our 73 (2 rungs);
+>   **work** = single RR73 rung (no report). Wired into `sequencer.go` switch arms
+>   (OnSlot / fireOpening [answer only — work's sole rung is terminal, needs the onDone
+>   path] / statusModeLocked / Abandon / SetSkipIfSilent). `QsoStatus.Type4` added.
+> - **Service + HTTP:** `Service.StartQsoT4`/`StartWorkCallerT4` (armed-gated, no config
+>   identity — our call is standard); `mode:"type4"` added to `POST /v1/ft8/qso/{start,work}`
+>   (no new routes). api-endpoints.md updated.
+> - **Logging:** NO `BuildQso` change needed — the degraded `CompletedQso` (our SNR →
+>   RST_SENT, blank TheirReport → blank RST_RCVD, empty grid, no contest fields) flows
+>   through cleanly; the e4 sink's FD default-RST fill is gated on `ContestId=="ARRL-FD"`
+>   so type-4 stays blank; enrich uses the spelled call. Locked with `TestBuildQso_Type4`.
+> - **SPA (`frontend/app`):** `isNonstandardCall` + `isCqType4` (ft8Message.ts); answer
+>   dispatch in `Ft8BandActivity.svelte` (CQ-click + directed-call double-click route a
+>   nonstandard call to `mode:"type4"`); `type4` on the SSE payload/state/args; reduced
+>   ladder in `ft8Ladder.ts`; role labels in `Ft8Operate.svelte`; client `mode:'type4'`;
+>   main.ts wiring. **Work-a-caller SPA trigger DEFERRED** — our call is hashed on the wire
+>   (`<...> PJ4/NA2AA`), so the browser can't distinguish "called me"; a nonstandard caller
+>   is worked via the answer path (a bare opening completes the QSO either way). Daemon work
+>   path is built + tested, ready if a resolution seam appears.
+> - **Tests:** `TestType4_RoundTrip` (RF-safety — all 7 ladder messages encode→modulate→
+>   decode with the shipped decoder, zero RF), `type4_test.go` (parse + ladders),
+>   `type4_sequencer_test.go` (7 happy/error/skip/retry paths), `TestBuildQso_Type4`, +
+>   SPA `ft8Message`/`ft8Ladder` tests. Full ft8+api suite (incl. heavy round-trips) + race
+>   + gofmt + static CGO-free build all green; SPA check/build clean, 545 tests pass. **6
+>   pre-existing SPA lint errors in unrelated logbook/Ft8Operate TEST files — NOT touched by
+>   this work.**
+> - **COMMITTED (session 214, 2026-07-16):** four per-unit commits on `main` — daemon
+>   ladder core (`6810bb27`), service + HTTP endpoint (`86ff2e0d`), SPA dispatch + ladder
+>   (`fd5c02f7`), docs. NOT pushed (on-air validation gates the push + the ADR flip). Stray
+>   root `package.json`/`package-lock.json` (`@openai/codex`, unrelated) left untracked.
+> - **NEXT:** **work a real nonstandard station on air** → flip ADR 0048 Proposed→Accepted,
+>   then push. Dogfood deploy (`task deploy:local:dev`, CGO) is operator-gated (restarts the
+>   live daemon). Doc discrepancy fixed: the stale "build the 22-bit hash table" lines now
+>   reflect ADR 0048's spelled-partner-match decision.
 
 > **Session 212 (2026-07-13) — DATA-CORRUPTING ENRICHMENT BUG found, FIXED +
 > LIVE-DATA REPAIRED (U-prefix country-cache poisoning: 26 Ukrainian QSOs were
@@ -1510,16 +1555,20 @@ Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the 
 > section is ONLY what's actively in flight — it does **not** re-rank the backlog
 > (that's the backlog's job; this doc points at it).
 >
-> **▶ NEXT (set 2026-07-14, operator directive): _FT8 — reduced type-4 hashed QSO
-> ladder._** Build the type-4 `CQ→RR73→73` flow + the 22-bit hash table so SM can
-> complete a QSO with any **nonstandard call** (`/D`, `/M`, prefix-compound). It's a
-> **distinct sequencer path** — the standard grid/report ladder can't encode a hashed
-> partner. Unblocked at the library level (go-ft8 v0.7.0). Full detail + the 2026-07-14
-> `/D` probe: `docs/backlog.md` → "FT8 — work type-4 compound calls"; design + weighed
-> alternatives in **ADR 0048** (status Proposed → flip to Accepted after the offline
-> round-trip gate + on-air validation). **The 7Q8AC-ship
-> focus below is CLEARED** (shipped 2026-07-09); the daily-driver track is now
-> `frontend/app` (memory `sm-frontend-app-consolidation`).
+> **▶ NEXT: _FT8 reduced type-4 ladder — WORK A REAL NONSTANDARD STATION ON AIR._** The
+> ladder itself is **BUILT + offline-gated (2026-07-16, ADR 0048, session 213)** — daemon
+> (`type4.go` / `type4_sequencer.go`), service, `mode:"type4"` routes, SSE `type4:true`, and
+> the SPA answer path all shipped; `TestType4_RoundTrip` (RF-safety) + 20-odd unit/sequencer
+> tests green; full ft8+api suite + race + static build clean; SPA 545 tests green. **The one
+> remaining step is on-air validation** — click a real `CQ PJ4/NA2AA` / `CQ …/D`, complete
+> the `bare-calls→RR73→73` exchange, confirm it logs (RST_SENT=SNR, RST_RCVD blank, no grid),
+> then **flip ADR 0048 Proposed→Accepted**. Matching is on the **spelled** partner — **no
+> 22-bit hash table** was built (ADR 0048 rejected it: go-ft8 exposes no decoded-hash to
+> match against, and the partner always spells itself). **NOT deployed to dogfood yet** (a
+> CGO build + `task deploy:local:dev` restarts the live daemon — do on operator go-ahead).
+> Detail: `docs/ft8.md` "Nonstandard / compound calls". **The 7Q8AC-ship focus below is
+> CLEARED** (shipped 2026-07-09); the daily-driver track is `frontend/app` (memory
+> `sm-frontend-app-consolidation`).
 >
 > **▶ Focus (set 2026-07-04): _Next shippable state for 7Q8AC._** The goal is a
 > release the external operator (7Q8AC, Malawi, offline-first) can run; "stabilise &

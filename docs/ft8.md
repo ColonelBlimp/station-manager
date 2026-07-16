@@ -612,6 +612,66 @@ standard-shaped** (the QSO works + logs, but the rung visuals aren't FD-aware ye
 directly); the config **SPA section dropdown** is pending (config.json-only for now).
 On-air validated during ARRL FD 2026: **K7T, W6A** (answer) and **K7IOC** (work).
 
+### Nonstandard / compound calls — the reduced type-4 ladder (ADR 0048) — SHIPPED (offline-gated; on-air pending)
+
+A **nonstandard callsign** — prefix-compound (`PJ4/NA2AA`), odd suffix (`/D`, `/M`,
+`/MM`), special-event — does not compress to a 28-bit standard call, so it cannot ride a
+standard FT8 message. It needs a **type-4** message (`i3=4`), which **spells** the
+nonstandard call and reduces the *other* call to a 12-bit **hash** rendered `<...>`. After
+the type tag there is room only for `{blank, RRR, RR73, 73}` — **no grid and no signal
+report on the wire** (a fixed-payload consequence, QEX Jul/Aug 2020 §type-4). So the
+standard grid→report→73 ladder is unencodable for a type-4 partner; SM runs a **reduced
+ladder** instead: **bare-calls → RR73 → 73**, no grid/report. Attended-only; the exception
+is `/P`, which packs *standard* and already walks the normal ladder (`/R` packs nonstandard
+but go-ft8 cannot yet decode it, so SM does not offer it — it would key a frame the far end
+can't read back).
+
+**Matching is on the SPELLED partner** (`from == TheirCall`). Our own standard call is
+always **hashed** to `<...>` in a type-4 exchange, so the addressed call can't be verified
+exactly — a hashed `<...>` in the `to` slot is treated as **presumed-us** while a single
+exchange is active (a bounded, documented false-match risk; ADR 0048). SM does **not**
+reimplement the 22-bit hash table: go-ft8 exposes no decoded-hash integer to compare
+against, and the partner always spells itself, so a hash table buys nothing for matching.
+A new additive `parseType4` accepts the `<...>` token that the standard
+`parseMessage`/`looksLikeCall` (which drop hashed tokens) deliberately reject.
+
+**Answer a CQ** (you S&P a nonstandard station) — click a `CQ PJ4/NA2AA` row (the SPA's
+`isCqType4` routes to `mode:"type4"`; `Service.StartQsoT4` → `seqAnsweringT4` / `T4Exchange`).
+Also reached by **double-clicking** any plain decode whose sender is nonstandard (the
+directed-call gesture — `isNonstandardCall`):
+
+```
+RX  CQ PJ4/NA2AA
+TX  PJ4/NA2AA 7Q5MLV          (bare opening — on air "PJ4/NA2AA <...>", our call hashed)
+RX  <...> PJ4/NA2AA RR73      (their roger — matched on the spelled PJ4/NA2AA)
+TX  PJ4/NA2AA 7Q5MLV 73       → QSO logs (RST_SENT = our SNR; RST_RCVD blank; no grid)
+```
+
+**Work a caller** (a nonstandard station calls you) — `Service.StartWorkCallerT4` →
+`seqWorkingT4` / `T4WorkExchange` runs a single **RR73** rung (no report), logged after it
+transmits. The daemon path is built + tested, but the **SPA trigger is deferred**: with our
+call hashed on the wire (`<...> PJ4/NA2AA`) the browser can't distinguish "called me" from
+"called someone else", so a nonstandard caller is worked via the **answer** path above (a
+bare opening completes the QSO regardless of who initiated).
+
+Both ladders are pure value-returning state machines (`type4.go`) driven one slot at a time
+by isolated handlers (`onSlotAnsweringT4` / `onSlotWorkingT4` in `type4_sequencer.go`, kept
+separate from the standard path — the ADR 0037 Field Day pattern), reusing the guaranteed-stop
+keyer, slot timing, `sessionGen` guard, and final-rung `onDone` logging. **Logging is
+degraded** (a completed exchange is still a QSO): `RST_SENT` = our measured SNR, `RST_RCVD`
+**blank** (no report is exchanged — and unlike FD there is no config default), no grid, no
+contest fields; `BuildQso` degrades cleanly with no branch. The enrich+submit path uses the
+**spelled** call, so the country/DXCC row is written normally.
+
+**Wire:** `POST /v1/ft8/qso/start` and `.../work` take `mode:"type4"` (no new routes, no
+config identity — our own call is standard); the `ft8-qso` SSE `QsoStatus` carries
+`type4:true` so the SPA renders the reduced ladder. **RF-safety gate:** `TestType4_RoundTrip`
+proves every ladder message (both directions) encodes → modulates → decodes with the shipped
+decoder, offline, zero RF. **Completion depends on the far station's client resolving our
+hashed call**, which is inherently flaky in type-4 — some contacts won't complete; that is
+the protocol, not an SM bug. **On-air validation pending** (needs a real nonstandard station
+on the band); the ADR flips Proposed→Accepted then.
+
 ### Working a CQ — what to expect on the air
 
 Clicking a CQ row sends a **directed** reply — `<their-call> <your-call> <your-grid>`
@@ -1165,8 +1225,9 @@ the standard `/P` variant** (go-ft8 ≥ **v0.3.5**). SM works `/P` stations end 
 with **no SM code change** — every TX guard decides by trying `EncodeStandardMessage`
 and skipping on error, so an upstream encoder gain flows straight through (proven
 offline in `internal/ft8/modulate_test.go`: `TestEncodeStandardMessage_Portable` +
-`TestModulate_RoundTrip_Portable`). **Still unencodable → still skipped:** type-4
-compound/nonstandard calls (`PJ4/K1ABC`, `/MM`, …) and free text. SM owns tones →
+`TestModulate_RoundTrip_Portable`). **Type-4 compound/nonstandard calls (`PJ4/NA2AA`,
+`/D`, `/MM`, …) now have their own reduced ladder** (bare-calls→RR73→73, ADR 0048 — see
+"Nonstandard / compound calls" above); **free text** is still unbuilt. SM owns tones →
 GFSK audio → output → PTT → timing.
 
 ## 6. Where the code lives
