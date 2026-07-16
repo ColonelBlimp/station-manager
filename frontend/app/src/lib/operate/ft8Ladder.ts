@@ -47,6 +47,25 @@ export function buildLadder(
     const answering = qso.active && qso.role === 'answerer';
     const working = qso.active && qso.role === 'worker';
 
+    // Reduced type-4 (nonstandard/compound call, ADR 0048): no grid/report rungs.
+    // Answer: bare opening → their roger → our 73. Work: their bare call → our RR73.
+    if (qso.type4 && answering) {
+        const rungs: Rung[] = [
+            { dir: 'tx', text: `${dxCall} ${me}` },
+            { dir: 'rx', text: `${me} ${dxCall} RR73` },
+            { dir: 'tx', text: `${dxCall} ${me} 73` },
+        ];
+        return { rungs, step: rowFor(qso.state === 'confirming' ? 2 : 0, rungs.length) };
+    }
+    if (qso.type4 && working) {
+        const rungs: Rung[] = [
+            { dir: 'rx', text: `${me} ${dxCall}` },
+            { dir: 'tx', text: `${dxCall} ${me} RR73` },
+            { dir: 'rx', text: `${me} ${dxCall} 73` },
+        ];
+        return { rungs, step: rowFor(1, rungs.length) };
+    }
+
     if (qso.fd && answering) {
         const oCls = qso.ourClass || '<CLS>';
         const oSec = qso.ourSection || '<SEC>';

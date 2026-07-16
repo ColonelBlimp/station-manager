@@ -63,6 +63,34 @@ export function isCqFd(text: string): boolean {
 }
 
 /**
+ * isNonstandardCall reports whether a callsign cannot ride a STANDARD FT8 message and
+ * therefore needs the reduced type-4 ladder (ADR 0048). The standard 28-bit packer
+ * accepts a base call plus a `/P` suffix only; every other slashed form — prefix-compound
+ * (`PJ4/NA2AA`), other suffixes (`/D`, `/M`, `/MM`, `/4`) — packs as type-4. `/R` (RTTY
+ * Roundup) also packs nonstandard but go-ft8 cannot yet DECODE it, so it is deliberately
+ * NOT treated as answerable (we'd key a frame the far end can't read back). Non-slashed
+ * special-event calls (e.g. `YW18FIFA`) are also nonstandard, but the daemon's encode
+ * guard is the backstop for those; here we key off the slash, which covers the operator's
+ * real cases. Mirrors the daemon's protocol boundary (compound_roundtrip_test.go).
+ */
+export function isNonstandardCall(call: string): boolean {
+    if (!call.includes('/')) return false;
+    const suffix = call.slice(call.lastIndexOf('/') + 1);
+    return suffix !== 'P' && suffix !== 'R';
+}
+
+/**
+ * isCqType4 reports whether a CQ decode is from a NONSTANDARD/compound station whose
+ * exchange must use the reduced type-4 ladder — e.g. `CQ PJ4/NA2AA`, `CQ K1ABC/D` (ADR
+ * 0048). Field Day CQs are their own path, so a `CQ FD …` returns false here.
+ */
+export function isCqType4(text: string): boolean {
+    if (isCqFd(text)) return false;
+    const call = parseCqCall(text);
+    return call !== null && isNonstandardCall(call);
+}
+
+/**
  * parseCq returns the calling station's callsign AND grid from a CQ decode, or
  * null if the line is not an answerable CQ. The grid is the 4-char Maidenhead
  * token immediately after the call when present (`CQ K1ABC FN42` → FN42), else

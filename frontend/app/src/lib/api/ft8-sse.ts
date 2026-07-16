@@ -75,6 +75,9 @@ export interface QsoPayload {
     their_report?: string;
     their_period?: string;
     fd?: boolean;
+    /** Reduced type-4 (nonstandard/compound call) session — bare-calls→RR73→73,
+     *  no grid/report rungs (ADR 0048). */
+    type4?: boolean;
     our_class?: string;
     our_section?: string;
     their_class?: string;

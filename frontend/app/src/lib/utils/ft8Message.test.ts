@@ -45,3 +45,37 @@ describe('parseSender', () => {
         expect(parseSender('k1abc t22tt ri91')).toEqual({ call: 'T22TT', grid: 'RI91' });
     });
 });
+
+import { isNonstandardCall, isCqType4 } from './ft8Message';
+
+describe('isNonstandardCall (ADR 0048 type-4 detection)', () => {
+    it('true for prefix-compound and non-/P suffixes', () => {
+        expect(isNonstandardCall('PJ4/NA2AA')).toBe(true); // prefix-compound
+        expect(isNonstandardCall('K1ABC/D')).toBe(true); // /D suffix
+        expect(isNonstandardCall('K1ABC/4')).toBe(true); // digit suffix
+        expect(isNonstandardCall('W1AW/MM')).toBe(true); // /MM
+    });
+    it('false for a plain call and the standard /P variant', () => {
+        expect(isNonstandardCall('7Q5MLV')).toBe(false); // plain
+        expect(isNonstandardCall('NA2AA/P')).toBe(false); // /P packs standard
+    });
+    it('false for /R — encodes but go-ft8 cannot decode it, so it is not answerable', () => {
+        expect(isNonstandardCall('NA2AA/R')).toBe(false);
+    });
+});
+
+describe('isCqType4', () => {
+    it('true for a nonstandard-call CQ', () => {
+        expect(isCqType4('CQ PJ4/NA2AA')).toBe(true);
+        expect(isCqType4('CQ K1ABC/D')).toBe(true);
+        expect(isCqType4('CQ DX PJ4/NA2AA')).toBe(true);
+    });
+    it('false for a standard CQ, a /P CQ, and a CQ FD', () => {
+        expect(isCqType4('CQ K1ABC FN42')).toBe(false);
+        expect(isCqType4('CQ NA2AA/P FN42')).toBe(false);
+        expect(isCqType4('CQ FD PJ4/NA2AA')).toBe(false); // FD is its own path
+    });
+    it('false for a non-CQ line', () => {
+        expect(isCqType4('K1ABC PJ4/NA2AA RR73')).toBe(false);
+    });
+});

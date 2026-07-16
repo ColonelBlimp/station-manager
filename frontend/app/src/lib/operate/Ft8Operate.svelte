@@ -31,13 +31,17 @@
             : qso.role === 'answerer'
               ? qso.fd
                   ? 'Answering CQ FD'
-                  : 'Answering a CQ'
+                  : qso.type4
+                    ? 'Answering (compound)'
+                    : 'Answering a CQ'
               : qso.role === 'caller'
                 ? 'Calling CQ'
                 : qso.role === 'worker'
                   ? qso.fd
                       ? 'Working an FD caller'
-                      : 'Working a caller'
+                      : qso.type4
+                        ? 'Working (compound)'
+                        : 'Working a caller'
                   : 'Active'
     );
 

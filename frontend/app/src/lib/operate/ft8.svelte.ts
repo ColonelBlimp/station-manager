@@ -67,6 +67,9 @@ export interface Ft8QsoStatus {
     theirReport: string;
     theirPeriod: string;
     fd: boolean;
+    /** Reduced type-4 (nonstandard/compound call) session — the SPA renders the
+     *  bare-calls→RR73→73 ladder (no grid/report rungs, ADR 0048). */
+    type4: boolean;
     ourClass: string;
     ourSection: string;
     theirClass: string;
@@ -87,6 +90,7 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     theirReport: '',
     theirPeriod: '',
     fd: false,
+    type4: false,
     ourClass: '',
     ourSection: '',
     theirClass: '',
@@ -339,7 +343,11 @@ export interface Ft8AnswerArgs {
     offsetHz: number;
     opFreqMHz: number;
     fd: boolean;
-    /** Our SNR of their CQ — logged as RST_SENT for an FD answer (no report exchanged). */
+    /** Reduced type-4 (nonstandard/compound call) answer — bare-calls→RR73→73, no
+     *  grid/report (ADR 0048). Mutually exclusive with fd. */
+    type4?: boolean;
+    /** Our SNR of their CQ — logged as RST_SENT for an FD or type-4 answer (neither
+     *  exchanges a report). */
     theirSnr: number;
 }
 
@@ -504,6 +512,7 @@ export const ft8Link: Ft8EventHandlers = {
             theirReport: p.their_report ?? '',
             theirPeriod: p.their_period ?? '',
             fd: p.fd ?? false,
+            type4: p.type4 ?? false,
             ourClass: p.our_class ?? '',
             ourSection: p.our_section ?? '',
             theirClass: p.their_class ?? '',

@@ -86,7 +86,7 @@ setFt8TxActions({
             a.slotUtc,
             a.offsetHz,
             a.opFreqMHz,
-            a.fd ? 'fd' : 'standard',
+            a.type4 ? 'type4' : a.fd ? 'fd' : 'standard',
             a.theirSnr
         ).then(toTxResult),
     workCaller: (a) =>

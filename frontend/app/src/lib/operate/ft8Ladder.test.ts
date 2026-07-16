@@ -19,6 +19,7 @@ function qso(over: Partial<Ft8QsoStatus> = {}): Ft8QsoStatus {
         theirReport: '',
         theirPeriod: '',
         fd: false,
+        type4: false,
         ourClass: '',
         ourSection: '',
         theirClass: '',
@@ -99,5 +100,50 @@ describe('buildLadder', () => {
             'AA00'
         );
         expect(l.rungs[0].text).toBe('K7T ME 1D WWA');
+    });
+
+    it('type-4 answerer: bare opening → their roger → our 73 (no grid/report rungs)', () => {
+        const l = buildLadder(
+            qso({ active: true, role: 'answerer', type4: true, theirCall: 'PJ4/NA2AA' }),
+            true,
+            'ME',
+            'AA00'
+        );
+        expect(l.rungs.map((r) => r.text)).toEqual([
+            'PJ4/NA2AA ME',
+            'ME PJ4/NA2AA RR73',
+            'PJ4/NA2AA ME 73',
+        ]);
+        expect(l.rungs.some((r) => /AA00|<GRID>|R[+-]/.test(r.text))).toBe(false);
+        expect(l.step).toBe(0); // calling
+    });
+
+    it('type-4 answerer confirming → the 73 rung is current (step 2)', () => {
+        const l = buildLadder(
+            qso({
+                active: true,
+                role: 'answerer',
+                type4: true,
+                state: 'confirming',
+                theirCall: 'PJ4/NA2AA',
+            }),
+            true,
+            'ME',
+            'AA00'
+        );
+        expect(l.step).toBe(2);
+        expect(l.rungs[2].text).toBe('PJ4/NA2AA ME 73');
+    });
+
+    it('type-4 worker: their bare call → our RR73 (single TX rung, no CQ row)', () => {
+        const l = buildLadder(
+            qso({ active: true, role: 'worker', type4: true, theirCall: 'K1ABC/D' }),
+            true,
+            'ME',
+            'AA00'
+        );
+        expect(l.rungs.map((r) => r.text)).toEqual(['ME K1ABC/D', 'K1ABC/D ME RR73', 'ME K1ABC/D 73']);
+        expect(l.rungs.some((r) => r.text.startsWith('CQ'))).toBe(false);
+        expect(l.step).toBe(1); // rogering (our RR73)
     });
 });

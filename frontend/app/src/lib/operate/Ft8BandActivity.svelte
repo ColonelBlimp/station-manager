@@ -24,6 +24,8 @@
         parseDirectedToMeFd,
         parseSender,
         isCqFd,
+        isCqType4,
+        isNonstandardCall,
     } from '../utils/ft8Message';
     import { slotParity } from '../utils/ft8Parity';
     import { pathInfo } from '../utils/bearing';
@@ -283,13 +285,18 @@
         const pre = txPreflight(row.dx.call);
         if (!pre) return;
         starting = true;
+        // A nonstandard/compound sender (PJ4/NA2AA, K1ABC/D) can't walk the standard
+        // grid/report ladder — answer it with the reduced type-4 ladder (ADR 0048),
+        // whose opening carries no grid.
+        const type4 = isNonstandardCall(row.dx.call);
         const r = await answerCq({
             theirCall: row.dx.call,
-            theirGrid: row.dx.grid,
+            theirGrid: type4 ? '' : row.dx.grid,
             slotUtc: row.d.startUtc,
             offsetHz: pre.offset,
             opFreqMHz: pre.opMHz,
             fd: false,
+            type4,
             theirSnr: row.d.snr,
         });
         if (!r.ok) {
@@ -317,15 +324,19 @@
                 starting = false;
                 return;
             }
-            // A CQ FD answers with the operator's Field Day exchange (daemon config);
-            // theirSnr (our SNR of their CQ) is logged as RST_SENT for FD.
+            // A CQ FD answers with the operator's Field Day exchange (daemon config); a
+            // CQ from a nonstandard/compound call routes to the reduced type-4 ladder
+            // (ADR 0048). theirSnr (our SNR of their CQ) is logged as RST_SENT for both
+            // (neither exchanges a report). The three modes are mutually exclusive.
+            const type4 = isCqType4(row.d.text);
             r = await answerCq({
                 theirCall: cq.call,
-                theirGrid: cq.grid,
+                theirGrid: type4 ? '' : cq.grid,
                 slotUtc: row.d.startUtc,
                 offsetHz: offset,
                 opFreqMHz: opMHz,
                 fd: isCqFd(row.d.text),
+                type4,
                 theirSnr: row.d.snr,
             });
         } else {

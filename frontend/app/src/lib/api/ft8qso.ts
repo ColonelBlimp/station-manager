@@ -67,14 +67,16 @@ async function postFt8Qso(
  *  in (it fixes the worked station's parity); offsetHz is the picked TX audio offset;
  *  operatingFreqMHz is the rig dial frequency. A 'fd' mode answers a CQ FD with the
  *  operator's Field Day class+section (daemon config) — theirSnr is our SNR of the CQ,
- *  logged as RST_SENT since FD exchanges no report. Omit both for a standard answer. */
+ *  logged as RST_SENT since FD exchanges no report. A 'type4' mode answers a
+ *  NONSTANDARD/compound-call CQ with the reduced bare-calls→RR73→73 ladder (ADR 0048),
+ *  also logging theirSnr as RST_SENT (no report on the wire). Omit for a standard answer. */
 export function startFt8Qso(
     theirCall: string,
     theirGrid: string,
     slotUtc: string,
     offsetHz: number,
     operatingFreqMHz: number,
-    mode: 'standard' | 'fd' = 'standard',
+    mode: 'standard' | 'fd' | 'type4' = 'standard',
     theirSnr?: number,
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
@@ -86,7 +88,9 @@ export function startFt8Qso(
             slot_utc: slotUtc,
             offset_hz: offsetHz,
             operating_freq_mhz: operatingFreqMHz,
-            ...(mode === 'fd' ? { mode: 'fd', their_snr: theirSnr ?? 0 } : {}),
+            // 'fd' and 'type4' both carry the measured SNR (logged RST_SENT); 'standard'
+            // derives its report from the exchange, so it sends neither.
+            ...(mode === 'fd' || mode === 'type4' ? { mode, their_snr: theirSnr ?? 0 } : {}),
         },
         signal
     );
