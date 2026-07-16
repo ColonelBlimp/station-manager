@@ -76,6 +76,15 @@ const (
 	// twin of seqWorking). fdWork drives it; we reply R+our class/section, RR73, and log
 	// their class/section. This is the dominant path for a sought-after DX station.
 	seqWorkingFd
+	// seqAnsweringT4: answering a NONSTANDARD/compound station's CQ with the reduced
+	// type-4 ladder (ADR 0048) — t4Ex drives it. No grid/report is exchanged (the
+	// protocol has no wire form for one with a hashed call); we open bare-calls, they
+	// roger, we 73. The type-4 twin of seqAnswering, isolated so the standard path is
+	// untouched.
+	seqAnsweringT4
+	// seqWorkingT4: working a nonstandard station that called US, reduced type-4 ladder
+	// (ADR 0048) — t4Work drives it. A single RR73 rung (no report), logged after it.
+	seqWorkingT4
 )
 
 // QsoStatus roles (the `ft8-qso` SSE Role field) — which side of the contact we
@@ -98,7 +107,10 @@ type QsoStatus struct {
 	Role   string `json:"role,omitempty"` // "answerer" | "caller" | "worker"; empty when idle
 	// Fd marks an ARRL Field Day answer-a-CQ session, so the SPA renders the FD ladder
 	// (class/section rungs) instead of the standard grid/report one.
-	Fd        bool   `json:"fd,omitempty"`
+	Fd bool `json:"fd,omitempty"`
+	// Type4 marks a reduced type-4 (nonstandard/compound call) session (ADR 0048), so
+	// the SPA renders the reduced bare-calls→RR73→73 ladder (no grid/report rungs).
+	Type4     bool   `json:"type4,omitempty"`
 	TheirCall string `json:"their_call,omitempty"`
 	// TheirGrid — the worked station's 4-char grid, for the ladder's opening row (so it
 	// shows the real grid, not a "<GRID>" placeholder). Empty until known.
@@ -193,6 +205,11 @@ type Sequencer struct {
 
 	// Working a caller in FD (seqWorkingFd): fdWork is the active Field Day work exchange.
 	fdWork *FdWorkExchange
+
+	// Reduced type-4 ladders (ADR 0048): t4Ex answers a nonstandard station's CQ
+	// (seqAnsweringT4); t4Work works a nonstandard caller (seqWorkingT4).
+	t4Ex   *T4Exchange
+	t4Work *T4WorkExchange
 
 	// Calling CQ (seqCalling, ADR 0033): caller is nil while still calling (phase 1),
 	// set once an answerer is chosen (phase 2). cqMessage is repeated each of our
@@ -384,6 +401,8 @@ func (s *Sequencer) Abandon() {
 	s.ex = nil
 	s.fdEx = nil
 	s.fdWork = nil
+	s.t4Ex = nil
+	s.t4Work = nil
 	s.caller = nil
 	s.repeats = 0
 	s.skipIfSilent = false
@@ -404,7 +423,8 @@ func (s *Sequencer) Abandon() {
 func (s *Sequencer) SetSkipIfSilent(armed bool) error {
 	s.mu.Lock()
 	skippable := s.mode == seqAnswering || s.mode == seqAnsweringFd ||
-		s.mode == seqWorking || s.mode == seqWorkingFd
+		s.mode == seqWorking || s.mode == seqWorkingFd ||
+		s.mode == seqAnsweringT4 || s.mode == seqWorkingT4
 	if armed && !skippable {
 		s.mu.Unlock()
 		return ErrNoActiveQso
@@ -444,6 +464,10 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 		s.onSlotWorking(ref, msgs, now)
 	case seqWorkingFd:
 		s.onSlotWorkingFd(ref, msgs, now)
+	case seqAnsweringT4:
+		s.onSlotAnsweringT4(ref, msgs, now)
+	case seqWorkingT4:
+		s.onSlotWorkingT4(ref, msgs, now)
 	default:
 		// seqIdle — no active session; nothing to drive this slot.
 	}
@@ -836,6 +860,21 @@ func (s *Sequencer) fireOpening(now time.Time) {
 			return
 		}
 		msg, rung = m, s.fdEx.State.label()
+	case seqAnsweringT4:
+		// Opening rung is t4Calling (bare calls) — always non-terminal, so the
+		// no-completion contract here holds. (seqWorkingT4 is deliberately NOT fired
+		// here: its sole rung is the terminal RR73, which needs the onDone completion
+		// path that fireOpening does not provide — it is driven by onSlotWorkingT4.)
+		if s.t4Ex == nil {
+			s.mu.Unlock()
+			return
+		}
+		m, ok := s.t4Ex.TxMessage()
+		if !ok {
+			s.mu.Unlock()
+			return
+		}
+		msg, rung = m, s.t4Ex.State.label()
 	case seqWorkingFd:
 		if s.fdWork == nil {
 			s.mu.Unlock()
@@ -989,6 +1028,54 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 		}
 		if s.fdWork.State != fdwRogering {
 			st.MaxRepeats = s.maxRepeats
+		}
+		return st
+	case seqAnsweringT4:
+		if s.t4Ex == nil {
+			return QsoStatus{Active: false}
+		}
+		msg, _ := s.t4Ex.TxMessage()
+		st := QsoStatus{
+			Active:      true,
+			Role:        roleAnswerer,
+			Type4:       true,
+			TheirCall:   s.t4Ex.TheirCall,
+			TheirGrid:   s.t4Ex.TheirGrid,
+			State:       s.t4Ex.State.label(),
+			NextMessage: msg,
+			Repeats:     s.repeats,
+			TheirPeriod: s.theirPeriod,
+		}
+		// Cap governs the pre-73 rung only (the one-shot 73 is uncapped).
+		if s.t4Ex.State != t4Confirming {
+			st.MaxRepeats = s.maxRepeats
+		}
+		// No report is exchanged on the wire, but OurReport carries the SNR we log as
+		// RST_SENT (informational; the reduced ladder renders no report rung).
+		if s.t4Ex.HasSendSnr {
+			st.OurReport = formatReport(s.t4Ex.SendSnr)
+		}
+		return st
+	case seqWorkingT4:
+		if s.t4Work == nil {
+			return QsoStatus{Active: false}
+		}
+		msg, _ := s.t4Work.TxMessage()
+		st := QsoStatus{
+			Active:      true,
+			Role:        roleWorker,
+			Type4:       true,
+			TheirCall:   s.t4Work.TheirCall,
+			TheirGrid:   s.t4Work.TheirGrid,
+			State:       s.t4Work.State.label(),
+			NextMessage: msg,
+			Repeats:     s.repeats,
+			TheirPeriod: s.theirPeriod,
+		}
+		// The sole rung (RR73) is a one-shot terminal, so it is uncapped (MaxRepeats
+		// stays 0).
+		if s.t4Work.HasSendSnr {
+			st.OurReport = formatReport(s.t4Work.SendSnr)
 		}
 		return st
 	case seqCalling:
