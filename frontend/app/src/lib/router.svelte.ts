@@ -4,7 +4,7 @@
 // the last-used mode. Deep links + refresh work because both Vite's dev server
 // and the daemon's spaHandler index-fall-back unknown paths to index.html.
 
-export type View = 'dashboard' | 'operate' | 'logbook' | 'config';
+export type View = 'dashboard' | 'operate' | 'logbook' | 'config' | 'map';
 export type OpMode = 'phone' | 'ft8';
 
 const MODE_KEY = 'sm-op-mode';
@@ -29,6 +29,8 @@ function parse(path: string, fallbackMode: OpMode): Loc {
             return { view: 'logbook', mode: fallbackMode };
         case '/config':
             return { view: 'config', mode: fallbackMode };
+        case '/map':
+            return { view: 'map', mode: fallbackMode };
         default:
             return { view: 'dashboard', mode: fallbackMode };
     }
@@ -42,6 +44,8 @@ function pathFor(view: View, mode: OpMode): string {
             return '/logbook';
         case 'config':
             return '/config';
+        case 'map':
+            return '/map';
         default:
             return '/';
     }

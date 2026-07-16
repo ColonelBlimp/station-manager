@@ -13,6 +13,18 @@
     <div class="flex items-center justify-between">
         <h3 class="text-sm font-semibold text-ink">Session</h3>
         <div class="flex items-center gap-x-2">
+            <!-- Contacts map in its own tab (second monitor) — the map is a
+                 time-window view over logged data, so it stands alone and
+                 needs nothing from this tab (ADR 0049 rejection). -->
+            <a
+                class="btn text-xs"
+                href="{import.meta.env.BASE_URL}map"
+                target="_blank"
+                rel="noopener"
+                title="Open the contacts map in a new tab"
+            >
+                Map ↗
+            </a>
             <!-- Export / email the session — disabled with an empty log. -->
             <button class="btn text-xs" disabled={session.qsos.length === 0} onclick={openExport}>
                 Export…

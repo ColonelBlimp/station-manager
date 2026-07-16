@@ -51,6 +51,14 @@ export interface LogbookQso {
     cqz?: string;
     ituz?: string;
     cont?: string;
+    // Enrichment-precomputed coordinates (decimal-degree strings when the
+    // lookup provided them) — the contacts map plots these and falls back to
+    // gridsquare when absent or unparseable (e.g. import-era ADIF Location
+    // format), per its fail-soft "N of M plotted" rule.
+    lat?: string;
+    lon?: string;
+    my_lat?: string;
+    my_lon?: string;
     // Upload/forward status (e.g. "Y") — drive the callsign tint.
     sm_fwrd_by_email_status?: string;
     qrzcom_qso_upload_status?: string;

@@ -45,31 +45,42 @@
         operate: 'Operate',
         logbook: 'Logbook',
         config: 'Settings',
+        map: 'Contacts Map',
     };
 </script>
 
-<Sidebar />
+{#if router.view === 'map'}
+    <!-- Full-window, no shell chrome: the map opens in its OWN tab (second
+         monitor) from the Session tile, so sidebar/header would be dead
+         weight here. Lazy import = its own chunk (ADR 0044 code-splitting):
+         the bundled basemap + d3-geo never load unless the map is opened. -->
+    {#await import('./lib/map/MapView.svelte') then mapModule}
+        <mapModule.default />
+    {/await}
+{:else}
+    <Sidebar />
 
-<!-- System messages (info/warn/error) — single mount, fixed overlay, never
-     reflows the working surface. Pushed via lib/ui/toasts.svelte.ts. -->
-<Toasts />
+    <!-- System messages (info/warn/error) — single mount, fixed overlay, never
+         reflows the working surface. Pushed via lib/ui/toasts.svelte.ts. -->
+    <Toasts />
 
-<div class="content-wrap flex h-screen flex-col pl-[var(--sidebar-w)]">
-    <Header />
-    <!-- main is the horizontal (and vertical) scroll container. Its width is
-         bounded by the rail offsets (content-wrap pl/pr), so a min-width card
-         scrolls WITHIN it and the fixed rails can't scroll over the card. -->
-    <main class="flex-1 overflow-auto bg-canvas">
-        <div class="p-4 sm:p-6 lg:p-8">
-            {#if router.view === 'operate'}
-                <Operate />
-            {:else if router.view === 'logbook'}
-                <Logbook />
-            {:else}
-                <!-- Placeholder for views not yet built. -->
-                <h1 class="text-2xl font-semibold text-ink">{titles[router.view]}</h1>
-                <div class="mt-6 h-[60vh] rounded-xl border border-dashed border-line"></div>
-            {/if}
-        </div>
-    </main>
-</div>
+    <div class="content-wrap flex h-screen flex-col pl-[var(--sidebar-w)]">
+        <Header />
+        <!-- main is the horizontal (and vertical) scroll container. Its width is
+             bounded by the rail offsets (content-wrap pl/pr), so a min-width card
+             scrolls WITHIN it and the fixed rails can't scroll over the card. -->
+        <main class="flex-1 overflow-auto bg-canvas">
+            <div class="p-4 sm:p-6 lg:p-8">
+                {#if router.view === 'operate'}
+                    <Operate />
+                {:else if router.view === 'logbook'}
+                    <Logbook />
+                {:else}
+                    <!-- Placeholder for views not yet built. -->
+                    <h1 class="text-2xl font-semibold text-ink">{titles[router.view]}</h1>
+                    <div class="mt-6 h-[60vh] rounded-xl border border-dashed border-line"></div>
+                {/if}
+            </div>
+        </main>
+    </div>
+{/if}

@@ -41,4 +41,11 @@ describe('SessionPanel', () => {
         await fireEvent.click(exportBtn);
         expect(operate.exportOpen).toBe(true);
     });
+
+    it('offers the contacts map in a new tab regardless of session contents', () => {
+        render(SessionPanel);
+        const link = screen.getByRole('link', { name: /Map/ });
+        expect(link).toHaveAttribute('target', '_blank');
+        expect(link.getAttribute('href')).toMatch(/map$/);
+    });
 });

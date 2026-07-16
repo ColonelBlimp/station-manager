@@ -19,6 +19,7 @@ describe('router base-path handling', () => {
         expect(urlOf('operate', 'phone', '/app')).toBe('/app/operate/phone');
         expect(urlOf('logbook', 'phone', '/app')).toBe('/app/logbook');
         expect(urlOf('config', 'phone', '/app')).toBe('/app/config');
+        expect(urlOf('map', 'phone', '/app')).toBe('/app/map'); // contacts-map tab
         expect(urlOf('dashboard', 'phone', '/app')).toBe('/app/'); // default → base root
     });
 
