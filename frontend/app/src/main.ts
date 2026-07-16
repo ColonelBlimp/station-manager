@@ -40,6 +40,8 @@ import {
     type Ft8QsoOutcome,
 } from './lib/api/ft8qso';
 import { toasts } from './lib/ui/toasts.svelte';
+import { setup, setSetupSave } from './lib/setup.svelte';
+import { completeSetup } from './lib/api/setup';
 import { sendRigTune } from './lib/api/rig-tune';
 import { sendRigCommand } from './lib/api/rig-command';
 import {
@@ -170,6 +172,8 @@ setLayoutPersistence({
 // failure: the submit sink refuses with a clear message instead of posting
 // against the wrong logbook, and the rig surface stays fully manual.
 const ctx: StationContext = {
+    configOk: false,
+    setupComplete: false,
     myGrid: '',
     stationCallsign: '',
     operator: '',
@@ -212,7 +216,11 @@ setFt8Dupe((call, band, mode) => {
         .catch(() => null);
 });
 
-void fetchStationContext().then((c) => {
+// Guard: applyStationContext can run more than once (boot, then again after
+// first-run setup completes) — the rig event stream must not double-open.
+let rigEventsOpen = false;
+
+function applyStationContext(c: StationContext): void {
     Object.assign(ctx, c);
     setMyGrid(c.myGrid); // '' on failure → bearing row hides, fail-soft
     // The operator's "CAT enabled" intent gates the stream (shipping rule):
@@ -265,7 +273,28 @@ void fetchStationContext().then((c) => {
         cqToTop: c.ft8CqToTop,
         hideHashedCalls: c.ft8HideHashed,
     });
-    if (c.catEnabled) openRigEvents(catLink);
+    if (c.catEnabled && !rigEventsOpen) {
+        rigEventsOpen = true;
+        openRigEvents(catLink);
+    }
+}
+
+void fetchStationContext().then((c) => {
+    applyStationContext(c);
+    // First-run gate: only a REACHED config saying setup_complete=false shows
+    // setup — a daemon outage falls through to the fail-soft shell instead of
+    // greeting a configured operator with the welcome card.
+    setup.status = c.configOk && !c.setupComplete ? 'needed' : 'complete';
+});
+
+// First-run save (injected per ADR 0045 — the setup module never imports
+// lib/api): PUT the callsign, then re-fetch + re-wire the station context so
+// the freshly-seeded default logbook (id, name, count) is live with no reload.
+setSetupSave(async (callsign) => {
+    const out = await completeSetup(callsign);
+    if (out.kind !== 'ok') return { ok: false, message: out.message };
+    applyStationContext(await fetchStationContext());
+    return { ok: true, message: '' };
 });
 
 // Submit sink: draft + rig context + displayed enrichment → one ADIF record →

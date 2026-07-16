@@ -242,6 +242,30 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect(ctx.logbookName).toBe('');
         expect(ctx.rigName).toBe('');
     });
+
+    it('reads setup_complete and marks the config reachable', async () => {
+        mockConfig({ setup_complete: true, logging_station: { station_callsign: '7Q5MLV' } });
+        let ctx = await fetchStationContext();
+        expect(ctx.configOk).toBe(true);
+        expect(ctx.setupComplete).toBe(true);
+
+        // Fresh install: the daemon serves setup_complete=false — the app
+        // must gate behind first-run setup, not 404 against a missing logbook.
+        mockConfig({ setup_complete: false, logging_station: {} });
+        ctx = await fetchStationContext();
+        expect(ctx.configOk).toBe(true);
+        expect(ctx.setupComplete).toBe(false);
+    });
+
+    it('reports configOk=false when the daemon is unreachable — NOT setup-needed', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(new TypeError('network down')))
+        );
+        const ctx = await fetchStationContext();
+        expect(ctx.configOk).toBe(false);
+        expect(ctx.setupComplete).toBe(false);
+    });
 });
 
 describe('fetchLogbookCount (stubbed fetch)', () => {

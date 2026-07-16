@@ -103,6 +103,14 @@ export async function apiHistory(call: string, signal?: AbortSignal): Promise<Wo
  * leaves the rig surface fully manual.
  */
 export interface StationContext {
+    /** /v1/config was reached AND parsed. False = daemon down/malformed —
+     *  distinct from "not set up", so the shell renders (fail-soft empties)
+     *  instead of wrongly greeting a configured operator with first-run setup. */
+    configOk: boolean;
+    /** First-run setup done (config setup_complete): the default logbook row
+     *  exists. False gates the whole app behind the SetupCard — every surface
+     *  (map, logbook, header count) 404s against a logbook that isn't there. */
+    setupComplete: boolean;
     myGrid: string;
     stationCallsign: string;
     operator: string;
@@ -151,6 +159,8 @@ export interface StationContext {
 
 export async function fetchStationContext(): Promise<StationContext> {
     const none: StationContext = {
+        configOk: false,
+        setupComplete: false,
         myGrid: '',
         stationCallsign: '',
         operator: '',
@@ -184,6 +194,8 @@ export async function fetchStationContext(): Promise<StationContext> {
     const fd = isPlainObject(body.ft8_display) ? body.ft8_display : {};
     const str = (v: unknown): string => (typeof v === 'string' ? v : '');
     return {
+        configOk: true,
+        setupComplete: body.setup_complete === true,
         myGrid: str(ls.my_gridsquare),
         stationCallsign: str(ls.station_callsign),
         operator: str(ls.operator),

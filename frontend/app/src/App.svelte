@@ -2,6 +2,8 @@
     import Sidebar from './lib/ui/Sidebar.svelte';
     import Header from './lib/ui/Header.svelte';
     import Toasts from './lib/ui/Toasts.svelte';
+    import SetupCard from './lib/ui/SetupCard.svelte';
+    import { setup } from './lib/setup.svelte';
     import Operate from './lib/operate/Operate.svelte';
     import Logbook from './lib/logbook/Logbook.svelte';
     import {
@@ -49,7 +51,18 @@
     };
 </script>
 
-{#if router.view === 'map'}
+<!-- First-run gate: every logbook-backed surface (map tab included) 404s
+     until setup seeds the default logbook, so the gate sits above the router.
+     'loading' renders nothing — the boot /v1/config fetch settles in tens of
+     ms on localhost, and holding blank beats flashing the shell at a fresh
+     install. A daemon outage resolves to 'complete' (fail-soft shell), never
+     to a false first-run greeting. -->
+{#if setup.status === 'loading'}
+    <Toasts />
+{:else if setup.status === 'needed' || setup.justCompleted}
+    <SetupCard />
+    <Toasts />
+{:else if router.view === 'map'}
     <!-- Full-window, no shell chrome: the map opens in its OWN tab (second
          monitor) from the Session tile, so sidebar/header would be dead
          weight here. Lazy import = its own chunk (ADR 0044 code-splitting):
