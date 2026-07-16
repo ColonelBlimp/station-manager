@@ -60,11 +60,15 @@ tasks:
     cmds:
       - sqlboiler psql
 
-  frontend:install:
+  frontend:logging:install:
     desc: Install logging-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
     dir: frontend/logging
     cmds:
       - sh -c 'if [ -f package-lock.json ]; then npm ci; else npm install; fi'
+
+  frontend:install:
+    desc: Install dependencies for every embedded SPA (logging + config + logbook + app)
+    deps: [frontend:logging:install, frontend:config:install, frontend:logbook:install, frontend:app:install]
 
   frontend:dev:
     desc: Run the logging SPA Vite dev server with HMR (proxies /v1/* to daemon on :8080)

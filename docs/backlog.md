@@ -65,7 +65,7 @@ next, and in what order" is answered.
 
 **P3 — deferred / large / needs a trigger**
 - CAT poll mode (ADR 0034) · FT8 semi-auto watch-list (SET ASIDE) · spot-submitter registry (on 2nd destination) · operator / user profiles (contesting lens: bundle op-identity + contest params, swap mid-event — dogfood 2026-07-06) · outbound UDP telemetry (WSJT-X-compatible) · FT8 occupancy waterfall render · POTA fields · config hot-reload · settings help tooltips + beginner/expert mode · FT8 Monitor/Listen toggle (DISCUSSION) · download-site install page · `PUT /v1/config` `default_logbook.id` wiring (no consumer yet)
-- _Deferred features / design (dogfood triage 2026-07-08):_ `MY_RIG` follow the CAT-identified rig when connected (config = fallback) · single-source the freq→band table + regional band-plan design (three hand-synced copies today) · FT8 tune-carrier occupancy-skip (pending HW check on whether the RTTY tune tone bleeds into RX audio) · QSO contacts map — **session-first** (Operate/Session panel list⇄map toggle), whole-log dashboard map as phase 2 (Natural Earth bundled, d3-geo, offline; scoped 2026-07-14) · FT8 auto band-hop / "run the bands" · voice keyer + phone/CW auto-CQ + QSO copilot (crosses the v1 "no phone/CW PTT-for-operating" line — post-ship) · movable / dockable nav · propagation / conditions panel (external online data source — dogfood 2026-07-09) · 2nd callsign-enrichment provider (HamQTH fallback link in the lookup chain, catches QRZ-absent calls — dogfood 2026-07-13) · smcloud "am I being heard?" pile-up status site (community-phase, capture-don't-build — dogfood 2026-07-11)
+- _Deferred features / design (dogfood triage 2026-07-08):_ `MY_RIG` follow the CAT-identified rig when connected (config = fallback) · single-source the freq→band table + regional band-plan design (three hand-synced copies today) · FT8 tune-carrier occupancy-skip (pending HW check on whether the RTTY tune tone bleeds into RX audio) · whole-log **Dashboard map** (time-window contacts map SHIPPED 2026-07-16 → archive; the dashboard reuses its engine — needs the `GET /v1/logbook/{id}/map` aggregate) · FT8 auto band-hop / "run the bands" · voice keyer + phone/CW auto-CQ + QSO copilot (crosses the v1 "no phone/CW PTT-for-operating" line — post-ship) · movable / dockable nav · propagation / conditions panel (external online data source — dogfood 2026-07-09) · 2nd callsign-enrichment provider (HamQTH fallback link in the lookup chain, catches QRZ-absent calls — dogfood 2026-07-13) · smcloud "am I being heard?" pile-up status site (community-phase, capture-don't-build — dogfood 2026-07-11)
 
 **Designed workstreams — built on go-ahead (not queued)**
 - SM Cloud P1 (ADR 0040 + `docs/v2-design/sm-cloud-p1.md`) · DB-manager SPA (4th SPA — incl. a data-validation / DXCC-consistency-checker surface mirroring `scripts/qso-audit.py`, dogfood 2026-07-13)
@@ -493,95 +493,21 @@ next, and in what order" is answered.
   orthogonal to the frontend/app daily-driver work. Full note: `docs/dogfood-inbox.md`
   2026-07-11.
 
-- **QSO contacts map — time-window view over logged data (P3 · frontend/app; design settled 2026-07-16).**
-  A great-circle map from the operator's QTH to worked stations — a loved ham feature
-  (WSJT-X / QRZ / Log4OM all have one), not eye candy. **Decision: the map is a read-only
-  view over logged QSOs for an operator-picked time window** (last 60 min / 5 h / 10 days /
-  …), live-updated as QSOs land. No session entity — stored or derived.
-  - **▶ DESIGN SETTLED 2026-07-16 — time-window, not sessions; ADR 0049 REJECTED.** The
-    2026-07-14 session framing (sessions table + `session_id` stamped in `prepareQso` +
-    `GET /v1/session/{id}/qsos`) was rejected before implementation: a structural
-    write-path change for a display feature, and every boundary scenario demanded more
-    machinery (merge-correction UI, restart semantics, threshold config) for boundaries
-    that are derivable at read time — a derived window is *recomputable*, a stamped one is
-    frozen wrong (full rationale: ADR 0049's rejection note). The replacement needs
-    (almost) **zero daemon change**:
-    - **Initial render:** fetch the window from `GET /v1/logbook/{id}/qso` — cursor pages
-      are newest-first over `{qso_date, time_on, id}`, so page until rows pass the window
-      edge. Rows are full `types.Qso`, so the precomputed `lat`/`lon`/`my_lat`/`my_lon` in
-      `additional_data` come along free. Optional nicety if paging feels clumsy in
-      practice: a small read-only `since` query param on the existing endpoint.
-    - **Live update:** subscribe to the existing `GET /v1/events` firehose —
-      `qso.stored`/`qso.updated`/`qso.deleted` already fire from `qsoservice` for EVERY
-      logging path (Phone/CW submit, FT8 e4 sink, PATCH edits; `submit.go`). Per the
-      documented reconnect contract: open the stream first, then fetch the window; on a
-      `qso.*` event refresh the window head (first cursor page — the payload is minimal
-      `{qso_id, logbook_id}` by design, and head-refresh is cheap + idempotent).
-    - **Delivery:** a separate full-window route in `frontend/app`, opened in its own tab
-      (second monitor) — ADR 0049's overlay-blocks-operating reasoning stands; only the
-      data source changed. An **"Open map ↗"** button in the shared Session tile.
-  - **▶ IMPLEMENTATION PLAN (revised 2026-07-16 — SPA-only, two phases; the drafted ADR 0049
-    daemon spine [migration 0005 / lifecycle store / session endpoints] is DROPPED with the
-    rejection).**
-    - **Phase 1 — render engine.** Add `d3-geo` + `topojson-client`; bundle Natural Earth
-      110m TopoJSON (`import`ed → Vite bundles → `//go:embed`'d, never fetched). Reusable
-      engine: projection, country render, great-circle **arc sampler** (`geoInterpolate`),
-      fed by the precomputed `lat`/`lon`/`my_lat`/`my_lon` in `additional_data`. **Proof:**
-      engine unit tests (projection, arc sampler, antimeridian cases).
-    - **Phase 2 — map route (the payoff).** New **full-window route** in `frontend/app`
-      (empty dashboard `{:else}` is a candidate host), opened in its own tab; duration
-      picker (60 min / 5 h / 24 h / 10 days / custom); open `/v1/events` first, then the
-      windowed fetch (cursor pages until past the window edge); arcs + markers + hover
-      tooltip (call/grid/distance/bearing via `pathInfo`); window-head refresh on `qso.*`
-      events so arcs appear live as QSOs are logged; theme-aware; fail-soft "N of M
-      plotted" for grid-less rows. **Proof:** component render over a fixture window + a
-      simulated `qso.stored` adding an arc.
-  - **Data readiness (verified against the live 5,418-QSO dogfood DB, 2026-07-14):**
-    contacted `gridsquare` 98.6%, `dxcc` 100%, `my_gridsquare` 100%; the `additional_data`
-    blob already carries **pre-computed `lat`/`lon` + `my_lat`/`my_lon`** (+ `distance`,
-    `cont`) — the daemon has done the geo math. So the map is almost pure rendering.
-  - **Primitives we HAVE** (`frontend/app/src/lib/utils/bearing.ts`): `gridToDecimal`
-    (grid→lat/lon), `pathInfo` (short/long-path bearing + distance), Maidenhead validation.
-    Rendering idiom is SVG/DOM (no canvas anywhere) — a vector map fits. **Need to add:**
-    a projection (lat/lon→x/y), a great-circle **arc sampler** (`pathInfo` gives endpoints
-    only; nothing samples a polyline today), a bundled **basemap**, and a host component.
-  - **Superseded earlier framings (kept for the trail):** the original "v1 = Session-panel
-    list ⇄ map toggle over in-memory `session.qsos`" (2026-07-14) died with the
-    separate-tab decision (a second tab can't see the operating tab's state — which is
-    fine, because the daemon fetch replaces it); its `SessionQso`-needs-`gridsquare`
-    plumbing gap is moot — the map fetches full `types.Qso` rows, coords included. The
-    daemon-owned-sessions framing died with ADR 0049's rejection (see the design bullet
-    above).
-  - **Render decisions (these survive both rejections unchanged):**
-    - **Add `d3-geo` + `topojson-client`.** The one call that pushes against minimize-deps —
-      but hand-rolling a spherical projection + antimeridian clipping + `geoInterpolate` arc
-      sampling is exactly the fiddly, well-solved math a focused lib should own (~30 KB gz,
-      MIT → GPL-clean). Alternative (zero-dep equirectangular + hand-rolled slerp) saves the
-      dep but reinvents antimeridian handling and looks flatter. Lean d3-geo.
-    - **Basemap = Natural Earth 110m TopoJSON** (public domain → GPL-clean, no ODbL
-      share-alike), **`import`ed so Vite bundles it** into `app/dist` → shipped in the binary
-      by `//go:embed all:app/dist` (`frontend/embed.go`), **never fetched** — same offline-first
-      posture as the emoji-flag util. ~100 KB. AVOID OSM/ODbL-derived data (share-alike).
-  - **Follow-on — whole-log Dashboard map (later).** The `frontend/app` dashboard route is an
-    empty placeholder (`App.svelte` `{:else}`) wanting a first tenant. The whole-log map
-    reuses the SAME render engine; the only new piece is the data source — a small aggregate
-    endpoint **`GET /v1/logbook/{id}/map`** returning dedup'd plot coords
-    (`[{grid,lat,lon,dxcc,cont,bands[],modes[],count}]`; 5.4k QSOs → a few hundred unique
-    grids / ~150 DXCC → one tiny offline-friendly request), rather than paging the cursor API
-    over a flaky link. NB this bespoke aggregate slightly tensions with the ADR 0043/0044
-    "compose existing + subscribe, resist aggregates" guidance — justified because a
-    coordinate projection is a genuinely different shape than paginated rows and is the
-    flaky-link-correct choice; record the exception if built.
-  - **Per-QSO origin (refinement):** v1 uses a single fixed `myGrid`. Per-QSO `my_gridsquare`
-    (100% populated in the blob, but not on the typed client row) would let a roving/multi-site
-    log draw per-QSO origins — deferred; not needed for a fixed-location or DXpedition op.
-  - **Effort:** engine (d3-geo + basemap + projection + country render + arc sampler) ~1 day ·
-    map route (duration picker + windowed fetch + `/v1/events` live refresh + markers/tooltip)
-    ~1 day · theming + "Open map ↗" + tests ~0.5 day → **~2–2.5 days for the time-window map**
-    (down from ~2.5–3 + the dropped daemon spine), after which the Dashboard map is "swap the
-    data source." **Stays P3** — a delight feature; a shovel-ready block for a UI cycle.
-    Related: the LSPA "future POTA fields", the FT8 session log, `docs/dogfood-inbox.md`
-    2026-07-04 + 2026-07-06 (original map notes), ADR 0049 (rejected daemon-sessions design).
+- **Whole-log Dashboard map (P3 · frontend/app; follow-on to the shipped time-window map).**
+  The time-window contacts map SHIPPED 2026-07-16 (engine `lib/map/engine.ts` + reusable
+  `WorldMap.svelte`; route `/map` — `MapView.svelte` + `mapData.svelte.ts` windowed fetch +
+  `qso.*` live refresh; "Open map ↗" in the shared SessionPanel — full design trail in
+  `backlog-archive.md`). The dashboard route (`App.svelte` `{:else}`) is still an empty
+  placeholder wanting a first tenant; the whole-log map reuses the SAME render engine — the
+  only new piece is the data source: a small aggregate endpoint **`GET /v1/logbook/{id}/map`**
+  returning dedup'd plot coords (`[{grid,lat,lon,dxcc,cont,bands[],modes[],count}]`; 5.4k QSOs
+  → a few hundred unique grids / ~150 DXCC → one tiny offline-friendly request), rather than
+  paging the cursor API over a flaky link. NB the bespoke aggregate slightly tensions with the
+  ADR 0043/0044 "compose existing + subscribe, resist aggregates" guidance — justified because
+  a coordinate projection is a genuinely different shape than paginated rows and is the
+  flaky-link-correct choice; **record the exception if built**. The per-QSO-origin refinement
+  (roving/multi-site: per-QSO `my_gridsquare` origins instead of the single fixed `myGrid`)
+  stays deferred with it.
 
 - **SPA consolidation — one app shell (ADR 0044, post-ship).** Merge the three
   Svelte SPAs (`frontend/{logging,config,logbook}`) into one Vite + Svelte 5 app

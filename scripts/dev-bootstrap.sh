@@ -30,7 +30,7 @@
 # NOT run here (do them by hand after — they need a fresh shell for PATH, and
 # are the real toolchain smoke test):
 #   source ~/.bashrc   # or open a new terminal
-#   task frontend:install
+#   task frontend:install   # all embedded SPAs
 #   task               # vet + build + test — confirms the whole toolchain
 #
 # Run directly: bash scripts/dev-bootstrap.sh
@@ -153,7 +153,7 @@ $(say "Bootstrap complete.")
 Next steps (need a fresh shell so PATH picks up Go, then run from the repo root):
 
   source ~/.bashrc          # or open a new terminal
-  task frontend:install     # install the logging SPA deps
+  task frontend:install     # install all embedded SPA deps
   task                      # vet + build + test — the toolchain smoke test
 
 If 'go version' still reports 1.24.x, your shell hasn't picked up the new PATH.

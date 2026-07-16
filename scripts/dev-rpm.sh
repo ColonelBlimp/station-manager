@@ -47,6 +47,18 @@ echo "── [1/3] Building SPAs → frontend/{logging,config,logbook,app}/dist/
 # `app` (ADR 0044) was missed when it was embedded (2026-07-11) — a day of /app/
 # dogfood deploys silently shipped whatever dist/ last held (found 2026-07-13).
 for spa in logging config logbook app; do
+  # Keep the advertised one-command deploy usable on a fresh checkout (and
+  # after node_modules has been cleaned) without paying for `npm ci` on every
+  # dogfood rebuild. All SPAs commit package-lock.json, but retain the fallback
+  # so a newly scaffolded SPA fails usefully before its first lockfile lands.
+  if [ ! -x "frontend/${spa}/node_modules/.bin/vite" ]; then
+    echo "  • frontend/${spa} dependencies missing — installing"
+    if [ -f "frontend/${spa}/package-lock.json" ]; then
+      (cd "frontend/${spa}" && npm ci)
+    else
+      (cd "frontend/${spa}" && npm install)
+    fi
+  fi
   echo "  • frontend/${spa}"
   (cd "frontend/${spa}" && npm run build)
 done

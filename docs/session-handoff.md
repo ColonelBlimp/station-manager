@@ -32,6 +32,40 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-16)
 
+> **Session 215 (2026-07-16, afternoon) — QSO CONTACTS MAP BUILT (both phases of the
+> session-214 respec), COMMITTED + PUSHED; the type-4 + ADR 0049 doc commits are pushed
+> too. NB: this entry was written by a later reconciling session from git — the map
+> session itself did not update this handoff (the exact gap the RECONCILE guard warns
+> about, and the date-keyed check can't catch same-day drift).**
+> - **Phase 1 — render engine (`7817393b`):** `frontend/app/src/lib/map/engine.ts`
+>   (d3-geo projection, great-circle arc sampling, antimeridian clipping, basemap paths
+>   via topojson) + `WorldMap.svelte` (reusable, presentation-only — origin + arcs
+>   props). New deps `d3-geo`/`topojson-client`/`world-atlas` (+ type packages), per the
+>   backlog's render decisions (MIT/public-domain → GPL-clean, bundled → offline).
+>   Engine unit tests (spherical math, antimeridian) + component render tests.
+> - **Phase 2 — map route (`93e7f83b`):** `MapView.svelte` full-tab view at **`/map`**
+>   (duration picker, live-status indicator, mapped-of-total summary) +
+>   `mapData.svelte.ts` (windowed fetch over `GET /v1/logbook/{id}/qso` cursor pages +
+>   live head-refresh on `qso.*` events via the new `api/log-events.ts` transport —
+>   reconnect, idempotent updates, minimal payload parse; fail-soft for unmappable
+>   rows) + **"Open map ↗"** in the shared `SessionPanel` + router wiring. State +
+>   component tests (`collectWindow`, `qsoEpochMs`/`rowPoint`, MapView render).
+> - **PUSH STATE:** `main` == `origin/main` @ `93e7f83b` — everything is pushed,
+>   **including the four type-4 commits session 214 recorded as push-gated on on-air
+>   validation** (that gate was overtaken by the push). **ADR 0048 is still `Proposed`**
+>   — working a real nonstandard station on air remains open and still gates the ADR
+>   flip.
+> - **Verified at reconcile (2026-07-16, later session):** working tree clean;
+>   `frontend/app` suite green at HEAD — **576 tests / 47 files pass** (545 → 576, the
+>   map's ~31 new tests). Unverified: CI status (no `gh` on this machine) and dogfood
+>   deploy (daemon not reachable on :8080 at reconcile time) — assume the map is NOT
+>   yet dogfood-deployed / eyeballed live unless the operator says otherwise.
+> - **NEXT:** on-air validate the type-4 ladder → flip ADR 0048 Proposed→Accepted;
+>   dogfood-deploy + eyeball the map (`task deploy:local:dev`, operator-gated —
+>   remember `/app/` is `//go:embed`'d: redeploy, don't reload); the **whole-log
+>   Dashboard map** stays the designed follow-on (reuses the shipped engine; needs the
+>   `GET /v1/logbook/{id}/map` aggregate — detail in the backlog).
+
 > **Session 213 (2026-07-16) — FT8 REDUCED TYPE-4 (nonstandard/compound-call) LADDER
 > BUILT end-to-end (ADR 0048), offline-gated; COMMITTED (per-unit, local — NOT pushed),
 > NOT yet on air, NOT yet dogfood-deployed.** The one FT8 gap that blocked finishing a QSO with a `/D` / prefix-
