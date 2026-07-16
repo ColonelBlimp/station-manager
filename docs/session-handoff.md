@@ -72,6 +72,28 @@ precisely so we don't re-derive state or redo finished work.
 >   ladder core (`6810bb27`), service + HTTP endpoint (`86ff2e0d`), SPA dispatch + ladder
 >   (`fd5c02f7`), docs. NOT pushed (on-air validation gates the push + the ADR flip). Stray
 >   root `package.json`/`package-lock.json` (`@openai/codex`, unrelated) left untracked.
+>   **PROCESS RULE (operator, session 214, absolute):** Claude NEVER commits or pushes —
+>   the operator reviews and commits ALL work himself; sessions leave changes in the
+>   working tree. (The four commits above predate the rule.)
+
+> **Session 214 (2026-07-16, later) — ADR 0049 REJECTED (daemon-owned sessions); QSO map
+> respec'd to a time-window view — UNCOMMITTED doc edits awaiting operator review.**
+> Working the session-boundary semantics through with the operator (what opens/closes a
+> sitting?) collapsed the design: every scenario demanded new machinery (merge-correction
+> UI, restart semantics, threshold config) to defend a structure whose only live tenant
+> was a map, with stamping on `prepareQso` — a structural write-path change for eye candy
+> (the operator's warning flag, confirmed). The dissolving observation: **the map needs a
+> time-filtered read, not a session entity** — and the daemon already has both halves:
+> `GET /v1/logbook/{id}/qso` cursor pages newest-first (page to the window edge), and
+> `qso.stored`/`updated`/`deleted` already fire on `GET /v1/events` from `qsoservice`
+> for every logging path. So the map = SPA-only: duration picker (60 min / 5 h / 10 days)
+> + windowed fetch + live head-refresh on `qso.*` events, separate tab, render engine
+> unchanged (d3-geo + Natural Earth, all prior render decisions stand). **Edited (working
+> tree only):** `docs/decisions/0049` status → Rejected + rejection note (revisit trigger:
+> multi-op operator profiles — a session carrying non-derivable data); `docs/backlog.md`
+> QSO-map item respec'd (SPA-only two-phase plan; daemon spine dropped; effort ~2–2.5 d);
+> this handoff. Contest grouping stays `CONTEST_ID` (better than sittings — operator
+> leans to ignoring sessions in contests entirely).
 > - **NEXT:** **work a real nonstandard station on air** → flip ADR 0048 Proposed→Accepted,
 >   then push. Dogfood deploy (`task deploy:local:dev`, CGO) is operator-gated (restarts the
 >   live daemon). Doc discrepancy fixed: the stale "build the 22-bit hash table" lines now

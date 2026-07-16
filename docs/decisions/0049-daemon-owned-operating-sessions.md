@@ -1,11 +1,30 @@
 ---
 number: 0049
 title: Daemon-owned operating sessions — session_id on every QSO
-status: Proposed
+status: Rejected
 date: 2026-07-14
 ---
 
 # 0049 — Daemon-owned operating sessions — session_id on every QSO
+
+> **Rejected 2026-07-16, before any implementation.** Working the boundary semantics
+> through with the operator surfaced the flaw: every scenario (dinner-break misfire,
+> daemon restart, threshold choice) demanded new machinery — a merge-correction UI,
+> restart-safe lifecycle state, a configurable idle gap — to defend a structure whose
+> only live tenant was a display feature, with the stamping sitting on `prepareQso`,
+> the most load-bearing write path in the system. The dissolving observation: **the
+> map needs a time-filtered read, not a session entity.** "This sitting" is derivable
+> at read time from `qso_date`/`time_on` (a duration picker — last 60 min / 5 h /
+> 10 days), and a derived boundary is *recomputable* — change the threshold and
+> nothing was ever stored wrong — where a stamped one is frozen at write time and
+> needs correction tooling. Live update needs no new plumbing either: `qso.stored`
+> on `GET /v1/events` already fires for every logging path (`submit.go`). The
+> claimed independent value thinned on inspection: contests group better by
+> `CONTEST_ID` than by sittings, and the multi-op operator-profiles tenant hasn't
+> arrived. **Revisit trigger:** a session that must carry data *not derivable from
+> its QSOs* — operator identity per shift in a real multi-op, labels. If that fires,
+> the analysis below is the starting point. Current map design: `docs/backlog.md`
+> → "QSO contacts map".
 
 ## Context
 

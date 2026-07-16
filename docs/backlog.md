@@ -493,73 +493,49 @@ next, and in what order" is answered.
   orthogonal to the frontend/app daily-driver work. Full note: `docs/dogfood-inbox.md`
   2026-07-11.
 
-- **QSO contacts map — session-first, then whole-log (P3 · frontend/app; scoped 2026-07-14).**
+- **QSO contacts map — time-window view over logged data (P3 · frontend/app; design settled 2026-07-16).**
   A great-circle map from the operator's QTH to worked stations — a loved ham feature
-  (WSJT-X / QRZ / Log4OM all have one), not eye candy. **Decision: build it SESSION-scoped
-  first** (map the current session's QSOs), which removes the biggest cost and lands the
-  reusable render engine on a tiny dataset before the whole-log version.
-  - **▶ DESIGN REFINED 2026-07-14 → recorded in ADR 0049 (Daemon-owned operating sessions).**
-    The "SPA-only, no daemon change" framing below is **superseded**: a decent map needs the
-    whole working space, an in-app overlay blocks operating, and a separate tab can't see the
-    operating tab's in-memory `session.qsos`. So the map is delivered as a **separate
-    daemon-served tab** fed by `GET /v1/session/{id}/qsos`, which requires **daemon-owned
-    sessions** (a `sessions` table + a promoted `session_id` column stamped server-side on
-    every QSO). That structural change is independently justified (session reconstruction +
-    the operator/contest-profiles item) — the map is its first tenant. The render-engine
-    notes below (d3-geo, Natural Earth basemap, arc sampler, projection, fail-soft "N of M
-    plotted") still stand; only the data-source + delivery changed. **Full design +
-    weighed alternatives: ADR 0049.**
-  - **▶ IMPLEMENTATION PLAN (ADR 0049; drafted 2026-07-14). Critical path to "session map
-    from a real sitting" = Phases 0→1→2→3; Phase 4 is the durable-value tail. Each phase is
-    provable in isolation before the next depends on it — the daemon spine is fully tested
-    before any map pixel.**
-    - **Phase 0 — schema + types (pure plumbing, no behaviour change).** New migration
-      `migrations/log/0005_sessions.{up,down}.sql`: `CREATE TABLE sessions` (`uuid` PK with the
-      same UUIDv7 CHECK as `qso.uuid`; `started_at`, `ended_at` nullable; `operator_call`,
-      `operator_name`, `label`; `created_at`/`modified_at`) + `ALTER TABLE qso ADD COLUMN
-      session_id TEXT` + index (nullable → no table rebuild). Add `sessions` to
-      `coreTablesBySet[MigrationSetLog]` (`migrations.go:37`). sqlboiler regen. `types.Qso`
-      gains `SessionID string` (omitempty); new `types.Session`. Adapter edits (`type_to_model.go`
-      set column, `model_to_type.go` overlay authoritative) mirroring the `last_refreshed_at`
-      precedent. **Proof:** migration up/down test; a `Qso` with a hand-set `SessionID`
-      round-trips.
-    - **Phase 1 — session lifecycle (daemon owns "the current session").** New DI-registered
-      session store (`Initialize/Open/Close`): `CurrentOrOpen(now)` returns the open session or
-      creates one; **lazy auto-close** — if the gap since the open session's last QSO exceeds the
-      idle threshold, close it (`ended_at`) + open a fresh one (lazy-on-next-QSO beats a ticker:
-      no timer, inherently restart-safe — the open row IS the state). **Restart resilience:** on
-      boot, current = most recent `ended_at IS NULL` row, else none. Config
-      `sessions.idle_gap_minutes` (default ~60, TBD). Stamp in `prepareQso` (`submit.go`, beside
-      `resolveSubmitUUID`): resolve/create the current session **before** the QSO tx, stamp
-      `qso.SessionID`, **best-effort** (session-bookkeeping failure logs + stamps empty; the QSO
-      still logs — honours "only a broken local DB stops logging"). **Proof:** first QSO opens a
-      session; subsequent share it; a QSO past the idle gap opens a new one; simulated restart
-      resumes the open session.
-    - **Phase 2 — query endpoint (the map's data source).** `GET /v1/session/{id}/qsos` +
-      `GET /v1/session/current` (so the map tab knows what to open). Handlers in a new
-      `internal/api/handler_session_map.go`, **named to not collide** with the existing
-      client-list `SessionEmailRequest`/`SessionExportRequest`; registered in `server.go`'s
-      session block; ids via `parsePathUUID`/`IsValidUUIDv7`. **Proof:** returns exactly the
-      session's rows; unknown/invalid id → 404/400; empty session → empty list. **← daemon spine
-      complete + fully tested here; the ADR's Proposed→Accepted "sessions stamp correctly"
-      trigger is met before any UI.**
-    - **Phase 3 — SPA session map (the payoff).** Add `d3-geo` + `topojson-client`; bundle Natural
-      Earth 110m TopoJSON (`import`ed → Vite bundles → `//go:embed`'d, never fetched). Reusable
-      render engine: projection, country render, great-circle **arc sampler** (`geoInterpolate`),
-      fed by the precomputed `lat`/`lon`/`my_lat`/`my_lon` in `additional_data`. New **full-window
-      route** in `frontend/app` (empty dashboard `{:else}` is a candidate host), opened in its own
-      tab; fetches `/v1/session/current` → `/v1/session/{id}/qsos`; arcs + markers + hover tooltip
-      (call/grid/distance/bearing via `pathInfo`); theme-aware; fail-soft "N of M plotted". An
-      **"Open map ↗"** button in the shared Session tile opens the tab. **Proof:** engine unit
-      tests (projection, arc sampler) + component render over a fixture session.
-    - **Phase 4 — lifecycle control + reconstruction (follow-on, NOT needed for map v1).**
-      `POST /v1/session/start` (name, operator identity), `POST /v1/session/{id}/end`,
-      `GET /v1/sessions` (list). SPA start/name/end control + a session **picker** so the map can
-      show past sittings; the operator-identity fields wire toward the operator/contest-profiles
-      item. This is where the contest/multi-op payoff + "map last night's run" land.
-    - **Open calls at Phase 0/1 start:** idle-gap default (~60 min?) · lazy-close (recommended,
-      restart-safe) vs a background ticker (only if a session must *visibly* self-close while idle
-      with no new QSO).
+  (WSJT-X / QRZ / Log4OM all have one), not eye candy. **Decision: the map is a read-only
+  view over logged QSOs for an operator-picked time window** (last 60 min / 5 h / 10 days /
+  …), live-updated as QSOs land. No session entity — stored or derived.
+  - **▶ DESIGN SETTLED 2026-07-16 — time-window, not sessions; ADR 0049 REJECTED.** The
+    2026-07-14 session framing (sessions table + `session_id` stamped in `prepareQso` +
+    `GET /v1/session/{id}/qsos`) was rejected before implementation: a structural
+    write-path change for a display feature, and every boundary scenario demanded more
+    machinery (merge-correction UI, restart semantics, threshold config) for boundaries
+    that are derivable at read time — a derived window is *recomputable*, a stamped one is
+    frozen wrong (full rationale: ADR 0049's rejection note). The replacement needs
+    (almost) **zero daemon change**:
+    - **Initial render:** fetch the window from `GET /v1/logbook/{id}/qso` — cursor pages
+      are newest-first over `{qso_date, time_on, id}`, so page until rows pass the window
+      edge. Rows are full `types.Qso`, so the precomputed `lat`/`lon`/`my_lat`/`my_lon` in
+      `additional_data` come along free. Optional nicety if paging feels clumsy in
+      practice: a small read-only `since` query param on the existing endpoint.
+    - **Live update:** subscribe to the existing `GET /v1/events` firehose —
+      `qso.stored`/`qso.updated`/`qso.deleted` already fire from `qsoservice` for EVERY
+      logging path (Phone/CW submit, FT8 e4 sink, PATCH edits; `submit.go`). Per the
+      documented reconnect contract: open the stream first, then fetch the window; on a
+      `qso.*` event refresh the window head (first cursor page — the payload is minimal
+      `{qso_id, logbook_id}` by design, and head-refresh is cheap + idempotent).
+    - **Delivery:** a separate full-window route in `frontend/app`, opened in its own tab
+      (second monitor) — ADR 0049's overlay-blocks-operating reasoning stands; only the
+      data source changed. An **"Open map ↗"** button in the shared Session tile.
+  - **▶ IMPLEMENTATION PLAN (revised 2026-07-16 — SPA-only, two phases; the drafted ADR 0049
+    daemon spine [migration 0005 / lifecycle store / session endpoints] is DROPPED with the
+    rejection).**
+    - **Phase 1 — render engine.** Add `d3-geo` + `topojson-client`; bundle Natural Earth
+      110m TopoJSON (`import`ed → Vite bundles → `//go:embed`'d, never fetched). Reusable
+      engine: projection, country render, great-circle **arc sampler** (`geoInterpolate`),
+      fed by the precomputed `lat`/`lon`/`my_lat`/`my_lon` in `additional_data`. **Proof:**
+      engine unit tests (projection, arc sampler, antimeridian cases).
+    - **Phase 2 — map route (the payoff).** New **full-window route** in `frontend/app`
+      (empty dashboard `{:else}` is a candidate host), opened in its own tab; duration
+      picker (60 min / 5 h / 24 h / 10 days / custom); open `/v1/events` first, then the
+      windowed fetch (cursor pages until past the window edge); arcs + markers + hover
+      tooltip (call/grid/distance/bearing via `pathInfo`); window-head refresh on `qso.*`
+      events so arcs appear live as QSOs are logged; theme-aware; fail-soft "N of M
+      plotted" for grid-less rows. **Proof:** component render over a fixture window + a
+      simulated `qso.stored` adding an arc.
   - **Data readiness (verified against the live 5,418-QSO dogfood DB, 2026-07-14):**
     contacted `gridsquare` 98.6%, `dxcc` 100%, `my_gridsquare` 100%; the `additional_data`
     blob already carries **pre-computed `lat`/`lon` + `my_lat`/`my_lon`** (+ `distance`,
@@ -569,21 +545,14 @@ next, and in what order" is answered.
     Rendering idiom is SVG/DOM (no canvas anywhere) — a vector map fits. **Need to add:**
     a projection (lat/lon→x/y), a great-circle **arc sampler** (`pathInfo` gives endpoints
     only; nothing samples a polyline today), a bundled **basemap**, and a host component.
-  - **v1 = session map (SPA-only, no daemon change).** Data source is the in-memory
-    `session.qsos` (`session.svelte.ts` `sessionQosState`) — already `$state`-reactive and
-    `sessionStorage`-persisted, exactly what the shared Session panel renders. **Home:** the
-    shared Session panel (FT8 + Phone/CW both) as a **list ⇄ map toggle**, next to the log it
-    draws. **Origin:** config `myGrid` (fixed per session). At session scale (tens–hundreds
-    of rows) draw the **arcs from the start** (skip dots-first). **Live payoff:** arcs appear
-    as each QSO is logged — a compelling operating-moment view during a run/pile-up.
-    **Fail-soft:** rows without a grid just aren't plotted (show "N of M plotted").
-  - **The one plumbing gap:** `SessionQso` (`session.svelte.ts:10`) carries callsign/band/
-    mode/rst/name/country but **not `gridsquare`** — even though both sources have it. FT8's
-    `ft8-logged` SSE payload **already carries `gridsquare`** (`api/ft8-sse.ts:96`) — free,
-    just store it; the Phone/CW path has the grid in the client-side enrichment draft before
-    submit. So: add `gridsquare?` to `SessionQso` + populate it in the two `addSessionQso`
-    (`session.svelte.ts:67`) call sites. A handful of lines, SPA-only.
-  - **Decisions (now recorded in ADR 0049 — the daemon-session decisions — plus these render choices):**
+  - **Superseded earlier framings (kept for the trail):** the original "v1 = Session-panel
+    list ⇄ map toggle over in-memory `session.qsos`" (2026-07-14) died with the
+    separate-tab decision (a second tab can't see the operating tab's state — which is
+    fine, because the daemon fetch replaces it); its `SessionQso`-needs-`gridsquare`
+    plumbing gap is moot — the map fetches full `types.Qso` rows, coords included. The
+    daemon-owned-sessions framing died with ADR 0049's rejection (see the design bullet
+    above).
+  - **Render decisions (these survive both rejections unchanged):**
     - **Add `d3-geo` + `topojson-client`.** The one call that pushes against minimize-deps —
       but hand-rolling a spherical projection + antimeridian clipping + `geoInterpolate` arc
       sampling is exactly the fiddly, well-solved math a focused lib should own (~30 KB gz,
@@ -593,7 +562,7 @@ next, and in what order" is answered.
       share-alike), **`import`ed so Vite bundles it** into `app/dist` → shipped in the binary
       by `//go:embed all:app/dist` (`frontend/embed.go`), **never fetched** — same offline-first
       posture as the emoji-flag util. ~100 KB. AVOID OSM/ODbL-derived data (share-alike).
-  - **Phase 2 — whole-log Dashboard map (later).** The `frontend/app` dashboard route is an
+  - **Follow-on — whole-log Dashboard map (later).** The `frontend/app` dashboard route is an
     empty placeholder (`App.svelte` `{:else}`) wanting a first tenant. The whole-log map
     reuses the SAME render engine; the only new piece is the data source — a small aggregate
     endpoint **`GET /v1/logbook/{id}/map`** returning dedup'd plot coords
@@ -606,13 +575,13 @@ next, and in what order" is answered.
   - **Per-QSO origin (refinement):** v1 uses a single fixed `myGrid`. Per-QSO `my_gridsquare`
     (100% populated in the blob, but not on the typed client row) would let a roving/multi-site
     log draw per-QSO origins — deferred; not needed for a fixed-location or DXpedition op.
-  - **Effort:** engine (d3-geo + basemap + projection + country render) ~1 day · session arcs
-    + markers + hover tooltip (call/grid/distance/bearing from `pathInfo`) ~1 day · Session-panel
-    toggle + `gridsquare` plumbing + light/dark theming + tests ~0.5–1 day → **~2.5–3 days for
-    the session map**, after which the Dashboard map is "swap the data source." **Stays P3** — a
-    delight feature competing with the type-4 ladder; a shovel-ready block for a UI cycle.
+  - **Effort:** engine (d3-geo + basemap + projection + country render + arc sampler) ~1 day ·
+    map route (duration picker + windowed fetch + `/v1/events` live refresh + markers/tooltip)
+    ~1 day · theming + "Open map ↗" + tests ~0.5 day → **~2–2.5 days for the time-window map**
+    (down from ~2.5–3 + the dropped daemon spine), after which the Dashboard map is "swap the
+    data source." **Stays P3** — a delight feature; a shovel-ready block for a UI cycle.
     Related: the LSPA "future POTA fields", the FT8 session log, `docs/dogfood-inbox.md`
-    2026-07-04 + 2026-07-06 (original map notes).
+    2026-07-04 + 2026-07-06 (original map notes), ADR 0049 (rejected daemon-sessions design).
 
 - **SPA consolidation — one app shell (ADR 0044, post-ship).** Merge the three
   Svelte SPAs (`frontend/{logging,config,logbook}`) into one Vite + Svelte 5 app
