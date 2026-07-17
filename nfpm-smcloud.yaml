@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+#
+# SM Cloud backup service (cmd/smcloud) RPM spec — a SEPARATE package from
+# station-manager: smcloud runs on a different box (LAN staging box / VPS),
+# so it ships its own binary + system unit + /etc config skeleton and none
+# of the daemon. Build via scripts/smcloud-rpm.sh, which sets VERSION and
+# SMCLOUD_ARCH and invokes nfpm. Runbook: docs/smcloud-deploy.md.
+
+name: smcloud
+arch: "${SMCLOUD_ARCH}"
+platform: linux
+version: "${VERSION}"
+maintainer: "ColonelBlimp"
+description: "SM Cloud — Station Manager QSO backup service (HTTP API over Postgres)"
+homepage: "https://github.com/ColonelBlimp/station-manager"
+license: "GPL-3.0-only"
+
+# Postgres normally runs on the same box (runbook section 2), but a remote or
+# managed instance is equally valid — hence recommends, not depends.
+recommends:
+  - postgresql-server
+
+contents:
+  - src: build/bin/smcloud
+    dst: /usr/bin/smcloud
+    file_info:
+      mode: 0755
+
+  # System unit (DynamicUser — no account to provision, no local state).
+  - src: deploy/smcloud/smcloud.service
+    dst: /usr/lib/systemd/system/smcloud.service
+    file_info:
+      mode: 0644
+
+  # Config skeleton, installed WITH the CHANGE_ME placeholders for the
+  # operator to edit in place. noreplace: upgrades never clobber the real
+  # token/DSN (a changed packaged default lands as smcloud.env.rpmnew
+  # instead). 0600 from the first install because the edited file holds
+  # secrets.
+  - src: deploy/smcloud/smcloud.env.example
+    dst: /etc/smcloud/smcloud.env
+    type: config|noreplace
+    file_info:
+      mode: 0600
+
+  # The runbook, readable on the target box without a checkout.
+  - src: docs/smcloud-deploy.md
+    dst: /usr/share/doc/smcloud/smcloud-deploy.md
+  - src: deploy/smcloud/Caddyfile.example
+    dst: /usr/share/doc/smcloud/Caddyfile.example
+
+# No scriptlets, matching nfpm.yaml's stance: the only action worth taking
+# (systemctl enable --now smcloud) is an explicit operator decision made
+# after editing the env file — documented in the runbook, not automated.

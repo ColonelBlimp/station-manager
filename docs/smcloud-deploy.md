@@ -33,7 +33,9 @@ these deltas:
 - **Give the box a stable address** — a static IP or DHCP reservation /
   LAN hostname — so the daemon's forwarder URL (`http://192.168.x.y:8091`)
   doesn't strand on lease churn.
-- **Non-x86 box (e.g. a Pi):** `SMCLOUD_ARCH=arm64 task build:smcloud`.
+- **Non-x86 box (e.g. a Pi):** `SMCLOUD_ARCH=arm64 task rpm:smcloud`
+  (→ `smcloud.aarch64.rpm`), or `SMCLOUD_ARCH=arm64 task build:smcloud` for
+  a raw binary on a non-RPM OS.
 - Everything else is identical: Postgres (section 2), env file + unit
   (section 3), daemon wiring (section 5 — with the `http://…:8091` URL),
   verify (section 6), operations (section 7 — the `pg_dump` cron matters
@@ -70,14 +72,23 @@ either/or for now.
 | **Postgres** | Self-hosted distro package on the same VPS is the P1 recommendation (zero extra cost, one machine to manage; the DB is small). A managed instance works identically — put its DSN in the env file with `sslmode=require`. |
 | **TLS proxy** | Caddy (recommended — automatic Let's Encrypt, 4-line config) or nginx + certbot. smcloud itself listens on loopback only and never terminates TLS. |
 
-## 1. Build the binary (dev machine)
+## 1. Build the artifact (dev machine)
 
 ```bash
-task build:smcloud          # → build/bin/smcloud (static linux/amd64, version-stamped)
-scp build/bin/smcloud vps:/usr/local/bin/smcloud
+task rpm:smcloud            # → build/release/smcloud.x86_64.rpm (version-stamped)
+scp build/release/smcloud.x86_64.rpm box:
 ```
 
-Static = no glibc floor, no container dance — any Linux VPS runs it.
+The RPM carries the static binary (`/usr/bin/smcloud`), the system unit
+(`/usr/lib/systemd/system/smcloud.service`), and an `/etc/smcloud/smcloud.env`
+skeleton (0600, `noreplace` — upgrades never clobber the edited file). Built
+by `scripts/smcloud-rpm.sh` + `nfpm-smcloud.yaml`; `SMCLOUD_ARCH=arm64` for
+an aarch64 box. The binary is pure Go and fully static — no glibc floor, so
+it builds on the dev box with no container dance.
+
+Non-RPM target: `task build:smcloud` → scp `build/bin/smcloud` to
+`/usr/bin/smcloud` and hand-copy the unit + env file from
+[`deploy/smcloud/`](../deploy/smcloud/) (see section 3).
 
 ## 2. Postgres (VPS)
 
@@ -91,21 +102,28 @@ sudo -u postgres psql -c "CREATE DATABASE smcloud OWNER smcloud"
 No manual migrations: smcloud applies its embedded schema at boot
 (`store.Migrate`, the same files/tracking table as the dev CLI).
 
+Already have Postgres installed and running? Skip the first two lines — just
+create the role + database, and check `pg_hba.conf` allows password logins
+(`scram-sha-256`/`md5`) for `127.0.0.1` — a pre-existing install may be
+`ident`/`peer`-only, which rejects the DSN login.
+
 ## 3. The service (VPS)
 
 ```bash
-sudo mkdir -p /etc/smcloud
-sudo cp smcloud.env.example /etc/smcloud/smcloud.env      # from deploy/smcloud/
-sudo chmod 0600 /etc/smcloud/smcloud.env
-sudoedit /etc/smcloud/smcloud.env                         # DSN password, callsign, token
+sudo dnf install -y ./smcloud.x86_64.rpm     # binary + unit + env-file skeleton
+sudoedit /etc/smcloud/smcloud.env            # DSN password, callsign, token
 # Token: openssl rand -base64 32  (the SAME value goes into the daemon's forwarder)
-sudo cp smcloud.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now smcloud
-curl -s http://127.0.0.1:8091/v1/health                   # → {"status":"ok","db":"ok"}
+sudo systemctl enable --now smcloud
+curl -s http://127.0.0.1:8091/v1/health      # → {"status":"ok","db":"ok"}
 ```
 
 The unit runs as a transient `DynamicUser` with full sandboxing — smcloud
 keeps no local state, so nothing needs a real account or a writable path.
+
+Non-RPM box (from `deploy/smcloud/` in the checkout): copy
+`smcloud.env.example` → `/etc/smcloud/smcloud.env` (`chmod 0600`) and
+`smcloud.service` → `/etc/systemd/system/`, `systemctl daemon-reload`, then
+the same edit + enable.
 
 ## 4. TLS (VPS)
 
@@ -150,8 +168,11 @@ the hourly reconcile self-heals anything a flaky link drops.
   loss shouldn't cost the history either —
   `sudo -u postgres pg_dump smcloud | gzip > /var/backups/smcloud-$(date +%F).sql.gz`
   on a daily cron/timer, ideally synced off-box.
-- **Upgrade:** `task build:smcloud` → scp over the old binary →
-  `systemctl restart smcloud`. Schema migrations apply automatically at boot.
+- **Upgrade:** `task rpm:smcloud` → scp → `sudo dnf upgrade -y ./smcloud.x86_64.rpm`
+  → `sudo systemctl restart smcloud` (no scriptlets — the restart is yours; the
+  env file is `noreplace`, so the edited token/DSN survives). Rebuilding the
+  same dirty commit keeps the same NVR — install that with
+  `sudo rpm -Uvh --replacepkgs`. Schema migrations apply automatically at boot.
 - **Restore drill** (worth one rehearsal — see `smd restore` in
   sm-cloud-p1.md S5): on the shack machine with the daemon stopped,
   `smd restore -dry-run` fetches the export and reports counts without

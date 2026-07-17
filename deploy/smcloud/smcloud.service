@@ -1,5 +1,6 @@
 # SM Cloud backup service — systemd unit (ADR 0040 S6).
-# Install: /etc/systemd/system/smcloud.service on the VPS.
+# Install: the smcloud RPM ships this at /usr/lib/systemd/system/; on a
+#          non-RPM box, copy it to /etc/systemd/system/ instead.
 # Config:  /etc/smcloud/smcloud.env (root:root 0600 — holds the bearer token
 #          and the Postgres password; see smcloud.env.example).
 # Full runbook: docs/smcloud-deploy.md.
@@ -16,7 +17,7 @@ Type=simple
 # dynamic user is the perfect fit — no account to provision, nothing on disk.
 DynamicUser=yes
 EnvironmentFile=/etc/smcloud/smcloud.env
-ExecStart=/usr/local/bin/smcloud
+ExecStart=/usr/bin/smcloud
 Restart=on-failure
 RestartSec=5
 

@@ -214,6 +214,18 @@ tasks:
     cmds:
       - CGO_ENABLED=0 GOOS=linux GOARCH={{.SMCLOUD_ARCH}} go build -trimpath -ldflags="-s -w -X main.Version={{.SM_VERSION}}" -o build/bin/smcloud ./cmd/smcloud
 
+  rpm:smcloud:
+    desc: |
+      Build the deployable smcloud RPM → build/release/smcloud.x86_64.rpm
+      (binary + system unit + /etc/smcloud/smcloud.env config skeleton).
+      Static pure-Go build — no container, no glibc floor; builds right on
+      the dev box. SMCLOUD_ARCH=arm64 for an aarch64 RPM. Install on the
+      target: sudo dnf install -y ./smcloud.x86_64.rpm, then edit
+      /etc/smcloud/smcloud.env and systemctl enable --now smcloud.
+      Runbook: docs/smcloud-deploy.md.
+    cmds:
+      - scripts/smcloud-rpm.sh
+
   rpm:dev:
     desc: |
       Build a development RPM ready for local install. Output:
