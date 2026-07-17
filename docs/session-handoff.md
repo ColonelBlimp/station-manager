@@ -153,13 +153,30 @@ precisely so we don't re-derive state or redo finished work.
 >   forwarder wiring → first-backfill verify (`POST /v1/smcloud/reconcile` →
 >   in_sync) → ops (pg_dump backup-of-the-backup cron, binary-swap upgrades,
 >   restore drill, token rotation). Migrations self-apply at service boot.
-> - **NEXT (priority order): (1) smcloud GO-LIVE (operator ops)** — provision the
->   VPS + DNS, then walk `docs/smcloud-deploy.md`; local recovery first: QRZ ADIF
->   import (`smd import <file.adi>`, daemon stopped, NO `--forward`), then the
->   forwarder+reconciler backfill the rebuilt logbook to the cloud automatically.
->   (2) dogfood-validate the map features + the abandon fix on air; (3) carried:
->   on-air type-4 → ADR 0048 flip; whole-log Dashboard map (needs the
->   `GET /v1/logbook/{id}/map` aggregate).
+> - **DEPLOYMENT PLAN DECIDED (operator, late session): PHASE 1 = LAN STAGING on a
+>   separate local-network machine running FEDORA 44** — cheap immediate resilience
+>   (shack-machine disk/OS loss) + the test/soak/fault-drill/harden ground before any
+>   internet-facing VPS (phase 2 adds the off-site half). Runbook gained a full
+>   "Phase 1 — LAN staging deploy" section (bind 0.0.0.0:8091, NO TLS/proxy on LAN,
+>   never port-forward, static IP, fault-drill list, move-to-VPS = repoint forwarder,
+>   reconciler rebuilds); `build:smcloud` gained `SMCLOUD_ARCH` (arm64 verified);
+>   env example documents both listen postures. **These three edits (Taskfile.yml,
+>   deploy/smcloud/smcloud.env.example, docs/smcloud-deploy.md) are UNCOMMITTED,
+>   awaiting operator review.**
+> - **NEXT (session plan, set by operator): (1) build the smcloud RPM + DEPLOY to the
+>   F44 LAN box.** The RPM work was scoped but NOT started (only discussed):
+>   an `nfpm-smcloud.yaml` (package `smcloud`: /usr/bin/smcloud + the system unit at
+>   /usr/lib/systemd/system/ + /etc/smcloud/smcloud.env as a noreplace 0600 config +
+>   doc files; recommends postgresql-server; unify the unit's ExecStart on /usr/bin/
+>   smcloud — it currently says /usr/local/bin), a build script mirroring
+>   scripts/dev-rpm.sh (version.sh + static go build + nfpm), a `rpm:smcloud` task,
+>   and runbook RPM-path updates. Then walk runbook Phase 1 on the F44 box: Postgres,
+>   env file (token via openssl rand), enable unit, wire the daemon forwarder at
+>   http://<box>:8091, watch the reconciler's first backfill, fault-drill.
+>   Local recovery still pending too: QRZ ADIF import (`smd import <file.adi>`,
+>   daemon stopped, NO `--forward`). (2) dogfood-validate the map features + the
+>   abandon fix on air; (3) carried: on-air type-4 → ADR 0048 flip; whole-log
+>   Dashboard map (needs the `GET /v1/logbook/{id}/map` aggregate).
 
 > **Session 216 (2026-07-16→17) — FIRST-RUN SETUP GATE in frontend/app, committed by the
 > operator as `80e1faa3` (feat(setup)).** Fallout of the lost dogfood DB (the operator hit

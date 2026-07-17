@@ -9,6 +9,56 @@ single-tenant: one callsign, one bearer token.
 Design + wire contract: [`v2-design/sm-cloud-p1.md`](v2-design/sm-cloud-p1.md)
 + ADR 0040. Deploy artifacts live in [`deploy/smcloud/`](../deploy/smcloud/).
 
+**Two phases (decided 2026-07-17):** first a **LAN staging deploy** on a
+separate machine on the shack network — cheap, immediate resilience against
+the shack machine's disk/OS failure, and the place to test/soak/fault-drill/
+harden — then the **VPS deploy** (the numbered sections below), which adds
+the off-site half: a house-level event (lightning, fire, theft, a surge
+taking both machines) defeats the LAN copy. Nothing done in phase 1 commits
+you to anything — see "Moving to the VPS" below.
+
+---
+
+## Phase 1 — LAN staging deploy
+
+Same binary, same unit, same Postgres steps as the VPS sections below, with
+these deltas:
+
+- **Bind the LAN interface, skip TLS.** There is no reverse proxy in this
+  phase: set `SMCLOUD_LISTEN=0.0.0.0:8091` (or the box's specific IP) in the
+  env file, and skip section 4 entirely. Bearer-token-over-plain-HTTP is
+  acceptable on your own network — it is NOT the internet posture; do not
+  port-forward this listener through the router. Open 8091 in the box's own
+  firewall (`firewall-cmd --add-port=8091/tcp --permanent` or ufw equivalent).
+- **Give the box a stable address** — a static IP or DHCP reservation /
+  LAN hostname — so the daemon's forwarder URL (`http://192.168.x.y:8091`)
+  doesn't strand on lease churn.
+- **Non-x86 box (e.g. a Pi):** `SMCLOUD_ARCH=arm64 task build:smcloud`.
+- Everything else is identical: Postgres (section 2), env file + unit
+  (section 3), daemon wiring (section 5 — with the `http://…:8091` URL),
+  verify (section 6), operations (section 7 — the `pg_dump` cron matters
+  MORE here, since the LAN box is likely older hardware).
+
+**What to exercise while staging** (the point of the phase — fault drills
+beat throughput numbers, which a LAN inflates anyway):
+
+- Pull the LAN cable mid-backfill → the queue must hold (ADR 0038
+  unreachable-retries-forever), then drain on reconnect.
+- Stop Postgres mid-push → transient classification, worker retries.
+- Restart smcloud during a large backfill → the idempotent UUID upsert
+  absorbs the replay; `POST /v1/smcloud/reconcile` converges to `in_sync`.
+- Edit + delete QSOs with the LAN box powered off → power it on → the hourly
+  reconcile (or an on-demand pass) self-heals the drift.
+- A restore drill against a scratch `SM_WORKING_DIR` (section 7).
+
+**Moving to the VPS later:** local is authoritative, so there is no data
+migration — stand up the VPS per the sections below, change the forwarder's
+Service URL (+ token), and the reconciler's first pass rebuilds the cloud
+copy from scratch. (`pg_dump`/restore across instead if you want the LAN
+box's tombstone history carried over.) Decommission the LAN box or keep it
+as a second destination later — P1 wires one smcloud forwarder, so it's
+either/or for now.
+
 ---
 
 ## 0. Decisions (make once)
