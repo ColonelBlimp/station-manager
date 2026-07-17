@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -43,8 +44,13 @@ func newLocalStack(t *testing.T, cloudURL string) (*qsoservice.Service, *sqlite.
 		Credentials:  creds,
 	}
 
-	cfg := config.DefaultConfig(t.TempDir())
-	cfg.Datastore.Path = ":memory:"
+	// A temp-FILE database, not :memory: — the shared-cache in-memory DB is
+	// process-wide, and the restore test runs TWO local stacks ("machines")
+	// that must be genuinely separate databases.
+	workDir := t.TempDir()
+	dbPath := filepath.Join(workDir, "log.db")
+	cfg := config.DefaultConfig(workDir)
+	cfg.Datastore.Path = dbPath
 	cfg.Forwarders = []types.ForwarderConfig{fc}
 	cfgSvc := config.New(cfg)
 	require.NoError(t, cfgSvc.Initialize())
@@ -59,7 +65,7 @@ func newLocalStack(t *testing.T, cloudURL string) (*qsoservice.Service, *sqlite.
 	dbSvc.LoggerService = logSvc
 	require.NoError(t, dbSvc.Initialize())
 	dbSvc.DatabaseConfig = &types.DatastoreConfig{
-		Driver: "sqlite", Path: ":memory:",
+		Driver: "sqlite", Path: dbPath,
 		MaxOpenConns: 1, MaxIdleConns: 1,
 		ContextTimeout: 10, TransactionContextTimeout: 10,
 	}

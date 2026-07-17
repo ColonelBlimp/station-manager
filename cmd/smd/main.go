@@ -97,10 +97,17 @@ func main() {
 	//   smd                              → daemon (run())
 	//   smd --config <path>              → daemon with flag (run())
 	//   smd import [flags] <file.adi>    → one-shot import (runImport())
+	//   smd restore [flags]              → SM Cloud restore (runRestore())
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "import":
 			if err := runImport(os.Args[2:]); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
+				os.Exit(ExitError)
+			}
+			return
+		case "restore":
+			if err := runRestore(os.Args[2:]); err != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
 				os.Exit(ExitError)
 			}

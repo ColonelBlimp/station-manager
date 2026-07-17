@@ -5,6 +5,10 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/aarondl/null/v8"
+	"github.com/aarondl/sqlboiler/v4/boil"
+
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/adapters"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -73,4 +77,46 @@ func (s *Service) FetchQsoManifestWithContext(ctx context.Context, logbookID int
 		return nil, errors.New(op).WithErr(err).WithMsg("rows")
 	}
 	return out, nil
+}
+
+// InsertRestoredQsoWithContext inserts a QSO PRESERVING its storage metadata —
+// the SM Cloud restore writer (ADR 0040 S5). Unlike the normal insert path
+// (whose adapter deliberately leaves modified_at/deleted_at unmapped so the
+// bump trigger owns them), this sets both columns explicitly from
+// qso.ModifiedAt / qso.DeletedAt: a restored row must carry its ORIGINAL
+// recency (or reconcile would flag every restored row as drifted) and its
+// tombstone state. INSERT does not fire the update trigger, so the values
+// land verbatim. Requires uuid + non-zero ModifiedAt (caller-validated
+// invariants of the export wire).
+func (s *Service) InsertRestoredQsoWithContext(ctx context.Context, qso types.Qso) (int64, error) {
+	const op errors.Op = "sqlite.Service.InsertRestoredQsoWithContext"
+	if err := checkService(op, s); err != nil {
+		return 0, err
+	}
+	if qso.UUID == "" {
+		return 0, errors.New(op).WithMsg("restored qso has no uuid")
+	}
+	if qso.ModifiedAt.IsZero() {
+		return 0, errors.New(op).WithMsgf("restored qso %s has no modified_at", qso.UUID)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	model, err := adapters.QsoTypeToModel(qso)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err)
+	}
+	model.ModifiedAt = null.TimeFrom(qso.ModifiedAt.UTC())
+	if !qso.DeletedAt.IsZero() {
+		model.DeletedAt = null.TimeFrom(qso.DeletedAt.UTC())
+	}
+	if err = model.Insert(ctx, h, boil.Infer()); err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsgf("uuid %s", qso.UUID)
+	}
+	return model.ID, nil
 }

@@ -124,14 +124,31 @@ precisely so we don't re-derive state or redo finished work.
 >   qsoservice vs real cloud server + Postgres: first backfill → drain → in-sync →
 >   missed delete → tombstone heal → in-sync), EnqueueDeleteUploads/manifest
 >   integration, api handler 503/200/500. All affected suites green; gofmt/vet clean.
-> - **NEXT (priority order): (1) smcloud S5 — restore** (`smd restore` pulling GET
->   /v1/export, inserting with UUID + additional_data + modified_at preserved — NEVER
->   ADIF re-import; verify whether `qsoservice.SubmitImport` accepts an existing UUID
->   or needs a restore path; test = back up → wipe → restore → deep-equal); the
->   dogfood DB is still LOST — with S2–S4 built, the QRZ ADIF import (`smd import`,
->   daemon stopped, NO `--forward`) + an enabled smcloud forwarder would give a real
->   backup immediately. (2) S6 hosting (VPS + Postgres + reverse-proxy TLS) when S5
->   lands; (3) dogfood-validate the map features + the abandon fix on air; (4) carried:
+> - **SMCLOUD S5 BUILT (same session, final act) — restore; P1 IS CODE-COMPLETE
+>   (S1–S5); UNCOMMITTED for operator review.** JSON-native restore path (SubmitImport
+>   verified ADIF-shaped → unsuitable): **`qsoservice.Restore`** (UUID+modified_at
+>   required; existing rows skip = idempotent re-runs; no validation gauntlet / no
+>   upload rows / no enrichment; dedupe reuse-or-recompute; time_off→time_on default)
+>   over **`sqlite.InsertRestoredQsoWithContext`** — the ONE writer setting
+>   modified_at/deleted_at explicitly (QsoTypeToModel deliberately left unmapped: the
+>   UPDATE path round-trips fetched QSOs and would defeat the bump trigger on
+>   never-edited rows — caught during build). **`smd restore`** subcommand (daemon
+>   stopped; creds from the config's smcloud forwarder entry, enabled or not;
+>   -forwarder/-cloud-logbook/-logbook/-dry-run) + `smcloud.FetchExport`. Tombstones
+>   restore soft-deleted with original recency. **THE S5 GATE PASSES**:
+>   `TestRestore_FullCycle` — two real local stacks around the real cloud
+>   server/Postgres; machine 2 deep-equals machine 1's QSO AND **reconciles IN SYNC**
+>   (modified_at survived the whole cycle); idempotent re-run all-skips. e2e local
+>   stacks moved :memory:→temp-file DBs (shared-cache :memory: is process-wide — two
+>   "machines" were one DB). All affected suites + -race green; gofmt/vet clean.
+> - **NEXT (priority order): (1) smcloud LIVE DOGFOOD** — the DB is still LOST; the
+>   recovery+backup sequence is now fully buildable end-to-end: QRZ ADIF import
+>   (`smd import <file.adi>`, daemon stopped, NO `--forward`) → stand up `cmd/smcloud`
+>   (needs a Postgres; `task db:pg:up` locally or the S6 VPS) → add the smcloud
+>   forwarder (config SPA, url+token) → the reconciler's first pass backfills the
+>   whole logbook → `POST /v1/smcloud/reconcile` to verify in_sync. **(2) S6 hosting**
+>   (VPS + managed Postgres + reverse-proxy TLS + systemd) — the last P1 piece;
+>   (3) dogfood-validate the map features + the abandon fix on air; (4) carried:
 >   on-air type-4 → ADR 0048 flip; whole-log Dashboard map (needs the
 >   `GET /v1/logbook/{id}/map` aggregate).
 

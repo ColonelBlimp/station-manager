@@ -1,10 +1,10 @@
 # SM Cloud — P1 implementation plan (backup + restore)
 
-**Status:** in build — **S1 (store) + S2 (cloud HTTP API) + S3 (daemon forwarder)
-+ S4 (reconcile) BUILT** (S1 2026-07-08, S2–S4 2026-07-17, all integration-tested
-against real Postgres; the S2 round-trip gate passes, S3's Submit and S4's full
-detect→heal→in-sync cycle are pinned against the real server). S5 restore next;
-S6 deferred.
+**Status:** **P1 CODE-COMPLETE — S1–S5 ALL BUILT** (S1 2026-07-08, S2–S5
+2026-07-17, every step integration-tested against real Postgres; the S5 gate —
+back up → wipe → restore → deep-equal → the restored DB reconciles IN SYNC —
+passes end-to-end). Remaining: S6 hosting (deferred ops work) + live dogfood
+validation.
 **Decision record:** [ADR 0040](../decisions/0040-sm-cloud-p1-backup-restore.md) —
 this doc is the long-form implementation plan; the ADR holds the *why* and the
 rejected alternatives. When the two disagree, the ADR's decisions win and this
@@ -192,6 +192,29 @@ re-import (which mints new UUIDs and flattens `additional_data`). Needs a
 verify whether `SubmitImport` can, or add a restore-specific path. Test: back up
 → wipe local → restore → local == original (UUID, seconds, `additional_data`
 intact).
+
+**BUILT 2026-07-17 (gate passing).** The verify came back "SubmitImport
+preserves UUIDs but is ADIF-shaped" → a restore-specific JSON-native path:
+**`qsoservice.Restore`** (valid-UUIDv7 + non-zero modified_at required; existing
+rows — tombstones included — SKIP, so re-runs are idempotent and repairing a
+diverged row stays reconcile's job; no validation gauntlet, no upload rows —
+re-pushing a restore would be circular — no enrichment; dedupe key reused from
+the payload or recomputed; time_off defaults to time_on like prepareQso, the one
+schema-level normalisation) over **`sqlite.InsertRestoredQsoWithContext`** (the
+ONE writer that sets modified_at/deleted_at explicitly — `QsoTypeToModel`
+deliberately leaves them unmapped because the UPDATE path round-trips fetched
+QSOs and an explicit write would defeat the bump trigger on never-edited rows).
+**`smd restore`** (cmd/smd, daemon stopped): credentials come from the config's
+smcloud forwarder entry (enabled or not — restore only reads), flags
+`-forwarder/-cloud-logbook/-logbook/-config/-dry-run`; `smcloud.FetchExport` +
+`CloudLogbookName` are the client half. Tombstones restore as soft-deleted rows
+with their original recency. Tests: qsoservice round-trip (seconds, app-ext
+fields, enrichment, dedupe-recompute, tombstone via manifest, no-uploads,
+guards) + **`TestRestore_FullCycle`** — two real local stacks around the real
+cloud server/Postgres: log+delete+push on machine 1, restore onto fresh
+machine 2, deep-equal the live QSO, tombstone back deleted, and machine 2
+**reconciles IN SYNC** (the modified_at-survival proof), then an idempotent
+re-run all-skips.
 
 ### S6 — Deferred (not part of the P1 build)
 
