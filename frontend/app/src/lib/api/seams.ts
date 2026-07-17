@@ -155,6 +155,10 @@ export interface StationContext {
      *  defaults + operator overrides, merged daemon-side). Drives the FT8 rig card's
      *  band buttons (jump to the watering-hole, not the rig's band-stack freq). */
     ft8Frequencies: Record<string, number>;
+    /** Contacts-map per-band arc colour overrides (config `map.band_colors`,
+     *  band→"#rrggbb", sparse) — layered over the map's built-in palette
+     *  (lib/map/bandColors). Empty = all defaults. */
+    mapBandColors: Record<string, string>;
 }
 
 export async function fetchStationContext(): Promise<StationContext> {
@@ -178,6 +182,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8CqToTop: false,
         ft8HideHashed: false,
         ft8Frequencies: {},
+        mapBandColors: {},
         logbookName: '',
         rigName: '',
     };
@@ -217,9 +222,21 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8CqToTop: fd.cq_to_top === true,
         ft8HideHashed: fd.hide_hashed_calls === true,
         ft8Frequencies: toNumberMap(body.ft8_frequencies),
+        mapBandColors: toStringMap(isPlainObject(body.map) ? body.map.band_colors : undefined),
         logbookName: str(lb.name),
         rigName: str(br.rig_name),
     };
+}
+
+/** Keep only the string-valued members of a wire object (band→colour); anything
+ *  else (or a non-object) yields an empty map — malformed config is inert. */
+function toStringMap(v: unknown): Record<string, string> {
+    if (!isPlainObject(v)) return {};
+    const out: Record<string, string> = {};
+    for (const [k, val] of Object.entries(v)) {
+        if (typeof val === 'string') out[k] = val;
+    }
+    return out;
 }
 
 /** Keep only the number-valued members of a wire object (band→Hz); anything else

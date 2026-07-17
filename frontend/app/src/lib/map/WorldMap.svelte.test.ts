@@ -39,4 +39,35 @@ describe('WorldMap', () => {
         expect(arcs[0].querySelector('title')?.textContent).toContain('G4ABC');
         expect(arcs[1].querySelector('title')).toBeNull();
     });
+
+    it('strokes an arc with its given colour, theme accent otherwise', () => {
+        const { container } = render(WorldMap, {
+            props: {
+                origin: LILONGWE,
+                arcs: [
+                    {
+                        key: 'q1',
+                        from: LILONGWE,
+                        to: { lat: 51.5, lon: -0.1 },
+                        color: '#22c55e',
+                    },
+                    { key: 'q2', from: LILONGWE, to: { lat: 35.7, lon: 139.7 } },
+                ],
+            },
+        });
+        const arcs = container.querySelectorAll('[data-testid="arc"]');
+        expect(arcs[0].querySelector('path')?.getAttribute('stroke')).toBe('#22c55e');
+        expect(arcs[0].querySelector('circle')?.getAttribute('fill')).toBe('#22c55e');
+        expect(arcs[1].querySelector('path')?.getAttribute('stroke')).toBe('var(--color-focus)');
+    });
+
+    it('draws the grey-line rings only when given a terminator instant', () => {
+        const { container: off } = render(WorldMap, { props: {} });
+        expect(off.querySelectorAll('[data-testid="night"]')).toHaveLength(0);
+
+        const { container: on } = render(WorldMap, {
+            props: { terminator: new Date(Date.UTC(2026, 6, 17, 12)) },
+        });
+        expect(on.querySelectorAll('[data-testid="night"]')).toHaveLength(3);
+    });
 });

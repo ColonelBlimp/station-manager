@@ -159,6 +159,14 @@ type ConfigResponse struct {
 	// presence-aware on PUT (omit → untouched; carry → replace); always set on GET.
 	// Restart-only (the subsystem binds at boot).
 	PskReporter *types.PskReporterConfig `json:"psk_reporter,omitempty"`
+	// MapDisplay is the contacts-map display surface (the `map` block —
+	// per-band arc colour overrides). No secrets and sparse-by-design, so the
+	// canonical types.MapConfig rides the wire RAW like PskReporter: an absent
+	// band means "use the SPA's built-in palette" and config.json never
+	// materialises the defaults. Pointer = presence-aware on PUT (omit →
+	// untouched; carry → replace the whole block); always set on GET. Applied
+	// client-side — no daemon restart, the map picks it up on next load.
+	MapDisplay *types.MapConfig `json:"map,omitempty"`
 	// Ft8DecodeLog is the config SPA's FT8-tab decode-log surface (the
 	// ft8.decode_log block — a JTDX ALL.TXT-style record of RX decodes + our own
 	// TX). No secrets, so the canonical types.Ft8DecodeLogConfig rides the wire
@@ -452,6 +460,9 @@ func overlayConfig(base *config.Config, req *ConfigResponse) {
 	}
 	if req.PskReporter != nil {
 		base.PskReporter = *req.PskReporter
+	}
+	if req.MapDisplay != nil {
+		base.Map = *req.MapDisplay
 	}
 	if req.Ft8DecodeLog != nil {
 		base.Ft8.DecodeLog = req.Ft8DecodeLog
@@ -821,6 +832,11 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// empty host/port show as defaults in the SPA). Always set so the form binds.
 	psk := cfg.PskReporter
 	resp.PskReporter = &psk
+
+	// Contacts-map display (config SPA Map surface + the app SPA's map view) —
+	// served RAW like PskReporter: sparse overrides only, defaults live in the SPA.
+	mapDisplay := cfg.Map
+	resp.MapDisplay = &mapDisplay
 
 	// FT8 decode log (config SPA FT8 tab) — served so the form binds. A nil block in
 	// config (never enabled) is served as a disabled zero value; an empty path means

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -146,6 +147,11 @@ type Config struct {
 	// Read at startup and fed to the internal/pskreporter subsystem; not exposed
 	// over /v1/config (set-once, like the SMTP block).
 	PskReporter types.PskReporterConfig `json:"psk_reporter,omitempty"`
+
+	// Map holds the contacts-map display settings (per-band arc colour
+	// overrides). Sparse: empty means the SPA's built-in palette. The daemon
+	// only stores/validates/serves this — the colours apply client-side.
+	Map types.MapConfig `json:"map,omitempty"`
 
 	// Lookup holds the enrichment pipeline configuration per ADR 0017
 	// — hamnut (country source-of-truth), the callsign-class provider
@@ -1421,6 +1427,31 @@ func validateSmtp(s types.SmtpConfig) error {
 func validatePskReporter(p types.PskReporterConfig) error {
 	if p.Port < 0 || p.Port > 65535 {
 		return fmt.Errorf("psk_reporter.port must be in 0..65535 (0 = default), got %d", p.Port)
+	}
+	return nil
+}
+
+// bandToken matches ADIF band names ("160m", "70cm", "1.25m", "2.5mm",
+// "submm") — lowercase required, matching the SPA's normalisation so a
+// stored key always hits its lookup.
+var bandToken = regexp.MustCompile(`^([0-9]+(\.[0-9]+)?(m|cm|mm)|submm)$`)
+
+// hexColour is the strict 6-digit form the config SPA's colour picker emits.
+var hexColour = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// validateMap checks the contacts-map block. An empty block is the normal
+// state (the SPA's default palette applies); each stored override must be a
+// lowercase ADIF band token mapped to a #rrggbb colour — the daemon stays
+// the authoritative gate even though the config SPA's picker can't produce
+// anything else.
+func validateMap(m types.MapConfig) error {
+	for band, colour := range m.BandColors {
+		if !bandToken.MatchString(band) {
+			return fmt.Errorf("map.band_colors: %q is not a lowercase ADIF band token (e.g. \"20m\", \"70cm\")", band)
+		}
+		if !hexColour.MatchString(colour) {
+			return fmt.Errorf("map.band_colors[%s]: %q is not a #rrggbb colour", band, colour)
+		}
 	}
 	return nil
 }

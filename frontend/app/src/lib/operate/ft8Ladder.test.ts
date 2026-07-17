@@ -142,7 +142,11 @@ describe('buildLadder', () => {
             'ME',
             'AA00'
         );
-        expect(l.rungs.map((r) => r.text)).toEqual(['ME K1ABC/D', 'K1ABC/D ME RR73', 'ME K1ABC/D 73']);
+        expect(l.rungs.map((r) => r.text)).toEqual([
+            'ME K1ABC/D',
+            'K1ABC/D ME RR73',
+            'ME K1ABC/D 73',
+        ]);
         expect(l.rungs.some((r) => r.text.startsWith('CQ'))).toBe(false);
         expect(l.step).toBe(1); // rogering (our RR73)
     });

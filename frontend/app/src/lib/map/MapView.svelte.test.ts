@@ -22,9 +22,18 @@ const closeSpy = vi.fn();
 const fetchQsoPage = vi.fn();
 
 vi.mock('../api/seams', () => ({
-    fetchStationContext: (): Promise<{ logbookId: number; myGrid: string }> => {
+    fetchStationContext: (): Promise<{
+        logbookId: number;
+        myGrid: string;
+        mapBandColors: Record<string, string>;
+    }> => {
         calls.push('context');
-        return Promise.resolve({ logbookId: 7, myGrid: 'KH74' });
+        // 40m carries a config override; 20m falls to the default palette.
+        return Promise.resolve({
+            logbookId: 7,
+            myGrid: 'KH74',
+            mapBandColors: { '40m': '#101010' },
+        });
     },
 }));
 vi.mock('../api/log-events', () => ({
@@ -55,7 +64,8 @@ describe('MapView', () => {
         fetchQsoPage.mockResolvedValue({
             kind: 'ok',
             items: [
-                { id: 1, uuid: 'u1', call: 'G4ABC', gridsquare: 'IO91', ...ts },
+                { id: 1, uuid: 'u1', call: 'G4ABC', gridsquare: 'IO91', band: '20M', ...ts },
+                { id: 3, uuid: 'u3', call: 'ZS6DX', gridsquare: 'KG44', band: '40m', ...ts },
                 { id: 2, uuid: 'u2', call: 'VU2XYZ', ...ts }, // no location — unplotted
             ],
             nextCursor: null,
@@ -64,10 +74,21 @@ describe('MapView', () => {
         const { container } = render(MapView);
 
         const plotted = await screen.findByTestId('plotted');
-        expect(plotted.textContent).toContain('1 of 2 plotted');
+        expect(plotted.textContent).toContain('2 of 3 plotted');
         expect(plotted.textContent).toContain('1 without a location');
-        expect(container.querySelectorAll('[data-testid="arc"]')).toHaveLength(1);
+        expect(container.querySelectorAll('[data-testid="arc"]')).toHaveLength(2);
         expect(container.querySelector('[data-testid="origin"]')).not.toBeNull();
+
+        // Band colour-coding: 20m (no override) strokes the default palette
+        // colour; 40m takes the config override. Legend lists both bands.
+        const strokes = [...container.querySelectorAll('[data-testid="arc"] path')].map((p) =>
+            p.getAttribute('stroke')
+        );
+        expect(strokes).toContain('#22c55e'); // default 20m
+        expect(strokes).toContain('#101010'); // overridden 40m
+        const legend = container.querySelector('[data-testid="legend"]')?.textContent;
+        expect(legend).toContain('40m');
+        expect(legend).toContain('20m');
 
         // Stream-then-fetch ordering (the reconnect contract).
         expect(calls.indexOf('stream')).toBeLessThan(calls.indexOf('fetch'));

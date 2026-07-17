@@ -35,6 +35,18 @@ export function toggleTheme(): void {
     ui.theme = ui.theme === 'dark' ? 'light' : 'dark';
 }
 
+// Cross-tab theme sync. The contacts map opens in its own browser tab, and a
+// toggle only stamps <html data-theme> in the tab that toggled — the map tab
+// would keep its load-time theme forever. `storage` fires in every OTHER tab
+// when the toggling tab persists the preference; mirroring it into ui.theme
+// lets App.svelte's reflection $effect restamp this tab. No echo loop: the
+// receiving tab's setItem writes an identical value, which fires no event.
+window.addEventListener('storage', (e) => {
+    if (e.key === THEME_KEY && (e.newValue === 'light' || e.newValue === 'dark')) {
+        ui.theme = e.newValue;
+    }
+});
+
 export function toggleNav(): void {
     ui.navMode = ui.navMode === 'narrow' ? 'full' : 'narrow';
 }

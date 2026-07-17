@@ -16,10 +16,10 @@
  * `[lon, lat]` ordering stays inside this file.
  */
 
-import { geoNaturalEarth1, geoPath, geoInterpolate, geoGraticule10 } from 'd3-geo';
+import { geoNaturalEarth1, geoPath, geoInterpolate, geoGraticule10, geoCircle } from 'd3-geo';
 import type { GeoPath, GeoProjection } from 'd3-geo';
 import { feature } from 'topojson-client';
-import type { FeatureCollection, Geometry, LineString } from 'geojson';
+import type { FeatureCollection, Geometry, LineString, Polygon } from 'geojson';
 import worldTopo from 'world-atlas/countries-110m.json';
 
 export interface LatLon {
@@ -119,4 +119,58 @@ export function sampleArc(from: LatLon, to: LatLon, steps = 64): LatLon[] {
 /** SVG path `d` for a 10° graticule — the subtle lat/lon grid. */
 export function graticulePath(engine: MapEngine): string | null {
     return engine.path(geoGraticule10());
+}
+
+const RAD = Math.PI / 180;
+const DEG = 180 / Math.PI;
+
+/** Normalise degrees of longitude to [-180, 180). */
+function wrapLon(deg: number): number {
+    return ((((deg + 180) % 360) + 360) % 360) - 180;
+}
+
+/**
+ * Subsolar point (sun at the zenith) at `at` — the anchor for the
+ * grey-line overlay. Standard low-precision solar ephemeris (the NOAA /
+ * Astronomical Almanac truncation): mean longitude + equation-of-centre
+ * → ecliptic longitude → declination (the latitude) and right ascension,
+ * minus Greenwich mean sidereal time (the longitude). Good to ~0.01°;
+ * the terminator itself is a refraction-fuzzed band half a degree wide,
+ * so higher-order terms are noise here.
+ */
+export function subsolarPoint(at: Date): LatLon {
+    // Fractional days since the J2000.0 epoch (2000-01-01 12:00 UTC).
+    const n = at.getTime() / 86_400_000 - 10_957.5;
+    const meanLon = 280.46 + 0.9856474 * n;
+    const meanAnom = (357.528 + 0.9856003 * n) * RAD;
+    const eclipticLon =
+        (meanLon + 1.915 * Math.sin(meanAnom) + 0.02 * Math.sin(2 * meanAnom)) * RAD;
+    const obliquity = (23.439 - 0.0000004 * n) * RAD;
+    const declination = Math.asin(Math.sin(obliquity) * Math.sin(eclipticLon)) * DEG;
+    const rightAscension =
+        Math.atan2(Math.cos(obliquity) * Math.sin(eclipticLon), Math.cos(eclipticLon)) * DEG;
+    const gmst = 280.46061837 + 360.98564736629 * n;
+    return { lat: declination, lon: wrapLon(rightAscension - gmst) };
+}
+
+/**
+ * Twilight shading rings, outermost first: sun below the horizon (0°),
+ * below civil twilight (−6°), below nautical twilight (−12°). Sun
+ * altitude −x° ⇔ 90−x° from the ANTIsolar point, so these are cap radii
+ * for nightCap. Stacked translucent fills grade dusk → dark night; the
+ * band the first and last ring bound IS the grey line.
+ */
+export const TWILIGHT_RADII = [90, 84, 78] as const;
+
+/**
+ * The spherical cap of radius `radius` degrees around the antisolar
+ * point, as a GeoJSON polygon ready for geometryPath. d3's geoCircle
+ * handles the polar/antimeridian wrapping that makes hand-rolled
+ * terminator polygons notoriously fiddly.
+ */
+export function nightCap(at: Date, radius: number): Polygon {
+    const sun = subsolarPoint(at);
+    return geoCircle()
+        .center([wrapLon(sun.lon + 180), -sun.lat])
+        .radius(radius)();
 }

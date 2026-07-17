@@ -70,6 +70,9 @@ func Validate(cfg Config) []Finding {
 	if err := validatePskReporter(cfg.PskReporter); err != nil {
 		out = append(out, Finding{Field: "psk_reporter", Code: "invalid_psk_reporter", Message: err.Error()})
 	}
+	if err := validateMap(cfg.Map); err != nil {
+		out = append(out, Finding{Field: "map", Code: "invalid_map", Message: err.Error()})
+	}
 	if err := validateBridge(cfg.ActiveBridge()); err != nil {
 		out = append(out, Finding{Field: "bridge", Code: "invalid_bridge", Message: err.Error()})
 	}

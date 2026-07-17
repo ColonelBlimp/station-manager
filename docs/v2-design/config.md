@@ -156,6 +156,17 @@ Cloudflare website and drops UDP). Receiver identity — callsign, grid, **and a
 **not on `/v1/config`** (set-once, like the SMTP block — a config-SPA surface can come
 later). Detail in `docs/ft8.md`.
 
+### `MapConfig` (`internal/types/mapconfig.go`, config key `map`)
+
+Contacts-map display settings. `band_colors` maps lowercase ADIF band tokens
+(`"20m"`, `"70cm"`) to `#rrggbb` arc colours, layered over the SPA's built-in
+palette (`frontend/app/src/lib/map/bandColors.ts`). **Sparse:** an absent/empty
+block (or band) means the default palette — defaults are never materialised into
+config.json. Validated by `validateMap` (band-token key, 6-digit hex value).
+Served RAW on `GET /v1/config` (no secrets), presence-aware on PUT (omit →
+untouched; carry → replace the whole block). Applied client-side — a change
+needs a map-page reload, not a daemon restart.
+
 ### Other blocks (all global, config.json-authoritative, read at start)
 
 `StationConfig`, `LoggingStation` (ADIF `MY_*`), `ForwarderConfig` (+`RetryConfig`),

@@ -225,6 +225,20 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect((await fetchStationContext()).ft8Frequencies).toEqual({});
     });
 
+    it('reads map.band_colors (band→colour), dropping non-string values', async () => {
+        mockConfig({
+            logging_station: { station_callsign: '7Q5MLV' },
+            map: { band_colors: { '20m': '#123456', bogus: 42 } },
+        });
+        const ctx = await fetchStationContext();
+        expect(ctx.mapBandColors).toEqual({ '20m': '#123456' });
+    });
+
+    it('defaults map.band_colors to an empty map when absent', async () => {
+        mockConfig({ logging_station: { station_callsign: '7Q5MLV' } });
+        expect((await fetchStationContext()).mapBandColors).toEqual({});
+    });
+
     it('reads default_logbook.name and bridge.rig_name for the header identity', async () => {
         mockConfig({
             logging_station: { station_callsign: '7Q5MLV' },

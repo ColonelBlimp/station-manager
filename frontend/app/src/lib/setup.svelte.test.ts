@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { setup, setSetupSave, saveSetup, dismissSetupDone, _resetSetupForTests } from './setup.svelte';
+import {
+    setup,
+    setSetupSave,
+    saveSetup,
+    dismissSetupDone,
+    _resetSetupForTests,
+} from './setup.svelte';
 
 beforeEach(() => {
     _resetSetupForTests();

@@ -191,6 +191,7 @@ const ctx: StationContext = {
     ft8CqToTop: false,
     ft8HideHashed: false,
     ft8Frequencies: {},
+    mapBandColors: {},
     logbookName: '',
     rigName: '',
 };

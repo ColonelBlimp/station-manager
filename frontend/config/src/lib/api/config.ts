@@ -186,6 +186,13 @@ export interface ConfigResponse {
     // rig back to that mode's last freq/mode. Served resolved (always present;
     // true = the default ON).
     restore_rig_on_mode_switch?: boolean;
+    // Contacts-map display (`map` block): per-band arc colour overrides, sparse —
+    // an absent band means the map's built-in palette. Served raw.
+    map?: MapFields;
+}
+
+export interface MapFields {
+    band_colors?: Record<string, string>;
 }
 
 export type ConfigOutcome =
@@ -276,6 +283,9 @@ export interface ConfigPatch {
     // Presence-aware (General tab): the mode-switch rig-restore knob. Omit to leave
     // untouched.
     restore_rig_on_mode_switch?: boolean;
+    // Presence-aware (General tab): replaces the contacts-map display block (sparse
+    // band-colour overrides; no secrets). Omit to leave untouched.
+    map?: MapFields;
 }
 
 export async function putConfig(patch: ConfigPatch, signal?: AbortSignal): Promise<ConfigOutcome> {

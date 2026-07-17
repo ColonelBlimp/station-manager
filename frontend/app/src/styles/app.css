@@ -36,6 +36,15 @@
     --color-nav-icon: oklch(70.7% 0.022 261.325); /* gray-400 */
     --color-nav-accent-bg: oklch(98.5% 0.002 247.839); /* gray-50 */
     --color-nav-accent-fg: oklch(51.1% 0.262 276.966); /* indigo-600 */
+
+    /* Contacts map (WorldMap.svelte). Own tokens because the generic surface
+       tokens coincide in light mode (canvas == surface-muted == gray-100),
+       which rendered land the same colour as the ocean with a near-invisible
+       gray-200 coastline. Water sits on the surface step (lifts off the canvas
+       like a card); land + borders are picked for contrast in BOTH themes. */
+    --color-map-water: #fff; /* white — ocean */
+    --color-map-land: oklch(87.2% 0.01 258.338); /* gray-300 — landmass */
+    --color-map-border: oklch(70.7% 0.022 261.325); /* gray-400 — coast/borders */
 }
 
 /* Dark theme — override the colour custom-properties only (TWP dark sidebar). */
@@ -56,6 +65,9 @@ html[data-theme='dark'] {
     --color-nav-icon: #99a1af; /* gray-400 */
     --color-nav-accent-bg: rgba(255, 255, 255, 0.05); /* white/5 */
     --color-nav-accent-fg: #ffffff; /* white */
+    --color-map-water: #101828; /* gray-900 — ocean */
+    --color-map-land: #364153; /* gray-700 — landmass */
+    --color-map-border: rgba(255, 255, 255, 0.2); /* white/20 — coast/borders */
 }
 
 @layer base {

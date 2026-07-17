@@ -46,9 +46,9 @@
             <div class="space-y-3 py-4 text-center text-ink">
                 <p>Your default logbook is ready and you can start logging right away.</p>
                 <p>
-                    Want to finish setting up your station first? <i>Settings</i> is where you
-                    configure your rig (CAT), QSO forwarding (QRZ, ClubLog…), session email, FT8,
-                    and the rest of your station details.
+                    Want to finish setting up your station first? <i>Settings</i> is where you configure
+                    your rig (CAT), QSO forwarding (QRZ, ClubLog…), session email, FT8, and the rest of
+                    your station details.
                 </p>
             </div>
             <div class="flex flex-col items-center space-y-3 pt-2">
@@ -74,8 +74,8 @@
             </div>
             <div class="space-y-3 py-4 text-ink">
                 <p>
-                    Before you can use Station Manager, the <i>default logbook</i> needs to be
-                    initialised. All this requires is a callsign — generally your personal callsign.
+                    Before you can use Station Manager, the <i>default logbook</i> needs to be initialised.
+                    All this requires is a callsign — generally your personal callsign.
                 </p>
                 <p>
                     If you use QRZ.com and plan to forward QSOs to it, enter the callsign of your

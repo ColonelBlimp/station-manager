@@ -71,6 +71,13 @@ function cloneRigs(rigs: RigConfig[]): RigConfig[] {
     return JSON.parse(JSON.stringify(rigs)) as RigConfig[];
 }
 
+/** Key-order-insensitive equality for flat string maps (band→colour dirty
+ *  check — the draft's insertion order drifts as overrides come and go). */
+function sameStringMap(a: Record<string, string>, b: Record<string, string>): boolean {
+    const ka = Object.keys(a);
+    return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
+}
+
 /** Ensure a draft rig has a concrete `audio` object with string rx/tx, so the
  *  Rigs-tab audio dropdowns can `bind:value` directly (no lazy-init handler).
  *  Empty strings round-trip cleanly — the daemon omits empty audio on GET, and
@@ -408,6 +415,11 @@ class ConfigState {
     /** General tab: the mode-switch rig-restore knob (restore_rig_on_mode_switch,
      *  default ON). Hydrated from config; saved presence-aware via saveGeneral. */
     restoreRigOnModeSwitch: boolean = $state(true);
+    /** General tab: the contacts-map band-colour overrides draft (`map.band_colors`,
+     *  sparse — a band absent here takes the map's built-in palette). Folded into
+     *  the General save. Overrides for bands the editor doesn't list (hand-edited
+     *  config) ride along untouched — the whole map is sent on save. */
+    mapBandColors: Record<string, string> = $state({});
     /** True while a General-tab save PUT is in flight. */
     savingGeneral: boolean = $state(false);
     /** Last General-save status: 'ok', an error message, or null (idle/in-flight). */
@@ -508,6 +520,7 @@ class ConfigState {
             this.bridgeEnabled = this.config.bridge_enabled ?? false;
             this.ft8Enabled = this.config.ft8_enabled ?? false;
             this.restoreRigOnModeSwitch = this.config.restore_rig_on_mode_switch ?? true;
+            this.mapBandColors = { ...(this.config.map?.band_colors ?? {}) };
         } else {
             errs.push(`config: ${outcomeMessage(cfg)}`);
         }
@@ -697,7 +710,10 @@ class ConfigState {
     /** True when the General-tab preferences diverge from the loaded config. */
     get generalDirty(): boolean {
         if (!this.config) return false;
-        return this.restoreRigOnModeSwitch !== (this.config.restore_rig_on_mode_switch ?? true);
+        return (
+            this.restoreRigOnModeSwitch !== (this.config.restore_rig_on_mode_switch ?? true) ||
+            !sameStringMap(this.mapBandColors, this.config.map?.band_colors ?? {})
+        );
     }
 
     /**
@@ -713,10 +729,12 @@ class ConfigState {
             logging_station: this.config.logging_station,
             station: this.config.station,
             restore_rig_on_mode_switch: this.restoreRigOnModeSwitch,
+            map: { band_colors: { ...this.mapBandColors } },
         });
         if (outcome.kind === 'ok') {
             this.config = outcome.config;
             this.restoreRigOnModeSwitch = this.config.restore_rig_on_mode_switch ?? true;
+            this.mapBandColors = { ...(this.config.map?.band_colors ?? {}) };
             this.generalStatus = 'ok';
         } else {
             this.generalStatus = outcomeMessage(outcome);
@@ -728,6 +746,7 @@ class ConfigState {
     cancelGeneral(): void {
         if (this.config) {
             this.restoreRigOnModeSwitch = this.config.restore_rig_on_mode_switch ?? true;
+            this.mapBandColors = { ...(this.config.map?.band_colors ?? {}) };
         }
         this.generalStatus = null;
     }

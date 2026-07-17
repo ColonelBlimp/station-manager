@@ -19,6 +19,7 @@ import { fetchQsoPage, type LogbookQso, type QsoPageOutcome } from '../api/logbo
 import { openLogEvents, type QsoEventPayload } from '../api/log-events';
 import { fetchStationContext } from '../api/seams';
 import { gridToDecimal, haversineKm, calculateBearing } from '../utils/bearing';
+import { normalizeBand } from './bandColors';
 import type { LatLon } from './engine';
 
 export interface DurationOption {
@@ -28,22 +29,29 @@ export interface DurationOption {
 
 /** The picker's fixed choices; "custom" rides the same minutes field. */
 export const DURATIONS: DurationOption[] = [
+    { label: '15 min', minutes: 15 },
+    { label: '30 min', minutes: 30 },
     { label: '1 h', minutes: 60 },
-    { label: '5 h', minutes: 300 },
+    { label: '2 h', minutes: 120 },
+    { label: '3 h', minutes: 180 },
+    { label: '6 h', minutes: 360 },
+    { label: '12 h', minutes: 720 },
     { label: '24 h', minutes: 1440 },
-    { label: '10 d', minutes: 14400 },
+    { label: '48 h', minutes: 2880 },
 ];
 
 /** One plottable contact — everything WorldMap and the tooltip need. */
 export interface MapQso {
     key: string;
     call: string;
+    /** Normalised band token ("20m"), '' when the row carries none. */
+    band: string;
     point: LatLon;
     label: string;
 }
 
 // Page size / page cap for one windowed collection. The cap bounds a
-// pathological window (e.g. 10 d over a contest log) at 5 000 rows — when
+// pathological window (e.g. 48 h over a contest log) at 5 000 rows — when
 // hit, the view says so rather than silently truncating.
 const PAGE_LIMIT = 200;
 const MAX_PAGES = 25;
@@ -134,17 +142,21 @@ interface MapDataState {
     origin: LatLon | null;
     /** Event stream up — arcs appear live. */
     live: boolean;
+    /** Operator band-colour overrides (config `map.band_colors`), layered
+     *  over the default palette by the view's bandColor calls. */
+    bandColors: Record<string, string>;
 }
 
 export const mapData = $state<MapDataState>({
     status: 'loading',
     message: '',
-    durationMin: 300,
+    durationMin: 360,
     qsos: [],
     total: 0,
     capped: false,
     origin: null,
     live: false,
+    bandColors: {},
 });
 
 let logbookId = 0;
@@ -166,6 +178,7 @@ async function refresh(): Promise<void> {
                 {
                     key: q.uuid ?? String(q.id),
                     call: q.call ?? '?',
+                    band: normalizeBand(q.band),
                     point,
                     label: qsoLabel(q, point, mapData.origin),
                 },
@@ -208,6 +221,7 @@ export function startMapData(): () => void {
         const ctx = await fetchStationContext();
         logbookId = ctx.logbookId;
         mapData.origin = gridToDecimal(ctx.myGrid);
+        mapData.bandColors = ctx.mapBandColors;
         if (logbookId === 0) {
             mapData.status = 'error';
             mapData.message = 'Station config unavailable — cannot resolve the logbook.';

@@ -12,7 +12,10 @@ import {
     project,
     geometryPath,
     graticulePath,
+    nightCap,
+    subsolarPoint,
     SPHERE,
+    TWILIGHT_RADII,
 } from './engine';
 
 const W = 960;
@@ -131,5 +134,52 @@ describe('worldCountries / geometryPath / graticulePath', () => {
         const d = graticulePath(engine);
         expect(d).not.toBeNull();
         expect(d!.length).toBeGreaterThan(100);
+    });
+});
+
+describe('subsolarPoint / nightCap (grey line)', () => {
+    it('matches the almanac at the J2000 epoch', () => {
+        // 2000-01-01 12:00 UTC: declination −23.04°, and the ~−3 min
+        // equation of time puts the sun just east of Greenwich at noon.
+        const p = subsolarPoint(new Date(Date.UTC(2000, 0, 1, 12)));
+        expect(Math.abs(p.lat - -23.04)).toBeLessThan(0.1);
+        expect(Math.abs(p.lon - 0.8)).toBeLessThan(0.5);
+    });
+
+    it('tracks declination through equinox and solstices', () => {
+        // Equinox instant (2026-03-20 14:46 UTC): sun over the equator.
+        const equinox = subsolarPoint(new Date(Date.UTC(2026, 2, 20, 14, 46)));
+        expect(Math.abs(equinox.lat)).toBeLessThan(0.5);
+        // Solstices pin the extremes at ±obliquity (23.44°).
+        const june = subsolarPoint(new Date(Date.UTC(2026, 5, 21, 12)));
+        const december = subsolarPoint(new Date(Date.UTC(2026, 11, 21, 12)));
+        expect(Math.abs(june.lat - 23.44)).toBeLessThan(0.1);
+        expect(Math.abs(december.lat - -23.44)).toBeLessThan(0.1);
+    });
+
+    it('puts noon near Greenwich and midnight near the antimeridian', () => {
+        expect(Math.abs(subsolarPoint(new Date(Date.UTC(2026, 6, 17, 12))).lon)).toBeLessThan(5);
+        expect(Math.abs(subsolarPoint(new Date(Date.UTC(2026, 6, 17, 0))).lon)).toBeGreaterThan(
+            175
+        );
+    });
+
+    it('projects a drawable cap at every twilight radius', () => {
+        const engine = createEngine(W, H);
+        const at = new Date(Date.UTC(2026, 6, 17, 12));
+        for (const r of TWILIGHT_RADII) {
+            const d = geometryPath(engine, nightCap(at, r));
+            expect(d).not.toBeNull();
+            expect(d!.length).toBeGreaterThan(50);
+        }
+    });
+
+    it('centres the night hemisphere opposite the sun', () => {
+        // Equinox: the terminator runs pole to pole, so the 90° cap's ring
+        // must reach both polar regions — the classic sanity check.
+        const ring = nightCap(new Date(Date.UTC(2026, 2, 20, 14, 46)), 90).coordinates[0];
+        const lats = ring.map((c) => c[1]);
+        expect(Math.max(...lats)).toBeGreaterThan(85);
+        expect(Math.min(...lats)).toBeLessThan(-85);
     });
 });
