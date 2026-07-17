@@ -30,7 +30,87 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-16)
+## Current state (as of 2026-07-17)
+
+> **Session 217 (2026-07-17) — MAP POLISH ARC (5 features) + INBOX TRIAGE + FT8
+> ABANDON LAYER-1 FIX; ALL COMMITTED + PUSHED by the operator (`79378ab3`,
+> `b48f84c8`, `7ff37b2f`; `main` == `origin/main` @ `7ff37b2f`). Context shift:
+> the DOGFOOD DB IS LOST — smcloud P1 is now the operator-declared critical
+> workstream (see NEXT).**
+> - **Map light/dark fix + cross-tab theme sync:** the map had no land/ocean contrast in
+>   light mode (canvas == surface-muted == gray-100) — new dedicated theme tokens
+>   `--color-map-water/land/border` (both themes) in `styles/app.css`; and a theme toggle
+>   never reached the already-open map tab — a `storage`-event listener in
+>   `lib/ui/state.svelte.ts` mirrors the persisted theme so App.svelte's `$effect`
+>   restamps every tab.
+> - **Window selector:** the duration picker is a `<select>` with 15/30 min, 1/2/3/6/12/24/48 h
+>   (default 6 h); 10-day option dropped.
+> - **Grey line (operator-toggled):** `engine.ts` `subsolarPoint` (NOAA low-precision
+>   ephemeris, tests pin equinox/solstice/J2000) + `nightCap` (d3 `geoCircle` around the
+>   antisolar point); three stacked twilight rings (90/84/78°) = the grey-line band;
+>   "Grey line" checkbox persisted (`sm-map-greyline`), 60 s recompute clock.
+> - **Per-band arc colours, 3 slices:** (1) `lib/map/bandColors.ts` spectrum-ordered
+>   default palette + in-window legend (chips with counts); (2) daemon `map.band_colors`
+>   config block — `types.MapConfig`, `validateMap` (lowercase band token + #rrggbb),
+>   served RAW / presence-aware on `/v1/config` (psk_reporter pattern), consumed via
+>   `fetchStationContext().mapBandColors`, `docs/v2-design/config.md` updated; (3) config
+>   SPA **General tab → Contacts map** editor (14 colour pickers, default/reset, sparse
+>   overrides — picking the default drops the override; `MAP_DEFAULTS` is a pinned copy
+>   of the app palette, keep in sync). Colours apply at map load (reload, not restart).
+> - **Sidebar Map entry (`7ff37b2f`):** globe-europe-africa icon in the frontend/app
+>   sidebar bottom-utilities, above Manual, opens `/map` in a new tab (the map's
+>   standalone/second-monitor posture, ADR 0049 rejection).
+> - **FT8 Call-CQ abandon fix, layer 1 (`b48f84c8`):** dogfood catch (max-repeats abandon
+>   returned to CQ, losing live answerers) — `pickAnswererLocked` extracted in
+>   `caller_sequencer.go`; the drop now re-scans the abandon slot's decodes and replies to
+>   another live answerer in the SAME slot, CQ only when nobody else calls. Test
+>   `TestCallerSequencer_AbandonWorksLiveAnswererSameSlot`; ft8-suite `-race` green;
+>   `docs/ft8.md` updated. **Layer 2 (recency-bounded answerer pool) open in the backlog.**
+>   **Needs on-air validation** with the rest of the caller side.
+> - **Inbox FULLY TRIAGED (nothing open):** the abandon note → backlog (layer 1 then built
+>   same day); the 2026-07-03 Session-panel name-ellipsis note closed (verified fixed in
+>   both SPAs). PSK Reporter question answered: support is built + opt-in, dogfood config
+>   has it OFF (`"psk_reporter": {}`); enable = `"enabled": true` + restart.
+> - **Process memory added** (`offer-commit-points-between-features`): flag a commit
+>   boundary when a change lands green and another is directed — session accumulated 5
+>   features into one tree → one big commit (`79378ab3`); later work was committed
+>   per-feature.
+> - **SMCLOUD S2 BUILT (same session, later) — the cloud HTTP API is up, gate passing;
+>   UNCOMMITTED for operator review.** New: `internal/cloud/server` (PUT /v1/qsos
+>   batch-upsert-by-name'd-logbook + tombstones · GET /v1/logbooks ·
+>   /v1/logbooks/{id}/{reconcile,manifest} · /v1/export · /v1/health · /v1/version;
+>   bearer-token→tenant auth, constant-time; payload stored/exported VERBATIM as
+>   json.RawMessage; stdlib+store+types only, slog to stderr), shared
+>   **`internal/cloud/reconcile`** (`Summary` — the canonical µs/lowercase/UnixMicro
+>   hash BOTH ends compute; S4 imports it), store additions (`Logbooks`/`Logbook`/
+>   `Export` + `Migrate` — embedded golang-migrate runtime applier, same tracking
+>   table as the CLI), and **`cmd/smcloud`** (env/flag config, SMCLOUD_TOKEN env-only,
+>   graceful shutdown, TLS = S6 proxy). **The S2 round-trip GATE passes** (types.Qso →
+>   PUT → export → deep-equal, seconds + app fields intact) + auth/tombstone/stale-push/
+>   ownership tests — 15 integration tests live against Postgres (`task db:pg:up`),
+>   -race clean; live smoke of every endpoint done. Store+server test suites now
+>   serialise via pg_advisory_lock (parallel packages, one dev DB).
+>   `docs/v2-design/sm-cloud-p1.md` status updated (S1+S2 built).
+> - **NEXT (priority order): (1) smcloud S3 — the `smcloud` forwarder**
+>   (`internal/forwarding/smcloud/`, `AdifPrefix()==""`, full-QSO JSON to PUT /v1/qsos;
+>   verify `forwarding.Result` fields + registration signature + credential_fields
+>   first) **→ S4 reconcile (import `internal/cloud/reconcile`!) → S5 restore**; the
+>   dogfood DB is still LOST — recovery is a QRZ ADIF import (`smd import <file.adi>`,
+>   daemon stopped, NO `--forward`). (2) dogfood-validate today's map features + the
+>   abandon fix on air; (3) carried: on-air type-4 → ADR 0048 flip; whole-log Dashboard
+>   map (needs the `GET /v1/logbook/{id}/map` aggregate).
+
+> **Session 216 (2026-07-16→17) — FIRST-RUN SETUP GATE in frontend/app, committed by the
+> operator as `80e1faa3` (feat(setup)).** Fallout of the lost dogfood DB (the operator hit
+> the fresh-install path): the whole app shell now gates on `setup_complete` — new
+> `lib/setup.svelte.ts` (status loading→blank / needed→SetupCard / complete→shell;
+> daemon-unreachable resolves to complete so an outage never greets a configured operator
+> with first-run setup), `lib/ui/SetupCard.svelte` (callsign form + post-save "Setup
+> complete" interstitial offering Settings), `lib/api/setup.ts` (`completeSetup` → PUT
+> /v1/config with just the callsign; the daemon seeds the default logbook), `StationContext`
+> gained `configOk`/`setupComplete`, main.ts injects the save action (ADR 0045 — the state
+> module never imports lib/api). Gate sits ABOVE the router so the shell-less /map tab is
+> covered too. Tests throughout (589 at the time).
 
 > **Session 215 (2026-07-16, afternoon) — QSO CONTACTS MAP BUILT (both phases of the
 > session-214 respec), COMMITTED + PUSHED; the type-4 + ADR 0049 doc commits are pushed

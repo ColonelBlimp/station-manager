@@ -204,6 +204,88 @@ FROM qsos WHERE logbook_id = $1 ORDER BY uuid`
 	return out, nil
 }
 
+// LogbookInfo is a logbook's identity row — what the HTTP layer lists and
+// checks ownership against (TenantID never goes on the wire).
+type LogbookInfo struct {
+	ID       int64  `json:"id"`
+	TenantID int64  `json:"-"`
+	Name     string `json:"name"`
+}
+
+// Logbooks lists a tenant's logbooks, ordered by id (creation order).
+func (s *Store) Logbooks(ctx context.Context, tenantID int64) ([]LogbookInfo, error) {
+	const op errors.Op = "store.Logbooks"
+	const q = `SELECT id, tenant_id, name FROM logbooks WHERE tenant_id = $1 ORDER BY id`
+	rows, err := s.db.QueryContext(ctx, q, tenantID)
+	if err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsgf("tenant %d", tenantID)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []LogbookInfo
+	for rows.Next() {
+		var l LogbookInfo
+		if err := rows.Scan(&l.ID, &l.TenantID, &l.Name); err != nil {
+			return nil, errors.New(op).WithErr(err).WithMsg("scan")
+		}
+		out = append(out, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsg("rows")
+	}
+	return out, nil
+}
+
+// Logbook returns one logbook's identity row — the ownership check the HTTP
+// layer runs before serving a per-logbook read. Returns ErrNotFound
+// (errors.Is-matchable) when the id doesn't exist.
+func (s *Store) Logbook(ctx context.Context, id int64) (LogbookInfo, error) {
+	const op errors.Op = "store.Logbook"
+	const q = `SELECT id, tenant_id, name FROM logbooks WHERE id = $1`
+	var l LogbookInfo
+	err := s.db.QueryRowContext(ctx, q, id).Scan(&l.ID, &l.TenantID, &l.Name)
+	if stderr.Is(err, sql.ErrNoRows) {
+		return LogbookInfo{}, errors.New(op).WithErr(ErrNotFound).WithMsgf("logbook %d", id)
+	}
+	if err != nil {
+		return LogbookInfo{}, errors.New(op).WithErr(err).WithMsgf("logbook %d", id)
+	}
+	return l, nil
+}
+
+// Export returns EVERY record a tenant owns, tombstones included (restore needs
+// the deleted markers), ordered by (logbook_id, uuid) for a stable dump. This
+// is the read behind GET /v1/export — the full-fidelity restore source.
+func (s *Store) Export(ctx context.Context, tenantID int64) ([]Record, error) {
+	const op errors.Op = "store.Export"
+	const q = `
+SELECT uuid, tenant_id, logbook_id, modified_at, deleted_at, payload
+FROM qsos WHERE tenant_id = $1 ORDER BY logbook_id, uuid`
+	rows, err := s.db.QueryContext(ctx, q, tenantID)
+	if err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsgf("tenant %d", tenantID)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Record
+	for rows.Next() {
+		var (
+			r       Record
+			payload []byte
+		)
+		if err := rows.Scan(&r.UUID, &r.TenantID, &r.LogbookID,
+			&r.ModifiedAt, &r.DeletedAt, &payload); err != nil {
+			return nil, errors.New(op).WithErr(err).WithMsg("scan")
+		}
+		r.Payload = payload
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsg("rows")
+	}
+	return out, nil
+}
+
 // Get returns the full record for a UUID, tombstones included (restore needs the
 // deleted marker). Returns ErrNotFound (errors.Is-matchable) when no row matches.
 func (s *Store) Get(ctx context.Context, uuid string) (Record, error) {

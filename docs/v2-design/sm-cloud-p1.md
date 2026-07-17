@@ -1,6 +1,8 @@
 # SM Cloud — P1 implementation plan (backup + restore)
 
-**Status:** planned, not started (design-complete per ADR 0040).
+**Status:** in build — **S1 (store) + S2 (cloud HTTP API) BUILT** (S1 2026-07-08,
+S2 2026-07-17, both integration-tested against real Postgres; the S2 round-trip
+gate passes). S3 forwarder next; S4/S5 open; S6 deferred.
 **Decision record:** [ADR 0040](../decisions/0040-sm-cloud-p1-backup-restore.md) —
 this doc is the long-form implementation plan; the ADR holds the *why* and the
 rejected alternatives. When the two disagree, the ADR's decisions win and this
@@ -89,6 +91,28 @@ missed-delete is rejected by the modified_at guard, so the tombstone holds.
 **Gate:** an offline round-trip test — `types.Qso` → `PUT` → store → `export` →
 unmarshal → deep-equal, including UUID, HH:MM:SS seconds, and `additional_data`
 — lands *before* anything real flows.
+
+**BUILT 2026-07-17 (gate passing).** `internal/cloud/server` (stdlib + store +
+types only — no daemon imports; `log/slog` to stderr for systemd/journald) +
+`cmd/smcloud` (flag/env config: `SMCLOUD_DSN` / `SMCLOUD_TOKEN` (env-only) /
+`SMCLOUD_CALLSIGN`, `-listen` default `:8091`; boot = ping → embedded-migration
+apply (`store.Migrate`, golang-migrate over the same files + tracking table as
+`task migrate:cloud:up`) → `EnsureTenant` → serve; graceful shutdown; TLS is the
+S6 reverse proxy's job). Wire detail in `internal/cloud/server/doc.go`: the QSO
+payload is stored and exported **verbatim** (`json.RawMessage` end to end,
+unmarshalled only to validate + extract the UUID — which is what makes the gate
+byte-faithful); `modified_at`/`deleted_at` ride an envelope beside `qso`;
+`PUT /v1/qsos` takes the logbook by NAME (the server ensures it, so the client
+never pre-provisions); `GET /v1/logbooks` added for id discovery; a per-logbook
+read on another tenant's logbook is a 404 (existence not leaked). The reconcile
+hash lives in the shared **`internal/cloud/reconcile`** package (`Summary`:
+sort by lowercased UUID, µs-truncate, hash `uuid|unixmicro` lines with SHA-256)
+— **S4's daemon side must import this same package**, which discharges the
+µs-truncation obligation by construction. Tests: the gate + auth + tombstone +
+stale-push-telemetry + ownership in `internal/cloud/server/server_test.go`
+(same Postgres skip-gate as the store; the two suites serialise via a
+`pg_advisory_lock` because `go test ./...` runs their packages in parallel
+against the one dev DB).
 
 ### S3 — `smcloud` forwarder (daemon client)
 

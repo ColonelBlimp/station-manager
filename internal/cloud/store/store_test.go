@@ -44,6 +44,7 @@ func testStore(t *testing.T) *Store {
 		_ = db.Close()
 		t.Skipf("smcloud store tests need a dev Postgres (task db:pg:up): ping: %v", err)
 	}
+	lockTestDatabase(t, db)
 	// Clean slate: down (IF EXISTS, safe on first run) then up.
 	execSQLFile(t, db, "migrations/0001_init.down.sql")
 	execSQLFile(t, db, "migrations/0001_init.up.sql")
@@ -52,6 +53,35 @@ func testStore(t *testing.T) *Store {
 		_ = db.Close()
 	})
 	return New(db)
+}
+
+// smcloudTestLockID is the advisory-lock key every smcloud test-DB user takes
+// for the duration of one test. The store and server test packages run as
+// SEPARATE test binaries in parallel (`go test ./...`), both rebuilding the
+// same dev database's schema — without cross-process serialisation one
+// package's teardown lands mid-test in the other. Must match the server
+// suite's constant.
+const smcloudTestLockID = 0x534d434c // "SMCL"
+
+// lockTestDatabase serialises this test against every other smcloud DB test
+// (across packages/processes) via a session advisory lock held on a dedicated
+// connection until cleanup.
+func lockTestDatabase(t *testing.T, db *sql.DB) {
+	t.Helper()
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("advisory lock conn: %v", err)
+	}
+	if _, err := conn.ExecContext(context.Background(),
+		`SELECT pg_advisory_lock($1)`, smcloudTestLockID); err != nil {
+		_ = conn.Close()
+		t.Fatalf("advisory lock: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(context.Background(),
+			`SELECT pg_advisory_unlock($1)`, smcloudTestLockID)
+		_ = conn.Close()
+	})
 }
 
 // execSQLFile runs a whole migration file. lib/pq's parameterless Exec uses the
