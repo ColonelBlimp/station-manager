@@ -1,8 +1,10 @@
 # SM Cloud — P1 implementation plan (backup + restore)
 
-**Status:** in build — **S1 (store) + S2 (cloud HTTP API) BUILT** (S1 2026-07-08,
-S2 2026-07-17, both integration-tested against real Postgres; the S2 round-trip
-gate passes). S3 forwarder next; S4/S5 open; S6 deferred.
+**Status:** in build — **S1 (store) + S2 (cloud HTTP API) + S3 (daemon forwarder)
++ S4 (reconcile) BUILT** (S1 2026-07-08, S2–S4 2026-07-17, all integration-tested
+against real Postgres; the S2 round-trip gate passes, S3's Submit and S4's full
+detect→heal→in-sync cycle are pinned against the real server). S5 restore next;
+S6 deferred.
 **Decision record:** [ADR 0040](../decisions/0040-sm-cloud-p1-backup-restore.md) —
 this doc is the long-form implementation plan; the ADR holds the *why* and the
 rejected alternatives. When the two disagree, the ADR's decisions win and this
@@ -126,6 +128,28 @@ Reuses the queue + ADR-0038 forever-retry (built for a flaky link). Integration
 test: submit → worker pushes → cloud stores; assert the QSO's `modified_at` is
 untouched.
 
+**BUILT 2026-07-17, two deltas from the sketch above (both deliberate, from the
+code):** (1) **NOT auto-seeded** into the non-sparse config — `DefaultForwarderConfigs`
+deliberately excludes operator-must-supply-URL types (there is no canonical
+smcloud endpoint to seed), so the operator adds it via the config SPA's
+data-driven add-forwarder form (descriptor registered: url text / token
+password / logbook text, default `"main"`). (2) The wire needs the row's
+`modified_at`, which `types.Qso` didn't carry — **`types.Qso` gained
+`ModifiedAt`/`DeletedAt` with `json:"-"`** (the `LastRefreshedAt` column-only
+pattern: overlaid from the promoted columns in `adapters.QsoModelToType`, never
+in the additional_data blob or payload; they ride the wire ENVELOPE beside the
+`qso`). Submit guards: zero `modified_at` or empty UUID = Terminal (a silent
+`now()` substitute would poison the reconcile hash forever); `applied: 0`
+(stale re-push — the cloud holds a newer copy) = Success for a backup. Outcome
+matrix mirrors qrz (no response → Unreachable/forever-retry; 408/429/5xx →
+Transient; other 4xx → Terminal). The `modified_at`-untouched property is held
+by the worker's existing `AdifPrefix()==""` plain-mark path (no QSO-row write —
+pinned in `TestAdifPrefix_EmptyByDesign` + worker suite). End-to-end wire test
+`TestSubmit_AgainstRealCloudServer` runs Submit against the REAL
+`internal/cloud/server` over Postgres (insert deep-equal payload round-trip,
+stale-push no-clobber, delete tombstone) — a test-only import that pins the
+locally-declared envelope against the server's.
+
 ### S4 — Reconcile
 
 A daemon routine (periodic + on-demand): compute the local per-logbook
@@ -134,6 +158,30 @@ diff against local, and **re-enqueue the diverged UUIDs** through the existing
 forwarder queue — detect + self-heal, no separate repair path. `modified_at`
 (trigger-bumped on every edit) is the drift signal; the dedupe key is not (it's
 an identity key, blind to edits — ADR 0040 § Reconcile signal).
+
+**BUILT 2026-07-17.** `smcloud.Reconciler` (`internal/forwarding/smcloud/reconcile.go`)
+built from the SAME ForwarderConfig as the forwarder, guarding the default
+logbook: hourly loop (2-min startup delay) under the worker context in cmd/smd
++ on-demand **`POST /v1/smcloud/reconcile`** (503 until an enabled smcloud
+forwarder exists). Local hash comes from the new
+`sqlite.FetchQsoManifestWithContext` through the shared `internal/cloud/reconcile`
+Summary — the µs obligation discharged by construction. Heal paths: upserts via
+`qsoservice.EnqueueUploads` (force; smcloud has no stamp so nothing is skipped),
+missed tombstones via the NEW `qsoservice.EnqueueDeleteUploads` (refuses live
+rows per-row). Direction of trust: **local is authoritative** — cloud-only rows
+(a previous DB generation) and cloud-newer rows are counted + logged, never
+touched (S5 restore pulls; reconcile never deletes cloud data). Batches cap at
+5000/run (`truncated`, next run continues). **Two protocol bugs found by the
+tests and fixed:** (a) local `modified_at` is NULL until the update trigger
+first fires → both readers (`adapters.QsoModelToType` + the manifest query)
+fall back to `created_at`; (b) `created_at` carries sub-second digits while the
+trigger writes whole seconds → both readers truncate to SECONDS (the trigger
+defines the local precision), else a same-second edit/delete pushes a value the
+cloud's `>=` guard rejects as stale forever. Tests: 11 pure diff-table cases +
+`TestReconciler_EndToEnd` (real sqlite+qsoservice vs real cloud server+Postgres:
+empty-cloud first backfill → drain → in-sync → missed delete → tombstone heal →
+in-sync) + `EnqueueDeleteUploads` / manifest integration tests + the 503/200/500
+handler test.
 
 ### S5 — Restore
 

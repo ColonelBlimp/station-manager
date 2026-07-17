@@ -144,11 +144,98 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 // returns it only if it is enabled and forwards inserts — the eligibility gate
 // for a manual backfill (mirrors the submit-path shouldEnqueue check).
 func (s *Service) findEnabledInsertForwarder(name string) (types.ForwarderConfig, bool) {
+	return s.findEnabledForwarderFor(name, action.Insert)
+}
+
+// findEnabledForwarderFor resolves a forwarder by name (case-insensitive) and
+// returns it only if it is enabled and its action_filter covers act.
+func (s *Service) findEnabledForwarderFor(name string, act action.Action) (types.ForwarderConfig, bool) {
 	name = strings.TrimSpace(name)
 	for _, fc := range s.Config.Forwarders() {
-		if strings.EqualFold(fc.Name, name) && shouldEnqueue(fc, action.Insert) {
+		if strings.EqualFold(fc.Name, name) && shouldEnqueue(fc, act) {
 			return fc, true
 		}
 	}
 	return types.ForwarderConfig{}, false
+}
+
+// EnqueueDeleteResult summarises an EnqueueDeleteUploads call. SkippedLive
+// carries UUIDs that turned out NOT to be soft-deleted — a delete row for a
+// live QSO would wrongly remove it upstream, so they are refused per-row.
+type EnqueueDeleteResult struct {
+	Enqueued    int      `json:"enqueued"`
+	SkippedLive []string `json:"skipped_live,omitempty"`
+	NotFound    []string `json:"not_found,omitempty"`
+}
+
+// EnqueueDeleteUploads queues delete-action upload rows for already
+// SOFT-DELETED QSOs (by UUID) to one enabled forwarder whose action_filter
+// covers delete. The normal delete path enqueues at delete time (DeleteQso);
+// this is the repair path for a delete the destination missed — the SM Cloud
+// reconciler (ADR 0040 S4) uses it to push tombstones the cloud still shows
+// as live. Per-row best-effort like EnqueueUploads: a live or unknown UUID is
+// reported, never fatal.
+func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string, uuids []string) (EnqueueDeleteResult, error) {
+	const op errors.Op = "qsoservice.EnqueueDeleteUploads"
+
+	fwd, ok := s.findEnabledForwarderFor(forwarderName, action.Delete)
+	if !ok {
+		return EnqueueDeleteResult{}, &SubmitError{
+			Code:    "forwarder_unavailable",
+			Message: "forwarder is unknown, disabled, or does not forward deletes",
+		}
+	}
+
+	var res EnqueueDeleteResult
+	enqueueIDs := make([]int64, 0, len(uuids))
+	for _, raw := range uuids {
+		uuid := strings.TrimSpace(raw)
+		if uuid == "" || !utils.IsValidUUIDv7(uuid) {
+			res.NotFound = append(res.NotFound, raw)
+			continue
+		}
+		// A delete row must reference a soft-deleted QSO: the live-only fetch
+		// succeeding means the row is NOT deleted → refuse it.
+		if _, err := s.DB.FetchQsoByUUIDWithContext(ctx, uuid); err == nil {
+			res.SkippedLive = append(res.SkippedLive, uuid)
+			continue
+		}
+		qso, err := s.DB.FetchQsoByUUIDIncludingDeletedWithContext(ctx, uuid)
+		if err != nil {
+			if stderr.Is(err, errors.ErrNotFound) {
+				res.NotFound = append(res.NotFound, uuid)
+				continue
+			}
+			return EnqueueDeleteResult{}, errors.New(op).WithErr(err).WithMsg("fetch QSO by uuid")
+		}
+		enqueueIDs = append(enqueueIDs, qso.ID)
+	}
+
+	if len(enqueueIDs) == 0 {
+		return res, nil
+	}
+
+	tx, cancel, err := s.DB.BeginTxContext(ctx)
+	if err != nil {
+		return EnqueueDeleteResult{}, errors.New(op).WithErr(err).WithMsg("begin transaction")
+	}
+	defer cancel()
+	for _, qsoID := range enqueueIDs {
+		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Delete, fwd.Name, fwd.Type); err != nil {
+			_ = tx.Rollback()
+			return EnqueueDeleteResult{}, errors.New(op).WithErr(err).WithMsg("insert delete upload-queue row")
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return EnqueueDeleteResult{}, errors.New(op).WithErr(err).WithMsg("commit transaction")
+	}
+	res.Enqueued = len(enqueueIDs)
+
+	s.Logger.InfoWith().
+		Str("forwarder", fwd.Name).
+		Str("type", fwd.Type).
+		Int("enqueued", res.Enqueued).
+		Int("skipped_live", len(res.SkippedLive)).
+		Msg("delete upload rows enqueued (reconcile repair)")
+	return res, nil
 }

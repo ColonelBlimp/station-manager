@@ -91,14 +91,49 @@ precisely so we don't re-derive state or redo finished work.
 >   -race clean; live smoke of every endpoint done. Store+server test suites now
 >   serialise via pg_advisory_lock (parallel packages, one dev DB).
 >   `docs/v2-design/sm-cloud-p1.md` status updated (S1+S2 built).
-> - **NEXT (priority order): (1) smcloud S3 — the `smcloud` forwarder**
->   (`internal/forwarding/smcloud/`, `AdifPrefix()==""`, full-QSO JSON to PUT /v1/qsos;
->   verify `forwarding.Result` fields + registration signature + credential_fields
->   first) **→ S4 reconcile (import `internal/cloud/reconcile`!) → S5 restore**; the
->   dogfood DB is still LOST — recovery is a QRZ ADIF import (`smd import <file.adi>`,
->   daemon stopped, NO `--forward`). (2) dogfood-validate today's map features + the
->   abandon fix on air; (3) carried: on-air type-4 → ADR 0048 flip; whole-log Dashboard
->   map (needs the `GET /v1/logbook/{id}/map` aggregate).
+> - **SMCLOUD S3 BUILT (same session, later still) — the `smcloud` forwarder;
+>   UNCOMMITTED for operator review.** `internal/forwarding/smcloud/` registers type
+>   `smcloud` ("SM Cloud backup", insert/update/delete; creds url/token/logbook —
+>   NO default endpoints so it is NOT auto-seeded, the operator adds it via the config
+>   SPA's data-driven form; NO adif prefix → the worker's plain-mark path never touches
+>   the QSO row, protecting `modified_at` for reconcile). **`types.Qso` gained
+>   `ModifiedAt`/`DeletedAt` `json:"-"`** (LastRefreshedAt column-only pattern, overlaid
+>   in `adapters.QsoModelToType`) so the envelope can carry the row's drift signal;
+>   Submit treats zero-modified_at/no-UUID as Terminal (never a silent now()), stale
+>   `applied:0` as Success, and mirrors qrz's outcome matrix (no response →
+>   Unreachable/forever-retry per ADR 0038). Blank-imported in cmd/smd + UserAgent
+>   wired. Tests: 11 in-package (wire shape incl. modified_at-stays-out-of-payload,
+>   tombstone, outcome matrix, guards, registry posture) + `TestSubmit_AgainstRealCloudServer`
+>   (end-to-end vs the REAL internal/cloud/server + Postgres: deep-equal payload
+>   round-trip, stale no-clobber, tombstone). Affected suites green (types, database,
+>   forwarding, api, qsoservice, adif, cmd/smd). sm-cloud-p1.md S3 section updated
+>   (two deliberate deltas from the sketch documented there).
+> - **SMCLOUD S4 BUILT (same session, later again) — reconcile detect+heal;
+>   UNCOMMITTED for operator review.** `smcloud.Reconciler` (same ForwarderConfig as
+>   the forwarder; hourly loop + 2-min startup delay under the worker ctx in cmd/smd;
+>   on-demand **POST /v1/smcloud/reconcile**, 503 until an enabled smcloud forwarder
+>   exists — api-endpoints.md updated). Local hash: new `sqlite.FetchQsoManifestWithContext`
+>   → shared `internal/cloud/reconcile.Summary`. Heal: upserts via EnqueueUploads
+>   (force), missed tombstones via NEW `qsoservice.EnqueueDeleteUploads` (+
+>   `findEnabledForwarderFor` refactor). Local authoritative — cloud-only/cloud-newer
+>   counted+logged, never touched; 5000/run cap. **Two protocol bugs found by tests,
+>   fixed in BOTH readers (adapter + manifest query): NULL-until-first-edit
+>   modified_at → created_at fallback; created_at sub-second vs trigger whole-second →
+>   truncate to SECONDS** (else a same-second edit/delete reads as a stale push
+>   forever). Tests: 11 diff-table cases, `TestReconciler_EndToEnd` (real sqlite +
+>   qsoservice vs real cloud server + Postgres: first backfill → drain → in-sync →
+>   missed delete → tombstone heal → in-sync), EnqueueDeleteUploads/manifest
+>   integration, api handler 503/200/500. All affected suites green; gofmt/vet clean.
+> - **NEXT (priority order): (1) smcloud S5 — restore** (`smd restore` pulling GET
+>   /v1/export, inserting with UUID + additional_data + modified_at preserved — NEVER
+>   ADIF re-import; verify whether `qsoservice.SubmitImport` accepts an existing UUID
+>   or needs a restore path; test = back up → wipe → restore → deep-equal); the
+>   dogfood DB is still LOST — with S2–S4 built, the QRZ ADIF import (`smd import`,
+>   daemon stopped, NO `--forward`) + an enabled smcloud forwarder would give a real
+>   backup immediately. (2) S6 hosting (VPS + Postgres + reverse-proxy TLS) when S5
+>   lands; (3) dogfood-validate the map features + the abandon fix on air; (4) carried:
+>   on-air type-4 → ADR 0048 flip; whole-log Dashboard map (needs the
+>   `GET /v1/logbook/{id}/map` aggregate).
 
 > **Session 216 (2026-07-16→17) — FIRST-RUN SETUP GATE in frontend/app, committed by the
 > operator as `80e1faa3` (feat(setup)).** Fallout of the lost dogfood DB (the operator hit

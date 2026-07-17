@@ -92,6 +92,14 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Response:** **200**, body `{"enqueued": N, "skipped_uploaded": M, "skipped_deleted"?: ["…"], "not_found"?: ["…"]}`.
 - **Errors:** 400 `invalid_forwarder` (empty name); 400 `missing_required_field` (empty `uuids`); 400 `batch_too_large` (> 5000 uuids); 400 `forwarder_unavailable` (forwarder unknown, **disabled**, or doesn't forward inserts — a disabled forwarder has no worker and gets its queue rows discarded at startup, so enqueuing would strand them); 400 malformed body; 500 `enqueue_failed`.
 
+### `POST /v1/smcloud/reconcile`
+- **Purpose:** On-demand SM Cloud reconcile (ADR 0040 S4) — run one detect+heal pass NOW instead of waiting for the hourly loop: compute the local live-row `{count, hash}` (the shared `internal/cloud/reconcile` summary), compare with the cloud's, and on mismatch diff the two manifests and re-enqueue diverged UUIDs through the smcloud forwarder's queue (upserts via the backfill path, missed tombstones via delete rows). The operator's "back up / check now" button.
+- **Gating:** Wired only when an **enabled `smcloud` forwarder** exists at startup (cmd/smd injects the reconciler); otherwise the route answers 503.
+- **Request:** No body.
+- **Behaviour:** Synchronous, bounded at 25 s. Local is authoritative: cloud-only rows (e.g. a previous DB generation) and cloud-newer rows are counted + logged, never touched. Heal batches cap at 5000 per run (`truncated: true` → the next run continues). Safe alongside the periodic loop — duplicate queue rows are absorbed by the cloud's idempotent UUID upsert.
+- **Response:** **200**, body `{"in_sync": bool, "local_count": N, "cloud_count": N, "cloud_logbook_id": id, "enqueued_upserts": N, "enqueued_deletes": N, "cloud_only": N, "cloud_newer": N, "truncated": bool, "local_hash": "…"}`. `cloud_logbook_id: 0` = the logbook doesn't exist cloud-side yet (the first backfill was just enqueued).
+- **Errors:** 503 `smcloud_unavailable` (no enabled smcloud forwarder configured); 500 `reconcile_failed` (cloud unreachable / local read failed — the periodic loop retries regardless).
+
 ---
 
 ## Logbook

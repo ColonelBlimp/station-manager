@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -84,6 +85,24 @@ func QsoModelToType(model *models.Qso) (types.Qso, error) {
 	qso.ID = model.ID
 	qso.UUID = model.UUID
 	qso.LogbookID = model.LogbookID
+	// Storage metadata (json:"-" on types.Qso — column-only, never in the
+	// blob): the SM Cloud reconcile drift signal + the soft-delete tombstone.
+	// modified_at is NULL until the update trigger first fires (no INSERT
+	// default), so a never-edited row's modified time IS its creation time —
+	// the same fallback the reconcile manifest query applies; the two readers
+	// MUST agree or reconcile sees phantom drift on fresh rows.
+	//
+	// Truncated to SECONDS: the update trigger (datetime('now')) defines the
+	// local modified_at protocol precision as one second, while sqlboiler's
+	// created_at carries sub-second digits. Un-truncated, a same-second
+	// edit/delete after the first push would carry a modified_at BELOW the
+	// cloud's stored (created_at-derived) value and be rejected as a stale
+	// push forever — reconcile would re-enqueue it every cycle.
+	qso.ModifiedAt = model.ModifiedAt.Time.UTC().Truncate(time.Second)
+	if !model.ModifiedAt.Valid {
+		qso.ModifiedAt = model.CreatedAt.UTC().Truncate(time.Second)
+	}
+	qso.DeletedAt = model.DeletedAt.Time
 	qso.ContactedStation.Call = model.Call
 	qso.ContactedStation.Country = model.Country
 	qso.QsoDetails.Band = model.Band

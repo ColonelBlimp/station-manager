@@ -30,6 +30,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/clublog" // registers "clublog" forwarder + default retry via init(); main also sets clublog.UserAgent below
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"     // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud" // registers "smcloud" forwarder (ADR 0040 backup client) via init(); main also sets smcloud.UserAgent below
 	// The test-only "stub" forwarder is registered ONLY in dev builds (-tags dev,
 	// see forwarder_stub_dev.go) — never in a release binary, so a production
 	// config can't select type:"stub" and get fake "uploaded" status without
@@ -222,6 +223,7 @@ func run() error {
 	// User-Agent header. Set after the UA is final.
 	qrz.UserAgent = cfg.UserAgent
 	clublog.UserAgent = cfg.UserAgent
+	smcloud.UserAgent = cfg.UserAgent
 
 	container := iocdi.New()
 
@@ -493,6 +495,39 @@ func run() error {
 		return errors.New(op).WithErr(err).WithMsg("spawn forwarder workers")
 	}
 
+	// ---- SM Cloud reconcile (ADR 0040 S4) ----
+	// One reconciler for the first enabled smcloud forwarder, guarding the
+	// default logbook: a periodic detect+heal loop under the worker context
+	// (its heal traffic rides that forwarder's queue, so it shares the
+	// workers' lifecycle + WG drain), plus the on-demand
+	// POST /v1/smcloud/reconcile wired onto the API server below.
+	var smcloudRec *smcloud.Reconciler
+	for _, fc := range cfg.Forwarders {
+		if !fc.Enabled || fc.Type != smcloud.Type {
+			continue
+		}
+		if cfg.DefaultLogbookID < 1 {
+			loggerSvc.WarnWith().Str("forwarder", fc.Name).
+				Msg("smcloud reconciler skipped: no default logbook yet (first-run setup pending)")
+			break
+		}
+		rec, rerr := smcloud.NewReconciler(fc, cfg.DefaultLogbookID, dbSvc, qsoSvc, loggerSvc)
+		if rerr != nil {
+			return errors.New(op).WithErr(rerr).WithMsgf("build smcloud reconciler for %q", fc.Name)
+		}
+		smcloudRec = rec
+		reconcilePanic := func(name string, pv any, stack []byte) {
+			loggerSvc.ErrorWith().Str("goroutine", name).Interface("panic", pv).
+				Bytes("stack", stack).Msg("smcloud reconciler panic recovered")
+		}
+		safego.GoTracked(workerCtx, fc.Name+"-reconcile", reconcilePanic, func() {
+			rec.Run(workerCtx)
+		}, true, &workerWG)
+		loggerSvc.InfoWith().Str("forwarder", fc.Name).
+			Int64("logbook_id", cfg.DefaultLogbookID).Msg("smcloud reconciler started")
+		break // single smcloud destination in P1 — first enabled wins
+	}
+
 	// ---- Build enrichment pipeline (ADR 0017) ----
 	// Constructs the lookup providers (hamnut + chain entries) from
 	// operator config, the bounded async-refresh worker, and the
@@ -759,6 +794,13 @@ func run() error {
 
 	// ---- Start HTTP server ----
 	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc, bridgeSvc, ft8Svc)
+	if smcloudRec != nil {
+		// On-demand reconcile (the "back up / check now" action) — same
+		// Reconciler instance as the periodic loop.
+		server.SetSmcloudReconcile(func(ctx context.Context) (any, error) {
+			return smcloudRec.RunOnce(ctx)
+		})
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
