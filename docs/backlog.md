@@ -50,7 +50,7 @@ next, and in what order" is answered.
 - **▶ was-NEXT (bumped 2026-07-05):** _Re-enrich a logged QSO._ **SHIPPED as the frontend/app logbook-page Re-enrich repair path (session 212, 2026-07-13).** Companion **manual FAQ** on the name-missing cause/remedy still open (small). _(Relocate this line to the archive once the FAQ lands.)_
 - _SPA architecture (post-ship · ADR 0044):_ consolidate logging+config+logbook into **one app shell** (dashboard + Operate[Phone/CW+FT8] + Logbook + Settings; manual stays zero-JS — 3→1). **Subsumes** the _UI cohesion_ cluster below (theme built into the shell from the first commit). Gated behind the 7Q8AC ship.
 - _UI cohesion:_ shared theme layer (token convergence) → UI themes + dark mode → FT8 Spectrum colour revision · version-in-tab-title
-- _FT8:_ ~~reduced type-4 compound QSO ladder (`/D` / prefix-compound)~~ **BUILT 2026-07-16 (ADR 0048), on-air pending** · type-4 free-text messages · type-4 work-a-caller SPA trigger (deferred — hashed-us ambiguity) · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW) · work-path opening: prefer clean next-slot start over truncated immediate fire
+- _FT8:_ ~~reduced type-4 compound QSO ladder (`/D` / prefix-compound)~~ **BUILT 2026-07-16 (ADR 0048), on-air pending** · type-4 free-text messages · type-4 work-a-caller SPA trigger (deferred — hashed-us ambiguity) · attempt-limit SPA control · callsign ignore list · Call-CQ waiting feedback · Call-CQ abandon → work a live answerer (layer 1 SHIPPED 2026-07-17; recency pool open) · offset-picker no-overlap snap · same-session dupe → auto-workers · accumulate-mode duplicate rows → slot-grouped display · footer info-strip rehome · shift+ctrl freq-step key parity in FT8 (match phone/CW) · work-path opening: prefer clean next-slot start over truncated immediate fire
 - _Forwarding / data:_ clear queued-upload backlog for a forwarder · configurable session-email subject/body · operator-email-address config field
 - _Infra:_ SPA SSE consolidation (one multiplexed stream) · `/v1/hardware` audio availability + enum caching · CI-V `sets_state` value-compat validation · `internal/iocdi` contract hardening · multi-tab operating-lock (ownership + take-over; awareness banner already shipped)
 - _Data / SM-Cloud prep (do before S3):_ ~~migration 0004~~ **DEPLOYED + VERIFIED 2026-07-05** on the live 5,148-QSO dogfood DB (`schema_migrations_log` v4 clean; 0 debris/unparseable rows; `created_at` matches `qso_date`/`time_on` in UTC) → move to archive · `internal/database` review lows (cold-insert retry, bootstrap stale-table detection, + 5 nits) — still open
@@ -353,6 +353,24 @@ next, and in what order" is answered.
   - **Attended either way:** operator initiates by calling CQ, is present, Abandon stops
     it instantly; **no auto-CQ cycle, no auto-fire-on-watch-match** — which is why this
     **supersedes the auto-responder framing** of the watch-list item above.
+
+- **FT8 Call-CQ: on contact abandon, work a live answerer instead of resuming CQ
+  (dogfood 2026-07-17, P2). LAYER 1 BUILT 2026-07-17; layer 2 (answerer pool) open.**
+  When the worked answerer goes silent and the contact hits `max_repeats`,
+  `onSlotCalling` used to drop it and transmit CQ — other stations answering us were
+  lost because the answerer scan (phase 1) runs only when `s.caller == nil` at the TOP
+  of a slot. (The RR73 completion path was always fine — next slot's phase-1 scan picks
+  a new answerer without an extra CQ.) **Layer 1 (shipped):** the max-repeats drop now
+  re-runs the answerer pick (extracted `pickAnswererLocked`, honours the answer-mode
+  knob + the M2 encodability skip) over the CURRENT slot's decodes and replies in the
+  same slot; CQ only when nobody else is calling. Test
+  `TestCallerSequencer_AbandonWorksLiveAnswererSameSlot`; needs on-air validation with
+  the rest of the caller side. **Layer 2 (open):** callers heard DURING the failed
+  contact's retry cycles (~2.5 min at 5 repeats) still leave no memory — accumulate
+  grid-answer decodes from non-worked stations during phase 2 into a recency-bounded
+  candidate pool (last K their-slots; prefer most-recent/strongest; validate
+  encodable), picked on abandon and after RR73 (tail-enders). The pool would also feed
+  the parked "Call-CQ waiting feedback" SPA item. Surface: `internal/ft8/caller_sequencer.go`.
 
 - **Spot-submitter registry — generalize when a 2nd destination lands (e.g. DX cluster).**
   PSK Reporter is the first "submit what I heard" destination. A **DX cluster spot submit**

@@ -94,7 +94,8 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 // auto_first, picks the first to work; phase 2 (caller != nil) advances the contact.
 // Either way it transmits in the current (our CQ) slot — the CQ until a contact
 // starts, then the caller ladder. On RR73 the QSO logs and we resume calling CQ (loop
-// the pile-up until Abandon — ADR 0033).
+// the pile-up until Abandon — ADR 0033). A contact abandoned at max repeats re-scans
+// the same slot for another live answerer before falling back to the CQ.
 func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now time.Time) {
 	s.mu.Lock()
 	if s.mode != seqCalling {
@@ -110,48 +111,11 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	var heard string
 	advanced := false
 	if s.caller == nil {
-		// Pick an answerer to our CQ ("<ourCall> <them> <grid>") whose reply encodes:
-		// auto_first takes the first by decode order; auto_strongest takes the
-		// highest-SNR one in the slot (clear the loud ones first). operator_pick is
-		// rejected before we ever reach seqCalling, so only the two auto modes land here.
-		strongest := s.answerMode == types.Ft8CallerAnswerAutoStrongest
-		var pick *CallerExchange
-		var pickText string
-		var pickSnr int
-		for _, m := range msgs {
-			pm := parseMessage(m.Text)
-			if pm.kind != msgGrid || pm.to != s.ourCall {
-				continue
-			}
-			// Validate OUR reply to this answerer encodes before committing to them
-			// (review M2). A compound/portable answerer (e.g. K1ABC/P) yields an
-			// unencodable response, which seqTransmit would treat as terminal and
-			// abandon the whole Call-CQ loop. Skip such an answerer and keep scanning
-			// this slot for an encodable one; if none, we simply keep calling CQ.
-			c := NewCallerExchange(s.ourCall, pm.from, pm.grid, m.SNR)
-			reply, ok := c.TxMessage()
-			if !ok {
-				continue
-			}
-			if _, err := goft8.EncodeStandardMessage(reply); err != nil {
-				s.log.InfoWith().Str("answerer", pm.from).
-					Msg("ft8 seq: skipping answerer — our reply does not encode (compound/portable call?)")
-				continue
-			}
-			if pick == nil || (strongest && m.SNR > pickSnr) {
-				pick = &c
-				pickText = m.Text
-				pickSnr = m.SNR
-			}
-			if !strongest {
-				break // auto_first: the first encodable answerer wins
-			}
-		}
-		if pick != nil {
+		if pick, text := s.pickAnswererLocked(msgs); pick != nil {
 			s.caller = pick
 			s.startedAt = now.UTC()
 			s.repeats = 0
-			heard = pickText
+			heard = text
 			advanced = true
 		}
 	} else {
@@ -204,7 +168,10 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 
 	// Repeat cap / off-ramp:
 	//   - working a contact, pre-RR73: cap unanswered repeats; if the answerer goes
-	//     silent, drop the contact and resume calling CQ.
+	//     silent, drop the contact and work another live answerer from THIS slot's
+	//     decodes — the pile-up kept calling while we worked the silent one, and a
+	//     CQ here would waste their replies (dogfood 2026-07-17). Only when nobody
+	//     else is calling do we resume the CQ.
 	//   - calling CQ (no contact yet): NO cap — calling CQ is the operator's standing
 	//     intent; we keep calling until answered or Abandoned.
 	working := s.caller != nil
@@ -214,8 +181,19 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		if s.repeats >= s.maxRepeats {
 			s.caller = nil
 			s.repeats = 0
-			s.log.InfoWith().Msg("ft8 seq: caller — answerer silent after max repeats; resuming CQ")
-			msg, rung = s.cqMessage, "calling-cq"
+			if pick, text := s.pickAnswererLocked(msgs); pick != nil {
+				s.caller = pick
+				s.startedAt = now.UTC()
+				heard = text
+				if m, ok := pick.TxMessage(); ok { // encodability pinned by the pick
+					msg, rung = m, pick.State.label()
+				}
+				s.log.InfoWith().Str("next_answerer", pick.TheirCall).
+					Msg("ft8 seq: caller — answerer silent after max repeats; working next live answerer")
+			} else {
+				s.log.InfoWith().Msg("ft8 seq: caller — answerer silent after max repeats; resuming CQ")
+				msg, rung = s.cqMessage, "calling-cq"
+			}
 		} else {
 			s.repeats++
 		}
@@ -289,6 +267,47 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		}
 	}
 	s.publish(st)
+}
+
+// pickAnswererLocked scans one slot's decodes for an answerer to our CQ
+// ("<ourCall> <them> <grid>") whose reply encodes: auto_first takes the first by
+// decode order; auto_strongest the highest-SNR one in the slot (clear the loud
+// ones first). operator_pick is rejected before seqCalling is ever entered, so
+// only the two auto modes reach this. A compound/portable answerer (e.g.
+// K1ABC/P) yields an unencodable response, which seqTransmit would treat as
+// terminal and abandon the whole Call-CQ loop (review M2) — such an answerer is
+// skipped and the scan continues; nil when the slot holds no workable answerer.
+// Returns the pick and its decode text. Caller holds s.mu.
+func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage) (*CallerExchange, string) {
+	strongest := s.answerMode == types.Ft8CallerAnswerAutoStrongest
+	var pick *CallerExchange
+	var pickText string
+	var pickSnr int
+	for _, m := range msgs {
+		pm := parseMessage(m.Text)
+		if pm.kind != msgGrid || pm.to != s.ourCall {
+			continue
+		}
+		c := NewCallerExchange(s.ourCall, pm.from, pm.grid, m.SNR)
+		reply, ok := c.TxMessage()
+		if !ok {
+			continue
+		}
+		if _, err := goft8.EncodeStandardMessage(reply); err != nil {
+			s.log.InfoWith().Str("answerer", pm.from).
+				Msg("ft8 seq: skipping answerer — our reply does not encode (compound/portable call?)")
+			continue
+		}
+		if pick == nil || (strongest && m.SNR > pickSnr) {
+			pick = &c
+			pickText = m.Text
+			pickSnr = m.SNR
+		}
+		if !strongest {
+			break // auto_first: the first encodable answerer wins
+		}
+	}
+	return pick, pickText
 }
 
 // completedCallerQsoLocked captures the finished caller-side contact for logging.

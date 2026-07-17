@@ -100,8 +100,11 @@ on any PUT):
   **FIFO** regardless of this knob — the mode governs only the hands-off
   auto-answerer.)
 - **`tx.max_repeats`** — how many times the sequencer re-sends an unanswered rung
-  before it auto-abandons the contact (ADR 0031 off-ramp; the caller side resumes
-  CQ instead of abandoning). Default **6** (~90 s of calling); `0`/absent → default.
+  before it auto-abandons the contact (ADR 0031 off-ramp; the caller side drops the
+  silent contact and, since 2026-07-17, first re-scans that slot's decodes for
+  another live answerer — the pile-up kept calling while we worked the silent one —
+  working them immediately and only resuming CQ when nobody else is calling).
+  Default **6** (~90 s of calling); `0`/absent → default.
   **Hard-clamped to ≤ 10** (`Ft8MaxRepeatsCeiling`) — a safety bound like the
   tune-power / auto-off clamps, so no config value can leave the rig calling a dead
   station for minutes. Surfaced to the SPA as a per-rung "N calls left" countdown in
@@ -403,7 +406,7 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   attempts-remaining countdown** (`· N calls left`) while the current rung is subject
   to the auto-abandon cap (`ft8.tx.max_repeats`, default 6): it counts down each
   unanswered slot and reaches 0 on the slot before the sequencer abandons (or, on the
-  caller side, resumes CQ). The daemon advertises the cap (`max_repeats`) on the
+  caller side, works another live answerer / resumes CQ). The daemon advertises the cap (`max_repeats`) on the
   `ft8-qso` payload **only on the rungs it governs**, so the countdown shows iff
   `max_repeats > 0` — it's absent on the uncapped calling-CQ rung and the one-shot
   73/RR73.

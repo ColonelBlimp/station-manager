@@ -154,6 +154,39 @@ func TestCallerSequencer_DropsSilentAnswererResumesCq(t *testing.T) {
 	require.Equal(t, "CQ 7Q5MLV KH78", sent[len(sent)-1], "resumed calling CQ")
 }
 
+// Dogfood 2026-07-17: when the worked answerer goes silent and the contact hits max
+// repeats, another station answering us in the SAME slot is worked immediately — the
+// abandon slot replies to them instead of wasting a CQ on a live pile-up.
+func TestCallerSequencer_AbandonWorksLiveAnswererSameSlot(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)}) // DL9UW answers → reporting
+	require.Equal(t, "DL9UW", s.caller.TheirCall)
+
+	// DL9UW goes silent, but 9A4ZM keeps answering our CQ every slot.
+	other := []goft8.DecodedMessage{dm("7Q5MLV 9A4ZM JN95", -6)}
+	for i := int64(0); i < int64(s.maxRepeats)+1; i++ {
+		driveTheir(s, 60+i*30, other)
+	}
+
+	require.True(t, s.Active())
+	require.NotNil(t, s.caller, "abandon must pick up the live answerer, not drop to CQ")
+	require.Equal(t, "9A4ZM", s.caller.TheirCall)
+	sent := r.sentMsgs()
+	require.Equal(t, "9A4ZM 7Q5MLV -06", sent[len(sent)-1],
+		"the abandon slot replies to the live answerer instead of calling CQ")
+	require.NotContains(t, sent, "CQ 7Q5MLV KH78",
+		"no CQ wasted between the two contacts")
+
+	// The new contact completes and logs normally.
+	last := 60 + (int64(s.maxRepeats)+1)*30
+	driveTheir(s, last+30, []goft8.DecodedMessage{dm("7Q5MLV 9A4ZM R-12", -6)})
+	require.Len(t, r.completed, 1)
+	require.Equal(t, "9A4ZM", r.completed[0].TheirCall)
+	require.Equal(t, "JN95", r.completed[0].TheirGrid, "grid captured from the abandon-slot answer")
+}
+
 // review M2: an auto-first slot whose first answerer is a compound/portable call
 // (our reply to it can't encode) must be SKIPPED, not abandon the whole pile-up —
 // we fall through to the next encodable answerer in the same slot.
