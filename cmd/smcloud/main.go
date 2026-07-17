@@ -43,7 +43,7 @@ var Version = "dev"
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "smcloud: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "smcloud: %v\n", err)
 		os.Exit(1)
 	}
 }
