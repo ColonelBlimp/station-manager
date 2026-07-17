@@ -1,0 +1,46 @@
+# SM Cloud backup service — systemd unit (ADR 0040 S6).
+# Install: /etc/systemd/system/smcloud.service on the VPS.
+# Config:  /etc/smcloud/smcloud.env (root:root 0600 — holds the bearer token
+#          and the Postgres password; see smcloud.env.example).
+# Full runbook: docs/smcloud-deploy.md.
+
+[Unit]
+Description=SM Cloud backup service (smcloud)
+Documentation=https://github.com/ColonelBlimp/station-manager
+Wants=network-online.target
+After=network-online.target postgresql.service
+
+[Service]
+Type=simple
+# smcloud keeps NO local state (Postgres holds everything), so a transient
+# dynamic user is the perfect fit — no account to provision, nothing on disk.
+DynamicUser=yes
+EnvironmentFile=/etc/smcloud/smcloud.env
+ExecStart=/usr/local/bin/smcloud
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the service needs the network and nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+# Caddy reverse proxy for smcloud — automatic Let's Encrypt TLS (ADR 0040 S6).
+# Install: append to /etc/caddy/Caddyfile (distro package `caddy`), set your
+# hostname, then `systemctl reload caddy`. DNS for the hostname must already
+# point at the VPS. Full runbook: docs/smcloud-deploy.md.
+
+cloud.station-manager.org {
+	# smcloud listens on loopback only (SMCLOUD_LISTEN=127.0.0.1:8091);
+	# Caddy terminates TLS and proxies. Bearer auth is smcloud's own.
+	reverse_proxy 127.0.0.1:8091
+
+	# A full-logbook export/backfill on a slow link can be long-running.
+	# Caddy's defaults have no response timeout, so nothing to raise here —
+	# this block exists so a future timeout tweak has an obvious home.
+}

@@ -223,6 +223,17 @@ ops call (well-connected region, not Malawi). P2 multi-tenant onboarding of
 7Q8AC *after* the security assessment (auth model: trust-on-provisioning,
 per-tenant tokens — ADR 0040 § Identity).
 
+**ARTIFACTS BUILT 2026-07-17; provisioning is the operator's remaining step.**
+`task build:smcloud` produces a fully STATIC linux binary (pure Go — no CGO, no
+glibc floor, scp to any VPS); `deploy/smcloud/` holds the hardened systemd unit
+(DynamicUser — smcloud keeps no local state), the env-file template (loopback
+listen, DSN, callsign, token), and a Caddyfile example (automatic Let's Encrypt;
+smcloud never terminates TLS). The step-by-step runbook —
+decisions → build → Postgres → unit → TLS → daemon wiring → first-backfill
+verify → operations (pg_dump cron, upgrades, restore drill, token rotation) —
+is **`docs/smcloud-deploy.md`** (Tier 1). Migrations self-apply at service
+boot, so a VPS deploy never runs a migration CLI.
+
 ## Invariants held
 
 - **Narrow daemon scope** — `smcloud` is just a `Forwarder`; log/forward code is

@@ -202,6 +202,15 @@ tasks:
     cmds:
       - CGO_ENABLED=1 go build -tags "dev pocketfft" -ldflags="-X main.Version={{.SM_VERSION}}" -o build/bin/smd ./cmd/smd
 
+  build:smcloud:
+    desc: |
+      Build the SM Cloud backup service (cmd/smcloud) as a fully STATIC
+      linux binary — pure Go throughout (lib/pq + golang-migrate, no CGO),
+      so the one file scp's to any Linux VPS with zero runtime deps.
+      Output: build/bin/smcloud. Deploy runbook: docs/smcloud-deploy.md.
+    cmds:
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.Version={{.SM_VERSION}}" -o build/bin/smcloud ./cmd/smcloud
+
   rpm:dev:
     desc: |
       Build a development RPM ready for local install. Output:

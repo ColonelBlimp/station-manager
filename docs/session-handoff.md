@@ -141,14 +141,23 @@ precisely so we don't re-derive state or redo finished work.
 >   (modified_at survived the whole cycle); idempotent re-run all-skips. e2e local
 >   stacks moved :memory:→temp-file DBs (shared-cache :memory: is process-wide — two
 >   "machines" were one DB). All affected suites + -race green; gofmt/vet clean.
-> - **NEXT (priority order): (1) smcloud LIVE DOGFOOD** — the DB is still LOST; the
->   recovery+backup sequence is now fully buildable end-to-end: QRZ ADIF import
->   (`smd import <file.adi>`, daemon stopped, NO `--forward`) → stand up `cmd/smcloud`
->   (needs a Postgres; `task db:pg:up` locally or the S6 VPS) → add the smcloud
->   forwarder (config SPA, url+token) → the reconciler's first pass backfills the
->   whole logbook → `POST /v1/smcloud/reconcile` to verify in_sync. **(2) S6 hosting**
->   (VPS + managed Postgres + reverse-proxy TLS + systemd) — the last P1 piece;
->   (3) dogfood-validate the map features + the abandon fix on air; (4) carried:
+> - **SMCLOUD S6 ARTIFACTS BUILT (same session) — deployment is now a runbook walk;
+>   UNCOMMITTED for operator review.** `task build:smcloud` (fully STATIC pure-Go
+>   linux binary, version-stamped, 7.2 MB — verified);
+>   **`deploy/smcloud/`**: hardened systemd unit (DynamicUser + full sandbox,
+>   systemd-analyze-verified), `smcloud.env.example` (loopback listen; token via
+>   `openssl rand -base64 32`), `Caddyfile.example` (auto-TLS). Runbook
+>   **`docs/smcloud-deploy.md`** (added to the Tier-1 map): decisions (VPS/region —
+>   well-connected not Malawi; hostname e.g. cloud.station-manager.org; distro
+>   Postgres recommended for P1) → build/scp → Postgres → unit → Caddy → daemon
+>   forwarder wiring → first-backfill verify (`POST /v1/smcloud/reconcile` →
+>   in_sync) → ops (pg_dump backup-of-the-backup cron, binary-swap upgrades,
+>   restore drill, token rotation). Migrations self-apply at service boot.
+> - **NEXT (priority order): (1) smcloud GO-LIVE (operator ops)** — provision the
+>   VPS + DNS, then walk `docs/smcloud-deploy.md`; local recovery first: QRZ ADIF
+>   import (`smd import <file.adi>`, daemon stopped, NO `--forward`), then the
+>   forwarder+reconciler backfill the rebuilt logbook to the cloud automatically.
+>   (2) dogfood-validate the map features + the abandon fix on air; (3) carried:
 >   on-air type-4 → ADR 0048 flip; whole-log Dashboard map (needs the
 >   `GET /v1/logbook/{id}/map` aggregate).
 
