@@ -199,8 +199,15 @@ type Service struct {
 	tuneRestoreMode  string
 	tuneRestorePower int
 	tuneTimer        *time.Timer
-	lastMode         string
-	lastPower        int
+	// tuneGen is the tune path's TX-transition generation (mu-guarded),
+	// bumped on every key/finish/disconnect-clear. The auto-off backstop
+	// captures the generation it was armed for and refuses to release or
+	// re-arm against a DIFFERENT generation — without it, a stale failed-
+	// release retry callback could attach to (and prematurely unkey) a
+	// newer transmission (2026-07-18 TX-safety review, finding 6).
+	tuneGen   uint64
+	lastMode  string
+	lastPower int
 
 	// Rolling current-rig dial snapshot, mu-guarded, fed by readLoop alongside
 	// lastMode/lastPower. lastVfoA/lastVfoB are the per-VFO frequencies (Hz),
@@ -241,6 +248,8 @@ type Service struct {
 	ft8TxActive      bool
 	ft8TxRestoreMode string
 	ft8TxTimer       *time.Timer
+	// ft8TxGen mirrors tuneGen for the FT8-TX path (finding 6).
+	ft8TxGen uint64
 
 	// strandedKeyed (mu-guarded) records that a pipeline teardown could NOT unkey
 	// a keyed rig — F1(a)'s teardown tx_off write failed (a dead port), so the rig
@@ -477,12 +486,22 @@ func (s *Service) RigConnected() bool {
 	if s == nil {
 		return false
 	}
-	if s.noDataStrikes.Load() >= noDataStrikeLimit {
-		return false
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.activeClient != nil && s.identityConfirmed
+	return s.rigWritableLocked()
+}
+
+// rigWritableLocked is THE live/write-ready predicate every mutating entry
+// point agrees on (2026-07-18 TX-safety review, finding 3): port captured,
+// identity confirmed (H2), and the liveness strike count below the disconnect
+// limit — a rig the bridge already reads as non-responsive (RigConnected
+// false) must not be keyable or commandable either; before this, TxReady /
+// KeyFt8Tx / StartTune / SendCommands ignored strikes and would happily key a
+// connection the readLoop had declared dead. Caller holds s.mu (the strike
+// counter itself is atomic; folding it here keeps one predicate, not four).
+func (s *Service) rigWritableLocked() bool {
+	return s.activeClient != nil && s.identityConfirmed &&
+		s.noDataStrikes.Load() < noDataStrikeLimit
 }
 
 // Subscribe registers a new SSE subscriber. Returns the receive-only
@@ -546,8 +565,19 @@ func (s *Service) TriggerBootstrap(ctx context.Context) error {
 	cl := s.activeClient
 	bb := s.bootstrapBytes
 	civ := s.bootstrapCIV
+	keyed := s.tuneActive || s.ft8TxActive
 	s.mu.Unlock()
 	if cl == nil || len(bb) == 0 {
+		return nil
+	}
+	// CI-V only: while a transmission is keyed, a multi-frame bootstrap would
+	// hold cmdMu for seconds directly ahead of an emergency tx_off on the same
+	// mutex (2026-07-18 TX-safety review, finding 5). Skip — the subscriber
+	// still gets live pushes, and the next bootstrap/poll fills the snapshot
+	// once the carrier is down. Yaesu bootstraps are one cmdMu-free write and
+	// stay as they were.
+	if civ && keyed {
+		s.logger.DebugWith().Msg("bridge: skipping CI-V bootstrap snapshot while TX is keyed")
 		return nil
 	}
 	// CI-V: serialise behind cmdMu so a new subscriber's bootstrap READ burst

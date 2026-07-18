@@ -141,6 +141,13 @@ func (s *Service) StartTune(ctx context.Context) error {
 		s.mu.Unlock()
 		return errors.New(errOp).WithErr(ErrRigIdentityUnverified)
 	}
+	// Never key a rig the liveness strikes already read as non-responsive
+	// (finding 3): keying a dead link strands the carrier with no working
+	// unkey path.
+	if !s.rigWritableLocked() {
+		s.mu.Unlock()
+		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsg("rig not responding (liveness strikes)")
+	}
 	// Snapshot the restore target NOW, before keying. captureTuneSnapshot
 	// freezes lastMode/lastPower for the duration of the tune, so the rig's
 	// own RTTY/tune-power pushes can't overwrite what we'll restore to.
@@ -149,7 +156,12 @@ func (s *Service) StartTune(ctx context.Context) error {
 	s.tuneActive = true
 	// Arm the backstop together with tuneActive (atomic under mu) so the
 	// guaranteed stop exists from the instant we commit to transmitting.
-	s.tuneTimer = time.AfterFunc(s.tuneMaxDuration, s.tuneAutoOff)
+	// Bump the TX-transition generation and arm the backstop AGAINST it: the
+	// callback may only release/re-arm its own generation (finding 6 — a stale
+	// failed-release retry must not attach to a newer transmission).
+	s.tuneGen++
+	tuneGen := s.tuneGen
+	s.tuneTimer = time.AfterFunc(s.tuneMaxDuration, func() { s.tuneAutoOff(tuneGen) })
 	s.mu.Unlock()
 
 	// CI-V waits for the rig's FB/FA so a rejected/dropped key fails here (and
@@ -284,6 +296,7 @@ func (s *Service) releaseTune(ctx context.Context, reason string) error {
 func (s *Service) finishTune() {
 	s.mu.Lock()
 	s.tuneActive = false
+	s.tuneGen++ // invalidate any in-flight auto-off callback (finding 6)
 	if s.tuneTimer != nil {
 		s.tuneTimer.Stop()
 		s.tuneTimer = nil
@@ -302,11 +315,22 @@ func (s *Service) finishTune() {
 // eventually: the timer loops until the unkey succeeds or the rig disconnects
 // (clearTuneOnDisconnect cancels it; a watchdog-closed port surfaces as a
 // terminal serial error → pipeline teardown → clearTuneOnDisconnect).
-func (s *Service) tuneAutoOff() {
+// gen is the TX-transition generation this callback was armed for: the
+// callback releases and re-arms ONLY its own generation, so a stale retry
+// (armed for a transmission that has since been stopped and replaced) can
+// never unkey the newer one (finding 6). Timer.Stop can't cancel an
+// already-executing callback — the generation check is what makes that safe.
+func (s *Service) tuneAutoOff(gen uint64) {
+	s.mu.Lock()
+	stale := !s.tuneActive || s.tuneGen != gen
+	s.mu.Unlock()
+	if stale {
+		return
+	}
 	if err := s.releaseTune(context.Background(), "auto-off"); err != nil {
 		s.mu.Lock()
-		if s.tuneActive {
-			s.tuneTimer = time.AfterFunc(tuneRetryInterval, s.tuneAutoOff)
+		if s.tuneActive && s.tuneGen == gen {
+			s.tuneTimer = time.AfterFunc(tuneRetryInterval, func() { s.tuneAutoOff(gen) })
 		}
 		s.mu.Unlock()
 		return
@@ -324,6 +348,7 @@ func (s *Service) clearTuneOnDisconnect() {
 	s.mu.Lock()
 	wasActive := s.tuneActive
 	s.tuneActive = false
+	s.tuneGen++ // invalidate any in-flight auto-off callback (finding 6)
 	if s.tuneTimer != nil {
 		s.tuneTimer.Stop()
 		s.tuneTimer = nil

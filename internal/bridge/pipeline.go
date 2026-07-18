@@ -486,9 +486,18 @@ func (s *Service) runPollLoop(ctx context.Context, client serial.Client, pollByt
 		case <-ticker.C:
 			s.mu.Lock()
 			busy := time.Since(s.lastBroadcastAt) < s.civPollQuiet
+			keyed := s.tuneActive || s.ft8TxActive
 			s.mu.Unlock()
 			if busy {
 				continue // collision back-off: rig is mid-broadcast (dial spin)
+			}
+			if keyed {
+				// While a transmission is keyed, the multi-frame snapshot would
+				// hold cmdMu for seconds (five frames × the inter-frame gap) —
+				// directly ahead of an emergency tx_off waiting on the same
+				// mutex (2026-07-18 TX-safety review, finding 5). The mirror
+				// state can wait a tick; the unkey cannot.
+				continue
 			}
 			err := s.underCmdMuCIV(true, func() error {
 				return s.writeSnapshotReads(ctx, client, true, pollBytes)
@@ -576,6 +585,11 @@ func (s *Service) runSupervisor(ctx context.Context) {
 func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.RigDefinition, initBytes, readBytes []byte) pipelineExitClass {
 	announcedDisconnect := false
 	identityVerified := false
+	// unrecognisedPublished rate-limits the identity-unrecognised bridge-error
+	// to once per pipeline instance now that an unrecognised ID no longer
+	// latches identityVerified (finding 7) — without it every subsequent frame
+	// would re-publish the same error.
+	unrecognisedPublished := false
 	for {
 		readCtx, cancel := context.WithTimeout(ctx, s.livenessTimeout)
 		line, err := client.ReadResponseBytes(readCtx)
@@ -709,16 +723,25 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 				identityVerified = true
 				s.setIdentityConfirmed(true)
 			} else if v, ok := status["IDENTITY"]; ok {
-				identityVerified = true
 				switch classifyIdentity(v, def.Model) {
 				case identityUnrecognised:
 					// Rig answered with an ID code this rigdef doesn't map.
 					// Not a definite wrong-rig (could be an unlisted variant),
 					// so keep reading state for display + diagnosis — but
 					// identity is never confirmed, so the operator write paths
-					// stay blocked (H2).
-					s.publishBridgeError(BridgeErrCodeIdentityUnrecognised, map[string]string{"driver": def.ID})
+					// stay blocked (H2). Deliberately does NOT latch
+					// identityVerified: a garbled first ID (line noise during
+					// connect) must not permanently write-block the instance —
+					// a later exact-match IDENTITY frame re-classifies and
+					// confirms (2026-07-18 TX-safety review, finding 7). The
+					// bridge-error publishes once per instance (latch below),
+					// not per frame.
+					if !unrecognisedPublished {
+						unrecognisedPublished = true
+						s.publishBridgeError(BridgeErrCodeIdentityUnrecognised, map[string]string{"driver": def.ID})
+					}
 				case identityMismatch:
+					identityVerified = true
 					// Definite mismatch: the wired rig is a different model than
 					// the configured driver. Halt the pipeline (close the port,
 					// no supervisor retry) so commands / tune can never reach the
@@ -729,6 +752,7 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 				case identityConfirmed:
 					// Positively the configured rig — unlock the operator write
 					// paths (SendCommands / StartTune).
+					identityVerified = true
 					s.setIdentityConfirmed(true)
 				}
 			}

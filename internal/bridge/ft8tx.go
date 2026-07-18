@@ -94,6 +94,12 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 		s.mu.Unlock()
 		return errors.New(errOp).WithErr(ErrRigIdentityUnverified)
 	}
+	// Never key a rig the liveness strikes already read as non-responsive
+	// (finding 3) — see StartTune's twin gate.
+	if !s.rigWritableLocked() {
+		s.mu.Unlock()
+		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsg("rig not responding (liveness strikes)")
+	}
 	// Snapshot the mode to restore on unkey (only meaningful when we switch it).
 	// Unlike tune, an unknown prior mode is NOT a refusal: leaving the rig in the
 	// FT8 data mode after a transmission is harmless (it is the operating mode),
@@ -106,7 +112,10 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 	s.ft8TxActive = true
 	// Arm the backstop together with ft8TxActive (atomic under mu) so the
 	// guaranteed stop exists from the instant we commit to transmitting.
-	s.ft8TxTimer = time.AfterFunc(ft8TxMaxDuration, s.ft8TxAutoOff)
+	// Generation-armed backstop — see StartTune's twin (finding 6).
+	s.ft8TxGen++
+	ft8Gen := s.ft8TxGen
+	s.ft8TxTimer = time.AfterFunc(ft8TxMaxDuration, func() { s.ft8TxAutoOff(ft8Gen) })
 	s.mu.Unlock()
 
 	// CI-V waits for the rig's FB/FA so a rejected/dropped key fails here (and
@@ -231,6 +240,7 @@ func (s *Service) releaseFt8Tx(ctx context.Context, reason string) error {
 func (s *Service) finishFt8Tx() {
 	s.mu.Lock()
 	s.ft8TxActive = false
+	s.ft8TxGen++ // invalidate any in-flight auto-off callback (finding 6)
 	if s.ft8TxTimer != nil {
 		s.ft8TxTimer.Stop()
 		s.ft8TxTimer = nil
@@ -243,11 +253,19 @@ func (s *Service) finishFt8Tx() {
 // request's lifetime. On a failed unkey it re-arms a short retry so PTT is
 // guaranteed to come down eventually (the timer loops until the unkey succeeds
 // or the rig disconnects).
-func (s *Service) ft8TxAutoOff() {
+// gen gates the callback to its own TX transition — see tuneAutoOff
+// (finding 6).
+func (s *Service) ft8TxAutoOff(gen uint64) {
+	s.mu.Lock()
+	stale := !s.ft8TxActive || s.ft8TxGen != gen
+	s.mu.Unlock()
+	if stale {
+		return
+	}
 	if err := s.releaseFt8Tx(context.Background(), "auto-off"); err != nil {
 		s.mu.Lock()
-		if s.ft8TxActive {
-			s.ft8TxTimer = time.AfterFunc(tuneRetryInterval, s.ft8TxAutoOff)
+		if s.ft8TxActive && s.ft8TxGen == gen {
+			s.ft8TxTimer = time.AfterFunc(tuneRetryInterval, func() { s.ft8TxAutoOff(gen) })
 		}
 		s.mu.Unlock()
 		return
@@ -264,6 +282,7 @@ func (s *Service) clearFt8TxOnDisconnect() {
 	s.mu.Lock()
 	wasActive := s.ft8TxActive
 	s.ft8TxActive = false
+	s.ft8TxGen++ // invalidate any in-flight auto-off callback (finding 6)
 	if s.ft8TxTimer != nil {
 		s.ft8TxTimer.Stop()
 		s.ft8TxTimer = nil
@@ -307,7 +326,9 @@ func (s *Service) encodeFt8TxOn(def cat.RigDefinition, mode string) ([]byte, err
 func (s *Service) TxReady() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.activeClient != nil && s.identityConfirmed && !s.tuneActive && !s.ft8TxActive
+	// rigWritableLocked folds in the liveness strikes (finding 3): a rig the
+	// bridge reads as non-responsive must not report TX-ready.
+	return s.rigWritableLocked() && !s.tuneActive && !s.ft8TxActive
 }
 
 // Ft8TxSupported reports whether the rigdef can key PTT for FT8 — it dry-runs

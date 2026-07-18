@@ -115,6 +115,7 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 	s.mu.Lock()
 	cl := s.activeClient
 	idOK := s.identityConfirmed
+	writable := s.rigWritableLocked()
 	txBusy := s.tuneActive || s.ft8TxActive
 	s.mu.Unlock()
 	if cl == nil {
@@ -125,6 +126,11 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 	// commands (H2). State display is unaffected; only this write path gates.
 	if !idOK {
 		return errors.New(errOp).WithErr(ErrRigIdentityUnverified).WithMsgf("%d command(s)", len(cmds))
+	}
+	// Nor a rig the liveness strikes read as non-responsive (finding 3) — the
+	// same predicate the key paths and RigConnected use.
+	if !writable {
+		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsgf("rig not responding (liveness strikes), %d command(s)", len(cmds))
 	}
 	// Never write to a rig that is transmitting (review 2026-06-16): a tune
 	// carrier or FT8 TX owns the rig, and a generic command could retune/re-mode
