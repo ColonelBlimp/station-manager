@@ -30,7 +30,55 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-17)
+## Current state (as of 2026-07-18)
+
+> **Session 218 (2026-07-17→18) — SMCLOUD RPM BUILT + PHASE 1 LAN STAGING
+> DEPLOYED AND VERIFIED: the full 5,532-QSO logbook is backed up on the F44 box,
+> `POST /v1/smcloud/reconcile` → `in_sync:true` (5532 == 5532, hash match). The
+> operator-declared critical workstream (a real backup) IS NOW LIVE.**
+> - **RPM pipeline (committed+pushed `30328456`):** `nfpm-smcloud.yaml` (separate
+>   package `smcloud`: static binary → /usr/bin/smcloud, system unit →
+>   /usr/lib/systemd/system/, `/etc/smcloud/smcloud.env` as config|noreplace 0600
+>   skeleton, runbook+Caddyfile docs, recommends postgresql-server, NO scriptlets)
+>   + `scripts/smcloud-rpm.sh` (version.sh git-derived version; pure-Go static →
+>   builds on the dev box, NO AlmaLinux container needed; `SMCLOUD_ARCH=arm64` →
+>   aarch64) + `task rpm:smcloud` → `build/release/smcloud.x86_64.rpm` (~3.1 MB);
+>   unit ExecStart unified on /usr/bin/smcloud. Deployed artifact version
+>   `2.0.0-alpha.1-629-g30328456`.
+> - **Runbook matured under live fire (committed+pushed):** Phase 1 rewritten as a
+>   SELF-CONTAINED numbered walkthrough (1.1 build/scp → 1.2 Postgres → 1.3 token →
+>   1.4 install/env/firewall → 1.5 wire daemon → 1.6 verify; every step labelled
+>   with which machine; Caddy explicitly VPS-only; token = invented shared secret,
+>   exactly two places). Added from real deploy friction: the **Fedora pg_hba
+>   gotcha** (default `ident` on TCP → `Ident authentication failed`; fix =
+>   `scram-sha-256` on the two host lines in /var/lib/pgsql/data/pg_hba.conf +
+>   reload + direct-DSN `psql … -c "select 1"` test), the **hand-edit JSON
+>   forwarder entry** for step 1.5 (smcloud is deliberately NOT auto-seeded —
+>   no canonical URL), and the **backfill drain-speed note** (defaults 120 s/5 =
+>   flaky-link tuning ≈ days for a full backfill; LAN: `tick_interval_sec:10,
+>   batch_size:200` ≈ 1,200 rows/min, drained 5.5k in <5 min; don't hammer the
+>   reconcile endpoint mid-drain — each call re-enqueues the remainder).
+> - **Deploy war stories (all resolved):** staging-box Postgres was pre-installed
+>   → only role+db needed; pg_hba ident (above); shack-side `config.json` hand-edit
+>   had a trailing comma → smd restart-looped on `migrating config: parsing config
+>   document` until fixed (assistant repaired line 100 + validated + restarted).
+> - **The local DB is populated again** (5,532 QSOs — the QRZ re-import is done);
+>   with the backup live, a repeat of the DB-loss event is now a restore, not a
+>   catastrophe.
+> - **Inbox triage (UNCOMMITTED):** the two 2026-07-17 map notes (zoom; hover
+>   tooltip) → ONE P2 backlog item "Contacts map — zoom/pan + station hover
+>   tooltip" (paired: the tooltip's hit-test runs in zoom-transformed screen
+>   space; shared engine benefits the future Dashboard map). Inbox now has
+>   nothing untriaged (the occupancy-stall line stays open-by-design, watching
+>   for recurrence).
+> - **NEXT:** (1) **Phase 1 fault drills** (runbook list: cable-pull mid-push,
+>   Postgres kill mid-push, smcloud restart mid-backfill, offline-edit heal) +
+>   one **`smd restore -dry-run` rehearsal** against the staging box — prove the
+>   restore path before it's needed; (2) optionally revert the forwarder
+>   tick/batch to defaults (or keep for LAN); a `task rpm:smcloud` rebuild would
+>   also refresh the RPM's embedded runbook copy; (3) commit the triage edits
+>   (backlog + inbox); (4) carried: dogfood-validate map features + FT8 abandon
+>   fix on air; on-air type-4 → ADR 0048 flip; whole-log Dashboard map.
 
 > **Session 217 (2026-07-17) — MAP POLISH ARC (5 features) + INBOX TRIAGE + FT8
 > ABANDON LAYER-1 FIX; ALL COMMITTED + PUSHED by the operator (`79378ab3`,
