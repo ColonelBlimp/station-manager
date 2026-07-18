@@ -32,7 +32,7 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-18)
 
-> **Session 222 (2026-07-18, night) — AUDIO INCIDENT + WATCHDOG: live
+> **Session 222 (2026-07-18, mid-afternoon) — AUDIO INCIDENT + WATCHDOG: live
 > Plasma-upgrade capture failure diagnosed and fixed, then the durable
 > dead-stream watchdog built the same evening. Committed + pushed.**
 > - **Incident:** new KDE Plasma's audio device fiddling destroyed+recreated
@@ -60,7 +60,7 @@ precisely so we don't re-derive state or redo finished work.
 >   validations still open (map eyeball, in-place session edit mid-CQ,
 >   abandon-fix layer 1, type-4 → ADR 0048 flip).
 
-> **Session 221 (2026-07-18, evening) — SYNC-PROTOCOL ARC: review round 3
+> **Session 221 (2026-07-18, early afternoon) — SYNC-PROTOCOL ARC: review round 3
 > absorbed (6 findings on internal/cloud sync semantics) AND the resulting
 > ADR 0050 revision-counter protocol DESIGNED + BUILT the same day. Three
 > commits, all pushed by the operator.**
