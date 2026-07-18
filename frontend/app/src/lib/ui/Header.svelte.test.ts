@@ -9,6 +9,7 @@ import Header from './Header.svelte';
 import { setStationInfo, setLogbookCount, _resetStationForTests } from '../operate/station.svelte';
 import { rig } from '../operate/rig.svelte';
 import { router } from '../router.svelte';
+import { isVisible, toggleTile } from '../operate/layout.svelte';
 
 beforeEach(() => {
     _resetStationForTests();
@@ -77,5 +78,43 @@ describe('Header CAT chip vs FT8', () => {
         render(Header);
         expect(screen.getByText('CAT')).toBeInTheDocument();
         expect(screen.queryByText('CAT required')).toBeNull();
+    });
+});
+
+// The CAT chip toggles the Rig Control panel (dogfood 2026-07-18): a second
+// click on Operate dismisses what the first revealed; from any other view it
+// navigates to Operate and REVEALS (never a blind toggle-off the operator
+// can't see).
+describe('Header CAT chip → Rig Control panel', () => {
+    async function clickChip(): Promise<void> {
+        const { fireEvent } = await import('@testing-library/svelte');
+        // The chip is the only button in the header.
+        await fireEvent.click(screen.getByRole('button'));
+        flushSync();
+    }
+
+    beforeEach(() => {
+        // Hidden is the default layout state for the rig tile.
+        if (isVisible('rig')) toggleTile('rig');
+    });
+
+    it('on Operate: click reveals, second click dismisses', async () => {
+        router.view = 'operate';
+        render(Header);
+        expect(isVisible('rig')).toBe(false);
+        await clickChip();
+        expect(isVisible('rig')).toBe(true);
+        await clickChip();
+        expect(isVisible('rig')).toBe(false);
+    });
+
+    it('from another view: click navigates to Operate and reveals — never toggles off', async () => {
+        router.view = 'logbook';
+        // Panel already visible (left open earlier) — arriving must keep it open.
+        toggleTile('rig');
+        render(Header);
+        await clickChip();
+        expect(router.view).toBe('operate');
+        expect(isVisible('rig')).toBe(true);
     });
 });

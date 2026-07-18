@@ -136,7 +136,7 @@
     <!-- Self-contained tile header (ADR 0045/0046): title · rig name · CAT gate
          pill — the glance/status that used to live on the InfoPanel wrapper. -->
     <div class="mb-3 flex items-center gap-x-3">
-        <h3 class="text-sm font-semibold text-ink">Rig</h3>
+        <h3 class="text-sm font-semibold text-ink">Rig Control</h3>
         {#if rig.identity !== ''}
             <span class="text-sm text-muted">{rig.identity}</span>
         {/if}

@@ -25,7 +25,7 @@ export const TILES: Record<TileId, { name: string; component: Component }> = {
     logging: { name: 'Logging', component: LoggingCard },
     worked: { name: 'Worked', component: WorkedPanel },
     session: { name: 'Session', component: SessionPanel },
-    rig: { name: 'Rig', component: RigPanel },
+    rig: { name: 'Rig Control', component: RigPanel },
 };
 
 export interface LayoutValue {

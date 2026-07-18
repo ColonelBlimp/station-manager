@@ -2,12 +2,14 @@
     // Sticky top bar. Carries the ADR 0044 rig chip — the always-visible
     // freq/mode/band glance anchor AND the CAT gate's status light (green
     // live / grey confirmed-manual / amber confirm-needed / red lost).
-    // Clicking it jumps to the Rig panel, where the gate is acted on. Leading
-    // (left) is the operating-session timer — the other always-visible ambient
-    // readout, at the opposite end so the eye finds each.
+    // Clicking it TOGGLES the Rig Control panel (from another view it first
+    // jumps to Operate and reveals it — never a blind toggle-off of a panel
+    // the operator can't see). Leading (left) is the operating-session
+    // timer — the other always-visible ambient readout, at the opposite end
+    // so the eye finds each.
     import { rig, rigGate } from '../operate/rig.svelte';
     import { station } from '../operate/station.svelte';
-    import { showTile } from '../operate/layout.svelte';
+    import { showTile, toggleTile } from '../operate/layout.svelte';
     import { navigate, router } from '../router.svelte';
     import SessionTimer from './SessionTimer.svelte';
 
@@ -47,9 +49,16 @@
                   : 'Waiting for confirmation'
     );
 
-    function openRigPanel(): void {
-        navigate('operate');
-        showTile('rig'); // reveal the Rig tile if it's hidden
+    // Chip click: already on Operate → toggle the Rig Control panel (a second
+    // click dismisses what the first revealed); anywhere else → navigate there
+    // and reveal it (show, not toggle, so the arrival state is deterministic).
+    function toggleRigPanel(): void {
+        if (router.view !== 'operate') {
+            navigate('operate');
+            showTile('rig');
+            return;
+        }
+        toggleTile('rig');
     }
 </script>
 
@@ -101,7 +110,7 @@
     <button
         class="ml-auto flex cursor-pointer items-center gap-x-2 rounded-full bg-surface-muted px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-muted/70 sm:ml-4"
         title={chipTitle}
-        onclick={openRigPanel}
+        onclick={toggleRigPanel}
     >
         <span
             class="size-2 shrink-0 rounded-full"
