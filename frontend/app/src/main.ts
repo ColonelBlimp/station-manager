@@ -399,14 +399,19 @@ setSubmit(async (q, opts) => {
         // minute case.
         return refuse('Duplicate — this QSO is already in the log.', true);
     }
-    if (out.kind === 'network' && out.timedOut === true) {
-        // AMBIGUOUS: the daemon may have committed the QSO before the
-        // response was lost. "Not logged" would steer the operator into a
-        // blind retry → the duplicate dialog → a forced double-write; say
-        // unknown and point at the check that resolves it.
+    if (out.kind === 'network') {
+        // EVERY transport failure on a write is AMBIGUOUS, not just a fired
+        // timeout: the daemon's own 30 s HTTP-write timeout can cut the
+        // connection after committing, and the browser surfaces that as the
+        // same opaque TypeError as connect-refused — the two are
+        // indistinguishable here. "Not logged" would steer the operator into
+        // a blind retry → the duplicate dialog → a forced double-write; say
+        // unknown and point at the surface that resolves it: the LOGBOOK
+        // (fetched from the daemon) — the Session list only gains a row on a
+        // confirmed response, so it is guaranteed absent in exactly this case.
         return refuse(
-            'Outcome unknown — the daemon did not answer in time; the QSO may already be ' +
-                'logged. Check the Session list before retrying.'
+            'Cannot confirm the outcome — the connection to the daemon failed mid-submit; ' +
+                'the QSO may still have been logged. Check the Logbook before retrying.'
         );
     }
     return refuse(`QSO not logged: ${out.message}`);

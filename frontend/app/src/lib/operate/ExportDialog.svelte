@@ -88,12 +88,13 @@
                 case 'aborted':
                     break;
                 case 'network':
-                    // A timeout is ambiguous — SMTP may have accepted the
-                    // message; a blind re-send risks a duplicate email.
+                    // EVERY transport failure on a send is ambiguous, not
+                    // just a timeout — the daemon's 30 s SMTP/HTTP timeouts
+                    // can drop the connection after SMTP accepted, and the
+                    // browser can't tell that from connect-refused. A blind
+                    // re-send risks a duplicate email in a real inbox.
                     toasts.error(
-                        outcome.timedOut === true
-                            ? 'Email outcome unknown — the send may have completed. Check the inbox (or the Emailed markers) before re-sending.'
-                            : 'Cannot reach daemon'
+                        'Cannot confirm the send — the connection to the daemon failed. The email may still have gone out; check the inbox (or the Emailed markers) before re-sending.'
                     );
                     break;
             }

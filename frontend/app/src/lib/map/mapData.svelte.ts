@@ -173,7 +173,14 @@ export const mapData = $state<MapDataState>({
 let logbookId = 0;
 let closeEvents: (() => void) | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+/** Data-refresh generation: every refresh() bumps it so a superseded fetch
+ *  discards its result. NOT a lifecycle signal — an operator changing the
+ *  window mid-startup bumps this, so startup must not read it as teardown. */
 let generation = 0;
+/** Lifecycle generation: bumped ONLY by teardown. The startup continuation
+ *  compares it across its await to avoid installing the listener + stream
+ *  after the view is already gone. */
+let lifecycle = 0;
 
 async function refresh(): Promise<void> {
     const gen = ++generation;
@@ -231,13 +238,13 @@ export function startMapData(): () => void {
     mapData.status = 'loading';
     mapData.durationMin = storedDurationMin(storageGet(WINDOW_KEY));
     // Teardown may run while the context fetch below is still pending; the
-    // generation bump it does lets the continuation detect that and bail
+    // lifecycle bump it does lets the continuation detect that and bail
     // BEFORE installing the listener + stream — otherwise they'd leak with no
     // owner left to close them.
-    const startGen = generation;
+    const startLife = lifecycle;
     void (async () => {
         const ctx = await fetchStationContext();
-        if (startGen !== generation) return; // torn down while awaiting — install nothing
+        if (startLife !== lifecycle) return; // torn down while awaiting — install nothing
         logbookId = ctx.logbookId;
         mapData.origin = gridToDecimal(ctx.myGrid);
         mapData.bandColors = ctx.mapBandColors;
@@ -255,16 +262,16 @@ export function startMapData(): () => void {
         document.addEventListener('visibilitychange', onVisibilityCatchUp);
         // Stream first, then fetch — events for rows the fetch already
         // returns are idempotent (the refetch is the idempotency).
-        let hadOpen = false;
         closeEvents = openLogEvents({
             onOpen: () => {
                 mapData.live = true;
-                // A RE-open means a gap: the stream has no backlog, so a QSO
-                // logged/edited while it was down produced no event and the
-                // map would sit stale until the next unrelated change. Same
-                // catch-up refetch as the visibility fix (idempotent).
-                if (hadOpen) scheduleRefresh();
-                hadOpen = true;
+                // EVERY open schedules a catch-up refetch: the stream has no
+                // backlog, so a QSO logged/edited while it was down (a
+                // reconnect gap, OR a failed first attempt while the baseline
+                // fetch ran) produced no event and the map would sit stale
+                // until the next unrelated change. Idempotent + coalesced —
+                // the extra startup fetch is the cost of never missing a gap.
+                scheduleRefresh();
             },
             onTransportError: () => {
                 mapData.live = false;
@@ -276,6 +283,7 @@ export function startMapData(): () => void {
         await refresh();
     })();
     return () => {
+        lifecycle++; // stop a pending startup from installing anything
         generation++; // invalidate any in-flight refresh
         document.removeEventListener('visibilitychange', onVisibilityCatchUp);
         if (refreshTimer !== null) {

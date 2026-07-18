@@ -57,9 +57,11 @@ export type SessionEmailOutcome =
     | { kind: 'smtp_failure'; message: string }
     | { kind: 'server'; code: string; message: string }
     | { kind: 'aborted'; message: string }
-    /** timedOut: SMTP may have ACCEPTED the message (response lost) —
-     *  a blind re-send risks a duplicate email in a real inbox. */
-    | { kind: 'network'; message: string; timedOut?: boolean };
+    /** AMBIGUOUS for this write: SMTP may have ACCEPTED the message before
+     *  the connection dropped (the daemon's 30 s SMTP/HTTP timeouts), and
+     *  the browser can't tell that from connect-refused — so callers warn
+     *  "may have gone out", never "definitely failed". */
+    | { kind: 'network'; message: string };
 
 interface DaemonError {
     code: string;
@@ -84,10 +86,7 @@ export async function sendSessionEmail(
         { timeoutMs: EMAIL_TIMEOUT_MS }
     );
     if (!fetched.ok) {
-        if (fetched.kind === 'network') {
-            return { kind: 'network', message: fetched.message, timedOut: fetched.timedOut };
-        }
-        return { kind: 'aborted', message: fetched.message };
+        return { kind: fetched.kind, message: fetched.message };
     }
     const response = fetched.response;
 

@@ -37,9 +37,11 @@ export type SubmitOutcome =
     | { kind: 'validation'; code: string; message: string }
     | { kind: 'server'; code: string; message: string }
     | { kind: 'aborted'; message: string }
-    /** timedOut: the POST may have COMMITTED daemon-side (response lost) —
-     *  ambiguous, so the UI must not report a definite failure. */
-    | { kind: 'network'; message: string; timedOut?: boolean };
+    /** AMBIGUOUS for this write: the daemon may have committed before the
+     *  response was lost (its own 30 s write timeout cuts the connection),
+     *  and the browser can't tell that from connect-refused — so the caller
+     *  reports outcome-unknown, never a definite failure. */
+    | { kind: 'network'; message: string };
 
 interface DaemonError {
     code: string;
@@ -79,10 +81,7 @@ export async function submitQso(
         { timeoutMs: WRITE_TIMEOUT_MS }
     );
     if (!fetched.ok) {
-        if (fetched.kind === 'network') {
-            return { kind: 'network', message: fetched.message, timedOut: fetched.timedOut };
-        }
-        return { kind: 'aborted', message: fetched.message };
+        return { kind: fetched.kind, message: fetched.message };
     }
     const response = fetched.response;
     const body = await readJsonBody(response);
