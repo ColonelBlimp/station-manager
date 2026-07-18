@@ -25,6 +25,752 @@ block of oldest entries below the line, newest-first.
 
 ---
 
+**Rolled off 2026-07-18 (session 220):** Sessions 203–208 (the live doc had reached 18 entries; rolled back to the 12 most recent, 209–220).
+
+### Session 208 (2026-07-08, same day) — **session export/email + session timer
+for `frontend/app`; a hard reuse-first lesson.** The operator drove a
+**reuse-the-dogfood-SPAs-first** principle (now memory
+[[sm-reuse-dogfood-spas-first]]): the frontend/app work is primarily
+restyling battle-tested behaviour — study `frontend/logging` + the daemon
+for the existing mechanism BEFORE building.
+
+- **Session export/email (Export dialog, off the Session card).** An
+  **Export…** button in the InfoPanel header (Session panel only) opens a
+  modal (same pattern as DuplicateDialog) with **Download ADIF** + **Send
+  to QSL manager** — decided over an on-card control or a rail submenu
+  (header-action keeps the log table clean; the rail stays uniform).
+  **Email** = `session-email.ts` ported verbatim from logging → the
+  existing `POST /v1/session/email`.
+- **Reuse lesson (cost me two corrections):** I first built a
+  **client-side ADIF exporter** — WRONG. It came out sparse because the
+  daemon back-fills the record at submit (MY_* block, DXCC, zones,
+  lat/lon); the client's pre-submit copy can't carry that. The dogfood
+  SPAs never build ADIF client-side — they send UUIDs and the daemon
+  rebuilds (that's what produces the rich `exports/sent-adif/` archives).
+  Fix: **NEW daemon `POST /v1/session/export`** — reuses the *existing*
+  `adif.ComposeToAdifString` + `archiveSessionAdif` (so a download also
+  backs up to `exports/sent-adif/`, operator ask); the email + export
+  handlers now share `Server.fetchSessionQsos` (honest DRY, 2 real
+  consumers; email tests confirm the refactor). Returns `application/x-adif`
+  attachment. SPA "Download ADIF" streams it; the client-side
+  `adifExport.ts` + `session.adif` stash + `markEmailed`/`emailedDate` were
+  **deleted**. **QSL column removed** from the Session card (operator).
+  Archive-filename collision (email vs export share
+  `session-YYYYMMDD-HHMMSS.adi`) assessed as harmless — second-precision +
+  identical content on a same-session collision; optional `export-` prefix
+  noted, not done.
+- **Session timer ported** (`SessionTimer.svelte` verbatim from logging —
+  sessionStorage `sm.session.startedAt`, survives F5, resets on tab close,
+  per-tab) + `formatDurationHms` (+ tests) into a lean `utils/time.ts`.
+  Placed **leading-left in the Header** (opposite the trailing rig chip —
+  the two always-visible ambient readouts); app-wide (operator choice).
+  The logging SPA put it in its card because that SPA had no shell; the new
+  app's header is the better home.
+- **Operator polish (post-build tweaks):** InfoPanel card width
+  `w-[42rem]` → **`w-2xl`** (Tailwind v4 `--container-2xl` = 42rem —
+  equivalent, named token; verified in built CSS, centring calc unchanged;
+  comment updated to name `w-2xl`) + Export button `-mt-3` nudge; session
+  timer bumped to **`text-lg`** with the header glyph at **`size-5`**.
+- 336 SPA tests + 4 new Go handler tests green. Two inbox notes filed
+  (client-aborted enrich WARN noise; stale `TestVersion_HappyPath` schema
+  3-vs-4). `api-endpoints.md` updated for the export route.
+- **COMMIT STATE: committed through `ae894b9d` (session export/email +
+  timer + duplicate modal all landed); UNCOMMITTED = the operator polish
+  tweaks (`InfoPanel.svelte` w-2xl + comment + button nudge,
+  `Header.svelte` glyph size, `SessionTimer.svelte` text-lg) and this
+  handoff.** Dev daemon RESTARTED for the export route (go-run builds need
+  a restart for daemon changes — SPA hot-reloads, daemon doesn't); still
+  the DEV daemon (`build/` working dir), QA DB intact.
+
+### Session 207 (2026-07-08, same day) — **clean-DB live QA run of the
+`frontend/app/` logging flow on the FTdx10.** Parked the QSO DB in
+`build/db/backups/pre-qa-20260708/`, bootstrapped a fresh one (daemon
+self-seeded the default logbook — "config marked setup complete but DB had
+no row"), ran real QSOs and checked daemon log + DB row each time. **The
+clean dev daemon runs in the background under this session** (`task
+run:smd`, `2.0.0-alpha.1-532`), reading its own stdout + `build/log/smd.log`.
+
+- **Verified correct end-to-end:** USB QSO stores `mode=SSB submode=USB`;
+  CW QSO stores bare `mode=CW` (no submode) with **599/599** — the
+  rig-driven `rstDefaultFor` proven on the wire; duplicate flow is
+  minute-precision dedupe (same call/band/mode/freq/minute) → `200`
+  refusal → force sends a **random nonce dedupe key** (daemon
+  `submit.go:243`) so the forced row coexists under the unique constraint.
+  Same call across SSB/CW = two rows (mode is in the key), correct.
+- **3 SPA fixes this run:** (1) `observeWorked` now gates on
+  `isValidCallsign` like enrich — malformed partials were 400ing the
+  daemon (fail-soft hid it); (2) Rig-panel rail click hands focus back to
+  the callsign field when CAT is `connected` (fields locked = read-only),
+  keeps focus CAT-off/lost; (3) **the duplicate refusal is now a centred
+  modal + backdrop** (`DuplicateDialog.svelte`, TWP modal-dialogs ref) —
+  the off-centre anchored popover is gone. Esc dismisses the DIALOG only
+  (LoggingCard's window handler intercepts + returns before clear-draft);
+  Ctrl+Enter inert while open (no blind force on key-repeat); Cancel is
+  the focused safe default; backdrop-click cancels; draft preserved.
+  `dismissDuplicate()` added. 323 SPA tests green.
+- **2 daemon items INBOXED (not fixed — daemon out of this SPA's scope):**
+  (a) client-aborted enrichments log at WARN with full error chains
+  (`context canceled` from superseded /v1/enrich aborts) — noise that
+  masks real warns, fix = debug-level when cause is ctx.Canceled;
+  (b) MY_RIG design Q — stored blob carried `Yaesu FT-710` (stale config)
+  while the FTdx10 was on CAT; should rig-identity win when connected?
+- **Operator to-do noticed:** `build/config.json` `my_rig` is stale
+  (FT-710) — edit + restart for correct QA rows. Parked QA DB restorable
+  from `build/db/backups/pre-qa-20260708/`.
+
+**COMMIT STATE: committed through `8c8e23ef` (InfoPanel centring);
+UNCOMMITTED = the duplicate-modal round (`DuplicateDialog.svelte` +
+test / `qso.svelte.ts` + tests / `LoggingCard.svelte`), the Worked gate
+(`worked.svelte.ts`), the Rig focus tweak (`UtilRail.svelte`), the two
+inbox notes (`dogfood-inbox.md`), operator's own `SessionPanel.svelte` +
+`WorkedPanel.svelte` edits (SessionPanel has prettier drift to clean),
+and this handoff.**
+
+### Session 206 (2026-07-08) — **`frontend/app/` RIG SSE SEAM LIVE + validated on
+the FTdx10: the Operate surface now has NO stub seams left.** Closed session
+205's NEXT item:
+
+- **The SSE transport + CAT-link state machine.** `lib/api/rig-sse.ts` (new)
+  is a thin EventSource wrapper for `/v1/rig/events` — parse-guards each
+  event, hands payloads to injected handlers (ADR 0045; `tune-state` /
+  `rig-clients` deliberately not consumed yet). The transitions live in
+  `rig.svelte.ts` as `catLink`, pure + transport-free: partial-payload VFO
+  merge → freq/band; rig mode literal → operator-friendly form via the
+  injected `bridge.mode_mappings` table (`submode||mode`; unmapped passes
+  raw and the panel's select grows the odd value); the shipping **800 ms
+  flash suppression** (`rig-disconnected` only schedules the
+  connected→lost flip; a rig-state inside the window cancels silently);
+  transport error flips a live link immediately. **A never-connected stream
+  stays `off`** — the daemon's replayed `rig_no_data` on subscribe (rig-off
+  day) means manual logging, not a blocked form. `goManual()` = the interim
+  stand-in for the ADR 0044 confirm flow (on `lost`, take ownership, keep
+  last values; a returning rig auto-lifts). `bridge-error` shows raw
+  code+details under the pill (no i18n catalogue in this SPA yet).
+  `StationContext` gained `catEnabled` + narrowed `modeMappings`
+  (`/v1/config` bridge block); `main.ts` opens the stream only when CAT is
+  enabled (config fetched once at boot — re-wiring on config change comes
+  with this SPA's config surface). **The Rig panel's dev sim select is
+  deleted — no stub surface remains anywhere.**
+- **LIVE PASS on the FTdx10 (dev daemon, port 8080), all green:** freq
+  tracks the dial; `DATA-U`→**FT8** (mode_mappings resolution, which also
+  flips the report validators); VFO-B tracks; rig-off → pill red within
+  ~6 s (5 s liveness + suppression), Log blocked, **auto-lift** to green on
+  power-up with no operator action (wire capture confirmed the daemon side:
+  `rig-disconnected` on power-off, full INIT replay 65 s later). Idle
+  flicker-watch implicitly good (long connected stretches, no churn) —
+  watch during dogfooding; `FLASH_SUPPRESS_MS` is the knob.
+- **Frequency display converged on the SM dot-grouped convention** after
+  two operator catches (`14.19995` → `14.199.950`): ported
+  `validators/frequency.ts` **verbatim + tests** from shipping (parses
+  dot-grouped AND decimal MHz unambiguously to Hz, 100 kHz–30 GHz);
+  `rig.freq` is always dot-grouped when rig-fed (Go-manual continuity reads
+  like the rig); **every `parseFloat(rig.freq)` is gone** (submit sink +
+  band-sync via `parseFrequency` — parseFloat reads the grouped form as
+  14.199); ADIF `TX_FREQ` is now exact Hz, not a float round-trip.
+- **Panel polish (operator-driven):** CAT-locked view shows **both VFOs**
+  as dot-grouped read-outs with a selection dot (read-only by design —
+  click-to-swap needs the ADR 0026 command path, lands with rig control);
+  manual/lost keeps the single freq entry (no VFO concept by hand). Header
+  now reads **"Rig · FTdx10 · ● CAT connected"** (`rig.identity` from the
+  wire, kept across a loss; pill moved from the panel body to InfoPanel's
+  header). Icon swaps: Operate parent nav = the broadcast-arcs glyph (was
+  Rig's), Rig rail = arrows-right-left (operator-supplied), Sidebar's
+  shadowed operate branch synced. Rename "Rig"→"Rig Control" agreed for
+  WHEN control ops land (inbox note names the two touch points).
+- **`rstDefaultFor` SHIPPED (the thrice-parked item):** CW→`599`, else
+  `59` (shipping parity incl. the '59'-passes-SNR-pattern quirk). A
+  module-level fill effect overwrites both report fields ONLY when the
+  default changes — it tracks a memoized `$derived`, not `rig.mode`, so
+  USB↔LSB↔FT8 hops never clobber a typed report; only a CW↔voice boundary
+  crossing rewrites (deliberate clobber, shipping tradeoff, documented
+  in-code). `clearDraft` resets to the CURRENT mode default. Shipping's
+  no-empty-refill lesson preserved. **Live-verified: CW-U on the rig flips
+  the form to 599/599.** The rig SSE made this urgent — mode changes under
+  the operator now.
+- **Confirm-once-per-band CAT gate SHIPPED + operator-tested (ADR 0044's
+  full design target — the first-pass `off|connected|lost` gate is
+  superseded):** `rigGate()` = `live` / `manual` (off + THIS band
+  confirmed) / `unconfirmed` (off, not asserted — blocks) / `lost`
+  (blocks). Enforced in `logDraft` itself, not only the buttons (the
+  Log-anyway bypass lesson). Decisions: **single-slot confirm memory**
+  (any band change re-arms, including returns — simpler + safer than a
+  session set); **Go manual merged into Confirm** (on `lost` the button is
+  "Go manual — confirm": ownership + assertion in one act); **values
+  persist, confirmation doesn't** (band/mode/freq → localStorage
+  `sm.rig.context` for the fast next-session prefill; the confirm is a
+  per-session assertion by design). Surface: **header chip** live
+  (always-visible `freq · mode · band` + status dot, click → Rig panel —
+  the Header's "lands with the operating surface" placeholder is
+  fulfilled); InfoPanel pill gained amber "Manual — confirm to log";
+  entering Operate with a blocked gate **auto-opens the Rig panel** (only
+  if no panel is open — never a takeover; mid-session gate changes = the
+  deferred rail badge). Known softness, noted: on boot with CAT up
+  there's a sub-second `unconfirmed` window before the first rig-state,
+  so the Rig panel auto-opens then the gate lifts green — harmless,
+  fix-if-annoying (delay the auto-open check).
+- 292 SPA tests green (was 234 at session start: +CAT-link machine,
+  +transport, +bridge-block parsing, +frequency validator's 27, +RST
+  defaults, +gate).
+- **TOAST SYSTEM + system-message routing (operator: the in-card
+  "Logged…" message reflowed the Clear/Log buttons — find messages a
+  better home):** ported `toasts.svelte.ts` + tests VERBATIM from shipping
+  (info/warn/error, TTL 4/6/8 s, ttl=0 sticky, max stack 5) into
+  `lib/ui/`; NEW `Toasts.svelte` renderer styled to the operator-picked
+  **Tailwind Plus overlays/notifications/01-simple** reference (adapted to
+  @theme tokens per the TWP licence rule — surface panel, leading level
+  icon green-check/amber-triangle/red-x, sr-only severity prefix,
+  per-toast live-region roles), single-mounted in App.svelte.
+  **Bottom-centre placement** (operator choice after a
+  placement-conventions discussion; shipping's top-centre rationale noted
+  as the fallback if toasts get missed). Routing: success + non-duplicate
+  refusals = toasts; the **duplicate refusal stays card-local** (its "Log
+  anyway" action belongs beside the button) as an absolutely-positioned
+  anchored popover — **nothing reflows the card anymore**. `submitState`
+  slimmed to `{busy, error, duplicate}` (error = duplicate-only now).
+- **"No toast seen" bug → Vite HMR lesson (durable, now in memory):**
+  module-level `$state` singletons duplicate across HMR generations — the
+  submit path pushed into one toast-queue instance while the mounted
+  renderer read another; hard reload fixed it. Proven code-side via a NEW
+  component test (`Toasts.svelte.test.ts`: render + push + assert DOM) +
+  an `Element.animate` stub in `src/test/setup.ts` (jsdom lacks the Web
+  Animations API that `transition:fade` needs). Rule: hard-reload before
+  diagnosing cross-module state bugs; trust a component test over the
+  hot-swapped tab.
+- **Keyboard fast path (operator-specified):** **Ctrl+Enter** = log —
+  `logDraft` now returns a stored/refused boolean, and focus returns to
+  the callsign field ONLY on success (a refusal leaves the cursor where
+  the operator is fixing); **Esc** = clear + focus callsign (also
+  dismisses the duplicate popover via the submitState reset); the Clear
+  button click refocuses too; **the card mount-focuses the callsign
+  input** (covers app load, view switches, FT8→Phone/CW). Listener is
+  `<svelte:window>` INSIDE LoggingCard, so the shortcuts live and die
+  with the card (Phone/CW only). Tooltips advertise them (Log =
+  "Ctrl+Enter" when not gate-blocked, Clear = "Esc").
+- **Rig-panel auto-open on a blocked gate REMOVED** (operator: annoying —
+  the header chip already shows the state and click-opens the panel; the
+  chip serves ADR 0044's intent without moving panels under the operator;
+  why-comment left in Operate.svelte so it doesn't get re-added). Also
+  kills the boot-window flash from the known-softness list. "Logged" toast
+  tick dropped (icon carries success). 311 SPA tests green.
+- **Panel polish (operator) + focus hand-back seam:** operator gave
+  Session/Worked matching fixed-height bodies (`h-55` via a `tableHeight`
+  const, all empty/pending states same height — no more panel-height
+  jumps), switched both to `overflow-y-auto`, and applied the review
+  catch (SessionPanel's `<thead>` now `bg-surface sticky top-0 z-10`
+  like Worked's, so the header holds while a long session scrolls).
+  NEW **focus hand-back seam** (`operate/state.svelte.ts`
+  `registerCallsignInput`/`focusCallsign`): clicking **Worked/Session**
+  on the rail (open OR close — deliberate acts on read-only panels)
+  returns focus to the callsign field; **Details/Rig keep focus** (opened
+  to use their own inputs); the Worked panel's AUTO-open on a lookup hit
+  deliberately does NOT touch focus (it fires mid-typing and would steal
+  the cursor). LoggingCard registers its input on mount / unregisters on
+  unmount — the rail never reaches into another component's DOM
+  (ADR 0045).
+- **RST validators tightened to the actual scale (operator catch: 77 and
+  000 passed in USB):** the ported shape-only pattern (`[0-9]{2,3}`)
+  became scale-aware — R 1–5, S 1–9, T 1–9, zero invalid in every
+  position — AND mode-aware in digit count after the operator ruling
+  **"tone is only relevant to CW"**: `isValidRst` (CW — tone optional,
+  59 and 599 both fine) + NEW `isValidRs` (voice/RTTY/PSK31 — exactly two
+  digits, so 599-on-USB is malformed) + the unchanged signed-dB validator
+  for the WSJT-X family; `draftProblems` picks by rig mode. Lines up with
+  `rstDefaultFor` (RTTY/PSK31 already defaulted to 59). 320 SPA tests
+  green. **Backport note filed in the inbox** — shipping still carries
+  the loose pattern (low urgency: entry-error protection, daemon is
+  presence-only either way).
+- **InfoPanel card centred on the logging card's axis (operator ask):**
+  `.operate-center` anchors children to the logging card's LEFT edge (the
+  stationary-card centring mechanism), so the wider 42rem info card stuck
+  out to the right. Fix: a computed negative side margin —
+  `ml-[calc((var(--card-w,42rem)-42rem)/2)]` (−57 px at the 558 px card
+  width) — so it overhangs symmetrically; the `var()` fallback makes it a
+  no-op outside operate-center (FT8 branch). Two noted consequences:
+  Details rides along (one card, per-panel centring would jolt on tab
+  switch), and at cramped widths the 57 px left overhang can clip beyond
+  the scroll origin (the container's left stop protects the logging card;
+  rail auto-collapse largely prevents reaching it). The 42rem appears in
+  both `w-[42rem]` and the margin calc — keep in step (in-code comment).
+- **Narrow-rail Operate flyout stuck-open FIXED (operator catch):** the
+  flyout is CSS `:hover`/`:focus-within`-driven, so a click never closed
+  it — pointer still hovering AND the clicked button keeps focus. Fix in
+  `OperateNav.svelte` + `app.css`: a `flyout-suppressed` class set on any
+  click (parent or flyout item), CSS override placed AFTER the show rules
+  (wins by source order at equal specificity), cleared on mouseleave to
+  re-arm hover — PLUS a mouse-click blur on the parent (`e.detail > 0`
+  distinguishes mouse from keyboard activation), because retained focus
+  re-opened the flyout via `:focus-within` the moment mouseleave cleared
+  the suppression. Keyboard activation keeps focus (a11y); known limit
+  noted in-code: a keyboard user's suppression only re-arms on a pointer
+  move.
+
+**NEXT (frontend/app):** **rig control** (ADR 0026 ops: VFO
+click-to-swap, band step, set_mode — brings the "Rig Control" rename
+from the inbox), then the **FT8 surface**.
+**COMMIT STATE: committed through `cc1ac6d7` (RST validators);
+UNCOMMITTED = the InfoPanel centring (`InfoPanel.svelte`) and this
+handoff.** The local daemon is still the DEV daemon (`build/` working
+dir).
+
+### Session 205 (2026-07-07, same day) — **`frontend/app/` Log-QSO side FINISHED:
+enrichment lookup gate + the mode.ts port + mode-aware report validation.**
+Closed out session 204's first NEXT item and two follow-ons:
+
+- **Enrichment lookup gate (flaky-link motivation):** `observeCall` now
+  clears/idles on any input failing `isValidCallsign`, so malformed partials
+  never reach the daemon (or onward to QRZ). Known floor, noted in-code: the
+  validator (deliberately mirroring the daemon's) passes any ≥3-char
+  letter+digit string, so a partial like `DL3` is structurally valid — only
+  the 400 ms debounce suppresses those. Per-character behaviour verified:
+  fast typing = exactly ONE lookup (for the final call); slow typing lets
+  partials through, where the country layer prefix-matches the cache (232
+  rows → ~always a hit) but the station layer's exact-match miss runs the
+  QRZ chain (not-found, uncached by design); SPA abort propagates to the
+  handler ctx so a superseded partial's upstream call is cancelled.
+  `DEBOUNCE_MS` 400→~700 is the next knob if live monitoring warrants.
+- **`utils/mode.ts` PORTED verbatim + tests** (SUBMODE_TO_MODE /
+  `resolveModeAndSubmode` / `usesSignalReport`); **Rig panel dropdown = the
+  shipping nine** (USB LSB CW FM AM RTTY FT8 FT4 PSK31 — sidebands, not
+  families; default USB); the `main.ts` sink resolves before building ADIF,
+  so **USB now logs MODE=SSB SUBMODE=USB** (was bare SSB, sideband lost).
+  `adif.ts` already had subMode support. Session rows keep the operator
+  literal (USB) — more informative at a glance.
+- **Mode-aware report validation wired** (`draftProblems` picks
+  `isValidSignalReport` vs `isValidRst` by `usesSignalReport(rig.mode)`), so
+  manual FT8/FT4 entry with signed-dB reports (−12/+04) isn't a dead form.
+  One-way `qso → rig` sibling import (mode drives validation, never enters
+  the draft). **Integration tests added at the operator's request**
+  (`qso.svelte.test.ts`, 7 tests over the REAL state modules + the injected
+  submit seam — this path is never driven by hand, so the tests are its only
+  routine exercise). Rune modules test fine (svelte plugin is in the vitest
+  config). 214 tests green.
+- **Verified while wiring (both operator questions):** (1) the daemon has
+  NO RST shape validation — presence-only for non-FT8 + the `59` default
+  fill; the SPA gate is the ONLY report-shape defence. Asymmetry noted (not
+  filed): daemon keys on literal `Mode=="FT8"` while the SPA's
+  SIGNAL_REPORT_MODES is broader (FT4/JT*/JS8…). (2) the **FT8 Field-Day
+  path is untouched** — `BuildQso` sets RST_SENT=SNR / RST_RCVD empty, the
+  e4 sink back-fills `ft8.field_day.default_rst_rcvd`, and `Submit` skips
+  both RST checks for FT8; this session touched zero Go files and the FT8
+  flow never passes through a SPA form.
+- **Deliberately NOT ported:** the shipping mode-appropriate RST default
+  fill (CW→599 + the default-tracking effects) — belongs with the rig-SSE
+  work. Operator hand-tuned card layout + fixed the `accent-[--color-focus]`
+  v3-shorthand (v4 gotcha strikes again — spotted in review, he fixed).
+- **HISTORY SEAM LIVE (`GET /v1/contact-history`).** Ported
+  `api/contact-history.ts` verbatim + its 14 tests (incl. the
+  malformed-200 guard); `seams.ts` gained `apiHistory` + the pure
+  wire→display mappers (`20260508`→`2026-05-08`, `1430`/`143045`→`14:30`,
+  unrecognised values pass through — odd beats invisible) + `seams.test.ts`.
+  Fail-soft: any non-ok outcome = empty history (worked-before is a
+  convenience, never a gate). `HistoryFn` now takes an **AbortSignal**
+  (same inflight-AbortController discipline as enrich). **The dev-stub
+  layer is GONE** — `historyStub.ts` + `lib/dev/` deleted; the last stub
+  surface is the Rig panel's sim select (goes with the rig SSE).
+  Live-verified against the dev daemon (port 8080, `SM_WORKING_DIR=build/`
+  — its own DB, so production calls come back empty; dev-DB test calls:
+  M0CMC, 7Q7EB, 9Q1AAA…).
+- **WorkedPanel polish (operator) + a real crash fix:** operator added the
+  scrollable body + sticky header + fixed column widths; review caught the
+  each-key (`date+timeOn+band+mode`) colliding on **force-logged
+  duplicates** — exactly what "Log anyway" creates — and Svelte 5 THROWS on
+  duplicate keys. `WorkedQso` now carries **`uuid`** (mapped from the wire)
+  and the panel keys on it.
+- **Config-secrets assessment DECIDED (operator question after a config
+  dump exposed the SMTP app password into the session transcript):**
+  encryption-at-rest **REJECTED** — key-beside-ciphertext is obfuscation;
+  the accepted posture is plaintext + enforced 0600 (WriteJSON tightens,
+  never loosens) + API redaction (`password_set`, GET never carries values
+  — verified live for smtp AND lookup providers) + revocable app passwords
+  + FDE for the stolen-machine case. `internal/config/doc.go` now records
+  the assessment (was "deferred pending a security assessment"); upgrade
+  path if multi-user hosting ever appears = opt-in systemd LoadCredential.
+  **Operator action item: rotate the exposed Fastmail app password.**
+- **Review-findings round (operator ran a review, pasted 3 findings; fixed
+  2, skipped 1 deliberately):** (1) the duplicate **"Log anyway" button now
+  carries the same CAT gate** (`!rigReady() || busy` + stale-CAT tooltip) as
+  the primary Log button — it went straight to `logDraft(true)`, so a CAT
+  drop between the duplicate refusal and the retry click could log stale rig
+  context (academic until the rig SSE lands; fixed now so the SSE inherits a
+  correct gate). (2) **invalid gridsquare is now omitted at the submit sink**
+  (`main.ts`: emit only when `isValidMaidenhead` passes) — NOT blocked at
+  `canLog()`, because enrichment writes the grid into the draft and gating
+  Log on it would let a bad upstream value stop logging (invariant); the
+  DetailsPanel warning stays the operator-facing signal. (3) blank-RST →
+  daemon back-fills 59: **skipped, working as designed** — blanks only exist
+  if the operator clears the '59' default, and the daemon presence-default
+  is the decided posture (same as shipping + what FD relies on). 234 tests
+  green, check + lint clean.
+
+**NEXT: the rig SSE** — the last seam: `/v1/rig/events` → rig state (replace
+the sim select; shipping `bridge.svelte.ts` is the reference, incl. ~800 ms
+flash suppression), the CAT-live `bridge.mode_mappings` literal-resolution
+path from `/v1/config`, the fuller ADR 0044 confirm-per-band CAT gate, and
+the rstDefaultFor machinery (CW→599 defaults). Then the FT8 surface.
+**COMMIT STATE: committed through `3bd9872b` (review-fixes round —
+everything above is in, incl. `internal/config/doc.go`); UNCOMMITTED =
+this handoff only.** The local daemon is still the DEV daemon.
+
+### Session 204 (2026-07-07) — **`frontend/app/` Operate surface is now
+INTERACTION-COMPLETE on stubbed seams.** Continued the ADR 0044/0045 build from
+session 203 (post-ship, additive, ship gate unchanged). Built, in order:
+
+- **Enrichment card (the session-203 NEXT item).** `lib/operate/enrich.svelte.ts`
+  = state + **injected `setEnricher` seam** (mirrors `setSubmit`; dev stub now,
+  `/v1/enrich/callsign` later), 400 ms debounce, min 3 chars, **monotonic seq
+  token** (slow lookup can't overwrite a newer call), fail-soft (error = done-
+  with-nothing). On resolve it **back-fills the draft**: `gridsquare` AND `name`
+  (guarded: call still matches + field empty — operator entry always wins).
+  `EnrichmentCard.svelte` renders flag / country / DXCC + **NEW badge** /
+  **SP–LP radio group** (choice in `enrich.prefs.path` — shared state, sticky
+  across lookups, the future **rotator** reads the same selection) / bearing ·
+  distance for the selected path / **"Their time"** destination clock
+  (longitude-derived solar offset from their grid, 15°/hr — approximation by
+  design, noted in-code; 15 s ticker gated on data showing). Op name + grid
+  were **removed from the display** (name lives on the card, grid in Details) —
+  the data still flows. Hosted in the logging card's right square; positionless
+  per ADR 0045 (radio `name` namespaced via `$props.id()`).
+- **Utils ported verbatim from `frontend/logging` WITH their tests** (39 pass):
+  `utils/bearing.ts` (pathInfo — battle-tested v1 port), `utils/flag.ts`
+  (ccode→emoji), `validators/maidenhead.ts`.
+- **Worked panel.** `worked.svelte.ts` (same seam/debounce/seq discipline;
+  `setHistory` stub) + `WorkedPanel.svelte` (Date/Time/Band/Mode/Sent/Rcvd/Name
+  table). **Auto-open** on history hit — only if no panel is open, once per
+  call; **auto-close** only if it auto-opened (manual opens stay). The
+  observation lives in **LoggingCard** (must run while the panel is closed).
+- **Session panel + THE SUBMIT SINK WIRED.** `session.svelte.ts` (in-memory by
+  design — daemon owns the durable log; later fed from POST response +
+  `ft8-logged` SSE) + `SessionPanel.svelte` (Time/Call/**Band**/**Mode**/RST/
+  Name/Country — Band+Mode added because **FT8 + Phone/CW share one session
+  list**). `main.ts` `setSubmit` composes draft + displayed enrichment
+  (country only if `enrich.call` matches — a fast log can outrun the debounce)
+  + **rig context merged at log time** — the same composition-at-the-wiring-
+  layer shape as the daemon's e4 sink.
+- **`rig.svelte.ts`** — rig context (band/mode/freq) EXCLUDED from the draft by
+  design, merged at log; **CAT gate** `off|connected|lost`: off = manual entry
+  trusted (audio-only fine), **lost blocks logging** (stale context), fields
+  lock when connected. `RigPanel.svelte` = Band/Mode/Freq + status pill + a
+  **dev sim select** (stands in for the bridge SSE; removed at wiring). The
+  ADR 0044 confirm-once-per-band gate flow is the target at SSE-wiring time.
+- **Details panel.** QTH + Gridsquare over the draft (grid enrichment-filled,
+  corrected here; live Maidenhead validation, non-blocking). Deliberately
+  minimal — operator: "features and functions later" (Rig panel likewise).
+- **Tailwind v4 gotcha (recorded for reuse):** `w-[--card-w]` (v3 shorthand)
+  silently compiles to invalid `width:--card-w` in v4 — **`w-(--card-w)`
+  parens is the v4 shorthand**; square brackets only with full `var(...)`.
+  Was the root cause of the "card lost its width" mystery.
+- **Drag/pin chrome decision** (agreed, inbox `[2026-07-07]` note): NO baked-in
+  titlebars — a uniform **wrapper frame** (CardFrame-style) supplied by the
+  layout layer, revealed in an explicit **arrange-layout mode**; cards
+  contribute only a display name.
+- **DOC DEBT CLEARED:** ADR 0044 got a **2026-07-07 build-reconciliation
+  amendment** (rail = all Operate; 64rem floor removed → main-scroll-container
+  model; CAT-gate first pass vs confirm-per-band target; ADR 0045 cross-ref).
+
+**Second half of the session — the `/v1` WIRING ARC is substantially DONE**
+(operator switched the local daemon to the DEV daemon for safe write-testing):
+
+- **Enrichment LIVE**: ported `lib/api/{_helpers,enrichment}.ts` verbatim (+
+  `_helpers` tests) from frontend/logging; `lib/api/seams.ts` adapts wire →
+  card shape. Live-test surfaced fixes: **retract-writes** (enrichment
+  remembers what it wrote into the draft — name/grid/qth — and retracts on
+  call-change ONLY if the field still holds its value, so a previous
+  station's name can't leak into the next QSO and operator entry always
+  survives); **QTH mapped + back-filled**; **DXCC falls back to
+  `country.dxcc_prefix`** (numeric `station.dxcc` is absent on most cache
+  hits).
+- **External review round fixed 4 findings:** (1) `stampOff` is
+  **fill-if-empty per field** (manual off times survive submit); (2)
+  `clearDraft` restamps/disarms so a post-Clear QSO can't log blank times +
+  `canLog` requires dateOn/timeOn; (3) the "GBR flags" finding was
+  **INVERTED** — live-verified hamnut emits **alpha-2** (232/232 cached
+  country rows), so `api.md`'s example + the hamnut test fixture were fixed
+  GBR→GB (daemon test green), flag helper untouched; (4) **AbortSignal
+  threaded** through the enrich seam (superseded lookups cancel the upstream
+  request, not just the UI write).
+- **Submit LIVE** — `POST /v1/qso`: ported `utils/adif.ts` (+74 tests) +
+  `api/qso.ts`; `fetchStationContext()` (grid/callsigns/default logbook from
+  /v1/config); the `main.ts` sink composes draft + rig + enrichment →
+  `formatAdifRecord` (incl. **ANT_AZ/ANT_PATH** from the card's bearing +
+  SP/LP choice; numeric-only DXCC) → submit. **`logDraft` is async**: only a
+  stored QSO clears the card (draft PRESERVED on refusal, message shown);
+  busy latch (in-flight POST disables the button — a click-handler bug where
+  the MouseEvent landed in the `force` param and would have force-logged
+  EVERY click was caught + fixed); session row only on confirmed store, now
+  carries the daemon **UUID**. **Verified end-to-end WITHOUT pollution** via
+  a duplicate-echo POST of an existing QSO (full daemon pipeline → 200
+  duplicate, row count unchanged).
+- **Log-QSO tidy pass:** green "Logged CALL ✓" line (`--color-logged`
+  token); ported `validators/{callsign,rst}` + `utils/frequency` (+tests) —
+  malformed fields get red outlines (`.input-error`) and block `canLog`;
+  **duplicate → "Log anyway"** (force=1) affordance; **band follows
+  frequency** in the Rig panel (IARU table).
+- **QSO clock (operator's flow):** the QSO starts on **Tab out of the
+  callsign field** (not card-mount) — stamps Date/Time On, populates
+  Date/Time Off and **ticks Time Off every second** (the visible QSO
+  timer; midnight rollover handled). Hand-editing an off field **stops the
+  ticker** (correction survives); typo-fix re-Tab can't reset TIME_ON;
+  Clear disarms; before first Tab, Log is blocked (blank times).
+- **Modes/bands investigation** (operator question): shipping SPA gets modes
+  from `/v1/config` `bridge.rig_modes` (CAT-live literals) + a hardcoded
+  CAT-off list + the `SUBMODE_TO_MODE` mirror in `utils/mode.ts`; bands are
+  never fetched — derived from freq via the hardcoded ADIF-envelope table.
+  **Inbox notes filed:** (a) DXCC enrichment fill — CORRECTED: the
+  prefix→number table **already exists** (`internal/enums/dxcc`), the gap is
+  only the enrichment handler not filling `country.dxcc`; (b) band data —
+  single-source the 3 hand-synced band tables daemon-side + the operator's
+  design catch that **regional/jurisdiction band plans** are a different
+  dataset the future operating aids (band-edge warnings, FT8 band-hop
+  legality) must be designed against.
+
+**NEXT (agreed, next session): finish the Log-QSO side** — align the Rig
+panel's base mode list with the shipping nine + port `utils/mode.ts` so
+`USB` logs as `SSB/USB` (today it submits bare `SSB` and loses the
+sideband); then the remaining seams: **history** (Worked panel — still the
+dev stub) and the **rig SSE** (`/v1/rig/events` → rig state + the fuller
+ADR 0044 confirm-per-band CAT gate); then the FT8 surface. **COMMIT STATE:
+everything through the QSO clock is COMMITTED (`880ebdad`); uncommitted =
+the 2 dogfood-inbox notes + this handoff/memory update.** NOTE: the local
+daemon is currently the DEV daemon (operator switched for write-testing).
+
+### Session 203 (2026-07-06) — **started BUILDING ADR 0044's consolidated SPA at
+`frontend/app/`** (Svelte 5 + Vite, dev port 5176). Post-ship, **additive** — a
+new dir that does not touch the shipping `frontend/logging/`; **ship gate
+unchanged.** Everything is frontend-first with STUBS (no `/v1` wiring yet). Built
+this session, in order:
+
+- **Scaffold + shell chrome:** `Sidebar` (collapsible left nav, brand + `Logo`,
+  theme toggle), `Header` (empty placeholder), `App` composer. Theme
+  (`data-theme`) + nav collapse (`data-nav`) reflected onto `<html>` via `$effect`,
+  persisted (`sm-theme`/`sm-nav`), with an anti-FOUC inline script in `index.html`.
+  State in `lib/ui/state.svelte.ts`.
+- **History-API client router** (`lib/router.svelte.ts`): views
+  dashboard/operate/logbook/config; **Operate has sub-routes** `/operate/phone` +
+  `/operate/ft8` (`setMode`, persisted `sm-op-mode`, bare `/operate` normalises);
+  `popstate` sync; SPA index-fallback (Vite + daemon `spaHandler`). Routes are
+  client-side view-switching only — data comes from `/v1/*` later.
+- **Expandable Operate nav** (`lib/ui/OperateNav.svelte`): Phone/CW + FT8 inline
+  sub-items in the full rail, **hover flyout** in the narrow rail.
+- **Right util rail** (`lib/operate/UtilRail.svelte`): Worked/Session/Details/Rig
+  + Pile-up + Collapse; shown across **ALL of Operate (both modes)**; collapsible
+  full↔narrow (`sm-util`, `data-util`). `InfoPanel` (card-below, placeholder),
+  `PileupDrawer` (docked, **emerges from the rail's inner edge**, tucks behind rail
+  when closed → no flash; shadow only when open). Panel/pileup state in
+  `lib/operate/state.svelte.ts`.
+- **Responsive Operate layout:** (1) effective-vs-preference **auto-collapse**
+  (`matchMedia` util<72rem, nav<61rem; the saved preference is never clobbered,
+  restores on widen); (2) `<main>` is now the **horizontal-scroll container**
+  bounded by the rail offsets, so the fixed rails can **never overlap the logging
+  card** — it scrolls within the region (**replaced** the `min-width:64rem` page
+  floor); (3) **stationary logging card** anchored to the viewport
+  (`margin-left: max(0px, 50vw − var(--card-w)/2 − var(--sidebar-w))`).
+- **Logging card = the spine (ADR 0045 first real demo).** `lib/operate/qso.svelte.ts`
+  holds the shared `draft` (callsign, rstSent/rcvd, name, qth, gridsquare,
+  dateOn/timeOn/dateOff/timeOff, comment) + `resetDraft`/`canLog`/`stampOn`/`stampOff`
+  + an **injected submit seam** (`setSubmit` → `logDraft`, mirrors the daemon's
+  `SetQsoLogger`). `lib/operate/LoggingCard.svelte` = self-contained fast-path card
+  (callsign/RST · date/time on+off · name · comment), **two-column** with a blank
+  grayed **enrichment square** on the right, **golden-ratio** width
+  (`--card-w: 573px` = φ × 354px height, defined on `.operate-center`). **QTH + grid
+  are NOT on the card** — grid is enrichment-filled, QTH is Details-card (rarely
+  touched); `onMount` stamps on-time, log stamps off-time.
+- **ADR 0045 written (Accepted):** "Frontend component architecture — decoupled,
+  relocatable by construction" — the client-side parallel to ADR 0043; 5 principles
+  (presentation≠state, data-in-nothing-reached-out, backend injected/subscribed, no
+  positioning assumptions, DRY-not-generic). Forcing function = the draggable-cards
+  idea.
+- **`docs/dogfood-inbox.md` notes added:** draggable/pinnable cards (+ the DRY
+  architecture driver), rotator control (enrichment SP/LP heading → future daemon
+  subsystem, blocked on kit purchase), operator-profiles contesting lens.
+
+**NEXT:** build the **enrichment** into the square — an `EnrichmentStrip`/`Card`
+reading `draft.callsign` + a stubbed `enrich()` seam → flag / DXCC + **NEW?** /
+**bearing SP-LP** / distance (bearing kept as a first-class value for the future
+rotator button), decoupled per ADR 0045. Then Worked (reads `draft.callsign`,
+auto-open), Session (receives logged QSOs via the sink), Details (QTH/grid/comment
++ enrichment detail), Rig panel + **CAT gate**. Wire real `/v1` + SSE after the
+stubbed interactions are proven.
+
+**DOC DEBT (do when next in the docs):** update the **ADR 0044** 2026-07-06
+amendment — the rail is now **all of Operate** (not "Phone/CW-scoped"), the
+`min-width:64rem` floor was **removed** (superseded by the `<main>` scroll
+container), and niggle **#2b** (card-never-overlapped) is **implemented +
+generalised** to the rails; add the ADR 0045 cross-ref.
+
+**COMMIT STATE:** the shell chrome + Operate flyout were committed mid-session by
+the operator; **everything from the RH util rail onward (responsive layout,
+logging card + draft spine, ADR 0045, inbox notes, this handoff) is UNCOMMITTED**
+for his review.
+
+**Design note (session 202, 2026-07-06):** designed the **post-ship** SPA
+consolidation — **ADR 0044** (merge logging/config/logbook into one Svelte
+shell; manual stays zero-JS per ADR 0036; client-side mirror of ADR 0043)
+drafted `Proposed`, with a P2 backlog entry gated behind the 7Q8AC ship and
+sub-decisions endorsed (History-API routing · lean status-home dashboard +
+`startup_view` pref · config-as-route). Docs-only, uncommitted; ship gate
+unchanged.
+
+**Recent arc (session 201, 2026-07-05):** the review-hardening arc continued
+through three more packages, and the timestamp migration went live. **(1)
+`internal/database` timestamps:** the fix-forward (`_time_format=sqlite` +
+`time.Now().UTC()` writers) shipped, then **migration 0004** (localtime→UTC table
+rebuild + normalise pre-fix debris rows). The staged-review gate earned its keep —
+a **HIGH data-corruption bug was caught BEFORE deploy:** pre-fix sqlboiler stored
+UTC `created_at`/`deleted_at` as `'… +0000 UTC'` (correct instant, wrong skin), and
+the two-arm normalisation CASE would have shifted every `created_at` (≈ every QSO
+since April) 2 h wrong; fixed with a third CASE arm + a `seed(4)` test. **0004 then
+DEPLOYED + VERIFIED on the live 5,148-QSO dogfood DB** — `schema_migrations_log` v4
+clean, 0 debris/unparseable rows, `created_at` matches `qso_date`/`time_on` in UTC.
+**(2) `internal/api`:** the PUT /v1/config lost-update race (two SPAs, second
+silently reverts the first) — overlay + Normalize + Validate moved INSIDE the
+`Update` lock against the fresh clone (extracted `overlayConfig`; concurrency
+regression test); plus `spaHandler` `/v1/`→404 + directory→SPA-fallback
+(disabled-subsystem routes were returning 200-HTML/405). **(3)
+`internal/qsoservice`:** audit `before_image` now marshalled BEFORE the merge (a
+`contact_history` body could taint `existing`'s shared `ContactHistory` array →
+poison the SM Cloud sync input, ADR 0016); `EnqueueUploads` doc corrected to the
+actual per-TYPE stamp check; a reflection pinning test locks the immutable-restore
+denylist against `types.Qso` drift. **(4)** an FT8 dogfood note (abandon-while-TX →
+Resume immediately keys TX) triaged **WAI** — gated by `fireOpening`'s 4.5 s
+late-window (ADR 0032 truncation keeps it decodable) — and graduated to backlog as
+a work-path-opening TX-quality enhancement. Deferred lows from all three reviews →
+backlog batches. **(5) go-ft8 v0.5.0→v0.6.0 adopted** — a decode-perf bump
+(concurrent candidate analysis, **~22% faster**: ~494 ms → ~383 ms/slot on the
+8-core dogfood box), `go.mod`/`go.sum` only, NO SM code. Protocol unchanged
+(`TestPrefixCompound_EncoderBoundary` still green → type-4 TX + `/R` decode still
+blocked); RF-safety gate + decode-file + `-race -short` + static CGO-free build all
+clean. Nice tie-in with (4): faster decode → earlier TX reply → less ADR 0032
+truncation. **Ship gate unchanged: P0 clear; the one open P1 is the
+dogfood-daemon behavioural retest (operator hardware).**
+
+**Earlier arc (session 200, 2026-07-05):** a review-driven hardening pass toward
+the 7Q8AC ship — three code reviews closed, CI made real, and the last small P1
+shipped. **(1) Bridge TX-safety review:** a failed key write (CI-V no-ACK, or a
+watchdog-closed port that flushed the frame first) could leave the rig keyed with
+the daemon believing it idle and NO backstop — `StartTune`/`KeyFt8Tx` now arm
+`strandedKeyed` on the failed-write rollback, routing into the existing F1(b)
+defensive-unkey (**ADR 0042 amendment**, scoped CI-V-decisive); CI-V teardown +
+defensive unkeys take `cmdMu` and re-check busy-TX under it; doc nits. Lows
+(auto-off timer clobber, garbled-first-IDENTITY write-block, `bridge.New`
+nil-trust) → backlog. Commits `172195dd`/`90c4de84`. **(2) smcloud store review
+CLOSED (7 findings):** 9 real-Postgres integration tests (skip-gated on a reachable
+DB), tenant-scoped upsert (no cross-tenant UUID hijack), µs `modified_at`
+canonicalisation (reconcile-hash churn — pinned in `sm-cloud-p1.md` + test),
+applied-row count, non-destructive `EnsureTenant` name, covering manifest index,
+typed `ErrEmptyPayload`. **CI now runs them for real** — a `postgres:16` service
+added to `ci.yml` (they were silently skipping); Taskfile `db:pg:up` podman
+short-name fix. Commits `3abb9be5`/`abf872e8`. **(3) SPA fetch timeouts — the last
+small P1, SHIPPED:** `safeFetch` applies a default 15 s timeout (30 s for the
+QSO-log write) so a wedged/half-open daemon can't hang boot or the submit latch —
+the flaky-Malawi failure mode; a fired timeout now surfaces as retriable
+`'network'` (was misfiled `'aborted'`, which callers drop silently). NB the earlier
+`e0b860f0` "add fetch timeouts" commit was **docs-only** — the actual wiring landed
+here. **(4)** the SPA code-review low batch triaged to backlog. **P1 now has one
+item left: the dogfood-daemon behavioural retest (operator hardware).** Active
+cycle stays the 7Q8AC ship.
+
+**Earlier arc (session 199, 2026-07-05):** the go-ft8 release SM was paused on
+LANDED (v0.5.0, tagged same day) and was **adopted** — pause LIFTED. Bumped
+`go.mod` v0.4.0→v0.5.0 (type-4 compound/nonstandard-call + `/R` encode/decode,
+upstream fixes) and audited the callsign seams. **Honest outcome — the win is
+mostly RX:** a type-4 compound-call CQ (a DXpedition's `CQ PJ4/NA2AA`) now
+**decodes** and reaches Band Activity, where before v0.5.0 it was silently
+missed. Round-trip verified; the parse/self-filter/SPA seams were already
+slash-tolerant, so no SM code change was needed for that. **TX stays
+protocol-limited:** a full standard-ladder QSO with a *prefix*-compound partner
+is still impossible — type-4 carries only CQ/RR73/73 with the partner hashed,
+no grid/report form — so the ladder's opening rung is unencodable and SM keeps
+failing soft (`StartQso → ErrTxBadMessage`; no regression). The reduced type-4
+QSO flow is now unblocked at the library level but is a **separate backlog
+feature**. Corrections to earlier framing: the standard `/P` suffix already
+worked since the v0.3.5 bump (not new here — now a regression lock); `/R`
+*encodes* but go-ft8 does NOT yet decode it, so it fails the round-trip gate and
+must not be transmitted. RF-safety gate added (`TestCompoundCQ_Decodes` +
+`TestPortableP_RoundTrip` + `TestPrefixCompound_EncoderBoundary`). Commit
+`54f1b59c`. Active cycle returns to the 7Q8AC ship goal + `backlog.md` P-tiers.
+
+**Earlier arc (session 198, 2026-07-04→05):** QRZ flaky-link resilience +
+FT8 self-transmitted-slot accuracy, both shipped and closed. **(1) QRZ:** no
+permanent self-disable on a boot-time session-key failure (lazy, cooldown-bounded
+re-auth on lookups; single-flighted via `authMu` TryLock; detached login context;
+credential redaction in logs; compare-and-clear on session-key expiry races) —
+commits `431b7eca`/`e04d643a`/`25e10f84`; the arc is **complete per the operator
+(2026-07-05)**. **(2) FT8:** self-transmitted slots are skipped for decode +
+occupancy (no more false busy readouts / garbled ghost rows from our own TX);
+TX slots recorded only after successful PTT engagement; ring buffer of recent
+TX slots; `SlotRefFromTime` floors to the 15 s lattice + test — commits
+`0ec9328c`/`98d7beab`/`f51542c3`. Also a dev-bootstrap full-upgrade warning
+(`3e84dd30`).
+
+**Earlier arc (session 197, 2026-07-03):** a non-shipping-feature session — **dev-environment
+reproducibility + a coupling-architecture pass.** Proved DEVELOPING.md against a genuinely clean
+**Fedora 41** (4 real deviations fixed in the doc + a new `scripts/dev-bootstrap.sh` for the
+incoming machine ~mid-July), then a measured coupling audit → **ADR 0043** (seven coupling
+principles, unified by *tighten what's stable / loosen what's uncertain*) → the first
+`internal/api` split steps: **`internal/api/httpkit`** extraction (the reusable response/body
+leaf) + an **import-freeze ratchet** on `internal/api`. The `qso-logged` announce spine and the
+bulk per-surface split were deliberately **DEFERRED** (the spine already exists as minimal
+`qso.stored`; the split waits for smcloud to pull the seams — the doctrine's own "loosen
+uncertain" applied to itself). Commits `8eab75d`/`3734cca` (dev-setup), `9f746a7`/`f9fb2ae`
+(ADR 0043 + factual correction), `e3b57cb` (httpkit), `a7948e5` (ratchet).
+
+**Recent arc (session 196, 2026-07-01→02):** a two-day data-integrity + safety-hardening
+arc plus a design. **(1) HH:MM:SS time precision** (ADR 0041, migration 0003): store/export
+native `HHMM`/`HHMMSS` (dedupe stays minute-precision; display HH:MM), driven by a QRZ
+round-trip destroying local seconds a QSL manager (M0URX) matches on; `QSO_DATE_OFF` now
+always-populated → fixes a midnight-crossing QSO being dropped. **(2) Forwarder-backfill SPA
++ config toggles** (ADR 0039 SPA half): logbook tri-state "uploaded?" column + manual upload
+(`POST /v1/forwarder/{name}/uploads` + `missing_from`), non-sparse config Forwarders toggles,
+same-tab cross-SPA nav (new-tab caused an SSE-starvation hang), a DEV/release pill
+(`buildinfo.Env` → `/v1/version` `env`). **(3) SM Cloud P1 DESIGNED** (ADR 0040 +
+`docs/v2-design/sm-cloud-p1.md`, NOT built): an `smcloud` forwarder → Postgres, same-repo
+`cmd/smcloud`, split-ownership, soft-delete superset, reconcile on `(UUID, modified_at)`;
+reactivates ADR 0016. **(4) FOUR code-review passes fixed + tested** (qsoservice F1–F6, bridge
+F1(a)/F2/F5 + F1(b) per ADR 0042, FT8 F1/F2 + Stop) — real latent bugs: a **midnight FT8 QSO
+silently dropped**, a **daemon-shutdown-strands-keyed** rig hole (F1(a) bench-validated:
+`systemctl restart` drops PTT), an **FT8 capture double-mic → deadlock**. **(5)**
+station-manager.org LIVE; crash-loop guards (StartLimit + deploy preflight) after a two-smd
+crash. See §"Session 196" + ADRs 0040/0041/0042. **Earlier arc (session 195, 2026-06-29→30):** daemon-heavy storage+forwarding arc, all
+deployed+validated on the live station. **(1)** ADR 0038 — forwarder retries connectivity
+outages **indefinitely** (`OutcomeUnreachable`); `failed` reserved for host-up rejections
+(offline-first fix). **(2)** **reference.db / log-db split** SHIPPED+DEPLOYED+VALIDATED —
+enrichment caches (`country`/`contacted_station`) now in a shared `reference.db`, log
+tables stay in the log DB; two `sqlite.Service` beans + nil-fallback routing + idempotent
+backup-first bootstrap (`VACUUM INTO` + rename `schema_migrations`→`_log`, no 0002 re-run).
+The **DB-manager-SPA spine is designed** (build deferred). **(3)** ADR 0039 — `enabled`
+gates enqueue (disabled = don't queue + startup-discard); non-sparse config-driven
+forwarders (action-keyed `endpoints`, registry-seeded). Daemon side deployed; SPA side
+(logbook "uploaded?" column + manual upload, config-SPA forwarder toggles) pending. **(4)**
+a 4-finding code review fixed (High: stale-completion race on re-armed upload rows). See
+§"Session 195" below + memory `project_sm_forwarder_durability` / `_db_manager_and_multifile`
+/ `_forwarder_enqueue_policy`. **Earlier arc (session 193, 2026-06-26):** **FT8 occupancy Spectrum view + Tx parity
+selector + backlog staleness audit.** Two FT8 SPA features. (1) A **Tx even/odd parity
+selector** for Call CQ — 3-state **Next/Even/Odd** (daemon `tx_parity` threaded
+handler→`Service.StartCallCq`→`Sequencer.StartCallCq`, choosing the CQ-slot parity;
+SPA operating-state in localStorage; settled the open config-vs-operating-state question
+as operating state). (2) A switchable **Spectrum occupancy view**
+(`Ft8OccupancySpectrum.svelte`, Channels|Spectrum toggle) — a *continuous* alternative to
+the channelised strip: signals at their true `low_hz`→`high_hz` positions, daemon clear
+offsets as ▾/★ ticks, **click-anywhere** continuous offset pick, and graded
+**clear/near/sharing** with soft wording instead of binary red. Rationale (operator's
+insight): SM is the only FT8 app that *channelises*, which over-reports "full" and
+manufactures TX guilt; FT8 is continuous + overlap-tolerant, so the Spectrum view shows the
+real picture (pure logic in `lib/utils/ft8Spectrum.ts`, tested). Also: the **new-DXCC `*`**
+added to the worked-station enrichment card (matching Band Activity), and a **backlog
+staleness audit** — 5 items cleaned (ft8.device name-matching DONE, fresh-install
+config-shape RESOLVED, caller-side sequencing retitled "both flows shipped", PUT /v1/config
+partial-credit, Rx-pane idle-state resolved WAI, stray Tune button DONE). A rendered
+scrolling **waterfall** stays scoped in the backlog (feasibility assessed: Canvas not DOM,
+FFT stays in Go, real cost is the daemon streaming pipeline). **Earlier arc (session 192,
+2026-06-25):** new-entity **DXCC-match fix** (country-name match false-positived European
+Russia/Germany → match numeric DXCC via embedded `internal/enums/dxcc` + `HasQsoForDxcc` +
+name fallback; memory `project_sm_new_entity_dxcc`) + FT8 `*` marker + pile-up ↑ reorder +
+logbook-count fix + config-SPA decode-log toggle + LSPA cleanup + setup→config hand-off.
+**Before (191):** config-SPA build-out (Email/PSK/Station/QSL + `PasswordField` + favicon +
+bulk import ~9× + serial by-id + 3-SPA build fix). **Before (187–190):** ClubLog forwarder;
+importer NO-UPLOAD + `smctl import`; fresh-install config fixes; RST-length migration +
+4509-QSO import validated. Per-session detail below.
+
 ### Session 197 (2026-07-03) — **Clean-Fedora-41 dev-setup walkthrough (DEVELOPING.md proven + `scripts/dev-bootstrap.sh`) + coupling audit → ADR 0043 → first `internal/api` split steps (httpkit + import ratchet).** No shipping feature; a reproducibility + architecture session. All green (gofmt/vet, `go test -race ./internal/api/...`, full-module build). **(1) Dev setup walked on a genuinely clean Fedora 41** (dogfood host downgraded F43→F41 over GPU desktop crashes — memory `dev-host-fedora41`). Four real deviations from `DEVELOPING.md`, all fixed in the doc + scripted: **(a)** the anaconda-base `sqlite-libs-3.46.1-1.fc41` lacks `sqlite3session_attach`, which Fedora's `libnode` links → `node`/`npm` die on first run until `sudo dnf upgrade` (now a mandatory "update base first" §0 step); **(b)** F41's Go is **1.24.10 < go.mod 1.26.2** → upstream Go (`/usr/local/go`) is **required**, not a fallback — dropped `golang` from the dnf list (it still arrives transitively via `hugo`, shadowed by PATH); **(c)** F41's **Hugo 0.126.2 builds `manual/` fine** → the 0.162.1 pin downgraded to break-glass; **(d)** a fresh install has **no git identity** → documented + a warn-only bootstrap check. New **`scripts/dev-bootstrap.sh`** — idempotent, Go version **derived from `go.mod`**, warns (never sets) on unset git identity — scripts the non-interactive path for the **incoming machine (~mid-July, memory `new-machine-incoming`)**. Commits `8eab75d` + `3734cca`. **(2) Coupling audit** (measured from the real import graph: 55 pkgs, 185 internal edges, per-pkg instability I / abstractness A / churn). Tree is healthy; one outlier: **`internal/api` Ce=22 god-package** (a single `Server` god-struct, an 11-arg `New`, ~40 handler files fused into one package). Confirmed the intended seams hold (`storage`/`forwarder` ⊥ `bridge`; `ft8` ⊥ `qsoservice`/`bridge`). Verified **`types.Qso` churn is strictly additive** (only `SessionID`/`CountryDetails` ever removed, both unused, both right after the v2 restructure) → not a refactor target, guardrail only. **(3) ADR 0043** (Proposed) — **seven coupling principles** (hide-info-behind-APIs, guard-boundaries, translate/validate-at-edge, announce-don't-command, consume-parsimoniously/produce-generously, messages-unless-semantics-fixed) unified by the meta-rule **tighten stable / loosen uncertain** (= the instability axis), applied first to splitting `internal/api` by surface behind **consumer-defined ports** + boundary guards + edge validation. Commit `9f746a7`; **corrected `f9fb2ae`** — its Context wrongly claimed "qsoservice does not announce": it **already publishes** `qso.stored`/`updated`/`deleted` on the main `events.Hub` (minimal `{qso_id, logbook_id}`, deliberately, and currently with **no SPA consumer** — the SPA subscribes only to `/v1/rig/events` + `/v1/ft8/events`; Phone/CW session rows come from the `POST /v1/qso` response, FT8 from `ft8-logged`). **(4) First api-split steps SHIPPED:** **`internal/api/httpkit`** (commit `e3b57cb`) — the JSON error envelope + response writers + size-capped body readers extracted to a leaf `Kit`; `Server` keeps thin delegate methods so the ~180 handler call sites are untouched; one 1-method `httpkit.ErrorNoter` is the only package-boundary seam (the access-log `responseRecorder` satisfies it via an exported `NoteError`). **Import ratchet** `internal/api/boundary_test.go` (commit `a7948e5`) — AST-scans api's non-test imports and **fails on any new module-internal import outside the frozen 23-set** (subset semantics: removals always pass so the split can shed freely, only growth fails; unused entries reported via `t.Log`); same idiom as `internal/bridge/boundary_test.go`; negative-tested (a probe import trips it with the ADR-0043 message). **(5) Deliberately NOT built** (doctrine applied to itself): a `qso-logged` event (spine already exists + is correctly minimal for future live-sync) and the bulk per-surface `api` split — both **deferred until smcloud (a real second consumer) pulls the seams**; ADR-0040 P1 is **backup/restore**, which doesn't consume the event stream, so there was no near-term prerequisite. Memories: `dev-host-fedora41`, `new-machine-incoming`.
 
 ### Session 196 (2026-07-01→02) — **HH:MM:SS time precision (ADR 0041) + forwarder-backfill SPA + SM Cloud P1 design (ADR 0040) + FOUR code-review passes fixed + guaranteed-stop safety arc (ADR 0042).** A two-day data-integrity + safety-hardening arc; all green throughout (gofmt, `go test -race` on touched packages, three SPA suites). **(1) HH:MM:SS time precision (ADR 0041, migration 0003).** Store + export QSO times at native `HHMM`/`HHMMSS` (was truncated to HHMM); **dedupe stays minute-precision** (`ComputeDedupeKey` fed `utils.TimeToHHMM`, so a seconds-stripped QRZ re-import still dedupes → never overwrites the stored seconds); **display stays HH:MM** (SPA `qsoDraft.timeOnFull` pins the real start second invisibly; `submitTimeOn/Off`). FT8 `BuildQso` formats `150405`. Driver: a QRZ round-trip destroyed local seconds that QSL manager **M0URX**'s OQRS matches on — so **never reconcile M0URX from a QRZ export**. `QSO_DATE_OFF` **always populated** (both paths: `BuildQso` + SPA `submitQsoDateOff`) — fixes a **midnight-crossing QSO being rejected/dropped**. Memory `project_sm_time_precision`. **(2) Forwarder-backfill SPA + config toggles (ADR 0039 SPA half).** Logbook SPA: a **tri-state "uploaded?" callsign colour** (green all / amber partial / red none) keyed on the durable ADIF `<prefix>_qso_upload_status` stamp, a **destination picker + manual upload** (`POST /v1/forwarder/{name}/uploads {uuids, force}` → `qsoservice.EnqueueUploads`), a server-side **`missing_from`** filter (`AdifPrefixForType`), an Emailed column + not-emailed toggle. Config SPA: **non-sparse Forwarders tab** (fixed toggle list, no add/remove). **Cross-SPA nav** (logging↔config↔logbook via a `navLink` snippet, **same-tab** — new-tab accumulated tabs × long-lived SSE → browser 6-conn-per-host starvation → hang) + a **DEV/release pill** (`internal/buildinfo.Env` → `/v1/version` `env`; RPM stamps `release`). **(3) SM Cloud P1 DESIGNED (ADR 0040 + `docs/v2-design/sm-cloud-p1.md`; NOT built).** Durable full-fidelity off-site backup + restore: a new **`smcloud` forwarder** (upsert-by-UUID, full `types.Qso` JSON, ADR-0038 forever-retry) → **Postgres**, **same-repo `cmd/smcloud`** (shared `internal/` types), **split-ownership** (content up / confirmation down at P3), **soft-delete tombstone** superset, **reconcile on `(UUID, modified_at)`** (reuses the `modified_at` trigger + `qso_history`), **full-JSON restore** (`smd import` JSON mode). Phase arc P1 my-backup → P2 onboard 7Q8AC → P3 auto-confirm → P4 community; phased auth (admin token → trust-on-provisioning → TQSL). Reactivates ADR 0016; security assessment gates tenant #2. Memory `project_sm_online_db_community`. **(4) FOUR operator-supplied code reviews — all confirmed + fixed + tested.** **qsoservice F1–F6:** F1 `"freq":""` PATCH → clean 400 not 500; **F2** a PATCH could forge the ClubLog upload stamp (the ADR-0039 backfill signal) + `QrzlogLogid` → added to the immutable-restore block; **F3** an import UUID collision (re-import an edited export — same UUID, different dedupe) aborted the whole run → classified as a per-record `uuid_conflict` that reports + continues (**this is the SM Cloud P1 restore path**); F4 malformed `QSO_DATE_OFF` silently dropped → reject; F5 nil-guard, F6 comment rot. **bridge F1(a)/F2/F5 + F1(b) — guaranteed-stop teardown/reconnect, ADR 0042:** **F1(a)** the daemon's OWN shutdown never unkeyed a keyed rig (healthy rig, port open, auto-off timer dies with the process → transmits until TOT); teardown now best-effort `tx_off` before `Close` — **bench-validated on the FTdx10 (`systemctl restart` drops PTT)**. **F1(b)** flag-based reconnect unkey (`strandedKeyed` set when F1(a)'s write fails; `defensiveUnkeyIfStranded` fires one `tx_off` after identity-confirm, one-shot). **F2** `keyMu` around `SendCommands`' busy-check+write (was check-then-act, could put an Exposed `set_power` on the wire mid-TX). F5 comment nits; F3/F4 deferred (Low). **FT8 F1/F2 + Stop:** **F1** a reconnect mid-release started a 2nd capture session (double mic → deadlock); `if s.capturing { return }`. **F2** `releaseCaptureLocked` drained `s.wg` under `s.mu`, deadlocking a self-dying loop (USB unplug closes the source → `onCaptureLoopExit` blocks on `s.mu` the releaser holds while it waits on that goroutine); drain now runs with `s.mu` dropped (a `releasing` guard + end-of-drain re-acquire). **Stop()** now `s.wg.Wait()`s after unlock (a fresh-eyes follow-up caught it returning before the drain when racing a linger-release). **(5)** station-manager.org **LIVE** (separate repo `station-manager-www`, Hugo + GitHub Pages); **crash-loop guards** (`StartLimitIntervalSec`/`Burst` on smd.service + a deploy preflight) after two smd on `:8080` hard-crashed the box; the name-clash-with-"Station Master" detour closed (keep the name, bought station-manager.org). ADRs 0040/0041/0042; memory `project_sm_online_db_community` / `_time_precision` / `_serial_bridge` / `_website` / `_dev_dogfood_and_crashloop` / `_name_decision`.
