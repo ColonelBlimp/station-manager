@@ -21,6 +21,12 @@
 // serve. TLS is the reverse proxy's job (S6 hosting); this listener is plain
 // HTTP. P1 is single-tenant by provisioning — one (token, tenant) pair —
 // while the server's token→tenant map keeps multi-tenant a data change.
+//
+// NOT yet built — required before any internet-facing (Phase 2) deploy: a
+// request rate limiter. The pool is bounded but requests are not, and
+// /v1/health pings Postgres unauthenticated. Tracked in docs/backlog.md
+// ("smcloud hardening — pre-Phase-2 gate"), gated with the ADR 0040
+// security assessment.
 package main
 
 import (
