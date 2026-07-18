@@ -164,6 +164,18 @@ the entry must be added, either way below. Then restart `smd`.
 `batch_size` (5), `retry` — is filled with defaults at startup; set them
 only to override.
 
+**Backfill drain speed:** the worker defaults (one batch of 5 every 120 s)
+are tuned for a slow, flaky internet link — a first backfill of a few
+thousand QSOs would take *days* at that pace. On the LAN, add
+`"tick_interval_sec": 10, "batch_size": 200` to the entry above
+(≈1,200 rows/min — a 5,500-QSO logbook drains in under 5 minutes; validated
+on the first staging deploy, 2026-07-18). Leave the faster settings for the
+LAN phase, or revert to defaults once the backfill is done — steady-state
+traffic is a row or two per QSO, where the defaults are fine either way.
+While a drain is in progress, don't hammer `POST /v1/smcloud/reconcile`:
+each call re-enqueues everything not yet in the cloud, so mid-drain calls
+pile duplicate (idempotent, but wasteful) work onto the queue.
+
 On startup the daemon spawns the forwarder worker AND the reconciler;
 **the reconciler's first pass (≈2 min after startup) backfills the entire
 logbook automatically** — no manual export/import.
