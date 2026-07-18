@@ -21,25 +21,108 @@ you to anything — see "Moving to the VPS" below.
 
 ## Phase 1 — LAN staging deploy
 
-Same binary, same unit, same Postgres steps as the VPS sections below, with
-these deltas:
+A complete, self-contained walkthrough. **No TLS and no Caddy in this
+phase** — Caddy is the VPS deploy's reverse proxy for HTTPS (section 4,
+phase 2 only); on your own LAN, smcloud serves plain HTTP directly. Two
+machines are involved; every step below says which one it runs on:
 
-- **Bind the LAN interface, skip TLS.** There is no reverse proxy in this
-  phase: set `SMCLOUD_LISTEN=0.0.0.0:8091` (or the box's specific IP) in the
-  env file, and skip section 4 entirely. Bearer-token-over-plain-HTTP is
-  acceptable on your own network — it is NOT the internet posture; do not
-  port-forward this listener through the router. Open 8091 in the box's own
-  firewall (`firewall-cmd --add-port=8091/tcp --permanent` or ufw equivalent).
-- **Give the box a stable address** — a static IP or DHCP reservation /
-  LAN hostname — so the daemon's forwarder URL (`http://192.168.x.y:8091`)
-  doesn't strand on lease churn.
-- **Non-x86 box (e.g. a Pi):** `SMCLOUD_ARCH=arm64 task rpm:smcloud`
-  (→ `smcloud.aarch64.rpm`), or `SMCLOUD_ARCH=arm64 task build:smcloud` for
-  a raw binary on a non-RPM OS.
-- Everything else is identical: Postgres (section 2), env file + unit
-  (section 3), daemon wiring (section 5 — with the `http://…:8091` URL),
-  verify (section 6), operations (section 7 — the `pg_dump` cron matters
-  MORE here, since the LAN box is likely older hardware).
+- the **dev/shack machine** — builds the RPM, runs the `smd` daemon;
+- the **staging box** — runs smcloud + Postgres (an RPM distro, e.g. Fedora).
+
+### 1.1 Build + copy the RPM (dev machine)
+
+```bash
+task rpm:smcloud
+scp build/release/smcloud.x86_64.rpm <staging-box>:
+```
+
+(Non-x86 staging box, e.g. a Pi: `SMCLOUD_ARCH=arm64 task rpm:smcloud` →
+`smcloud.aarch64.rpm`; non-RPM OS: `task build:smcloud` for a raw binary.)
+
+### 1.2 Postgres (staging box)
+
+If Postgres isn't installed yet, do section 2's install/initdb lines first.
+Then create the service's role + database (invent the DB password here —
+it only ever lives on this box, inside the DSN in step 1.4):
+
+```bash
+sudo -u postgres psql -c "CREATE ROLE smcloud LOGIN PASSWORD '<pick-a-db-password>'"
+sudo -u postgres psql -c "CREATE DATABASE smcloud OWNER smcloud"
+```
+
+No schema/migration steps — smcloud applies its embedded schema at boot.
+On a pre-existing Postgres install, check `pg_hba.conf` has a password
+method (`scram-sha-256`/`md5`) for `127.0.0.1` — `ident`/`peer`-only
+rejects the DSN login.
+
+### 1.3 Generate the bearer token (either machine)
+
+The token is a shared secret you invent — no account or registration
+anywhere. It goes in exactly TWO places: smcloud's env file (step 1.4,
+"only accept callers presenting this") and the daemon's forwarder
+credential (step 1.5, "present this when pushing"). Generate it once and
+keep it handy for both:
+
+```bash
+openssl rand -base64 32
+```
+
+If the two ever differ, every push gets 401 and the queue retries until
+you fix it — nothing is lost, but nothing backs up either.
+
+### 1.4 Install + configure smcloud (staging box)
+
+```bash
+sudo dnf install -y ./smcloud.x86_64.rpm   # binary + systemd unit + env-file skeleton
+sudoedit /etc/smcloud/smcloud.env
+```
+
+Set all four values in the env file:
+
+| Variable | Value for LAN staging |
+|---|---|
+| `SMCLOUD_LISTEN` | `0.0.0.0:8091` (LAN posture — the loopback default in the skeleton is the VPS posture) |
+| `SMCLOUD_DSN` | as shipped, with `CHANGE_ME_DB_PASSWORD` → the password from step 1.2 |
+| `SMCLOUD_CALLSIGN` | your callsign (the tenant that owns the backed-up log) |
+| `SMCLOUD_TOKEN` | the token from step 1.3 |
+
+Then start it, check health, and open the firewall port:
+
+```bash
+sudo systemctl enable --now smcloud
+curl -s http://127.0.0.1:8091/v1/health    # → {"status":"ok","db":"ok"}
+sudo firewall-cmd --add-port=8091/tcp --permanent && sudo firewall-cmd --reload
+```
+
+Plain-HTTP-with-bearer-token is acceptable on your own network — it is
+NOT the internet posture. **Never port-forward 8091 through the router.**
+Also give the box a stable address (static IP or DHCP reservation) so the
+forwarder URL doesn't strand on lease churn.
+
+### 1.5 Wire the daemon (shack machine)
+
+Config SPA → **Forwarding → Add → SM Cloud backup**:
+
+- **Service URL** — `http://<staging-box-ip>:8091`
+- **Bearer token** — the step 1.3 value
+- **Cloud logbook name** — leave empty (`main`)
+
+Enable it and restart `smd`. The daemon spawns the forwarder worker AND the
+reconciler; **the reconciler's first pass (≈2 min after startup) backfills
+the entire logbook automatically** — no manual export/import.
+
+### 1.6 Verify (shack machine)
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/v1/smcloud/reconcile | jq
+# First run: in_sync:false + enqueued_upserts:N (the backfill being queued).
+# When the worker has drained it, re-run and expect:
+#   {"in_sync": true, "local_count": N, "cloud_count": N, ...}
+```
+
+From here every logged/edited/deleted QSO pushes within one worker tick.
+Section 7's operations notes apply as-is — the `pg_dump` cron matters MORE
+here, since the LAN box is likely older hardware.
 
 **What to exercise while staging** (the point of the phase — fault drills
 beat throughput numbers, which a LAN inflates anyway):
