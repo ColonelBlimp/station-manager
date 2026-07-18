@@ -123,6 +123,7 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 	idOK := s.identityConfirmed
 	writable := s.rigWritableLocked()
 	txBusy := s.tuneActive || s.ft8TxActive
+	txUnconfirmed := s.txUncertain
 	s.mu.Unlock()
 	if cl == nil {
 		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsgf("%d command(s)", len(cmds))
@@ -145,6 +146,13 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 	// up. Surfaced as a 409 conflict so the SPA can retry once TX ends.
 	if txBusy {
 		return errors.New(errOp).WithErr(ErrTxActive).WithMsgf("%d command(s)", len(cmds))
+	}
+	// An UNCONFIRMED prior transmission gets the same treatment as an active
+	// one (8bd88c1b review): the active flags cleared but the PTT may still
+	// be up, and a frequency/mode/power write to a transmitting rig is the
+	// scenario the txBusy guard exists to prevent.
+	if txUnconfirmed {
+		return errors.New(errOp).WithErr(ErrTxUncertain).WithMsgf("%d command(s)", len(cmds))
 	}
 
 	// CI-V (ADR 0034): the rig confirms each command with a bare FB/FA ACK and

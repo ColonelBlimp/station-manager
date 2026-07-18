@@ -320,12 +320,15 @@ func TestKeyUnkeyFt8TxCIV_ConfirmedByAck(t *testing.T) {
 func TestUnkeyFt8TxCIV_NoAckKeepsArmed(t *testing.T) {
 	s, fake := newCIVPipelineTestService(t)
 	s.civAckTimeout = 60 * time.Millisecond // before Start — only the cmd path reads it
-	// ACK everything except tx_off (1C 00 00), which the rig leaves unacknowledged.
+	// ACK ONLY tx_on (1C 00 01): the scenario needs the key to succeed and the
+	// unkey to time out. Deliberately NOT ACKing the startup INIT/READ writes —
+	// their stale queued ACKs could otherwise satisfy the defensive recovery's
+	// tx_off wait and turn its expected alarm into a flaky confirmation.
 	fake.onWrite = func(w []byte) []byte {
-		if bytes.Contains(w, []byte{0x1C, 0x00, 0x00}) {
-			return nil
+		if bytes.HasSuffix(w, []byte{0x1C, 0x00, 0x01}) {
+			return append([]byte(nil), civAckOKFrame...)
 		}
-		return append([]byte(nil), civAckOKFrame...)
+		return nil
 	}
 	if err := s.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -334,6 +337,15 @@ func TestUnkeyFt8TxCIV_NoAckKeepsArmed(t *testing.T) {
 	defer func() { unsub(); _ = s.Stop() }()
 	fake.feedLine(civFreqBroadcast)
 	waitForIdentity(t, s)
+	// This fixture deliberately never ACKs tx_off, so the ADR 0051 defensive
+	// recovery ends in the alarm (correct behaviour); reset to a confirmed
+	// state so the scenario under test starts clean.
+	waitFor(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.txAlarmActive
+	}, "defensive recovery did not alarm on the un-ACKed tx_off")
+	s.confirmTxIdle("test setup reset")
 
 	if err := s.KeyFt8Tx(context.Background(), ""); err != nil {
 		t.Fatalf("KeyFt8Tx (tx_on is ACKed): %v", err)

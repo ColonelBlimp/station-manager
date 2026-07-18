@@ -738,41 +738,103 @@ func TestDefensiveUnkeyAndTeardownAlarm(t *testing.T) {
 		s.unkeyOnTeardown(def, f) // healthy port → write succeeds
 		s.mu.Lock()
 		alarmed := s.txAlarmActive
+		uncertain := s.txUncertain
 		s.mu.Unlock()
 		if alarmed {
 			t.Fatal("a successful teardown unkey must not raise the alarm")
 		}
-	})
-
-	t.Run("defensive unkey fires unconditionally on a confirmed connection", func(t *testing.T) {
-		s, f := tuneTestService(t) // identityConfirmed=true, no stranded state at all
-		s.defensiveUnkeyOnConfirm(def, f)
-		if w := lastWrite(f); w != "TX0;" {
-			t.Fatalf("defensive unkey must send tx_off; last write = %q, want TX0;", w)
+		if !uncertain {
+			t.Fatal("teardown write-accepted is NOT confirmed — uncertainty must be retained (8bd88c1b review)")
 		}
 	})
 
-	t.Run("skips the defensive unkey while a legitimate TX owns the PTT", func(t *testing.T) {
-		// A real tune keyed the instant identity re-confirmed: the defensive
-		// tx_off must NOT cut the live carrier — its own guaranteed-stop
-		// unkeys on release.
+	t.Run("defensive recovery fires unconditionally and demands confirmation", func(t *testing.T) {
+		// 8bd88c1b review: a FRESH service (no seeded alarm/uncertainty —
+		// the real restart shape) must still run the full cycle: TX0 +
+		// status query out, TX blocked until the rig answers RX.
 		s, f := tuneTestService(t)
-		s.mu.Lock()
-		s.tuneActive = true
-		s.mu.Unlock()
-		before := len(f.recordedWrites())
-		s.defensiveUnkeyOnConfirm(def, f)
-		if n := len(f.recordedWrites()); n != before {
-			t.Fatalf("must not send a defensive tx_off while a TX is active; got %d new writes", n-before)
+		s.beginDefensiveRecovery(def, f)
+		// The wire phase runs on a goroutine (the readLoop must stay free to
+		// deliver CI-V ACKs) — poll for both frames.
+		sawBoth := func() bool {
+			var sawTxOff, sawQuery bool
+			for _, w := range f.recordedWrites() {
+				switch string(w) {
+				case "TX0;":
+					sawTxOff = true
+				case "TX;":
+					sawQuery = true
+				}
+			}
+			return sawTxOff && sawQuery
+		}
+		deadline := time.Now().Add(time.Second)
+		for !sawBoth() {
+			if time.Now().After(deadline) {
+				t.Fatalf("recovery writes = %q, want TX0; AND the TX; query", f.recordedWrites())
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if !s.TxUncertain() {
+			t.Fatal("recovery must hold TX blocked until the rig confirms")
+		}
+		if !s.identityOK() {
+			t.Fatal("recovery must have unlocked identity")
+		}
+		s.observeTxStatus("0")
+		if s.TxUncertain() {
+			t.Fatal("a positive RX answer must clear the recovery uncertainty")
+		}
+	})
+
+	t.Run("no key can race into the recovery window", func(t *testing.T) {
+		// 8bd88c1b review: uncertainty is set BEFORE identity unlocks, so a
+		// key attempted mid-recovery is refused — the old busy-skip (which
+		// could silently drop the recovery) is unreachable by ordering.
+		s, f := tuneTestService(t)
+		s.setIdentityConfirmed(false)
+		s.lastMode = "USB"
+		s.lastPower = 35
+		s.beginDefensiveRecovery(def, f)
+		// Recovery is in flight (unconfirmed): a key must be refused. The
+		// pre-block is synchronous, so this refusal is deterministic.
+		if err := s.StartTune(context.Background()); !errors.Is(err, ErrTxUncertain) {
+			t.Fatalf("StartTune during recovery = %v, want ErrTxUncertain", err)
+		}
+		// Wait for the async wire phase (its beginTxConfirm re-arms
+		// uncertainty) BEFORE answering, or the answer can race the query.
+		deadline := time.Now().Add(time.Second)
+		for {
+			ws := f.recordedWrites()
+			if len(ws) > 0 && string(ws[len(ws)-1]) == "TX;" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("status query never written; writes=%q", ws)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		s.observeTxStatus("0")
+		if err := s.StartTune(context.Background()); err != nil {
+			t.Fatalf("StartTune after confirmation: %v", err)
 		}
 	})
 
 	t.Run("a standing alarm clears via the confirmation cycle after the defensive unkey", func(t *testing.T) {
 		s, f := tuneTestService(t)
 		s.raiseTxAlarm(TxAlarmTeardownUnconfirmed) // prior life left the alarm up
-		s.defensiveUnkeyOnConfirm(def, f)          // writes TX0 + starts confirmation
-		// The rigdef has no read_tx_status in this fixture path unless added —
-		// confirmation arrives via observeTxStatus regardless of transport.
+		s.beginDefensiveRecovery(def, f)           // writes TX0 + starts confirmation
+		deadline := time.Now().Add(time.Second)
+		for {
+			ws := f.recordedWrites()
+			if len(ws) > 0 && string(ws[len(ws)-1]) == "TX;" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("status query never written; writes=%q", ws)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 		s.observeTxStatus("0")
 		s.mu.Lock()
 		alarmed := s.txAlarmActive

@@ -75,6 +75,9 @@ func (s *Service) beginTxConfirm(def cat.RigDefinition, cl serial.Client) {
 	s.txUncertain = true
 	s.txConfirmGen++
 	gen := s.txConfirmGen
+	// Watermark: the liveness fallback may only confirm on frames decoded
+	// after this point (8bd88c1b review - a pre-unkey frame proves nothing).
+	s.txConfirmAfterFrame = s.rxFrameCount.Load()
 	if s.txConfirmTimer != nil {
 		s.txConfirmTimer.Stop()
 	}
@@ -173,7 +176,8 @@ func (s *Service) observeTxStatus(v string) {
 // the status query exists precisely to prove the write path.
 func (s *Service) observeRigData() {
 	s.mu.Lock()
-	confirm := s.txUncertain && !s.hasTxStatusQuery
+	confirm := s.txUncertain && !s.hasTxStatusQuery &&
+		s.rxFrameCount.Load() > s.txConfirmAfterFrame
 	s.mu.Unlock()
 	if confirm {
 		s.confirmTxIdle("rig data (no tx-status query in rigdef)")
@@ -199,4 +203,59 @@ func (s *Service) TxUncertain() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.txUncertain
+}
+
+// beginDefensiveRecovery is the identity-confirmation hook (ADR 0051 as
+// hardened by the 8bd88c1b review): EVERY newly confirmed connection runs one
+// defensive unkey through the FULL confirm-or-alarm cycle — unconditionally,
+// because a fresh process has no memory of how the previous one died, and the
+// silently-discarded-write failure mode applies to the defensive TX0 exactly
+// as it does to any other write. Ordering is the safety argument:
+//
+//  1. txUncertain is set BEFORE identityConfirmed — the key/command gates
+//     refuse while uncertain, so nothing can race into the recovery window
+//     (the old busy-skip + one-shot latch could silently drop the recovery).
+//  2. identity unlocks (write paths legal, H2 satisfied).
+//  3. the defensive tx_off goes out under keyMu — on a GOROUTINE, because
+//     this hook is called FROM the readLoop and the CI-V write awaits an ACK
+//     only the readLoop can deliver (synchronous = self-deadlock until the
+//     ACK timeout). The state transitions above are synchronous, so the
+//     ordering guarantee holds regardless; the write itself is bounded by
+//     the serial write watchdog + the CI-V ACK timeout, so the untracked
+//     goroutine cannot linger (a Stop mid-write just fails the write, and
+//     alarm publishes on a closed hub are no-ops).
+//  4. CI-V's awaited ACK confirms directly; otherwise the status-query cycle
+//     runs — and its write failure or silence ALARMS, with TX still blocked.
+func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Client) {
+	txOff, encErr := cat.Encode(def, tuneTxOffCommand)
+	if encErr != nil {
+		// Rigdef has no TX capability — nothing to defend against, nothing
+		// to block. Identity unlocks normally.
+		s.setIdentityConfirmed(true)
+		return
+	}
+
+	s.mu.Lock()
+	s.txUncertain = true // pre-block: keys/commands refuse from this instant
+	s.mu.Unlock()
+	s.setIdentityConfirmed(true)
+
+	go func() {
+		s.keyMu.Lock()
+		werr := s.writeKeyedLine(context.Background(), def, client, txOff, "defensive unkey")
+		s.keyMu.Unlock()
+		if werr != nil {
+			s.logger.ErrorWith().Err(werr).
+				Msg("bridge: defensive unkey write failed — rig may be keyed from a prior life; TX stays blocked")
+			s.raiseTxAlarm(TxAlarmUnconfirmed)
+			return
+		}
+		if def.Protocol == cat.ProtocolIcomCIV {
+			// writeKeyedLine awaited the ACK — positive confirmation.
+			s.confirmTxIdle("civ ack (defensive unkey)")
+			return
+		}
+		s.logger.InfoWith().Msg("bridge: sent defensive tx_off on confirmed connection (ADR 0051)")
+		s.beginTxConfirm(def, client)
+	}()
 }

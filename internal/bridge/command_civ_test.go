@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	stderr "errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -32,15 +33,55 @@ var civFreqBroadcast = []byte{0xFE, 0xFE, 0x00, 0x94, 0x00, 0x00, 0x40, 0x07, 0x
 func startedCIVService(t *testing.T, ackFrame []byte) (*Service, *fakeSerial, <-chan Event, func()) {
 	t.Helper()
 	s, fake := newCIVPipelineTestService(t)
-	if ackFrame != nil {
-		fake.onWrite = func(_ []byte) []byte { return append([]byte(nil), ackFrame...) }
+	// Replies stay DISARMED through Start: the INIT/READ startup writes must
+	// not queue stale ACK frames that could later be misdelivered to a real
+	// waiter (they have no waiter of their own). Armed just before identity.
+	var replyArmed atomic.Bool
+	// The ADR 0051 defensive recovery sends tx_off (1C 00 00) on identity
+	// confirmation; a real rig ACKs that benign frame regardless of the
+	// behaviour a test scripts for its OWN writes — so answer it OK always,
+	// and apply the scripted ackFrame to everything else.
+	fake.onWrite = func(w []byte) []byte {
+		if !replyArmed.Load() {
+			return nil
+		}
+		if bytes.HasSuffix(w, []byte{0x1C, 0x00, 0x00}) {
+			return append([]byte(nil), civAckOKFrame...)
+		}
+		if ackFrame != nil {
+			return append([]byte(nil), ackFrame...)
+		}
+		return nil
 	}
 	if err := s.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	ch, unsub := s.Subscribe()
+	replyArmed.Store(true)
 	fake.feedLine(civFreqBroadcast)
 	waitForIdentity(t, s)
+	// Let the defensive recovery reach EITHER outcome, then normalise to a
+	// settled TX-ready state. (Confirmation is the usual path; the fake's
+	// zero-latency reply can occasionally be consumed before the recovery's
+	// ACK waiter registers, which times the recovery out into the alarm — a
+	// fixture-speed artifact real serial latency doesn't produce.)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		uncertain, alarmed := s.txUncertain, s.txAlarmActive
+		s.mu.Unlock()
+		if !uncertain {
+			break
+		}
+		if alarmed {
+			s.confirmTxIdle("test fixture normalisation")
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("defensive recovery did not settle")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	cleanup := func() { unsub(); _ = s.Stop() }
 	return s, fake, ch, cleanup
 }
@@ -261,6 +302,15 @@ func TestSendCommandsCIV_NoAckTimesOut(t *testing.T) {
 	defer unsub()
 	fake.feedLine(civFreqBroadcast) // no onWrite → no ACK ever
 	waitForIdentity(t, s)
+	// The silent rig never ACKs the ADR 0051 defensive tx_off either, so the
+	// recovery correctly ends in the alarm; reset so the scenario under test
+	// starts from a settled state.
+	waitFor(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.txAlarmActive
+	}, "defensive recovery did not alarm on the silent rig")
+	s.confirmTxIdle("test setup reset")
 
 	start := time.Now()
 	err := s.SendCommand(context.Background(), "set_freq", "18100000")
@@ -285,6 +335,12 @@ func TestSendCommandsCIV_ContextCancel(t *testing.T) {
 	defer unsub()
 	fake.feedLine(civFreqBroadcast)
 	waitForIdentity(t, s)
+	waitFor(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.txAlarmActive
+	}, "defensive recovery did not alarm on the silent rig")
+	s.confirmTxIdle("test setup reset")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already cancelled — no ACK will be waited for

@@ -266,6 +266,16 @@ type Service struct {
 	txConfirmGen     uint64
 	txConfirmTimer   *time.Timer
 	hasTxStatusQuery bool
+	// txConfirmAfterFrame (mu-guarded) is the rxFrameCount watermark at the
+	// moment the current confirmation cycle began: the any-rig-data fallback
+	// (defs without a TX-status query) may only confirm on frames decoded
+	// AFTER it - a frame that arrived before the unkey went out proves
+	// nothing about the unkey (8bd88c1b review, ordering finding).
+	txConfirmAfterFrame uint64
+
+	// rxFrameCount counts successfully decoded rig frames (readLoop-owned
+	// increments, atomic for cross-goroutine reads by the confirm machinery).
+	rxFrameCount atomic.Uint64
 }
 
 // New constructs a Service from the operator's bridge config and a

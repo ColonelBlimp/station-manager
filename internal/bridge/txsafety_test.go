@@ -10,7 +10,22 @@ import (
 	stderr "errors"
 	"testing"
 	"time"
+
+	"github.com/ColonelBlimp/station-manager/internal/cat"
 )
+
+// waitFor polls cond up to a second — the async defensive-recovery goroutine
+// (ADR 0051) makes several fixtures eventually-consistent.
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal(msg)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
 
 // Finding 3: every mutating entry point refuses a rig the liveness strikes
 // already read as non-responsive — before this, a 2-strike "dead" rig was
@@ -371,5 +386,110 @@ func TestIdentityCacheClearsOnConfirmation(t *testing.T) {
 		case <-timeout:
 			return // no stale replay — pass
 		}
+	}
+}
+
+// TestDefensiveRecovery_FreshProcessModelsRestart is the 8bd88c1b review's
+// core demand: a FRESH Service — no seeded alarm, no uncertainty, exactly what
+// a restarted daemon looks like — must still run the full defensive recovery
+// on its first confirmed connection: TX0 + status query out, TX blocked until
+// the rig positively answers RX. (The earlier recovery test seeded the alarm
+// in-process, which validated the alarm-carry path but not the restart.)
+func TestDefensiveRecovery_FreshProcessModelsRestart(t *testing.T) {
+	s, fake := newPipelineTestService(t) // FT-710 — completely fresh state
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	fake.feedLine([]byte("ID0800")) // identity confirms → unconditional recovery
+	waitFor(t, func() bool {
+		var sawTxOff, sawQuery bool
+		for _, w := range fake.recordedWrites() {
+			switch string(w) {
+			case "TX0;":
+				sawTxOff = true
+			case "TX;":
+				sawQuery = true
+			}
+		}
+		return sawTxOff && sawQuery
+	}, "fresh-process recovery did not write TX0 + the status query")
+
+	if !s.TxUncertain() {
+		t.Fatal("fresh-process recovery must hold TX blocked until the rig confirms")
+	}
+	// A key attempted mid-recovery is refused — the ordering guarantee.
+	s.lastMode = "USB"
+	s.lastPower = 35
+	if err := s.StartTune(context.Background()); !stderr.Is(err, ErrTxUncertain) {
+		t.Fatalf("StartTune during fresh recovery = %v, want ErrTxUncertain", err)
+	}
+
+	fake.feedLine([]byte("TX0")) // the rig answers RX
+	waitFor(t, func() bool { return !s.TxUncertain() },
+		"fresh-process recovery did not confirm on the RX answer")
+}
+
+// TestDefensiveRecovery_SilentRigAlarms: the restart shape where the defensive
+// TX0/query vanish into a dead write path — the confirm timeout must alarm and
+// TX must stay blocked (before the 8bd88c1b fix this produced nothing at all).
+func TestDefensiveRecovery_SilentRigAlarms(t *testing.T) {
+	prev := txConfirmTimeout
+	txConfirmTimeout = 50 * time.Millisecond
+	defer func() { txConfirmTimeout = prev }()
+
+	s, fake := newPipelineTestService(t)
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	fake.feedLine([]byte("ID0800")) // recovery fires; the rig never answers
+	waitFor(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.txAlarmActive
+	}, "unanswered fresh-process recovery must raise the tx-alarm")
+	if !s.TxUncertain() {
+		t.Fatal("TX must stay blocked while the recovery is unconfirmed")
+	}
+}
+
+// SendCommands must treat an UNCONFIRMED transmission like an active one
+// (8bd88c1b review): the active flags cleared but the PTT may still be up.
+func TestSendCommands_RefusedWhileUncertain(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	s.mu.Lock()
+	s.txUncertain = true
+	s.mu.Unlock()
+	if err := s.SendCommand(context.Background(), "set_freq", "14074000"); !stderr.Is(err, ErrTxUncertain) {
+		t.Fatalf("SendCommand while uncertain = %v, want ErrTxUncertain", err)
+	}
+	if n := len(fake.recordedWrites()); n != 0 {
+		t.Fatalf("%d command writes reached a possibly-transmitting rig, want 0", n)
+	}
+}
+
+// The any-rig-data fallback may only confirm on frames decoded AFTER the
+// confirmation cycle began — a pre-unkey frame proves nothing (8bd88c1b
+// review, ordering finding).
+func TestObserveRigData_WatermarkGuard(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	def, ok := cat.Lookup("yaesu-ftdx10")
+	if !ok {
+		t.Fatal("rigdef missing")
+	}
+	s.rxFrameCount.Store(7) // frames seen BEFORE the unkey
+	s.beginTxConfirm(def, nil)
+
+	s.observeRigData() // same watermark — must NOT confirm
+	if !s.TxUncertain() {
+		t.Fatal("a pre-cycle frame count must not confirm the unkey")
+	}
+	s.rxFrameCount.Add(1) // a frame decoded AFTER the cycle began
+	s.observeRigData()
+	if s.TxUncertain() {
+		t.Fatal("a post-cycle frame must confirm (no-query fallback)")
 	}
 }

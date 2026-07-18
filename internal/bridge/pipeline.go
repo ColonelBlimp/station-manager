@@ -377,7 +377,10 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 // cancelled by the time we tear down, and the unkey must not be skipped for that.
 func (s *Service) unkeyOnTeardown(def cat.RigDefinition, client serial.Client) {
 	s.mu.Lock()
-	keyed := s.tuneActive || s.ft8TxActive
+	// Include txUncertain (8bd88c1b review): an unconfirmed prior unkey means
+	// the PTT may still be owned — the teardown tx_off is exactly the cheap
+	// insurance that situation wants.
+	keyed := s.tuneActive || s.ft8TxActive || s.txUncertain
 	s.mu.Unlock()
 	if !keyed {
 		return
@@ -410,61 +413,16 @@ func (s *Service) unkeyOnTeardown(def cat.RigDefinition, client serial.Client) {
 		s.raiseTxAlarm(TxAlarmTeardownUnconfirmed)
 		return
 	}
-	s.logger.InfoWith().Msg("bridge: unkeyed TX on pipeline teardown (guaranteed stop)")
-}
-
-// defensiveUnkeyOnConfirm (ADR 0051, superseding ADR 0042's stranded-flag
-// residual): EVERY newly identity-confirmed connection gets ONE unconditional
-// defensive tx_off. Stateless by design — it needs no memory of how the
-// previous instance (or the previous DAEMON) died, so it covers restarts,
-// crashes, and power-cycle orderings the in-memory flag never could. A tx_off
-// to an idle rig is a no-op (and on the Yaesu family cancels CAT-initiated TX
-// only, so a manually keyed operator transmission is untouched); the H2 gate
-// holds — the caller fires this only after identity confirms. If an
-// uncertainty/alarm is standing from a prior life, the confirmation cycle runs
-// after the write so a positive RX answer clears the banner.
-func (s *Service) defensiveUnkeyOnConfirm(def cat.RigDefinition, client serial.Client) {
-	txOff, err := cat.Encode(def, tuneTxOffCommand)
-	if err != nil {
-		// Rigdef has no TX capability — nothing to defend against.
-		return
-	}
-	// Take cmdMu on CI-V (half-duplex bus guard, review 2026-06-19 M2) so the
-	// defensive frame can't interleave with an in-flight command/key sequence
-	// and its FB can't be misrouted by deliverAck to a pending command waiter.
-	// Under cmdMu — which the tune/FT8 key write also takes — re-check that no
-	// legitimate TX has since taken the PTT: this fires right after identity
-	// (re)confirmation unlocks the write paths, so a StartTune/KeyFt8Tx racing
-	// in the gap between the arm-check above and here would otherwise be cut
-	// short by our tx_off.
-	civ := def.Protocol == cat.ProtocolIcomCIV
-	skipped := false
-	werr := s.underCmdMuCIV(civ, func() error {
-		s.mu.Lock()
-		busy := s.tuneActive || s.ft8TxActive
-		s.mu.Unlock()
-		if busy {
-			skipped = true
-			return nil
-		}
-		return client.WriteCommandBytes(context.Background(), txOff)
-	})
-	if skipped {
-		return
-	}
-	if werr != nil {
-		s.logger.WarnWith().Err(werr).Msg("bridge: defensive unkey write failed")
-		return
-	}
-	s.logger.InfoWith().Msg("bridge: sent defensive tx_off on confirmed connection (ADR 0051)")
-	// A standing uncertainty/alarm from a prior life needs positive
-	// confirmation to clear — run the query cycle now that the port answers.
+	// Write-accepted is NOT confirmed (the incident's exact lesson), and the
+	// port closes before any answer could arrive — so retain txUncertain
+	// rather than declaring the stop guaranteed (8bd88c1b review). No banner
+	// alarm on a healthy shutdown (alarm-fatigue trade recorded in ADR 0051);
+	// the state survives an in-process reconnect, and the next connection's
+	// UNCONDITIONAL defensive recovery confirms — or alarms — either way.
 	s.mu.Lock()
-	pending := s.txUncertain || s.txAlarmActive
+	s.txUncertain = true
 	s.mu.Unlock()
-	if pending {
-		s.beginTxConfirm(def, client)
-	}
+	s.logger.InfoWith().Msg("bridge: unkeyed TX on pipeline teardown (unconfirmed — next connection verifies)")
 }
 
 // runPollLoop fires the rigdef's POLL read-list on a low-rate ticker to mirror
@@ -593,8 +551,6 @@ func (s *Service) runSupervisor(ctx context.Context) {
 func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.RigDefinition, initBytes, readBytes []byte) pipelineExitClass {
 	announcedDisconnect := false
 	identityVerified := false
-	// defensiveUnkeySent latches the ADR 0051 one-per-instance defensive unkey.
-	defensiveUnkeySent := false
 	// unrecognisedPublished rate-limits the identity-unrecognised bridge-error
 	// to once per pipeline instance now that an unrecognised ID no longer
 	// latches identityVerified (finding 7) — without it every subsequent frame
@@ -716,6 +672,9 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 			// Silent skip per the codec doc; logging would flood.
 			continue
 		}
+		// One successfully decoded frame — the confirm machinery's
+		// any-rig-data fallback watermarks against this counter (ADR 0051).
+		s.rxFrameCount.Add(1)
 
 		// Identity verification fires once per pipeline lifecycle on
 		// the first IDENTITY response (typically arrives in response
@@ -742,7 +701,9 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 				// Icom deliberately set to the same address would pass, but
 				// commands route by that address anyway, and TX stays unexposed.)
 				identityVerified = true
-				s.setIdentityConfirmed(true)
+				// Same safe-order recovery as the Yaesu branch (ADR 0051):
+				// the CI-V defensive unkey confirms via its awaited ACK.
+				s.beginDefensiveRecovery(def, client)
 			} else if v, ok := status["IDENTITY"]; ok {
 				switch classifyIdentity(v, def.Model) {
 				case identityUnrecognised:
@@ -771,10 +732,13 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 					s.publishExitBridgeError(BridgeErrCodeIdentityMismatch, map[string]string{"driver": def.ID, "expected": def.Model, "actual": v})
 					return exitPermanent
 				case identityConfirmed:
-					// Positively the configured rig — unlock the operator write
-					// paths (SendCommands / StartTune).
+					// Positively the configured rig. beginDefensiveRecovery
+					// unlocks the write paths in the SAFE order (ADR 0051 /
+					// 8bd88c1b review): uncertainty first (keys refuse), then
+					// identity, then the unconditional defensive unkey with
+					// its full confirm-or-alarm cycle.
 					identityVerified = true
-					s.setIdentityConfirmed(true)
+					s.beginDefensiveRecovery(def, client)
 				}
 			}
 		}
@@ -786,14 +750,6 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 			s.observeTxStatus(v)
 		}
 		s.observeRigData()
-
-		// ADR 0051: one unconditional defensive unkey per instance, the moment
-		// identity is confirmed — stateless recovery for ANY prior life that
-		// may have left the rig keyed (superseding the ADR 0042 stranded flag).
-		if !defensiveUnkeySent && s.identityOK() {
-			defensiveUnkeySent = true
-			s.defensiveUnkeyOnConfirm(def, client)
-		}
 
 		payload, hasFields := mapStatusToPayload(status)
 		if !hasFields {
