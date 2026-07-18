@@ -32,6 +32,54 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-18)
 
+> **Session 225 (2026-07-18, evening) — THE TX-SAFETY MEGA-ARC: the stuck-TX
+> incident's root fix, end to end — ADR 0051 designed, built, and hardened
+> through TWO adversarial review rounds, all in one evening. Committed
+> per-step by the operator.**
+> - **Warm-up (post-S224):** header CAT chip → Rig Control panel TOGGLE
+>   (route-aware; + the "Rig → Rig Control" rename, both hosts) · the
+>   review-trivials batch (middleware Unwrap comment, `uuid_conflict` under
+>   force — NB force salts the dedupe key so forced-import UUID collision is
+>   the only real case, pinned by test — `importBatchFallback` doc, TX_PWR
+>   omit-when-rounds-to-0 with the operator's 5 W-floor note) · SessionPanel
+>   truncate FIXED (`table-fixed` — ellipsis classes were inert under auto
+>   layout).
+> - **TX-safety review round 1 (7 findings, all verified real):** triage split
+>   into the ADR (1/2/4) + companion batch (3/5/6/7). **Companion BUILT:**
+>   `rigWritableLocked` strike-aware predicate in every mutating entry point ·
+>   CI-V snapshots skip while keyed · generation-gated auto-off backstops
+>   (with DIRECT tests for the 0%-covered callbacks) · identity un-latch
+>   (garbled first ID recovers). **Residual round (a1d031cf):** generation
+>   recheck UNDER keyMu in the release paths · keyed recheck INSIDE the cmdMu
+>   closures · stale identity_unrecognised hub-cache cleared on confirmation.
+> - **ADR 0051 BUILT + Accepted** (~26 files): `txconfirm.go` confirm-or-alarm
+>   core (uncertain state; rigdef `read_tx_status` `TX;`→`TXn;` on FTdx10 +
+>   FT-710, surgical 9-line def edits; CI-V confirms via ACK; frame-
+>   watermarked any-rig-data fallback for query-less defs) · `tx-alarm` SSE
+>   (hub-replayed) + persistent red "CHECK YOUR RADIO" banners in BOTH SPAs
+>   (dismiss ≠ clear; logging SPA via i18n) · teardown under `keyMu` (final
+>   TX0 is the last serialized wire action) · `strandedKeyed` DELETED for the
+>   stateless unconditional defensive unkey (supersedes the ADR 0042
+>   residual, noted there) · `ErrTxUncertain` → 409 `rig_tx_unconfirmed`.
+> - **Review round 2 (8bd88c1b, 5 findings) closed:** defensive recovery
+>   UNCONDITIONAL with the full cycle (the fresh-restart shape — the Critical;
+>   my own recovery test had seeded state in-process, now restart-modeled) ·
+>   uncertainty set BEFORE identity unlocks (no key races the recovery
+>   window; wire phase async — my first sync version self-deadlocked the
+>   CI-V readLoop awaiting its own ACK, caught by the suite) · teardown
+>   retains `txUncertain` on an ACCEPTED write (write-accepted ≠ confirmed;
+>   no banner on healthy shutdown — alarm-fatigue trade recorded) ·
+>   `SendCommands` refuses while unconfirmed · frame watermark. CI-V test
+>   fixtures needed honest updates (reply-arming vs stale queued ACKs —
+>   production register-before-write order verified CORRECT). Bridge suite
+>   8×-stable under `-race`; api/ft8/cat green; both SPA suites green.
+> - **NEXT: `task deploy:local:dev`** — NONE of today's post-morning work is
+>   live yet (ADR 0051 + both review batches + banners + trivials + chip
+>   toggle + truncate all wait on it). Then the standing dogfood validations;
+>   ClubLog key still pending. P0 empty again; the review cadence
+>   (paste → verify → triage → build) has now absorbed SIX external review
+>   rounds today across smcloud, frontend/app, and the bridge.
+
 > **Session 224 (2026-07-18, from mid-afternoon into evening) — THE USB/TX-SAFETY
 > INCIDENT + CLUBLOG ENABLEMENT SAGA. Operator-driven throughout; committed
 > per-step.**
