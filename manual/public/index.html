@@ -605,7 +605,27 @@ imported QSO, independent of any upload.</li>
           
           <section id="troubleshooting" class="chapter">
             <h2>Troubleshooting</h2>
-            <p><em>Draft outline — content to be written.</em></p>
+            <h2 id="a-logged-qso-has-no-operator-name-or-other-looked-up-details">A logged QSO has no operator name (or other looked-up details)</h2>
+<p><strong>Why it happens.</strong> When you log a QSO, Station Manager looks the callsign up
+online (QRZ.com and the country service) to fill in the operator&rsquo;s name,
+country, DXCC entity, zones, and grid. By design, <strong>a failed lookup never
+stops the QSO from being logged</strong> — if the internet is slow or down at that
+moment, the contact is stored with whatever was known, and fields like the
+name are simply left blank. The QSO itself is safe; only the decoration is
+missing.</p>
+<p><strong>The fix — Re-enrich.</strong> Open the <strong>Logbook</strong>, click the QSO to open its
+edit window, and press <strong>Re-enrich</strong> (bottom-left). Station Manager re-runs
+the lookup and fills in the missing fields; check the result and <strong>Save</strong>.
+To repair a batch, tick the affected rows in the logbook list and use the
+bulk <strong>Re-enrich</strong> action instead — it sweeps every selected row on the
+page.</p>
+<p><strong>If the name still comes back blank</strong>, the callsign is probably not listed
+on QRZ.com at all (common for some regions and club calls). No lookup source
+has the name in that case — Re-enrich will still repair the country, DXCC,
+and zones, and you can type the name in by hand if the operator gave it to
+you on the air.</p>
+<hr>
+<p><em>Draft outline — remaining content to be written.</em></p>
 <ul>
 <li>Station Manager won&rsquo;t start — and where the startup error is logged.</li>
 <li>The rig won&rsquo;t connect.</li>

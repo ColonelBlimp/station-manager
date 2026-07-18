@@ -32,6 +32,63 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-18)
 
+> **Session 219 (2026-07-18, same day, operator dogfooding throughout) — MAP
+> INTERACTIVITY ARC (5 pieces) + SMCLOUD FIELD-FIDELITY AUDIT (CLEAN) + small
+> closures. Map batch COMMITTED + PUSHED by the operator; NOT yet dogfood-
+> deployed (deploy deferred until the operating session ends — the batch
+> ships together on the next `task deploy:local:dev`).**
+> - **Map zoom/pan + stacked hover tooltip (dogfood-requested):** new pure
+>   `lib/map/zoom.ts` (viewBox-space transform: `zoomAt` cursor-pinned scale 1–16×,
+>   `panBy`/`clampTransform` bounds + exact-identity snap, `toContent`,
+>   `endpointsNear` stacked-endpoint hit grouping) + WorldMap interaction layer:
+>   manual non-passive wheel (Svelte 5 declares `onwheel` passive), drag-pan with
+>   pointer capture, dblclick/Reset-view button, stroke-widths + radii ÷k, tooltip
+>   lists every contact stacked at an endpoint (cap 8, "+N more — zoom in"),
+>   right-edge flip; native mid-arc `<title>` labels kept. jsdom tests drive real
+>   wheel/pointermove events via a pinned bounding rect.
+> - **Window persistence (operator-directed after the WAI triage):** picker choice
+>   → localStorage `sm-map-window`, restored through `storedDurationMin` (absent/
+>   garbled/retired values → 6 h default).
+> - **50m level-of-detail (operator asked "can zoom show more?"):** past 3× the
+>   basemap swaps 110m → Natural Earth 50m (241 countries, real coastlines) via
+>   `worldCountriesHi()` lazy dynamic import — bundled chunk (756 KB / 243 KB gz,
+>   offline posture intact), loaded only on first zoom-in; fail-soft to 110m. The
+>   50m set carries DUPLICATE feature ids (`036` ×2) — keyed-each keys are now
+>   id+index. `chunkSizeWarningLimit` 800 with a why-comment (data chunk, already
+>   code-split — anything NEW past it still warns).
+> - **Background-tab staleness FIXED (dogfood repro confirmed first):** hidden map
+>   tab never caught up (no visibilitychange handling, throttled debounce,
+>   possibly-dead SSE) — `mapData` now runs an immediate catch-up `refresh()` on
+>   the hidden→visible edge (listener detached on teardown; MapView test drives
+>   visible/hidden/unmount edges). Second-monitor posture was never affected.
+> - **Triage (same session):** "session timer 14:58 but map lists 1 h+ QSOs" =
+>   **WAI per ADR 0049** (window ≠ session; revisit only via a conscious ADR
+>   change) — persistence above is the operator's accepted remedy. App suite
+>   621 tests green; map suites 61.
+> - **SMCLOUD FIELD-FIDELITY AUDIT — CLEAN, and now a repeatable drill:**
+>   new **`scripts/smcloud-audit.py`** (qso-audit.py conventions; self-fetches
+>   `/v1/export` with the forwarder creds from config.json; flags --db/--config/
+>   --export/--logbook; exit 0/1/2). First run: **5,545/5,545 UUID parity, 0 core
+>   mismatches, 0 additional_data mismatches, 0 modified_at violations** — the
+>   only initial "mismatch" was the audit's own freq comparison (column = integer
+>   kHz per schema; payload = ADIF MHz string; conversion now built in).
+>   Population gaps (rst ~99%, cqz 95.8%, my_rig 45%) faithfully mirror local.
+>   Runbook Phase-1 drill list references the script. Live sync observed during
+>   dogfood: 13 new QSOs flowed as logged; 3 pending drained in one 10 s tick →
+>   `in_sync:true`.
+> - **Small closures:** backlog P1 stale-test item was ALREADY FIXED (found at
+>   triage — commit `74cf906d` bumped the schema expectation to v4; verified
+>   green; struck). **Re-enrich manual FAQ LANDED** (`manual/.../troubleshooting.md`:
+>   cause, per-QSO + bulk Re-enrich remedy, QRZ-absent-callsign limit; hugo
+>   builds) — the re-enrich arc is COMPLETE, archive its backlog line on the
+>   next roll.
+> - **NEXT:** (1) operator: `task deploy:local:dev` after the operating session →
+>   dogfood-eyeball the map batch (zoom Europe for 50m detail; re-run the
+>   background-tab repro as validation); (2) smcloud fault drills + `smd restore
+>   -dry-run` rehearsal (runbook list; the audit script is the before/after
+>   check); (3) on-air, opportunistic: FT8 abandon-fix validation + a type-4
+>   nonstandard QSO → flip ADR 0048; (4) then the active-cycle P2 queue.
+
 > **Session 218 (2026-07-17→18) — SMCLOUD RPM BUILT + PHASE 1 LAN STAGING
 > DEPLOYED AND VERIFIED: the full 5,532-QSO logbook is backed up on the F44 box,
 > `POST /v1/smcloud/reconcile` → `in_sync:true` (5532 == 5532, hash match). The
