@@ -319,7 +319,13 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		// lookup is bounded and pure-read. Inheriting `ctx` would let
 		// a request-deadline expiry turn a known-duplicate into a
 		// generic 500 — the M2 finding from the 2026-05-02 review.
-		if sqlite.IsUniqueConstraintError(err) && !force {
+		// No `!force` guard here: force skips the dedupe PRE-CHECK, but the
+		// DB's unique indexes still fire — a forced submit that collides can
+		// never insert, so classifying the violation (duplicate / uuid_conflict)
+		// beats surfacing a generic insert error. (Review 2026-07-05: the old
+		// `&& !force` made uuid_conflict unreachable under a future --force
+		// import.)
+		if sqlite.IsUniqueConstraintError(err) {
 			refetchCtx, refetchCancel := context.WithTimeout(context.Background(), dedupeRefetchTimeout)
 			existing, ferr := s.DB.FetchQsoByDedupeKeyWithContext(refetchCtx, logbookID, dedupeKey)
 			refetchCancel()

@@ -434,6 +434,13 @@ describe('formatAdifRecord — TX_PWR', () => {
         expect(adif).not.toContain('TX_PWR');
     });
 
+    it('omits TX_PWR when the value would round to 0 (sub-0.5 W typo/QRP)', () => {
+        // Emitting a durable TX_PWR:0 is worse than omitting: 0.4 W can only
+        // be a typo on an FTdx10 (5 W floor) but is real on a QRP rig.
+        const adif = formatAdifRecord({ ...baseFields, txPower: 0.4 });
+        expect(adif).not.toContain('TX_PWR');
+    });
+
     it('emits TX_PWR rounded to integer', () => {
         const adif = formatAdifRecord({ ...baseFields, txPower: 99.6 });
         expect(adif).toContain('<TX_PWR:3>100');

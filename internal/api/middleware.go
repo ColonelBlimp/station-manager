@@ -206,11 +206,11 @@ func (r *responseRecorder) Flush() {
 // Unwrap is required by http.ResponseController so that SetWriteDeadline /
 // SetReadDeadline / hijack-style operations can traverse the wrapper and
 // reach the underlying connection. Without it the controller returns
-// ErrNotSupported and long-lived SSE streams silently inherit the server's
-// WriteTimeout — the bridge handler clears its write deadline at stream
-// open precisely because the stream must outlive WriteTimeoutSec, so a
-// missing Unwrap manifests as "SSE connection closes every WriteTimeoutSec
-// seconds and the SPA misses any rig pushes during the reconnect window."
+// ErrNotSupported and the SSE handlers' per-write deadline arming
+// (handler_events.go) fails — long-lived streams then silently inherit the
+// server-wide WriteTimeout, which manifests as "SSE connection closes every
+// WriteTimeoutSec seconds and the SPA misses any pushes during the
+// reconnect window."
 func (r *responseRecorder) Unwrap() http.ResponseWriter {
 	return r.ResponseWriter
 }

@@ -70,7 +70,11 @@
     <div class="mt-3">
         {#if session.qsos.length > 0}
             <div class="{tableHeight} overflow-y-auto">
-                <table class="">
+                <!-- table-fixed: truncate on a td only works when column widths BIND —
+                     auto layout grows cells to fit content and ignores w-* as a cap,
+                     so long names/countries stretched the table instead of ellipsizing
+                     (dogfood 2026-07-18). Fixed layout takes widths from the th row. -->
+                <table class="w-full table-fixed">
                     <thead class="bg-surface sticky top-0 z-10">
                         <tr class="text-xs text-muted text-left font-medium">
                             <th class="w-20">Time</th>
@@ -107,8 +111,12 @@
                                 <td class="w-14">{q.mode}</td>
                                 <td class="tabular-nums">{q.rstSent}</td>
                                 <td class="tabular-nums">{q.rstRcvd}</td>
-                                <td class="w-32 truncate">{q.name}</td>
-                                <td class="w-32 truncate pl-1">{q.country}</td>
+                                <td class="w-32 overflow-hidden text-nowrap text-ellipsis"
+                                    >{q.name}</td
+                                >
+                                <td class="w-32 overflow-hidden text-nowrap text-ellipsis pl-1"
+                                    >{q.country}</td
+                                >
                             </tr>
                         {/each}
                     </tbody>

@@ -273,6 +273,19 @@ func TestSubmit_DedupeIgnoresSeconds(t *testing.T) {
 	existing, err := s.DB.FetchQsoByIdWithContext(ctx, first.ID)
 	require.NoError(t, err)
 	require.Equal(t, "084500", existing.QsoDetails.TimeOn)
+
+	// A FORCED import with a colliding UUID must classify as uuid_conflict,
+	// not a generic insert error (review 2026-07-05: the old `&& !force`
+	// guard skipped classification entirely under force). Note force can't
+	// collide on the dedupe index at all — force salts the key with a random
+	// nonce — so UNIQUE(uuid) via import is the only collision force can hit.
+	col := mk("0900")
+	col.AppSmQsoID = first.UUID
+	_, err = s.SubmitImport(ctx, lbID, col, true, nil)
+	require.Error(t, err)
+	var serr *SubmitError
+	require.ErrorAs(t, err, &serr, "forced uuid collision must be a classified SubmitError")
+	require.Equal(t, "uuid_conflict", serr.Code)
 }
 
 // TestPreserveSeconds pins the edit-time data-preservation guard: an edit that

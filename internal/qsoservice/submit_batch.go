@@ -48,7 +48,10 @@ type ImportBatchResult struct {
 // It shares prepareQso with the live submit path, so validation is identical.
 // Unlike submit it does NOT publish a per-QSO QsoStored event — bulk import runs
 // with no live SSE subscribers (the daemon is stopped for exclusive DB access),
-// so 45k no-op publishes are pointless. onProgress (optional) is called after
+// so 45k no-op publishes are pointless. (One exception: importBatchFallback
+// re-runs a failed batch per-record through submit(), which DOES publish per
+// QSO — harmless no-ops in the same no-subscriber context, but the
+// "does not publish" contract is the batch path's only.) onProgress (optional) is called after
 // each batch commits with the running totals, for the CLI's progress line.
 func (s *Service) SubmitImportBatch(
 	ctx context.Context,

@@ -237,7 +237,10 @@ export function formatAdifRecord(f: AdifQsoFields): string {
     if (f.rxFreqHz !== undefined && f.rxFreqHz !== f.txFreqHz) {
         lines.push(adifTag('FREQ_RX', freqMhz(f.rxFreqHz)));
     }
-    if (f.txPower !== undefined && f.txPower > 0) {
+    // Omit rather than emit a durable TX_PWR:0 when the value rounds to zero
+    // (sub-0.5 W can only be a typo on this station — the FTdx10's floor is
+    // 5 W — but a QRP rig's operator would hit it for real).
+    if (f.txPower !== undefined && Math.round(f.txPower) > 0) {
         lines.push(adifTag('TX_PWR', Math.round(f.txPower).toString()));
     }
     if (f.name && f.name.length > 0) {
