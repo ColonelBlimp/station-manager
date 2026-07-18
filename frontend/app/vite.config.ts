@@ -22,6 +22,12 @@ export default defineConfig({
     build: {
         outDir: 'dist',
         emptyOutDir: true,
+        // The Natural Earth 50m basemap (world-atlas/countries-50m.json) is a
+        // ~756 KB DATA chunk — already code-split behind a dynamic import and
+        // fetched only when the map zooms past the LOD threshold, so the
+        // default 500 kB advisory has nothing actionable to say about it.
+        // Anything NEW past this raised limit deserves a look.
+        chunkSizeWarningLimit: 800,
         rollupOptions: {
             output: {
                 // Stable, hash-free entry names so the (future) committed
