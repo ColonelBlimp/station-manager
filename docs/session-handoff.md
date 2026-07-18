@@ -32,6 +32,34 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-18)
 
+> **Session 222 (2026-07-18, night) — AUDIO INCIDENT + WATCHDOG: live
+> Plasma-upgrade capture failure diagnosed and fixed, then the durable
+> dead-stream watchdog built the same evening. Committed + pushed.**
+> - **Incident:** new KDE Plasma's audio device fiddling destroyed+recreated
+>   the rig codec's (PCM2903C) PipeWire nodes under a live FT8 capture —
+>   smd's source-output left DANGLING (`Source: 4294967295`), daemon
+>   "decoding live slots" on pure silence, ZERO errors anywhere.
+>   `pactl move-source-output` refuses a dangling stream; fix was close the
+>   FT8 view > 5 s linger → reopen (demand-driven capture = no daemon
+>   restart). Decodes confirmed back.
+> - **Watchdog BUILT (`internal/ft8/deadsource.go` + scheduler/service
+>   wiring):** scheduler-side monitor closes a window at EVERY 15 s boundary
+>   (timer fires even with zero samples — the incident's shape; the ring
+>   never filled so no Slot was emitted, a decode-side check would never
+>   run); dead = starved (< quarter-slot delivered) or silent (all literal
+>   zeros — analog inputs always carry ADC noise); 2 strikes (CAT
+>   `noDataStrikeLimit` pattern) → warn + async release, whose tail
+>   re-acquires for the still-present subscriber → fresh OS stream links to
+>   current nodes. Once per session; reacquire-failure falls back to the
+>   CAT-reconcile retry. Worst case ~45 s vs silent-forever. 7 tests
+>   (pure strike policy + release/reacquire plumbing); ft8 suite `-race`
+>   green. Docs: ft8.md capture section + inbox note struck BUILT.
+> - **NEXT:** watchdog goes live at the next `task deploy:local:dev` (running
+>   daemon predates it); end-to-end validation = next Plasma fiddle or
+>   `pw-cli destroy` on the codec node mid-capture. Standing S220 dogfood
+>   validations still open (map eyeball, in-place session edit mid-CQ,
+>   abandon-fix layer 1, type-4 → ADR 0048 flip).
+
 > **Session 221 (2026-07-18, evening) — SYNC-PROTOCOL ARC: review round 3
 > absorbed (6 findings on internal/cloud sync semantics) AND the resulting
 > ADR 0050 revision-counter protocol DESIGNED + BUILT the same day. Three
