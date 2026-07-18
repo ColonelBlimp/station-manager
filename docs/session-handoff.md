@@ -82,12 +82,45 @@ precisely so we don't re-derive state or redo finished work.
 >   cause, per-QSO + bulk Re-enrich remedy, QRZ-absent-callsign limit; hugo
 >   builds) — the re-enrich arc is COMPLETE, archive its backlog line on the
 >   next roll.
+> - **SMCLOUD FAULT DRILLS 1–5 RUN AND PASSED (later same session, operator at
+>   the box + assistant monitoring the shack side, ALL WHILE LIVE ON-AIR running
+>   an FT8 CQ pile-up — count grew 5,561→5,571 during the abuse, zero QSOs
+>   lost):** (1) total cloud DB loss (DROP DATABASE) → schema self-applied at
+>   boot, full 5,563-row rebuild; (2) smcloud restart mid-backfill → INVISIBLE
+>   (fell between 10 s ticks; the connection-refused→"host unreachable — will
+>   retry (no give-up)" path was proven by drill 1's stop window); (3) Postgres
+>   killed mid-push → HTTP 500 "logbook provisioning failed" → transient
+>   classification, ~65 s backoff, resumed on recovery; (4) LAN cable pulled +
+>   QSOs edited while dark → updates held (`no route to host`, distinct from
+>   drill 1's refused), drained seconds after replug; the on-demand reconcile
+>   500s GRACEFULLY while the box is dark; (5) a row DELETEd via psql under
+>   smcloud's feet → reconcile caught the 1-row drift → healed to in_sync.
+>   Post-abuse `scripts/smcloud-audit.py`: **CLEAN 5,571/5,571**. Mid-drill
+>   bonus: the real QRZ path hit a genuine internet timeout and took the same
+>   unreachable-retry path — the flaky-link design validated by actual
+>   flakiness. Cloud psql facts learned: table is `qsos`, PK is `uuid` (no
+>   int id — deliberate). **Drill 6 (restore rehearsal: `smctl stop` →
+>   `smd restore -dry-run` → expect ~all-skip → `smctl start`) still pending —
+>   needs the daemon stopped, so it waits for off-air.**
+> - **IN-PLACE SESSION EDIT BUILT (dogfood catch, same session): editing a QSO
+>   no longer takes the FT8 run off-air.** Trap diagnosed: SessionPanel had no
+>   edit → operator navigated to the Logbook ROUTE → Operate unmounts → FT8 SSE
+>   drops → 5 s linger → mic released (demand-driven capture, WAI) → no slots →
+>   CQ silent. Fix (option a, root-cause): `EditQsoModal` DECOUPLED to injected
+>   props (ADR 0045 — one modal, two owners), new `operate/sessionEdit.svelte.ts`
+>   controller (hydrate via NEW `fetchQso` GET /v1/qso/{uuid} in api/qso-patch.ts
+>   → modal in place → PATCH → canonical write-back onto the session row), the
+>   Session-card CALLSIGN is the edit button (fixed column widths untouched —
+>   operator constraint), uuid-less legacy rows stay plain text, Re-enrich rides
+>   along free. Rejected: capture-across-routes (touches the capture design) +
+>   nav-warning (documents the trap instead of removing it). 630 tests green.
 > - **NEXT:** (1) operator: `task deploy:local:dev` after the operating session →
->   dogfood-eyeball the map batch (zoom Europe for 50m detail; re-run the
->   background-tab repro as validation); (2) smcloud fault drills + `smd restore
->   -dry-run` rehearsal (runbook list; the audit script is the before/after
->   check); (3) on-air, opportunistic: FT8 abandon-fix validation + a type-4
->   nonstandard QSO → flip ADR 0048; (4) then the active-cycle P2 queue.
+>   dogfood-eyeball the map batch (zoom Europe for 50m detail; background-tab
+>   repro as validation) + the in-place session edit (edit a session QSO mid-CQ:
+>   TX cadence must never break); (2) **drill 6** — the `smd restore -dry-run`
+>   rehearsal (off-air; the last piece of proving Phase 1); (3) on-air,
+>   opportunistic: FT8 abandon-fix validation + a type-4 nonstandard QSO → flip
+>   ADR 0048; (4) then the active-cycle P2 queue.
 
 > **Session 218 (2026-07-17→18) — SMCLOUD RPM BUILT + PHASE 1 LAN STAGING
 > DEPLOYED AND VERIFIED: the full 5,532-QSO logbook is backed up on the F44 box,
