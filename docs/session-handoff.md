@@ -75,14 +75,17 @@ precisely so we don't re-derive state or redo finished work.
 >   an OLDER clock — NTP-step immunity), trigger characterization (+1 per
 >   edit incl. same-second, manifest carries it, restore resumes 7→8), hash
 >   revision-sensitivity, diff revision-drift, server round-trip.
-> - **NEXT / DEPLOY NOTE (recorded in backlog):** daemon + smcloud **must
->   ship together** (hash formulas differ across a skew → full-drift re-push,
->   harmless but noisy). So next `task deploy:local:dev` MUST pair with the
->   F44 smcloud RPM rebuild (`task rpm:smcloud` + reinstall) — now REQUIRED,
->   no longer optional. First reconcile after should read `in_sync` (all
->   rows tie at revision 0). Standing dogfood validations from S220 still
->   open (map eyeball, in-place session edit mid-CQ, abandon-fix layer 1,
->   type-4 → ADR 0048 flip).
+> - **DEPLOYED + VERIFIED same day:** paired deploy done (daemon
+>   `deploy:local:dev` + F44 smcloud RPM, both `654.gc5151ca8`). The one
+>   `in_sync:false` reconcile (14:04) was the predicted formula skew — the
+>   daemon's 2-min-after-boot reconcile fired before the F44 restart — and
+>   the version-aware diff correctly pushed NOTHING during it; post-restart
+>   reconcile (14:14): **`in_sync` 5,590/5,590, zero heals**, all rows tied
+>   at revision 0. Backlog item marked DEPLOYED+VERIFIED → archive at next
+>   sweep. **NEXT:** the standing S220 dogfood validations (map eyeball,
+>   in-place session edit mid-CQ, abandon-fix layer 1 on air, type-4 →
+>   ADR 0048 flip); smcloud rate limiter + streaming export stay gated with
+>   the ADR 0040 Phase-2 assessment.
 
 > **Session 220 (2026-07-18, later the same day) — SECURITY-REVIEW ARC: three
 > external review cycles absorbed (smcloud + frontend/app), every finding
