@@ -32,6 +32,58 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-18)
 
+> **Session 221 (2026-07-18, evening) — SYNC-PROTOCOL ARC: review round 3
+> absorbed (6 findings on internal/cloud sync semantics) AND the resulting
+> ADR 0050 revision-counter protocol DESIGNED + BUILT the same day. Three
+> commits, all pushed by the operator.**
+> - **Review 3 triage (6 findings, all real):** built 4 — **UUIDv7 gate on
+>   upload** (PUT rejects non-v7/malformed with 400 BEFORE the EnsureLogbook
+>   side effect — Postgres would store any RFC 4122 value but restore admits
+>   only v7, so a "successful" backup could be unrestorable), **snapshot
+>   export** (`store.ExportSnapshot` — logbooks + records in ONE
+>   repeatable-read read-only tx; two autocommit reads could dump QSOs whose
+>   logbook is missing from the same export), **composite tenant/logbook FK**
+>   (cloud migration 0002 — schema refuses cross-tenant logbook filing
+>   independent of handler discipline), **single-JSON-document bodies**
+>   (trailing JSON → 400). Deferred with notes: streaming export (bounded at
+>   P1 scale, → pre-Phase-2). Kept as permanent test: the **F44 upgrade
+>   rehearsal** (`migrate_test.go` — a version-1 cloud DB WITH DATA upgrades
+>   via `store.Migrate`, constraints present, data intact).
+> - **ADR 0050 (finding 1, the P1) — designed then built on go-ahead:**
+>   `modified_at` (SECONDS locally) can't order same-second edits; `>=` +
+>   arrival order let a reconcile-goroutine push racing the serial worker
+>   regress the cloud payload INVISIBLY (hash ties). Now a per-row monotonic
+>   **`revision`** counter is the version marker end to end: local sqlite
+>   migration **0005** (column + COMBINED stamp trigger), types.Qso/manifest/
+>   adapters/restore carry it, wire envelope + export field, cloud migration
+>   **0003** + revision-first guard (`revision > OR (= AND modified_at >=)` —
+>   ties get exact legacy semantics), reconcile hash line now
+>   `uuid|unixmicro|revision`. **Build discovery recorded in the ADR:** the
+>   proposed bump-inside-stamp-trigger shape was WRONG — the daemon edit path
+>   stamps modified_at explicitly (stamp trigger never fires there), and a
+>   separate revision trigger CHAINS (its inner UPDATE re-fires the stamp
+>   trigger, clobbering the µs-UTC stamp with `datetime('now')` — caught by
+>   the existing 0004 canonicalisation test). One combined trigger with a
+>   CASE owns both stamps. sqlboiler models regenerated at pinned 4.19.7
+>   (diff: qso.go +9/−2 only; toml blacklist gained the split tracking
+>   tables). Restore PRESERVES revision (a restored row resumes its sequence;
+>   out-of-band same-UUID re-imports that reset to 0 push as stale BY DESIGN
+>   — restore is the only sanctioned same-UUID recovery path).
+> - **Verification:** full-tree `go test -race ./...` ZERO failures incl.
+>   live-PG cloud suites + sqlite↔PG e2e reconcile/restore. New tests pin THE
+>   finding (same-second lower-revision push rejected; higher revision beats
+>   an OLDER clock — NTP-step immunity), trigger characterization (+1 per
+>   edit incl. same-second, manifest carries it, restore resumes 7→8), hash
+>   revision-sensitivity, diff revision-drift, server round-trip.
+> - **NEXT / DEPLOY NOTE (recorded in backlog):** daemon + smcloud **must
+>   ship together** (hash formulas differ across a skew → full-drift re-push,
+>   harmless but noisy). So next `task deploy:local:dev` MUST pair with the
+>   F44 smcloud RPM rebuild (`task rpm:smcloud` + reinstall) — now REQUIRED,
+>   no longer optional. First reconcile after should read `in_sync` (all
+>   rows tie at revision 0). Standing dogfood validations from S220 still
+>   open (map eyeball, in-place session edit mid-CQ, abandon-fix layer 1,
+>   type-4 → ADR 0048 flip).
+
 > **Session 220 (2026-07-18, later the same day) — SECURITY-REVIEW ARC: three
 > external review cycles absorbed (smcloud + frontend/app), every finding
 > verified-then-fixed or deliberately backlogged with a design note. All
