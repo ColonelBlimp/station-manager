@@ -51,9 +51,39 @@ sudo -u postgres psql -c "CREATE DATABASE smcloud OWNER smcloud"
 ```
 
 No schema/migration steps — smcloud applies its embedded schema at boot.
-On a pre-existing Postgres install, check `pg_hba.conf` has a password
-method (`scram-sha-256`/`md5`) for `127.0.0.1` — `ident`/`peer`-only
-rejects the DSN login.
+
+**Fedora/RHEL gotcha (hit on the first staging deploy, 2026-07-18):** the
+distro-default `pg_hba.conf` authenticates TCP connections with `ident`,
+so the DSN login fails — smcloud restart-loops, and testing the DSN
+directly shows `FATAL: Ident authentication failed for user "smcloud"` —
+even though the role and password are correct. Fix:
+
+```bash
+sudo nano /var/lib/pgsql/data/pg_hba.conf
+# (path wrong on your distro? locate it: sudo -u postgres psql -c "SHOW hba_file")
+```
+
+Change the METHOD column on the two TCP host lines from `ident` to
+`scram-sha-256` — leave the `local … peer` line alone (it's what lets
+`sudo -u postgres psql` keep working):
+
+```
+host    all    all    127.0.0.1/32    scram-sha-256
+host    all    all    ::1/128         scram-sha-256
+```
+
+Reload and test the DSN directly (this prints the real error, unlike the
+service's exit code):
+
+```bash
+sudo systemctl reload postgresql
+psql "postgres://smcloud:<db-password>@127.0.0.1:5432/smcloud?sslmode=disable" -c "select 1"
+```
+
+If it now fails with `password authentication failed`, the role's stored
+hash predates scram — re-store it:
+`sudo -u postgres psql -c "ALTER ROLE smcloud PASSWORD '<db-password>'"`
+and test again. Once `select 1` returns a row, restart the service.
 
 ### 1.3 Generate the bearer token (either machine)
 
@@ -101,15 +131,42 @@ forwarder URL doesn't strand on lease churn.
 
 ### 1.5 Wire the daemon (shack machine)
 
-Config SPA → **Forwarding → Add → SM Cloud backup**:
+Unlike QRZ/ClubLog, the smcloud forwarder is **not pre-seeded** into
+`config.json` (it has no canonical URL — yours is the only instance), so
+the entry must be added, either way below. Then restart `smd`.
+
+**Via the config SPA** — Forwarding → **Add → SM Cloud backup**:
 
 - **Service URL** — `http://<staging-box-ip>:8091`
 - **Bearer token** — the step 1.3 value
 - **Cloud logbook name** — leave empty (`main`)
 
-Enable it and restart `smd`. The daemon spawns the forwarder worker AND the
-reconciler; **the reconciler's first pass (≈2 min after startup) backfills
-the entire logbook automatically** — no manual export/import.
+…and enable it.
+
+**Or by hand** — add this entry to the `forwarders` array in
+`$SM_WORKING_DIR/config.json` (stop `smd` first; it writes the file):
+
+```json
+{
+  "name": "smcloud",
+  "type": "smcloud",
+  "enabled": true,
+  "credentials": {
+    "url": "http://<staging-box-ip>:8091",
+    "token": "<the step 1.3 token>",
+    "logbook": "main"
+  }
+}
+```
+
+`logbook` may be omitted (defaults to `main`). Everything else —
+`action_filter` (all three actions), `tick_interval_sec` (120),
+`batch_size` (5), `retry` — is filled with defaults at startup; set them
+only to override.
+
+On startup the daemon spawns the forwarder worker AND the reconciler;
+**the reconciler's first pass (≈2 min after startup) backfills the entire
+logbook automatically** — no manual export/import.
 
 ### 1.6 Verify (shack machine)
 
@@ -186,9 +243,9 @@ No manual migrations: smcloud applies its embedded schema at boot
 (`store.Migrate`, the same files/tracking table as the dev CLI).
 
 Already have Postgres installed and running? Skip the first two lines — just
-create the role + database, and check `pg_hba.conf` allows password logins
-(`scram-sha-256`/`md5`) for `127.0.0.1` — a pre-existing install may be
-`ident`/`peer`-only, which rejects the DSN login.
+create the role + database. Either way, check `pg_hba.conf` allows password
+logins for `127.0.0.1` — the distro default is `ident`-only, which rejects
+the DSN login; the exact fix is in Phase 1 step 1.2.
 
 ## 3. The service (VPS)
 
