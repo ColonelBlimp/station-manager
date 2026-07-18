@@ -61,3 +61,4 @@ config.json
 /.claude/*
 !/.claude/settings.json
 .tailwindplus
+/smcloud

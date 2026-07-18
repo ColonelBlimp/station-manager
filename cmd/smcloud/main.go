@@ -22,11 +22,15 @@
 // HTTP. P1 is single-tenant by provisioning — one (token, tenant) pair —
 // while the server's token→tenant map keeps multi-tenant a data change.
 //
-// NOT yet built — required before any internet-facing (Phase 2) deploy: a
-// request rate limiter. The pool is bounded but requests are not, and
-// /v1/health pings Postgres unauthenticated. Tracked in docs/backlog.md
-// ("smcloud hardening — pre-Phase-2 gate"), gated with the ADR 0040
-// security assessment.
+// NOT yet built — required before any internet-facing (Phase 2) deploy:
+// request limiting. The bounded DB pool protects Postgres but not the
+// process — excess requests pile up as handler goroutines waiting for
+// connections, and /v1/health pings Postgres unauthenticated. Decided
+// shape (2026-07-18): per-IP rate limiting lives at the reverse proxy
+// (which sees real client IPs); THIS binary gets a global in-process
+// concurrency limit so it stays safe even run without the proxy. Tracked
+// in docs/backlog.md ("smcloud hardening — pre-Phase-2 gate"), gated with
+// the ADR 0040 security assessment.
 package main
 
 import (
