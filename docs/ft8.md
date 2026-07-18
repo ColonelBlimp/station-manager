@@ -72,6 +72,18 @@ on any PUT):
   passive no-data disconnect) is caught too — `RigConnected` falls to false after
   a couple of consecutive no-data liveness timeouts, distinguishing a genuinely
   dead rig from a merely-quiet one the bridge's probe recovers each cycle.
+  **A live capture stream that goes DEAD is self-healed too** (dogfood
+  2026-07-18, "Plasma upgrade day"): a desktop audio reshuffle (KDE/PipeWire
+  device fiddling) can destroy+recreate the device's nodes under a running
+  session, leaving the daemon's stream dangling — no error anywhere, Band
+  Activity just never decodes again. A scheduler-side watchdog
+  (`internal/ft8/deadsource.go`) checks each 15 s boundary for a starved
+  (< quarter-slot of samples) or silent (all literal zeros — an analog input
+  always carries ADC noise) window; two consecutive dead windows release +
+  reacquire the session (fresh OS stream → links to the current nodes),
+  mirroring the CAT no-data strike pattern. Worst-case ~45 s outage instead
+  of silent-forever; if the reacquire fails outright, the CAT-reconcile loop
+  keeps retrying as before.
 - **`device`** — integer capture-device index from `ft8-capture-probe -list`, as
   a string. Empty = system default. Under ADR 0028 the active rig's audio device
   in the rig catalogue wins over this loose field.

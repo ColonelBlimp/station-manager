@@ -482,6 +482,10 @@ func (s *Service) startCaptureLocked() {
 	// subsystem is marked not-capturing + a terminal error logged, so the operator
 	// isn't left with a live-looking but dead capture (review 2026-06-19 M2).
 	sch := NewScheduler(samples, s.log)
+	// Dead-stream watchdog (deadsource.go): a desktop audio reshuffle can leave
+	// the capture stream dangling with no error anywhere — the watchdog turns
+	// that into an automatic release + reacquire.
+	sch.SetOnDeadSource(s.onDeadCaptureSource)
 	safego.GoTracked(runCtx, "ft8.scheduler", s.onPanic, func() {
 		defer s.onCaptureLoopExit(runCtx, "ft8.scheduler")
 		_ = sch.Run(runCtx)
@@ -495,6 +499,28 @@ func (s *Service) startCaptureLocked() {
 		Str("device", s.cfg.Device).
 		Bool("osd", s.osdEnabled()).
 		Msg("ft8: subscriber present; capture started, decoding live slots")
+}
+
+// onDeadCaptureSource handles the scheduler's dead-source verdict (deadsource.go):
+// the capture stream is delivering no live audio, so replace the session — release
+// (destroying the dangling OS stream) and let the release's tail re-acquire for
+// the still-present subscriber, creating a fresh stream that links to the current
+// device nodes. Runs the release on its OWN goroutine (bgWg): it is called from
+// the scheduler goroutine, and releaseCaptureLocked drains that very goroutine —
+// inline would deadlock. The guards make a late firing (session already being
+// torn down, subsystem stopping) a no-op; the monitor's once-latch means at most
+// one restart per session, so restarts can't stack.
+func (s *Service) onDeadCaptureSource(reason string) {
+	safego.GoTracked(s.parentCtx, "ft8.capture-restart", s.onPanic, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !s.capturing || s.releasing || s.stopped {
+			return
+		}
+		s.log.WarnWith().Str("reason", reason).
+			Msg("ft8: capture stream dead (no live audio reaching the scheduler) — restarting capture session")
+		s.releaseCaptureLocked()
+	}, false, &s.bgWg)
 }
 
 // onCaptureLoopExit handles a scheduler/decoder goroutine exit (review 2026-06-19

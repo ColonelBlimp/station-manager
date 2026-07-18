@@ -73,6 +73,12 @@ type Scheduler struct {
 	log    logging.Logger
 	out    chan Slot
 
+	// dead is the dead-capture-stream watchdog (see deadsource.go): driven at
+	// batch arrival + every boundary, inert unless SetOnDeadSource installed a
+	// callback. Lives here because the boundary timer fires even when the
+	// source delivers nothing — the failure mode being watched for.
+	dead deadSourceMonitor
+
 	dropped atomic.Int64
 }
 
@@ -92,6 +98,11 @@ func NewScheduler(source <-chan []int16, log logging.Logger) *Scheduler {
 // Slots returns the receive-only channel of completed slots. The channel
 // is closed when Run returns.
 func (s *Scheduler) Slots() <-chan Slot { return s.out }
+
+// SetOnDeadSource installs the dead-source callback (fired at most once per
+// Run, from the scheduler goroutine — the callback must not block; the
+// Service's handler hands off to a goroutine). Must be called before Run.
+func (s *Scheduler) SetOnDeadSource(cb func(reason string)) { s.dead.onDead = cb }
 
 // Dropped returns the number of slots that were discarded because the
 // Slots channel was full when the boundary fired. A non-zero value means
@@ -120,10 +131,15 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
+			s.dead.observeBatch(batch)
 			ring.Append(batch)
 
 		case <-timer.C:
 			now := time.Now().UTC()
+			// Watchdog first, independent of the lateness/emit logic: the dead
+			// cases (starved / all-zero source) mostly never fill the ring, so
+			// emitSlot's cold-start skip would hide them from any slot consumer.
+			s.dead.onBoundary(ring.Filled())
 			// Normal: the timer fired ~at target (sub-50 ms); emit the slot that
 			// ended there. If the goroutine was delayed more than maxSlotLateness,
 			// the ring no longer represents [target-SlotDuration, target) — it has
