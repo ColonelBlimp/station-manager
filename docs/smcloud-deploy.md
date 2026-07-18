@@ -204,6 +204,11 @@ beat throughput numbers, which a LAN inflates anyway):
 - Edit + delete QSOs with the LAN box powered off → power it on → the hourly
   reconcile (or an on-demand pass) self-heals the drift.
 - A restore drill against a scratch `SM_WORKING_DIR` (section 7).
+- **Field-fidelity audit:** `scripts/smcloud-audit.py` (dev machine) fetches
+  the cloud export and deep-compares every record against the local DB —
+  UUID parity, core columns, the full `additional_data` blob, and the
+  reconcile `modified_at` contract. Expect `RESULT: CLEAN`; exit 1 on any
+  mismatch. First run 2026-07-18: 5,545/5,545 clean.
 
 **Moving to the VPS later:** local is authoritative, so there is no data
 migration — stand up the VPS per the sections below, change the forwarder's

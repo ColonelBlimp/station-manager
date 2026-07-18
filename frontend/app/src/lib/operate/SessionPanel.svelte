@@ -75,8 +75,8 @@
                             <tr class="border-b text-sm border-line-soft text-ink last:border-0">
                                 <td class="tabular-nums">{q.timeOn}</td>
                                 <td class="font-medium">{q.callsign}</td>
-                                <td class="">{q.band}</td>
-                                <td class="">{q.mode}</td>
+                                <td class="w-12">{q.band}</td>
+                                <td class="w-14">{q.mode}</td>
                                 <td class="tabular-nums">{q.rstSent}</td>
                                 <td class="tabular-nums">{q.rstRcvd}</td>
                                 <td class="w-32 truncate">{q.country}</td>
