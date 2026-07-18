@@ -14,6 +14,30 @@ the [PSK reporter online service](https://pskreporter.info/) is also built-in.
 To use FT8 your transmitter must support CAT and be connected to the hardware where SM is installed and running.
 See [Enabling CAT](#cat) for details.
 
+### Before you transmit: set your rig's time-out timer
+
+Do this once, before using any Station Manager feature that transmits (FT8 or
+the amplifier Tune carrier): enable your rig's **TX time-out timer** (TOT) and
+set it to a few minutes.
+
+Station Manager takes transmit safety seriously — every transmission carries a
+hard automatic stop, and the daemon drops the key on disconnects, errors, and
+shutdown. But all of that protection travels over the same USB/serial cable as
+everything else, and a cable, hub, or USB port **can fail while the rig is
+keyed**. When that happens, no software on the computer can reach the radio to
+unkey it — the "stop transmitting" command has no wire to travel down. The
+rig's own time-out timer is the one safety net that lives inside the radio and
+works when the cable doesn't: it unkeys automatically after the set time, no
+matter what happened on the computer side.
+
+Most rigs ship with the timer **off**. On the Yaesu FTdx10 it is under
+**FUNC → OPERATION SETTING → GENERAL → TX TIME OUT TIMER**; other rigs index
+it as "TOT" or "time-out timer" in the menu list. A setting of **3 minutes**
+is a good choice: it will never interrupt an FT8 transmission (about 13
+seconds) or the Tune carrier (30 seconds at most), leaves room for a long
+voice over, and caps a fault at three minutes of carrier instead of an
+unattended transmission that runs until you notice.
+
 
 
 - Enabling FT8 and what's required.

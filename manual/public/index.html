@@ -253,6 +253,8 @@ designed to handle slow, intermittent, and unreliable internet connections.</p>
 <ul>
 <li>The <strong>Tune</strong> button: keying a reduced-power carrier to tune an external amp.</li>
 <li>Power and time limits, and how SM guarantees the carrier stops.</li>
+<li>Set your rig&rsquo;s TX time-out timer first — the one stop that works even if the
+CAT cable fails while keyed (see the FT8 chapter&rsquo;s &ldquo;Before you transmit&rdquo;).</li>
 <li>When it&rsquo;s available.</li>
 </ul>
 
@@ -268,6 +270,26 @@ the <a href="https://pskreporter.info/">PSK reporter online service</a> is also 
 <h3 id="enabling-ft8">Enabling FT8</h3>
 <p>To use FT8 your transmitter must support CAT and be connected to the hardware where SM is installed and running.
 See <a href="#cat">Enabling CAT</a> for details.</p>
+<h3 id="before-you-transmit-set-your-rigs-time-out-timer">Before you transmit: set your rig&rsquo;s time-out timer</h3>
+<p>Do this once, before using any Station Manager feature that transmits (FT8 or
+the amplifier Tune carrier): enable your rig&rsquo;s <strong>TX time-out timer</strong> (TOT) and
+set it to a few minutes.</p>
+<p>Station Manager takes transmit safety seriously — every transmission carries a
+hard automatic stop, and the daemon drops the key on disconnects, errors, and
+shutdown. But all of that protection travels over the same USB/serial cable as
+everything else, and a cable, hub, or USB port <strong>can fail while the rig is
+keyed</strong>. When that happens, no software on the computer can reach the radio to
+unkey it — the &ldquo;stop transmitting&rdquo; command has no wire to travel down. The
+rig&rsquo;s own time-out timer is the one safety net that lives inside the radio and
+works when the cable doesn&rsquo;t: it unkeys automatically after the set time, no
+matter what happened on the computer side.</p>
+<p>Most rigs ship with the timer <strong>off</strong>. On the Yaesu FTdx10 it is under
+<strong>FUNC → OPERATION SETTING → GENERAL → TX TIME OUT TIMER</strong>; other rigs index
+it as &ldquo;TOT&rdquo; or &ldquo;time-out timer&rdquo; in the menu list. A setting of <strong>3 minutes</strong>
+is a good choice: it will never interrupt an FT8 transmission (about 13
+seconds) or the Tune carrier (30 seconds at most), leaves room for a long
+voice over, and caps a fault at three minutes of carrier instead of an
+unattended transmission that runs until you notice.</p>
 <ul>
 <li>Enabling FT8 and what&rsquo;s required.</li>
 <li>Choosing your audio device.</li>
