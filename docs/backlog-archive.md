@@ -688,3 +688,51 @@ need the history of a specific item ("when/how did X ship?").
   destroyed local HH:MM:SS. **Revisits ADR 0016.** Next step on go-ahead = implement
   per the plan (S1–S6); NOT building yet. See ADR 0040, `sm-cloud-p1.md`, memory
   `project_sm_online_db_community`.
+
+## P1/P2 index items — archived by the 2026-07-18 verification sweep
+
+Seven items found already-built during the sweep (plus arc-complete/validated
+items carrying '→ archive' markers). Each entry below is the live-backlog text
+at archive time, stamp included.
+
+- - ~~Fix stale test `internal/api` `TestVersion_HappyPath`~~ **ALREADY FIXED (found stale at triage 2026-07-18)** — commit `74cf906d` bumped the expectation to v4; test verified green. → archive on next roll.
+
+- - **▶ was-NEXT (bumped 2026-07-05):** _Re-enrich a logged QSO._ **SHIPPED as the frontend/app logbook-page Re-enrich repair path (session 212, 2026-07-13); the companion manual FAQ LANDED 2026-07-18** (`manual/content/chapters/troubleshooting.md` — cause, per-QSO + bulk remedy, the QRZ-absent-callsign limit). **Arc complete → relocate to the archive on the next roll.**
+
+- ~~same-session dupe → auto-workers~~ **BUILT (sweep 2026-07-18): BOTH frontends block working/queuing an already-worked call this session+band with toast + muted tint (`Ft8BandActivity.svelte` app / `Ft8Panel.svelte` logging) → archive at next sweep**
+
+- ~~operator-email-address config field~~ **BUILT (sweep 2026-07-18): `SmtpConfig.DefaultRecipient` (`default_recipient`) exists and BOTH SPAs pre-fill the To from it (`SessionEmailControls.svelte` logging / `mailer.svelte.ts` + `ExportDialog` app) → archive at next sweep**
+
+- ~~migration 0004~~ **DEPLOYED + VERIFIED 2026-07-05** on the live 5,148-QSO dogfood DB (`schema_migrations_log` v4 clean; 0 debris/unparseable rows; `created_at` matches `qso_date`/`time_on` in UTC) → move to archive
+
+- ~~disabled-subsystem routes 200-HTML/405 + `/assets/` listing~~ **FIXED 2026-07-05** (`spaHandler` `/v1/`→404 guard + directory→SPA-fallback; tests)
+
+- ~~negative server-limit panics at startup~~ **ALREADY FIXED (found stale in the 2026-07-18 sweep)** — `config/validate.go:121-143` positive-required rules + `max_body_bytes <= 0` check, fatal at Load (commit `8defa43d`, 2026-06-19); regression test in `review_findings_test.go` → archive at next sweep
+
+- ~~**ADIF export omits populated `MY_*` fields**~~ **RESOLVED — was real, fixed the SAME DAY it was noted (2026-07-08, `ae894b9d`), backlog entry was stale (investigated 2026-07-18).** Root cause: frontend/app's first session-export was a CLIENT-side ADIF builder emitting the SPA's pre-submit copy, which lacks the daemon's submit-time back-fill (MY_* block, DXCC, zones, lat/lon) — sparse by construction, no stored data ever at risk. The same-day fix replaced it with daemon `POST /v1/session/export` (rebuild-from-DB by UUID → `ComposeToAdifString`, same contract as email). Verified 2026-07-18: all 7 archived `exports/sent-adif/` files (builds 618–637, email + download) carry the full MY_* block on EVERY record, and all 5,590 DB rows hold the complete MY_* set in `additional_data` (blob completeness explicitly checked — nothing missing at rest). → archive at next sweep.
+
+- ~~fill `country.dxcc` entity number in enrichment~~ **RESOLVED — already built + backfilled, entry was stale (investigated 2026-07-18).** The enrichment fill shipped 2026-06-25 (`b5eb0c3b`: `MergeStationFromCountry` derives `ContactedStation.DXCC` via `dxcc.DXCCForPrefix(country.dxcc_prefix)`, fill-only-when-empty), and the 2026-07-16 QRZ-rebuild backfilled history: today 5,589/5,590 live QSOs carry `dxcc` (all months 100%), and all 245 country rows have `dxcc_prefix`. The ~38% figure came from the 2026-07-08 triage — pre-rebuild data. The single remaining row is **9M6M 20251025** (QRZ files it as country "NON-DXCC" — enrichment correctly refuses to invent a code); operator remedy if wanted = Logbook Re-enrich or manual edit. → archive at next sweep.
+
+- ~~**configurable operating bands**~~ **RESOLVED — already built 2026-07-09 (five days BEFORE this triage entry), and the operator is actively using it (investigated 2026-07-18).** `station.operating_bands` exists end to end: daemon field + validation (known-band + dupe checks, `config/validate.go`) + `config.md`, injected via `/v1/config` → `setOperatingBands` (main.ts) → `operatingBands()` state with the 160m–6m `DEFAULT_BANDS` fallback → ONE RigPanel serves the whole Operate surface (Phone/CW AND FT8 — `Operate.svelte` passes `pickBand={ft8SelectBand}`), feeding the band grid, the manual band select (`bandOptions`, with join-current-value so a CAT-pushed off-list band still shows), and the Ctrl+Shift+digit jump (mapped by INDEX onto the configured list, commits `9f291938`+`64920d63`). Live dogfood config has `["80m"…"10m"]` set. Possible follow-ups (NOT this item): a Settings editor UI (today = hand-edit config.json / PUT), and the frontend/logging backport if `/` is still operated from (same class as the RST-validator backport). → archive at next sweep.
+
+- ~~**Sync-protocol revision counter (review 3 P1)**~~ **BUILT 2026-07-18 (ADR 0050 Accepted):** per-row monotonic `revision` through the whole protocol — local migration 0005 (column + combined stamp trigger), wire envelope + export, cloud migration 0003 + revision-first guard, reconcile manifest + hash (`uuid|unixmicro|revision`). Full-tree `-race` green incl. live-PG e2e. **DEPLOYED + VERIFIED 2026-07-18** (daemon + F44 smcloud both `654.gc5151ca8`; first same-formula reconcile `in_sync` 5,590/5,590, zero heals — the one `in_sync:false` before the F44 restart was the predicted formula skew, and the version-aware diff correctly pushed NOTHING during it) → archive at next sweep.
+
+- ~~edit-overlay mode dropdown~~ **BUILT (sweep 2026-07-18): `QsoEditOverlay.svelte` uses a constrained mode picker, not free text → archive at next sweep**
+
+- - **Configurable operating bands (P2 · daemon + all band surfaces).** Filed from
+  dogfood 2026-07-09. Antenna coverage varies and many ops don't work all bands
+  (7Q5MLV skips 160/60/30), so add a station-level **`operating_bands`** list to
+  `config.json` and drive EVERY band surface from that one source for consistency:
+  the Phone/CW band-button grid, the FT8 band buttons, and the manual band
+  dropdown. Default when unset = full 160m..6m (additive — today's behaviour);
+  render canonical low→high. Keep **distinct** from `ft8_frequencies` (FT8 buttons =
+  `operating_bands` ∩ ft8-freq bands). **Sequencing catch — do this BEFORE/WITH the
+  rig-control band-jump (Slice 4):** the shipping SPA's Ctrl+Shift+[digit] band-jump
+  maps digits 1–0 → 160m..6m as a FIXED table; with configurable bands the digit→band
+  mapping must become configurable too (simplest = digits follow `operating_bands`
+  order; fuller = an explicit digit→band map). Build the band-jump against the
+  configured list rather than a hardcoded table, so it isn't hardcode-then-rework.
+  Editor home is the Settings card (config surface, not yet in frontend/app); the
+  dogfood shortcut is to add the daemon field + wire the grid consumer FIRST
+  (config.json hand-editable), Settings checkboxes follow as polish.
+
