@@ -9,8 +9,10 @@ export type OpMode = 'phone' | 'ft8';
 
 const MODE_KEY = 'sm-op-mode';
 
+import { storageGet, storageSet } from './utils/storage';
+
 function storedMode(): OpMode {
-    return localStorage.getItem(MODE_KEY) === 'ft8' ? 'ft8' : 'phone';
+    return storageGet(MODE_KEY) === 'ft8' ? 'ft8' : 'phone';
 }
 
 interface Loc {
@@ -77,7 +79,7 @@ const urlFor = (view: View, mode: OpMode): string => urlOf(view, mode, BASE);
 
 const initial = parse(subPath(), storedMode());
 export const router = $state<Loc>(initial);
-localStorage.setItem(MODE_KEY, router.mode); // remember a deep-linked mode
+storageSet(MODE_KEY, router.mode); // remember a deep-linked mode
 
 // Normalise the URL (e.g. a bare /operate, or /app → /app/) to the canonical path
 // without adding a history entry.
@@ -97,7 +99,7 @@ export function navigate(view: View): void {
 export function setMode(mode: OpMode): void {
     router.view = 'operate';
     router.mode = mode;
-    localStorage.setItem(MODE_KEY, mode);
+    storageSet(MODE_KEY, mode);
     const path = urlFor('operate', mode);
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
 }

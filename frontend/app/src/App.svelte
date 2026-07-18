@@ -16,23 +16,24 @@
     } from './lib/ui/state.svelte';
     import { router, type View } from './lib/router.svelte';
     import { operate } from './lib/operate/state.svelte';
+    import { storageSet } from './lib/utils/storage';
 
     // Reflect shell state onto <html> (drives the token swap + collapse rules)
     // and persist it. Initial attributes are set pre-mount in index.html, so
     // these run in sync on the very first pass — no flash.
     $effect(() => {
         document.documentElement.dataset.theme = ui.theme;
-        localStorage.setItem(THEME_KEY, ui.theme);
+        storageSet(THEME_KEY, ui.theme);
     });
     // Apply the EFFECTIVE collapse (preference or forced-by-width) to <html>, but
     // persist only the operator's PREFERENCE so widening restores it.
     $effect(() => {
         document.documentElement.dataset.nav = effectiveNav();
-        localStorage.setItem(NAV_KEY, ui.navMode);
+        storageSet(NAV_KEY, ui.navMode);
     });
     $effect(() => {
         document.documentElement.dataset.util = effectiveUtil();
-        localStorage.setItem(UTIL_KEY, ui.utilMode);
+        storageSet(UTIL_KEY, ui.utilMode);
     });
     // The right util rail (and its content offset / pile-up push) exists in
     // Operate — both Phone/CW and FT8. Reflected onto <html> so the CSS gates on it.

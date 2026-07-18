@@ -13,6 +13,7 @@
     import WorldMap from './WorldMap.svelte';
     import { mapData, setDuration, startMapData, DURATIONS } from './mapData.svelte';
     import { bandColor, bandRank } from './bandColors';
+    import { storageGet, storageSet } from '../utils/storage';
 
     const teardown = startMapData();
     $effect(() => {
@@ -23,10 +24,10 @@
     // with a minute clock — the terminator moves ~0.25°/min, so 60 s keeps
     // it visually current for a fraction of a refetch's cost.
     const GREYLINE_KEY = 'sm-map-greyline';
-    let greyline = $state(localStorage.getItem(GREYLINE_KEY) !== 'off');
+    let greyline = $state(storageGet(GREYLINE_KEY) !== 'off');
     let terminatorNow = $state(new Date());
     $effect(() => {
-        localStorage.setItem(GREYLINE_KEY, greyline ? 'on' : 'off');
+        storageSet(GREYLINE_KEY, greyline ? 'on' : 'off');
     });
     $effect(() => {
         if (!greyline) return;

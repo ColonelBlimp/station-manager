@@ -484,15 +484,28 @@ class LogbookState {
         this.rows = [];
     }
 
+    // Request generations: the selector/filter/paging controls stay enabled
+    // while a load is in flight, so rapid picks race and whichever RESPONSE
+    // lands last would win — showing logbook A's rows under selector B and
+    // corrupting the cursor trail. Each loader bumps its own generation on
+    // entry and discards any completion that is no longer the newest call.
+    // (Per-loader counters, not one shared: #loadCount and #loadPage run
+    // concurrently via Promise.all and must not cancel each other.)
+    #countGen = 0;
+    #pageGen = 0;
+
     async #loadCount(): Promise<void> {
         if (this.selectedId === null) return;
+        const gen = ++this.#countGen;
         const out = await fetchLogbookCount(this.selectedId, this.missingFromParam);
+        if (gen !== this.#countGen) return; // superseded — a newer load owns the state
         if (out.kind === 'ok') this.count = out.count;
         // A count failure is non-fatal — the table still works; just no "of N".
     }
 
     async #loadPage(index: number): Promise<void> {
         if (this.selectedId === null) return;
+        const gen = ++this.#pageGen;
         this.loading = true;
         this.error = null;
         const after = this.#cursors[index] ?? undefined;
@@ -502,6 +515,7 @@ class LogbookState {
             after ?? undefined,
             this.missingFromParam
         );
+        if (gen !== this.#pageGen) return; // superseded — the newer call owns loading/rows
         if (out.kind === 'ok') {
             this.rows = out.items;
             this.pageIndex = index;

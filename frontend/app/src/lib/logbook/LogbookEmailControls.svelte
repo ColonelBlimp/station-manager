@@ -74,7 +74,15 @@
                 result = { ok: false, text: `Email send failed: ${outcome.message}` };
                 break;
             case 'network':
-                result = { ok: false, text: 'Cannot reach the daemon' };
+                // A timeout is ambiguous — SMTP may have accepted the
+                // message; a blind re-send risks a duplicate email.
+                result = {
+                    ok: false,
+                    text:
+                        outcome.timedOut === true
+                            ? 'Email outcome unknown — the send may have completed. Check the inbox (or the Emailed column) before re-sending.'
+                            : 'Cannot reach the daemon',
+                };
                 break;
         }
     }

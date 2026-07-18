@@ -84,6 +84,13 @@ function enrichBody(call: string, station: Record<string, string>) {
     };
 }
 
+// vi.fn fetch stubs receive RequestInfo | URL; String(new Request(...)) would
+// stringify to '[object Request]', so narrow explicitly (tests pass strings,
+// but the signature must be honest for lint's no-base-to-string).
+function urlText(input: RequestInfo | URL): string {
+    return typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+}
+
 describe('bulk re-enrich (skip-if-unchanged)', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
@@ -97,7 +104,7 @@ describe('bulk re-enrich (skip-if-unchanged)', () => {
         vi.stubGlobal(
             'fetch',
             vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-                const url = String(input);
+                const url = urlText(input);
                 if (url.startsWith('/v1/enrich/callsign')) {
                     const call = new URL(url, 'http://x').searchParams.get('call') ?? '';
                     expect(url).toContain('refresh=true');
@@ -117,7 +124,7 @@ describe('bulk re-enrich (skip-if-unchanged)', () => {
                     );
                 }
                 if (url.startsWith('/v1/qso/') && init?.method === 'PATCH') {
-                    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+                    const body = JSON.parse(init.body as string) as Record<string, unknown>;
                     patched.push({ url, body });
                     return Promise.resolve(
                         new Response(
@@ -161,5 +168,61 @@ describe('bulk re-enrich (skip-if-unchanged)', () => {
         );
         // The patched row was replaced in place with the daemon's canonical merge.
         expect(logbookState.rows[1].name).toBe('Ana');
+    });
+});
+
+// Request-generation guard: the selector stays enabled during a load, so a
+// slow response for logbook A must not clobber a faster, NEWER selection of
+// logbook B (rows/count/cursors would show A's data under B's selector).
+describe('logbook switch — stale responses are discarded', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        logbookState.rows = [];
+        logbookState.selectedId = null;
+    });
+
+    it('a late page/count for the previous logbook does not overwrite the new one', async () => {
+        const pageBody = (calls: string[]) => ({
+            items: calls.map((c, i) => ({ id: i + 1, uuid: `u-${c}`, call: c })),
+            next_cursor: null,
+        });
+        let releaseA: (v: Response) => void = () => undefined;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL) => {
+                const url = urlText(input);
+                if (url.startsWith('/v1/logbook/1/qso')) {
+                    // Logbook 1 is SLOW — held until after logbook 2 answers.
+                    return new Promise<Response>((res) => (releaseA = res));
+                }
+                if (url.startsWith('/v1/logbook/1/count')) {
+                    return Promise.resolve(
+                        new Response(JSON.stringify({ count: 111 }), { status: 200 })
+                    );
+                }
+                if (url.startsWith('/v1/logbook/2/qso')) {
+                    return Promise.resolve(
+                        new Response(JSON.stringify(pageBody(['K2AAA'])), { status: 200 })
+                    );
+                }
+                if (url.startsWith('/v1/logbook/2/count')) {
+                    return Promise.resolve(
+                        new Response(JSON.stringify({ count: 1 }), { status: 200 })
+                    );
+                }
+                return Promise.resolve(new Response('{}', { status: 404 }));
+            })
+        );
+
+        const first = logbookState.selectLogbook(1); // hangs on its page fetch
+        await logbookState.selectLogbook(2); // completes fully
+        expect(logbookState.rows.map((r) => r.call)).toEqual(['K2AAA']);
+        // Logbook 1's page finally lands — it must be dropped, not applied.
+        releaseA(new Response(JSON.stringify(pageBody(['G1OLD', 'G1OLD2'])), { status: 200 }));
+        await first;
+        expect(logbookState.selectedId).toBe(2);
+        expect(logbookState.rows.map((r) => r.call)).toEqual(['K2AAA']);
+        expect(logbookState.count).toBe(1);
+        expect(logbookState.loading).toBe(false);
     });
 });

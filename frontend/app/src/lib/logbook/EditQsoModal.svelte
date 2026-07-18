@@ -137,14 +137,24 @@
         return patch;
     }
 
+    // While a save is in flight every exit/re-save path is inert — the Save
+    // button is disabled, but Escape / backdrop / Ctrl+Enter would otherwise
+    // bypass it, and closing (or re-saving) mid-PATCH races the write-back
+    // onto whichever row the modal shows next.
     function save(): void {
+        if (saving) return;
         onSave(buildPatch());
+    }
+
+    function close(): void {
+        if (saving) return;
+        onClose();
     }
 
     function onKeydown(e: KeyboardEvent): void {
         if (e.key === 'Escape') {
             e.preventDefault();
-            onClose();
+            close();
         } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
             e.preventDefault();
             save();
@@ -159,7 +169,7 @@
     class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-gray-500/75 p-4 sm:items-center dark:bg-gray-900/50"
     role="presentation"
     onclick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) close();
     }}
 >
     <div
@@ -176,7 +186,7 @@
                 type="button"
                 class="cursor-pointer rounded-md px-2 py-1 text-muted hover:bg-surface-muted hover:text-ink"
                 aria-label="Close"
-                onclick={onClose}>✕</button
+                onclick={close}>✕</button
             >
         </div>
 
@@ -288,7 +298,7 @@
                 <span class="text-xs text-muted">{enrichNote}</span>
             {/if}
             <span class="ml-auto"></span>
-            <button type="button" class="btn" onclick={onClose}>Cancel</button>
+            <button type="button" class="btn" disabled={saving} onclick={close}>Cancel</button>
             <button type="button" class="btn btn-primary" disabled={saving} onclick={save}>
                 {saving ? 'Saving…' : 'Save'}
             </button>

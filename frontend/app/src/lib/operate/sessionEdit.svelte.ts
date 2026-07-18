@@ -36,8 +36,14 @@ class SessionEditState {
     /** The session-list id of the row being edited (the write-back target). */
     #sessionId = 0;
 
+    /** Bumped on every open/close. A save captures it before the PATCH and
+     *  discards its completion if the modal was closed (or reopened on a
+     *  different row) meanwhile — otherwise row A's returned data would be
+     *  written onto whichever row #sessionId points at by then. */
+    #gen = 0;
+
     async open(sq: SessionQso): Promise<void> {
-        if (this.opening || sq.uuid === undefined || sq.uuid === '') return;
+        if (this.opening || this.saving || sq.uuid === undefined || sq.uuid === '') return;
         this.opening = true;
         this.openError = null;
         const out = await fetchQso(sq.uuid);
@@ -47,25 +53,33 @@ class SessionEditState {
             return;
         }
         this.#sessionId = sq.id;
+        this.#gen++;
         this.error = null;
         this.row = out.qso;
     }
 
     close(): void {
+        this.#gen++;
         this.row = null;
         this.error = null;
         this.saving = false;
     }
 
     async save(patch: QsoPatch): Promise<void> {
+        if (this.saving) return; // Ctrl+Enter repeat while a PATCH is in flight
         const uuid = this.row?.uuid;
         if (uuid === undefined || uuid === '') {
             this.error = 'This QSO has no id and cannot be edited.';
             return;
         }
+        // Capture the write-back target NOW — after the await, #sessionId may
+        // belong to a different row (close + reopen during the PATCH).
+        const sessionId = this.#sessionId;
+        const gen = this.#gen;
         this.saving = true;
         this.error = null;
         const out = await patchQso(uuid, patch);
+        if (gen !== this.#gen) return; // modal moved on — the QSO is saved; drop the write-back
         this.saving = false;
         if (out.kind !== 'ok') {
             this.error = out.message;
@@ -88,7 +102,7 @@ class SessionEditState {
         };
         const t = displayTime(q.time_on, '');
         if (t !== '') overlay.timeOn = t;
-        updateSessionQso(this.#sessionId, overlay);
+        updateSessionQso(sessionId, overlay);
         this.close();
     }
 }

@@ -17,7 +17,7 @@ places:
 
 ```
 npm install
-npm run dev      # http://localhost:5174 (proxies /v1 → :8080)
+npm run dev      # http://localhost:5176 (proxies /v1 → :8080)
 npm run check    # svelte-check
 npm run lint
 npm run test

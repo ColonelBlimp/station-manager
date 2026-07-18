@@ -111,4 +111,49 @@ describe('sessionEdit.save', () => {
         expect(sessionEdit.error).toBe('freq out of band');
         expect(session.qsos[0].callsign).toBe('G4ABC'); // untouched
     });
+
+    it('drops a save that completes after close + reopen (no write onto the new row)', async () => {
+        // The race: save row A, close, open row B while A's PATCH is still in
+        // flight. A's completion must be discarded — the QSO is saved
+        // daemon-side either way, but its write-back must NOT land on B, and
+        // B's freshly opened modal must not be force-closed.
+        addSessionQso(sq()); // A: u-1 G4ABC
+        addSessionQso(sq({ uuid: 'u-2', callsign: 'K1XYZ', country: 'USA' })); // B
+        const rowA = session.qsos.find((q) => q.uuid === 'u-1');
+        const rowB = session.qsos.find((q) => q.uuid === 'u-2');
+        if (!rowA || !rowB) throw new Error('setup: session rows missing');
+        fetchQso.mockImplementation((uuid: unknown) =>
+            Promise.resolve({
+                kind: 'ok',
+                qso: { id: 1, uuid, call: uuid === 'u-1' ? 'G4ABC' : 'K1XYZ' },
+            })
+        );
+        await sessionEdit.open(rowA);
+        let release: (v: unknown) => void = () => undefined;
+        patchQso.mockImplementation(() => new Promise((res) => (release = res)));
+        const inflight = sessionEdit.save({ name: 'Fred' });
+        sessionEdit.close();
+        await sessionEdit.open(rowB);
+        release({
+            kind: 'ok',
+            qso: { id: 1, uuid: 'u-1', call: 'G4ABC', name: 'Fred', country: 'England' },
+        });
+        await inflight;
+        expect(sessionEdit.row?.uuid).toBe('u-2'); // B's modal survives
+        const b = session.qsos.find((q) => q.uuid === 'u-2');
+        expect(b?.callsign).toBe('K1XYZ'); // A's data never landed on B
+        expect(b?.name).toBe('');
+        expect(b?.country).toBe('USA');
+    });
+
+    it('ignores a repeated save while one is in flight', async () => {
+        await openOn(sq());
+        let release: (v: unknown) => void = () => undefined;
+        patchQso.mockImplementation(() => new Promise((res) => (release = res)));
+        const first = sessionEdit.save({ name: 'Fred' });
+        void sessionEdit.save({ name: 'Fred' }); // Ctrl+Enter repeat — must not double-PATCH
+        release({ kind: 'ok', qso: { id: 9, uuid: 'u-1', call: 'G4ABC', name: 'Fred' } });
+        await first;
+        expect(patchQso).toHaveBeenCalledTimes(1);
+    });
 });

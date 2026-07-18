@@ -11,6 +11,13 @@ import { logbookState } from './logbook.svelte';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
+// vi.fn fetch stubs receive RequestInfo | URL; String(new Request(...)) would
+// stringify to '[object Request]', so narrow explicitly (tests pass strings,
+// but the signature must be honest for lint's no-base-to-string).
+function urlText(input: RequestInfo | URL): string {
+    return typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+}
+
 function jsonResponse(body: unknown): Response {
     return new Response(JSON.stringify(body), {
         status: 200,
@@ -23,8 +30,8 @@ function jsonResponse(body: unknown): Response {
 beforeEach(() => {
     vi.stubGlobal(
         'fetch',
-        vi.fn((input: RequestInfo) => {
-            const url = String(input);
+        vi.fn((input: RequestInfo | URL) => {
+            const url = urlText(input);
             if (url.startsWith('/v1/config')) {
                 return Promise.resolve(
                     jsonResponse({
@@ -140,7 +147,7 @@ describe('Logbook page', () => {
 
         // Add the enrich route to the stub, then click Re-enrich.
         fetchMock.mockImplementation((input: RequestInfo | URL) => {
-            const url = String(input);
+            const url = urlText(input);
             if (url.startsWith('/v1/enrich/callsign')) {
                 expect(url).toContain('refresh=true');
                 return Promise.resolve(
@@ -170,9 +177,7 @@ describe('Logbook page', () => {
         expect(screen.getByDisplayValue('KN59RB')).toBeInTheDocument(); // grid was empty → filled
         expect(screen.getByText(/review, then Save/)).toBeInTheDocument();
         // Fetch-and-review only: no PATCH fired.
-        const patchCalls = fetchMock.mock.calls.filter(
-            (c) => (c[1] as RequestInit | undefined)?.method === 'PATCH'
-        );
+        const patchCalls = fetchMock.mock.calls.filter((c) => c[1]?.method === 'PATCH');
         expect(patchCalls).toHaveLength(0);
     });
 

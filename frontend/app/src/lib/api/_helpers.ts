@@ -42,7 +42,12 @@
 export type FetchOutcome =
     | { ok: true; response: Response }
     | { ok: false; kind: 'aborted'; message: string }
-    | { ok: false; kind: 'network'; message: string };
+    /** `timedOut` distinguishes the AMBIGUOUS network failure: the request
+     *  reached (or may have reached) the daemon and the RESPONSE never came,
+     *  so a write may already have committed. A plain connection failure
+     *  (refused/unreachable) definitely did not commit. Write callers use
+     *  this to say "outcome unknown" instead of "failed". */
+    | { ok: false; kind: 'network'; message: string; timedOut?: boolean };
 
 /**
  * Default request timeout (ms) applied to every `safeFetch` unless the
@@ -63,6 +68,15 @@ export const DEFAULT_TIMEOUT_MS = 15_000;
  * daemon can't hang the submit latch indefinitely.
  */
 export const WRITE_TIMEOUT_MS = 30_000;
+
+/**
+ * Timeout for the session-email send. The daemon's SMTP send is allowed up
+ * to 30 s of its own, and email is the worst write to double-fire (a real
+ * message lands in a real inbox twice), so the SPA must outlast the daemon's
+ * ceiling rather than give up first and tempt a re-send while the original
+ * is still completing.
+ */
+export const EMAIL_TIMEOUT_MS = 45_000;
 
 /**
  * Combine an optional caller abort signal with a timeout. Most calls pass
@@ -127,6 +141,7 @@ export async function safeFetch(
                 ok: false,
                 kind: 'network',
                 message: `request timed out after ${timeoutMs} ms`,
+                timedOut: true,
             };
         }
         return { ok: false, kind: 'network', message };

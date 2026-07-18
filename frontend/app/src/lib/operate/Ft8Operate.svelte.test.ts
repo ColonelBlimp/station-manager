@@ -270,7 +270,7 @@ describe('Ft8Operate Next control (deferred skip-if-silent)', () => {
         expect(ft8PileupStack.enabled).toBe(true); // drain resumed → next head worked
     });
 
-    it('a reply disarms the skip daemon-side and the button returns to Next', async () => {
+    it('a reply disarms the skip daemon-side and the button returns to Next', () => {
         armReady();
         workingWithQueue();
         render(Ft8Operate);

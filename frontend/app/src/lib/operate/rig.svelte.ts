@@ -13,6 +13,7 @@
 import { formatFrequency, frequencyToBand } from '../utils/frequency';
 import { parseFrequency } from '../validators/frequency';
 import type { RigStatePayload, BridgeCodePayload, TuneStatePayload } from '../api/rig-sse';
+import { storageSet } from '../utils/storage';
 
 export type CatLink = 'off' | 'connected' | 'lost';
 
@@ -503,10 +504,7 @@ export function resetFreqStep(): void {
 // confirm is one click over familiar values, not data entry.
 $effect.root(() => {
     $effect(() => {
-        localStorage.setItem(
-            RIG_CTX_KEY,
-            JSON.stringify({ band: rig.band, mode: rig.mode, freq: rig.freq })
-        );
+        storageSet(RIG_CTX_KEY, JSON.stringify({ band: rig.band, mode: rig.mode, freq: rig.freq }));
     });
 });
 

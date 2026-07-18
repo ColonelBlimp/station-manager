@@ -88,7 +88,13 @@
                 case 'aborted':
                     break;
                 case 'network':
-                    toasts.error('Cannot reach daemon');
+                    // A timeout is ambiguous — SMTP may have accepted the
+                    // message; a blind re-send risks a duplicate email.
+                    toasts.error(
+                        outcome.timedOut === true
+                            ? 'Email outcome unknown — the send may have completed. Check the inbox (or the Emailed markers) before re-sending.'
+                            : 'Cannot reach daemon'
+                    );
                     break;
             }
         } finally {

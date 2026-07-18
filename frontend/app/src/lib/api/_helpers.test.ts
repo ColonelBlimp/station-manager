@@ -133,6 +133,9 @@ describe('safeFetch', () => {
             ok: false,
             kind: 'network',
             message: `request timed out after ${DEFAULT_TIMEOUT_MS} ms`,
+            // The ambiguity marker: a timed-out WRITE may have committed
+            // daemon-side, so callers report "unknown", not "failed".
+            timedOut: true,
         });
     });
 

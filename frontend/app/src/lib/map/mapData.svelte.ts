@@ -18,6 +18,7 @@
 import { fetchQsoPage, type LogbookQso, type QsoPageOutcome } from '../api/logbooks';
 import { openLogEvents, type QsoEventPayload } from '../api/log-events';
 import { fetchStationContext } from '../api/seams';
+import { storageGet, storageSet } from '../utils/storage';
 import { gridToDecimal, haversineKm, calculateBearing } from '../utils/bearing';
 import { normalizeBand } from './bandColors';
 import type { LatLon } from './engine';
@@ -217,7 +218,7 @@ function scheduleRefresh(): void {
 /** The picker's entry point — also the manual-refresh path (same window). */
 export function setDuration(minutes: number): void {
     mapData.durationMin = minutes;
-    localStorage.setItem(WINDOW_KEY, String(minutes));
+    storageSet(WINDOW_KEY, String(minutes));
     mapData.status = 'loading';
     void refresh();
 }
@@ -228,9 +229,15 @@ export function setDuration(minutes: number): void {
  */
 export function startMapData(): () => void {
     mapData.status = 'loading';
-    mapData.durationMin = storedDurationMin(localStorage.getItem(WINDOW_KEY));
+    mapData.durationMin = storedDurationMin(storageGet(WINDOW_KEY));
+    // Teardown may run while the context fetch below is still pending; the
+    // generation bump it does lets the continuation detect that and bail
+    // BEFORE installing the listener + stream — otherwise they'd leak with no
+    // owner left to close them.
+    const startGen = generation;
     void (async () => {
         const ctx = await fetchStationContext();
+        if (startGen !== generation) return; // torn down while awaiting — install nothing
         logbookId = ctx.logbookId;
         mapData.origin = gridToDecimal(ctx.myGrid);
         mapData.bandColors = ctx.mapBandColors;
@@ -248,9 +255,16 @@ export function startMapData(): () => void {
         document.addEventListener('visibilitychange', onVisibilityCatchUp);
         // Stream first, then fetch — events for rows the fetch already
         // returns are idempotent (the refetch is the idempotency).
+        let hadOpen = false;
         closeEvents = openLogEvents({
             onOpen: () => {
                 mapData.live = true;
+                // A RE-open means a gap: the stream has no backlog, so a QSO
+                // logged/edited while it was down produced no event and the
+                // map would sit stale until the next unrelated change. Same
+                // catch-up refetch as the visibility fix (idempotent).
+                if (hadOpen) scheduleRefresh();
+                hadOpen = true;
             },
             onTransportError: () => {
                 mapData.live = false;

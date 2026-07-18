@@ -399,6 +399,16 @@ setSubmit(async (q, opts) => {
         // minute case.
         return refuse('Duplicate — this QSO is already in the log.', true);
     }
+    if (out.kind === 'network' && out.timedOut === true) {
+        // AMBIGUOUS: the daemon may have committed the QSO before the
+        // response was lost. "Not logged" would steer the operator into a
+        // blind retry → the duplicate dialog → a forced double-write; say
+        // unknown and point at the check that resolves it.
+        return refuse(
+            'Outcome unknown — the daemon did not answer in time; the QSO may already be ' +
+                'logged. Check the Session list before retrying.'
+        );
+    }
     return refuse(`QSO not logged: ${out.message}`);
 });
 

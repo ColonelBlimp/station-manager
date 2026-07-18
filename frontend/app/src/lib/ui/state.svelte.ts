@@ -11,18 +11,20 @@ export const THEME_KEY = 'sm-theme';
 export const NAV_KEY = 'sm-nav';
 export const UTIL_KEY = 'sm-util';
 
+import { storageGet } from '../utils/storage';
+
 function initialTheme(): Theme {
-    const s = localStorage.getItem(THEME_KEY);
+    const s = storageGet(THEME_KEY);
     if (s === 'light' || s === 'dark') return s;
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 function initialNav(): NavMode {
-    return localStorage.getItem(NAV_KEY) === 'narrow' ? 'narrow' : 'full';
+    return storageGet(NAV_KEY) === 'narrow' ? 'narrow' : 'full';
 }
 
 function initialUtil(): NavMode {
-    return localStorage.getItem(UTIL_KEY) === 'narrow' ? 'narrow' : 'full';
+    return storageGet(UTIL_KEY) === 'narrow' ? 'narrow' : 'full';
 }
 
 export const ui = $state({
