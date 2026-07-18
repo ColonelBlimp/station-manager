@@ -69,8 +69,33 @@ type ManifestEntry struct {
 // previously stored value; a non-empty name updates it (the caller is
 // authoritative). The DO UPDATE (rather than DO NOTHING) is also what lets
 // RETURNING id yield the existing row's id on conflict.
+//
+// The unique constraint is case-SENSITIVE, and boot only started normalising
+// callsigns (trim + uppercase) after early deployments existed — so a database
+// provisioned by an older build may hold a case-variant row ("7q5mlv").
+// Upserting the canonical spelling against that would create a NEW empty
+// tenant beside it and silently orphan the existing backup from the token's
+// view. So: a single case-insensitive match is first RENAMED to the canonical
+// spelling and reused; multiple rows differing only in case (corrupt
+// provisioning) fail loudly rather than guess which one owns the data.
 func (s *Store) EnsureTenant(ctx context.Context, callsign, name string) (int64, error) {
 	const op errors.Op = "store.EnsureTenant"
+	variants, err := s.tenantCaseVariants(ctx, callsign)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsgf("case-insensitive lookup %q", callsign)
+	}
+	switch {
+	case len(variants) > 1:
+		return 0, errors.New(op).WithMsgf(
+			"%d tenants differ only in case from %q — merge them manually before starting",
+			len(variants), callsign)
+	case len(variants) == 1 && variants[0].callsign != callsign:
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE tenants SET callsign = $1 WHERE id = $2`, callsign, variants[0].id); err != nil {
+			return 0, errors.New(op).WithErr(err).
+				WithMsgf("canonicalise tenant %q → %q", variants[0].callsign, callsign)
+		}
+	}
 	const q = `
 INSERT INTO tenants (callsign, name) VALUES ($1, $2)
 ON CONFLICT (callsign) DO UPDATE SET name = COALESCE(NULLIF(EXCLUDED.name, ''), tenants.name)
@@ -80,6 +105,30 @@ RETURNING id`
 		return 0, errors.New(op).WithErr(err).WithMsgf("callsign %q", callsign)
 	}
 	return id, nil
+}
+
+// tenantVariant is one row matching a callsign case-insensitively.
+type tenantVariant struct {
+	id       int64
+	callsign string
+}
+
+func (s *Store) tenantCaseVariants(ctx context.Context, callsign string) ([]tenantVariant, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, callsign FROM tenants WHERE UPPER(callsign) = UPPER($1)`, callsign)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []tenantVariant
+	for rows.Next() {
+		var v tenantVariant
+		if err := rows.Scan(&v.id, &v.callsign); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // EnsureLogbook returns the id of the (tenant, name) logbook, creating it on first

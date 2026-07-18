@@ -278,6 +278,57 @@ func TestUpsert_PrecisionCanonicalised(t *testing.T) {
 	}
 }
 
+// TestEnsureTenant_CanonicalisesCaseVariantRow: a database provisioned before
+// boot normalised callsigns may hold a lowercase tenant. Re-ensuring with the
+// canonical (uppercase) spelling must REUSE that row — renamed in place, name
+// kept — never create a second empty tenant beside it (which would orphan the
+// existing backup from the token's view).
+func TestEnsureTenant_CanonicalisesCaseVariantRow(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	oldID, err := s.EnsureTenant(ctx, "7q5mlv", "Marc") // the pre-normalisation deployment
+	if err != nil {
+		t.Fatalf("ensure old-style: %v", err)
+	}
+	newID, err := s.EnsureTenant(ctx, "7Q5MLV", "") // the upgraded boot
+	if err != nil {
+		t.Fatalf("ensure canonical: %v", err)
+	}
+	if newID != oldID {
+		t.Fatalf("canonical ensure created a NEW tenant %d (existing %d) — data orphaned", newID, oldID)
+	}
+	var stored string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT callsign FROM tenants WHERE id = $1`, oldID).Scan(&stored); err != nil {
+		t.Fatalf("read stored callsign: %v", err)
+	}
+	if stored != "7Q5MLV" {
+		t.Errorf("stored callsign = %q, want canonical %q", stored, "7Q5MLV")
+	}
+	if got := tenantName(t, s, oldID); got != "Marc" {
+		t.Errorf("name after canonicalise = %q, want %q (rename must not wipe)", got, "Marc")
+	}
+}
+
+// TestEnsureTenant_MultipleCaseVariantsFail: two rows differing only in case
+// mean corrupt provisioning — refusing is the safe move (guessing which row
+// owns the backup could canonicalise the wrong one and orphan the data).
+func TestEnsureTenant_MultipleCaseVariantsFail(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	for _, cs := range []string{"7q5mlv", "7Q5mlv"} {
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO tenants (callsign, name) VALUES ($1, '')`, cs); err != nil {
+			t.Fatalf("seed %q: %v", cs, err)
+		}
+	}
+	if _, err := s.EnsureTenant(ctx, "7Q5MLV", ""); err == nil {
+		t.Fatal("ensure over two case-variant rows succeeded — want a refuse-to-guess error")
+	}
+}
+
 // TestEnsureTenant_IdempotentPreservesName: re-ensuring is idempotent (same id)
 // and an EMPTY name on re-ensure does NOT wipe the stored name; a non-empty name
 // updates it (finding 5).

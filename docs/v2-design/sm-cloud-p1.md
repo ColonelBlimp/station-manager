@@ -97,7 +97,8 @@ unmarshal → deep-equal, including UUID, HH:MM:SS seconds, and `additional_data
 **BUILT 2026-07-17 (gate passing).** `internal/cloud/server` (stdlib + store +
 types only — no daemon imports; `log/slog` to stderr for systemd/journald) +
 `cmd/smcloud` (flag/env config: `SMCLOUD_DSN` / `SMCLOUD_TOKEN` (env-only) /
-`SMCLOUD_CALLSIGN`, `-listen` default `:8091`; boot = ping → embedded-migration
+`SMCLOUD_CALLSIGN`, `-listen` default `127.0.0.1:8091` (loopback since the
+2026-07-18 hardening batch; was `:8091`); boot = ping → embedded-migration
 apply (`store.Migrate`, golang-migrate over the same files + tracking table as
 `task migrate:cloud:up`) → `EnsureTenant` → serve; graceful shutdown; TLS is the
 S6 reverse proxy's job). Wire detail in `internal/cloud/server/doc.go`: the QSO

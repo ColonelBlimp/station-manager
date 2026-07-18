@@ -128,9 +128,8 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 	// Bound the pool: /v1/health pings the DB unauthenticated, so an unbounded
-	// pool lets request bursts eat Postgres's whole connection allowance. Note
-	// the migrator (store.Migrate) pins one connection for the process lifetime,
-	// so the effective pool is one less than MaxOpenConns.
+	// pool lets request bursts eat Postgres's whole connection allowance.
+	// (store.Migrate borrows one of these during boot and returns it.)
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(30 * time.Minute)

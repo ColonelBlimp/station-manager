@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	stderr "errors"
@@ -26,16 +27,35 @@ func Migrate(db *sql.DB) error {
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("open embedded migrations")
 	}
-	drv, err := pgmigrate.WithInstance(db, &pgmigrate.Config{})
+	// Build the driver on an explicitly acquired connection, not the *sql.DB:
+	// WithInstance checks a connection out of the pool for the PROCESS
+	// lifetime (never rotated, silently shrinking a bounded pool by one).
+	// Closing the migrator after Up returns this connection to the pool.
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
 	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("acquire migration connection")
+	}
+	drv, err := pgmigrate.WithConnection(ctx, conn, &pgmigrate.Config{})
+	if err != nil {
+		_ = conn.Close()
 		return errors.New(op).WithErr(err).WithMsg("postgres migrate driver")
 	}
 	m, err := migrate.NewWithInstance("iofs", src, "postgres", drv)
 	if err != nil {
+		_ = drv.Close() // releases conn back to the pool
 		return errors.New(op).WithErr(err).WithMsg("build migrator")
 	}
-	if err := m.Up(); err != nil && !stderr.Is(err, migrate.ErrNoChange) {
-		return errors.New(op).WithErr(err).WithMsg("apply migrations")
+	upErr := m.Up()
+	srcErr, dbErr := m.Close() // driver Close releases conn back to the pool
+	if upErr != nil && !stderr.Is(upErr, migrate.ErrNoChange) {
+		return errors.New(op).WithErr(upErr).WithMsg("apply migrations")
+	}
+	if srcErr != nil {
+		return errors.New(op).WithErr(srcErr).WithMsg("close migration source")
+	}
+	if dbErr != nil {
+		return errors.New(op).WithErr(dbErr).WithMsg("release migration connection")
 	}
 	return nil
 }
