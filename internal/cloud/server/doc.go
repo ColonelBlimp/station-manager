@@ -20,8 +20,13 @@
 // bytes VERBATIM (json.RawMessage end to end): it unmarshals only to validate
 // shape and extract the UUID, never re-marshals — so restore returns exactly
 // what backup sent, byte for byte (UUID, HH:MM:SS seconds, additional_data
-// intact). modified_at/deleted_at ride an envelope beside the payload because
-// they are storage-row facts (trigger-bumped locally), not ADIF fields.
+// intact). modified_at/revision/deleted_at ride an envelope beside the
+// payload because they are storage-row facts (trigger-stamped locally), not
+// ADIF fields. revision (ADR 0050) is the version marker the upsert guard
+// orders on — revision first, modified_at breaking ties — because local
+// modified_at is second-precision and cannot order same-second edits; an
+// absent revision decodes as 0 (legacy client) and gets pure-timestamp
+// semantics via the tie fallback.
 //
 // PUT bodies must be a SINGLE JSON document (trailing content is a 400), and
 // every uploaded UUID must be a valid UUIDv7 — the store's uuid column would

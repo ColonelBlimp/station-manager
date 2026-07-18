@@ -103,6 +103,7 @@ func QsoModelToType(model *models.Qso) (types.Qso, error) {
 		qso.ModifiedAt = model.CreatedAt.UTC().Truncate(time.Second)
 	}
 	qso.DeletedAt = model.DeletedAt.Time
+	qso.Revision = model.Revision
 	qso.ContactedStation.Call = model.Call
 	qso.ContactedStation.Country = model.Country
 	qso.QsoDetails.Band = model.Band

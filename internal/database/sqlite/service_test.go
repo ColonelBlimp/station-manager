@@ -237,6 +237,35 @@ func applyMigrationSteps(t *testing.T, svc *Service, steps int) {
 // validTestQso builds a minimal valid QSO. The call field defaults to
 // "M0CMC" and the dedupe key is computed manually so rows inserted by
 // InsertQsoTx bypass qsoservice.
+// insertQsoRawV1 inserts a QSO with raw SQL shaped for the VERSION-1 schema.
+// The current sqlboiler model cannot write to pre-0005 schemas: it fetches
+// the revision default column after insert, and SQLite's double-quoted-string
+// fallback turns the missing column into a literal (a string scan error).
+// Migration characterization needs a version-frozen writer, not the live model.
+func insertQsoRawV1(t *testing.T, svc *Service, q types.Qso) int64 {
+	t.Helper()
+	freqKHz, err := utils.ParseFreqMHz(q.QsoDetails.Freq)
+	if err != nil {
+		t.Fatalf("parse fixture freq: %v", err)
+	}
+	res, err := svc.handle.Exec(`INSERT INTO qso
+		(uuid, call, band, mode, freq, qso_date, time_on, time_off,
+		 rst_sent, rst_rcvd, country, dedupe_key, logbook_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		q.UUID, q.ContactedStation.Call, q.QsoDetails.Band, q.QsoDetails.Mode, freqKHz,
+		q.QsoDetails.QsoDate, q.QsoDetails.TimeOn, q.QsoDetails.TimeOff,
+		q.QsoDetails.RstSent, q.QsoDetails.RstRcvd, q.ContactedStation.Country,
+		q.DedupeKey, q.LogbookID)
+	if err != nil {
+		t.Fatalf("raw v1 qso insert: %v", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("raw v1 qso insert id: %v", err)
+	}
+	return id
+}
+
 func validTestQso(logbookID int64, call, band, mode, qsoDate, timeOn string) types.Qso {
 	q := types.Qso{LogbookID: logbookID, UUID: utils.NewUUIDv7()}
 	q.ContactedStation.Call = call
@@ -395,10 +424,7 @@ func TestMigrate_RelaxesRSTLengthFromVersion1(t *testing.T) {
 	}
 
 	before := validTestQso(logbookID, "M0CMC", "20m", "SSB", "20240615", "1253")
-	beforeID, err := svc.InsertQsoWithContext(context.Background(), before)
-	if err != nil {
-		t.Fatalf("insert version-1 qso: %v", err)
-	}
+	beforeID := insertQsoRawV1(t, svc, before)
 	enqueueUpload(t, svc, beforeID, "qrz-main", "qrz", action.Insert)
 	insertQsoHistory(t, svc, before.UUID, action.Update, source.API, []byte(`{"call":"M0CMC"}`))
 

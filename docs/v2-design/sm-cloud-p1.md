@@ -114,7 +114,14 @@ an accepted backup must be restorable) with validation running before the
 `EnsureLogbook` side effect, `/v1/export` reads from one repeatable-read
 snapshot (`store.ExportSnapshot`), and migration 0002 adds a composite
 `(logbook_id, tenant_id)` FK so the schema itself refuses cross-tenant
-logbook filing. The reconcile
+logbook filing. **ADR 0050 (built 2026-07-18, same day):** the sync version
+marker is now a per-row monotonic `revision` counter — local SQLite
+migration 0005 (column + combined stamp trigger), envelope + export wire
+field, cloud migration 0003, upsert guard `revision > OR (= AND
+modified_at >=)`, and the reconcile manifest + summary hash line
+(`uuid|unixmicro|revision`) — because second-precision `modified_at` cannot
+order same-second edits (both ends must deploy together; hash formulas
+differ across the skew, which flags full drift and re-pushes harmlessly). The reconcile
 hash lives in the shared **`internal/cloud/reconcile`** package (`Summary`:
 sort by lowercased UUID, µs-truncate, hash `uuid|unixmicro` lines with SHA-256)
 — **S4's daemon side must import this same package**, which discharges the

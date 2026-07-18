@@ -81,6 +81,18 @@ func TestSummary_Empty(t *testing.T) {
 	}
 }
 
+// TestSummary_RevisionSensitive: two edits within the same second tie on
+// modified_at — revision is what makes that divergence visible (ADR 0050).
+func TestSummary_RevisionSensitive(t *testing.T) {
+	at := time.Date(2026, 7, 17, 5, 0, 0, 0, time.UTC)
+	uuid := "0197f9a0-0000-7000-8000-000000000001"
+	_, rev0 := Summary([]Entry{{UUID: uuid, ModifiedAt: at}})
+	_, rev1 := Summary([]Entry{{UUID: uuid, ModifiedAt: at, Revision: 1}})
+	if rev0 == rev1 {
+		t.Fatal("a revision bump at an identical timestamp must change the hash")
+	}
+}
+
 func TestSummary_ContentSensitive(t *testing.T) {
 	at := time.Date(2026, 7, 17, 5, 0, 0, 0, time.UTC)
 	uuid := "0197f9a0-0000-7000-8000-000000000001"

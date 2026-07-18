@@ -163,9 +163,13 @@ func (f *Forwarder) AdifPrefix() string { return "" }
 // contract is types.Qso itself; this envelope is four fields whose round-trip
 // the integration test pins against the real server.
 type qsoUpload struct {
-	ModifiedAt time.Time  `json:"modified_at"`
-	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
-	Qso        types.Qso  `json:"qso"`
+	ModifiedAt time.Time `json:"modified_at"`
+	// Revision is the row's monotonic edit counter (ADR 0050) — the primary
+	// ordering the cloud's upsert guard applies. Envelope-only, like
+	// modified_at (types.Qso tags it json:"-", so it never rides the payload).
+	Revision  int64      `json:"revision,omitempty"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	Qso       types.Qso  `json:"qso"`
 }
 
 type putRequest struct {
@@ -210,7 +214,7 @@ func (f *Forwarder) Submit(
 		}
 	}
 
-	up := qsoUpload{ModifiedAt: qso.ModifiedAt, Qso: qso}
+	up := qsoUpload{ModifiedAt: qso.ModifiedAt, Revision: qso.Revision, Qso: qso}
 	switch act {
 	case action.Insert, action.Update:
 		// plain upsert

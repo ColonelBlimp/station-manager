@@ -1,7 +1,7 @@
 ---
 number: 0050
 title: Replace modified_at with a per-row revision counter as the sync version marker
-status: Proposed
+status: Accepted
 date: 2026-07-18
 ---
 
@@ -106,12 +106,22 @@ The build, end to end (order matters only within each side; the guard's
 fallback makes the two deploys order-independent):
 
 - **Local (SQLite) migration 0005:** `ALTER TABLE qso ADD COLUMN revision
-  INTEGER NOT NULL DEFAULT 0`, and recreate `trg_qso_set_modified_at` so the
-  inner update also sets `revision = OLD.revision + 1`. The trigger's
-  existing `WHEN NEW.modified_at = OLD.modified_at` guard stays — it also
-  keeps the bump self-terminating. Existing rows start at 0. sqlboiler
-  models regenerate; `adapters.QsoModelToType` maps the column;
-  `FetchQsoManifestWithContext` adds it to manifest entries.
+  INTEGER NOT NULL DEFAULT 0`, and replace `trg_qso_set_modified_at` with a
+  COMBINED trigger owning both stamps: `WHEN NEW.revision = OLD.revision`
+  (fires on every real edit — no writer sets revision via UPDATE), inner
+  update sets `revision = OLD.revision + 1` and stamps `modified_at` with
+  `datetime('now')` only when the edit left it untouched (a CASE keeps an
+  explicitly written value). *Build note (2026-07-18): the proposal's
+  original shape — keep the 0004 stamp trigger, bump revision inside it —
+  does not work, because the daemon's edit path (`updateActiveQso`) stamps
+  `modified_at` explicitly, so the stamp trigger's WHEN guard is false on
+  exactly the updates that matter; and a separate revision-only trigger
+  chains (its inner UPDATE re-fires the stamp trigger, clobbering the Go
+  writer's µs-UTC value with second-precision `datetime('now')` — undoing
+  0004's canonicalisation). One trigger, one inner update, no chain;
+  self-terminating because the inner update changes revision.* Existing rows
+  start at 0. sqlboiler models regenerate; `adapters.QsoModelToType` maps
+  the column; `FetchQsoManifestWithContext` adds it to manifest entries.
 - **Restore preserves revision:** `InsertRestoredQsoWithContext` writes it
   explicitly (INSERT fires no update trigger, same as `modified_at` today),
   so a restored logbook resumes the sequence instead of restarting at 0.

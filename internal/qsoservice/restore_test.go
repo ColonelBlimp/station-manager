@@ -19,6 +19,7 @@ func restorableQso(uuid string, modified time.Time) types.Qso {
 		AppSmRequestQsl: true,
 		QrzlogLogid:     "12345",
 		ModifiedAt:      modified,
+		Revision:        7, // mid-sequence — restore must resume, not reset (ADR 0050)
 	}
 	q.Call = "DL9UW"
 	q.Band = "20m"
@@ -52,6 +53,7 @@ func TestRestore_RoundTripPreservesEverything(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uuid, got.UUID, "identity preserved")
 	require.True(t, got.ModifiedAt.Equal(modified), "modified_at preserved: %v", got.ModifiedAt)
+	require.Equal(t, int64(7), got.Revision, "revision preserved — the sync sequence resumes post-restore")
 	// The additional_data-carried extras — what an ADIF re-import flattens.
 	require.Equal(t, "142559", got.TimeOn, "seconds preserved")
 	require.True(t, got.AppSmRequestQsl)

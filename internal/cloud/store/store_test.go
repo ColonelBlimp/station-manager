@@ -52,6 +52,7 @@ func testStore(t *testing.T) *Store {
 	execSQLFile(t, db, "migrations/0001_init.down.sql")
 	execSQLFile(t, db, "migrations/0001_init.up.sql")
 	execSQLFile(t, db, "migrations/0002_qsos_logbook_tenant_fk.up.sql")
+	execSQLFile(t, db, "migrations/0003_qsos_revision.up.sql")
 	t.Cleanup(func() {
 		execSQLFile(t, db, "migrations/0001_init.down.sql")
 		_ = db.Close()
@@ -207,6 +208,70 @@ func TestUpsert_TenantScope(t *testing.T) {
 	got := mustGet(t, s, uuidA)
 	if got.TenantID != tidA {
 		t.Errorf("tenant after hijack = %d, want %d (A still owns the row)", got.TenantID, tidA)
+	}
+}
+
+// TestUpsert_RevisionGuard pins the ADR 0050 ordering: revision outranks the
+// clock, and the modified_at comparison only decides revision TIES. The
+// same-second case is THE review-3 P1 finding — a reconcile-goroutine push
+// holding a stale fetch lands after a worker push within one second; before
+// revisions, arrival order silently regressed the payload and the hash tie
+// made it invisible forever.
+func TestUpsert_RevisionGuard(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+
+	recAt := func(rev int64, mod time.Time, payload string) Record {
+		r := rec(uuidA, tid, lid, mod, nil, payload)
+		r.Revision = rev
+		return r
+	}
+
+	if _, err := s.Upsert(ctx, []Record{recAt(2, baseTime, `{"v":2}`)}); err != nil {
+		t.Fatalf("seed rev 2: %v", err)
+	}
+
+	// Same second, LOWER revision — the stale reconcile push. Must be rejected.
+	applied, err := s.Upsert(ctx, []Record{recAt(1, baseTime, `{"v":1}`)})
+	if err != nil {
+		t.Fatalf("stale-revision push: %v", err)
+	}
+	if applied != 0 {
+		t.Errorf("same-second lower-revision push applied = %d, want 0", applied)
+	}
+	if got := payloadV(t, mustGet(t, s, uuidA)); got != 2 {
+		t.Errorf("payload v after stale-revision push = %d, want 2 (no regression)", got)
+	}
+
+	// Higher revision with an OLDER timestamp — an NTP step backward between
+	// edits. Revision must outrank the clock.
+	applied, err = s.Upsert(ctx, []Record{recAt(3, baseTime.Add(-time.Hour), `{"v":3}`)})
+	if err != nil {
+		t.Fatalf("clock-step push: %v", err)
+	}
+	if applied != 1 {
+		t.Errorf("higher-revision older-clock push applied = %d, want 1", applied)
+	}
+	if got := payloadV(t, mustGet(t, s, uuidA)); got != 3 {
+		t.Errorf("payload v after clock-step push = %d, want 3", got)
+	}
+
+	// Revision TIE falls back to modified_at: older is rejected, equal applies
+	// (idempotent re-push) — exactly the legacy semantics.
+	applied, err = s.Upsert(ctx, []Record{recAt(3, baseTime.Add(-2*time.Hour), `{"v":4}`)})
+	if err != nil {
+		t.Fatalf("tie-older push: %v", err)
+	}
+	if applied != 0 {
+		t.Errorf("revision-tie older-timestamp push applied = %d, want 0", applied)
+	}
+	applied, err = s.Upsert(ctx, []Record{recAt(3, baseTime.Add(-time.Hour), `{"v":5}`)})
+	if err != nil {
+		t.Fatalf("tie-equal push: %v", err)
+	}
+	if applied != 1 {
+		t.Errorf("revision-tie equal-timestamp re-push applied = %d, want 1 (idempotent)", applied)
 	}
 }
 

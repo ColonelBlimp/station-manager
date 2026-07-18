@@ -151,9 +151,12 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 
 // QsoUpload is one QSO on the PUT /v1/qsos wire: the full types.Qso as sent
 // (stored verbatim) plus the storage-row facts that are not ADIF fields.
-// DeletedAt set = tombstone (soft delete; the cloud is retentive).
+// DeletedAt set = tombstone (soft delete; the cloud is retentive). Revision
+// is the row's monotonic edit counter (ADR 0050); absent decodes as 0 =
+// legacy client, which the store guard handles via its modified_at fallback.
 type QsoUpload struct {
 	ModifiedAt time.Time       `json:"modified_at"`
+	Revision   int64           `json:"revision,omitempty"`
 	DeletedAt  *time.Time      `json:"deleted_at,omitempty"`
 	Qso        json.RawMessage `json:"qso"`
 }
@@ -224,10 +227,16 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 				"qsos["+strconv.Itoa(i)+"].modified_at is required")
 			return
 		}
+		if u.Revision < 0 {
+			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+				"qsos["+strconv.Itoa(i)+"].revision must be >= 0")
+			return
+		}
 		recs = append(recs, store.Record{
 			UUID:       uuid,
 			TenantID:   tenant,
 			ModifiedAt: u.ModifiedAt,
+			Revision:   u.Revision,
 			DeletedAt:  u.DeletedAt,
 			Payload:    u.Qso,
 		})
@@ -291,7 +300,7 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 		if m.Deleted {
 			continue // tombstones reconcile via the manifest, not the summary
 		}
-		entries = append(entries, reconcile.Entry{UUID: m.UUID, ModifiedAt: m.ModifiedAt})
+		entries = append(entries, reconcile.Entry{UUID: m.UUID, ModifiedAt: m.ModifiedAt, Revision: m.Revision})
 	}
 	count, hash := reconcile.Summary(entries)
 	s.writeJSON(w, http.StatusOK, ReconcileResponse{LogbookID: lb.ID, Count: count, Hash: hash})
@@ -315,11 +324,13 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 }
 
 // ExportQso is one row of the export dump: the verbatim stored payload plus
-// the storage-row facts restore needs (logbook routing, recency, tombstone).
+// the storage-row facts restore needs (logbook routing, recency, revision
+// continuity, tombstone).
 type ExportQso struct {
 	UUID       string          `json:"uuid"`
 	LogbookID  int64           `json:"logbook_id"`
 	ModifiedAt time.Time       `json:"modified_at"`
+	Revision   int64           `json:"revision,omitempty"`
 	DeletedAt  *time.Time      `json:"deleted_at,omitempty"`
 	Qso        json.RawMessage `json:"qso"`
 }
@@ -356,6 +367,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 			UUID:       rec.UUID,
 			LogbookID:  rec.LogbookID,
 			ModifiedAt: rec.ModifiedAt,
+			Revision:   rec.Revision,
 			DeletedAt:  rec.DeletedAt,
 			Qso:        rec.Payload,
 		})

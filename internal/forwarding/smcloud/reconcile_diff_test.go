@@ -16,6 +16,35 @@ func local(uuid string, mod time.Time, deleted bool) types.QsoManifestEntry {
 	return types.QsoManifestEntry{UUID: uuid, ModifiedAt: mod, Deleted: deleted}
 }
 
+// TestDiff_RevisionDrift (ADR 0050): version order is revision-first. A
+// same-timestamp revision mismatch is the divergence the clock can't see —
+// local higher heals by push; cloud higher counts as cloudNewer (untouched);
+// and a higher local revision outranks an OLDER local timestamp (NTP step).
+func TestDiff_RevisionDrift(t *testing.T) {
+	localHigher := types.QsoManifestEntry{UUID: "A", ModifiedAt: at, Revision: 2}
+	up, del, only, newer := diffManifests(
+		[]types.QsoManifestEntry{localHigher},
+		map[string]cloudEntry{"a": {modified: at, revision: 1}})
+	if len(up) != 1 || len(del) != 0 || only != 0 || newer != 0 {
+		t.Fatalf("same-second local-higher revision: up=%v del=%v only=%d newer=%d, want one upsert", up, del, only, newer)
+	}
+
+	up, del, only, newer = diffManifests(
+		[]types.QsoManifestEntry{{UUID: "A", ModifiedAt: at, Revision: 1}},
+		map[string]cloudEntry{"a": {modified: at, revision: 2}})
+	if len(up) != 0 || len(del) != 0 || only != 0 || newer != 1 {
+		t.Fatalf("same-second cloud-higher revision: up=%v del=%v only=%d newer=%d, want cloudNewer 1", up, del, only, newer)
+	}
+
+	clockStepped := types.QsoManifestEntry{UUID: "A", ModifiedAt: at.Add(-time.Hour), Revision: 3}
+	up, _, _, newer = diffManifests(
+		[]types.QsoManifestEntry{clockStepped},
+		map[string]cloudEntry{"a": {modified: at, revision: 2}})
+	if len(up) != 1 || newer != 0 {
+		t.Fatalf("higher revision + older clock: up=%v newer=%d, want one upsert (revision outranks clock)", up, newer)
+	}
+}
+
 func TestDiff_CloudMissingLiveRow(t *testing.T) {
 	up, del, only, newer := diffManifests(
 		[]types.QsoManifestEntry{local("A", at, false)}, map[string]cloudEntry{})

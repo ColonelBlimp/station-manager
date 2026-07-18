@@ -239,6 +239,7 @@ func runRestore(args []string) error {
 			continue
 		}
 		qso.ModifiedAt = r.ModifiedAt
+		qso.Revision = r.Revision
 		if r.DeletedAt != nil {
 			qso.DeletedAt = *r.DeletedAt
 		}

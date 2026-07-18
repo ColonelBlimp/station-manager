@@ -8,7 +8,7 @@ add-soft-deletes = true
 
 [sqlite3]
 dbname = "../../../build/db/data.db"
-blacklist = ["schema_migrations"]
+blacklist = ["schema_migrations", "schema_migrations_log", "schema_migrations_reference"]
 
 [aliases.tables.qso.columns]
 rst_rcvd = "RstRcvd"

@@ -1,0 +1,1 @@
+ALTER TABLE qsos DROP COLUMN IF EXISTS revision;

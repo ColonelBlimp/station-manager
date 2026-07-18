@@ -43,6 +43,7 @@ type Qso struct {
 	AdditionalData types.JSON `boil:"additional_data" json:"additional_data" toml:"additional_data" yaml:"additional_data"`
 	DedupeKey      string     `boil:"dedupe_key" json:"dedupe_key" toml:"dedupe_key" yaml:"dedupe_key"`
 	LogbookID      int64      `boil:"logbook_id" json:"logbook_id" toml:"logbook_id" yaml:"logbook_id"`
+	Revision       int64      `boil:"revision" json:"revision" toml:"revision" yaml:"revision"`
 
 	R *qsoR `boil:"-" json:"-" toml:"-" yaml:"-"`
 	L qsoL  `boil:"-" json:"-" toml:"-" yaml:"-"`
@@ -67,6 +68,7 @@ var QsoColumns = struct {
 	AdditionalData string
 	DedupeKey      string
 	LogbookID      string
+	Revision       string
 }{
 	ID:             "id",
 	CreatedAt:      "created_at",
@@ -86,6 +88,7 @@ var QsoColumns = struct {
 	AdditionalData: "additional_data",
 	DedupeKey:      "dedupe_key",
 	LogbookID:      "logbook_id",
+	Revision:       "revision",
 }
 
 var QsoTableColumns = struct {
@@ -107,6 +110,7 @@ var QsoTableColumns = struct {
 	AdditionalData string
 	DedupeKey      string
 	LogbookID      string
+	Revision       string
 }{
 	ID:             "qso.id",
 	CreatedAt:      "qso.created_at",
@@ -126,6 +130,7 @@ var QsoTableColumns = struct {
 	AdditionalData: "qso.additional_data",
 	DedupeKey:      "qso.dedupe_key",
 	LogbookID:      "qso.logbook_id",
+	Revision:       "qso.revision",
 }
 
 // Generated where
@@ -149,6 +154,7 @@ var QsoWhere = struct {
 	AdditionalData whereHelpertypes_JSON
 	DedupeKey      whereHelperstring
 	LogbookID      whereHelperint64
+	Revision       whereHelperint64
 }{
 	ID:             whereHelperint64{field: "\"qso\".\"id\""},
 	CreatedAt:      whereHelpertime_Time{field: "\"qso\".\"created_at\""},
@@ -168,6 +174,7 @@ var QsoWhere = struct {
 	AdditionalData: whereHelpertypes_JSON{field: "\"qso\".\"additional_data\""},
 	DedupeKey:      whereHelperstring{field: "\"qso\".\"dedupe_key\""},
 	LogbookID:      whereHelperint64{field: "\"qso\".\"logbook_id\""},
+	Revision:       whereHelperint64{field: "\"qso\".\"revision\""},
 }
 
 // QsoRels is where relationship names are stored.
@@ -245,9 +252,9 @@ func (r *qsoR) GetQsoUploads() QsoUploadSlice {
 type qsoL struct{}
 
 var (
-	qsoAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "uuid", "call", "band", "mode", "freq", "qso_date", "time_on", "time_off", "rst_sent", "rst_rcvd", "country", "additional_data", "dedupe_key", "logbook_id"}
+	qsoAllColumns            = []string{"id", "created_at", "modified_at", "deleted_at", "uuid", "call", "band", "mode", "freq", "qso_date", "time_on", "time_off", "rst_sent", "rst_rcvd", "country", "additional_data", "dedupe_key", "logbook_id", "revision"}
 	qsoColumnsWithoutDefault = []string{"uuid", "call", "band", "mode", "freq", "qso_date", "time_on", "time_off", "rst_sent", "rst_rcvd", "country", "dedupe_key", "logbook_id"}
-	qsoColumnsWithDefault    = []string{"id", "created_at", "modified_at", "deleted_at", "additional_data"}
+	qsoColumnsWithDefault    = []string{"id", "created_at", "modified_at", "deleted_at", "additional_data", "revision"}
 	qsoPrimaryKeyColumns     = []string{"id"}
 	qsoGeneratedColumns      = []string{"id"}
 )

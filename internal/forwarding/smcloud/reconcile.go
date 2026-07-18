@@ -168,7 +168,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) (ReconcileSummary, error) {
 	liveEntries := make([]reconcile.Entry, 0, len(local))
 	for _, e := range local {
 		if !e.Deleted {
-			liveEntries = append(liveEntries, reconcile.Entry{UUID: e.UUID, ModifiedAt: e.ModifiedAt})
+			liveEntries = append(liveEntries, reconcile.Entry{UUID: e.UUID, ModifiedAt: e.ModifiedAt, Revision: e.Revision})
 		}
 	}
 	localCount, localHash := reconcile.Summary(liveEntries)
@@ -237,15 +237,33 @@ func (r *Reconciler) RunOnce(ctx context.Context) (ReconcileSummary, error) {
 // cloudEntry is the cloud manifest reduced to what the diff needs.
 type cloudEntry struct {
 	modified time.Time
+	revision int64
 	deleted  bool
 }
 
-// diffManifests computes the heal sets. Timestamps compare at the protocol's
-// microsecond resolution (both sides truncated) and UUIDs fold to lower case,
-// matching reconcile.Summary's canonicalisation:
+// compareVersions orders two (revision, modified_at) version pairs per
+// ADR 0050: revision first, modified_at (µs-truncated) breaking ties —
+// exactly the cloud upsert guard's order. Returns <0 when a is older,
+// 0 when equal, >0 when a is newer. With both revisions 0 (legacy rows)
+// this degenerates to the pre-0050 pure-timestamp comparison.
+func compareVersions(aRev int64, aMod time.Time, bRev int64, bMod time.Time) int {
+	if aRev != bRev {
+		if aRev < bRev {
+			return -1
+		}
+		return 1
+	}
+	return aMod.Truncate(time.Microsecond).Compare(bMod.Truncate(time.Microsecond))
+}
+
+// diffManifests computes the heal sets. Versions compare revision-first with
+// timestamps at the protocol's microsecond resolution (both sides truncated),
+// and UUIDs fold to lower case, matching reconcile.Summary's canonicalisation:
 //
-//	upserts — local live rows the cloud is missing, holds stale, or holds
-//	          as a tombstone that a NEWER local edit resurrects.
+//	upserts — local live rows the cloud is missing, holds stale (lower
+//	          version — including same-second divergence the timestamp
+//	          alone can't see), or holds as a tombstone a newer-or-equal
+//	          local edit resurrects.
 //	deletes — local tombstones the cloud still shows live.
 //	cloudOnly — cloud rows with no local counterpart (never touched).
 //	cloudNewer — cloud rows strictly newer than local (never touched).
@@ -255,7 +273,7 @@ func diffManifests(local []types.QsoManifestEntry, cloud map[string]cloudEntry) 
 		key := strings.ToLower(strings.TrimSpace(l.UUID))
 		seen[key] = struct{}{}
 		c, ok := cloud[key]
-		lm := l.ModifiedAt.Truncate(time.Microsecond)
+		cmp := compareVersions(l.Revision, l.ModifiedAt, c.revision, c.modified)
 		switch {
 		case !ok:
 			if !l.Deleted {
@@ -265,13 +283,13 @@ func diffManifests(local []types.QsoManifestEntry, cloud map[string]cloudEntry) 
 			// nothing upstream to delete.
 		case l.Deleted && !c.deleted:
 			deletes = append(deletes, l.UUID)
-		case !l.Deleted && c.modified.Truncate(time.Microsecond).Before(lm):
+		case !l.Deleted && cmp > 0:
 			upserts = append(upserts, l.UUID) // stale cloud copy (or resurrect over tombstone)
-		case !l.Deleted && c.deleted && !c.modified.Truncate(time.Microsecond).After(lm):
-			// Cloud tombstone at same-or-older recency over a live local row:
-			// push the live row — local is authoritative (edit-after-delete wins).
+		case !l.Deleted && c.deleted && cmp == 0:
+			// Cloud tombstone at the same version as a live local row: push
+			// the live row — local is authoritative (edit-after-delete wins).
 			upserts = append(upserts, l.UUID)
-		case c.modified.Truncate(time.Microsecond).After(lm):
+		case cmp < 0:
 			cloudNewer++
 		}
 	}
@@ -349,6 +367,7 @@ func (r *Reconciler) cloudManifest(ctx context.Context, logbookID int64) (map[st
 		Entries []struct {
 			UUID       string    `json:"uuid"`
 			ModifiedAt time.Time `json:"modified_at"`
+			Revision   int64     `json:"revision"`
 			Deleted    bool      `json:"deleted"`
 		} `json:"entries"`
 	}
@@ -357,7 +376,7 @@ func (r *Reconciler) cloudManifest(ctx context.Context, logbookID int64) (map[st
 	}
 	m := make(map[string]cloudEntry, len(out.Entries))
 	for _, e := range out.Entries {
-		m[strings.ToLower(strings.TrimSpace(e.UUID))] = cloudEntry{modified: e.ModifiedAt, deleted: e.Deleted}
+		m[strings.ToLower(strings.TrimSpace(e.UUID))] = cloudEntry{modified: e.ModifiedAt, revision: e.Revision, deleted: e.Deleted}
 	}
 	return m, nil
 }

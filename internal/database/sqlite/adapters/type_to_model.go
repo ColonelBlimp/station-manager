@@ -58,13 +58,16 @@ func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 		jsonData = []byte("{}")
 	}
 
-	// NB: qso.ModifiedAt / qso.DeletedAt are deliberately NOT mapped here.
-	// This adapter also serves the UPDATE path, which round-trips a FETCHED
-	// qso (whose ModifiedAt the read overlay populated) — writing it back
-	// explicitly would defeat the bump trigger on never-edited rows (NEW ≠
-	// NULL-OLD → the trigger's WHEN goes false). The one writer that must
-	// preserve them — SM Cloud restore — sets the model fields itself
-	// (InsertRestoredQsoWithContext).
+	// NB: qso.ModifiedAt / qso.DeletedAt / qso.Revision are deliberately NOT
+	// mapped here. This adapter also serves the UPDATE path, which round-trips
+	// a FETCHED qso (whose ModifiedAt the read overlay populated) — writing it
+	// back explicitly would defeat the stamp trigger on never-edited rows (NEW
+	// ≠ NULL-OLD → its modified_at CASE keeps the stale write), and revision
+	// belongs to the same trigger (ADR 0050, combined in migration 0005): it
+	// bumps on every update that does not itself change the column —
+	// updateActiveQso's map omits it for exactly that reason. The one writer
+	// that must preserve them — SM Cloud restore — sets the model fields
+	// itself (InsertRestoredQsoWithContext).
 	return models.Qso{
 		ID:             qso.ID,
 		UUID:           qso.UUID,

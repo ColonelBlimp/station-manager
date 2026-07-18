@@ -205,7 +205,7 @@ func TestRoundTrip_FullFidelity(t *testing.T) {
 		t.Fatalf("marshal fixture: %v", err)
 	}
 	modified := time.Date(2026, 7, 17, 5, 4, 3, 123456000, time.UTC)
-	out := putQsos(t, ts, testToken, "main", []QsoUpload{{ModifiedAt: modified, Qso: payload}})
+	out := putQsos(t, ts, testToken, "main", []QsoUpload{{ModifiedAt: modified, Revision: 5, Qso: payload}})
 	if out.Received != 1 || out.Applied != 1 {
 		t.Fatalf("put outcome = %+v, want received/applied 1/1", out)
 	}
@@ -228,6 +228,9 @@ func TestRoundTrip_FullFidelity(t *testing.T) {
 	}
 	if !got.ModifiedAt.Equal(modified) {
 		t.Errorf("modified_at = %v, want %v (µs-canonical)", got.ModifiedAt, modified)
+	}
+	if got.Revision != 5 {
+		t.Errorf("revision = %d, want 5 (round-tripped for restore continuity)", got.Revision)
 	}
 	var restored types.Qso
 	if err := json.Unmarshal(got.Qso, &restored); err != nil {
@@ -274,7 +277,7 @@ func TestReconcileAndManifest(t *testing.T) {
 	p2, _ := json.Marshal(fixtureQso(u2))
 	putQsos(t, ts, testToken, "main", []QsoUpload{
 		{ModifiedAt: at, Qso: p1},
-		{ModifiedAt: at.Add(time.Second), Qso: p2},
+		{ModifiedAt: at.Add(time.Second), Revision: 4, Qso: p2},
 	})
 
 	var books struct {
@@ -291,15 +294,17 @@ func TestReconcileAndManifest(t *testing.T) {
 	do(t, http.MethodGet, base+"/reconcile", testToken, nil, &rec)
 	wantCount, wantHash := reconcile.Summary([]reconcile.Entry{
 		{UUID: u1, ModifiedAt: at},
-		{UUID: u2, ModifiedAt: at.Add(time.Second)},
+		{UUID: u2, ModifiedAt: at.Add(time.Second), Revision: 4},
 	})
 	if rec.Count != wantCount || rec.Hash != wantHash {
 		t.Fatalf("reconcile = %+v, want count %d hash %s", rec, wantCount, wantHash)
 	}
 
 	// Tombstone u2: reconcile drops to one live row; the manifest keeps both.
+	// The delete bumped the local revision past the stored 4 — a tombstone at a
+	// LOWER revision would (correctly) be rejected as a stale missed-delete.
 	del := at.Add(time.Minute)
-	putQsos(t, ts, testToken, "main", []QsoUpload{{ModifiedAt: del, DeletedAt: &del, Qso: p2}})
+	putQsos(t, ts, testToken, "main", []QsoUpload{{ModifiedAt: del, Revision: 5, DeletedAt: &del, Qso: p2}})
 
 	do(t, http.MethodGet, base+"/reconcile", testToken, nil, &rec)
 	oneCount, oneHash := reconcile.Summary([]reconcile.Entry{{UUID: u1, ModifiedAt: at}})

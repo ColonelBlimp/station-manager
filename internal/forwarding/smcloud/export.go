@@ -30,6 +30,7 @@ type ExportRecord struct {
 	UUID       string          `json:"uuid"`
 	LogbookID  int64           `json:"logbook_id"`
 	ModifiedAt time.Time       `json:"modified_at"`
+	Revision   int64           `json:"revision,omitempty"`
 	DeletedAt  *time.Time      `json:"deleted_at,omitempty"`
 	Qso        json.RawMessage `json:"qso"`
 }

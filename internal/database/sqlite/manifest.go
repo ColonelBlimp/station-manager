@@ -13,7 +13,8 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
-// FetchQsoManifestWithContext returns the (uuid, modified_at, deleted) tuple
+// FetchQsoManifestWithContext returns the (uuid, modified_at, revision,
+// deleted) tuple
 // for EVERY row of a logbook — tombstones included — ordered by uuid: the
 // local half of the SM Cloud reconcile diff (ADR 0040), mirroring the cloud
 // store's Manifest read. Rows with a NULL/blank uuid (none should exist —
@@ -39,7 +40,7 @@ func (s *Service) FetchQsoManifestWithContext(ctx context.Context, logbookID int
 	// column's DATETIME affinity and scan as a raw string); the fallback
 	// happens in Go below.
 	rows, err := h.QueryContext(ctx,
-		`SELECT uuid, modified_at, created_at, deleted_at IS NOT NULL
+		`SELECT uuid, modified_at, created_at, revision, deleted_at IS NOT NULL
 		 FROM qso WHERE logbook_id = ? AND uuid IS NOT NULL AND uuid != ''
 		 ORDER BY uuid`, logbookID)
 	if err != nil {
@@ -54,7 +55,7 @@ func (s *Service) FetchQsoManifestWithContext(ctx context.Context, logbookID int
 			mt sql.NullTime
 			ct time.Time
 		)
-		if err := rows.Scan(&e.UUID, &mt, &ct, &e.Deleted); err != nil {
+		if err := rows.Scan(&e.UUID, &mt, &ct, &e.Revision, &e.Deleted); err != nil {
 			return nil, errors.New(op).WithErr(err).WithMsg("scan")
 		}
 		// modified_at is NULL until the update trigger first fires (no INSERT
@@ -115,6 +116,10 @@ func (s *Service) InsertRestoredQsoWithContext(ctx context.Context, qso types.Qs
 	if !qso.DeletedAt.IsZero() {
 		model.DeletedAt = null.TimeFrom(qso.DeletedAt.UTC())
 	}
+	// Revision is preserved like modified_at (ADR 0050): a restored row must
+	// resume its edit sequence, not restart at 0 — a reset revision would push
+	// as "stale" against a cloud holding the higher pre-restore value.
+	model.Revision = qso.Revision
 	if err = model.Insert(ctx, h, boil.Infer()); err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsgf("uuid %s", qso.UUID)
 	}

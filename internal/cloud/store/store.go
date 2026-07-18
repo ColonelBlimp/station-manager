@@ -46,20 +46,25 @@ func New(db *sql.DB) *Store { return &Store{db: db} }
 
 // Record is one stored QSO: the identity + reconcile columns lifted out for
 // indexing, plus the full types.Qso as JSON. DeletedAt non-nil marks a tombstone.
+// Revision is the row's monotonic edit counter (ADR 0050) — the primary
+// ordering the upsert guard applies; 0 = pre-revision legacy row.
 type Record struct {
 	UUID       string
 	TenantID   int64
 	LogbookID  int64
 	ModifiedAt time.Time
+	Revision   int64
 	DeletedAt  *time.Time
 	Payload    json.RawMessage
 }
 
 // ManifestEntry is one row of a logbook's reconcile manifest — the minimal
-// (uuid, modified_at, deleted) tuple a peer diffs against its local copy.
+// (uuid, modified_at, revision, deleted) tuple a peer diffs against its local
+// copy. Revision 0 = pre-revision row (ADR 0050).
 type ManifestEntry struct {
 	UUID       string    `json:"uuid"`
 	ModifiedAt time.Time `json:"modified_at"`
+	Revision   int64     `json:"revision"`
 	Deleted    bool      `json:"deleted"`
 }
 
@@ -153,9 +158,14 @@ RETURNING id`
 // "pushed N, applied M" and see how many were stale (sync telemetry).
 //
 // Guards on the ON CONFLICT WHERE:
-//   - modified_at: an incoming record overwrites a stored one only when it is at
-//     least as new (>=, so an identical re-push is idempotent), so a stale or
-//     reordered push can't clobber a newer row (reconcile soundness, ADR 0040).
+//   - revision, then modified_at (ADR 0050): an incoming record overwrites a
+//     stored one when its revision is strictly higher; on a revision TIE the
+//     modified_at comparison decides (>=, so an identical re-push is
+//     idempotent). Revision is the primary order because local modified_at is
+//     second-precision wall clock — it cannot order two edits within one
+//     second, and a reconcile-goroutine push racing the serial worker could
+//     regress the payload invisibly on such a tie. All-legacy rows (both
+//     revisions 0) get exactly the pre-0050 semantics via the fallback.
 //     A NEWER non-tombstone over a tombstone resurrects the row by design —
 //     edit-after-delete wins by recency (local is authoritative); a STALE
 //     missed-delete push is rejected by this same guard, so the tombstone holds.
@@ -180,15 +190,17 @@ func (s *Store) Upsert(ctx context.Context, recs []Record) (int, error) {
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
 
 	const q = `
-INSERT INTO qsos (uuid, tenant_id, logbook_id, modified_at, deleted_at, payload)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO qsos (uuid, tenant_id, logbook_id, modified_at, revision, deleted_at, payload)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (uuid) DO UPDATE SET
     tenant_id   = EXCLUDED.tenant_id,
     logbook_id  = EXCLUDED.logbook_id,
     modified_at = EXCLUDED.modified_at,
+    revision    = EXCLUDED.revision,
     deleted_at  = EXCLUDED.deleted_at,
     payload     = EXCLUDED.payload
-WHERE EXCLUDED.modified_at >= qsos.modified_at
+WHERE (EXCLUDED.revision > qsos.revision
+       OR (EXCLUDED.revision = qsos.revision AND EXCLUDED.modified_at >= qsos.modified_at))
   AND qsos.tenant_id = EXCLUDED.tenant_id`
 	stmt, err := tx.PrepareContext(ctx, q)
 	if err != nil {
@@ -209,7 +221,7 @@ WHERE EXCLUDED.modified_at >= qsos.modified_at
 			deletedAt = &d
 		}
 		res, err := stmt.ExecContext(ctx, r.UUID, r.TenantID, r.LogbookID,
-			canonicalTime(r.ModifiedAt), deletedAt, []byte(r.Payload))
+			canonicalTime(r.ModifiedAt), r.Revision, deletedAt, []byte(r.Payload))
 		if err != nil {
 			return 0, errors.New(op).WithErr(err).WithMsgf("uuid %s", r.UUID)
 		}
@@ -231,7 +243,7 @@ WHERE EXCLUDED.modified_at >= qsos.modified_at
 func (s *Store) Manifest(ctx context.Context, logbookID int64) ([]ManifestEntry, error) {
 	const op errors.Op = "store.Manifest"
 	const q = `
-SELECT uuid, modified_at, deleted_at IS NOT NULL
+SELECT uuid, modified_at, revision, deleted_at IS NOT NULL
 FROM qsos WHERE logbook_id = $1 ORDER BY uuid`
 	rows, err := s.db.QueryContext(ctx, q, logbookID)
 	if err != nil {
@@ -242,7 +254,7 @@ FROM qsos WHERE logbook_id = $1 ORDER BY uuid`
 	var out []ManifestEntry
 	for rows.Next() {
 		var e ManifestEntry
-		if err := rows.Scan(&e.UUID, &e.ModifiedAt, &e.Deleted); err != nil {
+		if err := rows.Scan(&e.UUID, &e.ModifiedAt, &e.Revision, &e.Deleted); err != nil {
 			return nil, errors.New(op).WithErr(err).WithMsg("scan")
 		}
 		out = append(out, e)
@@ -343,7 +355,7 @@ func (s *Store) ExportSnapshot(ctx context.Context, tenantID int64) ([]LogbookIn
 
 func queryExport(ctx context.Context, op errors.Op, q querier, tenantID int64) ([]Record, error) {
 	const query = `
-SELECT uuid, tenant_id, logbook_id, modified_at, deleted_at, payload
+SELECT uuid, tenant_id, logbook_id, modified_at, revision, deleted_at, payload
 FROM qsos WHERE tenant_id = $1 ORDER BY logbook_id, uuid`
 	rows, err := q.QueryContext(ctx, query, tenantID)
 	if err != nil {
@@ -358,7 +370,7 @@ FROM qsos WHERE tenant_id = $1 ORDER BY logbook_id, uuid`
 			payload []byte
 		)
 		if err := rows.Scan(&r.UUID, &r.TenantID, &r.LogbookID,
-			&r.ModifiedAt, &r.DeletedAt, &payload); err != nil {
+			&r.ModifiedAt, &r.Revision, &r.DeletedAt, &payload); err != nil {
 			return nil, errors.New(op).WithErr(err).WithMsg("scan")
 		}
 		r.Payload = payload
@@ -375,14 +387,14 @@ FROM qsos WHERE tenant_id = $1 ORDER BY logbook_id, uuid`
 func (s *Store) Get(ctx context.Context, uuid string) (Record, error) {
 	const op errors.Op = "store.Get"
 	const q = `
-SELECT uuid, tenant_id, logbook_id, modified_at, deleted_at, payload
+SELECT uuid, tenant_id, logbook_id, modified_at, revision, deleted_at, payload
 FROM qsos WHERE uuid = $1`
 	var (
 		r       Record
 		payload []byte
 	)
 	err := s.db.QueryRowContext(ctx, q, uuid).Scan(
-		&r.UUID, &r.TenantID, &r.LogbookID, &r.ModifiedAt, &r.DeletedAt, &payload)
+		&r.UUID, &r.TenantID, &r.LogbookID, &r.ModifiedAt, &r.Revision, &r.DeletedAt, &payload)
 	if stderr.Is(err, sql.ErrNoRows) {
 		return Record{}, errors.New(op).WithErr(ErrNotFound).WithMsgf("uuid %s", uuid)
 	}
