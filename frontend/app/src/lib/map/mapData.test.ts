@@ -4,10 +4,31 @@
 // The pager is injected, so no fetch mocking — pure logic under test.
 
 import { describe, it, expect } from 'vitest';
-import { qsoEpochMs, rowPoint, collectWindow, qsoLabel, type Pager } from './mapData.svelte';
+import {
+    qsoEpochMs,
+    rowPoint,
+    collectWindow,
+    qsoLabel,
+    storedDurationMin,
+    type Pager,
+} from './mapData.svelte';
 import type { LogbookQso, QsoPageOutcome } from '../api/logbooks';
 
 const q = (over: Partial<LogbookQso>): LogbookQso => ({ id: 1, ...over });
+
+describe('storedDurationMin', () => {
+    it('restores a persisted picker choice', () => {
+        expect(storedDurationMin('15')).toBe(15);
+        expect(storedDurationMin('2880')).toBe(2880);
+    });
+
+    it('falls back to the 6 h default for absent, garbled, or retired values', () => {
+        expect(storedDurationMin(null)).toBe(360);
+        expect(storedDurationMin('')).toBe(360);
+        expect(storedDurationMin('yesterday')).toBe(360);
+        expect(storedDurationMin('14400')).toBe(360); // the dropped 10-day option
+    });
+});
 
 describe('qsoEpochMs', () => {
     it('parses ADIF date + HHMM as UTC', () => {

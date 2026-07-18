@@ -50,6 +50,12 @@ export function createEngine(width: number, height: number): MapEngine {
 
 let countriesCache: FeatureCollection<Geometry> | null = null;
 
+function topoToCountries(raw: unknown): FeatureCollection<Geometry> {
+    // world-atlas ships untyped JSON; the shape is fixed by that package.
+    const topo = raw as Parameters<typeof feature>[0];
+    return feature(topo, topo.objects.countries) as unknown as FeatureCollection<Geometry>;
+}
+
 /**
  * Countries as GeoJSON features, extracted once from the bundled
  * TopoJSON (the topojson→geojson conversion allocates; callers re-render
@@ -57,14 +63,27 @@ let countriesCache: FeatureCollection<Geometry> | null = null;
  */
 export function worldCountries(): FeatureCollection<Geometry> {
     if (countriesCache === null) {
-        // world-atlas ships untyped JSON; the shape is fixed by that package.
-        const topo = worldTopo as unknown as Parameters<typeof feature>[0];
-        countriesCache = feature(
-            topo,
-            topo.objects.countries
-        ) as unknown as FeatureCollection<Geometry>;
+        countriesCache = topoToCountries(worldTopo);
     }
     return countriesCache;
+}
+
+let countriesHiCache: FeatureCollection<Geometry> | null = null;
+
+/**
+ * The 50m (1:50M) countries — the zoomed-in level of detail. 110m coasts
+ * are visibly blocky past ~3× and drop small islands outright; 50m fixes
+ * both for ~750 KB. The dynamic import keeps that chunk BUNDLED (Vite
+ * code-splits it into the binary — offline posture unchanged, nothing
+ * fetched from the network) but out of the initial page load: the browser
+ * only parses it the first time an operator actually zooms in.
+ */
+export async function worldCountriesHi(): Promise<FeatureCollection<Geometry>> {
+    if (countriesHiCache === null) {
+        const mod = await import('world-atlas/countries-50m.json');
+        countriesHiCache = topoToCountries(mod.default);
+    }
+    return countriesHiCache;
 }
 
 /**

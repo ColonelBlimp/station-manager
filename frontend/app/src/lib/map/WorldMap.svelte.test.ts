@@ -6,7 +6,7 @@
 // client coordinates equal viewBox coordinates (jsdom has no layout).
 
 import { describe, it, expect } from 'vitest';
-import { render } from '@testing-library/svelte';
+import { render, waitFor } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import WorldMap from './WorldMap.svelte';
 import { createEngine, project } from './engine';
@@ -112,6 +112,31 @@ describe('WorldMap', () => {
         await tick();
         expect(viewport.getAttribute('transform')).toBe('translate(0 0) scale(1)');
         expect(container.querySelector('[data-testid="reset-view"]')).toBeNull();
+    });
+
+    it('swaps in the 50m basemap once zoomed past the LOD threshold', async () => {
+        const { container } = render(WorldMap, { props: {} });
+        const svg = container.querySelector('svg')!;
+        pinRect(svg);
+
+        const loCount = container.querySelectorAll('[data-testid="country"]').length;
+        // One deep wheel: exp(0.002 · 1000) ≈ 7.4× — past LOD_ZOOM (3).
+        svg.dispatchEvent(
+            new WheelEvent('wheel', {
+                deltaY: -1000,
+                clientX: 480,
+                clientY: 250,
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await tick();
+        // The 50m set (241 countries vs ~177 at 110m) lazy-loads, then draws.
+        await waitFor(() => {
+            expect(container.querySelectorAll('[data-testid="country"]').length).toBeGreaterThan(
+                loCount + 30
+            );
+        });
     });
 
     it('shows a tooltip with every stacked contact near an endpoint, hides it away', async () => {

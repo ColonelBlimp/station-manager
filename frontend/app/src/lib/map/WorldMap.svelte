@@ -17,6 +17,7 @@
     import {
         createEngine,
         worldCountries,
+        worldCountriesHi,
         arcPath,
         project,
         geometryPath,
@@ -57,10 +58,16 @@
 
     const spherePath = geometryPath(engine, SPHERE);
     const gratPath = graticulePath(engine);
-    const countries = worldCountries().features.map((f, i) => ({
-        id: f.id ?? i,
-        d: geometryPath(engine, f),
-    }));
+
+    // Key by id + index: the 50m dataset carries duplicate feature ids
+    // (e.g. `036` twice), which a bare-id keyed each rejects.
+    function countryPaths(features: ReturnType<typeof worldCountries>['features']) {
+        return features.map((f, i) => ({
+            id: `${String(f.id ?? '')}·${i}`,
+            d: geometryPath(engine, f),
+        }));
+    }
+    const countries = countryPaths(worldCountries().features);
 
     // Twilight caps, outermost first; their translucent fills stack so the
     // night deepens through the grey line into full dark.
@@ -90,6 +97,29 @@
     let svgEl = $state<SVGSVGElement | null>(null);
     let wrapEl = $state<HTMLDivElement | null>(null);
     let panLast = $state<[number, number] | null>(null);
+
+    // Level of detail: past LOD_ZOOM the 110m basemap is visibly blocky, so
+    // the 50m set is lazy-loaded once (bundled chunk, no network) and its
+    // paths cached against the same never-changing projection. Until it
+    // arrives — or if the import ever fails — 110m keeps drawing: fail-soft.
+    const LOD_ZOOM = 3;
+    let hiCountries = $state<{ id: string; d: string | null }[] | null>(null);
+    let hiRequested = false;
+    $effect(() => {
+        if (transform.k < LOD_ZOOM || hiRequested) return;
+        hiRequested = true;
+        worldCountriesHi()
+            .then((fc) => {
+                hiCountries = countryPaths(fc.features);
+            })
+            .catch(() => {
+                // keep drawing 110m; allow a later zoom to retry
+                hiRequested = false;
+            });
+    });
+    const drawCountries = $derived(
+        transform.k >= LOD_ZOOM && hiCountries !== null ? hiCountries : countries
+    );
 
     /**
      * Pointer position in viewBox coordinates, replicating the default
@@ -227,7 +257,7 @@
                     stroke-width={0.5 / transform.k}
                 />
             {/if}
-            {#each countries as c (c.id)}
+            {#each drawCountries as c (c.id)}
                 {#if c.d !== null}
                     <path
                         d={c.d}

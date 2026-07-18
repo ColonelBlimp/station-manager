@@ -59,6 +59,13 @@ export interface MapQso {
 const PAGE_LIMIT = 200;
 const MAX_PAGES = 25;
 
+/** Persisted window minutes → a valid picker choice; the 6 h default when
+ *  absent, unparsable, or no longer one of the offered durations. */
+export function storedDurationMin(raw: string | null): number {
+    const v = Number(raw);
+    return DURATIONS.some((d) => d.minutes === v) ? v : 360;
+}
+
 /** ADIF date (YYYYMMDD) + time (HHMM[SS], UTC) → epoch ms, null if unparseable. */
 export function qsoEpochMs(qsoDate?: string, timeOn?: string): number | null {
     if (qsoDate === undefined || !/^\d{8}$/.test(qsoDate)) return null;
@@ -210,6 +217,7 @@ function scheduleRefresh(): void {
 /** The picker's entry point — also the manual-refresh path (same window). */
 export function setDuration(minutes: number): void {
     mapData.durationMin = minutes;
+    localStorage.setItem(WINDOW_KEY, String(minutes));
     mapData.status = 'loading';
     void refresh();
 }
@@ -220,6 +228,7 @@ export function setDuration(minutes: number): void {
  */
 export function startMapData(): () => void {
     mapData.status = 'loading';
+    mapData.durationMin = storedDurationMin(localStorage.getItem(WINDOW_KEY));
     void (async () => {
         const ctx = await fetchStationContext();
         logbookId = ctx.logbookId;
