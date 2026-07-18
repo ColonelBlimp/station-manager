@@ -32,6 +32,55 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-18)
 
+> **Session 224 (2026-07-18, from mid-afternoon into evening) — THE USB/TX-SAFETY
+> INCIDENT + CLUBLOG ENABLEMENT SAGA. Operator-driven throughout; committed
+> per-step.**
+> - **P0-class incident (~15:42): rig stuck in CONTINUOUS TRANSMIT.** Root
+>   cause chain (kernel+daemon logs cross-referenced): the motherboard's
+>   onboard Genesys hub (bus5 port2 — also carries kbd/mouse) degraded from
+>   15:35 (`clear tt` EPROTO), then the CP2105's write endpoint stalled
+>   (`urb stopped -32` on EVERY write) DURING the RR73 to JO3OER — TX1 keyed
+>   the rig before the stall; the unkey TX0 and EVERY backstop after it
+>   (18 s auto-off, disarm, release-on-disconnect) were written into the dead
+>   pipe and "succeeded" daemon-side. Log looked perfectly clean while the
+>   rig sat keyed; operator recovered manually (kill smd + unkey at rig,
+>   15:44). NOT a tab-close bug (coincident timing). NB `5-2.3` = the
+>   FTdx10's own INTERNAL hub (CP2105 + PCM2903C behind one USB-B) — the
+>   morning "Plasma" audio incident was almost certainly this same failing
+>   link. **Fixes applied + VALIDATED:** rig moved to a DIRECT root port
+>   (bus 7, own controller — config unchanged, by-id is topology-independent),
+>   ferrites both ends, FTdx10 **TX TIME OUT TIMER enabled** (FUNC →
+>   OPERATION SETTING → GENERAL; 3 min) — and a live 30m TX test (the
+>   incident's exact conditions; suspected band-specific RFI via the DX
+>   Commander vertical) ran CLEAN: 3 QSOs (RA1OW/R2DR/YO3CUS), ZERO kernel
+>   USB errors under watch. **Manual now carries a TOT page** (ft8.md
+>   "Before you transmit" + tuning stub pointer) — committed. **Inbox holds
+>   the P0-class SM gap for triage:** stuck-TX alarm (daemon KNOWS — unkey
+>   errored/liveness dropped inside the TX window — but told nobody; design
+>   = ERROR + dedicated SSE alarm → persistent "CHECK YOUR RADIO" banner).
+> - **ClubLog enablement saga (start-to-parked):** enabled → first real QSO
+>   403'd → the forwarder's 403 circuit breaker + startup discard behaviour
+>   VERIFIED live, exactly as documented → creds "fixed" → still 403 →
+>   actual root cause: **no application API key** (operator had the app
+>   password; the key is APPLICATION-assigned and must be granted by the
+>   ClubLog helpdesk). **Key requested 2026-07-18** — form answers drafted
+>   from the real clublog.go behaviour (403 breaker, 60s→30min×5 retry,
+>   120s/5 pacing, stdlib net/url) + intended-use text; forwarder DISABLED
+>   until it arrives (startup purge keeps the queue clean — observed
+>   discarding 4 rows). Credential model pinned: per-operator = email +
+>   application password + callsign; per-software = the API key → when
+>   granted it's SM's key, so 7Q8AC configures only personal fields. Inbox
+>   note holds the distribution decision (embed-in-repo vs documented paste)
+>   + the re-enable/backfill steps (3 failed rows + gap, or full 5.6k).
+> - Also: one false alarm ("CAT lost" = smd simply left stopped after the
+>   clublog-disable edit; restarted 16:47, all green), and QSO forwarding
+>   verified healthy end-to-end on the new topology (smcloud ~5 s, QRZ on
+>   tick, ZR1ADI's interrupted rows self-healed idempotently post-restart).
+> - **NEXT:** ClubLog key arrival → inbox note has the full sequence; inbox
+>   triage owes verdicts on the stuck-TX alarm (P0-class) + the watchdog
+>   validation note; standing S220 dogfood validations + type-4 → ADR 0048
+>   flip unchanged.
+
 > **Session 223 (2026-07-18, late afternoon) — BACKLOG TRUTH ARC: three
 > consecutive "build X" picks found ALREADY BUILT, so the whole P2 backlog got
 > a code-verification sweep + the archive relocation. Committed + pushed
