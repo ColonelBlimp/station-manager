@@ -107,7 +107,14 @@ unmarshalled only to validate + extract the UUID — which is what makes the gat
 byte-faithful); `modified_at`/`deleted_at` ride an envelope beside `qso`;
 `PUT /v1/qsos` takes the logbook by NAME (the server ensures it, so the client
 never pre-provisions); `GET /v1/logbooks` added for id discovery; a per-logbook
-read on another tenant's logbook is a 404 (existence not leaked). The reconcile
+read on another tenant's logbook is a 404 (existence not leaked). The
+2026-07-18 review-3 batch tightened the contract: PUT bodies must be a single
+JSON document, uploaded UUIDs must be **UUIDv7** (restore's admission rule —
+an accepted backup must be restorable) with validation running before the
+`EnsureLogbook` side effect, `/v1/export` reads from one repeatable-read
+snapshot (`store.ExportSnapshot`), and migration 0002 adds a composite
+`(logbook_id, tenant_id)` FK so the schema itself refuses cross-tenant
+logbook filing. The reconcile
 hash lives in the shared **`internal/cloud/reconcile`** package (`Summary`:
 sort by lowercased UUID, µs-truncate, hash `uuid|unixmicro` lines with SHA-256)
 — **S4's daemon side must import this same package**, which discharges the

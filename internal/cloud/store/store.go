@@ -261,11 +261,20 @@ type LogbookInfo struct {
 	Name     string `json:"name"`
 }
 
+// querier is the read surface shared by *sql.DB and *sql.Tx, so the row-scan
+// helpers serve both the autocommit reads and ExportSnapshot's transaction.
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 // Logbooks lists a tenant's logbooks, ordered by id (creation order).
 func (s *Store) Logbooks(ctx context.Context, tenantID int64) ([]LogbookInfo, error) {
-	const op errors.Op = "store.Logbooks"
-	const q = `SELECT id, tenant_id, name FROM logbooks WHERE tenant_id = $1 ORDER BY id`
-	rows, err := s.db.QueryContext(ctx, q, tenantID)
+	return queryLogbooks(ctx, "store.Logbooks", s.db, tenantID)
+}
+
+func queryLogbooks(ctx context.Context, op errors.Op, q querier, tenantID int64) ([]LogbookInfo, error) {
+	const query = `SELECT id, tenant_id, name FROM logbooks WHERE tenant_id = $1 ORDER BY id`
+	rows, err := q.QueryContext(ctx, query, tenantID)
 	if err != nil {
 		return nil, errors.New(op).WithErr(err).WithMsgf("tenant %d", tenantID)
 	}
@@ -303,14 +312,40 @@ func (s *Store) Logbook(ctx context.Context, id int64) (LogbookInfo, error) {
 }
 
 // Export returns EVERY record a tenant owns, tombstones included (restore needs
-// the deleted markers), ordered by (logbook_id, uuid) for a stable dump. This
-// is the read behind GET /v1/export — the full-fidelity restore source.
+// the deleted markers), ordered by (logbook_id, uuid) for a stable dump.
 func (s *Store) Export(ctx context.Context, tenantID int64) ([]Record, error) {
-	const op errors.Op = "store.Export"
-	const q = `
+	return queryExport(ctx, "store.Export", s.db, tenantID)
+}
+
+// ExportSnapshot returns a tenant's logbooks AND every record it owns, both
+// read from ONE repeatable-read, read-only transaction — the consistent dump
+// behind GET /v1/export (the full-fidelity restore source). Two separate
+// autocommit reads can interleave with a concurrent push: a new logbook and
+// its first batch committing between them yields QSOs whose logbook_id is
+// absent from the same dump's logbook list, which restore has no way to map.
+func (s *Store) ExportSnapshot(ctx context.Context, tenantID int64) ([]LogbookInfo, []Record, error) {
+	const op errors.Op = "store.ExportSnapshot"
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, nil, errors.New(op).WithErr(err).WithMsg("begin")
+	}
+	defer func() { _ = tx.Rollback() }() // read-only; rollback is the cheap close
+	books, err := queryLogbooks(ctx, op, tx, tenantID)
+	if err != nil {
+		return nil, nil, err
+	}
+	recs, err := queryExport(ctx, op, tx, tenantID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return books, recs, nil
+}
+
+func queryExport(ctx context.Context, op errors.Op, q querier, tenantID int64) ([]Record, error) {
+	const query = `
 SELECT uuid, tenant_id, logbook_id, modified_at, deleted_at, payload
 FROM qsos WHERE tenant_id = $1 ORDER BY logbook_id, uuid`
-	rows, err := s.db.QueryContext(ctx, q, tenantID)
+	rows, err := q.QueryContext(ctx, query, tenantID)
 	if err != nil {
 		return nil, errors.New(op).WithErr(err).WithMsgf("tenant %d", tenantID)
 	}

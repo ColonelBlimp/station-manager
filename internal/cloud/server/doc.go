@@ -23,6 +23,15 @@
 // intact). modified_at/deleted_at ride an envelope beside the payload because
 // they are storage-row facts (trigger-bumped locally), not ADIF fields.
 //
+// PUT bodies must be a SINGLE JSON document (trailing content is a 400), and
+// every uploaded UUID must be a valid UUIDv7 — the store's uuid column would
+// take any RFC 4122 value, but restore (qsoservice.Restore) admits only v7,
+// and an accepted backup must be restorable. Validation runs before the
+// EnsureLogbook side effect, so a rejected batch provisions nothing.
+// /v1/export reads logbooks + records from ONE repeatable-read snapshot
+// (store.ExportSnapshot), so a push landing mid-export can't produce QSOs
+// whose logbook is missing from the same dump.
+//
 // # Auth
 //
 // Bearer token → tenant, constant-time compared. P1 provisions a single
@@ -33,8 +42,9 @@
 //
 // # Boundary
 //
-// Imports types + the cloud store/reconcile packages + stdlib (log/slog for
-// output — the service runs under systemd/journald, stderr is the sink).
+// Imports types + the cloud store/reconcile packages + internal/utils (UUID
+// validation) + stdlib (log/slog for output — the service runs under
+// systemd/journald, stderr is the sink).
 // Nothing daemon-specific: no internal/api, no bridge, no storage — the
 // package-boundary rule from cmd/smd/doc.go holds by import graph.
 package server

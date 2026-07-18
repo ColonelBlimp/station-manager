@@ -372,6 +372,11 @@ func TestPutQsos_Validation(t *testing.T) {
 	ts, _, _ := testServer(t)
 	at := time.Date(2026, 7, 17, 6, 0, 0, 0, time.UTC)
 	noUUID, _ := json.Marshal(types.Qso{})
+	// Valid RFC 4122 v4 — Postgres's uuid column would take it, but restore
+	// admits only v7, so the upload gate must refuse it (an accepted backup
+	// must be restorable).
+	v4UUID, _ := json.Marshal(fixtureQso("0197f9a0-0000-4000-8000-000000000001"))
+	badUUID, _ := json.Marshal(fixtureQso("not-a-uuid"))
 	ok, _ := json.Marshal(fixtureQso("0197f9a0-0000-7000-8000-000000000001"))
 
 	cases := []struct {
@@ -381,6 +386,8 @@ func TestPutQsos_Validation(t *testing.T) {
 		{"empty logbook", PutQsosRequest{Logbook: "", Qsos: []QsoUpload{{ModifiedAt: at, Qso: ok}}}},
 		{"no qsos", PutQsosRequest{Logbook: "main"}},
 		{"missing uuid", PutQsosRequest{Logbook: "main", Qsos: []QsoUpload{{ModifiedAt: at, Qso: noUUID}}}},
+		{"non-v7 uuid", PutQsosRequest{Logbook: "main", Qsos: []QsoUpload{{ModifiedAt: at, Qso: v4UUID}}}},
+		{"malformed uuid", PutQsosRequest{Logbook: "main", Qsos: []QsoUpload{{ModifiedAt: at, Qso: badUUID}}}},
 		{"zero modified_at", PutQsosRequest{Logbook: "main", Qsos: []QsoUpload{{Qso: ok}}}},
 	}
 	for _, c := range cases {
@@ -388,6 +395,44 @@ func TestPutQsos_Validation(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want 400", c.name, resp.StatusCode)
 		}
+	}
+
+	// A rejected batch must provision NOTHING — validation runs before the
+	// EnsureLogbook side effect.
+	var books struct {
+		Logbooks []store.LogbookInfo `json:"logbooks"`
+	}
+	do(t, http.MethodGet, ts.URL+"/v1/logbooks", testToken, nil, &books)
+	if len(books.Logbooks) != 0 {
+		t.Errorf("logbooks after rejected batches = %+v, want none", books.Logbooks)
+	}
+}
+
+// A syntactically valid request followed by trailing JSON is one malformed
+// body, not a request plus ignorable garbage.
+func TestPutQsos_TrailingJSONRejected(t *testing.T) {
+	ts, _, _ := testServer(t)
+	p, _ := json.Marshal(fixtureQso("0197f9a0-0000-7000-8000-000000000001"))
+	body, err := json.Marshal(PutQsosRequest{
+		Logbook: "main",
+		Qsos:    []QsoUpload{{ModifiedAt: time.Date(2026, 7, 17, 6, 0, 0, 0, time.UTC), Qso: p}},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/v1/qsos",
+		bytes.NewReader(append(body, []byte(`{"trailing":true}`)...)))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("trailing JSON status = %d, want 400", resp.StatusCode)
 	}
 }
 

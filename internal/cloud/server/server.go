@@ -6,14 +6,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	stderr "errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/reconcile"
 	"github.com/ColonelBlimp/station-manager/internal/cloud/store"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
 // maxBodyBytes caps a PUT /v1/qsos body. A batch of a few hundred QSOs is
@@ -177,6 +180,12 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid_body", "body must be JSON: "+err.Error())
 		return
 	}
+	// Exactly one JSON document: trailing content after the request object is
+	// a malformed (or smuggled) body, not extra data to silently ignore.
+	if err := dec.Decode(new(json.RawMessage)); !stderr.Is(err, io.EOF) {
+		s.writeError(w, http.StatusBadRequest, "invalid_body", "body must be a single JSON document")
+		return
+	}
 	if req.Logbook == "" || len(req.Logbook) > 64 {
 		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "logbook name must be 1..64 characters")
 		return
@@ -186,14 +195,9 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate the whole batch BEFORE the EnsureLogbook side effect, so a
+	// rejected request provisions nothing.
 	tenant := tenantID(r)
-	logbookID, err := s.store.EnsureLogbook(r.Context(), tenant, req.Logbook)
-	if err != nil {
-		s.log.Error("ensure logbook failed", "logbook", req.Logbook, "err", err)
-		s.writeError(w, http.StatusInternalServerError, "internal_error", "logbook provisioning failed")
-		return
-	}
-
 	recs := make([]store.Record, 0, len(req.Qsos))
 	for i, u := range req.Qsos {
 		// Unmarshal ONLY to validate shape + extract the UUID; the stored
@@ -204,9 +208,15 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 				"qsos["+strconv.Itoa(i)+"].qso is not a QSO: "+err.Error())
 			return
 		}
-		if q.UUID == "" {
+		// UUIDv7 exactly, not just any UUID: Postgres's uuid column would
+		// accept every RFC 4122 version, but restore (qsoservice.Restore)
+		// admits only v7 — a looser gate here stores backups that can never
+		// come back, and malformed text would surface as a retryable 500
+		// from the column type instead of this 400.
+		uuid := strings.TrimSpace(q.UUID)
+		if !utils.IsValidUUIDv7(uuid) {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-				"qsos["+strconv.Itoa(i)+"].qso.uuid is required")
+				"qsos["+strconv.Itoa(i)+"].qso.uuid must be a UUIDv7")
 			return
 		}
 		if u.ModifiedAt.IsZero() {
@@ -215,13 +225,22 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		recs = append(recs, store.Record{
-			UUID:       q.UUID,
+			UUID:       uuid,
 			TenantID:   tenant,
-			LogbookID:  logbookID,
 			ModifiedAt: u.ModifiedAt,
 			DeletedAt:  u.DeletedAt,
 			Payload:    u.Qso,
 		})
+	}
+
+	logbookID, err := s.store.EnsureLogbook(r.Context(), tenant, req.Logbook)
+	if err != nil {
+		s.log.Error("ensure logbook failed", "logbook", req.Logbook, "err", err)
+		s.writeError(w, http.StatusInternalServerError, "internal_error", "logbook provisioning failed")
+		return
+	}
+	for i := range recs {
+		recs[i].LogbookID = logbookID
 	}
 
 	applied, err := s.store.Upsert(r.Context(), recs)
@@ -319,15 +338,12 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("export: extend write deadline failed", "err", err)
 	}
 	tenant := tenantID(r)
-	books, err := s.store.Logbooks(r.Context(), tenant)
+	// One snapshot for both reads — a logbook + its first QSOs committing
+	// between separate queries would dump QSOs whose logbook_id is missing
+	// from the same export's logbook list.
+	books, recs, err := s.store.ExportSnapshot(r.Context(), tenant)
 	if err != nil {
-		s.log.Error("export: logbooks failed", "err", err)
-		s.writeError(w, http.StatusInternalServerError, "internal_error", "export failed")
-		return
-	}
-	recs, err := s.store.Export(r.Context(), tenant)
-	if err != nil {
-		s.log.Error("export: read failed", "err", err)
+		s.log.Error("export: snapshot read failed", "err", err)
 		s.writeError(w, http.StatusInternalServerError, "internal_error", "export failed")
 		return
 	}

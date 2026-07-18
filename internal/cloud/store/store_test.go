@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	stderr "errors"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -45,9 +46,12 @@ func testStore(t *testing.T) *Store {
 		t.Skipf("smcloud store tests need a dev Postgres (task db:pg:up): ping: %v", err)
 	}
 	lockTestDatabase(t, db)
-	// Clean slate: down (IF EXISTS, safe on first run) then up.
+	// Clean slate: down (IF EXISTS, safe on first run) then every up in
+	// order. 0001's down drops the tables, taking later migrations'
+	// constraints with them, so no other downs are needed.
 	execSQLFile(t, db, "migrations/0001_init.down.sql")
 	execSQLFile(t, db, "migrations/0001_init.up.sql")
+	execSQLFile(t, db, "migrations/0002_qsos_logbook_tenant_fk.up.sql")
 	t.Cleanup(func() {
 		execSQLFile(t, db, "migrations/0001_init.down.sql")
 		_ = db.Close()
@@ -203,6 +207,64 @@ func TestUpsert_TenantScope(t *testing.T) {
 	got := mustGet(t, s, uuidA)
 	if got.TenantID != tidA {
 		t.Errorf("tenant after hijack = %d, want %d (A still owns the row)", got.TenantID, tidA)
+	}
+}
+
+// TestUpsert_CrossTenantLogbookRejected: the composite (logbook_id, tenant_id)
+// FK (migration 0002) refuses a record filing tenant A's QSO under tenant B's
+// logbook — the schema-level invariant, independent of handler discipline.
+func TestUpsert_CrossTenantLogbookRejected(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tidA, _ := seedTenantLogbook(t, s, "7Q8AC")
+	_, lidB := seedTenantLogbook(t, s, "7Q5MLV")
+
+	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tidA, lidB, baseTime, nil, `{"v":1}`)}); err == nil {
+		t.Fatal("upsert filing tenant A's QSO under tenant B's logbook succeeded, want composite-FK rejection")
+	}
+	if _, err := s.Get(ctx, uuidA); !stderr.Is(err, ErrNotFound) {
+		t.Fatalf("Get after rejected upsert = %v, want ErrNotFound (nothing stored)", err)
+	}
+}
+
+// TestExportSnapshot_MatchesSeparateReads: with no concurrent writer, the
+// one-transaction snapshot returns exactly what the standalone reads return.
+func TestExportSnapshot_MatchesSeparateReads(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+	lid2, err := s.EnsureLogbook(ctx, tid, "portable")
+	if err != nil {
+		t.Fatalf("EnsureLogbook(portable): %v", err)
+	}
+	del := baseTime.Add(time.Minute)
+	if _, err := s.Upsert(ctx, []Record{
+		rec(uuidA, tid, lid, baseTime, nil, `{"v":1}`),
+		rec(uuidB, tid, lid2, baseTime, &del, `{"v":2}`),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	books, recs, err := s.ExportSnapshot(ctx, tid)
+	if err != nil {
+		t.Fatalf("ExportSnapshot: %v", err)
+	}
+	wantBooks, err := s.Logbooks(ctx, tid)
+	if err != nil {
+		t.Fatalf("Logbooks: %v", err)
+	}
+	wantRecs, err := s.Export(ctx, tid)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if !reflect.DeepEqual(books, wantBooks) {
+		t.Errorf("snapshot logbooks = %+v, want %+v", books, wantBooks)
+	}
+	if !reflect.DeepEqual(recs, wantRecs) {
+		t.Errorf("snapshot records = %+v, want %+v", recs, wantRecs)
+	}
+	if len(books) != 2 || len(recs) != 2 {
+		t.Errorf("snapshot shape = %d books / %d recs, want 2/2 (tombstone included)", len(books), len(recs))
 	}
 }
 
