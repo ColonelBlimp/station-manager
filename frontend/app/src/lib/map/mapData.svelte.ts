@@ -27,6 +27,9 @@ export interface DurationOption {
     minutes: number;
 }
 
+/** The picker choice survives tab close/reopen, like the greyline toggle. */
+const WINDOW_KEY = 'sm-map-window';
+
 /** The picker's fixed choices; "custom" rides the same minutes field. */
 export const DURATIONS: DurationOption[] = [
     { label: '15 min', minutes: 15 },

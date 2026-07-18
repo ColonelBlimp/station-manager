@@ -58,7 +58,7 @@ next, and in what order" is answered.
 - _Code-review nits (2026-07-05 `internal/qsoservice` review):_ `uuid_conflict` classification unreachable under `force` (`submit.go:322`, drop `&& !force` — trap for a future `--force` import) · `importBatchFallback` publishes Hub events, contradicting `SubmitImportBatch`'s "does NOT publish" doc (note the fallback exception) · best-effort `contacted_station` cache warm-up uses the request ctx (a detached short-timeout ctx would make it client-independent, like the dedupe refetch)
 - _Daemon / data (dogfood triage 2026-07-08):_ **ADIF export omits populated `MY_*` fields** — investigate the compose/export path (`/v1/session/export` + email; possible data-loss) · fill `country.dxcc` entity number in enrichment (`DXCCForPrefix` on `dxcc_prefix`; ~38% of QSOs otherwise carry no DXCC number for awards) · downgrade client-abort enrichment WARN→debug when the cause is request-ctx cancellation (flaky-link log noise) · backport the tightened RST validators (scale + mode-aware) from frontend/app to the shipping logging SPA (entry-error protection) · rename the Operate "Rig" panel → "Rig Control" when rig-control ops land in frontend/app
 - _Rig / bands (dogfood triage 2026-07-14):_ **configurable operating bands** — a `config.json` `operating_bands` list feeding the Phone/CW band grid + FT8 buttons + manual dropdown from ONE source (default 160–6m; additive, = today's behaviour); build BEFORE/WITH the rig-control band-jump so the Ctrl+Shift+digit map follows the configured list, not a hardcoded table · **contact view (working panel) re-organise** (frontend/app Operate UI)
-- _Map (dogfood triage 2026-07-18):_ **zoom/pan + station hover tooltip** on the shipped contacts map (one item — the tooltip's hit-test runs in zoom-transformed screen space; shared engine, so interactivity lands for the future Dashboard map too)
+- _Map (dogfood triage 2026-07-18):_ ~~**zoom/pan + station hover tooltip**~~ **BUILT 2026-07-18** (uncommitted; needs a dogfood eyeball after redeploy) · **background-tab staleness** — a hidden map tab never catches up when re-activated (no `visibilitychange` refresh; throttled debounce timer / possibly-dead SSE); second-monitor visible-window posture unaffected
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
 - _Code-review lows (2026-07-05 SPA review):_ 13 verified low-severity fixes (the fetch-timeout standout was promoted to P1 and SHIPPED 2026-07-05 → archive) — TX_PWR sub-0.5 W rounding (durable ADIF) · state-reset gaps (tabCount / freqKnown / stale decodes / enrich zombies) · FT8 UI nits (bearing 360°, drain-abort, FD tooltip, isWorking split, canAnswer TX-guard) · edit-overlay mode dropdown
@@ -512,8 +512,25 @@ next, and in what order" is answered.
   orthogonal to the frontend/app daily-driver work. Full note: `docs/dogfood-inbox.md`
   2026-07-11.
 
+- **Contacts map — background-tab staleness (P2 · frontend/app; dogfood
+  2026-07-18).** A map tab left open but HIDDEN (same-window background tab)
+  does not update, and shows stale data when re-activated (observed: 6 QSOs /
+  4 80m arcs frozen). Verified gaps: no `visibilitychange` handling in
+  `mapData.svelte.ts` or `api/log-events.ts`; the 300 ms `scheduleRefresh`
+  debounce runs on a timer browsers throttle in hidden tabs; SSE may also die
+  silently in a long-hidden tab (browser-native reconnect only). Fix
+  direction: on `visibilitychange` → visible, run an immediate `refresh()`
+  (idempotent, cheap — the same head-refetch events trigger) and let it
+  double as the liveness check; optionally skip refetch work entirely while
+  hidden. NB the map's PRIMARY posture — own window on a second monitor — is
+  unaffected (throttling keys on visibility, not focus), which is why this is
+  P2 polish, not a P1 break of the feature's main use.
+
 - **Contacts map — zoom/pan + station hover tooltip (P2 · frontend/app; dogfood
-  2026-07-17, triage 2026-07-18).** Two interactivity gaps on the shipped
+  2026-07-17, triage 2026-07-18; BUILT 2026-07-18 — uncommitted, needs a
+  dogfood eyeball after redeploy: `lib/map/zoom.ts` pure transform/hit math +
+  WorldMap wheel-zoom 1–16×/drag-pan/dblclick-reset/Reset-view button/stacked
+  tooltip, 618-test suite green).** Two interactivity gaps on the shipped
   time-window map (`lib/map/engine.ts` + `WorldMap.svelte` + `MapView.svelte`),
   built as ONE item because they share coordinate machinery:
   (a) **Zoom/pan** — wheel/pinch zoom + drag pan. d3-geo already renders; either a

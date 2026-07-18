@@ -1,13 +1,27 @@
 // Render-path test over a fixture: the basemap draws, arcs appear with
 // their tooltip labels, and the origin marker tracks the prop. The
-// spherical math itself is pinned in engine.test.ts — this guards the
-// engine ↔ component wiring.
+// spherical math itself is pinned in engine.test.ts, the zoom/hit math in
+// zoom.test.ts — this guards the engine/zoom ↔ component wiring. The
+// interaction tests pin the svg's bounding rect to the 960×500 viewBox so
+// client coordinates equal viewBox coordinates (jsdom has no layout).
 
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import WorldMap from './WorldMap.svelte';
+import { createEngine, project } from './engine';
 
 const LILONGWE = { lat: -14.0, lon: 33.8 };
+const LONDON = { lat: 51.5, lon: -0.1 };
+
+function pinRect(el: Element): void {
+    (el as HTMLElement).getBoundingClientRect = () =>
+        ({ left: 0, top: 0, width: 960, height: 500, right: 960, bottom: 500 }) as DOMRect;
+}
+
+function pointerMove(el: Element, clientX: number, clientY: number): void {
+    el.dispatchEvent(new MouseEvent('pointermove', { clientX, clientY, bubbles: true }));
+}
 
 describe('WorldMap', () => {
     it('renders the country basemap with no data', () => {
@@ -69,5 +83,70 @@ describe('WorldMap', () => {
             props: { terminator: new Date(Date.UTC(2026, 6, 17, 12)) },
         });
         expect(on.querySelectorAll('[data-testid="night"]')).toHaveLength(3);
+    });
+
+    it('zooms on wheel and resets via the Reset view button', async () => {
+        const { container } = render(WorldMap, { props: {} });
+        const svg = container.querySelector('svg')!;
+        const viewport = container.querySelector('[data-testid="viewport"]')!;
+        pinRect(svg);
+
+        expect(viewport.getAttribute('transform')).toBe('translate(0 0) scale(1)');
+        expect(container.querySelector('[data-testid="reset-view"]')).toBeNull();
+
+        svg.dispatchEvent(
+            new WheelEvent('wheel', {
+                deltaY: -240,
+                clientX: 480,
+                clientY: 250,
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await tick();
+        expect(viewport.getAttribute('transform')).not.toBe('translate(0 0) scale(1)');
+
+        const reset = container.querySelector<HTMLButtonElement>('[data-testid="reset-view"]');
+        expect(reset).not.toBeNull();
+        reset!.click();
+        await tick();
+        expect(viewport.getAttribute('transform')).toBe('translate(0 0) scale(1)');
+        expect(container.querySelector('[data-testid="reset-view"]')).toBeNull();
+    });
+
+    it('shows a tooltip with every stacked contact near an endpoint, hides it away', async () => {
+        const { container } = render(WorldMap, {
+            props: {
+                origin: LILONGWE,
+                arcs: [
+                    {
+                        key: 'q1',
+                        from: LILONGWE,
+                        to: LONDON,
+                        label: 'G4ABC · IO91 · 8,431 km',
+                        color: '#22c55e',
+                    },
+                    // Same far end → stacked endpoint, must list both.
+                    { key: 'q2', from: LILONGWE, to: LONDON, label: 'M0XYZ · IO91' },
+                    { key: 'q3', from: LILONGWE, to: { lat: 35.7, lon: 139.7 }, label: 'JA1AAA' },
+                ],
+            },
+        });
+        const svg = container.querySelector('svg')!;
+        pinRect(svg);
+
+        // With the rect pinned 1:1, client coords == viewBox == projected px.
+        const [ex, ey] = project(createEngine(960, 500), LONDON)!;
+        pointerMove(svg, ex + 2, ey - 2);
+        await tick();
+
+        const tipText = container.querySelector('[data-testid="map-tooltip"]')?.textContent;
+        expect(tipText).toContain('G4ABC');
+        expect(tipText).toContain('M0XYZ');
+        expect(tipText).not.toContain('JA1AAA');
+
+        pointerMove(svg, ex + 200, ey + 100);
+        await tick();
+        expect(container.querySelector('[data-testid="map-tooltip"]')).toBeNull();
     });
 });

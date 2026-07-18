@@ -95,6 +95,10 @@
             Grey line
         </label>
 
+        <span class="hidden text-[0.65rem] text-muted xl:inline">
+            scroll to zoom · drag to pan · double-click to reset
+        </span>
+
         {#if legend.length > 0}
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="legend">
                 {#each legend as l (l.band)}
