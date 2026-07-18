@@ -58,6 +58,7 @@ next, and in what order" is answered.
 - _Code-review nits (2026-07-05 `internal/qsoservice` review):_ `uuid_conflict` classification unreachable under `force` (`submit.go:322`, drop `&& !force` — trap for a future `--force` import) · `importBatchFallback` publishes Hub events, contradicting `SubmitImportBatch`'s "does NOT publish" doc (note the fallback exception) · best-effort `contacted_station` cache warm-up uses the request ctx (a detached short-timeout ctx would make it client-independent, like the dedupe refetch)
 - _Daemon / data (dogfood triage 2026-07-08):_ **ADIF export omits populated `MY_*` fields** — investigate the compose/export path (`/v1/session/export` + email; possible data-loss) · fill `country.dxcc` entity number in enrichment (`DXCCForPrefix` on `dxcc_prefix`; ~38% of QSOs otherwise carry no DXCC number for awards) · downgrade client-abort enrichment WARN→debug when the cause is request-ctx cancellation (flaky-link log noise) · backport the tightened RST validators (scale + mode-aware) from frontend/app to the shipping logging SPA (entry-error protection) · rename the Operate "Rig" panel → "Rig Control" when rig-control ops land in frontend/app
 - _Rig / bands (dogfood triage 2026-07-14):_ **configurable operating bands** — a `config.json` `operating_bands` list feeding the Phone/CW band grid + FT8 buttons + manual dropdown from ONE source (default 160–6m; additive, = today's behaviour); build BEFORE/WITH the rig-control band-jump so the Ctrl+Shift+digit map follows the configured list, not a hardcoded table · **contact view (working panel) re-organise** (frontend/app Operate UI)
+- _Map (dogfood triage 2026-07-18):_ **zoom/pan + station hover tooltip** on the shipped contacts map (one item — the tooltip's hit-test runs in zoom-transformed screen space; shared engine, so interactivity lands for the future Dashboard map too)
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
 - _Code-review lows (2026-07-05 SPA review):_ 13 verified low-severity fixes (the fetch-timeout standout was promoted to P1 and SHIPPED 2026-07-05 → archive) — TX_PWR sub-0.5 W rounding (durable ADIF) · state-reset gaps (tabCount / freqKnown / stale decodes / enrich zombies) · FT8 UI nits (bearing 360°, drain-abort, FD tooltip, isWorking split, canAnswer TX-guard) · edit-overlay mode dropdown
@@ -510,6 +511,24 @@ next, and in what order" is answered.
   Sits with the SM Cloud P1 designed workstream (ADR 0040) + the P4 community bucket;
   orthogonal to the frontend/app daily-driver work. Full note: `docs/dogfood-inbox.md`
   2026-07-11.
+
+- **Contacts map — zoom/pan + station hover tooltip (P2 · frontend/app; dogfood
+  2026-07-17, triage 2026-07-18).** Two interactivity gaps on the shipped
+  time-window map (`lib/map/engine.ts` + `WorldMap.svelte` + `MapView.svelte`),
+  built as ONE item because they share coordinate machinery:
+  (a) **Zoom/pan** — wheel/pinch zoom + drag pan. d3-geo already renders; either a
+  `d3-zoom` transform on the render group or projection `scale`/`translate` updates
+  with an engine re-render. All layers (land, grey line, arcs, legend markers) must
+  ride the same transform; clamp the zoom range; provide a reset (double-click or a
+  ⌂ button). (b) **Hover tooltip on a remote station** — hovering an arc endpoint
+  shows the contact's details: callsign, band/mode, time, grid, distance + bearing
+  (`lib/utils/bearing.ts` `pathInfo` already computes distance/bearing; the rest is
+  in the plotted QSO set). Needs pointermove hit-testing — nearest endpoint within a
+  px radius — plus a small positioned tooltip; overlapping endpoints at low zoom can
+  list N contacts or show "N QSOs" (zoom disambiguates, another reason they pair).
+  Build zoom first or together: hit-testing must run in the transformed screen
+  space, so a tooltip built against the static projection gets reworked by zoom.
+  Shared engine ⇒ the interactivity lands for the whole-log Dashboard map below too.
 
 - **Whole-log Dashboard map (P3 · frontend/app; follow-on to the shipped time-window map).**
   The time-window contacts map SHIPPED 2026-07-16 (engine `lib/map/engine.ts` + reusable
