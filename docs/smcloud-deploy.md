@@ -194,7 +194,9 @@ Section 7's operations notes apply as-is — the `pg_dump` cron matters MORE
 here, since the LAN box is likely older hardware.
 
 **What to exercise while staging** (the point of the phase — fault drills
-beat throughput numbers, which a LAN inflates anyway):
+beat throughput numbers, which a LAN inflates anyway). *First full campaign
+run 2026-07-18, all passed, live on-air throughout (zero QSOs lost; final
+audit CLEAN at 5,590/5,590):*
 
 - Pull the LAN cable mid-backfill → the queue must hold (ADR 0038
   unreachable-retries-forever), then drain on reconnect.

@@ -114,13 +114,20 @@ precisely so we don't re-derive state or redo finished work.
 >   operator constraint), uuid-less legacy rows stay plain text, Re-enrich rides
 >   along free. Rejected: capture-across-routes (touches the capture design) +
 >   nav-warning (documents the trap instead of removing it). 630 tests green.
-> - **NEXT:** (1) operator: `task deploy:local:dev` after the operating session →
->   dogfood-eyeball the map batch (zoom Europe for 50m detail; background-tab
->   repro as validation) + the in-place session edit (edit a session QSO mid-CQ:
->   TX cadence must never break); (2) **drill 6** — the `smd restore -dry-run`
->   rehearsal (off-air; the last piece of proving Phase 1); (3) on-air,
->   opportunistic: FT8 abandon-fix validation + a type-4 nonstandard QSO → flip
->   ADR 0048; (4) then the active-cycle P2 queue.
+> - **DRILL 6 RUN AND PASSED (off-air, end of session) — THE FULL CAMPAIGN IS
+>   COMPLETE: SM CLOUD PHASE 1 IS PROVEN.** `smctl stop` → `smd restore
+>   -dry-run` (5,590 fetched, 0 tombstones, no writes) → REAL `smd restore`
+>   (safe by design: stored 0 / skipped-existing 5,590 / failed 0, 225 ms —
+>   the actual write path exercised) → `smctl start` → reconcile `in_sync`
+>   (one tick to drain the pre-shutdown stragglers) → final audit **CLEAN
+>   5,590/5,590**. Runbook's drill list now carries the campaign stamp.
+> - **NEXT:** (1) operator: `task deploy:local:dev` → dogfood-eyeball the map
+>   batch (zoom Europe for 50m detail; background-tab repro as validation) +
+>   the in-place session edit (edit a session QSO mid-CQ: TX cadence must
+>   never break); (2) on-air, opportunistic: FT8 abandon-fix validation + a
+>   type-4 nonstandard QSO → flip ADR 0048; (3) **the active-cycle P2 queue
+>   is the default focus again** — smcloud P1 has NO remaining items (phase 2
+>   VPS waits on the ADR 0040 security assessment).
 
 > **Session 218 (2026-07-17→18) — SMCLOUD RPM BUILT + PHASE 1 LAN STAGING
 > DEPLOYED AND VERIFIED: the full 5,532-QSO logbook is backed up on the F44 box,
