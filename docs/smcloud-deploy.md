@@ -97,6 +97,9 @@ keep it handy for both:
 openssl rand -base64 32
 ```
 
+Don't hand-invent a short one: the service refuses to start with the
+shipped `CHANGE_ME_TOKEN` placeholder or any token under 32 characters.
+
 If the two ever differ, every push gets 401 and the queue retries until
 you fix it — nothing is lost, but nothing backs up either.
 
@@ -111,7 +114,7 @@ Set all four values in the env file:
 
 | Variable | Value for LAN staging |
 |---|---|
-| `SMCLOUD_LISTEN` | `0.0.0.0:8091` (LAN posture — the loopback default in the skeleton is the VPS posture) |
+| `SMCLOUD_LISTEN` | `0.0.0.0:8091` (LAN posture — MUST be set explicitly; the binary and the skeleton both default to loopback, the VPS posture) |
 | `SMCLOUD_DSN` | as shipped, with `CHANGE_ME_DB_PASSWORD` → the password from step 1.2 |
 | `SMCLOUD_CALLSIGN` | your callsign (the tenant that owns the backed-up log) |
 | `SMCLOUD_TOKEN` | the token from step 1.3 |

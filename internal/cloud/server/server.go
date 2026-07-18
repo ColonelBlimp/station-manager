@@ -305,7 +305,19 @@ type ExportQso struct {
 	Qso        json.RawMessage `json:"qso"`
 }
 
+// exportWriteDeadline bounds writing the /v1/export response. It must safely
+// exceed the restore client's own 10-minute timeout (forwarding/smcloud
+// export.go) — the server-wide 2-minute WriteTimeout is sized for the small
+// routes and would truncate a full-logbook dump mid-JSON on a slow or
+// proxy-backpressured link, which the client would see as corrupt, not slow.
+const exportWriteDeadline = 15 * time.Minute
+
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(exportWriteDeadline)); err != nil {
+		// Fail open: an unsupported ResponseWriter keeps the server-wide
+		// deadline, which is only a problem on a link slow enough to notice.
+		s.log.Warn("export: extend write deadline failed", "err", err)
+	}
 	tenant := tenantID(r)
 	books, err := s.store.Logbooks(r.Context(), tenant)
 	if err != nil {
