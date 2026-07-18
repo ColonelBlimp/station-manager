@@ -43,7 +43,7 @@ next, and in what order" is answered.
 
 **P1 — finish in-flight / validate (small; closes open arcs)**
 - Behavioural retest of shipped daemon changes on the dogfood daemon (session 192/193 batch)
-- Fix stale test `internal/api` `TestVersion_HappyPath` — expects schema v3, the DB now migrates to v4 (log migration `0004_utc_timestamps`); bump the expected version in `handler_version_test.go`. Quick; greens the full api suite. (dogfood triage 2026-07-08)
+- ~~Fix stale test `internal/api` `TestVersion_HappyPath`~~ **ALREADY FIXED (found stale at triage 2026-07-18)** — commit `74cf906d` bumped the expectation to v4; test verified green. → archive on next roll.
 
 **P2 — next features (open one workstream per active focus)**
 - ~~**▶ NEXT (set 2026-07-14, operator directive): _FT8 — reduced type-4 hashed QSO ladder._**~~ **BUILT 2026-07-16 (ADR 0048), offline-gated — on-air validation is the one remaining step.** The reduced `bare-calls→RR73→73` ladder (no grid/report — the protocol has none for a hashed call) completes a QSO with any **nonstandard call** (`/D`, `/M`, prefix-compound `PJ4/NA2AA`). Built as an **isolated parallel path** (Field Day pattern): `type4.go` + `type4_sequencer.go` (`T4Exchange`/`T4WorkExchange`, `seqAnsweringT4`/`seqWorkingT4`), `Service.StartQsoT4`/`StartWorkCallerT4`, `mode:"type4"` on the two existing routes, `type4:true` on the `ft8-qso` SSE, and the SPA answer path (`isCqType4` / `isNonstandardCall` → reduced ladder). **Matching is on the SPELLED partner** — no 22-bit hash table (go-ft8 exposes no decoded-hash integer, and the partner always spells itself, so a table buys nothing; ADR 0048 chose this over a persistent decoder). Logging is degraded: RST_SENT = our SNR, RST_RCVD blank, no grid. RF-safety gate `TestType4_RoundTrip` green. **Work-a-caller SPA trigger deferred** (our call is hashed on the wire, so the browser can't tell "called me" from "called someone else" — a nonstandard caller is worked via the answer path). **Next: work a real nonstandard station on air → flip ADR 0048 Proposed→Accepted.** Detail in `docs/ft8.md` "Nonstandard / compound calls"; the 2026-07-14 `/D` probe under "FT8 — work type-4 compound calls".
@@ -58,7 +58,7 @@ next, and in what order" is answered.
 - _Code-review nits (2026-07-05 `internal/qsoservice` review):_ `uuid_conflict` classification unreachable under `force` (`submit.go:322`, drop `&& !force` — trap for a future `--force` import) · `importBatchFallback` publishes Hub events, contradicting `SubmitImportBatch`'s "does NOT publish" doc (note the fallback exception) · best-effort `contacted_station` cache warm-up uses the request ctx (a detached short-timeout ctx would make it client-independent, like the dedupe refetch)
 - _Daemon / data (dogfood triage 2026-07-08):_ **ADIF export omits populated `MY_*` fields** — investigate the compose/export path (`/v1/session/export` + email; possible data-loss) · fill `country.dxcc` entity number in enrichment (`DXCCForPrefix` on `dxcc_prefix`; ~38% of QSOs otherwise carry no DXCC number for awards) · downgrade client-abort enrichment WARN→debug when the cause is request-ctx cancellation (flaky-link log noise) · backport the tightened RST validators (scale + mode-aware) from frontend/app to the shipping logging SPA (entry-error protection) · rename the Operate "Rig" panel → "Rig Control" when rig-control ops land in frontend/app
 - _Rig / bands (dogfood triage 2026-07-14):_ **configurable operating bands** — a `config.json` `operating_bands` list feeding the Phone/CW band grid + FT8 buttons + manual dropdown from ONE source (default 160–6m; additive, = today's behaviour); build BEFORE/WITH the rig-control band-jump so the Ctrl+Shift+digit map follows the configured list, not a hardcoded table · **contact view (working panel) re-organise** (frontend/app Operate UI)
-- _Map (dogfood triage 2026-07-18):_ ~~**zoom/pan + station hover tooltip**~~ **BUILT 2026-07-18** (uncommitted; needs a dogfood eyeball after redeploy) · **background-tab staleness** — a hidden map tab never catches up when re-activated (no `visibilitychange` refresh; throttled debounce timer / possibly-dead SSE); second-monitor visible-window posture unaffected
+- _Map (dogfood triage 2026-07-18):_ ~~**zoom/pan + station hover tooltip**~~ **BUILT 2026-07-18** (committed; needs a dogfood eyeball after redeploy) · ~~**background-tab staleness**~~ **BUILT same day** (`visibilitychange` → immediate catch-up refetch in `mapData`, listener detached on teardown; repro confirmed by the operator first) — both → archive once dogfood-validated
 - _Onboarding:_ install / first-run friction for non-Linux operators
 - _Diagnostics:_ operator log viewer (DB-manager tab)
 - _Code-review lows (2026-07-05 SPA review):_ 13 verified low-severity fixes (the fetch-timeout standout was promoted to P1 and SHIPPED 2026-07-05 → archive) — TX_PWR sub-0.5 W rounding (durable ADIF) · state-reset gaps (tabCount / freqKnown / stale decodes / enrich zombies) · FT8 UI nits (bearing 360°, drain-abort, FD tooltip, isWorking split, canAnswer TX-guard) · edit-overlay mode dropdown
@@ -513,7 +513,11 @@ next, and in what order" is answered.
   2026-07-11.
 
 - **Contacts map — background-tab staleness (P2 · frontend/app; dogfood
-  2026-07-18).** A map tab left open but HIDDEN (same-window background tab)
+  2026-07-18; BUILT same day — `visibilitychange` → immediate `refresh()` in
+  `mapData.svelte.ts` (hidden→visible edge only, listener removed on
+  teardown, MapView test drives the edge in jsdom); operator confirmed the
+  repro before the fix landed. Needs a dogfood re-check after redeploy).**
+  A map tab left open but HIDDEN (same-window background tab)
   does not update, and shows stale data when re-activated (observed: 6 QSOs /
   4 80m arcs frozen). Verified gaps: no `visibilitychange` handling in
   `mapData.svelte.ts` or `api/log-events.ts`; the 300 ms `scheduleRefresh`

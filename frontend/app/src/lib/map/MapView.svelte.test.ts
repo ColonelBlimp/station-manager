@@ -94,6 +94,31 @@ describe('MapView', () => {
         expect(calls.indexOf('stream')).toBeLessThan(calls.indexOf('fetch'));
     });
 
+    it('runs a catch-up refetch when the tab becomes visible again', async () => {
+        fetchQsoPage.mockResolvedValue({ kind: 'ok', items: [], nextCursor: null });
+        const { unmount } = render(MapView);
+        await vi.waitFor(() => expect(fetchQsoPage).toHaveBeenCalled());
+        const before = fetchQsoPage.mock.calls.length;
+
+        // jsdom tabs are always "visible"; drive the hidden→visible edge.
+        Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+        document.dispatchEvent(new Event('visibilitychange'));
+        await vi.waitFor(() => expect(fetchQsoPage.mock.calls.length).toBeGreaterThan(before));
+
+        // Going hidden must NOT refetch (nothing to see).
+        const midway = fetchQsoPage.mock.calls.length;
+        Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(fetchQsoPage.mock.calls.length).toBe(midway);
+
+        // Teardown detaches the listener — no refetch after unmount.
+        Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+        unmount();
+        const after = fetchQsoPage.mock.calls.length;
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(fetchQsoPage.mock.calls.length).toBe(after);
+    });
+
     it('re-fetches on a qso.stored event for our logbook only', async () => {
         vi.useFakeTimers();
         try {

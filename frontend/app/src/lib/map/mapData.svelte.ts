@@ -239,6 +239,13 @@ export function startMapData(): () => void {
             mapData.message = 'Station config unavailable — cannot resolve the logbook.';
             return;
         }
+        // Hidden tabs get throttled timers (the debounce below) and possibly
+        // a silently-dead stream, so a backgrounded map goes stale and NOTHING
+        // forces a catch-up when the operator returns (dogfood 2026-07-18).
+        // One immediate refetch on becoming visible heals every root cause at
+        // the only moment staleness matters. Idempotent + generation-guarded,
+        // so a burst of tab switches costs one in-flight fetch at most.
+        document.addEventListener('visibilitychange', onVisibilityCatchUp);
         // Stream first, then fetch — events for rows the fetch already
         // returns are idempotent (the refetch is the idempotency).
         closeEvents = openLogEvents({
@@ -256,6 +263,7 @@ export function startMapData(): () => void {
     })();
     return () => {
         generation++; // invalidate any in-flight refresh
+        document.removeEventListener('visibilitychange', onVisibilityCatchUp);
         if (refreshTimer !== null) {
             clearTimeout(refreshTimer);
             refreshTimer = null;
@@ -266,4 +274,8 @@ export function startMapData(): () => void {
         }
         mapData.live = false;
     };
+}
+
+function onVisibilityCatchUp(): void {
+    if (!document.hidden) void refresh();
 }
