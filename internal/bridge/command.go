@@ -28,6 +28,12 @@ var ErrRigNotConnected = stderr.New("bridge: no active rig connection")
 // stays for the pipeline's lifetime on a definite mismatch (which also halts).
 var ErrRigIdentityUnverified = stderr.New("bridge: rig identity not verified; refusing to send")
 
+// ErrTxUncertain refuses a key while a PRIOR transmission is unconfirmed
+// (ADR 0051): an unkey was written but not positively confirmed, so the PTT
+// may still be owned. Clears on confirmation (status query answer / CI-V ACK
+// / liveness fallback) or surfaces as the tx-alarm.
+var ErrTxUncertain = stderr.New("bridge: previous transmission unconfirmed; refusing to key")
+
 // ErrTxActive marks a keyed-transmission conflict. SendCommands returns it when
 // a tune carrier or FT8 transmission is keyed (the generic command path must not
 // write while the rig is transmitting: it could retune/re-mode mid-transmission,

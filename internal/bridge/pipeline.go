@@ -257,13 +257,19 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		return exitTransient
 	}
 	defer func() {
-		// Clear activeClient under mu BEFORE closing the port. This NARROWS
-		// the window for "a caller captured a non-nil cl, then wrote to a
-		// closed port": a late caller that races us takes the mu, sees nil,
-		// and returns the no-op branch. It does NOT fully close the window — a
-		// caller that already captured cl before this clear can still write to
-		// the now-closed port, and that write just fails with a logged error
-		// (benign).
+		// Teardown owns the TX transition (ADR 0051): holding keyMu means any
+		// in-flight key/release completes FIRST (its TX1 lands before our
+		// final TX0 below — never after), and a key still waiting on keyMu
+		// finds activeClient nil once we clear it and refuses. This closes the
+		// teardown-TX0 → pending-TX1 → close race the 2026-07-18 review's
+		// finding 2 identified; the old comment called the late write
+		// "benign", which was true for ordinary commands and exactly wrong
+		// for TX1. Lock order keyMu → cmdMu → mu is preserved
+		// (unkeyOnTeardown takes cmdMu/mu inside).
+		s.keyMu.Lock()
+		defer s.keyMu.Unlock()
+		// Clear activeClient under mu BEFORE closing the port: a late caller
+		// that races us takes the mu, sees nil, and returns the no-op branch.
 		s.mu.Lock()
 		s.activeClient = nil
 		s.bootstrapBytes = nil
@@ -327,6 +333,7 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	s.bootstrapBytes = readBytes
 	s.bootstrapCIV = civSnapshot
 	s.pollBytes = pollBytes
+	s.hasTxStatusQuery = cat.HasCommand(def, readTxStatusCommand)
 	s.mu.Unlock()
 	// Fresh pipeline run: clear any no-data strikes carried over from a prior
 	// run's drop so RigConnected starts clean (it still gates on
@@ -378,7 +385,11 @@ func (s *Service) unkeyOnTeardown(def cat.RigDefinition, client serial.Client) {
 	txOff, err := cat.Encode(def, tuneTxOffCommand)
 	if err != nil {
 		s.logger.WarnWith().Err(err).Msg("bridge: teardown unkey encode failed")
-		s.markStrandedKeyed() // couldn't unkey → arm F1(b) on the next instance
+		// Couldn't even encode an unkey while keyed: the rig may still be
+		// transmitting after we exit — raise the persistent alarm (ADR 0051);
+		// the SPA keeps the banner across our restart, and the next confirmed
+		// connection's unconditional defensive unkey recovers.
+		s.raiseTxAlarm(TxAlarmTeardownUnconfirmed)
 		return
 	}
 	// Take cmdMu on CI-V (half-duplex bus guard) so the unkey frame can't
@@ -392,50 +403,30 @@ func (s *Service) unkeyOnTeardown(def cat.RigDefinition, client serial.Client) {
 		return client.WriteCommandBytes(context.Background(), txOff)
 	}); err != nil {
 		s.logger.WarnWith().Err(err).Msg("bridge: teardown unkey write failed (rig may be gone)")
-		s.markStrandedKeyed() // dead port → arm F1(b) on the next instance
+		// The final unkey never left this host while the rig was keyed — the
+		// carrier may still be up (the 2026-07-18 incident's exact shape).
+		// Raise the persistent alarm (ADR 0051); the next confirmed
+		// connection's defensive unkey + confirmation cycle recovers.
+		s.raiseTxAlarm(TxAlarmTeardownUnconfirmed)
 		return
 	}
 	s.logger.InfoWith().Msg("bridge: unkeyed TX on pipeline teardown (guaranteed stop)")
 }
 
-// markStrandedKeyed records that a teardown could not confirm the unkey (encode
-// or write failed while keyed), so the rig may still be transmitting. The next
-// pipeline instance clears it via defensiveUnkeyIfStranded (F1(b), ADR 0042).
-func (s *Service) markStrandedKeyed() {
-	s.mu.Lock()
-	s.strandedKeyed = true
-	s.mu.Unlock()
-}
-
-// defensiveUnkeyIfStranded is F1(b) (ADR 0042): a prior pipeline instance tore
-// down while keyed but couldn't unkey (dead port), so the rig may still be
-// transmitting. Once the new instance has CONFIRMED identity (the H2 gate — never
-// write to an unrecognised/wrong rig), send one defensive tx_off and clear the
-// flag. One-shot: the flag clears regardless of the write outcome (identity just
-// confirmed, so the port is live and the write should land; if it somehow doesn't,
-// the rig's own TOT + the attended operator are the backstop — the accepted
-// residual). No-op unless both stranded and confirmed. Runs on every readLoop
-// push (cheap flag check) but fires at most once per instance.
-func (s *Service) defensiveUnkeyIfStranded(def cat.RigDefinition, client serial.Client) {
-	s.mu.Lock()
-	armed := s.strandedKeyed && s.identityConfirmed
-	// Clear once identity is confirmed: we either fire the defensive tx_off
-	// below, or a live tune/FT8 TX's own guaranteed-stop will unkey the carrier
-	// when it releases. Stay armed only while identity is unconfirmed — the H2
-	// gate forbids writing to an unverified rig, so the flag must survive to a
-	// later confirmed frame. A failed write does NOT re-arm (accepted ADR 0042
-	// residual: identity is confirmed so the port is live; the rig TOT + the
-	// attended operator are the final backstop).
-	if armed {
-		s.strandedKeyed = false
-	}
-	s.mu.Unlock()
-	if !armed {
-		return
-	}
+// defensiveUnkeyOnConfirm (ADR 0051, superseding ADR 0042's stranded-flag
+// residual): EVERY newly identity-confirmed connection gets ONE unconditional
+// defensive tx_off. Stateless by design — it needs no memory of how the
+// previous instance (or the previous DAEMON) died, so it covers restarts,
+// crashes, and power-cycle orderings the in-memory flag never could. A tx_off
+// to an idle rig is a no-op (and on the Yaesu family cancels CAT-initiated TX
+// only, so a manually keyed operator transmission is untouched); the H2 gate
+// holds — the caller fires this only after identity confirms. If an
+// uncertainty/alarm is standing from a prior life, the confirmation cycle runs
+// after the write so a positive RX answer clears the banner.
+func (s *Service) defensiveUnkeyOnConfirm(def cat.RigDefinition, client serial.Client) {
 	txOff, err := cat.Encode(def, tuneTxOffCommand)
 	if err != nil {
-		s.logger.WarnWith().Err(err).Msg("bridge: stranded-unkey encode failed")
+		// Rigdef has no TX capability — nothing to defend against.
 		return
 	}
 	// Take cmdMu on CI-V (half-duplex bus guard, review 2026-06-19 M2) so the
@@ -462,10 +453,18 @@ func (s *Service) defensiveUnkeyIfStranded(def cat.RigDefinition, client serial.
 		return
 	}
 	if werr != nil {
-		s.logger.WarnWith().Err(werr).Msg("bridge: stranded-unkey write failed")
+		s.logger.WarnWith().Err(werr).Msg("bridge: defensive unkey write failed")
 		return
 	}
-	s.logger.InfoWith().Msg("bridge: sent defensive tx_off on reconnect (prior teardown may have left the rig keyed)")
+	s.logger.InfoWith().Msg("bridge: sent defensive tx_off on confirmed connection (ADR 0051)")
+	// A standing uncertainty/alarm from a prior life needs positive
+	// confirmation to clear — run the query cycle now that the port answers.
+	s.mu.Lock()
+	pending := s.txUncertain || s.txAlarmActive
+	s.mu.Unlock()
+	if pending {
+		s.beginTxConfirm(def, client)
+	}
 }
 
 // runPollLoop fires the rigdef's POLL read-list on a low-rate ticker to mirror
@@ -585,6 +584,8 @@ func (s *Service) runSupervisor(ctx context.Context) {
 func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.RigDefinition, initBytes, readBytes []byte) pipelineExitClass {
 	announcedDisconnect := false
 	identityVerified := false
+	// defensiveUnkeySent latches the ADR 0051 one-per-instance defensive unkey.
+	defensiveUnkeySent := false
 	// unrecognisedPublished rate-limits the identity-unrecognised bridge-error
 	// to once per pipeline instance now that an unrecognised ID no longer
 	// latches identityVerified (finding 7) — without it every subsequent frame
@@ -618,7 +619,18 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 				// capture gate releases the mic on a genuine mid-session drop. A
 				// quiet-but-alive rig recovers on the probe below (a successful
 				// read resets the count), so it never reaches the limit.
-				s.noDataStrikes.Add(1)
+				strikes := s.noDataStrikes.Add(1)
+				// Liveness dying while a transmission is keyed or unconfirmed
+				// is the incident's exact shape: the control path is gone and
+				// the PTT may be up — alarm immediately (ADR 0051).
+				if strikes >= noDataStrikeLimit {
+					s.mu.Lock()
+					keyedish := s.tuneActive || s.ft8TxActive || s.txUncertain
+					s.mu.Unlock()
+					if keyedish {
+						s.raiseTxAlarm(TxAlarmLivenessLost)
+					}
+				}
 				if !announcedDisconnect {
 					s.publishDisconnect(RigCodeNoData, nil)
 					announcedDisconnect = true
@@ -758,10 +770,21 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 			}
 		}
 
-		// F1(b) (ADR 0042): now that identity is (re)confirmed, unkey the rig if a
-		// prior instance tore down while keyed but couldn't (dead port). No-op
-		// unless stranded; one-shot per instance.
-		s.defensiveUnkeyIfStranded(def, client)
+		// ADR 0051 confirmation inputs: a decoded TXSTATUS answers the
+		// post-unkey query (or an unsolicited status push); any successful
+		// decode is the weaker liveness-fallback for defs without the query.
+		if v, ok := status["TXSTATUS"]; ok && v != "" {
+			s.observeTxStatus(v)
+		}
+		s.observeRigData()
+
+		// ADR 0051: one unconditional defensive unkey per instance, the moment
+		// identity is confirmed — stateless recovery for ANY prior life that
+		// may have left the rig keyed (superseding the ADR 0042 stranded flag).
+		if !defensiveUnkeySent && s.identityOK() {
+			defensiveUnkeySent = true
+			s.defensiveUnkeyOnConfirm(def, client)
+		}
 
 		payload, hasFields := mapStatusToPayload(status)
 		if !hasFields {

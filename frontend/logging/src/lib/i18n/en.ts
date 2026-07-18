@@ -38,6 +38,18 @@ export const en: Record<string, string> = {
 
     'bridge.reconnected': 'Rig reconnected.',
 
+    // ─── Bridge: tx-alarm (ADR 0051 stuck-TX safety) ──────────────
+    'bridge.txalarm.banner': 'CHECK YOUR RADIO — it may still be transmitting.',
+    'bridge.txalarm.tx_unconfirmed':
+        'The stop-transmit command was sent but the rig has not confirmed it.',
+    'bridge.txalarm.tx_still_keyed':
+        'The rig reports it is STILL transmitting after the stop command.',
+    'bridge.txalarm.tx_liveness_lost': 'The CAT link died while a transmission was keyed.',
+    'bridge.txalarm.tx_teardown_unconfirmed':
+        'The daemon shut down while keyed and could not confirm the stop.',
+    'bridge.txalarm.tx_key_write_failed':
+        'A transmit command failed in a way that may still have keyed the rig.',
+
     // ─── Bridge: bridge-error events ──────────────────────────────
     // Daemon sends EventBridgeError with one of these codes; SPA
     // renders via `bridge.error.<code>`. All are operator-actionable

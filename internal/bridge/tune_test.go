@@ -315,15 +315,12 @@ func TestStartTune_RefusesNotConnected(t *testing.T) {
 	}
 }
 
-// TestStartTune_FailedKeyWriteArmsStranded covers the guaranteed-stop gap
-// (bridge review 2026-07-05 #1): a key write can return an error yet have reached
-// the rig (CI-V no-ACK — "may or may not have applied" — or a watchdog-closed
-// port that flushed the frame first). Rolling straight back to idle would strand
-// a possibly-live carrier with NO backstop: the auto-off timer is cancelled and
-// unkeyOnTeardown skips a rig it believes is idle. So on a failed tune-on write
-// the tune state rolls back BUT strandedKeyed is armed, so defensiveUnkeyIfStranded
-// fires a guaranteed tx_off on the next confirmed frame.
-func TestStartTune_FailedKeyWriteArmsStranded(t *testing.T) {
+// TestStartTune_FailedKeyWriteEntersUncertain (ADR 0051, was ...ArmsStranded):
+// a key write can return an error yet have reached the rig (CI-V no-ACK, or a
+// watchdog-closed port that flushed the frame first). The tune state rolls
+// back BUT the service enters txUncertain and runs the confirmation cycle —
+// a positive RX answer clears it, silence escalates to the tx-alarm.
+func TestStartTune_FailedKeyWriteEntersUncertain(t *testing.T) {
 	s, f := tuneTestService(t)
 	_ = f.Close() // key write now returns ErrClosed
 
@@ -333,14 +330,14 @@ func TestStartTune_FailedKeyWriteArmsStranded(t *testing.T) {
 
 	s.mu.Lock()
 	active := s.tuneActive
-	stranded := s.strandedKeyed
+	uncertain := s.txUncertain
 	timer := s.tuneTimer
 	s.mu.Unlock()
 	if active {
 		t.Error("tuneActive = true after a failed key write; want rolled back to false")
 	}
-	if !stranded {
-		t.Error("strandedKeyed = false after a failed key write; a possibly-keyed carrier has no backstop")
+	if !uncertain {
+		t.Error("txUncertain = false after a failed key write; a possibly-keyed carrier has no confirmation cycle")
 	}
 	if timer != nil {
 		t.Error("tuneTimer not cleared after a failed key write")
@@ -381,11 +378,15 @@ func TestStopTune_RestoresAndUnkeys(t *testing.T) {
 	// The mode (MD02;) must NOT ride in the same line as the unkey, or the rig
 	// drops it during the transition tail.
 	writes := f.recordedWrites()
-	if len(writes) < 3 {
-		t.Fatalf("got %d writes, want 3 (tune-on, unkey, restore); writes=%q", len(writes), writes)
+	// tune-on, unkey, the ADR 0051 status query, then the restore.
+	if len(writes) < 4 {
+		t.Fatalf("got %d writes, want 4 (tune-on, unkey, tx-status query, restore); writes=%q", len(writes), writes)
 	}
-	if got := string(writes[len(writes)-2]); got != "TX0;" {
+	if got := string(writes[len(writes)-3]); got != "TX0;" {
 		t.Errorf("unkey write = %q, want %q (tx_off alone)", got, "TX0;")
+	}
+	if got := string(writes[len(writes)-2]); got != "TX;" {
+		t.Errorf("post-unkey write = %q, want %q (ADR 0051 confirmation query)", got, "TX;")
 	}
 	if got := string(writes[len(writes)-1]); got != "PC100;MD02;" {
 		t.Errorf("restore write = %q, want %q (power + mode after settle)", got, "PC100;MD02;")
@@ -501,10 +502,10 @@ func TestStopTune_CtxCancelDuringSettleStillRestores(t *testing.T) {
 	}
 
 	writes := f.recordedWrites()
-	if len(writes) < 2 {
-		t.Fatalf("want unkey + restore writes, got %d: %q", len(writes), writes)
+	if len(writes) < 3 {
+		t.Fatalf("want unkey + query + restore writes, got %d: %q", len(writes), writes)
 	}
-	if got := string(writes[len(writes)-2]); got != "TX0;" {
+	if got := string(writes[len(writes)-3]); got != "TX0;" {
 		t.Errorf("unkey write = %q, want %q", got, "TX0;")
 	}
 	if got := string(writes[len(writes)-1]); got != "PC100;MD02;" {
@@ -537,12 +538,13 @@ func TestTuneAutoOff(t *testing.T) {
 	if active {
 		t.Error("tuneActive = true after auto-off")
 	}
-	// Auto-off uses the same two-write release: unkey alone, then restore.
+	// Auto-off uses the same release: unkey alone, the ADR 0051 status query,
+	// then the restore.
 	writes := f.recordedWrites()
-	if len(writes) < 3 {
-		t.Fatalf("got %d writes, want 3 (tune-on, unkey, restore); writes=%q", len(writes), writes)
+	if len(writes) < 4 {
+		t.Fatalf("got %d writes, want 4 (tune-on, unkey, query, restore); writes=%q", len(writes), writes)
 	}
-	if got := string(writes[len(writes)-2]); got != "TX0;" {
+	if got := string(writes[len(writes)-3]); got != "TX0;" {
 		t.Errorf("auto-off unkey write = %q, want %q", got, "TX0;")
 	}
 	if got := string(writes[len(writes)-1]); got != "PC100;MD02;" {
@@ -701,16 +703,18 @@ func TestUnkeyOnTeardown(t *testing.T) {
 	})
 }
 
-// TestDefensiveUnkeyIfStranded guards F1(b) (ADR 0042): when a teardown can't
-// unkey a keyed rig (dead port → write fails), the next pipeline instance sends
-// a defensive tx_off once identity is confirmed, then clears the flag.
-func TestDefensiveUnkeyIfStranded(t *testing.T) {
+// TestDefensiveUnkeyAndTeardownAlarm covers the ADR 0051 replacements for the
+// stranded-flag machinery: a teardown that cannot unkey a keyed rig raises the
+// persistent tx-alarm (the SPA holds the banner across the restart), and every
+// identity-confirmed connection fires ONE unconditional defensive tx_off —
+// stateless, so it needs no memory of how the prior life died.
+func TestDefensiveUnkeyAndTeardownAlarm(t *testing.T) {
 	def, ok := cat.Lookup("yaesu-ftdx10")
 	if !ok {
 		t.Fatal("yaesu-ftdx10 rigdef not found")
 	}
 
-	t.Run("teardown arms strandedKeyed when the unkey write fails (dead port)", func(t *testing.T) {
+	t.Run("teardown raises the tx-alarm when the unkey write fails (dead port)", func(t *testing.T) {
 		s, f := tuneTestService(t)
 		s.mu.Lock()
 		s.tuneActive = true
@@ -718,90 +722,64 @@ func TestDefensiveUnkeyIfStranded(t *testing.T) {
 		_ = f.Close() // dead port: WriteCommandBytes now returns ErrClosed
 		s.unkeyOnTeardown(def, f)
 		s.mu.Lock()
-		stranded := s.strandedKeyed
+		alarmed := s.txAlarmActive
+		uncertain := s.txUncertain
 		s.mu.Unlock()
-		if !stranded {
-			t.Fatal("a failed teardown unkey (dead port) must arm strandedKeyed for F1(b)")
+		if !alarmed || !uncertain {
+			t.Fatalf("failed teardown unkey: alarmed=%v uncertain=%v, want both true (rig may still be keyed)", alarmed, uncertain)
 		}
 	})
 
-	t.Run("a successful teardown does NOT arm strandedKeyed", func(t *testing.T) {
+	t.Run("a successful teardown unkey does not alarm", func(t *testing.T) {
 		s, f := tuneTestService(t)
 		s.mu.Lock()
 		s.ft8TxActive = true
 		s.mu.Unlock()
 		s.unkeyOnTeardown(def, f) // healthy port → write succeeds
 		s.mu.Lock()
-		stranded := s.strandedKeyed
+		alarmed := s.txAlarmActive
 		s.mu.Unlock()
-		if stranded {
-			t.Fatal("a successful teardown unkey must not arm strandedKeyed")
+		if alarmed {
+			t.Fatal("a successful teardown unkey must not raise the alarm")
 		}
 	})
 
-	t.Run("fires a defensive tx_off once identity is confirmed, one-shot", func(t *testing.T) {
-		s, f := tuneTestService(t) // identityConfirmed=true
-		s.mu.Lock()
-		s.strandedKeyed = true
-		s.mu.Unlock()
-		s.defensiveUnkeyIfStranded(def, f)
+	t.Run("defensive unkey fires unconditionally on a confirmed connection", func(t *testing.T) {
+		s, f := tuneTestService(t) // identityConfirmed=true, no stranded state at all
+		s.defensiveUnkeyOnConfirm(def, f)
 		if w := lastWrite(f); w != "TX0;" {
-			t.Fatalf("stranded + confirmed must send tx_off; last write = %q, want TX0;", w)
-		}
-		s.mu.Lock()
-		stranded := s.strandedKeyed
-		s.mu.Unlock()
-		if stranded {
-			t.Fatal("strandedKeyed must clear after firing")
-		}
-		// One-shot: a second call writes nothing more.
-		n := len(f.recordedWrites())
-		s.defensiveUnkeyIfStranded(def, f)
-		if len(f.recordedWrites()) != n {
-			t.Fatal("defensiveUnkeyIfStranded must be one-shot — no write after the flag clears")
-		}
-	})
-
-	t.Run("waits for identity: no unkey while unconfirmed (H2)", func(t *testing.T) {
-		s, f := tuneTestService(t)
-		s.mu.Lock()
-		s.strandedKeyed = true
-		s.identityConfirmed = false
-		s.mu.Unlock()
-		before := len(f.recordedWrites())
-		s.defensiveUnkeyIfStranded(def, f)
-		if n := len(f.recordedWrites()); n != before {
-			t.Fatalf("must not unkey an unconfirmed rig (H2); got %d new writes", n-before)
-		}
-		s.mu.Lock()
-		stranded := s.strandedKeyed
-		s.mu.Unlock()
-		if !stranded {
-			t.Fatal("strandedKeyed must persist until identity confirms")
+			t.Fatalf("defensive unkey must send tx_off; last write = %q, want TX0;", w)
 		}
 	})
 
 	t.Run("skips the defensive unkey while a legitimate TX owns the PTT", func(t *testing.T) {
-		// A real tune keyed after the flag was armed (e.g. the operator started a
-		// tune the instant identity re-confirmed). The defensive tx_off must NOT
-		// fire — it would cut the live carrier; the tune's own guaranteed-stop
-		// unkeys on release. The flag still clears: ownership of the stop has
-		// passed to the active TX.
-		s, f := tuneTestService(t) // identityConfirmed=true
+		// A real tune keyed the instant identity re-confirmed: the defensive
+		// tx_off must NOT cut the live carrier — its own guaranteed-stop
+		// unkeys on release.
+		s, f := tuneTestService(t)
 		s.mu.Lock()
-		s.strandedKeyed = true
 		s.tuneActive = true
 		s.mu.Unlock()
 		before := len(f.recordedWrites())
-		s.defensiveUnkeyIfStranded(def, f)
+		s.defensiveUnkeyOnConfirm(def, f)
 		if n := len(f.recordedWrites()); n != before {
 			t.Fatalf("must not send a defensive tx_off while a TX is active; got %d new writes", n-before)
 		}
+	})
+
+	t.Run("a standing alarm clears via the confirmation cycle after the defensive unkey", func(t *testing.T) {
+		s, f := tuneTestService(t)
+		s.raiseTxAlarm(TxAlarmTeardownUnconfirmed) // prior life left the alarm up
+		s.defensiveUnkeyOnConfirm(def, f)          // writes TX0 + starts confirmation
+		// The rigdef has no read_tx_status in this fixture path unless added —
+		// confirmation arrives via observeTxStatus regardless of transport.
+		s.observeTxStatus("0")
 		s.mu.Lock()
-		stranded := s.strandedKeyed
+		alarmed := s.txAlarmActive
+		uncertain := s.txUncertain
 		s.mu.Unlock()
-		if stranded {
-			t.Fatal("strandedKeyed must clear when the stop is handed off to a live TX")
+		if alarmed || uncertain {
+			t.Fatalf("after a positive RX answer: alarmed=%v uncertain=%v, want both false", alarmed, uncertain)
 		}
 	})
 }

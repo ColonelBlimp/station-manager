@@ -46,6 +46,14 @@ const (
 	// consumer handles it the same way.
 	EventTuneState EventName = "tune-state"
 
+	// EventTxAlarm carries the stuck-TX safety alarm (ADR 0051): Active=true
+	// means an unkey could not be positively confirmed (or liveness died while
+	// keyed) and the rig MAY still be transmitting — the SPA renders a
+	// persistent "check your radio" banner until Active=false (confirmed idle)
+	// or operator dismissal. Hub-cached (latest value) so a late-connecting
+	// tab still learns of a standing alarm.
+	EventTxAlarm EventName = "tx-alarm"
+
 	// EventRigClients carries the count of browser tabs currently subscribed to
 	// the rig event stream: {count int}. It is advisory multi-tab AWARENESS, not
 	// arbitration — the SPA warns the operator when more than one tab is open on
@@ -235,4 +243,11 @@ type TuneStatePayload struct {
 // Service.Subscribe), so a late-opening tab always learns it without a cache slot.
 type RigClientsPayload struct {
 	Count int `json:"count"`
+}
+
+// TxAlarmPayload is the tx-alarm event payload (ADR 0051). Code is an i18n
+// key (ADR 0010) naming why the alarm raised; empty on the clearing event.
+type TxAlarmPayload struct {
+	Active bool   `json:"active"`
+	Code   string `json:"code,omitempty"`
 }

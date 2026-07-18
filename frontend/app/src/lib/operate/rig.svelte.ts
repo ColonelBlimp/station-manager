@@ -12,7 +12,12 @@
 
 import { formatFrequency, frequencyToBand } from '../utils/frequency';
 import { parseFrequency } from '../validators/frequency';
-import type { RigStatePayload, BridgeCodePayload, TuneStatePayload } from '../api/rig-sse';
+import type {
+    RigStatePayload,
+    BridgeCodePayload,
+    TuneStatePayload,
+    TxAlarmPayload,
+} from '../api/rig-sse';
 import { storageSet } from '../utils/storage';
 
 export type CatLink = 'off' | 'connected' | 'lost';
@@ -54,6 +59,12 @@ export const rig: {
     confirmedBand: string | null;
     linkError: string;
     tuneActive: boolean;
+    /** Stuck-TX safety alarm (ADR 0051): the daemon cannot confirm the
+     *  transmitter is unkeyed. Persistent until the daemon clears it
+     *  (positive RX confirmation) or the operator dismisses. */
+    txAlarmActive: boolean;
+    txAlarmCode: string;
+    txAlarmDismissed: boolean;
 } = $state({
     // band/mode: operator-friendly literals (mode is a sideband, not an ADIF
     // family — resolved at submit). freq is the SELECTED VFO's frequency in
@@ -88,6 +99,9 @@ export const rig: {
     // tune-state SSE (confirm-by-push), never an optimistic local flip — so an
     // auto-off the operator didn't trigger still clears the button.
     tuneActive: false,
+    txAlarmActive: false,
+    txAlarmCode: '',
+    txAlarmDismissed: false,
 });
 
 /**
@@ -655,7 +669,22 @@ export const catLink = {
     onTuneState(p: TuneStatePayload): void {
         rig.tuneActive = p.active;
     },
+
+    /** Stuck-TX safety alarm (ADR 0051). A raise re-shows the banner even if a
+     *  previous alarm was dismissed (a NEW alarm is new information); the
+     *  daemon's clear (positive RX confirmation) retires it entirely. */
+    onTxAlarm(p: TxAlarmPayload): void {
+        rig.txAlarmActive = p.active;
+        rig.txAlarmCode = p.code ?? '';
+        if (p.active) rig.txAlarmDismissed = false;
+    },
 };
+
+/** Operator acknowledgment: hides the banner without claiming the rig is safe
+ *  — only the daemon's confirmation clears txAlarmActive itself. */
+export function dismissTxAlarm(): void {
+    rig.txAlarmDismissed = true;
+}
 
 /** Test seam — restore the module singleton between cases. */
 export function resetCatLink(): void {
@@ -677,4 +706,7 @@ export function resetCatLink(): void {
     rig.identity = '';
     rig.linkError = '';
     rig.tuneActive = false;
+    rig.txAlarmActive = false;
+    rig.txAlarmCode = '';
+    rig.txAlarmDismissed = false;
 }

@@ -62,6 +62,11 @@ func (s *Server) writeRigTuneError(w http.ResponseWriter, op errors.Op, err erro
 		// conflict, not a tune failure (review 2026-06-19 L1).
 		s.writeError(w, http.StatusConflict, "rig_tx_active",
 			"a transmission is already active; stop it before tuning", op)
+	case stderr.Is(err, bridge.ErrTxUncertain):
+		// ADR 0051: the previous transmission's unkey is unconfirmed — the PTT
+		// may still be owned. Clears on confirmation or surfaces as tx-alarm.
+		s.writeError(w, http.StatusConflict, "rig_tx_unconfirmed",
+			"the previous transmission is not yet confirmed ended; check the radio", op)
 	default:
 		s.writeServerError(w, op, err, "rig_tune_failed", "failed to drive rig tune")
 	}

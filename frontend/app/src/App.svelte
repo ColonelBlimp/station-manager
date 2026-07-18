@@ -1,6 +1,7 @@
 <script lang="ts">
     import Sidebar from './lib/ui/Sidebar.svelte';
     import Header from './lib/ui/Header.svelte';
+    import TxAlarmBanner from './lib/ui/TxAlarmBanner.svelte';
     import Toasts from './lib/ui/Toasts.svelte';
     import SetupCard from './lib/ui/SetupCard.svelte';
     import { setup } from './lib/setup.svelte';
@@ -80,6 +81,7 @@
 
     <div class="content-wrap flex h-screen flex-col pl-[var(--sidebar-w)]">
         <Header />
+        <TxAlarmBanner />
         <!-- main is the horizontal (and vertical) scroll container. Its width is
              bounded by the rail offsets (content-wrap pl/pr), so a min-width card
              scrolls WITHIN it and the fixed rails can't scroll over the card. -->

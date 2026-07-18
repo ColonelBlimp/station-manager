@@ -1,7 +1,7 @@
 ---
 number: 0051
 title: Model TX as idle/keyed/uncertain; alarm on uncertainty; defensive unkey on every confirmed connection
-status: Proposed
+status: Accepted
 date: 2026-07-18
 ---
 

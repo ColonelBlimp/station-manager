@@ -74,6 +74,11 @@ type hub struct {
 	// truth — an inactive cache replayed to a late subscriber matches the
 	// SPA's default and is harmless.
 	lastTuneState *Event
+
+	// lastTxAlarm caches the most recent EventTxAlarm (ADR 0051) — same
+	// latest-value-is-truth rule as tune-state, but with real safety weight:
+	// a tab opened AFTER the alarm raised must still show the banner.
+	lastTxAlarm *Event
 }
 
 func newHub() *hub {
@@ -126,6 +131,9 @@ func (h *hub) publish(evt Event) {
 	case EventTuneState:
 		cp := evt
 		h.lastTuneState = &cp
+	case EventTxAlarm:
+		cp := evt
+		h.lastTxAlarm = &cp
 	}
 	for id, ch := range h.subs {
 		select {
@@ -186,6 +194,14 @@ func (h *hub) subscribe() (<-chan Event, func()) {
 	if h.lastTuneState != nil {
 		select {
 		case ch <- *h.lastTuneState:
+		default:
+		}
+	}
+	// Replay a standing TX alarm (ADR 0051) — safety-critical: the operator's
+	// fresh tab must show the banner for a rig that may still be keyed.
+	if h.lastTxAlarm != nil {
+		select {
+		case ch <- *h.lastTxAlarm:
 		default:
 		}
 	}

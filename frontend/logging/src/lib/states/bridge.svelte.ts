@@ -77,6 +77,16 @@ class BridgeState {
      * a full operating-lock is future work.
      */
     tabCount: number = $state(1);
+    /**
+     * Stuck-TX safety alarm (ADR 0051): the daemon cannot confirm the
+     * transmitter is unkeyed — the rig MAY be transmitting. Persistent (the
+     * daemon hub replays it to late tabs); cleared only by the daemon's
+     * positive RX confirmation. Dismissal hides the banner locally without
+     * claiming safety; a NEW alarm re-shows it.
+     */
+    txAlarmActive: boolean = $state(false);
+    txAlarmCode: string = $state('');
+    txAlarmDismissed: boolean = $state(false);
 }
 
 export const bridgeState = new BridgeState();
@@ -106,6 +116,12 @@ interface BridgeErrorPayload {
 /** Payload shape mirrors `internal/bridge.TuneStatePayload`. */
 interface TuneStatePayload {
     active: boolean;
+}
+
+/** Mirrors internal/bridge.TxAlarmPayload (ADR 0051). */
+interface TxAlarmPayload {
+    active: boolean;
+    code?: string;
 }
 
 /** Payload shape mirrors `internal/bridge.RigClientsPayload`. */
@@ -297,6 +313,22 @@ function openSource(): void {
         // Daemon-authoritative: reflect whatever the daemon reports, including
         // a hard auto-off / disconnect-release the operator didn't trigger.
         bridgeState.tuneActive = payload.active;
+    });
+
+    src.addEventListener('tx-alarm', (ev: MessageEvent<string>) => {
+        let payload: TxAlarmPayload;
+        try {
+            payload = JSON.parse(ev.data) as TxAlarmPayload;
+        } catch (e) {
+            console.warn('[bridge] tx-alarm JSON parse failed', e);
+            return;
+        }
+        // Safety-critical + daemon-authoritative (ADR 0051): active raises the
+        // persistent banner (and re-shows a dismissed one — a new alarm is new
+        // information); the daemon's clear retires it.
+        bridgeState.txAlarmActive = payload.active;
+        bridgeState.txAlarmCode = payload.code ?? '';
+        if (payload.active) bridgeState.txAlarmDismissed = false;
     });
 
     src.addEventListener('rig-clients', (ev: MessageEvent<string>) => {

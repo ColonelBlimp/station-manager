@@ -50,13 +50,13 @@ func TestKeyFt8Tx_HappyPath(t *testing.T) {
 	}
 }
 
-// TestKeyFt8Tx_FailedKeyWriteArmsStranded is the FT8-TX sibling of
-// TestStartTune_FailedKeyWriteArmsStranded (bridge review 2026-07-05 #1): a
-// tx-on write that errors may still have keyed PTT (CI-V no-ACK / watchdog-closed
-// port). The FT8 TX state rolls back to idle, but strandedKeyed is armed so
-// defensiveUnkeyIfStranded guarantees a later tx_off rather than leaving a
-// possibly-live PTT with the auto-off timer cancelled.
-func TestKeyFt8Tx_FailedKeyWriteArmsStranded(t *testing.T) {
+// TestKeyFt8Tx_FailedKeyWriteEntersUncertain (ADR 0051, was ...ArmsStranded):
+// a tx-on write that errors may still have keyed PTT (CI-V no-ACK /
+// watchdog-closed port). The FT8 TX state rolls back to idle, but the service
+// enters txUncertain — the confirmation cycle (status query answer) clears
+// it, silence escalates to the tx-alarm — rather than leaving a possibly-live
+// PTT with the auto-off timer cancelled and no follow-up at all.
+func TestKeyFt8Tx_FailedKeyWriteEntersUncertain(t *testing.T) {
 	s, fake := newCommandTestService(t)
 	s.lastMode = "USB"
 	_ = fake.Close() // tx-on write now returns ErrClosed
@@ -67,14 +67,14 @@ func TestKeyFt8Tx_FailedKeyWriteArmsStranded(t *testing.T) {
 
 	s.mu.Lock()
 	active := s.ft8TxActive
-	stranded := s.strandedKeyed
+	uncertain := s.txUncertain
 	timer := s.ft8TxTimer
 	s.mu.Unlock()
 	if active {
 		t.Error("ft8TxActive = true after a failed key write; want rolled back to false")
 	}
-	if !stranded {
-		t.Error("strandedKeyed = false after a failed key write; a possibly-keyed PTT has no backstop")
+	if !uncertain {
+		t.Error("txUncertain = false after a failed key write; a possibly-keyed PTT has no confirmation cycle")
 	}
 	if timer != nil {
 		t.Error("ft8TxTimer not cleared after a failed key write")
@@ -96,8 +96,9 @@ func TestKeyFt8Tx_NoMode(t *testing.T) {
 		t.Fatalf("UnkeyFt8Tx: %v", err)
 	}
 	w := fake.recordedWrites()
-	if len(w) != 2 || string(w[1]) != "TX0;" {
-		t.Fatalf("writes = %q, want [TX1; TX0;]", w)
+	// key, unkey, then the ADR 0051 TX-status confirmation query.
+	if len(w) != 3 || string(w[1]) != "TX0;" || string(w[2]) != "TX;" {
+		t.Fatalf("writes = %q, want [TX1; TX0; TX;]", w)
 	}
 }
 

@@ -7,6 +7,12 @@ date: 2026-07-02
 
 # 0042 — Guaranteed stop on pipeline teardown + reconnect
 
+> **Note (2026-07-18):** the accepted residual “a failed defensive write does
+> not re-arm” is **superseded by ADR 0051** — the stranded-keyed flag is
+> replaced by an unconditional defensive unkey on every identity-confirmed
+> connection plus the confirm-or-alarm uncertainty model. This ADR's other
+> decisions stand.
+
 ## Context
 
 The tune-carrier (ADR 0027) and FT8-TX (ADR 0030) machinery is built around one

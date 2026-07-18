@@ -39,6 +39,7 @@ function makeHandlers(): RigEventHandlers {
         onRigDisconnected: vi.fn(),
         onBridgeError: vi.fn(),
         onTuneState: vi.fn(),
+        onTxAlarm: vi.fn(),
     };
 }
 
@@ -77,6 +78,9 @@ describe('openRigEvents', () => {
 
         src.emit('tune-state', '{"active":true}');
         expect(h.onTuneState).toHaveBeenCalledWith({ active: true });
+
+        src.emit('tx-alarm', '{"active":true,"code":"tx_unconfirmed"}');
+        expect(h.onTxAlarm).toHaveBeenCalledWith({ active: true, code: 'tx_unconfirmed' });
 
         src.emit('error');
         expect(h.onTransportError).toHaveBeenCalledOnce();

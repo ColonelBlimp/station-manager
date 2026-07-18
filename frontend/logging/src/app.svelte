@@ -5,6 +5,7 @@
     import { fetchConfig, putConfig } from './lib/api/config';
     import { configState } from './lib/states/config.svelte';
     import { startBridge, bridgeState } from './lib/states/bridge.svelte';
+    import { t } from './lib/i18n';
     import { toasts } from './lib/states/toasts.svelte';
     import { onMount } from 'svelte';
     import { isValidCallsign } from './lib/validators/callsign';
@@ -176,6 +177,28 @@
          subscriber, so another browser tab can move this same radio. Full operating-lock
          is future work; the dangerous cases (double-key, mic-steal, TX) are already
          prevented daemon-side. -->
+    <!-- Stuck-TX safety banner (ADR 0051): the daemon cannot confirm the
+         transmitter is unkeyed — persistent + hub-replayed, so a tab opened
+         after the alarm still shows it. Dismiss hides locally only; the
+         daemon's positive RX confirmation is what clears the alarm itself. -->
+    {#if bridgeState.txAlarmActive && !bridgeState.txAlarmDismissed}
+        <div
+            class="mx-auto mt-6 flex w-fit max-w-200 items-center gap-x-3 rounded-md border border-red-800 bg-red-600 px-3 py-1.5 text-sm font-medium text-white"
+            role="alert"
+        >
+            <span>
+                <strong>{t('bridge.txalarm.banner')}</strong>
+                {bridgeState.txAlarmCode ? t(`bridge.txalarm.${bridgeState.txAlarmCode}`) : ''}
+            </span>
+            <button
+                type="button"
+                class="shrink-0 cursor-pointer rounded border border-white/40 px-2 py-0.5 text-xs hover:bg-red-700"
+                onclick={() => (bridgeState.txAlarmDismissed = true)}
+            >
+                Dismiss
+            </button>
+        </div>
+    {/if}
     {#if bridgeState.tabCount > 1}
         <div
             class="mx-auto mt-6 w-fit max-w-200 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-center text-sm text-amber-800"

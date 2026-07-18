@@ -148,6 +148,11 @@ func (s *Service) StartTune(ctx context.Context) error {
 		s.mu.Unlock()
 		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsg("rig not responding (liveness strikes)")
 	}
+	// Never key while a PRIOR transmission is unconfirmed (ADR 0051).
+	if s.txUncertain {
+		s.mu.Unlock()
+		return errors.New(errOp).WithErr(ErrTxUncertain)
+	}
 	// Snapshot the restore target NOW, before keying. captureTuneSnapshot
 	// freezes lastMode/lastPower for the duration of the tune, so the rig's
 	// own RTTY/tune-power pushes can't overwrite what we'll restore to.
@@ -173,21 +178,25 @@ func (s *Service) StartTune(ctx context.Context) error {
 		// watchdog-closed port that flushed the frame first. Rolling straight
 		// back to idle would strand a possibly-live carrier with NO daemon
 		// backstop — the auto-off timer is cancelled, and unkeyOnTeardown skips
-		// a rig it believes is idle. So arm the ADR 0042 stranded-keyed flag:
-		// defensiveUnkeyIfStranded then fires a guaranteed tx_off on the next
-		// confirmed frame (this instance if the rig is still pushing, else the
-		// next instance on reconnect). A no-op if the key never landed. The
-		// mode/power half of the atomic line may also have applied; the
-		// stranded path unkeys only (carrier-down is the safety priority) and
-		// the post-INIT READ / operator reconciles mode+power.
+		// a rig it believes is idle. So (ADR 0051) fire one best-effort tx_off
+		// NOW and enter the uncertainty/confirmation cycle: the status query
+		// answer clears it, silence escalates to the tx-alarm. A no-op if the
+		// key never landed. The mode/power half of the atomic line may also
+		// have applied; this path unkeys only (carrier-down is the safety
+		// priority) and the post-INIT READ / operator reconciles mode+power.
 		s.mu.Lock()
 		s.tuneActive = false
 		if s.tuneTimer != nil {
 			s.tuneTimer.Stop()
 			s.tuneTimer = nil
 		}
-		s.strandedKeyed = true
 		s.mu.Unlock()
+		if off, oerr := encodeTuneUnkey(def); oerr == nil {
+			if werr := cl.WriteCommandBytes(context.Background(), off); werr != nil {
+				s.logger.WarnWith().Err(werr).Msg("bridge: post-failed-key defensive tx_off write failed")
+			}
+		}
+		s.beginTxConfirm(def, cl)
 		return errors.New(errOp).WithErr(err).WithMsg("write tune-on")
 	}
 	s.publishTuneState(true)
@@ -264,6 +273,12 @@ func (s *Service) releaseTune(ctx context.Context, reason string) error {
 		s.logger.ErrorWith().Err(err).Str("reason", reason).
 			Msg("bridge: tune unkey write failed; backstop will retry")
 		return errors.New(errOp).WithErr(err).WithMsg("write tune-off")
+	}
+	// ADR 0051 confirm-or-alarm — see releaseFt8Tx's twin note.
+	if def.Protocol == cat.ProtocolIcomCIV {
+		s.confirmTxIdle("civ ack")
+	} else {
+		s.beginTxConfirm(def, cl)
 	}
 
 	// Carrier is down. Step 2 — settle, then best-effort restore. DETACHED from the

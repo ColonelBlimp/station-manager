@@ -100,6 +100,12 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 		s.mu.Unlock()
 		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsg("rig not responding (liveness strikes)")
 	}
+	// Never key while a PRIOR transmission is unconfirmed (ADR 0051): the
+	// single-flight flags can't see a possibly-still-keyed PTT.
+	if s.txUncertain {
+		s.mu.Unlock()
+		return errors.New(errOp).WithErr(ErrTxUncertain)
+	}
 	// Snapshot the mode to restore on unkey (only meaningful when we switch it).
 	// Unlike tune, an unknown prior mode is NOT a refusal: leaving the rig in the
 	// FT8 data mode after a transmission is harmless (it is the operating mode),
@@ -127,19 +133,22 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 		// CI-V no-ACK (ErrCommandNoAck — "may or may not have applied") or a
 		// watchdog-closed port that flushed the frame first. Rolling straight
 		// back to idle would strand a possibly-live PTT with NO daemon backstop
-		// — the auto-off timer is cancelled, and unkeyOnTeardown skips a rig it
-		// believes is idle. So arm the ADR 0042 stranded-keyed flag:
-		// defensiveUnkeyIfStranded then fires a guaranteed tx_off on the next
-		// confirmed frame (this instance if the rig is still pushing, else the
-		// next instance on reconnect). A no-op if the key never landed.
+		// — so (ADR 0051) fire one best-effort tx_off NOW and enter the
+		// uncertainty/confirmation cycle: the status query answer clears it,
+		// silence escalates to the tx-alarm. A no-op if the key never landed.
 		s.mu.Lock()
 		s.ft8TxActive = false
 		if s.ft8TxTimer != nil {
 			s.ft8TxTimer.Stop()
 			s.ft8TxTimer = nil
 		}
-		s.strandedKeyed = true
 		s.mu.Unlock()
+		if off, oerr := encodeTuneUnkey(def); oerr == nil {
+			if werr := cl.WriteCommandBytes(context.Background(), off); werr != nil {
+				s.logger.WarnWith().Err(werr).Msg("bridge: post-failed-key defensive tx_off write failed")
+			}
+		}
+		s.beginTxConfirm(def, cl)
 		return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-on")
 	}
 	return nil
@@ -208,6 +217,14 @@ func (s *Service) releaseFt8Tx(ctx context.Context, reason string) error {
 		s.logger.ErrorWith().Err(err).Str("reason", reason).
 			Msg("bridge: ft8 tx-off write failed; backstop will retry")
 		return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-off")
+	}
+	// ADR 0051 confirm-or-alarm: CI-V's awaited ACK above IS positive
+	// confirmation; a fire-and-forget write is only write-acceptance, so enter
+	// the uncertainty cycle (status query → confirmed idle, or the tx-alarm).
+	if def.Protocol == cat.ProtocolIcomCIV {
+		s.confirmTxIdle("civ ack")
+	} else {
+		s.beginTxConfirm(def, cl)
 	}
 
 	// PTT is down. Step 2 — settle, then best-effort mode restore. Respect ctx
@@ -327,8 +344,9 @@ func (s *Service) TxReady() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// rigWritableLocked folds in the liveness strikes (finding 3): a rig the
-	// bridge reads as non-responsive must not report TX-ready.
-	return s.rigWritableLocked() && !s.tuneActive && !s.ft8TxActive
+	// bridge reads as non-responsive must not report TX-ready. An unconfirmed
+	// prior transmission (ADR 0051) blocks readiness the same way.
+	return s.rigWritableLocked() && !s.tuneActive && !s.ft8TxActive && !s.txUncertain
 }
 
 // Ft8TxSupported reports whether the rigdef can key PTT for FT8 — it dry-runs

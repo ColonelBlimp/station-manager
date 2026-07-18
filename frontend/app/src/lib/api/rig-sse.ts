@@ -35,6 +35,15 @@ export interface TuneStatePayload {
     active: boolean;
 }
 
+/** Mirrors internal/bridge.TxAlarmPayload (ADR 0051) — the stuck-TX safety
+ *  alarm: active=true means the daemon cannot confirm the transmitter is
+ *  unkeyed (the rig MAY be transmitting). Hub-replayed, so a late tab still
+ *  learns of a standing alarm. */
+export interface TxAlarmPayload {
+    active: boolean;
+    code?: string;
+}
+
 export interface RigEventHandlers {
     onOpen: () => void;
     /** Transport-level failure (stream down / reconnecting). */
@@ -43,6 +52,7 @@ export interface RigEventHandlers {
     onRigDisconnected: (payload: BridgeCodePayload) => void;
     onBridgeError: (payload: BridgeCodePayload) => void;
     onTuneState: (payload: TuneStatePayload) => void;
+    onTxAlarm: (payload: TxAlarmPayload) => void;
 }
 
 function parse<T>(ev: MessageEvent<string>, label: string): T | null {
@@ -82,6 +92,11 @@ export function openRigEvents(handlers: RigEventHandlers): () => void {
     src.addEventListener('tune-state', (ev: MessageEvent<string>) => {
         const p = parse<TuneStatePayload>(ev, 'tune-state');
         if (p !== null) handlers.onTuneState(p);
+    });
+
+    src.addEventListener('tx-alarm', (ev: MessageEvent<string>) => {
+        const p = parse<TxAlarmPayload>(ev, 'tx-alarm');
+        if (p !== null) handlers.onTxAlarm(p);
     });
 
     return () => src.close();

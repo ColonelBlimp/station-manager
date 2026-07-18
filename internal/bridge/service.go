@@ -251,11 +251,21 @@ type Service struct {
 	// ft8TxGen mirrors tuneGen for the FT8-TX path (finding 6).
 	ft8TxGen uint64
 
-	// strandedKeyed (mu-guarded) records that a pipeline teardown could NOT unkey
-	// a keyed rig — F1(a)'s teardown tx_off write failed (a dead port), so the rig
-	// may still be transmitting. The next pipeline instance sends one defensive
-	// tx_off after identity confirms and clears this (F1(b), ADR 0042).
-	strandedKeyed bool
+	// TX-uncertainty + stuck-TX alarm state (ADR 0051, all mu-guarded except
+	// where noted). txUncertain: an unkey (or possibly-keyed failed write) has
+	// not been positively confirmed — the rig MAY be transmitting; key paths
+	// refuse while set. txAlarmActive: the persistent operator alarm is
+	// standing (raised on confirm-timeout / liveness-loss-while-keyed /
+	// unconfirmable teardown; cleared only by positive RX confirmation).
+	// txConfirmGen gates stale confirm-timeout callbacks (same pattern as
+	// tuneGen/ft8TxGen); hasTxStatusQuery snapshots at pipeline start whether
+	// the rigdef can answer read_tx_status — it selects strict query-answer
+	// confirmation over the weaker any-rig-data fallback.
+	txUncertain      bool
+	txAlarmActive    bool
+	txConfirmGen     uint64
+	txConfirmTimer   *time.Timer
+	hasTxStatusQuery bool
 }
 
 // New constructs a Service from the operator's bridge config and a

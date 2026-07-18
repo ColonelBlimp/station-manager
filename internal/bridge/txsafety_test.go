@@ -61,10 +61,13 @@ func TestFt8TxAutoOff_StaleGenerationNoOp(t *testing.T) {
 	oldGen := s.ft8TxGen
 	s.mu.Unlock()
 
-	// The first transmission ends; a second begins (a new generation).
+	// The first transmission ends; the rig answers the status query with RX
+	// (ADR 0051 — a new key is refused while the unkey is unconfirmed); then
+	// a second transmission begins (a new generation).
 	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
 		t.Fatalf("unkey: %v", err)
 	}
+	s.observeTxStatus("0")
 	if err := s.KeyFt8Tx(context.Background(), "DATA-U"); err != nil {
 		t.Fatalf("second key: %v", err)
 	}
@@ -127,6 +130,7 @@ func TestTuneAutoOff_GenerationGate(t *testing.T) {
 	if err := s.StopTune(context.Background()); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
+	s.observeTxStatus("0") // rig confirms RX — unblocks the next key (ADR 0051)
 	if err := s.StartTune(context.Background()); err != nil {
 		t.Fatalf("second tune: %v", err)
 	}
@@ -205,5 +209,56 @@ func TestReadLoop_UnrecognisedIdentityThenValidConfirms(t *testing.T) {
 			t.Fatal("a valid IDENTITY after an unrecognised one did not confirm (instance poisoned)")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// ADR 0051 end-to-end recovery: a standing tx-alarm from a prior life clears
+// through the REAL pipeline — identity confirms, the unconditional defensive
+// unkey fires, the TX-status query goes out, the rig answers RX, the alarm
+// drops. This exercises the rigdef's read_tx_status command + TXSTATUS decode.
+func TestTxAlarm_RecoveryCycleThroughPipeline(t *testing.T) {
+	s, fake := newPipelineTestService(t)       // FT-710 (has read_tx_status)
+	s.raiseTxAlarm(TxAlarmTeardownUnconfirmed) // prior life left the rig possibly keyed
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	fake.feedLine([]byte("ID0800")) // identity confirms → defensive unkey + query
+	deadline := time.Now().Add(time.Second)
+	for {
+		writes := fake.recordedWrites()
+		var sawTxOff, sawQuery bool
+		for _, w := range writes {
+			switch string(w) {
+			case "TX0;":
+				sawTxOff = true
+			case "TX;":
+				sawQuery = true
+			}
+		}
+		if sawTxOff && sawQuery {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("defensive unkey + status query not written within 1s (writes: %q)", writes)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	fake.feedLine([]byte("TX0")) // the rig answers: RX — the alarm must clear
+	deadline = time.Now().Add(time.Second)
+	for s.TxUncertain() {
+		if time.Now().After(deadline) {
+			t.Fatal("alarm/uncertainty did not clear on a positive RX answer")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	s.mu.Lock()
+	alarmed := s.txAlarmActive
+	s.mu.Unlock()
+	if alarmed {
+		t.Fatal("txAlarmActive still set after RX confirmation")
 	}
 }

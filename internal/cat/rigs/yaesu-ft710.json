@@ -35,7 +35,8 @@
     {"name": "set_band",   "cmd": "BS%s;",  "value_map": "BAND",     "exposed": true},
     {"name": "set_power",  "cmd": "PC%s;",  "pad": 3, "min": 5, "max": 100,           "exposed": true},
     {"name": "tx_on",      "cmd": "TX1;"},
-    {"name": "tx_off",     "cmd": "TX0;"}
+    {"name": "tx_off",     "cmd": "TX0;"},
+    {"name": "read_tx_status", "cmd": "TX;"}
   ],
   "states": [
     {
@@ -142,6 +143,12 @@
           {"key": "09", "value": "10m"},
           {"key": "10", "value": "6m"}
         ]}
+      ]
+    },
+    {
+      "prefix": "TX",
+      "markers": [
+        {"tag": "TXSTATUS", "index": 0, "length": 1}
       ]
     }
   ],
