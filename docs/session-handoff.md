@@ -32,6 +32,48 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-18)
 
+> **Session 223 (2026-07-18, late afternoon) — BACKLOG TRUTH ARC: three
+> consecutive "build X" picks found ALREADY BUILT, so the whole P2 backlog got
+> a code-verification sweep + the archive relocation. Committed + pushed
+> per-step by the operator.**
+> - **Three stale items in a row (each investigated, struck with evidence):**
+>   (1) *ADIF `MY_*` export omission* — was real 2026-07-08, fixed the SAME DAY
+>   (`ae894b9d`, daemon rebuild-from-DB export replacing frontend/app's
+>   client-side builder); verified all 7 archived `sent-adif` files + all
+>   5,590 rows' `additional_data` carry the full MY_* set (blob completeness
+>   explicitly checked — nothing missing at rest). (2) *`country.dxcc` fill* —
+>   built 2026-06-25 (`MergeStationFromCountry` + `DXCCForPrefix`), history
+>   backfilled by the 07-16 QRZ rebuild; today 5,589/5,590 carry `dxcc` (the
+>   one holdout, 9M6M, is QRZ-classified "NON-DXCC" — correctly not guessed).
+>   (3) *configurable operating bands* — `station.operating_bands` shipped
+>   2026-07-09, five days BEFORE its own triage entry; the operator is running
+>   with `["80m"…"10m"]`; one RigPanel feeds every band surface incl. the
+>   digit-jump.
+> - **Verification sweep (4 parallel read-only investigators over ~35 open
+>   items):** 4 more stale (negative-limit panic → validation 2026-06-19;
+>   `default_recipient` operator-email field; FT8 same-session dupe
+>   suppression in BOTH frontends; edit-overlay mode dropdown), 5 downgraded
+>   to "mostly built" with the true remaining scope recorded (attempt-limit =
+>   Settings input only; upload-purge = endpoint+UI only; CQ feedback; FT8
+>   freq-step = logging-only; SPA-review clusters ~half done), ~24 confirmed
+>   genuinely open and annotated "verified open 2026-07-18" with file:line
+>   evidence. Notables: the offset-snap item's DESIGN GROUND MOVED (continuous
+>   picker + ★ suggestions shipped under it — re-decide before building);
+>   `bridge.New` nil-check premise drifted (no Serial/Cat fields — re-scoped);
+>   `sequencer.go`'s "edited from the FT8 Settings tab" comment is aspirational.
+> - **Archive relocation:** 13 resolved entries moved to `backlog-archive.md`
+>   (new dated section), incl. the operating-bands detail block. Live backlog
+>   now: P0 empty · P1 = one operator-decision item (192/193 retest, content
+>   annotated for the call) · P2 ≈ 24 evidence-backed open items. Only
+>   validation-pending strikes remain in place (type-4, map) by design.
+> - **Process lesson (now a memory):** the backlog drifted badly out of sync
+>   with the early-July build pace — VERIFY a backlog item against the code
+>   before building it; triage entries can postdate their own fixes.
+> - **NEXT:** unchanged from S222 (watchdog live at next deploy; S220 dogfood
+>   validations; type-4 on-air → ADR 0048 flip). For a build session, the now-
+>   trusted shortlist: attempt-limit Settings input (small), RST-validator
+>   backport, upload-purge endpoint+UI, or a review-lows batch.
+
 > **Session 222 (2026-07-18, mid-afternoon) — AUDIO INCIDENT + WATCHDOG: live
 > Plasma-upgrade capture failure diagnosed and fixed, then the durable
 > dead-stream watchdog built the same evening. Committed + pushed.**
@@ -832,455 +874,6 @@ precisely so we don't re-derive state or redo finished work.
 > empty-`rst_rcvd` rows were triaged NOT-A-BUG (operator: the other station
 > never sent the report; SM logged what was exchanged — closed in the inbox).
 
-> **Session 211 (2026-07-11) — `frontend/app` DOGFOODING STARTED: embedded +
-> served at `/app/`, and FT8 TX ON-AIR VALIDATED — the operator answered CQs and
-> logged real QSOs (US + Greek stations) live from the app. All committed +
-> pushed; 459 SPA tests green.** The answer-a-CQ → daemon-sequenced → logged +
-> forwarded path works end-to-end from `frontend/app`. Work this session:
-> - **`/app/` embed + serve.** `AppFS()` in `frontend/embed.go`
->   (`//go:embed all:app/dist`), `GET /app/` StripPrefix mount in
->   `internal/api/server.go`, `base:'/app/'` in the app's `vite.config.ts`,
->   committed `dist/index.html` placeholder (gitignore exception),
->   `frontend:app:build` folded into `frontend:build:all`, App-SPA CI gate +
->   npm-cache path, `/app/` in `api-endpoints.md`, `TestSpaHandler_ServesAppIndex`
->   guards it. Dogfood at **http://localhost:8080/app/** after `task
->   deploy:local:dev`. A separate commit fixed a **pre-existing** red test —
->   `TestVersion_HappyPath` expected schema 3, it's at 4 (`0004_utc_timestamps`).
-> - **`ft8.display.feed_mode`+`cq_to_top` were IGNORED** in the app
->   (`setFt8DisplayPrefs` never called from `/v1/config`) → wired via `seams.ts`
->   + `main.ts`; Band Activity honours `cqToTop` (float CQ rows, drop dividers).
-> - **Header station identity** — logbook name + rig name always-visible
->   (`station.svelte.ts` reactive `$state`, `default_logbook.name`/`bridge.rig_name`),
->   plus a **live logbook QSO count "(n)"** (`fetchLogbookCount` →
->   `/v1/logbook/{id}/count`, re-fetched after every logged QSO — FT8 + Phone/CW).
-> - **Toast contrast fix** — the QSO-logged toast was `bg-surface` (same token as
->   the cards under it) → camouflaged; now per-level theme-aware tints
->   (green/amber/red). TTL stays 4s (operator: no dismiss friction).
-> - **DXCC populate-everywhere (daemon).** `MergeStationFromCountry`
->   (`internal/lookup/orchestrator.go`) now fills `ContactedStation.DXCC` with the
->   numeric entity from the country prefix via `enums/dxcc` — it was deliberately
->   left empty for QRZ to resolve; operator's call: compute it ourselves so records
->   are complete even with no online services ([[sm-populate-data-ourselves]]).
->   Fixes display + logged/uploaded QSOs. App `seams.ts` drops the prefix fallback;
->   **calling-station enrichment** now gets flag + country + DXCC in the tooltip
->   (was CQ-only). Prefix→number verified (K→291, G→223, VK→150; unmapped→empty).
-> - **Band Activity** columns → Hz·Flag·Brg·SNR·Message + **`table-fixed`** (auto
->   layout jittered left↔right each parity). **FT8 layout** — Band Activity +
->   Operate fixed 470px centred via 1fr gutter columns, Occupancy full-width.
-> - **`selectedOffset` persists** to localStorage (`sm.ft8.selectedOffset`) so a
->   page reload / daemon redeploy keeps the TX-offset pick.
-> - **Parity indicators (#1 of the parity-aware-occupancy plan).** Timing pill
->   shows the live current-slot parity (`Transmit/Listen slot (even/odd)`);
->   Occupancy header labels the snapshot's parity (daemon `slot.period`) — the
->   occupancy is a single latest-slot snapshot that alternates even/odd every 15 s.
-> - **Band Activity funnel filter (shipping parity).** `Ft8BandFilter.svelte` popover
->   beside the header: typed token-prefix filter (`ft8State.bandFilter`, "show calls
->   starting with VK", live/session-scoped) + `hide_hashed_calls` (config-read). A
->   station CALLING US always shows through; the filter runs before cq-to-top order.
-> - **SP/LP path resets to short per new station.** `prefs.path` carried a previous
->   QSO's long-path pick over; now `observeCall` (the single reaction both the Phone/CW
->   callsign and the FT8 worked-call drive via `EnrichmentCard`) snaps it back to short
->   on each NEW station, deduped so it never fights the operator's own toggle.
-> - **Parity-aware occupancy (#2) — DONE.** `ft8State` keeps per-parity snapshots
->   (`occupiedByParity`/`suggestedByParity`, null=unseen); `shownParity` = OPPOSITE the
->   worked station during a QSO (locked, "· TX" cue), else the manual Even/Odd toggle
->   (labelled **"TX slot"** so its purpose is obvious). `occupied`/`suggested` became
->   getters over the shown parity, so `effectiveOffset`'s auto-pick draws from the
->   TX-parity snapshot. Correct by design — the daemon skips occupancy on own-TX slots,
->   so the TX-parity snapshot is the last seen before keying, exactly what to pick from.
-> - **FT8 Session panel (rail-toggled) + session persistence.** The RH-rail Session
->   icon was DEAD in FT8 (it toggles a Phone/CW-only tile that has no renderer there).
->   Fixed: `Operate.svelte` renders the self-contained `SessionPanel` (QSO list + its
->   own Export… button) as a stacked overlay in FT8 when `isVisible('session')` — same
->   tile-visibility state, so the rail icon + the card's X drive it. Export… → the
->   `ExportDialog` (download ADIF + email QSL manager). The session log now persists to
->   **sessionStorage** (`sm.session.qsos`) so a reload/redeploy keeps the sitting's rows.
-> - **Router `/app/` base-path fix.** The client router built/parsed ABSOLUTE paths, so
->   on load at `/app/` it `replaceState`d the URL to `/` (the *logging* SPA's root, a
->   different app). Now base-aware (`import.meta.env.BASE_URL`, `subPathOf`/`urlOf`):
->   strips the base on read, re-adds on write; base-agnostic if it ever moves to root.
-> - **Shared rig-card extraction (+ FT8 rig panel).** `RigPanel` was already self-
->   contained; parameterised the one mode-specific bit — the band `pickBand` prop
->   (defaults to `selectBand`, so the Phone/CW tile is a **pure refactor**; FT8 will
->   pass a watering-hole pick once `ft8_frequencies` is surfaced). Stood it up in FT8:
->   the rail **Rig** icon now shows the full rig card (band/mode/VFO/freq/Tune/CAT gate)
->   stacked with Session in the overlay.
-> - **FT8 watering-hole band buttons — DONE.** The FT8 rig card's band buttons were
->   doing `selectBand` (`set_band` → the rig's band-stack / *phone* freq); now the FT8
->   host passes `pickBand={ft8SelectBand}` → looks up the configured
->   `ft8_frequencies[band]` (already on `/v1/config`: WSJT-X defaults + operator
->   overrides) and drives a new absolute **`setFreq(hz)`** (CAT-live `set_freq`/
->   `set_freq_b`, CAT-off manual). So 40m → 7.074, 20m → 14.074, etc. `ft8_frequencies`
->   surfaced via `seams.ts` + `main.ts`. (set_freq only — the operator is already in
->   FT8 mode, so no `set_mode` on a band hop; a mode-assert is a small future add.)
-> - **FT8 pile-up stack — COMPLETE (SPA-only, 5 increments; NOT the daemon's
->   `operator_pick` sequencer — that's a separate, still-unbuilt daemon mode).** An
->   operator-curated FIFO of stations calling you, drained oldest-first via the
->   existing work-a-caller path — the daemon is untouched. **(1)**
->   `ft8Pileup.svelte.ts` — `ft8PileupStack` singleton (push/dedup-refresh, peek,
->   dequeue, remove, moveUp, clear, pause/resume, single-parity `lockedParity` set by
->   the first add). **(2)** `Ft8BandActivity` **Ctrl/Cmd+click** a calling-you decode
->   enqueues (pure capture in any TX state; wrong-parity + dupe + already-queued +
->   callerActive guards; a **Q** badge marks queued rows). **(3)** the drain `$effect`
->   in `Ft8Operate` — armed + CAT-live + idle + offset & freq known + auto-drain
->   enabled + queue non-empty → works the head, dequeues on start, advances as each
->   contact completes; a `draining` latch + reactive `retryTick` recover the
->   post-contact TX→RX settle. NB the app's TX seam flattens the daemon's `{kind,code}`
->   to `{ok,message}`, so the drain can't tell a transient settle from a hard reject →
->   it retries every failure (~1.5s×6) then **pauses** (keeps the queue) — simpler than
->   the shipping's drop-hard-rejects, and lossless. **(4)** `PileupDrawer` body — list
->   (head first, no move-up on head), per-row ↑/×, footer Resume (paused + not
->   callerActive only) + **Clear & abandon**; the slide-over header × only CLOSES (run
->   intact) — distinct from the shipping card's ×-clears-all; `UtilRail` Pile-up button
->   gains a live **count badge**. **(5)** the **Next** control in the Operate TX bar
->   (shown during a Call-CQ run too, `canNext = armed && qso.active && count>0`) —
->   **deliberate divergence from the shipping SPA:** it HIDES Next during a caller run
->   to forbid the takeover; the operator chose to **keep the queue-takes-over-CQ
->   behaviour**. (Next semantics were then refined — see the deferred-skip bullet.)
->   Baseline was **490 SPA tests** (new `ft8Pileup`/`PileupDrawer`/`Ft8Operate` suites).
-> - **On-air validated 2026-07-11** — pile-up dogfooded live (redeploy landed at 15:20;
->   earlier "Deployed" hadn't restarted `smd`, so the served bundle was stale — verify
->   `smd` timestamp + served bytes before on-air, [[sm-app-embed-redeploy-gotcha]]).
-> - **Ladder callsign reactivity fix** — on a HARD reload (cache bypassed), `/v1/config`
->   lands AFTER first paint; the operator-call/grid seams (and `displayPrefs`) were plain
->   module `let`s, so the idle ladder stayed stuck on a bare `CQ` (no callsign) — nothing
->   it depends on changes while idle. Made them **reactive `$state`** (`ft8.svelte.ts`) so
->   a late config re-derives the ladder + Band Activity cq-to-top/hide-hashed. Regression
->   test added.
-> - **Band Activity "now working" marker + badge contrast** — a solid green **●** ("Working
->   now") marks the station in the active QSO (`row.call === qso.theirCall`), beside the
->   existing **Q**; both badges went from faint 15%-tint to **solid fills, white bold text**
->   so the queue (blue Q) and the on-air station (green ●) read at a glance. Mutually
->   exclusive per row (a worked caller is dequeued).
-> - **Session-count pill on the RH rail** — the **Session** rail button gains a live count
->   oval (same blue `bg-focus` pill as the Pile-up depth badge) showing `session.qsos.length`
->   when >0, singular/plural tooltip; reactive off the shared session store (updates on every
->   logged QSO, FT8 + Phone/CW, both modes). Added `UtilRail.svelte.test.ts` + a shared
->   `window.matchMedia` stub in `src/test/setup.ts` (so chrome components reading the theme at
->   import can mount in tests). **496 SPA tests.**
-> - **Abandon now STOPS the run (fix)** — `onAbandon` pauses the drain (+ clears any armed
->   skip) on success, so Abandon = full stop (drop TX, halt the pile-up, **keep the queue**
->   for Resume). Root cause it fixes: without the pause, abandoning a pile-up contact handed
->   straight to the drain — the next caller's opening fired **in the same slot** within the
->   sequencer's **`txLateWindowSec` (~4.5s)** late window (the "delta" gate — there is no
->   2.5s constant), i.e. Abandon behaved like Next.
-> - **Next → deferred "skip if no reply" (feature)** — replaced the eager immediate skip.
->   While working a station Next **arms** (amber "Skip if silent…"), then resolves off the
->   confirm-by-push QSO state: rung advances (`qso.state` changes) → **heard, keep working
->   + disarm**; RX slot silent (`qso.repeats` ticks up) → **drop the no-show + advance**.
->   Second click cancels. Call-CQ run keeps the immediate takeover. `!tx.transmitting` gate
->   dropped (arming is timing-free). **SPA-only limit:** the daemon repeats atomically on
->   the first silent slot (`onSlotAnswering`), so the station gets exactly ONE extra call
->   before the skip fires; a zero-repeat skip would need a daemon "no-repeat on first
->   silence" assist. **494 SPA tests. Uncommitted — needs deploy + on-air validation.**
-> - **go-ft8 v0.7.0 (type-4) assessment — NOT bumped.** Current pin v0.6.0; v0.7.0 is
->   **API-compatible** (empty exported-API diff; +52 lines in `pack.go` only — WSJT-X
->   type-4 packer hardening) and SM builds + the full `compound_roundtrip_test.go` suite
->   pass under a temp bump. BUT the tripwire `TestPrefixCompound_EncoderBoundary` still
->   **passes unchanged** → the encoder boundary did NOT move: compound grid/report forms
->   are still unencodable, so v0.7.0 does **not** unblock the full compound-call QSO flow
->   (still needs the reduced hashed `CQ→RR73→73` ladder — a backlog feature buildable on
->   v0.6.0 already). Take the bump as its own commit when convenient; it ships no
->   user-visible feature alone.
->
-> **NEXT (frontend/app):** deploy + on-air-validate the pile-up stack (incl. the Abandon
-> stop + deferred skip-if-silent Next); consider the reduced type-4 compound ladder +
-> the isolated go-ft8 v0.7.0 bump; remaining
-> `ft8_display` fields (**highlight colours** + a live **hide-hashed toggle**
-> — hide-hashed is config-read only now), and (optional) the rail **Worked** panel in
-> FT8 + the FT8 band-jump also asserting FT8 mode. Inbox: Occupancy **light-mode colour
-> fix**, **DXCC backfill** on existing blank-DXCC QSOs. Dogfood gotcha: `/app/` is
-> `//go:embed`'d — **redeploy, don't just reload** ([[sm-app-embed-redeploy-gotcha]]).
-
-> **Session 210 (2026-07-09→10) — `frontend/app` RIG CONTROL arc COMPLETE
-> (Slices 1–4) + configurable operating-bands (daemon + SPA); FT8 UI DESIGN
-> settled (ADR 0047 + throwaway mock); then FT8 BUILD (increments 1–6:
-> SSE/state foundation, Band Activity + enrichment, Operate/ladder display,
-> FT8 TX — first RF from this SPA, UI-polish pass, Occupancy TX-offset picker).**
-> Goal changed
-> this session: 7Q8AC is shipped, so `frontend/app` is now the **full-replacement
-> daily-driver target** (no external clock — build it right). Reuse-first
-> throughout ([[sm-reuse-dogfood-spas-first]]). Decided up front: **extend the
-> single `rig` object, do NOT re-import the shipping four-object CAT model**
-> (ADR 0009); and the rig-control *substrate* comes before the FT8 port because
-> FT8's band-tuning + TX sit on it. Built in vertical slices, each dogfoodable:
-> - **Slice 0/1 — capability advertisement + Tune.** `fetchStationContext`/
->   `StationContext` now carry `ops[]`/`tune`/`rigModes[]` from `BridgeInfo`
->   (JSON tags `ops`/`tune`/`rig_modes`, all `omitempty` → default closed);
->   `rigCaps` + `hasOp()` gate every control (hidden, not disabled, when the rig
->   doesn't expose it). New `rig-tune.ts` client + `tune-state` SSE listener
->   (added to `rig-sse.ts`) + `catLink.onTuneState` → `rig.tuneActive`
->   (confirm-by-push, no optimistic flip). Tune button in RigPanel (red-pulse
->   when keyed). **Validated on-air (operator: "Tune works").**
-> - **Slice 2 — VFO swap.** `rig-command.ts` client (`POST /v1/rig/command`) +
->   injected `setCommandSender`; `selectVfo`/`swapVfo` with the optimistic
->   `vfoB` mirror + rollback (dual-VFO rig overwrites via push; single-RX rig
->   shows it at once; rejection rolls back). CAT-locked VFO read-outs are now
->   click-to-swap. **Validated on-air ("Swap works").**
-> - **Slice 3 — band selector + live mode.** Live Option-A mode dropdown (rig's
->   own `rigModes` literals → `set_mode`; added `rig.modeLiteral` beside the
->   friendly `rig.mode`; optimistic + rollback). Band started as ▲▼ steppers,
->   then — per operator ("stepping 160→10 is friction") — replaced with a
->   **button-per-band grid** (direct jump; the active highlight follows
->   `rig.band`, so confirm-by-push has no snap-back). Live click → `set_band`
->   (rig restores that band's stack freq+mode); manual → band + default freq.
-> - **Configurable operating-bands (daemon + SPA).** New station-level
->   `station.operating_bands []string` (`internal/types/station.go`), validated
->   at BOTH load + PUT (`validateStationPrefs` via `enums/bands`: known band, no
->   dupes; `validate_station_test.go`; `config.md` §5). Served/PUT for free (the
->   `station` block is whole-overlay). SPA: `StationContext.operatingBands` →
->   `setOperatingBands`/`operatingBands()` in `rig.svelte.ts`; **empty = the
->   HF..6m default** (additive — fresh installs write NONE and resolve to all,
->   NOT an empty grid). The band grid + (Slice 4) the digit-jump read this ONE
->   list. **Dogfood now:** hand-edit `config.json` `station.operating_bands` +
->   restart; Settings-tab checkbox editor is deferred to the Settings arc.
-> - **Slice 4 — freq nudge + keyboard (arc close).** `nudgeFreq` (coarse ±100 /
->   fine ±10 / jump ±5 kHz) with the per-VFO optimistic-target burst window so
->   key-repeat tracks despite push lag; routes `set_freq`(A)/`set_freq_b`(B).
->   **`RigKeys.svelte`** = the Operate-wide keyboard host (mounted in
->   `Operate.svelte`, NOT the Phone/CW-only LoggingCard) so the SAME keystroke
->   drives the rig in **both Phone/CW and FT8** — the operator's
->   "consistent across operations" rule, free because shortcuts bind to the
->   shared `rig.svelte.ts` actions. `Ctrl+Shift`+ `\`=swap, `]`/`[`=band step,
->   digits=band jump (**`bandForDigit` follows `operating_bands` order** — digit
->   1 = first configured band), arrows=freq step (Alt+↑↓=jump). Firefox
->   Page-keys avoided; modal overlays suppress; freq-arrows gated on `!typing`
->   (word-select still works in a field — swap/band/digit fire regardless).
->   `selectBand` absorbed the band→default-freq so grid + keyboard match.
-> - **Decisions banked (design chats, NOT built):** (a) one **shared rig-control
->   card** across Phone/CW + FT8 is the end state, but EXTRACT it as the first
->   move of the FT8 pass (both consumers real then), not now — the shared seam
->   is the *actions*, presentation differs. (b) **Global keybindings** (not
->   op-profile) — a per-profile overlay is a deliberately-open door, unbuilt;
->   TX-adjacent keys must stay stable across a profile switch. (c) Keybindings
->   stay a **literal handler in `RigKeys.svelte`** until the config feature
->   proper (global `keybindings` block + Settings editor); the clean refactor is
->   lifting the if-chain to a `code→action-id` table then. Inbox: configurable
->   operating-bands + user-configurable digit→band map ([2026-07-09]).
-> - **Verify:** frontend 370 tests / check / lint / build all green; daemon
->   `go build ./...` + `internal/config` green + gofmt clean. **Uncommitted.**
->   Pre-existing red: `internal/api` `TestVersion_HappyPath` (backlog P1, schema
->   v3→v4 stale test — unrelated). Non-transmitting shortcuts (swap/band/freq)
->   safe to validate live; only Tune transmits (already validated).
-> - **FT8 UI DESIGN settled (same session) — [ADR 0047](decisions/0047-ft8-operating-view-layout.md)
->   + throwaway mock `docs/v2-design/ft8-mock/index.html`.** Walked the shipping
->   `Ft8Panel` part-by-part with the operator (heavy FT8 op) and pruned. Result:
->   a **three-anchor fixed layout, NO sub-tabs** — **Band Activity** (front &
->   centre, sticky column header, per-CQ bearing) + **Operate/ladder** (co-primary,
->   the most-watched control center) side-by-side up top; **Occupancy** full-width
->   bottom strip (3-view switcher Waterfall·Spectrum·Channels; ▾/★ markers kept;
->   Clear-Offsets *list* dropped; **Rx-Freq folded into its header**). Operate
->   panel = reused **`EnrichmentCard`** (top-left, 224×180 like Phone/CW — carries
->   SP/LP + bearing + their-time; enrichment flipped from "conditional drop" to
->   KEEP-by-reuse) + worked-call/role → divider → **slot-timing pill** ("Transmit
->   slot"=red / "Listen slot"=green, above the rungs, replacing the redundant
->   "rung N of M"; repeats shown on the active rung) → pile-up next-up → actions
->   (**Call CQ · Abandon · Next**) → divider → **Arm** on its own at the very
->   bottom. **Rig + Session = rail-toggled** shared cards; **Settings → RH rail**;
->   pile-up drawer (Ctrl+click capture + daemon auto-drain). Cost flagged: reuse
->   needs `EnrichmentCard`'s observed-call made a **prop** (ADR 0045). Mock is
->   throwaway (delete on ship); ADR + mock agree.
-> - **FT8 BUILD STARTED (same session) — increments 1–3 landed, all green
->   (397 tests / check / lint / build), UNCOMMITTED.** Building the FT8 view in
->   `frontend/app` in verifiable increments:
->   - **(1) SSE + state foundation** — the ADR-0045 split of the shipping 643-line
->     `ft8.svelte.ts` monolith: `lib/api/ft8-sse.ts` (pure transport, all 5 named
->     events → injected handlers, mirrors `rig-sse.ts`) + `lib/operate/ft8.svelte.ts`
->     (pure `ft8State`: decodes/occupancy/tx/qso + decode feed accumulate/single/cap;
->     **view-scoped `startFt8`/`stopFt8`** for the demand-driven mic; injected seams
->     `setFt8Transport`/`DisplayPrefs`/`LoggedSink`/`OperatorCall`/`MyGrid`).
->   - **(2) Band Activity + enrichment** — `Ft8View.svelte` (the three-anchor shell,
->     view-scoped lifecycle) + `Ft8BandActivity.svelte` (slot-grouped feed, sticky
->     column header, CQ/calling tints, **flag** + **bearing** columns, **worked-aware
->     tint**, ★ NEW). Ported verbatim: `ft8Message.ts`, `ft8Parity.ts`,
->     `api/contest-dupe.ts`; ported `ft8Enrich.svelte.ts` with injected enricher+dupe
->     seams (reuses `apiEnrich` + `/v1/contest-dupe`). Wired in `main.ts`;
->     `Operate.svelte` FT8 branch → `<Ft8View>` (placeholder gone).
->   - **(3) Operate/ladder pane (display)** — `ft8Ladder.ts` (pure role-aware ladder
->     builder: answerer/caller/worker + FD twins + `rowFor` current-row) +
->     `Ft8Operate.svelte` (working-station, **live slot pill** TX-red/listen-green +
->     1 s countdown, message ladder w/ ✓/highlight/`sent ×N`). Occupancy still stub.
->   - **Deferred (flagged in code):** the `EnrichmentCard`-as-prop reuse (Operate uses
->     a lean working block for now); `ft8_display` config read (defaults for now).
-> - **(4) FT8 TX increment (2026-07-10) — FIRST RF FROM THIS SPA, all green
->   (405 tests / check / lint / build), UNCOMMITTED.** The first `frontend/app` path
->   that keys the rig; built with tune-button care. Reused the shipping mechanism in shape:
->   - **API clients** `lib/api/ft8tx.ts` (`armFt8Tx` → `POST /v1/ft8/tx/arm`) +
->     `lib/api/ft8qso.ts` (`startFt8Qso`/`startFt8WorkCaller`/`startFt8Cq`/`abandonFt8Qso`)
->     — thin daemon wrappers, `{code,message}` outcomes. Send endpoint NOT ported (messages
->     are daemon-sequenced, not SPA-queued).
->   - **State (`ft8.svelte.ts`, ADR 0045 seams):** `selectedOffset` + `txParity` fields;
->     `get effectiveOffset()` (operator pick → daemon `suggested[0]` → null — ONE place
->     answers "where will I transmit"); `Ft8TxActions` seam (`setFt8TxActions`) + thin
->     wrappers `armTx/callCq/answerCq/workCaller/abandonQso` (state module still never
->     imports `lib/api`). `stopFt8` KEEPS `selectedOffset` (operator pick ≠ stream data).
->   - **Operate control bar (`Ft8Operate.svelte`):** replaced the placeholder footer —
->     TX-offset readout (`· auto` when it's the daemon fallback) + CQ-slot parity select;
->     **Call CQ / Abandon** row; divider; **Enable TX / Armed — click to disable TX** alone
->     at the bottom (operator's layout). Confirm-by-push (buttons reflect `ft8State.tx/qso`).
->   - **Band-Activity click-to-work:** CQ rows → `answerCq` (FD-aware via `isCqFd`),
->     directed-at-me rows → `workCaller` (FD-aware). Guards w/ toasts: not-armed / rig-off /
->     session-busy / no-offset / **same-session-band dupe** (`session.qsos`).
->   - **`ft8-logged` session wiring (`main.ts`):** the deferred item, now done — completed
->     exchange → shared session log (FT8 rows beside Phone/CW) + `markWorked` greys the
->     station + "QSO logged" toast; **uuid-dedupe** guards a stray re-delivery.
->   - **`Next` deferred, correctly:** in the shipping SPA `Next` only lights with a pile-up
->     (`pileupStack.count > 0`) — it's the operator_pick drain control. With the pile-up
->     stack out of scope it would never show, so it's LEFT OUT (documented seam), not dead.
->   - **Tests +8** (397→405): `effectiveOffset`, TX-wrapper forwarding + unavailable-when-
->     unwired, and 4 Band-Activity click-path component tests (answer-CQ args incl. dial-freq
->     NOT dial+offset, work-caller SNR→report, disarmed-blocks, dupe-blocks).
-> - **(5) FT8 view UI-polish pass (2026-07-10, live tweak loop on :5176) — all green,
->   UNCOMMITTED.** Visual/interaction tuning of the FT8 view, plus one deferred item cleared:
->   - **`EnrichmentCard`-as-prop reuse DONE (was deferred).** `EnrichmentCard` now takes the
->     observed call as a **prop** (was reading `draft.callsign` directly), so it's host-agnostic
->     — LoggingCard passes `draft.callsign`, FT8 Operate passes `qso.theirCall`. Dropped into a
->     reserved **h-45 (180px) box** at the top-left of the Operate panel (its exact `w-56 h-45`
->     Phone/CW frame), blank when idle, live for the worked station. The box is fixed-height so
->     the slot pill + ladder below never reflow. Worked call + role sit in the column beside it.
->   - **Slot countdown fix (real bug).** The pill counted to `ft8State.slot.start_utc + 15s`, but
->     `slot` lags (only updates when a decode lands ~13 s in) → it read 0 almost at once. Now a
->     pure wall-clock countdown to the next UTC 15 s boundary (:00/:15/:30/:45), 250 ms tick →
->     a real 15→1 countdown.
->   - **Global cursor convention** (`app.css` `@layer base`): base cursor = arrow (`default`) so
->     text/table cells/flag emoji no longer show the I-beam; text caret on real text inputs;
->     pointer on clickables. In `@layer base` so any Tailwind `cursor-*` utility still wins.
->   - Smaller tweaks: **Disable TX** button label (was "Armed — click to disable TX") + matching
->     border so it doesn't jump height on toggle; **"No active contact"** trimmed; Band Activity
->     table given a **margin-inset scroll box** (`mx-3 mb-3`) so rows stop short of the card edge
->     (trailing padding on a scroll box is dropped at scroll end); **uniform shell padding**
->     (`p-4 sm:p-6 lg:p-8`, Ft8View height → `100vh - 8rem`) so the FT8 cards have an equal gap
->     all round — NOTE this wrapper is shared with the Phone/CW tile board; Band Activity given a
->     **470px min-width floor** (matches the Operate card) so it stops collapsing on narrow windows.
->   - **Verify:** full gate green — format:check clean (whole tree prettier-formatted, incl. 7
->     pre-existing-drift files), check 0/0, lint clean, 405 tests, build ok. Deferred-now: only
->     `ft8_display` config read (defaults for now) remains from increment-4's deferred list.
-> - **(6) Occupancy pane — TX-offset picker (2026-07-10), all green (417 tests / check /
->   lint / build), UNCOMMITTED.** Fills the last stub in the FT8 view (`occ` full-width slot).
->   Reuse-first: ported the shipping SPA's two switchable views + pure maths, re-themed to the
->   app's `--color-*` tokens (+ `dark:` variants) instead of hardcoded grays:
->   - **`Ft8Occupancy.svelte`** (card + Channels/Spectrum toggle, `occupancyView` in-memory) →
->     **`Ft8OccupancyStrip.svelte`** (discrete ~50 Hz cells: red=busy / green=clear, ▼/▲ brackets
->     the pick, **amber underline = daemon recommendation**) + **`Ft8OccupancySpectrum.svelte`**
->     (continuous click-anywhere/drag bar, graded **clear/near/sharing**, ▼ ticks + **★ top pick**).
->   - **`utils/ft8Spectrum.ts`** (pure `signalProximity`/`offsetFromFraction`/`clampOffset`) +
->     its test, ported verbatim. State: `occupancyView` + `setOccupancyView` + `selectOffset`
->     added to `ft8.svelte.ts`; a pick pins `selectedOffset` (survives view toggles already).
->   - **Auto-pick KEPT deliberately (operator ask 2026-07-10):** `effectiveOffset`'s
->     `selectedOffset ?? suggested[0]` fallback stays; both views read **"auto — daemon pick"**
->     and mark `suggested[0]`, whose marker **hops slot-to-slot on a busy band** — kept visible so
->     the operator can judge how stable the recommendation is *before* trusting it (operator wants
->     to test crowded-band behaviour). Picking a channel ends the auto and pins the offset.
->   - Tweaks during the live loop: bar height `h-8`→`h-11`; busy/clear cell colours re-tuned to
->     the slot-pill's green family then made a little more vivid (`red-500/65` · `green-700/75`
->     + dark variants). **KNOWN ISSUE (inbox 2026-07-10):** the Occupancy colours only read right
->     in **dark** mode — light-mode busy/clear fills + spectrum tints wash out; needs a light pass.
->   - **Tests +12** (405→417): `ft8Spectrum` maths (7), `selectOffset`/view-toggle state (2),
->     `Ft8Occupancy` render/click/toggle component (3).
-> - **NEXT: on-air validation of FT8 TX** (it transmits — same care as the tune button; TX
->   only fires armed + CAT-connected; now on the picked offset, else the auto fallback). Do it
->   **against a scratch `SM_WORKING_DIR`** (isolated DB + forwarding off) via `go run` — but the
->   *first real QSO* is a keeper (production DB, forwarding on): the counterparty logs it and
->   expects LoTW/QRZ confirmation, so validate the TX *path* into a **dummy load with self-decode**
->   first, never a throwaway real contact. Then the **Occupancy light-mode colour fix** (inbox),
->   the **operator_pick pile-up stack** (+ its `Next`), the **shared-rig-card extraction**, and
->   **FT8 band buttons** (watering-hole `onPick`).
->   Remaining shipping refs: `Ft8OccupancyStrip`/`Spectrum`, `Ft8PileupDrawer`/`ft8PileupStack`.
-
-> **Session 209 (2026-07-08, same day) — `frontend/app` Operate polish +
-> the draggable/pinnable tile-layout decision (ADR 0046 + POC).** Reuse-first
-> ([[sm-reuse-dogfood-spas-first]]) throughout.
->
-> - **Contact overlay replaces the Details card.** The always-on Details panel
->   + its rail glyph are **gone** (`DetailsPanel.svelte` deleted, `'details'`
->   off the `Panel` type). A new **`ContactDialog.svelte`** overlay opens from
->   the **Worked** card's **View…** button — enabled only when a QSO is underway
->   (`qsoClock.started`). It shows ONLY what isn't already on the logging card /
->   header (no repeats): **QRZ page link, email, CQ/ITU zone** (read-only
->   enrichment) + **Gridsquare, QTH, Rig, Notes** (operator fields). **View-only
->   by default; a pencil Edit glyph** unlocks the operator fields (grid included
->   — its only editing home now, off the fast path). Plumbing: `notes` + `rig`
->   added to `QsoDraft`; the submit sink now emits ADIF `RIG`/`NOTES`/`CQZ`/`ITUZ`;
->   `Enrichment` gained `email`/`cqZone`/`ituZone` (mapped in `apiEnrich` from
->   `station.email` + `country.cq_zone`/`itu_zone`). check/lint/336 tests green.
-> - **Smaller Operate tweaks:** favicon stroke thinned (150→130, `public/logo.svg`
->   only — in-app `Logo.svelte` untouched); Worked-card **View…** button; Worked
->   panel auto-opens on Tab (QSO start) if nothing's open; the unconfirmed-CAT
->   Log-QSO tooltip now states the block ("Cannot log yet — confirm…").
-> - **Tile-layout feature DECIDED (not built): [ADR 0046](decisions/0046-operate-tile-layout.md).**
->   Resolves ADR 0044's deferred content-model fork toward a **tiling** model —
->   fixed-size tiles, **no overlap** (reflow), non-destructive Default, **single
->   global pin** (not per-card), cards unchanged in size/content, CardFrame chrome
->   only in an explicit arrange mode, rail → show/hide-a-tile. Validated by a
->   pointer-drag **POC at `docs/v2-design/tile-layout-poc/`** (interaction only —
->   no persistence, no Svelte). Design guards recorded so per-op-profile
->   persistence is later *wiring*, not a refactor. Deferred to lift time: one
->   shared arrangement vs per-Operate-sub-mode; adaptive column count.
-> - **Tile-layout LIFTED into `frontend/app` + browser-validated (same session).**
->   New `layout.svelte.ts` (serialisable layout value — ordered tile ids per
->   column + hidden set; actions; **injected persistence seam** `setLayoutPersistence`
->   wired in `main.ts` to localStorage `sm.layout.default.phone`; tile registry),
->   `CardFrame.svelte` (drag grip, arrange-mode only), `TileBoard.svelte`
->   (Pointer-Events drag engine, live reorder, no overlap), `ArrangeBar.svelte`
->   (global Pin/Unpin · Reset · Done — **fixed near the window bottom**). The
->   single-slot `panel` model is gone: `worked.svelte` auto-open drives tile
->   visibility, `Header` rig chip shows the Rig tile, `UtilRail` toggles tile
->   show/hide + Arrange, the three panels are self-contained tiles (own header +
->   action + an **always-visible X to hide**, logging excluded), `InfoPanel.svelte`
->   deleted, `app.css` swapped `operate-center` for the board. **Decisions:**
->   Default = logging only, info tiles **stack BELOW logging** (its column) on
->   show — faithful to today; **centred on a shared axis** (`align-items:center`);
->   cards keep exact size (info tiles `w-2xl`); board centres when it fits, else
->   left-aligns + `<main>` scrolls; FT8 untouched (own tile surface = FT8 pass).
->   Guards honoured (data-not-coords, state-driven, injected persistence,
->   profile-keyed). `layout.svelte.test.ts` (5) locks show/hide + reset + pin;
->   check/lint/**341** tests/build green. Known: cross-column drag of the logging
->   tile briefly remounts it (Svelte each-block boundary) → refocuses callsign;
->   harmless in arrange.
-> - **Two dogfood fixes (frontend/app):** (1) Tab-to-start a QSO now **warns via
->   toast** when the rig gate is unconfirmed/lost (clock still starts; explains
->   the disabled Log button); (2) each info-card's **X refocuses the callsign
->   input** (`hideTile`→`focusCallsign`). check/lint/341 green.
-> - **Inbox TRIAGED (2026-07-08).** Everything untriaged dispositioned; only #73
->   (name-overflow, in progress) left plain. → `backlog.md`: **P1** stale
->   `TestVersion_HappyPath` (schema 3→4); **P2** new _Daemon/data_ line — ADIF
->   export omits `MY_*` (investigate, possible data-loss) · fill `country.dxcc`
->   number · enrich abort-WARN→debug · RST-validator backport to logging SPA ·
->   "Rig"→"Rig Control" rename with rig-control; **P3** MY_RIG follow-CAT ·
->   single-source freq→band · tune-carrier occupancy (pending HW) · world map ·
->   FT8 band-hop · voice-keyer/copilot · movable nav. **Struck as scope-notes**
->   (decided, not backlog): DX-cluster (don't build) · MQTT (P4 only) · app-name
->   (keep). Draggable-card notes marked IMPLEMENTED.
-> - **Rig-panel polish + band/freq consistency (frontend/app).** Header rig-chip
->   tooltip is gate-aware + terse ("Waiting for confirmation" when unconfirmed).
->   RigPanel: **Confirm** moved to the card's bottom-right with the message
->   **above** it; message reworded to "Logging is blocked until the **QSO
->   settings** are confirmed" (band/mode/freq — changing band doesn't move the
->   freq). **#1 default freq per band (CAT-off):** picking a band jumps the freq
->   to a representative centre (`BAND_DEFAULT_HZ`, editable) so band+freq can't
->   silently disagree; pairs with the existing `syncBand` (freq→band).
->   **#2 region-AGNOSTIC out-of-band flag:** freq input red-outlines + "Outside
->   the {band} band" when the freq isn't in the selected band's ADIF envelope
->   (`frequencyToBand`, no region data) — catches the 40m/14.2 mismatch + out-of-
->   any-band typos; the message sits in its OWN row below the inputs so it can't
->   break the `items-end` alignment. **Explicitly NOT built:** region-aware
->   TX-legality (needs IARU region + national band plan → the backlogged
->   band-plan item). check/lint/341 green.
-> - **Code-review fixes (pasted review; fixed 1–3, skipped 4).** **#1 (High):**
->   `LoggingCard.windowKeydown` now guards `operate.exportOpen` (Esc closes it,
->   log/clear inert) and `operate.pileup` (inert; `PileupDrawer` owns its Esc) —
->   was clearing the draft / logging behind an open Export modal or pile-up.
->   **#2 (Med):** RigPanel gained a `bandOptions` derived (mirrors `modeOptions`)
->   so a CAT/`frequencyToBand` VHF-UHF band (2m/70cm…) joins the `<select>`
->   instead of rendering blank. **#3 (Med):** `apiHistory` drops non-object rows
->   + rows without a unique non-empty uuid before mapping (Svelte keyed-each
->   safety) — new test + a fixed unrealistic fixture. **#4 (Low, storage-guard
->   wrapper) skipped** (can't bite this operator; widest change).
-> - **Worked-before list gained a Notes column** (operator added the header): `notes`
->   plumbed through `WorkedQso` + `toWorkedQso` (`row.notes`), rendered truncated
->   with a title tooltip. check/lint/**342** green. Inbox note (not acted): the
->   contact-detail overlay (from the Worked panel) needs re-organising.
->
 **main is v2.** Daemon (`cmd/smd`) + embedded Svelte 5 SPA (`frontend/logging/`, served at `GET /` when `Protocol=tcp && ServeSPA=true`). Day-to-day ham ops run from the frozen `v1` branch; v2 is under active development. Full suite green; CI gates every push to main.
 
 In-tree and shipped:
@@ -1682,5 +1275,5 @@ guide — use this, not an inferred version):
 - Update this file at the end of every session.
 - **Roll-off:** when the live `### Session N` list passes ~15 entries, move the
   oldest block into `session-handoff-archive.md` (newest-first, verbatim). Last
-  roll-off: 2026-07-18 (Sessions 203–208 → archive; live kept 209–220). Prior:
+  roll-off: 2026-07-18 later (Sessions 209–211 → archive; live kept 212–223). Prior: 2026-07-18 (203–208),
   2026-07-13 (Sessions 182–197 → archive).
