@@ -11,7 +11,7 @@
     the {code, message} envelope; the message is operator-facing enough to show.
 */
 
-import { readJsonBody, safeFetch, WRITE_TIMEOUT_MS } from './_helpers';
+import { DEFAULT_TIMEOUT_MS, readJsonBody, safeFetch, WRITE_TIMEOUT_MS } from './_helpers';
 import type { LogbookQso } from './logbooks';
 
 /** The editable subset of a QSO, by ADIF JSON tag. All optional — only the
@@ -42,6 +42,34 @@ export interface QsoPatch {
 }
 
 export type PatchOutcome = { kind: 'ok'; qso: LogbookQso } | { kind: 'error'; message: string };
+
+/** Fetch one QSO by its canonical uuid — GET /v1/qso/{uuid}. The response is
+ *  the full QSO JSON, a superset of the logbook list-row shape, so surfaces
+ *  that only carry a trimmed row (the Operate session list) can hydrate the
+ *  edit modal without paging the logbook. */
+export async function fetchQso(uuid: string): Promise<PatchOutcome> {
+    const fetched = await safeFetch(`/v1/qso/${uuid}`, {}, { timeoutMs: DEFAULT_TIMEOUT_MS });
+    if (!fetched.ok) {
+        return {
+            kind: 'error',
+            message: fetched.kind === 'network' ? 'Cannot reach the daemon.' : 'Request failed.',
+        };
+    }
+    const body = await readJsonBody(fetched.response);
+    if (!fetched.response.ok) {
+        const message =
+            body &&
+            typeof body === 'object' &&
+            typeof (body as { message?: unknown }).message === 'string'
+                ? (body as { message: string }).message
+                : `Daemon error (${fetched.response.status}).`;
+        return { kind: 'error', message };
+    }
+    if (body === null || typeof body !== 'object') {
+        return { kind: 'error', message: 'Unexpected QSO response.' };
+    }
+    return { kind: 'ok', qso: body as LogbookQso };
+}
 
 /** Apply an edit to one QSO. `uuid` is the QSO's canonical id (carried on every
  *  row). Returns the updated row on success, or a daemon-supplied message. */

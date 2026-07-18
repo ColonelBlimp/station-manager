@@ -10,14 +10,25 @@
     // message, not a silent write.
     //
     // Keyboard: ESC cancels, Ctrl/Cmd+Enter saves (the modal owns its own ESC).
+    //
+    // Save/close/status are INJECTED (ADR 0045 — presentation never reaches
+    // into a state module), so the same modal serves both the Logbook page
+    // (logbookState) and the Operate Session panel (sessionEdit): each owner
+    // supplies its own onSave/onClose and mirrors saving/error.
     import { untrack } from 'svelte';
-    import { logbookState } from './logbook.svelte';
     import { formatQsoDate, formatTime } from './format';
     import { enrichCallsign } from '../api/enrichment';
     import type { LogbookQso } from '../api/logbooks';
     import type { QsoPatch } from '../api/qso-patch';
 
-    const { row }: { row: LogbookQso } = $props();
+    interface Props {
+        row: LogbookQso;
+        saving: boolean;
+        error: string | null;
+        onSave: (patch: QsoPatch) => void;
+        onClose: () => void;
+    }
+    const { row, saving, error, onSave, onClose }: Props = $props();
 
     // YYYY-MM-DD (the <input type=date> value) → ADIF YYYYMMDD; "" stays "".
     const toAdifDate = (v: string): string => v.replace(/-/g, '');
@@ -126,17 +137,17 @@
         return patch;
     }
 
-    async function save(): Promise<void> {
-        await logbookState.saveEdit(buildPatch());
+    function save(): void {
+        onSave(buildPatch());
     }
 
     function onKeydown(e: KeyboardEvent): void {
         if (e.key === 'Escape') {
             e.preventDefault();
-            logbookState.closeEdit();
+            onClose();
         } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
             e.preventDefault();
-            void save();
+            save();
         }
     }
 </script>
@@ -148,7 +159,7 @@
     class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-gray-500/75 p-4 sm:items-center dark:bg-gray-900/50"
     role="presentation"
     onclick={(e) => {
-        if (e.target === e.currentTarget) logbookState.closeEdit();
+        if (e.target === e.currentTarget) onClose();
     }}
 >
     <div
@@ -165,7 +176,7 @@
                 type="button"
                 class="cursor-pointer rounded-md px-2 py-1 text-muted hover:bg-surface-muted hover:text-ink"
                 aria-label="Close"
-                onclick={() => logbookState.closeEdit()}>✕</button
+                onclick={onClose}>✕</button
             >
         </div>
 
@@ -173,7 +184,7 @@
             class="grid grid-cols-1 gap-x-4 gap-y-3 px-5 py-4 sm:grid-cols-3"
             onsubmit={(e) => {
                 e.preventDefault();
-                void save();
+                save();
             }}
         >
             <label class="flex flex-col gap-1 text-sm">
@@ -253,11 +264,11 @@
             </label>
         </form>
 
-        {#if logbookState.editError !== null}
+        {#if error !== null}
             <p
                 class="mx-5 mb-1 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-500/10 dark:text-red-300"
             >
-                {logbookState.editError}
+                {error}
             </p>
         {/if}
 
@@ -277,16 +288,9 @@
                 <span class="text-xs text-muted">{enrichNote}</span>
             {/if}
             <span class="ml-auto"></span>
-            <button type="button" class="btn" onclick={() => logbookState.closeEdit()}
-                >Cancel</button
-            >
-            <button
-                type="button"
-                class="btn btn-primary"
-                disabled={logbookState.savingEdit}
-                onclick={() => void save()}
-            >
-                {logbookState.savingEdit ? 'Saving…' : 'Save'}
+            <button type="button" class="btn" onclick={onClose}>Cancel</button>
+            <button type="button" class="btn btn-primary" disabled={saving} onclick={save}>
+                {saving ? 'Saving…' : 'Save'}
             </button>
         </div>
     </div>

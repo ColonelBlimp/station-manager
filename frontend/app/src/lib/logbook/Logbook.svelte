@@ -14,6 +14,7 @@
     import EditQsoModal from './EditQsoModal.svelte';
     import LogbookEmailControls from './LogbookEmailControls.svelte';
     import type { LogbookQso } from '../api/logbooks';
+    import type { QsoPatch } from '../api/qso-patch';
 
     onMount(() => void logbookState.init());
 
@@ -304,5 +305,11 @@
 </div>
 
 {#if logbookState.editing !== null}
-    <EditQsoModal row={logbookState.editing} />
+    <EditQsoModal
+        row={logbookState.editing}
+        saving={logbookState.savingEdit}
+        error={logbookState.editError}
+        onSave={(p: QsoPatch) => void logbookState.saveEdit(p)}
+        onClose={() => logbookState.closeEdit()}
+    />
 {/if}

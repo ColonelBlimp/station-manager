@@ -69,6 +69,15 @@ export function addSessionQso(q: Omit<SessionQso, 'id'>): void {
     persist();
 }
 
+/** Overlay edited fields onto a session row (the in-place edit's write-back —
+ *  the daemon's canonical merged QSO wins over what was captured at log time). */
+export function updateSessionQso(id: number, patch: Partial<Omit<SessionQso, 'id'>>): void {
+    const i = session.qsos.findIndex((q) => q.id === id);
+    if (i === -1) return;
+    session.qsos[i] = { ...session.qsos[i], ...patch };
+    persist();
+}
+
 /** Test seam — clear the session (state + persisted copy) between cases. */
 export function _resetSessionForTests(): void {
     session.qsos.length = 0;

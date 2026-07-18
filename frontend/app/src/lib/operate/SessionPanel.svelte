@@ -3,9 +3,18 @@
     // over the session state (the submit sink adds rows); self-contained tile
     // (ADR 0045/0046): owns its own header (title + the Export… action, which
     // used to live on the InfoPanel wrapper).
+    //
+    // In-place edit (dogfood 2026-07-18): the callsign is a button that opens
+    // the shared EditQsoModal RIGHT HERE — navigating to the Logbook route to
+    // edit unmounts the FT8 view and takes a live CQ run off the air
+    // (demand-driven capture). Rows without a uuid (pre-upgrade sessions)
+    // render as plain text.
     import { session } from './session.svelte';
+    import { sessionEdit } from './sessionEdit.svelte';
     import { openExport, focusCallsign } from './state.svelte';
     import { hideTile } from './layout.svelte';
+    import EditQsoModal from '../logbook/EditQsoModal.svelte';
+    import type { QsoPatch } from '../api/qso-patch';
     const tableHeight = 'h-55';
 </script>
 
@@ -52,6 +61,12 @@
         </div>
     </div>
 
+    {#if sessionEdit.openError !== null}
+        <p class="mt-2 text-xs text-invalid" data-testid="session-edit-error">
+            {sessionEdit.openError}
+        </p>
+    {/if}
+
     <div class="mt-3">
         {#if session.qsos.length > 0}
             <div class="{tableHeight} overflow-y-auto">
@@ -74,7 +89,20 @@
                         {#each session.qsos as q (q.id)}
                             <tr class="border-b text-sm border-line-soft text-ink last:border-0">
                                 <td class="tabular-nums">{q.timeOn}</td>
-                                <td class="font-medium">{q.callsign}</td>
+                                <td class="font-medium">
+                                    {#if q.uuid}
+                                        <button
+                                            type="button"
+                                            class="cursor-pointer hover:underline"
+                                            title="Edit this QSO (stays on this page — the FT8 run keeps going)"
+                                            onclick={() => void sessionEdit.open(q)}
+                                        >
+                                            {q.callsign}
+                                        </button>
+                                    {:else}
+                                        {q.callsign}
+                                    {/if}
+                                </td>
                                 <td class="w-12">{q.band}</td>
                                 <td class="w-14">{q.mode}</td>
                                 <td class="tabular-nums">{q.rstSent}</td>
@@ -93,3 +121,13 @@
         {/if}
     </div>
 </div>
+
+{#if sessionEdit.row !== null}
+    <EditQsoModal
+        row={sessionEdit.row}
+        saving={sessionEdit.saving}
+        error={sessionEdit.error}
+        onSave={(p: QsoPatch) => void sessionEdit.save(p)}
+        onClose={() => sessionEdit.close()}
+    />
+{/if}
