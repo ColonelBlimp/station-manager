@@ -226,6 +226,16 @@ func (s *Service) StopTune(ctx context.Context) error {
 // A no-op when no tune is active, and a clean state-sync (no write) when the
 // rig is already gone.
 func (s *Service) releaseTune(ctx context.Context, reason string) error {
+	return s.releaseTuneChecked(ctx, reason, nil)
+}
+
+// releaseTuneChecked is releaseTune with an optional generation guard for the
+// auto-off backstop (review of a1d031cf): the callback's cheap pre-check runs
+// BEFORE keyMu is acquired, so a stop + new key completing in that gap would
+// let the stale callback unkey the NEWER transmission. wantGen re-checks
+// UNDER keyMu — the lock every key/release transition holds — closing the
+// window; nil (operator stop) releases unconditionally.
+func (s *Service) releaseTuneChecked(ctx context.Context, reason string, wantGen *uint64) error {
 	const errOp errors.Op = "bridge.Service.releaseTune"
 
 	// keyMu: one release at a time, and no key may start mid-release. A second
@@ -236,6 +246,12 @@ func (s *Service) releaseTune(ctx context.Context, reason string) error {
 	defer s.keyMu.Unlock()
 
 	s.mu.Lock()
+	if wantGen != nil && s.tuneGen != *wantGen {
+		// A newer transition owns the carrier — this stale backstop must not
+		// touch it (its own generation's transmission is long gone).
+		s.mu.Unlock()
+		return nil
+	}
 	if !s.tuneActive {
 		s.mu.Unlock()
 		return nil
@@ -342,7 +358,9 @@ func (s *Service) tuneAutoOff(gen uint64) {
 	if stale {
 		return
 	}
-	if err := s.releaseTune(context.Background(), "auto-off"); err != nil {
+	// Pass the generation through: this cheap pre-check runs outside keyMu, so
+	// the release re-verifies it under the lock (review of a1d031cf).
+	if err := s.releaseTuneChecked(context.Background(), "auto-off", &gen); err != nil {
 		s.mu.Lock()
 		if s.tuneActive && s.tuneGen == gen {
 			s.tuneTimer = time.AfterFunc(tuneRetryInterval, func() { s.tuneAutoOff(gen) })

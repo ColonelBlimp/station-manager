@@ -173,6 +173,12 @@ func (s *Service) UnkeyFt8Tx(ctx context.Context) error {
 //     because some rigs ignore a mode change during the TX→RX transition tail
 //     right after tx_off (task #270, reusing tuneRestoreSettle).
 func (s *Service) releaseFt8Tx(ctx context.Context, reason string) error {
+	return s.releaseFt8TxChecked(ctx, reason, nil)
+}
+
+// releaseFt8TxChecked — see releaseTuneChecked (the ft8 twin of the a1d031cf
+// review fix): wantGen re-checks the transition generation UNDER keyMu.
+func (s *Service) releaseFt8TxChecked(ctx context.Context, reason string, wantGen *uint64) error {
 	const errOp errors.Op = "bridge.Service.releaseFt8Tx"
 
 	// keyMu: one release at a time, and no key may start mid-release. A second
@@ -183,6 +189,11 @@ func (s *Service) releaseFt8Tx(ctx context.Context, reason string) error {
 	defer s.keyMu.Unlock()
 
 	s.mu.Lock()
+	if wantGen != nil && s.ft8TxGen != *wantGen {
+		// A newer transition owns the PTT — the stale backstop must not touch it.
+		s.mu.Unlock()
+		return nil
+	}
 	if !s.ft8TxActive {
 		s.mu.Unlock()
 		return nil
@@ -279,7 +290,8 @@ func (s *Service) ft8TxAutoOff(gen uint64) {
 	if stale {
 		return
 	}
-	if err := s.releaseFt8Tx(context.Background(), "auto-off"); err != nil {
+	// Generation passed through — re-verified under keyMu (a1d031cf review).
+	if err := s.releaseFt8TxChecked(context.Background(), "auto-off", &gen); err != nil {
 		s.mu.Lock()
 		if s.ft8TxActive && s.ft8TxGen == gen {
 			s.ft8TxTimer = time.AfterFunc(tuneRetryInterval, func() { s.ft8TxAutoOff(gen) })

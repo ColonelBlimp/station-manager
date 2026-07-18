@@ -262,3 +262,114 @@ func TestTxAlarm_RecoveryCycleThroughPipeline(t *testing.T) {
 		t.Fatal("txAlarmActive still set after RX confirmation")
 	}
 }
+
+// a1d031cf review residual: the auto-off callbacks' cheap generation
+// pre-check runs OUTSIDE keyMu — a stop + new key completing in that gap must
+// still be caught by the release-level recheck UNDER the lock.
+func TestReleaseChecked_StaleGenerationUnderKeyMuNoOp(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	s.tuneRestoreSettle = 0
+	s.lastMode = "USB"
+	s.lastPower = 35
+
+	// Tune 1 (its generation is what the stale callback would carry).
+	if err := s.StartTune(context.Background()); err != nil {
+		t.Fatalf("first tune: %v", err)
+	}
+	s.mu.Lock()
+	staleGen := s.tuneGen
+	s.mu.Unlock()
+	if err := s.StopTune(context.Background()); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	s.observeTxStatus("0")
+	// Tune 2 is live; the stale callback's release arrives late.
+	if err := s.StartTune(context.Background()); err != nil {
+		t.Fatalf("second tune: %v", err)
+	}
+	before := len(fake.recordedWrites())
+
+	if err := s.releaseTuneChecked(context.Background(), "stale-test", &staleGen); err != nil {
+		t.Fatalf("stale release must no-op cleanly, got %v", err)
+	}
+	s.mu.Lock()
+	active := s.tuneActive
+	s.mu.Unlock()
+	if !active {
+		t.Fatal("stale-generation release unkeyed the NEWER tune under keyMu")
+	}
+	if n := len(fake.recordedWrites()); n != before {
+		t.Fatalf("stale release wrote %d frame(s), want none", n-before)
+	}
+
+	// The ft8 twin.
+	if err := s.StopTune(context.Background()); err != nil {
+		t.Fatalf("cleanup stop: %v", err)
+	}
+	s.observeTxStatus("0")
+	if err := s.KeyFt8Tx(context.Background(), "DATA-U"); err != nil {
+		t.Fatalf("ft8 key 1: %v", err)
+	}
+	s.mu.Lock()
+	staleFt8 := s.ft8TxGen
+	s.mu.Unlock()
+	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
+		t.Fatalf("ft8 unkey: %v", err)
+	}
+	s.observeTxStatus("0")
+	if err := s.KeyFt8Tx(context.Background(), "DATA-U"); err != nil {
+		t.Fatalf("ft8 key 2: %v", err)
+	}
+	before = len(fake.recordedWrites())
+	if err := s.releaseFt8TxChecked(context.Background(), "stale-test", &staleFt8); err != nil {
+		t.Fatalf("stale ft8 release must no-op cleanly, got %v", err)
+	}
+	s.mu.Lock()
+	active = s.ft8TxActive
+	s.mu.Unlock()
+	if !active {
+		t.Fatal("stale-generation release unkeyed the NEWER ft8 TX under keyMu")
+	}
+	if n := len(fake.recordedWrites()); n != before {
+		t.Fatalf("stale ft8 release wrote %d frame(s), want none", n-before)
+	}
+}
+
+// a1d031cf review low: a cached identity_unrecognised bridge-error must retire
+// once identity later confirms — a new tab must not be toasted a stale warning
+// after the recovery finding 7 enabled.
+func TestIdentityCacheClearsOnConfirmation(t *testing.T) {
+	s, fake := newPipelineTestService(t) // FT-710
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	fake.feedLine([]byte("ID9999")) // unrecognised → error published + cached
+	time.Sleep(50 * time.Millisecond)
+	fake.feedLine([]byte("ID0800")) // recovery: identity confirms
+	deadline := time.Now().Add(time.Second)
+	for !s.identityOK() {
+		if time.Now().After(deadline) {
+			t.Fatal("identity did not confirm")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// A NEW subscriber must not receive the stale cached identity error.
+	ch, unsub := s.Subscribe()
+	defer unsub()
+	timeout := time.After(200 * time.Millisecond)
+	for {
+		select {
+		case evt := <-ch:
+			if evt.Name == EventBridgeError {
+				if p, ok := evt.Payload.(BridgeErrorPayload); ok && p.Code == BridgeErrCodeIdentityUnrecognised {
+					t.Fatal("stale identity_unrecognised replayed to a new subscriber after confirmation")
+				}
+			}
+		case <-timeout:
+			return // no stale replay — pass
+		}
+	}
+}

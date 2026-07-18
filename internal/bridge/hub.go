@@ -81,6 +81,21 @@ type hub struct {
 	lastTxAlarm *Event
 }
 
+// clearCachedBridgeError drops the cached bridge-error replay when its code
+// matches — used when the condition it warned about has demonstrably resolved
+// (e.g. identity later confirmed after an unrecognised first ID). No-op on a
+// different cached code or an empty cache.
+func (h *hub) clearCachedBridgeError(code BridgeErrorCode) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.lastBridgeError == nil {
+		return
+	}
+	if p, ok := h.lastBridgeError.Payload.(BridgeErrorPayload); ok && p.Code == code {
+		h.lastBridgeError = nil
+	}
+}
+
 func newHub() *hub {
 	return &hub{
 		subs: make(map[int64]chan Event),

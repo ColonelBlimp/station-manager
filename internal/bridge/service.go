@@ -585,7 +585,10 @@ func (s *Service) TriggerBootstrap(ctx context.Context) error {
 	// mutex (2026-07-18 TX-safety review, finding 5). Skip — the subscriber
 	// still gets live pushes, and the next bootstrap/poll fills the snapshot
 	// once the carrier is down. Yaesu bootstraps are one cmdMu-free write and
-	// stay as they were.
+	// stay as they were. Checked OUTSIDE the lock for the cheap fast path AND
+	// re-checked INSIDE the closure (a1d031cf review): a key completing between
+	// the snapshot above and cmdMu acquisition would otherwise still run the
+	// long snapshot with TX active.
 	if civ && keyed {
 		s.logger.DebugWith().Msg("bridge: skipping CI-V bootstrap snapshot while TX is keyed")
 		return nil
@@ -593,6 +596,15 @@ func (s *Service) TriggerBootstrap(ctx context.Context) error {
 	// CI-V: serialise behind cmdMu so a new subscriber's bootstrap READ burst
 	// can't interleave an in-flight command/key ACK sequence (review M2).
 	return s.underCmdMuCIV(civ, func() error {
+		if civ {
+			s.mu.Lock()
+			nowKeyed := s.tuneActive || s.ft8TxActive
+			s.mu.Unlock()
+			if nowKeyed {
+				s.logger.DebugWith().Msg("bridge: skipping CI-V bootstrap snapshot while TX is keyed (post-lock)")
+				return nil
+			}
+		}
 		return s.writeSnapshotReads(ctx, cl, civ, bb)
 	})
 }

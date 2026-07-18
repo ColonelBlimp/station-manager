@@ -499,6 +499,15 @@ func (s *Service) runPollLoop(ctx context.Context, client serial.Client, pollByt
 				continue
 			}
 			err := s.underCmdMuCIV(true, func() error {
+				// Re-check keyed UNDER cmdMu (a1d031cf review): a key completing
+				// between the tick's snapshot and lock acquisition must still
+				// defer the poll — the unkey path waits on this same mutex.
+				s.mu.Lock()
+				nowKeyed := s.tuneActive || s.ft8TxActive
+				s.mu.Unlock()
+				if nowKeyed {
+					return nil
+				}
 				return s.writeSnapshotReads(ctx, client, true, pollBytes)
 			})
 			if err != nil && ctx.Err() == nil {
@@ -836,6 +845,13 @@ func (s *Service) setIdentityConfirmed(v bool) {
 	s.mu.Lock()
 	s.identityConfirmed = v
 	s.mu.Unlock()
+	if v {
+		// A now-confirmed identity retires any cached identity_unrecognised
+		// bridge-error (a1d031cf review): finding 7's un-latch means a garbled
+		// first ID can recover, and a new tab must not be toasted a stale
+		// warning about it after the recovery.
+		s.hub.clearCachedBridgeError(BridgeErrCodeIdentityUnrecognised)
+	}
 }
 
 // identityOK reports whether the connected rig has been confirmed as the
