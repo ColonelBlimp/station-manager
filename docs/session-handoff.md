@@ -59,10 +59,54 @@ precisely so we don't re-derive state or redo finished work.
 >   heals them. The reconcile AFTER it is the verdict: steady state is
 >   `in_sync:true` even mid-pile-up, and any later `in_sync:false` is a REAL
 >   drift signal again (and the manifest pull behind it is now gzipped ~10×).
-> - **NEXT:** after two hourly cycles, eyeball
+> - **Afternoon arc — SMC production-readiness → rate limiting BUILT → ADR
+>   0052 (SMC identity) → review round (3 findings, ALL real — 7th
+>   consecutive clean round) FIXED. Committed per-batch by the operator.**
+> - **SMC production-readiness answer:** yes for the LAN/backup job it does
+>   (drills + audit + hardening all passed), no for the internet — and the
+>   rate-limiting gate got BUILT the same afternoon: two-level in-process
+>   bound (accept-time connection cap via `netutil.LimitListener` at 4× the
+>   request cap — net/http spawns a goroutine per accepted conn BEFORE any
+>   handler, so the handler semaphore alone can't stop a connection flood —
+>   plus `internal/cloud/server/limit.go` request semaphore, default 16,
+>   `SMCLOUD_MAX_CONCURRENT`, over-limit → 503 + Retry-After) + the per-IP
+>   Caddy layer (`Caddyfile.example` rate_limit block; runbook §4 rewritten
+>   with the plugin install order: xcaddy build → install over
+>   `/usr/bin/caddy` → `list-modules` proof → validate → only then enable;
+>   stock Caddy fails loud on the directive, so a package-upgrade clobber
+>   can't run silently unlimited). **Remaining Phase-2 gate: ADR 0040
+>   security assessment + rotating the leaked dogfood token.** Limiter goes
+>   live on a box at its next `task rpm:smcloud` rebuild (no urgency on LAN).
+> - **ADR 0052 (Accepted): SM Cloud identity** — first and foremost a
+>   no-data-loss backup; permanent rules: passive revision-guarded store
+>   (no merge logic ever), single writer per QSO (operator is the mutex;
+>   guard makes violations safe, not impossible), forwarding-by-origin
+>   (pulled rows never forward — also keeps the ClubLog promise), everything
+>   richer is a layer over the store. **First milestone (operator): multiple
+>   tenancy — provision 7Q8AC as a second hand-provisioned tenant** (map
+>   supports N; the work is boot provisioning — today exactly one
+>   callsign/token pair). Then: bidirectional reconcile (completes the POTA
+>   laptop loop at the `CloudOnly` seam) → device tokens → delta pull →
+>   query API; qrz-core/QSL captured as explored-not-decided.
+> - **Review round on the batch (3/3 real):** (1) conn-flood gap → the
+>   accept-time cap above + narrowed comments + LimitListener semantics
+>   pinned by test · (2) runbook §4 had enabled STOCK Caddy before the
+>   plugin existed → rewritten (see above) · (3) ADR 0052 overclaimed
+>   "reconcile surfaces" single-writer violations — same-second
+>   same-revision edits make identical version tuples (`>=` tie guard +
+>   payload-less hash → silent divergence); ADR corrected + device/writer-id
+>   tie-breaker made a PRECONDITION of the bidirectional-reconcile leg.
+> - **Name check (operator question):** "Station Manager" vs Triton Digital's
+>   streaming encoder of the same name — no registered mark found, crowded
+>   descriptive term, different market; keep the name. Closest real
+>   neighbour is 4O3A's ham "Station Manager" console (discoverability, not
+>   legal).
+> - **NEXT: (1)** after two hourly cycles, eyeball
 >   `grep reconcile ~/.local/share/station-manager/log/smd.log | tail -3` to
->   confirm the steady state. Then back to the standing items: ClubLog key
->   arrival (inbox note has the full sequence), dogfood validations, backlog.
+>   confirm the stamp-drift steady state (`in_sync:true`). **(2) SMC
+>   milestone 1 — multi-tenancy provisioning** (7Q8AC pair) on operator
+>   go-ahead. **(3)** standing items: ClubLog key arrival (inbox note),
+>   dogfood validations, backlog.
 
 > **Session 226 (2026-07-19, morning) — DEPLOY DAY + SIX BUILT BATCHES:
 > ADR 0051 went LIVE (first real confirmations observed), the smcloud
