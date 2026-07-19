@@ -74,32 +74,60 @@ func TestGzip_IdentityWhenNotAccepted(t *testing.T) {
 	}
 }
 
-// TestAcceptsGzip pins the Accept-Encoding negotiation (2026-07-19 review #3):
-// q-values, case-insensitivity, wildcard, and explicit refusal.
-func TestAcceptsGzip(t *testing.T) {
+// TestNegotiateEncoding pins the Accept-Encoding negotiation (2026-07-19
+// reviews #3, round 2 #3): q-values, case-insensitivity, wildcard, explicit
+// refusal, and the everything-refused → 406 tri-state.
+func TestNegotiateEncoding(t *testing.T) {
 	cases := []struct {
 		header string
-		want   bool
+		want   contentEncoding
 	}{
-		{"gzip", true},
-		{"GZIP", true},
-		{"x-gzip", true},
-		{"gzip, deflate, br", true},
-		{"gzip;q=0.8", true},
-		{"gzip;q=0", false},        // explicitly refused
-		{"gzip; q=0.000", false},   // refused, spaced param
-		{"*", true},                // wildcard accepts anything
-		{"*;q=0", false},           // wildcard refusal
-		{"deflate, *;q=0.1", true}, // gzip via wildcard
-		{"identity", false},
-		{"deflate, br", false},
-		{"", false},
-		{"gzip;q=0, *;q=1", false}, // explicit gzip entry beats the wildcard
+		{"gzip", encGzip},
+		{"GZIP", encGzip},
+		{"x-gzip", encGzip},
+		{"gzip, deflate, br", encGzip},
+		{"gzip;q=0.8", encGzip},
+		{"gzip;q=0", encIdentity},      // gzip refused; identity default-acceptable
+		{"gzip; q=0.000", encIdentity}, // refused, spaced param
+		{"*", encGzip},                 // wildcard accepts anything
+		{"deflate, *;q=0.1", encGzip},  // gzip via wildcard
+		{"identity", encIdentity},
+		{"deflate, br", encIdentity},
+		{"", encIdentity},                // absent header → identity
+		{"gzip;q=0, *;q=1", encIdentity}, // explicit gzip refusal beats the wildcard; identity via *
+		{"identity;q=0, gzip", encGzip},  // identity refused but gzip accepted
+		// Everything this server can produce refused → 406.
+		{"gzip;q=0, identity;q=0", encNotAcceptable},
+		{"identity;q=0", encNotAcceptable},                  // identity refused, gzip never accepted
+		{"*;q=0", encNotAcceptable},                         // wildcard refuses ALL codings incl. identity
+		{"gzip;q=0, identity;q=0, *;q=1", encNotAcceptable}, // explicit refusals beat the wildcard
 	}
 	for _, c := range cases {
-		if got := acceptsGzip(c.header); got != c.want {
-			t.Errorf("acceptsGzip(%q) = %v, want %v", c.header, got, c.want)
+		if got := negotiateEncoding(c.header); got != c.want {
+			t.Errorf("negotiateEncoding(%q) = %v, want %v", c.header, got, c.want)
 		}
+	}
+}
+
+// TestGzip_AllRefusedGets406: a request refusing every producible coding gets
+// 406 (with Vary), not a body in a refused encoding.
+func TestGzip_AllRefusedGets406(t *testing.T) {
+	ts := httptest.NewServer(versionServer().Handler())
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/version", nil)
+	req.Header.Set("Accept-Encoding", "gzip;q=0, identity;q=0")
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/version: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotAcceptable {
+		t.Fatalf("status = %d, want 406", resp.StatusCode)
+	}
+	if v := resp.Header.Get("Vary"); !strings.Contains(v, "Accept-Encoding") {
+		t.Fatalf("Vary = %q, want Accept-Encoding on the 406 path", v)
 	}
 }
 

@@ -97,6 +97,58 @@ func TestEnqueueUploads_NoBulkBackfill_RefusesNoHistoryRows(t *testing.T) {
 	require.Empty(t, rows, "no queue row may be written for a refused backfill row")
 }
 
+// TestEnqueueUploads_NoBulkBackfill_RejectsForce: force means "re-send even
+// though uploaded" — for a retry-only destination that is by definition the
+// prohibited catch-up batch (review round 2 #1), so the whole request is
+// refused with a typed error before any row is touched.
+func TestEnqueueUploads_NoBulkBackfill_RejectsForce(t *testing.T) {
+	s := newTestService(t, enabledClublog())
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	u1, id1 := seedStoredQso(t, s, lbID, "K1AAA", "1200")
+
+	_, err := s.EnqueueUploads(context.Background(), "clublog", []string{u1}, true)
+	se := IsSubmitError(err)
+	require.NotNil(t, se, "want a SubmitError, got %v", err)
+	require.Equal(t, "force_unsupported", se.Code)
+
+	rows, err := s.DB.FetchUploadsByQsoIDWithContext(context.Background(), id1)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+}
+
+// TestEnqueueUploads_NoBulkBackfill_UploadedRowIsNotProvenance: an UPLOADED
+// queue row is a delivered QSO, not retry provenance — it must classify as
+// no-history, closing the second half of the force bypass (review round 2 #1:
+// even without force, a stampless-but-uploaded row must never re-arm).
+func TestEnqueueUploads_NoBulkBackfill_UploadedRowIsNotProvenance(t *testing.T) {
+	s := newTestService(t, enabledClublog())
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+	u1, id1 := seedStoredQso(t, s, lbID, "K1AAA", "1200")
+
+	// Live enqueue driven to UPLOADED via the plain (stampless) success path,
+	// so the stamp skip-check cannot mask the history classification.
+	tx, cancel, err := s.DB.BeginTxContext(ctx)
+	require.NoError(t, err)
+	require.NoError(t, s.DB.InsertQsoUploadTx(ctx, tx, id1, action.Insert, "clublog", "clublog"))
+	require.NoError(t, tx.Commit())
+	cancel()
+	claimed, err := s.DB.ClaimPendingUploadsWithContext(ctx, "clublog", 10)
+	require.NoError(t, err)
+	require.Len(t, claimed, 1)
+	require.NoError(t, s.DB.MarkUploadSuccessWithContext(ctx, claimed[0].ID, "cl-1"))
+
+	res, err := s.EnqueueUploads(ctx, "clublog", []string{u1}, false)
+	require.NoError(t, err)
+	require.Zero(t, res.Enqueued)
+	require.Equal(t, []string{u1}, res.SkippedNoHistory)
+
+	rows, err := s.DB.FetchUploadsByQsoIDWithContext(ctx, id1)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "uploaded", rows[0].Status, "the delivered row must stay uploaded, not re-armed")
+}
+
 // TestEnqueueUploads_NoBulkBackfill_RetriesFailedLiveRow: a QSO WITH queue
 // history for the destination was a live upload — re-arming it is legitimate
 // realtime usage (2026-07-19 review #2: this endpoint is how a 403-era

@@ -23,7 +23,16 @@ import (
 func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Accept-Encoding")
-		if !acceptsGzip(r.Header.Get("Accept-Encoding")) {
+		switch negotiateEncoding(r.Header.Get("Accept-Encoding")) {
+		case encNotAcceptable:
+			// The client refused every coding this server can produce (e.g.
+			// "gzip;q=0, identity;q=0") — RFC 9110 §12.5.3 says don't send a
+			// refused coding; 406 is the honest answer (review round 2 #3).
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = w.Write([]byte(`{"code":"not_acceptable","message":"no acceptable content-coding; this server offers gzip and identity"}`))
+			return
+		case encIdentity:
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -34,15 +43,27 @@ func gzipMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// acceptsGzip reports whether an Accept-Encoding header value accepts gzip,
-// honouring q-values, case-insensitive codings, and the * wildcard (RFC 9110
-// §12.5.3). A bare substring test would serve gzip to "gzip;q=0" — an
-// encoding the client explicitly REFUSED — and miss "GZIP" and "*"
-// (2026-07-19 review #3). An explicit gzip/x-gzip entry wins over a
-// wildcard; q=0 on the winning entry means refused; no matching entry means
-// not accepted (identity).
-func acceptsGzip(header string) bool {
+// contentEncoding is the outcome of Accept-Encoding negotiation.
+type contentEncoding int
+
+const (
+	encIdentity contentEncoding = iota
+	encGzip
+	encNotAcceptable
+)
+
+// negotiateEncoding resolves an Accept-Encoding header value against the two
+// codings this server can produce (gzip, identity), honouring q-values,
+// case-insensitive codings, and the * wildcard (RFC 9110 §12.5.3). A bare
+// substring test would serve gzip to "gzip;q=0" — an encoding the client
+// explicitly REFUSED (2026-07-19 review #3). Rules: an explicit gzip/x-gzip
+// or identity entry wins over the wildcard; identity is acceptable BY DEFAULT
+// unless refused explicitly or via the wildcard; when every producible coding
+// is refused the result is encNotAcceptable → 406 (review round 2 #3). An
+// absent/empty header negotiates identity.
+func negotiateEncoding(header string) contentEncoding {
 	gzipQ, gzipSeen := 0.0, false
+	idQ, idSeen := 0.0, false
 	starQ, starSeen := 0.0, false
 	for _, part := range strings.Split(header, ",") {
 		fields := strings.Split(part, ";")
@@ -59,17 +80,27 @@ func acceptsGzip(header string) bool {
 		switch coding {
 		case "gzip", "x-gzip":
 			gzipSeen, gzipQ = true, q
+		case "identity":
+			idSeen, idQ = true, q
 		case "*":
 			starSeen, starQ = true, q
 		}
 	}
-	if gzipSeen {
-		return gzipQ > 0
+	gzipOK := (gzipSeen && gzipQ > 0) || (!gzipSeen && starSeen && starQ > 0)
+	identityOK := true // acceptable by default (RFC 9110 §12.5.3)
+	if idSeen {
+		identityOK = idQ > 0
+	} else if starSeen {
+		identityOK = starQ > 0
 	}
-	if starSeen {
-		return starQ > 0
+	switch {
+	case gzipOK:
+		return encGzip
+	case identityOK:
+		return encIdentity
+	default:
+		return encNotAcceptable
 	}
-	return false
 }
 
 // gzipResponseWriter routes body writes through the gzip stream while headers

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -74,9 +75,30 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 	// upload is legitimate realtime usage, though (2026-07-19 review #2 — this
 	// endpoint is how a 403-era Terminal row gets re-armed after the operator
 	// fixes credentials and restarts), so the distinction is per row via queue
-	// history below: history → retry allowed; no history → backfill, refused
-	// into SkippedNoHistory.
+	// history below: an UNFINISHED insert row → retry allowed; anything else →
+	// backfill, refused into SkippedNoHistory.
+	//
+	// KNOWN LIMITATION (review round 2 #2, accepted): queue rows are working
+	// state, not durable provenance — disabling the forwarder purges its
+	// non-uploaded rows at the next daemon startup (ADR 0039 stop+drop), after
+	// which a genuinely-failed live upload classifies as no-history here. The
+	// degraded path is the destination's blessed one anyway (ADIF export
+	// uploaded on its website), so no durable marker is kept; the in-app fix
+	// for every bulk case is the putlogs.php route (docs/backlog.md).
 	retryOnly := forwarding.NoBulkBackfill(fwd.Type)
+	if retryOnly && force {
+		// force means "re-send even though already uploaded" — for a
+		// retry-only destination that is by definition the prohibited
+		// catch-up batch (up to a full selection of already-delivered QSOs
+		// re-hitting the realtime endpoint), so it is refused outright
+		// rather than silently narrowed (review round 2 #1).
+		return EnqueueResult{}, &SubmitError{
+			Code: "force_unsupported",
+			Message: "this destination accepts retries of failed uploads only; force re-send " +
+				"is not available — for anything already uploaded, use an ADIF export on the " +
+				"destination's website",
+		}
+	}
 
 	// The destination's ADIF stamp prefix is the durable "already uploaded?"
 	// signal (consistent with the missing_from filter + the SPA colour). A type
@@ -121,22 +143,27 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 			}
 		}
 
-		// Retry-only destinations: allow the enqueue only when this QSO already
-		// has queue history for THIS forwarder (it was a live upload — failed,
-		// re-armed, or uploaded); no history means backfill, refused.
+		// Retry-only destinations: allow the enqueue only when this QSO has an
+		// UNFINISHED insert row for THIS forwarder — a live upload that never
+		// succeeded (failed/pending/in_progress). An uploaded row is NOT retry
+		// provenance (re-sending delivered QSOs is the prohibited catch-up
+		// shape even one at a time — review round 2 #1), and a delete row says
+		// nothing about insert history.
 		if retryOnly {
 			hist, herr := s.DB.FetchUploadsByQsoIDWithContext(ctx, qso.ID)
 			if herr != nil {
 				return EnqueueResult{}, errors.New(op).WithErr(herr).WithMsg("check upload queue history")
 			}
-			seen := false
+			retryable := false
 			for _, h := range hist {
-				if strings.EqualFold(h.ForwarderName, fwd.Name) {
-					seen = true
+				if strings.EqualFold(h.ForwarderName, fwd.Name) &&
+					h.Action == action.Insert.String() &&
+					h.Status != status.Uploaded.String() {
+					retryable = true
 					break
 				}
 			}
-			if !seen {
+			if !retryable {
 				res.SkippedNoHistory = append(res.SkippedNoHistory, uuid)
 				continue
 			}
