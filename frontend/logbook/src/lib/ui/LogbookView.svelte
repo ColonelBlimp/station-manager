@@ -112,15 +112,27 @@
                         >{logbookState.selectedCount.toLocaleString()} selected</span
                     >
                     {#if logbookState.hasDestination}
-                        <button
-                            type="button"
-                            class="cursor-pointer rounded-md border border-green-600 bg-green-50 px-2 py-1 font-medium text-green-800 hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={logbookState.uploading}
-                            onclick={() => logbookState.uploadSelected()}
-                            >{logbookState.uploading
-                                ? 'Uploading…'
-                                : `Upload ${logbookState.selectedCount} to ${logbookState.selectedDestination}`}</button
-                        >
+                        {#if logbookState.destinationBlocksBackfill}
+                            <!-- ClubLog forbids catch-up batches on realtime.php (gets SM's
+                                 API key blocked) — the daemon refuses too; this explains
+                                 instead of offering a dead-end button. -->
+                            <span
+                                class="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-amber-800"
+                                title="This destination does not accept catch-up uploads of already-logged QSOs. Export the selected QSOs as ADIF and upload the file on the destination's website instead."
+                                >Bulk upload not available for {logbookState.selectedDestination} — use
+                                an ADIF export</span
+                            >
+                        {:else}
+                            <button
+                                type="button"
+                                class="cursor-pointer rounded-md border border-green-600 bg-green-50 px-2 py-1 font-medium text-green-800 hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={logbookState.uploading}
+                                onclick={() => logbookState.uploadSelected()}
+                                >{logbookState.uploading
+                                    ? 'Uploading…'
+                                    : `Upload ${logbookState.selectedCount} to ${logbookState.selectedDestination}`}</button
+                            >
+                        {/if}
                     {/if}
                     <LogbookEmailControls />
                     <button

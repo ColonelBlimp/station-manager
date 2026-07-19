@@ -26,6 +26,12 @@ import type { ForwarderInfo } from '../utils/uploadStatus';
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
+// Forwarder TYPES whose upstream forbids manual bulk backfill (catch-up
+// batches on the realtime endpoint). Mirrors the daemon's
+// forwarding.RegisterNoBulkBackfill registrations — the daemon refuses these
+// server-side too, so this set is UX-only (see destinationBlocksBackfill).
+const NO_BULK_BACKFILL_TYPES = new Set(['clublog']);
+
 class LogbookState {
     /** All logbooks (the selector). */
     logbooks: Logbook[] = $state([]);
@@ -135,6 +141,19 @@ class LogbookState {
      *  toggle are relevant. */
     get hasDestination(): boolean {
         return this.selectedDestination !== '';
+    }
+
+    /** True when the picked destination's TYPE refuses manual bulk backfill —
+     *  ClubLog forbids catch-up batches of pre-existing QSOs on realtime.php
+     *  (the anti-pattern gets SM's application API key blocked; history goes
+     *  via an ADIF upload on clublog.org). Mirrors the daemon's
+     *  RegisterNoBulkBackfill registry, which refuses server-side regardless
+     *  (bulk_backfill_unsupported) — hiding the button here just avoids a
+     *  dead-end pick. The "Not on X" gap-browse stays available: it's exactly
+     *  how the operator assembles the ADIF export set. */
+    get destinationBlocksBackfill(): boolean {
+        const f = this.forwarders.find((x) => x.name === this.selectedDestination);
+        return f !== undefined && NO_BULK_BACKFILL_TYPES.has(f.type);
     }
 
     /** Rows to display: the loaded page, minus already-emailed rows when

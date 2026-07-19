@@ -61,6 +61,18 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 		}
 	}
 
+	// Some upstreams forbid catch-up batches on the realtime endpoint the
+	// forwarder uses (ClubLog's realtime.php rule — batch catch-up there gets
+	// the application API key blocked). Refuse up front rather than strand the
+	// promise; live QSOs enqueued at logging time are unaffected.
+	if forwarding.NoBulkBackfill(fwd.Type) {
+		return EnqueueResult{}, &SubmitError{
+			Code: "bulk_backfill_unsupported",
+			Message: "this destination does not accept catch-up uploads of already-logged QSOs; " +
+				"export the QSOs as ADIF and upload them on the destination's website instead",
+		}
+	}
+
 	// The destination's ADIF stamp prefix is the durable "already uploaded?"
 	// signal (consistent with the missing_from filter + the SPA colour). A type
 	// that stamps nothing (e.g. a custom webhook) has no such signal — there's

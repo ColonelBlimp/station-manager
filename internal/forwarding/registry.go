@@ -26,6 +26,7 @@ var (
 	defaultEndpointsMap = map[string]map[string]string{}
 	adifPrefixMap       = map[string]string{}
 	rowMirrorTypes      = map[string]struct{}{}
+	noBulkBackfillTypes = map[string]struct{}{}
 )
 
 // adifPrefixPattern enforces a safe shape for the ADIF upload-status field prefix
@@ -307,6 +308,35 @@ func IsRowMirror(typeName string) bool {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	_, ok := rowMirrorTypes[typeName]
+	return ok
+}
+
+// RegisterNoBulkBackfill marks forwarder typeName as refusing manual bulk
+// backfill: its upstream forbids catch-up batches of pre-existing QSOs on the
+// realtime endpoint the forwarder uses (ClubLog's realtime.php rule — batch
+// catch-up there gets the application's API key BLOCKED; bulk belongs to
+// putlogs.php, which SM does not speak yet — see docs/backlog.md).
+// qsoservice.EnqueueUploads reads this back via NoBulkBackfill and refuses the
+// enqueue up front; QSOs logged live (enqueued at logging time) are unaffected.
+// From the forwarder package's init(). Panics on empty typeName or duplicate
+// registration — binary bugs.
+func RegisterNoBulkBackfill(typeName string) {
+	if typeName == "" {
+		panic("forwarding.RegisterNoBulkBackfill: empty type name")
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, exists := noBulkBackfillTypes[typeName]; exists {
+		panic("forwarding.RegisterNoBulkBackfill: type already registered: " + typeName)
+	}
+	noBulkBackfillTypes[typeName] = struct{}{}
+}
+
+// NoBulkBackfill reports whether typeName refuses manual bulk backfill.
+func NoBulkBackfill(typeName string) bool {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	_, ok := noBulkBackfillTypes[typeName]
 	return ok
 }
 

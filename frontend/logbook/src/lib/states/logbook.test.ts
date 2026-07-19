@@ -68,3 +68,35 @@ describe('logbook selection → email UUIDs', () => {
         expect(logbookState.rows[1].sm_fwrd_by_email_status).toBeUndefined();
     });
 });
+
+// ClubLog forbids catch-up batches on realtime.php (the 2026-07-19 API-key
+// grant condition), so the backfill Upload action must be withheld for
+// clublog-type destinations — the daemon refuses server-side too
+// (bulk_backfill_unsupported); this getter just prevents the dead-end pick.
+describe('destinationBlocksBackfill', () => {
+    afterEach(() => {
+        logbookState.forwarders = [];
+        void logbookState.selectDestination('');
+    });
+
+    it('true for a clublog-type destination, false for others', () => {
+        logbookState.forwarders = [
+            { name: 'clublog', type: 'clublog', enabled: true },
+            { name: 'qrz', type: 'qrz', enabled: true },
+        ];
+        void logbookState.selectDestination('clublog');
+        expect(logbookState.destinationBlocksBackfill).toBe(true);
+        void logbookState.selectDestination('qrz');
+        expect(logbookState.destinationBlocksBackfill).toBe(false);
+    });
+
+    it('keys on the TYPE, not the name', () => {
+        logbookState.forwarders = [{ name: 'my-club-uploads', type: 'clublog', enabled: true }];
+        void logbookState.selectDestination('my-club-uploads');
+        expect(logbookState.destinationBlocksBackfill).toBe(true);
+    });
+
+    it('false with no destination picked', () => {
+        expect(logbookState.destinationBlocksBackfill).toBe(false);
+    });
+});

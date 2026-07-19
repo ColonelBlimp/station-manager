@@ -145,6 +145,13 @@ func init() {
 		action.Insert.String(): DefaultRealtimeEndpoint,
 		action.Delete.String(): DefaultDeleteEndpoint,
 	})
+	// ClubLog forbids catch-up batches of pre-existing QSOs on realtime.php
+	// (helpdesk, 2026-07-19: that anti-pattern gets the application API key
+	// BLOCKED; bulk belongs to putlogs.php, which SM does not speak yet).
+	// Refusing manual backfill here keeps the promise SM made when the key
+	// was granted; live QSOs (enqueued at logging time) are unaffected.
+	// Historical catch-up = an ADIF export uploaded on clublog.org.
+	forwarding.RegisterNoBulkBackfill(Type)
 	// ClubLog real-time supports insert + delete only — it cannot edit a
 	// logged QSO's fields (see Submit). Registering the supported set means
 	// an omitted action_filter defaults to insert/delete (not all three),

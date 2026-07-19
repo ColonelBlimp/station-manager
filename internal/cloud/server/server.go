@@ -55,7 +55,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/logbooks/{id}/reconcile", s.auth(s.handleReconcile))
 	mux.HandleFunc("GET /v1/logbooks/{id}/manifest", s.auth(s.handleManifest))
 	mux.HandleFunc("GET /v1/export", s.auth(s.handleExport))
-	return mux
+	// Outermost: response compression for gzip-capable clients (the manifest
+	// and export payloads are the bandwidth-heavy ones — see gzip.go).
+	return gzipMiddleware(mux)
 }
 
 // ---- transport helpers ------------------------------------------------------

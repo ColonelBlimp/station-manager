@@ -18,6 +18,10 @@ import (
 // stamp" and never skip.
 func init() {
 	forwarding.RegisterAdifPrefix("qrz", "QRZCOM")
+	// Mirror the real clublog package's registration (not imported here):
+	// ClubLog forbids catch-up batches on realtime.php, so EnqueueUploads must
+	// refuse it as a manual-backfill destination.
+	forwarding.RegisterNoBulkBackfill("clublog")
 }
 
 // enabledQRZ is a minimal enabled forwarder config for the backfill tests.
@@ -59,6 +63,30 @@ func hasInsertRow(t *testing.T, s *Service, qsoID int64, forwarderName string) b
 		}
 	}
 	return false
+}
+
+// TestEnqueueUploads_RefusesNoBulkBackfillType: a destination whose type
+// registered NoBulkBackfill (ClubLog — realtime.php must never carry catch-up
+// batches; the 2026-07-19 API-key grant condition) is refused up front with a
+// typed error, and nothing reaches the queue.
+func TestEnqueueUploads_RefusesNoBulkBackfillType(t *testing.T) {
+	s := newTestService(t, types.ForwarderConfig{
+		Name:         "clublog",
+		Type:         "clublog",
+		Enabled:      true,
+		ActionFilter: []string{"insert", "delete"},
+	})
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	u1, id1 := seedStoredQso(t, s, lbID, "K1AAA", "1200")
+
+	_, err := s.EnqueueUploads(context.Background(), "clublog", []string{u1}, false)
+	se := IsSubmitError(err)
+	require.NotNil(t, se, "want a SubmitError, got %v", err)
+	require.Equal(t, "bulk_backfill_unsupported", se.Code)
+
+	rows, err := s.DB.FetchUploadsByQsoIDWithContext(context.Background(), id1)
+	require.NoError(t, err)
+	require.Empty(t, rows, "no queue row may be written for a refused destination")
 }
 
 func TestEnqueueUploads_EnqueuesSelectedGaps(t *testing.T) {
