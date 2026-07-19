@@ -101,12 +101,42 @@ precisely so we don't re-derive state or redo finished work.
 >   descriptive term, different market; keep the name. Closest real
 >   neighbour is 4O3A's ham "Station Manager" console (discoverability, not
 >   legal).
-> - **NEXT: (1)** after two hourly cycles, eyeball
->   `grep reconcile ~/.local/share/station-manager/log/smd.log | tail -3` to
->   confirm the stamp-drift steady state (`in_sync:true`). **(2) SMC
->   milestone 1 — multi-tenancy provisioning** (7Q8AC pair) on operator
->   go-ahead. **(3)** standing items: ClubLog key arrival (inbox note),
->   dogfood validations, backlog.
+> - **Review round 2 on the batch (3 findings, ALL real — 8th consecutive)
+>   FIXED:** runbook `restart` not `enable --now` (apt auto-starts stock
+>   Caddy; a running unit never swaps binaries on enable --now) ·
+>   payload-digest-in-hash is NOT equivalent to the writer-id tie-breaker
+>   (summary would flag mismatch forever while the revision+modified_at
+>   manifest diff finds nothing → non-convergent; ADR reworded — writer id
+>   is the ordering fix) · `connCap` ×4 overflow → parse ceiling 4096 +
+>   boundary/overflow tests.
+> - **Operator feedback → new standing memory
+>   (`verify-guarantee-claims-before-presenting`):** the review rounds have
+>   been catching unverified guarantee claims in my own work; from now on
+>   every safety/behaviour claim in a batch is adversarially verified + the
+>   diff self-reviewed BEFORE presenting — external review is the second
+>   net. The operator is trialling model choice on whether the find-rate
+>   drops; the milestone-1 build is the test case.
+> - **ClubLog API key ARRIVED (operator, 2026-07-19 evening)** — will be
+>   enabled for the next on-air test. Full enable checklist + grant-condition
+>   facts in `docs/dogfood-inbox.md` (the 2026-07-18/19 ClubLog note): config
+>   SPA creds + enable + restart; first `forwarding: success` = proven; 403 =
+>   breaker → fix creds + restart; historical catch-up = ONE manual ADIF on
+>   clublog.org; distribution decision (embed vs paste-in) still open — check
+>   the grant email for privacy conditions first.
+> - **SMC deploy decision: LET IT RIDE** — the rate limiter is dormant
+>   defense on the LAN box (no protocol change, skew-safe); it deploys as a
+>   passenger on the milestone-1 `task rpm:smcloud` rebuild.
+> - **NEXT (operator-set): (1) build SMC milestone 1 — multi-tenancy
+>   provisioning — NEXT SESSION:** multi-pair boot provisioning in
+>   `cmd/smcloud` (today exactly one SMCLOUD_CALLSIGN/SMCLOUD_TOKEN pair;
+>   the server's token→tenant map already takes N) to provision 7Q8AC as the
+>   second hand-provisioned tenant, per ADR 0052; then ONE F44 rebuild
+>   carries multi-tenancy + the limiter. Build under the new
+>   verify-guarantee-claims discipline. **(2)** ClubLog enable at the next
+>   on-air test (checklist above; verify afterwards: log grep + queue
+>   check). **(3)** stamp-drift steady-state eyeball
+>   (`grep reconcile …/smd.log | tail -3` → `in_sync:true`). **(4)**
+>   standing: dogfood validations, backlog.
 
 > **Session 226 (2026-07-19, morning) — DEPLOY DAY + SIX BUILT BATCHES:
 > ADR 0051 went LIVE (first real confirmations observed), the smcloud
