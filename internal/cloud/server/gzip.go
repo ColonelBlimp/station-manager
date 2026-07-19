@@ -31,15 +31,16 @@ func gzipMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotAcceptable)
 			_, _ = w.Write([]byte(`{"code":"not_acceptable","message":"no acceptable content-coding; this server offers gzip and identity"}`))
-			return
-		case encIdentity:
+		case encGzip:
+			w.Header().Set("Content-Encoding", "gzip")
+			gz := gzip.NewWriter(w)
+			defer func() { _ = gz.Close() }()
+			next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, gz: gz}, r)
+		default:
+			// encIdentity — and the safe fallback for any future negotiation
+			// value: never emit an encoding that wasn't negotiated.
 			next.ServeHTTP(w, r)
-			return
 		}
-		w.Header().Set("Content-Encoding", "gzip")
-		gz := gzip.NewWriter(w)
-		defer func() { _ = gz.Close() }()
-		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, gz: gz}, r)
 	})
 }
 

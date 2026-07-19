@@ -32,12 +32,13 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-19)
 
-> **Session 226 (2026-07-19, morning) — DEPLOY DAY + FIVE BUILT BATCHES:
+> **Session 226 (2026-07-19, morning) — DEPLOY DAY + SIX BUILT BATCHES:
 > ADR 0051 went LIVE (first real confirmations observed), the smcloud
 > stamp-drift fix + gzip landed, a FOURTH TX-safety review round (5 findings)
 > was verified + built, the ClubLog realtime.php promise got ENFORCED in
-> code, and a review round on the gzip/ClubLog batch (3 findings, all real)
-> was fixed same morning. Committed per-batch by the operator.**
+> code, and TWO review rounds on the gzip/ClubLog batch (3+3 findings, 6/6
+> real — the 5th and 6th consecutive clean rounds) were absorbed same
+> morning. Committed per-batch by the operator.**
 > - **The 04:22 deploy took everything through S225 live.** First live ADR 0051
 >   evidence in the log within minutes: `bridge: tx state confirmed idle` on
 >   real unkeys during an FT8 pile-up.
@@ -127,13 +128,34 @@ precisely so we don't re-derive state or redo finished work.
 >   q-values/case/x-gzip/wildcard, explicit-beats-wildcard; `gzip;q=0` no
 >   longer served gzip) + `Vary` on identity responses too. 14-case parser
 >   table + 4 new e2e/integration tests.
+> - **Gzip/ClubLog review round 2 (3 findings, ALL real) — built 1+3,
+>   documented 2:** (P1) **force bypassed the retry gate** — `force=true`
+>   skipped the stamp check, after which an UPLOADED clublog row counted as
+>   history → a direct API caller could force-re-arm up to 5,000 delivered
+>   QSOs into realtime.php. Fixed both halves: force is REFUSED outright for
+>   retry-only destinations (typed `force_unsupported`, fail-loud) AND history
+>   narrowed to unfinished insert rows (`action=insert && status != uploaded`
+>   — an uploaded row is a delivered QSO, not retry provenance; closes the
+>   stampless-uploaded no-force path too) · (P2) **all-refused negotiation →
+>   406** — `acceptsGzip` became tri-state `negotiateEncoding`
+>   (gzip/identity/not-acceptable; identity keeps its RFC default-acceptable
+>   status unless refused explicitly or via `*;q=0`); refusing everything now
+>   gets 406 + Vary (behaviour change: bare `*;q=0` now 406s, it refuses
+>   identity too). 18-case table + e2e 406 test · (P1 #2, **documented not
+>   built**): queue rows aren't durable retry provenance (the ADR 0039
+>   startup purge erases a disabled forwarder's failed rows → retry
+>   eligibility lost). Accepted: the degraded path IS ClubLog's blessed route
+>   (manual ADIF), a KNOWN LIMITATION block sits at the gate in `enqueue.go`,
+>   and "durable provenance" is folded into the putlogs.php backlog item —
+>   which dissolves the problem (bulk legal in-app = the history distinction
+>   stops mattering for recovery).
 > - **NEXT: (1) `task deploy:local:dev`** — the stamp-drift fix, round-4
->   TX-safety batch, and ClubLog retry-only guard are NOT live (the 04:22
->   deploy predates them); after deploy, watch the hourly reconcile go quiet
->   (`in_sync:true` even during operating hours). **(2) F44 smcloud RPM
->   rebuild** (`task rpm:smcloud` + install on the F44 box) to activate gzip —
->   independent of (1); make sure it includes the review fixes (the Unwrap one
->   protects restore).
+>   TX-safety batch, and ClubLog retry-only guard (incl. the force fix) are
+>   NOT live (the 04:22 deploy predates them); after deploy, watch the hourly
+>   reconcile go quiet (`in_sync:true` even during operating hours).
+>   **(2) F44 smcloud RPM rebuild** (`task rpm:smcloud` + install on the F44
+>   box) to activate gzip — independent of (1); cut it from the LATEST commit
+>   (Unwrap protects restore; round 2 adds the 406 negotiation).
 
 > **Session 225 (2026-07-18, evening) — THE TX-SAFETY MEGA-ARC: the stuck-TX
 > incident's root fix, end to end — ADR 0051 designed, built, and hardened
