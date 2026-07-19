@@ -78,7 +78,7 @@
                     <thead class="bg-surface sticky top-0 z-10">
                         <tr class="text-xs text-muted text-left font-medium">
                             <th class="w-20">Time</th>
-                            <th class="w-28 overflow-x-hidden text-nowrap text-ellipsis"
+                            <th class="w-27 overflow-x-hidden text-nowrap text-ellipsis"
                                 >Callsign</th
                             >
                             <th class="w-12">Band</th>

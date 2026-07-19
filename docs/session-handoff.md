@@ -32,10 +32,11 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-19)
 
-> **Session 226 (2026-07-19, early morning) — DEPLOY DAY + TWO BUILT BATCHES:
+> **Session 226 (2026-07-19, early morning) — DEPLOY DAY + FOUR BUILT BATCHES:
 > ADR 0051 went LIVE (first real confirmations observed), the smcloud
-> stamp-drift fix landed, and a FOURTH TX-safety review round (5 findings)
-> was verified + built the same morning. Committed per-batch by the operator.**
+> stamp-drift fix + gzip landed, a FOURTH TX-safety review round (5 findings)
+> was verified + built, and the ClubLog realtime.php promise got ENFORCED in
+> code — all the same morning. Committed per-batch by the operator.**
 > - **The 04:22 deploy took everything through S225 live.** First live ADR 0051
 >   evidence in the log within minutes: `bridge: tx state confirmed idle` on
 >   real unkeys during an FT8 pile-up.
@@ -84,9 +85,37 @@ precisely so we don't re-derive state or redo finished work.
 >   fault-teardown alarm, per-VFO unknown, def-floor); `answerTxStatusQueries`
 >   fixture helper keeps healthy-rig tests fast (suite 37 s → 4 s). Bridge 4×
 >   `-race` stable; full tree `-race` green.
-> - **NEXT: `task deploy:local:dev`** — the stamp-drift fix + round-4 batch are
->   NOT live (the 04:22 deploy predates them). After deploy, watch the hourly
->   reconcile log go quiet (`in_sync:true` even during operating hours).
+> - **ClubLog helpdesk exchange (API key still pending):** they conditioned the
+>   grant on realtime.php NEVER carrying catch-up batches of pre-existing QSOs
+>   (anti-pattern → key blocked; bulk = putlogs.php only). Drafted the
+>   plain-text confirmation reply (behaviour claims verified against
+>   clublog.go first: realtime insert-only-at-logging-time, single-QSO retries,
+>   403 breaker = fix credentials + restart, no runtime reset — 403-era rows
+>   go Terminal and need re-send). Revised the inbox note's backfill plan:
+>   history (3 failed rows + gap + 5.6k) = ONE manual ADIF upload on
+>   clublog.org; a putlogs.php bulk route logged as the longer-term backlog
+>   item.
+> - **ClubLog backfill ENFORCED off (operator-directed, so the promise can't
+>   be broken by a misclick):** `forwarding.RegisterNoBulkBackfill` (clublog
+>   registers in init, same idiom as RegisterRowMirror) →
+>   `qsoservice.EnqueueUploads` refuses with typed `bulk_backfill_unsupported`
+>   BEFORE any queue row is written; the logbook SPA withholds the Upload
+>   button for clublog-type destinations (amber "use an ADIF export" note;
+>   the "Not on clublog" gap-browse stays — it assembles the export set).
+>   Deletes + live logging-time enqueues untouched. Daemon guard test + 3 SPA
+>   state tests (block keys on TYPE, not name).
+> - **smcloud gzip BUILT (operator-directed, the stamp-drift bandwidth half):**
+>   `gzipMiddleware` wraps the whole handler chain
+>   (`internal/cloud/server/gzip.go`) — negotiated Content-Encoding + Vary,
+>   streaming writer; ~10× on the repetitive manifest/export JSON. 3 tests
+>   without Postgres, incl. a stock-Go-client transparent round-trip proving
+>   ZERO daemon-side change + no lockstep (skew-safe both directions).
+> - **NEXT: (1) `task deploy:local:dev`** — the stamp-drift fix, round-4
+>   TX-safety batch, and ClubLog backfill block are NOT live (the 04:22 deploy
+>   predates them); after deploy, watch the hourly reconcile go quiet
+>   (`in_sync:true` even during operating hours). **(2) F44 smcloud RPM
+>   rebuild** (`task rpm:smcloud` + install on the F44 box) to activate gzip —
+>   independent of (1), no ordering constraint.
 
 > **Session 225 (2026-07-18, evening) — THE TX-SAFETY MEGA-ARC: the stuck-TX
 > incident's root fix, end to end — ADR 0051 designed, built, and hardened
