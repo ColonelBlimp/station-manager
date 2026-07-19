@@ -57,7 +57,12 @@ Roadmap *direction* beyond that (sequenced, each step useful alone; not
 commitments): bidirectional reconcile (pull `CloudOnly` rows through the
 restore write path — completes the POTA loop) → per-device tokens (lost
 phone = one revocation) → delta pull / Merkle-lite manifest → phone-shaped
-query API. The qrz.com-core direction (QSL confirmations as the first
+query API. **Precondition on the sync legs (2026-07-19 review):** before
+bidirectional reconcile ships, the version tuple needs a tie-breaker (a
+device/writer id in the ADR 0050 tuple, or a payload digest in the reconcile
+hash) — same-second same-revision edits from two clients are currently
+undetectable (see Consequences), tolerable for a backup with one writer but
+not for a protocol that *pulls*. The qrz.com-core direction (QSL confirmations as the first
 server-owned *derived* table) is **explored, not decided** — captured here so
 it isn't re-derived, deliberately unscheduled.
 
@@ -107,9 +112,19 @@ way.
   already work.
 - A laptop that should upload park QSOs to QRZ/ClubLog must carry its own
   forwarder credentials — accepted cost of forwarding-by-origin.
-- The accepted residual risk: a genuine single-writer violation (same row
-  edited on two clients before they sync) silently drops the losing edit.
-  Reconcile surfaces it as drift; nothing corrupts.
+- The accepted residual risk (sharpened by the 2026-07-19 review): a genuine
+  single-writer violation (same row edited on two clients from the same base
+  revision) drops the losing edit, and detection depends on the tie's shape.
+  When the two edits' second-precision `modified_at` differ, the earlier
+  client shows *permanent one-sided drift* (its push is forever rejected as
+  stale) — noisy, but surfaced. When they land in the **same second**, the
+  version tuples are identical: the store's `>=` tie guard accepts the second
+  payload and the reconcile hash (`uuid|unixmicro|revision` — payload is not
+  hashed) matches on both sides, so the losing client reads `in_sync:true`.
+  That conflict is **undetectable** by the current protocol. Nothing
+  corrupts, but the divergence is silent — acceptable only while the
+  operator-is-the-mutex discipline holds, which is why the tie-breaker below
+  is a precondition, not an option.
 - QSL confirmations, if ever built, live in their own derived, rebuildable
   table — a tenant's QSO payload is never server-mutated.
 - Milestone 1 means the instance holds **someone else's** logbook: the

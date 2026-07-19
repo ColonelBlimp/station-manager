@@ -12,7 +12,8 @@
 //	-callsign / SMCLOUD_CALLSIGN   the P1 tenant callsign (required)
 //	-max-concurrent /
 //	SMCLOUD_MAX_CONCURRENT         in-flight request cap (default 16, ~3× the
-//	                               DB pool; over-limit → 503 + Retry-After)
+//	                               DB pool; over-limit → 503 + Retry-After;
+//	                               the accept-time connection cap is 4× this)
 //	SMCLOUD_DSN                    Postgres DSN (env ONLY — the DSN carries the
 //	                               DB password, and argv is world-readable via
 //	                               ps; required)
@@ -27,10 +28,13 @@
 //
 // Request limiting is two layers with distinct jobs (decided 2026-07-18):
 // per-IP rate limiting lives at the reverse proxy, which sees real client
-// IPs (deploy/smcloud/Caddyfile.example); THIS binary carries a global
-// in-process concurrency limit (internal/cloud/server/limit.go) so goroutine
-// and memory growth stay bounded even when it's run without the proxy — the
-// DB pool protects Postgres, the limiter protects the process. The remaining
+// IPs (deploy/smcloud/Caddyfile.example); THIS binary carries a two-level
+// in-process bound so it stays safe even run without the proxy — an
+// accept-time connection cap (netutil.LimitListener, 4× the request cap;
+// net/http spawns a goroutine per accepted connection BEFORE any handler
+// runs, so a handler-level limiter alone cannot bound a connection flood)
+// plus the in-handler request semaphore (internal/cloud/server/limit.go).
+// The DB pool protects Postgres; these protect the process. The remaining
 // pre-Phase-2 gate is the ADR 0040 security assessment (docs/backlog.md,
 // "smcloud hardening — pre-Phase-2 gate").
 package main
@@ -42,6 +46,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -51,6 +56,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"golang.org/x/net/netutil"
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/server"
 	"github.com/ColonelBlimp/station-manager/internal/cloud/store"
@@ -121,6 +127,15 @@ func parseMaxConcurrent(s string) (int, error) {
 	}
 	return n, nil
 }
+
+// connCap sizes the accept-time connection cap from the request cap. The
+// request semaphore (server/limit.go) runs only after net/http has accepted a
+// connection, spawned its goroutine, and parsed headers — so a connection or
+// slow-header flood would grow goroutines outside it (2026-07-19 review #1).
+// 4× leaves headroom for idle keep-alive connections from legitimate clients
+// (each daemon holds a couple between worker ticks) while bounding the
+// goroutine-per-connection growth a flood can cause.
+func connCap(maxConcurrent int) int { return maxConcurrent * 4 }
 
 func run() error {
 	var listen, callsign, maxConcurrentStr string
@@ -197,15 +212,24 @@ func run() error {
 		IdleTimeout:       2 * time.Minute,
 	}
 
+	// Accept-time connection cap: LimitListener blocks Accept past the cap,
+	// so a flood queues in the kernel backlog instead of becoming goroutines.
+	// Together with the in-handler request semaphore this is the two-level
+	// inbound bound — connections at accept, request work in limit.go.
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+
 	// Graceful shutdown on SIGINT/SIGTERM (systemd stop).
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	errCh := make(chan error, 1)
-	go func() { errCh <- httpSrv.ListenAndServe() }()
+	go func() { errCh <- httpSrv.Serve(netutil.LimitListener(ln, connCap(maxConcurrent))) }()
 
 	select {
 	case err := <-errCh:
-		return fmt.Errorf("listen: %w", err)
+		return fmt.Errorf("serve: %w", err)
 	case <-ctx.Done():
 	}
 	log.Info("smcloud stopping")

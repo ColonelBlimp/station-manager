@@ -19,10 +19,16 @@ const retryAfterSeconds = "2"
 // process — without this, excess requests (including unauthenticated
 // /v1/health hits) pile up as handler goroutines waiting for pool
 // connections. Over-limit requests are rejected immediately with 503 +
-// Retry-After rather than queued, so goroutine and memory growth stay flat no
-// matter the offered load. Per-IP fairness deliberately lives at the reverse
-// proxy (which sees real client IPs — this binary would only ever see the
-// proxy's); this cap keeps the binary safe even when run without one.
+// Retry-After rather than queued.
+//
+// Scope (2026-07-19 review #1): this bounds HANDLER concurrency only — it
+// runs after net/http has already accepted the connection, spawned its
+// goroutine, and parsed headers, so it cannot bound a connection or
+// slow-header flood by itself. cmd/smcloud pairs it with an accept-time
+// connection cap (netutil.LimitListener, 4× this cap); the two together are
+// the process bound — connections at accept, request work here. Per-IP
+// fairness deliberately lives at the reverse proxy (which sees real client
+// IPs — this binary would only ever see the proxy's).
 func limitMiddleware(next http.Handler, max int) http.Handler {
 	if max <= 0 {
 		max = defaultMaxConcurrent

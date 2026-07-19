@@ -1,8 +1,12 @@
 package main
 
 import (
+	"net"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/net/netutil"
 )
 
 func TestValidateToken(t *testing.T) {
@@ -64,6 +68,72 @@ func TestParseMaxConcurrent(t *testing.T) {
 				t.Fatalf("parseMaxConcurrent(%q) err = %v, want error containing %q", tc.in, err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestConnCap(t *testing.T) {
+	if got := connCap(16); got != 64 {
+		t.Fatalf("connCap(16) = %d, want 64", got)
+	}
+	if got := connCap(1); got != 4 {
+		t.Fatalf("connCap(1) = %d, want 4", got)
+	}
+}
+
+// TestLimitListener_CapsAccepts pins the accept-time bound the safety claim
+// relies on (review 2026-07-19 #1): past the cap, connections queue in the
+// kernel backlog instead of being accepted (= no goroutine per connection),
+// and closing an accepted connection frees its slot.
+func TestLimitListener_CapsAccepts(t *testing.T) {
+	base, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ln := netutil.LimitListener(base, 1)
+	defer func() { _ = ln.Close() }()
+
+	accepted := make(chan net.Conn, 2)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+		}
+	}()
+
+	dial := func() net.Conn {
+		t.Helper()
+		c, err := net.Dial("tcp", base.Addr().String())
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		return c
+	}
+	c1 := dial()
+	defer func() { _ = c1.Close() }()
+	var first net.Conn
+	select {
+	case first = <-accepted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first connection never accepted")
+	}
+
+	c2 := dial() // TCP-connects via the kernel backlog...
+	defer func() { _ = c2.Close() }()
+	select {
+	case <-accepted:
+		t.Fatal("second connection accepted past the cap")
+	case <-time.After(200 * time.Millisecond): // ...but must NOT be accepted
+	}
+
+	_ = first.Close() // frees the slot
+	select {
+	case second := <-accepted:
+		_ = second.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("second connection not accepted after slot freed")
 	}
 }
 

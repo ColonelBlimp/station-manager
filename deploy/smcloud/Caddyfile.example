@@ -9,12 +9,15 @@ cloud.station-manager.org {
 	# behind a proxy; smcloud's own in-process concurrency cap (503 +
 	# Retry-After, -max-concurrent) is the process-safety backstop underneath.
 	#
-	# NOTE: the stock Caddy package has NO rate-limit handler. Build one in:
-	#   xcaddy build --with github.com/mholt/caddy-ratelimit
-	# (or tick "http.handlers.rate_limit" on caddyserver.com/download), then
-	# uncomment. 60 events/min per IP is generous for a daemon's legitimate
-	# traffic — a 10 s worker tick + hourly reconcile + the odd export is
-	# well under 10/min — while capping an abusive client at noise level.
+	# NOTE: the stock Caddy package has NO rate-limit handler, and `xcaddy
+	# build --with github.com/mholt/caddy-ratelimit` only produces ./caddy in
+	# the current directory — it must be installed over the packaged binary
+	# and verified (`caddy list-modules | grep rate_limit`) BEFORE enabling
+	# the listener. Runbook §4 (docs/smcloud-deploy.md) has the full order;
+	# then uncomment. 60 events/min per IP is generous for a daemon's
+	# legitimate traffic — a 10 s worker tick + hourly reconcile + the odd
+	# export is well under 10/min — while capping an abusive client at noise
+	# level.
 	#
 	# rate_limit {
 	#	zone smcloud_per_ip {

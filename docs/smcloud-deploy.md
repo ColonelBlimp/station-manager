@@ -287,26 +287,53 @@ Non-RPM box (from `deploy/smcloud/` in the checkout): copy
 `smcloud.service` → `/etc/systemd/system/`, `systemctl daemon-reload`, then
 the same edit + enable.
 
-## 4. TLS (VPS)
+## 4. TLS + per-IP rate limiting (VPS)
+
+**Rate limiting is two layers (decided 2026-07-18):** smcloud's own
+in-process bound ships in the binary (accept-time connection cap + request
+cap; over-limit → 503 + Retry-After; tune with `SMCLOUD_MAX_CONCURRENT`) —
+nothing to install. The **per-IP** layer runs in Caddy — and the stock distro
+package does NOT include a rate-limit handler, and `xcaddy build` only drops
+a `caddy` binary in the current directory (it does not touch the
+systemd-managed one). So the order matters: install the custom binary and
+verify the module BEFORE enabling the public listener.
 
 ```bash
+# 1. Distro package first — it provides the systemd unit, user, and paths:
 sudo dnf install caddy                                     # or apt install caddy
-# append deploy/smcloud/Caddyfile.example (with your hostname) to /etc/caddy/Caddyfile
+
+# 2. Build a Caddy with the rate-limit plugin (any machine with Go — build on
+#    the dev box and scp if the VPS has no toolchain; same-arch binary), or
+#    download one from caddyserver.com/download with http.handlers.rate_limit
+#    ticked:
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+xcaddy build --with github.com/mholt/caddy-ratelimit       # → ./caddy in CWD
+
+# 3. Install it over the packaged binary, then PROVE the module is there:
+sudo install -m 0755 ./caddy /usr/bin/caddy
+caddy list-modules | grep rate_limit                       # → http.handlers.rate_limit
+
+# 4. Config: append deploy/smcloud/Caddyfile.example (your hostname) to
+#    /etc/caddy/Caddyfile, UNCOMMENT its rate_limit block (the handler now
+#    exists), and validate:
+caddy validate --config /etc/caddy/Caddyfile
+
+# 5. Only now expose the listener:
 sudo systemctl enable --now caddy
 curl -s https://cloud.station-manager.org/v1/health        # end-to-end through TLS
 ```
 
-**Rate limiting (internet-facing requirement, decided 2026-07-18) is two
-layers:** smcloud's own in-process concurrency cap ships in the binary
-(default 16 in-flight; over-limit → 503 + Retry-After; tune with
-`SMCLOUD_MAX_CONCURRENT`) — nothing to do here. The **per-IP** layer lives in
-Caddy, and the stock distro package does NOT include a rate-limit handler:
-build one in with `xcaddy build --with github.com/mholt/caddy-ratelimit` (or
-download a build with `http.handlers.rate_limit` ticked from
-caddyserver.com/download), then uncomment the `rate_limit` block in
-`Caddyfile.example`. Skipping the plugin leaves the in-process cap as the
-only limiter — safe for the process, but abuse then eats the shared cap
-instead of being turned away per-IP.
+**A package upgrade clobbers the custom binary** (`dnf upgrade caddy`
+reinstalls the stock one, and Caddy then refuses to start on the unknown
+`rate_limit` directive — fail-loud, not silently unlimited). After any caddy
+package upgrade, repeat step 3. `dnf versionlock caddy` avoids the surprise
+if upgrades are automated.
+
+Deliberately skipping the plugin (e.g. LAN staging behind a firewall): leave
+the `rate_limit` block commented — config validates against stock Caddy and
+the in-process caps are then the only limiter. Safe for the process, but on
+the open internet abuse then eats the shared cap instead of being turned
+away per-IP, so the plugin is the Phase-2 posture.
 
 ## 5. Wire the daemon (shack machine)
 
