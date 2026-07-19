@@ -17,7 +17,7 @@ import (
 // store or DB, so the gzip negotiation tests run without Postgres.
 func versionServer() *Server {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	return New(nil, nil, log, map[string]int64{"tok": 1}, "test-version")
+	return New(nil, nil, log, map[string]int64{"tok": 1}, "test-version", 0)
 }
 
 func TestGzip_CompressesWhenAccepted(t *testing.T) {

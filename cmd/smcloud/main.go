@@ -10,6 +10,9 @@
 //	                               loopback; a LAN/proxy posture opts into a
 //	                               wider bind explicitly)
 //	-callsign / SMCLOUD_CALLSIGN   the P1 tenant callsign (required)
+//	-max-concurrent /
+//	SMCLOUD_MAX_CONCURRENT         in-flight request cap (default 16, ~3× the
+//	                               DB pool; over-limit → 503 + Retry-After)
 //	SMCLOUD_DSN                    Postgres DSN (env ONLY — the DSN carries the
 //	                               DB password, and argv is world-readable via
 //	                               ps; required)
@@ -22,15 +25,14 @@
 // HTTP. P1 is single-tenant by provisioning — one (token, tenant) pair —
 // while the server's token→tenant map keeps multi-tenant a data change.
 //
-// NOT yet built — required before any internet-facing (Phase 2) deploy:
-// request limiting. The bounded DB pool protects Postgres but not the
-// process — excess requests pile up as handler goroutines waiting for
-// connections, and /v1/health pings Postgres unauthenticated. Decided
-// shape (2026-07-18): per-IP rate limiting lives at the reverse proxy
-// (which sees real client IPs); THIS binary gets a global in-process
-// concurrency limit so it stays safe even run without the proxy. Tracked
-// in docs/backlog.md ("smcloud hardening — pre-Phase-2 gate"), gated with
-// the ADR 0040 security assessment.
+// Request limiting is two layers with distinct jobs (decided 2026-07-18):
+// per-IP rate limiting lives at the reverse proxy, which sees real client
+// IPs (deploy/smcloud/Caddyfile.example); THIS binary carries a global
+// in-process concurrency limit (internal/cloud/server/limit.go) so goroutine
+// and memory growth stay bounded even when it's run without the proxy — the
+// DB pool protects Postgres, the limiter protects the process. The remaining
+// pre-Phase-2 gate is the ADR 0040 security assessment (docs/backlog.md,
+// "smcloud hardening — pre-Phase-2 gate").
 package main
 
 import (
@@ -43,6 +45,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -101,13 +104,33 @@ func normalizeCallsign(s string) string {
 	return strings.ToUpper(strings.TrimSpace(s))
 }
 
+// defaultMaxConcurrent mirrors server.limit.go's default so the flag help and
+// an empty env agree with the server's own fallback.
+const defaultMaxConcurrent = "16"
+
+// parseMaxConcurrent validates the in-flight request cap. Junk or a
+// non-positive value is a boot error, not a silent fallback — a mistyped
+// limit on an internet-facing box should fail loudly.
+func parseMaxConcurrent(s string) (int, error) {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, fmt.Errorf("max-concurrent %q is not an integer", s)
+	}
+	if n < 1 {
+		return 0, fmt.Errorf("max-concurrent must be >= 1 (got %d)", n)
+	}
+	return n, nil
+}
+
 func run() error {
-	var listen, callsign string
+	var listen, callsign, maxConcurrentStr string
 	var showVersion bool
 	flag.StringVar(&listen, "listen", envDefault("SMCLOUD_LISTEN", "127.0.0.1:8091"),
 		"listen address (loopback default; LAN staging binds wider explicitly)")
 	flag.StringVar(&callsign, "callsign", os.Getenv("SMCLOUD_CALLSIGN"),
 		"tenant callsign (or SMCLOUD_CALLSIGN)")
+	flag.StringVar(&maxConcurrentStr, "max-concurrent", envDefault("SMCLOUD_MAX_CONCURRENT", defaultMaxConcurrent),
+		"in-flight request cap; over-limit requests get 503 + Retry-After")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Parse()
 
@@ -129,6 +152,10 @@ func run() error {
 	}
 	token := os.Getenv("SMCLOUD_TOKEN")
 	if err := validateToken(token); err != nil {
+		return err
+	}
+	maxConcurrent, err := parseMaxConcurrent(maxConcurrentStr)
+	if err != nil {
 		return err
 	}
 
@@ -158,9 +185,9 @@ func run() error {
 		return fmt.Errorf("ensure tenant %q: %w", callsign, err)
 	}
 	log.Info("smcloud starting", "version", Version, "listen", listen,
-		"tenant", callsign, "tenant_id", tenantID)
+		"tenant", callsign, "tenant_id", tenantID, "max_concurrent", maxConcurrent)
 
-	srv := server.New(st, db, log, map[string]int64{token: tenantID}, Version)
+	srv := server.New(st, db, log, map[string]int64{token: tenantID}, Version, maxConcurrent)
 	httpSrv := &http.Server{
 		Addr:              listen,
 		Handler:           srv.Handler(),

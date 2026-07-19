@@ -296,6 +296,18 @@ sudo systemctl enable --now caddy
 curl -s https://cloud.station-manager.org/v1/health        # end-to-end through TLS
 ```
 
+**Rate limiting (internet-facing requirement, decided 2026-07-18) is two
+layers:** smcloud's own in-process concurrency cap ships in the binary
+(default 16 in-flight; over-limit → 503 + Retry-After; tune with
+`SMCLOUD_MAX_CONCURRENT`) — nothing to do here. The **per-IP** layer lives in
+Caddy, and the stock distro package does NOT include a rate-limit handler:
+build one in with `xcaddy build --with github.com/mholt/caddy-ratelimit` (or
+download a build with `http.handlers.rate_limit` ticked from
+caddyserver.com/download), then uncomment the `rate_limit` block in
+`Caddyfile.example`. Skipping the plugin leaves the in-process cap as the
+only limiter — safe for the process, but abuse then eats the shared cap
+instead of being turned away per-IP.
+
 ## 5. Wire the daemon (shack machine)
 
 Config SPA → **Forwarding → Add → SM Cloud backup**:

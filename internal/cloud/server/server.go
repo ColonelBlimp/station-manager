@@ -32,17 +32,19 @@ type Server struct {
 	log   *slog.Logger
 	// tokens maps a bearer token to the tenant it authenticates. P1 holds one
 	// entry (single-tenant); the map shape keeps multi-tenant a data change.
-	tokens  map[string]int64
-	version string
+	tokens        map[string]int64
+	version       string
+	maxConcurrent int
 }
 
 // New builds a Server. tokens maps bearer tokens to tenant ids (P1: one entry,
-// provisioned at boot). db is used only for the /v1/health ping.
-func New(st *store.Store, db *sql.DB, log *slog.Logger, tokens map[string]int64, version string) *Server {
+// provisioned at boot). db is used only for the /v1/health ping. maxConcurrent
+// caps in-flight requests (<= 0 → defaultMaxConcurrent; see limit.go).
+func New(st *store.Store, db *sql.DB, log *slog.Logger, tokens map[string]int64, version string, maxConcurrent int) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{store: st, db: db, log: log, tokens: tokens, version: version}
+	return &Server{store: st, db: db, log: log, tokens: tokens, version: version, maxConcurrent: maxConcurrent}
 }
 
 // Handler returns the routed HTTP handler.
@@ -55,9 +57,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/logbooks/{id}/reconcile", s.auth(s.handleReconcile))
 	mux.HandleFunc("GET /v1/logbooks/{id}/manifest", s.auth(s.handleManifest))
 	mux.HandleFunc("GET /v1/export", s.auth(s.handleExport))
-	// Outermost: response compression for gzip-capable clients (the manifest
-	// and export payloads are the bandwidth-heavy ones — see gzip.go).
-	return gzipMiddleware(mux)
+	// Middleware, inside-out: gzip compresses negotiated responses (the
+	// manifest and export payloads are the bandwidth-heavy ones — see
+	// gzip.go); the concurrency limiter sits OUTERMOST so a rejected request
+	// costs a 503 write and nothing else — no gzip writer, no negotiation,
+	// no handler goroutine pile-up (see limit.go).
+	return limitMiddleware(gzipMiddleware(mux), s.maxConcurrent)
 }
 
 // ---- transport helpers ------------------------------------------------------

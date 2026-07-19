@@ -123,7 +123,7 @@ DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`
 	require.NoError(t, err)
 	quiet := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	cloud := httptest.NewServer(
-		server.New(st, db, quiet, map[string]int64{"tok-e2e": tenant}, "test").Handler())
+		server.New(st, db, quiet, map[string]int64{"tok-e2e": tenant}, "test", 0).Handler())
 	t.Cleanup(cloud.Close)
 	return cloud
 }

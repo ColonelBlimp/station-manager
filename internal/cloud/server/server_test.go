@@ -77,7 +77,7 @@ func testServer(t *testing.T) (*httptest.Server, *store.Store, int64) {
 	}
 
 	srv := New(st, db, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
-		map[string]int64{testToken: tenant, otherToken: other}, testVersion)
+		map[string]int64{testToken: tenant, otherToken: other}, testVersion, 0)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
