@@ -238,9 +238,21 @@ func (s *Service) releaseFt8TxChecked(ctx context.Context, reason string, wantGe
 		s.beginTxConfirm(def, cl)
 	}
 
-	// PTT is down. Step 2 — settle, then best-effort mode restore. Respect ctx
-	// cancellation during the pause (shutdown / disconnect): PTT is already down,
-	// so skipping the restore is safe.
+	// Step 2 gate (2026-07-19 review P1, twin of releaseTune): the mode restore
+	// may only follow POSITIVE RX confirmation — a rig that missed TX0 but
+	// receives the MD frame would flip modes while keyed. Lower stakes than the
+	// tune path (no power change) but the same ordering hole. Unconfirmed:
+	// skip the restore; the alarm is already standing.
+	if !s.waitTxConfirm() {
+		s.logger.ErrorWith().Str("reason", reason).
+			Msg("bridge: skipping ft8 mode restore — unkey unconfirmed (rig may still be keyed)")
+		s.finishFt8Tx()
+		return nil
+	}
+
+	// PTT is confirmed down. Step 2 — settle, then best-effort mode restore.
+	// Respect ctx cancellation during the pause (shutdown / disconnect): PTT is
+	// already down, so skipping the restore is safe.
 	if restoreMode != "" {
 		if settle > 0 {
 			select {

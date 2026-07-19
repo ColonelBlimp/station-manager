@@ -780,7 +780,11 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// effective values even though they aren't materialised on disk.
 	bridgeTimeouts := bridge.ResolveTimeouts(cfg.Bridge.Timeouts)
 	resp.BridgeTimeouts = &bridgeTimeouts
-	bridgeTune := bridge.ResolveTune(cfg.Bridge.Tune)
+	bridgeDriver := ""
+	if cfg.Bridge.Cat != nil { // nil when the bridge isn't configured (config.md §10)
+		bridgeDriver = cfg.Bridge.Cat.Driver
+	}
+	bridgeTune := bridge.ResolveTune(cfg.Bridge.Tune, bridgeDriver)
 	resp.BridgeTune = &bridgeTune
 
 	if cfg.DefaultLogbookID > 0 {

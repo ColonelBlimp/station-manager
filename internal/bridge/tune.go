@@ -216,8 +216,13 @@ func (s *Service) StopTune(ctx context.Context) error {
 //  1. Unkey (tx_off) — the safety-critical step. On a failed write it leaves
 //     tune state armed (active + timer) and returns the error so the backstop
 //     keeps retrying; the carrier must never be stranded by a transient glitch.
-//  2. Settle, then restore power + mode — best-effort. The carrier is already
-//     down after step 1, so the guaranteed stop is satisfied before the pause.
+//  2. Wait for POSITIVE RX confirmation (waitTxConfirm — CI-V's ACK resolves
+//     immediately; Yaesu resolves via the read_tx_status answer), then settle,
+//     then restore power + mode — best-effort. The confirmation gate is
+//     safety-relevant (2026-07-19 review P1): the restore raises power back to
+//     the operator level, so writing it on a mere fixed settle could feed a
+//     still-keyed carrier full power. Unconfirmed → the restore is SKIPPED
+//     (the alarm is already standing; clamped-power RTTY is the safe state).
 //     The settle exists because some rigs (FTdx10) ignore a mode change during
 //     the TX→RX transition tail right after tx_off (task #270); the pause lets
 //     the rig return to RX so the restore lands. A failed restore write is
@@ -297,15 +302,31 @@ func (s *Service) releaseTuneChecked(ctx context.Context, reason string, wantGen
 		s.beginTxConfirm(def, cl)
 	}
 
-	// Carrier is down. Step 2 — settle, then best-effort restore. DETACHED from the
-	// caller's ctx (F3): a cancelled request — e.g. the browser disconnecting during
-	// the settle — must NOT skip the restore and strand the rig in RTTY / tune-power.
-	// Like the auto-off backstop (which already passes context.Background), the
-	// restore of the operator's pre-tune mode + power is a correctness action that
-	// must complete regardless of the HTTP request's lifetime. Step 1's unkey stays
-	// on the caller's ctx (a cancel there just re-arms the backstop, which is safe);
-	// only this best-effort restore detaches. The restore write is still bounded by
-	// the serial write watchdog, so detaching cannot hang teardown.
+	// Step 2 gate (2026-07-19 review P1): the restore raises power from the
+	// clamped tune level back to full operator power, so it may ONLY follow
+	// POSITIVE RX confirmation. A rig that missed TX0 but still receives later
+	// frames would otherwise get the PC restore while keyed — a full-power
+	// carrier into the amp. Unconfirmed/alarmed: skip the restore entirely;
+	// clamped-power RTTY plus the standing "check your radio" banner is the
+	// safe state, and the operator restores by hand once the rig is verified.
+	// CI-V confirmed synchronously above, so this returns immediately there.
+	if !s.waitTxConfirm() {
+		s.logger.ErrorWith().Str("reason", reason).
+			Msg("bridge: skipping tune mode/power restore — unkey unconfirmed (rig may still be keyed)")
+		s.finishTune()
+		return nil
+	}
+
+	// Carrier is confirmed down. Step 2 — settle, then best-effort restore.
+	// DETACHED from the caller's ctx (F3): a cancelled request — e.g. the browser
+	// disconnecting during the settle — must NOT skip the restore and strand the
+	// rig in RTTY / tune-power. Like the auto-off backstop (which already passes
+	// context.Background), the restore of the operator's pre-tune mode + power is
+	// a correctness action that must complete regardless of the HTTP request's
+	// lifetime. Step 1's unkey stays on the caller's ctx (a cancel there just
+	// re-arms the backstop, which is safe); only this best-effort restore
+	// detaches. The restore write is still bounded by the serial write watchdog,
+	// so detaching cannot hang teardown.
 	if settle > 0 {
 		time.Sleep(settle)
 	}
@@ -393,7 +414,6 @@ func (s *Service) clearTuneOnDisconnect() {
 	s.lastVfoA = 0
 	s.lastVfoB = 0
 	s.lastSelectedVfo = ""
-	s.dialKnown = false
 	s.mu.Unlock()
 	if wasActive {
 		s.logger.WarnWith().Msg("bridge: rig disconnected during tune; tune state cleared")
@@ -444,7 +464,6 @@ func (s *Service) captureDialFreq(p RigStatePayload) {
 	s.mu.Lock()
 	if p.VfoA != 0 {
 		s.lastVfoA = p.VfoA
-		s.dialKnown = true
 	}
 	if p.VfoB != 0 {
 		s.lastVfoB = p.VfoB
@@ -465,12 +484,17 @@ func (s *Service) captureDialFreq(p RigStatePayload) {
 func (s *Service) CurrentDialMHz() (float64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.dialKnown {
-		return 0, false
-	}
+	// Knownness is per-VFO (2026-07-19 review P2): 0 Hz means that VFO has
+	// never been decoded this session. The SELECTED VFO must itself be known —
+	// falling back to the other one would log a QSO on the wrong frequency,
+	// which is worse than reporting unknown (the caller then omits/uses its
+	// own fallback).
 	hz := s.lastVfoA
-	if s.lastSelectedVfo == "B" && s.lastVfoB != 0 {
+	if s.lastSelectedVfo == "B" {
 		hz = s.lastVfoB
+	}
+	if hz == 0 {
+		return 0, false
 	}
 	return float64(hz) / 1_000_000, true
 }
@@ -565,6 +589,18 @@ func TuneSupported(def cat.RigDefinition) bool {
 		return false
 	}
 	return true
+}
+
+// validateTunePowerForDef reports whether the rigdef can actually encode w as
+// its set_power value. resolveTunePower's range check knows only the package
+// ceilings, not the rig's own floor (2026-07-19 review P3: power_w:1 passed
+// the clamp, but both tune-capable Yaesu defs carry min:5 — so config served
+// tune:true while every StartTune failed at encode). The caller falls back to
+// defaultTunePowerW on false — which TuneSupported already dry-runs, so an
+// advertised tune capability implies the default encodes.
+func validateTunePowerForDef(def cat.RigDefinition, w int) bool {
+	_, err := cat.EncodeCommand(def, tunePowerCommand, strconv.Itoa(w))
+	return err == nil
 }
 
 // resolveTunePower clamps the operator's configured tune power to the safe

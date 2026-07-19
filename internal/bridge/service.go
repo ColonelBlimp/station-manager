@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/serial"
@@ -189,6 +190,15 @@ type Service struct {
 	// cmdMu → mu; nothing acquires keyMu while holding cmdMu or mu.
 	keyMu sync.Mutex
 
+	// clientsMu orders a subscriber join/leave and its EventRigClients count
+	// publication as ONE unit (2026-07-19 review P3): snapshotting the count
+	// outside the publish let a join read 2, a concurrent leave publish 1,
+	// then the join publish the stale 2 — leaving a lone tab's multi-tab
+	// banner stuck with no later transition to correct it. Held only in
+	// Subscribe/unsubscribe; the hub has its own internal lock and never
+	// calls back into these paths, so ordering is clientsMu → hub lock.
+	clientsMu sync.Mutex
+
 	// Tune-carrier state (ADR 0027), all mu-guarded. tuneActive is the
 	// single-flight gate; tuneRestoreMode/Power are the pre-tune snapshot
 	// captured at StartTune and restored on stop; tuneTimer is the hard
@@ -210,18 +220,19 @@ type Service struct {
 	lastPower int
 
 	// Rolling current-rig dial snapshot, mu-guarded, fed by readLoop alongside
-	// lastMode/lastPower. lastVfoA/lastVfoB are the per-VFO frequencies (Hz),
-	// lastSelectedVfo ("A"/"B") which one is operating; dialKnown flips true once a
-	// real frequency has been decoded (so the FT8 QSO sink can tell "no freq yet"
-	// from a real 0). CurrentDialMHz resolves the selected VFO's freq for FT8
-	// logging — the rig is the authority for the logged frequency, NOT the SPA's
-	// start-time snapshot (which is captured once and reused across a Call-CQ
-	// pile-up, so it goes stale). Cleared on disconnect with the rest of the
-	// snapshot. NOT frozen during tune/TX — the dial does not move while keyed.
+	// lastMode/lastPower. lastVfoA/lastVfoB are the per-VFO frequencies (Hz);
+	// 0 means that VFO has not been decoded this session — knownness is
+	// per-VFO (2026-07-19 review P2), so CurrentDialMHz reports ok=false when
+	// the SELECTED VFO is unknown rather than falling back to the other one.
+	// lastSelectedVfo ("A"/"B") is which one is operating. CurrentDialMHz
+	// resolves the selected VFO's freq for FT8 logging — the rig is the
+	// authority for the logged frequency, NOT the SPA's start-time snapshot
+	// (which is captured once and reused across a Call-CQ pile-up, so it goes
+	// stale). Cleared on disconnect with the rest of the snapshot. NOT frozen
+	// during tune/TX — the dial does not move while keyed.
 	lastVfoA        int64
 	lastVfoB        int64
 	lastSelectedVfo string
-	dialKnown       bool
 
 	// Resolved (config-overridable, hard-clamped) tune knobs, snapshotted at
 	// New like the timeout fields above. tunePowerW ≤ maxTunePowerW;
@@ -266,6 +277,13 @@ type Service struct {
 	txConfirmGen     uint64
 	txConfirmTimer   *time.Timer
 	hasTxStatusQuery bool
+	// txConfirmDone is closed when the current confirmation cycle resolves
+	// (confirmed idle OR alarmed) so the release paths can gate their
+	// best-effort restore on POSITIVE confirmation (2026-07-19 review P1:
+	// restoring full power on a fixed settle could raise a still-keyed
+	// carrier from tune power to operator power). Replaced per cycle by
+	// beginTxConfirm; nil when no cycle is pending.
+	txConfirmDone chan struct{}
 	// txConfirmAfterFrame (mu-guarded) is the rxFrameCount watermark at the
 	// moment the current confirmation cycle began: the any-rig-data fallback
 	// (defs without a TX-status query) may only confirm on frames decoded
@@ -294,6 +312,26 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 			Int("requested_w", cfg.Tune.PowerW).
 			Int("clamped_w", tunePower).
 			Msg("bridge: tune power_w above safe ceiling; clamped")
+	}
+	// The ceiling clamp knows nothing of the rig's own floor: a configured
+	// power the active rigdef cannot encode (e.g. 1 W under the FTdx10's
+	// PC min of 5) would fail EVERY StartTune at encode time while config
+	// still advertised tune:true (2026-07-19 review P3). Fall back to the
+	// default, which TuneSupported dry-runs. cfg.Cat is nil-able (bridge
+	// disabled / not yet configured) — no driver, no floor to check.
+	driver := ""
+	if cfg.Cat != nil {
+		driver = cfg.Cat.Driver
+	}
+	if def, ok := cat.Lookup(driver); ok && !validateTunePowerForDef(def, tunePower) {
+		if logger != nil {
+			logger.WarnWith().
+				Int("requested_w", tunePower).
+				Int("fallback_w", defaultTunePowerW).
+				Str("driver", def.ID).
+				Msg("bridge: tune power_w not encodable for this rig (below its minimum?); using default")
+		}
+		tunePower = defaultTunePowerW
 	}
 	if durClamped && logger != nil {
 		logger.WarnWith().
@@ -380,9 +418,14 @@ func ResolveTimeouts(c types.BridgeTimeoutsConfig) types.BridgeTimeoutsConfig {
 // ResolveTune returns the EFFECTIVE tune-carrier params — defaults where zero,
 // clamped to the hard safety ceilings — reusing the same resolveTune* helpers
 // New uses, so the served view matches runtime. Same sparse-but-served rationale
-// as ResolveTimeouts; the ceilings stay non-overridable in this package.
-func ResolveTune(c types.BridgeTuneConfig) types.BridgeTuneConfig {
+// as ResolveTimeouts; the ceilings stay non-overridable in this package. driver
+// selects the active rigdef so the def-floor fallback matches New (2026-07-19
+// review P3); an unknown driver serves the plain clamp.
+func ResolveTune(c types.BridgeTuneConfig, driver string) types.BridgeTuneConfig {
 	powerW, _ := resolveTunePower(c.PowerW)
+	if def, ok := cat.Lookup(driver); ok && !validateTunePowerForDef(def, powerW) {
+		powerW = defaultTunePowerW
+	}
 	dur, _ := resolveTuneDuration(c.MaxDurationMs)
 	settle, _ := resolveTuneRestoreSettle(c.RestoreSettleMs)
 	return types.BridgeTuneConfig{
@@ -537,7 +580,6 @@ func (s *Service) rigWritableLocked() bool {
 // already-closed channel so the SSE handler's range loop exits
 // immediately.
 func (s *Service) Subscribe() (<-chan Event, func()) {
-	ch, unsub := s.hub.subscribe()
 	// Advisory multi-tab awareness (EventRigClients): announce the subscriber count
 	// ONLY when it signals a multi-tab situation, so the common single-tab case (and
 	// every single-subscriber path) never sees this event — the SPA defaults to
@@ -545,22 +587,31 @@ func (s *Service) Subscribe() (<-chan Event, func()) {
 	// tab appeared, so both should warn); on leave we announce whenever >= 1 tab
 	// remains, which can only happen after a teardown that had been multi-tab, so the
 	// remaining tab's banner clears. A lone tab from start to finish gets nothing.
+	// clientsMu holds mutation + count + publish together so concurrent
+	// join/leave pairs publish in a consistent order (2026-07-19 review P3 —
+	// an interleaved stale count could otherwise be the LAST event).
+	s.clientsMu.Lock()
+	ch, unsub := s.hub.subscribe()
 	if n := s.hub.subscriberCount(); n >= 2 {
 		s.publishClientCount(n)
 	}
+	s.clientsMu.Unlock()
 	wrapped := func() {
+		s.clientsMu.Lock()
 		unsub() // idempotent
 		if n := s.hub.subscriberCount(); n >= 1 {
 			s.publishClientCount(n)
 		}
+		s.clientsMu.Unlock()
 	}
 	return ch, wrapped
 }
 
 // publishClientCount fans the given rig-event subscriber count out to every tab.
-// Advisory only; the count is snapshotted then broadcast in two hub calls, so it
-// may momentarily lag a concurrent join/leave — harmless for a banner, and the
-// next transition re-broadcasts the correct value.
+// Advisory only. Callers hold clientsMu, which orders the count snapshot and
+// this broadcast against concurrent joins/leaves — without it a stale count
+// could be the LAST event published and stick a lone tab's multi-tab banner
+// (2026-07-19 review P3).
 func (s *Service) publishClientCount(n int) {
 	s.hub.publish(Event{Name: EventRigClients, Payload: RigClientsPayload{Count: n}})
 }

@@ -35,6 +35,38 @@ func tuneTestService(t *testing.T) (*Service, *fakeSerial) {
 	return s, f
 }
 
+// answerTxStatusQueries models a healthy rig answering the ADR 0051
+// read_tx_status query ("TX;") with "RX": a watcher goroutine polls the fake's
+// writes and feeds observeTxStatus("0") — exactly what the readLoop would
+// deliver on the real TXn; answer. Needed since the restore-gate (2026-07-19
+// review P1) made the release paths wait for POSITIVE confirmation before
+// restoring mode/power; without an answer they now skip the restore by design.
+// Returns a stop func (t.Cleanup-compatible).
+func answerTxStatusQueries(s *Service, f *fakeSerial) func() {
+	done := make(chan struct{})
+	go func() {
+		answered := 0
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(2 * time.Millisecond):
+			}
+			n := 0
+			for _, w := range f.recordedWrites() {
+				if string(w) == "TX;" {
+					n++
+				}
+			}
+			for answered < n {
+				s.observeTxStatus("0")
+				answered++
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
 // lastWrite returns the most recent byte sequence written to the fake as a
 // string, or "" if nothing has been written.
 func lastWrite(f *fakeSerial) string {
@@ -362,6 +394,7 @@ func TestStartTune_SingleFlight(t *testing.T) {
 
 func TestStopTune_RestoresAndUnkeys(t *testing.T) {
 	s, f := tuneTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, f)) // healthy rig: confirm-gate passes
 	ch, unsub := s.Subscribe()
 	defer unsub()
 
@@ -408,6 +441,7 @@ func TestStopTune_RestoresAndUnkeys(t *testing.T) {
 // later transmission).
 func TestReleaseTune_ConcurrentStopsReleaseOnce(t *testing.T) {
 	s, f := tuneTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, f)) // healthy rig: confirm-gate passes
 	if err := s.StartTune(context.Background()); err != nil {
 		t.Fatalf("StartTune: %v", err)
 	}
@@ -440,7 +474,8 @@ func TestReleaseTune_ConcurrentStopsReleaseOnce(t *testing.T) {
 // several goroutines to exercise keyMu under the race detector (no deadlock, no
 // data race). A final stop must leave the carrier definitively down.
 func TestKeyRelease_ConcurrentStartStopNoDeadlock(t *testing.T) {
-	s, _ := tuneTestService(t)
+	s, f := tuneTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, f)) // healthy rig: confirm-gate passes
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -484,6 +519,7 @@ func TestStopTune_IdempotentWhenIdle(t *testing.T) {
 func TestStopTune_CtxCancelDuringSettleStillRestores(t *testing.T) {
 	s, f := tuneTestService(t)
 	s.tuneRestoreSettle = 5 * time.Millisecond
+	t.Cleanup(answerTxStatusQueries(s, f)) // healthy rig: confirm-gate passes
 	ch, unsub := s.Subscribe()
 	defer unsub()
 
@@ -521,9 +557,98 @@ func TestStopTune_CtxCancelDuringSettleStillRestores(t *testing.T) {
 	awaitTuneState(t, ch, false, time.Second)
 }
 
+// TestStopTune_UnconfirmedSkipsRestore pins the 2026-07-19 review P1 gate:
+// when the rig never answers the TX-status query after the unkey, the release
+// must NOT write the power/mode restore — a rig that missed TX0 but still
+// receives frames would get PC full power while KEYED (the amp-damage
+// scenario). The alarm stands, uncertainty is retained, and the carrier is
+// still reported down (the ADR 0051 UI/uncertainty split).
+func TestStopTune_UnconfirmedSkipsRestore(t *testing.T) {
+	prev := txConfirmTimeout
+	txConfirmTimeout = 30 * time.Millisecond
+	defer func() { txConfirmTimeout = prev }()
+
+	s, f := tuneTestService(t)
+	if err := s.StartTune(context.Background()); err != nil {
+		t.Fatalf("StartTune: %v", err)
+	}
+	if err := s.StopTune(context.Background()); err != nil {
+		t.Fatalf("StopTune: %v", err)
+	}
+
+	// The unkey and the status query went out; the restore must NOT have.
+	if w := lastWrite(f); w != "TX;" {
+		t.Fatalf("last write = %q, want the TX; query (restore must be skipped while unconfirmed)", w)
+	}
+	for _, w := range f.recordedWrites() {
+		if string(w) == "PC100;MD02;" {
+			t.Fatal("power/mode restore written without positive RX confirmation")
+		}
+	}
+
+	s.mu.Lock()
+	alarmed, uncertain, active := s.txAlarmActive, s.txUncertain, s.tuneActive
+	s.mu.Unlock()
+	if !alarmed || !uncertain {
+		t.Fatalf("alarmed=%v uncertain=%v after unconfirmed release, want both true", alarmed, uncertain)
+	}
+	if active {
+		t.Error("tuneActive should clear even on the skip path (UI reports probably-down)")
+	}
+}
+
+// TestStopTune_StillKeyedAnswerSkipsRestore: the rig ANSWERS the query with
+// "1" (CAT TX still keyed — the unkey definitively failed). Same gate, faster
+// resolution: the restore is skipped and the still-keyed alarm stands.
+func TestStopTune_StillKeyedAnswerSkipsRestore(t *testing.T) {
+	s, f := tuneTestService(t)
+	// Answer every status query with "still keyed".
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		answered := 0
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(2 * time.Millisecond):
+			}
+			n := 0
+			for _, w := range f.recordedWrites() {
+				if string(w) == "TX;" {
+					n++
+				}
+			}
+			for answered < n {
+				s.observeTxStatus("1")
+				answered++
+			}
+		}
+	}()
+
+	if err := s.StartTune(context.Background()); err != nil {
+		t.Fatalf("StartTune: %v", err)
+	}
+	if err := s.StopTune(context.Background()); err != nil {
+		t.Fatalf("StopTune: %v", err)
+	}
+	for _, w := range f.recordedWrites() {
+		if string(w) == "PC100;MD02;" {
+			t.Fatal("restore written although the rig answered TX1 (still keyed)")
+		}
+	}
+	s.mu.Lock()
+	alarmed := s.txAlarmActive
+	s.mu.Unlock()
+	if !alarmed {
+		t.Fatal("tx-alarm must stand after a still-keyed answer")
+	}
+}
+
 func TestTuneAutoOff(t *testing.T) {
 	s, f := tuneTestService(t)
 	s.tuneMaxDuration = 30 * time.Millisecond
+	t.Cleanup(answerTxStatusQueries(s, f)) // healthy rig: confirm-gate passes
 	ch, unsub := s.Subscribe()
 	defer unsub()
 
@@ -640,6 +765,26 @@ func TestCurrentDialMHz(t *testing.T) {
 	}
 }
 
+// TestCurrentDialMHz_SelectedVfoUnknown pins the per-VFO knownness rule
+// (2026-07-19 review P2): the SELECTED VFO must itself have been decoded —
+// falling back to the other VFO's frequency would log an FT8 QSO on the wrong
+// band, which is worse than reporting unknown.
+func TestCurrentDialMHz_SelectedVfoUnknown(t *testing.T) {
+	s, _ := tuneTestService(t)
+
+	// A known, B selected but never decoded → unknown (NOT VFO-A's value).
+	s.captureDialFreq(RigStatePayload{VfoA: 14_074_000, SelectedVfo: "B"})
+	if mhz, ok := s.CurrentDialMHz(); ok {
+		t.Fatalf("CurrentDialMHz = (%v, true) with selected VFO-B undecoded; want ok=false", mhz)
+	}
+
+	// B arrives → the selected frequency is B's.
+	s.captureDialFreq(RigStatePayload{VfoB: 7_074_000})
+	if mhz, ok := s.CurrentDialMHz(); !ok || dialHz(mhz) != 7_074_000 {
+		t.Fatalf("selected VFO-B dial = %v ok=%v, want 7.074 true", mhz, ok)
+	}
+}
+
 // TestClearTuneOnDisconnect_ForgetsDial: a frequency from a previous rig session must
 // not seed a logged QSO after reconnect.
 func TestClearTuneOnDisconnect_ForgetsDial(t *testing.T) {
@@ -669,7 +814,7 @@ func TestUnkeyOnTeardown(t *testing.T) {
 		s.tuneActive = true
 		s.mu.Unlock()
 		before := len(f.recordedWrites())
-		s.unkeyOnTeardown(def, f)
+		s.unkeyOnTeardown(def, f, false)
 		sawOff := false
 		for _, w := range f.recordedWrites()[before:] {
 			if string(w) == "TX0;" {
@@ -687,7 +832,7 @@ func TestUnkeyOnTeardown(t *testing.T) {
 		s.mu.Lock()
 		s.ft8TxActive = true
 		s.mu.Unlock()
-		s.unkeyOnTeardown(def, f)
+		s.unkeyOnTeardown(def, f, false)
 		if w := lastWrite(f); w != "TX0;" {
 			t.Fatalf("teardown must unkey an active FT8 TX; last write = %q, want TX0;", w)
 		}
@@ -696,7 +841,7 @@ func TestUnkeyOnTeardown(t *testing.T) {
 	t.Run("no write when PTT isn't up", func(t *testing.T) {
 		s, f := tuneTestService(t)
 		before := len(f.recordedWrites())
-		s.unkeyOnTeardown(def, f)
+		s.unkeyOnTeardown(def, f, false)
 		if n := len(f.recordedWrites()); n != before {
 			t.Fatalf("no unkey write expected when not keyed; got %d new writes", n-before)
 		}
@@ -720,7 +865,7 @@ func TestDefensiveUnkeyAndTeardownAlarm(t *testing.T) {
 		s.tuneActive = true
 		s.mu.Unlock()
 		_ = f.Close() // dead port: WriteCommandBytes now returns ErrClosed
-		s.unkeyOnTeardown(def, f)
+		s.unkeyOnTeardown(def, f, false)
 		s.mu.Lock()
 		alarmed := s.txAlarmActive
 		uncertain := s.txUncertain
@@ -735,7 +880,7 @@ func TestDefensiveUnkeyAndTeardownAlarm(t *testing.T) {
 		s.mu.Lock()
 		s.ft8TxActive = true
 		s.mu.Unlock()
-		s.unkeyOnTeardown(def, f) // healthy port → write succeeds
+		s.unkeyOnTeardown(def, f, false) // healthy shutdown, healthy port → write succeeds
 		s.mu.Lock()
 		alarmed := s.txAlarmActive
 		uncertain := s.txUncertain
@@ -745,6 +890,29 @@ func TestDefensiveUnkeyAndTeardownAlarm(t *testing.T) {
 		}
 		if !uncertain {
 			t.Fatal("teardown write-accepted is NOT confirmed — uncertainty must be retained (8bd88c1b review)")
+		}
+	})
+
+	t.Run("a FAULT-shaped teardown alarms even when the write is accepted", func(t *testing.T) {
+		// 2026-07-19 review P1: an error-shaped pipeline exit means the link
+		// just proved untrustworthy — a write the OS accepted may never have
+		// reached the rig (the 2026-07-18 stalled-endpoint incident), and the
+		// supervisor may never reconnect to run the defensive recovery. The
+		// quiet-uncertain trade applies only to healthy shutdowns.
+		s, f := tuneTestService(t)
+		s.mu.Lock()
+		s.tuneActive = true
+		s.mu.Unlock()
+		s.unkeyOnTeardown(def, f, true) // healthy port, but fault-shaped exit
+		if w := lastWrite(f); w != "TX0;" {
+			t.Fatalf("fault teardown must still write the unkey; last write = %q", w)
+		}
+		s.mu.Lock()
+		alarmed := s.txAlarmActive
+		uncertain := s.txUncertain
+		s.mu.Unlock()
+		if !alarmed || !uncertain {
+			t.Fatalf("fault teardown with accepted write: alarmed=%v uncertain=%v, want both true", alarmed, uncertain)
 		}
 	})
 

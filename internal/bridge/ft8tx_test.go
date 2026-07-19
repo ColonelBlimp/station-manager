@@ -16,7 +16,8 @@ import (
 // set_mode DATA-U → "MD0C;", tx_on → "TX1;".
 func TestKeyFt8Tx_HappyPath(t *testing.T) {
 	s, fake := newCommandTestService(t)
-	s.lastMode = "USB" // restore target snapshot
+	t.Cleanup(answerTxStatusQueries(s, fake)) // healthy rig: confirm-gate passes
+	s.lastMode = "USB"                        // restore target snapshot
 
 	if err := s.KeyFt8Tx(context.Background(), "DATA-U"); err != nil {
 		t.Fatalf("KeyFt8Tx: %v", err)
@@ -81,10 +82,43 @@ func TestKeyFt8Tx_FailedKeyWriteEntersUncertain(t *testing.T) {
 	}
 }
 
+// TestUnkeyFt8Tx_UnconfirmedSkipsModeRestore pins the FT8 twin of the tune
+// restore-gate (2026-07-19 review P1): with the rig silent after the unkey,
+// the mode restore must NOT be written — a rig that missed TX0 but receives
+// the MD frame would flip modes while keyed. The alarm stands instead.
+func TestUnkeyFt8Tx_UnconfirmedSkipsModeRestore(t *testing.T) {
+	prev := txConfirmTimeout
+	txConfirmTimeout = 30 * time.Millisecond
+	defer func() { txConfirmTimeout = prev }()
+
+	s, fake := newCommandTestService(t)
+	s.tuneRestoreSettle = 0
+	s.lastMode = "USB"
+
+	if err := s.KeyFt8Tx(context.Background(), "DATA-U"); err != nil {
+		t.Fatalf("KeyFt8Tx: %v", err)
+	}
+	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
+		t.Fatalf("UnkeyFt8Tx: %v", err)
+	}
+	for _, w := range fake.recordedWrites() {
+		if string(w) == "MD02;" {
+			t.Fatal("mode restore written without positive RX confirmation")
+		}
+	}
+	s.mu.Lock()
+	alarmed, uncertain := s.txAlarmActive, s.txUncertain
+	s.mu.Unlock()
+	if !alarmed || !uncertain {
+		t.Fatalf("alarmed=%v uncertain=%v after unconfirmed ft8 unkey, want both true", alarmed, uncertain)
+	}
+}
+
 // TestKeyFt8Tx_NoMode: with mode empty, KeyFt8Tx keys tx_on only and UnkeyFt8Tx
 // drops tx_off only — no mode switch/restore (the operator manages mode).
 func TestKeyFt8Tx_NoMode(t *testing.T) {
 	s, fake := newCommandTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, fake)) // healthy rig: confirm-gate passes
 
 	if err := s.KeyFt8Tx(context.Background(), ""); err != nil {
 		t.Fatalf("KeyFt8Tx: %v", err)

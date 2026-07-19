@@ -41,15 +41,29 @@ func TestResolveTimeouts(t *testing.T) {
 // TestResolveTune checks tune resolution: defaults where zero, clamped to the
 // hard safety ceilings (power 40, duration 30000, settle 2000).
 func TestResolveTune(t *testing.T) {
-	if got := ResolveTune(types.BridgeTuneConfig{}); got != (types.BridgeTuneConfig{
+	if got := ResolveTune(types.BridgeTuneConfig{}, ""); got != (types.BridgeTuneConfig{
 		PowerW: 20, MaxDurationMs: 15000, RestoreSettleMs: 150,
 	}) {
 		t.Fatalf("ResolveTune(zero) = %+v, want {20 15000 150}", got)
 	}
 
 	// Over-ceiling values clamp to the non-overridable safety limits.
-	got := ResolveTune(types.BridgeTuneConfig{PowerW: 100, MaxDurationMs: 60000, RestoreSettleMs: 5000})
+	got := ResolveTune(types.BridgeTuneConfig{PowerW: 100, MaxDurationMs: 60000, RestoreSettleMs: 5000}, "")
 	if got.PowerW != 40 || got.MaxDurationMs != 30000 || got.RestoreSettleMs != 2000 {
 		t.Errorf("ResolveTune(over-ceiling) = %+v, want {40 30000 2000}", got)
+	}
+
+	// Def-floor fallback (2026-07-19 review P3): a power below the active
+	// rigdef's set_power minimum (FTdx10 PC floor = 5 W) is not encodable, so
+	// the served effective value falls back to the default instead of
+	// advertising a config every StartTune would fail on.
+	got = ResolveTune(types.BridgeTuneConfig{PowerW: 1}, "yaesu-ftdx10")
+	if got.PowerW != 20 {
+		t.Errorf("ResolveTune(1 W, ftdx10) PowerW = %d, want 20 (def-floor fallback)", got.PowerW)
+	}
+	// In-range values pass through unchanged with the def present.
+	got = ResolveTune(types.BridgeTuneConfig{PowerW: 10}, "yaesu-ftdx10")
+	if got.PowerW != 10 {
+		t.Errorf("ResolveTune(10 W, ftdx10) PowerW = %d, want 10", got.PowerW)
 	}
 }

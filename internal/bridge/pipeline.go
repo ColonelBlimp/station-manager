@@ -281,8 +281,14 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		s.identityConfirmed = false
 		s.mu.Unlock()
 		// Guaranteed stop on the daemon's OWN exit too (F1): unkey while the
-		// port is still writable, before Close. See unkeyOnTeardown.
-		s.unkeyOnTeardown(def, client)
+		// port is still writable, before Close. See unkeyOnTeardown. The fault
+		// flag discriminates the teardown cause (2026-07-19 review P1): a live
+		// ctx here means the pipeline is dying of an ERROR — the link just
+		// proved untrustworthy, so a write-accepted unkey alarms instead of
+		// quietly entering uncertainty; a cancelled ctx is the healthy
+		// operator-initiated shutdown, which keeps the ADR 0051 quiet-uncertain
+		// trade (the next connection's defensive recovery verifies).
+		s.unkeyOnTeardown(def, client, ctx.Err() == nil)
 		_ = client.Close()
 		// Release any active tune — the carrier is down (we just unkeyed above,
 		// or it dropped with the rig); clear state, cancel the backstop, forget
@@ -375,7 +381,15 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 // tx_off encodes here for the same reason the pre-key gate proves it encodable
 // before keying. Runs on context.Background(): the request/parent ctx is already
 // cancelled by the time we tear down, and the unkey must not be skipped for that.
-func (s *Service) unkeyOnTeardown(def cat.RigDefinition, client serial.Client) {
+//
+// fault marks an ERROR-shaped teardown (terminal serial error / read failure —
+// the 2026-07-18 incident shape) as opposed to a ctx-cancelled healthy
+// shutdown. On a fault the link has just proven untrustworthy, so even a
+// write-ACCEPTED unkey alarms (2026-07-19 review P1: the supervisor may never
+// reconnect to run the defensive recovery, and "OS accepted" means least
+// exactly when the pipe is dying); on a healthy shutdown the quiet
+// txUncertain trade of ADR 0051 stands.
+func (s *Service) unkeyOnTeardown(def cat.RigDefinition, client serial.Client, fault bool) {
 	s.mu.Lock()
 	// Include txUncertain (8bd88c1b review): an unconfirmed prior unkey means
 	// the PTT may still be owned — the teardown tx_off is exactly the cheap
@@ -414,11 +428,22 @@ func (s *Service) unkeyOnTeardown(def cat.RigDefinition, client serial.Client) {
 		return
 	}
 	// Write-accepted is NOT confirmed (the incident's exact lesson), and the
-	// port closes before any answer could arrive — so retain txUncertain
-	// rather than declaring the stop guaranteed (8bd88c1b review). No banner
-	// alarm on a healthy shutdown (alarm-fatigue trade recorded in ADR 0051);
-	// the state survives an in-process reconnect, and the next connection's
-	// UNCONDITIONAL defensive recovery confirms — or alarms — either way.
+	// port closes before any answer could arrive.
+	if fault {
+		// Error-shaped teardown: the pipe just failed us mid-session, which is
+		// precisely when a stalled endpoint swallows writes silently — and the
+		// supervisor may never get a reconnect to run the defensive recovery.
+		// Alarm now; a later confirmed connection clears it (2026-07-19 P1).
+		s.logger.ErrorWith().
+			Msg("bridge: teardown unkey on faulted pipeline — write accepted but unconfirmable; raising alarm")
+		s.raiseTxAlarm(TxAlarmTeardownUnconfirmed)
+		return
+	}
+	// Healthy shutdown: retain txUncertain rather than declaring the stop
+	// guaranteed (8bd88c1b review). No banner alarm (alarm-fatigue trade
+	// recorded in ADR 0051); the state survives an in-process reconnect, and
+	// the next connection's UNCONDITIONAL defensive recovery confirms — or
+	// alarms — either way.
 	s.mu.Lock()
 	s.txUncertain = true
 	s.mu.Unlock()

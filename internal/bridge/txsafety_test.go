@@ -67,6 +67,7 @@ func TestWriteGates_RefuseAtStrikeLimit(t *testing.T) {
 // already-executing callback; the generation gate is what makes that safe.
 func TestFt8TxAutoOff_StaleGenerationNoOp(t *testing.T) {
 	s, fake := newCommandTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, fake)) // healthy rig: confirm-gate passes
 	s.tuneRestoreSettle = 0
 
 	if err := s.KeyFt8Tx(context.Background(), "DATA-U"); err != nil {
@@ -106,6 +107,7 @@ func TestFt8TxAutoOff_StaleGenerationNoOp(t *testing.T) {
 // review measured ft8TxAutoOff at 0% coverage; this is its direct test.)
 func TestFt8TxAutoOff_CurrentGenerationReleases(t *testing.T) {
 	s, fake := newCommandTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, fake)) // healthy rig: confirm-gate passes
 	s.tuneRestoreSettle = 0
 
 	if err := s.KeyFt8Tx(context.Background(), "DATA-U"); err != nil {
@@ -132,6 +134,7 @@ func TestFt8TxAutoOff_CurrentGenerationReleases(t *testing.T) {
 // Finding 6, tune flavour: stale no-op + current releases.
 func TestTuneAutoOff_GenerationGate(t *testing.T) {
 	s, fake := newCommandTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, fake)) // healthy rig: confirm-gate passes
 	s.tuneRestoreSettle = 0
 	s.lastMode = "USB"
 	s.lastPower = 35
@@ -283,6 +286,7 @@ func TestTxAlarm_RecoveryCycleThroughPipeline(t *testing.T) {
 // still be caught by the release-level recheck UNDER the lock.
 func TestReleaseChecked_StaleGenerationUnderKeyMuNoOp(t *testing.T) {
 	s, fake := newCommandTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, fake)) // healthy rig: confirm-gate passes
 	s.tuneRestoreSettle = 0
 	s.lastMode = "USB"
 	s.lastPower = 35

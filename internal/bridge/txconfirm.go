@@ -82,6 +82,10 @@ func (s *Service) beginTxConfirm(def cat.RigDefinition, cl serial.Client) {
 		s.txConfirmTimer.Stop()
 	}
 	s.txConfirmTimer = time.AfterFunc(txConfirmTimeout, func() { s.txConfirmTimeout(gen) })
+	// A superseded cycle's waiters wake now and read the (still-uncertain)
+	// state — a stale release must not sleep out its full grace timeout.
+	s.closeTxConfirmDoneLocked()
+	s.txConfirmDone = make(chan struct{})
 	s.mu.Unlock()
 
 	if !cat.HasCommand(def, readTxStatusCommand) || cl == nil {
@@ -105,11 +109,48 @@ func (s *Service) txConfirmTimeout(gen uint64) {
 	fire := s.txUncertain && s.txConfirmGen == gen && !s.txAlarmActive
 	if fire {
 		s.txAlarmActive = true
+		s.closeTxConfirmDoneLocked() // cycle resolved (alarmed): wake waiters
 	}
 	s.mu.Unlock()
 	if fire {
 		s.publishTxAlarm(true, TxAlarmUnconfirmed)
 	}
+}
+
+// closeTxConfirmDoneLocked wakes any waitTxConfirm callers for the current
+// cycle. Caller holds s.mu.
+func (s *Service) closeTxConfirmDoneLocked() {
+	if s.txConfirmDone != nil {
+		close(s.txConfirmDone)
+		s.txConfirmDone = nil
+	}
+}
+
+// waitTxConfirm blocks until the pending confirmation cycle resolves and
+// reports whether the transmitter was POSITIVELY confirmed idle. The release
+// paths call it before their best-effort restore (2026-07-19 review P1): a
+// full-power restore written on a fixed settle while the rig is still keyed —
+// missed TX0 but a live enough link to deliver the PC frame — would raise a
+// keyed carrier from clamped tune power to operator power. false means
+// unconfirmed or alarmed: the caller must SKIP the restore (clamped-power RTTY
+// plus the standing alarm banner is the safe state).
+//
+// The cycle self-resolves within txConfirmTimeout; the extra grace guards a
+// beginTxConfirm/wait interleaving so a missed channel can't block forever.
+// Returns immediately when no cycle is pending (CI-V's ACK already confirmed).
+func (s *Service) waitTxConfirm() bool {
+	s.mu.Lock()
+	ch := s.txConfirmDone
+	s.mu.Unlock()
+	if ch != nil {
+		select {
+		case <-ch:
+		case <-time.After(txConfirmTimeout + time.Second):
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.txUncertain && !s.txAlarmActive
 }
 
 // raiseTxAlarm latches the alarm with the given code (idempotent while
@@ -120,6 +161,7 @@ func (s *Service) raiseTxAlarm(code string) {
 	already := s.txAlarmActive
 	s.txAlarmActive = true
 	s.txUncertain = true
+	s.closeTxConfirmDoneLocked() // cycle resolved (alarmed): wake waiters
 	s.mu.Unlock()
 	if !already {
 		s.publishTxAlarm(true, code)
@@ -139,6 +181,7 @@ func (s *Service) confirmTxIdle(how string) {
 		s.txConfirmTimer.Stop()
 		s.txConfirmTimer = nil
 	}
+	s.closeTxConfirmDoneLocked() // cycle resolved (idle): wake waiters
 	s.mu.Unlock()
 	if wasAlarmed {
 		s.publishTxAlarm(false, "")
