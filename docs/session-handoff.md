@@ -32,11 +32,12 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-19)
 
-> **Session 226 (2026-07-19, early morning) — DEPLOY DAY + FOUR BUILT BATCHES:
+> **Session 226 (2026-07-19, morning) — DEPLOY DAY + FIVE BUILT BATCHES:
 > ADR 0051 went LIVE (first real confirmations observed), the smcloud
 > stamp-drift fix + gzip landed, a FOURTH TX-safety review round (5 findings)
-> was verified + built, and the ClubLog realtime.php promise got ENFORCED in
-> code — all the same morning. Committed per-batch by the operator.**
+> was verified + built, the ClubLog realtime.php promise got ENFORCED in
+> code, and a review round on the gzip/ClubLog batch (3 findings, all real)
+> was fixed same morning. Committed per-batch by the operator.**
 > - **The 04:22 deploy took everything through S225 live.** First live ADR 0051
 >   evidence in the log within minutes: `bridge: tx state confirmed idle` on
 >   real unkeys during an FT8 pile-up.
@@ -110,12 +111,29 @@ precisely so we don't re-derive state or redo finished work.
 >   streaming writer; ~10× on the repetitive manifest/export JSON. 3 tests
 >   without Postgres, incl. a stock-Go-client transparent round-trip proving
 >   ZERO daemon-side change + no lockstep (skew-safe both directions).
+> - **Gzip/ClubLog review round (3 findings, ALL real — 5th consecutive clean
+>   round) FIXED:** (P1) `gzipResponseWriter.Unwrap()` — `ResponseController`
+>   walks Unwrap chains, so without it handleExport's 15-min write-deadline
+>   extension silently failed and every gzip-accepting export (= every default
+>   Go client, incl. restore) ran under the server-wide 2-min timeout →
+>   slow-link restores would truncate mid-JSON; pinned by a
+>   deadline-through-the-wrapper test · (P1) **the blanket ClubLog guard
+>   severed the 403-era rows' recovery path** (this endpoint re-arms failed
+>   live uploads) → replaced with PER-ROW queue-history distinction: history =
+>   live upload → retry allowed (legitimate realtime usage); no history =
+>   backfill → refused into new `skipped_no_history` bucket; the SPA button
+>   became amber **"Retry failed uploads to clublog"** (tooltip + skip-count
+>   notice) · (P2) proper Accept-Encoding negotiation (`acceptsGzip`:
+>   q-values/case/x-gzip/wildcard, explicit-beats-wildcard; `gzip;q=0` no
+>   longer served gzip) + `Vary` on identity responses too. 14-case parser
+>   table + 4 new e2e/integration tests.
 > - **NEXT: (1) `task deploy:local:dev`** — the stamp-drift fix, round-4
->   TX-safety batch, and ClubLog backfill block are NOT live (the 04:22 deploy
->   predates them); after deploy, watch the hourly reconcile go quiet
+>   TX-safety batch, and ClubLog retry-only guard are NOT live (the 04:22
+>   deploy predates them); after deploy, watch the hourly reconcile go quiet
 >   (`in_sync:true` even during operating hours). **(2) F44 smcloud RPM
 >   rebuild** (`task rpm:smcloud` + install on the F44 box) to activate gzip —
->   independent of (1), no ordering constraint.
+>   independent of (1); make sure it includes the review fixes (the Unwrap one
+>   protects restore).
 
 > **Session 225 (2026-07-18, evening) — THE TX-SAFETY MEGA-ARC: the stuck-TX
 > incident's root fix, end to end — ADR 0051 designed, built, and hardened
