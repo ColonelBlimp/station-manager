@@ -21,6 +21,7 @@ import {
     type Ft8TxActions,
 } from './ft8.svelte';
 import type { DecodeReport } from '../api/ft8-sse';
+import { ft8PileupStack } from './ft8Pileup.svelte';
 
 beforeEach(() => {
     resetFt8ForTests();
@@ -309,5 +310,56 @@ describe('view-scoped lifecycle', () => {
     it('startFt8 is a no-op with no transport injected', () => {
         startFt8();
         expect(ft8State.connected).toBe(false);
+    });
+});
+
+describe('noteOperatingBand (band-change clear, dogfood 2026-07-19)', () => {
+    function seedDecodes() {
+        ft8Link.onDecode(
+            decodeSlot('2026-07-19T05:00:00Z', [{ text: 'CQ K1ABC FN42', freq_hz: 1200, snr: -5 }])
+        );
+        expect(ft8State.decodes.length).toBe(1);
+    }
+    function seedPileup() {
+        ft8PileupStack.push({
+            call: 'K2DEF',
+            grid: 'FN31',
+            snr: -8,
+            slotUtc: '2026-07-19T05:00:00Z',
+        });
+        expect(ft8PileupStack.items.length).toBe(1);
+    }
+
+    it('first sighting records the band without touching the pile-up', () => {
+        seedPileup();
+        ft8State.noteOperatingBand('20m');
+        expect(ft8State.lastSeenBand).toBe('20m');
+        expect(ft8PileupStack.items.length).toBe(1);
+        ft8PileupStack.clear();
+    });
+
+    it('same band repeated leaves the feed alone (intra-band dial nudges)', () => {
+        ft8State.noteOperatingBand('20m');
+        seedDecodes();
+        ft8State.noteOperatingBand('20m');
+        expect(ft8State.decodes.length).toBe(1);
+    });
+
+    it('a band change clears decodes AND the pile-up queue', () => {
+        ft8State.noteOperatingBand('20m');
+        seedDecodes();
+        seedPileup();
+        ft8State.noteOperatingBand('40m');
+        expect(ft8State.decodes.length).toBe(0);
+        expect(ft8PileupStack.items.length).toBe(0);
+        expect(ft8State.lastSeenBand).toBe('40m');
+    });
+
+    it('an empty band (unknown dial) is ignored', () => {
+        ft8State.noteOperatingBand('20m');
+        seedDecodes();
+        ft8State.noteOperatingBand('');
+        expect(ft8State.decodes.length).toBe(1);
+        expect(ft8State.lastSeenBand).toBe('20m');
     });
 });

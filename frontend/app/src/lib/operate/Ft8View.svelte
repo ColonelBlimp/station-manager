@@ -3,8 +3,9 @@
     // Activity + Operate side-by-side up top, Occupancy (TX-offset picker) full-
     // width across the bottom.
     import { onMount } from 'svelte';
-    import { startFt8, stopFt8 } from './ft8.svelte';
+    import { ft8State, startFt8, stopFt8 } from './ft8.svelte';
     import { ft8EnrichState } from './ft8Enrich.svelte';
+    import { rig } from './rig.svelte';
     import Ft8BandActivity from './Ft8BandActivity.svelte';
     import Ft8Operate from './Ft8Operate.svelte';
     import Ft8Occupancy from './Ft8Occupancy.svelte';
@@ -19,6 +20,12 @@
             ft8EnrichState.clear();
         };
     });
+
+    // Band-change watcher (dogfood niggle 2026-07-19): crossing a band boundary
+    // clears the Band Activity feed (and, on a genuine band-to-band change, the
+    // pile-up queue). The transition logic lives in ft8State.noteOperatingBand
+    // so it's unit-tested there; this effect just feeds it the rig band.
+    $effect(() => ft8State.noteOperatingBand(rig.band));
 </script>
 
 <div class="ft8-grid">

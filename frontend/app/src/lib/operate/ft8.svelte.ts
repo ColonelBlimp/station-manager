@@ -19,6 +19,7 @@ import type {
     LoggedPayload,
     Ft8EventHandlers,
 } from '../api/ft8-sse';
+import { ft8PileupStack } from './ft8Pileup.svelte';
 
 export type { Ft8SlotRef, Ft8Band } from '../api/ft8-sse';
 
@@ -238,6 +239,29 @@ class Ft8State {
     /** Drop the accumulated feed — a band change makes prior rows misleading. */
     clearDecodes(): void {
         this.decodes = [];
+    }
+
+    /** Last operating band seen by noteOperatingBand — transition bookkeeping,
+     *  plain (non-reactive) and deliberately NOT reset on view close: a band
+     *  change made while the FT8 view is closed must still clear the
+     *  (persistent, module-singleton) pile-up queue on reopen. */
+    lastSeenBand = '';
+
+    /** Band-change watcher for Band Activity (ported from the logging SPA's
+     *  Ft8Panel, dogfood niggle 2026-07-19): the FT8 view feeds it the rig's
+     *  operating band each render. Crossing a band boundary clears the decode
+     *  feed — accumulated rows are the previous band's watering hole and would
+     *  be misleading mixed with the new band's traffic. Intra-band dial nudges
+     *  don't wipe the list, and an empty band ('' — no/invalid dial freq) is
+     *  ignored so a transient unknown doesn't clear it. On a GENUINE
+     *  band-to-band change (not the first sighting) the pile-up queue drops
+     *  too: its callers were heard on the old band and aren't workable here. */
+    noteOperatingBand(band: string): void {
+        if (band === '' || band === this.lastSeenBand) return;
+        const genuineChange = this.lastSeenBand !== '';
+        this.lastSeenBand = band;
+        this.clearDecodes();
+        if (genuineChange) ft8PileupStack.clear();
     }
 }
 
@@ -593,4 +617,5 @@ export function resetFt8ForTests(): void {
     ft8State.occupancyView = 'spectrum';
     ft8State.tx = emptyTxStatus();
     ft8State.qso = emptyQsoStatus();
+    ft8State.lastSeenBand = '';
 }
