@@ -50,8 +50,11 @@ func TestParseMaxConcurrent(t *testing.T) {
 		{"custom", "32", 32, ""},
 		{"padded", " 8 ", 8, ""},
 		{"minimum", "1", 1, ""},
-		{"zero", "0", 0, ">= 1"},
-		{"negative", "-4", 0, ">= 1"},
+		{"ceiling", "4096", 4096, ""},
+		{"zero", "0", 0, "must be 1.."},
+		{"negative", "-4", 0, "must be 1.."},
+		{"over ceiling", "4097", 0, "must be 1.."},
+		{"overflow bait", "9223372036854775807", 0, "must be 1.."},
 		{"junk", "lots", 0, "not an integer"},
 		{"empty", "", 0, "not an integer"},
 	}

@@ -114,16 +114,23 @@ func normalizeCallsign(s string) string {
 // an empty env agree with the server's own fallback.
 const defaultMaxConcurrent = "16"
 
-// parseMaxConcurrent validates the in-flight request cap. Junk or a
-// non-positive value is a boot error, not a silent fallback — a mistyped
+// maxMaxConcurrent is the operational ceiling on the request cap. 4096
+// in-flight requests (→ 16384 connections via connCap) is far beyond any
+// sane smcloud deployment; the bound also keeps connCap's ×4 from integer
+// overflow — an extreme value would wrap negative and panic LimitListener's
+// semaphore at boot (2026-07-19 review round 2 #3).
+const maxMaxConcurrent = 4096
+
+// parseMaxConcurrent validates the in-flight request cap. Junk or an
+// out-of-range value is a boot error, not a silent fallback — a mistyped
 // limit on an internet-facing box should fail loudly.
 func parseMaxConcurrent(s string) (int, error) {
 	n, err := strconv.Atoi(strings.TrimSpace(s))
 	if err != nil {
 		return 0, fmt.Errorf("max-concurrent %q is not an integer", s)
 	}
-	if n < 1 {
-		return 0, fmt.Errorf("max-concurrent must be >= 1 (got %d)", n)
+	if n < 1 || n > maxMaxConcurrent {
+		return 0, fmt.Errorf("max-concurrent must be 1..%d (got %d)", maxMaxConcurrent, n)
 	}
 	return n, nil
 }

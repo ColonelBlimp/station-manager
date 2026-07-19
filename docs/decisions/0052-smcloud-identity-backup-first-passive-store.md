@@ -57,12 +57,17 @@ Roadmap *direction* beyond that (sequenced, each step useful alone; not
 commitments): bidirectional reconcile (pull `CloudOnly` rows through the
 restore write path — completes the POTA loop) → per-device tokens (lost
 phone = one revocation) → delta pull / Merkle-lite manifest → phone-shaped
-query API. **Precondition on the sync legs (2026-07-19 review):** before
-bidirectional reconcile ships, the version tuple needs a tie-breaker (a
-device/writer id in the ADR 0050 tuple, or a payload digest in the reconcile
-hash) — same-second same-revision edits from two clients are currently
-undetectable (see Consequences), tolerable for a backup with one writer but
-not for a protocol that *pulls*. The qrz.com-core direction (QSL confirmations as the first
+query API. **Precondition on the sync legs (2026-07-19 review, sharpened same day):**
+before bidirectional reconcile ships, the ADR 0050 version tuple needs a
+**device/writer id** as the tie-breaker — same-second same-revision edits
+from two clients are currently undetectable (see Consequences), tolerable
+for a backup with one writer but not for a protocol that *pulls*. A payload
+digest is NOT an equivalent alternative: folded into the summary hash it
+would flag perpetual mismatch while the per-row manifest diff (which
+compares only revision + modified_at) finds nothing to act on — reconcile
+would report drift forever and never converge. A digest can serve as a
+*detection aid* only if it also propagates through the manifest and gains an
+explicit conflict-resolution branch; the writer id is the ordering fix. The qrz.com-core direction (QSL confirmations as the first
 server-owned *derived* table) is **explored, not decided** — captured here so
 it isn't re-derived, deliberately unscheduled.
 

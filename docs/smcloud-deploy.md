@@ -318,16 +318,21 @@ caddy list-modules | grep rate_limit                       # → http.handlers.r
 #    exists), and validate:
 caddy validate --config /etc/caddy/Caddyfile
 
-# 5. Only now expose the listener:
-sudo systemctl enable --now caddy
+# 5. Only now expose the listener. RESTART, not `enable --now`: the
+#    Debian/Ubuntu package auto-starts stock Caddy during install, and
+#    `enable --now` does not restart a running unit — the old binary would
+#    keep serving. restart covers both families (starts it where it wasn't
+#    running, swaps the binary where it was):
+sudo systemctl enable caddy
+sudo systemctl restart caddy
 curl -s https://cloud.station-manager.org/v1/health        # end-to-end through TLS
 ```
 
 **A package upgrade clobbers the custom binary** (`dnf upgrade caddy`
 reinstalls the stock one, and Caddy then refuses to start on the unknown
 `rate_limit` directive — fail-loud, not silently unlimited). After any caddy
-package upgrade, repeat step 3. `dnf versionlock caddy` avoids the surprise
-if upgrades are automated.
+package upgrade, repeat step 3 and restart (step 5). `dnf versionlock caddy`
+avoids the surprise if upgrades are automated.
 
 Deliberately skipping the plugin (e.g. LAN staging behind a firewall): leave
 the `rate_limit` block commented — config validates against stock Caddy and
