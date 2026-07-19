@@ -32,6 +32,38 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-19)
 
+> **Session 227 (2026-07-19, mid-morning) — FT8 band-change clear BUILT, then
+> BOTH S226 NEXT deploys DONE + VERIFIED. Everything through the sixth batch
+> is now live on both ends.**
+> - **FT8 band-change Band Activity clear (dogfood niggle → built + committed
+>   `acfc9bfe`):** a frontend/app port gap — the logging SPA's Ft8Panel already
+>   cleared decodes on band change, but frontend/app's `clearDecodes()` was
+>   orphaned. Fix: `ft8State.noteOperatingBand(band)` with a `lastSeenBand`
+>   field that DELIBERATELY survives view close (so a band change while the
+>   FT8 view is closed still clears the persistent pile-up singleton on
+>   reopen; reset only in `resetFt8ForTests`) + a one-line `$effect` in
+>   `Ft8View.svelte` feeding it `rig.band`. A genuine band-to-band change also
+>   clears the pile-up queue; first-band seed doesn't. 4 state tests; app
+>   suite 639 green.
+> - **`task deploy:local:dev` DONE — daemon restarted 10:02 on
+>   `2.0.0-alpha.1-689-gacfc9bfe` (the latest commit):** stamp-drift fix,
+>   TX-safety round 4, ClubLog retry-only guard (incl. the force fix), and the
+>   band-change clear are all LIVE. Clean boot; reconciler + workers started.
+> - **F44 smcloud RPM rebuilt + installed — gzip VERIFIED live:** probe against
+>   `http://192.168.1.200:8091/v1/health` shows `Content-Encoding: gzip` +
+>   `Vary: Accept-Encoding` when accepting, identity on a plain request.
+> - **Reconcile expectation (so the first reading isn't misread):** the FIRST
+>   post-deploy hourly reconcile will still show `in_sync:false` + a few
+>   upserts — rows stamped by the OLD daemon after the 07:24 run (e.g.
+>   SQ3PMX/IT9LCC, QRZ-stamped 07:42) carry residual pre-fix drift; that run
+>   heals them. The reconcile AFTER it is the verdict: steady state is
+>   `in_sync:true` even mid-pile-up, and any later `in_sync:false` is a REAL
+>   drift signal again (and the manifest pull behind it is now gzipped ~10×).
+> - **NEXT:** after two hourly cycles, eyeball
+>   `grep reconcile ~/.local/share/station-manager/log/smd.log | tail -3` to
+>   confirm the steady state. Then back to the standing items: ClubLog key
+>   arrival (inbox note has the full sequence), dogfood validations, backlog.
+
 > **Session 226 (2026-07-19, morning) — DEPLOY DAY + SIX BUILT BATCHES:
 > ADR 0051 went LIVE (first real confirmations observed), the smcloud
 > stamp-drift fix + gzip landed, a FOURTH TX-safety review round (5 findings)
@@ -149,7 +181,7 @@ precisely so we don't re-derive state or redo finished work.
 >   and "durable provenance" is folded into the putlogs.php backlog item —
 >   which dissolves the problem (bulk legal in-app = the history distinction
 >   stops mattering for recovery).
-> - **NEXT: (1) `task deploy:local:dev`** — the stamp-drift fix, round-4
+> - **NEXT (both DONE in S227): (1) `task deploy:local:dev`** — the stamp-drift fix, round-4
 >   TX-safety batch, and ClubLog retry-only guard (incl. the force fix) are
 >   NOT live (the 04:22 deploy predates them); after deploy, watch the hourly
 >   reconcile go quiet (`in_sync:true` even during operating hours).
