@@ -16,6 +16,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/stub"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -89,14 +90,18 @@ func newTestDeps(t *testing.T) (*sqlite.Service, *logging.Service) {
 // error (if any) and whether the wg drained cleanly.
 func spawnAndDrain(t *testing.T, fwds []types.ForwarderConfig) (spawnErr error, drained bool) {
 	t.Helper()
-	db, logger := newTestDeps(t)
+	db, logger, cfgSvc := newTestDepsWithCfg(t, nil)
 	hub := events.NewHub()
 	t.Cleanup(func() { hub.Close() })
+
+	// Minimal qsoservice for the stamp-sync hook wiring; the spawn tests
+	// cancel immediately, so no upload (and thus no hook call) ever runs.
+	qsoSvc := &qsoservice.Service{DB: db, Logger: logger, Config: cfgSvc, Hub: hub}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 
-	spawnErr = spawnForwarderWorkers(ctx, &wg, fwds, db, logger, hub)
+	spawnErr = spawnForwarderWorkers(ctx, &wg, fwds, db, qsoSvc, logger, hub)
 
 	cancel()
 

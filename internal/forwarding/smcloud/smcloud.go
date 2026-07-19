@@ -20,7 +20,12 @@
 // ADIF stamp and only updates qso_upload. A stamp write would bump the row's
 // modified_at, which would make reconcile (S4) see false drift on every push
 // and risk a re-enqueue loop — backup status lives in qso_upload, never on
-// the QSO row (sm-cloud-p1.md § AdifPrefix).
+// the QSO row (sm-cloud-p1.md § AdifPrefix). OTHER forwarders' stamps (QRZ,
+// ClubLog, session email) still bump rows after this mirror received them,
+// so the type also registers as a ROW MIRROR (RegisterRowMirror): the stamp
+// writers re-enqueue the bumped row here via qsoservice.EnqueueStampSync,
+// keeping reconcile on its cheap hash-only path instead of a full-manifest
+// heal every operating hour.
 //
 // Registers under type "smcloud" via init(). Import with
 //
@@ -82,6 +87,8 @@ var DefaultRetry = types.RetryConfig{
 func init() {
 	forwarding.Register(Type, New)
 	forwarding.RegisterDefaultRetry(Type, DefaultRetry)
+	// Row mirror: stamp writes elsewhere re-enqueue here (see the package doc).
+	forwarding.RegisterRowMirror(Type)
 	// NO RegisterAdifPrefix (this type stamps nothing — see the package doc)
 	// and NO RegisterDefaultEndpoints (no canonical URL — the operator's own
 	// service; the absence also keeps it out of the auto-seeded non-sparse

@@ -46,6 +46,16 @@ type Config struct {
 	// the caller is responsible for merging the operator override (if
 	// any) with the forwarder package's defaults.
 	Retry types.RetryConfig
+
+	// OnQsoStamped, when non-nil, is invoked after a successful post-upload
+	// ADIF stamp (markSuccess's stamping branch) with the stamped QSO's row
+	// id. The stamp bumps the row's revision, so row-mirror forwarders (SM
+	// Cloud) need the row re-enqueued or their copy drifts until the hourly
+	// reconcile heals it via a full-manifest diff; cmd/smd wires this to
+	// qsoservice.EnqueueStampSync. Best-effort — the hook's outcome never
+	// affects the upload row's own lifecycle, and a forwarder that stamps
+	// nothing (including the mirror itself) never fires it.
+	OnQsoStamped func(ctx context.Context, qsoID int64)
 }
 
 // Worker drains the pending qso_upload queue for one destination.
@@ -527,6 +537,11 @@ func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamI
 				Err(err).
 				Msg("forwarder: mark success + adif stamp failed")
 			return
+		}
+		// The stamp just bumped the QSO row's revision — tell the row-mirror
+		// forwarder(s) so their copy doesn't drift until the hourly reconcile.
+		if w.cfg.OnQsoStamped != nil {
+			w.cfg.OnQsoStamped(ctx, row.QsoID)
 		}
 	} else {
 		if err := w.db.MarkUploadSuccessWithContext(ctx, row.ID, upstreamID); err != nil {

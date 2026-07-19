@@ -236,6 +236,16 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 		s.logger.WarnWith().Int64("stamped", n).Int("expected", len(stampIDs)).
 			Msg("session email: fewer rows stamped than sent")
 	}
+	if err == nil {
+		// The stamp bumped each row's revision — re-enqueue to the row-mirror
+		// forwarder(s) (SM Cloud) so their copies don't drift until the hourly
+		// reconcile. Best-effort: the stamp is committed, the mail has left,
+		// and the reconciler backstops a missed enqueue.
+		if _, serr := s.qso.EnqueueStampSync(r.Context(), stampIDs); serr != nil {
+			s.logger.WarnWith().Err(serr).Int("qso_count", len(stampIDs)).
+				Msg("session email: stamp sync enqueue failed (reconcile will heal)")
+		}
+	}
 
 	s.writeJSON(w, http.StatusOK, SessionEmailResponse{
 		Status:  "sent",

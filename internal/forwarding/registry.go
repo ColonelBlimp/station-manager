@@ -25,6 +25,7 @@ var (
 	descriptors         = map[string]TypeDescriptor{}
 	defaultEndpointsMap = map[string]map[string]string{}
 	adifPrefixMap       = map[string]string{}
+	rowMirrorTypes      = map[string]struct{}{}
 )
 
 // adifPrefixPattern enforces a safe shape for the ADIF upload-status field prefix
@@ -275,6 +276,38 @@ func AdifPrefixForType(typeName string) (string, bool) {
 	defer registryMu.Unlock()
 	p, ok := adifPrefixMap[typeName]
 	return p, ok
+}
+
+// RegisterRowMirror marks forwarder typeName as a ROW MIRROR — a destination
+// that holds a full copy of every QSO row (the SM Cloud backup) rather than a
+// derived record it extracts once (QRZ, ClubLog). A mirror must be told about
+// EVERY row change, including the out-of-band writes that bypass the qsoservice
+// ingest paths: the post-upload ADIF stamps and the session-email stamp both
+// bump the row's revision AFTER the mirror already received it, and without a
+// re-enqueue the mirror's copy stays one revision behind until the hourly
+// reconcile heals it via a full-manifest diff (an O(logbook-size) download —
+// see docs/backlog.md "smcloud stamp-drift"). qsoservice.EnqueueStampSync
+// reads this flag back via IsRowMirror. From the forwarder package's init().
+//
+// Panics on empty typeName or duplicate registration — binary bugs.
+func RegisterRowMirror(typeName string) {
+	if typeName == "" {
+		panic("forwarding.RegisterRowMirror: empty type name")
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, exists := rowMirrorTypes[typeName]; exists {
+		panic("forwarding.RegisterRowMirror: type already registered: " + typeName)
+	}
+	rowMirrorTypes[typeName] = struct{}{}
+}
+
+// IsRowMirror reports whether typeName registered as a row mirror.
+func IsRowMirror(typeName string) bool {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	_, ok := rowMirrorTypes[typeName]
+	return ok
 }
 
 // ResolveEndpoint returns the first non-empty endpoint among keys in m, falling

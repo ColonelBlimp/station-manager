@@ -914,6 +914,64 @@ func TestWorker_InsertSuccess_EmptyPrefix_DoesNotStamp(t *testing.T) {
 	}
 }
 
+func TestWorker_StampSuccess_FiresOnQsoStamped(t *testing.T) {
+	// A successful stamping upload bumps the QSO row's revision, so the
+	// OnQsoStamped hook must fire (cmd/smd wires it to the row-mirror
+	// re-enqueue — without it the SM Cloud copy drifts until reconcile).
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "qrz", "qrz", action.Insert)
+
+	var stamped []int64
+	cfg := defaultCfg("qrz")
+	cfg.OnQsoStamped = func(_ context.Context, id int64) { stamped = append(stamped, id) }
+
+	fwd := &stampingForwarder{
+		typeName: "qrz",
+		prefix:   "QRZCOM",
+		result:   forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "logid-1002"},
+	}
+	w, err := New(cfg, fwd, h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	// runUntil waits for Run to return, which happens-before this read.
+	runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Uploaded.String()
+	})
+
+	if len(stamped) != 1 || stamped[0] != qsoID {
+		t.Fatalf("OnQsoStamped calls = %v, want exactly [%d]", stamped, qsoID)
+	}
+}
+
+func TestWorker_EmptyPrefix_DoesNotFireOnQsoStamped(t *testing.T) {
+	// A non-stamping forwarder (the mirror itself, custom webhooks) never
+	// bumps the row, so the hook must stay silent — this is also the
+	// re-enqueue-loop guard: smcloud's own success must not re-enqueue.
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
+
+	fired := 0
+	cfg := defaultCfg("stub")
+	cfg.OnQsoStamped = func(_ context.Context, _ int64) { fired++ }
+
+	w, err := New(cfg, buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool {
+		return u.Status == status.Uploaded.String()
+	})
+
+	if fired != 0 {
+		t.Fatalf("OnQsoStamped fired %d times for a non-stamping forwarder, want 0", fired)
+	}
+}
+
 // =============================================================================
 // Stage 5: delete action + priorUpstreamID lookup
 // =============================================================================

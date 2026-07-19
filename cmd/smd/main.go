@@ -498,7 +498,7 @@ func run() error {
 	// before the daemon hub / DB tear down, instead of racing it (M2).
 	var qsoLogWG sync.WaitGroup
 
-	if err = spawnForwarderWorkers(workerCtx, &workerWG, cfg.Forwarders, dbSvc, loggerSvc, hub); err != nil {
+	if err = spawnForwarderWorkers(workerCtx, &workerWG, cfg.Forwarders, dbSvc, qsoSvc, loggerSvc, hub); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("spawn forwarder workers")
 	}
 
@@ -1085,6 +1085,7 @@ func spawnForwarderWorkers(
 	wg *sync.WaitGroup,
 	fwds []types.ForwarderConfig,
 	dbSvc *sqlite.Service,
+	qsoSvc *qsoservice.Service,
 	loggerSvc *logging.Service,
 	hub *events.Hub,
 ) error {
@@ -1096,6 +1097,18 @@ func spawnForwarderWorkers(
 			Interface("panic", pv).
 			Bytes("stack", stack).
 			Msg("forwarder worker panic recovered")
+	}
+
+	// A post-upload ADIF stamp bumps the QSO row's revision, so row-mirror
+	// forwarders (SM Cloud) must have the row re-enqueued or their copy drifts
+	// until the hourly reconcile heals it with a full-manifest diff. Failure is
+	// logged only — the stamp has already committed, and the reconciler stays
+	// the backstop.
+	onStamped := func(ctx context.Context, qsoID int64) {
+		if _, err := qsoSvc.EnqueueStampSync(ctx, []int64{qsoID}); err != nil {
+			loggerSvc.WarnWith().Err(err).Int64("qso_id", qsoID).
+				Msg("stamp sync enqueue failed (reconcile will heal)")
+		}
 	}
 
 	for _, fc := range fwds {
@@ -1125,10 +1138,11 @@ func spawnForwarderWorkers(
 		}
 
 		w, err := worker.New(worker.Config{
-			Name:  fc.Name,
-			Tick:  time.Duration(fc.TickIntervalSec) * time.Second,
-			Batch: fc.BatchSize,
-			Retry: retry,
+			Name:         fc.Name,
+			Tick:         time.Duration(fc.TickIntervalSec) * time.Second,
+			Batch:        fc.BatchSize,
+			Retry:        retry,
+			OnQsoStamped: onStamped,
 		}, fwd, dbSvc, loggerSvc, hub)
 		if err != nil {
 			return errors.New(op).WithErr(err).WithMsgf("construct worker for %q", fc.Name)
