@@ -30,7 +30,63 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-18)
+## Current state (as of 2026-07-19)
+
+> **Session 226 (2026-07-19, early morning) — DEPLOY DAY + TWO BUILT BATCHES:
+> ADR 0051 went LIVE (first real confirmations observed), the smcloud
+> stamp-drift fix landed, and a FOURTH TX-safety review round (5 findings)
+> was verified + built the same morning. Committed per-batch by the operator.**
+> - **The 04:22 deploy took everything through S225 live.** First live ADR 0051
+>   evidence in the log within minutes: `bridge: tx state confirmed idle` on
+>   real unkeys during an FT8 pile-up.
+> - **Reconcile check → stamp-drift root cause (evidence-verified in the DB):**
+>   every post-0050 QSO sits at revision 2 — the QRZ upload stamp
+>   (`MarkUploadSuccessWithAdifStampWithContext`) and the session-email stamp
+>   both bump `revision` AFTER the smcloud worker already pushed the row, so
+>   `in_sync:false` + upserts (7/39/34, then a 94-row heal at 04:24) was the
+>   ROUTINE state during operating hours. The real cost is bandwidth, not the
+>   upserts: any hash mismatch drops reconcile to the full cloud-manifest GET —
+>   O(total logbook), ~650 KB uncompressed at 5.7k rows, no gzip anywhere on
+>   the path — per client per drifted hour (the operator's concern exactly).
+> - **Stamp-drift fix BUILT (committed):** `forwarding.RegisterRowMirror` flag
+>   (smcloud self-registers; re-enqueue targets mirror types ONLY, so a QRZ
+>   stamp can never re-upload to QRZ) → `qsoservice.EnqueueStampSync`
+>   (update-action rows via the existing UPSERT re-arm, idempotent across the
+>   double stamp) → worker `Config.OnQsoStamped` hook fired ONLY on the
+>   stamping branch (smcloud stamps nothing → no loop) wired in
+>   `spawnForwarderWorkers` + the session-email handler enqueues after its
+>   stamp commit. All best-effort; reconcile stays the backstop. Steady state
+>   returns to the ~1 KB hash-only check — `in_sync:false` is a real alarm
+>   again. 2 worker tests + 5 qsoservice integration tests. **Gzip half stays
+>   open in the backlog** (server-side only — Go clients already send
+>   Accept-Encoding and auto-decompress, so no lockstep deploy; needs an F44
+>   smcloud RPM rebuild).
+> - **TX-safety round 4 (operator-pasted review, 5 findings — ALL verified
+>   real, 4th consecutive clean round) BUILT P1s-first:** (P1) **restore gated
+>   on positive RX confirmation** — new `txConfirmDone` per-cycle channel +
+>   `waitTxConfirm`; the tune power/mode restore and FT8 mode restore are
+>   SKIPPED when unconfirmed/alarmed (a fixed 150 ms settle previously wrote
+>   `PC` full power even if the rig missed `TX0;` — amp-damage territory;
+>   clamped-power RTTY + the standing banner is the safe state) · (P1)
+>   **cause-aware teardown** — `unkeyOnTeardown(…, fault)` where fault =
+>   error-shaped pipeline exit (`ctx.Err()==nil`): a faulted pipe's
+>   write-accepted unkey now ALARMS (the incident shape; the supervisor may
+>   never reconnect), healthy shutdowns keep the ADR 0051 quiet-uncertain
+>   trade · (P2) **per-VFO dial knownness** — `dialKnown` deleted;
+>   `CurrentDialMHz` refuses when the SELECTED VFO is undecoded (wrong-band
+>   FT8 logs) · (P3) **def-floor tune-power validation** — New + `ResolveTune`
+>   dry-run the configured watts against the rigdef (PC floor 5 W on both
+>   Yaesu defs; 1 W previously advertised tune:true while every StartTune
+>   failed); found + fixed a latent nil-deref (`cfg.Cat` is a nil-able
+>   pointer) · (P3) **multi-tab count race** — `clientsMu` orders join/leave +
+>   count + publish (a stale 2 could be the LAST event, sticking a lone tab's
+>   banner). New tests pin every finding (unconfirmed-skip tune/FT8/TX1-answer,
+>   fault-teardown alarm, per-VFO unknown, def-floor); `answerTxStatusQueries`
+>   fixture helper keeps healthy-rig tests fast (suite 37 s → 4 s). Bridge 4×
+>   `-race` stable; full tree `-race` green.
+> - **NEXT: `task deploy:local:dev`** — the stamp-drift fix + round-4 batch are
+>   NOT live (the 04:22 deploy predates them). After deploy, watch the hourly
+>   reconcile log go quiet (`in_sync:true` even during operating hours).
 
 > **Session 225 (2026-07-18, evening) — THE TX-SAFETY MEGA-ARC: the stuck-TX
 > incident's root fix, end to end — ADR 0051 designed, built, and hardened
@@ -655,352 +711,6 @@ precisely so we don't re-derive state or redo finished work.
 >   remember `/app/` is `//go:embed`'d: redeploy, don't reload); the **whole-log
 >   Dashboard map** stays the designed follow-on (reuses the shipped engine; needs the
 >   `GET /v1/logbook/{id}/map` aggregate — detail in the backlog).
-
-> **Session 213 (2026-07-16) — FT8 REDUCED TYPE-4 (nonstandard/compound-call) LADDER
-> BUILT end-to-end (ADR 0048), offline-gated; COMMITTED (per-unit, local — NOT pushed),
-> NOT yet on air, NOT yet dogfood-deployed.** The one FT8 gap that blocked finishing a QSO with a `/D` / prefix-
-> compound station (operator hit it on air 2026-07-14) is closed at the code level. Built
-> as an **isolated parallel path** (the Field Day pattern, ADR 0037):
-> - **Daemon:** `internal/ft8/type4.go` (`T4Exchange` answer + `T4WorkExchange` work — pure
->   value-returning state machines; `parseType4` accepts the hashed `<...>` token the
->   standard parser drops; matching is on the **spelled** partner, presumed-us for the
->   hashed addressee) + `type4_sequencer.go` (`seqAnsweringT4`/`seqWorkingT4`,
->   `onSlotAnsweringT4`/`onSlotWorkingT4`, `StartQsoT4`/`StartWorkCallerT4`, completion
->   snapshots). Reduced ladder: **answer** = bare opening → their roger → our 73 (2 rungs);
->   **work** = single RR73 rung (no report). Wired into `sequencer.go` switch arms
->   (OnSlot / fireOpening [answer only — work's sole rung is terminal, needs the onDone
->   path] / statusModeLocked / Abandon / SetSkipIfSilent). `QsoStatus.Type4` added.
-> - **Service + HTTP:** `Service.StartQsoT4`/`StartWorkCallerT4` (armed-gated, no config
->   identity — our call is standard); `mode:"type4"` added to `POST /v1/ft8/qso/{start,work}`
->   (no new routes). api-endpoints.md updated.
-> - **Logging:** NO `BuildQso` change needed — the degraded `CompletedQso` (our SNR →
->   RST_SENT, blank TheirReport → blank RST_RCVD, empty grid, no contest fields) flows
->   through cleanly; the e4 sink's FD default-RST fill is gated on `ContestId=="ARRL-FD"`
->   so type-4 stays blank; enrich uses the spelled call. Locked with `TestBuildQso_Type4`.
-> - **SPA (`frontend/app`):** `isNonstandardCall` + `isCqType4` (ft8Message.ts); answer
->   dispatch in `Ft8BandActivity.svelte` (CQ-click + directed-call double-click route a
->   nonstandard call to `mode:"type4"`); `type4` on the SSE payload/state/args; reduced
->   ladder in `ft8Ladder.ts`; role labels in `Ft8Operate.svelte`; client `mode:'type4'`;
->   main.ts wiring. **Work-a-caller SPA trigger DEFERRED** — our call is hashed on the wire
->   (`<...> PJ4/NA2AA`), so the browser can't distinguish "called me"; a nonstandard caller
->   is worked via the answer path (a bare opening completes the QSO either way). Daemon work
->   path is built + tested, ready if a resolution seam appears.
-> - **Tests:** `TestType4_RoundTrip` (RF-safety — all 7 ladder messages encode→modulate→
->   decode with the shipped decoder, zero RF), `type4_test.go` (parse + ladders),
->   `type4_sequencer_test.go` (7 happy/error/skip/retry paths), `TestBuildQso_Type4`, +
->   SPA `ft8Message`/`ft8Ladder` tests. Full ft8+api suite (incl. heavy round-trips) + race
->   + gofmt + static CGO-free build all green; SPA check/build clean, 545 tests pass. **6
->   pre-existing SPA lint errors in unrelated logbook/Ft8Operate TEST files — NOT touched by
->   this work.**
-> - **COMMITTED (session 214, 2026-07-16):** four per-unit commits on `main` — daemon
->   ladder core (`6810bb27`), service + HTTP endpoint (`86ff2e0d`), SPA dispatch + ladder
->   (`fd5c02f7`), docs. NOT pushed (on-air validation gates the push + the ADR flip). Stray
->   root `package.json`/`package-lock.json` (`@openai/codex`, unrelated) left untracked.
->   **PROCESS RULE (operator, session 214, absolute):** Claude NEVER commits or pushes —
->   the operator reviews and commits ALL work himself; sessions leave changes in the
->   working tree. (The four commits above predate the rule.)
-
-> **Session 214 (2026-07-16, later) — ADR 0049 REJECTED (daemon-owned sessions); QSO map
-> respec'd to a time-window view — UNCOMMITTED doc edits awaiting operator review.**
-> Working the session-boundary semantics through with the operator (what opens/closes a
-> sitting?) collapsed the design: every scenario demanded new machinery (merge-correction
-> UI, restart semantics, threshold config) to defend a structure whose only live tenant
-> was a map, with stamping on `prepareQso` — a structural write-path change for eye candy
-> (the operator's warning flag, confirmed). The dissolving observation: **the map needs a
-> time-filtered read, not a session entity** — and the daemon already has both halves:
-> `GET /v1/logbook/{id}/qso` cursor pages newest-first (page to the window edge), and
-> `qso.stored`/`updated`/`deleted` already fire on `GET /v1/events` from `qsoservice`
-> for every logging path. So the map = SPA-only: duration picker (60 min / 5 h / 10 days)
-> + windowed fetch + live head-refresh on `qso.*` events, separate tab, render engine
-> unchanged (d3-geo + Natural Earth, all prior render decisions stand). **Edited (working
-> tree only):** `docs/decisions/0049` status → Rejected + rejection note (revisit trigger:
-> multi-op operator profiles — a session carrying non-derivable data); `docs/backlog.md`
-> QSO-map item respec'd (SPA-only two-phase plan; daemon spine dropped; effort ~2–2.5 d);
-> this handoff. Contest grouping stays `CONTEST_ID` (better than sittings — operator
-> leans to ignoring sessions in contests entirely).
-> - **NEXT:** **work a real nonstandard station on air** → flip ADR 0048 Proposed→Accepted,
->   then push. Dogfood deploy (`task deploy:local:dev`, CGO) is operator-gated (restarts the
->   live daemon). Doc discrepancy fixed: the stale "build the 22-bit hash table" lines now
->   reflect ADR 0048's spelled-partner-match decision.
-
-> **Session 212 (2026-07-13) — DATA-CORRUPTING ENRICHMENT BUG found, FIXED +
-> LIVE-DATA REPAIRED (U-prefix country-cache poisoning: 26 Ukrainian QSOs were
-> stored + QRZ-uploaded as "European Russia"); new `qso-audit` CLI + Claude
-> skill; two `frontend/app` FT8 Rig-card fixes; afternoon tweak arc + the FT8
-> DIRECTED-CALL feature + go-ft8 v0.7.0. ALL COMMITTED + PUSHED (end of
-> session, per-unit commits). Deployed to dogfood throughout.**
-> - **`frontend/app` FT8 Rig card: CAT-required lockout.** Bug (operator): FT8
->   cannot operate without CAT, so the Rig card's manual/"Confirm" path was a
->   dead-end promise in the FT8 view. `RigPanel` gained a `requiresCat` prop
->   (FT8 host passes it; Phone/CW tile renders prop-less, unchanged): with the
->   rig away the pill goes red "CAT required" (or keeps "CAT link lost"), band
->   buttons + mode select + freq input disable, and the gate area explains
->   ("FT8 needs a live CAT connection…") with NO Confirm button — the only
->   unblock is the rig coming online (auto-lifts). 4 new RigPanel tests.
->   Follow-up noted: `RigKeys` shortcuts still silently edit the unused manual
->   state in FT8-without-CAT (harmless; could no-op + toast).
-> - **FT8 Rig/Session overlay position** — was `fixed right-16` (only 0.5rem
->   beside the narrow rail; slid UNDER a full 12rem rail). Now
->   `right-[calc(var(--util-rail-w)+1rem)]` — anchored to the rail's inner edge
->   so the side gap matches the 1rem below-header gap at either rail width
->   (same var the pile-up drawer uses). **500 SPA tests.**
-> - **`qso-audit` tooling** — `scripts/qso-audit.py`: read-only (`mode=ro`,
->   daemon-safe) consistency audit of the last N QSOs (core columns,
->   `additional_data` mirrors vs columns, band↔freq, enrichment fields,
->   station identity, upload-queue health, dupes; FAIL vs warn split honours
->   enrichment-never-blocks-logging — QRZ profile gaps are warnings). Plus
->   `.claude/skills/qso-audit/SKILL.md` so future sessions run it on "check
->   the QSOs" and know the dig-deeper paths (reference.db country cache,
->   longest-prefix gotcha, dxcc baseline).
-> - **THE BUG (found by the audit): country-cache poison row `prefix='U'`.**
->   `FetchCountryByCallsign` is a longest-prefix match
->   (`callsign LIKE prefix || '%'`); on 2026-06-25 a hamnut group prefix `'U'`
->   → "European Russia" row was cached, and since the ITU U-block spans FOUR
->   DXCC entities (UA–UI Russia, UJ–UM Uzbekistan, UN–UQ Kazakhstan, UR–UZ
->   Ukraine), EVERY U-call matched it: **26 QSOs with Ukrainian calls
->   (2026-06-26 → 07-11) stored AND QRZ-uploaded as European Russia** (dxcc 54
->   or blank); all 42 U-calls before the row's creation were correct. A
->   sibling `'R'` row had the same defect class (over-matched Asiatic
->   Russia / Kaliningrad).
-> - **Mechanism fix (all three layers tested):** (1) `validateCountryPrefix`
->   (chokepoint for every country writer) rejects one-char prefixes — new
->   exported `sqlite.IsCacheableCountryPrefix` carries the rule; (2) the
->   lookup orchestrator **skips the writeback QUIETLY** for uncacheable
->   prefixes at BOTH writeback sites (sync cold-miss + async refresh) — G/M/U/R-
->   block calls are common, so a warn per cold miss would be steady-state log
->   noise; the per-call hamnut result still reaches the caller (H2 freshness
->   stamp kept), only the cache row is forgone; (3) reference migration
->   **`0002_drop_single_char_prefixes`** purges pre-existing one-char rows
->   (down = no-op; cache rows re-fetch on cold miss). Tests:
->   `TestUpsertCountry_RejectsSingleCharPrefix`,
->   `TestMigrate0002Reference_PurgesSingleCharPrefixes` (+ new
->   `applyReferenceMigrationSteps` helper),
->   `TestEnrich_ColdMiss_OneCharPrefix_ReturnsButNeverCaches`. Test data
->   updated: country-prefix fixtures `"M"`→`"M0"` (lookup + api enrich tests),
->   `"K"`→`"K1"` (review_findings) — both old fixtures were themselves
->   multi-entity blocks.
-> - **Live-data repair (API-only, no direct DB writes):** deployed the fix
->   (migration purged `'U'`+`'R'` on startup, verified), then per distinct
->   call `GET /v1/enrich/callsign?refresh=true` (fresh hamnut: Ukraine, prefix
->   `UR` — 2-char, caches fine; dxcc 288) and per QSO
->   `PATCH /v1/qso/{uuid}` `{country, dxcc, cqz, ituz, cont}` → atomic update
->   + qso_history + **26 QRZ `update` uploads** through the normal queue
->   (draining clean at handoff: 15+ uploaded, 0 failed). One straggler
->   (UR4QFP — transient empty station lookup) re-patched explicitly.
->   Verified: zero Ukrainian-prefix rows with wrong country; mirrors +
->   dxcc=288 on all 26; audit re-run clean of the class.
-> - **Audit's other findings → inbox (not fixed today):** blank numeric dxcc
->   on 8/90 (4 pre-populate-fix backfill cases; 4 are `dxcc-entities.json`
->   baseline gaps — XU/T2/5N missing, consider regenerating the full table
->   via `scripts/gen-dxcc-entities.py`); whole-logbook blank-dxcc 740/5342
->   (existing backfill item); FT8 QSO #5257 (YO4SX) stored with EMPTY
->   `rst_rcvd` — which sequencer path logs without the report rung?
-> - **Pile-up status site roadmap addition (operator):** the smcloud widget
->   must also show ON-AIR NOW + FREQUENCY ("7Q8AC is on-air: 14.074 MHz (20m
->   FT8)") — the concrete active-vs-idle form + discovery ("where do I find
->   them"); freq inherits the staleness stamp (a stale freq misleads worse
->   than a stale decode list). Inbox entry updated.
-> - **Full-logbook audit (5,342 QSOs) + DXCC BACKFILL RUN (operator-ordered,
->   RST explicitly untouched).** The full audit corrected an assumption: blank
->   dxcc is NOT historical — the 2026-06-25 import (ids 1–4521) carries dxcc
->   from QRZ (1 blank); the **716 blanks were live-pipeline QSOs ids
->   4522–5255 (06-25 → 07-11)**, everything logged between the enrichment
->   rework and the populate-everywhere fix. Import-era "failures" (missing
->   my_*, no upload rows, qso_date≠created_at) are era effects — a possible
->   import-aware audit mode noted. Backfill = per-call re-enrich
->   (refresh=true for R/U-block calls whose cached station rows carried
->   poison-row data) + per-QSO PATCH of dxcc, plus country/zones/cont ONLY
->   where fresh enrichment disagreed; **683 + 33 = 716 repaired, 0 errors**.
->   The drift log exposed the one-char poisoning's full blast radius beyond
->   Ukraine: 12× European→**Asiatic Russia**, 2× →**Kazakhstan**,
->   UK7AL→**Uzbekistan**, RN2F→**Kaliningrad**, 4× England→**Scotland/
->   Wales/NI**, GD7DUZ→**Isle of Man**, 11× Italy→**Sicily**, and US
->   **K/W-block zone defaults** (cqz 5/ituz 8 → per-call real zones) — all
->   corrected. **dxcc-entities.json baseline 154→166** (GD/UA2/YV/IT9/3A/T2/
->   UK/A9/XU/5N/9J/HI; numbers verified vs ADIF 3.1.5 + log-authoritative
->   import rows; IT9 maps to 248 — Sicily has no separate DXCC entity) + a
->   **runtime override** at `~/.local/share/station-manager/dxcc-entities.json`
->   so the installed daemon resolves them without a redeploy (delete once a
->   release embeds the new baseline). Verified: 0 pipeline blank-dxcc; RST
->   empty-counts unchanged (13 sent / 7 rcvd). **742 QRZ `update` uploads
->   queued — drain ≈ 4.6 h** (tick 120 s × batch 5); durable queue, no action
->   needed. Second empty-`rst_rcvd` pipeline instance found (#5147 SV1NQT,
->   07-04); later triaged NOT-A-BUG (operator: the other station never sent
->   the report — SM logged what was exchanged; closed in the inbox).
-
-> - **Afternoon tweak arc (operator-driven, all deployed + eyeballed):**
->   **(1) Worked rail button DISABLED in FT8** (dimmed + "not available in
->   FT8" title) — the panel is Phone/CW-only (Band Activity already carries
->   worked-before context), and clicking it in FT8 silently flipped the
->   Phone/CW tile board's visibility state; resolves the session-211 "rail
->   Worked panel in FT8" open item as disable-not-build. **(2) Occupancy
->   default view = SPECTRUM** (`ft8State.occupancyView` initial + reset;
->   Channels one click away; view choice still separate from the offset
->   pick). **(3) Header CAT chip now mirrors the Rig panel's pill** — in FT8
->   with the rig away it showed grey "manual"/amber "confirm" while the panel
->   said red "CAT required"; the chip derived purely from `rigGate()` with no
->   mode awareness (same gap as the panel pre-requiresCat, in its second
->   consumer). **505 SPA tests.** **(4) THE LOAD-BEARING FIND — RPM scripts
->   never rebuilt the app SPA:** the operator deployed per-fix and the chip
->   stayed stale — `scripts/dev-rpm.sh`'s rebuild loop (and
->   `release-rpm.sh`'s SM_SKIP_SPA check + build loop, and `release.sh`'s
->   host loop) still said `logging config logbook` — **`app` was never added
->   when it was embedded (session 211)**, so every `/app/` deploy silently
->   shipped whatever `frontend/app/dist` last held (CI stayed green because
->   `frontend:build:all` DID include app — different code path). All four
->   loops fixed; without this the next release RPM would have shipped a
->   stale `/app/` too. **(5) Band Activity / Operate header alignment** — both
->   FT8 card headers pinned to a shared fixed `h-10` (Band Activity's filter
->   button made it 4px taller than Operate's text-only row); fixed height, not
->   padding, so they can't drift as contents change. **(6) Arrange rail button
->   DISABLED in FT8** (operator + assessment agreed: FT8's layout is
->   deliberately fixed — no tile board; same dimmed+tooltip pattern as Worked,
->   shared `phoneOnly` derivation; also kills the stealth
->   return-to-Phone/CW-in-arranging-mode side effect). Items 1–5 verified
->   deployed by the operator.
-> - **NEW FEATURE — FT8 directed call (double-click any plain Band Activity
->   row), operator-requested:** call a station WITHOUT waiting for its CQ (a DX
->   working a pile-up can go many minutes between CQs — the operator's T22TT
->   case). **Zero daemon change** — the directed opening is identical to
->   answering a CQ and `Sequencer.StartQso` never required the heard message to
->   be a CQ (their call + their-TX-slot parity + offset suffice). SPA:
->   `parseSender` (new, `utils/ft8Message.ts` — sender + optional grid, RR73
->   excluded, hashed senders rejected), plain rows with a callable sender become
->   dotted-underline buttons ("Double-click to call X" title) → same `answerCq`
->   action, `fd:false`; guard chain extracted as `txPreflight` (shared with
->   answer-a-CQ/work-a-caller); double-click NOT single (deliberate-gesture rule
->   for TX). The ● working-now marker extends to the worked station's plain
->   (mid-exchange) rows. **520 SPA tests** (9 parser + 4 component new). Detail
->   in `docs/ft8.md` (e3 initiation section). NOT yet on-air validated.
-> - **go-ft8 BUMPED v0.6.0 → v0.7.0** (operator-approved, own-commit
->   discipline). v0.7.0 = type-4 nonstandard-call encoding ALIGNED WITH WSJT-X
->   (bracket-aware hash routing, ≤6-char affixes, CQ path accepting
->   `CQ PJ4/NA2AA` / `CQ R/KL7ABC`) through the SAME `EncodeStandardMessage`
->   entry point — the RF-interop foundation the **reduced type-4 ladder**
->   backlog item sits on (hash/packing disagreement with the reference would
->   make our future type-4 TX undecodable). Bump alone does NOT deliver
->   compound QSOs — SM still needs the reduced ladder + relaxing StartQso's
->   compound-call fail-fast + display. Verified: full `go test -race ./...`,
->   FT8 offline round-trip gates, CGO-free static build.
-
-> - **LOGBOOK PAGE built in `frontend/app` (all four increments, one sitting;
->   the ADR 0044 consolidation's next surface).** Reuse-first port of the
->   shipping logbook SPA's battle-tested behaviour, restyled onto the app
->   shell's theme tokens (light + dark — the shipping SPA was light-only).
->   Lives in `lib/logbook/` (state + view + modal + email controls +
->   uploadStatus/format helpers) with API clients in `lib/api/`
->   (`logbooks`, `qso-patch`, `uploads`, `config-blocks`; `session-email` was
->   already byte-identical). Wired at `/app/logbook` (router + Sidebar entry
->   pre-existed). **(1) Browse:** selector, cursor-paged table
->   (First/Prev/Next, of-N), page size. **(2) Selection + bulk:** cross-page
->   multi-select, ADR 0039 destination picker + upload-selected + notice,
->   not-emailed filter, tri-state upload tints (now theme-aware).
->   **(3) Edit modal:** PATCH flow, ESC/Ctrl+Enter, daemon re-validates +
->   stash-restores immutables. Email-out controls in the toolbar
->   (inline result, faithful port). **(4) NEW — Re-enrich in the edit modal
->   (backlog P2, the flaky-link repair path):** fetch-and-REVIEW —
->   `enrichCallsign` gained `{refresh:true}` (cache-bypass escape valve);
->   fills country/name (grid only when empty — on-air grid stays
->   authoritative, the FT8-sink rule) and stashes dxcc/cqz/ituz/cont extras
->   onto the eventual Save (QsoPatch extended; PATCH-writability proven by
->   the day's backfill). Nothing writes until Save. **531 SPA tests** (ported
->   state tests + render/edit/re-enrich smokes). Dogfooded same day: edit +
->   Re-enrich VALIDATED live (the JH4BYZ edit re-armed its QRZ update row —
->   edit→re-forward works end-to-end; RG6S can't be name-repaired — not on
->   QRZ, the only callsign provider; HamQTH second-chain-link seed in inbox).
-> - **BULK Re-enrich on the selection toolbar (operator-requested, same
->   day).** `logbookState.reEnrichSelected()`: per selected row on the
->   CURRENT page, force-refresh enrich → PATCH **only the fields that
->   actually differ** — the load-bearing policy is **skip-if-unchanged**
->   (every PATCH re-arms that QSO's QRZ update upload, so already-correct
->   rows must not fire no-op re-uploads); only non-empty fresh values write
->   (never blanks a stored field); grid fills only when stored-empty (on-air
->   authoritative). Off-page selected rows are REPORTED skipped, not silent
->   (comparison needs live row data). Progress counter on the button
->   ("Re-enriching 12/47…"), summary notice ("Re-enriched N · M unchanged ·
->   …"). `LogbookQso` gained dxcc/cqz/ituz/cont for the comparison.
->   Plus operator polish: **country flags in the Country column** via new
->   `utils/dxccFlag.ts` — a static numeric-DXCC → ISO alpha-2 map (165
->   entities, everything in the log; splits collapse to ISO parent —
->   England/Scotland/Wales/NI→GB, Sardinia→IT, Eu/As-Russia→RU; unmapped →
->   no flag). Keyed on numeric dxcc because rows carry no ccode and names
->   vary by source — the morning's backfill is what made dxcc a reliable
->   key. Country column w-32→w-34; Name column pl-1 (was visually bleeding
->   into Country). **535 SPA tests.** Not yet dogfooded.
-> - **SKIP-IF-SILENT MOVED DAEMON-SIDE (operator's "tick-tick" PTT report →
->   sanity check → build).** Root cause confirmed in code: the SPA's deferred
->   Next could only resolve on the `ft8-qso` status published AFTER the
->   sequencer had already keyed the repeat to the silent station
->   (`transmit()` before `publish(st)` in every onSlot handler) — so each
->   skip cut a just-started transmission: one key/unkey relay cycle (the
->   tick-tick) + a fraction of a second of RF at a no-show. Fix: the
->   sequencer owns the arm — new `skipIfSilent` flag checked at all four
->   silent-repeat sites (answering/working × standard/FD; NOT the Call-CQ
->   run, whose Next is an immediate takeover) that ends the session INSTEAD
->   of keying the repeat; never fires before the rung transmitted once
->   (`repeats > 0`); clears on reply / session start / Abandon.
->   `SetSkipIfSilent` + `ErrNoActiveQso`; `QsoStatus.skip_armed`;
->   **`POST /v1/ft8/qso/skip {armed}`** (202; 409 `ft8_no_active_qso` arming
->   idle/caller; disarm idempotent). SPA: `skipQso` action seam, armed button
->   renders from SSE (confirm-by-push), falling-edge watcher does the
->   toasts + drain hand-off (Abandon suppresses the edge so it can't
->   fake-resume the drain it just paused). 4 new sequencer tests + rewritten
->   Ft8Operate tests; api-endpoints.md + ft8.md same-change. **536 SPA tests;
->   full Go suite green.** Not yet on-air validated (listen for NO tick).
-> - **BUG FIX (operator): worked new-entity kept its ★ all session.** The FT8
->   enrich cache is lookup-once, so `is_new_entity` captured before the QSO
->   never refreshed. `markWorked` (fires on every `ft8-logged`) now clears
->   the star on the worked call AND sweeps every cached call of the SAME
->   dxcc on any band (another station from that entity isn't "new" either) —
->   mirroring the daemon's flip onto the cache. Edge: if the worked call's
->   own enrich is still pending at log time the sweep can't match by dxcc;
->   fresh lookups get the daemon's false anyway. NOTE: `frontend/logging`
->   shares this bug (same ported module) — not fixed there; it's on the
->   ADR 0044 retirement path. **536 SPA tests.**
-
-> **NEXT (session 212 carry-over):** commit the logbook-page work (operator;
-> the morning's work is already committed+pushed). ~~confirm the QRZ update
-> drain~~ **DRAIN COMPLETE ~12:40 — all 742 backfill updates uploaded, 0
-> failed; post-drain `qso-audit --last 90` shows zero pending warnings (only
-> the known QRZ-profile gaps + the closed rst_rcvd row). Bonus validation:
-> the operator's first live logbook-page EDIT (JH4BYZ #4831, ~10:22)
-> re-armed its QRZ update row exactly as designed — edit→re-forward works
-> end-to-end.** Then the session-211 NEXT below still
-> stands (pile-up refinement validation, reduced type-4 ladder, `ft8_display`
-> remainders). RigKeys FT8-without-CAT no-op is a small follow-up. The
-> empty-`rst_rcvd` rows were triaged NOT-A-BUG (operator: the other station
-> never sent the report; SM logged what was exchanged — closed in the inbox).
-
-**main is v2.** Daemon (`cmd/smd`) + embedded Svelte 5 SPA (`frontend/logging/`, served at `GET /` when `Protocol=tcp && ServeSPA=true`). Day-to-day ham ops run from the frozen `v1` branch; v2 is under active development. Full suite green; CI gates every push to main.
-
-In-tree and shipped:
-
-- **Daemon core** — milestones 1/1b/1c (ingest → validate → store → forward → emit status → serve queries). CGO-free SQLite (modernc), UUIDv7 QSO identity (ADR 0016), `qso_history` append-only audit, dedupe key, soft-delete, one-fails-all-fail QSO writes.
-- **Enrichment** (ADR 0017) — hamnut + QRZ providers, domain-tables-as-cache, three-state read policy, bounded async refresh worker. Never blocks logging.
-- **Forwarder** (ADR 0022) — multi-destination `Forwarder` interface + worker + registry; enqueue gated on config presence, not `Enabled`.
-- **Bridge** (`internal/bridge`, ADR 0013 + 0019) — M3a closed 2026-05-11. Read-only rig state over `/v1/rig/events` SSE; AUTO-mode CAT → filter → SPA; pipeline supervisor (ADR 0020) self-heals first-boot ordering + mid-session disruption; rig-mode → ADIF mappings; i18n error codes (ADR 0010). **Inbound command path** (ADR 0026): `POST /v1/rig/command` drives freq/mode/VFO/band (data-driven `cat` commands + `BridgeInfo.ops`); SPA rig-control on Shift+Ctrl shortcuts. **Tune-carrier path** (ADR 0027): `POST /v1/rig/tune` + a daemon-owned TX state machine keys a reduced-power RTTY carrier for external-amp tuning — the first TX feature; the daemon owns the guaranteed stop; click-only Tune button. **Rig profiles** (ADR 0028, Phase 1 shipped 2026-06-05): `config.Rigs []types.RigConfig` (+`audio`) catalogue with `default_rig_id` as the active selector; legacy loose `bridge.serial`/`bridge.cat` migrate into a single id-1 rig at load; per-rig audio is **per-direction name-based** `audio.{rx,tx}` (Session 177); `ActiveBridge()`/`ActiveFt8()` project the active rig; bridge/ft8 internals unchanged. Switch = edit `default_rig_id` + restart. Discovery endpoint + picker UI + runtime hot-swap deferred to the config-SPA work.
-- **SPA logging client** — QsoPanel + CountryPanel + InfoPanel with four tabs (Worked / Details / My Station / Session), all shipped. **FT8 view (`Ft8Panel`)** carries the live Band Activity decode feed + occupancy/Clear-Slots readout; CQ decode lines are enriched SPA-side with a country flag + worked-before tint (Session 158). Keyboard-first flow, enrichment + contact-history wiring, QSO edit overlay, per-session QSO list. My Station has four sub-tabs (identity / location / equipment / qso); Mode Mappings + CW moved to the config SPA and Location was trimmed to grid/altitude/lat/lon (session 192), and **About/version moved to the config SPA's General tab** (2026-06-26). The Comment field carries a **paste-list** (localStorage MRU of recently-logged comments, clipboard-list dropdown). **Session email-out**: posts `{to, uuids[]}`; the daemon rebuilds the ADIF from the live DB rows (proper `<EOH>` header), durably stamps `sm_fwrd_by_email_*` (SessionPanel "Emailed" column), and archives a copy under `<workingDir>/exports/sent-adif/`. See memory `project_sm_session_email_sent_status`.
-- **Config SPA (`frontend/config/`)** — second embedded SPA, scaffolded 2026-06-14, served at `/config/` (sub-path on the same origin; Vite `base:'/config/'` + `StripPrefix` route; dev on :5174). Separate sibling project, NOT a route in the logging SPA. The **parking place for set-once config** that's UI noise in the logging client. **Built out into a category-tab shell** (sessions 188–194): **Station** (identity + QSL defaults + morse), **Rigs** (rig-profiles editor + `ModeMappingsEditor`; backed by `GET /v1/hardware`), **FT8** (display + PSK Reporter + decode-log + enable toggle), **Forwarding**, **Email** (SMTP), **Enrichment**, and **General** (cross-cutting prefs — the `restore_rig_on_mode_switch` toggle + About/version; added session 194). Per-tab dirty/save model (presence-aware `/v1/config` PUTs); masked-secret pattern via `PasswordField`. See `docs/v2-design/api-endpoints.md` + `frontend-spa.md`.
-- **Logbook SPA (`frontend/logbook/`)** — third embedded SPA, served at `/logbook/` (sub-path; dev on :5175). Separate sibling project. **First real surface shipped session 194 (2026-06-26): QSO browse** — `LogbookView.svelte`, a logbook selector + cursor-paged read-only QSO table (Date/Time/Callsign/Band/Freq/Mode/Country/Name/Comment, callsign tinted by forward/upload status) + count, over the existing `/v1/logbook`, `/v1/logbook/{id}/qso` (cursor), `/count` endpoints (no daemon change). Next/Prev/First cursor paging (no page-number jumps — daemon has no offset endpoint). The heavier management surface (edit, multi-select, export/email/upload, search, QSL-awaiting, edit-history, logbook CRUD) is a backlog item. See `frontend-spa.md` → "Logbook SPA — QSO browse".
-- **CD pipeline** — `.github/workflows/ci.yml` gates every push to main (SPA lint/check/test/build + gofmt/vet/`go test -race`/embed-build/all `cmd/...`). Local mirror `task ci:local`; dogfood refresh `task deploy:local:dev`.
-- **Operator daemon control** — the RPM ships `/usr/bin/smctl` (`start|stop|restart|status`) alongside `/usr/bin/smd`; it wraps `systemctl --user … smd` and prints a state-verified `SM Started.` / `SM Stopped.` line (bare `systemctl` is silent on success). See `docs/install.md §3`.
-- **FT8 decode subsystem** (`internal/ft8`, ADR 0024) — opt-in (`ft8.enabled`), fail-soft, decode-is-not-a-QSO (logs "heard this" lines only; narrow-daemon-scope holds by import graph). Offline `DecodeFile` + CGO-free pipeline core (ring + UTC slot scheduler + Service) shipped 2026-05-31; **live miniaudio/malgo capture shipped 2026-06-02** behind `//go:build cgo` (+ a `!cgo` idle stub). Live FT8 needs a **CGO build** (`SM_FFT=pocketfft`); the static default decodes WAVs but can't capture. FTdx10 smoke: 4/4 slots, 0 drops, 12–16 decodes/slot. **Capture is demand-driven (Session 157):** the device is acquired on the first `/v1/ft8/events` subscriber and released a short linger after the last leaves — an idle daemon holds no mic until the FT8 view is open. **FT8 TRANSMIT (ADR 0029/0030/0031/0033) — both flows shipped.** Steps (a)–(d) + e1–e4 done: **answer-a-CQ completes + logs** (click a CQ → daemon auto-advances → 73 → logged QSO), and **Call CQ runs a sequenced caller session** (ADR 0033 `auto_first`: calls CQ, auto-works the first answerer to RR73, logs, loops the pile-up until Abandon). Daemon-owned guaranteed stop throughout; attended-only. **Completed FT8 QSOs surface to a shared session log** via the one-shot **`ft8-logged` SSE event** → SPA `sessionQsosState` → a new **Session tab** in `Ft8Panel` (same `SessionPanel` + email-out as Phone/CW; UUID carried so edit/email work). Band Activity shows a **per-CQ beam-heading column** (short-path bearing to aim the antenna). Pending: the `operator_pick` answerer-stack + its Settings toggle, and on-air validation of the caller side + the session-tab logging. See `docs/install.md §8` + `docs/ft8.md` + memory `project_sm_ft8_integration`.
-
-Out of tree:
-
-- **The FT8 decoder library** is out-of-tree **go-ft8** (`github.com/ColonelBlimp/go-ft8`), a WSJT-X/jt9-derivative (GPL-3.0-only) that SM links — the in-tree clean-room MIT decoder was abandoned and preserved at tag `ft8-snapshot-2026-05-30` (recoverable via `git checkout`). SM carries only the thin `internal/ft8` wrapper + live capture, not the decoder. `internal/audio` (CGO-free WAV/FFT) deliberately retained. See the CLAUDE.md FT8 bullet + memory `project_ft8_library`.
-
-**Licence: GPL-3.0-only as of 2026-05-31 (was MIT).** Linking go-ft8 (a GPL-3.0-only WSJT-X derivative) pulls SM under copyleft. See ADR 0023 + `docs/licensing.md` + memory `project_sm_license_gplv3`.
-
-Authoritative current-state detail lives in `CLAUDE.md` + the memory files; the long-form session-by-session record is the `### Session N` entries below + git history. **Next steps** are at the bottom of this file.
-
-### Session 201 (2026-07-05) — **review-hardening continued (database / api / qsoservice) + migration 0004 went LIVE; a HIGH data-corruption bug caught by the staged gate before it hit the live DB.** Continuation of session 200's clean-room-review arc. **(1) `internal/database` — timestamp storage (review finding 1, MEDIUM-HIGH).** modernc stored timestamps three inconsistent ways (monotonic-debris Go `String()`, naive-local from SQL DEFAULTs/triggers read back as UTC → 2 h off, and canonical). **Fix-forward** (commit `b0ec149f`): `_time_format=sqlite` on `getDsn`/`bootstrapDSN` + `time.Now().UTC()` on the 10 `null.Time` writers → Go-written stamps now SQLite-canonical UTC (`TestModifiedAt_StoredCanonicalUTC`). Empirical scoping found the taint NARROWER than first assumed: `boil` defaults to UTC so sqlboiler (`created_at`/`deleted_at`) already stored UTC; only SQL DEFAULTs (`qso_upload.created_at`, `qso_history.at`) + the two triggers stamped local. **Migration 0004** (`0004_utc_timestamps.{up,down}.sql`, commit `291b86fd`): rebuilds the three tables with `datetime('now')` (UTC) defaults + UTC triggers, normalising every value during the copy. **STAGED-REVIEW CAUGHT A HIGH BUG** (commit `6bb2091e`): the two-arm CASE (`…+00:00` keep / else −2h) missed a fourth format — PRE-fix sqlboiler UTC rendered by Go's `time.Time.String()` as `'… +0000 UTC'` (UTC-correct, but not `+00:00`) — so the −2h arm would have shifted every pre-fix `created_at` (≈ every QSO since April) 2 h wrong. Fixed with a third arm `WHEN v LIKE '% +0000 UTC%' THEN datetime(substr(v,1,19))` (reformat, no shift) on all six columns + `seed(4)` in `TestMigrate0004`. The `-2→-3` down-step bump in `TestMigrate_DownRestoresRSTLengthConstraint` handles the new migration. Two doc-comment fixes (`61b4a2d6`). **DEPLOYED + read-only-VERIFIED on the live 5,148-QSO dogfood DB** (`~/.local/share/station-manager/db/station-manager.db`): `schema_migrations_log` version=4 dirty=false; 0 debris-format / 0 datetime()-unparseable rows; spot-check `id=5148` `qso_date=20260704 time_on=161100` → `created_at='2026-07-04 16:11:43'` (UTC, matches — a −2h bug would read 14:11); trigger now `datetime('now')`. Backlog carries the deploy-safety note (VACUUM INTO backup + post-migrate spot-check). **(2) `internal/api` review.** MEDIUM: **PUT /v1/config lost-update race** — the handler built a candidate from a pre-lock `Snapshot()` and did `*cfg = candidate` inside `Update`, so two SPAs saving different surfaces concurrently → the second wholesale-replace reverts the first. Fix: presence-aware overlay + Normalize + Validate now run INSIDE the `Update` callback against the fresh lock-held clone (extracted `overlayConfig`; request-only field validations hoisted to loud 400s; in-lock Validate failure → sentinel `errPutValidation` → 400, live config untouched; setup seed stays outside the lock). Regression test `TestHandlePutConfig_ConcurrentCrossSurfaceNoClobber` (30×2 concurrent cross-surface PUTs, both survive). Commit `985ab64f`. Later: **`spaHandler` fix** — a `/v1/*` path reaching the SPA catch-all (disabled bridge/FT8, or a typo) now returns an honest 404 instead of 200-index.html/405, and a real directory (`/assets/`) SPA-falls-through instead of an `http.FileServer` listing; tests `TestSpaHandler_ApiPathReturns404` + `TestSpaHandler_DirectoryServesIndexNotListing`. Lows (negative-limit panic, credential-clear asymmetry, stale Unwrap comment) → backlog. **(3) `internal/qsoservice` review.** LOW but real: audit `before_image = json.Marshal(existing)` ran AFTER the merge, and a `contact_history` body can decode into `existing`'s shared `ContactHistory` backing array → the audit row (SM Cloud sync input, ADR 0016) would capture post-tamper state. Fix: marshal `beforeImage` at the top of `Update`, before the merge. Also: `EnqueueUploads` doc corrected (the check is per-TYPE ADIF stamp, not per-`forwarder_name`); `TestUpdate_RestoresAllForwarderStamps` reflects over `types.Qso` stamp tags and pins the immutable-restore list against drift. Commit `e5490481`. Nits → backlog. **(4) FT8 dogfood triage.** "abandon (while Tx) → Resume immediately keys TX — too late into the slot?" → **WAI** (operator confirmed): the Resume→drain→`StartWorkCaller`→`fireOpening` path is gated by `txLateWindowSec` (4.5 s) — immediate TX only within the first 4.5 s of an our-parity slot, where ADR 0032 truncate-don't-shift keeps it decodable; past that it defers to the next slot. Struck in the inbox; graduated to backlog as a work-path enhancement (prefer a clean next-slot start over a truncated immediate fire, since a worked station keeps calling — no CQ-answer reply-window pressure). **Commit-message drift** flagged again (`b0ec149f`/`985ab64f` overclaimed vs their diffs; operator owns commit messages, handling it). **(5) go-ft8 v0.5.0→v0.6.0 adopted** (dep bump, `go.mod`/`go.sum` only, no SM code — perf-only release as the operator/author flagged). Standard adoption drill: bump + `go mod tidy` + CGO(pocketfft) build clean; RF-safety round-trip gate green (`TestCompoundCQ_Decodes`/`TestPortableP_RoundTrip`/`TestPrefixCompound_EncoderBoundary`/`TestFieldDay_RoundTrip`); decode-file tests (real 20 m + live FTdx10 slots) find the SAME decode set (no determinism break from the concurrent path); full ft8 suite green; `-race -short` clean (go-ft8's new internal goroutines are safe through SM's single-call `DecodeSlot` seam); static CGO-free build green. **v0.6.0 = concurrent candidate analysis, ~22% faster decode** (`BenchmarkDecodeSlot`, 8-core dogfood box: v0.5.0 ~494 ms → v0.6.0 ~383 ms/slot; ~2× transient allocs — negligible per 15 s slot). **Protocol UNCHANGED** — the boundary test stayed green, so type-4 grid/report forms did NOT arrive → type-4 compound TX still blocked, `/R` still undecodable (memory `sm-waiting-goft8-release` updated so a resume doesn't mistake this for a type-4 unblock). Synergy with item (4): a faster decode lands the answer-a-CQ/work reply earlier in the slot → fewer symbols truncated by ADR 0032 → better far-end copy, softening the "work-path opening: prefer a clean next-slot start" backlog note. Uncommitted: `go.mod`/`go.sum`. **(6) Dogfood log check + backlog bump.** Flaky-link day: read the smd.log — QRZ resilience healthy on the current boot (session key OK, ZERO self-disables, ~20 lookup timeouts recovered per-lookup), and the DB confirmed **3/52 QSOs logged nameless** (RG6S/R2BNC/SP9SOF) during the timeout window — the "enrichment never blocks logging" invariant held, but there's no backfill path. Operator **BUMPED** the parked "re-enrich a logged QSO" item out of P2/P3 → **next-session code work, target the LOGBOOK SPA** (`EditQsoModal` gains a "Re-enrich" action calling `/v1/enrich/callsign` + save via `patchQso`), plus a **companion manual FAQ** on the name-missing cause/remedy. **Next:** P1 = dogfood-daemon behavioural retest (operator hardware, unchanged); **next-session CODE pick = re-enrich in the logbook SPA + the FAQ** (see backlog "▶ NEXT SESSION"); the review-hardening arc is otherwise done (remaining backlog LOW/deferred).
-
-### Session 200 (2026-07-05) — **review-driven hardening toward the 7Q8AC ship: three code reviews closed, CI integration-tests made real, the last small P1 (SPA fetch timeouts) shipped.** A pass built entirely from pasted code reviews, each verified against the code before acting. **(1) Bridge TX-safety review (`internal/bridge`).** Finding #1 (MEDIUM-HIGH): a key-on write that returns an error may still have keyed the rig — a CI-V no-ACK (`ErrCommandNoAck` = "may or may not have applied") or a watchdog-closed port that flushed the frame first — and the old rollback cleared `active` + the auto-off timer, so `unkeyOnTeardown` (gated on `tuneActive||ft8TxActive`) skipped a rig it believed idle and F1(b) never armed → a possibly-live carrier with **no daemon backstop**. Fix: `StartTune`/`KeyFt8Tx` now set `strandedKeyed=true` in the same `mu` critical section as the rollback, routing into the existing ADR 0042 F1(b) defensive-unkey (fires on the next confirmed frame). Finding #2: `unkeyOnTeardown` + `defensiveUnkeyIfStranded` now take `cmdMu` via `underCmdMuCIV`, and the defensive fire re-checks `tuneActive||ft8TxActive` **under** `cmdMu` so a legitimately-started TX isn't cut short (CI-V-decisive; a narrow fail-safe Yaesu window documented as accepted). Doc nits (#6). Lows #3–5 (auto-off retry timer-clobber, garbled-first-IDENTITY permanent write-block, `bridge.New` nil-trust) → backlog batch. **ADR 0042 amendment** documents the failed-key-write arming + the CI-V-only scoping. Tests: `TestStartTune_FailedKeyWriteArmsStranded`, `TestKeyFt8Tx_FailedKeyWriteArmsStranded`, + a busy-skip subtest on `TestDefensiveUnkeyIfStranded`; full package green under `-race`. Commits `172195dd`/`90c4de84`. **(2) smcloud store review (`internal/cloud/store`) — CLOSED, all 7 findings.** Was zero-test storage code carrying the reconcile-soundness invariant. Added **9 integration tests against a real Postgres 16** (self-apply schema from `migrations/`, skip-gate on a reachable DB via `SMCLOUD_TEST_DSN`/default localhost) covering: stale/equal/newer upsert guard + applied count, tenant-scope rejection, tombstone round-trip + resurrect-by-recency + stale-missed-delete-holds, µs precision, `Ensure*` idempotency + name-preserve, `ErrNotFound`, `ErrEmptyPayload`, manifest order/flags. Code fixes: tenant-scoped `ON CONFLICT` (`AND qsos.tenant_id = EXCLUDED.tenant_id` — no cross-tenant UUID hijack); µs `canonicalTime` truncation on write with the **peer-side obligation pinned** in `sm-cloud-p1.md` (reconcile hashes `(UUID|modified_at)` — ns/µs mismatch would re-push whole logbooks); `Upsert` returns applied count; non-destructive `EnsureTenant` name (`COALESCE(NULLIF(...))`); `INCLUDE (deleted_at)` covering manifest index; typed `ErrEmptyPayload` precheck; doc.go softened (sqlboiler configured-not-generated). Commit `3abb9be5`. **CI made real:** a `postgres:16` service added to `ci.yml` so those tests **run** instead of skip-gating (the reconcile invariants were undefended); `ci.yml` YAML validated. Taskfile `db:pg:up` fully-qualified the podman image (short-name resolution needs a TTY). Commit `abf872e8`. **(3) SPA fetch timeouts — the last small P1, SHIPPED (this session, verify committed).** No `safeFetch` call passed a timeout, so a wedged/half-open daemon hung boot on a blank page + `submitQso`'s latch for minutes (the flaky-Malawi failure mode). Fix: `safeFetch` applies `DEFAULT_TIMEOUT_MS` (15 s) to every call, composed with any caller signal via `AbortSignal.any` (operator-cancel still works); `WRITE_TIMEOUT_MS` (30 s) on the QSO-log POST (a timed-out write is ambiguous). A fired timeout now surfaces as retriable `'network'`, **not** `'aborted'` (which callers drop silently — it would have swallowed the hang). Tests: `_helpers.test.ts` (timeout→network, default-signal injection, caller-signal composition, opt-out) + 5 caller tests migrated from signal-identity to signal-propagation assertions. SPA suite 876 green; type-check/lint/prettier clean; build OK. **NB the earlier `e0b860f0` "add fetch timeouts" commit was docs-only — the wiring is this session's uncommitted change.** **(4)** the 2026-07-05 SPA code-review low batch + the bridge lows triaged into `backlog.md`. **Working-note:** the user's commit messages are drifting hard from their diffs (`e0b860f0` a standout) — a resume-staleness hazard the date-based SessionStart guard doesn't catch; flagged to the operator. **Next:** P1 remaining = the dogfood-daemon behavioural retest (operator hardware); then P2 workstreams per `backlog.md`.
-
-### Session 199 (2026-07-05) — **go-ft8 v0.5.0 adopted → compound-call CQs now DECODE (RX win); full compound TX still a backlog feature; pause lifted.** The release SM was paused on landed (v0.5.0, tagged same day: type-4 compound/nonstandard-call encode+decode, `/R` suffix, upstream bug fixes). Bumped `go.mod` v0.4.0→v0.5.0 (`go mod tidy`, CGO build clean) and ran the callsign-seam audit the pause note called for. **Honest finding — the practical win is mostly RX, not TX:** **(a) type-4 compound-call CQs now DECODE.** A DXpedition's `CQ PJ4/NA2AA` (and directed type-4 like `PJ4/NA2AA <...> RR73`) now round-trips through the shipped decoder and would reach Band Activity; before v0.5.0 the unpacker had no type-4 path, so those CQs were silently **missed**. The parse/self-filter/SPA seams the pause note flagged (`callRe`, `parseMessage`, `dropOwnTransmissions`, SPA `parseCqCall`) were already slash-tolerant, so no SM code change was needed to surface them. **(b) A full standard-ladder QSO with a PREFIX-compound partner is still impossible.** Type-4 messages carry only `CQ`/`RR73`/`73` with the partner call HASHED to `<...>`; there is no type-4 grid/report form, so the ladder's opening `<them> <us> <grid>` rung won't encode. SM already fails soft — the M1-review guard in `StartQso`/`StartQsoFd` returns `ErrTxBadMessage` before publishing a dead ladder — so **no regression**. The reduced type-4 QSO flow (hashed CQ→RR73→73) is now unblocked at the library level but is a genuine **new SM feature** (backlog P2 "type-4 compound + free-text" refreshed). **Two earlier-framing corrections made after empirical probing:** the standard `/P` suffix already worked from the v0.3.5 bump (2026-06-18) — NOT new here, now a regression lock (`TestPortableP_RoundTrip`); and `/R` *encodes* but go-ft8 does NOT yet decode it (package doc: "RTTY Roundup … not yet unpacked"), so it fails the round-trip gate and **must not be transmitted** (noted in `EncodeToSlot` + the boundary test). **RF-safety gate added** (offline, zero RF): `TestCompoundCQ_Decodes` (type-4 CQ + hashed RR73 round-trip — the new capability), `TestPortableP_RoundTrip` (the /P ladder regression lock), `TestPrefixCompound_EncoderBoundary` (pins which prefix-compound / `/R` forms encode vs reject; flips the day go-ft8 adds the grid/report forms → the signal to lift the guard + build the type-4 flow). Full FT8 suite (incl. heavy round-trips) + whole-module short sweep green; `gofmt`/`vet` clean. Commit `54f1b59c`; docs/pause-banner removal + memory update this session. **Pending on-air:** validate a full QSO with a real `/P` station (offline-verified only). Memory `sm-waiting-goft8-release` updated. **Next:** back to the 7Q8AC ship goal — pull from `backlog.md` P-tiers.
-
-### Session 198 (2026-07-04→05) — **QRZ flaky-link resilience (shipped + review-hardened, arc CLOSED) + FT8 self-transmitted-slot decode/occupancy fixes. Project then PAUSED pending the next go-ft8 release.** *(Entry reconstructed 2026-07-05 from git + backlog — the session ended without a handoff update.)* **(1) QRZ enrichment resilience on flaky links** (found on-air 2026-07-04, 7Q8AC-relevant): `Initialize` no longer permanently disables QRZ on a boot-time session-key timeout — the service stays enabled but keyless and `ensureSessionKey` lazily re-fetches (30 s cooldown, single-flighted `authMu.TryLock`, detached login context, cooldown stamped at completion); expired-key re-auth routes through the same path with compare-and-clear (`clearSessionKeyIf`) so concurrent expiry races can't strand a fresh key; credentials redacted from transport-error logs (`scrubURLError`). Commits `431b7eca` → `e04d643a` → `25e10f84`. **Arc declared complete by the operator 2026-07-05** — the backlog's residual ideas ((2) per-lookup retry, (3) nameless-cache-row re-lookup) are dropped, not pending; re-open only via a fresh dogfood-inbox note if flaky-link name-loss recurs in practice. **(2) FT8 self-transmitted slots:** decode + occupancy now skip slots SM itself transmitted in (was: false "busy" readouts + garbled ghost rows in Band Activity from our own signal); `TxController` records a TX slot only after successful PTT engagement; a ring buffer tracks recent TX slots for consecutive transmissions; `SlotRefFromTime` floors timestamps to the 15 s lattice (+ `TestSlotRefFromTime_FloorsToLattice`). Commits `0ec9328c`/`98d7beab`/`f51542c3`. **(3)** dev-bootstrap warning for full system upgrades (`3e84dd30`). **Next:** nothing — waiting on the go-ft8 release (bug fixes + compound-callsign support); on arrival bump the dep + re-check slash-aware parsing (memory `sm-waiting-goft8-release`).
 
 ## Active cycle (the 1–3 things in flight now)
 
