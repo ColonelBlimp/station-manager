@@ -148,8 +148,10 @@ func init() {
 	// ClubLog forbids catch-up batches of pre-existing QSOs on realtime.php
 	// (helpdesk, 2026-07-19: that anti-pattern gets the application API key
 	// BLOCKED; bulk belongs to putlogs.php, which SM does not speak yet).
-	// Refusing manual backfill here keeps the promise SM made when the key
-	// was granted; live QSOs (enqueued at logging time) are unaffected.
+	// Registering keeps the promise SM made when the key was granted: manual
+	// enqueue re-arms only rows with prior ClubLog queue history (failed live
+	// uploads — e.g. 403-era rows after a credential fix); history-less rows
+	// are refused. Live QSOs (enqueued at logging time) are unaffected.
 	// Historical catch-up = an ADIF export uploaded on clublog.org.
 	forwarding.RegisterNoBulkBackfill(Type)
 	// ClubLog real-time supports insert + delete only — it cannot edit a

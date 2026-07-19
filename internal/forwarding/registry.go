@@ -311,15 +311,18 @@ func IsRowMirror(typeName string) bool {
 	return ok
 }
 
-// RegisterNoBulkBackfill marks forwarder typeName as refusing manual bulk
-// backfill: its upstream forbids catch-up batches of pre-existing QSOs on the
-// realtime endpoint the forwarder uses (ClubLog's realtime.php rule — batch
-// catch-up there gets the application's API key BLOCKED; bulk belongs to
-// putlogs.php, which SM does not speak yet — see docs/backlog.md).
-// qsoservice.EnqueueUploads reads this back via NoBulkBackfill and refuses the
-// enqueue up front; QSOs logged live (enqueued at logging time) are unaffected.
-// From the forwarder package's init(). Panics on empty typeName or duplicate
-// registration — binary bugs.
+// RegisterNoBulkBackfill marks forwarder typeName as accepting manual enqueue
+// of RETRIES ONLY: its upstream forbids catch-up batches of pre-existing QSOs
+// on the realtime endpoint the forwarder uses (ClubLog's realtime.php rule —
+// batch catch-up there gets the application's API key BLOCKED; bulk belongs
+// to putlogs.php, which SM does not speak yet — see docs/backlog.md).
+// qsoservice.EnqueueUploads reads this back via NoBulkBackfill and allows a
+// row only when it has queue HISTORY for the forwarder (a failed/re-armed
+// live upload — retrying those is legitimate realtime usage, e.g. re-sending
+// 403-era rows after a credential fix); history-less rows are refused into
+// skipped_no_history. QSOs logged live (enqueued at logging time) are
+// unaffected. From the forwarder package's init(). Panics on empty typeName
+// or duplicate registration — binary bugs.
 func RegisterNoBulkBackfill(typeName string) {
 	if typeName == "" {
 		panic("forwarding.RegisterNoBulkBackfill: empty type name")

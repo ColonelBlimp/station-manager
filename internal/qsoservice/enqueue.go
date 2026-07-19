@@ -21,6 +21,13 @@ type EnqueueResult struct {
 	SkippedUploaded int      `json:"skipped_uploaded"`          // already on this destination; not re-sent (no force)
 	SkippedDeleted  []string `json:"skipped_deleted,omitempty"` // soft-deleted — not backfilled
 	NotFound        []string `json:"not_found,omitempty"`       // unknown or malformed UUID
+	// SkippedNoHistory carries UUIDs refused because the destination accepts
+	// RETRIES of previously queued live uploads only (forwarding
+	// NoBulkBackfill types — ClubLog's realtime.php rule): a QSO with no
+	// queue history for this forwarder was never a live upload, so sending it
+	// now would be catch-up backfill, which belongs to an ADIF upload on the
+	// destination's website.
+	SkippedNoHistory []string `json:"skipped_no_history,omitempty"`
 }
 
 // EnqueueUploads queues already-stored QSOs (by UUID) for upload to one ENABLED
@@ -63,15 +70,13 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 
 	// Some upstreams forbid catch-up batches on the realtime endpoint the
 	// forwarder uses (ClubLog's realtime.php rule — batch catch-up there gets
-	// the application API key blocked). Refuse up front rather than strand the
-	// promise; live QSOs enqueued at logging time are unaffected.
-	if forwarding.NoBulkBackfill(fwd.Type) {
-		return EnqueueResult{}, &SubmitError{
-			Code: "bulk_backfill_unsupported",
-			Message: "this destination does not accept catch-up uploads of already-logged QSOs; " +
-				"export the QSOs as ADIF and upload them on the destination's website instead",
-		}
-	}
+	// the application API key blocked). RETRYING a previously queued live
+	// upload is legitimate realtime usage, though (2026-07-19 review #2 — this
+	// endpoint is how a 403-era Terminal row gets re-armed after the operator
+	// fixes credentials and restarts), so the distinction is per row via queue
+	// history below: history → retry allowed; no history → backfill, refused
+	// into SkippedNoHistory.
+	retryOnly := forwarding.NoBulkBackfill(fwd.Type)
 
 	// The destination's ADIF stamp prefix is the durable "already uploaded?"
 	// signal (consistent with the missing_from filter + the SPA colour). A type
@@ -112,6 +117,27 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 			}
 			if already {
 				res.SkippedUploaded++
+				continue
+			}
+		}
+
+		// Retry-only destinations: allow the enqueue only when this QSO already
+		// has queue history for THIS forwarder (it was a live upload — failed,
+		// re-armed, or uploaded); no history means backfill, refused.
+		if retryOnly {
+			hist, herr := s.DB.FetchUploadsByQsoIDWithContext(ctx, qso.ID)
+			if herr != nil {
+				return EnqueueResult{}, errors.New(op).WithErr(herr).WithMsg("check upload queue history")
+			}
+			seen := false
+			for _, h := range hist {
+				if strings.EqualFold(h.ForwarderName, fwd.Name) {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				res.SkippedNoHistory = append(res.SkippedNoHistory, uuid)
 				continue
 			}
 		}

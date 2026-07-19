@@ -70,10 +70,10 @@ describe('logbook selection → email UUIDs', () => {
 });
 
 // ClubLog forbids catch-up batches on realtime.php (the 2026-07-19 API-key
-// grant condition), so the backfill Upload action must be withheld for
-// clublog-type destinations — the daemon refuses server-side too
-// (bulk_backfill_unsupported); this getter just prevents the dead-end pick.
-describe('destinationBlocksBackfill', () => {
+// grant condition) but accepts retries of previously attempted live uploads —
+// the daemon enforces the split per row (skipped_no_history); this getter
+// flips the Upload button into its Retry flavour for such destinations.
+describe('destinationRetryOnly', () => {
     afterEach(() => {
         logbookState.forwarders = [];
         void logbookState.selectDestination('');
@@ -85,18 +85,18 @@ describe('destinationBlocksBackfill', () => {
             { name: 'qrz', type: 'qrz', enabled: true },
         ];
         void logbookState.selectDestination('clublog');
-        expect(logbookState.destinationBlocksBackfill).toBe(true);
+        expect(logbookState.destinationRetryOnly).toBe(true);
         void logbookState.selectDestination('qrz');
-        expect(logbookState.destinationBlocksBackfill).toBe(false);
+        expect(logbookState.destinationRetryOnly).toBe(false);
     });
 
     it('keys on the TYPE, not the name', () => {
         logbookState.forwarders = [{ name: 'my-club-uploads', type: 'clublog', enabled: true }];
         void logbookState.selectDestination('my-club-uploads');
-        expect(logbookState.destinationBlocksBackfill).toBe(true);
+        expect(logbookState.destinationRetryOnly).toBe(true);
     });
 
     it('false with no destination picked', () => {
-        expect(logbookState.destinationBlocksBackfill).toBe(false);
+        expect(logbookState.destinationRetryOnly).toBe(false);
     });
 });
