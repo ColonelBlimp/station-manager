@@ -30,7 +30,123 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-19)
+## Current state (as of 2026-07-20)
+
+> **Session 228 (2026-07-20) — review batch #9 (4 findings) BUILT + COMMITTED
+> (`internal/cloud` at a CLEAN BILL, incl. the multi-tenancy prerequisite
+> migration 0004), the FIX-DON'T-DEFER policy adopted, milestone-1 design
+> APPROVED (build PAUSED by operator — do NOT start it unprompted), and the
+> SPA-retirement direction decided with the parity audit run.**
+> - **External review (4 findings) → all four verified → ALL BUILT (the
+>   fix-don't-defer trigger session):** (1) padded UUID: server validated a
+>   TRIMMED uuid but stored the payload verbatim → 200-accepted rows failed
+>   SQLite's 36-char CHECK at restore. Fixed both ends: `server.go` validates
+>   the RAW `q.UUID` (padding → 400) and `qsoservice/restore.go` canonicalises
+>   (TrimSpace before validate/insert) so pre-fix padded backups restore.
+>   (2) global-unique uuid + the ON CONFLICT tenant guard turned a
+>   cross-tenant uuid collision into applied:0 reported as SUCCESS (forwarder
+>   treats applied:0 as stale-push success) → the later tenant's row was
+>   permanently unbackable. Fixed structurally: **migration 0004** rebuilds
+>   the qsos PK as `(tenant_id, uuid)`, `Upsert` conflicts on the composite
+>   key (tenant guard clause dropped — redundant), `Store.Get` gained a
+>   tenant param (uuid alone stopped being a key). The old
+>   `TestUpsert_TenantScope` pinned the BROKEN semantics — rewritten as
+>   `TestUpsert_TenantScopedUUID` (B's push of A's uuid lands as B's own row;
+>   A untouched; exports isolated). Migrate-over-live-data test now asserts
+>   the 2-column PK — exactly what the F44 upgrade will run. (3) export
+>   buffering — a RE-FIND of our own deferred review-3 #4, which triggered
+>   the policy discussion below → pulled forward and BUILT: `ExportSnapshot`
+>   streams rows to callbacks from inside the repeatable-read tx (books
+>   first, then row-at-a-time; tx never escapes the store), `handleExport`
+>   writes rows straight to the wire (byte-identical format — key order,
+>   escaping, `[]`, trailing newline all verified; e2e suite runs the real
+>   HTTP path). Mid-stream failure after the 200 = truncated invalid JSON
+>   the restore client rejects as corrupt. Accepted trade documented IN the
+>   handler: the pool conn stays open while a slow client drains, bounded by
+>   `exportWriteDeadline` + the request semaphore. (4) gzip negotiation
+>   honoured q=0 refusals but not RELATIVE weights → effective-weight compare
+>   (explicit beats wildcard; unnamed identity = 0.001, the smallest
+>   expressible qvalue, so it's acceptable-but-least-preferred and
+>   `gzip;q=0.8` still gets gzip; ties → gzip). **Self-review catches before
+>   presenting:** first weight impl defaulted unnamed identity to 1.0 (would
+>   have flipped `gzip;q=0.8` to identity — caught against the existing test
+>   table); the old tenant-scope test + migrate version pin encoded pre-fix
+>   behaviour (updated deliberately); the tx-lifetime trade written into the
+>   code so the next clean-room round prices it instead of re-finding it.
+>   All suites green `-race` against the dev Postgres (podman `sm-pg`
+>   container — was stopped; `podman start sm-pg`, since `task db:pg:up`
+>   errors when the container exists). COMMITTED by the operator.
+> - **FIX-DON'T-DEFER policy adopted (operator, memory
+>   `review-findings-fix-dont-defer`):** paid reviews are deliberately
+>   CLEAN-ROOM (ignore prior reviews) so deferred findings re-bill every
+>   round — that's the intended goading, proven by #3 above. Every finding on
+>   a reviewed package now reaches a terminal state: FIXED (default) or
+>   refuted/accepted with the rationale AT THE CODE SITE (the store/doc.go
+>   sqlboiler note is the house pattern — it answered the operator's own
+>   "why no sqlboiler models?" question this session unaided). "Real but
+>   parked in the backlog" is not a valid state for review findings. Goal:
+>   production-ready from the outset, per-package clean bills so future
+>   review hits are pure signal about new code.
+> - **SMC milestone 1 (multi-tenancy) design walk-through DONE + APPROVED —
+>   build NOT started (operator: "Don't build yet"):** numbered env pairs
+>   `SMCLOUD_CALLSIGN_N`/`SMCLOUD_TOKEN_N` (N from 2), legacy unnumbered
+>   pair stays valid as tenant 1 (zero migration on the live box); all in
+>   `/etc/smcloud/smcloud.env` (root 0600, systemd EnvironmentFile). Agreed
+>   fail-loud boot rules: no silent gaps (scan the whole index range / the
+>   environ, so an orphaned `_3` can't be silently skipped; both-or-neither
+>   per index), duplicate TOKEN across pairs rejected (the map would collapse
+>   two tenants — auth "works" while writing into the wrong tenant), duplicate
+>   CALLSIGN rejected (two tokens → one tenant is the device-tokens feature
+>   arriving unmanaged). `validateToken`/`normalizeCallsign` per pair;
+>   startup log per tenant, never tokens. Rotation today = edit env + restart
+>   both ends (401s in the window are fail-soft). **Env→DB credential move is
+>   NOT a tenant-count trigger — it's the device-tokens milestone** (second
+>   device per tenant, i.e. the POTA laptop after bidirectional reconcile:
+>   per-device revocation is the forcing function), gated on the ADR 0040
+>   assessment; tokens table would hold hashes, issuance via a CLI subcommand
+>   not an admin endpoint. If no second device ever appears, env pairs are
+>   the permanent right answer.
+> - **Security-audit concern (operator) discussed:** assessment checklist =
+>   request-body limits (verify MaxBytesReader exists!), the unauthenticated
+>   `/v1/health` DB ping decision, token lifecycle + compromise runbook,
+>   systemd unit hardening directives, Postgres least-privilege, log/error
+>   secret hygiene. Proposed format: structured self-audit doc → pushed
+>   through the external review channel as the second net. **Open option
+>   that shrinks the problem: WireGuard/Tailscale overlay instead of public
+>   HTTPS** — milestone 1 needs "reachable by two known operators", not "on
+>   the internet"; overlay-first defers most of the checklist until the
+>   phone/laptop roadmap genuinely needs public HTTPS. Decision not taken.
+> - **SPA retirement direction decided (operator):** retire the logging,
+>   config and logbook SPAs in favour of `frontend/app` — remove routes AND
+>   embeds (keep source dirs for reference; deletion later gets a
+>   preservation tag, the ft8-snapshot pattern). Parity audit RUN:
+>   `frontend/app` shows RAW bridge-error codes by design (`rig.svelte.ts`
+>   ~658 — no i18n catalogue; logging's 112-line `en.ts` + the ny/tum seam
+>   need porting); app Logbook HAS backfill/gap-browse/bulk-re-enrich/edit
+>   modal but MISSES the 2026-07-19 ClubLog amber retry
+>   (`skipped_no_history` handling is legacy-logbook-SPA-only); QSL-awaiting
+>   + edit-history were always "(future)" — never built anywhere, nothing to
+>   lose; FT8 Settings tab + MyStation have NO app counterpart (both fold
+>   into the app Settings-view build); app Settings + Dashboard views are
+>   PLACEHOLDERS (`App.svelte` dashed box). **Retirement order: logbook
+>   (port the ClubLog retry) → logging (port the i18n catalogue) → config
+>   (blocked on building the app Settings view, which also absorbs FT8
+>   settings + My Station).** When logging retires, `/` redirects to
+>   `/app/`. Not yet directed to build.
+> - Also this session: project-wide "what's left" survey (logbook/config/db
+>   management + contesting are design-first workstreams; LoTW/eQSL, awards
+>   tracking, stats, inbound DX cluster were in NO doc — now captured in the
+>   backlog); smcloud sqlboiler question answered (deliberate hand-written
+>   SQL, `store/doc.go`); streaming-export backlog item struck as BUILT.
+> - **NEXT (operator-set): (1) build SMC milestone 1 when the operator says
+>   go — design above is agreed; the paused build had `main.go` read and no
+>   code written. Then ONE F44 `task rpm:smcloud` rebuild carries
+>   multi-tenancy + migration 0004 + the review batch + the rate limiter.
+>   (2)** ClubLog enable at the next on-air test (checklist in
+>   `docs/dogfood-inbox.md`). **(3)** stamp-drift steady-state eyeball
+>   (`grep reconcile …/smd.log | tail -3` → `in_sync:true`). **(4)** standing:
+>   dogfood validations, backlog; SPA retirement + app Settings build are
+>   queued behind the milestone unless re-prioritised.
 
 > **Session 227 (2026-07-19, mid-morning) — FT8 band-change clear BUILT, then
 > BOTH S226 NEXT deploys DONE + VERIFIED. Everything through the sixth batch
