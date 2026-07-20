@@ -6,14 +6,13 @@ afterEach(() => {
 });
 
 function mockJSON(status: number, body: unknown) {
-    const spy = vi.fn(
-        (_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
-            Promise.resolve(
-                new Response(JSON.stringify(body), {
-                    status,
-                    headers: { 'Content-Type': 'application/json' },
-                }),
-            ),
+    const spy = vi.fn((_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+        Promise.resolve(
+            new Response(JSON.stringify(body), {
+                status,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        )
     );
     vi.stubGlobal('fetch', spy);
     return spy;

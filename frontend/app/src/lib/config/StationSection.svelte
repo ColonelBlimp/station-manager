@@ -49,27 +49,32 @@
                         'station_callsign',
                         'The logging station’s callsign — the callsign used over the air. Set during setup and bound to your logbook, so it’s read-only here.',
                         'w-48',
-                        true,
+                        true
                     )}
                     {@render field(
                         'Operator',
                         'operator',
                         'The logging operator’s callsign — who is at the controls. If blank, the station callsign is used.',
-                        'w-48',
+                        'w-48'
                     )}
                     {@render field(
                         'Owner callsign',
                         'owner_callsign',
                         'The callsign of the station’s owner — the operator’s host when operating as a guest. If blank, the station callsign is used.',
-                        'w-48',
+                        'w-48'
                     )}
                     {@render field('Name', 'my_name')}
-                    {@render field('Activity program', 'my_sig', 'ADIF MY_SIG — e.g. POTA, SOTA, WWFF.', 'w-40')}
+                    {@render field(
+                        'Activity program',
+                        'my_sig',
+                        'ADIF MY_SIG — e.g. POTA, SOTA, WWFF.',
+                        'w-40'
+                    )}
                     {@render field(
                         'Activity reference',
                         'my_sig_info',
                         'ADIF MY_SIG_INFO — e.g. K-1234.',
-                        'w-40',
+                        'w-40'
                     )}
                 </div>
             </section>
@@ -87,7 +92,7 @@
                             'Grid square',
                             'my_gridsquare',
                             'Maidenhead locator — lat/lon are derived from this on save.',
-                            'w-40',
+                            'w-40'
                         )}
                         {@render field('CQ Zone', 'my_cq_zone', undefined, 'w-28')}
                         {@render field('ITU Zone', 'my_itu_zone', undefined, 'w-28')}
@@ -96,7 +101,9 @@
             </section>
 
             <section>
-                <h2 class="mb-3 text-base font-semibold text-ink">Postal address (for QSL cards)</h2>
+                <h2 class="mb-3 text-base font-semibold text-ink">
+                    Postal address (for QSL cards)
+                </h2>
                 <div class="flex flex-wrap gap-x-4 gap-y-3">
                     {@render field('Street', 'my_street', undefined, 'w-full max-w-[38rem]')}
                     {@render field('City', 'my_city')}

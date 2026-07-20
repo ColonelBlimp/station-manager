@@ -1,28 +1,96 @@
 /*
-    Rig-list reader for the app Settings → Rigs section (ADR 0044). GET /v1/rigs
-    returns the configured rigs plus the active-rig id (and a rigdef catalogue
-    the details editor will use later). This first increment needs only the list
-    and the default marker; the write path + catalogue resolution land with the
-    rig-details editor. Mirrors the daemon DTOs (internal/api/handler_rigs.go,
-    internal/types/rig.go) and the config SPA's api/rigs.ts.
+    Rig reader for the app Settings → Rigs section (ADR 0044). GET /v1/rigs
+    returns the configured rigs, the active-rig id, and the rigdef catalogue. A
+    configured rig's `model` is a rigdef id (e.g. "yaesu-ftdx10"); the catalogue
+    resolves it to the friendly name + identity + defaults the read-only detail
+    panel shows. The WRITE path (edit model/port/audio, set-default, add/delete)
+    + the discovered-device lists (/v1/hardware) land with the editable panel.
+    Mirrors the daemon DTOs (internal/api/handler_rigs.go, internal/types/rig.go)
+    and the config SPA's api/rigs.ts.
 */
-import { safeFetch, readJsonBody, isShape } from './_helpers';
+import { safeFetch, readJsonBody, isShape, isPlainObject } from './_helpers';
 
-/** A configured rig (subset of types.RigConfig — the fields the list needs). */
+/** A configured rig (subset of types.RigConfig — the fields the panel needs). */
 export interface RigConfig {
     id: number;
     model: string;
     port: string;
     audio?: { rx?: string; tx?: string };
+    ft8_mode?: string | null;
     my_rig?: string | null;
+}
+
+/** A rigdef's serial defaults (subset of cat.RigSerial). */
+export interface RigSerial {
+    baud_rate?: number;
+    data_bits?: number;
+    stop_bits?: number;
+    parity?: string;
+    line_delimiter?: string;
+}
+
+/** The catalogue projection of a rigdef (subset of api.RigDefSummary) the detail
+ *  panel reads: the friendly name + identity + defaults for a configured rig. */
+export interface RigDef {
+    name: string;
+    manufacturer?: string;
+    model?: string;
+    description?: string;
+    ft8_mode?: string;
+    rig_modes?: string[];
+    serial?: RigSerial;
 }
 
 export interface RigsData {
     defaultRigId: number;
     rigs: RigConfig[];
+    /** rigdef id (a rig's `model`) → its catalogue entry. */
+    catalogue: Record<string, RigDef>;
 }
 
 export type RigsOutcome = { kind: 'ok'; data: RigsData } | { kind: 'error'; message: string };
+
+function asString(v: unknown): string | undefined {
+    return typeof v === 'string' ? v : undefined;
+}
+function asNumber(v: unknown): number | undefined {
+    return typeof v === 'number' ? v : undefined;
+}
+
+function parseSerial(v: unknown): RigSerial | undefined {
+    if (!isPlainObject(v)) return undefined;
+    return {
+        baud_rate: asNumber(v.baud_rate),
+        data_bits: asNumber(v.data_bits),
+        stop_bits: asNumber(v.stop_bits),
+        parity: asString(v.parity),
+        line_delimiter: asString(v.line_delimiter),
+    };
+}
+
+// catalogueById builds the rigdef-id → catalogue-entry map. Only entries with a
+// string id + name are kept; a rig whose model isn't found falls back to the id.
+function catalogueById(catalogue: unknown): Record<string, RigDef> {
+    const out: Record<string, RigDef> = {};
+    if (Array.isArray(catalogue)) {
+        for (const e of catalogue) {
+            if (!isPlainObject(e) || typeof e.id !== 'string' || typeof e.name !== 'string')
+                continue;
+            out[e.id] = {
+                name: e.name,
+                manufacturer: asString(e.manufacturer),
+                model: asString(e.model),
+                description: asString(e.description),
+                ft8_mode: asString(e.ft8_mode),
+                rig_modes: Array.isArray(e.rig_modes)
+                    ? e.rig_modes.filter((m): m is string => typeof m === 'string')
+                    : undefined,
+                serial: parseSerial(e.serial),
+            };
+        }
+    }
+    return out;
+}
 
 export async function fetchRigs(signal?: AbortSignal): Promise<RigsOutcome> {
     const fetched = await safeFetch('/v1/rigs', { signal });
@@ -37,6 +105,7 @@ export async function fetchRigs(signal?: AbortSignal): Promise<RigsOutcome> {
         data: {
             defaultRigId: typeof body.default_rig_id === 'number' ? body.default_rig_id : 0,
             rigs: Array.isArray(body.rigs) ? body.rigs : [],
+            catalogue: catalogueById((body as { catalogue?: unknown }).catalogue),
         },
     };
 }

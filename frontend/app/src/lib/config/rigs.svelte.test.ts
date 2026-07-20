@@ -9,20 +9,20 @@ afterEach(() => {
     rigsState.selectedId = null;
     rigsState.loaded = false;
     rigsState.error = '';
+    rigsState.catalogue = {};
 });
 
 function mockJSON(status: number, body: unknown) {
     vi.stubGlobal(
         'fetch',
-        vi.fn(
-            (_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
-                Promise.resolve(
-                    new Response(JSON.stringify(body), {
-                        status,
-                        headers: { 'Content-Type': 'application/json' },
-                    }),
-                ),
-        ),
+        vi.fn((_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+            Promise.resolve(
+                new Response(JSON.stringify(body), {
+                    status,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            )
+        )
     );
 }
 
@@ -71,6 +71,31 @@ describe('rigsState', () => {
         await rigsState.load();
         expect(rigsState.selected).not.toBeNull();
         expect(rigsState.selectedId).toBe(1); // fell back to the default
+    });
+
+    it('nameFor resolves the friendly rigdef name, falling back to the model id', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_u: RequestInfo | URL, _i?: RequestInit) =>
+                Promise.resolve(
+                    new Response(
+                        JSON.stringify({
+                            default_rig_id: 1,
+                            rigs: [
+                                { id: 1, model: 'yaesu-ftdx10', port: '/dev/a' },
+                                { id: 2, model: 'unknown-rig', port: '/dev/b' },
+                            ],
+                            catalogue: [{ id: 'yaesu-ftdx10', name: 'Yaesu FTdx10' }],
+                        }),
+                        { status: 200, headers: { 'Content-Type': 'application/json' } }
+                    )
+                )
+            )
+        );
+        await rigsState.load();
+        expect(rigsState.nameFor(rigsState.rigs[0])).toBe('Yaesu FTdx10');
+        // A model absent from the catalogue falls back to the raw id.
+        expect(rigsState.nameFor(rigsState.rigs[1])).toBe('unknown-rig');
     });
 
     it('select changes the detailed rig', async () => {

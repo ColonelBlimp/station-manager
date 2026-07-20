@@ -28,8 +28,7 @@ export interface StationConfig {
 }
 
 export type StationOutcome =
-    | { kind: 'ok'; config: StationConfig }
-    | { kind: 'error'; message: string };
+    { kind: 'ok'; config: StationConfig } | { kind: 'error'; message: string };
 
 // toStringMap normalises the received block to a string map. logging_station is
 // all-string by the daemon's types.LoggingStation, so this is defensive rather
@@ -63,7 +62,7 @@ export async function fetchStation(signal?: AbortSignal): Promise<StationOutcome
 
 export async function saveStation(
     cfg: StationConfig,
-    signal?: AbortSignal,
+    signal?: AbortSignal
 ): Promise<StationOutcome> {
     // Only logging_station — never the operational `station` block (see the
     // data-safety note above). The daemon leaves omitted blocks untouched.
@@ -82,7 +81,5 @@ export async function saveStation(
     // Re-apply the daemon's authoritative post-save view: it re-derives my_lat/
     // my_lon from the grid square, so the form should reflect what was stored.
     const config = parseConfig(body);
-    return config
-        ? { kind: 'ok', config }
-        : { kind: 'error', message: 'malformed save response' };
+    return config ? { kind: 'ok', config } : { kind: 'error', message: 'malformed save response' };
 }

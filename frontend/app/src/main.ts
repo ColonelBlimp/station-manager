@@ -322,7 +322,7 @@ setStationSaved((station) => {
     applyStationIdentity(
         station.operator ?? '',
         station.my_gridsquare ?? '',
-        station.station_callsign || ctx.stationCallsign,
+        station.station_callsign || ctx.stationCallsign
     );
 });
 

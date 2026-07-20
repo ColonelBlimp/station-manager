@@ -5,7 +5,7 @@
     cache. First increment is read-only (list + selection); the per-rig details
     editor + write path land next.
 */
-import { fetchRigs, type RigConfig } from '../api/rigs';
+import { fetchRigs, type RigConfig, type RigDef } from '../api/rigs';
 
 class RigsState {
     loading = $state(false);
@@ -14,9 +14,27 @@ class RigsState {
     rigs = $state<RigConfig[]>([]);
     defaultRigId = $state(0);
     selectedId = $state<number | null>(null);
+    // rigdef id → catalogue entry (name + identity + defaults); see nameFor/defFor.
+    catalogue = $state<Record<string, RigDef>>({});
 
     // The rig backing the details panel, or null (no rigs / none selected).
     selected = $derived(this.rigs.find((r) => r.id === this.selectedId) ?? null);
+
+    // The rigdef catalogue entry for a rig, or undefined (unknown/legacy rigdef).
+    defFor(rig: RigConfig): RigDef | undefined {
+        return this.catalogue[rig.model];
+    }
+
+    // The friendly rigdef name for display, falling back to the raw model id if
+    // the catalogue doesn't carry it.
+    nameFor(rig: RigConfig): string {
+        return this.catalogue[rig.model]?.name ?? rig.model;
+    }
+
+    // The effective FT8 mode: the rig's own override, else the rigdef default.
+    ft8ModeFor(rig: RigConfig): string {
+        return rig.ft8_mode || this.catalogue[rig.model]?.ft8_mode || '';
+    }
 
     async load(): Promise<void> {
         if (this.loading) return;
@@ -30,6 +48,7 @@ class RigsState {
         }
         this.rigs = res.data.rigs;
         this.defaultRigId = res.data.defaultRigId;
+        this.catalogue = res.data.catalogue;
         // Reconcile the selection against the (possibly changed) list: keep a
         // still-valid manual selection, otherwise fall back to the active rig,
         // then the first, then null. Guarding only on `selectedId === null`

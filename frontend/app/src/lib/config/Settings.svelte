@@ -20,8 +20,7 @@
     <header class="mb-4">
         <h1 class="text-2xl font-semibold text-ink">Settings</h1>
         <p class="mt-1 text-sm text-muted">
-            Station configuration — rigs, mode mappings, forwarders, and station
-            identity.
+            Station configuration — rigs, mode mappings, forwarders, and station identity.
         </p>
     </header>
 

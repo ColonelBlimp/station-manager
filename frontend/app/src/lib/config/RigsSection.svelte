@@ -1,14 +1,30 @@
 <script lang="ts">
     // Rigs section — the configured rig profiles (app Settings, ADR 0044), as a
-    // master-detail: the rig list on the left, a details panel on the right.
-    // First increment: the list is live (GET /v1/rigs) and selectable; the
-    // details panel is a blank placeholder — the per-rig editor (model /
-    // port / audio / serial overrides / mode mappings) lands next.
+    // master-detail: the rig list on the left, a details panel on the right. The
+    // list is live (GET /v1/rigs) and selectable; the detail panel shows the
+    // selected rig read-only. The editable pickers (model / port / audio device)
+    // + write path land next — they need /v1/hardware for the discovered device
+    // lists.
     import { onMount } from 'svelte';
     import { rigsState } from './rigs.svelte';
+    import type { RigSerial } from '../api/rigs';
 
     onMount(() => void rigsState.load());
+
+    // Compact one-line summary of a rigdef's serial defaults, e.g.
+    // "38400 8N1 · delim ;".
+    function serialSummary(s: RigSerial): string {
+        const framing = `${s.data_bits ?? '?'}${(s.parity ?? 'none')[0].toUpperCase()}${s.stop_bits ?? '?'}`;
+        const parts = [s.baud_rate ? `${s.baud_rate} baud` : '', framing];
+        if (s.line_delimiter) parts.push(`delim ${s.line_delimiter}`);
+        return parts.filter(Boolean).join(' · ');
+    }
 </script>
+
+{#snippet row(label: string, value: string, mono = false)}
+    <dt class="text-muted">{label}</dt>
+    <dd class="truncate text-ink {mono ? 'font-mono text-xs' : ''}" title={value}>{value}</dd>
+{/snippet}
 
 {#if !rigsState.loaded && rigsState.loading}
     <p class="text-sm text-muted">Loading…</p>
@@ -35,7 +51,7 @@
                         onclick={() => rigsState.select(rig.id)}
                     >
                         <div class="flex items-center gap-2">
-                            <span class="font-medium text-ink">{rig.model}</span>
+                            <span class="font-medium text-ink">{rigsState.nameFor(rig)}</span>
                             {#if rig.id === rigsState.defaultRigId}
                                 <span
                                     class="rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-muted uppercase"
@@ -43,24 +59,51 @@
                                 >
                             {/if}
                         </div>
-                        <div class="truncate text-xs text-muted" title={rig.port}>{rig.port}</div>
                     </button>
                 </li>
             {/each}
         </ul>
 
-        <!-- Detail: blank panel (per-rig editor lands next increment) -->
-        <div class="flex-1">
+        <!-- Detail: read-only rig details. The editable pickers (model / port /
+             audio device) + write path land next; those need /v1/hardware for
+             the discovered serial + audio device lists. -->
+        <div class="min-w-0 flex-1">
             {#if rigsState.selected}
-                <h2 class="text-base font-semibold text-ink">{rigsState.selected.model}</h2>
-                <p class="truncate text-sm text-muted" title={rigsState.selected.port}>
-                    {rigsState.selected.port}
-                </p>
-                <div
-                    class="mt-4 grid min-h-[40vh] place-items-center rounded-xl border border-dashed border-line"
-                >
-                    <p class="text-sm text-muted">Rig details — coming soon.</p>
+                {@const rig = rigsState.selected}
+                {@const def = rigsState.defFor(rig)}
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <h2 class="text-lg font-semibold text-ink">{rigsState.nameFor(rig)}</h2>
+                    {#if rig.id === rigsState.defaultRigId}
+                        <span
+                            class="rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-muted uppercase"
+                            >active</span
+                        >
+                    {/if}
                 </div>
+                {#if def?.manufacturer || def?.model}
+                    <p class="mt-0.5 text-sm text-muted">
+                        {[def?.manufacturer, def?.model].filter(Boolean).join(' · ')}
+                    </p>
+                {/if}
+
+                <dl class="mt-5 grid grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
+                    {@render row('Serial port', rig.port || '—', true)}
+                    {@render row('Audio RX', rig.audio?.rx || '—')}
+                    {@render row('Audio TX', rig.audio?.tx || '—')}
+                    {@render row('FT8 mode', rigsState.ft8ModeFor(rig) || '—')}
+                    {#if def?.serial}
+                        {@render row('Serial defaults', serialSummary(def.serial))}
+                    {/if}
+                </dl>
+
+                {#if def?.description}
+                    <section class="mt-6">
+                        <h3 class="mb-1 text-xs font-semibold tracking-wide text-muted uppercase">
+                            About
+                        </h3>
+                        <p class="text-sm leading-relaxed text-muted">{def.description}</p>
+                    </section>
+                {/if}
             {:else}
                 <div
                     class="grid min-h-[40vh] place-items-center rounded-xl border border-dashed border-line"
