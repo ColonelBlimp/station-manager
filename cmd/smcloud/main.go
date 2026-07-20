@@ -151,8 +151,10 @@ const maxTenantPairs = 32
 // FAIL-LOUD by construction — every malformed shape is a boot error, never a
 // silently missing tenant:
 //   - the whole environ is scanned, so indices need not be contiguous (a gap
-//     cannot skip a later pair) and an unparseable or out-of-range suffix on
-//     either prefix is refused rather than ignored;
+//     cannot skip a later pair) and an unparseable, non-canonical ("02", "+2"
+//     — alternate spellings of one slot could cross-combine halves) or
+//     out-of-range suffix on either prefix is refused rather than ignored, as
+//     is the same variable appearing twice;
 //   - _1 is refused (the first tenant is the unnumbered pair — two spellings
 //     for one slot would drift);
 //   - each index needs BOTH halves (an orphaned callsign or token names the
@@ -184,9 +186,16 @@ func collectTenantPairs(legacyCallsign, legacyToken string, environ []string) ([
 	}
 	numbered := map[int]*half{}
 	indexOf := func(name, prefix string) (int, error) {
-		n, err := strconv.Atoi(name[len(prefix):])
-		if err != nil {
-			return 0, fmt.Errorf("unrecognised variable %s — numbered tenant pairs are %sN/%sN",
+		// The suffix must be the CANONICAL decimal spelling: Atoi alone maps
+		// "02"/"+2" to the same index as "2", so two spellings of one slot
+		// could coexist in the environ, cross-combining one spelling's
+		// callsign with the other's token or silently discarding a pair —
+		// the exact silent merge this validation exists to prevent (codex
+		// review of the milestone commit).
+		suffix := name[len(prefix):]
+		n, err := strconv.Atoi(suffix)
+		if err != nil || strconv.Itoa(n) != suffix {
+			return 0, fmt.Errorf("unrecognised variable %s — numbered tenant pairs are %sN/%sN (canonical decimal index, no leading zeros or sign)",
 				name, callsignVarPrefix, tokenVarPrefix)
 		}
 		switch {
@@ -213,6 +222,9 @@ func collectTenantPairs(legacyCallsign, legacyToken string, environ []string) ([
 				h = &half{}
 				numbered[n] = h
 			}
+			if h.callsignSet {
+				return nil, fmt.Errorf("%s is set more than once", name)
+			}
 			h.callsign, h.callsignSet = value, true
 		case strings.HasPrefix(name, tokenVarPrefix):
 			n, err := indexOf(name, tokenVarPrefix)
@@ -223,6 +235,9 @@ func collectTenantPairs(legacyCallsign, legacyToken string, environ []string) ([
 			if h == nil {
 				h = &half{}
 				numbered[n] = h
+			}
+			if h.tokenSet {
+				return nil, fmt.Errorf("%s is set more than once", name)
 			}
 			h.token, h.tokenSet = value, true
 		}
