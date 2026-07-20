@@ -37,9 +37,13 @@ precisely so we don't re-derive state or redo finished work.
 > migration 0004), the FIX-DON'T-DEFER policy adopted, milestone-1 design
 > APPROVED (build PAUSED by operator — do NOT start it unprompted), the
 > SPA-retirement direction decided with the parity audit run — then ft8 review
-> batch #10 (6 findings, 6/6 real) BUILT + COMMITTED, then a follow-up round
-> #11 on the smcloud batch (2/2 real) BUILT + COMMITTED. Eleven consecutive
-> all-real rounds; nothing deferred anywhere.**
+> batch #10 (6 findings, 6/6 real) BUILT + COMMITTED, follow-up round #11 on
+> the smcloud batch (2/2 real) BUILT + COMMITTED, round #12 (3/3 real, incl. a
+> HIGH regression of my own inside the #10 capture fix) BUILT + COMMITTED in
+> three operator-directed steps — and the operator switched to AUTOMATIC
+> per-commit clean-room reviews (codex, `.codex-reviews/`), which immediately
+> caught two more real issues, both fixed. Nothing deferred anywhere; both
+> packages end the session at zero open findings.**
 > - **External review (4 findings) → all four verified → ALL BUILT (the
 >   fix-don't-defer trigger session):** (1) padded UUID: server validated a
 >   TRIMMED uuid but stored the payload verbatim → 200-accepted rows failed
@@ -206,6 +210,39 @@ precisely so we don't re-derive state or redo finished work.
 >   STAND and only the conflict-target detail is superseded by 0004.
 >   Validation: build + gofmt + vet + fresh `-race` cloud/e2e suites vs dev
 >   PG, all green. smcloud-only, rides the milestone-1 F44 rebuild.
+> - **Round #12 (3 findings, 3/3 real) — built in three operator-directed
+>   steps:** (1) LOW: my round-11 comment claimed the restore client "treats
+>   5xx as transient and retries" — FALSE (push-path worker retries;
+>   `FetchExport` is one-shot and ignores Retry-After). Comment corrected
+>   (server.go `maxConcurrentExports` doc); the same false claim in the
+>   handoff prose was independently re-found by the first codex review and
+>   corrected there too. (2) HIGH, my regression inside the #10 capture fix
+>   (the worst category again): `malgoSource.Stop` nilled `m.cap` BEFORE
+>   `<-m.done` while the pump dereferenced `m.cap.Samples()` per iteration —
+>   race/nil-panic on a buffered batch. Fixed with both belts: the pump takes
+>   the samples channel as an ARGUMENT (never touches the pointer again —
+>   race impossible by construction) + the nil-out moved after the drain.
+>   Codex-reviewed clean. (3) MEDIUM: path-reset atomicity — completion
+>   read+reset via two txMu holds (a set landing between was swallowed) and
+>   an accepted start published active before the reset. Fixed:
+>   `consumeExchangePath()` (atomic read+clear), Start* inverted to
+>   consume-BEFORE + restore-on-reject. The first shape's restore was
+>   unconditional — the codex review caught the lost update (a selection
+>   landing mid-window overwritten by a stale restore) → **`exchPathGen`
+>   generation token:** SetExchangePath bumps it; restore applies only if the
+>   generation hasn't moved, so the operator's latest selection always wins.
+>   Re-reviewed clean. Tests: consume/restore semantics incl. the exact
+>   lost-update scenario; full ft8 + `-race -short` + CGO-free + build green.
+> - **NEW STANDING PROCESS — automatic codex commit reviews (operator,
+>   2026-07-20):** every commit gets a clean-room review from another AI,
+>   landing as `.codex-reviews/<12-hex>.md` (UNCOMMITTED, transient).
+>   Workflow: check after commits + at session start → verify findings
+>   against code → implement valid ones → DELETE the review doc (deletion =
+>   processed; no status editing). Memory `codex-commit-reviews` records it.
+>   First session's tally: 5 reviews — 2 clean, 2 real P2 catches (both
+>   fixed), 1 re-find of a pasted-round finding. The reviewer's sandbox
+>   cannot run `go test` (read-only /tmp) — cover its blocked verification
+>   locally when triaging.
 > - **NEXT (operator-set): (1) build SMC milestone 1 when the operator says
 >   go — design above is agreed; the paused build had `main.go` read and no
 >   code written. Then ONE F44 `task rpm:smcloud` rebuild carries
