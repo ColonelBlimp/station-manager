@@ -32,6 +32,66 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-20)
 
+> **Session 229 (2026-07-20, later) — CONFIG UI: RIGS SECTION BUILT +
+> hardened; CLUBLOG API KEY moved to BUILD-TIME INJECTION (ADR 0054); ADR 0053
+> (inbound DX cluster) written; POTA + Call Sense added to backlog. Everything
+> at ZERO open codex findings after a multi-round convergent review arc.**
+> - **Rigs section** (`lib/config/RigsSection.svelte` + `rigs.svelte.ts` +
+>   `api/rigs.ts` + `api/hardware.ts`) — master-detail: rig list (rigdef
+>   friendly name + "default" badge; device removed per operator) → read-only
+>   identity/FT8-mode/serial-defaults → **editable Connection** (serial port +
+>   audio RX/TX pickers from `/v1/hardware`, keeping a stored-but-absent device
+>   as "(not detected)"; degrades to read-only text on a static/CGO-free daemon
+>   where audio can't be enumerated). "Restart the daemon to reconnect" note.
+> - **Concurrency-safe save model (took ~4 codex rounds, every finding real):**
+>   a rig save WHOLE-REPLACES the catalogue daemon-side, so save RE-FETCHES,
+>   then merges only the connection FIELDS the operator changed — **port, audio
+>   RX, audio TX diffed INDEPENDENTLY** — against an **immutable per-draft
+>   baseline** (not the live `this.rigs`, which drifts on refresh), and PUTs
+>   WITHOUT `default_rig_id` (presence-aware; never clobbers the active-rig
+>   pick). Pickers disabled mid-save; `#applyFetched` re-baselines PRISTINE
+>   retained drafts; Cancel adopts the current server value. Accepted limitation
+>   (documented in code): the re-fetch→PUT isn't atomic — a truly-concurrent
+>   second writer is last-writer-wins; closing it needs server-side optimistic
+>   concurrency, disproportionate for a single-operator daemon. Tests in
+>   `rigs.svelte.test.ts` pin each fix (rx/tx independence, baseline rebase,
+>   Cancel-adopts-fresh). Lesson reinforced: [[review-fixes-need-full-scrutiny]].
+> - **ClubLog application API key → BUILD-INJECTED (ADR 0054, Accepted).**
+>   ClubLog's terms forbid publishing the key in source; the operator also wants
+>   it out of `config.json`. So it's stamped into the binary via `-ldflags`
+>   (`-X …/clublog.InjectedAPIKey`) from the gitignored `.env`
+>   (**`CLUBLOG_API_KEY`** — already set), the same `-X` channel as
+>   `main.Version`. Wired into all 5 `cmd/smd` build lines + `dev-rpm.sh` /
+>   `release-rpm.sh` / `release.sh` (host `.env` sourced; container gets `-e`).
+>   ClubLog `credentials` now hold only `email`/`password`/`callsign` (the SPA
+>   add-forwarder descriptor dropped the `api` field). **Startup scrubs a legacy
+>   `api` out of `config.json`** (`stripCredentialKey`) — GUARDED on a non-empty
+>   baked key so a keyless build can't delete the only copy. **Keyless build =
+>   fail-SOFT:** `clublog.New` still constructs (a `Build()` error would abort
+>   the WHOLE daemon via `spawnForwarderWorkers`), and every `Submit`
+>   short-circuits to **Unreachable** (no network) so a queued backlog is
+>   preserved and auto-ships once a keyed build deploys — NOT Terminal (would
+>   fail rows permanently). ⚠️ **`build/config.json` HAD the key in plaintext**
+>   (line ~59) — the startup scrub removes it on the next daemon start with the
+>   new binary; the key value was also surfaced in-session, so **weigh
+>   rotation**. 4 codex rounds → CLEAN.
+> - **ADR 0053 (inbound DX-cluster spot alerts) — Accepted + written**
+>   (review-corrected): new `internal/dxcluster` telnet subsystem; FREQUENCY-
+>   first click-to-QSY (spots carry no mode → best-effort inferred → rig literal,
+>   omitted if unknown since `SendCommands` is atomic); reuse enrichment (DXCC) +
+>   exact-callsign contest-dupe, plus a NEW needed-entity logbook aggregation
+>   (contest-dupe can't answer "needed DXCC"). Not built — P2/post-ship.
+> - **Backlog:** POTA / activation-management + "Call Sense" predictive-callsign
+>   assistance added (2026-07-20 qso-director.com scan). Both P2/post-ship.
+> - **Process:** per-commit clean-room codex reviews are now a PERMANENT git hook
+>   (operator confirmed) — do NOT propose trimming/batching them
+>   ([[codex-commit-reviews]]).
+> - **NEXT (config UI):** the next Settings section — **forwarders** (recommended:
+>   removes the hand-edit-JSON pain; the ClubLog descriptor is now clean) OR
+>   logbooks / DB management — or build the **DX-cluster subsystem** (ADR 0053),
+>   or start **SPA retirement** (drop logging/config/logbook routes + embeds, keep
+>   source). ClubLog: enable at the next on-air test.
+
 > **Session 229 (2026-07-20, afternoon) — CONFIG UI STARTED: the app Settings
 > view's first real section (Station) BUILT + iterated + committed, through a
 > long automatic-codex-review arc. Also: SMC milestone 1 DEPLOYED earlier the

@@ -228,6 +228,14 @@ lives in config (overridable without a recompile) with the package
 forwarder's pending/failed rows) — superseding ADR 0022's presence-gating; see
 ADR 0039.
 
+The **ClubLog application API key is NOT a config credential** (ADR 0054). It is
+build-injected — stamped into the binary via `-ldflags` from the gitignored
+`.env` (`CLUBLOG_API_KEY`), never stored in `config.json`. A ClubLog forwarder's
+`credentials` therefore hold only `email`/`password`/`callsign`; a legacy `api`
+left in an existing config is **scrubbed from disk at startup**, but only when
+the running build actually has a baked key to replace it (a keyless build must
+not delete the operator's only usable key).
+
 ### (a′) first-run seed defaults — set in `DefaultConfig`, NOT `applyDefaults`
 
 Booleans where `false` is a legitimate operator choice, so they're seeded once at
