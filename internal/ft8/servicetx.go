@@ -504,9 +504,9 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	// is at its default before the session is ever visible. A rejected start
 	// (double-start, operator error) restores the active exchange's choice; see
 	// restoreExchangePath for the accepted residual on that rare path.
-	prev := s.consumeExchangePath()
+	prevPath, prevGen := s.consumeExchangePath()
 	if err := s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
-		s.restoreExchangePath(prev)
+		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
 	return nil
@@ -542,9 +542,9 @@ func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int,
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
-	prev := s.consumeExchangePath()
+	prevPath, prevGen := s.consumeExchangePath()
 	if err := s.seq.StartQsoFd(ourCall, class, section, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
-		s.restoreExchangePath(prev)
+		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
 	return nil
@@ -584,9 +584,9 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
-	prev := s.consumeExchangePath()
+	prevPath, prevGen := s.consumeExchangePath()
 	if err := s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, txParity, time.Now().UTC()); err != nil {
-		s.restoreExchangePath(prev)
+		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
 	return nil
@@ -618,9 +618,9 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
-	prev := s.consumeExchangePath()
+	prevPath, prevGen := s.consumeExchangePath()
 	if err := s.seq.StartWorkCaller(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
-		s.restoreExchangePath(prev)
+		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
 	return nil
@@ -655,10 +655,10 @@ func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, t
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
-	prev := s.consumeExchangePath()
+	prevPath, prevGen := s.consumeExchangePath()
 	if err := s.seq.StartWorkCallerFd(ourCall, class, section, theirCall, theirGrid, theirClass, theirSection,
 		theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
-		s.restoreExchangePath(prev)
+		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
 	return nil
@@ -687,9 +687,9 @@ func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int,
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
-	prev := s.consumeExchangePath()
+	prevPath, prevGen := s.consumeExchangePath()
 	if err := s.seq.StartQsoT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
-		s.restoreExchangePath(prev)
+		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
 	return nil
@@ -717,9 +717,9 @@ func (s *Service) StartWorkCallerT4(ourCall, theirCall, theirGrid string, theirS
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
-	prev := s.consumeExchangePath()
+	prevPath, prevGen := s.consumeExchangePath()
 	if err := s.seq.StartWorkCallerT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
-		s.restoreExchangePath(prev)
+		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
 	return nil
@@ -762,6 +762,7 @@ func (s *Service) SetExchangePath(path string) {
 	p := normalizeAntPath(path)
 	s.txMu.Lock()
 	s.exchPath = p
+	s.exchPathGen++ // any explicit selection invalidates a pending rejected-start restore
 	s.txMu.Unlock()
 }
 
@@ -793,31 +794,36 @@ func (s *Service) exchangePath() string {
 // previously read and reset via two separate acquisitions, so an operator
 // SetExchangePath landing between them was silently swallowed (review
 // 2026-07-20 round 12 #3). Session starts consume too (before the sequencer
-// commit), pairing with restoreExchangePath on rejection.
-func (s *Service) consumeExchangePath() string {
+// commit), pairing with restoreExchangePath on rejection. The returned
+// generation token makes that restore conditional: it applies only if no
+// SetExchangePath landed in between, so the operator's LATEST selection
+// always wins (codex review of the first consume/restore shape — an
+// unconditional restore was a lost update on the rejected-start path).
+func (s *Service) consumeExchangePath() (string, uint64) {
 	s.txMu.Lock()
 	p := s.exchPath
 	s.exchPath = ""
+	gen := s.exchPathGen
 	s.txMu.Unlock()
 	if p == "" {
-		return antPathShort
+		return antPathShort, gen
 	}
-	return p
+	return p, gen
 }
 
 // restoreExchangePath puts a consumed path back after a REJECTED session start,
-// so the still-active exchange keeps its choice. Only the non-default survives
-// the round-trip: restoring "S" is a no-op, which also means a SetExchangePath
-// that landed between the rejected start's consume and this restore wins over
-// a short-path restore. Accepted residual: a long-path restore can overwrite a
-// concurrent short-path selection — the window is the rejected-start error
-// path only (a double-start), and the path stays operator-adjustable.
-func (s *Service) restoreExchangePath(p string) {
+// so the still-active exchange keeps its choice — UNLESS a SetExchangePath
+// landed since the consume (the generation moved): the operator's newer
+// selection then stands and the stale value is dropped. Restoring the default
+// is always a no-op.
+func (s *Service) restoreExchangePath(p string, gen uint64) {
 	if p != antPathLong {
 		return
 	}
 	s.txMu.Lock()
-	s.exchPath = p
+	if s.exchPathGen == gen {
+		s.exchPath = p
+	}
 	s.txMu.Unlock()
 }
 

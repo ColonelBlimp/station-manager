@@ -446,14 +446,28 @@ func TestExchangePath_ConsumeAndRestore(t *testing.T) {
 	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 
 	s.SetExchangePath("L")
-	require.Equal(t, antPathLong, s.consumeExchangePath(), "consume returns the choice")
+	p, gen := s.consumeExchangePath()
+	require.Equal(t, antPathLong, p, "consume returns the choice")
 	require.Equal(t, antPathShort, s.exchangePath(), "consume clears back to the default")
-	require.Equal(t, antPathShort, s.consumeExchangePath(), "second consume yields the default")
+	p2, _ := s.consumeExchangePath()
+	require.Equal(t, antPathShort, p2, "second consume yields the default")
 
-	s.restoreExchangePath(antPathLong)
-	require.Equal(t, antPathLong, s.exchangePath(), "long-path restore reinstates the choice")
+	s.restoreExchangePath(antPathLong, gen)
+	require.Equal(t, antPathLong, s.exchangePath(), "quiet-window long-path restore reinstates the choice")
 
-	s.SetExchangePath("L") // a selection landing between a consume and a restore...
-	s.restoreExchangePath(antPathShort)
-	require.Equal(t, antPathLong, s.exchangePath(), "...is not clobbered by a short-path restore")
+	// The lost-update case the codex review caught in the first shape: a
+	// selection landing between consume and restore must WIN over the restore.
+	p3, gen3 := s.consumeExchangePath()
+	require.Equal(t, antPathLong, p3)
+	s.SetExchangePath("S") // operator's newer selection, mid-window
+	s.restoreExchangePath(antPathLong, gen3)
+	require.Equal(t, antPathShort, s.exchangePath(),
+		"a stale long-path restore must not overwrite a newer selection")
+
+	s.SetExchangePath("L") // and a short-path restore is always a no-op
+	_, gen4 := s.consumeExchangePath()
+	s.SetExchangePath("L")
+	s.restoreExchangePath(antPathShort, gen4)
+	require.Equal(t, antPathLong, s.exchangePath(),
+		"a short-path restore never clobbers a selection")
 }

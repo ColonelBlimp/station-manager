@@ -135,15 +135,18 @@ type Service struct {
 	// atomically CONSUMED before each session start (restored on a rejected
 	// start — consuming first means the path is at its default before the new
 	// session is ever visible-active, so a selection for it can't be stomped)
-	// and atomically consumed at each logged contact. Accepted residue: a
-	// caller-mode answerer that fails mid-exchange (no RR73, drop back to CQ)
-	// leaves the previous choice in place for the next answerer — adjust it as
-	// the pile-up moves.
-	exchPath string
-	txDevice txPlayer
-	txCtrl   *TxController
-	txCancel context.CancelFunc
-	txWg     sync.WaitGroup
+	// and atomically consumed at each logged contact. exchPathGen counts
+	// explicit SetExchangePath calls so a rejected start's restore applies only
+	// if no newer selection landed since its consume (latest selection wins —
+	// codex review). Accepted residue: a caller-mode answerer that fails
+	// mid-exchange (no RR73, drop back to CQ) leaves the previous choice in
+	// place for the next answerer — adjust it as the pile-up moves.
+	exchPath    string
+	exchPathGen uint64
+	txDevice    txPlayer
+	txCtrl      *TxController
+	txCancel    context.CancelFunc
+	txWg        sync.WaitGroup
 
 	// seqGate serialises "start a session" (StartQso/StartCallCq) against
 	// "disarm + abandon" (disarmTx) so the armed-check and the sequencer commit
@@ -242,7 +245,7 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		// NEXT answerer would inherit this contact's long-path choice — and
 		// read+clear must share one lock hold, or a selection landing between
 		// them is silently swallowed.
-		c.AntPath = s.consumeExchangePath()
+		c.AntPath, _ = s.consumeExchangePath() // completion has no restore; the token is unused
 		if s.qsoLogger != nil {
 			s.qsoLogger(s.base(), c)
 		}
