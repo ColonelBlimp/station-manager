@@ -191,7 +191,10 @@ precisely so we don't re-derive state or redo finished work.
 >   semaphore caps how many" was another soft guarantee claim (16 > 5 caps
 >   nothing). Fix: `maxConcurrentExports = 2` try-acquire gate at the top of
 >   `handleExport`, BEFORE any store access — over-limit → 503 + Retry-After
->   60; deferred release on every path; restore client already retries 5xx.
+>   60; deferred release on every path. (NB the restore client does NOT
+>   auto-retry — a gated export surfaces as a failure the operator re-runs;
+>   the round-12 review corrected this exact overclaim in the code comment,
+>   and the codex review of the docs commit caught it here too.)
 >   2 of 5 conns worst-case leaves 3 for the short-lived routes. Pinned by a
 >   no-DB test (nil store — proves rejection precedes store access) + the
 >   PG-backed export/e2e tests exercise acquire/release. (2) **doc drift** —

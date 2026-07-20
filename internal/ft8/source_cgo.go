@@ -63,7 +63,11 @@ func (m *malgoSource) Start(ctx context.Context) (<-chan []int16, error) {
 	m.cancel = cancel
 	m.out = make(chan []int16, capture.SampleChannelBufferSize)
 	m.done = make(chan struct{})
-	go m.pump(pumpCtx)
+	// The pump receives the samples channel as a STABLE argument rather than
+	// dereferencing m.cap per iteration — Stop nils m.cap, and a pump still
+	// draining a buffered batch must not race that write (review 2026-07-20
+	// round 12 #2).
+	go m.pump(pumpCtx, m.cap.Samples())
 	return m.out, nil
 }
 
@@ -71,14 +75,14 @@ func (m *malgoSource) Start(ctx context.Context) (<-chan []int16, error) {
 // is cancelled or the capture channel closes. It owns the close of m.out so
 // the scheduler sees a clean stream end. The send is itself ctx-guarded so a
 // stalled consumer can't wedge shutdown.
-func (m *malgoSource) pump(ctx context.Context) {
+func (m *malgoSource) pump(ctx context.Context, samples <-chan []float32) {
 	defer close(m.out)
 	defer close(m.done)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case batch, ok := <-m.cap.Samples():
+		case batch, ok := <-samples:
 			if !ok {
 				return
 			}
@@ -97,10 +101,13 @@ func (m *malgoSource) pump(ctx context.Context) {
 
 // Stop cancels the pump, releases the device, and waits for the pump to drain.
 // Idempotent and safe even if Start failed or was never called. The capture
-// pointer is cleared after Close so a second Stop — possible when both capture
-// goroutines die at once and each runs the unexpected-exit cleanup (review
-// 2026-07-20 #4) — cannot double-Close the CGO device. Callers serialise Stop
-// under the Service mutex; the nil-out is not itself concurrency-safe.
+// pointer is cleared so a second Stop — possible when both capture goroutines
+// die at once and each runs the unexpected-exit cleanup (review 2026-07-20
+// #4) — cannot double-Close the CGO device; the nil-out happens only AFTER
+// <-m.done proves the pump has exited (review 2026-07-20 round 12 #2 — nilling
+// before the drain raced a pump still looping on a buffered batch; the pump
+// also no longer dereferences m.cap at all, taking its channel as an
+// argument). Callers serialise Stop under the Service mutex.
 func (m *malgoSource) Stop() error {
 	if m.cap == nil {
 		return nil
@@ -109,9 +116,9 @@ func (m *malgoSource) Stop() error {
 		m.cancel()
 	}
 	err := m.cap.Close() // closes capture.Samples()
-	m.cap = nil
 	if m.done != nil {
 		<-m.done
 	}
+	m.cap = nil
 	return err
 }
