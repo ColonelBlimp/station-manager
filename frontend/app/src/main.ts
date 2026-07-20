@@ -222,9 +222,21 @@ setFt8Dupe((call, band, mode) => {
 // first-run setup completes) — the rig event stream must not double-open.
 let rigEventsOpen = false;
 
+// The station-identity setters keyed on operator / grid / station callsign —
+// the SINGLE place both the full boot-context apply and a Settings save go
+// through, so the two can't drift (review round 4 #1: a hand-rolled save-path
+// update missed setMyGrid, desyncing the displayed bearing from the logged one).
+function applyStationIdentity(operator: string, grid: string, stationCallsign: string): void {
+    ctx.operator = operator;
+    ctx.myGrid = grid;
+    ctx.stationCallsign = stationCallsign;
+    setMyGrid(grid); // enrichment bearing/distance display ('' hides the row)
+    setFt8OperatorCall(stationCallsign); // Band Activity "calling us" flags
+    setFt8MyGrid(grid); // Band Activity per-CQ bearing origin
+}
+
 function applyStationContext(c: StationContext): void {
     Object.assign(ctx, c);
-    setMyGrid(c.myGrid); // '' on failure → bearing row hides, fail-soft
     // The operator's "CAT enabled" intent gates the stream (shipping rule):
     // when false the SPA stays manual and never opens it. Config is fetched
     // once at boot, so no enable/disable tracking here — this SPA's config
@@ -261,10 +273,9 @@ function applyStationContext(c: StationContext): void {
     setStationInfo({ logbookName: c.logbookName, rigName: c.rigName });
     // Seed the header's live logbook count now that the default-logbook id is known.
     refreshLogbookCount();
-    // Operator callsign → Band Activity flags decodes calling US (`<me> <them>`).
-    setFt8OperatorCall(c.stationCallsign);
-    // Operator grid → the near end of Band Activity's per-CQ short-path bearing.
-    setFt8MyGrid(c.myGrid);
+    // Station identity (operator / grid / callsign) → the setters shared with the
+    // Settings save path, applied via the one helper so they can't drift.
+    applyStationIdentity(c.operator, c.myGrid, c.stationCallsign);
     // FT8 Band Activity display prefs (config ft8.display): feed_mode drives the
     // decode-feed roll (accumulate vs single-slot) in the state module; cq_to_top
     // + history_max shape the Band Activity render. Injected once at boot — this
@@ -308,11 +319,11 @@ setSetupSave(async (callsign) => {
 // window: the context can never wipe to empty (round 2 #1) nor keep stale
 // operator/grid that would be logged onto subsequent QSOs (round 3 #1).
 setStationSaved((station) => {
-    ctx.operator = station.operator ?? '';
-    ctx.myGrid = station.my_gridsquare ?? '';
-    ctx.stationCallsign = station.station_callsign || ctx.stationCallsign;
-    setFt8OperatorCall(ctx.stationCallsign);
-    setFt8MyGrid(ctx.myGrid);
+    applyStationIdentity(
+        station.operator ?? '',
+        station.my_gridsquare ?? '',
+        station.station_callsign || ctx.stationCallsign,
+    );
 });
 
 // Submit sink: draft + rig context + displayed enrichment → one ADIF record →
