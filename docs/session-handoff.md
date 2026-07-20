@@ -32,6 +32,61 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-20)
 
+> **Session 229 (2026-07-20, afternoon) — CONFIG UI STARTED: the app Settings
+> view's first real section (Station) BUILT + iterated + committed, through a
+> long automatic-codex-review arc. Also: SMC milestone 1 DEPLOYED earlier the
+> same day (see S228), `smcloudctl`/`smctl` control scripts added.**
+> - **Config UI = the app's Settings view** (`frontend/app`, ADR 0044 — the
+>   keystone that lets the standalone config SPA retire). Empty landing panel
+>   first (`lib/config/Settings.svelte`), then the first real section:
+> - **Station section** (`lib/config/StationSection.svelte` + `station.svelte.ts`
+>   state + `api/config.ts`) — the ADIF `logging_station` identity block:
+>   identity (callsign/operator/owner/name + activity SIG), location & zones
+>   (grid/country/DXCC/CQ/ITU/altitude), postal address, equipment, CW. Loads +
+>   saves via `/v1/config`. Operator-directed UI polish: grid moved to
+>   Location, SIG added (blank by default), hints → tooltips, two-row zones
+>   layout, Street/Antenna `w-full max-w-[38rem]`, ADIF-accurate callsign
+>   tooltips. **station_callsign is READ-ONLY** (operator decision): the daemon
+>   binds each logbook to STATION_CALLSIGN (`submit.go:136` — a live QSO needs
+>   STATION_CALLSIGN == the logbook's callsign, else `callsign_mismatch`), and
+>   PUT only seeds it at first-run, so editing it post-setup would break
+>   logging. operator/owner stay editable (they don't touch the logbook bind).
+> - **Data-safety contracts (verified against the daemon, not just comments):**
+>   `logging_station` PUT is a WHOLE-BLOCK replace (`overlayConfig`), so the
+>   save round-trips the full block (incl. daemon-derived my_lat/my_lon the form
+>   never renders) or omitted fields zero. The operational `station` block is
+>   NOT sent (presence-aware → omit leaves it untouched; echoing a load-time
+>   copy would clobber a concurrent amp/power/band change). After save, the
+>   shared app station context is refreshed from the PUT RESPONSE (not a second
+>   GET) via the shared `applyStationIdentity` helper in `main.ts`.
+> - **FIVE codex review rounds on this section (all findings verified real,
+>   all fixed) — a cautionary arc worth reading:** (1) 3 findings — callsign
+>   editability (→ read-only), stale shared identity after save (→ refresh
+>   hook), operational-block clobber (→ omit it), + a docs P2 (broken
+>   `git diff … A..HEAD` range → put the range BEFORE `--`; "byte-identical"
+>   binary was false, main.Version moved 712→716). (2) my refresh hook applied
+>   `fetchStationContext()`'s configOk:false sentinel unconditionally → wiped
+>   the good context on a transient GET failure. (3) fixing that by keeping the
+>   last-good context then LOGGED STALE operator/grid → the real fix was
+>   dropping the second GET entirely and refreshing from the PUT response. (4)
+>   that surgical update missed `setMyGrid` (one of three identity setters
+>   `applyStationContext` ran) → displayed bearing desynced from logged →
+>   extracted the shared `applyStationIdentity` helper so the boot + save paths
+>   can't drift. (5) CLEAN. **Rounds 2–5 were all follow-on defects in my OWN
+>   fixes** — see the new memory [[review-fixes-need-full-scrutiny]].
+> - Tests: `api/config.test.ts` (round-trip data-safety) + `station.svelte.test.ts`
+>   (load/dirty/reset/save, save-latch serialization, no-second-GET). App suite
+>   650 green; lint + check clean throughout.
+> - **Also this session (dev-loop niggle):** `build/config.json` (the dev
+>   working-dir config, NOT the repo) had an invalid-JSON trailing comma from a
+>   hand-edited smcloud forwarder entry → `task run:smd` crashed at parse;
+>   fixed the comma. This is exactly the hand-edit-JSON pain the config UI's
+>   forwarder section will remove.
+> - **NEXT (config UI):** QSL sub-section (separate `qsl` block, presence-aware)
+>   OR the next top-level section — forwarders (recommended: the hand-edit-JSON
+>   surface) or rigs. The app Settings view is now unblocked as the config-SPA
+>   retirement keystone.
+
 > **Session 228 (2026-07-20) — review batch #9 (4 findings) BUILT + COMMITTED
 > (`internal/cloud` at a CLEAN BILL, incl. the multi-tenancy prerequisite
 > migration 0004), the FIX-DON'T-DEFER policy adopted, milestone-1 design
