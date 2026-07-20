@@ -6,12 +6,30 @@
 
     DATA SAFETY (review 2026-07-20 Rigs-editor): a rig save WHOLE-REPLACES the
     catalogue daemon-side, so save RE-FETCHES the fresh catalogue, applies only
-    the edited rig's port/audio onto the fresh objects, and PUTs that — WITHOUT
-    default_rig_id — so a concurrent change to another rig, this rig's other
-    fields, or the active-rig selection is never clobbered by a stale snapshot.
-    Drafts are full-fidelity JSON clones (all fields, incl. the un-rendered
-    mode_mappings/overrides), kept PER RIG so switching rigs doesn't discard
-    unsaved edits.
+    the connection FIELDS the operator actually changed onto the fresh objects,
+    and PUTs that — WITHOUT default_rig_id — so a concurrent change to another
+    rig, this rig's other fields, an unedited connection field, or the active-rig
+    selection is never clobbered by a stale snapshot. The port/audio pickers are
+    disabled while a save is in flight, so a mid-save edit can't be silently
+    dropped by the post-save draft reset. Drafts are full-fidelity JSON clones
+    (all fields, incl. the un-rendered mode_mappings/overrides), kept PER RIG so
+    switching rigs doesn't discard unsaved edits.
+
+    ACCEPTED LIMITATIONS — bounded, and only reachable by a SECOND client editing
+    rig config at the same instant (SM is a single-operator daemon; the realistic
+    case is two browser tabs open at once, which is rare and self-inflicted):
+      - The re-fetch→PUT is not atomic (review #2): a writer landing in that
+        window is last-writer-wins. Closing it needs SERVER-SIDE optimistic
+        concurrency (a rigs revision / precondition) — disproportionate for a
+        single-operator local config editor, and revisit-if multi-client rig
+        editing ever becomes real (e.g. a hosted config surface).
+      - After a save, a pristine draft for another visited rig keeps its old
+        catalogue base (review #4) and the active-rig badge reflects the pre-PUT
+        default (review #5). Both are COSMETIC (a rig can falsely read dirty, or
+        show a stale "active" badge) until the next load; with the field-level
+        merge + save-lock above, neither causes data loss. Reconciling them fully
+        would mean rebasing every retained draft on each save — client-side
+        multi-writer bookkeeping not worth its complexity here.
 */
 import { fetchRigs, saveRigs, type RigConfig, type RigDef } from '../api/rigs';
 import { fetchHardware, type SerialPort, type AudioDevice } from '../api/hardware';
@@ -155,13 +173,23 @@ class RigsState {
             toasts.error('That rig no longer exists — reload Settings.');
             return;
         }
-        // Apply ONLY the edited connection fields onto the fresh rig; every other
-        // field (and every other rig) comes from the fresh fetch.
+        // Apply ONLY the connection fields the operator actually CHANGED (diffed
+        // against the pristine mount form) onto the fresh rig — every other field,
+        // every other rig, AND an unedited connection field come from the fresh
+        // fetch. So editing only the port preserves a concurrent audio change
+        // (and vice versa) instead of writing the draft's stale value back
+        // (review 2026-07-20 Rigs-editor #1). Field-level, not block-level.
+        const orig = this.selected; // pristine mount form (this.rigs unchanged until the PUT lands)
         const patched = cloneRig(freshTarget);
-        patched.port = d.port;
-        const audio = normalizedAudio(d.audio);
-        if (audio) patched.audio = audio;
-        else delete patched.audio;
+        if (!orig || d.port !== orig.port) patched.port = d.port;
+        if (
+            JSON.stringify(normalizedAudio(d.audio) ?? null) !==
+            JSON.stringify(normalizedAudio(orig?.audio) ?? null)
+        ) {
+            const audio = normalizedAudio(d.audio);
+            if (audio) patched.audio = audio;
+            else delete patched.audio;
+        }
         const next = fresh.data.rigs.map((r) => (r.id === id ? patched : r));
 
         const outcome = await saveRigs(next); // no default_rig_id — active rig untouched

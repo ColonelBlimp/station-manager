@@ -38,6 +38,7 @@
         <select
             class="input"
             value={current ?? ''}
+            disabled={rigsState.saving}
             onchange={(e) => rigsState.setDraftAudio(which, e.currentTarget.value)}
         >
             <option value="">— none —</option>
@@ -125,6 +126,7 @@
                         <select
                             class="input font-mono text-xs"
                             value={draft.port}
+                            disabled={rigsState.saving}
                             onchange={(e) => rigsState.setDraftPort(e.currentTarget.value)}
                         >
                             <!-- keep the stored value even if it isn't currently detected -->

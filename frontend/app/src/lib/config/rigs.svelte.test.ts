@@ -269,4 +269,44 @@ describe('rigsState', () => {
         expect(sent.rigs.find((r) => r.id === 2)?.port).toBe('/dev/CONCURRENT');
         expect(rigsState.dirty).toBe(false);
     });
+
+    it('editing only the port preserves a concurrent audio change on the SAME rig', async () => {
+        // review Rigs-editor #1: the merge is FIELD-level. The operator changes
+        // only the port; between load and the save re-fetch, another writer sets
+        // this rig's audio. The PUT must carry the fresh audio (not the draft's
+        // stale value) alongside the operator's new port.
+        let get = 0;
+        const puts = mockCluster(
+            () => {
+                get++;
+                return {
+                    default_rig_id: 1,
+                    rigs: [
+                        {
+                            id: 1,
+                            model: 'ftdx10',
+                            port: '/dev/a',
+                            // audio changed concurrently between load (get 1) and re-fetch (get 2)
+                            audio:
+                                get === 1
+                                    ? { rx: 'OLD', tx: 'OLD' }
+                                    : { rx: 'CONCURRENT', tx: 'CONCURRENT' },
+                        },
+                    ],
+                    catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+                };
+            },
+            { serial_ports: [{ id: '/dev/new', label: 'p' }], audio: { available: false } }
+        );
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftPort('/dev/new'); // ONLY the port is edited
+        await rigsState.save();
+
+        const sent = JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> };
+        const s1 = sent.rigs.find((r) => r.id === 1);
+        expect(s1?.port).toBe('/dev/new'); // our edit
+        // the concurrent audio survives — NOT overwritten by the draft's stale "OLD"
+        expect(s1?.audio).toEqual({ rx: 'CONCURRENT', tx: 'CONCURRENT' });
+    });
 });
