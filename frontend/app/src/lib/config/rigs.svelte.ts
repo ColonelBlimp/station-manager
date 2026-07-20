@@ -6,30 +6,29 @@
 
     DATA SAFETY (review 2026-07-20 Rigs-editor): a rig save WHOLE-REPLACES the
     catalogue daemon-side, so save RE-FETCHES the fresh catalogue, applies only
-    the connection FIELDS the operator actually changed onto the fresh objects,
-    and PUTs that — WITHOUT default_rig_id — so a concurrent change to another
-    rig, this rig's other fields, an unedited connection field, or the active-rig
-    selection is never clobbered by a stale snapshot. The port/audio pickers are
-    disabled while a save is in flight, so a mid-save edit can't be silently
-    dropped by the post-save draft reset. Drafts are full-fidelity JSON clones
-    (all fields, incl. the un-rendered mode_mappings/overrides), kept PER RIG so
-    switching rigs doesn't discard unsaved edits.
+    the connection FIELDS the operator actually changed — port, audio RX, and
+    audio TX diffed INDEPENDENTLY against the draft's baseline — onto the fresh
+    objects, and PUTs that WITHOUT default_rig_id. So a concurrent change to
+    another rig, this rig's other fields, the OTHER audio direction, or the
+    active-rig selection is never clobbered by a stale snapshot. The port/audio
+    pickers are disabled while a save is in flight, so a mid-save edit can't be
+    silently dropped by the post-save re-baseline. Each draft carries an IMMUTABLE
+    baseline (the snapshot it was cloned from); dirty + the save diff compare
+    against that, and #applyFetched re-baselines PRISTINE retained drafts onto
+    fresh data — so a rig that changed concurrently shows the new values and
+    doesn't read falsely dirty, while a dirty draft's unsaved edits survive.
+    Drafts are full-fidelity JSON clones (all fields, incl. the un-rendered
+    mode_mappings/overrides), kept PER RIG so switching rigs doesn't discard edits.
 
-    ACCEPTED LIMITATIONS — bounded, and only reachable by a SECOND client editing
-    rig config at the same instant (SM is a single-operator daemon; the realistic
-    case is two browser tabs open at once, which is rare and self-inflicted):
-      - The re-fetch→PUT is not atomic (review #2): a writer landing in that
-        window is last-writer-wins. Closing it needs SERVER-SIDE optimistic
-        concurrency (a rigs revision / precondition) — disproportionate for a
-        single-operator local config editor, and revisit-if multi-client rig
-        editing ever becomes real (e.g. a hosted config surface).
-      - After a save, a pristine draft for another visited rig keeps its old
-        catalogue base (review #4) and the active-rig badge reflects the pre-PUT
-        default (review #5). Both are COSMETIC (a rig can falsely read dirty, or
-        show a stale "active" badge) until the next load; with the field-level
-        merge + save-lock above, neither causes data loss. Reconciling them fully
-        would mean rebasing every retained draft on each save — client-side
-        multi-writer bookkeeping not worth its complexity here.
+    ACCEPTED LIMITATION — the re-fetch→PUT is not atomic (review #2): a second
+    client writing rig config in the millisecond window between our GET and PUT
+    is last-writer-wins. SM is a single-operator daemon (the realistic case is
+    two browser tabs, rare and self-inflicted), and closing this fully needs
+    SERVER-SIDE optimistic concurrency (a rigs revision / precondition) —
+    disproportionate for a local config editor. Revisit if multi-client rig
+    editing ever becomes real (e.g. a hosted config surface). The active-rig badge
+    can also show the pre-PUT default until the next load (#5) — cosmetic, no data
+    loss, since the PUT omits default_rig_id.
 */
 import { fetchRigs, saveRigs, type RigConfig, type RigDef } from '../api/rigs';
 import { fetchHardware, type SerialPort, type AudioDevice } from '../api/hardware';
@@ -76,16 +75,26 @@ class RigsState {
     // switching rigs preserves unsaved edits.
     drafts = $state<Record<number, RigConfig>>({});
 
+    // The IMMUTABLE baseline each draft was cloned from, keyed by rig id.
+    // dirty + the save diff compare the draft against THIS, not against
+    // this.selected — because this.selected is drawn from the mutable this.rigs
+    // snapshot, which #applyFetched rebases on every refresh. Comparing against a
+    // drifting baseline made a rig whose fields changed concurrently read falsely
+    // dirty, and then a save wrote the stale draft back over the concurrent
+    // change (review 2026-07-20 Rigs-editor #6).
+    baselines = $state<Record<number, RigConfig>>({});
+
     // The pristine selected rig, or null (no rigs / none selected).
     selected = $derived(this.rigs.find((r) => r.id === this.selectedId) ?? null);
 
     // The editable draft for the current selection (the form binds via setters).
     draft = $derived(this.selectedId !== null ? (this.drafts[this.selectedId] ?? null) : null);
 
-    // Unsaved connection edits: the current draft differs from its pristine rig.
+    // Unsaved connection edits: the current draft differs from ITS OWN baseline
+    // (the snapshot it was cloned from), not from this.selected.
     dirty = $derived(
-        this.draft && this.selected
-            ? JSON.stringify(this.draft) !== JSON.stringify(this.selected)
+        this.draft && this.selectedId !== null && this.baselines[this.selectedId]
+            ? JSON.stringify(this.draft) !== JSON.stringify(this.baselines[this.selectedId])
             : false
     );
 
@@ -128,6 +137,7 @@ class RigsState {
             this.playback = hw.hardware.playback;
         }
         this.drafts = {}; // fresh load discards any stale drafts
+        this.baselines = {};
         this.#ensureDraft();
         this.loaded = true;
     }
@@ -137,10 +147,12 @@ class RigsState {
         this.#ensureDraft(); // keep an existing draft for this rig (don't discard edits)
     }
 
-    // Revert the CURRENT rig's draft to its pristine form.
+    // Revert the CURRENT rig's draft to its baseline (the form it was cloned
+    // from), not to this.selected — which may have drifted on a refresh.
     resetDraft(): void {
-        if (this.selectedId !== null && this.selected) {
-            this.drafts[this.selectedId] = cloneRig(this.selected);
+        const id = this.selectedId;
+        if (id !== null && this.baselines[id]) {
+            this.drafts[id] = cloneRig(this.baselines[id]);
         }
     }
 
@@ -173,20 +185,30 @@ class RigsState {
             toasts.error('That rig no longer exists — reload Settings.');
             return;
         }
-        // Apply ONLY the connection fields the operator actually CHANGED (diffed
-        // against the pristine mount form) onto the fresh rig — every other field,
-        // every other rig, AND an unedited connection field come from the fresh
-        // fetch. So editing only the port preserves a concurrent audio change
-        // (and vice versa) instead of writing the draft's stale value back
-        // (review 2026-07-20 Rigs-editor #1). Field-level, not block-level.
-        const orig = this.selected; // pristine mount form (this.rigs unchanged until the PUT lands)
+        // Apply ONLY the connection fields the operator actually CHANGED — diffed
+        // against the draft's BASELINE (what it was cloned from), per independent
+        // field: port, audio RX, and audio TX are patched separately. Everything
+        // else — every other rig, and any connection field the operator didn't
+        // touch — comes from the fresh fetch. So editing only RX preserves a
+        // concurrent TX change (and port/audio don't clobber each other)
+        // instead of writing a stale draft value back (review 2026-07-20
+        // Rigs-editor #1 + #5). Field-level, down to each audio direction.
+        const base = this.baselines[id] ?? freshTarget;
         const patched = cloneRig(freshTarget);
-        if (!orig || d.port !== orig.port) patched.port = d.port;
-        if (
-            JSON.stringify(normalizedAudio(d.audio) ?? null) !==
-            JSON.stringify(normalizedAudio(orig?.audio) ?? null)
-        ) {
-            const audio = normalizedAudio(d.audio);
+        if (d.port !== base.port) patched.port = d.port;
+
+        const draftRx = d.audio?.rx ?? '';
+        const draftTx = d.audio?.tx ?? '';
+        const baseRx = base.audio?.rx ?? '';
+        const baseTx = base.audio?.tx ?? '';
+        if (draftRx !== baseRx || draftTx !== baseTx) {
+            // Start from the FRESH rig's audio (keeps a concurrent change to the
+            // direction the operator didn't edit), then override only the
+            // direction(s) they did.
+            const merged = { rx: patched.audio?.rx, tx: patched.audio?.tx };
+            if (draftRx !== baseRx) merged.rx = draftRx || undefined;
+            if (draftTx !== baseTx) merged.tx = draftTx || undefined;
+            const audio = normalizedAudio(merged);
             if (audio) patched.audio = audio;
             else delete patched.audio;
         }
@@ -198,9 +220,10 @@ class RigsState {
             toasts.error(`Save failed: ${outcome.message}`);
             return;
         }
-        // Adopt the fresh catalogue + our patch as the new truth; reset THIS
+        // Adopt the fresh catalogue + our patch as the new truth; re-baseline THIS
         // rig's draft to the saved form so it's no longer dirty.
         this.#applyFetched({ ...fresh.data, rigs: next });
+        this.baselines[id] = cloneRig(patched);
         this.drafts[id] = cloneRig(patched);
         toasts.info('Rig connection saved — restart the daemon to reconnect.');
     }
@@ -214,6 +237,20 @@ class RigsState {
         this.rigs = data.rigs;
         this.defaultRigId = data.defaultRigId;
         this.catalogue = data.catalogue;
+        // Re-baseline PRISTINE retained drafts (draft === baseline) onto the fresh
+        // rig, so a rig whose fields changed concurrently shows the new values and
+        // stays not-dirty. A DIRTY draft keeps its own baseline — the operator's
+        // unsaved edits (and the baseline the next save diffs against) survive
+        // (review 2026-07-20 Rigs-editor #6).
+        for (const rig of this.rigs) {
+            const b = this.baselines[rig.id];
+            const dr = this.drafts[rig.id];
+            if (!b || !dr) continue;
+            if (JSON.stringify(dr) === JSON.stringify(b)) {
+                this.baselines[rig.id] = cloneRig(rig);
+                this.drafts[rig.id] = cloneRig(rig);
+            }
+        }
         // Keep a still-valid selection; else the active rig, then the first, then
         // null (review 2026-07-20 Rigs #2 — don't strand a vanished selection).
         const stillSelected =
@@ -226,10 +263,13 @@ class RigsState {
     }
 
     // Ensure the current selection has a draft (lazy clone; preserves an existing
-    // one so per-rig edits survive re-selection).
+    // one so per-rig edits survive re-selection). Captures the immutable baseline
+    // alongside so dirty/save diff against a stable snapshot.
     #ensureDraft(): void {
-        if (this.selectedId !== null && this.selected && !this.drafts[this.selectedId]) {
-            this.drafts[this.selectedId] = cloneRig(this.selected);
+        const id = this.selectedId;
+        if (id !== null && this.selected && !this.drafts[id]) {
+            this.drafts[id] = cloneRig(this.selected);
+            this.baselines[id] = cloneRig(this.selected);
         }
     }
 }

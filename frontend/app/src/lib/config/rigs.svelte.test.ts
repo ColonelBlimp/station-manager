@@ -11,6 +11,7 @@ afterEach(() => {
     rigsState.error = '';
     rigsState.catalogue = {};
     rigsState.drafts = {};
+    rigsState.baselines = {};
     rigsState.saving = false;
     rigsState.serialPorts = [];
     rigsState.audioAvailable = false;
@@ -308,5 +309,84 @@ describe('rigsState', () => {
         expect(s1?.port).toBe('/dev/new'); // our edit
         // the concurrent audio survives — NOT overwritten by the draft's stale "OLD"
         expect(s1?.audio).toEqual({ rx: 'CONCURRENT', tx: 'CONCURRENT' });
+    });
+
+    it('editing only audio RX preserves a concurrent audio TX change (rx/tx are independent)', async () => {
+        // review Rigs-editor #5: audio RX and TX are independent fields. Editing
+        // only RX must not write the draft's stale TX back over a concurrent TX
+        // change picked up by the save re-fetch.
+        let get = 0;
+        const puts = mockCluster(
+            () => {
+                get++;
+                return {
+                    default_rig_id: 1,
+                    rigs: [
+                        {
+                            id: 1,
+                            model: 'ftdx10',
+                            port: '/dev/a',
+                            audio:
+                                get === 1
+                                    ? { rx: 'RX-OLD', tx: 'TX-OLD' }
+                                    : { rx: 'RX-OLD', tx: 'TX-CONCURRENT' },
+                        },
+                    ],
+                    catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+                };
+            },
+            { serial_ports: [], audio: { available: false } }
+        );
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftAudio('rx', 'RX-NEW'); // ONLY RX edited
+        await rigsState.save();
+
+        const s1 = (JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> }).rigs.find(
+            (r) => r.id === 1
+        );
+        // our RX edit AND the concurrent TX change both survive
+        expect(s1?.audio).toEqual({ rx: 'RX-NEW', tx: 'TX-CONCURRENT' });
+    });
+
+    it('a pristine retained draft is re-baselined on refresh (no false dirty, no revert)', async () => {
+        // review Rigs-editor #6: visit rig 1 (pristine), edit + save rig 2 while
+        // rig 1's port changes concurrently. Rig 1's retained draft must rebase to
+        // the fresh value — not read falsely dirty, and not revert the concurrent
+        // change if later saved.
+        let get = 0;
+        const puts = mockCluster(
+            () => {
+                get++;
+                return {
+                    default_rig_id: 1,
+                    rigs: [
+                        {
+                            id: 1,
+                            model: 'ftdx10',
+                            port: get === 1 ? '/dev/a1' : '/dev/a1-CONCURRENT',
+                        },
+                        { id: 2, model: 'ic7300', port: '/dev/b2' },
+                    ],
+                    catalogue: [],
+                };
+            },
+            { serial_ports: [{ id: '/dev/new', label: 'p' }], audio: { available: false } }
+        );
+        await rigsState.load();
+        rigsState.select(1); // visit rig 1 — a pristine draft + baseline are created
+        rigsState.select(2); // switch to rig 2 and edit it
+        rigsState.setDraftPort('/dev/new');
+        await rigsState.save(); // the save's re-fetch observes rig 1's concurrent change
+
+        // rig 1's pristine draft rebased to the concurrent value → not falsely dirty
+        rigsState.select(1);
+        expect(rigsState.draft?.port).toBe('/dev/a1-CONCURRENT');
+        expect(rigsState.dirty).toBe(false);
+        // and the rig 2 PUT carried rig 1's FRESH port, never the stale mount value
+        const s1 = (JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> }).rigs.find(
+            (r) => r.id === 1
+        );
+        expect(s1?.port).toBe('/dev/a1-CONCURRENT');
     });
 });

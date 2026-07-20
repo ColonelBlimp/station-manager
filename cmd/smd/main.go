@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	stderr "errors"
 	"flag"
 	"fmt"
@@ -220,11 +221,25 @@ func run() error {
 	// channel here (structured logger isn't built yet).
 	if uerr := cfgSvc.Update(func(c *config.Config) error {
 		c.UserAgent = cfg.UserAgent
+		// Scrub any legacy ClubLog application API key left in config
+		// credentials. The key is build-injected now (ADR 0054); an older config
+		// carried it in credentials.api in PLAINTEXT. The SPA no longer renders
+		// that field, so this startup scrub is the only path that clears it from
+		// disk — leaving it there defeats the whole point of moving the key out
+		// of config.
+		for i := range c.Forwarders {
+			if c.Forwarders[i].Type != clublog.Type {
+				continue
+			}
+			if scrubbed, ok := stripCredentialKey(c.Forwarders[i].Credentials, "api"); ok {
+				c.Forwarders[i].Credentials = scrubbed
+			}
+		}
 		return nil
 	}); uerr != nil {
 		_, _ = fmt.Fprintf(os.Stderr,
-			"smd: could not persist resolved UserAgent to config.json: %v (continuing with in-memory value %q)\n",
-			uerr, cfg.UserAgent)
+			"smd: could not persist resolved config (UserAgent / ClubLog key scrub) to config.json: %v (continuing with in-memory values)\n",
+			uerr)
 	}
 	// Forwarder package vars — every forwarder POST stamps this on the
 	// User-Agent header. Set after the UA is final.
@@ -1054,6 +1069,30 @@ func ensureDefaultLogbook(
 			Msg("startup: default_logbook_id corrected after seeding")
 	}
 	return nil
+}
+
+// stripCredentialKey removes one key from a forwarder's JSON credentials blob,
+// returning the rewritten blob and whether it changed anything. Used at startup
+// to scrub the legacy build-injected ClubLog API key (credentials.api) out of
+// config.json (ADR 0054). A blob that is empty, not a JSON object, or lacks the
+// key is returned unchanged with false, so a normal config is never rewritten.
+func stripCredentialKey(raw json.RawMessage, key string) (json.RawMessage, bool) {
+	if len(raw) == 0 {
+		return raw, false
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return raw, false // not an object — leave it alone
+	}
+	if _, present := m[key]; !present {
+		return raw, false
+	}
+	delete(m, key)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw, false
+	}
+	return out, true
 }
 
 // spawnForwarderWorkers constructs one worker per enabled forwarder

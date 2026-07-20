@@ -713,3 +713,44 @@ func TestLoadConfig_WorkingDirResolverFails(t *testing.T) {
 		t.Fatal("loadConfig with an un-creatable SM_WORKING_DIR returned nil; want the resolver error propagated (M1)")
 	}
 }
+
+// TestStripCredentialKey pins the ClubLog config scrub (ADR 0054): the legacy
+// build-injected API key is removed from a forwarder's credentials, other keys
+// are preserved, and a blob without the key (or a non-object) is returned
+// unchanged so a normal config is never needlessly rewritten.
+func TestStripCredentialKey(t *testing.T) {
+	// api present → stripped, siblings kept.
+	in := json.RawMessage(`{"email":"e@x","password":"p","callsign":"7Q5MLV","api":"SECRET"}`)
+	out, changed := stripCredentialKey(in, "api")
+	if !changed {
+		t.Fatal("changed = false, want true when api is present")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("scrubbed blob not valid JSON: %v", err)
+	}
+	if _, ok := m["api"]; ok {
+		t.Fatalf("api still present after scrub: %s", out)
+	}
+	for _, k := range []string{"email", "password", "callsign"} {
+		if _, ok := m[k]; !ok {
+			t.Fatalf("scrub dropped sibling %q: %s", k, out)
+		}
+	}
+	if strings.Contains(string(out), "SECRET") {
+		t.Fatalf("scrubbed blob still contains the key value: %s", out)
+	}
+
+	// api absent → unchanged, no rewrite.
+	noApi := json.RawMessage(`{"email":"e@x"}`)
+	if _, changed := stripCredentialKey(noApi, "api"); changed {
+		t.Fatal("changed = true for a blob without api")
+	}
+	// empty + non-object → unchanged.
+	if _, changed := stripCredentialKey(nil, "api"); changed {
+		t.Fatal("changed = true for an empty blob")
+	}
+	if _, changed := stripCredentialKey(json.RawMessage(`"a string"`), "api"); changed {
+		t.Fatal("changed = true for a non-object blob")
+	}
+}

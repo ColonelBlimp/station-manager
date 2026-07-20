@@ -27,6 +27,14 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Load .env (gitignored) so build-time secrets — the ClubLog API key
+# (CLUBLOG_API_KEY, baked via -ldflags below) — are available. Covers a bare
+# run on the host AND the release container, where release.sh bind-mounts the
+# repo (including .env) at /src; release.sh also passes -e CLUBLOG_API_KEY, so
+# the key resolves either way. An unset key just bakes an empty string, leaving
+# the ClubLog forwarder inert (Submit fails Terminal; the daemon still runs).
+if [[ -f .env ]]; then set -a; . ./.env; set +a; fi
+
 if ! command -v nfpm >/dev/null 2>&1; then
   echo "error: nfpm not in PATH (try: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest)" >&2
   exit 1

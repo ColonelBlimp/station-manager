@@ -159,14 +159,35 @@ func TestNew_MissingField_Errors(t *testing.T) {
 	}
 }
 
-func TestNew_NoBuildKey_Errors(t *testing.T) {
-	// A binary built WITHOUT CLUBLOG_API_KEY (InjectedAPIKey empty) must refuse
-	// to construct even with complete operator credentials — so it never fires
-	// keyless requests that would 403 and trip the breaker.
+func TestNew_NoBuildKey_ConstructsButSubmitFailsTerminal(t *testing.T) {
+	// A binary built WITHOUT CLUBLOG_API_KEY (InjectedAPIKey empty) must still
+	// CONSTRUCT — a Build error would abort the whole daemon (spawnForwarderWorkers)
+	// on a missing build-time env var. Instead every Submit short-circuits to a
+	// clear Terminal WITHOUT a network call.
 	setBuildKey(t, "")
-	_, err := New(types.ForwarderConfig{Name: "x", Type: Type, Credentials: validCreds(t)})
-	if err == nil || !strings.Contains(err.Error(), "not built into this binary") {
-		t.Fatalf("err = %v, want 'not built into this binary'", err)
+	fwd, err := New(types.ForwarderConfig{Name: "x", Type: Type, Credentials: validCreds(t)})
+	if err != nil {
+		t.Fatalf("New with no build key should not error, got %v", err)
+	}
+	// Point at a server that MUST NOT be hit — a keyless Submit makes no request.
+	var hit atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit.Store(true)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	cl := fwd.(*Forwarder)
+	cl.realtime, cl.deleteURL = srv.URL, srv.URL
+
+	res := cl.Submit(context.Background(), sampleQso(), action.Insert, "")
+	if res.Outcome != forwarding.OutcomeTerminal {
+		t.Fatalf("outcome = %q, want terminal", res.Outcome)
+	}
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "not built into this binary") {
+		t.Fatalf("err = %v, want 'not built into this binary'", res.Err)
+	}
+	if hit.Load() {
+		t.Fatal("keyless Submit hit the network; it must short-circuit")
 	}
 }
 

@@ -132,8 +132,10 @@ var UserAgent = "station-manager/dev"
 // source code, so it lives neither in this source nor in config.json — only in
 // the operator's local .env and the resulting private build (a compiled binary
 // is not source code). Empty when a build omits the key (CI, a fresh clone with
-// no .env): New then refuses to construct the forwarder, leaving Club Log inert
-// rather than firing keyless requests that would 403 and trip the breaker.
+// no .env): the forwarder STILL constructs (New must not error — a Build error
+// aborts the whole daemon in cmd/smd), but it short-circuits every Submit to a
+// clear Terminal with no network call, so Club Log is inert while logging and
+// every other forwarder keep running.
 var InjectedAPIKey string
 
 // DefaultRetry is the retry policy the daemon uses when a Club Log
@@ -209,6 +211,7 @@ type Forwarder struct {
 	password   string
 	callsign   string
 	apiKey     string
+	noKey      bool // built without CLUBLOG_API_KEY → Submit fails Terminal, no network
 	realtime   string
 	deleteURL  string
 	client     *http.Client
@@ -241,13 +244,14 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 	}
 
 	// The app API key is BUILD-injected (never config or source). A binary built
-	// without it can't authenticate to Club Log, so fail loudly here rather than
-	// fire keyless requests that 403 and trip the circuit breaker.
+	// WITHOUT it can't authenticate to Club Log — but New must NOT error on that,
+	// because spawnForwarderWorkers aborts the ENTIRE daemon on a Build error
+	// (cmd/smd), and a missing build-time env var must never brick logging and
+	// every other forwarder. Instead we construct a forwarder that short-circuits
+	// every Submit to a clear Terminal (no network call — parallels the 403
+	// breaker), so the daemon runs and the operator sees "key not built in" on the
+	// ClubLog upload rows. An empty apiKey sets f.noKey in newWithEndpoints.
 	apiKey := strings.TrimSpace(InjectedAPIKey)
-	if apiKey == "" {
-		return nil, errors.New(op).WithMsg(
-			"ClubLog application API key not built into this binary; set CLUBLOG_API_KEY in .env and rebuild")
-	}
 
 	// Config-driven per-action endpoints, with the package consts as fallbacks
 	// (ADR 0039).
@@ -271,6 +275,7 @@ func newWithEndpoints(creds credentials, apiKey, realtime, deleteURL string, cli
 		password:  creds.Password,
 		callsign:  creds.Callsign,
 		apiKey:    apiKey,
+		noKey:     apiKey == "",
 		realtime:  realtime,
 		deleteURL: deleteURL,
 		client:    client,
@@ -305,6 +310,19 @@ func (f *Forwarder) Submit(
 
 	if err := ctx.Err(); err != nil {
 		return forwarding.Result{Outcome: forwarding.OutcomeTransient, Err: err}
+	}
+
+	// No build-time API key: this binary can't authenticate. Short-circuit to a
+	// clear Terminal WITHOUT a network call (a keyless request would 403 and trip
+	// the breaker for the whole run). Terminal, not retryable — the fix is a
+	// rebuild with CLUBLOG_API_KEY, not waiting; the operator re-arms these rows
+	// after deploying a keyed build.
+	if f.noKey {
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err: errors.New(op).WithMsg(
+				"ClubLog application API key not built into this binary; rebuild with CLUBLOG_API_KEY set in .env"),
+		}
 	}
 
 	// Circuit breaker: once Club Log has returned a 403 we must not send
