@@ -10,7 +10,42 @@ afterEach(() => {
     rigsState.loaded = false;
     rigsState.error = '';
     rigsState.catalogue = {};
+    rigsState.draft = null;
+    rigsState.saving = false;
+    rigsState.serialPorts = [];
+    rigsState.audioAvailable = false;
+    rigsState.capture = [];
+    rigsState.playback = [];
 });
+
+// Route-aware fetch mock: /v1/rigs (GET), /v1/hardware (GET), /v1/config (PUT).
+// Returns the captured PUT bodies for the save assertions.
+function mockCluster(rigsBody: unknown, hardwareBody?: unknown): string[] {
+    const puts: string[] = [];
+    const resp = (body: unknown) =>
+        Promise.resolve(
+            new Response(JSON.stringify(body), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+    vi.stubGlobal(
+        'fetch',
+        // The app always calls fetch with a string URL + a string JSON body, so
+        // the mock narrows to those (avoids RequestInfo/BodyInit stringification).
+        vi.fn((url: string, init?: RequestInit) => {
+            if ((init?.method ?? 'GET') === 'PUT') {
+                puts.push(init?.body as string);
+                return resp({});
+            }
+            if (url.includes('/v1/hardware')) {
+                return resp(hardwareBody ?? { serial_ports: [], audio: { available: false } });
+            }
+            return resp(rigsBody);
+        })
+    );
+    return puts;
+}
 
 function mockJSON(status: number, body: unknown) {
     vi.stubGlobal(
@@ -139,5 +174,69 @@ describe('rigsState', () => {
         await rigsState.load();
         expect(rigsState.loaded).toBe(false);
         expect(rigsState.error).not.toBe('');
+    });
+
+    it('editing the port marks dirty; cancel reverts to the pristine rig', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a', audio: { rx: 'A', tx: 'A' } }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        expect(rigsState.dirty).toBe(false);
+        rigsState.setDraftPort('/dev/b');
+        expect(rigsState.dirty).toBe(true);
+        rigsState.resetDraft();
+        expect(rigsState.draft?.port).toBe('/dev/a');
+        expect(rigsState.dirty).toBe(false);
+    });
+
+    it('save round-trips EVERY rig field (unrendered ones too) in a whole-catalogue PUT', async () => {
+        // rig 1 carries fields the panel never renders — they MUST ride back, or
+        // the daemon's whole-replace of base.Rigs would zero them (config wipe).
+        const puts = mockCluster(
+            {
+                default_rig_id: 1,
+                rigs: [
+                    {
+                        id: 1,
+                        model: 'ftdx10',
+                        port: '/dev/a',
+                        audio: { rx: 'A', tx: 'A' },
+                        ft8_mode: 'DATA-U',
+                        my_rig: 'FTDX10',
+                        mode_mappings: { USB: { mode: 'SSB' } },
+                        overrides: { baud_rate: 38400 },
+                    },
+                    { id: 2, model: 'ic7300', port: '/dev/b' },
+                ],
+                catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+            },
+            {
+                serial_ports: [{ id: '/dev/new', label: 'new port' }],
+                audio: { available: true, capture: [{ name: 'A' }], playback: [{ name: 'A' }] },
+            }
+        );
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftPort('/dev/new');
+        await rigsState.save();
+
+        expect(puts).toHaveLength(1);
+        const sent = JSON.parse(puts[0]) as {
+            rigs: Array<Record<string, unknown>>;
+            default_rig_id: number;
+        };
+        expect(sent.default_rig_id).toBe(1);
+        const r1 = sent.rigs.find((r) => r.id === 1);
+        expect(r1?.port).toBe('/dev/new'); // the edit
+        // …and the unrendered fields rode back verbatim (the config-wipe guard):
+        expect(r1?.mode_mappings).toEqual({ USB: { mode: 'SSB' } });
+        expect(r1?.overrides).toEqual({ baud_rate: 38400 });
+        expect(r1?.ft8_mode).toBe('DATA-U');
+        expect(r1?.my_rig).toBe('FTDX10');
+        // …and the OTHER rig is preserved whole.
+        expect(sent.rigs.find((r) => r.id === 2)).toMatchObject({ id: 2, model: 'ic7300' });
+        expect(rigsState.dirty).toBe(false); // cleared after a successful save
     });
 });

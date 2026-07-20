@@ -92,6 +92,37 @@ function catalogueById(catalogue: unknown): Record<string, RigDef> {
     return out;
 }
 
+export type RigsSaveOutcome = { kind: 'ok' } | { kind: 'error'; message: string };
+
+/**
+ * Save the rig catalogue + active-rig selector via PUT /v1/config. The daemon
+ * WHOLE-REPLACES base.Rigs with what's sent (handler_config.go), so `rigs` MUST
+ * be the full list with every rig's every field intact — callers pass the raw
+ * objects from fetchRigs (never a reconstructed subset), so fields the panel
+ * doesn't render (mode_mappings, overrides, ft8_mode, my_rig) round-trip
+ * losslessly through JSON.stringify. Both blocks are presence-aware daemon-side;
+ * sending only these two leaves the rest of the config untouched.
+ */
+export async function saveRigs(
+    rigs: RigConfig[],
+    defaultRigId: number,
+    signal?: AbortSignal
+): Promise<RigsSaveOutcome> {
+    const fetched = await safeFetch('/v1/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rigs, default_rig_id: defaultRigId }),
+        signal,
+    });
+    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    const body = await readJsonBody(fetched.response);
+    if (!fetched.response.ok) {
+        const err = isPlainObject(body) ? (body as { message?: string }) : null;
+        return { kind: 'error', message: err?.message ?? `HTTP ${fetched.response.status}` };
+    }
+    return { kind: 'ok' };
+}
+
 export async function fetchRigs(signal?: AbortSignal): Promise<RigsOutcome> {
     const fetched = await safeFetch('/v1/rigs', { signal });
     if (!fetched.ok) return { kind: 'error', message: fetched.message };
