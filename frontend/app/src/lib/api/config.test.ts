@@ -5,7 +5,7 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 
-function mockJSON(status: number, body: unknown): ReturnType<typeof vi.fn> {
+function mockJSON(status: number, body: unknown) {
     const spy = vi.fn(
         (_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
             Promise.resolve(
@@ -36,7 +36,7 @@ function configBody() {
 }
 
 describe('fetchStation', () => {
-    it('reads logging_station (incl. unrendered fields) and echoes the station block', async () => {
+    it('reads logging_station including the fields the form never renders', async () => {
         mockJSON(200, configBody());
         const res = await fetchStation();
         expect(res.kind).toBe('ok');
@@ -45,7 +45,6 @@ describe('fetchStation', () => {
         // The derived fields the form never shows must still be carried.
         expect(res.config.station.my_lat).toBe('S011 26.250');
         expect(res.config.station.my_lon).toBe('E034 02.500');
-        expect(res.config.operational).toEqual(configBody().station);
     });
 
     it('errors (never throws) on a non-2xx GET', async () => {
@@ -56,7 +55,7 @@ describe('fetchStation', () => {
 });
 
 describe('saveStation — data safety', () => {
-    it('PUTs the FULL logging_station (unrendered fields preserved) + echoes station', async () => {
+    it('PUTs the FULL logging_station (unrendered fields preserved) and does NOT send the operational station block', async () => {
         const spy = mockJSON(200, configBody());
         const loaded = await fetchStation();
         expect(loaded.kind).toBe('ok');
@@ -71,19 +70,21 @@ describe('saveStation — data safety', () => {
 
         const put = spy.mock.calls.find((c) => c[1]?.method === 'PUT');
         expect(put, 'a PUT was issued').toBeTruthy();
-        const sent = JSON.parse(String(put![1]!.body)) as {
+        const sent = JSON.parse(put![1]!.body as string) as {
             logging_station: Record<string, string>;
-            station: unknown;
+            station?: unknown;
         };
         expect(sent.logging_station.station_callsign).toBe('7Q8AC');
         expect(sent.logging_station.my_lat).toBe('S011 26.250');
         expect(sent.logging_station.my_lon).toBe('E034 02.500');
-        expect(sent.station).toEqual(configBody().station);
+        // The operational block is intentionally absent — echoing a stale copy
+        // would clobber a concurrent amp/power/band change (review #3).
+        expect('station' in sent).toBe(false);
     });
 
     it('errors (never throws) on a non-2xx PUT', async () => {
         mockJSON(400, { message: 'invalid' });
-        const res = await saveStation({ station: { station_callsign: 'X' }, operational: {} });
+        const res = await saveStation({ station: { station_callsign: 'X' } });
         expect(res.kind).toBe('error');
     });
 });

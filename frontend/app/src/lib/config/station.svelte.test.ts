@@ -5,7 +5,7 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 
-function mockJSON(status: number, body: unknown): ReturnType<typeof vi.fn> {
+function mockJSON(status: number, body: unknown) {
     const spy = vi.fn(
         (_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
             Promise.resolve(

@@ -11,17 +11,19 @@
     onMount(() => void stationState.load());
 </script>
 
-{#snippet field(label: string, key: string, hint?: string, width = 'w-64')}
+{#snippet field(label: string, key: string, hint?: string, width = 'w-64', readonly = false)}
     <!-- value + oninput rather than bind:value: the key is dynamic (a snippet
          param), and reading/writing the string map by computed key is cleaner
          than a bindable computed-member expression. form is deep-reactive
-         $state, so the write drives the dirty check. -->
+         $state, so the write drives the dirty check. readonly fields render the
+         value (copyable) but can't be edited — oninput never fires for them. -->
     <label class="flex flex-col gap-1 {width}">
         <span class="text-sm font-medium text-ink">{label}</span>
         <!-- hint is the input's native tooltip (title) rather than an inline
              line, so a hinted field doesn't stand taller than its row-mates. -->
         <input
-            class="input"
+            class="input read-only:cursor-not-allowed read-only:bg-surface-muted read-only:text-muted"
+            {readonly}
             title={hint}
             value={stationState.form[key] ?? ''}
             oninput={(e) => (stationState.form[key] = e.currentTarget.value)}
@@ -45,8 +47,9 @@
                     {@render field(
                         'Station callsign',
                         'station_callsign',
-                        'Your on-air callsign.',
+                        'Set during first-run setup and bound to your logbook — changing it would reject new QSOs. Read-only here.',
                         'w-48',
+                        true,
                     )}
                     {@render field('Operator', 'operator', undefined, 'w-48')}
                     {@render field('Owner callsign', 'owner_callsign', undefined, 'w-48')}

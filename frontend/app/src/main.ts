@@ -41,6 +41,7 @@ import {
 } from './lib/api/ft8qso';
 import { toasts } from './lib/ui/toasts.svelte';
 import { setup, setSetupSave } from './lib/setup.svelte';
+import { setStationSaved } from './lib/config/station.svelte';
 import { completeSetup } from './lib/api/setup';
 import { sendRigTune } from './lib/api/rig-tune';
 import { sendRigCommand } from './lib/api/rig-command';
@@ -296,6 +297,14 @@ setSetupSave(async (callsign) => {
     if (out.kind !== 'ok') return { ok: false, message: out.message };
     applyStationContext(await fetchStationContext());
     return { ok: true, message: '' };
+});
+
+// Settings → Station save: after the daemon stores the new logging_station,
+// re-fetch + re-apply the shared station context so a changed operator/grid is
+// live app-wide (Band Activity flags, bearings, QSO OPERATOR/MY_GRIDSQUARE)
+// without a reload — mirrors the first-run save above (review 2026-07-20 #2).
+setStationSaved(async () => {
+    applyStationContext(await fetchStationContext());
 });
 
 // Submit sink: draft + rig context + displayed enrichment → one ADIF record →

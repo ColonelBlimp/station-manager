@@ -9,6 +9,15 @@
 import { fetchStation, saveStation, type StationFields, type StationConfig } from '../api/config';
 import { toasts } from '../ui/toasts.svelte';
 
+// Injected by main.ts (per ADR 0045 DI — this module never imports the app
+// bootstrap): re-fetch + re-apply the shared station context after a save, so
+// the operate/QSO path picks up a changed operator/grid with no page reload
+// (review 2026-07-20 #2 — mirrors setSetupSave). Null in tests / before wiring.
+let onSaved: (() => void | Promise<void>) | null = null;
+export function setStationSaved(fn: () => void | Promise<void>): void {
+    onSaved = fn;
+}
+
 // The identity fields the form renders. Ensured present (as '') after load so
 // binding is clean even when the daemon config predates a field (e.g. a station
 // that never set a postal code / CW key). Saving an empty field is harmless —
@@ -45,8 +54,6 @@ class StationState {
     // stable (the form is always rebuilt by #apply in the same order), so a
     // string compare is a valid change check.
     #pristine = $state('{}');
-    // The operational `station` block — held opaque, echoed verbatim on save.
-    #operational: Record<string, unknown> = {};
 
     dirty = $derived(JSON.stringify(this.form) !== this.#pristine);
 
@@ -67,13 +74,16 @@ class StationState {
     async save(): Promise<void> {
         if (this.saving || !this.dirty) return;
         this.saving = true;
-        const res = await saveStation({ station: { ...this.form }, operational: this.#operational });
+        const res = await saveStation({ station: { ...this.form } });
         this.saving = false;
         if (res.kind === 'error') {
             toasts.error(`Save failed: ${res.message}`);
             return;
         }
         this.#apply(res.config);
+        // Re-apply the shared station context so a changed operator/grid takes
+        // effect app-wide without a reload (review 2026-07-20 #2).
+        await onSaved?.();
         toasts.info('Station settings saved.');
     }
 
@@ -89,7 +99,6 @@ class StationState {
         }
         this.form = f;
         this.#pristine = JSON.stringify(f);
-        this.#operational = cfg.operational;
     }
 }
 

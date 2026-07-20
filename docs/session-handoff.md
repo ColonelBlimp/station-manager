@@ -287,11 +287,14 @@ precisely so we don't re-derive state or redo finished work.
 >   reads healthy) → honest exit from the real state. Also added a runbook
 >   "updating the binary → `smcloudctl restart`" note (closes the stale-binary
 >   gap that bit the deploy). Both control-script commits reviewed CLEAN.
-> - **Deploy-smc-again? decided NO (for now):** the smcloud BINARY is
->   byte-identical since the live deploy (`git diff cmd/smcloud internal/cloud
->   97b6e1da..HEAD` empty) — only packaging changed (smcloudctl + runbook), so
->   a redeploy is cosmetic. Hold it until `smcloudctl` is actually wanted on
->   the box OR 7Q8AC onboards (bundle the wrapper deploy with a restart that
+> - **Deploy-smc-again? decided NO (for now):** the smcloud RUNTIME SOURCE is
+>   unchanged since the live deploy (`git diff 97b6e1da..HEAD -- cmd/smcloud
+>   internal/cloud` reports nothing — note the range goes BEFORE `--`, else git
+>   reads it as a path and exits 128; the binary itself isn't byte-identical
+>   because the build stamps main.Version, which moved 712→716). Only packaging
+>   changed (smcloudctl + runbook), so a redeploy is cosmetic. Hold it until
+>   `smcloudctl` is actually wanted on the box OR 7Q8AC onboards (bundle the
+>   wrapper deploy with a restart that
 >   carries real value).
 > - **On journald (F44 ops):** smcloud logs to the systemd JOURNAL, not a file
 >   (`os.Stderr` → journald; the unit hardening forbids file writes anyway) —
