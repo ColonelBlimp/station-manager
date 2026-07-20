@@ -138,6 +138,11 @@ fallback makes the two deploys order-independent):
   qsos.modified_at)`, still ANDed with the tenant guard. Equal-revision
   (all-legacy) rows keep today's exact semantics — this is what makes
   deployment ordering and legacy clients safe.
+  *(2026-07-20 note: migration 0004 later scoped uuid uniqueness to
+  `(tenant_id, uuid)` — the conflict target is now `(tenant_id, uuid)` and the
+  tenant-guard clause was dropped as structurally redundant. The revision
+  guard above is UNCHANGED, so this ADR's hash formula and dual-deploy rule
+  stand; only the conflict-target detail is superseded.)*
 - **Reconcile:** `reconcile.Entry` gains `Revision`; the summary line
   becomes `uuid|unixmicro|revision`; `diffManifests` treats a revision
   mismatch as drift (local authoritative → push). Both ends import the

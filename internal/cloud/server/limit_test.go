@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -108,4 +109,51 @@ func TestLimit_DefaultApplied(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
+}
+
+// TestExport_GateOverLimitGets503 pins the export concurrency gate (review
+// 2026-07-20 #1): with every export slot taken, a further authenticated export
+// is refused immediately with 503 + Retry-After — it must NOT reach the store,
+// where it would pin one of the 5 pool connections for up to 15 minutes and,
+// at 5 concurrent, starve health/uploads/reconcile. Runs without a database
+// precisely because the gate must reject before any store access.
+func TestExport_GateOverLimitGets503(t *testing.T) {
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := New(nil, nil, quiet, map[string]int64{"tok-export-gate": 7}, "test", 0)
+	for i := 0; i < maxConcurrentExports; i++ {
+		srv.exportSlots <- struct{}{} // saturate the gate
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/export", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer tok-export-gate")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+	if ra := resp.Header.Get("Retry-After"); ra != exportRetryAfterSeconds {
+		t.Errorf("Retry-After = %q, want %q", ra, exportRetryAfterSeconds)
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Code != "overloaded" {
+		t.Errorf("code = %q, want overloaded", body.Code)
+	}
+
+	// Draining one slot frees the gate for the next export (the deferred
+	// release in handleExport is exercised by every PG-backed export test).
+	<-srv.exportSlots
 }

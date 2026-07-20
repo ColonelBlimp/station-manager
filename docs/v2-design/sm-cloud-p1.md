@@ -67,6 +67,15 @@ is what Postgres would keep anyway); **the S4 reconcile peer MUST apply the same
 microsecond truncation to its local values before it hashes/compares**, or the
 churn returns from the local side. Pinned by `TestUpsert_PrecisionCanonicalised`.
 
+> **Superseded detail (2026-07-20 — historical design; shipped code is the
+> truth):** uuid uniqueness is now scoped to `(tenant_id, uuid)` (cloud
+> migration 0004): the conflict target is `ON CONFLICT (tenant_id, uuid)` and
+> the tenant-guard clause described below is GONE — isolation is structural.
+> The global-unique shape here let a known/reused UUID from one tenant turn
+> another tenant's push into an applied:0 "success", permanently blocking that
+> row's backup. The revision/modified_at guard semantics are unchanged; current
+> truth: `internal/cloud/store/store.go` (Upsert doc).
+
 **Upsert guards (reconcile soundness).** The `ON CONFLICT (uuid) DO UPDATE`
 applies only `WHERE EXCLUDED.modified_at >= qsos.modified_at` (a stale/reordered
 push can't clobber a newer row; `>=` keeps an identical re-push idempotent) `AND

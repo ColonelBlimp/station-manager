@@ -34,7 +34,25 @@ type Server struct {
 	tokens        map[string]int64
 	version       string
 	maxConcurrent int
+	// exportSlots caps concurrently-running exports BELOW the DB pool size —
+	// see maxConcurrentExports.
+	exportSlots chan struct{}
 }
+
+// maxConcurrentExports caps concurrently-running /v1/export requests. An
+// export streams from an open snapshot transaction for as long as the client
+// takes to drain (up to exportWriteDeadline, 15 min), so each one PINS a pool
+// connection — and cmd/smcloud caps the pool at 5 while the request semaphore
+// admits 16 (review 2026-07-20 #1): five slow authenticated exports would
+// exhaust the pool and starve health checks, uploads, and reconciliation.
+// 2 leaves 3 connections free in the worst case. An over-limit export gets an
+// immediate 503 + Retry-After; the restore client treats 5xx as transient and
+// retries.
+const maxConcurrentExports = 2
+
+// exportRetryAfterSeconds is the Retry-After hint on a gated export — sized to
+// a plausible export duration, not the 2 s request-semaphore hint.
+const exportRetryAfterSeconds = "60"
 
 // New builds a Server. tokens maps bearer tokens to tenant ids (P1: one entry,
 // provisioned at boot). db is used only for the /v1/health ping. maxConcurrent
@@ -43,7 +61,10 @@ func New(st *store.Store, db *sql.DB, log *slog.Logger, tokens map[string]int64,
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{store: st, db: db, log: log, tokens: tokens, version: version, maxConcurrent: maxConcurrent}
+	return &Server{
+		store: st, db: db, log: log, tokens: tokens, version: version, maxConcurrent: maxConcurrent,
+		exportSlots: make(chan struct{}, maxConcurrentExports),
+	}
 }
 
 // Handler returns the routed HTTP handler.
@@ -353,6 +374,18 @@ type ExportQso struct {
 const exportWriteDeadline = 15 * time.Minute
 
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
+	// Export concurrency gate — try-acquire, never queue (see
+	// maxConcurrentExports): a gated export must fail fast, not hold a request
+	// slot waiting for a 15-minute stream to finish.
+	select {
+	case s.exportSlots <- struct{}{}:
+		defer func() { <-s.exportSlots }()
+	default:
+		w.Header().Set("Retry-After", exportRetryAfterSeconds)
+		s.writeError(w, http.StatusServiceUnavailable, "overloaded",
+			"too many concurrent exports; retry shortly")
+		return
+	}
 	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(exportWriteDeadline)); err != nil {
 		// Fail open: an unsupported ResponseWriter keeps the server-wide
 		// deadline, which is only a problem on a link slow enough to notice.
@@ -370,8 +403,9 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	// the read-only tx (and its pool connection) stays open while the
 	// response drains, so a slow client pins one of the 5 pool conns for up
 	// to exportWriteDeadline — bounded, and cheaper than the O(logbook)
-	// heap it replaces; the request semaphore caps how many can do it at
-	// once.
+	// heap it replaces. The export gate above keeps concurrent exports
+	// BELOW the pool size (the 16-slot request semaphore alone would let 5
+	// slow exports drain the whole pool — review 2026-07-20 #1).
 	count := 0
 	started := false
 	err := s.store.ExportSnapshot(r.Context(), tenant,
