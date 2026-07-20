@@ -3,17 +3,17 @@
 // responses into Success / Transient / Terminal outcomes so the worker
 // can retry, mark failed, or stamp success as appropriate.
 //
-// Credentials shape (all four required):
+// Credentials shape (three fields, all required) — the OPERATOR'S account
+// details, which live in config.json:
 //
 //	{
 //	  "email":    "operator@example.com",
 //	  "password": "an-application-password",
-//	  "callsign": "7Q5MLV",
-//	  "api":      "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33"
+//	  "callsign": "7Q5MLV"
 //	}
 //
-// Club Log needs TWO distinct credentials, and the API key ALONE is not
-// enough to upload or delete — the names ("application password" vs
+// A Club Log upload needs those PLUS the application API key, which is NOT a
+// config field (see InjectedAPIKey). The names ("application password" vs
 // "application API key") sound alike but authenticate different things:
 //
 //   - email + password = the OPERATOR'S ACCOUNT. password should be a
@@ -21,19 +21,21 @@
 //     password the operator generates in their account settings, used
 //     instead of their real login password). These tell Club Log whose
 //     log the QSO belongs to and that the request is authorised.
-//   - api = the SOFTWARE making the request (Station Manager). It is the
-//     SAME key for every SM install, so it carries no operator identity —
-//     it is the app-identification / rate-limiting layer, not account
-//     auth, which is why email + password are still required.
+//   - the application API key = the SOFTWARE making the request (Station
+//     Manager). It is the SAME key for every SM install, so it carries no
+//     operator identity — it is the app-identification / rate-limiting
+//     layer, not account auth, which is why email + password are still
+//     required. Club Log issues one CONFIDENTIAL key per *application* and
+//     auto-deletes any key it finds PUBLISHED IN SOURCE CODE, so SM keeps it
+//     out of both source AND config.json: it is stamped into the binary at
+//     BUILD time via -ldflags from the gitignored .env (CLUBLOG_API_KEY →
+//     InjectedAPIKey). A compiled binary is not source code, so this honours
+//     Club Log's rule. See ADR 0054 + docs/v2-design/forwarding.md.
 //
 // (Contrast QRZ, whose single logbook-specific api_key both authenticates
 // AND selects the logbook, so the QRZ forwarder needs nothing else.)
 //
-// callsign selects which of the account's logs the QSO lands in. Club Log
-// issues one api key per *application* and auto-deletes any key it finds
-// published in a public repository — so the key is always operator-
-// supplied here, never embedded in this source. See
-// docs/v2-design/forwarding.md and the ClubLog API-key guide.
+// callsign selects which of the account's logs the QSO lands in.
 //
 // Two endpoints back the two supported actions:
 //
@@ -120,6 +122,20 @@ const errorSnippetLen = 200
 // Config.UserAgent. The "dev" fallback keeps in-package tests hermetic.
 var UserAgent = "station-manager/dev"
 
+// InjectedAPIKey is the Club Log application API key, stamped into the binary
+// at BUILD time via
+//
+//	-ldflags "-X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=<key>"
+//
+// sourced from the gitignored .env (CLUBLOG_API_KEY). Club Log issues one
+// confidential key per application and auto-deletes any key found published in
+// source code, so it lives neither in this source nor in config.json — only in
+// the operator's local .env and the resulting private build (a compiled binary
+// is not source code). Empty when a build omits the key (CI, a fresh clone with
+// no .env): New then refuses to construct the forwarder, leaving Club Log inert
+// rather than firing keyless requests that would 403 and trip the breaker.
+var InjectedAPIKey string
+
 // DefaultRetry is the retry policy the daemon uses when a Club Log
 // forwarder config entry has no explicit `retry` block. Tuned like
 // QRZ's: transient 5xx/network blips recover within minutes, and the
@@ -159,7 +175,10 @@ func init() {
 	// an omitted action_filter defaults to insert/delete (not all three),
 	// so a natural config never queues update rows bound to fail. The
 	// descriptor drives the config SPA's add-forwarder form: ClubLog needs the
-	// account email + an Application Password + callsign + an Application API key.
+	// account email + an Application Password + callsign. The Application API key
+	// is NOT an operator-entered field — it is build-injected (see
+	// InjectedAPIKey), so the form never prompts for it and it never reaches
+	// config.json.
 	forwarding.RegisterForwarderType(Type, "ClubLog",
 		[]forwarding.Action{action.Insert, action.Delete},
 		[]forwarding.CredentialField{
@@ -167,18 +186,17 @@ func init() {
 			{Key: "password", Label: "Application password", Kind: "password",
 				Help: "A ClubLog Application Password — create one in your ClubLog settings; NOT your main account password."},
 			{Key: "callsign", Label: "Callsign", Kind: "text"},
-			{Key: "api", Label: "Application API key", Kind: "password",
-				Help: "Your ClubLog Application API key (clublog.org → API). Obtain from ClubLog; never shared in source."},
 		})
 }
 
 // credentials is the type-specific shape of ForwarderConfig.Credentials
-// for Club Log. Extra fields are ignored.
+// for Club Log — the OPERATOR'S account details. Extra fields are ignored,
+// so a stale `api` left in an older config is silently dropped rather than
+// used: the app API key is build-injected only (see InjectedAPIKey).
 type credentials struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 	Callsign string `json:"callsign"`
-	APIKey   string `json:"api"`
 }
 
 // Forwarder implements forwarding.Forwarder by POSTing to the Club Log
@@ -197,13 +215,16 @@ type Forwarder struct {
 	authFailed atomic.Bool
 }
 
-// New constructs a Club Log Forwarder from the given ForwarderConfig.
-// All four credential fields are required.
+// New constructs a Club Log Forwarder from the given ForwarderConfig. The three
+// operator credential fields (email, password, callsign) come from config; the
+// application API key comes from the build (InjectedAPIKey). All four must
+// resolve, so a binary built without the key refuses to construct rather than
+// send keyless requests.
 func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 	const op errors.Op = "clublog.New"
 
 	if len(fc.Credentials) == 0 {
-		return nil, errors.New(op).WithMsg("credentials required (email, password, callsign, api)")
+		return nil, errors.New(op).WithMsg("credentials required (email, password, callsign)")
 	}
 
 	var creds credentials
@@ -217,23 +238,31 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 		return nil, errors.New(op).WithMsg("credentials.password is required")
 	case creds.Callsign == "":
 		return nil, errors.New(op).WithMsg("credentials.callsign is required")
-	case creds.APIKey == "":
-		return nil, errors.New(op).WithMsg("credentials.api is required")
+	}
+
+	// The app API key is BUILD-injected (never config or source). A binary built
+	// without it can't authenticate to Club Log, so fail loudly here rather than
+	// fire keyless requests that 403 and trip the circuit breaker.
+	apiKey := strings.TrimSpace(InjectedAPIKey)
+	if apiKey == "" {
+		return nil, errors.New(op).WithMsg(
+			"ClubLog application API key not built into this binary; set CLUBLOG_API_KEY in .env and rebuild")
 	}
 
 	// Config-driven per-action endpoints, with the package consts as fallbacks
 	// (ADR 0039).
 	realtime := forwarding.ResolveEndpoint(fc.Endpoints, DefaultRealtimeEndpoint, action.Insert.String())
 	deleteURL := forwarding.ResolveEndpoint(fc.Endpoints, DefaultDeleteEndpoint, action.Delete.String())
-	return newWithEndpoints(creds, realtime, deleteURL, &http.Client{
+	return newWithEndpoints(creds, apiKey, realtime, deleteURL, &http.Client{
 		Timeout: DefaultHTTPTimeout,
 	}), nil
 }
 
 // newWithEndpoints is the package-internal constructor that tests use to
 // point the forwarder at httptest.NewServer URLs with an arbitrary
-// http.Client. Production code goes through New.
-func newWithEndpoints(creds credentials, realtime, deleteURL string, client *http.Client) *Forwarder {
+// http.Client. The apiKey is passed explicitly (New sources it from
+// InjectedAPIKey). Production code goes through New.
+func newWithEndpoints(creds credentials, apiKey, realtime, deleteURL string, client *http.Client) *Forwarder {
 	if client == nil {
 		client = &http.Client{Timeout: DefaultHTTPTimeout}
 	}
@@ -241,7 +270,7 @@ func newWithEndpoints(creds credentials, realtime, deleteURL string, client *htt
 		email:     creds.Email,
 		password:  creds.Password,
 		callsign:  creds.Callsign,
-		apiKey:    creds.APIKey,
+		apiKey:    apiKey,
 		realtime:  realtime,
 		deleteURL: deleteURL,
 		client:    client,

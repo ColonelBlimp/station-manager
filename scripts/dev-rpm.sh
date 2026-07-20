@@ -24,6 +24,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Load .env (gitignored) so build-time secrets — the ClubLog API key
+# (CLUBLOG_API_KEY, baked via -ldflags below) — are available when this script
+# is invoked DIRECTLY (e.g. by deploy-local-dev.sh, which unlike `task` does not
+# auto-load .env). Optional: an absent key just bakes an empty string, leaving
+# the ClubLog forwarder inert.
+if [[ -f .env ]]; then set -a; . ./.env; set +a; fi
+
 if ! command -v nfpm >/dev/null 2>&1; then
   echo "error: nfpm not in PATH (try: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest)" >&2
   exit 1
@@ -81,7 +88,7 @@ fi
 echo "── [2/3] Building daemon → build/bin/smd (version: ${VERSION}, FFT: ${FFT_BACKEND}) ──"
 mkdir -p build/bin
 CGO_ENABLED=$CGO_VAL go build -trimpath -tags "${BUILD_TAGS}" \
-    -ldflags="-s -w -X main.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release" \
+    -ldflags="-s -w -X main.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" \
     -o build/bin/smd ./cmd/smd
 
 echo "── [3/3] Packaging RPM → ${OUTPUT} (RPM version: ${RPM_VERSION}) ──"

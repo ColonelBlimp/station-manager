@@ -31,6 +31,12 @@ VERSION="$1"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Load .env (gitignored) on the HOST so the ClubLog API key (CLUBLOG_API_KEY) is
+# available to pass into the release container below (-e). The key is baked into
+# the binary via -ldflags inside the container; an absent key just leaves the
+# ClubLog forwarder inert. .env is never copied into the image.
+if [[ -f .env ]]; then set -a; . ./.env; set +a; fi
+
 ENGINE="${SM_CONTAINER_ENGINE:-podman}"
 IMAGE="${SM_RELEASE_IMAGE:-sm-release-builder}"
 
@@ -87,6 +93,7 @@ fi
   -e SM_FFT=pocketfft \
   -e SM_SKIP_SPA=1 \
   -e SM_SKIP_MANUAL=1 \
+  -e CLUBLOG_API_KEY="${CLUBLOG_API_KEY:-}" \
   "$IMAGE" \
   bash -c "scripts/release-rpm.sh '$VERSION'"
 

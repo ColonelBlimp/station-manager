@@ -17,19 +17,28 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
-// validCreds returns a minimally-valid credentials blob.
+// validCreds returns a minimally-valid credentials blob — the three operator
+// fields only; the app API key is build-injected, not a config field.
 func validCreds(t *testing.T) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(map[string]string{
 		"email":    "op@example.com",
 		"password": "app-password",
 		"callsign": "7Q5MLV",
-		"api":      "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33",
 	})
 	if err != nil {
 		t.Fatalf("marshal creds: %v", err)
 	}
 	return raw
+}
+
+// setBuildKey installs a fake build-injected API key for the duration of a test
+// (New requires InjectedAPIKey be non-empty), restoring the prior value after.
+func setBuildKey(t *testing.T, key string) {
+	t.Helper()
+	prev := InjectedAPIKey
+	InjectedAPIKey = key
+	t.Cleanup(func() { InjectedAPIKey = prev })
 }
 
 // captured records the last request the test server saw.
@@ -71,8 +80,8 @@ func newTestServer(t *testing.T, status int, statusText, body string, rec *captu
 // timeout so accidental hangs fail fast.
 func fwdAt(realtime, deleteURL string) *Forwarder {
 	return newWithEndpoints(
-		credentials{Email: "op@example.com", Password: "pw", Callsign: "7Q5MLV", APIKey: "key"},
-		realtime, deleteURL,
+		credentials{Email: "op@example.com", Password: "pw", Callsign: "7Q5MLV"},
+		"key", realtime, deleteURL,
 		&http.Client{Timeout: 3 * time.Second},
 	)
 }
@@ -110,6 +119,7 @@ func TestInit_RegistersDefaultRetry(t *testing.T) {
 }
 
 func TestNew_Valid_ReturnsForwarder(t *testing.T) {
+	setBuildKey(t, "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33")
 	fwd, err := New(types.ForwarderConfig{Name: "clublog", Type: Type, Credentials: validCreds(t)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -123,6 +133,8 @@ func TestNew_Valid_ReturnsForwarder(t *testing.T) {
 }
 
 func TestNew_MissingCredentials_Errors(t *testing.T) {
+	// A key IS built in, so this exercises the config-credentials guard.
+	setBuildKey(t, "k")
 	_, err := New(types.ForwarderConfig{Name: "x", Type: Type})
 	if err == nil || !strings.Contains(err.Error(), "credentials required") {
 		t.Fatalf("err = %v, want 'credentials required'", err)
@@ -130,11 +142,13 @@ func TestNew_MissingCredentials_Errors(t *testing.T) {
 }
 
 func TestNew_MissingField_Errors(t *testing.T) {
+	setBuildKey(t, "k")
+	// The app API key is no longer a config field — only the three operator
+	// fields are validated from config.
 	cases := map[string]map[string]string{
-		"email":    {"password": "p", "callsign": "c", "api": "k"},
-		"password": {"email": "e@x", "callsign": "c", "api": "k"},
-		"callsign": {"email": "e@x", "password": "p", "api": "k"},
-		"api":      {"email": "e@x", "password": "p", "callsign": "c"},
+		"email":    {"password": "p", "callsign": "c"},
+		"password": {"email": "e@x", "callsign": "c"},
+		"callsign": {"email": "e@x", "password": "p"},
 	}
 	for missing, creds := range cases {
 		raw, _ := json.Marshal(creds)
@@ -142,6 +156,17 @@ func TestNew_MissingField_Errors(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), missing) {
 			t.Fatalf("missing %s: err = %v, want it named", missing, err)
 		}
+	}
+}
+
+func TestNew_NoBuildKey_Errors(t *testing.T) {
+	// A binary built WITHOUT CLUBLOG_API_KEY (InjectedAPIKey empty) must refuse
+	// to construct even with complete operator credentials — so it never fires
+	// keyless requests that would 403 and trip the breaker.
+	setBuildKey(t, "")
+	_, err := New(types.ForwarderConfig{Name: "x", Type: Type, Credentials: validCreds(t)})
+	if err == nil || !strings.Contains(err.Error(), "not built into this binary") {
+		t.Fatalf("err = %v, want 'not built into this binary'", err)
 	}
 }
 

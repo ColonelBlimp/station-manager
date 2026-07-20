@@ -94,8 +94,11 @@ mkdir -p build/bin
 # -X main.Version injects the build version into cmd/smd's `var Version`
 # which feeds both the User-Agent header on outbound HTTP and the
 # PROGRAMVERSION field on ADIF exports.
+# CLUBLOG_API_KEY (the build-injected ClubLog app key) arrives from the caller's
+# env — passed into the release container by scripts/release.sh (-e), or from the
+# shell/.env for a bare run. Empty → the ClubLog forwarder stays inert.
 CGO_ENABLED=$CGO_VAL go build -trimpath "${TAGS_ARG[@]}" \
-    -ldflags="-s -w -X main.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release" \
+    -ldflags="-s -w -X main.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" \
     -o build/bin/smd ./cmd/smd
 
 echo "── [3/3] Packaging RPM → build/release/ (RPM version: ${RPM_VERSION}) ──"

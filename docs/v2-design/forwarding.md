@@ -191,6 +191,19 @@ LoTW wants a certificate path. Nesting the type-specific fields
 under `credentials` keeps the top-level shape uniform and the
 type-specific unmarshaling local to the forwarder's own package.
 
+**ClubLog's application API key is NOT a config credential.** A ClubLog
+upload needs the operator's `email`/`password`/`callsign` PLUS an
+*application* API key that identifies Station Manager itself. ClubLog
+issues one confidential key per application and auto-deletes any key it
+finds published in source code, so SM keeps it out of both source AND
+`config.json`: it is stamped into the binary at build time via `-ldflags`
+from the gitignored `.env` (`CLUBLOG_API_KEY` → `clublog.InjectedAPIKey`,
+the same `-X` channel as `main.Version`). A compiled binary is not source
+code, so this honours ClubLog's rule. A binary built without the key
+refuses to construct the ClubLog forwarder (it stays inert) rather than
+firing keyless requests that 403 and trip the circuit breaker. See ADR
+0054.
+
 **Why `action_filter` is explicit:** v1 uploaded everything to QRZ
 including deletes. Some destinations don't support updates or deletes
 cleanly (LoTW is famously write-once). The filter lets the operator
