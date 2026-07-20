@@ -115,6 +115,27 @@ func TestRestore_GuardRails(t *testing.T) {
 	require.Error(t, err, "missing target logbook refused")
 }
 
+// TestRestore_CanonicalisesPaddedUUID: cloud backups written before the
+// server's raw-UUID gate can carry surrounding whitespace in the payload's
+// uuid while the cloud key column holds the trimmed form. Restore must trim
+// and store the canonical 36-char form — the raw value would pass a
+// trimmed-only validation and then die on the qso table's length CHECK,
+// leaving the backup row unrestorable (review 2026-07-20 #1).
+func TestRestore_CanonicalisesPaddedUUID(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "7Q5MLV")
+	ctx := context.Background()
+
+	canonical := utils.NewUUIDv7()
+	status, err := s.Restore(ctx, lbID, restorableQso(" "+canonical+" ", time.Now().UTC()))
+	require.NoError(t, err)
+	require.Equal(t, RestoreStored, status)
+
+	got, err := s.DB.FetchQsoByUUIDIncludingDeletedWithContext(ctx, canonical)
+	require.NoError(t, err, "stored under the trimmed uuid")
+	require.Equal(t, canonical, got.UUID)
+}
+
 // Restore never queues upload rows — the cloud already holds these QSOs;
 // re-pushing a restore would be circular.
 func TestRestore_QueuesNoUploads(t *testing.T) {

@@ -71,6 +71,15 @@ FROM tenants t JOIN logbooks l ON l.tenant_id = t.id`
 	if constraints != 2 {
 		t.Errorf("0002 constraints present = %d, want 2", constraints)
 	}
+	// 0004 rebuilt the PK over existing rows: two columns, not one.
+	var pkCols int
+	if err := db.QueryRow(`SELECT array_length(conkey, 1) FROM pg_constraint
+		WHERE conrelid = 'qsos'::regclass AND contype = 'p'`).Scan(&pkCols); err != nil {
+		t.Fatalf("read qsos pk: %v", err)
+	}
+	if pkCols != 2 {
+		t.Errorf("qsos primary key spans %d columns, want 2 (tenant_id, uuid)", pkCols)
+	}
 	var qsos, version int
 	if err := db.QueryRow(`SELECT count(*) FROM qsos`).Scan(&qsos); err != nil {
 		t.Fatalf("count qsos: %v", err)
@@ -78,7 +87,7 @@ FROM tenants t JOIN logbooks l ON l.tenant_id = t.id`
 	if err := db.QueryRow(`SELECT version FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
-	if qsos != 1 || version != 3 {
-		t.Errorf("after upgrade: qsos = %d (want 1), schema version = %d (want 3)", qsos, version)
+	if qsos != 1 || version != 4 {
+		t.Errorf("after upgrade: qsos = %d (want 1), schema version = %d (want 4)", qsos, version)
 	}
 }

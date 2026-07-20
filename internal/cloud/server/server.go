@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/reconcile"
@@ -222,8 +221,12 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 		// accept every RFC 4122 version, but restore (qsoservice.Restore)
 		// admits only v7 — a looser gate here stores backups that can never
 		// come back, and malformed text would surface as a retryable 500
-		// from the column type instead of this 400.
-		uuid := strings.TrimSpace(q.UUID)
+		// from the column type instead of this 400. Validated RAW — no
+		// trimming — because the payload is stored verbatim: a padded UUID
+		// that validated after TrimSpace was 200-accepted yet failed the
+		// local qso table's 36-char CHECK at restore time, the worst failure
+		// class for a backup (review 2026-07-20 #1).
+		uuid := q.UUID
 		if !utils.IsValidUUIDv7(uuid) {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
 				"qsos["+strconv.Itoa(i)+"].qso.uuid must be a UUIDv7")
@@ -358,27 +361,79 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	tenant := tenantID(r)
 	// One snapshot for both reads — a logbook + its first QSOs committing
 	// between separate queries would dump QSOs whose logbook_id is missing
-	// from the same export's logbook list.
-	books, recs, err := s.store.ExportSnapshot(r.Context(), tenant)
+	// from the same export's logbook list. Rows are STREAMED from the
+	// snapshot transaction straight onto the wire (review 2026-07-20 #3):
+	// the export set is unbounded (live rows + tombstones, per tenant), so
+	// buffering it — as slices here plus json.Encoder's full marshal — made
+	// every export an O(logbook) heap spike an authenticated caller could
+	// aim at the service. Peak memory is now one row. The accepted trade:
+	// the read-only tx (and its pool connection) stays open while the
+	// response drains, so a slow client pins one of the 5 pool conns for up
+	// to exportWriteDeadline — bounded, and cheaper than the O(logbook)
+	// heap it replaces; the request semaphore caps how many can do it at
+	// once.
+	count := 0
+	started := false
+	err := s.store.ExportSnapshot(r.Context(), tenant,
+		func(books []store.LogbookInfo) error {
+			if books == nil {
+				books = []store.LogbookInfo{}
+			}
+			head, err := json.Marshal(books)
+			if err != nil {
+				return err
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			started = true
+			if _, err := w.Write([]byte(`{"logbooks":`)); err != nil {
+				return err
+			}
+			if _, err := w.Write(head); err != nil {
+				return err
+			}
+			_, err = w.Write([]byte(`,"qsos":[`))
+			return err
+		},
+		func(rec store.Record) error {
+			row, err := json.Marshal(ExportQso{
+				UUID:       rec.UUID,
+				LogbookID:  rec.LogbookID,
+				ModifiedAt: rec.ModifiedAt,
+				Revision:   rec.Revision,
+				DeletedAt:  rec.DeletedAt,
+				Qso:        rec.Payload,
+			})
+			if err != nil {
+				return err
+			}
+			if count > 0 {
+				if _, err := w.Write([]byte{','}); err != nil {
+					return err
+				}
+			}
+			count++
+			_, err = w.Write(row)
+			return err
+		})
 	if err != nil {
-		s.log.Error("export: snapshot read failed", "err", err)
-		s.writeError(w, http.StatusInternalServerError, "internal_error", "export failed")
+		if !started {
+			// Nothing written yet — a normal error response still works.
+			s.log.Error("export: snapshot read failed", "err", err)
+			s.writeError(w, http.StatusInternalServerError, "internal_error", "export failed")
+			return
+		}
+		// Mid-stream failure: the 200 is already on the wire, so the only
+		// honest signal is a truncated body — the missing "]}" terminator
+		// makes it invalid JSON, which the restore client rejects as corrupt
+		// rather than silently restoring a partial dump.
+		s.log.Error("export: aborted mid-stream", "tenant_id", tenant, "written", count, "err", err)
 		return
 	}
-	if books == nil {
-		books = []store.LogbookInfo{}
+	// Trailing newline matches the pre-streaming json.Encoder framing.
+	if _, err := w.Write([]byte("]}\n")); err != nil {
+		s.log.Error("export: aborted mid-stream", "tenant_id", tenant, "written", count, "err", err)
+		return
 	}
-	qsos := make([]ExportQso, 0, len(recs))
-	for _, rec := range recs {
-		qsos = append(qsos, ExportQso{
-			UUID:       rec.UUID,
-			LogbookID:  rec.LogbookID,
-			ModifiedAt: rec.ModifiedAt,
-			Revision:   rec.Revision,
-			DeletedAt:  rec.DeletedAt,
-			Qso:        rec.Payload,
-		})
-	}
-	s.log.Info("export served", "tenant_id", tenant, "qsos", len(qsos))
-	s.writeJSON(w, http.StatusOK, map[string]any{"logbooks": books, "qsos": qsos})
+	s.log.Info("export served", "tenant_id", tenant, "qsos", count)
 }

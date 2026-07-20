@@ -96,6 +96,13 @@ func TestNegotiateEncoding(t *testing.T) {
 		{"", encIdentity},                // absent header → identity
 		{"gzip;q=0, *;q=1", encIdentity}, // explicit gzip refusal beats the wildcard; identity via *
 		{"identity;q=0, gzip", encGzip},  // identity refused but gzip accepted
+		// Relative preference, not just refusal (review 2026-07-20 #4): the
+		// higher effective weight wins when both codings are acceptable.
+		{"gzip;q=0.1, identity;q=1", encIdentity},
+		{"identity;q=1, gzip;q=0.1", encIdentity}, // order-independent
+		{"gzip;q=1, identity;q=0.5", encGzip},
+		{"gzip;q=0.5, *;q=1", encIdentity},      // wildcard weights identity above explicit gzip
+		{"identity;q=0.2, gzip;q=0.2", encGzip}, // tie → server prefers gzip
 		// Everything this server can produce refused → 406.
 		{"gzip;q=0, identity;q=0", encNotAcceptable},
 		{"identity;q=0", encNotAcceptable},                  // identity refused, gzip never accepted

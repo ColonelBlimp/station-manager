@@ -7,8 +7,10 @@
 // Three tables — tenants, logbooks, qsos. A QSO is stored whole as JSONB (the
 // full types.Qso), with its identity + reconcile fields lifted into columns:
 //
-//   - uuid        the QSO's own UUID — the upsert key, preserved end to end so a
-//     restore round-trips identity (never an ADIF re-import).
+//   - uuid        the QSO's own UUID — with tenant_id the upsert key (uniqueness
+//     is tenant-scoped, migration 0004: UUIDs are public in exports, so a
+//     globally-unique uuid let one tenant occupy another's UUID), preserved end
+//     to end so a restore round-trips identity (never an ADIF re-import).
 //   - modified_at drives reconcile diffing on (uuid, modified_at).
 //   - deleted_at  a tombstone; the cloud is retentive, so a peer that missed a
 //     delete still reconciles to the tombstone rather than resurrecting.

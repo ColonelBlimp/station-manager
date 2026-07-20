@@ -53,6 +53,7 @@ func testStore(t *testing.T) *Store {
 	execSQLFile(t, db, "migrations/0001_init.up.sql")
 	execSQLFile(t, db, "migrations/0002_qsos_logbook_tenant_fk.up.sql")
 	execSQLFile(t, db, "migrations/0003_qsos_revision.up.sql")
+	execSQLFile(t, db, "migrations/0004_qsos_tenant_scoped_uuid.up.sql")
 	t.Cleanup(func() {
 		execSQLFile(t, db, "migrations/0001_init.down.sql")
 		_ = db.Close()
@@ -161,7 +162,7 @@ func TestUpsert_StaleGuard(t *testing.T) {
 	if applied != 0 {
 		t.Errorf("stale push applied = %d, want 0 (older modified_at must be ignored)", applied)
 	}
-	if got := payloadV(t, mustGet(t, s, uuidA)); got != 1 {
+	if got := payloadV(t, mustGet(t, s, tid, uuidA)); got != 1 {
 		t.Errorf("payload v after stale push = %d, want 1 (original preserved)", got)
 	}
 
@@ -184,10 +185,14 @@ func TestUpsert_StaleGuard(t *testing.T) {
 	}
 }
 
-// TestUpsert_TenantScope: a push carrying an existing UUID but a DIFFERENT
-// tenant_id (even with a newer modified_at) is rejected — it can't hijack another
-// tenant's row. Applied 0, ownership + payload unchanged.
-func TestUpsert_TenantScope(t *testing.T) {
+// TestUpsert_TenantScopedUUID: uuid uniqueness is scoped per tenant (migration
+// 0004), so the same UUID coexists under two tenants — each push lands as the
+// pushing tenant's OWN row and neither can touch the other's. Pre-0004 the
+// global-unique uuid turned tenant B's push into a zero-row update reported as
+// success (applied 0), permanently denying B a backup of that UUID (review
+// 2026-07-20 #2); the hijack the old WHERE tenant guard defended against is
+// now impossible structurally.
+func TestUpsert_TenantScopedUUID(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	tidA, lidA := seedTenantLogbook(t, s, "7Q8AC")
@@ -197,17 +202,51 @@ func TestUpsert_TenantScope(t *testing.T) {
 		t.Fatalf("seed A: %v", err)
 	}
 
-	// Tenant B tries to overwrite A's UUID with a newer record.
+	// Tenant B pushes the same UUID with a newer modified_at — the shape of a
+	// deliberate occupation attempt AND of an innocent collision. Must apply
+	// as B's own row.
 	applied, err := s.Upsert(ctx, []Record{rec(uuidA, tidB, lidB, baseTime.Add(time.Hour), nil, `{"owner":"B"}`)})
 	if err != nil {
-		t.Fatalf("hijack push: %v", err)
+		t.Fatalf("tenant B push: %v", err)
 	}
-	if applied != 0 {
-		t.Errorf("cross-tenant push applied = %d, want 0 (must not hijack)", applied)
+	if applied != 1 {
+		t.Errorf("tenant B push applied = %d, want 1 (same uuid, own tenant row)", applied)
 	}
-	got := mustGet(t, s, uuidA)
-	if got.TenantID != tidA {
-		t.Errorf("tenant after hijack = %d, want %d (A still owns the row)", got.TenantID, tidA)
+
+	a := mustGet(t, s, tidA, uuidA)
+	if a.TenantID != tidA || a.LogbookID != lidA {
+		t.Errorf("A's row = tenant %d logbook %d, want %d/%d (untouched by B's push)",
+			a.TenantID, a.LogbookID, tidA, lidA)
+	}
+	if !a.ModifiedAt.Equal(baseTime) {
+		t.Errorf("A's modified_at = %v, want %v (untouched by B's push)", a.ModifiedAt, baseTime)
+	}
+	b := mustGet(t, s, tidB, uuidA)
+	if b.TenantID != tidB || b.LogbookID != lidB {
+		t.Errorf("B's row = tenant %d logbook %d, want %d/%d", b.TenantID, b.LogbookID, tidB, lidB)
+	}
+
+	// Each tenant's export carries only its own copy.
+	for _, tc := range []struct {
+		tid  int64
+		want string
+	}{{tidA, `"A"`}, {tidB, `"B"`}} {
+		recs, err := s.Export(ctx, tc.tid)
+		if err != nil {
+			t.Fatalf("Export(%d): %v", tc.tid, err)
+		}
+		if len(recs) != 1 {
+			t.Fatalf("Export(%d) = %d records, want 1", tc.tid, len(recs))
+		}
+		var p struct {
+			Owner string `json:"owner"`
+		}
+		if err := json.Unmarshal(recs[0].Payload, &p); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if `"`+p.Owner+`"` != tc.want {
+			t.Errorf("Export(%d) payload owner = %q, want %s", tc.tid, p.Owner, tc.want)
+		}
 	}
 }
 
@@ -240,7 +279,7 @@ func TestUpsert_RevisionGuard(t *testing.T) {
 	if applied != 0 {
 		t.Errorf("same-second lower-revision push applied = %d, want 0", applied)
 	}
-	if got := payloadV(t, mustGet(t, s, uuidA)); got != 2 {
+	if got := payloadV(t, mustGet(t, s, tid, uuidA)); got != 2 {
 		t.Errorf("payload v after stale-revision push = %d, want 2 (no regression)", got)
 	}
 
@@ -253,7 +292,7 @@ func TestUpsert_RevisionGuard(t *testing.T) {
 	if applied != 1 {
 		t.Errorf("higher-revision older-clock push applied = %d, want 1", applied)
 	}
-	if got := payloadV(t, mustGet(t, s, uuidA)); got != 3 {
+	if got := payloadV(t, mustGet(t, s, tid, uuidA)); got != 3 {
 		t.Errorf("payload v after clock-step push = %d, want 3", got)
 	}
 
@@ -287,7 +326,7 @@ func TestUpsert_CrossTenantLogbookRejected(t *testing.T) {
 	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tidA, lidB, baseTime, nil, `{"v":1}`)}); err == nil {
 		t.Fatal("upsert filing tenant A's QSO under tenant B's logbook succeeded, want composite-FK rejection")
 	}
-	if _, err := s.Get(ctx, uuidA); !stderr.Is(err, ErrNotFound) {
+	if _, err := s.Get(ctx, tidA, uuidA); !stderr.Is(err, ErrNotFound) {
 		t.Fatalf("Get after rejected upsert = %v, want ErrNotFound (nothing stored)", err)
 	}
 }
@@ -310,7 +349,13 @@ func TestExportSnapshot_MatchesSeparateReads(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	books, recs, err := s.ExportSnapshot(ctx, tid)
+	var (
+		books []LogbookInfo
+		recs  []Record
+	)
+	err = s.ExportSnapshot(ctx, tid,
+		func(b []LogbookInfo) error { books = b; return nil },
+		func(r Record) error { recs = append(recs, r); return nil })
 	if err != nil {
 		t.Fatalf("ExportSnapshot: %v", err)
 	}
@@ -352,7 +397,7 @@ func TestUpsert_TombstoneRoundTripAndResurrect(t *testing.T) {
 	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, del, &del, `{"v":1}`)}); err != nil {
 		t.Fatalf("tombstone: %v", err)
 	}
-	if got := mustGet(t, s, uuidA); got.DeletedAt == nil {
+	if got := mustGet(t, s, tid, uuidA); got.DeletedAt == nil {
 		t.Fatal("DeletedAt nil after tombstone push; want a tombstone")
 	}
 	if !manifestDeleted(t, s, lid, uuidA) {
@@ -367,7 +412,7 @@ func TestUpsert_TombstoneRoundTripAndResurrect(t *testing.T) {
 	if applied != 0 {
 		t.Errorf("stale un-delete applied = %d, want 0 (tombstone must hold)", applied)
 	}
-	if got := mustGet(t, s, uuidA); got.DeletedAt == nil {
+	if got := mustGet(t, s, tid, uuidA); got.DeletedAt == nil {
 		t.Error("row resurrected by a STALE push; the tombstone should have held")
 	}
 
@@ -375,7 +420,7 @@ func TestUpsert_TombstoneRoundTripAndResurrect(t *testing.T) {
 	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime.Add(2*time.Minute), nil, `{"v":3}`)}); err != nil {
 		t.Fatalf("resurrect: %v", err)
 	}
-	if got := mustGet(t, s, uuidA); got.DeletedAt != nil {
+	if got := mustGet(t, s, tid, uuidA); got.DeletedAt != nil {
 		t.Error("DeletedAt non-nil after a newer non-tombstone push; want resurrected (nil)")
 	}
 	if manifestDeleted(t, s, lid, uuidA) {
@@ -395,7 +440,7 @@ func TestUpsert_PrecisionCanonicalised(t *testing.T) {
 	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, nanos, nil, `{"v":1}`)}); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	got := mustGet(t, s, uuidA)
+	got := mustGet(t, s, tid, uuidA)
 	if !got.ModifiedAt.Equal(canonicalTime(nanos)) {
 		t.Errorf("stored modified_at = %v, want µs-truncated %v", got.ModifiedAt.UTC(), canonicalTime(nanos))
 	}
@@ -505,7 +550,8 @@ func TestEnsureLogbook_Idempotent(t *testing.T) {
 
 func TestGet_NotFound(t *testing.T) {
 	s := testStore(t)
-	_, err := s.Get(context.Background(), uuidC)
+	tid, _ := seedTenantLogbook(t, s, "7Q8AC")
+	_, err := s.Get(context.Background(), tid, uuidC)
 	if !stderr.Is(err, ErrNotFound) {
 		t.Fatalf("Get(absent) err = %v, want ErrNotFound", err)
 	}
@@ -559,11 +605,11 @@ func TestManifest(t *testing.T) {
 	}
 }
 
-func mustGet(t *testing.T, s *Store, uuid string) Record {
+func mustGet(t *testing.T, s *Store, tenantID int64, uuid string) Record {
 	t.Helper()
-	r, err := s.Get(context.Background(), uuid)
+	r, err := s.Get(context.Background(), tenantID, uuid)
 	if err != nil {
-		t.Fatalf("Get(%s): %v", uuid, err)
+		t.Fatalf("Get(%d, %s): %v", tenantID, uuid, err)
 	}
 	return r
 }

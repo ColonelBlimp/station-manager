@@ -169,12 +169,14 @@ RETURNING id`
 //     A NEWER non-tombstone over a tombstone resurrects the row by design —
 //     edit-after-delete wins by recency (local is authoritative); a STALE
 //     missed-delete push is rejected by this same guard, so the tombstone holds.
-//   - tenant_id: the update applies only when the stored row belongs to the same
-//     tenant. QSO UUIDs are client-generated and appear in every exported
-//     logbook (not secret), so without this a push carrying another tenant's UUID
-//     with a newer modified_at would silently steal that row once multi-tenant.
-//     P1 is single-tenant so it never triggers today; baking it in now is one
-//     line vs a semantics-change migration after real multi-tenant data exists.
+//   - Tenant isolation is structural: uuid uniqueness is scoped to
+//     (tenant_id, uuid) (migration 0004), so a conflict can only ever be an
+//     intra-tenant re-push. QSO UUIDs are client-generated and appear in every
+//     exported logbook (not secret) — under the pre-0004 global-unique uuid, a
+//     cross-tenant collision hit the old WHERE tenant guard and became a
+//     zero-row "success" (applied 0), making that UUID permanently unbackable
+//     for the later tenant (review 2026-07-20 #2). With the composite key the
+//     same UUID simply coexists per tenant; no guard clause is needed.
 //
 // modified_at / deleted_at are truncated to canonicalPrecision so the stored
 // value matches what the reconcile hash expects (see canonicalPrecision).
@@ -192,16 +194,14 @@ func (s *Store) Upsert(ctx context.Context, recs []Record) (int, error) {
 	const q = `
 INSERT INTO qsos (uuid, tenant_id, logbook_id, modified_at, revision, deleted_at, payload)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT (uuid) DO UPDATE SET
-    tenant_id   = EXCLUDED.tenant_id,
+ON CONFLICT (tenant_id, uuid) DO UPDATE SET
     logbook_id  = EXCLUDED.logbook_id,
     modified_at = EXCLUDED.modified_at,
     revision    = EXCLUDED.revision,
     deleted_at  = EXCLUDED.deleted_at,
     payload     = EXCLUDED.payload
-WHERE (EXCLUDED.revision > qsos.revision
-       OR (EXCLUDED.revision = qsos.revision AND EXCLUDED.modified_at >= qsos.modified_at))
-  AND qsos.tenant_id = EXCLUDED.tenant_id`
+WHERE EXCLUDED.revision > qsos.revision
+   OR (EXCLUDED.revision = qsos.revision AND EXCLUDED.modified_at >= qsos.modified_at)`
 	stmt, err := tx.PrepareContext(ctx, q)
 	if err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsg("prepare")
@@ -329,41 +329,65 @@ func (s *Store) Export(ctx context.Context, tenantID int64) ([]Record, error) {
 	return queryExport(ctx, "store.Export", s.db, tenantID)
 }
 
-// ExportSnapshot returns a tenant's logbooks AND every record it owns, both
-// read from ONE repeatable-read, read-only transaction — the consistent dump
-// behind GET /v1/export (the full-fidelity restore source). Two separate
-// autocommit reads can interleave with a concurrent push: a new logbook and
-// its first batch committing between them yields QSOs whose logbook_id is
-// absent from the same dump's logbook list, which restore has no way to map.
-func (s *Store) ExportSnapshot(ctx context.Context, tenantID int64) ([]LogbookInfo, []Record, error) {
+// ExportSnapshot streams a tenant's logbooks AND every record it owns from
+// ONE repeatable-read, read-only transaction — the consistent dump behind
+// GET /v1/export (the full-fidelity restore source). Two separate autocommit
+// reads can interleave with a concurrent push: a new logbook and its first
+// batch committing between them yields QSOs whose logbook_id is absent from
+// the same dump's logbook list, which restore has no way to map.
+//
+// onBooks is called exactly once, before any onRecord call, with the (small,
+// bounded) logbook list; onRecord is then called once per QSO row. Records are
+// NOT accumulated — the export set is unbounded (live rows + tombstones, per
+// tenant, growing forever), so materialising it made every export an
+// O(logbook) heap allocation and a service-level OOM lever (review 2026-07-20
+// #3). A non-nil error from either callback aborts the scan and is returned
+// verbatim (no wrapping — the caller distinguishes its own write errors from
+// store read errors by identity). The transaction never escapes this method.
+func (s *Store) ExportSnapshot(ctx context.Context, tenantID int64,
+	onBooks func([]LogbookInfo) error, onRecord func(Record) error) error {
 	const op errors.Op = "store.ExportSnapshot"
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
-		return nil, nil, errors.New(op).WithErr(err).WithMsg("begin")
+		return errors.New(op).WithErr(err).WithMsg("begin")
 	}
 	defer func() { _ = tx.Rollback() }() // read-only; rollback is the cheap close
 	books, err := queryLogbooks(ctx, op, tx, tenantID)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	recs, err := queryExport(ctx, op, tx, tenantID)
-	if err != nil {
-		return nil, nil, err
+	if err := onBooks(books); err != nil {
+		return err
 	}
-	return books, recs, nil
+	return streamExport(ctx, op, tx, tenantID, onRecord)
 }
 
 func queryExport(ctx context.Context, op errors.Op, q querier, tenantID int64) ([]Record, error) {
+	var out []Record
+	err := streamExport(ctx, op, q, tenantID, func(r Record) error {
+		out = append(out, r)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// streamExport row-streams a tenant's full record set (tombstones included)
+// to onRecord in (logbook_id, uuid) order. Callback errors abort the scan and
+// return unwrapped (see ExportSnapshot).
+func streamExport(ctx context.Context, op errors.Op, q querier, tenantID int64,
+	onRecord func(Record) error) error {
 	const query = `
 SELECT uuid, tenant_id, logbook_id, modified_at, revision, deleted_at, payload
 FROM qsos WHERE tenant_id = $1 ORDER BY logbook_id, uuid`
 	rows, err := q.QueryContext(ctx, query, tenantID)
 	if err != nil {
-		return nil, errors.New(op).WithErr(err).WithMsgf("tenant %d", tenantID)
+		return errors.New(op).WithErr(err).WithMsgf("tenant %d", tenantID)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []Record
 	for rows.Next() {
 		var (
 			r       Record
@@ -371,29 +395,33 @@ FROM qsos WHERE tenant_id = $1 ORDER BY logbook_id, uuid`
 		)
 		if err := rows.Scan(&r.UUID, &r.TenantID, &r.LogbookID,
 			&r.ModifiedAt, &r.Revision, &r.DeletedAt, &payload); err != nil {
-			return nil, errors.New(op).WithErr(err).WithMsg("scan")
+			return errors.New(op).WithErr(err).WithMsg("scan")
 		}
 		r.Payload = payload
-		out = append(out, r)
+		if err := onRecord(r); err != nil {
+			return err
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New(op).WithErr(err).WithMsg("rows")
+		return errors.New(op).WithErr(err).WithMsg("rows")
 	}
-	return out, nil
+	return nil
 }
 
-// Get returns the full record for a UUID, tombstones included (restore needs the
-// deleted marker). Returns ErrNotFound (errors.Is-matchable) when no row matches.
-func (s *Store) Get(ctx context.Context, uuid string) (Record, error) {
+// Get returns the full record for a tenant's UUID, tombstones included (restore
+// needs the deleted marker). Tenant-scoped because uuid alone stopped being a
+// key at migration 0004 — the same UUID may exist under multiple tenants.
+// Returns ErrNotFound (errors.Is-matchable) when no row matches.
+func (s *Store) Get(ctx context.Context, tenantID int64, uuid string) (Record, error) {
 	const op errors.Op = "store.Get"
 	const q = `
 SELECT uuid, tenant_id, logbook_id, modified_at, revision, deleted_at, payload
-FROM qsos WHERE uuid = $1`
+FROM qsos WHERE tenant_id = $1 AND uuid = $2`
 	var (
 		r       Record
 		payload []byte
 	)
-	err := s.db.QueryRowContext(ctx, q, uuid).Scan(
+	err := s.db.QueryRowContext(ctx, q, tenantID, uuid).Scan(
 		&r.UUID, &r.TenantID, &r.LogbookID, &r.ModifiedAt, &r.Revision, &r.DeletedAt, &payload)
 	if stderr.Is(err, sql.ErrNoRows) {
 		return Record{}, errors.New(op).WithErr(ErrNotFound).WithMsgf("uuid %s", uuid)

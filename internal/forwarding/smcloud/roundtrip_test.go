@@ -106,7 +106,7 @@ DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`)
 	if res := f.Submit(context.Background(), q, action.Insert, ""); res.Outcome != forwarding.OutcomeSuccess {
 		t.Fatalf("insert outcome = %s (%v)", res.Outcome, res.Err)
 	}
-	rec, err := st.Get(context.Background(), q.UUID)
+	rec, err := st.Get(context.Background(), tenant, q.UUID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -133,7 +133,7 @@ DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`)
 	if res := f.Submit(context.Background(), stale, action.Update, ""); res.Outcome != forwarding.OutcomeSuccess {
 		t.Fatalf("stale update outcome = %s (%v)", res.Outcome, res.Err)
 	}
-	rec2, _ := st.Get(context.Background(), q.UUID)
+	rec2, _ := st.Get(context.Background(), tenant, q.UUID)
 	if !rec2.ModifiedAt.Equal(q.ModifiedAt) {
 		t.Errorf("stale push clobbered modified_at: %v", rec2.ModifiedAt)
 	}
@@ -145,7 +145,7 @@ DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`)
 	if res := f.Submit(context.Background(), del, action.Delete, ""); res.Outcome != forwarding.OutcomeSuccess {
 		t.Fatalf("delete outcome = %s (%v)", res.Outcome, res.Err)
 	}
-	rec3, _ := st.Get(context.Background(), q.UUID)
+	rec3, _ := st.Get(context.Background(), tenant, q.UUID)
 	if rec3.DeletedAt == nil || !rec3.DeletedAt.Equal(del.DeletedAt) {
 		t.Errorf("tombstone not stored: %v", rec3.DeletedAt)
 	}

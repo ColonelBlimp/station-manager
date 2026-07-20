@@ -60,8 +60,12 @@ const (
 // explicitly REFUSED (2026-07-19 review #3). Rules: an explicit gzip/x-gzip
 // or identity entry wins over the wildcard; identity is acceptable BY DEFAULT
 // unless refused explicitly or via the wildcard; when every producible coding
-// is refused the result is encNotAcceptable → 406 (review round 2 #3). An
-// absent/empty header negotiates identity.
+// is refused the result is encNotAcceptable → 406 (review round 2 #3).
+// Q-values are honoured as RELATIVE weights, not just refusals: when both
+// codings are acceptable the higher effective weight wins, so
+// "gzip;q=0.1, identity;q=1" gets identity (review 2026-07-20 #4); on a tie
+// the server prefers gzip (both acceptable — server's choice per §12.5.3).
+// An absent/empty header negotiates identity.
 func negotiateEncoding(header string) contentEncoding {
 	gzipQ, gzipSeen := 0.0, false
 	idQ, idSeen := 0.0, false
@@ -87,17 +91,30 @@ func negotiateEncoding(header string) contentEncoding {
 			starSeen, starQ = true, q
 		}
 	}
-	gzipOK := (gzipSeen && gzipQ > 0) || (!gzipSeen && starSeen && starQ > 0)
-	identityOK := true // acceptable by default (RFC 9110 §12.5.3)
-	if idSeen {
-		identityOK = idQ > 0
+	// Effective weights: an explicit entry wins over the wildcard. gzip
+	// defaults to unacceptable when nothing covers it (a server must not
+	// send a coding the client never offered to accept). Unnamed identity
+	// is acceptable but LEAST-preferred — a client that explicitly weights
+	// gzip ("gzip;q=0.8") wants gzip, not the coding it never mentioned.
+	// 0.001 is the smallest expressible qvalue (RFC 9110 §12.4.2 allows
+	// three decimals), so every acceptable explicit weight beats or ties it,
+	// and the tie goes to gzip below.
+	gzipEff := -1.0
+	if gzipSeen {
+		gzipEff = gzipQ
 	} else if starSeen {
-		identityOK = starQ > 0
+		gzipEff = starQ
+	}
+	idEff := 0.001
+	if idSeen {
+		idEff = idQ
+	} else if starSeen {
+		idEff = starQ
 	}
 	switch {
-	case gzipOK:
+	case gzipEff > 0 && gzipEff >= idEff:
 		return encGzip
-	case identityOK:
+	case idEff > 0:
 		return encIdentity
 	default:
 		return encNotAcceptable

@@ -38,7 +38,14 @@ const (
 func (s *Service) Restore(ctx context.Context, logbookID int64, qso types.Qso) (RestoreStatus, error) {
 	const op errors.Op = "qsoservice.Restore"
 
-	if !utils.IsValidUUIDv7(strings.TrimSpace(qso.UUID)) {
+	// Canonicalise BEFORE validating and keep the trimmed form: cloud backups
+	// written before the server's raw-UUID gate (review 2026-07-20 #1) can
+	// carry a padded UUID in the payload while the cloud's key column holds
+	// the trimmed form. Trimming here makes those rows restorable — the raw
+	// value would pass a trimmed validation only to die on the qso table's
+	// 36-char CHECK — and keeps the stored UUID matching the cloud's key.
+	qso.UUID = strings.TrimSpace(qso.UUID)
+	if !utils.IsValidUUIDv7(qso.UUID) {
 		return "", errors.New(op).WithMsgf("restored qso has invalid uuid %q", qso.UUID)
 	}
 	if qso.ModifiedAt.IsZero() {

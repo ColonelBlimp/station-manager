@@ -382,6 +382,11 @@ func TestPutQsos_Validation(t *testing.T) {
 	// must be restorable).
 	v4UUID, _ := json.Marshal(fixtureQso("0197f9a0-0000-4000-8000-000000000001"))
 	badUUID, _ := json.Marshal(fixtureQso("not-a-uuid"))
+	// Valid v7 wrapped in whitespace — rejected RAW, never trimmed: the
+	// payload is stored verbatim, so a trim-then-validate gate 200-accepted
+	// rows whose padded payload uuid failed the local qso table's 36-char
+	// CHECK at restore time (review 2026-07-20 #1).
+	paddedUUID, _ := json.Marshal(fixtureQso(" 0197f9a0-0000-7000-8000-000000000001 "))
 	ok, _ := json.Marshal(fixtureQso("0197f9a0-0000-7000-8000-000000000001"))
 
 	cases := []struct {
@@ -393,6 +398,7 @@ func TestPutQsos_Validation(t *testing.T) {
 		{"missing uuid", PutQsosRequest{Logbook: "main", Qsos: []QsoUpload{{ModifiedAt: at, Qso: noUUID}}}},
 		{"non-v7 uuid", PutQsosRequest{Logbook: "main", Qsos: []QsoUpload{{ModifiedAt: at, Qso: v4UUID}}}},
 		{"malformed uuid", PutQsosRequest{Logbook: "main", Qsos: []QsoUpload{{ModifiedAt: at, Qso: badUUID}}}},
+		{"padded uuid", PutQsosRequest{Logbook: "main", Qsos: []QsoUpload{{ModifiedAt: at, Qso: paddedUUID}}}},
 		{"zero modified_at", PutQsosRequest{Logbook: "main", Qsos: []QsoUpload{{Qso: ok}}}},
 	}
 	for _, c := range cases {
