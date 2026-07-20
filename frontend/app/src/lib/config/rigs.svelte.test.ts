@@ -73,6 +73,35 @@ describe('rigsState', () => {
         expect(rigsState.selectedId).toBe(1); // fell back to the default
     });
 
+    it('ft8ModeFor distinguishes inherit (nil), leave-current (""), and override', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_u: RequestInfo | URL, _i?: RequestInit) =>
+                Promise.resolve(
+                    new Response(
+                        JSON.stringify({
+                            default_rig_id: 1,
+                            rigs: [
+                                { id: 1, model: 'ftdx10', port: '/dev/a' }, // absent → inherit
+                                { id: 2, model: 'ftdx10', port: '/dev/b', ft8_mode: '' }, // leave current
+                                { id: 3, model: 'ftdx10', port: '/dev/c', ft8_mode: 'RTTY-U' }, // override
+                            ],
+                            catalogue: [{ id: 'ftdx10', name: 'FTdx10', ft8_mode: 'DATA-U' }],
+                        }),
+                        { status: 200, headers: { 'Content-Type': 'application/json' } }
+                    )
+                )
+            )
+        );
+        await rigsState.load();
+        // nil/absent inherits the rigdef default…
+        expect(rigsState.ft8ModeFor(rigsState.rigs[0])).toBe('DATA-U');
+        // …an explicit "" is NOT the default — it means leave the current mode…
+        expect(rigsState.ft8ModeFor(rigsState.rigs[1])).toBe('leave current mode');
+        // …and any other value is the override literal.
+        expect(rigsState.ft8ModeFor(rigsState.rigs[2])).toBe('RTTY-U');
+    });
+
     it('nameFor resolves the friendly rigdef name, falling back to the model id', async () => {
         vi.stubGlobal(
             'fetch',

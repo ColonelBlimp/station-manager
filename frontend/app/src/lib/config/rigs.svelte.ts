@@ -31,9 +31,17 @@ class RigsState {
         return this.catalogue[rig.model]?.name ?? rig.model;
     }
 
-    // The effective FT8 mode: the rig's own override, else the rigdef default.
+    // The effective FT8-mode label. Ft8Mode is *string daemon-side with THREE
+    // states (types.RigConfig): nil/absent → inherit the rigdef default; an
+    // EXPLICIT "" → "leave the rig's current mode" (no switch); any other value
+    // → that override literal. A `||` fallback would wrongly show an explicit ""
+    // as the rigdef default, so inherit is a NULLISH check, not a falsy one
+    // (review 2026-07-20 Rigs #4).
     ft8ModeFor(rig: RigConfig): string {
-        return rig.ft8_mode || this.catalogue[rig.model]?.ft8_mode || '';
+        if (rig.ft8_mode === null || rig.ft8_mode === undefined) {
+            return this.catalogue[rig.model]?.ft8_mode ?? '';
+        }
+        return rig.ft8_mode === '' ? 'leave current mode' : rig.ft8_mode;
     }
 
     async load(): Promise<void> {
