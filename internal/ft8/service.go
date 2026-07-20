@@ -128,12 +128,19 @@ type Service struct {
 	txClosed   bool   // set on Stop; refuses further arming
 	txMessage  string // message of the in-flight transmission ("" = none)
 	txOffsetHz float64
-	txLastErr  string // i18n code of the last failed transmission ("" = none)
-	exchPath   string // operator's antenna-path choice for the active exchange ("S"/"L"); logging-only
-	txDevice   txPlayer
-	txCtrl     *TxController
-	txCancel   context.CancelFunc
-	txWg       sync.WaitGroup
+	txDialMHz  float64 // dial of the in-flight transmission, for the keyed-time decode-log TX line
+	txLastErr  string  // i18n code of the last failed transmission ("" = none)
+	// exchPath is the operator's antenna-path choice for the active exchange
+	// ("S"/"L"); logging-only. Reset on ACCEPTED session starts and consumed+reset
+	// at each logged contact (review 2026-07-20 #5). Accepted residue: a
+	// caller-mode answerer that fails mid-exchange (no RR73, drop back to CQ)
+	// leaves the previous choice in place for the next answerer — adjust it as
+	// the pile-up moves.
+	exchPath string
+	txDevice txPlayer
+	txCtrl   *TxController
+	txCancel context.CancelFunc
+	txWg     sync.WaitGroup
 
 	// seqGate serialises "start a session" (StartQso/StartCallCq) against
 	// "disarm + abandon" (disarmTx) so the armed-check and the sequencer commit
@@ -227,7 +234,11 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		// completed exchange just before the sink builds the QSO record. The
 		// sequencer is path-agnostic; the choice lives on the Service (set via
 		// the /v1/ft8/qso/path endpoint, defaulting to short per exchange).
+		// Consume-then-reset (review 2026-07-20 #5): a Call-CQ run logs a
+		// contact and keeps the session alive, so without the reset here the
+		// NEXT answerer would inherit this contact's long-path choice.
 		c.AntPath = s.exchangePath()
+		s.resetExchangePath()
 		if s.qsoLogger != nil {
 			s.qsoLogger(s.base(), c)
 		}
@@ -544,6 +555,19 @@ func (s *Service) onCaptureLoopExit(runCtx context.Context, who string) {
 		s.captureCancel()
 		s.captureCancel = nil
 	}
+	// Stop the source HERE (review 2026-07-20 #4): capturing is now false, so a
+	// later releaseCaptureLocked early-returns without ever calling src.Stop —
+	// the CGO source's device would stay acquired (mic held with the loop dead)
+	// and the next acquisition would overwrite the un-Closed capture, leaking
+	// its backend context. Same under-s.mu placement as releaseCaptureLocked;
+	// Stop waits only on the source's own pump (ctx already cancelled above),
+	// never on s.wg, so it cannot deadlock a concurrent release drain.
+	if err := s.src.Stop(); err != nil {
+		s.log.WarnWith().Err(err).Msg("ft8: capture stop error (loop exit)")
+	}
+	// Invalidate the replay cache for the dead session — a later subscriber
+	// must not be handed this session's last slot as if it were live.
+	s.hub.clearActivity()
 	s.mu.Unlock()
 	// Close the decode log so the dead session doesn't leak the open file or let a
 	// later TX write to a stale log (releaseCaptureLocked would early-return now
@@ -721,6 +745,15 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// msgs is empty so nothing is written).
 		s.decLog.Load().WriteRx(slot.StartUTC, msgs)
 
+		// Drive the manual sequencer (ADR 0031) BEFORE publishing the decode
+		// (review 2026-07-20 #2): the published decode is actionable — a start
+		// request it triggers could otherwise race the still-pending OnSlot for
+		// the same slot and double-drive it. Sequencer-first also spends the
+		// late-window budget on the rung instead of on occupancy math. No-op
+		// when no QSO is active; on our own TX slot the decodes are empty and
+		// the parity-matched handler bails.
+		s.seq.OnSlot(ref, msgs, time.Now().UTC())
+
 		// Publish the decode feed every slot (empty on our TX slots) so the SPA's slot
 		// clock stays live; the decode + occupancy publish independent SSE events on
 		// one stream, order between them doesn't matter to the SPA.
@@ -741,12 +774,6 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 			}
 			s.hub.publish(hubEvent{name: EventOccupancy, payload: rep})
 		}
-
-		// Drive the manual sequencer (ADR 0031): feed this slot's decodes to the
-		// active exchange and let it transmit the next rung in the current
-		// (opposite-parity) slot. No-op when no QSO is active; on our own TX slot the
-		// decodes are empty and the parity-matched handler bails.
-		s.seq.OnSlot(ref, msgs, time.Now().UTC())
 
 		s.log.DebugWith().
 			Str("slot", ref.StartUTC).

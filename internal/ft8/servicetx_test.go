@@ -22,7 +22,7 @@ func TestStartTransmission_PanicClearsInFlight(t *testing.T) {
 	defer func() { _ = s.ArmTx(false) }()
 
 	done := make(chan bool, 1)
-	err := s.startTransmission("CQ G0XYZ IO91", 1500, 0,
+	err := s.startTransmission("CQ G0XYZ IO91", 1500, 0, nil,
 		func(context.Context, *TxController) error { panic("boom in fn") },
 		func(ok bool) { done <- ok })
 	require.NoError(t, err, "launch succeeds; the panic happens in the tracked goroutine")
@@ -367,4 +367,73 @@ func TestTxSlotTracking(t *testing.T) {
 	if s.wasTxSlot("") {
 		t.Fatal(`wasTxSlot("") should be false`)
 	}
+}
+
+// TestStartTransmission_SupersededCommitRefused pins the review 2026-07-20 #1
+// commit gate: a rung whose session generation went stale between the sequencer
+// dropping its lock and the commit taking txMu (an Abandon in that gap finds no
+// txCancel to cancel) must be REFUSED at commit — no goroutine, no in-flight
+// state, no RF — rather than keying a transmission for a dead session.
+func TestStartTransmission_SupersededCommitRefused(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	require.NoError(t, s.ArmTx(true))
+	defer func() { _ = s.ArmTx(false) }()
+
+	ran := false
+	err := s.startTransmission("CQ G0XYZ IO91", 1500, 0,
+		func() bool { return false }, // stale generation — Abandon won the race
+		func(context.Context, *TxController) error { ran = true; return nil },
+		nil)
+	require.ErrorIs(t, err, ErrTxSuperseded)
+	require.False(t, ran, "fn must never run for a refused commit")
+
+	s.txMu.Lock()
+	inFlight, cancelSet := s.txInFlight, s.txCancel != nil
+	s.txMu.Unlock()
+	require.False(t, inFlight, "refused commit leaves nothing in flight")
+	require.False(t, cancelSet, "refused commit registers no txCancel")
+}
+
+// TestStartQso_RejectedStartKeepsExchangePath pins review 2026-07-20 #5: the
+// antenna-path reset happens only on an ACCEPTED start — a rejected duplicate
+// StartQso must not flip the active exchange's long-path choice back to short.
+func TestStartQso_RejectedStartKeepsExchangePath(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	require.NoError(t, s.ArmTx(true))
+	defer func() { _ = s.ArmTx(false) }()
+
+	// theirSlot = the CURRENT wall-clock slot, so its parity matches "now" and
+	// fireOpening declines to fire (no TX goroutine — deterministic test).
+	theirSlot := slotStart(time.Now().UTC()).Format(time.RFC3339)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", theirSlot, 1500, 14.074))
+	s.SetExchangePath("L") // operator picks long path for the ACTIVE exchange
+
+	err := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31", theirSlot, 1500, 14.074)
+	require.Error(t, err, "second start while a QSO is active is rejected")
+	require.Equal(t, antPathLong, s.exchangePath(),
+		"a rejected start must not reset the active exchange's path")
+
+	s.AbandonQso()
+}
+
+// TestOnComplete_ConsumesThenResetsPath pins review 2026-07-20 #5 (caller-mode
+// half): each logged contact consumes the operator's path choice and resets it,
+// so a Call-CQ run's NEXT answerer does not inherit the previous contact's
+// long-path selection.
+func TestOnComplete_ConsumesThenResetsPath(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	logged := make(chan CompletedQso, 1)
+	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged <- c })
+
+	s.SetExchangePath("L")
+	s.seq.onComplete(CompletedQso{TheirCall: "K1ABC"})
+
+	select {
+	case c := <-logged:
+		require.Equal(t, antPathLong, c.AntPath, "the completed contact carries the choice")
+	case <-time.After(time.Second):
+		t.Fatal("qsoLogger not invoked")
+	}
+	require.Equal(t, antPathShort, s.exchangePath(),
+		"the choice is consumed — the next contact starts from the short-path default")
 }

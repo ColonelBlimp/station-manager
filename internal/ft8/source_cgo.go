@@ -96,7 +96,11 @@ func (m *malgoSource) pump(ctx context.Context) {
 }
 
 // Stop cancels the pump, releases the device, and waits for the pump to drain.
-// Idempotent and safe even if Start failed or was never called.
+// Idempotent and safe even if Start failed or was never called. The capture
+// pointer is cleared after Close so a second Stop — possible when both capture
+// goroutines die at once and each runs the unexpected-exit cleanup (review
+// 2026-07-20 #4) — cannot double-Close the CGO device. Callers serialise Stop
+// under the Service mutex; the nil-out is not itself concurrency-safe.
 func (m *malgoSource) Stop() error {
 	if m.cap == nil {
 		return nil
@@ -105,6 +109,7 @@ func (m *malgoSource) Stop() error {
 		m.cancel()
 	}
 	err := m.cap.Close() // closes capture.Samples()
+	m.cap = nil
 	if m.done != nil {
 		<-m.done
 	}

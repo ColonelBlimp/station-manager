@@ -129,9 +129,13 @@ func (c *TxController) transmitAligned(ctx context.Context, waveform []int16, bo
 		return errors.New(op).WithErr(err).WithMsg("wait for slot start")
 	}
 
-	skip := int(audioStart.Sub(nominal).Seconds() * float64(goft8.SampleRate))
-	wave := truncateHead(waveform, skip)
-	if len(wave) == 0 {
+	// Feasibility ESTIMATE only — the authoritative head-truncation happens in
+	// transmit(), AFTER KeyTx + the settle lead (review 2026-07-20 #3): CAT
+	// keying latency (mode switch, serial round-trip) postdates this point, so
+	// truncating here would start audio late relative to the computed timebase
+	// and shift every symbol off its DT. This pre-key check only avoids keying
+	// PTT for a rung that already has nothing left to send.
+	if skip := int(audioStart.Sub(nominal).Seconds() * float64(goft8.SampleRate)); skip >= len(waveform) {
 		return errors.New(op).WithMsg("too late in slot; nothing left to transmit")
 	}
 	// Record this slot ONLY after PTT keys successfully (onKeyed, below) — not here.
@@ -139,7 +143,7 @@ func (c *TxController) transmitAligned(ctx context.Context, waveform []int16, bo
 	// wait) means no RF went out, so the slot is a normal RX slot; marking it would
 	// make decodeLoop wrongly skip its occupancy. onTransmit records the slot so the
 	// decode loop skips its own-TX audio — see the TxController.onTransmit doc.
-	return c.transmit(ctx, wave, func() {
+	return c.transmit(ctx, waveform, nominal, func() {
 		if c.onTransmit != nil {
 			c.onTransmit(boundary)
 		}
@@ -149,11 +153,16 @@ func (c *TxController) transmitAligned(ctx context.Context, waveform []int16, bo
 // transmit is the key → play → unkey core, independent of slot timing so it is
 // unit-testable. onKeyed, if non-nil, is invoked exactly once immediately after
 // KeyTx succeeds (before audio) — the caller uses it to mark the slot only once
-// RF is actually going out. PTT is unkeyed on EVERY return path (success, play
-// error, or ctx cancel) via a deferred guard, on a background context so a
-// cancelled parent ctx can't skip the unkey — the bridge's auto-off backstop is
-// the further safety net.
-func (c *TxController) transmit(ctx context.Context, waveform []int16, onKeyed func()) error {
+// RF is actually going out. nominal, when non-zero, is the waveform's symbol-0
+// time on the synchronised timebase: the head is truncated against the ACTUAL
+// post-key clock (review 2026-07-20 #3 — KeyTx's CAT latency, mode switch and
+// scheduler delay land between the caller's estimate and the first sample, and
+// an untruncated head would shift every symbol off its computed DT). A zero
+// nominal plays the waveform as-is. PTT is unkeyed on EVERY return path
+// (success, play error, or ctx cancel) via a deferred guard, on a background
+// context so a cancelled parent ctx can't skip the unkey — the bridge's
+// auto-off backstop is the further safety net.
+func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal time.Time, onKeyed func()) error {
 	const op errors.Op = "ft8.TxController.transmit"
 
 	if err := c.keyer.KeyTx(ctx, c.mode); err != nil {
@@ -179,7 +188,21 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, onKeyed f
 		return errors.New(op).WithErr(err).WithMsg("pre-key settle")
 	}
 
-	done, err := c.player.Play(waveform)
+	// Authoritative head-truncation, against the clock the first sample will
+	// actually start on (we are about to Play). Symbol 0 belongs at nominal;
+	// whatever of the waveform now lies in the past is dropped so the remainder
+	// stays on the synchronised timebase.
+	wave := waveform
+	if !nominal.IsZero() {
+		if late := time.Since(nominal); late > 0 {
+			wave = truncateHead(waveform, int(late.Seconds()*float64(goft8.SampleRate)))
+		}
+		if len(wave) == 0 {
+			return errors.New(op).WithMsg("too late after keying; nothing left to transmit")
+		}
+	}
+
+	done, err := c.player.Play(wave)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("play waveform")
 	}

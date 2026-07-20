@@ -152,6 +152,14 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		s.publish(st)
 		return
 	}
+	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
+	// review 2026-07-20 #2); see onSlotAnswering.
+	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		st := s.statusLocked()
+		s.mu.Unlock()
+		s.publish(st)
+		return
+	}
 
 	// Repeat cap / off-ramp: pre-RR73 rungs are capped; on silence ABANDON (unlike
 	// Call-CQ, which resumes calling CQ). The one-shot RR73 (cqRogering) is uncapped —
@@ -179,7 +187,8 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		s.repeats++
 	}
 
-	transmit, offset, dial := s.transmit, s.offsetHz, s.dialFreqMHz
+	s.lastTxSlot = curStart.Add(SlotDuration)
+	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	repeats := s.repeats
 	var completed *CompletedQso
 	if confirming {
@@ -229,6 +238,10 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 
 	if err := transmit(msg, offset, dial, onDone); err != nil {
+		if stderrors.Is(err, ErrTxSuperseded) { // session gone; idle already published
+			s.log.InfoWith().Str("msg", msg).Msg("ft8 seq: rung superseded before commit; dropped")
+			return
+		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: working caller rung transmit failed")
 		// onDone never fired, so a final-rung QSO is correctly not logged. Terminal
 		// errors abandon; transient ones leave the contact for the next slot to retry.
@@ -360,6 +373,14 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.publish(st)
 		return
 	}
+	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
+	// review 2026-07-20 #2); see onSlotAnswering.
+	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		st := s.statusLocked()
+		s.mu.Unlock()
+		s.publish(st)
+		return
+	}
 
 	confirming := s.fdWork.State == fdwRogering
 	if !confirming {
@@ -384,7 +405,8 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.repeats++
 	}
 
-	transmit, offset, dial := s.transmit, s.offsetHz, s.dialFreqMHz
+	s.lastTxSlot = curStart.Add(SlotDuration)
+	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	repeats := s.repeats
 	var completed *CompletedQso
 	if confirming {
@@ -428,6 +450,10 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 
 	if err := transmit(msg, offset, dial, onDone); err != nil {
+		if stderrors.Is(err, ErrTxSuperseded) { // session gone; idle already published
+			s.log.InfoWith().Str("msg", msg).Msg("ft8 seq: rung superseded before commit; dropped")
+			return
+		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: working caller (FD) rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
 			s.Abandon()

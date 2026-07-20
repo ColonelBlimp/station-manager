@@ -43,7 +43,10 @@ func (r *seqRecorder) fireOnDone(ok bool) {
 // ("queued"), then fires onDone with the on-air outcome. Tests fire onDone
 // synchronously (the real path fires it from the tx goroutine); ok=true unless
 // asyncFail is set, so the final-rung completion path is exercised either way.
-func (r *seqRecorder) transmit(msg string, off, dialMHz float64, onDone func(ok bool)) error {
+// transmit matches the sequencer's injected shape; gen (the rung's session
+// generation, checked by the real Service at commit) is irrelevant to these
+// recorder-based tests and ignored.
+func (r *seqRecorder) transmit(msg string, off, dialMHz float64, _ uint64, onDone func(ok bool)) error {
 	r.mu.Lock()
 	if r.transmitErr != nil {
 		err := r.transmitErr
@@ -367,4 +370,53 @@ func TestSequencer_SkipIfSilent_NeverFiresBeforeFirstTransmit(t *testing.T) {
 	driveTheir(s, 60, nil) // now a silent cycle on a sent rung → skip
 	require.Equal(t, []string{"K1ABC G0XYZ IO91"}, r.sentMsgs())
 	require.False(t, s.Active())
+}
+
+// TestSequencer_IsCurrentTracksAbandon pins the review 2026-07-20 #1 contract
+// the Service's commit gate relies on: the generation captured at rung-decision
+// time stays current until Abandon (or a new session) supersedes it.
+func TestSequencer_IsCurrentTracksAbandon(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+
+	s.mu.Lock()
+	gen := s.sessionGen
+	s.mu.Unlock()
+	require.True(t, s.isCurrent(gen), "live session generation is current")
+
+	s.Abandon()
+	require.False(t, s.isCurrent(gen),
+		"Abandon must supersede the generation so an in-gap rung is refused at commit")
+}
+
+// TestSequencer_ImmediateOpeningNotDoubleDriven pins review 2026-07-20 #2: the
+// opening that fireOpening sent in the click's current slot must not be
+// re-driven by the SAME slot's still-pending OnSlot — which would consume a
+// second repeat and, at max_repeats=1, abandon the session while the opening
+// transmission is still playing.
+func TestSequencer_ImmediateOpeningNotDoubleDriven(t *testing.T) {
+	r := &seqRecorder{}
+	s := newSequencer(r.transmit, r.publish, 1, nil) // max_repeats=1 — the sharp case
+
+	// CQ heard in the even slot at epoch 0; the operator clicks 1 s into OUR
+	// odd slot (epoch 16) → fireOpening fires immediately in slot 15.
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(16, 0).UTC()))
+	require.Len(t, r.sentMsgs(), 1, "opening fired immediately")
+	require.True(t, s.Active())
+
+	// The same slot's OnSlot was still pending when the session started (its
+	// decode had just been published): identical slot, no reply from them yet.
+	s.OnSlot(SlotRefFromTime(time.Unix(0, 0).UTC()),
+		[]goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)}, time.Unix(16, 0).UTC())
+	require.True(t, s.Active(),
+		"same-slot OnSlot must not consume a second repeat and abandon (review 2026-07-20 #2)")
+	require.Len(t, r.sentMsgs(), 1, "no second transmission in the same slot")
+
+	// The next cycle proceeds normally: their report advances the exchange.
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	require.True(t, s.Active())
+	require.Len(t, r.sentMsgs(), 2, "roger-report transmitted on the following cycle")
 }

@@ -399,3 +399,47 @@ func TestSetMaxRepeats(t *testing.T) {
 	var nilSvc *Service
 	require.NotPanics(t, func() { nilSvc.SetMaxRepeats(3) })
 }
+
+// killStream closes the live sample channel WITHOUT counting a Stop — the
+// shape of a capture stream dying underneath the scheduler (device unplug,
+// backend fault) rather than an orderly release.
+func (f *fakeSource) killStream() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ch != nil {
+		close(f.ch)
+		f.ch = nil
+	}
+}
+
+// TestCapture_UnexpectedLoopExitStopsSource pins review 2026-07-20 #4: when the
+// capture loop dies on its own (stream end with the run context still live),
+// the exit path must Stop the source — before the fix, capturing was flagged
+// false without a Stop, releaseCaptureLocked then no-opped forever, and the
+// CGO source kept the audio device acquired (mic held by a dead session, and
+// the next acquire overwrote the un-Closed capture).
+func TestCapture_UnexpectedLoopExitStopsSource(t *testing.T) {
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub := s.Subscribe()
+	require.Eventually(t, func() bool { return src.startCount() == 1 }, time.Second, 5*time.Millisecond,
+		"subscriber acquires capture")
+
+	src.killStream() // stream dies under the scheduler — run context still live
+
+	require.Eventually(t, func() bool { return src.stopCount() >= 1 }, 2*time.Second, 5*time.Millisecond,
+		"the unexpected-exit path must Stop the source (mic released)")
+
+	// Recovery is by design "re-open the FT8 view": acquisition happens on the
+	// 0→1 subscriber transition, so the dead session's subscriber leaves and a
+	// reconnect acquires a fresh session.
+	unsub()
+	_, unsub2 := s.Subscribe()
+	defer unsub2()
+	require.Eventually(t, func() bool { return src.startCount() >= 2 }, 2*time.Second, 5*time.Millisecond,
+		"a reconnecting subscriber re-acquires after the dead session was cleaned up")
+}

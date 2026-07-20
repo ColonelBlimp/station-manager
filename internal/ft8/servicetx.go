@@ -60,6 +60,12 @@ var (
 	ErrTxNotArmed = stderrors.New("ft8: transmit not armed")
 	// ErrTxInFlight: a send was requested while a transmission is already running.
 	ErrTxInFlight = stderrors.New("ft8: a transmission is already in flight")
+	// ErrTxSuperseded: a sequencer rung reached the transmission commit after its
+	// session was abandoned or replaced (the rung is decided under the sequencer's
+	// lock but committed under txMu — an Abandon in that gap finds no txCancel to
+	// cancel, so the commit itself must refuse; review 2026-07-20 #1). Expected
+	// during an operator Abandon — callers drop the rung quietly.
+	ErrTxSuperseded = stderrors.New("ft8: transmission superseded by session change")
 	// ErrTxBadMessage: the message is not an encodable standard FT8 message.
 	ErrTxBadMessage = stderrors.New("ft8: not an encodable standard message")
 	// ErrTxBadOffset: the requested TX audio offset is non-finite or sits outside
@@ -155,8 +161,13 @@ func (s *Service) armTx() error {
 	s.txDevice = player
 	s.txCtrl = NewTxController(s.keyer, player, s.txMode(), s.log)
 	// Record each keyed slot so decodeLoop skips occupancy for it (the slot's
-	// captured audio is our own TX — see markTxSlot / the self-decode filter).
-	s.txCtrl.onTransmit = s.markTxSlot
+	// captured audio is our own TX — see markTxSlot / the self-decode filter),
+	// and write the decode-log TX line — HERE, not at commit, so the log records
+	// only transmissions whose PTT actually keyed (review 2026-07-20 #6).
+	s.txCtrl.onTransmit = func(boundary time.Time) {
+		s.markTxSlot(boundary)
+		s.writeTxLogLine()
+	}
 	s.txArmed = true
 	s.txLastErr = ""
 	s.txMu.Unlock()
@@ -178,6 +189,19 @@ func (s *Service) markTxSlot(boundary time.Time) {
 	s.txSlots[s.txSlotIx] = utc
 	s.txSlotIx = (s.txSlotIx + 1) % len(s.txSlots)
 	s.txSlotMu.Unlock()
+}
+
+// writeTxLogLine emits the JTDX ALL.TXT Transmitting line for the in-flight
+// transmission. Wired into txCtrl.onTransmit, so it runs only once PTT has
+// actually keyed (review 2026-07-20 #6) — a cancelled wait or failed key writes
+// nothing, and the timestamp is the real key time rather than commit time
+// (up to ~15 s early for a manual next-slot CQ). Runs on the TX goroutine with
+// txMu free. nil-safe no-op when the decode log is off.
+func (s *Service) writeTxLogLine() {
+	s.txMu.Lock()
+	msg, offset, dial := s.txMessage, s.txOffsetHz, s.txDialMHz
+	s.txMu.Unlock()
+	s.decLog.Load().WriteTx(time.Now().UTC(), dial, offset, msg)
 }
 
 // wasTxSlot reports whether startUTC is one of the recent slots we transmitted in.
@@ -300,7 +324,8 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	// nominal +0.5 s — right for a manually-initiated CQ (we pick our own slot/
 	// parity, so we start on time with no truncation). dialMHz 0 — a manual transmit
 	// has no session dial, so the decode-log TX line omits the band.
-	return s.startTransmission(message, offsetHz, 0, func(ctx context.Context, ctrl *TxController) error {
+	// nil commitOK — a manual transmit has no sequencer session to validate.
+	return s.startTransmission(message, offsetHz, 0, nil, func(ctx context.Context, ctrl *TxController) error {
 		return ctrl.TransmitSlot(ctx, message, offsetHz)
 	}, nil)
 }
@@ -314,12 +339,16 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 // finishes, with ok=true only on actual success (a cancel from disarm/stop is
 // ok=false). The sequencer uses it to log a completed QSO only after the final
 // rung truly transmitted — never on "queued" alone (review H1).
-func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, onDone func(ok bool)) error {
+func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, gen uint64, onDone func(ok bool)) error {
 	const op errors.Op = "ft8.Service.seqTransmit"
 	if _, err := EncodeWaveform(message, offsetHz); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
-	return s.startTransmission(message, offsetHz, dialMHz, func(ctx context.Context, ctrl *TxController) error {
+	// commitOK re-validates the rung's session generation under txMu, closing the
+	// unlock→commit gap an Abandon can land in (review 2026-07-20 #1; see
+	// ErrTxSuperseded and the startTransmission commit section).
+	commitOK := func() bool { return s.seq.isCurrent(gen) }
+	return s.startTransmission(message, offsetHz, dialMHz, commitOK, func(ctx context.Context, ctrl *TxController) error {
 		return ctrl.TransmitCurrentSlot(ctx, message, offsetHz)
 	}, onDone)
 }
@@ -333,6 +362,7 @@ func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, onDone 
 func (s *Service) startTransmission(
 	message string,
 	offsetHz, dialMHz float64,
+	commitOK func() bool,
 	fn func(ctx context.Context, ctrl *TxController) error,
 	onDone func(ok bool),
 ) error {
@@ -358,19 +388,29 @@ func (s *Service) startTransmission(
 		s.txMu.Unlock()
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
+	// Session-generation commit gate (review 2026-07-20 #1), checked WHILE
+	// HOLDING txMu so it is atomic with the txCancel registration below:
+	// AbandonQso bumps the generation first and reads txCancel under txMu
+	// second, so a stale rung either sees the bumped generation here (refused)
+	// or registered txCancel before Abandon's read (cancelled) — there is no
+	// third interleaving. Lock order txMu→seq.mu; nothing takes them reversed.
+	if commitOK != nil && !commitOK() {
+		s.txMu.Unlock()
+		return errors.New(op).WithErr(ErrTxSuperseded)
+	}
 	ctrl := s.txCtrl
 	txCtx, cancel := context.WithCancel(base)
 	s.txCancel = cancel
 	s.txInFlight = true
 	s.txMessage = message
 	s.txOffsetHz = offsetHz
+	// dialMHz is the accepted session's dial, passed in by the caller (0 for a
+	// manual transmit) — stashed for the decode-log TX line, which is written
+	// from onTransmit only once PTT actually keys (review 2026-07-20 #6: at
+	// commit, a manual CQ hasn't keyed for up to ~15 s, and a cancelled or
+	// failed key would still have logged a Transmitting line).
+	s.txDialMHz = dialMHz
 	s.txLastErr = ""
-
-	// JTDX ALL.TXT TX line (ft8.decode_log) — stamped at commit (within ~1 s of the
-	// on-air key for a sequencer rung). dialMHz is the accepted session's dial,
-	// passed in by the caller (0 for a manual transmit) — no shared mutable state, so
-	// a rejected concurrent Start* can't relabel this rung. nil-safe no-op when off.
-	s.decLog.Load().WriteTx(time.Now().UTC(), dialMHz, offsetHz, message)
 
 	// Launch UNDER txMu (review 2026-06-19 M1): GoTracked does txWg.Add(1)
 	// synchronously, so doing it while we still hold txMu means a concurrent
@@ -397,6 +437,7 @@ func (s *Service) startTransmission(
 			s.txInFlight = false
 			s.txMessage = ""
 			s.txOffsetHz = 0
+			s.txDialMHz = 0
 			s.txCancel = nil
 			if failed {
 				s.txLastErr = "ft8_tx_failed"
@@ -454,10 +495,15 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	if !ready {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
-	s.resetExchangePath()
 	// The decode-log TX dial comes from the sequencer's accepted session (threaded
 	// through seqTransmit), so a rejected start here can't relabel an active rung.
-	return s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+	// Antenna path resets only on an ACCEPTED start (review 2026-07-20 #5): a
+	// rejected duplicate start must not flip the active QSO's choice.
+	if err := s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
+		return err
+	}
+	s.resetExchangePath()
+	return nil
 }
 
 // StartQsoFd begins a manual answer-a-CQ-FD exchange (ARRL Field Day, search &
@@ -489,8 +535,12 @@ func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int,
 	if !ready {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
+	// Antenna path resets only on an ACCEPTED start (review 2026-07-20 #5).
+	if err := s.seq.StartQsoFd(ourCall, class, section, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
+		return err
+	}
 	s.resetExchangePath()
-	return s.seq.StartQsoFd(ourCall, class, section, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+	return nil
 }
 
 // StartCallCq begins a sequenced Call-CQ session (ADR 0033): we call CQ in our slot
@@ -526,8 +576,12 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	if !ready {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
+	// Antenna path resets only on an ACCEPTED start (review 2026-07-20 #5).
+	if err := s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, txParity, time.Now().UTC()); err != nil {
+		return err
+	}
 	s.resetExchangePath()
-	return s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, txParity, time.Now().UTC())
+	return nil
 }
 
 // StartWorkCaller begins working a station that is calling us (ADR 0033 "work a
@@ -555,8 +609,12 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 	if !ready {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
+	// Antenna path resets only on an ACCEPTED start (review 2026-07-20 #5).
+	if err := s.seq.StartWorkCaller(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
+		return err
+	}
 	s.resetExchangePath()
-	return s.seq.StartWorkCaller(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+	return nil
 }
 
 // StartWorkCallerFd begins working a station that called us with a Field Day exchange
@@ -587,9 +645,13 @@ func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, t
 	if !ready {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
+	// Antenna path resets only on an ACCEPTED start (review 2026-07-20 #5).
+	if err := s.seq.StartWorkCallerFd(ourCall, class, section, theirCall, theirGrid, theirClass, theirSection,
+		theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
+		return err
+	}
 	s.resetExchangePath()
-	return s.seq.StartWorkCallerFd(ourCall, class, section, theirCall, theirGrid, theirClass, theirSection,
-		theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+	return nil
 }
 
 // StartQsoT4 begins a reduced type-4 answer-a-CQ exchange (ADR 0048): the operator picked
@@ -614,8 +676,12 @@ func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int,
 	if !ready {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
+	// Antenna path resets only on an ACCEPTED start (review 2026-07-20 #5).
+	if err := s.seq.StartQsoT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
+		return err
+	}
 	s.resetExchangePath()
-	return s.seq.StartQsoT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+	return nil
 }
 
 // StartWorkCallerT4 begins working a NONSTANDARD/compound station that called us (the
@@ -639,8 +705,12 @@ func (s *Service) StartWorkCallerT4(ourCall, theirCall, theirGrid string, theirS
 	if !ready {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
+	// Antenna path resets only on an ACCEPTED start (review 2026-07-20 #5).
+	if err := s.seq.StartWorkCallerT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
+		return err
+	}
 	s.resetExchangePath()
-	return s.seq.StartWorkCallerT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC())
+	return nil
 }
 
 // SetQsoLogger injects the sink that logs a completed FT8 exchange (ADR 0029

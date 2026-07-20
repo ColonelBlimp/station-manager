@@ -134,6 +134,14 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 		s.publish(st)
 		return
 	}
+	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
+	// review 2026-07-20 #2); see onSlotAnswering.
+	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		st := s.statusLocked()
+		s.mu.Unlock()
+		s.publish(st)
+		return
+	}
 
 	confirming := s.t4Ex.State == t4Confirming
 	if !confirming {
@@ -158,7 +166,8 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 		s.repeats++
 	}
 
-	transmit, offset, dial := s.transmit, s.offsetHz, s.dialFreqMHz
+	s.lastTxSlot = curStart.Add(SlotDuration)
+	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	repeats := s.repeats
 	var completed *CompletedQso
 	if confirming {
@@ -200,6 +209,10 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	}
 
 	if err := transmit(msg, offset, dial, onDone); err != nil {
+		if stderrors.Is(err, ErrTxSuperseded) { // session gone; idle already published
+			s.log.InfoWith().Str("msg", msg).Msg("ft8 seq: rung superseded before commit; dropped")
+			return
+		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: type-4 rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
 			s.Abandon()
@@ -315,8 +328,17 @@ func (s *Sequencer) onSlotWorkingT4(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.publish(st)
 		return
 	}
+	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
+	// review 2026-07-20 #2); see onSlotAnswering.
+	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		st := s.statusLocked()
+		s.mu.Unlock()
+		s.publish(st)
+		return
+	}
 
-	transmit, offset, dial := s.transmit, s.offsetHz, s.dialFreqMHz
+	s.lastTxSlot = curStart.Add(SlotDuration)
+	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	c := s.completedT4WorkQsoLocked()
 	gen := s.sessionGen
 	st := s.statusLocked()
@@ -351,6 +373,10 @@ func (s *Sequencer) onSlotWorkingT4(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 
 	if err := transmit(msg, offset, dial, onDone); err != nil {
+		if stderrors.Is(err, ErrTxSuperseded) { // session gone; idle already published
+			s.log.InfoWith().Str("msg", msg).Msg("ft8 seq: rung superseded before commit; dropped")
+			return
+		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: type-4 work rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
 			s.Abandon()

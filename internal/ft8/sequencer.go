@@ -246,21 +246,56 @@ type Sequencer struct {
 	// log a QSO or publish idle over a newer session (review follow-up M1).
 	sessionGen uint64
 
+	// lastTxSlot is the start of the TX slot the most recent rung fired in.
+	// StartQso's immediate fireOpening and the SAME slot's pending OnSlot can
+	// otherwise both drive one slot (review 2026-07-20 #2): the opening fires,
+	// then OnSlot consumes another repeat for the identical slot — with
+	// max_repeats=1 that abandons the session while the opening is still
+	// playing. OnSlot's transmit sections skip a slot already fired.
+	lastTxSlot time.Time
+
 	// transmit sends a rung. dialMHz is the active session's dial (from this
 	// sequencer's own accepted state), passed through so the decode-log TX line
 	// records the correct band without the Service holding mutable per-session dial
 	// state (review: a rejected concurrent Start* must not relabel an active rung).
-	// onDone (optional) fires from the transmit goroutine once the transmission
-	// finishes — ok=true only on a clean on-air success. The final rung passes a
-	// completion closure so the QSO is logged ONLY after the 73/RR73 actually
-	// transmitted, never on "queued" (review H1).
-	transmit   func(message string, offsetHz, dialMHz float64, onDone func(ok bool)) error
+	// gen is the sessionGen captured at rung-decision time — the Service re-checks
+	// it at transmission COMMIT (under its own txMu, via isCurrent), because the
+	// rung sites call transmit after dropping s.mu: an Abandon landing in that gap
+	// found no txCancel to cancel yet, and the stale rung keyed RF after abandon
+	// returned (review 2026-07-20 #1). onDone (optional) fires from the transmit
+	// goroutine once the transmission finishes — ok=true only on a clean on-air
+	// success. The final rung passes a completion closure so the QSO is logged
+	// ONLY after the 73/RR73 actually transmitted, never on "queued" (review H1).
+	transmit   func(message string, offsetHz, dialMHz float64, gen uint64, onDone func(ok bool)) error
 	publish    func(QsoStatus)
 	onComplete func(CompletedQso)
 	log        logging.Logger
 }
 
-func newSequencer(transmit func(string, float64, float64, func(ok bool)) error, publish func(QsoStatus), maxRepeats int, log logging.Logger) *Sequencer {
+// transmitLocked binds the CURRENT session generation into a rung-shaped
+// transmit closure. Rung sites capture it under s.mu (in place of s.transmit)
+// so the commit-time isCurrent check compares against the generation the rung
+// was decided for — not whatever is current when the closure finally runs.
+func (s *Sequencer) transmitLocked() func(message string, offsetHz, dialMHz float64, onDone func(ok bool)) error {
+	gen := s.sessionGen
+	tx := s.transmit
+	return func(message string, offsetHz, dialMHz float64, onDone func(ok bool)) error {
+		return tx(message, offsetHz, dialMHz, gen, onDone)
+	}
+}
+
+// isCurrent reports whether gen is still the live session generation. The
+// Service calls this while holding its txMu at transmission commit — lock
+// order txMu→s.mu, safe because no sequencer path holds s.mu while calling
+// into the Service (rung sites drop s.mu before transmit; callbacks unlock
+// before onComplete/publish).
+func (s *Sequencer) isCurrent(gen uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionGen == gen
+}
+
+func newSequencer(transmit func(string, float64, float64, uint64, func(ok bool)) error, publish func(QsoStatus), maxRepeats int, log logging.Logger) *Sequencer {
 	if log == nil {
 		log = logging.Noop()
 	}
@@ -544,6 +579,17 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.publish(st)
 		return
 	}
+	// A rung already went out in this TX slot (a Start*'s immediate fireOpening
+	// racing this same slot's pending OnSlot — review 2026-07-20 #2): don't
+	// consume a repeat or key again; the next cycle drives the exchange. The
+	// dedup is per physical slot, not per session — two transmissions in one
+	// slot are impossible regardless of session identity.
+	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		st := s.statusLocked()
+		s.mu.Unlock()
+		s.publish(st)
+		return
+	}
 
 	confirming := s.ex.State == txConfirming
 	if !confirming {
@@ -571,7 +617,8 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.repeats++
 	}
 
-	transmit, offset, dial := s.transmit, s.offsetHz, s.dialFreqMHz
+	s.lastTxSlot = curStart.Add(SlotDuration)
+	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	repeats := s.repeats
 	var completed *CompletedQso
 	if confirming {
@@ -633,6 +680,13 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 
 	if err := transmit(msg, offset, dial, onDone); err != nil {
+		// A superseded commit means Abandon (or a new session) won the race while
+		// this rung was between s.mu and the Service's txMu — the session is gone
+		// and idle was already published; republishing st would flash it active.
+		if stderrors.Is(err, ErrTxSuperseded) {
+			s.log.InfoWith().Str("msg", msg).Msg("ft8 seq: rung superseded before commit; dropped")
+			return
+		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: rung transmit failed")
 		// onDone never fired (the goroutine didn't start). ErrTxNotArmed (TX gone)
 		// and ErrTxBadMessage (will never encode — review M1) are terminal. Anything
@@ -708,6 +762,14 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		s.publish(st)
 		return
 	}
+	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
+	// review 2026-07-20 #2); see onSlotAnswering.
+	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		st := s.statusLocked()
+		s.mu.Unlock()
+		s.publish(st)
+		return
+	}
 
 	confirming := s.fdEx.State == fdRogering
 	if !confirming {
@@ -732,7 +794,8 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		s.repeats++
 	}
 
-	transmit, offset, dial := s.transmit, s.offsetHz, s.dialFreqMHz
+	s.lastTxSlot = curStart.Add(SlotDuration)
+	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	repeats := s.repeats
 	var completed *CompletedQso
 	if confirming {
@@ -774,6 +837,10 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 	}
 
 	if err := transmit(msg, offset, dial, onDone); err != nil {
+		if stderrors.Is(err, ErrTxSuperseded) { // session gone; idle already published
+			s.log.InfoWith().Str("msg", msg).Msg("ft8 seq: FD rung superseded before commit; dropped")
+			return
+		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: FD rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
 			s.Abandon()
@@ -924,7 +991,13 @@ func (s *Sequencer) fireOpening(now time.Time) {
 	}
 
 	s.repeats++
-	transmit, offset, dial, repeats := s.transmit, s.offsetHz, s.dialFreqMHz, s.repeats
+	// Mark this TX slot consumed BEFORE dropping the lock: the same slot's
+	// OnSlot may already be pending (its decode was published just before this
+	// session started), and without the mark it would consume a second repeat —
+	// with max_repeats=1, abandoning the session while the opening is still
+	// playing (review 2026-07-20 #2).
+	s.lastTxSlot = curStart
+	transmit, offset, dial, repeats := s.transmitLocked(), s.offsetHz, s.dialFreqMHz, s.repeats
 	st := s.statusLocked()
 	s.mu.Unlock()
 
@@ -933,6 +1006,10 @@ func (s *Sequencer) fireOpening(now time.Time) {
 		Msg("ft8 seq: transmitting rung")
 	// The opening rung is always non-terminal (no completion), so no onDone.
 	if err := transmit(msg, offset, dial, nil); err != nil {
+		if stderrors.Is(err, ErrTxSuperseded) { // session gone; idle already published
+			s.log.InfoWith().Str("msg", msg).Msg("ft8 seq: opening superseded before commit; dropped")
+			return
+		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
 			s.Abandon() // TX gone / message can't encode — can't continue.
