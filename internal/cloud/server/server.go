@@ -46,8 +46,11 @@ type Server struct {
 // admits 16 (review 2026-07-20 #1): five slow authenticated exports would
 // exhaust the pool and starve health checks, uploads, and reconciliation.
 // 2 leaves 3 connections free in the worst case. An over-limit export gets an
-// immediate 503 + Retry-After; the restore client treats 5xx as transient and
-// retries.
+// immediate 503 + Retry-After. NB the restore client does NOT auto-retry —
+// forwarding/smcloud/export.go returns any non-200 as an error and ignores
+// Retry-After (only the push-path worker retries 5xx) — so a gated export
+// surfaces to the operator-run restore/drill as a failure to re-run, which is
+// acceptable for an operator-driven flow (review 2026-07-20 #1, round 12).
 const maxConcurrentExports = 2
 
 // exportRetryAfterSeconds is the Retry-After hint on a gated export — sized to
