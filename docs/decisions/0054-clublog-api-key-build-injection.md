@@ -55,23 +55,26 @@ Concretely:
   API key from `InjectedAPIKey` and ignores any stale `api` left in config (the
   `credentials` struct no longer has that field). The config-SPA add-forwarder
   descriptor drops the `api` field, so the operator is never prompted for it.
-- **A startup scrub removes a legacy key from disk.** Because the SPA no longer
-  renders the `api` field, an existing `config.json` that already carried the key
-  in `credentials.api` (plaintext) could otherwise keep it forever — defeating
-  the objective. So `cmd/smd` scrubs `api` out of every ClubLog forwarder's
-  credentials during the startup config-persist (`stripCredentialKey`), the same
-  `cfgSvc.Update` that persists the resolved UserAgent. Idempotent: a config
-  without the key is not rewritten for it.
+- **A startup scrub removes a legacy key from disk — but only when a baked
+  replacement exists.** Because the SPA no longer renders the `api` field, an
+  existing `config.json` that already carried the key in `credentials.api`
+  (plaintext) could otherwise keep it forever — defeating the objective. So
+  `cmd/smd` scrubs `api` out of every ClubLog forwarder's credentials during the
+  startup config-persist (`stripCredentialKey`), the same `cfgSvc.Update` that
+  persists the resolved UserAgent. **Guarded on `InjectedAPIKey != ""`**: a
+  keyless build must NOT delete the operator's only usable key (it would leave
+  ClubLog dead AND break a rollback to a pre-0054 binary that still requires
+  `credentials.api`). Idempotent: a config without the key is not rewritten.
 - **Absent key is fail-SOFT, not fail-loud.** A binary built without
   `CLUBLOG_API_KEY` (CI, a fresh clone, a musl/static fallback build) has an empty
   `InjectedAPIKey`. `clublog.New` must **still construct the forwarder** — because
   `spawnForwarderWorkers` aborts the ENTIRE daemon on a `Build()` error, so a
   missing build-time env var must never brick logging and every other forwarder.
-  Instead the forwarder short-circuits every `Submit` to a clear **Terminal**
-  with no network call (parallel to the 403 breaker), so ClubLog is inert while
-  the daemon runs and the operator sees "key not built in" on the ClubLog upload
-  rows. The CGO-free releasability gate and the test suite stay green with no key
-  present.
+  Instead the forwarder short-circuits every `Submit` to **Unreachable** with no
+  network call — NOT Terminal, which would permanently fail a queued backlog that
+  startup never retries. Unreachable keeps the rows queued (retried cheaply, no
+  I/O) so deploying a keyed build auto-ships them (no-data-loss, ADR 0038). The
+  CGO-free releasability gate and the test suite stay green with no key present.
 
 **A compiled binary is not source code**, so baking the key satisfies ClubLog's
 "do not publish it in source code" rule — the same posture WSJT-X and Log4OM take

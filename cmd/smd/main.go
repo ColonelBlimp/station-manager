@@ -226,13 +226,18 @@ func run() error {
 		// carried it in credentials.api in PLAINTEXT. The SPA no longer renders
 		// that field, so this startup scrub is the only path that clears it from
 		// disk — leaving it there defeats the whole point of moving the key out
-		// of config.
-		for i := range c.Forwarders {
-			if c.Forwarders[i].Type != clublog.Type {
-				continue
-			}
-			if scrubbed, ok := stripCredentialKey(c.Forwarders[i].Credentials, "api"); ok {
-				c.Forwarders[i].Credentials = scrubbed
+		// of config. GUARD: only scrub when THIS build actually has a baked
+		// replacement — a keyless build must not delete the operator's only
+		// usable key (and would break a rollback to a pre-0054 binary that still
+		// requires credentials.api).
+		if strings.TrimSpace(clublog.InjectedAPIKey) != "" {
+			for i := range c.Forwarders {
+				if c.Forwarders[i].Type != clublog.Type {
+					continue
+				}
+				if scrubbed, ok := stripCredentialKey(c.Forwarders[i].Credentials, "api"); ok {
+					c.Forwarders[i].Credentials = scrubbed
+				}
 			}
 		}
 		return nil

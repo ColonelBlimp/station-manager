@@ -389,4 +389,24 @@ describe('rigsState', () => {
         );
         expect(s1?.port).toBe('/dev/a1-CONCURRENT');
     });
+
+    it('Cancel on a concurrently-changed rig adopts the fresh server value, not the stale baseline', async () => {
+        // review Rigs-editor #7: a dirty draft keeps its old baseline across a
+        // refresh (by design). If the rig ALSO changed concurrently, Cancel must
+        // surface the current server value — not revert to the stale original.
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftPort('/dev/edited'); // dirty
+        // Simulate #applyFetched adopting a concurrent server change while this
+        // draft stayed dirty (a dirty draft's baseline is deliberately not rebased).
+        rigsState.rigs = [{ id: 1, model: 'ftdx10', port: '/dev/CONCURRENT' }];
+        rigsState.resetDraft(); // Cancel
+        expect(rigsState.draft?.port).toBe('/dev/CONCURRENT'); // adopts server truth
+        expect(rigsState.dirty).toBe(false); // re-baselined to it
+    });
 });

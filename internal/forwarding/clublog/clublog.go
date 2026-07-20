@@ -133,9 +133,10 @@ var UserAgent = "station-manager/dev"
 // the operator's local .env and the resulting private build (a compiled binary
 // is not source code). Empty when a build omits the key (CI, a fresh clone with
 // no .env): the forwarder STILL constructs (New must not error — a Build error
-// aborts the whole daemon in cmd/smd), but it short-circuits every Submit to a
-// clear Terminal with no network call, so Club Log is inert while logging and
-// every other forwarder keep running.
+// aborts the whole daemon in cmd/smd), but it short-circuits every Submit to
+// Unreachable with no network call, so Club Log rows stay safely queued (and
+// auto-ship once a keyed build is deployed) while logging and every other
+// forwarder keep running.
 var InjectedAPIKey string
 
 // DefaultRetry is the retry policy the daemon uses when a Club Log
@@ -312,14 +313,17 @@ func (f *Forwarder) Submit(
 		return forwarding.Result{Outcome: forwarding.OutcomeTransient, Err: err}
 	}
 
-	// No build-time API key: this binary can't authenticate. Short-circuit to a
-	// clear Terminal WITHOUT a network call (a keyless request would 403 and trip
-	// the breaker for the whole run). Terminal, not retryable — the fix is a
-	// rebuild with CLUBLOG_API_KEY, not waiting; the operator re-arms these rows
-	// after deploying a keyed build.
+	// No build-time API key: this binary can't authenticate. Short-circuit
+	// WITHOUT a network call (a keyless request would 403 and trip the breaker
+	// for the whole run). Return UNREACHABLE, not Terminal: a Terminal would mark
+	// every claimed row — including an existing backlog — permanently failed, and
+	// startup only recovers in_progress rows, so those QSOs would silently never
+	// reach ClubLog without a manual re-arm. Unreachable keeps the rows queued
+	// and retried (cheaply — no I/O) so deploying a keyed build auto-ships them,
+	// honouring the no-data-loss invariant (ADR 0038).
 	if f.noKey {
 		return forwarding.Result{
-			Outcome: forwarding.OutcomeTerminal,
+			Outcome: forwarding.OutcomeUnreachable,
 			Err: errors.New(op).WithMsg(
 				"ClubLog application API key not built into this binary; rebuild with CLUBLOG_API_KEY set in .env"),
 		}

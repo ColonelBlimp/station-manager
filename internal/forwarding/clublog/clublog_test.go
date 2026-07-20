@@ -159,11 +159,12 @@ func TestNew_MissingField_Errors(t *testing.T) {
 	}
 }
 
-func TestNew_NoBuildKey_ConstructsButSubmitFailsTerminal(t *testing.T) {
+func TestNew_NoBuildKey_ConstructsAndSubmitIsUnreachable(t *testing.T) {
 	// A binary built WITHOUT CLUBLOG_API_KEY (InjectedAPIKey empty) must still
 	// CONSTRUCT — a Build error would abort the whole daemon (spawnForwarderWorkers)
-	// on a missing build-time env var. Instead every Submit short-circuits to a
-	// clear Terminal WITHOUT a network call.
+	// on a missing build-time env var. Every Submit short-circuits WITHOUT a
+	// network call to Unreachable (retry-forever), so a backlog stays queued and
+	// auto-ships once a keyed build is deployed — not permanently failed.
 	setBuildKey(t, "")
 	fwd, err := New(types.ForwarderConfig{Name: "x", Type: Type, Credentials: validCreds(t)})
 	if err != nil {
@@ -180,8 +181,8 @@ func TestNew_NoBuildKey_ConstructsButSubmitFailsTerminal(t *testing.T) {
 	cl.realtime, cl.deleteURL = srv.URL, srv.URL
 
 	res := cl.Submit(context.Background(), sampleQso(), action.Insert, "")
-	if res.Outcome != forwarding.OutcomeTerminal {
-		t.Fatalf("outcome = %q, want terminal", res.Outcome)
+	if res.Outcome != forwarding.OutcomeUnreachable {
+		t.Fatalf("outcome = %q, want unreachable (queue preserved)", res.Outcome)
 	}
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "not built into this binary") {
 		t.Fatalf("err = %v, want 'not built into this binary'", res.Err)

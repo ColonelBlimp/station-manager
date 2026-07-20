@@ -147,12 +147,17 @@ class RigsState {
         this.#ensureDraft(); // keep an existing draft for this rig (don't discard edits)
     }
 
-    // Revert the CURRENT rig's draft to its baseline (the form it was cloned
-    // from), not to this.selected — which may have drifted on a refresh.
+    // Cancel: discard the operator's unsaved edits and adopt the CURRENT server
+    // value (this.selected), re-baselining to it. Not the old baseline — if the
+    // rig changed concurrently while this draft stayed dirty, #applyFetched kept
+    // the stale baseline, so reverting to it would show an obsolete value as
+    // clean; Cancel should surface what's actually on the server now (review
+    // 2026-07-20 Rigs-editor #7).
     resetDraft(): void {
         const id = this.selectedId;
-        if (id !== null && this.baselines[id]) {
-            this.drafts[id] = cloneRig(this.baselines[id]);
+        if (id !== null && this.selected) {
+            this.drafts[id] = cloneRig(this.selected);
+            this.baselines[id] = cloneRig(this.selected);
         }
     }
 

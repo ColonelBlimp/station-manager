@@ -201,9 +201,10 @@ from the gitignored `.env` (`CLUBLOG_API_KEY` → `clublog.InjectedAPIKey`,
 the same `-X` channel as `main.Version`). A compiled binary is not source
 code, so this honours ClubLog's rule. A binary built without the key still
 constructs the forwarder (a `Build()` error would abort the whole daemon)
-but short-circuits every upload to a Terminal outcome with no network call,
-so ClubLog is inert while logging keeps running. A legacy `api` left in an
-existing `config.json` is scrubbed from disk at startup. See ADR 0054.
+but short-circuits every upload to Unreachable with no network call, so the
+rows stay queued and auto-ship once a keyed build is deployed. A legacy `api`
+left in an existing `config.json` is scrubbed from disk at startup, but only
+when the running build has a baked key to replace it. See ADR 0054.
 
 **Why `action_filter` is explicit:** v1 uploaded everything to QRZ
 including deletes. Some destinations don't support updates or deletes
