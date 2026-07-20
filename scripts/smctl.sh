@@ -48,31 +48,70 @@ fail() {
     printf '%sSee:  journalctl --user -u %s -n 50 --no-pager%s\n' "$DIM" "$UNIT" "$RESET" >&2
 }
 
-is_active() { systemctl --user is-active --quiet "$UNIT"; }
+# unit_state echoes systemd's raw active-state (active|activating|inactive|
+# failed|deactivating|reloading) and always returns 0, so `set -e` and command
+# substitution are safe. `systemctl is-active` prints the state even when it
+# exits non-zero.
+unit_state() { systemctl --user is-active "$UNIT" 2>/dev/null || true; }
+
+# is_stopped is true only for a genuinely-down unit. A crash-looping unit sits
+# in activating(auto-restart) between attempts — where `systemctl is-active`
+# exits NON-ZERO yet the process keeps coming back — so a naive `! is-active`
+# gate would wrongly call it stopped and skip the actual stop, leaving the loop
+# running (review 2026-07-20; ported from smcloudctl #1).
+is_stopped() {
+    case "$(unit_state)" in
+        active|activating|reloading|deactivating) return 1 ;;
+        *) return 0 ;; # inactive | failed
+    esac
+}
+
+# settleSecs is how long start/restart watch the unit before declaring success.
+# The unit is Type=simple, so it reports "active" the instant the process forks
+# — BEFORE smd opens its SQLite DB, binds the HTTP port, and starts its
+# subsystems, any of which can fail (locked DB, port in use, bad config) and
+# crash-loop it via Restart=on-failure/RestartSec=5s (review 2026-07-20; ported
+# from smcloudctl #2). 8s comfortably exceeds one restart cycle, so a loop is
+# caught. Residual: a failure LATER than the window isn't caught — a health
+# probe would be the true readiness signal; this is the systemd-only best
+# effort.
+settleSecs=8
+
+# stays_active confirms the unit reaches AND HOLDS "active" for settleSecs,
+# bailing the moment it drops out (crash / auto-restart). Returns 0 = healthy.
+stays_active() {
+    local i
+    for (( i = 0; i < settleSecs; i++ )); do
+        sleep 1
+        [ "$(unit_state)" = active ] || return 1
+    done
+    [ "$(unit_state)" = active ]
+}
 
 cmd_start() {
-    if is_active; then
+    if [ "$(unit_state)" = active ]; then
         note "SM is already running."
         return 0
     fi
     systemctl --user start "$UNIT"
-    # Let RestartSec / an immediate crash settle before declaring success.
-    sleep 1
-    if is_active; then
+    if stays_active; then
         ok "SM Started."
     else
-        fail "SM failed to start."
+        fail "SM failed to start (crashed within ${settleSecs}s — locked DB, port in use, or bad config)."
         return 1
     fi
 }
 
 cmd_stop() {
-    if ! is_active; then
+    if is_stopped; then
         note "SM is not running."
         return 0
     fi
+    # Always issue stop — including from activating(auto-restart), which a gate
+    # on is-active would skip, leaving the crash loop running (#1). systemctl
+    # stop cancels the pending auto-restart.
     systemctl --user stop "$UNIT"
-    if ! is_active; then
+    if is_stopped; then
         ok "SM Stopped."
     else
         fail "SM did not stop."
@@ -81,8 +120,13 @@ cmd_stop() {
 }
 
 cmd_restart() {
-    cmd_stop
-    cmd_start
+    systemctl --user restart "$UNIT"
+    if stays_active; then
+        ok "SM Restarted."
+    else
+        fail "SM failed to restart (crashed within ${settleSecs}s — locked DB, port in use, or bad config)."
+        return 1
+    fi
 }
 
 cmd_import() {
@@ -99,7 +143,7 @@ cmd_import() {
 
     # Free the database: smd holds an exclusive SQLite handle.
     local was_active=0
-    if is_active; then
+    if [ "$(unit_state)" = active ]; then
         was_active=1
         note "Stopping SM for import (exclusive database access)…"
         cmd_stop
@@ -121,12 +165,18 @@ cmd_import() {
 }
 
 cmd_status() {
-    if is_active; then
+    local state
+    state="$(unit_state)"
+    if [ "$state" = active ]; then
         ok "SM is running."
     else
-        note "SM is not running."
+        note "SM is not running (${state})."
     fi
-    systemctl --user --no-pager status "$UNIT" || true
+    systemctl --user --no-pager status "$UNIT" || true # human detail; its exit is display-only
+    # Honest exit code for monitoring/scripts (review 2026-07-20 #3): a bare
+    # `systemctl status || true` always exits 0, reporting a dead service as
+    # healthy. Reflect the real running state instead.
+    [ "$state" = active ]
 }
 
 case "${1:-}" in
