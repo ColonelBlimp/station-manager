@@ -26,6 +26,14 @@ contents:
     file_info:
       mode: 0755
 
+  # Friendly control wrapper (start/stop/restart/status/enable/disable) with a
+  # confirmed-result line — the smcloud counterpart of smctl. Mirrors how the
+  # smd RPM ships smctl.
+  - src: scripts/smcloudctl.sh
+    dst: /usr/bin/smcloudctl
+    file_info:
+      mode: 0755
+
   # System unit (DynamicUser — no account to provision, no local state).
   - src: deploy/smcloud/smcloud.service
     dst: /usr/lib/systemd/system/smcloud.service

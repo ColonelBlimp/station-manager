@@ -141,10 +141,25 @@ tenant's access (their data stays — it's a backup service).
 Then start it, check health, and open the firewall port:
 
 ```bash
-sudo systemctl enable --now smcloud
+sudo smcloudctl enable      # start on boot (Restart=on-failure is already in the unit)
+sudo smcloudctl start       # confirmed "smcloud Started." once it's actually up
 curl -s http://127.0.0.1:8091/v1/health    # → {"status":"ok","db":"ok"}
 sudo firewall-cmd --add-port=8091/tcp --permanent && sudo firewall-cmd --reload
 ```
+
+`smcloudctl` (shipped in the RPM, the smcloud counterpart of `smctl`) wraps
+`systemctl` with a verified result line: `start`/`stop`/`restart`/`enable`/
+`disable`/`status`, and its `start`/`restart` only report success once the
+process is confirmed running — a boot-validation failure (bad token/DSN)
+shows a red error pointing at `journalctl`, not a false "started". Plain
+`sudo systemctl … smcloud` works too.
+
+> **Updating the binary:** after installing a new RPM (`sudo dnf install`),
+> run **`sudo smcloudctl restart`** — a plain `systemctl enable --now` does
+> NOT restart an already-running unit, so the old binary would keep serving
+> (the same trap the Caddy step calls out in §4). `smcloudctl restart` does a
+> real restart and confirms the new process is up; check the live version
+> with `curl -s http://127.0.0.1:8091/v1/version`.
 
 Plain-HTTP-with-bearer-token is acceptable on your own network — it is
 NOT the internet posture. **Never port-forward 8091 through the router.**
