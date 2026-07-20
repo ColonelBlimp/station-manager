@@ -9,7 +9,7 @@
 //	-listen / SMCLOUD_LISTEN       listen address (default 127.0.0.1:8091 —
 //	                               loopback; a LAN/proxy posture opts into a
 //	                               wider bind explicitly)
-//	-callsign / SMCLOUD_CALLSIGN   the P1 tenant callsign (required)
+//	-callsign / SMCLOUD_CALLSIGN   tenant 1's callsign (required)
 //	-max-concurrent /
 //	SMCLOUD_MAX_CONCURRENT         in-flight request cap (default 16, ~3× the
 //	                               DB pool; over-limit → 503 + Retry-After;
@@ -17,14 +17,24 @@
 //	SMCLOUD_DSN                    Postgres DSN (env ONLY — the DSN carries the
 //	                               DB password, and argv is world-readable via
 //	                               ps; required)
-//	SMCLOUD_TOKEN                  bearer token (env ONLY, same reason;
-//	                               required, ≥32 chars, placeholder rejected)
+//	SMCLOUD_TOKEN                  tenant 1's bearer token (env ONLY, same
+//	                               reason; required, ≥32 chars, placeholder
+//	                               rejected)
+//	SMCLOUD_CALLSIGN_N /
+//	SMCLOUD_TOKEN_N                additional tenants, N in [2, 32] (milestone
+//	                               1, ADR 0052 — hand-provisioned multi-
+//	                               tenancy). Fail-loud: orphaned halves,
+//	                               unparseable indices, duplicate tokens and
+//	                               duplicate callsigns all refuse boot; see
+//	                               collectTenantPairs.
 //
 // Boot: open + ping Postgres, apply the embedded migrations (store.Migrate —
-// same files + tracking table as `task migrate:cloud:up`), ensure the tenant,
-// serve. TLS is the reverse proxy's job (S6 hosting); this listener is plain
-// HTTP. P1 is single-tenant by provisioning — one (token, tenant) pair —
-// while the server's token→tenant map keeps multi-tenant a data change.
+// same files + tracking table as `task migrate:cloud:up`), ensure every
+// provisioned tenant, serve. TLS is the reverse proxy's job (S6 hosting);
+// this listener is plain HTTP. Tenant isolation is structural in the store
+// (uuid uniqueness is scoped per tenant, migration 0004); rotating one
+// tenant's token is an env-file edit + restart, touching no other tenant's
+// credentials.
 //
 // Request limiting is two layers with distinct jobs (decided 2026-07-18):
 // per-IP rate limiting lives at the reverse proxy, which sees real client
@@ -50,6 +60,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -90,14 +101,17 @@ const tokenPlaceholder = "CHANGE_ME_TOKEN"
 const minTokenLen = 32
 
 // validateToken rejects an absent, placeholder, or too-short bearer token.
-func validateToken(token string) error {
+// varName is the environment variable being validated (SMCLOUD_TOKEN or a
+// numbered SMCLOUD_TOKEN_N), so a multi-tenant boot failure names the exact
+// line of the env file to fix.
+func validateToken(varName, token string) error {
 	switch {
 	case token == "":
-		return errors.New("no bearer token (set SMCLOUD_TOKEN)")
+		return fmt.Errorf("no bearer token (set %s)", varName)
 	case token == tokenPlaceholder:
-		return errors.New("SMCLOUD_TOKEN is the shipped placeholder — generate a real one (openssl rand -base64 32)")
+		return fmt.Errorf("%s is the shipped placeholder — generate a real one (openssl rand -base64 32)", varName)
 	case len(token) < minTokenLen:
-		return fmt.Errorf("SMCLOUD_TOKEN too short (%d chars, need ≥%d) — generate one with: openssl rand -base64 32", len(token), minTokenLen)
+		return fmt.Errorf("%s too short (%d chars, need ≥%d) — generate one with: openssl rand -base64 32", varName, len(token), minTokenLen)
 	}
 	return nil
 }
@@ -108,6 +122,152 @@ func validateToken(token string) error {
 // trim + uppercase makes equivalent spellings one tenant.
 func normalizeCallsign(s string) string {
 	return strings.ToUpper(strings.TrimSpace(s))
+}
+
+// tenantPair is one boot-provisioned (callsign, bearer token) credential pair.
+type tenantPair struct {
+	Callsign string // normalised (trimmed + uppercased)
+	Token    string
+	Source   string // the env variable pair that defined it, for error/log text
+}
+
+// Env-name shapes for numbered tenant pairs (SM Cloud milestone 1, ADR 0052).
+const (
+	callsignVarPrefix = "SMCLOUD_CALLSIGN_"
+	tokenVarPrefix    = "SMCLOUD_TOKEN_"
+)
+
+// maxTenantPairs bounds the numbered-pair index. Hand-provisioned tenants
+// (the ADR 0052 model — self-signup is explicitly out of scope) number a
+// handful; 32 is far above any realistic env file while keeping a mistyped
+// index (SMCLOUD_TOKEN_2000) a loud boot error instead of a silent tenant.
+const maxTenantPairs = 32
+
+// collectTenantPairs assembles the boot provisioning set: the legacy
+// unnumbered pair (tenant 1 — callsign pre-resolved by the caller from
+// -callsign/SMCLOUD_CALLSIGN, token from SMCLOUD_TOKEN) plus numbered
+// SMCLOUD_CALLSIGN_N/SMCLOUD_TOKEN_N pairs, N in [2, maxTenantPairs].
+//
+// FAIL-LOUD by construction — every malformed shape is a boot error, never a
+// silently missing tenant:
+//   - the whole environ is scanned, so indices need not be contiguous (a gap
+//     cannot skip a later pair) and an unparseable or out-of-range suffix on
+//     either prefix is refused rather than ignored;
+//   - _1 is refused (the first tenant is the unnumbered pair — two spellings
+//     for one slot would drift);
+//   - each index needs BOTH halves (an orphaned callsign or token names the
+//     missing variable);
+//   - duplicate tokens are refused: the server's token→tenant map would
+//     silently collapse two tenants into one, authenticating writes into the
+//     wrong logbook namespace;
+//   - duplicate callsigns are refused: two tokens for one tenant is the
+//     device-tokens feature (ADR 0052 roadmap) arriving unmanaged.
+//
+// Pairs return in deterministic order: legacy first, then ascending index.
+func collectTenantPairs(legacyCallsign, legacyToken string, environ []string) ([]tenantPair, error) {
+	legacy := tenantPair{
+		Callsign: normalizeCallsign(legacyCallsign),
+		Token:    legacyToken,
+		Source:   "SMCLOUD_CALLSIGN/SMCLOUD_TOKEN",
+	}
+	if legacy.Callsign == "" {
+		return nil, errors.New("no tenant callsign (set -callsign or SMCLOUD_CALLSIGN)")
+	}
+	if err := validateToken("SMCLOUD_TOKEN", legacy.Token); err != nil {
+		return nil, err
+	}
+
+	// Gather every numbered variable, refusing any shape we don't understand.
+	type half struct {
+		callsign, token       string
+		callsignSet, tokenSet bool
+	}
+	numbered := map[int]*half{}
+	indexOf := func(name, prefix string) (int, error) {
+		n, err := strconv.Atoi(name[len(prefix):])
+		if err != nil {
+			return 0, fmt.Errorf("unrecognised variable %s — numbered tenant pairs are %sN/%sN",
+				name, callsignVarPrefix, tokenVarPrefix)
+		}
+		switch {
+		case n == 1:
+			return 0, fmt.Errorf("%s: the first tenant is the unnumbered SMCLOUD_CALLSIGN/SMCLOUD_TOKEN pair — numbered pairs start at 2", name)
+		case n < 2 || n > maxTenantPairs:
+			return 0, fmt.Errorf("%s: tenant index must be 2..%d", name, maxTenantPairs)
+		}
+		return n, nil
+	}
+	for _, kv := range environ {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(name, callsignVarPrefix):
+			n, err := indexOf(name, callsignVarPrefix)
+			if err != nil {
+				return nil, err
+			}
+			h := numbered[n]
+			if h == nil {
+				h = &half{}
+				numbered[n] = h
+			}
+			h.callsign, h.callsignSet = value, true
+		case strings.HasPrefix(name, tokenVarPrefix):
+			n, err := indexOf(name, tokenVarPrefix)
+			if err != nil {
+				return nil, err
+			}
+			h := numbered[n]
+			if h == nil {
+				h = &half{}
+				numbered[n] = h
+			}
+			h.token, h.tokenSet = value, true
+		}
+	}
+
+	indices := make([]int, 0, len(numbered))
+	for n := range numbered {
+		indices = append(indices, n)
+	}
+	sort.Ints(indices)
+
+	pairs := []tenantPair{legacy}
+	for _, n := range indices {
+		h := numbered[n]
+		csVar := callsignVarPrefix + strconv.Itoa(n)
+		tokVar := tokenVarPrefix + strconv.Itoa(n)
+		if !h.callsignSet {
+			return nil, fmt.Errorf("%s is set but %s is missing (each tenant needs both halves)", tokVar, csVar)
+		}
+		if !h.tokenSet {
+			return nil, fmt.Errorf("%s is set but %s is missing (each tenant needs both halves)", csVar, tokVar)
+		}
+		cs := normalizeCallsign(h.callsign)
+		if cs == "" {
+			return nil, fmt.Errorf("%s is empty", csVar)
+		}
+		if err := validateToken(tokVar, h.token); err != nil {
+			return nil, err
+		}
+		pairs = append(pairs, tenantPair{Callsign: cs, Token: h.token, Source: csVar + "/" + tokVar})
+	}
+
+	seenCallsign := map[string]string{} // callsign → source
+	seenToken := map[string]string{}    // token → source
+	for _, p := range pairs {
+		if prev, dup := seenCallsign[p.Callsign]; dup {
+			return nil, fmt.Errorf("duplicate tenant callsign %s (%s and %s) — one credential per tenant; per-device tokens are a future milestone", p.Callsign, prev, p.Source)
+		}
+		if prev, dup := seenToken[p.Token]; dup {
+			return nil, fmt.Errorf("duplicate bearer token in %s and %s — the token→tenant map would silently merge the tenants", prev, p.Source)
+		}
+		seenCallsign[p.Callsign] = p.Source
+		seenToken[p.Token] = p.Source
+	}
+	return pairs, nil
 }
 
 // defaultMaxConcurrent mirrors server.limit.go's default so the flag help and
@@ -168,12 +328,11 @@ func run() error {
 	if dsn == "" {
 		return errors.New("no Postgres DSN (set SMCLOUD_DSN)")
 	}
-	callsign = normalizeCallsign(callsign)
-	if callsign == "" {
-		return errors.New("no tenant callsign (set -callsign or SMCLOUD_CALLSIGN)")
-	}
-	token := os.Getenv("SMCLOUD_TOKEN")
-	if err := validateToken(token); err != nil {
+	// Tenant provisioning (milestone 1, ADR 0052): the legacy pair is tenant 1,
+	// numbered SMCLOUD_CALLSIGN_N/SMCLOUD_TOKEN_N pairs add more. Every
+	// malformed shape is a boot error — see collectTenantPairs.
+	pairs, err := collectTenantPairs(callsign, os.Getenv("SMCLOUD_TOKEN"), os.Environ())
+	if err != nil {
 		return err
 	}
 	maxConcurrent, err := parseMaxConcurrent(maxConcurrentStr)
@@ -202,14 +361,20 @@ func run() error {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	st := store.New(db)
-	tenantID, err := st.EnsureTenant(context.Background(), callsign, "")
-	if err != nil {
-		return fmt.Errorf("ensure tenant %q: %w", callsign, err)
+	tokens := make(map[string]int64, len(pairs))
+	for _, p := range pairs {
+		tenantID, err := st.EnsureTenant(context.Background(), p.Callsign, "")
+		if err != nil {
+			return fmt.Errorf("ensure tenant %q: %w", p.Callsign, err)
+		}
+		tokens[p.Token] = tenantID
+		// Callsign + id only — a token must never reach the log.
+		log.Info("tenant provisioned", "callsign", p.Callsign, "tenant_id", tenantID, "source", p.Source)
 	}
 	log.Info("smcloud starting", "version", Version, "listen", listen,
-		"tenant", callsign, "tenant_id", tenantID, "max_concurrent", maxConcurrent)
+		"tenants", len(pairs), "max_concurrent", maxConcurrent)
 
-	srv := server.New(st, db, log, map[string]int64{token: tenantID}, Version, maxConcurrent)
+	srv := server.New(st, db, log, tokens, Version, maxConcurrent)
 	httpSrv := &http.Server{
 		Addr:              listen,
 		Handler:           srv.Handler(),

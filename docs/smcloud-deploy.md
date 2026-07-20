@@ -116,8 +116,27 @@ Set all four values in the env file:
 |---|---|
 | `SMCLOUD_LISTEN` | `0.0.0.0:8091` (LAN posture — MUST be set explicitly; the binary and the skeleton both default to loopback, the VPS posture) |
 | `SMCLOUD_DSN` | as shipped, with `CHANGE_ME_DB_PASSWORD` → the password from step 1.2 |
-| `SMCLOUD_CALLSIGN` | your callsign (the tenant that owns the backed-up log) |
+| `SMCLOUD_CALLSIGN` | your callsign (tenant 1 — owns the backed-up log) |
 | `SMCLOUD_TOKEN` | the token from step 1.3 |
+
+**Additional tenants (multi-tenancy, ADR 0052 milestone 1):** add a numbered
+pair per tenant to the same env file, then restart —
+
+```bash
+# in /etc/smcloud/smcloud.env (N in 2..32; indices need not be contiguous):
+#   SMCLOUD_CALLSIGN_2=7Q8AC
+#   SMCLOUD_TOKEN_2=<openssl rand -base64 32 — that tenant's OWN token>
+sudo systemctl restart smcloud
+journalctl -u smcloud -n 5   # one "tenant provisioned" line per tenant
+```
+
+Each tenant's token goes into **that operator's** daemon forwarder
+credentials (their config SPA → Forwarding → SM Cloud backup). Boot refuses
+half-pairs, unparseable `SMCLOUD_CALLSIGN_*`/`SMCLOUD_TOKEN_*` variables,
+duplicate tokens, and duplicate callsigns — a malformed env file fails loudly
+rather than silently dropping or merging a tenant. Rotating one tenant's
+token touches only its line + a restart; removing a pair revokes that
+tenant's access (their data stays — it's a backup service).
 
 Then start it, check health, and open the firewall port:
 
