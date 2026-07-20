@@ -299,23 +299,20 @@ setSetupSave(async (callsign) => {
     return { ok: true, message: '' };
 });
 
-// Settings → Station save: after the daemon stores the new logging_station,
-// re-fetch + re-apply the shared station context so a changed operator/grid is
-// live app-wide (Band Activity flags, bearings, QSO OPERATOR/MY_GRIDSQUARE)
-// without a reload — mirrors the first-run save above (review 2026-07-20 #2).
-// Apply ONLY a good context: on a transient GET failure fetchStationContext
-// returns a configOk:false sentinel (empty callsign/operator/grid/logbook), and
-// blindly applying it would wipe the valid context and break subsequent QSO
-// submits until reload (review 2026-07-20 round 2 #1). The save itself already
-// succeeded; keep the last-good context and tell the operator a reload is needed
-// for the app-wide refresh.
-setStationSaved(async () => {
-    const c = await fetchStationContext();
-    if (c.configOk) {
-        applyStationContext(c);
-    } else {
-        toasts.warn('Saved — but refreshing the app failed; reload to apply the change everywhere.');
-    }
+// Settings → Station save: push the just-saved identity into the shared station
+// context so a changed operator/grid is live app-wide (Band Activity flags,
+// bearings, QSO OPERATOR/MY_GRIDSQUARE) without a reload. A Station-identity
+// save changes ONLY logging_station — the logbook binding is fixed (callsign is
+// read-only) — so we surgically update the context's identity fields from the
+// values just saved, rather than re-fetching. No GET means no refresh-failure
+// window: the context can never wipe to empty (round 2 #1) nor keep stale
+// operator/grid that would be logged onto subsequent QSOs (round 3 #1).
+setStationSaved((station) => {
+    ctx.operator = station.operator ?? '';
+    ctx.myGrid = station.my_gridsquare ?? '';
+    ctx.stationCallsign = station.station_callsign || ctx.stationCallsign;
+    setFt8OperatorCall(ctx.stationCallsign);
+    setFt8MyGrid(ctx.myGrid);
 });
 
 // Submit sink: draft + rig context + displayed enrichment → one ADIF record →

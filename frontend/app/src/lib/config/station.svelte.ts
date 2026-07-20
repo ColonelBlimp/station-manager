@@ -10,11 +10,14 @@ import { fetchStation, saveStation, type StationFields, type StationConfig } fro
 import { toasts } from '../ui/toasts.svelte';
 
 // Injected by main.ts (per ADR 0045 DI — this module never imports the app
-// bootstrap): re-fetch + re-apply the shared station context after a save, so
-// the operate/QSO path picks up a changed operator/grid with no page reload
-// (review 2026-07-20 #2 — mirrors setSetupSave). Null in tests / before wiring.
-let onSaved: (() => void | Promise<void>) | null = null;
-export function setStationSaved(fn: () => void | Promise<void>): void {
+// bootstrap): push the just-saved identity into the app's shared station
+// context so the operate/QSO path picks up a changed operator/grid with no page
+// reload (review 2026-07-20 #2). Receives the saved logging_station fields
+// straight from the PUT response — main.ts applies them WITHOUT a second GET, so
+// there is no refresh-failure window and the context can never diverge from the
+// save (review round 2 #1 / round 3 #1). Null in tests / before wiring.
+let onSaved: ((station: StationFields) => void | Promise<void>) | null = null;
+export function setStationSaved(fn: (station: StationFields) => void | Promise<void>): void {
     onSaved = fn;
 }
 
@@ -86,9 +89,11 @@ class StationState {
                 return;
             }
             this.#apply(res.config);
-            // Re-apply the shared station context so a changed operator/grid
-            // takes effect app-wide without a reload (review 2026-07-20 #2).
-            await onSaved?.();
+            // Push the just-saved identity into the shared station context so a
+            // changed operator/grid takes effect app-wide without a reload — from
+            // the response we already hold (form == the daemon's post-save
+            // values), never a second fetch (review 2026-07-20 #2 / round 3 #1).
+            await onSaved?.({ ...this.form });
             toasts.info('Station settings saved.');
         } finally {
             this.saving = false;

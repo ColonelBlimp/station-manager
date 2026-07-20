@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stationState, STATION_KEYS, setStationSaved } from './station.svelte';
+import type { StationFields } from '../api/config';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -79,6 +80,40 @@ describe('stationState', () => {
         const put = spy.mock.calls.find((c) => c[1]?.method === 'PUT');
         expect(put, 'a PUT was issued').toBeTruthy();
         expect(stationState.dirty).toBe(false);
+    });
+
+    it('hands onSaved the PUT-response identity and does NOT do a second GET', async () => {
+        // GET (load) returns BEFORE; PUT (save) returns AFTER — the daemon's
+        // authoritative post-save value. onSaved must receive AFTER, and there
+        // must be NO third fetch (the refresh GET that used to fail and either
+        // wipe or stale the shared context — review round 2 #1 / round 3 #1).
+        let calls = 0;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_u: RequestInfo | URL, _i?: RequestInit) => {
+                calls++;
+                const operator = calls === 1 ? 'BEFORE' : 'AFTER';
+                return Promise.resolve(
+                    new Response(JSON.stringify(configBody({ operator })), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    }),
+                );
+            }),
+        );
+        await stationState.load();
+        expect(stationState.form.operator).toBe('BEFORE');
+
+        const saved: StationFields[] = [];
+        setStationSaved((station) => {
+            saved.push({ ...station });
+        });
+        stationState.form.operator = 'edited'; // dirty; the response is authoritative
+        await stationState.save();
+
+        expect(saved).toHaveLength(1);
+        expect(saved[0].operator).toBe('AFTER');
+        expect(calls).toBe(2); // 1 GET (load) + 1 PUT (save) — no refresh GET
     });
 
     it('holds the save latch through the onSaved refresh (no overlapping saves)', async () => {
