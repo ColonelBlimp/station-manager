@@ -7,6 +7,7 @@
     import { setup } from './lib/setup.svelte';
     import Operate from './lib/operate/Operate.svelte';
     import Logbook from './lib/logbook/Logbook.svelte';
+    import Settings from './lib/config/Settings.svelte';
     import {
         ui,
         THEME_KEY,
@@ -91,8 +92,10 @@
                     <Operate />
                 {:else if router.view === 'logbook'}
                     <Logbook />
+                {:else if router.view === 'config'}
+                    <Settings />
                 {:else}
-                    <!-- Placeholder for views not yet built. -->
+                    <!-- Placeholder for views not yet built (dashboard). -->
                     <h1 class="text-2xl font-semibold text-ink">{titles[router.view]}</h1>
                     <div class="mt-6 h-[60vh] rounded-xl border border-dashed border-line"></div>
                 {/if}
