@@ -234,10 +234,6 @@ func TestCollectTenantPairs(t *testing.T) {
 	t.Run("signed suffix refused", func(t *testing.T) {
 		fail(t, []string{"SMCLOUD_TOKEN_+2=" + strongB}, "unrecognised variable SMCLOUD_TOKEN_+2")
 	})
-	t.Run("same variable twice refused", func(t *testing.T) {
-		fail(t, []string{"SMCLOUD_CALLSIGN_2=7Q8AC", "SMCLOUD_CALLSIGN_2=K1ABC", "SMCLOUD_TOKEN_2=" + strongB},
-			"SMCLOUD_CALLSIGN_2 is set more than once")
-	})
 	t.Run("index zero refused", func(t *testing.T) {
 		fail(t, []string{"SMCLOUD_TOKEN_0=" + strongB}, "must be 2..32")
 	})

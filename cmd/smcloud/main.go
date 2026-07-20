@@ -153,8 +153,10 @@ const maxTenantPairs = 32
 //   - the whole environ is scanned, so indices need not be contiguous (a gap
 //     cannot skip a later pair) and an unparseable, non-canonical ("02", "+2"
 //     — alternate spellings of one slot could cross-combine halves) or
-//     out-of-range suffix on either prefix is refused rather than ignored, as
-//     is the same variable appearing twice;
+//     out-of-range suffix on either prefix is refused rather than ignored;
+//     (a REPEATED identical key is not our concern — systemd's EnvironmentFile
+//     resolves it last-wins before exec, so os.Environ() never shows it twice;
+//     see the scan loop);
 //   - _1 is refused (the first tenant is the unnumbered pair — two spellings
 //     for one slot would drift);
 //   - each index needs BOTH halves (an orphaned callsign or token names the
@@ -222,9 +224,6 @@ func collectTenantPairs(legacyCallsign, legacyToken string, environ []string) ([
 				h = &half{}
 				numbered[n] = h
 			}
-			if h.callsignSet {
-				return nil, fmt.Errorf("%s is set more than once", name)
-			}
 			h.callsign, h.callsignSet = value, true
 		case strings.HasPrefix(name, tokenVarPrefix):
 			n, err := indexOf(name, tokenVarPrefix)
@@ -236,11 +235,18 @@ func collectTenantPairs(legacyCallsign, legacyToken string, environ []string) ([
 				h = &half{}
 				numbered[n] = h
 			}
-			if h.tokenSet {
-				return nil, fmt.Errorf("%s is set more than once", name)
-			}
 			h.token, h.tokenSet = value, true
 		}
+		// NB no same-KEY duplicate check: the deployed config path is systemd
+		// EnvironmentFile → process env → os.Environ(), and systemd resolves a
+		// repeated assignment (two SMCLOUD_CALLSIGN_2= lines) to the LAST value
+		// before exec, so an identical key never reaches us twice — a guard here
+		// would be unreachable theatre (codex review of the milestone-fix
+		// commit). This last-wins is generic env behaviour (SMCLOUD_DSN/TOKEN
+		// too), not a tenant-provisioning-specific hole. What DOES reach us and
+		// IS guarded is two DISTINCT keys for one logical index (_2 and _02):
+		// the canonical-suffix rejection in indexOf refuses _02 outright, so the
+		// same-index cross-combine can't form.
 	}
 
 	indices := make([]int, 0, len(numbered))
