@@ -35,8 +35,10 @@ precisely so we don't re-derive state or redo finished work.
 > **Session 228 (2026-07-20) — review batch #9 (4 findings) BUILT + COMMITTED
 > (`internal/cloud` at a CLEAN BILL, incl. the multi-tenancy prerequisite
 > migration 0004), the FIX-DON'T-DEFER policy adopted, milestone-1 design
-> APPROVED (build PAUSED by operator — do NOT start it unprompted), and the
-> SPA-retirement direction decided with the parity audit run.**
+> APPROVED (build PAUSED by operator — do NOT start it unprompted), the
+> SPA-retirement direction decided with the parity audit run — and, later the
+> same day, ft8 review batch #10 (6 findings, 6/6 real — 10th consecutive
+> all-real round) BUILT + COMMITTED, nothing deferred.**
 > - **External review (4 findings) → all four verified → ALL BUILT (the
 >   fix-don't-defer trigger session):** (1) padded UUID: server validated a
 >   TRIMMED uuid but stored the payload verbatim → 200-accepted rows failed
@@ -138,13 +140,59 @@ precisely so we don't re-derive state or redo finished work.
 >   tracking, stats, inbound DX cluster were in NO doc — now captured in the
 >   backlog); smcloud sqlboiler question answered (deliberate hand-written
 >   SQL, `store/doc.go`); streaming-export backlog item struck as BUILT.
+> - **ft8 review batch #10 (6 findings on `internal/ft8`, all verified real,
+>   ALL BUILT — first batch fully under fix-don't-defer, zero deferred):**
+>   (1) **HIGH, TX-correctness: Abandon → unintended rung.** Rung sites call
+>   the injected transmit AFTER dropping seq.mu; an Abandon in that gap found
+>   no txCancel yet, so the stale rung keyed RF and published Transmitting
+>   after abandon returned. Fix: `transmitLocked()` binds the sessionGen at
+>   rung-decision time; `startTransmission` gained a `commitOK` gate checked
+>   WHILE HOLDING txMu before txCancel registers (new `ErrTxSuperseded`,
+>   dropped quietly by rung callers — no stale-status republish). Abandon
+>   bumps gen then reads txCancel under txMu → every interleaving is
+>   refuse-or-cancel; argument written at the commit site. Lock order
+>   seqGate→txMu→seq.mu, no reversal (all 8 rung sites + 3 onComplete sites
+>   call out only after unlock; disarm stays safe via the txArmed re-check
+>   under the same txMu hold). (2) **same slot driven twice:** decodeLoop now
+>   runs seq.OnSlot BEFORE publishing the actionable decode (also spends the
+>   late window on the rung, not occupancy math) + the sequencer records
+>   `lastTxSlot` — fireOpening marks, all 8 OnSlot transmit sections skip a
+>   fired slot (per PHYSICAL slot; marking pre-transmit is deliberate — every
+>   failure mode makes a same-slot retry moot). Was: with max_repeats=1 the
+>   pending OnSlot self-abandoned the session mid-opening. (3) **KeyTx
+>   latency off the ADR 0032 timebase:** head-truncation moved POST-key —
+>   transmitAligned keeps only a pre-key feasibility estimate (don't key PTT
+>   for an empty remainder); `transmit` truncates against the actual clock
+>   after KeyTx+settle right before Play, so CAT/mode-switch latency shortens
+>   the head instead of shifting every symbol's DT. (4) **crashed capture
+>   loop leaked the mic:** onCaptureLoopExit now src.Stop()s +
+>   hub.clearActivity() (capturing=false had made releaseCaptureLocked no-op
+>   forever — device held by a dead session, next acquire overwrote the
+>   un-Closed CGO capture); malgoSource.Stop nils m.cap after Close so a
+>   double loop-exit can't double-Close. Recovery stays "re-open the FT8
+>   view" (0→1 subscriber transition). (5) **antenna-path boundaries:** all 7
+>   Start* reset the path only on an ACCEPTED start (a rejected duplicate no
+>   longer flips the active QSO to short); onComplete consumes-then-resets so
+>   a Call-CQ run's next answerer doesn't inherit long-path. Accepted residue
+>   documented at the exchPath field (failed mid-exchange caller answerer
+>   leaves the choice in place). (6) **ALL.TXT logged attempts:** WriteTx
+>   moved from commit into the onTransmit callback — only once PTT actually
+>   keys, real key timestamp, dial via the new txDialMHz in-flight field.
+>   7 new pinning tests; validation matrix = full ft8 suite + `-race -short`
+>   + `CGO_ENABLED=0 -short` + vet, all green; nothing outside internal/ft8
+>   changed. Self-review catch: the capture-test recovery assertion first
+>   assumed a 2nd subscriber re-acquires — it doesn't (0→1 by design).
 > - **NEXT (operator-set): (1) build SMC milestone 1 when the operator says
 >   go — design above is agreed; the paused build had `main.go` read and no
 >   code written. Then ONE F44 `task rpm:smcloud` rebuild carries
 >   multi-tenancy + migration 0004 + the review batch + the rate limiter.
 >   (2)** ClubLog enable at the next on-air test (checklist in
 >   `docs/dogfood-inbox.md`). **(3)** stamp-drift steady-state eyeball
->   (`grep reconcile …/smd.log | tail -3` → `in_sync:true`). **(4)** standing:
+>   (`grep reconcile …/smd.log | tail -3` → `in_sync:true`). **(4)** the ft8
+>   batch #10 TX-path changes (commit gate, post-key truncation, keyed-time
+>   ALL.TXT) deserve an on-air FT8 eyeball at the next session — normal
+>   QSO flow + an operator Abandon mid-exchange + ALL.TXT lines matching real
+>   key times; deploys with the next `task deploy:local:dev`. **(5)** standing:
 >   dogfood validations, backlog; SPA retirement + app Settings build are
 >   queued behind the milestone unless re-prioritised.
 
