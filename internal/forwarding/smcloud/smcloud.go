@@ -291,9 +291,22 @@ func (f *Forwarder) Submit(
 			Err:     errors.New(op).WithErr(err).WithMsg("parse smcloud response"),
 		}
 	}
-	// applied 0 = the stale-push guard held a newer cloud copy — the cloud
-	// already has this QSO's future, which for a BACKUP is success, not an
-	// error. The UUID doubles as the upstream id (the store's key).
+	// The cloud must acknowledge exactly this ONE record: received == 1, and
+	// applied is 1 (stored) or 0 (the stale-push guard held a newer cloud copy —
+	// the cloud already has this QSO's future, which for a BACKUP is success).
+	// Any other combination is a protocol-invalid 2xx (e.g. {} → received:0)
+	// where the cloud did NOT take the QSO; treat it as transient so the backup
+	// RETRIES rather than being silently marked uploaded and dropped (review
+	// 2026-07-20 internal/forwarding #3). Transient, not terminal: a bad ack from
+	// our own cloud is a server-side blip the backup must eventually clear.
+	if out.Received != 1 || out.Applied < 0 || out.Applied > 1 {
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTransient,
+			Err: errors.New(op).WithMsgf("smcloud ack invalid: received=%d applied=%d",
+				out.Received, out.Applied),
+		}
+	}
+	// The UUID doubles as the upstream id (the store's key).
 	return forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: qso.UUID}
 }
 

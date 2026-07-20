@@ -483,8 +483,29 @@ func (w *Worker) markTransientInternal(ctx context.Context, row types.QsoUpload,
 	w.markTransientRetry(ctx, row, nextAt, "internal: "+errText(cause))
 }
 
+// reArmed reports whether a completion write was a no-op because a concurrent
+// operator edit re-armed the claimed row (in_progress → pending). It is not a
+// failure: the caller must NOT publish a terminal event or fire the stamp hook,
+// because the transition never committed (review 2026-07-20 internal/forwarding
+// #4). Logged at debug for traceability, not as an error.
+func (w *Worker) reArmed(err error, uploadID int64, completion string) bool {
+	if !stderr.Is(err, errors.ErrUploadReArmed) {
+		return false
+	}
+	w.logger.DebugWith().
+		Str("forwarder", w.cfg.Name).
+		Int64("upload_id", uploadID).
+		Str("completion", completion).
+		Msg("forwarder: completion skipped — row re-armed by a concurrent edit")
+	return true
+}
+
 func (w *Worker) markTransientRetry(ctx context.Context, row types.QsoUpload, nextAt int64, lastErr string) {
-	if err := w.db.MarkUploadTransientRetryWithContext(ctx, row.ID, nextAt, lastErr); err != nil {
+	err := w.db.MarkUploadTransientRetryWithContext(ctx, row.ID, nextAt, lastErr)
+	if w.reArmed(err, row.ID, "transient-retry") {
+		return
+	}
+	if err != nil {
 		w.logger.ErrorWith().
 			Str("forwarder", w.cfg.Name).
 			Int64("upload_id", row.ID).
@@ -494,7 +515,11 @@ func (w *Worker) markTransientRetry(ctx context.Context, row types.QsoUpload, ne
 }
 
 func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr string) {
-	if err := w.db.MarkUploadFailedWithContext(ctx, row.ID, lastErr); err != nil {
+	err := w.db.MarkUploadFailedWithContext(ctx, row.ID, lastErr)
+	if w.reArmed(err, row.ID, "failed") {
+		return
+	}
+	if err != nil {
 		w.logger.ErrorWith().
 			Str("forwarder", w.cfg.Name).
 			Int64("upload_id", row.ID).
@@ -526,9 +551,13 @@ func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr st
 func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamID string) {
 	prefix := w.fwd.AdifPrefix()
 	if prefix != "" && row.Action != action.Delete.String() {
-		if err := w.db.MarkUploadSuccessWithAdifStampWithContext(
+		err := w.db.MarkUploadSuccessWithAdifStampWithContext(
 			ctx, row.ID, upstreamID, row.QsoID, prefix,
-		); err != nil {
+		)
+		if w.reArmed(err, row.ID, "success+stamp") {
+			return // no stamp committed → no mirror hook, no succeeded event
+		}
+		if err != nil {
 			w.logger.ErrorWith().
 				Str("forwarder", w.cfg.Name).
 				Int64("upload_id", row.ID).
@@ -544,7 +573,11 @@ func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamI
 			w.cfg.OnQsoStamped(ctx, row.QsoID)
 		}
 	} else {
-		if err := w.db.MarkUploadSuccessWithContext(ctx, row.ID, upstreamID); err != nil {
+		err := w.db.MarkUploadSuccessWithContext(ctx, row.ID, upstreamID)
+		if w.reArmed(err, row.ID, "success") {
+			return
+		}
+		if err != nil {
 			w.logger.ErrorWith().
 				Str("forwarder", w.cfg.Name).
 				Int64("upload_id", row.ID).

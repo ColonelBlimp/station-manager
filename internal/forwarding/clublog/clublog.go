@@ -396,14 +396,14 @@ func (f *Forwarder) post(ctx context.Context, op errors.Op, endpoint string, for
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-	if err != nil {
-		return forwarding.Result{
-			Outcome: forwarding.OutcomeTransient,
-			Err:     errors.New(op).WithErr(err).WithMsg("read ClubLog response"),
-		}
-	}
-
+	// ClubLog encodes the entire result in the STATUS CODE; the body is
+	// human-readable detail only. Read it BEST-EFFORT — a reset or truncated
+	// body must NOT downgrade the outcome, because doing so on a 403 would
+	// return a retryable Transient instead of tripping the circuit breaker,
+	// and the worker would keep POSTing at an upstream that is blocking us
+	// (violating the stop-immediately contract — review 2026-07-20
+	// internal/forwarding #2). The status is authoritative regardless.
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	return f.classifyHTTPStatus(op, resp.StatusCode, resp.Status, body)
 }
 

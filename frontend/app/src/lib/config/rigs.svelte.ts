@@ -30,12 +30,17 @@ class RigsState {
         }
         this.rigs = res.data.rigs;
         this.defaultRigId = res.data.defaultRigId;
-        // Pre-select so the details panel isn't empty when rigs exist: the
-        // active rig if present, else the first. A prior manual selection wins.
-        if (this.selectedId === null && this.rigs.length > 0) {
+        // Reconcile the selection against the (possibly changed) list: keep a
+        // still-valid manual selection, otherwise fall back to the active rig,
+        // then the first, then null. Guarding only on `selectedId === null`
+        // would strand a selection whose rig disappeared on reload — no list
+        // item highlighted and an empty detail panel (review 2026-07-20 Rigs #2).
+        const stillSelected =
+            this.selectedId !== null && this.rigs.some((r) => r.id === this.selectedId);
+        if (!stillSelected) {
             this.selectedId = this.rigs.some((r) => r.id === this.defaultRigId)
                 ? this.defaultRigId
-                : this.rigs[0].id;
+                : (this.rigs[0]?.id ?? null);
         }
         this.loaded = true;
     }

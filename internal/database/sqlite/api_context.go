@@ -2311,7 +2311,12 @@ func (s *Service) classifyZeroRowCompletion(ctx context.Context, exec boil.Conte
 			Str("completion", kind).
 			Msg("upload completion skipped: row re-armed by a concurrent edit (no longer in_progress)")
 	}
-	return nil
+	// Signal the no-op explicitly (was: nil). The worker must be able to tell a
+	// re-armed no-op from a committed completion so it doesn't publish a
+	// terminal forward.succeeded/failed event or fire the stamp mirror hook for
+	// a transition that never happened (review 2026-07-20 internal/forwarding
+	// #4). errors.Is-matchable via ErrUploadReArmed.
+	return errors.ErrUploadReArmed
 }
 
 // ResetOrphanedUploadsWithContext transitions any 'in_progress' rows

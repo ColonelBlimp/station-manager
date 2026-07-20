@@ -1248,3 +1248,42 @@ func TestWorker_RunReturnsWhenCtxCancelled(t *testing.T) {
 		t.Fatal("Run did not return after ctx cancellation")
 	}
 }
+
+// TestMarkSuccess_ReArmed_NoTerminalEvent pins review 2026-07-20
+// internal/forwarding #4: when a concurrent operator edit re-arms a claimed row
+// (in_progress → pending) mid-send, the worker's completion is a no-op — it must
+// NOT publish a terminal forward.succeeded event (the row is still pending and
+// will be re-forwarded), and the re-armed row must survive.
+func TestMarkSuccess_ReArmed_NoTerminalEvent(t *testing.T) {
+	h := newHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
+
+	// Worker claims the row → in_progress.
+	claimed, err := h.db.ClaimPendingUploadsWithContext(context.Background(), "stub", 5)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim: %v (%d rows)", err, len(claimed))
+	}
+
+	// Operator edit re-arms the same triple → back to pending.
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
+
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+	sub, unsub := h.hub.Subscribe()
+	defer unsub()
+
+	// Stale completion of the claimed (now re-armed) row.
+	w.markSuccess(context.Background(), claimed[0], "logid-stale")
+
+	select {
+	case ev := <-sub:
+		t.Fatalf("published %q on a re-armed no-op completion; want no event", ev.Name)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := h.fetchUpload(qsoID); got.Status != status.Pending.String() {
+		t.Fatalf("status = %q, want pending (re-arm must survive)", got.Status)
+	}
+}

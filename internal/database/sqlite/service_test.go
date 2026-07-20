@@ -1581,9 +1581,11 @@ func TestMarkUploadSuccess_StaleAfterReArm_NoOps(t *testing.T) {
 	// attempts=0 (InsertQsoUploadTx's ON CONFLICT path).
 	enqueueUpload(t, svc, qsoID, "qrz", "qrz", action.Insert)
 
-	// Stale worker completes — must not clobber the re-armed row.
-	if err := svc.MarkUploadSuccessWithContext(ctx, rowID, "logid-stale"); err != nil {
-		t.Fatalf("mark success: %v", err)
+	// Stale worker completes — must not clobber the re-armed row, AND must
+	// signal the re-arm (ErrUploadReArmed) so the worker skips the terminal
+	// event + stamp hook (review 2026-07-20 internal/forwarding #4).
+	if err := svc.MarkUploadSuccessWithContext(ctx, rowID, "logid-stale"); !stderr.Is(err, errors.ErrUploadReArmed) {
+		t.Fatalf("mark success: want ErrUploadReArmed, got %v", err)
 	}
 
 	uploads, _ := svc.FetchUploadsByQsoIDWithContext(ctx, qsoID)

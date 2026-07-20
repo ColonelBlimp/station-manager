@@ -249,3 +249,32 @@ func TestRegistry_Registered(t *testing.T) {
 		t.Fatalf("supported actions = %v", acts)
 	}
 }
+
+// TestSubmit_InvalidAckIsTransient: a protocol-invalid 2xx acknowledgement (the
+// cloud did NOT take our single record — received != 1, or an out-of-range
+// applied) must be TRANSIENT, so the backup retries rather than being silently
+// marked uploaded and dropped (review 2026-07-20 internal/forwarding #3).
+func TestSubmit_InvalidAckIsTransient(t *testing.T) {
+	cases := []struct {
+		name string
+		body putResponse
+	}{
+		{"received zero (e.g. {})", putResponse{Received: 0, Applied: 0}},
+		{"received two", putResponse{Received: 2, Applied: 1}},
+		{"applied out of range", putResponse{Received: 1, Applied: 2}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(tc.body)
+			}))
+			defer ts.Close()
+			f, _ := New(testConfig(ts.URL))
+			res := f.Submit(context.Background(), testQso("0197f9a0-0000-7000-8000-0000000000f1"),
+				action.Insert, "")
+			if res.Outcome != forwarding.OutcomeTransient {
+				t.Fatalf("outcome = %s (%v), want Transient", res.Outcome, res.Err)
+			}
+		})
+	}
+}

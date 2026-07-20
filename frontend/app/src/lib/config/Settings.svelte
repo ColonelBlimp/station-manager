@@ -39,9 +39,16 @@
         {/each}
     </nav>
 
-    {#if active === 'station'}
+    <!-- Both sections stay MOUNTED; the inactive one is just hidden. A
+         conditional {#if} would unmount the hidden section, and remounting it
+         re-runs its onMount load() — which would overwrite unsaved form edits
+         (and re-fetch on every tab switch). Keeping them mounted preserves
+         in-progress edits + selection across tab switches (review 2026-07-20
+         Rigs #1 / #3). Each section still loads once, on first render. -->
+    <div class:hidden={active !== 'station'}>
         <StationSection />
-    {:else if active === 'rigs'}
+    </div>
+    <div class:hidden={active !== 'rigs'}>
         <RigsSection />
-    {/if}
+    </div>
 </div>

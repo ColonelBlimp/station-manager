@@ -59,6 +59,20 @@ describe('rigsState', () => {
         expect(rigsState.selected).toBeNull();
     });
 
+    it('re-selects when the previously-selected rig disappears on reload', async () => {
+        mockJSON(200, rigsBody(1, [1, 2]));
+        await rigsState.load();
+        rigsState.select(2);
+        expect(rigsState.selectedId).toBe(2);
+
+        // A later load returns a list without rig 2 — the selection must not be
+        // left stranded (null detail despite rigs existing); it falls back.
+        mockJSON(200, rigsBody(1, [1, 3]));
+        await rigsState.load();
+        expect(rigsState.selected).not.toBeNull();
+        expect(rigsState.selectedId).toBe(1); // fell back to the default
+    });
+
     it('select changes the detailed rig', async () => {
         mockJSON(200, rigsBody(1, [1, 2]));
         await rigsState.load();

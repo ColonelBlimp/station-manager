@@ -303,6 +303,11 @@ func diffManifests(local []types.QsoManifestEntry, cloud map[string]cloudEntry) 
 
 // ---- cloud client reads ------------------------------------------------------
 
+// maxManifestBytes bounds a reconcile GET body (see the read in get()). Sized
+// for the full manifest of a very large logbook, not the 1 MiB submit-response
+// cap.
+const maxManifestBytes = 64 << 20 // 64 MiB
+
 func (r *Reconciler) get(ctx context.Context, path string, out any) error {
 	const op errors.Op = "smcloud.Reconciler.get"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+path, nil)
@@ -316,7 +321,15 @@ func (r *Reconciler) get(ctx context.Context, path string, out any) error {
 		return errors.New(op).WithErr(err).WithMsgf("GET %s", path)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	// maxManifestBytes, NOT the 1 MiB submit-response cap: the reconcile GETs
+	// include the FULL unpaginated manifest (one uuid+modified_at+revision+
+	// deleted entry per QSO, ~110 B each), and — because get() sets no
+	// Accept-Encoding, so Go's transport transparently decompresses — this cap
+	// applies to the DECOMPRESSED JSON. The old 1 MiB truncated any logbook past
+	// ~9k QSOs, failing the decode and silently halting reconciliation (review
+	// 2026-07-20 internal/forwarding #1). 64 MiB covers ~500k entries — far
+	// beyond any single logbook — while still bounding a rogue response.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestBytes))
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsgf("read GET %s", path)
 	}
