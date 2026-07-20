@@ -36,9 +36,10 @@ precisely so we don't re-derive state or redo finished work.
 > (`internal/cloud` at a CLEAN BILL, incl. the multi-tenancy prerequisite
 > migration 0004), the FIX-DON'T-DEFER policy adopted, milestone-1 design
 > APPROVED (build PAUSED by operator — do NOT start it unprompted), the
-> SPA-retirement direction decided with the parity audit run — and, later the
-> same day, ft8 review batch #10 (6 findings, 6/6 real — 10th consecutive
-> all-real round) BUILT + COMMITTED, nothing deferred.**
+> SPA-retirement direction decided with the parity audit run — then ft8 review
+> batch #10 (6 findings, 6/6 real) BUILT + COMMITTED, then a follow-up round
+> #11 on the smcloud batch (2/2 real) BUILT + COMMITTED. Eleven consecutive
+> all-real rounds; nothing deferred anywhere.**
 > - **External review (4 findings) → all four verified → ALL BUILT (the
 >   fix-don't-defer trigger session):** (1) padded UUID: server validated a
 >   TRIMMED uuid but stored the payload verbatim → 200-accepted rows failed
@@ -182,6 +183,26 @@ precisely so we don't re-derive state or redo finished work.
 >   + `CGO_ENABLED=0 -short` + vet, all green; nothing outside internal/ft8
 >   changed. Self-review catch: the capture-test recovery assertion first
 >   assumed a 2nd subscriber re-acquires — it doesn't (0→1 by design).
+> - **Review round #11 (2 findings on the streaming-export batch, both real,
+>   BUILT):** (1) **export pool exhaustion** — the streaming fix's held-tx
+>   trade was under-priced: pool 5 vs request semaphore 16 vs 15-min export
+>   deadline meant five slow authenticated exports drained the ENTIRE pool
+>   (health/uploads/reconcile starved); my own comment's "the request
+>   semaphore caps how many" was another soft guarantee claim (16 > 5 caps
+>   nothing). Fix: `maxConcurrentExports = 2` try-acquire gate at the top of
+>   `handleExport`, BEFORE any store access — over-limit → 503 + Retry-After
+>   60; deferred release on every path; restore client already retries 5xx.
+>   2 of 5 conns worst-case leaves 3 for the short-lived routes. Pinned by a
+>   no-DB test (nil store — proves rejection precedes store access) + the
+>   PG-backed export/e2e tests exercise acquire/release. (2) **doc drift** —
+>   `sm-cloud-p1.md` + ADR 0050 still described `ON CONFLICT (uuid)` + the
+>   tenant guard. Per docs tier rules (historical, append-only): DATED
+>   POINTER NOTES, not rewrites — sm-cloud-p1 got a "superseded detail"
+>   block; ADR 0050 got a scoped note on the migration-0003 bullet stating
+>   explicitly that the revision guard / hash formula / dual-deploy rule
+>   STAND and only the conflict-target detail is superseded by 0004.
+>   Validation: build + gofmt + vet + fresh `-race` cloud/e2e suites vs dev
+>   PG, all green. smcloud-only, rides the milestone-1 F44 rebuild.
 > - **NEXT (operator-set): (1) build SMC milestone 1 when the operator says
 >   go — design above is agreed; the paused build had `main.go` read and no
 >   code written. Then ONE F44 `task rpm:smcloud` rebuild carries
