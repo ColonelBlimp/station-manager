@@ -10,7 +10,7 @@ afterEach(() => {
     rigsState.loaded = false;
     rigsState.error = '';
     rigsState.catalogue = {};
-    rigsState.draft = null;
+    rigsState.drafts = {};
     rigsState.saving = false;
     rigsState.serialPorts = [];
     rigsState.audioAvailable = false;
@@ -19,8 +19,10 @@ afterEach(() => {
 });
 
 // Route-aware fetch mock: /v1/rigs (GET), /v1/hardware (GET), /v1/config (PUT).
-// Returns the captured PUT bodies for the save assertions.
-function mockCluster(rigsBody: unknown, hardwareBody?: unknown): string[] {
+// rigsBody may be a function called per GET /v1/rigs (so a test can return a
+// DIFFERENT catalogue on the save's re-fetch than on the initial load). Returns
+// the captured PUT bodies for the save assertions.
+function mockCluster(rigsBody: object | (() => unknown), hardwareBody?: unknown): string[] {
     const puts: string[] = [];
     const resp = (body: unknown) =>
         Promise.resolve(
@@ -41,7 +43,7 @@ function mockCluster(rigsBody: unknown, hardwareBody?: unknown): string[] {
             if (url.includes('/v1/hardware')) {
                 return resp(hardwareBody ?? { serial_ports: [], audio: { available: false } });
             }
-            return resp(rigsBody);
+            return resp(typeof rigsBody === 'function' ? rigsBody() : rigsBody);
         })
     );
     return puts;
@@ -191,31 +193,63 @@ describe('rigsState', () => {
         expect(rigsState.dirty).toBe(false);
     });
 
-    it('save round-trips EVERY rig field (unrendered ones too) in a whole-catalogue PUT', async () => {
-        // rig 1 carries fields the panel never renders — they MUST ride back, or
-        // the daemon's whole-replace of base.Rigs would zero them (config wipe).
+    it('a rig with no audio is NOT dirty on load (no injected empty audio block)', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }], // no audio field
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        expect(rigsState.dirty).toBe(false); // review Rigs-editor #2
+        expect(rigsState.draft?.audio).toBeUndefined();
+    });
+
+    it('per-rig drafts survive switching rigs (edits are not discarded)', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [
+                { id: 1, model: 'ftdx10', port: '/dev/a' },
+                { id: 2, model: 'ic7300', port: '/dev/b' },
+            ],
+            catalogue: [],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftPort('/dev/edited-1');
+        rigsState.select(2); // switch away — must NOT discard rig 1's edit
+        expect(rigsState.dirty).toBe(false); // rig 2 is pristine
+        rigsState.select(1); // back to rig 1
+        expect(rigsState.draft?.port).toBe('/dev/edited-1'); // review Rigs-editor #3
+        expect(rigsState.dirty).toBe(true);
+    });
+
+    it('save re-fetches + merges onto the FRESH catalogue and omits default_rig_id', async () => {
+        // Load returns catalogue A; the save's re-fetch returns catalogue B where
+        // rig 2 changed concurrently (new port) — the PUT must carry the FRESH
+        // rig 2, not the stale mount snapshot, and must NOT send default_rig_id
+        // (reviews Rigs-editor #1). rig 1 keeps its un-rendered fields.
+        let get = 0;
+        const rig1 = {
+            id: 1,
+            model: 'ftdx10',
+            port: '/dev/a',
+            audio: { rx: 'A', tx: 'A' },
+            mode_mappings: { USB: { mode: 'SSB' } },
+        };
         const puts = mockCluster(
-            {
-                default_rig_id: 1,
-                rigs: [
-                    {
-                        id: 1,
-                        model: 'ftdx10',
-                        port: '/dev/a',
-                        audio: { rx: 'A', tx: 'A' },
-                        ft8_mode: 'DATA-U',
-                        my_rig: 'FTDX10',
-                        mode_mappings: { USB: { mode: 'SSB' } },
-                        overrides: { baud_rate: 38400 },
-                    },
-                    { id: 2, model: 'ic7300', port: '/dev/b' },
-                ],
-                catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+            () => {
+                get++;
+                return {
+                    default_rig_id: 1,
+                    // rig 2's port differs between load (get 1) and re-fetch (get 2)
+                    rigs: [
+                        { ...rig1 },
+                        { id: 2, model: 'ic7300', port: get === 1 ? '/dev/b' : '/dev/CONCURRENT' },
+                    ],
+                    catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+                };
             },
-            {
-                serial_ports: [{ id: '/dev/new', label: 'new port' }],
-                audio: { available: true, capture: [{ name: 'A' }], playback: [{ name: 'A' }] },
-            }
+            { serial_ports: [{ id: '/dev/new', label: 'p' }], audio: { available: false } }
         );
         await rigsState.load();
         rigsState.select(1);
@@ -225,18 +259,14 @@ describe('rigsState', () => {
         expect(puts).toHaveLength(1);
         const sent = JSON.parse(puts[0]) as {
             rigs: Array<Record<string, unknown>>;
-            default_rig_id: number;
+            default_rig_id?: number;
         };
-        expect(sent.default_rig_id).toBe(1);
-        const r1 = sent.rigs.find((r) => r.id === 1);
-        expect(r1?.port).toBe('/dev/new'); // the edit
-        // …and the unrendered fields rode back verbatim (the config-wipe guard):
-        expect(r1?.mode_mappings).toEqual({ USB: { mode: 'SSB' } });
-        expect(r1?.overrides).toEqual({ baud_rate: 38400 });
-        expect(r1?.ft8_mode).toBe('DATA-U');
-        expect(r1?.my_rig).toBe('FTDX10');
-        // …and the OTHER rig is preserved whole.
-        expect(sent.rigs.find((r) => r.id === 2)).toMatchObject({ id: 2, model: 'ic7300' });
-        expect(rigsState.dirty).toBe(false); // cleared after a successful save
+        expect('default_rig_id' in sent).toBe(false); // active rig untouched
+        const s1 = sent.rigs.find((r) => r.id === 1);
+        expect(s1?.port).toBe('/dev/new'); // our edit
+        expect(s1?.mode_mappings).toEqual({ USB: { mode: 'SSB' } }); // un-rendered field preserved
+        // the concurrent change to rig 2 is preserved, not clobbered by the snapshot
+        expect(sent.rigs.find((r) => r.id === 2)?.port).toBe('/dev/CONCURRENT');
+        expect(rigsState.dirty).toBe(false);
     });
 });

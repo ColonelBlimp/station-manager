@@ -33,16 +33,36 @@ survive disruption via a supervisor/reconnect loop.
 Build an inbound DX-cluster client as a **new daemon subsystem**
 (`internal/dxcluster`), a sibling to `internal/bridge` and `internal/ft8`: it
 holds a persistent telnet connection to a classic DX-cluster node (callsign
-login + keepalive), parses spot lines, and — for each spot — resolves DXCC via
-the existing enrichment path and worked-status via the existing contest-dupe
-path, then matches against an operator **watch-list**. Matches raise an alert;
-all spots feed a live SSE spot stream the SPA renders (a filtered table like FT8
-Band Activity). Config lives in a `dxcluster` block in `config.json`; the
-watch-list (needed-DXCC, band/mode slots, specific calls) lives there too. A
-spot carries frequency + mode, so **click-a-spot → QSY** drives the *existing*
-bridge rig-control write seam (`set_freq`/`set_mode`) — reused via the same
-injected-closure seam the FT8 TX path uses, never a package import, so
-narrow-scope holds.
+login + keepalive), parses spot lines (frequency + callsign + free-form
+remarks — **a DXSpider spot carries no structured mode**), enriches each spot
+(DXCC/zones), and matches it against an operator **watch-list**. Matches raise
+an alert; all spots feed a live SSE spot stream the SPA renders (a filtered
+table like FT8 Band Activity). Config + watch-list live in a `dxcluster` block
+in `config.json`.
+
+**Two matching inputs, kept distinct** (review 2026-07-20):
+
+- **Exact-callsign worked-status** — the existing contest-dupe path
+  (`/v1/contest-dupe`, "have I worked THIS station on this band[/mode]") answers
+  the specific-callsign watch and the dupe tint. It is exact-callsign only.
+- **Needed-entity status** (needed DXCC / band / mode *slot*) — contest-dupe
+  **cannot** answer this: after one callsign from an entity is worked, another
+  callsign from the same entity is still `duplicate:false`. This needs a NEW
+  logbook aggregation — worked-entities-by-band-and-mode, over the configured
+  logbook scope — which the subsystem (or a shared awards-tracking derivation)
+  builds. The needed-slot match keys on that aggregation, not on contest-dupe.
+
+**Click-a-spot → QSY is FREQUENCY-first.** A spot's frequency drives `set_freq`
+via the existing bridge rig-control seam (the injected-closure seam the FT8 TX
+path uses, never an `internal/bridge` import — narrow-scope holds). Mode is NOT
+in the spot: it is best-effort inferred (band-plan segment, or a remark like
+"FT8"/"CW") and then mapped to the **rig's own literal** via that rig's
+`mode_mappings` (e.g. FT8 → `USB-D` on the IC-7300, `DATA-U` on the FTdx10 —
+never a generic "SSB"). Because `bridge.SendCommands` is an **atomic batch**
+(ADR 0026 — one bad command rejects the whole batch, losing even the valid
+freq change), a `set_mode` is only appended when a rig-literal was resolved;
+an unknown or unmappable mode → **frequency-only QSY** (the reliable part
+always happens).
 
 ## Alternatives considered
 

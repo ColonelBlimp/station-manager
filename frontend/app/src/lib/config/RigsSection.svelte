@@ -70,10 +70,11 @@
             {#each rigsState.rigs as rig (rig.id)}
                 <li>
                     <button
-                        class="w-full rounded-md border px-3 py-2 text-left transition-colors {rigsState.selectedId ===
+                        class="w-full rounded-md border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 {rigsState.selectedId ===
                         rig.id
                             ? 'border-focus bg-surface-muted'
                             : 'border-line hover:bg-surface-muted'}"
+                        disabled={rigsState.saving}
                         onclick={() => rigsState.select(rig.id)}
                     >
                         <div class="flex items-center gap-2">

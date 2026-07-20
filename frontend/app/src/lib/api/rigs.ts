@@ -95,23 +95,29 @@ function catalogueById(catalogue: unknown): Record<string, RigDef> {
 export type RigsSaveOutcome = { kind: 'ok' } | { kind: 'error'; message: string };
 
 /**
- * Save the rig catalogue + active-rig selector via PUT /v1/config. The daemon
- * WHOLE-REPLACES base.Rigs with what's sent (handler_config.go), so `rigs` MUST
- * be the full list with every rig's every field intact — callers pass the raw
- * objects from fetchRigs (never a reconstructed subset), so fields the panel
- * doesn't render (mode_mappings, overrides, ft8_mode, my_rig) round-trip
- * losslessly through JSON.stringify. Both blocks are presence-aware daemon-side;
- * sending only these two leaves the rest of the config untouched.
+ * Save the rig catalogue via PUT /v1/config. The daemon WHOLE-REPLACES base.Rigs
+ * with what's sent (handler_config.go), so `rigs` MUST be the full list with
+ * every rig's every field intact — callers pass the raw objects from fetchRigs
+ * (never a reconstructed subset), so fields the panel doesn't render
+ * (mode_mappings, overrides, ft8_mode, my_rig) round-trip losslessly through
+ * JSON.stringify. `default_rig_id` is OPTIONAL and OMITTED by the connection
+ * editor (which doesn't change the active rig): it's presence-aware daemon-side,
+ * so omitting it leaves the active-rig selection untouched rather than
+ * clobbering a concurrent change to it (review 2026-07-20 Rigs-editor #1). Both
+ * blocks are presence-aware; sending only these leaves the rest of the config
+ * alone.
  */
 export async function saveRigs(
     rigs: RigConfig[],
-    defaultRigId: number,
+    defaultRigId?: number,
     signal?: AbortSignal
 ): Promise<RigsSaveOutcome> {
+    const patch: { rigs: RigConfig[]; default_rig_id?: number } = { rigs };
+    if (defaultRigId !== undefined) patch.default_rig_id = defaultRigId;
     const fetched = await safeFetch('/v1/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rigs, default_rig_id: defaultRigId }),
+        body: JSON.stringify(patch),
         signal,
     });
     if (!fetched.ok) return { kind: 'error', message: fetched.message };
