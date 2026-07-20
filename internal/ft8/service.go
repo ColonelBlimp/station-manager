@@ -131,8 +131,11 @@ type Service struct {
 	txDialMHz  float64 // dial of the in-flight transmission, for the keyed-time decode-log TX line
 	txLastErr  string  // i18n code of the last failed transmission ("" = none)
 	// exchPath is the operator's antenna-path choice for the active exchange
-	// ("S"/"L"); logging-only. Reset on ACCEPTED session starts and consumed+reset
-	// at each logged contact (review 2026-07-20 #5). Accepted residue: a
+	// ("S"/"L"); logging-only. Lifecycle (review 2026-07-20 #5 + round 12 #3):
+	// atomically CONSUMED before each session start (restored on a rejected
+	// start — consuming first means the path is at its default before the new
+	// session is ever visible-active, so a selection for it can't be stomped)
+	// and atomically consumed at each logged contact. Accepted residue: a
 	// caller-mode answerer that fails mid-exchange (no RR73, drop back to CQ)
 	// leaves the previous choice in place for the next answerer — adjust it as
 	// the pile-up moves.
@@ -234,11 +237,12 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		// completed exchange just before the sink builds the QSO record. The
 		// sequencer is path-agnostic; the choice lives on the Service (set via
 		// the /v1/ft8/qso/path endpoint, defaulting to short per exchange).
-		// Consume-then-reset (review 2026-07-20 #5): a Call-CQ run logs a
-		// contact and keeps the session alive, so without the reset here the
-		// NEXT answerer would inherit this contact's long-path choice.
-		c.AntPath = s.exchangePath()
-		s.resetExchangePath()
+		// Atomic consume (review 2026-07-20 #5 + round 12 #3): a Call-CQ run
+		// logs a contact and keeps the session alive, so without the clear the
+		// NEXT answerer would inherit this contact's long-path choice — and
+		// read+clear must share one lock hold, or a selection landing between
+		// them is silently swallowed.
+		c.AntPath = s.consumeExchangePath()
 		if s.qsoLogger != nil {
 			s.qsoLogger(s.base(), c)
 		}

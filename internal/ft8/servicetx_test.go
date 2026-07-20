@@ -437,3 +437,23 @@ func TestOnComplete_ConsumesThenResetsPath(t *testing.T) {
 	require.Equal(t, antPathShort, s.exchangePath(),
 		"the choice is consumed — the next contact starts from the short-path default")
 }
+
+// TestExchangePath_ConsumeAndRestore pins the round-12 #3 helpers: consume is
+// an atomic read+clear (a second consume yields the default), and restore puts
+// back only the non-default — so a selection that landed after a rejected
+// start's consume beats a short-path restore.
+func TestExchangePath_ConsumeAndRestore(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+
+	s.SetExchangePath("L")
+	require.Equal(t, antPathLong, s.consumeExchangePath(), "consume returns the choice")
+	require.Equal(t, antPathShort, s.exchangePath(), "consume clears back to the default")
+	require.Equal(t, antPathShort, s.consumeExchangePath(), "second consume yields the default")
+
+	s.restoreExchangePath(antPathLong)
+	require.Equal(t, antPathLong, s.exchangePath(), "long-path restore reinstates the choice")
+
+	s.SetExchangePath("L") // a selection landing between a consume and a restore...
+	s.restoreExchangePath(antPathShort)
+	require.Equal(t, antPathLong, s.exchangePath(), "...is not clobbered by a short-path restore")
+}
