@@ -41,9 +41,12 @@ precisely so we don't re-derive state or redo finished work.
 > the smcloud batch (2/2 real) BUILT + COMMITTED, round #12 (3/3 real, incl. a
 > HIGH regression of my own inside the #10 capture fix) BUILT + COMMITTED in
 > three operator-directed steps — and the operator switched to AUTOMATIC
-> per-commit clean-room reviews (codex, `.codex-reviews/`), which immediately
-> caught two more real issues, both fixed. Nothing deferred anywhere; both
-> packages end the session at zero open findings.**
+> per-commit clean-room reviews (codex, `.codex-reviews/`). Then SMC milestone
+> 1 (multi-tenancy) BUILT → DEPLOYED + verified live on F44 (caught a
+> stale-binary trap during the deploy), and `smcloudctl`/`smctl` control
+> scripts added — codex catching 3 real reliability bugs in each. Nothing
+> deferred anywhere; the whole tree ends the session at zero open review
+> findings.**
 > - **External review (4 findings) → all four verified → ALL BUILT (the
 >   fix-don't-defer trigger session):** (1) padded UUID: server validated a
 >   TRIMMED uuid but stored the payload verbatim → 200-accepted rows failed
@@ -259,22 +262,61 @@ precisely so we don't re-derive state or redo finished work.
 >   fabricated test, documented the reality (the canonical-suffix check is
 >   the real, reachable protection); (c) clean. Tenant isolation was already
 >   structural (migration 0004) + pinned by the existing two-tenant e2e
->   tests. **Deploy = ONE `task rpm:smcloud` F44 rebuild** carrying
->   multi-tenancy + 0004 + all cloud review fixes + the dormant limiter;
->   7Q8AC then onboards with two env lines + restart. NOT yet deployed.
-> - **NEXT (operator-set): (1) DEPLOY — SMC milestone 1 is BUILT + committed,
->   so the one outstanding action is the `task rpm:smcloud` F44 rebuild +
->   install (multi-tenancy + migration 0004 + all cloud review fixes + the
->   dormant limiter in one artifact); 7Q8AC onboards after with two env lines
->   + restart. The ft8 TX batch rides the separate `task deploy:local:dev`.
->   (2)** ClubLog enable at the next on-air test (checklist in
+>   tests.
+> - **MILESTONE 1 DEPLOYED + VERIFIED LIVE on F44** (`task rpm:smcloud` →
+>   install → restart). Verification caught a real trap first: the initial
+>   `enable --now` left the OLD 2026-07-19 binary running (a running unit
+>   isn't restarted by enable --now — the same trap the runbook documents for
+>   Caddy); a `systemctl restart smcloud` swapped it, then `/v1/version` read
+>   `712-g97b6e1da` (HEAD) and health `db:ok` = migration 0004 applied cleanly
+>   over the live ~5,772 rows, reconcile `in_sync:true`. **7Q8AC not yet
+>   onboarded** (add the env pair + restart when ready).
+> - **Control scripts `smcloudctl` + `smctl` (operator-requested parity with
+>   smd):** `scripts/smcloudctl.sh` (NEW, packaged into the smcloud RPM at
+>   `/usr/bin/smcloudctl`) — start/stop/restart/status/enable/disable for the
+>   SYSTEM smcloud unit (auto-sudo; no `import` — smcloud has no local DB).
+>   On-crash restart already exists in the unit (`Restart=on-failure`), so
+>   "auto restart" = boot autostart (`enable`/`disable`). **Codex found 3 real
+>   reliability bugs, all fixed** (then ported the same 3 to the pre-existing
+>   `smctl`): (1) `stop` gated on `is-active`, which exits NON-ZERO in
+>   `activating(auto-restart)` — so it couldn't stop a crash loop → `is_stopped`
+>   state check; (2) `Type=simple` reports active on fork BEFORE the 5s
+>   Postgres ping/migrations, so `sleep 1; is-active` gave false success →
+>   `stays_active` watches the unit HOLDS active for 8s (>1 restart cycle);
+>   (3) `status` did `systemctl status || true` → always exit 0 (dead service
+>   reads healthy) → honest exit from the real state. Also added a runbook
+>   "updating the binary → `smcloudctl restart`" note (closes the stale-binary
+>   gap that bit the deploy). Both control-script commits reviewed CLEAN.
+> - **Deploy-smc-again? decided NO (for now):** the smcloud BINARY is
+>   byte-identical since the live deploy (`git diff cmd/smcloud internal/cloud
+>   97b6e1da..HEAD` empty) — only packaging changed (smcloudctl + runbook), so
+>   a redeploy is cosmetic. Hold it until `smcloudctl` is actually wanted on
+>   the box OR 7Q8AC onboards (bundle the wrapper deploy with a restart that
+>   carries real value).
+> - **On journald (F44 ops):** smcloud logs to the systemd JOURNAL, not a file
+>   (`os.Stderr` → journald; the unit hardening forbids file writes anyway) —
+>   `journalctl -u smcloud`. Operator made journald PERSISTENT on the F44 box
+>   (`/var/log/journal` + `SystemMaxUse=500M` drop-in) so smcloud history
+>   survives reboots. (smd, by contrast, writes a real file at
+>   `~/.local/share/station-manager/log/smd.log`.)
+> - **Codex-review timing note:** reviews can LAG a commit — after the
+>   smcloudctl-fix commit I was pivoted straight to smctl and skipped its
+>   review, which then sat in `.codex-reviews/` until the next check; and the
+>   smd review landed a beat after its commit. So on resume/after commits,
+>   expect the pending review to be for a PRIOR commit, and confirm which
+>   commit a review targets (subject + verified paths) before assuming it
+>   covers HEAD.
+> - **NEXT (operator-set): (1)** smcloud packaging redeploy (ships
+>   `smcloudctl`) — OPTIONAL, no binary change; bundle with 7Q8AC onboarding
+>   when ready. **(2)** ClubLog enable at the next on-air test (checklist in
 >   `docs/dogfood-inbox.md`). **(3)** stamp-drift steady-state eyeball
 >   (`grep reconcile …/smd.log | tail -3` → `in_sync:true`). **(4)** on-air
 >   FT8 eyeball of the TX-path changes (commit gate, post-key truncation,
 >   keyed-time ALL.TXT) — normal QSO flow + an operator Abandon mid-exchange
->   + ALL.TXT lines matching real key times. **(5)** standing: dogfood
->   validations, backlog; SPA retirement + app Settings build queued behind
->   the deploy unless re-prioritised.
+>   + ALL.TXT lines matching real key times; rides `task deploy:local:dev`.
+>   **(5)** standing: dogfood validations, backlog; SPA retirement + app
+>   Settings build queued unless re-prioritised. Phase-2 security gate
+>   (ADR 0040 + token rotation) before anything internet-facing.
 
 > **Session 227 (2026-07-19, mid-morning) — FT8 band-change clear BUILT, then
 > BOTH S226 NEXT deploys DONE + VERIFIED. Everything through the sixth batch
