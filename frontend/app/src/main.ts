@@ -303,8 +303,19 @@ setSetupSave(async (callsign) => {
 // re-fetch + re-apply the shared station context so a changed operator/grid is
 // live app-wide (Band Activity flags, bearings, QSO OPERATOR/MY_GRIDSQUARE)
 // without a reload — mirrors the first-run save above (review 2026-07-20 #2).
+// Apply ONLY a good context: on a transient GET failure fetchStationContext
+// returns a configOk:false sentinel (empty callsign/operator/grid/logbook), and
+// blindly applying it would wipe the valid context and break subsequent QSO
+// submits until reload (review 2026-07-20 round 2 #1). The save itself already
+// succeeded; keep the last-good context and tell the operator a reload is needed
+// for the app-wide refresh.
 setStationSaved(async () => {
-    applyStationContext(await fetchStationContext());
+    const c = await fetchStationContext();
+    if (c.configOk) {
+        applyStationContext(c);
+    } else {
+        toasts.warn('Saved — but refreshing the app failed; reload to apply the change everywhere.');
+    }
 });
 
 // Submit sink: draft + rig context + displayed enrichment → one ADIF record →

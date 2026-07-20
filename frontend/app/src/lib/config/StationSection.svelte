@@ -47,12 +47,22 @@
                     {@render field(
                         'Station callsign',
                         'station_callsign',
-                        'Set during first-run setup and bound to your logbook — changing it would reject new QSOs. Read-only here.',
+                        'The logging station’s callsign — the callsign used over the air. Set during setup and bound to your logbook, so it’s read-only here.',
                         'w-48',
                         true,
                     )}
-                    {@render field('Operator', 'operator', undefined, 'w-48')}
-                    {@render field('Owner callsign', 'owner_callsign', undefined, 'w-48')}
+                    {@render field(
+                        'Operator',
+                        'operator',
+                        'The logging operator’s callsign — who is at the controls. If blank, the station callsign is used.',
+                        'w-48',
+                    )}
+                    {@render field(
+                        'Owner callsign',
+                        'owner_callsign',
+                        'The callsign of the station’s owner — the operator’s host when operating as a guest. If blank, the station callsign is used.',
+                        'w-48',
+                    )}
                     {@render field('Name', 'my_name')}
                     {@render field('Activity program', 'my_sig', 'ADIF MY_SIG — e.g. POTA, SOTA, WWFF.', 'w-40')}
                     {@render field(

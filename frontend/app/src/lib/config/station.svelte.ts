@@ -74,17 +74,25 @@ class StationState {
     async save(): Promise<void> {
         if (this.saving || !this.dirty) return;
         this.saving = true;
-        const res = await saveStation({ station: { ...this.form } });
-        this.saving = false;
-        if (res.kind === 'error') {
-            toasts.error(`Save failed: ${res.message}`);
-            return;
+        // Hold `saving` across BOTH the PUT and the onSaved context refresh
+        // (finally), not just the PUT: clearing it early let a second save start
+        // while the first refresh was still in flight, and an out-of-order
+        // completion could apply a stale operator/grid to the shared context
+        // (review 2026-07-20 round 2 #2). The latch serialises them.
+        try {
+            const res = await saveStation({ station: { ...this.form } });
+            if (res.kind === 'error') {
+                toasts.error(`Save failed: ${res.message}`);
+                return;
+            }
+            this.#apply(res.config);
+            // Re-apply the shared station context so a changed operator/grid
+            // takes effect app-wide without a reload (review 2026-07-20 #2).
+            await onSaved?.();
+            toasts.info('Station settings saved.');
+        } finally {
+            this.saving = false;
         }
-        this.#apply(res.config);
-        // Re-apply the shared station context so a changed operator/grid takes
-        // effect app-wide without a reload (review 2026-07-20 #2).
-        await onSaved?.();
-        toasts.info('Station settings saved.');
     }
 
     // Revert edits to the last loaded/saved snapshot.
