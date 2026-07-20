@@ -239,23 +239,42 @@ precisely so we don't re-derive state or redo finished work.
 >   Workflow: check after commits + at session start → verify findings
 >   against code → implement valid ones → DELETE the review doc (deletion =
 >   processed; no status editing). Memory `codex-commit-reviews` records it.
->   First session's tally: 5 reviews — 2 clean, 2 real P2 catches (both
->   fixed), 1 re-find of a pasted-round finding. The reviewer's sandbox
->   cannot run `go test` (read-only /tmp) — cover its blocked verification
->   locally when triaging.
-> - **NEXT (operator-set): (1) build SMC milestone 1 when the operator says
->   go — design above is agreed; the paused build had `main.go` read and no
->   code written. Then ONE F44 `task rpm:smcloud` rebuild carries
->   multi-tenancy + migration 0004 + the review batch + the rate limiter.
+>   The reviewer's sandbox cannot run `go test` (read-only /tmp) — cover its
+>   blocked verification locally when triaging.
+> - **SMC MILESTONE 1 — MULTI-TENANCY PROVISIONING BUILT + COMMITTED
+>   (operator-directed, ADR 0052):** `cmd/smcloud` `collectTenantPairs` —
+>   legacy `SMCLOUD_CALLSIGN`/`SMCLOUD_TOKEN` pair = tenant 1 (unchanged, so
+>   the live F44 env is drop-in), numbered `SMCLOUD_CALLSIGN_N`/
+>   `SMCLOUD_TOKEN_N` (N 2..32) add tenants; `run()` loops `EnsureTenant` per
+>   pair into the N-entry token→tenant map (`server.New` needed no change).
+>   Fail-loud: orphaned halves, unparseable/non-canonical/out-of-range
+>   suffixes, duplicate tokens, duplicate callsigns all refuse boot; one
+>   `tenant provisioned` log line per tenant (callsign+id, never the token).
+>   `smcloud.env.example` + runbook §1.4 gained the add-a-pair→restart
+>   procedure. **Three codex rounds on it:** (a) `_02`/`_+2` alternate
+>   spellings of one index could cross-combine halves → canonical-suffix
+>   rejection (Itoa round-trip); (b) my follow-up set-twice guard was DEAD
+>   CODE — systemd EnvironmentFile resolves a repeated key last-wins before
+>   exec, so `os.Environ()` never shows it twice; removed the guard + its
+>   fabricated test, documented the reality (the canonical-suffix check is
+>   the real, reachable protection); (c) clean. Tenant isolation was already
+>   structural (migration 0004) + pinned by the existing two-tenant e2e
+>   tests. **Deploy = ONE `task rpm:smcloud` F44 rebuild** carrying
+>   multi-tenancy + 0004 + all cloud review fixes + the dormant limiter;
+>   7Q8AC then onboards with two env lines + restart. NOT yet deployed.
+> - **NEXT (operator-set): (1) DEPLOY — SMC milestone 1 is BUILT + committed,
+>   so the one outstanding action is the `task rpm:smcloud` F44 rebuild +
+>   install (multi-tenancy + migration 0004 + all cloud review fixes + the
+>   dormant limiter in one artifact); 7Q8AC onboards after with two env lines
+>   + restart. The ft8 TX batch rides the separate `task deploy:local:dev`.
 >   (2)** ClubLog enable at the next on-air test (checklist in
 >   `docs/dogfood-inbox.md`). **(3)** stamp-drift steady-state eyeball
->   (`grep reconcile …/smd.log | tail -3` → `in_sync:true`). **(4)** the ft8
->   batch #10 TX-path changes (commit gate, post-key truncation, keyed-time
->   ALL.TXT) deserve an on-air FT8 eyeball at the next session — normal
->   QSO flow + an operator Abandon mid-exchange + ALL.TXT lines matching real
->   key times; deploys with the next `task deploy:local:dev`. **(5)** standing:
->   dogfood validations, backlog; SPA retirement + app Settings build are
->   queued behind the milestone unless re-prioritised.
+>   (`grep reconcile …/smd.log | tail -3` → `in_sync:true`). **(4)** on-air
+>   FT8 eyeball of the TX-path changes (commit gate, post-key truncation,
+>   keyed-time ALL.TXT) — normal QSO flow + an operator Abandon mid-exchange
+>   + ALL.TXT lines matching real key times. **(5)** standing: dogfood
+>   validations, backlog; SPA retirement + app Settings build queued behind
+>   the deploy unless re-prioritised.
 
 > **Session 227 (2026-07-19, mid-morning) — FT8 band-change clear BUILT, then
 > BOTH S226 NEXT deploys DONE + VERIFIED. Everything through the sixth batch
