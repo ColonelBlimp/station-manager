@@ -8,7 +8,7 @@ const ServiceName = "bridgeservice"
 // (ADR 0027) and rig-clients (multi-tab awareness). Extending this set
 // is a wire-protocol change that requires
 // updating the SPA's EventSource consumer in
-// `frontend/logging/src/lib/states/bridge.svelte.ts` and revising the
+// `frontend/app/src/lib/operate/rig.svelte.ts` and revising the
 // relevant ADR.
 type EventName string
 

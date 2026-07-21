@@ -41,7 +41,8 @@ comment every 30s, clear/re-arm write deadlines so long-lived streams survive
 
 **Gating.** "Always-on" = registered whenever the server runs. Subsystem routes are
 registered only when their subsystem is enabled (bridge / FT8 / profiling / SPA); when
-unregistered, the path falls through to the SPA catch-all (or 404 on a headless daemon).
+unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-07-21 —
+`GET /` exact-redirects to `/app/`; a headless daemon has no SPA routes at all).
 
 ---
 
@@ -347,18 +348,18 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 - **Purpose:** Go runtime profiling (goroutine/heap/CPU/trace). Development affordance, not a stable contract; lives outside `/v1/*`.
 - **Gating:** **Only when `Server.EnableProfiling` is true** (off by default; logs a warning at mount).
 - **Routes:** `GET /debug/pprof/`, `/cmdline`, `/profile`, `/symbol` (GET+POST), `/trace`. Standard `net/http/pprof` semantics (`profile?seconds=N` blocks N seconds — a DoS vector, so it stays off by default).
-- **Notes:** Registered on this mux (not `http.DefaultServeMux`); method-specific GET registration avoids a ServeMux conflict with the `GET /` SPA catch-all.
+- **Notes:** Registered on this mux (not `http.DefaultServeMux`); method-specific GET registration keeps these patterns clean under Go 1.22 ServeMux. Since the logging SPA's `GET /` catch-all was retired (2026-07-21), there is no root catch-all to conflict with — an unmounted pprof path (profiling off) is a plain 404.
 
-### `GET /`, `GET /config/`, `GET /logbook/` (embedded SPAs)
-- **Purpose:** Serve the embedded Svelte SPAs — logging app at `/`, config app at `/config/`, logbook app at `/logbook/` — with client-side-routing fallback.
+### `GET /{$}`, `GET /app/`, `GET /config/`, `GET /logbook/` (embedded SPAs)
+- **Purpose:** Serve the embedded Svelte SPAs — app shell at `/app/` (ADR 0044), config app at `/config/`, logbook app at `/logbook/` — with client-side-routing fallback. `GET /` 302-redirects to `/app/`. (The legacy logging SPA that owned `/` as a catch-all was **retired 2026-07-21** — embed + route removed, source kept for reference.)
 - **Gating:** **Only when `Protocol == "tcp" && *ServeSPA`** (browsers need TCP; a headless Unix-socket daemon leaves these unregistered).
-- **Routes:** `GET /config/` → `StripPrefix("/config", spaHandler(ConfigFS()))` and `GET /logbook/` → `StripPrefix("/logbook", spaHandler(LogbookFS()))` (subtree patterns; bare `/config`,`/logbook` 301→ trailing slash); `GET /` → `spaHandler(LoggingFS())` (catch-all). Go 1.22 ServeMux gives `/v1/*`, the sub-path, `/manual/`, and pprof patterns priority, so `/` is naturally bounded to unmatched paths.
-- **Response:** **200** with the static asset, or `index.html` when the path doesn't resolve to a file (SPA-router fallback, so a refresh on `/log` etc. doesn't 404). `Cache-Control: no-cache` on every asset (the entry bundle has a stable, hash-free name).
+- **Routes:** `GET /app/` → `StripPrefix("/app", spaHandler(AppFS()))`, `GET /config/` → `StripPrefix("/config", spaHandler(ConfigFS()))`, `GET /logbook/` → `StripPrefix("/logbook", spaHandler(LogbookFS()))` (subtree patterns; bare `/app`,`/config`,`/logbook` 301→ trailing slash); `GET /{$}` → `RedirectHandler("/app/", 302)`. This is an **exact-match** root, not a catch-all, so any GET matching no route (incl. `/debug/pprof/*` when profiling is off) is a clean **404** rather than an SPA fallthrough.
+- **Response:** For a sub-path SPA, **200** with the static asset, or `index.html` when the path doesn't resolve to a file (SPA-router fallback within the subtree, so a refresh on `/app/log` etc. doesn't 404). `Cache-Control: no-cache` on every asset (the entry bundle has a stable, hash-free name). `GET /` → **302** to `/app/`.
 
 ### `GET /manual/` (embedded operator manual)
 - **Purpose:** Serve the embedded operator manual — a single self-contained, zero-JS Hugo page (ADR 0036). Distinct from the SPAs: plain static files, **no** client-side-router fallback.
 - **Gating:** Same as the SPAs — **only when `Protocol == "tcp" && *ServeSPA`**. The on-disk copy (`/usr/share/doc/station-manager/manual/`, shipped in the RPM) covers reading it from `file://` when the daemon isn't serving.
-- **Routes:** `GET /manual/` → `StripPrefix("/manual", manualHandler(manual.FS()))` (subtree pattern; bare `/manual` 301→`/manual/`). More specific than the `/` catch-all, so it takes priority.
+- **Routes:** `GET /manual/` → `StripPrefix("/manual", manualHandler(manual.FS()))` (subtree pattern; bare `/manual` 301→`/manual/`). A subtree pattern, matched independently of the `GET /{$}` exact-root redirect.
 - **Response:** **200** with the static page, **404** for any unresolved path (no SPA fallback — it's static). `Cache-Control: no-cache` (the manual is rebuilt with the daemon, so the served copy always matches the running version).
 
 ---

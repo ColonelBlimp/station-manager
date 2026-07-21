@@ -20,7 +20,7 @@ import (
 // Extended (chars 7-8): 0-9.
 //
 // The TypeScript-side mirror lives at
-// frontend/logging/src/lib/validators/maidenhead.ts; behaviour is kept
+// frontend/app/src/lib/validators/maidenhead.ts; behaviour is kept
 // in sync because both sides validate the same wire field.
 
 var maidenheadPattern = regexp.MustCompile(`^[A-R]{2}[0-9]{2}([A-X]{2}([0-9]{2})?)?$`)

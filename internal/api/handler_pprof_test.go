@@ -19,30 +19,21 @@ func pprofProbe(t *testing.T, srv *Server, path string) *httptest.ResponseRecord
 	return w
 }
 
-// looksLikeSPAFallthrough reports whether the response body looks like
-// the embedded SPA's index.html (the catch-all at GET /). Used to
-// distinguish "pprof handler served the request" from "request fell
-// through to the SPA". The SPA's index ships with an <html> root and a
-// <div id="app"> hook for Svelte to mount; both are robust markers
-// independent of asset filename hashing.
-func looksLikeSPAFallthrough(body string) bool {
-	return strings.Contains(body, "<html") || strings.Contains(body, `id="app"`)
-}
-
 // TestPprof_DisabledByDefault pins the safe-by-default behaviour: a
 // fresh server (no cfg.Server.EnableProfiling override) does NOT mount
-// the pprof handlers. /debug/pprof/* requests fall through to the
-// SPA catch-all (the documented "anything not under /v1/* serves
-// index.html" rule). Critical: without this assertion, a future
-// refactor that flips the default could expose pprof to anyone
-// reachable on the daemon's port — leaking heap / goroutine state and
-// offering a DoS surface via /debug/pprof/profile?seconds=N.
+// the pprof handlers. Since the logging SPA was retired (2026-07-21)
+// there is no root catch-all, so /debug/pprof/* matches no route and
+// returns 404 — a cleaner posture than the old SPA fallthrough.
+// Critical: without this assertion, a future refactor that flips the
+// default could expose pprof to anyone reachable on the daemon's port —
+// leaking heap / goroutine state and offering a DoS surface via
+// /debug/pprof/profile?seconds=N.
 func TestPprof_DisabledByDefault(t *testing.T) {
 	srv := testServer(t) // EnableProfiling stays at its zero value (false)
 
 	w := pprofProbe(t, srv, "/debug/pprof/")
-	if !looksLikeSPAFallthrough(w.Body.String()) {
-		t.Fatalf("/debug/pprof/ with profiling off did not fall through to SPA; body=%q", w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("/debug/pprof/ with profiling off: status = %d, want 404; body=%q", w.Code, w.Body.String())
 	}
 	// Body must not carry pprof markers — the disabled path must not
 	// leak any pprof index links / profile descriptions even by
@@ -55,9 +46,9 @@ func TestPprof_DisabledByDefault(t *testing.T) {
 }
 
 // TestPprof_DisabledRejectsAllSubroutes is the belt-and-braces sweep:
-// every documented pprof subroute must fall through to the SPA when
-// EnableProfiling is false. Catches any future code path that
-// registers a subset of the routes but forgets to gate them all.
+// every documented pprof subroute must 404 when EnableProfiling is
+// false. Catches any future code path that registers a subset of the
+// routes but forgets to gate them all.
 func TestPprof_DisabledRejectsAllSubroutes(t *testing.T) {
 	srv := testServer(t)
 
@@ -70,9 +61,8 @@ func TestPprof_DisabledRejectsAllSubroutes(t *testing.T) {
 	}
 	for _, path := range paths {
 		w := pprofProbe(t, srv, path)
-		if !looksLikeSPAFallthrough(w.Body.String()) {
-			t.Errorf("%s with profiling off did not fall through to SPA; body=%q",
-				path, w.Body.String())
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%s with profiling off: status = %d, want 404", path, w.Code)
 		}
 	}
 }

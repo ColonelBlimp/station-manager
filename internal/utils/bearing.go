@@ -5,7 +5,7 @@ import "math"
 // Great-circle bearing + distance between two Maidenhead locators, for the
 // daemon-side derivation of ADIF ANT_AZ / DISTANCE / ANT_PATH when logging a
 // QSO (FT8, where the daemon builds the record). The TypeScript mirror lives
-// at frontend/logging/src/lib/utils/bearing.ts; the two are kept in sync
+// at frontend/app/src/lib/utils/bearing.ts; the two are kept in sync
 // (same Earth radius, same rounding) so a QSO logged via the daemon and one
 // logged via the SPA carry identical geometry.
 

@@ -53,20 +53,20 @@ if [ "${SKIP_NPM_CI:-}" = "1" ]; then
     note "Using existing node_modules — re-run 'task frontend:install' if package.json changed."
 else
     step "SPA: npm ci"
-    ( cd frontend/logging && npm ci )
+    ( cd frontend/app && npm ci )
 fi
 
 step "SPA: lint"
-( cd frontend/logging && npm run lint )
+( cd frontend/app && npm run lint )
 
 step "SPA: svelte-check (--fail-on-warnings)"
-( cd frontend/logging && npx svelte-check --fail-on-warnings )
+( cd frontend/app && npx svelte-check --fail-on-warnings )
 
 step "SPA: vitest"
-( cd frontend/logging && npx vitest run )
+( cd frontend/app && npx vitest run )
 
 step "SPA: build (produces dist/ for daemon embed)"
-( cd frontend/logging && npm run build )
+( cd frontend/app && npm run build )
 
 # ───────────────────────────────────────────────────────────────────
 # Go gate — gofmt drift first (fastest fail), then vet, then race-test,
@@ -83,7 +83,7 @@ fi
 note "gofmt clean"
 
 step "Go: enumerate packages (excluding npm-vendored Go code)"
-# `npm ci` populates frontend/logging/node_modules/, which contains
+# `npm ci` populates the SPAs' node_modules/ dirs, which contain
 # third-party packages that ship their own Go code (notably flatted's
 # Golang variant). `go test ./...` happily descends into them — fine
 # today, but a future broken npm dep with broken Go code would fail

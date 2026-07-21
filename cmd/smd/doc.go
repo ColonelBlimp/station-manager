@@ -6,11 +6,11 @@
 // SMTP mailer, hosts the rig-control bridge subsystem, and runs the
 // opt-in FT8 decode subsystem (decode-is-not-a-QSO; logs heard signals
 // only) in the default single-binary deployment. It exposes an HTTP API which
-// — per ADR 0001 — also serves the embedded Svelte logging SPA at
-// `GET /` when the listener is TCP and ServeSPA is enabled. The
-// listener protocol is configurable: "tcp" (default, required for
-// the embedded SPA) or "unix" for a Unix domain socket on a
-// headless / split-host deployment.
+// — per ADR 0001 / ADR 0044 — also serves the embedded Svelte app SPA at
+// `/app/` (with `GET /` redirecting there) when the listener is TCP and
+// ServeSPA is enabled. The listener protocol is configurable: "tcp"
+// (default, required for the embedded SPA) or "unix" for a Unix domain
+// socket on a headless / split-host deployment.
 //
 // Scope (per the "narrow daemon scope" invariant — see
 // docs/v1-analysis/invariants.md): the log + forward + enrichment
@@ -23,10 +23,11 @@
 // in-process; a separately-built `cmd/bridge` for split-host
 // topologies remains opt-in (parked).
 //
-// The HTTP API is the single client surface. The Svelte logging SPA
-// (`frontend/logging/`, embedded via `//go:embed`) is the current
-// in-tree client; external integrations (importer-style CLIs,
-// wsjtx-bridge) are deferred to milestone M3b.
+// The HTTP API is the single client surface. The Svelte app SPA
+// (`frontend/app/`, embedded via `//go:embed`; ADR 0044) is the primary
+// in-tree client; the legacy logging SPA that owned `/` was retired
+// 2026-07-21. External integrations (importer-style CLIs, wsjtx-bridge)
+// are deferred to milestone M3b.
 //
 // See `docs/v2-design/structure.md` for the deployment shape,
 // `docs/v2-design/api.md` for the API surface,

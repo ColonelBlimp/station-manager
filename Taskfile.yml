@@ -60,39 +60,9 @@ tasks:
     cmds:
       - sqlboiler psql
 
-  frontend:logging:install:
-    desc: Install logging-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
-    dir: frontend/logging
-    cmds:
-      - sh -c 'if [ -f package-lock.json ]; then npm ci; else npm install; fi'
-
   frontend:install:
-    desc: Install dependencies for every embedded SPA (logging + config + logbook + app)
-    deps: [frontend:logging:install, frontend:config:install, frontend:logbook:install, frontend:app:install]
-
-  frontend:dev:
-    desc: Run the logging SPA Vite dev server with HMR (proxies /v1/* to daemon on :8080)
-    dir: frontend/logging
-    cmds:
-      - npm run dev
-
-  frontend:build:
-    desc: Production build of the logging SPA (consumed by go:embed)
-    dir: frontend/logging
-    cmds:
-      - npm run build
-
-  frontend:deps:check:
-    desc: List logging-SPA npm dependencies that are behind their latest published version (in-range and major bumps both)
-    dir: frontend/logging
-    cmds:
-      - npm run deps:check
-
-  frontend:deps:update:
-    desc: Pull in-range npm dependency bumps for the logging SPA (anything compatible with the package.json semver ranges). Major bumps stay deliberate — `npm install <pkg>@latest` per their own commit.
-    dir: frontend/logging
-    cmds:
-      - npm run deps:update
+    desc: Install dependencies for every embedded SPA (config + logbook + app)
+    deps: [frontend:config:install, frontend:logbook:install, frontend:app:install]
 
   frontend:config:install:
     desc: Install config-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
@@ -101,7 +71,7 @@ tasks:
       - sh -c 'if [ -f package-lock.json ]; then npm ci; else npm install; fi'
 
   frontend:config:dev:
-    desc: Run the config SPA Vite dev server with HMR on :5174 (proxies /v1/* to daemon on :8080; runs alongside frontend:dev)
+    desc: Run the config SPA Vite dev server with HMR on :5174 (proxies /v1/* to daemon on :8080; runs alongside frontend:app:dev)
     dir: frontend/config
     cmds:
       - npm run dev
@@ -119,7 +89,7 @@ tasks:
       - sh -c 'if [ -f package-lock.json ]; then npm ci; else npm install; fi'
 
   frontend:logbook:dev:
-    desc: Run the logbook SPA Vite dev server with HMR on :5175 (proxies /v1/* to daemon on :8080; runs alongside frontend:dev)
+    desc: Run the logbook SPA Vite dev server with HMR on :5175 (proxies /v1/* to daemon on :8080; runs alongside frontend:app:dev)
     dir: frontend/logbook
     cmds:
       - npm run dev
@@ -155,8 +125,8 @@ tasks:
       - npm run check
 
   frontend:build:all:
-    desc: Build every embedded SPA (logging + config + logbook + app). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
-    deps: [frontend:build, frontend:config:build, frontend:logbook:build, frontend:app:build]
+    desc: Build every embedded SPA (config + logbook + app). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
+    deps: [frontend:config:build, frontend:logbook:build, frontend:app:build]
 
   manual:build:
     desc: Build the operator manual (Hugo → manual/public/) for the daemon's go:embed. Single self-contained zero-JS page (ADR 0036).
@@ -315,8 +285,8 @@ tasks:
   run:smd:
     desc: |
       Run the daemon directly via `go run` for SPA development. Pair with
-      `task frontend:dev` in another terminal — Vite serves the SPA on :5173
-      and proxies /v1/* to this daemon. Uses SM_WORKING_DIR from .env.
+      `task frontend:app:dev` in another terminal — Vite serves the app SPA on
+      :5176 and proxies /v1/* to this daemon. Uses SM_WORKING_DIR from .env.
       CGO on, so live FT8 capture works without a deploy — the fast FT8
       iteration loop (no RPM). Automatically stops the systemd `smd` first so
       the two don't contend for :8080 / the audio + serial ports; restart the

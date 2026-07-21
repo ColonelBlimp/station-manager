@@ -75,38 +75,19 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version-file: frontend/logging/package.json
+          node-version-file: frontend/app/package.json
           cache: npm
           cache-dependency-path: |
-            frontend/logging/package-lock.json
             frontend/config/package-lock.json
             frontend/logbook/package-lock.json
             frontend/app/package-lock.json
 
-      # ─── SPA gate ───────────────────────────────────────────────
+      # ─── SPA gates ──────────────────────────────────────────────
       # Run SPA-side checks BEFORE the Go build so the daemon embed
-      # picks up a fresh, verified dist/. Fast-fail order: lint and
-      # type-check are cheapest, then tests, then build.
-
-      - name: SPA install
-        working-directory: frontend/logging
-        run: npm ci
-
-      - name: SPA lint
-        working-directory: frontend/logging
-        run: npm run lint
-
-      - name: SPA type-check
-        working-directory: frontend/logging
-        run: npx svelte-check --fail-on-warnings
-
-      - name: SPA tests
-        working-directory: frontend/logging
-        run: npx vitest run
-
-      - name: SPA build (produces dist/ for daemon embed)
-        working-directory: frontend/logging
-        run: npm run build
+      # picks up a fresh, verified dist/ for each client. Fast-fail
+      # order per SPA: lint and type-check are cheapest, then tests,
+      # then build. (The logging SPA was retired 2026-07-21; its embed
+      # + route are gone, so it is no longer gated here.)
 
       # ─── Config SPA gate ────────────────────────────────────────
       # The config client (frontend/config/) is a separate embedded SPA
@@ -209,8 +190,8 @@ jobs:
             exit 1
           fi
 
-      # `npm ci` (above) populates frontend/logging/node_modules/, which
-      # contains third-party packages shipping their own Go code (e.g.
+      # `npm ci` (above) populates the SPAs' node_modules/ dirs, which
+      # contain third-party packages shipping their own Go code (e.g.
       # flatted's Golang variant). Filter them out at each call site so
       # a broken npm dep with broken Go code can't fail our build for an
       # unrelated reason. The `$(...)` substitution runs in bash inside

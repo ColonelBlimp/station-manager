@@ -2,8 +2,8 @@
 # Build a Station Manager v2 RPM end to end.
 #
 # Steps:
-#   1. Build the Svelte SPA (frontend/logging) so that `dist/` is
-#      current — it gets embedded into the daemon via //go:embed.
+#   1. Build the embedded Svelte SPAs (frontend/{config,logbook,app})
+#      so each `dist/` is current — they get embedded via //go:embed.
 #   2. Build the daemon binary at build/bin/smd. CGO_ENABLED=0 +
 #      modernc-sqlite gives a fully static linux/amd64 binary.
 #   3. Hand off to nfpm for the actual packaging.
@@ -45,7 +45,7 @@ fi
 VERSION="${1#v}" # strip an optional leading 'v' (v2.0.0 → 2.0.0)
 RPM_VERSION=$(sm_rpm_version "$VERSION")
 
-echo "── [1/3] Building SPAs → frontend/{logging,config,logbook}/dist/ + manual → manual/public/ ──"
+echo "── [1/3] Building SPAs → frontend/{config,logbook,app}/dist/ + manual → manual/public/ ──"
 # Every embedded SPA (frontend/embed.go //go:embed all:<spa>/dist) must be present
 # and current — the Go build embeds whatever is in each dist/, so a missing or
 # stale bundle ships a broken/old client for that surface.
@@ -53,15 +53,15 @@ echo "── [1/3] Building SPAs → frontend/{logging,config,logbook}/dist/ + m
 # builds the SPAs on the host so the build container needs no Node). Bare runs
 # still build them.
 if [ "${SM_SKIP_SPA:-}" = "1" ]; then
-  for spa in logging config logbook app; do
+  for spa in config logbook app; do
     if [ ! -d "frontend/${spa}/dist" ]; then
       echo "error: SM_SKIP_SPA=1 but frontend/${spa}/dist/ is missing — build the SPAs first" >&2
       exit 1
     fi
   done
-  echo "  (SM_SKIP_SPA=1 — using pre-built frontend/{logging,config,logbook,app}/dist/)"
+  echo "  (SM_SKIP_SPA=1 — using pre-built frontend/{config,logbook,app}/dist/)"
 else
-  for spa in logging config logbook app; do
+  for spa in config logbook app; do
     echo "  • frontend/${spa}"
     (cd "frontend/${spa}" && npm run build)
   done

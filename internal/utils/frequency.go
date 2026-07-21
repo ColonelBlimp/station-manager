@@ -22,8 +22,8 @@ var reFrequencyMHz = regexp.MustCompile(`^\d{7,8}$`)
 // (low/high), NOT prefix-based: an earlier prefix scheme (e.g. "14." → 20m)
 // classified in-prefix-out-of-band values as valid — 14.999 → 20m even though
 // 20m ends at 14.350 — so values between bands or past a band edge were
-// mislabelled (review 2026-06-19 M1). Mirrors the frontends' tables
-// (frontend/{logging,app}/src/lib/utils/frequency.ts) so daemon and SPA agree on
+// mislabelled (review 2026-06-19 M1). Mirrors the app SPA's table
+// (frontend/app/src/lib/utils/frequency.ts) so daemon and SPA agree on
 // what counts as in-band. Ranges follow the ADIF 3.1.5 band enumeration — notably
 // 60m = 5.06–5.45 MHz and 4m = 70–71 MHz — so band derivation accepts every in-band
 // ADIF frequency; a truly out-of-band freq (empty result) is rejected at submit,

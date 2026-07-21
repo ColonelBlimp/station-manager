@@ -291,7 +291,12 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// NOT an SPA, so it uses manualHandler (plain file server, real 404s) not
 		// spaHandler. Same StripPrefix + subtree-redirect rationale as the SPAs.
 		mux.Handle("GET /manual/", http.StripPrefix("/manual", manualHandler(manual.FS())))
-		mux.Handle("GET /", spaHandler(frontend.LoggingFS()))
+		// The root redirects to the app SPA (ADR 0044). The legacy logging SPA that
+		// served "/" as a catch-all was retired 2026-07-21. This is an EXACT-match
+		// "/{$}" pattern, not a catch-all, so there is no longer a root SPA fallthrough:
+		// any GET path matching no route (incl. /debug/pprof/* when profiling is off)
+		// is a clean 404 rather than SPA HTML.
+		mux.Handle("GET /{$}", http.RedirectHandler("/app/", http.StatusFound))
 	}
 
 	// Middleware chain — outermost first:

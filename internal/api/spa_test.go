@@ -21,12 +21,29 @@ func testSPAFS() fs.FS {
 	}
 }
 
+// TestRootRedirectsToApp confirms GET / 302-redirects to the app SPA at /app/
+// (the logging SPA that served / as a catch-all was retired 2026-07-21). Driven
+// through the full server handler so the route registration itself is covered.
+func TestRootRedirectsToApp(t *testing.T) {
+	srv := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusFound {
+		t.Fatalf("GET /: status = %d, want 302 (%s)", w.Code, w.Body.String())
+	}
+	if loc := w.Header().Get("Location"); loc != "/app/" {
+		t.Fatalf("GET /: Location = %q, want /app/", loc)
+	}
+}
+
 // TestSpaHandler_ServesIndexAtRoot confirms a GET / returns the
 // embedded SPA's index.html. This catches regressions in the embed
 // directive (e.g. dist/ stripped from git, package path renamed) and
-// the //go:embed all: prefix.
+// the //go:embed all: prefix. Uses the app SPA fixture (the logging SPA
+// was retired 2026-07-21).
 func TestSpaHandler_ServesIndexAtRoot(t *testing.T) {
-	h := spaHandler(frontend.LoggingFS())
+	h := spaHandler(frontend.AppFS())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
@@ -131,7 +148,7 @@ func TestSpaHandler_DirectoryServesIndexNotListing(t *testing.T) {
 // router paths like /log or /logbook return index.html instead of 404,
 // which is the load-bearing behaviour for SPA refresh-on-deep-link.
 func TestSpaHandler_FallsBackToIndexForUnknownPaths(t *testing.T) {
-	h := spaHandler(frontend.LoggingFS())
+	h := spaHandler(frontend.AppFS())
 
 	for _, path := range []string{"/log", "/logbook", "/config", "/some/nested/route"} {
 		t.Run(path, func(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// These vectors mirror the SPA's frontend/logging/src/lib/utils/bearing.test.ts
+// These vectors mirror the SPA's frontend/app/src/lib/utils/bearing.test.ts
 // so the daemon-side QSO geometry (FT8 ANT_AZ / DISTANCE / ANT_PATH) matches what
 // the SPA computes for the same grids.
 
