@@ -352,7 +352,9 @@ export function formatAdifRecord(f: AdifQsoFields): string {
     // value upstream; this is the backstop for any other caller.
     if (f.rxPwr) {
         let v = f.rxPwr.trim();
-        if (/^(\d+\.?\d*|\.\d+)$/.test(v) && parseFloat(v) > 0) {
+        // Unambiguous grammar (`\d*` guarded by a mandatory dot) — the `\d+\.?\d*`
+        // form backtracks quadratically on a long malformed value (codex 21aa0c29).
+        if (/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(v) && parseFloat(v) > 0) {
             if (v.startsWith('.')) v = '0' + v;
             if (v.endsWith('.')) v = v.slice(0, -1);
             lines.push(adifTag('RX_PWR', v));

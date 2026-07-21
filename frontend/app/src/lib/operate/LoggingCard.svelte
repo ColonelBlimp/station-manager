@@ -346,6 +346,7 @@
                             class="input w-24"
                             class:input-error={p.rxPwr}
                             inputmode="numeric"
+                            maxlength="10"
                             autocomplete="off"
                             bind:value={draft.rxPwr}
                         />

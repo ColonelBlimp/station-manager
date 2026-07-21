@@ -177,7 +177,11 @@ const TIME_RE = /^\d{2}:\d{2}(:\d{2})?$/;
 // 3.1.7. Anything else — a localised "2,5", exponent "1e3", a sign, or a stray
 // letter — is malformed and gets FLAGGED (red outline + blocks Log), never
 // silently stripped into a different number (codex db053f3b/ab14e974 P2).
-const RX_PWR_RE = /^(\d+\.?\d*|\.\d+)$/;
+// The `\d*` is guarded by a MANDATORY dot (`\d+(?:\.\d*)?`, not `\d+\.?\d*`) so the
+// two digit runs can't ambiguously split a long digit string — that ambiguity
+// backtracks quadratically on a huge malformed paste and would freeze the reactive
+// draftProblems() check (codex 21aa0c29 P2, ReDoS). Keep this form.
+const RX_PWR_RE = /^(?:\d+(?:\.\d*)?|\.\d+)$/;
 
 export interface DraftProblems {
     callsign: boolean;
