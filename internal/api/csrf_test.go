@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/config"
 )
 
 // requireSameOrigin rejects a cross-origin drive-by POST while letting the
@@ -48,4 +50,54 @@ func TestRequireSameOrigin(t *testing.T) {
 	// both read evil.example — an Origin==Host check would pass, the allowlist
 	// rejects on the disallowed Host (codex 85997b79 P1).
 	block("POST DNS-rebinding", do(http.MethodPost, "http://evil.example:8080", "evil.example:8080"))
+}
+
+// originAllowed permits loopback (any port) and an EXACT same host:port, but a
+// different-port page on the same hostname is rejected (codex e77a573f P2).
+func TestOriginAllowed(t *testing.T) {
+	cases := []struct {
+		origin, host string
+		want         bool
+	}{
+		{"http://localhost:5173", "127.0.0.1:8080", true},          // dev proxy (loopback, any port)
+		{"http://127.0.0.1:8080", "127.0.0.1:8080", true},          // same-origin loopback
+		{"http://station.local:8080", "station.local:8080", true},  // non-loopback same host:port
+		{"http://station.local:9999", "station.local:8080", false}, // cross-PORT (P2)
+		{"https://evil.example", "station.local:8080", false},      // cross-origin
+		{"not-a-url", "127.0.0.1:8080", false},                     // malformed / no host
+	}
+	for _, c := range cases {
+		if got := originAllowed(c.origin, c.host); got != c.want {
+			t.Errorf("originAllowed(%q, %q) = %v, want %v", c.origin, c.host, got, c.want)
+		}
+	}
+}
+
+// A wildcard bind (0.0.0.0 / :8080) can't derive the external host, so the Host
+// allowlist is skipped and a LAN client's mutation isn't rejected (codex e77a573f
+// P1); the Origin check still rejects a plain cross-origin browser POST.
+func TestRequireSameOrigin_WildcardBind(t *testing.T) {
+	srv := testServerWithCfg(t, func(cfg *config.Config) {
+		cfg.SocketPath = "0.0.0.0:8080"
+	})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := srv.requireSameOrigin(next)
+	do := func(origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/restart", nil)
+		req.Host = "192.168.1.5:8080" // the actual interface, not the wildcard
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	if w := do(""); w.Code != http.StatusOK {
+		t.Fatalf("wildcard bind, LAN POST no Origin: want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if w := do("https://evil.example"); w.Code != http.StatusForbidden {
+		t.Fatalf("wildcard bind, cross-origin POST: want 403, got %d", w.Code)
+	}
 }

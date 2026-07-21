@@ -12,15 +12,13 @@ import (
 // (POST/PUT/PATCH/DELETE) — it protects the whole mutating API surface (/v1/qso,
 // /v1/config, /v1/rig/tune, /v1/restart, …) in one place (codex 088bdb84 P1).
 //
-// It validates the destination against a FIXED allowlist (loopback names + the
-// configured tcp bind host), NOT equality with the request's own — attacker-
-// controllable — Host. That closes DNS rebinding (codex 85997b79 P1): a page from
-// evil.example that rebinds its name to our address arrives with both Host and
-// Origin = evil.example, which an Origin==Host check would wave through but the
-// allowlist rejects. For unsafe methods:
+// It validates the destination against a FIXED allowlist decided by our own config,
+// NOT equality with the request's own (attacker-controllable) Host — which closes
+// DNS rebinding (codex 85997b79 P1). For unsafe methods:
 //   - the request Host must be an allowed host (else 403) — the rebinding defense;
-//   - a present Origin must also be an allowed host (else 403) — catches a plain
-//     cross-origin POST (real Host, attacker Origin);
+//   - a present Origin must be loopback (any port) or an EXACT same host:PORT (else
+//     403) — catches a plain cross-origin POST, incl. a different-port page on the
+//     same hostname (codex e77a573f P2);
 //   - absent Origin (curl, the CLI, server-to-server) is allowed — not a browser
 //     CSRF vector; browsers always send Origin on a cross-origin POST.
 //
@@ -39,30 +37,68 @@ func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 			s.writeError(w, http.StatusForbidden, "cross_origin", "host not allowed", op)
 			return
 		}
-		if origin := r.Header.Get("Origin"); origin != "" {
-			u, err := url.Parse(origin)
-			if err != nil || u.Host == "" || !s.hostAllowed(u.Hostname()) {
-				s.writeError(w, http.StatusForbidden, "cross_origin",
-					"cross-origin request rejected", op)
-				return
-			}
+		if origin := r.Header.Get("Origin"); origin != "" && !originAllowed(origin, r.Host) {
+			s.writeError(w, http.StatusForbidden, "cross_origin",
+				"cross-origin request rejected", op)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-// hostAllowed reports whether h is a host the daemon is legitimately served under:
-// a loopback name, or the configured tcp bind host. The allowlist is fixed by our
-// own config, never by the request — that is what makes it rebinding-proof.
+// hostAllowed reports whether h (the request Host, port stripped) is a host the
+// daemon is legitimately served under: a loopback name, or the configured tcp bind
+// host. A WILDCARD bind (0.0.0.0 / :: / empty) or a non-tcp listener has no
+// derivable external host, so the allowlist can't apply and any host passes — that
+// is an opt-in, warned non-loopback deployment (server.protocol=tcp validation),
+// and the Origin check still guards plain cross-origin. Rebinding can't be fully
+// defended for a wildcard bind without a configured hostname (codex e77a573f P1).
 func (s *Server) hostAllowed(h string) bool {
+	if isLoopbackName(h) {
+		return true
+	}
+	bind := s.tcpBindHost()
+	if bind == "" {
+		return true
+	}
+	return h == bind
+}
+
+// tcpBindHost returns the configured tcp bind host, or "" for a wildcard bind
+// (0.0.0.0 / :: / empty host) or a non-tcp listener.
+func (s *Server) tcpBindHost() string {
+	if s.protocol != "tcp" {
+		return ""
+	}
+	h, _, err := net.SplitHostPort(s.cfg.Snapshot().SocketPath)
+	if err != nil {
+		return ""
+	}
+	switch h {
+	case "", "0.0.0.0", "::":
+		return ""
+	}
+	return h
+}
+
+// originAllowed permits a loopback Origin (any port — the same-origin loopback SPA
+// and the dev proxy) or an EXACT same host:port match (port preserved, so a
+// different-port page on the same hostname is rejected — codex e77a573f P2).
+func originAllowed(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if isLoopbackName(u.Hostname()) {
+		return true
+	}
+	return u.Host == host
+}
+
+func isLoopbackName(h string) bool {
 	switch h {
 	case "localhost", "127.0.0.1", "::1":
 		return true
-	}
-	if s.protocol == "tcp" {
-		if bindHost, _, err := net.SplitHostPort(s.cfg.Snapshot().SocketPath); err == nil && bindHost == h {
-			return true
-		}
 	}
 	return false
 }
