@@ -7,6 +7,8 @@
     // set-default / add / delete land in follow-up increments.
     import { onMount } from 'svelte';
     import { rigsState } from './rigs.svelte';
+    import ModeMappingsEditor from './ModeMappingsEditor.svelte';
+    import SerialOverridesEditor from './SerialOverridesEditor.svelte';
     import type { RigSerial } from '../api/rigs';
     import type { AudioDevice } from '../api/hardware';
 
@@ -152,29 +154,51 @@
                             Audio devices can't be enumerated by this daemon build (read-only).
                         </p>
                     {/if}
-
-                    {#if rigsState.dirty}
-                        <p class="text-xs text-muted">
-                            Changes take effect after a daemon restart.
-                        </p>
-                    {/if}
-                    <div class="flex items-center gap-3 pt-1">
-                        <button
-                            class="btn btn-primary"
-                            disabled={!rigsState.dirty || rigsState.saving}
-                            onclick={() => rigsState.save()}
-                        >
-                            {rigsState.saving ? 'Saving…' : 'Save'}
-                        </button>
-                        <button
-                            class="btn"
-                            disabled={!rigsState.dirty || rigsState.saving}
-                            onclick={() => rigsState.resetDraft()}
-                        >
-                            Cancel
-                        </button>
-                    </div>
                 </section>
+
+                <!-- Advanced (editable, collapsed): per-rig mode mappings (rig mode
+                     literal → ADIF MODE/SUBMODE) + serial overrides (baud/framing/
+                     delimiter). Both keyed by id:model so they remount with a fresh
+                     snapshot when the selected rig (or its model) changes, mutate the
+                     same draft, and are covered by the shared Save/Cancel below. -->
+                <section class="mt-6 max-w-2xl space-y-2">
+                    <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">
+                        Advanced
+                    </h3>
+                    {#key `${rig.id}:${rig.model}`}
+                        <ModeMappingsEditor rig={draft} rigdef={def} disabled={rigsState.saving} />
+                        <SerialOverridesEditor
+                            rig={draft}
+                            rigdef={def}
+                            disabled={rigsState.saving}
+                        />
+                    {/key}
+                </section>
+
+                <!-- Shared action footer — rigsState.dirty spans the WHOLE draft,
+                     so this Save/Cancel covers both the connection edits and the
+                     mode-mapping overrides. -->
+                {#if rigsState.dirty}
+                    <p class="mt-4 max-w-2xl text-xs text-muted">
+                        Changes take effect after a daemon restart.
+                    </p>
+                {/if}
+                <div class="mt-3 flex items-center gap-3">
+                    <button
+                        class="btn btn-primary"
+                        disabled={!rigsState.dirty || rigsState.saving}
+                        onclick={() => rigsState.save()}
+                    >
+                        {rigsState.saving ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                        class="btn"
+                        disabled={!rigsState.dirty || rigsState.saving}
+                        onclick={() => rigsState.resetDraft()}
+                    >
+                        Cancel
+                    </button>
+                </div>
 
                 <!-- Operating (read-only) -->
                 <dl class="mt-6 grid max-w-md grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">

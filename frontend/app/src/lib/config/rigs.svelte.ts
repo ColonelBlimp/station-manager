@@ -6,11 +6,12 @@
 
     DATA SAFETY (review 2026-07-20 Rigs-editor): a rig save WHOLE-REPLACES the
     catalogue daemon-side, so save RE-FETCHES the fresh catalogue, applies only
-    the connection FIELDS the operator actually changed — port, audio RX, and
-    audio TX diffed INDEPENDENTLY against the draft's baseline — onto the fresh
-    objects, and PUTs that WITHOUT default_rig_id. So a concurrent change to
-    another rig, this rig's other fields, the OTHER audio direction, or the
-    active-rig selection is never clobbered by a stale snapshot. The port/audio
+    the FIELDS the operator actually changed — port, audio RX, and audio TX diffed
+    INDEPENDENTLY against the draft's baseline, plus the per-rig mode_mappings and
+    serial overrides, each diffed as one whole object — onto the fresh objects, and
+    PUTs that WITHOUT default_rig_id. So a concurrent change to another rig, this rig's other
+    fields, the OTHER audio direction, or the active-rig selection is never
+    clobbered by a stale snapshot. The port/audio
     pickers are disabled while a save is in flight, so a mid-save edit can't be
     silently dropped by the post-save re-baseline. Each draft carries an IMMUTABLE
     baseline (the snapshot it was cloned from); dirty + the save diff compare
@@ -216,6 +217,34 @@ class RigsState {
             const audio = normalizedAudio(merged);
             if (audio) patched.audio = audio;
             else delete patched.audio;
+        }
+
+        // mode_mappings is a whole-map override edited by ModeMappingsEditor;
+        // diff it as ONE field against the baseline. Changed → the operator's map
+        // wins (last-writer-wins on the map, per the accepted concurrent-edit
+        // limitation); untouched → keep the FRESH server value so a concurrent
+        // mode-mapping change on this rig isn't clobbered. An empty/absent map
+        // clears the override (inherit the rigdef defaults).
+        if (
+            JSON.stringify(base.mode_mappings ?? null) !== JSON.stringify(d.mode_mappings ?? null)
+        ) {
+            if (d.mode_mappings && Object.keys(d.mode_mappings).length > 0) {
+                patched.mode_mappings = d.mode_mappings;
+            } else {
+                delete patched.mode_mappings;
+            }
+        }
+
+        // Serial overrides — same whole-object, field-independent treatment as
+        // mode_mappings (edited by SerialOverridesEditor). Changed → the operator's
+        // overrides win; untouched → keep the fresh server value; empty → clear
+        // (inherit the rigdef serial defaults).
+        if (JSON.stringify(base.overrides ?? null) !== JSON.stringify(d.overrides ?? null)) {
+            if (d.overrides && Object.keys(d.overrides).length > 0) {
+                patched.overrides = d.overrides;
+            } else {
+                delete patched.overrides;
+            }
         }
         const next = fresh.data.rigs.map((r) => (r.id === id ? patched : r));
 

@@ -409,4 +409,155 @@ describe('rigsState', () => {
         expect(rigsState.draft?.port).toBe('/dev/CONCURRENT'); // adopts server truth
         expect(rigsState.dirty).toBe(false); // re-baselined to it
     });
+
+    it('editing mode_mappings persists the override on save', async () => {
+        // The ModeMappingsEditor mutates draft.mode_mappings; save() must diff it
+        // as one field and carry it in the PUT (the connection-only patch would
+        // otherwise drop it — the reason the editor alone wasn't enough).
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        const d = rigsState.draft;
+        if (!d) throw new Error('expected a draft after select');
+        d.mode_mappings = { 'DATA-U': { mode: 'MFSK', submode: 'FT4' } };
+        expect(rigsState.dirty).toBe(true);
+        await rigsState.save();
+
+        const s1 = (JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> }).rigs.find(
+            (r) => r.id === 1
+        );
+        expect(s1?.mode_mappings).toEqual({ 'DATA-U': { mode: 'MFSK', submode: 'FT4' } });
+    });
+
+    it('editing only mode_mappings preserves a concurrent port change (field independence)', async () => {
+        // mode_mappings and the connection fields are independent. Editing only the
+        // mappings must keep the FRESH server port picked up by the save re-fetch,
+        // not write the draft's stale port back.
+        let get = 0;
+        const puts = mockCluster(() => {
+            get++;
+            return {
+                default_rig_id: 1,
+                rigs: [{ id: 1, model: 'ftdx10', port: get === 1 ? '/dev/a' : '/dev/CONCURRENT' }],
+                catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+            };
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        const d = rigsState.draft;
+        if (!d) throw new Error('expected a draft after select');
+        d.mode_mappings = { 'CW-U': { mode: 'CW' } }; // ONLY the mappings edited
+        await rigsState.save();
+
+        const s1 = (JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> }).rigs.find(
+            (r) => r.id === 1
+        );
+        expect(s1?.port).toBe('/dev/CONCURRENT'); // concurrent port survives
+        expect(s1?.mode_mappings).toEqual({ 'CW-U': { mode: 'CW' } }); // our override applied
+    });
+
+    it('clearing mode_mappings removes the stored override on save', async () => {
+        // Reverting all rows to their rigdef defaults sets draft.mode_mappings to
+        // undefined; save() must DROP the override on the PUT (the fresh rig still
+        // carries it), not send an empty object or the stale map.
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [
+                {
+                    id: 1,
+                    model: 'ftdx10',
+                    port: '/dev/a',
+                    mode_mappings: { 'DATA-U': { mode: 'RTTY' } },
+                },
+            ],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        const d = rigsState.draft;
+        if (!d) throw new Error('expected a draft after select');
+        d.mode_mappings = undefined; // editor's "all rows back to default" state
+        expect(rigsState.dirty).toBe(true);
+        await rigsState.save();
+
+        const s1 = (JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> }).rigs.find(
+            (r) => r.id === 1
+        );
+        expect(s1?.mode_mappings).toBeUndefined();
+    });
+
+    it('editing serial overrides persists them on save', async () => {
+        // SerialOverridesEditor mutates draft.overrides; save() diffs it as one
+        // field and carries it in the PUT (the connection-only patch would drop it).
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        const d = rigsState.draft;
+        if (!d) throw new Error('expected a draft after select');
+        d.overrides = { baud_rate: 4800, parity: 'even' };
+        expect(rigsState.dirty).toBe(true);
+        await rigsState.save();
+
+        const s1 = (JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> }).rigs.find(
+            (r) => r.id === 1
+        );
+        expect(s1?.overrides).toEqual({ baud_rate: 4800, parity: 'even' });
+    });
+
+    it('editing only serial overrides preserves a concurrent port change (field independence)', async () => {
+        // overrides and the connection fields are independent. Editing only the
+        // overrides must keep the FRESH server port, not the draft's stale one.
+        let get = 0;
+        const puts = mockCluster(() => {
+            get++;
+            return {
+                default_rig_id: 1,
+                rigs: [{ id: 1, model: 'ftdx10', port: get === 1 ? '/dev/a' : '/dev/CONCURRENT' }],
+                catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+            };
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        const d = rigsState.draft;
+        if (!d) throw new Error('expected a draft after select');
+        d.overrides = { baud_rate: 9600 }; // ONLY the overrides edited
+        await rigsState.save();
+
+        const s1 = (JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> }).rigs.find(
+            (r) => r.id === 1
+        );
+        expect(s1?.port).toBe('/dev/CONCURRENT'); // concurrent port survives
+        expect(s1?.overrides).toEqual({ baud_rate: 9600 }); // our override applied
+    });
+
+    it('clearing serial overrides removes them on save', async () => {
+        // Blanking every field sets draft.overrides to undefined; save() must DROP
+        // the override on the PUT (the fresh rig still carries it), inheriting the
+        // rigdef serial defaults.
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a', overrides: { baud_rate: 4800 } }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        const d = rigsState.draft;
+        if (!d) throw new Error('expected a draft after select');
+        d.overrides = undefined;
+        expect(rigsState.dirty).toBe(true);
+        await rigsState.save();
+
+        const s1 = (JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> }).rigs.find(
+            (r) => r.id === 1
+        );
+        expect(s1?.overrides).toBeUndefined();
+    });
 });

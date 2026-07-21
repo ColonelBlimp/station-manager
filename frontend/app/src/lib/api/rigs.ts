@@ -10,6 +10,25 @@
 */
 import { safeFetch, readJsonBody, isShape, isPlainObject } from './_helpers';
 
+/** One rig-mode literal's ADIF mapping (mirrors types.ModeMapping): an ADIF MODE
+ *  and an optional SUBMODE refinement. */
+export interface ModeMapping {
+    mode: string;
+    submode?: string;
+}
+
+/** Per-rig serial overrides (mirrors types.RigOverrides). Each zero/absent field
+ *  inherits the rigdef default; the bridge composes the effective serial.Config
+ *  at open (internal/rigserial). */
+export interface RigOverrides {
+    baud_rate?: number;
+    data_bits?: number;
+    stop_bits?: number;
+    parity?: string;
+    line_delimiter?: string;
+    read_timeout_ms?: number;
+}
+
 /** A configured rig (subset of types.RigConfig — the fields the panel needs). */
 export interface RigConfig {
     id: number;
@@ -18,6 +37,15 @@ export interface RigConfig {
     audio?: { rx?: string; tx?: string };
     ft8_mode?: string | null;
     my_rig?: string | null;
+    // Operator override layer keyed by the rig's own mode literal (e.g. "DATA-U").
+    // Absent → inherit the rigdef defaults. Carried through fetch untouched (raw
+    // passthrough) and edited by ModeMappingsEditor; the save diff treats the whole
+    // map as one field.
+    mode_mappings?: Record<string, ModeMapping>;
+    // Per-rig serial parameter overrides (baud/framing/delimiter). Absent → inherit
+    // the rigdef serial defaults. Same raw-passthrough + edited-by-SerialOverridesEditor
+    // + one-field-in-the-save-diff treatment as mode_mappings.
+    overrides?: RigOverrides;
 }
 
 /** A rigdef's serial defaults (subset of cat.RigSerial). */
@@ -38,6 +66,10 @@ export interface RigDef {
     description?: string;
     ft8_mode?: string;
     rig_modes?: string[];
+    // The rigdef's DEFAULT mode mappings (rig literal → ADIF) that a rig's
+    // per-rig mode_mappings override. ModeMappingsEditor shows these as the
+    // baseline each row inherits until the operator overrides it.
+    mode_mappings?: Record<string, ModeMapping>;
     serial?: RigSerial;
 }
 
@@ -68,6 +100,21 @@ function parseSerial(v: unknown): RigSerial | undefined {
     };
 }
 
+// Parse a mode-mappings object (rig literal → {mode, submode?}); skips entries
+// without a string MODE. Used for both the rigdef defaults (catalogue) and — via
+// the raw rig passthrough — a rig's overrides. Returns undefined when empty so an
+// absent map reads as "no mappings" rather than an empty object.
+function parseModeMappings(v: unknown): Record<string, ModeMapping> | undefined {
+    if (!isPlainObject(v)) return undefined;
+    const out: Record<string, ModeMapping> = {};
+    for (const [lit, m] of Object.entries(v)) {
+        if (!isPlainObject(m) || typeof m.mode !== 'string') continue;
+        out[lit] =
+            typeof m.submode === 'string' ? { mode: m.mode, submode: m.submode } : { mode: m.mode };
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+}
+
 // catalogueById builds the rigdef-id → catalogue-entry map. Only entries with a
 // string id + name are kept; a rig whose model isn't found falls back to the id.
 function catalogueById(catalogue: unknown): Record<string, RigDef> {
@@ -85,6 +132,7 @@ function catalogueById(catalogue: unknown): Record<string, RigDef> {
                 rig_modes: Array.isArray(e.rig_modes)
                     ? e.rig_modes.filter((m): m is string => typeof m === 'string')
                     : undefined,
+                mode_mappings: parseModeMappings(e.mode_mappings),
                 serial: parseSerial(e.serial),
             };
         }
@@ -98,9 +146,10 @@ export type RigsSaveOutcome = { kind: 'ok' } | { kind: 'error'; message: string 
  * Save the rig catalogue via PUT /v1/config. The daemon WHOLE-REPLACES base.Rigs
  * with what's sent (handler_config.go), so `rigs` MUST be the full list with
  * every rig's every field intact — callers pass the raw objects from fetchRigs
- * (never a reconstructed subset), so fields the panel doesn't render
- * (mode_mappings, overrides, ft8_mode, my_rig) round-trip losslessly through
- * JSON.stringify. `default_rig_id` is OPTIONAL and OMITTED by the connection
+ * (never a reconstructed subset), so fields the panel doesn't render (overrides,
+ * ft8_mode, my_rig) round-trip losslessly through JSON.stringify, and the ones it
+ * DOES edit (port, audio, mode_mappings) are patched onto those raw objects.
+ * `default_rig_id` is OPTIONAL and OMITTED by the connection
  * editor (which doesn't change the active rig): it's presence-aware daemon-side,
  * so omitting it leaves the active-rig selection untouched rather than
  * clobbering a concurrent change to it (review 2026-07-20 Rigs-editor #1). Both
