@@ -22,10 +22,12 @@ var reFrequencyMHz = regexp.MustCompile(`^\d{7,8}$`)
 // (low/high), NOT prefix-based: an earlier prefix scheme (e.g. "14." → 20m)
 // classified in-prefix-out-of-band values as valid — 14.999 → 20m even though
 // 20m ends at 14.350 — so values between bands or past a band edge were
-// mislabelled (review 2026-06-19 M1). Mirrors the frontend's table
-// (frontend/logging/src/lib/utils/frequency.ts) so the daemon and SPA agree on
-// what counts as in-band: IARU allocations broad enough to cover Regions 1/2/3
-// for the common bands, with 60m widened to 5.25–5.45 MHz.
+// mislabelled (review 2026-06-19 M1). Mirrors the frontends' tables
+// (frontend/{logging,app}/src/lib/utils/frequency.ts) so daemon and SPA agree on
+// what counts as in-band. Ranges follow the ADIF 3.1.5 band enumeration — notably
+// 60m = 5.06–5.45 MHz and 4m = 70–71 MHz — so band derivation accepts every in-band
+// ADIF frequency; a truly out-of-band freq (empty result) is rejected at submit,
+// which relies on this table being no narrower than ADIF (2026-07-21 review #2).
 type bandRange struct {
 	low  float64 // MHz, inclusive
 	high float64 // MHz, inclusive
@@ -35,7 +37,7 @@ type bandRange struct {
 var bandRanges = []bandRange{
 	{1.800, 2.000, "160m"},
 	{3.500, 4.000, "80m"},
-	{5.250, 5.450, "60m"},
+	{5.060, 5.450, "60m"},
 	{7.000, 7.300, "40m"},
 	{10.100, 10.150, "30m"},
 	{14.000, 14.350, "20m"},
@@ -44,7 +46,7 @@ var bandRanges = []bandRange{
 	{24.890, 24.990, "12m"},
 	{28.000, 29.700, "10m"},
 	{50.000, 54.000, "6m"},
-	{70.000, 70.500, "4m"},
+	{70.000, 71.000, "4m"},
 	{144.000, 148.000, "2m"},
 	{222.000, 225.000, "1.25m"},
 	{420.000, 450.000, "70cm"},

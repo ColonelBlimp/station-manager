@@ -280,6 +280,28 @@ func TestUpdate_RejectsOutOfBandFreq(t *testing.T) {
 	require.Equal(t, "invalid_field_value", se.Code)
 }
 
+// TestSubmit_Accepts60mBelowOldTableFloor guards 2026-07-21 review #2 (the strict
+// rejection's follow-up): 5.100 MHz is valid 60m per ADIF (5.06–5.45) but fell below
+// the old table's 5.25 floor. With the freq→band table widened to the ADIF ranges it
+// derives 60m and stores, rather than being false-rejected as out-of-band.
+func TestSubmit_Accepts60mBelowOldTableFloor(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "60m", Mode: "SSB", Freq: "5.100", QsoDate: "20260101", TimeOn: "1200"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err, "5.100 MHz is valid 60m per ADIF and must be accepted")
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+	require.Equal(t, "60m", existing.QsoDetails.Band)
+	require.Equal(t, "5.100", existing.QsoDetails.Freq)
+}
+
 // TestSubmit_HHMMSSPreserved: an ADIF body with HHMMSS times stores at full
 // second precision (the schema CHECK now accepts HHMM or HHMMSS). Seconds are no
 // longer truncated — FT8's real slot seconds and imported HHMMSS survive for

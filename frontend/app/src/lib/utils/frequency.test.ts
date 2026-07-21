@@ -22,9 +22,17 @@ describe('frequencyToBand', () => {
         expect(frequencyToBand(29_700_000)).toBe('10m');
     });
 
-    it('returns 60m for the widened range (covers regional variations)', () => {
+    it('returns 60m across the ADIF range (5.06–5.45 MHz)', () => {
+        expect(frequencyToBand(5_060_000)).toBe('60m'); // ADIF low edge (below old 5.25 floor)
+        expect(frequencyToBand(5_100_000)).toBe('60m');
         expect(frequencyToBand(5_330_000)).toBe('60m');
         expect(frequencyToBand(5_403_000)).toBe('60m');
+    });
+
+    it('returns 4m across the ADIF range (70–71 MHz)', () => {
+        expect(frequencyToBand(70_600_000)).toBe('4m'); // above the old 70.5 ceiling
+        expect(frequencyToBand(71_000_000)).toBe('4m');
+        expect(frequencyToBand(71_100_000)).toBe('');
     });
 
     it('returns 2m', () => {
@@ -36,7 +44,7 @@ describe('frequencyToBand', () => {
     });
 
     it('returns empty string between bands', () => {
-        // 5 MHz is between 80m (3.5–4.0) and 60m (5.25–5.45)
+        // 5 MHz is between 80m (3.5–4.0) and 60m (5.06–5.45)
         expect(frequencyToBand(5_000_000)).toBe('');
     });
 

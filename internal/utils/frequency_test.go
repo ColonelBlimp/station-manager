@@ -51,6 +51,15 @@ func TestFrequencyToBand_RangeEdges(t *testing.T) {
 		"7.301":  "",
 		"5.250":  "60m",
 		"5.357":  "60m",
+		// 60m and 4m follow ADIF (5.06–5.45, 70–71), wider than the old table
+		// (2026-07-21 review #2) — these in-band ADIF freqs must not be rejected.
+		"5.060":  "60m",
+		"5.100":  "60m",
+		"5.059":  "",
+		"70.500": "4m",
+		"70.600": "4m",
+		"71.000": "4m",
+		"71.001": "",
 		"24.890": "12m",
 		"24.889": "",
 		// Unparseable → empty, never a panic.
