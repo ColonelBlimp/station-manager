@@ -126,3 +126,25 @@ func TestRequireSameOrigin_SpecificIPBind(t *testing.T) {
 		t.Fatalf("specific-IP bind, rebinding POST: want 403, got %d", w.Code)
 	}
 }
+
+// A Unix-socket listener has no network host and no DNS-rebinding vector (a browser
+// can't reach a Unix socket), so an unsafe request with an arbitrary non-loopback
+// Host — e.g. `curl --unix-socket … http://smd/v1/qso` — is accepted (codex
+// 6525f509 P2).
+func TestRequireSameOrigin_UnixSocketAnyHost(t *testing.T) {
+	srv := testServerWithCfg(t, func(cfg *config.Config) {
+		cfg.Server.Protocol = "unix"
+		cfg.SocketPath = "/tmp/smd-test.sock"
+	})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := srv.requireSameOrigin(next)
+	req := httptest.NewRequest(http.MethodPost, "/v1/qso", nil)
+	req.Host = "smd" // the arbitrary Host a --unix-socket curl client sends
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unix socket, non-loopback Host POST: want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+}
