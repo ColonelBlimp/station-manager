@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -181,7 +182,7 @@ func applyCatalogue(cat *catalogue) {
 	for k := range cat.SubModes {
 		rawKeys = append(rawKeys, k)
 	}
-	sortStrings(rawKeys)
+	slices.Sort(rawKeys)
 	validParents := make(map[string]string, len(rawKeys))
 	invalidOnly := make(map[string]struct{})
 	for _, rawKey := range rawKeys {
@@ -265,7 +266,7 @@ func MainModes() []string {
 		out = append(out, m)
 	}
 	mu.RUnlock()
-	sortStrings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -279,16 +280,6 @@ func SubModes() []string {
 		out = append(out, k)
 	}
 	mu.RUnlock()
-	sortStrings(out)
+	slices.Sort(out)
 	return out
-}
-
-// sortStrings is a tiny local sort to avoid pulling sort just for two
-// callers. Insertion sort is fine — the lists are O(50).
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j-1] > s[j]; j-- {
-			s[j-1], s[j] = s[j], s[j-1]
-		}
-	}
 }
