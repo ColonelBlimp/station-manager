@@ -344,8 +344,15 @@ export function formatAdifRecord(f: AdifQsoFields): string {
     // Contacted-station / per-QSO operator notes (Details panel).
     // Distinct from COMMENT (above) — NOTES is operator's private
     // record, COMMENT is for things shared during the QSO.
-    if (f.rxPwr && f.rxPwr.length > 0) {
-        lines.push(adifTag('RX_PWR', f.rxPwr));
+    // RX_PWR is an ADIF Number — emit only a well-formed positive value (0 / blank
+    // = "not set", like TX_PWR) so a stray "100W" or bad paste can't produce
+    // invalid ADIF that QRZ/ClubLog reject (codex bd783573 P2). Number() also
+    // normalises a trailing dot ("100." → "100").
+    if (f.rxPwr && f.rxPwr.trim() !== '') {
+        const n = Number(f.rxPwr.trim());
+        if (Number.isFinite(n) && n > 0) {
+            lines.push(adifTag('RX_PWR', String(n)));
+        }
     }
     if (f.rig && f.rig.length > 0) {
         lines.push(adifTag('RIG', f.rig));

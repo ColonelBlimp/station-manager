@@ -450,6 +450,38 @@ describe('formatAdifRecord — TX_PWR', () => {
     });
 });
 
+describe('formatAdifRecord — RX_PWR', () => {
+    it('emits RX_PWR for a typical value', () => {
+        const adif = formatAdifRecord({ ...baseFields, rxPwr: '100' });
+        expect(adif).toContain('<RX_PWR:3>100');
+    });
+
+    it('normalises a trailing decimal point', () => {
+        const adif = formatAdifRecord({ ...baseFields, rxPwr: '100.' });
+        expect(adif).toContain('<RX_PWR:3>100');
+    });
+
+    it('emits a fractional value', () => {
+        const adif = formatAdifRecord({ ...baseFields, rxPwr: '2.5' });
+        expect(adif).toContain('<RX_PWR:3>2.5');
+    });
+
+    it('omits RX_PWR when blank', () => {
+        const adif = formatAdifRecord({ ...baseFields, rxPwr: '' });
+        expect(adif).not.toContain('RX_PWR');
+    });
+
+    it('omits RX_PWR for zero ("not set")', () => {
+        const adif = formatAdifRecord({ ...baseFields, rxPwr: '0' });
+        expect(adif).not.toContain('RX_PWR');
+    });
+
+    it('omits non-numeric junk instead of emitting invalid ADIF', () => {
+        const adif = formatAdifRecord({ ...baseFields, rxPwr: '100W' });
+        expect(adif).not.toContain('RX_PWR');
+    });
+});
+
 describe('formatAdifRecord — frequency formatting', () => {
     it('formats below 10 MHz with 6 decimal places (no leading zero stripped)', () => {
         const adif = formatAdifRecord({ ...baseFields, txFreqHz: 7_100_000 });
