@@ -395,6 +395,12 @@ func run() error {
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("resolve qso service")
 	}
+	// Pin MY_RIG attribution to the rig active AT STARTUP — the same one the bridge
+	// binds via cfg.ActiveBridge() below. A runtime "Set as default" only takes
+	// effect for the bridge on the next restart, so MY_RIG must follow the same
+	// startup rig, not the live default_rig_id, or QSOs made on the still-connected
+	// old rig would be stamped with the new rig's identity (codex e539a080 P1).
+	qsoSvc.SetActiveRig(cfg.DefaultRigID)
 
 	// ---- Open databases and run migrations (reference.db / log-db split) ----
 	// The log connection holds logbook/qso/qso_upload/qso_history; the reference

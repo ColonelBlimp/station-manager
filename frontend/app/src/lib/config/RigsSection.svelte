@@ -205,7 +205,7 @@
                 <div class="mt-3 flex items-center gap-3">
                     <button
                         class="btn btn-primary"
-                        disabled={!rigsState.dirty || rigsState.saving}
+                        disabled={!rigsState.dirty || rigsState.saving || rigsState.settingDefault}
                         onclick={() => rigsState.save()}
                     >
                         {rigsState.saving ? 'Saving…' : 'Save'}

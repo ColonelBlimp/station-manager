@@ -25,6 +25,13 @@ type Service struct {
 	Logger *logging.Service `di.inject:"loggingservice"`
 	Config *config.Service  `di.inject:"configservice"`
 	Hub    *events.Hub      `di.inject:"eventhub"`
+
+	// activeRigID pins MY_RIG attribution to the rig the bridge connected to at
+	// startup — set once by cmd/smd via SetActiveRig, before serving. NOT
+	// DI-injected. When unpinned (tests), MY_RIG follows the live default rig.
+	// See config.ResolveMyRigFor / codex e539a080 P1.
+	activeRigID     int64
+	activeRigPinned bool
 }
 
 // refCacheDB returns the connection for best-effort enrichment-cache writes:
@@ -37,6 +44,16 @@ func (s *Service) refCacheDB() *sqlite.Service {
 		return s.RefDB
 	}
 	return s.DB
+}
+
+// SetActiveRig pins MY_RIG attribution to the rig the bridge connected to at
+// startup (cfg.DefaultRigID at boot). cmd/smd calls this once before serving, so a
+// runtime "Set as default" — which the bridge only honours on the next restart —
+// doesn't stamp QSOs still made on the connected (old) rig with the new rig's
+// identity (codex e539a080 P1). Set once at startup, so no lock is needed.
+func (s *Service) SetActiveRig(id int64) {
+	s.activeRigID = id
+	s.activeRigPinned = true
 }
 
 // Initialize satisfies the iocdi.Initializer interface. It fails fast when a

@@ -1232,6 +1232,33 @@ func TestResolveMyRig_DeriveAndSuppress(t *testing.T) {
 	}
 }
 
+// ResolveMyRigFor resolves a SPECIFIC rig independent of DefaultRigID — the
+// property qsoservice relies on to pin MY_RIG to the STARTUP rig, so a runtime
+// "Set as default" doesn't re-attribute QSOs before a restart (codex e539a080 P1).
+func TestResolveMyRigFor_IndependentOfDefault(t *testing.T) {
+	override := "IC-7300 + PA"
+	cfg := DefaultConfig(t.TempDir())
+	cfg.Rigs = []types.RigConfig{
+		{ID: 1, Model: "yaesu-ftdx10"},
+		{ID: 2, Model: "yaesu-ftdx10", MyRig: &override},
+	}
+	cfg.DefaultRigID = 1
+
+	// Resolves the requested rig, not the default.
+	if got := cfg.ResolveMyRigFor(2); got != "IC-7300 + PA" {
+		t.Fatalf("ResolveMyRigFor(2) = %q, want rig 2's override", got)
+	}
+	// Moving the LIVE default must not change what a PINNED rig resolves to.
+	cfg.DefaultRigID = 2
+	if got := cfg.ResolveMyRigFor(1); got != "Yaesu FTdx10" {
+		t.Fatalf("ResolveMyRigFor(1) after default→2 = %q, want rig 1's name (pinned, not live default)", got)
+	}
+	// Unknown id → "".
+	if got := cfg.ResolveMyRigFor(99); got != "" {
+		t.Fatalf("ResolveMyRigFor(99) = %q, want \"\" for no such rig", got)
+	}
+}
+
 // --- §12a slice: consolidated Validate -------------------------------------
 
 func TestValidate_CollectsErrorsAndWarnings(t *testing.T) {

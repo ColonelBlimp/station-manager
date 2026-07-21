@@ -42,7 +42,16 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// and the FT8 e4 sink. SubmitImport deliberately does NOT stamp (it preserves
 	// an imported QSO's own MY_RIG). Config is required (Initialize enforces it)
 	// and submit() dereferences it unconditionally, so there's no nil-guard here.
-	rec.MyRig = s.Config.Snapshot().ResolveMyRig()
+	// Pin MY_RIG to the rig the bridge actually connected to at startup, not the
+	// live default_rig_id — a runtime "Set as default" only reconnects the bridge
+	// on the next restart, so following the live default would mis-attribute QSOs
+	// still made on the connected rig (codex e539a080 P1). Unpinned (tests) → live.
+	snap := s.Config.Snapshot()
+	if s.activeRigPinned {
+		rec.MyRig = snap.ResolveMyRigFor(s.activeRigID)
+	} else {
+		rec.MyRig = snap.ResolveMyRig()
+	}
 	return s.submit(ctx, logbookID, rec, force, false, nil)
 }
 

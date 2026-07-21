@@ -175,7 +175,11 @@ class RigsState {
     async save(): Promise<void> {
         const id = this.selectedId;
         const d = this.draft;
-        if (this.saving || !this.dirty || !d || id === null) return;
+        // settingDefault is checked BOTH ways (setDefault also refuses while saving)
+        // so a connection save and a set-default can't overlap — otherwise a save
+        // that re-fetched the OLD default could apply it via #applyFetched after
+        // set-default moved the badge, reverting it (codex e539a080 P2).
+        if (this.saving || this.settingDefault || !this.dirty || !d || id === null) return;
         this.saving = true;
         // Re-fetch so we merge onto the CURRENT catalogue, not the mount snapshot
         // — otherwise the whole-replace would overwrite a concurrent change to

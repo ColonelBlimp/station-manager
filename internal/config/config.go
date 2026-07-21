@@ -407,14 +407,25 @@ func (c Config) ActiveFt8() types.Ft8Config {
 	return f
 }
 
-// ResolveMyRig returns the ADIF MY_RIG value for the active rig (config.md §10,
-// B2): the per-rig override if set (a non-nil value, including "" to suppress),
-// else the rigdef Name for the rig's Model (e.g. "Yaesu FTdx10"). qsoservice
-// stamps this onto each live QSO at submit time, so MY_RIG follows the active
-// rig automatically rather than being a hand-typed identity field. "" when there
-// is no resolvable active rig.
+// ResolveMyRig returns the ADIF MY_RIG value for the LIVE active rig
+// (DefaultRigID). See ResolveMyRigFor for the rig-pinned variant.
 func (c Config) ResolveMyRig() string {
-	rc := c.RigByID(c.DefaultRigID)
+	return c.ResolveMyRigFor(c.DefaultRigID)
+}
+
+// ResolveMyRigFor returns the ADIF MY_RIG value for a SPECIFIC rig id (config.md
+// §10, B2): the per-rig override if set (a non-nil value, including "" to
+// suppress), else the rigdef Name for the rig's Model (e.g. "Yaesu FTdx10"); ""
+// when the id resolves to no rig.
+//
+// qsoservice pins this to the rig the bridge connected to AT STARTUP, not the live
+// DefaultRigID: a runtime "Set as default" only takes effect for the bridge on the
+// next restart, so following the live default would stamp QSOs still made on the
+// old (connected) rig with the new rig's identity — a misattribution window
+// (codex e539a080 P1). Pinning keeps MY_RIG consistent with the rig actually on
+// the air; both change together, only on restart.
+func (c Config) ResolveMyRigFor(rigID int64) string {
+	rc := c.RigByID(rigID)
 	if rc == nil {
 		return ""
 	}

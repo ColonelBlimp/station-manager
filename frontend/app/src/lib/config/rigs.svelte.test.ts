@@ -595,4 +595,21 @@ describe('rigsState', () => {
         await rigsState.setDefault(1);
         expect(puts.length).toBe(0);
     });
+
+    it('save() is blocked while a set-default write is in flight (no overlap)', async () => {
+        // codex e539a080 P2: a connection save that overlaps a set-default could
+        // apply the stale (pre-change) default via #applyFetched and revert the
+        // badge. The two write paths are now mutually exclusive.
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftPort('/dev/new'); // dirty
+        rigsState.settingDefault = true; // a set-default is mid-flight
+        await rigsState.save();
+        expect(puts.length).toBe(0); // save refused — no overlapping connection PUT
+    });
 });
