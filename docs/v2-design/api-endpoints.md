@@ -230,6 +230,12 @@ unregistered, the path falls through to the SPA catch-all (or 404 on a headless 
 ### `GET /v1/version`
 - **Purpose:** Daemon build / Go runtime / build environment / DB schema version. **Always-on.** **200** `{"daemon": string, "go": string, "env": "dev"|"release", "schema": {"version": uint64, "dirty": bool}?}` (always 200; `schema` omitted + warn-logged if the schema query fails). `env` is `dev` for any source build (incl. `task run:smd`) and `release` only for a packaged binary (the RPM build stamps `-X …/internal/buildinfo.Env=release`); the SPAs flag a `dev` daemon with a DEV pill + a tab-title prefix so it's distinguishable from the deployed one on the same `:8080`.
 
+### `POST /v1/restart`
+- **Purpose:** ATTENDED, operator-triggered graceful daemon restart — applies the "Requires a restart" config-apply changes (active rig, connection, mode mappings, serial overrides) without an on-box `systemctl`. The daemon runs its normal graceful shutdown (releasing the tune/FT8 carrier — TX-safe), then exits `ExitRestart` (3); systemd (`smd.service` `Restart=on-failure` + `RestartForceExitStatus=3`) respawns it ~`RestartSec` (5s) later and SSE clients auto-reconnect.
+- **Response:** **202** (no body) — accepted; shutdown then respawn follows.
+- **Errors:** **409** `tx_active` (a tune carrier / FT8 transmission is CURRENTLY keyed — stop transmitting first; a stuck/*unconfirmed* TX is NOT refused, so a recovery restart stays possible); **503** `restart_unavailable` (no service-manager restart wired — split-host / non-systemd / a bare `./smd` run, where nothing would bring it back up).
+- **Notes:** The 202 flushes before the shutdown begins (the handler writes it, then signals a guarded channel). Wired only under systemd — `cmd/smd` injects the trigger via `api.Server.SetRestart`; SPA control is the Settings "Restart daemon" button.
+
 ---
 
 ## Rig / bridge (ADR 0013 / 0019 / 0026 / 0027)

@@ -22,6 +22,13 @@ Type=simple
 Environment=SM_WORKING_DIR=%h/.local/share/station-manager
 ExecStart=/usr/bin/smd
 Restart=on-failure
+# Exit code 3 (ExitRestart) is a PLANNED self-restart requested via POST
+# /v1/restart — force the respawn explicitly so it stays a restart even if the
+# Restart= policy ever changes, and so it reads as intentional (not a crash /
+# ExitError=1) in the journal. on-failure already respawns any non-zero exit, so
+# the feature works before this line is deployed; this just makes the intent
+# explicit + robust.
+RestartForceExitStatus=3
 RestartSec=5s
 
 [Install]

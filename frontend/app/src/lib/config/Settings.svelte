@@ -7,6 +7,8 @@
     // mappings, and the rest land in follow-up increments.
     import StationSection from './StationSection.svelte';
     import RigsSection from './RigsSection.svelte';
+    import { restartDaemon } from '../api/restart';
+    import { toasts } from '../ui/toasts.svelte';
 
     type SectionId = 'station' | 'rigs';
     const sections: { id: SectionId; label: string }[] = [
@@ -14,14 +16,58 @@
         { id: 'rigs', label: 'Rigs' },
     ];
     let active = $state<SectionId>('station');
+
+    // Manual daemon restart — applies the "Requires a restart" config changes
+    // (active rig, connection, mappings, overrides). Refused while transmitting.
+    let restarting = $state(false);
+    async function doRestart(): Promise<void> {
+        if (restarting) return;
+        if (
+            !window.confirm(
+                'Restart the daemon now? This briefly drops the connection and applies pending rig/config changes.'
+            )
+        )
+            return;
+        restarting = true;
+        const out = await restartDaemon();
+        switch (out.kind) {
+            case 'accepted':
+                // Stays disabled/"Restarting…" — the SSE clients reconnect once the
+                // daemon is back (~5s); a manual page reload also recovers.
+                toasts.info('Restarting the daemon… reconnecting in a few seconds.');
+                break;
+            case 'tx_active':
+                toasts.error('Stop transmitting before restarting the daemon.');
+                restarting = false;
+                break;
+            case 'unavailable':
+                toasts.error("Restart isn't available on this daemon.");
+                restarting = false;
+                break;
+            case 'error':
+                toasts.error(`Restart failed: ${out.message}`);
+                restarting = false;
+                break;
+        }
+    }
 </script>
 
 <div class="mx-auto max-w-5xl">
-    <header class="mb-4">
-        <h1 class="text-2xl font-semibold text-ink">Settings</h1>
-        <p class="mt-1 text-sm text-muted">
-            Station configuration — rigs, mode mappings, forwarders, and station identity.
-        </p>
+    <header class="mb-4 flex items-start justify-between gap-4">
+        <div>
+            <h1 class="text-2xl font-semibold text-ink">Settings</h1>
+            <p class="mt-1 text-sm text-muted">
+                Station configuration — rigs, mode mappings, forwarders, and station identity.
+            </p>
+        </div>
+        <button
+            class="btn shrink-0"
+            title="Applies pending rig/config changes (briefly drops the connection)"
+            disabled={restarting}
+            onclick={doRestart}
+        >
+            {restarting ? 'Restarting…' : 'Restart daemon'}
+        </button>
     </header>
 
     <nav class="mb-6 flex gap-1 border-b border-line">

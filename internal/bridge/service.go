@@ -554,6 +554,21 @@ func (s *Service) RigConnected() bool {
 	return s.rigWritableLocked()
 }
 
+// TxActive reports whether a tune carrier or FT8 transmission is CURRENTLY keyed
+// (the same single-flight snapshot SendCommands guards on). Used to refuse a
+// daemon restart while actively transmitting — the operator must stop TX first.
+// Deliberately EXCLUDES txUncertain: an unconfirmed/stuck TX is exactly the case
+// where a RECOVERY restart must stay possible (2026-07-21 stuck-TX incident, where
+// the operator restarts to recover). Nil-safe (absent/disabled bridge → false).
+func (s *Service) TxActive() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tuneActive || s.ft8TxActive
+}
+
 // rigWritableLocked is THE live/write-ready predicate every mutating entry
 // point agrees on (2026-07-18 TX-safety review, finding 3): port captured,
 // identity confirmed (H2), and the liveness strike count below the disconnect

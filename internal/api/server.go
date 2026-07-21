@@ -50,6 +50,9 @@ type Server struct {
 	// Injected by cmd/smd via SetSmcloudReconcile when an enabled smcloud
 	// forwarder exists; nil → the route answers 503.
 	smcloudRec SmcloudReconcileFunc
+	// restart triggers a graceful daemon restart (POST /v1/restart). Injected by
+	// cmd/smd via SetRestart; nil → the route answers 503.
+	restart RestartFunc
 	// shutdownCh is closed by Shutdown to signal long-lived handlers
 	// (the SSE event stream) that they should return promptly. r.Context()
 	// alone does NOT fire on http.Server.Shutdown — only on connection
@@ -116,6 +119,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// SM Cloud on-demand reconcile (ADR 0040 S4) — one detect+heal pass now.
 	// 503 until cmd/smd wires an enabled smcloud forwarder's reconciler.
 	mux.HandleFunc("POST /v1/smcloud/reconcile", s.handleSmcloudReconcile)
+	mux.HandleFunc("POST /v1/restart", s.handleRestart)
 
 	// Logbook CRUD
 	mux.HandleFunc("GET /v1/logbook", s.handleListLogbooks)

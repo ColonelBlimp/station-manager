@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -63,7 +64,18 @@ var Version = "dev"
 const (
 	ExitError = 1
 	ExitPanic = 2
+	// ExitRestart is a PLANNED self-restart (POST /v1/restart): the daemon runs
+	// its normal graceful shutdown, then exits with this code so systemd
+	// (RestartForceExitStatus in smd.service) respawns it. Distinct from
+	// ExitError so the log + service manager can tell a requested restart from a
+	// fault.
+	ExitRestart = 3
 )
+
+// restartRequested is set by the POST /v1/restart trigger before it starts the
+// graceful shutdown, so main() can exit ExitRestart (→ systemd respawn) rather
+// than the normal 0 after run() returns cleanly.
+var restartRequested atomic.Bool
 
 // referenceDBFilename is the shared enrichment-cache database (country +
 // contacted_station), opened alongside the log DB in the same directory
@@ -119,6 +131,11 @@ func main() {
 	if err := run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
 		os.Exit(ExitError)
+	}
+	// A clean run() return after POST /v1/restart exits with the restart code so
+	// systemd respawns; a normal SIGTERM / systemctl stop leaves this false → 0.
+	if restartRequested.Load() {
+		os.Exit(ExitRestart)
 	}
 }
 
@@ -835,6 +852,25 @@ func run() error {
 		})
 	}
 
+	// Planned self-restart (POST /v1/restart): the handler signals restartCh; run()
+	// falls into the SAME graceful shutdown as a signal (the tune/FT8 carrier is
+	// released cleanly), and main() exits ExitRestart so systemd respawns. Guarded
+	// so a double POST can't close the channel twice.
+	restartCh := make(chan struct{})
+	var restartOnce sync.Once
+	// Only wire the self-restart when a supervisor will actually respawn us:
+	// systemd sets INVOCATION_ID for a unit. A bare ./smd or `task run:smd` has no
+	// respawn, so POST /v1/restart must 503 there rather than exit the daemon for
+	// good.
+	if os.Getenv("INVOCATION_ID") != "" {
+		server.SetRestart(func() {
+			restartOnce.Do(func() {
+				restartRequested.Store(true)
+				close(restartCh)
+			})
+		})
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- server.ListenAndServe(cfg.SocketPath)
@@ -848,6 +884,8 @@ func run() error {
 	select {
 	case sig := <-sigCh:
 		loggerSvc.InfoWith().Str("signal", sig.String()).Msg("shutdown signal received")
+	case <-restartCh:
+		loggerSvc.InfoWith().Msg("restart requested (POST /v1/restart); graceful shutdown then exit for systemd respawn")
 	case runErr = <-errCh:
 		if runErr != nil {
 			loggerSvc.ErrorWith().Err(runErr).Msg("server exited with error")
