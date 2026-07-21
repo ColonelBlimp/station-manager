@@ -9,19 +9,9 @@
     import { rigsState } from './rigs.svelte';
     import ModeMappingsEditor from './ModeMappingsEditor.svelte';
     import SerialOverridesEditor from './SerialOverridesEditor.svelte';
-    import type { RigSerial } from '../api/rigs';
     import type { AudioDevice } from '../api/hardware';
 
     onMount(() => void rigsState.load());
-
-    // Compact one-line summary of a rigdef's serial defaults, e.g.
-    // "38400 8N1 · delim ;".
-    function serialSummary(s: RigSerial): string {
-        const framing = `${s.data_bits ?? '?'}${(s.parity ?? 'none')[0].toUpperCase()}${s.stop_bits ?? '?'}`;
-        const parts = [s.baud_rate ? `${s.baud_rate} baud` : '', framing];
-        if (s.line_delimiter) parts.push(`delim ${s.line_delimiter}`);
-        return parts.filter(Boolean).join(' · ');
-    }
 </script>
 
 {#snippet row(label: string, value: string, mono = false)}
@@ -206,23 +196,6 @@
                         Cancel
                     </button>
                 </div>
-
-                <!-- Operating (read-only) -->
-                <dl class="mt-6 grid max-w-md grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
-                    {@render row('FT8 mode', rigsState.ft8ModeFor(rig) || '—')}
-                    {#if def?.serial}
-                        {@render row('Serial defaults', serialSummary(def.serial))}
-                    {/if}
-                </dl>
-
-                {#if def?.description}
-                    <section class="mt-6">
-                        <h3 class="mb-1 text-xs font-semibold tracking-wide text-muted uppercase">
-                            About
-                        </h3>
-                        <p class="text-sm leading-relaxed text-muted">{def.description}</p>
-                    </section>
-                {/if}
             {:else}
                 <div
                     class="grid min-h-[40vh] place-items-center rounded-xl border border-dashed border-line"

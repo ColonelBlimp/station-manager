@@ -222,3 +222,28 @@ describe('logging a manual FT8 QSO end-to-end (state modules + submit seam)', ()
         expect(submit).not.toHaveBeenCalled();
     });
 });
+
+describe('RX_PWR validation', () => {
+    it('accepts empty (optional) and a bare integer / decimal', () => {
+        for (const v of ['', '100', '5', '2.5', '0.0000001', '0']) {
+            draft.rxPwr = v;
+            expect(draftProblems().rxPwr, `rxPwr ${JSON.stringify(v)}`).toBe(false);
+        }
+    });
+
+    it('flags malformed values (never transforms them into a different number)', () => {
+        for (const v of ['2,5', '1e3', '-5', '100W', '.5', '100.', 'abc']) {
+            draft.rxPwr = v;
+            expect(draftProblems().rxPwr, `rxPwr ${JSON.stringify(v)}`).toBe(true);
+        }
+    });
+
+    it('a malformed RX power blocks logging until fixed', () => {
+        fillDraft();
+        expect(canLog()).toBe(true);
+        draft.rxPwr = '2,5';
+        expect(canLog()).toBe(false);
+        draft.rxPwr = '2.5';
+        expect(canLog()).toBe(true);
+    });
+});

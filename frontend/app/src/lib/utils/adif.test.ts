@@ -456,14 +456,20 @@ describe('formatAdifRecord — RX_PWR', () => {
         expect(adif).toContain('<RX_PWR:3>100');
     });
 
-    it('normalises a trailing decimal point', () => {
-        const adif = formatAdifRecord({ ...baseFields, rxPwr: '100.' });
-        expect(adif).toContain('<RX_PWR:3>100');
-    });
-
     it('emits a fractional value', () => {
         const adif = formatAdifRecord({ ...baseFields, rxPwr: '2.5' });
         expect(adif).toContain('<RX_PWR:3>2.5');
+    });
+
+    it('emits a small decimal literally, never in exponent notation', () => {
+        const adif = formatAdifRecord({ ...baseFields, rxPwr: '0.0000001' });
+        expect(adif).toContain('<RX_PWR:9>0.0000001');
+        expect(adif).not.toContain('e-');
+    });
+
+    it('omits a trailing-dot value (not ADIF-Number grammar)', () => {
+        const adif = formatAdifRecord({ ...baseFields, rxPwr: '100.' });
+        expect(adif).not.toContain('RX_PWR');
     });
 
     it('omits RX_PWR when blank', () => {

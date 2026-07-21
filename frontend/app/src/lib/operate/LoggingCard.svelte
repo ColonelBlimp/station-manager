@@ -56,16 +56,6 @@
         draft.callsign = draft.callsign.toUpperCase();
     }
 
-    // RX_PWR is an ADIF Number — keep only digits + a single decimal point as the
-    // operator types, so a stray letter or a pasted "100W" can't linger in the
-    // field. The ADIF formatter double-guards on submit (codex bd783573 P2).
-    function sanitizeRxPwr(): void {
-        let v = draft.rxPwr.replace(/[^0-9.]/g, '');
-        const dot = v.indexOf('.');
-        if (dot !== -1) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
-        draft.rxPwr = v;
-    }
-
     // Keyboard fast path (card-scoped: the svelte:window listener lives and
     // dies with this card, so the shortcuts exist only on Phone/CW):
     //   Ctrl+Enter — log; on SUCCESS focus returns to the callsign field for
@@ -354,10 +344,10 @@
                         <input
                             id="lc-rxpwr"
                             class="input w-24"
+                            class:input-error={p.rxPwr}
                             inputmode="numeric"
                             autocomplete="off"
                             bind:value={draft.rxPwr}
-                            oninput={sanitizeRxPwr}
                         />
                     </div>
                 </div>

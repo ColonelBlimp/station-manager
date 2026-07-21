@@ -172,6 +172,11 @@ export function clearDraft(): void {
 // concern, and dateOff/timeOff are legitimately blank until log.
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}(:\d{2})?$/;
+// RX_PWR is an ADIF Number (non-negative): a bare integer or decimal. Anything
+// else — a localised "2,5", exponent "1e3", a sign, or a stray letter — is
+// malformed and gets FLAGGED (red outline + blocks Log), never silently stripped
+// into a different number (codex db053f3b P2).
+const RX_PWR_RE = /^\d+(\.\d+)?$/;
 
 export interface DraftProblems {
     callsign: boolean;
@@ -181,6 +186,7 @@ export interface DraftProblems {
     timeOn: boolean;
     dateOff: boolean;
     timeOff: boolean;
+    rxPwr: boolean;
 }
 
 /** Per-field validity (true = malformed) for the card's red outlines. */
@@ -204,6 +210,7 @@ export function draftProblems(): DraftProblems {
         timeOn: bad(TIME_RE, draft.timeOn),
         dateOff: bad(DATE_RE, draft.dateOff),
         timeOff: bad(TIME_RE, draft.timeOff),
+        rxPwr: bad(RX_PWR_RE, draft.rxPwr),
     };
 }
 
