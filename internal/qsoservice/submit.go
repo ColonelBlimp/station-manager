@@ -169,11 +169,16 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "TIME_ON is not a valid time (expected HHMM or HHMMSS)"}
 	}
 
-	// TIME_OFF is optional: absent, it defaults to TIME_ON. But a PRESENT value that
-	// sanitizes to empty is malformed — reject it (mirroring the QSO_DATE_OFF guard
-	// below and the Update path) rather than silently substituting TIME_ON, which
-	// would store a fabricated end time for a bad input. SanitizeTimeToADIF returns
-	// either a valid time or "", so a non-empty result needs no further format check.
+	// TIME_OFF is optional. A NON-EMPTY value that won't parse (e.g. "99:99") is
+	// malformed garbage — reject it (mirroring the QSO_DATE_OFF guard below and the
+	// Update path) rather than silently substituting TIME_ON, which would store a
+	// fabricated end time for genuinely bad input. An EMPTY TIME_OFF defaults to
+	// TIME_ON: adif.Parse right-trims field values, so an omitted tag, a `<TIME_OFF:0>`
+	// tag, and a whitespace-only tag all arrive here as "" and are indistinguishable
+	// (codex ef77a7b8 P2) — but every one of them means "no end time given", for which
+	// TIME_ON is the correct default, not an error; rejecting an empty tag would break
+	// valid ADIF imports. SanitizeTimeToADIF returns a valid time or "", so a non-empty
+	// result needs no further format check.
 	rawTimeOff := strings.TrimSpace(rec.TimeOff)
 	timeOff := utils.SanitizeTimeToADIF(rawTimeOff)
 	if rawTimeOff != "" && timeOff == "" {

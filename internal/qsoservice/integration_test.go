@@ -334,6 +334,19 @@ func TestSubmit_MalformedTimeOff(t *testing.T) {
 	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
 	require.NoError(t, err)
 	require.Equal(t, "1200", existing.QsoDetails.TimeOff, "absent TIME_OFF defaults to TIME_ON")
+
+	// Empty/whitespace TIME_OFF is NOT rejected — after adif.Parse's right-trim it is
+	// indistinguishable from an omitted tag, and "no end time given" correctly
+	// defaults to TIME_ON (codex ef77a7b8 P2: rejecting empty tags would break valid
+	// ADIF). Different minute keeps a distinct dedupe key from the row above.
+	ws := base()
+	ws.QsoDetails.TimeOn = "1201"
+	ws.QsoDetails.TimeOff = "   "
+	res, err = s.Submit(ctx, lbID, ws, false)
+	require.NoError(t, err, "whitespace-only TIME_OFF must default, not reject")
+	existing, err = s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+	require.Equal(t, "1201", existing.QsoDetails.TimeOff, "whitespace TIME_OFF defaults to TIME_ON")
 }
 
 // TestSubmit_HHMMSSPreserved: an ADIF body with HHMMSS times stores at full
