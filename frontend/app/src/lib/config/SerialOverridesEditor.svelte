@@ -99,7 +99,6 @@
         }
     });
 
-    const overrideCount = $derived(rig.overrides ? Object.keys(rig.overrides).length : 0);
     function isOverridden(key: keyof RigOverrides): boolean {
         return rig.overrides?.[key] != null && rig.overrides[key] !== '';
     }
@@ -114,13 +113,6 @@
 <details class="rounded-md border border-line">
     <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-ink select-none">
         Serial overrides
-        <span class="font-normal text-muted">
-            {#if overrideCount > 0}
-                ({overrideCount} override{overrideCount === 1 ? '' : 's'})
-            {:else}
-                (using rigdef defaults)
-            {/if}
-        </span>
     </summary>
 
     <div class="border-t border-line px-3 py-3">

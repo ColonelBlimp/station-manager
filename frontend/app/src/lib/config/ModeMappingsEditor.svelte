@@ -88,8 +88,6 @@
         }
     });
 
-    const overrideCount = $derived(rig.mode_mappings ? Object.keys(rig.mode_mappings).length : 0);
-
     // Small inline field styled like .input (outline edge, accent focus) but at a
     // fixed width — .input forces w-full/block, wrong for the MODE/SUBMODE pair.
     const fieldClass =
@@ -100,15 +98,6 @@
 <details class="rounded-md border border-line">
     <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-ink select-none">
         Mode mappings
-        <span class="font-normal text-muted">
-            {#if literals.length === 0}
-                (model has no mode list)
-            {:else if overrideCount > 0}
-                ({overrideCount} override{overrideCount === 1 ? '' : 's'})
-            {:else}
-                (all rigdef defaults)
-            {/if}
-        </span>
     </summary>
 
     <div class="border-t border-line px-3 py-3">
@@ -143,7 +132,7 @@
                                 {disabled}
                                 autocomplete="off"
                                 spellcheck="false"
-                                class="w-44 {fieldClass} disabled:opacity-50"
+                                class="w-28 {fieldClass} disabled:opacity-50"
                             />
                             <span class="text-xs {isOverridden(lit) ? 'text-focus' : 'text-muted'}">
                                 {isOverridden(lit) ? 'override' : 'default'}

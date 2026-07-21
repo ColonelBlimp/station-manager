@@ -74,9 +74,22 @@
                             <span class="font-medium text-ink">{rigsState.nameFor(rig)}</span>
                             {#if rig.id === rigsState.defaultRigId}
                                 <span
-                                    class="rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-muted uppercase"
-                                    >default</span
+                                    class="inline-flex items-center gap-0.5 rounded border border-green-500/40 bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-green-700 uppercase dark:bg-green-500/10 dark:text-green-400"
                                 >
+                                    <svg
+                                        viewBox="0 0 20 20"
+                                        fill="currentColor"
+                                        aria-hidden="true"
+                                        class="size-3"
+                                    >
+                                        <path
+                                            fill-rule="evenodd"
+                                            d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
+                                            clip-rule="evenodd"
+                                        />
+                                    </svg>
+                                    default
+                                </span>
                             {/if}
                         </div>
                     </button>
@@ -96,7 +109,7 @@
                     <h2 class="text-lg font-semibold text-ink">{rigsState.nameFor(rig)}</h2>
                     {#if rig.id === rigsState.defaultRigId}
                         <span
-                            class="rounded bg-surface-muted px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-muted uppercase"
+                            class="rounded border border-green-500/40 bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-green-700 uppercase dark:bg-green-500/10 dark:text-green-400"
                             >active</span
                         >
                     {/if}
@@ -158,7 +171,7 @@
                      mutate the draft without changing its identity, so they don't
                      remount. Both mutate the same draft; the shared Save/Cancel
                      below covers them. -->
-                <section class="mt-6 max-w-2xl space-y-2">
+                <section class="mt-6 max-w-md space-y-2">
                     <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">
                         Advanced
                     </h3>
@@ -176,7 +189,7 @@
                      so this Save/Cancel covers both the connection edits and the
                      mode-mapping overrides. -->
                 {#if rigsState.dirty}
-                    <p class="mt-4 max-w-2xl text-xs text-muted">
+                    <p class="mt-4 max-w-md text-xs text-muted">
                         Changes take effect after a daemon restart.
                     </p>
                 {/if}
