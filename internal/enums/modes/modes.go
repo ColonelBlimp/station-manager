@@ -168,24 +168,48 @@ func applyCatalogue(cat *catalogue) {
 		}
 		mainModeSet[key] = struct{}{}
 	}
-	for k, v := range cat.SubModes {
-		key := strings.ToUpper(strings.TrimSpace(k))
-		val := strings.ToUpper(strings.TrimSpace(v))
+	// Resolve the override's submode entries into a canonical decision BEFORE
+	// mutating the shared map, so the result doesn't depend on Go's map iteration
+	// order (codex 26e55f6d P2). Distinct raw keys can canonicalize identically
+	// (e.g. "USB" and " usb "): iterating SORTED keys makes two valid siblings
+	// resolve the same way every run, and tracking valid vs. invalid-only per
+	// canonical key makes a valid-length parent always beat an over-length sibling.
+	// An over-length parent removes the key ONLY when no valid entry was supplied
+	// for it — the 1680267a case (reassigning an existing submode to an invalid
+	// parent) — without the nondeterministic erasure a bare delete-in-loop caused.
+	rawKeys := make([]string, 0, len(cat.SubModes))
+	for k := range cat.SubModes {
+		rawKeys = append(rawKeys, k)
+	}
+	sortStrings(rawKeys)
+	validParents := make(map[string]string, len(rawKeys))
+	invalidOnly := make(map[string]struct{})
+	for _, rawKey := range rawKeys {
+		key := strings.ToUpper(strings.TrimSpace(rawKey))
+		val := strings.ToUpper(strings.TrimSpace(cat.SubModes[rawKey]))
 		if key == "" || val == "" {
 			continue
 		}
 		// The parent BECOMES the stored mode when a QSO is logged by submode
-		// (GetModeBySubmode → prepareQso), so it faces the same storage bound. An
-		// over-length parent is invalid: DELETE the key rather than skipping it —
-		// submodeToParent is a persistent merge map, so a bare `continue` would
-		// leave an inherited mapping (e.g. the baseline USB → SSB) active and
-		// silently normalize QSOs under the old parent instead of surfacing the bad
-		// override (codex 1680267a P2). A later valid override re-adds the key.
+		// (GetModeBySubmode → prepareQso), so it faces the same storage bound.
 		if utf8.RuneCountInString(val) > MaxModeLen {
-			delete(submodeToParent, key)
+			if _, ok := validParents[key]; !ok {
+				invalidOnly[key] = struct{}{}
+			}
 			continue
 		}
+		validParents[key] = val
+		delete(invalidOnly, key)
+	}
+	// Apply: valid parents override/add; invalid-only keys are removed so a bad
+	// override doesn't leave an inherited mapping active (1680267a). These loops are
+	// pure assignments/deletes on distinct keys, so their own iteration order is
+	// immaterial.
+	for key, val := range validParents {
 		submodeToParent[key] = val
+	}
+	for key := range invalidOnly {
+		delete(submodeToParent, key)
 	}
 }
 

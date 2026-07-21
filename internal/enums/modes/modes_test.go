@@ -63,6 +63,25 @@ func TestLoadOverride_BoundsModeLength(t *testing.T) {
 	if parent, ok := GetModeBySubmode("REMAP_TEST"); ok {
 		t.Errorf("over-length reassignment must remove the mapping, not retain it: got %q", parent)
 	}
+
+	// Distinct raw keys that canonicalize identically ("COLLIDE_TEST" and
+	// " collide_test "), one valid and one over-length, must resolve
+	// DETERMINISTICALLY to the valid parent regardless of map iteration order — and
+	// stay that way across repeated loads (codex 26e55f6d P2). A fresh key keeps it
+	// hermetic.
+	dir4 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir4, "modes.json"),
+		[]byte(`{"submodes": {"COLLIDE_TEST": "SSB", " collide_test ": "`+over+`"}}`), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	for i := 0; i < 10; i++ {
+		if err := LoadOverride(dir4); err != nil {
+			t.Fatalf("LoadOverride: %v", err)
+		}
+		if parent, ok := GetModeBySubmode("COLLIDE_TEST"); !ok || parent != SSB {
+			t.Fatalf("collision load %d: valid parent must win, got (%q, %v)", i, parent, ok)
+		}
+	}
 }
 
 func TestIsValidMode(t *testing.T) {
