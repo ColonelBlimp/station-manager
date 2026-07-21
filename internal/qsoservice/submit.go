@@ -214,6 +214,21 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 	}
 	freqMHz := utils.FormatFreqMHz(freqKHz)
 
+	// BAND is a function of FREQ, so derive it from the canonical freq — the operator
+	// or an import can supply a BAND that contradicts FREQ, and an impossible pair
+	// corrupts the dedupe key below and the forwarded ADIF. FREQ is authoritative (the
+	// SPA/rig sets it directly). A freq in no recognised band is rejected outright:
+	// IsValidBand and the freq→band table cover the SAME 17 bands (160m–23cm), so an
+	// unmapped freq is genuinely out-of-band, not a valid band the table merely misses
+	// — live/edit never hit this (rig freqs are in-band), and an out-of-band import
+	// record is flagged (per-record error) rather than stored as a corrupt pair.
+	// Symmetric with Update (review 2026-06-19 M2; 2026-07-21 review finding 2).
+	derivedBand := utils.FrequencyToBand(freqMHz)
+	if derivedBand == "" {
+		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("FREQ %s is not within a recognised amateur band", freqMHz)}
+	}
+	band = strings.ToLower(derivedBand)
+
 	// ---- Build the Qso ----
 	qso := adif.RecordToQso(rec, logbookID)
 	qso.ContactedStation.Call = call

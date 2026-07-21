@@ -135,15 +135,19 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 			return types.Qso{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("freq %q: %v", freq, err)}
 		}
 		merged.QsoDetails.Freq = utils.FormatFreqMHz(kHz)
-		// Band is a function of frequency, so derive it from the canonical freq —
-		// the edit overlay sends the OLD band on a VFO freq change, which would
-		// otherwise persist an impossible BAND/FREQ pair (and a wrong dedupe key,
-		// and contradictory ADIF to forwarders). Review 2026-06-19 M2. Only
-		// overwrite when the freq maps to a known band; an out-of-band freq keeps
-		// the supplied band so the band validation below still catches it.
-		if derived := utils.FrequencyToBand(merged.QsoDetails.Freq); derived != "" {
-			merged.QsoDetails.Band = strings.ToLower(derived)
+		// BAND is a function of FREQ, so derive it from the canonical freq — the edit
+		// overlay sends the OLD band on a VFO freq change, which would otherwise
+		// persist an impossible BAND/FREQ pair (and a wrong dedupe key, and
+		// contradictory ADIF to forwarders). Review 2026-06-19 M2. A freq in no
+		// recognised band is rejected: IsValidBand and the freq→band table cover the
+		// same 17 bands, so an unmapped freq is genuinely out-of-band, not a valid
+		// band the table merely misses (2026-07-21 review finding 2). Symmetric with
+		// Submit.
+		derived := utils.FrequencyToBand(merged.QsoDetails.Freq)
+		if derived == "" {
+			return types.Qso{}, &SubmitError{Code: "invalid_field_value", Message: fmt.Sprintf("freq %s is not within a recognised amateur band", merged.QsoDetails.Freq)}
 		}
+		merged.QsoDetails.Band = strings.ToLower(derived)
 	}
 
 	// ---- Validate required-field invariants on the merged result ----

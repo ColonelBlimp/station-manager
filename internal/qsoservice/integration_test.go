@@ -212,6 +212,74 @@ func TestUpdate_FreqEditDerivesBand(t *testing.T) {
 	require.Equal(t, "14.250", updated.QsoDetails.Freq)
 }
 
+// TestSubmit_DerivesBandFromFreq is the submit-side symmetry of
+// TestUpdate_FreqEditDerivesBand (2026-07-21 review finding 2): a submit whose BAND
+// contradicts FREQ stores the freq-derived band, so an impossible pair (and the
+// wrong dedupe key / contradictory forwarded ADIF) can't be created.
+func TestSubmit_DerivesBandFromFreq(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		// BAND says 20m but 7.050 is 40m — FREQ is authoritative.
+		QsoDetails:     types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "7.050", QsoDate: "20260101", TimeOn: "1200"},
+		LoggingStation: types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+	require.Equal(t, "40m", existing.QsoDetails.Band, "band derived from freq, not the supplied 20m")
+	require.Equal(t, "7.050", existing.QsoDetails.Freq)
+}
+
+// TestSubmit_RejectsOutOfBandFreq (2026-07-21 review finding 2): a FREQ in no
+// recognised band (12.000 sits between 30m and 20m) is a clean invalid_field_value,
+// not a stored corrupt pair — IsValidBand and the freq→band table cover the same
+// bands, so an unmapped freq is genuinely out-of-band.
+func TestSubmit_RejectsOutOfBandFreq(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "12.000", QsoDate: "20260101", TimeOn: "1200"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	_, err := s.Submit(ctx, lbID, rec, false)
+	require.Error(t, err)
+	var se *SubmitError
+	require.ErrorAs(t, err, &se, "out-of-band freq must be a SubmitError (→ 400), not a stored corrupt pair")
+	require.Equal(t, "invalid_field_value", se.Code)
+}
+
+// TestUpdate_RejectsOutOfBandFreq: the update-side symmetry — a freq edit to an
+// out-of-band value is rejected rather than persisting a band that contradicts it.
+func TestUpdate_RejectsOutOfBandFreq(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "14.074", QsoDate: "20260101", TimeOn: "1200"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+
+	_, err = s.Update(ctx, existing, []byte(`{"freq":"12.000"}`), source.API)
+	require.Error(t, err)
+	var se *SubmitError
+	require.ErrorAs(t, err, &se)
+	require.Equal(t, "invalid_field_value", se.Code)
+}
+
 // TestSubmit_HHMMSSPreserved: an ADIF body with HHMMSS times stores at full
 // second precision (the schema CHECK now accepts HHMM or HHMMSS). Seconds are no
 // longer truncated — FT8's real slot seconds and imported HHMMSS survive for
