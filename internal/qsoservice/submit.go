@@ -169,7 +169,16 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "TIME_ON is not a valid time (expected HHMM or HHMMSS)"}
 	}
 
-	timeOff := utils.SanitizeTimeToADIF(strings.TrimSpace(rec.TimeOff))
+	// TIME_OFF is optional: absent, it defaults to TIME_ON. But a PRESENT value that
+	// sanitizes to empty is malformed — reject it (mirroring the QSO_DATE_OFF guard
+	// below and the Update path) rather than silently substituting TIME_ON, which
+	// would store a fabricated end time for a bad input. SanitizeTimeToADIF returns
+	// either a valid time or "", so a non-empty result needs no further format check.
+	rawTimeOff := strings.TrimSpace(rec.TimeOff)
+	timeOff := utils.SanitizeTimeToADIF(rawTimeOff)
+	if rawTimeOff != "" && timeOff == "" {
+		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "TIME_OFF is not a valid time (expected HHMM or HHMMSS)"}
+	}
 	if timeOff == "" {
 		timeOff = timeOn
 	}

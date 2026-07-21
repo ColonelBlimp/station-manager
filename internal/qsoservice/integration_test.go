@@ -302,6 +302,40 @@ func TestSubmit_Accepts60mBelowOldTableFloor(t *testing.T) {
 	require.Equal(t, "5.100", existing.QsoDetails.Freq)
 }
 
+// TestSubmit_MalformedTimeOff guards 2026-07-21 review finding 3: a PRESENT but
+// malformed TIME_OFF is a clean invalid_field_value, not silently replaced with
+// TIME_ON (which would store a fabricated end time). An ABSENT TIME_OFF still
+// defaults to TIME_ON.
+func TestSubmit_MalformedTimeOff(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	base := func() adif.Record {
+		return adif.Record{
+			ContactedStation: types.ContactedStation{Call: "K1ABC"},
+			QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "14.074", QsoDate: "20260101", TimeOn: "1200"},
+			LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+		}
+	}
+
+	// Present but malformed → rejected, not defaulted to TIME_ON.
+	bad := base()
+	bad.QsoDetails.TimeOff = "99:99"
+	_, err := s.Submit(ctx, lbID, bad, false)
+	require.Error(t, err)
+	var se *SubmitError
+	require.ErrorAs(t, err, &se, "malformed TIME_OFF must be a SubmitError (→ 400), not a silent default")
+	require.Equal(t, "invalid_field_value", se.Code)
+
+	// Absent → defaults to TIME_ON (behavior preserved).
+	res, err := s.Submit(ctx, lbID, base(), false)
+	require.NoError(t, err)
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+	require.Equal(t, "1200", existing.QsoDetails.TimeOff, "absent TIME_OFF defaults to TIME_ON")
+}
+
 // TestSubmit_HHMMSSPreserved: an ADIF body with HHMMSS times stores at full
 // second precision (the schema CHECK now accepts HHMM or HHMMSS). Seconds are no
 // longer truncated — FT8's real slot seconds and imported HHMMSS survive for
