@@ -30,8 +30,53 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-20)
+## Current state (as of 2026-07-21)
 
+> **Session 230 (2026-07-21) — REVIEW-DRIVEN HARDENING + LOGGING-SPA RETIREMENT.
+> A long reactive session: finished the CSRF arc, worked a whole `internal/qsoservice`
+> review batch, and retired the legacy logging SPA. Every commit reviewed + converged
+> at ZERO open codex findings.**
+> - **CSRF middleware — hardening arc converged (`internal/api/csrf.go`
+>   `requireSameOrigin`).** API-wide same-origin guard over the whole mutating surface.
+>   **Rebinding-proof** for loopback + specific-IP binds (Host allowlist from OUR config,
+>   not the attacker-controlled Host). **Fail-closed (loopback-only)** for wildcard TCP
+>   binds AND Unix sockets — incl. a Unix socket behind a reverse proxy that forwards a
+>   rebound Host+Origin. Trust model: `r.Host` is the Origin comparison basis ONLY for
+>   tcp (where `hostAllowed` validated it); non-browser no-Origin clients (`curl
+>   --unix-socket`, CLI) always pass. **Deferred (Option B):** a `server.allowed_hosts`
+>   config for a real wildcard-LAN / proxied-hostname deployment (YAGNI until one exists).
+> - **2026-07-21 `internal/qsoservice` review batch (7 findings, operator-pasted; all
+>   verified real).** #1–#3, #5, #6 FIXED; #4, #7 logged as enhancements (`backlog.md`
+>   line 59: FT4/SNR empty-report policy; SUBMODE↔MODE validation).
+>   - **#1 mode/call length → migration `0006_widen_mode_call` (schema now v6).** mode
+>     CHECK ≤10→**≤20** (DIGITALVOICE is 12 + DSTAR/DMR resolve to it), call BETWEEN
+>     1..20→**1..32** to match `IsValidCallsign` — was ABORTING a QRZ-ADIF import on any
+>     such QSO (`importBatchFallback` treats a CHECK violation as a hard error). Plus
+>     `modes.MaxModeLen=20` catalogue bound (over-length main-modes + submode-parents
+>     dropped at load; an invalid override DELETES the key not skips; deterministic
+>     sorted resolution — valid parent always beats over-length sibling; `slices.Sort`).
+>   - **#2 band/freq coherence.** `submit` now derives BAND from FREQ like `update`
+>     (freq authoritative), and **rejects an out-of-band freq** (strict — operator's
+>     call). To keep strict safe, the freq→band table (daemon `utils/frequency.go` +
+>     **app SPA**, not logging) was widened to ADIF: 60m 5.25→**5.06**, 4m 70.5→**71.0**
+>     (else 60m/5.100 false-rejected). Symmetric submit/update.
+>   - **#3 TIME_OFF** — reject a present-but-malformed value; absent/empty/whitespace all
+>     default to TIME_ON (indistinguishable after `adif.Parse` right-trim; correct).
+>   - **#5/#6 error propagation** — batch import ABORTS on a dedupe-lookup infra fault
+>     (not per-record); `EnqueueUploads` tombstone probe + `EnqueueDeleteUploads`
+>     live-fetch propagate a non-ErrNotFound error instead of bucketing as NotFound /
+>     falling through (which could enqueue a DELETE against a live row).
+> - **Logging SPA RETIRED (`frontend/logging`).** Embed (`frontend/embed.go`
+>   `LoggingFS`/`loggingSPA`) + `GET /` route + CI/Taskfile/release-script build steps
+>   all removed; **`GET /` now 302-redirects to `/app/`** (exact `/{$}`, NO root
+>   catch-all → any unmatched GET, incl. `/debug/pprof/*` when off, is a clean 404).
+>   **Source dir KEPT** for reference (backlog retirement pattern — real delete later
+>   gets a preservation tag). The app SPA at `/app/` is now the sole browser client;
+>   `ci-local.sh` repointed to `frontend/app`. **Known parity gap** (accepted): the app
+>   shows raw error codes, not the logging SPA's 112-line `en.ts` i18n catalogue.
+> - **Latent CI red fixed:** `handler_version_test.go` hardcoded schema v5 — migration
+>   0006 made it v6 (I missed it at the 0006 commit; caught during the SPA work).
+>
 > **Session 229 (2026-07-20, later) — CONFIG UI: RIGS SECTION BUILT +
 > hardened; CLUBLOG API KEY moved to BUILD-TIME INJECTION (ADR 0054); ADR 0053
 > (inbound DX cluster) written; POTA + Call Sense added to backlog. Everything
