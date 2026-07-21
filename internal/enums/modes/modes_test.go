@@ -37,6 +37,32 @@ func TestLoadOverride_BoundsModeLength(t *testing.T) {
 	if parent, ok := GetModeBySubmode("SUB_OK"); !ok || parent.String() != atLimit {
 		t.Errorf("submode with an at-limit parent should resolve: got (%q, %v)", parent, ok)
 	}
+
+	// An over-length parent for an EXISTING submode key must REMOVE the mapping,
+	// not silently leave the prior (inherited) parent active (codex 1680267a P2).
+	// A fresh key (never in the baseline) keeps this hermetic — no restore needed.
+	dir2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir2, "modes.json"),
+		[]byte(`{"submodes": {"REMAP_TEST": "SSB"}}`), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if err := LoadOverride(dir2); err != nil {
+		t.Fatalf("LoadOverride: %v", err)
+	}
+	if parent, ok := GetModeBySubmode("REMAP_TEST"); !ok || parent != SSB {
+		t.Fatalf("precondition: REMAP_TEST should resolve to SSB, got (%q, %v)", parent, ok)
+	}
+	dir3 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir3, "modes.json"),
+		[]byte(`{"submodes": {"REMAP_TEST": "`+over+`"}}`), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if err := LoadOverride(dir3); err != nil {
+		t.Fatalf("LoadOverride: %v", err)
+	}
+	if parent, ok := GetModeBySubmode("REMAP_TEST"); ok {
+		t.Errorf("over-length reassignment must remove the mapping, not retain it: got %q", parent)
+	}
 }
 
 func TestIsValidMode(t *testing.T) {

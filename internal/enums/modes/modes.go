@@ -175,9 +175,14 @@ func applyCatalogue(cat *catalogue) {
 			continue
 		}
 		// The parent BECOMES the stored mode when a QSO is logged by submode
-		// (GetModeBySubmode → prepareQso), so it faces the same storage bound —
-		// drop a mapping whose parent would fail the qso.mode CHECK.
+		// (GetModeBySubmode → prepareQso), so it faces the same storage bound. An
+		// over-length parent is invalid: DELETE the key rather than skipping it —
+		// submodeToParent is a persistent merge map, so a bare `continue` would
+		// leave an inherited mapping (e.g. the baseline USB → SSB) active and
+		// silently normalize QSOs under the old parent instead of surfacing the bad
+		// override (codex 1680267a P2). A later valid override re-adds the key.
 		if utf8.RuneCountInString(val) > MaxModeLen {
+			delete(submodeToParent, key)
 			continue
 		}
 		submodeToParent[key] = val
