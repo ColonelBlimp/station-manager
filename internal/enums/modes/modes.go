@@ -25,9 +25,20 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	_ "embed"
 )
+
+// MaxModeLen bounds a main-mode name at the storage limit — the qso.mode column's
+// CHECK(length(trim(mode)) <= 20) (migration 0006). Enforced when the catalogue is
+// (re)loaded so IsValidMode never accepts, and GetModeBySubmode never resolves, a
+// mode that would then violate the insert CHECK (a 500 on live submit, a hard abort
+// on import). This keeps the validation domain inside the storage domain: an
+// over-length operator mode is cleanly rejected as "not recognised" instead of
+// reaching the DB (codex c03f36e5 P1). Kept in step with the migration by hand —
+// SQL can't reference a Go const; the value here IS the CHECK's ceiling.
+const MaxModeLen = 20
 
 // Mode is the typed wrapper for ADIF main-mode strings. Kept as a
 // distinct type so call sites that thread modes through can use
@@ -149,7 +160,10 @@ func parseCatalogue(data []byte) (*catalogue, error) {
 func applyCatalogue(cat *catalogue) {
 	for _, m := range cat.MainModes {
 		key := strings.ToUpper(strings.TrimSpace(m))
-		if key == "" {
+		// Skip empty or over-length names (rune count matches SQLite's length()):
+		// an over-length mode would pass IsValidMode but fail the qso.mode CHECK on
+		// insert, so it must never enter the catalogue (codex c03f36e5 P1).
+		if key == "" || utf8.RuneCountInString(key) > MaxModeLen {
 			continue
 		}
 		mainModeSet[key] = struct{}{}
@@ -158,6 +172,12 @@ func applyCatalogue(cat *catalogue) {
 		key := strings.ToUpper(strings.TrimSpace(k))
 		val := strings.ToUpper(strings.TrimSpace(v))
 		if key == "" || val == "" {
+			continue
+		}
+		// The parent BECOMES the stored mode when a QSO is logged by submode
+		// (GetModeBySubmode → prepareQso), so it faces the same storage bound —
+		// drop a mapping whose parent would fail the qso.mode CHECK.
+		if utf8.RuneCountInString(val) > MaxModeLen {
 			continue
 		}
 		submodeToParent[key] = val

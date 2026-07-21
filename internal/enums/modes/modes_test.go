@@ -3,8 +3,41 @@ package modes
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestLoadOverride_BoundsModeLength pins the storage-domain guard: an operator
+// modes.json mode (or submode parent) longer than MaxModeLen is dropped at load, so
+// IsValidMode/GetModeBySubmode never yield a value that would fail the qso.mode
+// CHECK on insert (codex c03f36e5 P1). A name AT the ceiling is still accepted.
+func TestLoadOverride_BoundsModeLength(t *testing.T) {
+	over := strings.Repeat("X", MaxModeLen+1)  // 21 chars
+	atLimit := strings.Repeat("Y", MaxModeLen) // 20 chars
+	dir := t.TempDir()
+	payload := `{"main_modes": ["` + over + `", "` + atLimit + `"],` +
+		`"submodes": {"SUB_OVER": "` + over + `", "SUB_OK": "` + atLimit + `"}}`
+	if err := os.WriteFile(filepath.Join(dir, "modes.json"), []byte(payload), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if err := LoadOverride(dir); err != nil {
+		t.Fatalf("LoadOverride: %v", err)
+	}
+
+	if IsValidMode(over) {
+		t.Errorf("over-length mode (%d chars) must not be admitted", len(over))
+	}
+	if _, ok := GetModeBySubmode("SUB_OVER"); ok {
+		t.Errorf("submode mapping to an over-length parent must be dropped")
+	}
+	// The boundary value is fine — it fits the CHECK exactly.
+	if !IsValidMode(atLimit) {
+		t.Errorf("mode at exactly MaxModeLen (%d) should be admitted", MaxModeLen)
+	}
+	if parent, ok := GetModeBySubmode("SUB_OK"); !ok || parent.String() != atLimit {
+		t.Errorf("submode with an at-limit parent should resolve: got (%q, %v)", parent, ok)
+	}
+}
 
 func TestIsValidMode(t *testing.T) {
 	valid := []string{
