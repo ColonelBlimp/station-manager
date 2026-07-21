@@ -172,11 +172,12 @@ export function clearDraft(): void {
 // concern, and dateOff/timeOff are legitimately blank until log.
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}(:\d{2})?$/;
-// RX_PWR is an ADIF Number (non-negative): a bare integer or decimal. Anything
-// else — a localised "2,5", exponent "1e3", a sign, or a stray letter — is
-// malformed and gets FLAGGED (red outline + blocks Log), never silently stripped
-// into a different number (codex db053f3b P2).
-const RX_PWR_RE = /^\d+(\.\d+)?$/;
+// RX_PWR is an ADIF Number (non-negative): digits with an optional single decimal
+// point — including a leading (".5") or trailing ("100.") dot, both valid per ADIF
+// 3.1.7. Anything else — a localised "2,5", exponent "1e3", a sign, or a stray
+// letter — is malformed and gets FLAGGED (red outline + blocks Log), never
+// silently stripped into a different number (codex db053f3b/ab14e974 P2).
+const RX_PWR_RE = /^(\d+\.?\d*|\.\d+)$/;
 
 export interface DraftProblems {
     callsign: boolean;

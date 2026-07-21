@@ -344,15 +344,17 @@ export function formatAdifRecord(f: AdifQsoFields): string {
     // Contacted-station / per-QSO operator notes (Details panel).
     // Distinct from COMMENT (above) — NOTES is operator's private
     // record, COMMENT is for things shared during the QSO.
-    // RX_PWR is an ADIF Number — emit the operator's LITERAL value only when it
-    // matches the ADIF Number grammar and is positive (0 / blank = "not set", like
-    // TX_PWR). Emitting the literal (not String(Number(v))) avoids exponent
-    // notation for tiny/huge values ("0.0000001" stays literal, not "1e-7") that
-    // the ADIF grammar rejects (codex db053f3b P2). The logging card blocks a
-    // malformed value upstream; this is the backstop for any other caller.
+    // RX_PWR is an ADIF Number (non-negative): digits with an optional single
+    // decimal point, incl. a leading (".5") or trailing ("100.") dot (ADIF 3.1.7).
+    // Positive only (0 / blank = "not set", like TX_PWR). Normalise the dot WITHOUT
+    // Number()/String() so tiny values stay literal, never exponent ("0.0000001",
+    // not "1e-7") — codex db053f3b/ab14e974 P2. The logging card blocks a malformed
+    // value upstream; this is the backstop for any other caller.
     if (f.rxPwr) {
-        const v = f.rxPwr.trim();
-        if (/^\d+(\.\d+)?$/.test(v) && Number(v) > 0) {
+        let v = f.rxPwr.trim();
+        if (/^(\d+\.?\d*|\.\d+)$/.test(v) && parseFloat(v) > 0) {
+            if (v.startsWith('.')) v = '0' + v;
+            if (v.endsWith('.')) v = v.slice(0, -1);
             lines.push(adifTag('RX_PWR', v));
         }
     }

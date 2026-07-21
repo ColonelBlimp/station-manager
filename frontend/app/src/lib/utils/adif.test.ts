@@ -467,9 +467,14 @@ describe('formatAdifRecord — RX_PWR', () => {
         expect(adif).not.toContain('e-');
     });
 
-    it('omits a trailing-dot value (not ADIF-Number grammar)', () => {
+    it('normalises a leading dot (".5" → "0.5")', () => {
+        const adif = formatAdifRecord({ ...baseFields, rxPwr: '.5' });
+        expect(adif).toContain('<RX_PWR:3>0.5');
+    });
+
+    it('normalises a trailing dot ("100." → "100")', () => {
         const adif = formatAdifRecord({ ...baseFields, rxPwr: '100.' });
-        expect(adif).not.toContain('RX_PWR');
+        expect(adif).toContain('<RX_PWR:3>100');
     });
 
     it('omits RX_PWR when blank', () => {

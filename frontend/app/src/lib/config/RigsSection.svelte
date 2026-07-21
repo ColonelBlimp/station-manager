@@ -209,6 +209,13 @@
                         Cancel
                     </button>
                 </div>
+
+                <!-- The rigdef's effective FT8 mode, serial-defaults summary, and
+                     description used to render here; removed 2026-07-21 as
+                     non-actionable read-only info (operator request). Serial
+                     defaults now surface as placeholders in the Serial overrides
+                     editor; rigsState.ft8ModeFor is retained for a future per-rig
+                     FT8-mode control. -->
             {:else}
                 <div
                     class="grid min-h-[40vh] place-items-center rounded-xl border border-dashed border-line"
