@@ -73,10 +73,10 @@ func TestOriginAllowed(t *testing.T) {
 	}
 }
 
-// A wildcard bind (0.0.0.0 / :8080) can't derive the external host, so the Host
-// allowlist is skipped and a LAN client's mutation isn't rejected (codex e77a573f
-// P1); the Origin check still rejects a plain cross-origin browser POST.
-func TestRequireSameOrigin_WildcardBind(t *testing.T) {
+// A wildcard bind (0.0.0.0 / :8080) can't identify its external host, so mutations
+// are LOOPBACK-ONLY — fail-closed / rebinding-proof (Option A, codex 5664434c P1).
+// A LAN deployment must bind a specific IP instead (next test).
+func TestRequireSameOrigin_WildcardBindLoopbackOnly(t *testing.T) {
 	srv := testServerWithCfg(t, func(cfg *config.Config) {
 		cfg.SocketPath = "0.0.0.0:8080"
 	})
@@ -84,9 +84,34 @@ func TestRequireSameOrigin_WildcardBind(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	h := srv.requireSameOrigin(next)
-	do := func(origin string) *httptest.ResponseRecorder {
+	do := func(host string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/v1/restart", nil)
-		req.Host = "192.168.1.5:8080" // the actual interface, not the wildcard
+		req.Host = host
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	if w := do("127.0.0.1:8080"); w.Code != http.StatusOK {
+		t.Fatalf("wildcard bind, loopback POST: want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if w := do("192.168.1.5:8080"); w.Code != http.StatusForbidden {
+		t.Fatalf("wildcard bind, LAN POST: want 403 (fail-closed), got %d", w.Code)
+	}
+}
+
+// A SPECIFIC-IP bind is how a LAN deployment accepts network browser writes: the
+// bound IP is allowed; a rebound attacker name is not.
+func TestRequireSameOrigin_SpecificIPBind(t *testing.T) {
+	srv := testServerWithCfg(t, func(cfg *config.Config) {
+		cfg.SocketPath = "192.168.1.5:8080"
+	})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := srv.requireSameOrigin(next)
+	do := func(host, origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/restart", nil)
+		req.Host = host
 		if origin != "" {
 			req.Header.Set("Origin", origin)
 		}
@@ -94,10 +119,10 @@ func TestRequireSameOrigin_WildcardBind(t *testing.T) {
 		h.ServeHTTP(w, req)
 		return w
 	}
-	if w := do(""); w.Code != http.StatusOK {
-		t.Fatalf("wildcard bind, LAN POST no Origin: want 200, got %d (%s)", w.Code, w.Body.String())
+	if w := do("192.168.1.5:8080", ""); w.Code != http.StatusOK {
+		t.Fatalf("specific-IP bind, LAN POST on bound IP: want 200, got %d (%s)", w.Code, w.Body.String())
 	}
-	if w := do("https://evil.example"); w.Code != http.StatusForbidden {
-		t.Fatalf("wildcard bind, cross-origin POST: want 403, got %d", w.Code)
+	if w := do("evil.example:8080", "http://evil.example:8080"); w.Code != http.StatusForbidden {
+		t.Fatalf("specific-IP bind, rebinding POST: want 403, got %d", w.Code)
 	}
 }

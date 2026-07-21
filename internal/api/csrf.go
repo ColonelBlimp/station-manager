@@ -49,19 +49,16 @@ func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 // hostAllowed reports whether h (the request Host, port stripped) is a host the
 // daemon is legitimately served under: a loopback name, or the configured tcp bind
 // host. A WILDCARD bind (0.0.0.0 / :: / empty) or a non-tcp listener has no
-// derivable external host, so the allowlist can't apply and any host passes — that
-// is an opt-in, warned non-loopback deployment (server.protocol=tcp validation),
-// and the Origin check still guards plain cross-origin. Rebinding can't be fully
-// defended for a wildcard bind without a configured hostname (codex e77a573f P1).
+// derivable external host, so it admits LOOPBACK ONLY — fail-closed and
+// rebinding-proof (Option A, codex 5664434c P1). A LAN deployment must bind a
+// SPECIFIC IP (itself rebinding-proof, since a rebound attacker name won't equal
+// it), not 0.0.0.0, to accept browser writes from the network.
 func (s *Server) hostAllowed(h string) bool {
 	if isLoopbackName(h) {
 		return true
 	}
 	bind := s.tcpBindHost()
-	if bind == "" {
-		return true
-	}
-	return h == bind
+	return bind != "" && h == bind
 }
 
 // tcpBindHost returns the configured tcp bind host, or "" for a wildcard bind
