@@ -122,3 +122,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-07-21] logbook. When selecting row, the table jumps down because of the header appearing.
 - [2026-07-21] logbook: when sending an email no toast is show for sending, or sent, rather once sent a msg is added to to popup header
 - [2026-07-21] logbook 'not emailed only' doesn't work
+- [2026-07-21] check if we need to update the ADIF field for CLUBLOG_QSO_UPLOAD_DATE

@@ -43,7 +43,8 @@
     }>;
 
     function defaultFor(key: keyof RigOverrides): string {
-        const v = rigdef?.serial?.[key as keyof NonNullable<RigDef['serial']>];
+        // RigOverrides and RigSerial share the same key set, so no cast is needed.
+        const v = rigdef?.serial?.[key];
         return v === undefined || v === null ? '' : String(v);
     }
 
@@ -72,9 +73,16 @@
             return;
         }
         const next: RigOverrides = {};
+        // The WHOLE trimmed value must be a positive integer. parseInt would accept
+        // a numeric prefix ("9600xyz"→9600, "8.5"→8, "1e3"→1) and silently store a
+        // value different from the visible text — a surprise serial setting that
+        // could fail the bridge on restart (codex 55d85876 P2). A non-integer /
+        // non-positive entry → undefined (inherit the rigdef default).
         const num = (s: string): number | undefined => {
-            const n = parseInt(s.trim(), 10);
-            return Number.isFinite(n) && n > 0 ? n : undefined;
+            const t = s.trim();
+            if (!/^\d+$/.test(t)) return undefined;
+            const n = parseInt(t, 10);
+            return n > 0 ? n : undefined;
         };
         if (num(editing.baud_rate) !== undefined) next.baud_rate = num(editing.baud_rate);
         if (num(editing.data_bits) !== undefined) next.data_bits = num(editing.data_bits);

@@ -1,7 +1,9 @@
 <script lang="ts">
-    // Phone/CW logging card — the fast-path entry fields (callsign, RST, time,
-    // name) plus a comment line. Rarely touched lookups (QTH, grid) live in the
-    // Details card; the grid is enrichment-filled into the draft, not typed here.
+    // Phone/CW logging card — the fast-path entry fields (callsign, RST, time),
+    // a Name + Comment row, and a collapsible Contact-details disclosure for the
+    // contacted-station facts kept off the fast path (Rig / RX power / Notes to
+    // edit; QRZ page link + looked-up email to read). QTH / grid live in the
+    // ContactDialog overlay; the grid is enrichment-filled, not typed here.
     //
     // The right column hosts EnrichmentCard (flag / DXCC + NEW / bearing SP-LP /
     // distance — mirrors the FT8 Band-Activity enrichment). This card is only its
@@ -29,6 +31,17 @@
     import { operate, closeContact, closeExport, registerCallsignInput } from './state.svelte';
     import { toasts } from '../ui/toasts.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
+    import { enrich } from './enrich.svelte';
+
+    // Contact-details disclosure (rig / RX power / notes to edit; QRZ page link +
+    // looked-up email to read — all for the contacted station). Enrichment is
+    // trusted only when it belongs to the call in the draft (a fast edit can outrun
+    // the debounced lookup), mirroring ContactDialog.
+    const detailsCall = $derived(draft.callsign.trim().toUpperCase());
+    const enrichData = $derived(enrich.call === detailsCall ? enrich.data : null);
+    const qrzUrl = $derived(
+        detailsCall === '' ? null : `https://www.qrz.com/db/${encodeURIComponent(detailsCall)}`
+    );
 
     // Why the Log button is gated, for the tooltip (undefined when it isn't).
     const gateTitle = $derived(
@@ -146,146 +159,226 @@
 <DuplicateDialog />
 
 <div class="card w-(--card-w)">
-    <div class="flex gap-x-6">
-        <!-- Left: fast-path entry fields -->
-        <div class="flex flex-col">
-            <div class="flex items-end gap-x-2">
-                <div>
-                    <label for="lc-call" class="block text-sm font-medium text-ink">Callsign</label>
-                    <input
-                        id="lc-call"
-                        class="input w-32 uppercase"
-                        class:input-error={p.callsign}
-                        autocomplete="off"
-                        spellcheck="false"
-                        placeholder="Callsign"
-                        bind:this={callInput}
-                        bind:value={draft.callsign}
-                        oninput={upperCall}
-                        onkeydown={callKeydown}
-                    />
+    <div class="flex flex-col">
+        <div class="flex flex-row gap-x-6">
+            <div class="flex flex-col">
+                <div class="flex items-end gap-x-2">
+                    <div>
+                        <label for="lc-call" class="block text-sm font-medium text-ink"
+                            >Callsign</label
+                        >
+                        <input
+                            id="lc-call"
+                            class="input w-32 uppercase"
+                            class:input-error={p.callsign}
+                            autocomplete="off"
+                            spellcheck="false"
+                            placeholder="Callsign"
+                            bind:this={callInput}
+                            bind:value={draft.callsign}
+                            oninput={upperCall}
+                            onkeydown={callKeydown}
+                        />
+                    </div>
+                    <div>
+                        <label for="lc-rst-s" class="block text-sm font-medium text-ink"
+                            >RST Sent</label
+                        >
+                        <input
+                            id="lc-rst-s"
+                            class="input w-15"
+                            class:input-error={p.rstSent}
+                            bind:value={draft.rstSent}
+                        />
+                    </div>
+                    <div>
+                        <label for="lc-rst-r" class="block text-sm font-medium text-ink"
+                            >RST Rcvd</label
+                        >
+                        <input
+                            id="lc-rst-r"
+                            class="input w-15"
+                            class:input-error={p.rstRcvd}
+                            bind:value={draft.rstRcvd}
+                        />
+                    </div>
                 </div>
-                <div>
-                    <label for="lc-rst-s" class="block text-sm font-medium text-ink">RST Sent</label
-                    >
-                    <input
-                        id="lc-rst-s"
-                        class="input w-15"
-                        class:input-error={p.rstSent}
-                        bind:value={draft.rstSent}
-                    />
+                <div class="mt-2 flex items-end gap-x-2">
+                    <div>
+                        <label for="lc-date-on" class="block text-sm font-medium text-ink"
+                            >Date On</label
+                        >
+                        <input
+                            id="lc-date-on"
+                            class="input w-32"
+                            class:input-error={p.dateOn}
+                            placeholder="YYYY-MM-DD"
+                            bind:value={draft.dateOn}
+                        />
+                    </div>
+                    <div>
+                        <label for="lc-time-on" class="block text-sm font-medium text-ink"
+                            >Time On</label
+                        >
+                        <input
+                            id="lc-time-on"
+                            class="input w-24"
+                            class:input-error={p.timeOn}
+                            placeholder="HH:MM:SS"
+                            bind:value={draft.timeOn}
+                        />
+                    </div>
                 </div>
-                <div>
-                    <label for="lc-rst-r" class="block text-sm font-medium text-ink">RST Rcvd</label
-                    >
-                    <input
-                        id="lc-rst-r"
-                        class="input w-15"
-                        class:input-error={p.rstRcvd}
-                        bind:value={draft.rstRcvd}
-                    />
+                <div class="mt-2 flex items-end gap-2">
+                    <div>
+                        <label for="lc-date-off" class="block text-sm font-medium text-ink"
+                            >Date Off</label
+                        >
+                        <input
+                            id="lc-date-off"
+                            class="input w-32"
+                            class:input-error={p.dateOff}
+                            placeholder="YYYY-MM-DD"
+                            bind:value={draft.dateOff}
+                            oninput={holdOffTimes}
+                        />
+                    </div>
+                    <div>
+                        <label for="lc-time-off" class="block text-sm font-medium text-ink"
+                            >Time Off</label
+                        >
+                        <input
+                            id="lc-time-off"
+                            class="input w-24"
+                            class:input-error={p.timeOff}
+                            placeholder="HH:MM:SS"
+                            bind:value={draft.timeOff}
+                            oninput={holdOffTimes}
+                        />
+                    </div>
                 </div>
             </div>
-
-            <div class="mt-2 flex items-end gap-x-2">
-                <div>
-                    <label for="lc-date-on" class="block text-sm font-medium text-ink"
-                        >Date On</label
-                    >
-                    <input
-                        id="lc-date-on"
-                        class="input w-32"
-                        class:input-error={p.dateOn}
-                        placeholder="YYYY-MM-DD"
-                        bind:value={draft.dateOn}
-                    />
-                </div>
-                <div>
-                    <label for="lc-time-on" class="block text-sm font-medium text-ink"
-                        >Time On</label
-                    >
-                    <input
-                        id="lc-time-on"
-                        class="input w-24"
-                        class:input-error={p.timeOn}
-                        placeholder="HH:MM:SS"
-                        bind:value={draft.timeOn}
-                    />
-                </div>
+            <div class="flex w-56 h-45 shrink-0">
+                <EnrichmentCard call={draft.callsign} />
             </div>
-
-            <div class="mt-2 flex items-end gap-2">
-                <div>
-                    <label for="lc-date-off" class="block text-sm font-medium text-ink"
-                        >Date Off</label
-                    >
-                    <input
-                        id="lc-date-off"
-                        class="input w-32"
-                        class:input-error={p.dateOff}
-                        placeholder="YYYY-MM-DD"
-                        bind:value={draft.dateOff}
-                        oninput={holdOffTimes}
-                    />
-                </div>
-                <div>
-                    <label for="lc-time-off" class="block text-sm font-medium text-ink"
-                        >Time Off</label
-                    >
-                    <input
-                        id="lc-time-off"
-                        class="input w-24"
-                        class:input-error={p.timeOff}
-                        placeholder="HH:MM:SS"
-                        bind:value={draft.timeOff}
-                        oninput={holdOffTimes}
-                    />
-                </div>
-            </div>
-
-            <div class="mt-2">
+        </div>
+        <div class="mt-2 flex w-full items-end gap-x-2">
+            <div class="flex-1">
                 <label for="lc-name" class="block text-sm font-medium text-ink">Name</label>
-                <input id="lc-name" class="input w-60" autocomplete="off" bind:value={draft.name} />
+                <input
+                    id="lc-name"
+                    class="input w-full"
+                    autocomplete="off"
+                    bind:value={draft.name}
+                />
             </div>
-
-            <div class="mt-2">
+            <div class="flex-1">
                 <label for="lc-comment" class="block text-sm font-medium text-ink">Comment</label>
                 <input
                     id="lc-comment"
-                    class="input w-60"
+                    class="input w-full"
                     autocomplete="off"
                     bind:value={draft.comment}
                 />
             </div>
         </div>
+        <!-- Contact details (extends the card): contacted-station fields kept
+     off the fast path — Rig / RX power / Notes to edit, QRZ page link +
+     looked-up email to read. Sits where the Comment row used to be. -->
+        <details class="mt-2 rounded-md border border-line">
+            <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-ink select-none">
+                Contact details
+                <span class="font-normal text-muted">(rig · power · notes)</span>
+            </summary>
+            <div class="space-y-3 border-t border-line px-3 py-3">
+                <!-- Read-only, looked-up: QRZ page link + email. -->
+                <div class="flex flex-col gap-y-1 text-sm">
+                    {#if qrzUrl !== null}
+                        <a
+                            href={qrzUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="inline-flex w-fit items-center gap-x-1 font-medium text-focus hover:underline"
+                        >
+                            Lookup on QRZ.com
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.5"
+                                aria-hidden="true"
+                                class="size-4"
+                            >
+                                <path
+                                    d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                />
+                            </svg>
+                        </a>
+                    {:else}
+                        <span class="text-muted">Enter a callsign for the QRZ link.</span>
+                    {/if}
+                    <div>
+                        <span class="text-muted">Email:</span>
+                        <span class="text-ink">{enrichData?.email || '—'}</span>
+                    </div>
+                </div>
 
-        <!-- Right: always-on enrichment (relocatable — this square is just its first host) -->
-        <div class="flex flex-col">
-            <div class="flex w-56 h-45 shrink-0 mt-0">
-                <EnrichmentCard call={draft.callsign} />
+                <!-- Editable contacted-station fields. -->
+                <div>
+                    <label for="lc-rig" class="block text-sm font-medium text-ink">Rig</label>
+                    <input
+                        id="lc-rig"
+                        class="input w-full"
+                        autocomplete="off"
+                        bind:value={draft.rig}
+                    />
+                </div>
+                <div>
+                    <label for="lc-rxpwr" class="block text-sm font-medium text-ink"
+                        >RX Power (W)</label
+                    >
+                    <input
+                        id="lc-rxpwr"
+                        class="input w-24"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        bind:value={draft.rxPwr}
+                    />
+                </div>
+                <div>
+                    <label for="lc-notes" class="block text-sm font-medium text-ink">Notes</label>
+                    <input
+                        id="lc-notes"
+                        class="input w-full"
+                        autocomplete="off"
+                        bind:value={draft.notes}
+                    />
+                </div>
             </div>
-            <div class="relative mt-auto flex justify-end gap-x-2">
-                <button
-                    class="btn"
-                    title="Esc"
-                    onclick={() => {
-                        clearDraft();
-                        callInput?.focus();
-                    }}>Clear</button
-                >
-                <!-- CAT/rig gate (ADR 0044): 'lost' and 'unconfirmed' block
-                     logging — the context may be stale or never asserted;
-                     'live' and confirmed-'manual' log. Enforced in logDraft
-                     too; this disabled state is the UX face of it.
-                     busy = in-flight POST (double-log guard). -->
-                <button
-                    class="btn btn-primary"
-                    onclick={() => logAndRefocus()}
-                    disabled={!canLog() || !rigReady() || submitState.busy}
-                    title={gateTitle ?? 'Ctrl+Enter'}
-                    >{submitState.busy ? 'Logging…' : 'Log QSO'}</button
-                >
-            </div>
+        </details>
+        <div class="mt-4 flex justify-end gap-x-2">
+            <button
+                class="btn"
+                title="Esc"
+                onclick={() => {
+                    clearDraft();
+                    callInput?.focus();
+                }}>Clear</button
+            >
+            <!-- CAT/rig gate (ADR 0044): 'lost' and 'unconfirmed' block
+                 logging — the context may be stale or never asserted;
+                 'live' and confirmed-'manual' log. Enforced in logDraft
+                 too; this disabled state is the UX face of it.
+                 busy = in-flight POST (double-log guard). -->
+            <button
+                class="btn btn-primary"
+                onclick={() => logAndRefocus()}
+                disabled={!canLog() || !rigReady() || submitState.busy}
+                title={gateTitle ?? 'Ctrl+Enter'}
+                >{submitState.busy ? 'Logging…' : 'Log QSO'}</button
+            >
         </div>
     </div>
 </div>

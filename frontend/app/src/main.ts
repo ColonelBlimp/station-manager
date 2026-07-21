@@ -383,6 +383,7 @@ setSubmit(async (q, opts) => {
         comment: q.comment || undefined,
         rig: q.rig || undefined,
         notes: q.notes || undefined,
+        rxPwr: q.rxPwr || undefined,
         // An invalid grid is omitted, never a block: the grid can arrive via
         // enrichment, and gating Log on it would let a bad upstream value
         // stop logging (invariant). The Details panel shows the warning.

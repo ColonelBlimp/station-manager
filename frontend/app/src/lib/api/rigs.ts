@@ -55,6 +55,7 @@ export interface RigSerial {
     stop_bits?: number;
     parity?: string;
     line_delimiter?: string;
+    read_timeout_ms?: number;
 }
 
 /** The catalogue projection of a rigdef (subset of api.RigDefSummary) the detail
@@ -97,6 +98,7 @@ function parseSerial(v: unknown): RigSerial | undefined {
         stop_bits: asNumber(v.stop_bits),
         parity: asString(v.parity),
         line_delimiter: asString(v.line_delimiter),
+        read_timeout_ms: asNumber(v.read_timeout_ms),
     };
 }
 

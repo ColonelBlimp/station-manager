@@ -27,6 +27,7 @@ export interface QsoDraft {
     // on demand in the contact overlay (ContactDialog).
     rig: string; // ADIF RIG — contacted station's rig / working conditions
     notes: string; // ADIF NOTES — operator's PRIVATE notes (distinct from COMMENT)
+    rxPwr: string; // ADIF RX_PWR — contacted station's TX power in watts (their signal, as received)
 }
 
 /**
@@ -56,6 +57,7 @@ function blank(): QsoDraft {
         comment: '',
         rig: '',
         notes: '',
+        rxPwr: '',
     };
 }
 

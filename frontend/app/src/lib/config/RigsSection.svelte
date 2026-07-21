@@ -158,14 +158,21 @@
 
                 <!-- Advanced (editable, collapsed): per-rig mode mappings (rig mode
                      literal → ADIF MODE/SUBMODE) + serial overrides (baud/framing/
-                     delimiter). Both keyed by id:model so they remount with a fresh
-                     snapshot when the selected rig (or its model) changes, mutate the
-                     same draft, and are covered by the shared Save/Cancel below. -->
+                     delimiter). Keyed on the DRAFT OBJECT (not id:model): these
+                     editors take a one-time snapshot on mount, so they must remount
+                     whenever the draft is REPLACED — switching rigs, but also Cancel
+                     (resetDraft swaps in a fresh clone) and save (re-baseline). An
+                     id:model key stays constant on Cancel, so the editors would keep
+                     their stale snapshot and write it back into the fresh draft,
+                     leaving Cancel ineffective (codex 55d85876 P1). In-place edits
+                     mutate the draft without changing its identity, so they don't
+                     remount. Both mutate the same draft; the shared Save/Cancel
+                     below covers them. -->
                 <section class="mt-6 max-w-2xl space-y-2">
                     <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">
                         Advanced
                     </h3>
-                    {#key `${rig.id}:${rig.model}`}
+                    {#key draft}
                         <ModeMappingsEditor rig={draft} rigdef={def} disabled={rigsState.saving} />
                         <SerialOverridesEditor
                             rig={draft}
