@@ -154,8 +154,13 @@ func (s *Service) importBatch(
 			batchDup++
 			continue
 		} else if !stderr.Is(derr, errors.ErrNotFound) {
-			batchErrs = append(batchErrs, ImportError{Index: idx, Call: rec.Call, Reason: derr.Error()})
-			continue
+			// A non-ErrNotFound error is an infrastructure fault (context
+			// cancellation, DB failure), NOT a per-record validation problem.
+			// Recording it as an errored record and continuing would silently skip
+			// this record — and every later one — while returning a nil service error,
+			// so the import reports success when it actually aborted midway. Fail the
+			// whole import instead (2026-07-21 review finding 5).
+			return errors.New(op).WithErr(derr).WithMsgf("dedupe lookup for record %d (%s)", idx, rec.Call)
 		}
 		batchKeys[key] = struct{}{}
 		toInsert = append(toInsert, prepared{qso: qso, idx: idx})

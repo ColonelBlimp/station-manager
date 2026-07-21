@@ -124,8 +124,14 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 				// unknown UUID via the including-deleted probe.
 				if _, derr := s.DB.FetchQsoByUUIDIncludingDeletedWithContext(ctx, uuid); derr == nil {
 					res.SkippedDeleted = append(res.SkippedDeleted, uuid)
-				} else {
+				} else if stderr.Is(derr, errors.ErrNotFound) {
 					res.NotFound = append(res.NotFound, uuid)
+				} else {
+					// A non-ErrNotFound error on the tombstone probe is an infra fault,
+					// not "unknown UUID": bucketing it as NotFound would return HTTP
+					// success while silently skipping a deleted QSO the reconciler meant
+					// to repair. Propagate it (2026-07-21 review finding 6).
+					return EnqueueResult{}, errors.New(op).WithErr(derr).WithMsg("tombstone probe by uuid")
 				}
 				continue
 			}
@@ -264,6 +270,13 @@ func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string
 		if _, err := s.DB.FetchQsoByUUIDWithContext(ctx, uuid); err == nil {
 			res.SkippedLive = append(res.SkippedLive, uuid)
 			continue
+		} else if !stderr.Is(err, errors.ErrNotFound) {
+			// Same class as EnqueueUploads' probe (2026-07-21 review finding 6): a
+			// non-ErrNotFound fault must NOT fall through to the including-deleted
+			// fetch below — if the live-only fetch faulted on a QSO that is actually
+			// live, the fall-through would find it and enqueue a DELETE against a live
+			// row. Propagate the fault instead.
+			return EnqueueDeleteResult{}, errors.New(op).WithErr(err).WithMsg("live-only fetch by uuid")
 		}
 		qso, err := s.DB.FetchQsoByUUIDIncludingDeletedWithContext(ctx, uuid)
 		if err != nil {

@@ -349,6 +349,34 @@ func TestSubmit_MalformedTimeOff(t *testing.T) {
 	require.Equal(t, "1201", existing.QsoDetails.TimeOff, "whitespace TIME_OFF defaults to TIME_ON")
 }
 
+// TestImportBatch_AbortsOnDedupeLookupFault guards 2026-07-21 review finding 5: a
+// non-ErrNotFound fault on the batch dedupe lookup (here induced with a cancelled
+// context) is an infra failure, so the import ABORTS with an error rather than
+// recording the record as a per-record validation error and continuing — which
+// would return a nil service error while silently skipping records.
+func TestImportBatch_AbortsOnDedupeLookupFault(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "14.074", QsoDate: "20260101", TimeOn: "1200"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+
+	// prepareQso does no DB work, so a valid record reaches the dedupe lookup; the
+	// cancelled context then fails that lookup with a ctx error (not ErrNotFound).
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var res ImportBatchResult
+	contacts := map[string]types.ContactedStation{}
+	err := s.importBatch(ctx, lbID, "M0ABC", []adif.Record{rec}, 0, nil, nil, contacts, &res)
+	require.Error(t, err, "an infra fault on the dedupe lookup must abort the import")
+	require.Empty(t, res.Errors, "the record must not be recorded as a per-record validation error")
+	require.Zero(t, res.Stored)
+}
+
 // TestSubmit_HHMMSSPreserved: an ADIF body with HHMMSS times stores at full
 // second precision (the schema CHECK now accepts HHMM or HHMMSS). Seconds are no
 // longer truncated — FT8's real slot seconds and imported HHMMSS survive for
