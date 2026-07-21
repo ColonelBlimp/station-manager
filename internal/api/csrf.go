@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 
@@ -11,17 +12,21 @@ import (
 // (POST/PUT/PATCH/DELETE) — it protects the whole mutating API surface (/v1/qso,
 // /v1/config, /v1/rig/tune, /v1/restart, …) in one place (codex 088bdb84 P1).
 //
-// A browser attaches an Origin header to every cross-origin request (and to
-// same-origin POSTs): a same-origin request's Origin matches the request's own
-// Host, a cross-site drive-by page's (evil.com) does not. So for unsafe methods we
-// reject (403) an Origin that is present AND neither same-host nor loopback:
-//   - absent Origin → allowed (curl, the CLI, server-to-server on a LAN — not
-//     browser CSRF vectors; browsers always send Origin on a cross-origin POST);
-//   - loopback Origin (localhost / 127.0.0.1 / ::1, any port) → allowed, so the
-//     Vite dev proxy (:5173 → :8080) works while a real remote page is still
-//     blocked;
-//   - safe methods (GET/HEAD/OPTIONS) → always allowed (no state change; SSE GETs
-//     must stay open, and a cross-origin GET can't read the response anyway).
+// It validates the destination against a FIXED allowlist (loopback names + the
+// configured tcp bind host), NOT equality with the request's own — attacker-
+// controllable — Host. That closes DNS rebinding (codex 85997b79 P1): a page from
+// evil.example that rebinds its name to our address arrives with both Host and
+// Origin = evil.example, which an Origin==Host check would wave through but the
+// allowlist rejects. For unsafe methods:
+//   - the request Host must be an allowed host (else 403) — the rebinding defense;
+//   - a present Origin must also be an allowed host (else 403) — catches a plain
+//     cross-origin POST (real Host, attacker Origin);
+//   - absent Origin (curl, the CLI, server-to-server) is allowed — not a browser
+//     CSRF vector; browsers always send Origin on a cross-origin POST.
+//
+// Loopback (localhost / 127.0.0.1 / ::1, any port) is always allowed, so the
+// same-origin SPA and the Vite dev proxy (:5173 → :8080) pass. Safe methods
+// (GET/HEAD/OPTIONS) are untouched (no state change; SSE GETs must stay open).
 func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 	const op errors.Op = "api.requireSameOrigin"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,29 +35,43 @@ func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if origin := r.Header.Get("Origin"); origin != "" && !originAllowed(origin, r.Host) {
-			s.writeError(w, http.StatusForbidden, "cross_origin",
-				"cross-origin request rejected", op)
+		if !s.hostAllowed(hostOnly(r.Host)) {
+			s.writeError(w, http.StatusForbidden, "cross_origin", "host not allowed", op)
 			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" {
+			u, err := url.Parse(origin)
+			if err != nil || u.Host == "" || !s.hostAllowed(u.Hostname()) {
+				s.writeError(w, http.StatusForbidden, "cross_origin",
+					"cross-origin request rejected", op)
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-// originAllowed reports whether an Origin header belongs to the request's own host
-// or a loopback host. Same-host is compared with the port (the SPA is served on the
-// same host:port as the API); loopback is host-only so any local dev port passes.
-func originAllowed(origin, host string) bool {
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
-		return false // malformed / opaque Origin → treat as cross-origin
-	}
-	if u.Host == host {
-		return true
-	}
-	switch u.Hostname() {
+// hostAllowed reports whether h is a host the daemon is legitimately served under:
+// a loopback name, or the configured tcp bind host. The allowlist is fixed by our
+// own config, never by the request — that is what makes it rebinding-proof.
+func (s *Server) hostAllowed(h string) bool {
+	switch h {
 	case "localhost", "127.0.0.1", "::1":
 		return true
 	}
+	if s.protocol == "tcp" {
+		if bindHost, _, err := net.SplitHostPort(s.cfg.Snapshot().SocketPath); err == nil && bindHost == h {
+			return true
+		}
+	}
 	return false
+}
+
+// hostOnly strips the port from a Host header ("127.0.0.1:8080" → "127.0.0.1"; a
+// bare host with no port is returned unchanged).
+func hostOnly(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
 }

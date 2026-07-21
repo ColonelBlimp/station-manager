@@ -3,9 +3,18 @@ package api
 import (
 	"net/http"
 	"runtime"
+	"strconv"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/buildinfo"
 )
+
+// processInstance is a marker minted ONCE per process (the daemon's start time in
+// base-36), exposed in /v1/version. A restart mints a new one, so a client can
+// tell the freshly-respawned daemon from the still-shutting-down old process even
+// if a poll lands on the old one over a reused keep-alive connection — it waits for
+// the instance to CHANGE, not merely for any 200 (codex 85997b79 P2).
+var processInstance = strconv.FormatInt(time.Now().UnixNano(), 36)
 
 // handleVersion returns daemon-build, Go-runtime, and schema-migration
 // version info. Diagnostic endpoint: lets operators confirm which
@@ -29,16 +38,18 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		Dirty   bool   `json:"dirty"`
 	}
 	type versionResponse struct {
-		Daemon string      `json:"daemon"`
-		Env    string      `json:"env"`
-		Go     string      `json:"go"`
-		Schema *schemaInfo `json:"schema,omitempty"`
+		Daemon   string      `json:"daemon"`
+		Env      string      `json:"env"`
+		Go       string      `json:"go"`
+		Instance string      `json:"instance"`
+		Schema   *schemaInfo `json:"schema,omitempty"`
 	}
 
 	resp := versionResponse{
-		Daemon: s.daemonVersion,
-		Env:    buildinfo.Env,
-		Go:     runtime.Version(),
+		Daemon:   s.daemonVersion,
+		Env:      buildinfo.Env,
+		Go:       runtime.Version(),
+		Instance: processInstance,
 	}
 
 	if ver, dirty, err := s.db.SchemaVersionWithContext(r.Context()); err == nil {

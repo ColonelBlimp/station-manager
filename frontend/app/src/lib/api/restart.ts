@@ -32,19 +32,34 @@ export async function restartDaemon(signal?: AbortSignal): Promise<RestartOutcom
 }
 
 /**
- * Poll GET /v1/version until the daemon answers again after a restart, so the UI
- * can re-enable its control instead of staying stuck disabled (codex 088bdb84 P2).
- * Resolves true once it's back, false if it doesn't return within the cap. The
- * short initial delay lets the old process release the listener before the first
- * poll (so we don't see the still-up old daemon and declare it "back" early).
+ * The daemon's per-process instance id (`/v1/version.instance`), or '' when the
+ * daemon isn't reachable or doesn't report one.
  */
-export async function waitForDaemonBack(timeoutMs = 30_000): Promise<boolean> {
+export async function fetchDaemonInstance(): Promise<string> {
+    const res = await safeFetch('/v1/version', { method: 'GET' });
+    if (!res.ok || !res.response.ok) return '';
+    const body = await readJsonBody(res.response);
+    return isPlainObject(body) && typeof body.instance === 'string' ? body.instance : '';
+}
+
+/**
+ * Poll GET /v1/version until a DIFFERENT process answers than `prevInstance` (the
+ * instance captured before the restart), then resolve true — so we don't mistake
+ * the still-shutting-down OLD daemon, answering on a reused keep-alive connection,
+ * for the replacement (codex 85997b79 P2). Resolves false past the cap. When
+ * `prevInstance` is '' (it couldn't be read), any reachable instance counts as
+ * back. The short initial delay just avoids an immediate needless poll.
+ */
+export async function waitForDaemonBack(
+    prevInstance: string,
+    timeoutMs = 30_000
+): Promise<boolean> {
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     await sleep(2000);
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-        const res = await safeFetch('/v1/version', { method: 'GET' });
-        if (res.ok && res.response.ok) return true;
+        const inst = await fetchDaemonInstance();
+        if (inst !== '' && inst !== prevInstance) return true;
         await sleep(1500);
     }
     return false;

@@ -7,7 +7,7 @@
     // mappings, and the rest land in follow-up increments.
     import StationSection from './StationSection.svelte';
     import RigsSection from './RigsSection.svelte';
-    import { restartDaemon, waitForDaemonBack } from '../api/restart';
+    import { restartDaemon, waitForDaemonBack, fetchDaemonInstance } from '../api/restart';
     import { toasts } from '../ui/toasts.svelte';
 
     type SectionId = 'station' | 'rigs';
@@ -29,6 +29,10 @@
         )
             return;
         restarting = true;
+        // Capture the current process instance so the poll waits for a DIFFERENT
+        // one (the respawned daemon), not just any 200 from the old one still
+        // shutting down (codex 85997b79 P2).
+        const before = await fetchDaemonInstance();
         const out = await restartDaemon();
         switch (out.kind) {
             case 'accepted': {
@@ -37,7 +41,7 @@
                 // isn't remounted, so nothing else would clear `restarting` (codex
                 // 088bdb84 P2).
                 toasts.info('Restarting the daemon…');
-                const back = await waitForDaemonBack();
+                const back = await waitForDaemonBack(before);
                 toasts.info(
                     back
                         ? 'Daemon restarted.'

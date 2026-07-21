@@ -154,6 +154,9 @@ func TestPprof_EnabledMountsSymbolGetAndPost(t *testing.T) {
 
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
 		req := httptest.NewRequest(method, "/debug/pprof/symbol", nil)
+		// `go tool pprof` reaches the daemon on loopback; httptest defaults Host to
+		// example.com, which the same-origin CSRF guard rejects for the POST.
+		req.Host = "127.0.0.1:8080"
 		w := httptest.NewRecorder()
 		srv.httpServer.Handler.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {

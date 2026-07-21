@@ -44,4 +44,8 @@ func TestRequireSameOrigin(t *testing.T) {
 	pass("POST loopback dev proxy", do(http.MethodPost, "http://localhost:5173", "127.0.0.1:8080"))
 	block("POST cross-origin", do(http.MethodPost, "https://evil.example", "127.0.0.1:8080"))
 	block("POST malformed Origin", do(http.MethodPost, "not-a-url", "127.0.0.1:8080"))
+	// DNS rebinding: the attacker rebinds their own name to us, so Host AND Origin
+	// both read evil.example — an Origin==Host check would pass, the allowlist
+	// rejects on the disallowed Host (codex 85997b79 P1).
+	block("POST DNS-rebinding", do(http.MethodPost, "http://evil.example:8080", "evil.example:8080"))
 }
