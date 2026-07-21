@@ -119,3 +119,6 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-07-21] change between VOF-A/B should also action on clicking the label as well as the input field
 - [2026-07-21] moving between VFOs - only the main freq is displayed, the sub is not rendered
 - [2026-07-21] session email resend sends ALL session QSOs, not just unsent ones (ExportDialog.svelte uuids = whole session, no sm_fwrd_by_email filter; "Emailed" markers are informational only). Add a "send only not-yet-emailed" delta option so a resend doesn't re-transmit already-emailed QSOs.
+- [2026-07-21] logbook. When selecting row, the table jumps down because of the header appearing.
+- [2026-07-21] logbook: when sending an email no toast is show for sending, or sent, rather once sent a msg is added to to popup header
+- [2026-07-21] logbook 'not emailed only' doesn't work
