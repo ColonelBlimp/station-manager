@@ -102,14 +102,12 @@
 
     <div class="border-t border-line px-3 py-3">
         {#if literals.length === 0}
-            <p class="text-sm text-muted">
-                This rig's model defines no mode literals, so there's nothing to map.
-            </p>
+            <p class="text-sm text-muted">This rig has no mode list, so there's nothing to map.</p>
         {:else}
             <p class="mb-3 text-xs text-muted">
-                Maps each rig mode literal to an ADIF MODE (+ optional SUBMODE). Leave MODE empty,
-                or set it to the default, to inherit the rigdef default. Unknown ADIF values are
-                rejected on save.
+                Maps each mode your radio reports to the MODE (and optional SUBMODE) stored in the
+                log. Leave MODE blank, or set it to the default shown, to keep the default. An
+                unrecognised MODE is rejected when you save.
             </p>
             <ul class="space-y-2">
                 {#each literals as lit (lit)}

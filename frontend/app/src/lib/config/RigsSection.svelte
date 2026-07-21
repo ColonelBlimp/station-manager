@@ -4,7 +4,7 @@
     // identity is read-only; the CONNECTION (serial port + audio RX/TX) is
     // editable via pickers populated from /v1/hardware, saved via a whole-
     // catalogue PUT (see rigs.svelte.ts data-safety note). Model / ft8_mode /
-    // set-default / add / delete land in follow-up increments.
+    // add / delete land in follow-up increments.
     import { onMount } from 'svelte';
     import { rigsState } from './rigs.svelte';
     import ModeMappingsEditor from './ModeMappingsEditor.svelte';
@@ -74,7 +74,7 @@
                             <span class="font-medium text-ink">{rigsState.nameFor(rig)}</span>
                             {#if rig.id === rigsState.defaultRigId}
                                 <span
-                                    class="inline-flex items-center gap-0.5 rounded border border-green-500/40 bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-green-700 uppercase dark:bg-green-500/10 dark:text-green-400"
+                                    class="ml-auto inline-flex items-center gap-0.5 rounded border border-green-500/40 bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-green-700 uppercase dark:bg-green-500/10 dark:text-green-400"
                                 >
                                     <svg
                                         viewBox="0 0 20 20"
@@ -98,8 +98,8 @@
         </ul>
 
         <!-- Detail: identity read-only; the CONNECTION (port + audio) is editable
-             via pickers from /v1/hardware. Model / ft8_mode / set-default /
-             add / delete land in follow-up increments. -->
+             via pickers from /v1/hardware. Model / ft8_mode / add / delete land in
+             follow-up increments. -->
         <div class="min-w-0 flex-1">
             {#if rigsState.selected && rigsState.draft}
                 {@const rig = rigsState.selected}
@@ -112,6 +112,15 @@
                             class="rounded border border-green-500/40 bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-green-700 uppercase dark:bg-green-500/10 dark:text-green-400"
                             >active</span
                         >
+                    {:else}
+                        <button
+                            class="rounded-md px-2 py-1.5 text-xs font-medium text-focus hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
+                            title="Requires a restart"
+                            disabled={rigsState.settingDefault || rigsState.saving}
+                            onclick={() => rigsState.setDefault(rig.id)}
+                        >
+                            {rigsState.settingDefault ? 'Setting…' : 'Set as default'}
+                        </button>
                     {/if}
                 </div>
                 {#if def?.manufacturer || def?.model}

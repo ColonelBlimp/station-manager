@@ -31,7 +31,7 @@
     can also show the pre-PUT default until the next load (#5) — cosmetic, no data
     loss, since the PUT omits default_rig_id.
 */
-import { fetchRigs, saveRigs, type RigConfig, type RigDef } from '../api/rigs';
+import { fetchRigs, saveRigs, setDefaultRig, type RigConfig, type RigDef } from '../api/rigs';
 import { fetchHardware, type SerialPort, type AudioDevice } from '../api/hardware';
 import { toasts } from '../ui/toasts.svelte';
 
@@ -58,6 +58,7 @@ class RigsState {
     loaded = $state(false);
     error = $state('');
     saving = $state(false);
+    settingDefault = $state(false);
     rigs = $state<RigConfig[]>([]);
     defaultRigId = $state(0);
     selectedId = $state<number | null>(null);
@@ -260,6 +261,24 @@ class RigsState {
         this.baselines[id] = cloneRig(patched);
         this.drafts[id] = cloneRig(patched);
         toasts.info('Rig connection saved — restart the daemon to reconnect.');
+    }
+
+    // Set the active/default rig. Sends ONLY default_rig_id (a single-field PUT),
+    // so it never touches the connection drafts or the catalogue — no re-fetch, no
+    // clobber (the reason set-default is its own path, not folded into save()).
+    // Optimistic: the badge moves on success. No-op if it's already the default or
+    // another write is in flight.
+    async setDefault(id: number): Promise<void> {
+        if (this.settingDefault || this.saving || id === this.defaultRigId) return;
+        this.settingDefault = true;
+        const outcome = await setDefaultRig(id);
+        this.settingDefault = false;
+        if (outcome.kind === 'error') {
+            toasts.error(`Couldn't set the default rig: ${outcome.message}`);
+            return;
+        }
+        this.defaultRigId = id;
+        toasts.info('Default rig set — restart to connect to it.');
     }
 
     // Apply a fetched rigs payload + reconcile the selection against the list.

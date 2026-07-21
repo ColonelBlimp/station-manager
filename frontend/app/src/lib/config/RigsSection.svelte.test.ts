@@ -17,6 +17,7 @@ afterEach(() => {
     rigsState.drafts = {};
     rigsState.baselines = {};
     rigsState.saving = false;
+    rigsState.settingDefault = false;
     rigsState.serialPorts = [];
     rigsState.audioAvailable = false;
     rigsState.capture = [];

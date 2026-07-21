@@ -180,6 +180,28 @@ export async function saveRigs(
     return { kind: 'ok' };
 }
 
+/**
+ * Set the active/default rig via PUT /v1/config with ONLY `default_rig_id` — `rigs`
+ * is omitted, so the whole-replace catalogue path never runs and the connection
+ * fields (and every other rig) are left untouched (presence-aware). A single-field
+ * change can't clobber a concurrent edit, so no re-fetch is needed here.
+ */
+export async function setDefaultRig(id: number, signal?: AbortSignal): Promise<RigsSaveOutcome> {
+    const fetched = await safeFetch('/v1/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ default_rig_id: id }),
+        signal,
+    });
+    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    const body = await readJsonBody(fetched.response);
+    if (!fetched.response.ok) {
+        const err = isPlainObject(body) ? (body as { message?: string }) : null;
+        return { kind: 'error', message: err?.message ?? `HTTP ${fetched.response.status}` };
+    }
+    return { kind: 'ok' };
+}
+
 export async function fetchRigs(signal?: AbortSignal): Promise<RigsOutcome> {
     const fetched = await safeFetch('/v1/rigs', { signal });
     if (!fetched.ok) return { kind: 'error', message: fetched.message };

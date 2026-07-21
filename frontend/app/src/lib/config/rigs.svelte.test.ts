@@ -13,6 +13,7 @@ afterEach(() => {
     rigsState.drafts = {};
     rigsState.baselines = {};
     rigsState.saving = false;
+    rigsState.settingDefault = false;
     rigsState.serialPorts = [];
     rigsState.audioAvailable = false;
     rigsState.capture = [];
@@ -559,5 +560,39 @@ describe('rigsState', () => {
             (r) => r.id === 1
         );
         expect(s1?.overrides).toBeUndefined();
+    });
+
+    it('setDefault PUTs only default_rig_id (no catalogue) and moves the active flag', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [
+                { id: 1, model: 'ftdx10', port: '/dev/a' },
+                { id: 2, model: 'ic7300', port: '/dev/b' },
+            ],
+            catalogue: [
+                { id: 'ftdx10', name: 'FTdx10' },
+                { id: 'ic7300', name: 'IC-7300' },
+            ],
+        });
+        await rigsState.load();
+        expect(rigsState.defaultRigId).toBe(1);
+        await rigsState.setDefault(2);
+
+        // The PUT carries ONLY default_rig_id — the catalogue is left untouched.
+        const body = JSON.parse(puts[0]) as { default_rig_id?: number; rigs?: unknown };
+        expect(body.default_rig_id).toBe(2);
+        expect(body.rigs).toBeUndefined();
+        expect(rigsState.defaultRigId).toBe(2); // optimistic badge move
+    });
+
+    it('setDefault is a no-op when the rig is already the default', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        await rigsState.setDefault(1);
+        expect(puts.length).toBe(0);
     });
 });

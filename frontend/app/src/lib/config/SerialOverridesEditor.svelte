@@ -117,9 +117,9 @@
 
     <div class="border-t border-line px-3 py-3">
         <p class="mb-3 text-xs text-muted">
-            Advanced — most rigs work on the rigdef defaults. Leave a field blank to inherit the
-            default shown. Changes apply on daemon restart; a bad value surfaces as a bridge error
-            when the rig reconnects.
+            Advanced — most rigs work on the built-in defaults. Leave a field blank to keep the
+            default shown. Changes apply on restart; a bad value produces an error when the rig
+            reconnects.
         </p>
         <ul class="space-y-2">
             {#each FIELDS as f (f.key)}
