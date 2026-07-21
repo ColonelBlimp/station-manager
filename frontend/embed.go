@@ -3,7 +3,7 @@
 // compiled in via //go:embed; the daemon serves them at the
 // appropriate URL prefixes.
 //
-// Build pipeline: `task frontend:build` runs `npm run build` in each
+// Build pipeline: `task frontend:build:all` runs `npm run build` in each
 // SPA project to populate its dist/ before `go build` reaches the
 // embed directive. CI runs the same steps; dist/ is not committed
 // (except for a placeholder index.html that ships with the scaffold so
