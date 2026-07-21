@@ -325,36 +325,40 @@
                     </div>
                 </div>
 
-                <!-- Editable contacted-station fields. -->
-                <div>
-                    <label for="lc-rig" class="block text-sm font-medium text-ink">Rig</label>
-                    <input
-                        id="lc-rig"
-                        class="input w-full"
-                        autocomplete="off"
-                        bind:value={draft.rig}
-                    />
-                </div>
-                <div>
-                    <label for="lc-rxpwr" class="block text-sm font-medium text-ink"
-                        >RX Power (W)</label
-                    >
-                    <input
-                        id="lc-rxpwr"
-                        class="input w-24"
-                        inputmode="numeric"
-                        autocomplete="off"
-                        bind:value={draft.rxPwr}
-                    />
+                <!-- Editable contacted-station fields. Rig + RX power share a row
+                     (Rig fills; power stays narrow). -->
+                <div class="flex items-end gap-x-2">
+                    <div class="flex-1">
+                        <label for="lc-rig" class="block text-sm font-medium text-ink">Rig</label>
+                        <input
+                            id="lc-rig"
+                            class="input w-full"
+                            autocomplete="off"
+                            bind:value={draft.rig}
+                        />
+                    </div>
+                    <div>
+                        <label for="lc-rxpwr" class="block text-sm font-medium text-ink"
+                            >RX Power (W)</label
+                        >
+                        <input
+                            id="lc-rxpwr"
+                            class="input w-24"
+                            inputmode="numeric"
+                            autocomplete="off"
+                            bind:value={draft.rxPwr}
+                        />
+                    </div>
                 </div>
                 <div>
                     <label for="lc-notes" class="block text-sm font-medium text-ink">Notes</label>
-                    <input
+                    <textarea
                         id="lc-notes"
-                        class="input w-full"
+                        class="input w-full resize-y"
+                        rows="2"
                         autocomplete="off"
                         bind:value={draft.notes}
-                    />
+                    ></textarea>
                 </div>
             </div>
         </details>
