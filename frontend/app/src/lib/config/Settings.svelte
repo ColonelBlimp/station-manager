@@ -7,7 +7,7 @@
     // mappings, and the rest land in follow-up increments.
     import StationSection from './StationSection.svelte';
     import RigsSection from './RigsSection.svelte';
-    import { restartDaemon } from '../api/restart';
+    import { restartDaemon, waitForDaemonBack } from '../api/restart';
     import { toasts } from '../ui/toasts.svelte';
 
     type SectionId = 'station' | 'rigs';
@@ -31,11 +31,21 @@
         restarting = true;
         const out = await restartDaemon();
         switch (out.kind) {
-            case 'accepted':
-                // Stays disabled/"Restarting…" — the SSE clients reconnect once the
-                // daemon is back (~5s); a manual page reload also recovers.
-                toasts.info('Restarting the daemon… reconnecting in a few seconds.');
+            case 'accepted': {
+                // Poll until the daemon answers again, then re-enable the button —
+                // the SSE clients reconnect on their own, but the Settings component
+                // isn't remounted, so nothing else would clear `restarting` (codex
+                // 088bdb84 P2).
+                toasts.info('Restarting the daemon…');
+                const back = await waitForDaemonBack();
+                toasts.info(
+                    back
+                        ? 'Daemon restarted.'
+                        : 'Restart is taking a while — reload the page if it seems stuck.'
+                );
+                restarting = false;
                 break;
+            }
             case 'tx_active':
                 toasts.error('Stop transmitting before restarting the daemon.');
                 restarting = false;

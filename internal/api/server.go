@@ -302,7 +302,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	//   mux               — per-route handlers (with their own per-route
 	//                       middleware like limitSubmitRate / limitEventSubscribers)
 	s.httpServer = &http.Server{
-		Handler: s.logRequests(s.limitConcurrent(s.recoverPanic(mux))),
+		Handler: s.logRequests(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(mux)))),
 		// ReadHeaderTimeout caps the pre-handler request-header read
 		// independently of ReadTimeout (which budgets headers + body
 		// together and is operator-tunable up to longer values for

@@ -20,6 +20,12 @@ Type=simple
 # internal/utils.WorkingDir(). Without this, the executable-dir fallback
 # would land in /usr/bin/, which is read-only and wrong for user data.
 Environment=SM_WORKING_DIR=%h/.local/share/station-manager
+# Declares to the daemon that THIS unit will respawn it, so POST /v1/restart is
+# enabled (self-restart via ExitRestart below). Kept in lockstep with the
+# Restart= / RestartForceExitStatus= lines: a unit that drops the respawn config
+# must also drop this, or the daemon would exit and stay stopped. cmd/smd gates
+# the endpoint on it (not on INVOCATION_ID, which every systemd unit has).
+Environment=SM_SELF_RESTART=1
 ExecStart=/usr/bin/smd
 Restart=on-failure
 # Exit code 3 (ExitRestart) is a PLANNED self-restart requested via POST

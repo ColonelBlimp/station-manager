@@ -26,6 +26,12 @@ func (s *Server) SetRestart(fn RestartFunc) { s.restart = fn }
 // Refuses with 409 while a tune carrier or FT8 transmission is CURRENTLY keyed —
 // the operator must stop transmitting first. A stuck/unconfirmed TX is NOT refused
 // (bridge.TxActive excludes it), so a recovery restart stays possible.
+//
+// CSRF: like every mutating endpoint, this is covered by the API-wide
+// requireSameOrigin middleware (csrf.go) — a cross-origin drive-by POST from a page
+// in the operator's browser is rejected 403; the same-origin SPA and loopback (dev
+// proxy) pass. Still unauthenticated: SM is a single-operator loopback service, so
+// there's no per-request auth beyond the origin check.
 func (s *Server) handleRestart(w http.ResponseWriter, _ *http.Request) {
 	const op errors.Op = "api.handleRestart"
 	if s.restart == nil {

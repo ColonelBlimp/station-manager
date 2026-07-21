@@ -858,11 +858,14 @@ func run() error {
 	// so a double POST can't close the channel twice.
 	restartCh := make(chan struct{})
 	var restartOnce sync.Once
-	// Only wire the self-restart when a supervisor will actually respawn us:
-	// systemd sets INVOCATION_ID for a unit. A bare ./smd or `task run:smd` has no
-	// respawn, so POST /v1/restart must 503 there rather than exit the daemon for
-	// good.
-	if os.Getenv("INVOCATION_ID") != "" {
+	// Only wire the self-restart when the managing unit EXPLICITLY declares it will
+	// respawn us — the bundled smd.service sets SM_SELF_RESTART=1 alongside
+	// Restart=on-failure + RestartForceExitStatus=3. INVOCATION_ID is NOT enough:
+	// systemd sets it for every unit, including Restart=no, which would exit
+	// ExitRestart and stay stopped (codex 088bdb84 P2). A bare ./smd / `task
+	// run:smd` (no supervisor) leaves this unset, so POST /v1/restart 503s rather
+	// than killing the daemon for good.
+	if os.Getenv("SM_SELF_RESTART") == "1" {
 		server.SetRestart(func() {
 			restartOnce.Do(func() {
 				restartRequested.Store(true)
