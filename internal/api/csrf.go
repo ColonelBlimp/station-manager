@@ -16,9 +16,9 @@ import (
 // NOT equality with the request's own (attacker-controllable) Host — which closes
 // DNS rebinding (codex 85997b79 P1). For unsafe methods:
 //   - the request Host must be an allowed host (else 403) — the rebinding defense;
-//   - a present Origin must be loopback (any port) or an EXACT same host:PORT (else
-//     403) — catches a plain cross-origin POST, incl. a different-port page on the
-//     same hostname (codex e77a573f P2);
+//   - a present Origin must be loopback (any port) or — for tcp — an EXACT same
+//     host:PORT (else 403) — catches a plain cross-origin POST, incl. a different-
+//     port page on the same hostname (codex e77a573f P2);
 //   - absent Origin (curl, the CLI, server-to-server) is allowed — not a browser
 //     CSRF vector; browsers always send Origin on a cross-origin POST.
 //
@@ -37,7 +37,16 @@ func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 			s.writeError(w, http.StatusForbidden, "cross_origin", "host not allowed", op)
 			return
 		}
-		if origin := r.Header.Get("Origin"); origin != "" && !originAllowed(origin, r.Host) {
+		// The Origin is compared against a TRUSTED host. For tcp, hostAllowed already
+		// validated r.Host to be loopback or the exact bind host, so r.Host is a safe
+		// basis. For a non-tcp listener r.Host is arbitrary — a reverse proxy fronting
+		// the socket could forward a rebound Host — so no non-loopback host is trusted
+		// and only a loopback Origin passes (codex d068ff9c P1).
+		trusted := ""
+		if s.protocol == "tcp" {
+			trusted = r.Host
+		}
+		if origin := r.Header.Get("Origin"); origin != "" && !originAllowed(origin, trusted) {
 			s.writeError(w, http.StatusForbidden, "cross_origin",
 				"cross-origin request rejected", op)
 			return
@@ -86,9 +95,12 @@ func (s *Server) tcpBindHost() string {
 }
 
 // originAllowed permits a loopback Origin (any port — the same-origin loopback SPA
-// and the dev proxy) or an EXACT same host:port match (port preserved, so a
+// and the dev proxy) or an EXACT match to trustedHost (host:port preserved, so a
 // different-port page on the same hostname is rejected — codex e77a573f P2).
-func originAllowed(origin, host string) bool {
+// trustedHost is the (validated) request Host for a tcp listener, or "" when no
+// non-loopback host is trusted — a non-tcp listener, where r.Host is arbitrary, so
+// only a loopback Origin passes (codex d068ff9c P1).
+func originAllowed(origin, trustedHost string) bool {
 	u, err := url.Parse(origin)
 	if err != nil || u.Host == "" {
 		return false
@@ -96,7 +108,7 @@ func originAllowed(origin, host string) bool {
 	if isLoopbackName(u.Hostname()) {
 		return true
 	}
-	return u.Host == host
+	return trustedHost != "" && u.Host == trustedHost
 }
 
 func isLoopbackName(h string) bool {

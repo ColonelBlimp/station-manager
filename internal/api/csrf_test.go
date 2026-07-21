@@ -53,11 +53,12 @@ func TestRequireSameOrigin(t *testing.T) {
 }
 
 // originAllowed permits loopback (any port) and an EXACT same host:port, but a
-// different-port page on the same hostname is rejected (codex e77a573f P2).
+// different-port page on the same hostname is rejected (codex e77a573f P2). With no
+// trusted host (unix / wildcard tcp) only loopback Origins pass (codex d068ff9c P1).
 func TestOriginAllowed(t *testing.T) {
 	cases := []struct {
-		origin, host string
-		want         bool
+		origin, trusted string
+		want            bool
 	}{
 		{"http://localhost:5173", "127.0.0.1:8080", true},          // dev proxy (loopback, any port)
 		{"http://127.0.0.1:8080", "127.0.0.1:8080", true},          // same-origin loopback
@@ -65,10 +66,12 @@ func TestOriginAllowed(t *testing.T) {
 		{"http://station.local:9999", "station.local:8080", false}, // cross-PORT (P2)
 		{"https://evil.example", "station.local:8080", false},      // cross-origin
 		{"not-a-url", "127.0.0.1:8080", false},                     // malformed / no host
+		{"http://localhost:5173", "", true},                        // loopback Origin, no trusted host
+		{"https://evil.example", "", false},                        // non-loopback Origin, no trusted host (P1)
 	}
 	for _, c := range cases {
-		if got := originAllowed(c.origin, c.host); got != c.want {
-			t.Errorf("originAllowed(%q, %q) = %v, want %v", c.origin, c.host, got, c.want)
+		if got := originAllowed(c.origin, c.trusted); got != c.want {
+			t.Errorf("originAllowed(%q, %q) = %v, want %v", c.origin, c.trusted, got, c.want)
 		}
 	}
 }
@@ -127,11 +130,12 @@ func TestRequireSameOrigin_SpecificIPBind(t *testing.T) {
 	}
 }
 
-// A Unix-socket listener has no network host and no DNS-rebinding vector (a browser
-// can't reach a Unix socket), so an unsafe request with an arbitrary non-loopback
-// Host — e.g. `curl --unix-socket … http://smd/v1/qso` — is accepted (codex
-// 6525f509 P2).
-func TestRequireSameOrigin_UnixSocketAnyHost(t *testing.T) {
+// A Unix socket: a non-browser client (no Origin) with an arbitrary Host is
+// accepted (codex 6525f509 P2), and a loopback-Origin browser passes — but a
+// browser reaching the socket through a reverse proxy that forwards a REBOUND
+// Host+Origin is rejected, because r.Host is not a trusted comparison basis for a
+// non-tcp listener (codex d068ff9c P1).
+func TestRequireSameOrigin_UnixSocket(t *testing.T) {
 	srv := testServerWithCfg(t, func(cfg *config.Config) {
 		cfg.Server.Protocol = "unix"
 		cfg.SocketPath = "/tmp/smd-test.sock"
@@ -140,11 +144,26 @@ func TestRequireSameOrigin_UnixSocketAnyHost(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	h := srv.requireSameOrigin(next)
-	req := httptest.NewRequest(http.MethodPost, "/v1/qso", nil)
-	req.Host = "smd" // the arbitrary Host a --unix-socket curl client sends
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("unix socket, non-loopback Host POST: want 200, got %d (%s)", w.Code, w.Body.String())
+	do := func(host, origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/qso", nil)
+		req.Host = host
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	// `curl --unix-socket … http://smd/v1/qso` — arbitrary Host, no Origin.
+	if w := do("smd", ""); w.Code != http.StatusOK {
+		t.Fatalf("unix socket, no-Origin POST: want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	// A loopback browser reaching the socket via a loopback proxy.
+	if w := do("smd", "http://localhost:5173"); w.Code != http.StatusOK {
+		t.Fatalf("unix socket, loopback-Origin POST: want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	// Rebinding through a proxy that forwards the rebound Host+Origin: rejected.
+	if w := do("evil.example", "http://evil.example"); w.Code != http.StatusForbidden {
+		t.Fatalf("unix socket, rebinding-via-proxy POST: want 403, got %d", w.Code)
 	}
 }
