@@ -172,6 +172,10 @@ ADR under-specified. They must be resolved during implementation:
    a per-logbook/callsign binding AND the SMC reconciler follows the current
    logbook. The FT8 logbook_id pin (gap 6) makes *local* logging correct across a
    switch, but that's not sufficient — the remote routing must be solved first.
+   **The mechanism is ADR 0056** (per-logbook service bindings in the DB): a
+   `logbook_forwarders`-style table resolves each logbook's upload account, and the
+   growing service surface (HamQTH next, LoTW untouched) is what makes the
+   relational/DB approach the right one rather than global config.
 3. **Migration must preserve existing identity.** An upgrade with a set
    `OPERATOR`/`MY_NAME` must seed the roster + `default_operator` from them (the
    `SeedOperatorRoster` fill does this). When `owner_callsign` eventually moves to
