@@ -93,11 +93,14 @@ credentials, not merely per-logbook on/off of a shared (wrong-account) one.
   service.
 - **Two config sources** (`config.json` + DB). This ADR is the "what lives where"
   rule; `config.md` and the config SPA must state it so it does not confuse.
-- **Credentials move from `config.json` to the DB.** Both are in the working dir
-  (not `.env`), so secret exposure is roughly neutral; the build-injected ClubLog
-  key (ADR 0054) is a separate mechanism and unaffected. Per-logbook credential
-  entry needs a config-SPA surface (the logbook editor), since the DB isn't
-  hand-edited.
+- **Credentials move from `config.json` to the DB — this is NOT secret-neutral.**
+  `config.WriteJSON` forces `config.json` to `0600`, but SQLite creates its DB (and
+  WAL/SHM sidecars) at `0644` and the containing dir may be `0755`, so moving QRZ
+  keys / ClubLog passwords into the DB as-is exposes them to other local users. The
+  DB, its sidecars, and its directory MUST be tightened to owner-only before any
+  credential is stored (see Implementation requirements). The build-injected ClubLog
+  key (ADR 0054) is a separate mechanism, unaffected. Per-logbook credential entry
+  needs a config-SPA surface (the logbook editor), since the DB isn't hand-edited.
 - Enrichment is a *softer* per-logbook case than forwarding: a lookup's RESULT
   (the contacted station's data) is the same whichever of your accounts you query;
   only the CREDENTIAL may be per-callsign. Forwarding (which uploads to a specific
@@ -114,6 +117,43 @@ credentials, not merely per-logbook on/off of a shared (wrong-account) one.
 - If per-logbook config ever needs frequent **hand-editing** before a UI exists,
   the DB's opacity bites — but the config SPA's logbook editor is the intended
   path, so this is a sequencing note, not a design flaw.
+
+## Implementation requirements (surfaced by review 2026-07-22)
+
+The clean-room review flagged four things the implementation MUST handle;
+recorded here so they are not lost:
+
+1. **Enrichment must carry the logbook_id — IF enrichment credentials are made
+   per-logbook.** Enrichment runs *before* a QSO exists, and the current logbook is
+   client state (ADR 0055), so the daemon cannot infer it: `/v1/enrich/callsign`
+   and `Orchestrator.Enrich` would need to take the logbook_id from the caller (the
+   SPA already sends `?logbook` on submit and knows the current logbook; the FT8 e4
+   sink holds the pinned logbook_id from gap 6). BUT — enrichment RESULTS are
+   callsign-agnostic (the contacted station's data is the same whichever of your
+   accounts you query), so keeping enrichment on a **global/default account is a
+   valid v1**; this requirement binds only if per-logbook enrichment *credentials*
+   are actually wanted. Forwarding (which uploads to a specific remote log) has no
+   such escape — it is per-logbook or it misroutes.
+
+2. **A crash-safe STARTUP migration must seed bindings from the existing config
+   BEFORE the old fields are removed.** Existing installs hold forwarder
+   enabled/credentials/endpoints/retry only in `config.json`, and SQL migrations
+   cannot read it. A Go-side, idempotent startup step must seed the per-logbook
+   binding tables (for the default logbook) from the current global config; the
+   removal/ignore of the old config fields must be **gated on that seeding having
+   run**. Otherwise an upgrade starts with no bindings — new QSOs are not queued,
+   existing `qso_upload` rows have no worker, and lookup providers vanish.
+
+3. **The database must be owner-only (`0600`) before credentials move in** — the DB
+   file, its WAL/SHM sidecars, and the containing directory. See the corrected
+   Consequences bullet above; my original "secret-neutral" claim was wrong.
+
+4. **`POST /v1/smcloud/reconcile` must become multi-logbook aware.** It currently
+   takes no logbook and returns one scalar summary (one `cloud_logbook_id`); once
+   reconciliation is per-logbook it must accept a logbook_id, or reconcile + report
+   **every** bound logbook in an aggregate response — otherwise the "back up/check
+   now" action can only surface one reconciler while periodic reconcile covers
+   several.
 
 ## References
 
