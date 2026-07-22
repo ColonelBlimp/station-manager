@@ -231,10 +231,14 @@ type Sequencer struct {
 	// opposite our CQ parity); we transmit in the opposite (current) slot.
 	theirPeriod string
 	offsetHz    float64
-	dialFreqMHz float64   // rig dial freq at start, for the logged QSO frequency
-	logbookID   int64     // logbook PINNED at arm (ADR 0055); stamped on the CompletedQso
-	startedAt   time.Time // contact start, stamped as the logged QSO's TIME_ON
-	repeats     int
+	dialFreqMHz float64 // rig dial freq at start, for the logged QSO frequency
+	// logbookID is the logbook PINNED to the ACCEPTED session (ADR 0055), consumed
+	// from pendingLogbookID atomically with mode activation and stamped onto the
+	// CompletedQso. pendingLogbookID is staged by the Service before a start.
+	logbookID        int64
+	pendingLogbookID int64
+	startedAt        time.Time // contact start, stamped as the logged QSO's TIME_ON
+	repeats          int
 	// skipIfSilent — operator-armed "drop this contact instead of repeating an
 	// unanswered rung" (the SPA's deferred Next, moved daemon-side 2026-07-13).
 	// Checked at the silent-repeat sites BEFORE the repeat keys, so a skip never
