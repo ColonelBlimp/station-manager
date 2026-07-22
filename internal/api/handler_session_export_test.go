@@ -28,6 +28,28 @@ func TestSessionExport_MissingUUIDs_Returns400(t *testing.T) {
 	}
 }
 
+func TestSessionExport_TooManyUUIDs_Returns400(t *testing.T) {
+	srv := testServer(t)
+
+	var b strings.Builder
+	b.WriteString(`{"uuids":[`)
+	for i := 0; i <= maxSessionQsoUUIDs; i++ { // one over the cap
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`"00000000-0000-0000-0000-000000000000"`)
+	}
+	b.WriteString(`]}`)
+
+	w := postExport(t, srv, b.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid_field_value") {
+		t.Errorf("body should carry invalid_field_value; got %s", w.Body.String())
+	}
+}
+
 func TestSessionExport_AllUnknownUUIDs_Returns400NoQsos(t *testing.T) {
 	srv := testServer(t)
 	w := postExport(t, srv, `{"uuids":["00000000-0000-0000-0000-000000000000"]}`)

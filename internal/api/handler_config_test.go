@@ -238,8 +238,11 @@ func TestHandlePutConfig_SetupCompleteIdempotent(t *testing.T) {
 		t.Fatalf("first PUT status = %d", w.Code)
 	}
 
-	// Second PUT — operator changes their callsign.
-	second := `{"logging_station": {"station_callsign": "G0ABC"}}`
+	// Second PUT — re-sends the SAME callsign (a post-setup save that doesn't
+	// change identity). Must be idempotent: no re-seed, no double-apply. (A
+	// callsign CHANGE that would orphan the default logbook is rejected — see
+	// TestHandlePutConfig_RejectsOrphaningCallsignChange.)
+	second := `{"logging_station": {"station_callsign": "M0XYZ"}}`
 	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(second))
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
@@ -250,8 +253,8 @@ func TestHandlePutConfig_SetupCompleteIdempotent(t *testing.T) {
 
 	var resp ConfigResponse
 	_ = json.Unmarshal(w2.Body.Bytes(), &resp)
-	if resp.LoggingStation.StationCallsign != "G0ABC" {
-		t.Errorf("StationCallsign after second PUT = %q, want G0ABC", resp.LoggingStation.StationCallsign)
+	if resp.LoggingStation.StationCallsign != "M0XYZ" {
+		t.Errorf("StationCallsign after second PUT = %q, want M0XYZ", resp.LoggingStation.StationCallsign)
 	}
 	// Logbook callsign was set during seed and is owned by
 	// /v1/logbook/{id} now — the second PUT to /v1/config must NOT
@@ -266,6 +269,59 @@ func TestHandlePutConfig_SetupCompleteIdempotent(t *testing.T) {
 // data-loss footgun: LoggingStation and Station were value-typed and copied
 // unconditionally, so a PUT that omitted one block zeroed it. Now both are
 // pointer-typed and presence-aware — an omitted block must be a no-op, not a wipe.
+func TestHandlePutConfig_RejectsOrphaningCallsignChange(t *testing.T) {
+	srv := testServer(t)
+
+	// Complete setup with M0XYZ — seeds a default logbook under M0XYZ.
+	first := `{"logging_station": {"station_callsign": "M0XYZ"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(first))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("setup PUT status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// A callsign CHANGE would orphan the M0XYZ default logbook (live submits gate
+	// on STATION_CALLSIGN == logbook callsign) — reject with 409.
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config",
+		strings.NewReader(`{"logging_station": {"station_callsign": "G0ABC"}}`))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusConflict {
+		t.Fatalf("callsign-change PUT status = %d, want 409; body = %s", w2.Code, w2.Body.String())
+	}
+	if !strings.Contains(w2.Body.String(), "callsign_locked_to_logbook") {
+		t.Fatalf("body = %q, want callsign_locked_to_logbook", w2.Body.String())
+	}
+	// Config unchanged — the rejected write never touched the callsign.
+	if got := srv.cfg.Snapshot().LoggingStation.StationCallsign; got != "M0XYZ" {
+		t.Errorf("callsign changed despite 409: got %q, want M0XYZ", got)
+	}
+}
+
+func TestHandlePutConfig_SetupRejectsMismatchedDefaultLogbook(t *testing.T) {
+	srv := testServer(t)
+
+	// A logbook already exists at the default id (1) under a DIFFERENT callsign
+	// than the operator sets up. Reusing it would seed a default whose callsign
+	// can never match live submits — reject 409 (review #1).
+	createTestLogbook(t, srv, "Preexisting", "G4ABC") // id 1 == default_logbook_id
+
+	req := httptest.NewRequest(http.MethodPut, "/v1/config",
+		strings.NewReader(`{"logging_station": {"station_callsign": "M0XYZ"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("setup PUT status = %d, want 409; body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "default_logbook_callsign_mismatch") {
+		t.Fatalf("body = %q, want default_logbook_callsign_mismatch", w.Body.String())
+	}
+}
+
 func TestHandlePutConfig_OmittedBlocksPreserved(t *testing.T) {
 	srv := testServer(t)
 
@@ -300,8 +356,11 @@ func TestHandlePutConfig_OmittedBlocksPreserved(t *testing.T) {
 		t.Errorf("station zeroed by an FT8-only PUT: got %+v, want amp_enabled + multiplier 10", resp.Station)
 	}
 
-	// A logging_station-only PUT must not zero station (the cross-block direction).
-	stationless := `{"logging_station": {"station_callsign": "G0ABC"}}`
+	// A logging_station-only PUT must not zero station (the cross-block
+	// direction). Keeps the callsign (M0XYZ, matching the default logbook, so no
+	// orphan-guard trip) but changes my_gridsquare — proving the block IS applied
+	// while station is preserved.
+	stationless := `{"logging_station": {"station_callsign": "M0XYZ", "my_gridsquare": "JO22"}}`
 	req3 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(stationless))
 	req3.Header.Set("Content-Type", "application/json")
 	w3 := httptest.NewRecorder()
@@ -311,8 +370,11 @@ func TestHandlePutConfig_OmittedBlocksPreserved(t *testing.T) {
 	}
 	var resp2 ConfigResponse
 	_ = json.Unmarshal(w3.Body.Bytes(), &resp2)
-	if resp2.LoggingStation.StationCallsign != "G0ABC" {
-		t.Errorf("logging_station not applied: StationCallsign = %q, want G0ABC", resp2.LoggingStation.StationCallsign)
+	if resp2.LoggingStation.StationCallsign != "M0XYZ" {
+		t.Errorf("logging_station callsign changed unexpectedly: got %q, want M0XYZ", resp2.LoggingStation.StationCallsign)
+	}
+	if resp2.LoggingStation.MyGridsquare != "JO22" {
+		t.Errorf("logging_station not applied: MyGridsquare = %q, want JO22", resp2.LoggingStation.MyGridsquare)
 	}
 	if !resp2.Station.AmpEnabled {
 		t.Error("station wiped by a logging_station-only PUT; presence-aware apply failed")

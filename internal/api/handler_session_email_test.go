@@ -601,3 +601,35 @@ func (f *apiSmtpFake) handle(c net.Conn) {
 		}
 	}
 }
+
+// TestWriteArchiveExclusive_SuffixesOnCollision verifies the archive never
+// truncates an existing file: a reused name gets a "-N" suffix and both files
+// survive with their own content (review 2026-07-22 #4).
+func TestWriteArchiveExclusive_SuffixesOnCollision(t *testing.T) {
+	dir := t.TempDir()
+
+	p1, err := writeArchiveExclusive(dir, "session.adi", "FIRST")
+	if err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	if filepath.Base(p1) != "session.adi" {
+		t.Errorf("first path = %q, want session.adi", filepath.Base(p1))
+	}
+
+	// Same name again must NOT overwrite the first — it suffixes to -1.
+	p2, err := writeArchiveExclusive(dir, "session.adi", "SECOND")
+	if err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	if filepath.Base(p2) != "session-1.adi" {
+		t.Errorf("second path = %q, want session-1.adi", filepath.Base(p2))
+	}
+
+	// Both files present with their own content — nothing was clobbered.
+	if b, _ := os.ReadFile(p1); string(b) != "FIRST" {
+		t.Errorf("p1 content = %q, want FIRST", b)
+	}
+	if b, _ := os.ReadFile(p2); string(b) != "SECOND" {
+		t.Errorf("p2 content = %q, want SECOND", b)
+	}
+}

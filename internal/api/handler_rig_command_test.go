@@ -153,4 +153,23 @@ func TestHandleRigCommand_Batch(t *testing.T) {
 			t.Errorf("code = %q, want missing_required_param", code)
 		}
 	})
+
+	t.Run("batch over the size cap is rejected", func(t *testing.T) {
+		var b strings.Builder
+		b.WriteString(`{"commands":[`)
+		for i := 0; i <= maxRigCommandBatch; i++ { // one over the cap
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(`{"op":"band_up"}`)
+		}
+		b.WriteString(`]}`)
+		w := postRigCommand(t, srv, b.String())
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body %s)", w.Code, w.Body.String())
+		}
+		if code := decodeErrCode(t, w); code != "invalid_field_value" {
+			t.Errorf("code = %q, want invalid_field_value", code)
+		}
+	})
 }

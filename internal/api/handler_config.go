@@ -384,6 +384,12 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // handler maps it to a 400.
 var errPutValidation = stderr.New("api: config validation failed")
 
+// errSetupLogbookCallsignMismatch is returned by seedDefaultLogbook when a
+// logbook already exists at the target default id but under a DIFFERENT
+// callsign than the one being set up. Reusing it would seed a default logbook
+// whose callsign can never match live submits; the handler maps this to a 409.
+var errSetupLogbookCallsignMismatch = stderr.New("api: setup default logbook callsign mismatch")
+
 // firstBlockingFinding returns the first non-warning (fatal) finding, or nil when
 // the config produced only advisories. A fatal finding is a 400 at PUT.
 func firstBlockingFinding(findings []config.Finding) *config.Finding {
@@ -538,6 +544,37 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A post-setup station-callsign change must not orphan the default logbook:
+	// a live submit requires STATION_CALLSIGN == the logbook's callsign
+	// (qsoservice submit gate), so silently changing it here would 200 but then
+	// fail every subsequent QSO with callsign_mismatch (review 2026-07-22 #1).
+	// Reject and direct the operator to reconcile logbooks first. (The deliberate
+	// end-state — operating callsign follows the SELECTED logbook — is the
+	// deferred per-logbook-identity feature; until then the callsign stays a
+	// config field guarded against this footgun.) Skipped during first-run setup
+	// (handled below) and for saves that don't carry My Station.
+	if current.SetupComplete && req.LoggingStation != nil {
+		newCall := strings.ToUpper(strings.TrimSpace(req.LoggingStation.StationCallsign))
+		oldCall := strings.ToUpper(strings.TrimSpace(current.LoggingStation.StationCallsign))
+		if newCall != oldCall && current.DefaultLogbookID != 0 {
+			lbCall, lerr := s.db.LogbookCallsignByIDWithContext(r.Context(), current.DefaultLogbookID)
+			switch {
+			case stderr.Is(lerr, errors.ErrNotFound):
+				// Default logbook already missing (dangling id) — nothing to
+				// orphan, so allow the change. Only reachable from a pre-existing
+				// inconsistent config; deleting the default is itself blocked.
+			case lerr != nil:
+				s.writeServerError(w, op, lerr, "db_error", "database operation failed")
+				return
+			case !strings.EqualFold(strings.TrimSpace(lbCall), newCall):
+				s.writeError(w, http.StatusConflict, "callsign_locked_to_logbook",
+					"changing your station callsign would orphan the default logbook; "+
+						"create or select a logbook for the new callsign first", op)
+				return
+			}
+		}
+	}
+
 	// First-run setup transition (single-operator; the first PUT carrying a
 	// callsign). Seed the default logbook OUTSIDE the config lock — DB I/O must not
 	// run under the config mutex — gated on a dry-run validation of the overlaid
@@ -557,6 +594,12 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		id, err := s.seedDefaultLogbook(r, dry.DefaultLogbookID, dry.LoggingStation.StationCallsign)
 		if err != nil {
+			if stderr.Is(err, errSetupLogbookCallsignMismatch) {
+				s.writeError(w, http.StatusConflict, "default_logbook_callsign_mismatch",
+					"a logbook already exists at the default id under a different callsign; "+
+						"choose a matching callsign or clear the default logbook", op)
+				return
+			}
 			s.writeServerError(w, op, err, "db_error", "failed to seed default logbook")
 			return
 		}
@@ -615,9 +658,15 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// Live-apply the FT8 repeat cap to the running sequencer — the one config field
 	// that takes effect without a restart, so the operator can dial it down mid-pile-up.
 	// After the persist so a rejected/failed write never applies; nil-safe when FT8 is
-	// off (s.ft8 == nil).
+	// off (s.ft8 == nil). Apply the COMMITTED value from a fresh snapshot, NOT the
+	// request's own *req.Ft8MaxRepeats: two interleaved saves could otherwise persist
+	// one value but live-apply the other, leaving the sequencer out of step with config
+	// until the next restart (review 2026-07-22 #5). The snapshot reflects whichever
+	// save committed last under the config lock.
 	if req.Ft8MaxRepeats != nil {
-		s.ft8.SetMaxRepeats(*req.Ft8MaxRepeats)
+		if tx := s.cfg.Snapshot().Ft8.TX; tx != nil {
+			s.ft8.SetMaxRepeats(tx.MaxRepeats)
+		}
 	}
 
 	resp, err := s.buildConfigResponse(r, s.cfg.Snapshot())
@@ -642,6 +691,14 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 // they're looking at when they open the logbook list.
 func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign string) (int64, error) {
 	if existing, err := s.db.FetchLogbookByIDWithContext(r.Context(), defaultID); err == nil {
+		// Reusing a pre-existing default row is fine ONLY when its callsign
+		// matches the callsign being set up — otherwise setup would adopt a
+		// default logbook that can never accept this operator's live submits
+		// (callsign_mismatch on every QSO). Surface it so the operator picks a
+		// clean default id or a matching callsign (review 2026-07-22 #1).
+		if !strings.EqualFold(strings.TrimSpace(existing.Callsign), strings.TrimSpace(callsign)) {
+			return 0, errSetupLogbookCallsignMismatch
+		}
 		return existing.ID, nil
 	} else if !stderr.Is(err, errors.ErrNotFound) {
 		return 0, err

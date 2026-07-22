@@ -2,6 +2,7 @@ package api
 
 import (
 	stderr "errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -9,6 +10,12 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
+
+// maxRigCommandBatch caps how many CAT commands one atomic batch may carry
+// (review 2026-07-22 #6). Without it the only bound is the request-body size, so
+// a single call could enqueue thousands of hardware writes as one CAT line. Real
+// batches are a handful (e.g. set freq + set mode); 32 is generous headroom.
+const maxRigCommandBatch = 32
 
 // rigCommandRequest is the POST /v1/rig/command body (ADR 0026). It accepts
 // either a single op — {"op": "...", "value": <scalar>} — or an atomic batch
@@ -70,6 +77,12 @@ func (s *Server) buildRigCommands(w http.ResponseWriter, op errors.Op, req rigCo
 	default:
 		s.writeError(w, http.StatusBadRequest, "missing_required_param",
 			"op or commands is required", op)
+		return nil, false
+	}
+
+	if len(raw) > maxRigCommandBatch {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			fmt.Sprintf("a command batch may contain at most %d commands", maxRigCommandBatch), op)
 		return nil, false
 	}
 

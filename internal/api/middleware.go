@@ -71,6 +71,27 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 	})
 }
 
+// rejectWhenDraining short-circuits NEW requests with 503 once graceful
+// shutdown has begun (s.draining, set by StopAccepting). StopAccepting closes
+// the listener and disables keep-alives, but a client holding an existing
+// keep-alive connection can still send a request during the multi-second
+// subsystem teardown that runs before http.Server.Shutdown drains — and that
+// request would otherwise reach a stopping/stopped subsystem (bridge, ft8,
+// forwarder workers). In-flight requests are unaffected; only new ones are
+// turned away. Sits outside limitConcurrent so a drained request never consumes
+// a concurrency slot (review 2026-07-22 #3).
+func (s *Server) rejectWhenDraining(next http.Handler) http.Handler {
+	const op errors.Op = "api.rejectWhenDraining"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.draining.Load() {
+			s.writeError(w, http.StatusServiceUnavailable, "shutting_down",
+				"the daemon is shutting down", op)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // limitConcurrent caps the number of simultaneous non-SSE requests
 // in flight. Over-budget requests get 503 server_busy; the daemon
 // does not queue. SSE (/v1/events) is exempt and counted separately

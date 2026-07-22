@@ -432,6 +432,10 @@ func TestUpdateLogbook_NotFound(t *testing.T) {
 func TestDeleteLogbook(t *testing.T) {
 	srv := testServer(t)
 
+	// Occupy the default-logbook id (1) — deleting the default is separately
+	// rejected (TestDeleteLogbook_DefaultRejected) — so the one under test is
+	// a deletable non-default logbook.
+	createTestLogbook(t, srv, "Default", "G4ABC")
 	id := createTestLogbook(t, srv, "To Delete", "G4ABC")
 
 	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/v1/logbook/%d", id), nil)
@@ -457,9 +461,32 @@ func TestDeleteLogbook_NotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteLogbook_DefaultRejected(t *testing.T) {
+	srv := testServer(t)
+
+	// The first created logbook gets id 1, which equals the config's
+	// default_logbook_id — deleting it would dangle the default (review #1).
+	id := createTestLogbook(t, srv, "Default", "G4ABC")
+
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/v1/logbook/%d", id), nil)
+	req.SetPathValue("id", fmt.Sprintf("%d", id))
+	w := httptest.NewRecorder()
+	srv.handleDeleteLogbook(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusConflict, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "default_logbook") {
+		t.Fatalf("body = %q, want default_logbook", w.Body.String())
+	}
+}
+
 func TestDeleteLogbook_WithQSOs_Rejected(t *testing.T) {
 	srv := testServer(t)
 
+	// Non-default logbook (id 1 is the default and is separately protected) so
+	// this exercises the has_qsos rejection, not the default-logbook guard.
+	createTestLogbook(t, srv, "Default", "G4ABC")
 	lbID := createTestLogbook(t, srv, "Has QSOs", "G4ABC")
 	// Submit a QSO so the logbook is non-empty.
 	w := submitQso(t, srv, lbID, testQsoADIF, false)

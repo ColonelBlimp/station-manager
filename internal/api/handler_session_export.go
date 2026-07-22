@@ -13,6 +13,13 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
+// maxSessionQsoUUIDs caps how many QSO UUIDs one session email/export request
+// may carry (review 2026-07-22 #6). Without it the only bound is the request
+// body, so a request could force thousands of DB fetches and a hugely amplified
+// ADIF attachment. A session is one operating sitting (tens to low hundreds);
+// 1000 is generous headroom. Shared by the export and email handlers.
+const maxSessionQsoUUIDs = 1000
+
 // SessionExportRequest is the SPA's POST body for a download: the canonical
 // UUIDs of the session QSOs to export, plus an optional filename. Same
 // daemon-rebuilds-from-DB contract as the email path — the client sends
@@ -29,6 +36,13 @@ type SessionExportRequest struct {
 // warning. A real fetch failure returns an error for the caller to map to a
 // 500. Shared by the email and export session handlers so both rebuild from
 // the same battle-tested path. `what` labels the log lines for the caller.
+//
+// One indexed point-lookup per UUID is deliberate: callers cap the list at
+// maxSessionQsoUUIDs, so the round-trip count is bounded, and against
+// in-process SQLite a batched `WHERE uuid IN (…)` would trade this simple
+// skip-missing/preserve-order loop for extra complexity with no meaningful win
+// at this scale (review 2026-07-22 #6, bulk-fetch sub-point — accepted, not a
+// perf concern at the capped size).
 func (s *Server) fetchSessionQsos(
 	ctx context.Context, uuids []string, what string,
 ) (types.QsoSlice, error) {
@@ -72,6 +86,11 @@ func (s *Server) handleSessionExport(w http.ResponseWriter, r *http.Request) {
 	if len(req.UUIDs) == 0 {
 		s.writeError(w, http.StatusBadRequest, "missing_required_field",
 			"uuids is required", op)
+		return
+	}
+	if len(req.UUIDs) > maxSessionQsoUUIDs {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			fmt.Sprintf("too many QSOs in one request (max %d)", maxSessionQsoUUIDs), op)
 		return
 	}
 	// Dedupe (first-occurrence order) so a repeated UUID isn't emitted twice.

@@ -161,6 +161,16 @@ func (s *Server) handleDeleteLogbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Refuse to delete the configured default logbook: doing so leaves
+	// default_logbook_id dangling (new submits then resolve a non-existent
+	// logbook) with no UI to repair it (review 2026-07-22 #1). The operator must
+	// point the default elsewhere first.
+	if def := s.cfg.Snapshot().DefaultLogbookID; def == id {
+		s.writeError(w, http.StatusConflict, "default_logbook",
+			"cannot delete the default logbook; set another default first", op)
+		return
+	}
+
 	if err = s.db.DeleteLogbookByIDWithContext(r.Context(), id); err != nil {
 		if stderr.Is(err, errors.ErrNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "logbook not found", op)

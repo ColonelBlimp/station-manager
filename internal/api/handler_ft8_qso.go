@@ -67,6 +67,19 @@ type ft8QsoStartRequest struct {
 }
 
 // handleFt8QsoStart begins a manual answer-a-CQ exchange (ADR 0031, step e3).
+// validFt8ExchangeMode reports whether m is an accepted FT8 exchange type. An
+// unrecognised value must NOT fall through to the standard on-air exchange
+// (review 2026-07-22 #2): this is a TX path, so a typo'd mode would key the rig
+// with the wrong exchange. "" and "standard" both select the standard path.
+func validFt8ExchangeMode(m string) bool {
+	switch m {
+	case "", "standard", "fd", "type4":
+		return true
+	default:
+		return false
+	}
+}
+
 // Registered only when FT8 is enabled. Requires TX already armed. A 202 means
 // "the sequencer is now driving this contact"; progress rides the ft8-qso SSE.
 func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
@@ -104,8 +117,14 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if !validFt8ExchangeMode(mode) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			`mode must be one of "", "standard", "fd", or "type4"`, op)
+		return
+	}
 	var err error
-	switch strings.ToLower(strings.TrimSpace(req.Mode)) {
+	switch mode {
 	case "fd":
 		// ARRL Field Day: our class+section come from ft8.field_day config (read by
 		// the Service), not the client. theirGrid is still logged (bearing/enrichment).
@@ -244,8 +263,14 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if !validFt8ExchangeMode(mode) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			`mode must be one of "", "standard", "fd", or "type4"`, op)
+		return
+	}
 	var err error
-	switch strings.ToLower(strings.TrimSpace(req.Mode)) {
+	switch mode {
 	case "fd":
 		// Field Day: their class+section came from the picked call; ours from config.
 		err = s.ft8.StartWorkCallerFd(ourCall, req.TheirCall, req.TheirGrid,

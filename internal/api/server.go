@@ -8,6 +8,7 @@ import (
 	"net/http/pprof"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/frontend"
@@ -68,6 +69,13 @@ type Server struct {
 	// listenerMu guards listener: it's assigned in ListenAndServe (serve
 	// goroutine) and read by StopAccepting (shutdown goroutine).
 	listenerMu sync.Mutex
+	// draining is set by StopAccepting at the very start of shutdown. The
+	// rejectWhenDraining middleware turns it into a 503 for NEW requests: closing
+	// the listener frees the port but leaves existing keep-alive connections
+	// open, and the multi-second subsystem teardown runs before Shutdown drains
+	// them — so without this gate a client could reach a stopping/stopped
+	// subsystem over a held connection (review 2026-07-22 #3).
+	draining atomic.Bool
 }
 
 // New constructs a Server from the resolved services and config. The
@@ -307,7 +315,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	//   mux               — per-route handlers (with their own per-route
 	//                       middleware like limitSubmitRate / limitEventSubscribers)
 	s.httpServer = &http.Server{
-		Handler: s.logRequests(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(mux)))),
+		Handler: s.logRequests(s.rejectWhenDraining(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(mux))))),
 		// ReadHeaderTimeout caps the pre-handler request-header read
 		// independently of ReadTimeout (which budgets headers + body
 		// together and is operator-tunable up to longer values for
@@ -383,6 +391,15 @@ func (s *Server) ListenAndServe(socketPath string) error {
 // loop's resulting net.ErrClosed is treated as a clean stop. Safe if never bound,
 // and idempotent (a second close is a harmless error we ignore).
 func (s *Server) StopAccepting() {
+	// Raise the drain gate FIRST so rejectWhenDraining turns away any request
+	// arriving over an already-established keep-alive connection while the
+	// listener closes and subsystems tear down (review 2026-07-22 #3).
+	s.draining.Store(true)
+	// Stop honouring keep-alive too: in-flight responses get Connection: close so
+	// a client can't reuse a connection into the dying daemon after this returns.
+	if s.httpServer != nil {
+		s.httpServer.SetKeepAlivesEnabled(false)
+	}
 	s.listenerMu.Lock()
 	ln := s.listener
 	s.listenerMu.Unlock()

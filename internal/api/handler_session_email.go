@@ -20,6 +20,11 @@ import (
 // export kinds (full-logbook, migration) can sit alongside.
 var sessionAdifArchiveDir = filepath.Join("exports", "sent-adif")
 
+// archiveCollisionLimit bounds the "-N" suffix search when the target archive
+// filename already exists (review 2026-07-22 #4) — high enough to never bite a
+// real operator, low enough that a pathological loop can't spin.
+const archiveCollisionLimit = 1000
+
 // SessionEmailRequest is the SPA's POST body. `to` is the recipient
 // (typically the operator's QSL manager); `uuids` are the canonical
 // ids of the session QSOs to email. The daemon rebuilds the ADIF from
@@ -107,6 +112,11 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	if len(req.UUIDs) == 0 {
 		s.writeError(w, http.StatusBadRequest, "missing_required_field",
 			"uuids is required", op)
+		return
+	}
+	if len(req.UUIDs) > maxSessionQsoUUIDs {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			fmt.Sprintf("too many QSOs in one request (max %d)", maxSessionQsoUUIDs), op)
 		return
 	}
 	// Deduplicate UUIDs (preserving first-occurrence order) before fetching:
@@ -352,10 +362,49 @@ func (s *Server) archiveSessionAdif(filename, body string) {
 			Msg("session email: refusing to archive outside the archive dir")
 		return
 	}
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		s.logger.WarnWith().Err(err).Str("path", path).
+	written, werr := writeArchiveExclusive(dir, filename, body)
+	if werr != nil {
+		s.logger.WarnWith().Err(werr).Str("dir", dir).Str("filename", filename).
 			Msg("session email: could not write local ADIF archive")
 		return
 	}
-	s.logger.InfoWith().Str("path", path).Msg("session email: archived ADIF locally")
+	s.logger.InfoWith().Str("path", written).Msg("session email: archived ADIF locally")
+}
+
+// writeArchiveExclusive writes body to dir/filename using O_EXCL so an existing
+// archive is never truncated (review 2026-07-22 #4): the default filename has
+// only one-second resolution and an explicit name can be reused, so a plain
+// os.WriteFile would silently overwrite a prior backup. On a collision it
+// appends "-N" before the extension (session.adi → session-1.adi → …) up to
+// archiveCollisionLimit tries. Returns the path actually written. The caller has
+// already validated filename as a bare name, and every "-N" candidate stays bare
+// (no separators), so none can escape dir.
+func writeArchiveExclusive(dir, filename, body string) (string, error) {
+	ext := filepath.Ext(filename)
+	stem := strings.TrimSuffix(filename, ext)
+	for i := 0; i <= archiveCollisionLimit; i++ {
+		name := filename
+		if i > 0 {
+			name = fmt.Sprintf("%s-%d%s", stem, i, ext)
+		}
+		path := filepath.Join(dir, name)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			if os.IsExist(err) {
+				continue // name taken — try the next suffix
+			}
+			return "", err
+		}
+		_, werr := f.WriteString(body)
+		cerr := f.Close()
+		if werr != nil {
+			return "", werr
+		}
+		if cerr != nil {
+			return "", cerr
+		}
+		return path, nil
+	}
+	return "", fmt.Errorf("archive filename collision limit (%d) exhausted for %q",
+		archiveCollisionLimit, filename)
 }

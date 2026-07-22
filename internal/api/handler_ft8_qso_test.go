@@ -89,6 +89,22 @@ func TestHandleFt8QsoStart(t *testing.T) {
 			t.Fatalf("status=%d code=%q, want 409 ft8_tx_not_armed (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
 		}
 	})
+
+	t.Run("invalid mode rejected before sequencer", func(t *testing.T) {
+		srv := ft8QsoTestServer(t, "G0TST")
+		// Every other field is valid, so a bad mode is the only reason to fail —
+		// and it must fail at validation (400), NOT fall through to the standard
+		// exchange (which would reach the sequencer → 409 ft8_tx_not_armed) and
+		// transmit the wrong exchange type (review #2).
+		w := postFt8Qso(t, srv, "/v1/ft8/qso/start",
+			`{"their_call":"K1ABC","their_grid":"FN42","slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":14.074,"mode":"field-day-typo"}`, srv.handleFt8QsoStart)
+		if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "invalid_field_value" {
+			t.Fatalf("status=%d code=%q, want 400 invalid_field_value (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "mode") {
+			t.Errorf("message should name mode; got %s", w.Body.String())
+		}
+	})
 }
 
 func TestHandleFt8QsoWork(t *testing.T) {
@@ -127,6 +143,18 @@ func TestHandleFt8QsoWork(t *testing.T) {
 			`{"their_call":"K1ABC","their_grid":"FN42","their_snr":-12,"slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":14.074}`, srv.handleFt8QsoWork)
 		if w.Code != http.StatusConflict || decodeErrCode(t, w) != "ft8_tx_not_armed" {
 			t.Fatalf("status=%d code=%q, want 409 ft8_tx_not_armed (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+		}
+	})
+
+	t.Run("invalid mode rejected before sequencer", func(t *testing.T) {
+		srv := ft8QsoTestServer(t, "G0TST")
+		w := postFt8Qso(t, srv, "/v1/ft8/qso/work",
+			`{"their_call":"K1ABC","their_grid":"FN42","their_snr":-12,"slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":14.074,"mode":"bogus"}`, srv.handleFt8QsoWork)
+		if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "invalid_field_value" {
+			t.Fatalf("status=%d code=%q, want 400 invalid_field_value (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "mode") {
+			t.Errorf("message should name mode; got %s", w.Body.String())
 		}
 	})
 }
