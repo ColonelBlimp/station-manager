@@ -232,6 +232,7 @@ type Sequencer struct {
 	theirPeriod string
 	offsetHz    float64
 	dialFreqMHz float64   // rig dial freq at start, for the logged QSO frequency
+	logbookID   int64     // logbook PINNED at arm (ADR 0055); stamped on the CompletedQso
 	startedAt   time.Time // contact start, stamped as the logged QSO's TIME_ON
 	repeats     int
 	// skipIfSilent — operator-armed "drop this contact instead of repeating an
@@ -524,6 +525,17 @@ func (s *Sequencer) ActiveCallsign() string {
 	// Reached only if an active mode's exchange pointer is unexpectedly nil (an
 	// invariant violation) — treat as no active call rather than dereference.
 	return ""
+}
+
+// bindLogbook pins the arm-time logbook for the CURRENT session (ADR 0055),
+// called by the Service right after it accepts a start. The completion sites
+// stamp it onto the CompletedQso under this same lock, so a QSO logs to the book
+// it started under — regardless of a later current-logbook switch or a rejected
+// concurrent start that would otherwise clobber a service-global.
+func (s *Sequencer) bindLogbook(id int64) {
+	s.mu.Lock()
+	s.logbookID = id
+	s.mu.Unlock()
 }
 
 // OnSlot is the per-slot driver, called by the decode loop once each completed slot.
@@ -903,6 +915,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 // fields — FD exchanges class+section, not an SNR report. Caller holds s.mu.
 func (s *Sequencer) completedQsoFdLocked() CompletedQso {
 	return CompletedQso{
+		LogbookID:    s.logbookID,
 		TheirCall:    s.fdEx.TheirCall,
 		TheirGrid:    s.fdEx.TheirGrid,
 		Class:        s.fdEx.TheirClass,
@@ -919,6 +932,7 @@ func (s *Sequencer) completedQsoFdLocked() CompletedQso {
 // class/section came from the call we picked. Caller holds s.mu.
 func (s *Sequencer) completedFdWorkQsoLocked() CompletedQso {
 	return CompletedQso{
+		LogbookID:    s.logbookID,
 		TheirCall:    s.fdWork.TheirCall,
 		TheirGrid:    s.fdWork.TheirGrid,
 		Class:        s.fdWork.TheirClass,
@@ -1264,6 +1278,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 // completedQsoLocked captures the finished exchange for logging. Caller holds s.mu.
 func (s *Sequencer) completedQsoLocked() CompletedQso {
 	return CompletedQso{
+		LogbookID:      s.logbookID,
 		TheirCall:      s.ex.TheirCall,
 		TheirGrid:      s.theirGrid,
 		OurReport:      s.ex.SendSnr,

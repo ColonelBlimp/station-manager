@@ -327,6 +327,7 @@ func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage) (*CallerExch
 // Caller holds s.mu and s.caller is the just-completed exchange.
 func (s *Sequencer) completedCallerQsoLocked() CompletedQso {
 	return CompletedQso{
+		LogbookID:      s.logbookID,
 		TheirCall:      s.caller.TheirCall,
 		TheirGrid:      s.caller.TheirGrid,
 		OurReport:      s.caller.SendSnr,

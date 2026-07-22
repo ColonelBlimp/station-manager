@@ -391,6 +391,7 @@ func (s *Sequencer) onSlotWorkingT4(ref SlotRef, msgs []goft8.DecodedMessage, no
 // no grid (type-4 CQ carries none). Caller holds s.mu.
 func (s *Sequencer) completedQsoT4Locked() CompletedQso {
 	return CompletedQso{
+		LogbookID:    s.logbookID,
 		TheirCall:    s.t4Ex.TheirCall,
 		TheirGrid:    s.t4Ex.TheirGrid,
 		OurReport:    s.t4Ex.SendSnr,
@@ -405,6 +406,7 @@ func (s *Sequencer) completedQsoT4Locked() CompletedQso {
 // degraded shape: our SNR → RST_SENT, blank RST_RCVD, no grid. Caller holds s.mu.
 func (s *Sequencer) completedT4WorkQsoLocked() CompletedQso {
 	return CompletedQso{
+		LogbookID:    s.logbookID,
 		TheirCall:    s.t4Work.TheirCall,
 		TheirGrid:    s.t4Work.TheirGrid,
 		OurReport:    s.t4Work.SendSnr,

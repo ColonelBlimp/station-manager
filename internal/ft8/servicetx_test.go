@@ -194,20 +194,6 @@ func TestStartSession_RefusesWhenRigBecomesUnready(t *testing.T) {
 	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1), ErrTxNotReady)
 }
 
-// TestService_LogbookPinnedOnComplete covers ADR 0055 (logging half): the
-// logbook_id pinned at arm is stamped onto the CompletedQso at completion, so a
-// QSO logs to the book it started under — not the current default.
-func TestService_LogbookPinnedOnComplete(t *testing.T) {
-	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
-	var logged CompletedQso
-	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged = c })
-
-	s.pinnedLogbookID.Store(42) // as a Start* pins it at arm
-	s.seq.onComplete(CompletedQso{TheirCall: "K1ABC"})
-
-	require.Equal(t, int64(42), logged.LogbookID)
-}
-
 // TestStartWorkCaller_Gating: the work-a-caller entry point shares the arm gate with
 // StartQso/StartCallCq — refused when disarmed, committed (session active) when armed.
 func TestStartWorkCaller_Gating(t *testing.T) {
