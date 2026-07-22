@@ -123,3 +123,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-07-21] logbook: when sending an email no toast is show for sending, or sent, rather once sent a msg is added to to popup header
 - [2026-07-21] logbook 'not emailed only' doesn't work
 - [2026-07-21] check if we need to update the ADIF field for CLUBLOG_QSO_UPLOAD_DATE
+- [2026-07-22] the phone/cw panel need QTH field

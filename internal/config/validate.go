@@ -79,6 +79,7 @@ func Validate(cfg Config) []Finding {
 	out = append(out, validateServer(cfg)...)
 	out = append(out, validateRigs(cfg)...)
 	out = append(out, validateLoggingStation(cfg.LoggingStation)...)
+	out = append(out, validateOperators(cfg)...)
 	out = append(out, validateStationPrefs(cfg.Station)...)
 	out = append(out, validateFt8Display(cfg.Ft8.Display)...)
 	out = append(out, validateFt8Occupancy(cfg.Ft8.TX)...)
@@ -214,6 +215,43 @@ func validateRigs(cfg Config) []Finding {
 	if cfg.RigByID(cfg.DefaultRigID) == nil && !(len(cfg.Rigs) == 0 && cfg.DefaultRigID == 0) {
 		out = append(out, rigErr("default_rig_id",
 			fmt.Sprintf("default_rig_id %d does not match any defined rig", cfg.DefaultRigID)))
+	}
+	return out
+}
+
+// validateOperators checks the operator roster (ADR 0055): each entry needs a
+// valid, unique callsign, and default_operator must resolve to a roster entry.
+// Assumes Normalize has run (callsigns uppercased/trimmed). An empty roster
+// passes — applyDefaults seeds it at Load, but a client that clears it is a
+// legitimate (if unusual) pre-setup state.
+func validateOperators(cfg Config) []Finding {
+	var out []Finding
+	add := func(field, msg string) {
+		out = append(out, Finding{Field: field, Code: "invalid_field_value", Message: msg})
+	}
+	seen := make(map[string]struct{}, len(cfg.Operators))
+	for i := range cfg.Operators {
+		call := cfg.Operators[i].Callsign
+		if call == "" {
+			add(fmt.Sprintf("operators[%d]", i), fmt.Sprintf("operators[%d]: callsign must not be empty", i))
+			continue
+		}
+		if !isValidCallsign(call) {
+			add(fmt.Sprintf("operators[%d]", i),
+				fmt.Sprintf("operators[%d]: callsign %q must be 3-32 characters and contain at least one digit", i, call))
+		}
+		if _, dup := seen[call]; dup {
+			add(fmt.Sprintf("operators[%d]", i), fmt.Sprintf("operators: duplicate callsign %q", call))
+		}
+		seen[call] = struct{}{}
+	}
+	// default_operator must point at a roster entry (empty passes — a roster-less
+	// pre-seed config, or a client that cleared both together).
+	if cfg.DefaultOperator != "" {
+		if _, ok := seen[cfg.DefaultOperator]; !ok {
+			add("default_operator",
+				fmt.Sprintf("default_operator %q does not match any roster entry", cfg.DefaultOperator))
+		}
 	}
 	return out
 }

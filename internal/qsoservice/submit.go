@@ -130,20 +130,30 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 		return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "TIME_ON is required"}
 	}
 
-	stationCallsign := strings.ToUpper(strings.TrimSpace(rec.StationCallsign))
-	if stationCallsign == "" {
-		return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "STATION_CALLSIGN is required"}
-	}
-	if !IsValidCallsign(stationCallsign) {
-		return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "STATION_CALLSIGN must be 3-32 characters and contain at least one digit"}
-	}
-
-	// Logbook-callsign match: live submits require STATION_CALLSIGN == the
-	// logbook's callsign (forwarders reject a mismatch); import relaxes it (a
-	// historical/mixed log may carry a different callsign). The logbook-exists
-	// check lives in the caller (it owns the lookup that yields logbookCallsign).
-	if !isImport && !strings.EqualFold(logbookCallsign, stationCallsign) {
-		return types.Qso{}, "", &SubmitError{Code: "callsign_mismatch", Message: "STATION_CALLSIGN does not match the logbook's callsign"}
+	// STATION_CALLSIGN (ADR 0055): for a LIVE submit it is the logbook's OWN
+	// callsign — daemon-authoritative, never client-supplied — so a QSO always
+	// records the call the logbook represents. This dissolves the former
+	// callsign_mismatch gate: a derived value can't disagree with the logbook,
+	// and the client can only pick which of its own logbooks to log into. An
+	// IMPORT keeps the record's own STATION_CALLSIGN (a historical/mixed log may
+	// carry a different callsign), still requiring it present + well-formed.
+	var stationCallsign string
+	if isImport {
+		stationCallsign = strings.ToUpper(strings.TrimSpace(rec.StationCallsign))
+		if stationCallsign == "" {
+			return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "STATION_CALLSIGN is required"}
+		}
+		if !IsValidCallsign(stationCallsign) {
+			return types.Qso{}, "", &SubmitError{Code: "invalid_field_value", Message: "STATION_CALLSIGN must be 3-32 characters and contain at least one digit"}
+		}
+	} else {
+		// The logbook's callsign is NOT NULL and CHECK(length BETWEEN 3 AND 32)
+		// at the schema, so it is always present + valid here; the guard covers a
+		// logbook-less caller (a direct test that passes an empty logbookCallsign).
+		stationCallsign = strings.ToUpper(strings.TrimSpace(logbookCallsign))
+		if stationCallsign == "" {
+			return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "the logbook has no callsign to stamp as STATION_CALLSIGN"}
+		}
 	}
 
 	// ---- Validate field values ----

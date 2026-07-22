@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -892,18 +893,29 @@ func TestSubmitQso_LogbookNotFound(t *testing.T) {
 	}
 }
 
-func TestSubmitQso_CallsignMismatch(t *testing.T) {
+func TestSubmitQso_StampsStationCallsignFromLogbook(t *testing.T) {
 	srv := testServer(t)
-	// Logbook has callsign M0CMC, but ADIF has STATION_CALLSIGN=G4ABC
+	// Logbook callsign M0CMC; the ADIF record carries STATION_CALLSIGN=G4ABC.
+	// ADR 0055: a live submit overwrites it with the logbook's callsign rather
+	// than rejecting — STATION_CALLSIGN is derived, never client-supplied.
 	lbID := createTestLogbook(t, srv, "Wrong Log", "M0CMC")
 
 	w := submitQso(t, srv, lbID, testQsoADIF, false)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusCreated, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "callsign_mismatch") {
-		t.Fatalf("body = %q, want callsign_mismatch", w.Body.String())
+	var resp struct {
+		UUID string `json:"uuid"`
+	}
+	if err := unmarshalJSON(w.Body.String(), &resp); err != nil || resp.UUID == "" {
+		t.Fatalf("decode submit response: %v (%s)", err, w.Body.String())
+	}
+	stored, err := srv.db.FetchQsoByUUIDWithContext(context.Background(), resp.UUID)
+	if err != nil {
+		t.Fatalf("fetch stored qso: %v", err)
+	}
+	if stored.LoggingStation.StationCallsign != "M0CMC" {
+		t.Errorf("STATION_CALLSIGN = %q, want the logbook's M0CMC (derived)", stored.LoggingStation.StationCallsign)
 	}
 }
 

@@ -91,6 +91,21 @@ type Config struct {
 	// the legitimate pre-setup state.
 	LoggingStation types.LoggingStation `json:"logging_station"`
 
+	// Operators is the operator roster (ADR 0055) — the people who may sit at
+	// the key. The SPA's "current operator" selection picks one, whose Callsign
+	// + Name stamp a QSO's OPERATOR + MY_NAME. Config-level, not a DB table: a
+	// contest group registers once and each op picks themselves rather than
+	// retyping call + name. Empty on a fresh or legacy config → applyDefaults
+	// seeds a single entry from the existing operator identity, so the daemon
+	// always has at least one operator to stamp (backward compatibility).
+	Operators []types.Operator `json:"operators,omitempty"`
+
+	// DefaultOperator is the callsign of the roster entry used when no current
+	// operator has been selected (the usual single-op case). Must match an
+	// Operators[].Callsign (or be empty when the roster is empty, pre-seed).
+	// applyDefaults points it at the first roster entry when unset.
+	DefaultOperator string `json:"default_operator,omitempty"`
+
 	// SetupComplete is the explicit "operator has finished first-run
 	// setup" flag. Server-managed: PUT /v1/config can never set or
 	// clear it directly; the daemon flips false → true on the first
@@ -707,6 +722,15 @@ func Normalize(cfg *Config) {
 	ls.MyITUZone = strings.TrimSpace(ls.MyITUZone)
 	ls.MyDXCC = strings.TrimSpace(ls.MyDXCC)
 
+	// Operator roster (ADR 0055): canonicalise each roster callsign + the
+	// default pointer like the identity fields above, so validation and the
+	// current-operator match are case- and space-insensitive.
+	for i := range cfg.Operators {
+		cfg.Operators[i].Callsign = strings.ToUpper(strings.TrimSpace(cfg.Operators[i].Callsign))
+		cfg.Operators[i].Name = strings.TrimSpace(cfg.Operators[i].Name)
+	}
+	cfg.DefaultOperator = strings.ToUpper(strings.TrimSpace(cfg.DefaultOperator))
+
 	normalizeRigOverrides(cfg)
 
 	// Drop vestigial empty loose serial/cat blocks (config.md §10): serial port +
@@ -968,6 +992,28 @@ func applyDefaults(cfg *Config, baseDir string) {
 	}
 	if cfg.DefaultRigID == 0 && len(cfg.Rigs) > 0 {
 		cfg.DefaultRigID = defaultRigID
+	}
+
+	// Operator roster (ADR 0055): a fresh or legacy config carries no roster.
+	// Seed a single entry from the existing single-operator identity so the
+	// daemon always has an operator to stamp (backward compatibility) — prefer
+	// OPERATOR, fall back to STATION_CALLSIGN. Idempotent (only an empty roster
+	// is seeded); Normalize runs after and uppercases the seeded callsign.
+	if len(cfg.Operators) == 0 {
+		seed := strings.TrimSpace(cfg.LoggingStation.Operator)
+		if seed == "" {
+			seed = strings.TrimSpace(cfg.LoggingStation.StationCallsign)
+		}
+		if seed != "" {
+			cfg.Operators = []types.Operator{{
+				Callsign: seed,
+				Name:     strings.TrimSpace(cfg.LoggingStation.MyName),
+			}}
+		}
+	}
+	// Point default_operator at the first roster entry when unset.
+	if cfg.DefaultOperator == "" && len(cfg.Operators) > 0 {
+		cfg.DefaultOperator = cfg.Operators[0].Callsign
 	}
 
 	// Non-sparse seeding (ADR 0039): ensure every registered forwarder TYPE has

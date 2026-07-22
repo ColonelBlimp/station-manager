@@ -73,11 +73,13 @@ func TestInitialize_RequiresDependencies(t *testing.T) {
 	require.NoError(t, full.Initialize(), "all deps present")
 }
 
-// TestSubmit_EnforcesLogbookCallsign guards review 2026-06-19 M3: the
-// logbook-exists + callsign-match invariant lives in the shared service path, so
-// FT8/direct callers can't bypass it. Live Submit enforces the callsign match;
-// SubmitImport relaxes it (historical/mixed logs) but still requires the logbook.
-func TestSubmit_EnforcesLogbookCallsign(t *testing.T) {
+// TestSubmit_StampsStationCallsignFromLogbook covers ADR 0055: a LIVE submit's
+// STATION_CALLSIGN is the logbook's own callsign (daemon-authoritative), so the
+// old callsign_mismatch gate is gone — a record's STATION_CALLSIGN, whatever it
+// is (or absent), is overwritten by the logbook's. The logbook-exists check
+// still lives in the shared service path. (Import fidelity is covered
+// separately; SubmitImport keeps the record's own STATION_CALLSIGN.)
+func TestSubmit_StampsStationCallsignFromLogbook(t *testing.T) {
 	s := newTestService(t)
 	lbID := seedLogbook(t, s, "Main", "M0ABC")
 	ctx := context.Background()
@@ -89,17 +91,30 @@ func TestSubmit_EnforcesLogbookCallsign(t *testing.T) {
 		}
 	}
 
+	// A record whose STATION_CALLSIGN matches the logbook stores as-is.
 	res, err := s.Submit(ctx, lbID, rec("M0ABC", "K1ABC"), false)
 	require.NoError(t, err)
 	require.Equal(t, "stored", res.Status)
 
-	_, err = s.Submit(ctx, lbID, rec("G0XYZ", "K2ABC"), false)
-	se := IsSubmitError(err)
-	require.NotNil(t, se)
-	require.Equal(t, "callsign_mismatch", se.Code)
+	// A record with a DIFFERENT STATION_CALLSIGN no longer errors — it is
+	// overwritten with the logbook's callsign (M0ABC), not stored as G0XYZ.
+	res, err = s.Submit(ctx, lbID, rec("G0XYZ", "K2ABC"), false)
+	require.NoError(t, err)
+	require.Equal(t, "stored", res.Status)
+	stored, ferr := s.DB.FetchQsoByUUIDWithContext(ctx, res.UUID)
+	require.NoError(t, ferr)
+	require.Equal(t, "M0ABC", stored.LoggingStation.StationCallsign)
+
+	// An ABSENT STATION_CALLSIGN is likewise filled from the logbook.
+	res, err = s.Submit(ctx, lbID, rec("", "K7ABC"), false)
+	require.NoError(t, err)
+	require.Equal(t, "stored", res.Status)
+	stored, ferr = s.DB.FetchQsoByUUIDWithContext(ctx, res.UUID)
+	require.NoError(t, ferr)
+	require.Equal(t, "M0ABC", stored.LoggingStation.StationCallsign)
 
 	_, err = s.Submit(ctx, 9999, rec("M0ABC", "K3ABC"), false)
-	se = IsSubmitError(err)
+	se := IsSubmitError(err)
 	require.NotNil(t, se)
 	require.Equal(t, "logbook_not_found", se.Code)
 
