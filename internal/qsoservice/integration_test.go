@@ -128,6 +128,46 @@ func TestSubmit_StampsStationCallsignFromLogbook(t *testing.T) {
 	require.Equal(t, "logbook_not_found", se.Code, "import still requires the logbook to exist")
 }
 
+// TestSubmit_DefaultsOperatorFromRoster covers ADR 0055: a live submit that
+// omits OPERATOR is stamped from the configured default_operator roster entry
+// (callsign + MY_NAME); a record that carries its own OPERATOR keeps it.
+func TestSubmit_DefaultsOperatorFromRoster(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	// Config.Update persists, so give the service an on-disk path (temp).
+	s.Config.SetPath(t.TempDir() + "/config.json")
+	require.NoError(t, s.Config.Update(func(c *config.Config) error {
+		c.Operators = []types.Operator{{Callsign: "G0XYZ", Name: "Marc"}}
+		c.DefaultOperator = "G0XYZ"
+		return nil
+	}))
+
+	base := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "14.074", QsoDate: "20260101", TimeOn: "1200"},
+	}
+
+	// No OPERATOR on the record → default roster entry is stamped.
+	res, err := s.Submit(ctx, lbID, base, false)
+	require.NoError(t, err)
+	stored, ferr := s.DB.FetchQsoByUUIDWithContext(ctx, res.UUID)
+	require.NoError(t, ferr)
+	require.Equal(t, "G0XYZ", stored.LoggingStation.Operator)
+	require.Equal(t, "Marc", stored.LoggingStation.MyName)
+
+	// A record that carries its own OPERATOR keeps it (guest op wins).
+	guest := base
+	guest.ContactedStation.Call = "K2ABC"
+	guest.LoggingStation.Operator = "2E0PQR"
+	res2, err := s.Submit(ctx, lbID, guest, false)
+	require.NoError(t, err)
+	stored2, ferr := s.DB.FetchQsoByUUIDWithContext(ctx, res2.UUID)
+	require.NoError(t, ferr)
+	require.Equal(t, "2E0PQR", stored2.LoggingStation.Operator)
+}
+
 // TestSubmitImport_ForwardSelection guards the dogfood-2026-06-23 fix at the
 // service boundary: a public Submit enqueues every configured forwarder, but
 // SubmitImport enqueues NOTHING unless the forwarder is named in forwardTo

@@ -655,6 +655,11 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			if cfg.LoggingStation.OwnerCallsign == "" {
 				cfg.LoggingStation.OwnerCallsign = call
 			}
+			// Seed the operator roster from the just-established identity (ADR 0055).
+			// applyDefaults does this at Load, but setup runs via this PUT — which
+			// does not re-run applyDefaults — so without it the roster stays empty
+			// until a restart (codex review of 23d2df7a, #3).
+			config.SeedOperatorRoster(cfg)
 		}
 		return nil
 	}); err != nil {

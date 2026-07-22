@@ -809,6 +809,33 @@ func normalizeRigOverrides(cfg *Config) {
 // defaults.go; safety ceilings are enforced in their owning subsystems (see
 // defaults.go for the index). config.md §14.
 
+// SeedOperatorRoster fills an EMPTY operator roster (ADR 0055) with a single
+// entry from the station identity — OPERATOR, falling back to STATION_CALLSIGN —
+// plus MY_NAME, and points default_operator at the first entry when unset.
+// Idempotent: a non-empty roster and an already-set default are left alone.
+//
+// Called from applyDefaults at Load AND from first-run setup completion
+// (PUT /v1/config), because PUT does not re-run applyDefaults — without the
+// setup-time call the roster would stay empty until the next daemon restart
+// (codex review of 23d2df7a, #3).
+func SeedOperatorRoster(cfg *Config) {
+	if len(cfg.Operators) == 0 {
+		seed := strings.TrimSpace(cfg.LoggingStation.Operator)
+		if seed == "" {
+			seed = strings.TrimSpace(cfg.LoggingStation.StationCallsign)
+		}
+		if seed != "" {
+			cfg.Operators = []types.Operator{{
+				Callsign: seed,
+				Name:     strings.TrimSpace(cfg.LoggingStation.MyName),
+			}}
+		}
+	}
+	if cfg.DefaultOperator == "" && len(cfg.Operators) > 0 {
+		cfg.DefaultOperator = cfg.Operators[0].Callsign
+	}
+}
+
 func applyDefaults(cfg *Config, baseDir string) {
 	// Stamp the current schema version so a freshly-loaded (version-less) or
 	// first-run config always carries it; migrateDocument has already brought
@@ -994,27 +1021,7 @@ func applyDefaults(cfg *Config, baseDir string) {
 		cfg.DefaultRigID = defaultRigID
 	}
 
-	// Operator roster (ADR 0055): a fresh or legacy config carries no roster.
-	// Seed a single entry from the existing single-operator identity so the
-	// daemon always has an operator to stamp (backward compatibility) — prefer
-	// OPERATOR, fall back to STATION_CALLSIGN. Idempotent (only an empty roster
-	// is seeded); Normalize runs after and uppercases the seeded callsign.
-	if len(cfg.Operators) == 0 {
-		seed := strings.TrimSpace(cfg.LoggingStation.Operator)
-		if seed == "" {
-			seed = strings.TrimSpace(cfg.LoggingStation.StationCallsign)
-		}
-		if seed != "" {
-			cfg.Operators = []types.Operator{{
-				Callsign: seed,
-				Name:     strings.TrimSpace(cfg.LoggingStation.MyName),
-			}}
-		}
-	}
-	// Point default_operator at the first roster entry when unset.
-	if cfg.DefaultOperator == "" && len(cfg.Operators) > 0 {
-		cfg.DefaultOperator = cfg.Operators[0].Callsign
-	}
+	SeedOperatorRoster(cfg)
 
 	// Non-sparse seeding (ADR 0039): ensure every registered forwarder TYPE has
 	// a config entry. For each registered default the operator hasn't already

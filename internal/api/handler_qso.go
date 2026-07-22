@@ -181,23 +181,15 @@ func (s *Server) handleSubmitQso(w http.ResponseWriter, r *http.Request) {
 
 	rec := parsed.Records[0]
 
-	// ---- Validate STATION_CALLSIGN ----
-	stationCallsign := strings.ToUpper(strings.TrimSpace(rec.StationCallsign))
-	if stationCallsign == "" {
-		s.writeError(w, http.StatusBadRequest, "missing_required_field",
-			"STATION_CALLSIGN is required", op)
-		return
-	}
-	if !isValidCallsign(stationCallsign) {
-		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-			"STATION_CALLSIGN must be 3-32 characters and contain at least one digit", op)
-		return
-	}
+	// STATION_CALLSIGN is NOT validated here (ADR 0055): a live submit derives it
+	// from the logbook (qsoservice.Submit), so a record's own STATION_CALLSIGN is
+	// ignored and need not be present or well-formed. Rejecting it here would 400
+	// a valid submit that omits the now-daemon-authoritative field.
 
 	// ---- Resolve logbook id ----
-	// The client must provide ?logbook=<id>. The logbook-exists +
-	// callsign-matches-STATION_CALLSIGN invariant now lives in qsoservice.Submit
-	// (review 2026-06-19 M3) so every submit caller (HTTP, FT8 e4 sink, …) shares
+	// The client must provide ?logbook=<id>. The logbook-exists check (and the
+	// STATION_CALLSIGN derivation) now live in qsoservice.Submit (review
+	// 2026-06-19 M3) so every submit caller (HTTP, FT8 e4 sink, …) shares
 	// it; Submit returns logbook_not_found / callsign_mismatch, mapped below.
 	logbookIDStr := r.URL.Query().Get("logbook")
 	if logbookIDStr == "" {

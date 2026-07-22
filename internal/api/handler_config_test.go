@@ -327,6 +327,29 @@ func TestHandlePutConfig_SetupRejectsMismatchedDefaultLogbook(t *testing.T) {
 	}
 }
 
+func TestHandlePutConfig_SetupSeedsOperatorRoster(t *testing.T) {
+	srv := testServer(t)
+	// First-run setup with a callsign must seed the operator roster (ADR 0055) —
+	// setup runs via PUT, which doesn't re-run applyDefaults, so without the
+	// setup-time seed the roster stays empty until a restart.
+	req := httptest.NewRequest(http.MethodPut, "/v1/config",
+		strings.NewReader(`{"logging_station":{"station_callsign":"M0XYZ"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("setup PUT status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	snap := srv.cfg.Snapshot()
+	if len(snap.Operators) != 1 || snap.Operators[0].Callsign != "M0XYZ" {
+		t.Errorf("roster = %+v, want a single seeded entry M0XYZ", snap.Operators)
+	}
+	if snap.DefaultOperator != "M0XYZ" {
+		t.Errorf("default_operator = %q, want M0XYZ", snap.DefaultOperator)
+	}
+}
+
 func TestHandlePutConfig_OmittedBlocksPreserved(t *testing.T) {
 	srv := testServer(t)
 

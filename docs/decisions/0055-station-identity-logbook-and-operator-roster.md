@@ -149,6 +149,43 @@ call.
   `STATION_CALLSIGN` (a relay), the daemon-stamped-from-logbook rule needs an
   explicit escape hatch.
 
+## Open design gaps (surfaced by review 2026-07-22)
+
+The clean-room review of the first implementation commit flagged five gaps this
+ADR under-specified. They must be resolved during implementation:
+
+1. **The default-logbook delete guard must STAY** (do not blind-retire it in the
+   "retires the guards" consequence). Beyond the callsign-orphan reason, it
+   prevents `default_logbook_id` from pointing at a soft-deleted row →
+   `logbook_not_found` on every submit, and a **stuck restart** (`ensureDefaultLogbook`
+   can't re-insert `"Default"` because the soft-deleted row still holds the
+   unique-name slot). Retire it only once deletion **atomically re-points or
+   clears** the default.
+2. **Forwarding is global — this likely GATES multi-callsign use.** Every live
+   submit queues every enabled forwarder, but a QRZ key / ClubLog credential is
+   bound to ONE remote callsign. QSOs logged under a *different* local logbook
+   would upload to the **wrong remote account** or fail terminally. Forwarders
+   need a per-logbook/callsign binding (or routing rule) before operating a
+   second call is safe.
+3. **Migration must preserve existing identity.** An upgrade with a set
+   `OPERATOR`/`MY_NAME` must seed the roster + `default_operator` from them (the
+   `SeedOperatorRoster` fill does this). When `owner_callsign` eventually moves to
+   the logbook, the default logbook's owner must seed from the old
+   `OWNER_CALLSIGN` (not silently default to the call) — moot while owner stays
+   config-sourced (the "no schema change" decision), but a prerequisite of the
+   owner-on-logbook follow-up.
+4. **PSK Reporter identity switching is undefined.** The uploader captures the RX
+   callsign at startup for public reports + self-decode filtering and buffers
+   spots without per-spot identity; switching the current logbook would report
+   under the old call and could relabel buffered spots. Needs a flush /
+   partitioned-buffer transition tied to the current logbook — or an explicit
+   decision that PSK stays on the home call.
+5. **FT8-exchange delete race.** A freshly-selected secondary logbook is empty
+   until an exchange completes, so another tab could delete it mid-air (deletion
+   only checks *stored* QSOs); completion then submits against a missing logbook
+   and loses the contact. Pin the selected logbook (or reject deletion) while an
+   FT8 session references it (related to gap 1).
+
 ## References
 
 - 2026-07-22 `internal/api` review — commits `e5da1945` (guards added) and

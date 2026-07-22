@@ -543,17 +543,30 @@ func TestSubmitQso_InvalidCallInADIF(t *testing.T) {
 	}
 }
 
-func TestSubmitQso_InvalidStationCallsign(t *testing.T) {
+func TestSubmitQso_IgnoresInvalidRecordStationCallsign(t *testing.T) {
 	srv := testServer(t)
-	// Create logbook with valid callsign, but submit ADIF with invalid STATION_CALLSIGN.
-	// The handler validates STATION_CALLSIGN before the logbook lookup.
+	// The record carries an INVALID STATION_CALLSIGN ("AB"). ADR 0055 derives the
+	// field from the logbook, so it is IGNORED rather than rejected — the QSO
+	// stores the logbook's callsign (G4ABC).
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
 
 	body := `<CALL:5>M0CMC<BAND:3>40m<MODE:3>SSB<FREQ:5>7.050<QSO_DATE:8>20250508<TIME_ON:4>0845<TIME_OFF:4>0850<STATION_CALLSIGN:2>AB<COUNTRY:7>England<EOR>`
 	w := submitQso(t, srv, lbID, body, false)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusBadRequest, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusCreated, w.Body.String())
+	}
+	var resp struct {
+		UUID string `json:"uuid"`
+	}
+	if err := unmarshalJSON(w.Body.String(), &resp); err != nil || resp.UUID == "" {
+		t.Fatalf("decode submit response: %v (%s)", err, w.Body.String())
+	}
+	stored, err := srv.db.FetchQsoByUUIDWithContext(context.Background(), resp.UUID)
+	if err != nil {
+		t.Fatalf("fetch stored qso: %v", err)
+	}
+	if stored.LoggingStation.StationCallsign != "G4ABC" {
+		t.Errorf("STATION_CALLSIGN = %q, want the logbook's G4ABC (invalid record value ignored)", stored.LoggingStation.StationCallsign)
 	}
 }
 

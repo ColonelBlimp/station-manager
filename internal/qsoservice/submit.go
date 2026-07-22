@@ -265,6 +265,25 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 	qso.QsoDetails.Freq = freqMHz
 	qso.LoggingStation.StationCallsign = stationCallsign
 
+	// OPERATOR + MY_NAME (ADR 0055): default from the configured current operator
+	// (the default_operator roster entry) when the record leaves OPERATOR empty,
+	// so the roster is the fallback identity and configuring it actually takes
+	// effect (codex review of 23d2df7a, #1). A record that carries OPERATOR wins
+	// (the SPA's current-operator pick, or a one-off guest op). Live submit only —
+	// an import keeps its own OPERATOR/MY_NAME.
+	if !isImport && s.Config != nil && strings.TrimSpace(qso.LoggingStation.Operator) == "" {
+		cfg := s.Config.Snapshot()
+		for i := range cfg.Operators {
+			if strings.EqualFold(cfg.Operators[i].Callsign, cfg.DefaultOperator) {
+				qso.LoggingStation.Operator = cfg.Operators[i].Callsign
+				if strings.TrimSpace(qso.LoggingStation.MyName) == "" {
+					qso.LoggingStation.MyName = cfg.Operators[i].Name
+				}
+				break
+			}
+		}
+	}
+
 	if strings.TrimSpace(qso.ContactedStation.Country) == "" {
 		qso.ContactedStation.Country = "Unknown"
 	}
