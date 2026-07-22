@@ -479,6 +479,41 @@ func (s *Sequencer) Active() bool {
 	return s.mode != seqIdle
 }
 
+// ActiveCallsign returns our own callsign for the CURRENTLY-ACTIVE session — the
+// call pinned when the exchange was armed (ADR 0055, pin-at-arm). It is the single
+// source for self-decode filtering: only an active session keys TX, so an idle
+// sequencer returns "" and nothing is filtered (nothing of ours is on the air).
+// No DB lookup, no fallback — the call was resolved once at arm and carried here.
+func (s *Sequencer) ActiveCallsign() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch s.mode {
+	case seqAnswering:
+		if s.ex != nil {
+			return s.ex.OurCall
+		}
+	case seqAnsweringFd:
+		if s.fdEx != nil {
+			return s.fdEx.OurCall
+		}
+	case seqWorkingFd:
+		if s.fdWork != nil {
+			return s.fdWork.OurCall
+		}
+	case seqAnsweringT4:
+		if s.t4Ex != nil {
+			return s.t4Ex.OurCall
+		}
+	case seqWorkingT4:
+		if s.t4Work != nil {
+			return s.t4Work.OurCall
+		}
+	case seqCalling, seqWorking:
+		return s.ourCall
+	}
+	return ""
+}
+
 // OnSlot is the per-slot driver, called by the decode loop once each completed slot.
 // ref is the slot just decoded; msgs are its decodes; now is wall-clock UTC. It
 // dispatches to the active session's handler (answering a CQ, or calling CQ); idle

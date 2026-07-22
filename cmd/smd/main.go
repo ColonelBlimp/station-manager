@@ -654,46 +654,12 @@ func run() error {
 	// scope by import graph). Only meaningful when the bridge is enabled and a
 	// rig is connected; otherwise TxReady() stays false and arming is refused.
 	ft8Svc.SetTxKeyer(ft8Keyer{bridgeSvc})
-	// Self-decode filter: drop SM's own transmissions from the decode feed (the rig
-	// loops TX audio back into capture, so a keyed slot decodes as our own call on
-	// our TX offset). Provider resolves the CURRENT logbook's callsign (ADR 0055) so
-	// switching the current logbook re-points the filter without a restart. This
-	// feeds ONLY self-decode filtering (dropOwnTransmissions), NOT transmitted
-	// identity.
-	//
-	// On a transient DB error / 500ms timeout it reuses the LAST resolved call, not
-	// the config identity: config may hold a DIFFERENT call than the current logbook
-	// and would filter out a REAL station's decodes (codex review of 8b3afe75); an
-	// empty result would instead leak our own TX into the decode/activity/occupancy
-	// views (codex review of 23907ffd). The cache satisfies both — correct in the
-	// common case, and never wrong-filters. The lookup is bounded so it can't stall
-	// the per-slot decode path (the DB layer's default 10s timeout would blow the
-	// FT8 late-TX window). This whole dance is why ADR 0055 gap #6 (pin identity at
-	// arm) is the durable fix.
-	var stationCallMu sync.Mutex
-	var lastStationCall string
-	ft8Svc.SetStationCall(func() string {
-		snap := cfgSvc.Snapshot()
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		defer cancel()
-		lbCall, err := dbSvc.LogbookCallsignByIDWithContext(ctx, snap.DefaultLogbookID)
-		var resolved string
-		switch {
-		case err == nil:
-			resolved = strings.TrimSpace(lbCall)
-		case stderr.Is(err, errors.ErrNotFound):
-			// No logbook yet (pre-setup) → config IS the identity.
-			resolved = strings.TrimSpace(snap.LoggingStation.StationCallsign)
-		default:
-			// Transient error / timeout → fall through to the cached value.
-		}
-		stationCallMu.Lock()
-		defer stationCallMu.Unlock()
-		if resolved != "" {
-			lastStationCall = resolved
-		}
-		return lastStationCall
-	})
+	// Self-decode filtering (dropping SM's own TX self-decoded off residual rig
+	// TX-audio bleed) reads the ACTIVE session's pinned callsign directly from the
+	// sequencer (ADR 0055, pin-at-arm) — no per-slot DB lookup, no fallback, no
+	// timeout on the decode path. The call was resolved ONCE when the exchange was
+	// armed (the /v1/ft8/qso/* handlers) and carried on the exchange, so nothing
+	// needs to be wired here.
 	// Gate FT8 capture on the rig/CAT being live — only when the bridge is
 	// enabled (CAT configured). Without it, the daemon would grab the microphone
 	// as soon as the FT8 view opens (e.g. SPA reopens to FT8 on PC boot) even with
@@ -734,15 +700,11 @@ func run() error {
 			if dialMHz, ok := bridgeSvc.CurrentDialMHz(); ok {
 				c.DialFreqMHz = dialMHz
 			}
-			// STATION_CALLSIGN is the CURRENT logbook's callsign (ADR 0055), not the
-			// config field — so a logged FT8 QSO records the call actually on the air
-			// under the current-logbook selection. Fall back to the config value when
-			// the logbook can't be read.
-			if lbCall, lberr := dbSvc.LogbookCallsignByIDWithContext(ctx, snap.DefaultLogbookID); lberr == nil {
-				if call := strings.TrimSpace(lbCall); call != "" {
-					snap.LoggingStation.StationCallsign = call
-				}
-			}
+			// STATION_CALLSIGN is derived by qsoservice.Submit from the target logbook
+			// (ADR 0055 / Slice B) — whatever BuildQso sets is overwritten there — so
+			// nothing to resolve here. The logbook is the CURRENT default; pinning the
+			// ARM-TIME logbook_id (so a mid-exchange logbook switch can't relabel the
+			// QSO — ADR 0055 gap #6 logging half) is a follow-up.
 			q := ft8.BuildQso(c, snap.LoggingStation, snap.DefaultLogbookID, time.Now().UTC())
 			// ARRL Field Day RST_RCVD default (config ft8.field_day.default_rst_rcvd):
 			// FD exchanges class/section, not a report, so we never receive an RST.

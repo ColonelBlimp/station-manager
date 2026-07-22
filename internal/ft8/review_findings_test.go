@@ -12,6 +12,21 @@ import (
 
 // --- H1: a completed QSO is logged only after the final rung TRANSMITS ------
 
+// TestSequencer_ActiveCallsign covers ADR 0055 pin-at-arm: the active session
+// exposes the callsign pinned at StartQso for the self-decode filter; idle (and
+// after Abandon) it's empty, so nothing of ours is filtered.
+func TestSequencer_ActiveCallsign(t *testing.T) {
+	s := newTestSeq(&seqRecorder{})
+	require.Equal(t, "", s.ActiveCallsign(), "idle sequencer has no active call")
+
+	require.NoError(t, s.StartQso("7Q1XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	require.Equal(t, "7Q1XYZ", s.ActiveCallsign(), "active session exposes the pinned call")
+
+	s.Abandon()
+	require.Equal(t, "", s.ActiveCallsign(), "abandoned session has no active call")
+}
+
 // TestSequencer_FinalRungAsyncFailDoesNotLog: the 73 is queued (transmit returns
 // nil) but the transmission then fails on air (onDone(false)). No QSO must be
 // logged (review H1) — the session still ends.

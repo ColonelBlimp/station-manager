@@ -741,15 +741,6 @@ func (s *Service) SetDecodeSink(fn func(DecodeReport)) {
 	s.decodeSink = fn
 }
 
-// SetStationCall injects a provider for the operator's own callsign, used to drop
-// SM's OWN transmissions from the decode feed — the rig loops TX audio back into the
-// capture input, so a keyed slot self-decodes as our own call on our TX offset. Set
-// once during wiring, before Start; cmd/smd wires it to live config. Nil → no
-// filtering. Kept as DI (a provider func) so internal/ft8 stays free of config.
-func (s *Service) SetStationCall(fn func() string) {
-	s.stationCall = fn
-}
-
 // SetExchangePath records the operator's antenna-path choice for the active
 // exchange — "S"/"short" or "L"/"long" (case-insensitive). Logging-only: it
 // annotates the QSO the exchange logs (ADIF ANT_PATH + the short/long

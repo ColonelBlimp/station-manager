@@ -186,13 +186,17 @@ ADR under-specified. They must be resolved during implementation:
    only checks *stored* QSOs); completion then submits against a missing logbook
    and loses the contact. Pin the selected logbook (or reject deletion) while an
    FT8 session references it (related to gap 1).
-6. **FT8 identity should be PINNED at arm.** The shipped fix resolves the current
-   logbook's callsign per-lookup — fail-closed on a transient DB error, bounded
-   timeout on the per-slot decode path (codex review of c93da89b #1/#2). The
-   robust design resolves the callsign ONCE when the FT8 session is armed and
-   holds it for the session, so TX and the logged QSO cannot diverge even if the
-   current logbook is switched mid-exchange, and no DB I/O touches the real-time
-   decode path at all.
+6. **FT8 identity pinned at arm.** DONE for the two on-air paths, which ends the
+   self-decode-filter review loop (4 rounds): the callsign is resolved ONCE at arm
+   (the `/v1/ft8/qso/*` handlers, fail-closed) and carried on the exchange; the
+   **self-decode filter** reads it via `Sequencer.ActiveCallsign()` (no per-slot DB
+   lookup, no fallback, no cache — all that code deleted), and **TX** uses the same
+   pinned exchange call. REMAINING (logging half): the QSO still logs to the
+   CURRENT default logbook at completion — `qsoservice.Submit` derives
+   `STATION_CALLSIGN` from whichever logbook the sink passes — so a mid-exchange
+   logbook *switch* could still relabel the QSO. The fix is to pin the
+   **logbook_id** at arm (thread it through `Start*` → exchange → `CompletedQso`,
+   submit to it), not the callsign; a focused follow-up, and it also closes gap 5.
 
 ## References
 

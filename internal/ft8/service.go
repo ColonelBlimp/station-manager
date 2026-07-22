@@ -176,14 +176,6 @@ type Service struct {
 	// consumer (one-way import), same as qsoLogger.
 	decodeSink func(DecodeReport)
 
-	// stationCall returns the operator's own callsign, used to drop SM's OWN
-	// transmissions from the decode feed (self-decode filter — the rig loops TX
-	// audio back into capture). Injected via SetStationCall before Start; nil → no
-	// filtering. A provider (not a static string) so a My Station callsign change
-	// takes effect without a restart. Read in decodeLoop (set-before-Start, same
-	// happens-before contract as qsoLogger / decodeSink).
-	stationCall func() string
-
 	// txSlots is a small ring of the StartUTCs of recent slots the FT8 TX controller
 	// keyed (via txCtrl.onTransmit, recorded only after PTT engages). decodeLoop skips
 	// decode + occupancy for those slots: the captured audio is our own transmission
@@ -740,10 +732,11 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		if !txSlot {
 			msgs = DecodeSlot(slot.Samples, osd, s.log)
 			// Drop our own transmissions self-decoded off residual rig TX-audio bleed,
-			// so Band Activity / the sequencer never see our own signal. No-op when idle
-			// (nothing keyed decodes as us) or no station call is wired.
-			if s.stationCall != nil {
-				msgs = dropOwnTransmissions(msgs, s.stationCall())
+			// so Band Activity / the sequencer never see our own signal. The callsign
+			// is the ACTIVE session's pinned call (ADR 0055, pin-at-arm) — no per-slot
+			// DB lookup, no fallback: idle → "" → no-op (nothing of ours is on the air).
+			if oc := s.seq.ActiveCallsign(); oc != "" {
+				msgs = dropOwnTransmissions(msgs, oc)
 			}
 		}
 
