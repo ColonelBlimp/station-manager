@@ -384,11 +384,20 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // handler maps it to a 400.
 var errPutValidation = stderr.New("api: config validation failed")
 
-// errSetupLogbookCallsignMismatch is returned by seedDefaultLogbook when a
-// logbook already exists at the target default id but under a DIFFERENT
-// callsign than the one being set up. Reusing it would seed a default logbook
-// whose callsign can never match live submits; the handler maps this to a 409.
-var errSetupLogbookCallsignMismatch = stderr.New("api: setup default logbook callsign mismatch")
+// setupLogbookMismatchError is returned by seedDefaultLogbook when a logbook
+// already exists at the target default id but under a DIFFERENT callsign than
+// the one being set up. Reusing it would seed a default logbook whose callsign
+// can never match live submits (review 2026-07-22 #1), so setup is rejected —
+// and recovery stays MANUAL by design (operator's Option C on the codex review
+// of e5da1945 #1: the API deliberately offers no clear-the-default path). It
+// carries the existing callsign so the 409 can tell the operator exactly which
+// callsign to set up under (the other recovery is removing that logbook from the
+// database directly).
+type setupLogbookMismatchError struct{ existingCallsign string }
+
+func (e *setupLogbookMismatchError) Error() string {
+	return "api: setup default logbook callsign mismatch (existing callsign " + e.existingCallsign + ")"
+}
 
 // firstBlockingFinding returns the first non-warning (fatal) finding, or nil when
 // the config produced only advisories. A fatal finding is a 400 at PUT.
@@ -594,10 +603,12 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		id, err := s.seedDefaultLogbook(r, dry.DefaultLogbookID, dry.LoggingStation.StationCallsign)
 		if err != nil {
-			if stderr.Is(err, errSetupLogbookCallsignMismatch) {
+			var mismatch *setupLogbookMismatchError
+			if stderr.As(err, &mismatch) {
 				s.writeError(w, http.StatusConflict, "default_logbook_callsign_mismatch",
-					"a logbook already exists at the default id under a different callsign; "+
-						"choose a matching callsign or clear the default logbook", op)
+					fmt.Sprintf("a logbook already exists at the default id under callsign %q; "+
+						"set up under that callsign, or remove that logbook from the database before retrying",
+						mismatch.existingCallsign), op)
 				return
 			}
 			s.writeServerError(w, op, err, "db_error", "failed to seed default logbook")
@@ -697,7 +708,7 @@ func (s *Server) seedDefaultLogbook(r *http.Request, defaultID int64, callsign s
 		// (callsign_mismatch on every QSO). Surface it so the operator picks a
 		// clean default id or a matching callsign (review 2026-07-22 #1).
 		if !strings.EqualFold(strings.TrimSpace(existing.Callsign), strings.TrimSpace(callsign)) {
-			return 0, errSetupLogbookCallsignMismatch
+			return 0, &setupLogbookMismatchError{existingCallsign: existing.Callsign}
 		}
 		return existing.ID, nil
 	} else if !stderr.Is(err, errors.ErrNotFound) {

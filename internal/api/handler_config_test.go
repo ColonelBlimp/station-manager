@@ -320,6 +320,11 @@ func TestHandlePutConfig_SetupRejectsMismatchedDefaultLogbook(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "default_logbook_callsign_mismatch") {
 		t.Fatalf("body = %q, want default_logbook_callsign_mismatch", w.Body.String())
 	}
+	// The message must name the existing logbook's callsign so the operator knows
+	// exactly which call to set up under (recovery is manual — Option C).
+	if !strings.Contains(w.Body.String(), "G4ABC") {
+		t.Errorf("message should name the existing callsign G4ABC; got %s", w.Body.String())
+	}
 }
 
 func TestHandlePutConfig_OmittedBlocksPreserved(t *testing.T) {

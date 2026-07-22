@@ -14,11 +14,15 @@ import (
 )
 
 // maxSessionQsoUUIDs caps how many QSO UUIDs one session email/export request
-// may carry (review 2026-07-22 #6). Without it the only bound is the request
-// body, so a request could force thousands of DB fetches and a hugely amplified
-// ADIF attachment. A session is one operating sitting (tens to low hundreds);
-// 1000 is generous headroom. Shared by the export and email handlers.
-const maxSessionQsoUUIDs = 1000
+// may carry. The hard ceiling is already the 1 MiB request body (~26k UUIDs);
+// this is an explicit sanity bound BELOW that (review 2026-07-22 #6), set
+// generously so a legitimate long contest session still exports/emails through
+// its normal end-of-session controls — the session accumulates for the
+// browser-tab lifetime with no reset UI, so too low a cap silently strands a
+// large session (codex review of e5da1945 #2). 10000 is far above any realistic
+// single operating sitting yet still bounds the per-UUID fetch fan-out. Shared
+// by the export and email handlers.
+const maxSessionQsoUUIDs = 10000
 
 // SessionExportRequest is the SPA's POST body for a download: the canonical
 // UUIDs of the session QSOs to export, plus an optional filename. Same
