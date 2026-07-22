@@ -58,15 +58,20 @@ func TestCurrentStationCallsign_FromCurrentLogbook(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("set config callsign: %v", err)
 	}
-	if got := srv.currentStationCallsign(ctx); got != "7Q5MLV" {
+	if got, _ := srv.currentStationIdentity(ctx); got != "7Q5MLV" {
 		t.Errorf("fallback = %q, want config 7Q5MLV", got)
 	}
 
 	// Seed the default logbook (id 1 == default_logbook_id) under a DIFFERENT
-	// callsign → FT8 now resolves the logbook's callsign, not the config field.
+	// callsign → FT8 now resolves the logbook's callsign, not the config field,
+	// AND returns the logbook_id to pin at arm.
 	createTestLogbook(t, srv, "Event", "7Q1XYZ")
-	if got := srv.currentStationCallsign(ctx); got != "7Q1XYZ" {
+	got, lbID := srv.currentStationIdentity(ctx)
+	if got != "7Q1XYZ" {
 		t.Errorf("current = %q, want the logbook's 7Q1XYZ", got)
+	}
+	if lbID != 1 {
+		t.Errorf("logbookID = %d, want the default 1 (to pin at arm)", lbID)
 	}
 }
 

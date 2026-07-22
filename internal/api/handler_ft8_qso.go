@@ -14,27 +14,32 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
-// currentStationCallsign resolves the callsign FT8 transmits + logs under: the
-// CURRENT logbook's callsign (default_logbook_id), per ADR 0055 — so FT8 follows
-// the shell's current-logbook selection instead of a global config field.
+// currentStationIdentity resolves, from ONE config snapshot, the FT8 station
+// identity to pin at arm (ADR 0055): the callsign FT8 transmits + logs under
+// (the CURRENT logbook's callsign) AND the logbook_id that call came from. Both
+// are pinned into the FT8 session so the QSO logs to the book it started under,
+// even if the shell's current-logbook selection changes mid-exchange.
 //
-// It fails CLOSED on a transient DB error: falling back to the config call there
-// could transmit the wrong call (config A) while qsoservice logs the logbook's
-// (call B) once the DB recovers (codex review of c93da89b, #1). The config
-// fallback applies only when the logbook is genuinely absent (pre-setup) or
-// empty; any other error returns "" so the caller refuses to arm/transmit.
-func (s *Server) currentStationCallsign(ctx context.Context) string {
+// The callsign fails CLOSED on a transient DB error: falling back to the config
+// call there could transmit the wrong call while qsoservice logs the logbook's
+// once the DB recovers (codex review of c93da89b, #1). The config fallback
+// applies only when the logbook is genuinely absent (pre-setup) or empty; any
+// other error returns callsign "" so the caller refuses to arm/transmit.
+// logbookID is always the current default (needed only when the callsign is
+// non-empty, i.e. when we actually arm).
+func (s *Server) currentStationIdentity(ctx context.Context) (callsign string, logbookID int64) {
 	snap := s.cfg.Snapshot()
-	lbCall, err := s.db.LogbookCallsignByIDWithContext(ctx, snap.DefaultLogbookID)
+	logbookID = snap.DefaultLogbookID
+	lbCall, err := s.db.LogbookCallsignByIDWithContext(ctx, logbookID)
 	if err == nil {
 		if c := strings.TrimSpace(lbCall); c != "" {
-			return c
+			return c, logbookID
 		}
 	}
 	if err == nil || stderr.Is(err, errors.ErrNotFound) {
-		return strings.TrimSpace(snap.LoggingStation.StationCallsign)
+		return strings.TrimSpace(snap.LoggingStation.StationCallsign), logbookID
 	}
-	return ""
+	return "", logbookID
 }
 
 // validFt8SlotUTC reports whether v is the RFC3339 UTC timestamp the FT8
@@ -131,7 +136,7 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ls := s.cfg.Snapshot().LoggingStation
-	ourCall := s.currentStationCallsign(r.Context())
+	ourCall, logbookID := s.currentStationIdentity(r.Context())
 	if ourCall == "" {
 		s.writeError(w, http.StatusBadRequest, "no_station_callsign",
 			"set your station callsign in My Station before transmitting", op)
@@ -150,15 +155,15 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 		// ARRL Field Day: our class+section come from ft8.field_day config (read by
 		// the Service), not the client. theirGrid is still logged (bearing/enrichment).
 		err = s.ft8.StartQsoFd(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID)
 	case "type4":
 		// Reduced type-4 (nonstandard/compound call, ADR 0048): no grid/report on the
 		// wire, so we log the measured SNR as RST_SENT (like FD).
 		err = s.ft8.StartQsoT4(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID)
 	default:
 		err = s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID)
 	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)
@@ -204,14 +209,14 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ls := s.cfg.Snapshot().LoggingStation
-	ourCall := s.currentStationCallsign(r.Context())
+	ourCall, logbookID := s.currentStationIdentity(r.Context())
 	if ourCall == "" {
 		s.writeError(w, http.StatusBadRequest, "no_station_callsign",
 			"set your station callsign in My Station before calling CQ", op)
 		return
 	}
 
-	if err := s.ft8.StartCallCq(ourCall, ls.MyGridsquare, req.OffsetHz, req.OperatingFreqMHz, req.TxParity); err != nil {
+	if err := s.ft8.StartCallCq(ourCall, ls.MyGridsquare, req.OffsetHz, req.OperatingFreqMHz, req.TxParity, logbookID); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}
@@ -275,7 +280,7 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 	// logbook can't be resolved (pre-setup, or a fail-closed transient DB error)
 	// → refuse to transmit rather than key the wrong call (codex review of
 	// 23907ffd, #1).
-	ourCall := s.currentStationCallsign(r.Context())
+	ourCall, logbookID := s.currentStationIdentity(r.Context())
 	if ourCall == "" {
 		s.writeError(w, http.StatusBadRequest, "no_station_callsign",
 			"set your station callsign in My Station before transmitting", op)
@@ -293,14 +298,14 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 	case "fd":
 		// Field Day: their class+section came from the picked call; ours from config.
 		err = s.ft8.StartWorkCallerFd(ourCall, req.TheirCall, req.TheirGrid,
-			req.TheirClass, req.TheirSection, req.TheirSnr, req.SlotUTC, req.OffsetHz, req.OperatingFreqMHz)
+			req.TheirClass, req.TheirSection, req.TheirSnr, req.SlotUTC, req.OffsetHz, req.OperatingFreqMHz, logbookID)
 	case "type4":
 		// Reduced type-4 (nonstandard/compound caller, ADR 0048): no report on the wire.
 		err = s.ft8.StartWorkCallerT4(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID)
 	default:
 		err = s.ft8.StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID)
 	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)

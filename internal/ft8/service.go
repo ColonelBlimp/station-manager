@@ -170,6 +170,14 @@ type Service struct {
 	// created after wiring — happens-before holds).
 	qsoLogger func(ctx context.Context, c CompletedQso)
 
+	// pinnedLogbookID is the default_logbook_id captured when the CURRENT session
+	// was armed (ADR 0055 pin-at-arm, logging half). Stored by the Start* methods
+	// (handler goroutine) and read in onComplete (decode goroutine) to stamp
+	// CompletedQso.LogbookID, so the QSO logs to the book it was started under —
+	// not whatever the default is at completion. Atomic: one int64 across those
+	// two goroutines. Set once per session (survives a Call-CQ pile-up's contacts).
+	pinnedLogbookID atomic.Int64
+
 	// decodeSink observes every slot's decodes (e.g. the PSK Reporter uploader);
 	// injected via SetDecodeSink before Start. nil = no observer. Called from the
 	// decode goroutine after the SSE publish. DI keeps internal/ft8 free of the
@@ -238,6 +246,9 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		// read+clear must share one lock hold, or a selection landing between
 		// them is silently swallowed.
 		c.AntPath, _ = s.consumeExchangePath() // completion has no restore; the token is unused
+		// Log to the logbook PINNED at arm (ADR 0055), not the current default —
+		// so a mid-exchange logbook switch can't relabel or misroute the QSO.
+		c.LogbookID = s.pinnedLogbookID.Load()
 		if s.qsoLogger != nil {
 			s.qsoLogger(s.base(), c)
 		}

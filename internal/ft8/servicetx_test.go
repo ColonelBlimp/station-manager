@@ -84,7 +84,7 @@ func TestValidateTxOffset_RejectsOutOfPassband(t *testing.T) {
 
 	// The sequenced start paths share the gate.
 	require.ErrorIs(t,
-		s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42", "2026-06-10T14:30:00Z", 4000, 14.074),
+		s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42", "2026-06-10T14:30:00Z", 4000, 14.074, 1),
 		ErrTxBadOffset)
 }
 
@@ -189,9 +189,23 @@ func TestStartSession_RefusesWhenRigBecomesUnready(t *testing.T) {
 	require.NoError(t, s.ArmTx(true))
 	k.setNotReady(true) // rig disconnects / loses identity after arming
 	now := time.Now().UTC().Format(time.RFC3339)
-	require.ErrorIs(t, s.StartQso("7Q5MLV", "KH78", "K1ABC", "FN42", now, 1500, 14.074), ErrTxNotReady)
-	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074, ""), ErrTxNotReady)
-	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074), ErrTxNotReady)
+	require.ErrorIs(t, s.StartQso("7Q5MLV", "KH78", "K1ABC", "FN42", now, 1500, 14.074, 1), ErrTxNotReady)
+	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074, "", 1), ErrTxNotReady)
+	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1), ErrTxNotReady)
+}
+
+// TestService_LogbookPinnedOnComplete covers ADR 0055 (logging half): the
+// logbook_id pinned at arm is stamped onto the CompletedQso at completion, so a
+// QSO logs to the book it started under — not the current default.
+func TestService_LogbookPinnedOnComplete(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	var logged CompletedQso
+	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged = c })
+
+	s.pinnedLogbookID.Store(42) // as a Start* pins it at arm
+	s.seq.onComplete(CompletedQso{TheirCall: "K1ABC"})
+
+	require.Equal(t, int64(42), logged.LogbookID)
 }
 
 // TestStartWorkCaller_Gating: the work-a-caller entry point shares the arm gate with
@@ -200,12 +214,12 @@ func TestStartWorkCaller_Gating(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	t.Run("refused when disarmed", func(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
-		require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074), ErrTxNotArmed)
+		require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1), ErrTxNotArmed)
 	})
 	t.Run("commits when armed", func(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 		require.NoError(t, s.ArmTx(true))
-		require.NoError(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074))
+		require.NoError(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1))
 		require.True(t, s.seq.Active(), "an armed work-a-caller start commits a session")
 		s.AbandonQso()
 	})
@@ -405,10 +419,10 @@ func TestStartQso_RejectedStartKeepsExchangePath(t *testing.T) {
 	// theirSlot = the CURRENT wall-clock slot, so its parity matches "now" and
 	// fireOpening declines to fire (no TX goroutine — deterministic test).
 	theirSlot := slotStart(time.Now().UTC()).Format(time.RFC3339)
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", theirSlot, 1500, 14.074))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", theirSlot, 1500, 14.074, 1))
 	s.SetExchangePath("L") // operator picks long path for the ACTIVE exchange
 
-	err := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31", theirSlot, 1500, 14.074)
+	err := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31", theirSlot, 1500, 14.074, 1)
 	require.Error(t, err, "second start while a QSO is active is rejected")
 	require.Equal(t, antPathLong, s.exchangePath(),
 		"a rejected start must not reset the active exchange's path")

@@ -161,12 +161,17 @@ ADR under-specified. They must be resolved during implementation:
    can't re-insert `"Default"` because the soft-deleted row still holds the
    unique-name slot). Retire it only once deletion **atomically re-points or
    clears** the default.
-2. **Forwarding is global — this likely GATES multi-callsign use.** Every live
-   submit queues every enabled forwarder, but a QRZ key / ClubLog credential is
-   bound to ONE remote callsign. QSOs logged under a *different* local logbook
-   would upload to the **wrong remote account** or fail terminally. Forwarders
-   need a per-logbook/callsign binding (or routing rule) before operating a
-   second call is safe.
+2. **Forwarding + cloud backup are global — this GATES mid-session logbook
+   switching.** Every live submit queues every enabled forwarder, but a QRZ key /
+   ClubLog credential is bound to ONE remote callsign; and the **SMC reconciler is
+   constructed once at boot** with `cfg.DefaultLogbookID` (`cmd/smd/main.go`), so it
+   only backs up the boot-time logbook. QSOs logged under a *different* local
+   logbook would upload to the **wrong remote account** / not be cloud-reconciled.
+   **HARD GUARDRAIL (operator, 2026-07-22):** the shell's current-logbook selector
+   (Slice E) must NOT allow switching the logbook mid-session until forwarders have
+   a per-logbook/callsign binding AND the SMC reconciler follows the current
+   logbook. The FT8 logbook_id pin (gap 6) makes *local* logging correct across a
+   switch, but that's not sufficient — the remote routing must be solved first.
 3. **Migration must preserve existing identity.** An upgrade with a set
    `OPERATOR`/`MY_NAME` must seed the roster + `default_operator` from them (the
    `SeedOperatorRoster` fill does this). When `owner_callsign` eventually moves to
@@ -186,17 +191,19 @@ ADR under-specified. They must be resolved during implementation:
    only checks *stored* QSOs); completion then submits against a missing logbook
    and loses the contact. Pin the selected logbook (or reject deletion) while an
    FT8 session references it (related to gap 1).
-6. **FT8 identity pinned at arm.** DONE for the two on-air paths, which ends the
-   self-decode-filter review loop (4 rounds): the callsign is resolved ONCE at arm
-   (the `/v1/ft8/qso/*` handlers, fail-closed) and carried on the exchange; the
-   **self-decode filter** reads it via `Sequencer.ActiveCallsign()` (no per-slot DB
-   lookup, no fallback, no cache — all that code deleted), and **TX** uses the same
-   pinned exchange call. REMAINING (logging half): the QSO still logs to the
-   CURRENT default logbook at completion — `qsoservice.Submit` derives
-   `STATION_CALLSIGN` from whichever logbook the sink passes — so a mid-exchange
-   logbook *switch* could still relabel the QSO. The fix is to pin the
-   **logbook_id** at arm (thread it through `Start*` → exchange → `CompletedQso`,
-   submit to it), not the callsign; a focused follow-up, and it also closes gap 5.
+6. **FT8 identity pinned at arm — DONE (both filter and logging).** The callsign
+   is resolved ONCE at arm (the `/v1/ft8/qso/*` handlers, fail-closed) and carried
+   on the exchange; the **self-decode filter** reads it via
+   `Sequencer.ActiveCallsign()` (no per-slot DB lookup / fallback / cache — all
+   deleted, ending the 4-round review loop), and **TX** uses the same pinned call.
+   The **logbook_id is pinned too**: `currentStationIdentity` returns
+   `(callsign, logbook_id)` from one snapshot; the 7 Service `Start*` methods store
+   it (`pinnedLogbookID`); the Service's `onComplete` stamps `CompletedQso.LogbookID`;
+   the sink logs to that book (not the current default at completion). So TX, the
+   self-filter, and the logged QSO all use the arm-time identity — a mid-exchange
+   logbook switch can no longer relabel or misroute a QSO. Pinning the logbook_id
+   is also the prerequisite for closing gap 5 (a delete-guard can now consult the
+   active session's pinned book — small follow-on).
 
 ## References
 

@@ -700,12 +700,16 @@ func run() error {
 			if dialMHz, ok := bridgeSvc.CurrentDialMHz(); ok {
 				c.DialFreqMHz = dialMHz
 			}
-			// STATION_CALLSIGN is derived by qsoservice.Submit from the target logbook
-			// (ADR 0055 / Slice B) — whatever BuildQso sets is overwritten there — so
-			// nothing to resolve here. The logbook is the CURRENT default; pinning the
-			// ARM-TIME logbook_id (so a mid-exchange logbook switch can't relabel the
-			// QSO — ADR 0055 gap #6 logging half) is a follow-up.
-			q := ft8.BuildQso(c, snap.LoggingStation, snap.DefaultLogbookID, time.Now().UTC())
+			// Log to the logbook PINNED at arm (c.LogbookID, ADR 0055) — NOT the
+			// current default — so a mid-exchange logbook switch can't relabel or
+			// misroute the QSO. STATION_CALLSIGN is then derived by qsoservice.Submit
+			// from that logbook (Slice B). Defensive fallback to the current default if
+			// somehow unpinned (0 — shouldn't happen, a completion implies a Start).
+			logbookID := c.LogbookID
+			if logbookID < 1 {
+				logbookID = snap.DefaultLogbookID
+			}
+			q := ft8.BuildQso(c, snap.LoggingStation, logbookID, time.Now().UTC())
 			// ARRL Field Day RST_RCVD default (config ft8.field_day.default_rst_rcvd):
 			// FD exchanges class/section, not a report, so we never receive an RST.
 			// RST_SENT is the measured SNR (set by BuildQso); some OQRS systems require

@@ -206,7 +206,7 @@ func TestStartCallCq_RejectsOperatorPick(t *testing.T) {
 	require.NoError(t, s.ArmTx(true))
 	defer func() { _ = s.ArmTx(false) }()
 
-	err := s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "")
+	err := s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "", 1)
 	require.ErrorIs(t, err, ErrCallerAnswerModeUnsupported,
 		"operator_pick must be rejected, not silently auto-picked (review H2)")
 	require.False(t, s.seq.Active(), "no session for an unsupported answer mode")
@@ -225,7 +225,7 @@ func TestService_StartDisarmRace(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_ = s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", slot, 1500, 14.074)
+			_ = s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", slot, 1500, 14.074, 1)
 		}()
 		go func() {
 			defer wg.Done()

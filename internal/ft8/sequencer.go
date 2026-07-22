@@ -153,6 +153,12 @@ type QsoStatus struct {
 // CompletedQso is captured when an exchange finishes (73 sent) — the data e4 maps
 // to a types.Qso (BuildQso) and submits via qsoservice.
 type CompletedQso struct {
+	// LogbookID is the logbook PINNED when the exchange was armed (ADR 0055) —
+	// the QSO is logged there, not to whatever the current default logbook is at
+	// completion, so a mid-exchange logbook switch can't relabel or misroute it.
+	// Stamped by the Service's onComplete from the arm-time value. 0 = unpinned
+	// (defensive; the sink falls back to the current default).
+	LogbookID      int64
 	TheirCall      string
 	TheirGrid      string
 	OurReport      int // the report WE sent (our SNR of their signal)
@@ -510,7 +516,13 @@ func (s *Sequencer) ActiveCallsign() string {
 		}
 	case seqCalling, seqWorking:
 		return s.ourCall
+	default:
+		// seqIdle — no active session; nothing is keyed, so there's no own-call to
+		// filter. A new TX mode MUST add its case above, or self-decode filtering
+		// silently degrades for it (its TX would leak back into the decode feed).
 	}
+	// Reached only if an active mode's exchange pointer is unexpectedly nil (an
+	// invariant violation) — treat as no active call rather than dereference.
 	return ""
 }
 
