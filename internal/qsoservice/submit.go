@@ -265,21 +265,24 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 	qso.QsoDetails.Freq = freqMHz
 	qso.LoggingStation.StationCallsign = stationCallsign
 
-	// OPERATOR + MY_NAME (ADR 0055): default from the configured current operator
-	// (the default_operator roster entry) when the record leaves OPERATOR empty,
-	// so the roster is the fallback identity and configuring it actually takes
-	// effect (codex review of 23d2df7a, #1). A record that carries OPERATOR wins
-	// (the SPA's current-operator pick, or a one-off guest op). Live submit only —
-	// an import keeps its own OPERATOR/MY_NAME.
-	if !isImport && s.Config != nil && strings.TrimSpace(qso.LoggingStation.Operator) == "" {
+	// OPERATOR + MY_NAME (ADR 0055): the roster is the fallback identity, so
+	// configuring it actually takes effect. Live submit only — an import keeps its
+	// own OPERATOR/MY_NAME. The two fields default INDEPENDENTLY (codex review of
+	// c391ff3b): OPERATOR defaults from default_operator when the record omits it
+	// (a supplied OPERATOR — the SPA's current-op pick, or a guest — wins); MY_NAME
+	// fills from the roster entry matching the EFFECTIVE OPERATOR whenever it's
+	// absent, even if OPERATOR itself was supplied.
+	if !isImport && s.Config != nil {
 		cfg := s.Config.Snapshot()
-		for i := range cfg.Operators {
-			if strings.EqualFold(cfg.Operators[i].Callsign, cfg.DefaultOperator) {
-				qso.LoggingStation.Operator = cfg.Operators[i].Callsign
-				if strings.TrimSpace(qso.LoggingStation.MyName) == "" {
+		if strings.TrimSpace(qso.LoggingStation.Operator) == "" {
+			qso.LoggingStation.Operator = strings.TrimSpace(cfg.DefaultOperator)
+		}
+		if op := strings.TrimSpace(qso.LoggingStation.Operator); op != "" && strings.TrimSpace(qso.LoggingStation.MyName) == "" {
+			for i := range cfg.Operators {
+				if strings.EqualFold(cfg.Operators[i].Callsign, op) {
 					qso.LoggingStation.MyName = cfg.Operators[i].Name
+					break
 				}
-				break
 			}
 		}
 	}

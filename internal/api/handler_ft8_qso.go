@@ -133,9 +133,6 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 	ls := s.cfg.Snapshot().LoggingStation
 	ourCall := s.currentStationCallsign(r.Context())
 	if ourCall == "" {
-		ourCall = strings.TrimSpace(ls.Operator)
-	}
-	if ourCall == "" {
 		s.writeError(w, http.StatusBadRequest, "no_station_callsign",
 			"set your station callsign in My Station before transmitting", op)
 		return
@@ -209,9 +206,6 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 	ls := s.cfg.Snapshot().LoggingStation
 	ourCall := s.currentStationCallsign(r.Context())
 	if ourCall == "" {
-		ourCall = strings.TrimSpace(ls.Operator)
-	}
-	if ourCall == "" {
 		s.writeError(w, http.StatusBadRequest, "no_station_callsign",
 			"set your station callsign in My Station before calling CQ", op)
 		return
@@ -276,11 +270,12 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ls := s.cfg.Snapshot().LoggingStation
+	// TX identity is the CURRENT logbook's callsign (ADR 0055) — never OPERATOR
+	// (a club station's operator differs from its station call). Empty means the
+	// logbook can't be resolved (pre-setup, or a fail-closed transient DB error)
+	// → refuse to transmit rather than key the wrong call (codex review of
+	// 23907ffd, #1).
 	ourCall := s.currentStationCallsign(r.Context())
-	if ourCall == "" {
-		ourCall = strings.TrimSpace(ls.Operator)
-	}
 	if ourCall == "" {
 		s.writeError(w, http.StatusBadRequest, "no_station_callsign",
 			"set your station callsign in My Station before transmitting", op)

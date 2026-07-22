@@ -166,6 +166,18 @@ func TestSubmit_DefaultsOperatorFromRoster(t *testing.T) {
 	stored2, ferr := s.DB.FetchQsoByUUIDWithContext(ctx, res2.UUID)
 	require.NoError(t, ferr)
 	require.Equal(t, "2E0PQR", stored2.LoggingStation.Operator)
+
+	// OPERATOR supplied AND in the roster but MY_NAME absent → name filled from
+	// the roster entry, independently of the OPERATOR default.
+	named := base
+	named.ContactedStation.Call = "K3ABC"
+	named.LoggingStation.Operator = "G0XYZ"
+	res3, err := s.Submit(ctx, lbID, named, false)
+	require.NoError(t, err)
+	stored3, ferr := s.DB.FetchQsoByUUIDWithContext(ctx, res3.UUID)
+	require.NoError(t, ferr)
+	require.Equal(t, "G0XYZ", stored3.LoggingStation.Operator)
+	require.Equal(t, "Marc", stored3.LoggingStation.MyName)
 }
 
 // TestSubmitImport_ForwardSelection guards the dogfood-2026-06-23 fix at the
