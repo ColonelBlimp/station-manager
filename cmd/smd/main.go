@@ -661,12 +661,24 @@ func run() error {
 	// falling back to the config station_callsign when the logbook can't be read.
 	ft8Svc.SetStationCall(func() string {
 		snap := cfgSvc.Snapshot()
-		if lbCall, err := dbSvc.LogbookCallsignByIDWithContext(context.Background(), snap.DefaultLogbookID); err == nil {
+		// This provider is called on the timing-critical decode path (per slot for
+		// self-decode filtering), so the DB layer's default 10s timeout could blow
+		// the FT8 late-TX window — cap it hard (codex review of c93da89b, #2).
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		lbCall, err := dbSvc.LogbookCallsignByIDWithContext(ctx, snap.DefaultLogbookID)
+		if err == nil {
 			if call := strings.TrimSpace(lbCall); call != "" {
 				return call
 			}
 		}
-		return snap.LoggingStation.StationCallsign
+		// Config fallback ONLY when the logbook is genuinely absent (pre-setup);
+		// a transient error (incl. the 500ms timeout) fails closed (empty) so we
+		// never TX under a stale/wrong call while the QSO logs the logbook's (#1).
+		if err == nil || stderr.Is(err, errors.ErrNotFound) {
+			return snap.LoggingStation.StationCallsign
+		}
+		return ""
 	})
 	// Gate FT8 capture on the rig/CAT being live — only when the bridge is
 	// enabled (CAT configured). Without it, the daemon would grab the microphone

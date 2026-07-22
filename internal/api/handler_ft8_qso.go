@@ -16,17 +16,25 @@ import (
 
 // currentStationCallsign resolves the callsign FT8 transmits + logs under: the
 // CURRENT logbook's callsign (default_logbook_id), per ADR 0055 — so FT8 follows
-// the shell's current-logbook selection instead of a global config field. Falls
-// back to the config station_callsign when the logbook can't be read (pre-setup
-// / a transient DB error) so identity resolution never hard-fails.
+// the shell's current-logbook selection instead of a global config field.
+//
+// It fails CLOSED on a transient DB error: falling back to the config call there
+// could transmit the wrong call (config A) while qsoservice logs the logbook's
+// (call B) once the DB recovers (codex review of c93da89b, #1). The config
+// fallback applies only when the logbook is genuinely absent (pre-setup) or
+// empty; any other error returns "" so the caller refuses to arm/transmit.
 func (s *Server) currentStationCallsign(ctx context.Context) string {
 	snap := s.cfg.Snapshot()
-	if lbCall, err := s.db.LogbookCallsignByIDWithContext(ctx, snap.DefaultLogbookID); err == nil {
+	lbCall, err := s.db.LogbookCallsignByIDWithContext(ctx, snap.DefaultLogbookID)
+	if err == nil {
 		if c := strings.TrimSpace(lbCall); c != "" {
 			return c
 		}
 	}
-	return strings.TrimSpace(snap.LoggingStation.StationCallsign)
+	if err == nil || stderr.Is(err, errors.ErrNotFound) {
+		return strings.TrimSpace(snap.LoggingStation.StationCallsign)
+	}
+	return ""
 }
 
 // validFt8SlotUTC reports whether v is the RFC3339 UTC timestamp the FT8

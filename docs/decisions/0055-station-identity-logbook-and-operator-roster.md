@@ -174,17 +174,25 @@ ADR under-specified. They must be resolved during implementation:
    `OWNER_CALLSIGN` (not silently default to the call) — moot while owner stays
    config-sourced (the "no schema change" decision), but a prerequisite of the
    owner-on-logbook follow-up.
-4. **PSK Reporter identity switching is undefined.** The uploader captures the RX
-   callsign at startup for public reports + self-decode filtering and buffers
-   spots without per-spot identity; switching the current logbook would report
-   under the old call and could relabel buffered spots. Needs a flush /
-   partitioned-buffer transition tied to the current logbook — or an explicit
-   decision that PSK stays on the home call.
+4. **PSK Reporter identity switching is undefined** (confirmed by the c93da89b
+   review). The uploader captures the RX callsign at startup for public reports +
+   self-decode filtering and buffers spots without per-spot identity; switching
+   the current logbook would report under the old call and could relabel buffered
+   spots (`pskreporter.Service.SetReceiver` supports live changes but nothing
+   calls it). Needs a flush / partitioned-buffer transition tied to the current
+   logbook — or an explicit decision that PSK stays on the home call.
 5. **FT8-exchange delete race.** A freshly-selected secondary logbook is empty
    until an exchange completes, so another tab could delete it mid-air (deletion
    only checks *stored* QSOs); completion then submits against a missing logbook
    and loses the contact. Pin the selected logbook (or reject deletion) while an
    FT8 session references it (related to gap 1).
+6. **FT8 identity should be PINNED at arm.** The shipped fix resolves the current
+   logbook's callsign per-lookup — fail-closed on a transient DB error, bounded
+   timeout on the per-slot decode path (codex review of c93da89b #1/#2). The
+   robust design resolves the callsign ONCE when the FT8 session is armed and
+   holds it for the session, so TX and the logged QSO cannot diverge even if the
+   current logbook is switched mid-exchange, and no DB I/O touches the real-time
+   decode path at all.
 
 ## References
 
