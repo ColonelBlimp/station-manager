@@ -505,15 +505,18 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	// (double-start, operator error) restores the active exchange's choice; see
 	// restoreExchangePath for the accepted residual on that rare path.
 	prevPath, prevGen := s.consumeExchangePath()
+	// Stage the arm-time logbook to the session BEFORE the start (ADR 0055): each
+	// seq.Start* consumes it into s.logbookID under s.mu, ATOMICALLY with mode
+	// activation, and stamps it onto the CompletedQso. Staging-before-activation is
+	// the fix for the terminal-first-rung race — a post-start bind left a gap in which
+	// StartWorkCallerT4's sole RR73 could complete and snapshot a stale/zero logbook.
+	// A rejected start (ErrQsoInProgress) leaves the staged value unconsumed; the next
+	// start overwrites it (all serialised by seqGate), so no restore is needed here.
+	s.seq.setPendingLogbook(logbookID)
 	if err := s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
-	// Bind the arm-time logbook to the ACCEPTED session (ADR 0055) — only after
-	// the sequencer commits, so a rejected start (ErrQsoInProgress) can't clobber
-	// the active exchange's pin. The sequencer stamps it onto the CompletedQso at
-	// construction (under its lock), so completion can't read a newer session's id.
-	s.seq.bindLogbook(logbookID)
 	return nil
 }
 
@@ -548,15 +551,12 @@ func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int,
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()
+	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
+	s.seq.setPendingLogbook(logbookID)
 	if err := s.seq.StartQsoFd(ourCall, class, section, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
-	// Bind the arm-time logbook to the ACCEPTED session (ADR 0055) — only after
-	// the sequencer commits, so a rejected start (ErrQsoInProgress) can't clobber
-	// the active exchange's pin. The sequencer stamps it onto the CompletedQso at
-	// construction (under its lock), so completion can't read a newer session's id.
-	s.seq.bindLogbook(logbookID)
 	return nil
 }
 
@@ -595,15 +595,12 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()
+	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
+	s.seq.setPendingLogbook(logbookID)
 	if err := s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, txParity, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
-	// Bind the arm-time logbook to the ACCEPTED session (ADR 0055) — only after
-	// the sequencer commits, so a rejected start (ErrQsoInProgress) can't clobber
-	// the active exchange's pin. The sequencer stamps it onto the CompletedQso at
-	// construction (under its lock), so completion can't read a newer session's id.
-	s.seq.bindLogbook(logbookID)
 	return nil
 }
 
@@ -634,15 +631,12 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()
+	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
+	s.seq.setPendingLogbook(logbookID)
 	if err := s.seq.StartWorkCaller(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
-	// Bind the arm-time logbook to the ACCEPTED session (ADR 0055) — only after
-	// the sequencer commits, so a rejected start (ErrQsoInProgress) can't clobber
-	// the active exchange's pin. The sequencer stamps it onto the CompletedQso at
-	// construction (under its lock), so completion can't read a newer session's id.
-	s.seq.bindLogbook(logbookID)
 	return nil
 }
 
@@ -676,16 +670,13 @@ func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, t
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()
+	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
+	s.seq.setPendingLogbook(logbookID)
 	if err := s.seq.StartWorkCallerFd(ourCall, class, section, theirCall, theirGrid, theirClass, theirSection,
 		theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
-	// Bind the arm-time logbook to the ACCEPTED session (ADR 0055) — only after
-	// the sequencer commits, so a rejected start (ErrQsoInProgress) can't clobber
-	// the active exchange's pin. The sequencer stamps it onto the CompletedQso at
-	// construction (under its lock), so completion can't read a newer session's id.
-	s.seq.bindLogbook(logbookID)
 	return nil
 }
 
@@ -713,15 +704,12 @@ func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int,
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()
+	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
+	s.seq.setPendingLogbook(logbookID)
 	if err := s.seq.StartQsoT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
-	// Bind the arm-time logbook to the ACCEPTED session (ADR 0055) — only after
-	// the sequencer commits, so a rejected start (ErrQsoInProgress) can't clobber
-	// the active exchange's pin. The sequencer stamps it onto the CompletedQso at
-	// construction (under its lock), so completion can't read a newer session's id.
-	s.seq.bindLogbook(logbookID)
 	return nil
 }
 
@@ -748,15 +736,12 @@ func (s *Service) StartWorkCallerT4(ourCall, theirCall, theirGrid string, theirS
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()
+	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
+	s.seq.setPendingLogbook(logbookID)
 	if err := s.seq.StartWorkCallerT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
 	}
-	// Bind the arm-time logbook to the ACCEPTED session (ADR 0055) — only after
-	// the sequencer commits, so a rejected start (ErrQsoInProgress) can't clobber
-	// the active exchange's pin. The sequencer stamps it onto the CompletedQso at
-	// construction (under its lock), so completion can't read a newer session's id.
-	s.seq.bindLogbook(logbookID)
 	return nil
 }
 

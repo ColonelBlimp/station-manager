@@ -94,13 +94,15 @@ credentials, not merely per-logbook on/off of a shared (wrong-account) one.
 - **Two config sources** (`config.json` + DB). This ADR is the "what lives where"
   rule; `config.md` and the config SPA must state it so it does not confuse.
 - **Credentials move from `config.json` to the DB — this is NOT secret-neutral.**
-  `config.WriteJSON` forces `config.json` to `0600`, but SQLite creates its DB (and
-  WAL/SHM sidecars) at `0644` and the containing dir may be `0755`, so moving QRZ
-  keys / ClubLog passwords into the DB as-is exposes them to other local users. The
-  DB, its sidecars, and its directory MUST be tightened to owner-only before any
-  credential is stored (see Implementation requirements). The build-injected ClubLog
-  key (ADR 0054) is a separate mechanism, unaffected. Per-logbook credential entry
-  needs a config-SPA surface (the logbook editor), since the DB isn't hand-edited.
+  `config.WriteJSON` forces `config.json` to `0600`, but SQLite creates its DB and
+  WAL/SHM sidecars at `0644`. The immediate DB directory is already created `0700`
+  (owner-only, so it currently gates traversal), but the DB FILES themselves are
+  world-readable, and the backup directory is created `0755` — so a DB copy written
+  there would expose QRZ keys / ClubLog passwords to other local users. The DB files
+  (and any backup copies) MUST be tightened to `0600` before any credential is stored
+  (see Implementation requirements). The build-injected ClubLog key (ADR 0054) is a
+  separate mechanism, unaffected. Per-logbook credential entry needs a config-SPA
+  surface (the logbook editor), since the DB isn't hand-edited.
 - Enrichment is a *softer* per-logbook case than forwarding: a lookup's RESULT
   (the contacted station's data) is the same whichever of your accounts you query;
   only the CREDENTIAL may be per-callsign. Forwarding (which uploads to a specific
@@ -144,9 +146,14 @@ recorded here so they are not lost:
    run**. Otherwise an upgrade starts with no bindings — new QSOs are not queued,
    existing `qso_upload` rows have no worker, and lookup providers vanish.
 
-3. **The database must be owner-only (`0600`) before credentials move in** — the DB
-   file, its WAL/SHM sidecars, and the containing directory. See the corrected
-   Consequences bullet above; my original "secret-neutral" claim was wrong.
+3. **The database FILES must be `0600` before credentials move in** — the DB file and
+   its WAL/SHM sidecars (and any backup copies). The containing directories must be
+   `0700` (owner rwx), NOT `0600`: a directory needs its execute/search bit to be
+   traversable, so `0600` would make the DB path unreachable and the daemon could not
+   reopen SQLite or create WAL/SHM after a restart. The immediate DB dir is already
+   created `0700` (keep it); the real gaps are the `0644` DB files and the `0755`
+   backup dir. My original "secret-neutral" claim (and an earlier `0600`-on-directory
+   requirement) was wrong.
 
 4. **`POST /v1/smcloud/reconcile` must become multi-logbook aware.** It currently
    takes no logbook and returns one scalar summary (one `cloud_logbook_id`); once

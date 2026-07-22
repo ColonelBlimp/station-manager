@@ -56,18 +56,18 @@ func TestWorkCaller_HappyPath(t *testing.T) {
 	require.Equal(t, 1500.0, r.completed[0].OffsetHz)
 }
 
-// TestSequencer_LogbookPinnedToSession covers ADR 0055: the logbook bound at arm
-// (bindLogbook, called by the Service after a successful start) is stamped onto
-// the CompletedQso at completion — so the QSO logs to the book it STARTED under,
-// stamped under the sequencer lock, immune to a later current-logbook switch or a
-// rejected concurrent start.
+// TestSequencer_LogbookPinnedToSession covers ADR 0055: the logbook STAGED at arm
+// (setPendingLogbook, called by the Service BEFORE the start) is consumed into the
+// session ATOMICALLY with activation and stamped onto the CompletedQso at completion
+// — so the QSO logs to the book it STARTED under, immune to a later current-logbook
+// switch or a rejected concurrent start.
 func TestSequencer_LogbookPinnedToSession(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 
+	s.setPendingLogbook(42)
 	require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
-	s.bindLogbook(42)
 
 	driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC FN42", -12)})
 	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC R-08", -11)})

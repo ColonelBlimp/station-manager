@@ -367,6 +367,7 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.mode = seqAnswering
 	s.skipIfSilent = false
 	s.sessionGen++
+	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
 	s.ex = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
 	s.theirGrid = theirGrid
@@ -420,6 +421,7 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 	s.mode = seqAnsweringFd
 	s.skipIfSilent = false
 	s.sessionGen++
+	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
 	s.fdEx = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
@@ -531,14 +533,18 @@ func (s *Sequencer) ActiveCallsign() string {
 	return ""
 }
 
-// bindLogbook pins the arm-time logbook for the CURRENT session (ADR 0055),
-// called by the Service right after it accepts a start. The completion sites
-// stamp it onto the CompletedQso under this same lock, so a QSO logs to the book
-// it started under — regardless of a later current-logbook switch or a rejected
-// concurrent start that would otherwise clobber a service-global.
-func (s *Sequencer) bindLogbook(id int64) {
+// setPendingLogbook stages the arm-time logbook for the NEXT accepted start (ADR
+// 0055). The Service calls it (under seqGate) BEFORE seq.Start*; each Start* then
+// consumes it into s.logbookID under s.mu ATOMICALLY with mode activation, so the
+// pin lands with the session and no completion can observe an active session before
+// its logbook is set. Staging-BEFORE-activation is the fix for the terminal-first-rung
+// race: a post-activation bind left a gap in which StartWorkCallerT4's sole RR73 could
+// complete and snapshot a stale (or zero, first-session) logbook. A rejected start
+// (ErrQsoInProgress) leaves the staged value unconsumed and the active session's pin
+// untouched; the next start overwrites it — all starts are serialised by seqGate.
+func (s *Sequencer) setPendingLogbook(id int64) {
 	s.mu.Lock()
-	s.logbookID = id
+	s.pendingLogbookID = id
 	s.mu.Unlock()
 }
 

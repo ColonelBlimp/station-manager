@@ -94,6 +94,27 @@ func TestType4Work_HappyPath(t *testing.T) {
 	require.False(t, r.completed[0].HasTheirReport)
 }
 
+// TestType4Work_LogbookPinnedToSession (ADR 0055 regression): work-a-caller-T4 is the
+// TERMINAL-FIRST-RUNG path the review flagged — its sole RR73 can complete in the very
+// first slot, so the logbook must be pinned AT ACTIVATION, not by a later bind that a
+// completion could outrun. Staging setPendingLogbook before the start and completing
+// immediately proves the pin lands with the session on this path (guards the consume at
+// the seqWorkingT4 activation site).
+func TestType4Work_LogbookPinnedToSession(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+
+	s.setPendingLogbook(99)
+	require.NoError(t, s.StartWorkCallerT4("7Q5MLV", "PJ4/NA2AA", "", 3,
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+
+	// The single RR73 rung completes in the first qualifying slot.
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("<...> PJ4/NA2AA", 3)})
+
+	require.Len(t, r.completed, 1)
+	require.Equal(t, int64(99), r.completed[0].LogbookID)
+}
+
 // TestType4Work_RetriesOnRfFailure: if the RR73 fails on air, the contact stays put and
 // the next slot retries (no premature log/idle).
 func TestType4Work_RetriesOnRfFailure(t *testing.T) {

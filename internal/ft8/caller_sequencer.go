@@ -53,6 +53,7 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	s.mode = seqCalling
 	s.skipIfSilent = false
 	s.sessionGen++
+	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
 	s.caller = nil
 	s.ourCall = call
 	s.ourGrid = grid
