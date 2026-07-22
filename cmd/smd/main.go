@@ -656,9 +656,18 @@ func run() error {
 	ft8Svc.SetTxKeyer(ft8Keyer{bridgeSvc})
 	// Self-decode filter: drop SM's own transmissions from the decode feed (the rig
 	// loops TX audio back into capture, so a keyed slot decodes as our own call on
-	// our TX offset). Provider reads live config so a My Station callsign change
-	// applies without a restart.
-	ft8Svc.SetStationCall(func() string { return cfgSvc.Snapshot().LoggingStation.StationCallsign })
+	// our TX offset). Provider resolves the CURRENT logbook's callsign (ADR 0055) —
+	// so switching the current logbook re-points the TX identity without a restart —
+	// falling back to the config station_callsign when the logbook can't be read.
+	ft8Svc.SetStationCall(func() string {
+		snap := cfgSvc.Snapshot()
+		if lbCall, err := dbSvc.LogbookCallsignByIDWithContext(context.Background(), snap.DefaultLogbookID); err == nil {
+			if call := strings.TrimSpace(lbCall); call != "" {
+				return call
+			}
+		}
+		return snap.LoggingStation.StationCallsign
+	})
 	// Gate FT8 capture on the rig/CAT being live — only when the bridge is
 	// enabled (CAT configured). Without it, the daemon would grab the microphone
 	// as soon as the FT8 view opens (e.g. SPA reopens to FT8 on PC boot) even with
@@ -698,6 +707,15 @@ func run() error {
 			// falling back to the SPA value only when the bridge has no dial yet.
 			if dialMHz, ok := bridgeSvc.CurrentDialMHz(); ok {
 				c.DialFreqMHz = dialMHz
+			}
+			// STATION_CALLSIGN is the CURRENT logbook's callsign (ADR 0055), not the
+			// config field — so a logged FT8 QSO records the call actually on the air
+			// under the current-logbook selection. Fall back to the config value when
+			// the logbook can't be read.
+			if lbCall, lberr := dbSvc.LogbookCallsignByIDWithContext(ctx, snap.DefaultLogbookID); lberr == nil {
+				if call := strings.TrimSpace(lbCall); call != "" {
+					snap.LoggingStation.StationCallsign = call
+				}
 			}
 			q := ft8.BuildQso(c, snap.LoggingStation, snap.DefaultLogbookID, time.Now().UTC())
 			// ARRL Field Day RST_RCVD default (config ft8.field_day.default_rst_rcvd):

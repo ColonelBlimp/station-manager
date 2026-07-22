@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	stderr "errors"
 	"fmt"
 	"math"
@@ -12,6 +13,21 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
+
+// currentStationCallsign resolves the callsign FT8 transmits + logs under: the
+// CURRENT logbook's callsign (default_logbook_id), per ADR 0055 — so FT8 follows
+// the shell's current-logbook selection instead of a global config field. Falls
+// back to the config station_callsign when the logbook can't be read (pre-setup
+// / a transient DB error) so identity resolution never hard-fails.
+func (s *Server) currentStationCallsign(ctx context.Context) string {
+	snap := s.cfg.Snapshot()
+	if lbCall, err := s.db.LogbookCallsignByIDWithContext(ctx, snap.DefaultLogbookID); err == nil {
+		if c := strings.TrimSpace(lbCall); c != "" {
+			return c
+		}
+	}
+	return strings.TrimSpace(snap.LoggingStation.StationCallsign)
+}
 
 // validFt8SlotUTC reports whether v is the RFC3339 UTC timestamp the FT8
 // sequencer expects (it parses with time.RFC3339 — sequencer.go /
@@ -107,7 +123,7 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ls := s.cfg.Snapshot().LoggingStation
-	ourCall := strings.TrimSpace(ls.StationCallsign)
+	ourCall := s.currentStationCallsign(r.Context())
 	if ourCall == "" {
 		ourCall = strings.TrimSpace(ls.Operator)
 	}
@@ -183,7 +199,7 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ls := s.cfg.Snapshot().LoggingStation
-	ourCall := strings.TrimSpace(ls.StationCallsign)
+	ourCall := s.currentStationCallsign(r.Context())
 	if ourCall == "" {
 		ourCall = strings.TrimSpace(ls.Operator)
 	}
@@ -253,7 +269,7 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ls := s.cfg.Snapshot().LoggingStation
-	ourCall := strings.TrimSpace(ls.StationCallsign)
+	ourCall := s.currentStationCallsign(r.Context())
 	if ourCall == "" {
 		ourCall = strings.TrimSpace(ls.Operator)
 	}

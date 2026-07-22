@@ -41,6 +41,28 @@ per-session "current operator". Every live QSO is stamped by the daemon —
 from the current operator, `MY_*` from config — so the operating callsign is
 **derived, never client-supplied**.
 
+## Selection UX (amended 2026-07-22)
+
+The "selected logbook" and "current operator" are **global selectors in the app
+shell header**, not per-panel controls: the operator picks a logbook once and it
+spans the whole sitting across bands AND modes — the canonical session is FT8
+80→40→30→20 m then phone 20 m, one call and one logbook throughout. The header
+shows the current logbook's name + QSO count and the current operator.
+
+Crucially the current logbook is a **persisted setting, not daemon session
+state**: it rides on the existing `default_logbook_id` (already daemon-persisted;
+the FT8 sink already reads it). Switching the header selector updates
+`default_logbook_id`; every operation still carries the logbook to the daemon
+(Phone/CW `?logbook=`, FT8 `logbook_id`, both defaulting to the current), so the
+daemon stays **stateless**. This setting-vs-session distinction is what keeps the
+rejection of a daemon-held operating session (below) intact: a *setting* is
+shared across tabs and survives reload; *session state* would not, and would
+collide with the multi-tab operating lock (ADR 0049). The current operator is a
+small header picker over the roster; it and the logbook switch independently
+(change logbook to run the 7Q1 event; change operator when someone else takes the
+key). FT8 therefore needs no logbook selector of its own — it uses the current
+logbook, which is what the sink already does.
+
 ## Alternatives considered
 
 ### Keep the global station callsign + the interim 409 guards (status quo)

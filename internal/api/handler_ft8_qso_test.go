@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	stderrors "errors"
 	"net/http"
 	"net/http/httptest"
@@ -40,6 +41,33 @@ func postFt8Qso(t *testing.T, srv *Server, path, body string, h http.HandlerFunc
 	w := httptest.NewRecorder()
 	h(w, req)
 	return w
+}
+
+// TestCurrentStationCallsign_FromCurrentLogbook covers ADR 0055 Slice C: FT8's
+// station callsign is the CURRENT logbook's callsign (default_logbook_id), so
+// switching the current logbook re-points FT8's TX + logged identity. Falls back
+// to the config station_callsign when no logbook can be read.
+func TestCurrentStationCallsign_FromCurrentLogbook(t *testing.T) {
+	srv := testServer(t)
+	ctx := context.Background()
+
+	// No logbook at the default id yet → falls back to the config callsign.
+	if err := srv.cfg.Update(func(c *config.Config) error {
+		c.LoggingStation.StationCallsign = "7Q5MLV"
+		return nil
+	}); err != nil {
+		t.Fatalf("set config callsign: %v", err)
+	}
+	if got := srv.currentStationCallsign(ctx); got != "7Q5MLV" {
+		t.Errorf("fallback = %q, want config 7Q5MLV", got)
+	}
+
+	// Seed the default logbook (id 1 == default_logbook_id) under a DIFFERENT
+	// callsign → FT8 now resolves the logbook's callsign, not the config field.
+	createTestLogbook(t, srv, "Event", "7Q1XYZ")
+	if got := srv.currentStationCallsign(ctx); got != "7Q1XYZ" {
+		t.Errorf("current = %q, want the logbook's 7Q1XYZ", got)
+	}
 }
 
 func TestHandleFt8QsoStart(t *testing.T) {
