@@ -656,26 +656,43 @@ func run() error {
 	ft8Svc.SetTxKeyer(ft8Keyer{bridgeSvc})
 	// Self-decode filter: drop SM's own transmissions from the decode feed (the rig
 	// loops TX audio back into capture, so a keyed slot decodes as our own call on
-	// our TX offset). Provider resolves the CURRENT logbook's callsign (ADR 0055) —
-	// so switching the current logbook re-points the TX identity without a restart —
-	// falling back to the config station_callsign when the logbook can't be read.
+	// our TX offset). Provider resolves the CURRENT logbook's callsign (ADR 0055) so
+	// switching the current logbook re-points the filter without a restart. This
+	// feeds ONLY self-decode filtering (dropOwnTransmissions), NOT transmitted
+	// identity.
+	//
+	// On a transient DB error / 500ms timeout it reuses the LAST resolved call, not
+	// the config identity: config may hold a DIFFERENT call than the current logbook
+	// and would filter out a REAL station's decodes (codex review of 8b3afe75); an
+	// empty result would instead leak our own TX into the decode/activity/occupancy
+	// views (codex review of 23907ffd). The cache satisfies both — correct in the
+	// common case, and never wrong-filters. The lookup is bounded so it can't stall
+	// the per-slot decode path (the DB layer's default 10s timeout would blow the
+	// FT8 late-TX window). This whole dance is why ADR 0055 gap #6 (pin identity at
+	// arm) is the durable fix.
+	var stationCallMu sync.Mutex
+	var lastStationCall string
 	ft8Svc.SetStationCall(func() string {
 		snap := cfgSvc.Snapshot()
-		// This provider feeds ONLY self-decode filtering (dropOwnTransmissions),
-		// NOT transmitted identity — so it must NOT fail closed: an empty call
-		// disables filtering and leaks our own TX into the decode / activity /
-		// occupancy views (codex review of 23907ffd, #2). Bound the lookup so it
-		// can't stall the per-slot decode path (the DB layer's default 10s timeout
-		// would blow the FT8 late-TX window), then fall back to the config call on
-		// absence / error / timeout.
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
-		if lbCall, err := dbSvc.LogbookCallsignByIDWithContext(ctx, snap.DefaultLogbookID); err == nil {
-			if call := strings.TrimSpace(lbCall); call != "" {
-				return call
-			}
+		lbCall, err := dbSvc.LogbookCallsignByIDWithContext(ctx, snap.DefaultLogbookID)
+		var resolved string
+		switch {
+		case err == nil:
+			resolved = strings.TrimSpace(lbCall)
+		case stderr.Is(err, errors.ErrNotFound):
+			// No logbook yet (pre-setup) → config IS the identity.
+			resolved = strings.TrimSpace(snap.LoggingStation.StationCallsign)
+		default:
+			// Transient error / timeout → fall through to the cached value.
 		}
-		return snap.LoggingStation.StationCallsign
+		stationCallMu.Lock()
+		defer stationCallMu.Unlock()
+		if resolved != "" {
+			lastStationCall = resolved
+		}
+		return lastStationCall
 	})
 	// Gate FT8 capture on the rig/CAT being live — only when the bridge is
 	// enabled (CAT configured). Without it, the daemon would grab the microphone
