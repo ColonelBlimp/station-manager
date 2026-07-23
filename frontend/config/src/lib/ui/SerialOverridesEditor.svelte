@@ -67,30 +67,34 @@
         // stops the rig working (review of 60a8e7ae). Carry anything unknown
         // through untouched rather than enumerating it here, so a future field
         // added daemon-side is preserved without a matching UI change.
-        const MANAGED: ReadonlySet<string> = new Set([
-            'baud_rate',
-            'data_bits',
-            'stop_bits',
-            'parity',
-            'line_delimiter',
-            'read_timeout_ms',
-        ]);
-        const next: RigOverrides = {};
-        for (const [k, v] of Object.entries(rig.overrides ?? {})) {
-            if (!MANAGED.has(k)) (next as Record<string, unknown>)[k] = v;
-        }
+        //
+        // Start from a COPY of the current value and edit in place, rather than
+        // rebuilding from scratch: that preserves the server's key ORDER. The
+        // dirty check below (and the panel's baseline comparison) are
+        // JSON.stringify equality, so re-emitting the same settings in a
+        // different order reads as an edit — an override could not be cleanly
+        // reverted, and the spurious diff reaches the save merge (review of
+        // 0e8cec2e). Managed keys are set or deleted below; anything else rides
+        // along untouched, in its original position.
+        const next: RigOverrides = { ...(rig.overrides ?? {}) };
+        const setOrDrop = (key: keyof RigOverrides, v: string | number | undefined): void => {
+            if (v === undefined) delete next[key];
+            else (next as Record<string, unknown>)[key] = v;
+        };
         const num = (s: string): number | undefined => {
             const n = parseInt(s.trim(), 10);
             return Number.isFinite(n) && n > 0 ? n : undefined;
         };
-        if (num(editing.baud_rate) !== undefined) next.baud_rate = num(editing.baud_rate);
-        if (num(editing.data_bits) !== undefined) next.data_bits = num(editing.data_bits);
-        if (num(editing.stop_bits) !== undefined) next.stop_bits = num(editing.stop_bits);
-        if (num(editing.read_timeout_ms) !== undefined)
-            next.read_timeout_ms = num(editing.read_timeout_ms);
-        if (editing.parity.trim() !== '') next.parity = editing.parity.trim();
+        setOrDrop('baud_rate', num(editing.baud_rate));
+        setOrDrop('data_bits', num(editing.data_bits));
+        setOrDrop('stop_bits', num(editing.stop_bits));
+        setOrDrop('read_timeout_ms', num(editing.read_timeout_ms));
+        setOrDrop('parity', editing.parity.trim() !== '' ? editing.parity.trim() : undefined);
         // Delimiter is byte-exact (e.g. ";", "0xFD") — don't trim.
-        if (editing.line_delimiter !== '') next.line_delimiter = editing.line_delimiter;
+        setOrDrop(
+            'line_delimiter',
+            editing.line_delimiter !== '' ? editing.line_delimiter : undefined
+        );
 
         const nextVal = Object.keys(next).length > 0 ? next : undefined;
         if (JSON.stringify(rig.overrides ?? null) !== JSON.stringify(nextVal ?? null)) {
