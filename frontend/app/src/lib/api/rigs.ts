@@ -27,6 +27,13 @@ export interface RigOverrides {
     parity?: string;
     line_delimiter?: string;
     read_timeout_ms?: number;
+    /** Tri-state serial-line control (daemon `*bool`). No UI — set by hand in
+     *  config.json. Declared here so the editors' "carry unmanaged fields
+     *  through" path is type-visible rather than an untyped passenger. These
+     *  lines are a PTT source on rigs that map one to them, so asserting one on
+     *  such a rig keys the transmitter for the life of the connection. */
+    rts?: boolean;
+    dtr?: boolean;
 }
 
 /** A configured rig (subset of types.RigConfig — the fields the panel needs). */
@@ -56,6 +63,11 @@ export interface RigSerial {
     parity?: string;
     line_delimiter?: string;
     read_timeout_ms?: number;
+    /** Mirrors the daemon rigdef's tri-state modem-output lines. Present so
+     *  RigSerial and RigOverrides keep the SAME key set — SerialOverridesEditor's
+     *  defaultFor() indexes the rigdef by an override key and relies on it. */
+    rts?: boolean;
+    dtr?: boolean;
 }
 
 /** The catalogue projection of a rigdef (subset of api.RigDefSummary) the detail

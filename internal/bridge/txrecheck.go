@@ -35,6 +35,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/serial"
 )
 
 // Alarm re-probe cadence. The first probe is near-immediate because the common
@@ -65,10 +66,23 @@ var (
 // not have carried the unkey either), so callers report it rather than retrying
 // harder.
 func (s *Service) probeTxStatus(reason string) error {
+	s.mu.Lock()
+	cl := s.activeClient
+	s.mu.Unlock()
+	return s.probeTxStatusOn(cl, reason)
+}
+
+// probeTxStatusOn is probeTxStatus against a CALLER-PINNED client. The re-unkey
+// sequence uses it so its whole stop-and-ask attempt stays on ONE connection: it
+// validates the client, unkeys, then asks — and if a reconnect lands between the
+// unkey and the question, re-resolving would send the question down the NEW
+// connection while the old sequence still holds the single-flight latch, so the
+// replacement's own "still keyed" answer could not start a fresh sequence
+// (2026-07-23 review). Pinning makes the attempt connection-specific end to end.
+func (s *Service) probeTxStatusOn(cl serial.Client, reason string) error {
 	const op errors.Op = "bridge.probeTxStatus"
 
 	s.mu.Lock()
-	cl := s.activeClient
 	idOK := s.identityConfirmed
 	s.mu.Unlock()
 
@@ -295,7 +309,7 @@ func (s *Service) retryUnkeyStillKeyed() {
 			s.logger.WarnWith().Int("attempt", attempt).
 				Msg("bridge: re-sent tx_off — rig reported it was still transmitting")
 			// Ask again so the answer, not the write, decides whether it worked.
-			if perr := s.probeTxStatus("post re-unkey"); perr != nil {
+			if perr := s.probeTxStatusOn(cl, "post re-unkey"); perr != nil {
 				s.logger.DebugWith().Err(perr).Msg("bridge: post-re-unkey status probe failed")
 			}
 		}

@@ -29,6 +29,13 @@ export interface RigOverrides {
     parity?: string;
     line_delimiter?: string;
     read_timeout_ms?: number;
+    /** Tri-state serial-line control (daemon `*bool`). No UI — set by hand in
+     *  config.json. Declared here so the editors' "carry unmanaged fields
+     *  through" path is type-visible rather than an untyped passenger. These
+     *  lines are a PTT source on rigs that map one to them, so asserting one on
+     *  such a rig keys the transmitter for the life of the connection. */
+    rts?: boolean;
+    dtr?: boolean;
 }
 
 /** A configured rig (mirrors types.RigConfig). Overrides null/absent = inherit. */

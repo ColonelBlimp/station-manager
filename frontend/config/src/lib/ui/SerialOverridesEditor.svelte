@@ -58,7 +58,27 @@
             primed = true;
             return;
         }
+        // Fields this editor does NOT manage must SURVIVE a save. rts/dtr are
+        // tri-state serial-line controls set by hand in config.json (no UI), and
+        // rebuilding `overrides` from only the visible fields silently dropped
+        // them: an operator who set "rts": true and later touched baud lost the
+        // line override, and the daemon fell back to the rigdef default on
+        // restart — on hardware that genuinely needs the line asserted, that
+        // stops the rig working (review of 60a8e7ae). Carry anything unknown
+        // through untouched rather than enumerating it here, so a future field
+        // added daemon-side is preserved without a matching UI change.
+        const MANAGED: ReadonlySet<string> = new Set([
+            'baud_rate',
+            'data_bits',
+            'stop_bits',
+            'parity',
+            'line_delimiter',
+            'read_timeout_ms',
+        ]);
         const next: RigOverrides = {};
+        for (const [k, v] of Object.entries(rig.overrides ?? {})) {
+            if (!MANAGED.has(k)) (next as Record<string, unknown>)[k] = v;
+        }
         const num = (s: string): number | undefined => {
             const n = parseInt(s.trim(), 10);
             return Number.isFinite(n) && n > 0 ? n : undefined;

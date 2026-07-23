@@ -76,10 +76,14 @@ read -r ok
 [[ "$ok" == "y" || "$ok" == "Y" ]] || { printf 'aborted.\n'; exit 0; }
 
 stuck=0
-ran=0 # counted inside the loop: after a COMPLETED for-loop the index sits at
-      # REPEATS+1, which reported "0 of 4" for a 3-trial run.
+# ran counts trials that ACTUALLY TRANSMITTED. Not the loop index (after a
+# completed for-loop that sits at REPEATS+1 — it reported "0 of 4" for a 3-trial
+# run), and not incremented at the top either: a refused START means no test
+# happened, and putting it in the denominator reports "0 of 1 stuck" for a trial
+# that never keyed — misleading in exactly the direction that makes a fault look
+# absent (reviews of c6741c3e and ddbe46be).
+ran=0
 for ((i = 1; i <= REPEATS; i++)); do
-    ran=$i
     before=$(alarm_count)
     on=$(tune true)
     start=$(date +%H:%M:%S)
@@ -104,9 +108,11 @@ for ((i = 1; i <= REPEATS; i++)); do
             "$i" "$REPEATS" "$start" "$on" "$off"
         printf '    The tune auto-off (15 s) should drop it; the rig TOT is the backstop.\n'
         stuck=$((stuck + 1))
+        ran=$((ran + 1)) # it DID transmit — this one counts
         break
     fi
 
+    ran=$((ran + 1))
     sleep 2 # let the confirm cycle resolve (3 s timeout, answer usually in ms)
     after=$(alarm_count)
 
