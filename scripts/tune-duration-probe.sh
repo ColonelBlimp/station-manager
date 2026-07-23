@@ -65,7 +65,10 @@ read -r ok
 [[ "$ok" == "y" || "$ok" == "Y" ]] || { printf 'aborted.\n'; exit 0; }
 
 stuck=0
+ran=0 # counted inside the loop: after a COMPLETED for-loop the index sits at
+      # REPEATS+1, which reported "0 of 4" for a 3-trial run.
 for ((i = 1; i <= REPEATS; i++)); do
+    ran=$i
     before=$(alarm_count)
     on=$(tune true)
     start=$(date +%H:%M:%S)
@@ -88,5 +91,5 @@ for ((i = 1; i <= REPEATS; i++)); do
     [[ "$i" -lt "$REPEATS" ]] && sleep "$SETTLE"
 done
 
-printf '\nRESULT: %d of %d trials stuck at %ss.\n' "$stuck" "$i" "$DURATION"
+printf "\nRESULT: %d of %d trials stuck at %ss.\n" "$stuck" "$ran" "$DURATION"
 printf 'Record this even when it is 0 — "0 of 3 at 5s, 2 of 3 at 2s" is the finding.\n'
