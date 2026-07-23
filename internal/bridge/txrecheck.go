@@ -99,10 +99,6 @@ func (s *Service) probeTxStatus(reason string) error {
 	if err := cl.WriteCommandBytes(context.Background(), q); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("write tx-status query")
 	}
-	// Count it like any other query so its reply is attributed to THIS confirm
-	// cycle — a probe answer that arrives after the next unkey must be
-	// discarded, not treated as that unkey's confirmation.
-	s.noteTxQuerySent()
 	s.logger.DebugWith().Str("reason", reason).Msg("bridge: tx-status re-probe sent")
 	return nil
 }

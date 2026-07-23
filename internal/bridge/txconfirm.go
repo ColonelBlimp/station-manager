@@ -81,13 +81,6 @@ func (s *Service) beginTxConfirm(def cat.RigDefinition, cl serial.Client) {
 	if s.txConfirmTimer != nil {
 		s.txConfirmTimer.Stop()
 	}
-	// Carry this cycle's unanswered queries forward as stale expectations: a
-	// reply still in flight from the OLD cycle must not be allowed to confirm
-	// the new one (see the txStaleReplies field comment).
-	if s.txQueriesSent > s.txQueriesAnswered {
-		s.txStaleReplies += s.txQueriesSent - s.txQueriesAnswered
-	}
-	s.txQueriesSent, s.txQueriesAnswered = 0, 0
 	s.txConfirmTimer = time.AfterFunc(txConfirmTimeout, func() { s.txConfirmTimeout(gen) })
 	// A superseded cycle's waiters wake now and read the (still-uncertain)
 	// state — a stale release must not sleep out its full grace timeout.
@@ -105,19 +98,7 @@ func (s *Service) beginTxConfirm(def cat.RigDefinition, cl serial.Client) {
 	}
 	if err := cl.WriteCommandBytes(context.Background(), q); err != nil {
 		s.logger.WarnWith().Err(err).Msg("bridge: tx-status query write failed; relying on confirm timeout")
-		return
 	}
-	s.noteTxQuerySent()
-}
-
-// noteTxQuerySent records that one status query reached the wire, so the reply
-// accounting can tell this cycle's expected answers from a previous cycle's
-// leftovers. Called only after a SUCCESSFUL write — a query that never went out
-// has no reply to wait for and must not inflate the stale count.
-func (s *Service) noteTxQuerySent() {
-	s.mu.Lock()
-	s.txQueriesSent++
-	s.mu.Unlock()
 }
 
 // txConfirmTimeout fires when an unkey stayed unconfirmed. Generation-gated
@@ -225,28 +206,36 @@ func (s *Service) confirmTxIdle(how string) {
 // footswitch — not ours to manage; our CAT TX is off, which is what the
 // unkey promised).
 func (s *Service) observeTxStatus(v string) {
+	// KNOWN LIMITATION, deliberately not papered over (2026-07-23 review
+	// rounds 2 and 3). TXSTATUS frames are ANONYMOUS — a bare "TX0;" carries
+	// nothing tying it to the query it answers, and this stream mixes solicited
+	// answers with the rig's own unsolicited AI pushes. So a reply delayed past
+	// a cycle boundary can, in principle, confirm a LATER unkey using evidence
+	// the rig generated before that transmission.
+	//
+	// A per-cycle reply-counting scheme was tried and REVERTED: it assumed a
+	// 1:1 query↔reply correspondence the protocol does not provide. An
+	// unsolicited push was counted as an answer (hiding a still-outstanding
+	// query, which reproduced the very hole it closed), and unanswered queries
+	// on a serial client that later died left a debt no reply could ever pay —
+	// after a probe-exhausted alarm plus a reconnect, the fresh defensive
+	// answer was discarded and TX stayed blocked on a healthy rig. Denying
+	// recovery is strictly worse than the narrow hazard it guarded.
+	//
+	// The sound fix is a stream BARRIER, not counting: emit a distinguishable
+	// marker query (e.g. `ID;`) immediately after the unkey and treat only the
+	// TXSTATUS frames arriving after that marker's answer as post-unkey
+	// evidence — serial frames are FIFO, so the marker cleanly partitions the
+	// stream. That changes the wire traffic on every unkey, so it is tracked in
+	// the backlog rather than bolted on here.
+	//
+	// What bounds the residual meanwhile: the alarm re-probe loop retires the
+	// moment the alarm clears (generation-gated), so no NEW probe is issued
+	// once a cycle ends, and on any link that answers at all the 5 s probe
+	// spacing means at most one reply is in flight.
 	s.mu.Lock()
 	uncertain := s.txUncertain
-	// Consume one reply from the accounting REGARDLESS of the uncertainty
-	// state: an answer arriving while we are idle is still an answer to one of
-	// the queries we sent, and consuming it here is what stops it being
-	// mistaken for the next cycle's evidence later.
-	stale := s.txStaleReplies > 0
-	if stale {
-		s.txStaleReplies--
-	} else {
-		s.txQueriesAnswered++
-	}
 	s.mu.Unlock()
-
-	if stale {
-		// Solicited before the current cycle's unkey — it says nothing about
-		// whether THAT unkey took effect. Discard; the current cycle's own
-		// query (or the alarm's re-probe) supplies the real answer.
-		s.logger.DebugWith().Str("tx_status", v).
-			Msg("bridge: discarded a tx-status reply left over from a previous confirm cycle")
-		return
-	}
 	if !uncertain {
 		return
 	}

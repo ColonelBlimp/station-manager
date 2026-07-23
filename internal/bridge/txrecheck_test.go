@@ -206,43 +206,12 @@ func TestRecheckTx_GatedOnConnectionAndIdentity(t *testing.T) {
 	}
 }
 
-// TestStaleReply_CannotConfirmALaterCycle is the 2026-07-23 review's P1.
-// read_tx_status answers are anonymous, so a reply solicited before the current
-// unkey must never be read as proof that THIS unkey took effect — otherwise a
-// late answer could clear a fresh uncertainty window and re-enable keying over a
-// transmitter whose stop was never confirmed.
-func TestStaleReply_CannotConfirmALaterCycle(t *testing.T) {
-	s, fake := newAlarmProbeService(t, 1)
-	def, ok := cat.Lookup("yaesu-ftdx10")
-	if !ok {
-		t.Fatal("rigdef lookup failed")
-	}
-
-	// Cycle 1: unkey, query goes out, answer never arrives (the shape that
-	// alarms in the first place).
-	s.beginTxConfirm(def, fake)
-	// Cycle 2: a NEW unkey opens a fresh uncertainty window with its own query.
-	s.beginTxConfirm(def, fake)
-
-	// Cycle 1's answer finally turns up. It predates cycle 2's transmission.
-	s.observeTxStatus("0")
-	if !s.TxUncertain() {
-		t.Fatal("a leftover reply from the previous cycle confirmed the new one — " +
-			"keying is now re-enabled on evidence captured before the transmission")
-	}
-
-	// Cycle 2's OWN answer confirms normally.
-	s.observeTxStatus("0")
-	if s.TxUncertain() {
-		t.Error("the current cycle's own reply must still confirm")
-	}
-}
-
-// TestAlarmProbes_ReplyStillConfirmsDuringAlarm guards the stale-reply fix from
-// breaking the thing it sits next to: while an alarm stands there is no new
-// confirm cycle, so nothing is carried into the stale count and a probe's answer
-// must clear the alarm exactly as before. Without this, the P1 fix could have
-// silently re-latched the alarm it was meant to release.
+// TestAlarmProbes_ReplyStillConfirmsDuringAlarm is the end-to-end recovery this
+// whole feature exists for: an alarm stands, the loop re-asks, the rig answers
+// "in RX", the alarm retires. It is also the guard that killed the reverted
+// reply-counting design — that scheme discarded exactly this answer after a
+// reconnect, leaving TX blocked on a healthy rig (see the KNOWN LIMITATION note
+// in observeTxStatus).
 func TestAlarmProbes_ReplyStillConfirmsDuringAlarm(t *testing.T) {
 	s, fake := newAlarmProbeService(t, 5)
 	def, ok := cat.Lookup("yaesu-ftdx10")
