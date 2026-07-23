@@ -6,6 +6,7 @@
     // dismisses; a dismiss hides the banner but does not claim safety, and a
     // NEW alarm re-shows it.
     import { rig, dismissTxAlarm } from '../operate/rig.svelte';
+    import { recheckRigTx } from '../api/rig-recheck';
 
     const CODE_TEXT: Record<string, string> = {
         tx_unconfirmed: 'The stop-transmit command was sent but the rig has not confirmed it.',
@@ -18,6 +19,39 @@
 
     const detail = $derived(CODE_TEXT[rig.txAlarmCode] ?? '');
     const show = $derived(rig.txAlarmActive && !rig.txAlarmDismissed);
+
+    let rechecking = $state(false);
+    let recheckUnsupported = $state(false);
+    let recheckNote = $state('');
+
+    // Ask the rig again. Deliberately does NOT touch rig.txAlarmActive on
+    // success: the banner may only be retired by the daemon's tx-alarm clear,
+    // which follows the rig's own answer a moment later. Saying "asked" and
+    // letting the banner vanish on its own keeps the UI honest about what is
+    // actually known — a button that hid the warning itself would be claiming
+    // safety it cannot verify.
+    async function onRecheck(): Promise<void> {
+        if (rechecking) return;
+        rechecking = true;
+        recheckNote = '';
+        const outcome = await recheckRigTx();
+        rechecking = false;
+        switch (outcome.kind) {
+            case 'ok':
+                recheckNote = 'asked the rig; waiting for its answer';
+                break;
+            case 'unsupported':
+                recheckUnsupported = true;
+                recheckNote = 'this rig cannot report its transmit state';
+                break;
+            case 'aborted':
+            case 'network':
+                recheckNote = "couldn't reach the daemon";
+                break;
+            default:
+                recheckNote = outcome.message;
+        }
+    }
 </script>
 
 {#if show}
@@ -42,10 +76,27 @@
         <span>
             <strong>CHECK YOUR RADIO</strong> — it may still be transmitting.
             {detail}
+            {#if recheckNote !== ''}
+                <span class="opacity-90">— {recheckNote}</span>
+            {/if}
         </span>
+        <!-- Re-check asks the rig again; only the rig's own "in RX" answer can
+             retire this banner, and it arrives as a tx-alarm SSE clear. Dismiss
+             hides it locally and claims nothing. -->
         <button
             type="button"
-            class="ml-auto shrink-0 cursor-pointer rounded border border-white/40 px-2 py-0.5 text-xs hover:bg-red-700"
+            class="ml-auto shrink-0 cursor-pointer rounded border border-white/40 px-2 py-0.5 text-xs hover:bg-red-700 disabled:cursor-default disabled:opacity-60"
+            disabled={rechecking || recheckUnsupported}
+            onclick={onRecheck}
+            title={recheckUnsupported
+                ? 'This rig cannot be asked for its transmit state'
+                : 'Ask the rig again whether it is transmitting'}
+        >
+            {rechecking ? 'Checking…' : 'Re-check'}
+        </button>
+        <button
+            type="button"
+            class="shrink-0 cursor-pointer rounded border border-white/40 px-2 py-0.5 text-xs hover:bg-red-700"
             onclick={dismissTxAlarm}
         >
             Dismiss

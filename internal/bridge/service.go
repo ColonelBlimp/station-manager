@@ -291,6 +291,15 @@ type Service struct {
 	// nothing about the unkey (8bd88c1b review, ordering finding).
 	txConfirmAfterFrame uint64
 
+	// txAlarmProbeGen gates the alarm re-probe loop the way txConfirmGen gates
+	// the confirm timeout: the loop reads it before every probe and exits when
+	// it no longer matches, so a cleared-then-re-raised alarm never leaves two
+	// loops running. Incremented on every raise AND on every clear.
+	txAlarmProbeGen uint64
+	// runCtx is Start's derived context, kept so event-driven background work
+	// (the tx-alarm re-probe loop) can be cancelled by Stop. nil before Start.
+	runCtx context.Context
+
 	// rxFrameCount counts successfully decoded rig frames (readLoop-owned
 	// increments, atomic for cross-goroutine reads by the confirm machinery).
 	rxFrameCount atomic.Uint64
@@ -486,6 +495,11 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
+	// Retained so background work started later by an EVENT rather than by
+	// Start — currently the tx-alarm re-probe loop — can be cancelled by Stop
+	// instead of running out its own bounded schedule while the port closes
+	// underneath it.
+	s.runCtx = runCtx
 	s.wg.Add(1)
 	go s.runSupervisor(runCtx)
 	return nil

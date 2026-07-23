@@ -268,6 +268,14 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 - **Errors:** 400 `invalid_json`; 503 `rig_not_connected`/`rig_state_unknown`; 409 `rig_identity_unverified`; 500 `rig_tune_failed`.
 - **Notes:** Daemon owns the guaranteed stop (hard auto-off timer + release-on-disconnect + single-flight shared with FT8-TX). Refuses to start without a mode/power restore snapshot (`rig_state_unknown`).
 
+### `POST /v1/rig/tx/recheck`
+- **Purpose:** Re-ask the rig for its transmit state so a standing stuck-TX alarm can be resolved on evidence (2026-07-21 incident: the alarm latches itself out of every clear path, because every issuer of the TX-status query is gated by the same `txUncertain` flag the alarm holds).
+- **Gating:** **Only when the bridge is enabled.**
+- **Request:** No body.
+- **Response:** **200** `{"asked": true, "alarm_active": bool}`.
+- **Errors:** 503 `rig_not_connected`; 409 `rig_identity_unverified`; 501 `rig_tx_recheck_unsupported` (rigdef has no `read_tx_status`); 500 `rig_tx_recheck_failed`.
+- **Notes:** Writes a **READ only** (`read_tx_status`) — it carries no TX intent, which is why it may run outside the key/command gates while the transmitter's state is unknown. It **cannot clear the alarm**, and no endpoint may: only the rig's own "in RX" answer, via `observeTxStatus` → `confirmTxIdle`, retires it. `alarm_active` is therefore a status snapshot taken after the query went out, NOT a safety verdict — the answer arrives asynchronously, so expect `alarm_active: true` followed by the authoritative `tx-alarm` SSE clear. Operator acknowledgement stays client-side (the SPA banner hides locally without touching daemon state). The daemon also re-probes automatically on a bounded schedule when an alarm is raised; this endpoint is the manual path for after that expires.
+
 ---
 
 ## FT8 (ADR 0024 / 0029 / 0030 / 0031 / 0033)

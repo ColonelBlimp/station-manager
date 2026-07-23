@@ -207,6 +207,10 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// limitConcurrent middleware covers it. The daemon owns the
 		// guaranteed stop, so this can't strand a carrier.
 		mux.HandleFunc("POST /v1/rig/tune", s.handleRigTune)
+		// TX-alarm re-check (2026-07-21 stuck-TX incident). Re-asks the rig
+		// for its transmit state so a standing alarm can be resolved on
+		// evidence; it writes a READ only and cannot clear the alarm itself.
+		mux.HandleFunc("POST /v1/rig/tx/recheck", s.handleRigTxRecheck)
 	}
 
 	// FT8 occupancy SSE — opt-in via ft8.enabled (ADR 0029 step a). When the

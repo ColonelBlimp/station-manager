@@ -45,6 +45,13 @@ var ErrTxUncertain = stderr.New("bridge: previous transmission unconfirmed; refu
 // rig_tx_active rather than a generic 500 (review 2026-06-19 L1).
 var ErrTxActive = stderr.New("bridge: transmission active; refusing command")
 
+// ErrTxRecheckUnsupported is returned by the TX-status re-probe when the
+// configured rigdef has no read_tx_status command to ask with. Such defs
+// confirm through the any-rig-data liveness fallback instead (ADR 0051), so
+// there is no query to re-send and no operator action that would help — the
+// API maps it to 501 rather than a failure the operator should retry.
+var ErrTxRecheckUnsupported = stderr.New("bridge: rig definition has no TX-status query")
+
 // ErrCommandRejected is returned by the CI-V command path (ADR 0034
 // wait-for-ACK) when the rig answers a command with FA (NG) — it refused the
 // command, e.g. an out-of-band frequency. Distinct from an encoding error: the

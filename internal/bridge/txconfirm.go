@@ -114,6 +114,10 @@ func (s *Service) txConfirmTimeout(gen uint64) {
 	s.mu.Unlock()
 	if fire {
 		s.publishTxAlarm(true, TxAlarmUnconfirmed)
+		// Ask again. This is the commonest false alarm — a busy bus swallowed
+		// the answer on a rig that is actually in RX — and without a re-probe
+		// nothing would ever ask a second time (see txrecheck.go).
+		s.startAlarmProbes()
 	}
 }
 
@@ -165,6 +169,10 @@ func (s *Service) raiseTxAlarm(code string) {
 	s.mu.Unlock()
 	if !already {
 		s.publishTxAlarm(true, code)
+		// Only on the false→true edge: a re-raise while already alarmed must
+		// not stack a second probe loop (the generation gate would retire the
+		// older one anyway, but not starting it is cheaper and clearer).
+		s.startAlarmProbes()
 	}
 }
 
@@ -176,7 +184,8 @@ func (s *Service) confirmTxIdle(how string) {
 	wasAlarmed := s.txAlarmActive
 	s.txUncertain = false
 	s.txAlarmActive = false
-	s.txConfirmGen++ // invalidate any in-flight confirm-timeout
+	s.txConfirmGen++    // invalidate any in-flight confirm-timeout
+	s.txAlarmProbeGen++ // retire any running alarm re-probe loop
 	if s.txConfirmTimer != nil {
 		s.txConfirmTimer.Stop()
 		s.txConfirmTimer = nil
