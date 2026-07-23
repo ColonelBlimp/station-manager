@@ -210,7 +210,11 @@ func (s *Service) retryUnkeyStillKeyed() {
 		s.mu.Unlock()
 		return
 	}
-	if s.activeClient == nil {
+	// The connection this sequence belongs to. Each attempt compares against it,
+	// so a reconnect ends the sequence rather than letting it write to whatever
+	// client happens to be current.
+	startClient := s.activeClient
+	if startClient == nil {
 		s.mu.Unlock()
 		return
 	}
@@ -249,18 +253,22 @@ func (s *Service) retryUnkeyStillKeyed() {
 			if !s.TxUncertain() {
 				return
 			}
-			// Re-resolve the client EVERY attempt rather than pinning the one
-			// that was live when the sequence started (2026-07-23 review): the
-			// pipeline can reconnect inside this ~1.6 s window, and the
-			// remaining writes would then go to a closed port while
-			// txStopRetrying suppressed a fresh sequence for the new one — the
-			// carrier staying up for the difference. A reconnect swaps the
-			// field, so a nil (or replaced) client ends this sequence and lets
-			// the next "still keyed" answer start a clean one.
+			// End the sequence if the client is gone OR has been REPLACED
+			// (2026-07-23 review round 6). Checking only for nil was not enough:
+			// the supervisor's reconnect backoff can be as short as 50 ms —
+			// well inside this 400 ms retry interval — so a reconnect can
+			// complete between attempts and leave a NON-nil, different client.
+			// The old sequence would then spend its remaining budget writing to
+			// the replacement while txStopRetrying suppressed the new
+			// pipeline's own "still keyed" answers from starting a clean
+			// sequence; if the budget ran out first, no further automatic unkey
+			// happened at all and the carrier stood until the rig TOT.
+			// Identity comparison — not just nil — is what makes the sequence
+			// strictly per-connection.
 			s.mu.Lock()
 			cl := s.activeClient
 			s.mu.Unlock()
-			if cl == nil {
+			if cl == nil || cl != startClient {
 				return
 			}
 

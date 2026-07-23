@@ -255,15 +255,24 @@ func TestStillKeyed_StopsWhenTheClientGoesAway(t *testing.T) {
 		return false
 	}, "no re-unkey was sent")
 
-	// The pipeline drops the client, as it does on teardown/reconnect.
+	// The pipeline REPLACES the client, as a reconnect does. Nil would be the
+	// easy case; a live replacement is the one that slipped through when the
+	// check was nil-only (review round 6) — the old sequence carried on writing
+	// to the new connection while holding the single-flight latch.
+	replacement := newFakeSerial()
 	s.mu.Lock()
-	s.activeClient = nil
+	s.activeClient = replacement
 	s.mu.Unlock()
 
-	settled := len(fake.recordedWrites())
 	time.Sleep(60 * time.Millisecond) // many intervals at the shortened cadence
-	if after := len(fake.recordedWrites()); after > settled+1 {
-		t.Errorf("kept writing to a client the pipeline had dropped: %d → %d", settled, after)
+
+	// Assert on the REPLACEMENT, not the old client. Writes to the old one stop
+	// under either implementation — it is no longer s.activeClient — so watching
+	// it proves nothing. The regression is the old sequence spending its budget
+	// on the NEW connection.
+	if n := len(replacement.recordedWrites()); n != 0 {
+		t.Errorf("the previous connection's retry sequence wrote %d time(s) to the "+
+			"replacement client — it must end when the client changes, not follow it", n)
 	}
 	// The latch must be free again so the next pipeline can retry.
 	waitFor(t, func() bool {

@@ -47,7 +47,18 @@ tune() { # $1 = "true" | "false"
 
 # Count alarm lines so each trial can be judged by the DELTA, not by whatever
 # the log already contained from earlier incidents.
-alarm_count() { grep -ac 'CAT TX still keyed after unkey' "$LOG" 2>/dev/null || echo 0; }
+#
+# NO `|| echo 0`: grep -c ALREADY prints 0 when it matches nothing, and exits 1
+# while doing so — the fallback would append a SECOND line, and "0\n0" breaks the
+# numeric comparison below, silently reporting a stuck trial as clean. (Missed on
+# the first runs only because the log already held an earlier alarm, so grep
+# exited 0. Review of c6741c3e.) ${n:-0} covers a missing log file, where grep
+# prints nothing at all.
+alarm_count() {
+    local n
+    n=$(grep -ac 'CAT TX still keyed after unkey' "$LOG" 2>/dev/null)
+    printf '%s' "${n:-0}"
+}
 
 printf '=== tune-duration probe: %ss × %s ===\n' "$DURATION" "$REPEATS"
 printf 'daemon %s | log %s\n\n' "$HOST" "$LOG"
@@ -72,8 +83,30 @@ for ((i = 1; i <= REPEATS; i++)); do
     before=$(alarm_count)
     on=$(tune true)
     start=$(date +%H:%M:%S)
+
+    # A refused START means no test happened — counting it as a clean trial
+    # would manufacture evidence that the fault does not reproduce.
+    if [[ "$on" != "202" ]]; then
+        printf '  trial %d/%d  %s  ON:%s  *** NOT STARTED — no tune, not a result ***\n' \
+            "$i" "$REPEATS" "$start" "$on"
+        printf '    (409 = alarm standing or TX active; 503 = no rig)\n'
+        break
+    fi
+
     sleep "$DURATION"
     off=$(tune false)
+
+    # A refused STOP is the dangerous case: the carrier may still be up and the
+    # daemon may not have logged the alarm, so the log-delta check below cannot
+    # be relied on to catch it. Stop everything and tell the operator.
+    if [[ "$off" != "202" ]]; then
+        printf '  trial %d/%d  %s  ON:%s OFF:%s  *** STOP REFUSED — CHECK THE RADIO ***\n' \
+            "$i" "$REPEATS" "$start" "$on" "$off"
+        printf '    The tune auto-off (15 s) should drop it; the rig TOT is the backstop.\n'
+        stuck=$((stuck + 1))
+        break
+    fi
+
     sleep 2 # let the confirm cycle resolve (3 s timeout, answer usually in ms)
     after=$(alarm_count)
 
