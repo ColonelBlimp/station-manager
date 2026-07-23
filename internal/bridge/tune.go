@@ -192,8 +192,17 @@ func (s *Service) StartTune(ctx context.Context) error {
 		}
 		s.mu.Unlock()
 		if off, oerr := encodeTuneUnkey(def); oerr == nil {
-			if werr := cl.WriteCommandBytes(context.Background(), off); werr != nil {
-				s.logger.WarnWith().Err(werr).Msg("bridge: post-failed-key defensive tx_off write failed")
+			// writeKeyedLine, NOT a raw WriteCommandBytes — the twin of
+			// KeyFt8Tx's note: on CI-V only the awaited ACK proves the unkey
+			// applied, and with no read_tx_status in the rigdef the confirm cycle
+			// would otherwise let the next decoded frame "confirm" a lost stop
+			// (2026-07-23 review P1).
+			if werr := s.writeKeyedLine(context.Background(), def, cl, off, "post-failed-key defensive tx_off"); werr != nil {
+				s.logger.ErrorWith().Err(werr).
+					Msg("bridge: post-failed-key defensive tx_off failed — rig may be keyed; TX stays blocked")
+				s.raiseTxAlarm(TxAlarmKeyWriteFailed)
+				s.retryUnkeyStillKeyed()
+				return errors.New(errOp).WithErr(err).WithMsg("write tune-on")
 			}
 		}
 		s.beginTxConfirm(def, cl)
@@ -313,6 +322,7 @@ func (s *Service) releaseTuneChecked(ctx context.Context, reason string, wantGen
 	if !s.waitTxConfirm() {
 		s.logger.ErrorWith().Str("reason", reason).
 			Msg("bridge: skipping tune mode/power restore — unkey unconfirmed (rig may still be keyed)")
+		s.invalidateTuneSnapshot() // rig is still at tune mode/power; the snapshot now lies
 		s.finishTune()
 		return nil
 	}
@@ -336,6 +346,7 @@ func (s *Service) releaseTuneChecked(ctx context.Context, reason string, wantGen
 		if err := s.writeKeyedLine(context.Background(), def, cl, restore, "tune restore"); err != nil {
 			s.logger.WarnWith().Err(err).Str("reason", reason).
 				Msg("bridge: tune mode/power restore write failed (carrier already down)")
+			s.invalidateTuneSnapshot() // same lie as the skip path above
 		}
 	}
 	s.finishTune()
@@ -419,6 +430,25 @@ func (s *Service) clearTuneOnDisconnect() {
 		s.logger.WarnWith().Msg("bridge: rig disconnected during tune; tune state cleared")
 		s.publishTuneState(false)
 	}
+}
+
+// invalidateTuneSnapshot forgets the mode+power snapshot because the rig is
+// KNOWN to no longer match it: the tune restore was skipped (unkey unconfirmed)
+// or its write failed, so the rig is still sitting at RTTY / clamped tune power
+// while lastMode+lastPower describe the pre-tune state.
+//
+// Leaving them was a quiet data bug (2026-07-23 review P2): captureTuneSnapshot
+// is frozen for the whole tune, so nothing corrected them afterwards, and
+// CurrentPowerW feeds TX_PWR on every logged FT8 QSO — contacts would have been
+// stamped with the operator's normal power while the rig ran at 20 W. Clearing
+// is the honest state and self-heals: the next decoded rig-state refills both
+// (tuneActive is false by now), and until then StartTune refuses to key a rig
+// whose restore target is unknown, which is the behaviour we want anyway.
+func (s *Service) invalidateTuneSnapshot() {
+	s.mu.Lock()
+	s.lastMode = ""
+	s.lastPower = 0
+	s.mu.Unlock()
 }
 
 // captureTuneSnapshot records the rig's current main mode + power so a later

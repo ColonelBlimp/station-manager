@@ -270,9 +270,22 @@ func TestStillKeyed_StopsWhenTheClientGoesAway(t *testing.T) {
 	// under either implementation — it is no longer s.activeClient — so watching
 	// it proves nothing. The regression is the old sequence spending its budget
 	// on the NEW connection.
-	if n := len(replacement.recordedWrites()); n != 0 {
-		t.Errorf("the previous connection's retry sequence wrote %d time(s) to the "+
-			"replacement client — it must end when the client changes, not follow it", n)
+	//
+	// Count UNKEYS ONLY, not all writes. Raising the alarm also starts the probe
+	// loop, which deliberately re-resolves s.activeClient every attempt — asking
+	// a replacement connection what the rig is doing is its whole purpose. A
+	// bare write count made a legitimate query look like the defect and failed
+	// ~10% of race-enabled runs, which is what had CI intermittently red
+	// (2026-07-23). The defect this test exists for is an inherited TX0;.
+	var unkeys int
+	for _, w := range replacement.recordedWrites() {
+		if bytes.Equal(w, []byte("TX0;")) {
+			unkeys++
+		}
+	}
+	if unkeys != 0 {
+		t.Errorf("the previous connection's retry sequence sent %d unkey(s) to the "+
+			"replacement client — it must end when the client changes, not follow it", unkeys)
 	}
 	// The latch must be free again so the next pipeline can retry.
 	waitFor(t, func() bool {

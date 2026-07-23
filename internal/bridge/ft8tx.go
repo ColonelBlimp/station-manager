@@ -144,8 +144,22 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 		}
 		s.mu.Unlock()
 		if off, oerr := encodeTuneUnkey(def); oerr == nil {
-			if werr := cl.WriteCommandBytes(context.Background(), off); werr != nil {
-				s.logger.WarnWith().Err(werr).Msg("bridge: post-failed-key defensive tx_off write failed")
+			// writeKeyedLine, NOT a raw WriteCommandBytes: on CI-V the raw write
+			// returns success the moment the bytes are queued, so a dropped or
+			// rejected unkey looked like it landed. The IC-7300 rigdef has no
+			// read_tx_status, so the confirm cycle below falls back to
+			// any-rig-data — and the next decoded frame would then "confirm" an
+			// unkey that never took (2026-07-23 review P1). Awaiting the ACK is
+			// the only evidence CI-V offers that the stop actually applied.
+			if werr := s.writeKeyedLine(context.Background(), def, cl, off, "post-failed-key defensive tx_off"); werr != nil {
+				s.logger.ErrorWith().Err(werr).
+					Msg("bridge: post-failed-key defensive tx_off failed — rig may be keyed; TX stays blocked")
+				// Alarm rather than confirm: a key that may have landed followed
+				// by an unkey that demonstrably did not is the strongest evidence
+				// available that the PTT is up. Keep trying to stop it.
+				s.raiseTxAlarm(TxAlarmKeyWriteFailed)
+				s.retryUnkeyStillKeyed()
+				return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-on")
 			}
 		}
 		s.beginTxConfirm(def, cl)

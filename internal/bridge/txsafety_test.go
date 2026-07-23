@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // waitFor polls cond up to a second — the async defensive-recovery goroutine
@@ -526,5 +528,88 @@ func TestObserveTxStatus_IdleObservationIsInert(t *testing.T) {
 	s.mu.Unlock()
 	if last != "2" {
 		t.Fatalf("lastTxStatus = %q, want %q — transitions cannot be detected", last, "2")
+	}
+}
+
+// "2" (transmitting by OTHER means) must not satisfy the confirmation gate.
+// The tune release only restores the operator's mode + power after positive RX
+// confirmation, because that restore raises power from the clamped tune level:
+// treating "2" as idle let it write full power into a rig whose PTT was being
+// held down by a control line (2026-07-23 review P1). It must not alarm either
+// — "2" is also the ordinary TX→RX tail — so the correct state is UNCHANGED.
+func TestObserveTxStatus_TxByOtherMeansDoesNotConfirm(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	def, ok := cat.Lookup("yaesu-ftdx10")
+	if !ok {
+		t.Fatal("rigdef missing")
+	}
+	s.beginTxConfirm(def, nil)
+
+	s.observeTxStatus("2")
+
+	if !s.TxUncertain() {
+		t.Fatal("\"2\" confirmed the unkey — it reports the rig is TRANSMITTING, not idle")
+	}
+	if s.TxAlarmActive() {
+		t.Fatal("\"2\" alarmed; it is also the normal TX→RX tail, so it must only stay inconclusive")
+	}
+
+	// The rig settling into RX is what resolves it.
+	s.observeTxStatus("0")
+	if s.TxUncertain() {
+		t.Fatal("\"0\" after \"2\" must confirm — otherwise a clean tune never restores")
+	}
+}
+
+// A skipped tune restore must not leave the mode/power snapshot describing a
+// state the rig is no longer in. captureTuneSnapshot is frozen for the whole
+// tune, so nothing else corrects it — and CurrentPowerW feeds TX_PWR on logged
+// QSOs, which would then record the operator's normal power while the rig sat
+// at clamped tune power (2026-07-23 review P2).
+func TestReleaseTune_UnconfirmedUnkeyInvalidatesSnapshot(t *testing.T) {
+	prev := txConfirmTimeout
+	txConfirmTimeout = 30 * time.Millisecond // rig stays silent; skip path taken
+	defer func() { txConfirmTimeout = prev }()
+
+	s, _ := newCommandTestService(t)
+	s.tuneRestoreSettle = 0
+
+	s.mu.Lock()
+	s.lastMode, s.lastPower = "USB", 100 // the pre-tune state StartTune restores to
+	s.mu.Unlock()
+
+	if err := s.StartTune(context.Background()); err != nil {
+		t.Fatalf("StartTune: %v", err)
+	}
+	// No TXSTATUS answer, so waitTxConfirm fails and the restore is skipped —
+	// leaving the rig at RTTY / clamped tune power.
+	if err := s.StopTune(context.Background()); err != nil {
+		t.Fatalf("StopTune: %v", err)
+	}
+
+	if got := s.CurrentPowerW(); got != 0 {
+		t.Errorf("CurrentPowerW = %d after a skipped restore, want 0 (unknown) — "+
+			"a stale value gets stamped on QSOs as TX_PWR", got)
+	}
+	s.mu.Lock()
+	mode := s.lastMode
+	s.mu.Unlock()
+	if mode != "" {
+		t.Errorf("lastMode = %q after a skipped restore, want empty — the rig is still in tune mode", mode)
+	}
+}
+
+// An effective backoff initial must never exceed the effective maximum. Config
+// validation only compares the two RAW settings, so a max set with the initial
+// omitted left the built-in 1s default above a 50ms cap (2026-07-23 review P2).
+func TestNewService_BackoffInitialClampedToEffectiveMax(t *testing.T) {
+	cfg := types.BridgeConfig{Enabled: false}
+	cfg.Timeouts.BackoffMaxMs = 50 // initial deliberately left unset
+
+	s := New(cfg, &logging.Service{})
+
+	if s.supervisorInitialBackoff > s.supervisorMaxBackoff {
+		t.Errorf("initial backoff %v exceeds configured max %v — the configured ceiling is not honoured",
+			s.supervisorInitialBackoff, s.supervisorMaxBackoff)
 	}
 }

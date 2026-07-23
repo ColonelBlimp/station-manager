@@ -81,7 +81,7 @@ func (s *Service) beginTxConfirm(def cat.RigDefinition, cl serial.Client) {
 	if s.txConfirmTimer != nil {
 		s.txConfirmTimer.Stop()
 	}
-	s.txConfirmTimer = time.AfterFunc(txConfirmTimeout, func() { s.txConfirmTimeout(gen) })
+	s.txConfirmTimer = time.AfterFunc(s.confirmTimeout, func() { s.txConfirmTimeout(gen) })
 	// A superseded cycle's waiters wake now and read the (still-uncertain)
 	// state — a stale release must not sleep out its full grace timeout.
 	s.closeTxConfirmDoneLocked()
@@ -149,7 +149,7 @@ func (s *Service) waitTxConfirm() bool {
 	if ch != nil {
 		select {
 		case <-ch:
-		case <-time.After(txConfirmTimeout + time.Second):
+		case <-time.After(s.confirmTimeout + time.Second):
 		}
 	}
 	s.mu.Lock()
@@ -203,8 +203,9 @@ func (s *Service) confirmTxIdle(how string) {
 // observeTxStatus consumes a decoded TXSTATUS push — the answer to the
 // read_tx_status query (or an unsolicited status push). Yaesu semantics:
 // "0" = RX, "1" = CAT-commanded TX, "2" = TX by other means (mic PTT,
-// footswitch — not ours to manage; our CAT TX is off, which is what the
-// unkey promised).
+// footswitch, or a control line asserted on the CAT port).
+//
+// Only "0" confirms. "2" is INCONCLUSIVE, not idle — see the case below.
 func (s *Service) observeTxStatus(v string) {
 	// ACCEPTED LIMITATION — see ADR 0057 before "fixing" this.
 	//
@@ -253,8 +254,29 @@ func (s *Service) observeTxStatus(v string) {
 		return
 	}
 	switch v {
-	case "0", "2":
+	case "0":
 		s.confirmTxIdle("tx-status " + v)
+	case "2":
+		// INCONCLUSIVE — deliberately neither confirms nor alarms.
+		//
+		// "2" says the transmitter IS up, just not by CAT. It used to confirm
+		// idle on the reasoning that our CAT TX is off, which is all the unkey
+		// promised. The 2026-07-23 incident showed what that costs: an asserted
+		// RTS line held data-mode PTT down for the life of the connection, the
+		// rig answered "2" to every query, and the tune release read that as
+		// positive RX confirmation — clearing the gate that exists to stop the
+		// restore raising a LIVE carrier from clamped tune power back to full
+		// operator power (tune.go, step-2 gate). That gate's own contract says
+		// POSITIVE RX confirmation; "2" is not that.
+		//
+		// Not an alarm either, because "2" is ALSO the normal TX→RX tail: the
+		// dogfood FTdx10 answers "2" for about a second after an unkey and then
+		// pushes "0" (measured 2026-07-23, 16:12:34 → 16:12:35). Alarming on it
+		// would fire on every clean tune. Staying uncertain lets that "0" arrive
+		// and confirm; if it never does, the existing confirm-timeout raises the
+		// alarm and startAlarmProbes keeps asking. No new machinery — this
+		// REMOVES an unsound confirmation rather than adding a layer, which is
+		// why ADR 0057's "no new TX-safety mechanism" rule does not bar it.
 	case "1":
 		s.logger.ErrorWith().Msg("bridge: rig reports CAT TX still keyed after unkey — CHECK YOUR RADIO")
 		s.raiseTxAlarm(TxAlarmStillKeyed)
@@ -315,10 +337,10 @@ func (s *Service) TxUncertain() bool {
 //     this hook is called FROM the readLoop and the CI-V write awaits an ACK
 //     only the readLoop can deliver (synchronous = self-deadlock until the
 //     ACK timeout). The state transitions above are synchronous, so the
-//     ordering guarantee holds regardless; the write itself is bounded by
-//     the serial write watchdog + the CI-V ACK timeout, so the untracked
-//     goroutine cannot linger (a Stop mid-write just fails the write, and
-//     alarm publishes on a closed hub are no-ops).
+//     ordering guarantee holds regardless. The goroutine is REGISTERED on the
+//     service WaitGroup: bounding it by the write watchdog + ACK timeout is
+//     not the same as Stop waiting for it, and Stop's contract is that no
+//     in-flight work outlives it (2026-07-23 review P2).
 //  4. CI-V's awaited ACK confirms directly; otherwise the status-query cycle
 //     runs — and its write failure or silence ALARMS, with TX still blocked.
 func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Client) {
@@ -332,10 +354,31 @@ func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Cl
 
 	s.mu.Lock()
 	s.txUncertain = true // pre-block: keys/commands refuse from this instant
+	// Watermark, exactly as beginTxConfirm sets one. This hook is called FROM
+	// the readLoop, which has already counted the triggering frame and will call
+	// observeRigData on that same frame a few lines later — so without a fresh
+	// watermark the any-rig-data fallback (defs with no TX-status query, i.e.
+	// every CI-V rig today) confirmed this recovery using the frame that STARTED
+	// it, before the defensive tx_off had even been written. TxReady then read
+	// safe while the unkey was still in flight (2026-07-23 review P1).
+	s.txConfirmAfterFrame = s.rxFrameCount.Load()
+	// wg.Add under the SAME lock that observes s.stopped — see startAlarmProbes
+	// for why the ordering is load-bearing. Stop() promises to wait for in-flight
+	// work; an untracked goroutine here could resume after Stop closed the client
+	// and the hub, write to a closed port, and mutate alarm state afterwards.
+	if s.stopped {
+		// Shutting down: leave txUncertain set (it blocks keys, which is the safe
+		// reading) and let pipeline teardown own the final unkey.
+		s.mu.Unlock()
+		s.setIdentityConfirmed(true)
+		return
+	}
+	s.wg.Add(1)
 	s.mu.Unlock()
 	s.setIdentityConfirmed(true)
 
 	go func() {
+		defer s.wg.Done()
 		s.keyMu.Lock()
 		werr := s.writeKeyedLine(context.Background(), def, client, txOff, "defensive unkey")
 		s.keyMu.Unlock()

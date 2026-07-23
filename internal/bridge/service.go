@@ -302,6 +302,16 @@ type Service struct {
 	// it no longer matches, so a cleared-then-re-raised alarm never leaves two
 	// loops running. Incremented on every raise AND on every clear.
 	txAlarmProbeGen uint64
+	// confirmTimeout is this service's copy of the package-level
+	// txConfirmTimeout default, snapshotted at New(). Immutable for the
+	// service's life, so the background goroutines that consult it (the
+	// auto-off backstops → releaseX → waitTxConfirm) read per-instance state
+	// instead of a package var. Tests shorten the knob before constructing a
+	// Service; while the goroutines read the var directly, a timer armed by one
+	// test could still fire during a LATER test that was writing it — a real
+	// -race failure (~1 run in 12) that made the suite, and CI, intermittently
+	// red for reasons unrelated to the code under test (2026-07-23).
+	confirmTimeout time.Duration
 	// lastTxStatus (mu-guarded) is the previous TXSTATUS value seen, so
 	// observeTxStatus can log TRANSITIONS only. Without it the rig's answers
 	// are invisible whenever txUncertain is false — which is most of the time,
@@ -366,6 +376,24 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 			Int("clamped_ms", int(tuneSettle.Milliseconds())).
 			Msg("bridge: tune restore_settle_ms above ceiling; clamped")
 	}
+	// initial ≤ max on the EFFECTIVE values. Config validation compares the two
+	// raw settings, so it only fires when the operator set BOTH: `backoff_max_ms:
+	// 50` with the initial omitted passed validation and then slept the 1 s
+	// default before the 50 ms cap could apply — a configured maximum silently
+	// violated by a default (2026-07-23 review P2). Clamping here (rather than in
+	// config) is deliberate: these defaults are bridge-package constants, and the
+	// config layer has no business knowing them. Same idiom as the tune knobs.
+	backoffInitial := resolveTimeout(cfg.Timeouts.BackoffInitialMs, supervisorInitialBackoff)
+	backoffMax := resolveTimeout(cfg.Timeouts.BackoffMaxMs, supervisorMaxBackoff)
+	if backoffInitial > backoffMax {
+		if logger != nil {
+			logger.WarnWith().
+				Int("initial_ms", int(backoffInitial.Milliseconds())).
+				Int("max_ms", int(backoffMax.Milliseconds())).
+				Msg("bridge: effective backoff initial exceeds max; clamped to max")
+		}
+		backoffInitial = backoffMax
+	}
 	return &Service{
 		cfg:      cfg,
 		logger:   logger,
@@ -375,14 +403,15 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 			return serial.Open(c)
 		},
 		livenessTimeout:                resolveTimeout(cfg.Timeouts.LivenessMs, livenessTimeout),
-		supervisorInitialBackoff:       resolveTimeout(cfg.Timeouts.BackoffInitialMs, supervisorInitialBackoff),
-		supervisorMaxBackoff:           resolveTimeout(cfg.Timeouts.BackoffMaxMs, supervisorMaxBackoff),
+		supervisorInitialBackoff:       backoffInitial,
+		supervisorMaxBackoff:           backoffMax,
 		supervisorSteadyStateThreshold: resolveTimeout(cfg.Timeouts.SteadyStateThresholdMs, supervisorSteadyStateThreshold),
 		writeWatchdog:                  resolveTimeout(cfg.Timeouts.WriteWatchdogMs, writeWatchdog),
 		civReadGap:                     clampDuration(resolveTimeout(cfg.Timeouts.CivReadGapMs, civReadGap), civReadGapMax),
 		civAckTimeout:                  resolveTimeout(cfg.Timeouts.CivAckMs, civAckTimeout),
 		civPollInterval:                resolveTimeout(cfg.Timeouts.CivPollIntervalMs, civPollInterval),
 		civPollQuiet:                   resolveTimeout(cfg.Timeouts.CivPollQuietMs, civPollQuiet),
+		confirmTimeout:                 txConfirmTimeout,
 		tunePowerW:                     tunePower,
 		tuneMaxDuration:                tuneDur,
 		tuneRestoreSettle:              tuneSettle,
