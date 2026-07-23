@@ -3,10 +3,16 @@ package sqlite
 import (
 	"context"
 	stderr "errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -235,6 +241,111 @@ func TestUpsertContactedStation_ColdInsertAndMerge(t *testing.T) {
 	// PK preserved across the merge.
 	if got2.CSID != got.CSID {
 		t.Fatalf("CSID changed across upsert: %d → %d", got.CSID, got2.CSID)
+	}
+}
+
+// concurrentCacheService wires a FILE-backed Service with a real connection
+// pool. The shared :memory: helpers pin MaxOpenConns to 1, which serialises
+// every writer and so cannot exercise a read-then-write race at all.
+func concurrentCacheService(t *testing.T, path string) *Service {
+	t.Helper()
+
+	cfg := config.DefaultConfig(t.TempDir())
+	cfg.Datastore.Path = path
+	cfgSvc := config.New(cfg)
+	if err := cfgSvc.Initialize(); err != nil {
+		t.Fatalf("config init: %v", err)
+	}
+	logSvc := &logging.Service{}
+	logSvc.ConfigService = cfgSvc
+	logSvc.WorkingDir = cfgSvc.WorkingDir()
+	if err := logSvc.Initialize(); err != nil {
+		t.Fatalf("logging init: %v", err)
+	}
+	svc := &Service{}
+	svc.ConfigService = cfgSvc
+	svc.LoggerService = logSvc
+	if err := svc.Initialize(); err != nil {
+		t.Fatalf("sqlite init: %v", err)
+	}
+	svc.DatabaseConfig = &types.DatastoreConfig{
+		Driver:                    "sqlite",
+		Path:                      path,
+		MaxOpenConns:              4,
+		MaxIdleConns:              4,
+		ContextTimeout:            10,
+		TransactionContextTimeout: 10,
+	}
+	if err := svc.Open(); err != nil {
+		t.Fatalf("sqlite open: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = svc.Close()
+		_ = logSvc.Close()
+	})
+	if err := svc.Migrate(); err != nil {
+		t.Fatalf("sqlite migrate: %v", err)
+	}
+	return svc
+}
+
+// TestUpsertContactedStation_ConcurrentColdMissesDoNotCollide pins the fix for
+// finding 4 (2026-07-22 sqlite review): the writer used to pick INSERT vs
+// UPDATE from its own earlier read, so simultaneous cold misses all chose
+// INSERT and everyone but the first hit the active-callsign unique index. The
+// single INSERT … ON CONFLICT … DO UPDATE lets the database resolve that
+// collision instead — every writer succeeds and exactly one row exists.
+func TestUpsertContactedStation_ConcurrentColdMissesDoNotCollide(t *testing.T) {
+	svc := concurrentCacheService(t, filepath.Join(t.TempDir(), "cache.db"))
+	ctx := context.Background()
+
+	const writers = 8
+	var wg sync.WaitGroup
+	errCh := make(chan error, writers)
+	start := make(chan struct{})
+
+	for i := range writers {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			<-start // release them together, so they race on the same cold miss
+			errCh <- svc.UpsertContactedStationWithContext(ctx, types.ContactedStation{
+				Call: "ZS6XYZ",
+				Name: fmt.Sprintf("Writer %d", n),
+				QTH:  "Pretoria",
+			})
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			t.Errorf("concurrent upsert failed: %v", err)
+		}
+	}
+
+	var n int
+	if err := svc.handle.QueryRow(
+		`SELECT COUNT(*) FROM contacted_station WHERE call = 'ZS6XYZ' AND deleted_at IS NULL`).Scan(&n); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("live rows for ZS6XYZ = %d, want exactly 1", n)
+	}
+
+	// Whichever writer landed last, the shared field must have survived —
+	// a collision must not leave the row half-written.
+	got, err := svc.FetchContactedStationByCallsignWithContext(ctx, "ZS6XYZ")
+	if err != nil {
+		t.Fatalf("fetch after concurrent upserts: %v", err)
+	}
+	if got.QTH != "Pretoria" {
+		t.Errorf("QTH = %q, want Pretoria", got.QTH)
+	}
+	if !strings.HasPrefix(got.Name, "Writer ") {
+		t.Errorf("Name = %q, want one of the writers' values", got.Name)
 	}
 }
 

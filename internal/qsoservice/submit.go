@@ -374,6 +374,15 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	if err != nil {
 		_ = tx.Rollback()
 
+		// The logbook was deleted between the preflight above and the insert
+		// (InsertQsoTx re-checks the parent inside the tx — 2026-07-22 sqlite
+		// review, finding 2). Same outcome the preflight would have produced
+		// had the delete landed a moment earlier, so report it identically
+		// rather than as a daemon error.
+		if stderr.Is(err, errors.ErrNotFound) {
+			return SubmitResult{}, &SubmitError{Code: "logbook_not_found", Message: "logbook does not exist"}
+		}
+
 		// Race window: two submits with identical dedupe-key inputs
 		// can both pass the pre-transaction FetchQsoByDedupeKey check
 		// above and both try to insert. The second to hit the UNIQUE

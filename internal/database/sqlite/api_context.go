@@ -47,6 +47,14 @@ func (s *Service) InsertQsoWithContext(ctx context.Context, qso types.Qso) (int6
 		return 0, errors.New(op).WithErr(err)
 	}
 
+	// Same soft-deleted-parent guard as InsertQsoTx — see requireLiveLogbook.
+	// Autocommit here, so the two statements are not one atomic unit; this
+	// path is the non-transactional convenience wrapper, and the production
+	// submit/import flows go through InsertQsoTx.
+	if err = requireLiveLogbook(ctx, h, op, model.LogbookID); err != nil {
+		return 0, err
+	}
+
 	if err = model.Insert(ctx, h, boil.Infer()); err != nil {
 		return 0, errors.New(op).WithErr(err)
 	}
@@ -1351,44 +1359,65 @@ func (s *Service) writeContactedStation(ctx context.Context, station types.Conta
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
+	// The read only supplies the merge BASE; it no longer decides which
+	// statement to run. Choosing insert-vs-update from it was a read-then-write
+	// race: two concurrent cold misses both saw "no row", and the loser's
+	// INSERT then failed the active-callsign unique index (2026-07-22 sqlite
+	// review, finding 4). The single upsert below resolves that same collision
+	// into an update instead.
+	//
+	// The merge itself stays in Go: most fields live in the additional_data
+	// JSON blob, where SQL-level merging is awkward. That leaves last-writer-
+	// wins between two concurrent merges of the SAME row — accepted, not
+	// overlooked: contacted_station is a re-derivable enrichment cache, every
+	// writer stamps the fields it actually holds, and the next lookup refreshes
+	// whatever a loser dropped. Serialising it would need a write-locked
+	// transaction around a best-effort cache write on the QSO-submit path.
 	existing, ferr := s.FetchContactedStationByCallsignWithContext(ctx, call)
+	row := station
 	switch {
 	case ferr == nil:
 		// Existing row. merge → non-empty-wins field merge; replace → the
 		// incoming station overwrites all columns (empty fields clear).
 		// Preserve PK from the existing row either way.
-		row := station
 		if merge {
 			row = mergeContactedStation(existing, station)
 		}
 		row.CSID = existing.CSID
-		row.LastRefreshedAt = time.Now().UTC()
-
-		model, mErr := adapters.ContactedStationTypeToModel(row)
-		if mErr != nil {
-			return errors.New(op).WithErr(mErr)
-		}
-		model.ModifiedAt = null.TimeFrom(time.Now().UTC())
-		if _, uErr := model.Update(ctx, h, boil.Infer()); uErr != nil {
-			return errors.New(op).WithErr(uErr).WithMsg("updating contacted_station failed")
-		}
-		return nil
 
 	case stderr.Is(ferr, errors.ErrNotFound):
-		// Cold insert — no existing row to merge or replace.
-		station.LastRefreshedAt = time.Now().UTC()
-		model, mErr := adapters.ContactedStationTypeToModel(station)
-		if mErr != nil {
-			return errors.New(op).WithErr(mErr)
-		}
-		if iErr := model.Insert(ctx, h, boil.Infer()); iErr != nil {
-			return errors.New(op).WithErr(iErr).WithMsg("inserting contacted_station failed")
-		}
-		return nil
+		// Cold miss — nothing to merge against; `row` is the incoming station.
 
 	default:
 		return errors.New(op).WithErr(ferr)
 	}
+	row.LastRefreshedAt = time.Now().UTC()
+
+	model, mErr := adapters.ContactedStationTypeToModel(row)
+	if mErr != nil {
+		return errors.New(op).WithErr(mErr)
+	}
+
+	// Conflict target is the PARTIAL unique index, so it matches exactly the
+	// row the read above can return (the fetch is soft-delete filtered) — a
+	// tombstone for the same callsign neither blocks the insert nor gets
+	// resurrected. created_at keeps its column default on insert and is never
+	// touched on update, matching sqlboiler's generated behaviour.
+	if _, wErr := h.ExecContext(ctx, `
+		INSERT INTO contacted_station (name, call, country, additional_data, last_refreshed_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (call) WHERE deleted_at IS NULL DO UPDATE SET
+			name              = excluded.name,
+			country           = excluded.country,
+			additional_data   = excluded.additional_data,
+			last_refreshed_at = excluded.last_refreshed_at,
+			modified_at       = ?`,
+		model.Name, model.Call, model.Country, model.AdditionalData, model.LastRefreshedAt,
+		null.TimeFrom(time.Now().UTC()),
+	); wErr != nil {
+		return errors.New(op).WithErr(wErr).WithMsg("writing contacted_station failed")
+	}
+	return nil
 }
 
 // mergeContactedStation returns a copy of base with each field replaced
@@ -1664,37 +1693,62 @@ func (s *Service) DeleteLogbookByIDWithContext(ctx context.Context, id int64) er
 	ctx, cancel := s.ensureCtxTimeout(ctx)
 	defer cancel()
 
-	logbook, err := models.FindLogbook(ctx, h, id)
-	if err != nil {
-		if stderr.Is(err, sql.ErrNoRows) {
-			return errors.ErrNotFound
-		}
-		return errors.New(op).WithErr(err)
-	}
-
-	// Check for QSOs referencing this logbook before soft-deleting.
-	// The FK RESTRICT only fires on hard deletes; soft-delete (setting
-	// deleted_at) would silently succeed, orphaning QSOs under a
-	// deleted logbook.
+	// One conditional statement carries BOTH preconditions — the logbook is
+	// live AND it holds no live QSOs — so the check cannot be outrun by a
+	// concurrent submit (2026-07-22 sqlite review, finding 2). The previous
+	// shape read those facts in separate statements and only then soft-
+	// deleted, leaving a window for the interleaving "delete preflight sees
+	// no QSOs → a submit commits a QSO → soft-delete lands", which orphans a
+	// live QSO under a deleted logbook. The FK is no help: ON DELETE RESTRICT
+	// fires on hard deletes only, and a soft-deleted parent still physically
+	// satisfies it. (The symmetric guard on the insert side lives in
+	// InsertQsoTx / InsertQsoWithContext.)
 	//
-	// .Exists() is cheaper than .Count(): it short-circuits at the
-	// first hit rather than summing the whole match set. For a
-	// logbook with thousands of QSOs this is the difference between
-	// "read one row via idx_qso_logbook_id" and "scan the whole
-	// partition".
-	hasQsos, err := models.Qsos(models.QsoWhere.LogbookID.EQ(id)).Exists(ctx, h)
+	// NOT EXISTS matches .Exists() semantics — it short-circuits at the first
+	// hit via idx_qso_logbook_id rather than scanning the partition — and
+	// counts only LIVE QSOs, preserving the existing rule that a logbook
+	// whose QSOs are all soft-deleted may still be deleted.
+	//
+	// deleted_at is stamped in UTC to match sqlboiler's generated soft-delete
+	// (boil's timestamp location defaults to UTC).
+	res, err := h.ExecContext(ctx, `
+		UPDATE logbook SET deleted_at = ?
+		WHERE id = ?
+		  AND deleted_at IS NULL
+		  AND NOT EXISTS (
+		      SELECT 1 FROM qso
+		      WHERE qso.logbook_id = logbook.id AND qso.deleted_at IS NULL
+		  )`, time.Now().UTC(), id)
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("checking logbook QSO count")
-	}
-	if hasQsos {
-		return errors.New(op).WithErr(errors.ErrLogbookHasQsos)
-	}
-
-	if _, err = logbook.Delete(ctx, h, false); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("failed to delete logbook")
 	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("rows affected by logbook delete")
+	}
+	if affected > 0 {
+		return nil
+	}
 
-	return nil
+	// No row matched: one of the two preconditions failed. Re-read to report
+	// WHICH — this is diagnosis for the error message only, the mutation
+	// above was already all-or-nothing. A logbook that is no longer live
+	// (never existed, or already soft-deleted) is ErrNotFound, matching
+	// FindLogbook's deleted_at-filtered semantics; anything else means the
+	// QSO precondition is what blocked it. If a concurrent writer soft-
+	// deleted the last QSO between the two statements this reports the
+	// slightly-stale "has QSOs" — accurate for the moment the delete was
+	// attempted, and it keeps the caller's two-outcome contract intact.
+	var live bool
+	if err = h.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM logbook WHERE id = ? AND deleted_at IS NULL)`,
+		id).Scan(&live); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("classifying logbook delete failure")
+	}
+	if !live {
+		return errors.ErrNotFound
+	}
+	return errors.New(op).WithErr(errors.ErrLogbookHasQsos)
 }
 
 func (s *Service) UpdateLogbookWithContext(ctx context.Context, logbook types.Logbook) error {
@@ -2569,11 +2623,47 @@ func (s *Service) InsertQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) (i
 		return 0, errors.New(op).WithErr(err)
 	}
 
+	if err = requireLiveLogbook(ctx, tx, op, model.LogbookID); err != nil {
+		return 0, err
+	}
+
 	if err = model.Insert(ctx, tx, boil.Infer()); err != nil {
 		return 0, errors.New(op).WithErr(err)
 	}
 
 	return model.ID, nil
+}
+
+// requireLiveLogbook rejects a QSO write whose parent logbook has been
+// soft-deleted (2026-07-22 sqlite review, finding 2). The FK constraint cannot
+// do this: ON DELETE RESTRICT fires on hard deletes only, and a row with
+// deleted_at set still physically satisfies the reference — so without this
+// check a QSO submitted concurrently with a logbook deletion commits as a live
+// row under a deleted parent, invisible to every logbook-scoped query.
+//
+// Run inside the caller's transaction, it is the insert-side half of the pair
+// whose delete-side half is the conditional UPDATE in
+// DeleteLogbookByIDWithContext. Together they are race-free on SQLite: if the
+// tx has already written, it holds the write lock and the delete blocks behind
+// it; if this check is the tx's first statement, the tx is a reader and the
+// subsequent INSERT fails with SQLITE_BUSY_SNAPSHOT rather than committing on
+// top of a snapshot the delete has invalidated.
+//
+// ErrNotFound is the deliberate sentinel: a soft-deleted logbook is already
+// invisible to LogbookCallsignByIDWithContext and FindLogbook, so callers that
+// map ErrNotFound to "logbook does not exist" stay correct whether the delete
+// landed before their preflight or after it.
+func requireLiveLogbook(ctx context.Context, exec boil.ContextExecutor, op errors.Op, logbookID int64) error {
+	var live bool
+	if err := exec.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM logbook WHERE id = ? AND deleted_at IS NULL)`,
+		logbookID).Scan(&live); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("checking parent logbook is live")
+	}
+	if !live {
+		return errors.New(op).WithErr(errors.ErrNotFound).WithMsgf("logbook %d is deleted or does not exist", logbookID)
+	}
+	return nil
 }
 
 func (s *Service) UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) error {

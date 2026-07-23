@@ -116,6 +116,106 @@ func TestUpdateLogbook_RejectsSoftDeletedAndMissing(t *testing.T) {
 	}
 }
 
+// --- 2026-07-22 finding 2: no QSO may live under a soft-deleted logbook -----
+
+// TestInsertQso_RejectsSoftDeletedLogbook pins the insert-side half of the fix.
+// The FK is ON DELETE RESTRICT, which fires on hard deletes only — a
+// soft-deleted logbook still physically satisfies it — so before the fix a QSO
+// submitted after (or concurrently with) a logbook deletion committed as a live
+// row under a deleted parent, invisible to every logbook-scoped query.
+func TestInsertQso_RejectsSoftDeletedLogbook(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+
+	lbID, err := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	if err != nil {
+		t.Fatalf("insert logbook: %v", err)
+	}
+	if err := svc.DeleteLogbookByIDWithContext(ctx, lbID); err != nil {
+		t.Fatalf("soft delete logbook: %v", err)
+	}
+
+	qso := validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845")
+
+	// Non-transactional path.
+	if _, err := svc.InsertQsoWithContext(ctx, qso); !stderr.Is(err, errors.ErrNotFound) {
+		t.Errorf("InsertQsoWithContext under a soft-deleted logbook: got %v, want ErrNotFound", err)
+	}
+
+	// Transactional path — the one the live submit/import flows use.
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer cancel()
+	if _, err := svc.InsertQsoTx(ctx, tx, qso); !stderr.Is(err, errors.ErrNotFound) {
+		t.Errorf("InsertQsoTx under a soft-deleted logbook: got %v, want ErrNotFound", err)
+	}
+	_ = tx.Rollback()
+
+	// A logbook that never existed is rejected the same way.
+	orphan := validTestQso(999999, "M0CMC", "40m", "SSB", "20250508", "0900")
+	if _, err := svc.InsertQsoWithContext(ctx, orphan); !stderr.Is(err, errors.ErrNotFound) {
+		t.Errorf("insert under a missing logbook: got %v, want ErrNotFound", err)
+	}
+}
+
+// TestDeleteLogbook_ConditionalOutcomes covers the delete-side half — now a
+// single conditional UPDATE carrying both preconditions. The classification of
+// its no-op case must still distinguish "has live QSOs" from "not live", and
+// the pre-existing rule that soft-deleted QSOs do NOT block a delete has to
+// survive the rewrite.
+func TestDeleteLogbook_ConditionalOutcomes(t *testing.T) {
+	svc := testService(t)
+	ctx := context.Background()
+
+	// A logbook holding a live QSO cannot be deleted.
+	lbID, err := svc.InsertLogbook(types.Logbook{Name: "L1", Callsign: "G4ABC"})
+	if err != nil {
+		t.Fatalf("insert logbook: %v", err)
+	}
+	qsoID, err := svc.InsertQso(validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845"))
+	if err != nil {
+		t.Fatalf("insert qso: %v", err)
+	}
+	if err := svc.DeleteLogbookByIDWithContext(ctx, lbID); !stderr.Is(err, errors.ErrLogbookHasQsos) {
+		t.Errorf("delete with a live QSO: got %v, want ErrLogbookHasQsos", err)
+	}
+	if _, ferr := svc.FetchLogbookByIDWithContext(ctx, lbID); ferr != nil {
+		t.Errorf("a rejected delete must leave the logbook live: %v", ferr)
+	}
+
+	// Once that QSO is soft-deleted the logbook is deletable again — the
+	// pre-fix .Exists() check counted live rows only, and so must the
+	// NOT EXISTS that replaced it.
+	dtx, dcancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if _, err := svc.DeleteQsoByIDTx(ctx, dtx, qsoID); err != nil {
+		_ = dtx.Rollback()
+		dcancel()
+		t.Fatalf("soft delete qso: %v", err)
+	}
+	if err := dtx.Commit(); err != nil {
+		dcancel()
+		t.Fatalf("commit qso delete: %v", err)
+	}
+	dcancel()
+	if err := svc.DeleteLogbookByIDWithContext(ctx, lbID); err != nil {
+		t.Errorf("delete with only soft-deleted QSOs should succeed: %v", err)
+	}
+
+	// Deleting it again, and deleting an id that never existed, are both
+	// ErrNotFound — matching the deleted_at-filtered read path.
+	if err := svc.DeleteLogbookByIDWithContext(ctx, lbID); !stderr.Is(err, errors.ErrNotFound) {
+		t.Errorf("re-delete of a soft-deleted logbook: got %v, want ErrNotFound", err)
+	}
+	if err := svc.DeleteLogbookByIDWithContext(ctx, 999999); !stderr.Is(err, errors.ErrNotFound) {
+		t.Errorf("delete of a missing logbook: got %v, want ErrNotFound", err)
+	}
+}
+
 // --- M1 (2026-06-19): legacy update/upsert helpers respect active-row + not-found ---
 
 func TestUpdateContactedStation_RejectsSoftDeletedAndMissing(t *testing.T) {
