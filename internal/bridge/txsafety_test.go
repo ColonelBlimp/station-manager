@@ -497,3 +497,34 @@ func TestObserveRigData_WatermarkGuard(t *testing.T) {
 		t.Fatal("a post-cycle frame must confirm (no-query fallback)")
 	}
 }
+
+// A status answer arriving while nothing is uncertain must stay INERT — it may
+// not key, unkey, alarm, or confirm anything. It is only recorded, so the
+// transition can be logged: with txUncertain false the value was previously
+// read and dropped, which hid a rig reporting "2" (transmitting by other
+// means) at rest — the 2026-07-23 stuck-tune signature, where an asserted RTS
+// line held data-mode PTT down for the whole connection.
+func TestObserveTxStatus_IdleObservationIsInert(t *testing.T) {
+	s, fake := newCommandTestService(t)
+
+	s.observeTxStatus("2") // rig claims TX by other means; we believe we are idle
+
+	if s.TxUncertain() {
+		t.Fatal("an unsolicited status answer must not make the TX state uncertain")
+	}
+	if s.TxAlarmActive() {
+		t.Fatal("an unsolicited status answer must not raise the operator alarm")
+	}
+	if n := len(fake.recordedWrites()); n != 0 {
+		t.Fatalf("observation wrote %d frame(s) to the rig, want 0", n)
+	}
+
+	// Recorded, so a repeat is a non-transition and the log stays readable
+	// across a long FT8 session (TXSTATUS also arrives on AUTO-mode pushes).
+	s.mu.Lock()
+	last := s.lastTxStatus
+	s.mu.Unlock()
+	if last != "2" {
+		t.Fatalf("lastTxStatus = %q, want %q — transitions cannot be detected", last, "2")
+	}
+}

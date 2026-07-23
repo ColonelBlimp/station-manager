@@ -49,12 +49,17 @@ down by a wire, and no stop command over CAT can release it. See
 grep 'tx-status' ~/.local/share/station-manager/log/smd.log | tail
 ```
 
-- `tx-status 0` — the rig is in receive. Normal.
-- `tx-status 2` — "transmitting by **other means**". If you see this
-  routinely, something other than CAT is keying your rig — almost always a
-  control line, as above.
+- `status 0` — the rig is in receive. Normal.
+- `status 2` — "transmitting by **other means**". Expect this briefly while a
+  transmission is actually up. Seeing it **at rest**, when you are not
+  transmitting, means something other than CAT is keying your rig — almost
+  always a control line, as above.
 - `rig reports CAT TX still keyed after unkey` — the rig acknowledged that it
   ignored the stop command. Check the radio.
+
+Station Manager logs `rig tx-status changed` on every change of state, whether
+or not it was expecting one, so a line that keys the rig behind its back shows
+up in the log even when nothing else looks wrong.
 
 **The banner won't clear.** It clears when the rig reports that it is receiving
 again — the daemon re-asks automatically for a few minutes, and there is a
@@ -62,6 +67,25 @@ again — the daemon re-asks automatically for a few minutes, and there is a
 the banner; it does not claim the rig is safe. If the rig genuinely cannot be
 reached, restarting Station Manager re-establishes the connection and resets
 the state.
+
+---
+
+## CAT connects but no frequency ever appears (Yaesu)
+
+The app shows no frequency and no mode, FT8 reports the rig as not live, and
+there is **no error** anywhere. The log says the port opened and the pipeline
+started, then goes quiet.
+
+On a Yaesu, check `RADIO SETTING → GENERAL → CAT RTS` and set it to
+**DISABLE**. With it set to ENABLE — the factory default — the radio only
+answers CAT while the computer asserts the RTS line, and Station Manager keeps
+RTS de-asserted so it can never key your transmitter by accident. The commands
+reach the rig; the replies never come back. Nothing reports an error because,
+from the software's side, nothing failed.
+
+This is the one rig setting that has to change before CAT will work at all.
+See [Connecting Your Rig (CAT)](#cat) for the full picture, including why RTS
+is left de-asserted.
 
 ---
 

@@ -229,7 +229,26 @@ func (s *Service) observeTxStatus(v string) {
 	// decision. The answer is ADR 0057, not another layer.
 	s.mu.Lock()
 	uncertain := s.txUncertain
+	changed := v != s.lastTxStatus
+	s.lastTxStatus = v
 	s.mu.Unlock()
+
+	// Log every TRANSITION, including the ones the gate below discards. A rig
+	// answering "2" (transmitting by other means) while we believe nothing is
+	// keyed means something outside CAT is holding PTT down — the 2026-07-23
+	// stuck-tune cause, where an asserted RTS line keyed data-mode PTT for the
+	// life of the connection. That state was invisible: with txUncertain false
+	// the answer was read and dropped, so the log only ever showed readings
+	// taken during a confirmation cycle. Transitions only, not every frame:
+	// TXSTATUS also arrives unsolicited on AUTO-mode pushes, and one line per
+	// state change keeps a long FT8 session readable.
+	if changed {
+		s.logger.InfoWith().
+			Str("status", v).
+			Bool("uncertain", uncertain).
+			Msg("bridge: rig tx-status changed")
+	}
+
 	if !uncertain {
 		return
 	}

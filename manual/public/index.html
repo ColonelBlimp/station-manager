@@ -262,6 +262,11 @@ transmitting for as long as the line stays asserted.</p>
 					<td><strong>DAKY</strong> (not RTS or DTR)</td>
 			</tr>
 			<tr>
+					<td>Yaesu (FTdx10, FT-710)</td>
+					<td><code>RADIO SETTING → GENERAL → CAT RTS</code></td>
+					<td><strong>DISABLE</strong></td>
+			</tr>
+			<tr>
 					<td>Icom (IC-7300)</td>
 					<td><code>SET → Connectors → USB SEND</code></td>
 					<td><strong>OFF</strong></td>
@@ -270,8 +275,21 @@ transmitting for as long as the line stays asserted.</p>
 </table>
 <p>Station Manager opens every supported rig&rsquo;s port with <strong>RTS and DTR
 de-asserted</strong>, so it will not key a rig configured this way. That is the
-default for all shipped rigs and you should not need to change it. If you have
-a genuine reason to assert a line, you can override it per rig in
+default for all shipped rigs and you should not need to change it.</p>
+<blockquote>
+<p><strong>Yaesu owners: you must also set <code>CAT RTS</code> to DISABLE.</strong> On these rigs RTS
+does two unrelated jobs, and the menu decides which: <code>RPTT SELECT</code> can make
+it a data-mode PTT line, and <code>CAT RTS</code> can make it a CAT flow-control line.
+With <code>CAT RTS</code> set to ENABLE — Yaesu&rsquo;s factory default — the radio will not
+send CAT replies unless the computer asserts RTS. Because Station Manager
+keeps RTS de-asserted for safety, <strong>CAT appears to connect and then nothing
+happens</strong>: the app shows no frequency, no mode, and FT8 reports the rig as
+not live. There is no error message, because from the daemon&rsquo;s side the port
+opened normally and the commands went out — the rig simply never answers.
+Set <code>CAT RTS</code> to <strong>DISABLE</strong> and CAT starts working immediately; no restart
+is needed.</p>
+</blockquote>
+<p>If you have a genuine reason to assert a line, you can override it per rig in
 <code>config.json</code>:</p>
 <div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-jsonc" data-lang="jsonc"><span style="display:flex;"><span><span style="color:#e6db74">&#34;rigs&#34;</span><span style="color:#960050;background-color:#1e0010">:</span> [
 </span></span><span style="display:flex;"><span>  {
@@ -717,19 +735,37 @@ down by a wire, and no stop command over CAT can release it. See
 <p><strong>How to tell.</strong> In <code>smd.log</code>, look at what the rig answered after the stop:</p>
 <pre tabindex="0"><code>grep &#39;tx-status&#39; ~/.local/share/station-manager/log/smd.log | tail
 </code></pre><ul>
-<li><code>tx-status 0</code> — the rig is in receive. Normal.</li>
-<li><code>tx-status 2</code> — &ldquo;transmitting by <strong>other means</strong>&rdquo;. If you see this
-routinely, something other than CAT is keying your rig — almost always a
-control line, as above.</li>
+<li><code>status 0</code> — the rig is in receive. Normal.</li>
+<li><code>status 2</code> — &ldquo;transmitting by <strong>other means</strong>&rdquo;. Expect this briefly while a
+transmission is actually up. Seeing it <strong>at rest</strong>, when you are not
+transmitting, means something other than CAT is keying your rig — almost
+always a control line, as above.</li>
 <li><code>rig reports CAT TX still keyed after unkey</code> — the rig acknowledged that it
 ignored the stop command. Check the radio.</li>
 </ul>
+<p>Station Manager logs <code>rig tx-status changed</code> on every change of state, whether
+or not it was expecting one, so a line that keys the rig behind its back shows
+up in the log even when nothing else looks wrong.</p>
 <p><strong>The banner won&rsquo;t clear.</strong> It clears when the rig reports that it is receiving
 again — the daemon re-asks automatically for a few minutes, and there is a
 <strong>Re-check</strong> button on the banner to ask again at any time. Dismiss only hides
 the banner; it does not claim the rig is safe. If the rig genuinely cannot be
 reached, restarting Station Manager re-establishes the connection and resets
 the state.</p>
+<hr>
+<h2 id="cat-connects-but-no-frequency-ever-appears-yaesu">CAT connects but no frequency ever appears (Yaesu)</h2>
+<p>The app shows no frequency and no mode, FT8 reports the rig as not live, and
+there is <strong>no error</strong> anywhere. The log says the port opened and the pipeline
+started, then goes quiet.</p>
+<p>On a Yaesu, check <code>RADIO SETTING → GENERAL → CAT RTS</code> and set it to
+<strong>DISABLE</strong>. With it set to ENABLE — the factory default — the radio only
+answers CAT while the computer asserts the RTS line, and Station Manager keeps
+RTS de-asserted so it can never key your transmitter by accident. The commands
+reach the rig; the replies never come back. Nothing reports an error because,
+from the software&rsquo;s side, nothing failed.</p>
+<p>This is the one rig setting that has to change before CAT will work at all.
+See <a href="#cat">Connecting Your Rig (CAT)</a> for the full picture, including why RTS
+is left de-asserted.</p>
 <hr>
 <p><em>Draft outline — remaining content to be written.</em></p>
 <ul>

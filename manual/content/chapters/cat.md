@@ -22,12 +22,26 @@ transmitting for as long as the line stays asserted.
 | Rig | Setting | Use |
 |---|---|---|
 | Yaesu (FTdx10, FT-710) | `RADIO SETTING → MODE PSK/DATA → RPTT SELECT` | **DAKY** (not RTS or DTR) |
+| Yaesu (FTdx10, FT-710) | `RADIO SETTING → GENERAL → CAT RTS` | **DISABLE** |
 | Icom (IC-7300) | `SET → Connectors → USB SEND` | **OFF** |
 
 Station Manager opens every supported rig's port with **RTS and DTR
 de-asserted**, so it will not key a rig configured this way. That is the
-default for all shipped rigs and you should not need to change it. If you have
-a genuine reason to assert a line, you can override it per rig in
+default for all shipped rigs and you should not need to change it.
+
+> **Yaesu owners: you must also set `CAT RTS` to DISABLE.** On these rigs RTS
+> does two unrelated jobs, and the menu decides which: `RPTT SELECT` can make
+> it a data-mode PTT line, and `CAT RTS` can make it a CAT flow-control line.
+> With `CAT RTS` set to ENABLE — Yaesu's factory default — the radio will not
+> send CAT replies unless the computer asserts RTS. Because Station Manager
+> keeps RTS de-asserted for safety, **CAT appears to connect and then nothing
+> happens**: the app shows no frequency, no mode, and FT8 reports the rig as
+> not live. There is no error message, because from the daemon's side the port
+> opened normally and the commands went out — the rig simply never answers.
+> Set `CAT RTS` to **DISABLE** and CAT starts working immediately; no restart
+> is needed.
+
+If you have a genuine reason to assert a line, you can override it per rig in
 `config.json`:
 
 ```jsonc

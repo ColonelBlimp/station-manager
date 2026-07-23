@@ -302,6 +302,12 @@ type Service struct {
 	// it no longer matches, so a cleared-then-re-raised alarm never leaves two
 	// loops running. Incremented on every raise AND on every clear.
 	txAlarmProbeGen uint64
+	// lastTxStatus (mu-guarded) is the previous TXSTATUS value seen, so
+	// observeTxStatus can log TRANSITIONS only. Without it the rig's answers
+	// are invisible whenever txUncertain is false — which is most of the time,
+	// and is exactly the window in which a control line keying the rig behind
+	// our back would show up. Empty before the first observation.
+	lastTxStatus string
 	// runCtx is Start's derived context, kept so event-driven background work
 	// (the tx-alarm re-probe loop) can be cancelled by Stop. nil before Start.
 	runCtx context.Context
