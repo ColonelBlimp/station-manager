@@ -38,6 +38,7 @@
     // mount via an untracked $effect.pre (reading rig.overrides here must not make
     // this a dependency, else the reconcile effect's writes would wipe edits).
     let editing: Record<string, string> = $state({});
+    let keyOrder: string[] = [];
     $effect.pre(() => {
         untrack(() => {
             const fresh: Record<string, string> = {};
@@ -46,6 +47,13 @@
                 fresh[f.key] = v ? String(v) : ''; // 0 / '' / absent → inherit
             }
             editing = fresh;
+            // Remember the ORDER the value arrived in. Emitting in this order
+            // below is what lets clear-then-restore (and edit-then-revert)
+            // reproduce the original object byte-for-byte: `delete` drops a
+            // key's position, so re-setting it would otherwise append and the
+            // JSON.stringify dirty check would read a reverted edit as a real
+            // one (reviews of 0e8cec2e and 3335fdab).
+            keyOrder = Object.keys(rig.overrides ?? {});
         });
     });
 
@@ -76,10 +84,10 @@
         // reverted, and the spurious diff reaches the save merge (review of
         // 0e8cec2e). Managed keys are set or deleted below; anything else rides
         // along untouched, in its original position.
-        const next: RigOverrides = { ...(rig.overrides ?? {}) };
+        const values: Record<string, unknown> = { ...(rig.overrides ?? {}) };
         const setOrDrop = (key: keyof RigOverrides, v: string | number | undefined): void => {
-            if (v === undefined) delete next[key];
-            else (next as Record<string, unknown>)[key] = v;
+            if (v === undefined) delete values[key];
+            else values[key] = v;
         };
         const num = (s: string): number | undefined => {
             const n = parseInt(s.trim(), 10);
@@ -95,6 +103,16 @@
             'line_delimiter',
             editing.line_delimiter !== '' ? editing.line_delimiter : undefined
         );
+
+        // Emit in the remembered order first, then anything new, so an object
+        // that is semantically back to where it started is also byte-identical.
+        const next: RigOverrides = {};
+        for (const k of keyOrder) {
+            if (values[k] !== undefined) (next as Record<string, unknown>)[k] = values[k];
+        }
+        for (const k of Object.keys(values)) {
+            if (!keyOrder.includes(k)) (next as Record<string, unknown>)[k] = values[k];
+        }
 
         const nextVal = Object.keys(next).length > 0 ? next : undefined;
         if (JSON.stringify(rig.overrides ?? null) !== JSON.stringify(nextVal ?? null)) {

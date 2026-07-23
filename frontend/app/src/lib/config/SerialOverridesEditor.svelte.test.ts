@@ -66,4 +66,18 @@ describe('SerialOverridesEditor', () => {
         expect(rig.overrides?.baud_rate).toBeUndefined();
         expect(rig.overrides?.rts).toBe(true);
     });
+
+    it('CLEARING then RESTORING a field also restores the original object', () => {
+        // The combination the earlier tests missed (review 3335fdab): `delete`
+        // drops a key's insertion position, so re-setting it appended and the
+        // round trip came back reordered — semantically reverted but still dirty.
+        const rig = rigWith({ baud_rate: 4800, rts: false });
+        const typeBaud = mount(rig);
+        const before = JSON.stringify(rig.overrides);
+
+        typeBaud(''); // clear — key removed entirely
+        typeBaud('4800'); // restore the original value
+
+        expect(JSON.stringify(rig.overrides)).toBe(before);
+    });
 });
