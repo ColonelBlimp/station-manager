@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	stderr "errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -157,6 +158,66 @@ func TestInsertQso_RejectsSoftDeletedLogbook(t *testing.T) {
 	orphan := validTestQso(999999, "M0CMC", "40m", "SSB", "20250508", "0900")
 	if _, err := svc.InsertQsoWithContext(ctx, orphan); !stderr.Is(err, errors.ErrNotFound) {
 		t.Errorf("insert under a missing logbook: got %v, want ErrNotFound", err)
+	}
+}
+
+// TestReadFirstTxStrandsOnConcurrentCommit is a CHARACTERIZATION test for the
+// SQLite behaviour that makes InsertQsoTx's statement order load-bearing
+// (2026-07-23 review of 0517354b). A transaction whose first statement is a READ
+// starts as a reader on a WAL snapshot; SQLite then refuses its write upgrade
+// with SQLITE_BUSY_SNAPSHOT ("database is locked", 517) if any other connection
+// committed in between. Note what triggers it below: an UNRELATED logbook insert,
+// not a delete of the row being read — so when the soft-deleted-parent guard sat
+// before the insert, two ordinary simultaneous submits were enough to turn one of
+// them into a 500. Guarding AFTER the insert keeps the transaction a writer from
+// its first statement.
+//
+// This pins the PREMISE, not the call site: the damaging interleave lives strictly
+// between InsertQsoTx's two statements, which no outside caller can drive without
+// a hook inside it (a deferred tx takes its snapshot at the first read, so a commit
+// landing before that read is harmless — an end-to-end test passes under either
+// order and would give false assurance). If a driver or SQLite upgrade ever makes
+// read-first safe, this test flips and the ordering comment can be revisited.
+//
+// Needs a real pool: the shared :memory: helpers pin MaxOpenConns to 1, where no
+// second connection exists to invalidate a snapshot.
+func TestReadFirstTxStrandsOnConcurrentCommit(t *testing.T) {
+	svc := concurrentCacheService(t, filepath.Join(t.TempDir(), "order.db"))
+	ctx := context.Background()
+
+	lbID, err := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	if err != nil {
+		t.Fatalf("seed logbook: %v", err)
+	}
+
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer cancel()
+	defer func() { _ = tx.Rollback() }()
+
+	// 1. Read first — exactly what a guard placed before the insert would do.
+	var live bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM logbook WHERE id = ? AND deleted_at IS NULL)`,
+		lbID).Scan(&live); err != nil {
+		t.Fatalf("guard read: %v", err)
+	}
+	if !live {
+		t.Fatalf("test setup: seeded logbook should read live")
+	}
+
+	// 2. An UNRELATED commit on another pool connection.
+	if _, err := svc.InsertLogbook(types.Logbook{Name: "Other", Callsign: "G9ZZZ"}); err != nil {
+		t.Fatalf("concurrent commit: %v", err)
+	}
+
+	// 3. The write upgrade is now refused — the reason the guard moved after it.
+	qso := validTestQso(lbID, "M0CMC", "40m", "SSB", "20250508", "0845")
+	if _, err := svc.InsertQsoTx(ctx, tx, qso); err == nil {
+		t.Fatal("read-first tx completed its write after a concurrent commit — " +
+			"SQLite no longer strands the upgrade, so InsertQsoTx's ordering comment is stale")
 	}
 }
 

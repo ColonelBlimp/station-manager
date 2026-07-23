@@ -2623,12 +2623,28 @@ func (s *Service) InsertQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) (i
 		return 0, errors.New(op).WithErr(err)
 	}
 
-	if err = requireLiveLogbook(ctx, tx, op, model.LogbookID); err != nil {
-		return 0, err
-	}
-
+	// ORDER IS LOAD-BEARING: insert FIRST, then verify the parent. Checking
+	// first made the guard read the transaction's opening statement, which
+	// starts it as a READER holding a WAL snapshot — and SQLite then refuses
+	// the later write upgrade with SQLITE_BUSY_SNAPSHOT (error 517, "database
+	// is locked") if ANY other connection committed in between. Not just a
+	// competing logbook delete: an unrelated concurrent submit was enough to
+	// turn this transaction into a 500 (2026-07-23 review of 0517354b, verified
+	// by probe). Writing first takes the write lock immediately, so a competing
+	// delete blocks behind us instead, and the subsequent read is a writer's own
+	// read — no upgrade, no snapshot to invalidate.
+	//
+	// The guarantee survives the reorder: a delete that committed BEFORE our
+	// insert is caught by this check (we roll back, nothing is committed); a
+	// delete that arrives AFTER it waits on our write lock and then finds our
+	// live QSO, so its NOT EXISTS refuses. A logbook that never existed is
+	// rejected by the foreign key on the insert above, as it always was.
 	if err = model.Insert(ctx, tx, boil.Infer()); err != nil {
 		return 0, errors.New(op).WithErr(err)
+	}
+
+	if err = requireLiveLogbook(ctx, tx, op, model.LogbookID); err != nil {
+		return 0, err
 	}
 
 	return model.ID, nil
@@ -2641,13 +2657,12 @@ func (s *Service) InsertQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) (i
 // check a QSO submitted concurrently with a logbook deletion commits as a live
 // row under a deleted parent, invisible to every logbook-scoped query.
 //
-// Run inside the caller's transaction, it is the insert-side half of the pair
-// whose delete-side half is the conditional UPDATE in
-// DeleteLogbookByIDWithContext. Together they are race-free on SQLite: if the
-// tx has already written, it holds the write lock and the delete blocks behind
-// it; if this check is the tx's first statement, the tx is a reader and the
-// subsequent INSERT fails with SQLITE_BUSY_SNAPSHOT rather than committing on
-// top of a snapshot the delete has invalidated.
+// It is the insert-side half of the pair whose delete-side half is the
+// conditional UPDATE in DeleteLogbookByIDWithContext. Inside a transaction it
+// MUST run AFTER the write it guards — see the ordering note in InsertQsoTx;
+// calling it as a transaction's first statement reintroduces the
+// SQLITE_BUSY_SNAPSHOT failure. In autocommit (InsertQsoWithContext) there is
+// no snapshot to strand, so the check goes first there.
 //
 // ErrNotFound is the deliberate sentinel: a soft-deleted logbook is already
 // invisible to LogbookCallsignByIDWithContext and FindLogbook, so callers that
