@@ -285,6 +285,27 @@ func IsUniqueConstraintError(err error) bool {
 // the exported IsUniqueConstraintError.
 func isUniqueConstraintError(err error) bool { return IsUniqueConstraintError(err) }
 
+// isForeignKeyConstraintError reports whether err is a FOREIGN KEY violation —
+// on an insert, "the parent row does not exist."
+//
+// Deliberately NARROWER than IsUniqueConstraintError: it matches only the
+// extended code SQLITE_CONSTRAINT_FOREIGNKEY (787) and the driver's message,
+// never the primary SQLITE_CONSTRAINT (19). That generic code is already
+// claimed by the unique-constraint fallback above, and treating every
+// constraint failure as a missing parent would mislabel CHECK violations —
+// which this schema uses heavily (call/mode/band lengths, date and time
+// shapes) and which callers must keep seeing as validation errors.
+func isForeignKeyConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var sqliteErr *moderncsqlite.Error
+	if stderr.As(err, &sqliteErr) {
+		return sqliteErr.Code() == moderncsqlitelib.SQLITE_CONSTRAINT_FOREIGNKEY
+	}
+	return strings.Contains(err.Error(), "FOREIGN KEY constraint failed")
+}
+
 func isTransientPingError(err error) bool {
 	if err == nil {
 		return false

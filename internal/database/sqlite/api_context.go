@@ -2640,6 +2640,18 @@ func (s *Service) InsertQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) (i
 	// live QSO, so its NOT EXISTS refuses. A logbook that never existed is
 	// rejected by the foreign key on the insert above, as it always was.
 	if err = model.Insert(ctx, tx, boil.Infer()); err != nil {
+		// `qso` carries exactly ONE foreign key (fk_qso_logbook_id), so an FK
+		// violation here can only mean the parent logbook row does not exist.
+		// Map it to the same ErrNotFound the guard below returns for a
+		// SOFT-deleted parent: writing first must not cost callers the sentinel
+		// they classify on (qsoservice.submit → "logbook_not_found"). Before the
+		// reorder the guard ran first and caught both shapes; now the FK catches
+		// the missing-row shape and the guard catches the tombstone shape, and
+		// the two must stay indistinguishable to the caller.
+		if isForeignKeyConstraintError(err) {
+			return 0, errors.New(op).WithErr(errors.ErrNotFound).
+				WithMsgf("logbook %d does not exist", model.LogbookID)
+		}
 		return 0, errors.New(op).WithErr(err)
 	}
 

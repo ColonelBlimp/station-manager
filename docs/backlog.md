@@ -44,7 +44,7 @@ next, and in what order" is answered.
 - ~~**Bridge TX-safety companion batch (review findings 3/5/6/7)**~~ **BUILT 2026-07-18:** `rigWritableLocked` is THE one live/write-ready predicate (strikes folded in) enforced in `RigConnected`/`TxReady`/`KeyFt8Tx`/`StartTune`/`SendCommands` · CI-V bootstrap + poll snapshots SKIP while keyed (Yaesu untouched) · per-path generation tokens (`tuneGen`/`ft8TxGen`) gate the auto-off callbacks' release AND re-arm · unrecognised IDENTITY no longer latches (a later exact match confirms; error published once per instance). 7 new tests in `txsafety_test.go` incl. DIRECT coverage of both auto-off callbacks (were 0%/28.6%); bridge+cat+api+ft8 `-race` green, coverage 85.2%. → archive at next sweep. _Original scope:_ one strike-aware live/write-ready predicate enforced in `TxReady`/`KeyFt8Tx`/`StartTune`/`SendCommands` (a 2-strike "dead" rig is currently still keyable) · skip/defer CI-V snapshots+polls while keyed (a snapshot holds `cmdMu` ~8 s ahead of TX0; Yaesu unaffected) · per-transition generation token so a stale auto-off retry can't unkey a NEWER transmission (`tune.go:305`/`ft8tx.go:246` re-arm on the boolean only) · classify identity BEFORE latching `identityVerified` (`pipeline.go:699` — a garbled first ID permanently write-blocks the instance). Subsumes the two old Bridge/TX-hardening P2 items (generation counter · identity poisoning).
 
 **P1 — finish in-flight / validate (small; closes open arcs)**
-- **Bridge: the tx-alarm cannot self-clear** — alarm-driven one-shot `TX;` re-poll (bypassing the `txUncertain` gate, since it is a READ) + an explicit operator ack/clear. The alarm currently blocks the only mechanism that would clear it, so a stuck-TX banner persists until an unsolicited rig push or a pipeline reconnect. Mechanism verified in code 2026-07-23; detail in Bugs. _(dogfood 2026-07-21 second stuck-TX incident.)_
+- **Bridge: the tx-alarm cannot self-clear** — alarm-driven one-shot `TX;` re-poll (bypassing the `txUncertain` gate, since it is a READ) + an operator "re-check the rig" affordance. The alarm currently blocks the only mechanism that would clear it, so a stuck-TX banner persists until an unsolicited rig push or a pipeline reconnect. **More evidence, never a manual override — no daemon-side ack/clear endpoint** (it would either re-enable keying while the rig may be transmitting or hide the only warning from every tab; dismissal stays UI-local, as `TxAlarmBanner` already does). Mechanism verified in code 2026-07-23; detail in Bugs. _(dogfood 2026-07-21 second stuck-TX incident.)_
 - Behavioural retest of shipped daemon changes on the dogfood daemon (session 192/193 batch). _Sweep note (2026-07-18): the batch = DXCC numeric-match (`HasQsoForDxcc` on `json_extract('$.dxcc')`), the `ft8_decode_log` config toggle, and the `tx_parity` CQ-sequencer path — shipped 2026-06-25/26. ~3.5 weeks of daily FT8 dogfooding since has plausibly exercised DXCC-match (new-entity markers) and tx-parity implicitly; decode-log only matters if enabled. Operator's call to close._
 
 **P2 — next features (open one workstream per active focus)**
@@ -98,12 +98,23 @@ next, and in what order" is answered.
   that would clear it, leaving the operator with a permanent "CHECK YOUR RADIO" banner
   (13 min in the incident) that only an unsolicited AI push or a pipeline reconnect can
   dismiss — and a rig front-panel power-cycle triggers neither, since the CP2105 stays
-  USB-enumerated. **Two parts, both needed:** (1) an alarm-driven **one-shot `TX;`
-  re-poll** that bypasses the `txUncertain` gate — it is a READ and cannot key anything —
-  so a rig that is actually idle clears within a second or two; (2) an explicit
-  **operator ack/clear** (endpoint + SSE clear event + SPA button) for when the rig
-  genuinely cannot answer. Note the hub caches `tx-alarm {active:true}` for late
-  subscribers, so the clear must invalidate that cache too. Companion (operator/hardware,
+  USB-enumerated. **The fix is more EVIDENCE, never a manual override:** (1) an
+  alarm-driven **one-shot `TX;` re-poll** that bypasses the `txUncertain` gate — it is a
+  READ and cannot key anything — so a rig that is actually idle clears within a second or
+  two; (2) an operator-triggered **"re-check the rig" action** (the same read, on demand)
+  and/or bounded polling while alarmed, so the operator has a way to *ask* rather than
+  only wait. **Do NOT add a daemon-side ack/clear endpoint** (the shape the original
+  dogfood note and the first draft of this entry asked for — corrected 2026-07-23 after
+  review): clearing `txUncertain` would re-enable keying and generic commands while the
+  rig may still be transmitting, which is precisely the ADR 0051 guarantee; and
+  publishing `tx-alarm {active:false}` without positive RX evidence would retire the only
+  standing warning for every tab AND every late subscriber via the hub cache. Operator
+  acknowledgement therefore stays LOCAL/UI-only — `frontend/app`'s `TxAlarmBanner`
+  already implements exactly that (`dismissTxAlarm` sets a client-side
+  `txAlarmDismissed`; a new alarm re-shows the banner; daemon state is untouched), so
+  part (2) is about adding a recheck affordance next to that Dismiss, not a clear path.
+  Only `confirmTxIdle`, on positive evidence, may ever publish an inactive alarm.
+  Companion (operator/hardware,
   not code): 30m RFI defeated the CAT `TX0;` unkey twice — RF mitigations (common-mode
   choke on the USB lead, ferrites, lower power on 30m) and the open question of whether a
   **hardware PTT line (RTS/DTR) unkey path** should back up CAT, which two incidents have

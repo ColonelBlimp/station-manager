@@ -154,11 +154,25 @@ func TestInsertQso_RejectsSoftDeletedLogbook(t *testing.T) {
 	}
 	_ = tx.Rollback()
 
-	// A logbook that never existed is rejected the same way.
+	// A logbook that never existed is rejected the same way — on BOTH paths.
+	// The transactional one reaches ErrNotFound by a different route since the
+	// write-first reorder (the FK fires before the guard runs, and the insert's
+	// FK error is mapped back to the sentinel), so it needs its own assertion:
+	// callers must not be able to tell a missing parent from a soft-deleted one.
 	orphan := validTestQso(999999, "M0CMC", "40m", "SSB", "20250508", "0900")
 	if _, err := svc.InsertQsoWithContext(ctx, orphan); !stderr.Is(err, errors.ErrNotFound) {
 		t.Errorf("insert under a missing logbook: got %v, want ErrNotFound", err)
 	}
+
+	otx, ocancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer ocancel()
+	if _, err := svc.InsertQsoTx(ctx, otx, orphan); !stderr.Is(err, errors.ErrNotFound) {
+		t.Errorf("InsertQsoTx under a missing logbook: got %v, want ErrNotFound", err)
+	}
+	_ = otx.Rollback()
 }
 
 // TestReadFirstTxStrandsOnConcurrentCommit is a CHARACTERIZATION test for the
