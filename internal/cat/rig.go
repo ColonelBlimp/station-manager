@@ -125,10 +125,21 @@ type RigSerial struct {
 
 	// RTS and DTR are the initial modem-output-line states the transport sets
 	// at open (*bool tri-state: nil/omitted = leave go.bug.st default of both
-	// asserted; an explicit false DE-ASSERTS). Icom CI-V sets both false: its
-	// USB SEND can map PTT to a control line, so opening with the line asserted
-	// would key the rig (ADR 0034). The Yaesu USB-CDC rigs set true (the
-	// default, where the lines aren't flow control anyway).
+	// ASSERTED; an explicit false DE-ASSERTS).
+	//
+	// EVERY shipping rigdef sets both false, and new ones should too. The reason
+	// is not flow control — it is that these lines are a PTT source on rigs that
+	// offer one: Icom's USB SEND, and Yaesu's PSK/DATA "RPTT SELECT = RTS/DTR".
+	// A port opened with the line asserted holds that PTT DOWN for the life of
+	// the connection, and no CAT `TX0;` can release it — the transmitter is
+	// keyed by hardware, and the rig correctly reports "TX by other means".
+	//
+	// The Yaesu defs shipped `true` until 2026-07-23, when a dogfood station
+	// running PSK/DATA RPTT SELECT = RTS traced a stuck tune carrier to exactly
+	// this: 975 of 985 post-unkey status reads answered "2" (TX by other means)
+	// because SM was holding the operator's data-mode PTT. Default to
+	// de-asserted; an operator who genuinely needs a line asserted opts in via
+	// the per-rig override.
 	RTS *bool `json:"rts,omitempty"`
 	DTR *bool `json:"dtr,omitempty"`
 }

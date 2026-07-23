@@ -30,8 +30,64 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-21)
+## Current state (as of 2026-07-23)
 
+> **Session 231 (2026-07-23) — DB REVIEW BATCH SHIPPED, DEPLOYED, THEN THREE
+> STUCK-TX INCIDENTS THAT ENDED IN A ROOT CAUSE. The session's real output is the
+> last item: SM was holding the operator's data-mode PTT down via RTS.**
+> - **ROOT CAUSE FOUND — the Yaesu rigdefs asserted RTS/DTR.** `yaesu-ftdx10` /
+>   `yaesu-ft710` shipped `"rts": true, "dtr": true` (the Icom def already set both
+>   false, with a comment warning about exactly this). The dogfood FTdx10 runs
+>   **PSK/DATA → RPTT SELECT = RTS**, so SM opening the CAT port held the
+>   **data-mode PTT down for the life of every connection** — and no CAT `TX0;` can
+>   release a PTT a wire is holding. Evidence: **975 of 985** post-unkey status
+>   reads answered `tx-status 2` ("TX by OTHER means"); only 10 ever answered `0`.
+>   That also explains the 06:36 stuck tune (tune switches to RTTY = a data mode →
+>   RTS-as-PTT live) and why **SSB was never affected** (SSB is on DAKY).
+>   **FIXED:** both Yaesu defs de-asserted; `RigOverrides` gained tri-state
+>   `rts`/`dtr` (there was NO operator escape hatch — it could not be corrected
+>   from config.json at all); manual gained a CAT section + a troubleshooting
+>   entry. Operator set the rig to DAKY. **UNCONFIRMED — verify `tx-status` flips
+>   from `2` to `0` on the next unkey.**
+> - **THREE stuck-TX incidents, three different mechanisms** (2026-07-18 USB
+>   write-endpoint stall; 2026-07-21 30m, clean kernel log, RFI suspected;
+>   2026-07-23 20m/30W, CAT healthy throughout — the rig answered `TX1;`). The
+>   third ran ~2 minutes and ended when the operator switched the radio off.
+>   **What held:** the restore-skip (no full-power write into a keyed rig) and the
+>   TxReady interlock (refused 3 re-tunes). **What didn't:** nothing re-asked the
+>   rig, so the alarm sat there.
+> - **ADR 0057 — TX-safety scope, the session's other durable output.** Operator
+>   called the accumulated protection "slop"; the numbers agreed (28 state fields,
+>   ~1,700 lines, 12 commits in 7 days, **4 review rounds in one day each finding a
+>   real defect in the previous fix**). Decision: **CAT confirmation is best-effort
+>   DETECTION; the rig's TOT is the guarantee.** Kept the three proven guards plus
+>   two simple additions (bounded alarm re-probe loop — the alarm could previously
+>   latch itself out of every clear path; and a re-unkey retry on a positive "still
+>   keyed" answer). **REVERTED** per-cycle reply counting (assumed a 1:1
+>   query↔reply correspondence the protocol lacks; blocked TX on a healthy rig
+>   after reconnect) and **REMOVED** the half-built marker barrier. Standing rule:
+>   **no new TX-safety mechanism without an observed failure.** ADR 0057 is also
+>   the standing answer to the anonymous-reply finding clean-room reviews re-raise
+>   every round.
+> - **`internal/database/sqlite` review batch (5 findings) — ALL FIXED**, each with
+>   a regression test verified to fail against the pre-fix code. Reference migration
+>   `0003_widen_contacted_station_call` (cache `call` 20→32; **rehearsed on a copy of
+>   the live 5,471-row reference.db**); atomic conditional logbook delete +
+>   `requireLiveLogbook` guard (FK `ON DELETE RESTRICT` never fires on a soft
+>   delete); `bootstrap.go` `splitState` (interrupted split resumed instead of
+>   reading as done) + unconditional single-char-prefix purge; contacted-station
+>   `INSERT … ON CONFLICT … DO UPDATE`. **Follow-on from review:** `InsertQsoTx`
+>   statement ORDER is load-bearing — the guard read as the tx's first statement
+>   caused `SQLITE_BUSY_SNAPSHOT` on ANY concurrent commit (two ordinary submits
+>   were enough); insert-first + FK→`ErrNotFound` mapping fixed it.
+> - **DEPLOYED `2.0.0-alpha.1-787-g00921ce9`** (PocketFFT/CGO). **ClubLog forwarder
+>   confirmed LIVE on air** — 3 successful realtime.php uploads. Closes the
+>   long-standing "enable at next on-air test" item.
+> - **Dogfood inbox TRIAGED** (15 open items, all verified against the code):
+>   5 already done, 2 resolved elsewhere, 5 → backlog, 3 closed WAI/no-action.
+> - **FT8 session-panel time** now `HH:MM:SS` (the daemon was truncating the SSE
+>   payload; Phone/CW was full precision, so FT8 was the odd one out).
+>
 > **Session 230 (2026-07-21) — REVIEW-DRIVEN HARDENING + LOGGING-SPA RETIREMENT.
 > A long reactive session: finished the CSRF arc, worked a whole `internal/qsoservice`
 > review batch, and retired the legacy logging SPA. Every commit reviewed + converged
@@ -1337,6 +1393,38 @@ precisely so we don't re-derive state or redo finished work.
 >   `GET /v1/logbook/{id}/map` aggregate — detail in the backlog).
 
 ## Active cycle (the 1–3 things in flight now)
+
+> **▶ FIRST, BEFORE ANY OTHER TX WORK (session 231 hand-off):**
+>
+> 1. **COMMIT + DEPLOY the post-`00921ce9` work.** The running daemon is
+>    `00921ce9`, which predates the alarm re-probe loop, the Re-check endpoint +
+>    button, the re-unkey retry, AND the RTS/DTR rigdef fix. **The deployed build
+>    is the one that gave the two-minute stuck carrier.** Working tree at session
+>    end: rigdef de-assert, `RigOverrides` rts/dtr + test, manual CAT +
+>    troubleshooting chapters, `config.md`. Uncommitted.
+> 2. **CONFIRM THE ROOT CAUSE — free, no RF.** The operator has set the rig to
+>    `RPTT SELECT = DAKY`. On the next FT8 or tune unkey:
+>    `grep 'tx-status' ~/.local/share/station-manager/log/smd.log | tail -5`.
+>    **`tx-status 0` = confirmed** (SM was holding the PTT via RTS; 975/985 reads
+>    were `2` before). Still `2` = the mechanism is NOT what we think and the
+>    stuck-TX investigation reopens. **Record the result in the inbox either way.**
+> 3. **Then validate the TX-safety additions on air:** provoke an alarm and check
+>    it now self-clears within a probe interval, and that the **Re-check** button
+>    works. Neither has ever run on air.
+>
+> **STILL UNEXPLAINED — needs an operator timestamp, don't guess:** twice during
+> SSB the **PTT dropped mid-transmission**. The daemon wrote NOTHING to the rig
+> between 06:39 and 07:16, so it wasn't SM over CAT in that window. Structural
+> candidate: a CAT reconnect sends an unconditional defensive `tx_off`, so a
+> mid-transmission reconnect WOULD drop the mic. **Next occurrence: note the clock
+> time — the log settles it immediately.**
+>
+> **Stuck-tune reproduction so far (all dummy load, pre-fix build): 0/3 at 5s,
+> 0/3 at 2s, 0/3 after an FT8 session.** Duration and FT8-residue hypotheses both
+> DEAD. `scripts/tune-duration-probe.sh` is the harness (disposable). If the
+> RTS fix confirms, this whole line closes; if not, the antenna is the remaining
+> untested variable.
+>
 
 > **The full ranked queue lives in `docs/backlog.md` → "Worklist index".** This
 > section is ONLY what's actively in flight — it does **not** re-rank the backlog

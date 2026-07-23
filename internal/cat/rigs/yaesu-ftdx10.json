@@ -15,8 +15,8 @@
     "line_delimiter": ";",
     "read_timeout_ms": 8,
     "write_timeout_ms": 20,
-    "rts": true,
-    "dtr": true
+    "rts": false,
+    "dtr": false
   },
   "timing": {
     "listener_interval_ms": 10,

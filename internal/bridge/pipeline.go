@@ -1077,6 +1077,17 @@ func buildSerialConfig(brCfg types.BridgeSerialConfig, rigSerial cat.RigSerial) 
 	if ov.ReadTimeoutMS != 0 {
 		eff.ReadTimeoutMS = ov.ReadTimeoutMS
 	}
+	// RTS/DTR are tri-state, so "set" is nil-ness rather than non-zero: an
+	// override of FALSE is meaningful and must not be read as "unset". These are
+	// a PTT source on rigs that map one to a control line, so the override
+	// exists mainly to let an operator de-assert a line a future rigdef asserts
+	// — the reverse of the 2026-07-23 case, where there was no override at all.
+	if ov.RTS != nil {
+		eff.RTS = ov.RTS
+	}
+	if ov.DTR != nil {
+		eff.DTR = ov.DTR
+	}
 	return rigserial.Compose(eff, brCfg.Port)
 }
 

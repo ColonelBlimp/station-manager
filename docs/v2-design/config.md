@@ -127,7 +127,13 @@ secretly are) rig-specific.
 ### `RigConfig` (`internal/types/rig.go`)
 
 `ID`, `Model`, `Port`, `Audio.Device` (all per-rig), and `Overrides` (per-rig serial
-params). The active rig's fields ARE projected at runtime: `ActiveBridge()` overlays
+params: `baud_rate`, `data_bits`, `stop_bits`, `parity`, `line_delimiter`,
+`read_timeout_ms`, plus the **tri-state `rts`/`dtr`** added 2026-07-23 — `*bool`, so an
+explicit `false` is a real setting and is NOT read as "unset"; omitted inherits the
+rigdef, and every shipping rigdef now de-asserts both. These lines are a PTT source on
+rigs that map one to them (Icom USB SEND, Yaesu PSK/DATA `RPTT SELECT`), so asserting one
+on such a rig keys the transmitter for the life of the connection — see ADR 0057 and the
+CAT chapter of the manual). The active rig's fields ARE projected at runtime: `ActiveBridge()` overlays
 `Model`→`cat.driver`, `Port`, and `Overrides` onto the bridge serial/cat config, and
 `ActiveFt8()` projects the active rig's `Audio.Device` (both pinned by tests). `Model` is
 validated against the embedded `cat.Lookup` catalogue at Load/PUT (review 2026-06-19 M2),

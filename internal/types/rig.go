@@ -120,4 +120,17 @@ type RigOverrides struct {
 	Parity        string `json:"parity,omitempty"`
 	LineDelimiter string `json:"line_delimiter,omitempty"`
 	ReadTimeoutMS int    `json:"read_timeout_ms,omitempty"`
+
+	// RTS and DTR override the rigdef's initial modem-output-line states.
+	// *bool tri-state: omitted inherits the rigdef (every shipping def
+	// de-asserts); an explicit true ASSERTS the line, false de-asserts it.
+	//
+	// These exist because there was NO escape hatch when the shipped Yaesu defs
+	// asserted RTS/DTR (2026-07-23): on a rig with PSK/DATA "RPTT SELECT = RTS"
+	// that holds the data-mode PTT down for the whole connection, and the
+	// operator could not correct it from config.json at all. Assert a line only
+	// if you know your rig does not use it as a PTT source — doing so on a rig
+	// that does will key the transmitter for as long as the daemon is connected.
+	RTS *bool `json:"rts,omitempty"`
+	DTR *bool `json:"dtr,omitempty"`
 }
