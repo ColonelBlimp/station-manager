@@ -111,7 +111,7 @@ type LoggedQso struct {
 	RstSent    string `json:"rst_sent"`
 	RstRcvd    string `json:"rst_rcvd"`
 	Mode       string `json:"mode"`
-	TimeOn     string `json:"time_on"`  // UTC "HH:MM"
+	TimeOn     string `json:"time_on"`  // UTC "HH:MM:SS" ("HH:MM" if the record has no seconds)
 	QsoDate    string `json:"qso_date"` // "YYYY-MM-DD"
 	Gridsquare string `json:"gridsquare"`
 	Country    string `json:"country"` // contacted station's country (enriched at log time)
@@ -120,19 +120,26 @@ type LoggedQso struct {
 
 // NewLoggedQso maps a stored types.Qso (as built by BuildQso) plus its canonical
 // UUID into the SSE payload, converting the daemon's storage formats to the
-// SPA-friendly shapes the session list expects: FREQ MHz → Hz, TIME_ON "HHMM" →
-// "HH:MM", QSO_DATE "YYYYMMDD" → "YYYY-MM-DD". A malformed freq/time/date degrades
+// SPA-friendly shapes the session list expects: FREQ MHz → Hz, TIME_ON "HHMMSS"
+// → "HH:MM:SS", QSO_DATE "YYYYMMDD" → "YYYY-MM-DD". A malformed freq/time/date degrades
 // to a zero/blank field rather than failing — the QSO is already logged.
 func NewLoggedQso(q types.Qso, uuid string) LoggedQso {
 	var freqHz int64
 	if mhz, err := strconv.ParseFloat(q.Freq, 64); err == nil {
 		freqHz = int64(mhz*1_000_000 + 0.5)
 	}
-	// Display is HH:MM (compact session list) regardless of whether the stored
-	// value is HHMM or HHMMSS — the seconds live in the stored/exported record,
-	// not this UI field.
+	// Colon-separate at the precision the record actually carries: HHMMSS →
+	// "HH:MM:SS", HHMM → "HH:MM". This used to truncate to HH:MM unconditionally
+	// for a "compact" session list, which made FT8 rows the odd ones out — the
+	// Phone/CW path fills the same session column from the submit response at
+	// full precision, and the SPA's row type documents it as HH:MM:SS (dogfood
+	// 2026-07-23). BuildQso always stamps seconds, so FT8 now matches; the
+	// shorter form stays for an imported/legacy HHMM value.
 	timeOn := q.TimeOn
-	if len(timeOn) >= 4 {
+	switch len(timeOn) {
+	case 6:
+		timeOn = timeOn[:2] + ":" + timeOn[2:4] + ":" + timeOn[4:6]
+	case 4:
 		timeOn = timeOn[:2] + ":" + timeOn[2:4]
 	}
 	qsoDate := q.QsoDate

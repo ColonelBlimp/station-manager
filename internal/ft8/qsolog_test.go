@@ -185,8 +185,8 @@ func TestBuildQso_StationCallsignFallsBackToOperator(t *testing.T) {
 
 func TestNewLoggedQso(t *testing.T) {
 	// Build a QSO the normal way, then map it to the SSE payload — the storage
-	// formats (MHz freq, HHMM time, YYYYMMDD date) must convert to the SPA shapes
-	// (Hz, HH:MM, YYYY-MM-DD), and the UUID must carry through for email/edit.
+	// formats (MHz freq, HHMMSS time, YYYYMMDD date) must convert to the SPA shapes
+	// (Hz, HH:MM:SS, YYYY-MM-DD), and the UUID must carry through for email/edit.
 	station := types.LoggingStation{StationCallsign: "G0XYZ"}
 	c := CompletedQso{
 		TheirCall:      "K1ABC",
@@ -213,7 +213,10 @@ func TestNewLoggedQso(t *testing.T) {
 	require.Equal(t, int64(14_074_000), l.FreqHz) // dial 14.074 MHz → Hz (TX offset not added)
 	require.Equal(t, "20m", l.Band)
 	require.Equal(t, "FT8", l.Mode)
-	require.Equal(t, "09:05", l.TimeOn)       // stored HHMMSS → compact HH:MM for the session list
+	// Seconds are KEPT (dogfood 2026-07-23): the Phone/CW path fills this same
+	// session column at full precision, so truncating here made FT8 rows the only
+	// ones showing HH:MM.
+	require.Equal(t, "09:05:00", l.TimeOn)
 	require.Equal(t, "2026-06-10", l.QsoDate) // YYYYMMDD → YYYY-MM-DD
 	require.Equal(t, "-12", l.RstSent)
 	require.Equal(t, "-10", l.RstRcvd)

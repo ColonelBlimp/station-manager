@@ -172,6 +172,114 @@ func (s *Service) startAlarmProbes() {
 	}()
 }
 
+// Re-unkey cadence for a rig that reports itself STILL TRANSMITTING. Spaced far
+// enough apart to let the rig act on each stop and answer the follow-up query,
+// bounded because past a few attempts the wire is not the problem and the
+// operator's own intervention (and the rig's TOT) is what will end it.
+var (
+	txStopRetryAttempts = 4
+	txStopRetryInterval = 400 * time.Millisecond
+)
+
+// retryUnkeyStillKeyed re-asserts the STOP after the rig has answered the status
+// query with "CAT TX on" — positive evidence that the unkey did not take effect
+// (2026-07-23 dogfood: a 2-second tune on 20m left the carrier up for two
+// minutes, ending only when the operator switched the radio off).
+//
+// Raising the alarm was previously the WHOLE response to that answer, which is
+// half a reaction: the rig has just told us it is transmitting when it should
+// not be, and the guaranteed-stop discipline says the daemon's job is to keep
+// trying to stop it, not merely to report it. Re-sending tx_off is the safest
+// possible write — it carries no TX intent and cannot key anything — so unlike
+// the generic command path there is no reason to withhold it while the
+// transmitter's state is in doubt.
+//
+// Deliberately NOT a substitute for the alarm: the banner stays up, TX stays
+// blocked, and only the rig's own "in RX" answer (via observeTxStatus →
+// confirmTxIdle) retires either. This just gives the rig more chances to obey
+// before the operator has to reach for the radio.
+//
+// Runs on its own goroutine because observeTxStatus is called FROM the readLoop
+// and writeKeyedLine awaits a CI-V ACK that only the readLoop can deliver —
+// writing inline would self-deadlock until the ACK timeout (the same reasoning
+// as beginDefensiveRecovery). Single-flighted, since the re-probe loop means the
+// "still keyed" answer can arrive repeatedly.
+func (s *Service) retryUnkeyStillKeyed() {
+	s.mu.Lock()
+	if s.txStopRetrying || s.stopped || s.runCtx == nil {
+		s.mu.Unlock()
+		return
+	}
+	cl := s.activeClient
+	if cl == nil {
+		s.mu.Unlock()
+		return
+	}
+	s.txStopRetrying = true
+	ctx := s.runCtx
+	// Registered under the same lock that observed s.stopped — see startAlarmProbes.
+	s.wg.Add(1)
+	s.mu.Unlock()
+
+	go func() {
+		defer s.wg.Done()
+		defer func() {
+			s.mu.Lock()
+			s.txStopRetrying = false
+			s.mu.Unlock()
+		}()
+
+		def, ok := cat.Lookup(s.cfg.Cat.Driver)
+		if !ok {
+			return
+		}
+		off, err := encodeTuneUnkey(def)
+		if err != nil {
+			return
+		}
+
+		for attempt := 1; attempt <= txStopRetryAttempts; attempt++ {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(txStopRetryInterval):
+			}
+			// The rig may have obeyed an earlier attempt (or the operator may
+			// have unkeyed at the radio) — confirmTxIdle clears uncertainty, and
+			// there is nothing left to stop.
+			if !s.TxUncertain() {
+				return
+			}
+			// keyMu: the release paths hold it across their own unkey+confirm,
+			// so taking it here keeps this write from interleaving with theirs.
+			s.keyMu.Lock()
+			// Re-check under the lock: the rig may have confirmed idle while we
+			// waited for keyMu. The window cannot be closed completely — a
+			// confirmation landing between this check and the write still lets
+			// one unkey through — and it does not need to be: an extra tx_off to
+			// a rig already in RX is a no-op, which is exactly why re-asserting
+			// the stop is safe to do at all.
+			if !s.TxUncertain() {
+				s.keyMu.Unlock()
+				return
+			}
+			werr := s.writeKeyedLine(context.Background(), def, cl, off, "stuck-tx re-unkey")
+			s.keyMu.Unlock()
+			if werr != nil {
+				s.logger.ErrorWith().Err(werr).Int("attempt", attempt).
+					Msg("bridge: re-unkey write failed on a rig reporting itself still keyed")
+				continue
+			}
+			s.logger.WarnWith().Int("attempt", attempt).
+				Msg("bridge: re-sent tx_off — rig reported it was still transmitting")
+			// Ask again so the answer, not the write, decides whether it worked.
+			if perr := s.probeTxStatus("post re-unkey"); perr != nil {
+				s.logger.DebugWith().Err(perr).Msg("bridge: post-re-unkey status probe failed")
+			}
+		}
+	}()
+}
+
 // RecheckTx is the operator-initiated re-probe behind POST /v1/rig/tx/recheck.
 // It asks the rig the same question the automatic loop asks, on demand, for the
 // case the bounded loop has expired or the operator has just fixed something

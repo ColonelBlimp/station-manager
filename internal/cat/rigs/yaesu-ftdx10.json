@@ -36,7 +36,8 @@
     {"name": "set_power", "cmd": "PC%s;", "pad": 3, "min": 5, "max": 100, "exposed": true},
     {"name": "tx_on",     "cmd": "TX1;"},
     {"name": "tx_off",    "cmd": "TX0;"},
-    {"name": "read_tx_status", "cmd": "TX;"}
+    {"name": "read_tx_status", "cmd": "TX;"},
+    {"name": "read_identity", "cmd": "ID;"}
   ],
   "states": [
     {

@@ -39,6 +39,16 @@ import (
 // actual state. Not Exposed — only this confirmation machinery sends it.
 const readTxStatusCommand = "read_tx_status"
 
+// readIdentityCommand is the BARRIER marker (2026-07-23 review round 4). See
+// the barrier note on beginTxConfirm: it is written immediately before the
+// status query so its distinguishable answer partitions the reply stream into
+// "emitted before our unkey" and "emitted after it". Optional — a rigdef
+// without it simply gets no barrier, and confirmation behaves as it did before.
+// Safe to re-send freely: identity VERIFICATION latches per pipeline instance
+// (pipeline.go's `if !identityVerified` block), so later IDENTITY frames only
+// re-publish the same value.
+const readIdentityCommand = "read_identity"
+
 // txConfirmTimeout bounds how long an unconfirmed unkey may stay silent
 // before the alarm fires. A healthy link answers the status query in tens of
 // milliseconds; three seconds absorbs a busy half-duplex bus without leaving
@@ -245,6 +255,9 @@ func (s *Service) observeTxStatus(v string) {
 	case "1":
 		s.logger.ErrorWith().Msg("bridge: rig reports CAT TX still keyed after unkey — CHECK YOUR RADIO")
 		s.raiseTxAlarm(TxAlarmStillKeyed)
+		// Positive evidence the transmitter is up when it should be down — keep
+		// trying to stop it, don't just report it (see retryUnkeyStillKeyed).
+		s.retryUnkeyStillKeyed()
 	}
 }
 

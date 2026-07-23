@@ -291,6 +291,12 @@ type Service struct {
 	// nothing about the unkey (8bd88c1b review, ordering finding).
 	txConfirmAfterFrame uint64
 
+	// txStopRetrying single-flights the re-unkey sequence that runs when the rig
+	// POSITIVELY reports it is still transmitting. The alarm re-probe keeps
+	// asking, so the "1" answer can repeat every few seconds; without this each
+	// answer would stack another retry goroutine.
+	txStopRetrying bool
+
 	// txAlarmProbeGen gates the alarm re-probe loop the way txConfirmGen gates
 	// the confirm timeout: the loop reads it before every probe and exits when
 	// it no longer matches, so a cleared-then-re-raised alarm never leaves two
