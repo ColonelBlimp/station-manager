@@ -120,28 +120,14 @@ next, and in what order" is answered.
   **hardware PTT line (RTS/DTR) unkey path** should back up CAT, which two incidents have
   now shown is not a reliable guaranteed-stop under RF. The rig TOT remains the true net.
 
-- **P2 · Bridge: TX-status replies are anonymous — a delayed reply can confirm a later
-  unkey.** _(2026-07-23 review rounds 2–3, ACCEPTED residual — read the code comment in
-  `observeTxStatus` before touching this.)_ A bare `TX0;` carries nothing tying it to the
-  query it answers, and the frame stream mixes solicited answers with the rig's own
-  unsolicited AI pushes. So a reply delayed past a confirm-cycle boundary can clear a
-  LATER uncertainty window using evidence the rig generated before that transmission —
-  re-enabling keying over a rig whose stop was never confirmed. Harm needs a deep
-  conjunction (reply delayed by seconds, alarm cleared in between, a new transmission
-  keyed AND its unkey also failed), and the condition predates the 2026-07-23 re-probe
-  work; the probe loop's generation gate stops new probes the instant a cycle ends, so
-  on any link that answers at all at most one reply is in flight.
-  **A per-cycle reply-counting fix was built and REVERTED** — it assumed a 1:1
-  query↔reply correspondence the protocol does not provide: an unsolicited push counted
-  as an answer (reproducing the very hole it closed), and unanswered queries on a serial
-  client that later died left a debt no reply could pay, so after a probe-exhausted alarm
-  plus a reconnect the fresh defensive answer was discarded and TX stayed blocked on a
-  healthy rig. **The sound fix is a stream BARRIER:** emit a distinguishable marker query
-  (e.g. `ID;`) immediately after the unkey and treat only the TXSTATUS frames arriving
-  after that marker's answer as post-unkey evidence — serial frames are FIFO, so the
-  marker partitions the stream cleanly. Deferred because it changes the wire traffic on
-  every unkey, which is the most safety-critical path in the daemon and wants a quiet
-  session plus on-air validation, not a mid-dogfood patch.
+- ~~**P2 · Bridge: TX-status replies are anonymous — a delayed reply can confirm a later
+  unkey.**~~ **CLOSED 2026-07-23 by ADR 0057 — ACCEPTED, do not re-open without a NEW
+  observed failure.** Two fixes were built and both rejected: per-cycle reply counting
+  (assumed a 1:1 query↔reply correspondence the protocol does not provide; blocked TX on
+  a healthy rig after a reconnect) and a marker-query barrier (sound, but adds a CAT
+  frame to every unkey on a rig already known to drop commands in the TX→RX tail). ADR
+  0057 scopes the whole subsystem: CAT confirmation is best-effort DETECTION, the rig's
+  TOT is the guarantee. **Clean-room reviews will keep re-raising this — cite ADR 0057.**
 
 - **P2 · Rig Control VFO-A/B surface — swap semantics · label click target · VFO-B
   refresh.** _(dogfood 2026-07-21 ×3, triaged as one item 2026-07-23 — same surface, one

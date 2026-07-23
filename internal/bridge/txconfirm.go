@@ -39,16 +39,6 @@ import (
 // actual state. Not Exposed — only this confirmation machinery sends it.
 const readTxStatusCommand = "read_tx_status"
 
-// readIdentityCommand is the BARRIER marker (2026-07-23 review round 4). See
-// the barrier note on beginTxConfirm: it is written immediately before the
-// status query so its distinguishable answer partitions the reply stream into
-// "emitted before our unkey" and "emitted after it". Optional — a rigdef
-// without it simply gets no barrier, and confirmation behaves as it did before.
-// Safe to re-send freely: identity VERIFICATION latches per pipeline instance
-// (pipeline.go's `if !identityVerified` block), so later IDENTITY frames only
-// re-publish the same value.
-const readIdentityCommand = "read_identity"
-
 // txConfirmTimeout bounds how long an unconfirmed unkey may stay silent
 // before the alarm fires. A healthy link answers the status query in tens of
 // milliseconds; three seconds absorbs a busy half-duplex bus without leaving
@@ -216,33 +206,27 @@ func (s *Service) confirmTxIdle(how string) {
 // footswitch — not ours to manage; our CAT TX is off, which is what the
 // unkey promised).
 func (s *Service) observeTxStatus(v string) {
-	// KNOWN LIMITATION, deliberately not papered over (2026-07-23 review
-	// rounds 2 and 3). TXSTATUS frames are ANONYMOUS — a bare "TX0;" carries
-	// nothing tying it to the query it answers, and this stream mixes solicited
-	// answers with the rig's own unsolicited AI pushes. So a reply delayed past
-	// a cycle boundary can, in principle, confirm a LATER unkey using evidence
-	// the rig generated before that transmission.
+	// ACCEPTED LIMITATION — see ADR 0057 before "fixing" this.
 	//
-	// A per-cycle reply-counting scheme was tried and REVERTED: it assumed a
-	// 1:1 query↔reply correspondence the protocol does not provide. An
-	// unsolicited push was counted as an answer (hiding a still-outstanding
-	// query, which reproduced the very hole it closed), and unanswered queries
-	// on a serial client that later died left a debt no reply could ever pay —
-	// after a probe-exhausted alarm plus a reconnect, the fresh defensive
-	// answer was discarded and TX stayed blocked on a healthy rig. Denying
-	// recovery is strictly worse than the narrow hazard it guarded.
+	// TXSTATUS frames are ANONYMOUS: a bare "TX0;" carries nothing tying it to
+	// the query it answers, and this stream mixes solicited answers with the
+	// rig's own unsolicited pushes. A reply delayed past a cycle boundary can
+	// therefore confirm a LATER unkey using evidence generated before that
+	// transmission. Real, but it needs a deep conjunction: a reply delayed by
+	// seconds, the alarm cleared in between, a new transmission keyed, AND its
+	// unkey also failing.
 	//
-	// The sound fix is a stream BARRIER, not counting: emit a distinguishable
-	// marker query (e.g. `ID;`) immediately after the unkey and treat only the
-	// TXSTATUS frames arriving after that marker's answer as post-unkey
-	// evidence — serial frames are FIFO, so the marker cleanly partitions the
-	// stream. That changes the wire traffic on every unkey, so it is tracked in
-	// the backlog rather than bolted on here.
+	// Two fixes were built and BOTH rejected. Per-cycle reply COUNTING assumed a
+	// 1:1 query↔reply correspondence the protocol does not provide — unsolicited
+	// pushes were counted as answers, and unanswered queries on a client that
+	// later died left a debt no reply could pay, blocking TX on a healthy rig
+	// after a reconnect. A marker-query BARRIER is sound in principle but adds a
+	// CAT frame to every unkey, on a rig already known to drop commands in the
+	// TX→RX tail. ADR 0057 accepts the hazard instead: CAT confirmation is
+	// best-effort DETECTION, and the rig's TOT is the actual guarantee.
 	//
-	// What bounds the residual meanwhile: the alarm re-probe loop retires the
-	// moment the alarm clears (generation-gated), so no NEW probe is issued
-	// once a cycle ends, and on any link that answers at all the 5 s probe
-	// spacing means at most one reply is in flight.
+	// Clean-room reviews re-raise this every round because they cannot see the
+	// decision. The answer is ADR 0057, not another layer.
 	s.mu.Lock()
 	uncertain := s.txUncertain
 	s.mu.Unlock()

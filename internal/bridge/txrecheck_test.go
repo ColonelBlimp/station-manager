@@ -232,6 +232,47 @@ func TestStillKeyed_StopsOnceTheRigObeys(t *testing.T) {
 	}
 }
 
+// TestStillKeyed_StopsWhenTheClientGoesAway: the retry sequence resolves the
+// serial client per attempt, so a pipeline reconnect (or teardown) inside its
+// ~1.6 s window ends it instead of writing into a closed port — and, because it
+// ends, the single-flight latch frees for the replacement pipeline to start a
+// clean sequence (2026-07-23 review).
+func TestStillKeyed_StopsWhenTheClientGoesAway(t *testing.T) {
+	s, fake := newAlarmProbeService(t, 1)
+	txStopRetryAttempts = 20 // see StopsOnceTheRigObeys for why this is safe here
+
+	s.mu.Lock()
+	s.txUncertain = true
+	s.mu.Unlock()
+	s.observeTxStatus("1")
+
+	waitFor(t, func() bool {
+		for _, w := range fake.recordedWrites() {
+			if bytes.Equal(w, []byte("TX0;")) {
+				return true
+			}
+		}
+		return false
+	}, "no re-unkey was sent")
+
+	// The pipeline drops the client, as it does on teardown/reconnect.
+	s.mu.Lock()
+	s.activeClient = nil
+	s.mu.Unlock()
+
+	settled := len(fake.recordedWrites())
+	time.Sleep(60 * time.Millisecond) // many intervals at the shortened cadence
+	if after := len(fake.recordedWrites()); after > settled+1 {
+		t.Errorf("kept writing to a client the pipeline had dropped: %d → %d", settled, after)
+	}
+	// The latch must be free again so the next pipeline can retry.
+	waitFor(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return !s.txStopRetrying
+	}, "the single-flight latch stayed held after the sequence ended")
+}
+
 // TestRecheckTx_AsksButCannotClear pins the safety contract: the manual
 // re-check may ask, and may ONLY ask. It must work while the alarm holds (every
 // other write path is gated shut at that moment) and must leave both the alarm

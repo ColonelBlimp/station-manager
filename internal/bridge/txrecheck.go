@@ -210,8 +210,7 @@ func (s *Service) retryUnkeyStillKeyed() {
 		s.mu.Unlock()
 		return
 	}
-	cl := s.activeClient
-	if cl == nil {
+	if s.activeClient == nil {
 		s.mu.Unlock()
 		return
 	}
@@ -250,6 +249,21 @@ func (s *Service) retryUnkeyStillKeyed() {
 			if !s.TxUncertain() {
 				return
 			}
+			// Re-resolve the client EVERY attempt rather than pinning the one
+			// that was live when the sequence started (2026-07-23 review): the
+			// pipeline can reconnect inside this ~1.6 s window, and the
+			// remaining writes would then go to a closed port while
+			// txStopRetrying suppressed a fresh sequence for the new one — the
+			// carrier staying up for the difference. A reconnect swaps the
+			// field, so a nil (or replaced) client ends this sequence and lets
+			// the next "still keyed" answer start a clean one.
+			s.mu.Lock()
+			cl := s.activeClient
+			s.mu.Unlock()
+			if cl == nil {
+				return
+			}
+
 			// keyMu: the release paths hold it across their own unkey+confirm,
 			// so taking it here keeps this write from interleaving with theirs.
 			s.keyMu.Lock()
