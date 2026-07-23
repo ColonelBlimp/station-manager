@@ -31,6 +31,465 @@ block of oldest entries below the line, newest-first.
 
 **Rolled off 2026-07-19 (session 226):** Sessions 198, 199, 212–214 (the live doc had reached 17 entries with Session 226 added; rolled back to the 12 most recent, 215–226).
 
+**Rolled off 2026-07-23 (session 232):** Sessions 215–221 (the live doc had reached 19 entries with Session 232 added; rolled back to the 12 most recent, 222–232).
+
+> **Session 221 (2026-07-18, early afternoon) — SYNC-PROTOCOL ARC: review round 3
+> absorbed (6 findings on internal/cloud sync semantics) AND the resulting
+> ADR 0050 revision-counter protocol DESIGNED + BUILT the same day. Three
+> commits, all pushed by the operator.**
+> - **Review 3 triage (6 findings, all real):** built 4 — **UUIDv7 gate on
+>   upload** (PUT rejects non-v7/malformed with 400 BEFORE the EnsureLogbook
+>   side effect — Postgres would store any RFC 4122 value but restore admits
+>   only v7, so a "successful" backup could be unrestorable), **snapshot
+>   export** (`store.ExportSnapshot` — logbooks + records in ONE
+>   repeatable-read read-only tx; two autocommit reads could dump QSOs whose
+>   logbook is missing from the same export), **composite tenant/logbook FK**
+>   (cloud migration 0002 — schema refuses cross-tenant logbook filing
+>   independent of handler discipline), **single-JSON-document bodies**
+>   (trailing JSON → 400). Deferred with notes: streaming export (bounded at
+>   P1 scale, → pre-Phase-2). Kept as permanent test: the **F44 upgrade
+>   rehearsal** (`migrate_test.go` — a version-1 cloud DB WITH DATA upgrades
+>   via `store.Migrate`, constraints present, data intact).
+> - **ADR 0050 (finding 1, the P1) — designed then built on go-ahead:**
+>   `modified_at` (SECONDS locally) can't order same-second edits; `>=` +
+>   arrival order let a reconcile-goroutine push racing the serial worker
+>   regress the cloud payload INVISIBLY (hash ties). Now a per-row monotonic
+>   **`revision`** counter is the version marker end to end: local sqlite
+>   migration **0005** (column + COMBINED stamp trigger), types.Qso/manifest/
+>   adapters/restore carry it, wire envelope + export field, cloud migration
+>   **0003** + revision-first guard (`revision > OR (= AND modified_at >=)` —
+>   ties get exact legacy semantics), reconcile hash line now
+>   `uuid|unixmicro|revision`. **Build discovery recorded in the ADR:** the
+>   proposed bump-inside-stamp-trigger shape was WRONG — the daemon edit path
+>   stamps modified_at explicitly (stamp trigger never fires there), and a
+>   separate revision trigger CHAINS (its inner UPDATE re-fires the stamp
+>   trigger, clobbering the µs-UTC stamp with `datetime('now')` — caught by
+>   the existing 0004 canonicalisation test). One combined trigger with a
+>   CASE owns both stamps. sqlboiler models regenerated at pinned 4.19.7
+>   (diff: qso.go +9/−2 only; toml blacklist gained the split tracking
+>   tables). Restore PRESERVES revision (a restored row resumes its sequence;
+>   out-of-band same-UUID re-imports that reset to 0 push as stale BY DESIGN
+>   — restore is the only sanctioned same-UUID recovery path).
+> - **Verification:** full-tree `go test -race ./...` ZERO failures incl.
+>   live-PG cloud suites + sqlite↔PG e2e reconcile/restore. New tests pin THE
+>   finding (same-second lower-revision push rejected; higher revision beats
+>   an OLDER clock — NTP-step immunity), trigger characterization (+1 per
+>   edit incl. same-second, manifest carries it, restore resumes 7→8), hash
+>   revision-sensitivity, diff revision-drift, server round-trip.
+> - **DEPLOYED + VERIFIED same day:** paired deploy done (daemon
+>   `deploy:local:dev` + F44 smcloud RPM, both `654.gc5151ca8`). The one
+>   `in_sync:false` reconcile (14:04) was the predicted formula skew — the
+>   daemon's 2-min-after-boot reconcile fired before the F44 restart — and
+>   the version-aware diff correctly pushed NOTHING during it; post-restart
+>   reconcile (14:14): **`in_sync` 5,590/5,590, zero heals**, all rows tied
+>   at revision 0. Backlog item marked DEPLOYED+VERIFIED → archive at next
+>   sweep. **NEXT:** the standing S220 dogfood validations (map eyeball,
+>   in-place session edit mid-CQ, abandon-fix layer 1 on air, type-4 →
+>   ADR 0048 flip); smcloud rate limiter + streaming export stay gated with
+>   the ADR 0040 Phase-2 assessment.
+
+> **Session 220 (2026-07-18, later the same day) — SECURITY-REVIEW ARC: three
+> external review cycles absorbed (smcloud + frontend/app), every finding
+> verified-then-fixed or deliberately backlogged with a design note. All
+> committed + pushed by the operator (HEAD `de9239b2`).**
+> - **Post-deploy verification (morning):** `task deploy:local:dev` picked up
+>   the Session-219 map batch + in-place session edit; daemon active on
+>   `2.0.0-alpha.1-643-g862dd384`, smcloud rode through the restart —
+>   `in_sync` 5,590/5,590.
+> - **smcloud hardening (review 1, 7 findings, all real):** boot now REJECTS
+>   the `CHANGE_ME_TOKEN` placeholder + tokens <32 chars; `-listen` defaults
+>   to `127.0.0.1:8091` (LAN staging must set `0.0.0.0:8091` explicitly —
+>   runbook updated); DSN is env-only (no `-dsn` flag — argv leaks via ps);
+>   DB pool bounded (5/2/30 m — unauthenticated `/v1/health` pings Postgres
+>   per hit); `/v1/export` extends its own write deadline to 15 min via
+>   `http.NewResponseController` (must outlast the restore client's 10 min;
+>   the server-wide 2 min would truncate a slow-link dump mid-JSON). New
+>   `cmd/smcloud/main_test.go`. **Follow-up (review 2, 3 residuals):**
+>   `EnsureTenant` resolves case-insensitively — a pre-normalisation
+>   lowercase tenant row is RENAMED to canonical and reused (never a second
+>   empty tenant orphaning the backup); two case-variant rows refuse loudly
+>   (+2 integration tests); `store.Migrate` uses `WithConnection` + closes
+>   the migrator, returning the boot connection to the pool. **The F44 box
+>   is unaffected** (uppercase tenant, explicit bind, real 44-char token) —
+>   an RPM rebuild (`task rpm:smcloud` + reinstall) is worthwhile, NOT urgent.
+> - **frontend/app fixes (review 1: 9 findings + lint/README; review 2: 4
+>   residuals):** logbook loaders carry per-loader request GENERATIONS
+>   (stale responses discarded — rapid logbook/page-size/filter picks can no
+>   longer corrupt rows/cursors); sessionEdit captures its write-back target
+>   per save + a generation guard, and EditQsoModal makes Escape/backdrop/✕/
+>   Cancel/Ctrl+Enter inert while saving (a late save can no longer land row
+>   A's data on row B); Session table **Name/Country cells were SWAPPED** —
+>   fixed (was live in the morning deploy); map: catch-up refetch on EVERY
+>   stream open (heals the no-backlog gap incl. a failed first connect),
+>   startup guarded by a SEPARATE teardown-only `lifecycle` counter (a
+>   window-picker refresh mid-startup no longer suppresses the stream
+>   install) and no longer leaks listener+EventSource on early teardown; new
+>   fail-soft `lib/utils/storage.ts` on every boot-critical localStorage
+>   site (a storage SecurityError can no longer kill mount). **Ambiguous
+>   writes told honestly:** EVERY non-aborted transport failure on a write
+>   is outcome-unknown (the daemon's own 30 s timeout can cut the connection
+>   AFTER committing; the browser can't tell that from connect-refused) —
+>   QSO submit says "may still have been logged — **check the Logbook**"
+>   (the Session list only gains a row on a confirmed response, so it is
+>   guaranteed absent in exactly this case); both email surfaces say "may
+>   still have gone out — check the inbox / Emailed markers"; email timeout
+>   45 s (`EMAIL_TIMEOUT_MS`, outlasts the daemon's 30 s SMTP ceiling). Six
+>   test-only lint errors fixed properly; README port 5174→5176. Suite
+>   633/633 (+3 regression tests freezing the races).
+> - **Backlogged with design notes (P2):** FT8 session reconnect reconcile —
+>   trap recorded (naive daemon replay of `ft8-logged` would inject stale
+>   events into fresh sessions; uuid dedup can't catch that) · daemon
+>   write-idempotency tokens for QSO submit + email (what actually RESOLVES
+>   the ambiguity the SPA now merely reports honestly) · **smcloud rate
+>   limiting — pre-Phase-2 gate, two-layer design DECIDED (operator):**
+>   per-IP limiting at the reverse proxy (it sees real client IPs) + a
+>   global in-process concurrency limit in the binary (the bounded pool
+>   protects Postgres, NOT the process — excess requests pile up handler
+>   goroutines waiting for connections); noted in the `cmd/smcloud` doc
+>   header + backlog.
+> - **NEXT:** `task deploy:local:dev` at the next convenient moment to pick
+>   up the review-fix batches (incl. the visible Name/Country column fix);
+>   then the standing dogfood validations (map zoom/tooltip eyeball,
+>   in-place session edit mid-CQ-run, FT8 abandon-fix layer 1, type-4
+>   nonstandard QSO → flip ADR 0048). F44 smcloud RPM rebuild optional.
+
+> **Session 219 (2026-07-18, same day, operator dogfooding throughout) — MAP
+> INTERACTIVITY ARC (5 pieces) + SMCLOUD FIELD-FIDELITY AUDIT (CLEAN) + small
+> closures. Map batch COMMITTED + PUSHED by the operator; NOT yet dogfood-
+> deployed (deploy deferred until the operating session ends — the batch
+> ships together on the next `task deploy:local:dev`).**
+> - **Map zoom/pan + stacked hover tooltip (dogfood-requested):** new pure
+>   `lib/map/zoom.ts` (viewBox-space transform: `zoomAt` cursor-pinned scale 1–16×,
+>   `panBy`/`clampTransform` bounds + exact-identity snap, `toContent`,
+>   `endpointsNear` stacked-endpoint hit grouping) + WorldMap interaction layer:
+>   manual non-passive wheel (Svelte 5 declares `onwheel` passive), drag-pan with
+>   pointer capture, dblclick/Reset-view button, stroke-widths + radii ÷k, tooltip
+>   lists every contact stacked at an endpoint (cap 8, "+N more — zoom in"),
+>   right-edge flip; native mid-arc `<title>` labels kept. jsdom tests drive real
+>   wheel/pointermove events via a pinned bounding rect.
+> - **Window persistence (operator-directed after the WAI triage):** picker choice
+>   → localStorage `sm-map-window`, restored through `storedDurationMin` (absent/
+>   garbled/retired values → 6 h default).
+> - **50m level-of-detail (operator asked "can zoom show more?"):** past 3× the
+>   basemap swaps 110m → Natural Earth 50m (241 countries, real coastlines) via
+>   `worldCountriesHi()` lazy dynamic import — bundled chunk (756 KB / 243 KB gz,
+>   offline posture intact), loaded only on first zoom-in; fail-soft to 110m. The
+>   50m set carries DUPLICATE feature ids (`036` ×2) — keyed-each keys are now
+>   id+index. `chunkSizeWarningLimit` 800 with a why-comment (data chunk, already
+>   code-split — anything NEW past it still warns).
+> - **Background-tab staleness FIXED (dogfood repro confirmed first):** hidden map
+>   tab never caught up (no visibilitychange handling, throttled debounce,
+>   possibly-dead SSE) — `mapData` now runs an immediate catch-up `refresh()` on
+>   the hidden→visible edge (listener detached on teardown; MapView test drives
+>   visible/hidden/unmount edges). Second-monitor posture was never affected.
+> - **Triage (same session):** "session timer 14:58 but map lists 1 h+ QSOs" =
+>   **WAI per ADR 0049** (window ≠ session; revisit only via a conscious ADR
+>   change) — persistence above is the operator's accepted remedy. App suite
+>   621 tests green; map suites 61.
+> - **SMCLOUD FIELD-FIDELITY AUDIT — CLEAN, and now a repeatable drill:**
+>   new **`scripts/smcloud-audit.py`** (qso-audit.py conventions; self-fetches
+>   `/v1/export` with the forwarder creds from config.json; flags --db/--config/
+>   --export/--logbook; exit 0/1/2). First run: **5,545/5,545 UUID parity, 0 core
+>   mismatches, 0 additional_data mismatches, 0 modified_at violations** — the
+>   only initial "mismatch" was the audit's own freq comparison (column = integer
+>   kHz per schema; payload = ADIF MHz string; conversion now built in).
+>   Population gaps (rst ~99%, cqz 95.8%, my_rig 45%) faithfully mirror local.
+>   Runbook Phase-1 drill list references the script. Live sync observed during
+>   dogfood: 13 new QSOs flowed as logged; 3 pending drained in one 10 s tick →
+>   `in_sync:true`.
+> - **Small closures:** backlog P1 stale-test item was ALREADY FIXED (found at
+>   triage — commit `74cf906d` bumped the schema expectation to v4; verified
+>   green; struck). **Re-enrich manual FAQ LANDED** (`manual/.../troubleshooting.md`:
+>   cause, per-QSO + bulk Re-enrich remedy, QRZ-absent-callsign limit; hugo
+>   builds) — the re-enrich arc is COMPLETE, archive its backlog line on the
+>   next roll.
+> - **SMCLOUD FAULT DRILLS 1–5 RUN AND PASSED (later same session, operator at
+>   the box + assistant monitoring the shack side, ALL WHILE LIVE ON-AIR running
+>   an FT8 CQ pile-up — count grew 5,561→5,571 during the abuse, zero QSOs
+>   lost):** (1) total cloud DB loss (DROP DATABASE) → schema self-applied at
+>   boot, full 5,563-row rebuild; (2) smcloud restart mid-backfill → INVISIBLE
+>   (fell between 10 s ticks; the connection-refused→"host unreachable — will
+>   retry (no give-up)" path was proven by drill 1's stop window); (3) Postgres
+>   killed mid-push → HTTP 500 "logbook provisioning failed" → transient
+>   classification, ~65 s backoff, resumed on recovery; (4) LAN cable pulled +
+>   QSOs edited while dark → updates held (`no route to host`, distinct from
+>   drill 1's refused), drained seconds after replug; the on-demand reconcile
+>   500s GRACEFULLY while the box is dark; (5) a row DELETEd via psql under
+>   smcloud's feet → reconcile caught the 1-row drift → healed to in_sync.
+>   Post-abuse `scripts/smcloud-audit.py`: **CLEAN 5,571/5,571**. Mid-drill
+>   bonus: the real QRZ path hit a genuine internet timeout and took the same
+>   unreachable-retry path — the flaky-link design validated by actual
+>   flakiness. Cloud psql facts learned: table is `qsos`, PK is `uuid` (no
+>   int id — deliberate). **Drill 6 (restore rehearsal: `smctl stop` →
+>   `smd restore -dry-run` → expect ~all-skip → `smctl start`) still pending —
+>   needs the daemon stopped, so it waits for off-air.**
+> - **IN-PLACE SESSION EDIT BUILT (dogfood catch, same session): editing a QSO
+>   no longer takes the FT8 run off-air.** Trap diagnosed: SessionPanel had no
+>   edit → operator navigated to the Logbook ROUTE → Operate unmounts → FT8 SSE
+>   drops → 5 s linger → mic released (demand-driven capture, WAI) → no slots →
+>   CQ silent. Fix (option a, root-cause): `EditQsoModal` DECOUPLED to injected
+>   props (ADR 0045 — one modal, two owners), new `operate/sessionEdit.svelte.ts`
+>   controller (hydrate via NEW `fetchQso` GET /v1/qso/{uuid} in api/qso-patch.ts
+>   → modal in place → PATCH → canonical write-back onto the session row), the
+>   Session-card CALLSIGN is the edit button (fixed column widths untouched —
+>   operator constraint), uuid-less legacy rows stay plain text, Re-enrich rides
+>   along free. Rejected: capture-across-routes (touches the capture design) +
+>   nav-warning (documents the trap instead of removing it). 630 tests green.
+> - **DRILL 6 RUN AND PASSED (off-air, end of session) — THE FULL CAMPAIGN IS
+>   COMPLETE: SM CLOUD PHASE 1 IS PROVEN.** `smctl stop` → `smd restore
+>   -dry-run` (5,590 fetched, 0 tombstones, no writes) → REAL `smd restore`
+>   (safe by design: stored 0 / skipped-existing 5,590 / failed 0, 225 ms —
+>   the actual write path exercised) → `smctl start` → reconcile `in_sync`
+>   (one tick to drain the pre-shutdown stragglers) → final audit **CLEAN
+>   5,590/5,590**. Runbook's drill list now carries the campaign stamp.
+> - **NEXT:** (1) operator: `task deploy:local:dev` → dogfood-eyeball the map
+>   batch (zoom Europe for 50m detail; background-tab repro as validation) +
+>   the in-place session edit (edit a session QSO mid-CQ: TX cadence must
+>   never break); (2) on-air, opportunistic: FT8 abandon-fix validation + a
+>   type-4 nonstandard QSO → flip ADR 0048; (3) **the active-cycle P2 queue
+>   is the default focus again** — smcloud P1 has NO remaining items (phase 2
+>   VPS waits on the ADR 0040 security assessment).
+
+> **Session 218 (2026-07-17→18) — SMCLOUD RPM BUILT + PHASE 1 LAN STAGING
+> DEPLOYED AND VERIFIED: the full 5,532-QSO logbook is backed up on the F44 box,
+> `POST /v1/smcloud/reconcile` → `in_sync:true` (5532 == 5532, hash match). The
+> operator-declared critical workstream (a real backup) IS NOW LIVE.**
+> - **RPM pipeline (committed+pushed `30328456`):** `nfpm-smcloud.yaml` (separate
+>   package `smcloud`: static binary → /usr/bin/smcloud, system unit →
+>   /usr/lib/systemd/system/, `/etc/smcloud/smcloud.env` as config|noreplace 0600
+>   skeleton, runbook+Caddyfile docs, recommends postgresql-server, NO scriptlets)
+>   + `scripts/smcloud-rpm.sh` (version.sh git-derived version; pure-Go static →
+>   builds on the dev box, NO AlmaLinux container needed; `SMCLOUD_ARCH=arm64` →
+>   aarch64) + `task rpm:smcloud` → `build/release/smcloud.x86_64.rpm` (~3.1 MB);
+>   unit ExecStart unified on /usr/bin/smcloud. Deployed artifact version
+>   `2.0.0-alpha.1-629-g30328456`.
+> - **Runbook matured under live fire (committed+pushed):** Phase 1 rewritten as a
+>   SELF-CONTAINED numbered walkthrough (1.1 build/scp → 1.2 Postgres → 1.3 token →
+>   1.4 install/env/firewall → 1.5 wire daemon → 1.6 verify; every step labelled
+>   with which machine; Caddy explicitly VPS-only; token = invented shared secret,
+>   exactly two places). Added from real deploy friction: the **Fedora pg_hba
+>   gotcha** (default `ident` on TCP → `Ident authentication failed`; fix =
+>   `scram-sha-256` on the two host lines in /var/lib/pgsql/data/pg_hba.conf +
+>   reload + direct-DSN `psql … -c "select 1"` test), the **hand-edit JSON
+>   forwarder entry** for step 1.5 (smcloud is deliberately NOT auto-seeded —
+>   no canonical URL), and the **backfill drain-speed note** (defaults 120 s/5 =
+>   flaky-link tuning ≈ days for a full backfill; LAN: `tick_interval_sec:10,
+>   batch_size:200` ≈ 1,200 rows/min, drained 5.5k in <5 min; don't hammer the
+>   reconcile endpoint mid-drain — each call re-enqueues the remainder).
+> - **Deploy war stories (all resolved):** staging-box Postgres was pre-installed
+>   → only role+db needed; pg_hba ident (above); shack-side `config.json` hand-edit
+>   had a trailing comma → smd restart-looped on `migrating config: parsing config
+>   document` until fixed (assistant repaired line 100 + validated + restarted).
+> - **The local DB is populated again** (5,532 QSOs — the QRZ re-import is done);
+>   with the backup live, a repeat of the DB-loss event is now a restore, not a
+>   catastrophe.
+> - **Inbox triage (UNCOMMITTED):** the two 2026-07-17 map notes (zoom; hover
+>   tooltip) → ONE P2 backlog item "Contacts map — zoom/pan + station hover
+>   tooltip" (paired: the tooltip's hit-test runs in zoom-transformed screen
+>   space; shared engine benefits the future Dashboard map). Inbox now has
+>   nothing untriaged (the occupancy-stall line stays open-by-design, watching
+>   for recurrence).
+> - **NEXT:** (1) **Phase 1 fault drills** (runbook list: cable-pull mid-push,
+>   Postgres kill mid-push, smcloud restart mid-backfill, offline-edit heal) +
+>   one **`smd restore -dry-run` rehearsal** against the staging box — prove the
+>   restore path before it's needed; (2) optionally revert the forwarder
+>   tick/batch to defaults (or keep for LAN); a `task rpm:smcloud` rebuild would
+>   also refresh the RPM's embedded runbook copy; (3) commit the triage edits
+>   (backlog + inbox); (4) carried: dogfood-validate map features + FT8 abandon
+>   fix on air; on-air type-4 → ADR 0048 flip; whole-log Dashboard map.
+
+> **Session 217 (2026-07-17) — MAP POLISH ARC (5 features) + INBOX TRIAGE + FT8
+> ABANDON LAYER-1 FIX; ALL COMMITTED + PUSHED by the operator (`79378ab3`,
+> `b48f84c8`, `7ff37b2f`; `main` == `origin/main` @ `7ff37b2f`). Context shift:
+> the DOGFOOD DB IS LOST — smcloud P1 is now the operator-declared critical
+> workstream (see NEXT).**
+> - **Map light/dark fix + cross-tab theme sync:** the map had no land/ocean contrast in
+>   light mode (canvas == surface-muted == gray-100) — new dedicated theme tokens
+>   `--color-map-water/land/border` (both themes) in `styles/app.css`; and a theme toggle
+>   never reached the already-open map tab — a `storage`-event listener in
+>   `lib/ui/state.svelte.ts` mirrors the persisted theme so App.svelte's `$effect`
+>   restamps every tab.
+> - **Window selector:** the duration picker is a `<select>` with 15/30 min, 1/2/3/6/12/24/48 h
+>   (default 6 h); 10-day option dropped.
+> - **Grey line (operator-toggled):** `engine.ts` `subsolarPoint` (NOAA low-precision
+>   ephemeris, tests pin equinox/solstice/J2000) + `nightCap` (d3 `geoCircle` around the
+>   antisolar point); three stacked twilight rings (90/84/78°) = the grey-line band;
+>   "Grey line" checkbox persisted (`sm-map-greyline`), 60 s recompute clock.
+> - **Per-band arc colours, 3 slices:** (1) `lib/map/bandColors.ts` spectrum-ordered
+>   default palette + in-window legend (chips with counts); (2) daemon `map.band_colors`
+>   config block — `types.MapConfig`, `validateMap` (lowercase band token + #rrggbb),
+>   served RAW / presence-aware on `/v1/config` (psk_reporter pattern), consumed via
+>   `fetchStationContext().mapBandColors`, `docs/v2-design/config.md` updated; (3) config
+>   SPA **General tab → Contacts map** editor (14 colour pickers, default/reset, sparse
+>   overrides — picking the default drops the override; `MAP_DEFAULTS` is a pinned copy
+>   of the app palette, keep in sync). Colours apply at map load (reload, not restart).
+> - **Sidebar Map entry (`7ff37b2f`):** globe-europe-africa icon in the frontend/app
+>   sidebar bottom-utilities, above Manual, opens `/map` in a new tab (the map's
+>   standalone/second-monitor posture, ADR 0049 rejection).
+> - **FT8 Call-CQ abandon fix, layer 1 (`b48f84c8`):** dogfood catch (max-repeats abandon
+>   returned to CQ, losing live answerers) — `pickAnswererLocked` extracted in
+>   `caller_sequencer.go`; the drop now re-scans the abandon slot's decodes and replies to
+>   another live answerer in the SAME slot, CQ only when nobody else calls. Test
+>   `TestCallerSequencer_AbandonWorksLiveAnswererSameSlot`; ft8-suite `-race` green;
+>   `docs/ft8.md` updated. **Layer 2 (recency-bounded answerer pool) open in the backlog.**
+>   **Needs on-air validation** with the rest of the caller side.
+> - **Inbox FULLY TRIAGED (nothing open):** the abandon note → backlog (layer 1 then built
+>   same day); the 2026-07-03 Session-panel name-ellipsis note closed (verified fixed in
+>   both SPAs). PSK Reporter question answered: support is built + opt-in, dogfood config
+>   has it OFF (`"psk_reporter": {}`); enable = `"enabled": true` + restart.
+> - **Process memory added** (`offer-commit-points-between-features`): flag a commit
+>   boundary when a change lands green and another is directed — session accumulated 5
+>   features into one tree → one big commit (`79378ab3`); later work was committed
+>   per-feature.
+> - **SMCLOUD S2 BUILT (same session, later) — the cloud HTTP API is up, gate passing;
+>   UNCOMMITTED for operator review.** New: `internal/cloud/server` (PUT /v1/qsos
+>   batch-upsert-by-name'd-logbook + tombstones · GET /v1/logbooks ·
+>   /v1/logbooks/{id}/{reconcile,manifest} · /v1/export · /v1/health · /v1/version;
+>   bearer-token→tenant auth, constant-time; payload stored/exported VERBATIM as
+>   json.RawMessage; stdlib+store+types only, slog to stderr), shared
+>   **`internal/cloud/reconcile`** (`Summary` — the canonical µs/lowercase/UnixMicro
+>   hash BOTH ends compute; S4 imports it), store additions (`Logbooks`/`Logbook`/
+>   `Export` + `Migrate` — embedded golang-migrate runtime applier, same tracking
+>   table as the CLI), and **`cmd/smcloud`** (env/flag config, SMCLOUD_TOKEN env-only,
+>   graceful shutdown, TLS = S6 proxy). **The S2 round-trip GATE passes** (types.Qso →
+>   PUT → export → deep-equal, seconds + app fields intact) + auth/tombstone/stale-push/
+>   ownership tests — 15 integration tests live against Postgres (`task db:pg:up`),
+>   -race clean; live smoke of every endpoint done. Store+server test suites now
+>   serialise via pg_advisory_lock (parallel packages, one dev DB).
+>   `docs/v2-design/sm-cloud-p1.md` status updated (S1+S2 built).
+> - **SMCLOUD S3 BUILT (same session, later still) — the `smcloud` forwarder;
+>   UNCOMMITTED for operator review.** `internal/forwarding/smcloud/` registers type
+>   `smcloud` ("SM Cloud backup", insert/update/delete; creds url/token/logbook —
+>   NO default endpoints so it is NOT auto-seeded, the operator adds it via the config
+>   SPA's data-driven form; NO adif prefix → the worker's plain-mark path never touches
+>   the QSO row, protecting `modified_at` for reconcile). **`types.Qso` gained
+>   `ModifiedAt`/`DeletedAt` `json:"-"`** (LastRefreshedAt column-only pattern, overlaid
+>   in `adapters.QsoModelToType`) so the envelope can carry the row's drift signal;
+>   Submit treats zero-modified_at/no-UUID as Terminal (never a silent now()), stale
+>   `applied:0` as Success, and mirrors qrz's outcome matrix (no response →
+>   Unreachable/forever-retry per ADR 0038). Blank-imported in cmd/smd + UserAgent
+>   wired. Tests: 11 in-package (wire shape incl. modified_at-stays-out-of-payload,
+>   tombstone, outcome matrix, guards, registry posture) + `TestSubmit_AgainstRealCloudServer`
+>   (end-to-end vs the REAL internal/cloud/server + Postgres: deep-equal payload
+>   round-trip, stale no-clobber, tombstone). Affected suites green (types, database,
+>   forwarding, api, qsoservice, adif, cmd/smd). sm-cloud-p1.md S3 section updated
+>   (two deliberate deltas from the sketch documented there).
+> - **SMCLOUD S4 BUILT (same session, later again) — reconcile detect+heal;
+>   UNCOMMITTED for operator review.** `smcloud.Reconciler` (same ForwarderConfig as
+>   the forwarder; hourly loop + 2-min startup delay under the worker ctx in cmd/smd;
+>   on-demand **POST /v1/smcloud/reconcile**, 503 until an enabled smcloud forwarder
+>   exists — api-endpoints.md updated). Local hash: new `sqlite.FetchQsoManifestWithContext`
+>   → shared `internal/cloud/reconcile.Summary`. Heal: upserts via EnqueueUploads
+>   (force), missed tombstones via NEW `qsoservice.EnqueueDeleteUploads` (+
+>   `findEnabledForwarderFor` refactor). Local authoritative — cloud-only/cloud-newer
+>   counted+logged, never touched; 5000/run cap. **Two protocol bugs found by tests,
+>   fixed in BOTH readers (adapter + manifest query): NULL-until-first-edit
+>   modified_at → created_at fallback; created_at sub-second vs trigger whole-second →
+>   truncate to SECONDS** (else a same-second edit/delete reads as a stale push
+>   forever). Tests: 11 diff-table cases, `TestReconciler_EndToEnd` (real sqlite +
+>   qsoservice vs real cloud server + Postgres: first backfill → drain → in-sync →
+>   missed delete → tombstone heal → in-sync), EnqueueDeleteUploads/manifest
+>   integration, api handler 503/200/500. All affected suites green; gofmt/vet clean.
+> - **SMCLOUD S5 BUILT (same session, final act) — restore; P1 IS CODE-COMPLETE
+>   (S1–S5); UNCOMMITTED for operator review.** JSON-native restore path (SubmitImport
+>   verified ADIF-shaped → unsuitable): **`qsoservice.Restore`** (UUID+modified_at
+>   required; existing rows skip = idempotent re-runs; no validation gauntlet / no
+>   upload rows / no enrichment; dedupe reuse-or-recompute; time_off→time_on default)
+>   over **`sqlite.InsertRestoredQsoWithContext`** — the ONE writer setting
+>   modified_at/deleted_at explicitly (QsoTypeToModel deliberately left unmapped: the
+>   UPDATE path round-trips fetched QSOs and would defeat the bump trigger on
+>   never-edited rows — caught during build). **`smd restore`** subcommand (daemon
+>   stopped; creds from the config's smcloud forwarder entry, enabled or not;
+>   -forwarder/-cloud-logbook/-logbook/-dry-run) + `smcloud.FetchExport`. Tombstones
+>   restore soft-deleted with original recency. **THE S5 GATE PASSES**:
+>   `TestRestore_FullCycle` — two real local stacks around the real cloud
+>   server/Postgres; machine 2 deep-equals machine 1's QSO AND **reconciles IN SYNC**
+>   (modified_at survived the whole cycle); idempotent re-run all-skips. e2e local
+>   stacks moved :memory:→temp-file DBs (shared-cache :memory: is process-wide — two
+>   "machines" were one DB). All affected suites + -race green; gofmt/vet clean.
+> - **SMCLOUD S6 ARTIFACTS BUILT (same session) — deployment is now a runbook walk;
+>   UNCOMMITTED for operator review.** `task build:smcloud` (fully STATIC pure-Go
+>   linux binary, version-stamped, 7.2 MB — verified);
+>   **`deploy/smcloud/`**: hardened systemd unit (DynamicUser + full sandbox,
+>   systemd-analyze-verified), `smcloud.env.example` (loopback listen; token via
+>   `openssl rand -base64 32`), `Caddyfile.example` (auto-TLS). Runbook
+>   **`docs/smcloud-deploy.md`** (added to the Tier-1 map): decisions (VPS/region —
+>   well-connected not Malawi; hostname e.g. cloud.station-manager.org; distro
+>   Postgres recommended for P1) → build/scp → Postgres → unit → Caddy → daemon
+>   forwarder wiring → first-backfill verify (`POST /v1/smcloud/reconcile` →
+>   in_sync) → ops (pg_dump backup-of-the-backup cron, binary-swap upgrades,
+>   restore drill, token rotation). Migrations self-apply at service boot.
+> - **DEPLOYMENT PLAN DECIDED (operator, late session): PHASE 1 = LAN STAGING on a
+>   separate local-network machine running FEDORA 44** — cheap immediate resilience
+>   (shack-machine disk/OS loss) + the test/soak/fault-drill/harden ground before any
+>   internet-facing VPS (phase 2 adds the off-site half). Runbook gained a full
+>   "Phase 1 — LAN staging deploy" section (bind 0.0.0.0:8091, NO TLS/proxy on LAN,
+>   never port-forward, static IP, fault-drill list, move-to-VPS = repoint forwarder,
+>   reconciler rebuilds); `build:smcloud` gained `SMCLOUD_ARCH` (arm64 verified);
+>   env example documents both listen postures. **These three edits (Taskfile.yml,
+>   deploy/smcloud/smcloud.env.example, docs/smcloud-deploy.md) are UNCOMMITTED,
+>   awaiting operator review.**
+> - **NEXT (session plan, set by operator): (1) build the smcloud RPM + DEPLOY to the
+>   F44 LAN box.** The RPM work was scoped but NOT started (only discussed):
+>   an `nfpm-smcloud.yaml` (package `smcloud`: /usr/bin/smcloud + the system unit at
+>   /usr/lib/systemd/system/ + /etc/smcloud/smcloud.env as a noreplace 0600 config +
+>   doc files; recommends postgresql-server; unify the unit's ExecStart on /usr/bin/
+>   smcloud — it currently says /usr/local/bin), a build script mirroring
+>   scripts/dev-rpm.sh (version.sh + static go build + nfpm), a `rpm:smcloud` task,
+>   and runbook RPM-path updates. Then walk runbook Phase 1 on the F44 box: Postgres,
+>   env file (token via openssl rand), enable unit, wire the daemon forwarder at
+>   http://<box>:8091, watch the reconciler's first backfill, fault-drill.
+>   Local recovery still pending too: QRZ ADIF import (`smd import <file.adi>`,
+>   daemon stopped, NO `--forward`). (2) dogfood-validate the map features + the
+>   abandon fix on air; (3) carried: on-air type-4 → ADR 0048 flip; whole-log
+>   Dashboard map (needs the `GET /v1/logbook/{id}/map` aggregate).
+
+> **Session 216 (2026-07-16→17) — FIRST-RUN SETUP GATE in frontend/app, committed by the
+> operator as `80e1faa3` (feat(setup)).** Fallout of the lost dogfood DB (the operator hit
+> the fresh-install path): the whole app shell now gates on `setup_complete` — new
+> `lib/setup.svelte.ts` (status loading→blank / needed→SetupCard / complete→shell;
+> daemon-unreachable resolves to complete so an outage never greets a configured operator
+> with first-run setup), `lib/ui/SetupCard.svelte` (callsign form + post-save "Setup
+> complete" interstitial offering Settings), `lib/api/setup.ts` (`completeSetup` → PUT
+> /v1/config with just the callsign; the daemon seeds the default logbook), `StationContext`
+> gained `configOk`/`setupComplete`, main.ts injects the save action (ADR 0045 — the state
+> module never imports lib/api). Gate sits ABOVE the router so the shell-less /map tab is
+> covered too. Tests throughout (589 at the time).
+
+> **Session 215 (2026-07-16, afternoon) — QSO CONTACTS MAP BUILT (both phases of the
+> session-214 respec), COMMITTED + PUSHED; the type-4 + ADR 0049 doc commits are pushed
+> too. NB: this entry was written by a later reconciling session from git — the map
+> session itself did not update this handoff (the exact gap the RECONCILE guard warns
+> about, and the date-keyed check can't catch same-day drift).**
+> - **Phase 1 — render engine (`7817393b`):** `frontend/app/src/lib/map/engine.ts`
+>   (d3-geo projection, great-circle arc sampling, antimeridian clipping, basemap paths
+>   via topojson) + `WorldMap.svelte` (reusable, presentation-only — origin + arcs
+>   props). New deps `d3-geo`/`topojson-client`/`world-atlas` (+ type packages), per the
+>   backlog's render decisions (MIT/public-domain → GPL-clean, bundled → offline).
+>   Engine unit tests (spherical math, antimeridian) + component render tests.
+> - **Phase 2 — map route (`93e7f83b`):** `MapView.svelte` full-tab view at **`/map`**
+>   (duration picker, live-status indicator, mapped-of-total summary) +
+>   `mapData.svelte.ts` (windowed fetch over `GET /v1/logbook/{id}/qso` cursor pages +
+>   live head-refresh on `qso.*` events via the new `api/log-events.ts` transport —
+>   reconnect, idempotent updates, minimal payload parse; fail-soft for unmappable
+>   rows) + **"Open map ↗"** in the shared `SessionPanel` + router wiring. State +
+>   component tests (`collectWindow`, `qsoEpochMs`/`rowPoint`, MapView render).
+> - **PUSH STATE:** `main` == `origin/main` @ `93e7f83b` — everything is pushed,
+>   **including the four type-4 commits session 214 recorded as push-gated on on-air
+>   validation** (that gate was overtaken by the push). **ADR 0048 is still `Proposed`**
+>   — working a real nonstandard station on air remains open and still gates the ADR
+>   flip.
+> - **Verified at reconcile (2026-07-16, later session):** working tree clean;
+>   `frontend/app` suite green at HEAD — **576 tests / 47 files pass** (545 → 576, the
+>   map's ~31 new tests). Unverified: CI status (no `gh` on this machine) and dogfood
+>   deploy (daemon not reachable on :8080 at reconcile time) — assume the map is NOT
+>   yet dogfood-deployed / eyeballed live unless the operator says otherwise.
+> - **NEXT:** on-air validate the type-4 ladder → flip ADR 0048 Proposed→Accepted;
+>   dogfood-deploy + eyeball the map (`task deploy:local:dev`, operator-gated —
+>   remember `/app/` is `//go:embed`'d: redeploy, don't reload); the **whole-log
+>   Dashboard map** stays the designed follow-on (reuses the shipped engine; needs the
+>   `GET /v1/logbook/{id}/map` aggregate — detail in the backlog).
+
 > **Session 213 (2026-07-16) — FT8 REDUCED TYPE-4 (nonstandard/compound-call) LADDER
 > BUILT end-to-end (ADR 0048), offline-gated; COMMITTED (per-unit, local — NOT pushed),
 > NOT yet on air, NOT yet dogfood-deployed.** The one FT8 gap that blocked finishing a QSO with a `/D` / prefix-
