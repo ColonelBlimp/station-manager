@@ -40,7 +40,7 @@ the radio out.
 **The most common cause is a control line keying the rig.** If your rig keys
 data-mode PTT from **RTS** or **DTR** on the CAT port, the transmitter is held
 down by a wire, and no stop command over CAT can release it. See
-[Connecting Your Rig (CAT)]({{% relref "cat.md" %}}) — set `RPTT SELECT` to
+[Connecting Your Rig (CAT)](#cat) — set `RPTT SELECT` to
 **DAKY** (Yaesu) or `USB SEND` to **OFF** (Icom).
 
 **How to tell.** In `smd.log`, look at what the rig answered after the stop:

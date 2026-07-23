@@ -235,7 +235,62 @@ designed to handle slow, intermittent, and unreliable internet connections.</p>
           
           <section id="cat" class="chapter">
             <h2>Connecting Your Rig (CAT)</h2>
-            <p><em>Draft outline — content to be written.</em></p>
+            <h2 id="important-keep-data-mode-ptt-off-the-control-lines">Important: keep data-mode PTT off the control lines</h2>
+<p>Before you connect a rig for the first time, check <strong>how your rig keys the
+transmitter in data modes</strong>. Many rigs can be set to key from one of the serial
+control lines — <strong>RTS</strong> or <strong>DTR</strong> — on the very same USB/CAT port Station
+Manager uses to read your frequency and mode.</p>
+<p><strong>If your rig is set that way, any program holding that port open can hold your
+transmitter keyed.</strong> The rig is doing exactly what you told it to: the line is
+asserted, so PTT is down. No CAT stop command can release it, because the
+transmitter is not being keyed by CAT — it is being keyed by a wire. The rig
+will report that it is &ldquo;transmitting by other means&rdquo;, and it will keep
+transmitting for as long as the line stays asserted.</p>
+<p><strong>What to set:</strong></p>
+<table>
+	<thead>
+			<tr>
+					<th>Rig</th>
+					<th>Setting</th>
+					<th>Use</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td>Yaesu (FTdx10, FT-710)</td>
+					<td><code>RADIO SETTING → MODE PSK/DATA → RPTT SELECT</code></td>
+					<td><strong>DAKY</strong> (not RTS or DTR)</td>
+			</tr>
+			<tr>
+					<td>Icom (IC-7300)</td>
+					<td><code>SET → Connectors → USB SEND</code></td>
+					<td><strong>OFF</strong></td>
+			</tr>
+	</tbody>
+</table>
+<p>Station Manager opens every supported rig&rsquo;s port with <strong>RTS and DTR
+de-asserted</strong>, so it will not key a rig configured this way. That is the
+default for all shipped rigs and you should not need to change it. If you have
+a genuine reason to assert a line, you can override it per rig in
+<code>config.json</code>:</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-jsonc" data-lang="jsonc"><span style="display:flex;"><span><span style="color:#e6db74">&#34;rigs&#34;</span><span style="color:#960050;background-color:#1e0010">:</span> [
+</span></span><span style="display:flex;"><span>  {
+</span></span><span style="display:flex;"><span>    <span style="color:#f92672">&#34;id&#34;</span>: <span style="color:#ae81ff">1</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f92672">&#34;model&#34;</span>: <span style="color:#e6db74">&#34;yaesu-ftdx10&#34;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f92672">&#34;overrides&#34;</span>: { <span style="color:#f92672">&#34;rts&#34;</span>: <span style="color:#66d9ef">true</span> }   <span style="color:#75715e">// only if you know your rig doesn&#39;t key on it
+</span></span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>]
+</span></span></code></pre></div><p>Be careful with that override. Asserting a line on a rig that uses it as a PTT
+source will transmit continuously for as long as the daemon is connected.</p>
+<blockquote>
+<p><strong>Older builds asserted these lines.</strong> Versions before 2026-07-23 opened
+Yaesu ports with RTS and DTR <strong>asserted</strong>. On a station with
+<code>RPTT SELECT = RTS</code> this held the data-mode PTT down for the whole session
+and caused a tune carrier that would not stop. If you run an older build, set
+<code>RPTT SELECT</code> to <strong>DAKY</strong> on the rig.</p>
+</blockquote>
+<hr>
+<p><em>Draft outline — remaining content to be written.</em></p>
 <ul>
 <li>What CAT gives you: live frequency, mode, and rig control from the browser.</li>
 <li>Choosing your rig and serial port.</li>
@@ -646,6 +701,35 @@ on QRZ.com at all (common for some regions and club calls). No lookup source
 has the name in that case — Re-enrich will still repair the country, DXCC,
 and zones, and you can type the name in by hand if the operator gave it to
 you on the air.</p>
+<hr>
+<h2 id="the-rig-transmits-and-wont-stop--check-your-radio">The rig transmits and won&rsquo;t stop — &ldquo;CHECK YOUR RADIO&rdquo;</h2>
+<p><strong>Act first, diagnose after.</strong> Unkey at the radio, or switch it off. Your rig&rsquo;s
+<strong>TX time-out timer (TOT)</strong> is the backstop that ends a stuck transmission when
+nothing else can — set it, and treat it as a requirement rather than an option
+if you use tune or FT8. Station Manager will refuse to start any new
+transmission while it is unsure, so it cannot make things worse while you sort
+the radio out.</p>
+<p><strong>The most common cause is a control line keying the rig.</strong> If your rig keys
+data-mode PTT from <strong>RTS</strong> or <strong>DTR</strong> on the CAT port, the transmitter is held
+down by a wire, and no stop command over CAT can release it. See
+<a href="#cat">Connecting Your Rig (CAT)</a> — set <code>RPTT SELECT</code> to
+<strong>DAKY</strong> (Yaesu) or <code>USB SEND</code> to <strong>OFF</strong> (Icom).</p>
+<p><strong>How to tell.</strong> In <code>smd.log</code>, look at what the rig answered after the stop:</p>
+<pre tabindex="0"><code>grep &#39;tx-status&#39; ~/.local/share/station-manager/log/smd.log | tail
+</code></pre><ul>
+<li><code>tx-status 0</code> — the rig is in receive. Normal.</li>
+<li><code>tx-status 2</code> — &ldquo;transmitting by <strong>other means</strong>&rdquo;. If you see this
+routinely, something other than CAT is keying your rig — almost always a
+control line, as above.</li>
+<li><code>rig reports CAT TX still keyed after unkey</code> — the rig acknowledged that it
+ignored the stop command. Check the radio.</li>
+</ul>
+<p><strong>The banner won&rsquo;t clear.</strong> It clears when the rig reports that it is receiving
+again — the daemon re-asks automatically for a few minutes, and there is a
+<strong>Re-check</strong> button on the banner to ask again at any time. Dismiss only hides
+the banner; it does not claim the rig is safe. If the rig genuinely cannot be
+reached, restarting Station Manager re-establishes the connection and resets
+the state.</p>
 <hr>
 <p><em>Draft outline — remaining content to be written.</em></p>
 <ul>

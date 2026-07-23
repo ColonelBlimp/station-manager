@@ -43,12 +43,11 @@ a genuine reason to assert a line, you can override it per rig in
 Be careful with that override. Asserting a line on a rig that uses it as a PTT
 source will transmit continuously for as long as the daemon is connected.
 
-{{% notice warning %}}
-Versions before 2026-07-23 opened Yaesu ports with RTS and DTR **asserted**. On
-a station with `RPTT SELECT = RTS` this held the data-mode PTT down for the
-whole session and caused a tune carrier that would not stop. If you run an
-older build, set `RPTT SELECT` to **DAKY** on the rig.
-{{% /notice %}}
+> **Older builds asserted these lines.** Versions before 2026-07-23 opened
+> Yaesu ports with RTS and DTR **asserted**. On a station with
+> `RPTT SELECT = RTS` this held the data-mode PTT down for the whole session
+> and caused a tune carrier that would not stop. If you run an older build, set
+> `RPTT SELECT` to **DAKY** on the rig.
 
 ---
 
