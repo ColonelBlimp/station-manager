@@ -10,6 +10,8 @@ import (
 	stderr "errors"
 	"testing"
 	"time"
+
+	"github.com/ColonelBlimp/station-manager/internal/cat"
 )
 
 // txStatusQuery is what the FTdx10 rigdef encodes read_tx_status to. Asserted
@@ -202,6 +204,98 @@ func TestRecheckTx_GatedOnConnectionAndIdentity(t *testing.T) {
 	if n := len(fake.recordedWrites()); n != 0 {
 		t.Errorf("%d writes reached a rig that should not have been asked, want 0", n)
 	}
+}
+
+// TestStaleReply_CannotConfirmALaterCycle is the 2026-07-23 review's P1.
+// read_tx_status answers are anonymous, so a reply solicited before the current
+// unkey must never be read as proof that THIS unkey took effect — otherwise a
+// late answer could clear a fresh uncertainty window and re-enable keying over a
+// transmitter whose stop was never confirmed.
+func TestStaleReply_CannotConfirmALaterCycle(t *testing.T) {
+	s, fake := newAlarmProbeService(t, 1)
+	def, ok := cat.Lookup("yaesu-ftdx10")
+	if !ok {
+		t.Fatal("rigdef lookup failed")
+	}
+
+	// Cycle 1: unkey, query goes out, answer never arrives (the shape that
+	// alarms in the first place).
+	s.beginTxConfirm(def, fake)
+	// Cycle 2: a NEW unkey opens a fresh uncertainty window with its own query.
+	s.beginTxConfirm(def, fake)
+
+	// Cycle 1's answer finally turns up. It predates cycle 2's transmission.
+	s.observeTxStatus("0")
+	if !s.TxUncertain() {
+		t.Fatal("a leftover reply from the previous cycle confirmed the new one — " +
+			"keying is now re-enabled on evidence captured before the transmission")
+	}
+
+	// Cycle 2's OWN answer confirms normally.
+	s.observeTxStatus("0")
+	if s.TxUncertain() {
+		t.Error("the current cycle's own reply must still confirm")
+	}
+}
+
+// TestAlarmProbes_ReplyStillConfirmsDuringAlarm guards the stale-reply fix from
+// breaking the thing it sits next to: while an alarm stands there is no new
+// confirm cycle, so nothing is carried into the stale count and a probe's answer
+// must clear the alarm exactly as before. Without this, the P1 fix could have
+// silently re-latched the alarm it was meant to release.
+func TestAlarmProbes_ReplyStillConfirmsDuringAlarm(t *testing.T) {
+	s, fake := newAlarmProbeService(t, 5)
+	def, ok := cat.Lookup("yaesu-ftdx10")
+	if !ok {
+		t.Fatal("rigdef lookup failed")
+	}
+
+	s.beginTxConfirm(def, fake) // query 1 — goes unanswered
+	s.raiseTxAlarm(TxAlarmUnconfirmed)
+	waitFor(t, func() bool {
+		n, _ := countQueries(fake)
+		return n >= 2 // the cycle's query plus at least one re-probe
+	}, "the alarm did not re-probe")
+
+	s.observeTxStatus("0")
+	if s.TxAlarmActive() || s.TxUncertain() {
+		t.Fatalf("a probe answer must clear the alarm: alarm=%v uncertain=%v",
+			s.TxAlarmActive(), s.TxUncertain())
+	}
+}
+
+// TestAlarmProbes_StopDoesNotRaceWaitGroup exercises the review's P2 shape:
+// alarms raised concurrently with Stop, where registering the probe goroutine
+// after releasing the lock that observed s.stopped allowed wg.Add to run once
+// Stop had already begun wg.Wait() — WaitGroup misuse (panic, or a Stop that
+// returns with the goroutine still live).
+//
+// Honest about its power: this is a SMOKE test, not a deterministic guard. The
+// bad interleaving needs Stop's Wait to observe a zero counter in the exact
+// window between the unlock and the Add, and re-running it against the broken
+// ordering did NOT reliably fail. The actual guarantee is structural — the Add
+// now happens under the same mutex Stop uses to publish `stopped`, so the two
+// orderings are mutually exclusive by construction (see startAlarmProbes). Keep
+// this for the churn coverage under -race; do not rely on it to catch a revert.
+func TestAlarmProbes_StopDoesNotRaceWaitGroup(t *testing.T) {
+	s, _ := newAlarmProbeService(t, 100)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 50 {
+			s.raiseTxAlarm(TxAlarmUnconfirmed)
+			s.confirmTxIdle("test churn") // clear so the next raise is an edge
+		}
+	}()
+
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	<-done
+
+	// Post-Stop raises must not register anything new on the WaitGroup.
+	s.raiseTxAlarm(TxAlarmUnconfirmed)
 }
 
 // TestRecheckTx_ClearsWhenTheRigAnswersIdle is the end-to-end recovery the

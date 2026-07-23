@@ -291,6 +291,19 @@ type Service struct {
 	// nothing about the unkey (8bd88c1b review, ordering finding).
 	txConfirmAfterFrame uint64
 
+	// TX-status reply accounting (mu-guarded). read_tx_status answers are
+	// anonymous — "TX0;" carries nothing that ties it to the query it answers —
+	// so a reply delayed past a cycle boundary would otherwise confirm a LATER
+	// unkey using evidence captured before that transmission even happened
+	// (2026-07-23 review of 6d3f161e). txQueriesSent/txQueriesAnswered count
+	// within the CURRENT confirm cycle; at each new cycle the unanswered
+	// remainder is carried into txStaleReplies, and that many incoming answers
+	// are consumed-and-discarded before any is allowed to confirm. Serial
+	// replies are FIFO, so discarding the oldest N is exactly right.
+	txQueriesSent     uint64
+	txQueriesAnswered uint64
+	txStaleReplies    uint64
+
 	// txAlarmProbeGen gates the alarm re-probe loop the way txConfirmGen gates
 	// the confirm timeout: the loop reads it before every probe and exits when
 	// it no longer matches, so a cleared-then-re-raised alarm never leaves two

@@ -99,6 +99,10 @@ func (s *Service) probeTxStatus(reason string) error {
 	if err := cl.WriteCommandBytes(context.Background(), q); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("write tx-status query")
 	}
+	// Count it like any other query so its reply is attributed to THIS confirm
+	// cycle — a probe answer that arrives after the next unkey must be
+	// discarded, not treated as that unkey's confirmation.
+	s.noteTxQuerySent()
 	s.logger.DebugWith().Str("reason", reason).Msg("bridge: tx-status re-probe sent")
 	return nil
 }
@@ -114,16 +118,21 @@ func (s *Service) startAlarmProbes() {
 	s.txAlarmProbeGen++
 	gen := s.txAlarmProbeGen
 	ctx := s.runCtx
-	stopped := s.stopped
-	s.mu.Unlock()
-
 	// No run context (alarm raised before Start, or after Stop) means nothing
 	// could cancel the loop — don't start one.
-	if ctx == nil || stopped {
+	if ctx == nil || s.stopped {
+		s.mu.Unlock()
 		return
 	}
-
+	// wg.Add MUST happen under the same lock that observed s.stopped. Stop sets
+	// that flag under mu and only then calls wg.Wait(); adding after releasing
+	// the lock leaves a window where Stop has already begun waiting on a zero
+	// counter, which is the documented WaitGroup misuse (panic, or a Stop that
+	// returns while this goroutine still runs). Start() adds under mu for the
+	// same reason.
 	s.wg.Add(1)
+	s.mu.Unlock()
+
 	go func() {
 		defer s.wg.Done()
 
