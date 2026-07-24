@@ -77,6 +77,11 @@ func (s *Server) writeFt8TxError(w http.ResponseWriter, op errors.Op, err error)
 	case stderr.Is(err, ft8.ErrTxInFlight):
 		s.writeError(w, http.StatusConflict, "ft8_tx_in_flight",
 			"a transmission is already in flight", op)
+	case stderr.Is(err, ft8.ErrQsoInProgress):
+		// A manual send is refused while a sequenced session is active — they are
+		// mutually exclusive so a manual message can't key mid-exchange.
+		s.writeError(w, http.StatusConflict, "ft8_qso_in_progress",
+			"a sequenced QSO is in progress; abandon it before a manual send", op)
 	case stderr.Is(err, ft8.ErrTxBadMessage):
 		s.writeError(w, http.StatusBadRequest, "ft8_tx_bad_message",
 			"not an encodable standard FT8 message", op)

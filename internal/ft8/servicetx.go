@@ -320,6 +320,21 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	if _, err := EncodeToSlot(message, offsetHz, txNominalDtSec); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
+	// A manual send and a sequenced session must be mutually exclusive. They share
+	// only the single-flight (txInFlight) guard, which is false BETWEEN a session's
+	// rungs — so without this a manual message could key mid-exchange, and the
+	// reverse (a session started while this is queued) would burn its opening rung
+	// on ErrTxInFlight while the manual message still went out. seqGate makes the
+	// Active() check atomic w.r.t. the session-start paths (which hold seqGate and
+	// refuse symmetrically on txInFlight via sessionTxGate); it is held across
+	// startTransmission so the no-session decision and the txInFlight commit can't
+	// be split by a concurrent StartQso. (StartQso already drives startTransmission
+	// under seqGate via fireOpening, so this nesting is the established order.)
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+	if s.seq.Active() {
+		return errors.New(op).WithErr(ErrQsoInProgress)
+	}
 	// Boundary-aligned: TransmitSlot waits for the next UTC slot and starts at the
 	// nominal +0.5 s — right for a manually-initiated CQ (we pick our own slot/
 	// parity, so we start on time with no truncation). dialMHz 0 — a manual transmit
@@ -469,6 +484,40 @@ func (s *Service) startTransmission(
 	return nil
 }
 
+// sessionTxGate verifies the shared preconditions for STARTING a sequenced
+// session, read together under txMu. Callers hold seqGate — which makes this
+// atomic w.r.t. a manual TransmitNext (that path gates on seqGate + the
+// sequencer's Active() state) — and must NOT already hold txMu. The order
+// mirrors startTransmission's own gate (armed → in-flight → ready):
+//   - armed: the operator-consent gate before any FT8 RF.
+//   - in-flight: a manual TransmitNext is queued/keying. A session and a manual
+//     send share only the single-flight (txInFlight) guard, which is false
+//     BETWEEN a session's rungs — so without refusing here a session could start
+//     under a queued manual send, its opening rung would collide (ErrTxInFlight)
+//     and burn a repeat/slot, and the unrelated manual message would still key.
+//   - ready: LIVE rig readiness, not just the sticky armed flag (review M1) —
+//     refuse to commit (and publish) a session the rig can no longer key rather
+//     than returning 202 and letting the sequencer spin against an unready rig.
+//
+// Returns a wrapped sentinel on refusal, nil to proceed.
+func (s *Service) sessionTxGate(op errors.Op) error {
+	s.txMu.Lock()
+	armed := s.txArmed
+	inFlight := s.txInFlight
+	ready := s.keyer != nil && s.keyer.TxReady()
+	s.txMu.Unlock()
+	if !armed {
+		return errors.New(op).WithErr(ErrTxNotArmed)
+	}
+	if inFlight {
+		return errors.New(op).WithErr(ErrTxInFlight)
+	}
+	if !ready {
+		return errors.New(op).WithErr(ErrTxNotReady)
+	}
+	return nil
+}
+
 // StartQso begins a manual answer-a-CQ exchange (ADR 0031): the operator picked
 // the worked station (theirCall/theirGrid, from a CQ heard in the slot at
 // theirSlotUTC) and a clear offset. Requires TX **armed** — the sequencer keys
@@ -482,18 +531,8 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
-	s.txMu.Lock()
-	armed := s.txArmed
-	ready := s.keyer != nil && s.keyer.TxReady()
-	s.txMu.Unlock()
-	if !armed {
-		return errors.New(op).WithErr(ErrTxNotArmed)
-	}
-	// Live readiness, not just the sticky armed flag (review M1): refuse to
-	// commit (and publish) a session the rig can no longer key, rather than
-	// returning 202 and letting the sequencer spin against an unready rig.
-	if !ready {
-		return errors.New(op).WithErr(ErrTxNotReady)
+	if err := s.sessionTxGate(op); err != nil {
+		return err
 	}
 	// The decode-log TX dial comes from the sequencer's accepted session (threaded
 	// through seqTransmit), so a rejected start here can't relabel an active rung.
@@ -539,15 +578,8 @@ func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int,
 	}
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
-	s.txMu.Lock()
-	armed := s.txArmed
-	ready := s.keyer != nil && s.keyer.TxReady()
-	s.txMu.Unlock()
-	if !armed {
-		return errors.New(op).WithErr(ErrTxNotArmed)
-	}
-	if !ready {
-		return errors.New(op).WithErr(ErrTxNotReady)
+	if err := s.sessionTxGate(op); err != nil {
+		return err
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()
@@ -582,16 +614,8 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
-	s.txMu.Lock()
-	armed := s.txArmed
-	ready := s.keyer != nil && s.keyer.TxReady()
-	s.txMu.Unlock()
-	if !armed {
-		return errors.New(op).WithErr(ErrTxNotArmed)
-	}
-	// Live readiness, not just the sticky armed flag (review M1).
-	if !ready {
-		return errors.New(op).WithErr(ErrTxNotReady)
+	if err := s.sessionTxGate(op); err != nil {
+		return err
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()
@@ -618,16 +642,8 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
-	s.txMu.Lock()
-	armed := s.txArmed
-	ready := s.keyer != nil && s.keyer.TxReady()
-	s.txMu.Unlock()
-	if !armed {
-		return errors.New(op).WithErr(ErrTxNotArmed)
-	}
-	// Live readiness, not just the sticky armed flag (review M1).
-	if !ready {
-		return errors.New(op).WithErr(ErrTxNotReady)
+	if err := s.sessionTxGate(op); err != nil {
+		return err
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()
@@ -658,15 +674,8 @@ func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, t
 	}
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
-	s.txMu.Lock()
-	armed := s.txArmed
-	ready := s.keyer != nil && s.keyer.TxReady()
-	s.txMu.Unlock()
-	if !armed {
-		return errors.New(op).WithErr(ErrTxNotArmed)
-	}
-	if !ready {
-		return errors.New(op).WithErr(ErrTxNotReady)
+	if err := s.sessionTxGate(op); err != nil {
+		return err
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()
@@ -692,15 +701,8 @@ func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int,
 	}
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
-	s.txMu.Lock()
-	armed := s.txArmed
-	ready := s.keyer != nil && s.keyer.TxReady()
-	s.txMu.Unlock()
-	if !armed {
-		return errors.New(op).WithErr(ErrTxNotArmed)
-	}
-	if !ready {
-		return errors.New(op).WithErr(ErrTxNotReady)
+	if err := s.sessionTxGate(op); err != nil {
+		return err
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()
@@ -724,15 +726,8 @@ func (s *Service) StartWorkCallerT4(ourCall, theirCall, theirGrid string, theirS
 	}
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
-	s.txMu.Lock()
-	armed := s.txArmed
-	ready := s.keyer != nil && s.keyer.TxReady()
-	s.txMu.Unlock()
-	if !armed {
-		return errors.New(op).WithErr(ErrTxNotArmed)
-	}
-	if !ready {
-		return errors.New(op).WithErr(ErrTxNotReady)
+	if err := s.sessionTxGate(op); err != nil {
+		return err
 	}
 	// Antenna path: consume before the start, restore on rejection — see StartQso.
 	prevPath, prevGen := s.consumeExchangePath()

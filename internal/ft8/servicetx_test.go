@@ -130,6 +130,14 @@ func newTxTestService(keyer TxKeyer, player txPlayer, playerErr error) *Service 
 	return s
 }
 
+// txInFlightNow reads the single-flight flag under txMu — race-safe for assertions
+// (the transmit goroutine mutates it under the same lock).
+func (s *Service) txInFlightNow() bool {
+	s.txMu.Lock()
+	defer s.txMu.Unlock()
+	return s.txInFlight
+}
+
 // drainTxState reads ft8-tx events from a subscriber until one matches want or
 // the deadline passes, returning the last TxState seen.
 func drainTxState(t *testing.T, ch <-chan hubEvent, want func(TxState) bool) TxState {
@@ -209,6 +217,44 @@ func TestStartWorkCaller_Gating(t *testing.T) {
 		require.True(t, s.seq.Active(), "an armed work-a-caller start commits a session")
 		s.AbandonQso()
 	})
+}
+
+// TestTransmitNext_RefusedWhileSessionActive: a manual send and a sequenced
+// session are mutually exclusive. StartCallCq makes the sequencer active WITHOUT
+// keying immediately (the caller's CQ goes out on the next slot), so txInFlight is
+// false — the manual send must still be refused (ErrQsoInProgress) by the Active()
+// gate, not admitted to key mid-session on the strength of an idle single-flight.
+func TestTransmitNext_RefusedWhileSessionActive(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	require.NoError(t, s.ArmTx(true))
+	defer func() { _ = s.ArmTx(false) }()
+
+	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
+	require.True(t, s.seq.Active(), "the Call-CQ session is active")
+	require.False(t, s.txInFlightNow(), "the caller's CQ has not keyed yet (next slot)")
+
+	require.ErrorIs(t, s.TransmitNext("CQ G0XYZ IO91", 1600), ErrQsoInProgress)
+	s.AbandonQso()
+}
+
+// TestStartSession_RefusedWhileManualSendInFlight: the reverse exclusion. A manual
+// send sets txInFlight synchronously (the fake player's done never closes, so it
+// stays in flight), and every session start must then be refused (ErrTxInFlight)
+// rather than committing a session whose opening rung would collide and drop while
+// the manual message still keys.
+func TestStartSession_RefusedWhileManualSendInFlight(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	require.NoError(t, s.ArmTx(true))
+	defer func() { _ = s.ArmTx(false) }() // disarm cancels the in-flight manual send
+
+	require.NoError(t, s.TransmitNext("CQ G0XYZ IO91", 1500))
+	require.True(t, s.txInFlightNow(), "the manual send is in flight")
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	require.ErrorIs(t, s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42", now, 1600, 14.074, 1), ErrTxInFlight)
+	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "IO91", 1600, 14.074, "", 1), ErrTxInFlight)
+	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1600, 14.074, 1), ErrTxInFlight)
+	require.False(t, s.seq.Active(), "no session may commit while a manual send is in flight")
 }
 
 func TestArmTx_AcquiresAndReleasesDevice(t *testing.T) {
