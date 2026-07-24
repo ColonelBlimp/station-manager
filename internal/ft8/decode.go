@@ -154,13 +154,27 @@ func DecodeSlot(samples []int16, enableOSD bool, log logging.Logger) (msgs []gof
 }
 
 // DecodeFile reads a WAV fixture into an int16 slot and decodes it. The WAV
-// must already meet go-ft8's contract (12 kHz, mono, 16-bit PCM); readSlotWAV
-// rejects anything else rather than mis-decoding it. enableOSD is forwarded to
-// DecodeSlot.
+// must already meet go-ft8's contract (12 kHz, mono, 16-bit PCM) AND be exactly
+// one slot long (SlotSamples); readSlotWAV rejects the wrong format and this
+// rejects the wrong duration rather than mis-reporting either. enableOSD is
+// forwarded to DecodeSlot.
+//
+// The duration check lives here, not in DecodeSlot: DecodeSlot is fail-soft and
+// swallows go-ft8's wrong-length rejection (returning nil), which is correct for
+// the live pipeline — the scheduler always emits exactly one slot, so a short
+// count is a producer bug to log-and-skip, not to fail on. But the offline path
+// takes an arbitrary operator-supplied file; a wrong-duration WAV that DecodeSlot
+// silently drops would surface as "0 decodes" with a nil error — success — hiding
+// that the file simply isn't a decodable slot. So reject it up front instead.
 func DecodeFile(path string, enableOSD bool, log logging.Logger) ([]goft8.DecodedMessage, error) {
 	samples, err := readSlotWAV(path)
 	if err != nil {
 		return nil, errors.New(opDecodeFile).WithErr(err)
+	}
+	if len(samples) != SlotSamples {
+		return nil, errors.New(opDecodeFile).WithMsgf(
+			"WAV is %d samples; a decode slot must be exactly %d (%d s at %d Hz)",
+			len(samples), SlotSamples, slotSeconds, goft8.SampleRate)
 	}
 	return DecodeSlot(samples, enableOSD, log), nil
 }

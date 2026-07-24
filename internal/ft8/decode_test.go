@@ -112,6 +112,36 @@ func TestDecodeSlot_RejectsWrongLength(t *testing.T) {
 	}
 }
 
+// TestDecodeFile_RejectsWrongDuration proves DecodeFile fails on a correctly
+// formatted (12 kHz / mono / 16-bit) WAV that isn't exactly one slot long,
+// rather than forwarding it to fail-soft DecodeSlot and reporting "0 decodes"
+// with a nil error. The offline path takes an arbitrary operator file, so a
+// wrong-duration WAV is an error the operator must see, not silent success.
+func TestDecodeFile_RejectsWrongDuration(t *testing.T) {
+	// Core regression: 100 samples, not 180000. Rejection is cheap (no decode).
+	shortPath := filepath.Join(t.TempDir(), "short.wav")
+	writeTestWAV(t, shortPath, uint32(goft8.SampleRate), 1, 16, make([]byte, 200))
+	if _, err := DecodeFile(shortPath, false, logging.Noop()); err == nil {
+		t.Fatal("expected error for wrong-duration WAV, got nil")
+	}
+
+	// Guard against the length check rejecting a valid slot: a full slot of
+	// silence must decode cleanly (0 messages, no error). This runs a real
+	// decode, so gate it under -short like the corpus tests above.
+	if testing.Short() {
+		return
+	}
+	fullPath := filepath.Join(t.TempDir(), "full.wav")
+	writeTestWAV(t, fullPath, uint32(goft8.SampleRate), 1, 16, make([]byte, SlotSamples*2))
+	msgs, err := DecodeFile(fullPath, false, logging.Noop())
+	if err != nil {
+		t.Fatalf("full-length silent slot: unexpected error %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("silent slot decoded %d messages, want 0", len(msgs))
+	}
+}
+
 // writeTestWAV writes a minimal canonical PCM WAV for reader-contract tests.
 func writeTestWAV(t *testing.T, path string, rate uint32, channels, bits uint16, data []byte) {
 	t.Helper()
