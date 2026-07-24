@@ -243,6 +243,43 @@ func TestService_StartDisarmRace(t *testing.T) {
 	}
 }
 
+// AbandonQso must serialize through seqGate like the Start*/disarm paths, so it
+// is atomic w.r.t. a start's armed-check → session-commit window. Without the
+// gate, Abandon could slip into that window, find an idle sequencer + nil
+// txCancel, do nothing, and let the start commit a fresh-generation session and
+// transmit AFTER Abandon returned (High finding). Deterministic: hold seqGate as
+// an in-progress start would and require AbandonQso to block behind it.
+func TestAbandonQso_SerializesThroughSeqGate(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	require.NoError(t, s.ArmTx(true))
+	defer func() { _ = s.ArmTx(false) }()
+
+	s.seqGate.Lock() // stand in for a Start* holding the gate across its commit
+
+	done := make(chan struct{})
+	go func() {
+		s.AbandonQso()
+		close(done)
+	}()
+
+	// The gate is held, so AbandonQso must NOT complete. The old code took no
+	// gate and would return immediately here.
+	select {
+	case <-done:
+		s.seqGate.Unlock()
+		t.Fatal("AbandonQso completed while seqGate was held — it does not serialize " +
+			"against a concurrent Start*, so a start can transmit after Abandon returns")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	s.seqGate.Unlock() // release: AbandonQso may now proceed
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("AbandonQso did not complete after seqGate was released")
+	}
+}
+
 // --- M2: the scheduler skips slots serviced beyond the lateness budget -------
 
 func TestSlotTooLate(t *testing.T) {

@@ -838,14 +838,6 @@ func (s *Service) restoreExchangePath(p string, gen uint64) {
 	s.txMu.Unlock()
 }
 
-// AbandonQso drops any active sequenced QSO (operator action). Idempotent.
-// Abandon is the operator's immediate off-ramp: besides stopping the sequencer
-// (no further rungs), it cancels any in-flight transmission NOW — dropping PTT
-// and stopping audio mid-slot rather than letting the current ~13 s cycle play
-// out. TX stays ARMED (the device isn't torn down): only the contact ends, so
-// the operator can call CQ or answer again. (disarmTx is the harder stop that
-// also closes the device.) The cancelled transmission's goroutine clears
-// txCancel/txInFlight and publishes the final ft8-tx state on its own path.
 // SetQsoSkip arms/disarms skip-if-silent on the active sequenced session (the
 // deferred Next, daemon-side): armed, a silent cycle ends the session instead
 // of keying the repeat. Nil sequencer → ErrNoActiveQso (nothing to arm).
@@ -856,7 +848,28 @@ func (s *Service) SetQsoSkip(armed bool) error {
 	return s.seq.SetSkipIfSilent(armed)
 }
 
+// AbandonQso drops any active sequenced QSO (operator action). Idempotent.
+// Abandon is the operator's immediate off-ramp: besides stopping the sequencer
+// (no further rungs), it cancels any in-flight transmission NOW — dropping PTT
+// and stopping audio mid-slot rather than letting the current ~13 s cycle play
+// out. TX stays ARMED (the device isn't torn down): only the contact ends, so
+// the operator can call CQ or answer again. (disarmTx is the harder stop that
+// also closes the device.) The cancelled transmission's goroutine clears
+// txCancel/txInFlight and publishes the final ft8-tx state on its own path.
 func (s *Service) AbandonQso() {
+	// seqGate: the abandonment + cancellation must be atomic w.r.t. a concurrent
+	// Start* — which commits its session, and can fire the opening transmission,
+	// under this SAME gate (see StartQso, where seq.StartQso publishes and may
+	// fire before returning). Without the gate, Abandon could slip into a start
+	// AFTER its armed check but BEFORE the session commits: it would find an idle
+	// sequencer and a nil txCancel, do nothing, and the start would then commit a
+	// FRESH-generation session and transmit AFTER Abandon returned — the rung
+	// commit-gate can't refuse a session created after the bump. Matches disarmTx's
+	// seqGate protocol. Order seqGate → txMu.
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+	// Bump the generation FIRST, then read txCancel under txMu second — the order
+	// the rung commit-gate in startTransmission relies on (review 2026-07-20 #1).
 	if s.seq != nil {
 		s.seq.Abandon()
 	}
