@@ -202,13 +202,14 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 				return
 			}
 			s.t4Ex = nil
-			s.mode = seqIdle
-			s.mu.Unlock()
+			s.mu.Unlock() // clear the exchange, but stay non-idle across onComplete
 			s.log.InfoWith().Str("their_call", c.TheirCall).Msg("ft8 seq: type-4 QSO complete (73 sent)")
 			if onComplete != nil {
-				onComplete(c)
+				onComplete(c) // consumes the antenna path — must run before we go idle
 			}
-			publish(QsoStatus{Active: false})
+			if s.goIdleAfterCompletion(gen) {
+				publish(QsoStatus{Active: false})
+			}
 		}
 	}
 
@@ -378,15 +379,16 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 			return
 		}
 		s.t4Work = nil
-		s.mode = seqIdle
 		s.repeats = 0
-		s.mu.Unlock()
+		s.mu.Unlock() // clear the exchange, but stay non-idle across onComplete
 		s.log.InfoWith().Str("their_call", c.TheirCall).
 			Msg("ft8 seq: type-4 work QSO complete (RR73 sent)")
 		if onComplete != nil {
-			onComplete(c)
+			onComplete(c) // consumes the antenna path — must run before we go idle
 		}
-		publish(QsoStatus{Active: false})
+		if s.goIdleAfterCompletion(gen) {
+			publish(QsoStatus{Active: false})
+		}
 	}
 
 	if err := transmit(msg, offset, dial, onDone); err != nil {

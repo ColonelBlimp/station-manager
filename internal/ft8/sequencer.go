@@ -313,6 +313,33 @@ func (s *Sequencer) isCurrent(gen uint64) bool {
 	return s.sessionGen == gen
 }
 
+// goIdleAfterCompletion transitions a completing session to seqIdle — but ONLY
+// after its onComplete side effect has already run. The order is load-bearing
+// (review: a concurrent new session start stole the completed QSO's antenna
+// path). onComplete consumes the operator's per-exchange antenna-path selection
+// (Service-side, under txMu) to stamp it on the completed QSO; a new session
+// start ALSO consumes it (resetting to the default) and is gated on mode !=
+// seqIdle. Going idle BEFORE onComplete left a window in which the new start
+// consumed the completing QSO's long-path choice first — the completed QSO then
+// logged short, or the reverse. So each completion site clears its exchange field
+// (OnSlot / fireOpening / status then no-op on the nil field) but leaves the mode
+// non-idle across onComplete, then calls this: while the mode stays non-idle a
+// concurrent start is refused (ErrQsoInProgress), so the completing QSO always
+// takes its path first.
+//
+// Returns true if it went idle; false if an Abandon/disarm superseded the session
+// while onComplete ran (it bumped sessionGen and published its own state), so the
+// caller skips its idle publish — mirroring the pre-onComplete gen guard.
+func (s *Sequencer) goIdleAfterCompletion(gen uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionGen != gen {
+		return false
+	}
+	s.mode = seqIdle
+	return true
+}
+
 func newSequencer(transmit func(string, float64, float64, uint64, func(ok bool)) error, publish func(QsoStatus), maxRepeats int, log logging.Logger) *Sequencer {
 	if log == nil {
 		log = logging.Noop()
@@ -745,13 +772,14 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 				return
 			}
 			s.ex = nil
-			s.mode = seqIdle
-			s.mu.Unlock()
+			s.mu.Unlock() // clear the exchange, but stay non-idle across onComplete
 			s.log.InfoWith().Str("their_call", c.TheirCall).Msg("ft8 seq: QSO complete (73 sent)")
 			if onComplete != nil {
-				onComplete(c)
+				onComplete(c) // consumes the antenna path — must run before we go idle
 			}
-			publish(QsoStatus{Active: false})
+			if s.goIdleAfterCompletion(gen) {
+				publish(QsoStatus{Active: false})
+			}
 		}
 	}
 
@@ -902,13 +930,14 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 				return
 			}
 			s.fdEx = nil
-			s.mode = seqIdle
-			s.mu.Unlock()
+			s.mu.Unlock() // clear the exchange, but stay non-idle across onComplete
 			s.log.InfoWith().Str("their_call", c.TheirCall).Msg("ft8 seq: FD QSO complete (RR73 sent)")
 			if onComplete != nil {
-				onComplete(c)
+				onComplete(c) // consumes the antenna path — must run before we go idle
 			}
-			publish(QsoStatus{Active: false})
+			if s.goIdleAfterCompletion(gen) {
+				publish(QsoStatus{Active: false})
+			}
 		}
 	}
 
