@@ -20,6 +20,7 @@
     */
     import { logbookState } from './logbook.svelte';
     import { sendSessionEmail } from '../api/session-email';
+    import { toasts } from '../ui/toasts.svelte';
 
     let recipient = $state('');
     let recipientSeeded = false;
@@ -51,38 +52,53 @@
         result = null;
         const to = recipient.trim();
         const uuids = logbookState.selectedUuids;
+        const label = `${uuids.length} QSO${uuids.length === 1 ? '' : 's'}`;
+        // A sticky "sending" toast superseded by the outcome toast below (the
+        // documented pushToast supersede idiom) gives the sending→sent
+        // transition its own status surface, without disturbing the inline
+        // result line the toolbar port already relies on.
+        const pending = toasts.info(`Emailing ${label}…`, 0);
         const outcome = await sendSessionEmail({ to, uuids });
         sending = false;
+        toasts.dismiss(pending);
         switch (outcome.kind) {
             case 'sent':
                 logbookState.markEmailed(outcome.emailed);
-                result = {
-                    ok: true,
-                    text: `Sent ${uuids.length} QSO${uuids.length === 1 ? '' : 's'} to ${to}`,
-                };
+                result = { ok: true, text: `Sent ${label} to ${to}` };
+                toasts.info(`Emailed ${label} to ${to}`);
                 break;
             case 'mailer_disabled':
                 result = { ok: false, text: 'Email not configured (SMTP block missing)' };
+                toasts.error('Email not configured (SMTP block missing)');
                 break;
             case 'invalid':
                 result = { ok: false, text: outcome.message };
+                toasts.error(outcome.message);
                 break;
             case 'smtp_failure':
                 result = { ok: false, text: 'Email send failed; check daemon logs' };
+                toasts.error('Email send failed; check daemon logs');
                 break;
             case 'server':
                 result = { ok: false, text: `Email send failed: ${outcome.message}` };
+                toasts.error(`Email send failed: ${outcome.message}`);
                 break;
             case 'network':
                 // EVERY transport failure on a send is ambiguous, not just a
                 // timeout — the daemon's 30 s SMTP/HTTP timeouts can drop the
                 // connection after SMTP accepted, and the browser can't tell
                 // that from connect-refused. A blind re-send risks a
-                // duplicate email in a real inbox.
+                // duplicate email in a real inbox. The verbose, PERSISTENT
+                // inline warning stays the primary surface (a transient toast
+                // must never be the only record of "check before re-sending");
+                // the warn toast is a brief companion pointing back to it.
                 result = {
                     ok: false,
                     text: 'Cannot confirm the send — the connection to the daemon failed. The email may still have gone out; check the inbox (or the Emailed column) before re-sending.',
                 };
+                toasts.warn(
+                    'Email send unconfirmed — it may still have gone out; see the note by the button before re-sending.'
+                );
                 break;
         }
     }

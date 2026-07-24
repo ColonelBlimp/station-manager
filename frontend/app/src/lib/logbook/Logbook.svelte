@@ -103,10 +103,15 @@
             />
             Not emailed only
         </label>
+    </div>
 
-        <!-- Selection toolbar: count + email-out + upload-to-destination + Clear.
-             Email posts the selected rows' UUIDs to /v1/session/email
-             (LogbookEmailControls). -->
+    <!-- Selection toolbar in its own height-reserved row. Rendering it here —
+         rather than as another wrapping child of the controls row above — means
+         selecting a QSO can no longer wrap that row and shove the table down:
+         the row holds min-h-9 whether or not anything is selected. Count +
+         upload-to-destination + Re-enrich + email-out + Clear; Email posts the
+         selected rows' UUIDs to /v1/session/email (LogbookEmailControls). -->
+    <div class="mb-4 flex min-h-9 items-center">
         {#if logbookState.selectedCount > 0}
             <div class="ml-auto flex flex-wrap items-center gap-2 text-sm">
                 <span class="font-medium text-focus"
