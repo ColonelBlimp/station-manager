@@ -264,7 +264,16 @@
                         <tr>
                             <td colspan="12" class="px-3 py-6 text-center text-sm text-muted">
                                 {#if logbookState.rows.length === 0}
-                                    No QSOs in this logbook.
+                                    <!-- An empty page under an active server-side
+                                         filter means "nothing MATCHES", not "the
+                                         logbook is empty" — say which. -->
+                                    {#if logbookState.notEmailedOnly}
+                                        No QSOs still need emailing.
+                                    {:else if logbookState.hasDestination && !logbookState.showUploaded}
+                                        No QSOs still to upload to {logbookState.selectedDestination}.
+                                    {:else}
+                                        No QSOs in this logbook.
+                                    {/if}
                                 {:else}
                                     All QSOs on this page have been emailed.
                                 {/if}

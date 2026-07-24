@@ -92,6 +92,9 @@ afterEach(() => {
     logbookState.logbooks = [];
     logbookState.selectedId = null;
     logbookState.error = null;
+    // Reset filter state — it's a shared singleton, and a leaked notEmailedOnly
+    // makes the next test's toggle flip the wrong way (isolation bug).
+    logbookState.notEmailedOnly = false;
 });
 
 describe('Logbook page', () => {
@@ -216,5 +219,72 @@ describe('Logbook page', () => {
         const urls = fetchMock.mock.calls.map((c) => urlText(c[0]));
         expect(urls.some((u) => u.includes('/qso') && u.includes('not_emailed=true'))).toBe(true);
         expect(urls.some((u) => u.includes('/count') && u.includes('not_emailed=true'))).toBe(true);
+    });
+
+    it('emailing a row while "Not emailed only" is on refreshes the filtered count + page', async () => {
+        const fetchMock = vi.mocked(globalThis.fetch);
+        render(Logbook);
+        await flush();
+        await flush();
+        flushSync();
+
+        // Turn the filter on (reloads), then clear so we see only the post-email fetches.
+        screen.getByLabelText('Not emailed only').click();
+        await flush();
+        await flush();
+        flushSync();
+        fetchMock.mockClear();
+
+        // A successful email stamps a loaded row; with the server-side filter on,
+        // the count + cursor trail must refresh, else the pager goes stale (P2).
+        logbookState.markEmailed(['u-1']);
+        await flush();
+        await flush();
+        flushSync();
+
+        const urls = fetchMock.mock.calls.map((c) => urlText(c[0]));
+        expect(urls.some((u) => u.includes('/count') && u.includes('not_emailed=true'))).toBe(true);
+        expect(urls.some((u) => u.includes('/qso') && u.includes('not_emailed=true'))).toBe(true);
+    });
+
+    it('emailing a row with the filter OFF triggers no reload', async () => {
+        const fetchMock = vi.mocked(globalThis.fetch);
+        render(Logbook);
+        await flush();
+        await flush();
+        flushSync();
+        fetchMock.mockClear();
+
+        logbookState.markEmailed(['u-1']); // notEmailedOnly defaults false
+        await flush();
+        flushSync();
+
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('shows a filter-specific empty message when nothing matches "Not emailed only"', async () => {
+        const fetchMock = vi.mocked(globalThis.fetch);
+        render(Logbook);
+        await flush();
+        await flush();
+        flushSync();
+
+        // Re-stub so the filtered page returns empty (every QSO already emailed)
+        // while the logbook itself is non-empty — the P3 misfire condition.
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+            const url = urlText(input);
+            if (url.includes('/count')) return Promise.resolve(jsonResponse({ count: 5 }));
+            if (url.includes('/qso'))
+                return Promise.resolve(jsonResponse({ items: [], next_cursor: null }));
+            return Promise.resolve(jsonResponse({ mailer: { enabled: false }, forwarders: [] }));
+        });
+
+        screen.getByLabelText('Not emailed only').click();
+        await flush();
+        await flush();
+        flushSync();
+
+        expect(screen.getByText('No QSOs still need emailing.')).toBeInTheDocument();
+        expect(screen.queryByText('No QSOs in this logbook.')).toBeNull();
     });
 });

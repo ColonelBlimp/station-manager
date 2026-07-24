@@ -236,6 +236,15 @@ class LogbookState {
                 this.rows[i] = { ...this.rows[i], sm_fwrd_by_email_status: 'Y' };
             }
         }
+        // With the server-side "not emailed only" filter active, the rows just
+        // stamped no longer belong to the filtered set: the visibleRows client
+        // filter hides them instantly, but the count + cursor trail would be left
+        // stale (the pager reading "of N" too high, or an empty table with a
+        // nonzero total). Reload the filtered snapshot so the paging metadata
+        // re-syncs. Fire-and-forget — the reactive state updates when it lands.
+        if (this.notEmailedOnly) {
+            void Promise.all([this.#loadCount(), this.#loadPage(this.pageIndex)]);
+        }
     }
 
     /** Open the edit modal on a row. */
