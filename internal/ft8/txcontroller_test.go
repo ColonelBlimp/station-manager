@@ -80,6 +80,13 @@ func (p *fakePlayer) finishPlayback() {
 	close(p.done)
 }
 
+// deliverDone hands the controller ONE playback-complete signal via a blocking
+// send: it returns only after transmit's mid-play select has received it, so it
+// doubles as a synchronization point proving transmit has left that select and
+// entered the drain. (finishPlayback closes done instead — fine when the drain
+// is skipped, but a preclosed channel can't prove *when* transmit consumed it.)
+func (p *fakePlayer) deliverDone() { p.done <- struct{}{} }
+
 // zeroTiming sets the pre-key lead and play tail to zero for the duration of a
 // test so transmit() doesn't sleep, restoring them on cleanup.
 func zeroTiming(t *testing.T) {
@@ -168,15 +175,22 @@ func TestTransmit_CancelDuringDrainReportsFailure(t *testing.T) {
 	c := NewTxController(k, p, "", logging.Noop())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	// Playback "done" (samples reached the device) BEFORE transmit runs, so the
-	// first select deterministically takes <-done and enters the drain; the cancel
-	// then lands DURING the drain (ctx isn't cancelled until we're already there).
-	p.finishPlayback()
-	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	errCh := make(chan error, 1)
+	go func() { errCh <- c.transmit(ctx, []int16{1, 2, 3}, time.Time{}, nil) }()
 
-	err := c.transmit(ctx, []int16{1, 2, 3}, time.Time{}, nil)
+	// Rendezvous: deliverDone blocks until transmit's mid-play select has received
+	// it, so transmit is provably PAST that select (ctx still uncancelled, so it
+	// could only have taken <-done) and now in the drain. Cancelling here therefore
+	// lands deterministically in the drain window — never racing the first select.
+	p.deliverDone()
+	cancel()
+
+	err := <-errCh
 	require.Error(t, err, "a cancel during the drain must be reported, not returned as success")
 	require.ErrorIs(t, err, context.Canceled)
+	// Assert the DRAIN path specifically (not the mid-play "transmit cancelled"),
+	// so the test can't quietly pass by exercising the wrong cancellation branch.
+	require.ErrorContains(t, err, "during drain")
 	require.Equal(t, 1, k.unkeys(), "must still unkey on the drain-cancel path")
 	require.GreaterOrEqual(t, p.stops(), 1, "must still stop the player on the drain-cancel path")
 }
