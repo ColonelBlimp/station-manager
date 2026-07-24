@@ -174,4 +174,29 @@ describe('WorldMap', () => {
         await tick();
         expect(container.querySelector('[data-testid="map-tooltip"]')).toBeNull();
     });
+
+    it('lists a deep stack topmost-first, dropping the bottom (not the top) on overflow', async () => {
+        // Nine contacts on the same far endpoint. Arcs paint in array order (last
+        // on top), so 'stack-8' is the topmost arc and 'stack-0' the bottommost.
+        // The tooltip caps at TIP_MAX (8), so exactly one is dropped — it must be
+        // the buried bottom one, never the visible top one (778b343a review P2).
+        const arcs = Array.from({ length: 9 }, (_, i) => ({
+            key: `s${i}`,
+            from: LILONGWE,
+            to: LONDON,
+            label: `stack-${i}`,
+        }));
+        const { container } = render(WorldMap, { props: { origin: LILONGWE, arcs } });
+        const svg = container.querySelector('svg')!;
+        pinRect(svg);
+
+        const [ex, ey] = project(createEngine(960, 500), LONDON)!;
+        pointerMove(svg, ex + 2, ey - 2);
+        await tick();
+
+        const tip = container.querySelector('[data-testid="map-tooltip"]')?.textContent ?? '';
+        expect(tip).toContain('stack-8'); // topmost — kept
+        expect(tip).not.toContain('stack-0'); // bottommost — dropped by the cap
+        expect(tip).toContain('+1 more');
+    });
 });

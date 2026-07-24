@@ -199,9 +199,18 @@
             hover = null;
             return;
         }
+        // List the stack TOPMOST-FIRST. endpointsNear returns indices ascending,
+        // and arcs paint in document order (highest index drawn last = on top), so
+        // reversing gives topmost→bottommost. This matters at the tooltip's TIP_MAX
+        // cap: the entries kept are the ones actually visible on top, and the
+        // "+N more" drops the ones buried underneath — a pure paint-stacking rule,
+        // independent of what the arcs mean. Because the parent paints newest last
+        // (MapView), the tooltip therefore leads with the newest contact and never
+        // truncates it away (778b343a review P2).
+        const stack = [...idxs].reverse();
         hover = {
-            keys: new Set(idxs.map((i) => drawnArcs[i].key)),
-            entries: idxs.map((i) => ({
+            keys: new Set(stack.map((i) => drawnArcs[i].key)),
+            entries: stack.map((i) => ({
                 key: drawnArcs[i].key,
                 label: drawnArcs[i].label ?? drawnArcs[i].key,
                 color: drawnArcs[i].color ?? 'var(--color-focus)',
