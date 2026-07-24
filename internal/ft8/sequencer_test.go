@@ -151,6 +151,30 @@ func TestSequencer_HappyPath(t *testing.T) {
 	require.Equal(t, 1500.0, r.completed[0].OffsetHz)
 }
 
+// TestSequencer_StartTheirPeriodNoRace guards the data race where a start method's
+// info log read s.theirPeriod AFTER releasing s.mu, while a concurrent abandon-then-
+// start wrote it under s.mu. Meaningful under `go test -race`: many goroutines each
+// abandon then start, so a start's unguarded log read overlaps another's guarded
+// write. The captured-under-lock fix must make this clean; the value is otherwise
+// irrelevant to the assertions.
+func TestSequencer_StartTheirPeriodNoRace(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	slot := time.Unix(0, 0).UTC().Format(time.RFC3339)
+	now := time.Unix(0, 0).UTC()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.Abandon()
+			_ = s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", slot, 1500, 14.074, now)
+		}()
+	}
+	wg.Wait()
+}
+
 func TestSequencer_OnlyTransmitsOppositeParity(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)

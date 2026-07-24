@@ -79,11 +79,12 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	}
 	s.theirPeriod = oppositePeriod(ourPeriod)
 	st := s.statusLocked()
+	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("our_call", call).Str("answer_mode", answerMode).
 		Float64("offset_hz", offsetHz).Str("cq_period", ourPeriod).
-		Str("their_period", s.theirPeriod).Msg("ft8 seq: calling CQ")
+		Str("their_period", theirPeriod).Msg("ft8 seq: calling CQ")
 	s.publish(st)
 	// No immediate-fire here (unlike answering a CQ): we chose our CQ parity as the
 	// NEXT slot, so the first CQ goes out at the upcoming boundary (≤ one slot, ~15 s)

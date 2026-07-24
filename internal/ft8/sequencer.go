@@ -396,9 +396,10 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.startedAt = now.UTC()
 	s.repeats = 0
 	st := s.statusLocked()
+	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.mu.Unlock()
 
-	s.log.InfoWith().Str("their_call", theirCall).Str("their_period", s.theirPeriod).
+	s.log.InfoWith().Str("their_call", theirCall).Str("their_period", theirPeriod).
 		Float64("offset_hz", offsetHz).Msg("ft8 seq: answering CQ")
 	s.publish(st)
 	// Send the opening call this slot if we're already in our TX window — else the
@@ -449,9 +450,10 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 	s.startedAt = now.UTC()
 	s.repeats = 0
 	st := s.statusLocked()
+	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.mu.Unlock()
 
-	s.log.InfoWith().Str("their_call", theirCall).Str("their_period", s.theirPeriod).
+	s.log.InfoWith().Str("their_call", theirCall).Str("their_period", theirPeriod).
 		Float64("offset_hz", offsetHz).Str("our_class", ourClass).Str("our_section", ourSection).
 		Msg("ft8 seq: answering CQ FD")
 	s.publish(st)

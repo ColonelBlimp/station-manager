@@ -69,9 +69,10 @@ func (s *Sequencer) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr in
 	s.startedAt = now.UTC()
 	s.repeats = 0
 	st := s.statusLocked()
+	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.mu.Unlock()
 
-	s.log.InfoWith().Str("their_call", ex.TheirCall).Str("their_period", s.theirPeriod).
+	s.log.InfoWith().Str("their_call", ex.TheirCall).Str("their_period", theirPeriod).
 		Float64("offset_hz", offsetHz).Msg("ft8 seq: answering CQ (type-4)")
 	s.publish(st)
 	s.fireOpening(now)
@@ -278,9 +279,10 @@ func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, thei
 	s.startedAt = now.UTC()
 	s.repeats = 0
 	st := s.statusLocked()
+	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.mu.Unlock()
 
-	s.log.InfoWith().Str("their_call", c.TheirCall).Str("their_period", s.theirPeriod).
+	s.log.InfoWith().Str("their_call", c.TheirCall).Str("their_period", theirPeriod).
 		Float64("offset_hz", offsetHz).Msg("ft8 seq: working a caller (type-4)")
 	s.publish(st)
 	// Immediate terminal fire: the sole RR73 rung is terminal, so it goes through

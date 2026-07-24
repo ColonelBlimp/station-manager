@@ -71,9 +71,10 @@ func (s *Sequencer) StartWorkCaller(ourCall, theirCall, theirGrid string, theirS
 	s.startedAt = now.UTC()
 	s.repeats = 0
 	st := s.statusLocked()
+	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.mu.Unlock()
 
-	s.log.InfoWith().Str("their_call", c.TheirCall).Str("their_period", s.theirPeriod).
+	s.log.InfoWith().Str("their_call", c.TheirCall).Str("their_period", theirPeriod).
 		Float64("offset_hz", offsetHz).Msg("ft8 seq: working a caller")
 	s.publish(st)
 	// Send our opening report this slot if we're already in our TX window — else the
@@ -304,9 +305,10 @@ func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, 
 	s.startedAt = now.UTC()
 	s.repeats = 0
 	st := s.statusLocked()
+	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.mu.Unlock()
 
-	s.log.InfoWith().Str("their_call", c.TheirCall).Str("their_period", s.theirPeriod).
+	s.log.InfoWith().Str("their_call", c.TheirCall).Str("their_period", theirPeriod).
 		Float64("offset_hz", offsetHz).Str("our_class", ourClass).Str("our_section", ourSection).
 		Str("their_class", theirClass).Str("their_section", theirSection).
 		Msg("ft8 seq: working a caller (FD)")
