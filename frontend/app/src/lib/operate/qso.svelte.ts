@@ -16,7 +16,7 @@ export interface QsoDraft {
     rstSent: string;
     rstRcvd: string;
     name: string;
-    qth: string; // ADIF QTH — edited in the Details card (rarely changed), not on the logging card
+    qth: string; // ADIF QTH — enrichment-filled; correctable in the logging card's Contact-details disclosure
     gridsquare: string; // ADIF GRIDSQUARE — filled by enrichment (Details), not entered on the card
     dateOn: string; // ADIF QSO_DATE — UTC, YYYY-MM-DD
     timeOn: string; // ADIF TIME_ON — UTC, HH:MM:SS

@@ -1,9 +1,10 @@
 <script lang="ts">
     // Phone/CW logging card — the fast-path entry fields (callsign, RST, time),
     // a Name + Comment row, and a collapsible Contact-details disclosure for the
-    // contacted-station facts kept off the fast path (Rig / RX power / Notes to
-    // edit; QRZ page link + looked-up email to read). QTH / grid live in the
-    // ContactDialog overlay; the grid is enrichment-filled, not typed here.
+    // contacted-station facts kept off the fast path (QTH / Rig / RX power / Notes
+    // to edit; QRZ page link + looked-up email to read). QTH is enrichment-filled
+    // (fill-if-empty in enrich.svelte), correctable here. Gridsquare stays in the
+    // ContactDialog overlay — enrichment-filled, effectively never hand-corrected.
     //
     // The right column hosts EnrichmentCard (flag / DXCC + NEW / bearing SP-LP /
     // distance — mirrors the FT8 Band-Activity enrichment). This card is only its
@@ -283,12 +284,13 @@
             </div>
         </div>
         <!-- Contact details (extends the card): contacted-station fields kept
-     off the fast path — Rig / RX power / Notes to edit, QRZ page link +
-     looked-up email to read. Sits where the Comment row used to be. -->
+     off the fast path — QTH / Rig / RX power / Notes to edit, QRZ page link +
+     looked-up email to read. QTH is enrichment-filled (correctable here).
+     Sits where the Comment row used to be. -->
         <details class="mt-2 rounded-md border border-line">
             <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-ink select-none">
                 Contact details
-                <span class="font-normal text-muted">(rig · power · notes)</span>
+                <span class="font-normal text-muted">(qth · rig · power · notes)</span>
             </summary>
             <div class="space-y-3 border-t border-line px-3 py-3">
                 <!-- Read-only, looked-up: QRZ page link + email. -->
@@ -325,8 +327,19 @@
                     </div>
                 </div>
 
-                <!-- Editable contacted-station fields. Rig + RX power share a row
-                     (Rig fills; power stays narrow). -->
+                <!-- Editable contacted-station fields. QTH is enrichment-filled
+                     (correctable); Rig + RX power share a row (Rig fills; power
+                     stays narrow). -->
+                <div>
+                    <label for="lc-qth" class="block text-sm font-medium text-ink">QTH</label>
+                    <input
+                        id="lc-qth"
+                        class="input w-full"
+                        autocomplete="off"
+                        placeholder="City / town"
+                        bind:value={draft.qth}
+                    />
+                </div>
                 <div class="flex items-end gap-x-2">
                     <div class="flex-1">
                         <label for="lc-rig" class="block text-sm font-medium text-ink">Rig</label>
