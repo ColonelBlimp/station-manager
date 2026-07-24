@@ -659,6 +659,14 @@ need the history of a specific item ("when/how did X ship?").
     Related: the LSPA "future POTA fields", the FT8 session log, `docs/dogfood-inbox.md`
     2026-07-04 + 2026-07-06 (original map notes), ADR 0049 (rejected daemon-sessions design).
 
+- ~~**P2 · Bridge: TX-status replies are anonymous — a delayed reply can confirm a later unkey.**~~ **CLOSED 2026-07-23 by ADR 0057 (Accepted) — do not re-open without a NEW observed failure.** Per-cycle reply counting + a marker-query barrier were both built and rejected; CAT confirmation is best-effort DETECTION, the rig's TOT is the guarantee. Clean-room reviews keep re-raising this — cite ADR 0057. _(Swept from live backlog 2026-07-24.)_
+
+- ~~**P2 · Logbook "Not emailed only" is page-local, so it looks inert.**~~ **BUILT 2026-07-24.** Server-side `not_emailed` filter mirroring `missing_from` (daemon `notEmailedMod` + list/count handlers + shared `parseBoolQuery`; SPA `toggleNotEmailedOnly` reloads count+page). Plus three review rounds: pager refresh on email while filtered, filter-aware empty messages, cross-logbook origin guard, non-destructive-on-failure refresh. Detail in git (commits `0dfd3bfd`→`ce7edf28`).
+
+- ~~**P2 · Session email — "send only not-yet-emailed" delta option.**~~ **BUILT 2026-07-24.** `SessionQso.emailed` + `markSessionEmailed`; `ExportDialog` defaults a resend to the not-yet-emailed delta via an `onlyUnsent` toggle that resets on each open; the ADIF download stays the full session. Detail in git (`aa5986ee`+`94997cbf`).
+
+- ~~**P3 · Logbook email send has no toasts.**~~ **BUILT 2026-07-24.** Send/outcome toasts + the sticky sending→sent supersede idiom; the ambiguous-network warning kept inline as the primary surface; test `LogbookEmailControls.svelte.test.ts` (`bfdf1a35`).
+
 ## Website / public presence
 
 - ~~**Landing page for `station-manager.org`**~~ **MVP LIVE 2026-07-02.** Domain
@@ -735,4 +743,6 @@ at archive time, stamp included.
   Editor home is the Settings card (config surface, not yet in frontend/app); the
   dogfood shortcut is to add the daemon field + wire the grid consumer FIRST
   (config.json hand-editable), Settings checkboxes follow as polish.
+
+- ~~**P0 · Bridge TX-safety revision + companion + round 3 (2026-07-18/19 reviews, 3+4+5 findings, all real)**~~ **BUILT 2026-07-18/19 (ADR 0051 → Accepted); swept 2026-07-24.** The whole confirm-or-alarm TX-safety subsystem: `txUncertain` model (`txconfirm.go`), hub-replayed `tx-alarm` SSE + "CHECK YOUR RADIO" banners in both SPAs, unconditional defensive tx_off on every identity-confirmed connection (`strandedKeyed` deleted, restart-safe), `keyMu`-held teardown closing the TX1 race, restore gated on positive RX confirmation (no full-power `PC` into a possibly-keyed rig), cause-aware teardown alarms on faulted exits, per-VFO dial knownness, tune-power def-floor validation, `rigWritableLocked` single live/write predicate, per-path generation tokens, CI-V snapshots skip while keyed. Bridge suite `-race`-stable, coverage 85.2%. Authoritative detail in git + ADR 0051/0057.
 
