@@ -68,6 +68,19 @@ step "SPA: vitest"
 step "SPA: build (produces dist/ for daemon embed)"
 ( cd frontend/app && npm run build )
 
+# The generated manual is not committed (only manual/public/.gitkeep is), so —
+# exactly as hosted CI does before its Go gate — build it here so the daemon
+# embed-build compiles against the real page and TestManualHandler_ServesIndexAtRoot
+# exercises the served content instead of skipping. Hugo is a hard prerequisite
+# for this mirror, same as it is for hosted CI.
+step "Manual: build (Hugo → public/ for daemon embed)"
+if ! command -v hugo >/dev/null 2>&1; then
+    printf 'hugo not found on PATH — required to build the embedded manual.\n' >&2
+    note "Install Hugo (extended) 0.162.1 to match CI (see DEVELOPING.md)"
+    exit 1
+fi
+( cd manual && hugo --quiet )
+
 # ───────────────────────────────────────────────────────────────────
 # Go gate — gofmt drift first (fastest fail), then vet, then race-test,
 # then the daemon embed-build smoke.

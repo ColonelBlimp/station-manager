@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,10 +11,18 @@ import (
 )
 
 // TestManualHandler_ServesIndexAtRoot confirms a GET / returns the embedded
-// manual's index.html. Guards the //go:embed all:public directive and the
-// committed public/index.html placeholder against being stripped from git
-// (which would break the build / 404 the manual at runtime).
+// manual's index.html — guarding the //go:embed all:public directive and the
+// static-serve wiring.
+//
+// The generated manual is deliberately NOT committed (only public/.gitkeep is),
+// so a bare checkout that hasn't run `hugo` / `task manual:build` embeds no
+// index.html. Skip there rather than fail: every real build path (task build:smd,
+// deploy, rpm, release, hosted CI, and `task ci:local`) runs Hugo first, so this
+// still exercises the serve path wherever the manual actually exists.
 func TestManualHandler_ServesIndexAtRoot(t *testing.T) {
+	if _, err := fs.Stat(manual.FS(), "index.html"); err != nil {
+		t.Skip("manual not built (only .gitkeep embedded); run `task manual:build` to exercise this test")
+	}
 	h := manualHandler(manual.FS())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
