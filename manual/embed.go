@@ -7,11 +7,12 @@
 // coexist and the manual stays cohesive under a single top-level path.
 //
 // Build pipeline: `task manual:build` (and the rpm/release scripts) run `hugo`
-// to populate public/ before `go build` reaches the embed directive. public/ is
-// not committed except a placeholder index.html, so the package compiles before
-// Hugo has ever run (mirrors the SPA dist/index.html placeholder). The same
-// public/ is also shipped on disk in the RPM so the manual is readable from
-// file:// when the daemon is down.
+// to populate public/ before `go build` reaches the embed directive. The
+// generated site is not committed; a committed public/.gitkeep keeps the
+// directory present so the package compiles before Hugo has ever run (a bare
+// build that skips Hugo therefore embeds only .gitkeep and serves an empty
+// manual). The same public/ is also shipped on disk in the RPM so the manual is
+// readable from file:// when the daemon is down.
 package manual
 
 import (
@@ -31,8 +32,8 @@ var site embed.FS
 //
 // fs.Sub on a hard-coded valid path is infallible at runtime; a missing public/
 // directory at compile time fails the Go build, not this call (the committed
-// placeholder index.html prevents that). The function therefore returns only
-// fs.FS — no error to plumb, matching frontend.LoggingFS et al.
+// public/.gitkeep prevents that). The function therefore returns only fs.FS — no
+// error to plumb, matching frontend.LoggingFS et al.
 func FS() fs.FS {
 	sub, err := fs.Sub(site, "public")
 	if err != nil {

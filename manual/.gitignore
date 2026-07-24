@@ -1,10 +1,13 @@
 # Hugo build output + transient artifacts. The manual is built into public/ at
-# build time and embedded into the daemon; the generated site is NOT committed —
-# EXCEPT a placeholder public/index.html, kept so the `manual` package's
-# go:embed compiles before Hugo has run (mirrors the SPA dist/index.html
-# placeholder). `hugo` overwrites the placeholder with the real page at build
-# time; don't commit that overwrite.
+# build time and embedded into the daemon; the generated site is NOT committed.
+# A committed placeholder .gitkeep keeps public/ present so the `manual` package's
+# `//go:embed all:public` compiles before Hugo has ever run; `hugo` then populates
+# public/ (including index.html) at build time, and none of that output is tracked
+# — so a rebuild never shows as a git change. The real page reaches the daemon via
+# the build pipeline (task/rpm/release/CI all run `hugo` first), never via a commit.
+# A bare `go build` that skips Hugo embeds only .gitkeep, so /manual is empty until
+# the manual is built — a deliberate trade for never committing generated HTML.
 /public/*
-!/public/index.html
+!/public/.gitkeep
 /resources/_gen/
 .hugo_build.lock
