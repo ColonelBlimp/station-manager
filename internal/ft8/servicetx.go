@@ -490,11 +490,17 @@ func (s *Service) startTransmission(
 // sequencer's Active() state) — and must NOT already hold txMu. The order
 // mirrors startTransmission's own gate (armed → in-flight → ready):
 //   - armed: the operator-consent gate before any FT8 RF.
-//   - in-flight: a manual TransmitNext is queued/keying. A session and a manual
-//     send share only the single-flight (txInFlight) guard, which is false
-//     BETWEEN a session's rungs — so without refusing here a session could start
-//     under a queued manual send, its opening rung would collide (ErrTxInFlight)
-//     and burn a repeat/slot, and the unrelated manual message would still key.
+//   - in-flight: refused ONLY when no session is active. txInFlight is shared by
+//     a manual TransmitNext and a sequencer rung, and is false BETWEEN a session's
+//     rungs — so without a guard a session could start under a queued manual send,
+//     its opening rung would collide (ErrTxInFlight) and burn a repeat/slot while
+//     the manual message still keyed. But while a session IS active, a rung keying
+//     is not "a manual transmission in flight": a duplicate start atop it is the
+//     sequencer's own ErrQsoInProgress, so those fall through to seq.Start* and get
+//     that code, identical to the between-rungs path. What remains — in flight with
+//     no active session — is a manual send OR a just-completed session's draining
+//     tail; both mean live RF a new session must not start atop, and ErrTxInFlight
+//     ("a transmission is in flight") is accurate for either.
 //   - ready: LIVE rig readiness, not just the sticky armed flag (review M1) —
 //     refuse to commit (and publish) a session the rig can no longer key rather
 //     than returning 202 and letting the sequencer spin against an unready rig.
@@ -509,7 +515,10 @@ func (s *Service) sessionTxGate(op errors.Op) error {
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
 	}
-	if inFlight {
+	// In flight under an active session = a rung: fall through so seq.Start* reports
+	// ErrQsoInProgress. In flight with no session = a manual send (or a completed
+	// session's draining tail): refuse — a new session can't start atop live RF.
+	if inFlight && !s.seq.Active() {
 		return errors.New(op).WithErr(ErrTxInFlight)
 	}
 	if !ready {

@@ -257,6 +257,40 @@ func TestStartSession_RefusedWhileManualSendInFlight(t *testing.T) {
 	require.False(t, s.seq.Active(), "no session may commit while a manual send is in flight")
 }
 
+// TestStartSession_DuplicateDuringRung_ReportsQsoInProgress: txInFlight is shared
+// by manual sends AND sequencer rungs. While a session is active its rung keys for
+// most of each slot (txInFlight true), so a duplicate start must still classify as
+// ErrQsoInProgress ("a QSO is in progress") — NOT ErrTxInFlight ("a transmission is
+// in flight"), which would misreport the session's own rung as a foreign send. Same
+// code the between-rungs path returns. (Regression guard for the sessionTxGate
+// classification introduced with mutual exclusion.)
+func TestStartSession_DuplicateDuringRung_ReportsQsoInProgress(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	require.NoError(t, s.ArmTx(true))
+	defer func() { _ = s.ArmTx(false) }()
+
+	// An active session (its CQ has not keyed yet — the caller CQ goes out next slot).
+	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
+	require.True(t, s.seq.Active())
+
+	// Simulate the session's rung keying: txInFlight goes true while the session is
+	// active. (Whether it became true via a real rung or here is irrelevant to the
+	// gate — it classifies purely on txInFlight + seq.Active.)
+	s.txMu.Lock()
+	s.txInFlight = true
+	s.txMu.Unlock()
+
+	err := s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42",
+		time.Now().UTC().Format(time.RFC3339), 1600, 14.074, 1)
+	require.ErrorIs(t, err, ErrQsoInProgress, "a duplicate start atop an active session is a QSO conflict")
+	require.NotErrorIs(t, err, ErrTxInFlight, "the session's own rung must not read as a manual transmission")
+
+	// Restore so the deferred disarm sees consistent state (no real goroutine here).
+	s.txMu.Lock()
+	s.txInFlight = false
+	s.txMu.Unlock()
+}
+
 func TestArmTx_AcquiresAndReleasesDevice(t *testing.T) {
 	p := newFakeTxPlayer()
 	s := newTxTestService(&fakeKeyer{}, p, nil)

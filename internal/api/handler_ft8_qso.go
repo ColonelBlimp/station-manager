@@ -376,10 +376,12 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 		s.writeError(w, http.StatusServiceUnavailable, "rig_not_ready",
 			"rig not connected or identity unverified; try again in a moment", op)
 	case stderr.Is(err, ft8.ErrTxInFlight):
-		// A manual send is queued/keying — a session can't start atop it (they are
-		// mutually exclusive); its opening rung would otherwise collide and drop.
+		// A transmission (a manual send, or a just-finished session's draining tail)
+		// is in flight and no session is active — a new session can't start atop live
+		// RF or its opening rung would collide and drop. (A duplicate start atop an
+		// ACTIVE session is ErrQsoInProgress, handled above, not this.)
 		s.writeError(w, http.StatusConflict, "ft8_tx_in_flight",
-			"a manual transmission is in flight; wait for it to finish or abandon it", op)
+			"a transmission is in flight; wait for it to finish or abandon it", op)
 	case stderr.Is(err, ft8.ErrNoActiveQso):
 		s.writeError(w, http.StatusConflict, "ft8_no_active_qso",
 			"no active QSO to arm a skip on", op)
