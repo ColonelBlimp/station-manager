@@ -143,10 +143,17 @@ type Service struct {
 	// place for the next answerer — adjust it as the pile-up moves.
 	exchPath    string
 	exchPathGen uint64
-	txDevice    txPlayer
-	txCtrl      *TxController
-	txCancel    context.CancelFunc
-	txWg        sync.WaitGroup
+	// completionAntPath is the antenna path SNAPSHOTTED at the final rung's commit
+	// (seqTransmit, while the session is still active) and read back in onComplete to
+	// stamp the completed QSO. Decoupling the stamp from the live exchPath closes the
+	// race where a concurrent new session start (or an OnSlot idle-out that beat the
+	// completing callback) reset exchPath between completion and the stamp, logging
+	// the wrong ANT_PATH. Re-taken on each terminal-rung attempt (retry-safe). txMu.
+	completionAntPath string
+	txDevice          txPlayer
+	txCtrl            *TxController
+	txCancel          context.CancelFunc
+	txWg              sync.WaitGroup
 
 	// seqGate serialises "start a session" (StartQso/StartCallCq) against
 	// "disarm + abandon" (disarmTx) so the armed-check and the sequencer commit
@@ -228,16 +235,19 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 	// s.qsoLogger at call time (set via SetQsoLogger before Start), so the
 	// daemon wires logging after construction.
 	s.seq.onComplete = func(c CompletedQso) {
-		// Stamp the operator's antenna-path choice (logging-only) onto the
-		// completed exchange just before the sink builds the QSO record. The
-		// sequencer is path-agnostic; the choice lives on the Service (set via
-		// the /v1/ft8/qso/path endpoint, defaulting to short per exchange).
-		// Atomic consume (review 2026-07-20 #5 + round 12 #3): a Call-CQ run
-		// logs a contact and keeps the session alive, so without the clear the
-		// NEXT answerer would inherit this contact's long-path choice — and
-		// read+clear must share one lock hold, or a selection landing between
-		// them is silently swallowed.
-		c.AntPath, _ = s.consumeExchangePath() // completion has no restore; the token is unused
+		// Stamp the operator's antenna-path choice (logging-only) onto the completed
+		// exchange just before the sink builds the QSO record. The sequencer is
+		// path-agnostic; the choice lives on the Service (set via the /v1/ft8/qso/path
+		// endpoint, defaulting to short per exchange).
+		//
+		// The value is read from the snapshot taken at the final rung's commit
+		// (snapshotCompletionPath), NOT the live exchPath: by the time this runs the
+		// session is idle, so a concurrent new session start OR an OnSlot idle-out could
+		// already have reset the live selection, logging the wrong ANT_PATH (review —
+		// the completing callback lost the race). takeCompletionPath also resets the
+		// live selection so the next exchange / Call-CQ answerer (the sequencer stays
+		// alive across a Call-CQ contact) starts from the short-path default.
+		c.AntPath = s.takeCompletionPath()
 		// c.LogbookID is already stamped by the sequencer at construction from the
 		// pinned session logbook (ADR 0055) — nothing to add here.
 		if s.qsoLogger != nil {

@@ -359,6 +359,14 @@ func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, gen uin
 	if _, err := EncodeWaveform(message, offsetHz); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
+	// Terminal rung (onDone != nil is the completing 73/RR73): snapshot the operator's
+	// antenna-path choice NOW, while the session is still active (mode non-idle, so no
+	// concurrent new session start / OnSlot idle-out can have reset the live selection),
+	// and stamp it onto the completed QSO in onComplete. Reading the live selection at
+	// completion instead raced those resetters and logged the wrong ANT_PATH (review).
+	if onDone != nil {
+		s.snapshotCompletionPath()
+	}
 	// commitOK re-validates the rung's session generation under txMu, closing the
 	// unlock→commit gap an Abandon can land in (review 2026-07-20 #1; see
 	// ErrTxSuperseded and the startTransmission commit section).
@@ -810,6 +818,41 @@ func (s *Service) exchangePath() string {
 		return antPathShort
 	}
 	return s.exchPath
+}
+
+// snapshotCompletionPath captures the active exchange's antenna path ("S"/"L") for
+// the QSO that the final rung — about to transmit — will complete. It is called
+// from seqTransmit for the terminal rung ONLY, while the session is still active
+// (mode non-idle), so no concurrent new session start or OnSlot idle-out can have
+// reset the live selection yet. onComplete reads it back via takeCompletionPath.
+// This decouples the completed QSO's ANT_PATH from the live exchPath, which those
+// resetters race at the instant of completion (review: wrong path logged). Re-taken
+// on every terminal-rung attempt, so a retried final rung captures the latest choice.
+func (s *Service) snapshotCompletionPath() {
+	s.txMu.Lock()
+	p := s.exchPath
+	if p == "" {
+		p = antPathShort
+	}
+	s.completionAntPath = p
+	s.txMu.Unlock()
+}
+
+// takeCompletionPath returns the path snapshotted for the completing QSO (short if
+// none was taken) and clears both the snapshot AND the live selection. Clearing the
+// live selection is what makes the next exchange / Call-CQ answerer start from the
+// short-path default — the sequencer stays alive across a Call-CQ contact, so the
+// clear can't be left to the next session start (there isn't one).
+func (s *Service) takeCompletionPath() string {
+	s.txMu.Lock()
+	p := s.completionAntPath
+	s.completionAntPath = ""
+	s.exchPath = ""
+	s.txMu.Unlock()
+	if p == "" {
+		return antPathShort
+	}
+	return p
 }
 
 // consumeExchangePath returns the active exchange's path ("S"/"L", short when

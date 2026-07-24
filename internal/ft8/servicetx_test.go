@@ -501,26 +501,54 @@ func TestStartQso_RejectedStartKeepsExchangePath(t *testing.T) {
 	s.AbandonQso()
 }
 
-// TestOnComplete_ConsumesThenResetsPath pins review 2026-07-20 #5 (caller-mode
-// half): each logged contact consumes the operator's path choice and resets it,
-// so a Call-CQ run's NEXT answerer does not inherit the previous contact's
-// long-path selection.
-func TestOnComplete_ConsumesThenResetsPath(t *testing.T) {
+// TestOnComplete_StampsSnapshotThenResetsPath pins review 2026-07-20 #5 (caller-mode
+// half) under the capture-at-commit shape: the completed contact carries the path
+// SNAPSHOTTED at the final rung's commit, and onComplete resets the live selection
+// so a Call-CQ run's NEXT answerer does not inherit the previous contact's choice.
+func TestOnComplete_StampsSnapshotThenResetsPath(t *testing.T) {
 	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 	logged := make(chan CompletedQso, 1)
 	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged <- c })
 
 	s.SetExchangePath("L")
+	s.snapshotCompletionPath() // taken by seqTransmit at the final rung's commit
 	s.seq.onComplete(CompletedQso{TheirCall: "K1ABC"})
 
 	select {
 	case c := <-logged:
-		require.Equal(t, antPathLong, c.AntPath, "the completed contact carries the choice")
+		require.Equal(t, antPathLong, c.AntPath, "the completed contact carries the snapshotted choice")
 	case <-time.After(time.Second):
 		t.Fatal("qsoLogger not invoked")
 	}
 	require.Equal(t, antPathShort, s.exchangePath(),
-		"the choice is consumed — the next contact starts from the short-path default")
+		"the live selection is reset — the next contact starts from the short-path default")
+}
+
+// TestOnComplete_SnapshotSurvivesLivePathReset is the race guard: a concurrent new
+// session start (or an OnSlot idle-out) can reset the LIVE exchPath between the final
+// rung's commit and onComplete. The completed QSO must still log the path captured at
+// commit, not the reset live value. Pre-fix (onComplete read the live exchPath) this
+// logged the default and stole the operator's choice.
+func TestOnComplete_SnapshotSurvivesLivePathReset(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	logged := make(chan CompletedQso, 1)
+	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged <- c })
+
+	s.SetExchangePath("L")
+	s.snapshotCompletionPath() // final rung commits with the operator's long-path choice
+
+	// A concurrent start / OnSlot idle-out resets the live selection BEFORE onComplete.
+	s.consumeExchangePath()
+	require.Equal(t, antPathShort, s.exchangePath(), "live selection was reset")
+
+	s.seq.onComplete(CompletedQso{TheirCall: "K1ABC"})
+	select {
+	case c := <-logged:
+		require.Equal(t, antPathLong, c.AntPath,
+			"the completed QSO logs the snapshot, not the reset live value")
+	case <-time.After(time.Second):
+		t.Fatal("qsoLogger not invoked")
+	}
 }
 
 // TestExchangePath_ConsumeAndRestore pins the round-12 #3 helpers: consume is

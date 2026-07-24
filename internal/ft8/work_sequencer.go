@@ -225,17 +225,16 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 					Msg("ft8 seq: working caller RR73 did not transmit; will retry next slot")
 				return
 			}
-			s.caller = nil // terminal: go idle (NOT resume CQ) — after onComplete
+			s.caller = nil
+			s.mode = seqIdle // terminal: go idle (NOT resume CQ)
 			s.repeats = 0
-			s.mu.Unlock() // clear the exchange, but stay non-idle across onComplete
+			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", c.TheirCall).
 				Msg("ft8 seq: working caller QSO complete (RR73 sent)")
 			if onComplete != nil {
-				onComplete(c) // consumes the antenna path — must run before we go idle
+				onComplete(c)
 			}
-			if s.goIdleAfterCompletion(gen) {
-				publish(QsoStatus{Active: false})
-			}
+			publish(QsoStatus{Active: false})
 		}
 	}
 
@@ -440,16 +439,15 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 				return
 			}
 			s.fdWork = nil
+			s.mode = seqIdle
 			s.repeats = 0
-			s.mu.Unlock() // clear the exchange, but stay non-idle across onComplete
+			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", c.TheirCall).
 				Msg("ft8 seq: working caller (FD) QSO complete (RR73 sent)")
 			if onComplete != nil {
-				onComplete(c) // consumes the antenna path — must run before we go idle
+				onComplete(c)
 			}
-			if s.goIdleAfterCompletion(gen) {
-				publish(QsoStatus{Active: false})
-			}
+			publish(QsoStatus{Active: false})
 		}
 	}
 

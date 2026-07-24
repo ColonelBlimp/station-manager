@@ -151,44 +151,6 @@ func TestSequencer_HappyPath(t *testing.T) {
 	require.Equal(t, 1500.0, r.completed[0].OffsetHz)
 }
 
-// TestSequencer_StaysActiveThroughOnComplete pins the antenna-path race fix: the
-// session must remain NON-idle across onComplete, because onComplete consumes the
-// completing QSO's antenna path (Service-side) and a concurrent new session start
-// is gated on mode != seqIdle. Going idle before onComplete let a new start consume
-// the completing QSO's path first (logging the wrong ANT_PATH). Deterministic: the
-// recorder fires onDone synchronously, so onComplete runs inside driveTheir.
-func TestSequencer_StaysActiveThroughOnComplete(t *testing.T) {
-	r := &seqRecorder{}
-	s := newTestSeq(r)
-
-	var activeDuringComplete, startRefusedDuringComplete bool
-	s.onComplete = func(c CompletedQso) {
-		// Probe the session state WHILE the completion side effect runs.
-		activeDuringComplete = s.Active()
-		// A new session start here must be refused — mode is still non-idle, so it
-		// cannot begin (and thus cannot consume the completing QSO's path).
-		err := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31",
-			time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC())
-		startRefusedDuringComplete = stderrors.Is(err, ErrQsoInProgress)
-		r.mu.Lock()
-		r.completed = append(r.completed, c)
-		r.mu.Unlock()
-	}
-
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
-		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
-	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
-	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
-	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)}) // 73 → completes
-
-	require.Len(t, r.completed, 1, "the QSO completed")
-	require.True(t, activeDuringComplete,
-		"the session must stay non-idle across onComplete so a concurrent start can't steal the path")
-	require.True(t, startRefusedDuringComplete,
-		"a new start during completion must be refused (ErrQsoInProgress)")
-	require.False(t, s.Active(), "the session is idle after completion")
-}
-
 func TestSequencer_OnlyTransmitsOppositeParity(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
