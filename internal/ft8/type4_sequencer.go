@@ -17,7 +17,10 @@ import (
 //
 // The one structural difference from the FD twins: the WORK side is a single terminal
 // rung (RR73), so — unlike every other opening — it is NOT eligible for fireOpening
-// (which has no completion path). onSlotWorkingT4 drives it with a proper onDone instead.
+// (which fires only non-terminal openings, with no completion). It gets its own
+// immediate-fire path, fireWorkT4, which keys the RR73 WITH the onDone completion, and
+// onSlotWorkingT4 drives the same terminal rung on later slots (both via
+// fireWorkT4RungLocked).
 
 // StartQsoT4 begins answering a nonstandard station's CQ with the reduced type-4 ladder.
 // ourCall is our (standard) call; theirCall is the spelled nonstandard partner; theirGrid
@@ -227,9 +230,10 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 
 // StartWorkCallerT4 begins working a nonstandard station that called US (reduced type-4).
 // theirCall/theirGrid come from the decode the operator picked; theirSnr is our SNR of
-// their calling signal (RST_SENT). It does NOT fire the opening immediately: the sole rung
-// is the terminal RR73, which needs onSlotWorkingT4's completion path — fireOpening has
-// none — so the RR73 goes out on the next qualifying slot instead.
+// their calling signal (RST_SENT). The sole rung is the terminal RR73; unlike the other
+// openings it is NOT fired via fireOpening (which has no completion path) but via
+// fireWorkT4, so it still keys immediately in the current our-parity slot WITH the onDone
+// that logs the QSO — otherwise it would wait a full ~30 s for the next theirPeriod slot.
 func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, now time.Time) error {
 	if offsetHz <= 0 {
 		return ErrNoOffset
@@ -274,8 +278,10 @@ func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, thei
 	s.log.InfoWith().Str("their_call", c.TheirCall).Str("their_period", s.theirPeriod).
 		Float64("offset_hz", offsetHz).Msg("ft8 seq: working a caller (type-4)")
 	s.publish(st)
-	// No fireOpening: the sole RR73 rung is terminal and must run through the onDone
-	// completion path (see onSlotWorkingT4), which fireOpening does not provide.
+	// Immediate terminal fire: the sole RR73 rung is terminal, so it goes through
+	// fireWorkT4 (not fireOpening) — keying now in the current our-parity slot WITH
+	// the onDone completion, instead of waiting ~30 s for the next theirPeriod OnSlot.
+	s.fireWorkT4(now)
 	return nil
 }
 
@@ -323,23 +329,32 @@ func (s *Sequencer) onSlotWorkingT4(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.mu.Unlock()
 		return
 	}
-	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
-	if dt < 0 || dt > txLateWindowSec {
-		st := s.statusLocked()
-		s.mu.Unlock()
-		s.publish(st)
-		return
-	}
-	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
-	// review 2026-07-20 #2); see onSlotAnswering.
-	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+	// ref is the caller's slot (their parity); our RR73 goes out in the NEXT slot.
+	txSlot := curStart.Add(SlotDuration)
+	s.fireWorkT4RungLocked(msg, rung, txSlot, now.Sub(txSlot).Seconds()) // fires or defers; UNLOCKS s.mu
+}
+
+// fireWorkT4RungLocked keys the type-4 work side's SINGLE terminal RR73 rung in
+// txSlot (an our-parity slot, dt seconds into it) and wires the onDone that logs
+// the QSO once the RR73 truly transmits (gen-guarded). Because that rung is
+// terminal, this is the one place a work-T4 contact both fires and completes —
+// shared by the immediate-start fire (fireWorkT4) and the per-slot handler
+// (onSlotWorkingT4), so the completion path can never drift between them. Caller
+// holds s.mu with t4Work active and msg/rung resolved; the helper applies the
+// late-window + already-fired-this-slot guards, snapshots, UNLOCKS s.mu, then
+// transmits. It ALWAYS leaves s.mu unlocked.
+func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt float64) {
+	// Too early/late in the slot, or this exact slot already fired (an immediate
+	// fire vs its own pending OnSlot — review 2026-07-20 #2): leave it for the next
+	// qualifying slot; the session stays active.
+	if dt < 0 || dt > txLateWindowSec || s.lastTxSlot.Equal(txSlot) {
 		st := s.statusLocked()
 		s.mu.Unlock()
 		s.publish(st)
 		return
 	}
 
-	s.lastTxSlot = curStart.Add(SlotDuration)
+	s.lastTxSlot = txSlot
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	c := s.completedT4WorkQsoLocked()
 	gen := s.sessionGen
@@ -386,6 +401,34 @@ func (s *Sequencer) onSlotWorkingT4(ref SlotRef, msgs []goft8.DecodedMessage, no
 		}
 	}
 	s.publish(st)
+}
+
+// fireWorkT4 keys the terminal RR73 IMMEDIATELY at StartWorkCallerT4 time when the
+// current slot is ours and still within the late window — the work-T4 twin of
+// fireOpening. It is separate from fireOpening because the work side's SOLE rung is
+// terminal: fireOpening fires only non-terminal openings (it passes a nil onDone),
+// so without this the RR73 would wait for the next theirPeriod OnSlot — a full ~30 s
+// away — missing the slot immediately after the caller's transmission. Falls through
+// to onSlotWorkingT4 when the current slot is the caller's parity or the late window
+// has closed.
+func (s *Sequencer) fireWorkT4(now time.Time) {
+	s.mu.Lock()
+	if s.mode != seqWorkingT4 || s.t4Work == nil {
+		s.mu.Unlock()
+		return
+	}
+	msg, ok := s.t4Work.TxMessage()
+	if !ok {
+		s.mu.Unlock()
+		return
+	}
+	rung := s.t4Work.State.label()
+	curStart := slotStart(now)
+	if SlotRefFromTime(curStart).Period == s.theirPeriod {
+		s.mu.Unlock()
+		return // current slot is the caller's parity — leave it to OnSlot
+	}
+	s.fireWorkT4RungLocked(msg, rung, curStart, now.Sub(curStart).Seconds()) // fires or defers; UNLOCKS s.mu
 }
 
 // completedQsoT4Locked snapshots an answer-a-CQ type-4 contact for logging. Our SNR of

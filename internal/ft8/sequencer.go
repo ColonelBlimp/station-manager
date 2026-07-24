@@ -1001,8 +1001,8 @@ func (s *Sequencer) fireOpening(now time.Time) {
 	case seqAnsweringT4:
 		// Opening rung is t4Calling (bare calls) — always non-terminal, so the
 		// no-completion contract here holds. (seqWorkingT4 is deliberately NOT fired
-		// here: its sole rung is the terminal RR73, which needs the onDone completion
-		// path that fireOpening does not provide — it is driven by onSlotWorkingT4.)
+		// here: its sole rung is the terminal RR73, which needs an onDone completion
+		// path fireOpening does not provide — it is fired by fireWorkT4 instead.)
 		if s.t4Ex == nil {
 			s.mu.Unlock()
 			return

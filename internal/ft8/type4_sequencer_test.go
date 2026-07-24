@@ -94,6 +94,26 @@ func TestType4Work_HappyPath(t *testing.T) {
 	require.False(t, r.completed[0].HasTheirReport)
 }
 
+// TestType4Work_ImmediateReply keys the terminal RR73 in the click's current slot when it
+// is our parity and within the late window — instead of waiting a full ~30 s for the next
+// theirPeriod OnSlot. The work side's sole rung is terminal, so it fires WITH the onDone
+// completion (via fireWorkT4, not fireOpening), and the QSO logs immediately.
+func TestType4Work_ImmediateReply(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	// PJ4/NA2AA called us in the even slot at epoch 0; now is 1 s into the odd slot at 15 →
+	// our parity, early → the RR73 keys immediately (not a full cycle later).
+	require.NoError(t, s.StartWorkCallerT4("7Q5MLV", "PJ4/NA2AA", "", 3,
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(16, 0).UTC()))
+
+	require.Equal(t, []string{"PJ4/NA2AA 7Q5MLV RR73"}, r.sentMsgs(),
+		"the RR73 must key in the immediate reply slot, not a full cycle later")
+	require.False(t, s.Active(), "the terminal RR73 completes the work-a-caller type-4 contact")
+	require.Len(t, r.completed, 1)
+	require.Equal(t, "PJ4/NA2AA", r.completed[0].TheirCall)
+	require.Equal(t, 3, r.completed[0].OurReport)
+}
+
 // TestType4Work_LogbookPinnedToSession (ADR 0055 regression): work-a-caller-T4 is the
 // TERMINAL-FIRST-RUNG path the review flagged — its sole RR73 can complete in the very
 // first slot, so the logbook must be pinned AT ACTIVATION, not by a later bind that a
