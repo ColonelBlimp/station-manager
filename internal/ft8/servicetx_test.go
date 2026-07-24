@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/stretchr/testify/require"
@@ -501,18 +502,19 @@ func TestStartQso_RejectedStartKeepsExchangePath(t *testing.T) {
 	s.AbandonQso()
 }
 
-// TestOnComplete_StampsSnapshotThenResetsPath pins review 2026-07-20 #5 (caller-mode
-// half) under the capture-at-commit shape: the completed contact carries the path
-// SNAPSHOTTED at the final rung's commit, and onComplete resets the live selection
-// so a Call-CQ run's NEXT answerer does not inherit the previous contact's choice.
-func TestOnComplete_StampsSnapshotThenResetsPath(t *testing.T) {
+// TestOnComplete_UsesStampThenResetsPath pins review 2026-07-20 #5 (caller-mode
+// half): the completed contact carries the path stamped for its final-rung
+// attempt, and onComplete resets the live selection so a Call-CQ run's NEXT
+// answerer does not inherit the previous contact's choice.
+func TestOnComplete_UsesStampThenResetsPath(t *testing.T) {
 	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 	logged := make(chan CompletedQso, 1)
 	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged <- c })
 
 	s.SetExchangePath("L")
-	s.snapshotCompletionPath() // taken by seqTransmit at the final rung's commit
-	s.seq.onComplete(CompletedQso{TheirCall: "K1ABC"})
+	c := CompletedQso{TheirCall: "K1ABC"}
+	s.stampCompletionPath(&c) // taken at the successful final-rung boundary
+	s.seq.onComplete(c)
 
 	select {
 	case c := <-logged:
@@ -524,31 +526,177 @@ func TestOnComplete_StampsSnapshotThenResetsPath(t *testing.T) {
 		"the live selection is reset — the next contact starts from the short-path default")
 }
 
-// TestOnComplete_SnapshotSurvivesLivePathReset is the race guard: a concurrent new
+// TestOnComplete_StampSurvivesLivePathReset is the race guard: a concurrent new
 // session start (or an OnSlot idle-out) can reset the LIVE exchPath between the final
-// rung's commit and onComplete. The completed QSO must still log the path captured at
-// commit, not the reset live value. Pre-fix (onComplete read the live exchPath) this
-// logged the default and stole the operator's choice.
-func TestOnComplete_SnapshotSurvivesLivePathReset(t *testing.T) {
+// rung's success and onComplete. The completed QSO must still log the path captured at
+// success, not the reset live value. Reading exchPath in onComplete logged the default
+// and stole the operator's choice.
+func TestOnComplete_StampSurvivesLivePathReset(t *testing.T) {
 	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 	logged := make(chan CompletedQso, 1)
 	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged <- c })
 
 	s.SetExchangePath("L")
-	s.snapshotCompletionPath() // final rung commits with the operator's long-path choice
+	c := CompletedQso{TheirCall: "K1ABC"}
+	s.stampCompletionPath(&c) // final rung succeeds with the operator's long-path choice
 
 	// A concurrent start / OnSlot idle-out resets the live selection BEFORE onComplete.
 	s.consumeExchangePath()
 	require.Equal(t, antPathShort, s.exchangePath(), "live selection was reset")
 
-	s.seq.onComplete(CompletedQso{TheirCall: "K1ABC"})
+	s.seq.onComplete(c)
 	select {
 	case c := <-logged:
 		require.Equal(t, antPathLong, c.AntPath,
-			"the completed QSO logs the snapshot, not the reset live value")
+			"the completed QSO logs its stamp, not the reset live value")
 	case <-time.After(time.Second):
 		t.Fatal("qsoLogger not invoked")
 	}
+}
+
+// TestOnComplete_DoesNotClearNewerPathSelection guards the inverse completion
+// race. Once a new session has started, its explicit path selection must survive
+// the previous QSO's delayed onComplete reset. The generation check makes the
+// newer selection win while the old QSO still logs its own stamped value.
+func TestOnComplete_DoesNotClearNewerPathSelection(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	logged := make(chan CompletedQso, 1)
+	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged <- c })
+
+	old := CompletedQso{TheirCall: "K1ABC"}
+	s.stampCompletionPath(&old) // old contact used the default short path
+
+	s.consumeExchangePath() // accepted new-session start resets the live value
+	s.SetExchangePath("L")  // operator selects long path for the new contact
+
+	s.seq.onComplete(old)
+	select {
+	case c := <-logged:
+		require.Equal(t, antPathShort, c.AntPath, "old QSO keeps its own path")
+	case <-time.After(time.Second):
+		t.Fatal("qsoLogger not invoked")
+	}
+	require.Equal(t, antPathLong, s.exchangePath(),
+		"delayed old completion must not clear the new session's selection")
+}
+
+// TestOnComplete_PerQsoStampsDoNotOverwrite proves completion metadata is not a
+// Service singleton: two prepared completions retain their own path even when
+// their callbacks are delivered in the same window.
+func TestOnComplete_PerQsoStampsDoNotOverwrite(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	logged := make(chan CompletedQso, 2)
+	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged <- c })
+
+	s.SetExchangePath("L")
+	first := CompletedQso{TheirCall: "K1ABC"}
+	s.stampCompletionPath(&first)
+
+	s.SetExchangePath("S")
+	second := CompletedQso{TheirCall: "W1AW"}
+	s.stampCompletionPath(&second)
+
+	s.seq.onComplete(first)
+	s.seq.onComplete(second)
+
+	require.Equal(t, antPathLong, (<-logged).AntPath)
+	require.Equal(t, antPathShort, (<-logged).AntPath)
+	require.Equal(t, antPathShort, s.exchangePath(), "latest completed selection is reset")
+}
+
+// TestCompletionRace_PreservesNewPathAndStatus drives the production ordering:
+// the old final-rung callback has committed idle but is paused before onComplete,
+// a replacement session starts and selects long path, then the old callback
+// resumes. The old completion must neither clear the new choice nor publish stale
+// idle after the replacement's active status.
+func TestCompletionRace_PreservesNewPathAndStatus(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	require.NoError(t, s.ArmTx(true))
+	defer func() { _ = s.ArmTx(false) }()
+
+	var (
+		statusMu sync.Mutex
+		statuses []QsoStatus
+		pending  func(bool)
+	)
+	s.seq.publish = func(st QsoStatus) {
+		statusMu.Lock()
+		statuses = append(statuses, st)
+		statusMu.Unlock()
+	}
+	// Match the real asynchronous contract: the terminal onDone is delivered
+	// after the rung-driving call has returned.
+	s.seq.transmit = func(_ string, _, _ float64, _ uint64, onDone func(bool)) error {
+		if onDone != nil {
+			pending = onDone
+		}
+		return nil
+	}
+
+	logged := make(chan CompletedQso, 1)
+	s.SetQsoLogger(func(_ context.Context, c CompletedQso) { logged <- c })
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	originalOnComplete := s.seq.onComplete
+	s.seq.onComplete = func(c CompletedQso) {
+		close(entered)
+		<-release
+		originalOnComplete(c)
+	}
+
+	epoch := time.Unix(0, 0).UTC()
+	require.NoError(t, s.seq.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		epoch.Format(time.RFC3339), 1500, 14.074, epoch))
+	s.SetExchangePath("L")
+	driveTheir(s.seq, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+	driveTheir(s.seq, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	driveTheir(s.seq, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
+	require.NotNil(t, pending, "final rung must register an asynchronous completion")
+
+	callbackDone := make(chan struct{})
+	go func() {
+		pending(true)
+		close(callbackDone)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("completion callback did not reach the race window")
+	}
+
+	// Match the current wall-clock parity so the replacement does not immediately
+	// fire an opening rung; only its state/path commit matters to this test.
+	newSlot := slotStart(time.Now().UTC()).Format(time.RFC3339)
+	startErr := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31", newSlot, 1600, 14.074, 2)
+	if startErr == nil {
+		s.SetExchangePath("L")
+	}
+	close(release)
+	select {
+	case <-callbackDone:
+	case <-time.After(time.Second):
+		t.Fatal("completion callback did not finish")
+	}
+
+	require.NoError(t, startErr, "replacement session should start after idle commit")
+	select {
+	case c := <-logged:
+		require.Equal(t, "K1ABC", c.TheirCall)
+		require.Equal(t, antPathLong, c.AntPath, "old QSO logs its own stamped path")
+	case <-time.After(time.Second):
+		t.Fatal("qsoLogger not invoked")
+	}
+	require.Equal(t, antPathLong, s.exchangePath(),
+		"old completion must not clear the replacement session's selection")
+
+	statusMu.Lock()
+	gotStatuses := append([]QsoStatus(nil), statuses...)
+	statusMu.Unlock()
+	require.NotEmpty(t, gotStatuses)
+	last := gotStatuses[len(gotStatuses)-1]
+	require.True(t, last.Active, "old completion must not overwrite the replacement with idle")
+	require.Equal(t, "W1AW", last.TheirCall)
 }
 
 // TestExchangePath_ConsumeAndRestore pins the round-12 #3 helpers: consume is

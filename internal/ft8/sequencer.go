@@ -179,10 +179,15 @@ type CompletedQso struct {
 	// AntPath is the operator's antenna-path choice for this contact, "S" (short)
 	// or "L" (long), used only to annotate the logged QSO (ADIF ANT_PATH + the
 	// short/long bearing+distance). It is NOT part of the on-air exchange — FT8
-	// messages carry no path info. The sequencer doesn't set it; the Service
-	// stamps the current exchange path onto the CompletedQso just before handing
-	// it to the logger (see Service.onComplete). Empty = unset (defaults to short).
+	// messages carry no path info. The Service stamps the current exchange path
+	// onto the per-attempt CompletedQso when the final rung succeeds.
+	// Empty = unset (defaults to short).
 	AntPath string
+	// antPathGen ties AntPath to the Service path generation captured for this
+	// completion attempt. antPathStamped distinguishes a valid generation zero
+	// from a synthetic/direct completion. Both are internal concurrency metadata.
+	antPathGen     uint64
+	antPathStamped bool
 
 	// Class / Section are the WORKED station's ARRL Field Day exchange (their class
 	// + ARRL/RAC section), set only for an answer-a-CQ-FD contact. Empty for a
@@ -284,10 +289,18 @@ type Sequencer struct {
 	// goroutine once the transmission finishes — ok=true only on a clean on-air
 	// success. The final rung passes a completion closure so the QSO is logged
 	// ONLY after the 73/RR73 actually transmitted, never on "queued" (review H1).
-	transmit   func(message string, offsetHz, dialMHz float64, gen uint64, onDone func(ok bool)) error
-	publish    func(QsoStatus)
-	onComplete func(CompletedQso)
-	log        logging.Logger
+	transmit func(message string, offsetHz, dialMHz float64, gen uint64, onDone func(ok bool)) error
+	// Completion transitions publish while s.mu is held so an immediate
+	// replacement session cannot publish active before the old idle event. The
+	// sink must therefore be non-reentrant; production only appends to the hub.
+	publish func(QsoStatus)
+	// prepareComplete stamps Service-owned, logging-only metadata onto the
+	// per-attempt QSO after the final rung succeeds and before the completion
+	// state is released. It must not call back into the Sequencer; completion
+	// callbacks invoke it with s.mu released.
+	prepareComplete func(*CompletedQso)
+	onComplete      func(CompletedQso)
+	log             logging.Logger
 }
 
 // transmitLocked binds the CURRENT session generation into a rung-shaped
@@ -305,8 +318,8 @@ func (s *Sequencer) transmitLocked() func(message string, offsetHz, dialMHz floa
 // isCurrent reports whether gen is still the live session generation. The
 // Service calls this while holding its txMu at transmission commit — lock
 // order txMu→s.mu, safe because no sequencer path holds s.mu while calling
-// into the Service (rung sites drop s.mu before transmit; callbacks unlock
-// before onComplete/publish).
+// Service transmit/onComplete. Terminal status publication may hold s.mu, but
+// the production publisher only appends to the SSE hub and never takes txMu.
 func (s *Sequencer) isCurrent(gen uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -709,7 +722,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 	gen := s.sessionGen
 	st := s.statusLocked()
-	onComplete, publish := s.onComplete, s.publish
+	prepareComplete, onComplete, publish := s.prepareComplete, s.onComplete, s.publish
 	s.mu.Unlock()
 
 	// Side effects outside the lock. Log every rung transmit (msg, rung, and how
@@ -733,6 +746,9 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	if completed != nil {
 		c := *completed
 		onDone = func(ok bool) {
+			if ok && prepareComplete != nil {
+				prepareComplete(&c)
+			}
 			s.mu.Lock()
 			if s.sessionGen != gen { // superseded (abandon/disarm) — stale callback
 				s.mu.Unlock()
@@ -746,12 +762,15 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 			}
 			s.ex = nil
 			s.mode = seqIdle
+			// Publish the terminal state while the state lock still excludes a
+			// replacement Start*. Otherwise that start can publish active first
+			// and this delayed completion can overwrite it with stale idle.
+			publish(QsoStatus{Active: false})
 			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", c.TheirCall).Msg("ft8 seq: QSO complete (73 sent)")
 			if onComplete != nil {
 				onComplete(c)
 			}
-			publish(QsoStatus{Active: false})
 		}
 	}
 
@@ -880,7 +899,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 	}
 	gen := s.sessionGen
 	st := s.statusLocked()
-	onComplete, publish := s.onComplete, s.publish
+	prepareComplete, onComplete, publish := s.prepareComplete, s.onComplete, s.publish
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -890,6 +909,9 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 	if completed != nil {
 		c := *completed
 		onDone = func(ok bool) {
+			if ok && prepareComplete != nil {
+				prepareComplete(&c)
+			}
 			s.mu.Lock()
 			if s.sessionGen != gen { // superseded — stale callback
 				s.mu.Unlock()
@@ -903,12 +925,12 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 			}
 			s.fdEx = nil
 			s.mode = seqIdle
+			publish(QsoStatus{Active: false}) // ordered before any replacement start
 			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", c.TheirCall).Msg("ft8 seq: FD QSO complete (RR73 sent)")
 			if onComplete != nil {
 				onComplete(c)
 			}
-			publish(QsoStatus{Active: false})
 		}
 	}
 

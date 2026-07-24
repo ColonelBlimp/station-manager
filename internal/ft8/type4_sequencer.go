@@ -180,7 +180,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	}
 	gen := s.sessionGen
 	st := s.statusLocked()
-	onComplete, publish := s.onComplete, s.publish
+	prepareComplete, onComplete, publish := s.prepareComplete, s.onComplete, s.publish
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -190,6 +190,9 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	if completed != nil {
 		c := *completed
 		onDone = func(ok bool) {
+			if ok && prepareComplete != nil {
+				prepareComplete(&c)
+			}
 			s.mu.Lock()
 			if s.sessionGen != gen { // superseded — stale callback
 				s.mu.Unlock()
@@ -203,12 +206,12 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 			}
 			s.t4Ex = nil
 			s.mode = seqIdle
+			publish(QsoStatus{Active: false}) // ordered before any replacement start
 			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", c.TheirCall).Msg("ft8 seq: type-4 QSO complete (73 sent)")
 			if onComplete != nil {
 				onComplete(c)
 			}
-			publish(QsoStatus{Active: false})
 		}
 	}
 
@@ -359,13 +362,16 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 	c := s.completedT4WorkQsoLocked()
 	gen := s.sessionGen
 	st := s.statusLocked()
-	publish, onComplete := s.publish, s.onComplete
+	publish, prepareComplete, onComplete := s.publish, s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
 		Float64("dt_s", dt).Msg("ft8 seq: transmitting type-4 work rung")
 
 	onDone := func(ok bool) {
+		if ok && prepareComplete != nil {
+			prepareComplete(&c)
+		}
 		s.mu.Lock()
 		if s.sessionGen != gen { // superseded (abandon) — stale callback
 			s.mu.Unlock()
@@ -380,13 +386,13 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 		s.t4Work = nil
 		s.mode = seqIdle
 		s.repeats = 0
+		publish(QsoStatus{Active: false}) // ordered before any replacement start
 		s.mu.Unlock()
 		s.log.InfoWith().Str("their_call", c.TheirCall).
 			Msg("ft8 seq: type-4 work QSO complete (RR73 sent)")
 		if onComplete != nil {
 			onComplete(c)
 		}
-		publish(QsoStatus{Active: false})
 	}
 
 	if err := transmit(msg, offset, dial, onDone); err != nil {

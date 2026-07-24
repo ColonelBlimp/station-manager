@@ -135,25 +135,19 @@ type Service struct {
 	// atomically CONSUMED before each session start (restored on a rejected
 	// start — consuming first means the path is at its default before the new
 	// session is ever visible-active, so a selection for it can't be stomped)
-	// and atomically consumed at each logged contact. exchPathGen counts
-	// explicit SetExchangePath calls so a rejected start's restore applies only
-	// if no newer selection landed since its consume (latest selection wins —
-	// codex review). Accepted residue: a caller-mode answerer that fails
-	// mid-exchange (no RR73, drop back to CQ) leaves the previous choice in
-	// place for the next answerer — adjust it as the pile-up moves.
+	// and generation-checked back to default at each logged contact. exchPathGen
+	// counts explicit SetExchangePath calls so a rejected start's restore or a
+	// delayed completion's reset applies only if no newer selection landed
+	// (latest selection wins — codex review). Accepted residue: a caller-mode
+	// answerer that fails mid-exchange (no RR73, drop back to CQ) leaves the
+	// previous choice in place for the next answerer — adjust it as the pile-up
+	// moves.
 	exchPath    string
 	exchPathGen uint64
-	// completionAntPath is the antenna path SNAPSHOTTED at the final rung's commit
-	// (seqTransmit, while the session is still active) and read back in onComplete to
-	// stamp the completed QSO. Decoupling the stamp from the live exchPath closes the
-	// race where a concurrent new session start (or an OnSlot idle-out that beat the
-	// completing callback) reset exchPath between completion and the stamp, logging
-	// the wrong ANT_PATH. Re-taken on each terminal-rung attempt (retry-safe). txMu.
-	completionAntPath string
-	txDevice          txPlayer
-	txCtrl            *TxController
-	txCancel          context.CancelFunc
-	txWg              sync.WaitGroup
+	txDevice    txPlayer
+	txCtrl      *TxController
+	txCancel    context.CancelFunc
+	txWg        sync.WaitGroup
 
 	// seqGate serialises "start a session" (StartQso/StartCallCq) against
 	// "disarm + abandon" (disarmTx) so the armed-check and the sequencer commit
@@ -231,23 +225,21 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		types.ResolveFt8MaxRepeats(cfg.TX),
 		log,
 	)
+	// Stamp the antenna choice onto the per-attempt CompletedQso when the final
+	// rung succeeds. Keeping the stamp on the QSO (rather than in a Service
+	// singleton) prevents overlapping completion callbacks from stealing it.
+	s.seq.prepareComplete = s.stampCompletionPath
 	// On a completed exchange, hand it to the injected logger (e4). Reads
 	// s.qsoLogger at call time (set via SetQsoLogger before Start), so the
 	// daemon wires logging after construction.
 	s.seq.onComplete = func(c CompletedQso) {
-		// Stamp the operator's antenna-path choice (logging-only) onto the completed
-		// exchange just before the sink builds the QSO record. The sequencer is
-		// path-agnostic; the choice lives on the Service (set via the /v1/ft8/qso/path
-		// endpoint, defaulting to short per exchange).
-		//
-		// The value is read from the snapshot taken at the final rung's commit
-		// (snapshotCompletionPath), NOT the live exchPath: by the time this runs the
-		// session is idle, so a concurrent new session start OR an OnSlot idle-out could
-		// already have reset the live selection, logging the wrong ANT_PATH (review —
-		// the completing callback lost the race). takeCompletionPath also resets the
-		// live selection so the next exchange / Call-CQ answerer (the sequencer stays
-		// alive across a Call-CQ contact) starts from the short-path default.
-		c.AntPath = s.takeCompletionPath()
+		// Clear the completed exchange's live selection only if no newer operator
+		// selection has landed since its per-QSO stamp. A new session may already be
+		// active here: an unconditional clear would erase that session's choice.
+		s.resetCompletionPath(c)
+		if c.AntPath == "" { // defensive: direct/unit-test completions default short
+			c.AntPath = antPathShort
+		}
 		// c.LogbookID is already stamped by the sequencer at construction from the
 		// pinned session logbook (ADR 0055) — nothing to add here.
 		if s.qsoLogger != nil {

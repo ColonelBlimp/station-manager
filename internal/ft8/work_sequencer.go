@@ -201,7 +201,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 	gen := s.sessionGen
 	st := s.statusLocked()
-	publish, onComplete := s.publish, s.onComplete
+	publish, prepareComplete, onComplete := s.publish, s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -214,6 +214,9 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	if completed != nil {
 		c := *completed
 		onDone = func(ok bool) {
+			if ok && prepareComplete != nil {
+				prepareComplete(&c)
+			}
 			s.mu.Lock()
 			if s.sessionGen != gen { // superseded (abandon) — stale callback
 				s.mu.Unlock()
@@ -228,13 +231,13 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			s.caller = nil
 			s.mode = seqIdle // terminal: go idle (NOT resume CQ)
 			s.repeats = 0
+			publish(QsoStatus{Active: false}) // ordered before any replacement start
 			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", c.TheirCall).
 				Msg("ft8 seq: working caller QSO complete (RR73 sent)")
 			if onComplete != nil {
 				onComplete(c)
 			}
-			publish(QsoStatus{Active: false})
 		}
 	}
 
@@ -417,7 +420,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 	gen := s.sessionGen
 	st := s.statusLocked()
-	publish, onComplete := s.publish, s.onComplete
+	publish, prepareComplete, onComplete := s.publish, s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -427,6 +430,9 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 	if completed != nil {
 		c := *completed
 		onDone = func(ok bool) {
+			if ok && prepareComplete != nil {
+				prepareComplete(&c)
+			}
 			s.mu.Lock()
 			if s.sessionGen != gen { // superseded (abandon) — stale callback
 				s.mu.Unlock()
@@ -441,13 +447,13 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 			s.fdWork = nil
 			s.mode = seqIdle
 			s.repeats = 0
+			publish(QsoStatus{Active: false}) // ordered before any replacement start
 			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", c.TheirCall).
 				Msg("ft8 seq: working caller (FD) QSO complete (RR73 sent)")
 			if onComplete != nil {
 				onComplete(c)
 			}
-			publish(QsoStatus{Active: false})
 		}
 	}
 

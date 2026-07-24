@@ -235,7 +235,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 	gen := s.sessionGen
 	st := s.statusLocked()
-	publish, onComplete := s.publish, s.onComplete
+	publish, prepareComplete, onComplete := s.publish, s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
 	// Side effects outside the lock.
@@ -250,6 +250,9 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	if completed != nil {
 		c := *completed
 		onDone = func(ok bool) {
+			if ok && prepareComplete != nil {
+				prepareComplete(&c)
+			}
 			s.mu.Lock()
 			if s.sessionGen != gen { // superseded (abandon) — stale callback
 				s.mu.Unlock()
@@ -265,13 +268,13 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			s.repeats = 0
 			s.stalledCalls = nil // completed — fresh CQ round; previously-stalled callers retry
 			cqSt := s.statusLocked()
+			publish(cqSt) // ordered before a concurrent Abandon/replacement start
 			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", c.TheirCall).
 				Msg("ft8 seq: caller QSO complete (RR73 sent)")
 			if onComplete != nil {
 				onComplete(c)
 			}
-			publish(cqSt) // now back to calling-cq
 		}
 	}
 
