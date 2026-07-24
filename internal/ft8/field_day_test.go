@@ -21,14 +21,14 @@ func TestParseMessage_FieldDay(t *testing.T) {
 			t.Fatalf("plain CQ marked fd: %+v", m)
 		}
 	})
-	t.Run("R-exchange (rung 2 we receive)", func(t *testing.T) {
+	t.Run("R-exchange (rung 2 we receive) is msgFdRExchange", func(t *testing.T) {
 		m := parseMessage("7Q5MLV K1ABC R 2A EMA")
-		if m.kind != msgFdExchange || m.to != "7Q5MLV" || m.from != "K1ABC" ||
+		if m.kind != msgFdRExchange || m.to != "7Q5MLV" || m.from != "K1ABC" ||
 			m.class != "2A" || m.section != "EMA" {
-			t.Fatalf("got %+v, want msgFdExchange 2A/EMA", m)
+			t.Fatalf("got %+v, want msgFdRExchange 2A/EMA", m)
 		}
 	})
-	t.Run("bare exchange (opening reply, no R)", func(t *testing.T) {
+	t.Run("bare exchange (opening reply, no R) is msgFdExchange, not rogered", func(t *testing.T) {
 		m := parseMessage("K1ABC 7Q5MLV 1D DX")
 		if m.kind != msgFdExchange || m.class != "1D" || m.section != "DX" {
 			t.Fatalf("got %+v, want msgFdExchange 1D/DX", m)
@@ -102,6 +102,29 @@ func TestFdExchange_Ladder(t *testing.T) {
 	}
 	if _, ok := e.TxMessage(); ok {
 		t.Fatal("fdDone still has a TxMessage")
+	}
+}
+
+// TestFdExchange_BareExchangeDoesNotAdvance guards the answerer ladder: only the
+// partner's R-exchange (their acknowledgment) may move us to RR73. A bare exchange
+// directed at us — no "R" — is not that acknowledgment; advancing on it would jump the
+// contact to RR73 before they ever confirmed our exchange (however many times repeated).
+func TestFdExchange_BareExchangeDoesNotAdvance(t *testing.T) {
+	e := NewFdExchange("7Q5MLV", "1D", "DX", "K1ABC", "FN42", -12)
+
+	// A bare exchange from them (no R) must NOT advance — even repeated.
+	for i := 0; i < 3; i++ {
+		next, ok := e.Advance("7Q5MLV K1ABC 2A EMA")
+		if ok || next.State != fdCalling || next.HasTheirExch {
+			t.Fatalf("bare exchange #%d advanced: %+v (ok=%v)", i+1, next, ok)
+		}
+		e = next
+	}
+
+	// Their rogered R-exchange DOES advance (sanity — the fix doesn't over-reject).
+	next, ok := e.Advance("7Q5MLV K1ABC R 2A EMA")
+	if !ok || next.State != fdRogering || next.TheirClass != "2A" || next.TheirSection != "EMA" {
+		t.Fatalf("R-exchange did not advance: %+v (ok=%v)", next, ok)
 	}
 }
 

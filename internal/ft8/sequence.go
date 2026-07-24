@@ -89,14 +89,15 @@ func formatReport(snr int) string {
 type msgKind int
 
 const (
-	msgOther      msgKind = iota
-	msgCQ                 // CQ [mod...] <call> [grid]
-	msgGrid               // <to> <from> <grid4>     — a reply carrying a grid
-	msgReport             // <to> <from> <±report>   — a signal report (rung 2)
-	msgRReport            // <to> <from> R<±report>  — a rogered report (rung 3)
-	msgRoger              // <to> <from> RRR | RR73  — rogered (RR73 also says 73)
-	msg73                 // <to> <from> 73
-	msgFdExchange         // <to> <from> [R] <class> <section> — ARRL Field Day exchange
+	msgOther       msgKind = iota
+	msgCQ                  // CQ [mod...] <call> [grid]
+	msgGrid                // <to> <from> <grid4>     — a reply carrying a grid
+	msgReport              // <to> <from> <±report>   — a signal report (rung 2)
+	msgRReport             // <to> <from> R<±report>  — a rogered report (rung 3)
+	msgRoger               // <to> <from> RRR | RR73  — rogered (RR73 also says 73)
+	msg73                  // <to> <from> 73
+	msgFdExchange          // <to> <from> <class> <section>   — ARRL Field Day exchange (bare, un-rogered)
+	msgFdRExchange         // <to> <from> R <class> <section> — rogered ARRL Field Day exchange (their ACK)
 )
 
 // message is a standard FT8 message reduced to the fields the sequencer needs.
@@ -110,7 +111,7 @@ type message struct {
 	grid   string // 4-char Maidenhead — msgCQ / msgGrid only
 	report int    // signal report value — msgReport / msgRReport only
 	// ARRL Field Day. fd marks a CQ carrying the "FD" modifier (msgCQ); class and
-	// section carry the exchange of an msgFdExchange (e.g. "2A" / "EMA").
+	// section carry the exchange of an msgFdExchange / msgFdRExchange (e.g. "2A" / "EMA").
 	fd      bool
 	class   string
 	section string
@@ -175,13 +176,16 @@ func parseMessage(text string) message {
 		m.kind = msgRoger
 	case tok == "73":
 		m.kind = msg73
-	// ARRL Field Day exchange. The R-variant "<to> <from> R <class> <section>" is what
-	// an answerer receives (rung 2); the bare "<to> <from> <class> <section>" is the
-	// opening reply (parsed for symmetry / the future caller side). The section is
-	// confirmed against go-ft8's canonical list so a real report/grid can't be misread
-	// as an exchange.
+	// ARRL Field Day exchange. The R-variant "<to> <from> R <class> <section>"
+	// (msgFdRExchange) is the partner's ROGER — the answerer requires it at rung 2, as it
+	// confirms they received OUR exchange. The bare "<to> <from> <class> <section>"
+	// (msgFdExchange) is an un-rogered exchange (the opening reply / the future caller
+	// side); it must NOT advance the answerer, or a repeated bare exchange would jump the
+	// contact to RR73 without the partner ever acknowledging ours. Kept distinct exactly as
+	// msgReport (bare) vs msgRReport (R-prefixed) are. The section is confirmed against
+	// go-ft8's canonical list so a real report/grid can't be misread as an exchange.
 	case tok == "R" && len(toks) >= 5 && looksLikeFdClass(toks[3]) && goft8.ValidARRLFieldDaySection(toks[4]):
-		m.kind, m.class, m.section = msgFdExchange, toks[3], toks[4]
+		m.kind, m.class, m.section = msgFdRExchange, toks[3], toks[4]
 	case looksLikeFdClass(tok) && len(toks) >= 4 && goft8.ValidARRLFieldDaySection(toks[3]):
 		m.kind, m.class, m.section = msgFdExchange, tok, toks[3]
 	case isGrid4(tok):

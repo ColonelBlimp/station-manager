@@ -116,15 +116,18 @@ func (e FdExchange) TxMessage() (string, bool) {
 	}
 }
 
-// Advance consumes a received line; if it's their R-exchange directed at us, it
-// captures their class/section and moves to fdRogering. Returns the new exchange and
-// whether it advanced.
+// Advance consumes a received line; it advances ONLY on their R-exchange directed at
+// us (msgFdRExchange — their acknowledgment that they received our exchange), capturing
+// their class/section and moving to fdRogering. A bare exchange (msgFdExchange, no R) is
+// NOT the roger the ladder waits for, so it does not advance — otherwise a repeated bare
+// exchange would jump the contact to RR73 without the partner ever confirming ours.
+// Returns the new exchange and whether it advanced.
 func (e FdExchange) Advance(text string) (FdExchange, bool) {
 	m := parseMessage(text)
 	if m.to != e.OurCall || m.from != e.TheirCall {
 		return e, false
 	}
-	if e.State == fdCalling && m.kind == msgFdExchange {
+	if e.State == fdCalling && m.kind == msgFdRExchange {
 		e.TheirClass, e.TheirSection, e.HasTheirExch = m.class, m.section, true
 		e.State = fdRogering
 		return e, true
