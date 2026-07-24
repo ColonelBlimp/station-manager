@@ -143,9 +143,12 @@ class LogbookState {
         return this.selectedDestination !== '';
     }
 
-    /** Rows to display: the loaded page, minus already-emailed rows when
-     *  `notEmailedOnly` is on. Everything that renders + the select-all helpers key
-     *  off this, so "visible" consistently means "what the operator can see". */
+    /** Rows to display. The server already filters emailed rows out of the page
+     *  when `notEmailedOnly` is on (the not_emailed param), so this client filter
+     *  is now just the immediate-vanish layer: it hides a row the instant
+     *  markEmailed flips it locally, before the next fetch drops it for real.
+     *  Everything that renders + the select-all helpers key off this, so
+     *  "visible" consistently means "what the operator can see". */
     get visibleRows(): LogbookQso[] {
         return this.notEmailedOnly
             ? this.rows.filter((r) => r.sm_fwrd_by_email_status !== 'Y')
@@ -204,10 +207,15 @@ class LogbookState {
         }
     }
 
-    /** Flip the client-side "not emailed only" page filter. No reload — it just
-     *  hides emailed rows from the loaded page. */
-    toggleNotEmailedOnly(): void {
+    /** Flip the "not emailed only" filter and reload count + first page so it
+     *  applies across the WHOLE logbook (server-side not_emailed), not just the
+     *  loaded page — the page-local behaviour was the reported bug. Mirrors the
+     *  toggleShowUploaded reload shape (reset the cursor trail: cursors from the
+     *  unfiltered view don't address the filtered set). */
+    async toggleNotEmailedOnly(): Promise<void> {
         this.notEmailedOnly = !this.notEmailedOnly;
+        this.#resetPaging();
+        await Promise.all([this.#loadCount(), this.#loadPage(0)]);
     }
     /** Drop the entire selection. */
     clearSelection(): void {
@@ -497,7 +505,11 @@ class LogbookState {
     async #loadCount(): Promise<void> {
         if (this.selectedId === null) return;
         const gen = ++this.#countGen;
-        const out = await fetchLogbookCount(this.selectedId, this.missingFromParam);
+        const out = await fetchLogbookCount(
+            this.selectedId,
+            this.missingFromParam,
+            this.notEmailedOnly
+        );
         if (gen !== this.#countGen) return; // superseded — a newer load owns the state
         if (out.kind === 'ok') this.count = out.count;
         // A count failure is non-fatal — the table still works; just no "of N".
@@ -513,7 +525,8 @@ class LogbookState {
             this.selectedId,
             this.pageSize,
             after ?? undefined,
-            this.missingFromParam
+            this.missingFromParam,
+            this.notEmailedOnly
         );
         if (gen !== this.#pageGen) return; // superseded — the newer call owns loading/rows
         if (out.kind === 'ok') {

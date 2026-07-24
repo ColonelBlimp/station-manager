@@ -27,6 +27,18 @@ func (s *Server) resolveMissingFromPrefix(name string) (string, bool) {
 	return "", false
 }
 
+// parseBoolQuery reads an optional boolean query param. Absent/empty → (false,
+// nil). A present value is parsed with strconv.ParseBool (1/t/T/true/0/f/false/…);
+// an unrecognised value is a client error, matching the strict validation the
+// other list filters use. Shared by the QSO-list and logbook-count handlers.
+func parseBoolQuery(r *http.Request, key string) (bool, error) {
+	raw := r.URL.Query().Get(key)
+	if raw == "" {
+		return false, nil
+	}
+	return strconv.ParseBool(raw)
+}
+
 // qsoPageCursor is the decoded form of the opaque ?after= token. It
 // represents the sort-key tuple (qso_date, time_on, id) of the last QSO
 // returned on the previous page, per api.md §4.4.
@@ -111,6 +123,16 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 		missingPrefix = p
 	}
 
+	// ---- not_emailed: page only QSOs not yet forwarded by email (the "Not
+	// emailed only" logbook toggle), by the durable sm_fwrd_by_email_status
+	// stamp ----
+	notEmailed, err := parseBoolQuery(r, "not_emailed")
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_not_emailed",
+			"not_emailed must be a boolean", op)
+		return
+	}
+
 	// ---- cursor ----
 	var afterDate, afterTime string
 	var afterID int64
@@ -126,7 +148,7 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 
 	// Fetch limit+1 so we can detect "has more" without a second query.
 	rows, err := s.db.FetchQsoPageByLogbookWithContext(
-		r.Context(), logbookID, afterDate, afterTime, afterID, limit, missingPrefix,
+		r.Context(), logbookID, afterDate, afterTime, afterID, limit, missingPrefix, notEmailed,
 	)
 	if err != nil {
 		s.writeServerError(w, op, err, "db_error", "database operation failed")

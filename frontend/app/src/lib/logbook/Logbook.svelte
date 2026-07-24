@@ -92,8 +92,9 @@
             {/if}
         {/if}
 
-        <!-- "Still needs emailing" filter — client-side, hides already-emailed
-             rows on the current page (see logbook.svelte.ts notEmailedOnly). -->
+        <!-- "Still needs emailing" filter — server-side (not_emailed), so it
+             applies across the whole logbook, not just the loaded page. The
+             toggle reloads count + first page (see logbook.svelte.ts). -->
         <label class="flex items-center gap-2 text-sm text-muted">
             <input
                 type="checkbox"

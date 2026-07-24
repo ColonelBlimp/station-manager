@@ -236,7 +236,7 @@ func (s *Service) FetchQsoSliceByLogbookIdWithContext(ctx context.Context, id in
 	return typeSlice, nil
 }
 
-func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id int64, missingFromPrefix string) (int64, error) {
+func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id int64, missingFromPrefix string, notEmailed bool) (int64, error) {
 	const op errors.Op = "sqlite.Service.FetchQsoCountByLogbookIdWithContext"
 	if err := checkService(op, s); err != nil {
 		return 0, err
@@ -261,6 +261,9 @@ func (s *Service) FetchQsoCountByLogbookIdWithContext(ctx context.Context, id in
 	mods := []qm.QueryMod{models.QsoWhere.LogbookID.EQ(id)}
 	if missingMod != nil {
 		mods = append(mods, missingMod)
+	}
+	if m := notEmailedMod(notEmailed); m != nil {
+		mods = append(mods, m)
 	}
 	count, err := models.Qsos(mods...).Count(ctx, h)
 	if err != nil {
@@ -288,6 +291,21 @@ func missingFromUploadMod(op errors.Op, adifPrefix string) (qm.QueryMod, error) 
 	}
 	path := "$." + strings.ToLower(adifPrefix) + "_qso_upload_status"
 	return qm.Where("COALESCE(json_extract(additional_data, ?), '') <> ?", path, adif.YesString), nil
+}
+
+// notEmailedMod builds the "not yet forwarded by email" predicate behind the
+// logbook "Not emailed only" filter: the QSO's sm_fwrd_by_email_status stamp in
+// additional_data is absent or not "Y" — the SAME durable stamp
+// MarkSessionEmailedWithContext writes and the SPA "Emailed" column reads.
+// notEmailed=false → nil (no restriction). Unlike missingFromUploadMod the JSON
+// path is a static literal (no forwarder prefix to inject), so there is nothing
+// to validate and no error return.
+func notEmailedMod(notEmailed bool) qm.QueryMod {
+	if !notEmailed {
+		return nil
+	}
+	return qm.Where("COALESCE(json_extract(additional_data, ?), '') <> ?",
+		"$.sm_fwrd_by_email_status", adif.YesString)
 }
 
 // HasUploadStampWithContext reports whether the QSO's ADIF upload-status stamp
@@ -746,6 +764,7 @@ func (s *Service) FetchQsoPageByLogbookWithContext(
 	afterID int64,
 	limit int,
 	missingFromPrefix string,
+	notEmailed bool,
 ) (types.QsoSlice, error) {
 	const op errors.Op = "sqlite.Service.FetchQsoPageByLogbookWithContext"
 	if err := checkService(op, s); err != nil {
@@ -775,6 +794,9 @@ func (s *Service) FetchQsoPageByLogbookWithContext(
 	}
 	if missingMod != nil {
 		mods = append(mods, missingMod)
+	}
+	if m := notEmailedMod(notEmailed); m != nil {
+		mods = append(mods, m)
 	}
 	// Cursor predicate on the (qso_date, time_on, id) tuple in DESC order:
 	// rows strictly before the cursor.

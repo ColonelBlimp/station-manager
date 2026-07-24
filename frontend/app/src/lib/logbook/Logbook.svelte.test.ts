@@ -196,4 +196,25 @@ describe('Logbook page', () => {
         expect(screen.queryByText(/^Upload 2/)).toBeNull();
         expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument();
     });
+
+    it('toggling "Not emailed only" reloads count + page with the server-side filter', async () => {
+        const fetchMock = vi.mocked(globalThis.fetch);
+        render(Logbook);
+        await flush();
+        await flush();
+        flushSync();
+
+        fetchMock.mockClear();
+        // Flip the filter on — it must REFETCH (the page-local version just hid
+        // loaded rows), and both the page and the count carry not_emailed=true so
+        // the filter (and the "of N") span the whole logbook, not one page.
+        screen.getByLabelText('Not emailed only').click();
+        await flush();
+        await flush();
+        flushSync();
+
+        const urls = fetchMock.mock.calls.map((c) => urlText(c[0]));
+        expect(urls.some((u) => u.includes('/qso') && u.includes('not_emailed=true'))).toBe(true);
+        expect(urls.some((u) => u.includes('/count') && u.includes('not_emailed=true'))).toBe(true);
+    });
 });

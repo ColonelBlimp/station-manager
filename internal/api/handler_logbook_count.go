@@ -38,7 +38,16 @@ func (s *Server) handleLogbookCount(w http.ResponseWriter, r *http.Request) {
 		missingPrefix = p
 	}
 
-	count, err := s.db.FetchQsoCountByLogbookIdWithContext(r.Context(), logbookID, missingPrefix)
+	// not_emailed: count only QSOs not yet forwarded by email, so the SPA's
+	// "of N" matches the "Not emailed only" filtered page.
+	notEmailed, err := parseBoolQuery(r, "not_emailed")
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_not_emailed",
+			"not_emailed must be a boolean", op)
+		return
+	}
+
+	count, err := s.db.FetchQsoCountByLogbookIdWithContext(r.Context(), logbookID, missingPrefix, notEmailed)
 	if err != nil {
 		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
