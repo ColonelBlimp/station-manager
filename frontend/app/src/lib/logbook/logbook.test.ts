@@ -63,7 +63,7 @@ describe('logbook selection → email UUIDs', () => {
 
     it('markEmailed flips only the matching visible rows to forwarded-by-email', () => {
         logbookState.rows = [qso(1, 'u1'), qso(2, 'u2')];
-        logbookState.markEmailed(['u1']);
+        logbookState.markEmailed(['u1'], null);
         expect(logbookState.rows[0].sm_fwrd_by_email_status).toBe('Y');
         expect(logbookState.rows[1].sm_fwrd_by_email_status).toBeUndefined();
     });
@@ -259,12 +259,46 @@ describe('markEmailed — filtered paging reset', () => {
         logbookState.pageIndex = 2;
         logbookState.rows = [qso(1, 'u1')];
 
-        logbookState.markEmailed(['u1']);
-        // #resetPaging runs synchronously ahead of the async reload — pre-fix this
-        // refetched pageIndex 2 and left the operator there.
-        expect(logbookState.pageIndex).toBe(0);
+        logbookState.markEmailed(['u1'], 1); // origin === current logbook
         await new Promise((r) => setTimeout(r, 0));
+        // Reloaded page 0 (pre-fix this refetched pageIndex 2 and could strand the
+        // operator on an emptied page); #loadPage resets pageIndex on success.
+        expect(logbookState.pageIndex).toBe(0);
         expect(urls.some((u) => u.includes('/qso') && u.includes('not_emailed=true'))).toBe(true);
+    });
+
+    it('does not reload when the send originated from a different logbook', async () => {
+        const fetchFn = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
+        vi.stubGlobal('fetch', fetchFn);
+        logbookState.selectedId = 2; // operator has switched to logbook 2
+        logbookState.notEmailedOnly = true;
+        logbookState.pageIndex = 3;
+        logbookState.rows = [qso(1, 'u1')];
+
+        logbookState.markEmailed(['u1'], 1); // a completion for logbook 1
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(fetchFn).not.toHaveBeenCalled(); // logbook 2 is left untouched
+        expect(logbookState.pageIndex).toBe(3);
+    });
+
+    it('preserves the current page + pageIndex when the refresh fails', async () => {
+        // The reload errors (500). The stale-cursor risk is real, but blanking the
+        // page with no way back is worse — keep the displayed snapshot.
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(new Response('boom', { status: 500 })))
+        );
+        logbookState.selectedId = 1;
+        logbookState.notEmailedOnly = true;
+        logbookState.pageIndex = 2;
+        logbookState.rows = [qso(1, 'u1')];
+
+        logbookState.markEmailed(['u1'], 1);
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(logbookState.rows).toHaveLength(1); // not blanked by a pre-clear
+        expect(logbookState.pageIndex).toBe(2); // still on the current page
     });
 
     it('leaves paging untouched and does not reload when the filter is off', async () => {
@@ -275,7 +309,7 @@ describe('markEmailed — filtered paging reset', () => {
         logbookState.pageIndex = 2;
         logbookState.rows = [qso(1, 'u1')];
 
-        logbookState.markEmailed(['u1']);
+        logbookState.markEmailed(['u1'], 1);
         await new Promise((r) => setTimeout(r, 0));
 
         expect(logbookState.pageIndex).toBe(2);

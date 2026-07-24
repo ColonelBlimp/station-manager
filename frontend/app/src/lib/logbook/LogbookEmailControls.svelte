@@ -52,6 +52,10 @@
         result = null;
         const to = recipient.trim();
         const uuids = logbookState.selectedUuids;
+        // Capture the logbook the send is FOR before awaiting — if the operator
+        // switches logbooks while SMTP is in flight, markEmailed must not resync
+        // the one they moved to (see logbook.svelte.ts markEmailed).
+        const origin = logbookState.selectedId;
         const label = `${uuids.length} QSO${uuids.length === 1 ? '' : 's'}`;
         // A sticky "sending" toast superseded by the outcome toast below (the
         // documented pushToast supersede idiom) gives the sending→sent
@@ -63,7 +67,7 @@
         toasts.dismiss(pending);
         switch (outcome.kind) {
             case 'sent':
-                logbookState.markEmailed(outcome.emailed);
+                logbookState.markEmailed(outcome.emailed, origin);
                 result = { ok: true, text: `Sent ${label} to ${to}` };
                 toasts.info(`Emailed ${label} to ${to}`);
                 break;

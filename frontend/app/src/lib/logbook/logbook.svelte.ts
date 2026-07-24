@@ -223,11 +223,16 @@ class LogbookState {
         this.#selectedUuids.clear();
     }
 
-    /** Flip the visible rows whose UUID was just emailed to "forwarded by email"
+    /** Flip the loaded rows whose UUID was just emailed to "forwarded by email"
      *  so the callsign tint updates immediately (the daemon has durably stamped
      *  sm_fwrd_by_email_*; this mirrors that onto the in-memory page). Rows on other
-     *  pages reflect it on their next fetch. */
-    markEmailed(uuids: string[]): void {
+     *  pages reflect it on their next fetch.
+     *
+     *  `originLogbookId` is the logbook the send was issued from, captured BEFORE
+     *  the async send. When the "not emailed only" filter is on we reload to resync
+     *  paging — but only if the operator is still on that same logbook, so a send
+     *  that lands after a logbook switch can't reset the unrelated one. */
+    markEmailed(uuids: string[], originLogbookId: number | null): void {
         if (uuids.length === 0) return;
         const set = new Set(uuids);
         for (let i = 0; i < this.rows.length; i++) {
@@ -236,19 +241,20 @@ class LogbookState {
                 this.rows[i] = { ...this.rows[i], sm_fwrd_by_email_status: 'Y' };
             }
         }
-        // With the server-side "not emailed only" filter active, the rows just
-        // stamped no longer belong to the filtered set: the visibleRows client
-        // filter hides them instantly, but the count + cursor trail would be left
-        // stale (the pager reading "of N" too high, or an empty table with a
-        // nonzero total). Reset paging and reload from page 0 rather than
-        // refetching the current pageIndex: its start cursor is a fixed tuple, so
-        // once a row anywhere at/before it is emailed the boundary no longer holds
-        // — refetching in place can strand the operator on an emptied last page
-        // (earlier pages still full) or misalign rows. A page-0 reset rebuilds the
-        // trail coherently. Fire-and-forget — the reactive state updates when it
-        // lands.
-        if (this.notEmailedOnly) {
-            this.#resetPaging();
+        // With the server-side "not emailed only" filter on, the just-stamped rows
+        // leave the filtered set: the visibleRows client filter hides them
+        // instantly, but the count + cursor trail would be left stale (the pager
+        // reading "of N" too high, or an empty table with a nonzero total). Reload
+        // PAGE 0 to resync — not the current pageIndex, whose start cursor is a
+        // fixed tuple that no longer bounds a shrunk page (refetching it in place
+        // can strand the operator on an emptied last page). We deliberately do NOT
+        // pre-clear rows/cursors: #loadPage replaces them only on success and
+        // resets pageIndex to 0 there, rebuilding the forward trail as the operator
+        // navigates — so a FAILED refresh preserves the current page instead of
+        // blanking it with no way back. Guarded on the origin logbook so a stale
+        // completion can't reset a logbook the operator has since switched to.
+        // Fire-and-forget — the reactive state updates when it lands.
+        if (this.notEmailedOnly && this.selectedId === originLogbookId) {
             void Promise.all([this.#loadCount(), this.#loadPage(0)]);
         }
     }

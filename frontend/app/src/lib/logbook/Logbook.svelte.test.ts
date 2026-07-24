@@ -240,7 +240,7 @@ describe('Logbook page', () => {
 
         // A successful email stamps a loaded row; with the server-side filter on,
         // the count + cursor trail must refresh, else the pager goes stale (P2).
-        logbookState.markEmailed(['u-1']);
+        logbookState.markEmailed(['u-1'], logbookState.selectedId);
         await flush();
         await flush();
         flushSync();
@@ -258,7 +258,7 @@ describe('Logbook page', () => {
         flushSync();
         fetchMock.mockClear();
 
-        logbookState.markEmailed(['u-1']); // notEmailedOnly defaults false
+        logbookState.markEmailed(['u-1'], logbookState.selectedId); // notEmailedOnly defaults false
         await flush();
         flushSync();
 
