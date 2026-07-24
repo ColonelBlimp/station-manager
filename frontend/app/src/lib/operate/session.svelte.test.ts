@@ -4,7 +4,13 @@
 // sessionStorage persistence.
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { session, addSessionQso, _resetSessionForTests, type SessionQso } from './session.svelte';
+import {
+    session,
+    addSessionQso,
+    markSessionEmailed,
+    _resetSessionForTests,
+    type SessionQso,
+} from './session.svelte';
 
 beforeEach(() => {
     _resetSessionForTests();
@@ -46,5 +52,32 @@ describe('session log', () => {
         _resetSessionForTests();
         expect(session.qsos).toHaveLength(0);
         expect(sessionStorage.getItem('sm.session.qsos')).toBeNull();
+    });
+});
+
+describe('markSessionEmailed', () => {
+    it('flags only the matching UUIDs and persists the flag', () => {
+        addSessionQso(qso({ callsign: 'A', uuid: 'u1' }));
+        addSessionQso(qso({ callsign: 'B', uuid: 'u2' }));
+
+        markSessionEmailed(['u1']);
+
+        const byCall = (c: string) => session.qsos.find((q) => q.callsign === c);
+        expect(byCall('A')?.emailed).toBe(true);
+        expect(byCall('B')?.emailed).toBeUndefined();
+        // Persisted, so a reload keeps the "already emailed" delta.
+        const stored = JSON.parse(sessionStorage.getItem('sm.session.qsos')!) as {
+            qsos: SessionQso[];
+        };
+        expect(stored.qsos.find((q) => q.uuid === 'u1')?.emailed).toBe(true);
+    });
+
+    it('is idempotent and ignores unknown / empty UUIDs', () => {
+        addSessionQso(qso({ uuid: 'u1' }));
+        markSessionEmailed(['u1']);
+        markSessionEmailed(['u1']); // already flagged → no-op
+        markSessionEmailed(['nope']); // not in session → no-op
+        markSessionEmailed([]); // empty → no-op
+        expect(session.qsos[0].emailed).toBe(true);
     });
 });

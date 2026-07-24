@@ -21,6 +21,10 @@ export interface SessionQso {
     name: string;
     country: string; // enrichment-provided, '' when unknown
     comment: string;
+    /** True once this QSO has been emailed to a QSL manager this session — lets
+     *  the export dialog default a resend to just the not-yet-emailed delta so a
+     *  second send doesn't duplicate mail already delivered. */
+    emailed?: boolean;
 }
 
 const STORE_KEY = 'sm.session.qsos';
@@ -76,6 +80,24 @@ export function updateSessionQso(id: number, patch: Partial<Omit<SessionQso, 'id
     if (i === -1) return;
     session.qsos[i] = { ...session.qsos[i], ...patch };
     persist();
+}
+
+/** Mark session QSOs (by UUID) as emailed after a successful send, so the export
+ *  dialog can default a resend to only the not-yet-emailed delta. Persisted;
+ *  idempotent — a UUID already flagged (or not in the session) is a no-op. */
+export function markSessionEmailed(uuids: string[]): void {
+    if (uuids.length === 0) return;
+    // A plain includes() (not a Set) — a session holds tens of QSOs, so the lookup
+    // is trivially small and this avoids a non-reactive Set in a .svelte.ts module.
+    let changed = false;
+    for (let i = 0; i < session.qsos.length; i++) {
+        const u = session.qsos[i].uuid;
+        if (u && uuids.includes(u) && !session.qsos[i].emailed) {
+            session.qsos[i] = { ...session.qsos[i], emailed: true };
+            changed = true;
+        }
+    }
+    if (changed) persist();
 }
 
 /** Test seam — clear the session (state + persisted copy) between cases. */

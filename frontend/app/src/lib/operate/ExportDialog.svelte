@@ -10,7 +10,7 @@
     // metadata) — a real option lands when the format does, not a greyed tease.
     import { fade } from 'svelte/transition';
     import { operate, closeExport } from './state.svelte';
-    import { session } from './session.svelte';
+    import { session, markSessionEmailed } from './session.svelte';
     import { mailer } from './mailer.svelte';
     import { sendSessionEmail } from '../api/session-email';
     import { exportSessionAdif, downloadTextFile } from '../api/session-export';
@@ -32,10 +32,24 @@
     let downloading = $state(false);
 
     const count = $derived(session.qsos.length);
+    // The whole session — feeds the ADIF archive download (re-downloading a file
+    // is harmless, so the download is always the full session).
     const uuids = $derived(session.qsos.map((q) => q.uuid).filter((u): u is string => !!u));
+    // Email is different: a duplicate in a real inbox is NOT harmless, so a resend
+    // defaults to only the not-yet-emailed delta. onlyUnsent is meaningful once
+    // something has been emailed this session.
+    const emailedCount = $derived(session.qsos.filter((q) => q.emailed).length);
+    const unsentUuids = $derived(
+        session.qsos
+            .filter((q) => !q.emailed)
+            .map((q) => q.uuid)
+            .filter((u): u is string => !!u)
+    );
+    let onlyUnsent = $state(true);
+    const sendUuids = $derived(onlyUnsent ? unsentUuids : uuids);
     const canSend = $derived(
         mailer.enabled &&
-            count > 0 &&
+            sendUuids.length > 0 &&
             recipient.trim() !== '' &&
             recipient.includes('@') &&
             !sending
@@ -66,10 +80,13 @@
         sending = true;
         const pending = toasts.info('Sending email…', 0);
         try {
-            const outcome = await sendSessionEmail({ to: recipient.trim(), uuids });
+            const outcome = await sendSessionEmail({ to: recipient.trim(), uuids: sendUuids });
             toasts.dismiss(pending);
             switch (outcome.kind) {
                 case 'sent':
+                    // Flag the sent rows so a resend this session defaults to the
+                    // remaining not-yet-emailed delta.
+                    markSessionEmailed(outcome.emailed);
                     toasts.info(`Sent ${outcome.emailed.length} QSOs to ${recipient.trim()}`);
                     closeExport();
                     break;
@@ -188,11 +205,28 @@
                             <button
                                 class="btn btn-primary shrink-0"
                                 disabled={!canSend}
+                                title={emailedCount > 0 && onlyUnsent && unsentUuids.length === 0
+                                    ? 'Everything this session is already emailed — uncheck to resend all'
+                                    : undefined}
                                 onclick={send}
                             >
-                                {sending ? 'Sending…' : 'Send'}
+                                {sending
+                                    ? 'Sending…'
+                                    : emailedCount > 0
+                                      ? `Send ${sendUuids.length}`
+                                      : 'Send'}
                             </button>
                         </div>
+                        {#if emailedCount > 0}
+                            <label class="mt-2 flex items-center gap-2 text-xs text-muted">
+                                <input
+                                    type="checkbox"
+                                    class="cursor-pointer"
+                                    bind:checked={onlyUnsent}
+                                />
+                                Send only not-yet-emailed ({emailedCount} already sent this session)
+                            </label>
+                        {/if}
                     {:else}
                         <p class="mt-2 text-xs text-muted">
                             Email isn't configured — add an SMTP block in Settings.
