@@ -143,15 +143,23 @@ Before operating Field Day you must tell Station Manager your own class and sect
 These live in the configuration file (`config.json`) under `ft8.field_day` — stop the
 daemon, edit, and restart:
 
-```jsonc
+```json
 "ft8": {
   "field_day": {
-    "class":            "1D",   // your entry: <transmitters><category>, e.g. 2A, 5F
-    "section":          "DX",   // your ARRL/RAC section, or DX outside US/Canada
-    "default_rst_rcvd": "59"    // see "Signal reports" below
+    "class": "1D",
+    "section": "DX",
+    "default_rst_rcvd": "59"
   }
 }
 ```
+
+`config.json` is plain JSON and does not accept `//` comments — type the block as
+shown. The fields are:
+
+- **`class`** — your entry, `<transmitters><category>`, e.g. `2A`, `5F`.
+- **`section`** — your ARRL/RAC section, or `DX` if you are outside the US and Canada.
+- **`default_rst_rcvd`** — the signal report to record when none is exchanged; see
+  "Signal reports" below.
 
 If your class or section is not set, Station Manager will refuse to start a Field Day
 contact (and tell you why) rather than send an incomplete exchange.

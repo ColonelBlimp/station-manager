@@ -76,7 +76,7 @@ The app shows no frequency and no mode, FT8 reports the rig as not live, and
 there is **no error** anywhere. The log says the port opened and the pipeline
 started, then goes quiet.
 
-On a Yaesu, check `RADIO SETTING → GENERAL → CAT RTS` and set it to
+On a Yaesu, check `OPERATION SETTING → GENERAL → CAT RTS` and set it to
 **DISABLE**. With it set to ENABLE — the factory default — the radio only
 answers CAT while the computer asserts the RTS line, and Station Manager keeps
 RTS de-asserted so it can never key your transmitter by accident. The commands

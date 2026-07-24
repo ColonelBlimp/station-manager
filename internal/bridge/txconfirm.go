@@ -45,6 +45,13 @@ const readTxStatusCommand = "read_tx_status"
 // the operator watching a stuck carrier for long.
 var txConfirmTimeout = 3 * time.Second
 
+// confirmFallbackDisarmed parks txConfirmAfterFrame above every reachable frame
+// count, so observeRigData's any-rig-data fallback (defs with no TX-status
+// query) cannot confirm while it sits there. Used for the window where an unkey
+// is COMMITTED but not yet WRITTEN — a queued pre-write frame must not confirm a
+// stop that has not left the host (50e35d review P1).
+const confirmFallbackDisarmed = ^uint64(0)
+
 // TX-alarm i18n codes (ADR 0010: the SPA maps code → wording).
 const (
 	// TxAlarmUnconfirmed — an unkey was written but never confirmed.
@@ -234,7 +241,17 @@ func (s *Service) observeTxStatus(v string) {
 	s.lastTxStatus = v
 	s.mu.Unlock()
 
-	// Log every TRANSITION, including the ones the gate below discards. A rig
+	// Resolve the confirmation BEFORE the (synchronous) transition log below.
+	// confirmTxIdle cancels the confirm-timeout timer under the lock; a log write
+	// that stalled between the two could otherwise let the 3 s timer fire and
+	// raise a false alarm on a rig that just answered "0" — and a false alarm
+	// makes the release path skip its power restore (3f1a047 review P2). Logging
+	// is observational, so it runs once the state has settled.
+	if uncertain {
+		s.resolveTxStatusWhileUncertain(v)
+	}
+
+	// Log every TRANSITION, including the ones the gate above discards. A rig
 	// answering "2" (transmitting by other means) while we believe nothing is
 	// keyed means something outside CAT is holding PTT down — the 2026-07-23
 	// stuck-tune cause, where an asserted RTS line keyed data-mode PTT for the
@@ -249,10 +266,15 @@ func (s *Service) observeTxStatus(v string) {
 			Bool("uncertain", uncertain).
 			Msg("bridge: rig tx-status changed")
 	}
+}
 
-	if !uncertain {
-		return
-	}
+// resolveTxStatusWhileUncertain applies a decoded TXSTATUS answer to a pending
+// confirmation cycle (caller has already checked txUncertain). Only "0" confirms;
+// "2" is inconclusive; "1" alarms and re-tries the stop. Split out of
+// observeTxStatus so the confirmation resolves — and its confirm-timeout is
+// cancelled — before the synchronous transition log, closing the window where a
+// stalled log write could let the timer fire a false alarm (3f1a047 review P2).
+func (s *Service) resolveTxStatusWhileUncertain(v string) {
 	switch v {
 	case "0":
 		s.confirmTxIdle("tx-status " + v)
@@ -354,14 +376,19 @@ func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Cl
 
 	s.mu.Lock()
 	s.txUncertain = true // pre-block: keys/commands refuse from this instant
-	// Watermark, exactly as beginTxConfirm sets one. This hook is called FROM
-	// the readLoop, which has already counted the triggering frame and will call
-	// observeRigData on that same frame a few lines later — so without a fresh
-	// watermark the any-rig-data fallback (defs with no TX-status query, i.e.
-	// every CI-V rig today) confirmed this recovery using the frame that STARTED
-	// it, before the defensive tx_off had even been written. TxReady then read
-	// safe while the unkey was still in flight (2026-07-23 review P1).
-	s.txConfirmAfterFrame = s.rxFrameCount.Load()
+	// DISARM the any-rig-data fallback for the whole committed-but-unwritten
+	// window. This hook is called FROM the readLoop, and the CI-V pipeline's
+	// initial multi-frame READ leaves several replies queued behind the one that
+	// triggered recovery — so a plain current-count watermark (which rejects only
+	// the triggering frame) would let the NEXT queued reply confirm this recovery
+	// through observeRigData before the defensive tx_off had even been written,
+	// exposing TxReady with the unkey still in flight (50e35d review P1, tightening
+	// the earlier 2026-07-23 review P1 fix that only watermarked the triggering
+	// frame). The goroutine re-arms it to the post-write count once the unkey is on
+	// the wire — for CI-V that also preserves the any-data alarm-clear fallback,
+	// which is the ONLY way a CI-V alarm retires (its rigdef has no query to
+	// re-probe; see txrecheck.go).
+	s.txConfirmAfterFrame = confirmFallbackDisarmed
 	// wg.Add under the SAME lock that observes s.stopped — see startAlarmProbes
 	// for why the ordering is load-bearing. Stop() promises to wait for in-flight
 	// work; an untracked goroutine here could resume after Stop closed the client
@@ -382,6 +409,15 @@ func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Cl
 		s.keyMu.Lock()
 		werr := s.writeKeyedLine(context.Background(), def, client, txOff, "defensive unkey")
 		s.keyMu.Unlock()
+		// The unkey has now left the host: re-arm the any-rig-data fallback to the
+		// current frame count. Before this point the sentinel disarmed it (a queued
+		// pre-write frame could not confirm a stop that had not gone out); from here
+		// a genuinely-later frame may. Done on BOTH branches below — the write-failed
+		// path raises the alarm, and for CI-V observeRigData is that alarm's only
+		// exit (no status query to re-probe).
+		s.mu.Lock()
+		s.txConfirmAfterFrame = s.rxFrameCount.Load()
+		s.mu.Unlock()
 		if werr != nil {
 			s.logger.ErrorWith().Err(werr).
 				Msg("bridge: defensive unkey write failed — rig may be keyed from a prior life; TX stays blocked")

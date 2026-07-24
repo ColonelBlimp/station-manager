@@ -204,7 +204,21 @@ func (s *Service) StartTune(ctx context.Context) error {
 				s.retryUnkeyStillKeyed()
 				return errors.New(errOp).WithErr(err).WithMsg("write tune-on")
 			}
+			// Defensive tx_off ACCEPTED — twin of KeyFt8Tx: CI-V's awaited FB IS
+			// positive RX confirmation, so confirm directly rather than entering
+			// txUncertain and falling to the any-rig-data path (no read_tx_status
+			// on the IC-7300), which would needlessly block writes and risk a
+			// false alarm on a rig already known idle (50e35d review P2).
+			if def.Protocol == cat.ProtocolIcomCIV {
+				s.confirmTxIdle("civ ack (post-failed-key defensive tx_off)")
+			} else {
+				s.beginTxConfirm(def, cl)
+			}
+			return errors.New(errOp).WithErr(err).WithMsg("write tune-on")
 		}
+		// tx_off would not even encode (the pre-key gate proved it can): no
+		// unkey was sent, so enter the uncertainty cycle and let the timeout
+		// alarm rather than reporting idle.
 		s.beginTxConfirm(def, cl)
 		return errors.New(errOp).WithErr(err).WithMsg("write tune-on")
 	}

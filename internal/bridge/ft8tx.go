@@ -146,11 +146,9 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 		if off, oerr := encodeTuneUnkey(def); oerr == nil {
 			// writeKeyedLine, NOT a raw WriteCommandBytes: on CI-V the raw write
 			// returns success the moment the bytes are queued, so a dropped or
-			// rejected unkey looked like it landed. The IC-7300 rigdef has no
-			// read_tx_status, so the confirm cycle below falls back to
-			// any-rig-data — and the next decoded frame would then "confirm" an
-			// unkey that never took (2026-07-23 review P1). Awaiting the ACK is
-			// the only evidence CI-V offers that the stop actually applied.
+			// rejected unkey looked like it landed. Awaiting the ACK is the only
+			// evidence CI-V offers that the stop actually applied (2026-07-23
+			// review P1).
 			if werr := s.writeKeyedLine(context.Background(), def, cl, off, "post-failed-key defensive tx_off"); werr != nil {
 				s.logger.ErrorWith().Err(werr).
 					Msg("bridge: post-failed-key defensive tx_off failed — rig may be keyed; TX stays blocked")
@@ -161,7 +159,23 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 				s.retryUnkeyStillKeyed()
 				return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-on")
 			}
+			// Defensive tx_off ACCEPTED — same confirm-or-alarm split as the normal
+			// release: CI-V's awaited FB IS positive RX confirmation, so confirm
+			// directly. Routing CI-V through beginTxConfirm instead would enter
+			// txUncertain and fall to the any-rig-data path (the IC-7300 has no
+			// read_tx_status), needlessly blocking writes and risking a false alarm
+			// on a rig already known idle (50e35d review P2). Yaesu enters the
+			// status-query cycle.
+			if def.Protocol == cat.ProtocolIcomCIV {
+				s.confirmTxIdle("civ ack (post-failed-key defensive tx_off)")
+			} else {
+				s.beginTxConfirm(def, cl)
+			}
+			return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-on")
 		}
+		// tx_off would not even encode (the pre-key gate proved it can, so this is
+		// unreachable in practice): no unkey was sent, so enter the uncertainty
+		// cycle and let the timeout alarm rather than reporting idle.
 		s.beginTxConfirm(def, cl)
 		return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-on")
 	}

@@ -376,23 +376,18 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 			Int("clamped_ms", int(tuneSettle.Milliseconds())).
 			Msg("bridge: tune restore_settle_ms above ceiling; clamped")
 	}
-	// initial ≤ max on the EFFECTIVE values. Config validation compares the two
-	// raw settings, so it only fires when the operator set BOTH: `backoff_max_ms:
-	// 50` with the initial omitted passed validation and then slept the 1 s
-	// default before the 50 ms cap could apply — a configured maximum silently
-	// violated by a default (2026-07-23 review P2). Clamping here (rather than in
-	// config) is deliberate: these defaults are bridge-package constants, and the
-	// config layer has no business knowing them. Same idiom as the tune knobs.
-	backoffInitial := resolveTimeout(cfg.Timeouts.BackoffInitialMs, supervisorInitialBackoff)
-	backoffMax := resolveTimeout(cfg.Timeouts.BackoffMaxMs, supervisorMaxBackoff)
-	if backoffInitial > backoffMax {
-		if logger != nil {
-			logger.WarnWith().
-				Int("initial_ms", int(backoffInitial.Milliseconds())).
-				Int("max_ms", int(backoffMax.Milliseconds())).
-				Msg("bridge: effective backoff initial exceeds max; clamped to max")
-		}
-		backoffInitial = backoffMax
+	// Resolve + clamp the supervisor backoff (see resolveBackoff for why). The
+	// helper is shared with ResolveTimeouts so the /v1/config effective view can
+	// never disagree with the running service (50e35d review P2). New keeps the
+	// operator warning here: it wants the RAW initial to show what was capped, and
+	// it must not fire on every /v1/config GET.
+	rawBackoffInitial := resolveTimeout(cfg.Timeouts.BackoffInitialMs, supervisorInitialBackoff)
+	backoffInitial, backoffMax := resolveBackoff(cfg.Timeouts.BackoffInitialMs, cfg.Timeouts.BackoffMaxMs)
+	if rawBackoffInitial > backoffMax && logger != nil {
+		logger.WarnWith().
+			Int("initial_ms", int(rawBackoffInitial.Milliseconds())).
+			Int("max_ms", int(backoffMax.Milliseconds())).
+			Msg("bridge: effective backoff initial exceeds max; clamped to max")
 	}
 	return &Service{
 		cfg:      cfg,
@@ -430,6 +425,24 @@ func resolveTimeout(cfgMs int, defaultDur time.Duration) time.Duration {
 	return defaultDur
 }
 
+// resolveBackoff resolves the supervisor's initial + max backoff from config
+// (package defaults where a value is zero) and clamps the initial to the max on
+// the EFFECTIVE values. `backoff_max_ms: 50` with the initial omitted would
+// otherwise sleep the 1 s default before the 50 ms cap could apply — config
+// validation only compares the two RAW settings, so it never fires on that mixed
+// case (2026-07-23 review P2). Clamping here rather than in config is deliberate:
+// the defaults are bridge-package constants the config layer has no business
+// knowing. Shared by New and ResolveTimeouts so the effective view served by
+// /v1/config matches what the supervisor actually runs (50e35d review P2).
+func resolveBackoff(initialMs, maxMs int) (initial, max time.Duration) {
+	initial = resolveTimeout(initialMs, supervisorInitialBackoff)
+	max = resolveTimeout(maxMs, supervisorMaxBackoff)
+	if initial > max {
+		initial = max
+	}
+	return initial, max
+}
+
 // clampDuration caps d at max (and floors a negative at zero). Used for the
 // CI-V read gap so an operator typo can't stall every state snapshot.
 func clampDuration(d, max time.Duration) time.Duration {
@@ -452,10 +465,13 @@ func clampDuration(d, max time.Duration) time.Duration {
 // sparse-but-served): the file stays sparse, the API reports the resolved view.
 func ResolveTimeouts(c types.BridgeTimeoutsConfig) types.BridgeTimeoutsConfig {
 	ms := func(d time.Duration) int { return int(d / time.Millisecond) }
+	// Same resolve+clamp New applies, so the served initial/max obey the same
+	// initial ≤ max invariant the supervisor runs under (50e35d review P2).
+	backoffInitial, backoffMax := resolveBackoff(c.BackoffInitialMs, c.BackoffMaxMs)
 	return types.BridgeTimeoutsConfig{
 		LivenessMs:             ms(resolveTimeout(c.LivenessMs, livenessTimeout)),
-		BackoffInitialMs:       ms(resolveTimeout(c.BackoffInitialMs, supervisorInitialBackoff)),
-		BackoffMaxMs:           ms(resolveTimeout(c.BackoffMaxMs, supervisorMaxBackoff)),
+		BackoffInitialMs:       ms(backoffInitial),
+		BackoffMaxMs:           ms(backoffMax),
 		SteadyStateThresholdMs: ms(resolveTimeout(c.SteadyStateThresholdMs, supervisorSteadyStateThreshold)),
 		WriteWatchdogMs:        ms(resolveTimeout(c.WriteWatchdogMs, writeWatchdog)),
 		CivReadGapMs:           ms(clampDuration(resolveTimeout(c.CivReadGapMs, civReadGap), civReadGapMax)),

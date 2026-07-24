@@ -22,7 +22,7 @@ transmitting for as long as the line stays asserted.
 | Rig | Setting | Use |
 |---|---|---|
 | Yaesu (FTdx10, FT-710) | `RADIO SETTING → MODE PSK/DATA → RPTT SELECT` | **DAKY** (not RTS or DTR) |
-| Yaesu (FTdx10, FT-710) | `RADIO SETTING → GENERAL → CAT RTS` | **DISABLE** |
+| Yaesu (FTdx10, FT-710) | `OPERATION SETTING → GENERAL → CAT RTS` | **DISABLE** |
 | Icom (IC-7300) | `SET → Connectors → USB SEND` | **OFF** |
 
 Station Manager opens every supported rig's port with **RTS and DTR
@@ -44,18 +44,20 @@ default for all shipped rigs and you should not need to change it.
 If you have a genuine reason to assert a line, you can override it per rig in
 `config.json`:
 
-```jsonc
+```json
 "rigs": [
   {
     "id": 1,
     "model": "yaesu-ftdx10",
-    "overrides": { "rts": true }   // only if you know your rig doesn't key on it
+    "overrides": { "rts": true }
   }
 ]
 ```
 
-Be careful with that override. Asserting a line on a rig that uses it as a PTT
-source will transmit continuously for as long as the daemon is connected.
+Only do this if you know your rig does **not** key on that line. `config.json` is
+plain JSON — it does not accept `//` comments, so type the block exactly as
+above. Be careful with the override: asserting a line on a rig that uses it as a
+PTT source will transmit continuously for as long as the daemon is connected.
 
 > **Older builds asserted these lines.** Versions before 2026-07-23 opened
 > Yaesu ports with RTS and DTR **asserted**. On a station with

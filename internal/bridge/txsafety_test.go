@@ -500,6 +500,40 @@ func TestObserveRigData_WatermarkGuard(t *testing.T) {
 	}
 }
 
+// The any-rig-data fallback must stay DISARMED while the confirmation watermark
+// holds the disarm sentinel — the state beginDefensiveRecovery uses for its
+// committed-but-unwritten window. Without it, a frame queued behind the one that
+// triggered recovery (the CI-V initial multi-frame READ) would confirm the stop
+// through observeRigData before the defensive tx_off had gone out, exposing
+// TxReady with the unkey still in flight (50e35d review P1). The recovery
+// goroutine re-arms the watermark to a real count once the unkey is on the wire.
+func TestObserveRigData_SentinelDisarmsFallback(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	s.mu.Lock()
+	s.txUncertain = true
+	s.hasTxStatusQuery = false // no-query def → the any-rig-data fallback is live
+	s.txConfirmAfterFrame = confirmFallbackDisarmed
+	s.mu.Unlock()
+
+	s.rxFrameCount.Store(100) // frames keep streaming during the pre-write window
+	s.observeRigData()
+	if !s.TxUncertain() {
+		t.Fatal("observeRigData confirmed while the watermark held the disarm sentinel — " +
+			"a pre-write frame must not confirm an unkey that has not left the host")
+	}
+
+	// Re-armed to the current count, exactly as the recovery goroutine does once
+	// the unkey has been written: a genuinely-later frame may now confirm.
+	s.mu.Lock()
+	s.txConfirmAfterFrame = 100
+	s.mu.Unlock()
+	s.rxFrameCount.Store(101)
+	s.observeRigData()
+	if s.TxUncertain() {
+		t.Fatal("observeRigData failed to confirm after the fallback was re-armed post-write")
+	}
+}
+
 // A status answer arriving while nothing is uncertain must stay INERT — it may
 // not key, unkey, alarm, or confirm anything. It is only recorded, so the
 // transition can be logged: with txUncertain false the value was previously

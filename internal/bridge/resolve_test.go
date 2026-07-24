@@ -36,6 +36,20 @@ func TestResolveTimeouts(t *testing.T) {
 	if got.CivReadGapMs != 2000 {
 		t.Errorf("CivReadGapMs = %d, want 2000 (clamped to civReadGapMax)", got.CivReadGapMs)
 	}
+
+	// Backoff initial ≤ max on the EFFECTIVE values (50e35d review P2): a max set
+	// with the initial omitted must serve a clamped initial, not the raw 1s
+	// default — otherwise /v1/config reports 1000/50 while the supervisor (via New)
+	// runs 50/50. This is exactly the clamp New applies, now shared through
+	// resolveBackoff so the served view can never disagree with the running service.
+	got = ResolveTimeouts(types.BridgeTimeoutsConfig{BackoffMaxMs: 50})
+	if got.BackoffInitialMs != 50 {
+		t.Errorf("BackoffInitialMs = %d with max=50 and initial unset, want 50 (clamped) — "+
+			"the served effective initial must not exceed the effective max", got.BackoffInitialMs)
+	}
+	if got.BackoffMaxMs != 50 {
+		t.Errorf("BackoffMaxMs = %d, want 50 (operator value preserved)", got.BackoffMaxMs)
+	}
 }
 
 // TestResolveTune checks tune resolution: defaults where zero, clamped to the
