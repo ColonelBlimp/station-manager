@@ -12,6 +12,35 @@ import (
 // station transmits in even slots (driveTheir uses even sec); we reply in the odd ones.
 // Our own call (7Q5MLV) is standard, so the partner hashes it to "<...>" on the wire.
 
+// TestType4_RejectsStandardCall guards ADR 0048: the reduced type-4 entry points are
+// ONLY for nonstandard/compound callsigns. A standard pair (e.g. "K1ABC 7Q5MLV")
+// still ENCODES — but as a type-1 message, not type 4 — so a bare encodability check
+// wrongly admits it, and the work path would key an immediate RR73 with no valid
+// type-4 exchange. Both entry points must reject a standard call (it belongs on the
+// standard answer/work path). A genuine nonstandard call still starts.
+func TestType4_RejectsStandardCall(t *testing.T) {
+	slot := time.Unix(0, 0).UTC().Format(time.RFC3339)
+	now := time.Unix(0, 0).UTC()
+
+	t.Run("StartQsoT4 rejects a standard call", func(t *testing.T) {
+		s := newTestSeq(&seqRecorder{})
+		require.ErrorIs(t, s.StartQsoT4("7Q5MLV", "K1ABC", "FN42", -12, slot, 1500, 14.074, now),
+			ErrTxBadMessage)
+		require.False(t, s.Active(), "no type-4 session may start for a standard call")
+	})
+	t.Run("StartWorkCallerT4 rejects a standard call", func(t *testing.T) {
+		s := newTestSeq(&seqRecorder{})
+		require.ErrorIs(t, s.StartWorkCallerT4("7Q5MLV", "K1ABC", "FN42", -12, slot, 1500, 14.074, now),
+			ErrTxBadMessage)
+		require.False(t, s.Active(), "no type-4 session may start for a standard call")
+	})
+	t.Run("a genuine nonstandard call is still accepted", func(t *testing.T) {
+		s := newTestSeq(&seqRecorder{})
+		require.NoError(t, s.StartQsoT4("7Q5MLV", "PJ4/NA2AA", "", -12, slot, 1500, 14.074, now))
+		require.True(t, s.Active(), "a nonstandard call is a valid type-4 partner")
+	})
+}
+
 // TestType4Answer_HappyPath walks answering a nonstandard station's CQ: bare opening,
 // their roger (addressed to our hashed call), our 73, log + idle. No report exchanged.
 func TestType4Answer_HappyPath(t *testing.T) {

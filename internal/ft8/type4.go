@@ -1,6 +1,10 @@
 package ft8
 
-import "strings"
+import (
+	"strings"
+
+	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
+)
 
 // Reduced type-4 (nonstandard/compound call) QSO ladder — ADR 0048.
 //
@@ -45,6 +49,28 @@ import "strings"
 // these tokens (sequence.go); type-4 accepts them.
 func isHashedCall(t string) bool {
 	return len(t) >= 2 && t[0] == '<' && t[len(t)-1] == '>'
+}
+
+// ft8Type4I3 is the FT8 message-type (i3) code for a type-4 (nonstandard/compound
+// call) message. i3 is the 3-bit field at bits 74..76 of the packed 77-bit payload
+// (WSJT-X FT8 spec, MSB first).
+const ft8Type4I3 = 4
+
+// encodesAsType4 reports whether msg packs to a GENUINE type-4 message — one whose
+// nonstandard/compound callsign actually requires the reduced type-4 ladder.
+// go-ft8's EncodeStandardMessage tries the type-4 packer first but falls through to
+// the standard packer (i3=1/2) when both calls are standard, so a pair like
+// "K1ABC 7Q5MLV RR73" encodes fine — as type 1, NOT type 4. The type-4 entry points
+// must reject those: driving a standard message through the reduced ladder (an
+// immediate RR73 with no valid type-4 exchange) is not a real QSO. Authoritative
+// check — encode, then read i3 straight from the packed bits (whatever go-ft8 chose).
+func encodesAsType4(msg string) bool {
+	enc, err := goft8.EncodeStandardMessage(msg)
+	if err != nil {
+		return false
+	}
+	i3 := int(enc.Bits77[74])<<2 | int(enc.Bits77[75])<<1 | int(enc.Bits77[76])
+	return i3 == ft8Type4I3
 }
 
 // type4msg is a type-4 directed line reduced to the fields the reduced ladder needs. It

@@ -44,13 +44,13 @@ func (s *Sequencer) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr in
 	}
 
 	ex := NewT4Exchange(ourCall, theirCall, theirGrid, theirSnr)
-	// Validate our opening encodes as a type-4 message BEFORE committing (mirrors
-	// StartQso): if go-ft8 can't pack it, fail up front rather than publish a ladder
-	// that can never produce RF.
-	if msg, ok := ex.TxMessage(); ok {
-		if _, err := goft8.EncodeStandardMessage(msg); err != nil {
-			return ErrTxBadMessage
-		}
+	// Validate our opening packs as a GENUINE type-4 message BEFORE committing (mirrors
+	// StartQso): fail up front rather than publish a ladder that can never produce RF.
+	// Encodability alone is insufficient — a standard callsign pair also encodes (as
+	// type 1), but it doesn't belong on the reduced type-4 ladder; require i3=4 so a
+	// standard call is routed to the standard answer path instead.
+	if msg, ok := ex.TxMessage(); ok && !encodesAsType4(msg) {
+		return ErrTxBadMessage
 	}
 
 	s.mu.Lock()
@@ -253,10 +253,12 @@ func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, thei
 	}
 
 	c := NewT4WorkExchange(ourCall, theirCall, theirGrid, theirSnr)
-	if msg, ok := c.TxMessage(); ok {
-		if _, err := goft8.EncodeStandardMessage(msg); err != nil {
-			return ErrTxBadMessage
-		}
+	// The RR73 must pack as a GENUINE type-4 message: a standard callsign pair still
+	// encodes (as type 1), but working it here would key an immediate RR73 with no
+	// valid reduced type-4 exchange. Reject a standard call up front — it belongs on
+	// the standard work-a-caller path (StartWorkCaller), not this one.
+	if msg, ok := c.TxMessage(); ok && !encodesAsType4(msg) {
+		return ErrTxBadMessage
 	}
 
 	s.mu.Lock()
