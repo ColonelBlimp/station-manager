@@ -94,6 +94,31 @@ describe('MapView', () => {
         expect(calls.indexOf('stream')).toBeLessThan(calls.indexOf('fetch'));
     });
 
+    it('paints newer arcs on top: a newest-first page renders oldest-first', async () => {
+        const ts = nowAdif();
+        // The daemon pages newest-first, so items[0] is the NEWEST plotted contact.
+        fetchQsoPage.mockResolvedValue({
+            kind: 'ok',
+            items: [
+                { id: 2, uuid: 'u2', call: 'NEWEST', gridsquare: 'IO91', band: '20M', ...ts },
+                { id: 1, uuid: 'u1', call: 'OLDEST', gridsquare: 'KG44', band: '20M', ...ts },
+            ],
+            nextCursor: null,
+        });
+
+        const { container } = render(MapView);
+        await screen.findByTestId('plotted');
+
+        // SVG paints in document order (last on top), so the newest contact must
+        // render LAST — its arc sits over the older ones, not under them.
+        const titles = [...container.querySelectorAll('[data-testid="arc"] title')].map(
+            (t) => t.textContent ?? ''
+        );
+        expect(titles).toHaveLength(2);
+        expect(titles[0]).toContain('OLDEST');
+        expect(titles[1]).toContain('NEWEST');
+    });
+
     it('runs a catch-up refetch when the tab becomes visible again', async () => {
         fetchQsoPage.mockResolvedValue({ kind: 'ok', items: [], nextCursor: null });
         const { unmount } = render(MapView);

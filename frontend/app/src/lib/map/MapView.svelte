@@ -39,13 +39,20 @@
     const arcs = $derived.by(() => {
         const origin = mapData.origin;
         if (origin === null) return [];
-        return mapData.qsos.map((q) => ({
-            key: q.key,
-            from: origin,
-            to: q.point,
-            label: q.label,
-            color: bandColor(q.band, mapData.bandColors),
-        }));
+        // Oldest-first so the NEWEST contact's arc paints last — SVG paint order
+        // is document order, so a fresh QSO should sit on top of the older ones,
+        // not under them. mapData.qsos is newest-first (newest-first paging), so
+        // reverse the mapped arcs; .map() already returns a fresh array, so this
+        // in-place reverse never touches mapData.qsos.
+        return mapData.qsos
+            .map((q) => ({
+                key: q.key,
+                from: origin,
+                to: q.point,
+                label: q.label,
+                color: bandColor(q.band, mapData.bandColors),
+            }))
+            .reverse();
     });
     const unplotted = $derived(mapData.total - mapData.qsos.length);
 
