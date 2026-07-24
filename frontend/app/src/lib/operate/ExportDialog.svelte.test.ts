@@ -137,4 +137,31 @@ describe('ExportDialog', () => {
 
         expect([...sentUuids].sort()).toEqual(['u1', 'u2']);
     });
+
+    it('resets the resend-all override when the dialog is reopened', async () => {
+        setMailer(true, 'qsl@example.com');
+        addQso({ callsign: 'DONE', uuid: 'u1', emailed: true });
+        addQso({ callsign: 'NEW', uuid: 'u2' });
+
+        operate.exportOpen = true;
+        render(ExportDialog); // stays mounted across close/reopen, like Operate.svelte
+        flushSync();
+
+        // Uncheck "only not-yet-emailed" to resend all.
+        const checkbox = () => screen.getByRole('checkbox');
+        expect(checkbox()).toBeChecked();
+        await fireEvent.click(checkbox());
+        flushSync();
+        expect(checkbox()).not.toBeChecked();
+
+        // Close and reopen (component is NOT re-rendered — same instance).
+        closeExport();
+        flushSync();
+        operate.exportOpen = true;
+        flushSync();
+
+        // The override is back to the safe delta default (pre-fix it stayed off,
+        // re-mailing already-sent QSOs on the next send).
+        expect(checkbox()).toBeChecked();
+    });
 });

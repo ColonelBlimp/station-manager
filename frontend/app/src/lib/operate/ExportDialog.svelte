@@ -46,6 +46,15 @@
             .filter((u): u is string => !!u)
     );
     let onlyUnsent = $state(true);
+    // Reset the resend-all override every time the dialog OPENS. The component
+    // stays mounted (Operate.svelte renders it unconditionally; only the inner
+    // {#if} toggles), so without this an operator who unchecked "only unsent" to
+    // resend all would leave it stuck off — and a later send after logging more
+    // QSOs would re-mail everything already sent, the duplicate this prevents.
+    // It's a per-send choice, not a sticky preference.
+    $effect(() => {
+        if (operate.exportOpen) onlyUnsent = true;
+    });
     const sendUuids = $derived(onlyUnsent ? unsentUuids : uuids);
     const canSend = $derived(
         mailer.enabled &&
