@@ -112,7 +112,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	var heard string
 	advanced := false
 	if s.caller == nil {
-		if pick, text := s.pickAnswererLocked(msgs); pick != nil {
+		if pick, text := s.pickAnswererLocked(msgs, ""); pick != nil {
 			s.caller = pick
 			s.startedAt = now.UTC()
 			s.repeats = 0
@@ -188,9 +188,10 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	switch {
 	case working && !confirming:
 		if s.repeats >= s.maxRepeats {
+			abandoned := s.caller.TheirCall // exclude from the rescan of THIS slot
 			s.caller = nil
 			s.repeats = 0
-			if pick, text := s.pickAnswererLocked(msgs); pick != nil {
+			if pick, text := s.pickAnswererLocked(msgs, abandoned); pick != nil {
 				s.caller = pick
 				s.startedAt = now.UTC()
 				heard = text
@@ -291,8 +292,11 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 // K1ABC/P) yields an unencodable response, which seqTransmit would treat as
 // terminal and abandon the whole Call-CQ loop (review M2) — such an answerer is
 // skipped and the scan continues; nil when the slot holds no workable answerer.
-// Returns the pick and its decode text. Caller holds s.mu.
-func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage) (*CallerExchange, string) {
+// exclude (a callsign, or "") is skipped: the repeat-cap rescan passes the
+// answerer it just abandoned, so a station still repeating its grid in this same
+// slot can't be re-picked — which would reset its counter forever and starve the
+// rest of the pile-up. Returns the pick and its decode text. Caller holds s.mu.
+func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage, exclude string) (*CallerExchange, string) {
 	strongest := s.answerMode == types.Ft8CallerAnswerAutoStrongest
 	var pick *CallerExchange
 	var pickText string
@@ -303,6 +307,9 @@ func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage) (*CallerExch
 			continue
 		}
 		c := NewCallerExchange(s.ourCall, pm.from, pm.grid, m.SNR)
+		if exclude != "" && c.TheirCall == exclude {
+			continue // the just-abandoned stalled answerer — don't re-lock onto it
+		}
 		reply, ok := c.TxMessage()
 		if !ok {
 			continue

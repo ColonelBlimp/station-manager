@@ -187,6 +187,33 @@ func TestCallerSequencer_AbandonWorksLiveAnswererSameSlot(t *testing.T) {
 	require.Equal(t, "JN95", r.completed[0].TheirGrid, "grid captured from the abandon-slot answer")
 }
 
+// A worked answerer that keeps REPEATING its grid (never advancing to the roger) must not
+// be re-picked from the very slot it was abandoned in at the repeat cap — auto_first/auto_
+// strongest would otherwise re-select it, reset its counter forever, and starve the rest
+// of the pile-up (finding: exclude the just-abandoned callsign from the rescan).
+func TestCallerSequencer_AbandonExcludesStalledAnswererFromRescan(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)}) // DL9UW answers → reporting
+	require.Equal(t, "DL9UW", s.caller.TheirCall)
+
+	// DL9UW STALLS — it re-sends its grid every slot instead of rogering — while 9A4ZM also
+	// answers our CQ. DL9UW is first by decode order, so auto_first would re-lock onto it at
+	// the cap; the exclusion must roll to 9A4ZM instead.
+	slot := []goft8.DecodedMessage{
+		dm("7Q5MLV DL9UW JO41", -8), // stalled: same answer, never advances
+		dm("7Q5MLV 9A4ZM JN95", -6), // a fresh live answerer in the pile-up
+	}
+	for i := int64(0); i < int64(s.maxRepeats)+1; i++ {
+		driveTheir(s, 60+i*30, slot)
+	}
+
+	require.NotNil(t, s.caller, "the cap must roll to the live answerer, not re-lock the stalled one")
+	require.Equal(t, "9A4ZM", s.caller.TheirCall,
+		"the just-abandoned DL9UW must be excluded from the rescan; 9A4ZM is worked instead")
+}
+
 // review M2: an auto-first slot whose first answerer is a compound/portable call
 // (our reply to it can't encode) must be SKIPPED, not abandon the whole pile-up —
 // we fall through to the next encodable answerer in the same slot.
