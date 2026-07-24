@@ -92,9 +92,12 @@ afterEach(() => {
     logbookState.logbooks = [];
     logbookState.selectedId = null;
     logbookState.error = null;
-    // Reset filter state — it's a shared singleton, and a leaked notEmailedOnly
-    // makes the next test's toggle flip the wrong way (isolation bug).
+    // Reset filter state — it's a shared singleton, and a leaked filter makes
+    // the next test's toggle flip the wrong way / start pre-filtered (isolation).
     logbookState.notEmailedOnly = false;
+    logbookState.selectedDestination = '';
+    logbookState.showUploaded = false;
+    logbookState.pageIndex = 0;
 });
 
 describe('Logbook page', () => {
@@ -286,5 +289,38 @@ describe('Logbook page', () => {
 
         expect(screen.getByText('No QSOs still need emailing.')).toBeInTheDocument();
         expect(screen.queryByText('No QSOs in this logbook.')).toBeNull();
+    });
+
+    it('with BOTH filters active and no matches, uses the generic intersection message', async () => {
+        const fetchMock = vi.mocked(globalThis.fetch);
+        render(Logbook);
+        await flush();
+        await flush();
+        flushSync();
+
+        // Empty filtered result while the logbook is non-empty.
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+            const url = urlText(input);
+            if (url.includes('/count')) return Promise.resolve(jsonResponse({ count: 5 }));
+            if (url.includes('/qso'))
+                return Promise.resolve(jsonResponse({ items: [], next_cursor: null }));
+            return Promise.resolve(
+                jsonResponse({
+                    mailer: { enabled: false },
+                    forwarders: [{ name: 'qrz', type: 'qrz', enabled: true }],
+                })
+            );
+        });
+
+        // Turn on BOTH the destination filter and "not emailed only". The empty
+        // intersection must NOT claim either filter alone is satisfied (P2b).
+        await logbookState.selectDestination('qrz');
+        logbookState.notEmailedOnly = true;
+        await flush();
+        await flush();
+        flushSync();
+
+        expect(screen.getByText('No QSOs match these filters.')).toBeInTheDocument();
+        expect(screen.queryByText('No QSOs still need emailing.')).toBeNull();
     });
 });

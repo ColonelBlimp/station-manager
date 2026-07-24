@@ -240,10 +240,16 @@ class LogbookState {
         // stamped no longer belong to the filtered set: the visibleRows client
         // filter hides them instantly, but the count + cursor trail would be left
         // stale (the pager reading "of N" too high, or an empty table with a
-        // nonzero total). Reload the filtered snapshot so the paging metadata
-        // re-syncs. Fire-and-forget — the reactive state updates when it lands.
+        // nonzero total). Reset paging and reload from page 0 rather than
+        // refetching the current pageIndex: its start cursor is a fixed tuple, so
+        // once a row anywhere at/before it is emailed the boundary no longer holds
+        // — refetching in place can strand the operator on an emptied last page
+        // (earlier pages still full) or misalign rows. A page-0 reset rebuilds the
+        // trail coherently. Fire-and-forget — the reactive state updates when it
+        // lands.
         if (this.notEmailedOnly) {
-            void Promise.all([this.#loadCount(), this.#loadPage(this.pageIndex)]);
+            this.#resetPaging();
+            void Promise.all([this.#loadCount(), this.#loadPage(0)]);
         }
     }
 

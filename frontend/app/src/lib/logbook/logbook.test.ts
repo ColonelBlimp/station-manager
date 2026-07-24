@@ -226,3 +226,59 @@ describe('logbook switch — stale responses are discarded', () => {
         expect(logbookState.loading).toBe(false);
     });
 });
+
+// markEmailed, with the "not emailed only" filter active, must resync paging by
+// RESETTING to page 0 — refetching the current pageIndex keeps a stale start
+// cursor that can strand the operator on an emptied last page (P2 review
+// follow-up on the filtered-refresh fix).
+describe('markEmailed — filtered paging reset', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        logbookState.clearSelection();
+        logbookState.rows = [];
+        logbookState.selectedId = null;
+        logbookState.notEmailedOnly = false;
+        logbookState.pageIndex = 0;
+    });
+
+    it('resets to page 0 and reloads the filtered snapshot when notEmailedOnly is on', async () => {
+        const urls: string[] = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL) => {
+                urls.push(urlText(input));
+                return Promise.resolve(
+                    new Response(JSON.stringify({ items: [], next_cursor: null, count: 0 }), {
+                        status: 200,
+                    })
+                );
+            })
+        );
+        logbookState.selectedId = 1;
+        logbookState.notEmailedOnly = true;
+        logbookState.pageIndex = 2;
+        logbookState.rows = [qso(1, 'u1')];
+
+        logbookState.markEmailed(['u1']);
+        // #resetPaging runs synchronously ahead of the async reload — pre-fix this
+        // refetched pageIndex 2 and left the operator there.
+        expect(logbookState.pageIndex).toBe(0);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(urls.some((u) => u.includes('/qso') && u.includes('not_emailed=true'))).toBe(true);
+    });
+
+    it('leaves paging untouched and does not reload when the filter is off', async () => {
+        const fetchFn = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
+        vi.stubGlobal('fetch', fetchFn);
+        logbookState.selectedId = 1;
+        logbookState.notEmailedOnly = false;
+        logbookState.pageIndex = 2;
+        logbookState.rows = [qso(1, 'u1')];
+
+        logbookState.markEmailed(['u1']);
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(logbookState.pageIndex).toBe(2);
+        expect(fetchFn).not.toHaveBeenCalled();
+    });
+});

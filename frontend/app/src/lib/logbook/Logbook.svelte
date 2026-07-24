@@ -264,12 +264,16 @@
                         <tr>
                             <td colspan="12" class="px-3 py-6 text-center text-sm text-muted">
                                 {#if logbookState.rows.length === 0}
-                                    <!-- An empty page under an active server-side
-                                         filter means "nothing MATCHES", not "the
-                                         logbook is empty" — say which. -->
-                                    {#if logbookState.notEmailedOnly}
+                                    <!-- An empty page under active server-side
+                                         filters means "nothing MATCHES", not "the
+                                         logbook is empty" — name the active filter.
+                                         With BOTH on, an empty intersection proves
+                                         neither alone, so stay generic. -->
+                                    {#if logbookState.notEmailedOnly && logbookState.missingFromParam !== undefined}
+                                        No QSOs match these filters.
+                                    {:else if logbookState.notEmailedOnly}
                                         No QSOs still need emailing.
-                                    {:else if logbookState.hasDestination && !logbookState.showUploaded}
+                                    {:else if logbookState.missingFromParam !== undefined}
                                         No QSOs still to upload to {logbookState.selectedDestination}.
                                     {:else}
                                         No QSOs in this logbook.
