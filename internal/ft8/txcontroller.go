@@ -225,6 +225,16 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 		t.Stop()
 	}
 	_ = c.player.Stop()
+	// A cancel during the drain (Abandon, disarm, shutdown) halts output early —
+	// player.done only means the samples reached the device, so the still-buffered
+	// tail is clipped and the rung did NOT finish cleanly on air. Report it like
+	// the mid-play cancel above so onDone sees failure and the final-rung QSO is
+	// not logged; a bare `return nil` here would mark an interrupted rung complete.
+	// This also settles the first-select race: if both done and ctx.Done() were
+	// ready and it took done, the interrupted transmit is still reported cancelled.
+	if err := ctx.Err(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("transmit cancelled during drain")
+	}
 	return nil
 }
 

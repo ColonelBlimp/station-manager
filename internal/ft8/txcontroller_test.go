@@ -150,6 +150,37 @@ func TestTransmit_ContextCancel(t *testing.T) {
 	require.GreaterOrEqual(t, p.stops(), 1, "must stop the player on cancel")
 }
 
+// TestTransmit_CancelDuringDrainReportsFailure: a cancel that lands in the
+// txPlayTail drain window (the waveform has reached the device, but its buffered
+// tail is still playing out) must be reported as a cancel — not swallowed as
+// success. Otherwise Stop() clips the tail AND onDone(true) logs an incomplete
+// final-rung QSO despite Abandon/shutdown. Guards the servicetx contract that a
+// cancel means "did NOT complete on air".
+func TestTransmit_CancelDuringDrainReportsFailure(t *testing.T) {
+	// Real (non-zero) drain window; a long timer so the cancel — not the timer —
+	// resolves the drain select. Lead stays zero so transmit() doesn't sleep.
+	lead, tail := txPreKeyLead, txPlayTail
+	txPreKeyLead, txPlayTail = 0, 10*time.Second
+	t.Cleanup(func() { txPreKeyLead, txPlayTail = lead, tail })
+
+	k := &fakeKeyer{}
+	p := newFakePlayer()
+	c := NewTxController(k, p, "", logging.Noop())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Playback "done" (samples reached the device) BEFORE transmit runs, so the
+	// first select deterministically takes <-done and enters the drain; the cancel
+	// then lands DURING the drain (ctx isn't cancelled until we're already there).
+	p.finishPlayback()
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+
+	err := c.transmit(ctx, []int16{1, 2, 3}, time.Time{}, nil)
+	require.Error(t, err, "a cancel during the drain must be reported, not returned as success")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, k.unkeys(), "must still unkey on the drain-cancel path")
+	require.GreaterOrEqual(t, p.stops(), 1, "must still stop the player on the drain-cancel path")
+}
+
 // TestTransmitSlot_EncodeError: a non-encodable message fails fast (before any
 // slot wait), keying nothing.
 func TestTransmitSlot_EncodeError(t *testing.T) {
