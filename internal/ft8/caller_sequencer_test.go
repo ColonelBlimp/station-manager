@@ -214,6 +214,39 @@ func TestCallerSequencer_AbandonExcludesStalledAnswererFromRescan(t *testing.T) 
 		"the just-abandoned DL9UW must be excluded from the rescan; 9A4ZM is worked instead")
 }
 
+// With several stalling answerers ahead of others, a single-cycle exclusion would
+// ping-pong between the first two forever and starve the rest (113e14b8 review P2). The
+// accumulated stalled-set must rotate PAST each staller in turn so every answerer is
+// reached — here DL9UW → 9A4ZM → K1ABC, never back to DL9UW.
+func TestCallerSequencer_StalledSetRotatesPastMultipleStallers(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+	// Three answerers, none advancing (all just repeat their grid). auto_first order:
+	// DL9UW, 9A4ZM, K1ABC.
+	stall := []goft8.DecodedMessage{
+		dm("7Q5MLV DL9UW JO41", -8),
+		dm("7Q5MLV 9A4ZM JN95", -6),
+		dm("7Q5MLV K1ABC FN42", -4),
+	}
+	driveTheir(s, 30, stall) // DL9UW picked first
+	require.Equal(t, "DL9UW", s.caller.TheirCall)
+
+	sec := int64(60)
+	capOnce := func() { // drive the current answerer to its repeat cap
+		for i := 0; i <= s.maxRepeats; i++ {
+			driveTheir(s, sec, stall)
+			sec += 30
+		}
+	}
+
+	capOnce()
+	require.Equal(t, "9A4ZM", s.caller.TheirCall, "rotated past DL9UW")
+	capOnce()
+	require.Equal(t, "K1ABC", s.caller.TheirCall,
+		"rotated past BOTH prior stallers to the third answerer, not back to DL9UW")
+}
+
 // review M2: an auto-first slot whose first answerer is a compound/portable call
 // (our reply to it can't encode) must be SKIPPED, not abandon the whole pile-up —
 // we fall through to the next encodable answerer in the same slot.

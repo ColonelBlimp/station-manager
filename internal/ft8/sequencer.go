@@ -225,6 +225,13 @@ type Sequencer struct {
 	ourGrid    string
 	cqMessage  string
 	answerMode string
+	// stalledCalls accumulates the answerers abandoned at the repeat cap since the
+	// current CQ round began. pickAnswererLocked skips them, so a handful of stations
+	// that keep repeating their grid can't be re-selected in rotation and starve the
+	// rest of the pile-up (113e14b8 review P2: a single-cycle exclusion let two
+	// preferred stallers ping-pong forever). Reset when a fresh CQ round starts — a
+	// completed contact, the rescan exhausting the live answerers, and StartCallCq.
+	stalledCalls []string
 
 	// Shared by both modes. theirPeriod is the parity of the slots we PROCESS (the
 	// worked station's when answering, or — when calling CQ — the answerers', i.e.

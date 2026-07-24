@@ -2,6 +2,7 @@ package ft8
 
 import (
 	stderrors "errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -55,6 +56,7 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	s.sessionGen++
 	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
 	s.caller = nil
+	s.stalledCalls = nil // fresh session — no abandoned answerers to exclude yet
 	s.ourCall = call
 	s.ourGrid = grid
 	s.cqMessage = cq
@@ -112,7 +114,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	var heard string
 	advanced := false
 	if s.caller == nil {
-		if pick, text := s.pickAnswererLocked(msgs, ""); pick != nil {
+		if pick, text := s.pickAnswererLocked(msgs); pick != nil {
 			s.caller = pick
 			s.startedAt = now.UTC()
 			s.repeats = 0
@@ -188,10 +190,12 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	switch {
 	case working && !confirming:
 		if s.repeats >= s.maxRepeats {
-			abandoned := s.caller.TheirCall // exclude from the rescan of THIS slot
+			// Remember this staller for the rest of the round so the rescan can't
+			// re-select it — nor an earlier staller — and rotate forever (review P2).
+			s.stalledCalls = append(s.stalledCalls, s.caller.TheirCall)
 			s.caller = nil
 			s.repeats = 0
-			if pick, text := s.pickAnswererLocked(msgs, abandoned); pick != nil {
+			if pick, text := s.pickAnswererLocked(msgs); pick != nil {
 				s.caller = pick
 				s.startedAt = now.UTC()
 				heard = text
@@ -201,6 +205,9 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 				s.log.InfoWith().Str("next_answerer", pick.TheirCall).
 					Msg("ft8 seq: caller — answerer silent after max repeats; working next live answerer")
 			} else {
+				// Every live answerer this round has stalled — start a fresh CQ round
+				// and clear the set so they all get another chance on the next answers.
+				s.stalledCalls = nil
 				s.log.InfoWith().Msg("ft8 seq: caller — answerer silent after max repeats; resuming CQ")
 				msg, rung = s.cqMessage, "calling-cq"
 			}
@@ -256,6 +263,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			}
 			s.caller = nil // resume calling CQ (work the pile-up)
 			s.repeats = 0
+			s.stalledCalls = nil // completed — fresh CQ round; previously-stalled callers retry
 			cqSt := s.statusLocked()
 			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", c.TheirCall).
@@ -292,11 +300,11 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 // K1ABC/P) yields an unencodable response, which seqTransmit would treat as
 // terminal and abandon the whole Call-CQ loop (review M2) — such an answerer is
 // skipped and the scan continues; nil when the slot holds no workable answerer.
-// exclude (a callsign, or "") is skipped: the repeat-cap rescan passes the
-// answerer it just abandoned, so a station still repeating its grid in this same
-// slot can't be re-picked — which would reset its counter forever and starve the
-// rest of the pile-up. Returns the pick and its decode text. Caller holds s.mu.
-func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage, exclude string) (*CallerExchange, string) {
+// Answerers in s.stalledCalls (abandoned at the repeat cap this CQ round) are
+// skipped, so a few stations that keep repeating their grid can't be re-selected
+// in rotation and starve the rest of the pile-up (113e14b8 review P2). Returns the
+// pick and its decode text. Caller holds s.mu.
+func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage) (*CallerExchange, string) {
 	strongest := s.answerMode == types.Ft8CallerAnswerAutoStrongest
 	var pick *CallerExchange
 	var pickText string
@@ -307,8 +315,8 @@ func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage, exclude stri
 			continue
 		}
 		c := NewCallerExchange(s.ourCall, pm.from, pm.grid, m.SNR)
-		if exclude != "" && c.TheirCall == exclude {
-			continue // the just-abandoned stalled answerer — don't re-lock onto it
+		if slices.Contains(s.stalledCalls, c.TheirCall) {
+			continue // already tried-and-stalled this CQ round — don't re-lock onto it
 		}
 		reply, ok := c.TxMessage()
 		if !ok {
