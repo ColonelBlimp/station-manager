@@ -485,25 +485,30 @@ func (s *Service) startTransmission(
 }
 
 // sessionTxGate verifies the shared preconditions for STARTING a sequenced
-// session, read together under txMu. Callers hold seqGate — which makes this
-// atomic w.r.t. a manual TransmitNext (that path gates on seqGate + the
-// sequencer's Active() state) — and must NOT already hold txMu. The order
-// mirrors startTransmission's own gate (armed → in-flight → ready):
+// session. Callers hold seqGate — which makes this atomic w.r.t. a manual
+// TransmitNext (that path gates on seqGate + the sequencer's Active() state) —
+// and must NOT already hold txMu.
+//
+// Precedence — armed → active session → in-flight → ready — and the ORDER is
+// load-bearing. The classification checks (active session, in-flight) MUST come
+// BEFORE the ready check, because the production keyer reports TxReady()==false
+// while it is keying (bridge.Service.TxReady folds in tuneActive/ft8TxActive/
+// txUncertain — single-flight holds the rig). If the ready check ran first, a
+// duplicate start during the keyed portion of a rung — most of a live slot —
+// would surface ErrTxNotReady (503) instead of the correct conflict code:
 //   - armed: the operator-consent gate before any FT8 RF.
-//   - in-flight: refused ONLY when no session is active. txInFlight is shared by
-//     a manual TransmitNext and a sequencer rung, and is false BETWEEN a session's
-//     rungs — so without a guard a session could start under a queued manual send,
-//     its opening rung would collide (ErrTxInFlight) and burn a repeat/slot while
-//     the manual message still keyed. But while a session IS active, a rung keying
-//     is not "a manual transmission in flight": a duplicate start atop it is the
-//     sequencer's own ErrQsoInProgress, so those fall through to seq.Start* and get
-//     that code, identical to the between-rungs path. What remains — in flight with
-//     no active session — is a manual send OR a just-completed session's draining
-//     tail; both mean live RF a new session must not start atop, and ErrTxInFlight
-//     ("a transmission is in flight") is accurate for either.
+//   - active session: a session already owns the TX path, so a duplicate start is
+//     ErrQsoInProgress — the same code the sequencer's own mode guard returns,
+//     classified here so it is returned whether or not a rung is currently keyed.
+//   - in-flight (no session): a manual TransmitNext, or a just-finished session's
+//     draining tail. txInFlight is shared by manual sends and rungs and is false
+//     BETWEEN a session's rungs, so without this a session could start under a
+//     queued manual send and its opening rung would collide (ErrTxInFlight) and
+//     burn a repeat/slot while the manual message still keyed. Either case is live
+//     RF a new session must not start atop; ErrTxInFlight is accurate for both.
 //   - ready: LIVE rig readiness, not just the sticky armed flag (review M1) —
-//     refuse to commit (and publish) a session the rig can no longer key rather
-//     than returning 202 and letting the sequencer spin against an unready rig.
+//     with nothing keying, refuse to commit (and publish) a session the rig can no
+//     longer key rather than returning 202 and letting the sequencer spin.
 //
 // Returns a wrapped sentinel on refusal, nil to proceed.
 func (s *Service) sessionTxGate(op errors.Op) error {
@@ -515,10 +520,13 @@ func (s *Service) sessionTxGate(op errors.Op) error {
 	if !armed {
 		return errors.New(op).WithErr(ErrTxNotArmed)
 	}
-	// In flight under an active session = a rung: fall through so seq.Start* reports
-	// ErrQsoInProgress. In flight with no session = a manual send (or a completed
-	// session's draining tail): refuse — a new session can't start atop live RF.
-	if inFlight && !s.seq.Active() {
+	// Active session / in-flight classified before the ready check: the keyer is
+	// deliberately not-ready while keying, so ready-first would mask these as
+	// ErrTxNotReady during a live rung/send (review: duplicate-during-keyed-rung).
+	if s.seq.Active() {
+		return errors.New(op).WithErr(ErrQsoInProgress)
+	}
+	if inFlight {
 		return errors.New(op).WithErr(ErrTxInFlight)
 	}
 	if !ready {

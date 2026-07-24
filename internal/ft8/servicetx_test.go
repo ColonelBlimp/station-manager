@@ -265,7 +265,8 @@ func TestStartSession_RefusedWhileManualSendInFlight(t *testing.T) {
 // code the between-rungs path returns. (Regression guard for the sessionTxGate
 // classification introduced with mutual exclusion.)
 func TestStartSession_DuplicateDuringRung_ReportsQsoInProgress(t *testing.T) {
-	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	k := &fakeKeyer{}
+	s := newTxTestService(k, newFakeTxPlayer(), nil)
 	require.NoError(t, s.ArmTx(true))
 	defer func() { _ = s.ArmTx(false) }()
 
@@ -273,19 +274,23 @@ func TestStartSession_DuplicateDuringRung_ReportsQsoInProgress(t *testing.T) {
 	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
 	require.True(t, s.seq.Active())
 
-	// Simulate the session's rung keying: txInFlight goes true while the session is
-	// active. (Whether it became true via a real rung or here is irrelevant to the
-	// gate — it classifies purely on txInFlight + seq.Active.)
+	// Model the session's rung KEYING: txInFlight true AND — crucially, like the real
+	// bridge (TxReady() folds in ft8TxActive) — the keyer reports NOT ready during the
+	// keyed portion. A ready-first gate would mask this as ErrTxNotReady; the classify-
+	// before-ready order must still return ErrQsoInProgress.
 	s.txMu.Lock()
 	s.txInFlight = true
 	s.txMu.Unlock()
+	k.setNotReady(true)
 
 	err := s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42",
 		time.Now().UTC().Format(time.RFC3339), 1600, 14.074, 1)
 	require.ErrorIs(t, err, ErrQsoInProgress, "a duplicate start atop an active session is a QSO conflict")
 	require.NotErrorIs(t, err, ErrTxInFlight, "the session's own rung must not read as a manual transmission")
+	require.NotErrorIs(t, err, ErrTxNotReady, "a keyed rung reports not-ready; must not leak as rig-not-ready")
 
 	// Restore so the deferred disarm sees consistent state (no real goroutine here).
+	k.setNotReady(false)
 	s.txMu.Lock()
 	s.txInFlight = false
 	s.txMu.Unlock()
