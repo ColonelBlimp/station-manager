@@ -411,6 +411,40 @@ func (e *setupLogbookMismatchError) Error() string {
 	return "api: setup default logbook callsign mismatch (existing callsign " + e.existingCallsign + ")"
 }
 
+// forwarderStartupFinding rejects a forwarder list the daemon could not start
+// with. It mirrors spawnForwarderWorkers EXACTLY — skip disabled, Build each
+// enabled one — because that loop is precisely the failure it exists to pre-empt:
+// config.Validate never inspects credentials, so a bad value used to return 200
+// here and surface only at the next restart, as a daemon that refuses to come up
+// long after the operator believed the save had worked. Three separate review
+// findings (a blanked required credential, an unmarked clearable field,
+// whitespace persisted verbatim) were all instances of that one gap; validating
+// against the real constructors closes the family rather than the symptoms.
+//
+// Disabled forwarders are skipped because startup skips them — a destination must
+// stay saveable while half-configured, before the operator switches it on.
+//
+// Build is side-effect-free (the constructors assemble a struct and an
+// http.Client; no network, no files), so probing is cheap and safe. NOTE the
+// constructor's error text reaches the client here — today none of them echo a
+// credential value back, and a new forwarder must not start doing so.
+func forwarderStartupFinding(fwds []types.ForwarderConfig) *config.Finding {
+	for _, fc := range fwds {
+		if !fc.Enabled {
+			continue
+		}
+		if _, err := forwarding.Build(fc); err != nil {
+			return &config.Finding{
+				Field: "forwarders",
+				Code:  "forwarder_unusable",
+				Message: fmt.Sprintf(
+					"forwarder %q is enabled but cannot be started with these settings: %v", fc.Name, err),
+			}
+		}
+	}
+	return nil
+}
+
 // firstBlockingFinding returns the first non-warning (fatal) finding, or nil when
 // the config produced only advisories. A fatal finding is a 400 at PUT.
 func firstBlockingFinding(findings []config.Finding) *config.Finding {
@@ -643,6 +677,16 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		if f := firstBlockingFinding(config.Validate(*cfg)); f != nil {
 			blocking = f
 			return errPutValidation
+		}
+		// Only when this request actually carried forwarders. A PUT can introduce
+		// forwarder breakage ONLY through that block, and checking the merged list
+		// unconditionally would let one pre-existing bad destination block every
+		// unrelated save (station identity, FT8 settings…) until it was fixed.
+		if req.Forwarders != nil {
+			if f := forwarderStartupFinding(cfg.Forwarders); f != nil {
+				blocking = f
+				return errPutValidation
+			}
 		}
 		// FT8 display passed validation — resolve to the stored shape (clamp
 		// colours / row cap; feed_mode already validated raw). Stored normalised so

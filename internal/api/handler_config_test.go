@@ -1153,10 +1153,12 @@ func TestHandlePutConfig_WritesRigCatalogue(t *testing.T) {
 func TestHandlePutConfig_ForwardersMaskedAndMerged(t *testing.T) {
 	srv := testServer(t)
 
-	// 1. Create a forwarder carrying a secret credential.
+	// 1. Create a forwarder carrying a secret credential. Uses clublog (a
+	// registered type with a real password field) and a COMPLETE credential set —
+	// the PUT now refuses an enabled forwarder the daemon could not start with.
 	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"qrz-main","type":"qrz","enabled":true,"action_filter":["insert"],` +
-		`"credentials":{"api_key":"SECRET123"}}]}`
+		`{"name":"cl-main","type":"clublog","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"email":"op@example.com","password":"SECRET123","callsign":"M0ABC"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1180,13 +1182,13 @@ func TestHandlePutConfig_ForwardersMaskedAndMerged(t *testing.T) {
 	if strings.Contains(getBody, "SECRET123") {
 		t.Fatalf("GET /v1/config leaked the credential value: %s", getBody)
 	}
-	if !strings.Contains(getBody, `"credentials_set":["api_key"]`) {
+	if !strings.Contains(getBody, `"credentials_set":["callsign","email","password"]`) {
 		t.Fatalf("GET did not report the set credential key: %s", getBody)
 	}
 
 	// 3. PUT changing only `enabled`, omitting credentials → secret preserved.
 	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
-		`{"name":"qrz-main","type":"qrz","enabled":false,"action_filter":["insert"]}]}`
+		`{"name":"cl-main","type":"clublog","enabled":false,"action_filter":["insert"]}]}`
 	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
@@ -1230,9 +1232,12 @@ func TestHandlePutConfig_ForwardersMaskedAndMerged(t *testing.T) {
 func TestHandlePutConfig_BlankCredentialKeepsStoredSecret(t *testing.T) {
 	srv := testServer(t)
 
+	// A COMPLETE credential set: the PUT now refuses an enabled forwarder the
+	// daemon could not start with, so a half-filled one would 400 before this test
+	// could exercise the merge at all.
 	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
 		`{"name":"clublog-main","type":"clublog","enabled":true,"action_filter":["insert"],` +
-		`"credentials":{"email":"op@example.com","password":"SECRET123"}}]}`
+		`"credentials":{"email":"op@example.com","password":"SECRET123","callsign":"M0ABC"}}]}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1455,6 +1460,92 @@ func TestHandlePutConfig_StubModeIsClearable(t *testing.T) {
 	// The real proof: what was stored must actually construct.
 	if _, err := forwarding.Build(stored); err != nil {
 		t.Fatalf("stored credentials do not construct — the daemon would fail to start: %v", err)
+	}
+}
+
+// TestHandlePutConfig_RejectsUnstartableForwarder closes the root cause behind a
+// run of separate findings: config.Validate never inspected credentials, so a PUT
+// that left an ENABLED forwarder unbuildable returned 200 and the damage only
+// appeared at the next restart — spawnForwarderWorkers Build()s each enabled
+// forwarder and propagates the error out of run(), so the whole daemon refuses to
+// start. The operator saw success now and a dead daemon later, with nothing
+// connecting the two. The PUT now accepts exactly what the daemon can start with.
+func TestHandlePutConfig_RejectsUnstartableForwarder(t *testing.T) {
+	srv := testServer(t)
+
+	// Enabled but missing required credentials (password, callsign) → refuse.
+	body := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"cl","type":"clublog","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"email":"op@example.com"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 — an unstartable forwarder must not be accepted; body = %s",
+			w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "forwarder_unusable") {
+		t.Fatalf("expected a forwarder_unusable code: %s", w.Body.String())
+	}
+	// The rejected write must leave the live config untouched. Per ADR 0039 the
+	// list is NON-sparse (the daemon seeds it), so "untouched" means the seeded
+	// entries survive and the rejected one never landed — not that it is empty.
+	for _, fc := range srv.cfg.Snapshot().Forwarders {
+		if fc.Name == "cl" {
+			t.Fatalf("rejected PUT still wrote the forwarder: %+v", fc)
+		}
+	}
+}
+
+// The same forwarder DISABLED must still save: startup skips disabled entries, so
+// a destination has to remain storable while half-configured — otherwise the
+// operator could never enter credentials before switching it on.
+func TestHandlePutConfig_AllowsIncompleteDisabledForwarder(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"cl","type":"clublog","enabled":false,"action_filter":["insert"],` +
+		`"credentials":{"email":"op@example.com"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a disabled half-configured forwarder must stay saveable; body = %s",
+			w.Code, w.Body.String())
+	}
+	if len(srv.cfg.Snapshot().Forwarders) != 1 {
+		t.Fatal("the disabled forwarder was not stored")
+	}
+}
+
+// A PUT that carries no forwarders block must not be judged on the stored list:
+// one pre-existing bad destination would otherwise block every unrelated save.
+func TestHandlePutConfig_ForwarderlessPutSkipsStartupCheck(t *testing.T) {
+	srv := testServer(t)
+
+	// Seed a valid enabled forwarder, then make the STORED entry unstartable the
+	// way a hand-edited config.json would (bypassing the PUT path entirely).
+	if err := srv.cfg.Update(func(cfg *config.Config) error {
+		cfg.Forwarders = []types.ForwarderConfig{{
+			Name: "cl", Type: "clublog", Enabled: true,
+			ActionFilter: []string{"insert"},
+			Credentials:  []byte(`{"email":"op@example.com"}`),
+		}}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	body := `{"logging_station":{"station_callsign":"M0ABC"},"station":{}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — an unrelated save must not be blocked by a stored forwarder; body = %s",
+			w.Code, w.Body.String())
 	}
 }
 
