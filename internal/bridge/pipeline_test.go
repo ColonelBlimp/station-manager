@@ -150,6 +150,61 @@ func TestReadLoop_ConfirmsIdentityOnMatch(t *testing.T) {
 	}
 }
 
+// TestReadLoop_ReprobesIdentityWhenConnectIDLost pins the fix for the 2026-07-25
+// on-air report: CAT shows green, but every band change returns 409
+// rig_identity_unverified. The connect-time READ's ID reply can be lost (the rig
+// isn't ready to answer the first query right after power-on, or the first frame
+// of the burst drops — ID leads READ), and AI-mode state pushes then keep the
+// link alive frame-by-frame so the no-data liveness probe — readLoop's ONLY
+// other READ re-issue — never fires. Without an active re-probe, identity stays
+// unconfirmed for the whole session while the rig is plainly talking. This
+// models exactly that: the rig swallows the ID reply on the first READ and only
+// answers it from a re-probe READ onward, while pushing FA frames throughout.
+func TestReadLoop_ReprobesIdentityWhenConnectIDLost(t *testing.T) {
+	prev := identityReprobeInterval
+	identityReprobeInterval = 5 * time.Millisecond
+	t.Cleanup(func() { identityReprobeInterval = prev })
+
+	s, fake := newPipelineTestService(t) // FT-710
+
+	// The rig answers READ bursts, but SWALLOWS the ID reply on the first READ
+	// (the lost-connect-ID case) and only returns its identity from the second
+	// READ onward (a re-probe). onWrite runs under the fake's mutex, so readCount
+	// needs no extra guard.
+	var readCount int
+	fake.onWrite = func(written []byte) []byte {
+		if !bytes.Contains(written, []byte("ID;")) {
+			return nil // INIT (AI1;) / TX0; etc. — not a READ burst
+		}
+		readCount++
+		if readCount == 1 {
+			return nil // connect-time READ: ID reply lost
+		}
+		return []byte("ID0800") // re-probe READ: rig answers "FT-710"
+	}
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	if s.identityOK() {
+		t.Fatal("identity confirmed before any ID reply")
+	}
+
+	// Push AI-mode frequency frames to keep the link alive and drive decodes;
+	// each decode-while-unconfirmed paces a re-probe READ, which the rig above
+	// now answers with its ID. Pre-fix (no re-probe) this loop never confirms.
+	deadline := time.Now().Add(2 * time.Second)
+	for !s.identityOK() {
+		if time.Now().After(deadline) {
+			t.Fatal("identity never re-confirmed after a lost connect-time ID reply")
+		}
+		fake.feedLine([]byte("FA014200000"))
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // newCIVPipelineTestService is the icom_civ counterpart of
 // newPipelineTestService: an IC-7300 (CI-V) service over the fake serial, with
 // the snapshot read gap zeroed so tests don't incur the real inter-frame delay.

@@ -63,6 +63,21 @@ var civReadGap = 50 * time.Millisecond
 // the ceiling stays well under the liveness window.
 const civReadGapMax = 2 * time.Second
 
+// identityReprobeInterval bounds how often readLoop re-issues the READ snapshot
+// (which carries the ID query) while the rig is decoding frames but its identity
+// is still unconfirmed. The connect-time READ's ID reply can be lost — the rig
+// isn't always ready to answer the first query right after power-on, and a
+// dropped first frame in the burst takes ID (it leads READ) with it. AI-mode
+// state pushes then keep the link alive frame-by-frame, so the no-data liveness
+// probe — readLoop's ONLY other READ re-issue — never fires, and identity stays
+// unconfirmed (every write path blocked, FT8 capture deferred) for the whole
+// session even though the rig is plainly talking. Re-probing on this cadence
+// re-asks "who are you?" until an IDENTITY frame arrives, recovering within one
+// interval without flooding the bus. READ is a pure query burst, so this never
+// keys TX — H2 is unaffected (writes stay blocked until the ID actually
+// confirms). Package var so tests can dial it down.
+var identityReprobeInterval = 1 * time.Second
+
 // civAckTimeout is the default wait for a CI-V command's FB/FA ACK after writing
 // each frame (ADR 0034 wait-for-ACK). The IC-7300 ACKs in ~20ms and never
 // broadcasts a commanded change, so the command path adopts state on FB / errors
@@ -581,6 +596,10 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 	// latches identityVerified (finding 7) — without it every subsequent frame
 	// would re-publish the same error.
 	unrecognisedPublished := false
+	// identityReprobeAt paces readLoop's active ID re-query (see
+	// identityReprobeInterval). Seeded to now so the connect-time READ that
+	// runPipeline just sent gets one interval to be answered before we re-ask.
+	identityReprobeAt := time.Now()
 	for {
 		readCtx, cancel := context.WithTimeout(ctx, s.livenessTimeout)
 		line, err := client.ReadResponseBytes(readCtx)
@@ -765,6 +784,25 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 					identityVerified = true
 					s.beginDefensiveRecovery(def, client)
 				}
+			}
+		}
+
+		// A decoded frame proves the rig is alive and talking. While its
+		// identity is still unconfirmed, actively re-issue READ to re-solicit
+		// the ID reply the connect-time READ lost — the chatty-AI-mode case
+		// where the no-data liveness probe (readLoop's only other READ
+		// re-issue) never fires. Placed AFTER the verification block so the
+		// frame that just confirmed identity (CI-V's first frame, or a matching
+		// IDENTITY) skips it. Cadence-bounded; READ is queries only, no TX — H2
+		// is unaffected (writes stay blocked until the ID actually confirms).
+		if !identityVerified && time.Since(identityReprobeAt) >= identityReprobeInterval {
+			identityReprobeAt = time.Now()
+			civ := def.Protocol == cat.ProtocolIcomCIV
+			if werr := s.underCmdMuCIV(civ, func() error {
+				return s.writeSnapshotReads(ctx, client, civ, readBytes)
+			}); werr != nil && ctx.Err() == nil {
+				s.logger.DebugWith().Err(werr).Str("driver", def.ID).
+					Msg("bridge: identity re-probe READ write failed; will retry")
 			}
 		}
 
