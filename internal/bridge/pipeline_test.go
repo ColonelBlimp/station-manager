@@ -154,12 +154,18 @@ func TestReadLoop_ConfirmsIdentityOnMatch(t *testing.T) {
 // on-air report: CAT shows green, but every band change returns 409
 // rig_identity_unverified. The connect-time READ's ID reply can be lost (the rig
 // isn't ready to answer the first query right after power-on, or the first frame
-// of the burst drops — ID leads READ), and AI-mode state pushes then keep the
-// link alive frame-by-frame so the no-data liveness probe — readLoop's ONLY
-// other READ re-issue — never fires. Without an active re-probe, identity stays
-// unconfirmed for the whole session while the rig is plainly talking. This
-// models exactly that: the rig swallows the ID reply on the first READ and only
-// answers it from a re-probe READ onward, while pushing FA frames throughout.
+// of the burst drops — ID leads READ), and the rig then chatters frames faster
+// than livenessTimeout so the no-data liveness probe — readLoop's ONLY other
+// READ re-issue — never fires. Without an active re-probe, identity stays
+// unconfirmed for the whole session while the rig is plainly talking.
+//
+// The keep-alive frames here are UNPARSED (S-meter "SM…", which the FT-710
+// rigdef has no State for → cat.Decode returns ErrNoMatch): they reset the read
+// deadline but `continue` before the decode path. This is the harder case the
+// bb3af343 clean-room review flagged — a re-probe gated on a successful DECODE
+// would be bypassed by exactly this traffic and identity would never recover.
+// Passing on unparsed keep-alive frames proves the re-probe fires on any
+// successful read, not just decodable ones.
 func TestReadLoop_ReprobesIdentityWhenConnectIDLost(t *testing.T) {
 	prev := identityReprobeInterval
 	identityReprobeInterval = 5 * time.Millisecond
@@ -192,15 +198,16 @@ func TestReadLoop_ReprobesIdentityWhenConnectIDLost(t *testing.T) {
 		t.Fatal("identity confirmed before any ID reply")
 	}
 
-	// Push AI-mode frequency frames to keep the link alive and drive decodes;
-	// each decode-while-unconfirmed paces a re-probe READ, which the rig above
-	// now answers with its ID. Pre-fix (no re-probe) this loop never confirms.
+	// Push UNPARSED S-meter frames to keep the link alive without ever decoding;
+	// each successful-read-while-unconfirmed paces a re-probe READ, which the rig
+	// above now answers with its ID. Pre-fix (no re-probe), and with the re-probe
+	// gated on a successful decode, this loop never confirms.
 	deadline := time.Now().Add(2 * time.Second)
 	for !s.identityOK() {
 		if time.Now().After(deadline) {
 			t.Fatal("identity never re-confirmed after a lost connect-time ID reply")
 		}
-		fake.feedLine([]byte("FA014200000"))
+		fake.feedLine([]byte("SM0100")) // S-meter: no FT-710 State → ErrNoMatch
 		time.Sleep(10 * time.Millisecond)
 	}
 }

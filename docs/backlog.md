@@ -487,8 +487,10 @@ next, and in what order" is answered.
   Malawi-relevant (more sources = more complete offline records). Untriaged detail was
   in the inbox 2026-07-13.
   **Candidate providers + API docs (dogfood 2026-07-24, capture for evaluation — NOT a
-  build commitment):** HamQTH (`hamqth.com/developers.php` — XML/JSON callsign API, the
-  named free-tier candidate) · QRZCQ (`qrzcq.com/page/developers`) · QRZ.digital
+  build commitment):** HamQTH (`hamqth.com/developers.php` — callsign/callbook lookup is
+  **XML-only** (name/QTH/grid via an authenticated session key); its JSON endpoint returns
+  DXCC data only, which the chain discards — so the enrichment link must speak XML. The
+  named free-tier candidate.) · QRZCQ (`qrzcq.com/page/developers`) · QRZ.digital
   (`qrz.digital/api/swagger-ui/index.html` — REST/OpenAPI). When picked up, evaluate each
   for coverage of QRZ-absent calls (CIS especially), licence, and rate-limit terms. Note
   some (HamQTH, QRZCQ) also host **logbooks**, so a provider could double as a forwarder
