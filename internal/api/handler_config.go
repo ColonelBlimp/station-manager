@@ -1157,8 +1157,18 @@ func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig)
 			_ = json.Unmarshal(ex.Credentials, &base)
 		}
 		for k, v := range in.Credentials {
-			if strings.TrimSpace(v) == "" && !clearable[k] {
-				continue
+			if strings.TrimSpace(v) == "" {
+				if !clearable[k] {
+					continue
+				}
+				// Store the canonical blank, not the whitespace that was sent. The
+				// classification above uses TrimSpace, so persisting the raw value
+				// would hand the constructor something it never agreed was empty:
+				// smcloud.New trims its logbook and copes, but stub.New compares
+				// mode against "" exactly, so a stored " " reaches its unknown-mode
+				// branch and the daemon refuses to start. Deciding "this is blank"
+				// and then writing something else is the bug — write what we decided.
+				v = ""
 			}
 			if b, err := json.Marshal(v); err == nil {
 				base[k] = b

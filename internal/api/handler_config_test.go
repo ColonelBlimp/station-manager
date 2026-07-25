@@ -9,9 +9,10 @@ import (
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	// Registered for their credential-field descriptors: the blank-credential merge
-	// rule keys off CredentialField.Kind, so these tests must see the real password
-	// vs text classification rather than falling through the unknown-type path.
+	// rule keys off CredentialField.Clearable, so these tests must see the real
+	// per-field markings rather than falling through the unknown-type path.
 	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/clublog"
 	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -1421,6 +1422,39 @@ func TestHandlePutConfig_StubModeIsClearable(t *testing.T) {
 	}
 	if creds := string(srv.cfg.Snapshot().Forwarders[0].Credentials); strings.Contains(creds, "always_terminal") {
 		t.Fatalf("blanking a constructor-defaulted mode did not reset it: %s", creds)
+	}
+
+	// Whitespace must be stored as the CANONICAL blank, not verbatim. The merge
+	// classifies blankness with TrimSpace, but stub.New compares mode against ""
+	// exactly — so a stored " " reaches its unknown-mode branch and the daemon
+	// refuses to start, from a PUT that returned 200.
+	body3 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"st","type":"stub","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"mode":"always_transient"}}]}`
+	req3 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body3))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	srv.handlePutConfig(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("PUT 3 status = %d, body = %s", w3.Code, w3.Body.String())
+	}
+	body4 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"st","type":"stub","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"mode":"   "}}]}`
+	req4 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body4))
+	req4.Header.Set("Content-Type", "application/json")
+	w4 := httptest.NewRecorder()
+	srv.handlePutConfig(w4, req4)
+	if w4.Code != http.StatusOK {
+		t.Fatalf("PUT 4 status = %d, body = %s", w4.Code, w4.Body.String())
+	}
+	stored := srv.cfg.Snapshot().Forwarders[0]
+	if !strings.Contains(string(stored.Credentials), `"mode":""`) {
+		t.Fatalf("whitespace mode was not canonicalised to an empty string: %s", stored.Credentials)
+	}
+	// The real proof: what was stored must actually construct.
+	if _, err := forwarding.Build(stored); err != nil {
+		t.Fatalf("stored credentials do not construct — the daemon would fail to start: %v", err)
 	}
 }
 
