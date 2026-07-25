@@ -32,6 +32,14 @@ import (
 // tests dial them to zero; ADR 0030 makes them config if real hardware needs it.
 const txNominalDtSec = 0.5
 
+// txAudioBudget is how long audio may run from the nominal symbol-0 time before it
+// spills into the next slot — the slot's remaining 14.5 s, against a 12.96 s
+// waveform, so ~1.54 s of slack absorbs normal device-start latency. A
+// transmission that would exceed it has been shifted so far off the synchronised
+// timebase that it cannot be decoded, and would QRM the following period as well.
+// Package var so tests can dial it, like txPreKeyLead / txLateWindowSec.
+var txAudioBudget = SlotDuration - time.Duration(txNominalDtSec*float64(time.Second))
+
 var (
 	txPreKeyLead = 200 * time.Millisecond
 	txPlayTail   = 250 * time.Millisecond
@@ -191,10 +199,9 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 		return errors.New(op).WithErr(err).WithMsg("pre-key settle")
 	}
 
-	// Authoritative head-truncation, against the clock the first sample will
-	// actually start on (we are about to Play). Symbol 0 belongs at nominal;
-	// whatever of the waveform now lies in the past is dropped so the remainder
-	// stays on the synchronised timebase.
+	// Authoritative head-truncation, against the post-key clock. Symbol 0 belongs
+	// at nominal; whatever of the waveform now lies in the past is dropped so the
+	// remainder stays on the synchronised timebase.
 	wave := waveform
 	if !nominal.IsZero() {
 		if late := time.Since(nominal); late > 0 {
@@ -203,14 +210,13 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 		// The sequencer's late-window guard runs BEFORE this — before the encode, the
 		// CAT key (mode switch + serial round-trip, bounded only by the daemon ctx)
 		// and the pre-key settle, all of which push the real start later than the
-		// moment it decided. So the surviving remainder is re-checked here, against
-		// the clock audio actually starts on, and a truncation that has eaten into
-		// the middle Costas array is reported as a FAILED transmission rather than a
-		// short one. That distinction is the point: a bare non-empty check let a
-		// badly delayed final 73/RR73 return success, and success is what logs the
-		// QSO — so an undecodable fragment could book a contact the other station
-		// never heard, and forward it to QRZ/ClubLog. Failing here instead leaves the
-		// exchange in txConfirming to retry on the next cycle.
+		// moment it decided. So the surviving remainder is re-checked here, and a
+		// truncation that has eaten into the middle Costas array is reported as a
+		// FAILED transmission rather than a short one. That distinction is the point:
+		// a bare non-empty check let a badly delayed final 73/RR73 return success,
+		// and success is what logs the QSO — so an undecodable fragment could book a
+		// contact the other station never heard, and forward it to QRZ/ClubLog.
+		// Failing here instead leaves the exchange in txConfirming to retry.
 		if skipped := len(waveform) - len(wave); len(wave) == 0 || skipped > maxDecodableSkip(len(waveform)) {
 			return errors.New(op).WithMsgf(
 				"too late after keying; %.2f s of head lost, past the %.2f s that keeps the sync arrays intact",
@@ -222,6 +228,31 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 	done, err := c.player.Play(wave)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("play waveform")
+	}
+
+	// Play returns once the device is RUNNING, and getting it there is unbounded
+	// work the truncation above could not account for: the production player does
+	// device enumeration, malgo.InitDevice and device.Start inside Play, none of it
+	// context-bounded, on hardware (a USB codec waking, a contended PipeWire) that
+	// can take seconds. That delay is pure UNCOMPENSATED shift — unlike the CAT
+	// keying latency, which the truncation above absorbs — so every symbol leaves
+	// off its computed DT and the receiver cannot sync, however much waveform
+	// survived. It bites hardest where the head check cannot see it at all: an
+	// on-time next-slot CQ truncates nothing, so a slow device start shifts the
+	// FULL waveform and no head-loss test would ever fire.
+	//
+	// Bound it by physics rather than a guessed DT tolerance: the audio must still
+	// end inside its own slot. Overrunning means both that we are transmitting into
+	// the next period and that the shift is far past anything decodable. Halt output
+	// and fail — we cannot un-transmit what already left, but we CAN refuse to call
+	// it a sent rung, which is what stops a QSO being logged and forwarded.
+	if !nominal.IsZero() {
+		audioDur := time.Duration(float64(len(wave)) / float64(goft8.SampleRate) * float64(time.Second))
+		if overrun := time.Since(nominal) + audioDur - txAudioBudget; overrun > 0 {
+			_ = c.player.Stop()
+			return errors.New(op).WithMsgf(
+				"audio device started too late; transmission would overrun its slot by %.2f s", overrun.Seconds())
+		}
 	}
 
 	select {

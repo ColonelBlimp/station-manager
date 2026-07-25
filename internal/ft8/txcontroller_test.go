@@ -325,6 +325,21 @@ func TestTransmit_TruncatesForKeyLatency(t *testing.T) {
 		"only latency-sized head loss expected, not wholesale truncation")
 }
 
+// slowStartPlayer models the production player's Play, which returns only once the
+// device is RUNNING: it does device enumeration, malgo.InitDevice and device.Start
+// inline, none context-bounded. The plain fakePlayer returns instantly and so can
+// never exercise that delay — the gap a review caught in the first version of the
+// decodability floor.
+type slowStartPlayer struct {
+	*fakePlayer
+	startDelay time.Duration
+}
+
+func (p *slowStartPlayer) Play(samples []int16) (<-chan struct{}, error) {
+	time.Sleep(p.startDelay)
+	return p.fakePlayer.Play(samples)
+}
+
 // fullTxWaveform is a synthetic waveform of the real standard-message length, so
 // the decodability floor under test is the one live transmissions face.
 func fullTxWaveform() []int16 {
@@ -381,6 +396,70 @@ func TestTransmit_KeyLatencyPushesRungPastTheLimit(t *testing.T) {
 	require.Error(t, err, "keying latency must be able to fail a rung that was inside the window when decided")
 	require.Equal(t, 0, p.plays())
 	require.Equal(t, 1, k.unkeys(), "PTT drops on the reject path")
+}
+
+// setAudioBudget dials the slot audio budget down for a test (restoring it after)
+// so a short, fast device-start delay stands in for the seconds a real USB codec or
+// contended PipeWire can take. The live budget leaves ~1.54 s of slack over the
+// waveform, which would otherwise mean a >1.5 s sleep per test.
+func setAudioBudget(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := txAudioBudget
+	txAudioBudget = d
+	t.Cleanup(func() { txAudioBudget = prev })
+}
+
+// TestTransmit_RejectsWhenDeviceStartsTooLate pins the follow-up review finding on
+// the decodability floor: the floor was evaluated immediately BEFORE Play, but the
+// production Play then does unbounded device startup before the first sample. A
+// rung can clear the head check and still have its audio begin seconds later.
+func TestTransmit_RejectsWhenDeviceStartsTooLate(t *testing.T) {
+	zeroTiming(t)
+	setAudioBudget(t, 13*time.Second) // 12.96 s waveform → ~0.04 s of slack
+	k := &fakeKeyer{}
+	p := &slowStartPlayer{fakePlayer: newFakePlayer(), startDelay: 200 * time.Millisecond}
+	c := NewTxController(k, p, "", logging.Noop())
+
+	// 4 s late: well inside the head-truncation floor, so only the device-start
+	// delay can fail this.
+	go p.finishPlayback()
+	err := c.transmit(context.Background(), fullTxWaveform(), time.Now().UTC().Add(-4*time.Second), nil)
+	require.Error(t, err, "a transmission whose audio starts too late must not be reported as sent")
+	require.Equal(t, 1, p.stops(), "output must be halted, not left running into the next slot")
+	require.Equal(t, 1, k.unkeys(), "PTT still drops")
+}
+
+// TestTransmit_RejectsLateDeviceStartOnAnUntruncatedRung is the case the head-loss
+// check is structurally blind to. A manual next-slot CQ starts on time and
+// truncates NOTHING, so no amount of head-loss testing can notice a slow device
+// start — yet the shift puts every symbol off its DT just the same.
+func TestTransmit_RejectsLateDeviceStartOnAnUntruncatedRung(t *testing.T) {
+	zeroTiming(t)
+	setAudioBudget(t, 13*time.Second)
+	k := &fakeKeyer{}
+	p := &slowStartPlayer{fakePlayer: newFakePlayer(), startDelay: 200 * time.Millisecond}
+	c := NewTxController(k, p, "", logging.Noop())
+
+	wave := fullTxWaveform()
+	go p.finishPlayback()
+	err := c.transmit(context.Background(), wave, time.Now().UTC(), nil)
+	require.Error(t, err, "an on-time rung whose device started late is still off its timebase")
+	require.Equal(t, len(wave), len(p.played), "nothing was truncated — the head check could not have caught this")
+	require.Equal(t, 1, p.stops())
+}
+
+// TestTransmit_ToleratesNormalDeviceStartLatency guards the other direction: the
+// live budget leaves ~1.54 s of slack over the waveform, so ordinary device-start
+// latency must not fail a rung.
+func TestTransmit_ToleratesNormalDeviceStartLatency(t *testing.T) {
+	zeroTiming(t) // real txAudioBudget (14.5 s)
+	k := &fakeKeyer{}
+	p := &slowStartPlayer{fakePlayer: newFakePlayer(), startDelay: 150 * time.Millisecond}
+	c := NewTxController(k, p, "", logging.Noop())
+
+	go p.finishPlayback()
+	require.NoError(t, c.transmit(context.Background(), fullTxWaveform(), time.Now().UTC(), nil),
+		"a normal device-start delay is inside the slot's slack and must transmit")
 }
 
 // TestTransmit_StillSendsALateButDecodableRemainder guards the other direction:
