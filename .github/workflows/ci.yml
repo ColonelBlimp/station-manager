@@ -215,8 +215,15 @@ jobs:
       # This step is also where the internal/cloud/store integration tests
       # run for real — the `postgres` service above is what stops them
       # skip-gating; keep the service as long as those tests exist.
+      #
+      # -timeout is PER PACKAGE BINARY. internal/api is a large -race integration
+      # suite (~120s local, ~260s on this slower runner) and had grown close enough
+      # to the old 5m ceiling that it intermittently tripped "panic: test timed out"
+      # — a flaky red that masked real breakage. 10m gives it honest headroom without
+      # hiding a genuine hang (a real deadlock still blows 10m). The heavy stress
+      # tests scale themselves down under -short so this stays a quick gate.
       - name: go test (race detector, -short)
-        run: go test -race -short -timeout 5m $(go list ./... | grep -v /node_modules/)
+        run: go test -race -short -timeout 10m $(go list ./... | grep -v /node_modules/)
 
       # Full run without the race detector: exercises the slow FT8
       # decode sensitivity-floor tests (real-capture decodes, synthetic

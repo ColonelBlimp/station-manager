@@ -72,6 +72,21 @@ func countQueries(fake *fakeSerial) (queries int, foreign [][]byte) {
 	return queries, foreign
 }
 
+// countUnkeys reports how many recorded writes are the re-unkey (TX0;) — the
+// actual stop attempt — as distinct from the status query the retry loop sends
+// right after each one. Tests that reason about "did the retry loop stop" must
+// count these, not every write, or a single racing iteration (which emits an
+// unkey AND a follow-up query) looks like two retries.
+func countUnkeys(fake *fakeSerial) int {
+	n := 0
+	for _, w := range fake.recordedWrites() {
+		if bytes.Equal(w, []byte("TX0;")) {
+			n++
+		}
+	}
+	return n
+}
+
 // TestAlarmProbes_ReAskAutomatically is the core of the fix. Before it, a raised
 // alarm was terminal in-process: confirmTxIdle needs an observed TXSTATUS, the
 // only issuer of that query was an unkey, and every key/command path refuses
@@ -217,18 +232,24 @@ func TestStillKeyed_StopsOnceTheRigObeys(t *testing.T) {
 	}, "no re-unkey was sent")
 
 	s.confirmTxIdle("test: rig obeyed")
-	settled := len(fake.recordedWrites())
+	settled := countUnkeys(fake)
 	time.Sleep(60 * time.Millisecond) // many intervals at the shortened cadence
 
-	// Tolerance of exactly one: the loop re-checks uncertainty under keyMu, but a
-	// confirmation landing between that check and the write still lets a single
-	// already-committed unkey through. That cannot be closed without confirmTxIdle
-	// taking keyMu, and it does not need to be — an extra tx_off to a rig already
-	// in RX is a no-op. What matters, and what this asserts, is that the loop
-	// STOPS rather than running its remaining 20 attempts.
-	after := len(fake.recordedWrites())
+	// Count re-unkeys (TX0;), NOT every recorded write. Each retry iteration writes
+	// the unkey AND a follow-up status query (probeTxStatusOn); counting both makes
+	// a single iteration that passed the keyMu re-check just before the confirmation
+	// landed look like TWO retries (unkey + its query), which under -race on a loaded
+	// CI runner is exactly the intermittent 1→3 flake this test used to have.
+	//
+	// Tolerance of exactly one UNKEY is right and deterministic: the loop is
+	// sequential and re-checks uncertainty under keyMu, so at most one
+	// already-committed TX0; slips through — and its follow-up query is a harmless
+	// READ, not another stop attempt. Closing even that one would need confirmTxIdle
+	// to take keyMu, which it must not. What this asserts is that the loop STOPS
+	// rather than running its remaining 20 attempts.
+	after := countUnkeys(fake)
 	if after > settled+1 {
-		t.Errorf("retries continued after the rig confirmed idle: %d → %d writes", settled, after)
+		t.Errorf("re-unkeys continued after the rig confirmed idle: %d → %d TX0; writes", settled, after)
 	}
 }
 

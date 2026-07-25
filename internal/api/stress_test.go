@@ -22,9 +22,18 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "Stress Log", "G4ABC")
 
-	const numClients = 20
-	const qsosPerClient = 50
-	const totalQSOs = numClients * qsosPerClient
+	numClients := 20
+	qsosPerClient := 50
+	if testing.Short() {
+		// The -race -short quick gate cannot afford the full 1000-QSO run: under the
+		// race detector on CI's slower runner it pushes internal/api past the 5m
+		// -timeout (the intermittent "panic: test timed out after 5m0s" that kept CI
+		// red). Keep genuine concurrency so -race still exercises the parallel
+		// submit/fetch/patch/delete paths, but at a fraction of the volume. The full
+		// 1000-QSO stress still runs in CI's non-race step (go test -timeout 12m).
+		numClients, qsosPerClient = 6, 6
+	}
+	totalQSOs := int64(numClients * qsosPerClient)
 
 	var stored atomic.Int64
 	var fetched atomic.Int64
