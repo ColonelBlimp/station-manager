@@ -229,8 +229,16 @@ type LookupInfo struct {
 //     keys that currently hold a non-empty value — NEVER the values). Credentials
 //     is nil/omitted.
 //   - On PUT: Name/Type/Enabled/ActionFilter + Credentials (key→new value, only
-//     the fields the operator typed; an omitted field keeps its stored value).
-//     CredentialsSet is ignored.
+//     the fields the operator typed). A field that is omitted OR blank keeps its
+//     stored value — a client never has to strip empties to avoid destroying a
+//     secret. CredentialsSet is ignored.
+//
+// There is deliberately no per-field clear: no shipped client could express one
+// (the masked GET means blanks are "untouched", and Smtp/LookupProvider can't
+// distinguish absent from "" at all), so treating "" as a clear only ever fired by
+// accident. Removing or replacing the forwarder entry clears its credentials; if a
+// per-field clear is ever wanted it needs an explicit signal (map[string]*string
+// with JSON null), not an empty string.
 //
 // The advanced knobs (tick_interval_sec / batch_size / retry) are intentionally
 // absent: the SPA doesn't edit them, and the PUT merge carries the stored values
@@ -1075,9 +1083,9 @@ func credentialKeysSet(raw json.RawMessage) []string {
 // mergeForwarders builds the new forwarder list from the SPA's PUT payload,
 // preserving secrets the masked-on-GET surface never exposed: credentials are
 // merged onto the stored entry (matched by name) — a field the operator didn't
-// type keeps its stored value — and the advanced knobs (tick/batch/retry) carry
-// over from the stored entry too. A forwarder with no name match is treated as
-// new (its supplied credentials stand alone).
+// type, whether omitted or sent blank, keeps its stored value — and the advanced
+// knobs (tick/batch/retry) carry over from the stored entry too. A forwarder with
+// no name match is treated as new (its supplied credentials stand alone).
 func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig) []types.ForwarderConfig {
 	byName := make(map[string]types.ForwarderConfig, len(existing))
 	for _, fc := range existing {
@@ -1097,12 +1105,23 @@ func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig)
 			fc.BatchSize = ex.BatchSize
 			fc.Retry = ex.Retry
 		}
-		// Merge credentials: stored base overlaid with supplied (typed) fields.
+		// Merge credentials: stored base overlaid with supplied (typed) fields. A
+		// BLANK value keeps the stored secret — same rule as mergeSmtp /
+		// mergeLookupProvider, where a plain string field makes "absent" and ""
+		// indistinguishable so keep is the only expressible behaviour. Here the map
+		// COULD tell them apart, and treating "" as a clear made the safety of every
+		// stored credential depend on the client stripping blanks before the PUT (the
+		// config SPA does; nothing else has to). Destroying a secret should never be
+		// the default reading of an empty field, so the daemon now owns the guarantee
+		// its masked-on-GET surface already promises the operator.
 		base := map[string]json.RawMessage{}
 		if matched && len(ex.Credentials) > 0 {
 			_ = json.Unmarshal(ex.Credentials, &base)
 		}
 		for k, v := range in.Credentials {
+			if strings.TrimSpace(v) == "" {
+				continue
+			}
 			if b, err := json.Marshal(v); err == nil {
 				base[k] = b
 			}

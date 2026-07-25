@@ -1210,6 +1210,86 @@ func TestHandlePutConfig_ForwardersMaskedAndMerged(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_BlankCredentialKeepsStoredSecret closes the gap the
+// omitted-key case above does NOT cover: a credential key present with an EMPTY
+// value. The config SPA masks credentials on GET and tells the operator "leave
+// blank to keep", but it honoured that CLIENT-side by stripping blanks before the
+// PUT — so the daemon still cleared on an empty string, and any other client
+// (curl, a script, the app SPA's forwarders section) silently destroyed a stored
+// credential. A guarantee about secrets belongs in the daemon, not in one browser.
+//
+// Blank now means keep, matching mergeSmtp / mergeLookupProvider — where a plain
+// string field makes absent and "" indistinguishable, so keep is the only
+// behaviour they can express. One rule across all three.
+func TestHandlePutConfig_BlankCredentialKeepsStoredSecret(t *testing.T) {
+	srv := testServer(t)
+
+	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"clublog-main","type":"clublog","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"email":"op@example.com","password":"SECRET123"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT 1 status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// A PUT that sends the key with an empty value — an untouched masked field on a
+	// client that doesn't strip blanks, or a hand-rolled request.
+	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"clublog-main","type":"clublog","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"email":"op@example.com","password":""}}]}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("PUT 2 status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+
+	cfg := srv.cfg.Snapshot()
+	if len(cfg.Forwarders) != 1 {
+		t.Fatalf("Forwarders len = %d, want 1", len(cfg.Forwarders))
+	}
+	if !strings.Contains(string(cfg.Forwarders[0].Credentials), "SECRET123") {
+		t.Fatalf("a blank credential wiped the stored secret: %s", cfg.Forwarders[0].Credentials)
+	}
+	// Whitespace-only is the same "operator typed nothing" case.
+	body3 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"clublog-main","type":"clublog","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"password":"   "}}]}`
+	req3 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body3))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	srv.handlePutConfig(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("PUT 3 status = %d, body = %s", w3.Code, w3.Body.String())
+	}
+	cfg = srv.cfg.Snapshot()
+	if !strings.Contains(string(cfg.Forwarders[0].Credentials), "SECRET123") {
+		t.Fatalf("a whitespace-only credential wiped the stored secret: %s", cfg.Forwarders[0].Credentials)
+	}
+	// A genuinely supplied value still replaces the stored one.
+	body4 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"clublog-main","type":"clublog","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"password":"NEWSECRET"}}]}`
+	req4 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body4))
+	req4.Header.Set("Content-Type", "application/json")
+	w4 := httptest.NewRecorder()
+	srv.handlePutConfig(w4, req4)
+	if w4.Code != http.StatusOK {
+		t.Fatalf("PUT 4 status = %d, body = %s", w4.Code, w4.Body.String())
+	}
+	cfg = srv.cfg.Snapshot()
+	if !strings.Contains(string(cfg.Forwarders[0].Credentials), "NEWSECRET") {
+		t.Fatalf("a supplied credential did not replace the stored one: %s", cfg.Forwarders[0].Credentials)
+	}
+	if strings.Contains(string(cfg.Forwarders[0].Credentials), "SECRET123") {
+		t.Fatalf("the old secret survived a real update: %s", cfg.Forwarders[0].Credentials)
+	}
+}
+
 // TestHandlePutConfig_EnableToggles covers the master subsystem switches the
 // config SPA's Rigs (bridge) + FT8 tabs write: bridge_enabled / ft8_enabled are
 // read+write, presence-aware. Enabling the bridge needs the active rig to carry
