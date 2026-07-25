@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 describe('TxAlarmBanner re-check', () => {
-    it('POSTs to the recheck endpoint and reports that it asked', async () => {
+    it('POSTs to the recheck endpoint and reports that it sent the safety check', async () => {
         const spy = mockFetch(200, { asked: true, alarm_active: true });
         render(TxAlarmBanner);
 
@@ -48,7 +48,7 @@ describe('TxAlarmBanner re-check', () => {
         const [url, init] = spy.mock.calls[0] as [string, RequestInit];
         expect(url).toBe('/v1/rig/tx/recheck');
         expect(init.method).toBe('POST');
-        await screen.findByText(/asked the rig/i);
+        await screen.findByText(/safety re-check sent/i);
     });
 
     it('does NOT clear the banner on a successful re-check', async () => {
@@ -56,7 +56,7 @@ describe('TxAlarmBanner re-check', () => {
         render(TxAlarmBanner);
 
         screen.getByRole('button', { name: /re-check/i }).click();
-        await screen.findByText(/asked the rig/i);
+        await screen.findByText(/safety re-check sent/i);
 
         // Still standing: only the daemon's tx-alarm clear may retire it.
         expect(screen.getByText(/CHECK YOUR RADIO/)).toBeTruthy();
@@ -67,7 +67,7 @@ describe('TxAlarmBanner re-check', () => {
         mockFetch(200, { asked: true, alarm_active: true });
         render(TxAlarmBanner);
         screen.getByRole('button', { name: /re-check/i }).click();
-        await screen.findByText(/asked the rig/i);
+        await screen.findByText(/safety re-check sent/i);
 
         // The rig answered "in RX"; the daemon confirms and clears.
         catLink.onTxAlarm({ active: false, code: '' });
@@ -84,7 +84,7 @@ describe('TxAlarmBanner re-check', () => {
 
         const button = screen.getByRole('button', { name: /re-check/i });
         button.click();
-        await screen.findByText(/cannot report its transmit state/i);
+        await screen.findByText(/no supported safety re-check/i);
         expect((button as HTMLButtonElement).disabled).toBe(true);
         // The warning itself is untouched by an unsupported re-check.
         expect(screen.getByText(/CHECK YOUR RADIO/)).toBeTruthy();

@@ -1,21 +1,14 @@
 /*
     Thin daemon-side wrapper for `POST /v1/rig/tx/recheck`.
 
-    Re-asks the rig whether it is transmitting, so a standing stuck-TX alarm can
-    be resolved on evidence. It exists because the alarm latches itself out of
-    every clear path in the daemon: the only thing that retires it is an observed
-    TX-status answer, and every path that would normally ask for one is gated by
-    the same uncertainty flag the alarm holds (2026-07-21 incident — the operator
-    sat in front of an undismissable banner for thirteen minutes).
+    Obtains fresh rig evidence so a standing stuck-TX alarm can be resolved.
+    Rigs with a TX-status query are asked whether they are receiving; CI-V rigs
+    safely re-assert tx_off and require the addressed radio's ACK.
 
-    An 'ok' outcome means "the daemon put the question on the wire", NOT "the rig
-    is safe". The answer comes back asynchronously on the rig's read loop and
-    surfaces as a `tx-alarm` SSE event with `active: false` — that event is the
-    authoritative all-clear, and nothing in this client may pre-empt it. There is
-    deliberately no endpoint to clear the alarm outright: doing so would either
-    re-enable keying over a possibly-live PTT or hide the only standing warning
-    from every other tab. Hiding the banner locally is what the Dismiss action is
-    for, and it does not claim safety.
+    An 'ok' outcome means the evidence operation succeeded, but the authoritative
+    all-clear is still the `tx-alarm` SSE event with `active: false`; nothing in
+    this client may pre-empt it. There is deliberately no operator-asserted clear.
+    Hiding the banner locally is what Dismiss is for, and it does not claim safety.
 */
 
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
@@ -35,10 +28,8 @@ interface DaemonError {
 }
 
 /**
- * Ask the daemon to re-query the rig's transmit state. `alarmActive` in the
- * 'ok' outcome is a status snapshot taken the moment the query went out — it is
- * usually still true, because the rig has not answered yet. Treat it as "was
- * still alarmed when asked", never as a safety verdict.
+ * Ask the daemon to obtain fresh transmit-state evidence. `alarmActive` in the
+ * 'ok' outcome is only a snapshot; the tx-alarm SSE stream is authoritative.
  */
 export async function recheckRigTx(signal?: AbortSignal): Promise<RigRecheckOutcome> {
     const fetched = await safeFetch('/v1/rig/tx/recheck', { method: 'POST', signal });
@@ -57,8 +48,8 @@ export async function recheckRigTx(signal?: AbortSignal): Promise<RigRecheckOutc
     const err = isPlainObject(body) ? (body as unknown as DaemonError) : null;
     const code = err?.code ?? 'unknown_error';
     const message = err?.message ?? `HTTP ${response.status}`;
-    // 501: this rig definition has no TX-status query, so re-checking can never
-    // work — the button should say so rather than invite a retry.
+    // 501: this rig has neither a TX-status query nor an ACK-confirmed safe
+    // unkey recovery operation, so the button should not invite another retry.
     if (response.status === 501) {
         return { kind: 'unsupported', message };
     }

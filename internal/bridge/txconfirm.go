@@ -78,8 +78,24 @@ const (
 // leaves the state unconfirmed — escalating to the alarm at the timeout,
 // which is the correct reading of a write path that can't even carry a query.
 func (s *Service) beginTxConfirm(def cat.RigDefinition, cl serial.Client) {
+	s.beginTxConfirmCycle(def, cl, false)
+}
+
+// beginTxConfirmIfUncertain starts a fresh confirmation cycle only if no
+// positive RX evidence has already cleared uncertainty. Retry paths use this
+// after writing tx_off: a TXSTATUS=RX can arrive concurrently with that write,
+// and a later unconditional beginTxConfirm must not overwrite the all-clear.
+func (s *Service) beginTxConfirmIfUncertain(def cat.RigDefinition, cl serial.Client) bool {
+	return s.beginTxConfirmCycle(def, cl, true)
+}
+
+func (s *Service) beginTxConfirmCycle(def cat.RigDefinition, cl serial.Client, requireUncertain bool) bool {
 	hasStatusQuery := cat.HasCommand(def, readTxStatusCommand)
 	s.mu.Lock()
+	if requireUncertain && !s.txUncertain {
+		s.mu.Unlock()
+		return false
+	}
 	s.txUncertain = true
 	s.txConfirmGen++
 	gen := s.txConfirmGen
@@ -101,16 +117,17 @@ func (s *Service) beginTxConfirm(def cat.RigDefinition, cl serial.Client) {
 	s.mu.Unlock()
 
 	if !hasStatusQuery || cl == nil {
-		return // A no-query fallback runs only when armed above.
+		return true // A no-query fallback runs only when armed above.
 	}
 	q, err := cat.Encode(def, readTxStatusCommand)
 	if err != nil {
 		s.logger.WarnWith().Err(err).Msg("bridge: tx-status query encode failed; relying on confirm timeout")
-		return
+		return true
 	}
 	if err := cl.WriteCommandBytes(context.Background(), q); err != nil {
 		s.logger.WarnWith().Err(err).Msg("bridge: tx-status query write failed; relying on confirm timeout")
 	}
+	return true
 }
 
 // txConfirmTimeout fires when an unkey stayed unconfirmed. Generation-gated
@@ -419,22 +436,29 @@ func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Cl
 		defer s.wg.Done()
 		s.keyMu.Lock()
 		werr := s.writeKeyedLine(context.Background(), def, client, txOff, "defensive unkey")
-		s.keyMu.Unlock()
 		if werr != nil {
 			s.logger.ErrorWith().Err(werr).
 				Msg("bridge: defensive unkey write failed — rig may be keyed from a prior life; TX stays blocked")
+			// Apply the alarm before releasing keyMu. Pipeline teardown takes the
+			// same lock before clearing/replacing activeClient, so an old
+			// recovery goroutine cannot mutate a replacement pipeline's TX state.
 			s.raiseTxAlarm(TxAlarmUnconfirmed)
+			s.keyMu.Unlock()
 			// Keep asserting the safe command. On CI-V a later FB ACK is the
-			// positive evidence that can finally retire this alarm.
+			// positive evidence that can finally retire this alarm; the longer
+			// alarm-recovery cadence and manual RecheckTx remain after this
+			// short retry burst expires.
 			s.retryUnkeyStillKeyed()
 			return
 		}
 		if def.Protocol == cat.ProtocolIcomCIV {
 			// writeKeyedLine awaited the ACK — positive confirmation.
 			s.confirmTxIdle("civ ack (defensive unkey)")
+			s.keyMu.Unlock()
 			return
 		}
 		s.logger.InfoWith().Msg("bridge: sent defensive tx_off on confirmed connection (ADR 0051)")
-		s.beginTxConfirm(def, client)
+		s.beginTxConfirmIfUncertain(def, client)
+		s.keyMu.Unlock()
 	}()
 }

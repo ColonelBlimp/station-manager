@@ -450,7 +450,18 @@ func (s *Service) clearRigSnapshotLocked() {
 	s.lastPower = 0
 	s.lastVfoA = 0
 	s.lastVfoB = 0
-	s.lastSelectedVfo = ""
+	if s.selectedVfoExplicit {
+		// A fresh Yaesu snapshot returns FA/FB/VS as separate replies. Keep the
+		// operating VFO unknown until VS arrives; defaulting an empty selection
+		// to A would briefly expose the wrong dial when the rig is on VFO-B.
+		s.lastSelectedVfo = ""
+		s.lastSelectedVfoKnown = false
+	} else {
+		// Definitions without SELECT use the operating-VFO-A model (currently
+		// the IC-7300), so its first VFO-A frequency is authoritative.
+		s.lastSelectedVfo = "A"
+		s.lastSelectedVfoKnown = true
+	}
 }
 
 // invalidateTuneSnapshot forgets the mode+power snapshot because the rig is
@@ -524,6 +535,7 @@ func (s *Service) captureDialFreq(p RigStatePayload) {
 	}
 	if p.SelectedVfo == "A" || p.SelectedVfo == "B" {
 		s.lastSelectedVfo = p.SelectedVfo
+		s.lastSelectedVfoKnown = true
 	}
 	s.mu.Unlock()
 }
@@ -539,6 +551,9 @@ func (s *Service) CurrentDialMHz() (float64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.rigWritableLocked() {
+		return 0, false
+	}
+	if !s.lastSelectedVfoKnown {
 		return 0, false
 	}
 	// Knownness is per-VFO (2026-07-19 review P2): 0 Hz means that VFO has

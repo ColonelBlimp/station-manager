@@ -24,12 +24,11 @@
     let recheckUnsupported = $state(false);
     let recheckNote = $state('');
 
-    // Ask the rig again. Deliberately does NOT touch rig.txAlarmActive on
-    // success: the banner may only be retired by the daemon's tx-alarm clear,
-    // which follows the rig's own answer a moment later. Saying "asked" and
-    // letting the banner vanish on its own keeps the UI honest about what is
-    // actually known — a button that hid the warning itself would be claiming
-    // safety it cannot verify.
+    // Request fresh protocol evidence. Deliberately does NOT touch
+    // rig.txAlarmActive on success: the banner may only be retired by the
+    // daemon's tx-alarm clear after either TXSTATUS=RX or an accepted CI-V
+    // tx_off ACK. Letting the banner vanish only on that event keeps the UI
+    // honest about what is actually known.
     async function onRecheck(): Promise<void> {
         if (rechecking) return;
         rechecking = true;
@@ -38,11 +37,11 @@
         rechecking = false;
         switch (outcome.kind) {
             case 'ok':
-                recheckNote = 'asked the rig; waiting for its answer';
+                recheckNote = 'rig safety re-check sent';
                 break;
             case 'unsupported':
                 recheckUnsupported = true;
-                recheckNote = 'this rig cannot report its transmit state';
+                recheckNote = 'this rig has no supported safety re-check';
                 break;
             case 'aborted':
             case 'network':
@@ -80,17 +79,17 @@
                 <span class="opacity-90">— {recheckNote}</span>
             {/if}
         </span>
-        <!-- Re-check asks the rig again; only the rig's own "in RX" answer can
-             retire this banner, and it arrives as a tx-alarm SSE clear. Dismiss
-             hides it locally and claims nothing. -->
+        <!-- Re-check requests protocol evidence; only the daemon's resulting
+             tx-alarm SSE clear can retire this banner. Dismiss hides it locally
+             and claims nothing. -->
         <button
             type="button"
             class="ml-auto shrink-0 cursor-pointer rounded border border-white/40 px-2 py-0.5 text-xs hover:bg-red-700 disabled:cursor-default disabled:opacity-60"
             disabled={rechecking || recheckUnsupported}
             onclick={onRecheck}
             title={recheckUnsupported
-                ? 'This rig cannot be asked for its transmit state'
-                : 'Ask the rig again whether it is transmitting'}
+                ? 'This rig has no supported transmit safety re-check'
+                : 'Request fresh evidence that the rig is not transmitting'}
         >
             {rechecking ? 'Checking…' : 'Re-check'}
         </button>

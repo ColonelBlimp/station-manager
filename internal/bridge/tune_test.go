@@ -746,8 +746,14 @@ func TestCurrentDialMHz(t *testing.T) {
 		t.Fatal("CurrentDialMHz should be unknown before any frequency is decoded")
 	}
 
-	// VFO-A arrives → known; selected VFO defaults to A.
+	// Yaesu reports FA/FB/VS separately. VFO-A alone is not authoritative:
+	// the rig may actually be operating on B and its SELECT reply is still in
+	// flight.
 	s.captureDialFreq(RigStatePayload{VfoA: 21_074_000})
+	if _, ok := s.CurrentDialMHz(); ok {
+		t.Fatal("VFO-A frequency without a fresh selection must remain unknown")
+	}
+	s.captureDialFreq(RigStatePayload{SelectedVfo: "A"})
 	if mhz, ok := s.CurrentDialMHz(); !ok || dialHz(mhz) != 21_074_000 {
 		t.Fatalf("VFO-A dial = %v ok=%v, want 21.074 true", mhz, ok)
 	}
@@ -785,11 +791,64 @@ func TestCurrentDialMHz_SelectedVfoUnknown(t *testing.T) {
 	}
 }
 
+// A passive CAT recovery marks the connection live on its first rig reply, but
+// a Yaesu READ snapshot returns FA, FB, and VS as separate frames. Until VS
+// arrives, neither frequency may be exposed as the selected operating dial.
+func TestCurrentDialMHz_PassiveRecoveryWaitsForSelectedVFO(t *testing.T) {
+	s, _ := tuneTestService(t)
+	s.captureDialFreq(RigStatePayload{
+		VfoA:        14_074_000,
+		VfoB:        7_074_000,
+		SelectedVfo: "B",
+	})
+	if mhz, ok := s.CurrentDialMHz(); !ok || dialHz(mhz) != 7_074_000 {
+		t.Fatalf("precondition dial = %v ok=%v, want selected VFO-B", mhz, ok)
+	}
+
+	// Passive liveness loss invalidates the snapshot; the first recovered frame
+	// makes CAT writable again before the later SELECT reply arrives.
+	s.noDataStrikes.Store(noDataStrikeLimit)
+	s.mu.Lock()
+	s.clearRigSnapshotLocked()
+	s.mu.Unlock()
+	s.noDataStrikes.Store(0)
+
+	s.captureDialFreq(RigStatePayload{VfoA: 21_074_000})
+	if mhz, ok := s.CurrentDialMHz(); ok {
+		t.Fatalf("recovered VFO-A before SELECT = %v,true; want unknown", mhz)
+	}
+	s.captureDialFreq(RigStatePayload{VfoB: 18_100_000})
+	if mhz, ok := s.CurrentDialMHz(); ok {
+		t.Fatalf("both recovered frequencies before SELECT = %v,true; want unknown", mhz)
+	}
+	s.captureDialFreq(RigStatePayload{SelectedVfo: "B"})
+	if mhz, ok := s.CurrentDialMHz(); !ok || dialHz(mhz) != 18_100_000 {
+		t.Fatalf("dial after recovered SELECT=B = %v ok=%v, want 18.1 true", mhz, ok)
+	}
+}
+
+// The IC-7300 rigdef has no SELECT state: its operating frequency is modelled
+// as VFO-A. Explicit-selection knownness must not make that dial permanently
+// unknown after a passive snapshot reset.
+func TestCurrentDialMHz_ImplicitVFOARecoversWithoutSelect(t *testing.T) {
+	s, fake := newCIVPipelineTestService(t)
+	s.mu.Lock()
+	s.activeClient = fake
+	s.identityConfirmed = true
+	s.clearRigSnapshotLocked()
+	s.mu.Unlock()
+
+	s.captureDialFreq(RigStatePayload{VfoA: 18_100_000})
+	if mhz, ok := s.CurrentDialMHz(); !ok || dialHz(mhz) != 18_100_000 {
+		t.Fatalf("implicit VFO-A dial after recovery = %v ok=%v, want 18.1 true", mhz, ok)
+	}
+}
+
 // TestClearTuneOnDisconnect_ForgetsDial: a frequency from a previous rig session must
 // not seed a logged QSO after reconnect.
 func TestClearTuneOnDisconnect_ForgetsDial(t *testing.T) {
 	s, _ := tuneTestService(t)
-	s.captureDialFreq(RigStatePayload{VfoA: 21_074_000})
+	s.captureDialFreq(RigStatePayload{VfoA: 21_074_000, SelectedVfo: "A"})
 	if _, ok := s.CurrentDialMHz(); !ok {
 		t.Fatal("precondition: dial should be known after a frequency push")
 	}

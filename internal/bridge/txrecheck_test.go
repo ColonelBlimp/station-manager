@@ -87,6 +87,16 @@ func countUnkeys(fake *fakeSerial) int {
 	return n
 }
 
+func countCIVUnkeys(fake *fakeSerial) int {
+	n := 0
+	for _, w := range fake.recordedWrites() {
+		if bytes.Contains(w, []byte{0x1C, 0x00, 0x00}) {
+			n++
+		}
+	}
+	return n
+}
+
 // TestAlarmProbes_ReAskAutomatically is the core of the fix. Before it, a raised
 // alarm was terminal in-process: confirmTxIdle needs an observed TXSTATUS, the
 // only issuer of that query was an unkey, and every key/command path refuses
@@ -314,6 +324,137 @@ func TestStillKeyed_StopsWhenTheClientGoesAway(t *testing.T) {
 		defer s.mu.Unlock()
 		return !s.txStopRetrying
 	}, "the single-flight latch stayed held after the sequence ended")
+}
+
+// A retry result belongs to the pipeline that wrote it. Pipeline teardown also
+// takes keyMu, so it must not be able to acquire that lifecycle lock before the
+// retry has armed its confirmation state; otherwise a replacement pipeline can
+// begin defensive recovery and then be overwritten by the old result.
+func TestStillKeyed_AppliesConfirmationBeforeReleasingConnection(t *testing.T) {
+	s, fake := newAlarmProbeService(t, 1)
+	writeStarted := make(chan struct{})
+	allowWrite := make(chan struct{})
+	fake.onWrite = func(w []byte) []byte {
+		if !bytes.Equal(w, []byte("TX0;")) {
+			return nil
+		}
+		select {
+		case <-writeStarted:
+			return nil // later attempts are not part of this ordering test
+		default:
+			close(writeStarted)
+			<-allowWrite
+			return nil
+		}
+	}
+
+	s.mu.Lock()
+	s.txUncertain = true
+	s.mu.Unlock()
+	s.retryUnkeyStillKeyed()
+
+	select {
+	case <-writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("retry never reached tx_off")
+	}
+
+	// Model pipeline teardown waiting to take ownership of the connection.
+	// When it acquires keyMu, the retry's confirmation cycle must already exist.
+	observedGen := make(chan uint64, 1)
+	go func() {
+		s.keyMu.Lock()
+		s.mu.Lock()
+		gen := s.txConfirmGen
+		s.mu.Unlock()
+		s.keyMu.Unlock()
+		observedGen <- gen
+	}()
+	close(allowWrite)
+
+	select {
+	case gen := <-observedGen:
+		if gen == 0 {
+			t.Fatal("pipeline lifecycle lock was released before retry confirmation was armed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pipeline lifecycle waiter never acquired keyMu")
+	}
+	s.confirmTxIdle("test cleanup")
+}
+
+// CI-V has no read_tx_status command. Its automatic alarm recovery therefore
+// re-asserts the intrinsically safe tx_off and requires the addressed rig's FB
+// ACK before clearing uncertainty.
+func TestAlarmProbes_CIVRecoversThroughAckedUnkey(t *testing.T) {
+	delay, interval, attempts := txAlarmProbeDelay, txAlarmProbeInterval, txAlarmProbeAttempts
+	txAlarmProbeDelay = 5 * time.Millisecond
+	txAlarmProbeInterval = 5 * time.Millisecond
+	txAlarmProbeAttempts = 3
+	defer func() {
+		txAlarmProbeDelay, txAlarmProbeInterval, txAlarmProbeAttempts = delay, interval, attempts
+	}()
+
+	s, fake, _, cleanup := startedCIVService(t, []byte(civAckOKFrame))
+	defer cleanup() // runs before the schedule restore above (LIFO)
+	before := countCIVUnkeys(fake)
+
+	s.raiseTxAlarm(TxAlarmUnconfirmed)
+	waitFor(t, func() bool {
+		return countCIVUnkeys(fake) > before && !s.TxAlarmActive() && !s.TxUncertain()
+	}, "CI-V alarm recovery did not obtain a tx_off ACK")
+}
+
+// The bounded automatic attempts may expire while a radio remains powered off.
+// RecheckTx must still provide a safe later recovery on the same connection
+// instead of returning ErrTxRecheckUnsupported forever.
+func TestRecheckTx_CIVRecoversAfterAutomaticWindow(t *testing.T) {
+	s, fake, _, cleanup := startedCIVService(t, []byte(civAckOKFrame))
+	defer cleanup()
+	before := countCIVUnkeys(fake)
+
+	// Model an alarm whose bounded automatic loop has already ended.
+	s.mu.Lock()
+	s.txAlarmActive = true
+	s.txUncertain = true
+	s.txAlarmProbeGen++
+	s.mu.Unlock()
+
+	if err := s.RecheckTx(); err != nil {
+		t.Fatalf("RecheckTx on CI-V alarm: %v", err)
+	}
+	if countCIVUnkeys(fake) <= before {
+		t.Fatal("CI-V RecheckTx did not send tx_off")
+	}
+	if s.TxAlarmActive() || s.TxUncertain() {
+		t.Fatalf("ACKed CI-V recheck did not clear alarm: alarm=%v uncertain=%v",
+			s.TxAlarmActive(), s.TxUncertain())
+	}
+}
+
+// Pressing Re-check is not an operator override. If CI-V never ACKs the safe
+// tx_off, the request fails and both the warning and TX gate remain latched.
+func TestRecheckTx_CIVMissingAckKeepsAlarm(t *testing.T) {
+	s, fake, _, cleanup := startedCIVService(t, []byte(civAckOKFrame))
+	defer cleanup()
+	s.civAckTimeout = 20 * time.Millisecond
+	fake.mu.Lock()
+	fake.onWrite = func([]byte) []byte { return nil }
+	fake.mu.Unlock()
+
+	s.mu.Lock()
+	s.txAlarmActive = true
+	s.txUncertain = true
+	s.mu.Unlock()
+
+	err := s.RecheckTx()
+	if !stderr.Is(err, ErrCommandNoAck) {
+		t.Fatalf("RecheckTx without CI-V ACK = %v, want ErrCommandNoAck", err)
+	}
+	if !s.TxAlarmActive() || !s.TxUncertain() {
+		t.Fatalf("missing ACK cleared safety state: alarm=%v uncertain=%v",
+			s.TxAlarmActive(), s.TxUncertain())
+	}
 }
 
 // TestRecheckTx_AsksButCannotClear pins the safety contract: the manual

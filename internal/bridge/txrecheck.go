@@ -14,12 +14,12 @@ package bridge
 // neither, because the CP2105 stays USB-enumerated. The operator sat in front of
 // an undismissable "CHECK YOUR RADIO" banner for thirteen minutes.
 //
-// The fix is MORE EVIDENCE, never a manual override. Everything here writes the
-// rigdef's read_tx_status query and nothing else: a READ cannot key the rig, so
-// it is the one operation that is safe to perform outside the key/command gates
-// while the transmitter's state is unknown. The answer flows through the normal
-// readLoop → observeTxStatus path, so an idle rig clears the alarm through
-// confirmTxIdle exactly as it always did, on genuine positive evidence.
+// The fix is MORE EVIDENCE, never a manual override. A rig with read_tx_status
+// is asked for its actual state; the answer flows through readLoop →
+// observeTxStatus. CI-V has no such query, but it does ACK commands, so its
+// recovery operation safely re-asserts tx_off and clears only after the awaited
+// FB ACK. A stop command cannot key or retune the rig, and the ACK proves that
+// the command reached and was accepted by the addressed radio.
 //
 // What is deliberately NOT here: any way to clear txUncertain or to publish
 // tx-alarm{active:false} by operator request. Clearing uncertainty would
@@ -38,55 +38,61 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/serial"
 )
 
-// Alarm re-probe cadence. The first probe is near-immediate because the common
+// Alarm recovery cadence. The first attempt is near-immediate because the common
 // case is an alarm raised by a confirm TIMEOUT on a rig that is actually idle
 // (a busy bus swallowed the answer) — that clears in well under a second. The
 // repeats then cover a rig that recovers shortly afterwards.
 //
-// Bounded on purpose: probing forever would write into a dead link indefinitely,
-// and past a few minutes the situation needs the operator, not another query. On
-// expiry the loop says so in the log, and the manual re-check (RecheckTx) stays
-// available for as long as the alarm stands.
+// Bounded on purpose: writing forever into a dead link is undesirable, and past
+// a few minutes the situation needs the operator. On expiry the loop says so in
+// the log, and manual RecheckTx remains available for as long as the alarm
+// stands—including CI-V, where it performs another ACK-awaited safe tx_off.
 var (
 	txAlarmProbeDelay    = 250 * time.Millisecond
 	txAlarmProbeInterval = 5 * time.Second
 	txAlarmProbeAttempts = 60 // ≈5 minutes at the interval above
 )
 
-// probeTxStatus writes the rigdef's read_tx_status query, bypassing every
-// key/command gate. Safe precisely because it is a read: it carries no TX
-// intent, so unlike SendCommands it cannot retune or re-key a rig whose state
-// is in doubt, and it is the only way to obtain the positive evidence
-// confirmTxIdle requires while the alarm blocks everything else.
-//
-// Fire-and-forget, exactly like beginTxConfirm's query: the ANSWER is the
-// confirmation, delivered by the readLoop to observeTxStatus. Returns an error
-// only when the query could not be put on the wire at all — which is itself
-// meaningful (a write path that cannot carry a query is a write path that could
-// not have carried the unkey either), so callers report it rather than retrying
-// harder.
-func (s *Service) probeTxStatus(reason string) error {
+// probeTxRecovery obtains protocol-appropriate positive RX evidence while the
+// ordinary command gates are closed by txUncertain: read_tx_status where the
+// rigdef offers it, otherwise an ACK-awaited CI-V tx_off. Definitions with
+// neither evidence mechanism remain unsupported.
+func (s *Service) probeTxRecovery(reason string) error {
+	const op errors.Op = "bridge.probeTxRecovery"
+
 	s.mu.Lock()
 	cl := s.activeClient
 	s.mu.Unlock()
-	return s.probeTxStatusOn(cl, reason)
+
+	driver := ""
+	if s.cfg.Cat != nil {
+		driver = s.cfg.Cat.Driver
+	}
+	def, ok := cat.Lookup(driver)
+	if !ok {
+		return errors.New(op).WithMsgf("no rig definition for driver %q", driver)
+	}
+	if cat.HasCommand(def, readTxStatusCommand) {
+		return s.probeTxStatusOn(cl, reason)
+	}
+	if def.Protocol == cat.ProtocolIcomCIV {
+		return s.reassertCIVTxOffOn(cl, def, reason)
+	}
+	return errors.New(op).WithErr(ErrTxRecheckUnsupported)
 }
 
-// probeTxStatusOn is probeTxStatus against a CALLER-PINNED client. The re-unkey
-// sequence uses it so its whole stop-and-ask attempt stays on ONE connection: it
-// validates the client, unkeys, then asks — and if a reconnect lands between the
-// unkey and the question, re-resolving would send the question down the NEW
-// connection while the old sequence still holds the single-flight latch, so the
-// replacement's own "still keyed" answer could not start a fresh sequence
-// (2026-07-23 review). Pinning makes the attempt connection-specific end to end.
+// probeTxStatusOn sends a fire-and-forget TX-state query against a
+// caller-pinned client. The ANSWER is delivered independently by readLoop to
+// observeTxStatus; merely putting the query on the wire clears nothing.
 func (s *Service) probeTxStatusOn(cl serial.Client, reason string) error {
 	const op errors.Op = "bridge.probeTxStatus"
 
 	s.mu.Lock()
 	idOK := s.identityConfirmed
+	current := cl != nil && s.activeClient == cl
 	s.mu.Unlock()
 
-	if cl == nil {
+	if !current {
 		return errors.New(op).WithErr(ErrRigNotConnected)
 	}
 	// Same H2 gate the write paths use: never drive a rig whose identity is
@@ -114,6 +120,42 @@ func (s *Service) probeTxStatusOn(cl serial.Client, reason string) error {
 		return errors.New(op).WithErr(err).WithMsg("write tx-status query")
 	}
 	s.logger.DebugWith().Str("reason", reason).Msg("bridge: tx-status re-probe sent")
+	return nil
+}
+
+// reassertCIVTxOffOn is the CI-V evidence path for a standing alarm. CI-V has
+// no read_tx_status command, so the only positive safe evidence available is an
+// FB ACK to tx_off itself. keyMu binds the complete write+ACK+state transition
+// to cl: pipeline teardown takes the same lock before replacing activeClient,
+// preventing an old connection's late ACK from confirming its replacement.
+func (s *Service) reassertCIVTxOffOn(cl serial.Client, def cat.RigDefinition, reason string) error {
+	const op errors.Op = "bridge.reassertCIVTxOff"
+
+	off, err := encodeTuneUnkey(def)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("encode CI-V tx_off")
+	}
+
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+
+	s.mu.Lock()
+	current := cl != nil && s.activeClient == cl
+	idOK := s.identityConfirmed
+	s.mu.Unlock()
+	if !current {
+		return errors.New(op).WithErr(ErrRigNotConnected)
+	}
+	if !idOK {
+		return errors.New(op).WithErr(ErrRigIdentityUnverified)
+	}
+	if err := s.writeKeyedLine(context.Background(), def, cl, off, "tx-alarm recovery unkey"); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("write CI-V tx_off")
+	}
+
+	// Still under keyMu: the active pipeline cannot tear down or be replaced
+	// between the ACK and the service-wide confirmation.
+	s.confirmTxIdle("civ ack (" + reason + ")")
 	return nil
 }
 
@@ -163,13 +205,13 @@ func (s *Service) startAlarmProbes() {
 				return // alarm cleared, or superseded by a newer one
 			}
 
-			if err := s.probeTxStatus("alarm re-probe"); err != nil {
+			if err := s.probeTxRecovery("alarm recovery"); err != nil {
 				// Log the first failure and then stay quiet: an alarm raised
 				// BECAUSE the link died would otherwise emit one warning every
 				// interval for the whole bounded run.
 				if attempt == 1 {
 					s.logger.WarnWith().Err(err).
-						Msg("bridge: tx-status re-probe failed; the rig cannot be asked, alarm stands")
+						Msg("bridge: automatic TX-alarm recovery failed; alarm stands")
 				}
 			}
 			timer.Reset(txAlarmProbeInterval)
@@ -180,7 +222,7 @@ func (s *Service) startAlarmProbes() {
 		s.mu.Unlock()
 		if stillAlarmed {
 			s.logger.WarnWith().
-				Msg("bridge: automatic tx-status re-probes exhausted; alarm stands — " +
+				Msg("bridge: automatic TX-alarm recovery attempts exhausted; alarm stands — " +
 					"use the re-check action once the rig is responding")
 		}
 	}()
@@ -195,10 +237,11 @@ var (
 	txStopRetryInterval = 400 * time.Millisecond
 )
 
-// retryUnkeyStillKeyed re-asserts the STOP after the rig has answered the status
-// query with "CAT TX on" — positive evidence that the unkey did not take effect
-// (2026-07-23 dogfood: a 2-second tune on 20m left the carrier up for two
-// minutes, ending only when the operator switched the radio off).
+// retryUnkeyStillKeyed runs a short burst of STOP attempts after the rig has
+// answered the status query with "CAT TX on", or after CI-V failed to ACK a
+// defensive tx_off. Both mean the stop cannot yet be trusted (2026-07-23
+// dogfood: a 2-second tune on 20m left the carrier up for two minutes, ending
+// only when the operator switched the radio off).
 //
 // Raising the alarm was previously the WHOLE response to that answer, which is
 // half a reaction: the rig has just told us it is transmitting when it should
@@ -289,56 +332,64 @@ func (s *Service) retryUnkeyStillKeyed() {
 			// keyMu: the release paths hold it across their own unkey+confirm,
 			// so taking it here keeps this write from interleaving with theirs.
 			s.keyMu.Lock()
-			// Re-check under the lock: the rig may have confirmed idle while we
-			// waited for keyMu. The window cannot be closed completely — a
-			// confirmation landing between this check and the write still lets
-			// one unkey through — and it does not need to be: an extra tx_off to
-			// a rig already in RX is a no-op, which is exactly why re-asserting
-			// the stop is safe to do at all.
-			if !s.TxUncertain() {
+			// Re-check BOTH connection identity and uncertainty under keyMu.
+			// Pipeline teardown takes keyMu before replacing activeClient, so
+			// this binds the write and its result to one pipeline instance.
+			s.mu.Lock()
+			current := s.activeClient == startClient
+			uncertain := s.txUncertain
+			s.mu.Unlock()
+			if !current || !uncertain {
 				s.keyMu.Unlock()
 				return
 			}
 			werr := s.writeKeyedLine(context.Background(), def, cl, off, "stuck-tx re-unkey")
-			s.keyMu.Unlock()
 			if werr != nil {
+				s.keyMu.Unlock()
 				s.logger.ErrorWith().Err(werr).Int("attempt", attempt).
-					Msg("bridge: re-unkey write failed on a rig reporting itself still keyed")
+					Msg("bridge: safety re-unkey write failed; rig may still be keyed")
 				continue
 			}
 			s.logger.WarnWith().Int("attempt", attempt).
-				Msg("bridge: re-sent tx_off — rig reported it was still transmitting")
+				Msg("bridge: re-sent tx_off while TX state remained uncertain")
 			if def.Protocol == cat.ProtocolIcomCIV {
 				// writeKeyedLine awaited FB: unlike an unrelated state frame,
-				// this ACK is positive evidence that the stop applied.
+				// this ACK is positive evidence that the stop applied. Confirm
+				// before releasing keyMu so an old pipeline cannot clear a
+				// replacement pipeline's defensive-recovery uncertainty.
 				s.confirmTxIdle("civ ack (stuck-tx re-unkey)")
+				s.keyMu.Unlock()
 				return
 			}
 			// Fire-and-forget protocols need a fresh confirmation cycle. It
 			// asks read_tx_status when available, or explicitly arms the weak
-			// post-write rig-data fallback for a no-query rigdef.
-			s.beginTxConfirm(def, cl)
+			// post-write rig-data fallback for a no-query rigdef. Arm it before
+			// releasing keyMu for the same connection-lifetime guarantee. If an
+			// RX answer landed during the write, do not overwrite that all-clear
+			// with a fresh uncertain cycle.
+			s.beginTxConfirmIfUncertain(def, cl)
+			s.keyMu.Unlock()
 		}
 	}()
 }
 
-// RecheckTx is the operator-initiated re-probe behind POST /v1/rig/tx/recheck.
-// It asks the rig the same question the automatic loop asks, on demand, for the
-// case the bounded loop has expired or the operator has just fixed something
-// (power-cycled the rig, re-seated the cable) and wants an answer NOW.
+// RecheckTx is the operator-initiated evidence attempt behind
+// POST /v1/rig/tx/recheck. On a rig with TX status it asks the question again;
+// on CI-V it re-asserts the safe tx_off and awaits its ACK. This remains
+// available after the bounded automatic loop expires, so an IC-7300 that
+// recovers later on the same USB connection is not stuck behind a permanent
+// in-process alarm.
 //
-// It CANNOT clear the alarm by itself, and that is the whole design: it only
-// puts a query on the wire, and only the rig's own "I am in RX" answer —
-// arriving through observeTxStatus → confirmTxIdle — retires the alarm. A
-// successful return therefore means "asked", not "safe". Restarting the probe
-// loop on a manual re-check is deliberate: the operator asking usually means
-// the situation just changed, so it is worth watching again for a while.
+// It never clears by operator assertion. Only protocol evidence does that:
+// TXSTATUS=RX or an accepted CI-V tx_off ACK. Restarting the automatic loop when
+// the alarm remains is deliberate: the operator asking usually means the
+// situation just changed, so it is worth watching again for a while.
 func (s *Service) RecheckTx() error {
 	const op errors.Op = "bridge.RecheckTx"
 	if s == nil {
 		return errors.New(op).WithErr(ErrRigNotConnected)
 	}
-	if err := s.probeTxStatus("operator re-check"); err != nil {
+	if err := s.probeTxRecovery("operator re-check"); err != nil {
 		return errors.New(op).WithErr(err)
 	}
 	s.mu.Lock()

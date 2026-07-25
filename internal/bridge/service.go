@@ -224,15 +224,24 @@ type Service struct {
 	// 0 means that VFO has not been decoded this session — knownness is
 	// per-VFO (2026-07-19 review P2), so CurrentDialMHz reports ok=false when
 	// the SELECTED VFO is unknown rather than falling back to the other one.
-	// lastSelectedVfo ("A"/"B") is which one is operating. CurrentDialMHz
-	// resolves the selected VFO's freq for FT8 logging — the rig is the
-	// authority for the logged frequency, NOT the SPA's start-time snapshot
-	// (which is captured once and reused across a Call-CQ pile-up, so it goes
-	// stale). Cleared on disconnect with the rest of the snapshot. NOT frozen
-	// during tune/TX — the dial does not move while keyed.
-	lastVfoA        int64
-	lastVfoB        int64
-	lastSelectedVfo string
+	// lastSelectedVfo ("A"/"B") is which one is operating.
+	// lastSelectedVfoKnown is separate from the string because rigs whose
+	// definitions report SELECT (Yaesu) send the VFO frequencies and selection
+	// as separate replies. After a disconnect, an early VFO-A reply must not be
+	// treated as authoritative until the fresh SELECT reply arrives. Rigs with
+	// no SELECT state (the IC-7300's implicit operating-VFO-A model) start each
+	// snapshot with A known. selectedVfoExplicit is immutable after New.
+	//
+	// CurrentDialMHz resolves the selected VFO's freq for FT8 logging — the rig
+	// is the authority for the logged frequency, NOT the SPA's start-time
+	// snapshot (which is captured once and reused across a Call-CQ pile-up, so
+	// it goes stale). Cleared on disconnect with the rest of the snapshot. NOT
+	// frozen during tune/TX — the dial does not move while keyed.
+	lastVfoA             int64
+	lastVfoB             int64
+	lastSelectedVfo      string
+	lastSelectedVfoKnown bool
+	selectedVfoExplicit  bool
 
 	// Resolved (config-overridable, hard-clamped) tune knobs, snapshotted at
 	// New like the timeout fields above. tunePowerW ≤ maxTunePowerW;
@@ -292,10 +301,10 @@ type Service struct {
 	// nothing about the unkey (8bd88c1b review, ordering finding).
 	txConfirmAfterFrame uint64
 
-	// txStopRetrying single-flights the re-unkey sequence that runs when the rig
-	// POSITIVELY reports it is still transmitting. The alarm re-probe keeps
-	// asking, so the "1" answer can repeat every few seconds; without this each
-	// answer would stack another retry goroutine.
+	// txStopRetrying single-flights the short re-unkey sequence that runs when
+	// the rig positively reports it is still transmitting, or when a CI-V
+	// defensive unkey receives no ACK. Without this, repeated evidence/failures
+	// could stack retry goroutines.
 	txStopRetrying bool
 
 	// txAlarmProbeGen gates the alarm re-probe loop the way txConfirmGen gates
@@ -390,6 +399,17 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 			Int("max_ms", int(backoffMax.Milliseconds())).
 			Msg("bridge: effective backoff initial exceeds max; clamped to max")
 	}
+	// Some rigs report VFO-A/VFO-B frequencies and SELECT as separate frames.
+	// Their dial is unknown until SELECT arrives. Definitions without SELECT
+	// use the operating-VFO-A model, so A is known from the first frequency.
+	selectedVfoExplicit := false
+	if def, ok := cat.Lookup(driver); ok {
+		selectedVfoExplicit = rigDefinitionHasStateTag(def, "SELECT")
+	}
+	selectedVfo := "A"
+	if selectedVfoExplicit {
+		selectedVfo = ""
+	}
 	return &Service{
 		cfg:      cfg,
 		logger:   logger,
@@ -411,7 +431,24 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		tunePowerW:                     tunePower,
 		tuneMaxDuration:                tuneDur,
 		tuneRestoreSettle:              tuneSettle,
+		lastSelectedVfo:                selectedVfo,
+		lastSelectedVfoKnown:           !selectedVfoExplicit,
+		selectedVfoExplicit:            selectedVfoExplicit,
 	}
+}
+
+// rigDefinitionHasStateTag reports whether a rig definition can explicitly
+// produce tag. It keeps dial-selection policy data-driven rather than tied to a
+// manufacturer/protocol switch.
+func rigDefinitionHasStateTag(def cat.RigDefinition, tag string) bool {
+	for _, state := range def.States {
+		for _, marker := range state.Markers {
+			if marker.Tag == tag {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // resolveTimeout converts a config-supplied milliseconds value to a
