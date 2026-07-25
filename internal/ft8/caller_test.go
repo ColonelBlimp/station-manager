@@ -1,9 +1,12 @@
 package ft8
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // Caller-side happy path: we called CQ, DL9UW answered with JO41, we work it to RR73.
@@ -125,6 +128,39 @@ func TestCallerExchangeMessagesAreEncodable(t *testing.T) {
 		if _, err := goft8.EncodeStandardMessage(m); err != nil {
 			t.Errorf("EncodeStandardMessage(%q) failed: %v", m, err)
 		}
+	}
+}
+
+// TestCallerExchangeLogsTheReportItTransmits closes the review finding that the
+// logged RST_SENT could differ from the report actually sent: formatReport clamped
+// the on-air message while the raw SNR stayed on the exchange and rode through to
+// the QSO. SNR 99 transmitted +49 and logged 99 — outbound, durable data going to
+// QRZ/ClubLog. Reachable because their_snr arrives unvalidated from the client on
+// the work-a-caller path (work_sequencer.go → NewCallerExchange).
+func TestCallerExchangeLogsTheReportItTransmits(t *testing.T) {
+	e := NewCallerExchange("7Q5MLV", "DL9UW", "JO41", 99)
+
+	msg, ok := e.TxMessage()
+	if !ok {
+		t.Fatal("expected a report message to transmit")
+	}
+	// The token that actually goes on the air.
+	onAir := msg[strings.LastIndex(msg, " ")+1:]
+
+	// The same exchange, logged the way the sequencer logs it.
+	c := CompletedQso{TheirCall: e.TheirCall, OurReport: e.SendSnr, HasOurReport: e.HasSendSnr}
+	q := BuildQso(c, types.LoggingStation{Operator: "7Q5MLV"}, 1, time.Unix(0, 0).UTC())
+
+	if want := "+49"; onAir != want {
+		t.Fatalf("on-air report = %q, want %q", onAir, want)
+	}
+	if q.RstSent != "49" {
+		t.Fatalf("logged RST_SENT = %q, want %q (the report transmitted, not the raw SNR)", q.RstSent, "49")
+	}
+	// The invariant itself, independent of the values above: what we log is what we
+	// sent, ignoring the sign prefix formatReport adds for the air.
+	if got := strings.TrimPrefix(onAir, "+"); got != q.RstSent {
+		t.Fatalf("logged RST_SENT %q does not match the transmitted report %q", q.RstSent, got)
 	}
 }
 

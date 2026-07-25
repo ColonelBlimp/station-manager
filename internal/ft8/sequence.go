@@ -67,16 +67,42 @@ func parseReport(s string) (int, bool) {
 	return n, true
 }
 
+// Report bounds — the range packReportToken accepts, so a message built from a
+// clamped value is always one EncodeStandardMessage will take.
+const (
+	minReportDB = -50
+	maxReportDB = 49
+)
+
+// clampReport folds an SNR into the range an FT8 report can actually express.
+//
+// Exchanges that TRANSMIT a report clamp at the moment they record it, so the
+// stored value IS the value that goes on the air — which is what makes the logged
+// RST_SENT, the report on the `ft8-qso` SSE and the report the far end hears the
+// same number. Keeping the raw SNR instead let them diverge: `their_snr` arrives
+// unvalidated from the client on the work-a-caller path, so an out-of-range value
+// transmitted +49 while the QSO logged (and forwarded to QRZ/ClubLog) 99.
+//
+// Only for reports WE send. A RECEIVED report is logged exactly as decoded — that
+// token is what was on the air, so clamping it would falsify the record instead of
+// correcting it.
+func clampReport(snr int) int {
+	if snr < minReportDB {
+		return minReportDB
+	}
+	if snr > maxReportDB {
+		return maxReportDB
+	}
+	return snr
+}
+
 // formatReport renders an SNR as a 2-digit signed FT8 report ("-13", "+04"),
-// clamped to the [-50, 49] range packReportToken accepts so the resolver never
-// emits a message EncodeStandardMessage would reject.
+// clamped so the resolver never emits a message EncodeStandardMessage would
+// reject. Report-carrying exchanges store the clamped value too (clampReport), so
+// this is a no-op re-clamp for them and the belt-and-braces guard for any other
+// caller (the SSE status formatters).
 func formatReport(snr int) string {
-	if snr < -50 {
-		snr = -50
-	}
-	if snr > 49 {
-		snr = 49
-	}
+	snr = clampReport(snr)
 	if snr >= 0 {
 		return fmt.Sprintf("+%02d", snr)
 	}
@@ -303,8 +329,11 @@ func (e Exchange) Advance(text string, snr int) (Exchange, bool) {
 	case txCalling:
 		// They answered us with a report → roger it next slot.
 		if m.kind == msgReport || m.kind == msgRReport {
+			// RcvdReport keeps the decoded token verbatim (it IS what was on the
+			// air); SendSnr is clamped to the report we will transmit, so the QSO
+			// logs the number the far end actually hears.
 			e.RcvdReport, e.HasRcvdReport = m.report, true
-			e.SendSnr, e.HasSendSnr = snr, true
+			e.SendSnr, e.HasSendSnr = clampReport(snr), true
 			e.State = txReporting
 			return e, true
 		}

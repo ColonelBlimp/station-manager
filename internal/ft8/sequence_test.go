@@ -2,8 +2,10 @@ package ft8
 
 import (
 	"testing"
+	"time"
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 func TestParseReport(t *testing.T) {
@@ -239,6 +241,34 @@ func TestExchangeClampsReport(t *testing.T) {
 	e, _ = e.Advance("G0XYZ K1ABC -10", -75)
 	if msg, _ := e.TxMessage(); msg != "K1ABC G0XYZ R-50" {
 		t.Fatalf("TxMessage = %q, want %q", msg, "K1ABC G0XYZ R-50")
+	}
+}
+
+// The standard-exchange half of the logged-vs-transmitted review finding: the
+// clamp must land on the STORED report, not only on the formatted message, because
+// the stored value is what BuildQso writes to RST_SENT and forwards. A RECEIVED
+// report is deliberately left verbatim — that token is what was actually on the
+// air, so clamping it would falsify the log rather than correct it.
+func TestExchangeLogsTheReportItTransmits(t *testing.T) {
+	e := NewExchange("G0XYZ", "IO91", "K1ABC")
+	e, _ = e.Advance("G0XYZ K1ABC -10", -75)
+
+	if e.SendSnr != -50 {
+		t.Fatalf("stored SendSnr = %d, want -50 (the report transmitted, not the raw SNR)", e.SendSnr)
+	}
+	if e.RcvdReport != -10 {
+		t.Fatalf("RcvdReport = %d, want -10 — a received report is logged as decoded", e.RcvdReport)
+	}
+	c := CompletedQso{
+		TheirCall: e.TheirCall, OurReport: e.SendSnr, HasOurReport: e.HasSendSnr,
+		TheirReport: e.RcvdReport, HasTheirReport: e.HasRcvdReport,
+	}
+	q := BuildQso(c, types.LoggingStation{Operator: "G0XYZ"}, 1, time.Unix(0, 0).UTC())
+	if q.RstSent != "-50" {
+		t.Fatalf("logged RST_SENT = %q, want %q", q.RstSent, "-50")
+	}
+	if q.RstRcvd != "-10" {
+		t.Fatalf("logged RST_RCVD = %q, want %q", q.RstRcvd, "-10")
 	}
 }
 

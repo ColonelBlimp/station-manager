@@ -70,11 +70,14 @@ func NewCallerExchange(ourCall, theirCall, theirGrid string, sendSnr int) Caller
 		grid = grid[:4]
 	}
 	return CallerExchange{
-		OurCall:    strings.ToUpper(strings.TrimSpace(ourCall)),
-		TheirCall:  strings.ToUpper(strings.TrimSpace(theirCall)),
-		TheirGrid:  grid,
-		State:      cqReporting,
-		SendSnr:    sendSnr,
+		OurCall:   strings.ToUpper(strings.TrimSpace(ourCall)),
+		TheirCall: strings.ToUpper(strings.TrimSpace(theirCall)),
+		TheirGrid: grid,
+		State:     cqReporting,
+		// Clamped here, not just when the message is formatted: the report we LOG
+		// must be the report we SEND. sendSnr reaches this from the client on the
+		// work-a-caller path, where nothing bounds it (see clampReport).
+		SendSnr:    clampReport(sendSnr),
 		HasSendSnr: true,
 	}
 }
