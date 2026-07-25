@@ -1295,12 +1295,64 @@ func TestHandlePutConfig_BlankCredentialKeepsStoredSecret(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_BlankRequiredCredentialKeeps guards the hazard that makes
+// "any non-password field is clearable" wrong. ClubLog's email/callsign and SM
+// Cloud's url are text-kind but REQUIRED: their New() rejects an empty value, and
+// cmd/smd propagates that out of spawnForwarderWorkers, so the whole daemon fails
+// to start. Config validation doesn't inspect credentials, so the PUT that caused
+// it returned 200 — the operator would see success now and a dead daemon at the
+// next restart. Only fields marked Clearable may be blanked.
+func TestHandlePutConfig_BlankRequiredCredentialKeeps(t *testing.T) {
+	srv := testServer(t)
+
+	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"cl","type":"clublog","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"email":"op@example.com","password":"PW","callsign":"M0ABC"}},` +
+		`{"name":"cloud","type":"smcloud","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"url":"https://cloud.example.org","token":"TOKEN123"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT 1 status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// Blank every required text field — what a client following the old
+	// blank-means-unchanged contract sends for untouched inputs.
+	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"cl","type":"clublog","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"email":"","password":"","callsign":""}},` +
+		`{"name":"cloud","type":"smcloud","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"url":"","token":""}}]}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("PUT 2 status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+
+	cfg := srv.cfg.Snapshot()
+	for _, fc := range cfg.Forwarders {
+		creds := string(fc.Credentials)
+		for _, want := range map[string][]string{
+			"cl":    {"op@example.com", "PW", "M0ABC"},
+			"cloud": {"https://cloud.example.org", "TOKEN123"},
+		}[fc.Name] {
+			if !strings.Contains(creds, want) {
+				t.Fatalf("forwarder %q lost required credential %q — the daemon would refuse to start: %s",
+					fc.Name, want, creds)
+			}
+		}
+	}
+}
+
 // TestHandlePutConfig_BlankTextCredentialStillClears is the counterweight to the
-// blank-keeps rule: it applies to SECRETS only. A text-kind credential can hold an
-// empty value legitimately — smcloud's `logbook` documents "leave empty for main"
-// — so blanket blank-keeps would strand it on its old value with no way back to
-// the default. The discriminator is CredentialField.Kind, which the type
-// descriptor already carries.
+// blank-keeps rule: a field the type marks Clearable DOES accept a blank, because
+// its constructor defaults an empty value. smcloud's `logbook` documents "leave
+// empty for main", so without this it would be stranded on its old value with no
+// way back to the default.
 func TestHandlePutConfig_BlankTextCredentialStillClears(t *testing.T) {
 	srv := testServer(t)
 

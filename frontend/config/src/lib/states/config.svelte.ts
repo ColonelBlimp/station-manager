@@ -579,8 +579,8 @@ class ConfigState {
     get rigsRestartRequired(): boolean {
         if (this.draftDefaultRigId !== this.defaultRigId) return true;
         if (this.bridgeEnabled !== (this.config?.bridge_enabled ?? false)) return true;
-        const draft = this.rigDraft.map(restartRelevant).join(' ');
-        const loaded = this.rigs.map(restartRelevant).join(' ');
+        const draft = this.rigDraft.map(restartRelevant).join('\0');
+        const loaded = this.rigs.map(restartRelevant).join('\0');
         return draft !== loaded;
     }
 
@@ -867,9 +867,20 @@ class ConfigState {
     /**
      * Persist the forwarders draft via PUT /v1/config. Sends the whole list
      * (presence-aware daemon-side) with only the NON-EMPTY typed credentials per
-     * destination — the daemon merges them onto the stored secrets, so a blank
-     * field keeps its value. Echoes logging_station/station; omits rigs/ft8 so
-     * those are left untouched. Re-hydrates from the (masked) PUT response.
+     * destination. Echoes logging_station/station; omits rigs/ft8 so those are
+     * left untouched. Re-hydrates from the (masked) PUT response.
+     *
+     * Stripping blanks is now belt-and-braces rather than load-bearing: the daemon
+     * keeps a stored credential on a blank of its own accord, so a client that
+     * forgot to strip can no longer wipe a secret. What this editor CANNOT express
+     * is the deliberate opposite — resetting a field the descriptor marks
+     * `clearable` (smcloud's `logbook` → "main"). Values are never echoed, so an
+     * empty box is indistinguishable from an untouched one; expressing a reset
+     * needs an explicit control (a "reset to default" affordance shown only for
+     * clearable fields that currently hold a value), not a blank input. Deferred
+     * here because this SPA is being retired — the app's forwarders section should
+     * carry that control, and `clearable` is on the wire in
+     * GET /v1/forwarder-types for it. Until then the reset is API-only.
      */
     async saveForwarders(): Promise<void> {
         if (this.savingForwarders || !this.config || !this.forwardersDirty) return;

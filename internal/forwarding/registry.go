@@ -396,22 +396,32 @@ func DefaultForwarderConfigs() []types.ForwarderConfig {
 // hardcoded forms).
 //
 // GET /v1/config echoes NO credential values at all — of either kind — only which
-// keys currently hold one (ForwarderInfo.CredentialsSet). Kind has two consumers:
+// keys currently hold one (ForwarderInfo.CredentialsSet). Kind is presentation
+// only: it picks the input widget (a masked box for "password").
 //
-//   - the editor picks the input widget (a masked box for "password").
-//   - the PUT credential merge reads it to decide what a BLANK value means. For
-//     "password" a blank is "the operator didn't retype the masked field", so the
-//     stored secret is kept — no client has to strip empties to avoid destroying
-//     one. For "text" a blank is a real value and clears the field, because empty
-//     can be meaningful (smcloud's `logbook`: "leave empty for main").
+// Clearable is what governs WRITES. Because values are never echoed, a blank field
+// on a PUT normally means "the operator didn't retype it", so the stored value is
+// kept — that is the default for every field and it is what stops a client wiping
+// a credential by sending empties. Only a field explicitly marked Clearable reads
+// a blank as "reset me".
 //
-// So changing a field's Kind changes its write semantics, not just its widget:
-// flipping a secret to "text" would let an empty PUT erase it.
+// Clearable is deliberately NOT inferred from Kind == "text". Most text
+// credentials are REQUIRED (ClubLog's email/callsign, SM Cloud's url), and
+// emptying one is not a reset — it is a config the forwarder constructor rejects
+// at startup, which aborts spawnForwarderWorkers and so the whole daemon. Marking
+// a field Clearable is therefore a statement that empty is a MEANINGFUL value for
+// it, i.e. the constructor supplies a default (smcloud's `logbook` → "main").
 type CredentialField struct {
 	Key   string `json:"key"`   // matches the forwarder's credentials JSON key (e.g. "api_key")
 	Label string `json:"label"` // human label for the input
-	Kind  string `json:"kind"`  // "text" | "password"
+	Kind  string `json:"kind"`  // "text" | "password" — widget only, never write policy
 	Help  string `json:"help,omitempty"`
+	// Clearable marks a field whose EMPTY value is meaningful (the constructor
+	// defaults it). Only these accept a blank on PUT as "reset to the default";
+	// every other field keeps its stored value. Never set this on a field the
+	// forwarder's New() requires — that turns an empty PUT into a daemon that
+	// won't restart.
+	Clearable bool `json:"clearable,omitempty"`
 }
 
 // TypeDescriptor is the editor-facing description of a forwarder type, served by

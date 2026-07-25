@@ -100,7 +100,9 @@ func init() {
 				Help: "Your smcloud service's base URL, e.g. https://cloud.example.org"},
 			{Key: "token", Label: "Bearer token", Kind: "password",
 				Help: "The SMCLOUD_TOKEN the service was provisioned with."},
-			{Key: "logbook", Label: "Cloud logbook name", Kind: "text",
+			// Clearable: New defaults an empty logbook to DefaultLogbook, so a blank
+			// PUT is a genuine "reset to main" — unlike url/token, which New rejects.
+			{Key: "logbook", Label: "Cloud logbook name", Kind: "text", Clearable: true,
 				Help: "Cloud-side logbook the QSOs land in (created on first push). Leave empty for \"main\"."},
 		})
 }
