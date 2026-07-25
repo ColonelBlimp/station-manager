@@ -131,23 +131,40 @@ func (s *Service) probeTxStatusOn(cl serial.Client, reason string) error {
 func (s *Service) reassertCIVTxOffOn(cl serial.Client, def cat.RigDefinition, reason string) error {
 	const op errors.Op = "bridge.reassertCIVTxOff"
 
-	off, err := encodeTuneUnkey(def)
-	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("encode CI-V tx_off")
-	}
-
 	s.keyMu.Lock()
 	defer s.keyMu.Unlock()
 
 	s.mu.Lock()
 	current := cl != nil && s.activeClient == cl
 	idOK := s.identityConfirmed
+	recoveryNeeded := s.txUncertain || s.txAlarmActive
+	controllerTxActive := s.tuneActive || s.ft8TxActive
 	s.mu.Unlock()
 	if !current {
 		return errors.New(op).WithErr(ErrRigNotConnected)
 	}
 	if !idOK {
 		return errors.New(op).WithErr(ErrRigIdentityUnverified)
+	}
+	// Revalidate under keyMu, not only in startAlarmProbes before it calls us.
+	// The alarm may have cleared while this attempt waited for an active
+	// key/release transition, and the now-free transmitter may already belong
+	// to a new healthy tune/FT8 transmission. In either case tx_off would
+	// truncate valid traffic while leaving its controller state/timer armed.
+	if controllerTxActive && !recoveryNeeded {
+		s.logger.DebugWith().Str("reason", reason).
+			Msg("bridge: skipped stale CI-V TX recovery; a healthy transmission now owns PTT")
+		return nil
+	}
+	if !recoveryNeeded {
+		s.logger.DebugWith().Str("reason", reason).
+			Msg("bridge: skipped stale CI-V TX recovery; transmitter is no longer uncertain")
+		return nil
+	}
+
+	off, err := encodeTuneUnkey(def)
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("encode CI-V tx_off")
 	}
 	if err := s.writeKeyedLine(context.Background(), def, cl, off, "tx-alarm recovery unkey"); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("write CI-V tx_off")

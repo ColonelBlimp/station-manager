@@ -432,6 +432,85 @@ func TestRecheckTx_CIVRecoversAfterAutomaticWindow(t *testing.T) {
 	}
 }
 
+// The endpoint is always registered, not only while an alarm banner is visible.
+// A direct call during a healthy IC-7300 FT8 transmission must be a no-op:
+// sending tx_off would truncate the slot while ft8TxActive and its timer stayed
+// armed.
+func TestRecheckTx_CIVDoesNotInterruptHealthyFT8(t *testing.T) {
+	s, fake, _, cleanup := startedCIVService(t, []byte(civAckOKFrame))
+	defer cleanup()
+	before := countCIVUnkeys(fake)
+
+	s.mu.Lock()
+	s.ft8TxActive = true
+	s.txUncertain = false
+	s.txAlarmActive = false
+	s.mu.Unlock()
+
+	if err := s.RecheckTx(); err != nil {
+		t.Fatalf("RecheckTx during healthy CI-V FT8 TX: %v", err)
+	}
+	if got := countCIVUnkeys(fake); got != before {
+		t.Fatalf("healthy CI-V FT8 TX was interrupted: tx_off count %d → %d", before, got)
+	}
+	s.mu.Lock()
+	active := s.ft8TxActive
+	s.ft8TxActive = false // keep fixture cleanup from treating this as a real TX
+	s.mu.Unlock()
+	if !active {
+		t.Fatal("healthy FT8 controller state was unexpectedly cleared")
+	}
+}
+
+// An automatic probe validates its generation before calling the protocol
+// recovery, but it can then wait behind keyMu while the alarm clears and a new
+// transmission starts. The protocol operation must revalidate after acquiring
+// keyMu rather than acting on the stale earlier decision.
+func TestCIVRecovery_RevalidatesAfterWaitingForKeyMu(t *testing.T) {
+	s, fake, _, cleanup := startedCIVService(t, []byte(civAckOKFrame))
+	defer cleanup()
+	before := countCIVUnkeys(fake)
+
+	s.mu.Lock()
+	s.txAlarmActive = true
+	s.txUncertain = true
+	s.mu.Unlock()
+
+	s.keyMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- s.probeTxRecovery("stale automatic probe")
+	}()
+
+	// The old alarm is resolved and a new, healthy controller owns PTT before
+	// the queued recovery operation gets the lifecycle lock.
+	s.mu.Lock()
+	s.txAlarmActive = false
+	s.txUncertain = false
+	s.ft8TxActive = true
+	s.mu.Unlock()
+	s.keyMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("stale CI-V recovery: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stale CI-V recovery did not finish")
+	}
+	if got := countCIVUnkeys(fake); got != before {
+		t.Fatalf("stale recovery interrupted new FT8 TX: tx_off count %d → %d", before, got)
+	}
+	s.mu.Lock()
+	active := s.ft8TxActive
+	s.ft8TxActive = false
+	s.mu.Unlock()
+	if !active {
+		t.Fatal("new FT8 controller state was unexpectedly cleared")
+	}
+}
+
 // Pressing Re-check is not an operator override. If CI-V never ACKs the safe
 // tx_off, the request fails and both the warning and TX gate remain latched.
 func TestRecheckTx_CIVMissingAckKeepsAlarm(t *testing.T) {
