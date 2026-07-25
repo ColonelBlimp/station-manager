@@ -31,7 +31,7 @@ var txStatusQuery = []byte("TX;")
 // schedule in production.
 func newAlarmProbeService(t *testing.T, attempts int) (*Service, *fakeSerial) {
 	t.Helper()
-	delay, interval, max := txAlarmProbeDelay, txAlarmProbeInterval, txAlarmProbeAttempts
+	delay, interval, maxAttempts := txAlarmProbeDelay, txAlarmProbeInterval, txAlarmProbeAttempts
 	stopN, stopEvery := txStopRetryAttempts, txStopRetryInterval
 	txAlarmProbeDelay = 5 * time.Millisecond
 	txAlarmProbeInterval = 5 * time.Millisecond
@@ -53,7 +53,7 @@ func newAlarmProbeService(t *testing.T, attempts int) (*Service, *fakeSerial) {
 	t.Cleanup(func() {
 		cancel()
 		s.wg.Wait() // the probe + re-unkey goroutines are registered on it
-		txAlarmProbeDelay, txAlarmProbeInterval, txAlarmProbeAttempts = delay, interval, max
+		txAlarmProbeDelay, txAlarmProbeInterval, txAlarmProbeAttempts = delay, interval, maxAttempts
 		txStopRetryAttempts, txStopRetryInterval = stopN, stopEvery
 	})
 	return s, fake
