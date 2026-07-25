@@ -239,6 +239,42 @@ func TestCapture_DisarmsTxWhenLastSubscriberLeaves(t *testing.T) {
 		"TX must be disarmed once the last subscriber leaves past the linger")
 }
 
+// TestCapture_DisarmsTxWhenLastSubscriberLeaves_CaptureDown is the attended-only
+// rule when capture is NOT running (2026-07-25 review). TX arms independently of
+// capture — armTx checks only keyer / TxReady / output device — so a rig with a
+// live CAT link but an unavailable INPUT device (missing, busy) arms fine while
+// capturing stays false; the same state arises when a live session's capture loop
+// dies (onCaptureLoopExit clears capturing without disarming).
+//
+// Both the linger scheduling and its expiry used to skip on !capturing, so the
+// operator closing the browser disarmed NOTHING: TX stayed armed unattended, and a
+// queued TransmitNext — which waits on the UTC boundary itself, not on the capture
+// scheduler — could key with nobody there. The disarm must not depend on capture.
+func TestCapture_DisarmsTxWhenLastSubscriberLeaves_CaptureDown(t *testing.T) {
+	withShortLinger(t, 10*time.Millisecond)
+	// Capture acquisition fails → capturing stays false, subsystem idle (fail-soft).
+	src := &fakeSource{startErr: stderrors.New("no capture device")}
+	s := newService(types.Ft8Config{Enabled: true, TX: &types.Ft8TXConfig{}}, logging.Noop(), src)
+	s.newPlayer = func(string, int) (txPlayer, error) { return newFakeTxPlayer(), nil }
+	s.SetTxKeyer(&fakeKeyer{})
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub := s.Subscribe()
+	require.False(t, s.capturing, "precondition: capture must be down for this case")
+
+	// TX still arms — the output path is fine, only the input device is gone.
+	require.NoError(t, s.ArmTx(true))
+	armed := func() bool { s.txMu.Lock(); defer s.txMu.Unlock(); return s.txArmed }
+	require.True(t, armed(), "TX should arm even with capture down")
+
+	unsub() // browser closes: last subscriber gone, nobody attending
+
+	require.Eventually(t, func() bool { return !armed() }, time.Second, 5*time.Millisecond,
+		"TX must be disarmed when the operator leaves, even though capture was never running")
+}
+
 // TestCapture_Error_FailSoft covers the "enabled but capture won't start" case
 // (no device, busy, or the CGO-free build's unavailable stub): the subscriber
 // connection that triggers acquisition must not panic or error out; the

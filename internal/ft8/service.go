@@ -318,25 +318,45 @@ func (s *Service) onSubscriberAdded() {
 		return
 	}
 	if s.lingerTimer != nil {
-		// A release was pending but capture is still live — keep it.
+		// A teardown was pending — cancel it, the operator is back.
+		//
+		// Then FALL THROUGH to the acquire rather than returning (2026-07-25
+		// review fix): a pending timer no longer implies a live capture session.
+		// onSubscriberRemoved now schedules the timer regardless of s.capturing
+		// (it carries the attended-only TX disarm), so this branch is also reached
+		// after a session whose capture loop died — where returning early would
+		// leave the reconnecting subscriber with NO capture, defeating the
+		// documented "re-open the FT8 view to restart" recovery. startCaptureLocked
+		// is the right arbiter: its F1 guard no-ops when a session is genuinely
+		// still live, so the reuse case is unchanged.
 		s.lingerTimer.Stop()
 		s.lingerTimer = nil
-		return
 	}
 	s.startCaptureLocked()
 }
 
 // onSubscriberRemoved is called when a /v1/ft8/events subscriber disconnects.
-// When the last one leaves (count→0) it schedules a release after captureLinger
-// rather than tearing the device down immediately, so a quick reconnect reuses
-// the live session.
+// When the last one leaves (count→0) it schedules the attendance teardown after
+// captureLinger rather than acting immediately, so a quick reconnect reuses the
+// live session.
+//
+// Deliberately NOT gated on s.capturing (2026-07-25 review): this timer carries
+// the attended-only TX disarm, which must run whenever the operator leaves —
+// including when capture is already down. TX arms independently of capture
+// (armTx checks only keyer / TxReady / output device), and capturing can go false
+// on its own via onCaptureLoopExit (a dead capture loop) or a failed acquisition.
+// Gating here therefore left TX ARMED with nobody attending: no timer was
+// scheduled, so nothing ever disarmed, and a queued TransmitNext — which waits on
+// the UTC boundary itself, not on the capture scheduler — could key after the
+// operator closed the browser. Scheduling unconditionally is cheap: disarmTx is
+// idempotent, and onLingerExpired still gates the DEVICE release on capturing.
 func (s *Service) onSubscriberRemoved() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.subCount > 0 {
 		s.subCount--
 	}
-	if s.subCount != 0 || s.stopped || !s.capturing || s.lingerTimer != nil {
+	if s.subCount != 0 || s.stopped || s.lingerTimer != nil {
 		return
 	}
 	s.lingerTimer = time.AfterFunc(captureLinger, s.onLingerExpired)
@@ -349,7 +369,13 @@ func (s *Service) onSubscriberRemoved() {
 func (s *Service) onLingerExpired() {
 	s.mu.Lock()
 	s.lingerTimer = nil
-	if s.subCount > 0 || s.stopped || !s.capturing {
+	// No !s.capturing check (2026-07-25 review): the disarm below is the
+	// attended-only guarantee and must run even with capture already down —
+	// otherwise a session whose capture loop died (onCaptureLoopExit clears
+	// capturing without disarming) leaves TX armed once the operator leaves. The
+	// DEVICE release further down stays gated on capturing, which is the only
+	// part that genuinely depends on it. Stop() owns the stopped case (disarmTx(true)).
+	if s.subCount > 0 || s.stopped {
 		s.mu.Unlock()
 		return
 	}
