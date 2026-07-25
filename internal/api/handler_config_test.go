@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	stderr "errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	// Registered for their credential-field descriptors: the blank-credential merge
 	// rule keys off CredentialField.Clearable, so these tests must see the real
@@ -1495,6 +1497,85 @@ func TestHandlePutConfig_RejectsUnstartableForwarder(t *testing.T) {
 		if fc.Name == "cl" {
 			t.Fatalf("rejected PUT still wrote the forwarder: %+v", fc)
 		}
+	}
+}
+
+// TestHandlePutConfig_UnstartableForwarderDoesNotLeakCredentials guards the
+// disclosure path the startup probe opened. Constructors format the offending
+// value into their message — smcloud.New quotes credentials.url, which can carry
+// userinfo (a token in the URL) — so returning Build's error verbatim would hand
+// back, in a 400 and the access log, exactly the value GET /v1/config masks.
+//
+// The route is the reviewer's: store the bad URL while DISABLED (allowed, startup
+// skips it), then enable without retyping credentials. The merge keeps the stored
+// value, the probe fails, and the response must stay generic.
+func TestHandlePutConfig_UnstartableForwarderDoesNotLeakCredentials(t *testing.T) {
+	srv := testServer(t)
+
+	const secretURL = "ftp://alice:s3cr3t-token@cloud.example.org"
+	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"cloud","type":"smcloud","enabled":false,"action_filter":["insert"],` +
+		`"credentials":{"url":"` + secretURL + `","token":"TOKEN123"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT 1 status = %d (a disabled entry may hold bad credentials); body = %s", w.Code, w.Body.String())
+	}
+
+	// Enable it, sending no credentials — the stored (bad) URL is merged in.
+	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"cloud","type":"smcloud","enabled":true,"action_filter":["insert"]}]}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w2.Code, w2.Body.String())
+	}
+	respBody := w2.Body.String()
+	for _, leak := range []string{secretURL, "s3cr3t-token", "alice", "TOKEN123"} {
+		if strings.Contains(respBody, leak) {
+			t.Fatalf("400 body leaked masked credential material (%q): %s", leak, respBody)
+		}
+	}
+	if !strings.Contains(respBody, "forwarder_unusable") {
+		t.Fatalf("expected the stable forwarder_unusable code: %s", respBody)
+	}
+}
+
+// TestHandlePutConfig_SetupRejectsForwarderBeforeSeedingLogbook: during first-run
+// setup the forwarder probe must run in the DRY RUN, before seedDefaultLogbook
+// writes to the DB. That write is not rolled back by the later in-lock rejection,
+// so probing only at commit time left setup incomplete WITH an orphaned logbook —
+// and a retry under a corrected callsign then failed 409 on the stale row,
+// needing manual DB surgery.
+func TestHandlePutConfig_SetupRejectsForwarderBeforeSeedingLogbook(t *testing.T) {
+	srv := testServer(t)
+	if srv.cfg.Snapshot().SetupComplete {
+		t.Fatal("test server should start pre-setup")
+	}
+	lbID := srv.cfg.Snapshot().DefaultLogbookID
+
+	// A setup PUT (carries a callsign) that also enables an unbuildable forwarder.
+	body := `{"logging_station":{"station_callsign":"M0ABC"},"station":{},"forwarders":[` +
+		`{"name":"cl","type":"clublog","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"email":"op@example.com"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	if srv.cfg.Snapshot().SetupComplete {
+		t.Fatal("setup must not complete on a rejected PUT")
+	}
+	// The partial write: no logbook row may have been created.
+	if _, err := srv.db.LogbookCallsignByIDWithContext(req.Context(), lbID); !stderr.Is(err, errors.ErrNotFound) {
+		t.Fatalf("rejected setup PUT still seeded the default logbook (err = %v) — a retry under a "+
+			"corrected callsign would now fail 409 on the orphaned row", err)
 	}
 }
 
