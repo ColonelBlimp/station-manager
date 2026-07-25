@@ -1,5 +1,5 @@
-// Operate-surface UI state: the pile-up drawer, and the two overlays (export /
-// contact). Tile visibility + arrangement live in lib/operate/layout.svelte
+// Operate-surface UI state: the pile-up drawer and the export/email overlay.
+// Tile visibility + arrangement live in lib/operate/layout.svelte
 // (ADR 0046) — the single-slot `panel` model was retired with the tile board.
 // (Left-nav + theme + right-rail collapse live in lib/ui/state.)
 
@@ -7,10 +7,6 @@ export const operate = $state({
     pileup: false,
     // Export/email dialog (opened from the Session tile's header action).
     exportOpen: false,
-    // Contact-detail overlay (opened from the Worked tile's View action while
-    // a QSO is underway) — the everything-we-know view, and the deliberate
-    // edit-any-field surface that replaced the always-on Details card.
-    contactOpen: false,
 });
 
 export function openExport(): void {
@@ -19,14 +15,6 @@ export function openExport(): void {
 
 export function closeExport(): void {
     operate.exportOpen = false;
-}
-
-export function openContact(): void {
-    operate.contactOpen = true;
-}
-
-export function closeContact(): void {
-    operate.contactOpen = false;
 }
 
 export function setPileup(open: boolean): void {

@@ -1,11 +1,11 @@
 <script lang="ts">
     // Worked-before table — previous QSOs with the station being entered. Pure
     // presentation over the worked state (the LoggingCard drives the lookup);
-    // self-contained tile (ADR 0045/0046): owns its own header (title + the
-    // View… contact overlay action, which used to live on the InfoPanel wrapper).
+    // self-contained tile (ADR 0045/0046): owns its own header (title + a Hide
+    // action). The contact-detail fields it used to open via a "View…" button now
+    // live inline in the LoggingCard's Contact-details disclosure (2026-07-25).
     import { worked } from './worked.svelte';
-    import { qsoClock } from './qso.svelte';
-    import { openContact, focusCallsign } from './state.svelte';
+    import { focusCallsign } from './state.svelte';
     import { hideTile } from './layout.svelte';
     const tableHeight = 'h-55';
 </script>
@@ -14,15 +14,6 @@
     <div class="flex items-center justify-between">
         <h3 class="text-sm font-semibold text-ink">Worked</h3>
         <div class="flex items-center gap-x-2">
-            <!-- Contact-detail overlay — only meaningful once a QSO is underway. -->
-            <button
-                class="btn text-xs"
-                disabled={!qsoClock.started}
-                title={qsoClock.started ? undefined : 'Start a QSO to view contact details'}
-                onclick={openContact}
-            >
-                View…
-            </button>
             <button
                 class="cursor-pointer rounded-md text-muted hover:text-ink"
                 title="Hide"

@@ -9,7 +9,6 @@
     import ArrangeBar from './ArrangeBar.svelte';
     import PileupDrawer from './PileupDrawer.svelte';
     import ExportDialog from './ExportDialog.svelte';
-    import ContactDialog from './ContactDialog.svelte';
     import RigKeys from './RigKeys.svelte';
     import Ft8View from './Ft8View.svelte';
     import SessionPanel from './SessionPanel.svelte';
@@ -29,7 +28,6 @@
 <UtilRail />
 <PileupDrawer />
 <ExportDialog />
-<ContactDialog />
 
 <!-- FT8 has no tile board, so the rail-toggled info panels (Rig · Session) render
      here as a stacked overlay when shown. Phone/CW shows the same self-contained

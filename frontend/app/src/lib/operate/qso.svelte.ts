@@ -17,14 +17,14 @@ export interface QsoDraft {
     rstRcvd: string;
     name: string;
     qth: string; // ADIF QTH — enrichment-filled; correctable in the logging card's Contact-details disclosure
-    gridsquare: string; // ADIF GRIDSQUARE — filled by enrichment (Details), not entered on the card
+    gridsquare: string; // ADIF GRIDSQUARE — enrichment-filled; correctable in the logging card's Contact-details disclosure
     dateOn: string; // ADIF QSO_DATE — UTC, YYYY-MM-DD
     timeOn: string; // ADIF TIME_ON — UTC, HH:MM:SS
     dateOff: string; // ADIF QSO_DATE_OFF
     timeOff: string; // ADIF TIME_OFF
     comment: string; // ADIF COMMENT — things shared during the QSO (logging card)
-    // Rarely-touched per-contact fields — off the fast-path logging card, edited
-    // on demand in the contact overlay (ContactDialog).
+    // Rarely-touched per-contact fields — off the fast-path entry row, edited on
+    // demand in the logging card's Contact-details disclosure.
     rig: string; // ADIF RIG — contacted station's rig / working conditions
     notes: string; // ADIF NOTES — operator's PRIVATE notes (distinct from COMMENT)
     rxPwr: string; // ADIF RX_PWR — contacted station's TX power in watts (their signal, as received)

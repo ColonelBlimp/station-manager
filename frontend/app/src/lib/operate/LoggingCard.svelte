@@ -2,9 +2,10 @@
     // Phone/CW logging card — the fast-path entry fields (callsign, RST, time),
     // a Name + Comment row, and a collapsible Contact-details disclosure for the
     // contacted-station facts kept off the fast path (QTH / Rig / RX power / Notes
-    // to edit; QRZ page link + looked-up email to read). QTH is enrichment-filled
-    // (fill-if-empty in enrich.svelte), correctable here. Gridsquare stays in the
-    // ContactDialog overlay — enrichment-filled, effectively never hand-corrected.
+    // to edit; QRZ page link + looked-up email + CQ/ITU zone to read). QTH and
+    // Gridsquare are enrichment-filled (fill-if-empty in enrich.svelte), correctable
+    // here — the former ContactDialog overlay was folded in (its only non-duplicate
+    // fields were Gridsquare + the two zones; everything else already lived here).
     //
     // The right column hosts EnrichmentCard (flag / DXCC + NEW / bearing SP-LP /
     // distance — mirrors the FT8 Band-Activity enrichment). This card is only its
@@ -29,20 +30,30 @@
     import DuplicateDialog from './DuplicateDialog.svelte';
     import { observeWorked, openWorkedForQso } from './worked.svelte';
     import { rigReady, rigGate } from './rig.svelte';
-    import { operate, closeContact, closeExport, registerCallsignInput } from './state.svelte';
+    import { operate, closeExport, registerCallsignInput } from './state.svelte';
     import { toasts } from '../ui/toasts.svelte';
     import EnrichmentCard from './EnrichmentCard.svelte';
     import { enrich } from './enrich.svelte';
+    import { isValidMaidenhead } from '../validators/maidenhead';
 
-    // Contact-details disclosure (rig / RX power / notes to edit; QRZ page link +
-    // looked-up email to read — all for the contacted station). Enrichment is
-    // trusted only when it belongs to the call in the draft (a fast edit can outrun
-    // the debounced lookup), mirroring ContactDialog.
+    // Contact-details disclosure (grid / QTH / rig / RX power / notes to edit; QRZ
+    // page link + looked-up email + CQ/ITU zone to read — all for the contacted
+    // station). Enrichment is trusted only when it belongs to the call in the draft
+    // (a fast edit can outrun the debounced lookup).
     const detailsCall = $derived(draft.callsign.trim().toUpperCase());
     const enrichData = $derived(enrich.call === detailsCall ? enrich.data : null);
     const qrzUrl = $derived(
         detailsCall === '' ? null : `https://www.qrz.com/db/${encodeURIComponent(detailsCall)}`
     );
+    // Gridsquare is enrichment-filled but hand-correctable here (folded off the
+    // former ContactDialog overlay); validate it the same way the overlay did —
+    // isValidMaidenhead returns non-null on a bad grid.
+    const gridInvalid = $derived(
+        draft.gridsquare !== '' && isValidMaidenhead(draft.gridsquare) !== null
+    );
+    function upperGrid(): void {
+        draft.gridsquare = draft.gridsquare.toUpperCase();
+    }
 
     // Why the Log button is gated, for the tooltip (undefined when it isn't).
     const gateTitle = $derived(
@@ -70,17 +81,6 @@
     }
 
     function windowKeydown(e: KeyboardEvent): void {
-        // Contact overlay open: it owns the keys. Esc closes the OVERLAY (never
-        // clears the draft underneath); log/clear shortcuts are inert so a
-        // key-repeat can't act on the card behind it.
-        if (operate.contactOpen) {
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                closeContact();
-                callInput?.focus();
-            }
-            return;
-        }
         // Export modal open: it owns the keys. Esc closes it; the log/clear
         // shortcuts are inert so they can't act on the card behind the modal.
         if (operate.exportOpen) {
@@ -290,7 +290,7 @@
         <details class="mt-2 rounded-md border border-line">
             <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-ink select-none">
                 Contact details
-                <span class="font-normal text-muted">(qth · rig · power · notes)</span>
+                <span class="font-normal text-muted">(grid · qth · rig · power · notes)</span>
             </summary>
             <div class="space-y-3 border-t border-line px-3 py-3">
                 <!-- Read-only, looked-up: QRZ page link + email. -->
@@ -325,11 +325,39 @@
                         <span class="text-muted">Email:</span>
                         <span class="text-ink">{enrichData?.email || '—'}</span>
                     </div>
+                    <div class="flex gap-x-6">
+                        <div>
+                            <span class="text-muted">CQ Zone:</span>
+                            <span class="tabular-nums text-ink">{enrichData?.cqZone || '—'}</span>
+                        </div>
+                        <div>
+                            <span class="text-muted">ITU Zone:</span>
+                            <span class="tabular-nums text-ink">{enrichData?.ituZone || '—'}</span>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- Editable contacted-station fields. QTH is enrichment-filled
-                     (correctable); Rig + RX power share a row (Rig fills; power
-                     stays narrow). -->
+                <!-- Editable contacted-station fields. Gridsquare + QTH are
+                     enrichment-filled (correctable); Rig + RX power share a row
+                     (Rig fills; power stays narrow). -->
+                <div>
+                    <label for="lc-grid" class="block text-sm font-medium text-ink"
+                        >Gridsquare</label
+                    >
+                    <input
+                        id="lc-grid"
+                        class="input w-full uppercase"
+                        class:input-error={gridInvalid}
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="e.g. KH66"
+                        bind:value={draft.gridsquare}
+                        oninput={upperGrid}
+                    />
+                    {#if gridInvalid}
+                        <p class="mt-1 text-xs text-invalid">Not a valid grid square</p>
+                    {/if}
+                </div>
                 <div>
                     <label for="lc-qth" class="block text-sm font-medium text-ink">QTH</label>
                     <input

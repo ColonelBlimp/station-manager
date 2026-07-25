@@ -46,7 +46,7 @@
     function onKeydown(e: KeyboardEvent): void {
         // A modal overlay owns the keyboard while open — don't tune underneath it.
         // (The pile-up drawer is docked, not modal, so shortcuts stay live there.)
-        if (operate.contactOpen || operate.exportOpen || submitState.duplicate) return;
+        if (operate.exportOpen || submitState.duplicate) return;
         if (!e.ctrlKey || !e.shiftKey) return; // the rig family is Ctrl+Shift only
 
         if (e.code === 'Backslash') {
