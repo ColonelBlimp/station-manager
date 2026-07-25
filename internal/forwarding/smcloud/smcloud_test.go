@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +49,34 @@ func TestNew_Validation(t *testing.T) {
 		if _, err := New(fc); err == nil {
 			t.Errorf("%s: New accepted bad credentials", c.name)
 		}
+	}
+}
+
+// TestNew_RejectionDoesNotEchoCredentials: a constructor error is logged as a
+// startup fatal by spawnForwarderWorkers and raised again by the config PUT's
+// startup probe, so it must never quote the URL — a URL credential can hide
+// userinfo (https://user:token@host) that a %q looks harmless around.
+func TestNew_RejectionDoesNotEchoCredentials(t *testing.T) {
+	const (
+		user  = "alice"
+		token = "s3cr3t-token"
+		bad   = "ftp://" + user + ":" + token + "@cloud.example.org"
+	)
+	fc := types.ForwarderConfig{Name: "smcloud", Type: Type}
+	fc.Credentials = json.RawMessage(`{"url":"` + bad + `","token":"tok-123"}`)
+
+	_, err := New(fc)
+	if err == nil {
+		t.Fatal("New accepted a non-http(s) URL")
+	}
+	for _, leak := range []string{bad, token, user, "tok-123"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Fatalf("constructor error leaked credential material (%q): %v", leak, err)
+		}
+	}
+	// It must still say something useful.
+	if !strings.Contains(err.Error(), "credentials.url") {
+		t.Fatalf("error should still name the offending field: %v", err)
 	}
 }
 
