@@ -46,6 +46,7 @@ func TestLoad_MalformedConfigIsActionable(t *testing.T) {
 		if strings.Contains(got, "line 5") {
 			t.Fatalf("caret should point at the comma (line 4), not the brace:\n%s", got)
 		}
+		assertCaretOn(t, got, ',')
 	})
 
 	t.Run("truncated file says it ends early", func(t *testing.T) {
@@ -121,17 +122,18 @@ func TestLoad_ValidConfigUnaffected(t *testing.T) {
 // with the tabs as PRINTED (expanded) rather than as stored.
 func TestLineColAndSnippetEdgeCases(t *testing.T) {
 	src := []byte("{\n\t\"a\": 1\n}")
-	if line, col := lineCol(src, int64(len(src))); line != 3 || col != 2 {
-		t.Fatalf("EOF offset → line %d col %d, want 3/2", line, col)
+	// The final byte is the closing brace: line 3, column 1.
+	if line, col := lineCol(src, len(src)-1); line != 3 || col != 1 {
+		t.Fatalf("last byte → line %d col %d, want 3/1", line, col)
 	}
-	// Offset past the end must clamp rather than panic.
+	// An index past the end must clamp rather than panic.
 	if line, _ := lineCol(src, 9999); line != 3 {
 		t.Fatalf("clamped line = %d, want 3", line)
 	}
 	// Byte column 2 of "\t\"a\": 1" is the quote. Once the tab is printed as four
 	// spaces the quote sits at display column 5, so the caret must too — measuring
 	// on the raw byte column would bury it in the indentation.
-	text, caret, ok := snippet(src, 2, 2)
+	text, caret, _, ok := snippet(src, 2, 2)
 	if !ok {
 		t.Fatal("snippet not produced for a tab-indented line")
 	}
@@ -143,5 +145,89 @@ func TestLineColAndSnippetEdgeCases(t *testing.T) {
 	}
 	if idx := strings.IndexByte(caret, '^'); idx >= len(text) || text[idx] != '"' {
 		t.Fatalf("caret at index %d does not land on the quote in %q", idx, text)
+	}
+}
+
+// assertCaretOn checks the caret row lines up with the expected character in the
+// quoted snippet above it. Asserting only that a caret EXISTS let an off-by-one
+// through the first review round — the output looked right at a glance.
+func assertCaretOn(t *testing.T, msg string, want byte) {
+	t.Helper()
+	lines := strings.Split(msg, "\n")
+	for i, ln := range lines {
+		caretAt := strings.IndexByte(ln, '^')
+		if caretAt < 0 || !strings.HasPrefix(strings.TrimSpace(ln), "|") && !strings.Contains(ln, "|") {
+			continue
+		}
+		if i == 0 {
+			continue
+		}
+		src := lines[i-1]
+		if caretAt >= len(src) {
+			t.Fatalf("caret at column %d is past the end of %q", caretAt, src)
+		}
+		if src[caretAt] != want {
+			t.Fatalf("caret points at %q, want %q\n  %s\n  %s", src[caretAt], want, src, ln)
+		}
+		return
+	}
+	t.Fatalf("no caret row found in:\n%s", msg)
+}
+
+// TestLoad_SnippetRedactsCredentials guards the disclosure the snippet opened.
+// config.json is written 0600 BECAUSE it holds SMTP and lookup-provider
+// passwords and forwarder credentials; this message goes to stderr (→ the
+// journal) and is mirrored into smd.log at 0644. Quoting the raw line would copy
+// a secret out of the protected file into a world-readable one.
+func TestLoad_SnippetRedactsCredentials(t *testing.T) {
+	const secret = "hunter2-smtp-password"
+	got := loadErrText(t, "{\n  \"version\": 2,\n  \"smtp\": {\n    \"password\": \""+secret+"\",\n  }\n}\n")
+
+	if strings.Contains(got, secret) {
+		t.Fatalf("the snippet leaked a credential into a message bound for smd.log (0644):\n%s", got)
+	}
+	// The line must stay identifiable: keys are not secrets and are what tell the
+	// operator WHICH line to open.
+	if !strings.Contains(got, `"password"`) {
+		t.Fatalf("redaction removed the key too, leaving the line unidentifiable:\n%s", got)
+	}
+	if !strings.Contains(got, "string values shown as") {
+		t.Fatalf("redaction is not explained, so the asterisks look like corruption:\n%s", got)
+	}
+	// Redaction preserves length, so the caret must still land on the comma.
+	assertCaretOn(t, got, ',')
+}
+
+// TestLoad_TrailingJunkIsNotCalledTruncation: a fault on the LAST byte is not
+// proof the document ended early. A complete document followed by junk faults
+// there too, and the ends-early hint would send the operator hunting for an
+// unclosed bracket that does not exist.
+func TestLoad_TrailingJunkIsNotCalledTruncation(t *testing.T) {
+	got := loadErrText(t, `{"version":2}?`)
+	if strings.Contains(got, "ends early") {
+		t.Fatalf("a structurally complete document was reported as truncated:\n%s", got)
+	}
+	assertCaretOn(t, got, '?')
+}
+
+// looksTruncated is the structural test behind that hint: it must key on unclosed
+// brackets/strings, not on where the parser happened to stop.
+func TestLooksTruncated(t *testing.T) {
+	cases := []struct {
+		src  string
+		want bool
+	}{
+		{`{"a":1}`, false},
+		{`{"a":1}?`, false},    // complete, then junk
+		{`{"a":{`, true},       // unclosed object
+		{`{"a":"b`, true},      // unterminated string
+		{`{"a":"}"}`, false},   // brace inside a string is data, not structure
+		{`{"a":"x\""}`, false}, // escaped quote must not flip string state
+		{`[1,2`, true},         // unclosed array
+	}
+	for _, c := range cases {
+		if got := looksTruncated([]byte(c.src)); got != c.want {
+			t.Errorf("looksTruncated(%q) = %v, want %v", c.src, got, c.want)
+		}
 	}
 }

@@ -33,6 +33,11 @@ import (
 // config.json can't dump kilobytes onto the terminal.
 const maxSnippetLen = 120
 
+// redactChar replaces the content of string VALUES in a quoted snippet. Single
+// byte on purpose: the caret is positioned by byte width, so a multi-byte glyph
+// would shift it off the character it points at.
+const redactChar = '*'
+
 // describeJSONError renders a JSON syntax or type error against src as an
 // operator-facing message, or returns nil when err is neither — so callers can
 // fall through to their existing wrapping for non-JSON failures (a version
@@ -54,24 +59,35 @@ func describeJSONError(path string, src []byte, hasOffsets bool, err error) erro
 	var typ *json.UnmarshalTypeError
 	switch {
 	case stderr.As(err, &syn):
-		// point may move the caret off the reported fault: for a trailing comma
-		// json blames the closing brace, but the character to DELETE is the comma,
+		// idx may move the caret off the reported fault: for a trailing comma json
+		// blames the closing brace, but the character to DELETE is the comma,
 		// possibly lines earlier. Pointing at the fix beats pointing at the symptom.
-		hint, point := syntaxHint(src, syn.Offset)
+		hint, idx := syntaxHint(src, faultIndex(syn.Offset))
 		return &loadError{
 			path:     path,
 			headline: fmt.Sprintf("%s is not valid JSON: %s", path, syn.Error()),
-			src:      src, offset: point, hasOffsets: hasOffsets,
+			src:      src, index: idx, hasOffsets: hasOffsets,
 			hint: hint,
 		}
 	case stderr.As(err, &typ):
 		return &loadError{
 			path:     path,
 			headline: fmt.Sprintf("%s has a value of the wrong type: %s", path, typeFault(typ)),
-			src:      src, offset: typ.Offset, hasOffsets: hasOffsets,
+			src:      src, index: faultIndex(typ.Offset), hasOffsets: hasOffsets,
 		}
 	}
 	return nil
+}
+
+// faultIndex converts encoding/json's Offset into a 0-based index of the
+// OFFENDING byte. Offset counts through that byte (it is the position just
+// after it), so using it directly puts the caret one column late — invisible in
+// a casual read of the output, which is how it survived the first round.
+func faultIndex(offset int64) int {
+	if offset <= 0 {
+		return 0
+	}
+	return int(offset) - 1
 }
 
 // typeFault describes an UnmarshalTypeError without Go type names. A nested
@@ -111,31 +127,118 @@ func goTypeToJSON(goType string) string {
 // It also returns where the caret should point, which is not always the offset
 // json reported: for a trailing comma the parser blames the closing bracket,
 // while the character the operator must delete is the comma before it.
-func syntaxHint(src []byte, offset int64) (hint string, point int64) {
+func syntaxHint(src []byte, idx int) (hint string, point int) {
+	if idx >= len(src) {
+		idx = len(src) - 1
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	var at byte
+	if idx < len(src) {
+		at = src[idx]
+	}
 	// A trailing comma: the last meaningful character before the fault is a
 	// comma, and the fault itself is a closing bracket. JSON forbids this while
 	// most config formats allow it, so it is the single most common slip.
-	i := int(offset) - 1
-	if i > len(src) {
-		i = len(src)
-	}
-	var at byte
-	if int(offset)-1 >= 0 && int(offset)-1 < len(src) {
-		at = src[offset-1]
-	}
-	for i--; i >= 0; i-- {
+	for i := idx - 1; i >= 0; i-- {
 		if c := src[i]; c != ' ' && c != '\t' && c != '\n' && c != '\r' {
 			if c == ',' && (at == '}' || at == ']') {
-				// +1 so lineCol's 1-based column lands ON the comma.
-				return "JSON does not allow a trailing comma before } or ]", int64(i) + 1
+				return "JSON does not allow a trailing comma before } or ]", i
 			}
 			break
 		}
 	}
-	if offset >= int64(len(src)) {
-		return "the file ends early — a { [ or \" is probably never closed", offset
+	// "Ends early" must mean STRUCTURALLY incomplete, not merely "the fault is at
+	// the last byte" — trailing junk after a complete document (`{"version":2}?`)
+	// also faults on the final byte and would be sent chasing an unclosed bracket
+	// that isn't there.
+	if looksTruncated(src) {
+		return "the file ends early — a { [ or \" is probably never closed", idx
 	}
-	return "", offset
+	return "", idx
+}
+
+// looksTruncated reports whether the document ends with something still open —
+// an unterminated string, or more { [ than } ]. Scanned rather than inferred
+// from the fault position, and string-aware so a brace inside a value doesn't
+// skew the depth.
+func looksTruncated(src []byte) bool {
+	depth := 0
+	inString, escaped := false, false
+	for _, c := range src {
+		switch {
+		case escaped:
+			escaped = false
+		case inString && c == '\\':
+			escaped = true
+		case c == '"':
+			inString = !inString
+		case inString:
+			// Punctuation inside a string is data, not structure.
+		case c == '{', c == '[':
+			depth++
+		case c == '}', c == ']':
+			depth--
+		}
+	}
+	return inString || depth > 0
+}
+
+// redactStringValues blanks the CONTENT of every JSON string value on a line,
+// keeping keys (a string followed by ':') so the line stays identifiable.
+//
+// config.json is written 0600 because it holds SMTP and lookup-provider
+// passwords and forwarder credentials; this snippet, by contrast, goes to stderr
+// (→ the journal) and is mirrored into smd.log at 0644. Quoting the raw line
+// would therefore copy a secret from a private file into a world-readable one
+// whenever the syntax error happened to be on a credential line.
+//
+// Length is preserved exactly so the caret still lands on the character it
+// describes. An unterminated string is redacted to end-of-line: with no closing
+// quote there is no way to tell key from value, so assume the worst.
+func redactStringValues(line string) (string, bool) {
+	out := []byte(line)
+	changed := false
+	for i := 0; i < len(out); {
+		if out[i] != '"' {
+			i++
+			continue
+		}
+		open := i
+		j := i + 1
+		for j < len(out) {
+			if out[j] == '\\' {
+				j += 2
+				continue
+			}
+			if out[j] == '"' {
+				break
+			}
+			j++
+		}
+		if j >= len(out) { // unterminated
+			for k := open + 1; k < len(out); k++ {
+				out[k] = redactChar
+				changed = true
+			}
+			break
+		}
+		k := j + 1
+		for k < len(out) && (out[k] == ' ' || out[k] == '\t') {
+			k++
+		}
+		if k < len(out) && out[k] == ':' { // a key — keep it, it names the line
+			i = j + 1
+			continue
+		}
+		for m := open + 1; m < j; m++ {
+			out[m] = redactChar
+			changed = true
+		}
+		i = j + 1
+	}
+	return string(out), changed
 }
 
 // loadError carries the pieces so Error() can render them together; keeping it
@@ -144,7 +247,7 @@ type loadError struct {
 	path       string
 	headline   string
 	src        []byte
-	offset     int64
+	index      int // 0-based byte index of the offending character
 	hasOffsets bool
 	hint       string
 }
@@ -153,10 +256,14 @@ func (e *loadError) Error() string {
 	var b strings.Builder
 	b.WriteString(e.headline)
 	if e.hasOffsets {
-		line, col := lineCol(e.src, e.offset)
+		line, col := lineCol(e.src, e.index)
 		fmt.Fprintf(&b, "\n  at line %d, column %d", line, col)
-		if snip, caret, ok := snippet(e.src, line, col); ok {
+		if snip, caret, redacted, ok := snippet(e.src, line, col); ok {
 			fmt.Fprintf(&b, "\n\n    %d | %s\n      | %s", line, snip, caret)
+			if redacted {
+				b.WriteString("\n\n  (string values shown as " + string(redactChar) +
+					" — this message reaches the log and journal, config.json does not)")
+			}
 		}
 	}
 	if e.hint != "" {
@@ -165,38 +272,44 @@ func (e *loadError) Error() string {
 	return b.String()
 }
 
-// lineCol converts a byte offset into 1-based line and column. An offset at or
-// past the end (the "ends early" case) reports the final position.
-func lineCol(src []byte, offset int64) (line, col int) {
-	if offset > int64(len(src)) {
-		offset = int64(len(src))
+// lineCol converts a 0-BASED byte index into 1-based line and column — the
+// position of src[idx] itself, not of the byte after it.
+func lineCol(src []byte, idx int) (line, col int) {
+	if idx >= len(src) {
+		idx = len(src) - 1
+	}
+	if idx < 0 {
+		return 1, 1
 	}
 	line, lineStart := 1, 0
-	for i := 0; i < int(offset); i++ {
+	for i := 0; i < idx; i++ {
 		if src[i] == '\n' {
 			line++
 			lineStart = i + 1
 		}
 	}
-	return line, int(offset) - lineStart + 1
+	return line, idx - lineStart + 1
 }
 
 // snippet returns the 1-based line's text (tabs expanded so the caret lines up)
 // and a caret row pointing at col.
-func snippet(src []byte, line, col int) (text, caret string, ok bool) {
+func snippet(src []byte, line, col int) (text, caret string, redacted, ok bool) {
 	const tabWidth = "    "
 
 	lines := strings.Split(string(src), "\n")
 	if line < 1 || line > len(lines) {
-		return "", "", false
+		return "", "", false, false
 	}
 	raw := strings.TrimRight(lines[line-1], "\r")
 	if strings.TrimSpace(raw) == "" {
-		return "", "", false
+		return "", "", false, false
 	}
 	if col > len(raw)+1 {
 		col = len(raw) + 1
 	}
+	// Redact BEFORE expanding tabs: redaction preserves byte length exactly, so
+	// the caret arithmetic below is unaffected by it.
+	raw, redacted = redactStringValues(raw)
 	// col is a BYTE column, but the line is printed with tabs expanded — so the
 	// caret's position has to be measured on the expanded PREFIX, not on col.
 	// Expanding only the display line (and trusting col) puts the caret inside
@@ -206,8 +319,8 @@ func snippet(src []byte, line, col int) (text, caret string, ok bool) {
 	if len(text) > maxSnippetLen {
 		text = text[:maxSnippetLen] + " …"
 		if caretCol > maxSnippetLen {
-			return text, "", true
+			return text, "", redacted, true
 		}
 	}
-	return text, strings.Repeat(" ", caretCol) + "^", true
+	return text, strings.Repeat(" ", caretCol) + "^", redacted, true
 }
