@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,8 +49,16 @@ type testHarness struct {
 func newHarness(t *testing.T) *testHarness {
 	t.Helper()
 
-	cfg := config.DefaultConfig(t.TempDir())
-	cfg.Datastore.Path = ":memory:"
+	tmp := t.TempDir()
+	cfg := config.DefaultConfig(tmp)
+	// A temp-FILE DB, not ":memory:": a shared-cache in-memory DB is destroyed the
+	// instant its last pooled connection is transiently dropped — which happens
+	// under -race when the concurrent worker goroutine and the test both exercise
+	// the pool — surfacing an intermittent "no such table: qso_upload" (seen once
+	// in CI, 2026-07-25; the service's own DSN comment documents the drop-and-
+	// replace). A file DB has no connection-lifetime fragility; t.TempDir() cleans it.
+	dbPath := filepath.Join(tmp, "worker.db")
+	cfg.Datastore.Path = dbPath
 
 	cfgSvc := config.New(cfg)
 	if err := cfgSvc.Initialize(); err != nil {
@@ -71,7 +80,7 @@ func newHarness(t *testing.T) *testHarness {
 	}
 	dbSvc.DatabaseConfig = &types.DatastoreConfig{
 		Driver:                    "sqlite",
-		Path:                      ":memory:",
+		Path:                      dbPath,
 		MaxOpenConns:              1,
 		MaxIdleConns:              1,
 		ContextTimeout:            10,

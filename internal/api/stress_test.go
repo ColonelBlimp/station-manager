@@ -14,10 +14,13 @@ import (
 )
 
 // TestStress_20Clients_50QSOs launches 20 concurrent clients, each submitting
-// 50 unique QSOs to a single logbook. Clients 0-9 use CW (RST 599), clients
-// 10-19 use SSB/USB (RST 59). Each QSO includes non-promoted fields (comment,
-// gridsquare, name, qth, my_gridsquare) to exercise the additional_data JSON
-// blob storage in sqlite. Total: 1000 QSOs, all must store with zero errors.
+// 50 unique QSOs to a single logbook. The first half of the clients use CW
+// (RST 599), the second half SSB/USB (RST 59), so both the promoted-RST and the
+// SUBMODE payloads are written under concurrent load. Each QSO includes
+// non-promoted fields (comment, gridsquare, name, qth, my_gridsquare) to exercise
+// the additional_data JSON blob storage in sqlite. Total: 1000 QSOs, all must
+// store with zero errors. Under -short the run scales down (see below) but keeps
+// both mode cohorts and genuine concurrency for the race detector.
 func TestStress_20Clients_50QSOs(t *testing.T) {
 	srv := testServer(t)
 	lbID := createTestLogbook(t, srv, "Stress Log", "G4ABC")
@@ -59,7 +62,12 @@ func TestStress_20Clients_50QSOs(t *testing.T) {
 				timeOn := fmt.Sprintf("%02d%02d", minute/60, minute%60)
 
 				var modeTag, submodeTag, rstSentTag, rstRcvdTag string
-				if clientID < 10 {
+				// Split the clients into two mode cohorts RELATIVE to the active
+				// count (not a hardcoded 10): under -short numClients is small, and
+				// a fixed <10 would put every client in the CW cohort, leaving the
+				// SSB/SUBMODE path unexercised under the race detector (CI's only
+				// -race run is -short). Half CW, half SSB/USB at any scale.
+				if clientID < numClients/2 {
 					modeTag = "<MODE:2>CW"
 					submodeTag = ""
 					rstSentTag = "<RST_SENT:3>599"
