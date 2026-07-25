@@ -133,10 +133,13 @@ func (c *TxController) transmitAligned(ctx context.Context, waveform []int16, bo
 	// transmit(), AFTER KeyTx + the settle lead (review 2026-07-20 #3): CAT
 	// keying latency (mode switch, serial round-trip) postdates this point, so
 	// truncating here would start audio late relative to the computed timebase
-	// and shift every symbol off its DT. This pre-key check only avoids keying
-	// PTT for a rung that already has nothing left to send.
-	if skip := int(audioStart.Sub(nominal).Seconds() * float64(goft8.SampleRate)); skip >= len(waveform) {
-		return errors.New(op).WithMsg("too late in slot; nothing left to transmit")
+	// and shift every symbol off its DT. This pre-key check only avoids keying PTT
+	// for a rung that is ALREADY past saving — and it can only under-estimate the
+	// lateness (the clock has moved on by the time transmit() truncates), so
+	// applying the same decodability floor here is safe: anything it rejects would
+	// have been rejected after keying too, just with a pointless PTT blip first.
+	if skip := int(audioStart.Sub(nominal).Seconds() * float64(goft8.SampleRate)); skip > maxDecodableSkip(len(waveform)) {
+		return errors.New(op).WithMsg("too late in slot; too little of the waveform would survive truncation")
 	}
 	// Record this slot ONLY after PTT keys successfully (onKeyed, below) — not here.
 	// A failed key (single-flight held by a tune carrier, a rig blip in the boundary
@@ -197,8 +200,22 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 		if late := time.Since(nominal); late > 0 {
 			wave = truncateHead(waveform, int(late.Seconds()*float64(goft8.SampleRate)))
 		}
-		if len(wave) == 0 {
-			return errors.New(op).WithMsg("too late after keying; nothing left to transmit")
+		// The sequencer's late-window guard runs BEFORE this — before the encode, the
+		// CAT key (mode switch + serial round-trip, bounded only by the daemon ctx)
+		// and the pre-key settle, all of which push the real start later than the
+		// moment it decided. So the surviving remainder is re-checked here, against
+		// the clock audio actually starts on, and a truncation that has eaten into
+		// the middle Costas array is reported as a FAILED transmission rather than a
+		// short one. That distinction is the point: a bare non-empty check let a
+		// badly delayed final 73/RR73 return success, and success is what logs the
+		// QSO — so an undecodable fragment could book a contact the other station
+		// never heard, and forward it to QRZ/ClubLog. Failing here instead leaves the
+		// exchange in txConfirming to retry on the next cycle.
+		if skipped := len(waveform) - len(wave); len(wave) == 0 || skipped > maxDecodableSkip(len(waveform)) {
+			return errors.New(op).WithMsgf(
+				"too late after keying; %.2f s of head lost, past the %.2f s that keeps the sync arrays intact",
+				float64(skipped)/float64(goft8.SampleRate),
+				float64(maxDecodableSkip(len(waveform)))/float64(goft8.SampleRate))
 		}
 	}
 

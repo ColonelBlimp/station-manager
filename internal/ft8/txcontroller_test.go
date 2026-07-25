@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/stretchr/testify/require"
 )
@@ -322,4 +323,81 @@ func TestTransmit_TruncatesForKeyLatency(t *testing.T) {
 		"the 50 ms keying delay must be dropped from the head (post-key truncation)")
 	require.Greater(t, played, rate/2,
 		"only latency-sized head loss expected, not wholesale truncation")
+}
+
+// fullTxWaveform is a synthetic waveform of the real standard-message length, so
+// the decodability floor under test is the one live transmissions face.
+func fullTxWaveform() []int16 {
+	wave := make([]int16, txWaveformSamples)
+	for i := range wave {
+		wave[i] = 1000
+	}
+	return wave
+}
+
+// TestTransmit_RejectsUndecodablyLateFragment pins the review finding that a
+// severely late start was reported as a SUCCESSFUL transmission: the old check
+// refused only a completely empty remainder, so any surviving tail — even a few
+// samples — returned nil. Success is what logs the QSO, so a delayed final
+// 73/RR73 could book (and forward) a contact that never went out decodably.
+func TestTransmit_RejectsUndecodablyLateFragment(t *testing.T) {
+	zeroTiming(t)
+	k := &fakeKeyer{}
+	p := newFakePlayer()
+	c := NewTxController(k, p, "", logging.Noop())
+
+	// Symbol 0 was due 7 s ago — the head loss reaches past FT8's middle Costas
+	// array (5.92 s), so what is left cannot carry a decode even though it is a
+	// long way from empty. finishPlayback is armed so that a controller which
+	// wrongly plays the fragment completes and returns nil, failing the assertion
+	// below rather than blocking the test.
+	go p.finishPlayback()
+	err := c.transmit(context.Background(), fullTxWaveform(), time.Now().UTC().Add(-7*time.Second), nil)
+	require.Error(t, err, "an undecodable fragment must be reported as a failed transmission, not sent")
+	require.Equal(t, 0, p.plays(), "nothing may go on air")
+	// The guaranteed stop is unchanged on the new reject path.
+	require.Equal(t, 1, k.keys())
+	require.Equal(t, 1, k.unkeys(), "PTT must still drop")
+}
+
+// TestTransmit_KeyLatencyPushesRungPastTheLimit is the finding's exact mechanism.
+// The rung is inside the limit when the sequencer decides it AND when the
+// controller makes its pre-key estimate; only the CAT keying latency (mode switch
+// + serial round-trip, which lands after both) carries it past the point of no
+// decode. That is the gap a pre-key check alone cannot close.
+func TestTransmit_KeyLatencyPushesRungPastTheLimit(t *testing.T) {
+	zeroTiming(t)
+	k := &delayKeyer{delay: 300 * time.Millisecond}
+	p := newFakePlayer()
+	c := NewTxController(k, p, "", logging.Noop())
+
+	wave := fullTxWaveform()
+	limitSec := float64(maxDecodableSkip(len(wave))) / float64(goft8.SampleRate)
+	// 100 ms inside the limit at decision time; the 300 ms key delay crosses it.
+	nominal := time.Now().UTC().Add(-time.Duration((limitSec - 0.1) * float64(time.Second)))
+
+	go p.finishPlayback() // see TestTransmit_RejectsUndecodablyLateFragment
+	err := c.transmit(context.Background(), wave, nominal, nil)
+	require.Error(t, err, "keying latency must be able to fail a rung that was inside the window when decided")
+	require.Equal(t, 0, p.plays())
+	require.Equal(t, 1, k.unkeys(), "PTT drops on the reject path")
+}
+
+// TestTransmit_StillSendsALateButDecodableRemainder guards the other direction:
+// ADR 0032 deliberately transmits a truncated reply rather than slipping a whole
+// 30 s cycle, so the floor must not tighten the late window that already works on
+// air. 4.0 s is the most head-loss the sequencer's 4.5 s window can hand over
+// (symbol 0 is nominally 0.5 s into the slot).
+func TestTransmit_StillSendsALateButDecodableRemainder(t *testing.T) {
+	zeroTiming(t)
+	k := &fakeKeyer{}
+	p := newFakePlayer()
+	c := NewTxController(k, p, "", logging.Noop())
+
+	wave := fullTxWaveform()
+	go p.finishPlayback()
+	require.NoError(t, c.transmit(context.Background(), wave, time.Now().UTC().Add(-4*time.Second), nil))
+	require.Equal(t, 1, p.plays(), "a late-but-decodable remainder must still transmit")
+	require.Less(t, len(p.played), len(wave), "the elapsed head was dropped")
+	require.Greater(t, len(p.played), len(wave)/2, "most of the waveform still went out")
 }

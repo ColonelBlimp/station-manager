@@ -180,6 +180,24 @@ func EncodeWaveform(text string, offsetHz float64) ([]int16, error) {
 	return out, nil
 }
 
+// ft8CostasMidTone is the tone index of the SECOND of FT8's three 7-symbol Costas
+// sync arrays (they sit at tone indices 0-6, 36-42 and 72-78). Head-truncating a
+// late start (ADR 0032) always costs the FIRST array, and the receiver re-syncs on
+// the remaining two (QEX §8) — that is what makes truncate-don't-shift work. Once
+// the truncation reaches THIS array only one sync word and a fragment of the data
+// field would go out, which is past any plausible decode: the point where "late"
+// stops meaning "degraded" and starts meaning "not actually transmitted".
+const ft8CostasMidTone = 36
+
+// maxDecodableSkip is the largest head-truncation, in samples, that still leaves a
+// transmission worth calling sent — everything from the middle Costas array onward.
+// Scaled off the waveform's own length rather than assuming a standard 79-tone
+// message, so it holds for any tone sequence. Modulate prepends one symbol of
+// Gaussian overhang, hence tone N begins at waveform symbol N+1.
+func maxDecodableSkip(waveLen int) int {
+	return waveLen * (ft8CostasMidTone + 1) / (ft8ToneCount + 2)
+}
+
 // truncateHead drops the first skip samples of a synchronised waveform — a late
 // start (ADR 0032) — and re-ramps the new leading edge to suppress the key click
 // a hard sample step would cause. skip ≤ 0 returns the waveform unchanged; skip

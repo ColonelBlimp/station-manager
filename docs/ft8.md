@@ -1090,7 +1090,20 @@ read by the e2 resolver. Step (e) breaks into increments:
   (ADR 0031): late-window guard — `txLateWindowSec` (~4.5 s into the slot) skips a
   rung only when too few symbols would survive truncation; plus
   N-unanswered-repeats → abandon, abort on Disarm/Abandon, never auto-switch
-  targets. **First-rung immediate-fire (2026-06-12):** `StartQso` takes `now` and a
+  targets. **Controller-side decodability floor (2026-07-25, review finding):** the
+  sequencer's window is checked *before* the encode, the CAT key (mode switch +
+  serial round-trip) and the pre-key settle, all of which push the real audio start
+  later — so `transmit()` re-checks the surviving remainder against the clock audio
+  actually starts on, and **fails** the transmission if head-truncation has reached
+  FT8's middle Costas array (`maxDecodableSkip`, ~5.92 s of the 12.96 s waveform;
+  the arrays sit at tone indices 0-6/36-42/72-78 and the receiver needs two of the
+  three). Previously any non-empty tail returned success — and success is what logs
+  the QSO, so a badly delayed final 73/RR73 could book and forward a contact the
+  other station never decoded. A failure instead leaves the exchange in
+  `txConfirming` to retry next cycle; PTT still drops on the reject path. The floor
+  (5.92 s) is deliberately looser than the sequencer's implied 4.0 s so it never
+  tightens the late window that already works on air — it only catches the
+  pathological keying delay. **First-rung immediate-fire (2026-06-12):** `StartQso` takes `now` and a
   `fireOpening(now)` helper sends the opening call in the click's *current* TX slot
   when it's the opposite parity within `txLateWindowSec` — otherwise the opening rung
   waits for the next qualifying `OnSlot`, which lands at a boundary, so a click just
