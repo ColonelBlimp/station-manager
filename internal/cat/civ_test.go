@@ -325,6 +325,29 @@ func TestDecodeCIV_UnknownCommandByte(t *testing.T) {
 	}
 }
 
+func TestIsCIVRigFrame(t *testing.T) {
+	def := civTestDef()
+	tests := []struct {
+		name string
+		line []byte
+		want bool
+	}{
+		{"controller reply", []byte{0xFE, 0xFE, 0xE0, 0x94, 0x03}, true},
+		{"broadcast", []byte{0xFE, 0xFE, 0x00, 0x94, 0x27}, true},
+		{"controller echo", []byte{0xFE, 0xFE, 0x94, 0xE0, 0x03}, false},
+		{"other rig", []byte{0xFE, 0xFE, 0xE0, 0x88, 0x03}, false},
+		{"short", []byte{0xFE, 0xFE, 0xE0, 0x94}, false},
+		{"bad preamble", []byte{0x00, 0xFE, 0xE0, 0x94, 0x03}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsCIVRigFrame(def, tt.line); got != tt.want {
+				t.Fatalf("IsCIVRigFrame(% X) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDecodeCIV_ShortAndMalformed(t *testing.T) {
 	def := civTestDef()
 	for _, line := range [][]byte{

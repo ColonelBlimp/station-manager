@@ -432,18 +432,25 @@ func (s *Service) clearTuneOnDisconnect() {
 		s.tuneTimer.Stop()
 		s.tuneTimer = nil
 	}
-	s.lastMode = ""
-	s.lastPower = 0
-	// Forget the dial snapshot too — a frequency from a previous rig session must
-	// not seed a logged QSO after reconnect; the post-INIT READ / poll repopulates.
-	s.lastVfoA = 0
-	s.lastVfoB = 0
-	s.lastSelectedVfo = ""
+	s.clearRigSnapshotLocked()
 	s.mu.Unlock()
 	if wasActive {
 		s.logger.WarnWith().Msg("bridge: rig disconnected during tune; tune state cleared")
 		s.publishTuneState(false)
 	}
+}
+
+// clearRigSnapshotLocked invalidates every rolling value that callers treat as
+// authoritative current-rig state. It is used both on pipeline teardown and
+// when passive no-data liveness reaches the disconnect threshold: the latter
+// does not exit readLoop, so waiting for teardown would leave stale dial/power
+// values available to FT8 logging and PSK Reporter. Caller holds s.mu.
+func (s *Service) clearRigSnapshotLocked() {
+	s.lastMode = ""
+	s.lastPower = 0
+	s.lastVfoA = 0
+	s.lastVfoB = 0
+	s.lastSelectedVfo = ""
 }
 
 // invalidateTuneSnapshot forgets the mode+power snapshot because the rig is
@@ -493,6 +500,9 @@ func (s *Service) captureTuneSnapshot(p RigStatePayload) {
 func (s *Service) CurrentPowerW() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.rigWritableLocked() {
+		return 0
+	}
 	return s.lastPower
 }
 
@@ -528,6 +538,9 @@ func (s *Service) captureDialFreq(p RigStatePayload) {
 func (s *Service) CurrentDialMHz() (float64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.rigWritableLocked() {
+		return 0, false
+	}
 	// Knownness is per-VFO (2026-07-19 review P2): 0 Hz means that VFO has
 	// never been decoded this session. The SELECTED VFO must itself be known —
 	// falling back to the other one would log a QSO on the wrong frequency,

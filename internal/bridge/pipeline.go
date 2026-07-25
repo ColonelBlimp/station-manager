@@ -354,7 +354,6 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	s.bootstrapBytes = readBytes
 	s.bootstrapCIV = civSnapshot
 	s.pollBytes = pollBytes
-	s.hasTxStatusQuery = cat.HasCommand(def, readTxStatusCommand)
 	s.mu.Unlock()
 	// Fresh pipeline run: clear any no-data strikes carried over from a prior
 	// run's drop so RigConnected starts clean (it still gates on
@@ -600,8 +599,14 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 	// identityReprobeInterval). Seeded to now so the connect-time READ that
 	// runPipeline just sent gets one interval to be answered before we re-ask.
 	identityReprobeAt := time.Now()
+	// Keep one absolute liveness deadline across ignored frames. In particular,
+	// CI-V serial links may echo the controller's own writes; starting a fresh
+	// timeout after every echo would let the poll loop keep a powered-off rig
+	// "alive" forever. Only a frame proven to come from the configured rig moves
+	// this deadline.
+	livenessDeadline := time.Now().Add(s.livenessTimeout)
 	for {
-		readCtx, cancel := context.WithTimeout(ctx, s.livenessTimeout)
+		readCtx, cancel := context.WithDeadline(ctx, livenessDeadline)
 		line, err := client.ReadResponseBytes(readCtx)
 		cancel()
 
@@ -635,6 +640,10 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 				if strikes >= noDataStrikeLimit {
 					s.mu.Lock()
 					keyedish := s.tuneActive || s.ft8TxActive || s.txUncertain
+					// The authoritative FT8 logging/spot snapshots must not
+					// survive a passive disconnect. A recovered rig's READ/POLL
+					// replies repopulate them field by field.
+					s.clearRigSnapshotLocked()
 					s.mu.Unlock()
 					if keyedish {
 						s.raiseTxAlarm(TxAlarmLivenessLost)
@@ -661,6 +670,9 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 					s.publishExitDisconnect(RigCodeSerialError, map[string]string{"error": errMessage(werr)})
 					return exitTransient
 				}
+				// Give the rig a full response window after the multi-frame
+				// probe completes; its own controller echoes do not move this.
+				livenessDeadline = time.Now().Add(s.livenessTimeout)
 				continue
 			}
 			// Terminal serial error (ErrClosed, EIO, cable yank,
@@ -681,16 +693,24 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 			return exitTransient
 		}
 
-		announcedDisconnect = false
-		// A successful read means the rig is responding — clear the no-data
-		// strike count so a recovered (or merely-quiet, probe-answered) rig reads
-		// as connected again. Gated on non-zero to avoid an atomic store per read.
-		if s.noDataStrikes.Load() != 0 {
-			s.noDataStrikes.Store(0)
+		// For CI-V, a successful serial read is not necessarily rig traffic: USB
+		// adapters can return our controller writes as echoes, and a shared bus can
+		// carry other members. Only a structurally valid frame FROM the configured
+		// rig proves liveness. The ASCII protocols have no controller-echo frame
+		// shape, so every complete response line remains liveness evidence.
+		fromRig := def.Protocol != cat.ProtocolIcomCIV || cat.IsCIVRigFrame(def, line)
+		if fromRig {
+			announcedDisconnect = false
+			livenessDeadline = time.Now().Add(s.livenessTimeout)
+			// Clear strikes only on genuine rig traffic so RigConnected cannot be
+			// held true by controller echoes.
+			if s.noDataStrikes.Load() != 0 {
+				s.noDataStrikes.Store(0)
+			}
 		}
 
-		// A successful read — decodable or not — proves the rig is alive and
-		// talking. While its identity is still unconfirmed, re-issue READ to
+		// A frame from the configured rig — decodable or not — proves it is alive
+		// and talking. While its identity is still unconfirmed, re-issue READ to
 		// re-solicit the ID reply the connect-time READ lost. This runs BEFORE
 		// decode on purpose: unparsed AI/telemetry frames (S-meter, etc.) return
 		// ErrNoMatch and `continue` below, yet they still reset the liveness
@@ -702,7 +722,7 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		// decoded frame, well inside one interval) never re-probes here. READ is
 		// queries only — no TX; H2 is unaffected (writes stay blocked until the
 		// ID actually confirms).
-		if !identityVerified && time.Since(identityReprobeAt) >= identityReprobeInterval {
+		if fromRig && !identityVerified && time.Since(identityReprobeAt) >= identityReprobeInterval {
 			identityReprobeAt = time.Now()
 			civ := def.Protocol == cat.ProtocolIcomCIV
 			if werr := s.underCmdMuCIV(civ, func() error {

@@ -249,6 +249,25 @@ func IsCIVBroadcast(def RigDefinition, line []byte) bool {
 		line[2] == 0x00 && line[3] == rigAddr
 }
 
+// IsCIVRigFrame reports whether line is a structurally valid CI-V frame sent
+// FROM the configured rig. It deliberately accepts both controller-addressed
+// replies and broadcasts, including command bytes the current rigdef does not
+// decode: all of those prove the rig is alive. It rejects our own controller
+// echoes and traffic from other CI-V bus members, neither of which may reset the
+// bridge's rig-liveness deadline.
+func IsCIVRigFrame(def RigDefinition, line []byte) bool {
+	if def.Protocol != ProtocolIcomCIV {
+		return false
+	}
+	rigAddr, err := civAddressByte(def)
+	if err != nil {
+		return false
+	}
+	// Minimum valid frame: FE FE <to> <from> <cmd>.
+	return len(line) >= 5 && line[0] == civPreamble && line[1] == civPreamble &&
+		line[3] == rigAddr
+}
+
 // decodeCIV is the icom_civ branch of Decode. line is one FD-delimited frame
 // with the trailing FD already stripped by the serial reader, so it is
 // FE FE <to> <from> <cmd> [<subcmd>] [<data>].

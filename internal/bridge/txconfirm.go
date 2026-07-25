@@ -78,10 +78,15 @@ const (
 // leaves the state unconfirmed — escalating to the alarm at the timeout,
 // which is the correct reading of a write path that can't even carry a query.
 func (s *Service) beginTxConfirm(def cat.RigDefinition, cl serial.Client) {
+	hasStatusQuery := cat.HasCommand(def, readTxStatusCommand)
 	s.mu.Lock()
 	s.txUncertain = true
 	s.txConfirmGen++
 	gen := s.txConfirmGen
+	// The any-data fallback is valid only after a successfully written unkey on
+	// a protocol that offers neither command ACKs nor a TX-status query. CI-V
+	// has ACKs: if its tx_off was not ACKed, unrelated state is not proof of RX.
+	s.txConfirmViaRigData = !hasStatusQuery && def.Protocol != cat.ProtocolIcomCIV
 	// Watermark: the liveness fallback may only confirm on frames decoded
 	// after this point (8bd88c1b review - a pre-unkey frame proves nothing).
 	s.txConfirmAfterFrame = s.rxFrameCount.Load()
@@ -95,8 +100,8 @@ func (s *Service) beginTxConfirm(def cat.RigDefinition, cl serial.Client) {
 	s.txConfirmDone = make(chan struct{})
 	s.mu.Unlock()
 
-	if !cat.HasCommand(def, readTxStatusCommand) || cl == nil {
-		return // liveness fallback: observeRigData confirms
+	if !hasStatusQuery || cl == nil {
+		return // A no-query fallback runs only when armed above.
 	}
 	q, err := cat.Encode(def, readTxStatusCommand)
 	if err != nil {
@@ -172,6 +177,10 @@ func (s *Service) raiseTxAlarm(code string) {
 	already := s.txAlarmActive
 	s.txAlarmActive = true
 	s.txUncertain = true
+	// A directly raised alarm is not evidence that a write-accepted unkey is
+	// awaiting the weak no-query fallback. Disarm it; a later successful re-unkey
+	// explicitly starts a fresh confirmation cycle.
+	s.txConfirmViaRigData = false
 	s.closeTxConfirmDoneLocked() // cycle resolved (alarmed): wake waiters
 	s.mu.Unlock()
 	if !already {
@@ -191,6 +200,7 @@ func (s *Service) confirmTxIdle(how string) {
 	wasAlarmed := s.txAlarmActive
 	s.txUncertain = false
 	s.txAlarmActive = false
+	s.txConfirmViaRigData = false
 	s.txConfirmGen++    // invalidate any in-flight confirm-timeout
 	s.txAlarmProbeGen++ // retire any running alarm re-probe loop
 	if s.txConfirmTimer != nil {
@@ -308,14 +318,15 @@ func (s *Service) resolveTxStatusWhileUncertain(v string) {
 	}
 }
 
-// observeRigData is the liveness-fallback confirmation for rigdefs WITHOUT a
-// TX-status query: any successfully decoded rig data after the unkey write.
-// Deliberately NOT used when the def can answer properly — a half-dead link
-// (reads alive, writes stalled) would look "confirmed" on mere pushes, and
-// the status query exists precisely to prove the write path.
+// observeRigData is the deliberately weak liveness-fallback confirmation for a
+// successfully written unkey on a non-ACK rigdef WITHOUT a TX-status query:
+// any successfully decoded rig data after that write. The per-cycle
+// txConfirmViaRigData arm is load-bearing — protocol capability alone is not
+// enough. In particular, a failed CI-V tx_off, a liveness-loss alarm, or a
+// possibly-keyed failed write must remain uncertain when unrelated state arrives.
 func (s *Service) observeRigData() {
 	s.mu.Lock()
-	confirm := s.txUncertain && !s.hasTxStatusQuery &&
+	confirm := s.txUncertain && s.txConfirmViaRigData &&
 		s.rxFrameCount.Load() > s.txConfirmAfterFrame
 	s.mu.Unlock()
 	if confirm {
@@ -376,6 +387,7 @@ func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Cl
 
 	s.mu.Lock()
 	s.txUncertain = true // pre-block: keys/commands refuse from this instant
+	s.txConfirmViaRigData = false
 	// DISARM the any-rig-data fallback for the whole committed-but-unwritten
 	// window. This hook is called FROM the readLoop, and the CI-V pipeline's
 	// initial multi-frame READ leaves several replies queued behind the one that
@@ -385,9 +397,8 @@ func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Cl
 	// exposing TxReady with the unkey still in flight (50e35d review P1, tightening
 	// the earlier 2026-07-23 review P1 fix that only watermarked the triggering
 	// frame). The goroutine re-arms it to the post-write count once the unkey is on
-	// the wire — for CI-V that also preserves the any-data alarm-clear fallback,
-	// which is the ONLY way a CI-V alarm retires (its rigdef has no query to
-	// re-probe; see txrecheck.go).
+	// the wire. A successful non-ACK write starts its own confirmation cycle;
+	// CI-V requires its awaited ACK and never arms the generic-data fallback.
 	s.txConfirmAfterFrame = confirmFallbackDisarmed
 	// wg.Add under the SAME lock that observes s.stopped — see startAlarmProbes
 	// for why the ordering is load-bearing. Stop() promises to wait for in-flight
@@ -409,19 +420,13 @@ func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Cl
 		s.keyMu.Lock()
 		werr := s.writeKeyedLine(context.Background(), def, client, txOff, "defensive unkey")
 		s.keyMu.Unlock()
-		// The unkey has now left the host: re-arm the any-rig-data fallback to the
-		// current frame count. Before this point the sentinel disarmed it (a queued
-		// pre-write frame could not confirm a stop that had not gone out); from here
-		// a genuinely-later frame may. Done on BOTH branches below — the write-failed
-		// path raises the alarm, and for CI-V observeRigData is that alarm's only
-		// exit (no status query to re-probe).
-		s.mu.Lock()
-		s.txConfirmAfterFrame = s.rxFrameCount.Load()
-		s.mu.Unlock()
 		if werr != nil {
 			s.logger.ErrorWith().Err(werr).
 				Msg("bridge: defensive unkey write failed — rig may be keyed from a prior life; TX stays blocked")
 			s.raiseTxAlarm(TxAlarmUnconfirmed)
+			// Keep asserting the safe command. On CI-V a later FB ACK is the
+			// positive evidence that can finally retire this alarm.
+			s.retryUnkeyStillKeyed()
 			return
 		}
 		if def.Protocol == cat.ProtocolIcomCIV {

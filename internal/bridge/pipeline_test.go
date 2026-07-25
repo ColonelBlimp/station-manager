@@ -525,6 +525,67 @@ func TestPipeline_DisconnectAnnouncedOnce(t *testing.T) {
 	}
 }
 
+// Controller echoes are serial traffic, not rig traffic. A CI-V adapter that
+// echoes INIT/READ/POLL writes must not keep a powered-off rig connected or
+// restart the liveness window indefinitely.
+func TestReadLoop_CIVEchoDoesNotResetLiveness(t *testing.T) {
+	s, fake := newCIVPipelineTestService(t)
+	s.livenessTimeout = 10 * time.Millisecond
+	s.mu.Lock()
+	s.activeClient = fake
+	s.identityConfirmed = true
+	s.lastMode = "USB"
+	s.lastPower = 100
+	s.lastVfoA = 14_074_000
+	s.mu.Unlock()
+	fake.onWrite = func(w []byte) []byte {
+		return append([]byte(nil), w...) // FE FE <rig> <controller> ... echo
+	}
+
+	def, ok := cat.Lookup("icom-ic7300")
+	if !ok {
+		t.Fatal("icom-ic7300 rigdef missing")
+	}
+	initBytes, err := cat.Encode(def, initCommandName)
+	if err != nil {
+		t.Fatalf("encode INIT: %v", err)
+	}
+	readBytes, err := cat.Encode(def, readCommandName)
+	if err != nil {
+		t.Fatalf("encode READ: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = s.readLoop(ctx, fake, def, initBytes, readBytes)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitFor(t, func() bool {
+		return s.noDataStrikes.Load() >= noDataStrikeLimit
+	}, "CI-V controller echoes kept resetting rig liveness")
+	if s.RigConnected() {
+		t.Fatal("RigConnected = true with only controller echoes, want false")
+	}
+	if got := s.CurrentPowerW(); got != 0 {
+		t.Fatalf("CurrentPowerW = %d after passive disconnect, want unknown (0)", got)
+	}
+	if mhz, ok := s.CurrentDialMHz(); ok {
+		t.Fatalf("CurrentDialMHz = %v,true after passive disconnect, want unknown", mhz)
+	}
+	s.mu.Lock()
+	stalePower, staleDial := s.lastPower, s.lastVfoA
+	s.mu.Unlock()
+	if stalePower != 0 || staleDial != 0 {
+		t.Fatalf("passive disconnect retained stale snapshot: power=%d dial=%d", stalePower, staleDial)
+	}
+}
+
 // TestPipeline_DataResumesAfterDisconnect covers the recovery shape:
 // after a passive disconnect, a fresh rig push resumes rig-state
 // events without any explicit "reconnected" signal. The SPA flips

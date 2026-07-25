@@ -269,14 +269,15 @@ type Service struct {
 	// standing (raised on confirm-timeout / liveness-loss-while-keyed /
 	// unconfirmable teardown; cleared only by positive RX confirmation).
 	// txConfirmGen gates stale confirm-timeout callbacks (same pattern as
-	// tuneGen/ft8TxGen); hasTxStatusQuery snapshots at pipeline start whether
-	// the rigdef can answer read_tx_status — it selects strict query-answer
-	// confirmation over the weaker any-rig-data fallback.
-	txUncertain      bool
-	txAlarmActive    bool
-	txConfirmGen     uint64
-	txConfirmTimer   *time.Timer
-	hasTxStatusQuery bool
+	// tuneGen/ft8TxGen). txConfirmViaRigData is armed ONLY for a successfully
+	// written unkey on a non-ACK protocol whose rigdef has no TX-status query.
+	// It prevents unrelated state from clearing uncertainty raised by a failed
+	// CI-V unkey, liveness loss, or another alarm source.
+	txUncertain         bool
+	txAlarmActive       bool
+	txConfirmGen        uint64
+	txConfirmTimer      *time.Timer
+	txConfirmViaRigData bool
 	// txConfirmDone is closed when the current confirmation cycle resolves
 	// (confirmed idle OR alarmed) so the release paths can gate their
 	// best-effort restore on POSITIVE confirmation (2026-07-19 review P1:

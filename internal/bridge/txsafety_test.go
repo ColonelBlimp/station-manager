@@ -486,6 +486,14 @@ func TestObserveRigData_WatermarkGuard(t *testing.T) {
 	if !ok {
 		t.Fatal("rigdef missing")
 	}
+	// Exercise the intended fallback shape: a non-ACK rig with no status query.
+	commands := make([]cat.Command, 0, len(def.Commands))
+	for _, c := range def.Commands {
+		if c.Name != readTxStatusCommand {
+			commands = append(commands, c)
+		}
+	}
+	def.Commands = commands
 	s.rxFrameCount.Store(7) // frames seen BEFORE the unkey
 	s.beginTxConfirm(def, nil)
 
@@ -511,7 +519,7 @@ func TestObserveRigData_SentinelDisarmsFallback(t *testing.T) {
 	s, _ := newCommandTestService(t)
 	s.mu.Lock()
 	s.txUncertain = true
-	s.hasTxStatusQuery = false // no-query def → the any-rig-data fallback is live
+	s.txConfirmViaRigData = true // a successful no-query unkey armed the fallback
 	s.txConfirmAfterFrame = confirmFallbackDisarmed
 	s.mu.Unlock()
 
@@ -531,6 +539,29 @@ func TestObserveRigData_SentinelDisarmsFallback(t *testing.T) {
 	s.observeRigData()
 	if s.TxUncertain() {
 		t.Fatal("observeRigData failed to confirm after the fallback was re-armed post-write")
+	}
+}
+
+// CI-V proves an unkey through its awaited FB ACK. If that ACK was absent, an
+// unrelated decoded state frame (freq/mode/poll reply) must not clear the alarm
+// or re-enable keying.
+func TestObserveRigData_DoesNotClearCIVUnkeyAlarm(t *testing.T) {
+	s, _ := newCIVPipelineTestService(t)
+	s.mu.Lock()
+	s.txUncertain = true
+	s.txAlarmActive = true
+	s.txConfirmViaRigData = false
+	s.txConfirmAfterFrame = 10
+	s.mu.Unlock()
+	s.rxFrameCount.Store(11)
+
+	s.observeRigData()
+
+	if !s.TxUncertain() {
+		t.Fatal("unrelated CI-V state cleared uncertainty without a tx_off ACK")
+	}
+	if !s.TxAlarmActive() {
+		t.Fatal("unrelated CI-V state cleared the unconfirmed-unkey alarm")
 	}
 }
 

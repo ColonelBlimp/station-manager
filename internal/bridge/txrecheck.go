@@ -308,10 +308,16 @@ func (s *Service) retryUnkeyStillKeyed() {
 			}
 			s.logger.WarnWith().Int("attempt", attempt).
 				Msg("bridge: re-sent tx_off — rig reported it was still transmitting")
-			// Ask again so the answer, not the write, decides whether it worked.
-			if perr := s.probeTxStatusOn(cl, "post re-unkey"); perr != nil {
-				s.logger.DebugWith().Err(perr).Msg("bridge: post-re-unkey status probe failed")
+			if def.Protocol == cat.ProtocolIcomCIV {
+				// writeKeyedLine awaited FB: unlike an unrelated state frame,
+				// this ACK is positive evidence that the stop applied.
+				s.confirmTxIdle("civ ack (stuck-tx re-unkey)")
+				return
 			}
+			// Fire-and-forget protocols need a fresh confirmation cycle. It
+			// asks read_tx_status when available, or explicitly arms the weak
+			// post-write rig-data fallback for a no-query rigdef.
+			s.beginTxConfirm(def, cl)
 		}
 	}()
 }
