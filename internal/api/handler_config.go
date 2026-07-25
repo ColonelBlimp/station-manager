@@ -12,6 +12,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -229,16 +230,18 @@ type LookupInfo struct {
 //     keys that currently hold a non-empty value — NEVER the values). Credentials
 //     is nil/omitted.
 //   - On PUT: Name/Type/Enabled/ActionFilter + Credentials (key→new value, only
-//     the fields the operator typed). A field that is omitted OR blank keeps its
-//     stored value — a client never has to strip empties to avoid destroying a
-//     secret. CredentialsSet is ignored.
+//     the fields the operator typed). An omitted field always keeps its stored
+//     value; a BLANK one keeps it for password-kind fields (a client never has to
+//     strip empties to avoid destroying a secret) but clears text-kind fields,
+//     where empty is a real value — smcloud's `logbook` means "use the default".
+//     CredentialsSet is ignored.
 //
-// There is deliberately no per-field clear: no shipped client could express one
-// (the masked GET means blanks are "untouched", and Smtp/LookupProvider can't
-// distinguish absent from "" at all), so treating "" as a clear only ever fired by
-// accident. Removing or replacing the forwarder entry clears its credentials; if a
-// per-field clear is ever wanted it needs an explicit signal (map[string]*string
-// with JSON null), not an empty string.
+// So there is no per-field clear for SECRETS: the masked GET means a blank
+// password box is "untouched", and Smtp/LookupProvider can't distinguish absent
+// from "" at all, so treating "" as a clear only ever fired by accident. Removing
+// or replacing the forwarder entry clears its credentials; if a per-field secret
+// clear is ever wanted it needs an explicit signal (map[string]*string with JSON
+// null), not an empty string.
 //
 // The advanced knobs (tick_interval_sec / batch_size / retry) are intentionally
 // absent: the SPA doesn't edit them, and the PUT merge carries the stored values
@@ -1080,12 +1083,35 @@ func credentialKeysSet(raw json.RawMessage) []string {
 	return keys
 }
 
+// secretCredentialKeys reports which of a forwarder type's credential keys hold
+// SECRETS — the CredentialField.Kind == "password" entries the masked-on-GET
+// surface never echoes, and therefore the only ones for which a blank value means
+// "the operator didn't retype it" rather than "the operator wants it empty".
+// knownType is false when the type has no registered descriptor (a forwarder from
+// a build that doesn't include it), where no key can be classified.
+func secretCredentialKeys(typeName string) (keys map[string]bool, knownType bool) {
+	for _, d := range forwarding.ForwarderTypes() {
+		if d.Type != typeName {
+			continue
+		}
+		keys = make(map[string]bool, len(d.CredentialFields))
+		for _, f := range d.CredentialFields {
+			if f.Kind == "password" {
+				keys[f.Key] = true
+			}
+		}
+		return keys, true
+	}
+	return nil, false
+}
+
 // mergeForwarders builds the new forwarder list from the SPA's PUT payload,
 // preserving secrets the masked-on-GET surface never exposed: credentials are
-// merged onto the stored entry (matched by name) — a field the operator didn't
-// type, whether omitted or sent blank, keeps its stored value — and the advanced
-// knobs (tick/batch/retry) carry over from the stored entry too. A forwarder with
-// no name match is treated as new (its supplied credentials stand alone).
+// merged onto the stored entry (matched by name) — an omitted field always keeps
+// its stored value, and a blank one keeps it for password-kind fields — and the
+// advanced knobs (tick/batch/retry) carry over from the stored entry too. A
+// forwarder with no name match is treated as new (its supplied credentials stand
+// alone).
 func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig) []types.ForwarderConfig {
 	byName := make(map[string]types.ForwarderConfig, len(existing))
 	for _, fc := range existing {
@@ -1106,20 +1132,29 @@ func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig)
 			fc.Retry = ex.Retry
 		}
 		// Merge credentials: stored base overlaid with supplied (typed) fields. A
-		// BLANK value keeps the stored secret — same rule as mergeSmtp /
-		// mergeLookupProvider, where a plain string field makes "absent" and ""
-		// indistinguishable so keep is the only expressible behaviour. Here the map
-		// COULD tell them apart, and treating "" as a clear made the safety of every
-		// stored credential depend on the client stripping blanks before the PUT (the
-		// config SPA does; nothing else has to). Destroying a secret should never be
-		// the default reading of an empty field, so the daemon now owns the guarantee
-		// its masked-on-GET surface already promises the operator.
+		// blank value keeps the stored one for SECRET fields only — same rule as
+		// mergeSmtp / mergeLookupProvider, where a plain string field makes "absent"
+		// and "" indistinguishable so keep is the only expressible behaviour. Here
+		// the map could tell them apart, and treating "" as a clear made the safety
+		// of every stored secret depend on the client stripping blanks before the PUT
+		// (the config SPA does; nothing else has to). Destroying a secret must not be
+		// the default reading of an empty field, so the daemon owns the guarantee its
+		// masked-on-GET surface already promises the operator.
+		//
+		// NON-secret fields keep accepting a blank, because for them empty is a
+		// legitimate value rather than "untouched": smcloud's `logbook` documents
+		// "leave empty for main", so blanket blank-keeps would strand it on its old
+		// value with no way back to the default.
+		secret, knownType := secretCredentialKeys(in.Type)
 		base := map[string]json.RawMessage{}
 		if matched && len(ex.Credentials) > 0 {
 			_ = json.Unmarshal(ex.Credentials, &base)
 		}
 		for k, v := range in.Credentials {
-			if strings.TrimSpace(v) == "" {
+			// An unregistered type (built without that forwarder) has no field kinds
+			// to consult — keep blanks, since preserving a value we can't classify is
+			// the recoverable mistake and erasing a secret is not.
+			if strings.TrimSpace(v) == "" && (!knownType || secret[k]) {
 				continue
 			}
 			if b, err := json.Marshal(v); err == nil {

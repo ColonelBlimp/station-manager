@@ -393,8 +393,20 @@ func DefaultForwarderConfigs() []types.ForwarderConfig {
 
 // CredentialField describes one credential input a forwarder type needs, so the
 // config SPA can render its "add forwarder" form data-drivenly (no per-type
-// hardcoded forms). Kind drives the input widget + masking: "password" fields
-// are never echoed back on GET /v1/config (masked-on-GET); "text" fields are.
+// hardcoded forms).
+//
+// GET /v1/config echoes NO credential values at all — of either kind — only which
+// keys currently hold one (ForwarderInfo.CredentialsSet). Kind has two consumers:
+//
+//   - the editor picks the input widget (a masked box for "password").
+//   - the PUT credential merge reads it to decide what a BLANK value means. For
+//     "password" a blank is "the operator didn't retype the masked field", so the
+//     stored secret is kept — no client has to strip empties to avoid destroying
+//     one. For "text" a blank is a real value and clears the field, because empty
+//     can be meaningful (smcloud's `logbook`: "leave empty for main").
+//
+// So changing a field's Kind changes its write semantics, not just its widget:
+// flipping a secret to "text" would let an empty PUT erase it.
 type CredentialField struct {
 	Key   string `json:"key"`   // matches the forwarder's credentials JSON key (e.g. "api_key")
 	Label string `json:"label"` // human label for the input

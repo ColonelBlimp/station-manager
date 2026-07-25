@@ -9,6 +9,11 @@ import (
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/config"
+	// Registered for their credential-field descriptors: the blank-credential merge
+	// rule keys off CredentialField.Kind, so these tests must see the real password
+	// vs text classification rather than falling through the unknown-type path.
+	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/clublog"
+	_ "github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -1287,6 +1292,78 @@ func TestHandlePutConfig_BlankCredentialKeepsStoredSecret(t *testing.T) {
 	}
 	if strings.Contains(string(cfg.Forwarders[0].Credentials), "SECRET123") {
 		t.Fatalf("the old secret survived a real update: %s", cfg.Forwarders[0].Credentials)
+	}
+}
+
+// TestHandlePutConfig_BlankTextCredentialStillClears is the counterweight to the
+// blank-keeps rule: it applies to SECRETS only. A text-kind credential can hold an
+// empty value legitimately — smcloud's `logbook` documents "leave empty for main"
+// — so blanket blank-keeps would strand it on its old value with no way back to
+// the default. The discriminator is CredentialField.Kind, which the type
+// descriptor already carries.
+func TestHandlePutConfig_BlankTextCredentialStillClears(t *testing.T) {
+	srv := testServer(t)
+
+	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"cloud","type":"smcloud","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"url":"https://cloud.example.org","token":"TOKEN123","logbook":"contest"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT 1 status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// Blank the text field (reset to the default) while leaving the secret blank too.
+	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"cloud","type":"smcloud","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"url":"https://cloud.example.org","token":"","logbook":""}}]}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("PUT 2 status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+
+	creds := string(srv.cfg.Snapshot().Forwarders[0].Credentials)
+	if strings.Contains(creds, "contest") {
+		t.Fatalf("blank text credential did not clear — logbook stuck on its old value: %s", creds)
+	}
+	if !strings.Contains(creds, "TOKEN123") {
+		t.Fatalf("blank password credential wiped the stored token: %s", creds)
+	}
+}
+
+// An unregistered forwarder type has no field kinds to consult, so blanks keep:
+// preserving a value we cannot classify is recoverable, erasing a secret is not.
+func TestHandlePutConfig_BlankCredentialKeepsForUnknownType(t *testing.T) {
+	srv := testServer(t)
+
+	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"mystery","type":"not-in-this-build","enabled":false,"action_filter":["insert"],` +
+		`"credentials":{"secret":"KEEPME"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT 1 status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"mystery","type":"not-in-this-build","enabled":false,"action_filter":["insert"],` +
+		`"credentials":{"secret":""}}]}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("PUT 2 status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+	if creds := string(srv.cfg.Snapshot().Forwarders[0].Credentials); !strings.Contains(creds, "KEEPME") {
+		t.Fatalf("unknown-type blank wiped the stored value: %s", creds)
 	}
 }
 
