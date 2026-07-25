@@ -191,7 +191,7 @@ func TestLoad_SnippetRedactsCredentials(t *testing.T) {
 	if !strings.Contains(got, `"password"`) {
 		t.Fatalf("redaction removed the key too, leaving the line unidentifiable:\n%s", got)
 	}
-	if !strings.Contains(got, "string values shown as") {
+	if !strings.Contains(got, "values shown as") {
 		t.Fatalf("redaction is not explained, so the asterisks look like corruption:\n%s", got)
 	}
 	// Redaction preserves length, so the caret must still land on the comma.
@@ -207,7 +207,17 @@ func TestLoad_TrailingJunkIsNotCalledTruncation(t *testing.T) {
 	if strings.Contains(got, "ends early") {
 		t.Fatalf("a structurally complete document was reported as truncated:\n%s", got)
 	}
-	assertCaretOn(t, got, '?')
+	// The `?` is at 0-based index 13 → column 14. It is itself redacted (it is
+	// neither structure nor a key, and redaction fails closed), so assert the
+	// POSITION rather than the character — the character is still named for the
+	// operator by encoding/json's own text in the headline.
+	if !strings.Contains(got, "column 14") {
+		t.Fatalf("caret is not on the offending character (column 14):\n%s", got)
+	}
+	if !strings.Contains(got, "'?'") {
+		t.Fatalf("the offending character is not identified anywhere in the message:\n%s", got)
+	}
+	assertCaretOn(t, got, redactChar)
 }
 
 // looksTruncated is the structural test behind that hint: it must key on unclosed
@@ -229,5 +239,82 @@ func TestLooksTruncated(t *testing.T) {
 		if got := looksTruncated([]byte(c.src)); got != c.want {
 			t.Errorf("looksTruncated(%q) = %v, want %v", c.src, got, c.want)
 		}
+	}
+}
+
+// TestRedactLine_FailsClosed pins the allowlist. The first version hunted for
+// string VALUES and blanked them — a blacklist — and on the only input this code
+// ever sees (malformed JSON) it leaked three ways. Each case here is one of those
+// bypasses; the rule is that anything whose role is not provable gets blanked.
+func TestRedactLine_FailsClosed(t *testing.T) {
+	const secret = "hunter2"
+	cases := []struct {
+		name string
+		line string
+		keep []string // structure/keys that must survive to keep the line usable
+	}{
+		{
+			// A stray colon after the VALUE satisfied a lone "followed by ':'"
+			// key test, so the secret was preserved as though it were a key.
+			name: "value followed by a stray colon",
+			line: `{"version":2,"smtp":{"password":"` + secret + `":}}`,
+			keep: []string{`"password"`, `"smtp"`, "{", "}"},
+		},
+		{
+			// Only double-quoted strings were scanned, so a JS/YAML-habit quote
+			// style passed through untouched.
+			name: "single-quoted value",
+			line: `  'password': '` + secret + `',`,
+			keep: []string{":", ","},
+		},
+		{
+			// Unquoted values were never considered at all.
+			name: "bare unquoted value",
+			line: `  "password": ` + secret + `,`,
+			keep: []string{`"password"`, ":", ","},
+		},
+		{
+			// An array element is not a key however it is punctuated.
+			name: "array element",
+			line: `  ["` + secret + `", "tok-bbb",]`,
+			keep: []string{"[", "]", ","},
+		},
+		{
+			// No closing quote means the role cannot be established either way.
+			name: "unterminated string",
+			line: `  "password": "` + secret,
+			keep: []string{":"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, changed := redactLine(c.line)
+			if strings.Contains(got, secret) {
+				t.Fatalf("secret survived redaction:\n  in : %s\n  out: %s", c.line, got)
+			}
+			if !changed {
+				t.Fatalf("redaction reported no change but should have blanked something: %s", got)
+			}
+			if len(got) != len(c.line) {
+				t.Fatalf("length changed (%d → %d), which would misalign the caret", len(c.line), len(got))
+			}
+			for _, k := range c.keep {
+				if !strings.Contains(got, k) {
+					t.Fatalf("structure %q did not survive, leaving the line unreadable:\n  %s", k, got)
+				}
+			}
+		})
+	}
+}
+
+// The counterweight: a well-formed line must keep every key, or the snippet stops
+// telling the operator which field to look at.
+func TestRedactLine_KeepsKeysOnWellFormedLines(t *testing.T) {
+	got, _ := redactLine(`    "station_callsign": "7Q5MLV",`)
+	if !strings.Contains(got, `"station_callsign"`) {
+		t.Fatalf("key was blanked: %s", got)
+	}
+	if strings.Contains(got, "7Q5MLV") {
+		t.Fatalf("value survived: %s", got)
 	}
 }

@@ -185,28 +185,46 @@ func looksTruncated(src []byte) bool {
 	return inString || depth > 0
 }
 
-// redactStringValues blanks the CONTENT of every JSON string value on a line,
-// keeping keys (a string followed by ':') so the line stays identifiable.
+// redactLine blanks everything on a snippet line that is not PROVABLY safe to
+// print, keeping only JSON structure and unambiguous key names.
 //
 // config.json is written 0600 because it holds SMTP and lookup-provider
 // passwords and forwarder credentials; this snippet, by contrast, goes to stderr
 // (→ the journal) and is mirrored into smd.log at 0644. Quoting the raw line
-// would therefore copy a secret from a private file into a world-readable one
-// whenever the syntax error happened to be on a credential line.
+// would copy a secret out of a private file into a world-readable one whenever
+// the syntax error landed on a credential line.
 //
-// Length is preserved exactly so the caret still lands on the character it
-// describes. An unterminated string is redacted to end-of-line: with no closing
-// quote there is no way to tell key from value, so assume the worst.
-func redactStringValues(line string) (string, bool) {
+// It is an ALLOWLIST, and that is the whole point. The first version hunted for
+// string values and blanked them — a blacklist — which on the only input this
+// code ever sees (malformed JSON) leaked three different ways: a value followed
+// by a stray colon passed as a key (`{"password":"hunter2":}`), single-quoted
+// values were not double-quoted so were skipped entirely, and bare unquoted
+// values were never considered at all. Ambiguity has to fail CLOSED, so anything
+// not recognised is redacted rather than the reverse.
+//
+// Survives: structural punctuation, whitespace, and a double-quoted string that
+// is unambiguously a key — preceded by `{`, `,` or line start AND followed by
+// `:`. Checking BOTH sides matters: a lone "followed by ':'" test is what let the
+// stray-colon value through. Everything else — values of every quoting style,
+// numbers, bare tokens, unterminated strings — is blanked.
+//
+// Byte length is preserved exactly so the caret still lands on the character it
+// describes.
+func redactLine(line string) (string, bool) {
 	out := []byte(line)
-	changed := false
+	keep := make([]bool, len(out))
+	for i, c := range out {
+		switch c {
+		case '{', '}', '[', ']', ':', ',', ' ', '\t':
+			keep[i] = true
+		}
+	}
 	for i := 0; i < len(out); {
 		if out[i] != '"' {
 			i++
 			continue
 		}
-		open := i
-		j := i + 1
+		open, j := i, i+1
 		for j < len(out) {
 			if out[j] == '\\' {
 				j += 2
@@ -217,26 +235,31 @@ func redactStringValues(line string) (string, bool) {
 			}
 			j++
 		}
-		if j >= len(out) { // unterminated
-			for k := open + 1; k < len(out); k++ {
-				out[k] = redactChar
-				changed = true
-			}
-			break
+		if j >= len(out) {
+			break // unterminated: role unknowable, so leave it unmarked → redacted
 		}
+		p := open - 1
+		for p >= 0 && (out[p] == ' ' || out[p] == '\t') {
+			p--
+		}
+		precededOK := p < 0 || out[p] == '{' || out[p] == ','
 		k := j + 1
 		for k < len(out) && (out[k] == ' ' || out[k] == '\t') {
 			k++
 		}
-		if k < len(out) && out[k] == ':' { // a key — keep it, it names the line
-			i = j + 1
-			continue
-		}
-		for m := open + 1; m < j; m++ {
-			out[m] = redactChar
-			changed = true
+		if precededOK && k < len(out) && out[k] == ':' {
+			for m := open; m <= j; m++ {
+				keep[m] = true
+			}
 		}
 		i = j + 1
+	}
+	changed := false
+	for i := range out {
+		if !keep[i] {
+			out[i] = redactChar
+			changed = true
+		}
 	}
 	return string(out), changed
 }
@@ -261,7 +284,7 @@ func (e *loadError) Error() string {
 		if snip, caret, redacted, ok := snippet(e.src, line, col); ok {
 			fmt.Fprintf(&b, "\n\n    %d | %s\n      | %s", line, snip, caret)
 			if redacted {
-				b.WriteString("\n\n  (string values shown as " + string(redactChar) +
+				b.WriteString("\n\n  (values shown as " + string(redactChar) +
 					" — this message reaches the log and journal, config.json does not)")
 			}
 		}
@@ -309,7 +332,7 @@ func snippet(src []byte, line, col int) (text, caret string, redacted, ok bool) 
 	}
 	// Redact BEFORE expanding tabs: redaction preserves byte length exactly, so
 	// the caret arithmetic below is unaffected by it.
-	raw, redacted = redactStringValues(raw)
+	raw, redacted = redactLine(raw)
 	// col is a BYTE column, but the line is printed with tabs expanded — so the
 	// caret's position has to be measured on the expanded PREFIX, not on col.
 	// Expanding only the display line (and trusting col) puts the caret inside
