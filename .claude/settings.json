@@ -13,6 +13,17 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx @nizos/probity --agent claude-code"
+          }
+        ]
+      }
     ]
   }
 }

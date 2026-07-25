@@ -1,5 +1,39 @@
 package qsoservice
 
+import (
+	"fmt"
+
+	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
+)
+
+// validateSubmodeMatchesMode rejects a SUBMODE that is KNOWN to belong to a
+// different main mode: an inconsistent pair (MODE=CW, SUBMODE=USB) would
+// otherwise be stored and forwarded to QRZ/ClubLog as contradictory ADIF. An
+// UNKNOWN submode passes — the catalogue is operator-extendable, so an
+// unlisted-but-valid ADIF submode must not block an import.
+//
+// Both create and edit call this, because the invariant is only as strong as its
+// weaker path: a PATCH naming just MODE leaves the stored SUBMODE untouched and
+// re-forms at edit time exactly the pair refused at creation. Keeping it in one
+// function is what stops the two paths drifting apart again.
+//
+// Inputs should already be trimmed and uppercased (same contract as
+// IsValidCallsign) — the lookup normalizes its own argument, but the parent it
+// returns is canonical uppercase and is compared against mode directly.
+func validateSubmodeMatchesMode(mode, submode string) error {
+	if mode == "" || submode == "" {
+		return nil
+	}
+	parent, ok := modes.GetModeBySubmode(submode)
+	if !ok || parent.String() == mode {
+		return nil
+	}
+	return &SubmitError{
+		Code:    "invalid_field_value",
+		Message: fmt.Sprintf("SUBMODE %q belongs to mode %q, not %q", submode, parent.String(), mode),
+	}
+}
+
 // Callsign length bounds (inclusive). The error messages in submit.go /
 // update.go quote "3-32" in prose; keep them in step with these if changed.
 const (

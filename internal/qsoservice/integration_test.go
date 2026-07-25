@@ -357,6 +357,43 @@ func TestSubmit_RejectsSubmodeInconsistentWithMode(t *testing.T) {
 	require.NoError(t, err, "SSB/USB is a consistent mode/submode pair and must log")
 }
 
+// TestUpdate_RejectsSubmodeInconsistentWithMode is the edit-side symmetry of the
+// submit check. A PATCH that names only MODE leaves the stored SUBMODE in place,
+// so without this guard the pair rejected at creation walks straight in through
+// the public edit endpoint: a valid SSB/USB QSO becomes a stored — and forwarded
+// — CW/USB. Clearing the submode in the same patch stays valid.
+func TestUpdate_RejectsSubmodeInconsistentWithMode(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails: types.QsoDetails{
+			Band: "20m", Freq: "14.074", Mode: "SSB", Submode: "USB", QsoDate: "20260101", TimeOn: "1200",
+		},
+		LoggingStation: types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err)
+	existing, err := s.DB.FetchQsoByIdWithContext(ctx, res.ID)
+	require.NoError(t, err)
+	require.Equal(t, "USB", existing.QsoDetails.Submode,
+		"SUBMODE must round-trip through storage or this test proves nothing")
+
+	_, err = s.Update(ctx, existing, []byte(`{"mode":"CW"}`), source.API)
+	require.Error(t, err)
+	var se *SubmitError
+	require.ErrorAs(t, err, &se, "a mode edit that strands an SSB submode must be a SubmitError, not a stored pair")
+	require.Equal(t, "invalid_field_value", se.Code)
+
+	// Changing both halves together is consistent and must be accepted.
+	updated, err := s.Update(ctx, existing, []byte(`{"mode":"CW","submode":""}`), source.API)
+	require.NoError(t, err, "clearing SUBMODE alongside the MODE change leaves a consistent pair")
+	require.Equal(t, "CW", updated.QsoDetails.Mode)
+	require.Empty(t, updated.QsoDetails.Submode)
+}
+
 // TestUpdate_RejectsOutOfBandFreq: the update-side symmetry — a freq edit to an
 // out-of-band value is rejected rather than persisting a band that contradicts it.
 func TestUpdate_RejectsOutOfBandFreq(t *testing.T) {
