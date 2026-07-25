@@ -27,6 +27,13 @@ import (
 // expiry from turning a known duplicate into a 500 (review 2026-05-02 M2).
 const dedupeRefetchTimeout = 2 * time.Second
 
+// cacheWarmTimeout bounds the post-commit contacted_station cache write, which
+// also runs on a context detached from the request (see the call site). Same
+// shape as dedupeRefetchTimeout: the QSO is already committed, so this is a
+// bounded local write that must neither inherit the request's deadline nor
+// outlive its usefulness.
+const cacheWarmTimeout = 2 * time.Second
+
 // Submit validates an ADIF record, checks for duplicates, and atomically
 // stores the QSO and its upload-queue rows. It is the PUBLIC entry point
 // (POST /v1/qso): it always mints a fresh UUIDv7 and never honours a
@@ -498,7 +505,19 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// Subsequent enrichment Tabs may overwrite the country fields
 	// with hamnut's truth per ADR 0017 #11; the operator's QSO row
 	// preserves what they typed regardless.
-	if uerr := s.refCacheDB().UpsertContactedStationWithContext(ctx, qso.ContactedStation); uerr != nil {
+	//
+	// Runs on a FRESH context, detached from the request — same reasoning as the
+	// post-insert dedupe refetch above. By this point the QSO is committed and
+	// the response is decided, so this write's only job is to warm the cache; it
+	// must not be abandoned because the client went away (a closed SPA tab, a
+	// curl ^C, a request deadline). Inheriting ctx meant the operator's own
+	// disconnect silently skipped warming the cache for the callsign they had
+	// just worked. SubmitImportBatch deliberately keeps the request ctx: there a
+	// cancel is the operator's Ctrl-C on `smd import`, where stopping IS correct.
+	warmCtx, warmCancel := context.WithTimeout(context.Background(), cacheWarmTimeout)
+	uerr := s.refCacheDB().UpsertContactedStationWithContext(warmCtx, qso.ContactedStation)
+	warmCancel()
+	if uerr != nil {
 		s.Logger.WarnWith().
 			Err(uerr).
 			Str("call", call).
