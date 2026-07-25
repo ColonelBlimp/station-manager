@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -545,12 +546,24 @@ func Load(path string) (Config, error) {
 	// unmarshalling (config.md §13). A newer-than-supported file is fatal here
 	// (downgrade guard). Rewrite-on-migration (persisting the upgraded shape) is
 	// deferred until the first real migration lands with §10.
+	// Keep the file's own bytes: migrateDocument re-marshals the document when a
+	// migration applies, and offsets into THAT bear no relation to the file the
+	// operator is looking at.
+	raw := data
 	data, err = migrateDocument(data)
 	if err != nil {
+		// A malformed file fails here first (migrateDocument parses before it
+		// migrates), so this is where nearly every hand-edit slip surfaces.
+		if d := describeJSONError(path, raw, true, err); d != nil {
+			return cfg, d
+		}
 		return cfg, fmt.Errorf("migrating config: %w", err)
 	}
 
 	if err = json.Unmarshal(data, &cfg); err != nil {
+		if d := describeJSONError(path, data, bytes.Equal(data, raw), err); d != nil {
+			return cfg, d
+		}
 		return cfg, fmt.Errorf("parsing config file: %w", err)
 	}
 
