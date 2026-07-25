@@ -109,14 +109,28 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 	}
 
 	mode := strings.ToUpper(strings.TrimSpace(rec.Mode))
+	submode := strings.ToUpper(strings.TrimSpace(rec.Submode))
 	if mode == "" {
-		if sub := strings.TrimSpace(rec.Submode); sub != "" {
-			if resolved, ok := modes.GetModeBySubmode(sub); ok {
+		// MODE absent: derive it from a known SUBMODE when we can.
+		if submode != "" {
+			if resolved, ok := modes.GetModeBySubmode(submode); ok {
 				mode = resolved.String()
 			}
 		}
 		if mode == "" {
 			return types.Qso{}, "", &SubmitError{Code: "missing_required_field", Message: "MODE is required"}
+		}
+	} else if submode != "" {
+		// MODE and SUBMODE both present: the submode must belong to this mode, or
+		// we'd store — and forward to QRZ/ClubLog — an inconsistent pair (e.g.
+		// MODE=SSB, SUBMODE=DMR). Only a KNOWN submode that maps to a DIFFERENT
+		// mode is rejected; an unknown submode is left alone so an unlisted-but-
+		// valid ADIF submode on import isn't blocked (the catalogue is extendable).
+		if parent, ok := modes.GetModeBySubmode(submode); ok && parent.String() != mode {
+			return types.Qso{}, "", &SubmitError{
+				Code:    "invalid_field_value",
+				Message: fmt.Sprintf("SUBMODE %q belongs to mode %q, not %q", submode, parent.String(), mode),
+			}
 		}
 	}
 

@@ -323,6 +323,40 @@ func TestSubmit_RejectsOutOfBandFreq(t *testing.T) {
 	require.Equal(t, "invalid_field_value", se.Code)
 }
 
+// TestSubmit_RejectsSubmodeInconsistentWithMode (qsoservice review #7): a SUBMODE
+// that belongs to a different MODE than the one supplied (USB is an SSB submode,
+// not CW) is rejected rather than stored — and forwarded — as an inconsistent
+// pair. A consistent pair (SSB/USB) still logs.
+func TestSubmit_RejectsSubmodeInconsistentWithMode(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	bad := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K1ABC"},
+		QsoDetails: types.QsoDetails{
+			Band: "20m", Freq: "14.074", Mode: "CW", Submode: "USB", QsoDate: "20260101", TimeOn: "1200",
+		},
+		LoggingStation: types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	_, err := s.Submit(ctx, lbID, bad, false)
+	require.Error(t, err)
+	var se *SubmitError
+	require.ErrorAs(t, err, &se, "an SSB submode under MODE=CW must be a SubmitError, not a stored pair")
+	require.Equal(t, "invalid_field_value", se.Code)
+
+	// A consistent pair still logs.
+	good := adif.Record{
+		ContactedStation: types.ContactedStation{Call: "K2ABC"},
+		QsoDetails: types.QsoDetails{
+			Band: "20m", Freq: "14.074", Mode: "SSB", Submode: "USB", QsoDate: "20260101", TimeOn: "1201",
+		},
+		LoggingStation: types.LoggingStation{StationCallsign: "M0ABC"},
+	}
+	_, err = s.Submit(ctx, lbID, good, false)
+	require.NoError(t, err, "SSB/USB is a consistent mode/submode pair and must log")
+}
+
 // TestUpdate_RejectsOutOfBandFreq: the update-side symmetry — a freq edit to an
 // out-of-band value is rejected rather than persisting a band that contradicts it.
 func TestUpdate_RejectsOutOfBandFreq(t *testing.T) {
