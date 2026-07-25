@@ -1107,11 +1107,16 @@ read by the e2 resolver. Step (e) breaks into increments:
      *running*, and the production player does device enumeration + `malgo.InitDevice`
      + `device.Start` inline, none of it context-bounded (seconds, on a waking USB
      codec or contended PipeWire). That delay is **uncompensated shift** — unlike CAT
-     keying latency, which the truncation absorbs — so the audio must still end
-     inside its own slot (`txAudioBudget`, 14.5 s from nominal; ~1.54 s of slack over
-     the waveform). Overrun ⇒ halt output and fail. This is the only guard that
-     covers an **untruncated** rung: a manual next-slot CQ drops no head at all, so
-     no head-loss test can see a slow device start shift the whole waveform off DT. **First-rung immediate-fire (2026-06-12):** `StartQso` takes `now` and a
+     keying latency, which the truncation absorbs — so RF must still stop inside its
+     own slot: `elapsed + audio + txPlayTail ≤ txAudioBudget` (14.5 s from nominal,
+     leaving ~1.29 s for device-start latency). The `txPlayTail` reserve is
+     load-bearing — the player's `done` only means samples *reached* the device, and
+     the drain wait exists because the buffered tail is still emitting, so counting
+     PCM duration alone would let this guard permit the overrun it prevents. Overrun
+     ⇒ halt output and fail (preserving `ctx.Err()` so a disarm during a slow start
+     stays a normal stop, not `ft8_tx_failed`). This is the only guard that covers an
+     **untruncated** rung: a manual next-slot CQ drops no head at all, so no
+     head-loss test can see a slow device start shift the whole waveform off DT. **First-rung immediate-fire (2026-06-12):** `StartQso` takes `now` and a
   `fireOpening(now)` helper sends the opening call in the click's *current* TX slot
   when it's the opposite parity within `txLateWindowSec` — otherwise the opening rung
   waits for the next qualifying `OnSlot`, which lands at a boundary, so a click just

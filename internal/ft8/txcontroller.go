@@ -241,15 +241,30 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 	// on-time next-slot CQ truncates nothing, so a slow device start shifts the
 	// FULL waveform and no head-loss test would ever fire.
 	//
-	// Bound it by physics rather than a guessed DT tolerance: the audio must still
-	// end inside its own slot. Overrunning means both that we are transmitting into
-	// the next period and that the shift is far past anything decodable. Halt output
-	// and fail — we cannot un-transmit what already left, but we CAN refuse to call
-	// it a sent rung, which is what stops a QSO being logged and forwarded.
+	// Bound it by physics rather than a guessed DT tolerance: RF must still stop
+	// inside its own slot. Overrunning means both that we are transmitting into the
+	// next period and that the shift is far past anything decodable. Halt output and
+	// fail — we cannot un-transmit what already left, but we CAN refuse to call it a
+	// sent rung, which is what stops a QSO being logged and forwarded.
+	//
+	// txPlayTail is reserved because the PCM duration is NOT when RF stops: the
+	// player's done only means the samples reached the device, and the drain below
+	// waits txPlayTail precisely because the device is still emitting its buffered
+	// tail. Counting audio alone would leave that tail unbudgeted and let this guard
+	// permit the very overrun it exists to prevent. Using the controller's own drain
+	// allowance keeps the two statements consistent — if txPlayTail is ever tuned for
+	// real hardware (ADR 0030), the budget follows it.
 	if !nominal.IsZero() {
 		audioDur := time.Duration(float64(len(wave)) / float64(goft8.SampleRate) * float64(time.Second))
-		if overrun := time.Since(nominal) + audioDur - txAudioBudget; overrun > 0 {
+		if overrun := time.Since(nominal) + audioDur + txPlayTail - txAudioBudget; overrun > 0 {
 			_ = c.player.Stop()
+			// A cancel landing during a slow device start is a NORMAL stop (disarm,
+			// shutdown), not a transmission failure. Before this guard existed the
+			// select below returned the cancellation; classify it the same way here,
+			// or an operator disarm surfaces as ft8_tx_failed in the SPA.
+			if cerr := ctx.Err(); cerr != nil {
+				return errors.New(op).WithErr(cerr).WithMsg("transmit cancelled during device start")
+			}
 			return errors.New(op).WithMsgf(
 				"audio device started too late; transmission would overrun its slot by %.2f s", overrun.Seconds())
 		}

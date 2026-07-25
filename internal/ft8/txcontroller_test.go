@@ -462,6 +462,52 @@ func TestTransmit_ToleratesNormalDeviceStartLatency(t *testing.T) {
 		"a normal device-start delay is inside the slot's slack and must transmit")
 }
 
+// TestTransmit_ReservesDeviceDrainInSlotBudget pins the follow-up finding on the
+// slot-overrun guard: it counted only the PCM duration, but the player's done means
+// the samples merely REACHED the device — the drain below waits txPlayTail because
+// the buffered tail is still emitting. A waveform that fits the budget on PCM
+// duration alone can therefore still carry RF into the next slot, so the drain has
+// to be reserved. Here the audio fits with 40 ms to spare and the 200 ms tail is
+// what must fail it.
+func TestTransmit_ReservesDeviceDrainInSlotBudget(t *testing.T) {
+	lead, tail := txPreKeyLead, txPlayTail
+	txPreKeyLead, txPlayTail = 0, 200*time.Millisecond
+	t.Cleanup(func() { txPreKeyLead, txPlayTail = lead, tail })
+	setAudioBudget(t, 13*time.Second) // 12.96 s waveform → 40 ms of slack
+
+	k := &fakeKeyer{}
+	p := newFakePlayer() // instant start: only the unbudgeted drain can fail this
+	c := NewTxController(k, p, "", logging.Noop())
+
+	go p.finishPlayback()
+	err := c.transmit(context.Background(), fullTxWaveform(), time.Now().UTC(), nil)
+	require.Error(t, err, "the buffered tail must be counted against the slot budget")
+	require.Equal(t, 1, p.stops())
+	require.Equal(t, 1, k.unkeys(), "PTT still drops")
+}
+
+// TestTransmit_SlowDeviceStartCancelStaysACancel pins the classification half: a
+// disarm/shutdown that lands while Play is blocked in a slow device start used to
+// be reported by the select below as a cancellation. The overrun guard runs first,
+// so it must preserve that — otherwise Service.startTransmission marks a deliberate
+// operator action as ft8_tx_failed and warns.
+func TestTransmit_SlowDeviceStartCancelStaysACancel(t *testing.T) {
+	zeroTiming(t)
+	setAudioBudget(t, 13*time.Second)
+	k := &fakeKeyer{}
+	p := &slowStartPlayer{fakePlayer: newFakePlayer(), startDelay: 200 * time.Millisecond}
+	c := NewTxController(k, p, "", logging.Noop())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancelled before the (slow) device start completes
+
+	err := c.transmit(ctx, fullTxWaveform(), time.Now().UTC(), nil)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled,
+		"a cancel during device start is a normal stop, not a transmission failure")
+	require.Equal(t, 1, k.unkeys())
+}
+
 // TestTransmit_StillSendsALateButDecodableRemainder guards the other direction:
 // ADR 0032 deliberately transmits a truncated reply rather than slipping a whole
 // 30 s cycle, so the floor must not tighten the late window that already works on
