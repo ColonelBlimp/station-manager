@@ -30,8 +30,57 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-23)
+## Current state (as of 2026-07-25)
 
+> **Session(s) since 232 (2026-07-24 → 07-25) — CI RED RESOLVED, the on-air
+> CAT-identity bug fixed, and the "PTT drops mid-SSB" mystery closed. Several items
+> below are COMMITTED LOCALLY BUT NOT YET PUSHED/DEPLOYED — see each.**
+> - **CI red RESOLVED (pending a push + one green run to confirm).** The `go test
+>   (race detector, -short)` red was THREE independent flaky tests, not one — pulled
+>   the CI log via `gh` (now installed + authed): (a) `internal/bridge`
+>   `TestStillKeyed_StopsOnceTheRigObeys` counted ALL writes (a re-unkey PLUS its
+>   follow-up status query) against a tolerance of one → count re-unkeys (`TX0;`)
+>   only, matching the sibling `StopsWhenTheClientGoesAway` already fixed 2026-07-23
+>   but missed here; (b) **DOMINANT (4/6 reds)** `internal/api`
+>   `TestStress_20Clients_50QSOs` blew the 5m per-package `-timeout` under -race →
+>   raised the `-race -short` timeout 5m→10m AND scaled the stress down under `-short`
+>   (kept both CW+SSB mode cohorts, per a P2 review); (c) `internal/forwarding/worker`
+>   `TestWorker_DoesNotClaimOtherForwardersRows` → `no such table` from a shared-cache
+>   `:memory:` DB destroyed when its sole pooled conn drops under -race → temp-FILE DB.
+>   Commits `16b42897` / `e41c5645` / `68232b1d`, **LOCAL, NOT PUSHED** (CI only runs
+>   on push). Verified locally under -race (bridge 200×+40×, api green under -short,
+>   worker green). Session-232 active-cycle item 1 is fix-complete; watch the first
+>   post-push CI.
+> - **On-air CAT bug FIXED: "connected rig's identity is unverified" on a band change
+>   while CAT shows green.** Identity confirms only on a decoded IDENTITY frame, which
+>   comes ONLY from the READ (`ID;`) — and READ re-fired only on a full 5s liveness
+>   silence, which a chatty AI-mode rig never hits. So a lost connect-time ID reply
+>   left the rig write-blocked all session (green CAT, every command 409, FT8 "capture
+>   deferred"). Fix: an active identity re-probe in `readLoop` — while unconfirmed,
+>   re-issue READ on a bounded 1s cadence on ANY decoded frame (READ is queries only,
+>   no TX; H2 untouched). Commits `bb3af343` + `2a890373` (2nd = review fix: re-probe
+>   BEFORE decode so unparsed keep-alive frames drive it too). **NOT DEPLOYED** —
+>   needs `task deploy:local:dev` + an on-air boot→green→band-change eyeball.
+> - **"PTT drops mid-SSB" — EXPLAINED 2026-07-25 = the rig's own 3-min Time-Out Timer,
+>   NOT SM.** New occurrence (long ragchew w/ an NA station + a fast triple-beep). The
+>   log settles it: the two longest transmissions of the session were BOTH exactly
+>   180.0s (`06:14:46`, `06:32:09`), NOTHING exceeded 185s (a hard 3:00 cap), and at
+>   both drops SM logged ONLY the passive `tx-status 2→0` observation — no `TX0;`, no
+>   defensive tx_off, no reconnect. The triple-beep is the Yaesu TOT alarm. The
+>   session-232 "daemon wrote NOTHING 06:39–07:16" pair is the SAME thing → the
+>   defensive-tx_off-on-reconnect candidate is RULED OUT. Fix is on the radio (FUNC →
+>   OPERATION SETTING → GENERAL → TIME OUT TIMER: raise or OFF). Backlog P3 note added:
+>   surface/set TOT via CAT + warn before a long TX is cut (idea only, no code).
+> - **FT8 sequencing audit — CLEAN.** Swept the whole dogfood log (465 completed QSOs,
+>   2017 TX rungs): every rung addressed to the right station, no rung regressions, 0
+>   QSOs logged without the full 3-way exchange, TX timing p99=0.25s into slot, 0
+>   mixed-parity, 465 completes = 465 logged. The apparent "anomalies" were all the
+>   ADR 0033 work-next-live-answerer pileup hops behaving correctly. Nothing to fix.
+> - **Also shipped since 232 (2026-07-24, already pushed):** server-side "Not emailed
+>   only" logbook filter + session-email not-yet-emailed delta (`60c80460`,
+>   `aa5986ee`, `94997cbf`), backlog archive sweep (`f735bc2a`), DecodeFile now
+>   rejects wrong-duration WAVs (`d06dc6d2`).
+>
 > **Session 232 (2026-07-23, later) — ROOT CAUSE CONFIRMED ON AIR. The RTS
 > diagnosis from session 231 is now proven by a clean CAT trace, and the fix
 > exposed a second Yaesu rig setting that has to change before CAT works at all.**
@@ -989,24 +1038,25 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Active cycle (the 1–3 things in flight now)
 
-> **▶ SESSION 232 HAND-OFF. Items 1 + 2 of the session-231 list are DONE (deploy
-> `3f1a047a`; root cause confirmed on air). What remains:**
+> **▶ UPDATED 2026-07-25. Session-232 item 1 (CI red) is FIXED; two new deploy/
+> validate tasks joined the queue. In flight:**
 >
-> 1. **CI IS RED AND THE REMAINING CAUSE IS UNIDENTIFIED — `go test (race
->    detector, -short)`.** Flaky, not broken (greens interleave), and it does not
->    reproduce locally under any angle tried: full suite, `GOMAXPROCS=4`, and with
->    the Postgres-gated `internal/cloud/store` tests genuinely running. **Blocked
->    on reading the CI log** — install `gh` (`sudo dnf install gh && gh auth
->    login`) or paste the failing step. Until this is settled the gate is noise,
->    and a week of red is exactly why a hard Hugo breakage went unnoticed across
->    four pushes.
-> 2. **Validate the TX-safety additions on air:** provoke an alarm and check it
+> 1. **CI red — FIXED locally, PENDING PUSH + a green run.** It was three flaky
+>    tests, not one (bridge write-count · api stress `-timeout` · worker `:memory:`
+>    DB — full detail in Current state). Commits `16b42897`/`e41c5645`/`68232b1d`
+>    are LOCAL; **push, then watch the first CI run** (green across a couple pushes
+>    closes it). `gh` is now installed + authed — pulling CI logs is easy going
+>    forward (`gh run view <id> --log-failed`).
+> 2. **DEPLOY + on-air-validate the CAT identity re-probe fix** (`bb3af343` +
+>    `2a890373` — the "identity unverified on a band change while CAT shows green"
+>    bug). `task deploy:local:dev`, then boot → green → change band → confirm it
+>    recovers within ~1s (no tab reload). Bridge code, unproven on air.
+> 3. **Validate the TX-safety additions on air:** provoke an alarm and check it
 >    self-clears within a probe interval, and that the **Re-check** button works.
 >    Neither has ever run on air. Note the Re-check probe only *interprets* an
->    answer while `txUncertain` is set — which is its intended use (a standing
->    alarm), but it means it cannot serve as a general "what is the rig doing"
->    query.
-> 3. **DECIDE: is `rts: false` the right shipped default?** It costs every Yaesu
+>    answer while `txUncertain` is set — its intended use (a standing alarm), so it
+>    cannot serve as a general "what is the rig doing" query.
+> 4. **DECIDE: is `rts: false` the right shipped default?** It costs every Yaesu
 >    on factory settings a dead CAT link until they set `CAT RTS = DISABLE`;
 >    `rts: true` instead re-exposes anyone on `RPTT SELECT = RTS` to a stuck
 >    transmitter. Current call is safety-first (`false`) + documentation. Revisit
@@ -1022,12 +1072,14 @@ precisely so we don't re-derive state or redo finished work.
 > standing rule is **no new TX-safety mechanism without an observed failure**.
 > Recorded so the reasoning survives; build only if a failure demands it.
 >
-> **STILL UNEXPLAINED — needs an operator timestamp, don't guess:** twice during
-> SSB the **PTT dropped mid-transmission**. The daemon wrote NOTHING to the rig
-> between 06:39 and 07:16, so it wasn't SM over CAT in that window. Structural
-> candidate: a CAT reconnect sends an unconditional defensive `tx_off`, so a
-> mid-transmission reconnect WOULD drop the mic. **Next occurrence: note the clock
-> time — the log settles it immediately.** (Not explained by the RTS fix.)
+> **PTT drops mid-SSB — EXPLAINED 2026-07-25 = the rig's own 3-min Time-Out Timer,
+> NOT SM (log evidence in Current state).** The two longest transmissions of the
+> 2026-07-25 session were BOTH exactly 180.0s, nothing exceeded 185s (a hard 3:00
+> cap), and SM wrote nothing at either drop — only the passive `tx-status 2→0`. The
+> triple-beep is the Yaesu TOT alarm. This RETIRES the "defensive-tx_off-on-reconnect"
+> candidate: the session-232 "daemon wrote NOTHING 06:39–07:16" pair was the same TOT.
+> Fix is on the radio (raise or disable TIME OUT TIMER); no SM change. Backlog P3:
+> surface/set TOT via CAT so the operator sees the limit + is warned before a cut.
 >
 > **Stuck-tune reproduction line CLOSED** by the root-cause confirmation: 0/3 at
 > 5s, 0/3 at 2s, 0/3 after an FT8 session, all on the pre-fix build — duration and
