@@ -139,19 +139,20 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 	if base == "" {
 		return nil, errors.New(op).WithMsg("credentials.url is required")
 	}
-	// Never echo the URL itself. It can carry userinfo (https://user:token@host),
-	// and this error is both logged as a fatal at startup (spawnForwarderWorkers)
-	// and raised by the config PUT's startup probe — so quoting it would put a
-	// credential in the daemon log and, before sanitising, in an HTTP response.
-	// Describing the specific fault is more actionable than quoting the value
-	// anyway. Same discipline as scrubURLError in internal/lookup/qrz.
+	// Echo NOTHING derived from the URL — not the value, and not any component of
+	// it. This error is logged as a fatal at startup (spawnForwarderWorkers) and
+	// raised by the config PUT's startup probe, so anything included lands in the
+	// daemon log. No part of a URL is inherently inert: url.Parse takes everything
+	// before the first ':' as the scheme, so an operator who omits "https://"
+	// turns "alice:token@host" into scheme "alice" — the username — and a pasted
+	// token becomes the scheme outright. Name the field and the requirement only.
+	// Same discipline as scrubURLError in internal/lookup/qrz.
 	u, err := url.Parse(base)
 	switch {
 	case err != nil:
 		return nil, errors.New(op).WithMsg("credentials.url is not a parseable URL")
 	case u.Scheme != "http" && u.Scheme != "https":
-		// The scheme alone is safe to name — userinfo lives after it.
-		return nil, errors.New(op).WithMsgf("credentials.url scheme %q is not http or https", u.Scheme)
+		return nil, errors.New(op).WithMsg("credentials.url must start with http:// or https://")
 	case u.Host == "":
 		return nil, errors.New(op).WithMsg("credentials.url has no host")
 	}

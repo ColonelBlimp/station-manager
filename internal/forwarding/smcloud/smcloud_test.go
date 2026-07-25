@@ -60,23 +60,37 @@ func TestNew_RejectionDoesNotEchoCredentials(t *testing.T) {
 	const (
 		user  = "alice"
 		token = "s3cr3t-token"
-		bad   = "ftp://" + user + ":" + token + "@cloud.example.org"
 	)
-	fc := types.ForwarderConfig{Name: "smcloud", Type: Type}
-	fc.Credentials = json.RawMessage(`{"url":"` + bad + `","token":"tok-123"}`)
+	// Every one of these is a plausible mistyped credential, and each puts secret
+	// material in a DIFFERENT part of the URL — including the scheme, which is not
+	// the inert token it looks like: url.Parse takes everything before the first
+	// ':' as the scheme, so an operator who omits "https://" turns their username
+	// (or a pasted token) into the scheme.
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"userinfo in a wrong-scheme URL", "ftp://" + user + ":" + token + "@cloud.example.org"},
+		{"scheme omitted, username becomes the scheme", user + ":" + token + "@cloud.example.org"},
+		{"token pasted as the scheme", token + "://cloud.example.org"},
+	}
+	for _, c := range cases {
+		fc := types.ForwarderConfig{Name: "smcloud", Type: Type}
+		fc.Credentials = json.RawMessage(`{"url":"` + c.url + `","token":"tok-123"}`)
 
-	_, err := New(fc)
-	if err == nil {
-		t.Fatal("New accepted a non-http(s) URL")
-	}
-	for _, leak := range []string{bad, token, user, "tok-123"} {
-		if strings.Contains(err.Error(), leak) {
-			t.Fatalf("constructor error leaked credential material (%q): %v", leak, err)
+		_, err := New(fc)
+		if err == nil {
+			t.Fatalf("%s: New accepted %q", c.name, c.url)
 		}
-	}
-	// It must still say something useful.
-	if !strings.Contains(err.Error(), "credentials.url") {
-		t.Fatalf("error should still name the offending field: %v", err)
+		for _, leak := range []string{c.url, token, user, "tok-123"} {
+			if strings.Contains(err.Error(), leak) {
+				t.Fatalf("%s: constructor error leaked credential material (%q): %v", c.name, leak, err)
+			}
+		}
+		// It must still say something useful.
+		if !strings.Contains(err.Error(), "credentials.url") {
+			t.Fatalf("%s: error should still name the offending field: %v", c.name, err)
+		}
 	}
 }
 
