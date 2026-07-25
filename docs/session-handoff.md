@@ -69,7 +69,8 @@ precisely so we don't re-derive state or redo finished work.
 >   defensive tx_off, no reconnect. The triple-beep is the Yaesu TOT alarm. The
 >   session-232 "daemon wrote NOTHING 06:39–07:16" pair is the SAME thing → the
 >   defensive-tx_off-on-reconnect candidate is RULED OUT. Fix is on the radio (FUNC →
->   OPERATION SETTING → GENERAL → TIME OUT TIMER: raise or OFF). Backlog P3 note added:
+>   OPERATION SETTING → GENERAL → TIME OUT TIMER — RAISE it, keep it ENABLED; per ADR
+>   0057 the TOT is SM's dead-wire TX backstop, so never disable it). Backlog P3 note:
 >   surface/set TOT via CAT + warn before a long TX is cut (idea only, no code).
 > - **FT8 sequencing audit — CLEAN.** Swept the whole dogfood log (465 completed QSOs,
 >   2017 TX rungs): every rung addressed to the right station, no rung regressions, 0
@@ -1078,7 +1079,9 @@ precisely so we don't re-derive state or redo finished work.
 > cap), and SM wrote nothing at either drop — only the passive `tx-status 2→0`. The
 > triple-beep is the Yaesu TOT alarm. This RETIRES the "defensive-tx_off-on-reconnect"
 > candidate: the session-232 "daemon wrote NOTHING 06:39–07:16" pair was the same TOT.
-> Fix is on the radio (raise or disable TIME OUT TIMER); no SM change. Backlog P3:
+> Fix is on the radio: RAISE the TIME OUT TIMER but keep it ENABLED — per ADR 0057 it
+> is SM's dead-wire backstop (the only unkey that survives a dead CAT link mid-tune /
+> FT8-TX); NEVER disable it. No SM change. Backlog P3:
 > surface/set TOT via CAT so the operator sees the limit + is warned before a cut.
 >
 > **Stuck-tune reproduction line CLOSED** by the root-cause confirmation: 0/3 at
