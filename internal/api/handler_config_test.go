@@ -1388,6 +1388,42 @@ func TestHandlePutConfig_BlankTextCredentialStillClears(t *testing.T) {
 	}
 }
 
+// TestHandlePutConfig_StubModeIsClearable pins the descriptor marking rather than
+// the merge rule: stub.New defaults an empty mode to always_success, which is the
+// definition of Clearable, so leaving it unmarked silently stranded a stub on its
+// previous mode. Every credential field whose constructor defaults an empty value
+// must carry Clearable — audited across the registered types: qrz's api_key,
+// ClubLog's email/password/callsign and SM Cloud's url/token all reject empty and
+// so stay unmarked.
+func TestHandlePutConfig_StubModeIsClearable(t *testing.T) {
+	srv := testServer(t)
+
+	body1 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"st","type":"stub","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"mode":"always_terminal"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body1))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT 1 status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	body2 := `{"logging_station":{},"station":{},"forwarders":[` +
+		`{"name":"st","type":"stub","enabled":true,"action_filter":["insert"],` +
+		`"credentials":{"mode":""}}]}`
+	req2 := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handlePutConfig(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("PUT 2 status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+	if creds := string(srv.cfg.Snapshot().Forwarders[0].Credentials); strings.Contains(creds, "always_terminal") {
+		t.Fatalf("blanking a constructor-defaulted mode did not reset it: %s", creds)
+	}
+}
+
 // An unregistered forwarder type has no field kinds to consult, so blanks keep:
 // preserving a value we cannot classify is recoverable, erasing a secret is not.
 func TestHandlePutConfig_BlankCredentialKeepsForUnknownType(t *testing.T) {

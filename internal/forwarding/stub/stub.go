@@ -61,8 +61,10 @@ func init() {
 	forwarding.RegisterForwarderType(Type, "Stub (testing)",
 		[]forwarding.Action{action.Insert, action.Update, action.Delete},
 		[]forwarding.CredentialField{
-			{Key: "mode", Label: "Mode", Kind: "text",
-				Help: "Stub behaviour mode (dev/testing only)."},
+			// Clearable: New defaults an empty mode to ModeAlwaysSuccess, so a blank
+			// PUT is a real "reset", not a config New would reject.
+			{Key: "mode", Label: "Mode", Kind: "text", Clearable: true,
+				Help: "Stub behaviour mode (dev/testing only). Leave empty for \"always_success\"."},
 		})
 }
 
