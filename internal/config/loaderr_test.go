@@ -288,7 +288,7 @@ func TestRedactLine_FailsClosed(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, changed := redactLine(c.line)
+			got, changed := redactLine(c.line, false)
 			if strings.Contains(got, secret) {
 				t.Fatalf("secret survived redaction:\n  in : %s\n  out: %s", c.line, got)
 			}
@@ -310,11 +310,63 @@ func TestRedactLine_FailsClosed(t *testing.T) {
 // The counterweight: a well-formed line must keep every key, or the snippet stops
 // telling the operator which field to look at.
 func TestRedactLine_KeepsKeysOnWellFormedLines(t *testing.T) {
-	got, _ := redactLine(`    "station_callsign": "7Q5MLV",`)
+	got, _ := redactLine(`    "station_callsign": "7Q5MLV",`, false)
 	if !strings.Contains(got, `"station_callsign"`) {
 		t.Fatalf("key was blanked: %s", got)
 	}
 	if strings.Contains(got, "7Q5MLV") {
 		t.Fatalf("value survived: %s", got)
+	}
+}
+
+// TestRedactLine_StructuralCharsInsideValues: punctuation is only structure when
+// it is OUTSIDE a string. Marking `{ } [ ] : ,` safe by CHARACTER let a password
+// made of them survive whole, and disclosed the punctuation of an ordinary one in
+// place — enough to narrow a guess considerably.
+func TestRedactLine_StructuralCharsInsideValues(t *testing.T) {
+	cases := []struct{ name, line, secret string }{
+		{"password of pure punctuation", `{"password":"[{,:}]":}`, `[{,:}]`},
+		{"punctuation inside a normal password", `  "password": "p@ss,word{1}",`, `p@ss,word{1}`},
+		{"comma inside a value", `  "token": "aaa,bbb",`, `aaa,bbb`},
+		{"braces inside a value", `  "url": "https://h/{x}",`, `{x}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, _ := redactLine(c.line, false)
+			if strings.Contains(got, c.secret) {
+				t.Fatalf("value content survived:\n  in : %s\n  out: %s", c.line, got)
+			}
+			if len(got) != len(c.line) {
+				t.Fatalf("length changed (%d → %d), which would misalign the caret", len(c.line), len(got))
+			}
+		})
+	}
+}
+
+// A value can open on one line and close on a later one, so a snippet line must
+// inherit the string state its predecessors left open — otherwise the middle of a
+// multi-line value is treated as fresh structure and printed.
+func TestRedactLine_InheritsOpenStringState(t *testing.T) {
+	got, _ := redactLine(`secret{,:}continues",`, true)
+	if strings.Contains(got, "secret") || strings.Contains(got, "{,:}") {
+		t.Fatalf("content of a string opened on an earlier line was printed: %s", got)
+	}
+}
+
+// stringStateAt is what supplies that inherited state.
+func TestStringStateAt(t *testing.T) {
+	src := []byte("{\n  \"a\": \"open\n  more\",\n}")
+	// Offset 0 and the start of line 2 are outside any string.
+	if stringStateAt(src, 0) {
+		t.Fatal("start of file reported as inside a string")
+	}
+	// Byte offset of line 3 ("  more\",") — the value opened on line 2 is still open.
+	line3 := strings.Index(string(src), "  more")
+	if !stringStateAt(src, line3) {
+		t.Fatal("line inside an unclosed string reported as outside")
+	}
+	// An escaped quote must not flip the state.
+	if stringStateAt([]byte(`"a\"b"`), 6) {
+		t.Fatal("escaped quote miscounted, leaving the state inside a string")
 	}
 }

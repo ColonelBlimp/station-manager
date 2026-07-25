@@ -210,50 +210,72 @@ func looksTruncated(src []byte) bool {
 //
 // Byte length is preserved exactly so the caret still lands on the character it
 // describes.
-func redactLine(line string) (string, bool) {
+// inString says whether the line BEGINS inside a string literal — a snippet is
+// one line of a multi-line file, and a value can have opened on an earlier one.
+func redactLine(line string, inString bool) (string, bool) {
 	out := []byte(line)
 	keep := make([]bool, len(out))
-	for i, c := range out {
-		switch c {
-		case '{', '}', '[', ']', ':', ',', ' ', '\t':
-			keep[i] = true
-		}
-	}
+
 	for i := 0; i < len(out); {
-		if out[i] != '"' {
+		// Inside a string every byte is content, punctuation included. Marking
+		// structure by CHARACTER rather than by POSITION is what leaked before:
+		// a password of `[{,:}]` survived whole, and an ordinary `p@ss,word{1}`
+		// disclosed its punctuation in place.
+		if inString {
+			if out[i] == '\\' {
+				i += 2
+				continue
+			}
+			if out[i] == '"' {
+				inString = false
+			}
 			i++
 			continue
 		}
-		open, j := i, i+1
-		for j < len(out) {
-			if out[j] == '\\' {
-				j += 2
+
+		switch out[i] {
+		case ' ', '\t', '{', '}', '[', ']', ':', ',':
+			keep[i] = true
+			i++
+		case '"':
+			open, j := i, i+1
+			for j < len(out) {
+				if out[j] == '\\' {
+					j += 2
+					continue
+				}
+				if out[j] == '"' {
+					break
+				}
+				j++
+			}
+			if j >= len(out) {
+				// Unterminated: the rest of the line is string content of unknowable
+				// role, so consume it as such and leave every byte redacted.
+				inString = true
+				i = len(out)
 				continue
 			}
-			if out[j] == '"' {
-				break
+			p := open - 1
+			for p >= 0 && (out[p] == ' ' || out[p] == '\t') {
+				p--
 			}
-			j++
-		}
-		if j >= len(out) {
-			break // unterminated: role unknowable, so leave it unmarked → redacted
-		}
-		p := open - 1
-		for p >= 0 && (out[p] == ' ' || out[p] == '\t') {
-			p--
-		}
-		precededOK := p < 0 || out[p] == '{' || out[p] == ','
-		k := j + 1
-		for k < len(out) && (out[k] == ' ' || out[k] == '\t') {
-			k++
-		}
-		if precededOK && k < len(out) && out[k] == ':' {
-			for m := open; m <= j; m++ {
-				keep[m] = true
+			precededOK := p < 0 || out[p] == '{' || out[p] == ','
+			k := j + 1
+			for k < len(out) && (out[k] == ' ' || out[k] == '\t') {
+				k++
 			}
+			if precededOK && k < len(out) && out[k] == ':' {
+				for m := open; m <= j; m++ {
+					keep[m] = true
+				}
+			}
+			i = j + 1
+		default:
+			i++
 		}
-		i = j + 1
 	}
+
 	changed := false
 	for i := range out {
 		if !keep[i] {
@@ -262,6 +284,23 @@ func redactLine(line string) (string, bool) {
 		}
 	}
 	return string(out), changed
+}
+
+// stringStateAt reports whether byte offset upto in src sits inside a string
+// literal, so a snippet line inherits the state a previous line left open.
+func stringStateAt(src []byte, upto int) bool {
+	inString, escaped := false, false
+	for i := 0; i < upto && i < len(src); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case inString && src[i] == '\\':
+			escaped = true
+		case src[i] == '"':
+			inString = !inString
+		}
+	}
+	return inString
 }
 
 // loadError carries the pieces so Error() can render them together; keeping it
@@ -331,8 +370,13 @@ func snippet(src []byte, line, col int) (text, caret string, redacted, ok bool) 
 		col = len(raw) + 1
 	}
 	// Redact BEFORE expanding tabs: redaction preserves byte length exactly, so
-	// the caret arithmetic below is unaffected by it.
-	raw, redacted = redactLine(raw)
+	// the caret arithmetic below is unaffected by it. The line inherits whatever
+	// string state the preceding lines left open.
+	lineStart := 0
+	for i := 0; i < line-1; i++ {
+		lineStart += len(lines[i]) + 1 // +1 for the \n that Split consumed
+	}
+	raw, redacted = redactLine(raw, stringStateAt(src, lineStart))
 	// col is a BYTE column, but the line is printed with tabs expanded — so the
 	// caret's position has to be measured on the expanded PREFIX, not on col.
 	// Expanding only the display line (and trusting col) puts the caret inside
