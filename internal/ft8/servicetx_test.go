@@ -85,7 +85,7 @@ func TestValidateTxOffset_RejectsOutOfPassband(t *testing.T) {
 
 	// The sequenced start paths share the gate.
 	require.ErrorIs(t,
-		s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42", "2026-06-10T14:30:00Z", 4000, 14.074, 1),
+		s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42", "2026-06-10T14:30:00Z", 4000, 14.074, 1, false),
 		ErrTxBadOffset)
 }
 
@@ -198,9 +198,9 @@ func TestStartSession_RefusesWhenRigBecomesUnready(t *testing.T) {
 	require.NoError(t, s.ArmTx(true))
 	k.setNotReady(true) // rig disconnects / loses identity after arming
 	now := time.Now().UTC().Format(time.RFC3339)
-	require.ErrorIs(t, s.StartQso("7Q5MLV", "KH78", "K1ABC", "FN42", now, 1500, 14.074, 1), ErrTxNotReady)
+	require.ErrorIs(t, s.StartQso("7Q5MLV", "KH78", "K1ABC", "FN42", now, 1500, 14.074, 1, false), ErrTxNotReady)
 	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "KH78", 1500, 14.074, "", 1), ErrTxNotReady)
-	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1), ErrTxNotReady)
+	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1, false), ErrTxNotReady)
 }
 
 // TestStartWorkCaller_Gating: the work-a-caller entry point shares the arm gate with
@@ -209,12 +209,12 @@ func TestStartWorkCaller_Gating(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	t.Run("refused when disarmed", func(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
-		require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1), ErrTxNotArmed)
+		require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1, false), ErrTxNotArmed)
 	})
 	t.Run("commits when armed", func(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 		require.NoError(t, s.ArmTx(true))
-		require.NoError(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1))
+		require.NoError(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1500, 14.074, 1, false))
 		require.True(t, s.seq.Active(), "an armed work-a-caller start commits a session")
 		s.AbandonQso()
 	})
@@ -252,9 +252,9 @@ func TestStartSession_RefusedWhileManualSendInFlight(t *testing.T) {
 	require.True(t, s.txInFlightNow(), "the manual send is in flight")
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	require.ErrorIs(t, s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42", now, 1600, 14.074, 1), ErrTxInFlight)
+	require.ErrorIs(t, s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42", now, 1600, 14.074, 1, false), ErrTxInFlight)
 	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "IO91", 1600, 14.074, "", 1), ErrTxInFlight)
-	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1600, 14.074, 1), ErrTxInFlight)
+	require.ErrorIs(t, s.StartWorkCaller("7Q5MLV", "K1ABC", "FN42", -12, now, 1600, 14.074, 1, false), ErrTxInFlight)
 	require.False(t, s.seq.Active(), "no session may commit while a manual send is in flight")
 }
 
@@ -285,7 +285,7 @@ func TestStartSession_DuplicateDuringRung_ReportsQsoInProgress(t *testing.T) {
 	k.setNotReady(true)
 
 	err := s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42",
-		time.Now().UTC().Format(time.RFC3339), 1600, 14.074, 1)
+		time.Now().UTC().Format(time.RFC3339), 1600, 14.074, 1, false)
 	require.ErrorIs(t, err, ErrQsoInProgress, "a duplicate start atop an active session is a QSO conflict")
 	require.NotErrorIs(t, err, ErrTxInFlight, "the session's own rung must not read as a manual transmission")
 	require.NotErrorIs(t, err, ErrTxNotReady, "a keyed rung reports not-ready; must not leak as rig-not-ready")
@@ -491,10 +491,10 @@ func TestStartQso_RejectedStartKeepsExchangePath(t *testing.T) {
 	// theirSlot = the CURRENT wall-clock slot, so its parity matches "now" and
 	// fireOpening declines to fire (no TX goroutine — deterministic test).
 	theirSlot := slotStart(time.Now().UTC()).Format(time.RFC3339)
-	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", theirSlot, 1500, 14.074, 1))
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", theirSlot, 1500, 14.074, 1, false))
 	s.SetExchangePath("L") // operator picks long path for the ACTIVE exchange
 
-	err := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31", theirSlot, 1500, 14.074, 1)
+	err := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31", theirSlot, 1500, 14.074, 1, false)
 	require.Error(t, err, "second start while a QSO is active is rejected")
 	require.Equal(t, antPathLong, s.exchangePath(),
 		"a rejected start must not reset the active exchange's path")
@@ -668,7 +668,7 @@ func TestCompletionRace_PreservesNewPathAndStatus(t *testing.T) {
 	// Match the current wall-clock parity so the replacement does not immediately
 	// fire an opening rung; only its state/path commit matters to this test.
 	newSlot := slotStart(time.Now().UTC()).Format(time.RFC3339)
-	startErr := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31", newSlot, 1600, 14.074, 2)
+	startErr := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31", newSlot, 1600, 14.074, 2, false)
 	if startErr == nil {
 		s.SetExchangePath("L")
 	}

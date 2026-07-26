@@ -147,3 +147,41 @@ func TestOpenDecodeLog_FailSoftReturnsNil(t *testing.T) {
 	dl := openDecodeLog(filepath.Join(blocker, "nested", "all.txt"), "", logging.Noop())
 	require.Nil(t, dl) // open failed, but no panic — the caller gets a nil no-op writer
 }
+
+// The decode log is 0600 and rotating. Both matter: it used to be created 0644 and
+// grow without bound (WSJT-X ALL.TXT behaviour, left for the operator to clear), and
+// lumberjack copies the EXISTING file's mode onto every rotated file — so a log left
+// behind by an older build would propagate 0644 forever unless it is tightened here.
+func TestOpenDecodeLog_TightensLegacyPermissionsAndRotates(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "log", "ft8-all.txt")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A log left by an older build, world-readable.
+	if err := os.WriteFile(p, []byte("legacy line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d := openDecodeLog(p, dir, nil)
+	if d == nil {
+		t.Fatal("decode log did not open")
+	}
+	d.Close()
+
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Fatalf("permissions = %o, want 600 — a legacy 0644 log must be tightened", got)
+	}
+	// Appending, not truncating: the operator's existing history survives.
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "legacy line") {
+		t.Fatalf("existing content lost on open: %q", b)
+	}
+}

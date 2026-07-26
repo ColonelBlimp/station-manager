@@ -62,7 +62,8 @@ func (s *Sequencer) StartWorkCaller(ourCall, theirCall, theirGrid string, theirS
 	s.mode = seqWorking
 	s.skipIfSilent = false
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
+	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
 	s.caller = &c
 	s.ourCall = call
 	s.theirPeriod = SlotRefFromTime(t).Period
@@ -308,7 +309,8 @@ func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, 
 	s.mode = seqWorkingFd
 	s.skipIfSilent = false
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
+	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
 	s.fdWork = &c
 	s.ourCall = call
 	s.theirPeriod = SlotRefFromTime(t).Period

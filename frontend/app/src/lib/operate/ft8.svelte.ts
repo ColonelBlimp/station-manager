@@ -373,6 +373,13 @@ export interface Ft8AnswerArgs {
     /** Our SNR of their CQ — logged as RST_SENT for an FD or type-4 answer (neither
      *  exchanges a report). */
     theirSnr: number;
+    /** True when the operator is deliberately working a station ALREADY logged this
+     *  session — a repair (they never copied our RR73), a sked, a second report. SM
+     *  deduplicates on call+band+mode+freq+date+HH:MM, so without this a second contact
+     *  inside one minute is folded into the first and never stored: the operator
+     *  transmits a full exchange and sees no row. Only set from an explicit operator
+     *  action on a station the UI already shows as worked. */
+    allowDuplicate?: boolean;
 }
 
 export interface Ft8WorkArgs {
@@ -385,6 +392,13 @@ export interface Ft8WorkArgs {
     opFreqMHz: number;
     /** Present when the caller sent an FD exchange — work them Field Day style. */
     fd?: { class: string; section: string };
+    /** True when the operator is deliberately working a station ALREADY logged this
+     *  session — a repair (they never copied our RR73), a sked, a second report. SM
+     *  deduplicates on call+band+mode+freq+date+HH:MM, so without this a second contact
+     *  inside one minute is folded into the first and never stored: the operator
+     *  transmits a full exchange and sees no row. Only set from an explicit operator
+     *  action on a station the UI already shows as worked. */
+    allowDuplicate?: boolean;
 }
 
 export interface Ft8TxActions {

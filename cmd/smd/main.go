@@ -760,7 +760,12 @@ func run() error {
 			// no form, so the daemon applies them here; the Phone/CW submit handler
 			// calls the same record method, so both modes log identical defaults.
 			rec.ApplyQslDefaults(snap.Qsl)
-			res, err := qsoSvc.Submit(ctx, q.LogbookID, rec, false)
+			// force = the operator's explicit "work this station again" intent, pinned
+			// at arm time and carried on the CompletedQso. Ordinary contacts pass
+			// false and keep the duplicate protection; only a deliberate repeat
+			// bypasses the minute-granular dedupe key, which would otherwise fold the
+			// second on-air exchange into the first and store nothing.
+			res, err := qsoSvc.Submit(ctx, q.LogbookID, rec, c.AllowDuplicate)
 			if err != nil {
 				loggerSvc.ErrorWith().Err(err).Str("call", c.TheirCall).
 					Msg("ft8: failed to log completed QSO")

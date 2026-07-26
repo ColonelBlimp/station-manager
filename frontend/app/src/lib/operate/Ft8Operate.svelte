@@ -331,6 +331,11 @@
             slotUtc: head.slotUtc,
             offsetHz: off,
             opFreqMHz: opMHz,
+            // The entry's deliberate-repeat marker must reach persistence, not just
+            // this drain's skip check: honouring the operator's intent on air and then
+            // letting the dedupe key discard the result would be the same silent loss
+            // in a different place (codex c2a8bea6 P1).
+            allowDuplicate: head.repeat,
         }).then((r) => {
             if (r.ok) {
                 // Now being worked — remove from the queue. The latch clears when

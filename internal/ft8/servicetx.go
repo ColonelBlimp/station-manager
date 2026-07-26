@@ -540,7 +540,7 @@ func (s *Service) sessionTxGate(op errors.Op) error {
 // theirSlotUTC) and a clear offset. Requires TX **armed** — the sequencer keys
 // through the armed controller. ourCall/ourGrid are the station identity the api
 // layer resolved from config.
-func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64) error {
+func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
 	const op errors.Op = "ft8.Service.StartQso"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -569,6 +569,7 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	// A rejected start (ErrQsoInProgress) leaves the staged value unconsumed; the next
 	// start overwrites it (all serialised by seqGate), so no restore is needed here.
 	s.seq.setPendingLogbook(logbookID)
+	s.seq.setPendingAllowDuplicate(allowDuplicate)
 	if err := s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
@@ -581,7 +582,7 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 // (class + section) is daemon config (ft8.field_day), not client-supplied — mirroring
 // how StartCallCq reads the answer mode — and a missing identity is refused up front.
 // Requires TX armed, same as StartQso.
-func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64) error {
+func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
 	const op errors.Op = "ft8.Service.StartQsoFd"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -602,6 +603,7 @@ func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int,
 	prevPath, prevGen := s.consumeExchangePath()
 	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
 	s.seq.setPendingLogbook(logbookID)
+	s.seq.setPendingAllowDuplicate(allowDuplicate)
 	if err := s.seq.StartQsoFd(ourCall, class, section, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
@@ -638,6 +640,10 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	prevPath, prevGen := s.consumeExchangePath()
 	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
 	s.seq.setPendingLogbook(logbookID)
+	// A Call-CQ run works whoever answers, so there is no per-station repeat
+	// intent to express — stage FALSE explicitly so a flag left over from a
+	// previous per-station start cannot leak into this session.
+	s.seq.setPendingAllowDuplicate(false)
 	if err := s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, txParity, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
@@ -651,7 +657,7 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 // is our SNR of that signal (the report we send back). Requires TX **armed** — the
 // sequencer keys through the armed controller. ourCall is the station identity the
 // api layer resolved from config.
-func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64) error {
+func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
 	const op errors.Op = "ft8.Service.StartWorkCaller"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -666,6 +672,7 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 	prevPath, prevGen := s.consumeExchangePath()
 	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
 	s.seq.setPendingLogbook(logbookID)
+	s.seq.setPendingAllowDuplicate(allowDuplicate)
 	if err := s.seq.StartWorkCaller(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
@@ -677,7 +684,7 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 // (the FD twin of StartWorkCaller): the operator picked "<ourCall> <theirCall> <class>
 // <section>". theirClass/theirSection are parsed by the api layer from that decode; OUR
 // class/section come from ft8.field_day config (not client-supplied). Requires TX armed.
-func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, theirSection string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64) error {
+func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, theirSection string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
 	const op errors.Op = "ft8.Service.StartWorkCallerFd"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -698,6 +705,7 @@ func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, t
 	prevPath, prevGen := s.consumeExchangePath()
 	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
 	s.seq.setPendingLogbook(logbookID)
+	s.seq.setPendingAllowDuplicate(allowDuplicate)
 	if err := s.seq.StartWorkCallerFd(ourCall, class, section, theirCall, theirGrid, theirClass, theirSection,
 		theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
@@ -711,7 +719,7 @@ func (s *Service) StartWorkCallerFd(ourCall, theirCall, theirGrid, theirClass, t
 // standard grid/report ladder. theirSnr is our SNR of their CQ (logged as RST_SENT, since
 // type-4 exchanges no report on the air). Needs no config identity — our own call is
 // standard. Requires TX armed, same gating as StartQso.
-func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64) error {
+func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
 	const op errors.Op = "ft8.Service.StartQsoT4"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -725,6 +733,7 @@ func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int,
 	prevPath, prevGen := s.consumeExchangePath()
 	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
 	s.seq.setPendingLogbook(logbookID)
+	s.seq.setPendingAllowDuplicate(allowDuplicate)
 	if err := s.seq.StartQsoT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
@@ -736,7 +745,7 @@ func (s *Service) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr int,
 // type-4 twin of StartWorkCaller, ADR 0048): the operator picked a bare directed call
 // ("<ourCall> <theirCall>") whose sender's call is nonstandard. theirSnr is our SNR of it
 // (RST_SENT). Needs no config identity. Requires TX armed.
-func (s *Service) StartWorkCallerT4(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64) error {
+func (s *Service) StartWorkCallerT4(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool) error {
 	const op errors.Op = "ft8.Service.StartWorkCallerT4"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -750,6 +759,7 @@ func (s *Service) StartWorkCallerT4(ourCall, theirCall, theirGrid string, theirS
 	prevPath, prevGen := s.consumeExchangePath()
 	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
 	s.seq.setPendingLogbook(logbookID)
+	s.seq.setPendingAllowDuplicate(allowDuplicate)
 	if err := s.seq.StartWorkCallerT4(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err

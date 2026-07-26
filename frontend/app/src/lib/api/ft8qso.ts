@@ -78,6 +78,7 @@ export function startFt8Qso(
     operatingFreqMHz: number,
     mode: 'standard' | 'fd' | 'type4' = 'standard',
     theirSnr?: number,
+    allowDuplicate?: boolean,
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
@@ -91,6 +92,7 @@ export function startFt8Qso(
             // 'fd' and 'type4' both carry the measured SNR (logged RST_SENT); 'standard'
             // derives its report from the exchange, so it sends neither.
             ...(mode === 'fd' || mode === 'type4' ? { mode, their_snr: theirSnr ?? 0 } : {}),
+            ...(allowDuplicate ? { allow_duplicate: true } : {}),
         },
         signal
     );
@@ -110,6 +112,7 @@ export function startFt8WorkCaller(
     offsetHz: number,
     operatingFreqMHz: number,
     fd?: { class: string; section: string },
+    allowDuplicate?: boolean,
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
@@ -122,6 +125,7 @@ export function startFt8WorkCaller(
             offset_hz: offsetHz,
             operating_freq_mhz: operatingFreqMHz,
             ...(fd ? { mode: 'fd', their_class: fd.class, their_section: fd.section } : {}),
+            ...(allowDuplicate ? { allow_duplicate: true } : {}),
         },
         signal
     );

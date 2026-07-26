@@ -90,7 +90,8 @@ setFt8TxActions({
             a.offsetHz,
             a.opFreqMHz,
             a.type4 ? 'type4' : a.fd ? 'fd' : 'standard',
-            a.theirSnr
+            a.theirSnr,
+            a.allowDuplicate
         ).then(toTxResult),
     workCaller: (a) =>
         startFt8WorkCaller(
@@ -100,7 +101,8 @@ setFt8TxActions({
             a.slotUtc,
             a.offsetHz,
             a.opFreqMHz,
-            a.fd
+            a.fd,
+            a.allowDuplicate
         ).then(toTxResult),
     abandon: () => abandonFt8Qso().then(toTxResult),
     skip: (armed) => skipFt8Qso(armed).then(toTxResult),

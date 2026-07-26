@@ -3,12 +3,15 @@ package ft8
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"gopkg.in/natefinch/lumberjack.v2"
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -25,6 +28,16 @@ const decodeLogFileName = "ft8-all.txt"
 // DROPPED rather than blocking the decode/TX path (see the "never blocks FT8"
 // contract). Sized generously because a string queue is cheap.
 const decodeLogQueue = 1024
+
+// Rotation for the decode log. Unlike smd.log these are NOT operator-configurable —
+// the file is a diagnostic stream with no tuning value, and the defaults already hold
+// roughly a month of continuous operating (it grows ~2 MB/day while the FT8 view is
+// open). Rotation matters because the log is append-only and previously unbounded:
+// WSJT-X's ALL.TXT behaviour, left for the operator to clear by hand.
+const (
+	decodeLogMaxSizeMB  = 10
+	decodeLogMaxBackups = 5
+)
 
 // DecodeLog is a fail-soft, append-only JTDX-style ALL.TXT writer for FT8 RX
 // decodes and our own TX. It is deliberately independent of the daemon's zerolog
@@ -46,9 +59,10 @@ type DecodeLog struct {
 	closed    atomic.Bool
 	dropped   atomic.Uint64
 
-	// w/f are touched ONLY by the writer goroutine (run), so they need no lock.
+	// w/wc are touched ONLY by the writer goroutine (run), so they need no lock.
+	// wc is the rotating sink (lumberjack), which owns size/backup/gzip policy.
 	w   *bufio.Writer
-	f   *os.File
+	wc  io.WriteCloser
 	log logging.Logger
 }
 
@@ -87,21 +101,41 @@ func openDecodeLog(path, defaultDir string, log logging.Logger) *DecodeLog {
 		log.WarnWith().Err(err).Str("path", p).Msg("ft8: decode log dir create failed; decode log off")
 		return nil
 	}
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	// lumberjack opens lazily on first Write, so prove the target is writable NOW —
+	// otherwise a bad path or permission surfaces only once decodes start flowing.
+	// This also CREATES the file at 0600 when absent, which is the mode lumberjack
+	// then copies onto every rotated file.
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		log.WarnWith().Err(err).Str("path", p).Msg("ft8: decode log open failed; decode log off")
 		return nil
+	}
+	_ = f.Close()
+	// Tighten a log left behind by an earlier build (it created 0644). lumberjack
+	// copies the EXISTING file's mode on rotation, so without this an old install
+	// would keep propagating the wider mode forever. Best-effort: a chmod failure is
+	// not a reason to stop logging decodes.
+	if err := os.Chmod(p, 0o600); err != nil {
+		log.WarnWith().Err(err).Str("path", p).Msg("ft8: could not tighten decode log permissions")
+	}
+	wc := &lumberjack.Logger{
+		Filename:   p,
+		MaxSize:    decodeLogMaxSizeMB,
+		MaxBackups: decodeLogMaxBackups,
+		Compress:   true,
 	}
 	d := &DecodeLog{
 		lines: make(chan string, decodeLogQueue),
 		quit:  make(chan struct{}),
 		done:  make(chan struct{}),
-		w:     bufio.NewWriter(f),
-		f:     f,
+		w:     bufio.NewWriter(wc),
+		wc:    wc,
 		log:   log,
 	}
 	go d.run()
-	log.InfoWith().Str("path", p).Msg("ft8: decode log on (JTDX ALL.TXT format)")
+	log.InfoWith().Str("path", p).Int("max_size_mb", decodeLogMaxSizeMB).
+		Int("max_backups", decodeLogMaxBackups).
+		Msg("ft8: decode log on (JTDX ALL.TXT format, rotating + gzipped)")
 	return d
 }
 
@@ -116,7 +150,7 @@ func (d *DecodeLog) run() {
 			d.log.WarnWith().Interface("panic", r).Msg("ft8: decode log writer panicked; stopping")
 		}
 		_ = d.w.Flush()
-		_ = d.f.Close()
+		_ = d.wc.Close()
 	}()
 	flush := func() {
 		if err := d.w.Flush(); err != nil {

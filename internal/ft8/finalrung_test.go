@@ -523,3 +523,81 @@ func TestCallerSequencer_ConfirmHoldLifetimeTerminatesUnderConstantRefusal(t *te
 	require.Nil(t, s.confirmHold, "the lifetime bound retires the hold regardless of RF")
 	require.Equal(t, confirmResendLimit, 2, "RF budget never spent, but the hold still ended")
 }
+
+// P2 (codex c2a8bea6): `transmit` returning nil only means the goroutine was queued.
+// A re-send that then FAILS on air must not spend the RF budget — counting it as a
+// successful re-send throws the repair away while claiming it was delivered.
+func TestCallerSequencer_ConfirmHoldAsyncFailureKeepsBudget(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)})
+	require.Equal(t, confirmResendLimit, s.confirmHold.resends)
+
+	asking := []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}
+	r.mu.Lock()
+	r.asyncFail = true // queued, then fails on air
+	r.mu.Unlock()
+	driveTheir(s, 120, asking)
+	require.Contains(t, r.sentMsgs(), "DL9UW 7Q5MLV RR73", "it was queued")
+	require.NotNil(t, s.confirmHold)
+	require.Equal(t, confirmResendLimit, s.confirmHold.resends,
+		"a re-send that failed on air spends no RF budget")
+
+	r.mu.Lock()
+	r.asyncFail = false // this one really lands
+	r.mu.Unlock()
+	driveTheir(s, 150, asking)
+	require.Equal(t, confirmResendLimit-1, s.confirmHold.resends, "a delivered one does")
+}
+
+// --- Deliberate-repeat intent reaches the logged QSO ------------------------
+
+// The operator's "work this station again" intent must survive from the start call
+// all the way onto the CompletedQso, where the sink turns it into Submit's `force`.
+// Without it a second contact inside one minute hashes to the first's dedupe key and
+// is silently discarded — a full exchange on air with no row to show for it.
+func TestSequencer_AllowDuplicateIsPinnedAtArmAndStamped(t *testing.T) {
+	t.Run("carried when the operator asked for it", func(t *testing.T) {
+		r := &seqRecorder{}
+		s := newTestSeq(r)
+		s.setPendingAllowDuplicate(true)
+		require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+			time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+		driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC FN42", -12)})
+		driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC R-08", -11)})
+		require.Len(t, r.completed, 1)
+		require.True(t, r.completed[0].AllowDuplicate, "intent must reach the logged QSO")
+	})
+
+	t.Run("false by default — an ordinary contact keeps dedupe protection", func(t *testing.T) {
+		r := &seqRecorder{}
+		s := newTestSeq(r)
+		require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+			time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+		driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC FN42", -12)})
+		driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC R-08", -11)})
+		require.Len(t, r.completed, 1)
+		require.False(t, r.completed[0].AllowDuplicate)
+	})
+
+	// Pinned AT ACTIVATION, like the logbook: a stale flag from a previous start must
+	// not leak into a session that did not ask for it.
+	t.Run("does not leak into the next session", func(t *testing.T) {
+		r := &seqRecorder{}
+		s := newTestSeq(r)
+		s.setPendingAllowDuplicate(true)
+		require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+			time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+		s.Abandon()
+
+		s.setPendingAllowDuplicate(false)
+		require.NoError(t, s.StartWorkCaller("G0XYZ", "K2DEF", "FN31", -12,
+			time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+		driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K2DEF FN31", -12)})
+		driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K2DEF R-08", -11)})
+		require.Len(t, r.completed, 1)
+		require.False(t, r.completed[0].AllowDuplicate, "the second session never asked for it")
+	})
+}

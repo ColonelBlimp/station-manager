@@ -85,7 +85,12 @@ class Ft8PileupStack {
         const e: PileupEntry = { ...entry, call };
         const i = this.items.findIndex((x) => x.call === call);
         if (i >= 0) {
-            this.items = this.items.map((x, idx) => (idx === i ? e : x));
+            // Refresh in place, but `repeat` is STICKY: once the operator has said
+            // "work this one again" the mark survives a later plain re-click, which
+            // would otherwise silently downgrade the entry and let the drain discard
+            // it as stale.
+            const merged: PileupEntry = { ...e, repeat: e.repeat || this.items[i].repeat };
+            this.items = this.items.map((x, idx) => (idx === i ? merged : x));
             return false;
         }
         this.items = [...this.items, e];

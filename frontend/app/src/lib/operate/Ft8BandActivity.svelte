@@ -221,10 +221,19 @@
         if (repeat) {
             toasts.info(`${call} already worked this session — queued anyway.`);
         }
-        // This one DOES block: it is a duplicate QUEUE entry, not a duplicate contact.
-        if (ft8PileupStack.items.some((x) => x.call === call)) {
-            toasts.info(`${call} is already in the pile-up.`);
-            return;
+        // Already queued? Do NOT return — fall through to push, which dedupes by call
+        // and refreshes the entry in place. Returning here discarded two things: the
+        // documented "a later decode is the better data to work from" refresh, and —
+        // since `repeat` is decided above — an operator re-clicking to UPGRADE a
+        // queued entry into a deliberate repeat, which the drain would then still
+        // drop as stale (codex c2a8bea6 P2).
+        const queued = ft8PileupStack.items.some((x) => x.call === call);
+        if (queued) {
+            toasts.info(
+                repeat
+                    ? `${call} already in the pile-up — marked to work again.`
+                    : `${call} is already in the pile-up — refreshed.`
+            );
         }
         // Fresh run? Empty queue + no contact → the previous run is over, so unlock; the
         // first add sets a new parity. A live run holds the lock across the drain.
@@ -251,7 +260,11 @@
 
     // The guard chain every TX-starting row interaction runs — each miss explains
     // itself (toast) rather than silently no-op'ing on a click.
-    function txPreflight(call: string): { offset: number; opMHz: number } | null {
+    function txPreflight(call: string): {
+        offset: number;
+        opMHz: number;
+        allowDuplicate: boolean;
+    } | null {
         if (!ft8State.tx.armed) {
             toasts.info('Enable TX first (Operate panel).');
             return null;
@@ -280,10 +293,15 @@
         // log, not whether the other station has the QSO. Refusing here fired exactly
         // when working again was CORRECT: XE1GM (dogfood 2026-07-26) never copied our
         // RR73 and asked eleven times, and this guard blocked the repair.
-        if (workedThisSession(call)) {
+        // Carried through to the daemon as `allow_duplicate` so a deliberate repeat is
+        // actually STORED. Without it the second contact hashes to the first's dedupe
+        // key inside one minute and is silently dropped — the operator would transmit
+        // a full exchange and see no row (codex c2a8bea6 P1).
+        const allowDuplicate = workedThisSession(call);
+        if (allowDuplicate) {
             toasts.info(`${call} already worked this session — working again.`);
         }
-        return { offset, opMHz: opHz / 1_000_000 };
+        return { offset, opMHz: opHz / 1_000_000, allowDuplicate };
     }
 
     // Directed call (WSJT-X double-click semantic): call the SENDER of a plain
@@ -312,6 +330,7 @@
             fd: false,
             type4,
             theirSnr: row.d.snr,
+            allowDuplicate: pre.allowDuplicate,
         });
         if (!r.ok) {
             starting = false;
@@ -329,7 +348,7 @@
         if (row.kind === '' || starting) return;
         const pre = txPreflight(row.call);
         if (!pre) return;
-        const { offset, opMHz } = pre;
+        const { offset, opMHz, allowDuplicate } = pre;
         starting = true;
         let r;
         if (row.kind === 'cq') {
@@ -352,6 +371,7 @@
                 fd: isCqFd(row.d.text),
                 type4,
                 theirSnr: row.d.snr,
+                allowDuplicate,
             });
         } else {
             // Work a caller: try the FD shape first (more specific), else standard.
@@ -369,6 +389,7 @@
                 offsetHz: offset,
                 opFreqMHz: opMHz,
                 fd: fd ? { class: fd.class, section: fd.section } : undefined,
+                allowDuplicate,
             });
         }
         if (!r.ok) {

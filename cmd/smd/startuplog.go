@@ -36,7 +36,13 @@ func logStartupFailure(startupErr error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return
 	}
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	// 0600 to match internal/logging's own open mode. This path can CREATE smd.log
+	// (a startup failure on a fresh install is exactly when it runs), and lumberjack
+	// copies the mode off an existing logfile on every rotation — so a 0644 here made
+	// the daemon log world-readable for the life of the install. It is also the one
+	// writer whose payload is a config-parse error, the class of message most likely
+	// to quote something sensitive.
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return
 	}

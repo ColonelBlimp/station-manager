@@ -93,6 +93,14 @@ type ft8QsoStartRequest struct {
 	// exchanges a report on the air, so we log this measured SNR as RST_SENT (standard
 	// answer-a-CQ derives its report from the exchange, so this is ignored there).
 	TheirSnr int `json:"their_snr,omitempty"`
+	// AllowDuplicate is the operator's EXPLICIT "work this station again" intent. SM
+	// deduplicates on call+band+mode+freq+date+HH:MM, so without it a deliberate second
+	// contact inside one minute is folded into the first and never stored — the
+	// operator transmits a full exchange and sees no row. Reachable on the short
+	// ladders (work-a-caller, single-rung type-4). Absent/false keeps the duplicate
+	// protection; the SPA sets it only when the operator acted on a station it already
+	// shows as worked this session.
+	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
 }
 
 // handleFt8QsoStart begins a manual answer-a-CQ exchange (ADR 0031, step e3).
@@ -155,15 +163,15 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 		// ARRL Field Day: our class+section come from ft8.field_day config (read by
 		// the Service), not the client. theirGrid is still logged (bearing/enrichment).
 		err = s.ft8.StartQsoFd(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz, logbookID)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	case "type4":
 		// Reduced type-4 (nonstandard/compound call, ADR 0048): no grid/report on the
 		// wire, so we log the measured SNR as RST_SENT (like FD).
 		err = s.ft8.StartQsoT4(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz, logbookID)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	default:
 		err = s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz, logbookID)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)
@@ -245,6 +253,14 @@ type ft8QsoWorkRequest struct {
 	Mode         string `json:"mode,omitempty"`
 	TheirClass   string `json:"their_class,omitempty"`
 	TheirSection string `json:"their_section,omitempty"`
+	// AllowDuplicate is the operator's EXPLICIT "work this station again" intent. SM
+	// deduplicates on call+band+mode+freq+date+HH:MM, so without it a deliberate second
+	// contact inside one minute is folded into the first and never stored — the
+	// operator transmits a full exchange and sees no row. Reachable on the short
+	// ladders (work-a-caller, single-rung type-4). Absent/false keeps the duplicate
+	// protection; the SPA sets it only when the operator acted on a station it already
+	// shows as worked this session.
+	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
 }
 
 // handleFt8QsoWork begins working a station that is calling us (ADR 0033). The operator
@@ -298,14 +314,14 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 	case "fd":
 		// Field Day: their class+section came from the picked call; ours from config.
 		err = s.ft8.StartWorkCallerFd(ourCall, req.TheirCall, req.TheirGrid,
-			req.TheirClass, req.TheirSection, req.TheirSnr, req.SlotUTC, req.OffsetHz, req.OperatingFreqMHz, logbookID)
+			req.TheirClass, req.TheirSection, req.TheirSnr, req.SlotUTC, req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	case "type4":
 		// Reduced type-4 (nonstandard/compound caller, ADR 0048): no report on the wire.
 		err = s.ft8.StartWorkCallerT4(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz, logbookID)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	default:
 		err = s.ft8.StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz, logbookID)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)

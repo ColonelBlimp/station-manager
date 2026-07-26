@@ -54,7 +54,8 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	s.mode = seqCalling
 	s.skipIfSilent = false
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
+	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
 	s.caller = nil
 	s.stalledCalls = nil // fresh session — no abandoned answerers to exclude yet
 	s.confirmHold = nil
@@ -305,15 +306,20 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		}
 	}
 
-	err := transmit(msg, offset, dial, onDone)
-	if err == nil && resendRR73 != "" {
-		// The re-send was ACCEPTED, so it costs one of the RF budget. Spending it
-		// any earlier charged the repair for slots that never reached the air —
-		// deferred by the late window, or refused by the transmitter's single-flight
-		// / readiness gates (codex dab1143a P2). The hold still terminates without
-		// this: `slots` is spent on every consulted slot regardless of outcome.
-		s.spendConfirmResend()
+	if resendRR73 != "" {
+		// A confirm-hold re-send carries its OWN completion callback purely to
+		// account for the RF budget. `transmit` returning nil means only that the
+		// goroutine was queued — keying, playback and device errors surface later
+		// through onDone — so spending the budget on acceptance counted failed
+		// transmissions as successful re-sends (codex c2a8bea6 P2). It never logs:
+		// the QSO was recorded when the ORIGINAL RR73 went out.
+		onDone = func(ok bool) {
+			if ok {
+				s.spendConfirmResend()
+			}
+		}
 	}
+	err := transmit(msg, offset, dial, onDone)
 	if err != nil {
 		if stderrors.Is(err, ErrTxSuperseded) { // session gone; idle already published
 			s.log.InfoWith().Str("msg", msg).Msg("ft8 seq: caller rung superseded before commit; dropped")
@@ -570,6 +576,7 @@ func (s *Sequencer) parkAnswererLocked(msgs []goft8.DecodedMessage, now time.Tim
 func (s *Sequencer) completedCallerQsoLocked() CompletedQso {
 	return CompletedQso{
 		LogbookID:      s.logbookID,
+		AllowDuplicate: s.allowDuplicate,
 		TheirCall:      s.caller.TheirCall,
 		TheirGrid:      s.caller.TheirGrid,
 		OurReport:      s.caller.SendSnr,

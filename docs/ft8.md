@@ -783,6 +783,16 @@ log is authoritative.
 
 ### Decode log (`ALL.TXT`-style) — `ft8.decode_log.*`
 
+**Rotation + archiving (2026-07-26).** The file used to grow without bound — WSJT-X
+ALL.TXT behaviour, left for the operator to clear by hand. It now rotates through
+lumberjack (the same library as `smd.log`): **10 MB** per file, **5** gzipped
+backups, which holds roughly a month of continuous operating in a few MB. These are
+NOT operator-configurable — a diagnostic stream has no tuning value and the defaults
+already outlast any session. It is also created **0600** now (it was 0644), and an
+existing log from an older build is tightened on open, because lumberjack copies the
+EXISTING file's mode onto every rotated file and would otherwise propagate the wider
+mode forever.
+
 A durable, append-only record of **every RX decode and our own TX**, in the JTDX
 `ALL.TXT` line format — so you can reconstruct an on-air exchange after the fact and
 compare it line-for-line with another operator's log. It is written **independently of

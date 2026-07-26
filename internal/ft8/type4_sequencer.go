@@ -61,7 +61,8 @@ func (s *Sequencer) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr in
 	s.mode = seqAnsweringT4
 	s.skipIfSilent = false
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
+	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
 	s.t4Ex = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
@@ -252,7 +253,8 @@ func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, thei
 	s.mode = seqWorkingT4
 	s.skipIfSilent = false
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
+	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
 	s.t4Work = &c
 	s.ourCall = c.OurCall
 	s.theirPeriod = SlotRefFromTime(t).Period
@@ -446,14 +448,15 @@ func (s *Sequencer) fireWorkT4(now time.Time) {
 // no grid (type-4 CQ carries none). Caller holds s.mu.
 func (s *Sequencer) completedQsoT4Locked() CompletedQso {
 	return CompletedQso{
-		LogbookID:    s.logbookID,
-		TheirCall:    s.t4Ex.TheirCall,
-		TheirGrid:    s.t4Ex.TheirGrid,
-		OurReport:    s.t4Ex.SendSnr,
-		HasOurReport: s.t4Ex.HasSendSnr,
-		StartedAt:    s.startedAt,
-		OffsetHz:     s.offsetHz,
-		DialFreqMHz:  s.dialFreqMHz,
+		LogbookID:      s.logbookID,
+		AllowDuplicate: s.allowDuplicate,
+		TheirCall:      s.t4Ex.TheirCall,
+		TheirGrid:      s.t4Ex.TheirGrid,
+		OurReport:      s.t4Ex.SendSnr,
+		HasOurReport:   s.t4Ex.HasSendSnr,
+		StartedAt:      s.startedAt,
+		OffsetHz:       s.offsetHz,
+		DialFreqMHz:    s.dialFreqMHz,
 	}
 }
 
@@ -461,14 +464,15 @@ func (s *Sequencer) completedQsoT4Locked() CompletedQso {
 // degraded shape: our SNR → RST_SENT, blank RST_RCVD, no grid. Caller holds s.mu.
 func (s *Sequencer) completedT4WorkQsoLocked() CompletedQso {
 	return CompletedQso{
-		LogbookID:    s.logbookID,
-		TheirCall:    s.t4Work.TheirCall,
-		TheirGrid:    s.t4Work.TheirGrid,
-		OurReport:    s.t4Work.SendSnr,
-		HasOurReport: s.t4Work.HasSendSnr,
-		StartedAt:    s.startedAt,
-		OffsetHz:     s.offsetHz,
-		DialFreqMHz:  s.dialFreqMHz,
+		LogbookID:      s.logbookID,
+		AllowDuplicate: s.allowDuplicate,
+		TheirCall:      s.t4Work.TheirCall,
+		TheirGrid:      s.t4Work.TheirGrid,
+		OurReport:      s.t4Work.SendSnr,
+		HasOurReport:   s.t4Work.HasSendSnr,
+		StartedAt:      s.startedAt,
+		OffsetHz:       s.offsetHz,
+		DialFreqMHz:    s.dialFreqMHz,
 	}
 }
 

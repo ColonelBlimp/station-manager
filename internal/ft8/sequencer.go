@@ -158,7 +158,13 @@ type CompletedQso struct {
 	// completion, so a mid-exchange logbook switch can't relabel or misroute it.
 	// Stamped by the Service's onComplete from the arm-time value. 0 = unpinned
 	// (defensive; the sink falls back to the current default).
-	LogbookID      int64
+	LogbookID int64
+	// AllowDuplicate is the operator's explicit "work this station again" intent,
+	// pinned at arm time. The sink passes it to Submit as `force`, so a deliberate
+	// repeat is stored instead of being folded into the first contact by the
+	// minute-granular dedupe key. False is the safe default: an ordinary contact
+	// keeps the duplicate protection.
+	AllowDuplicate bool
 	TheirCall      string
 	TheirGrid      string
 	OurReport      int // the report WE sent (our SNR of their signal)
@@ -253,8 +259,18 @@ type Sequencer struct {
 	// CompletedQso. pendingLogbookID is staged by the Service before a start.
 	logbookID        int64
 	pendingLogbookID int64
-	startedAt        time.Time // contact start, stamped as the logged QSO's TIME_ON
-	repeats          int
+	// allowDuplicate is the operator's EXPLICIT "work this station again" intent for
+	// THIS session, pinned at activation exactly like logbookID and stamped onto the
+	// CompletedQso so the sink can pass it to Submit as `force`. Without it a
+	// deliberate repeat inside one minute hashes to the same dedupe key as the first
+	// contact and is silently discarded — the operator transmits a full exchange and
+	// never sees a row (codex 0f9aa672 / c2a8bea6 P1). Only the per-station starts
+	// carry it; a Call-CQ run works whoever answers, so there is no per-station
+	// intent to express there.
+	allowDuplicate        bool
+	pendingAllowDuplicate bool
+	startedAt             time.Time // contact start, stamped as the logged QSO's TIME_ON
+	repeats               int
 	// skipIfSilent — operator-armed "drop this contact instead of repeating an
 	// unanswered rung" (the SPA's deferred Next, moved daemon-side 2026-07-13).
 	// Checked at the silent-repeat sites BEFORE the repeat keys, so a skip never
@@ -391,7 +407,8 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.mode = seqAnswering
 	s.skipIfSilent = false
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
+	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
 	s.ex = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
 	s.theirGrid = theirGrid
@@ -446,7 +463,8 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 	s.mode = seqAnsweringFd
 	s.skipIfSilent = false
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
+	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
 	s.fdEx = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
@@ -572,6 +590,17 @@ func (s *Sequencer) ActiveCallsign() string {
 func (s *Sequencer) setPendingLogbook(id int64) {
 	s.mu.Lock()
 	s.pendingLogbookID = id
+	s.mu.Unlock()
+}
+
+// setPendingAllowDuplicate stages the operator's deliberate-repeat intent for the
+// NEXT accepted start, on the same terms as setPendingLogbook: consumed under s.mu
+// atomically with mode activation, so a terminal-first-rung ladder (work-a-caller
+// type-4, whose sole RR73 can complete immediately) cannot snapshot a stale value.
+// A rejected start leaves it unconsumed and the next start overwrites it.
+func (s *Sequencer) setPendingAllowDuplicate(allow bool) {
+	s.mu.Lock()
+	s.pendingAllowDuplicate = allow
 	s.mu.Unlock()
 }
 
@@ -945,16 +974,17 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 // fields — FD exchanges class+section, not an SNR report. Caller holds s.mu.
 func (s *Sequencer) completedQsoFdLocked() CompletedQso {
 	return CompletedQso{
-		LogbookID:    s.logbookID,
-		TheirCall:    s.fdEx.TheirCall,
-		TheirGrid:    s.fdEx.TheirGrid,
-		Class:        s.fdEx.TheirClass,
-		Section:      s.fdEx.TheirSection,
-		OurReport:    s.fdEx.SendSnr,    // our SNR of them → RST_SENT (FD exchanges no report)
-		HasOurReport: s.fdEx.HasSendSnr, // RST_RCVD is the config default, applied at log time
-		StartedAt:    s.startedAt,
-		OffsetHz:     s.offsetHz,
-		DialFreqMHz:  s.dialFreqMHz,
+		LogbookID:      s.logbookID,
+		AllowDuplicate: s.allowDuplicate,
+		TheirCall:      s.fdEx.TheirCall,
+		TheirGrid:      s.fdEx.TheirGrid,
+		Class:          s.fdEx.TheirClass,
+		Section:        s.fdEx.TheirSection,
+		OurReport:      s.fdEx.SendSnr,    // our SNR of them → RST_SENT (FD exchanges no report)
+		HasOurReport:   s.fdEx.HasSendSnr, // RST_RCVD is the config default, applied at log time
+		StartedAt:      s.startedAt,
+		OffsetHz:       s.offsetHz,
+		DialFreqMHz:    s.dialFreqMHz,
 	}
 }
 
@@ -962,16 +992,17 @@ func (s *Sequencer) completedQsoFdLocked() CompletedQso {
 // class/section came from the call we picked. Caller holds s.mu.
 func (s *Sequencer) completedFdWorkQsoLocked() CompletedQso {
 	return CompletedQso{
-		LogbookID:    s.logbookID,
-		TheirCall:    s.fdWork.TheirCall,
-		TheirGrid:    s.fdWork.TheirGrid,
-		Class:        s.fdWork.TheirClass,
-		Section:      s.fdWork.TheirSection,
-		OurReport:    s.fdWork.SendSnr,    // our SNR of them → RST_SENT (FD exchanges no report)
-		HasOurReport: s.fdWork.HasSendSnr, // RST_RCVD is the config default, applied at log time
-		StartedAt:    s.startedAt,
-		OffsetHz:     s.offsetHz,
-		DialFreqMHz:  s.dialFreqMHz,
+		LogbookID:      s.logbookID,
+		AllowDuplicate: s.allowDuplicate,
+		TheirCall:      s.fdWork.TheirCall,
+		TheirGrid:      s.fdWork.TheirGrid,
+		Class:          s.fdWork.TheirClass,
+		Section:        s.fdWork.TheirSection,
+		OurReport:      s.fdWork.SendSnr,    // our SNR of them → RST_SENT (FD exchanges no report)
+		HasOurReport:   s.fdWork.HasSendSnr, // RST_RCVD is the config default, applied at log time
+		StartedAt:      s.startedAt,
+		OffsetHz:       s.offsetHz,
+		DialFreqMHz:    s.dialFreqMHz,
 	}
 }
 
@@ -1311,6 +1342,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 func (s *Sequencer) completedQsoLocked() CompletedQso {
 	return CompletedQso{
 		LogbookID:      s.logbookID,
+		AllowDuplicate: s.allowDuplicate,
 		TheirCall:      s.ex.TheirCall,
 		TheirGrid:      s.theirGrid,
 		OurReport:      s.ex.SendSnr,
