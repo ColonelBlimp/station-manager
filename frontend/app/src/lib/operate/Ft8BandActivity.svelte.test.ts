@@ -492,3 +492,47 @@ describe('Ft8BandActivity directed call (double-click a plain row)', () => {
         expect(got[0]).toMatchObject({ theirCall: 'T22TT' });
     });
 });
+
+describe('Ft8BandActivity deliberate-repeat intent', () => {
+    // A contact is over on the air BEFORE the daemon finishes logging it: the
+    // sequencer publishes the terminal idle first, then enriches and submits in a
+    // goroutine. So `session.qsos` is still empty when the operator re-clicks, and
+    // deriving the repeat intent from it alone sent allow_duplicate:false — which,
+    // for two contacts inside one minute, silently discarded the second on-air
+    // exchange. The engaged-call set closes that window (codex 0f08d2b2 P1).
+    it('flags a repeat from a contact the daemon has not finished logging yet', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+
+        // The sequencer engaged W1ABC, then went idle — no ft8-logged yet, so
+        // session.qsos is still empty.
+        ft8Link.onQso({ active: true, role: 'answerer', their_call: 'W1ABC' });
+        ft8Link.onQso({ active: false });
+        expect(session.qsos).toHaveLength(0);
+
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }]));
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+
+        expect(got).toHaveLength(1);
+        expect(got[0].allowDuplicate).toBe(true);
+    });
+
+    it('does not flag a station this session has never engaged', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }]));
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+
+        expect(got).toHaveLength(1);
+        expect(got[0].allowDuplicate).toBe(false);
+    });
+});

@@ -27,6 +27,33 @@ cloud.station-manager.org {
 	#	}
 	# }
 
+	# Access log. This is the ONLY access log in the stack: smcloud logs to
+	# stderr (journald) but has no request logging at all, so without this
+	# nothing records method, path, status, latency or client IP — and the
+	# per-IP rate limiting above would be unobservable. Caddy is the right
+	# layer for it: it sees the real client IP, which smcloud never does
+	# behind a proxy.
+	#
+	# The Authorization header is DELETED explicitly rather than relying on
+	# Caddy's default credential redaction. smcloud's auth is a bearer token
+	# (see smcloud.env), and an access log is a long-lived file — a config
+	# that silently starts logging headers must not be able to spill it.
+	# Cookie is deleted for the same reason even though smcloud sets none.
+	log {
+		output file /var/log/caddy/smcloud-access.log {
+			roll_size    10MiB
+			roll_keep    5
+			roll_keep_for 720h
+		}
+		format filter {
+			wrap json
+			fields {
+				request>headers>Authorization delete
+				request>headers>Cookie delete
+			}
+		}
+	}
+
 	# smcloud listens on loopback only (SMCLOUD_LISTEN=127.0.0.1:8091);
 	# Caddy terminates TLS and proxies. Bearer auth is smcloud's own.
 	reverse_proxy 127.0.0.1:8091

@@ -12,6 +12,7 @@
         callCq,
         abandonQso,
         skipQso,
+        ft8EngagedThisSession,
         workCaller,
     } from './ft8.svelte';
     import { rig } from './rig.svelte';
@@ -292,8 +293,17 @@
     // is queue hygiene, not a veto on the operator: their intent (one contact with
     // this station) has already been met, and the automatic path is exactly where an
     // unintended duplicate has no human to catch it.
+    // Two sources, because neither alone is timely AND durable: `session.qsos` only
+    // learns of a contact after the daemon's asynchronous enrich+submit finishes
+    // (the terminal idle is published first), while the engaged-call set knows the
+    // instant the sequencer touches a station but is forgotten on reload. Together
+    // they cover the immediate-repair window this whole feature exists for
+    // (codex 0f08d2b2 P1).
     function workedThisSession(call: string): boolean {
-        return session.qsos.some((q) => q.callsign === call && q.band === rig.band);
+        return (
+            ft8EngagedThisSession(call) ||
+            session.qsos.some((q) => q.callsign === call && q.band === rig.band)
+        );
     }
 
     $effect(() => {

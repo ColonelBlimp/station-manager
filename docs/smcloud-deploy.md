@@ -352,6 +352,14 @@ caddy list-modules | grep rate_limit                       # → http.handlers.r
 #    exists), and validate:
 caddy validate --config /etc/caddy/Caddyfile
 
+# 4b. The access-log directory must exist and be writable by the caddy user
+#     BEFORE reload — Caddy fails to provision a file logger it cannot open,
+#     and a Caddy that won't start takes the whole service offline. The distro
+#     package normally creates it; verify rather than assume, and check the
+#     packaged unit does not confine /var/log (ProtectSystem=strict would):
+sudo install -d -o caddy -g caddy -m 0750 /var/log/caddy
+systemctl show caddy -p ProtectSystem -p ReadWritePaths
+
 # 5. Only now expose the listener. RESTART, not `enable --now`: the
 #    Debian/Ubuntu package auto-starts stock Caddy during install, and
 #    `enable --now` does not restart a running unit — the old binary would
@@ -402,8 +410,26 @@ the hourly reconcile self-heals anything a flaky link drops.
 
 ## 7. Operations
 
-- **Logs:** `journalctl -u smcloud -f` (slog to stderr). Health: `/v1/health`
-  (unauthenticated; checks the DB ping).
+- **Logs — two places, deliberately.**
+  - **Application:** `journalctl -u smcloud -f` (slog to stderr; journald owns
+    rotation). smcloud writes NO files — `DynamicUser=yes` +
+    `ProtectSystem=strict` leave it no writable path, which is why journald is
+    the sink rather than an app-side rotating file like `smd` uses.
+  - **Access:** `/var/log/caddy/smcloud-access.log` (JSON, 10 MiB × 5, 30 days
+    — Caddy's own roll settings). This is the ONLY request log in the stack:
+    smcloud has no request-logging middleware, so without it nothing records
+    method, path, status, latency or client IP, and the per-IP rate limiting
+    in §4 is unobservable. Caddy is the right layer — it sees the real client
+    IP, which smcloud never does behind the proxy.
+    ```bash
+    # recent non-2xx, newest last
+    sudo jq -c 'select(.status >= 400) | {ts,status,uri:.request.uri,ip:.request.remote_ip}' \
+      /var/log/caddy/smcloud-access.log | tail -20
+    ```
+    The `Authorization` header is **deleted** from the log by an explicit
+    filter, not left to Caddy's default credential redaction — smcloud's auth
+    is a long-lived bearer token and an access log is a long-lived file.
+- **Health:** `/v1/health` (unauthenticated; checks the DB ping).
 - **Back up the backup:** the local log DB remains the authority, but a VPS
   loss shouldn't cost the history either —
   `sudo -u postgres pg_dump smcloud | gzip > /var/backups/smcloud-$(date +%F).sql.gz`

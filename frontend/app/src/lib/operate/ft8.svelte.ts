@@ -360,6 +360,33 @@ export function setFt8LoggedSink(fn: (p: LoggedPayload) => void): void {
 */
 export type Ft8TxResult = { ok: boolean; message: string };
 
+// Stations the sequencer has engaged since this tab loaded. Deliberately keyed on
+// ENGAGEMENT, not on a completed QSO: an abandoned contact ends up in here too, and
+// that is the safe direction. The only consumer is the deliberate-repeat decision,
+// where the flag merely bypasses duplicate protection — so over-marking stores a
+// genuinely new contact (correct), while under-marking silently loses a real on-air
+// exchange. In-memory like the pile-up stack: live operating state, not durable.
+// Deliberately a plain Set, not SvelteSet: nothing RENDERS from it. It is read
+// imperatively by the click handlers, and by the pile-up drain's $effect — which
+// already re-runs on `ft8State.qso.active`, the very signal that also updates this
+// set, so the effect always sees a current value without the set itself being a
+// reactive dependency. Reactivity here would buy nothing and cost a proxy on a
+// hot path.
+// eslint-disable-next-line svelte/prefer-svelte-reactivity
+const engagedThisSession = new Set<string>();
+
+/** True when this session has already engaged `call` — used to decide whether an
+ *  operator action is a DELIBERATE repeat. Complements `session.qsos`, which only
+ *  learns about a contact once the daemon has finished logging it asynchronously. */
+export function ft8EngagedThisSession(call: string): boolean {
+    return engagedThisSession.has(call.trim().toUpperCase());
+}
+
+/** Test seam: forget the engaged-call set (a fresh tab starts empty). */
+export function resetFt8EngagedThisSession(): void {
+    engagedThisSession.clear();
+}
+
 export interface Ft8AnswerArgs {
     theirCall: string;
     theirGrid: string;
@@ -536,6 +563,16 @@ export const ft8Link: Ft8EventHandlers = {
     },
 
     onQso(p: QsoPayload): void {
+        // Remember every station the sequencer has actually engaged this session.
+        // `session.qsos` cannot answer "did we just work them?" in time: the daemon
+        // publishes the terminal idle BEFORE its enrich+submit goroutine runs, so
+        // there is a window (up to the 30 s submit timeout) where a contact is over
+        // on the air but absent from the session list — and on the single-rung type-4
+        // path the operator can re-click well inside it (codex 0f08d2b2 P1). The
+        // ft8-logged event that feeds session.qsos is also one-shot and not replayed,
+        // so a missed event or a fresh tab never learns it at all.
+        const engaged = (p.their_call ?? '').trim().toUpperCase();
+        if (engaged !== '') engagedThisSession.add(engaged);
         ft8State.qso = {
             active: p.active ?? false,
             role: p.role ?? '',
@@ -606,6 +643,9 @@ export function stopFt8(): void {
 
 /** Test seam — restore module singletons between cases. */
 export function resetFt8ForTests(): void {
+    // A fresh tab starts with no engaged stations; clearing here (rather than only
+    // via the dedicated reset) keeps the set from leaking across tests.
+    resetFt8EngagedThisSession();
     opener = null;
     closeFn = null;
     loggedSink = null;

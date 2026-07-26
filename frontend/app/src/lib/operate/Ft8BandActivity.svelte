@@ -10,6 +10,7 @@
         ft8MyGrid,
         ft8CqToTop,
         ft8HideHashed,
+        ft8EngagedThisSession,
         answerCq,
         workCaller,
         type DecodeEntry,
@@ -192,8 +193,17 @@
     // work a station as often as they choose; callers use it to say so, never to
     // refuse. (The pile-up DRAIN is the one exception: it transmits with no operator
     // present at that instant, so it still skips — see Ft8Operate.)
+    // Two sources, because neither alone is timely AND durable: `session.qsos` only
+    // learns of a contact after the daemon's asynchronous enrich+submit finishes
+    // (the terminal idle is published first), while the engaged-call set knows the
+    // instant the sequencer touches a station but is forgotten on reload. Together
+    // they cover the immediate-repair window this whole feature exists for
+    // (codex 0f08d2b2 P1).
     function workedThisSession(call: string): boolean {
-        return session.qsos.some((q) => q.callsign === call && q.band === rig.band);
+        return (
+            ft8EngagedThisSession(call) ||
+            session.qsos.some((q) => q.callsign === call && q.band === rig.band)
+        );
     }
 
     // Ctrl/Cmd+click a calling-you row → PILE-UP queue (pure capture, works in ANY TX
