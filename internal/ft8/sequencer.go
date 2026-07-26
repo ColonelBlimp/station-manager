@@ -711,20 +711,24 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	s.lastTxSlot = curStart.Add(SlotDuration)
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	repeats := s.repeats
-	var completed *CompletedQso
+	// GROUP A final rung (see finalrung.go): they already sent RRR/RR73, so the
+	// contact is complete on their side and this 73 is a courtesy — send once and
+	// record the QSO on either outcome. The exchange is NOT cleared here (review
+	// follow-up M1): leaving it in txConfirming keeps the operator from starting a
+	// new QSO (ErrQsoInProgress) while we are still keying, and the report fields
+	// are final at txConfirming — Sent() only flips State — so reading the live
+	// exchange is correct.
+	var onDone func(bool)
 	if confirming {
-		// Capture the QSO data for logging, but DO NOT clear the exchange or go
-		// idle yet (review follow-up M1): the session stays in txConfirming until
-		// the 73 actually transmits, so a synchronous ErrTxInFlight can retry next
-		// slot, and the operator can't start a new QSO (ErrQsoInProgress) while we
-		// are still keying the 73. The report fields are final at txConfirming —
-		// Sent() only flips State — so reading the live exchange is correct.
-		c := s.completedQsoLocked()
-		completed = &c
+		onDone = s.finalRungDoneLocked(
+			s.completedQsoLocked(),
+			func() { s.ex = nil },
+			"ft8 seq: QSO complete (73 sent)",
+			"ft8 seq: final 73 did not transmit; QSO logged anyway (partner already rogered)",
+		)
 	}
-	gen := s.sessionGen
 	st := s.statusLocked()
-	prepareComplete, onComplete, publish := s.prepareComplete, s.onComplete, s.publish
+	publish := s.publish
 	s.mu.Unlock()
 
 	// Side effects outside the lock. Log every rung transmit (msg, rung, and how
@@ -738,44 +742,6 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		Int("repeats", repeats).
 		Msg("ft8 seq: transmitting rung")
 
-	// Final-rung completion (review H1 + follow-up M1): the QSO logs ONLY after
-	// the 73 truly transmits, and the gen guard means an Abandon/disarm that
-	// superseded this session while the 73 was in flight neither logs nor
-	// publishes. On success → log + idle + publish idle. On RF failure → leave
-	// the exchange in txConfirming so the next slot retries the 73 (don't drop
-	// the contact).
-	var onDone func(ok bool)
-	if completed != nil {
-		c := *completed
-		onDone = func(ok bool) {
-			if ok && prepareComplete != nil {
-				prepareComplete(&c)
-			}
-			s.mu.Lock()
-			if s.sessionGen != gen { // superseded (abandon/disarm) — stale callback
-				s.mu.Unlock()
-				return
-			}
-			if !ok {
-				s.mu.Unlock()
-				s.log.WarnWith().Str("their_call", c.TheirCall).
-					Msg("ft8 seq: final 73 did not transmit; will retry next slot")
-				return
-			}
-			s.ex = nil
-			s.mode = seqIdle
-			// Publish the terminal state while the state lock still excludes a
-			// replacement Start*. Otherwise that start can publish active first
-			// and this delayed completion can overwrite it with stale idle.
-			publish(QsoStatus{Active: false})
-			s.mu.Unlock()
-			s.log.InfoWith().Str("their_call", c.TheirCall).Msg("ft8 seq: QSO complete (73 sent)")
-			if onComplete != nil {
-				onComplete(c)
-			}
-		}
-	}
-
 	if err := transmit(msg, offset, dial, onDone); err != nil {
 		// A superseded commit means Abandon (or a new session) won the race while
 		// this rung was between s.mu and the Service's txMu — the session is gone
@@ -785,10 +751,17 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 			return
 		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: rung transmit failed")
-		// onDone never fired (the goroutine didn't start). ErrTxNotArmed (TX gone)
-		// and ErrTxBadMessage (will never encode — review M1) are terminal. Anything
-		// else (e.g. ErrTxInFlight) is transient: the state is untouched (a final
-		// rung is still txConfirming), so the next slot retries.
+		// onDone never fired (the transmit goroutine didn't start). A Group A final
+		// rung is send-once, so complete the contact here rather than retrying or
+		// dropping it — that covers the terminal errors too, since TX going away
+		// does not un-make a contact the partner already rogered.
+		if onDone != nil {
+			onDone(false)
+			return
+		}
+		// Pre-final rungs: ErrTxNotArmed (TX gone) and ErrTxBadMessage (will never
+		// encode — review M1) are terminal; anything else (e.g. ErrTxInFlight) is
+		// transient and the untouched state retries next slot.
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
 			s.Abandon()
 			return
@@ -868,9 +841,15 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		return
 	}
 
+	// In Field Day the ANSWERING station sends the closing RR73, so fdRogering is a
+	// GROUP B final rung (see finalrung.go) — the mirror of the standard answer
+	// ladder, whose 73 is Group A. The CQ-FD station is waiting on this RR73 to
+	// complete their sequence, so it is retried rather than sent once, but under the
+	// same cap: re-entry means the previous attempt failed to transmit.
 	confirming := s.fdEx.State == fdRogering
 	if !confirming {
-		// Operator-armed skip — see onSlotAnswering; same semantics.
+		// Operator-armed skip — see onSlotAnswering; same semantics. Pre-final
+		// only: it means "stop calling a station that isn't answering".
 		if s.skipIfSilent && !advanced && s.repeats > 0 {
 			s.fdEx = nil
 			s.mode = seqIdle
@@ -880,16 +859,24 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 			s.publish(QsoStatus{Active: false})
 			return
 		}
-		if s.repeats >= s.maxRepeats {
-			s.fdEx = nil
-			s.mode = seqIdle
-			s.mu.Unlock()
-			s.log.InfoWith().Msg("ft8 seq: FD no answer after max repeats; abandoning")
-			s.publish(QsoStatus{Active: false})
-			return
-		}
-		s.repeats++
 	}
+	if s.repeats >= s.maxRepeats {
+		call, attempts := s.fdEx.TheirCall, s.maxRepeats
+		s.fdEx = nil
+		s.mode = seqIdle
+		s.mu.Unlock()
+		if confirming {
+			// Group B: they never received the roger, so neither side has a QSO —
+			// abandon WITHOUT logging rather than invent a contact they don't hold.
+			s.log.WarnWith().Str("their_call", call).Int("attempts", attempts).
+				Msg("ft8 seq: FD final RR73 never transmitted; abandoning without logging")
+		} else {
+			s.log.InfoWith().Msg("ft8 seq: FD no answer after max repeats; abandoning")
+		}
+		s.publish(QsoStatus{Active: false})
+		return
+	}
+	s.repeats++
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
@@ -1148,8 +1135,9 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			Repeats:     s.repeats,
 			TheirPeriod: s.theirPeriod,
 		}
-		// Advertise the cap only on the rungs it governs (everything but the one-shot
-		// 73), so the SPA's countdown shows iff max_repeats>0.
+		// MaxRepeats is advertised exactly when the CURRENT rung is bounded, so the
+		// SPA's countdown shows iff max_repeats>0. The final 73 here is Group A
+		// (send-once, see finalrung.go) — genuinely uncapped, so it stays 0.
 		if s.ex.State != txConfirming {
 			st.MaxRepeats = s.maxRepeats
 		}
@@ -1180,10 +1168,10 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			TheirClass:   s.fdEx.TheirClass,
 			TheirSection: s.fdEx.TheirSection,
 		}
-		// Cap governs the pre-RR73 rung only (the one-shot RR73 is uncapped).
-		if s.fdEx.State != fdRogering {
-			st.MaxRepeats = s.maxRepeats
-		}
+		// Every rung here is bounded: the pre-RR73 rung by the unanswered-repeat cap,
+		// and the closing RR73 because FD's answering side is Group B — the CQ-FD
+		// station is waiting on it, so it retries under the same cap.
+		st.MaxRepeats = s.maxRepeats
 		return st
 	case seqWorkingFd:
 		if s.fdWork == nil {
@@ -1205,6 +1193,8 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			TheirClass:   s.fdWork.TheirClass,
 			TheirSection: s.fdWork.TheirSection,
 		}
+		// The closing RR73 on FD's WORK side is Group A (they already rogered), so
+		// it is send-once and uncapped — the mirror of seqAnsweringFd above.
 		if s.fdWork.State != fdwRogering {
 			st.MaxRepeats = s.maxRepeats
 		}
@@ -1225,7 +1215,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			Repeats:     s.repeats,
 			TheirPeriod: s.theirPeriod,
 		}
-		// Cap governs the pre-73 rung only (the one-shot 73 is uncapped).
+		// Cap governs the pre-73 rung only — the closing 73 is Group A (send-once).
 		if s.t4Ex.State != t4Confirming {
 			st.MaxRepeats = s.maxRepeats
 		}
@@ -1251,8 +1241,9 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			Repeats:     s.repeats,
 			TheirPeriod: s.theirPeriod,
 		}
-		// The sole rung (RR73) is a one-shot terminal, so it is uncapped (MaxRepeats
-		// stays 0).
+		// The sole rung (RR73) is terminal AND Group B — the caller is waiting on it,
+		// so its retry is bounded by the same cap (fireWorkT4RungLocked).
+		st.MaxRepeats = s.maxRepeats
 		if s.t4Work.HasSendSnr {
 			st.OurReport = formatReport(s.t4Work.SendSnr)
 		}
@@ -1267,11 +1258,10 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			st.TheirGrid = s.caller.TheirGrid
 			st.State = s.caller.State.label()
 			st.NextMessage = msg
-			// Cap governs the working-an-answerer rungs but not the one-shot RR73; on
-			// plain calling-cq (caller==nil) it's uncapped, so MaxRepeats stays 0.
-			if s.caller.State != cqRogering {
-				st.MaxRepeats = s.maxRepeats
-			}
+			// Every rung of a contact is bounded — including the closing RR73, which
+			// is Group B here (the answerer is waiting on it). On plain calling-cq
+			// (caller==nil) there IS no cap, so MaxRepeats stays 0.
+			st.MaxRepeats = s.maxRepeats
 			if s.caller.HasSendSnr {
 				st.OurReport = formatReport(s.caller.SendSnr)
 			}
@@ -1286,7 +1276,8 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 	case seqWorking:
 		// Working a station that called us: caller-role ladder (report → RR73), but
 		// no calling-cq phase — s.caller is always set. Role "caller" so the SPA
-		// renders the same ladder as Call-CQ; the cap governs the pre-RR73 rung.
+		// renders the same ladder as Call-CQ; every rung is capped, the closing RR73
+		// included (Group B — the caller is waiting on it).
 		if s.caller == nil {
 			return QsoStatus{Active: false}
 		}
@@ -1301,9 +1292,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			Repeats:     s.repeats,
 			TheirPeriod: s.theirPeriod,
 		}
-		if s.caller.State != cqRogering {
-			st.MaxRepeats = s.maxRepeats
-		}
+		st.MaxRepeats = s.maxRepeats
 		if s.caller.HasSendSnr {
 			st.OurReport = formatReport(s.caller.SendSnr)
 		}

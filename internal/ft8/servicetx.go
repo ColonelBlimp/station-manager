@@ -816,8 +816,11 @@ func (s *Service) exchangePath() string {
 // per-attempt CompletedQso after its terminal rung succeeds, before the sequencer
 // releases the completed state. Per-QSO storage avoids a singleton snapshot that
 // another completion can overwrite. The generation lets onComplete clear the live
-// selection only if no newer choice has landed. Failed/superseded attempts never
-// stamp; a retry captures the latest choice.
+// selection only if no newer choice has landed. Superseded attempts never stamp.
+// A FAILED attempt stamps only on a GROUP A final rung, which logs whether or not
+// its closing message keyed (see finalrung.go) — without the stamp that QSO would
+// silently lose the operator's antenna choice. Group B retries instead of logging,
+// and each retry captures the latest selection.
 func (s *Service) stampCompletionPath(c *CompletedQso) {
 	s.txMu.Lock()
 	p := s.exchPath

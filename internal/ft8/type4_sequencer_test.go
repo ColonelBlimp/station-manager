@@ -110,7 +110,8 @@ func TestType4Work_HappyPath(t *testing.T) {
 	require.True(t, st.Type4)
 	require.Equal(t, "rogering", st.State)
 	require.Equal(t, "PJ4/NA2AA 7Q5MLV RR73", st.NextMessage)
-	require.Zero(t, st.MaxRepeats, "the sole RR73 rung is a one-shot terminal (uncapped)")
+	require.Equal(t, defaultSeqMaxRepeats, st.MaxRepeats,
+		"the sole RR73 rung is terminal but Group B — its retry is bounded, so the cap is advertised")
 
 	// Our first qualifying slot → we key RR73 and the QSO completes + logs idle.
 	driveTheir(s, 30, []goft8.DecodedMessage{dm("<...> PJ4/NA2AA", 3)})

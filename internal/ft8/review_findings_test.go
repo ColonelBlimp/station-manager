@@ -10,7 +10,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- H1: a completed QSO is logged only after the final rung TRANSMITS ------
+// --- H1 (refined by the final-rung split): when a completed QSO is logged ----
+//
+// Review H1 established that a QSO logs only after its final rung TRANSMITS, so SM
+// never records a contact it did not put on the air. The final-rung work split
+// that by ladder (see finalrung.go): the rule still holds for GROUP B, where our
+// closing RR73 is what completes the PARTNER's sequence and nothing is complete
+// until it lands. It does NOT hold for GROUP A, where the partner already rogered
+// — there the contact is finished on their side before we key at all, so
+// withholding the log would leave the other operator holding a QSO we have no
+// record of. Group A sends once and logs on either outcome; Group B retries under
+// the repeat cap and logs only on success.
+//
+// H1's surviving half is asserted in every Group A test below: nothing logs before
+// the final rung is reached.
 
 // TestSequencer_ActiveCallsign covers ADR 0055 pin-at-arm: the active session
 // exposes the callsign pinned at StartQso for the self-decode filter; idle (and
@@ -27,10 +40,11 @@ func TestSequencer_ActiveCallsign(t *testing.T) {
 	require.Equal(t, "", s.ActiveCallsign(), "abandoned session has no active call")
 }
 
-// TestSequencer_FinalRungAsyncFailDoesNotLog: the 73 is queued (transmit returns
-// nil) but the transmission then fails on air (onDone(false)). No QSO must be
-// logged (review H1) — the session still ends.
-func TestSequencer_FinalRungAsyncFailDoesNotLog(t *testing.T) {
+// TestSequencer_FinalRungAsyncFailStillLogs: the 73 is queued (transmit returns
+// nil) but the transmission then fails on air (onDone(false)). GROUP A — K1ABC
+// already sent RR73, so the QSO IS logged, the session ends, and the 73 is never
+// re-keyed.
+func TestSequencer_FinalRungAsyncFailStillLogs(t *testing.T) {
 	r := &seqRecorder{asyncFail: true}
 	s := newTestSeq(r)
 
@@ -38,18 +52,24 @@ func TestSequencer_FinalRungAsyncFailDoesNotLog(t *testing.T) {
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
 	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	require.Empty(t, r.completed, "nothing logs before the final rung is reached (review H1)")
+
 	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)}) // 73 queued, fails on air
 
 	require.Contains(t, r.sentMsgs(), "K1ABC G0XYZ 73", "the 73 was queued")
-	require.Empty(t, r.completed, "a failed final 73 must NOT log a QSO (review H1)")
-	// Follow-up M1: a failed final 73 stays active so the next slot retries it,
-	// rather than silently ending the contact.
-	require.True(t, s.Active(), "a failed final 73 stays active to retry")
+	require.Len(t, r.completed, 1, "Group A: they already rogered, so the QSO logs anyway")
+	require.False(t, s.Active(), "send-once: a failed Group A final rung ends the session")
+
+	sentBefore := len(r.sentMsgs())
+	driveTheir(s, 120, nil)
+	require.Len(t, r.sentMsgs(), sentBefore, "a Group A final rung is never retried")
+	require.Len(t, r.completed, 1, "and never logs twice")
 }
 
-// TestSequencer_FinalRungBadMessageAbandonsNoLog: a synchronous terminal error
-// on the final rung (ErrTxBadMessage) must abandon and not log (review H1/M1).
-func TestSequencer_FinalRungBadMessageAbandonsNoLog(t *testing.T) {
+// TestSequencer_FinalRungBadMessageStillLogs: a synchronous terminal error on the
+// GROUP A final rung (ErrTxBadMessage — the 73 never reaches the air at all) still
+// logs. TX going away does not un-make a contact the partner already rogered.
+func TestSequencer_FinalRungBadMessageStillLogs(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 
@@ -57,14 +77,16 @@ func TestSequencer_FinalRungBadMessageAbandonsNoLog(t *testing.T) {
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
 	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	require.Empty(t, r.completed, "nothing logs before the final rung is reached (review H1)")
 
 	r.mu.Lock()
 	r.transmitErr = ErrTxBadMessage // the final 73 can't be sent
 	r.mu.Unlock()
 	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
 
-	require.Empty(t, r.completed, "a final rung that can't transmit must not log (review H1)")
-	require.False(t, s.Active(), "ErrTxBadMessage is terminal (review M1)")
+	require.NotContains(t, r.sentMsgs(), "K1ABC G0XYZ 73", "the 73 never went out")
+	require.Len(t, r.completed, 1, "Group A logs even when the final 73 never keyed")
+	require.False(t, s.Active(), "the session ends either way")
 }
 
 // TestCallerSequencer_FinalRR73AsyncFailDoesNotLog: caller-side equivalent — a
@@ -83,30 +105,33 @@ func TestCallerSequencer_FinalRR73AsyncFailDoesNotLog(t *testing.T) {
 
 // --- Follow-up M1: final-rung state survives transmit acceptance -------------
 
-// A synchronous ErrTxInFlight on the final 73 must NOT end or log the QSO — the
-// exchange stays in confirming so the next slot retries (review follow-up M1).
-func TestSequencer_FinalRungInFlightRetries(t *testing.T) {
+// A transient ErrTxInFlight on a GROUP A final 73 no longer retries: the rung is
+// send-once, so the QSO logs and the session ends. The courtesy 73 is lost (the
+// partner will repeat their RR73 a few times and give up), but both logs hold the
+// contact — which is the trade the split was decided on. Group B keeps the retry;
+// see TestCallerSequencer_FinalRR73InFlightRetries below.
+func TestSequencer_FinalRungInFlightStillLogsOnce(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
 	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	require.Empty(t, r.completed, "nothing logs before the final rung is reached (review H1)")
 
 	r.mu.Lock()
 	r.transmitErr = ErrTxInFlight // a prior TX is still running when the 73 fires
 	r.mu.Unlock()
 	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
-	require.Empty(t, r.completed, "ErrTxInFlight on the 73 must not log")
-	require.True(t, s.Active(), "ErrTxInFlight on the final rung is retryable, not terminal")
+	require.Len(t, r.completed, 1, "Group A logs on the single attempt")
+	require.False(t, s.Active(), "and ends rather than holding the rig for a retry")
 
 	r.mu.Lock()
-	r.transmitErr = nil // TX free now
+	r.transmitErr = nil // TX free again
 	r.mu.Unlock()
-	driveTheir(s, 120, nil) // next slot retries the 73
-	require.Contains(t, r.sentMsgs(), "K1ABC G0XYZ 73")
-	require.Len(t, r.completed, 1, "the retried 73 logs the QSO")
-	require.False(t, s.Active())
+	driveTheir(s, 120, nil)
+	require.NotContains(t, r.sentMsgs(), "K1ABC G0XYZ 73", "no retry once the session ended")
+	require.Len(t, r.completed, 1, "and no second log")
 }
 
 // Caller equivalent: ErrTxInFlight on RR73 keeps the contact in cqRogering and

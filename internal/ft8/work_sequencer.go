@@ -164,11 +164,16 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 
 	// Repeat cap / off-ramp: pre-RR73 rungs are capped; on silence ABANDON (unlike
-	// Call-CQ, which resumes calling CQ). The one-shot RR73 (cqRogering) is uncapped —
-	// it completes on our own transmit.
+	// Call-CQ, which resumes calling CQ). The RR73 (cqRogering) is a GROUP B final
+	// rung (see finalrung.go): the answerer is waiting on it, so it is retried
+	// rather than sent once — but under the SAME cap, because re-entering that rung
+	// means the previous attempt failed to transmit and an unbounded retry re-keys
+	// the rig every cycle forever.
 	confirming := s.caller.State == cqRogering
 	if !confirming {
-		// Operator-armed skip — see onSlotAnswering; same semantics.
+		// Operator-armed skip — see onSlotAnswering; same semantics. Deliberately
+		// pre-final only: it means "stop calling a station that isn't answering",
+		// and at the final rung nobody is being waited for.
 		if s.skipIfSilent && !advanced && s.repeats > 0 {
 			s.caller = nil
 			s.mode = seqIdle
@@ -178,16 +183,24 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			s.publish(QsoStatus{Active: false})
 			return
 		}
-		if s.repeats >= s.maxRepeats {
-			s.caller = nil
-			s.mode = seqIdle
-			s.mu.Unlock()
-			s.log.InfoWith().Msg("ft8 seq: working caller — no answer after max repeats; abandoning")
-			s.publish(QsoStatus{Active: false})
-			return
-		}
-		s.repeats++
 	}
+	if s.repeats >= s.maxRepeats {
+		call, attempts := s.caller.TheirCall, s.maxRepeats
+		s.caller = nil
+		s.mode = seqIdle
+		s.mu.Unlock()
+		if confirming {
+			// Group B: they never received the roger, so neither side has a QSO —
+			// abandon WITHOUT logging rather than invent a contact they don't hold.
+			s.log.WarnWith().Str("their_call", call).Int("attempts", attempts).
+				Msg("ft8 seq: working caller — final RR73 never transmitted; abandoning without logging")
+		} else {
+			s.log.InfoWith().Msg("ft8 seq: working caller — no answer after max repeats; abandoning")
+		}
+		s.publish(QsoStatus{Active: false})
+		return
+	}
+	s.repeats++
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
@@ -415,49 +428,25 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 	s.lastTxSlot = curStart.Add(SlotDuration)
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	repeats := s.repeats
-	var completed *CompletedQso
+	// GROUP A final rung (see finalrung.go): in Field Day the ANSWERING station
+	// sends the closing RR73, and receiving theirs is what advanced us here — so on
+	// the work side the contact is already complete for them and our RR73 is the
+	// courtesy. Send once and record the QSO on either outcome. (Note this is the
+	// mirror of the standard work-a-caller ladder, which is Group B.)
+	var onDone func(bool)
 	if confirming {
-		c := s.completedFdWorkQsoLocked()
-		completed = &c
+		onDone = s.finalRungDoneLocked(
+			s.completedFdWorkQsoLocked(),
+			func() { s.fdWork = nil },
+			"ft8 seq: working caller (FD) QSO complete (RR73 sent)",
+			"ft8 seq: working caller (FD) RR73 did not transmit; QSO logged anyway (partner already rogered)",
+		)
 	}
-	gen := s.sessionGen
 	st := s.statusLocked()
-	publish, prepareComplete, onComplete := s.publish, s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
 		Float64("dt_s", dt).Int("repeats", repeats).Msg("ft8 seq: working caller (FD) transmitting rung")
-
-	var onDone func(ok bool)
-	if completed != nil {
-		c := *completed
-		onDone = func(ok bool) {
-			if ok && prepareComplete != nil {
-				prepareComplete(&c)
-			}
-			s.mu.Lock()
-			if s.sessionGen != gen { // superseded (abandon) — stale callback
-				s.mu.Unlock()
-				return
-			}
-			if !ok {
-				s.mu.Unlock()
-				s.log.WarnWith().Str("their_call", c.TheirCall).
-					Msg("ft8 seq: working caller (FD) RR73 did not transmit; will retry next slot")
-				return
-			}
-			s.fdWork = nil
-			s.mode = seqIdle
-			s.repeats = 0
-			publish(QsoStatus{Active: false}) // ordered before any replacement start
-			s.mu.Unlock()
-			s.log.InfoWith().Str("their_call", c.TheirCall).
-				Msg("ft8 seq: working caller (FD) QSO complete (RR73 sent)")
-			if onComplete != nil {
-				onComplete(c)
-			}
-		}
-	}
 
 	if err := transmit(msg, offset, dial, onDone); err != nil {
 		if stderrors.Is(err, ErrTxSuperseded) { // session gone; idle already published
@@ -465,6 +454,13 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 			return
 		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: working caller (FD) rung transmit failed")
+		// Group A final rung: onDone never fired, and it is send-once — complete
+		// the contact here instead of retrying or dropping it (terminal errors
+		// included; TX going away does not un-make a contact they already rogered).
+		if onDone != nil {
+			onDone(false)
+			return
+		}
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
 			s.Abandon()
 			return

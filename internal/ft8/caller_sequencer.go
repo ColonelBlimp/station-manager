@@ -186,6 +186,8 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	//     else is calling do we resume the CQ.
 	//   - calling CQ (no contact yet): NO cap — calling CQ is the operator's standing
 	//     intent; we keep calling until answered or Abandoned.
+	//   - working a contact, at the RR73: a GROUP B final rung — capped too, see the
+	//     default branch.
 	working := s.caller != nil
 	confirming := working && s.caller.State == cqRogering
 	switch {
@@ -218,7 +220,28 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	case !working:
 		s.repeats++ // CQ repeat count for status; uncapped
 	default:
-		// working && confirming — about to send RR73 (a one-shot); repeats untouched.
+		// working && confirming — the RR73 the answerer is WAITING for: a GROUP B
+		// final rung (see finalrung.go). Re-entering it means the previous attempt
+		// failed to transmit, and an unbounded retry hurts more here than on the
+		// other ladders — the contact only clears on success, so the whole CQ loop
+		// would freeze on one station and the rest of the pile-up goes unworked.
+		if s.repeats >= s.maxRepeats {
+			// Park it for this round exactly like a staller: OUR transmit is what
+			// failed, and the station is still calling, so letting the rescan
+			// re-pick it would walk the ladder straight back into the same wall.
+			s.stalledCalls = append(s.stalledCalls, s.caller.TheirCall)
+			s.log.WarnWith().Str("their_call", s.caller.TheirCall).Int("attempts", s.maxRepeats).
+				Msg("ft8 seq: caller — final RR73 never transmitted; dropping contact without logging, resuming CQ")
+			// Nothing is logged: they never got the roger, so neither side has a
+			// QSO. Clearing confirming is load-bearing — it stops the completion
+			// callback below being built against the contact we just released.
+			s.caller = nil
+			s.repeats = 0
+			confirming = false
+			msg, rung = s.cqMessage, "calling-cq"
+		} else {
+			s.repeats++
+		}
 	}
 
 	s.lastTxSlot = curStart.Add(SlotDuration)

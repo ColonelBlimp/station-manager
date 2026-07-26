@@ -174,47 +174,24 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	s.lastTxSlot = curStart.Add(SlotDuration)
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	repeats := s.repeats
-	var completed *CompletedQso
+	// GROUP A final rung (see finalrung.go): their RR73 is what advanced us here,
+	// so the contact is complete on their side and this 73 is a courtesy — send
+	// once and record the QSO on either outcome.
+	var onDone func(bool)
 	if confirming {
-		c := s.completedQsoT4Locked()
-		completed = &c
+		onDone = s.finalRungDoneLocked(
+			s.completedQsoT4Locked(),
+			func() { s.t4Ex = nil },
+			"ft8 seq: type-4 QSO complete (73 sent)",
+			"ft8 seq: type-4 final 73 did not transmit; QSO logged anyway (partner already rogered)",
+		)
 	}
-	gen := s.sessionGen
 	st := s.statusLocked()
-	prepareComplete, onComplete, publish := s.prepareComplete, s.onComplete, s.publish
+	publish := s.publish
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
 		Float64("dt_s", dt).Int("repeats", repeats).Msg("ft8 seq: transmitting type-4 rung")
-
-	var onDone func(ok bool)
-	if completed != nil {
-		c := *completed
-		onDone = func(ok bool) {
-			if ok && prepareComplete != nil {
-				prepareComplete(&c)
-			}
-			s.mu.Lock()
-			if s.sessionGen != gen { // superseded — stale callback
-				s.mu.Unlock()
-				return
-			}
-			if !ok {
-				s.mu.Unlock()
-				s.log.WarnWith().Str("their_call", c.TheirCall).
-					Msg("ft8 seq: type-4 final 73 did not transmit; will retry next slot")
-				return
-			}
-			s.t4Ex = nil
-			s.mode = seqIdle
-			publish(QsoStatus{Active: false}) // ordered before any replacement start
-			s.mu.Unlock()
-			s.log.InfoWith().Str("their_call", c.TheirCall).Msg("ft8 seq: type-4 QSO complete (73 sent)")
-			if onComplete != nil {
-				onComplete(c)
-			}
-		}
-	}
 
 	if err := transmit(msg, offset, dial, onDone); err != nil {
 		if stderrors.Is(err, ErrTxSuperseded) { // session gone; idle already published
@@ -222,6 +199,13 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 			return
 		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: type-4 rung transmit failed")
+		// Group A final rung: onDone never fired, and it is send-once — complete
+		// the contact here instead of retrying or dropping it (terminal errors
+		// included; TX going away does not un-make a contact they already rogered).
+		if onDone != nil {
+			onDone(false)
+			return
+		}
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
 			s.Abandon()
 			return
@@ -294,9 +278,11 @@ func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, thei
 
 // onSlotWorkingT4 drives a work-a-caller type-4 contact — the type-4 twin of
 // onSlotWorkingFd, collapsed to the single RR73 rung. That rung is always the terminal
-// (confirming) rung, so there is no repeat cap or skip-if-silent path to walk: we key RR73
-// in our next opposite-parity slot and the QSO logs from onDone only after it truly
-// transmits, gen-guarded. On RF failure the contact stays put and the next slot retries.
+// (confirming) rung, so there is no skip-if-silent path to walk: we key RR73 in our next
+// opposite-parity slot and the QSO logs from onDone only after it truly transmits,
+// gen-guarded. On RF failure the contact stays put and the next slot retries — bounded by
+// the Group B final-rung cap in fireWorkT4RungLocked (see finalrung.go), since with no
+// pre-final rung there is nothing else to carry one.
 func (s *Sequencer) onSlotWorkingT4(ref SlotRef, msgs []goft8.DecodedMessage, now time.Time) {
 	s.mu.Lock()
 	if s.t4Work == nil {
@@ -360,6 +346,23 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 		s.publish(st)
 		return
 	}
+
+	// GROUP B final rung (see finalrung.go): this ladder's SOLE rung is the RR73 the
+	// caller is waiting for, so re-entry means the previous attempt failed to
+	// transmit. There is no pre-final rung here to carry a cap, so bound it directly
+	// — counted only past the guards above, since a deferred slot is not an attempt.
+	if s.repeats >= s.maxRepeats {
+		call, attempts := s.t4Work.TheirCall, s.maxRepeats
+		s.t4Work = nil
+		s.mode = seqIdle
+		s.mu.Unlock()
+		// Nothing is logged: they never got the roger, so neither side has a QSO.
+		s.log.WarnWith().Str("their_call", call).Int("attempts", attempts).
+			Msg("ft8 seq: type-4 work — final RR73 never transmitted; abandoning without logging")
+		s.publish(QsoStatus{Active: false})
+		return
+	}
+	s.repeats++
 
 	s.lastTxSlot = txSlot
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz

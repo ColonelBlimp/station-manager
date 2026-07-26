@@ -32,6 +32,110 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-25)
 
+> **LATER 2026-07-25 — the "reasonably robust for public use" pass ran, plus a
+> long external-review arc on FT8 TX and on config/forwarder credential handling.
+> ~20 commits, every one reviewed to a clean bill. NONE of it is deployed.**
+>
+> **Robustness pass (operator-staged: fix identified items step-by-step → sweep →
+> public-ready). Steps 1, 2, 5 DONE; 3 PARKED; 4 STRUCK AS STALE.**
+> - **Step 1 — SUBMODE↔MODE validation** (`fcd45c45` + `35da0b91`). `Submit`
+>   rejected an inconsistent pair but `Update` bypassed it, so a `PATCH
+>   {"mode":"CW"}` onto an SSB/USB QSO persisted and FORWARDED `CW`/`USB`. Now one
+>   shared `validateSubmodeMatchesMode` in `qsoservice/validation.go` called by
+>   BOTH paths; submode also normalised on store in both (Submit validated the
+>   uppercased value but stored the raw one).
+> - **Step 2 — config credential handling. This grew into SEVEN commits and is the
+>   most consequential change of the day.** The durable rules, all now enforced
+>   daemon-side rather than by the browser:
+>   - A **blank credential on a PUT KEEPS the stored value** (`mergeForwarders`
+>     used to clear on blank). The safety of every stored secret previously
+>     depended on the config SPA stripping empties before the PUT — nothing else
+>     had to. The app's forwarders Settings section is unbuilt, so this was settled
+>     before it gets written against the old behaviour.
+>   - The exception is **`CredentialField.Clearable`**, a per-field marker meaning
+>     "empty is a meaningful value the constructor defaults". Only `smcloud.logbook`
+>     and the dev `stub.mode` carry it. **NOT inferred from `Kind == "text"`** —
+>     most text credentials are REQUIRED (ClubLog email/callsign, SM Cloud url) and
+>     blanking one produced a 200 followed by a daemon that would not restart.
+>     `Kind` is presentation only; `Clearable` is write policy. Changing a field's
+>     Kind no longer changes its write semantics.
+>   - A clearable blank is stored as the **canonical `""`**, not the whitespace as
+>     sent — the merge classified with `TrimSpace` but persisted verbatim, and
+>     `stub.New` compares `mode == ""` exactly, so a stored `" "` bricked startup.
+>   - **`PUT /v1/config` now probes every ENABLED forwarder with
+>     `forwarding.Build`** — the same call `spawnForwarderWorkers` makes — so the
+>     endpoint accepts exactly what the daemon can start with (400
+>     `forwarder_unusable`). Disabled entries are skipped, matching startup, so a
+>     destination stays saveable while half-configured. The probe runs only when
+>     the body carried `forwarders`, so one bad stored destination cannot block
+>     unrelated saves. It ALSO runs in the first-run dry run, before
+>     `seedDefaultLogbook` writes — otherwise a rejected setup PUT left an orphaned
+>     logbook that failed 409 on the retry.
+>   - **Constructor errors must not echo credential values.** `smcloud.New` quoted
+>     `credentials.url`, which can carry userinfo — and that error is logged as a
+>     startup fatal AND was surfaced by the new probe. Fixed at source (the
+>     constructor now names the fault, not the value), which also closed a
+>     pre-existing leak into the startup log. Contract recorded on
+>     `forwarding.Build`.
+> - **Step 3 — `bridge.New` dependency validation: PARKED.** `internal/bridge` is
+>   being worked by someone else (CI-V TX confirmation / arm fallback). Pick up
+>   when that lands.
+> - **Step 4 — STRUCK AS STALE (4th stale backlog item).** Both halves were already
+>   fixed by the 2026-07-23 sqlite batch: `bootstrap.go`'s `splitState` covers all
+>   four pieces of split state, and the cold-insert race is gone (contacted_station
+>   is a single upsert; the country cache uses `ON CONFLICT`). The one bare
+>   `Insert` — `InsertCountryWithContext` — has **zero production callers**.
+> - **Step 5 — cache-warm context** (`3b2a04f5`). The post-commit
+>   `contacted_station` warm used the REQUEST ctx, so a client disconnect skipped
+>   warming the cache for the callsign just worked. Now a detached 2 s ctx,
+>   mirroring the dedupe refetch. Deliberately NOT applied to `submit_batch.go`
+>   (CLI-only, where a cancel is the operator's Ctrl-C and stopping is correct).
+>   **No direct regression test** — the cancel window isn't deterministically
+>   reachable without a seam; the sibling dedupe fix landed the same way.
+>
+> **FT8 TX decodability guards (4 review rounds → clean, `d66a0bb4` → `e2124231`,
+> plus `4730c58a`). Safety-adjacent, ALL UNDEPLOYED AND UNVALIDATED ON AIR.**
+> `transmit()` now has two independent checks, because a transmission that cannot
+> be decoded must be reported FAILED, not short — success is what LOGS the QSO, so
+> a delayed final 73/RR73 could book and forward a contact the other station never
+> heard:
+> - **Head-loss floor** before `Play`: fail if truncation reached FT8's middle
+>   Costas array (`maxDecodableSkip`, ~5.92 s of the 12.96 s waveform; arrays at
+>   tone idx 0-6/36-42/72-78, receiver needs 2 of 3). Deliberately looser than the
+>   sequencer's implied 4.0 s so it never tightens the working late window.
+> - **Slot-overrun check** AFTER `Play` returns: `Play` returns once the device is
+>   RUNNING and does device enumeration + `malgo.InitDevice` + `device.Start`
+>   inline, unbounded. That delay is UNCOMPENSATED shift (unlike CAT keying
+>   latency, which the truncation absorbs), so require
+>   `elapsed + audio + txPlayTail ≤ txAudioBudget` (14.5 s). **The `txPlayTail`
+>   reserve is load-bearing** — the player's `done` means samples REACHED the
+>   device, not that they were emitted. Overrun preserves `ctx.Err()` so a disarm
+>   during a slow start stays a normal stop, not `ft8_tx_failed`. This is the ONLY
+>   guard covering an UNTRUNCATED rung (a next-slot CQ drops no head, so no
+>   head-loss test can see a slow device start).
+> - **`RST_SENT` logged the raw SNR, not the clamped on-air report** (`4730c58a`):
+>   SNR 99 transmitted `+49` and logged 99, outbound to QRZ/ClubLog. `clampReport`
+>   now applies where the report is RECORDED, not just formatted. Reachable because
+>   `their_snr` arrives UNVALIDATED from the client (`work_sequencer.go:46`). NOT
+>   applied to type-4/FD (they send no report on air, so their SNR is a logged
+>   measurement) and `RcvdReport` stays verbatim (that token IS what was on the air).
+>
+> **config.json diagnostics (`814724ae` → `19ccd71a`, 4 commits).** A malformed
+> config was a cryptic pre-logging fatal (`migrating config: parsing config
+> document: invalid character '}'…`) — no file, no line, and type errors leaked Go
+> struct names. Now: the path, line/column, the offending line carated, and a named
+> fix. Covers trailing comma (the caret points at the COMMA, not the brace json
+> blames), truncated file, empty file, wrong type, and top-level array. The
+> trailing-comma hint is derived from the DOCUMENT, not from matching
+> encoding/json's message prose. Line/column is suppressed when a config migration
+> re-marshalled the document (offsets would point at bytes the operator can't see).
+> **The snippet redacts, and took three rounds to get right** — blacklist →
+> allowlist by character → **allowlist by POSITION** (string-aware, inheriting
+> multi-line string state). config.json is 0600 *because* it holds SMTP/lookup
+> passwords; this message reaches stderr → journal and smd.log at **0644**. Only
+> structure and provable keys survive. Residual, accepted: encoding/json's own text
+> quotes the single offending character.
+
 > **Session(s) since 232 (2026-07-24 → 07-25) — CI RED RESOLVED, the on-air
 > CAT-identity bug fixed, and the "PTT drops mid-SSB" mystery closed. Several items
 > below are COMMITTED LOCALLY BUT NOT YET PUSHED/DEPLOYED — see each.**
@@ -1039,8 +1143,40 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Active cycle (the 1–3 things in flight now)
 
-> **▶ UPDATED 2026-07-25. Session-232 item 1 (CI red) is FIXED; two new deploy/
-> validate tasks joined the queue. In flight:**
+> **▶ RE-UPDATED later 2026-07-25 after the robustness pass. The queue is now
+> dominated by DEPLOY + ON-AIR VALIDATION — a large amount of TX-path and
+> config-path code has landed unproven:**
+>
+> - **A. DEPLOY.** `task deploy:local:dev`. Nothing from 2026-07-25 has run
+>   outside tests: the CAT identity re-probe, FOUR FT8 TX guards (head-loss floor,
+>   slot-overrun, RST clamp, attended-only disarm), the whole config/forwarder
+>   credential change, and the config.json diagnostics.
+> - **B. ON-AIR eyeball of the FT8 TX guards.** A normal QSO, a mid-exchange
+>   Abandon, and — if it can be provoked — a late rung, confirming a rejected
+>   transmission reports FAILED and does NOT log a QSO.
+> - **C. Robustness pass continues.** Step 3 (`bridge.New` deps) is PARKED behind
+>   the in-flight bridge work; then the sweep. Sweep shortlist, clear of
+>   `internal/bridge`: the **lumberjack goroutine leak** (336 leaked across an
+>   `internal/api` run) and **external-failure surfacing** (SMTP / upload / QRZ
+>   errors reaching the operator). The one with RF consequences is the **unbounded
+>   FT8 final-rung retry** — `sequencer.go:685-709` puts the repeat cap and
+>   skip-if-silent inside `if !confirming`, so a 73/RR73 that keeps failing
+>   re-keys PTT every cycle forever — but it sits on the TX path near the bridge
+>   work, so coordinate first.
+> - **D. Smaller, captured, not yet done:** `their_snr` is unvalidated at the API
+>   boundary (type-4/FD still log whatever integer arrives as RST_SENT);
+>   `reconcileCat`'s `dropMic` is gated on `capturing`, leaving the ARMED flag set
+>   on a CAT drop while armed-but-not-capturing (RF safety holds via
+>   `clearFt8TxOnDisconnect` — a state-symmetry gap only); RST_SENT logs positives
+>   unsigned (`strconv.Itoa` → "49"), and whether ADIF wants "+49" is unresolved.
+> - **E. Config SPA cannot express a `Clearable` reset.** Values are never echoed,
+>   so a blank box is indistinguishable from an untouched one; expressing a reset
+>   needs an explicit "reset to default" control shown only for clearable fields.
+>   Documented at the code site and DEFERRED because that SPA is being retired —
+>   **the app's forwarders section should carry it**, and `clearable` is already on
+>   the wire in `GET /v1/forwarder-types`.
+>
+> **Older items from earlier on 2026-07-25 (CI red now closed by a green run):**
 >
 > 1. **CI red — FIXED locally, PENDING PUSH + a green run.** It was three flaky
 >    tests, not one (bridge write-count · api stress `-timeout` · worker `:memory:`
