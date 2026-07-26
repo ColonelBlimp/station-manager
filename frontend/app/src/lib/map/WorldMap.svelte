@@ -173,6 +173,15 @@
 
     // ---- endpoint hover tooltip ------------------------------------------
     // Hit-test radii are on-screen sizes, so divide by k in content space.
+    //
+    // `hover` also drives the CURSOR (see the svg's class below). Endpoints are
+    // hover-only — there is no click handler on a station — so the cursor becomes
+    // `help` (info available here), NOT `pointer`, which would promise an activation
+    // that does not exist. It takes precedence over the pan cursor so a station reads
+    // as a target rather than more draggable map; the two can't conflict, since
+    // pointerdown clears `hover` and the pan branch returns before re-hit-testing.
+    // Without this the pointer stayed a grab-hand over a station when zoomed, and a
+    // plain arrow when not — no feedback either way (dogfood 2026-07-26).
     const HIT_R = 10;
     const GROUP_R = 5;
     const TIP_MAX = 8;
@@ -240,7 +249,13 @@
         role="img"
         aria-label="World map of contacts"
         class="block h-auto w-full touch-none select-none
-               {transform.k > 1 ? (panLast !== null ? 'cursor-grabbing' : 'cursor-grab') : ''}"
+               {hover !== null
+            ? 'cursor-help'
+            : transform.k > 1
+              ? panLast !== null
+                  ? 'cursor-grabbing'
+                  : 'cursor-grab'
+              : ''}"
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}

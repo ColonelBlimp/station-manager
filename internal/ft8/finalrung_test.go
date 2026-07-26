@@ -601,3 +601,49 @@ func TestSequencer_AllowDuplicateIsPinnedAtArmAndStamped(t *testing.T) {
 		require.False(t, r.completed[0].AllowDuplicate, "the second session never asked for it")
 	})
 }
+
+// The EW8DU case (dogfood 2026-07-26): a partner who rogered with an R-REPORT and
+// then sends RR73 has ADVANCED past that rung, which requires having received our
+// RR73 — a partner who missed it repeats the R-report instead. So RR73 there is a
+// sign-off, not a plea, and must not cost a needless re-send.
+func TestCallerSequencer_ConfirmHoldReadsRR73AsSignOffAfterAnRReport(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV EW8DU KO52", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV EW8DU R-17", -10)}) // roger WITH a report
+	require.Len(t, r.completed, 1)
+	require.NotNil(t, s.confirmHold)
+	require.True(t, s.confirmHold.rogeredWithReport)
+
+	before := countMsg(r.sentMsgs(), "EW8DU 7Q5MLV RR73")
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("7Q5MLV EW8DU RR73", -10)}) // their sign-off
+	require.Nil(t, s.confirmHold, "an advanced partner has heard us — release")
+	require.Equal(t, before, countMsg(r.sentMsgs(), "EW8DU 7Q5MLV RR73"),
+		"no needless re-send when they demonstrably advanced")
+
+	sent := r.sentMsgs()
+	require.Equal(t, "CQ 7Q5MLV KH78", sent[len(sent)-1], "straight back to CQ")
+}
+
+// The distinction is narrow on purpose: when their roger was a BARE RRR/RR73 there
+// is nothing to advance past, so a repeated RR73 stays ambiguous and must still be
+// treated as still-asking — a needless re-send costs a slot, a false confirmation
+// costs a duplicate QSO in three logbooks.
+func TestCallerSequencer_ConfirmHoldStillResendsWhenRogerWasBare(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW RR73", -10)}) // BARE roger
+	require.Len(t, r.completed, 1)
+	require.False(t, s.confirmHold.rogeredWithReport)
+
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("7Q5MLV DL9UW RR73", -10)}) // ambiguous repeat
+	sent := r.sentMsgs()
+	require.Equal(t, "DL9UW 7Q5MLV RR73", sent[len(sent)-1],
+		"no report to advance past — still ambiguous, so re-send")
+	require.NotNil(t, s.confirmHold)
+}

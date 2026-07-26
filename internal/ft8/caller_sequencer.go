@@ -294,7 +294,12 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			// Stay listenable for one of their slots: if they did not copy this RR73
 			// they will repeat their R-report, which no longer reaches us once the
 			// contact is cleared (see confirmHold).
-			s.confirmHold = &confirmHold{call: c.TheirCall, resends: confirmResendLimit, slots: confirmHoldSlotLimit}
+			s.confirmHold = &confirmHold{
+				call:              c.TheirCall,
+				resends:           confirmResendLimit,
+				slots:             confirmHoldSlotLimit,
+				rogeredWithReport: c.HasTheirReport,
+			}
 			cqSt := s.statusLocked()
 			publish(cqSt) // ordered before a concurrent Abandon/replacement start
 			s.mu.Unlock()
@@ -444,6 +449,10 @@ type confirmHold struct {
 	call    string // the completed partner
 	resends int    // remaining RR73 re-sends that reach the air
 	slots   int    // remaining slots the hold may live, whatever the outcome
+	// rogeredWithReport records that the partner rogered with an R-REPORT
+	// ("<us> <them> R-17") rather than a bare RRR/RR73. It disambiguates the one
+	// message that is otherwise unreadable — see resolveConfirmHoldLocked.
+	rogeredWithReport bool
 }
 
 // resolveConfirmHoldLocked decides what an outstanding hold does with one slot of
@@ -473,16 +482,21 @@ func (s *Sequencer) resolveConfirmHoldLocked(msgs []goft8.DecodedMessage) string
 		if pm.from != h.call || pm.to != s.ourCall {
 			continue
 		}
-		// ONLY a bare 73 confirms. msgRoger covers RRR *and* RR73, and the caller
-		// ladder accepts either as the partner's roger of our report (see
-		// CallerExchange.Advance) — so a partner who missed our RR73 repeats exactly
-		// that token. Reading it as confirmation would release the hold at the one
-		// moment the re-send is needed and hand back the duplicate this exists to
-		// prevent (codex 5a623c1a P1). RR73 is genuinely ambiguous here — sign-off, or
-		// a repeat of their roger — so it is treated as still-asking too: a needless
-		// re-send costs one slot, a false confirmation costs a duplicate QSO in three
-		// logbooks. Every confirming partner in the dogfood session sent a bare 73.
-		if pm.kind == msg73 {
+		// A bare 73 always confirms. msgRoger (RRR *and* RR73) is the hard case: the
+		// caller ladder accepts either as the partner's roger of our report (see
+		// CallerExchange.Advance), so a partner who MISSED our RR73 repeats exactly
+		// that token — reading it as confirmation would release the hold at the one
+		// moment the re-send is needed (codex 5a623c1a P1).
+		//
+		// It is only ambiguous when their roger WAS a bare RRR/RR73. If they rogered
+		// with an R-REPORT and now send RR73, they have moved PAST that rung, and
+		// advancing requires having received our RR73 — a partner who missed it
+		// repeats their R-report instead (SQ2LXX, VK6WTF, HL3KPJ all did). So that
+		// case is a sign-off, not a plea. Observed live: EW8DU rogered "R-17", got our
+		// RR73, and closed with "RR73" rather than a bare 73 — which cost a needless
+		// re-send until this distinction existed (dogfood 2026-07-26).
+		advancedPastRoger := pm.kind == msgRoger && h.rogeredWithReport
+		if pm.kind == msg73 || advancedPastRoger {
 			s.confirmHold = nil
 			s.log.InfoWith().Str("their_call", h.call).Str("heard", m.Text).
 				Msg("ft8 seq: caller — partner confirmed the contact; releasing hold")
