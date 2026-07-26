@@ -396,3 +396,83 @@ func TestCallerSequencer_ConfirmHoldResendsAreBounded(t *testing.T) {
 		"the original RR73 plus exactly confirmResendLimit re-sends")
 	require.Len(t, r.completed, 1, "still exactly one QSO")
 }
+
+// --- Review 5a623c1a regressions ---------------------------------------------
+
+// driveTheirLate fires OnSlot past the late window, so the rung is deferred rather
+// than transmitted.
+func driveTheirLate(s *Sequencer, sec int64, msgs []goft8.DecodedMessage) {
+	ref := SlotRefFromTime(time.Unix(sec, 0).UTC())
+	now := time.Unix(sec+slotSeconds, 0).UTC().
+		Add(time.Duration(txLateWindowSec+1) * time.Second)
+	s.OnSlot(ref, msgs, now)
+}
+
+// P1: the caller ladder accepts a bare RRR as the partner's roger, so a partner who
+// misses our RR73 repeats RRR — which must NOT be read as their sign-off. Only a
+// bare 73 confirms; treating RRR as confirmation released the hold at exactly the
+// moment the re-send was needed.
+func TestCallerSequencer_ConfirmHoldTreatsRepeatedRRRAsStillAsking(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW RRR", -10)}) // rogered with RRR
+	require.Len(t, r.completed, 1, "the QSO logs on our RR73")
+
+	// They missed it and repeat the same RRR.
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("7Q5MLV DL9UW RRR", -10)})
+	sent := r.sentMsgs()
+	require.Equal(t, "DL9UW 7Q5MLV RR73", sent[len(sent)-1],
+		"a repeated RRR is the partner still asking, not confirming")
+	require.NotNil(t, s.confirmHold, "the hold survives to cover another slot")
+	require.Len(t, r.completed, 1)
+}
+
+// P2: the budget bounds re-sends that REACH THE AIR. A slot deferred by the late
+// window never transmits, so it must not spend one.
+func TestCallerSequencer_ConfirmHoldLateSlotDoesNotSpendBudget(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)})
+	require.Equal(t, confirmResendLimit, s.confirmHold.resends)
+
+	asking := []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}
+	before := countMsg(r.sentMsgs(), "DL9UW 7Q5MLV RR73")
+	driveTheirLate(s, 120, asking) // too late — deferred, no RF
+	require.Equal(t, before, countMsg(r.sentMsgs(), "DL9UW 7Q5MLV RR73"), "nothing transmitted")
+	require.NotNil(t, s.confirmHold)
+	require.Equal(t, confirmResendLimit, s.confirmHold.resends, "a deferred slot spends nothing")
+
+	driveTheir(s, 150, asking) // in-window — this one spends a re-send
+	require.Equal(t, before+1, countMsg(r.sentMsgs(), "DL9UW 7Q5MLV RR73"))
+	require.Equal(t, confirmResendLimit-1, s.confirmHold.resends)
+}
+
+// Accepted limitation (P1 #2): once the budget is spent, a partner who heard none of
+// our RR73s and restarts with a grid answer IS worked again — they never received the
+// roger, so on air that is correct. The residual defect is the second ROW, which
+// needs duplicate detection at log level. Pinned so the trade-off is explicit.
+func TestCallerSequencer_ConfirmHoldExpiryStillAllowsARestart(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}) // logs QSO 1
+	asking := []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}
+	for sec := int64(120); sec <= 210; sec += 30 { // burn the budget
+		driveTheir(s, sec, asking)
+	}
+	require.Nil(t, s.confirmHold, "budget spent")
+	require.Len(t, r.completed, 1)
+
+	// They give up and restart from the top.
+	driveTheir(s, 240, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	require.NotNil(t, s.caller, "a restart is worked as a fresh contact")
+	require.Equal(t, "DL9UW", s.caller.TheirCall)
+}

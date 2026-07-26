@@ -744,11 +744,16 @@ ClubLog and SM Cloud (QRZ accepted both copies; it does not dedupe).
 So a completed Call-CQ contact now stays **listenable for one of the answerers'
 slots** (`confirmHold`, `internal/ft8/caller_sequencer.go`):
 
-- they send `73` / `RR73` → they copied it; release the hold **in that same slot**,
-  so its decodes still feed the normal answerer pick (no throughput lost)
+- they send a bare `73` → they copied it; release the hold **in that same slot**, so
+  its decodes still feed the normal answerer pick (no throughput lost). Only a bare
+  `73` confirms: `RRR`/`RR73` are what the caller ladder accepts as their roger of
+  our report, so a partner who missed our `RR73` repeats exactly that token — reading
+  it as confirmation would release the hold at the one moment the re-send is needed
 - silence → they copied it or have gone; release
 - anything else addressed to us → they are still asking; **re-send the `RR73`**,
-  bounded by `confirmResendLimit` (2) so a deaf partner can't hold the loop hostage
+  bounded by `confirmResendLimit` (2) so a deaf partner can't hold the loop hostage.
+  The budget is spent only once a slot is committed to the transmission, so a slot
+  deferred by the late window costs nothing
 
 The QSO is already logged, so a re-send carries **no completion callback** and can
 never log the contact twice. Both parameters came from the decode log rather than
@@ -759,6 +764,14 @@ Deliberately **Call-CQ only**. The other Group B ladders go idle after their `RR
 so re-working a station there needs an operator click; the CQ loop is the one path
 that re-works automatically. Log lines: `partner still asking after our RR73;
 re-sending it` and `partner confirmed the contact; releasing hold`.
+
+**It narrows the window, it does not close it.** Once the budget is spent the call is
+forgotten, so a partner who heard none of our `RR73`s and later restarts with a grid
+answer is worked as a fresh contact and logged again. That is deliberate: by then
+they genuinely never received the roger, so working them again is correct on air and
+is the only way they get their contact. The residual defect is the second ROW, and
+the fix for that is duplicate detection/merge at log level — suppressing the re-work
+would deny a station its contact to keep our log tidy.
 
 *Known cosmetic gap:* during a re-send slot the ladder still reads `calling-cq`
 (the contact is cleared), so the SPA shows CQ while an `RR73` is keyed. The daemon

@@ -195,6 +195,12 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		s.publish(st)
 		return
 	}
+	// Past the guards, so this slot really will carry the re-send: spend the budget
+	// here rather than where the decision was made, or a deferred slot burns one
+	// without transmitting.
+	if resendRR73 != "" && s.confirmHold != nil {
+		s.consumeConfirmResendLocked()
+	}
 
 	// Repeat cap / off-ramp:
 	//   - working a contact, pre-RR73: cap unanswered repeats; if the answerer goes
@@ -398,6 +404,19 @@ const confirmResendLimit = 2
 // It is deliberately Call-CQ only. The other Group B ladders go idle after their
 // RR73, so re-working a station there needs an operator click; the CQ loop is the
 // one path that re-works automatically.
+//
+// ACCEPTED LIMITATION (codex 5a623c1a P1 #2, not a defect): the hold NARROWS the
+// duplicate window, it does not close it. Once the budget is spent the call is
+// forgotten, so a partner who heard none of our RR73s and later restarts with a grid
+// answer is picked up as a fresh contact and logged a second time —
+// pickAnswererLocked has no completed-call suppression. That is left deliberately:
+// by then they genuinely never received the roger, so working them again is the
+// CORRECT on-air behaviour and the only way they get their contact. The defect in
+// that case is the SECOND ROW, not the second QSO, and the fix for it is
+// duplicate detection/merge at log level — a separate piece, since suppressing the
+// re-work would deny a station its contact to keep our log tidy (the same
+// recoverability argument that settled the Group A/B split in finalrung.go).
+// TestCallerSequencer_ConfirmHoldExpiryStillAllowsARestart pins the behaviour.
 type confirmHold struct {
 	call    string // the completed partner
 	resends int    // remaining RR73 re-sends
@@ -420,7 +439,16 @@ func (s *Sequencer) resolveConfirmHoldLocked(msgs []goft8.DecodedMessage) string
 		if pm.from != h.call || pm.to != s.ourCall {
 			continue
 		}
-		if pm.kind == msg73 || pm.kind == msgRoger {
+		// ONLY a bare 73 confirms. msgRoger covers RRR *and* RR73, and the caller
+		// ladder accepts either as the partner's roger of our report (see
+		// CallerExchange.Advance) — so a partner who missed our RR73 repeats exactly
+		// that token. Reading it as confirmation would release the hold at the one
+		// moment the re-send is needed and hand back the duplicate this exists to
+		// prevent (codex 5a623c1a P1). RR73 is genuinely ambiguous here — sign-off, or
+		// a repeat of their roger — so it is treated as still-asking too: a needless
+		// re-send costs one slot, a false confirmation costs a duplicate QSO in three
+		// logbooks. Every confirming partner in the dogfood session sent a bare 73.
+		if pm.kind == msg73 {
 			s.confirmHold = nil
 			s.log.InfoWith().Str("their_call", h.call).Str("heard", m.Text).
 				Msg("ft8 seq: caller — partner confirmed the contact; releasing hold")
@@ -432,14 +460,27 @@ func (s *Sequencer) resolveConfirmHoldLocked(msgs []goft8.DecodedMessage) string
 		s.confirmHold = nil
 		return ""
 	}
-	h.resends--
-	remaining := h.resends
-	if h.resends <= 0 {
-		s.confirmHold = nil
-	}
-	s.log.InfoWith().Str("their_call", h.call).Str("heard", asking).Int("resends_left", remaining).
+	s.log.InfoWith().Str("their_call", h.call).Str("heard", asking).Int("resends_left", h.resends).
 		Msg("ft8 seq: caller — partner still asking after our RR73; re-sending it")
 	return h.call + " " + s.ourCall + " RR73"
+}
+
+// consumeConfirmResendLocked spends one of the hold's re-sends. Called only once
+// this slot is actually COMMITTED to the transmission — past the late-window and
+// already-fired guards — because the budget bounds re-sends that reach the air, and
+// decrementing at decision time let a deferred slot burn one with no RF at all
+// (codex 5a623c1a P2).
+//
+// A committed attempt that then fails still counts. That is deliberate: the budget's
+// other job is to stop an unbounded re-send loop against a rig that cannot transmit,
+// which is the same failure the Group B final-rung cap bounds (see finalrung.go), and
+// counting attempts rather than successes is what makes it terminate. Caller holds
+// s.mu with s.confirmHold non-nil.
+func (s *Sequencer) consumeConfirmResendLocked() {
+	s.confirmHold.resends--
+	if s.confirmHold.resends <= 0 {
+		s.confirmHold = nil
+	}
 }
 
 // parkAnswererLocked drops the current contact and decides what to transmit in its
