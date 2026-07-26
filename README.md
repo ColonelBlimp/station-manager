@@ -32,7 +32,7 @@ Station Manager runs as a local daemon (`smd`, written in Go) that serves a brow
 - Session view with in-place editing, ADIF export and session email-out.
 - Contacts map — great-circle paths with a live grey-line overlay.
 
-**FT8** — attended operation only, see [below](#why-another-logger)
+**FT8**
 
 - Live decode with band activity, per-CQ **beam heading**, country flags and worked-before marking.
 - Answer a CQ, work a caller, or run CQ and work the pile-up.
@@ -71,10 +71,10 @@ and when it is, it is not always reliable. Everything that matters happens local
 control, FT8, the database. Online logbooks are a bonus that syncs when there is a link — never a
 requirement.
 
-**FT8 here is attended-only, by design.** The QEX FT8 specification forbids automatic operation,
-and unattended operation is licence-restricted in many jurisdictions. You choose whom to work and
-you arm the transmitter; the software then walks the exchange. Daemon-initiated sequencing is not
-a roadmap item — it is out of scope.
+**FT8 is built in, not bolted on.** No second application, no UDP bridge, no parallel logbook to
+reconcile afterwards: decoding, the exchange, rig control and logging are one program sharing one
+database. A contact worked on FT8 lands in the same log, with the same callsign enrichment and on
+the same map, as one worked on SSB.
 
 Contesting is not the target today — general HF by SSB, CW and FT8 is — though support is
 planned, including multiple distributed stations.
