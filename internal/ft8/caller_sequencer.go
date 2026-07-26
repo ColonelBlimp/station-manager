@@ -57,6 +57,7 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	s.logbookID = s.pendingLogbookID // pin the staged logbook atomically with activation
 	s.caller = nil
 	s.stalledCalls = nil // fresh session — no abandoned answerers to exclude yet
+	s.confirmHold = nil
 	s.ourCall = call
 	s.ourGrid = grid
 	s.cqMessage = cq
@@ -111,16 +112,30 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		return
 	}
 
+	// Phase 0: a just-completed contact may still be asking for the RR73 it never
+	// copied (see confirmHold). Resolved BEFORE picking a new answerer — finishing
+	// the contact we already logged takes precedence over starting another, and when
+	// there is nothing to re-send the hold releases here so this same slot's decodes
+	// still feed the normal pick (so a partner who copied it costs us no throughput).
+	var resendRR73 string
+	if s.caller == nil && s.confirmHold != nil {
+		resendRR73 = s.resolveConfirmHoldLocked(msgs)
+	}
+
 	// Phase 1 (pick an answerer) / phase 2 (advance the contact).
 	var heard string
 	advanced := false
 	if s.caller == nil {
-		if pick, text := s.pickAnswererLocked(msgs); pick != nil {
-			s.caller = pick
-			s.startedAt = now.UTC()
-			s.repeats = 0
-			heard = text
-			advanced = true
+		// A due re-send owns this slot, so no new contact is picked — the branch
+		// below must stay guarded by caller!=nil or it dereferences a nil contact.
+		if resendRR73 == "" {
+			if pick, text := s.pickAnswererLocked(msgs); pick != nil {
+				s.caller = pick
+				s.startedAt = now.UTC()
+				s.repeats = 0
+				heard = text
+				advanced = true
+			}
 		}
 	} else {
 		for _, m := range msgs {
@@ -136,17 +151,20 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		}
 	}
 
-	// Message + rung for the current (our) slot: the caller ladder while working a
-	// contact, else the CQ.
+	// Message + rung for the current (our) slot: a confirm-hold re-send if one is
+	// due, else the caller ladder while working a contact, else the CQ.
 	var msg, rung string
-	if s.caller != nil {
+	switch {
+	case resendRR73 != "":
+		msg, rung = resendRR73, "rogering"
+	case s.caller != nil:
 		if m, ok := s.caller.TxMessage(); ok {
 			msg, rung = m, s.caller.State.label()
 		} else {
 			s.caller = nil // exhausted (shouldn't reach here) — resume CQ
 		}
 	}
-	if s.caller == nil {
+	if msg == "" {
 		msg, rung = s.cqMessage, "calling-cq"
 	}
 
@@ -198,7 +216,12 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			s.repeats++
 		}
 	case !working:
-		s.repeats++ // CQ repeat count for status; uncapped
+		if resendRR73 == "" {
+			s.repeats++ // CQ repeat count for status; uncapped
+		}
+		// A confirm-hold re-send is not a CQ, so it must not advance that counter.
+		// It also leaves `confirming` false, so no completion callback is built —
+		// which is what keeps the re-send from logging the QSO a second time.
 	default:
 		// working && confirming — the RR73 the answerer is WAITING for: a GROUP B
 		// final rung (see finalrung.go). Re-entering it means the previous attempt
@@ -268,6 +291,10 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			s.caller = nil // resume calling CQ (work the pile-up)
 			s.repeats = 0
 			s.stalledCalls = nil // completed — fresh CQ round; previously-stalled callers retry
+			// Stay listenable for one of their slots: if they did not copy this RR73
+			// they will repeat their R-report, which no longer reaches us once the
+			// contact is cleared (see confirmHold).
+			s.confirmHold = &confirmHold{call: c.TheirCall, resends: confirmResendLimit}
 			cqSt := s.statusLocked()
 			publish(cqSt) // ordered before a concurrent Abandon/replacement start
 			s.mu.Unlock()
@@ -341,6 +368,78 @@ func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage) (*CallerExch
 		}
 	}
 	return pick, pickText
+}
+
+// confirmResendLimit bounds how many times a completed Call-CQ contact will re-send
+// its closing RR73 to a partner who is still asking for it. Two covers the observed
+// failure — a single-slot fade or collision swallowing one RR73 — without letting a
+// deaf partner hold the CQ loop hostage; past that they will restart their own
+// sequence and be worked as a fresh contact.
+const confirmResendLimit = 2
+
+// confirmHold is a completed Call-CQ contact kept listenable for one more of the
+// answerers' slots.
+//
+// WHY (dogfood 2026-07-26, XE1GM): the QSO logs the moment our RR73 transmits and
+// the contact is cleared, so a partner who did not copy that RR73 becomes invisible
+// — pickAnswererLocked only accepts a GRID answer, and they are repeating an
+// R-report. XE1GM repeated `7Q5MLV XE1GM R-07` ELEVEN times at −9..−13 while the
+// sequencer, having logged and moved on, ignored every one. They eventually give up,
+// restart from the top with a grid answer, and get worked and logged a SECOND time —
+// which is how AC8MR, KI2Y and KE4IHI became duplicate rows in the log and in QRZ,
+// ClubLog and SM Cloud.
+//
+// The hold closes that gap: for one of their slots after the RR73, a message from
+// that station is still understood. The decode log settled both parameters — the
+// repeat arrives in the VERY NEXT slot (+15 s), and a partner who DID copy sends
+// `73` (four for four), so the hold releases early on that and costs nothing in the
+// common case.
+//
+// It is deliberately Call-CQ only. The other Group B ladders go idle after their
+// RR73, so re-working a station there needs an operator click; the CQ loop is the
+// one path that re-works automatically.
+type confirmHold struct {
+	call    string // the completed partner
+	resends int    // remaining RR73 re-sends
+}
+
+// resolveConfirmHoldLocked decides what an outstanding hold does with one slot of
+// the answerers' decodes, returning the RR73 to re-send (empty = nothing to send).
+//
+// Three outcomes, all of which either clear the hold or spend one of its re-sends,
+// so it can never persist: `73`/`RR73` from them means they copied it (release);
+// silence means they copied it or are gone (release); anything else addressed to us
+// means they are still asking (re-send). The QSO is ALREADY logged, so a re-send
+// carries no completion callback and cannot log again. Caller holds s.mu with
+// s.confirmHold non-nil.
+func (s *Sequencer) resolveConfirmHoldLocked(msgs []goft8.DecodedMessage) string {
+	h := s.confirmHold
+	asking := ""
+	for _, m := range msgs {
+		pm := parseMessage(m.Text)
+		if pm.from != h.call || pm.to != s.ourCall {
+			continue
+		}
+		if pm.kind == msg73 || pm.kind == msgRoger {
+			s.confirmHold = nil
+			s.log.InfoWith().Str("their_call", h.call).Str("heard", m.Text).
+				Msg("ft8 seq: caller — partner confirmed the contact; releasing hold")
+			return ""
+		}
+		asking = m.Text
+	}
+	if asking == "" { // silent: they copied it, or they have gone
+		s.confirmHold = nil
+		return ""
+	}
+	h.resends--
+	remaining := h.resends
+	if h.resends <= 0 {
+		s.confirmHold = nil
+	}
+	s.log.InfoWith().Str("their_call", h.call).Str("heard", asking).Int("resends_left", remaining).
+		Msg("ft8 seq: caller — partner still asking after our RR73; re-sending it")
+	return h.call + " " + s.ourCall + " RR73"
 }
 
 // parkAnswererLocked drops the current contact and decides what to transmit in its

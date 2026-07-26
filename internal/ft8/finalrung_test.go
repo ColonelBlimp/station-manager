@@ -312,3 +312,87 @@ func TestCallerSequencer_ReplacementAnswererRespectsCap(t *testing.T) {
 	require.Equal(t, 2, countMsg(r.sentMsgs(), "K1ABC 7Q5MLV -20"),
 		"the replacement gets the SAME budget — its immediate transmit counts")
 }
+
+// --- Confirm-hold: the XE1GM repair (dogfood 2026-07-26) ---------------------
+
+// The observed failure, reproduced: the partner never copies our closing RR73 and
+// repeats their R-report. Before the hold the contact was already cleared, so
+// pickAnswererLocked (grid answers only) ignored them — XE1GM repeated eleven
+// times into silence, then restarted and was worked and LOGGED a second time.
+func TestCallerSequencer_ConfirmHoldResendsRR73ToAStillAskingPartner(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}) // RR73 → logs
+	require.Len(t, r.completed, 1, "the QSO logs on the first RR73")
+
+	// They did not copy it and repeat their roger, exactly as XE1GM did.
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)})
+	sent := r.sentMsgs()
+	require.Equal(t, "DL9UW 7Q5MLV RR73", sent[len(sent)-1], "the RR73 is re-sent, not ignored")
+	require.Len(t, r.completed, 1, "a re-send must NOT log the QSO again")
+
+	// They copy it this time and say 73 → hold releases, back to CQ.
+	driveTheir(s, 150, []goft8.DecodedMessage{dm("7Q5MLV DL9UW 73", -10)})
+	sent = r.sentMsgs()
+	require.Equal(t, "CQ 7Q5MLV KH78", sent[len(sent)-1], "released on 73")
+	require.Nil(t, s.confirmHold)
+	require.Len(t, r.completed, 1)
+}
+
+// The common case must cost nothing: a partner who copied it sends 73 (four for
+// four in the dogfood session), and the hold releases in that same slot so the
+// decodes still feed a normal pick.
+func TestCallerSequencer_ConfirmHoldReleasesOn73AndStillPicks(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}) // RR73 → logs
+
+	// Same slot: the worked station confirms AND a new station answers the CQ.
+	driveTheir(s, 120, []goft8.DecodedMessage{
+		dm("7Q5MLV DL9UW 73", -10),
+		dm("7Q5MLV K1ABC FN42", -12),
+	})
+	require.Nil(t, s.confirmHold, "released by the 73")
+	require.NotNil(t, s.caller, "and the same slot still starts the next contact")
+	require.Equal(t, "K1ABC", s.caller.TheirCall)
+	sent := r.sentMsgs()
+	require.Equal(t, "K1ABC 7Q5MLV -12", sent[len(sent)-1], "no throughput lost")
+}
+
+// Silence releases the hold too — they either copied it or have gone.
+func TestCallerSequencer_ConfirmHoldReleasesOnSilence(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)})
+
+	driveTheir(s, 120, nil)
+	require.Nil(t, s.confirmHold, "silence releases the hold")
+	sent := r.sentMsgs()
+	require.Equal(t, "CQ 7Q5MLV KH78", sent[len(sent)-1], "and we go straight back to CQ")
+}
+
+// A deaf partner must not hold the CQ loop hostage: the re-sends are bounded.
+func TestCallerSequencer_ConfirmHoldResendsAreBounded(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}) // RR73 #1 (logs)
+
+	asking := []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}
+	for sec := int64(120); sec <= 300; sec += 30 { // they never copy it
+		driveTheir(s, sec, asking)
+	}
+	require.Nil(t, s.confirmHold, "the hold is bounded")
+	require.Equal(t, 1+confirmResendLimit, countMsg(r.sentMsgs(), "DL9UW 7Q5MLV RR73"),
+		"the original RR73 plus exactly confirmResendLimit re-sends")
+	require.Len(t, r.completed, 1, "still exactly one QSO")
+}

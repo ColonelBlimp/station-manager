@@ -237,6 +237,10 @@ type Sequencer struct {
 	// preferred stallers ping-pong forever). Reset when a fresh CQ round starts — a
 	// completed contact, the rescan exhausting the live answerers, and StartCallCq.
 	stalledCalls []string
+	// confirmHold keeps a just-completed Call-CQ contact "listenable" for one more of
+	// the answerers' slots, so a partner who did NOT copy our closing RR73 can be
+	// answered instead of ignored. See confirmHold / resolveConfirmHoldLocked.
+	confirmHold *confirmHold
 
 	// Shared by both modes. theirPeriod is the parity of the slots we PROCESS (the
 	// worked station's when answering, or — when calling CQ — the answerers', i.e.
@@ -474,6 +478,7 @@ func (s *Sequencer) Abandon() {
 	s.t4Ex = nil
 	s.t4Work = nil
 	s.caller = nil
+	s.confirmHold = nil
 	s.repeats = 0
 	s.skipIfSilent = false
 	s.mu.Unlock()

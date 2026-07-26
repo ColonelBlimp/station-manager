@@ -726,6 +726,44 @@ instead: **Ctrl/Cmd+click** each calling-you decode to queue it, and SM works th
 oldest-first (FIFO, see "Working a caller" above). Auto-answer Call CQ is the hands-off
 option; the stack is the operator-curated one.
 
+### Call CQ — the confirm-hold (why you no longer work the same station twice)
+
+**Shipped 2026-07-26, from a dogfood diagnosis.** A Call-CQ contact logs the moment
+its closing `RR73` transmits, and the contact is then cleared so the loop can work
+the next station. If the partner did **not** copy that `RR73` they keep repeating
+their `R-report` — but `pickAnswererLocked` only accepts a **grid** answer, so once
+the contact is cleared those repeats are invisible. They eventually give up, restart
+from the top with a grid answer, and get worked and logged a **second** time.
+
+That is not theory. On 2026-07-26 the decode log caught **XE1GM** repeating
+`7Q5MLV XE1GM R-07` **eleven times** at −9..−13 while the sequencer, having logged
+and moved on, ignored every one. The same mechanism produced duplicate rows for
+AC8MR, KI2Y and KE4IHI the night before — duplicates that were also uploaded to QRZ,
+ClubLog and SM Cloud (QRZ accepted both copies; it does not dedupe).
+
+So a completed Call-CQ contact now stays **listenable for one of the answerers'
+slots** (`confirmHold`, `internal/ft8/caller_sequencer.go`):
+
+- they send `73` / `RR73` → they copied it; release the hold **in that same slot**,
+  so its decodes still feed the normal answerer pick (no throughput lost)
+- silence → they copied it or have gone; release
+- anything else addressed to us → they are still asking; **re-send the `RR73`**,
+  bounded by `confirmResendLimit` (2) so a deaf partner can't hold the loop hostage
+
+The QSO is already logged, so a re-send carries **no completion callback** and can
+never log the contact twice. Both parameters came from the decode log rather than
+guesswork: the repeat arrives in the **very next slot** (+15 s), and a partner who
+copied it sends `73` (four for four in that session).
+
+Deliberately **Call-CQ only**. The other Group B ladders go idle after their `RR73`,
+so re-working a station there needs an operator click; the CQ loop is the one path
+that re-works automatically. Log lines: `partner still asking after our RR73;
+re-sending it` and `partner confirmed the contact; releasing hold`.
+
+*Known cosmetic gap:* during a re-send slot the ladder still reads `calling-cq`
+(the contact is cleared), so the SPA shows CQ while an `RR73` is keyed. The daemon
+log is authoritative.
+
 ### Decode log (`ALL.TXT`-style) — `ft8.decode_log.*`
 
 A durable, append-only record of **every RX decode and our own TX**, in the JTDX
