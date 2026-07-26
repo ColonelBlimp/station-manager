@@ -112,6 +112,13 @@ let decodeSeq = 0;
 // so a saved value stays valid across bands.
 const OFFSET_KEY = 'sm.ft8.selectedOffset';
 
+/** How old an occupancy snapshot may be before it is treated as a replay rather
+ *  than news — three FT8 slots. A live report describes audio from the slot that
+ *  just ended and is published about one slot later, so ~30 s is the honest upper
+ *  bound for fresh; the third slot is margin for decode latency and browser/daemon
+ *  clock skew. See the gate in onOccupancy. */
+const maxOccupancyAgeMs = 45_000;
+
 function loadSelectedOffset(): number | null {
     try {
         const raw = localStorage.getItem(OFFSET_KEY);
@@ -157,11 +164,19 @@ class Ft8State {
     /** The parity the operator is VIEWING when idle (manual Even/Odd toggle); during a
      *  QSO the shown parity is forced to the TX parity. */
     occupancyParity: 'even' | 'odd' = $state('even');
-    /** Rig band the held snapshots were captured on ('' = not yet known). Occupancy is
-     *  band-specific, so this is what lets a band change invalidate them — see
-     *  occupancyStale. Without it, changing band kept the previous band's picture on
-     *  screen as though it were current. */
-    occupancyBand = $state('');
+    /** Rig band each parity's snapshot was captured on ('' = not yet known).
+     *  Occupancy is band-specific, so this is what lets a band change invalidate it
+     *  — see occupancyStale. Without it, changing band kept the previous band's
+     *  picture on screen as though it were current.
+     *  PER PARITY, not one shared tag: the two parities are INDEPENDENT snapshots
+     *  that arrive in separate slots, so a single tag meant the first report on the
+     *  new band re-validated the other parity's OLD-band data — and since
+     *  effectiveOffset falls back to suggested[0], that stale cross-band pick could
+     *  become the transmit offset with no operator action (codex P1 on 6088b931).
+     *  The exposure is not hypothetical: during a CQ run the TX parity never fills
+     *  (the daemon skips our own TX slots), so it is exactly the parity that would
+     *  keep serving pre-QSY data. */
+    occupancyBandByParity: { even: string; odd: string } = $state({ even: '', odd: '' });
     /** Audio passband the picker spans (Hz); daemon standard 200–3000 until the first report. */
     passbandLow = $state(200);
     passbandHigh = $state(3000);
@@ -217,7 +232,8 @@ class Ft8State {
      *  current. Only invalidates when both bands are known: with CAT off the band can
      *  be blank, and blanking the panel then would be worse than showing what we have. */
     get occupancyStale(): boolean {
-        return rig.band !== '' && this.occupancyBand !== '' && this.occupancyBand !== rig.band;
+        const captured = this.occupancyBandByParity[this.shownParity];
+        return rig.band !== '' && captured !== '' && captured !== rig.band;
     }
 
     /** Busy bands for the SHOWN parity — the Occupancy components read this. */
@@ -582,6 +598,18 @@ export const ft8Link: Ft8EventHandlers = {
         // even and odd views stay distinct. A period-less payload (shouldn't happen)
         // fills both so it still shows.
         const occ = p.occupied ?? [];
+        // Drop a REPLAYED snapshot. The daemon's hub caches the last occupancy and
+        // hands it to a freshly-connected tab, and the payload carries no band — so
+        // after a QSY + reconnect (a browser refresh is enough) a pre-QSY snapshot
+        // would be stamped with the NEW band and read as current, defeating the
+        // check above (codex P1 on 6088b931). The slot timestamp is the only
+        // authority available client-side: a live report lands about one slot after
+        // the audio it describes, so anything materially older than that is a
+        // replay, not news. Deliberately fails OPEN on an unparseable timestamp —
+        // this guards staleness, it is not a validator, and the per-parity band tag
+        // still covers the cross-band case.
+        const slotAgeMs = Date.now() - Date.parse(p.slot?.start_utc ?? '');
+        if (Number.isFinite(slotAgeMs) && slotAgeMs > maxOccupancyAgeMs) return;
         const sug = p.suggested ?? [];
         const period = p.slot?.period;
         if (period === 'even' || period === 'odd') {
@@ -596,8 +624,13 @@ export const ft8Link: Ft8EventHandlers = {
             ft8State.passbandHigh = p.passband.high_hz;
         }
         if (p.signal_width_hz > 0) ft8State.signalWidth = p.signal_width_hz;
-        // Stamp the band this snapshot describes; see occupancyStale.
-        ft8State.occupancyBand = rig.band;
+        // Stamp the band on the parity that actually arrived — never both; see
+        // occupancyBandByParity.
+        if (period === 'even' || period === 'odd') {
+            ft8State.occupancyBandByParity[period] = rig.band;
+        } else {
+            ft8State.occupancyBandByParity = { even: rig.band, odd: rig.band };
+        }
     },
 
     onDecode(p: DecodeReport): void {
@@ -722,7 +755,7 @@ export function stopFt8(): void {
     ft8State.slot = null;
     ft8State.occupiedByParity = { even: null, odd: null };
     ft8State.suggestedByParity = { even: null, odd: null };
-    ft8State.occupancyBand = '';
+    ft8State.occupancyBandByParity = { even: '', odd: '' };
     ft8State.decodes = [];
     // Keep selectedOffset across a re-open — it's an operator pick, not stream data;
     // clearing it would silently drop the chosen TX channel on a view toggle.
@@ -751,7 +784,7 @@ export function resetFt8ForTests(): void {
     ft8State.slot = null;
     ft8State.occupiedByParity = { even: null, odd: null };
     ft8State.suggestedByParity = { even: null, odd: null };
-    ft8State.occupancyBand = '';
+    ft8State.occupancyBandByParity = { even: '', odd: '' };
     ft8State.occupancyParity = 'even';
     ft8State.decodes = [];
     ft8State.bandFilter = '';

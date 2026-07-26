@@ -30,18 +30,11 @@
             >
         </h3>
         <div class="flex items-center gap-x-2">
-            <!-- Contacts map in its own tab (second monitor) — the map is a
-                 time-window view over logged data, so it stands alone and
-                 needs nothing from this tab (ADR 0049 rejection). -->
-            <a
-                class="btn text-xs"
-                href="{import.meta.env.BASE_URL}map"
-                target="_blank"
-                rel="noopener"
-                title="Open the contacts map in a new tab"
-            >
-                Map ↗
-            </a>
+            <!-- No Map button here: the sidebar's bottom-utilities Map link is
+                 always on screen and opens the identical new tab, so a second
+                 entry point on this tile was pure duplication (operator,
+                 2026-07-25). The map itself is still a standalone time-window
+                 view launched in its own tab (ADR 0049 rejection). -->
             <!-- Export / email the session — disabled with an empty log. -->
             <button class="btn text-xs" disabled={session.qsos.length === 0} onclick={openExport}>
                 Export…

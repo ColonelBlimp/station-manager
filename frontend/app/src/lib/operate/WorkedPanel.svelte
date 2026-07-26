@@ -40,7 +40,14 @@
     <div class="mt-3">
         {#if worked.status === 'done' && worked.qsos.length > 0}
             <div class="{tableHeight} overflow-y-auto">
-                <table class="table-fixed">
+                <!-- w-full is load-bearing, not decoration: CSS 2.1 §17.5.2 says a
+                     table whose `width` is auto uses the AUTOMATIC layout algorithm —
+                     `table-layout: fixed` is ignored outright. Without it the w-* on
+                     the th row stopped binding, so cells grew to fit content (columns
+                     bleeding into each other) and a long Notes value stretched the
+                     table into a horizontal overscroll instead of ellipsizing
+                     (dogfood 2026-07-25). Same fix, same reason, as SessionPanel. -->
+                <table class="w-full table-fixed">
                     <thead class="bg-surface sticky top-0 z-10">
                         <tr class="text-xs text-muted text-left font-medium">
                             <th class="w-24 pb-1">Date</th>

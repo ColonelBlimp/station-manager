@@ -54,11 +54,12 @@ describe('SessionPanel', () => {
         expect(operate.exportOpen).toBe(true);
     });
 
-    it('offers the contacts map in a new tab regardless of session contents', () => {
+    // The Map button was removed as redundant (operator, 2026-07-25): the sidebar's
+    // always-visible Map link opens the identical tab. Coverage for the link itself
+    // moved with it, to Sidebar.svelte.test.ts — it did not disappear.
+    it('does not duplicate the sidebar Map link on the tile', () => {
         render(SessionPanel);
-        const link = screen.getByRole('link', { name: /Map/ });
-        expect(link).toHaveAttribute('target', '_blank');
-        expect(link.getAttribute('href')).toMatch(/map$/);
+        expect(screen.queryByRole('link', { name: /Map/ })).toBeNull();
     });
 
     it('opens the in-place edit modal from a row callsign (no route change)', async () => {
