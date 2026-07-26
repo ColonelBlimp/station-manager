@@ -354,9 +354,11 @@ caddy validate --config /etc/caddy/Caddyfile
 
 # 4b. The access-log directory must exist and be writable by the caddy user
 #     BEFORE reload — Caddy fails to provision a file logger it cannot open,
-#     and a Caddy that won't start takes the whole service offline. The distro
-#     package normally creates it; verify rather than assume, and check the
-#     packaged unit does not confine /var/log (ProtectSystem=strict would):
+#     and a Caddy that won't start takes the whole service offline. The official
+#     packages do NOT create this directory and Caddy runs unprivileged, so it
+#     cannot mkdir under root-owned /var/log — this step is REQUIRED, not a
+#     precaution. Also check the packaged unit does not confine /var/log
+#     (ProtectSystem=strict would):
 sudo install -d -o caddy -g caddy -m 0750 /var/log/caddy
 systemctl show caddy -p ProtectSystem -p ReadWritePaths
 

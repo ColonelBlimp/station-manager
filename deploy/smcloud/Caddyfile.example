@@ -27,6 +27,18 @@ cloud.station-manager.org {
 	#	}
 	# }
 
+	# ---------------------------------------------------------------------
+	# PRECONDITION — the official Caddy packages do NOT create /var/log/caddy,
+	# and Caddy runs unprivileged and cannot mkdir under root-owned /var/log.
+	# A file logger it cannot open FAILS THE RELOAD, and a Caddy that will not
+	# start takes the whole service offline. Before reloading (runbook §4b):
+	#
+	#   sudo install -d -o caddy -g caddy -m 0750 /var/log/caddy
+	#   systemctl show caddy -p ProtectSystem -p ReadWritePaths   # /var/log writable?
+	#
+	# Or drop the `output file` line to fall back to Caddy's default (journald).
+	# ---------------------------------------------------------------------
+	#
 	# Access log. This is the ONLY access log in the stack: smcloud logs to
 	# stderr (journald) but has no request logging at all, so without this
 	# nothing records method, path, status, latency or client IP — and the

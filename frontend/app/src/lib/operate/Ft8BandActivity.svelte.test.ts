@@ -15,6 +15,7 @@ import {
     setFt8TxActions,
     setFt8DisplayPrefs,
     resetFt8ForTests,
+    reloadFt8EngagedFromStorage,
     type Ft8AnswerArgs,
     type Ft8WorkArgs,
     type Ft8TxResult,
@@ -511,6 +512,59 @@ describe('Ft8BandActivity deliberate-repeat intent', () => {
         ft8Link.onQso({ active: false });
         expect(session.qsos).toHaveLength(0);
 
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }]));
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+
+        expect(got).toHaveLength(1);
+        expect(got[0].allowDuplicate).toBe(true);
+    });
+
+    // Both consumers define a same-session duplicate as CALL + BAND. Keying the
+    // engaged set on callsign alone classified the FIRST contact on a NEW band as a
+    // repeat — and allow_duplicate becomes Submit's `force`, which uses a RANDOM
+    // dedupe key, so that contact would lose duplicate protection outright
+    // (codex a5667b00 P2).
+    it('does not flag a station engaged on a DIFFERENT band', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+
+        rig.band = '20m';
+        ft8Link.onQso({ active: true, role: 'answerer', their_call: 'W1ABC' });
+        ft8Link.onQso({ active: false });
+
+        rig.band = '40m'; // band change — this is a NEW contact, not a repeat
+        rig.freq = '7.074.000';
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }]));
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+
+        expect(got).toHaveLength(1);
+        expect(got[0].allowDuplicate).toBe(false);
+    });
+
+    // A reload inside the async-logging window would otherwise drop the engagement
+    // before session.qsos ever learns it — the exact data-loss case (codex a5667b00
+    // P1). sessionStorage survives the reload and dies with the tab.
+    it('survives a reload: engagement is restored from session storage', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        rig.band = '20m';
+        ft8Link.onQso({ active: true, role: 'answerer', their_call: 'W1ABC' });
+        ft8Link.onQso({ active: false });
+
+        // Simulate a page reload: module state is rebuilt from storage, session.qsos
+        // is empty (the daemon never got to log it).
+        reloadFt8EngagedFromStorage();
+        session.qsos.length = 0;
+
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        setFt8OperatorCall('7Q5MLV');
         render(Ft8BandActivity);
         ft8Link.onDecode(decode('t1', [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }]));
         flushSync();

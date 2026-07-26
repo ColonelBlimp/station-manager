@@ -30,3 +30,32 @@ export function storageRemove(key: string): void {
         // Already effectively absent.
     }
 }
+
+/**
+ * Fail-soft sessionStorage — same contract as the localStorage helpers above, for
+ * state that must survive a RELOAD but die with the tab. A throw degrades to "no
+ * stored value", never an exception on a hot path.
+ */
+export function sessionGet(key: string): string | null {
+    try {
+        return sessionStorage.getItem(key);
+    } catch {
+        return null;
+    }
+}
+
+export function sessionSet(key: string, value: string): void {
+    try {
+        sessionStorage.setItem(key, value);
+    } catch {
+        // Not persisted — the caller must degrade, not fail.
+    }
+}
+
+export function sessionRemove(key: string): void {
+    try {
+        sessionStorage.removeItem(key);
+    } catch {
+        // Already effectively absent.
+    }
+}

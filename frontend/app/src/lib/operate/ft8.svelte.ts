@@ -20,6 +20,8 @@ import type {
     Ft8EventHandlers,
 } from '../api/ft8-sse';
 import { ft8PileupStack } from './ft8Pileup.svelte';
+import { rig } from './rig.svelte';
+import { sessionGet, sessionSet, sessionRemove } from '../utils/storage';
 
 export type { Ft8SlotRef, Ft8Band } from '../api/ft8-sse';
 
@@ -372,19 +374,61 @@ export type Ft8TxResult = { ok: boolean; message: string };
 // set, so the effect always sees a current value without the set itself being a
 // reactive dependency. Reactivity here would buy nothing and cost a proxy on a
 // hot path.
+// Survives a RELOAD, dies with the tab — sessionStorage matches the set's semantics
+// exactly. Without it, a reload inside the async-logging window drops the engagement
+// before `session.qsos` has learned it, which is precisely the data-loss case this
+// set exists to prevent (codex a5667b00 P1).
+const engagedStoreKey = 'sm.ft8.engaged';
+
 // eslint-disable-next-line svelte/prefer-svelte-reactivity
 const engagedThisSession = new Set<string>();
+
+/** Keyed by CALL|BAND, matching how both consumers define a same-session duplicate.
+ *  Callsign alone would classify the FIRST contact on a NEW band as a repeat, sending
+ *  allow_duplicate:true — and `force` makes Submit use a RANDOM dedupe key, so that
+ *  contact loses its duplicate protection entirely (codex a5667b00 P2). */
+function engagedKey(call: string, band: string): string {
+    return `${call.trim().toUpperCase()}|${band.trim().toUpperCase()}`;
+}
+
+function loadEngaged(): string[] {
+    const raw = sessionGet(engagedStoreKey);
+    if (raw === null) return [];
+    try {
+        const v: unknown = JSON.parse(raw);
+        return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+    } catch {
+        return []; // corrupt payload — start clean rather than throw on boot
+    }
+}
+
+function saveEngaged(): void {
+    sessionSet(engagedStoreKey, JSON.stringify([...engagedThisSession]));
+}
 
 /** True when this session has already engaged `call` — used to decide whether an
  *  operator action is a DELIBERATE repeat. Complements `session.qsos`, which only
  *  learns about a contact once the daemon has finished logging it asynchronously. */
-export function ft8EngagedThisSession(call: string): boolean {
-    return engagedThisSession.has(call.trim().toUpperCase());
+export function ft8EngagedThisSession(call: string, band: string): boolean {
+    return engagedThisSession.has(engagedKey(call, band));
 }
+
+/** Restore the engaged set from session storage. Called at MODULE INIT (below) and
+ *  by tests to model a page reload — deliberately the same function, so the boot
+ *  path is the one the tests actually exercise. The reset seam further down models
+ *  a fresh TAB by clearing storage as well. */
+export function reloadFt8EngagedFromStorage(): void {
+    engagedThisSession.clear();
+    for (const k of loadEngaged()) engagedThisSession.add(k);
+}
+
+// A reload rebuilds this module; the engaged set comes back with it.
+reloadFt8EngagedFromStorage();
 
 /** Test seam: forget the engaged-call set (a fresh tab starts empty). */
 export function resetFt8EngagedThisSession(): void {
     engagedThisSession.clear();
+    sessionRemove(engagedStoreKey);
 }
 
 export interface Ft8AnswerArgs {
@@ -571,8 +615,12 @@ export const ft8Link: Ft8EventHandlers = {
         // path the operator can re-click well inside it (codex 0f08d2b2 P1). The
         // ft8-logged event that feeds session.qsos is also one-shot and not replayed,
         // so a missed event or a fresh tab never learns it at all.
-        const engaged = (p.their_call ?? '').trim().toUpperCase();
-        if (engaged !== '') engagedThisSession.add(engaged);
+        const engaged = (p.their_call ?? '').trim();
+        if (engaged !== '') {
+            const before = engagedThisSession.size;
+            engagedThisSession.add(engagedKey(engaged, rig.band));
+            if (engagedThisSession.size !== before) saveEngaged();
+        }
         ft8State.qso = {
             active: p.active ?? false,
             role: p.role ?? '',

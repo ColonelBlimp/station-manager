@@ -201,7 +201,7 @@
     // (codex 0f08d2b2 P1).
     function workedThisSession(call: string): boolean {
         return (
-            ft8EngagedThisSession(call) ||
+            ft8EngagedThisSession(call, rig.band) ||
             session.qsos.some((q) => q.callsign === call && q.band === rig.band)
         );
     }
