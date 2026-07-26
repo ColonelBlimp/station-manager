@@ -9,10 +9,12 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Ft8Occupancy from './Ft8Occupancy.svelte';
 import { ft8State, ft8Link, resetFt8ForTests } from './ft8.svelte';
+import { rig } from './rig.svelte';
 import type { OccupancyPayload } from '../api/ft8-sse';
 
 beforeEach(() => {
     resetFt8ForTests();
+    rig.band = '20m'; // occupancy is band-scoped now; keep tests order-independent
 });
 
 function occupancy(): OccupancyPayload {
@@ -89,5 +91,51 @@ describe('Ft8Occupancy picker', () => {
         expect(ft8State.occupancyView).toBe('channels');
         expect(screen.queryByLabelText('TX offset (continuous)')).toBeNull();
         expect(ft8State.selectedOffset).toBe(1234); // view choice ≠ offset pick
+    });
+});
+
+describe('Ft8Occupancy empty states', () => {
+    // The trap (dogfood 2026-07-26): the panel is locked to the parity we TRANSMIT
+    // in, and the daemon skips occupancy for a slot we transmitted in — so during a
+    // run that parity NEVER fills. "Waiting for slot…" implied it was imminent, and
+    // the operator waited indefinitely for a reading that could not arrive.
+    it('names the TX-parity blind spot instead of implying data is coming', () => {
+        ft8Link.onQso({ active: true, role: 'caller', their_call: 'W1ABC', their_period: 'odd' });
+        flushSync();
+        render(Ft8Occupancy);
+
+        expect(screen.getByText(/can't listen while it transmits/)).toBeInTheDocument();
+        expect(screen.getByText(/Pause TX for one slot/)).toBeInTheDocument();
+        expect(screen.queryByText(/Waiting for slot/)).toBeNull();
+        expect(ft8State.occupancyEmptyReason).toBe('tx-parity');
+    });
+
+    it('still says "waiting" when idle and nothing has simply arrived yet', () => {
+        render(Ft8Occupancy);
+        expect(screen.getByText(/Waiting for slot/)).toBeInTheDocument();
+        expect(ft8State.occupancyEmptyReason).toBe('waiting');
+    });
+
+    // Occupancy is band-specific: who is using 1200 Hz on 15 m says nothing about
+    // 12 m, so a QSY must invalidate the snapshot rather than keep rendering it.
+    it('discards a snapshot captured on a different band', () => {
+        rig.band = '15m';
+        ft8Link.onOccupancy(occupancy());
+        flushSync();
+        expect(ft8State.hasOccupancy).toBe(true);
+        expect(ft8State.suggested).toEqual([1500, 700]);
+
+        rig.band = '12m'; // QSY — the 15 m picture is now meaningless
+        flushSync();
+        expect(ft8State.hasOccupancy).toBe(false);
+        expect(ft8State.occupied).toEqual([]);
+        expect(ft8State.suggested).toEqual([]);
+    });
+
+    it('keeps the snapshot when the rig band is unknown (CAT off)', () => {
+        rig.band = '';
+        ft8Link.onOccupancy(occupancy());
+        flushSync();
+        expect(ft8State.hasOccupancy).toBe(true);
     });
 });

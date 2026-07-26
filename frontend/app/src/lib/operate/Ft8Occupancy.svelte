@@ -98,6 +98,7 @@
                 recommended={topPick}
                 selected={ft8State.selectedOffset}
                 hasSlot={ft8State.hasOccupancy}
+                emptyReason={ft8State.occupancyEmptyReason}
                 onselect={(hz: number) => ft8State.selectOffset(hz)}
             />
         {:else}
@@ -109,6 +110,7 @@
                 recommended={topPick}
                 selected={ft8State.selectedOffset}
                 hasSlot={ft8State.hasOccupancy}
+                emptyReason={ft8State.occupancyEmptyReason}
                 onselect={(hz: number) => ft8State.selectOffset(hz)}
             />
         {/if}

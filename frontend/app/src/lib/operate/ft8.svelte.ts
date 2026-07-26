@@ -22,6 +22,7 @@ import type {
 import { ft8PileupStack } from './ft8Pileup.svelte';
 import { sessionGet, sessionSet, sessionRemove } from '../utils/storage';
 import { frequencyToBand } from '../utils/frequency';
+import { rig } from './rig.svelte';
 
 export type { Ft8SlotRef, Ft8Band } from '../api/ft8-sse';
 
@@ -156,6 +157,11 @@ class Ft8State {
     /** The parity the operator is VIEWING when idle (manual Even/Odd toggle); during a
      *  QSO the shown parity is forced to the TX parity. */
     occupancyParity: 'even' | 'odd' = $state('even');
+    /** Rig band the held snapshots were captured on ('' = not yet known). Occupancy is
+     *  band-specific, so this is what lets a band change invalidate them — see
+     *  occupancyStale. Without it, changing band kept the previous band's picture on
+     *  screen as though it were current. */
+    occupancyBand = $state('');
     /** Audio passband the picker spans (Hz); daemon standard 200–3000 until the first report. */
     passbandLow = $state(200);
     passbandHigh = $state(3000);
@@ -205,19 +211,42 @@ class Ft8State {
         return tp === 'even' || tp === 'odd';
     }
 
+    /** True when the held snapshots were captured on a DIFFERENT band than the rig is
+     *  on now. Occupancy is band-specific — who is using which audio offset on 15 m
+     *  says nothing about 12 m — so a carried-over snapshot must never render as
+     *  current. Only invalidates when both bands are known: with CAT off the band can
+     *  be blank, and blanking the panel then would be worse than showing what we have. */
+    get occupancyStale(): boolean {
+        return rig.band !== '' && this.occupancyBand !== '' && this.occupancyBand !== rig.band;
+    }
+
     /** Busy bands for the SHOWN parity — the Occupancy components read this. */
     get occupied(): Ft8Band[] {
+        if (this.occupancyStale) return [];
         return this.occupiedByParity[this.shownParity] ?? [];
     }
 
     /** Daemon-ranked clear offsets for the SHOWN parity, best first. Feeds effectiveOffset. */
     get suggested(): number[] {
+        if (this.occupancyStale) return [];
         return this.suggestedByParity[this.shownParity] ?? [];
     }
 
-    /** Whether the shown parity has received a snapshot yet (gates "Waiting for slot"). */
+    /** Whether the shown parity has a usable snapshot (gates the empty state). */
     get hasOccupancy(): boolean {
+        if (this.occupancyStale) return false;
         return this.occupiedByParity[this.shownParity] !== null;
+    }
+
+    /** WHY the panel is empty, so it can say something true instead of implying that
+     *  data is imminent. 'tx-parity' is the trap: during a session the panel is locked
+     *  to the parity we TRANSMIT in, and the daemon deliberately skips occupancy for a
+     *  slot we transmitted in (the captured audio is our own signal) — so while a CQ
+     *  run continues that parity can NEVER fill, and "Waiting for slot…" waits forever
+     *  (dogfood 2026-07-26, on a band change straight into a run). */
+    get occupancyEmptyReason(): '' | 'waiting' | 'tx-parity' {
+        if (this.hasOccupancy) return '';
+        return this.occupancyParityLocked ? 'tx-parity' : 'waiting';
     }
 
     /** Commit the operator's TX-offset pick (Hz). One mutation point so both
@@ -567,6 +596,8 @@ export const ft8Link: Ft8EventHandlers = {
             ft8State.passbandHigh = p.passband.high_hz;
         }
         if (p.signal_width_hz > 0) ft8State.signalWidth = p.signal_width_hz;
+        // Stamp the band this snapshot describes; see occupancyStale.
+        ft8State.occupancyBand = rig.band;
     },
 
     onDecode(p: DecodeReport): void {
@@ -691,6 +722,7 @@ export function stopFt8(): void {
     ft8State.slot = null;
     ft8State.occupiedByParity = { even: null, odd: null };
     ft8State.suggestedByParity = { even: null, odd: null };
+    ft8State.occupancyBand = '';
     ft8State.decodes = [];
     // Keep selectedOffset across a re-open — it's an operator pick, not stream data;
     // clearing it would silently drop the chosen TX channel on a view toggle.
@@ -719,6 +751,7 @@ export function resetFt8ForTests(): void {
     ft8State.slot = null;
     ft8State.occupiedByParity = { even: null, odd: null };
     ft8State.suggestedByParity = { even: null, odd: null };
+    ft8State.occupancyBand = '';
     ft8State.occupancyParity = 'even';
     ft8State.decodes = [];
     ft8State.bandFilter = '';

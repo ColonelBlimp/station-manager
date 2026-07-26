@@ -18,6 +18,8 @@
         recommended: number | null;
         selected: number | null;
         hasSlot: boolean;
+        /** Why the panel is empty when hasSlot is false — drives the copy below. */
+        emptyReason: '' | 'waiting' | 'tx-parity';
         onselect: (hz: number) => void;
     }
     let {
@@ -28,6 +30,7 @@
         recommended,
         selected,
         hasSlot,
+        emptyReason,
         onselect,
     }: Props = $props();
 
@@ -134,6 +137,16 @@
             <span>{passbandLow} Hz</span>
             <span>{passbandHigh} Hz</span>
         </div>
+    {:else if emptyReason === 'tx-parity'}
+        <!-- The trap this replaced: a bare "Waiting for slot…" here implied data was
+             imminent, but the panel is locked to the parity we TRANSMIT in and the
+             daemon skips occupancy for a slot we transmitted in — so during a CQ run
+             it would never arrive and the operator waits forever (dogfood 2026-07-26). -->
+        <p class="mt-1 text-xs text-muted">
+            No reading for your <span class="text-ink">transmit</span> slot — SM can't listen while
+            it transmits.
+            <br />Pause TX for one slot and this fills.
+        </p>
     {:else}
         <p class="mt-1 text-xs text-muted">Waiting for slot…</p>
     {/if}
