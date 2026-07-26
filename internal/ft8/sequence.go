@@ -141,6 +141,12 @@ type message struct {
 	fd      bool
 	class   string
 	section string
+	// rogerSignsOff distinguishes the two tokens msgRoger covers. RR73 carries the
+	// 73 — the sender is FINISHED. Bare RRR is an acknowledgement only, and still
+	// expects a closing 73. They advance the ladder identically (either is a valid
+	// roger), so they share a kind; but anywhere the question is "are they DONE?"
+	// the difference is decisive — see resolveConfirmHoldLocked (codex cfaa6404 P2).
+	rogerSignsOff bool
 }
 
 // SpotFrom extracts a PSK Reporter reception spot — the TRANSMITTING station's
@@ -199,7 +205,7 @@ func parseMessage(text string) message {
 
 	switch tok := toks[2]; {
 	case tok == "RRR" || tok == "RR73":
-		m.kind = msgRoger
+		m.kind, m.rogerSignsOff = msgRoger, tok == "RR73"
 	case tok == "73":
 		m.kind = msg73
 	// ARRL Field Day exchange. The R-variant "<to> <from> R <class> <section>"

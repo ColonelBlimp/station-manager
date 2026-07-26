@@ -746,14 +746,17 @@ slots** (`confirmHold`, `internal/ft8/caller_sequencer.go`):
 
 - they send a bare `73` → they copied it; release the hold **in that same slot**, so
   its decodes still feed the normal answerer pick (no throughput lost)
-- they send `RRR`/`RR73` → depends on how they rogered. Those are also what the
-  caller ladder accepts as their roger of our report, so a partner who MISSED our
-  `RR73` repeats exactly that token — reading it as confirmation would release the
-  hold at the one moment the re-send is needed. But if they rogered with an
-  **R-report** and now send `RR73`, they have moved PAST that rung, and advancing
-  requires having received us — a partner who missed it repeats the R-report instead.
-  So that case is a sign-off and releases; a bare-roger partner repeating `RR73`
-  stays ambiguous and gets the re-send
+- they send `RR73` → releases ONLY if their roger carried an **R-report**. Both
+  `RRR` and `RR73` are what the caller ladder accepts as a roger, so a partner who
+  MISSED our `RR73` repeats exactly that token — reading it as confirmation would
+  release the hold at the one moment the re-send is needed. But a partner who rogered
+  with an R-report and now sends `RR73` has moved PAST that rung, and advancing
+  requires having received us (a partner who missed it repeats the R-report instead).
+  Observed live: EW8DU closed with `RR73` rather than a bare `73`
+- they send bare `RRR` → **never** a release. `RR73` carries the 73; `RRR` is an
+  acknowledgement that still expects a closing `73`, so the sender may still be
+  waiting on us. Every doubtful case resolves the same way: releasing early costs a
+  duplicate QSO in three logbooks, holding on costs one slot
 - silence → they copied it or have gone; release
 - anything else addressed to us → they are still asking; **re-send the `RR73`**,
   bounded so a deaf partner can't hold the loop hostage. TWO bounds, because one

@@ -647,3 +647,36 @@ func TestCallerSequencer_ConfirmHoldStillResendsWhenRogerWasBare(t *testing.T) {
 		"no report to advance past — still ambiguous, so re-send")
 	require.NotNil(t, s.confirmHold)
 }
+
+// codex cfaa6404 P2: RRR and RR73 are NOT interchangeable. RR73 carries the 73 —
+// the sender is finished. Bare RRR is an acknowledgement that still expects a
+// closing 73, so a partner sending it may still be waiting on us; releasing the
+// hold there hands back the duplicate the mechanism exists to prevent.
+func TestCallerSequencer_ConfirmHoldBareRRRIsNotASignOff(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV EW8DU KO52", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV EW8DU R-17", -10)}) // roger WITH a report
+	require.True(t, s.confirmHold.rogeredWithReport)
+
+	// Same shape as the EW8DU sign-off case, but the token is bare RRR.
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("7Q5MLV EW8DU RRR", -10)})
+	sent := r.sentMsgs()
+	require.Equal(t, "EW8DU 7Q5MLV RR73", sent[len(sent)-1],
+		"bare RRR is an acknowledgement, not a sign-off — re-send")
+	require.NotNil(t, s.confirmHold, "the hold survives to cover another slot")
+	require.Len(t, r.completed, 1)
+}
+
+// The parser must carry the distinction, since both tokens share msgRoger.
+func TestParseMessage_RogerSignsOffOnlyForRR73(t *testing.T) {
+	rr73 := parseMessage("7Q5MLV EW8DU RR73")
+	require.Equal(t, msgRoger, rr73.kind)
+	require.True(t, rr73.rogerSignsOff, "RR73 carries the 73")
+
+	rrr := parseMessage("7Q5MLV EW8DU RRR")
+	require.Equal(t, msgRoger, rrr.kind, "still a roger — it advances the ladder")
+	require.False(t, rrr.rogerSignsOff, "bare RRR does not sign off")
+}

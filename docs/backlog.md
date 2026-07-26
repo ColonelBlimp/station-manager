@@ -60,6 +60,7 @@ next, and in what order" is answered.
 - _Code-review enhancements (2026-07-21 `internal/qsoservice` review — operator-deferred as enhancements, NOT regressions):_ **(#4) empty-report fabrication is FT8-only** — `submit.go`'s `if mode != "FT8"` defaults RST to `59` (and `update.go`'s `if Mode != "FT8"` requires non-empty RST), so an imported **FT4 / other SNR-reporting** record gets a bogus `59` and a legit empty-report record can't be edited; widen the exemption from the FT8 literal to the SNR-mode set when FT4 (or another SNR mode) actually matters. FT8-only is deliberate today and SM doesn't run FT4, so no live impact. · **(#7) SUBMODE not validated against MODE** — `submit.go:111` consults the submode catalogue only when MODE is ABSENT, so `MODE=SSB, SUBMODE=DMR` (DMR is a DIGITALVOICE submode) and unknown submodes store + forward unchecked (Update just trims the value); add SUBMODE↔MODE consistency validation. Data-quality enhancement, no current consumer forcing it.
 - _Per-logbook operating identity (decided 2026-07-22, deferred from the `internal/api` review #1 — operator chose "patch now, feature next"):_ **make the operating callsign follow the SELECTED logbook instead of the global My Station config field.** Today `STATION_CALLSIGN` on a QSO is sourced from `config.LoggingStation.StationCallsign`, and the submit gate (`qsoservice/submit.go:145`) requires it to equal the logbook's callsign; FT8 TX identity reads the same config field (`handler_ft8_qso.go:97`). So operating under a second call (7Q5MLV ↔ 7Q8AC) is impossible without changing the global callsign — which the review #1 patch now **rejects** (409 `callsign_locked_to_logbook`) to stop it silently orphaning the default logbook. The feature: demote `station_callsign` to a set-once *home/default* (seeds the first logbook), and source the operating callsign (QSO stamp + FT8 TX identity) from the **active logbook**, so switching call = selecting a logbook. Touches daemon (submit gate, FT8 TX identity, setup/seed) + both SPAs (logbook selector drives identity; My Station dissolved). **SPECIFIED in ADR 0055 (2026-07-22, Accepted)** — the refined model: `STATION_CALLSIGN` + `OWNER_CALLSIGN` → logbook; `MY_*` location/equipment → physical-station config; `OPERATOR` (+ `MY_NAME`) → config **operator roster** + transient current-op (multi-op / contest-group case). Retires the callsign_mismatch gate AND the shipped 409 guards (config PUT + logbook DELETE + setup reuse) — those only fenced the footgun this model removes. Design fully converged; no code yet.
 - _Daemon / data (dogfood triage 2026-07-08):_ downgrade client-abort enrichment WARN→debug when the cause is request-ctx cancellation (verified open 2026-07-18 — `orchestrator.go` `warn` is unconditional, no `ctx.Err()` check)
+- **FT8 RX propagation overlay on the map — "what can I hear right now" (2026-07-26).** Plot stations decoded in the last N minutes as an overlay on the existing contacts map. **Entirely first-party**: the decode stream already carries call/SNR/freq/time and the map engine already draws great-circle arcs from the QTH — no external service, no rate limit, no bandwidth, refreshed every slot. The "who can hear ME" half is a SEPARATE and much harder problem (needs an aggregator) — deliberately not this item. Detail in Bugs below.
 - _Rig / bands (dogfood triage 2026-07-14):_ **contact view (working panel) re-organise** (frontend/app Operate UI)
 - _Map (dogfood triage 2026-07-18):_ ~~**zoom/pan + station hover tooltip**~~ **BUILT 2026-07-18** (committed; needs a dogfood eyeball after redeploy) · ~~**background-tab staleness**~~ **BUILT same day** (`visibilitychange` → immediate catch-up refetch in `mapData`, listener detached on teardown; repro confirmed by the operator first) — both → archive once dogfood-validated
 - _smcloud hardening — **pre-Phase-2 gate** (operator-flagged 2026-07-18):_ ~~**`cmd/smcloud` needs rate limiting before anything internet-facing.**~~ **RATE LIMITING BUILT 2026-07-19**, per the decided two-layer design (operator, 2026-07-18 — each layer a distinct job): (1) **per-IP at the reverse proxy** — `deploy/smcloud/Caddyfile.example` gained the `rate_limit` block (60/min/IP; NB stock Caddy ships NO rate-limit handler — needs `xcaddy build --with github.com/mholt/caddy-ratelimit`, documented there + runbook §4; the proxy sees real client IPs, the binary never does) · (2) **the global in-process concurrency limit** — `internal/cloud/server/limit.go` `limitMiddleware`, bounded-semaphore try-acquire OUTERMOST in the handler chain (a rejected request costs one 503 write — no gzip writer, no pool wait, no goroutine pile-up); default 16 ≈ 3× the 5-conn pool, `-max-concurrent`/`SMCLOUD_MAX_CONCURRENT` (boot-validated ≥ 1, fail-loud on junk); over-limit → immediate `503 {"code":"overloaded"}` + `Retry-After: 2`. Tests: saturation → 503 with parked requests unaffected, slot release, zero-value default fallback, parse table. **Review round (3 findings, ALL real — 7th consecutive clean round) FIXED 2026-07-19:** (1) the handler-level semaphore alone couldn't bound a connection/slow-header flood (net/http spawns a goroutine per accepted conn BEFORE any handler) → accept-time connection cap added (`netutil.LimitListener`, 4× the request cap — x/net was already a direct dep) + claims narrowed in the comments; LimitListener semantics pinned by test · (2) runbook §4 enabled STOCK Caddy before the plugin note, and `xcaddy build` doesn't touch the systemd binary → §4 rewritten: install custom binary over `/usr/bin/caddy` → `caddy list-modules | grep rate_limit` → `caddy validate` → only then enable; package-upgrade clobber warning (fail-loud: stock caddy refuses the unknown directive) · (3) ADR 0052 overclaimed "reconcile surfaces" single-writer violations — same-second same-revision edits produce identical version tuples (`>=` tie guard + payload-less reconcile hash → silent divergence); ADR corrected + device/writer-id tie-breaker made a PRECONDITION of the bidirectional-reconcile sync leg. **Round 2 (3 findings, ALL real — 8th consecutive) FIXED 2026-07-19:** (1) runbook step 5 `enable --now` doesn't restart the apt-auto-started stock Caddy → explicit `restart` (both families; upgrade note now says repeat 3 + restart) · (2) ADR: payload-digest-in-hash is NOT equivalent to a writer-id tie-breaker (summary would flag mismatch forever while the revision+modified_at manifest diff finds nothing → non-convergent); reworded — writer id is the ordering fix, digest at most a detection aid needing manifest propagation + a conflict branch · (3) `connCap` ×4 could wrap negative on an extreme `SMCLOUD_MAX_CONCURRENT` and panic LimitListener at boot → parse ceiling 4096 (`maxMaxConcurrent`) + boundary/overflow tests. (Original mechanism, for the record: the bounded DB pool protects Postgres, not the process — `/v1/health` pings Postgres unauthenticated, and excess requests piled up as handler goroutines waiting on the pool.) **Remaining gate: the ADR 0040 security assessment + rotating the leaked dogfood token** before anything internet-facing. · ~~**Streaming/paginated export (review 3 #4)**~~ **BUILT 2026-07-20 (external review re-found it — the fix-don't-defer trigger):** `ExportSnapshot` now streams rows to callbacks from inside the repeatable-read tx and `handleExport` writes each row straight onto the wire (identical wire format; peak memory one row); accepted trade documented in the handler — the tx/pool conn stays open while a slow client drains, bounded by `exportWriteDeadline` + the request semaphore. Landed in the 2026-07-20 four-finding batch (padded-UUID raw gate + restore canonicalise · `(tenant_id, uuid)` composite key migration 0004 + `ON CONFLICT` rescope · this · gzip relative q-value preference). **FT8 session reconnect reconcile** — `ft8-logged` has no backlog, so a QSO completed during an SSE gap is durable in the logbook but missing from the session list / export / worked markers. **Design note (the trap):** do NOT naively replay-cache the event daemon-side — a fresh page load hours later would receive the stale event into an empty session list, and the uuid dedup can't catch that (the new session doesn't hold the row). Correct shapes: SPA reconnect reconcile (on re-open, fetch QSOs since session start, merge by uuid) or a time-bounded replay the SPA can age-filter. · **Write idempotency for QSO submit + session email (daemon)** — a timed-out write is ambiguous (may have committed / SMTP may have accepted); the SPA now *says* "outcome unknown" (shipped), but resolving the ambiguity needs a daemon-side idempotency token (client-generated key the daemon dedups on, with a retrievable outcome) so a retry is safe instead of merely warned about. Email is the sharper case (a real duplicate lands in a real inbox).
@@ -86,6 +87,61 @@ next, and in what order" is answered.
 - _Future thinking:_ "design our own sequencing / timing".
 
 ## Bugs (detail)
+
+- **P2 · `frontend/app/src/lib/map` + the FT8 decode stream — RX propagation overlay
+  ("what can I hear right now").** _(From a 2026-07-26 discussion about PSK Reporter
+  being slow. The key realisation: what people want from a PSKReporter map is two
+  different problems, and SM already owns one of them outright.)_
+
+  **The split.** "Who can I HEAR" is first-party — SM decodes the band every 15 s and
+  each decode carries callsign, SNR, frequency and time. "Who can hear ME" is
+  unknowable locally and is the only thing an aggregator uniquely provides. **This
+  item is the RX half only**; the TX half is separate and deferred (see below).
+
+  **Why it is attractive.** Zero external dependency, zero rate limit, **zero
+  bandwidth** — which matters more here than anywhere: 7Q8AC is Malawi/offline-first
+  and the whole smcloud stamp-drift arc was about not burning the link. It also
+  refreshes every slot, and for your OWN station it is more accurate than PSK
+  Reporter, which is aggregated and delayed.
+
+  **What already exists** (so this is assembly, not new machinery): `WorldMap.svelte`
+  draws great-circle arcs from an origin with per-endpoint hover tooltips and
+  zoom/pan; `MapArc` already carries `from`/`to`/`key`/`label`/`color`;
+  `ft8Enrich.svelte.ts` already resolves country/DXCC/worked-before per callsign; the
+  `ft8-decode` SSE already streams every decode to the SPA.
+
+  **The real limitation, worth knowing before it looks like a bug:** a grid only
+  appears in CQ and ANSWER messages (`CQ W1ABC FN42`, `7Q5MLV DL9UW JO41`). A plain
+  in-progress exchange (`K1ABC W9XYZ -07`) carries no grid, so only stations whose
+  grid has been seen — or can be enriched — are plottable. Expect a partial picture,
+  biased toward stations calling CQ.
+
+  **Design points when picked up.** (a) A propagation overlay and the contacts map
+  tell DIFFERENT stories — QSOs made vs paths open now — so they want a layer toggle
+  rather than one merged surface. (b) Time window (rolling N minutes) and what decays:
+  age-fade, or drop. (c) Colour by band or by SNR. (d) Fail-soft per the
+  enrichment-never-blocks invariant: a missing grid or a failed lookup drops that
+  station, never the overlay or the map.
+
+  **The TX half, explicitly NOT this item.** "Who is hearing me" needs an external
+  source. Options, best-first for this station: PSK Reporter's **query API**
+  (`retrieve.pskreporter.info`, plain HTTP so no new dependency, but aggressively
+  rate-limited and 503s under load — the observed slowness); a PSK Reporter **MQTT
+  feed**, which would push filtered reports instead of polling and would be far
+  cheaper on the link — **UNVERIFIED, confirm it exists before designing around it**,
+  and it costs an MQTT client dependency; **WSPRnet** (good API, WSPR only, says
+  nothing about your FT8 signal); **RBN** (CW/RTTY only). Whatever is chosen it should
+  be **on-demand** — a "who's hearing me?" button doing one fetch — not a background
+  poll, for both the rate limit and the bandwidth. Note `internal/pskreporter` is
+  **upload-only** today (IPFIX over UDP); nothing in SM currently reads from them.
+
+  **Related items already in this file:** the P3 "propagation / conditions panel
+  (external online data source)" is the TX-half/space-weather cousin; the
+  spot-submitter registry generalises the OUTBOUND side; ADR 0053's inbound DX cluster
+  shares the "external live feed onto the map" plumbing but is a different data shape
+  (human spots, not automated reception reports); and the smcloud "am I being heard?"
+  pile-up status idea is the long game — if SM Cloud ever has several operators
+  uploading decodes, SM has its own reception network that nobody else can copy.
 
 - **P2 · `internal/forwarding/smcloud` (+ `qrz`) — a 401 is classified TERMINAL, so
   rotating the smcloud bearer token strands every upload attempted during the

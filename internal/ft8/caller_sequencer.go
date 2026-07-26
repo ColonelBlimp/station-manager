@@ -495,7 +495,13 @@ func (s *Sequencer) resolveConfirmHoldLocked(msgs []goft8.DecodedMessage) string
 		// case is a sign-off, not a plea. Observed live: EW8DU rogered "R-17", got our
 		// RR73, and closed with "RR73" rather than a bare 73 — which cost a needless
 		// re-send until this distinction existed (dogfood 2026-07-26).
-		advancedPastRoger := pm.kind == msgRoger && h.rogeredWithReport
+		//
+		// RR73 ONLY, never bare RRR (codex cfaa6404 P2): RR73 carries the 73, so the
+		// sender is finished; RRR is an acknowledgement that still expects a closing
+		// 73, so a partner sending it is NOT done and may still be waiting on us.
+		// The asymmetry decides the doubtful case as always — releasing too early
+		// costs a duplicate QSO in three logbooks, holding too long costs one slot.
+		advancedPastRoger := pm.kind == msgRoger && pm.rogerSignsOff && h.rogeredWithReport
 		if pm.kind == msg73 || advancedPastRoger {
 			s.confirmHold = nil
 			s.log.InfoWith().Str("their_call", h.call).Str("heard", m.Text).
