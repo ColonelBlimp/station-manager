@@ -86,12 +86,30 @@ precisely so we don't re-derive state or redo finished work.
 >
 > ### Open loose ends from this session — READ BEFORE PICKING WORK
 >
-> - **UNCOMMITTED:** `UtilRail.svelte` + test + `app.css` — the count badge is
->   right-anchored in the narrow rail. The `999+` cap alone did NOT fix the
->   clipping the operator reported: `999+` is exactly as wide as `1000`, and a
->   clipped `999+` is WORSE, reading as an exact `999` (codex P2 on `4e223176`).
-> - **UNDEPLOYED:** `4e223176`, `6088b931` + the above. Deploy before the next
->   session or the occupancy panel still lies.
+> - **UNDEPLOYED — the whole tail: `4e223176` … `b0025985`.** The running daemon is
+>   `c7f88cbc`. Deploy before the next session or the occupancy panel still lies.
+>   What is in that tail:
+>   - Count badge right-anchored in the narrow rail (`d66a54f1`). The `999+` cap
+>     alone did NOT fix the clipping: `999+` is exactly as wide as `1000`, and a
+>     clipped `999+` is WORSE — it reads as an exact `999` (codex P2 on `4e223176`).
+>   - **Two P1s on the occupancy fix itself** (`b0025985`), both reachable and both
+>     landing on the TX path, since `effectiveOffset` falls back to `suggested[0]`
+>     when the operator has not pinned an offset: (1) one shared band tag over two
+>     INDEPENDENT per-parity snapshots let a fresh parity revalidate the other
+>     parity's old-band data — and during a CQ run the TX parity is exactly the one
+>     that never refreshes; (2) the hub replays the last occupancy to a
+>     freshly-connected tab and the payload carries NO band, so a QSY plus a browser
+>     refresh stamped a pre-QSY snapshot as current. Fixed with per-parity band tags
+>     and a three-slot freshness gate.
+>   - **Residual, not closed:** a QSY followed by a reload within 45 s can still slip
+>     one snapshot through — after a reload there is no memory of when the QSY
+>     happened. The complete fix is for the daemon to stamp the capture band on
+>     `OccupancyReport`; that is NOT cheap today, because `Occupancy()` is a pure
+>     audio computation and the dial freq reaches the daemon from the CLIENT via
+>     `StartCallCq`, so plumbing rig state in would cross the narrow-import boundary
+>     `internal/ft8` deliberately keeps.
+>   - Worked panel `w-full` and the Session-tile Map removal (both inbox items,
+>     closed `b0025985`).
 > - **`5ea0ff60` HAS A WRONG COMMIT MESSAGE.** It claims to stop 401 being
 >   classified as terminal; it is **docs-only** (backlog.md, +46). The code still
 >   treats 401 as terminal (`internal/forwarding/smcloud/smcloud.go:330`), so a
@@ -104,9 +122,10 @@ precisely so we don't re-derive state or redo finished work.
 >   2026-07-24: 2 s tune into the ANTENNA on 20m. Both leading hypotheses (tune
 >   duration, FT8 residue) were refuted on a dummy load; RF ingress is the last
 >   lead.
-> - **Dogfood inbox, untriaged:** worked-panel needs `table-fixed` (columns bleed,
->   notes overscroll), session-panel Map button is redundant, add a world-time
->   widget.
+> - **Dogfood inbox, untriaged:** add a world-time widget. (The worked-panel and
+>   session-panel Map items were done in `b0025985` — the worked-panel fix was
+>   `w-full`, NOT `table-fixed`: that was already present, and per CSS 2.1 §17.5.2 a
+>   table with `width: auto` ignores `table-layout: fixed` entirely.)
 
 > **LATER 2026-07-25 — the "reasonably robust for public use" pass ran, plus a
 > long external-review arc on FT8 TX and on config/forwarder credential handling.
