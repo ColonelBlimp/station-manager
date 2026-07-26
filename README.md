@@ -4,32 +4,118 @@
 
 # Station Manager
 
-**Station Manager** is software for Amateur Radio station management on Linux. It runs as a local daemon (`smd`, written in Go) that serves a browser SPA (Svelte 5 + Vite) for QSO logging, station configuration, and rig control. The daemon and SPA ship as a single binary; the operator points a browser at it.
+**Amateur radio station management for Linux — logging, rig control and FT8 in one place, with no account to create and no internet needed to operate.**
 
-Why yet another piece of software for amateur radio logging, etc.? Well, what is out there just doesn't allow me to
-operate in the way I want to. Also, I don't generally use Windows, and I don't want to use Mac,
-so I was left with writing the software myself. Besides, many packages out there, while working, look way
-out-of-date, cost too much, and their UIs are far too busy to make them easy to set up and a joy to use
-(opinionated – as this software is also).
+🌐 **[station-manager.org](https://station-manager.org)** · 📦 [Install guide](docs/install.md) · 📄 [GPL-3.0-only](#licence)
 
-One of the other main requirements is that the software should not require an internet connection to operate.
-Here in Malawi, the internet is not always available, and when it is, it is not always reliable. So, the software should
-be able to operate without an internet connection. The application will forward QSOs to online logbooks such as QRZ.com and ClubLog (configurable), but this is not a requirement for the software to operate.
+Station Manager runs as a local daemon (`smd`, written in Go) that serves a browser UI (Svelte 5 + Vite). The daemon and the UI ship as a **single binary** — install it, point a browser at `localhost:8080`, and you have a logging station. No desktop application, no cloud account, and nothing phoning home.
 
-The software is not currently aimed at contesting (although support is planned), rather at general HF operation by SSB, CW, and FT8. There are
-plans to support serious contesting, including multiple distributed stations, etc.
+> **Status: v2 alpha.** It is dogfooded daily from 7Q5MLV in Malawi and logs real contacts on
+> real hardware, but it is early software with one primary operator. Expect rough edges, and
+> read the [install guide](docs/install.md) before depending on it.
 
-Install and first-run setup: see [`docs/install.md`](docs/install.md).
+<p align="center">
+  <img src="assets/screenshot-map.png" alt="Contacts map — great-circle paths from Malawi with a grey-line overlay, coloured by band" width="100%">
+  <br>
+  <em>128 contacts in 12 hours from 7Q5MLV, coloured by band, with the grey line live.</em>
+</p>
 
-Design decisions, architecture notes, and the ADR log live under `docs/`.
+---
+
+## What it does
+
+**Logging**
+
+- Fast SSB/CW entry with live callsign enrichment (QRZ.com and hamnut lookups). Enrichment is
+  fail-soft by design — a lookup that fails degrades the entry, it never blocks the QSO.
+- Full ADIF data model, `HH:MM:SS` time precision, multiple logbooks.
+- Session view with in-place editing, ADIF export and session email-out.
+- Contacts map — great-circle paths with a live grey-line overlay.
+
+**FT8** — attended operation only, see [below](#why-another-logger)
+
+- Live decode with band activity, per-CQ **beam heading**, country flags and worked-before marking.
+- Answer a CQ, work a caller, or run CQ and work the pile-up.
+- Occupancy view (channels or spectrum) so you pick a clear transmit slot.
+- ARRL Field Day exchanges, and reduced type-4 ladders for compound calls (`PJ4/NA2AA`).
+- Optional PSK Reporter spotting.
+
+<p align="center">
+  <img src="assets/screenshot-ft8.png" alt="FT8 operating view — band activity with beam headings and country flags, the live message ladder, and the transmit-offset occupancy strip" width="100%">
+  <br>
+  <em>Working Japan on 15 m. Band activity carries the beam heading for every CQ; the
+  ladder shows the exchange as it happens.</em>
+</p>
+
+**Rig control (CAT)**
+
+- Frequency, mode, VFO and band control over serial, with rig state pushed live to the UI.
+- FT8 keys the rig through the same guarded path, with a hard stop that survives a lost link.
+
+**Getting QSOs out**
+
+- Automatic forwarding to **QRZ.com** and **ClubLog**, per destination and configurable.
+- **SM Cloud** — an optional, self-hosted off-site backup of your log, so a dead disk is not a
+  lost logbook.
+- All of it is opt-in. The local database is always the authority.
+
+## Why another logger?
+
+Honestly: what is out there did not let me operate the way I want to. I do not generally use
+Windows and I do not want to use a Mac, so I was left writing it myself. Many of the existing
+packages work, but look out of date, cost too much, or have UIs busy enough to make setup a chore
+rather than a pleasure. This one is opinionated — deliberately.
+
+**It has to work without the internet.** Here in Malawi the connection is not always available,
+and when it is, it is not always reliable. Everything that matters happens locally: logging, rig
+control, FT8, the database. Online logbooks are a bonus that syncs when there is a link — never a
+requirement.
+
+**FT8 here is attended-only, by design.** The QEX FT8 specification forbids automatic operation,
+and unattended operation is licence-restricted in many jurisdictions. You choose whom to work and
+you arm the transmitter; the software then walks the exchange. Daemon-initiated sequencing is not
+a roadmap item — it is out of scope.
+
+Contesting is not the target today — general HF by SSB, CW and FT8 is — though support is
+planned, including multiple distributed stations.
+
+## Requirements
+
+- An RPM-based Linux with `systemd`: **Fedora 34+, RHEL/Rocky/AlmaLinux 8+**, or recent openSUSE.
+  A Debian/Ubuntu package is on the roadmap but not yet available.
+- A web browser. That is the entire UI.
+- For CAT and FT8: a supported rig and a sound interface.
+
+The daemon binds **loopback only** (`127.0.0.1:8080`) and keeps all state under your home
+directory — single user, single machine, no network exposure by default.
+
+Install and first-run setup: **[`docs/install.md`](docs/install.md)**.
 
 ## Computer Aided Transceiver (CAT)
 
-The software does support CAT operation; however, only Yaesu FTdx10, FT-710, and IC7300 have been tested (I don't own any other
-rigs).
+CAT is supported, but only the **Yaesu FTdx10**, **Yaesu FT-710** and **Icom IC-7300** have been
+tested — those are the rigs I own. Rigs are described by data files rather than code, so adding
+one does not need a new build. Definitions and reports from other operators are welcome.
+
+## Documentation
+
+- **[Install and first run](docs/install.md)** — from a fresh machine to your first logged QSO.
+- **[Documentation map](docs/README.md)** — which documents are kept current, and which are a
+  historical record.
+- Architecture decisions live under [`docs/decisions/`](docs/decisions/).
 
 ## Licence
 
-Station Manager is licensed under the **GNU General Public License, version 3 only** (`GPL-3.0-only`) — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+Station Manager is licensed under the **GNU General Public License, version 3 only**
+(`GPL-3.0-only`) — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
 
-It was MIT-licensed until 2026-05-31. The move to GPL-3.0-only follows from the FT8 decode path: that capability comes from the companion library [go-ft8](https://github.com/ColonelBlimp/go-ft8), a WSJT-X/jt9-derived work that is GPL-3.0-only. Linking it makes the combined work a GPLv3 derivative, so the whole project adopts the same copyleft licence. The reasoning is recorded in [`docs/decisions/0023-relicense-to-gplv3.md`](docs/decisions/0023-relicense-to-gplv3.md) and [`docs/licensing.md`](docs/licensing.md).
+It was MIT-licensed until 2026-05-31. The move to GPL-3.0-only follows from the FT8 decode path:
+that capability comes from the companion library [go-ft8](https://github.com/ColonelBlimp/go-ft8),
+a WSJT-X/jt9-derived work that is GPL-3.0-only. Linking it makes the combined work a GPLv3
+derivative, so the whole project adopts the same copyleft licence. The reasoning is recorded in
+[`docs/decisions/0023-relicense-to-gplv3.md`](docs/decisions/0023-relicense-to-gplv3.md) and
+[`docs/licensing.md`](docs/licensing.md).
+
+---
+
+*73 de 7Q5MLV*

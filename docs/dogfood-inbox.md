@@ -134,3 +134,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - [2026-07-25] the worked panel for phone/cw needs the table to be set to table-fixed as the columns are bleeding into each other and a large field (note) overscolls.
 - [2026-07-25] session panel: map button is redundant
 - ~~[2026-07-26] ftp-all.txt should be enhanced to do archiving (gzip) and log rotation.~~ **→ DONE 2026-07-26: `ft8-all.txt` now rotates via lumberjack (10 MB × 5 gzipped backups) and is created 0600 (was 0644, and a legacy log is tightened on open). `smd.log` already had rotation + gzip (100 MB × 5 / 30 days); the survey also found `cmd/smd/startuplog.go` creating smd.log 0644 — fixed to 0600.**
+- [2026-07-26] add a world time widget
