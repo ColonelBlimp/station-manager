@@ -101,6 +101,18 @@ describe('UtilRail session count badge', () => {
         expect(badge).toHaveTextContent('999+');
     });
 
+    // The cap alone does not keep the badge on screen: `999+` is the same width as
+    // `1000`, and the narrow rail is fixed to the viewport's right edge with only
+    // 24px of room from left-6. The badge must therefore be right-anchored in narrow
+    // mode (app.css html[data-util='narrow'] .rail-badge) so it grows back over the
+    // icon rather than off-screen. jsdom does no layout, so this asserts the hook the
+    // CSS rule targets is actually on the element (codex review of 4e223176).
+    it('carries the class that right-anchors it in the narrow rail', () => {
+        session.qsos.push(sessionQso('A1AA'));
+        render(UtilRail);
+        expect(screen.getByTitle('1 QSO this session')).toHaveClass('rail-badge');
+    });
+
     it('still shows an exact count at the 999 boundary', () => {
         render(UtilRail);
         for (let i = 0; i < 999; i++) session.qsos.push(sessionQso(`T${i}`));

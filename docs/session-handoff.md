@@ -30,7 +30,83 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-25)
+## Current state (as of 2026-07-26)
+
+> **2026-07-26 — the FT8 final-rung session. ~19 commits, all reviewed clean. The
+> daemon-side work IS deployed and was validated on air across ~148 QSOs with zero
+> duplicates; the frontend polish at the end is NOT (running build `c7f88cbc`,
+> HEAD is `6088b931` + uncommitted).**
+>
+> **1. The final-rung retry cap (the day's main arc).** Our last rung in a QSO
+> could repeat unboundedly: the partner has everything they need, so from THEIR
+> side the contact is complete, and we would keep calling into a station that has
+> moved on. The seven handlers split into two groups by whether the QSO is ours to
+> log:
+> - **Group A — the contact IS complete for us** (we sent the final RR73/73 after
+>   receiving their report). Log it, send ONCE, move on. Shared helper
+>   `finalRungDoneLocked` in the new `internal/ft8/finalrung.go`, which also holds
+>   the policy write-up. It bumps `sessionGen` so a late callback cannot double-log.
+> - **Group B — the contact is NOT complete** (we are still owed something). Cap
+>   the retries, then ABANDON: no log, clear the session, back to CQ.
+>
+> **2. `confirmHold` — the duplicate-QSO fix, and the day's best result.** Live-log
+> diagnosis (AC8MR, KI2Y, KE4IHI — 3 dupes in 21) found the mechanism: the partner
+> misses our RR73, restarts the exchange, and gets logged a SECOND time. XE1GM was
+> caught repeating `R-07` eleven times into our silence. Call-CQ now keeps a
+> completed contact *listenable* for a bounded window (`confirmResendLimit` 2,
+> `confirmHoldSlotLimit` 5) and re-sends RR73 only to a partner still asking.
+> **On air: 3 genuine repairs (SQ2LXX, VK6WTF, HL3KPJ), 12/12 same-slot releases,
+> zero throughput lost, zero duplicates in 148+ QSOs.** Two false positives
+> (EW8DU, PA3GSM) traced to treating `RRR` and `RR73` as one token — fixed at the
+> parser with `message.rogerSignsOff` (`920807a9`), since only `RR73` signs off.
+>
+> **3. Deliberate duplicates are now expressible.** The SPA's same-session dupe
+> guard blocked the operator from re-working a station on purpose. Intent is
+> threaded end to end as `allow_duplicate` → `CompletedQso.AllowDuplicate` →
+> `qsoservice.Submit(..., force)`; the engaged-call set is keyed `CALL|BAND` off
+> the new `dial_freq_mhz` and survives a reload via sessionStorage.
+>
+> **4. Logging hygiene.** `ft8-all.txt` now rotates (lumberjack, 10 MB × 5 gzipped)
+> and is created **0600**; a legacy 0644 file is tightened on open. The survey also
+> caught `cmd/smd/startuplog.go` creating `smd.log` 0644 — also now 0600. SM Cloud
+> gained a Caddy access log with `Authorization`/`Cookie` explicitly deleted.
+>
+> **5. README rewritten for the public** (35 → 108 lines) with the
+> station-manager.org link and two screenshots. **All attended/unattended language
+> was removed** — SM *does* run unattended (a CQ run continues as long as you leave
+> it), so the old claim was simply untrue.
+>
+> **6. Occupancy blank-panel fix** (`6088b931` + follow-up). Two independent bugs:
+> the panel locks to the parity we TRANSMIT in and the daemon skips occupancy for a
+> slot we transmitted in, so during a CQ run it can NEVER fill — yet it said
+> "Waiting for slot…", which implied imminent data and cost the operator a live
+> session's worth of confusion. It now names the cause and the action. Separately,
+> snapshots were never invalidated on a **band change**, so a QSY rendered the old
+> band's picture as current.
+>
+> ### Open loose ends from this session — READ BEFORE PICKING WORK
+>
+> - **UNCOMMITTED:** `UtilRail.svelte` + test + `app.css` — the count badge is
+>   right-anchored in the narrow rail. The `999+` cap alone did NOT fix the
+>   clipping the operator reported: `999+` is exactly as wide as `1000`, and a
+>   clipped `999+` is WORSE, reading as an exact `999` (codex P2 on `4e223176`).
+> - **UNDEPLOYED:** `4e223176`, `6088b931` + the above. Deploy before the next
+>   session or the occupancy panel still lies.
+> - **`5ea0ff60` HAS A WRONG COMMIT MESSAGE.** It claims to stop 401 being
+>   classified as terminal; it is **docs-only** (backlog.md, +46). The code still
+>   treats 401 as terminal (`internal/forwarding/smcloud/smcloud.go:330`), so a
+>   token rotation still strands the queue. Do not read git log and assume it is
+>   fixed — it is a backlog item.
+> - **STILL UNSEEN ON AIR** (the paths the next session should exercise): a repair
+>   needing a SECOND re-send, a confirm-hold LIFETIME EXPIRY, and a Group B
+>   final-rung CAP. Operator plans 80m/40m/30m to hunt them.
+> - **Stuck-TX investigation is parked on an operator experiment**, unchanged from
+>   2026-07-24: 2 s tune into the ANTENNA on 20m. Both leading hypotheses (tune
+>   duration, FT8 residue) were refuted on a dummy load; RF ingress is the last
+>   lead.
+> - **Dogfood inbox, untriaged:** worked-panel needs `table-fixed` (columns bleed,
+>   notes overscroll), session-panel Map button is redundant, add a world-time
+>   widget.
 
 > **LATER 2026-07-25 — the "reasonably robust for public use" pass ran, plus a
 > long external-review arc on FT8 TX and on config/forwarder credential handling.

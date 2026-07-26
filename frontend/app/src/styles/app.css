@@ -274,6 +274,16 @@ html[data-util='narrow'] .rail-item {
     justify-content: center;
     gap: 0;
 }
+/* Count badges grow LEFTWARD in the narrow rail. The rail is fixed to right:0, so
+   its right edge is the viewport's: a left-anchored badge has only 24px before it
+   is cut off by the window, which a 4-character count (`1000`, and equally `999+`)
+   overruns. Right-anchoring makes the width irrelevant — it extends back over the
+   icon instead of off-screen. Full mode has 160px of room and keeps left-6, which
+   hugs the icon. */
+html[data-util='narrow'] .rail-badge {
+    right: 0;
+    left: auto;
+}
 .util-chevron {
     transition: transform 0.2s ease;
 }

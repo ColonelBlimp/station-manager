@@ -49,12 +49,20 @@
 </script>
 
 {#snippet countBadge(n: number, label: string)}
-    <!-- Glanceable indicator, not a readout: the rail is 3.5rem wide in narrow mode
-         and the badge sits at left-6, so a 4-digit count runs off the rail edge and
-         is clipped by the viewport. Cap the DISPLAY at 999+; the exact figure stays
-         in the tooltip, and the Session panel header carries it in full. -->
+    <!-- Glanceable indicator, not a readout. Two things keep it on screen:
+         (1) rail-badge right-anchors it in NARROW mode. The rail is 3.5rem (56px)
+             and fixed to right:0, so the viewport edge IS the rail edge. Left-anchored
+             at left-6 the badge starts 32px in with only 24px of room, and at 10px
+             bold every character costs ~6px + 8px of px-1 padding — so 4 characters
+             need ~32px and hang 8px off-screen. Growing LEFTWARD instead can never
+             clip (1-digit lands in the identical spot, so the usual look is unchanged).
+         (2) The DISPLAY caps at 999+, bounding how far it can grow back over the icon.
+         Note the cap alone does NOT fix (1): `999+` is exactly as wide as `1000`, and
+         a clipped `999+` is worse than a clipped `1000` — it reads as an exact 999
+         (codex review of 4e223176). The exact figure stays in the tooltip, and the
+         Session panel header carries it in full. -->
     <span
-        class="absolute top-0.5 left-6 min-w-4 rounded-full bg-focus px-1 text-center text-[10px] font-bold text-white tabular-nums"
+        class="rail-badge absolute top-0.5 left-6 min-w-4 rounded-full bg-focus px-1 text-center text-[10px] font-bold text-white tabular-nums"
         title={label}
     >
         {n > 999 ? '999+' : n}
