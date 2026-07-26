@@ -187,8 +187,11 @@
     });
 
     // Same-session dupe (band-scoped): a call already logged this session on this
-    // band is skipped. A prior-session/durable-log contact is fine — only a repeat
-    // WITHIN this sitting is blocked. Cross-band the same call is not a dupe.
+    // band. Cross-band the same call is not a dupe, and a prior-session contact is
+    // not one either. This is ADVISORY only — the operator is the licensee and may
+    // work a station as often as they choose; callers use it to say so, never to
+    // refuse. (The pile-up DRAIN is the one exception: it transmits with no operator
+    // present at that instant, so it still skips — see Ft8Operate.)
     function workedThisSession(call: string): boolean {
         return session.qsos.some((q) => q.callsign === call && q.band === rig.band);
     }
@@ -210,10 +213,12 @@
             toasts.info(`Already working ${call}.`);
             return;
         }
+        // Inform, don't refuse — see txPreflight. Queuing a station worked earlier is
+        // a legitimate operator choice (a repair, a sked, a second report).
         if (workedThisSession(call)) {
-            toasts.info(`Already worked ${call} this session.`);
-            return;
+            toasts.info(`${call} already worked this session — queued anyway.`);
         }
+        // This one DOES block: it is a duplicate QUEUE entry, not a duplicate contact.
         if (ft8PileupStack.items.some((x) => x.call === call)) {
             toasts.info(`${call} is already in the pile-up.`);
             return;
@@ -265,9 +270,14 @@
             toasts.info('Rig frequency is not known yet.');
             return null;
         }
+        // A repeat contact INFORMS, it does not refuse. Every other check above is a
+        // genuine impossibility (no TX, no rig, no offset); this one is the operator's
+        // call, and the software's information is incomplete — it knows only its own
+        // log, not whether the other station has the QSO. Refusing here fired exactly
+        // when working again was CORRECT: XE1GM (dogfood 2026-07-26) never copied our
+        // RR73 and asked eleven times, and this guard blocked the repair.
         if (workedThisSession(call)) {
-            toasts.info(`Already worked ${call} this session.`);
-            return null;
+            toasts.info(`${call} already worked this session — working again.`);
         }
         return { offset, opMHz: opHz / 1_000_000 };
     }

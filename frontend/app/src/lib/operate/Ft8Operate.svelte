@@ -284,8 +284,14 @@
     let retryTick = $state(0);
     let workRetries = 0;
 
-    // Same-session dupe (band-scoped) — mirrors the click-to-work guard so the drain
-    // never re-works a station already logged this session on this band.
+    // Same-session dupe (band-scoped). NOTE the deliberate asymmetry with
+    // Ft8BandActivity, where this is advisory only: there the operator is clicking
+    // and may work a station as often as they like. HERE nobody is present at the
+    // moment of transmission — the drain keys automatically off a queue entry made
+    // earlier — so an already-satisfied entry is dropped rather than re-worked. That
+    // is queue hygiene, not a veto on the operator: their intent (one contact with
+    // this station) has already been met, and the automatic path is exactly where an
+    // unintended duplicate has no human to catch it.
     function workedThisSession(call: string): boolean {
         return session.qsos.some((q) => q.callsign === call && q.band === rig.band);
     }

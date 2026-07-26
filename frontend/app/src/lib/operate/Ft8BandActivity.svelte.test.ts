@@ -292,7 +292,10 @@ describe('Ft8BandActivity click-to-work (first RF path)', () => {
         expect(answered).toBe(0);
     });
 
-    it('does NOT re-work a station already logged this session on this band', async () => {
+    // See the directed-call case below: a station worked earlier this session is still
+    // answerable. Working it again is the operator's call — and sometimes the only way
+    // to give the other station a contact they never completed.
+    it('DOES re-answer a station already logged this session on this band', async () => {
         setFt8OperatorCall('7Q5MLV');
         let answered = 0;
         armReady({
@@ -319,7 +322,7 @@ describe('Ft8BandActivity click-to-work (first RF path)', () => {
 
         await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
         await flush();
-        expect(answered).toBe(0); // dupe guard blocked it
+        expect(answered).toBe(1);
     });
 });
 
@@ -454,7 +457,12 @@ describe('Ft8BandActivity directed call (double-click a plain row)', () => {
         expect(screen.queryByTitle(/Double-click to call/)).toBeNull();
     });
 
-    it('worked-this-session guard blocks the directed call', async () => {
+    // A repeat contact is ADVISORY, never a refusal: the operator is the licensee and
+    // may work a station as often as they choose, and SM knows only its own log — not
+    // whether the other station has the QSO. Blocking here fired exactly when working
+    // again was correct (XE1GM, dogfood 2026-07-26: never copied our RR73, asked
+    // eleven times, and this guard prevented the repair).
+    it('worked-this-session does NOT block the directed call — it informs and proceeds', async () => {
         setFt8OperatorCall('7Q5MLV');
         const got: Ft8AnswerArgs[] = [];
         armReady({ answerCq: (a) => (got.push(a), okResult()) });
@@ -480,6 +488,7 @@ describe('Ft8BandActivity directed call (double-click a plain row)', () => {
             screen.getByTitle('Double-click to call T22TT (directed call — no CQ needed)')
         );
         await flush();
-        expect(got).toHaveLength(0);
+        expect(got).toHaveLength(1);
+        expect(got[0]).toMatchObject({ theirCall: 'T22TT' });
     });
 });
