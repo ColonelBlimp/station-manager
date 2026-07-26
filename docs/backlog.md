@@ -52,6 +52,7 @@ next, and in what order" is answered.
 - _FT8 (every sub-item verified in the 2026-07-18 sweep):_ type-4 free-text messages (open — `modulate.go` rejects free text; no entry UX in either frontend) · type-4 work-a-caller SPA trigger (deferred — hashed-us ambiguity) · attempt-limit SPA control (**mostly built**: `ft8.tx.max_repeats` config + `ft8_max_repeats` GET/PUT + live `SetMaxRepeats` all exist — only the Settings-tab INPUT is missing; NB `sequencer.go`'s "edited from the FT8 Settings tab" comment is aspirational) · callsign ignore list (open) · Call-CQ waiting feedback (partial — frontend/app shows "sent ×N" on the CQ rung; logging shows only the label; no "no answers yet" copy) · Call-CQ abandon → work a live answerer (layer 1 SHIPPED 2026-07-17; layer-2 recency pool open — no candidate pool in `Sequencer`, only the same-slot re-scan) · offset-picker no-overlap snap (open, but the design moved under it — continuous click-anywhere pick + daemon-ranked ★ suggestions shipped; re-examine whether an arbitrary-click SNAP is still wanted before building) · accumulate-mode duplicate rows → slot-grouped display (Rx pane open — flat `rxDecodes` list; Band Activity grouping exists in both frontends) · footer info-strip rehome (open — `rxCaption` still under the Rx pane) · shift+ctrl freq-step key parity in FT8 (**built in frontend/app** — `RigKeys` is shell-global and covers FT8; **open in frontend/logging** — the handler lives in QsoPanel, which unmounts in FT8 mode) · work-path opening: prefer clean next-slot start over truncated immediate fire (open — `StartWorkCaller` still fires truncated-immediate via `fireOpening`)
 - _Forwarding / data (verified in the 2026-07-18 sweep):_ clear queued-upload backlog for a forwarder (**half built**: `DiscardQueuedUploadsForForwarderWithContext` exists and auto-purges DISABLED forwarders at daemon startup — `cmd/smd/main.go:464`; the operator-triggered endpoint + UI are the open half) · configurable session-email subject/body (open — still hardcoded in `handler_session_email.go`, with in-code comments pointing here) · **ClubLog putlogs.php bulk-backfill path (logged 2026-07-19, from the API-key helpdesk exchange):** ClubLog's grant condition is that realtime.php never carries catch-up batches of pre-existing QSOs (anti-pattern → key blocked; confirmed back to them 2026-07-19) — but SM's Logbook backfill rides the worker → realtime.php one QSO at a time, so pointing it at ClubLog for a historical set would break the promise. Interim rule (documented in the inbox note): ClubLog history = manual ADIF upload on clublog.org. **The refusal is ENFORCED as of 2026-07-19 (refined same day per review — retry-aware):** `forwarding.RegisterNoBulkBackfill` (clublog registers in init) → `qsoservice.EnqueueUploads` distinguishes PER ROW via queue history: a QSO with prior clublog queue rows was a live upload, so re-arming it is legitimate realtime usage (the 403-era Terminal rows' recovery path — review caught that the first blanket block severed it); a history-less row is backfill → refused into `skipped_no_history` (no queue row written). The logbook SPA shows an amber "Retry failed uploads to clublog" button for such destinations (tooltip + notice explain what was skipped; the "Not on clublog" gap-browse stays — it's how the export set is assembled). Deletes (delete.php) and live logging-time enqueues are unaffected. Same review round also fixed the gzip layer: `gzipResponseWriter.Unwrap()` (without it `http.ResponseController` couldn't extend the export write deadline past the server-wide 2 min — every default Go client accepts gzip, so slow restores would truncate mid-JSON) + proper Accept-Encoding negotiation (q-values/case/wildcard; `gzip;q=0` no longer served gzip) + `Vary` on identity responses too. The proper fix: the clublog forwarder gains a putlogs.php batch route and the backfill path routes ClubLog-bound sets through it (batch ADIF POST) instead of per-QSO realtime rows — then 7Q8AC-style operators get in-app backfill without the manual step. Design notes: (a) putlogs semantics differ (whole-log ADIF upload, server-side dedupe), so the backfill result reporting (enqueued/skipped counts) needs rethinking for that route; (b) **durable retry provenance** (review round 2 #2, accepted limitation for now): the retry-only gate keys on qso_upload rows, which are working state — the ADR 0039 startup purge deletes a disabled forwarder's non-uploaded rows, so disabling ClubLog mid-403 loses the failed rows' retry eligibility (degraded path = the ADIF manual upload, which is ClubLog's blessed route anyway — documented at the gate in `enqueue.go`). The putlogs route dissolves this: once bulk is legal in-app, the history distinction stops mattering for recovery.
 - _Infra (all verified OPEN in the 2026-07-18 sweep — three carry in-code "future work" comments):_ SPA SSE consolidation (one multiplexed stream; daemon still serves 3 separate SSE endpoints) · `/v1/hardware` audio availability + enum caching (single `Available` bool + explicit "no cache" comment) · CI-V `sets_state` value-compat validation (marker-exists check only) · `internal/iocdi` contract hardening (M1/M3/M4 all still present) · multi-tab operating-lock (ownership + take-over; awareness banner already shipped — `events.go`/`hub.go` comments mark the lock as future work)
+- **smcloud: a 401 is TERMINAL, so a token rotation strands every in-flight upload (found 2026-07-26, planning the ADR 0040 rotation).** `classifyHTTPStatus` marks 401 terminal → `markFailed`, no retry. Correct for QRZ/ClubLog (revoked account), wrong for a destination the operator owns and whose credential they are deliberately changing. The hourly reconciler heals the DATA; the upload rows stay failed. Detail in Bugs below.
 - **FT8 duplicate-QSO detection + merge (log level) — evidence-backed 2026-07-26.** _(Half done: a DELIBERATE repeat now stores correctly — `allow_duplicate` threads operator intent from the SPA click through to `Submit`'s `force`, shipped 2026-07-26. What remains is detecting and resolving the ACCIDENTAL pairs already in the log.)_ A station that never copies our closing `RR73` restarts and gets worked and logged a SECOND time; four such rows exist in the dogfood log and were uploaded to QRZ, ClubLog and SM Cloud (QRZ accepted both copies — it does not dedupe). The `confirmHold` mitigation shipped 2026-07-26 narrows the window but deliberately does not close it. Detection + an operator resolve surface (keep / merge / delete) is the open half. Detail in Bugs below.
 - _Data / SM-Cloud prep (do before S3):_ `internal/database` review lows (cold-insert retry, bootstrap stale-table detection, + 5 nits) — verified still open 2026-07-18 (no unique-error catch on the cold insert; bootstrap split-check still keys on `country` alone)
 - _Code-review lows (2026-07-05 `internal/api` review):_ credential-clear asymmetry (forwarder clears on blank, SMTP/lookup keep) — verified open 2026-07-18 (`mergeForwarders` overlays blanks; `mergeSmtp`/`mergeLookupProvider` keep; each only locally documented)
@@ -85,6 +86,51 @@ next, and in what order" is answered.
 - _Future thinking:_ "design our own sequencing / timing".
 
 ## Bugs (detail)
+
+- **P2 · `internal/forwarding/smcloud` (+ `qrz`) — a 401 is classified TERMINAL, so
+  rotating the smcloud bearer token strands every upload attempted during the
+  cutover.** _(Found 2026-07-26 while working out the impact of the ADR 0040 token
+  rotation — the pre-Phase-2 gate. Not yet hit in anger; the rotation hasn't been
+  done.)_
+
+  **Mechanism, traced end to end.** `smcloud.classifyHTTPStatus` retries only
+  408/429/5xx; every other 4xx — "notably 401 (bad token) and 400 (malformed)" — is
+  `forwarding.OutcomeTerminal`, and the worker's `OutcomeTerminal` branch calls
+  `markFailed`. A failed row does NOT retry. `qrz.classifyHTTPStatus` uses the same
+  matrix (the smcloud comment says so, and the code matches).
+
+  **Why it bites on rotation.** The token lives in two places that must change
+  together — `SMCLOUD_TOKEN` in `/etc/smcloud/smcloud.env` (read at boot) and the
+  daemon's `forwarders.smcloud.credentials` (forwarders are built once in
+  `spawnForwarderWorkers`) — so BOTH need a restart and there is unavoidably a window
+  where one side has the new token and the other doesn't. Every QSO logged in that
+  window 401s and is marked permanently failed. **An overlap is impossible:**
+  `SMCLOUD_TOKEN_N` supports 32 tenants but `collectTenantPairs` refuses boot on
+  duplicate tokens AND duplicate callsigns, so old+new for one tenant cannot coexist.
+
+  **What already saves it, and what doesn't.** The hourly reconciler treats local as
+  authoritative and re-enqueues cloud-missing rows (`EnqueuedUpserts`), with the ADR
+  0038 forever-retry posture applying to heal traffic — so the DATA reaches the cloud
+  within the hour unaided. What it does not repair is the `qso_upload` row: that stays
+  `failed`, so the logbook SPA shows red for QSOs that are actually safe. Manual
+  recovery is `POST /v1/forwarder/{name}/uploads` (the retry surface built for the
+  ClubLog 403-era Terminal rows).
+
+  **Operational workaround (no code):** rotate while NOT operating. No QSOs logged =
+  no uploads attempted = no terminal rows, and the window stops mattering.
+
+  **The open question — is terminal right here at all?** A bad token is an
+  operator-fixable condition, not bad data. For QRZ/ClubLog terminal is correct: a 401
+  means a revoked account at a third party, and hammering it is antisocial. For
+  smcloud the operator owns both ends, the destination is on their own LAN/VPS, and a
+  401 during rotation is a routine, self-resolving state. Options: (a) make 401
+  transient for smcloud only — but then a genuinely wrong token retries forever under
+  ADR 0038, which is cheap against your own host but noisy; (b) a bounded
+  retry-with-backoff for 401 specifically, terminal only after N attempts; (c) leave
+  it and rely on the reconciler, documenting the "rotate while idle" rule. Whichever
+  is chosen, the classification wants to be **per-forwarder** rather than the shared
+  matrix it is now — a self-hosted destination and a third-party API genuinely differ
+  here.
 
 - **P2 · `internal/qsoservice` + logbook SPA — FT8 duplicate-QSO detection and merge.**
   _(Diagnosed 2026-07-26 from the dogfood log + decode log; the partial mitigation
