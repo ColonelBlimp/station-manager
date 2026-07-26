@@ -214,7 +214,6 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		completed = &c
 	}
 	gen := s.sessionGen
-	st := s.statusLocked()
 	publish, prepareComplete, onComplete := s.publish, s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
@@ -268,7 +267,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			return
 		}
 	}
-	s.publishIfCurrent(gen, st)
+	s.publishCurrent()
 }
 
 // StartWorkCallerFd begins working a station that called US with a Field Day exchange
@@ -442,8 +441,6 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 			"ft8 seq: working caller (FD) RR73 did not transmit; QSO logged anyway (partner already rogered)",
 		)
 	}
-	gen := s.sessionGen
-	st := s.statusLocked()
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -467,5 +464,5 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 			return
 		}
 	}
-	s.publishIfCurrent(gen, st)
+	s.publishCurrent()
 }

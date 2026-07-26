@@ -236,7 +236,6 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		completed = &c
 	}
 	gen := s.sessionGen
-	st := s.statusLocked()
 	publish, prepareComplete, onComplete := s.publish, s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
@@ -294,7 +293,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			return
 		}
 	}
-	s.publishIfCurrent(gen, st)
+	s.publishCurrent()
 }
 
 // pickAnswererLocked scans one slot's decodes for an answerer to our CQ
@@ -367,6 +366,14 @@ func (s *Sequencer) parkAnswererLocked(msgs []goft8.DecodedMessage, now time.Tim
 	if pick, _ := s.pickAnswererLocked(msgs); pick != nil {
 		s.caller = pick
 		s.startedAt = now.UTC()
+		// Count the rung we are about to transmit. The replacement is handed straight
+		// to this slot's transmit, but we are already INSIDE the switch that would
+		// normally do the increment — leaving it at 0 gave the replacement one extra
+		// unanswered call before its own cap fired (maxRepeats=2 → 3 transmissions),
+		// blowing the configured cap and slowing rotation through the pile-up
+		// (codex a301d350 P2). A first-pick answerer reaches its first transmit at
+		// repeats=1; this matches.
+		s.repeats = 1
 		if m, ok := pick.TxMessage(); ok { // encodability pinned by the pick
 			msg, rung = m, pick.State.label()
 		}

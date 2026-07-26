@@ -253,3 +253,62 @@ func TestType4Answer_Final73SendsOnceAndLogs(t *testing.T) {
 	require.Equal(t, 1, countMsg(r.sentMsgs(), "PJ4/NA2AA 7Q5MLV 73"), "never retried")
 	require.Len(t, r.completed, 1, "and never logged twice")
 }
+
+// --- Review a301d350 regressions --------------------------------------------
+
+// P2: the trailing publish must never carry a pre-transmit snapshot. Group B's
+// completion callbacks clear the contact WITHOUT retiring the session generation
+// (the Call-CQ session carries on), so guarding the snapshot by generation misses
+// them — the handler would republish the stale `rogering` state over the CQ status
+// the callback just pushed. Both Group B terminals are covered: Call CQ resumes CQ,
+// work-a-caller goes idle.
+func TestGroupB_SuccessfulFinalRungPublishesPostCompletionState(t *testing.T) {
+	t.Run("call cq resumes cq", func(t *testing.T) {
+		r := &seqRecorder{} // onDone(true) fires INSIDE transmit, before it returns
+		s := newTestSeq(r)
+		startCq(t, s)
+		driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+		driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}) // RR73 completes
+
+		st := r.lastStatus()
+		require.Equal(t, "calling-cq", st.State, "must publish the resumed CQ, not the stale rung")
+		require.Empty(t, st.TheirCall, "the completed station must not still be shown as worked")
+		require.Len(t, r.completed, 1)
+	})
+
+	t.Run("work-a-caller goes idle", func(t *testing.T) {
+		r := &seqRecorder{}
+		s := newTestSeq(r)
+		require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+			time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+		driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC FN42", -12)})
+		driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC R-08", -11)}) // RR73 completes
+
+		require.False(t, r.lastStatus().Active,
+			"must publish the terminal idle, not the stale active snapshot")
+		require.Len(t, r.completed, 1)
+	})
+}
+
+// P2: a replacement answerer picked during the park is handed straight to THIS
+// slot's transmit, from inside the switch that would normally count the rung. Left
+// uncounted it gets one extra unanswered call before its own cap fires, blowing the
+// configured cap and slowing rotation through the pile-up.
+func TestCallerSequencer_ReplacementAnswererRespectsCap(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	s.maxRepeats = 2
+	startCq(t, s)
+
+	// Both keep calling; neither ever rogers, so each must be parked at the cap.
+	two := []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8), dm("7Q5MLV K1ABC FN42", -20)}
+	driveTheir(s, 60, two)  // pick DL9UW → report (repeats 1)
+	driveTheir(s, 90, two)  // silent → report (repeats 2)
+	driveTheir(s, 120, two) // cap → park DL9UW, pick K1ABC, transmit ITS first report
+	driveTheir(s, 150, two)
+	driveTheir(s, 180, two)
+
+	require.Equal(t, 2, countMsg(r.sentMsgs(), "DL9UW 7Q5MLV -08"), "first answerer honours the cap")
+	require.Equal(t, 2, countMsg(r.sentMsgs(), "K1ABC 7Q5MLV -20"),
+		"the replacement gets the SAME budget — its immediate transmit counts")
+}

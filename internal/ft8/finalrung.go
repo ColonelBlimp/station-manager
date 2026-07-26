@@ -47,26 +47,29 @@ package ft8
 // successful one completes the contact — so it counts transmit failures, not
 // unanswered calls.
 
-// publishIfCurrent emits st only while the session that produced it is still the
-// live one. Every slot handler snapshots its status under s.mu, releases the lock,
-// transmits, and publishes afterwards — but `transmit` launches its goroutine BEFORE
-// returning, so a transmission that fails immediately (KeyTx refused, audio device
-// start failing) can run its completion callback, publish idle, and even let a
-// replacement session start, all before the handler reaches its own publish. That
-// stale ACTIVE snapshot would then overwrite the newer state and strand subscribers
-// showing a finished QSO as live (codex 3c1ee047 P1).
+// publishCurrent pushes the sequencer's state as it is NOW, rather than a snapshot
+// taken earlier in the slot handler.
 //
-// The window was practically unreachable while only SUCCESS completed — a real
-// transmission takes ~13 s — but Group A now completes on failure too, where the
-// callback can fire in microseconds. Publishing under s.mu matches the completion
-// paths, which deliberately publish while the lock still excludes a replacement
-// Start*.
-func (s *Sequencer) publishIfCurrent(gen uint64, st QsoStatus) {
+// Every handler snapshots its status under s.mu, releases the lock, transmits, then
+// publishes. But `transmit` launches its goroutine BEFORE returning, so the
+// completion callback can run — clearing the contact, resuming CQ, going idle, even
+// letting a replacement session start — before the handler reaches its own publish.
+// Publishing the pre-transmit snapshot then overwrites the newer state, stranding
+// subscribers on a finished QSO shown as live (codex 3c1ee047 P1, a301d350 P2).
+//
+// Re-reading is deliberately preferred over validating the snapshot against a
+// version: only SOME completion paths retire the session generation (Group A does,
+// via finalRungDoneLocked; the Group B callbacks clear a contact and carry the
+// session on), so a generation check silently misses them — which is exactly how the
+// first attempt at this guard failed. Reading the truth at publish time cannot miss
+// a case, and needs no bump site to be kept in sync.
+//
+// Publishing under s.mu matches the completion paths, which publish while the lock
+// still excludes a replacement Start*.
+func (s *Sequencer) publishCurrent() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.sessionGen == gen {
-		s.publish(st)
-	}
+	s.publish(s.statusLocked())
 }
 
 // finalRungDoneLocked builds the completion callback for a GROUP A final rung: it

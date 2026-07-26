@@ -727,8 +727,6 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 			"ft8 seq: final 73 did not transmit; QSO logged anyway (partner already rogered)",
 		)
 	}
-	gen := s.sessionGen
-	st := s.statusLocked()
 	s.mu.Unlock()
 
 	// Side effects outside the lock. Log every rung transmit (msg, rung, and how
@@ -766,10 +764,10 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 			s.Abandon()
 			return
 		}
-		s.publishIfCurrent(gen, st)
+		s.publishCurrent()
 		return
 	}
-	s.publishIfCurrent(gen, st)
+	s.publishCurrent()
 	// Completion (confirming) is handled by onDone from the transmit goroutine.
 }
 
@@ -887,7 +885,6 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		completed = &c
 	}
 	gen := s.sessionGen
-	st := s.statusLocked()
 	prepareComplete, onComplete, publish := s.prepareComplete, s.onComplete, s.publish
 	s.mu.Unlock()
 
@@ -933,10 +930,10 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 			s.Abandon()
 			return
 		}
-		s.publishIfCurrent(gen, st)
+		s.publishCurrent()
 		return
 	}
-	s.publishIfCurrent(gen, st)
+	s.publishCurrent()
 }
 
 // completedQsoFdLocked snapshots an answer-a-CQ-FD contact for logging. No report

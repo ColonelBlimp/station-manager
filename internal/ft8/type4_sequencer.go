@@ -186,8 +186,6 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 			"ft8 seq: type-4 final 73 did not transmit; QSO logged anyway (partner already rogered)",
 		)
 	}
-	gen := s.sessionGen
-	st := s.statusLocked()
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -210,10 +208,10 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 			s.Abandon()
 			return
 		}
-		s.publishIfCurrent(gen, st)
+		s.publishCurrent()
 		return
 	}
-	s.publishIfCurrent(gen, st)
+	s.publishCurrent()
 }
 
 // StartWorkCallerT4 begins working a nonstandard station that called US (reduced type-4).
@@ -368,7 +366,6 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	c := s.completedT4WorkQsoLocked()
 	gen := s.sessionGen
-	st := s.statusLocked()
 	publish, prepareComplete, onComplete := s.publish, s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
@@ -413,7 +410,7 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 			return
 		}
 	}
-	s.publishIfCurrent(gen, st)
+	s.publishCurrent()
 }
 
 // fireWorkT4 keys the terminal RR73 IMMEDIATELY at StartWorkCallerT4 time when the

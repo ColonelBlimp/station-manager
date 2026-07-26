@@ -133,3 +133,4 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - ~~[2026-07-24] https://www.hamqth.com/developers.php - for further investigation~~ **→ backlog (triaged 2026-07-24): the API docs for HamQTH, already the NAMED candidate in the "2nd callsign-enrichment provider" backlog item; URL attached there.**
 - [2026-07-25] the worked panel for phone/cw needs the table to be set to table-fixed as the columns are bleeding into each other and a large field (note) overscolls.
 - [2026-07-25] session panel: map button is redundant
+- [2026-07-26] ftp-all.txt should be enhanced to do archiving (gzip) and log rotation.
