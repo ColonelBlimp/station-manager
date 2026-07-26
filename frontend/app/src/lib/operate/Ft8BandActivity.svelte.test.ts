@@ -508,7 +508,13 @@ describe('Ft8BandActivity deliberate-repeat intent', () => {
 
         // The sequencer engaged W1ABC, then went idle — no ft8-logged yet, so
         // session.qsos is still empty.
-        ft8Link.onQso({ active: true, role: 'answerer', their_call: 'W1ABC' });
+        // 14.074 MHz = 20 m, the band the click below happens on.
+        ft8Link.onQso({
+            active: true,
+            role: 'answerer',
+            their_call: 'W1ABC',
+            dial_freq_mhz: 14.074,
+        });
         ft8Link.onQso({ active: false });
         expect(session.qsos).toHaveLength(0);
 
@@ -532,8 +538,12 @@ describe('Ft8BandActivity deliberate-repeat intent', () => {
         const got: Ft8AnswerArgs[] = [];
         armReady({ answerCq: (a) => (got.push(a), okResult()) });
 
-        rig.band = '20m';
-        ft8Link.onQso({ active: true, role: 'answerer', their_call: 'W1ABC' });
+        ft8Link.onQso({
+            active: true,
+            role: 'answerer',
+            their_call: 'W1ABC',
+            dial_freq_mhz: 14.074, // 20 m
+        });
         ft8Link.onQso({ active: false });
 
         rig.band = '40m'; // band change — this is a NEW contact, not a repeat
@@ -554,7 +564,12 @@ describe('Ft8BandActivity deliberate-repeat intent', () => {
     it('survives a reload: engagement is restored from session storage', async () => {
         setFt8OperatorCall('7Q5MLV');
         rig.band = '20m';
-        ft8Link.onQso({ active: true, role: 'answerer', their_call: 'W1ABC' });
+        ft8Link.onQso({
+            active: true,
+            role: 'answerer',
+            their_call: 'W1ABC',
+            dial_freq_mhz: 14.074, // 20 m
+        });
         ft8Link.onQso({ active: false });
 
         // Simulate a page reload: module state is rebuilt from storage, session.qsos
@@ -573,6 +588,45 @@ describe('Ft8BandActivity deliberate-repeat intent', () => {
 
         expect(got).toHaveLength(1);
         expect(got[0].allowDuplicate).toBe(true);
+    });
+
+    // The engagement must be filed against the band the QSO is PINNED to, not
+    // whatever the rig happens to show. The two are independent streams, so a band
+    // change mid-contact (or a skew between them) would otherwise file a 20 m
+    // contact under 40 m — and persistence would carry that error across a reload
+    // (codex 18008c10 P1).
+    it('attributes the engagement to the pinned dial, not live rig state', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+
+        // Contact pinned to 20 m; the rig is dragged to 40 m while it runs.
+        ft8Link.onQso({
+            active: true,
+            role: 'answerer',
+            their_call: 'W1ABC',
+            dial_freq_mhz: 14.074,
+        });
+        rig.band = '40m';
+        rig.freq = '7.074.000';
+        ft8Link.onQso({
+            active: true,
+            role: 'answerer',
+            their_call: 'W1ABC',
+            dial_freq_mhz: 14.074,
+        });
+        ft8Link.onQso({ active: false });
+
+        // On 40 m this station has NOT been worked — the mid-contact rig state must
+        // not have leaked an engagement onto this band.
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }]));
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+
+        expect(got).toHaveLength(1);
+        expect(got[0].allowDuplicate).toBe(false);
     });
 
     it('does not flag a station this session has never engaged', async () => {

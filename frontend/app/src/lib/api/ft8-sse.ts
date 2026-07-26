@@ -74,6 +74,10 @@ export interface QsoPayload {
     our_report?: string;
     their_report?: string;
     their_period?: string;
+    /** Rig dial PINNED to the session at start (MHz) — the frequency the contact will
+     *  be logged on. Use this, not live rig state, to attribute a contact to a band:
+     *  the rig and FT8 status are independent streams. */
+    dial_freq_mhz?: number;
     fd?: boolean;
     /** Reduced type-4 (nonstandard/compound call) session — bare-calls→RR73→73,
      *  no grid/report rungs (ADR 0048). */

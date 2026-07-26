@@ -36,7 +36,10 @@ cloud.station-manager.org {
 	#   sudo install -d -o caddy -g caddy -m 0750 /var/log/caddy
 	#   systemctl show caddy -p ProtectSystem -p ReadWritePaths   # /var/log writable?
 	#
-	# Or drop the `output file` line to fall back to Caddy's default (journald).
+	# To fall back to Caddy's default (journald) instead, delete the WHOLE
+	# `output file … { … }` block — its roll_* directives and closing brace
+	# included. Dropping only the `output file` line leaves them orphaned and
+	# the config fails to parse, which is the same outage by another route.
 	# ---------------------------------------------------------------------
 	#
 	# Access log. This is the ONLY access log in the stack: smcloud logs to

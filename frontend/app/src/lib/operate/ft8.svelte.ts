@@ -20,8 +20,8 @@ import type {
     Ft8EventHandlers,
 } from '../api/ft8-sse';
 import { ft8PileupStack } from './ft8Pileup.svelte';
-import { rig } from './rig.svelte';
 import { sessionGet, sessionSet, sessionRemove } from '../utils/storage';
+import { frequencyToBand } from '../utils/frequency';
 
 export type { Ft8SlotRef, Ft8Band } from '../api/ft8-sse';
 
@@ -616,10 +616,19 @@ export const ft8Link: Ft8EventHandlers = {
         // ft8-logged event that feeds session.qsos is also one-shot and not replayed,
         // so a missed event or a fresh tab never learns it at all.
         const engaged = (p.their_call ?? '').trim();
-        if (engaged !== '') {
-            const before = engagedThisSession.size;
-            engagedThisSession.add(engagedKey(engaged, rig.band));
-            if (engagedThisSession.size !== before) saveEngaged();
+        // Band comes from the SESSION-PINNED dial the daemon reports, never from live
+        // rig state: the two are independent streams, so a band change mid-contact —
+        // or a skew between them — would file a 20 m contact under 40 m, or under
+        // both, and persistence would make that survive a reload (codex 18008c10 P1).
+        // No dial (older daemon) → record nothing rather than guess wrong.
+        const mhz = p.dial_freq_mhz ?? 0;
+        if (engaged !== '' && mhz > 0) {
+            const band = frequencyToBand(Math.round(mhz * 1_000_000));
+            if (band !== '') {
+                const before = engagedThisSession.size;
+                engagedThisSession.add(engagedKey(engaged, band));
+                if (engagedThisSession.size !== before) saveEngaged();
+            }
         }
         ft8State.qso = {
             active: p.active ?? false,

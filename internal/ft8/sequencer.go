@@ -128,6 +128,13 @@ type QsoStatus struct {
 	// final rungs (73/RR73), so the SPA shows the "calls left" countdown iff this is
 	// >0 without re-deriving the cap-vs-one-shot rule. Remaining = MaxRepeats-Repeats.
 	MaxRepeats int `json:"max_repeats,omitempty"`
+	// DialFreqMHz is the rig dial PINNED to this session at start — the frequency the
+	// contact will actually be logged on. Emitted so a client can attribute the
+	// contact to the right band without consulting live rig state, which drifts: the
+	// rig and FT8 status are independent streams, so a band change (or a skew between
+	// them) would otherwise let a 20 m contact be recorded against 40 m, or both
+	// (codex 18008c10 P1). Zero when idle.
+	DialFreqMHz float64 `json:"dial_freq_mhz,omitempty"`
 	// OurReport / TheirReport — the signal reports exchanged, formatted exactly as
 	// they appear on the air (e.g. "-12", "+04"); empty until known. OurReport is
 	// the report WE send (our SNR of their signal); TheirReport is the one THEY sent
@@ -1147,6 +1154,8 @@ func (s *Sequencer) statusLocked() QsoStatus {
 	st := s.statusModeLocked()
 	if st.Active {
 		st.SkipArmed = s.skipIfSilent
+		// Session-pinned, not live rig state — see QsoStatus.DialFreqMHz.
+		st.DialFreqMHz = s.dialFreqMHz
 	}
 	return st
 }
