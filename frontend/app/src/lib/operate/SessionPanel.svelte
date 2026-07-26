@@ -20,7 +20,15 @@
 
 <div class="card w-2xl">
     <div class="flex items-center justify-between">
-        <h3 class="text-sm font-semibold text-ink">Session</h3>
+        <!-- The count spans BOTH modes: session.qsos is fed by the Phone/CW submit
+             sink and the FT8 ft8-logged SSE alike, so it is the sitting's whole
+             tally, not the current mode's. Muted parens match the header's
+             "Logbook <name> (n)" treatment. -->
+        <h3 class="text-sm font-semibold text-ink">
+            Session <span class="font-normal text-muted"
+                >({session.qsos.length.toLocaleString()})</span
+            >
+        </h3>
         <div class="flex items-center gap-x-2">
             <!-- Contacts map in its own tab (second monitor) — the map is a
                  time-window view over logged data, so it stands alone and

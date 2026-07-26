@@ -123,3 +123,32 @@ describe('SessionPanel', () => {
         expect(await screen.findByTestId('session-edit-error')).toHaveTextContent('G0FAIL');
     });
 });
+
+describe('SessionPanel header count', () => {
+    const qso = (callsign: string, mode: string) => ({
+        callsign,
+        timeOn: '14:30:00',
+        band: '20m',
+        mode,
+        rstSent: '',
+        rstRcvd: '',
+        name: '',
+        country: '',
+        comment: '',
+    });
+
+    it('shows (0) on an empty session', () => {
+        render(SessionPanel);
+        expect(screen.getByRole('heading', { name: /Session \(0\)/ })).toBeInTheDocument();
+    });
+
+    // The tally spans BOTH modes — session.qsos is fed by the Phone/CW submit sink
+    // and the FT8 ft8-logged SSE alike, so the header must not read as per-mode.
+    it('counts FT8 and Phone/CW contacts together', () => {
+        addSessionQso(qso('W1ABC', 'FT8'));
+        addSessionQso(qso('G0XYZ', 'SSB'));
+        addSessionQso(qso('DL1ABC', 'CW'));
+        render(SessionPanel);
+        expect(screen.getByRole('heading', { name: /Session \(3\)/ })).toBeInTheDocument();
+    });
+});
