@@ -228,6 +228,15 @@ next, and in what order" is answered.
   silently discarded. So a repeat the operator ASKS for is now stored; the remaining
   gap is the accidental pairs the sequencer creates on its own.
 
+  **Not every repeat is a defect — detection must not assume it is.** A naive "same
+  call+band+mode twice" query flags three different things, and only ONE is a problem:
+  (a) the accidental pair this item is about — the partner missed our roger, restarted,
+  and was worked again; (b) a repeat the OPERATOR asked for (`allow_duplicate` is set —
+  recorded intent, exclude it); (c) a repeat the PARTNER chose, by answering our CQ
+  again later. (c) is ordinary operating, not a fault: they decided to call us. Time
+  separation is a signal, not a rule — minutes apart reads accidental, hours apart
+  usually does not.
+
   **The open work:** (1) DETECT the pair (same call+band+mode, same session, minutes
   apart — note `qsoservice`'s existing dedupe key is call+band+mode+freq+date+HH**MM**
   and correctly does NOT catch these; it exists to catch a re-submitted identical

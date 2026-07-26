@@ -88,4 +88,23 @@ describe('UtilRail session count badge', () => {
         flushSync();
         expect(screen.getByTitle('2 QSOs this session')).toHaveTextContent('2');
     });
+
+    // The rail is 3.5rem wide in narrow mode and the badge sits at left-6, so a
+    // 4-digit count runs past the rail edge and is clipped by the viewport. The
+    // DISPLAY caps at 999+; the exact figure stays in the tooltip (and in the
+    // Session panel header), so nothing is actually lost.
+    it('caps the displayed count at 999+ but keeps the exact figure in the tooltip', () => {
+        render(UtilRail);
+        for (let i = 0; i < 1000; i++) session.qsos.push(sessionQso(`T${i}`));
+        flushSync();
+        const badge = screen.getByTitle('1000 QSOs this session');
+        expect(badge).toHaveTextContent('999+');
+    });
+
+    it('still shows an exact count at the 999 boundary', () => {
+        render(UtilRail);
+        for (let i = 0; i < 999; i++) session.qsos.push(sessionQso(`T${i}`));
+        flushSync();
+        expect(screen.getByTitle('999 QSOs this session')).toHaveTextContent('999');
+    });
 });

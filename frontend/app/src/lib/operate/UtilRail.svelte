@@ -48,6 +48,19 @@
     const phoneOnly = $derived(router.mode !== 'phone');
 </script>
 
+{#snippet countBadge(n: number, label: string)}
+    <!-- Glanceable indicator, not a readout: the rail is 3.5rem wide in narrow mode
+         and the badge sits at left-6, so a 4-digit count runs off the rail edge and
+         is clipped by the viewport. Cap the DISPLAY at 999+; the exact figure stays
+         in the tooltip, and the Session panel header carries it in full. -->
+    <span
+        class="absolute top-0.5 left-6 min-w-4 rounded-full bg-focus px-1 text-center text-[10px] font-bold text-white tabular-nums"
+        title={label}
+    >
+        {n > 999 ? '999+' : n}
+    </span>
+{/snippet}
+
 {#snippet railIcon(key: string)}
     {#if key === 'worked'}
         <svg
@@ -113,12 +126,10 @@
                 {@render railIcon(key)}
                 <span class="rail-label">{labels[key]}</span>
                 {#if key === 'session' && session.qsos.length > 0}
-                    <span
-                        class="absolute top-0.5 left-6 min-w-4 rounded-full bg-focus px-1 text-center text-[10px] font-bold text-white tabular-nums"
-                        title={`${session.qsos.length} QSO${session.qsos.length === 1 ? '' : 's'} this session`}
-                    >
-                        {session.qsos.length}
-                    </span>
+                    {@render countBadge(
+                        session.qsos.length,
+                        `${session.qsos.length} QSO${session.qsos.length === 1 ? '' : 's'} this session`
+                    )}
                 {/if}
             </button>
         {/each}
@@ -169,12 +180,10 @@
                 </svg>
                 <span class="rail-label">Pile-up</span>
                 {#if ft8PileupStack.count > 0}
-                    <span
-                        class="absolute top-0.5 left-6 min-w-4 rounded-full bg-focus px-1 text-center text-[10px] font-bold text-white tabular-nums"
-                        title={`${ft8PileupStack.count} caller${ft8PileupStack.count === 1 ? '' : 's'} queued`}
-                    >
-                        {ft8PileupStack.count}
-                    </span>
+                    {@render countBadge(
+                        ft8PileupStack.count,
+                        `${ft8PileupStack.count} caller${ft8PileupStack.count === 1 ? '' : 's'} queued`
+                    )}
                 {/if}
             </button>
             <button class="rail-item" title="Collapse" onclick={toggleUtil}>
