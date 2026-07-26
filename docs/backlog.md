@@ -52,6 +52,7 @@ next, and in what order" is answered.
 - _FT8 (every sub-item verified in the 2026-07-18 sweep):_ type-4 free-text messages (open — `modulate.go` rejects free text; no entry UX in either frontend) · type-4 work-a-caller SPA trigger (deferred — hashed-us ambiguity) · attempt-limit SPA control (**mostly built**: `ft8.tx.max_repeats` config + `ft8_max_repeats` GET/PUT + live `SetMaxRepeats` all exist — only the Settings-tab INPUT is missing; NB `sequencer.go`'s "edited from the FT8 Settings tab" comment is aspirational) · callsign ignore list (open) · Call-CQ waiting feedback (partial — frontend/app shows "sent ×N" on the CQ rung; logging shows only the label; no "no answers yet" copy) · Call-CQ abandon → work a live answerer (layer 1 SHIPPED 2026-07-17; layer-2 recency pool open — no candidate pool in `Sequencer`, only the same-slot re-scan) · offset-picker no-overlap snap (open, but the design moved under it — continuous click-anywhere pick + daemon-ranked ★ suggestions shipped; re-examine whether an arbitrary-click SNAP is still wanted before building) · accumulate-mode duplicate rows → slot-grouped display (Rx pane open — flat `rxDecodes` list; Band Activity grouping exists in both frontends) · footer info-strip rehome (open — `rxCaption` still under the Rx pane) · shift+ctrl freq-step key parity in FT8 (**built in frontend/app** — `RigKeys` is shell-global and covers FT8; **open in frontend/logging** — the handler lives in QsoPanel, which unmounts in FT8 mode) · work-path opening: prefer clean next-slot start over truncated immediate fire (open — `StartWorkCaller` still fires truncated-immediate via `fireOpening`)
 - _Forwarding / data (verified in the 2026-07-18 sweep):_ clear queued-upload backlog for a forwarder (**half built**: `DiscardQueuedUploadsForForwarderWithContext` exists and auto-purges DISABLED forwarders at daemon startup — `cmd/smd/main.go:464`; the operator-triggered endpoint + UI are the open half) · configurable session-email subject/body (open — still hardcoded in `handler_session_email.go`, with in-code comments pointing here) · **ClubLog putlogs.php bulk-backfill path (logged 2026-07-19, from the API-key helpdesk exchange):** ClubLog's grant condition is that realtime.php never carries catch-up batches of pre-existing QSOs (anti-pattern → key blocked; confirmed back to them 2026-07-19) — but SM's Logbook backfill rides the worker → realtime.php one QSO at a time, so pointing it at ClubLog for a historical set would break the promise. Interim rule (documented in the inbox note): ClubLog history = manual ADIF upload on clublog.org. **The refusal is ENFORCED as of 2026-07-19 (refined same day per review — retry-aware):** `forwarding.RegisterNoBulkBackfill` (clublog registers in init) → `qsoservice.EnqueueUploads` distinguishes PER ROW via queue history: a QSO with prior clublog queue rows was a live upload, so re-arming it is legitimate realtime usage (the 403-era Terminal rows' recovery path — review caught that the first blanket block severed it); a history-less row is backfill → refused into `skipped_no_history` (no queue row written). The logbook SPA shows an amber "Retry failed uploads to clublog" button for such destinations (tooltip + notice explain what was skipped; the "Not on clublog" gap-browse stays — it's how the export set is assembled). Deletes (delete.php) and live logging-time enqueues are unaffected. Same review round also fixed the gzip layer: `gzipResponseWriter.Unwrap()` (without it `http.ResponseController` couldn't extend the export write deadline past the server-wide 2 min — every default Go client accepts gzip, so slow restores would truncate mid-JSON) + proper Accept-Encoding negotiation (q-values/case/wildcard; `gzip;q=0` no longer served gzip) + `Vary` on identity responses too. The proper fix: the clublog forwarder gains a putlogs.php batch route and the backfill path routes ClubLog-bound sets through it (batch ADIF POST) instead of per-QSO realtime rows — then 7Q8AC-style operators get in-app backfill without the manual step. Design notes: (a) putlogs semantics differ (whole-log ADIF upload, server-side dedupe), so the backfill result reporting (enqueued/skipped counts) needs rethinking for that route; (b) **durable retry provenance** (review round 2 #2, accepted limitation for now): the retry-only gate keys on qso_upload rows, which are working state — the ADR 0039 startup purge deletes a disabled forwarder's non-uploaded rows, so disabling ClubLog mid-403 loses the failed rows' retry eligibility (degraded path = the ADIF manual upload, which is ClubLog's blessed route anyway — documented at the gate in `enqueue.go`). The putlogs route dissolves this: once bulk is legal in-app, the history distinction stops mattering for recovery.
 - _Infra (all verified OPEN in the 2026-07-18 sweep — three carry in-code "future work" comments):_ SPA SSE consolidation (one multiplexed stream; daemon still serves 3 separate SSE endpoints) · `/v1/hardware` audio availability + enum caching (single `Available` bool + explicit "no cache" comment) · CI-V `sets_state` value-compat validation (marker-exists check only) · `internal/iocdi` contract hardening (M1/M3/M4 all still present) · multi-tab operating-lock (ownership + take-over; awareness banner already shipped — `events.go`/`hub.go` comments mark the lock as future work)
+- **FT8 duplicate-QSO detection + merge (log level) — evidence-backed 2026-07-26.** A station that never copies our closing `RR73` restarts and gets worked and logged a SECOND time; four such rows exist in the dogfood log and were uploaded to QRZ, ClubLog and SM Cloud (QRZ accepted both copies — it does not dedupe). The `confirmHold` mitigation shipped 2026-07-26 narrows the window but deliberately does not close it. Detection + an operator resolve surface (keep / merge / delete) is the open half. Detail in Bugs below.
 - _Data / SM-Cloud prep (do before S3):_ `internal/database` review lows (cold-insert retry, bootstrap stale-table detection, + 5 nits) — verified still open 2026-07-18 (no unique-error catch on the cold insert; bootstrap split-check still keys on `country` alone)
 - _Code-review lows (2026-07-05 `internal/api` review):_ credential-clear asymmetry (forwarder clears on blank, SMTP/lookup keep) — verified open 2026-07-18 (`mergeForwarders` overlays blanks; `mergeSmtp`/`mergeLookupProvider` keep; each only locally documented)
 - _Code-review nits (2026-07-05 `internal/qsoservice` review):_ best-effort `contacted_station` cache warm-up uses the request ctx (a detached short-timeout ctx would make it client-independent, like the dedupe refetch) — verified open, still open
@@ -84,6 +85,58 @@ next, and in what order" is answered.
 - _Future thinking:_ "design our own sequencing / timing".
 
 ## Bugs (detail)
+
+- **P2 · `internal/qsoservice` + logbook SPA — FT8 duplicate-QSO detection and merge.**
+  _(Diagnosed 2026-07-26 from the dogfood log + decode log; the partial mitigation
+  shipped the same day.)_
+
+  **The mechanism, proven on air.** A Call-CQ contact logs the moment its closing
+  `RR73` transmits. If the partner does not copy that `RR73` they repeat their
+  `R-report` — and once the contact is cleared, `pickAnswererLocked` only accepts a
+  GRID answer, so those repeats are invisible. They give up, restart from the top
+  with a grid answer, and are worked and logged AGAIN. Caught red-handed with the
+  decode log on: **XE1GM repeated `7Q5MLV XE1GM R-07` eleven times** at −9..−13 while
+  the sequencer, having logged and moved on, ignored every one.
+
+  **Damage already in the log** (all 40m/30m/20m FT8, same day, minutes apart):
+  AC8MR (5995/5998), KI2Y (5990/5992), KE4IHI (5982/5989) — plus XE1GM (6015), whose
+  contact the other operator very likely does NOT hold. All were forwarded; QRZ
+  issued two distinct record ids for AC8MR, so **QRZ does not dedupe these**. Across
+  the whole log, 20 FT8 pairs match "same call+band+mode, same day, ≤30 min apart".
+
+  **What is already done.** `confirmHold` (`internal/ft8/caller_sequencer.go`, shipped
+  2026-07-26) keeps a completed Call-CQ contact listenable for one of the answerers'
+  slots and re-sends the `RR73` to a partner still asking, bounded by
+  `confirmResendLimit`. It NARROWS the window. It deliberately does not close it:
+  once the budget is spent, a partner who heard none of our `RR73`s and restarts is
+  worked again — by then they genuinely never received the roger, so on air that is
+  CORRECT, and it is the only way they get their contact (operator-ratified
+  2026-07-26; rationale at the code site).
+
+  **So the residual defect is the second ROW, not the second QSO** — which is why the
+  fix belongs at log level, not in the sequencer. Suppressing the re-work would deny
+  a station its contact to keep our log tidy; the same recoverability argument
+  retired the SPA's blocking dupe guard (now advisory) and settled the Group A/B
+  split in `internal/ft8/finalrung.go`.
+
+  **The open work:** (1) DETECT the pair (same call+band+mode, same session, minutes
+  apart — note `qsoservice`'s existing dedupe key is call+band+mode+freq+date+HH**MM**
+  and correctly does NOT catch these; it exists to catch a re-submitted identical
+  contact); (2) SURFACE it as a review list, not a modal — "these two look like one
+  contact, here is the evidence"; (3) RESOLVE: keep both / merge into one / delete the
+  orphan, with the delete propagating upstream via the existing
+  `enums/upload/action` `Delete` (ClubLog `delete.php` is already wired).
+
+  **Design points when picked up.** (a) ADIF `QSO_COMPLETE` already exists on
+  `types.Qso` (`qso_details.go:30`, values Y/N/NIL/`?`) and is **never written
+  anywhere** — the natural, exportable home for "we sent the roger, we don't know it
+  landed". But marking it is INFERENCE from a later event, so prefer recording the
+  observed link and letting the operator set the field, or a genuine second contact
+  gets silently stamped as doubtful. (b) There is no back-channel in FT8 — you cannot
+  ask the other operator anything — so the real reconciliation is passive and already
+  exists: an unmatched row simply stays unconfirmed in LoTW/ClubLog/QRZ. SM's job is
+  local visibility plus the delete path, not a protocol. (c) If the operator does want
+  to ask, give them the two rows copy-pasteable; that is an affordance, not a feature.
 
 - **P2 · Rig Control VFO-A/B surface — swap semantics · label click target · VFO-B
   refresh.** _(dogfood 2026-07-21 ×3, triaged as one item 2026-07-23 — same surface, one

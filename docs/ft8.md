@@ -751,9 +751,13 @@ slots** (`confirmHold`, `internal/ft8/caller_sequencer.go`):
   it as confirmation would release the hold at the one moment the re-send is needed
 - silence → they copied it or have gone; release
 - anything else addressed to us → they are still asking; **re-send the `RR73`**,
-  bounded by `confirmResendLimit` (2) so a deaf partner can't hold the loop hostage.
-  The budget is spent only once a slot is committed to the transmission, so a slot
-  deferred by the late window costs nothing
+  bounded so a deaf partner can't hold the loop hostage. TWO bounds, because one
+  counter cannot do both jobs: `confirmResendLimit` (2) is the RF budget, spent only
+  when a re-send is ACCEPTED for transmission — a slot deferred by the late window or
+  refused by the transmitter's single-flight/readiness gate never reached the air and
+  costs nothing — and `confirmHoldSlotLimit` (5) is the lifetime, spent on every
+  consulted slot whatever the outcome, so a rig that refuses everything still retires
+  the hold instead of stalling the CQ loop on one contact
 
 The QSO is already logged, so a re-send carries **no completion callback** and can
 never log the contact twice. Both parameters came from the decode log rather than

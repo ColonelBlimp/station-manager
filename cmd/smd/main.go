@@ -766,6 +766,21 @@ func run() error {
 					Msg("ft8: failed to log completed QSO")
 				return
 			}
+			// A contact completed ON AIR but deduplicated away stores NOTHING and
+			// returns the FIRST contact's UUID, which the session sink then ignores
+			// as already-seen — so without this the operator transmits a full
+			// exchange and simply never sees a row (codex 0f9aa672 P1). The dedupe
+			// key is minute-granular (call+band+mode+freq+date+HHMM), so this needs
+			// two contacts with the same station inside one minute: unreachable on
+			// the standard ladder (~60 s minimum) but reachable on the short ones —
+			// work-a-caller and the single-rung type-4 work path. Surfacing it is
+			// the floor, not the fix; the fix is an explicit operator override
+			// reaching Submit's `force` (see docs/backlog.md, FT8 duplicate-QSO).
+			if res.Status == "duplicate" {
+				loggerSvc.WarnWith().Str("call", c.TheirCall).Str("band", q.Band).
+					Str("uuid", res.UUID).
+					Msg("ft8: completed QSO matched an existing row and was NOT stored — same station, band and minute")
+			}
 			loggerSvc.InfoWith().Str("call", c.TheirCall).Str("band", q.Band).
 				Str("country", q.Country).Msg("ft8: completed QSO logged")
 			// Surface the logged QSO to the SPA's session list (ADR 0029 step e4).

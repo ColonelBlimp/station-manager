@@ -195,13 +195,6 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		s.publish(st)
 		return
 	}
-	// Past the guards, so this slot really will carry the re-send: spend the budget
-	// here rather than where the decision was made, or a deferred slot burns one
-	// without transmitting.
-	if resendRR73 != "" && s.confirmHold != nil {
-		s.consumeConfirmResendLocked()
-	}
-
 	// Repeat cap / off-ramp:
 	//   - working a contact, pre-RR73: cap unanswered repeats; if the answerer goes
 	//     silent, drop the contact and work another live answerer from THIS slot's
@@ -300,7 +293,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			// Stay listenable for one of their slots: if they did not copy this RR73
 			// they will repeat their R-report, which no longer reaches us once the
 			// contact is cleared (see confirmHold).
-			s.confirmHold = &confirmHold{call: c.TheirCall, resends: confirmResendLimit}
+			s.confirmHold = &confirmHold{call: c.TheirCall, resends: confirmResendLimit, slots: confirmHoldSlotLimit}
 			cqSt := s.statusLocked()
 			publish(cqSt) // ordered before a concurrent Abandon/replacement start
 			s.mu.Unlock()
@@ -312,7 +305,16 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		}
 	}
 
-	if err := transmit(msg, offset, dial, onDone); err != nil {
+	err := transmit(msg, offset, dial, onDone)
+	if err == nil && resendRR73 != "" {
+		// The re-send was ACCEPTED, so it costs one of the RF budget. Spending it
+		// any earlier charged the repair for slots that never reached the air —
+		// deferred by the late window, or refused by the transmitter's single-flight
+		// / readiness gates (codex dab1143a P2). The hold still terminates without
+		// this: `slots` is spent on every consulted slot regardless of outcome.
+		s.spendConfirmResend()
+	}
+	if err != nil {
 		if stderrors.Is(err, ErrTxSuperseded) { // session gone; idle already published
 			s.log.InfoWith().Str("msg", msg).Msg("ft8 seq: caller rung superseded before commit; dropped")
 			return
@@ -383,6 +385,12 @@ func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage) (*CallerExch
 // sequence and be worked as a fresh contact.
 const confirmResendLimit = 2
 
+// confirmHoldSlotLimit bounds how many of the answerers' slots a hold may live for,
+// independently of whether any re-send reached the air. It is the backstop that makes
+// the hold terminate even when every transmission is refused; generous relative to
+// confirmResendLimit so a couple of refused slots don't cost the repair.
+const confirmHoldSlotLimit = 5
+
 // confirmHold is a completed Call-CQ contact kept listenable for one more of the
 // answerers' slots.
 //
@@ -405,7 +413,8 @@ const confirmResendLimit = 2
 // RR73, so re-working a station there needs an operator click; the CQ loop is the
 // one path that re-works automatically.
 //
-// ACCEPTED LIMITATION (codex 5a623c1a P1 #2, not a defect): the hold NARROWS the
+// ACCEPTED LIMITATION (codex 5a623c1a P1 #2 — operator-ratified 2026-07-26, not a
+// defect; do not "fix" it by suppressing the re-work): the hold NARROWS the
 // duplicate window, it does not close it. Once the budget is spent the call is
 // forgotten, so a partner who heard none of our RR73s and later restarts with a grid
 // answer is picked up as a fresh contact and logged a second time —
@@ -417,9 +426,18 @@ const confirmResendLimit = 2
 // re-work would deny a station its contact to keep our log tidy (the same
 // recoverability argument that settled the Group A/B split in finalrung.go).
 // TestCallerSequencer_ConfirmHoldExpiryStillAllowsARestart pins the behaviour.
+// Two counters, because one cannot do both jobs. `resends` is the RF budget and is
+// spent ONLY when a re-send is actually accepted for transmission, so a slot the
+// transmitter refuses (ErrTxInFlight / ErrTxNotReady) or the late-window defers costs
+// nothing — those never reached the air, and spending on them throws the repair away
+// (codex dab1143a P2). `slots` is the lifetime bound and is spent on EVERY slot the
+// hold is consulted with the partner still asking, so a rig that cannot transmit at
+// all still terminates the hold instead of stalling the CQ loop on one contact —
+// the unbounded-retry failure the Group B cap exists to prevent (see finalrung.go).
 type confirmHold struct {
 	call    string // the completed partner
-	resends int    // remaining RR73 re-sends
+	resends int    // remaining RR73 re-sends that reach the air
+	slots   int    // remaining slots the hold may live, whatever the outcome
 }
 
 // resolveConfirmHoldLocked decides what an outstanding hold does with one slot of
@@ -433,6 +451,16 @@ type confirmHold struct {
 // s.confirmHold non-nil.
 func (s *Sequencer) resolveConfirmHoldLocked(msgs []goft8.DecodedMessage) string {
 	h := s.confirmHold
+	// Lifetime spent — every consulted slot costs one whether or not it reached the
+	// air, so this is what terminates a hold against a transmitter that keeps
+	// refusing. Checked here (not only where the RF budget is spent) because those
+	// slots never get that far.
+	if h.slots <= 0 {
+		s.confirmHold = nil
+		s.log.InfoWith().Str("their_call", h.call).
+			Msg("ft8 seq: caller — confirm-hold lifetime expired; releasing")
+		return ""
+	}
 	asking := ""
 	for _, m := range msgs {
 		pm := parseMessage(m.Text)
@@ -460,7 +488,11 @@ func (s *Sequencer) resolveConfirmHoldLocked(msgs []goft8.DecodedMessage) string
 		s.confirmHold = nil
 		return ""
 	}
-	s.log.InfoWith().Str("their_call", h.call).Str("heard", asking).Int("resends_left", h.resends).
+	// Spend a slot of the hold's lifetime. This is the bound that always advances,
+	// so the hold terminates even if no re-send is ever accepted.
+	h.slots--
+	s.log.InfoWith().Str("their_call", h.call).Str("heard", asking).
+		Int("resends_left", h.resends).Int("slots_left", h.slots).
 		Msg("ft8 seq: caller — partner still asking after our RR73; re-sending it")
 	return h.call + " " + s.ourCall + " RR73"
 }
@@ -476,7 +508,12 @@ func (s *Sequencer) resolveConfirmHoldLocked(msgs []goft8.DecodedMessage) string
 // which is the same failure the Group B final-rung cap bounds (see finalrung.go), and
 // counting attempts rather than successes is what makes it terminate. Caller holds
 // s.mu with s.confirmHold non-nil.
-func (s *Sequencer) consumeConfirmResendLocked() {
+func (s *Sequencer) spendConfirmResend() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.confirmHold == nil { // Abandon / a new session won the race — nothing to spend
+		return
+	}
 	s.confirmHold.resends--
 	if s.confirmHold.resends <= 0 {
 		s.confirmHold = nil

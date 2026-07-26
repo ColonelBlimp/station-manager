@@ -476,3 +476,50 @@ func TestCallerSequencer_ConfirmHoldExpiryStillAllowsARestart(t *testing.T) {
 	require.NotNil(t, s.caller, "a restart is worked as a fresh contact")
 	require.Equal(t, "DL9UW", s.caller.TheirCall)
 }
+
+// P2 (codex dab1143a): a transmit the rig REFUSES never reached the air, so it must
+// not spend the RF budget — otherwise two collisions silently end the repair.
+func TestCallerSequencer_ConfirmHoldRefusedTransmitKeepsBudget(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)})
+	require.Equal(t, confirmResendLimit, s.confirmHold.resends)
+
+	asking := []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}
+	r.mu.Lock()
+	r.transmitErr = ErrTxInFlight // the single-flight gate refuses it
+	r.mu.Unlock()
+	driveTheir(s, 120, asking)
+	require.NotNil(t, s.confirmHold)
+	require.Equal(t, confirmResendLimit, s.confirmHold.resends,
+		"a refused transmit spends no RF budget")
+
+	r.mu.Lock()
+	r.transmitErr = nil // rig free again
+	r.mu.Unlock()
+	driveTheir(s, 150, asking)
+	require.Equal(t, confirmResendLimit-1, s.confirmHold.resends, "an accepted one does")
+	require.Contains(t, r.sentMsgs(), "DL9UW 7Q5MLV RR73")
+}
+
+// The lifetime bound is what makes the hold terminate when EVERY slot is refused —
+// without it, sparing the budget on refusal would stall the CQ loop indefinitely.
+func TestCallerSequencer_ConfirmHoldLifetimeTerminatesUnderConstantRefusal(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	startCq(t, s)
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)})
+
+	r.mu.Lock()
+	r.transmitErr = ErrTxInFlight // never accepts anything again
+	r.mu.Unlock()
+	asking := []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}
+	for sec := int64(120); sec <= 120+30*int64(confirmHoldSlotLimit+1); sec += 30 {
+		driveTheir(s, sec, asking)
+	}
+	require.Nil(t, s.confirmHold, "the lifetime bound retires the hold regardless of RF")
+	require.Equal(t, confirmResendLimit, 2, "RF budget never spent, but the hold still ended")
+}

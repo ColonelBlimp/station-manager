@@ -214,8 +214,11 @@
             return;
         }
         // Inform, don't refuse — see txPreflight. Queuing a station worked earlier is
-        // a legitimate operator choice (a repair, a sked, a second report).
-        if (workedThisSession(call)) {
+        // a legitimate operator choice (a repair, a sked, a second report). The entry
+        // is marked `repeat` so the drain honours it instead of dropping it as a stale
+        // duplicate, or the accepted action could never actually happen.
+        const repeat = workedThisSession(call);
+        if (repeat) {
             toasts.info(`${call} already worked this session — queued anyway.`);
         }
         // This one DOES block: it is a duplicate QUEUE entry, not a duplicate contact.
@@ -240,6 +243,7 @@
             grid: toMe.grid,
             snr: row.d.snr,
             slotUtc: row.d.startUtc,
+            repeat,
         });
         // Only a genuinely NEW caller resumes a paused drain (Abandon stays in control).
         if (added) ft8PileupStack.resume();

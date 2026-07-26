@@ -162,6 +162,27 @@ describe('Ft8Operate pile-up drain', () => {
         expect(ft8PileupStack.items).toEqual([]); // dropped, not worked
     });
 
+    // ...but an entry the operator queued KNOWING the station was worked carries
+    // `repeat`, and the drain must honour it. Ctrl+click accepts such an add and says
+    // "queued anyway"; dropping it here would make the accepted action impossible and
+    // leave a doomed entry holding the run's parity lock (codex 0f9aa672 P1).
+    it('works a head marked repeat even though the station was worked this session', async () => {
+        const worked: Ft8WorkArgs[] = [];
+        armReady({
+            workCaller: (a) => {
+                worked.push(a);
+                return okResult();
+            },
+        });
+        session.qsos.push(sessionQso('K1ABC', '20m'));
+        render(Ft8Operate);
+        ft8PileupStack.push({ ...caller('K1ABC'), repeat: true });
+        flushSync();
+        await flush();
+        expect(worked.length).toBe(1);
+        expect(worked[0]).toMatchObject({ theirCall: 'K1ABC' });
+    });
+
     it('keeps the head (does not pause) on a single transient failure', async () => {
         const worked: Ft8WorkArgs[] = [];
         armReady({

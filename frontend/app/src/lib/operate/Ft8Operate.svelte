@@ -313,7 +313,11 @@
         // Don't re-work a station already logged this session — a manual work during
         // an Abandon pause can leave a now-duplicate entry. Drop it; the dequeue
         // re-fires this effect for the next head.
-        if (workedThisSession(head.call)) {
+        // `repeat` marks an entry the operator queued KNOWING the station was worked
+        // — a deliberate repair/sked, not a stale entry — so it is honoured. Without
+        // that carve-out the panel accepts the add and this silently discards it
+        // (codex 0f9aa672 P1).
+        if (!head.repeat && workedThisSession(head.call)) {
             ft8PileupStack.dequeue();
             return;
         }

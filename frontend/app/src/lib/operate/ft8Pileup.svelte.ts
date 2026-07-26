@@ -35,6 +35,15 @@ export interface PileupEntry {
     snr: number;
     /** RFC3339 start of the decode's slot — fixes the TX parity (stable even if old). */
     slotUtc: string;
+    /**
+     * The operator queued this station KNOWING they were already worked this session
+     * (a repair, a sked, a second report). The drain drops an already-worked head as
+     * stale queue hygiene — an entry queued before the station got worked some other
+     * way — but that must not silently discard a deliberate repeat: the panel accepts
+     * the add and says so, and dropping it anyway would make the accepted action
+     * impossible to carry out (codex 0f9aa672 P1).
+     */
+    repeat?: boolean;
 }
 
 class Ft8PileupStack {
