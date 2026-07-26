@@ -47,6 +47,28 @@ package ft8
 // successful one completes the contact — so it counts transmit failures, not
 // unanswered calls.
 
+// publishIfCurrent emits st only while the session that produced it is still the
+// live one. Every slot handler snapshots its status under s.mu, releases the lock,
+// transmits, and publishes afterwards — but `transmit` launches its goroutine BEFORE
+// returning, so a transmission that fails immediately (KeyTx refused, audio device
+// start failing) can run its completion callback, publish idle, and even let a
+// replacement session start, all before the handler reaches its own publish. That
+// stale ACTIVE snapshot would then overwrite the newer state and strand subscribers
+// showing a finished QSO as live (codex 3c1ee047 P1).
+//
+// The window was practically unreachable while only SUCCESS completed — a real
+// transmission takes ~13 s — but Group A now completes on failure too, where the
+// callback can fire in microseconds. Publishing under s.mu matches the completion
+// paths, which deliberately publish while the lock still excludes a replacement
+// Start*.
+func (s *Sequencer) publishIfCurrent(gen uint64, st QsoStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionGen == gen {
+		s.publish(st)
+	}
+}
+
 // finalRungDoneLocked builds the completion callback for a GROUP A final rung: it
 // records the QSO whether or not the closing message reached the air, then ends
 // the session. Only the log line distinguishes the two outcomes.

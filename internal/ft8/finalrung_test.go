@@ -77,8 +77,11 @@ func TestCallerSequencer_FinalRR73CapDropsContactAndResumesCq(t *testing.T) {
 
 	sent := r.sentMsgs()
 	require.Equal(t, "CQ 7Q5MLV KH78", sent[len(sent)-1], "back to calling CQ")
-	require.Contains(t, s.stalledCalls, "DL9UW",
-		"parked for the round so the rescan can't walk straight back into the same wall")
+	require.Nil(t, s.caller, "the contact is dropped, not carried")
+	// The station is excluded from the rescan in THAT slot (so we don't re-lock onto
+	// the one that just failed), but the set is cleared as soon as the rescan finds
+	// nobody else — see TestCallerSequencer_FinalRR73CapDoesNotBlacklistSoleAnswerer.
+	require.Empty(t, s.stalledCalls, "the exclusion is per-round, not per-session")
 }
 
 // Field Day, ANSWERING side: FD inverts the standard roles — the answerer sends
@@ -151,6 +154,59 @@ func TestSequencer_Final73CompletionIsIdempotent(t *testing.T) {
 
 	done(true) // the in-flight transmission finishing afterwards
 	require.Len(t, r.completed, 1, "a second completion for the same contact must not log again")
+}
+
+// --- Review 3c1ee047 regressions --------------------------------------------
+
+// P1: parking the station at the final-rung cap must not exclude it for the rest
+// of the SESSION. `stalledCalls` is a per-ROUND exclusion, cleared as soon as the
+// rescan comes up empty. Without that clear, a station that is the only one
+// answering is rejected by every later rescan: we call CQ forever and never work
+// it again.
+func TestCallerSequencer_FinalRR73CapDoesNotBlacklistSoleAnswerer(t *testing.T) {
+	r := &seqRecorder{asyncFail: true}
+	s := newTestSeq(r)
+	s.maxRepeats = 2
+	startCq(t, s)
+
+	answer := []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)}
+	roger := []goft8.DecodedMessage{dm("7Q5MLV DL9UW R-15", -10)}
+
+	driveTheir(s, 60, answer)  // picked → we report
+	driveTheir(s, 90, roger)   // roger → RR73 attempt 1 (fails)
+	driveTheir(s, 120, nil)    // attempt 2 — the cap
+	driveTheir(s, 150, answer) // cap exceeded → dropped; DL9UW is the ONLY answerer
+	require.Empty(t, s.stalledCalls,
+		"the exclusion set must be cleared once the rescan finds nobody else")
+
+	// They keep calling. The session must be able to work them again.
+	r.mu.Lock()
+	r.asyncFail = false // TX recovered
+	r.mu.Unlock()
+	driveTheir(s, 180, answer)
+	require.Equal(t, "DL9UW", s.caller.TheirCall,
+		"the sole answerer must be workable again, not excluded for the session")
+	require.Equal(t, "DL9UW 7Q5MLV -08", r.sentMsgs()[len(r.sentMsgs())-1])
+}
+
+// P1: a Group A final rung whose transmission fails FAST completes from the
+// callback before the handler reaches its own publish. That trailing publish
+// carries a stale ACTIVE snapshot and would strand subscribers showing a finished
+// QSO as live — or overwrite a session that has already replaced this one.
+func TestSequencer_FastGroupAFailureDoesNotRepublishActive(t *testing.T) {
+	r := &seqRecorder{asyncFail: true} // onDone(false) fires INSIDE transmit
+	s := newTestSeq(r)
+
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
+
+	require.Len(t, r.completed, 1, "the QSO logged (Group A)")
+	require.False(t, s.Active(), "the session ended")
+	require.False(t, r.lastStatus().Active,
+		"the last published status must be the terminal idle, not a stale active snapshot")
 }
 
 // --- GROUP A: send once, log on either outcome ------------------------------

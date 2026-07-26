@@ -193,27 +193,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	switch {
 	case working && !confirming:
 		if s.repeats >= s.maxRepeats {
-			// Remember this staller for the rest of the round so the rescan can't
-			// re-select it — nor an earlier staller — and rotate forever (review P2).
-			s.stalledCalls = append(s.stalledCalls, s.caller.TheirCall)
-			s.caller = nil
-			s.repeats = 0
-			if pick, text := s.pickAnswererLocked(msgs); pick != nil {
-				s.caller = pick
-				s.startedAt = now.UTC()
-				heard = text
-				if m, ok := pick.TxMessage(); ok { // encodability pinned by the pick
-					msg, rung = m, pick.State.label()
-				}
-				s.log.InfoWith().Str("next_answerer", pick.TheirCall).
-					Msg("ft8 seq: caller — answerer silent after max repeats; working next live answerer")
-			} else {
-				// Every live answerer this round has stalled — start a fresh CQ round
-				// and clear the set so they all get another chance on the next answers.
-				s.stalledCalls = nil
-				s.log.InfoWith().Msg("ft8 seq: caller — answerer silent after max repeats; resuming CQ")
-				msg, rung = s.cqMessage, "calling-cq"
-			}
+			msg, rung = s.parkAnswererLocked(msgs, now, "answerer silent after max repeats")
 		} else {
 			s.repeats++
 		}
@@ -226,19 +206,17 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// other ladders — the contact only clears on success, so the whole CQ loop
 		// would freeze on one station and the rest of the pile-up goes unworked.
 		if s.repeats >= s.maxRepeats {
-			// Park it for this round exactly like a staller: OUR transmit is what
-			// failed, and the station is still calling, so letting the rescan
-			// re-pick it would walk the ladder straight back into the same wall.
-			s.stalledCalls = append(s.stalledCalls, s.caller.TheirCall)
 			s.log.WarnWith().Str("their_call", s.caller.TheirCall).Int("attempts", s.maxRepeats).
-				Msg("ft8 seq: caller — final RR73 never transmitted; dropping contact without logging, resuming CQ")
-			// Nothing is logged: they never got the roger, so neither side has a
-			// QSO. Clearing confirming is load-bearing — it stops the completion
-			// callback below being built against the contact we just released.
-			s.caller = nil
-			s.repeats = 0
+				Msg("ft8 seq: caller — final RR73 never transmitted; dropping contact without logging")
+			// Nothing is logged: they never got the roger, so neither side has a QSO.
+			// Park it through the SHARED path so it gets the same rescan-or-clear the
+			// pre-final cap gets — parking without the clear would exclude the station
+			// for the rest of the SESSION, and if it is the only one answering we would
+			// CQ forever and reject every answer it sends (codex 3c1ee047 P1).
+			msg, rung = s.parkAnswererLocked(msgs, now, "final RR73 never transmitted")
+			// Load-bearing: stops the completion callback below being built against
+			// the contact we just released.
 			confirming = false
-			msg, rung = s.cqMessage, "calling-cq"
 		} else {
 			s.repeats++
 		}
@@ -316,7 +294,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			return
 		}
 	}
-	s.publish(st)
+	s.publishIfCurrent(gen, st)
 }
 
 // pickAnswererLocked scans one slot's decodes for an answerer to our CQ
@@ -364,6 +342,43 @@ func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage) (*CallerExch
 		}
 	}
 	return pick, pickText
+}
+
+// parkAnswererLocked drops the current contact and decides what to transmit in its
+// place: another live answerer from THIS slot's decodes, else a fresh CQ. It is the
+// single off-ramp for both ways a Call-CQ contact can end badly — the answerer going
+// silent on a pre-final rung, and the closing RR73 failing to transmit — so the two
+// can't drift apart (they did: the final-rung branch originally parked WITHOUT the
+// clear below, codex 3c1ee047 P1).
+//
+// The parked station is excluded from the rescan so we don't immediately re-lock onto
+// the one that just failed us — but the exclusion set is CLEARED the moment the rescan
+// comes up empty. That clear is load-bearing: `stalledCalls` is a per-ROUND exclusion,
+// and without it a station that is the ONLY one answering stays excluded for the rest
+// of the session — we would call CQ forever and reject every answer it sent.
+//
+// reason is folded into the log line so each caller stays greppable. It does NOT touch
+// `heard`: the decode-log line for this slot has already been emitted by the time any
+// caller reaches here. Caller holds s.mu with s.caller non-nil.
+func (s *Sequencer) parkAnswererLocked(msgs []goft8.DecodedMessage, now time.Time, reason string) (msg, rung string) {
+	s.stalledCalls = append(s.stalledCalls, s.caller.TheirCall)
+	s.caller = nil
+	s.repeats = 0
+	if pick, _ := s.pickAnswererLocked(msgs); pick != nil {
+		s.caller = pick
+		s.startedAt = now.UTC()
+		if m, ok := pick.TxMessage(); ok { // encodability pinned by the pick
+			msg, rung = m, pick.State.label()
+		}
+		s.log.InfoWith().Str("next_answerer", pick.TheirCall).
+			Msg("ft8 seq: caller — " + reason + "; working next live answerer")
+		return msg, rung
+	}
+	// Nobody else is calling — start a fresh CQ round and let every parked station
+	// back in, including the one just dropped.
+	s.stalledCalls = nil
+	s.log.InfoWith().Msg("ft8 seq: caller — " + reason + "; resuming CQ")
+	return s.cqMessage, "calling-cq"
 }
 
 // completedCallerQsoLocked captures the finished caller-side contact for logging.
