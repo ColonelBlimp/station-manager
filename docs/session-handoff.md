@@ -32,6 +32,78 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-27)
 
+> **2026-07-27 (late) — internal/ft8 package review CLOSED, Call-CQ Next SHIPPED
+> + on-air proven, invariants 3 and 6 swept, tile layout RETIRED.** Long session;
+> the running daemon is `2.0.0-alpha.1-932-g33c66232` and everything committed
+> after it is frontend or test-only, so **there is nothing operational to deploy**.
+>
+> - **Package review of `internal/ft8` (3 findings) closed.** F2 (idle completions
+>   diverged) → one `retireSessionLocked` primitive. F1 (skip armable where it can
+>   never fire) → `rungSkippableLocked` + `ErrRungNotSkippable` → 409
+>   `ft8_rung_not_skippable`; skippability belongs to the RUNG, now invariant 7.
+>   F3 (`Sent()`/`Done()` unreachable) → REJECTED by the operator; rationale
+>   recorded at `Exchange.Done` — wiring them in would be WRONG, since the real
+>   terminal transition turns on whether the closing message reached the air.
+>   Dead code: `fireOpening`'s `seqCalling` branch deleted; `exchangePath` →
+>   `exchangePathForTest` + a shared `exchPathLocked`.
+> - **Call-CQ "Next" — the session's feature.** Short-circuits the repeat cap on a
+>   STUCK contact: park the answerer at the next slot evaluation, take another live
+>   one from that slot else resume CQ. The run CONTINUES (that is Abandon's job).
+>   Sequencer (`NextAnswerer`, 10 rules in `nextanswerer_test.go`) + `POST
+>   /v1/ft8/qso/next` (409 `ft8_no_answerer`) + the SPA button. **The pile-up drawer
+>   is now fully decoupled from the CQ side** — Next no longer abandons-and-drains,
+>   and `doSkip` went with it. **PROVEN ON AIR:** TA3XEE stuck at −21 for 5
+>   transmissions, Next pressed 15:12:30, parked + resumed CQ in the same slot,
+>   HA7TM worked 30 s later. `ft8.tx.max_repeats` raised 3 → **6** (the cap had been
+>   detuned as a substitute stop button; Next is the stop now).
+> - **Invariant 3 (publish atomicity) swept.** 39 publish-after-unlock sites moved
+>   under the lock across the four sequencer files. TWO guards: a runtime probe in
+>   `newTestSeq` (whole suite enforces it) + a source-level AST check
+>   (coverage-independent — 23 of the 39 sites are executed by no test).
+> - **Invariant 6 extended to the ABANDONMENT paths.** 19 hand-rolled session ends
+>   → `retireSessionLocked`, which now also clears the per-session flags. Guarded
+>   structurally by `TestSource_SessionsEndOnlyThroughThePrimitive`.
+> - **SEVEN review rounds went into those guards, zero into production code.** Each
+>   round I patched the instance reported instead of enumerating the complete set;
+>   the lessons are in `internal/ft8/CLAUDE.md` (allowlist over denylist; when
+>   REPLACING a check, audit what the old one caught — I dropped the lvalue rule
+>   once and the address rule twice).
+> - **ADR 0058 — tile layout RETIRED**, superseding 0046. `TileBoard`/`ArrangeBar`/
+>   `CardFrame` deleted, `layout.svelte.ts` down to visibility + the ambient split,
+>   persistence dropped (~590 lines). Operator's reasoning: no arrangement friction
+>   in three weeks, the real complaint was CONSISTENCY (fixed by the ambient host),
+>   and with Rig+Session ambient the board arranged two tiles. QT desktop = parked,
+>   not rejected.
+> - **"Attended-only" wording TIGHTENED (operator decision).** SM does not ENFORCE
+>   attendance — a Call-CQ run works answerers until Abandon, so an operator can
+>   walk away. Live docs now say **operator-initiated** and say plainly that
+>   attendance is not checked; the README deliberately says nothing. ADRs untouched
+>   (append-only) but still carry the old phrasing.
+> - **SMC healthy** (checked): in_sync, 6290/6290, live forwarding seconds after
+>   each QSO. It is LAN-only (`192.168.1.200:8091`, plain HTTP) — the public
+>   `cloud.station-manager.org` was never stood up, so the backup shares premises
+>   with the primary. 7Q8AC still not onboarded.
+> - **131+ QSOs** on 17 m (JA run). PSK Reporter confirmed uploading live.
+>
+> **NEXT (nothing blocking 80 m tomorrow):**
+>
+> 1. **R9LAU map bug** — `contacted_station` holds a correct `gridsquare` (MO27)
+>    but lat/lon decoded from the `AA00AA` placeholder (−89.979167/−179.958333,
+>    exactly that grid's centre), so the map draws to the South Pole. The on-air
+>    grid correctly wins for `gridsquare` but **lat/lon is never re-derived from
+>    it** — that asymmetry is the defect. Fix both: re-derive on grid win, and
+>    treat `AA00AA` as "no location". 1 of the newest 500; QSO data otherwise fine.
+> 2. **Auto-work-pile-up ADR** — extend 0033's reasoning to stations calling us
+>    outside a CQ run. Mechanism already exists (`pickAnswererLocked` matches the
+>    same `<me> <them> <grid>`; `auto_strongest` is already implemented). Needs the
+>    operator on the STOP CONDITION and DUPE handling. Would make the FT8 pile-up
+>    drawer largely redundant.
+> 3. **Three FT8 paths still unseen on air:** Next taking another LIVE ANSWERER
+>    (rather than resuming CQ), a repair needing a SECOND re-send, a confirm-hold
+>    LIFETIME EXPIRY, and a Group B final-rung CAP.
+> 4. **Codex review pipeline caveat:** the frontend commit's suites could not RUN
+>    (read-only `node_modules/.vite*`), so that review was by reading only.
+
 > **2026-07-27 — the occupancy/attribution arc reached the TX path (round 7,
 > uncommitted).** Round 6 stopped publishing occupancy for a slot whose dial moved,
 > and round 7's first half stopped publishing its DECODES too (they reach the
