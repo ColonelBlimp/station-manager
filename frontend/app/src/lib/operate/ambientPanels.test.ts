@@ -48,7 +48,7 @@
 */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render } from '@testing-library/svelte';
+import { render, screen } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Operate from './Operate.svelte';
 import { router } from '../router.svelte';
@@ -229,5 +229,87 @@ describe('a layout saved before the split is migrated', () => {
             expect.arrayContaining<TileId>(['logging', 'worked'])
         );
         expect(isVisible('worked')).toBe(true);
+    });
+});
+
+describe('a shared host is not shared behaviour', () => {
+    // FT8 disables the rig card without CAT because FT8 genuinely cannot run without
+    // it. Phone/CW can — you set frequency and mode by hand and confirm. Applying
+    // FT8's rule there stops the operator establishing the rig state logging needs.
+    it('leaves the Phone/CW rig controls usable without CAT', () => {
+        router.mode = 'phone';
+        showTile('rig');
+        render(Operate);
+        flushSync();
+
+        const mode = screen.getByLabelText<HTMLSelectElement>('Mode');
+        expect(mode.disabled).toBe(false);
+    });
+
+    it('still disables them in FT8, where CAT is not optional', () => {
+        router.mode = 'ft8';
+        showTile('rig');
+        render(Operate);
+        flushSync();
+
+        const mode = screen.getByLabelText<HTMLSelectElement>('Mode');
+        expect(mode.disabled).toBe(true);
+    });
+});
+
+describe('ambient visibility survives a restart', () => {
+    // An ambient panel lives in no column, so a saved layout records it only by its
+    // ABSENCE from hidden. Read the wrong way round, an open panel silently closes
+    // on the next reload — and worse, only after the operator pinned a layout.
+    it('reopens a panel that was open when the layout was saved', () => {
+        let stored: LayoutValue | null = null;
+        setLayoutPersistence({
+            load: () => stored,
+            save: (v) => {
+                stored = v;
+            },
+            clear: () => {
+                stored = null;
+            },
+        });
+        layout.pinned = true;
+
+        showTile('rig'); // persists, since pinned
+        expect(stored).not.toBeNull();
+
+        // Capture what was WRITTEN before resetting: resetToDefault persists too
+        // while pinned, so it would otherwise overwrite the very value under test.
+        // Scaffolding, not spec — the restart being simulated is "load exactly what
+        // the previous session wrote".
+        const written = stored;
+        layout.pinned = false;
+        resetToDefault();
+        setLayoutPersistence({ load: () => written, save: () => {}, clear: () => {} });
+
+        expect(isVisible('rig')).toBe(true);
+    });
+
+    it('keeps a closed one closed across the same round-trip', () => {
+        let stored: LayoutValue | null = null;
+        setLayoutPersistence({
+            load: () => stored,
+            save: (v) => {
+                stored = v;
+            },
+            clear: () => {
+                stored = null;
+            },
+        });
+        layout.pinned = true;
+
+        showTile('session');
+        hideTile('session');
+
+        const written = stored;
+        layout.pinned = false;
+        resetToDefault();
+        setLayoutPersistence({ load: () => written, save: () => {}, clear: () => {} });
+
+        expect(isVisible('session')).toBe(false);
     });
 });

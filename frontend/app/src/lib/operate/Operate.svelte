@@ -36,12 +36,8 @@
      accepted deliberately (operator, 2026-07-27) — it is how FT8 has always
      behaved and has never been a problem.
 
-     The rig card's band buttons jump to the configured FT8 watering-hole freq
-     (ft8SelectBand → set_freq of ft8_frequencies[band]) rather than the rig's
-     band-stack freq that Phone/CW's default selectBand restores; requiresCat
-     disables the card's controls with the rig away. Both are FT8-shaped choices
-     that now apply in Phone/CW too — worth revisiting when the Phone/CW rig
-     workflow is looked at, but not silently different per workspace. -->
+     Each workspace keeps its own rig-card behaviour inside that shared host — see
+     the panel below. -->
 {#if AMBIENT_TILES.some(isVisible)}
     <!-- Anchored to the rail's INNER edge (right: rail width + 1rem) so the gap
          beside the rail matches the 1rem below the 4rem header (top-20), at
@@ -50,7 +46,21 @@
         data-ambient-host
         class="fixed top-20 right-[calc(var(--util-rail-w)+1rem)] z-40 flex max-h-[calc(100vh-6rem)] flex-col gap-3 overflow-auto"
     >
-        {#if isVisible('rig')}<RigPanel pickBand={ft8SelectBand} requiresCat />{/if}
+        {#if isVisible('rig')}
+            <!-- Shared HOST, not shared BEHAVIOUR. FT8 jumps the band buttons to the
+                 configured watering-hole freq and requires CAT, because FT8 cannot
+                 run without it. Phone/CW can: frequency and mode are settable by
+                 hand and confirmed, and the band buttons restore the rig's own
+                 band-stack. Applying FT8's rules there disabled the controls an
+                 operator without CAT needs to establish rig state for logging —
+                 noticed while building this, written into a comment, and shipped
+                 anyway (codex P1 on d4233b64). A comment is not a decision. -->
+            {#if router.mode === 'phone'}
+                <RigPanel />
+            {:else}
+                <RigPanel pickBand={ft8SelectBand} requiresCat />
+            {/if}
+        {/if}
         {#if isVisible('session')}<SessionPanel />{/if}
     </div>
 {/if}

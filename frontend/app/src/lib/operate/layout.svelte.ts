@@ -100,9 +100,13 @@ function normalise(l: LayoutValue): LayoutValue {
         columns.push(take(l.columns?.[i]).filter((id) => !isAmbient(id)));
     }
     const hidden = take(l.hidden);
-    // `take` marks a stripped ambient tile as seen, so the sweep below will not push
-    // it into hidden — its visibility carries over from the saved layout untouched.
-    for (const id of ALL_TILES) if (!seen.includes(id)) hidden.push(id);
+    // Sweep the WORKFLOW tiles only. Those live in a column or in hidden, so one
+    // missing from both is hidden. An AMBIENT tile lives in no column by design, so
+    // `hidden` is its whole story: present = closed, absent = open. Sweeping them
+    // too read "absent from columns" as "hidden", and an open Rig or Session panel
+    // silently closed on the next reload — worse, only for operators who had pinned
+    // a layout (codex P2 on d4233b64).
+    for (const id of WORKFLOW_TILES) if (!seen.includes(id)) hidden.push(id);
     return { columns, hidden };
 }
 
