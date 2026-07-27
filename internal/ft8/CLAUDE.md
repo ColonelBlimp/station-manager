@@ -151,8 +151,12 @@ deleted within a round or two, while the behavioural ones caught real defects.
    `TestSource_SessionsEndOnlyThroughThePrimitive` requires every write to `s.mode`
    outside `retireSessionLocked`/`abandonLocked` to assign an enumerated ACTIVE mode
    (i.e. to be a session START); anything else — `seqIdle`, a variable holding it, or
-   an unreadable multi-value call — fails. Matching the literal `s.mode = seqIdle`
-   was too narrow and missed `s.mode, s.ex = seqIdle, nil` (codex P2 on 61a875d8).
+   an unreadable multi-value call — fails. It rejects every WRITE FORM — plain and multi-value
+   assignment, compound assignment, `++`/`--`, and `&s.mode` (the only route to
+   writing through a pointer). Narrower versions missed `s.mode, s.ex = seqIdle, nil`
+   (codex P2 on 61a875d8) and then `s.mode--`, which walks seqAnswering(1) to
+   seqIdle(0) (codex P2 on 5cffed06) — each fix patched the form just found instead
+   of enumerating the complete set, which is the actual lesson.
    That makes THREE guards in this package fixed by inverting a denylist into an
    allowlist, so treat the allowlist as the default shape for a new guard here rather
    than the remedy after a review finds the hole.

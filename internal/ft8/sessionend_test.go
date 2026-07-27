@@ -136,6 +136,13 @@ session ends across the four sequencer files and no test reaches most of them. S
 this asserts the STRUCTURE instead: `s.mode = seqIdle` may appear only inside the
 two primitives that perform the full transition.
 
+It covers every way Go can write a struct field, enumerated deliberately rather than
+reactively: plain and multi-value assignment, compound assignment, ++/--, and taking
+the address (the only route to writing through a pointer). Three review rounds were
+spent adding one form at a time — the multi-value assignment (61a875d8) and then
+`s.mode--`, which walks seqAnswering(1) to seqIdle(0) (5cffed06) — because each fix
+patched the form that had just been found instead of asking what the complete set was.
+
 It is an ALLOWLIST twice over, deliberately. Outside the two primitives, a write to
 s.mode must assign one of the enumerated ACTIVE modes — a session start. Anything
 else is flagged: seqIdle, a variable holding it, or an expression we cannot read.
@@ -184,29 +191,47 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 					}
 					return b.String()
 				}
+				flag := func(n ast.Node, how string) {
+					t.Errorf("%s:%d: session state written by hand in %s (%s) — every ending "+
+						"must go through the session-identity transition (invariant 6), so "+
+						"the generation is retired and a staged end_reason is consumed. "+
+						"Allowed only in: %s",
+						name, fset.Position(n.Pos()).Line, fd.Name.Name, how, allowed)
+				}
 				ast.Inspect(fd.Body, func(n ast.Node) bool {
-					as, ok := n.(*ast.AssignStmt)
-					if !ok {
-						return true
-					}
-					for i, l := range as.Lhs {
-						if render(l) != "s.mode" {
-							continue
+					switch v := n.(type) {
+					case *ast.AssignStmt:
+						for i, l := range v.Lhs {
+							if render(l) != "s.mode" {
+								continue
+							}
+							if v.Tok != token.ASSIGN { // +=, -=, |= …
+								flag(v, "s.mode "+v.Tok.String()+" …")
+								continue
+							}
+							// Pairable only when the arities match; a multi-value call on
+							// the right cannot be read, so it is not an allowed start.
+							rhs := "?"
+							if len(v.Rhs) == len(v.Lhs) {
+								rhs = render(v.Rhs[i])
+							}
+							if !activeMode[rhs] {
+								flag(v, "s.mode = "+rhs)
+							}
 						}
-						// Pairable only when the arities match; a multi-value call on the
-						// right cannot be read, so it is not an allowed start.
-						rhs := "?"
-						if len(as.Rhs) == len(as.Lhs) {
-							rhs = render(as.Rhs[i])
+					case *ast.IncDecStmt:
+						// s.mode-- walks seqAnswering(1) to seqIdle(0) (codex P2 on
+						// 5cffed06). Arithmetic on the mode is never legitimate.
+						if render(v.X) == "s.mode" {
+							flag(v, "s.mode"+v.Tok.String())
 						}
-						if activeMode[rhs] {
-							continue // a session start
+					case *ast.UnaryExpr:
+						// Taking the address is how a write escapes this analysis
+						// entirely: p := &s.mode; *p = seqIdle. There is no reason to
+						// need it, so refuse it outright.
+						if v.Op == token.AND && render(v.X) == "s.mode" {
+							flag(v, "&s.mode")
 						}
-						t.Errorf("%s:%d: session ended by hand in %s (s.mode = %s) — every "+
-							"ending must go through the session-identity transition "+
-							"(invariant 6), so the generation is retired and a staged "+
-							"end_reason is consumed. Allowed only in: %s",
-							name, fset.Position(as.Pos()).Line, fd.Name.Name, rhs, allowed)
 					}
 					return true
 				})
