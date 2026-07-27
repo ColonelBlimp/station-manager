@@ -69,6 +69,19 @@ package ft8
 func (s *Sequencer) publishCurrent() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Nothing to refresh once the session is over: its TERMINAL frame has already
+	// been published and is the truth. Re-publishing a bare idle status over it
+	// would strip the end_reason the hub is caching, so a reconnecting client would
+	// be told the session ended but never why — the explanation exists only in that
+	// one frame (codex P2 on f1a8836d).
+	//
+	// This covers every post-transmit publish in the package, not just the caller
+	// that surfaced it: transmit() returns as soon as startTransmission launches its
+	// goroutine, so an asynchronous refusal can end the session before ANY of them
+	// reach here.
+	if s.mode == seqIdle {
+		return
+	}
 	s.publish(s.statusLocked())
 }
 

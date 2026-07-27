@@ -83,7 +83,11 @@ deleted within a round or two, while the behavioural ones caught real defects.
    the operator did not cause the end. A safety stop nobody can see is
    indistinguishable from a hang: the first on-air read of a WORKING dial guard was
    "moving the dial does not stop TX", and it took a log dive to establish that it
-   had (dogfood 2026-07-27).
+   had (dogfood 2026-07-27). The terminal frame is the ONLY carrier of that
+   reason, so nothing may republish over it: `publishCurrent` returns early when
+   the session is idle, because `transmit()` returns as soon as its goroutine
+   LAUNCHES and an async refusal can end the session before any post-transmit
+   publish runs.
 
 **Corollary that cost three rounds:** if a behaviour test for one of these cannot
 be written without inventing a fact the system does not carry, the SYSTEM is

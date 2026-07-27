@@ -135,3 +135,20 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - ~~[2026-07-25] session panel: map button is redundant~~ **→ DONE 2026-07-26.** Removed. The sidebar's bottom-utilities Map link is always on screen and opens the identical new tab (same href/target/rel), so the tile button was pure duplication. Its test coverage MOVED rather than vanished — the map link was previously tested only through SessionPanel, so a new `Sidebar.svelte.test.ts` now guards it (the `target="_blank"` matters: opening in-tab would unmount a live FT8 run).
 - ~~[2026-07-26] ftp-all.txt should be enhanced to do archiving (gzip) and log rotation.~~ **→ DONE 2026-07-26: `ft8-all.txt` now rotates via lumberjack (10 MB × 5 gzipped backups) and is created 0600 (was 0644, and a legacy log is tightened on open). `smd.log` already had rotation + gzip (100 MB × 5 / 30 days); the survey also found `cmd/smd/startuplog.go` creating smd.log 0644 — fixed to 0600.**
 - [2026-07-26] add a world time widget
+- [2026-07-27] FT8 TX drive collapsed mid-session — rig keyed but made almost no
+  power, so the amp (needs ~10 W) never came up. ROOT CAUSE UNKNOWN. Everything
+  upstream was verified healthy: CAT ok, PTT asserted (ft8-all.txt "Transmitting"
+  lines prove KeyTx succeeded), mode DATA-U, correct frequency, correct default
+  sink (the rig's PCM2903C codec), and a full QSO had completed on the same build
+  20 minutes earlier. It was fixed by CYCLING the PipeWire sink volume
+  (0.40 -> 1.00 -> 0.60 -> 0.35 -> 0.39); the operator did NOT touch the rig's USB
+  LEVEL, and the working value (0.39) is essentially the 0.40 it was broken at — so
+  the volume VALUE was never the fault. The plausible mechanism is that changing it
+  forced PipeWire/WirePlumber to re-apply routing+gain to smd's playback stream,
+  which had somehow got into a bad state. If it recurs: cycle the sink volume
+  first, and capture `pactl list sink-inputs` DURING a transmit slot before
+  changing anything — that is the one observation we never got, and it would show
+  whether smd's stream exists and where it is routed.
+  Follow-ups worth building either way: (a) an `ft8.tx.amplitude` config field so
+  drive is SM's to set rather than a desktop mixer's, and (b) log the output sink's
+  name AND volume at FT8 arm time, so this is one grep instead of an hour.

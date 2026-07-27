@@ -126,7 +126,12 @@ const SESSION_END_TEXT: Record<string, string> = {
 setFt8SessionEndedSink((reason, theirCall) => {
     const why = SESSION_END_TEXT[reason] ?? 'the rig frequency could not be verified';
     const who = theirCall !== '' ? ` with ${theirCall}` : '';
-    toasts.warn(`FT8 session ended${who} — ${why}. Nothing was transmitted.`);
+    // Says the PENDING message was blocked, not that the session sent nothing: the
+    // guard usually fires partway through an exchange, after earlier rungs have
+    // already gone out on the air. Claiming "nothing was transmitted" would be
+    // false about that prior activity, and the point of this notice is to be
+    // trustworthy about what did and did not reach the air (codex P2 on f1a8836d).
+    toasts.warn(`FT8 session ended${who} — ${why}. The pending message was not sent.`);
 });
 
 // Completed-FT8-QSO sink (ft8-logged SSE): a finished exchange is logged daemon-side

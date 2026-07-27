@@ -147,6 +147,19 @@ precisely so we don't re-derive state or redo finished work.
 > self-retired within a slot or two. The fix matters because invariant 5 should not
 > depend on a later rung happening to run.
 >
+> **Round 14 (uncommitted): two P2s on the end-reason work.** (1) `fireOpening` was
+> the last post-transmit publish still emitting its PRE-transmit snapshot — every
+> other rung path had been converted by `3c1ee047` / `a301d350`, the immediate-fire
+> path was missed. `transmit()` returns as soon as `startTransmission` launches its
+> goroutine, so an async refusal could end the session and publish `active:false`
+> with its reason, and this would overwrite it with a live ladder. Now
+> `publishCurrent()`, which additionally **returns early when idle** — that guard
+> lives in `publishCurrent` rather than the call site so it covers every rung path,
+> and stops a bare idle frame stripping the `end_reason` a reconnecting client
+> depends on. (2) The toast claimed "Nothing was transmitted", which is false once
+> an exchange is under way — earlier rungs did reach the air. It now says the
+> PENDING message was not sent.
+>
 > Rounds 4-8 were whack-a-mole because every fix reacted to an observed dial
 > TRANSITION; transitions can be missed, mis-timed, or attributed to the wrong
 > session. The invariant cannot be. **A codex P1 claiming a boundary QSY escapes

@@ -1198,7 +1198,6 @@ func (s *Sequencer) fireOpening(now time.Time) {
 	// playing (review 2026-07-20 #2).
 	s.lastTxSlot = curStart
 	transmit, offset, dial, repeats := s.transmitLocked(), s.offsetHz, s.dialFreqMHz, s.repeats
-	st := s.statusLocked()
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -1216,7 +1215,18 @@ func (s *Sequencer) fireOpening(now time.Time) {
 			return
 		}
 	}
-	s.publish(st)
+	// Re-read the truth rather than publishing the snapshot taken before the
+	// transmit — the last post-transmit publish in the package that still did
+	// (finalrung.go's publishCurrent explains why, and the other rung paths were
+	// converted by 3c1ee047 / a301d350; this immediate-fire path was missed).
+	//
+	// transmit() returns as soon as startTransmission LAUNCHES its goroutine, so an
+	// asynchronous pre-key refusal can already have ended the session and published
+	// active:false with its end_reason by the time we get here. Publishing the stale
+	// active snapshot would overwrite that in the hub cache: the ladder would show a
+	// live session the daemon has ended, and a reconnecting client would never see
+	// the reason at all (codex P2 on f1a8836d).
+	s.publishCurrent()
 }
 
 // statusLocked builds the QsoStatus snapshot for the active session. Caller holds s.mu.

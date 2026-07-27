@@ -498,3 +498,38 @@ func TestAbandonIfCurrent_LeavesANewerSessionAlone(t *testing.T) {
 	require.True(t, s.Active(), "the replacement session survives")
 	s.Abandon()
 }
+
+// TestFireOpening_PublishesCurrentTruthNotAStaleSnapshot: transmit() returns as
+// soon as startTransmission LAUNCHES its goroutine, so an asynchronous pre-key
+// refusal can end the session — publishing active:false with its end_reason —
+// before fireOpening reaches its own publish. Publishing the snapshot captured
+// before the transmit would overwrite that in the hub cache: the ladder shows a
+// live session the daemon has ended, and a reconnecting client never sees the
+// reason (codex P2 on f1a8836d).
+//
+// Simulated by having the transmit itself end the session, which is exactly what
+// the async refusal does, just deterministically.
+func TestFireOpening_PublishesCurrentTruthNotAStaleSnapshot(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+
+	// The rung's transmit ends the session mid-flight, as an async dial refusal does.
+	inner := s.transmit
+	s.transmit = func(msg string, offsetHz, dialMHz float64, gen uint64, onDone func(bool)) error {
+		err := inner(msg, offsetHz, dialMHz, gen, onDone)
+		s.AbandonIfCurrent(gen, EndReasonDialMoved)
+		return err
+	}
+
+	// StartQso fires the opening rung immediately when the parity/timing allow.
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074,
+		time.Unix(slotSeconds+1, 0).UTC()))
+
+	last := r.lastStatus()
+	require.False(t, last.Active,
+		"the terminal frame must not be overwritten by the pre-transmit snapshot — "+
+			"the ladder would show a session the daemon has already ended")
+	require.Equal(t, EndReasonDialMoved, last.EndReason,
+		"and a reconnecting client must still receive the reason from the hub cache")
+}
