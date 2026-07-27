@@ -55,7 +55,14 @@ deleted within a round or two, while the behavioural ones caught real defects.
    `Start*`; publishing after the unlock lets a newer session publish ACTIVE first
    and be overwritten by the stale idle, leaving the hub caching idle for a live
    session and the operator without controls. `finalrung.go` documents this; it
-   has been found by review three times.
+   has been found by review FOUR times — the fourth (`NextAnswerer`, codex P2 on
+   a9e51f96) inherited the shape by copying `SetSkipIfSilent`, which had it too. A
+   comment was demonstrably not enough, so the operator-command entry points now
+   carry an executable guard: `publishatomicity_test.go` asserts the sequencer lock
+   is HELD at publish time (TryLock succeeding means it was not). That guard is
+   PARTIAL by design — the ~13 publish-after-unlock sites in the slot paths
+   (caller/work/type4 sequencers) are the same shape and are NOT converted; extend
+   the probe if they are.
    Observable: the final `ft8-qso` frame matches whether a session is running.
 
 4. **No decode is displayed as workable, spotted, or acted on unless its capture

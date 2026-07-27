@@ -616,9 +616,13 @@ func (s *Sequencer) NextAnswerer() error {
 		return ErrNoAnswerer
 	}
 	s.nextArmed = true
-	st := s.statusLocked()
+	// Publish while the lock is STILL HELD (invariant 3). Snapshotting here and
+	// publishing after the unlock lets an Abandon or a slot evaluation take the lock
+	// in the gap, change or end the session and publish first — leaving this stale
+	// "active, next armed" frame cached by the hub as the last word, so a reconnecting
+	// client is shown a contact that no longer exists (codex P2 on a9e51f96).
+	s.publish(s.statusLocked())
 	s.mu.Unlock()
-	s.publish(st)
 	return nil
 }
 
@@ -742,9 +746,11 @@ func (s *Sequencer) SetSkipIfSilent(armed bool) error {
 	}
 	// Reaching here: either a valid arm (skippable) or a disarm (always ok).
 	s.skipIfSilent = armed
-	st := s.statusLocked()
+	// Under the lock — same reason as NextAnswerer above (invariant 3). This is where
+	// that shape came from, so it is corrected here too rather than left as the next
+	// thing to copy.
+	s.publish(s.statusLocked())
 	s.mu.Unlock()
-	s.publish(st)
 	return nil
 }
 
