@@ -138,16 +138,9 @@ func (s *Service) armTx() error {
 	const op errors.Op = "ft8.Service.ArmTx"
 
 	// Read the dial BEFORE taking txMu (dialState reaches into the bridge, and the
-	// lock order elsewhere is txMu-free for that call). An arm binds to a frequency,
-	// so a configured source that cannot report one is refused rather than stored as
-	// zero: a zero pin would read as "any frequency will do" in both keying checks
-	// and in the guard, giving an arm that can later key anywhere with no re-arm
-	// (codex P1 on 7c2e66ad). No source at all is different — that deployment cannot
-	// key, so there is nothing to bind and nothing to protect.
+	// lock order elsewhere is txMu-free for that call). The reading is only ACTED on
+	// below, once the switch has established that this call is creating a new arm.
 	dialAtArm, tracked, known := s.dialState()
-	if tracked && !known {
-		return errors.New(op).WithErr(ErrTxDialUnknown)
-	}
 
 	s.txMu.Lock()
 	switch {
@@ -156,13 +149,25 @@ func (s *Service) armTx() error {
 		return errors.New(op).WithErr(ErrTxUnavailable).WithMsg("subsystem stopped")
 	case s.txArmed:
 		s.txMu.Unlock()
-		return nil // idempotent
+		return nil // idempotent — already armed, already bound; the dial is irrelevant
 	case s.keyer == nil:
 		s.txMu.Unlock()
 		return errors.New(op).WithErr(ErrTxUnavailable).WithMsg("no keyer wired")
 	case !s.keyer.TxReady():
 		s.txMu.Unlock()
 		return errors.New(op).WithErr(ErrTxNotReady)
+	case tracked && !known:
+		// ESTABLISHING an arm binds it to a frequency, so a configured source that
+		// cannot report one is refused rather than stored as zero: a zero pin reads
+		// as "any frequency will do" in both keying checks and in the guard, giving
+		// an arm that can later key anywhere with no re-arm (codex P1 on 7c2e66ad).
+		// LAST in the switch deliberately — ahead of the armed check it turned a
+		// harmless retry during a CAT blink into a reported failure while TX stayed
+		// armed (codex P2 on e917c8f2). Same precedence sessionTxGate uses. No
+		// source at all is different: that deployment cannot key, so there is
+		// nothing to bind and nothing to protect.
+		s.txMu.Unlock()
+		return errors.New(op).WithErr(ErrTxDialUnknown)
 	}
 
 	player, err := s.newPlayer(s.txDeviceSpec())

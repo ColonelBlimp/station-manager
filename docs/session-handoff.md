@@ -218,6 +218,15 @@ precisely so we don't re-derive state or redo finished work.
 > would undo the guarantee), and only reachable with no capture running, but worth
 > knowing.
 >
+> **Round 18 (uncommitted): ONE P2, and the reviewer could run the tests.** Every
+> earlier round in this arc reported `go test` blocked by a read-only sandbox — this
+> one says "Ran `go test ./internal/ft8` successfully", so the spec was executable
+> for it, not just readable. Finding: rule 14's dial requirement sat AHEAD of the
+> `txArmed` early-out, so an idempotent re-arm during a CAT blink reported failure
+> while TX stayed armed. Rule 18 added — the frequency requirement applies only to
+> ESTABLISHING an arm — and the check moved to LAST in the switch, the same
+> precedence `sessionTxGate` uses.
+>
 > Rounds 4-8 were whack-a-mole because every fix reacted to an observed dial
 > TRANSITION; transitions can be missed, mis-timed, or attributed to the wrong
 > session. The invariant cannot be. **A codex P1 claiming a boundary QSY escapes

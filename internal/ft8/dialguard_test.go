@@ -72,6 +72,10 @@ import (
 	     replacements until it is manually abandoned.
 	 17. The terminal frame carries the reason even when a COMPLETION retires the
 	     session. Preserving the contact must not cost the explanation.
+	 18. The frequency requirement applies only to ESTABLISHING an arm. Re-arming an
+	     already-armed service stays idempotent whatever the dial is doing — the
+	     requested state is already active, and reporting failure for it would make a
+	     retry or a duplicate click look like a fault.
 
 	Rule 6 is the one that must survive all the strictness above it: dropping TX
 	must never drop a contact that already happened on the air.
@@ -636,4 +640,37 @@ func TestDialGuard_TerminalFrameKeepsTheReasonWhenACompletionRetiresTheSession(t
 	require.False(t, last.Active)
 	require.Equal(t, EndReasonDialMoved, last.EndReason,
 		"the contact was preserved; the explanation must be too")
+}
+
+// --- 18: the requirement is about ESTABLISHING an arm ------------------------
+
+// Rule 14 must not cost idempotency. An already-armed service is already bound to
+// a frequency; a duplicate or retried arm asks for a state that is active, so it
+// succeeds whatever CAT is doing at that instant. Ordering the dial check ahead of
+// the armed check made a retry during a blink report failure while TX stayed armed
+// (codex P2 on e917c8f2).
+func TestDialGuard_ReArmingStaysIdempotentWhileTheDialBlinks(t *testing.T) {
+	known := true
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	s.SetDialSource(func() (float64, bool) { return 14.074, known })
+	require.NoError(t, s.ArmTx(true))
+
+	known = false // CAT goes quiet
+	require.NoError(t, s.ArmTx(true),
+		"already armed and already bound — a retry asks for a state that is active")
+
+	// The binding is untouched by the redundant call, so keying is still judged
+	// against the frequency the arm was actually made on.
+	known = true
+	require.NoError(t, s.preKeyDialCheck())
+}
+
+// Establishing a NEW arm still requires a readable dial — the two cases must not
+// be conflated, or rule 14 is lost.
+func TestDialGuard_ANewArmStillRequiresAReadableDial(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	s.SetDialSource(func() (float64, bool) { return 0, false })
+
+	require.ErrorIs(t, s.ArmTx(true), ErrTxDialUnknown,
+		"not armed yet, so this is establishing a binding and there is nothing to bind to")
 }
