@@ -116,33 +116,30 @@ func seqMethod(fd *ast.FuncDecl) string {
 }
 
 // locksOnEntry reports whether a method provably holds s.mu on EVERY path through its
-// body, by taking it unconditionally before any branch.
+// body. The rule is deliberately the strictest one that still works: s.mu.Lock() must
+// be the method's FIRST statement.
 //
-// The exemption has to be structural. Treating any occurrence of s.mu.Lock() anywhere
-// in the AST as proof was wrong (codex P2 on e3a7e605): it accepted a helper that locks
-// on one conditional path, or whose only Lock sits in an unrelated closure, and such a
-// helper publishes unlocked when called after an unlock. A guard whose exemption is
-// unsound is worse than no exemption, because it reads as coverage.
+// This started as "a Lock anywhere in the AST" and was tightened twice, because each
+// looser rule had a hole an unlocked publish could walk through:
 //
-// The exemption is load-bearing, not decorative: 11 correct call sites publish through
-// publishCurrent after releasing the lock, and it manages its own ordering.
+//   - anywhere in the AST accepted a lock on one conditional path, or one sitting in
+//     an unrelated closure (codex P2 on e3a7e605);
+//   - "before any control-flow statement" accepted a bare *ast.BlockStmt, which hides
+//     an early return inside it — and equally accepted a publish placed BEFORE the
+//     lock, since a call is not control flow (codex P2 on 30be7fb5).
 //
-// So: scan top-level statements in order and accept only a Lock reached before any
-// control flow. Anything else is treated as NOT self-locking — conservative, and the
-// failure mode is a false positive a human resolves, not a silent pass.
+// Each fix enumerated what to REJECT and each time the enumeration was incomplete.
+// So the rule now enumerates what to ACCEPT, and the accepted set has one member.
+// publishCurrent — the only method the exemption exists for, and the one 11 correct
+// call sites depend on — locks first, so nothing real is lost.
+//
+// An unsound exemption is worse than no exemption, because it reads as coverage.
 func locksOnEntry(fd *ast.FuncDecl, calleeOf func(ast.Node) (string, bool)) bool {
-	for _, st := range fd.Body.List {
-		if c, ok := calleeOf(st); ok && c == "s.mu.Lock" {
-			return true
-		}
-		switch st.(type) {
-		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt,
-			*ast.TypeSwitchStmt, *ast.SelectStmt, *ast.ReturnStmt,
-			*ast.DeferStmt, *ast.GoStmt, *ast.BranchStmt, *ast.LabeledStmt:
-			return false // a branch could skip the lock — not provable
-		}
+	if len(fd.Body.List) == 0 {
+		return false
 	}
-	return false
+	c, ok := calleeOf(fd.Body.List[0])
+	return ok && c == "s.mu.Lock"
 }
 
 func TestSource_NoStatusPublishedAfterUnlock(t *testing.T) {

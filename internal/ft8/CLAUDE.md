@@ -76,11 +76,15 @@ deleted within a round or two, while the behavioural ones caught real defects.
    publishes transitively — because a guard that knew only the first could be evaded
    by a rename (codex P2 on 603cd026). Methods that take `s.mu` themselves are
    exempt: they own their ordering, which is what `publishCurrent` is for (11 correct
-   call sites depend on that exemption). The exemption is STRUCTURAL — the lock must
-   be taken unconditionally before any branch. Accepting any `s.mu.Lock()` anywhere in
-   the body was unsound: it passed a helper that locks on one conditional path, or
-   whose only lock sits in an unrelated closure (codex P2 on e3a7e605). An unsound
-   exemption is worse than none, because it reads as coverage.
+   call sites depend on that exemption). The exemption is STRUCTURAL and now minimal: `s.mu.Lock()`
+   must be the method's FIRST statement. Two looser rules each had a hole — "a Lock
+   anywhere in the body" passed a conditional or closure-only lock (codex P2 on
+   e3a7e605); "before any control-flow statement" passed a bare block hiding an early
+   return, and a publish placed BEFORE the lock, since a call is not control flow
+   (codex P2 on 30be7fb5). Both attempts enumerated what to REJECT and both
+   enumerations were incomplete, so the rule now enumerates what to ACCEPT and the
+   accepted set has one member. An unsound exemption is worse than none, because it
+   reads as coverage.
    Observable: the final `ft8-qso` frame matches whether a session is running.
 
 4. **No decode is displayed as workable, spotted, or acted on unless its capture
