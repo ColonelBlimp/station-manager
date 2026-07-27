@@ -115,6 +115,36 @@ func seqMethod(fd *ast.FuncDecl) string {
 	return ""
 }
 
+// locksOnEntry reports whether a method provably holds s.mu on EVERY path through its
+// body, by taking it unconditionally before any branch.
+//
+// The exemption has to be structural. Treating any occurrence of s.mu.Lock() anywhere
+// in the AST as proof was wrong (codex P2 on e3a7e605): it accepted a helper that locks
+// on one conditional path, or whose only Lock sits in an unrelated closure, and such a
+// helper publishes unlocked when called after an unlock. A guard whose exemption is
+// unsound is worse than no exemption, because it reads as coverage.
+//
+// The exemption is load-bearing, not decorative: 11 correct call sites publish through
+// publishCurrent after releasing the lock, and it manages its own ordering.
+//
+// So: scan top-level statements in order and accept only a Lock reached before any
+// control flow. Anything else is treated as NOT self-locking — conservative, and the
+// failure mode is a false positive a human resolves, not a silent pass.
+func locksOnEntry(fd *ast.FuncDecl, calleeOf func(ast.Node) (string, bool)) bool {
+	for _, st := range fd.Body.List {
+		if c, ok := calleeOf(st); ok && c == "s.mu.Lock" {
+			return true
+		}
+		switch st.(type) {
+		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt,
+			*ast.TypeSwitchStmt, *ast.SelectStmt, *ast.ReturnStmt,
+			*ast.DeferStmt, *ast.GoStmt, *ast.BranchStmt, *ast.LabeledStmt:
+			return false // a branch could skip the lock — not provable
+		}
+	}
+	return false
+}
+
 func TestSource_NoStatusPublishedAfterUnlock(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
@@ -187,14 +217,12 @@ func TestSource_NoStatusPublishedAfterUnlock(t *testing.T) {
 			}
 			decls[name] = fd
 			al := aliasesIn(fd)
+			if locksOnEntry(fd, calleeOf) {
+				selfLocks[name] = true
+			}
 			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				if c, ok := calleeOf(n); ok {
-					if c == "s.publish" || al[c] {
-						publishes[name] = true
-					}
-					if c == "s.mu.Lock" {
-						selfLocks[name] = true
-					}
+				if c, ok := calleeOf(n); ok && (c == "s.publish" || al[c]) {
+					publishes[name] = true
 				}
 				return true
 			})

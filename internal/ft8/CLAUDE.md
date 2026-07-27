@@ -75,7 +75,12 @@ deleted within a round or two, while the behavioural ones caught real defects.
    the sink to a completion callback), and a call to any Sequencer method that
    publishes transitively — because a guard that knew only the first could be evaded
    by a rename (codex P2 on 603cd026). Methods that take `s.mu` themselves are
-   exempt: they own their ordering, which is what `publishCurrent` is for.
+   exempt: they own their ordering, which is what `publishCurrent` is for (11 correct
+   call sites depend on that exemption). The exemption is STRUCTURAL — the lock must
+   be taken unconditionally before any branch. Accepting any `s.mu.Lock()` anywhere in
+   the body was unsound: it passed a helper that locks on one conditional path, or
+   whose only lock sits in an unrelated closure (codex P2 on e3a7e605). An unsound
+   exemption is worse than none, because it reads as coverage.
    Observable: the final `ft8-qso` frame matches whether a session is running.
 
 4. **No decode is displayed as workable, spotted, or acted on unless its capture
