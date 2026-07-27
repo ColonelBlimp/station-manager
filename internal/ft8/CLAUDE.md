@@ -151,12 +151,16 @@ deleted within a round or two, while the behavioural ones caught real defects.
    `TestSource_SessionsEndOnlyThroughThePrimitive` requires every write to `s.mode`
    outside `retireSessionLocked`/`abandonLocked` to assign an enumerated ACTIVE mode
    (i.e. to be a session START); anything else — `seqIdle`, a variable holding it, or
-   an unreadable multi-value call — fails. It rejects every WRITE FORM — plain and multi-value
-   assignment, compound assignment, `++`/`--`, and `&s.mode` (the only route to
-   writing through a pointer). Narrower versions missed `s.mode, s.ex = seqIdle, nil`
-   (codex P2 on 61a875d8) and then `s.mode--`, which walks seqAnswering(1) to
-   seqIdle(0) (codex P2 on 5cffed06) — each fix patched the form just found instead
-   of enumerating the complete set, which is the actual lesson.
+   an unreadable multi-value call — fails. It rejects every write FORM (plain and multi-value
+   assignment, compound assignment, `++`/`--`, `&`-of) and matches the lvalue
+   STRUCTURALLY, unwrapping parens and pointer indirection and anchoring on the
+   *Sequencer identifiers in scope — receiver or parameter, since `mode` is not a
+   unique field name here. Four review rounds were spent getting there
+   (61a875d8, 5cffed06, 980c9e04), each patching the one instance reported. **The
+   lesson is not any of the individual holes: it is that a structural guard needs its
+   complete set enumerated up front — every write form, every spelling — because
+   patching reported instances converges slowly and reads as thoroughness while it
+   does so.**
    That makes THREE guards in this package fixed by inverting a denylist into an
    allowlist, so treat the allowlist as the default shape for a new guard here rather
    than the remedy after a review finds the hole.

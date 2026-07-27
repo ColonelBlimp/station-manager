@@ -136,12 +136,20 @@ session ends across the four sequencer files and no test reaches most of them. S
 this asserts the STRUCTURE instead: `s.mode = seqIdle` may appear only inside the
 two primitives that perform the full transition.
 
-It covers every way Go can write a struct field, enumerated deliberately rather than
-reactively: plain and multi-value assignment, compound assignment, ++/--, and taking
-the address (the only route to writing through a pointer). Three review rounds were
-spent adding one form at a time — the multi-value assignment (61a875d8) and then
-`s.mode--`, which walks seqAnswering(1) to seqIdle(0) (5cffed06) — because each fix
-patched the form that had just been found instead of asking what the complete set was.
+It covers two independent axes, because fixing one at a time is what made this take
+four review rounds:
+
+  - the write FORM: plain and multi-value assignment, compound assignment, ++/--, and
+    taking the address (the only route to writing through a pointer);
+  - the way the lvalue is SPELLED: matched structurally after unwrapping parentheses
+    and pointer indirection, so `s.mode`, `(s.mode)`, `(*s).mode` and `(*(s)).mode`
+    are one thing — and anchored to the *Sequencer identifiers in scope, its receiver
+    AND any parameter, since `mode` is not a unique field name in this package.
+
+The rounds: multi-value assignment (61a875d8), `s.mode--` walking seqAnswering(1) to
+seqIdle(0) (5cffed06), then printed-text comparison letting parenthesised and
+dereferenced spellings through (980c9e04). Each fix patched the instance reported
+instead of asking what the complete set was.
 
 It is an ALLOWLIST twice over, deliberately. Outside the two primitives, a write to
 s.mode must assign one of the enumerated ACTIVE modes — a session start. Anything
@@ -155,6 +163,64 @@ denylist into an allowlist; the pattern is now the default here, not the remedy.
 A new legitimate primitive or a new mode has to be added to a list, which is a
 two-line change and a conversation, rather than a silent pass.
 */
+// unwrap strips parentheses and pointer indirection, so (x), *x and (*x) all reduce
+// to x. Comparing PRINTED source instead let `(s.mode) = seqIdle`, `(s.mode)--` and
+// `(*s).mode = seqIdle` through — all valid Go for the same lvalue (codex P2 on
+// 980c9e04).
+func unwrap(e ast.Expr) ast.Expr {
+	for {
+		switch v := e.(type) {
+		case *ast.ParenExpr:
+			e = v.X
+		case *ast.StarExpr:
+			e = v.X
+		default:
+			return e
+		}
+	}
+}
+
+// isModeOf reports whether e denotes the mode field of one of the given *Sequencer
+// identifiers, however it is spelled. Anchoring on the identifier matters: `mode` is
+// not a unique field name in this package (TxController has one), so matching the
+// selector alone would flag unrelated code.
+func isModeOf(e ast.Expr, seqIdents map[string]bool) bool {
+	sel, ok := unwrap(e).(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != "mode" {
+		return false
+	}
+	id, ok := unwrap(sel.X).(*ast.Ident)
+	return ok && seqIdents[id.Name]
+}
+
+// sequencerIdents names every *Sequencer in scope for a function — its receiver and
+// any parameter — so a helper taking one cannot sidestep the guard either.
+func sequencerIdents(fd *ast.FuncDecl) map[string]bool {
+	out := map[string]bool{}
+	add := func(fl *ast.FieldList) {
+		if fl == nil {
+			return
+		}
+		for _, f := range fl.List {
+			st, ok := f.Type.(*ast.StarExpr)
+			if !ok {
+				continue
+			}
+			if id, ok := st.X.(*ast.Ident); !ok || id.Name != "Sequencer" {
+				continue
+			}
+			for _, n := range f.Names {
+				out[n.Name] = true
+			}
+		}
+	}
+	add(fd.Recv)
+	if fd.Type != nil {
+		add(fd.Type.Params)
+	}
+	return out
+}
+
 func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 	const allowed = "retireSessionLocked, abandonLocked"
 	permitted := map[string]bool{"retireSessionLocked": true, "abandonLocked": true}
@@ -184,6 +250,10 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 				if fd.Name != nil && permitted[fd.Name.Name] {
 					continue
 				}
+				seqIdents := sequencerIdents(fd)
+				if len(seqIdents) == 0 {
+					continue // nothing of ours can be written here
+				}
 				render := func(e ast.Expr) string {
 					var b strings.Builder
 					if printer.Fprint(&b, fset, e) != nil {
@@ -202,11 +272,11 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 					switch v := n.(type) {
 					case *ast.AssignStmt:
 						for i, l := range v.Lhs {
-							if render(l) != "s.mode" {
+							if !isModeOf(l, seqIdents) {
 								continue
 							}
 							if v.Tok != token.ASSIGN { // +=, -=, |= …
-								flag(v, "s.mode "+v.Tok.String()+" …")
+								flag(v, render(l)+" "+v.Tok.String()+" …")
 								continue
 							}
 							// Pairable only when the arities match; a multi-value call on
@@ -216,21 +286,21 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 								rhs = render(v.Rhs[i])
 							}
 							if !activeMode[rhs] {
-								flag(v, "s.mode = "+rhs)
+								flag(v, render(l)+" = "+rhs)
 							}
 						}
 					case *ast.IncDecStmt:
 						// s.mode-- walks seqAnswering(1) to seqIdle(0) (codex P2 on
 						// 5cffed06). Arithmetic on the mode is never legitimate.
-						if render(v.X) == "s.mode" {
-							flag(v, "s.mode"+v.Tok.String())
+						if isModeOf(v.X, seqIdents) {
+							flag(v, render(v.X)+v.Tok.String())
 						}
 					case *ast.UnaryExpr:
 						// Taking the address is how a write escapes this analysis
 						// entirely: p := &s.mode; *p = seqIdle. There is no reason to
 						// need it, so refuse it outright.
-						if v.Op == token.AND && render(v.X) == "s.mode" {
-							flag(v, "&s.mode")
+						if v.Op == token.AND && isModeOf(v.X, seqIdents) {
+							flag(v, "&"+render(v.X))
 						}
 					}
 					return true
