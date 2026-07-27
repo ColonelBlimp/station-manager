@@ -35,7 +35,7 @@ Station Manager runs as a local daemon (`smd`, written in Go) that serves a brow
 **FT8**
 
 - Live decode with band activity, per-CQ **beam heading**, country flags and worked-before marking.
-- Answer a CQ, work a caller, or run CQ and work the pile-up.
+- Answer a CQ, work a caller, or run CQ and auto-work a pile-up.
 - Occupancy view (channels or spectrum) so you pick a clear transmit slot.
 - ARRL Field Day exchanges, and reduced type-4 ladders for compound calls (`PJ4/NA2AA`).
 - Optional PSK Reporter spotting.
