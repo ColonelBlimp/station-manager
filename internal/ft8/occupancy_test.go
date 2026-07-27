@@ -661,3 +661,72 @@ func TestDecodeLoop_TrackedSlotWithNoDialIsNotPublished(t *testing.T) {
 		t.Fatal("a no-CAT session must still publish occupancy; that panel is display-only")
 	}
 }
+
+// TestDecodeLoop_MovedSlotPublishesNoDecodes is the other half of the moved-slot
+// rule: suppressing only occupancy left the slot's DECODES flowing to the
+// sequencer, the Band Activity feed and the PSK Reporter sink, all of which read
+// the CURRENT dial. An A→B→A slot would therefore show stations heard on B as
+// workable on A — keying an answer at a station that is not there and spotting
+// wrong frequencies to a public network. A moved slot must behave exactly like a
+// TX slot: empty decodes, but still a heartbeat so the SPA's slot clock ticks.
+//
+// Uses real modulated audio, not silence: a silent slot decodes to nothing
+// whether or not the suppression works, so it would prove nothing. Heavy (full
+// decode), so gated under -short like its siblings in modulate_test.go.
+func TestDecodeLoop_MovedSlotPublishesNoDecodes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+
+	audio, err := EncodeToSlot("CQ K1ABC FN42", 1500, 0.5)
+	if err != nil {
+		t.Fatalf("EncodeToSlot: %v", err)
+	}
+	// Sanity: this audio really is decodable, so an empty result below is the
+	// suppression working and not a dud fixture.
+	if got := DecodeSlot(audio, true, logging.Noop()); len(got) == 0 {
+		t.Fatal("fixture audio decodes to nothing; the test would pass vacuously")
+	}
+
+	run := func(t *testing.T, slot Slot) []DecodeReport {
+		t.Helper()
+		s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), newFakeSource())
+		var sunk []DecodeReport
+		s.SetDecodeSink(func(r DecodeReport) { sunk = append(sunk, r) })
+		ch := make(chan Slot, 1)
+		ch <- slot
+		close(ch)
+		s.decodeLoop(ch)
+		return sunk
+	}
+
+	start := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+
+	moved := run(t, Slot{
+		StartUTC:    start,
+		Samples:     audio,
+		DialChanged: true,
+		DialTracked: true,
+	})
+	if len(moved) != 1 {
+		t.Fatalf("decode sink got %d reports, want exactly 1 (the empty heartbeat)", len(moved))
+	}
+	if len(moved[0].Decodes) != 0 {
+		t.Errorf("moved slot leaked %d decodes: %+v", len(moved[0].Decodes), moved[0].Decodes)
+	}
+	if moved[0].Slot.StartUTC != "2026-07-27T12:00:00Z" {
+		t.Errorf("heartbeat lost the slot ref: %q", moved[0].Slot.StartUTC)
+	}
+
+	// Control: the same audio on a settled slot DOES decode, so the assertion
+	// above is about the dial having moved and nothing else.
+	settled := run(t, Slot{
+		StartUTC:    start,
+		Samples:     audio,
+		DialMHz:     14.074,
+		DialTracked: true,
+	})
+	if len(settled) != 1 || len(settled[0].Decodes) == 0 {
+		t.Fatalf("settled slot decoded nothing; the moved-slot assertion proves nothing")
+	}
+}
