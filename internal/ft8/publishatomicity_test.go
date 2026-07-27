@@ -32,7 +32,8 @@ import (
 	commands, but enforcement is now PACKAGE-WIDE — newTestSeq installs the same probe
 	on every test sequencer, so any path any test drives is checked (see
 	publishguard_test.go). All 39 publish-after-unlock sites across the four sequencer
-	files have been converted.
+	files have been converted, and a source-level AST check guards the ones no test
+	executes — including against reintroduction via an alias or a publishing helper.
 
 	Publishing under the lock is safe here because the sink cannot block or re-enter:
 	production's sink appends to the hub, which takes its own mutex and does a

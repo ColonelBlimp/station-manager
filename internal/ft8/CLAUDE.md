@@ -70,7 +70,12 @@ deleted within a round or two, while the behavioural ones caught real defects.
    the runtime probe (paths any test drives) and a source-level AST check
    (`TestSource_NoStatusPublishedAfterUnlock`) that is independent of coverage —
    necessary because 23 of the 39 sites are executed by no test, so the probe alone
-   would not catch a regression in them.
+   would not catch a regression in them. The AST check understands three forms —
+   direct `s.publish`, a local ALIAS of it (this package really uses that, to hand
+   the sink to a completion callback), and a call to any Sequencer method that
+   publishes transitively — because a guard that knew only the first could be evaded
+   by a rename (codex P2 on 603cd026). Methods that take `s.mu` themselves are
+   exempt: they own their ordering, which is what `publishCurrent` is for.
    Observable: the final `ft8-qso` frame matches whether a session is running.
 
 4. **No decode is displayed as workable, spotted, or acted on unless its capture
