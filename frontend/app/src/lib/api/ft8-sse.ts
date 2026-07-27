@@ -82,6 +82,10 @@ export interface QsoPayload {
      *  be logged on. Use this, not live rig state, to attribute a contact to a band:
      *  the rig and FT8 status are independent streams. */
     dial_freq_mhz?: number;
+    /** Why a session ended, when the operator did not cause it (carried only on the
+     *  terminal active:false frame; absent for an abandon or a completed contact).
+     *  A stable code — `dial_moved` | `dial_unknown` — rendered by the client. */
+    end_reason?: string;
     fd?: boolean;
     /** Reduced type-4 (nonstandard/compound call) session — bare-calls→RR73→73,
      *  no grid/report rungs (ADR 0048). */

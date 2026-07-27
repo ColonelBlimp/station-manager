@@ -313,6 +313,19 @@ export const ft8State = new Ft8State();
     sessionQsosState / toasts directly; here main.ts wires them.
 */
 
+/** Notified when a session ends for a reason the operator did NOT cause, with the
+ *  daemon's stable code (`dial_moved` | `dial_unknown`) and the call we were
+ *  working, if any. Null until wired; main.ts turns it into a toast.
+ *
+ *  Exists because a safety stop the operator cannot SEE is indistinguishable from a
+ *  hang: the ladder simply vanished, and the first on-air read of a working dial
+ *  guard was "moving the dial does not stop TX" (dogfood 2026-07-27). */
+let sessionEndedSink: ((reason: string, theirCall: string) => void) | null = null;
+
+export function setFt8SessionEndedSink(fn: (reason: string, theirCall: string) => void): void {
+    sessionEndedSink = fn;
+}
+
 /** Band Activity display prefs (config.json ft8.display). Defaults until /v1/config
  *  loads: accumulate the feed, cap at 100 rows, don't float CQ rows to the top.
  *  `$state` because /v1/config is fetched async — on a hard reload it lands AFTER
@@ -691,6 +704,13 @@ export const ft8Link: Ft8EventHandlers = {
                 if (engagedThisSession.size !== before) saveEngaged();
             }
         }
+        // A session ending with a reason is announced BEFORE the state is replaced:
+        // the terminal frame carries no callsign, so the station we were working has
+        // to come from the state we are about to overwrite.
+        const endReason = (p.end_reason ?? '').trim();
+        if (endReason !== '' && p.active !== true && ft8State.qso.active) {
+            sessionEndedSink?.(endReason, ft8State.qso.theirCall);
+        }
         ft8State.qso = {
             active: p.active ?? false,
             role: p.role ?? '',
@@ -768,6 +788,7 @@ export function resetFt8ForTests(): void {
     opener = null;
     closeFn = null;
     loggedSink = null;
+    sessionEndedSink = null;
     txActions = null;
     operatorCall = '';
     myGrid = '';

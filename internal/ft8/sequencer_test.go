@@ -478,7 +478,9 @@ func TestAbandonIfCurrent_PublishesUnderTheLock(t *testing.T) {
 	require.True(t, heldDuringPublish,
 		"the terminal publish escaped s.mu — a concurrent Start* can publish active first "+
 			"and be overwritten by this stale idle")
-	require.Equal(t, QsoStatus{Active: false}, r.lastStatus())
+	require.Equal(t, QsoStatus{Active: false, EndReason: "test"}, r.lastStatus(),
+		"the terminal frame carries WHY, so the operator is not left guessing whether "+
+			"a deliberate stop was a hang")
 }
 
 // A rung whose session was already replaced must not end the replacement.

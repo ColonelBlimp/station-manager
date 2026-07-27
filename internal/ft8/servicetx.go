@@ -395,6 +395,11 @@ func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, gen uin
 	// reading on either side is a refusal, not a pass. Untracked (no CAT) stays
 	// inert — that deployment cannot key at all.
 	if tracked && (!known || pinned == 0 || cur != pinned) {
+		// Which of the two the operator is told: unreadable, or moved.
+		reason := EndReasonDialMoved
+		if !known {
+			reason = EndReasonDialUnknown
+		}
 		// Refusing RF must never un-make a contact that already happened. Run the
 		// rung's completion policy FIRST: a Group A final rung records the QSO on
 		// either outcome and retires the session itself, and every callback is
@@ -409,7 +414,7 @@ func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, gen uin
 		// on and this is a no-op, while a Group B callback (which does not log or
 		// retire on failure) leaves it to fire here. It also guarantees a rung can
 		// never end a session that replaced it.
-		s.seq.AbandonIfCurrent(gen, "rig dial no longer matches the session's frequency")
+		s.seq.AbandonIfCurrent(gen, reason)
 		// Callers already treat this sentinel as "session gone; idle already
 		// published" and return without re-firing onDone, so no new error code
 		// reaches the SPA and no completion runs twice.
@@ -421,10 +426,10 @@ func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, gen uin
 	commitOK := func() bool { return s.seq.isCurrent(gen) }
 	return s.startTransmission(message, offsetHz, dialMHz, commitOK, func(ctx context.Context, ctrl *TxController) error {
 		return ctrl.TransmitCurrentSlot(ctx, message, offsetHz)
-	}, onDone, func() {
+	}, onDone, func(refusal error) {
 		// Generation-scoped so a refusal belonging to this rung can never end a
 		// session that replaced it.
-		s.seq.AbandonIfCurrent(gen, "rig dial no longer confirmed at keying time")
+		s.seq.AbandonIfCurrent(gen, endReasonForRefusal(refusal))
 	})
 }
 
@@ -440,7 +445,7 @@ func (s *Service) startTransmission(
 	commitOK func() bool,
 	fn func(ctx context.Context, ctrl *TxController) error,
 	onDone func(ok bool),
-	onDialRefusal func(),
+	onDialRefusal func(refusal error),
 ) error {
 	const op errors.Op = "ft8.Service.startTransmission"
 
@@ -558,7 +563,7 @@ func (s *Service) startTransmission(
 			// contact's callback refuse and the QSO vanish — the same trap as
 			// a76f1f61. The retirement itself is generation-scoped by the caller.
 			if onDialRefusal != nil && isDialRefusal(txErr) {
-				onDialRefusal()
+				onDialRefusal(txErr)
 			}
 		}()
 
@@ -978,6 +983,16 @@ func (s *Service) exchangePath() string {
 // longer confirm the rig's frequency — the two sentinels preKeyDialCheck returns.
 // Deliberately narrow: a key or play failure is transient and each ladder already
 // decides whether to retry it, so only a frequency refusal retires the session.
+// endReasonForRefusal maps a refusal to the code the operator sees. Defaults to
+// dial_moved: a mismatch is the common case, and saying "moved" when the truth was
+// "unreadable" still points at the right thing to check.
+func endReasonForRefusal(err error) string {
+	if stderrors.Is(err, ErrTxDialUnknown) {
+		return EndReasonDialUnknown
+	}
+	return EndReasonDialMoved
+}
+
 func isDialRefusal(err error) bool {
 	return stderrors.Is(err, ErrTxDialUnknown) || stderrors.Is(err, ErrTxSuperseded)
 }

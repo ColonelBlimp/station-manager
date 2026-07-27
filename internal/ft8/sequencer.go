@@ -102,6 +102,20 @@ const (
 // QsoStatus is the `ft8-qso` SSE payload + the sequencer's exposed state: the role
 // (answerer/caller), the active contact's rung, the worked call, the message we'll
 // send next, and the unanswered-repeat count. Active=false means idle (no session).
+// Session end-reason codes carried on the terminal QsoStatus. Stable machine
+// strings, not prose: the SPA renders them through its own wording (ADR 0010),
+// the same convention Ft8TxStatus.error follows. Absent for a NORMAL end — an
+// operator abandon or a completed contact needs no explanation, because the
+// operator caused it.
+const (
+	// EndReasonDialMoved: the rig is no longer on the frequency this session
+	// pinned, so the exchange cannot continue — the partner is not in our passband.
+	EndReasonDialMoved = "dial_moved"
+	// EndReasonDialUnknown: the daemon can no longer read the rig's frequency, so
+	// it will not key on one it cannot corroborate.
+	EndReasonDialUnknown = "dial_unknown"
+)
+
 type QsoStatus struct {
 	Active bool   `json:"active"`
 	Role   string `json:"role,omitempty"` // "answerer" | "caller" | "worker"; empty when idle
@@ -128,6 +142,15 @@ type QsoStatus struct {
 	// final rungs (73/RR73), so the SPA shows the "calls left" countdown iff this is
 	// >0 without re-deriving the cap-vs-one-shot rule. Remaining = MaxRepeats-Repeats.
 	MaxRepeats int `json:"max_repeats,omitempty"`
+	// EndReason explains a session that ended for a reason the operator did NOT
+	// cause, carried on the terminal (Active:false) status. Empty for a normal end.
+	//
+	// Without it the daemon knows exactly why it stopped and the operator does not:
+	// the ladder simply vanishes, which on air is indistinguishable from a hang —
+	// the first read of a working dial-guard stop was "moving the dial does not stop
+	// TX" (dogfood 2026-07-27, on air). A safety stop the operator cannot see is a
+	// safety stop they will work around.
+	EndReason string `json:"end_reason,omitempty"`
 	// DialFreqMHz is the rig dial PINNED to this session at start — the frequency the
 	// contact will actually be logged on. Emitted so a client can attribute the
 	// contact to the right band without consulting live rig state, which drifts: the
@@ -545,13 +568,14 @@ func (s *Sequencer) AbandonIfCurrent(gen uint64, reason string) bool {
 	}
 	was := s.abandonLocked()
 	if was {
+		// The terminal frame carries WHY, so the SPA can say it.
 		// Publish the terminal state while s.mu still excludes a replacement
 		// Start*, exactly as the final-rung completions do (finalrung.go). Publishing
 		// after the unlock lets a concurrent start commit and publish ACTIVE first,
 		// and this delayed idle then overwrites it — the hub caches idle for a live
 		// session, stranding the operator without session controls (codex P1 on
 		// a76f1f61; the same hazard as 3c1ee047 / a301d350).
-		s.publish(QsoStatus{Active: false})
+		s.publish(QsoStatus{Active: false, EndReason: reason})
 	}
 	s.mu.Unlock()
 	if was {

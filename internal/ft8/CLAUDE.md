@@ -78,6 +78,12 @@ deleted within a round or two, while the behavioural ones caught real defects.
    session that replaced it. *An unconditional abandon driven by a stale capture
    slot killed a valid session started on the new dial in the meantime.*
    Observable: a session started after the triggering event survives it.
+   **And the operator must be able to SEE it end and why** — the terminal
+   `ft8-qso` frame carries `end_reason` (`dial_moved` | `dial_unknown`) whenever
+   the operator did not cause the end. A safety stop nobody can see is
+   indistinguishable from a hang: the first on-air read of a WORKING dial guard was
+   "moving the dial does not stop TX", and it took a log dive to establish that it
+   had (dogfood 2026-07-27).
 
 **Corollary that cost three rounds:** if a behaviour test for one of these cannot
 be written without inventing a fact the system does not carry, the SYSTEM is

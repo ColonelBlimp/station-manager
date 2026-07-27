@@ -19,6 +19,7 @@ import {
     stopFt8,
     resetFt8ForTests,
     type Ft8TxActions,
+    setFt8SessionEndedSink,
 } from './ft8.svelte';
 import type { DecodeReport } from '../api/ft8-sse';
 import { ft8PileupStack } from './ft8Pileup.svelte';
@@ -361,5 +362,52 @@ describe('noteOperatingBand (band-change clear, dogfood 2026-07-19)', () => {
         ft8State.noteOperatingBand('');
         expect(ft8State.decodes.length).toBe(1);
         expect(ft8State.lastSeenBand).toBe('20m');
+    });
+});
+
+describe('session-ended notice (dogfood 2026-07-27, on air)', () => {
+    // The daemon ends a session it cannot confirm the frequency of. That is a
+    // deliberate safety stop, but it presented as the ladder simply vanishing —
+    // indistinguishable from a hang. The first on-air read of a WORKING dial guard
+    // was "moving the dial does not stop TX"; it took a log dive to see that it had.
+    function activeSession() {
+        ft8Link.onQso({
+            active: true,
+            role: 'caller',
+            their_call: 'K1ABC',
+            their_period: 'even',
+        });
+    }
+
+    it('announces the reason and who we were working when a session is cut short', () => {
+        const seen: { reason: string; call: string }[] = [];
+        setFt8SessionEndedSink((reason, call) => seen.push({ reason, call }));
+
+        activeSession();
+        // The terminal frame carries no callsign — the station has to come from the
+        // state being replaced, which is why the notice fires before the overwrite.
+        ft8Link.onQso({ active: false, end_reason: 'dial_moved' });
+
+        expect(seen).toEqual([{ reason: 'dial_moved', call: 'K1ABC' }]);
+        expect(ft8State.qso.active).toBe(false);
+    });
+
+    it('stays silent for an ordinary end — an abandon or a completed contact', () => {
+        const seen: string[] = [];
+        setFt8SessionEndedSink((reason) => seen.push(reason));
+
+        activeSession();
+        ft8Link.onQso({ active: false }); // no reason: the operator caused this
+
+        expect(seen).toEqual([]);
+    });
+
+    it('does not fire when no session was running', () => {
+        const seen: string[] = [];
+        setFt8SessionEndedSink((reason) => seen.push(reason));
+
+        ft8Link.onQso({ active: false, end_reason: 'dial_unknown' });
+
+        expect(seen).toEqual([]);
     });
 });

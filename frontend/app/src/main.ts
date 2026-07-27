@@ -24,6 +24,7 @@ import {
     setFt8MyGrid,
     setFt8TxActions,
     setFt8LoggedSink,
+    setFt8SessionEndedSink,
     setFt8DisplayPrefs,
     type Ft8TxResult,
 } from './lib/operate/ft8.svelte';
@@ -106,6 +107,26 @@ setFt8TxActions({
         ).then(toTxResult),
     abandon: () => abandonFt8Qso().then(toTxResult),
     skip: (armed) => skipFt8Qso(armed).then(toTxResult),
+});
+
+// Session-ended sink (ft8-qso, terminal frame with a reason): the daemon ends a
+// session when it can no longer confirm the rig is on the session's frequency. That
+// is a deliberate safety stop, but on air it presented as the ladder simply
+// vanishing — indistinguishable from a hang, and the first read of a WORKING guard
+// was "moving the dial does not stop TX" (dogfood 2026-07-27). Say it out loud.
+//
+// Wording is the SPA's, from the daemon's stable code (ADR 0010). Unknown codes
+// fall through to a generic line rather than showing the raw code, so an older SPA
+// against a newer daemon still says something true.
+const SESSION_END_TEXT: Record<string, string> = {
+    dial_moved: 'the rig moved off the session frequency',
+    dial_unknown: "the rig's frequency could not be confirmed",
+};
+
+setFt8SessionEndedSink((reason, theirCall) => {
+    const why = SESSION_END_TEXT[reason] ?? 'the rig frequency could not be verified';
+    const who = theirCall !== '' ? ` with ${theirCall}` : '';
+    toasts.warn(`FT8 session ended${who} — ${why}. Nothing was transmitted.`);
 });
 
 // Completed-FT8-QSO sink (ft8-logged SSE): a finished exchange is logged daemon-side

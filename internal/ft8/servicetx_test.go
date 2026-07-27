@@ -1068,7 +1068,7 @@ func TestStartTransmission_DialRefusalRetiresTheSession(t *testing.T) {
 			func() bool { return true },
 			func(context.Context, *TxController) error { return ErrTxDialUnknown },
 			nil,
-			func() {
+			func(error) {
 				s.seq.AbandonIfCurrent(gen, "test")
 				close(done)
 			})
@@ -1092,7 +1092,7 @@ func TestStartTransmission_DialRefusalRetiresTheSession(t *testing.T) {
 			func() bool { return true },
 			func(context.Context, *TxController) error { return ErrTxDialUnknown },
 			func(bool) { order = append(order, "completion") },
-			func() {
+			func(error) {
 				order = append(order, "retire")
 				s.seq.AbandonIfCurrent(gen, "test")
 				close(done)
@@ -1117,7 +1117,7 @@ func TestStartTransmission_DialRefusalRetiresTheSession(t *testing.T) {
 			func() bool { return true },
 			func(context.Context, *TxController) error { return stderrors.New("device busy") },
 			nil,
-			func() { fired <- struct{}{} })
+			func(error) { fired <- struct{}{} })
 		require.NoError(t, err)
 
 		select {
