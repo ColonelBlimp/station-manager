@@ -804,6 +804,18 @@ func TestSeqTransmit_RefusesWhenTheRigLeftTheSessionsDial(t *testing.T) {
 		dial := 14.074
 		s, k := newServiceOnDial(t, &dial)
 		dial = 7.074 // QSY while idle...
+		// ...which now needs a re-arm before working the new frequency: dial-guard
+		// rule 16 refuses a start while the rig is off the ARMED frequency, rather
+		// than accepting it and refusing every rung. The point of this case is
+		// unchanged — a session pinned to the new dial must not be torn down.
+		//
+		// Disarm THEN arm, because arming while already armed is idempotent and so
+		// does not re-bind: deliberately, since a silent re-bind on a stray click
+		// would undo the guarantee. In service the guard does the disarm for you;
+		// this test has no capture running, which is the one way to reach
+		// armed-on-A-while-the-rig-is-on-B.
+		require.NoError(t, s.ArmTx(false))
+		require.NoError(t, s.ArmTx(true))
 		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 7.074, "", 1))
 		gen := s.seq.currentGen()
 		stopKeying(k)
@@ -876,13 +888,18 @@ func TestSeqTransmit_DialGuardPreservesCompletedQso(t *testing.T) {
 // treating unknown as a pass disabled the invariant exactly when it was needed
 // (codex P1 on a76f1f61).
 func TestSeqTransmit_RefusesWhenTheDialCannotBeRead(t *testing.T) {
-	t.Run("start is refused while the dial is unreadable", func(t *testing.T) {
+	// SUPERSEDED by dial-guard rule 14: an unreadable dial is now refused one step
+	// EARLIER, at the arm, because an arm binds to a frequency and there is nothing
+	// to bind to. The original concern — an unverifiable dial must never authorise
+	// RF — is unchanged and now holds from arming onward, so a session can never
+	// reach the state this case described.
+	t.Run("arming is refused while the dial is unreadable, so no such session exists", func(t *testing.T) {
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 		s.SetDialSource(func() (float64, bool) { return 0, false })
-		require.NoError(t, s.ArmTx(true))
 
-		require.ErrorIs(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1), ErrTxDialUnknown,
-			"a session that could never validate a rung must not commit")
+		require.ErrorIs(t, s.ArmTx(true), ErrTxDialUnknown)
+		require.ErrorIs(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1), ErrTxNotArmed,
+			"and with no arm there is nothing for a start to bind to either")
 		require.False(t, s.seq.Active())
 	})
 
@@ -953,9 +970,15 @@ func TestDialGuard_LogsTheContactOnTheFrequencyItHappenedOn(t *testing.T) {
 // through sessionTxGate (a manual send is not a session), so this was keying with
 // an unreadable dial (codex P1 on 652821db).
 func TestTransmitNext_RefusedWhenTheDialCannotBeRead(t *testing.T) {
+	// The dial goes unreadable AFTER the arm — dial-guard rule 14 means an arm can
+	// no longer be made while it is unreadable, so that is the only way to reach
+	// this state. The assertion is unchanged: a manual send must not key on a
+	// frequency the daemon cannot corroborate.
+	known := true
 	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
-	s.SetDialSource(func() (float64, bool) { return 0, false })
+	s.SetDialSource(func() (float64, bool) { return 14.074, known })
 	require.NoError(t, s.ArmTx(true))
+	known = false
 
 	require.ErrorIs(t, s.TransmitNext("CQ 7Q5MLV IO91", 1500), ErrTxDialUnknown)
 	require.False(t, s.txInFlightNow(), "nothing may have been keyed")

@@ -55,6 +55,24 @@ import (
 	 13. A knownness blink (known -> unknown -> known, same frequency) is not a move.
 	     It still makes the SLOT unplaceable for occupancy; that is a different signal.
 
+	Rules 14-17 were added 2026-07-27 after rules 8-13 drew two more P1s. Each is a
+	consequence of the fixes above — the pattern to notice is that ADDING a binding
+	creates new states (unbound, mismatched-at-start) that the rules must then cover.
+
+	 14. There is no UNBOUND arm. Arming is refused while a configured dial source
+	     cannot report the frequency, and the pin is installed atomically with the
+	     arm — otherwise a zero pin reads as a wildcard and the arm can later key on
+	     any frequency, and a concurrent send can slip through before the pin lands.
+	 15. A frequency change ACROSS an unreadable interval is a move: A -> unknown ->
+	     B must fire, while A -> unknown -> A must not. Comparing only adjacent
+	     readings loses the QSY that happened during a CAT blink.
+	 16. A session start is REFUSED when the rig is not on the armed frequency —
+	     never accepted and then unable to transmit. A start that commits and then
+	     has every rung refused leaves a session the API called successful, blocking
+	     replacements until it is manually abandoned.
+	 17. The terminal frame carries the reason even when a COMPLETION retires the
+	     session. Preserving the contact must not cost the explanation.
+
 	Rule 6 is the one that must survive all the strictness above it: dropping TX
 	must never drop a contact that already happened on the air.
 
@@ -495,4 +513,127 @@ func TestDialGuard_KnownnessBlinkIsNotAMove(t *testing.T) {
 	require.Zero(t, moves, "the frequency never changed; CAT merely blinked")
 	require.True(t, sch.slotDialMoved,
 		"the SLOT is still unplaceable for occupancy — different question, different signal")
+}
+
+// --- 14: there is no unbound arm ---------------------------------------------
+
+// A zero pin must never read as "any frequency will do". Arming while a configured
+// dial source cannot answer would store one, and from then on both keying checks
+// skip their comparison and the guard ignores every QSY — an arm that can key
+// anywhere, with no re-arm required (codex P1 on 7c2e66ad).
+func TestDialGuard_ArmingIsRefusedWhileTheDialIsUnreadable(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	s.SetDialSource(func() (float64, bool) { return 0, false })
+
+	require.ErrorIs(t, s.ArmTx(true), ErrTxDialUnknown,
+		"an arm binds to a frequency; there is nothing to bind to yet")
+	require.ErrorIs(t, s.TransmitNext("CQ 7Q5MLV IO91", 1500), ErrTxNotArmed,
+		"and the refused arm must not have half-committed")
+}
+
+// No CAT at all is a different case: nothing to bind to, and that deployment
+// cannot key anyway, so arming stands.
+func TestDialGuard_ArmingStandsWithNoCatAtAll(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil) // no dial source
+	require.NoError(t, s.ArmTx(true))
+	_ = s.ArmTx(false)
+}
+
+// --- 15: a move across an unreadable interval ---------------------------------
+
+// Comparing only ADJACENT readings loses a QSY made while CAT was quiet: the
+// unknown sample overwrites the last frequency, so A -> unknown -> B looks like a
+// blink. The last KNOWN frequency is what a new reading must be compared against
+// (codex P1 on 7c2e66ad).
+func TestDialGuard_MoveAcrossAnUnreadableInterval(t *testing.T) {
+	type reading struct {
+		mhz float64
+		ok  bool
+	}
+	cases := []struct {
+		name      string
+		readings  []reading
+		wantMoves int
+		wantTo    float64
+	}{
+		{
+			name:      "QSY while CAT was quiet is still a QSY",
+			readings:  []reading{{14.074, true}, {0, false}, {14.075, true}},
+			wantMoves: 1,
+			wantTo:    14.075,
+		},
+		{
+			name:      "a blink that returns to the same frequency is not",
+			readings:  []reading{{14.074, true}, {0, false}, {14.074, true}},
+			wantMoves: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := 0
+			sch := NewScheduler(make(chan []int16), nil)
+			sch.SetDialSource(func() (float64, bool) {
+				r := tc.readings[n]
+				if n < len(tc.readings)-1 {
+					n++
+				}
+				return r.mhz, r.ok
+			})
+			moves, gotTo := 0, 0.0
+			sch.SetOnDialMoved(func(_, to float64) { moves++; gotTo = to })
+
+			for range tc.readings {
+				sch.observeDial()
+			}
+
+			require.Equal(t, tc.wantMoves, moves)
+			if tc.wantMoves > 0 {
+				require.InDelta(t, tc.wantTo, gotTo, 1e-9)
+			}
+		})
+	}
+}
+
+// --- 16: a mismatched start is refused, not accepted ------------------------
+
+// Accepting the start and then refusing every rung leaves a session the API called
+// successful: Call-CQ shows active, transmits nothing, and blocks replacements
+// until manually abandoned. The sequencers read the rung's refusal sentinel as
+// "already retired" and tear nothing down (codex P2 on 7c2e66ad).
+func TestDialGuard_RefusesAStartWhenTheRigIsNotOnTheArmedFrequency(t *testing.T) {
+	dial := 14.074
+	s, _ := dialGuardService(t, &dial) // armed on 14.074, no capture running
+
+	dial = 14.075 // QSY with nothing observing
+
+	require.Error(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.075, "", 1),
+		"the rig is not where TX was armed; the start must be refused up front")
+	require.False(t, s.seq.Active(),
+		"and no session may be left active-but-mute, blocking the next one")
+}
+
+// --- 17: preserving the contact must not cost the explanation ---------------
+
+// The teardown waits for an in-flight completion before abandoning, so a Group A
+// final rung can retire the session itself. Its terminal publish must still carry
+// the staged reason — otherwise the contact is saved and the operator is left with
+// PTT stopped, TX disarmed, and no explanation (codex P2 on 7c2e66ad).
+func TestDialGuard_TerminalFrameKeepsTheReasonWhenACompletionRetiresTheSession(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+
+	// The guard stages its reason, then the completion wins the race and retires
+	// the session before Abandon runs.
+	s.setPendingEndReason(EndReasonDialMoved)
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
+
+	last := r.lastStatus()
+	require.False(t, last.Active)
+	require.Equal(t, EndReasonDialMoved, last.EndReason,
+		"the contact was preserved; the explanation must be too")
 }

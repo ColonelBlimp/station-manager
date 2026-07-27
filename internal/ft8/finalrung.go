@@ -122,10 +122,19 @@ func (s *Sequencer) finalRungDoneLocked(c CompletedQso, clear func(), sentMsg, u
 		clear()
 		s.mode = seqIdle
 		s.repeats = 0
+		// Carry any staged end-reason. The dial guard waits for an in-flight
+		// completion before abandoning — so that a rogered contact is not lost — but
+		// that lets THIS callback retire the session, and the Abandon behind it then
+		// finds an idle sequencer and publishes nothing. Without consuming the
+		// reason here the contact is preserved at the cost of the explanation: PTT
+		// stopped, TX disarmed, and nothing on screen saying why (codex P2 on
+		// 7c2e66ad).
+		reason := s.pendingEndReason
+		s.pendingEndReason = ""
 		// Publish the terminal state while the state lock still excludes a
 		// replacement Start*. Otherwise that start can publish active first and
 		// this delayed completion can overwrite it with stale idle.
-		publish(QsoStatus{Active: false})
+		publish(QsoStatus{Active: false, EndReason: reason})
 		s.mu.Unlock()
 		if ok {
 			s.log.InfoWith().Str("their_call", c.TheirCall).Msg(sentMsg)

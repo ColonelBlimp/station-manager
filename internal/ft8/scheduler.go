@@ -117,12 +117,18 @@ type Scheduler struct {
 	// unknown). Sampled on every audio batch AND at every boundary — see
 	// observeDial for why endpoints alone are not enough. Installed before Run;
 	// all of this is owned by Run's goroutine, so no lock is needed.
-	dialSource    func() (float64, bool)
-	onDialMoved   func(fromMHz, toMHz float64)
-	lastDial      float64
-	lastDialOK    bool
-	dialSampled   bool // lastDial/lastDialOK hold a real reading
-	slotDialMoved bool // the dial moved somewhere inside the slot being captured
+	dialSource  func() (float64, bool)
+	onDialMoved func(fromMHz, toMHz float64)
+	lastDial    float64
+	lastDialOK  bool
+	// lastKnownDial is the last reading that actually carried a frequency, held
+	// separately so a QSY made while CAT was quiet is still seen: comparing only
+	// ADJACENT readings lets the unknown sample overwrite the frequency, and
+	// A -> unknown -> B then looks identical to a blink (codex P1 on 7c2e66ad).
+	lastKnownDial   float64
+	lastKnownDialOK bool
+	dialSampled     bool // lastDial/lastDialOK hold a real reading
+	slotDialMoved   bool // the dial moved somewhere inside the slot being captured
 
 	dropped atomic.Int64
 }
@@ -195,11 +201,16 @@ func (s *Scheduler) observeDial() {
 	//     a QSY, and treating it as one disarms a perfectly good arm (codex P2 on
 	//     6e974717).
 	unplaceable := s.dialSampled && (d != s.lastDial || ok != s.lastDialOK)
-	movedFrom, moved := s.lastDial, s.dialSampled && ok && s.lastDialOK && d != s.lastDial
+	// A move is judged against the last KNOWN frequency, however long ago it was
+	// read — so an unreadable stretch defers the comparison rather than losing it.
+	movedFrom, moved := s.lastKnownDial, ok && s.lastKnownDialOK && d != s.lastKnownDial
 	if unplaceable {
 		s.slotDialMoved = true
 	}
 	s.lastDial, s.lastDialOK, s.dialSampled = d, ok, true
+	if ok {
+		s.lastKnownDial, s.lastKnownDialOK = d, true
+	}
 	// Report the move NOW, not at the slot boundary. The dial guard hangs off this:
 	// an FT8 session is bound to one frequency, and letting the next rung notice
 	// leaves up to 30 s in which nothing on screen changes — long enough that a

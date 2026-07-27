@@ -137,6 +137,18 @@ func (s *Service) ArmTx(armed bool) error {
 func (s *Service) armTx() error {
 	const op errors.Op = "ft8.Service.ArmTx"
 
+	// Read the dial BEFORE taking txMu (dialState reaches into the bridge, and the
+	// lock order elsewhere is txMu-free for that call). An arm binds to a frequency,
+	// so a configured source that cannot report one is refused rather than stored as
+	// zero: a zero pin would read as "any frequency will do" in both keying checks
+	// and in the guard, giving an arm that can later key anywhere with no re-arm
+	// (codex P1 on 7c2e66ad). No source at all is different — that deployment cannot
+	// key, so there is nothing to bind and nothing to protect.
+	dialAtArm, tracked, known := s.dialState()
+	if tracked && !known {
+		return errors.New(op).WithErr(ErrTxDialUnknown)
+	}
+
 	s.txMu.Lock()
 	switch {
 	case s.txClosed:
@@ -178,19 +190,14 @@ func (s *Service) armTx() error {
 	}
 	s.txArmed = true
 	s.txLastErr = ""
-	s.txMu.Unlock()
-	// An ARM is bound to a frequency exactly as a session is. Pinned here rather
-	// than only at session start because TX is independent of capture: with no
-	// scheduler running there is nothing to observe a QSY, so the pre-key gate —
-	// which runs on every path — is the only thing standing between an arm made on
-	// one frequency and a key on another (codex P1 on 6e974717).
-	dialAtArm, tracked, known := s.dialState()
-	s.txMu.Lock()
-	if tracked && known {
-		s.armDialMHz = dialAtArm
-	} else {
-		s.armDialMHz = 0 // nothing to bind to; the gate falls back to refusing unknowns
-	}
+	// An ARM is bound to a frequency exactly as a session is, pinned HERE — under
+	// the same lock hold that sets txArmed. TX is independent of capture, so with no
+	// scheduler running the pre-key gate is the only thing between an arm made on
+	// one frequency and a key on another; and publishing armed before the pin lands
+	// leaves a window in which a concurrent send finds a zero pin (codex P1 on
+	// 7c2e66ad). A zero pin must never read as "any frequency will do", which is why
+	// the unreadable case is refused above rather than stored.
+	s.armDialMHz = dialAtArm
 	s.txMu.Unlock()
 
 	s.log.InfoWith().Str("mode", s.txMode()).Msg("ft8 tx: armed")
@@ -678,6 +685,20 @@ func (s *Service) sessionTxGate(op errors.Op) error {
 		// validate a rung — the operator gets one clear reason instead of a
 		// silent session that never transmits.
 		return errors.New(op).WithErr(ErrTxDialUnknown)
+	}
+	// Same reasoning for a rig that has left the ARMED frequency. Accepting the
+	// start and letting the first rung fail is worse than refusing: the sequencers
+	// read that rung's sentinel as "the session was already retired" and tear
+	// nothing down, so the API reports a live session that transmits nothing and
+	// blocks every replacement until it is manually abandoned (codex P2 on
+	// 7c2e66ad).
+	if tracked {
+		s.txMu.Lock()
+		armPin := s.armDialMHz
+		s.txMu.Unlock()
+		if armPin != 0 && dial != armPin {
+			return errors.New(op).WithErr(ErrTxSuperseded)
+		}
 	}
 	s.txMu.Lock()
 	s.sessionDialMHz = dial

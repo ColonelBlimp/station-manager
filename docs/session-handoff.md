@@ -197,6 +197,27 @@ precisely so we don't re-derive state or redo finished work.
 > the supersession explained, because its original concern is what the arm pin must
 > not reintroduce.
 >
+> **Round 17 (uncommitted): four more, and the PATTERN is now the finding.** Adding
+> a binding creates new STATES, and each round's findings were about states the
+> previous round's fix had just created — unbound arm, mismatched-at-start,
+> reason-lost-to-a-completion. Rules 14-17 added:
+> **14** no unbound arm (arming refused while a configured dial is unreadable; the
+> pin installed under the same lock hold as `txArmed`, since a zero pin read as a
+> wildcard and publishing armed first left a window); **15** a move ACROSS an
+> unreadable interval counts (compare against the last KNOWN frequency, not the last
+> adjacent reading, else a QSY during a CAT blink is invisible); **16** a mismatched
+> start is REFUSED, not accepted-then-mute (the sequencers read a refused rung as
+> "already retired" and tear nothing down, leaving a live-looking session that
+> blocks replacements); **17** a completion that retires the session carries the
+> staged reason (the round-16 wait-before-abandon let the contact survive at the
+> cost of the explanation).
+>
+> Three older tests SUPERSEDED and rewritten with the supersession explained, not
+> deleted. One of them surfaced a genuine edge: `ArmTx(true)` while already armed is
+> idempotent and so does NOT re-bind — deliberate (a silent re-bind on a stray click
+> would undo the guarantee), and only reachable with no capture running, but worth
+> knowing.
+>
 > Rounds 4-8 were whack-a-mole because every fix reacted to an observed dial
 > TRANSITION; transitions can be missed, mis-timed, or attributed to the wrong
 > session. The invariant cannot be. **A codex P1 claiming a boundary QSY escapes
