@@ -526,3 +526,44 @@ func TestTransmit_StillSendsALateButDecodableRemainder(t *testing.T) {
 	require.Less(t, len(p.played), len(wave), "the elapsed head was dropped")
 	require.Greater(t, len(p.played), len(wave)/2, "most of the waveform still went out")
 }
+
+// TestTransmit_PreKeyCheckRefusesWithoutKeying: the pre-key gate is the last thing
+// between a committed transmission and RF, and it runs AFTER the slot-boundary
+// wait. A manual send is accepted up to ~15 s before it keys, and the daemon's
+// view of the rig can change inside that window — so a check made when the request
+// was accepted says nothing about the moment we key (codex P1 on 0d180e59).
+//
+// Asserted on the observable that matters: whether PTT was pressed.
+func TestTransmit_PreKeyCheckRefusesWithoutKeying(t *testing.T) {
+	zeroTiming(t)
+
+	t.Run("a refusing check aborts before PTT", func(t *testing.T) {
+		k := &fakeKeyer{}
+		p := newFakePlayer()
+		c := NewTxController(k, p, "DATA-U", logging.Noop())
+		c.SetPreKeyCheck(func() error { return ErrTxDialUnknown })
+
+		// Let playback complete if the gate is (wrongly) skipped, so this fails on
+		// the assertion below rather than deadlocking — a hanging test is a poor
+		// proof; it does not say WHAT went wrong.
+		go p.finishPlayback()
+		err := c.transmit(context.Background(), []int16{1, 2, 3}, time.Time{}, nil)
+		require.ErrorIs(t, err, ErrTxDialUnknown)
+
+		require.Zero(t, k.keys(), "the rig must not have been keyed")
+		require.Zero(t, k.unkeys(), "nothing was keyed, so nothing needed unkeying")
+	})
+
+	t.Run("a passing check keys as normal", func(t *testing.T) {
+		k := &fakeKeyer{}
+		p := newFakePlayer()
+		c := NewTxController(k, p, "DATA-U", logging.Noop())
+		c.SetPreKeyCheck(func() error { return nil })
+
+		go p.finishPlayback()
+		require.NoError(t, c.transmit(context.Background(), []int16{1, 2, 3}, time.Time{}, nil))
+
+		require.Equal(t, 1, k.keys(), "a passing gate must not change normal keying")
+		require.Equal(t, 1, p.plays())
+	})
+}

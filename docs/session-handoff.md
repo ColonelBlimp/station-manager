@@ -120,6 +120,19 @@ precisely so we don't re-derive state or redo finished work.
 > against the reverted code. Rewritten to assert the logged frequency, with a
 > deliberately-wrong client dial so it exercises the stamp.
 >
+> **Round 11 (uncommitted): the dial check moved to the moment of KEYING.** The
+> request-time check proved nothing — `TransmitSlot` waits up to ~15 s for the
+> boundary, and the rig's state can change in that window (select an undecoded VFO
+> and `CurrentDialMHz` goes unknown). `TxController.SetPreKeyCheck` now runs
+> `Service.preKeyDialCheck` immediately before `KeyTx`, so every path to PTT —
+> manual send and sequencer rung — is gated at the moment it matters. Refusing
+> there aborts without keying and the normal failure path still runs the completion
+> callback, so invariant 1 holds. Its rules differ by caller: unknown dial always
+> refuses; the pinned-dial comparison applies only while a SESSION is active, so a
+> stale pin cannot block a manual send. Also fixed: the request-time check now goes
+> LAST (after armed / in-flight / readiness) — placed first, it reported
+> `rig_dial_unknown` for a disarmed send and masked in-flight conflicts.
+>
 > Rounds 4-8 were whack-a-mole because every fix reacted to an observed dial
 > TRANSITION; transitions can be missed, mis-timed, or attributed to the wrong
 > session. The invariant cannot be. **A codex P1 claiming a boundary QSY escapes

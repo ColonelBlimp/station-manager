@@ -60,6 +60,16 @@ type TxController struct {
 	// decode + occupancy for it — the captured audio of a slot we transmitted in is
 	// our own signal (rig TX bleed), meaningless for channel occupancy. Nil = no-op.
 	onTransmit func(boundary time.Time)
+
+	// preKey is the LAST check before PTT. It runs immediately before KeyTx,
+	// after the slot-boundary wait — which is where it has to run: a manual send
+	// is committed up to ~15 s before it keys, and the daemon's view of the rig
+	// can change inside that window (the operator selects a VFO whose frequency
+	// has not been decoded, and CurrentDialMHz goes unknown). A check made when
+	// the request was accepted says nothing about the moment we key
+	// (codex P1 on 0d180e59). Nil = no check, which is what cmd/ft8-tx-probe
+	// (its own bridge, no Service) and the unit tests get.
+	preKey func() error
 }
 
 // NewTxController builds the controller from an injected keyer (PTT) and player
@@ -71,6 +81,12 @@ func NewTxController(keyer TxKeyer, player slotPlayer, mode string, log logging.
 	}
 	return &TxController{keyer: keyer, player: player, mode: mode, log: log}
 }
+
+// SetPreKeyCheck installs the final pre-PTT gate (see TxController.preKey). Call
+// before any transmission; a non-nil error from it aborts the transmission
+// without keying, and the normal failure path still runs the caller's completion
+// callback — so refusing here cannot discard a contact that already happened.
+func (c *TxController) SetPreKeyCheck(fn func() error) { c.preKey = fn }
 
 // TransmitSlot encodes a standard FT8 message at the given base offset and
 // transmits it on the next UTC slot, on the synchronised timebase (symbol 0 at
@@ -176,6 +192,15 @@ func (c *TxController) transmitAligned(ctx context.Context, waveform []int16, bo
 func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal time.Time, onKeyed func()) error {
 	const op errors.Op = "ft8.TxController.transmit"
 
+	// Last gate before RF. Deliberately inside transmit rather than at the call
+	// sites: every path to PTT — manual send and sequencer rung alike — funnels
+	// through here after its wait, so this is the only place a check is
+	// guaranteed to reflect the moment of keying.
+	if c.preKey != nil {
+		if err := c.preKey(); err != nil {
+			return errors.New(op).WithErr(err).WithMsg("pre-key check")
+		}
+	}
 	if err := c.keyer.KeyTx(ctx, c.mode); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("key tx")
 	}

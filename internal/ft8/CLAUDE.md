@@ -40,7 +40,14 @@ deleted within a round or two, while the behavioural ones caught real defects.
    `bridge.TxReady` checks connection and identity and does NOT require the
    selected VFO to have been decoded, so "ready to key" and "we know where we
    are" are different facts (`Service.dialState`, tracked vs known). With no CAT
-   at all the check is inert, because that deployment cannot key.
+   at all the check is inert, because that deployment cannot key. **The check that
+   COUNTS is the one adjacent to PTT** (`Service.preKeyDialCheck`, installed via
+   `TxController.SetPreKeyCheck`): a manual send is committed up to ~15 s before it
+   keys, and the rig's state can change in that window, so a check made when the
+   request was accepted proves nothing about the moment of keying. Request-time
+   checks are a courtesy — a fast refusal for a send that is already doomed — and
+   they go LAST in precedence, after armed / active / in-flight / readiness, or
+   they mask those conflicts (codex P1+P2 on 0d180e59).
    Observable: no PTT, and `ErrTxDialUnknown` → 503 `rig_dial_unknown` on a start.
 
 3. **The last published `ft8-qso` status always reflects the live session.** A

@@ -167,6 +167,7 @@ func (s *Service) armTx() error {
 
 	s.txDevice = player
 	s.txCtrl = NewTxController(s.keyer, player, s.txMode(), s.log)
+	s.txCtrl.SetPreKeyCheck(s.preKeyDialCheck)
 	// Record each keyed slot so decodeLoop skips occupancy for it (the slot's
 	// captured audio is our own TX — see markTxSlot / the self-decode filter),
 	// and write the decode-log TX line — HERE, not at commit, so the log records
@@ -337,17 +338,6 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	// startTransmission so the no-session decision and the txInFlight commit can't
 	// be split by a concurrent StartQso. (StartQso already drives startTransmission
 	// under seqGate via fireOpening, so this nesting is the established order.)
-	// A manual send keys the rig too, so it clears the same bar as a session rung:
-	// SM does not transmit on a frequency it cannot corroborate. sessionTxGate does
-	// this for sequenced starts, and TransmitNext deliberately does NOT go through
-	// it (a manual send is not a session), so the check has to be repeated here —
-	// without it /v1/ft8/tx/send kept keying with an unreadable dial and the
-	// ErrTxDialUnknown mapping in handler_ft8_tx.go was unreachable (codex P1 on
-	// 652821db). There is no session dial to compare against; knowing where we are
-	// IS the bar, and it is also what labels the decode log's TX line.
-	if _, tracked, known := s.dialState(); tracked && !known {
-		return errors.New(op).WithErr(ErrTxDialUnknown)
-	}
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
 	if s.seq.Active() {
@@ -466,6 +456,17 @@ func (s *Service) startTransmission(
 	if s.keyer == nil || !s.keyer.TxReady() {
 		s.txMu.Unlock()
 		return errors.New(op).WithErr(ErrTxNotReady)
+	}
+	// Dial knownness goes LAST, after armed / in-flight / readiness — the same
+	// precedence sessionTxGate uses. Checking it earlier (it was at the top of
+	// TransmitNext) meant a disarmed send with an unreadable dial reported
+	// rig_dial_unknown instead of the documented not-armed conflict, and masked
+	// in-flight conflicts too (codex P2 on 0d180e59). This is the fast synchronous
+	// refusal; the guarantee is preKeyDialCheck, which re-runs at the moment of
+	// keying — this one only avoids accepting a send that is already doomed.
+	if _, tracked, known := s.dialState(); tracked && !known {
+		s.txMu.Unlock()
+		return errors.New(op).WithErr(ErrTxDialUnknown)
 	}
 	// Session-generation commit gate (review 2026-07-20 #1), checked WHILE
 	// HOLDING txMu so it is atomic with the txCancel registration below:
@@ -934,6 +935,44 @@ func (s *Service) exchangePath() string {
 // its closing message keyed (see finalrung.go) — without the stamp that QSO would
 // silently lose the operator's antenna choice. Group B retries instead of logging,
 // and each retry captures the latest selection.
+// preKeyDialCheck is the final gate before PTT (TxController.SetPreKeyCheck),
+// enforcing invariant 2 at the moment it matters rather than when the send was
+// accepted. Two rules:
+//
+//   - We must know where the rig is. An unreadable dial refuses: SM does not key
+//     on a frequency it cannot corroborate, and that reading is also what labels
+//     the decode log's TX line.
+//   - If a SESSION is active, the rig must still be on the dial that session
+//     pinned. Compared against sessionDialMHz, not the caller's dialMHz: the
+//     latter is the CLIENT-supplied value carried for logging and took a
+//     different path, so comparing it would produce spurious refusals. A manual
+//     send has no active session, so only the first rule applies to it — a stale
+//     pin from a previous session must never block one.
+//
+// Refusing here aborts the transmission without keying; startTransmission's
+// failure path still runs the completion callback, so a Group A contact is
+// recorded on its pinned frequency rather than lost (invariant 1).
+func (s *Service) preKeyDialCheck() error {
+	const op errors.Op = "ft8.Service.preKeyDialCheck"
+	cur, tracked, known := s.dialState()
+	if !tracked {
+		return nil // no CAT: nothing to corroborate against, and no session either
+	}
+	if !known {
+		return errors.New(op).WithErr(ErrTxDialUnknown)
+	}
+	if !s.seq.Active() {
+		return nil
+	}
+	s.txMu.Lock()
+	pinned := s.sessionDialMHz
+	s.txMu.Unlock()
+	if pinned != 0 && cur != pinned {
+		return errors.New(op).WithErr(ErrTxSuperseded)
+	}
+	return nil
+}
+
 func (s *Service) stampCompletionPath(c *CompletedQso) {
 	s.txMu.Lock()
 	p := s.exchPath

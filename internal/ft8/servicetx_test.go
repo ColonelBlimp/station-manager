@@ -967,3 +967,70 @@ func TestTransmitNext_RefusedWhenTheDialCannotBeRead(t *testing.T) {
 	s2.AbandonQso()
 	_ = s2.ArmTx(false)
 }
+
+// TestPreKeyDialCheck covers the gate the controller runs immediately before PTT.
+// Its three rules differ per caller, and the manual-send row is the one that needs
+// care: a stale pin from a PREVIOUS session must never block a manual send, which
+// is why the pinned comparison is conditional on a session being active.
+func TestPreKeyDialCheck(t *testing.T) {
+	t.Run("no CAT: nothing to corroborate against", func(t *testing.T) {
+		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil) // no dial source
+		require.NoError(t, s.preKeyDialCheck())
+	})
+
+	t.Run("dial unreadable: refuse", func(t *testing.T) {
+		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+		s.SetDialSource(func() (float64, bool) { return 0, false })
+		require.ErrorIs(t, s.preKeyDialCheck(), ErrTxDialUnknown)
+	})
+
+	t.Run("no active session: a stale pin must not block a manual send", func(t *testing.T) {
+		dial := 14.074
+		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+		s.SetDialSource(func() (float64, bool) { return dial, true })
+		require.NoError(t, s.ArmTx(true))
+		// Pin 14.074 via a session, end it, then QSY: the pin is now stale.
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
+		s.AbandonQso()
+		dial = 7.074
+
+		require.NoError(t, s.preKeyDialCheck(),
+			"with no session there is nothing to match against; the manual send stands")
+	})
+
+	t.Run("active session on a different dial: refuse", func(t *testing.T) {
+		dial := 14.074
+		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+		s.SetDialSource(func() (float64, bool) { return dial, true })
+		require.NoError(t, s.ArmTx(true))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
+
+		dial = 7.074
+		require.ErrorIs(t, s.preKeyDialCheck(), ErrTxSuperseded)
+		s.AbandonQso()
+	})
+
+	t.Run("active session still on its dial: proceed", func(t *testing.T) {
+		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+		s.SetDialSource(func() (float64, bool) { return 14.074, true })
+		require.NoError(t, s.ArmTx(true))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
+
+		require.NoError(t, s.preKeyDialCheck())
+		s.AbandonQso()
+	})
+}
+
+// TestTransmitNext_ErrorPrecedence: the dial check must not mask the conflicts
+// that are checked before it. A disarmed send with an unreadable dial is a
+// not-armed conflict (409), not rig_dial_unknown (503) — putting the dial check
+// first inverted that and also masked in-flight conflicts (codex P2 on 0d180e59).
+func TestTransmitNext_ErrorPrecedence(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	s.SetDialSource(func() (float64, bool) { return 0, false })
+	// NOT armed.
+
+	err := s.TransmitNext("CQ 7Q5MLV IO91", 1500)
+	require.ErrorIs(t, err, ErrTxNotArmed, "armed is checked before the dial")
+	require.NotErrorIs(t, err, ErrTxDialUnknown)
+}
