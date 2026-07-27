@@ -3,7 +3,6 @@ package ft8
 import (
 	"go/ast"
 	"go/parser"
-	"go/printer"
 	"go/token"
 	"os"
 	"strings"
@@ -163,75 +162,32 @@ denylist into an allowlist; the pattern is now the default here, not the remedy.
 A new legitimate primitive or a new mode has to be added to a list, which is a
 two-line change and a conversation, rather than a silent pass.
 */
-// unwrap strips parentheses and pointer indirection, so (x), *x and (*x) all reduce
-// to x. Comparing PRINTED source instead let `(s.mode) = seqIdle`, `(s.mode)--` and
-// `(*s).mode = seqIdle` through — all valid Go for the same lvalue (codex P2 on
-// 980c9e04).
-func unwrap(e ast.Expr) ast.Expr {
-	for {
-		switch v := e.(type) {
-		case *ast.ParenExpr:
-			e = v.X
-		case *ast.StarExpr:
-			e = v.X
-		default:
-			return e
-		}
-	}
-}
-
-// isModeOf reports whether e denotes the mode field of one of the given *Sequencer
-// identifiers, however it is spelled. Anchoring on the identifier matters: `mode` is
-// not a unique field name in this package (TxController has one), so matching the
-// selector alone would flag unrelated code.
-func isModeOf(e ast.Expr, seqIdents map[string]bool) bool {
-	sel, ok := unwrap(e).(*ast.SelectorExpr)
-	if !ok || sel.Sel == nil || sel.Sel.Name != "mode" {
-		return false
-	}
-	id, ok := unwrap(sel.X).(*ast.Ident)
-	return ok && seqIdents[id.Name]
-}
-
-// sequencerIdents names every *Sequencer in scope for a function — its receiver and
-// any parameter — so a helper taking one cannot sidestep the guard either.
-func sequencerIdents(fd *ast.FuncDecl) map[string]bool {
-	out := map[string]bool{}
-	add := func(fl *ast.FieldList) {
-		if fl == nil {
-			return
-		}
-		for _, f := range fl.List {
-			st, ok := f.Type.(*ast.StarExpr)
-			if !ok {
-				continue
-			}
-			if id, ok := st.X.(*ast.Ident); !ok || id.Name != "Sequencer" {
-				continue
-			}
-			for _, n := range f.Names {
-				out[n.Name] = true
-			}
-		}
-	}
-	add(fd.Recv)
-	if fd.Type != nil {
-		add(fd.Type.Params)
-	}
-	return out
-}
-
+// TestSource_SessionsEndOnlyThroughThePrimitive enforces invariant 6 structurally.
+//
+// It constrains the CONSTANT, not the lvalue. A session ends exactly when mode becomes
+// seqIdle, and there are only two ways for that to happen: something assigns seqIdle,
+// or something does arithmetic on a mode. So outside the two primitives:
+//
+//   - the identifier `seqIdle` may appear ONLY as an operand of a comparison, or in a
+//     case clause. Never where it can be stored, aliased, or passed;
+//   - no `++`/`--`/compound assignment may target a `.mode` selector, since that path
+//     reaches seqIdle without naming it (seqAnswering(1)-- is seqIdle).
+//
+// This replaces four rounds of tracking WHICH IDENTIFIER denotes the Sequencer —
+// receiver, then parameter, then the alias `alias := s` (codex P2 on 0c80f894). That
+// list has no end: a struct field, a slice element, a closure capture, a function
+// return. Constraining the constant is immune to all of it, and to how the lvalue is
+// spelled, because the left-hand side is never examined. It also needs no type
+// information: `alias.mode = seqIdle` is caught by the seqIdle on the right, and
+// `idle := seqIdle` is caught where the alias is created.
+//
+// A survey of production code before writing this confirmed the rule costs nothing:
+// every existing use of seqIdle outside the primitives is `s.mode == seqIdle` or
+// `!=`. Adding a legitimate third primitive means adding it to `permitted` — a
+// two-line change and a conversation, rather than a silent pass.
 func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 	const allowed = "retireSessionLocked, abandonLocked"
 	permitted := map[string]bool{"retireSessionLocked": true, "abandonLocked": true}
-	// The ACTIVE modes: assigning one of these is a session START, which legitimately
-	// happens outside the primitives. Every other right-hand side is a session end (or
-	// unreadable), and must go through them.
-	activeMode := map[string]bool{
-		"seqAnswering": true, "seqCalling": true, "seqWorking": true,
-		"seqAnsweringFd": true, "seqWorkingFd": true,
-		"seqAnsweringT4": true, "seqWorkingT4": true,
-	}
 
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
@@ -250,57 +206,73 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 				if fd.Name != nil && permitted[fd.Name.Name] {
 					continue
 				}
-				seqIdents := sequencerIdents(fd)
-				if len(seqIdents) == 0 {
-					continue // nothing of ours can be written here
-				}
-				render := func(e ast.Expr) string {
-					var b strings.Builder
-					if printer.Fprint(&b, fset, e) != nil {
-						return "?"
-					}
-					return b.String()
-				}
-				flag := func(n ast.Node, how string) {
-					t.Errorf("%s:%d: session state written by hand in %s (%s) — every ending "+
-						"must go through the session-identity transition (invariant 6), so "+
-						"the generation is retired and a staged end_reason is consumed. "+
-						"Allowed only in: %s",
-						name, fset.Position(n.Pos()).Line, fd.Name.Name, how, allowed)
+				// Positions of seqIdle mentions that are merely READ.
+				readOnly := map[token.Pos]bool{}
+				markRead := func(e ast.Expr) {
+					ast.Inspect(e, func(n ast.Node) bool {
+						if id, ok := n.(*ast.Ident); ok && id.Name == "seqIdle" {
+							readOnly[id.Pos()] = true
+						}
+						return true
+					})
 				}
 				ast.Inspect(fd.Body, func(n ast.Node) bool {
 					switch v := n.(type) {
-					case *ast.AssignStmt:
-						for i, l := range v.Lhs {
-							if !isModeOf(l, seqIdents) {
-								continue
-							}
-							if v.Tok != token.ASSIGN { // +=, -=, |= …
-								flag(v, render(l)+" "+v.Tok.String()+" …")
-								continue
-							}
-							// Pairable only when the arities match; a multi-value call on
-							// the right cannot be read, so it is not an allowed start.
-							rhs := "?"
-							if len(v.Rhs) == len(v.Lhs) {
-								rhs = render(v.Rhs[i])
-							}
-							if !activeMode[rhs] {
-								flag(v, render(l)+" = "+rhs)
-							}
+					case *ast.BinaryExpr:
+						if v.Op == token.EQL || v.Op == token.NEQ {
+							markRead(v.X)
+							markRead(v.Y)
+						}
+					case *ast.CaseClause:
+						for _, e := range v.List {
+							markRead(e)
+						}
+					}
+					return true
+				})
+
+				isModeSel := func(e ast.Expr) bool {
+					for {
+						switch v := e.(type) {
+						case *ast.ParenExpr:
+							e = v.X
+						case *ast.StarExpr:
+							e = v.X
+						default:
+							sel, ok := e.(*ast.SelectorExpr)
+							return ok && sel.Sel != nil && sel.Sel.Name == "mode"
+						}
+					}
+				}
+				ast.Inspect(fd.Body, func(n ast.Node) bool {
+					switch v := n.(type) {
+					case *ast.Ident:
+						if v.Name == "seqIdle" && !readOnly[v.Pos()] {
+							t.Errorf("%s:%d: seqIdle used outside a comparison in %s — a "+
+								"session may only be ended by the session-identity "+
+								"transition (invariant 6), which retires the generation and "+
+								"consumes a staged end_reason. Allowed only in: %s",
+								name, fset.Position(v.Pos()).Line, fd.Name.Name, allowed)
 						}
 					case *ast.IncDecStmt:
-						// s.mode-- walks seqAnswering(1) to seqIdle(0) (codex P2 on
-						// 5cffed06). Arithmetic on the mode is never legitimate.
-						if isModeOf(v.X, seqIdents) {
-							flag(v, render(v.X)+v.Tok.String())
+						if isModeSel(v.X) {
+							t.Errorf("%s:%d: arithmetic on a mode in %s (%s) reaches seqIdle "+
+								"without naming it — see invariant 6. Allowed only in: %s",
+								name, fset.Position(v.Pos()).Line, fd.Name.Name,
+								v.Tok.String(), allowed)
 						}
-					case *ast.UnaryExpr:
-						// Taking the address is how a write escapes this analysis
-						// entirely: p := &s.mode; *p = seqIdle. There is no reason to
-						// need it, so refuse it outright.
-						if v.Op == token.AND && isModeOf(v.X, seqIdents) {
-							flag(v, "&"+render(v.X))
+					case *ast.AssignStmt:
+						if v.Tok == token.ASSIGN {
+							return true
+						}
+						for _, l := range v.Lhs {
+							if isModeSel(l) {
+								t.Errorf("%s:%d: arithmetic on a mode in %s (%s) reaches "+
+									"seqIdle without naming it — see invariant 6. Allowed "+
+									"only in: %s",
+									name, fset.Position(v.Pos()).Line, fd.Name.Name,
+									v.Tok.String(), allowed)
+							}
 						}
 					}
 					return true

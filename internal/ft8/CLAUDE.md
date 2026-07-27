@@ -151,16 +151,19 @@ deleted within a round or two, while the behavioural ones caught real defects.
    `TestSource_SessionsEndOnlyThroughThePrimitive` requires every write to `s.mode`
    outside `retireSessionLocked`/`abandonLocked` to assign an enumerated ACTIVE mode
    (i.e. to be a session START); anything else — `seqIdle`, a variable holding it, or
-   an unreadable multi-value call — fails. It rejects every write FORM (plain and multi-value
-   assignment, compound assignment, `++`/`--`, `&`-of) and matches the lvalue
-   STRUCTURALLY, unwrapping parens and pointer indirection and anchoring on the
-   *Sequencer identifiers in scope — receiver or parameter, since `mode` is not a
-   unique field name here. Four review rounds were spent getting there
-   (61a875d8, 5cffed06, 980c9e04), each patching the one instance reported. **The
-   lesson is not any of the individual holes: it is that a structural guard needs its
-   complete set enumerated up front — every write form, every spelling — because
-   patching reported instances converges slowly and reads as thoroughness while it
-   does so.**
+   an unreadable multi-value call — fails. It constrains the CONSTANT rather than the
+   lvalue: outside those two functions `seqIdle` may appear only as a comparison
+   operand or a case clause — never where it can be stored, aliased or passed — plus
+   no `++`/`--`/compound assignment may target a `.mode` selector (that path reaches
+   seqIdle without naming it, since seqAnswering(1)-- is seqIdle). **This replaced
+   five rounds of tracking which identifier denotes the Sequencer** — receiver, then
+   parameter, then `alias := s` (61a875d8, 5cffed06, 980c9e04, 0c80f894) — a list
+   with no end: a struct field, a slice element, a closure capture, a function
+   return. The lesson is the shape of the question: asking "how can you name the
+   thing being written?" has an unbounded answer, while asking "what may this value
+   do?" has a small one. A survey of production code confirmed the stricter rule
+   costs nothing — every existing use of `seqIdle` outside the primitives is already
+   a comparison.
    That makes THREE guards in this package fixed by inverting a denylist into an
    allowlist, so treat the allowlist as the default shape for a new guard here rather
    than the remedy after a review finds the hole.
