@@ -363,6 +363,16 @@ type Sequencer struct {
 	// per-attempt QSO after the final rung succeeds and before the completion
 	// state is released. It must not call back into the Sequencer; completion
 	// callbacks invoke it with s.mu released.
+	//
+	// It must also be SIDE-EFFECT-FREE on anything but the CompletedQso it is
+	// handed, because every call site runs it BEFORE the sessionGen check — so it
+	// also runs on stale callbacks belonging to a session that has already been
+	// abandoned or replaced. Writing Service state here would let a dead session
+	// mutate a live one. (Deliberate asymmetry: onComplete, which DOES mutate
+	// Service state via resetCompletionPath, runs only after that check passes.)
+	// Stamping before the check is itself deliberate — the values describe the
+	// attempt that just transmitted, and reading them later would read whatever
+	// replaced it.
 	prepareComplete func(*CompletedQso)
 	onComplete      func(CompletedQso)
 	log             logging.Logger
@@ -1246,12 +1256,6 @@ func (s *Sequencer) fireOpening(now time.Time) {
 			return
 		}
 		msg, rung = m, s.fdWork.State.label()
-	case seqCalling:
-		if s.caller != nil { // a contact already started — not an opening
-			s.mu.Unlock()
-			return
-		}
-		msg, rung = s.cqMessage, "calling-cq"
 	case seqWorking:
 		// Opening rung is our report (cqReporting) — always non-terminal, so the
 		// no-completion contract here holds (RR73 is never an opening).

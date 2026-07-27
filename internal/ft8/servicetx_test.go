@@ -497,7 +497,7 @@ func TestStartQso_RejectedStartKeepsExchangePath(t *testing.T) {
 
 	err := s.StartQso("G0XYZ", "IO91", "W1AW", "FN31", theirSlot, 1500, 14.074, 1, false)
 	require.Error(t, err, "second start while a QSO is active is rejected")
-	require.Equal(t, antPathLong, s.exchangePath(),
+	require.Equal(t, antPathLong, s.exchangePathForTest(),
 		"a rejected start must not reset the active exchange's path")
 
 	s.AbandonQso()
@@ -523,7 +523,7 @@ func TestOnComplete_UsesStampThenResetsPath(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("qsoLogger not invoked")
 	}
-	require.Equal(t, antPathShort, s.exchangePath(),
+	require.Equal(t, antPathShort, s.exchangePathForTest(),
 		"the live selection is reset — the next contact starts from the short-path default")
 }
 
@@ -543,7 +543,7 @@ func TestOnComplete_StampSurvivesLivePathReset(t *testing.T) {
 
 	// A concurrent start / OnSlot idle-out resets the live selection BEFORE onComplete.
 	s.consumeExchangePath()
-	require.Equal(t, antPathShort, s.exchangePath(), "live selection was reset")
+	require.Equal(t, antPathShort, s.exchangePathForTest(), "live selection was reset")
 
 	s.seq.onComplete(c)
 	select {
@@ -577,7 +577,7 @@ func TestOnComplete_DoesNotClearNewerPathSelection(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("qsoLogger not invoked")
 	}
-	require.Equal(t, antPathLong, s.exchangePath(),
+	require.Equal(t, antPathLong, s.exchangePathForTest(),
 		"delayed old completion must not clear the new session's selection")
 }
 
@@ -602,7 +602,7 @@ func TestOnComplete_PerQsoStampsDoNotOverwrite(t *testing.T) {
 
 	require.Equal(t, antPathLong, (<-logged).AntPath)
 	require.Equal(t, antPathShort, (<-logged).AntPath)
-	require.Equal(t, antPathShort, s.exchangePath(), "latest completed selection is reset")
+	require.Equal(t, antPathShort, s.exchangePathForTest(), "latest completed selection is reset")
 }
 
 // TestCompletionRace_PreservesNewPathAndStatus drives the production ordering:
@@ -688,7 +688,7 @@ func TestCompletionRace_PreservesNewPathAndStatus(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("qsoLogger not invoked")
 	}
-	require.Equal(t, antPathLong, s.exchangePath(),
+	require.Equal(t, antPathLong, s.exchangePathForTest(),
 		"old completion must not clear the replacement session's selection")
 
 	statusMu.Lock()
@@ -710,12 +710,12 @@ func TestExchangePath_ConsumeAndRestore(t *testing.T) {
 	s.SetExchangePath("L")
 	p, gen := s.consumeExchangePath()
 	require.Equal(t, antPathLong, p, "consume returns the choice")
-	require.Equal(t, antPathShort, s.exchangePath(), "consume clears back to the default")
+	require.Equal(t, antPathShort, s.exchangePathForTest(), "consume clears back to the default")
 	p2, _ := s.consumeExchangePath()
 	require.Equal(t, antPathShort, p2, "second consume yields the default")
 
 	s.restoreExchangePath(antPathLong, gen)
-	require.Equal(t, antPathLong, s.exchangePath(), "quiet-window long-path restore reinstates the choice")
+	require.Equal(t, antPathLong, s.exchangePathForTest(), "quiet-window long-path restore reinstates the choice")
 
 	// The lost-update case the codex review caught in the first shape: a
 	// selection landing between consume and restore must WIN over the restore.
@@ -723,14 +723,14 @@ func TestExchangePath_ConsumeAndRestore(t *testing.T) {
 	require.Equal(t, antPathLong, p3)
 	s.SetExchangePath("S") // operator's newer selection, mid-window
 	s.restoreExchangePath(antPathLong, gen3)
-	require.Equal(t, antPathShort, s.exchangePath(),
+	require.Equal(t, antPathShort, s.exchangePathForTest(),
 		"a stale long-path restore must not overwrite a newer selection")
 
 	s.SetExchangePath("L") // and a short-path restore is always a no-op
 	_, gen4 := s.consumeExchangePath()
 	s.SetExchangePath("L")
 	s.restoreExchangePath(antPathShort, gen4)
-	require.Equal(t, antPathLong, s.exchangePath(),
+	require.Equal(t, antPathLong, s.exchangePathForTest(),
 		"a short-path restore never clobbers a selection")
 }
 

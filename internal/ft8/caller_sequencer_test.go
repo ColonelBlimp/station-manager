@@ -120,6 +120,37 @@ func TestCallerSequencer_TxParityChoice(t *testing.T) {
 	}
 }
 
+// TestCallerSequencer_DoesNotFireTheCqImmediately pins the decision StartCallCq
+// documents: unlike answering a CQ, a Call-CQ run does NOT claim the current slot.
+// Our CQ parity is chosen as the NEXT slot, so the first CQ goes out at the upcoming
+// boundary (≤ ~15 s) via onSlotCalling.
+//
+// The fixture is deliberately inside OUR parity and early in the slot — the exact
+// conditions under which the answer-a-CQ path fires its opening immediately — so
+// this pins a DECISION, not an accident of timing.
+//
+// What it does NOT catch, stated so nobody trusts it further than it goes: wiring
+// fireOpening into StartCallCq would transmit nothing (that switch has no seqCalling
+// case), which is observably identical to waiting for the boundary. The trap is
+// recorded where a future author would hit it — in StartCallCq's own comment.
+func TestCallerSequencer_DoesNotFireTheCqImmediately(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	// Slot 15 is odd; txParity "odd" makes it ours, and now is 1 s in — well inside
+	// the late window fireOpening honours.
+	require.NoError(t, s.StartCallCq("7Q5MLV", "KH78", 2700, 28.074, "auto_first", "odd",
+		time.Unix(16, 0).UTC()))
+	require.Equal(t, "even", s.theirPeriod, "fixture: slot 15 is OURS")
+
+	require.Empty(t, r.sentMsgs(),
+		"starting a run must not key: the CQ waits for the next slot boundary")
+
+	// ...and it is a delay, not a failure to call — the next qualifying slot sends it.
+	driveTheir(s, 30, nil)
+	require.Equal(t, []string{"CQ 7Q5MLV KH78"}, r.sentMsgs(),
+		"the CQ must still go out on the following slot")
+}
+
 // Calling CQ has no repeat cap — it keeps calling until answered or abandoned.
 func TestCallerSequencer_NoCapWhileCallingCq(t *testing.T) {
 	r := &seqRecorder{}

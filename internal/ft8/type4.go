@@ -214,6 +214,8 @@ func (e T4Exchange) Sent() T4Exchange {
 }
 
 // Done reports whether the exchange is complete (our 73 transmitted) and ready to log.
+// Specification-only, like every ladder's Sent/Done — see Exchange.Done in
+// sequence.go for why production completion does not run through these.
 func (e T4Exchange) Done() bool { return e.State == t4Done }
 
 // --- work-a-caller: a nonstandard station calls US -----------------------------------

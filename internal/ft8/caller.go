@@ -144,4 +144,6 @@ func (e CallerExchange) Sent() CallerExchange {
 }
 
 // Done reports whether the exchange is complete (our RR73 transmitted) and ready to log.
+// Specification-only, like every ladder's Sent/Done — see Exchange.Done in
+// sequence.go for why production completion does not run through these.
 func (e CallerExchange) Done() bool { return e.State == cqDone }

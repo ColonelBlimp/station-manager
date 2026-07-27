@@ -130,6 +130,36 @@ deleted within a round or two, while the behavioural ones caught real defects.
    Observable: an arm the sequencer refused is never reported as armed, and
    disarm is always accepted.
 
+## Adding a sequencer mode — the coordinated-edit list
+
+Nothing enforces this, and no abstraction should be invented to (the modes differ
+in ways that matter — see "Build specific, not generic"). It is a checklist because
+that is what it honestly is. Surfaced by the 2026-07-27 package review: seven modes
+across four protocol families, each of which had to be taught to every one of these
+sites, and skip validation was the one that got missed.
+
+A new mode must be added to: `OnSlot` dispatch · `ActiveCallsign` ·
+`rungSkippableLocked` (invariant 7 — omission means NOT skippable, which is the
+safe default) · `abandonLocked` · `statusLocked` · `fireOpening` (or a deliberate
+decision not to fire an opening, recorded at the start function — see
+`StartCallCq`) · the completion snapshot (`completed*QsoLocked`) · and the
+Service-side staging in `servicetx.go`.
+
+Two structural rules the modes already obey, worth keeping:
+
+- **An active mode always has exactly its corresponding exchange pointer**
+  (`seqAnswering`↔`ex`, `seqWorking`↔`caller`, and so on). The nil checks scattered
+  through the switch statements are defensive, not a supported state: a mode set
+  without its pointer leaves `mode` and the published status disagreeing, and the
+  operator sees a session the sequencer cannot advance.
+- **A mode's family decides its final-rung policy, and the Group A/Group B split
+  is not symmetric** — it turns on whether the PARTNER already holds a complete
+  QSO (Group A: they rogered, so log whether or not our courtesy closer keys;
+  Group B: we owe them the roger, so retry and log only on true on-air success).
+  Standard answer / FD work / type-4 answer are Group A; standard work / Call-CQ /
+  FD answer / type-4 work are Group B. Copying the wrong sibling's policy is an
+  easy mistake that either loses a real QSO or logs one the partner never got.
+
 **Corollary that cost three rounds:** if a behaviour test for one of these cannot
 be written without inventing a fact the system does not carry, the SYSTEM is
 missing that fact — do not settle for a threshold, an age check, or a heuristic in

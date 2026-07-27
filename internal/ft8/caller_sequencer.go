@@ -92,6 +92,12 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	// NEXT slot, so the first CQ goes out at the upcoming boundary (≤ one slot, ~15 s)
 	// via onSlotCalling — already far better than the answer-a-CQ worst case, and we
 	// don't claim the current slot for a CQ.
+	//
+	// Adding s.fireOpening(now) here would NOT change that: its switch has no
+	// seqCalling case (deleted as unreachable — this is the only entry to the mode and
+	// it deliberately does not call it), so the call would silently transmit nothing.
+	// Reversing the decision means restoring that branch too, and it must skip when
+	// s.caller != nil, since Call-CQ stays in seqCalling for the whole worked contact.
 	return nil
 }
 

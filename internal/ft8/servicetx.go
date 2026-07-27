@@ -1010,15 +1010,28 @@ func (s *Service) SetMaxRepeats(n int) {
 	s.seq.SetMaxRepeats(n)
 }
 
-// exchangePath returns the active exchange's antenna path, "S" or "L"
-// (short when unset).
-func (s *Service) exchangePath() string {
-	s.txMu.Lock()
-	defer s.txMu.Unlock()
+// exchPathLocked resolves the active exchange's antenna path, "S" or "L", applying
+// the short-path default for an unset selection. Caller holds s.txMu.
+//
+// The ONE place that default lives: the save/restore path at setExchangePath's
+// quiet window must preserve "" as "" (it restores the original, unset included),
+// so a second copy of "unset means short" is a real divergence risk rather than
+// pedantry.
+func (s *Service) exchPathLocked() string {
 	if s.exchPath == "" {
 		return antPathShort
 	}
 	return s.exchPath
+}
+
+// exchangePathForTest reports the resolved live antenna path. TEST SEAM — the
+// production readers take it under the lock they already hold (stampCompletionPath);
+// this exists so the selection/reset/restore rules can be asserted without reaching
+// into the mutex-guarded field.
+func (s *Service) exchangePathForTest() string {
+	s.txMu.Lock()
+	defer s.txMu.Unlock()
+	return s.exchPathLocked()
 }
 
 // stampCompletionPath captures the active exchange's antenna path on the
@@ -1171,11 +1184,7 @@ func (s *Service) preKeyDialCheck() error {
 
 func (s *Service) stampCompletionPath(c *CompletedQso) {
 	s.txMu.Lock()
-	p := s.exchPath
-	if p == "" {
-		p = antPathShort
-	}
-	c.AntPath = p
+	c.AntPath = s.exchPathLocked()
 	c.antPathGen = s.exchPathGen
 	c.antPathStamped = true
 	// Stamp the frequency the contact actually happened on: the dial this SESSION

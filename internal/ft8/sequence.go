@@ -374,4 +374,15 @@ func (e Exchange) Sent() Exchange {
 
 // Done reports whether the exchange is complete (our 73 transmitted) and the
 // QSO is ready to be logged.
+//
+// SPECIFICATION-ONLY, deliberately (operator decision, 2026-07-27, on a package
+// review that flagged Sent/Done across all six ladders as production-unreachable).
+// Production completion runs in the transmit callback instead, and the two must NOT
+// be connected: Sent() advances unconditionally, whereas the real terminal
+// transition turns on whether the closing message REACHED THE AIR — the Group A /
+// Group B distinction (finalrung.go). A pure state function cannot know that, so
+// wiring these in would log Group B contacts the partner never received. They stay
+// as the readable statement of each ladder's rung model, which is what the pure
+// ladder tests assert against; the lifecycle that actually logs is covered by the
+// sequencer tests.
 func (e Exchange) Done() bool { return e.State == txDone }
