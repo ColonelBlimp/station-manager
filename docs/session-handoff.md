@@ -32,33 +32,41 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-27)
 
-> **2026-07-27 — round 4 on the occupancy panel (uncommitted, SPA-only).** The
-> codex review of `0462eb7b` was right: dropping hub replay closed only the late-
-> SUBSCRIBER instance of the cross-band hazard. `occupancyBandByParity` stamps a
-> report with `rig.band` AS IT IS ON ARRIVAL, which is only correct if the rig held
-> that band for the whole slot the report measured — and after a QSY it did not.
-> The daemon publishes a slot's occupancy ~1 s after the slot ends, so the report
-> for the slot in progress at the moment of the QSY arrives stamped with the NEW
-> band, clears `occupancyStale`, and (via `effectiveOffset`'s fallback to
-> `suggested[0]`) can hand TX an offset never measured on the band we are on. That
-> is the same harm as rounds 2 and 3, through a third door — and it fires on EVERY
-> band change, not just on a refresh.
+> **2026-07-27 — the occupancy panel, rounds 4 and 5. Round 5 is the one that
+> matters: the fix moved to the SOURCE, and the client-side guesswork is gone.**
 >
-> Fix: `Ft8State.admitOccupancy` quarantines occupancy for two slot boundaries after
-> a genuine band change, anchored on the daemon slot the clock had reached
-> (`noteOperatingBand` arms it; the `$effect` in `Ft8View` already feeds that). The
-> straddling slot is +1, the first wholly-post-QSY slot is +2. **Both sides of the
-> comparison are DAEMON timestamps** — the report's `start_utc` against the slot the
-> daemon last reported — never `Date.now()`, which is precisely what made the
-> round-3 age gate able to blank the panel forever on a skewed host. When no slot
-> clock was running at the change (QSY made with the FT8 view closed) the first
-> report becomes the anchor and is itself rejected. The quarantine deliberately
-> survives `stopFt8`, like `lastSeenBand`. Cost: one extra empty slot after a QSY.
+> Round 4 (`f6ea7ce2`, committed) added a post-band-change quarantine keyed on the
+> daemon slot clock. Round 5 deletes it. The review of `f6ea7ce2` showed the anchor
+> can lag the capture clock by TWO slots, because a slot is published only after it
+> decodes: with the last published slot at 11:59:45 and the rig moving just after
+> 12:00:15, the straddling 12:00:15 capture sits exactly 30 s past the anchor and
+> was admitted by the very test meant to reject it. No threshold repairs that — a
+> delayed-but-steady pipeline is indistinguishable from a live one from inside the
+> browser, so **the client cannot establish that a capture happened after the QSY.**
+> Three rounds of client-side approximation failed for that one reason.
 >
-> Proven by reversion — with the gate neutered, the straddling report re-validates
-> the old band's picture (`hasOccupancy` true where it must be false). Gate green:
-> prettier / eslint / svelte-check 0 errors / **743 frontend tests**. No daemon
-> change in this round, so the pending deploy story is unchanged.
+> **The daemon now says which frequency it measured on.** `Slot.DialMHz` /
+> `Slot.DialChanged` are stamped by the scheduler from a dial read taken once per
+> boundary — that instant is both the END of the slot being emitted and the START
+> of the next, so a slot is attributable exactly when the two readings bracketing it
+> agree. A slot whose dial moved mid-window is skipped like a TX slot (it describes
+> two bands and belongs to neither); `OccupancyReport.DialMHz` carries the rest to
+> the SPA, which stamps the band from the REPORT instead of from wherever the rig is
+> when the report lands. Wired with `ft8Svc.SetDialSource(bridgeSvc.CurrentDialMHz)`
+> — the same injection shape as `SetCatGate`, so `internal/ft8` still never imports
+> `internal/bridge`. `api-endpoints.md` updated; the `ft8-qso` event already carried
+> this exact lesson for contacts (`dial_freq_mhz`), so occupancy now matches it.
+>
+> No CAT means nothing to attribute with: `dial_mhz` is omitted and the SPA falls
+> back to the arrival stamp, keeping the pre-existing one-slot ambiguity after a
+> manual band change. With CAT it is exact — and there is no longer any post-QSY
+> blank window, which is what round 4's P2 was complaining about.
+>
+> Proven by reversion in both halves: neutering the SPA attribution re-validates the
+> old band's picture, and reverting the daemon halves drops the stamp and publishes
+> the straddled slot. Gate green: gofmt, `go vet`, `go test ./internal/ft8 -race`,
+> all `cmd/...`, prettier / eslint / svelte-check 0 errors / **743 frontend tests**.
+> **This round carries a DAEMON change** on top of the already-undeployed tail.
 
 > **2026-07-26 — the FT8 final-rung session. ~19 commits, all reviewed clean. The
 > daemon-side work IS deployed and was validated on air across ~148 QSOs with zero
@@ -140,9 +148,10 @@ precisely so we don't re-derive state or redo finished work.
 >     stale decode list is cosmetic and does not steer where we transmit. The cost
 >     is what `handler.go`'s own comment already accepted as the fallback: the next
 >     slot is ≤15 s away. No clocks, no window, no residual.
->   - **Round 4 (2026-07-27, uncommitted) closed the QSY door** — see the block at
->     the top of Current state. "No residual" above was wrong: replay was one of
->     three doors, and the plain band change was the widest.
+>   - **Rounds 4 and 5 (2026-07-27) closed the QSY door properly** — see the block
+>     at the top of Current state. "No residual" above was wrong: replay was one of
+>     three doors, and the plain band change was the widest. Round 5 stopped
+>     approximating and made the daemon stamp the frequency it measured on.
 >   - Worked panel `w-full` and the Session-tile Map removal (both inbox items,
 >     closed `b0025985`).
 > - **`5ea0ff60` HAS A WRONG COMMIT MESSAGE.** It claims to stop 401 being

@@ -50,6 +50,21 @@ type Slot struct {
 	// scheduler does not retain or mutate it after delivery — so the
 	// decode worker can hand it straight to DecodeSlot.
 	Samples []int16
+
+	// DialMHz is the rig dial frequency this slot's audio was captured on,
+	// or 0 when unknown (no CAT, or the frequency was not known at BOTH ends
+	// of the window). Occupancy is band-specific decision data, so a consumer
+	// must not attribute a report to a band without this: the alternative —
+	// labelling a report with whatever band the rig is on when the report
+	// lands — is wrong for every slot in flight across a band change, and no
+	// downstream clock comparison can repair it (a report's publication lags
+	// its capture by the decode, so distance-from-the-last-report cannot
+	// establish that the capture happened after the QSY).
+	DialMHz float64
+
+	// DialChanged reports that the dial moved DURING this slot: its audio
+	// spans two bands and belongs to neither, so it must not be attributed.
+	DialChanged bool
 }
 
 // Scheduler drains a continuous audio source (typically the capture
@@ -79,6 +94,14 @@ type Scheduler struct {
 	// source delivers nothing — the failure mode being watched for.
 	dead deadSourceMonitor
 
+	// dialSource reads the rig's current dial frequency in MHz (ok=false when
+	// unknown). Sampled once per boundary; prevDial holds the previous
+	// boundary's reading so a slot can be checked at both ends. Installed
+	// before Run and only read from Run's goroutine, so no lock is needed.
+	dialSource func() (float64, bool)
+	prevDial   float64
+	prevDialOK bool
+
 	dropped atomic.Int64
 }
 
@@ -103,6 +126,20 @@ func (s *Scheduler) Slots() <-chan Slot { return s.out }
 // Run, from the scheduler goroutine — the callback must not block; the
 // Service's handler hands off to a goroutine). Must be called before Run.
 func (s *Scheduler) SetOnDeadSource(cb func(reason string)) { s.dead.onDead = cb }
+
+// SetDialSource installs the rig dial-frequency reader used to attribute each
+// slot to the frequency it was captured on (see Slot.DialMHz). It is called once
+// per slot boundary from the scheduler goroutine, so it must be a cheap cached
+// read — never a CAT round-trip. Must be called before Run; leaving it unset
+// leaves every slot unattributed, which is the correct no-CAT behaviour.
+func (s *Scheduler) SetDialSource(fn func() (float64, bool)) { s.dialSource = fn }
+
+func (s *Scheduler) readDial() (float64, bool) {
+	if s.dialSource == nil {
+		return 0, false
+	}
+	return s.dialSource()
+}
 
 // Dropped returns the number of slots that were discarded because the
 // Slots channel was full when the boundary fired. A non-zero value means
@@ -140,6 +177,12 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			// cases (starved / all-zero source) mostly never fill the ring, so
 			// emitSlot's cold-start skip would hide them from any slot consumer.
 			s.dead.onBoundary(ring.Filled())
+			// One dial read per boundary. This instant is simultaneously the END
+			// of the slot about to be emitted and the START of the next, so a
+			// slot is attributable exactly when this reading matches the previous
+			// boundary's. Sampled here rather than in emitSlot so the chain still
+			// advances on a skipped slot (cold start / lateness resync).
+			dial, dialOK := s.readDial()
 			// Normal: the timer fired ~at target (sub-50 ms); emit the slot that
 			// ended there. If the goroutine was delayed more than maxSlotLateness,
 			// the ring no longer represents [target-SlotDuration, target) — it has
@@ -154,8 +197,9 @@ func (s *Scheduler) Run(ctx context.Context) error {
 					Int64("late_ms", now.Sub(target).Milliseconds()).
 					Msg("ft8.scheduler: timer delay exceeded the lateness budget; skipping slot")
 			} else {
-				s.emitSlot(ring, target, now)
+				s.emitSlot(ring, target, now, dial, dialOK)
 			}
+			s.prevDial, s.prevDialOK = dial, dialOK
 			target = nextSlotBoundary(now)
 			timer.Reset(time.Until(target))
 		}
@@ -182,7 +226,7 @@ func slotTooLate(now, target time.Time) bool {
 // false-decode noise. Once enough samples have accumulated, every
 // subsequent boundary fires a slot. now is the actual service time (not the
 // timer payload), so OffsetMs reflects real servicing delay (review M2).
-func (s *Scheduler) emitSlot(ring *sampleRing, target, now time.Time) {
+func (s *Scheduler) emitSlot(ring *sampleRing, target, now time.Time, dial float64, dialOK bool) {
 	if ring.Filled() < int64(ring.Cap()) {
 		return
 	}
@@ -190,6 +234,14 @@ func (s *Scheduler) emitSlot(ring *sampleRing, target, now time.Time) {
 		StartUTC: target.Add(-SlotDuration),
 		OffsetMs: now.Sub(target).Milliseconds(),
 		Samples:  ring.Snapshot(),
+	}
+	// Attribute only when the dial was known at BOTH ends of the window. One
+	// end unknown (CAT down mid-slot, or the first boundary after Run starts)
+	// means we cannot say the rig held one frequency for the whole slot, and
+	// an unattributed slot is honest — a wrongly attributed one is the bug.
+	if dialOK && s.prevDialOK {
+		slot.DialMHz = dial
+		slot.DialChanged = dial != s.prevDial
 	}
 	select {
 	case s.out <- slot:

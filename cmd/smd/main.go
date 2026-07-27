@@ -667,6 +667,13 @@ func run() error {
 	// purely demand-driven, so an audio-only setup is unaffected.
 	if bridgeSvc.Enabled() {
 		ft8Svc.SetCatGate(bridgeSvc.RigConnected)
+		// Attribute each captured slot to the dial frequency it was heard on, so
+		// an occupancy report says which band it measured instead of being
+		// labelled with whatever band the rig is on when it reaches the SPA. Same
+		// injection shape as the CAT gate — internal/ft8 never imports
+		// internal/bridge. Without CAT there is nothing to attribute with, and
+		// reports simply carry no frequency.
+		ft8Svc.SetDialSource(bridgeSvc.CurrentDialMHz)
 	}
 	// Wire the completed-QSO sink (ADR 0029 step e4): a finished FT8 exchange
 	// becomes a logged QSO. The assembly + submit live here (the composition

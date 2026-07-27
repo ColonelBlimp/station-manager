@@ -29,6 +29,10 @@ export interface Ft8SlotRef {
 export interface OccupancyPayload {
     slot: Ft8SlotRef;
     passband: Ft8Band;
+    /** Rig dial frequency (MHz) the slot was captured on; absent when the daemon
+     *  had no CAT to read it from. This is what makes the snapshot attributable to
+     *  a band on its own — see ft8.svelte.ts onOccupancy. */
+    dial_mhz?: number;
     signal_width_hz: number;
     occupied: Ft8Band[] | null;
     suggested: number[] | null;

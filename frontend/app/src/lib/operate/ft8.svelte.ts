@@ -105,10 +105,6 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
 // matters and 2^53 ids outlast any session.
 let decodeSeq = 0;
 
-// Two FT8 slots (15 s each). How far past a band change an occupancy report's slot
-// must start before we trust it — see Ft8State.admitOccupancy.
-const QUARANTINE_MS = 30_000;
-
 // The operator's TX-offset pick persists across a page reload (localStorage) so a
 // daemon redeploy — which reloads /app/ to pick up the new build — doesn't silently
 // drop the chosen channel. Best-effort: private-mode / disabled storage falls back
@@ -161,10 +157,11 @@ class Ft8State {
     /** The parity the operator is VIEWING when idle (manual Even/Odd toggle); during a
      *  QSO the shown parity is forced to the TX parity. */
     occupancyParity: 'even' | 'odd' = $state('even');
-    /** Rig band each parity's snapshot was captured on ('' = not yet known).
-     *  Occupancy is band-specific, so this is what lets a band change invalidate it
-     *  — see occupancyStale. Without it, changing band kept the previous band's
-     *  picture on screen as though it were current.
+    /** Band each parity's snapshot was MEASURED on ('' = not yet known), taken from
+     *  the report's own dial_mhz — not from where the rig happens to be when the
+     *  report lands. Occupancy is band-specific, so this is what lets a band change
+     *  invalidate it — see occupancyStale. Without it, changing band kept the previous
+     *  band's picture on screen as though it were current.
      *  PER PARITY, not one shared tag: the two parities are INDEPENDENT snapshots
      *  that arrive in separate slots, so a single tag meant the first report on the
      *  new band re-validated the other parity's OLD-band data — and since
@@ -174,14 +171,6 @@ class Ft8State {
      *  (the daemon skips our own TX slots), so it is exactly the parity that would
      *  keep serving pre-QSY data. */
     occupancyBandByParity: { even: string; odd: string } = $state({ even: '', odd: '' });
-    /** Post-band-change quarantine — see admitOccupancy for the rule.
-     *  `active` while a band change is still working through the slot pipeline;
-     *  `sinceSlot` is the daemon slot the clock had reached at the change ('' when no
-     *  slot had been seen yet, so the first report we get becomes the anchor). */
-    occupancyQuarantine: { active: boolean; sinceSlot: string } = $state({
-        active: false,
-        sinceSlot: '',
-    });
     /** Audio passband the picker spans (Hz); daemon standard 200–3000 until the first report. */
     passbandLow = $state(200);
     passbandHigh = $state(3000);
@@ -313,54 +302,7 @@ class Ft8State {
         const genuineChange = this.lastSeenBand !== '';
         this.lastSeenBand = band;
         this.clearDecodes();
-        if (genuineChange) {
-            ft8PileupStack.clear();
-            // Anchor the occupancy quarantine on the daemon slot the clock had reached.
-            // Reports for that slot and the next one were measured (wholly or partly)
-            // before the QSY, and the stamp in onOccupancy can't tell — see admitOccupancy.
-            this.occupancyQuarantine = { active: true, sinceSlot: this.slot?.start_utc ?? '' };
-        }
-    }
-
-    /** Gate for an arriving occupancy report: true = safe to apply.
-     *
-     *  occupancyBandByParity stamps a report with rig.band AS IT IS ON ARRIVAL, which
-     *  is only right if the rig held that band for the whole slot the report measured.
-     *  After a QSY it doesn't: the daemon publishes a slot's occupancy ~1 s after the
-     *  slot ends, and the slot in progress at the moment of the change straddles both
-     *  bands. Those reports would be stamped with the NEW band, clearing occupancyStale
-     *  and — via effectiveOffset's fallback to suggested[0] — offering a transmit
-     *  offset that was never measured on the band we're now on (codex P1 on 0462eb7b).
-     *  Dropping hub replay fixed only the late-SUBSCRIBER instance of this; the QSY
-     *  race and a backgrounded tab flushing a queued frame both still land here.
-     *
-     *  So admit only reports whose slot began at least two slot boundaries after the
-     *  change: the straddling slot is +1, the first wholly-post-QSY slot is +2. Both
-     *  sides of that comparison are DAEMON timestamps (the report's slot vs. the slot
-     *  the daemon last reported), never Date.now() — the cross-clock comparison is what
-     *  made the deleted age gate able to blank the panel forever on a skewed host.
-     *
-     *  Costs one extra slot of empty panel after a band change. That is the trade:
-     *  briefly saying nothing beats confidently showing another band's picture. */
-    admitOccupancy(slotStartUtc: string): boolean {
-        const q = this.occupancyQuarantine;
-        if (!q.active) return true;
-        if (slotStartUtc === '') return false; // unplaceable in time — can't clear it
-        if (q.sinceSlot === '') {
-            // No slot clock at the change (view just opened, or the stream was down).
-            // Anchor on this report and reject it: it may itself be the straddling slot.
-            this.occupancyQuarantine = { active: true, sinceSlot: slotStartUtc };
-            return false;
-        }
-        const elapsed = Date.parse(slotStartUtc) - Date.parse(q.sinceSlot);
-        // Unparseable timestamps mean something is badly wrong upstream; disarm rather
-        // than quarantine forever, which would be the worse failure (blank panel, no
-        // reason shown, no way for the operator to clear it).
-        if (Number.isNaN(elapsed) || elapsed >= QUARANTINE_MS) {
-            this.occupancyQuarantine = { active: false, sinceSlot: '' };
-            return true;
-        }
-        return false;
+        if (genuineChange) ft8PileupStack.clear();
     }
 }
 
@@ -645,23 +587,11 @@ export const ft8Link: Ft8EventHandlers = {
     },
 
     onOccupancy(p: OccupancyPayload): void {
-        // Drop reports that can't be attributed to the band we're on now. Nothing
-        // else in here is applied either — the slot clock is driven by ft8-decode,
-        // which fires every slot, so the panel's "waiting" state stays honest.
-        if (!ft8State.admitOccupancy(p.slot?.start_utc ?? '')) return;
         ft8State.slot = p.slot ?? null;
         // Route the snapshot into its parity slot (daemon-provided slot.period) so the
         // even and odd views stay distinct. A period-less payload (shouldn't happen)
         // fills both so it still shows.
         const occ = p.occupied ?? [];
-        // No client-side staleness check here by design. Replayed snapshots are
-        // prevented at the SOURCE — the daemon's hub no longer replays occupancy to
-        // a late subscriber (internal/ft8/hub.go). An age limit here could not do
-        // the job anyway: start_utc is the DAEMON's clock and Date.now() the
-        // browser's, so a skewed host would silently discard every live report and
-        // leave the panel permanently empty, while any threshold loose enough for
-        // decode latency (~16 s) is looser than the QSY-then-refresh race it was
-        // meant to catch (codex P1+P2 on b0025985).
         const sug = p.suggested ?? [];
         const period = p.slot?.period;
         if (period === 'even' || period === 'odd') {
@@ -676,12 +606,24 @@ export const ft8Link: Ft8EventHandlers = {
             ft8State.passbandHigh = p.passband.high_hz;
         }
         if (p.signal_width_hz > 0) ft8State.signalWidth = p.signal_width_hz;
+        // Attribute the snapshot to the band it was MEASURED on, from the dial the
+        // daemon read while capturing the slot (dial_mhz). Reading rig.band here
+        // instead would label the report with wherever the rig is NOW, which is wrong
+        // for every report in flight across a QSY — and unfixable downstream, since a
+        // report's publication lags its capture by the decode, so neither its age nor
+        // its distance from the last report can show the capture happened after the
+        // band change (codex P1 on 0462eb7b and again on f6ea7ce2).
+        // No dial means no CAT: fall back to the arrival stamp, which is the best the
+        // daemon can offer when it cannot see the rig. That path keeps the pre-existing
+        // one-slot ambiguity after a manual band change; with CAT it is exact.
+        const band =
+            p.dial_mhz && p.dial_mhz > 0 ? frequencyToBand(p.dial_mhz * 1_000_000) : rig.band;
         // Stamp the band on the parity that actually arrived — never both; see
         // occupancyBandByParity.
         if (period === 'even' || period === 'odd') {
-            ft8State.occupancyBandByParity[period] = rig.band;
+            ft8State.occupancyBandByParity[period] = band;
         } else {
-            ft8State.occupancyBandByParity = { even: rig.band, odd: rig.band };
+            ft8State.occupancyBandByParity = { even: band, odd: band };
         }
     },
 
@@ -809,11 +751,6 @@ export function stopFt8(): void {
     ft8State.suggestedByParity = { even: null, odd: null };
     ft8State.occupancyBandByParity = { even: '', odd: '' };
     ft8State.decodes = [];
-    // occupancyQuarantine deliberately survives, like lastSeenBand: a QSY made just
-    // before closing the view is still working through the daemon's slot pipeline, and
-    // clearing it here would admit the straddling report on reopen — the exact hole it
-    // exists to close. Its anchor is an absolute UTC slot, so it stays meaningful, and
-    // it disarms itself on the first report two slots clear of the change.
     // Keep selectedOffset across a re-open — it's an operator pick, not stream data;
     // clearing it would silently drop the chosen TX channel on a view toggle.
     ft8State.tx = emptyTxStatus();
@@ -852,5 +789,4 @@ export function resetFt8ForTests(): void {
     ft8State.tx = emptyTxStatus();
     ft8State.qso = emptyQsoStatus();
     ft8State.lastSeenBand = '';
-    ft8State.occupancyQuarantine = { active: false, sinceSlot: '' };
 }

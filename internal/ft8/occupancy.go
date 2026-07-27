@@ -95,8 +95,17 @@ type SlotRef struct {
 // (typically a handful), and Suggested is a daemon-ranked best-first list of
 // clear base offsets for one-click slot selection. See ADR 0029.
 type OccupancyReport struct {
-	Slot          SlotRef `json:"slot"`
-	Passband      Band    `json:"passband"`
+	Slot     SlotRef `json:"slot"`
+	Passband Band    `json:"passband"`
+	// DialMHz is the rig dial frequency the slot was captured on, omitted when
+	// unknown (no CAT). It is what makes the report self-identifying: without
+	// it a consumer can only label the report with whatever band the rig is on
+	// when it ARRIVES, which is wrong for every report in flight across a QSY
+	// and cannot be repaired downstream — publication lags capture by the
+	// decode, so no arrival-time or slot-distance test can establish that the
+	// capture happened after the band change. A report whose slot straddled a
+	// dial change is not published at all (see Slot.DialChanged).
+	DialMHz       float64 `json:"dial_mhz,omitempty"`
 	SignalWidthHz int     `json:"signal_width_hz"`
 	Occupied      []Band  `json:"occupied"`
 	Suggested     []int   `json:"suggested"`

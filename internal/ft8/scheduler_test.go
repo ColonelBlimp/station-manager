@@ -175,3 +175,66 @@ func TestScheduler_DroppedSlot_WhenConsumerStalls(t *testing.T) {
 	cancel()
 	<-runDone
 }
+
+// --- slot→dial attribution --------------------------------------------------
+
+// TestScheduler_AttributesSlotToDialAtBothEnds pins the rule that makes an
+// occupancy report self-identifying: a slot carries a frequency only when the
+// rig demonstrably held that frequency for the WHOLE window. The boundary that
+// emits a slot is also the start of the next one, so the reading taken there and
+// the previous boundary's reading bracket the emitted slot exactly.
+func TestScheduler_AttributesSlotToDialAtBothEnds(t *testing.T) {
+	full := make([]int16, SlotSamples)
+	target := time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC)
+
+	cases := []struct {
+		name        string
+		prevDial    float64
+		prevOK      bool
+		dial        float64
+		dialOK      bool
+		wantDial    float64
+		wantChanged bool
+	}{
+		{"held one frequency", 14.074, true, 14.074, true, 14.074, false},
+		// The straddling slot: audio from two bands, describing neither.
+		{"dial moved mid-slot", 14.074, true, 7.074, true, 7.074, true},
+		// One end unknown cannot prove the rig held anything: stay unattributed
+		// rather than claim a band. Covers CAT dropping or coming up mid-slot,
+		// and the very first boundary after Run starts.
+		{"unknown at slot start", 0, false, 14.074, true, 0, false},
+		{"unknown at slot end", 14.074, true, 0, false, 0, false},
+		{"no CAT at all", 0, false, 0, false, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sch := NewScheduler(make(chan []int16), nil)
+			sch.prevDial, sch.prevDialOK = tc.prevDial, tc.prevOK
+			ring := newSampleRing(SlotSamples)
+			ring.Append(full)
+
+			sch.emitSlot(ring, target, target, tc.dial, tc.dialOK)
+
+			select {
+			case slot := <-sch.out:
+				require.Equal(t, tc.wantDial, slot.DialMHz)
+				require.Equal(t, tc.wantChanged, slot.DialChanged)
+			default:
+				t.Fatal("emitSlot published nothing")
+			}
+		})
+	}
+}
+
+// An unset dial source is the no-CAT deployment, not an error: every slot is
+// simply unattributed and the SPA falls back to its own view of the band.
+func TestScheduler_ReadDial_UnsetSourceReportsUnknown(t *testing.T) {
+	sch := NewScheduler(make(chan []int16), nil)
+	_, ok := sch.readDial()
+	require.False(t, ok, "nil dial source must report unknown, not zero-as-truth")
+
+	sch.SetDialSource(func() (float64, bool) { return 14.074, true })
+	mhz, ok := sch.readDial()
+	require.True(t, ok)
+	require.Equal(t, 14.074, mhz)
+}

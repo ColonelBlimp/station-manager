@@ -98,7 +98,15 @@ type Service struct {
 	// when it drops) is the catReconcile loop. Read under s.mu where it gates;
 	// catLive() itself takes the bridge lock, so the lock order is s.mu → bridge
 	// (the bridge never calls back into ft8).
-	catLive  func() bool
+	catLive func() bool
+
+	// dialSource attributes each captured slot to the dial frequency it was
+	// heard on (SetDialSource). Handed to the scheduler when a capture session
+	// starts; nil (no CAT) leaves slots unattributed. Read under s.mu, but
+	// unlike catLive it is INVOKED from the scheduler goroutine with no ft8
+	// lock held, so it adds no lock nesting at all.
+	dialSource func() (float64, bool)
+
 	bgCancel context.CancelFunc // cancels subsystem-lifetime loops (catReconcile)
 	bgWg     sync.WaitGroup     // subsystem-lifetime loops; drained by Stop
 
@@ -413,6 +421,18 @@ func (s *Service) SetCatGate(catLive func() bool) {
 	s.mu.Unlock()
 }
 
+// SetDialSource installs the rig dial-frequency reader that attributes each
+// captured slot to the frequency it was heard on (Scheduler.SetDialSource, and
+// OccupancyReport.DialMHz for why it matters). cmd/smd wires this to
+// bridge.Service.CurrentDialMHz, and only when the bridge is enabled — a no-CAT
+// setup leaves it nil and its occupancy reports simply carry no frequency. Call
+// before Start; it is read when a capture session builds its scheduler.
+func (s *Service) SetDialSource(dial func() (float64, bool)) {
+	s.mu.Lock()
+	s.dialSource = dial
+	s.mu.Unlock()
+}
+
 // runCatReconcile is the dynamic half of the CAT gate (startCaptureLocked is the
 // acquire-time half): it periodically aligns the capture session with rig
 // liveness — acquiring the mic once CAT comes up with a subscriber waiting (the
@@ -526,6 +546,9 @@ func (s *Service) startCaptureLocked() {
 	// the capture stream dangling with no error anywhere — the watchdog turns
 	// that into an automatic release + reacquire.
 	sch.SetOnDeadSource(s.onDeadCaptureSource)
+	// Slot→frequency attribution (OccupancyReport.DialMHz). Installed before Run,
+	// as SetDialSource requires; nil with no CAT, which is the honest no-op.
+	sch.SetDialSource(s.dialSource)
 	safego.GoTracked(runCtx, "ft8.scheduler", s.onPanic, func() {
 		defer s.onCaptureLoopExit(runCtx, "ft8.scheduler")
 		_ = sch.Run(runCtx)
@@ -748,6 +771,10 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 	// while it remains clear instead of hopping to a marginally wider gap each
 	// slot. Loop-local, so it resets naturally when a new capture session starts.
 	prevTop := 0
+	// Frequency the previous slot was attributed to, so a band change between
+	// slots resets the hysteresis above. 0 = unattributed (no CAT), which never
+	// changes and so never resets — matching the pre-attribution behaviour.
+	prevDial := 0.0
 	for slot := range slots {
 		ref := SlotRefFromTime(slot.StartUTC)
 		txSlot := s.wasTxSlot(ref.StartUTC)
@@ -793,9 +820,25 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 			s.decodeSink(report)
 		}
 
+		// A slot whose dial moved mid-window spans two bands and describes
+		// neither, so it is skipped exactly like a TX slot. The sticky-offset
+		// carry resets on ANY change of frequency, not just a straddle: a QSY
+		// landing on a slot boundary produces two cleanly-attributed slots with
+		// no straddle to catch it. stickySuggested re-vets the carried offset
+		// against the new band's occupancy so the ★ is always genuinely clear
+		// either way — but preferring an offset because it was good on 20 m is
+		// arbitrary on 40 m.
+		if slot.DialChanged || slot.DialMHz != prevDial {
+			prevTop = 0
+		}
+		prevDial = slot.DialMHz
+
 		var rep OccupancyReport
-		if !txSlot {
+		if !txSlot && !slot.DialChanged {
 			rep = Occupancy(ref, slot.Samples, msgs, s.occCfg)
+			// Stamp the frequency the audio was actually captured on, so the
+			// report is attributable no matter how late it is consumed.
+			rep.DialMHz = slot.DialMHz
 			rep.Suggested = stickySuggested(rep.Suggested, rep.Occupied, s.occCfg, prevTop)
 			if len(rep.Suggested) > 0 {
 				prevTop = rep.Suggested[0]

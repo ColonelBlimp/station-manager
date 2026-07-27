@@ -587,3 +587,41 @@ func TestDecodeLoop_PublishesOccupancy(t *testing.T) {
 		t.Errorf("report passband low = %d, want resolved %d", rep.Passband.LowHz, s.occCfg.PassbandLowHz)
 	}
 }
+
+// TestDecodeLoop_StampsDialAndDropsStraddledSlots covers the two halves of
+// slot→band attribution at the publishing end: a report carries the frequency
+// its audio was captured on, and a slot whose dial moved mid-window is not
+// published at all (it describes two bands and belongs to neither, exactly like
+// a slot we transmitted in).
+func TestDecodeLoop_StampsDialAndDropsStraddledSlots(t *testing.T) {
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), newFakeSource())
+
+	ch := make(chan Slot, 2)
+	ch <- Slot{
+		StartUTC: time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
+		Samples:  make([]int16, 1000),
+		DialMHz:  14.074,
+	}
+	// Straddled the QSY: must not reach the hub, so LatestOccupancy stays on
+	// the 20m report above rather than becoming a 40m-labelled 20m picture.
+	ch <- Slot{
+		StartUTC:    time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC),
+		Samples:     make([]int16, 1000),
+		DialMHz:     7.074,
+		DialChanged: true,
+	}
+	close(ch)
+	s.decodeLoop(ch)
+
+	rep := s.LatestOccupancy()
+	if rep == nil {
+		t.Fatal("decodeLoop published no occupancy report")
+	}
+	if rep.DialMHz != 14.074 {
+		t.Errorf("report DialMHz = %v, want 14.074 (the frequency it was captured on)", rep.DialMHz)
+	}
+	if rep.Slot.StartUTC != "2026-07-27T12:00:00Z" {
+		t.Errorf("latest report slot = %q, want the 12:00:00 slot — the straddled "+
+			"12:00:15 slot must not have been published", rep.Slot.StartUTC)
+	}
+}
