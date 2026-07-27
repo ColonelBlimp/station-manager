@@ -21,6 +21,31 @@ export const ALL_TILES: TileId[] = ['logging', 'worked', 'session', 'rig'];
 // logging card is the fast-path anchor, not a rail toggle).
 export const RAIL_TILES: TileId[] = ['worked', 'session', 'rig'];
 
+/*
+    Panels are classified by PURPOSE, not by workspace — see ambientPanels.test.ts
+    for the specification this serves.
+
+    AMBIENT panels are reference: what the radio is doing, what has been worked
+    today. Nothing about them is tied to the contact in progress, so they get ONE
+    home in every workspace and the rail toggle always puts them in the same place.
+    Previously they were board tiles in Phone/CW and an overlay in FT8, so the same
+    click produced a panel in a different place depending on mode and the operator
+    had to re-find it.
+
+    WORKFLOW panels are contextual to the contact being entered right now — Logging
+    is the anchor, Worked is about the callsign in the box and auto-shows on Tab.
+    They belong beside the work and stay wherever the workspace puts them.
+
+    Every TileId is in exactly one list: a panel with two homes is the bug this
+    split exists to prevent.
+*/
+export const AMBIENT_TILES: TileId[] = ['rig', 'session'];
+export const WORKFLOW_TILES: TileId[] = ['logging', 'worked'];
+
+export function isAmbient(id: TileId): boolean {
+    return AMBIENT_TILES.includes(id);
+}
+
 export const TILES: Record<TileId, { name: string; component: Component }> = {
     logging: { name: 'Logging', component: LoggingCard },
     worked: { name: 'Worked', component: WorkedPanel },
@@ -64,9 +89,19 @@ function normalise(l: LayoutValue): LayoutValue {
         }
         return out;
     };
+    // Ambient panels never live in a column — they render in the ambient host, in
+    // every workspace. Stripped HERE rather than only on the new code path so a
+    // layout PINNED BEFORE the split migrates on load: left in, the board would
+    // render the panel as a tile while the ambient host rendered it too, giving it
+    // two homes — precisely the bug the split exists to prevent, and only for the
+    // operators who had bothered to arrange their workspace.
     const columns: TileId[][] = [];
-    for (let i = 0; i < COLUMN_COUNT; i++) columns.push(take(l.columns?.[i]));
+    for (let i = 0; i < COLUMN_COUNT; i++) {
+        columns.push(take(l.columns?.[i]).filter((id) => !isAmbient(id)));
+    }
     const hidden = take(l.hidden);
+    // `take` marks a stripped ambient tile as seen, so the sweep below will not push
+    // it into hidden — its visibility carries over from the saved layout untouched.
     for (const id of ALL_TILES) if (!seen.includes(id)) hidden.push(id);
     return { columns, hidden };
 }
@@ -119,6 +154,12 @@ export function isVisible(id: TileId): boolean {
 export function showTile(id: TileId): void {
     if (isVisible(id)) return;
     layout.current.hidden = layout.current.hidden.filter((x) => x !== id);
+    // An ambient panel has no place in the board — it renders in the ambient host,
+    // in every workspace. Only its VISIBILITY lives here.
+    if (isAmbient(id)) {
+        persistIfPinned();
+        return;
+    }
     // Stack BELOW the logging card (into its column), reproducing the pre-tile
     // vertical layout — info appears under the log form, not beside it. Arrange
     // mode is where the operator drags a tile into the second column for a
