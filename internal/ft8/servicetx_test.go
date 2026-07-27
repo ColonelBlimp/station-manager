@@ -985,18 +985,28 @@ func TestPreKeyDialCheck(t *testing.T) {
 		require.ErrorIs(t, s.preKeyDialCheck(), ErrTxDialUnknown)
 	})
 
-	t.Run("no active session: a stale pin must not block a manual send", func(t *testing.T) {
+	// SUPERSEDED by dial-guard rule 11 (2026-07-27). This case used to assert that a
+	// manual send proceeds once the SESSION ends, on the grounds that a stale session
+	// pin should not block it. That reasoning still holds — and the gate no longer
+	// reads the session pin at all — but the ARM is now bound to a frequency too, so
+	// the send is refused for a different and better reason: the operator armed on
+	// 14.074 and is now on 7.074. Rewritten rather than deleted, because the original
+	// concern (a stale pin blocking a legitimate send) is exactly what the arm pin
+	// must not reintroduce.
+	t.Run("the arm's own frequency binding outlives the session", func(t *testing.T) {
 		dial := 14.074
 		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
 		s.SetDialSource(func() (float64, bool) { return dial, true })
 		require.NoError(t, s.ArmTx(true))
-		// Pin 14.074 via a session, end it, then QSY: the pin is now stale.
 		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
 		s.AbandonQso()
-		dial = 7.074
 
 		require.NoError(t, s.preKeyDialCheck(),
-			"with no session there is nothing to match against; the manual send stands")
+			"still on the armed frequency — ending a session does not un-bind the arm")
+
+		dial = 7.074
+		require.Error(t, s.preKeyDialCheck(),
+			"the arm was made on 14.074; a manual send on 7.074 is not what was armed")
 	})
 
 	t.Run("active session on a different dial: refuse", func(t *testing.T) {

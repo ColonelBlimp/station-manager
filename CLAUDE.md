@@ -103,6 +103,36 @@ Conventions that carry forward from v1 and that new v2 code should follow. These
 
 ## Testing
 
+- **TDD IS THE ROUTE, NOT AN OPTION (operator directive, 2026-07-27).** Determine the
+  behaviour required → write the tests → then write code against the tests. If the
+  behaviour needs to grow, that is fine: expand the tests, then the code. Never the
+  other way round.
+  - **State the behaviour before choosing a mechanism.** Where a rule involves a
+    judgement the code cannot settle — a tolerance, a timeout, what counts as
+    "moved" — that is the operator's call. Ask; do not infer a plausible number.
+    Every threshold invented without asking has been wrong.
+  - **Run the tests RED before implementing**, and make the red informative: they
+    must compile and fail on an assertion, not fail to build. A test that passes
+    before the fix exists proves nothing (a "preservation" test that merely counted
+    callbacks passed against the un-fixed code, 2026-07-27).
+  - **Keep the reversion proof.** After going green, revert the implementation and
+    confirm the test fails for the RIGHT reason. That is what distinguishes a test
+    that pins behaviour from one that describes whatever the code happens to do.
+  - **A failing test is one of two things, and they are not the same:** the code
+    does not meet the spec (a bug — fix the code), or the spec is wrong/incomplete
+    (a design question — settle it with the operator, then expand the tests). Being
+    unable to tell these apart is what turned one FT8 dial-attribution issue into a
+    ten-round arc of plausible fixes that each undid the last.
+  - **Assert on what an operator or another subsystem can OBSERVE** — a logged QSO
+    row, RF keyed or not, a published SSE frame, a spot emitted — not on fields the
+    current mechanism happens to carry. Field-level assertions from that arc were
+    all deleted within a round or two; the behavioural ones caught real defects.
+  - **Feed inputs where right and wrong actually differ.** A test whose fixture makes
+    both paths agree proves nothing, however behavioural its name.
+  - **If a behaviour test cannot be written without inventing a fact the system does
+    not carry, the SYSTEM is missing that fact.** Do not substitute a threshold or a
+    heuristic. Worked example: `internal/ft8/dialguard_test.go`, written before its
+    implementation, with the reasoning for each rule in the file header.
 - **Integration tests are the default** for anything touching storage, services, or cross-package flows. Use real `&sqlite.Service{}` with in-memory SQLite databases. Do not introduce mock interfaces for internal services.
 - **Unit tests for pure logic** — parsing, math, format conversions, adapter round-trips. No mocks needed.
 - **Test the error path first for enrichment code.** Per the invariant: "what does this do when hamnut/QRZ is down" is the test that should exist before the happy-path test is written.

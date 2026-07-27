@@ -179,6 +179,19 @@ func (s *Service) armTx() error {
 	s.txArmed = true
 	s.txLastErr = ""
 	s.txMu.Unlock()
+	// An ARM is bound to a frequency exactly as a session is. Pinned here rather
+	// than only at session start because TX is independent of capture: with no
+	// scheduler running there is nothing to observe a QSY, so the pre-key gate —
+	// which runs on every path — is the only thing standing between an arm made on
+	// one frequency and a key on another (codex P1 on 6e974717).
+	dialAtArm, tracked, known := s.dialState()
+	s.txMu.Lock()
+	if tracked && known {
+		s.armDialMHz = dialAtArm
+	} else {
+		s.armDialMHz = 0 // nothing to bind to; the gate falls back to refusing unknowns
+	}
+	s.txMu.Unlock()
 
 	s.log.InfoWith().Str("mode", s.txMode()).Msg("ft8 tx: armed")
 	s.publishTxState()
@@ -237,7 +250,15 @@ func (s *Service) disarmTx(closing bool) {
 	// active session in between. Order seqGate → txMu.
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
+	s.disarmTxLocked(closing)
+}
 
+// disarmTxLocked is disarmTx with seqGate already held, so a caller that must
+// DECIDE and then tear down can do both under one hold. The dial guard needs that:
+// deciding outside the gate and tearing down inside it lets a replacement session
+// commit in between and be killed for a move it was never subject to (codex P1 on
+// 6e974717) — the same class of bug as the round-8 unconditional abandon.
+func (s *Service) disarmTxLocked(closing bool) {
 	s.txMu.Lock()
 	if closing {
 		s.txClosed = true
@@ -253,6 +274,7 @@ func (s *Service) disarmTx(closing bool) {
 	}
 	wasArmed := s.txArmed
 	s.txArmed = false
+	s.armDialMHz = 0 // the binding dies with the arm
 	if s.txCancel != nil {
 		s.txCancel() // abort in-flight; controller drops PTT on the cancel path
 	}
@@ -261,16 +283,27 @@ func (s *Service) disarmTx(closing bool) {
 	s.txCtrl = nil
 	s.txMu.Unlock()
 
-	// Armed state is now false (under the gate); abandon the sequencer. A start
-	// blocked on seqGate will observe txArmed=false and refuse to commit.
+	// Wait for the in-flight transmission to return BEFORE abandoning — outside
+	// txMu so the TX goroutine can clear its own state.
+	//
+	// The ORDER is load-bearing and used to be the other way round. Cancelling a
+	// transmission makes its completion callback run, and every completion callback
+	// is generation-guarded; abandoning first retires the generation, so a callback
+	// that then fires sees a stale one and returns without logging. A partner who
+	// had already rogered would have their contact silently discarded (codex P1 on
+	// 6e974717). Waiting first lets the completion run against the generation it was
+	// created under — and for a Group A rung that completion retires the session
+	// itself, making the Abandon below a no-op.
+	//
+	// The wait is bounded: the controller returns promptly on ctx cancel, and PTT is
+	// already down via its deferred unkey plus the bridge auto-off backstop.
+	s.txWg.Wait()
+
+	// Armed state is false (under the gate); abandon whatever survived the
+	// completion. A start blocked on seqGate will observe txArmed=false and refuse.
 	if s.seq != nil {
 		s.seq.Abandon()
 	}
-
-	// Wait for the in-flight transmission (if any) to return BEFORE closing the
-	// device — outside txMu so the TX goroutine can clear its own state. The
-	// bridge auto-off backstop guarantees PTT is down regardless.
-	s.txWg.Wait()
 
 	if dev != nil {
 		_ = dev.Stop()
@@ -476,9 +509,18 @@ func (s *Service) startTransmission(
 	// in-flight conflicts too (codex P2 on 0d180e59). This is the fast synchronous
 	// refusal; the guarantee is preKeyDialCheck, which re-runs at the moment of
 	// keying — this one only avoids accepting a send that is already doomed.
-	if _, tracked, known := s.dialState(); tracked && !known {
-		s.txMu.Unlock()
-		return errors.New(op).WithErr(ErrTxDialUnknown)
+	if cur, tracked, known := s.dialState(); tracked {
+		if !known {
+			s.txMu.Unlock()
+			return errors.New(op).WithErr(ErrTxDialUnknown)
+		}
+		// Same comparison the pre-key gate makes, made early so a send that is
+		// already doomed is refused synchronously rather than accepted and then
+		// dropped at the boundary. The gate remains the guarantee; this is courtesy.
+		if s.armDialMHz != 0 && cur != s.armDialMHz {
+			s.txMu.Unlock()
+			return errors.New(op).WithErr(ErrTxSuperseded)
+		}
 	}
 	// Session-generation commit gate (review 2026-07-20 #1), checked WHILE
 	// HOLDING txMu so it is atomic with the txCancel registration below:
@@ -1004,47 +1046,46 @@ func isDialRefusal(err error) bool {
 //
 // Called from the scheduler goroutine on every observed dial change (~43 ms
 // granularity), so it must be cheap and must not block that loop.
-func (s *Service) onDialMoved() {
-	// Compare against what we PINNED, not merely "something reported a move": the
-	// scheduler also reports transitions in dial KNOWN-ness, and a session must not
-	// be torn down because a reading blinked and came back to the same frequency.
-	// Nothing pinned (no CAT) means nothing to leave.
+func (s *Service) onDialMoved(fromMHz, toMHz float64) {
+	// Decide and act under ONE hold of seqGate. Validating outside it and tearing
+	// down inside lets a replacement arm or session commit in between and be killed
+	// for a move it was never subject to (codex P1 on 6e974717).
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+
 	s.txMu.Lock()
-	pinned := s.sessionDialMHz
 	armed := s.txArmed
+	pinned := s.armDialMHz
 	s.txMu.Unlock()
-	if pinned == 0 && !armed {
+	if !armed {
+		return // nothing is bound to a frequency
+	}
+	// Does this move concern the CURRENT binding? An arm made at the move's
+	// destination postdates it — the operator has already QSYed and re-armed — so
+	// the move is not theirs to answer for. Judged from the frequencies the
+	// scheduler OBSERVED, never a re-read: A->B->A is two observations, and a
+	// handler that looks at live state finds the dial back at A and does nothing,
+	// while a waveform in flight jumped frequency and back.
+	if pinned == 0 || pinned == toMHz {
 		return
 	}
-	cur, tracked, known := s.dialState()
-	if !tracked || !known {
-		// Unreadable is not "moved" — preKeyDialCheck already refuses to key on a
-		// dial it cannot corroborate, which is the right response to not knowing.
+	if pinned != fromMHz {
+		// The binding is neither where the move started nor where it ended. It
+		// belongs to some other frequency entirely, so this observation is stale.
 		return
-	}
-	if pinned != 0 && cur == pinned {
-		return // still where we started
 	}
 
-	// disarmTx does the whole teardown under seqGate, in the order the rest of the
-	// package relies on: clear armed, cancel the in-flight transmission (the
-	// controller drops PTT on the cancel path), then abandon the session. Reusing it
-	// rather than open-coding is deliberate — a bespoke sequence here is how the
-	// earlier attempt at this guard raced a concurrent start and skipped the
-	// completion policy. The transmission's own failure path still runs the rung's
-	// onDone, so a contact the partner already rogered is logged on its pinned
-	// frequency (rule 6).
 	s.log.InfoWith().
-		Float64("pinned_mhz", pinned).
-		Float64("now_mhz", cur).
-		Msg("ft8: rig left the session's frequency; abandoning and disarming")
+		Float64("from_mhz", fromMHz).
+		Float64("to_mhz", toMHz).
+		Msg("ft8: rig left the frequency TX was bound to; abandoning and disarming")
 	// Stage the explanation BEFORE the teardown so the terminal frame carries it —
 	// disarmTx abandons through the plain path, which is reasonless by default
 	// because an operator abandon needs no explanation. This one does.
 	s.seq.setPendingEndReason(EndReasonDialMoved)
-	s.disarmTx(false)
+	s.disarmTxLocked(false)
 	s.txMu.Lock()
-	s.sessionDialMHz = 0 // the arm is gone; nothing is bound to a frequency now
+	s.sessionDialMHz = 0
 	s.txMu.Unlock()
 }
 
@@ -1057,11 +1098,14 @@ func (s *Service) preKeyDialCheck() error {
 	if !known {
 		return errors.New(op).WithErr(ErrTxDialUnknown)
 	}
-	if !s.seq.Active() {
-		return nil
-	}
+	// Compare against the ARM's frequency, not the session's. The arm is the wider
+	// binding — every key goes through one, session or manual — and using it means
+	// the gate holds with no session running and with no capture at all. The
+	// session's own pin stays what a completed contact is LOGGED on
+	// (stampCompletionPath); the two are the same value in practice, because a move
+	// between arming and starting would have disarmed.
 	s.txMu.Lock()
-	pinned := s.sessionDialMHz
+	pinned := s.armDialMHz
 	s.txMu.Unlock()
 	if pinned != 0 && cur != pinned {
 		return errors.New(op).WithErr(ErrTxSuperseded)

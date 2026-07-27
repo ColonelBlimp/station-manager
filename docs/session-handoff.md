@@ -173,6 +173,30 @@ precisely so we don't re-derive state or redo finished work.
 > path**. Implemented by reusing `disarmTx` rather than open-coding the teardown —
 > a bespoke sequence here is exactly how the round-8 attempt raced a concurrent start.
 >
+> **Round 16 (uncommitted): the dial guard drew FOUR P1s — and the lesson is about
+> the tests, not the rules.** The seven rules were right; every test entered at the
+> `s.onDialMoved` SEAM rather than through production paths, so they proved the
+> reaction logic in isolation and said nothing about where it is wired, what crosses
+> the async boundary, or concurrency. Assertions were behavioural; TRIGGERS were not.
+> Rule 6's test even exercised the synchronous-refusal path rather than the
+> cancellation path the implementation had just introduced.
+>
+> Six rules added (8-13) and the structure changed: **safety moved off the scheduler
+> and onto the pre-key gate.** An ARM now pins a frequency (`armDialMHz`), so the
+> binding holds with no session and no capture — TX is independent of capture, so
+> safety had to be too. The scheduler became the RESPONSIVENESS mechanism and now
+> carries the observed from/to (a handler that re-reads live state loses A->B->A),
+> and reports only known->known changes so a CAT blink is not a QSY. Teardown:
+> `txWg.Wait` moved BEFORE `Abandon` — cancelling makes the completion run, and
+> abandoning first retired the generation so a rogered contact was silently
+> discarded — plus a new `disarmTxLocked` so the guard decides and acts under one
+> `seqGate` hold.
+>
+> One old subtest was SUPERSEDED (not deleted): "a stale pin must not block a manual
+> send" is now refused for a better reason — the arm's own binding. Rewritten with
+> the supersession explained, because its original concern is what the arm pin must
+> not reintroduce.
+>
 > Rounds 4-8 were whack-a-mole because every fix reacted to an observed dial
 > TRANSITION; transitions can be missed, mis-timed, or attributed to the wrong
 > session. The invariant cannot be. **A codex P1 claiming a boundary QSY escapes

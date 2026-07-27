@@ -118,7 +118,7 @@ type Scheduler struct {
 	// observeDial for why endpoints alone are not enough. Installed before Run;
 	// all of this is owned by Run's goroutine, so no lock is needed.
 	dialSource    func() (float64, bool)
-	onDialMoved   func()
+	onDialMoved   func(fromMHz, toMHz float64)
 	lastDial      float64
 	lastDialOK    bool
 	dialSampled   bool // lastDial/lastDialOK hold a real reading
@@ -163,7 +163,7 @@ func (s *Scheduler) SetDialSource(fn func() (float64, bool)) { s.dialSource = fn
 // leaves up to 30 s in which the operator cannot tell a deliberate stop from a hang.
 // Must be called before Run; the callback runs on the scheduler goroutine and must
 // not block.
-func (s *Scheduler) SetOnDialMoved(fn func()) { s.onDialMoved = fn }
+func (s *Scheduler) SetOnDialMoved(fn func(fromMHz, toMHz float64)) { s.onDialMoved = fn }
 
 func (s *Scheduler) readDial() (float64, bool) {
 	if s.dialSource == nil {
@@ -187,8 +187,16 @@ func (s *Scheduler) readDial() (float64, bool) {
 // a slot whose dial went unknown partway through cannot be placed either.
 func (s *Scheduler) observeDial() {
 	d, ok := s.readDial()
-	moved := s.dialSampled && (d != s.lastDial || ok != s.lastDialOK)
-	if moved {
+	// Two DIFFERENT questions, deliberately answered separately:
+	//   - "is this slot placeable?" — any change, including one of KNOWN-ness,
+	//     makes the window unattributable for occupancy.
+	//   - "did the operator move the rig?" — only a change between two KNOWN
+	//     frequencies. CAT going quiet and coming back on the same frequency is not
+	//     a QSY, and treating it as one disarms a perfectly good arm (codex P2 on
+	//     6e974717).
+	unplaceable := s.dialSampled && (d != s.lastDial || ok != s.lastDialOK)
+	movedFrom, moved := s.lastDial, s.dialSampled && ok && s.lastDialOK && d != s.lastDial
+	if unplaceable {
 		s.slotDialMoved = true
 	}
 	s.lastDial, s.lastDialOK, s.dialSampled = d, ok, true
@@ -198,8 +206,11 @@ func (s *Scheduler) observeDial() {
 	// working guard read on air as "moving the dial does not stop TX".
 	// After the state update, so a callback that reaches back in sees a settled
 	// tracker rather than the reading it was told about.
+	// Carry WHAT WAS SEEN. A handler that re-reads live state loses the event: two
+	// observations A->B and B->A both find the dial back at A, so neither acts even
+	// though a waveform in flight jumped frequency (codex P1 on 6e974717).
 	if moved && s.onDialMoved != nil {
-		s.onDialMoved()
+		s.onDialMoved(movedFrom, d)
 	}
 }
 

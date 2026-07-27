@@ -138,6 +138,11 @@ type Service struct {
 	txMessage  string // message of the in-flight transmission ("" = none)
 	txOffsetHz float64
 	txDialMHz  float64 // dial of the in-flight transmission, for the keyed-time decode-log TX line
+	// armDialMHz is the dial the daemon read when TX was ARMED (0 = unknown). The
+	// pre-key gate compares against it, so the frequency binding holds on every
+	// keying path — including with no session and no capture running. Distinct from
+	// sessionDialMHz, which is what a completed contact is LOGGED on.
+	armDialMHz float64
 	// sessionDialMHz is the dial the DAEMON read when the active session started
 	// (0 = it had none). The TX-safety invariant compares it against a live read
 	// before every rung — see seqTransmit. Pinned in sessionTxGate, the shared
@@ -559,8 +564,8 @@ func (s *Service) startCaptureLocked() {
 	// every audio batch. Handed off to a goroutine because onDialMoved takes seqGate
 	// and waits on an in-flight transmission, and the scheduler loop must keep
 	// servicing slot boundaries — a blocked scheduler drops slots.
-	sch.SetOnDialMoved(func() {
-		safego.Go(runCtx, "ft8.dialguard", s.onPanic, func() { s.onDialMoved() }, false)
+	sch.SetOnDialMoved(func(from, to float64) {
+		safego.Go(runCtx, "ft8.dialguard", s.onPanic, func() { s.onDialMoved(from, to) }, false)
 	})
 	safego.GoTracked(runCtx, "ft8.scheduler", s.onPanic, func() {
 		defer s.onCaptureLoopExit(runCtx, "ft8.scheduler")

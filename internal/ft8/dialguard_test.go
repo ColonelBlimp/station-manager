@@ -37,6 +37,24 @@ import (
 	  6. A contact already rogered is still logged, on the PINNED frequency.
 	  7. The operator is told what happened and why.
 
+	Rules 8-13 were added 2026-07-27 after the first implementation drew four P1s.
+	The rules above were RIGHT; the tests entered at the s.onDialMoved seam instead
+	of through production paths, so they proved the reaction logic in isolation and
+	said nothing about where it is wired, what crosses the async boundary, or what
+	happens under concurrency. Assertions were behavioural; the TRIGGERS were not.
+
+	  8. Aborting must not discard a rogered contact — on the CANCELLATION path,
+	     not merely the synchronous refusal. Rule 6's first test never touched the
+	     mechanism the implementation had just introduced.
+	  9. The guard acts on the move the scheduler OBSERVED, not on a later re-read
+	     of live state. A -> B -> A is two observations, not zero.
+	 10. Every path that can key is gated, INCLUDING with capture stopped or never
+	     started. TX is independent of capture; safety must be too.
+	 11. An ARM pins a frequency, exactly as a session does.
+	 12. A teardown must not end a session that started AFTER the move it reacts to.
+	 13. A knownness blink (known -> unknown -> known, same frequency) is not a move.
+	     It still makes the SLOT unplaceable for occupancy; that is a different signal.
+
 	Rule 6 is the one that must survive all the strictness above it: dropping TX
 	must never drop a contact that already happened on the air.
 
@@ -90,7 +108,7 @@ func TestDialGuard_AnyChangeEndsTheSession(t *testing.T) {
 			startGuardCq(t, s)
 
 			dial = tc.to
-			s.onDialMoved()
+			s.onDialMoved(14.074, tc.to)
 
 			require.False(t, s.seq.Active(),
 				"the rig left the frequency this session was bound to; there is no tolerance")
@@ -102,7 +120,7 @@ func TestDialGuard_AnyChangeEndsTheSession(t *testing.T) {
 		s, _ := dialGuardService(t, &dial)
 		startGuardCq(t, s)
 
-		s.onDialMoved() // spurious call, dial unchanged
+		s.onDialMoved(14.074, 14.074) // spurious call, dial unchanged
 
 		require.True(t, s.seq.Active(),
 			"nothing moved — ending the session here would abandon every QSO on a stray report")
@@ -121,7 +139,7 @@ func TestDialGuard_EndsOnObservationNotAtTheNextRung(t *testing.T) {
 	startGuardCq(t, s)
 
 	dial = 14.075
-	s.onDialMoved()
+	s.onDialMoved(14.074, 14.075)
 
 	require.False(t, s.seq.Active(),
 		"no further rung has been driven — the session must already be over")
@@ -142,7 +160,7 @@ func TestDialGuard_SchedulerReportsAMoveAsSoonAsItSeesOne(t *testing.T) {
 	})
 
 	moves := 0
-	sch.SetOnDialMoved(func() { moves++ })
+	sch.SetOnDialMoved(func(_, _ float64) { moves++ })
 
 	for range readings {
 		sch.observeDial()
@@ -178,7 +196,7 @@ func TestDialGuard_AbortsTheTransmissionInFlight(t *testing.T) {
 		"fixture: the rung must be keyed before the move, or there is nothing to abort")
 
 	dial = 14.075
-	s.onDialMoved()
+	s.onDialMoved(14.074, 14.075)
 
 	require.Eventually(t, func() bool { return k.unkeys() >= k.keys() }, time.Second, 10*time.Millisecond,
 		"PTT must drop — the rig is transmitting on a frequency the session never pinned")
@@ -196,7 +214,7 @@ func TestDialGuard_DisarmsTransmit(t *testing.T) {
 	startGuardCq(t, s)
 
 	dial = 14.075
-	s.onDialMoved()
+	s.onDialMoved(14.074, 14.075)
 
 	require.ErrorIs(t, s.TransmitNext("CQ 7Q5MLV IO91", 1500), ErrTxNotArmed,
 		"TX must be disarmed by the move")
@@ -219,7 +237,7 @@ func TestDialGuard_DisarmsEvenWithNoSessionRunning(t *testing.T) {
 	require.False(t, s.seq.Active(), "fixture: armed, but nothing running")
 
 	dial = 14.075
-	s.onDialMoved()
+	s.onDialMoved(14.074, 14.075)
 
 	require.ErrorIs(t, s.TransmitNext("CQ 7Q5MLV IO91", 1500), ErrTxNotArmed,
 		"an arm is bound to a frequency too")
@@ -269,7 +287,7 @@ func TestDialGuard_TellsTheOperatorWhy(t *testing.T) {
 	published := startGuardCq(t, s)
 
 	dial = 14.075
-	s.onDialMoved()
+	s.onDialMoved(14.074, 14.075)
 
 	require.NotEmpty(t, *published, "the session end must be published, not silent")
 	last := (*published)[len(*published)-1]
@@ -289,7 +307,7 @@ func TestDialGuard_SmsOwnBandChangeIsNotSpecial(t *testing.T) {
 	startGuardCq(t, s)
 
 	dial = 7.074 // as if set_band drove the rig here
-	s.onDialMoved()
+	s.onDialMoved(14.074, 7.074)
 
 	require.False(t, s.seq.Active(), "a band button is a dial change like any other")
 	require.ErrorIs(t, s.TransmitNext("CQ 7Q5MLV IO91", 1500), ErrTxNotArmed)
@@ -310,7 +328,7 @@ func TestDialGuard_CaptureSessionWiresTheSchedulerToTheService(t *testing.T) {
 	// Stand up the scheduler exactly as startCaptureLocked does.
 	sch := NewScheduler(make(chan []int16), nil)
 	sch.SetDialSource(s.dialSource)
-	sch.SetOnDialMoved(func() { s.onDialMoved() })
+	sch.SetOnDialMoved(s.onDialMoved)
 
 	sch.observeDial() // baseline
 	dial = 14.075
@@ -320,4 +338,161 @@ func TestDialGuard_CaptureSessionWiresTheSchedulerToTheService(t *testing.T) {
 		"a move seen by the scheduler must reach the guard — otherwise both halves "+
 			"pass in isolation and nothing fires on the air")
 	require.ErrorIs(t, s.TransmitNext("CQ 7Q5MLV IO91", 1500), ErrTxNotArmed)
+}
+
+// --- 8: the CANCELLATION path must not discard a rogered contact ------------
+
+// Rule 6 covered the synchronous refusal — the rung never starts. This covers the
+// path the dial guard actually introduced: a closing rung already KEYED and in
+// flight when the dial moves. disarmTx cancels it, and the completion callback
+// runs afterwards. If the session generation has already been retired by then, the
+// callback sees a stale generation and refuses, and a contact the partner rogered
+// is silently lost (codex P1 on 6e974717).
+//
+// The callback here is generation-guarded exactly as finalRungDoneLocked is; that
+// guard is the mechanism the bug exploits, so a test without it proves nothing.
+func TestDialGuard_AbortingDoesNotDiscardARogeredContact(t *testing.T) {
+	zeroTiming(t)
+	dial := 14.074
+	s, k := dialGuardService(t, &dial)
+	startGuardCq(t, s)
+
+	gen := s.seq.currentGen()
+	logged := 0
+	onDone := func(bool) {
+		s.seq.mu.Lock()
+		defer s.seq.mu.Unlock()
+		if s.seq.sessionGen != gen {
+			return // stale callback — this is where the contact would vanish
+		}
+		logged++
+	}
+
+	// The courtesy closing rung is keyed and playing.
+	require.NoError(t, s.startTransmission("K1ABC 7Q5MLV 73", 1500, 14.074,
+		func() bool { return s.seq.isCurrent(gen) },
+		func(ctx context.Context, ctrl *TxController) error {
+			return ctrl.transmit(ctx, []int16{1, 2, 3}, time.Time{}, nil)
+		}, onDone, nil))
+	require.Eventually(t, func() bool { return k.keys() > 0 }, time.Second, 10*time.Millisecond,
+		"fixture: the closing rung must be on the air before the dial moves")
+
+	dial = 14.075
+	s.onDialMoved(14.074, 14.075)
+
+	require.Eventually(t, func() bool { return !s.txInFlightNow() }, 2*time.Second, 10*time.Millisecond,
+		"the transmission must be torn down")
+	require.Equal(t, 1, logged,
+		"the partner rogered — aborting our courtesy 73 must not un-make the contact")
+}
+
+// --- 9: acts on the observed move, not a re-read ----------------------------
+
+// The scheduler reports what it SAW. Re-reading live state in the handler loses
+// the event: observe A->B and B->A in quick succession and both handlers find the
+// dial back at A, so neither acts — even though a waveform in flight jumped
+// frequency and back (codex P1 on 6e974717).
+func TestDialGuard_ActsOnTheObservedMoveNotALaterReRead(t *testing.T) {
+	dial := 14.074
+	s, _ := dialGuardService(t, &dial)
+	startGuardCq(t, s)
+
+	// The rig went to 14.075 and came back before the handler ran.
+	dial = 14.074
+	s.onDialMoved(14.074, 14.075)
+
+	require.False(t, s.seq.Active(),
+		"a move was observed; that the dial returned does not un-observe it")
+}
+
+// --- 10 + 11: an arm pins a frequency, and TX is gated without capture ------
+
+// TX is explicitly independent of capture, so the guard cannot live only where the
+// scheduler does. With no FT8 subscriber, a failed capture start, or an exited
+// capture loop there is no scheduler at all — and an operator could arm at A, QSY
+// to B and still key at B (codex P1 on 6e974717). The pre-key gate runs on every
+// path with no such dependency, so the arm must pin a frequency for it to compare.
+func TestDialGuard_GatesTxWithNoCaptureRunning(t *testing.T) {
+	dial := 14.074
+	s, _ := dialGuardService(t, &dial) // armed; no capture, so no scheduler exists
+
+	dial = 14.075 // QSY with nothing observing
+
+	require.Error(t, s.preKeyDialCheck(),
+		"the arm was made on 14.074; keying on 14.075 must be refused with or without capture")
+	require.Error(t, s.TransmitNext("CQ 7Q5MLV IO91", 1500),
+		"and the manual send that would key there must not be accepted")
+}
+
+// An arm is bound to a frequency exactly as a session is — that is what makes the
+// idle-arm rule enforceable without a running scheduler.
+func TestDialGuard_AnArmPinsAFrequency(t *testing.T) {
+	dial := 14.074
+	s, _ := dialGuardService(t, &dial)
+
+	require.NoError(t, s.preKeyDialCheck(), "still on the arm frequency")
+
+	dial = 14.0741
+	require.Error(t, s.preKeyDialCheck(), "one hundred hertz is a move like any other")
+
+	dial = 14.074
+	require.NoError(t, s.preKeyDialCheck(), "back on it, and workable again")
+}
+
+// --- 12: a later session is not collateral ----------------------------------
+
+// The handler validates, then tears down whatever is current. If the session it
+// validated ends and a NEW one starts on the new dial in between, the replacement
+// is killed for a move it was never subject to (codex P1 on 6e974717) — the same
+// class of bug as the round-8 unconditional abandon.
+func TestDialGuard_DoesNotEndASessionStartedAfterTheMove(t *testing.T) {
+	dial := 14.074
+	s, _ := dialGuardService(t, &dial)
+	startGuardCq(t, s)
+
+	// The operator QSYs, re-arms, and starts working on the new frequency.
+	dial = 14.075
+	s.onDialMoved(14.074, 14.075)
+	require.NoError(t, s.ArmTx(true))
+	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.075, "", 1))
+	require.True(t, s.seq.Active(), "fixture: a replacement session is running on 14.075")
+
+	// A late handler for the ORIGINAL move finally runs.
+	s.onDialMoved(14.074, 14.075)
+
+	require.True(t, s.seq.Active(),
+		"this session began after that move and was never bound to 14.074")
+	s.AbandonQso()
+}
+
+// --- 13: a knownness blink is not a move ------------------------------------
+
+// CAT going quiet and coming back on the SAME frequency is not a QSY. Treating it
+// as one disarms a perfectly good arm (codex P2 on 6e974717). The slot is still
+// unplaceable for occupancy — that is a separate signal with a separate rule.
+func TestDialGuard_KnownnessBlinkIsNotAMove(t *testing.T) {
+	type reading struct {
+		mhz float64
+		ok  bool
+	}
+	readings := []reading{{14.074, true}, {0, false}, {14.074, true}}
+	n := 0
+	sch := NewScheduler(make(chan []int16), nil)
+	sch.SetDialSource(func() (float64, bool) {
+		r := readings[n]
+		if n < len(readings)-1 {
+			n++
+		}
+		return r.mhz, r.ok
+	})
+	moves := 0
+	sch.SetOnDialMoved(func(_, _ float64) { moves++ })
+
+	for range readings {
+		sch.observeDial()
+	}
+
+	require.Zero(t, moves, "the frequency never changed; CAT merely blinked")
+	require.True(t, sch.slotDialMoved,
+		"the SLOT is still unplaceable for occupancy — different question, different signal")
 }
