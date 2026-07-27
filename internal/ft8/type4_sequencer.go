@@ -120,9 +120,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 
 	msg, ok := s.t4Ex.TxMessage()
 	if !ok { // already done — clear defensively.
-		s.t4Ex = nil
-		s.mode = seqIdle
-		s.publish(QsoStatus{Active: false})
+		s.retireSessionLocked(func() { s.t4Ex = nil })
 		s.mu.Unlock()
 		return
 	}
@@ -153,18 +151,13 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	if !confirming {
 		// Operator-armed skip — see onSlotAnswering; same semantics.
 		if s.skipIfSilent && !advanced && s.repeats > 0 {
-			s.t4Ex = nil
-			s.mode = seqIdle
-			s.skipIfSilent = false
-			s.publish(QsoStatus{Active: false})
+			s.retireSessionLocked(func() { s.t4Ex = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: type-4 skip-if-silent — no reply; ending without repeat")
 			return
 		}
 		if s.repeats >= s.maxRepeats {
-			s.t4Ex = nil
-			s.mode = seqIdle
-			s.publish(QsoStatus{Active: false})
+			s.retireSessionLocked(func() { s.t4Ex = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: type-4 no answer after max repeats; abandoning")
 			return
@@ -309,9 +302,7 @@ func (s *Sequencer) onSlotWorkingT4(ref SlotRef, msgs []goft8.DecodedMessage, no
 
 	msg, ok := s.t4Work.TxMessage()
 	if !ok {
-		s.mode = seqIdle
-		s.t4Work = nil
-		s.publish(QsoStatus{Active: false})
+		s.retireSessionLocked(func() { s.t4Work = nil })
 		s.mu.Unlock()
 		return
 	}
@@ -353,9 +344,7 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 	// — counted only past the guards above, since a deferred slot is not an attempt.
 	if s.repeats >= s.maxRepeats {
 		call, attempts := s.t4Work.TheirCall, s.maxRepeats
-		s.t4Work = nil
-		s.mode = seqIdle
-		s.publish(QsoStatus{Active: false})
+		s.retireSessionLocked(func() { s.t4Work = nil })
 		s.mu.Unlock()
 		// Nothing is logged: they never got the roger, so neither side has a QSO.
 		s.log.WarnWith().Str("their_call", call).Int("attempts", attempts).

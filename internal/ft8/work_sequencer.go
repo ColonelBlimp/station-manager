@@ -96,8 +96,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		return
 	}
 	if s.caller == nil { // defensive: seqWorking always has a contact
-		s.mode = seqIdle
-		s.publish(QsoStatus{Active: false})
+		s.retireSessionLocked(func() {})
 		s.mu.Unlock()
 		return
 	}
@@ -126,9 +125,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 
 	msg, ok := s.caller.TxMessage()
 	if !ok { // exchange exhausted off the onDone path — shouldn't happen; clear defensively.
-		s.mode = seqIdle
-		s.caller = nil
-		s.publish(QsoStatus{Active: false})
+		s.retireSessionLocked(func() { s.caller = nil })
 		s.mu.Unlock()
 		return
 	}
@@ -176,10 +173,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// pre-final only: it means "stop calling a station that isn't answering",
 		// and at the final rung nobody is being waited for.
 		if s.skipIfSilent && !advanced && s.repeats > 0 {
-			s.caller = nil
-			s.mode = seqIdle
-			s.skipIfSilent = false
-			s.publish(QsoStatus{Active: false})
+			s.retireSessionLocked(func() { s.caller = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: working caller — skip-if-silent; ending without repeat")
 			return
@@ -187,9 +181,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 	if s.repeats >= s.maxRepeats {
 		call, attempts := s.caller.TheirCall, s.maxRepeats
-		s.caller = nil
-		s.mode = seqIdle
-		s.publish(QsoStatus{Active: false})
+		s.retireSessionLocked(func() { s.caller = nil })
 		s.mu.Unlock()
 		if confirming {
 			// Group B: they never received the roger, so neither side has a QSO —
@@ -342,8 +334,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 		return
 	}
 	if s.fdWork == nil {
-		s.mode = seqIdle
-		s.publish(QsoStatus{Active: false})
+		s.retireSessionLocked(func() {})
 		s.mu.Unlock()
 		return
 	}
@@ -368,9 +359,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 
 	msg, ok := s.fdWork.TxMessage()
 	if !ok {
-		s.mode = seqIdle
-		s.fdWork = nil
-		s.publish(QsoStatus{Active: false})
+		s.retireSessionLocked(func() { s.fdWork = nil })
 		s.mu.Unlock()
 		return
 	}
@@ -408,18 +397,13 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 	if !confirming {
 		// Operator-armed skip — see onSlotAnswering; same semantics.
 		if s.skipIfSilent && !advanced && s.repeats > 0 {
-			s.fdWork = nil
-			s.mode = seqIdle
-			s.skipIfSilent = false
-			s.publish(QsoStatus{Active: false})
+			s.retireSessionLocked(func() { s.fdWork = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: working caller (FD) — skip-if-silent; ending without repeat")
 			return
 		}
 		if s.repeats >= s.maxRepeats {
-			s.fdWork = nil
-			s.mode = seqIdle
-			s.publish(QsoStatus{Active: false})
+			s.retireSessionLocked(func() { s.fdWork = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: working caller (FD) — no answer after max repeats; abandoning")
 			return

@@ -114,6 +114,12 @@ func (s *Sequencer) retireSessionLocked(clear func()) {
 	clear()
 	s.mode = seqIdle
 	s.repeats = 0
+	// Per-session operator flags die with the session. Every Start* also clears
+	// skipIfSilent, so this is belt-and-braces there — but it is what makes this
+	// function the WHOLE transition, which is the point of having one: a caller
+	// should never need to remember a fifth thing to reset by hand.
+	s.skipIfSilent = false
+	s.nextArmed = false
 	reason := s.pendingEndReason
 	s.pendingEndReason = ""
 	s.publish(QsoStatus{Active: false, EndReason: reason})

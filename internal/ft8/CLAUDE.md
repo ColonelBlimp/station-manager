@@ -139,6 +139,19 @@ deleted within a round or two, while the behavioural ones caught real defects.
    Observable: after any ending completion the generation has moved on, and the
    terminal frame carries whatever reason was staged.
 
+   **This binds the ABANDONMENT paths too, not just the completions** (2026-07-27).
+   F2 converted the four ways a session ends because a contact FINISHED; the ways it
+   ends because the contact FAILED — the repeat cap, an armed skip firing, the
+   defensive exhausted-exchange branches — were still hand-rolled at 19 sites, so
+   they retired no generation and dropped any staged `end_reason`. Both are
+   observable: a stale callback cannot be told from a live session, and a dial-guard
+   teardown that loses the race leaves the operator watching a session stop with no
+   explanation. All 19 now call the primitive, which also clears the per-session
+   operator flags so it is the WHOLE transition. Enforced structurally:
+   `TestSource_SessionsEndOnlyThroughThePrimitive` permits `s.mode = seqIdle` only
+   inside `retireSessionLocked` and `abandonLocked` — an ALLOWLIST, for the reason
+   the publish guard learned the hard way.
+
 7. **A control that stops RF is offered only where it can actually stop RF.**
    Skip-if-silent means "if they do not come back, end the session instead of
    repeating this rung" — a property of the RUNG, not of the session mode. The
