@@ -157,8 +157,11 @@ deleted within a round or two, while the behavioural ones caught real defects.
    appear only AS a comparison operand or case expression — never nested beneath one,
    stored, aliased or passed; (2) any assignment to a `.mode` selector must name an
    enumerated ACTIVE mode, and arithmetic on one is refused; (3) `&x.mode` is refused
-   outright, since a write through the pointer names no constant and puts no `.mode`
-   on the left, evading (1) and (2) together — `seqMode` is
+   outright — UNIVERSALLY, including inside the primitives themselves, since a
+   primitive that leaked the pointer would let a write elsewhere carry neither a
+   `.mode` lvalue nor `seqIdle` and pass all three rules (codex P2 on 33c66232). The
+   primitives are exempt from (1) and (2) only; nothing anywhere needs that address,
+   which makes the universal rule simpler to state than the carve-out it replaced — `seqMode` is
    integer-backed and `seqIdle` is 0, so `s.mode = 0` and `seqAnswering(1)--` reach
    idle silently. Rule 2 matches ANY `.mode` selector without asking whose it is,
    which is sound because nothing else in the package assigns to a `.mode` field, and

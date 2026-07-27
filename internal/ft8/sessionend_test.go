@@ -236,9 +236,14 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 				if !ok || fd.Body == nil {
 					continue
 				}
-				if fd.Name != nil && permitted[fd.Name.Name] {
-					continue
-				}
+				// The primitives are exempt from rules 1 and 2 — assigning seqIdle is
+				// their whole job — but NOT from rule 3. Skipping their bodies wholesale
+				// let a primitive leak `&s.mode`, after which a write through the escaped
+				// pointer carries no `.mode` lvalue and no seqIdle, so all three rules
+				// pass (codex P2 on 33c66232). Nothing needs that address anywhere, so
+				// the rule is simply universal — which is also easier to state than the
+				// carve-out it replaces.
+				isPrimitive := fd.Name != nil && permitted[fd.Name.Name]
 				// Positions of seqIdle mentions that are merely READ.
 				readOnly := map[token.Pos]bool{}
 				// The identifier must BE the operand. Marking everything BENEATH it let
@@ -280,7 +285,7 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 				ast.Inspect(fd.Body, func(n ast.Node) bool {
 					switch v := n.(type) {
 					case *ast.Ident:
-						if v.Name == "seqIdle" && !readOnly[v.Pos()] {
+						if !isPrimitive && v.Name == "seqIdle" && !readOnly[v.Pos()] {
 							t.Errorf("%s:%d: seqIdle used outside a comparison in %s — a "+
 								"session may only be ended by the session-identity "+
 								"transition (invariant 6), which retires the generation and "+
@@ -301,6 +306,9 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 								name, fset.Position(v.Pos()).Line, fd.Name.Name, allowed)
 						}
 					case *ast.IncDecStmt:
+						if isPrimitive {
+							return true
+						}
 						if isModeSel(v.X) {
 							t.Errorf("%s:%d: arithmetic on a mode in %s (%s) reaches seqIdle "+
 								"without naming it — see invariant 6. Allowed only in: %s",
@@ -308,6 +316,9 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 								v.Tok.String(), allowed)
 						}
 					case *ast.AssignStmt:
+						if isPrimitive {
+							return true
+						}
 						for i, l := range v.Lhs {
 							if !isModeSel(l) {
 								continue
