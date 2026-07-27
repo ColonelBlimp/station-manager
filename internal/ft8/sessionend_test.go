@@ -176,10 +176,18 @@ two-line change and a conversation, rather than a silent pass.
 //     `launder(seqIdle) == x` passes it out again. Never where it can be stored,
 //     aliased or passed. This is what makes aliasing irrelevant: `alias.mode =
 //     seqIdle` is caught by the right-hand side, whatever `alias` is called.
+//  3. ADDRESS. `&x.mode` is refused outright: a write through the pointer names no
+//     constant and puts no `.mode` on the left, so it evades rules 1 and 2 together.
 //  2. LVALUE. Any assignment to a `.mode` selector must name an enumerated ACTIVE
 //     mode; `++`/`--`/compound assignment on one is refused outright. seqMode is
 //     integer-backed and seqIdle is 0, so `s.mode = 0`, `seqMode(0)`, a zero-valued
 //     variable and `seqAnswering(1)--` all reach idle silently.
+//
+// The three rules were arrived at by AUDIT rather than by patching the latest
+// finding: every check any earlier version of this guard performed was listed, and
+// each mapped to a rule that still performs it. That audit is what found rule 3
+// missing — one round after "when replacing a check, enumerate what the old one
+// caught" was written into this very file, and not applied to it.
 //
 // Rule 2 deliberately matches ANY `.mode` selector without asking whose it is. That
 // is sound here because no other type in the package is written through an
@@ -277,6 +285,19 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 								"session may only be ended by the session-identity "+
 								"transition (invariant 6), which retires the generation and "+
 								"consumes a staged end_reason. Allowed only in: %s",
+								name, fset.Position(v.Pos()).Line, fd.Name.Name, allowed)
+						}
+					case *ast.UnaryExpr:
+						// RULE 3. Taking the address is how a write escapes both rules at
+						// once: `m := &s.mode; z := seqMode(0); *m = z` names no constant
+						// and has no `.mode` on the left. There is no legitimate need for
+						// it, so refuse it outright (codex P2 on 95b5da25 — a check this
+						// file HAD, dropped in a rewrite and then not restored alongside
+						// the lvalue rule, which is the same mistake twice).
+						if v.Op == token.AND && isModeSel(v.X) {
+							t.Errorf("%s:%d: the address of a mode is taken in %s — a write "+
+								"through it would evade both rules. See invariant 6; "+
+								"allowed only in: %s",
 								name, fset.Position(v.Pos()).Line, fd.Name.Name, allowed)
 						}
 					case *ast.IncDecStmt:

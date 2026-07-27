@@ -156,15 +156,21 @@ deleted within a round or two, while the behavioural ones caught real defects.
    constant, or reaching zero without it. (1) outside those functions `seqIdle` may
    appear only AS a comparison operand or case expression — never nested beneath one,
    stored, aliased or passed; (2) any assignment to a `.mode` selector must name an
-   enumerated ACTIVE mode, and arithmetic on one is refused — `seqMode` is
+   enumerated ACTIVE mode, and arithmetic on one is refused; (3) `&x.mode` is refused
+   outright, since a write through the pointer names no constant and puts no `.mode`
+   on the left, evading (1) and (2) together — `seqMode` is
    integer-backed and `seqIdle` is 0, so `s.mode = 0` and `seqAnswering(1)--` reach
    idle silently. Rule 2 matches ANY `.mode` selector without asking whose it is,
    which is sound because nothing else in the package assigns to a `.mode` field, and
    is what finally made the guard immune to naming after five rounds of tracking
    receivers, parameters and aliases (61a875d8, 5cffed06, 980c9e04, 0c80f894,
-   bd2f31fa). **The costly lesson was not any individual hole: it was rewriting the
-   guard around one axis and DROPPING the other, which reopened a hole this file had
-   already closed. When replacing a check, enumerate what the old one caught.**
+   bd2f31fa). **The costly lesson was not any individual hole: it was
+   rewriting the guard around one axis and DROPPING the others. That happened TWICE —
+   the lvalue rule (bd2f31fa) and then the address rule (95b5da25), the second one a
+   round AFTER "enumerate what the old check caught" was written here and not applied.
+   The rules above were finally settled by auditing every check any earlier version
+   performed against the current one, which is the step that should follow any
+   rewrite of a guard.**
    That makes THREE guards in this package fixed by inverting a denylist into an
    allowlist, so treat the allowlist as the default shape for a new guard here rather
    than the remedy after a review finds the hole.
