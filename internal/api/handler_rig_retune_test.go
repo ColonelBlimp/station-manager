@@ -5,6 +5,7 @@ import (
 	stderr "errors"
 	"testing"
 
+	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -42,6 +43,14 @@ import (
 	Rule 21 is the constraint that keeps 19 honest: "stop TX first" is the right
 	answer for a band change and quite wrong for a mode change.
 
+	 22. "TX" means ANY SM-owned transmission — an FT8 transmission OR a tune
+	     carrier. They are owned by different subsystems and both must be stopped;
+	     stopping one and writing anyway still switches a keyed rig. Added after the
+	     first implementation covered only FT8 while the very error it replaced said
+	     "tune or FT8" (codex P1 on 4773f506). Both are attempted even if the first
+	     fails — getting the rig unkeyed matters more than a tidy early return — and
+	     any failure cancels the retune under rule 20.
+
 	The stop itself is injected (cmd/smd wires it to the FT8 subsystem), matching
 	SetTxKeyer / SetDialSource / SetCatGate — internal/api composes the two
 	subsystems without either importing the other. ORDERING is asserted through what
@@ -66,15 +75,22 @@ func retuneServer(t *testing.T, stopErr error) (*Server, *int) {
 
 // newServerWithFt8 builds a Server through the real constructor, which is the only
 // way to observe what New wires.
-func newServerWithFt8(t *testing.T, withFt8 bool) *Server {
+func newServerWith(t *testing.T, withBridge, withFt8 bool) *Server {
 	t.Helper()
 	base := testServer(t)
 	var f *ft8.Service
 	if withFt8 {
 		f = ft8.NewService(types.Ft8Config{Enabled: true}, base.logger, t.TempDir())
 	}
+	var br *bridge.Service
+	if withBridge {
+		br = bridge.New(types.BridgeConfig{
+			Enabled: true,
+			Cat:     &types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+		}, base.logger)
+	}
 	return New(config.Config{}, "test", base.cfg, base.qso, base.db, base.logger,
-		base.hub, base.enrich, base.mailer, base.bridge, f)
+		base.hub, base.enrich, base.mailer, br, f)
 }
 
 func rigErrorCode(t *testing.T, body string) string {
@@ -179,18 +195,73 @@ func TestRigRetune_NoHookIsHarmless(t *testing.T) {
 // every test above stays green and the rig still gets switched while keyed on air.
 // That exact gap — two correct halves, no wire — is what made a previous round's
 // guard fire nowhere (codex P1 on 6e974717), so the connection gets its own test.
-func TestRigRetune_ServerWiresTheStopHookFromTheFt8Subsystem(t *testing.T) {
-	t.Run("wired when an FT8 subsystem is present", func(t *testing.T) {
-		srv := newServerWithFt8(t, true)
-		if srv.stopTxForRetune == nil {
-			t.Fatal("nothing would stop TX before a band change; the rig would be switched keyed")
+func TestRigRetune_ServerWiresEverySmOwnedTransmitter(t *testing.T) {
+	// Each transmitter alone must produce a hook. Asserting only "non-nil when FT8
+	// is present" would stay green with the tune carrier unwired — which is exactly
+	// the bug this rule was added for, so the BRIDGE-only case is the load-bearing
+	// one here.
+	cases := []struct {
+		name       string
+		bridge     bool
+		ft8        bool
+		wantHooked bool
+	}{
+		{"tune carrier alone still needs stopping", true, false, true},
+		{"FT8 alone", false, true, true},
+		{"both", true, true, true},
+		{"neither — nothing to stop", false, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newServerWith(t, tc.bridge, tc.ft8)
+			hooked := srv.stopTxForRetune != nil
+			if hooked != tc.wantHooked {
+				t.Fatalf("hooked = %v, want %v — an unwired transmitter means the rig gets "+
+					"switched while it is keyed", hooked, tc.wantHooked)
+			}
+		})
+	}
+}
+
+// --- 22: both transmitters --------------------------------------------------
+
+// A tune carrier and an FT8 transmission are owned by different subsystems, and
+// either one keys the rig. Stopping only the one you happened to think of still
+// leaves relays switching under RF.
+func TestRigRetune_StopsBothTuneAndFt8(t *testing.T) {
+	t.Run("both are asked to stop", func(t *testing.T) {
+		tune, ft8 := 0, 0
+		stop := retuneStopper(
+			func() error { tune++; return nil },
+			func() error { ft8++; return nil },
+		)
+		if err := stop(); err != nil {
+			t.Fatalf("nothing failed; got %v", err)
+		}
+		if tune != 1 || ft8 != 1 {
+			t.Fatalf("tune=%d ft8=%d — both transmitters must be stopped", tune, ft8)
 		}
 	})
 
-	t.Run("absent without one", func(t *testing.T) {
-		srv := newServerWithFt8(t, false)
-		if srv.stopTxForRetune != nil {
-			t.Fatal("there is no transmitter to stop; a hook here could only fail confusingly")
+	t.Run("a failure in one still attempts the other", func(t *testing.T) {
+		ft8 := 0
+		stop := retuneStopper(
+			func() error { return errStopFailed },
+			func() error { ft8++; return nil },
+		)
+		err := stop()
+		if err == nil {
+			t.Fatal("a transmitter that would not stop must cancel the retune (rule 20)")
+		}
+		if ft8 != 1 {
+			t.Fatal("the other transmitter must still be stopped — getting the rig unkeyed " +
+				"matters more than returning early")
+		}
+	})
+
+	t.Run("no transmitters at all leaves nothing to wire", func(t *testing.T) {
+		if retuneStopper(nil, nil) != nil {
+			t.Fatal("a hook with nothing to stop could only fail confusingly")
 		}
 	})
 }

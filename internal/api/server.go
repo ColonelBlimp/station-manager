@@ -93,17 +93,6 @@ type Server struct {
 // protocol) because those don't change at runtime; the config-update
 // endpoint only touches operator-relevant fields (logging_station,
 // default_*_id) which startup doesn't bake into Server fields.
-// retuneStopper adapts the FT8 subsystem to the stop-hook, or nil when there is no
-// subsystem — a hook with nothing to stop could only fail confusingly. Typed nil is
-// checked explicitly: a nil *ft8.Service in an interface-free func value would still
-// produce a non-nil closure.
-func retuneStopper(ft8Svc *ft8.Service) func() error {
-	if ft8Svc == nil {
-		return nil
-	}
-	return ft8Svc.StopForRetune
-}
-
 func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator, mailer *email.Service, br *bridge.Service, ft8Svc *ft8.Service) *Server {
 	s := &Server{
 		cfg:    cfgSvc,
@@ -118,7 +107,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// Wire the retune stop-hook here rather than leaving it to cmd/smd: both
 		// halves of that behaviour pass in isolation whether or not they are
 		// connected, so the fewer places the wire can be forgotten the better.
-		stopTxForRetune:          retuneStopper(ft8Svc),
+		stopTxForRetune:          retuneStopper(tuneStopper(br), ft8Stopper(ft8Svc)),
 		limits:                   newLoadLimiter(cfg.Server.MaxConcurrentRequests, cfg.Server.MaxEventSubscribers, cfg.Server.SubmitRatePerSec, cfg.Server.SubmitRateBurst),
 		kit:                      httpkit.New(logger, cfg.Server.MaxBodyBytes),
 		protocol:                 cfg.Server.Protocol,
@@ -357,6 +346,57 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	}
 
 	return s
+}
+
+// tuneStopper and ft8Stopper adapt each SM-owned transmitter to the retune
+// stop-hook. Typed nil is checked explicitly: a nil *Service assigned straight into
+// a func value would still produce a NON-nil closure, which would then panic on
+// call rather than being skipped.
+func tuneStopper(br *bridge.Service) func() error {
+	if br == nil {
+		return nil
+	}
+	// StopTune is idempotent and a no-op when no carrier is up, so a band change
+	// with nothing tuning costs exactly nothing.
+	return func() error { return br.StopTune(context.Background()) }
+}
+
+func ft8Stopper(ft8Svc *ft8.Service) func() error {
+	if ft8Svc == nil {
+		return nil
+	}
+	return ft8Svc.StopForRetune
+}
+
+// retuneStopper composes the stop-hook from every SM-owned transmitter. A tune
+// carrier and an FT8 transmission are owned by DIFFERENT subsystems and either one
+// keys the rig, so stopping just the one you thought of still leaves relays
+// switching under RF — the first cut covered only FT8, while the very error it
+// replaced said "tune or FT8" (codex P1 on 4773f506).
+//
+// Every stop is attempted even after one fails: getting the rig unkeyed matters
+// more than an early return, and any failure still cancels the retune (rule 20).
+// Nil when there is nothing to stop — a hook with no transmitter behind it could
+// only fail confusingly.
+func retuneStopper(stops ...func() error) func() error {
+	live := make([]func() error, 0, len(stops))
+	for _, fn := range stops {
+		if fn != nil {
+			live = append(live, fn)
+		}
+	}
+	if len(live) == 0 {
+		return nil
+	}
+	return func() error {
+		var firstErr error
+		for _, fn := range live {
+			if err := fn(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		return firstErr
+	}
 }
 
 // ListenAndServe binds the listener and starts serving.

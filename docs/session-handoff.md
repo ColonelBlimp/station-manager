@@ -243,6 +243,15 @@ precisely so we don't re-derive state or redo finished work.
 > or not they are connected. That missing-wire shape is exactly what made the
 > round-16 guard fire nowhere.
 >
+> **Round 20: rule 22 — "TX" means EVERY SM-owned transmitter.** The first cut
+> stopped only FT8 while the error it replaced said "tune or FT8", so a band change
+> during a TUNE still 409'd. Now `retuneStopper` composes both (bridge `StopTune` +
+> `ft8.StopForRetune`), attempting every stop even after one fails — unkeying the
+> rig matters more than an early return — with any failure still cancelling the
+> retune. **The wiring test had to be strengthened too:** it asserted only that the
+> hook was non-nil, which stayed green with the tune carrier unwired. It now covers
+> each transmitter ALONE, and the bridge-only case is the load-bearing one.
+>
 > ON-AIR VALIDATION EARNED TODAY: the dial guard is confirmed end to end — 100 Hz
 > ends a session in ~2 s, PTT drops ~11 s into a 12.6 s transmission, TX disarms,
 > the toast names it. A dial move on an RR73 dropped cleanly, the operator re-armed,
