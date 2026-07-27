@@ -5,7 +5,6 @@ import { setHistory } from './lib/operate/worked.svelte';
 import { setSubmit } from './lib/operate/qso.svelte';
 import { addSessionQso, session } from './lib/operate/session.svelte';
 import { setMailer } from './lib/operate/mailer.svelte';
-import { setLayoutPersistence, type LayoutValue } from './lib/operate/layout.svelte';
 import {
     rig,
     catLink,
@@ -171,35 +170,6 @@ setFt8LoggedSink((p) => {
 // the logging card uses; fail-soft (a miss leaves the row undecorated). The
 // worked-before dupe seam is wired below, where the default logbook id is known.
 setFt8Enricher(apiEnrich);
-
-// Tile-layout persistence (ADR 0046) — localStorage today; the seam swaps to a
-// config.json op-profile field later without touching the layout module. The
-// key is profile/sub-mode composable ('default.phone' for now).
-const LAYOUT_KEY = 'sm.layout.default.phone';
-setLayoutPersistence({
-    load(): LayoutValue | null {
-        try {
-            const raw = localStorage.getItem(LAYOUT_KEY);
-            return raw ? (JSON.parse(raw) as LayoutValue) : null;
-        } catch {
-            return null;
-        }
-    },
-    save(l: LayoutValue): void {
-        try {
-            localStorage.setItem(LAYOUT_KEY, JSON.stringify(l));
-        } catch {
-            // storage unavailable (private mode) — pin becomes session-only, fine
-        }
-    },
-    clear(): void {
-        try {
-            localStorage.removeItem(LAYOUT_KEY);
-        } catch {
-            /* ignore */
-        }
-    },
-});
 
 // Station facts a submit needs (grid / callsigns / default logbook) plus the
 // bridge facts the rig seam needs, fetched once at boot. Zero-values on

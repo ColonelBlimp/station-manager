@@ -1,77 +1,56 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import {
-    layout,
-    resetToDefault,
-    showTile,
-    toggleTile,
-    isVisible,
-    setColumnsLive,
-    togglePin,
-} from './layout.svelte';
+import { layout, resetToDefault, showTile, toggleTile, isVisible } from './layout.svelte';
 
-// Each test starts from the built-in Default (and unpinned, so no persistence
-// side-effects bleed across tests).
+// What survives of this suite after ADR 0058. The column model, the drag seam and the
+// global pin were the tile layout; their tests went with them rather than being
+// rewritten, because their subject no longer exists. Panel VISIBILITY is what was
+// load-bearing underneath, and it is what the rail and the Tab-auto-show still drive.
+
 beforeEach(() => {
-    if (layout.pinned) togglePin(); // unpin → resets to Default too
     resetToDefault();
 });
 
 describe('layout — show / hide', () => {
-    it('Default shows only the logging tile', () => {
-        expect(layout.current.columns).toEqual([['logging'], []]);
+    it('Default shows only the logging card', () => {
         expect(isVisible('logging')).toBe(true);
-        expect(isVisible('worked')).toBe(false);
-    });
-
-    it('showTile stacks a hidden tile below the logging card (its column)', () => {
-        showTile('worked');
-        expect(isVisible('worked')).toBe(true);
-        expect(layout.current.columns[0]).toEqual(['logging', 'worked']); // stacked below
-        expect(layout.current.columns[1]).toEqual([]); // second column stays empty
-        expect(layout.current.hidden).not.toContain('worked');
-    });
-
-    it('toggleTile hides a visible tile', () => {
-        showTile('rig');
-        toggleTile('rig');
-        expect(isVisible('rig')).toBe(false);
-        expect(layout.current.columns.flat()).not.toContain('rig');
-    });
-});
-
-describe('layout — resetToDefault', () => {
-    it('reverts a rearranged + shown layout back to Default', () => {
-        showTile('worked');
-        showTile('session');
-        showTile('rig');
-        // simulate a drag that reshuffled the columns
-        setColumnsLive([
-            ['worked', 'logging'],
-            ['session', 'rig'],
-        ]);
-        expect(isVisible('worked')).toBe(true);
-
-        resetToDefault();
-
-        expect(layout.current.columns).toEqual([['logging'], []]);
         expect(isVisible('worked')).toBe(false);
         expect(isVisible('session')).toBe(false);
         expect(isVisible('rig')).toBe(false);
     });
+
+    it('showTile opens a hidden panel', () => {
+        showTile('worked');
+        expect(isVisible('worked')).toBe(true);
+        expect(layout.hidden).not.toContain('worked');
+    });
+
+    it('showTile is idempotent', () => {
+        showTile('worked');
+        showTile('worked');
+        expect(layout.hidden.filter((id) => id === 'worked')).toHaveLength(0);
+        expect(isVisible('worked')).toBe(true);
+    });
+
+    it('toggleTile hides a visible panel and reopens it', () => {
+        showTile('session');
+        toggleTile('session');
+        expect(isVisible('session')).toBe(false);
+        toggleTile('session');
+        expect(isVisible('session')).toBe(true);
+    });
 });
 
-describe('layout — global pin', () => {
-    it('unpin reverts to Default; the current ref is replaced', () => {
+describe('layout — resetToDefault', () => {
+    it('closes every info panel again', () => {
         showTile('worked');
-        togglePin(); // pin the worked-visible layout
-        expect(layout.pinned).toBe(true);
+        showTile('session');
+        showTile('rig');
 
-        showTile('session'); // rearrange while pinned
-        expect(isVisible('session')).toBe(true);
+        resetToDefault();
 
-        togglePin(); // unpin → back to Default
-        expect(layout.pinned).toBe(false);
-        expect(layout.current.columns).toEqual([['logging'], []]);
+        expect(isVisible('logging')).toBe(true);
         expect(isVisible('worked')).toBe(false);
+        expect(isVisible('session')).toBe(false);
+        expect(isVisible('rig')).toBe(false);
     });
 });

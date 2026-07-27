@@ -28,7 +28,7 @@
     // that band's freq+mode from its own band-stack); FT8 passes the watering-hole
     // pick (set_freq of ft8_frequencies). requiresCat: FT8 sets it because FT8 can't
     // run without CAT — see catMissing below. Defaults keep the Phone/CW tile —
-    // rendered prop-less by the TileBoard — unchanged.
+    // rendered prop-less on the Operate surface — unchanged.
     interface Props {
         pickBand?: (band: string) => Promise<RigWriteResult>;
         requiresCat?: boolean;

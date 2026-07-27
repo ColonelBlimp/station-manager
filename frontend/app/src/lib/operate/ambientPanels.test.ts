@@ -59,9 +59,6 @@ import {
     showTile,
     hideTile,
     resetToDefault,
-    setLayoutPersistence,
-    layout,
-    type LayoutValue,
     type TileId,
 } from './layout.svelte';
 
@@ -91,10 +88,12 @@ describe('ambient panels have one home', () => {
 
         expect(ambientHost()).not.toBeNull();
         expect(inAmbientHost(/Rig/)).toBe(true);
-        // "In the ambient host" is only half the rule — it must not ALSO be a board
-        // tile. Without this the panel can have two homes and every other assertion
-        // here still passes, which is the exact bug the split exists to prevent.
-        expect(layout.current.columns.flat()).not.toContain<TileId>('rig');
+        // "In the ambient host" is only half the rule — it must not ALSO render on
+        // the surface. Without this the panel can have two homes and every other
+        // assertion here still passes, which is the bug the split exists to prevent.
+        // (Before ADR 0058 the second home was a board tile; now it would be a
+        // workflow card.)
+        expect(document.querySelector('[data-card="rig"]')).toBeNull();
     });
 
     it.each(['phone', 'ft8'] as const)('renders Session in the ambient host in %s', (mode) => {
@@ -104,7 +103,7 @@ describe('ambient panels have one home', () => {
         flushSync();
 
         expect(inAmbientHost(/Session/)).toBe(true);
-        expect(layout.current.columns.flat()).not.toContain<TileId>('session');
+        expect(document.querySelector('[data-card="session"]')).toBeNull();
     });
 
     // Nothing open, nothing occupying the screen. Asserted as a TRANSITION so it
@@ -194,44 +193,6 @@ describe('switching workspace does not reshuffle what is open', () => {
     });
 });
 
-describe('a layout saved before the split is migrated', () => {
-    function loadSaved(saved: LayoutValue): void {
-        setLayoutPersistence({ load: () => saved, save: () => {}, clear: () => {} });
-    }
-
-    it('takes ambient tiles out of the board columns but keeps them visible', () => {
-        // What an operator who pinned a layout yesterday actually has stored.
-        loadSaved({ columns: [['logging', 'rig'], ['session']], hidden: ['worked'] });
-
-        const inColumns = layout.current.columns.flat();
-        expect(inColumns).not.toContain('rig');
-        expect(inColumns).not.toContain('session');
-        expect(isVisible('rig')).toBe(true);
-        expect(isVisible('session')).toBe(true);
-
-        render(Operate);
-        flushSync();
-        expect(inAmbientHost(/Rig/)).toBe(true);
-        expect(inAmbientHost(/Session/)).toBe(true);
-    });
-
-    it('leaves a hidden ambient tile hidden', () => {
-        loadSaved({ columns: [['logging'], []], hidden: ['worked', 'rig', 'session'] });
-
-        expect(isVisible('rig')).toBe(false);
-        expect(isVisible('session')).toBe(false);
-    });
-
-    it('does not disturb the workflow tiles', () => {
-        loadSaved({ columns: [['logging'], ['worked', 'rig']], hidden: [] });
-
-        expect(layout.current.columns.flat()).toEqual(
-            expect.arrayContaining<TileId>(['logging', 'worked'])
-        );
-        expect(isVisible('worked')).toBe(true);
-    });
-});
-
 describe('a shared host is not shared behaviour', () => {
     // FT8 disables the rig card without CAT because FT8 genuinely cannot run without
     // it. Phone/CW can — you set frequency and mode by hand and confirm. Applying
@@ -254,62 +215,5 @@ describe('a shared host is not shared behaviour', () => {
 
         const mode = screen.getByLabelText<HTMLSelectElement>('Mode');
         expect(mode.disabled).toBe(true);
-    });
-});
-
-describe('ambient visibility survives a restart', () => {
-    // An ambient panel lives in no column, so a saved layout records it only by its
-    // ABSENCE from hidden. Read the wrong way round, an open panel silently closes
-    // on the next reload — and worse, only after the operator pinned a layout.
-    it('reopens a panel that was open when the layout was saved', () => {
-        let stored: LayoutValue | null = null;
-        setLayoutPersistence({
-            load: () => stored,
-            save: (v) => {
-                stored = v;
-            },
-            clear: () => {
-                stored = null;
-            },
-        });
-        layout.pinned = true;
-
-        showTile('rig'); // persists, since pinned
-        expect(stored).not.toBeNull();
-
-        // Capture what was WRITTEN before resetting: resetToDefault persists too
-        // while pinned, so it would otherwise overwrite the very value under test.
-        // Scaffolding, not spec — the restart being simulated is "load exactly what
-        // the previous session wrote".
-        const written = stored;
-        layout.pinned = false;
-        resetToDefault();
-        setLayoutPersistence({ load: () => written, save: () => {}, clear: () => {} });
-
-        expect(isVisible('rig')).toBe(true);
-    });
-
-    it('keeps a closed one closed across the same round-trip', () => {
-        let stored: LayoutValue | null = null;
-        setLayoutPersistence({
-            load: () => stored,
-            save: (v) => {
-                stored = v;
-            },
-            clear: () => {
-                stored = null;
-            },
-        });
-        layout.pinned = true;
-
-        showTile('session');
-        hideTile('session');
-
-        const written = stored;
-        layout.pinned = false;
-        resetToDefault();
-        setLayoutPersistence({ load: () => written, save: () => {}, clear: () => {} });
-
-        expect(isVisible('session')).toBe(false);
     });
 });

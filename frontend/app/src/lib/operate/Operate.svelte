@@ -1,25 +1,37 @@
 <script lang="ts">
-    // Operate surface — a thin composer. Phone/CW renders the tile board (ADR
-    // 0046: logging + info tiles the operator can arrange/pin); FT8 is still a
-    // placeholder (its own tile surface lands in the FT8 pass). Shared rail +
-    // drawer + overlays are positioned here; the cards are self-contained.
+    // Operate surface — a thin composer. Phone/CW lays its workflow cards out in
+    // responsive flow and FT8 renders its own view; the shared rail, drawer and
+    // overlays are positioned here, and the cards stay self-contained.
+    //
+    // The tile board and arrange mode were removed by ADR 0058 (superseding 0046):
+    // no arrangement friction appeared in three weeks of operating, the complaint
+    // that did appear was CONSISTENCY between workspaces — answered by the ambient
+    // host below, not by tiling — and with Rig and Session ambient the board was
+    // arranging two tiles.
     import { router } from '../router.svelte';
     import UtilRail from './UtilRail.svelte';
-    import TileBoard from './TileBoard.svelte';
-    import ArrangeBar from './ArrangeBar.svelte';
     import PileupDrawer from './PileupDrawer.svelte';
     import ExportDialog from './ExportDialog.svelte';
     import RigKeys from './RigKeys.svelte';
     import Ft8View from './Ft8View.svelte';
     import SessionPanel from './SessionPanel.svelte';
     import RigPanel from './RigPanel.svelte';
-    import { isVisible, AMBIENT_TILES } from './layout.svelte';
+    import { isVisible, AMBIENT_TILES, WORKFLOW_TILES, TILES } from './layout.svelte';
     import { ft8SelectBand } from './rig.svelte';
 </script>
 
 {#if router.mode === 'phone'}
-    <TileBoard />
-    <ArrangeBar />
+    <!-- Responsive flow, matching FT8 (ADR 0058 retired the tile board). The
+         data-card marker is the test seam for "this panel is on the surface";
+         nothing positions by it. -->
+    <div class="mx-auto flex w-full max-w-3xl flex-col gap-3 px-3 py-3">
+        {#each WORKFLOW_TILES as id (id)}
+            {#if isVisible(id)}
+                {@const Card = TILES[id].component}
+                <div data-card={id}><Card /></div>
+            {/if}
+        {/each}
+    </div>
 {:else}
     <Ft8View />
 {/if}

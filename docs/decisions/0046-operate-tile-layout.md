@@ -1,11 +1,21 @@
 ---
 number: 0046
 title: Operate surface — draggable/pinnable tile layout (fixed-size, no-overlap, global pin)
-status: Accepted
+status: Superseded by 0058
 date: 2026-07-08
 ---
 
 # 0046 — Operate surface — draggable/pinnable tile layout
+
+> **Superseded by [ADR 0058](0058-retire-operate-tile-layout.md) (2026-07-27).**
+> The tile layout was built and operated for three weeks. Its premise — that
+> per-card chrome would otherwise accrete and a general placement feature would
+> supersede it — did not hold: no arrangement friction appeared in use, the real
+> complaint turned out to be *consistency* between workspaces (fixed by giving the
+> Rig and Session panels one ambient home), and with those two panels ambient the
+> board was left arranging two tiles. The reasoning below is preserved as written;
+> 0058 explains what changed.
+
 
 ## Context
 

@@ -1,11 +1,15 @@
-// Operate tile layout (ADR 0046). The layout is a PLAIN SERIALISABLE VALUE —
-// ordered tile ids per column + a hidden set — NOT pixel coordinates, so the
-// same shape persists to localStorage today or a config.json op-profile field
-// later. Persistence is an INJECTED seam (setLayoutPersistence, wired in
-// main.ts). State-driven: the board/drag mutate THIS; the DOM is the view.
+// Operate panel visibility.
 //
-// Cards are unchanged (ADR 0046): the registry only names them + points at the
-// component to render; the board positions them, never reshapes them.
+// This was the tile-layout module (ADR 0046): ordered tile ids per column, a drag
+// seam, an arrange mode, a global pin and a persistence seam. ADR 0058 retired all of
+// it — three weeks of operating produced no arrangement friction, the real complaint
+// was consistency between workspaces, and with Rig and Session ambient the board was
+// left arranging two tiles.
+//
+// What remains is the part that was actually load-bearing: which panels are open, and
+// the AMBIENT/WORKFLOW split that gives each one a single home. Cards are still
+// relocatable by construction (ADR 0045) — that discipline costs nothing and is what
+// would make a revisit wiring rather than a refactor.
 
 import type { Component } from 'svelte';
 import LoggingCard from './LoggingCard.svelte';
@@ -53,131 +57,28 @@ export const TILES: Record<TileId, { name: string; component: Component }> = {
     rig: { name: 'Rig Control', component: RigPanel },
 };
 
-export interface LayoutValue {
-    columns: TileId[][];
-    hidden: TileId[];
-}
-
-const COLUMN_COUNT = 2;
-
-// Default = faithful to the pre-tile surface: just the logging card visible;
-// the info tiles are added on demand (rail show/hide, or Worked auto-shows on
-// Tab). Shown tiles pack into the shortest column (col 1, beside the tall
-// logging card).
-function defaultLayout(): LayoutValue {
-    return { columns: [['logging'], []], hidden: ['worked', 'session', 'rig'] };
-}
-
-const clone = (l: LayoutValue): LayoutValue => ({
-    columns: l.columns.map((c) => c.slice()),
-    hidden: l.hidden.slice(),
-});
-
-// Guard a loaded/stale value: keep only known tiles, exactly COLUMN_COUNT
-// columns, every tile placed-or-hidden exactly once (a tile the saved layout
-// predates lands in hidden — forward-compat).
-function normalise(l: LayoutValue): LayoutValue {
-    // Plain array (not a Set) — a small, non-reactive local dedupe helper.
-    const seen: TileId[] = [];
-    const take = (ids: TileId[] | undefined): TileId[] => {
-        const out: TileId[] = [];
-        for (const id of ids ?? []) {
-            if (ALL_TILES.includes(id) && !seen.includes(id)) {
-                seen.push(id);
-                out.push(id);
-            }
-        }
-        return out;
-    };
-    // Ambient panels never live in a column — they render in the ambient host, in
-    // every workspace. Stripped HERE rather than only on the new code path so a
-    // layout PINNED BEFORE the split migrates on load: left in, the board would
-    // render the panel as a tile while the ambient host rendered it too, giving it
-    // two homes — precisely the bug the split exists to prevent, and only for the
-    // operators who had bothered to arrange their workspace.
-    const columns: TileId[][] = [];
-    for (let i = 0; i < COLUMN_COUNT; i++) {
-        columns.push(take(l.columns?.[i]).filter((id) => !isAmbient(id)));
-    }
-    const hidden = take(l.hidden);
-    // Sweep the WORKFLOW tiles only. Those live in a column or in hidden, so one
-    // missing from both is hidden. An AMBIENT tile lives in no column by design, so
-    // `hidden` is its whole story: present = closed, absent = open. Sweeping them
-    // too read "absent from columns" as "hidden", and an open Rig or Session panel
-    // silently closed on the next reload — worse, only for operators who had pinned
-    // a layout (codex P2 on d4233b64).
-    for (const id of WORKFLOW_TILES) if (!seen.includes(id)) hidden.push(id);
-    return { columns, hidden };
+// Default = the logging card only; the info panels are opened on demand (rail
+// show/hide, or Worked auto-shows on Tab). Session-scoped by design: ADR 0058
+// dropped persistence along with the pin it belonged to, so a reload starts here.
+function defaultHidden(): TileId[] {
+    return ['worked', 'session', 'rig'];
 }
 
 export const layout = $state({
-    current: defaultLayout(),
-    arranging: false,
-    pinned: false,
+    hidden: defaultHidden(),
 });
 
-// ---- Persistence seam (injected in main.ts) -------------------------------
-// localStorage today; a config.json op-profile field later — this module is
-// unchanged either way. The key is profile/sub-mode composable at the seam.
-export interface LayoutStore {
-    load: () => LayoutValue | null;
-    save: (l: LayoutValue) => void;
-    clear: () => void;
-}
-
-let store: LayoutStore | null = null;
-
-export function setLayoutPersistence(s: LayoutStore): void {
-    store = s;
-    const saved = s.load();
-    // A saved layout means the operator pinned one previously — adopt it and
-    // reflect the pinned state; otherwise stay on the non-destructive Default.
-    if (saved) {
-        loadInto(normalise(saved));
-        layout.pinned = true;
-    }
-}
-
-function persistIfPinned(): void {
-    if (layout.pinned) store?.save(clone(layout.current));
-}
-
-// ---- Arrange mode ---------------------------------------------------------
-export function setArranging(on: boolean): void {
-    layout.arranging = on;
-}
-export function toggleArranging(): void {
-    layout.arranging = !layout.arranging;
-}
-
-// ---- Show / hide ----------------------------------------------------------
 export function isVisible(id: TileId): boolean {
-    return !layout.current.hidden.includes(id);
+    return !layout.hidden.includes(id);
 }
 
 export function showTile(id: TileId): void {
     if (isVisible(id)) return;
-    layout.current.hidden = layout.current.hidden.filter((x) => x !== id);
-    // An ambient panel has no place in the board — it renders in the ambient host,
-    // in every workspace. Only its VISIBILITY lives here.
-    if (isAmbient(id)) {
-        persistIfPinned();
-        return;
-    }
-    // Stack BELOW the logging card (into its column), reproducing the pre-tile
-    // vertical layout — info appears under the log form, not beside it. Arrange
-    // mode is where the operator drags a tile into the second column for a
-    // side-by-side layout. Col 0 is the fallback if logging is hidden.
-    let target = layout.current.columns.findIndex((c) => c.includes('logging'));
-    if (target < 0) target = 0;
-    layout.current.columns[target].push(id);
-    persistIfPinned();
+    layout.hidden = layout.hidden.filter((x) => x !== id);
 }
 
 export function hideTile(id: TileId): void {
-    layout.current.columns = layout.current.columns.map((c) => c.filter((x) => x !== id));
-    if (!layout.current.hidden.includes(id)) layout.current.hidden.push(id);
-    persistIfPinned();
+    if (!layout.hidden.includes(id)) layout.hidden = [...layout.hidden, id];
 }
 
 export function toggleTile(id: TileId): void {
@@ -185,37 +86,7 @@ export function toggleTile(id: TileId): void {
     else showTile(id);
 }
 
-// ---- Drag (board-driven, state as source of truth) ------------------------
-// The board live-reorders during a drag (setColumnsLive, no persist), then
-// commits once on pointer-up.
-export function setColumnsLive(columns: TileId[][]): void {
-    layout.current.columns = columns.map((c) => c.slice());
-}
-export function commitLayout(): void {
-    persistIfPinned();
-}
-
-// ---- Pin / reset ----------------------------------------------------------
-// Mutate the current layout IN PLACE (columns + hidden), rather than replacing
-// the `current` object — the same reactive pattern as show/hide/drag, so the
-// board reflows identically. (Replacing the parent object should be reactive
-// too, but staying on the proven-working mutation shape removes any doubt.)
-function loadInto(l: LayoutValue): void {
-    layout.current.columns = l.columns;
-    layout.current.hidden = l.hidden;
-}
-
-export function togglePin(): void {
-    layout.pinned = !layout.pinned;
-    if (layout.pinned) {
-        store?.save(clone(layout.current)); // save all
-    } else {
-        store?.clear();
-        loadInto(defaultLayout()); // unpin → back to Default
-    }
-}
-
+/** Back to the shipped default — every info panel closed. */
 export function resetToDefault(): void {
-    loadInto(defaultLayout());
-    persistIfPinned();
+    layout.hidden = defaultHidden();
 }

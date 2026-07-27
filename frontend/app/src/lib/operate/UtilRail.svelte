@@ -1,7 +1,7 @@
 <script lang="ts">
-    // Right util rail — tile show/hide (Worked/Session/Rig) + Arrange + Pile-up.
-    // Under the tile layout (ADR 0046) the rail toggles a tile's VISIBILITY (it
-    // no longer swaps a single info slot); Arrange enters the drag/pin mode.
+    // Right util rail — panel show/hide (Worked/Session/Rig) + Pile-up. The rail
+    // toggles a panel's VISIBILITY (it does not swap a single info slot). The
+    // Arrange control went with the tile board (ADR 0058).
     // Collapsible full↔narrow like the left nav (data-util); shown only in
     // Operate → Phone/CW (render gate in Operate; visibility on data-rail).
     import { toggleUtil } from '../ui/state.svelte';
@@ -9,14 +9,7 @@
     import { setPileup, focusCallsign } from './state.svelte';
     import { operate } from './state.svelte';
     import { ft8PileupStack } from './ft8Pileup.svelte';
-    import {
-        layout,
-        toggleTile,
-        toggleArranging,
-        isVisible,
-        RAIL_TILES,
-        type TileId,
-    } from './layout.svelte';
+    import { toggleTile, isVisible, RAIL_TILES, type TileId } from './layout.svelte';
     import { rig } from './rig.svelte';
     import { session } from './session.svelte';
 
@@ -24,7 +17,7 @@
     // typing, so focus goes home to the callsign field. The Rig tile is read-only
     // too while CAT is live (fields locked) — same hand-back; CAT-off/lost it
     // keeps focus (opened to edit values or confirm). Only hand back on a SHOW
-    // (hiding, or entering arrange, shouldn't yank focus).
+    // (hiding shouldn't yank focus).
     function onTileClick(id: TileId): void {
         const willShow = !isVisible(id);
         toggleTile(id);
@@ -39,12 +32,10 @@
         rig: 'Rig',
     };
 
-    // The Worked panel and Arrange are Phone/CW-only — Worked because FT8's
-    // Band Activity already carries worked-before context (dupe tint + the
-    // Q/● badges), Arrange because FT8's layout is deliberately FIXED (no
-    // tile board; the panel positions are workflow muscle memory) (operator,
-    // 2026-07-13). Disabled rather than wired: clicking either in FT8 would
-    // silently flip Phone/CW tile-board state with no visible effect here.
+    // The Worked panel is Phone/CW-only — FT8's Band Activity already carries
+    // worked-before context (dupe tint + the Q/● badges) (operator, 2026-07-13).
+    // Disabled rather than wired: clicking it in FT8 would flip Phone/CW state
+    // with no visible effect here.
     const phoneOnly = $derived(router.mode !== 'phone');
 </script>
 
@@ -143,29 +134,6 @@
         {/each}
 
         <div class="mt-auto flex flex-col gap-1">
-            <button
-                class="rail-item disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-                title={phoneOnly ? 'Arrange — not available in FT8' : 'Arrange layout'}
-                data-active={!phoneOnly && layout.arranging ? 'true' : 'false'}
-                disabled={phoneOnly}
-                onclick={toggleArranging}
-            >
-                <svg
-                    class="size-6 shrink-0"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke-width="1.5"
-                    stroke="currentColor"
-                    aria-hidden="true"
-                >
-                    <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z"
-                    />
-                </svg>
-                <span class="rail-label">Arrange</span>
-            </button>
             <button
                 class="rail-item relative"
                 title="Pile-up"
