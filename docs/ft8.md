@@ -533,7 +533,7 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   it only marks "this is where I'll transmit"; nothing keys the rig until the TX
   controller (step d/e) consumes it.** Any cell is clickable (the grid keeps
   picks signal-aligned); the strip is **best-effort guidance, not a hard gate** —
-  SM is attended-only, so the offset is the operator's choice and the daemon does
+  the offset is the operator's choice and the daemon does
   **not** refuse or snap an *overlapping* pick (it DOES reject a non-finite or
   out-of-passband offset — a safety bound, not overlap admission; see the review
   note below). The pick is
@@ -912,8 +912,8 @@ A **guard margin** additionally forbids *candidates* (the ranked suggestions)
 that don't keep clearance from adjacent occupied bands, so a recommendation never
 sits flush ("brushed edge"). Unlike WSJT-X — which gives the operator no occupancy
 cue at all — SM ranks and highlights the clean spots and shades the busy ones, so
-a clear offset is obvious at a glance. But the pick is the **operator's** (SM is
-attended-only): the strip is best-effort **guidance**, not a hard gate — SM does
+a clear offset is obvious at a glance. But the pick is the **operator's**: the
+strip is best-effort **guidance**, not a hard gate — SM does
 **not** refuse or snap an *overlapping* selection. A daemon-side overlap-admission
 gate was considered (review 2026-06-16 H1) and deliberately left out; enforcement
 would fight the attended-operation model. The daemon DOES, however, reject an
@@ -1288,10 +1288,16 @@ the operator's judgement is *whom to work* (the click) + arming TX, and rung
 advance is mechanical — so within a QSO the rungs **auto-advance** (the daemon
 walks the ladder via the e2 resolver; the operator intervenes only to
 retry/abandon). i.e. **manual = operator-initiated-per-QSO with automatic rung
-advance** — but the operator still initiates every QSO (the click + arming TX), so
-SM stays **attended-only**. A daemon-*initiated* mode would be automatic/unattended
-operation, which is **out of scope and unsupported** — the QEX FT8 specification
-forbids automatic operation (see above). Per-rung confirm
+advance** — the operator initiates every QSO (the click + arming TX) and the daemon
+initiates none. A daemon-*initiated* mode would be automatic/unattended operation,
+which is **out of scope and unsupported** — the QEX FT8 specification forbids
+automatic operation (see above).
+
+Stated precisely, because the looser phrasing overclaimed: SM does not ENFORCE
+attendance. A Call-CQ run keeps working answerers until Abandon, so an operator can
+start one and walk away and nothing stops it. What SM guarantees is that the run had
+to be started deliberately; remaining at the rig is the operator's obligation under
+their licence, not a property the software checks (operator, 2026-07-27). Per-rung confirm
 was rejected (the 15 s cadence makes it frantic; the Arm-TX gate already provides
 the deliberate-consent safety). Off-ramps: stop after N unanswered repeats; never
 auto-start a fresh CQ cycle; abort on operator action; never auto-switch targets.
