@@ -215,7 +215,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		completed = &c
 	}
 	gen := s.sessionGen
-	publish, prepareComplete, onComplete := s.publish, s.prepareComplete, s.onComplete
+	prepareComplete, onComplete := s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -242,10 +242,11 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 					Msg("ft8 seq: working caller RR73 did not transmit; will retry next slot")
 				return
 			}
-			s.caller = nil
-			s.mode = seqIdle // terminal: go idle (NOT resume CQ)
-			s.repeats = 0
-			publish(QsoStatus{Active: false}) // ordered before any replacement start
+			// Terminal: go idle (NOT resume CQ). Through the shared primitive so
+			// this ending performs the SAME session-identity transition as every
+			// other — retire the generation, consume any staged teardown reason,
+			// publish under the lock. Doing it by hand here is how it drifted.
+			s.retireSessionLocked(func() { s.caller = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", c.TheirCall).
 				Msg("ft8 seq: working caller QSO complete (RR73 sent)")

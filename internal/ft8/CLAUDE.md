@@ -99,6 +99,17 @@ deleted within a round or two, while the behavioural ones caught real defects.
    LAUNCHES and an async refusal can end the session before any post-transmit
    publish runs.
 
+6. **Every completion that ENDS a session performs the SAME session-identity
+   transition** — retire the generation, consume any staged teardown reason, clear
+   the ladder's state, and publish the terminal status while the lock still
+   excludes a replacement start. One primitive, `retireSessionLocked`; doing it by
+   hand is how four paths drifted into three different versions, so that a stale
+   callback could not be told from a live session and the dial guard's explanation
+   vanished when a completion won the race. Call-CQ is deliberately NOT one of
+   these — it RESUMES CQ rather than ending, a different transition.
+   Observable: after any ending completion the generation has moved on, and the
+   terminal frame carries whatever reason was staged.
+
 **Corollary that cost three rounds:** if a behaviour test for one of these cannot
 be written without inventing a fact the system does not carry, the SYSTEM is
 missing that fact — do not settle for a threshold, an age check, or a heuristic in

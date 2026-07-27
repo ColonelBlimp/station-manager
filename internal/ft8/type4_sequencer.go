@@ -368,7 +368,7 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
 	c := s.completedT4WorkQsoLocked()
 	gen := s.sessionGen
-	publish, prepareComplete, onComplete := s.publish, s.prepareComplete, s.onComplete
+	prepareComplete, onComplete := s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -389,10 +389,8 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 				Msg("ft8 seq: type-4 work RR73 did not transmit; will retry next slot")
 			return
 		}
-		s.t4Work = nil
-		s.mode = seqIdle
-		s.repeats = 0
-		publish(QsoStatus{Active: false}) // ordered before any replacement start
+		// Same session-identity transition as every other ending completion.
+		s.retireSessionLocked(func() { s.t4Work = nil })
 		s.mu.Unlock()
 		s.log.InfoWith().Str("their_call", c.TheirCall).
 			Msg("ft8 seq: type-4 work QSO complete (RR73 sent)")

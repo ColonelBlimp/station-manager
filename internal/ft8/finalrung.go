@@ -95,9 +95,33 @@ func (s *Sequencer) publishCurrent() {
 //
 // sentMsg / unsentMsg are the full log lines for the keyed and un-keyed cases;
 // each ladder keeps its own wording so the log stays greppable per path.
+// retireSessionLocked performs the ONE session-identity transition every completion
+// that ends a session must make. Caller holds s.mu; clear releases that ladder's own
+// exchange field and must not unlock.
+//
+// It exists because the four ending completions each did their own version and had
+// already drifted: only the Group A path retired the generation and consumed the
+// staged reason, so the other three left every stale-callback guard in the package
+// unable to tell a finished session from a live one, and silently dropped the dial
+// guard's explanation when they won the race with a teardown (package review of
+// internal/ft8, finding 2). Call-CQ is deliberately NOT a caller: its completion
+// RESUMES CQ rather than ending, which is a different transition.
+//
+// The publish happens INSIDE the lock so a replacement Start* cannot commit and
+// publish ACTIVE first only to be overwritten by this idle (see publishCurrent).
+func (s *Sequencer) retireSessionLocked(clear func()) {
+	s.sessionGen++
+	clear()
+	s.mode = seqIdle
+	s.repeats = 0
+	reason := s.pendingEndReason
+	s.pendingEndReason = ""
+	s.publish(QsoStatus{Active: false, EndReason: reason})
+}
+
 func (s *Sequencer) finalRungDoneLocked(c CompletedQso, clear func(), sentMsg, unsentMsg string) func(bool) {
 	gen := s.sessionGen
-	prepareComplete, onComplete, publish := s.prepareComplete, s.onComplete, s.publish
+	prepareComplete, onComplete := s.prepareComplete, s.onComplete
 	return func(ok bool) {
 		// Stamp unconditionally. The stamp carries the operator's antenna
 		// selection onto the QSO, and a Group A contact logs even when the
@@ -118,23 +142,7 @@ func (s *Sequencer) finalRungDoneLocked(c CompletedQso, clear func(), sentMsg, u
 		// still-running earlier transmission of the same rung. Without this bump the
 		// second would log the QSO again: a duplicate row AND a duplicate upload to
 		// every forwarder. The gen check above now refuses it.
-		s.sessionGen++
-		clear()
-		s.mode = seqIdle
-		s.repeats = 0
-		// Carry any staged end-reason. The dial guard waits for an in-flight
-		// completion before abandoning — so that a rogered contact is not lost — but
-		// that lets THIS callback retire the session, and the Abandon behind it then
-		// finds an idle sequencer and publishes nothing. Without consuming the
-		// reason here the contact is preserved at the cost of the explanation: PTT
-		// stopped, TX disarmed, and nothing on screen saying why (codex P2 on
-		// 7c2e66ad).
-		reason := s.pendingEndReason
-		s.pendingEndReason = ""
-		// Publish the terminal state while the state lock still excludes a
-		// replacement Start*. Otherwise that start can publish active first and
-		// this delayed completion can overwrite it with stale idle.
-		publish(QsoStatus{Active: false, EndReason: reason})
+		s.retireSessionLocked(clear)
 		s.mu.Unlock()
 		if ok {
 			s.log.InfoWith().Str("their_call", c.TheirCall).Msg(sentMsg)

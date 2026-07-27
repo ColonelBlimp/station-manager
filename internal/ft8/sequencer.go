@@ -563,6 +563,13 @@ func (s *Sequencer) abandonLocked() (bool, string) {
 // than passed because the teardown runs through disarmTx, which owns the ordering
 // (clear armed -> cancel in-flight -> abandon) and must not grow a reason parameter
 // on every path that reaches it.
+// peekPendingEndReason reports the staged reason without consuming it (test seam).
+func (s *Sequencer) peekPendingEndReason() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pendingEndReason
+}
+
 func (s *Sequencer) setPendingEndReason(reason string) {
 	s.mu.Lock()
 	s.pendingEndReason = reason
@@ -1025,7 +1032,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		completed = &c
 	}
 	gen := s.sessionGen
-	prepareComplete, onComplete, publish := s.prepareComplete, s.onComplete, s.publish
+	prepareComplete, onComplete := s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -1049,9 +1056,8 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 					Msg("ft8 seq: FD final RR73 did not transmit; will retry next slot")
 				return
 			}
-			s.fdEx = nil
-			s.mode = seqIdle
-			publish(QsoStatus{Active: false}) // ordered before any replacement start
+			// Same session-identity transition as every other ending completion.
+			s.retireSessionLocked(func() { s.fdEx = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", c.TheirCall).Msg("ft8 seq: FD QSO complete (RR73 sent)")
 			if onComplete != nil {
