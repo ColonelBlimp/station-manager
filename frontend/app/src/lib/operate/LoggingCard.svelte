@@ -290,7 +290,6 @@
         <details class="mt-2 rounded-md border border-line">
             <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-ink select-none">
                 Contact details
-                <span class="font-normal text-muted">(grid · qth · rig · power · notes)</span>
             </summary>
             <div class="space-y-3 border-t border-line px-3 py-3">
                 <!-- Read-only, looked-up: QRZ page link + email. -->
