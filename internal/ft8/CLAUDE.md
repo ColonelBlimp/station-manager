@@ -148,9 +148,14 @@ deleted within a round or two, while the behavioural ones caught real defects.
    teardown that loses the race leaves the operator watching a session stop with no
    explanation. All 19 now call the primitive, which also clears the per-session
    operator flags so it is the WHOLE transition. Enforced structurally:
-   `TestSource_SessionsEndOnlyThroughThePrimitive` permits `s.mode = seqIdle` only
-   inside `retireSessionLocked` and `abandonLocked` — an ALLOWLIST, for the reason
-   the publish guard learned the hard way.
+   `TestSource_SessionsEndOnlyThroughThePrimitive` requires every write to `s.mode`
+   outside `retireSessionLocked`/`abandonLocked` to assign an enumerated ACTIVE mode
+   (i.e. to be a session START); anything else — `seqIdle`, a variable holding it, or
+   an unreadable multi-value call — fails. Matching the literal `s.mode = seqIdle`
+   was too narrow and missed `s.mode, s.ex = seqIdle, nil` (codex P2 on 61a875d8).
+   That makes THREE guards in this package fixed by inverting a denylist into an
+   allowlist, so treat the allowlist as the default shape for a new guard here rather
+   than the remedy after a review finds the hole.
 
 7. **A control that stops RF is offered only where it can actually stop RF.**
    Skip-if-silent means "if they do not come back, end the session instead of

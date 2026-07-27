@@ -136,15 +136,29 @@ session ends across the four sequencer files and no test reaches most of them. S
 this asserts the STRUCTURE instead: `s.mode = seqIdle` may appear only inside the
 two primitives that perform the full transition.
 
-It is an ALLOWLIST of two functions, deliberately. The publish-atomicity guard was
-fixed three times because each version enumerated the unsafe shapes and each
-enumeration was incomplete (codex P2s on e3a7e605 and 30be7fb5); enumerating the
-safe ones has no such failure mode. A new legitimate primitive has to be added
-here, which is a two-line change and a conversation, rather than a silent pass.
+It is an ALLOWLIST twice over, deliberately. Outside the two primitives, a write to
+s.mode must assign one of the enumerated ACTIVE modes — a session start. Anything
+else is flagged: seqIdle, a variable holding it, or an expression we cannot read.
+
+Matching "s.mode = seqIdle" instead was too narrow and missed both a multi-value
+assignment (`s.mode, s.ex = seqIdle, nil` — codex P2 on 61a875d8) and the same value
+through a local. That is the third guard in this package to be fixed by inverting a
+denylist into an allowlist; the pattern is now the default here, not the remedy.
+
+A new legitimate primitive or a new mode has to be added to a list, which is a
+two-line change and a conversation, rather than a silent pass.
 */
 func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 	const allowed = "retireSessionLocked, abandonLocked"
 	permitted := map[string]bool{"retireSessionLocked": true, "abandonLocked": true}
+	// The ACTIVE modes: assigning one of these is a session START, which legitimately
+	// happens outside the primitives. Every other right-hand side is a session end (or
+	// unreadable), and must go through them.
+	activeMode := map[string]bool{
+		"seqAnswering": true, "seqCalling": true, "seqWorking": true,
+		"seqAnsweringFd": true, "seqWorkingFd": true,
+		"seqAnsweringT4": true, "seqWorkingT4": true,
+	}
 
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
@@ -163,22 +177,36 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 				if fd.Name != nil && permitted[fd.Name.Name] {
 					continue
 				}
+				render := func(e ast.Expr) string {
+					var b strings.Builder
+					if printer.Fprint(&b, fset, e) != nil {
+						return "?"
+					}
+					return b.String()
+				}
 				ast.Inspect(fd.Body, func(n ast.Node) bool {
 					as, ok := n.(*ast.AssignStmt)
-					if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+					if !ok {
 						return true
 					}
-					var lhs, rhs strings.Builder
-					if printer.Fprint(&lhs, fset, as.Lhs[0]) != nil ||
-						printer.Fprint(&rhs, fset, as.Rhs[0]) != nil {
-						return true
-					}
-					if lhs.String() == "s.mode" && rhs.String() == "seqIdle" {
-						t.Errorf("%s:%d: session ended by hand in %s — every ending must go "+
-							"through the session-identity transition (invariant 6), so the "+
-							"generation is retired and a staged end_reason is consumed. "+
-							"Allowed only in: %s",
-							name, fset.Position(as.Pos()).Line, fd.Name.Name, allowed)
+					for i, l := range as.Lhs {
+						if render(l) != "s.mode" {
+							continue
+						}
+						// Pairable only when the arities match; a multi-value call on the
+						// right cannot be read, so it is not an allowed start.
+						rhs := "?"
+						if len(as.Rhs) == len(as.Lhs) {
+							rhs = render(as.Rhs[i])
+						}
+						if activeMode[rhs] {
+							continue // a session start
+						}
+						t.Errorf("%s:%d: session ended by hand in %s (s.mode = %s) — every "+
+							"ending must go through the session-identity transition "+
+							"(invariant 6), so the generation is retired and a staged "+
+							"end_reason is consumed. Allowed only in: %s",
+							name, fset.Position(as.Pos()).Line, fd.Name.Name, rhs, allowed)
 					}
 					return true
 				})
