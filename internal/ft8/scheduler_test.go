@@ -178,52 +178,101 @@ func TestScheduler_DroppedSlot_WhenConsumerStalls(t *testing.T) {
 
 // --- slot→dial attribution --------------------------------------------------
 
-// TestScheduler_AttributesSlotToDialAtBothEnds pins the rule that makes an
-// occupancy report self-identifying: a slot carries a frequency only when the
-// rig demonstrably held that frequency for the WHOLE window. The boundary that
-// emits a slot is also the start of the next one, so the reading taken there and
-// the previous boundary's reading bracket the emitted slot exactly.
-func TestScheduler_AttributesSlotToDialAtBothEnds(t *testing.T) {
+// TestScheduler_AttributesSlotOnlyWhenDialHeldSteady drives real reading
+// sequences through the per-batch sampler. The A→B→A case is the one endpoint
+// comparison gets wrong: band-stack recall returns to exactly the frequency you
+// left, so both ends read A while most of the window was captured on B.
+func TestScheduler_AttributesSlotOnlyWhenDialHeldSteady(t *testing.T) {
 	full := make([]int16, SlotSamples)
 	target := time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC)
 
+	type reading struct {
+		mhz float64
+		ok  bool
+	}
 	cases := []struct {
 		name        string
-		prevDial    float64
-		prevOK      bool
-		dial        float64
-		dialOK      bool
+		readings    []reading
 		wantDial    float64
 		wantChanged bool
 	}{
-		{"held one frequency", 14.074, true, 14.074, true, 14.074, false},
-		// The straddling slot: audio from two bands, describing neither.
-		{"dial moved mid-slot", 14.074, true, 7.074, true, 7.074, true},
-		// One end unknown cannot prove the rig held anything: stay unattributed
-		// rather than claim a band. Covers CAT dropping or coming up mid-slot,
-		// and the very first boundary after Run starts.
-		{"unknown at slot start", 0, false, 14.074, true, 0, false},
-		{"unknown at slot end", 14.074, true, 0, false, 0, false},
-		{"no CAT at all", 0, false, 0, false, 0, false},
+		{
+			name:     "held one frequency all window",
+			readings: []reading{{14.074, true}, {14.074, true}, {14.074, true}},
+			wantDial: 14.074,
+		},
+		{
+			name:        "tuned away mid-window",
+			readings:    []reading{{14.074, true}, {14.074, true}, {7.074, true}},
+			wantChanged: true,
+		},
+		{
+			// Wrong band button, corrected inside the same slot.
+			name:        "tuned away and back to the same frequency",
+			readings:    []reading{{14.074, true}, {7.074, true}, {14.074, true}},
+			wantChanged: true,
+		},
+		{
+			name:        "CAT dropped part-way through",
+			readings:    []reading{{14.074, true}, {0, false}, {0, false}},
+			wantChanged: true,
+		},
+		{
+			name:        "CAT came up part-way through",
+			readings:    []reading{{0, false}, {14.074, true}, {14.074, true}},
+			wantChanged: true,
+		},
+		{
+			name:     "no CAT for the whole window",
+			readings: []reading{{0, false}, {0, false}, {0, false}},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			next := 0
 			sch := NewScheduler(make(chan []int16), nil)
-			sch.prevDial, sch.prevDialOK = tc.prevDial, tc.prevOK
+			sch.SetDialSource(func() (float64, bool) {
+				r := tc.readings[next]
+				if next < len(tc.readings)-1 {
+					next++
+				}
+				return r.mhz, r.ok
+			})
+			for range tc.readings {
+				sch.observeDial()
+			}
 			ring := newSampleRing(SlotSamples)
 			ring.Append(full)
 
-			sch.emitSlot(ring, target, target, tc.dial, tc.dialOK)
+			sch.emitSlot(ring, target, target)
 
 			select {
 			case slot := <-sch.out:
 				require.Equal(t, tc.wantDial, slot.DialMHz)
 				require.Equal(t, tc.wantChanged, slot.DialChanged)
+				require.True(t, slot.DialTracked, "a dial source was installed")
 			default:
 				t.Fatal("emitSlot published nothing")
 			}
 		})
 	}
+}
+
+// A slot from a session with no dial source is UNTRACKED, not merely
+// unattributed: the consumer publishes it (that deployment cannot transmit)
+// instead of skipping it.
+func TestScheduler_NoDialSourceLeavesSlotUntracked(t *testing.T) {
+	sch := NewScheduler(make(chan []int16), nil)
+	sch.observeDial()
+	ring := newSampleRing(SlotSamples)
+	ring.Append(make([]int16, SlotSamples))
+
+	sch.emitSlot(ring, time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC), time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC))
+
+	slot := <-sch.out
+	require.False(t, slot.DialTracked)
+	require.Zero(t, slot.DialMHz)
+	require.False(t, slot.DialChanged)
 }
 
 // An unset dial source is the no-CAT deployment, not an error: every slot is

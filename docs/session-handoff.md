@@ -32,7 +32,7 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-27)
 
-> **2026-07-27 — the occupancy panel, rounds 4 and 5. Round 5 is the one that
+> **2026-07-27 — the occupancy panel, rounds 4 to 6. Round 5 is the one that
 > matters: the fix moved to the SOURCE, and the client-side guesswork is gone.**
 >
 > Round 4 (`f6ea7ce2`, committed) added a post-band-change quarantine keyed on the
@@ -57,14 +57,29 @@ precisely so we don't re-derive state or redo finished work.
 > `internal/bridge`. `api-endpoints.md` updated; the `ft8-qso` event already carried
 > this exact lesson for contacts (`dial_freq_mhz`), so occupancy now matches it.
 >
-> No CAT means nothing to attribute with: `dial_mhz` is omitted and the SPA falls
-> back to the arrival stamp, keeping the pre-existing one-slot ambiguity after a
-> manual band change. With CAT it is exact — and there is no longer any post-QSY
-> blank window, which is what round 4's P2 was complaining about.
+> **Round 6 hardened the same idea in two places.** (1) Endpoint sampling missed an
+> A→B→A excursion inside one slot — band-stack recall returns to exactly the
+> frequency you left, so a wrong band button corrected within 15 s read as stable
+> while most of the window was captured elsewhere. The dial is now sampled on every
+> audio batch (~43 ms), so any move inside the window marks the slot unplaceable.
+> (2) A CAT-attached daemon no longer emits reports it cannot place at all: `dial_mhz`
+> unknown is now as disqualifying as dial-moved. `Slot.DialTracked` separates "no CAT,
+> nothing to attribute with" from "CAT present but this slot could not be placed" —
+> the bridge only reports a dial once the selected VFO has been decoded, so the second
+> is reachable early in a session, and there the operator CAN transmit.
 >
-> Proven by reversion in both halves: neutering the SPA attribution re-validates the
-> old band's picture, and reverting the daemon halves drops the stamp and publishes
-> the straddled slot. Gate green: gofmt, `go vet`, `go test ./internal/ft8 -race`,
+> So `dial_mhz` is now absent **only** in the audio-only deployment, where the SPA
+> falls back to the arrival stamp and keeps the pre-existing one-slot ambiguity after
+> a manual band change. That is display-only and cannot steer anything: FT8 keying
+> needs a writable rig, and `TxReady` shares the `rigWritableLocked` precondition with
+> the dial read, so no-CAT means no transmit. With CAT it is exact, and there is no
+> post-QSY blank window — which is what round 4's P2 was complaining about.
+>
+> Proven by reversion at every step: neutering the SPA attribution re-validates the
+> old band's picture; reverting the daemon halves drops the stamp and publishes the
+> straddled slot; reverting to endpoint-only sampling attributes the A→B→A slot to the
+> frequency it started on; and reverting the placeability gate publishes a report from
+> a CAT-attached session with no dial. Gate green: gofmt, `go vet`, `go test ./internal/ft8 -race`,
 > all `cmd/...`, prettier / eslint / svelte-check 0 errors / **743 frontend tests**.
 > **This round carries a DAEMON change** on top of the already-undeployed tail.
 

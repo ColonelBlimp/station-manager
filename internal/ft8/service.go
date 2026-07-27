@@ -102,9 +102,10 @@ type Service struct {
 
 	// dialSource attributes each captured slot to the dial frequency it was
 	// heard on (SetDialSource). Handed to the scheduler when a capture session
-	// starts; nil (no CAT) leaves slots unattributed. Read under s.mu, but
-	// unlike catLive it is INVOKED from the scheduler goroutine with no ft8
-	// lock held, so it adds no lock nesting at all.
+	// starts; nil (no CAT) leaves slots unattributed AND untracked, which is
+	// what tells decodeLoop to publish them anyway. Read under s.mu, but unlike
+	// catLive it is INVOKED from the scheduler goroutine with no ft8 lock held,
+	// so it adds no lock nesting at all.
 	dialSource func() (float64, bool)
 
 	bgCancel context.CancelFunc // cancels subsystem-lifetime loops (catReconcile)
@@ -820,21 +821,29 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 			s.decodeSink(report)
 		}
 
-		// A slot whose dial moved mid-window spans two bands and describes
-		// neither, so it is skipped exactly like a TX slot. The sticky-offset
-		// carry resets on ANY change of frequency, not just a straddle: a QSY
-		// landing on a slot boundary produces two cleanly-attributed slots with
-		// no straddle to catch it. stickySuggested re-vets the carried offset
-		// against the new band's occupancy so the ★ is always genuinely clear
-		// either way — but preferring an offset because it was good on 20 m is
-		// arbitrary on 40 m.
-		if slot.DialChanged || slot.DialMHz != prevDial {
+		// A CAT-attached session must never publish occupancy it cannot place on
+		// a frequency — the dial moved mid-window, or was unknown — so such a
+		// slot is skipped exactly like a TX slot. There, the operator CAN
+		// transmit and the picker's suggested[0] feeds the TX offset, so showing
+		// an unplaceable report is worse than showing nothing: the next slot is
+		// 15 s away. An UNTRACKED session (no CAT) still publishes, because FT8
+		// transmit is refused without a writable rig — the keyer's TxReady and
+		// the dial read share that precondition — so its occupancy panel is
+		// display-only and cannot steer anything.
+		unplaceable := slot.DialTracked && slot.DialMHz == 0
+		// The sticky-offset carry resets on ANY change of frequency, not just a
+		// mid-window move: a QSY landing on a slot boundary produces two cleanly
+		// attributed slots with no move to catch it. stickySuggested re-vets the
+		// carried offset against the new band's occupancy so the ★ is always
+		// genuinely clear either way — but preferring an offset because it was
+		// good on 20 m is arbitrary on 40 m.
+		if slot.DialMHz != prevDial {
 			prevTop = 0
 		}
 		prevDial = slot.DialMHz
 
 		var rep OccupancyReport
-		if !txSlot && !slot.DialChanged {
+		if !txSlot && !unplaceable {
 			rep = Occupancy(ref, slot.Samples, msgs, s.occCfg)
 			// Stamp the frequency the audio was actually captured on, so the
 			// report is attributable no matter how late it is consumed.
@@ -851,6 +860,12 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		s.log.DebugWith().
 			Str("slot", ref.StartUTC).
 			Bool("tx_slot", txSlot).
+			// "why is the occupancy panel empty" is the first on-air question a
+			// skipped slot raises, and these three answer it: no dial at all,
+			// the operator tuning through the window, or CAT gone quiet.
+			Float64("dial_mhz", slot.DialMHz).
+			Bool("dial_moved", slot.DialChanged).
+			Bool("unplaceable", unplaceable).
 			Int("decodes", len(msgs)).
 			Int("occupied", len(rep.Occupied)).
 			Int("suggested", len(rep.Suggested)).

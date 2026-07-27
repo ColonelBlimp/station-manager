@@ -613,9 +613,12 @@ export const ft8Link: Ft8EventHandlers = {
         // report's publication lags its capture by the decode, so neither its age nor
         // its distance from the last report can show the capture happened after the
         // band change (codex P1 on 0462eb7b and again on f6ea7ce2).
-        // No dial means no CAT: fall back to the arrival stamp, which is the best the
-        // daemon can offer when it cannot see the rig. That path keeps the pre-existing
-        // one-slot ambiguity after a manual band change; with CAT it is exact.
+        // No dial reaching us means the daemon has no CAT at all: a CAT-attached
+        // daemon SKIPS any slot it cannot place rather than sending it unattributed
+        // (internal/ft8 decodeLoop), so this fallback is only ever the audio-only
+        // deployment. There it keeps the pre-existing one-slot ambiguity after a
+        // manual band change, and that is display-only — FT8 transmit is refused
+        // without a writable rig, so a mislabelled panel cannot steer anything.
         const band =
             p.dial_mhz && p.dial_mhz > 0 ? frequencyToBand(p.dial_mhz * 1_000_000) : rig.band;
         // Stamp the band on the parity that actually arrived — never both; see

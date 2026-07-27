@@ -598,17 +598,19 @@ func TestDecodeLoop_StampsDialAndDropsStraddledSlots(t *testing.T) {
 
 	ch := make(chan Slot, 2)
 	ch <- Slot{
-		StartUTC: time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
-		Samples:  make([]int16, 1000),
-		DialMHz:  14.074,
+		StartUTC:    time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
+		Samples:     make([]int16, 1000),
+		DialMHz:     14.074,
+		DialTracked: true,
 	}
-	// Straddled the QSY: must not reach the hub, so LatestOccupancy stays on
-	// the 20m report above rather than becoming a 40m-labelled 20m picture.
+	// Unplaceable: the dial moved through the window, so this slot's audio
+	// belongs to no single band. It must not reach the hub — LatestOccupancy
+	// stays on the 20m report above rather than becoming a mislabelled picture.
 	ch <- Slot{
 		StartUTC:    time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC),
 		Samples:     make([]int16, 1000),
-		DialMHz:     7.074,
 		DialChanged: true,
+		DialTracked: true,
 	}
 	close(ch)
 	s.decodeLoop(ch)
@@ -623,5 +625,39 @@ func TestDecodeLoop_StampsDialAndDropsStraddledSlots(t *testing.T) {
 	if rep.Slot.StartUTC != "2026-07-27T12:00:00Z" {
 		t.Errorf("latest report slot = %q, want the 12:00:00 slot — the straddled "+
 			"12:00:15 slot must not have been published", rep.Slot.StartUTC)
+	}
+}
+
+// TestDecodeLoop_TrackedSlotWithNoDialIsNotPublished covers the CAT-attached
+// deployment whose dial read comes back unknown — the bridge only reports a dial
+// once the selected VFO has been decoded, so this is reachable early in a
+// session. There the operator CAN transmit, and the picker's suggested[0] feeds
+// the TX offset, so a report the daemon cannot place must not be published at
+// all. An UNTRACKED (no-CAT) slot is published, because that deployment cannot
+// key the rig and its panel is display-only.
+func TestDecodeLoop_TrackedSlotWithNoDialIsNotPublished(t *testing.T) {
+	tracked := newService(types.Ft8Config{Enabled: true}, logging.Noop(), newFakeSource())
+	ch := make(chan Slot, 1)
+	ch <- Slot{
+		StartUTC:    time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
+		Samples:     make([]int16, 1000),
+		DialTracked: true, // CAT present, but the dial could not be read
+	}
+	close(ch)
+	tracked.decodeLoop(ch)
+	if rep := tracked.LatestOccupancy(); rep != nil {
+		t.Fatalf("published an unplaceable report from a CAT-attached session: %+v", rep)
+	}
+
+	untracked := newService(types.Ft8Config{Enabled: true}, logging.Noop(), newFakeSource())
+	ch2 := make(chan Slot, 1)
+	ch2 <- Slot{
+		StartUTC: time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
+		Samples:  make([]int16, 1000),
+	}
+	close(ch2)
+	untracked.decodeLoop(ch2)
+	if untracked.LatestOccupancy() == nil {
+		t.Fatal("a no-CAT session must still publish occupancy; that panel is display-only")
 	}
 }
