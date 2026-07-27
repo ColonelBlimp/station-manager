@@ -289,6 +289,11 @@ type Sequencer struct {
 	// CompletedQso. pendingLogbookID is staged by the Service before a start.
 	logbookID        int64
 	pendingLogbookID int64
+	// pendingEndReason is staged by the Service just before a teardown it caused
+	// (the dial guard), so the terminal frame explains itself. Consumed by
+	// abandonLocked and cleared with it: an operator abandon must stay reasonless,
+	// because the operator does not need telling why they abandoned.
+	pendingEndReason string
 	// allowDuplicate is the operator's EXPLICIT "work this station again" intent for
 	// THIS session, pinned at activation exactly like logbookID and stamped onto the
 	// CompletedQso so the sink can pass it to Submit as `force`. Without it a
@@ -517,19 +522,25 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 // disarm, or off-ramp). Idempotent.
 func (s *Sequencer) Abandon() {
 	s.mu.Lock()
-	was := s.abandonLocked()
+	was, reason := s.abandonLocked()
+	if was {
+		// Terminal publish under the lock, so a replacement Start* cannot commit and
+		// publish ACTIVE first only to be overwritten by this idle (finalrung.go).
+		s.publish(QsoStatus{Active: false, EndReason: reason})
+	}
 	s.mu.Unlock()
 	if was {
-		s.log.InfoWith().Msg("ft8 seq: session abandoned")
-		s.publish(QsoStatus{Active: false})
+		s.log.InfoWith().Str("reason", reason).Msg("ft8 seq: session abandoned")
 	}
 }
 
 // abandonLocked clears the session state and retires its generation. Returns
 // whether a session was actually active, so the caller can decide about logging
 // and the idle publish (which must happen with s.mu released).
-func (s *Sequencer) abandonLocked() bool {
+func (s *Sequencer) abandonLocked() (bool, string) {
 	was := s.mode != seqIdle
+	reason := s.pendingEndReason
+	s.pendingEndReason = ""
 	s.mode = seqIdle
 	s.sessionGen++ // supersede any in-flight final-rung callback (review follow-up M1)
 	s.ex = nil
@@ -541,7 +552,17 @@ func (s *Sequencer) abandonLocked() bool {
 	s.confirmHold = nil
 	s.repeats = 0
 	s.skipIfSilent = false
-	return was
+	return was, reason
+}
+
+// setPendingEndReason stages the explanation for the NEXT teardown. Staged rather
+// than passed because the teardown runs through disarmTx, which owns the ordering
+// (clear armed -> cancel in-flight -> abandon) and must not grow a reason parameter
+// on every path that reaches it.
+func (s *Sequencer) setPendingEndReason(reason string) {
+	s.mu.Lock()
+	s.pendingEndReason = reason
+	s.mu.Unlock()
 }
 
 // currentGen returns the live session generation (test seam + guard callers).
@@ -566,7 +587,10 @@ func (s *Sequencer) AbandonIfCurrent(gen uint64, reason string) bool {
 		s.mu.Unlock()
 		return false
 	}
-	was := s.abandonLocked()
+	was, staged := s.abandonLocked()
+	if staged != "" {
+		reason = staged // an explicitly staged reason wins over the caller's label
+	}
 	if was {
 		// The terminal frame carries WHY, so the SPA can say it.
 		// Publish the terminal state while s.mu still excludes a replacement

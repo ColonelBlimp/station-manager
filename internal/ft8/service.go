@@ -555,6 +555,13 @@ func (s *Service) startCaptureLocked() {
 	// Slot→frequency attribution (OccupancyReport.DialMHz). Installed before Run,
 	// as SetDialSource requires; nil with no CAT, which is the honest no-op.
 	sch.SetDialSource(s.dialSource)
+	// The dial guard's trigger: the scheduler is what actually notices a move, on
+	// every audio batch. Handed off to a goroutine because onDialMoved takes seqGate
+	// and waits on an in-flight transmission, and the scheduler loop must keep
+	// servicing slot boundaries — a blocked scheduler drops slots.
+	sch.SetOnDialMoved(func() {
+		safego.Go(runCtx, "ft8.dialguard", s.onPanic, func() { s.onDialMoved() }, false)
+	})
 	safego.GoTracked(runCtx, "ft8.scheduler", s.onPanic, func() {
 		defer s.onCaptureLoopExit(runCtx, "ft8.scheduler")
 		_ = sch.Run(runCtx)

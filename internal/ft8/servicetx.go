@@ -997,6 +997,57 @@ func isDialRefusal(err error) bool {
 	return stderrors.Is(err, ErrTxDialUnknown) || stderrors.Is(err, ErrTxSuperseded)
 }
 
+// onDialMoved is the dial guard's reaction: the rig has left the frequency the
+// session — or the arm — was bound to, so the session ends, any transmission in
+// flight is aborted, and TX is disarmed. dialguard_test.go is the specification;
+// read it for the seven rules and why there is no tolerance.
+//
+// Called from the scheduler goroutine on every observed dial change (~43 ms
+// granularity), so it must be cheap and must not block that loop.
+func (s *Service) onDialMoved() {
+	// Compare against what we PINNED, not merely "something reported a move": the
+	// scheduler also reports transitions in dial KNOWN-ness, and a session must not
+	// be torn down because a reading blinked and came back to the same frequency.
+	// Nothing pinned (no CAT) means nothing to leave.
+	s.txMu.Lock()
+	pinned := s.sessionDialMHz
+	armed := s.txArmed
+	s.txMu.Unlock()
+	if pinned == 0 && !armed {
+		return
+	}
+	cur, tracked, known := s.dialState()
+	if !tracked || !known {
+		// Unreadable is not "moved" — preKeyDialCheck already refuses to key on a
+		// dial it cannot corroborate, which is the right response to not knowing.
+		return
+	}
+	if pinned != 0 && cur == pinned {
+		return // still where we started
+	}
+
+	// disarmTx does the whole teardown under seqGate, in the order the rest of the
+	// package relies on: clear armed, cancel the in-flight transmission (the
+	// controller drops PTT on the cancel path), then abandon the session. Reusing it
+	// rather than open-coding is deliberate — a bespoke sequence here is how the
+	// earlier attempt at this guard raced a concurrent start and skipped the
+	// completion policy. The transmission's own failure path still runs the rung's
+	// onDone, so a contact the partner already rogered is logged on its pinned
+	// frequency (rule 6).
+	s.log.InfoWith().
+		Float64("pinned_mhz", pinned).
+		Float64("now_mhz", cur).
+		Msg("ft8: rig left the session's frequency; abandoning and disarming")
+	// Stage the explanation BEFORE the teardown so the terminal frame carries it —
+	// disarmTx abandons through the plain path, which is reasonless by default
+	// because an operator abandon needs no explanation. This one does.
+	s.seq.setPendingEndReason(EndReasonDialMoved)
+	s.disarmTx(false)
+	s.txMu.Lock()
+	s.sessionDialMHz = 0 // the arm is gone; nothing is bound to a frequency now
+	s.txMu.Unlock()
+}
+
 func (s *Service) preKeyDialCheck() error {
 	const op errors.Op = "ft8.Service.preKeyDialCheck"
 	cur, tracked, known := s.dialState()

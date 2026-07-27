@@ -160,6 +160,19 @@ precisely so we don't re-derive state or redo finished work.
 > an exchange is under way — earlier rungs did reach the air. It now says the
 > PENDING message was not sent.
 >
+> **Round 15 (uncommitted) — THE PROCESS CHANGED, at the operator's call.** The dial
+> guard is now specified in `internal/ft8/dialguard_test.go`, written BEFORE the
+> implementation: seven rules, each a test, with the reasoning in the file header.
+> Ran red, then implemented to green. Operator's decisions, not inferred: **no
+> tolerance** (any dial change ends the session — a nudge is a statement of intent to
+> leave, and no threshold survives contact with the physics), **end on observation**
+> (~43 ms via the scheduler, not up to 30 s at the next rung), **abort the in-flight
+> transmission** (the carrier moves WITH the dial, so letting it finish radiates a
+> frequency-hopping signal — my earlier "let it finish" advice was wrong), **disarm
+> TX** including with no session running, and **SM's own band buttons take the same
+> path**. Implemented by reusing `disarmTx` rather than open-coding the teardown —
+> a bespoke sequence here is exactly how the round-8 attempt raced a concurrent start.
+>
 > Rounds 4-8 were whack-a-mole because every fix reacted to an observed dial
 > TRANSITION; transitions can be missed, mis-timed, or attributed to the wrong
 > session. The invariant cannot be. **A codex P1 claiming a boundary QSY escapes

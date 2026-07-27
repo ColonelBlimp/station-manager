@@ -118,6 +118,7 @@ type Scheduler struct {
 	// observeDial for why endpoints alone are not enough. Installed before Run;
 	// all of this is owned by Run's goroutine, so no lock is needed.
 	dialSource    func() (float64, bool)
+	onDialMoved   func()
 	lastDial      float64
 	lastDialOK    bool
 	dialSampled   bool // lastDial/lastDialOK hold a real reading
@@ -156,6 +157,14 @@ func (s *Scheduler) SetOnDeadSource(cb func(reason string)) { s.dead.onDead = cb
 // behaviour.
 func (s *Scheduler) SetDialSource(fn func() (float64, bool)) { s.dialSource = fn }
 
+// SetOnDialMoved installs the callback fired the moment a dial change is SEEN —
+// per audio batch (~43 ms), not at a slot boundary. The dial guard hangs off this:
+// an FT8 session is bound to one frequency, and waiting for the next rung to notice
+// leaves up to 30 s in which the operator cannot tell a deliberate stop from a hang.
+// Must be called before Run; the callback runs on the scheduler goroutine and must
+// not block.
+func (s *Scheduler) SetOnDialMoved(fn func()) { s.onDialMoved = fn }
+
 func (s *Scheduler) readDial() (float64, bool) {
 	if s.dialSource == nil {
 		return 0, false
@@ -178,10 +187,20 @@ func (s *Scheduler) readDial() (float64, bool) {
 // a slot whose dial went unknown partway through cannot be placed either.
 func (s *Scheduler) observeDial() {
 	d, ok := s.readDial()
-	if s.dialSampled && (d != s.lastDial || ok != s.lastDialOK) {
+	moved := s.dialSampled && (d != s.lastDial || ok != s.lastDialOK)
+	if moved {
 		s.slotDialMoved = true
 	}
 	s.lastDial, s.lastDialOK, s.dialSampled = d, ok, true
+	// Report the move NOW, not at the slot boundary. The dial guard hangs off this:
+	// an FT8 session is bound to one frequency, and letting the next rung notice
+	// leaves up to 30 s in which nothing on screen changes — long enough that a
+	// working guard read on air as "moving the dial does not stop TX".
+	// After the state update, so a callback that reaches back in sees a settled
+	// tracker rather than the reading it was told about.
+	if moved && s.onDialMoved != nil {
+		s.onDialMoved()
+	}
 }
 
 // Dropped returns the number of slots that were discarded because the

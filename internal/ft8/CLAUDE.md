@@ -69,6 +69,16 @@ deleted within a round or two, while the behavioural ones caught real defects.
 
 5. **A session ends only by: operator abandon, disarm, its completion policy, or
    a failed frequency confirmation — INCLUDING one that fires asynchronously.**
+   The dial guard's full behaviour is specified as executable tests in
+   **`dialguard_test.go`** — read that file before touching anything on this path.
+   It was written BEFORE the implementation (2026-07-27), after ten rounds in which
+   the rules were inferred one at a time from whatever the last review noticed; each
+   inferred rule was wrong in a case the next review found. NO TOLERANCE is an
+   operator decision, not an oversight: survivability depends on where the partner
+   sits in the passband and which way you moved, so there is no clean edge to pick,
+   and every threshold tried before the spec existed was wrong. A dial change now
+   also DISARMS TX — including with no session running, because an arm is bound to a
+   frequency just as a session is.
    The pre-key gate refuses inside the launched TX goroutine, so its caller cannot
    run the synchronous refuse-then-retire policy; `startTransmission` carries an
    `onDialRefusal` hook for exactly that, invoked strictly AFTER the completion
