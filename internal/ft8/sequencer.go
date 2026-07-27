@@ -489,11 +489,11 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.repeats = 0
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
+	s.publish(st)
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("their_call", theirCall).Str("their_period", theirPeriod).
 		Float64("offset_hz", offsetHz).Msg("ft8 seq: answering CQ")
-	s.publish(st)
 	// Send the opening call this slot if we're already in our TX window — else the
 	// first rung waits for the next qualifying OnSlot (up to a full cycle late).
 	s.fireOpening(now)
@@ -544,12 +544,12 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 	s.repeats = 0
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
+	s.publish(st)
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("their_call", theirCall).Str("their_period", theirPeriod).
 		Float64("offset_hz", offsetHz).Str("our_class", ourClass).Str("our_section", ourSection).
 		Msg("ft8 seq: answering CQ FD")
-	s.publish(st)
 	s.fireOpening(now)
 	return nil
 }
@@ -907,8 +907,8 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	if !ok { // exchange already done — shouldn't happen here; clear defensively.
 		s.ex = nil
 		s.mode = seqIdle
-		s.mu.Unlock()
 		s.publish(QsoStatus{Active: false})
+		s.mu.Unlock()
 		return
 	}
 	rung := s.ex.State.label()
@@ -924,8 +924,8 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
 	if dt < 0 || dt > txLateWindowSec {
 		st := s.statusLocked()
-		s.mu.Unlock()
 		s.publish(st)
+		s.mu.Unlock()
 		return
 	}
 	// A rung already went out in this TX slot (a Start*'s immediate fireOpening
@@ -935,8 +935,8 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	// slot are impossible regardless of session identity.
 	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
 		st := s.statusLocked()
-		s.mu.Unlock()
 		s.publish(st)
+		s.mu.Unlock()
 		return
 	}
 
@@ -949,18 +949,18 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 			s.ex = nil
 			s.mode = seqIdle
 			s.skipIfSilent = false
+			s.publish(QsoStatus{Active: false})
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: skip-if-silent — no reply; ending without repeat")
-			s.publish(QsoStatus{Active: false})
 			return
 		}
 		// Calling / Reporting wait for the partner; cap the repeats (off-ramp).
 		if s.repeats >= s.maxRepeats {
 			s.ex = nil
 			s.mode = seqIdle
+			s.publish(QsoStatus{Active: false})
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: no answer after max repeats; abandoning")
-			s.publish(QsoStatus{Active: false})
 			return
 		}
 		s.repeats++
@@ -1070,8 +1070,8 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 	if !ok { // already done — clear defensively.
 		s.fdEx = nil
 		s.mode = seqIdle
-		s.mu.Unlock()
 		s.publish(QsoStatus{Active: false})
+		s.mu.Unlock()
 		return
 	}
 	rung := s.fdEx.State.label()
@@ -1084,16 +1084,16 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
 	if dt < 0 || dt > txLateWindowSec {
 		st := s.statusLocked()
-		s.mu.Unlock()
 		s.publish(st)
+		s.mu.Unlock()
 		return
 	}
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
 	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
 		st := s.statusLocked()
-		s.mu.Unlock()
 		s.publish(st)
+		s.mu.Unlock()
 		return
 	}
 
@@ -1110,9 +1110,9 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 			s.fdEx = nil
 			s.mode = seqIdle
 			s.skipIfSilent = false
+			s.publish(QsoStatus{Active: false})
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: FD skip-if-silent — no reply; ending without repeat")
-			s.publish(QsoStatus{Active: false})
 			return
 		}
 	}
@@ -1120,6 +1120,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		call, attempts := s.fdEx.TheirCall, s.maxRepeats
 		s.fdEx = nil
 		s.mode = seqIdle
+		s.publish(QsoStatus{Active: false})
 		s.mu.Unlock()
 		if confirming {
 			// Group B: they never received the roger, so neither side has a QSO —
@@ -1129,7 +1130,6 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		} else {
 			s.log.InfoWith().Msg("ft8 seq: FD no answer after max repeats; abandoning")
 		}
-		s.publish(QsoStatus{Active: false})
 		return
 	}
 	s.repeats++

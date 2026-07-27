@@ -59,10 +59,18 @@ deleted within a round or two, while the behavioural ones caught real defects.
    a9e51f96) inherited the shape by copying `SetSkipIfSilent`, which had it too. A
    comment was demonstrably not enough, so the operator-command entry points now
    carry an executable guard: `publishatomicity_test.go` asserts the sequencer lock
-   is HELD at publish time (TryLock succeeding means it was not). That guard is
-   PARTIAL by design — the ~13 publish-after-unlock sites in the slot paths
-   (caller/work/type4 sequencers) are the same shape and are NOT converted; extend
-   the probe if they are.
+   is HELD at publish time (TryLock succeeding means it was not), and `newTestSeq`
+   installs that probe on EVERY test sequencer so the whole suite enforces it on any
+   path it drives (`publishguard_test.go` collects violations by source location and
+   reports them from TestMain). All 39 sites across the four sequencer files were
+   converted on 2026-07-27; the pattern to never reintroduce is
+   `s.mu.Unlock()` … `s.publish(...)`. Publishing under the lock is safe because the
+   hub's publish takes its own mutex and sends NON-BLOCKING per subscriber (slow
+   readers are evicted), and never re-enters the Sequencer. Enforcement is BOTH:
+   the runtime probe (paths any test drives) and a source-level AST check
+   (`TestSource_NoStatusPublishedAfterUnlock`) that is independent of coverage —
+   necessary because 23 of the 39 sites are executed by no test, so the probe alone
+   would not catch a regression in them.
    Observable: the final `ft8-qso` frame matches whether a session is running.
 
 4. **No decode is displayed as workable, spotted, or acted on unless its capture

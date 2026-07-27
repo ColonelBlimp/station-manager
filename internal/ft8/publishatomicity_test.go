@@ -28,16 +28,23 @@ import (
 	a replacement transition from interleaving. TryLock succeeding means the caller had
 	already let go.
 
-	SCOPE, stated so this file is not mistaken for a package-wide guarantee: it covers
-	the operator-command entry points only. There are ~13 other publish-after-unlock
-	sites in the slot paths (caller/work/type4 sequencers) which are the same SHAPE and
-	were left alone deliberately — converting them is a sweep with its own lock-hold
-	and re-entrancy questions, not a review fix. If they are converted, add them here.
+	SCOPE (updated 2026-07-27): this file states the rule explicitly for the operator
+	commands, but enforcement is now PACKAGE-WIDE — newTestSeq installs the same probe
+	on every test sequencer, so any path any test drives is checked (see
+	publishguard_test.go). All 39 publish-after-unlock sites across the four sequencer
+	files have been converted.
+
+	Publishing under the lock is safe here because the sink cannot block or re-enter:
+	production's sink appends to the hub, which takes its own mutex and does a
+	NON-BLOCKING send per subscriber (slow readers are evicted via select/default), and
+	nothing in that path calls back into the Sequencer.
 */
 
-// publishLockProbe records frames published while s.mu was NOT held. It is armed
-// explicitly, because session SETUP publishes after unlocking too and would otherwise
-// drown the signal from the command under test.
+// publishLockProbe records frames published while s.mu was NOT held. The explicit
+// arming dates from when session SETUP still published after unlocking and would have
+// drowned the signal; Start* was part of the 2026-07-27 conversion, so that no longer
+// applies. It is kept because scoping each subtest to the command under test is what
+// makes a failure here point at that command rather than anywhere in the fixture.
 type publishLockProbe struct {
 	seq      *Sequencer
 	armed    bool

@@ -90,8 +90,27 @@ func (r *seqRecorder) lastStatus() QsoStatus {
 	return r.statuses[len(r.statuses)-1]
 }
 
+// newTestSeq wires the recorder AND the package-wide publish-atomicity guard: every
+// status frame any test causes must be published while s.mu is HELD (invariant 3 in
+// CLAUDE.md — publishing after the unlock lets a replacement transition interleave and
+// leaves a stale frame cached by the hub as the last word).
+//
+// Violations are COLLECTED (by source location) and reported once by TestMain rather
+// than failing the offending test: newTestSeq has no *testing.T and 117 call sites,
+// and one run then names every site instead of only the first. The rule is stated
+// explicitly in publishatomicity_test.go; this makes the whole suite enforce it on
+// every path any test happens to drive.
 func newTestSeq(r *seqRecorder) *Sequencer {
-	s := newSequencer(r.transmit, r.publish, 0, nil) // 0 → defaultSeqMaxRepeats
+	var s *Sequencer
+	publish := func(st QsoStatus) {
+		// Held → TryLock fails. Succeeding means the caller already let go.
+		if s != nil && s.mu.TryLock() {
+			s.mu.Unlock()
+			recordUnlockedPublish()
+		}
+		r.publish(st)
+	}
+	s = newSequencer(r.transmit, publish, 0, nil) // 0 → defaultSeqMaxRepeats
 	s.onComplete = func(c CompletedQso) {
 		r.mu.Lock()
 		r.completed = append(r.completed, c)

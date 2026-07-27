@@ -71,11 +71,11 @@ func (s *Sequencer) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr in
 	s.repeats = 0
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
+	s.publish(st)
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("their_call", ex.TheirCall).Str("their_period", theirPeriod).
 		Float64("offset_hz", offsetHz).Msg("ft8 seq: answering CQ (type-4)")
-	s.publish(st)
 	s.fireOpening(now)
 	return nil
 }
@@ -122,8 +122,8 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	if !ok { // already done — clear defensively.
 		s.t4Ex = nil
 		s.mode = seqIdle
-		s.mu.Unlock()
 		s.publish(QsoStatus{Active: false})
+		s.mu.Unlock()
 		return
 	}
 	rung := s.t4Ex.State.label()
@@ -136,16 +136,16 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
 	if dt < 0 || dt > txLateWindowSec {
 		st := s.statusLocked()
-		s.mu.Unlock()
 		s.publish(st)
+		s.mu.Unlock()
 		return
 	}
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
 	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
 		st := s.statusLocked()
-		s.mu.Unlock()
 		s.publish(st)
+		s.mu.Unlock()
 		return
 	}
 
@@ -156,17 +156,17 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 			s.t4Ex = nil
 			s.mode = seqIdle
 			s.skipIfSilent = false
+			s.publish(QsoStatus{Active: false})
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: type-4 skip-if-silent — no reply; ending without repeat")
-			s.publish(QsoStatus{Active: false})
 			return
 		}
 		if s.repeats >= s.maxRepeats {
 			s.t4Ex = nil
 			s.mode = seqIdle
+			s.publish(QsoStatus{Active: false})
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: type-4 no answer after max repeats; abandoning")
-			s.publish(QsoStatus{Active: false})
 			return
 		}
 		s.repeats++
@@ -264,11 +264,11 @@ func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, thei
 	s.repeats = 0
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
+	s.publish(st)
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("their_call", c.TheirCall).Str("their_period", theirPeriod).
 		Float64("offset_hz", offsetHz).Msg("ft8 seq: working a caller (type-4)")
-	s.publish(st)
 	// Immediate terminal fire: the sole RR73 rung is terminal, so it goes through
 	// fireWorkT4 (not fireOpening) — keying now in the current our-parity slot WITH
 	// the onDone completion, instead of waiting ~30 s for the next theirPeriod OnSlot.
@@ -311,8 +311,8 @@ func (s *Sequencer) onSlotWorkingT4(ref SlotRef, msgs []goft8.DecodedMessage, no
 	if !ok {
 		s.mode = seqIdle
 		s.t4Work = nil
-		s.mu.Unlock()
 		s.publish(QsoStatus{Active: false})
+		s.mu.Unlock()
 		return
 	}
 	rung := s.t4Work.State.label()
@@ -342,8 +342,8 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 	// qualifying slot; the session stays active.
 	if dt < 0 || dt > txLateWindowSec || s.lastTxSlot.Equal(txSlot) {
 		st := s.statusLocked()
-		s.mu.Unlock()
 		s.publish(st)
+		s.mu.Unlock()
 		return
 	}
 
@@ -355,11 +355,11 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 		call, attempts := s.t4Work.TheirCall, s.maxRepeats
 		s.t4Work = nil
 		s.mode = seqIdle
+		s.publish(QsoStatus{Active: false})
 		s.mu.Unlock()
 		// Nothing is logged: they never got the roger, so neither side has a QSO.
 		s.log.WarnWith().Str("their_call", call).Int("attempts", attempts).
 			Msg("ft8 seq: type-4 work — final RR73 never transmitted; abandoning without logging")
-		s.publish(QsoStatus{Active: false})
 		return
 	}
 	s.repeats++
