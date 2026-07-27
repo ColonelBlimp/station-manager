@@ -30,6 +30,7 @@ beforeEach(() => {
         workCaller: okResult,
         abandon: okResult,
         skip: okResult,
+        next: okResult,
     });
 });
 

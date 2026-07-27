@@ -255,6 +255,11 @@ func TestWriteFt8QsoError_Mapping(t *testing.T) {
 		// them (start something / abandon what is running).
 		{"no active qso", ft8.ErrNoActiveQso, http.StatusConflict, "ft8_no_active_qso"},
 		{"rung not skippable", ft8.ErrRungNotSkippable, http.StatusConflict, "ft8_rung_not_skippable"},
+		// Next's refusal is a THIRD distinct fact: a Call-CQ run is active and is on a
+		// skippable-shaped rung, but nobody is being worked, so there is no answerer to
+		// move on from. Collapsing it into either neighbour tells the operator to do
+		// the wrong thing.
+		{"no answerer", ft8.ErrNoAnswerer, http.StatusConflict, "ft8_no_answerer"},
 		{"unknown maps to generic 500", stderrors.New("boom: internal detail"), http.StatusInternalServerError, "internal_error"},
 	}
 	for _, tc := range cases {
@@ -277,5 +282,29 @@ func TestHandleFt8QsoAbandon(t *testing.T) {
 	w := postFt8Qso(t, srv, "/v1/ft8/qso/abandon", ``, srv.handleFt8QsoAbandon)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("abandon status=%d, want 202", w.Code)
+	}
+}
+
+// The Call-CQ Next endpoint: short-circuit the repeat cap on a stuck contact and
+// carry on with the run (see internal/ft8/nextanswerer_test.go for the sequencing
+// rules). Driven through the full server handler so the ROUTE REGISTRATION is
+// covered — a handler that exists but is never wired answers 404, and the SPA's
+// only symptom would be a Next button that silently does nothing.
+//
+// With no keyer there is no session, so the reachable assertion is the refusal; that
+// it is ft8_no_answerer rather than 404/405 proves both the route and the mapping.
+func TestHandleFt8QsoNext_RouteIsWiredAndRefusesWithoutAnAnswerer(t *testing.T) {
+	srv := testServerWithFt8(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
+	req := httptest.NewRequest(http.MethodPost, "/v1/ft8/qso/next", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "127.0.0.1:8080" // loopback: satisfies requireSameOrigin, which wraps the mux
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status=%d, want %d (body %s)", w.Code, http.StatusConflict, w.Body.String())
+	}
+	if got := decodeErrCode(t, w); got != "ft8_no_answerer" {
+		t.Fatalf("code=%q, want ft8_no_answerer (body %s)", got, w.Body.String())
 	}
 }

@@ -38,6 +38,7 @@ import {
     startFt8Cq,
     abandonFt8Qso,
     skipFt8Qso,
+    nextFt8Answerer,
     type Ft8QsoOutcome,
 } from './lib/api/ft8qso';
 import { toasts } from './lib/ui/toasts.svelte';
@@ -107,6 +108,7 @@ setFt8TxActions({
         ).then(toTxResult),
     abandon: () => abandonFt8Qso().then(toTxResult),
     skip: (armed) => skipFt8Qso(armed).then(toTxResult),
+    next: () => nextFt8Answerer().then(toTxResult),
 });
 
 // Session-ended sink (ft8-qso, terminal frame with a reason): the daemon ends a

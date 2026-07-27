@@ -378,6 +378,24 @@ func (s *Server) handleFt8QsoSkip(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// handleFt8QsoNext short-circuits the repeat cap on a stuck Call-CQ contact: park
+// this answerer at the next slot evaluation, then work another live answerer from
+// that slot or resume calling CQ. The run continues — ending it is Abandon's job.
+//
+// Deliberately NOT the skip route. Skip fires on a SILENT cycle; the case this exists
+// for is a station that keeps transmitting the same rung and never advances, so a
+// skip-shaped trigger would never fire. No body. 202 on success; 409 ft8_no_answerer
+// when no answerer is being worked (idle, merely calling CQ, or an answer/work session
+// whose Next is skip). The pending state comes back via the ft8-qso SSE (next_armed).
+func (s *Server) handleFt8QsoNext(w http.ResponseWriter, _ *http.Request) {
+	const op errors.Op = "api.handleFt8QsoNext"
+	if err := s.ft8.NextAnswerer(); err != nil {
+		s.writeFt8QsoError(w, op, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
 // handleFt8QsoAbandon drops any active sequenced session — answer-a-CQ or Call-CQ.
 // Idempotent — abandoning when idle is a 202 no-op.
 func (s *Server) handleFt8QsoAbandon(w http.ResponseWriter, _ *http.Request) {
@@ -409,6 +427,12 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 	case stderr.Is(err, ft8.ErrNoActiveQso):
 		s.writeError(w, http.StatusConflict, "ft8_no_active_qso",
 			"no active QSO to arm a skip on", op)
+	case stderr.Is(err, ft8.ErrNoAnswerer):
+		// A third distinct refusal alongside ft8_no_active_qso and
+		// ft8_rung_not_skippable: something IS running (or nothing is), but no answerer
+		// is being worked, so there is nobody to move on from.
+		s.writeError(w, http.StatusConflict, "ft8_no_answerer",
+			"no station is being worked; Next moves on from a contact, and there isn't one", op)
 	case stderr.Is(err, ft8.ErrRungNotSkippable):
 		// Distinct from ft8_no_active_qso: a session IS running, but it is on a rung
 		// with no skip path (a terminal RR73/73), so an arm could never fire. Naming

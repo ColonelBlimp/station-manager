@@ -12,6 +12,7 @@
         callCq,
         abandonQso,
         skipQso,
+        nextAnswerer,
         ft8EngagedThisSession,
         workCaller,
     } from './ft8.svelte';
@@ -125,13 +126,18 @@
     // A Call-CQ run is in progress (we are the caller, looping the pile-up) — the
     // Call CQ button goes red so "I'm running CQ" is unmistakable.
     const callerActive = $derived(qso.active && qso.role === 'caller');
-    // Next — advance the pile-up. Available whenever a contact is active AND the
-    // pile-up has someone waiting, INCLUDING during a Call-CQ run (the operator chose
-    // to keep the queue-takes-over-CQ behaviour). Its ACTION differs by mode:
-    //   - Call-CQ run: an immediate takeover — abandon the CQ run, hand the rig to the
-    //     drain (there's no specific reply to wait on while calling CQ).
-    //   - working/answering a specific station: a DEFERRED "skip if no reply" (below).
-    const canNext = $derived(tx.armed && qso.active && ft8PileupStack.count > 0);
+    // Next — move on. Its gate AND its action differ by mode:
+    //   - Call-CQ run working an answerer: short-circuit the repeat cap on a stuck
+    //     rung. Gated on there being a CONTACT, not on the curated queue: the daemon
+    //     picks the replacement from the slot's own decodes, so requiring a queued
+    //     station hid the control in exactly the case it is for (one stuck station,
+    //     nothing curated). Merely calling CQ offers nothing to move on from.
+    //   - working/answering a specific station: a DEFERRED "skip if no reply" (below),
+    //     which hands over to the pile-up drain — so that one keeps the queue gate.
+    const callerWorking = $derived(callerActive && qso.theirCall !== '');
+    const canNext = $derived(
+        tx.armed && qso.active && (callerActive ? callerWorking : ft8PileupStack.count > 0)
+    );
 
     // Deferred "skip if no reply" (the Next control while working a station) —
     // DAEMON-SIDE since 2026-07-13: Next arms skip_if_silent on the sequencer,
@@ -210,11 +216,27 @@
             return;
         }
         if (!canNext) return;
-        if (callerActive) {
-            void doSkip(qso.theirCall); // Call-CQ: abandon the run, drain takes over
+        if (callerWorking) {
+            void moveOn(); // Call-CQ: park this answerer, the run carries on
             return;
         }
         void setSkip(true);
+    }
+
+    // Call-CQ Next. Deliberately does NOT touch ft8PileupStack: this used to abandon
+    // the run and resume the drain, which quietly switched the operator from calling
+    // CQ to working their curated queue. The drawer is for a pile-up that did not come
+    // from a CQ call, and the drain cannot run during a live session anyway.
+    async function moveOn(): Promise<void> {
+        if (nexting) return;
+        nexting = true;
+        try {
+            const r = await nextAnswerer();
+            if (!r.ok) toasts.error(r.message);
+            // The pending state arrives via the ft8-qso SSE (confirm-by-push).
+        } finally {
+            nexting = false;
+        }
     }
 
     async function setSkip(armed: boolean): Promise<void> {
@@ -242,24 +264,6 @@
         prevSkipArmed = armed;
         if (armed) prevSkipCall = call;
     });
-
-    // Shared advance: abandon the current contact and (re-)enable the drain so it works
-    // the next queued head. Used by the Call-CQ takeover and the deferred skip.
-    async function doSkip(who: string, silent = false): Promise<void> {
-        if (nexting) return;
-        nexting = true;
-        try {
-            const r = await abandonQso();
-            if (!r.ok) {
-                toasts.error(r.message);
-                return;
-            }
-            if (silent) toasts.info(`No reply from ${who} — next.`);
-            ft8PileupStack.resume();
-        } finally {
-            nexting = false;
-        }
-    }
 
     // ---- Pile-up drain (SPA-only) ---------------------------------------------
     // The operator curates a FIFO of stations calling them (Ctrl+click in Band
@@ -482,7 +486,7 @@
             >
                 Abandon
             </button>
-            {#if canNext || skipArmed}
+            {#if canNext || skipArmed || qso.nextArmed}
                 <button
                     type="button"
                     class="flex-1 rounded-md border px-3 py-1.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 {skipArmed
@@ -491,12 +495,12 @@
                     title={skipArmed
                         ? 'Skip armed — advances to the next caller if this station is silent this slot; click to cancel'
                         : callerActive
-                          ? 'Abandon the CQ run and work the pile-up queue'
+                          ? 'Move on from this station — the CQ run carries on'
                           : "Skip this station if it doesn't reply this slot"}
                     onclick={onNext}
                     disabled={nexting}
                 >
-                    {skipArmed ? 'Skip if silent…' : 'Next'}
+                    {qso.nextArmed ? 'Moving on…' : skipArmed ? 'Skip if silent…' : 'Next'}
                 </button>
             {/if}
         </div>

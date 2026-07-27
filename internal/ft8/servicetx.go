@@ -1268,6 +1268,21 @@ func (s *Service) SetQsoSkip(armed bool) error {
 	return s.seq.SetSkipIfSilent(armed)
 }
 
+// NextAnswerer short-circuits the repeat cap on a stuck Call-CQ contact: park this
+// answerer at the next slot evaluation and carry on with the run (work another live
+// answerer, else resume CQ). Nil sequencer → ErrNoAnswerer (nothing to move on from).
+//
+// Unlike AbandonQso this does NOT touch the transmitter: the park happens at the next
+// slot evaluation, so the rung already on the air simply finishes. That is deliberate
+// — nothing can be worked before the next slot boundary anyway, so cutting PTT here
+// would buy nothing and add a second cancellation path.
+func (s *Service) NextAnswerer() error {
+	if s.seq == nil {
+		return ErrNoAnswerer
+	}
+	return s.seq.NextAnswerer()
+}
+
 // AbandonQso drops any active sequenced QSO (operator action). Idempotent.
 // Abandon is the operator's immediate off-ramp: besides stopping the sequencer
 // (no further rungs), it cancels any in-flight transmission NOW — dropping PTT

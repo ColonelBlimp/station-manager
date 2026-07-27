@@ -341,11 +341,18 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 ### `POST /v1/ft8/qso/abandon`
 - **Purpose:** Drop any active sequenced session (answer-a-CQ or Call-CQ). **Only when FT8 is enabled.** No body. **202 Accepted**, idempotent (no-op while idle). No error codes.
 
+### `POST /v1/ft8/qso/next`
+- **Purpose:** Short-circuit the repeat cap on a **stuck Call-CQ contact**: park this answerer at the next slot evaluation, then work another live answerer from that slot or resume calling CQ. The run **continues** — ending it is Abandon's job. **Only when FT8 is enabled.**
+- **Request:** No body.
+- **Response:** **202 Accepted**. The pending state rides the `ft8-qso` SSE as `next_armed` (confirm-by-push); it clears when the park happens or the contact advances.
+- **Errors:** **409 `ft8_no_answerer`** when no answerer is being worked — idle, a Call-CQ run that is merely calling, or an answer/work session (whose Next is `qso/skip`). A third distinct refusal alongside `ft8_no_active_qso` and `ft8_rung_not_skippable`.
+- **Notes:** Deliberately **not** the skip route. Skip fires on a **silent** cycle; this exists for a station that keeps transmitting the same rung and never advances, so a skip-shaped trigger would never fire — the trigger is "did not advance", not "did not transmit". It is the repeat cap fired early, through the same `parkAnswererLocked` off-ramp, so the parked station gets the cap's **per-round** exclusion (cleared when the rescan is empty or a contact completes) — not a session-long lockout. Fires on **both** capped rungs; on the closing RR73 the contact is dropped **without logging** (Group B — the partner never got the roger). The transmission already on the air finishes: the park is deferred to the next slot evaluation, since a replacement can only be picked from a slot's decodes.
+
 ### `POST /v1/ft8/qso/skip`
 - **Purpose:** Arm/disarm **skip-if-silent** on the active sequenced session (the operator's deferred Next, daemon-side): armed, a silent cycle on an already-transmitted rung ends the session **instead of keying the repeat** — no RF at a station the operator has decided to drop. **Only when FT8 is enabled.**
 - **Request:** Body `{"armed": bool}`.
 - **Response:** **202 Accepted**. The armed state rides the `ft8-qso` SSE as `skip_armed` (confirm-by-push); the skip firing publishes the idle status.
-- **Errors:** 400 malformed body; **409 `ft8_no_active_qso`** when nothing is running; **409 `ft8_rung_not_skippable`** when a session IS running but sits on a rung with no skip path — a terminal RR73/73, or a Call-CQ run (its Next is an immediate takeover). Skippability is a property of the RUNG, not the session mode. Disarm is always accepted (idempotent, including when idle).
+- **Errors:** 400 malformed body; **409 `ft8_no_active_qso`** when nothing is running; **409 `ft8_rung_not_skippable`** when a session IS running but sits on a rung with no skip path — a terminal RR73/73, or a Call-CQ run (whose Next is `POST /v1/ft8/qso/next`, below). Skippability is a property of the RUNG, not the session mode. Disarm is always accepted (idempotent, including when idle).
 - **Notes:** The arm clears itself when the partner replies (they came back), on session start, and on Abandon. Applies to answering + working sessions, standard and FD.
 
 ---

@@ -157,6 +157,15 @@ export function abandonFt8Qso(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
     return postFt8Qso('/v1/ft8/qso/abandon', {}, signal);
 }
 
+/** Short-circuit the repeat cap on a stuck Call-CQ contact: park this answerer at
+ *  the next slot evaluation, then work another live answerer or resume calling CQ.
+ *  The run CONTINUES — ending it is abandon's job. Not the same control as skip:
+ *  skip fires on a SILENT cycle, this one on a station that keeps transmitting the
+ *  same rung and never advances. Pending state rides ft8-qso as next_armed. */
+export function nextFt8Answerer(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
+    return postFt8Qso('/v1/ft8/qso/next', {}, signal);
+}
+
 /** Arm/disarm skip-if-silent on the active session (the deferred Next,
  *  daemon-side): armed, a silent cycle ends the session INSTEAD of keying the
  *  repeat — no RF at a station the operator decided to drop. The armed state

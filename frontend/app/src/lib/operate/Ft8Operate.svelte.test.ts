@@ -36,6 +36,7 @@ function armReady(over: Partial<Ft8TxActions> = {}): void {
         workCaller: okResult,
         abandon: okResult,
         skip: okResult,
+        next: okResult,
         ...over,
     });
     rig.cat = 'connected';
@@ -325,25 +326,12 @@ describe('Ft8Operate Next control (deferred skip-if-silent)', () => {
         expect(skips).toEqual([false]); // cancel = disarm intent; SSE clears the amber
     });
 
-    it('during a Call-CQ run, Next is an immediate takeover (abandon + resume)', async () => {
-        let abandoned = 0;
-        armReady({
-            abandon: () => {
-                abandoned++;
-                return okResult();
-            },
-        });
-        ft8State.qso.active = true;
-        ft8State.qso.role = 'caller';
-        ft8PileupStack.pause();
-        ft8PileupStack.push(caller('K1ABC'));
-        render(Ft8Operate);
-        flushSync();
-        await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-        await flush();
-        expect(abandoned).toBe(1);
-        expect(ft8PileupStack.enabled).toBe(true);
-    });
+    // The Call-CQ arm of Next moved to ft8OperateNext.svelte.test.ts (2026-07-27).
+    // It no longer abandons the run and resumes the drain — it parks the stuck
+    // answerer daemon-side and the run carries on. The test that lived here pinned
+    // the superseded takeover, including the state it used (role 'caller' with no
+    // theirCall), which now offers no Next at all: there is nothing to move on from
+    // while merely calling CQ.
 });
 
 describe('Ft8Operate Abandon', () => {

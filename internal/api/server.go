@@ -250,6 +250,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		mux.HandleFunc("POST /v1/ft8/qso/path", s.handleFt8QsoPath)
 		mux.HandleFunc("POST /v1/ft8/qso/abandon", s.handleFt8QsoAbandon)
 		mux.HandleFunc("POST /v1/ft8/qso/skip", s.handleFt8QsoSkip)
+		mux.HandleFunc("POST /v1/ft8/qso/next", s.handleFt8QsoNext)
 		// Caller-side sequencer (ADR 0033) — start a Call-CQ session that works the
 		// stations that answer (auto_first / operator_pick per ft8.tx.caller_answer_mode);
 		// abandon uses the shared qso/abandon route. Same enablement gate.

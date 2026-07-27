@@ -75,6 +75,8 @@ export interface QsoPayload {
     repeats?: number;
     max_repeats?: number;
     skip_armed?: boolean;
+    /** Pending Call-CQ Next: park this answerer at the next slot evaluation. */
+    next_armed?: boolean;
     our_report?: string;
     their_report?: string;
     their_period?: string;

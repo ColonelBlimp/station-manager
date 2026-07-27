@@ -41,6 +41,7 @@ function armReady(over: Partial<Ft8TxActions> = {}): void {
         workCaller: okResult,
         abandon: okResult,
         skip: okResult,
+        next: okResult,
         ...over,
     });
     rig.cat = 'connected';

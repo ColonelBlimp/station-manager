@@ -13,6 +13,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -39,6 +40,16 @@ func testServer(t *testing.T) *Server {
 // set, before any service is constructed — giving tests a chance to
 // populate cfg.Forwarders, tweak page limits, etc.
 func testServerWithCfg(t *testing.T, mutate func(cfg *config.Config)) *Server {
+	t.Helper()
+	return testServerWithFt8(t, mutate, nil)
+}
+
+// testServerWithFt8 is testServerWithCfg with an FT8 service passed to New rather
+// than assigned afterwards. That distinction matters: the FT8 routes are registered
+// INSIDE New, gated on an enabled service, so a server whose ft8 field is swapped in
+// later answers 404 on all of them. Tests that drive an FT8 route through the real
+// mux (rather than calling its handler directly) must build the server this way.
+func testServerWithFt8(t *testing.T, mutate func(cfg *config.Config), ft8Svc *ft8.Service) *Server {
 	t.Helper()
 
 	cfg := config.DefaultConfig(t.TempDir())
@@ -103,7 +114,7 @@ func testServerWithCfg(t *testing.T, mutate func(cfg *config.Config)) *Server {
 	// session-email handler probes Enabled() (which a nil mailer
 	// reports as false) and returns 503 mailer_disabled, mirroring
 	// an operator who hasn't configured SMTP.
-	return New(cfg, "test", cfgSvc, qsoSvc, dbSvc, logSvc, hub, nil, nil, nil, nil)
+	return New(cfg, "test", cfgSvc, qsoSvc, dbSvc, logSvc, hub, nil, nil, nil, ft8Svc)
 }
 
 // createTestLogbook creates a logbook via the handler and returns its ID.

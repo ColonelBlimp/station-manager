@@ -67,6 +67,11 @@ export interface Ft8QsoStatus {
     /** Daemon-armed skip-if-silent (deferred Next): a silent cycle ends the
      *  session instead of keying the repeat. Confirm-by-push via ft8-qso. */
     skipArmed: boolean;
+    /** Daemon-pending Next on a Call-CQ contact: park this answerer at the next slot
+     *  evaluation and carry on with the run. Confirm-by-push via ft8-qso. Distinct
+     *  from skipArmed — that one ends the session on a SILENT cycle; this one fires
+     *  on a station that transmits but never advances. */
+    nextArmed: boolean;
     ourReport: string;
     theirReport: string;
     theirPeriod: string;
@@ -90,6 +95,7 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     repeats: 0,
     maxRepeats: 0,
     skipArmed: false,
+    nextArmed: false,
     ourReport: '',
     theirReport: '',
     theirPeriod: '',
@@ -535,6 +541,7 @@ export interface Ft8TxActions {
     workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult>;
     abandon(): Promise<Ft8TxResult>;
     skip(armed: boolean): Promise<Ft8TxResult>;
+    next(): Promise<Ft8TxResult>;
 }
 
 let txActions: Ft8TxActions | null = null;
@@ -581,6 +588,12 @@ export function abandonQso(): Promise<Ft8TxResult> {
  *  state renders from qso.skipArmed (confirm-by-push via ft8-qso). */
 export function skipQso(armed: boolean): Promise<Ft8TxResult> {
     return txActions ? txActions.skip(armed) : Promise.resolve(txUnavailable);
+}
+
+/** Move on from a stuck Call-CQ contact without ending the run (see nextFt8Answerer).
+ *  The pending state renders from qso.nextArmed (confirm-by-push via ft8-qso). */
+export function nextAnswerer(): Promise<Ft8TxResult> {
+    return txActions ? txActions.next() : Promise.resolve(txUnavailable);
 }
 
 /*
@@ -720,6 +733,7 @@ export const ft8Link: Ft8EventHandlers = {
             nextMessage: p.next_message ?? '',
             repeats: p.repeats ?? 0,
             skipArmed: p.skip_armed ?? false,
+            nextArmed: p.next_armed ?? false,
             maxRepeats: p.max_repeats ?? 0,
             ourReport: p.our_report ?? '',
             theirReport: p.their_report ?? '',

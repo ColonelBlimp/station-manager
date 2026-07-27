@@ -59,6 +59,9 @@ var (
 	// operator can act on the difference: Abandon ends this contact, whereas "no
 	// QSO" means the click missed entirely.
 	ErrRungNotSkippable = stderrors.New("ft8: this rung cannot be skipped")
+	// ErrNoAnswerer — Next was pressed with no answerer being worked. Distinct from
+	// ErrNoActiveQso: a Call-CQ run IS active while it is merely calling.
+	ErrNoAnswerer = stderrors.New("ft8: no answerer to move on from")
 )
 
 // seqMode is the active sequencer session: idle, answering a CQ (ex drives), or
@@ -146,6 +149,9 @@ type QsoStatus struct {
 	// SkipArmed — the operator armed skip-if-silent on this session (deferred
 	// Next): a silent cycle ends the session instead of keying the repeat.
 	SkipArmed bool `json:"skip_armed,omitempty"`
+	// NextArmed — the operator pressed Next on a Call-CQ contact: park this answerer
+	// at the next slot evaluation and carry on with the run.
+	NextArmed bool `json:"next_armed,omitempty"`
 	// MaxRepeats — the unanswered-rung repeat cap, set ONLY while the current rung is
 	// actually subject to it (an answerer pre-73, or a caller working an answerer
 	// pre-RR73). Zero (omitted) on the uncapped rungs (calling CQ) and the one-shot
@@ -324,7 +330,17 @@ type Sequencer struct {
 	// RF). Cleared when the partner advances us (they came back), on every
 	// session start, and on Abandon.
 	skipIfSilent bool
-	maxRepeats   int
+	// nextArmed — the operator pressed Next on a Call-CQ contact: park this answerer
+	// at the next slot evaluation, as if the repeat cap had just been reached.
+	//
+	// Deliberately NOT skipIfSilent, though the buttons look alike. Skip fires on a
+	// SILENT cycle; the case this exists for is a station that is transmitting — it
+	// re-sends the same rung and never advances — so a skip-shaped trigger would
+	// never fire here. The trigger is "did not advance", not "did not transmit".
+	// Cleared when the contact advances (the rung was not stuck after all), when it
+	// is consumed by a park, on completion, on Abandon, and at session start.
+	nextArmed  bool
+	maxRepeats int
 
 	// sessionGen is bumped on every session-identity change (StartQso /
 	// StartCallCq commit, Abandon). A final-rung onDone closure captures the gen
@@ -572,6 +588,7 @@ func (s *Sequencer) abandonLocked() (bool, string) {
 	s.confirmHold = nil
 	s.repeats = 0
 	s.skipIfSilent = false
+	s.nextArmed = false
 	return was, reason
 }
 
@@ -584,6 +601,25 @@ func (s *Sequencer) statusForTest() QsoStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.statusLocked()
+}
+
+// NextAnswerer short-circuits the remaining retries on a stuck Call-CQ contact: park
+// this answerer at the next slot evaluation, then work another live answerer or resume
+// CQ. Specified in nextanswerer_test.go.
+func (s *Sequencer) NextAnswerer() error {
+	s.mu.Lock()
+	// A CQ run that is merely CALLING has no contact to move on from, and neither
+	// does an answer/work session (whose Next is skip). Both are ErrNoAnswerer rather
+	// than ErrNoActiveQso: a Call-CQ run IS active.
+	if s.mode != seqCalling || s.caller == nil {
+		s.mu.Unlock()
+		return ErrNoAnswerer
+	}
+	s.nextArmed = true
+	st := s.statusLocked()
+	s.mu.Unlock()
+	s.publish(st)
+	return nil
 }
 
 // rungSkippableLocked reports whether the rung the session is CURRENTLY on has a
@@ -1332,6 +1368,7 @@ func (s *Sequencer) statusLocked() QsoStatus {
 	st := s.statusModeLocked()
 	if st.Active {
 		st.SkipArmed = s.skipIfSilent
+		st.NextArmed = s.nextArmed
 		// Session-pinned, not live rig state — see QsoStatus.DialFreqMHz.
 		st.DialFreqMHz = s.dialFreqMHz
 	}
