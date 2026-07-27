@@ -30,7 +30,35 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-26)
+## Current state (as of 2026-07-27)
+
+> **2026-07-27 — round 4 on the occupancy panel (uncommitted, SPA-only).** The
+> codex review of `0462eb7b` was right: dropping hub replay closed only the late-
+> SUBSCRIBER instance of the cross-band hazard. `occupancyBandByParity` stamps a
+> report with `rig.band` AS IT IS ON ARRIVAL, which is only correct if the rig held
+> that band for the whole slot the report measured — and after a QSY it did not.
+> The daemon publishes a slot's occupancy ~1 s after the slot ends, so the report
+> for the slot in progress at the moment of the QSY arrives stamped with the NEW
+> band, clears `occupancyStale`, and (via `effectiveOffset`'s fallback to
+> `suggested[0]`) can hand TX an offset never measured on the band we are on. That
+> is the same harm as rounds 2 and 3, through a third door — and it fires on EVERY
+> band change, not just on a refresh.
+>
+> Fix: `Ft8State.admitOccupancy` quarantines occupancy for two slot boundaries after
+> a genuine band change, anchored on the daemon slot the clock had reached
+> (`noteOperatingBand` arms it; the `$effect` in `Ft8View` already feeds that). The
+> straddling slot is +1, the first wholly-post-QSY slot is +2. **Both sides of the
+> comparison are DAEMON timestamps** — the report's `start_utc` against the slot the
+> daemon last reported — never `Date.now()`, which is precisely what made the
+> round-3 age gate able to blank the panel forever on a skewed host. When no slot
+> clock was running at the change (QSY made with the FT8 view closed) the first
+> report becomes the anchor and is itself rejected. The quarantine deliberately
+> survives `stopFt8`, like `lastSeenBand`. Cost: one extra empty slot after a QSY.
+>
+> Proven by reversion — with the gate neutered, the straddling report re-validates
+> the old band's picture (`hasOccupancy` true where it must be false). Gate green:
+> prettier / eslint / svelte-check 0 errors / **743 frontend tests**. No daemon
+> change in this round, so the pending deploy story is unchanged.
 
 > **2026-07-26 — the FT8 final-rung session. ~19 commits, all reviewed clean. The
 > daemon-side work IS deployed and was validated on air across ~148 QSOs with zero
@@ -112,6 +140,9 @@ precisely so we don't re-derive state or redo finished work.
 >     stale decode list is cosmetic and does not steer where we transmit. The cost
 >     is what `handler.go`'s own comment already accepted as the fallback: the next
 >     slot is ≤15 s away. No clocks, no window, no residual.
+>   - **Round 4 (2026-07-27, uncommitted) closed the QSY door** — see the block at
+>     the top of Current state. "No residual" above was wrong: replay was one of
+>     three doors, and the plain band change was the widest.
 >   - Worked panel `w-full` and the Session-tile Map removal (both inbox items,
 >     closed `b0025985`).
 > - **`5ea0ff60` HAS A WRONG COMMIT MESSAGE.** It claims to stop 401 being

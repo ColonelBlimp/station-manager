@@ -168,3 +168,87 @@ describe('Ft8Occupancy per-parity band guard', () => {
         expect(ft8State.suggested).toEqual([]);
     });
 });
+
+describe('Ft8Occupancy post-band-change quarantine', () => {
+    // The band tag alone is not enough: it stamps a report with rig.band AS IT IS ON
+    // ARRIVAL. After a QSY the reports still in the daemon's slot pipeline (and any a
+    // backgrounded tab flushes late) get stamped with the NEW band, which clears
+    // occupancyStale and lets effectiveOffset hand TX an offset measured elsewhere.
+    // In the app the $effect in Ft8View feeds noteOperatingBand; these drive it directly.
+
+    it('rejects the slot that straddles the band change', () => {
+        rig.band = '15m';
+        ft8State.noteOperatingBand('15m'); // first sighting — nothing to quarantine
+        ft8Link.onOccupancy(occupancy()); // slot 12:00:00, even, measured on 15m
+        flushSync();
+        expect(ft8State.suggested).toEqual([1500, 700]);
+
+        rig.band = '12m';
+        ft8State.noteOperatingBand('12m'); // QSY, anchored on slot 12:00:00
+        flushSync();
+        expect(ft8State.hasOccupancy).toBe(false);
+
+        // The next slot was already being captured when the rig moved, so its audio is
+        // part 15m and part 12m. Arriving now, it would be stamped 12m.
+        const straddling = occupancy();
+        straddling.slot.start_utc = '2026-07-10T12:00:15Z';
+        ft8Link.onOccupancy(straddling);
+        flushSync();
+
+        expect(ft8State.hasOccupancy).toBe(false);
+        expect(ft8State.suggested).toEqual([]);
+        // The load-bearing one: no 15m offset may reach TX by fallback.
+        expect(ft8State.effectiveOffset).toBeNull();
+    });
+
+    it('admits the first slot that began wholly after the change', () => {
+        rig.band = '15m';
+        ft8State.noteOperatingBand('15m');
+        ft8Link.onOccupancy(occupancy());
+        rig.band = '12m';
+        ft8State.noteOperatingBand('12m');
+        flushSync();
+
+        const clean = occupancy();
+        clean.slot.start_utc = '2026-07-10T12:00:30Z'; // two slot boundaries on
+        clean.suggested = [2200];
+        ft8Link.onOccupancy(clean);
+        flushSync();
+
+        expect(ft8State.hasOccupancy).toBe(true);
+        expect(ft8State.suggested).toEqual([2200]);
+        expect(ft8State.effectiveOffset).toBe(2200);
+    });
+
+    it('anchors on the first report when no slot clock was running at the change', () => {
+        // QSY made with the FT8 view closed, or while the stream was down: there is no
+        // slot to anchor on, and the first report back may itself be the straddling one.
+        rig.band = '15m';
+        ft8State.noteOperatingBand('15m');
+        rig.band = '12m';
+        ft8State.noteOperatingBand('12m');
+        flushSync();
+        expect(ft8State.occupancyQuarantine).toEqual({ active: true, sinceSlot: '' });
+
+        ft8Link.onOccupancy(occupancy()); // 12:00:00 — becomes the anchor, not the data
+        flushSync();
+        expect(ft8State.hasOccupancy).toBe(false);
+
+        const later = occupancy();
+        later.slot.start_utc = '2026-07-10T12:00:30Z';
+        ft8Link.onOccupancy(later);
+        flushSync();
+        expect(ft8State.hasOccupancy).toBe(true);
+    });
+
+    it('leaves reports alone when the band has not changed', () => {
+        rig.band = '20m';
+        ft8State.noteOperatingBand('20m');
+        ft8Link.onOccupancy(occupancy());
+        flushSync();
+
+        expect(ft8State.occupancyQuarantine.active).toBe(false);
+        expect(ft8State.hasOccupancy).toBe(true);
+        expect(ft8State.suggested).toEqual([1500, 700]);
+    });
+});
