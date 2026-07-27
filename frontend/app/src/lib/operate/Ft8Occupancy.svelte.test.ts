@@ -17,12 +17,9 @@ beforeEach(() => {
     rig.band = '20m'; // occupancy is band-scoped now; keep tests order-independent
 });
 
-// A LIVE report. The slot timestamp must be current: onOccupancy drops snapshots
-// older than three slots as replays, so a hardcoded date would make every fixture
-// look like a stale replay and test nothing.
-function occupancy(ageMs = 0): OccupancyPayload {
+function occupancy(): OccupancyPayload {
     return {
-        slot: { start_utc: new Date(Date.now() - ageMs).toISOString(), period: 'even' },
+        slot: { start_utc: '2026-07-10T12:00:00Z', period: 'even' },
         passband: { low_hz: 200, high_hz: 3000 },
         signal_width_hz: 50,
         occupied: [{ low_hz: 1000, high_hz: 1050 }],
@@ -143,25 +140,7 @@ describe('Ft8Occupancy empty states', () => {
     });
 });
 
-describe('Ft8Occupancy replay + per-parity band guards', () => {
-    // The daemon caches the last occupancy and replays it to a freshly-connected
-    // tab, and the payload carries no band — so after a QSY a browser refresh alone
-    // could stamp a pre-QSY snapshot with the NEW band and present it as current.
-    // effectiveOffset falls back to suggested[0], so that stale pick could become
-    // the transmit offset unprompted (codex P1 on 6088b931).
-    it('ignores a replayed snapshot from an old slot', () => {
-        ft8Link.onOccupancy(occupancy(10 * 60 * 1000)); // 10 minutes stale
-        flushSync();
-        expect(ft8State.hasOccupancy).toBe(false);
-        expect(ft8State.effectiveOffset).toBeNull();
-    });
-
-    it('accepts a snapshot from the slot that just ended', () => {
-        ft8Link.onOccupancy(occupancy(20 * 1000)); // one slot + decode latency
-        flushSync();
-        expect(ft8State.hasOccupancy).toBe(true);
-    });
-
+describe('Ft8Occupancy per-parity band guard', () => {
     // The two parities are independent snapshots. With ONE shared band tag, the
     // first report on the new band revalidated the other parity's old-band data —
     // and during a CQ run the TX parity is exactly the one that never refreshes.

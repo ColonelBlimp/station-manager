@@ -30,7 +30,11 @@ func TestHub_PublishFanout(t *testing.T) {
 	}
 }
 
-func TestHub_ReplaysBothCachedEventsOnSubscribe(t *testing.T) {
+// Occupancy must NOT be replayed while decode still is. The report carries no
+// band, so a late subscriber stamps a cached pre-QSY snapshot with the band the
+// rig is on NOW, and the SPA's effectiveOffset can then transmit on an offset
+// never measured on that band. A stale decode list is only cosmetic, so it stays.
+func TestHub_ReplaysDecodeButNeverOccupancyOnSubscribe(t *testing.T) {
 	h := newHub()
 	h.publish(decodeEvent("CQ K1ABC"))
 	h.publish(occEvent(2200))
@@ -39,16 +43,31 @@ func TestHub_ReplaysBothCachedEventsOnSubscribe(t *testing.T) {
 	defer unsub()
 
 	got := map[string]bool{}
-	for range []int{0, 1} {
+	for {
 		select {
 		case e := <-ch:
 			got[e.name] = true
+			continue
 		default:
-			t.Fatal("expected two replayed events")
 		}
+		break
 	}
-	if !got[EventDecode] || !got[EventOccupancy] {
-		t.Fatalf("replay missing an event type: %v", got)
+	if !got[EventDecode] {
+		t.Fatalf("decode should still be replayed to a late subscriber: %v", got)
+	}
+	if got[EventOccupancy] {
+		t.Fatal("occupancy was replayed — a late subscriber cannot tell it from a live slot")
+	}
+}
+
+// The cache itself is still maintained (LatestOccupancy reads it); only the
+// replay-on-subscribe was dropped. Guard that distinction so a future change
+// doesn't quietly restore the replay by way of the cache.
+func TestHub_StillCachesOccupancyDespiteNoReplay(t *testing.T) {
+	h := newHub()
+	h.publish(occEvent(1400))
+	if rep := h.latestOccupancy(); rep == nil || rep.Suggested[0] != 1400 {
+		t.Fatalf("latestOccupancy = %+v, want the published report cached", rep)
 	}
 }
 

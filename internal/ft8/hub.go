@@ -97,7 +97,21 @@ func (h *hub) subscribe() (<-chan hubEvent, func()) {
 	h.subs[id] = ch
 
 	// Replay cached events into the just-allocated buffer (non-blocking; cap>0).
-	for _, cached := range []*hubEvent{h.lastDecode, h.lastOccupancy, h.lastTx, h.lastQso} {
+	//
+	// OCCUPANCY IS DELIBERATELY NOT REPLAYED. The report carries no band, so a
+	// subscriber cannot tell a cached pre-QSY snapshot from a live one and stamps
+	// it with whatever band the rig is on NOW — and since the SPA's effectiveOffset
+	// falls back to suggested[0], that mislabelled snapshot can become the transmit
+	// offset on a band it was never measured on. The window is not exotic: capture
+	// lingers 5 s past the last unsubscribe, and a report is published ~16 s after
+	// its slot, so QSY-then-refresh lands squarely in it. Client-side age limits
+	// cannot close this (the timestamps come from two different clocks, and a
+	// threshold loose enough for decode latency is looser than the race).
+	// The cost of dropping it is exactly what this file's own header already
+	// accepts as the fallback: the next slot is ≤15 s away and refreshes the panel.
+	// Decode/tx/qso REMAIN cached — a stale decode list is cosmetic, it does not
+	// steer where we transmit.
+	for _, cached := range []*hubEvent{h.lastDecode, h.lastTx, h.lastQso} {
 		if cached != nil {
 			select {
 			case ch <- *cached:

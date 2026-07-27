@@ -112,13 +112,6 @@ let decodeSeq = 0;
 // so a saved value stays valid across bands.
 const OFFSET_KEY = 'sm.ft8.selectedOffset';
 
-/** How old an occupancy snapshot may be before it is treated as a replay rather
- *  than news — three FT8 slots. A live report describes audio from the slot that
- *  just ended and is published about one slot later, so ~30 s is the honest upper
- *  bound for fresh; the third slot is margin for decode latency and browser/daemon
- *  clock skew. See the gate in onOccupancy. */
-const maxOccupancyAgeMs = 45_000;
-
 function loadSelectedOffset(): number | null {
     try {
         const raw = localStorage.getItem(OFFSET_KEY);
@@ -598,18 +591,14 @@ export const ft8Link: Ft8EventHandlers = {
         // even and odd views stay distinct. A period-less payload (shouldn't happen)
         // fills both so it still shows.
         const occ = p.occupied ?? [];
-        // Drop a REPLAYED snapshot. The daemon's hub caches the last occupancy and
-        // hands it to a freshly-connected tab, and the payload carries no band — so
-        // after a QSY + reconnect (a browser refresh is enough) a pre-QSY snapshot
-        // would be stamped with the NEW band and read as current, defeating the
-        // check above (codex P1 on 6088b931). The slot timestamp is the only
-        // authority available client-side: a live report lands about one slot after
-        // the audio it describes, so anything materially older than that is a
-        // replay, not news. Deliberately fails OPEN on an unparseable timestamp —
-        // this guards staleness, it is not a validator, and the per-parity band tag
-        // still covers the cross-band case.
-        const slotAgeMs = Date.now() - Date.parse(p.slot?.start_utc ?? '');
-        if (Number.isFinite(slotAgeMs) && slotAgeMs > maxOccupancyAgeMs) return;
+        // No client-side staleness check here by design. Replayed snapshots are
+        // prevented at the SOURCE — the daemon's hub no longer replays occupancy to
+        // a late subscriber (internal/ft8/hub.go). An age limit here could not do
+        // the job anyway: start_utc is the DAEMON's clock and Date.now() the
+        // browser's, so a skewed host would silently discard every live report and
+        // leave the panel permanently empty, while any threshold loose enough for
+        // decode latency (~16 s) is looser than the QSY-then-refresh race it was
+        // meant to catch (codex P1+P2 on b0025985).
         const sug = p.suggested ?? [];
         const period = p.slot?.period;
         if (period === 'even' || period === 'odd') {

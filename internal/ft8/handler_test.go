@@ -161,12 +161,16 @@ func TestHTTPHandler_StreamsDecode(t *testing.T) {
 	t.Fatal("did not receive a complete ft8-decode SSE frame")
 }
 
-// TestHTTPHandler_ReplaysLatestToLateSubscriber confirms a tab connecting after
-// a slot was processed gets the cached report immediately (the one-slot replay
-// cache), not a 15 s wait.
-func TestHTTPHandler_ReplaysLatestToLateSubscriber(t *testing.T) {
+// TestHTTPHandler_ReplaysDecodeButNotOccupancy confirms the late-subscriber
+// replay path is wired (a tab connecting mid-session gets the cached decode
+// immediately rather than waiting up to 15 s) AND that occupancy is excluded
+// from it. Occupancy carries no band, so a replayed pre-QSY snapshot would be
+// read as current by the SPA and could steer the transmit offset onto a channel
+// never measured on the band now in use — see hub.subscribe.
+func TestHTTPHandler_ReplaysDecodeButNotOccupancy(t *testing.T) {
 	s, shutdownCh := newHandlerTestService(t)
 	s.hub.publish(hubEvent{name: EventOccupancy, payload: OccupancyReport{SignalWidthHz: 50, Suggested: []int{1234}}})
+	s.hub.publish(hubEvent{name: EventDecode, payload: DecodeReport{Decodes: []DecodeLine{{Text: "CQ K1ABC FN42"}}}})
 
 	srv := httptest.NewServer(s.HTTPHandler(shutdownCh))
 	t.Cleanup(srv.Close)
@@ -180,13 +184,27 @@ func TestHTTPHandler_ReplaysLatestToLateSubscriber(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
+	// Drain the WHOLE replay burst before asserting — do NOT stop at the decode.
+	// hub.subscribe replays in a fixed order with decode FIRST, so breaking early
+	// would return before any occupancy frame could arrive and the test would pass
+	// against the very behaviour it exists to forbid.
+	sawDecode, sawOccupancy := false, false
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
-		if strings.Contains(scanner.Text(), `"suggested":[1234]`) {
-			return
+		line := scanner.Text()
+		if strings.Contains(line, `"suggested":[1234]`) {
+			sawOccupancy = true
+		}
+		if strings.Contains(line, "CQ K1ABC FN42") {
+			sawDecode = true
 		}
 	}
-	t.Fatal("late subscriber did not receive the replayed cached report")
+	if sawOccupancy {
+		t.Fatal("occupancy was replayed to a late subscriber — it cannot be told from a live slot")
+	}
+	if !sawDecode {
+		t.Fatal("late subscriber did not receive the replayed cached decode")
+	}
 }
 
 // TestHTTPHandler_ShutdownChClosesStream confirms closing the daemon shutdown

@@ -101,13 +101,17 @@ precisely so we don't re-derive state or redo finished work.
 >     freshly-connected tab and the payload carries NO band, so a QSY plus a browser
 >     refresh stamped a pre-QSY snapshot as current. Fixed with per-parity band tags
 >     and a three-slot freshness gate.
->   - **Residual, not closed:** a QSY followed by a reload within 45 s can still slip
->     one snapshot through — after a reload there is no memory of when the QSY
->     happened. The complete fix is for the daemon to stamp the capture band on
->     `OccupancyReport`; that is NOT cheap today, because `Occupancy()` is a pure
->     audio computation and the dial freq reaches the daemon from the CLIENT via
->     `StartCallCq`, so plumbing rig state in would cross the narrow-import boundary
->     `internal/ft8` deliberately keeps.
+>   - **Round 3 killed the residual at the source.** The client-side age gate was
+>     wrong twice over: reports publish ~16 s after their slot and capture lingers
+>     5 s past the last unsubscribe, so QSY-then-refresh sat INSIDE any threshold
+>     loose enough for decode latency; and `start_utc` is the DAEMON's clock while
+>     `Date.now()` is the browser's, so a skewed host would silently discard every
+>     live report and leave the panel permanently empty (codex P1+P2 on `b0025985`).
+>     Gate deleted. **The daemon now simply does not replay occupancy to a late
+>     subscriber** (`internal/ft8/hub.go`) — decode/tx/qso still replay, because a
+>     stale decode list is cosmetic and does not steer where we transmit. The cost
+>     is what `handler.go`'s own comment already accepted as the fallback: the next
+>     slot is ≤15 s away. No clocks, no window, no residual.
 >   - Worked panel `w-full` and the Session-tile Map removal (both inbox items,
 >     closed `b0025985`).
 > - **`5ea0ff60` HAS A WRONG COMMIT MESSAGE.** It claims to stop 401 being
