@@ -250,6 +250,11 @@ func TestWriteFt8QsoError_Mapping(t *testing.T) {
 		{"no offset", ft8.ErrNoOffset, http.StatusBadRequest, "ft8_no_offset"},
 		{"bad message", ft8.ErrTxBadMessage, http.StatusBadRequest, "ft8_tx_bad_message"},
 		{"caller mode unsupported", ft8.ErrCallerAnswerModeUnsupported, http.StatusNotImplemented, "ft8_caller_mode_unsupported"},
+		// These two must stay DISTINCT on the wire: "there is no QSO" and "this rung
+		// cannot be skipped" are different facts, and the operator acts differently on
+		// them (start something / abandon what is running).
+		{"no active qso", ft8.ErrNoActiveQso, http.StatusConflict, "ft8_no_active_qso"},
+		{"rung not skippable", ft8.ErrRungNotSkippable, http.StatusConflict, "ft8_rung_not_skippable"},
 		{"unknown maps to generic 500", stderrors.New("boom: internal detail"), http.StatusInternalServerError, "internal_error"},
 	}
 	for _, tc := range cases {

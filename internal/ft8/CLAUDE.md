@@ -110,6 +110,26 @@ deleted within a round or two, while the behavioural ones caught real defects.
    Observable: after any ending completion the generation has moved on, and the
    terminal frame carries whatever reason was staged.
 
+7. **A control that stops RF is offered only where it can actually stop RF.**
+   Skip-if-silent means "if they do not come back, end the session instead of
+   repeating this rung" — a property of the RUNG, not of the session mode. The
+   code treated it as a mode, so every answer/work mode accepted an arm and the
+   status advertised `skip_armed`, while the skip check is only ever reached on
+   PRE-FINAL rungs: type-4 work (whose sole rung IS the terminal RR73) and any
+   ladder already on its final rung armed a stop that could never fire. A false
+   promise on the TX path is worse than no feature — this is the button pressed
+   when the operator wants the radio to stop. `rungSkippableLocked` enumerates the
+   pre-final rungs POSITIVELY and defaults to false, so a new mode must claim
+   skippability deliberately: failing safe costs an unavailable button, failing
+   open costs a stop that never comes. Refusing is the operator's decision
+   (2026-07-27) over inventing final-rung skip semantics — Abandon already ends a
+   contact, and a second meaning on the rung that decides whether a QSO logs is
+   not worth the ambiguity. The refusal is DISTINCT on the wire
+   (`ft8_rung_not_skippable` vs `ft8_no_active_qso`): "nothing is running" and
+   "this rung cannot be skipped" lead to different operator actions.
+   Observable: an arm the sequencer refused is never reported as armed, and
+   disarm is always accepted.
+
 **Corollary that cost three rounds:** if a behaviour test for one of these cannot
 be written without inventing a fact the system does not carry, the SYSTEM is
 missing that fact — do not settle for a threshold, an age check, or a heuristic in

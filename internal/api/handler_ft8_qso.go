@@ -358,9 +358,11 @@ func (s *Server) handleFt8QsoPath(w http.ResponseWriter, r *http.Request) {
 // deferred Next moved daemon-side, 2026-07-13): armed, a silent cycle on an
 // already-sent rung ends the session INSTEAD of keying the repeat — so a skip
 // never puts RF at a station the operator has decided to drop. Body
-// {"armed": bool}. 409 ft8_no_active_qso when arming with nothing skippable
-// (idle, or a Call-CQ run — its Next is an immediate takeover); disarm is
-// idempotent. The armed state comes back via the ft8-qso SSE (skip_armed).
+// {"armed": bool}. Arming is refused when the CURRENT RUNG has no skip path:
+// 409 ft8_no_active_qso when nothing is running, 409 ft8_rung_not_skippable when
+// a session is but is on a terminal rung (or a Call-CQ run, whose Next is an
+// immediate takeover). Disarm is always accepted. The armed state comes back via
+// the ft8-qso SSE (skip_armed).
 func (s *Server) handleFt8QsoSkip(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleFt8QsoSkip"
 	var req struct {
@@ -407,6 +409,13 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 	case stderr.Is(err, ft8.ErrNoActiveQso):
 		s.writeError(w, http.StatusConflict, "ft8_no_active_qso",
 			"no active QSO to arm a skip on", op)
+	case stderr.Is(err, ft8.ErrRungNotSkippable):
+		// Distinct from ft8_no_active_qso: a session IS running, but it is on a rung
+		// with no skip path (a terminal RR73/73), so an arm could never fire. Naming
+		// Abandon matters — the operator reaching for skip wants the radio to stop,
+		// and this is the control that does it here.
+		s.writeError(w, http.StatusConflict, "ft8_rung_not_skippable",
+			"this rung cannot be skipped — it is the closing message; use Abandon to end the contact", op)
 	case stderr.Is(err, ft8.ErrQsoInProgress):
 		s.writeError(w, http.StatusConflict, "ft8_qso_in_progress",
 			"a QSO is already in progress; abandon it first", op)

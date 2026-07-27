@@ -345,7 +345,7 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 - **Purpose:** Arm/disarm **skip-if-silent** on the active sequenced session (the operator's deferred Next, daemon-side): armed, a silent cycle on an already-transmitted rung ends the session **instead of keying the repeat** — no RF at a station the operator has decided to drop. **Only when FT8 is enabled.**
 - **Request:** Body `{"armed": bool}`.
 - **Response:** **202 Accepted**. The armed state rides the `ft8-qso` SSE as `skip_armed` (confirm-by-push); the skip firing publishes the idle status.
-- **Errors:** 400 malformed body; **409 `ft8_no_active_qso`** when arming with nothing skippable (idle, or a Call-CQ run — its Next is an immediate takeover). Disarm is idempotent (accepted even when idle).
+- **Errors:** 400 malformed body; **409 `ft8_no_active_qso`** when nothing is running; **409 `ft8_rung_not_skippable`** when a session IS running but sits on a rung with no skip path — a terminal RR73/73, or a Call-CQ run (its Next is an immediate takeover). Skippability is a property of the RUNG, not the session mode. Disarm is always accepted (idempotent, including when idle).
 - **Notes:** The arm clears itself when the partner replies (they came back), on session start, and on Abandon. Applies to answering + working sessions, standard and FD.
 
 ---

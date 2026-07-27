@@ -154,3 +154,107 @@ func TestIdleCompletion_CallCqIsNotAnIdleCompletion(t *testing.T) {
 		"a Call-CQ run does not end at a contact, so it has no idle completion to "+
 			"consume the reason — the teardown that staged it still owns it")
 }
+
+/*
+	SKIPPABILITY specification (2026-07-27, from the internal/ft8 package review).
+
+	Skip-if-silent means "if they do not come back, end the session instead of
+	repeating this rung". That is a property of the RUNG, not of the session mode —
+	and the code treated it as a mode. Every answer/work mode was accepted, and the
+	status then advertised SkipArmed, but skip is only ever checked on PRE-FINAL
+	rungs. So two states accepted an arm that could never fire:
+
+	  - type-4 work, whose sole rung IS the terminal RR73 (its own comment says
+	    "there is no skip-if-silent path to walk"); and
+	  - any ladder already sitting on its final rung.
+
+	The operator arms it, the UI says armed, and the rig keeps transmitting. A false
+	promise on the TX path is worse than no feature: it is the button you press when
+	you want the radio to stop.
+
+	Rejecting is the operator's decision (2026-07-27) over defining final-rung skip
+	semantics — Abandon already ends a contact, and giving skip a second meaning on
+	the rung that decides whether a QSO logs is not worth the ambiguity.
+
+	Rules:
+
+	  7. Arming is refused unless the CURRENT RUNG has a skip path.
+	  8. Disarming is always accepted — the session may have ended between the
+	     operator's click and the request, and reporting failure for "make sure it is
+	     off" is noise.
+	  9. A refusal says so distinctly: "this rung cannot be skipped" is a different
+	     fact from "there is no QSO", and the operator can act on the difference.
+	 10. A mode with no explicit skip path is NOT skippable. New modes fail safe —
+	     silently advertising a skip that never fires is the bug being fixed.
+*/
+
+func TestSkip_RefusedWhenTheRungHasNoSkipPath(t *testing.T) {
+	slot := time.Unix(0, 0).UTC().Format(time.RFC3339)
+	now := time.Unix(0, 0).UTC()
+
+	t.Run("type-4 work: its only rung is terminal", func(t *testing.T) {
+		s := newTestSeq(&seqRecorder{})
+		require.NoError(t, s.StartWorkCallerT4("7Q5MLV", "PJ4/NA2AA", "", 3, slot, 1500, 14.074, now))
+		require.True(t, s.Active(), "fixture: a session is running")
+
+		require.ErrorIs(t, s.SetSkipIfSilent(true), ErrRungNotSkippable,
+			"there is no pre-final rung to skip — arming would do nothing while the "+
+				"UI said it would")
+		require.False(t, s.statusForTest().SkipArmed,
+			"and nothing may advertise an arm that cannot fire")
+	})
+
+	t.Run("a ladder lingering on its final rung", func(t *testing.T) {
+		// A ladder only SITS on a final rung when that rung fails to reach the air —
+		// otherwise it completes and the session ends. asyncFail reproduces the
+		// reviewer's probe: arm skip after the first failed RR73 and the next silent
+		// cycle transmits RR73 again, because the skip check lives on the pre-final
+		// path and this rung is past it.
+		s := newTestSeq(&seqRecorder{asyncFail: true})
+		require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12, slot, 1500, 14.074, now))
+		driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC FN42", -12)})
+		driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC R-08", -11)})
+		require.True(t, s.Active(), "fixture: the RR73 did not transmit, so the contact stays put")
+
+		require.ErrorIs(t, s.SetSkipIfSilent(true), ErrRungNotSkippable,
+			"this rung has no skip path, so arming it would promise a stop that never comes")
+		require.False(t, s.statusForTest().SkipArmed)
+	})
+
+	t.Run("a pre-final rung is skippable", func(t *testing.T) {
+		s := newTestSeq(&seqRecorder{})
+		require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", slot, 1500, 14.074, now))
+		driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+
+		require.NoError(t, s.SetSkipIfSilent(true), "this rung repeats; skipping it is meaningful")
+		require.True(t, s.statusForTest().SkipArmed)
+	})
+
+	t.Run("a Call-CQ run is active but not skippable", func(t *testing.T) {
+		// A behaviour CHANGE this fix makes, pinned deliberately: Call-CQ used to
+		// refuse with ErrNoActiveQso, which was never true — a run IS active. Its
+		// Next is an immediate takeover (the SPA abandons instead), so the rung has
+		// no skip path, and the accurate refusal is the new one.
+		s := newTestSeq(&seqRecorder{})
+		require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "auto_first", "", now))
+		require.True(t, s.Active())
+
+		require.ErrorIs(t, s.SetSkipIfSilent(true), ErrRungNotSkippable)
+		require.False(t, s.statusForTest().SkipArmed)
+	})
+
+	t.Run("idle has nothing to skip", func(t *testing.T) {
+		s := newTestSeq(&seqRecorder{})
+		require.ErrorIs(t, s.SetSkipIfSilent(true), ErrNoActiveQso,
+			"no QSO at all is a different fact from a rung that cannot be skipped")
+	})
+
+	t.Run("disarming is always accepted", func(t *testing.T) {
+		s := newTestSeq(&seqRecorder{})
+		require.NoError(t, s.SetSkipIfSilent(false), "idle")
+
+		require.NoError(t, s.StartWorkCallerT4("7Q5MLV", "PJ4/NA2AA", "", 3, slot, 1500, 14.074, now))
+		require.NoError(t, s.SetSkipIfSilent(false),
+			"make-sure-it-is-off must never report failure, whatever rung we are on")
+	})
+}

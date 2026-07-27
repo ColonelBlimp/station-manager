@@ -53,6 +53,12 @@ var (
 	// ErrNoActiveQso: SetSkipIfSilent when no skippable session is active (idle, or
 	// a Call-CQ run — whose Next is an immediate takeover, not a deferred skip).
 	ErrNoActiveQso = stderrors.New("ft8: no active QSO to arm a skip on")
+	// ErrRungNotSkippable: there IS an active QSO, but the rung it is on has no
+	// skip path — type-4 work, whose sole rung is the terminal RR73, or any ladder
+	// already sitting on its final rung. Distinct from ErrNoActiveQso because the
+	// operator can act on the difference: Abandon ends this contact, whereas "no
+	// QSO" means the click missed entirely.
+	ErrRungNotSkippable = stderrors.New("ft8: this rung cannot be skipped")
 )
 
 // seqMode is the active sequencer session: idle, answering a CQ (ex drives), or
@@ -563,6 +569,56 @@ func (s *Sequencer) abandonLocked() (bool, string) {
 // than passed because the teardown runs through disarmTx, which owns the ordering
 // (clear armed -> cancel in-flight -> abandon) and must not grow a reason parameter
 // on every path that reaches it.
+// statusForTest snapshots the published status shape without a recorder (test seam).
+func (s *Sequencer) statusForTest() QsoStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.statusLocked()
+}
+
+// rungSkippableLocked reports whether the rung the session is CURRENTLY on has a
+// skip-if-silent path. Caller holds s.mu.
+//
+// Skippability belongs to the RUNG, not to the session mode — the distinction this
+// function exists to make. Skip means "if they do not come back, end the session
+// instead of repeating this rung", so it is meaningful only where a repeat is what
+// would otherwise happen AND a handler actually consults the flag. Treating it as a
+// mode accepted two states where neither holds: type-4 work, whose sole rung is the
+// terminal RR73, and any ladder already past its pre-final rungs. The operator armed
+// it, the status advertised SkipArmed, and the rig kept transmitting (package review
+// of internal/ft8, finding 1).
+//
+// The cases below mirror exactly where the handlers consult skipIfSilent. A mode
+// with no case is NOT skippable: a new mode must add itself here deliberately,
+// because failing safe costs an unavailable button while failing open costs a stop
+// that never comes — and the second is the one the operator presses when they want
+// the radio to stop.
+func (s *Sequencer) rungSkippableLocked() bool {
+	switch s.mode {
+	// Each case names the PRE-FINAL rung explicitly rather than "not the terminal
+	// one": a ladder gaining a rung should have to say whether it is skippable, not
+	// inherit an answer from a negation.
+	case seqAnswering:
+		return s.ex != nil && s.ex.State != txConfirming
+	case seqAnsweringFd:
+		return s.fdEx != nil && s.fdEx.State == fdCalling
+	case seqWorking:
+		return s.caller != nil && s.caller.State == cqReporting
+	case seqWorkingFd:
+		return s.fdWork != nil && s.fdWork.State == fdwReporting
+	case seqAnsweringT4:
+		return s.t4Ex != nil && s.t4Ex.State == t4Calling
+	case seqWorkingT4:
+		// The sole rung IS the terminal RR73 — its own handler says there is no
+		// skip path to walk.
+		return false
+	default:
+		// seqCalling (a Call-CQ run's Next is an immediate takeover, not a skip)
+		// and anything new.
+		return false
+	}
+}
+
 // peekPendingEndReason reports the staged reason without consuming it (test seam).
 func (s *Sequencer) peekPendingEndReason() string {
 	s.mu.Lock()
@@ -628,12 +684,15 @@ func (s *Sequencer) AbandonIfCurrent(gen uint64, reason string) bool {
 // click and the request). Publishes the updated status (confirm-by-push).
 func (s *Sequencer) SetSkipIfSilent(armed bool) error {
 	s.mu.Lock()
-	skippable := s.mode == seqAnswering || s.mode == seqAnsweringFd ||
-		s.mode == seqWorking || s.mode == seqWorkingFd ||
-		s.mode == seqAnsweringT4 || s.mode == seqWorkingT4
-	if armed && !skippable {
-		s.mu.Unlock()
-		return ErrNoActiveQso
+	if armed {
+		if s.mode == seqIdle {
+			s.mu.Unlock()
+			return ErrNoActiveQso
+		}
+		if !s.rungSkippableLocked() {
+			s.mu.Unlock()
+			return ErrRungNotSkippable
+		}
 	}
 	// Reaching here: either a valid arm (skippable) or a disarm (always ok).
 	s.skipIfSilent = armed
