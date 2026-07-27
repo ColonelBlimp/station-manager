@@ -133,6 +133,20 @@ precisely so we don't re-derive state or redo finished work.
 > LAST (after armed / in-flight / readiness) — placed first, it reported
 > `rig_dial_unknown` for a disarmed send and masked in-flight conflicts.
 >
+> **Round 12 (uncommitted): the pre-key refusal now retires the session.** The gate
+> fires inside the launched TX goroutine, so `seqTransmit` never sees the error and
+> its synchronous refuse-then-retire policy cannot run — a rung with no completion
+> callback (most of them) suppressed PTT and left the exchange running.
+> `startTransmission` gained an `onDialRefusal` hook, invoked strictly AFTER
+> `onDone` (retiring first bumps the generation and a Group A contact's callback
+> refuses — the a76f1f61 trap) and generation-scoped by the caller. Narrow by
+> design: only a frequency refusal retires; a key/play failure stays transient.
+>
+> **Severity note:** the finding read as an indefinite leak. It is bounded — the
+> NEXT rung's synchronous check catches the same condition, so the session
+> self-retired within a slot or two. The fix matters because invariant 5 should not
+> depend on a later rung happening to run.
+>
 > Rounds 4-8 were whack-a-mole because every fix reacted to an observed dial
 > TRANSITION; transitions can be missed, mis-timed, or attributed to the wrong
 > session. The invariant cannot be. **A codex P1 claiming a boundary QSY escapes

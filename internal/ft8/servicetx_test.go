@@ -2,6 +2,7 @@ package ft8
 
 import (
 	"context"
+	stderrors "errors"
 	"math"
 	"sync"
 	"testing"
@@ -25,7 +26,7 @@ func TestStartTransmission_PanicClearsInFlight(t *testing.T) {
 	done := make(chan bool, 1)
 	err := s.startTransmission("CQ G0XYZ IO91", 1500, 0, nil,
 		func(context.Context, *TxController) error { panic("boom in fn") },
-		func(ok bool) { done <- ok })
+		func(ok bool) { done <- ok }, nil)
 	require.NoError(t, err, "launch succeeds; the panic happens in the tracked goroutine")
 
 	select {
@@ -469,7 +470,7 @@ func TestStartTransmission_SupersededCommitRefused(t *testing.T) {
 	err := s.startTransmission("CQ G0XYZ IO91", 1500, 0,
 		func() bool { return false }, // stale generation — Abandon won the race
 		func(context.Context, *TxController) error { ran = true; return nil },
-		nil)
+		nil, nil)
 	require.ErrorIs(t, err, ErrTxSuperseded)
 	require.False(t, ran, "fn must never run for a refused commit")
 
@@ -1033,4 +1034,98 @@ func TestTransmitNext_ErrorPrecedence(t *testing.T) {
 	err := s.TransmitNext("CQ 7Q5MLV IO91", 1500)
 	require.ErrorIs(t, err, ErrTxNotArmed, "armed is checked before the dial")
 	require.NotErrorIs(t, err, ErrTxDialUnknown)
+}
+
+// TestStartTransmission_DialRefusalRetiresTheSession covers the ASYNCHRONOUS
+// refusal. The pre-key gate fires inside the launched TX goroutine, long after
+// seqTransmit returned, so its caller never sees the error and the synchronous
+// "refuse, then retire" policy cannot run. A failed frequency confirmation must
+// still end the session (invariant 5) — otherwise the exchange lingers, consuming
+// slots and blocking a new session (codex P1 on e0207074).
+//
+// The ordering assertion is the load-bearing one: retirement must come AFTER the
+// completion policy, because every completion callback is generation-guarded and
+// retiring first makes a Group A contact vanish.
+func TestStartTransmission_DialRefusalRetiresTheSession(t *testing.T) {
+	newSvc := func(t *testing.T) *Service {
+		t.Helper()
+		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+		s.SetDialSource(func() (float64, bool) { return 14.074, true })
+		require.NoError(t, s.ArmTx(true))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
+		require.True(t, s.seq.Active())
+		return s
+	}
+
+	t.Run("a non-final rung's refusal still ends the session", func(t *testing.T) {
+		s := newSvc(t)
+		gen := s.seq.currentGen()
+		done := make(chan struct{})
+
+		// onDone nil — a non-final rung, which is exactly the case with no
+		// completion policy to fall back on.
+		err := s.startTransmission("CQ 7Q5MLV IO91", 1500, 14.074,
+			func() bool { return true },
+			func(context.Context, *TxController) error { return ErrTxDialUnknown },
+			nil,
+			func() {
+				s.seq.AbandonIfCurrent(gen, "test")
+				close(done)
+			})
+		require.NoError(t, err, "the launch succeeds; the refusal happens in the goroutine")
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("the refusal never retired the session")
+		}
+		require.False(t, s.seq.Active(), "a session that cannot confirm its frequency must not linger")
+	})
+
+	t.Run("retirement runs after the completion policy, not before", func(t *testing.T) {
+		s := newSvc(t)
+		gen := s.seq.currentGen()
+		var order []string
+		done := make(chan struct{})
+
+		err := s.startTransmission("K1ABC 7Q5MLV 73", 1500, 14.074,
+			func() bool { return true },
+			func(context.Context, *TxController) error { return ErrTxDialUnknown },
+			func(bool) { order = append(order, "completion") },
+			func() {
+				order = append(order, "retire")
+				s.seq.AbandonIfCurrent(gen, "test")
+				close(done)
+			})
+		require.NoError(t, err)
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("the refusal never retired the session")
+		}
+		require.Equal(t, []string{"completion", "retire"}, order,
+			"retiring first bumps the generation and a Group A contact's callback refuses — "+
+				"the QSO would vanish")
+	})
+
+	t.Run("a transient failure leaves the session alone", func(t *testing.T) {
+		s := newSvc(t)
+		fired := make(chan struct{}, 1)
+
+		err := s.startTransmission("CQ 7Q5MLV IO91", 1500, 14.074,
+			func() bool { return true },
+			func(context.Context, *TxController) error { return stderrors.New("device busy") },
+			nil,
+			func() { fired <- struct{}{} })
+		require.NoError(t, err)
+
+		select {
+		case <-fired:
+			t.Fatal("a play/key failure is transient — each ladder decides whether to retry it")
+		case <-time.After(300 * time.Millisecond):
+		}
+		require.True(t, s.seq.Active(), "the session survives a transient transmit failure")
+		s.AbandonQso()
+	})
 }

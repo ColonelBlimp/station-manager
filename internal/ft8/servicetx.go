@@ -347,10 +347,12 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	// nominal +0.5 s — right for a manually-initiated CQ (we pick our own slot/
 	// parity, so we start on time with no truncation). dialMHz 0 — a manual transmit
 	// has no session dial, so the decode-log TX line omits the band.
-	// nil commitOK — a manual transmit has no sequencer session to validate.
+	// nil commitOK — a manual transmit has no sequencer session to validate, and
+	// nil onDialRefusal for the same reason: there is no session to retire, and a
+	// stale one from an earlier exchange must not be touched.
 	return s.startTransmission(message, offsetHz, 0, nil, func(ctx context.Context, ctrl *TxController) error {
 		return ctrl.TransmitSlot(ctx, message, offsetHz)
-	}, nil)
+	}, nil, nil)
 }
 
 // seqTransmit transmits a sequencer rung in the CURRENT slot on the synchronised
@@ -419,7 +421,11 @@ func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, gen uin
 	commitOK := func() bool { return s.seq.isCurrent(gen) }
 	return s.startTransmission(message, offsetHz, dialMHz, commitOK, func(ctx context.Context, ctrl *TxController) error {
 		return ctrl.TransmitCurrentSlot(ctx, message, offsetHz)
-	}, onDone)
+	}, onDone, func() {
+		// Generation-scoped so a refusal belonging to this rung can never end a
+		// session that replaced it.
+		s.seq.AbandonIfCurrent(gen, "rig dial no longer confirmed at keying time")
+	})
 }
 
 // startTransmission runs one transmission through the armed controller under the
@@ -434,6 +440,7 @@ func (s *Service) startTransmission(
 	commitOK func() bool,
 	fn func(ctx context.Context, ctrl *TxController) error,
 	onDone func(ok bool),
+	onDialRefusal func(),
 ) error {
 	const op errors.Op = "ft8.Service.startTransmission"
 
@@ -537,6 +544,21 @@ func (s *Service) startTransmission(
 			// NOT complete on air, so the QSO must not be logged.
 			if onDone != nil {
 				onDone(normal && txErr == nil)
+			}
+			// The pre-key gate refuses INSIDE this goroutine, long after
+			// seqTransmit returned, so its caller never sees the error and the
+			// synchronous "refuse, then retire the session" policy cannot run. A
+			// failed frequency confirmation must still end the session (invariant
+			// 5): otherwise the exchange lingers — consuming slots, blocking a new
+			// session, and resuming if the dial happens to come back — until the
+			// NEXT rung's synchronous check catches it (codex P1 on e0207074).
+			//
+			// Ordering is the whole point: strictly AFTER onDone. Every completion
+			// callback is generation-guarded, so retiring first makes a Group A
+			// contact's callback refuse and the QSO vanish — the same trap as
+			// a76f1f61. The retirement itself is generation-scoped by the caller.
+			if onDialRefusal != nil && isDialRefusal(txErr) {
+				onDialRefusal()
 			}
 		}()
 
@@ -952,6 +974,14 @@ func (s *Service) exchangePath() string {
 // Refusing here aborts the transmission without keying; startTransmission's
 // failure path still runs the completion callback, so a Group A contact is
 // recorded on its pinned frequency rather than lost (invariant 1).
+// isDialRefusal reports whether a transmission failed because the daemon could no
+// longer confirm the rig's frequency — the two sentinels preKeyDialCheck returns.
+// Deliberately narrow: a key or play failure is transient and each ladder already
+// decides whether to retry it, so only a frequency refusal retires the session.
+func isDialRefusal(err error) bool {
+	return stderrors.Is(err, ErrTxDialUnknown) || stderrors.Is(err, ErrTxSuperseded)
+}
+
 func (s *Service) preKeyDialCheck() error {
 	const op errors.Op = "ft8.Service.preKeyDialCheck"
 	cur, tracked, known := s.dialState()

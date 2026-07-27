@@ -68,7 +68,12 @@ deleted within a round or two, while the behavioural ones caught real defects.
    Observable: no decode rows, no spots, no sequencer advance from such a slot.
 
 5. **A session ends only by: operator abandon, disarm, its completion policy, or
-   a failed frequency confirmation.** Nothing else may retire one, and anything
+   a failed frequency confirmation — INCLUDING one that fires asynchronously.**
+   The pre-key gate refuses inside the launched TX goroutine, so its caller cannot
+   run the synchronous refuse-then-retire policy; `startTransmission` carries an
+   `onDialRefusal` hook for exactly that, invoked strictly AFTER the completion
+   callback. Without it a rung with no completion policy (most of them) suppressed
+   PTT and left the exchange running (codex P1 on e0207074). Nothing else may retire one, and anything
    that does must be generation-scoped (`AbandonIfCurrent`) so it cannot end a
    session that replaced it. *An unconditional abandon driven by a stale capture
    slot killed a valid session started on the new dial in the meantime.*
