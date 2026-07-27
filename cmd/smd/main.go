@@ -698,15 +698,23 @@ func run() error {
 		// deliberately unused here.
 		launchFt8QsoLog(&qsoLogWG, ft8LogPanic, func(ctx context.Context) {
 			snap := cfgSvc.Snapshot()
-			// Authoritative frequency: the rig's live dial from the bridge, NOT the
-			// SPA's start-time snapshot (c.DialFreqMHz). The SPA value is captured once
-			// when the session starts and reused for every QSO — across a whole Call-CQ
-			// pile-up — so it goes stale (e.g. logged before the IC-7300's freq poll had
-			// landed, producing wrong-band QSOs). The bridge is on frequency; prefer it,
-			// falling back to the SPA value only when the bridge has no dial yet.
-			if dialMHz, ok := bridgeSvc.CurrentDialMHz(); ok {
-				c.DialFreqMHz = dialMHz
-			}
+			// Authoritative frequency: c.DialFreqMHz, which internal/ft8 now stamps
+			// from the dial the SESSION pinned (read from the bridge at start).
+			//
+			// This used to prefer a LIVE bridge read, because the value the SPA sends
+			// at start goes stale across a Call-CQ pile-up (logged before the IC-7300's
+			// freq poll had landed, producing wrong-band QSOs). The session pin fixes
+			// that at the source and is strictly better: a start is refused while the
+			// dial is unreadable, and a QSY during the session ends the session — so
+			// the pin is always a real reading of where the contact happened. A live
+			// read is now the WRONG answer in the one case they differ: a contact
+			// completed just before a QSY would be filed on the new band.
+			//
+			// The live read stays only as a fallback for a completion carrying no
+			// pinned dial at all (no CAT — where the read is unavailable too, so this
+			// is close to dead code, kept so an unpinned path degrades rather than
+			// logs zero).
+			c.DialFreqMHz = resolveQsoDialMHz(c.DialFreqMHz, bridgeSvc.CurrentDialMHz)
 			// Log to the logbook PINNED at arm (c.LogbookID, ADR 0055) — NOT the
 			// current default — so a mid-exchange logbook switch can't relabel or
 			// misroute the QSO. STATION_CALLSIGN is then derived by qsoservice.Submit
@@ -1037,6 +1045,34 @@ func run() error {
 	hub.Close()
 
 	return runErr
+}
+
+// resolveQsoDialMHz decides the frequency a completed FT8 contact is logged on.
+//
+// The PINNED value wins: internal/ft8 stamps it from the dial the session read off
+// the rig at start, so it is the frequency the contact actually happened on. A live
+// read is the wrong answer in the one case they differ — a contact completed just
+// before a QSY would be filed on the band we moved to, and that wrong-band row is
+// forwarded to QRZ and ClubLog (codex P1 on 652821db).
+//
+// This used to prefer the live read, because the dial the SPA sends at session start
+// goes stale across a Call-CQ pile-up (logged before the IC-7300's freq poll had
+// landed, producing wrong-band QSOs). The session pin fixes that at the source: a
+// start is refused while the dial is unreadable, and a QSY during the session ends
+// the session, so the pin is always a real reading. live() therefore only covers a
+// completion carrying no pin at all (no CAT — where it is unavailable too), kept so
+// an unpinned path degrades rather than logging zero.
+func resolveQsoDialMHz(pinnedMHz float64, live func() (float64, bool)) float64 {
+	if pinnedMHz != 0 {
+		return pinnedMHz
+	}
+	if live == nil {
+		return 0
+	}
+	if mhz, ok := live(); ok {
+		return mhz
+	}
+	return 0
 }
 
 // launchFt8QsoLog runs one completed-FT8-exchange log+enrich job off the decode

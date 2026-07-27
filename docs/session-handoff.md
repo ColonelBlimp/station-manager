@@ -92,6 +92,34 @@ precisely so we don't re-derive state or redo finished work.
 >    session. `finalrung.go` already documents this exact hazard (from `3c1ee047` /
 >    `a301d350`) and publishes under `s.mu`; now this does too.
 >
+> **Round 10 (uncommitted): five TX/attribution INVARIANTS written down**, in
+> `internal/ft8/CLAUDE.md` so they auto-load in the package where they were being
+> missed (pointer from `docs/ft8.md`; the canonical list is not duplicated). Every
+> P1 in this arc violated one of them. They are stated in operator-observable terms
+> — a logged row, RF keyed or not, a published status, a spot emitted — because the
+> field-level assertions from this arc were all deleted within a round or two while
+> the behavioural ones caught real defects.
+>
+> Round 10 also fixed two more P1s, and the first is a direct vindication of that
+> shift: preserving the QSO across a refused final rung filed it **on the band we
+> moved to** — the sink preferred a LIVE dial read over the session's — so a
+> wrong-band row would have been forwarded to QRZ and ClubLog. Worse than losing it.
+> The session's pinned dial is now stamped onto the completion
+> (`stampCompletionPath`, the seam already used for Service-owned completion facts)
+> and the sink prefers it, via an extracted, unit-tested `resolveQsoDialMHz`. The
+> old live-read preference existed because the CLIENT dial went stale across a
+> Call-CQ pile-up; the pin has neither problem. Second P1: `TransmitNext` never went
+> through `sessionTxGate`, so manual `/v1/ft8/tx/send` kept keying with an
+> unreadable dial — now gated, which also makes the `ErrTxDialUnknown` mapping in
+> `handler_ft8_tx.go` reachable.
+>
+> **The review caught a hole in the invariants within an hour of writing them:**
+> "logged exactly once" was satisfied by a wrong-band row. Invariant 1 now says
+> "…ON THE FREQUENCY IT HAPPENED ON", and invariant 2 now binds manual sends. And
+> the first version of the preservation test only COUNTED callbacks — it passed
+> against the reverted code. Rewritten to assert the logged frequency, with a
+> deliberately-wrong client dial so it exercises the stamp.
+>
 > Rounds 4-8 were whack-a-mole because every fix reacted to an observed dial
 > TRANSITION; transitions can be missed, mis-timed, or attributed to the wrong
 > session. The invariant cannot be. **A codex P1 claiming a boundary QSY escapes

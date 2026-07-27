@@ -899,3 +899,71 @@ func TestSeqTransmit_RefusesWhenTheDialCannotBeRead(t *testing.T) {
 		require.False(t, s.seq.Active())
 	})
 }
+
+// TestDialGuard_LogsTheContactOnTheFrequencyItHappenedOn is the behavioural
+// counterpart to the preservation test above, and exists because that one was too
+// weak: it counted callbacks. Counting proved the contact was not LOST, but said
+// nothing about what was recorded — and a completion landing after a QSY was being
+// filed on the new band, which is worse than losing it (the wrong-band row is
+// forwarded to QRZ and ClubLog). Assert the observable the operator actually cares
+// about: the frequency on the logged QSO.
+//
+// Drives the REAL Group A completion policy and the REAL Service completion stamp;
+// only the transmit itself is faked, so no RF machinery or timing is involved.
+func TestDialGuard_LogsTheContactOnTheFrequencyItHappenedOn(t *testing.T) {
+	dial := 14.074
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	s.SetDialSource(func() (float64, bool) { return dial, true })
+
+	// Real completion policy + real Service stamp, fake transmit.
+	r := &seqRecorder{}
+	stamp := s.seq.prepareComplete
+	s.seq = newTestSeq(r)
+	s.seq.prepareComplete = stamp
+
+	var logged []CompletedQso
+	s.seq.onComplete = func(c CompletedQso) { logged = append(logged, c) }
+
+	require.NoError(t, s.ArmTx(true))
+	// Pin the session's dial the way a real start does (sessionTxGate reads the rig).
+	require.NoError(t, s.sessionTxGate("test"))
+	// The CLIENT-supplied dial is deliberately wrong here. It is the value that
+	// used to reach the logbook, and it is exactly what goes stale across a
+	// Call-CQ pile-up; the daemon's own reading must win.
+	require.NoError(t, s.seq.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 21.074, time.Unix(0, 0).UTC()))
+
+	// Work K1ABC to the point where they roger: the contact is now complete for us.
+	driveTheir(s.seq, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+	driveTheir(s.seq, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+
+	dial = 7.074 // QSY before our closing 73 goes out
+
+	driveTheir(s.seq, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
+
+	require.Len(t, logged, 1, "a rogered contact is logged exactly once")
+	require.InDelta(t, 14.074, logged[0].DialFreqMHz, 1e-9,
+		"the contact happened on 14.074 (the rig's own reading when the session started) — "+
+			"not the stale 21.074 the client supplied, and not the 7.074 we moved to")
+}
+
+// A manual send keys the rig, so it clears the same bar as a session rung: SM does
+// not transmit on a frequency it cannot corroborate. TransmitNext does not go
+// through sessionTxGate (a manual send is not a session), so this was keying with
+// an unreadable dial (codex P1 on 652821db).
+func TestTransmitNext_RefusedWhenTheDialCannotBeRead(t *testing.T) {
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	s.SetDialSource(func() (float64, bool) { return 0, false })
+	require.NoError(t, s.ArmTx(true))
+
+	require.ErrorIs(t, s.TransmitNext("CQ 7Q5MLV IO91", 1500), ErrTxDialUnknown)
+	require.False(t, s.txInFlightNow(), "nothing may have been keyed")
+
+	// With no CAT at all the check is inert — that deployment cannot key anyway,
+	// and the keyer owns readiness.
+	s2 := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil) // no dial source
+	require.NoError(t, s2.ArmTx(true))
+	require.NotErrorIs(t, s2.TransmitNext("CQ 7Q5MLV IO91", 1500), ErrTxDialUnknown)
+	s2.AbandonQso()
+	_ = s2.ArmTx(false)
+}

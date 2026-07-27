@@ -11,6 +11,11 @@
 > is the single place the FT8 picture is captured; keep it current as the TX
 > layers land.
 
+> **TX + attribution invariants** (what must never break on the transmit and
+> slot-attribution paths, and why) live in **`internal/ft8/CLAUDE.md`**, so they
+> auto-load when working in that package — which is where they were being missed.
+> Read them before changing the TX or slot path; they are not repeated here.
+
 ## 1. What it is
 
 SM links **go-ft8** (`github.com/ColonelBlimp/go-ft8`, GPL-3.0-only, a WSJT-X/jt9

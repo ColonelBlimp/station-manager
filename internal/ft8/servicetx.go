@@ -337,6 +337,17 @@ func (s *Service) TransmitNext(message string, offsetHz float64) error {
 	// startTransmission so the no-session decision and the txInFlight commit can't
 	// be split by a concurrent StartQso. (StartQso already drives startTransmission
 	// under seqGate via fireOpening, so this nesting is the established order.)
+	// A manual send keys the rig too, so it clears the same bar as a session rung:
+	// SM does not transmit on a frequency it cannot corroborate. sessionTxGate does
+	// this for sequenced starts, and TransmitNext deliberately does NOT go through
+	// it (a manual send is not a session), so the check has to be repeated here —
+	// without it /v1/ft8/tx/send kept keying with an unreadable dial and the
+	// ErrTxDialUnknown mapping in handler_ft8_tx.go was unreachable (codex P1 on
+	// 652821db). There is no session dial to compare against; knowing where we are
+	// IS the bar, and it is also what labels the decode log's TX line.
+	if _, tracked, known := s.dialState(); tracked && !known {
+		return errors.New(op).WithErr(ErrTxDialUnknown)
+	}
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
 	if s.seq.Active() {
@@ -932,6 +943,21 @@ func (s *Service) stampCompletionPath(c *CompletedQso) {
 	c.AntPath = p
 	c.antPathGen = s.exchPathGen
 	c.antPathStamped = true
+	// Stamp the frequency the contact actually happened on: the dial this SESSION
+	// pinned, read from the rig at start. A contact is logged on the frequency it
+	// was made on, not on wherever the rig is when the completion lands — and
+	// those differ exactly when a QSY refused the closing rung, which is the case
+	// that made us preserve the QSO in the first place. Storing it on the new band
+	// would be worse than losing it: the wrong-band row is forwarded to QRZ and
+	// ClubLog and has to be chased down by hand (codex P1 on 652821db).
+	//
+	// This supersedes the sink's old live-dial read, which existed because the
+	// CLIENT-supplied dial went stale across a Call-CQ pile-up. The pin has neither
+	// problem: it comes from the bridge, a start is refused outright while the dial
+	// is unreadable, and a QSY during the session ends the session.
+	if s.sessionDialMHz != 0 {
+		c.DialFreqMHz = s.sessionDialMHz
+	}
 	s.txMu.Unlock()
 }
 

@@ -73,3 +73,33 @@ func TestLaunchFt8QsoLog_ContextDecoupledFromDecodeLoop(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestResolveQsoDialMHz pins which frequency a completed FT8 contact is logged on.
+// The session's pinned dial wins over a live rig read: they differ exactly when the
+// operator QSYed between the contact completing and its closing rung, and filing it
+// on the band we moved to is worse than not filing it — the wrong-band row is
+// forwarded to QRZ and ClubLog (codex P1 on 652821db).
+func TestResolveQsoDialMHz(t *testing.T) {
+	live := func(mhz float64, ok bool) func() (float64, bool) {
+		return func() (float64, bool) { return mhz, ok }
+	}
+	cases := []struct {
+		name   string
+		pinned float64
+		live   func() (float64, bool)
+		want   float64
+	}{
+		{"pinned wins over a live read that has moved on", 14.074, live(7.074, true), 14.074},
+		{"pinned wins even when they agree", 14.074, live(14.074, true), 14.074},
+		{"no pin falls back to the live read", 0, live(7.074, true), 7.074},
+		{"no pin and no live read logs nothing rather than zero-as-truth", 0, live(0, false), 0},
+		{"no pin and no source at all", 0, nil, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveQsoDialMHz(tc.pinned, tc.live); got != tc.want {
+				t.Errorf("resolveQsoDialMHz(%v) = %v, want %v", tc.pinned, got, tc.want)
+			}
+		})
+	}
+}
