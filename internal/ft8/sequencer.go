@@ -494,6 +494,18 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 // disarm, or off-ramp). Idempotent.
 func (s *Sequencer) Abandon() {
 	s.mu.Lock()
+	was := s.abandonLocked()
+	s.mu.Unlock()
+	if was {
+		s.log.InfoWith().Msg("ft8 seq: session abandoned")
+		s.publish(QsoStatus{Active: false})
+	}
+}
+
+// abandonLocked clears the session state and retires its generation. Returns
+// whether a session was actually active, so the caller can decide about logging
+// and the idle publish (which must happen with s.mu released).
+func (s *Sequencer) abandonLocked() bool {
 	was := s.mode != seqIdle
 	s.mode = seqIdle
 	s.sessionGen++ // supersede any in-flight final-rung callback (review follow-up M1)
@@ -506,11 +518,38 @@ func (s *Sequencer) Abandon() {
 	s.confirmHold = nil
 	s.repeats = 0
 	s.skipIfSilent = false
+	return was
+}
+
+// currentGen returns the live session generation (test seam + guard callers).
+func (s *Sequencer) currentGen() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionGen
+}
+
+// AbandonIfCurrent abandons the session ONLY when gen is still the live session
+// generation — the check and the clear happen under one lock hold, so a rung that
+// lost its race can never kill the session that replaced it.
+//
+// This is the difference between ending "the session this rung belongs to" and
+// ending "whatever session happens to be active right now". The latter killed a
+// valid session started on a new dial while a stale slot was still being
+// processed (codex P1 on c6b8a15d), so every conditional abandon goes through
+// here. reason is logged, not published — the operator sees the idle status.
+func (s *Sequencer) AbandonIfCurrent(gen uint64, reason string) bool {
+	s.mu.Lock()
+	if s.sessionGen != gen {
+		s.mu.Unlock()
+		return false
+	}
+	was := s.abandonLocked()
 	s.mu.Unlock()
 	if was {
-		s.log.InfoWith().Msg("ft8 seq: session abandoned")
+		s.log.InfoWith().Str("reason", reason).Msg("ft8 seq: session abandoned")
 		s.publish(QsoStatus{Active: false})
 	}
+	return was
 }
 
 // SetSkipIfSilent arms (or disarms) the skip-if-silent intent on the active

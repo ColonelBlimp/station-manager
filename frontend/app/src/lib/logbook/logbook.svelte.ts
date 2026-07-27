@@ -145,11 +145,12 @@ class LogbookState {
     }
 
     /** Whether the picked destination records a per-QSO upload stamp, i.e.
-     *  whether the gap view ("not on X") is answerable for it at all. A row
-     *  mirror like SM Cloud keeps a full copy and stamps nothing, so the daemon
-     *  rejects missing_from for it — sending it anyway was a guaranteed 400
-     *  (dogfood 2026-07-27). It stays a valid upload TARGET; the operator just
-     *  sees the whole logbook while it is selected. */
+     *  whether the gap view ("not on X") is answerable for it at all. The daemon
+     *  rejects missing_from for a type that records none, so sending it anyway
+     *  was a guaranteed 400 (dogfood 2026-07-27). Such a destination stays a
+     *  valid upload TARGET; the operator just sees the whole logbook while it is
+     *  selected. SM Cloud is the case in practice — a row mirror holding a full
+     *  copy — but "no stamp" does not imply mirroring; see hasUploadStamp. */
     get destinationTracksUploads(): boolean {
         const f = this.forwarders.find((x) => x.name === this.selectedDestination);
         return f !== undefined && hasUploadStamp(f.type);

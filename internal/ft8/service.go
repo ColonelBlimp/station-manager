@@ -138,7 +138,12 @@ type Service struct {
 	txMessage  string // message of the in-flight transmission ("" = none)
 	txOffsetHz float64
 	txDialMHz  float64 // dial of the in-flight transmission, for the keyed-time decode-log TX line
-	txLastErr  string  // i18n code of the last failed transmission ("" = none)
+	// sessionDialMHz is the dial the DAEMON read when the active session started
+	// (0 = it had none). The TX-safety invariant compares it against a live read
+	// before every rung — see seqTransmit. Pinned in sessionTxGate, the shared
+	// preamble of every Start*; NOT the client-supplied dial carried for logging.
+	sessionDialMHz float64
+	txLastErr      string // i18n code of the last failed transmission ("" = none)
 	// exchPath is the operator's antenna-path choice for the active exchange
 	// ("S"/"L"); logging-only. Lifecycle (review 2026-07-20 #5 + round 12 #3):
 	// atomically CONSUMED before each session start (restored on a rejected
@@ -788,37 +793,30 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// key an answer on A at a station that is not there, and the PSK Reporter
 		// sink stamps dial+offset at sink time, publishing wrong spots to a public
 		// network. So a moved slot is treated exactly like a TX slot: no decode,
-		// which leaves msgs empty all the way down — nothing to the sequencer,
-		// nothing to the decode log, nothing to the spot sink — while the empty
-		// report below still ticks the SPA's slot clock.
+		// which leaves msgs empty — nothing to the decode log, nothing to the spot
+		// sink — while the empty report below still ticks the SPA's slot clock.
+		// The SEQUENCER is a separate skip below, deliberately: empty is not the
+		// same as nothing there. It reads an empty slot as "they said nothing",
+		// which is a claim it acts on. Conflating the two in this comment is what
+		// hid that gap for a round (codex P1 on 97565b03).
 		//
 		// Deliberately keyed on MOVED, not on the wider unplaceable below: a dial
 		// that was never known does not imply a band change, and suppressing
 		// decodes for it would blind Band Activity on any rig whose frequency the
 		// bridge cannot read, which is a far worse failure than an unattributed
 		// occupancy panel.
+		// Ending the SESSION on a dial move used to live here and is gone: it
+		// abandoned whichever session was active when this slot was PROCESSED, not
+		// the one that was live during the window it describes — so a QSY followed
+		// by Call CQ inside the same slot had its brand-new, perfectly valid
+		// session killed at the next boundary (codex P1 on c6b8a15d). It also
+		// bypassed AbandonQso's seqGate and in-flight cancellation.
+		//
+		// TX safety is now the INVARIANT check in seqTransmit — the rig must still
+		// be on the dial the session pinned — which cannot be defeated by a missed,
+		// late or mis-attributed transition, and leaves a session started on the new
+		// dial alone. This flag now governs only what we PUBLISH from this slot.
 		dialMoved := slot.DialChanged
-		if dialMoved {
-			// An FT8 exchange lives on ONE dial frequency: the partner is in our
-			// receiver only while we stay there, and the session logs the dial it
-			// pinned at start. Moving the dial ends the contact physically, so the
-			// daemon ends it too.
-			//
-			// Without this, the suppression below is not enough — it is worse than
-			// nothing. Empty decodes are NOT a sequencer no-op: onSlotAnswering
-			// reads them as "they said nothing", repeats the rung, and KEYS in the
-			// next slot. So a QSY during a receive window would transmit at a
-			// station no longer in our passband and log the contact on the
-			// frequency we left. Skipping just the moved slot only delays that by
-			// one slot, because every settled slot on the new frequency is silence
-			// too (codex P1 on 97565b03).
-			//
-			// Nothing loggable is lost: a contact already complete for us was
-			// logged and retired at its final rung (finalrung.go), and an
-			// incomplete one has nothing to log. Abandon is idempotent and a no-op
-			// when idle.
-			s.seq.Abandon()
-		}
 
 		// Skip decode + occupancy for a slot we transmitted in: the captured audio is
 		// our own TX (rig bleed). Decoding it wastes ~1 s and can surface garbled bleed
@@ -854,8 +852,9 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// A dial-moved slot is NOT driven at all — not even with empty decodes. We
 		// could not hear that window, and "we heard nothing" is a claim the
 		// sequencer acts on (repeat the rung, then key). Silence has to be
-		// observed, not assumed. The Abandon above has already ended any session,
-		// so this is belt-and-braces for the idle case and for the ordering.
+		// observed, not assumed. Unlike the session-ending rule this replaced, this
+		// is safe to apply unconditionally: skipping one slot costs a session
+		// started meanwhile nothing but that slot.
 		if !dialMoved {
 			s.seq.OnSlot(ref, msgs, time.Now().UTC())
 		}
@@ -881,11 +880,16 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// cannot steer anything.
 		unplaceable := slot.DialTracked && slot.DialMHz == 0
 		// The sticky-offset carry resets on ANY change of frequency, not just a
-		// mid-window move: a QSY landing on a slot boundary produces two cleanly
-		// attributed slots with no move to catch it. stickySuggested re-vets the
-		// carried offset against the new band's occupancy so the ★ is always
-		// genuinely clear either way — but preferring an offset because it was
-		// good on 20 m is arbitrary on 40 m.
+		// mid-window move — a settled slot on a new frequency still ends the old
+		// band's hysteresis. stickySuggested re-vets the carried offset against the
+		// new band's occupancy so the ★ is always genuinely clear either way, but
+		// preferring an offset because it was good on 20 m is arbitrary on 40 m.
+		// (This once claimed a boundary QSY yields two cleanly-attributed slots
+		// with no move to catch it. That was true of the round-5 endpoint sampling
+		// and became false when per-batch sampling landed: consecutive samples
+		// bracket every instant, so exactly one slot is always flagged. The stale
+		// claim was cited back as evidence for a P1 that does not exist — hence the
+		// correction rather than a deletion.)
 		if slot.DialMHz != prevDial {
 			prevTop = 0
 		}

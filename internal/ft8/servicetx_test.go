@@ -732,3 +732,98 @@ func TestExchangePath_ConsumeAndRestore(t *testing.T) {
 	require.Equal(t, antPathLong, s.exchangePath(),
 		"a short-path restore never clobbers a selection")
 }
+
+// TestSeqTransmit_RefusesWhenTheRigLeftTheSessionsDial pins the TX-safety
+// invariant: an FT8 exchange lives on ONE dial frequency, so a rung may only key
+// while the rig is still on the frequency its session pinned. Otherwise we
+// transmit at a station no longer in our passband and log the contact on the
+// frequency we left.
+//
+// Checked at the single transmit funnel rather than by reacting to an observed
+// dial transition upstream. The third case is why: a session started on the NEW
+// dial must be left alone — the rule this replaced abandoned whichever session
+// was active when a moved capture slot was processed, killing exactly that
+// session (codex P1 on c6b8a15d).
+func TestSeqTransmit_RefusesWhenTheRigLeftTheSessionsDial(t *testing.T) {
+	// dial is a pointer so a case can move the rig AFTER the session pinned it.
+	//
+	// The keyer is flipped not-ready once armed, so a rung that gets PAST the dial
+	// guard is refused by startTransmission's live-readiness re-check instead of
+	// spawning a real transmission. These cases are about the guard, not about
+	// keying — and a live transmit goroutine outliving the test raced the shared
+	// txPreKeyLead/txPlayTail that zeroTiming mutates in the controller tests.
+	newServiceOnDial := func(t *testing.T, dial *float64) (*Service, *fakeKeyer) {
+		t.Helper()
+		k := &fakeKeyer{}
+		s := newTxTestService(k, newFakeTxPlayer(), nil)
+		s.SetDialSource(func() (float64, bool) { return *dial, true })
+		require.NoError(t, s.ArmTx(true))
+		return s, k
+	}
+	// notReady must be set under the keyer's own lock: TxReady is read from the
+	// transmit path, not just this goroutine.
+	stopKeying := func(k *fakeKeyer) {
+		k.mu.Lock()
+		k.notReady = true
+		k.mu.Unlock()
+	}
+	slot := time.Now().UTC().Format(time.RFC3339)
+
+	t.Run("rig moved off the pinned dial: refuse and end the session", func(t *testing.T) {
+		dial := 14.074
+		s, k := newServiceOnDial(t, &dial)
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
+		require.True(t, s.seq.Active())
+		gen := s.seq.currentGen()
+		stopKeying(k)
+
+		dial = 7.074 // operator QSYs mid-session
+
+		err := s.seqTransmit("CQ 7Q5MLV IO91", 1500, 14.074, gen, nil)
+		require.ErrorIs(t, err, ErrTxSuperseded,
+			"a rung must not key while the rig is off the session's frequency")
+		require.False(t, s.seq.Active(), "the session is over — the partner is not in our passband")
+		require.False(t, s.txInFlightNow(), "nothing may have been keyed")
+	})
+
+	t.Run("rig still on the pinned dial: the rung proceeds", func(t *testing.T) {
+		dial := 14.074
+		s, k := newServiceOnDial(t, &dial)
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
+		gen := s.seq.currentGen()
+		stopKeying(k)
+
+		require.NotErrorIs(t, s.seqTransmit("CQ 7Q5MLV IO91", 1500, 14.074, gen, nil),
+			ErrTxSuperseded, "a settled dial must not block the rung")
+		require.True(t, s.seq.Active(), "a matching dial leaves the session alone")
+		s.AbandonQso()
+	})
+
+	t.Run("session started AFTER the QSY is left alone", func(t *testing.T) {
+		dial := 14.074
+		s, k := newServiceOnDial(t, &dial)
+		dial = 7.074 // QSY while idle...
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 7.074, "", 1))
+		gen := s.seq.currentGen()
+		stopKeying(k)
+
+		require.NotErrorIs(t, s.seqTransmit("CQ 7Q5MLV IO91", 1500, 7.074, gen, nil),
+			ErrTxSuperseded, "this session was pinned to the new dial; nothing moved under it")
+		require.True(t, s.seq.Active(),
+			"a session started on the new dial must survive — killing it was the P1")
+		s.AbandonQso()
+	})
+
+	t.Run("no CAT: the guard is inert, the keyer owns readiness", func(t *testing.T) {
+		k := &fakeKeyer{}
+		s := newTxTestService(k, newFakeTxPlayer(), nil) // no dial source
+		require.NoError(t, s.ArmTx(true))
+		require.NoError(t, s.StartQso("7Q5MLV", "IO91", "K1ABC", "FN42", slot, 1500, 14.074, 1, false))
+		gen := s.seq.currentGen()
+		stopKeying(k)
+
+		require.NotErrorIs(t, s.seqTransmit("K1ABC 7Q5MLV FN42", 1500, 14.074, gen, nil),
+			ErrTxSuperseded, "an unreadable dial must not become a new way to block TX")
+		s.AbandonQso()
+	})
+}

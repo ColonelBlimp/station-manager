@@ -359,6 +359,37 @@ func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, gen uin
 	if _, err := EncodeWaveform(message, offsetHz); err != nil {
 		return errors.New(op).WithErr(ErrTxBadMessage).WithMsg(err.Error())
 	}
+	// THE INVARIANT: an FT8 exchange lives on one dial frequency. The session
+	// pinned one when it started; if the rig has moved off it, the partner is no
+	// longer in our passband and the contact is over. Keying anyway transmits at a
+	// station that is not there, and the QSO would be logged on the frequency we
+	// left (the sequencer carries the pinned dial into the completed contact).
+	//
+	// Checked HERE — the single funnel every rung passes through — rather than by
+	// reacting to an observed dial transition somewhere upstream. Reacting is what
+	// made this whack-a-mole: a rule that fired on a moved capture slot ended
+	// whatever session was active when that slot was PROCESSED, killing a valid
+	// session started on the new dial in between (codex P1 on c6b8a15d), and any
+	// missed or mis-timed transition left a hole. A session pinned to the new dial
+	// simply matches here, so there is nothing left to get wrong.
+	//
+	// Both sides come from the SAME reader, so exact comparison is correct; the
+	// client-supplied dialMHz carried for logging is NOT comparable. Refuse only
+	// when both readings are known — an unreadable dial is the keyer's business
+	// (TxReady shares that precondition), not a new way to block TX.
+	s.txMu.Lock()
+	pinned := s.sessionDialMHz
+	s.txMu.Unlock()
+	if pinned != 0 {
+		if cur := s.currentDialMHz(); cur != 0 && cur != pinned {
+			// Generation-scoped: never touches a session newer than this rung.
+			// Abandon publishes the idle status, which is exactly what
+			// ErrTxSuperseded's callers already expect ("session gone; idle
+			// already published"), so no new error code reaches the SPA.
+			s.seq.AbandonIfCurrent(gen, "dial moved off the session's frequency")
+			return errors.New(op).WithErr(ErrTxSuperseded)
+		}
+	}
 	// commitOK re-validates the rung's session generation under txMu, closing the
 	// unlock→commit gap an Abandon can land in (review 2026-07-20 #1; see
 	// ErrTxSuperseded and the startTransmission commit section).
@@ -532,7 +563,34 @@ func (s *Service) sessionTxGate(op errors.Op) error {
 	if !ready {
 		return errors.New(op).WithErr(ErrTxNotReady)
 	}
+	// Every session start funnels through here, under seqGate — so this is the one
+	// place to pin the dial the DAEMON itself reads. Read before taking txMu so no
+	// new lock nesting appears (dialSource reaches into the bridge). A start that
+	// is subsequently rejected leaves the value stale and unread: the guard in
+	// seqTransmit only consults it while a session is active, and the next start
+	// overwrites it — the same reasoning setPendingLogbook already relies on.
+	dial := s.currentDialMHz()
+	s.txMu.Lock()
+	s.sessionDialMHz = dial
+	s.txMu.Unlock()
 	return nil
+}
+
+// currentDialMHz is the daemon's OWN view of the rig dial in MHz, 0 when it has
+// none (no CAT, or the frequency not yet decoded this session). Deliberately
+// distinct from the dialFreqMHz the client supplies for LOGGING: that value took
+// a different path and the two must never be compared against each other.
+func (s *Service) currentDialMHz() float64 {
+	s.mu.Lock()
+	src := s.dialSource
+	s.mu.Unlock()
+	if src == nil {
+		return 0
+	}
+	if mhz, ok := src(); ok {
+		return mhz
+	}
+	return 0
 }
 
 // StartQso begins a manual answer-a-CQ exchange (ADR 0031): the operator picked

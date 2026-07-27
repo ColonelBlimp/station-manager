@@ -50,10 +50,34 @@ precisely so we don't re-derive state or redo finished work.
 > Nothing loggable is lost: a contact already complete for us was logged and retired
 > at its final rung, and an incomplete one has nothing to log.
 >
-> **This is an on-air behaviour change worth knowing about before the next run:
-> touching the VFO mid-exchange now ends that exchange** (status pushes
-> `active:false`, so the SPA shows it). That is what the radio was already doing
-> physically; the daemon now agrees with it.
+> **Round 8 replaced that with the INVARIANT, and that ended the whack-a-mole.**
+> The abandon-on-move was both racy and wrong-targeted: it ended whichever session
+> was active when a moved slot was PROCESSED, not the one live during the window it
+> described — so QSY-then-Call-CQ inside one slot had its brand-new valid session
+> killed at the next boundary — and it bypassed `AbandonQso`'s `seqGate` and
+> in-flight cancellation. Deleted.
+>
+> TX safety is now one check at the single transmit funnel (`seqTransmit`): **the
+> rig must still be on the dial the session pinned**, else the rung is refused
+> (`ErrTxSuperseded`, which existing callers already drop quietly) and the session
+> is ended via the new generation-scoped `Sequencer.AbandonIfCurrent` — so a rung
+> can never kill a session that replaced it. The pin is the DAEMON's own dial read,
+> taken in `sessionTxGate` (the shared preamble of all seven `Start*`), never the
+> client-supplied dial carried for logging: same reader on both sides, so exact
+> comparison is right. No CAT → guard inert; the keyer owns readiness.
+>
+> **On-air behaviour change: touching the VFO mid-exchange ends that exchange**
+> (`ft8-qso` pushes `active:false`). That is what the radio was already doing
+> physically. A session STARTED on the new dial is unaffected.
+>
+> Rounds 4-8 were whack-a-mole because every fix reacted to an observed dial
+> TRANSITION; transitions can be missed, mis-timed, or attributed to the wrong
+> session. The invariant cannot be. **A codex P1 claiming a boundary QSY escapes
+> detection was REFUTED** — per-batch sampling means consecutive samples bracket
+> every instant, so exactly one slot is always flagged (verified by walking a change
+> through every position across a boundary). It was believed because it cited a
+> STALE round-5 comment of ours as evidence. That comment, and three more from the
+> arc, are corrected.
 >
 > Also corrected: the `missing_from_unsupported` message claimed any stampless
 > destination "keeps a full copy". Only true of a row mirror — the dev stub

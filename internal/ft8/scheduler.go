@@ -64,10 +64,15 @@ type Slot struct {
 	DialMHz float64
 
 	// DialChanged reports that the dial moved DURING this slot: its audio spans
-	// two frequencies and belongs to neither. Diagnostic only — DialMHz is
-	// already 0 — but it separates "the operator was tuning" from "CAT was
-	// down" in the slot log, which is the first question on air when the
-	// occupancy panel goes quiet.
+	// two frequencies and belongs to neither.
+	//
+	// LOAD-BEARING, not merely diagnostic (it was diagnostic when introduced —
+	// DialMHz is 0 either way — and became load-bearing a round later). It is what
+	// suppresses the slot's DECODES: every consumer resolves a decode against the
+	// CURRENT dial, so an A→B→A window would render stations heard on B as
+	// workable here and spot them at the wrong frequency. It also separates "the
+	// operator was tuning" from "CAT was down" in the slot log — the first question
+	// on air when the panel goes quiet.
 	DialChanged bool
 
 	// DialTracked reports that a dial source was installed for this capture
