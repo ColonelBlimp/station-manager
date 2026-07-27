@@ -3,6 +3,7 @@ package ft8
 import (
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"os"
 	"strings"
@@ -164,30 +165,54 @@ two-line change and a conversation, rather than a silent pass.
 */
 // TestSource_SessionsEndOnlyThroughThePrimitive enforces invariant 6 structurally.
 //
-// It constrains the CONSTANT, not the lvalue. A session ends exactly when mode becomes
-// seqIdle, and there are only two ways for that to happen: something assigns seqIdle,
-// or something does arithmetic on a mode. So outside the two primitives:
+// It needs TWO rules, because a session ends when mode becomes seqIdle and there are
+// two disjoint ways to get there — naming the constant, or reaching zero without it.
+// Each rule alone leaves a hole the other covers, which is how round six happened:
+// the previous version dropped the second and `s.mode = 0` walked straight through a
+// guard that had already been closing it (codex P2 on bd2f31fa).
 //
-//   - the identifier `seqIdle` may appear ONLY as an operand of a comparison, or in a
-//     case clause. Never where it can be stored, aliased, or passed;
-//   - no `++`/`--`/compound assignment may target a `.mode` selector, since that path
-//     reaches seqIdle without naming it (seqAnswering(1)-- is seqIdle).
+//  1. CONSTANT. Outside the two primitives, `seqIdle` may appear only AS a comparison
+//     operand or case expression — not merely somewhere beneath one, or
+//     `launder(seqIdle) == x` passes it out again. Never where it can be stored,
+//     aliased or passed. This is what makes aliasing irrelevant: `alias.mode =
+//     seqIdle` is caught by the right-hand side, whatever `alias` is called.
+//  2. LVALUE. Any assignment to a `.mode` selector must name an enumerated ACTIVE
+//     mode; `++`/`--`/compound assignment on one is refused outright. seqMode is
+//     integer-backed and seqIdle is 0, so `s.mode = 0`, `seqMode(0)`, a zero-valued
+//     variable and `seqAnswering(1)--` all reach idle silently.
 //
-// This replaces four rounds of tracking WHICH IDENTIFIER denotes the Sequencer —
-// receiver, then parameter, then the alias `alias := s` (codex P2 on 0c80f894). That
-// list has no end: a struct field, a slice element, a closure capture, a function
-// return. Constraining the constant is immune to all of it, and to how the lvalue is
-// spelled, because the left-hand side is never examined. It also needs no type
-// information: `alias.mode = seqIdle` is caught by the seqIdle on the right, and
-// `idle := seqIdle` is caught where the alias is created.
+// Rule 2 deliberately matches ANY `.mode` selector without asking whose it is. That
+// is sound here because no other type in the package is written through an
+// assignment to a `.mode` field — verified before relying on it — and it is what
+// finally made the guard immune to naming, after five rounds of tracking receivers,
+// parameters and aliases. If a future type does need one, this test fails and the
+// author has a conversation rather than a silent pass.
 //
 // A survey of production code before writing this confirmed the rule costs nothing:
 // every existing use of seqIdle outside the primitives is `s.mode == seqIdle` or
 // `!=`. Adding a legitimate third primitive means adding it to `permitted` — a
 // two-line change and a conversation, rather than a silent pass.
+// unwrapParens strips redundant parentheses: (x) and ((x)) reduce to x.
+func unwrapParens(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
+}
+
 func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 	const allowed = "retireSessionLocked, abandonLocked"
 	permitted := map[string]bool{"retireSessionLocked": true, "abandonLocked": true}
+	// Assigning one of these is a session START, which legitimately happens outside
+	// the primitives. Anything else written to a mode is an end, or unreadable.
+	activeMode := map[string]bool{
+		"seqAnswering": true, "seqCalling": true, "seqWorking": true,
+		"seqAnsweringFd": true, "seqWorkingFd": true,
+		"seqAnsweringT4": true, "seqWorkingT4": true,
+	}
 
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
@@ -208,13 +233,13 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 				}
 				// Positions of seqIdle mentions that are merely READ.
 				readOnly := map[token.Pos]bool{}
+				// The identifier must BE the operand. Marking everything BENEATH it let
+				// `capture(seqIdle) == want` launder the value through a call and out
+				// again (codex P2 on bd2f31fa).
 				markRead := func(e ast.Expr) {
-					ast.Inspect(e, func(n ast.Node) bool {
-						if id, ok := n.(*ast.Ident); ok && id.Name == "seqIdle" {
-							readOnly[id.Pos()] = true
-						}
-						return true
-					})
+					if id, ok := unwrapParens(e).(*ast.Ident); ok && id.Name == "seqIdle" {
+						readOnly[id.Pos()] = true
+					}
 				}
 				ast.Inspect(fd.Body, func(n ast.Node) bool {
 					switch v := n.(type) {
@@ -262,16 +287,37 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 								v.Tok.String(), allowed)
 						}
 					case *ast.AssignStmt:
-						if v.Tok == token.ASSIGN {
-							return true
-						}
-						for _, l := range v.Lhs {
-							if isModeSel(l) {
+						for i, l := range v.Lhs {
+							if !isModeSel(l) {
+								continue
+							}
+							if v.Tok != token.ASSIGN { // +=, -=, |= …
 								t.Errorf("%s:%d: arithmetic on a mode in %s (%s) reaches "+
 									"seqIdle without naming it — see invariant 6. Allowed "+
 									"only in: %s",
 									name, fset.Position(v.Pos()).Line, fd.Name.Name,
 									v.Tok.String(), allowed)
+								continue
+							}
+							// seqMode is integer-backed and seqIdle is 0, so a write can
+							// reach idle without ever mentioning the constant: s.mode = 0,
+							// seqMode(0), or a zero-valued variable. The constant rule
+							// above cannot see those, so the LVALUE rule stands alongside
+							// it and demands an enumerated ACTIVE mode (codex P2 on
+							// bd2f31fa, a hole this file had closed and then reopened).
+							rhs := "?"
+							if len(v.Rhs) == len(v.Lhs) {
+								var b strings.Builder
+								if printer.Fprint(&b, fset, v.Rhs[i]) == nil {
+									rhs = b.String()
+								}
+							}
+							if !activeMode[rhs] {
+								t.Errorf("%s:%d: a mode is set to %q in %s — outside the "+
+									"primitives a write may only name an ACTIVE mode "+
+									"(a session START). See invariant 6; allowed only in: %s",
+									name, fset.Position(v.Pos()).Line, rhs, fd.Name.Name,
+									allowed)
 							}
 						}
 					}

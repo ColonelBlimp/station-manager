@@ -151,19 +151,20 @@ deleted within a round or two, while the behavioural ones caught real defects.
    `TestSource_SessionsEndOnlyThroughThePrimitive` requires every write to `s.mode`
    outside `retireSessionLocked`/`abandonLocked` to assign an enumerated ACTIVE mode
    (i.e. to be a session START); anything else — `seqIdle`, a variable holding it, or
-   an unreadable multi-value call — fails. It constrains the CONSTANT rather than the
-   lvalue: outside those two functions `seqIdle` may appear only as a comparison
-   operand or a case clause — never where it can be stored, aliased or passed — plus
-   no `++`/`--`/compound assignment may target a `.mode` selector (that path reaches
-   seqIdle without naming it, since seqAnswering(1)-- is seqIdle). **This replaced
-   five rounds of tracking which identifier denotes the Sequencer** — receiver, then
-   parameter, then `alias := s` (61a875d8, 5cffed06, 980c9e04, 0c80f894) — a list
-   with no end: a struct field, a slice element, a closure capture, a function
-   return. The lesson is the shape of the question: asking "how can you name the
-   thing being written?" has an unbounded answer, while asking "what may this value
-   do?" has a small one. A survey of production code confirmed the stricter rule
-   costs nothing — every existing use of `seqIdle` outside the primitives is already
-   a comparison.
+   an unreadable multi-value call — fails. It needs TWO rules, because a session ends
+   when mode becomes `seqIdle` and there are two disjoint routes: naming the
+   constant, or reaching zero without it. (1) outside those functions `seqIdle` may
+   appear only AS a comparison operand or case expression — never nested beneath one,
+   stored, aliased or passed; (2) any assignment to a `.mode` selector must name an
+   enumerated ACTIVE mode, and arithmetic on one is refused — `seqMode` is
+   integer-backed and `seqIdle` is 0, so `s.mode = 0` and `seqAnswering(1)--` reach
+   idle silently. Rule 2 matches ANY `.mode` selector without asking whose it is,
+   which is sound because nothing else in the package assigns to a `.mode` field, and
+   is what finally made the guard immune to naming after five rounds of tracking
+   receivers, parameters and aliases (61a875d8, 5cffed06, 980c9e04, 0c80f894,
+   bd2f31fa). **The costly lesson was not any individual hole: it was rewriting the
+   guard around one axis and DROPPING the other, which reopened a hole this file had
+   already closed. When replacing a check, enumerate what the old one caught.**
    That makes THREE guards in this package fixed by inverting a denylist into an
    allowlist, so treat the allowlist as the default shape for a new guard here rather
    than the remedy after a review finds the hole.
