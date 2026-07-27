@@ -66,6 +66,13 @@ var (
 	// cancel, so the commit itself must refuse; review 2026-07-20 #1). Expected
 	// during an operator Abandon — callers drop the rung quietly.
 	ErrTxSuperseded = stderrors.New("ft8: transmission superseded by session change")
+	// ErrTxDialUnknown: a dial source is configured but cannot report the rig's
+	// frequency right now (the selected VFO has not been decoded this session).
+	// The rig may still report TxReady — that checks connection and identity, not
+	// frequency knowledge — so this is its own refusal: SM will not key, or log a
+	// contact, on a frequency it cannot corroborate. Retryable; it clears as soon
+	// as the bridge decodes the VFO.
+	ErrTxDialUnknown = stderrors.New("ft8: rig frequency unknown; cannot verify the transmit frequency")
 	// ErrTxBadMessage: the message is not an encodable standard FT8 message.
 	ErrTxBadMessage = stderrors.New("ft8: not an encodable standard message")
 	// ErrTxBadOffset: the requested TX audio offset is non-finite or sits outside
@@ -380,15 +387,30 @@ func (s *Service) seqTransmit(message string, offsetHz, dialMHz float64, gen uin
 	s.txMu.Lock()
 	pinned := s.sessionDialMHz
 	s.txMu.Unlock()
-	if pinned != 0 {
-		if cur := s.currentDialMHz(); cur != 0 && cur != pinned {
-			// Generation-scoped: never touches a session newer than this rung.
-			// Abandon publishes the idle status, which is exactly what
-			// ErrTxSuperseded's callers already expect ("session gone; idle
-			// already published"), so no new error code reaches the SPA.
-			s.seq.AbandonIfCurrent(gen, "dial moved off the session's frequency")
-			return errors.New(op).WithErr(ErrTxSuperseded)
+	cur, tracked, known := s.dialState()
+	// With a source installed the rung must be POSITIVELY validated: an unknown
+	// reading on either side is a refusal, not a pass. Untracked (no CAT) stays
+	// inert — that deployment cannot key at all.
+	if tracked && (!known || pinned == 0 || cur != pinned) {
+		// Refusing RF must never un-make a contact that already happened. Run the
+		// rung's completion policy FIRST: a Group A final rung records the QSO on
+		// either outcome and retires the session itself, and every callback is
+		// generation-guarded — so abandoning first would bump the generation and
+		// the callback would refuse, silently discarding a completed contact
+		// (codex P1 on a76f1f61).
+		if onDone != nil {
+			onDone(false)
 		}
+		// Then end the session if it is still live. The generation check makes
+		// this self-selecting: after a Group A completion the generation has moved
+		// on and this is a no-op, while a Group B callback (which does not log or
+		// retire on failure) leaves it to fire here. It also guarantees a rung can
+		// never end a session that replaced it.
+		s.seq.AbandonIfCurrent(gen, "rig dial no longer matches the session's frequency")
+		// Callers already treat this sentinel as "session gone; idle already
+		// published" and return without re-firing onDone, so no new error code
+		// reaches the SPA and no completion runs twice.
+		return errors.New(op).WithErr(ErrTxSuperseded)
 	}
 	// commitOK re-validates the rung's session generation under txMu, closing the
 	// unlock→commit gap an Abandon can land in (review 2026-07-20 #1; see
@@ -569,28 +591,40 @@ func (s *Service) sessionTxGate(op errors.Op) error {
 	// is subsequently rejected leaves the value stale and unread: the guard in
 	// seqTransmit only consults it while a session is active, and the next start
 	// overwrites it — the same reasoning setPendingLogbook already relies on.
-	dial := s.currentDialMHz()
+	dial, tracked, known := s.dialState()
+	if tracked && !known {
+		// Refuse up front rather than committing a session that could never
+		// validate a rung — the operator gets one clear reason instead of a
+		// silent session that never transmits.
+		return errors.New(op).WithErr(ErrTxDialUnknown)
+	}
 	s.txMu.Lock()
 	s.sessionDialMHz = dial
 	s.txMu.Unlock()
 	return nil
 }
 
-// currentDialMHz is the daemon's OWN view of the rig dial in MHz, 0 when it has
-// none (no CAT, or the frequency not yet decoded this session). Deliberately
-// distinct from the dialFreqMHz the client supplies for LOGGING: that value took
-// a different path and the two must never be compared against each other.
-func (s *Service) currentDialMHz() float64 {
+// dialState reports the daemon's OWN view of the rig dial. Deliberately distinct
+// from the dialFreqMHz the client supplies for LOGGING: that value took a
+// different path and the two must never be compared against each other.
+//
+// tracked and known are SEPARATE facts and conflating them disables the safety
+// invariant exactly when it is needed (codex P1 on a76f1f61). "No dial source"
+// means no CAT, and FT8 cannot key without a writable rig, so there is nothing to
+// protect. "Source installed but the reading is unavailable" is different: the
+// bridge reports TxReady on connection + identity, which does NOT require the
+// selected VFO's frequency to have been decoded — so the rig can be ready to key
+// while the daemon cannot say what it is tuned to. That must not authorise RF.
+// Same distinction as Slot.DialTracked on the receive side.
+func (s *Service) dialState() (mhz float64, tracked, known bool) {
 	s.mu.Lock()
 	src := s.dialSource
 	s.mu.Unlock()
 	if src == nil {
-		return 0
+		return 0, false, false
 	}
-	if mhz, ok := src(); ok {
-		return mhz
-	}
-	return 0
+	m, ok := src()
+	return m, true, ok
 }
 
 // StartQso begins a manual answer-a-CQ exchange (ADR 0031): the operator picked

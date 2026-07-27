@@ -444,3 +444,55 @@ func TestSequencer_ImmediateOpeningNotDoubleDriven(t *testing.T) {
 	require.True(t, s.Active())
 	require.Len(t, r.sentMsgs(), 2, "roger-report transmitted on the following cycle")
 }
+
+// TestAbandonIfCurrent_PublishesUnderTheLock: a terminal publish must happen while
+// s.mu still excludes a replacement Start*, exactly as the final-rung completions
+// do. Publishing after the unlock lets a concurrent start commit and publish ACTIVE
+// first, and the delayed idle then overwrites it — the hub caches idle for a live
+// session and the operator loses the session controls (codex P1 on a76f1f61; the
+// same hazard as 3c1ee047 / a301d350).
+//
+// Asserted structurally: the publish hook tries to take s.mu and reports whether it
+// was already held. A publish outside the lock would acquire it freely.
+func TestAbandonIfCurrent_PublishesUnderTheLock(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+
+	heldDuringPublish := false
+	s.publish = func(st QsoStatus) {
+		// TryLock succeeds only if nobody holds s.mu — i.e. only if this publish
+		// escaped the lock the terminal transition was made under.
+		if s.mu.TryLock() {
+			s.mu.Unlock()
+		} else {
+			heldDuringPublish = true
+		}
+		r.publish(st)
+	}
+
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	gen := s.currentGen()
+
+	require.True(t, s.AbandonIfCurrent(gen, "test"), "an active session is abandoned")
+	require.True(t, heldDuringPublish,
+		"the terminal publish escaped s.mu — a concurrent Start* can publish active first "+
+			"and be overwritten by this stale idle")
+	require.Equal(t, QsoStatus{Active: false}, r.lastStatus())
+}
+
+// A rung whose session was already replaced must not end the replacement.
+func TestAbandonIfCurrent_LeavesANewerSessionAlone(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	slot := time.Unix(0, 0).UTC().Format(time.RFC3339)
+
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", slot, 1500, 14.074, time.Unix(0, 0).UTC()))
+	staleGen := s.currentGen()
+	s.Abandon()
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "W1XYZ", "FN31", slot, 1500, 7.074, time.Unix(0, 0).UTC()))
+
+	require.False(t, s.AbandonIfCurrent(staleGen, "stale"), "a stale generation must not abandon")
+	require.True(t, s.Active(), "the replacement session survives")
+	s.Abandon()
+}

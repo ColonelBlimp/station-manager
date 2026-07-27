@@ -71,6 +71,12 @@ func (s *Server) writeFt8TxError(w http.ResponseWriter, op errors.Op, err error)
 	case stderr.Is(err, ft8.ErrTxNotReady):
 		s.writeError(w, http.StatusServiceUnavailable, "rig_not_ready",
 			"rig not connected or identity unverified; try again in a moment", op)
+	case stderr.Is(err, ft8.ErrTxDialUnknown):
+		// Distinct from rig_not_ready: the rig IS connected and armable, but the
+		// daemon cannot read the frequency it is on, so it will not key or log a
+		// contact it cannot place. Clears once the bridge decodes the VFO.
+		s.writeError(w, http.StatusServiceUnavailable, "rig_dial_unknown",
+			"rig frequency not known yet; try again in a moment", op)
 	case stderr.Is(err, ft8.ErrTxNotArmed):
 		s.writeError(w, http.StatusConflict, "ft8_tx_not_armed",
 			"FT8 transmit is not armed", op)

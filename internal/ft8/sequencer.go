@@ -544,10 +544,18 @@ func (s *Sequencer) AbandonIfCurrent(gen uint64, reason string) bool {
 		return false
 	}
 	was := s.abandonLocked()
+	if was {
+		// Publish the terminal state while s.mu still excludes a replacement
+		// Start*, exactly as the final-rung completions do (finalrung.go). Publishing
+		// after the unlock lets a concurrent start commit and publish ACTIVE first,
+		// and this delayed idle then overwrites it — the hub caches idle for a live
+		// session, stranding the operator without session controls (codex P1 on
+		// a76f1f61; the same hazard as 3c1ee047 / a301d350).
+		s.publish(QsoStatus{Active: false})
+	}
 	s.mu.Unlock()
 	if was {
 		s.log.InfoWith().Str("reason", reason).Msg("ft8 seq: session abandoned")
-		s.publish(QsoStatus{Active: false})
 	}
 	return was
 }

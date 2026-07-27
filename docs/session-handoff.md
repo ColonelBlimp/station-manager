@@ -70,6 +70,28 @@ precisely so we don't re-derive state or redo finished work.
 > (`ft8-qso` pushes `active:false`). That is what the radio was already doing
 > physically. A session STARTED on the new dial is unaffected.
 >
+> **Round 9 (uncommitted) fixed three P1s on that guard — all of them "the new path
+> did not follow a protocol this codebase already had", and each fixed by copying
+> the existing pattern rather than inventing one.**
+> 1. **A completed QSO could be dropped.** Group A records the contact whether or
+>    not the closing message reaches the air, but the guard abandoned FIRST and every
+>    completion callback is generation-guarded, so the bumped generation made it
+>    refuse. Now the rung's completion policy runs first, then `AbandonIfCurrent(gen)`
+>    — which self-selects: after a Group A completion the generation has moved on so
+>    it no-ops, while Group B (no log, no retire on failure) leaves it to fire.
+> 2. **An unknown dial disabled the guard.** `TxReady` needs connection + identity;
+>    `CurrentDialMHz` additionally needs the selected VFO decoded — so the rig can be
+>    ready to key while the daemon cannot say where it is. `dialState()` now separates
+>    TRACKED from KNOWN (the same distinction as `Slot.DialTracked` on the RX side):
+>    with a source installed the rung must be POSITIVELY validated, and a start whose
+>    dial is unreadable is refused up front with the new `ErrTxDialUnknown` →
+>    503 `rig_dial_unknown`. No CAT → inert.
+> 3. **The terminal publish escaped the lock.** `AbandonIfCurrent` published idle
+>    after unlocking, so a concurrent `Start*` could commit and publish ACTIVE first
+>    and be overwritten by the stale idle — the hub then caches idle for a live
+>    session. `finalrung.go` already documents this exact hazard (from `3c1ee047` /
+>    `a301d350`) and publishes under `s.mu`; now this does too.
+>
 > Rounds 4-8 were whack-a-mole because every fix reacted to an observed dial
 > TRANSITION; transitions can be missed, mis-timed, or attributed to the wrong
 > session. The invariant cannot be. **A codex P1 claiming a boundary QSY escapes

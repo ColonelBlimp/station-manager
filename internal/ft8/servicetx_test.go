@@ -827,3 +827,75 @@ func TestSeqTransmit_RefusesWhenTheRigLeftTheSessionsDial(t *testing.T) {
 		s.AbandonQso()
 	})
 }
+
+// TestSeqTransmit_DialGuardPreservesCompletedQso: refusing RF must never un-make a
+// contact that already happened. After the partner rogers, a Group A final rung
+// records the QSO whether or not the courtesy closing message reaches the air —
+// so a QSY in the ~15 s before that rung keys must still log it.
+//
+// Abandoning first breaks this invisibly: every completion callback is
+// generation-guarded, so a bumped generation makes it refuse and the contact is
+// silently discarded (codex P1 on a76f1f61).
+func TestSeqTransmit_DialGuardPreservesCompletedQso(t *testing.T) {
+	dial := 14.074
+	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	s.SetDialSource(func() (float64, bool) { return dial, true })
+	require.NoError(t, s.ArmTx(true))
+	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
+	gen := s.seq.currentGen()
+
+	// Stand in for a Group A final rung: a completion callback that records the
+	// contact on EITHER outcome and retires the session, exactly as
+	// finalRungDoneLocked does — including its generation guard.
+	logged := 0
+	onDone := func(bool) {
+		s.seq.mu.Lock()
+		defer s.seq.mu.Unlock()
+		if s.seq.sessionGen != gen { // stale callback — the contact is lost here
+			return
+		}
+		logged++
+		s.seq.sessionGen++
+		s.seq.mode = seqIdle
+	}
+
+	dial = 7.074 // QSY between their roger and our closing rung
+
+	err := s.seqTransmit("K1ABC 7Q5MLV 73", 1500, 14.074, gen, onDone)
+	require.ErrorIs(t, err, ErrTxSuperseded, "the closing rung must not key on the new dial")
+	require.Equal(t, 1, logged,
+		"the contact already happened on the old frequency — refusing RF must not discard it")
+	require.False(t, s.seq.Active(), "the session is still retired")
+}
+
+// TestSeqTransmit_RefusesWhenTheDialCannotBeRead: a configured dial source that
+// cannot report the frequency must NOT authorise RF. The bridge reports TxReady on
+// connection + identity, which does not require the selected VFO to have been
+// decoded — so "ready to key" and "we know where we are" are different facts, and
+// treating unknown as a pass disabled the invariant exactly when it was needed
+// (codex P1 on a76f1f61).
+func TestSeqTransmit_RefusesWhenTheDialCannotBeRead(t *testing.T) {
+	t.Run("start is refused while the dial is unreadable", func(t *testing.T) {
+		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+		s.SetDialSource(func() (float64, bool) { return 0, false })
+		require.NoError(t, s.ArmTx(true))
+
+		require.ErrorIs(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1), ErrTxDialUnknown,
+			"a session that could never validate a rung must not commit")
+		require.False(t, s.seq.Active())
+	})
+
+	t.Run("rung is refused when the reading goes away mid-session", func(t *testing.T) {
+		known := true
+		s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+		s.SetDialSource(func() (float64, bool) { return 14.074, known })
+		require.NoError(t, s.ArmTx(true))
+		require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
+		gen := s.seq.currentGen()
+
+		known = false // CAT still connected; the VFO reading is gone
+		require.ErrorIs(t, s.seqTransmit("CQ 7Q5MLV IO91", 1500, 14.074, gen, nil), ErrTxSuperseded,
+			"an unverifiable dial must not authorise RF")
+		require.False(t, s.seq.Active())
+	})
+}
