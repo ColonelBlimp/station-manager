@@ -45,12 +45,14 @@ function stampField(type: string): string | undefined {
  * Whether this forwarder type records a per-QSO "uploaded" stamp — i.e. whether
  * "which QSOs are missing from it?" is a question the logbook row can answer.
  *
- * Not every destination can: SM Cloud is a ROW MIRROR holding a full copy rather
- * than a derived record it extracts once, so it deliberately stamps nothing
- * (`internal/forwarding/smcloud` registers no ADIF prefix). The daemon rejects
- * `missing_from` for such a type, so offering it as a filter is a guaranteed
- * 400 — which is exactly what picking "Not on smcloud" used to do (dogfood
- * 2026-07-27). It remains a valid UPLOAD target; only the gap view is undefined.
+ * Not every destination can. SM Cloud is the case that surfaced this — a ROW
+ * MIRROR holding a full copy rather than a derived record it extracts once, so it
+ * deliberately registers no ADIF prefix — but "records no stamp" does not imply
+ * mirroring (the dev stub registers no prefix and mirrors nothing). The daemon
+ * rejects `missing_from` for any such type, so offering it as a filter is a
+ * guaranteed 400 — exactly what picking "Not on smcloud" used to do (dogfood
+ * 2026-07-27). Such a type remains a valid UPLOAD target; only the gap view is
+ * undefined.
  */
 export function hasUploadStamp(type: string): boolean {
     return stampField(type) !== undefined;

@@ -128,7 +128,8 @@ func TestListQsoByLogbook_MissingFromUnknownForwarder(t *testing.T) {
 // is not a question the logbook table can answer. It must not share the
 // "no such forwarder" code, and the message must say why: the operator picked
 // this from a dropdown, hit a bare 400, and had no way to tell the two apart
-// (dogfood 2026-07-27).
+// (dogfood 2026-07-27). smcloud is the case that surfaced it; the message must
+// describe the missing STAMP, not infer row mirroring from it.
 func TestListQsoByLogbook_MissingFromRowMirror(t *testing.T) {
 	srv := serverWithForwarders(t, forwarderCfg("cloud-backup", "smcloud", true, "insert"))
 	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
@@ -151,7 +152,13 @@ func TestListQsoByLogbook_MissingFromRowMirror(t *testing.T) {
 	if !strings.Contains(e.Message, "cloud-backup") || !strings.Contains(e.Message, "smcloud") {
 		t.Errorf("message names neither the forwarder nor its type: %q", e.Message)
 	}
-	if !strings.Contains(e.Message, "full copy") {
+	// State only what a missing ADIF prefix proves. It does NOT prove the
+	// destination mirrors rows — SM Cloud does, the dev stub does not — so an
+	// earlier "keeps a full copy" wording was false for the stub (codex P3).
+	if !strings.Contains(e.Message, "no per-QSO upload status") {
 		t.Errorf("message does not explain WHY there is nothing to filter on: %q", e.Message)
+	}
+	if strings.Contains(e.Message, "full copy") {
+		t.Errorf("message claims row mirroring, which a missing stamp does not prove: %q", e.Message)
 	}
 }

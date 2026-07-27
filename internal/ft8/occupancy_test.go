@@ -10,6 +10,7 @@ import (
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/stretchr/testify/require"
 )
 
 // toneSlot synthesises a full FT8 slot of 12 kHz int16 audio: a sum of sine
@@ -729,4 +730,57 @@ func TestDecodeLoop_MovedSlotPublishesNoDecodes(t *testing.T) {
 	if len(settled) != 1 || len(settled[0].Decodes) == 0 {
 		t.Fatalf("settled slot decoded nothing; the moved-slot assertion proves nothing")
 	}
+}
+
+// TestDecodeLoop_DialMoveEndsTheSession covers the TX half of the moved-slot
+// rule. Suppressing the decodes was NOT enough on its own: empty messages are not
+// a sequencer no-op — onSlotAnswering reads them as "they said nothing", repeats
+// the rung and keys in the next slot. A QSY during a receive window would
+// therefore transmit at a station no longer in our passband, and log the contact
+// on the frequency we left (the session pins its dial at start). Skipping just the
+// moved slot only delays that by one slot, because every settled slot on the new
+// frequency is silence too.
+//
+// An FT8 exchange lives on one dial frequency, so moving the dial ends it. The
+// assertion is the strong one: after a dial move there is no session left to key.
+func TestDecodeLoop_DialMoveEndsTheSession(t *testing.T) {
+	start := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+
+	runSlot := func(t *testing.T, moved bool) (*Service, *seqRecorder) {
+		t.Helper()
+		r := &seqRecorder{}
+		s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), newFakeSource())
+		s.seq = newTestSeq(r)
+		require.NoError(t, s.seq.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+			time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+		require.True(t, s.seq.Active(), "fixture: a session must be active to prove anything")
+
+		ch := make(chan Slot, 1)
+		ch <- Slot{
+			StartUTC:    start,
+			Samples:     make([]int16, 1000),
+			DialMHz:     7.074, // where the rig ended up
+			DialChanged: moved,
+			DialTracked: true,
+		}
+		close(ch)
+		s.decodeLoop(ch)
+		return s, r
+	}
+
+	t.Run("dial moved", func(t *testing.T) {
+		s, r := runSlot(t, true)
+		require.False(t, s.seq.Active(),
+			"a dial change must end the session — otherwise the next silent slot keys a repeat "+
+				"at a station we can no longer hear, logged on the frequency we left")
+		require.Equal(t, QsoStatus{Active: false}, r.lastStatus(),
+			"the operator must see the session end, not discover it by silence")
+	})
+
+	t.Run("dial settled", func(t *testing.T) {
+		s, _ := runSlot(t, false)
+		require.True(t, s.seq.Active(),
+			"a settled slot must leave the session alone; ending it would abandon "+
+				"every QSO on a slot that merely could not be placed")
+	})
 }

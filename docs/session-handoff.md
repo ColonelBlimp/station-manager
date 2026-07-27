@@ -32,6 +32,37 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-27)
 
+> **2026-07-27 — the occupancy/attribution arc reached the TX path (round 7,
+> uncommitted).** Round 6 stopped publishing occupancy for a slot whose dial moved,
+> and round 7's first half stopped publishing its DECODES too (they reach the
+> sequencer, Band Activity and the **PSK Reporter** sink, all of which resolve a
+> decode against the CURRENT dial — an A→B→A slot would render stations heard
+> elsewhere as workable here and spot wrong frequencies to a public network).
+>
+> **That was not enough, and the gap was on the TX path.** Empty decodes are NOT a
+> sequencer no-op: `onSlotAnswering` reads them as "they said nothing", repeats the
+> rung and KEYS in the next slot. So a QSY during a receive window would transmit at
+> a station no longer in our passband and log the contact on the frequency we left
+> (the session pins its dial at start). Suppressing only the moved slot delays that
+> by exactly one slot, because every settled slot on the new frequency is silence
+> too. **A dial move now ENDS the active session** (`s.seq.Abandon()`), and a moved
+> slot is not fed to the sequencer at all — silence has to be observed, not assumed.
+> Nothing loggable is lost: a contact already complete for us was logged and retired
+> at its final rung, and an incomplete one has nothing to log.
+>
+> **This is an on-air behaviour change worth knowing about before the next run:
+> touching the VFO mid-exchange now ends that exchange** (status pushes
+> `active:false`, so the SPA shows it). That is what the radio was already doing
+> physically; the daemon now agrees with it.
+>
+> Also corrected: the `missing_from_unsupported` message claimed any stampless
+> destination "keeps a full copy". Only true of a row mirror — the dev stub
+> registers no ADIF prefix and mirrors nothing — so both the daemon message and the
+> SPA copy now state only what a missing prefix proves.
+>
+> Proven by reversion; gate green (gofmt, vet, `go test ./internal/ft8
+> ./internal/api -race`, prettier/eslint/svelte-check, **747 frontend tests**).
+
 > **2026-07-27 — the occupancy panel, rounds 4 to 6. Round 5 is the one that
 > matters: the fix moved to the SOURCE, and the client-side guesswork is gone.**
 >

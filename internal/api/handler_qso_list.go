@@ -21,12 +21,12 @@ import (
 // The two ways this fails are DIFFERENT problems and now say so. They shared one
 // message — "must name a configured forwarder with an upload-status stamp" —
 // which reads as "you got the name wrong" even when the name is perfectly good
-// and the destination simply has nothing to filter on. A row mirror like SM Cloud
-// keeps a full copy of every QSO instead of a derived record, so it stamps
-// nothing (no RegisterAdifPrefix) and "which QSOs are missing from it?" is not a
-// question this table can answer. The operator hit exactly that, saw an
-// unexplained 400, and had no way to tell which of the two it was (dogfood
-// 2026-07-27).
+// and the destination simply has nothing to filter on. A type that registers no
+// ADIF prefix records no per-QSO upload status, so "which QSOs are missing from
+// it?" is not a question this table can answer — SM Cloud is the case the
+// operator hit (a row mirror holding a full copy rather than a derived record),
+// but it is not the only one. They saw an unexplained 400 with no way to tell
+// which of the two failures it was (dogfood 2026-07-27).
 func (s *Server) parseMissingFrom(w http.ResponseWriter, r *http.Request, op errors.Op) (string, bool) {
 	raw := r.URL.Query().Get("missing_from")
 	if raw == "" {
@@ -41,9 +41,14 @@ func (s *Server) parseMissingFrom(w http.ResponseWriter, r *http.Request, op err
 		// deliberately does NOT echo the raw param back.
 		prefix, stamps := forwarding.AdifPrefixForType(fc.Type)
 		if !stamps {
+			// State only what the missing prefix actually proves. It does NOT
+			// prove the destination mirrors rows: SM Cloud happens to, but the
+			// dev stub registers no prefix and mirrors nothing, so explaining
+			// this as "keeps a full copy" was simply false for it (codex P3 on
+			// 97565b03). Row mirroring is a separate registered capability.
 			s.writeError(w, http.StatusBadRequest, "missing_from_unsupported",
-				fmt.Sprintf("%q (type %s) keeps a full copy of every QSO rather than stamping "+
-					"each one, so it has no per-QSO upload status to filter on",
+				fmt.Sprintf("%q (type %s) records no per-QSO upload status, so there is "+
+					"nothing to filter on — it can still be used as an upload target",
 					fc.Name, fc.Type), op)
 			return "", false
 		}

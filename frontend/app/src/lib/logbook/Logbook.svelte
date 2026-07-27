@@ -75,10 +75,12 @@
                 >
                     <option value="">All</option>
                     <!-- "Not on X" only for destinations that stamp each QSO.
-                         A row mirror (SM Cloud) holds a full copy and stamps
-                         nothing, so there is no gap to show — label it as the
-                         upload target it is, rather than promising a filter the
-                         daemon will reject. -->
+                         A type that records no per-QSO upload status has no gap
+                         to show, so label it as the upload target it is rather
+                         than promising a filter the daemon will reject. (SM
+                         Cloud is the case in practice — a row mirror holding a
+                         full copy — but "no stamp" does not by itself mean
+                         mirrored: the dev stub registers no prefix either.) -->
                     {#each logbookState.enabledForwarders as f (f.name)}
                         <option value={f.name}>
                             {hasUploadStamp(f.type) ? `Not on ${f.name}` : `Upload to ${f.name}`}
@@ -100,7 +102,7 @@
                 <!-- Say why there is no gap view, so a full logbook doesn't read
                      as a broken filter. -->
                 <span class="text-sm text-muted"
-                    >keeps a full copy — no per-QSO upload stamp to filter on</span
+                    >no per-QSO upload stamp to filter on — upload target only</span
                 >
             {/if}
         {/if}

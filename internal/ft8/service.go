@@ -798,6 +798,27 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// bridge cannot read, which is a far worse failure than an unattributed
 		// occupancy panel.
 		dialMoved := slot.DialChanged
+		if dialMoved {
+			// An FT8 exchange lives on ONE dial frequency: the partner is in our
+			// receiver only while we stay there, and the session logs the dial it
+			// pinned at start. Moving the dial ends the contact physically, so the
+			// daemon ends it too.
+			//
+			// Without this, the suppression below is not enough — it is worse than
+			// nothing. Empty decodes are NOT a sequencer no-op: onSlotAnswering
+			// reads them as "they said nothing", repeats the rung, and KEYS in the
+			// next slot. So a QSY during a receive window would transmit at a
+			// station no longer in our passband and log the contact on the
+			// frequency we left. Skipping just the moved slot only delays that by
+			// one slot, because every settled slot on the new frequency is silence
+			// too (codex P1 on 97565b03).
+			//
+			// Nothing loggable is lost: a contact already complete for us was
+			// logged and retired at its final rung (finalrung.go), and an
+			// incomplete one has nothing to log. Abandon is idempotent and a no-op
+			// when idle.
+			s.seq.Abandon()
+		}
 
 		// Skip decode + occupancy for a slot we transmitted in: the captured audio is
 		// our own TX (rig bleed). Decoding it wastes ~1 s and can surface garbled bleed
@@ -829,7 +850,15 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// late-window budget on the rung instead of on occupancy math. No-op
 		// when no QSO is active; on our own TX slot the decodes are empty and
 		// the parity-matched handler bails.
-		s.seq.OnSlot(ref, msgs, time.Now().UTC())
+		//
+		// A dial-moved slot is NOT driven at all — not even with empty decodes. We
+		// could not hear that window, and "we heard nothing" is a claim the
+		// sequencer acts on (repeat the rung, then key). Silence has to be
+		// observed, not assumed. The Abandon above has already ended any session,
+		// so this is belt-and-braces for the idle case and for the ordering.
+		if !dialMoved {
+			s.seq.OnSlot(ref, msgs, time.Now().UTC())
+		}
 
 		// Publish the decode feed every slot (empty on our TX slots) so the SPA's slot
 		// clock stays live; the decode + occupancy publish independent SSE events on
