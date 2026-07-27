@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	stderr "errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,17 +14,43 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
-// resolveMissingFromPrefix maps a ?missing_from= forwarder NAME to its ADIF
-// upload-status prefix (uppercase, e.g. "QRZCOM") for the stamp-based "not yet
-// uploaded to X" logbook filter (ADR 0039). ok=false when the name matches no
-// configured forwarder, or that forwarder's type stamps no upload status (so
-// "missing from" is undefined for it — e.g. a custom webhook).
-func (s *Server) resolveMissingFromPrefix(name string) (string, bool) {
-	for _, fc := range s.cfg.Forwarders() {
-		if strings.EqualFold(fc.Name, name) {
-			return forwarding.AdifPrefixForType(fc.Type)
-		}
+// parseMissingFrom resolves the optional ?missing_from= param to an ADIF stamp
+// prefix, writing the client error itself and returning ok=false when it cannot.
+// Absent/empty → ("", true), i.e. no filter.
+//
+// The two ways this fails are DIFFERENT problems and now say so. They shared one
+// message — "must name a configured forwarder with an upload-status stamp" —
+// which reads as "you got the name wrong" even when the name is perfectly good
+// and the destination simply has nothing to filter on. A row mirror like SM Cloud
+// keeps a full copy of every QSO instead of a derived record, so it stamps
+// nothing (no RegisterAdifPrefix) and "which QSOs are missing from it?" is not a
+// question this table can answer. The operator hit exactly that, saw an
+// unexplained 400, and had no way to tell which of the two it was (dogfood
+// 2026-07-27).
+func (s *Server) parseMissingFrom(w http.ResponseWriter, r *http.Request, op errors.Op) (string, bool) {
+	raw := r.URL.Query().Get("missing_from")
+	if raw == "" {
+		return "", true
 	}
+	for _, fc := range s.cfg.Forwarders() {
+		if !strings.EqualFold(fc.Name, raw) {
+			continue
+		}
+		// Name/type come from config, not from the request — safe to name in the
+		// response, and naming them is the whole point. The unmatched arm below
+		// deliberately does NOT echo the raw param back.
+		prefix, stamps := forwarding.AdifPrefixForType(fc.Type)
+		if !stamps {
+			s.writeError(w, http.StatusBadRequest, "missing_from_unsupported",
+				fmt.Sprintf("%q (type %s) keeps a full copy of every QSO rather than stamping "+
+					"each one, so it has no per-QSO upload status to filter on",
+					fc.Name, fc.Type), op)
+			return "", false
+		}
+		return prefix, true
+	}
+	s.writeError(w, http.StatusBadRequest, "invalid_missing_from",
+		"missing_from does not name a configured forwarder", op)
 	return "", false
 }
 
@@ -112,15 +139,9 @@ func (s *Server) handleListQsoByLogbook(w http.ResponseWriter, r *http.Request) 
 
 	// ---- missing_from (ADR 0039): page only QSOs not yet uploaded to this
 	// destination, by its durable ADIF stamp ----
-	var missingPrefix string
-	if raw := r.URL.Query().Get("missing_from"); raw != "" {
-		p, ok := s.resolveMissingFromPrefix(raw)
-		if !ok {
-			s.writeError(w, http.StatusBadRequest, "invalid_missing_from",
-				"missing_from must name a configured forwarder with an upload-status stamp", op)
-			return
-		}
-		missingPrefix = p
+	missingPrefix, ok := s.parseMissingFrom(w, r, op)
+	if !ok {
+		return // parseMissingFrom wrote the specific reason
 	}
 
 	// ---- not_emailed: page only QSOs not yet forwarded by email (the "Not

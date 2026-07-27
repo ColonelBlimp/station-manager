@@ -9,7 +9,7 @@
     import { onMount } from 'svelte';
     import { logbookState } from './logbook.svelte';
     import { formatQsoDate, formatTime, formatFreq, formatMode } from './format';
-    import { uploadState, uploadTooltip, uploadColorClass } from './uploadStatus';
+    import { uploadState, uploadTooltip, uploadColorClass, hasUploadStamp } from './uploadStatus';
     import { dxccFlag } from '../utils/dxccFlag';
     import EditQsoModal from './EditQsoModal.svelte';
     import LogbookEmailControls from './LogbookEmailControls.svelte';
@@ -74,12 +74,19 @@
                     onchange={(e) => logbookState.selectDestination(e.currentTarget.value)}
                 >
                     <option value="">All</option>
+                    <!-- "Not on X" only for destinations that stamp each QSO.
+                         A row mirror (SM Cloud) holds a full copy and stamps
+                         nothing, so there is no gap to show — label it as the
+                         upload target it is, rather than promising a filter the
+                         daemon will reject. -->
                     {#each logbookState.enabledForwarders as f (f.name)}
-                        <option value={f.name}>Not on {f.name}</option>
+                        <option value={f.name}>
+                            {hasUploadStamp(f.type) ? `Not on ${f.name}` : `Upload to ${f.name}`}
+                        </option>
                     {/each}
                 </select>
             </label>
-            {#if logbookState.hasDestination}
+            {#if logbookState.hasDestination && logbookState.destinationTracksUploads}
                 <label class="flex items-center gap-2 text-sm text-muted">
                     <input
                         type="checkbox"
@@ -89,6 +96,12 @@
                     />
                     Show uploaded
                 </label>
+            {:else if logbookState.hasDestination}
+                <!-- Say why there is no gap view, so a full logbook doesn't read
+                     as a broken filter. -->
+                <span class="text-sm text-muted"
+                    >keeps a full copy — no per-QSO upload stamp to filter on</span
+                >
             {/if}
         {/if}
 

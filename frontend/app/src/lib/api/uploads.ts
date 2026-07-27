@@ -5,7 +5,7 @@
     the existing per-destination worker then drains the queue in the background.
 */
 
-import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+import { daemonErrorMessage, isPlainObject, readJsonBody, safeFetch } from './_helpers';
 
 export interface EnqueueResult {
     enqueued: number;
@@ -37,14 +37,10 @@ export async function enqueueUploads(
 
     const body = await readJsonBody(fetched.response);
     if (!fetched.response.ok) {
-        // Surface the daemon's error message/code when present.
-        const msg =
-            isPlainObject(body) && typeof body.message === 'string'
-                ? body.message
-                : isPlainObject(body) && typeof body.code === 'string'
-                  ? body.code
-                  : `Daemon error (${fetched.response.status}).`;
-        return { kind: 'error', message: msg };
+        return {
+            kind: 'error',
+            message: daemonErrorMessage(fetched.response.status, body),
+        };
     }
     if (!isPlainObject(body)) {
         return { kind: 'error', message: 'Unexpected upload response.' };

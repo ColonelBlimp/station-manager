@@ -324,3 +324,93 @@ describe('Logbook page', () => {
         expect(screen.queryByText('No QSOs still need emailing.')).toBeNull();
     });
 });
+
+describe('Logbook destination picker: destinations that stamp nothing', () => {
+    // SM Cloud is a ROW MIRROR — it keeps a full copy of every QSO instead of a
+    // derived record, so it stamps no per-QSO upload status and the daemon rejects
+    // missing_from for it. The picker offered it anyway, so selecting it was a
+    // guaranteed 400 with an unexplained "Daemon error (400)." (dogfood 2026-07-27).
+    // The global fetch stub is installed per-test in beforeEach; grab the mock
+    // handle the same way the other cases in this file do.
+    function stubWithSmCloud() {
+        const fetchMock = vi.mocked(globalThis.fetch);
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+            const url = urlText(input);
+            if (url.startsWith('/v1/config')) {
+                return Promise.resolve(
+                    jsonResponse({
+                        mailer: { enabled: false },
+                        forwarders: [
+                            { name: 'qrz', type: 'qrz', enabled: true },
+                            { name: 'cloud-backup', type: 'smcloud', enabled: true },
+                        ],
+                    })
+                );
+            }
+            if (url.includes('/count')) return Promise.resolve(jsonResponse({ count: 5 }));
+            if (url.includes('/qso'))
+                return Promise.resolve(jsonResponse({ items: [], next_cursor: null }));
+            return Promise.resolve(jsonResponse([{ id: 1, name: 'My Log' }]));
+        });
+        return fetchMock;
+    }
+
+    it('never sends missing_from for a destination with no upload stamp', async () => {
+        const fetchMock = stubWithSmCloud();
+        render(Logbook);
+        await flush();
+        await flush();
+
+        fetchMock.mockClear();
+        await logbookState.selectDestination('cloud-backup');
+        await flush();
+
+        const urls = fetchMock.mock.calls.map((c) => urlText(c[0]));
+        const filtered = urls.filter((u) => u.includes('missing_from'));
+        expect(filtered).toEqual([]);
+        expect(logbookState.missingFromParam).toBeUndefined();
+        expect(logbookState.destinationTracksUploads).toBe(false);
+    });
+
+    it('still sends missing_from for a destination that does stamp', async () => {
+        const fetchMock = stubWithSmCloud();
+        render(Logbook);
+        await flush();
+        await flush();
+
+        fetchMock.mockClear();
+        await logbookState.selectDestination('qrz');
+        await flush();
+
+        const urls = fetchMock.mock.calls.map((c) => urlText(c[0]));
+        expect(urls.some((u) => u.includes('missing_from=qrz'))).toBe(true);
+        expect(logbookState.destinationTracksUploads).toBe(true);
+    });
+
+    it('labels a stampless destination as an upload target, not a gap filter', async () => {
+        stubWithSmCloud();
+        render(Logbook);
+        await flush();
+        await flush();
+        flushSync();
+
+        // "Not on X" promises a filter that cannot exist for this type.
+        expect(screen.getByRole('option', { name: 'Upload to cloud-backup' })).toBeInTheDocument();
+        expect(screen.queryByRole('option', { name: 'Not on cloud-backup' })).toBeNull();
+        expect(screen.getByRole('option', { name: 'Not on qrz' })).toBeInTheDocument();
+    });
+
+    it('replaces "Show uploaded" with the reason there is no gap view', async () => {
+        stubWithSmCloud();
+        render(Logbook);
+        await flush();
+        await flush();
+
+        await logbookState.selectDestination('cloud-backup');
+        await flush();
+        flushSync();
+
+        expect(screen.queryByLabelText('Show uploaded')).toBeNull();
+        expect(screen.getByText(/no per-QSO upload stamp to filter on/)).toBeInTheDocument();
+    });
+});

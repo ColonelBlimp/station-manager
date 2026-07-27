@@ -780,6 +780,25 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		ref := SlotRefFromTime(slot.StartUTC)
 		txSlot := s.wasTxSlot(ref.StartUTC)
 
+		// A slot whose dial MOVED spans two frequencies, so its decodes cannot be
+		// placed either — and decodes are the more dangerous half. An A→B→A
+		// excursion (band button, corrected inside the window) captures stations
+		// heard on B while the rig ends on A; every consumer downstream then reads
+		// the CURRENT dial and gets A. The SPA would render those as workable and
+		// key an answer on A at a station that is not there, and the PSK Reporter
+		// sink stamps dial+offset at sink time, publishing wrong spots to a public
+		// network. So a moved slot is treated exactly like a TX slot: no decode,
+		// which leaves msgs empty all the way down — nothing to the sequencer,
+		// nothing to the decode log, nothing to the spot sink — while the empty
+		// report below still ticks the SPA's slot clock.
+		//
+		// Deliberately keyed on MOVED, not on the wider unplaceable below: a dial
+		// that was never known does not imply a band change, and suppressing
+		// decodes for it would blind Band Activity on any rig whose frequency the
+		// bridge cannot read, which is a far worse failure than an unattributed
+		// occupancy panel.
+		dialMoved := slot.DialChanged
+
 		// Skip decode + occupancy for a slot we transmitted in: the captured audio is
 		// our own TX (rig bleed). Decoding it wastes ~1 s and can surface garbled bleed
 		// as ghost Band Activity rows; the raw-spectrum energy detector would mark our
@@ -787,7 +806,7 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// (the occupancy sibling of the self-decode filter). WSJT-X likewise doesn't
 		// decode its own TX slot.
 		var msgs []goft8.DecodedMessage
-		if !txSlot {
+		if !txSlot && !dialMoved {
 			msgs = DecodeSlot(slot.Samples, osd, s.log)
 			// Drop our own transmissions self-decoded off residual rig TX-audio bleed,
 			// so Band Activity / the sequencer never see our own signal. The callsign
@@ -821,15 +840,16 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 			s.decodeSink(report)
 		}
 
-		// A CAT-attached session must never publish occupancy it cannot place on
-		// a frequency — the dial moved mid-window, or was unknown — so such a
-		// slot is skipped exactly like a TX slot. There, the operator CAN
-		// transmit and the picker's suggested[0] feeds the TX offset, so showing
-		// an unplaceable report is worse than showing nothing: the next slot is
-		// 15 s away. An UNTRACKED session (no CAT) still publishes, because FT8
-		// transmit is refused without a writable rig — the keyer's TxReady and
-		// the dial read share that precondition — so its occupancy panel is
-		// display-only and cannot steer anything.
+		// Occupancy needs MORE than the decodes do: it must be ATTRIBUTED to a
+		// band to be rendered at all, so a dial that was never known disqualifies
+		// it even though nothing moved. A CAT-attached session must never publish
+		// occupancy it cannot place — there the operator CAN transmit and the
+		// picker's suggested[0] feeds the TX offset, so showing an unplaceable
+		// report is worse than showing nothing: the next slot is 15 s away. An
+		// UNTRACKED session (no CAT) still publishes, because FT8 transmit is
+		// refused without a writable rig — the keyer's TxReady and the dial read
+		// share that precondition — so its occupancy panel is display-only and
+		// cannot steer anything.
 		unplaceable := slot.DialTracked && slot.DialMHz == 0
 		// The sticky-offset carry resets on ANY change of frequency, not just a
 		// mid-window move: a QSY landing on a slot boundary produces two cleanly
@@ -864,7 +884,7 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 			// skipped slot raises, and these three answer it: no dial at all,
 			// the operator tuning through the window, or CAT gone quiet.
 			Float64("dial_mhz", slot.DialMHz).
-			Bool("dial_moved", slot.DialChanged).
+			Bool("dial_moved", dialMoved).
 			Bool("unplaceable", unplaceable).
 			Int("decodes", len(msgs)).
 			Int("occupied", len(rep.Occupied)).

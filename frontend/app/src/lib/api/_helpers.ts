@@ -200,3 +200,25 @@ export function isShape<T>(
     }
     return true;
 }
+
+/**
+ * The operator-facing message for a non-2xx daemon response.
+ *
+ * The daemon's error envelope carries a human `message` and a machine `code`;
+ * prefer the message, fall back to the code, and only then to the bare status.
+ * A raw "Daemon error (400)." tells the operator that something was rejected but
+ * not what or why — they cannot act on it, and it hides an explanation the
+ * daemon already went to the trouble of writing (dogfood 2026-07-27: picking an
+ * upload destination that cannot be filtered showed exactly that, with the real
+ * reason sitting unread in the body).
+ *
+ * `body` is the already-parsed `readJsonBody` result, so a caller that needs the
+ * body on the success path parses once and passes it here on the failure path.
+ */
+export function daemonErrorMessage(status: number, body: unknown): string {
+    if (isPlainObject(body)) {
+        if (typeof body.message === 'string' && body.message !== '') return body.message;
+        if (typeof body.code === 'string' && body.code !== '') return body.code;
+    }
+    return `Daemon error (${status}).`;
+}

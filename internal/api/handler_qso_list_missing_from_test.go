@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
@@ -12,7 +13,7 @@ import (
 )
 
 // The api test binary doesn't import the qrz package, so register its ADIF stamp
-// prefix here — resolveMissingFromPrefix maps a forwarder's type → this prefix.
+// prefix here — parseMissingFrom maps a forwarder's type → this prefix.
 func init() {
 	forwarding.RegisterAdifPrefix("qrz", "QRZCOM")
 }
@@ -118,5 +119,39 @@ func TestListQsoByLogbook_MissingFromUnknownForwarder(t *testing.T) {
 	}
 	if e.Code != "invalid_missing_from" {
 		t.Fatalf("code = %q, want invalid_missing_from", e.Code)
+	}
+}
+
+// TestListQsoByLogbook_MissingFromRowMirror covers the destination that EXISTS
+// and is spelled correctly but stamps nothing — SM Cloud holds a full copy of
+// every QSO rather than a derived record, so "which QSOs are missing from it?"
+// is not a question the logbook table can answer. It must not share the
+// "no such forwarder" code, and the message must say why: the operator picked
+// this from a dropdown, hit a bare 400, and had no way to tell the two apart
+// (dogfood 2026-07-27).
+func TestListQsoByLogbook_MissingFromRowMirror(t *testing.T) {
+	srv := serverWithForwarders(t, forwarderCfg("cloud-backup", "smcloud", true, "insert"))
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+
+	w := listMissingFrom(t, srv, lbID, "cloud-backup")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	var e struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := unmarshalJSON(w.Body.String(), &e); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if e.Code != "missing_from_unsupported" {
+		t.Fatalf("code = %q, want missing_from_unsupported (NOT the unknown-name code)", e.Code)
+	}
+	// The operator must be able to tell which destination and why.
+	if !strings.Contains(e.Message, "cloud-backup") || !strings.Contains(e.Message, "smcloud") {
+		t.Errorf("message names neither the forwarder nor its type: %q", e.Message)
+	}
+	if !strings.Contains(e.Message, "full copy") {
+		t.Errorf("message does not explain WHY there is nothing to filter on: %q", e.Message)
 	}
 }

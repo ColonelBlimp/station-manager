@@ -24,7 +24,7 @@ import { patchQso, type QsoPatch } from '../api/qso-patch';
 import { fetchMailer, fetchForwarders } from '../api/config-blocks';
 import { enqueueUploads } from '../api/uploads';
 import { enrichCallsign } from '../api/enrichment';
-import type { ForwarderInfo } from './uploadStatus';
+import { hasUploadStamp, type ForwarderInfo } from './uploadStatus';
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
@@ -129,10 +129,11 @@ class LogbookState {
     }
 
     /** The `missing_from` query value for the current view: the selected
-     *  destination when one is picked and "show uploaded" is off, else undefined
-     *  (no filter — All, or showing the whole logbook). */
+     *  destination when one is picked, it can answer "missing from?", and "show
+     *  uploaded" is off. Else undefined (no filter — All, showing the whole
+     *  logbook, or a destination that stamps nothing). */
     get missingFromParam(): string | undefined {
-        return this.selectedDestination !== '' && !this.showUploaded
+        return this.hasDestination && this.destinationTracksUploads && !this.showUploaded
             ? this.selectedDestination
             : undefined;
     }
@@ -141,6 +142,17 @@ class LogbookState {
      *  toggle are relevant. */
     get hasDestination(): boolean {
         return this.selectedDestination !== '';
+    }
+
+    /** Whether the picked destination records a per-QSO upload stamp, i.e.
+     *  whether the gap view ("not on X") is answerable for it at all. A row
+     *  mirror like SM Cloud keeps a full copy and stamps nothing, so the daemon
+     *  rejects missing_from for it — sending it anyway was a guaranteed 400
+     *  (dogfood 2026-07-27). It stays a valid upload TARGET; the operator just
+     *  sees the whole logbook while it is selected. */
+    get destinationTracksUploads(): boolean {
+        const f = this.forwarders.find((x) => x.name === this.selectedDestination);
+        return f !== undefined && hasUploadStamp(f.type);
     }
 
     /** Rows to display. The server already filters emailed rows out of the page
