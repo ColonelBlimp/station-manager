@@ -129,6 +129,18 @@ Conventions that carry forward from v1 and that new v2 code should follow. These
     all deleted within a round or two; the behavioural ones caught real defects.
   - **Feed inputs where right and wrong actually differ.** A test whose fixture makes
     both paths agree proves nothing, however behavioural its name.
+  - **The test must be as strong as the RULE it claims to pin.** Three rounds
+    running (2026-07-27) the finding was "your test proved a weaker statement than
+    your rule": a rule about the cancellation path tested only the synchronous one;
+    a rule that EVERY transmitter is stopped tested only that A hook existed; a rule
+    about where the guard is wired entered at the seam it was wired to. Read the
+    rule and the assertion side by side and ask what an implementation could get
+    wrong while still passing. If the answer is "quite a lot", the test is weaker
+    than the rule.
+  - **Enumerate the states a change CREATES.** Adding a binding creates unbound,
+    stale and mismatched states; adding a wait creates an ordering. Each is a rule
+    to write before implementing. Every finding in the 2026-07-27 dial-guard arc was
+    a state the previous round's fix had just introduced.
   - **If a behaviour test cannot be written without inventing a fact the system does
     not carry, the SYSTEM is missing that fact.** Do not substitute a threshold or a
     heuristic. Worked example: `internal/ft8/dialguard_test.go`, written before its
