@@ -76,6 +76,13 @@ import (
 	     already-armed service stays idempotent whatever the dial is doing — the
 	     requested state is already active, and reporting failure for it would make a
 	     retry or a duplicate click look like a fault.
+	 19. StopForRetune performs the SAME teardown the dial guard does, on request:
+	     PTT down, session ended, TX disarmed. It is the operator asking to leave
+	     rather than the rig having left, so the reason is band_change, not
+	     dial_moved — the notice must not tell them the rig drifted when they moved
+	     it deliberately.
+	 20. StopForRetune is a NO-OP when nothing is transmitting and nothing is armed.
+	     A band change made while idle must not cost a session or an arm.
 
 	Rule 6 is the one that must survive all the strictness above it: dropping TX
 	must never drop a contact that already happened on the air.
@@ -673,4 +680,66 @@ func TestDialGuard_ANewArmStillRequiresAReadableDial(t *testing.T) {
 
 	require.ErrorIs(t, s.ArmTx(true), ErrTxDialUnknown,
 		"not armed yet, so this is establishing a binding and there is nothing to bind to")
+}
+
+// --- 19 + 20: the same teardown, on request ---------------------------------
+
+// A band change is the operator saying "I have decided to leave" through the
+// software instead of the VFO. Same physical consequence, so the same teardown —
+// but a DIFFERENT reason: telling them the rig moved off frequency when they asked
+// to change band is a small lie, and the notice is only worth having if it is true.
+func TestDialGuard_StopForRetuneTearsDownAndSaysWhy(t *testing.T) {
+	dial := 14.074
+	s, k := dialGuardService(t, &dial)
+	published := startGuardCq(t, s)
+
+	require.NoError(t, s.StopForRetune())
+
+	require.False(t, s.seq.Active(), "the session is over — the operator is leaving")
+	require.ErrorIs(t, s.TransmitNext("CQ 7Q5MLV IO91", 1500), ErrTxNotArmed,
+		"and TX is disarmed, exactly as a dial move would leave it")
+	require.Zero(t, k.keys(), "nothing was keyed by the teardown itself")
+
+	require.NotEmpty(t, *published)
+	last := (*published)[len(*published)-1]
+	require.False(t, last.Active)
+	require.Equal(t, EndReasonBandChange, last.EndReason,
+		"the operator moved the rig deliberately; do not report it as the rig drifting")
+}
+
+// Aborting an in-flight transmission is the point of doing this from the API side
+// rather than refusing the command: the rig must be unkeyed before it is switched.
+func TestDialGuard_StopForRetuneDropsPtt(t *testing.T) {
+	zeroTiming(t)
+	dial := 14.074
+	s, k := dialGuardService(t, &dial)
+	startGuardCq(t, s)
+
+	gen := s.seq.currentGen()
+	require.NoError(t, s.startTransmission("CQ 7Q5MLV KH78", 1500, 14.074,
+		func() bool { return s.seq.isCurrent(gen) },
+		func(ctx context.Context, ctrl *TxController) error {
+			return ctrl.transmit(ctx, []int16{1, 2, 3}, time.Time{}, nil)
+		}, nil, nil))
+	require.Eventually(t, func() bool { return k.keys() > 0 }, time.Second, 10*time.Millisecond,
+		"fixture: something must be on the air for the drop to mean anything")
+
+	require.NoError(t, s.StopForRetune())
+
+	require.Eventually(t, func() bool { return k.unkeys() >= k.keys() }, time.Second, 10*time.Millisecond,
+		"PTT must be down BEFORE the caller switches the rig — switching under RF is "+
+			"how relays and amplifiers get damaged")
+	require.False(t, s.txInFlightNow())
+}
+
+// Idle is the common case: most band changes happen between overs, and one must
+// not cost an arm the operator still wants.
+func TestDialGuard_StopForRetuneIsANoOpWhenIdle(t *testing.T) {
+	dial := 14.074
+	s, _ := dialGuardService(t, &dial) // armed, nothing running
+
+	require.NoError(t, s.StopForRetune())
+
+	require.NoError(t, s.preKeyDialCheck(),
+		"nothing was transmitting; the arm stands and the band change costs nothing")
 }

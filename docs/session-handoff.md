@@ -227,6 +227,29 @@ precisely so we don't re-derive state or redo finished work.
 > ESTABLISHING an arm — and the check moved to LAST in the switch, the same
 > precedence `sessionTxGate` uses.
 >
+> **Round 19 (uncommitted): band change while transmitting — spec-first, from the
+> chair.** The operator clicking a band button mid-CQ got 409 "the rig is
+> transmitting". Protective (switching relays under RF damages amplifiers) but
+> inconsistent: nudging the VFO tore everything down in 2 s, while the software
+> route for the same intent just argued. Now a RETUNING command (`set_band`/
+> `set_freq` only) runs the dial guard's teardown first — `ft8.StopForRetune` — then
+> writes; if TX cannot be confirmed stopped the retune does NOT proceed
+> (409 `rig_tx_stop_failed`). New reason code `band_change` so the notice says the
+> operator moved the rig rather than implying it drifted.
+>
+> Composed in `internal/api` via an injected hook (the `SetTxKeyer`/`SetDialSource`
+> idiom) so neither subsystem imports the other — and **wired in `api.New` rather
+> than `cmd/smd`, with its own test**, because both halves pass in isolation whether
+> or not they are connected. That missing-wire shape is exactly what made the
+> round-16 guard fire nowhere.
+>
+> ON-AIR VALIDATION EARNED TODAY: the dial guard is confirmed end to end — 100 Hz
+> ends a session in ~2 s, PTT drops ~11 s into a 12.6 s transmission, TX disarms,
+> the toast names it. A dial move on an RR73 dropped cleanly, the operator re-armed,
+> the exchange resumed in the ANSWERER role and logged (ZS1WH, 20m). Group B policy
+> confirmed correct: the caller's un-sent RR73 is NOT logged, because the partner
+> has not logged either — logging it would manufacture a one-sided QSO.
+>
 > Rounds 4-8 were whack-a-mole because every fix reacted to an observed dial
 > TRANSITION; transitions can be missed, mis-timed, or attributed to the wrong
 > session. The invariant cannot be. **A codex P1 claiming a boundary QSY escapes

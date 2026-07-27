@@ -51,11 +51,41 @@ func (s *Server) handleRigCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A command that moves the rig off frequency must not be written while SM is
+	// keyed: switching relays under RF is how amplifiers get damaged. So rather than
+	// refusing the operator (which is what the bridge's ErrTxActive did, and which
+	// left a band button behaving differently from the VFO for the same intent), we
+	// perform the same teardown the dial guard performs — PTT down, session ended,
+	// TX disarmed — and only then write. Dogfood 2026-07-27.
+	if s.stopTxForRetune != nil && retunesTheRig(cmds) {
+		if err := s.stopTxForRetune(); err != nil {
+			// Could not confirm the rig is unkeyed. Leaving the operator
+			// transmitting where they are beats switching a keyed rig.
+			s.writeError(w, http.StatusConflict, "rig_tx_stop_failed",
+				"could not stop transmitting; the rig was not retuned", op)
+			return
+		}
+	}
+
 	if err := s.bridge.SendCommands(r.Context(), cmds); err != nil {
 		s.writeRigCommandError(w, op, err)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// retunesTheRig reports whether a batch contains anything that moves the rig off
+// frequency. Deliberately a small allow-list rather than "anything that writes":
+// stopping TX is the right answer for a band change and quite wrong for a mode
+// change, which would otherwise tear down a working session as a side effect.
+func retunesTheRig(cmds []bridge.RigCommand) bool {
+	for _, c := range cmds {
+		switch c.Op {
+		case "set_band", "set_freq":
+			return true
+		}
+	}
+	return false
 }
 
 // buildRigCommands resolves the request into a command list, writing the

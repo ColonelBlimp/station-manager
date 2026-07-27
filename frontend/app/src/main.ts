@@ -121,6 +121,9 @@ setFt8TxActions({
 const SESSION_END_TEXT: Record<string, string> = {
     dial_moved: 'the rig moved off the session frequency',
     dial_unknown: "the rig's frequency could not be confirmed",
+    // The operator asked to move; saying the rig drifted would be a small lie, and
+    // the notice is only worth having if it is true.
+    band_change: 'you changed frequency, so SM stopped transmitting first',
 };
 
 setFt8SessionEndedSink((reason, theirCall) => {

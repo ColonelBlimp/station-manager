@@ -1072,6 +1072,36 @@ func isDialRefusal(err error) bool {
 //
 // Called from the scheduler goroutine on every observed dial change (~43 ms
 // granularity), so it must be cheap and must not block that loop.
+// StopForRetune performs the dial guard's teardown ON REQUEST: PTT down, session
+// ended, TX disarmed — for a caller that is about to move the rig deliberately.
+// internal/api calls it before writing a retuning command, so the rig is never
+// switched while keyed; switching relays under RF is how amplifiers get damaged.
+//
+// A no-op when nothing is armed: most band changes happen between overs and must
+// not cost an arm the operator still wants. Returns an error only if the teardown
+// itself could not be completed, which the caller must treat as "do not retune".
+func (s *Service) StopForRetune() error {
+	s.seqGate.Lock()
+	defer s.seqGate.Unlock()
+
+	s.txMu.Lock()
+	armed := s.txArmed
+	s.txMu.Unlock()
+	if !armed {
+		return nil // nothing armed, nothing transmitting, nothing to take down
+	}
+
+	s.log.InfoWith().Msg("ft8: stopping transmit for an operator-requested retune")
+	// Same teardown the dial guard performs, and for the same reason — the only
+	// difference is who initiated it, which is what the reason code records.
+	s.seq.setPendingEndReason(EndReasonBandChange)
+	s.disarmTxLocked(false)
+	s.txMu.Lock()
+	s.sessionDialMHz = 0
+	s.txMu.Unlock()
+	return nil
+}
+
 func (s *Service) onDialMoved(fromMHz, toMHz float64) {
 	// Decide and act under ONE hold of seqGate. Validating outside it and tearing
 	// down inside lets a replacement arm or session commit in between and be killed

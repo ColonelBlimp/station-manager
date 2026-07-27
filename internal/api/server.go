@@ -28,17 +28,22 @@ import (
 
 // Server holds the HTTP server and its dependencies.
 type Server struct {
-	httpServer               *http.Server
-	listener                 net.Listener
-	cfg                      *config.Service
-	qso                      *qsoservice.Service
-	db                       *sqlite.Service
-	logger                   *logging.Service
-	hub                      *events.Hub
-	enrich                   *lookup.Orchestrator
-	mailer                   *email.Service
-	bridge                   *bridge.Service
-	ft8                      *ft8.Service
+	httpServer *http.Server
+	listener   net.Listener
+	cfg        *config.Service
+	qso        *qsoservice.Service
+	db         *sqlite.Service
+	logger     *logging.Service
+	hub        *events.Hub
+	enrich     *lookup.Orchestrator
+	mailer     *email.Service
+	bridge     *bridge.Service
+	ft8        *ft8.Service
+	// stopTxForRetune stops any SM-owned transmission before a command that moves
+	// the rig off frequency. Injected by cmd/smd (same shape as ft8.SetTxKeyer /
+	// SetDialSource) so internal/api can compose the two subsystems without either
+	// importing the other. Nil when there is no FT8 subsystem to stop.
+	stopTxForRetune          func() error
 	limits                   *loadLimiter
 	kit                      *httpkit.Kit
 	protocol                 string
@@ -88,17 +93,32 @@ type Server struct {
 // protocol) because those don't change at runtime; the config-update
 // endpoint only touches operator-relevant fields (logging_station,
 // default_*_id) which startup doesn't bake into Server fields.
+// retuneStopper adapts the FT8 subsystem to the stop-hook, or nil when there is no
+// subsystem — a hook with nothing to stop could only fail confusingly. Typed nil is
+// checked explicitly: a nil *ft8.Service in an interface-free func value would still
+// produce a non-nil closure.
+func retuneStopper(ft8Svc *ft8.Service) func() error {
+	if ft8Svc == nil {
+		return nil
+	}
+	return ft8Svc.StopForRetune
+}
+
 func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator, mailer *email.Service, br *bridge.Service, ft8Svc *ft8.Service) *Server {
 	s := &Server{
-		cfg:                      cfgSvc,
-		qso:                      qso,
-		db:                       db,
-		logger:                   logger,
-		hub:                      hub,
-		enrich:                   enrich,
-		mailer:                   mailer,
-		bridge:                   br,
-		ft8:                      ft8Svc,
+		cfg:    cfgSvc,
+		qso:    qso,
+		db:     db,
+		logger: logger,
+		hub:    hub,
+		enrich: enrich,
+		mailer: mailer,
+		bridge: br,
+		ft8:    ft8Svc,
+		// Wire the retune stop-hook here rather than leaving it to cmd/smd: both
+		// halves of that behaviour pass in isolation whether or not they are
+		// connected, so the fewer places the wire can be forgotten the better.
+		stopTxForRetune:          retuneStopper(ft8Svc),
 		limits:                   newLoadLimiter(cfg.Server.MaxConcurrentRequests, cfg.Server.MaxEventSubscribers, cfg.Server.SubmitRatePerSec, cfg.Server.SubmitRateBurst),
 		kit:                      httpkit.New(logger, cfg.Server.MaxBodyBytes),
 		protocol:                 cfg.Server.Protocol,

@@ -114,6 +114,10 @@ const (
 	// EndReasonDialUnknown: the daemon can no longer read the rig's frequency, so
 	// it will not key on one it cannot corroborate.
 	EndReasonDialUnknown = "dial_unknown"
+	// EndReasonBandChange: the operator asked to move the rig, so SM stopped first.
+	// Distinct from dial_moved on purpose — the rig did not drift, they moved it,
+	// and a notice is only worth having if it is true.
+	EndReasonBandChange = "band_change"
 )
 
 type QsoStatus struct {
