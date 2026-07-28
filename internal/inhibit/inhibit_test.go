@@ -51,6 +51,7 @@ type hangingSurface struct {
 	gate        chan struct{} // closed to let the hung call finally return
 	hangAcquire bool
 	hangRelease bool
+	entries     int
 	acquires    int
 	releases    int
 }
@@ -58,6 +59,12 @@ type hangingSurface struct {
 func (h *hangingSurface) name() string { return h.nameStr }
 
 func (h *hangingSurface) inhibit(string) (func(), error) {
+	// Counted BEFORE the gate, unlike acquires: rule 10 is about how many times
+	// the surface was ENTERED, which is what accumulates goroutines, not how many
+	// times it completed.
+	h.mu.Lock()
+	h.entries++
+	h.mu.Unlock()
 	if h.hangAcquire {
 		<-h.gate
 	}
@@ -78,6 +85,12 @@ func (h *hangingSurface) counts() (int, int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.acquires, h.releases
+}
+
+func (h *hangingSurface) entered() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.entries
 }
 
 // eventually polls until want is satisfied, so a rule about something happening
@@ -344,4 +357,41 @@ func TestInhibit_DoesNotBlockOnAHungRelease(t *testing.T) {
 		t.Fatalf("inhibit: %v", err)
 	}
 	mustNotBlock(t, "release", rel)
+}
+
+// Rule 10 — a surface whose previous attempt is STILL blocked must not be
+// attempted again.
+//
+// godbus's SystemBus()/SessionBus() take a package-global mutex and hold it
+// across the whole connect+auth+Hello handshake, none of which accepts a
+// context. A bus that accepts the socket but never completes the handshake
+// therefore blocks its goroutine forever AND blocks every later caller behind
+// the mutex. Rules 6-9 bound what the CALLER waits for, but they do not stop the
+// work behind them stacking up: without this rule each arm adds another
+// permanently-blocked pair — the surface call, plus the cleanup goroutine
+// waiting on its result to release a late acquisition — so a long session
+// against a wedged bus grows without bound. This is a state rules 6-9 CREATED.
+func TestInhibit_DoesNotStackAttemptsOnAPermanentlyHungSurface(t *testing.T) {
+	hung := &hangingSurface{nameStr: "screensaver", gate: make(chan struct{}), hangAcquire: true}
+	defer close(hung.gate)
+	good := &fakeSurface{nameStr: "logind"}
+
+	in := newTestInhibitorWithTimeout(20*time.Millisecond, hung, good)
+	const arms = 5
+	for n := 0; n < arms; n++ {
+		rel, err := inhibitBounded(t, in, "testing")
+		if err != nil {
+			t.Fatalf("arm %d: want success from the working surface, got: %v", n, err)
+		}
+		rel()
+	}
+
+	if got := hung.entered(); got != 1 {
+		t.Errorf("hung surface: want 1 attempt across %d arms, got %d "+
+			"(each extra attempt is two goroutines blocked for the life of the process)", arms, got)
+	}
+	// The wedged surface must not have cost us the one that works, on ANY arm.
+	if acq, rel := good.counts(); acq != arms || rel != arms {
+		t.Errorf("working surface: want %d/%d acquires/releases, got %d/%d", arms, arms, acq, rel)
+	}
 }

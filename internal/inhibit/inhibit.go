@@ -55,6 +55,13 @@ type Inhibitor struct {
 	surfaces []surface
 	log      logging.Logger
 	timeout  time.Duration
+
+	// inflight marks a surface whose previous acquire has not come back yet, so a
+	// wedged one is attempted ONCE rather than once per arm. Keyed by index, not
+	// by name, so a future surface that duplicated a name could not silently share
+	// another's slot. See claim().
+	mu       sync.Mutex
+	inflight map[int]bool
 }
 
 // New builds an Inhibitor over both supported surfaces. Nothing connects to a bus
@@ -103,8 +110,8 @@ func (i *Inhibitor) Inhibit(why string) (func(), error) {
 		releases []func()
 		failures []string
 	)
-	for _, s := range i.surfaces {
-		rel, err := i.acquireBounded(s, why)
+	for idx, s := range i.surfaces {
+		rel, err := i.acquireBounded(idx, s, why)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", s.name(), err))
 			continue
@@ -149,7 +156,42 @@ func (i *Inhibitor) Inhibit(why string) (func(), error) {
 // background, because an inhibition whose release func nobody holds never ends —
 // the desktop would stop idling for the life of the process, which is worse than
 // the fault this package mitigates (rule 8).
-func (i *Inhibitor) acquireBounded(s surface, why string) (func(), error) {
+// claim reserves a surface for one acquire attempt, returning false when the
+// previous attempt is still outstanding. Lazily allocated so a hand-built
+// Inhibitor (the tests) needs no extra construction.
+func (i *Inhibitor) claim(idx int) bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.inflight == nil {
+		i.inflight = make(map[int]bool)
+	}
+	if i.inflight[idx] {
+		return false
+	}
+	i.inflight[idx] = true
+	return true
+}
+
+func (i *Inhibitor) unclaim(idx int) {
+	i.mu.Lock()
+	delete(i.inflight, idx)
+	i.mu.Unlock()
+}
+
+func (i *Inhibitor) acquireBounded(idx int, s surface, why string) (func(), error) {
+	// One outstanding attempt per surface. godbus's SystemBus()/SessionBus() hold
+	// a PACKAGE-GLOBAL mutex across the whole connect+auth+Hello handshake and
+	// take no context, so a bus that accepts the socket but never finishes the
+	// handshake blocks its goroutine forever and every later caller behind it.
+	// The bound below returns control to the caller but does not stop that work
+	// stacking: without this guard each arm would strand another pair — the
+	// surface call, plus the cleanup goroutine waiting on its result — for the
+	// life of the process (codex P2 on 0188672a, a defect introduced by the bound
+	// itself). The claim clears when the attempt finally answers, so a bus that
+	// recovers is retried.
+	if !i.claim(idx) {
+		return nil, fmt.Errorf("previous attempt has not answered yet")
+	}
 	type result struct {
 		rel func()
 		err error
@@ -164,12 +206,18 @@ func (i *Inhibitor) acquireBounded(s surface, why string) (func(), error) {
 
 	timer := time.NewTimer(i.timeout)
 	defer timer.Stop()
+	// Exactly ONE reader of ch clears the claim — the fast path here, or the
+	// cleanup goroutine below. Clearing it anywhere else would let a second
+	// attempt start while the first was still blocked.
 	select {
 	case r := <-ch:
+		i.unclaim(idx)
 		return r.rel, r.err
 	case <-timer.C:
 		go func() {
-			if r := <-ch; r.rel != nil {
+			r := <-ch
+			i.unclaim(idx)
+			if r.rel != nil {
 				i.log.DebugWith().Str("surface", s.name()).
 					Msg("inhibit: surface answered after the bound; releasing the late inhibition")
 				r.rel()
