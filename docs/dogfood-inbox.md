@@ -152,3 +152,168 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   Follow-ups worth building either way: (a) an `ft8.tx.amplitude` config field so
   drive is SM's to set rather than a desktop mixer's, and (b) log the output sink's
   name AND volume at FT8 arm time, so this is one grep instead of an hour.
+  **THIS RECURRED 2026-07-28 — see the stuck-TX entry below. Same rig, same setup,
+  one day later; that time it was NOT cycled and it ended with the radio latched
+  and hung. The 07-28 entry establishes the collapse is silently detectable from
+  the decode log (answers stop while decodes continue) and proposes the real fix:
+  read the rig's PO meter while keyed.**
+- [2026-07-28] **STUCK TX — 4th incident, and the first where the RIG stopped
+  answering CAT while still keyed.** 80m FT8 CQ run (3.573 MHz, +2750 Hz), operator
+  in the shack 2 m away and NOT touching the rig; no rig settings changed since the
+  2026-07-23 RTS fix. Ended when the operator switched the radio off at ~04:15:30.
+  **Trace** (local time, `smd.log`): 50 clean CQ cycles, every one keying
+  `tx-status 1` (TX by CAT) → `2` (tail) → `0`. Cycle 51 at **04:10:30** reported
+  **`2` — "TX by other means" — at the moment of keying, never `1`, and never
+  returned to `0`.** `TX0;` written 04:10:43 on schedule; alarm `tx_unconfirmed`
+  04:10:46 (the 3 s confirm timeout); three following slots refused
+  (`rig not ready to transmit`); **~04:11:50 the rig stopped answering CAT
+  altogether** (derived: the FT8 capture gate needs 2 consecutive 5 s silent
+  windows and dropped at 04:12:02); alarm re-probe loop exhausted 04:15:41. Only
+  the power cycle cleared it. Across today 95 keyings read `1` and exactly one read
+  `2`; since the RTS fix, `2`-while-idle otherwise appears only in the 2026-07-25
+  06:00–07:30 block, which is the operator working phone by hand.
+  **Operator observation at ~04:15: rig displayed TX, amp keyed, but NO POWER
+  OUTPUT** — which is the single most useful fact and the reason to read this
+  alongside the 2026-07-27 drive-collapse note above.
+  **Eliminated:** RF ingress as the SUSTAINING cause (no drive after 04:10:43 =
+  no RF, so nothing to get back into the CAT lead while it died); operator PTT
+  (mic/MOX/footswitch — he was 2 m away); `RPTT SELECT` / settings drift (unchanged
+  since 07-23, and it is DAKY); USB/CP2105 (kernel log completely clean through the
+  window — this is NOT the 2026-07-18 shape); SM's audio path timing (the
+  transmission ran its normal 12.6 s and the unkey went out on time); SM command
+  set (`ft8.tx.mode` is unset, so SM sends this rig nothing but `TX1;`/`TX0;`, and
+  both went out). **RF ingress is also OUT as the trigger** — see the finding
+  below; no RF had left the shack for 24 minutes before the latch. (Recorded
+  because it was the leading hypothesis for most of the investigation and was
+  wrong twice: RF was ruled out as the SUSTAINING cause on the "no power"
+  observation, readmitted as a possible TRIGGER, then ruled out entirely by the
+  decode-log timing. The operator's own report of 80/40/30 m interfering with
+  household equipment is real and is the common-mode signature — it just is not
+  what happened here.)
+  **THE ACTUAL FINDING — THE DRIVE HAD ALREADY COLLAPSED, 24 MINUTES EARLIER.**
+  From `ft8-all.txt`, last station to answer us: **UR4LBG at 01:46:15 UTC**. In the
+  window 01:46:30 → 02:10:30 we made **48 CQ transmissions and got 0 answers**,
+  while **decoding 25 signals from 6 distinct stations** (DO5PY, MM0HVU, NF6P,
+  RN3YN, ZS6NL) — so the band was open and RX was healthy the whole time. In the
+  seven minutes BEFORE that we worked VE7SV (British Columbia, on 80m!), SP9UPH and
+  UR4LBG back to back. **Confirmation from the recovery:** after the power cycle,
+  DM2BPG answered within 2 minutes of resuming and KU1CW right after — at 250 W,
+  LESS power than before. Propagation does not recover the instant a radio is
+  power-cycled. So TX drive collapsed ~01:46:30 UTC, we called CQ into nothing for
+  24 minutes, and the rig latched at 02:10:30 — the latch came AFTER the collapse,
+  not before, and is probably a second-order consequence rather than the primary
+  fault. The `ft8-all.txt` "Transmitting" lines prove only that KeyTx succeeded,
+  never that audio flowed — same caveat as 07-27, and this is exactly how 24
+  minutes of dead air looked normal in every log we have.
+  **The cheap detector that already exists in the data:** answers stop while
+  decodes continue. Worth knowing by hand; better as (d) below.
+  **BAND CORRELATION — operator's observation, and the log supports it.** He
+  reports trouble only on **80m and 30m**, never on the high bands. Sweeping every
+  answer-less run of ≥15 consecutive TX slots across the whole decode log finds
+  exactly ONE genuine collapse: today's, on 80m. The high bands are demonstrably
+  clean over ~1,070 transmissions — 17m 478 TX/377 answered (the 07-27 soak), 15m
+  413/339, 12m 181/166, all with no answer-less run at all. (The one other flagged
+  run, 20m 07-27 04:53→07:41, is 31 slots spread over 2h48m of intermittent
+  operation, not a continuous collapse.) The earlier 30m sighting is the 2026-07-21
+  incident recorded in `session-handoff.md`, outside this log window. **This puts RF
+  ingress back as the leading cause OF THE DRIVE COLLAPSE — which is NOT a
+  contradiction of the elimination above, because that ruled RF out for the LATCH
+  and the CAT death, both of which happened 24 min after any RF had stopped. RF was
+  present at 01:46:30 when the drive collapsed.**
+  **AND IT IS NOT A FREQUENCY CORRELATION AT ALL — IT IS AN ANTENNA ONE (operator,
+  2026-07-28).** 20m–6m are on a **hex beam**; 80/40/30m are on the **DX Commander
+  vertical**. Re-sorted that way the split is exact: every clean band above — 20m,
+  17m, 15m, 12m — is the HEX BEAM, and both trouble bands — 80m, 30m — are the
+  VERTICAL. That is a far stronger hypothesis than "low bands are worse", because it
+  names a mechanism instead of a tendency: a ground-mounted multiband vertical works
+  against its radial field and readily puts common-mode current on the feedline
+  shield, which carries RF straight into the shack; an elevated, balanced hex beam
+  normally does not. **Check against the earlier incidents:** 2026-07-21 was 30m =
+  vertical ✓; 2026-07-28 is 80m = vertical ✓; 2026-07-23 was 20m = hex beam, which
+  looks like a counter-example but is NOT evidence either way — that one has a known
+  and fixed root cause (the RTS rigdef bug). **FALSIFIABLE PREDICTION worth running:
+  40m is also on the DX Commander and has only ~7 logged transmissions, so it is
+  effectively untested. If the antenna hypothesis is right, 40m should show the
+  fault and 20m should never.** That single experiment separates antenna from
+  frequency.
+  **THE MECHANISM THIS SUGGESTS, AND THE GAP IT EXPOSES:** common-mode RF disturbs
+  the **PCM2903C USB audio codec's stream** — a DIFFERENT USB device from the CP2105
+  serial bridge, which is why CAT sails on untouched while audio dies. **We have
+  already been bitten by exactly this shape in the other direction and fixed only
+  that side:** 2026-07-18, the CAPTURE stream went dead and the daemon decoded pure
+  silence with zero errors logged → `internal/ft8/deadsource.go` was built the same
+  day (starved/silent strike detection → release + reacquire). **There is NO
+  playback-side equivalent** — confirmed, nothing in `internal/audio/playback/` or
+  `txcontroller.go` monitors stream health — so when the PLAYBACK stream died on
+  07-27 and again on 07-28 the daemon transmitted silence with zero errors, twice.
+  Same failure shape, opposite direction, mitigation applied to one side only.
+  **Caveat that matters for the fix choice:** a playback watchdog may be BLIND to
+  this. On 07-27 the stream appeared to be running and was routed nowhere useful —
+  if malgo keeps pulling frames, a callback-counting watchdog sees a healthy stream.
+  The meter read in (d) measures at the RIG, past every software layer, so it
+  catches the fault wherever in the chain it happened. Build (d) first.
+  **TOT was armed and would have worked:** set to 8 min (kept long because a short
+  TOT cuts out phone), so it was due to fire 04:18:30 — the operator stopped it
+  ~3 min short. Not a gap; but 8 min is pure exposure for a mode whose transmissions
+  are 12.6 s.
+  **OPERATOR CHANGES ON RESUME (04:37 local):** (1) power reduced to **250 W**;
+  (2) **the microphone was UNPLUGGED — and PLUGGED BACK IN at ~04:52**, so the
+  mic-out window was only ~15 min and covered 3 QSOs (DM2BPG 04:40, KU1CW 04:42,
+  DL1STG 04:50) with no fault. **That proves nothing**: the previous run went ~25
+  min before the drive collapsed and ~49 min before the latch, so a clean 15 min is
+  well inside the noise. From ~04:52 the only variable still changed is the power.
+  (2) is a real candidate for the LATCH
+  specifically: a stuck or intermittent mic PTT keys the rig "by other means"
+  (`tx-status 2`, exactly what was observed), no CAT `TX0;` can release it, and in
+  DATA-U the mic audio is not routed — which would key the rig with NO power out,
+  matching the operator's observation precisely. It does NOT explain the CAT link
+  going silent at 02:11:50, and it does NOT explain the drive collapse at 01:46:30,
+  which is the primary fault and came first. If the latch never recurs with the mic
+  out, unplug/replug it deliberately to confirm rather than leaving it as a
+  coincidence.
+  **Follow-ups, HIGHEST VALUE FIRST:** (d) **read the rig's ALC *and* PO meters
+  while keyed** — Yaesu exposes meter reads (`RM`; `RM5` ALC, `RM6` PO), and the
+  FTdx10 rigdef has no meter command among its fourteen. Keyed with the meters at
+  zero is a DIRECT, local measurement of "I am not radiating" — the fault that
+  actually happened, twice in two days, and which every existing log made look
+  normal. **Read BOTH, because together they LOCALISE the fault rather than merely
+  detecting it:** ALC≈0 + PO≈0 ⇒ no audio is reaching the rig (the PipeWire/drive
+  fault — our case); ALC normal + PO≈0 ⇒ audio is fine and the rig is not making RF
+  (PA, ATU, antenna or rig fault); ALC≈0 + PO normal should be impossible and would
+  indicate the reads themselves are wrong. The operator already does this by eye —
+  watching ALC during a slot is exactly the manual version — so the check is
+  known-good, it just needs to be something the daemon does every slot instead of
+  something a human has to remember to look at. READ-only: no TX intent, no safety
+  risk, no network. This supersedes (a) in priority: (a) shortens the damage after a
+  hang, (d) catches the fault itself. Needs checking against the FTdx10 CAT
+  reference, same as (a).
+  (a) **mode-scoped TOT** — if the FTdx10 exposes the TOT menu item
+  over CAT (Yaesu `EX` commands reach the menu on that generation; the rigdef has NO
+  menu-command support today), SM could clamp it to the rig's **1 min minimum** for
+  the life of an FT8 session and restore the operator's 8 min on exit. Same
+  snapshot/clamp/restore shape as the ADR 0027 tune restore, so NOT a new safety
+  mechanism — and it addresses the one failure class no CAT logic can, a radio that
+  has stopped listening. 1 min is still ~5× the longest legitimate FT8 key-down
+  (12.6 s), so the floor costs nothing here; against TODAY's incident it would have
+  ended the carrier at ~04:11:30 instead of ~04:15:30, i.e. 4 minutes earlier and
+  before the operator had to reach the radio. Needs checking against the FTdx10 CAT
+  reference first. (b) **The alarm
+  window logs almost nothing** — 04:10:46→04:15:41 produced ONE line, because
+  `observeTxStatus` logs only on TRANSITION and a stuck state never transitions. So
+  the log cannot distinguish "rig keeps answering still-transmitting" from "rig
+  stopped answering" — the single most important fact in a stuck-TX incident, and
+  the one that had to be inferred here from the FT8 capture gate's timing. Log the
+  probe answer (or its absence) while an alarm stands. (c) **CHOKE THE COMMON-MODE
+  PATH — PROMOTED from "cheap, do it anyway" to the leading candidate FIX, on the
+  ANTENNA correlation above.** Two places, and the first matters more: a choke/current
+  balun at the **DX Commander's feedpoint** stops RF getting onto the feedline shield
+  and into the shack at all, and a clamp-on ferrite on the **USB leads at the rig end**
+  protects the specific victim. The hex beam evidently does not need either, which is
+  itself the argument for where to spend the effort. (d) detects the fault; (c) is the
+  only item that attacks its cause. Cheap enough to just do and see. (e) A
+  **playback-side dead-stream watchdog** mirroring `deadsource.go` — lower priority
+  than it looks, per the blindness caveat above, but the asymmetry is real and worth
+  closing once (d) can tell us whether a given collapse was visible from inside the
+  audio layer at all.
+  NOT worth building: escalating a persistent `2` to a re-unkey burst (as `1`
+  already does) — it would have written into a radio that had stopped listening.
