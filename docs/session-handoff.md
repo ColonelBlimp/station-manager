@@ -30,7 +30,81 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-27)
+## Current state (as of 2026-07-28)
+
+> **2026-07-28 — the stuck-TX investigation day. Idle inhibitor (g) SHIPPED and
+> PROVEN; the drive collapse is STILL UNEXPLAINED; one new rig-side finding.**
+>
+> - **DEPLOYMENT — read this first.** The running daemon is the **14:44 build**
+>   (`/usr/bin/smd`, mtime 14:44). It **has (g)** — that is how the A/B below was
+>   run — but **NOT** the two D-Bus timeout fixes (`0188672a` 16:05, `17afb249`
+>   16:39). A `task deploy:local:dev` is needed to pick those up. Nothing else is
+>   pending deployment.
+> - **(g) desktop idle inhibition — shipped and PROVEN on hardware.** New
+>   `internal/inhibit` (logind `idle:sleep` mode=block on the SYSTEM bus, plus
+>   `org.freedesktop.ScreenSaver` on the session bus), injected into `internal/ft8`
+>   behind an `IdleInhibitor` interface so the FT8 package takes no D-Bus
+>   dependency. Config `ft8.tx.inhibit_idle`, nil→true, as a **resolver** and not
+>   an `applyDefaults` entry — `ActiveFt8()` leaves the whole TX block nil, and a
+>   default cannot be written into a block that does not exist (that was a real
+>   defect, caught pre-commit: a minimal config resolved to OFF while the docs said
+>   ON). **Controlled A/B on KDE Plasma, same session, same defaults, one
+>   variable: 44 min armed and untouched → NO screen lock; TX disarmed at 15:29:12
+>   → locked at 15:36:33**, ~5 min, the KDE default. So PowerDevil honours the
+>   ScreenSaver lock. Note logind's `IdleAction=ignore` makes the `idle` half inert
+>   on this host; the `sleep` half plus ScreenSaver do the work.
+> - **(g)'s JUSTIFICATION CHANGED — do not read it as a drive-collapse fix.** It
+>   was written for the idle hypothesis, which the SAME DAY's testing weakened.
+>   What justifies it is a **measured** hazard: at 13:02:34 the machine suspended
+>   **four seconds into a keyed transmission**, `user.slice` frozen, so smd could
+>   not send `TX0;` for 134 s and its own 18 s max-duration timer froze with it
+>   (fired 127 s late on thaw). Only the rig's TOT could have ended that carrier.
+> - **Three codex rounds, converged.** P1 unbounded D-Bus calls (hang arm, disarm,
+>   shutdown — `publishTxState()` sits AFTER the inhibit call, so a hang leaves the
+>   daemon armed with the SPA unaware) → P2, where **the fix itself leaked two
+>   goroutines per arm**, because godbus holds a package-global mutex across a
+>   context-free connect+auth+Hello → **clean**. `internal/inhibit` now carries 10
+>   behaviour rules, every one written before its implementation, each with a
+>   reversion proof.
+> - **THE DRIVE COLLAPSE IS STILL UNEXPLAINED. Four tests, all null, all WEAK.**
+>   5 W dummy load through two lock cycles and a full suspend/resume (107/107 with
+>   drive); 350 W dummy load, 31 min (54/54); 350 W into the DX Commander on 80m,
+>   28 min (53/53). **Do not over-read these:** ~250 transmissions against a fault
+>   that runs maybe 1 in 1,000 gives roughly a 78% chance of seeing nothing even if
+>   the hypothesis were right. They narrow the space weakly; they settle nothing.
+> - **NEW POSITIVE FINDING — its own dogfood-inbox entry.** The rig intermittently
+>   **ignores the first `TX0;`**, answering `1`; SM's `case "1"` path alarms,
+>   refuses the mode restore, re-sends the unkey and recovers in ~1 s. Six
+>   occurrences all-time (07-21, 07-23, 07-26 ×2, 07-28 ×2), ~1 in 430
+>   transmissions, and **no trend** (07-27: 578 transmissions, zero events). The
+>   07-28 pair is the discriminator — **5 W into a dummy load and 350 W into the
+>   antenna** — which rules out RF, power and the antenna. **NOT established as
+>   related to the stuck-TX incidents:** `1` means the unkey did not take, `2`
+>   means something non-CAT is keying; different rig states, and conflating them
+>   would be an error.
+> - **Measured facts worth keeping.** The incident's drive collapse was **6m47s
+>   after the screen locked** — the `Lockdown: systemd-logind: hibernation is
+>   restricted` ×5 line DATES the lock but is **not** a fault marker (it fires on
+>   every normal lock; the earlier reading is corrected in the inbox). logind's
+>   **`IdleHint` is NOT tracked under KDE Wayland** — use `LockedHint`, or an
+>   analysis comes out flat and reads as "never went idle". The rig's PipeWire sink
+>   **suspends ~6 s after every transmission and must resume for the next** (~120
+>   resumes/hour), and SM's playback node is created per transmission rather than
+>   held from arm — which weakens the "one bad handle for the whole session" story.
+> - **Manual updated** (operator-directed): new section *"Before you transmit: stop
+>   the computer sleeping"* in `manual/content/chapters/ft8.md`, alongside the TOT
+>   section it depends on and stating the consequences can extend to equipment
+>   damage; plus a cause paragraph in the troubleshooting *"The rig transmits and
+>   won't stop"* entry.
+> - **NEXT, in order.** (1) **Follow-up (d) — read the rig's ALC and PO meters
+>   while keyed.** Highest value by far: it turns normal operating into the
+>   experiment, so the next occurrence diagnoses itself instead of needing a
+>   ~6-hour reproduction attempt, and ALC≈0+PO≈0 vs ALC-normal+PO≈0 localises the
+>   fault. (2) The **dawn 350 W run** on 80m with `inhibit_idle: false` so (g) does
+>   not mask the idle variable, and **no feedpoint choke yet** — fitting it first
+>   destroys the baseline. (3) The **TOT-through-suspend observation**: 3 min at
+>   5 W, watch the PO meter through a deliberate suspend; if it drops at 60 s that
+>   confirms ADR 0057's central premise on real hardware for the first time.
 
 > **2026-07-27 (late) — internal/ft8 package review CLOSED, Call-CQ Next SHIPPED
 > + on-air proven, invariants 3 and 6 swept, tile layout RETIRED.** Long session;
