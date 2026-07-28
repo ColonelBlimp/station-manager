@@ -43,6 +43,13 @@ down by a wire, and no stop command over CAT can release it. See
 [Connecting Your Rig (CAT)](#cat) — set `RPTT SELECT` to
 **DAKY** (Yaesu) or `USB SEND` to **OFF** (Icom).
 
+**Another cause is the computer going to sleep.** If an idle timer suspends
+the machine part-way through a transmission, Station Manager is frozen with
+the rig keyed — it cannot send the stop command, and neither can anything else
+on the computer. Only the rig's time-out timer will end it. Turn automatic
+suspend off: see [Operating FT8](#ft8), *Before you transmit: stop the
+computer sleeping*.
+
 **How to tell.** In `smd.log`, look at what the rig answered after the stop:
 
 ```

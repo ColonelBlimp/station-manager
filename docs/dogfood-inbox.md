@@ -560,7 +560,8 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   **The FT8 scheduler did the right thing under a fault it had never met:**
   `timer delay exceeded the lateness budget; skipping slot`, `late_ms=127172`. It
   refused a 127 s-late slot instead of transmitting into it.
-  **(g) HAS A VALIDATION GAP, found while setting this up.** The bench check —
+  **(g) HAD A VALIDATION GAP, found while setting this up — CLOSED the same day;
+  see the controlled A/B below.** The bench check —
   arm TX, confirm `systemd-inhibit --list` shows the lock — proves the lock is
   TAKEN, not that anything HONOURS it. On this host logind's `IdleAction` is
   `ignore`, so **the `idle` half of (g)'s lock is inert**: there is no logind idle
@@ -572,6 +573,46 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   Wayland** — it read `no` throughout while `LockedHint` read `yes`. An analysis
   keyed on `IdleHint` would come out flat and read as "the machine never went
   idle".
+  **GAP CLOSED — (g) WORKS ON THIS DESKTOP, PROVEN BY CONTROLLED A/B (2026-07-28,
+  15:40).** Deployed, armed TX with NO CQ run (arming holds the inhibitor and
+  transmits nothing — `armTx` opens the device and builds the controller, only
+  `startTransmission` keys), then left untouched. The lock was visible and
+  correct: `Station Manager | smd | sleep:idle | "Station Manager: FT8 transmit
+  is armed" | block` — and the ONLY block-mode sleep lock on the box, since
+  PowerDevil's `block` covers key handling alone and every other sleep lock is
+  `delay`. Both surfaces granted: logind directly visible in the list; the
+  ScreenSaver one inferred from the ABSENCE of `inhibit: some idle-inhibition
+  surfaces unavailable`, which `internal/inhibit` emits whenever it gets fewer
+  locks than surfaces.
+  **The A/B — same machine, same session, same KDE defaults (`powerdevilrc` and
+  `kscreenlockerrc` both reset to empty), one variable:**
+  | inhibitor | window | result |
+  |-----------|--------|--------|
+  | **HELD** | 14:44:54 → 15:29:12, 44 min untouched | **NO LOCK** |
+  | **RELEASED** (TX disarmed 15:29:12) | ~5 min after last input | **locked 15:36:33** |
+  **PROVEN DIRECTLY: PowerDevil's idle timers are suppressed** — i.e. the
+  ScreenSaver surface IS honoured, which was the actual open question, and the
+  bench check could never have answered it.
+  **STRONGLY SUPPORTED BUT NOT DIRECTLY CONTROLLED: suspend prevention.** The
+  control ran only 11 min and suspend needs ~18, so no suspend was ever available
+  for it to block. The inference rests on three things: the same PowerDevil idle
+  mechanism the lock A/B just proved suppressed; an INDEPENDENT logind `sleep`
+  block lock; and this machine demonstrably suspending at ~18 min idle (13:02:34)
+  yet sitting 44 min inhibited without one. **To close it properly: disarm and
+  leave the machine 25+ min.** Recorded as still open rather than claimed.
+  **ALSO CONFIRMED IN THE FIELD: the inhibition RELEASES on disarm** — no
+  `Station Manager` row after 15:29:12. That is one of the two rules called out
+  above as pinning a state this change CREATES, and the more dangerous one: a
+  leaked inhibition never releases, so the desktop would stop idling for the life
+  of the process — worse than the fault being mitigated.
+  **JUSTIFICATION HAS CHANGED — say so in the commit message.** (g) was built for
+  the idle/drive-collapse hypothesis, and that hypothesis was WEAKENED the same
+  day (see the dummy-load results above). What justifies it now is the MEASURED
+  hazard at 13:02:34: a suspend landing four seconds into a keyed transmission,
+  SM frozen and unable to unkey, with only the rig's TOT able to end it.
+  **Do not read (g) as a drive-collapse fix.**
+  **Set `inhibit_idle: false` for the dawn 350 W test**, or (g) masks the idle
+  variable in the one experiment that still matters.
   **MANUAL UPDATED** (2026-07-28, operator-directed): new section *"Before you
   transmit: stop the computer sleeping"* in `manual/content/chapters/ft8.md`,
   next to the TOT section it depends on, stating that the results are

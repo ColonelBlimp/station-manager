@@ -30,10 +30,12 @@
 package inhibit
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/godbus/dbus/v5"
@@ -52,6 +54,7 @@ type surface interface {
 type Inhibitor struct {
 	surfaces []surface
 	log      logging.Logger
+	timeout  time.Duration
 }
 
 // New builds an Inhibitor over both supported surfaces. Nothing connects to a bus
@@ -65,8 +68,28 @@ func New(log logging.Logger) *Inhibitor {
 	return &Inhibitor{
 		surfaces: []surface{&logindSurface{}, &screenSaverSurface{}},
 		log:      log,
+		timeout:  surfaceTimeout,
 	}
 }
+
+// surfaceTimeout bounds ONE surface's acquire or release. godbus's obj.Call is
+// CallWithContext(context.Background(), ...) and dbus.SystemBus()/SessionBus()
+// do an unbounded Hello handshake, so a D-Bus peer that stays CONNECTED but
+// stops replying blocks forever. That matters because this package is called
+// synchronously from arm and disarm: an unbounded acquire hangs ArmTx with TX
+// already armed, and an unbounded release hangs disarm ahead of the playback
+// device being closed — on the closing path, ahead of the daemon exiting.
+//
+// The package contract is that inhibition is a COURTESY (a failure is logged and
+// transmitting continues); a hang is not an error, so without this bound it slips
+// past that contract silently instead of loudly.
+//
+// 2 s is the operator's figure (2026-07-28). A healthy D-Bus round trip is
+// sub-millisecond, so it is ~1000x headroom for a merely-busy session bus, while
+// capping a wedged one at a stall on the Enable Tx button that is barely
+// noticeable. A var, not a const, to match txConfirmTimeout in internal/bridge —
+// the house shape for a timeout tests need to shorten.
+var surfaceTimeout = 2 * time.Second
 
 // Inhibit takes an inhibition on every surface that will grant one and returns a
 // single release func covering them all.
@@ -81,7 +104,7 @@ func (i *Inhibitor) Inhibit(why string) (func(), error) {
 		failures []string
 	)
 	for _, s := range i.surfaces {
-		rel, err := s.inhibit(why)
+		rel, err := i.acquireBounded(s, why)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", s.name(), err))
 			continue
@@ -107,10 +130,74 @@ func (i *Inhibitor) Inhibit(why string) (func(), error) {
 	return func() {
 		once.Do(func() {
 			for _, rel := range releases {
-				rel()
+				i.releaseBounded(rel)
 			}
 		})
 	}, nil
+}
+
+// acquireBounded runs ONE surface's acquire under i.timeout.
+//
+// The bound is per surface rather than one deadline across the whole call, and
+// that is deliberate: a shared deadline consumed by a hung FIRST surface would
+// leave the second with no budget, so a wedged ScreenSaver would cost us the
+// logind lock that was working perfectly — exactly what rule 7 forbids. The price
+// is that the worst case is len(surfaces) x timeout, which only arises when EVERY
+// surface is wedged, i.e. on a desktop that has already stopped functioning.
+//
+// A surface that answers LATE is not discarded. Its release is called in the
+// background, because an inhibition whose release func nobody holds never ends —
+// the desktop would stop idling for the life of the process, which is worse than
+// the fault this package mitigates (rule 8).
+func (i *Inhibitor) acquireBounded(s surface, why string) (func(), error) {
+	type result struct {
+		rel func()
+		err error
+	}
+	// Buffered: the surface goroutine must always be able to complete its send,
+	// so the timeout path leaves nothing blocked on an unread channel.
+	ch := make(chan result, 1)
+	go func() {
+		rel, err := s.inhibit(why)
+		ch <- result{rel: rel, err: err}
+	}()
+
+	timer := time.NewTimer(i.timeout)
+	defer timer.Stop()
+	select {
+	case r := <-ch:
+		return r.rel, r.err
+	case <-timer.C:
+		go func() {
+			if r := <-ch; r.rel != nil {
+				i.log.DebugWith().Str("surface", s.name()).
+					Msg("inhibit: surface answered after the bound; releasing the late inhibition")
+				r.rel()
+			}
+		}()
+		return nil, fmt.Errorf("no answer within %s", i.timeout)
+	}
+}
+
+// releaseBounded bounds one surface's release. Unlike an acquire there is nothing
+// to salvage — the caller only needs control back — so a late release simply
+// finishes in its own goroutine. The caller is disarmTxLocked, which invokes this
+// BEFORE it waits for the in-flight transmission, abandons the session and closes
+// the playback device; on the closing path it is also ahead of the daemon exiting.
+func (i *Inhibitor) releaseBounded(rel func()) {
+	done := make(chan struct{})
+	go func() {
+		rel()
+		close(done)
+	}()
+
+	timer := time.NewTimer(i.timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		i.log.DebugWith().Msg("inhibit: release did not answer within the bound; continuing without it")
+	}
 }
 
 // ---- logind (system bus) ----
@@ -126,9 +213,16 @@ func (l *logindSurface) inhibit(why string) (func(), error) {
 	}
 	obj := conn.Object("org.freedesktop.login1", dbus.ObjectPath("/org/freedesktop/login1"))
 	var fd dbus.UnixFD
+	// CallWithContext, never Call: godbus's Call is CallWithContext(Background)
+	// and waits forever on a peer that is connected but not replying. The
+	// Inhibitor bounds this from the outside too, but only that bound returns
+	// control to the CALLER — without a deadline here the abandoned goroutine
+	// would live for the life of the process.
+	ctx, cancel := context.WithTimeout(context.Background(), surfaceTimeout)
+	defer cancel()
 	// mode=block, not delay: delay only postpones the action by a few seconds,
 	// which is useless across a multi-hour FT8 run.
-	err = obj.Call("org.freedesktop.login1.Manager.Inhibit", 0,
+	err = obj.CallWithContext(ctx, "org.freedesktop.login1.Manager.Inhibit", 0,
 		"idle:sleep", "Station Manager", why, "block").Store(&fd)
 	if err != nil {
 		return nil, fmt.Errorf("login1 Inhibit: %w", err)
@@ -155,12 +249,18 @@ func (s *screenSaverSurface) inhibit(why string) (func(), error) {
 	}
 	obj := conn.Object("org.freedesktop.ScreenSaver", dbus.ObjectPath("/org/freedesktop/ScreenSaver"))
 	var cookie uint32
-	err = obj.Call("org.freedesktop.ScreenSaver.Inhibit", 0, "Station Manager", why).Store(&cookie)
+	ctx, cancel := context.WithTimeout(context.Background(), surfaceTimeout)
+	defer cancel()
+	err = obj.CallWithContext(ctx, "org.freedesktop.ScreenSaver.Inhibit", 0, "Station Manager", why).Store(&cookie)
 	if err != nil {
 		return nil, fmt.Errorf("ScreenSaver Inhibit: %w", err)
 	}
 	return func() {
+		// A FRESH deadline, not the acquire's: this closure runs at disarm, which
+		// may be hours later, and the acquire's context expired long ago.
+		rctx, rcancel := context.WithTimeout(context.Background(), surfaceTimeout)
+		defer rcancel()
 		// Best-effort: if the desktop went away the inhibition went with it.
-		_ = obj.Call("org.freedesktop.ScreenSaver.UnInhibit", 0, cookie).Err
+		_ = obj.CallWithContext(rctx, "org.freedesktop.ScreenSaver.UnInhibit", 0, cookie).Err
 	}, nil
 }

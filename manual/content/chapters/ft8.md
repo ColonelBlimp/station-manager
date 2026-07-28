@@ -38,6 +38,56 @@ seconds) or the Tune carrier (30 seconds at most), leaves room for a long
 voice over, and caps a fault at three minutes of carrier instead of an
 unattended transmission that runs until you notice.
 
+### Before you transmit: stop the computer sleeping
+
+Also do this once, before transmitting: turn off **automatic suspend**
+(sleep) on the computer running Station Manager.
+
+> **Don't skip this one.** At best the results are unpredictable — a run that
+> stops for no visible reason, or a rig that keys with no power output. At
+> worst you can damage equipment. A transmitter left keyed with nobody at the
+> radio runs until its time-out timer stops it, and if that timer is off — as
+> it is on most rigs from the factory — until you come back and notice. A long
+> unattended carrier is hard on a transmitter's finals, harder still on a
+> linear amplifier driven far beyond its duty cycle, and will cook a balun,
+> tuner, or feedline that was never specified for continuous key-down. It also
+> leaves you transmitting unattended, which your licence may not permit.
+
+Screen blanking and screen locking are harmless — Station Manager keeps
+running, keeps decoding, and keeps transmitting perfectly well with the
+screen dark. Sleep is different, because it stops the whole computer.
+
+**Sleep is likely to catch you mid-transmission.** Calling CQ puts you on the
+air for about 13 seconds in every 30, so an idle timer that expires during a
+run has roughly two chances in five of landing while the rig is keyed. When
+that happens the stop-transmit command is never sent — the program that would
+send it is suspended along with everything else, and so is its own automatic
+stop. The rig stays on the air until its time-out timer ends the
+transmission. That is precisely the case the previous section exists for, and
+the only protection left.
+
+**Waking up resets the USB bus.** On resume the computer re-initialises its
+USB ports, so your audio interface and your CAT connection are both
+disconnected and re-detected. That normally recovers cleanly. When it doesn't,
+CAT can come back while the audio path does not — and a rig being keyed with
+no audio reaching it shows **TX with no power output**.
+
+Turning it off:
+
+- **KDE Plasma** — System Settings → Power Management → turn off *Suspend
+  session*.
+- **GNOME** — Settings → Power → *Automatic Suspend* → Off.
+- **On a laptop**, also set the lid-close action to do nothing. Closing the
+  lid suspends by default on most systems.
+- **On a dedicated or headless station computer**, block it outright:
+
+  ```
+  sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+  ```
+
+Leave the rig's time-out timer set regardless. It is the backstop for the
+case where the computer cannot help you, and sleep is exactly that case.
+
 
 
 - Enabling FT8 and what's required.
