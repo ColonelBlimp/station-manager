@@ -289,6 +289,17 @@ type Ft8TXConfig struct {
 	// Occupancy tunes the per-slot occupancy detector and clear-offset ranking
 	// (ADR 0029 step a). Pointer-typed for the same inert-block reason as TX.
 	Occupancy *Ft8OccupancyConfig `json:"occupancy,omitempty"`
+
+	// InhibitIdle asks the desktop to stop idling, blanking and suspending for as
+	// long as TX is armed. An armed FT8 run is exactly when the host looks idle to
+	// the session (no keyboard, no mouse, for hours) and exactly when nobody is
+	// watching — and a session/power event mid-run is the suspected cause of the
+	// 2026-07-28 silent-transmit incident, where SM kept keying for 24 minutes with
+	// no audio reaching the rig. nil (absent) → true; an explicit false is honoured
+	// for operators who would rather SM left their power management alone. Inert on
+	// a host that grants no inhibition (headless, no D-Bus): the daemon logs and
+	// transmits regardless, because inhibition is a courtesy and TX is not.
+	InhibitIdle *bool `json:"inhibit_idle,omitempty"`
 }
 
 // Caller-answer-mode literals (ADR 0033) for Ft8TXConfig.CallerAnswerMode.
@@ -315,6 +326,21 @@ const (
 	// Ft8MaxRepeatsCeiling is the hard internal ceiling the config can never exceed.
 	Ft8MaxRepeatsCeiling = 10
 )
+
+// ResolveFt8InhibitIdle reports whether the daemon should keep the host awake
+// while TX is armed. Absent → ON, and that must hold for an absent BLOCK as well
+// as an absent field: Config.ActiveFt8() leaves Ft8Config.TX nil when there is no
+// ft8.tx block, no ft8.tx.mode and no rig TX-audio device, so a caller that reads
+// the field off the block would resolve a minimal config to "off" and silently
+// contradict the documented default. A resolver rather than an applyDefaults
+// entry for exactly that reason — there is nowhere to write a default into a block
+// that does not exist. Only an explicit false turns it off.
+func ResolveFt8InhibitIdle(c *Ft8TXConfig) bool {
+	if c == nil || c.InhibitIdle == nil {
+		return true
+	}
+	return *c.InhibitIdle
+}
 
 // ResolveFt8MaxRepeats returns the effective unanswered-rung repeat cap: the
 // operator's value clamped to [1, Ft8MaxRepeatsCeiling], or DefaultFt8MaxRepeats

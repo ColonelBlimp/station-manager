@@ -254,14 +254,70 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   80m collapse. Ended by band noise, not by any fault. **So a DX Commander band ran
   ~31 min clean — longer than the 80m session survived before it broke (~25 min) —
   and the simple "it is the vertical" story is WEAKENED.**
-  **BUT TWO VARIABLES ARE STILL CONFOUNDED, so this does not close it:** (1) power
-  was **250 W here vs full power during the 80m failure** — if ingress is
-  RF-level-dependent, 40m at 250 W tests very little; (2) 40m and 80m do not couple
-  common-mode alike even on the same antenna (different current distribution, and
-  80m is where a multiband vertical is most compromised). **THE CLEAN NEXT TEST IS
-  80m AT 250 W**, which isolates BAND from POWER — the one comparison neither
-  session has made. Run it before fitting the choke, or fitting the choke will
-  confound it a third time.
+  **POWER IS THE VARIABLE THAT ACTUALLY TRACKS THE FAULT (operator supplied the
+  figure 2026-07-28: the failing 80m run was at 350 W).** Tabulated, every run this
+  morning on the same unchoked DX Commander:
+  | band | power | duration | result |
+  |------|-------|----------|--------|
+  | 80m  | **350 W** | ~25 min | **COLLAPSED**, then the rig latched |
+  | 80m  | 250 W | ~30 min, 4 QSOs | clean |
+  | 40m  | 250 W | ~31 min, 4 QSOs | clean |
+  | 30m  | 300 W | in progress | — |
+  **The 80m 350 W vs 80m 250 W pair is a SAME-BAND, SAME-ANTENNA, SAME-MORNING
+  comparison in which only the power differed — and only the high-power run failed.**
+  That is much stronger than any of the cross-band comparisons, and it is a
+  threshold signature: consistent with common-mode ingress that only becomes
+  destructive above some level between 250 W and 350 W. **It also revives the
+  antenna hypothesis in a REFINED form** — not "the vertical always fails" (40m and
+  80m both ran clean at 250 W) but "the vertical couples enough common-mode current
+  back into the shack to break the USB audio ABOVE a power threshold". The choke
+  remains the right fix; it just is not needed at 250 W.
+  **CORRECTION to an earlier draft of this entry**, which called "80m at 250 W" the
+  clean next test that neither session had made: it HAD been made, immediately after
+  the power cycle the same morning — ~30 min, 4 QSOs, clean. That run is the control,
+  and it is what makes the power comparison work.
+  **The remaining useful experiment is therefore a POWER LADDER on 80m** (250 → 300
+  → 350 W, ~30 min each), run BEFORE any RF changes, to find where it breaks.
+  Changing the RF path first destroys the baseline. Note 40m/80m also do not couple
+  common-mode alike even on one antenna, so keep the ladder on ONE band.
+  **STATION RF LAYOUT (operator, 2026-07-28) — there is ALREADY a common-mode
+  choke, which reframes the fix:** `rig → coax switch → amp → [Palomar common-mode
+  choke] → Rat Pak remote switch → DX Commander or hex beam`. So the main line out
+  is already choked, and RF is still getting in. Three readings, in order of how
+  cheap they are to test:
+  (i) ~~The Rat Pak control cable bypasses the choke.~~ **WRONG — operator
+  confirms NOTHING bypasses it: a single high-quality coax leaves the shack, and the
+  choke sits before it exits.** So the conducted path out of the shack is properly
+  choked, and it was choked during every incident. Recorded because it eliminates
+  the obvious answer and forces the next one.
+  (i-revised) **THE INGRESS IS PROBABLY NOT CONDUCTED AT ALL — IT IS DIRECT FIELD
+  COUPLING.** The operator independently reports that 80/40/30m "produce
+  interference with household equipment and vice-versa". **Household equipment is
+  not connected to his coax**, so that interference cannot be travelling by the
+  choked path — it is the antenna's near field reaching into the house, plus RF on
+  the mains. Once that is granted, the shack's own USB leads, PC and rig are sitting
+  in the same field, and the coax choke is irrelevant to them. This explains why a
+  correctly-fitted choke did not prevent any of this, and it re-orders the fixes:
+  **work at the VICTIM end, not the source.** Ferrite the USB leads (rig end AND PC
+  end), keep them short, route them away from the antenna side of the room, and
+  consider a ferrite/filter on the mains feeds to the PC and rig — the mains is the
+  other conductor running through the whole house that the household-equipment
+  symptom implicates. Antenna-to-shack distance is the underlying variable and the
+  expensive one.
+  (ii) **A broadband choke is usually WEAKEST at 3.5 MHz.** If the Palomar model's
+  common-mode impedance falls off at the low end, the observed pattern falls straight
+  out: at 80m the choke is least effective AND the vertical produces the most
+  common-mode current AND 350 W makes the absolute current highest — three factors
+  compounding on exactly the one band that failed, while 20–6m on the hex beam
+  (better-behaved antenna, choke in its strong region) stays clean. **Check the
+  model's published impedance at 3.5 MHz**; it may simply be out of its depth there
+  rather than faulty.
+  (iii) **Ferrite the USB leads at the rig regardless.** (i) and (ii) attack the
+  source; this protects the actual victim, and the victim is known — the PCM2903C
+  audio stream, not the CAT link.
+  **Cheap diagnostic while running the power ladder: feel the choke.** A
+  common-mode choke that is being overwhelmed gets warm; a cold one at 350 W on 80m
+  argues the current is arriving by another path — i.e. (i).
   **THE MECHANISM THIS SUGGESTS, AND THE GAP IT EXPOSES:** common-mode RF disturbs
   the **PCM2903C USB audio codec's stream** — a DIFFERENT USB device from the CP2105
   serial bridge, which is why CAT sails on untouched while audio dies. **We have
@@ -278,6 +334,101 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   if malgo keeps pulling frames, a callback-counting watchdog sees a healthy stream.
   The meter read in (d) measures at the RIG, past every software layer, so it
   catches the fault wherever in the chain it happened. Build (d) first.
+  **THE PLAYBACK DEVICE LIFETIME IS THE LIKELY MECHANISM — AND IT SUGGESTS A MUCH
+  CHEAPER FIX (2026-07-28).** `txplayer_cgo.go`: "The Service Init's it on **arm**
+  and Close's it on **disarm**; the TxController drives Play/Stop per slot." So ONE
+  playback device handle is held open for the WHOLE armed session — potentially an
+  hour — and every slot's `Play()` writes into it. **If that single handle goes bad
+  (RF glitch, a WirePlumber re-route, a device suspend), it stays bad for the entire
+  session and every subsequent transmission is silent.** That fits every observation
+  better than a per-stream fault does: 48 consecutive silent transmissions from ONE
+  bad handle rather than 48 independently-bad streams; cycling the sink volume
+  fixing it (forces PipeWire to re-apply routing to the existing stream); zero
+  PipeWire errors (the stream object still exists, it is just going nowhere — and
+  PipeWire/WirePlumber DO log to the user journal, they logged startup fine at
+  03:20:17, so the silence during the collapse is meaningful rather than absent
+  logging).
+  **IMMEDIATE OPERATOR RECOVERY, easier than cycling PipeWire volumes: DISARM and
+  RE-ARM TX.** That closes and re-opens the device, so it should clear the collapse
+  from inside SM with no desktop fiddling. **UNVERIFIED — try it at the next
+  occurrence before reaching for `pactl`**, and if it works that also CONFIRMS this
+  mechanism, because nothing else in the disarm/arm path touches the audio route.
+  **OPERATOR HYPOTHESIS, 2026-07-28, AND IT MAY DISPLACE THE WHOLE RF THREAD: was
+  the PC idle/screen-blanked when the drive collapsed?** He was **lying on his bed
+  2 m away, not at the machine**, for the entire 80m run. Checked and PARTLY
+  supported:
+  - **USB autosuspend is RULED OUT.** All three relevant devices read
+    `power/control=on` with `runtime_status=active` (USB AUDIO CODEC 7-1.2, CP2105
+    7-1.1, USB Audio 1-5). No USB-level power management is touching them.
+  - **But something power-related DID happen 7 minutes before the collapse:**
+    `03:39:43 Lockdown: systemd-logind: hibernation is restricted` ×5 with
+    "5 callbacks suppressed" — logind evaluating hibernation capability. Collapse
+    was 03:46:30. Suggestive, not conclusive: that message can also come from a
+    desktop applet polling `CanHibernate`. No lock/screensaver/DPMS event is
+    journalled (the compositor handles blanking, not logind), so absence of a lock
+    record is NOT evidence there was no blank.
+  - **The session-event mechanism has PRECEDENT IN THIS STATION:** the 2026-07-18
+    capture-side incident was *"KDE Plasma device fiddling destroyed+recreated the
+    rig codec's PipeWire nodes mid-capture"*. A session/compositor event causing
+    WirePlumber to re-evaluate routing would leave SM's held-open playback device
+    (see the lifetime note above) pointing at a stale node — no USB error, no
+    PipeWire error, silence until something forces a re-route. That is every
+    observation, with no RF required.
+  - **AND IT RE-EXPLAINS THE "BAND" CORRELATION AS A TIME-OF-DAY ONE.** The clean
+    high-band sessions were DAYTIME with the operator working at the PC (07-27 17m
+    soak 11:41–16:41 local; 07-26 15m/12m 11:18–16:17 local). The 80m failure was
+    **03:23–04:59 local with the operator on his bed**. Screen blanking needs an
+    idle machine, and only the low-band sessions had one. **The 80m/30m pattern may
+    be nothing to do with the vertical at all** — it may simply be when he operates
+    unattended. This ALSO fits the 07-28 SPA "cannot reach the daemon" entry above,
+    which is a confirmed screen-blank casualty on the same machine the same morning.
+  **THE TEST THAT SEPARATES THIS FROM RF, and it is cheaper than the power ladder:
+  run 80m at 350 W while ACTIVELY USING the PC (or with blanking/idle disabled).**
+  Clean ⇒ idle/session event, not RF, and the choke work is unnecessary. Collapses
+  ⇒ RF is back and the power ladder is the next step. Run this BEFORE the ladder.
+  **(g) SM holds an IDLE INHIBITOR while TX is armed — BUILT 2026-07-28.**
+  ("Don't idle/blank/suspend while the station is transmitting.") Correct
+  regardless of which hypothesis wins, since an unattended FT8 run is exactly when
+  the machine looks idle to the desktop and exactly when nobody is watching.
+  **TWO surfaces, because neither is universal:** logind
+  (`org.freedesktop.login1`, SYSTEM bus, `idle:sleep` in mode `block`) is on every
+  systemd distro and on the non-systemd ones shipping elogind, and works headless;
+  `org.freedesktop.ScreenSaver` (SESSION bus) is provided by KDE/GNOME/XFCE/MATE/
+  Cinnamon but NOT by bare wlroots compositors or without a session. **logind alone
+  does not reliably stop a desktop BLANKING** — on KDE that is kscreenlocker's
+  business and answers to the ScreenSaver interface — so holding only logind would
+  likely have missed the very event suspected here. Partial success is success;
+  an error means the host granted nothing, and then the daemon logs once and
+  transmits anyway (inhibition is a courtesy, TX is not).
+  New package `internal/inhibit` (+`github.com/godbus/dbus/v5`, BSD-2, GPL-
+  compatible, pure Go, no transitive deps); injected into `internal/ft8` behind an
+  `IdleInhibitor` interface exactly as `TxKeyer` is, so the FT8 package takes no
+  D-Bus dependency and stays testable without a bus. Config `ft8.tx.inhibit_idle`,
+  nil→true, explicit false honoured — as a RESOLVER (`types.ResolveFt8InhibitIdle`),
+  not an `applyDefaults` entry, because `ActiveFt8()` leaves the whole TX block nil
+  when there is no `ft8.tx`, no `ft8.tx.mode` and no rig TX-audio device, and a
+  default cannot be written into a block that does not exist. **That was a real
+  defect caught before commit**: the first cut defaulted inside `applyDefaults` and
+  read the field off the block, so a minimal config resolved to OFF while the docs
+  said ON — silently, discoverable only by the machine blanking mid-transmission.
+  13 tests across three packages, all written BEFORE their implementations, and
+  five reversions proven: drop the acquire → "want 1 held, got 0"; drop the release
+  → "want 0 held, got 1"; drop `sync.Once` → 3 underlying releases; release only the
+  first surface → the second leaks; restore the nil-block defect → "want true".
+  The two rules worth knowing, because they pin states this change CREATES: a
+  REFUSED arm must hold nothing (arms are refused routinely on a CAT blink, and a
+  leaked inhibition never releases — the desktop would stop idling for the life of
+  the process, a worse fault than the one being mitigated), and arming twice must
+  hold exactly ONE (`ArmTx` is idempotent and the SPA re-sends it).
+  **NOT YET VALIDATED ON AIR.** It mitigates a cause that is still unproven — the
+  confirming experiment (80m at 350 W with the operator actively at the PC) has not
+  been run, and (g) will now MASK that experiment on the machine it is deployed to.
+  Run the experiment on a build without it, or with `inhibit_idle: false`.
+  **The fix this implies (f): re-open the playback device on a detected collapse** —
+  the exact analogue of what `deadsource.go` already does on the capture side
+  (strike → release → reacquire). Note this makes (e) and (f) the same work, and it
+  raises the value of (d) further: the meter read is what would DETECT the condition
+  that (f) then recovers from.
   **TOT was armed and would have worked:** set to 8 min (kept long because a short
   TOT cuts out phone), so it was due to fire 04:18:30 — the operator stopped it
   ~3 min short. Not a gap; but 8 min is pure exposure for a mode whose transmissions
@@ -343,3 +494,144 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   audio layer at all.
   NOT worth building: escalating a persistent `2` to a re-unkey burst (as `1`
   already does) — it would have written into a radio that had stopped listening.
+  **THE IDLE/SESSION TEST WAS RUN — 2026-07-28 midday, DUMMY LOAD. NO
+  REPRODUCTION, and it forces two corrections above.** 5 W into a dummy load on
+  **3.573 MHz — the incident's own band** — CQ run, blank/lock at 2 min, then
+  KDE power management returned to defaults so the session also SUSPENDS.
+  Instrumented at 2 s: the rig sink's PipeWire state, SM's playback and capture
+  node presence, logind `IdleHint`/`LockedHint`, smd's PID; plus `pw-mon`,
+  `smd.log`, `ft8-all.txt`. **Result: 107 of 107 transmissions had drive**, over
+  ~55 min, two lock cycles and one full suspend/resume. The reconciliation is
+  exact — 107 `Transmitting` lines, 12 of them before the recorder started, 95
+  remaining, against 95 observed `txplay: ABSENT→running` bursts.
+  **CORRECTION 1 — the `03:39:43 hibernation is restricted` ×5 line is NOT
+  suggestive of anything.** It fired again today at 12:15:42, four seconds
+  before an ordinary screen lock. It is the routine signature of a session
+  locking. **But it is a good TIMESTAMP, and that is new: it dates the lock on
+  the night of the incident, putting the drive collapse 6m47s after the screen
+  locked** (03:39:43 → 03:46:30).
+  **CORRECTION 2 — "idle alone is sufficient" is WEAKENED.** The test ran ~3×
+  that 6m47s interval, locked, with zero failures. It does NOT clear idle as a
+  co-factor and does NOT implicate RF; the variables still separating the test
+  from the incident are power (5 W vs 350 W) and load (dummy vs DX Commander),
+  i.e. precisely the RF ones. So the confirming experiment in the "NOT YET
+  VALIDATED ON AIR" note above is only PARTLY discharged — the low-power,
+  no-antenna half is done and null.
+  **MECHANISM REFINEMENT, and it cuts against the "one bad handle" reading
+  above.** The rig's PipeWire sink drops to `suspended` ~6 s after every
+  transmission and must RESUME for the next one — ~120 resumes/hour on a CQ run.
+  And SM's playback NODE does not exist at arm at all: PipeWire creates it per
+  transmission and removes it after (verified — armed and idle for 22 s showed
+  `txplay=ABSENT`, `sink=suspended` throughout). So whatever malgo holds open
+  from arm to disarm, PipeWire tears the node down and rebuilds it every slot.
+  **A stale-node theory must therefore explain why a FRESH node each slot still
+  goes nowhere** — which points at the persistent device handle and its routing
+  target rather than at the node. 107 consecutive clean resumes says the path is
+  not fragile; the per-slot resume is nonetheless the operation to instrument.
+  **SAFETY FINDING — SUSPEND CAUGHT A KEYED TRANSMISSION.** 13:02:30 transmission
+  starts, `tx-status 1`; **13:02:34 `PM: suspend entry (deep)`, `user.slice`
+  frozen** — the machine slept four seconds into a keyed transmission. SM was
+  frozen for 134 s and could send nothing; its own 18 s `ft8TxMaxDuration`
+  auto-off froze with it and fired **127 s late** on thaw (13:04:55, `ft8 tx
+  auto-off fired; PTT dropped`). **Nothing on the computer could unkey the rig —
+  only the rig's TOT could.** That is ADR 0057's premise meeting real hardware
+  for the first time, but it is NOT proof the premise held: there is no rig-side
+  observation across the freeze. The rig reported `0` within 7 s of resume, so it
+  was unkeyed by then; TOT (at 1 min for this test) is the likely agent,
+  unproven. **Cheap test that WOULD prove it: watch the PO meter through a
+  deliberate suspend.** If it drops at 60 s, the premise is confirmed on
+  hardware. At 5 W into a dummy load this was harmless; on the DX Commander at
+  350 W it is a minute of unattended full-power carrier.
+  **A RESUME USB ERROR WAS LOGGED — BUT NOT ON THE RIG'S CONTROLLER.** Resume
+  logged `xhci_hcd 0000:0d:00.0: xHC error in resume, USBSTS 0x401, Reinit`,
+  `root hub lost power or was reset` on usb1 and usb2, and a reset of every
+  device on those two buses. **The rig is on NEITHER:** CP2105 `7-1.1` and USB
+  AUDIO CODEC `7-1.2` are on bus 7 behind controller `0000:73:00.4`, and bus 7
+  logged no reset at all — the rig's audio and CAT resumed cleanly.
+  **CORRECTION to the first draft of this block, which claimed they shared the
+  erroring controller:** that came from taking the first PCI address in the
+  device path, which is the shared bridge `0000:00:08.1`, not the controller.
+  The `7-1.2`/`7-1.1` numbering recorded earlier in this same entry would have
+  caught it. So "a resume that half-recovers — CAT back, audio not" stays a
+  THEORETICAL route to the incident's signature: no evidence it happened here,
+  and no suspend occurred during the incident regardless. What is solid and still
+  worth knowing: this machine has an xHCI controller that errors on every resume,
+  which is an independent reason not to let it sleep.
+  **The FT8 scheduler did the right thing under a fault it had never met:**
+  `timer delay exceeded the lateness budget; skipping slot`, `late_ms=127172`. It
+  refused a 127 s-late slot instead of transmitting into it.
+  **(g) HAS A VALIDATION GAP, found while setting this up.** The bench check —
+  arm TX, confirm `systemd-inhibit --list` shows the lock — proves the lock is
+  TAKEN, not that anything HONOURS it. On this host logind's `IdleAction` is
+  `ignore`, so **the `idle` half of (g)'s lock is inert**: there is no logind idle
+  action to inhibit. The suspend is driven by **PowerDevil**, so the work must be
+  done by the `sleep` half (making PowerDevil's call into logind fail) and by the
+  ScreenSaver lock. **The real proof is re-running exactly this test with (g)
+  deployed and seeing whether the machine still suspends.** Also worth knowing
+  for any future analysis: **logind's `IdleHint` is NOT tracked under KDE
+  Wayland** — it read `no` throughout while `LockedHint` read `yes`. An analysis
+  keyed on `IdleHint` would come out flat and read as "the machine never went
+  idle".
+  **MANUAL UPDATED** (2026-07-28, operator-directed): new section *"Before you
+  transmit: stop the computer sleeping"* in `manual/content/chapters/ft8.md`,
+  next to the TOT section it depends on, stating that the results are
+  unpredictable at best and can damage equipment at worst; plus a cause paragraph
+  in the troubleshooting *"The rig transmits and won't stop"* entry.
+- [2026-07-28] **THE RIG INTERMITTENTLY IGNORES THE FIRST `TX0;` — 6 occurrences,
+  and it is NOT RF, NOT power, and NOT the antenna.** Separate finding from the
+  stuck-TX entry above, and deliberately NOT filed as part of it (see "two
+  readings" below). Signature: after a normal unkey the FTdx10 answers **`1`** —
+  CAT TX still keyed — to the confirmation query. SM's `case "1"` path raises
+  `tx_still_keyed`, refuses the FT8 mode restore, and `retryUnkeyStillKeyed()`
+  re-sends `tx_off`; the rig then confirms idle and the alarm auto-clears. Every
+  occurrence so far has recovered **on attempt 1, within about one second**, and
+  no run has been interrupted.
+  **Every occurrence in `smd.log`:**
+  | date | local | band | context | outcome |
+  |------|-------|------|---------|---------|
+  | 07-21 | 04:53:43 | — | — | (pre-dates `ft8-all.txt`) |
+  | 07-23 | 06:36:29 | — | — | cleared |
+  | 07-26 | 07:00:43 | 20m | `ZL1JRD 7Q5MLV R-17` | attempt 1 → cleared |
+  | 07-26 | 13:07:13 | 15m | `BA4SEX 7Q5MLV RR73` | attempt 1 → cleared |
+  | 07-28 | 12:25:43 | 80m | CQ, **5 W into a DUMMY LOAD** | attempt 1 → cleared |
+  | 07-28 | 14:11:43 | 80m | CQ, **350 W into the DX Commander** | attempt 1 → cleared |
+  (07-21 and 07-23 have no matching TX line only because `ft8-all.txt` starts
+  20260726_043930 — that is NOT evidence they were outside an FT8 transmission.)
+  **THE 07-28 PAIR IS THE DISCRIMINATING EVIDENCE.** Same rig, same day, ~1h45m
+  apart: one at **5 W into a dummy load** (no antenna, essentially no RF in the
+  shack) and one at **350 W into the DX Commander on 80m**. An order of magnitude
+  in power, completely different loads. **That rules out RF ingress and power as
+  the cause of THIS fault.** The band spread rules out the antenna correlation
+  too: 20m and 15m are the HEX BEAM, 80m is the VERTICAL — it happens on both.
+  **RATE — and there is NO trend, despite two today.** 4 events across the 1,707
+  transmissions `ft8-all.txt` covers (07-26: 634, 07-27: 578, 07-28: 495) ≈ **1 in
+  430**. 07-27 had 578 transmissions and **zero** events, which at that rate has
+  ~26% probability — entirely unremarkable. So the data are consistent with a
+  constant low rate, and "two today" is not an escalation. **Normalise per
+  transmission before ever claiming this is getting worse.** Also not something we
+  introduced: 07-21 and 07-23 pre-date all of this week's work.
+  **WHAT IS CONFIRMED: the `case "1"` path works in the field.** Alarm raised →
+  mode restore correctly refused → `tx_off` re-sent → rig confirmed idle → alarm
+  auto-cleared → run continued. Four clean observations, the first ever outside a
+  live incident. That machinery needs no changes.
+  **TWO READINGS OF ITS RELATION TO THE STUCK-TX INCIDENTS, AND THE CONSERVATIVE
+  ONE SAYS THEY ARE DIFFERENT FAULTS.** (A) *Same fault*: the rig's CAT handling
+  occasionally drops or defers a write, and which code comes back is a matter of
+  timing. (B) *Different faults*: `1` means **the unkey did not take** (command
+  handling), `2` means **something non-CAT is keying the rig** (control line or
+  hardware). Those are different rig states and conflating them would be an error.
+  The 07-28 04:10:30 incident's `2` arrived with a latch AND the CAT link dying —
+  a far larger event than a one-second blip. **Nothing currently separates A from
+  B, so do NOT treat this finding as an explanation of the stuck-TX incidents.**
+  **WHAT IT DOES BEAR ON — the recorded "NOT worth building" verdict deserves a
+  re-look.** That verdict (escalating a persistent `2` to a re-unkey burst) was
+  reached for a rig that had **stopped listening**. But in the 04:10:30 incident
+  the rig answered `2` for roughly 80 seconds BEFORE CAT died, so there WAS a
+  window in which it was still listening and an escalation could have written to
+  it. Worth revisiting — with the constraint that any escalation needs a
+  **duration threshold**, because `2` is also the normal ~1 s TX→RX tail and
+  escalating on it immediately would fire on every clean transmission (see the
+  `case "2"` comment in `txconfirm.go` and ADR 0057).
+  **Next, if this is picked up:** sweep the occurrences for a common factor. Four
+  usable samples is thin, and message type is already not it — the 07-26 pair were
+  mid-QSO rungs (`R-17`, `RR73`), the 07-28 pair were both CQ.

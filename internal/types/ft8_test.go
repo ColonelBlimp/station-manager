@@ -172,3 +172,30 @@ func TestResolveFt8Frequencies(t *testing.T) {
 		t.Error("ResolveFt8Frequencies leaked into the package defaults")
 	}
 }
+
+// ResolveFt8InhibitIdle's contract, with the nil-BLOCK case first because that is
+// the one an implementation is most likely to get wrong and the one that bit here:
+// Config.ActiveFt8() leaves Ft8Config.TX nil when the operator has no ft8.tx block,
+// no ft8.tx.mode and no rig TX-audio device, so a caller that reads the field off
+// the block cannot see the default at all. Defaulting must survive an ABSENT block,
+// not merely an absent field — otherwise the documented "on unless you say
+// otherwise" silently becomes "off" for a minimal config, and the operator only
+// discovers it when their machine blanks mid-transmission.
+func TestResolveFt8InhibitIdle(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name string
+		in   *Ft8TXConfig
+		want bool
+	}{
+		{"nil TX block → default on", nil, true},
+		{"block present, field unset → default on", &Ft8TXConfig{}, true},
+		{"explicit true honoured", &Ft8TXConfig{InhibitIdle: &yes}, true},
+		{"explicit false honoured", &Ft8TXConfig{InhibitIdle: &no}, false},
+	}
+	for _, c := range cases {
+		if got := ResolveFt8InhibitIdle(c.in); got != c.want {
+			t.Errorf("%s: ResolveFt8InhibitIdle = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

@@ -40,6 +40,7 @@ import (
 	// unregistered type as "unknown forwarder type" at startup.
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/worker"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
+	"github.com/ColonelBlimp/station-manager/internal/inhibit"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
@@ -654,6 +655,15 @@ func run() error {
 	// scope by import graph). Only meaningful when the bridge is enabled and a
 	// rig is connected; otherwise TxReady() stays false and arming is refused.
 	ft8Svc.SetTxKeyer(ft8Keyer{bridgeSvc})
+	// Ask the desktop to stay awake while TX is armed. An unattended FT8 run is
+	// exactly when the host looks idle to its session, and a session/power event
+	// mid-run is the suspected cause of the 2026-07-28 silent-transmit incident
+	// (SM kept keying for 24 minutes with no audio reaching the rig). Injected like
+	// the keyer, so internal/ft8 takes no D-Bus dependency; a host that grants no
+	// inhibition (headless, no bus) logs once and transmits regardless.
+	if types.ResolveFt8InhibitIdle(cfg.ActiveFt8().TX) {
+		ft8Svc.SetIdleInhibitor(inhibit.New(loggerSvc))
+	}
 	// Self-decode filtering (dropping SM's own TX self-decoded off residual rig
 	// TX-audio bleed) reads the ACTIVE session's pinned callsign directly from the
 	// sequencer (ADR 0055, pin-at-arm) — no per-slot DB lookup, no fallback, no

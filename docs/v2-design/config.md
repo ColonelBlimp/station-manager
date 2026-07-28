@@ -269,6 +269,13 @@ These differ from (a): defaults are applied at **GET-serve / read time**, not at
 | `Ft8.EnableOSD` (`*bool`) | `true` | `ft8.enable_osd` |
 | `Ft8.TX.Occupancy.GuardMarginHz` (`*int`) | guard on (default Hz); explicit `0` = guard off | `ft8.tx.occupancy.guard_margin_hz` |
 
+`Ft8.TX.InhibitIdle` (`*bool`, `ft8.tx.inhibit_idle`, nil → `true`) is a
+**resolver**, not an `applyDefaults` entry — `ActiveFt8()` leaves the whole `TX`
+block nil when there is no `ft8.tx`, no `ft8.tx.mode` and no rig TX-audio device,
+and a default cannot be written into a block that does not exist. Readers go
+through `types.ResolveFt8InhibitIdle`, which treats an absent BLOCK and an absent
+FIELD alike. Same reason `ft8.tx.max_repeats` resolves rather than defaults.
+
 ### (d) safety-ceiling — const is a non-overridable MAX, not a default ⚠️
 
 These must survive any redesign as ceilings; flattening them into ordinary defaults

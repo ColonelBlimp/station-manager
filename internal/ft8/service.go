@@ -130,14 +130,20 @@ type Service struct {
 	// s.mu→txMu nesting.
 	newPlayer func(deviceName string, deviceIndex int) (txPlayer, error)
 
-	txMu       sync.Mutex
-	keyer      TxKeyer
-	txArmed    bool
-	txInFlight bool
-	txClosed   bool   // set on Stop; refuses further arming
-	txMessage  string // message of the in-flight transmission ("" = none)
-	txOffsetHz float64
-	txDialMHz  float64 // dial of the in-flight transmission, for the keyed-time decode-log TX line
+	txMu sync.Mutex
+	// idleInhibitor + idleRelease: the desktop is asked to stop idling for as
+	// long as TX is armed (see idleinhibit.go). idleRelease is non-nil EXACTLY
+	// while an inhibition is held, so it doubles as the "held" flag — one
+	// variable, so the two cannot disagree.
+	idleInhibitor IdleInhibitor
+	idleRelease   func()
+	keyer         TxKeyer
+	txArmed       bool
+	txInFlight    bool
+	txClosed      bool   // set on Stop; refuses further arming
+	txMessage     string // message of the in-flight transmission ("" = none)
+	txOffsetHz    float64
+	txDialMHz     float64 // dial of the in-flight transmission, for the keyed-time decode-log TX line
 	// armDialMHz is the dial the daemon read when TX was ARMED (0 = unknown). The
 	// pre-key gate compares against it, so the frequency binding holds on every
 	// keying path — including with no session and no capture running. Distinct from

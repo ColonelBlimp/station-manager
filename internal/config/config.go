@@ -943,6 +943,10 @@ func applyDefaults(cfg *Config, baseDir string) {
 		def := true
 		cfg.Ft8.EnableOSD = &def
 	}
+	// NB: ft8.tx.inhibit_idle is deliberately NOT defaulted here. ActiveFt8() can
+	// leave the whole TX block nil, and there is nowhere to write a default into a
+	// block that does not exist — so the default lives in
+	// types.ResolveFt8InhibitIdle, which every reader goes through.
 
 	// Datastore defaults
 	if cfg.Datastore.Driver == "" {

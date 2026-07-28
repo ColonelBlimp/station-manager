@@ -203,7 +203,18 @@ func (s *Service) armTx() error {
 	// 7c2e66ad). A zero pin must never read as "any frequency will do", which is why
 	// the unreadable case is refused above rather than stored.
 	s.armDialMHz = dialAtArm
+	inhibitor := s.idleInhibitor
 	s.txMu.Unlock()
+
+	// AFTER the arm has committed, never before: an arm refused by the switch above
+	// returns without reaching here, so a refusal cannot leak an inhibition that
+	// nothing would ever release. Arms are refused routinely (CAT blink, unreadable
+	// dial), and a leaked inhibition stops the desktop idling for the life of the
+	// process — a worse fault than the one this mitigates. Outside txMu because
+	// Inhibit does D-Bus I/O and txMu gates transmit and disarm.
+	if inhibitor != nil {
+		s.acquireIdleInhibit(inhibitor)
+	}
 
 	s.log.InfoWith().Str("mode", s.txMode()).Msg("ft8 tx: armed")
 	s.publishTxState()
@@ -276,7 +287,15 @@ func (s *Service) disarmTxLocked(closing bool) {
 		s.txClosed = true
 	}
 	if !s.txArmed && s.txCancel == nil {
+		// Release here TOO, not only on the teardown path below. This branch is
+		// reached whenever the subsystem is already idle, and an inhibition that
+		// somehow outlived its arm would otherwise be unreachable forever — the
+		// leak is silent and only ends with the process. Normally a no-op.
+		rel := s.takeIdleReleaseLocked()
 		s.txMu.Unlock() // idle: nothing to tear down (txClosed already latched above)
+		if rel != nil {
+			rel()
+		}
 		// Still abandon under the gate: a session could be active from a start
 		// that raced an earlier disarm; clear it now that armed is false.
 		if s.seq != nil {
@@ -293,7 +312,15 @@ func (s *Service) disarmTxLocked(closing bool) {
 	dev := s.txDevice
 	s.txDevice = nil
 	s.txCtrl = nil
+	// Taken under the lock, invoked outside it: the release is a D-Bus round trip
+	// and txMu gates the transmit path. Cleared here so a concurrent acquire that
+	// is still in flight finds txArmed=false and frees its own inhibition instead
+	// of storing it into a disarmed service.
+	relIdle := s.takeIdleReleaseLocked()
 	s.txMu.Unlock()
+	if relIdle != nil {
+		relIdle()
+	}
 
 	// Wait for the in-flight transmission to return BEFORE abandoning — outside
 	// txMu so the TX goroutine can clear its own state.
