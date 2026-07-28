@@ -157,6 +157,16 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   and hung. The 07-28 entry establishes the collapse is silently detectable from
   the decode log (answers stop while decodes continue) and proposes the real fix:
   read the rig's PO meter while keyed.**
+- [2026-07-28] SPA shows **"Cannot reach the daemon"** on a tab that was backgrounded
+  while the screen blanked (operator had to log back in). The daemon was healthy
+  throughout — `smd` active, no restart, answering HTTP 200, FT8 still transmitting
+  and decoding, and a QSO (IK6DLK) logged after the unlock. So the browser suspended
+  the backgrounded tab, its SSE `EventSource` dropped, and **it did not
+  re-establish on refocus** — a reload was needed. Minor, but misleading at exactly
+  the wrong moment: the operator came back to what looked like a dead daemon in the
+  middle of an unattended TX run, on the same morning as a real stuck-TX incident.
+  An SSE client that loses its connection while hidden should retry when the tab
+  becomes visible again.
 - [2026-07-28] **STUCK TX — 4th incident, and the first where the RIG stopped
   answering CAT while still keyed.** 80m FT8 CQ run (3.573 MHz, +2750 Hz), operator
   in the shack 2 m away and NOT touching the rig; no rig settings changed since the
@@ -236,6 +246,22 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   effectively untested. If the antenna hypothesis is right, 40m should show the
   fault and 20m should never.** That single experiment separates antenna from
   frequency.
+  **THE 40m EXPERIMENT WAS RUN THE SAME MORNING — AND THE PREDICTION DID NOT HOLD.**
+  2026-07-28, T0 03:08:00 → 03:39 UTC, 7.074 MHz, DX Commander, **choke NOT yet
+  fitted**, 250 W: **64 TX slots, 144 decodes, 4 QSOs** — SP9UPH (Poland) 03:09,
+  W3GQ (USA) 03:13, F4JTM (France) 03:21, IK6DLK (Italy) 03:28. Longest answer-less
+  run **22 slots / 11 min**, against 48 slots / 24 min for the morning's confirmed
+  80m collapse. Ended by band noise, not by any fault. **So a DX Commander band ran
+  ~31 min clean — longer than the 80m session survived before it broke (~25 min) —
+  and the simple "it is the vertical" story is WEAKENED.**
+  **BUT TWO VARIABLES ARE STILL CONFOUNDED, so this does not close it:** (1) power
+  was **250 W here vs full power during the 80m failure** — if ingress is
+  RF-level-dependent, 40m at 250 W tests very little; (2) 40m and 80m do not couple
+  common-mode alike even on the same antenna (different current distribution, and
+  80m is where a multiband vertical is most compromised). **THE CLEAN NEXT TEST IS
+  80m AT 250 W**, which isolates BAND from POWER — the one comparison neither
+  session has made. Run it before fitting the choke, or fitting the choke will
+  confound it a third time.
   **THE MECHANISM THIS SUGGESTS, AND THE GAP IT EXPOSES:** common-mode RF disturbs
   the **PCM2903C USB audio codec's stream** — a DIFFERENT USB device from the CP2105
   serial bridge, which is why CAT sails on untouched while audio dies. **We have
