@@ -101,6 +101,110 @@ Conventions that carry forward from v1 and that new v2 code should follow. These
 - **Enrichment errors are never fatal.** External service failures log a warning and fall through to a cached value or a default. See the "Enrichment never blocks logging" invariant.
 - **Wrap errors with meaningful context** as they propagate; don't return naked errors from deep call stacks.
 
+## Claims about external systems (operator directive, 2026-07-29)
+
+Anything asserted about a system outside this tree — the rig, CAT, the OS,
+PipeWire, a third-party API — must be **cited**. A claim carrying no quote, no
+source line and no measurement is a guess, and must be labelled one out loud.
+
+- **Cheapest source first: grep → doc → passive observation → keyed
+  transmission.** Each step costs more than the last, and the final one spends
+  the operator's time and a transmission from a licensed station. Never reach
+  past a cheaper source that would settle the question.
+- **Grep our own tree before theorising about the rig's behaviour.** What *we*
+  send it is usually the entire explanation. Cautionary tale: four rounds spent
+  theorising about why the FTdx10 pushes `RM` frames unsolicited, when the
+  answer was `{"name": "INIT", "cmd": "AI1;"}` in our own rigdef — one grep,
+  available every round, missed every round, at the price of two wasted on-air
+  transmissions.
+- **Read the whole page, not the line you went looking for.** Terminating the
+  search on first confirmation is the actual failure mode, and it is invisible
+  from the inside because the check *succeeded*. Cautionary tale: the `RM` page
+  was opened to correct the `RM4`=ALC/`RM5`=PO mapping, and the `P1=0` legend
+  directly above it — which documents the pushed frame, the whole question at
+  issue — went unread; the write-up then asserted "the manual is silent here"
+  about a page that had been read.
+- **Never let an unverified inference become a premise.** Conversation summaries
+  keep conclusions and drop the evidence under them, so a guess that survives
+  one compaction returns looking like established ground. Write a verified
+  external fact into a code comment or doc **with its citation, at the moment it
+  is verified** — worked example: the quoted AI and `RM P1=0` clauses in
+  `internal/bridge/meters.go`.
+- **An anomaly dismissed twice is a finding, not noise.** Cautionary tale: three
+  blank transmissions *were* the drive-collapse signature under investigation,
+  and were written off as instrument failure twice before a controlled test
+  forced the issue.
+- **Don't blame the source for your own inference.** Check it clause by clause
+  before concluding a manual or spec is wrong. Misattribution hides the real
+  defect — a reading habit — and teaches "distrust the documentation, probe the
+  hardware", which is the most expensive path available.
+
+## Acceptance criteria (ATDD) (operator directive, 2026-07-29)
+
+TDD says: state the behaviour, write the tests, then the code. ATDD puts one
+step in front of that — **state what the OPERATOR will observe when the feature
+works, before choosing any mechanism.** Package-level tests can be entirely
+sound and still prove nothing about whether the feature answers the question it
+exists for. Cautionary tale: `internal/bridge/meters_test.go` rules R1–R15c were
+written test-first and were correct; not one of them asked whether the log could
+tell "no RF left the rig" apart from "the instrument is broken". That
+distinction was the entire point of the feature, and establishing it empirically
+cost two days and 24 on-air transmissions.
+
+**Shape of a criterion** — one or two plain sentences:
+
+```
+When <situation>, <observable outcome>, and I can tell it apart from
+<the nearest confusable state>.
+```
+
+The third clause is load-bearing and is the one usually missing. The nearest
+confusable state is where the defects live: no-RF vs dead instrument, alarm
+stuck vs rig genuinely still keyed, dial moved vs noise.
+
+**Who writes it.** Claude drafts, the operator checks — the operator will
+normally delegate the drafting. That delegation only works if the check stays
+cheap, so:
+
+- **State it in operator-observable terms** — a logged QSO row, RF keyed or not,
+  an SSE frame, a banner, a spot emitted. If checking it requires reading the
+  code, it is written at the wrong level.
+- **Present it BEFORE the mechanism is chosen**, as its own short artefact,
+  while changing it is still cheap. Never back-fill a criterion from an
+  implementation already sketched: a criterion that describes what you were
+  going to build anyway is the ATDD equivalent of a test that passes before the
+  fix exists.
+- **Mark the judgement calls; do not fill them in.** Where a criterion needs a
+  tolerance, a timeout, or a definition of "collapsed", flag it as an open
+  question for the operator. Every threshold invented without asking has been
+  wrong.
+
+**Three layers, no framework.**
+
+1. **The criterion**, recorded in the acceptance test's file header and in the
+   ADR where one exists. Worked example of reasoning-in-the-header:
+   `internal/ft8/dialguard_test.go`.
+2. **Automated acceptance at the daemon boundary** — real service, assertions on
+   HTTP responses, SSE frames and log output, never package internals. Already
+   house style: real `&sqlite.Service{}` with in-memory DBs. Playwright for
+   anything the operator sees in the SPA.
+3. **On-hardware acceptance procedure for rig/TX-touching work**, written down
+   BEFORE the build, with the expected observation for each step. **Passive
+   first:** `cmd/catcli` and the logs answer most rig questions for free; spend a
+   keyed transmission only where passive observation cannot settle it. The two
+   wasted on-air transmissions of 2026-07-29 were an acceptance test run at the
+   most expensive layer available, because nothing cheaper had been written.
+
+**No BDD framework** — no godog, no Cucumber, no Gherkin runner. Plain Go tests
+named after the criterion get essentially all of the value. A BDD runner is the
+exact shape of `internal/adapters/`: 30+ test files of framework, abandoned as
+too complicated to maintain and use correctly.
+
+**The loop.** Outer acceptance test RED → inner TDD cycles until it goes green.
+The TDD rules below apply unchanged to the inner cycles — including the
+reversion proof, which the outer test also owes: it must fail for the right
+reason before the feature exists.
+
 ## Testing
 
 - **TDD IS THE ROUTE, NOT AN OPTION (operator directive, 2026-07-27).** Determine the

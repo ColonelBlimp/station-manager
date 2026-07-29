@@ -692,23 +692,47 @@ transmission and summarised in one log line at unkey
 `n` (the sample count). Nothing is written to the rig: the readings arrive as
 unsolicited AUTO-mode pushes, so no CAT traffic is added to the key-down path.
 
-### THE THREE THINGS THE MANUAL GOT WRONG (all cost a wrong build first)
+### WHAT I GOT WRONG — the manual documented all of it, and so did our rigdef
 
-1. **`AI=O` against `RM READ METER` does NOT mean the rig streams the meter you
-   ask for.** The first implementation modelled `RM4`/`RM5`/`RM6` (ALC/PO/SWR)
-   because those are the documented selectors. **The rig never pushes any of
-   them** — they answer explicit queries only. Two real on-air transmissions
-   reported "no meter data" while the rig was pushing at ~26 Hz throughout both.
-2. **What it actually pushes is `RM0nnn000`** — the value of whatever meter is
-   *currently selected*. Found with `cmd/catcli`, which prints `[no match]` for
-   frames the rigdef doesn't model. Going back to the wire was the only thing
-   that settled it; four rounds of reasoning from the manual did not.
-3. **The pushed frame does not say WHICH meter it is.** `MS METER SW` does
+The CAT reference (2308-F) states nothing false here, and every fact needed to
+get this right was available from day one. Recorded this way deliberately: the
+first draft of this section was headed "the three things the manual got wrong",
+which was false and taught the wrong lesson — that documentation is unreliable
+and the hardware must be probed. Probing costs keyed transmissions on a licensed
+station, and two were spent on my wrong prefix.
+
+1. **The rig pushes `RM` because SM tells it to.** `internal/cat/rigs/yaesu-ftdx10.json`
+   sets `INIT` to `AI1;` on every connect; the reference's AI page reads
+   *"0: Auto Information 'OFF' / 1: Auto Information 'ON'"* and *"This parameter
+   is set to '0' (OFF) automatically when the transceiver is turned 'OFF'."* So
+   the rig's own default is OFF and the stream exists only because the bridge
+   arms it. I never opened that page — I read `AI=O` in the command index as if
+   it were the mechanism. **One grep of our own rigdef settles it**, and was
+   available in all four rounds.
+2. **The manual documents the pushed frame.** The `RM` page carries a **`P1=0`**
+   form with *"P2: Meter 0 - 255"* and *"P3: 000 (Fixed)"* — distinct from the
+   Read form, whose selector list runs `1: S 3: COMP 4: ALC 5: PO 6: SWR
+   7: IDD 8: VDD` and contains **no `0`**. That is `RM0nnn000`. The first
+   implementation modelled `RM4`/`RM5`/`RM6` on my unstated assumption that the
+   rig pushes the meter you asked for; those answer explicit queries only, and
+   two real on-air transmissions reported "no meter data" while the rig pushed
+   at ~26 Hz throughout both. Worse than not reading the page: **I had read it**
+   — that is where the `RM4`=ALC / `RM5`=PO correction came from — and took only
+   the legend I went looking for. The `P1=0` legend sits directly above it.
+   (Caveat: the PDF's two-column layout converts badly, so which row the `P1=0`
+   legend binds to is read from converted text, not the page image.)
+3. **The pushed frame does not say WHICH meter it is** — not an error of mine, a
+   design consequence, and `MS METER SW` covers it
    (`0:PO 1:COMP 2:ALC 3:VDD 4:ID 5:SWR`), so `MS;` was added to the rigdef's
    READ burst. Observed: the meter reads **S-meter during receive** and the
    **MS-selected meter while transmitting** — receive values sat at 103-132 and
    matched an explicit `RM1;` query (124); under mic modulation they dropped to
    a 0-33 band tracking the speech envelope.
+
+The transferable lesson is narrower than "check the wire", and it is not about
+the manual at all: **read the whole page, not the line you went looking for, and
+grep our own tree before theorising about the rig's behaviour.** Both of the
+above were answerable without transmitting.
 
 ### THE CONTROLLED TEST (dummy load, 5 W, 80 m, 24 transmissions)
 

@@ -10,16 +10,21 @@ import (
 
 // Per-transmission rig-meter observation (follow-up (d)).
 //
-// MEASURED ON HARDWARE, 2026-07-29 (dogfood FTdx10, via cmd/catcli). The
-// manual's AI=O against RM READ METER does NOT mean the rig streams the meter
-// you ask for. What it actually pushes, once INIT arms AUTO mode, is:
+// MEASURED ON HARDWARE, 2026-07-29 (dogfood FTdx10, via cmd/catcli). The rig
+// pushes because WE enable it: the rigdef's INIT is `AI1;`, and per the CAT
+// reference AI is "set to 0 (OFF) automatically when the transceiver is turned
+// OFF", so auto-information is off until the bridge arms it. What then arrives
+// unsolicited is:
 //
 //	RM0nnn000   the value of whatever meter is CURRENTLY SELECTED
 //
-// and nothing at all under RM4/RM5/RM6 — those answer queries only. The first
-// version of this file modelled RM4/5/6 alone, and two real on-air
-// transmissions consequently reported "no meter data" while the rig was
-// pushing RM0 at ~26 Hz throughout both of them.
+// and nothing under RM4/RM5/RM6 — those answer explicit queries only. The CAT
+// reference (2308-F) documents this: the RM page carries a P1=0 form with
+// "P2: Meter 0 - 255 / P3: 000 (Fixed)", distinct from the Read form whose
+// selector list runs 1:S 3:COMP 4:ALC 5:PO 6:SWR 7:IDD 8:VDD and contains no 0.
+// The first version of this file modelled RM4/5/6 alone — a misreading of the
+// page, not a gap in it — and two real on-air transmissions consequently
+// reported "no meter data" while the rig pushed RM0 at ~26 Hz throughout both.
 //
 // RM0 is therefore tagged METER, not PO: the frame does not say which meter it
 // is. MS METER SW does (0:PO 1:COMP 2:ALC 3:VDD 4:ID 5:SWR), so MS is in the
