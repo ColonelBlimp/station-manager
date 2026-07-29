@@ -16,12 +16,15 @@
     // alarm re-shows the banner.
     import { rig, dismissDriveAlarm } from '../operate/rig.svelte';
 
-    // PAST TENSE throughout, and not a slip. There is no daemon clear for this
-    // alarm, so the banner outlives the slot it reports on — by the time it is
-    // read, the transmission has almost always ended. "The rig is keyed" would be
-    // false, and false in the dangerous direction: that is what the stuck-TX
-    // banner means, and an operator who learns this one overstates has been
-    // taught to discount the one that does not.
+    // NO TENSED CLAIM ABOUT THE RIG'S KEY STATE, in either direction, and that
+    // is deliberate — three review rounds were spent flipping between them.
+    // The banner SPANS BOTH STATES: the daemon raises it mid-slot with the rig
+    // still keyed (~9 s of a 12.6 s slot left), and there is no daemon clear, so
+    // it then persists past the end of the slot until dismissed. "Is keyed"
+    // becomes false at unkey — and is what the STUCK-TX banner means, so it
+    // blurs the separation in the dangerous direction. "Was keyed" is false for
+    // the whole time the operator is most likely to be reading it. Describe the
+    // OBSERVATION instead; that stays true for the banner's whole life.
     //
     // Wording is otherwise bounded by what the detector actually establishes: the rig's
     // meter stopped reporting output for the silence window. It never observes a
@@ -59,8 +62,7 @@
             />
         </svg>
         <span>
-            <strong>NO RF OUTPUT</strong> — the rig was keyed but its power meter reported nothing
-            for several seconds.
+            <strong>NO RF OUTPUT</strong> — the power meter reported nothing for several seconds.
             {detail}
         </span>
         <button

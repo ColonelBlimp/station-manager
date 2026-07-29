@@ -148,20 +148,27 @@ describe('DriveAlarmBanner', () => {
         expect(text).toMatch(/reported nothing|no output|stopped/i);
     });
 
-    // S9 — the banner OUTLIVES the transmission it reports on. There is no
-    // daemon clear for this alarm, so it stays until dismissed, and the slot it
-    // describes has almost always ended by the time the operator reads it.
-    // Present-tense wording is therefore false — and false in the one direction
-    // that matters, because "the rig is keyed" is exactly what the STUCK-TX
-    // alarm means. It would blur the separation S5/S6 exist to keep, in the
-    // dangerous direction: an operator who learns that this banner overstates
-    // things has been taught to discount the one that does not.
-    it('does not claim the rig is currently transmitting', () => {
+    // S9 — the banner SPANS BOTH KEY STATES, so it may not assert either one.
+    // The daemon raises it mid-slot while ft8TxActive is still true (daemon rule
+    // D1 requires exactly that), leaving ~9 s of a 12.6 s slot still keyed; and
+    // there is no daemon clear, so it then persists after the slot ends until
+    // dismissed. Present tense is false for the second half, past tense for the
+    // first — a tense cannot be chosen, so the wording must describe the
+    // OBSERVATION rather than the rig's current state.
+    //
+    // The first version of this rule asserted /was keyed/, which pinned one of
+    // the two wrong answers instead of ruling out both. That is the failure mode
+    // the CLAUDE.md testing section names: a failing spec, not a failing
+    // implementation. Written as two negatives so no tense can satisfy it.
+    it('asserts neither that the rig is still keyed nor that it has stopped', () => {
         render(DriveAlarmBanner);
         raiseDriveAlarm();
 
         const text = bannerText(screen.getByRole('alert'));
+        // Would be false once the slot ends — and is what the STUCK-TX banner
+        // means, so it blurs the S5/S6 separation in the dangerous direction.
         expect(text).not.toMatch(/\bis keyed\b|\bis transmitting\b|currently transmitting/i);
-        expect(text).toMatch(/was keyed/i);
+        // Would be false for the ~9 s the rig is still keyed when it first shows.
+        expect(text).not.toMatch(/\bwas keyed\b|\bhas (ended|stopped|finished)\b/i);
     });
 });
