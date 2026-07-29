@@ -9,10 +9,11 @@ import (
 
 // Per-transmission meter accumulation (follow-up (d), 2026-07-29).
 //
-// The FTdx10 marks RM READ METER as AI=O in its command index (CAT ref 2308-F
-// p.5), so ALC/PO/SWR frames arrive UNPROMPTED while transmitting — the bridge
-// listens rather than polling, which is why nothing here adds a CAT write to
-// the key-down path.
+// The rigdef's INIT is `AI1;`, which arms the FTdx10's auto-information mode
+// (off by default — the CAT reference has it "set to 0 (OFF) automatically when
+// the transceiver is turned OFF"). The rig then pushes RM0nnn000 unprompted, so
+// the bridge listens rather than polling and nothing here adds a CAT write to
+// the key-down path. RM4/RM5/RM6 (ALC/PO/SWR) are query answers only.
 //
 // The rules below were written before the implementation. Each pins a state
 // that the accumulator CREATES rather than only the happy path: readings must

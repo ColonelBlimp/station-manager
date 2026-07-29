@@ -63,6 +63,14 @@ const (
 	// the dangerous cases (double-key, mic-steal, write-mid-TX) are already
 	// prevented by the keyMu/ErrTxActive single-flight, independent of this.
 	EventRigClients EventName = "rig-clients"
+
+	// EventDriveAlarm carries the drive-collapse alarm: the rig is keyed but no
+	// RF is leaving it. Deliberately NOT the tx-alarm — that one means the PTT
+	// may be stuck, latches txUncertain to refuse further keying, and may only be
+	// cleared by positive RX evidence. A drive fault shares none of that: the
+	// transmitter is behaving, the audio feeding it is not. Sharing the tx-alarm's
+	// hub-cached slot could also retire a standing "check your radio" banner.
+	EventDriveAlarm EventName = "drive-alarm"
 )
 
 // Event is one bridge → SSE-subscriber message. Name is the SSE
