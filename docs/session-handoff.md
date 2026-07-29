@@ -30,7 +30,60 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-28)
+## Current state (as of 2026-07-29)
+
+> **2026-07-29 — the drive collapse HAS A MEASURED SIGNATURE, and an alarm that
+> fires on it. Built end to end; on-hardware acceptance is the only thing left.**
+>
+> - **DEPLOYMENT — nothing pending.** The running daemon is the **16:50 build**
+>   (`/usr/bin/smd`), which is HEAD `84ed3ffc` (16:48). Everything below is
+>   deployed. Station was last on a **dummy load at 5 W on 80 m** for the sweep —
+>   restore normal power/antenna before operating.
+> - **THE COLLAPSE IS NOW OBSERVABLE.** Controlled sweep (dummy load, 5 W, 80 m,
+>   24 transmissions, PipeWire sink 66 swept 0.39 → mute → 0.39). All four states
+>   are distinguishable from the per-TX meter summary: healthy `max=34 n≈155`;
+>   **collapse mid-transmission `max=34 n=23`**; reduced drive (−3 dB)
+>   `max=5 n=33`; total collapse **silent**. **`n` is the PRIMARY diagnostic** —
+>   mid-TX collapse has the same `max` as healthy. The 09:26:43 recovery control
+>   is what makes it conclusive. Full write-up: `docs/dogfood-inbox.md`.
+> - **METER INSTRUMENTATION (follow-up (d)) — shipped.** The rig pushes
+>   `RM0nnn000` (the *currently selected* meter) **because our own rigdef sets
+>   `INIT: AI1;`** — AI is OFF by default on the FTdx10. `RM4/RM5/RM6` are
+>   query-only; `MS` carries the selection and is now in the READ burst.
+>   `internal/bridge/meters.go`. **The manual was correct throughout** — see the
+>   corrected write-up; the earlier "the manual got it wrong" framing was false
+>   and is retracted.
+> - **DRIVE-COLLAPSE ALARM (follow-up (1)) — BUILT, both halves, not yet proven
+>   on hardware.** Daemon: `internal/bridge/drivealarm.go`, an idle-timeout on
+>   the meter stream, **3 s** (operator's number), armed AFTER the key write
+>   completes, one alarm per transmission, re-arms next slot. Publishes its OWN
+>   `drive-alarm` SSE event — never `tx-alarm`, and it never sets `txUncertain`
+>   (a drive fault is not a stuck carrier). **The discriminator against a dead
+>   instrument is the RECEIVE-time meter stream**, not frames within the slot:
+>   total collapse is usually silent from key-down (12 of 24). SPA: amber
+>   `DriveAlarmBanner`, mounted below `TxAlarmBanner` in `App.svelte`,
+>   dismiss-only (no daemon clear). 11 daemon rules + 9 SPA rules, all
+>   reversion-proved.
+> - **NEXT — layer 3, the on-hardware acceptance run (3 transmissions).** Dummy
+>   load, 5 W: (1) **mute sink 66 BEFORE key-down** → amber banner appears
+>   mid-slot, ~3 s after keying, and STAYS (correct — no auto-clear); (2)
+>   **0.39 clean** → no banner (negative control); (3) optional **mute mid-slot**.
+>   Note `ft8.tx.max_repeats = 6` caps a Call-CQ run at six transmissions.
+> - **THREE NEW CLAUDE.md DIRECTIVES, all operator-approved today.** (1)
+>   *Claims about external systems* — cite it or label it a guess; grep our own
+>   tree before theorising about the rig; cheapest source first (grep → doc →
+>   passive observation → keyed transmission). (2) *Acceptance criteria (ATDD)* —
+>   state what the OPERATOR observes before choosing a mechanism; Claude drafts,
+>   operator checks; three layers, no BDD framework. (3) TDD now says **ship
+>   tests and implementation as ONE commit** (a tests-only commit turns the CI
+>   gate red on main), plus two guards on reversion proofs.
+> - **STILL OPEN from the meter arc:** `last` is a key-down tail artefact and
+>   reads 0 on healthy transmissions (needs onset treatment or removal); the
+>   0.28–0.39 sensitivity curve is steep and unmeasured; the FT-710 rigdef's
+>   RM/MS selectors are UNVERIFIED against its own CAT manual; and the
+>   rigdef-as-single-source-of-truth ADR (a tag declared in the rigdef should
+>   reach every CAT consumer without a second Go-side whitelist) now has a
+>   measured push rate to justify its rate half.
 
 > **2026-07-28 — the stuck-TX investigation day. Idle inhibitor (g) SHIPPED and
 > PROVEN; the drive collapse is STILL UNEXPLAINED; one new rig-side finding.**
