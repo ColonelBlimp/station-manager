@@ -78,11 +78,24 @@ type meterKey struct {
 // Values are the rig's raw 0-255 meter scale, NOT engineering units: the CAT
 // reference documents no conversion to watts or SWR ratio, and inventing one
 // would put a fabricated number in the log where a real reading belongs.
+//
+// Min is ONSET-RELATIVE: it ignores readings before the first non-zero one.
+// Measured on air 2026-07-29, every transmission reported a raw minimum of zero
+// — healthy ones included — because PTT comes up a few samples ahead of the
+// waveform. A raw minimum is therefore identical on a clean transmission and on
+// one where drive collapsed, which is exactly the distinction this exists to
+// draw. Onset-relative needs no invented settling time: the rig says when drive
+// arrived by reporting a non-zero value. Drive that never arrives at all stays
+// distinguishable because Max is then zero too.
 type meterSample struct {
 	Tag            string
 	Sel            string
 	Count          int
 	Min, Max, Last int
+	// started records that a non-zero reading has been seen, so Min tracks only
+	// from drive onset. Unexported: an implementation detail of accumulation,
+	// not part of what a transmission reports.
+	started bool
 }
 
 // ft8MeterSummary is what one transmission's meter pushes amounted to.
@@ -152,11 +165,16 @@ func (s *Service) observeMeter(status cat.Status) {
 			if s.ft8Meters == nil {
 				s.ft8Meters = make(map[meterKey]*meterSample, len(meterTags))
 			}
-			acc = &meterSample{Tag: tag, Sel: key.Sel, Min: n, Max: n}
+			acc = &meterSample{Tag: tag, Sel: key.Sel, Max: n}
 			s.ft8Meters[key] = acc
 		}
 		acc.Count++
-		if n < acc.Min {
+		// Minimum tracks from drive ONSET. Leading zeros are the key-up ramp, not
+		// a fault; a zero AFTER onset is the collapse being hunted.
+		if n != 0 && !acc.started {
+			acc.started = true
+			acc.Min = n
+		} else if acc.started && n < acc.Min {
 			acc.Min = n
 		}
 		if n > acc.Max {

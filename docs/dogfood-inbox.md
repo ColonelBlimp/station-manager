@@ -676,3 +676,121 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   **Next, if this is picked up:** sweep the occurrences for a common factor. Four
   usable samples is thin, and message type is already not it — the 07-26 pair were
   mid-QSO rungs (`R-17`, `RR73`), the 07-28 pair were both CQ.
+
+---
+
+## [2026-07-29] THE FT8 DRIVE COLLAPSE NOW HAS A MEASURABLE SIGNATURE — and it is the ABSENCE of meter data, not a low reading
+
+**Status: MEASURED, on hardware, with a controlled drive sweep and a recovery
+control. This is the first time the collapse has been made observable.**
+
+### What was built
+
+`internal/bridge/meters.go` — the rig's own PO meter is now recorded per FT8
+transmission and summarised in one log line at unkey
+(`bridge: ft8 tx meters (raw 0-255 scale)`), carrying `max`, `min`, `last` and
+`n` (the sample count). Nothing is written to the rig: the readings arrive as
+unsolicited AUTO-mode pushes, so no CAT traffic is added to the key-down path.
+
+### THE THREE THINGS THE MANUAL GOT WRONG (all cost a wrong build first)
+
+1. **`AI=O` against `RM READ METER` does NOT mean the rig streams the meter you
+   ask for.** The first implementation modelled `RM4`/`RM5`/`RM6` (ALC/PO/SWR)
+   because those are the documented selectors. **The rig never pushes any of
+   them** — they answer explicit queries only. Two real on-air transmissions
+   reported "no meter data" while the rig was pushing at ~26 Hz throughout both.
+2. **What it actually pushes is `RM0nnn000`** — the value of whatever meter is
+   *currently selected*. Found with `cmd/catcli`, which prints `[no match]` for
+   frames the rigdef doesn't model. Going back to the wire was the only thing
+   that settled it; four rounds of reasoning from the manual did not.
+3. **The pushed frame does not say WHICH meter it is.** `MS METER SW` does
+   (`0:PO 1:COMP 2:ALC 3:VDD 4:ID 5:SWR`), so `MS;` was added to the rigdef's
+   READ burst. Observed: the meter reads **S-meter during receive** and the
+   **MS-selected meter while transmitting** — receive values sat at 103-132 and
+   matched an explicit `RM1;` query (124); under mic modulation they dropped to
+   a 0-33 band tracking the speech envelope.
+
+### THE CONTROLLED TEST (dummy load, 5 W, 80 m, 24 transmissions)
+
+Drive was swept by muting/attenuating the PipeWire sink feeding the rig
+(sink 66, `PCM2903C Audio CODEC`), three transmissions per level.
+
+| sink vol | dB     | max | n     | frames |
+|----------|--------|-----|-------|--------|
+| 0.39     | 0      | 34  | ~140  | flowing |
+| 0.28     | -3     | 5   | ~33   | flowing |
+| 0.20     | -6     | —   | —     | **SILENT** |
+| 0.10     | -12    | —   | —     | **SILENT** |
+| 0.05     | -18    | —   | —     | **SILENT** |
+| 0.00     | mute   | —   | —     | **SILENT** |
+| 0.39     | recovery | **34** | **158** | flowing |
+
+**The recovery control is what makes this conclusive.** Fourteen consecutive
+silent transmissions could have meant the rig simply stopped pushing at 09:20
+for unrelated reasons; the return to exactly baseline (`max=34, n=158`) at
+09:26:43, and immediate re-silencing when re-muted, rules that out. Silence
+tracks drive, reversibly.
+
+### THE DIAGNOSTIC MATRIX — all four states are distinguishable
+
+| condition                        | max | n    |
+|----------------------------------|-----|------|
+| healthy                          | 34  | ~155 |
+| **collapse mid-transmission**    | 34  | **23** |
+| reduced drive throughout (-3 dB) | 5   | 33   |
+| total collapse                   | —   | **silent** |
+
+The mid-transmission case was produced deliberately: keyed 09:31:00, drive held
+3 s, muted 09:31:03, transmission ended 09:31:13.
+
+**`n` is the primary diagnostic, NOT `max`.** A mid-transmission collapse has an
+*identical* `max` to a healthy transmission (34 in both) because drive genuinely
+was present briefly; only the sample count betrays it — 23 vs ~155, and 23/155
+≈ 15% against the ~24% of the window that had drive, so it tracks duration.
+`max` is what then separates "collapsed after coming up" (34) from "weak
+throughout" (5). **Both fields are needed; neither alone suffices.**
+
+### WHY: the rig pushes ON CHANGE
+
+A meter pinned at zero has nothing to report, so it sends nothing. `max=0` never
+occurs. This is why silence — not a low number — is the collapse signature, and
+it is the opposite of what the instrument was designed to detect. The
+"rig pushed no meter data for this transmission" line was built as a *"does this
+rig push at all?"* diagnostic and was twice dismissed as instrument failure when
+it was in fact the fault being reported.
+
+**It had already fired unnoticed**: three blank transmissions at 09:05:28,
+09:05:58 and 09:06:28 were the collapse signature, from the audio still being
+down after an earlier volume test.
+
+### TWO FIELDS THAT LOOK DIAGNOSTIC AND ARE NOT
+
+- **`min` was pure key-up ramp.** EVERY transmission logged `min=0`, healthy ones
+  included, because PTT comes up a few samples before the waveform starts. Now
+  computed from the first non-zero reading onward, which needs no invented
+  settling interval — the rig says when drive arrived by reporting a non-zero
+  value. Demoted but kept honest.
+- **`last` is pure key-down tail** and is still unfixed. All three *clean* 5 W
+  controls logged `last=0` because the final sample lands after the waveform
+  stops but before PTT drops. **Do not read `last` as evidence of anything.**
+
+### FOLLOW-UPS
+
+1. **An alarm must key on silence / depressed `n` during a keyed transmission,
+   not on a low reading.** The ambiguity to resolve first: "no meter data" today
+   means BOTH "instrument broken (wrong rigdef, AI not armed)" AND "drive is
+   zero". The discriminator already exists and needs no threshold — the S-meter
+   pushes continuously at ~26 Hz in *receive*, so a working instrument is
+   provably alive between transmissions.
+2. **`last` needs the same onset-style treatment as `min`, or removal.**
+3. **The sensitivity curve is steep between 0.28 and 0.39** and unmeasured there;
+   5 W is evidently near the bottom of the rig's drive range. A finer sweep would
+   locate the detection floor.
+4. **Push rate is NOT constant** — ~26 Hz in receive, ~4 Hz under voice, ~12 Hz
+   under FT8. Any consumer must tolerate the range; nothing may assume an
+   interval.
+5. **`ft8.tx.max_repeats = 6` caps a CQ session at six transmissions**, which
+   shaped this test plan into 6-transmission blocks. Worth remembering for any
+   future on-air experiment.
+6. **The FT-710 rigdef is untouched.** Its `RM`/`MS` selectors were not verified
+   against its own CAT manual and must not be assumed identical to the FTdx10's.

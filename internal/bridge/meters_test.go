@@ -420,6 +420,79 @@ func TestMeterFieldPrefix_PushedAndExplicitDoNotCollide(t *testing.T) {
 	}
 }
 
+// R15 — the per-transmission minimum is taken from the FIRST NON-ZERO reading
+// onward, so the key-to-audio ramp cannot masquerade as a collapse.
+//
+// Measured on air 2026-07-29: every transmission logs min=0, healthy ones
+// included, because PTT comes up a few samples before the waveform starts. A
+// raw minimum is therefore constant across healthy and faulty transmissions
+// and diagnoses nothing — proven that morning when the operator drove the
+// audio to zero mid-transmission and the aggregate was indistinguishable from
+// the three clean transmissions before it.
+//
+// Onset-relative needs no invented settling time: the rig itself says when
+// drive arrived by reporting a non-zero reading.
+func TestObserveMeter_MinIgnoresKeyUpRamp(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	setFt8Keyed(s, true)
+
+	// Ramp (0,0) then steady drive — a HEALTHY transmission.
+	for _, v := range []string{"RM0000000", "RM0000000", "RM0100000", "RM0120000", "RM0110000"} {
+		s.observeMeter(meterFrame(t, v))
+	}
+
+	sum := s.flushFt8TxMeters()
+	m := sum.Samples[0]
+	if m.Min != 100 {
+		t.Fatalf("min = %d, want 100 — the key-up ramp must not set the minimum", m.Min)
+	}
+	if m.Max != 120 {
+		t.Fatalf("max = %d, want 120", m.Max)
+	}
+}
+
+// R15b — a collapse AFTER drive came up is still reported. This is the whole
+// point: post-onset zeros are real, leading zeros are not.
+func TestObserveMeter_MinCatchesPostOnsetCollapse(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	setFt8Keyed(s, true)
+
+	// Ramp, drive up, drive DROPS to zero, drive returns — exactly the operator's
+	// volume-to-minimum-then-maximum test.
+	for _, v := range []string{"RM0000000", "RM0100000", "RM0000000", "RM0120000"} {
+		s.observeMeter(meterFrame(t, v))
+	}
+
+	sum := s.flushFt8TxMeters()
+	m := sum.Samples[0]
+	if m.Min != 0 {
+		t.Fatalf("min = %d, want 0 — a drop to zero after drive came up is a collapse and must show", m.Min)
+	}
+	if m.Max != 120 {
+		t.Fatalf("max = %d, want 120", m.Max)
+	}
+}
+
+// R15c — drive that NEVER came up stays distinguishable from a mid-transmission
+// collapse: max is zero rather than high. Both are faults, but not the same one.
+func TestObserveMeter_NeverCameUpReportsZeroMax(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	setFt8Keyed(s, true)
+
+	for i := 0; i < 4; i++ {
+		s.observeMeter(meterFrame(t, "RM0000000"))
+	}
+
+	sum := s.flushFt8TxMeters()
+	m := sum.Samples[0]
+	if m.Count != 4 {
+		t.Fatalf("count = %d, want 4 — all-zero readings are still readings", m.Count)
+	}
+	if m.Max != 0 || m.Min != 0 {
+		t.Fatalf("sample = %+v, want min=0 max=0 (drive never arrived)", m)
+	}
+}
+
 // R7 — a transmission BEGINS with an empty accumulator (codex review of
 // bd60f178, P1).
 //
