@@ -83,10 +83,14 @@ func TestObserveMeter_TracksRangeAcrossTransmission(t *testing.T) {
 	}
 }
 
-// R2 — readings decoded while NOT keyed are discarded. PO reads ~0 in receive,
-// so accumulating them would peg every transmission's minimum at zero and make
-// a real collapse indistinguishable from normal operation.
-func TestObserveMeter_IgnoredWhileNotKeyed(t *testing.T) {
+// R2 — readings decoded while NOT keyed stay out of the per-transmission
+// SUMMARY. PO reads ~0 in receive, so accumulating them would peg every
+// transmission's minimum at zero and make a real collapse indistinguishable
+// from normal operation.
+//
+// This is the preservation half of R8: observation became unconditional, and
+// this rule is the thing that refactor must NOT weaken.
+func TestObserveMeter_ReceiveReadingsExcludedFromSummary(t *testing.T) {
 	s, _ := newCommandTestService(t)
 	setFt8Keyed(s, false)
 
@@ -96,6 +100,116 @@ func TestObserveMeter_IgnoredWhileNotKeyed(t *testing.T) {
 	sum := s.flushFt8TxMeters()
 	if len(sum.Samples) != 0 {
 		t.Fatalf("readings taken outside a transmission were accumulated: %+v", sum.Samples)
+	}
+}
+
+// R8 — OBSERVATION IS UNCONDITIONAL. A meter frame decoded in receive is still
+// recorded as the rig's current reading.
+//
+// The gate belongs on the per-transmission diagnostic, not on observation
+// itself: the rig pushing RM is rig state arriving like FA or MD0, and a
+// future browser meter display must not need a transmission to come alive
+// (operator, 2026-07-29). The original implementation returned early when not
+// keyed and DESTROYED the reading, which would have made any such consumer
+// blank until the operator transmitted.
+func TestObserveMeter_RecordsLatestWhileReceiving(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	setFt8Keyed(s, false)
+
+	s.observeMeter(meterFrame(t, "RM6030000"))
+	s.observeMeter(meterFrame(t, "RM5000000"))
+
+	latest := s.latestMeters()
+	byTag := map[string]int{}
+	for _, r := range latest {
+		byTag[r.Tag] = r.Value
+	}
+	if v, ok := byTag["SWR"]; !ok || v != 30 {
+		t.Fatalf("SWR not observed in receive: latest=%+v", latest)
+	}
+	if v, ok := byTag["PO"]; !ok || v != 0 {
+		t.Fatalf("PO not observed in receive: latest=%+v", latest)
+	}
+}
+
+// R8b — the latest reading tracks the most recent frame, in receive or keyed.
+// A display showing a stale value would be worse than showing none.
+func TestObserveMeter_LatestTracksMostRecent(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	setFt8Keyed(s, false)
+
+	s.observeMeter(meterFrame(t, "RM5010000"))
+	s.observeMeter(meterFrame(t, "RM5200000"))
+
+	// Assert PRESENCE then value: a bare range-and-compare passes vacuously on
+	// an empty slice, which is exactly how this test slipped past the stub.
+	latest := s.latestMeters()
+	var po *meterReading
+	for i := range latest {
+		if latest[i].Tag == "PO" {
+			po = &latest[i]
+		}
+	}
+	if po == nil {
+		t.Fatalf("PO absent from latest readings: %+v", latest)
+	}
+	if po.Value != 200 {
+		t.Fatalf("latest PO = %d, want 200 (most recent frame)", po.Value)
+	}
+}
+
+// R10 — the first meter frame of a pipeline lifecycle is announced ONCE.
+//
+// Without it, a rig that pushes nothing is indistinguishable from a wiring bug
+// on our side, and answering that question would need a transmission — the
+// very coupling R8 removes. Silent thereafter, because the push rate is
+// unknown and could be tens per second.
+func TestMarkMeterSeen_AnnouncesOnlyOnce(t *testing.T) {
+	s, _ := newCommandTestService(t)
+
+	s.mu.Lock()
+	first := s.markMeterSeenLocked()
+	second := s.markMeterSeenLocked()
+	s.mu.Unlock()
+
+	if !first {
+		t.Fatal("the first meter frame must announce")
+	}
+	if second {
+		t.Fatal("a second meter frame must NOT re-announce (the push rate is unbounded)")
+	}
+}
+
+// R10b — a new pipeline re-answers the question. Scoped per-pipeline like
+// identityVerified: a reconnect may be a different rig, or the same rig with
+// AI mode no longer armed (the FTdx10 clears AI on power-off), so the previous
+// instance's answer does not carry over.
+func TestResetMeterObservation_ReArmsAnnouncement(t *testing.T) {
+	s, _ := newCommandTestService(t)
+
+	s.mu.Lock()
+	_ = s.markMeterSeenLocked()
+	s.mu.Unlock()
+
+	s.resetMeterObservation()
+
+	s.mu.Lock()
+	again := s.markMeterSeenLocked()
+	s.mu.Unlock()
+	if !again {
+		t.Fatal("a new pipeline lifecycle must re-announce whether this rig pushes meters")
+	}
+}
+
+// R10c — a reconnect must not leave the previous rig's readings on display.
+func TestResetMeterObservation_ClearsLatest(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	s.observeMeter(meterFrame(t, "RM5200000"))
+
+	s.resetMeterObservation()
+
+	if latest := s.latestMeters(); len(latest) != 0 {
+		t.Fatalf("readings survived a pipeline teardown: %+v", latest)
 	}
 }
 

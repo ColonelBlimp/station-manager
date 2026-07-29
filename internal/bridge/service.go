@@ -277,6 +277,14 @@ type Service struct {
 	// transmission. See meters.go.
 	ft8Meters    map[string]*meterSample
 	ft8MeterLast ft8MeterSummary
+	// meterLatest is the rig's CURRENT reading per meter, recorded whether or
+	// not anything is transmitting — observation is a layer below the
+	// per-transmission diagnostic, so a consumer (a browser meter display) never
+	// needs a transmission to come alive. meterSeen gates the once-per-pipeline
+	// "this rig pushes meters" announcement. Both mu-guarded, both reset at
+	// pipeline teardown by resetMeterObservation.
+	meterLatest map[string]int
+	meterSeen   bool
 
 	// TX-uncertainty + stuck-TX alarm state (ADR 0051, all mu-guarded except
 	// where noted). txUncertain: an unkey (or possibly-keyed failed write) has

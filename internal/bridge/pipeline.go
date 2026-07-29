@@ -311,6 +311,11 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		s.clearTuneOnDisconnect()
 		// Release any active FT8 TX the same way — PTT dropped (ADR 0030).
 		s.clearFt8TxOnDisconnect()
+		// Drop meter observation with the instance that produced it: a reconnect
+		// may be a different rig, or the same rig with AI no longer armed, so the
+		// "does this rig push meters" answer is re-established rather than
+		// inherited — and stale readings never linger as if current (meters.go).
+		s.resetMeterObservation()
 	}()
 
 	if err := client.WriteCommandBytes(ctx, initBytes); err != nil {

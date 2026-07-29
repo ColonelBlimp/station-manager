@@ -53,16 +53,22 @@ type ft8MeterSummary struct {
 	Samples []meterSample
 }
 
-// observeMeter accumulates a decoded meter push against the transmission in
-// flight. Readings taken outside a keyed transmission are discarded: PO reads
-// ~0 in receive, so accumulating them would peg every transmission's minimum
-// at zero and hide the very fault this exists to catch.
+// observeMeter consumes a decoded meter push. Two SEPARATE layers, and the
+// distinction is load-bearing:
+//
+//   - OBSERVATION is unconditional. A pushed meter frame is rig state arriving
+//     exactly like FA or MD0, so the current reading is recorded whether or not
+//     anything is transmitting. An earlier version returned early when not
+//     keyed and destroyed the reading, which would have left any consumer (a
+//     browser meter display) blank until the operator transmitted — a
+//     transmission must not be needed to bring a meter to life.
+//   - The per-transmission SUMMARY is gated on ft8TxActive. PO reads ~0 in
+//     receive, so folding receive-time readings into a transmission's range
+//     would peg every minimum at zero and hide the very fault this exists to
+//     catch.
 func (s *Service) observeMeter(status cat.Status) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.ft8TxActive {
-		return
-	}
+	announce := false
 	for _, tag := range meterTags {
 		v, ok := status[tag]
 		if !ok || v == "" {
@@ -71,6 +77,18 @@ func (s *Service) observeMeter(status cat.Status) {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			continue // a garbled frame is not a reading
+		}
+		// Layer 1 — always current.
+		if s.meterLatest == nil {
+			s.meterLatest = make(map[string]int, len(meterTags))
+		}
+		s.meterLatest[tag] = n
+		if s.markMeterSeenLocked() {
+			announce = true
+		}
+		// Layer 2 — only while this rig is actually transmitting.
+		if !s.ft8TxActive {
+			continue
 		}
 		acc, seen := s.ft8Meters[tag]
 		if !seen {
@@ -88,6 +106,14 @@ func (s *Service) observeMeter(status cat.Status) {
 			acc.Max = n
 		}
 		acc.Last = n
+	}
+	s.mu.Unlock()
+
+	// Outside the lock — a stalled log write must not block the read loop.
+	if announce {
+		s.logger.InfoWith().
+			Str("meters", strings.Join(meterTags, ",")).
+			Msg("bridge: rig pushes meter frames (RM); meter observation is live")
 	}
 }
 
@@ -145,4 +171,54 @@ func (s *Service) logFt8TxMeters(sum ft8MeterSummary) {
 	// is never mistaken for watts.
 	e.Str("meters", strings.Join(names, ",")).
 		Msg("bridge: ft8 tx meters (raw 0-255 scale)")
+}
+
+// meterReading is one meter's most recent value, on the rig's raw 0-255 scale.
+type meterReading struct {
+	Tag   string
+	Value int
+}
+
+// latestMeters reports the rig's current meter readings, in meterTags order so
+// a consumer renders them consistently. Populated whether or not anything is
+// transmitting — this is the seam a browser meter display reads.
+func (s *Service) latestMeters() []meterReading {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]meterReading, 0, len(meterTags))
+	for _, tag := range meterTags {
+		if v, ok := s.meterLatest[tag]; ok {
+			out = append(out, meterReading{Tag: tag, Value: v})
+		}
+	}
+	return out
+}
+
+// markMeterSeenLocked records that this rig has pushed at least one meter frame
+// and reports whether it was the FIRST of the pipeline lifecycle, so the caller
+// announces once and stays silent thereafter. Silence matters: the push rate is
+// undocumented and could be tens per second.
+//
+// Its value is diagnostic — with no announcement at all, a rig that does not
+// push RM is distinguishable from a fault on our side WITHOUT needing a
+// transmission to find out. Caller holds s.mu.
+func (s *Service) markMeterSeenLocked() bool {
+	if s.meterSeen {
+		return false
+	}
+	s.meterSeen = true
+	return true
+}
+
+// resetMeterObservation drops observation state at pipeline teardown. Scoped
+// per-pipeline like identityVerified: a reconnect may be a different rig, or
+// the same rig with AI mode no longer armed (the FTdx10 clears AI on
+// power-off), so the previous instance's answer must not carry over — and its
+// readings must not linger on a display as if current.
+func (s *Service) resetMeterObservation() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.meterSeen = false
+	s.meterLatest = nil
+	s.ft8Meters = nil
 }
