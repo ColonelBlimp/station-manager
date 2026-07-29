@@ -96,7 +96,9 @@ precisely so we don't re-derive state or redo finished work.
 >   section it depends on and stating the consequences can extend to equipment
 >   damage; plus a cause paragraph in the troubleshooting *"The rig transmits and
 >   won't stop"* entry.
-> - **NEXT, in order.** (1) **Follow-up (d) — read the rig's ALC and PO meters
+> - **NEXT, in order — (1) is the AGREED starting point for the next session
+>   (operator, 2026-07-28), not just a recommendation.** (1) **Follow-up (d) —
+>   read the rig's ALC and PO meters
 >   while keyed.** Highest value by far: it turns normal operating into the
 >   experiment, so the next occurrence diagnoses itself instead of needing a
 >   ~6-hour reproduction attempt, and ALC≈0+PO≈0 vs ALC-normal+PO≈0 localises the
