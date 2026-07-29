@@ -131,9 +131,6 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 	s.ft8TxGen++
 	ft8Gen := s.ft8TxGen
 	s.ft8TxTimer = time.AfterFunc(ft8TxMaxDuration, func() { s.ft8TxAutoOff(ft8Gen) })
-	// Drive-collapse detection for this transmission, armed under the same lock
-	// and gated on the same generation as the backstop (drivealarm.go).
-	s.armDriveWatch(ft8Gen)
 	s.mu.Unlock()
 
 	// CI-V waits for the rig's FB/FA so a rejected/dropped key fails here (and
@@ -195,6 +192,24 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 		s.beginTxConfirm(def, cl)
 		return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-on")
 	}
+	// Drive-collapse detection arms only once the key command has actually gone
+	// out. Unlike the auto-off backstop — which must exist from the instant we
+	// commit, because its job is to stop a PTT that may already be up — this one
+	// measures how long the rig has been transmitting without reporting output,
+	// and nothing is transmitting until the write completes. A stalled write
+	// would otherwise burn the whole silence window before key-down and alarm
+	// "no RF" about a transmission that had not begun, pointing the operator at
+	// the audio path while the real fault is the serial one. The wait is
+	// unbounded in principle: write_watchdog_ms goes through resolveTimeout with
+	// no ceiling, and CI-V additionally waits on cmdMu and an ACK.
+	//
+	// Generation re-checked because clearFt8TxOnDisconnect takes only s.mu, not
+	// keyMu — a teardown can land between the write returning and this line.
+	s.mu.Lock()
+	if s.ft8TxActive && s.ft8TxGen == ft8Gen {
+		s.armDriveWatch(ft8Gen)
+	}
+	s.mu.Unlock()
 	return nil
 }
 

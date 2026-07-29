@@ -16,9 +16,16 @@
     // alarm re-shows the banner.
     import { rig, dismissDriveAlarm } from '../operate/rig.svelte';
 
+    // Wording is bounded by what the detector actually establishes: the rig's
+    // meter stopped reporting output for the silence window. It never observes a
+    // zero reading (the rig pushes on change, so no drive means no frames at
+    // all), never waits for the transmission to end, and fires equally when
+    // output was present and then collapsed. Claiming an all-slot zero would be
+    // false in that second case and would send the operator looking for a fault
+    // that never happened.
     const CODE_TEXT: Record<string, string> = {
         drive_no_output:
-            'Its power meter read zero for the whole transmission — check the audio drive to the radio.',
+            'Output may have failed from the start or collapsed part-way in — check the audio drive to the radio.',
     };
 
     const detail = $derived(CODE_TEXT[rig.driveAlarmCode] ?? '');
@@ -45,7 +52,8 @@
             />
         </svg>
         <span>
-            <strong>NO RF OUTPUT</strong> — the rig was keyed but produced nothing.
+            <strong>NO RF OUTPUT</strong> — the rig is keyed but its power meter has reported
+            nothing for several seconds.
             {detail}
         </span>
         <button

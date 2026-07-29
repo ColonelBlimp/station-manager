@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
@@ -346,4 +347,41 @@ func TestDriveAlarm_RearmsForTheNextTransmission(t *testing.T) {
 
 	waitFor(t, func() bool { return w.count(EventDriveAlarm) == 2 },
 		"second transmission with a dead drive did not alarm; the detector did not re-arm")
+}
+
+// D11 — a key write that BLOCKS must not burn the silence window. The rig is
+// not transmitting until the key command has actually left the host, and the
+// write can legally take longer than the whole window: write_watchdog_ms is
+// resolved by resolveTimeout with no ceiling (service.go), and CI-V additionally
+// waits on cmdMu and an ACK. Arming at the moment ft8TxActive is set would then
+// alarm "no RF" about a transmission that had not begun — and it would do so
+// precisely when a write is already in trouble, pointing the operator at the
+// audio path when the fault is the serial one.
+func TestDriveAlarm_BlockedKeyWrite_DoesNotAlarmBeforeTheRigIsKeyed(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	w := watchEvents(t, s)
+
+	rxMeterFlowing(t, s)
+	// The key write stalls for longer than the entire silence window.
+	fake.onWrite = func(b []byte) []byte {
+		if bytes.Contains(b, []byte("TX1;")) {
+			time.Sleep(4 * silence)
+		}
+		return nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = s.KeyFt8Tx(context.Background(), "")
+	}()
+
+	// Sample while the write is still stalled: the rig is not keyed yet.
+	time.Sleep(2 * silence)
+	if n := w.count(EventDriveAlarm); n != 0 {
+		t.Errorf("drive alarm published %d times while the key write was still blocked; want 0 — "+
+			"nothing is transmitting until the key command has gone out", n)
+	}
+	<-done
 }

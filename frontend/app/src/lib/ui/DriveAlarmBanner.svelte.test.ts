@@ -27,6 +27,12 @@ import DriveAlarmBanner from './DriveAlarmBanner.svelte';
 import TxAlarmBanner from './TxAlarmBanner.svelte';
 import { rig, catLink } from '../operate/rig.svelte';
 
+// Markup wrapping puts newlines mid-phrase in textContent, which is a
+// formatting artefact and not part of what the operator reads.
+function bannerText(el: HTMLElement): string {
+    return (el.textContent ?? '').replace(/\s+/g, ' ');
+}
+
 function raiseDriveAlarm(): void {
     catLink.onDriveAlarm({ active: true, code: 'drive_no_output' });
     flushSync();
@@ -120,8 +126,25 @@ describe('DriveAlarmBanner', () => {
         render(DriveAlarmBanner);
         raiseDriveAlarm();
 
-        const banner = screen.getByRole('alert');
-        expect(banner.textContent).toMatch(/no RF|drive/i);
-        expect(banner.textContent).not.toMatch(/still be transmitting/i);
+        const text = bannerText(screen.getByRole('alert'));
+        expect(text).toMatch(/no RF|drive/i);
+        expect(text).not.toMatch(/still be transmitting/i);
+    });
+
+    // S8 — the wording may only claim what the detector actually establishes.
+    // It fires on the ABSENCE of meter updates for the silence window, so it
+    // never observes a zero reading, never waits for the transmission to end,
+    // and deliberately also fires when output was present and then collapsed
+    // (daemon rule D2). Text asserting an all-slot zero is therefore
+    // demonstrably false in the commonest half of the cases it renders for, and
+    // a diagnostic banner that lies about its own evidence sends the operator
+    // looking in the wrong place.
+    it('does not claim a measurement the detector never makes', () => {
+        render(DriveAlarmBanner);
+        raiseDriveAlarm();
+
+        const text = bannerText(screen.getByRole('alert'));
+        expect(text).not.toMatch(/whole transmission|read(s|ing)? zero|produced nothing/i);
+        expect(text).toMatch(/reported nothing|no output|stopped/i);
     });
 });
