@@ -182,6 +182,23 @@ type meterReading struct {
 // latestMeters reports the rig's current meter readings, in meterTags order so
 // a consumer renders them consistently. Populated whether or not anything is
 // transmitting — this is the seam a browser meter display reads.
+//
+// NOT YET WIRED TO A PRODUCTION CONSUMER, and that is deliberate rather than an
+// oversight (42fc869f review P1, which is correct on the facts: mapStatusToPayload
+// does not map ALC/PO/SWR, so a meter-only frame publishes nothing).
+//
+// Publishing meters to /v1/rig/events fans them out to every connected browser,
+// and the ONLY thing that decides whether that is free or a firehose is the
+// rig's push RATE — which is undocumented and, as of this commit, has never
+// been observed even once. Sizing a coalescing interval now would be inventing
+// the number the design depends on. The measurement is already built and one
+// transmission away: the per-transmission summary's Count field IS the rate.
+//
+// So the ordering is: observe a real transmission, read the count, then wire the
+// publish path with a policy justified by it. The wider question this belongs to
+// — that a tag declared in the rigdef should reach every CAT consumer without a
+// second Go-side whitelist (operator, 2026-07-29) — is an ADR, because it changes
+// a shipped wire contract with a live SPA on the other end.
 func (s *Service) latestMeters() []meterReading {
 	s.mu.Lock()
 	defer s.mu.Unlock()
