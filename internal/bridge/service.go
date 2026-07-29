@@ -289,6 +289,24 @@ type Service struct {
 	// represents. Empty until the rig answers MS (it is in the READ burst).
 	meterSel string
 
+	// Drive-collapse detection (drivealarm.go), all mu-guarded.
+	// meterSeenSinceTx is the instrument-alive evidence: at least one meter push
+	// has arrived since the last transmission ended. Scoped that way rather than
+	// per-pipeline like meterSeen, because an instrument that dies mid-session
+	// must stop counting as known-good. driveLastMeterAt dates the most recent
+	// push (set at key-down too, so silence is measured from the key).
+	// driveAlarmed keeps it to one alarm per transmission; driveTimer is the
+	// idle-timeout, generation-gated on ft8TxGen like the auto-off backstop.
+	// driveSilence is this service's silence threshold, seeded from
+	// driveSilenceTimeout — a field rather than the package var directly, like
+	// confirmTimeout, so a test can shorten it without a pending timer racing
+	// the restore of a global.
+	meterSeenSinceTx bool
+	driveLastMeterAt time.Time
+	driveAlarmed     bool
+	driveSilence     time.Duration
+	driveTimer       *time.Timer
+
 	// TX-uncertainty + stuck-TX alarm state (ADR 0051, all mu-guarded except
 	// where noted). txUncertain: an unkey (or possibly-keyed failed write) has
 	// not been positively confirmed — the rig MAY be transmitting; key paths
@@ -446,6 +464,7 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		civPollInterval:                resolveTimeout(cfg.Timeouts.CivPollIntervalMs, civPollInterval),
 		civPollQuiet:                   resolveTimeout(cfg.Timeouts.CivPollQuietMs, civPollQuiet),
 		confirmTimeout:                 txConfirmTimeout,
+		driveSilence:                   driveSilenceTimeout,
 		tunePowerW:                     tunePower,
 		tuneMaxDuration:                tuneDur,
 		tuneRestoreSettle:              tuneSettle,

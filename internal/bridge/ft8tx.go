@@ -131,6 +131,9 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 	s.ft8TxGen++
 	ft8Gen := s.ft8TxGen
 	s.ft8TxTimer = time.AfterFunc(ft8TxMaxDuration, func() { s.ft8TxAutoOff(ft8Gen) })
+	// Drive-collapse detection for this transmission, armed under the same lock
+	// and gated on the same generation as the backstop (drivealarm.go).
+	s.armDriveWatch(ft8Gen)
 	s.mu.Unlock()
 
 	// CI-V waits for the rig's FB/FA so a rejected/dropped key fails here (and
@@ -151,6 +154,10 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 			s.ft8TxTimer.Stop()
 			s.ft8TxTimer = nil
 		}
+		// The generation gate already stops a stray timer alarming against the
+		// next transmission; disarming here just avoids leaving one pending for a
+		// key that never landed.
+		s.disarmDriveWatch()
 		s.mu.Unlock()
 		if off, oerr := encodeTuneUnkey(def); oerr == nil {
 			// writeKeyedLine, NOT a raw WriteCommandBytes: on CI-V the raw write
@@ -327,6 +334,10 @@ func (s *Service) finishFt8Tx() {
 	// a transmission that had already ended (meters.go).
 	sum := s.flushFt8TxMetersLocked()
 	s.ft8MeterLast = sum
+	// Same critical section, same reason: a drive check firing between clearing
+	// the TX flags and stopping the timer would alarm against a transmission that
+	// had already ended (drivealarm.go).
+	s.disarmDriveWatch()
 	s.mu.Unlock()
 	// Outside the lock — a stalled log write must not block the read loop.
 	s.logFt8TxMeters(sum)
@@ -376,6 +387,9 @@ func (s *Service) clearFt8TxOnDisconnect() {
 	// The rig vanished mid-transmission, so they must not be attributed to
 	// whatever transmits next after the supervisor reconnects (meters.go).
 	s.ft8Meters = nil
+	// The rig is gone, so PTT dropped with it — there is no drive fault to
+	// report, and the reconnect must not inherit this transmission's watch.
+	s.disarmDriveWatch()
 	s.mu.Unlock()
 	if wasActive {
 		s.logger.WarnWith().Msg("bridge: rig disconnected during ft8 tx; tx state cleared")

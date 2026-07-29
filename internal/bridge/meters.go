@@ -150,6 +150,11 @@ func (s *Service) observeMeter(status cat.Status) {
 			s.meterLatest = make(map[string]int, len(meterTags))
 		}
 		s.meterLatest[tag] = n
+		// Instrument-alive evidence + the idle-timeout's liveness signal
+		// (drivealarm.go). Recorded in the UNCONDITIONAL layer on purpose: the
+		// receive-time stream is what proves something is reading, and it is the
+		// only thing that distinguishes absent drive from an absent instrument.
+		s.noteMeterPush()
 		if s.markMeterSeenLocked() {
 			announce = true
 		}
@@ -331,6 +336,10 @@ func (s *Service) resetMeterObservation() {
 	s.meterLatest = nil
 	s.meterSel = ""
 	s.ft8Meters = nil
+	// A reconnect may be a different rig, or the same one with AI mode no longer
+	// armed, so the previous instance's instrument-alive evidence must not carry
+	// over into the next transmission's drive check (drivealarm.go).
+	s.meterSeenSinceTx = false
 }
 
 // meterSelection reports which meter the rig's pushed RM0 value represents,

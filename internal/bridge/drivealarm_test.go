@@ -44,14 +44,16 @@ import (
 // flowing means no alarm, whatever their value. If that turns out to be wrong,
 // it is a rule to add, not a threshold to invent.
 
-// driveAlarmTestSilence shortens the silence threshold so a test does not sit
-// out the real 3 s. Package-level, so these tests must not run in parallel —
-// the same constraint txConfirmTimeout already carries.
-func driveAlarmTestSilence(t *testing.T, d time.Duration) {
-	t.Helper()
-	prev := driveSilenceTimeout
-	driveSilenceTimeout = d
-	t.Cleanup(func() { driveSilenceTimeout = prev })
+// shortDriveSilence shortens THIS service's silence threshold so a test does not
+// sit out the real 3 s, and returns it for the test's own waits.
+//
+// Per-service, not a package var: these tests deliberately leave a transmission
+// running at test end, so a still-pending re-arming timer would read a global
+// while the cleanup restored it — a real data race, caught by -race on the first
+// run. Must be called before the transmission is keyed; armDriveWatch reads it.
+func shortDriveSilence(s *Service) time.Duration {
+	s.driveSilence = 100 * time.Millisecond
+	return s.driveSilence
 }
 
 // eventWatch records everything published to one subscription, so a test can
@@ -132,8 +134,8 @@ func wroteUnkey(fake *fakeSerial) bool {
 // flowing in receive. This must alarm, and must do so while the rig is STILL
 // KEYED — an alarm at unkey is forensic and lets the next slot fail too.
 func TestDriveAlarm_SilentFromKeyDown_AlarmsDuringSlot(t *testing.T) {
-	driveAlarmTestSilence(t, 100*time.Millisecond)
 	s, fake := newCommandTestService(t)
+	shortDriveSilence(s)
 	t.Cleanup(answerTxStatusQueries(s, fake))
 	w := watchEvents(t, s)
 
@@ -162,8 +164,8 @@ func TestDriveAlarm_SilentFromKeyDown_AlarmsDuringSlot(t *testing.T) {
 // D2 — drive comes up and then collapses partway through the slot. Same fault,
 // the other shape (measured on hardware: max=34 with n=23, against ~155 healthy).
 func TestDriveAlarm_CollapseMidSlot_Alarms(t *testing.T) {
-	driveAlarmTestSilence(t, 100*time.Millisecond)
 	s, fake := newCommandTestService(t)
+	shortDriveSilence(s)
 	t.Cleanup(answerTxStatusQueries(s, fake))
 	w := watchEvents(t, s)
 
@@ -183,14 +185,14 @@ func TestDriveAlarm_CollapseMidSlot_Alarms(t *testing.T) {
 //
 // This is the test a naive "no meter data during TX ⇒ alarm" fails.
 func TestDriveAlarm_DeadInstrument_DoesNotAlarm(t *testing.T) {
-	driveAlarmTestSilence(t, 100*time.Millisecond)
 	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
 	t.Cleanup(answerTxStatusQueries(s, fake))
 	w := watchEvents(t, s)
 
 	// Deliberately NO receive-time meter frames: the instrument never spoke.
 	keyedTestSlot(t, s)
-	time.Sleep(4 * driveSilenceTimeout)
+	time.Sleep(4 * silence)
 
 	if n := w.count(EventDriveAlarm); n != 0 {
 		t.Errorf("drive alarm published %d times with a dead instrument; want 0 — "+
@@ -200,14 +202,14 @@ func TestDriveAlarm_DeadInstrument_DoesNotAlarm(t *testing.T) {
 
 // D4 — healthy transmission. Frames flow throughout; nothing is wrong.
 func TestDriveAlarm_HealthyDrive_DoesNotAlarm(t *testing.T) {
-	driveAlarmTestSilence(t, 100*time.Millisecond)
 	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
 	t.Cleanup(answerTxStatusQueries(s, fake))
 	w := watchEvents(t, s)
 
 	rxMeterFlowing(t, s)
 	keyedTestSlot(t, s)
-	feedMeterFor(t, s, "RM0034000", 3*driveSilenceTimeout)
+	feedMeterFor(t, s, "RM0034000", 3*silence)
 
 	if n := w.count(EventDriveAlarm); n != 0 {
 		t.Errorf("drive alarm published %d times on a healthy transmission; want 0", n)
@@ -220,14 +222,14 @@ func TestDriveAlarm_HealthyDrive_DoesNotAlarm(t *testing.T) {
 // implementation that alarms on a low READING rather than on SILENCE passes
 // every other test in this file.
 func TestDriveAlarm_ReducedDrive_DoesNotAlarm(t *testing.T) {
-	driveAlarmTestSilence(t, 100*time.Millisecond)
 	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
 	t.Cleanup(answerTxStatusQueries(s, fake))
 	w := watchEvents(t, s)
 
 	rxMeterFlowing(t, s)
 	keyedTestSlot(t, s)
-	feedMeterFor(t, s, "RM0005000", 3*driveSilenceTimeout) // low but flowing
+	feedMeterFor(t, s, "RM0005000", 3*silence) // low but flowing
 
 	if n := w.count(EventDriveAlarm); n != 0 {
 		t.Errorf("drive alarm published %d times on reduced-but-present drive; want 0", n)
@@ -240,8 +242,8 @@ func TestDriveAlarm_ReducedDrive_DoesNotAlarm(t *testing.T) {
 // stuck. Latching it would turn "your drive died" into "you cannot transmit
 // again", which is a worse outcome than the fault.
 func TestDriveAlarm_DoesNotBlockTheNextKey(t *testing.T) {
-	driveAlarmTestSilence(t, 100*time.Millisecond)
 	s, fake := newCommandTestService(t)
+	shortDriveSilence(s)
 	t.Cleanup(answerTxStatusQueries(s, fake))
 	w := watchEvents(t, s)
 
@@ -273,8 +275,8 @@ func TestDriveAlarm_DoesNotBlockTheNextKey(t *testing.T) {
 // evidence may publish Active=false on it; a drive alarm sharing that slot could
 // retire a standing "CHECK YOUR RADIO" banner for every tab.
 func TestDriveAlarm_DoesNotPublishOnTheTxAlarmEvent(t *testing.T) {
-	driveAlarmTestSilence(t, 100*time.Millisecond)
 	s, fake := newCommandTestService(t)
+	shortDriveSilence(s)
 	t.Cleanup(answerTxStatusQueries(s, fake))
 	w := watchEvents(t, s)
 
@@ -292,12 +294,12 @@ func TestDriveAlarm_DoesNotPublishOnTheTxAlarmEvent(t *testing.T) {
 // once the S-meter settles). The detector is gated on an active transmission,
 // so a quiet receive period must never alarm.
 func TestDriveAlarm_SilenceOutsideATransmission_DoesNotAlarm(t *testing.T) {
-	driveAlarmTestSilence(t, 100*time.Millisecond)
 	s, _ := newCommandTestService(t)
+	silence := shortDriveSilence(s)
 	w := watchEvents(t, s)
 
 	rxMeterFlowing(t, s)
-	time.Sleep(4 * driveSilenceTimeout) // never keyed
+	time.Sleep(4 * silence) // never keyed
 
 	if n := w.count(EventDriveAlarm); n != 0 {
 		t.Errorf("drive alarm published %d times without a transmission; want 0", n)
@@ -308,15 +310,15 @@ func TestDriveAlarm_SilenceOutsideATransmission_DoesNotAlarm(t *testing.T) {
 // publish every threshold for the rest of the slot, so a 12.6 s slot with a 3 s
 // threshold would raise four banners for one fault.
 func TestDriveAlarm_FiresOncePerTransmission(t *testing.T) {
-	driveAlarmTestSilence(t, 100*time.Millisecond)
 	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
 	t.Cleanup(answerTxStatusQueries(s, fake))
 	w := watchEvents(t, s)
 
 	rxMeterFlowing(t, s)
 	keyedTestSlot(t, s)
 	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 }, "no drive alarm to test against")
-	time.Sleep(4 * driveSilenceTimeout)
+	time.Sleep(4 * silence)
 
 	if n := w.count(EventDriveAlarm); n != 1 {
 		t.Errorf("drive alarm published %d times for one transmission; want exactly 1", n)
@@ -327,8 +329,8 @@ func TestDriveAlarm_FiresOncePerTransmission(t *testing.T) {
 // to alarm too; a one-shot latch would report the first collapse and go quiet
 // for the rest of the session.
 func TestDriveAlarm_RearmsForTheNextTransmission(t *testing.T) {
-	driveAlarmTestSilence(t, 100*time.Millisecond)
 	s, fake := newCommandTestService(t)
+	shortDriveSilence(s)
 	t.Cleanup(answerTxStatusQueries(s, fake))
 	w := watchEvents(t, s)
 

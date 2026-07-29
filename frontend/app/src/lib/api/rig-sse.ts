@@ -44,6 +44,17 @@ export interface TxAlarmPayload {
     code?: string;
 }
 
+/** Mirrors internal/bridge.DriveAlarmPayload — the rig is keyed but its own
+ *  meter reports no output. Deliberately NOT the tx-alarm: that one means the
+ *  transmitter may be stuck and demands a safety re-check, this one means the
+ *  audio path feeding a correctly-behaving transmitter has died. A one-shot per
+ *  transmission — the daemon publishes no clear, because nothing it can observe
+ *  proves a drive fault is over. */
+export interface DriveAlarmPayload {
+    active: boolean;
+    code?: string;
+}
+
 export interface RigEventHandlers {
     onOpen: () => void;
     /** Transport-level failure (stream down / reconnecting). */
@@ -53,6 +64,7 @@ export interface RigEventHandlers {
     onBridgeError: (payload: BridgeCodePayload) => void;
     onTuneState: (payload: TuneStatePayload) => void;
     onTxAlarm: (payload: TxAlarmPayload) => void;
+    onDriveAlarm: (payload: DriveAlarmPayload) => void;
 }
 
 function parse<T>(ev: MessageEvent<string>, label: string): T | null {
@@ -97,6 +109,14 @@ export function openRigEvents(handlers: RigEventHandlers): () => void {
     src.addEventListener('tx-alarm', (ev: MessageEvent<string>) => {
         const p = parse<TxAlarmPayload>(ev, 'tx-alarm');
         if (p !== null) handlers.onTxAlarm(p);
+    });
+
+    // A separate listener because it is a separate event: EventSource delivers
+    // only the named types registered here, so an unregistered event vanishes in
+    // the browser with nothing to show it arrived.
+    src.addEventListener('drive-alarm', (ev: MessageEvent<string>) => {
+        const p = parse<DriveAlarmPayload>(ev, 'drive-alarm');
+        if (p !== null) handlers.onDriveAlarm(p);
     });
 
     return () => src.close();

@@ -40,6 +40,7 @@ function makeHandlers(): RigEventHandlers {
         onBridgeError: vi.fn(),
         onTuneState: vi.fn(),
         onTxAlarm: vi.fn(),
+        onDriveAlarm: vi.fn(),
     };
 }
 
@@ -81,6 +82,14 @@ describe('openRigEvents', () => {
 
         src.emit('tx-alarm', '{"active":true,"code":"tx_unconfirmed"}');
         expect(h.onTxAlarm).toHaveBeenCalledWith({ active: true, code: 'tx_unconfirmed' });
+
+        // The drive alarm is a SEPARATE event, so it must be listened for
+        // separately: EventSource delivers only the named types registered, and
+        // an unregistered event is dropped silently in the browser with nothing
+        // to show it happened.
+        src.emit('drive-alarm', '{"active":true,"code":"drive_no_output"}');
+        expect(h.onDriveAlarm).toHaveBeenCalledWith({ active: true, code: 'drive_no_output' });
+        expect(h.onTxAlarm).toHaveBeenCalledTimes(1);
 
         src.emit('error');
         expect(h.onTransportError).toHaveBeenCalledOnce();

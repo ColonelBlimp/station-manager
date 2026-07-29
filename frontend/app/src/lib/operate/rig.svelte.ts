@@ -17,6 +17,7 @@ import type {
     BridgeCodePayload,
     TuneStatePayload,
     TxAlarmPayload,
+    DriveAlarmPayload,
 } from '../api/rig-sse';
 import { storageSet } from '../utils/storage';
 
@@ -65,6 +66,12 @@ export const rig: {
     txAlarmActive: boolean;
     txAlarmCode: string;
     txAlarmDismissed: boolean;
+    /** Drive-collapse alarm: the rig is keyed but its own meter reports no
+     *  output. A one-shot per transmission — the daemon publishes no clear, so
+     *  the banner stays until dismissed and a NEW alarm re-shows it. */
+    driveAlarmActive: boolean;
+    driveAlarmCode: string;
+    driveAlarmDismissed: boolean;
 } = $state({
     // band/mode: operator-friendly literals (mode is a sideband, not an ADIF
     // family — resolved at submit). freq is the SELECTED VFO's frequency in
@@ -102,6 +109,9 @@ export const rig: {
     txAlarmActive: false,
     txAlarmCode: '',
     txAlarmDismissed: false,
+    driveAlarmActive: false,
+    driveAlarmCode: '',
+    driveAlarmDismissed: false,
 });
 
 /**
@@ -678,12 +688,32 @@ export const catLink = {
         rig.txAlarmCode = p.code ?? '';
         if (p.active) rig.txAlarmDismissed = false;
     },
+
+    /** Drive-collapse alarm: the rig is keyed but reports no output. Touches
+     *  NOTHING belonging to the stuck-TX alarm — that one means the transmitter
+     *  may be live and demands a safety re-check; this one means the audio path
+     *  into a correctly-behaving transmitter has died. A raise re-shows the
+     *  banner even if a previous one was dismissed, because a new collapse is
+     *  new information about a new transmission. */
+    onDriveAlarm(p: DriveAlarmPayload): void {
+        rig.driveAlarmActive = p.active;
+        rig.driveAlarmCode = p.code ?? '';
+        if (p.active) rig.driveAlarmDismissed = false;
+    },
 };
 
 /** Operator acknowledgment: hides the banner without claiming the rig is safe
  *  — only the daemon's confirmation clears txAlarmActive itself. */
 export function dismissTxAlarm(): void {
     rig.txAlarmDismissed = true;
+}
+
+/** Operator acknowledgment of a drive alarm. The daemon publishes no clear for
+ *  this one — nothing it can observe proves a drive fault is over — so dismissal
+ *  is the only way out, and it claims only "I have read this", not "it is
+ *  fixed". */
+export function dismissDriveAlarm(): void {
+    rig.driveAlarmDismissed = true;
 }
 
 /** Test seam — restore the module singleton between cases. */
@@ -709,4 +739,7 @@ export function resetCatLink(): void {
     rig.txAlarmActive = false;
     rig.txAlarmCode = '';
     rig.txAlarmDismissed = false;
+    rig.driveAlarmActive = false;
+    rig.driveAlarmCode = '';
+    rig.driveAlarmDismissed = false;
 }

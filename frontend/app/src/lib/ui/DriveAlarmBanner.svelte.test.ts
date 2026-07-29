@@ -1,0 +1,127 @@
+// Drive-collapse banner — the operator-facing half of the 2026-07-29 acceptance
+// criterion:
+//
+//   When I transmit and no RF is leaving the rig, Station Manager raises an SSE
+//   alarm banner DURING the slot rather than waiting for it to end — and stays
+//   silent both when the meter instrumentation itself has failed and when drive
+//   is merely reduced.
+//
+// The daemon half (internal/bridge/drivealarm_test.go) decides WHEN to raise.
+// What is pinned here is what the operator actually sees, and the load-bearing
+// rules are the two SEPARATION ones (S5/S6): a drive fault and a stuck
+// transmitter must never render as each other. They demand opposite responses —
+// one is "your audio path died, fix it and carry on", the other is "your rig may
+// be transmitting right now, go and look at it" — so confusing them at the only
+// layer the operator reads would undo the point of giving them separate events.
+//
+// The drive alarm is a per-transmission ONE-SHOT: the daemon publishes no clear,
+// because nothing it can observe proves a drive fault is over. The banner
+// therefore stays until dismissed, and a NEW alarm re-shows it — the same
+// dismissal contract the tx-alarm banner already has, where dismissing hides the
+// warning without claiming the fault is fixed.
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { render, screen } from '@testing-library/svelte';
+import { flushSync } from 'svelte';
+import DriveAlarmBanner from './DriveAlarmBanner.svelte';
+import TxAlarmBanner from './TxAlarmBanner.svelte';
+import { rig, catLink } from '../operate/rig.svelte';
+
+function raiseDriveAlarm(): void {
+    catLink.onDriveAlarm({ active: true, code: 'drive_no_output' });
+    flushSync();
+}
+
+beforeEach(() => {
+    rig.driveAlarmActive = false;
+    rig.driveAlarmCode = '';
+    rig.driveAlarmDismissed = false;
+    rig.txAlarmActive = false;
+    rig.txAlarmCode = '';
+    rig.txAlarmDismissed = false;
+});
+
+afterEach(() => {
+    rig.driveAlarmActive = false;
+    rig.driveAlarmDismissed = false;
+    rig.txAlarmActive = false;
+});
+
+describe('DriveAlarmBanner', () => {
+    // S1 — nothing to report, nothing on screen. A banner that is always present
+    // is a banner the operator stops reading.
+    it('renders nothing until the daemon raises a drive alarm', () => {
+        render(DriveAlarmBanner);
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    // S2 — the criterion's visible half.
+    it('shows the banner when the daemon reports no RF leaving the rig', () => {
+        render(DriveAlarmBanner);
+        raiseDriveAlarm();
+        expect(screen.getByRole('alert')).toBeTruthy();
+    });
+
+    // S3 — the operator can clear it. There is no daemon clear for this alarm,
+    // so without a dismiss the banner would be permanent for the session.
+    it('hides when dismissed', async () => {
+        render(DriveAlarmBanner);
+        raiseDriveAlarm();
+
+        screen.getByRole('button', { name: /dismiss/i }).click();
+        flushSync();
+        await Promise.resolve();
+
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    // S4 — a dismissal must not silence the NEXT fault. Dismissing says "I have
+    // read this one", not "stop telling me about drive collapses".
+    it('re-shows on a new alarm after being dismissed', async () => {
+        render(DriveAlarmBanner);
+        raiseDriveAlarm();
+        screen.getByRole('button', { name: /dismiss/i }).click();
+        flushSync();
+        await Promise.resolve();
+        expect(screen.queryByRole('alert')).toBeNull();
+
+        raiseDriveAlarm();
+        expect(screen.getByRole('alert')).toBeTruthy();
+    });
+
+    // S5 — SEPARATION, and the reason these are distinct events. A drive fault
+    // must not raise the stuck-TX banner: that one tells the operator their rig
+    // may be transmitting and offers a safety re-check, which is the wrong
+    // instruction and the wrong action for an audio-path failure.
+    it('does not raise the stuck-TX banner', () => {
+        render(TxAlarmBanner);
+        raiseDriveAlarm();
+
+        expect(screen.queryByText(/CHECK YOUR RADIO/i)).toBeNull();
+        expect(screen.queryByRole('button', { name: /re-check/i })).toBeNull();
+        expect(rig.txAlarmActive).toBe(false);
+    });
+
+    // S6 — the converse. A stuck transmitter is a safety emergency; rendering it
+    // as "check your drive" would tell the operator to go and fiddle with audio
+    // levels while the rig sits keyed.
+    it('does not show for a stuck-TX alarm', () => {
+        render(DriveAlarmBanner);
+        catLink.onTxAlarm({ active: true, code: 'tx_still_keyed' });
+        flushSync();
+
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    // S7 — the wording must name THIS fault. Both banners are red alerts in the
+    // same shell position, so the text is the only thing distinguishing them,
+    // and the operator's next action depends on reading it correctly.
+    it('names the drive fault rather than a possible stuck transmission', () => {
+        render(DriveAlarmBanner);
+        raiseDriveAlarm();
+
+        const banner = screen.getByRole('alert');
+        expect(banner.textContent).toMatch(/no RF|drive/i);
+        expect(banner.textContent).not.toMatch(/still be transmitting/i);
+    });
+});
