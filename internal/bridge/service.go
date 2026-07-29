@@ -270,6 +270,13 @@ type Service struct {
 	ft8TxTimer       *time.Timer
 	// ft8TxGen mirrors tuneGen for the FT8-TX path (finding 6).
 	ft8TxGen uint64
+	// ft8Meters accumulates the rig's pushed ALC/PO/SWR readings for the
+	// transmission in flight; ft8MeterLast holds the summary of the one that
+	// most recently ended. Both are guarded by mu and cleared together with the
+	// TX flags, so a reading can never be filed against a finished
+	// transmission. See meters.go.
+	ft8Meters    map[string]*meterSample
+	ft8MeterLast ft8MeterSummary
 
 	// TX-uncertainty + stuck-TX alarm state (ADR 0051, all mu-guarded except
 	// where noted). txUncertain: an unkey (or possibly-keyed failed write) has

@@ -837,6 +837,10 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		if v, ok := status["TXSTATUS"]; ok && v != "" {
 			s.observeTxStatus(v)
 		}
+		// Rig-pushed ALC/PO/SWR, accumulated against the keyed transmission and
+		// summarised in one line when it ends (meters.go). Read-only and
+		// listen-only: nothing is written to the rig for this.
+		s.observeMeter(status)
 		s.observeRigData()
 
 		payload, hasFields := mapStatusToPayload(status)

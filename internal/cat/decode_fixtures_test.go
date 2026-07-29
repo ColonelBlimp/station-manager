@@ -186,7 +186,83 @@ var decodeCases = []decodeCase{
 		expected: map[string]string{"TXPWR": "05"},
 	},
 
+	// --- RM READ METER (FTdx10 CAT ref 2308-F p.20) ---
+	//
+	// The rig answers/pushes `RM P1 P2P2P2 P3P3P3;` where P1 names the meter
+	// (1:S 3:COMP 4:ALC 5:PO 6:SWR 7:IDD 8:VDD), P2 is the 0-255 reading and
+	// P3 is a fixed "000". RM is marked AI=O in the command index, so these
+	// arrive unprompted while transmitting — the bridge listens, it does not
+	// poll (no CAT traffic is added to the key-down path).
+	//
+	// Each fixture below pins a way a plausible implementation could go wrong:
+	{
+		// A swapped 4/5 mapping still decodes "a meter", so the two fixtures
+		// carry DIFFERENT readings — 090 vs 128 — and a swap fails on value.
+		name:     "RM4 → ALC carries its own reading",
+		rigID:    "yaesu-ftdx10",
+		input:    "RM4090000",
+		expected: map[string]string{"ALC": "090"},
+	},
+	{
+		name:     "RM5 → PO carries its own reading",
+		rigID:    "yaesu-ftdx10",
+		input:    "RM5128000",
+		expected: map[string]string{"PO": "128"},
+	},
+	{
+		// The reading is P2 alone. A marker length of 6 would swallow the
+		// fixed P3 and yield "128000" — plausible, and wrong by 1000x.
+		name:     "RM reading is P2 only, not P2+P3",
+		rigID:    "yaesu-ftdx10",
+		input:    "RM5128000",
+		expected: map[string]string{"PO": "128"},
+	},
+	{
+		// THE case this feature exists to catch. A zero reading must decode as
+		// a reading, not vanish into an empty/absent tag: "the rig keyed and
+		// PO read 000" is the drive-collapse signature, and a codec that
+		// dropped it would be blind to precisely the fault under investigation.
+		name:     "RM5 zero power decodes as a reading, not as absent",
+		rigID:    "yaesu-ftdx10",
+		input:    "RM5000000",
+		expected: map[string]string{"PO": "000"},
+	},
+	{
+		// Full-scale bound, the other end of the 0-255 range.
+		name:     "RM4 full-scale ALC",
+		rigID:    "yaesu-ftdx10",
+		input:    "RM4255000",
+		expected: map[string]string{"ALC": "255"},
+	},
+	{
+		// SWR foldback is a candidate CAUSE of the drive collapse: a rig
+		// protecting its finals into a bad load drops drive, which reads at
+		// the PO meter exactly like the fault under investigation. A third
+		// distinct value (030) so any two-way mix-up between the three
+		// modelled meters fails on value, not just on tag.
+		name:     "RM6 → SWR carries its own reading",
+		rigID:    "yaesu-ftdx10",
+		input:    "RM6030000",
+		expected: map[string]string{"SWR": "030"},
+	},
+
 	// --- No-match cases ---
+	{
+		// Guards against a lazy bare-"RM" prefix: the S-meter shares the RM
+		// stem, so a prefix that ignored P1 would silently report an S-meter
+		// reading as ALC, PO or SWR. Unmodelled meters must not match at all.
+		name:     "RM1 (S meter) is not attributed to a modelled meter",
+		rigID:    "yaesu-ftdx10",
+		input:    "RM1015000",
+		expected: nil,
+	},
+	{
+		// Second unmodelled selector, so the guard isn't pinned to one value.
+		name:     "RM3 (COMP) is not attributed to a modelled meter",
+		rigID:    "yaesu-ftdx10",
+		input:    "RM3120000",
+		expected: nil,
+	},
 	{
 		name:     "unknown prefix ZZ",
 		rigID:    "yaesu-ftdx10",

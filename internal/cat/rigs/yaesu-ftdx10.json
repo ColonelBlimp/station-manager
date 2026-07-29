@@ -151,6 +151,24 @@
       "markers": [
         {"tag": "TXSTATUS", "index": 0, "length": 1}
       ]
+    },
+    {
+      "prefix": "RM4",
+      "markers": [
+        {"tag": "ALC", "index": 0, "length": 3}
+      ]
+    },
+    {
+      "prefix": "RM5",
+      "markers": [
+        {"tag": "PO", "index": 0, "length": 3}
+      ]
+    },
+    {
+      "prefix": "RM6",
+      "markers": [
+        {"tag": "SWR", "index": 0, "length": 3}
+      ]
     }
   ],
   "mode_mappings": {

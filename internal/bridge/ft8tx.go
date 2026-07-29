@@ -313,7 +313,14 @@ func (s *Service) finishFt8Tx() {
 		s.ft8TxTimer.Stop()
 		s.ft8TxTimer = nil
 	}
+	// Close the meter accumulator in the SAME critical section that clears the
+	// TX flags: a push decoded between the two would otherwise be filed against
+	// a transmission that had already ended (meters.go).
+	sum := s.flushFt8TxMetersLocked()
+	s.ft8MeterLast = sum
 	s.mu.Unlock()
+	// Outside the lock — a stalled log write must not block the read loop.
+	s.logFt8TxMeters(sum)
 }
 
 // ft8TxAutoOff is the hard-backstop timer callback (mirrors tuneAutoOff). Runs
@@ -356,6 +363,10 @@ func (s *Service) clearFt8TxOnDisconnect() {
 		s.ft8TxTimer.Stop()
 		s.ft8TxTimer = nil
 	}
+	// Drop the part-accumulated readings with the transmission they belong to.
+	// The rig vanished mid-transmission, so they must not be attributed to
+	// whatever transmits next after the supervisor reconnects (meters.go).
+	s.ft8Meters = nil
 	s.mu.Unlock()
 	if wasActive {
 		s.logger.WarnWith().Msg("bridge: rig disconnected during ft8 tx; tx state cleared")
