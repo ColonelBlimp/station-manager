@@ -116,6 +116,15 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 		s.ft8TxRestoreMode = ""
 	}
 	s.ft8TxActive = true
+	// A transmission BEGINS with an empty meter accumulator, cleared here under
+	// the same lock that commits ft8TxActive (bd60f178 review P1). The window
+	// between this line and the tx-on write below is live for observeMeter, and
+	// a key write that FAILS rolls the flags back through paths that all return
+	// without finishFt8Tx — so an aborted attempt's readings would otherwise
+	// merge into whatever transmits next. Cleared at the single point that
+	// defines a start rather than in each failure path: the latter is a property
+	// of N exits that any future early return silently evades.
+	s.ft8Meters = nil
 	// Arm the backstop together with ft8TxActive (atomic under mu) so the
 	// guaranteed stop exists from the instant we commit to transmitting.
 	// Generation-armed backstop — see StartTune's twin (finding 6).

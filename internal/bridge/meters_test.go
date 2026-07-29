@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
@@ -144,6 +145,58 @@ func TestObserveMeter_DoesNotCarryAcrossTransmissions(t *testing.T) {
 	}
 	if got := sum.Samples[0]; got.Min != 200 || got.Count != 1 {
 		t.Fatalf("transmission 2 = %+v, want min=200 count=1 (transmission 1 must not carry over)", got)
+	}
+}
+
+// R7 — a transmission BEGINS with an empty accumulator (codex review of
+// bd60f178, P1).
+//
+// KeyFt8Tx sets ft8TxActive before writing tx_on, so meter frames decoded in
+// the window between the two are accumulated. If that write then fails, the
+// rollback clears the TX flags and the backstop timer but NOT the accumulator,
+// and all three of its return paths exit without finishFt8Tx — so the aborted
+// attempt's readings merge into whatever transmits next, corrupting the
+// per-transmission attribution this whole feature provides.
+//
+// The review offered two fixes: clear on the failed-key rollback, or clear
+// when beginning every key. This pins the SECOND deliberately. "A transmission
+// starts empty" is one invariant at the single point that defines a
+// transmission's start; "every failure path remembers to clean up" is a
+// property of N exit paths that any future early return silently evades. The
+// rollback path is where the bug was found, not where the rule belongs.
+//
+// The leftover state is constructed directly rather than raced against a
+// failing write: the fake's onWrite hook only fires on writes that succeed, so
+// the real window cannot be hit deterministically.
+func TestKeyFt8Tx_StartsWithEmptyMeterAccumulator(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	s.lastMode = "USB"
+	s.tuneRestoreSettle = 0
+
+	// State a failed key attempt leaves behind: readings banked while
+	// ft8TxActive was briefly true, then the flag rolled back without a flush.
+	setFt8Keyed(s, true)
+	s.observeMeter(meterFrame(t, "RM5250000"))
+	setFt8Keyed(s, false)
+
+	// A real transmission now runs to completion.
+	if err := s.KeyFt8Tx(context.Background(), "DATA-U"); err != nil {
+		t.Fatalf("KeyFt8Tx: %v", err)
+	}
+	s.observeMeter(meterFrame(t, "RM5100000"))
+	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
+		t.Fatalf("UnkeyFt8Tx: %v", err)
+	}
+
+	sum := s.lastFt8TxMeters()
+	if len(sum.Samples) != 1 {
+		t.Fatalf("got %d samples, want 1: %+v", len(sum.Samples), sum.Samples)
+	}
+	got := sum.Samples[0]
+	if got.Count != 1 || got.Max != 100 {
+		t.Fatalf("summary = %+v, want count=1 max=100 — the aborted key attempt's "+
+			"reading (250) must not be merged into this transmission", got)
 	}
 }
 
