@@ -232,13 +232,7 @@ func (s *Service) logFt8TxMeters(sum ft8MeterSummary) {
 	e := s.logger.InfoWith()
 	names := make([]string, 0, len(sum.Samples))
 	for _, m := range sum.Samples {
-		// Name the field after the METER IT ACTUALLY IS. Two pushed samples taken
-		// under different selections would otherwise both key on "meter_" and
-		// silently overwrite each other in the log event.
-		k := strings.ToLower(m.Tag)
-		if m.Tag == meterPushedTag && m.Sel != "" {
-			k = strings.ToLower(m.Sel)
-		}
+		k := meterFieldPrefix(m)
 		e = e.Int(k+"_min", m.Min).Int(k+"_max", m.Max).Int(k+"_last", m.Last).Int(k+"_n", m.Count)
 		names = append(names, k)
 	}
@@ -323,4 +317,24 @@ func (s *Service) meterSelection() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.meterSel
+}
+
+// meterFieldPrefix names a sample's log fields. Pushed readings are namespaced
+// under "meter_" and carry their selection; explicit query answers use the meter
+// name alone.
+//
+// The namespace is load-bearing, not cosmetic (7b35b9c1 review P2). A pushed
+// reading taken while PO was selected and an RM5 query answer are INDEPENDENT
+// samples of the same transmission; naming both "po_" would put duplicate keys
+// in one structured log event, and a JSON consumer keeps only one of them —
+// silently discarding a whole sample. It also keeps two pushed samples taken
+// under different selections apart.
+func meterFieldPrefix(m meterSample) string {
+	if m.Tag != meterPushedTag {
+		return strings.ToLower(m.Tag)
+	}
+	if m.Sel == "" {
+		return "meter"
+	}
+	return "meter_" + strings.ToLower(m.Sel)
 }

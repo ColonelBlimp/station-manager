@@ -139,11 +139,29 @@ func TestAlarmProbes_StopOnConfirm(t *testing.T) {
 		t.Fatal("a positive RX answer must clear tx-uncertainty")
 	}
 
+	// The loop is generation-gated, so clearing the alarm retires it — but a
+	// probe goroutine that ALREADY passed the gate still has Lookup+Encode+Write
+	// ahead of it and can land one more query afterwards. That straggler is
+	// harmless (a read-only status query) and eliminating it would mean adding
+	// synchronisation to a safety path purely to satisfy a test.
+	//
+	// Demanding an exact count therefore raced the straggler and failed ~7% of
+	// runs (measured 2026-07-29: 2/30 under -race). The probe loop is a SINGLE
+	// goroutine, so at most ONE probe can be in flight — which makes "no more
+	// than one further query" a principled allowance rather than a fudge, and
+	// still catches a live loop, which at the 5 ms test cadence would add
+	// roughly eight in this window.
+	//
+	// Deliberately not a wait-for-quiescence loop: with txAlarmProbeAttempts
+	// capped, an UNRETIRED loop also goes quiet on its own once it exhausts the
+	// cap, so "eventually stable" would pass against a broken gate.
+	const window = 40 * time.Millisecond // several intervals at the shortened cadence
 	settled, _ := countQueries(fake)
-	time.Sleep(40 * time.Millisecond) // several intervals at the shortened cadence
+	time.Sleep(window)
 	after, _ := countQueries(fake)
-	if after != settled {
-		t.Errorf("probes continued after the alarm cleared: %d → %d", settled, after)
+	if after > settled+1 {
+		t.Errorf("probes continued after the alarm cleared: %d → %d in %s (at most one in-flight straggler is allowed)",
+			settled, after, window)
 	}
 }
 

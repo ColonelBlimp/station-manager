@@ -389,6 +389,37 @@ func TestObserveMeter_LateSelectionDoesNotRelabel(t *testing.T) {
 	}
 }
 
+// R14 — a PUSHED reading and an EXPLICIT query answer for the same meter get
+// distinct log field names (7b35b9c1 review P2).
+//
+// RM0-under-PO and an RM5 query answer are independently accumulated samples.
+// Naming both "po_" would emit duplicate keys in one structured event, and a
+// JSON consumer keeps only one — silently discarding a whole sample. They are
+// also not interchangeable: one is whatever the front panel had selected, the
+// other is unambiguously power, and a reader has to be able to tell which.
+func TestMeterFieldPrefix_PushedAndExplicitDoNotCollide(t *testing.T) {
+	pushed := meterFieldPrefix(meterSample{Tag: "METER", Sel: "PO"})
+	explicit := meterFieldPrefix(meterSample{Tag: "PO"})
+	if pushed == explicit {
+		t.Fatalf("pushed and explicit PO share the log prefix %q — one sample would overwrite the other", pushed)
+	}
+	if pushed != "meter_po" {
+		t.Errorf("pushed prefix = %q, want meter_po", pushed)
+	}
+	if explicit != "po" {
+		t.Errorf("explicit prefix = %q, want po", explicit)
+	}
+	// Unknown selection must still be distinguishable, not blank.
+	if got := meterFieldPrefix(meterSample{Tag: "METER"}); got != "meter" {
+		t.Errorf("unknown-selection prefix = %q, want meter", got)
+	}
+	// Two pushed samples under different selections must not collide either.
+	if a, b := meterFieldPrefix(meterSample{Tag: "METER", Sel: "PO"}),
+		meterFieldPrefix(meterSample{Tag: "METER", Sel: "SWR"}); a == b {
+		t.Fatalf("pushed samples under different selections share prefix %q", a)
+	}
+}
+
 // R7 — a transmission BEGINS with an empty accumulator (codex review of
 // bd60f178, P1).
 //
