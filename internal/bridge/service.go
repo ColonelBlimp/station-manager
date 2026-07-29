@@ -285,6 +285,9 @@ type Service struct {
 	// pipeline teardown by resetMeterObservation.
 	meterLatest map[string]int
 	meterSeen   bool
+	// meterSel is the MS METER SW selection — which meter the pushed RM0 value
+	// represents. Empty until the rig answers MS (it is in the READ burst).
+	meterSel string
 
 	// TX-uncertainty + stuck-TX alarm state (ADR 0051, all mu-guarded except
 	// where noted). txUncertain: an unkey (or possibly-keyed failed write) has

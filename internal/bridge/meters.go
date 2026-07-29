@@ -9,19 +9,35 @@ import (
 
 // Per-transmission rig-meter observation (follow-up (d)).
 //
-// The FTdx10 marks RM READ METER as AI=O in its command index (CAT ref 2308-F
-// p.5), so the rig pushes meter frames unprompted once AUTO mode is armed by
-// the rigdef's INIT. Nothing here writes to the rig: adding CAT traffic to the
-// key-down path would put frames on a half-duplex bus that ADR 0057 already
-// documents as dropping commands in the TX→RX tail, and the guaranteed-stop
-// unkey is the one write that must never queue behind anything.
+// MEASURED ON HARDWARE, 2026-07-29 (dogfood FTdx10, via cmd/catcli). The
+// manual's AI=O against RM READ METER does NOT mean the rig streams the meter
+// you ask for. What it actually pushes, once INIT arms AUTO mode, is:
+//
+//	RM0nnn000   the value of whatever meter is CURRENTLY SELECTED
+//
+// and nothing at all under RM4/RM5/RM6 — those answer queries only. The first
+// version of this file modelled RM4/5/6 alone, and two real on-air
+// transmissions consequently reported "no meter data" while the rig was
+// pushing RM0 at ~26 Hz throughout both of them.
+//
+// RM0 is therefore tagged METER, not PO: the frame does not say which meter it
+// is. MS METER SW does (0:PO 1:COMP 2:ALC 3:VDD 4:ID 5:SWR), so MS is in the
+// rigdef's READ burst and its answer travels with the summary. Observed
+// behaviour is that the meter reads S during receive and the MS-selected meter
+// while transmitting — receive values sat at 103-132 matching RM1 (S-meter),
+// then dropped to a 0-33 band tracking speech envelope under mic modulation.
+//
+// Nothing here writes to the rig. Adding CAT traffic to the key-down path would
+// put frames on a half-duplex bus that ADR 0057 already documents as dropping
+// commands in the TX→RX tail, and the guaranteed-stop unkey is the one write
+// that must never queue behind anything.
 //
 // Readings are accumulated per keyed transmission and summarised in ONE log
-// line when it ends, rather than logged per frame. That choice needs no
-// invented sampling interval — the boundaries are the key/unkey events the
-// bridge already knows exactly — and it cannot flood however fast the rig
-// pushes. The per-transmission Count is also what tells us the push rate,
-// which is not documented anywhere.
+// line when it ends, rather than logged per frame. That needs no invented
+// sampling interval — the boundaries are the key/unkey events the bridge
+// already knows exactly — and cannot flood however fast the rig pushes, which
+// matters because the observed rate is NOT constant (~26 Hz in receive, ~4 Hz
+// under voice).
 
 // meterTags are the rigdef state tags accumulated per transmission. An
 // allowlist rather than "every numeric tag": a future rigdef state (S-meter,
@@ -31,7 +47,17 @@ import (
 // correctness. This one exists so the constantly-arriving non-meter tags
 // (VFOAFREQ on every dial push, MAINMODE, TXPWR) don't allocate a junk
 // accumulator entry per decoded frame for the length of a transmission.
-var meterTags = []string{"ALC", "PO", "SWR"}
+//
+// METER is the pushed one and the only one populated in normal operation;
+// ALC/PO/SWR are the explicit query answers, kept because they are unambiguous
+// and cost nothing when absent.
+var meterTags = []string{"METER", "ALC", "PO", "SWR"}
+
+// meterSelTag is the MS METER SW selection — not a reading, so it is recorded
+// rather than accumulated. Without it a pushed value is uninterpretable: "the
+// meter read 210" says nothing unless you know whether that is power, ALC or
+// drain voltage.
+const meterSelTag = "METERSEL"
 
 // meterSample is one meter's readings across a single keyed transmission.
 // Values are the rig's raw 0-255 meter scale, NOT engineering units: the CAT
@@ -49,8 +75,9 @@ type meterSample struct {
 // answer to whether this rig pushes RM at all, so it must be reportable rather
 // than silent.
 type ft8MeterSummary struct {
-	Present bool
-	Samples []meterSample
+	Present   bool
+	Selection string
+	Samples   []meterSample
 }
 
 // observeMeter consumes a decoded meter push. Two SEPARATE layers, and the
@@ -69,6 +96,11 @@ type ft8MeterSummary struct {
 func (s *Service) observeMeter(status cat.Status) {
 	s.mu.Lock()
 	announce := false
+	// The selection is a mapped literal ("PO"), not a number, so it is recorded
+	// rather than run through the numeric accumulation below.
+	if sel, ok := status[meterSelTag]; ok && sel != "" {
+		s.meterSel = sel
+	}
 	for _, tag := range meterTags {
 		v, ok := status[tag]
 		if !ok || v == "" {
@@ -130,7 +162,7 @@ func (s *Service) flushFt8TxMeters() ft8MeterSummary {
 // a reading decoded between the two would otherwise be filed against a
 // transmission that had already ended.
 func (s *Service) flushFt8TxMetersLocked() ft8MeterSummary {
-	sum := ft8MeterSummary{Present: true}
+	sum := ft8MeterSummary{Present: true, Selection: s.meterSel}
 	for _, tag := range meterTags {
 		if acc, ok := s.ft8Meters[tag]; ok && acc.Count > 0 {
 			sum.Samples = append(sum.Samples, *acc)
@@ -169,6 +201,9 @@ func (s *Service) logFt8TxMeters(sum ft8MeterSummary) {
 	}
 	// Meters are the rig's raw 0-255 scale — stated in the message so a reading
 	// is never mistaken for watts.
+	if sum.Selection != "" {
+		e = e.Str("meter_sel", sum.Selection)
+	}
 	e.Str("meters", strings.Join(names, ",")).
 		Msg("bridge: ft8 tx meters (raw 0-255 scale)")
 }
@@ -237,5 +272,15 @@ func (s *Service) resetMeterObservation() {
 	defer s.mu.Unlock()
 	s.meterSeen = false
 	s.meterLatest = nil
+	s.meterSel = ""
 	s.ft8Meters = nil
+}
+
+// meterSelection reports which meter the rig's pushed RM0 value represents,
+// per the last MS frame. Empty means unknown — never guessed, because a wrong
+// label on a reading is worse than an absent one.
+func (s *Service) meterSelection() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.meterSel
 }

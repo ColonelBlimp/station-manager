@@ -262,6 +262,73 @@ func TestObserveMeter_DoesNotCarryAcrossTransmissions(t *testing.T) {
 	}
 }
 
+// R11 — the meter the rig actually PUSHES (RM0) is accumulated per
+// transmission. Measured 2026-07-29 on the dogfood FTdx10: RM0 is the ONLY
+// meter prefix the rig sends unprompted (RM4/5/6 are query-only), so without
+// this the per-transmission summary is empty on real hardware — which is
+// exactly what the first two on-air transmissions reported.
+func TestObserveMeter_AccumulatesPushedMeter(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	setFt8Keyed(s, true)
+
+	for _, f := range []string{"RM0180000", "RM0000000", "RM0210000"} {
+		s.observeMeter(meterFrame(t, f))
+	}
+
+	sum := s.flushFt8TxMeters()
+	var m *meterSample
+	for i := range sum.Samples {
+		if sum.Samples[i].Tag == "METER" {
+			m = &sum.Samples[i]
+		}
+	}
+	if m == nil {
+		t.Fatalf("pushed RM0 readings absent from the summary: %+v", sum.Samples)
+	}
+	if m.Count != 3 || m.Min != 0 || m.Max != 210 || m.Last != 210 {
+		t.Fatalf("METER = %+v, want count=3 min=0 max=210 last=210", m)
+	}
+}
+
+// R12 — the meter SELECTION is recorded, because a pushed RM0 value is
+// uninterpretable on its own. The rig reports the value (RM0) and which meter
+// it is (MS) as separate frames; storing only the number would leave the log
+// saying "the meter read 210" with no way to know whether that is power,
+// ALC or drain voltage. MS is in the READ burst so the answer arrives at
+// pipeline start rather than being inferred.
+func TestObserveMeter_RecordsMeterSelection(t *testing.T) {
+	s, _ := newCommandTestService(t)
+
+	if got := s.meterSelection(); got != "" {
+		t.Fatalf("selection before any MS frame = %q, want empty (unknown, not guessed)", got)
+	}
+	s.observeMeter(meterFrame(t, "MS00"))
+	if got := s.meterSelection(); got != "PO" {
+		t.Fatalf("selection = %q, want PO", got)
+	}
+	// The operator can change it mid-session from the front panel; the rig
+	// pushes the new selection and the reading's meaning changes with it.
+	s.observeMeter(meterFrame(t, "MS50"))
+	if got := s.meterSelection(); got != "SWR" {
+		t.Fatalf("selection after front-panel change = %q, want SWR", got)
+	}
+}
+
+// R12b — the selection is reported WITH the transmission's summary, so a log
+// line is self-describing rather than needing correlation against a separate
+// line that may be thousands of frames earlier.
+func TestFlushFt8TxMeters_CarriesSelection(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	s.observeMeter(meterFrame(t, "MS00"))
+	setFt8Keyed(s, true)
+	s.observeMeter(meterFrame(t, "RM0200000"))
+
+	sum := s.flushFt8TxMeters()
+	if sum.Selection != "PO" {
+		t.Fatalf("summary Selection = %q, want PO", sum.Selection)
+	}
+}
+
 // R7 — a transmission BEGINS with an empty accumulator (codex review of
 // bd60f178, P1).
 //

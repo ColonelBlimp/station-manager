@@ -35,7 +35,7 @@ type encodeCase struct {
 var encodeCases = []encodeCase{
 	// --- Plain burst templates (no args) ---
 	{name: "INIT on FTdx10", rigID: "yaesu-ftdx10", cmdName: "INIT", want: "AI1;"},
-	{name: "READ on FTdx10", rigID: "yaesu-ftdx10", cmdName: "READ", want: "ID;FA;FB;ST;VS;MD0;MD1;PC;"},
+	{name: "READ on FTdx10", rigID: "yaesu-ftdx10", cmdName: "READ", want: "ID;FA;FB;ST;VS;MD0;MD1;PC;MS;"},
 	{name: "INIT on FT-710", rigID: "yaesu-ft710", cmdName: "INIT", want: "AI1;"},
 	{name: "READ on FT-710", rigID: "yaesu-ft710", cmdName: "READ", want: "ID;FA;FB;ST;VS;MD0;MD1;PC;"},
 

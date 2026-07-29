@@ -246,11 +246,63 @@ var decodeCases = []decodeCase{
 		expected: map[string]string{"SWR": "030"},
 	},
 
+	// --- RM0: the meter the rig actually PUSHES ---
+	//
+	// Measured on the dogfood FTdx10 (2026-07-29): with AI armed the rig pushes
+	// RM0nnn000 at ~26 Hz and pushes NOTHING under RM4/RM5/RM6 — those are
+	// query-only. RM0 carries the value of whatever meter is currently
+	// selected, which is why it is tagged METER rather than any specific one:
+	// naming it PO would be an inference the frame does not carry. MS reports
+	// the selection (see below), and the two together are the interpretation.
+	{
+		name:     "RM0 push decodes as the selected-meter value",
+		rigID:    "yaesu-ftdx10",
+		input:    "RM0124000",
+		expected: map[string]string{"METER": "124"},
+	},
+	{
+		// The drive-collapse signature, on the prefix the rig really sends.
+		name:     "RM0 zero decodes as a reading, not as absent",
+		rigID:    "yaesu-ftdx10",
+		input:    "RM0000000",
+		expected: map[string]string{"METER": "000"},
+	},
+	{
+		// RM0 must not swallow the explicit query answers: longest-prefix-wins
+		// has to keep RM4/RM5/RM6 distinct from RM0, or a polled PO reply would
+		// be filed as the generic selected meter.
+		name:     "RM0 does not swallow the RM5 query answer",
+		rigID:    "yaesu-ftdx10",
+		input:    "RM5128000",
+		expected: map[string]string{"PO": "128"},
+	},
+
+	// --- MS METER SW: which meter RM0 is reporting (CAT ref 2308-F p.16) ---
+	{
+		name:     "MS0 → PO selected",
+		rigID:    "yaesu-ftdx10",
+		input:    "MS00",
+		expected: map[string]string{"METERSEL": "PO"},
+	},
+	{
+		name:     "MS2 → ALC selected",
+		rigID:    "yaesu-ftdx10",
+		input:    "MS20",
+		expected: map[string]string{"METERSEL": "ALC"},
+	},
+	{
+		name:     "MS5 → SWR selected",
+		rigID:    "yaesu-ftdx10",
+		input:    "MS50",
+		expected: map[string]string{"METERSEL": "SWR"},
+	},
+
 	// --- No-match cases ---
 	{
 		// Guards against a lazy bare-"RM" prefix: the S-meter shares the RM
 		// stem, so a prefix that ignored P1 would silently report an S-meter
-		// reading as ALC, PO or SWR. Unmodelled meters must not match at all.
+		// reading as ALC, PO, SWR or the selected meter. Unmodelled selectors
+		// must not match at all.
 		name:     "RM1 (S meter) is not attributed to a modelled meter",
 		rigID:    "yaesu-ftdx10",
 		input:    "RM1015000",
