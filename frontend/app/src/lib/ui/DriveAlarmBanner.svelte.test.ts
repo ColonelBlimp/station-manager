@@ -147,4 +147,21 @@ describe('DriveAlarmBanner', () => {
         expect(text).not.toMatch(/whole transmission|read(s|ing)? zero|produced nothing/i);
         expect(text).toMatch(/reported nothing|no output|stopped/i);
     });
+
+    // S9 — the banner OUTLIVES the transmission it reports on. There is no
+    // daemon clear for this alarm, so it stays until dismissed, and the slot it
+    // describes has almost always ended by the time the operator reads it.
+    // Present-tense wording is therefore false — and false in the one direction
+    // that matters, because "the rig is keyed" is exactly what the STUCK-TX
+    // alarm means. It would blur the separation S5/S6 exist to keep, in the
+    // dangerous direction: an operator who learns that this banner overstates
+    // things has been taught to discount the one that does not.
+    it('does not claim the rig is currently transmitting', () => {
+        render(DriveAlarmBanner);
+        raiseDriveAlarm();
+
+        const text = bannerText(screen.getByRole('alert'));
+        expect(text).not.toMatch(/\bis keyed\b|\bis transmitting\b|currently transmitting/i);
+        expect(text).toMatch(/was keyed/i);
+    });
 });

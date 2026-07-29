@@ -222,6 +222,29 @@ reason before the feature exists.
   - **Keep the reversion proof.** After going green, revert the implementation and
     confirm the test fails for the RIGHT reason. That is what distinguishes a test
     that pins behaviour from one that describes whatever the code happens to do.
+    Two ways a proof lies, both seen on 2026-07-29:
+    - **It never applied.** A scripted revert whose pattern does not match leaves
+      the code untouched and the test "passes" — certifying the implementation it
+      was meant to challenge. Once from a `\t` pattern run against a
+      space-indented file, once from a `grep -c` guard that counted a
+      pre-existing identical line elsewhere in the file. **Assert the pattern
+      matched before running the test.**
+    - **It went red somewhere else.** Routing the drive alarm through
+      `raiseTxAlarm` turned its tests red on *"no drive alarm to test against"* —
+      they died in setup and never reached the assertions they exist to make.
+      Read the failure message: if it is not the rule's own assertion, the proof
+      is worthless. And if red→green straddled an edit to the TEST, revert only
+      the implementation half and re-prove.
+  - **TDD orders the WORK, not the commits — ship tests and implementation as ONE
+    commit.** A commit holding only the RED tests leaves `main` failing, and CI
+    gates every push to `main` (`.github/workflows/ci.yml`, `on: push`), so the
+    split turns the gate red on a commit that was never a release candidate and
+    puts a known-broken revision in the path of `git bisect`. Cautionary tale:
+    `638b3198` (drive-alarm tests) and `1be5ae65` (the detector) went up as two
+    commits on 2026-07-29; the first was red on main and the clean-room review
+    correctly filed it P1. Nothing real is lost by combining them — the RED step
+    is a process artefact, and what makes it durable is the test-file header
+    reasoning plus the reversion proof, neither of which git history holds.
   - **A failing test is one of two things, and they are not the same:** the code
     does not meet the spec (a bug — fix the code), or the spec is wrong/incomplete
     (a design question — settle it with the operator, then expand the tests). Being
