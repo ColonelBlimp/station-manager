@@ -316,7 +316,8 @@ func TestObserveMeter_RecordsMeterSelection(t *testing.T) {
 
 // R12b — the selection is reported WITH the transmission's summary, so a log
 // line is self-describing rather than needing correlation against a separate
-// line that may be thousands of frames earlier.
+// line that may be thousands of frames earlier. The label belongs to the
+// READING, not to the summary: see R13.
 func TestFlushFt8TxMeters_CarriesSelection(t *testing.T) {
 	s, _ := newCommandTestService(t)
 	s.observeMeter(meterFrame(t, "MS00"))
@@ -324,8 +325,67 @@ func TestFlushFt8TxMeters_CarriesSelection(t *testing.T) {
 	s.observeMeter(meterFrame(t, "RM0200000"))
 
 	sum := s.flushFt8TxMeters()
-	if sum.Selection != "PO" {
-		t.Fatalf("summary Selection = %q, want PO", sum.Selection)
+	if len(sum.Samples) != 1 {
+		t.Fatalf("got %d samples, want 1: %+v", len(sum.Samples), sum.Samples)
+	}
+	if sum.Samples[0].Sel != "PO" {
+		t.Fatalf("sample Sel = %q, want PO", sum.Samples[0].Sel)
+	}
+}
+
+// R13 — readings taken under DIFFERENT meter selections are never merged, and
+// each carries the selection that was in force when it was taken (c49e12f2
+// review P2).
+//
+// The pushed RM0 frame does not say which meter it is, so the selection is the
+// only thing that gives a number meaning. Accumulating across a change and
+// labelling the lot with whatever was selected last produces a min/max that
+// spans two different physical quantities — power and SWR share nothing but a
+// 0-255 scale. Mislabelled diagnostics are worse than none, which is the
+// standard this file already sets for the unknown-selection case.
+func TestObserveMeter_SelectionChangeSplitsSamples(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	setFt8Keyed(s, true)
+
+	s.observeMeter(meterFrame(t, "MS00")) // PO
+	s.observeMeter(meterFrame(t, "RM0100000"))
+	s.observeMeter(meterFrame(t, "MS50")) // operator switches to SWR mid-transmission
+	s.observeMeter(meterFrame(t, "RM0200000"))
+
+	sum := s.flushFt8TxMeters()
+	bySel := map[string]meterSample{}
+	for _, m := range sum.Samples {
+		bySel[m.Sel] = m
+	}
+	if len(bySel) != 2 {
+		t.Fatalf("readings under two selections were merged: %+v", sum.Samples)
+	}
+	if po := bySel["PO"]; po.Max != 100 || po.Count != 1 {
+		t.Fatalf("PO sample = %+v, want max=100 count=1", po)
+	}
+	if swr := bySel["SWR"]; swr.Max != 200 || swr.Count != 1 {
+		t.Fatalf("SWR sample = %+v, want max=200 count=1", swr)
+	}
+}
+
+// R13b — an MS frame arriving AFTER the last reading must not relabel it. The
+// selection can change in the TX→RX tail, which needs no operator action at
+// all, so this is reachable without anyone touching the front panel
+// mid-transmission.
+func TestObserveMeter_LateSelectionDoesNotRelabel(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	setFt8Keyed(s, true)
+
+	s.observeMeter(meterFrame(t, "MS00")) // PO
+	s.observeMeter(meterFrame(t, "RM0150000"))
+	s.observeMeter(meterFrame(t, "MS50")) // arrives after the last reading
+
+	sum := s.flushFt8TxMeters()
+	if len(sum.Samples) != 1 {
+		t.Fatalf("got %d samples, want 1: %+v", len(sum.Samples), sum.Samples)
+	}
+	if got := sum.Samples[0].Sel; got != "PO" {
+		t.Fatalf("sample Sel = %q, want PO — a later MS frame must not relabel a reading already taken", got)
 	}
 }
 

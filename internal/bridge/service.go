@@ -275,7 +275,7 @@ type Service struct {
 	// most recently ended. Both are guarded by mu and cleared together with the
 	// TX flags, so a reading can never be filed against a finished
 	// transmission. See meters.go.
-	ft8Meters    map[string]*meterSample
+	ft8Meters    map[meterKey]*meterSample
 	ft8MeterLast ft8MeterSummary
 	// meterLatest is the rig's CURRENT reading per meter, recorded whether or
 	// not anything is transmitting — observation is a layer below the

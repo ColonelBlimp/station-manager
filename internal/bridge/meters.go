@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -59,12 +60,27 @@ var meterTags = []string{"METER", "ALC", "PO", "SWR"}
 // drain voltage.
 const meterSelTag = "METERSEL"
 
+// meterPushedTag is the tag carrying RM0 — the meter the rig actually pushes.
+// It is the ONLY tag whose meaning depends on the MS selection; ALC/PO/SWR name
+// their meter in the query itself.
+const meterPushedTag = "METER"
+
+// meterKey identifies one accumulator. Sel is populated only for the pushed
+// tag, so readings taken under different meter selections accumulate SEPARATELY
+// (c49e12f2 review P2). Merging them would produce a min/max spanning two
+// different physical quantities that share nothing but a 0-255 scale.
+type meterKey struct {
+	Tag string
+	Sel string
+}
+
 // meterSample is one meter's readings across a single keyed transmission.
 // Values are the rig's raw 0-255 meter scale, NOT engineering units: the CAT
 // reference documents no conversion to watts or SWR ratio, and inventing one
 // would put a fabricated number in the log where a real reading belongs.
 type meterSample struct {
 	Tag            string
+	Sel            string
 	Count          int
 	Min, Max, Last int
 }
@@ -74,10 +90,11 @@ type meterSample struct {
 // "no transmission has ended yet" — an absence of readings is itself the
 // answer to whether this rig pushes RM at all, so it must be reportable rather
 // than silent.
+// The meter selection is NOT a summary-level field: it belongs to each reading
+// (meterSample.Sel), because it can change mid-transmission.
 type ft8MeterSummary struct {
-	Present   bool
-	Selection string
-	Samples   []meterSample
+	Present bool
+	Samples []meterSample
 }
 
 // observeMeter consumes a decoded meter push. Two SEPARATE layers, and the
@@ -122,13 +139,21 @@ func (s *Service) observeMeter(status cat.Status) {
 		if !s.ft8TxActive {
 			continue
 		}
-		acc, seen := s.ft8Meters[tag]
+		// Bind the reading to the selection in force RIGHT NOW, not to whatever
+		// is selected when the transmission ends: an MS frame arriving after this
+		// reading (including in the TX→RX tail, which needs no operator action)
+		// must not retro-label it.
+		key := meterKey{Tag: tag}
+		if tag == meterPushedTag {
+			key.Sel = s.meterSel
+		}
+		acc, seen := s.ft8Meters[key]
 		if !seen {
 			if s.ft8Meters == nil {
-				s.ft8Meters = make(map[string]*meterSample, len(meterTags))
+				s.ft8Meters = make(map[meterKey]*meterSample, len(meterTags))
 			}
-			acc = &meterSample{Tag: tag, Min: n, Max: n}
-			s.ft8Meters[tag] = acc
+			acc = &meterSample{Tag: tag, Sel: key.Sel, Min: n, Max: n}
+			s.ft8Meters[key] = acc
 		}
 		acc.Count++
 		if n < acc.Min {
@@ -162,10 +187,22 @@ func (s *Service) flushFt8TxMeters() ft8MeterSummary {
 // a reading decoded between the two would otherwise be filed against a
 // transmission that had already ended.
 func (s *Service) flushFt8TxMetersLocked() ft8MeterSummary {
-	sum := ft8MeterSummary{Present: true, Selection: s.meterSel}
+	sum := ft8MeterSummary{Present: true}
 	for _, tag := range meterTags {
-		if acc, ok := s.ft8Meters[tag]; ok && acc.Count > 0 {
-			sum.Samples = append(sum.Samples, *acc)
+		// A tag may have several samples when the selection changed during the
+		// transmission. Sorted by Sel so the summary is deterministic rather than
+		// following Go's randomised map order.
+		keys := make([]meterKey, 0, 2)
+		for k := range s.ft8Meters {
+			if k.Tag == tag {
+				keys = append(keys, k)
+			}
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i].Sel < keys[j].Sel })
+		for _, k := range keys {
+			if acc := s.ft8Meters[k]; acc.Count > 0 {
+				sum.Samples = append(sum.Samples, *acc)
+			}
 		}
 	}
 	s.ft8Meters = nil
@@ -195,15 +232,18 @@ func (s *Service) logFt8TxMeters(sum ft8MeterSummary) {
 	e := s.logger.InfoWith()
 	names := make([]string, 0, len(sum.Samples))
 	for _, m := range sum.Samples {
+		// Name the field after the METER IT ACTUALLY IS. Two pushed samples taken
+		// under different selections would otherwise both key on "meter_" and
+		// silently overwrite each other in the log event.
 		k := strings.ToLower(m.Tag)
+		if m.Tag == meterPushedTag && m.Sel != "" {
+			k = strings.ToLower(m.Sel)
+		}
 		e = e.Int(k+"_min", m.Min).Int(k+"_max", m.Max).Int(k+"_last", m.Last).Int(k+"_n", m.Count)
 		names = append(names, k)
 	}
 	// Meters are the rig's raw 0-255 scale — stated in the message so a reading
 	// is never mistaken for watts.
-	if sum.Selection != "" {
-		e = e.Str("meter_sel", sum.Selection)
-	}
 	e.Str("meters", strings.Join(names, ",")).
 		Msg("bridge: ft8 tx meters (raw 0-255 scale)")
 }
