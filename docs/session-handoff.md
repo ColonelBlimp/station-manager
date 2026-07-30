@@ -101,7 +101,19 @@ precisely so we don't re-derive state or redo finished work.
 >   the SPA handler previously assigned `p.active` straight to `driveAlarmActive`,
 >   which would have made the banner vanish. "Healthy" deliberately means
 >   armed-and-silent, not merely un-alarmed: a transmission that measured nothing
->   is not evidence of health. 6 daemon rules + 5 SPA rules, all reversion-proved.
+>   is not evidence of health. **9 daemon rules + 5 SPA rules**, all
+>   reversion-proved.
+> - **RECOVERY KEYS ON THE MEASUREMENT, NOT ON WHETHER THE ALARM TIMER RAN** — two
+>   review rounds to get there. It requires the keyed window to be at least as long
+>   as the silence threshold AND the measured widest gap to be under it. Resting on
+>   `driveAlarmed` was wrong because `checkDriveSilence` takes `s.mu` on entry, so a
+>   `finishFt8Tx` that wins the lock leaves it false for a slot that DID contain
+>   alarm-level silence. The gap check also subsumed an explicit keyed-frame flag
+>   (with no frames the widest gap IS the window), so the fix removed state rather
+>   than adding it. `driveAlarmStanding` also survives pipeline teardown: the SPA
+>   does NOT clear the drive banner on disconnect — `onRigDisconnected` only sets
+>   `rig.cat = 'lost'`, and `resetCatLink` is a test seam with no production caller,
+>   which a code comment here got wrong.
 > - **NEW STANDING CONSTRAINT (operator, today): no transmit-path change without
 >   per-instance prior agreement.** Sink 66 level/mute, rig commands, power —
 >   nothing, while the daemon can key the rig. Warning about a problem and ASKING

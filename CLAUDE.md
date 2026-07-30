@@ -300,6 +300,22 @@ reason before the feature exists.
     creates a rollback state — if a later step FAILS, does the earlier decision still
     hold? (Here a failed `tx_off` had to unseal, because the transmission was not
     over.)
+  - **A risk you NOTICE and dismiss must be dismissed on evidence, not on estimated
+    cost.** The words to catch yourself on are "narrow race", "not worth testing",
+    "can't be tested deterministically", "acceptable in practice". Each is a
+    decision to ship a known defect, so before making it, check whether the system
+    ALREADY CARRIES the fact that would settle it — a value already computed, an
+    existing measurement, one grep. State the evidence in the dismissal, or do not
+    dismiss. Two cautionary tales from the same afternoon (2026-07-30): the drive
+    recovery rested on whether an alarm timer had run, a race spotted at build time
+    and waved off as untestable, while `meterGapAtUnkey` was returning the frozen
+    measurement that answered it and the call site discarded it with `_` — the fix
+    was to stop ignoring a value already in hand, and it REMOVED state. And a code
+    comment asserted the SPA drops its drive banner on disconnect, citing
+    `resetCatLink`, which is a test seam with no production caller; the real handler
+    only sets `rig.cat = 'lost'`, so the daemon was discarding a report the operator
+    could still see a banner waiting for. Both were found by review, not by the
+    reasoning that had already been over the ground.
   - **If a behaviour test cannot be written without inventing a fact the system does
     not carry, the SYSTEM is missing that fact.** Do not substitute a threshold or a
     heuristic. Worked example: `internal/ft8/dialguard_test.go`, written before its
