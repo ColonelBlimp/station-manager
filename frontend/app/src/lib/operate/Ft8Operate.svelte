@@ -122,7 +122,12 @@
             myCall !== '' &&
             catLive
     );
-    const canAbandon = $derived(tx.armed && qso.active);
+    // Abandon stops a CONTACT or a RUN, and the armed-and-idle state has no contact.
+    // Gating on qso.active alone disabled the button precisely where the auto-work
+    // indicator advertises it ("Abandon stops the run"), while the daemon accepts the
+    // call there and clears the run. Invariant 7 inverted: not offering a stop that
+    // cannot act, but withholding one that can.
+    const canAbandon = $derived(tx.armed && (qso.active || qso.autoWorkArmed));
     // A Call-CQ run is in progress (we are the caller, looping the pile-up) — the
     // Call CQ button goes red so "I'm running CQ" is unmistakable.
     const callerActive = $derived(qso.active && qso.role === 'caller');

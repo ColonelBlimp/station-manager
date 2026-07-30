@@ -11,7 +11,24 @@
 import { it, expect, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import Ft8Operate from './Ft8Operate.svelte';
-import { ft8State, resetFt8ForTests, ft8Link } from './ft8.svelte';
+import { ft8State, resetFt8ForTests, ft8Link, setFt8TxActions } from './ft8.svelte';
+
+// Abandon is also gated on TX being armed, so a rule about the RUN must not be
+// satisfied (or defeated) by the arm state.
+function armReadyForAbandon(): void {
+    const ok = (): Promise<{ ok: boolean; message: string }> =>
+        Promise.resolve({ ok: true, message: '' });
+    setFt8TxActions({
+        arm: ok,
+        callCq: ok,
+        answerCq: ok,
+        workCaller: ok,
+        abandon: ok,
+        skip: ok,
+        next: ok,
+    });
+    ft8State.tx.armed = true;
+}
 
 beforeEach(() => {
     resetFt8ForTests();
@@ -51,4 +68,33 @@ it('keeps the indicator while the run is working a contact', () => {
     ft8Link.onQso({ active: true, their_call: 'DL9UW', auto_work_armed: true });
     render(Ft8Operate);
     expect(screen.getByTestId('auto-work-armed')).toBeTruthy();
+});
+
+// U5 — THE ADVERTISED STOP MUST BE PRESSABLE. The indicator's own text says "Abandon
+// stops the run", and the armed-and-idle state is precisely where an operator reads
+// it — yet Abandon was gated on a contact being in progress, so the control was
+// disabled exactly when it was being advertised. The daemon accepts the call in this
+// state (Service.AbandonQso abandons unconditionally and the sequencer clears the
+// run), so the button was the only thing standing between the operator and the stop.
+//
+// This is invariant 7 inverted: that rule forbids offering a stop where it cannot
+// act; this is advertising one that can act and withholding it.
+it('enables Abandon when idle with an armed run', () => {
+    armReadyForAbandon();
+    ft8Link.onQso({ active: false, auto_work_armed: true });
+    render(Ft8Operate);
+
+    // The rendered ATTRIBUTE, not the DOM property: getByRole is typed HTMLElement,
+    // and asserting on what the markup emits is what the operator's browser sees.
+    expect(screen.getByRole('button', { name: 'Abandon' }).hasAttribute('disabled')).toBe(false);
+});
+
+// ...and stays disabled with nothing to stop, so U5 cannot be satisfied by simply
+// enabling it always.
+it('leaves Abandon disabled when idle with no run', () => {
+    armReadyForAbandon();
+    ft8Link.onQso({ active: false, auto_work_armed: false });
+    render(Ft8Operate);
+
+    expect(screen.getByRole('button', { name: 'Abandon' }).hasAttribute('disabled')).toBe(true);
 });
