@@ -32,16 +32,29 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-30)
 
-> **2026-07-30 — the drive alarm PASSED on-air acceptance; the measurement that
-> answers its one open question is BUILT AND DEPLOYED; and the map's South-Pole
-> arcs are fixed. Waiting on data, not on work.**
+> **2026-07-30 — the drive alarm PASSED on-air acceptance and its open question is
+> instrumented; the map's South-Pole arcs are fixed; and FT8 AUTO-WORK-CALLERS is
+> built, deployed AND SWITCHED ON. The station now works callers unattended after
+> an operator-started QSO.**
 >
-> - **DEPLOYMENT — nothing pending.** Running daemon is PID-from-07:30:58 off the
->   07:30:52 install, which is HEAD **`16ca2397`**, verified rather than assumed:
->   the binary carries the `unsealMeterGapWindow` symbol (exists only in that
->   commit) and the embedded SPA carries the map fix's `fall outside grid` string.
->   **No FT8 transmission has ended since that restart, so no `gap_max_ms` line
->   exists in the log yet** — the first one appears on the next transmission.
+> - **DEPLOYMENT — nothing pending; everything below is running.** Daemon PID
+>   248630, started **16:41:46**, off the 16:36:38 install = HEAD **`95e8e4e3`**,
+>   verified rather than assumed (the binary carries the auto-work log string).
+> - **`ft8.tx.auto_work_callers` IS ON.** Confirmed in
+>   `~/.local/share/station-manager/config.json`. That the RUNNING daemon has it is
+>   an inference, stated as one: the daemon rewrote that file at 16:41:46.70 —
+>   immediately after starting — and the rewrite contains `true`, and the daemon
+>   serialises the config it loaded. **There is no startup log line confirming the
+>   policy**, which is a small gap worth closing: nothing in the log distinguishes
+>   the feature being on from off until a run actually picks a caller up.
+> - **OPERATIONAL TRAP, cost one round today: the daemon REWRITES config.json at
+>   startup.** The first attempt to enable the knob was silently lost — edited
+>   while `task deploy:local:dev` was restarting the daemon, and the daemon's own
+>   write landed on top. **Stop `smd`, edit, then start.** The symptom is
+>   indistinguishable from a typo: the key is simply absent afterwards.
+> - **An earlier note in this block said "no `gap_max_ms` line exists yet"** — that
+>   was true of the 07:30 build and is superseded: the gap fields, the map fix and
+>   the drive-alarm recovery reporting are all in the running binary now.
 > - **GAP MEASUREMENT SHIPPED — this is what Finding 1 needs.** Two new fields on
 >   the existing per-transmission meter line, present in BOTH branches including
 >   the no-frames one: **`gap_max_ms`** (widest silence inside the keyed window)
@@ -127,6 +140,35 @@ precisely so we don't re-derive state or redo finished work.
 > - **Correction to yesterday's note:** `ft8.tx.max_repeats = 6` does NOT cap a CQ
 >   run — today's reached `repeats 9` while still calling. It caps repeats of a
 >   rung while working one answerer; a CQ run is unbounded until Abandon.
+> - **FT8 AUTO-WORK-CALLERS SHIPPED (ADR 0059) — the pile-up runs itself.** After an
+>   OPERATOR-STARTED QSO (answering a CQ, or picking a caller), stations calling us
+>   are worked one after another through the full ladder with no click each, until
+>   Abandon. Selection reuses `pickAnswererLocked`, so `auto_first`/`auto_strongest`,
+>   the stalled-call exclusion and the unencodable-caller skip behave as on the
+>   Call-CQ side. **26 rules** across daemon + SPA, every one reversion-proved.
+>   - **The operator-initiated invariant is UNCHANGED.** A run is armed only by an
+>     operator action — never from idle — so one action heads every run, exactly the
+>     shape a Call-CQ run already has. Arming from idle was considered and REJECTED
+>     in ADR 0059: it would be daemon-initiated operation and needs its own ADR, not
+>     a config default.
+>   - **Stops on:** Abandon, TX disarmed, CAT lost, band/dial change. All four route
+>     through `disarmTx` → `seq.Abandon` → the run disarms; four rules pin that
+>     routing, because nothing else would notice it changing.
+>   - **Visibility:** `QsoStatus.auto_work_armed` rides IDLE frames too, and the
+>     Operate tab shows an amber **"Auto-work armed"** badge. Without it,
+>     armed-and-waiting and stopped are the same "No active contact" view and only
+>     one of them keys the rig. Abandon is enabled in that state too — it was
+>     disabled at first, in exactly the state its own badge advertises it.
+>   - **Duplicates unchanged** from the Call-CQ loop's ratified position: no
+>     completed-call suppression, because a partner who heard none of our RR73s
+>     never got the contact.
+>   - **NOT built:** no SPA toggle and no live retune, so changing the knob means
+>     stopping the daemon, editing config.json, and starting it (see the trap above).
+>   - **SIX review rounds, and five of the seven findings were REACHABILITY, not
+>     logic** — `SetAutoWorkCallers` unwired, `StartQso` unarmed, config
+>     unconnected, the terminal frame omitting the flag, Abandon disabled where it
+>     was advertised. The machinery was right each time; the path from the operator
+>     to it was missing, and the tests kept reaching past the broken seam.
 > - **TWO CLAUDE.md TESTING RULES ADDED, both earned today, both about tests that
 >   look sound and prove nothing.** (1) **"Enumerate the STEPS too, and name which
 >   one a rule means"** — a NEW bullet beside the existing states one, because the
