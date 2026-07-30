@@ -32,25 +32,63 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-07-30)
 
-> **2026-07-30 — the drive alarm PASSED on-air acceptance. Two findings came out
-> of it; neither is built. No code changed today, only comments and docs.**
+> **2026-07-30 — the drive alarm PASSED on-air acceptance; the measurement that
+> answers its one open question is BUILT AND DEPLOYED; and the map's South-Pole
+> arcs are fixed. Waiting on data, not on work.**
 >
+> - **DEPLOYMENT — nothing pending.** Running daemon is PID-from-07:30:58 off the
+>   07:30:52 install, which is HEAD **`16ca2397`**, verified rather than assumed:
+>   the binary carries the `unsealMeterGapWindow` symbol (exists only in that
+>   commit) and the embedded SPA carries the map fix's `fall outside grid` string.
+>   **No FT8 transmission has ended since that restart, so no `gap_max_ms` line
+>   exists in the log yet** — the first one appears on the next transmission.
+> - **GAP MEASUREMENT SHIPPED — this is what Finding 1 needs.** Two new fields on
+>   the existing per-transmission meter line, present in BOTH branches including
+>   the no-frames one: **`gap_max_ms`** (widest silence inside the keyed window)
+>   and **`keyed_ms`** (the window's length). `internal/bridge/drivealarm.go` +
+>   `meters.go`; 12 rules in `metergap_test.go` with the criterion in its header.
+>   **WHAT TO READ WHEN THE DATA ARRIVES:** if collapse slots show `gap_max_ms`
+>   comfortably above 3000, the alarm's margin is real and Finding 1 closes; if any
+>   land near 2000–3000, the false negative is LIVE and the detector needs a
+>   value-aware rule — which needs the operator's definition of "zero" and must not
+>   be invented.
+> - **THE WINDOW IS KEY-DOWN → tx_off ISSUED**, and getting that boundary right
+>   cost FIVE review rounds and four real defects, every one in the same seam:
+>   measured to `finishFt8Tx` (included confirm + settle + restore); froze
+>   `keyed_ms` but read `gap_max` live; took the instant after the write returned
+>   (CI-V ACK latency); sealed after the write so mid-write frames still counted.
+>   Root cause each time: treating `releaseFt8TxChecked`'s multi-step sequence
+>   (issue → ACK → confirm → restore) as a single instant. A failed tx_off write
+>   now UNSEALS, because TX stays armed and the rig may still be transmitting.
+> - **MAP BUG FIXED (backlog item 1) — UA3DPM and R9LAU no longer draw to the South
+>   Pole.** `rowPoint()` in `frontend/app/src/lib/map/mapData.svelte.ts` prefers
+>   lat/lon only while it AGREES with the station's own grid; the tolerance is the
+>   grid cell itself (`gridToCell()` now returns the extent `gridToDecimal` was
+>   already computing and discarding), so no threshold was invented. Operator's
+>   calls: map-layer only, cell-based, silent fallback with a deduped console warn.
+>   Cause chain, all verified: `internal/lookup/qrz/internal.go:244` passes QRZ's
+>   lat/lon through VERBATIM (SM derives nothing); `api_context.go:1489–1506`
+>   merges gridsquare and lat/lon INDEPENDENTLY so they can disagree; the map
+>   preferred the coordinates. **Consequence of map-layer-only: the two rows still
+>   hold their polar coordinates in the DB, so ADIF export and any re-upload still
+>   carry them.** Only 2 of the newest 500 rows are affected.
 > - **ACCEPTANCE (layer 3) DONE — do not re-run it.** On the air at operating
 >   power during a live CQ run, not the 5 W dummy load: collapse mid-slot keyed
 >   04:57:15 → alarm 04:57:24 (`n=129`); silent from key-down keyed 05:01:15 →
 >   alarm **05:01:18, +3 s exactly** (`n=35`); healthy slots either side
 >   (`n=349–376`) fired nothing. Two QSOs completed through the run (R2EC KO82,
 >   UX7QV KN29). Full write-up + citations: `docs/dogfood-inbox.md` 2026-07-30.
-> - **FINDING 1 — a latent FALSE NEGATIVE in the detector.** Absent drive does
->   NOT produce pure silence: the 05:01:15 slot pushed ~26–30 zero-valued frames
->   at ~2–3 Hz while no RF left the rig. The alarm fired only because a complete
->   gap preceded them. The detector keys on GAPS, not values, so its safety rests
->   on absent drive being silent for LONG ENOUGH, not silent at all. Settle it
->   with inter-frame-gap or value-histogram logging over one keyed window — **no
->   transmission needed**. A value-aware rule needs the operator's definition of
->   "zero". Reasoning now lives in `internal/bridge/drivealarm.go`'s header.
->   Related: at operating power `max` was 109 in EVERY state observed, so the 5 W
->   matrix's `max` thresholds must not be ported upward — `n` carried it all.
+> - **FINDING 1 — a latent FALSE NEGATIVE in the detector. INSTRUMENTED, NOT YET
+>   ANSWERED.** Absent drive does NOT produce pure silence: the 05:01:15 slot
+>   pushed ~26–30 zero-valued frames at ~2–3 Hz while no RF left the rig. The alarm
+>   fired only because a complete gap preceded them. The detector keys on GAPS, not
+>   values, so its safety rests on absent drive being silent for LONG ENOUGH, not
+>   silent at all. **The measurement that settles it is now deployed (see gap
+>   fields above) and costs no transmission of its own** — it rides on whatever the
+>   operator transmits anyway. Reasoning lives in `internal/bridge/drivealarm.go`'s
+>   header. Related: at operating power `max` was 109 in EVERY state observed, so
+>   the 5 W matrix's `max` thresholds must not be ported upward — `n` carried it
+>   all.
 > - **FINDING 2 — the banner has no time anchor.** A stale alarm is
 >   indistinguishable from a fresh one (the operator hit this at ~05:02, three
 >   minutes and four healthy slots after the real alarm). Not a code defect — the
@@ -72,14 +110,33 @@ precisely so we don't re-derive state or redo finished work.
 > - **Correction to yesterday's note:** `ft8.tx.max_repeats = 6` does NOT cap a CQ
 >   run — today's reached `repeats 9` while still calling. It caps repeats of a
 >   rung while working one answerer; a CQ run is unbounded until Abandon.
+> - **TWO CLAUDE.md RULES DRAFTED-BUT-NOT-WRITTEN, awaiting the operator.** Both
+>   earned today, both about tests that look sound and prove nothing:
+>   (1) **Name which STEP of a sequence you mean.** Four defects in one day came
+>   from treating a multi-step release path as a single instant; the existing
+>   "enumerate the states a change creates" rule applies to time as well as state.
+>   (2) **A fixture that cannot tell right from wrong proves nothing** — three
+>   instances today: G8 fed no frames after the unkey (so sealed and unsealed
+>   agreed), G5's silent transmission never wrote the field it tested for leaks,
+>   and the map test paired London coordinates with a Malawi grid, pinning the
+>   defect as intended behaviour. CLAUDE.md's "feed inputs where right and wrong
+>   actually differ" already says this and caught none of the three, so the value
+>   would be in the worked cases.
+> - **STILL OPEN, unchanged from the older backlog:** R9LAU's map row is fixed for
+>   DISPLAY but its stored coordinates remain wrong (see the map bullet); the
+>   auto-work-pile-up ADR; four unseen FT8 paths; the sweep (lumberjack goroutine
+>   leak, external-failure surfacing); and the `5ea0ff60` docs-only trap — 401 is
+>   STILL terminal in `internal/forwarding/smcloud/smcloud.go`, so an SM Cloud token
+>   rotation still strands the queue.
 
 > **2026-07-29 — the drive collapse HAS A MEASURED SIGNATURE, and an alarm that
 > fires on it. Built end to end; on-hardware acceptance is the only thing left.**
 >
-> - **DEPLOYMENT — nothing pending.** The running daemon is the **16:50 build**
->   (`/usr/bin/smd`), which is HEAD `84ed3ffc` (16:48). Everything below is
->   deployed. Station was last on a **dummy load at 5 W on 80 m** for the sweep —
->   restore normal power/antenna before operating.
+> - **DEPLOYMENT** *(as of 2026-07-29 — SUPERSEDED, see the 07-30 block for what is
+>   actually running).* The running daemon was the **16:50 build**
+>   (`/usr/bin/smd`), which was HEAD `84ed3ffc` (16:48). Everything below is
+>   deployed. Station was on a **dummy load at 5 W on 80 m** for the sweep;
+>   normal power/antenna were restored before the 07-30 operating session.
 > - **THE COLLAPSE IS NOW OBSERVABLE.** Controlled sweep (dummy load, 5 W, 80 m,
 >   24 transmissions, PipeWire sink 66 swept 0.39 → mute → 0.39). All four states
 >   are distinguishable from the per-TX meter summary: healthy `max=34 n≈155`;
