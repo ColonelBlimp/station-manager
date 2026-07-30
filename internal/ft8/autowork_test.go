@@ -216,3 +216,32 @@ func lastSent(r *seqRecorder) string {
 	}
 	return sent[len(sent)-1]
 }
+
+// W9 — ANSWERING A CQ ARMS THE RUN. This is the entry point the operator's request
+// actually names ("I answer a CQ call, and now stations are calling me directly") and
+// the one the criterion opens with, yet every rule above seeds the run through
+// StartWorkCaller because that ladder is shorter to drive. The two are different
+// operator actions on different code paths, and arming one does not arm the other —
+// the first implementation armed only the work-a-caller path and this workflow was
+// silently dead.
+func TestAutoWork_AnsweringACqArmsTheRun(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	s.SetAutoWorkCallers(true, "auto_first")
+
+	// Answer K1ABC's CQ and run the exchange to completion.
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
+	require.False(t, s.Active(), "fixture: the answer-a-CQ exchange must complete")
+	require.True(t, s.AutoWorkArmed(), "answering a CQ is an operator action and must arm the run")
+
+	// ...and a station calling us afterwards is worked.
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
+
+	require.True(t, s.Active(), "the run must pick the caller up")
+	require.NotNil(t, s.caller)
+	require.Equal(t, "DL9UW", s.caller.TheirCall)
+}

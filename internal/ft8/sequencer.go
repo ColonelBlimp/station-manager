@@ -501,6 +501,13 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.dialFreqMHz = dialFreqMHz
 	s.startedAt = now.UTC()
 	s.repeats = 0
+	// Answering a CQ is an operator action, so it arms an auto-work run exactly as
+	// picking a caller does (ADR 0059, autowork_test.go W9). It is also the entry point
+	// the feature was ASKED for — "I answer a CQ call, and now stations are calling me
+	// directly" — and arming only the work-a-caller path left it silently dead.
+	// ex.OurCall is the normalised form the exchange was built with; pickAnswererLocked
+	// matches directed calls against it.
+	s.armAutoWorkLocked(ex.OurCall, offsetHz, dialFreqMHz)
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.publish(st)
