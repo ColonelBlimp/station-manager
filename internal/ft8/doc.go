@@ -1,6 +1,6 @@
 // Package ft8 is Station Manager's FT8 subsystem: it wires the go-ft8 library
 // into the daemon and owns everything from live receive audio through decode,
-// occupancy analysis, the SSE wire, and — attended-only — transmit, sequencing,
+// occupancy analysis, the SSE wire, and — operator-initiated — transmit, sequencing,
 // and completed-QSO assembly. It is no longer the thin decode-only wrapper the
 // original scaffold was; the responsibilities below all live here now.
 //
@@ -25,13 +25,20 @@
 //   - Decodes, occupancy, TX state, QSO status, and completed-QSO events fan out
 //     on the ft8-* SSE events (Service.HTTPHandler).
 //
-// # Transmit + sequencing (TX, attended-only)
+// # Transmit + sequencing (TX, operator-initiated)
 //
-// Transmit is operator-initiated and auto-advancing — never unattended (the QEX
-// FT8 spec forbids automatic operation). The operator arms TX, then either
-// answers a CQ (ADR 0031) or calls CQ to work a pile-up (ADR 0033); the
-// sequencer walks the message ladder, transmitting each rung on the synchronised
-// timebase (ADR 0032).
+// Transmit is operator-initiated and auto-advancing — the daemon starts no run of
+// its own (the QEX FT8 spec forbids automatic operation). The operator arms TX,
+// then either answers a CQ (ADR 0031) or calls CQ to work a pile-up (ADR 0033);
+// the sequencer walks the message ladder, transmitting each rung on the
+// synchronised timebase (ADR 0032).
+//
+// "Never unattended" would overstate it, and this comment said so until
+// 2026-07-30. A Call-CQ run works answerers, and an ADR 0059 auto-work run works
+// callers, until Abandon — with nobody at the desk. The one presence check that IS
+// enforced is the open view: Service.onLingerExpired disarms TX and abandons any
+// active QSO once the last /v1/ft8/events subscriber is gone past captureLinger.
+// Closing the browser stops a run; walking away does not.
 //
 //   - TxKeyer is the PTT seam: the package keys the rig WITHOUT importing
 //     internal/bridge (the bridge implements TxKeyer; injected like the capture

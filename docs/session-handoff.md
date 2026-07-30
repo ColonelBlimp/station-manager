@@ -34,8 +34,8 @@ precisely so we don't re-derive state or redo finished work.
 
 > **2026-07-30 — the drive alarm PASSED on-air acceptance and its open question is
 > instrumented; the map's South-Pole arcs are fixed; and FT8 AUTO-WORK-CALLERS is
-> built, deployed AND SWITCHED ON. The station now works callers unattended after
-> an operator-started QSO.**
+> built, deployed AND SWITCHED ON. The station now works callers back-to-back after
+> an operator-started QSO, with no click each.**
 >
 > - **DEPLOYMENT — nothing pending; everything below is running.** Daemon PID
 >   248630, started **16:41:46**, off the 16:36:38 install = HEAD **`95e8e4e3`**,
@@ -183,12 +183,63 @@ precisely so we don't re-derive state or redo finished work.
 >   implementation you are guarding against?*) plus the three shapes — fixture never
 >   exercises the interval (G8), never writes the state under test (G5), or asserts
 >   the defect as the intent (London coordinates paired with a Malawi grid).
+> - **DOC CORRECTION — "attended-only" was a claim SM does not honour, and it was in
+>   both Tier-1 FT8 docs.** `docs/backlog.md` (6 places) and `docs/ft8.md` (8) said or
+>   implied that SM enforces operator presence. It does not, and shipping auto-work
+>   made the gap plain. The line that IS enforced: **operator-initiated** — nothing
+>   starts a run the operator did not. The line that is NOT: attendance — a Call-CQ
+>   run and an auto-work run both continue until Abandon with nobody at the rig.
+>   Also corrected the weaker per-contact claim ("every contact is started by a
+>   human"), which had been wrong since `auto_first` Call-CQ shipped **2026-06-12**,
+>   not since yesterday. Two facts were VERIFIED rather than assumed while doing it,
+>   with citations left in `ft8.md`: an auto-work run cannot pick up a **Field Day**
+>   caller or a **type-4** caller, because `pickAnswererLocked` accepts only
+>   `msgGrid` (`caller_sequencer.go:390`) and neither parses as one
+>   (`sequence.go:120–126`). A dead memory pointer (`project_sm_ft8_attended_only`,
+>   no such file) was replaced. **The four ADRs (0029/0031/0033/0048) were left
+>   alone deliberately** — Tier 2 is a frozen reasoning trail; editing them would
+>   falsify the record of what was believed then.
+>   **The uncomfortable part: this was supposed to have been done on 2026-07-27.**
+>   The 07-27 block below (line ~385) records the same operator decision and claims
+>   "**Live docs now say operator-initiated** and say plainly that attendance is not
+>   checked". `CLAUDE.md` and `internal/ft8/CLAUDE.md` did get it; the two Tier-1 FT8
+>   docs — the ones `docs/README.md` names as kept-current — did not, and carried the
+>   old wording for three more days. A sweep reported as complete was never checked
+>   against the files it claimed. **Grep for the phrase before reporting a wording
+>   sweep done** — it costs one command and would have caught this the same day.
+> - **AND THE REPLACEMENT WORDING WAS ITSELF WRONG — caught by grepping the CODE
+>   after the doc edits were already written.** "SM does not enforce attendance /
+>   nothing stops a run" is false: `Service.onLingerExpired` disarms TX and abandons
+>   any active QSO when the last `/v1/ft8/events` subscriber is gone past
+>   `captureLinger`, before releasing the device — and the disarm is deliberately NOT
+>   gated on `capturing` (`internal/ft8/service.go:398–429`, 2026-07-25 review). **The
+>   accurate statement has two halves: walking away with the browser open does not
+>   stop a run; CLOSING THE BROWSER does, after the linger.** The code comments call
+>   this the "attended-only guarantee", which is very likely where the over-broad word
+>   entered the docs in the first place — what it enforces is an open SSE
+>   subscription, not a human at the desk. Both docs now say so with the citation.
+> - **THE WORDING IS NOW CONSISTENT ACROSS ALL FIVE LIVE SURFACES** (operator asked
+>   for CLAUDE.md after the two Tier-1 docs): `CLAUDE.md`'s FT8 bullet ·
+>   `internal/ft8/CLAUDE.md`, which had the same "not something the software checks"
+>   gap plus an FD line reading "BOTH directions, attended-only" (now stating the
+>   real reason an FD caller is click-only) · **and `internal/ft8/doc.go`**, whose
+>   godoc said "operator-initiated and auto-advancing — **never unattended**" — the
+>   flattest version of the false claim, and the one a `go doc` reader hits first.
+>   doc.go is a comment-only change, `gofmt` clean and `go build` green; it is one
+>   file beyond what was asked for, so drop it from the commit if unwanted.
+>   **Still deliberately untouched:** the four ADRs (0029/0031/0033/0048), and the
+>   `service.go` comments that NAME the mechanism the "attended-only guarantee" —
+>   the docs now cite that name, so renaming it would detach them from the code.
 > - **STILL OPEN, unchanged from the older backlog:** R9LAU's map row is fixed for
->   DISPLAY but its stored coordinates remain wrong (see the map bullet); the
->   auto-work-pile-up ADR; four unseen FT8 paths; the sweep (lumberjack goroutine
->   leak, external-failure surfacing); and the `5ea0ff60` docs-only trap — 401 is
->   STILL terminal in `internal/forwarding/smcloud/smcloud.go`, so an SM Cloud token
->   rotation still strands the queue.
+>   DISPLAY but its stored coordinates remain wrong (see the map bullet); four unseen
+>   FT8 paths; the sweep (lumberjack goroutine leak, external-failure surfacing); and
+>   the `5ea0ff60` docs-only trap — 401 is STILL terminal in
+>   `internal/forwarding/smcloud/smcloud.go`, so an SM Cloud token rotation still
+>   strands the queue. **(The "auto-work-pile-up ADR" that this list carried is DONE
+>   — it is ADR 0059, written and shipped today. It was still listed as open in a
+>   block that also announced it shipped; exactly the drift the RECONCILE guard
+>   exists to catch, so re-read a backlog "open" line against `git log` before acting
+>   on it.)**
 
 > **2026-07-29 — the drive collapse HAS A MEASURED SIGNATURE, and an alarm that
 > fires on it. Built end to end; on-hardware acceptance is the only thing left.**

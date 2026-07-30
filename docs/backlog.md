@@ -83,7 +83,7 @@ next, and in what order" is answered.
 
 **Parked — blocked or out of scope (do not pick up now)**
 - _Blocked on external event:_ **FT8 Field Day UI** (FD-aware Operate ladder render · pile-up Ctrl-click · config-SPA section dropdown) + any further FD on-air validation — the FD path can only be exercised **during a Field Day contest**, so it waits for the next one. Flows already shipped + on-air-validated 2026-06-28. NOT a 7Q8AC ship concern (ARRL/RAC-only; a Malawi op doesn't run FD).
-- _Out of scope (never):_ FT8 automatic / unattended sequencing — the FT8 spec forbids it; SM is attended-only.
+- _Out of scope (never):_ FT8 **daemon-initiated** sequencing — the FT8 spec forbids automatic operation; every SM session starts from an operator action. NB "operator-initiated", NOT "attended-only" — SM does not check that the operator stays. See the scope note.
 - _Future thinking:_ "design our own sequencing / timing".
 
 ## Bugs (detail)
@@ -443,10 +443,15 @@ next, and in what order" is answered.
   **Open regulatory question (acknowledged grayline, still being thought through):**
   does pre-authorising a batch + auto-responding count as *attended* (the operator
   initiated the intent, analogous to WSJT-X "Call 1st") or does it cross into
-  *daemon-initiated* operation (QEX §9 forbids robotic/unattended; attended-only
-  stance)? Not resolved — recorded to keep thinking. **If ever built, it must be
-  framed as attended-assisted; public docs must never present it as automatic
-  operation.** See memory `project_sm_ft8_attended_only`.
+  *daemon-initiated* operation (QEX §9 forbids robotic/unattended; SM's
+  operator-initiated stance)? Not resolved — recorded to keep thinking. **If ever
+  built, it must be framed as attended-assisted; public docs must never present
+  it as automatic operation.** Note this item is the one place where the
+  operator-initiated line is genuinely at issue: a watch-list match, not an
+  operator click, would be the thing that STARTS a contact — which is why it sits
+  differently from ADR 0059 auto-work (that continues a run the operator already
+  started). See the scope note at the end of this file, CLAUDE.md's FT8 bullet,
+  and `docs/ft8.md`.
 
 - **FT8 callsign ignore list.** An operator-maintained list of callsigns to
   suppress in the FT8 view — already worked, not being sought, known nuisance, etc.
@@ -524,7 +529,7 @@ next, and in what order" is answered.
     `onSlotCalling` now picks the **highest-SNR** encodable answerer in the slot (clear
     the loud ones first) when `caller_answer_mode == auto_strongest`, else the first by
     decode order (`auto_first`). Surfaced over `/v1/config` as `ft8_caller_answer_mode`
-    (presence-aware; only the two attended auto modes accepted, `operator_pick`/junk →
+    (presence-aware; only the two auto answer modes accepted, `operator_pick`/junk →
     400) and editable from the logging SPA's **FT8 Settings tab → Call CQ → Answer**
     (First answerer / Strongest signal). Pile-up drain stays **FIFO** — the knob governs
     only the hands-off auto-answerer. Tests: `caller_sequencer_test.go`
@@ -548,9 +553,11 @@ next, and in what order" is answered.
     Call-CQ mode** (still `501`-rejected at `StartCallCq`; not needed — the stack gives
     operator-chosen working for *anyone* calling you, whether or not you called CQ).
     `auto_first` Call-CQ stays as the hands-off "call CQ + auto-work answerers" loop.
-  - **Attended either way:** operator initiates by calling CQ, is present, Abandon stops
-    it instantly; **no auto-CQ cycle, no auto-fire-on-watch-match** — which is why this
-    **supersedes the auto-responder framing** of the watch-list item above.
+  - **Operator-initiated either way:** the operator starts it by calling CQ, and Abandon
+    stops it instantly; **no auto-CQ cycle, no auto-fire-on-watch-match** — which is why
+    this **supersedes the auto-responder framing** of the watch-list item above. (What it
+    does NOT claim: that the operator stays. A Call-CQ run keeps working answerers until
+    Abandon or until the FT8 view closes — see the scope note.)
 
 - **FT8 Call-CQ: on contact abandon, work a live answerer instead of resuming CQ
   (dogfood 2026-07-17, P2). LAYER 1 BUILT 2026-07-17; layer 2 (answerer pool) open.**
@@ -857,8 +864,9 @@ next, and in what order" is answered.
     schema that's WSJT-X's to change (a maintenance tail — hence the ADR).
   - **Hard constraints to bake in:** (1) **emit-only** — expose only the OUTBOUND
     subset; the WSJT-X protocol's inbound control side (Reply / HaltTx / Replay)
-    is a remote-rig-control surface that collides with the attended-only FT8
-    invariant and the existing daemon-owned command path. Telemetry out, never
+    is a remote-rig-control surface that collides with the operator-initiated FT8
+    invariant (a remote Reply would start a contact with no operator action here)
+    and with the existing daemon-owned command path. Telemetry out, never
     control in. (2) **never block** decode/TX — same discipline as PSK Reporter
     (send off the decode path, drop on a full buffer, fail-soft).
   - Meaty subsystem; **later**, after SM is releasable. Closes the loop with the
@@ -1458,9 +1466,25 @@ next, and in what order" is answered.
 
 ## Scope notes (NOT backlog — recorded so they aren't mistaken for it)
 
-- **FT8 automatic / unattended sequencing is OUT OF SCOPE and unsupported** — the
-  QEX FT8 specification forbids automatic operation and it is licence-restricted
-  in many jurisdictions. SM is attended-only. This is not a roadmap item.
+- **FT8 daemon-initiated sequencing is OUT OF SCOPE and unsupported** — the QEX
+  FT8 specification forbids automatic operation and unattended operation is
+  licence-restricted in many jurisdictions. Not a roadmap item.
+  **State the claim precisely** (the wording matters, and this doc got it wrong
+  until 2026-07-30): SM is **operator-initiated** — every session begins with an
+  operator action (the click plus arming TX) and the daemon never starts one.
+  That is enforced. What is NOT enforced is **attendance**: once a run is started
+  it continues until Abandon — a Call-CQ run works answerers, and under ADR 0059
+  an auto-work run works callers — with nobody at the desk. Remaining present is
+  the operator's obligation under their own licence.
+  **One presence check IS enforced, and it is narrower than attendance: the FT8
+  view must stay OPEN.** When the last `/v1/ft8/events` subscriber goes away past
+  the linger window, `Service.onLingerExpired` calls `disarmTx` — dropping PTT and
+  abandoning any active QSO — before releasing the capture device
+  (`internal/ft8/service.go:398–429`, which calls this the "attended-only
+  guarantee"). So: walking away with the browser open does not stop a run; closing
+  the browser does. Say that, rather than either "attended-only" (overstates —
+  nothing checks for a human) or "runs unattended" (understates — it dies with the
+  tab).
 
 - **"Design our own sequencing/timing" — future thinking (flagged 2026-06-12).**
   Operator wants to revisit, later, whether SM grows its own sequencing/timing

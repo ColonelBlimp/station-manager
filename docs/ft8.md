@@ -109,7 +109,7 @@ on any PUT):
   in the slot (clear the loud signals first). Both are operator-writable from the
   logging SPA's **FT8 Settings tab → Call CQ → Answer** (First answerer / Strongest
   signal), surfaced over `/v1/config` as `ft8_caller_answer_mode`; the wire surface
-  only ever carries those two attended auto modes. Default `auto_first`;
+  only ever carries those two auto answer modes. Default `auto_first`;
   empty/invalid → the default. The third literal `"operator_pick"` is a
   **config.json-only** value, **superseded by the SPA pile-up stack** and **rejected**
   at Call-CQ start (501 `ft8_caller_mode_unsupported`) — the SPA dropdown never offers
@@ -578,8 +578,10 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
 
 SM operates **ARRL Field Day** over FT8 in **both directions** — search & pounce (answer
 a `CQ FD`) and as the sought-after station (work a caller who calls you in FD). It does
-**NOT** call `CQ FD` (no FD run/caller-CQ side) and stays **attended** (operator clicks
-each contact). FD is a distinct FT8 message type (`i3=0`/`n3=3,4`) carrying **class +
+**NOT** call `CQ FD` (no FD run/caller-CQ side), and every FD contact starts from an
+**operator click** — including under the ADR 0059 auto-work run, which cannot pick up an
+FD caller: `pickAnswererLocked` accepts only `msgGrid`, and an FD exchange parses as
+`msgFdExchange`/`msgFdRExchange` (`caller_sequencer.go:390`, `sequence.go:120–126`). FD is a distinct FT8 message type (`i3=0`/`n3=3,4`) carrying **class +
 ARRL/RAC section** instead of grid/report — go-ft8 v0.4.0's packer handles the encode and
 decode, so the encode/modulate seam is unchanged (offline round-trip proof:
 `TestFieldDay_RoundTrip`). Your own class/section come from config (`ft8.field_day`);
@@ -641,7 +643,9 @@ nonstandard call and reduces the *other* call to a 12-bit **hash** rendered `<..
 the type tag there is room only for `{blank, RRR, RR73, 73}` — **no grid and no signal
 report on the wire** (a fixed-payload consequence, QEX Jul/Aug 2020 §type-4). So the
 standard grid→report→73 ladder is unencodable for a type-4 partner; SM runs a **reduced
-ladder** instead: **bare-calls → RR73 → 73**, no grid/report. Attended-only; the exception
+ladder** instead: **bare-calls → RR73 → 73**, no grid/report. Operator-click only — a
+type-4 partner is never picked up by an auto-work run either, since `pickAnswererLocked`
+accepts only `msgGrid` and type-4 carries no grid at all; the exception
 is `/P`, which packs *standard* and already walks the normal ladder (`/R` packs nonstandard
 but go-ft8 cannot yet decode it, so SM does not offer it — it would key a frame the far end
 can't read back).
@@ -916,7 +920,7 @@ a clear offset is obvious at a glance. But the pick is the **operator's**: the
 strip is best-effort **guidance**, not a hard gate — SM does
 **not** refuse or snap an *overlapping* selection. A daemon-side overlap-admission
 gate was considered (review 2026-06-16 H1) and deliberately left out; enforcement
-would fight the attended-operation model. The daemon DOES, however, reject an
+would fight the model in which the offset is the operator's to choose. The daemon DOES, however, reject an
 offset that is **non-finite or outside the usable passband** at send time (review
 2026-06-19 M1) — a hardware-safety sanity bound, distinct from overlap admission:
 a station may transmit where it overlaps another, but never where the tone can't
@@ -1011,10 +1015,12 @@ sending.
 
 ## 5. Transmit roadmap (ADR 0029)
 
-Daemon-owned TX, **operator-initiated and attended** (a human starts each QSO; the
-CQ→73 rungs then auto-advance within that QSO). **Automatic/unattended sequencing
-is out of scope and unsupported — the QEX FT8 specification forbids automatic
-operation.** Reusing the ADR 0027 guaranteed-stop
+Daemon-owned TX, **operator-initiated** — a human starts every RUN (the click plus
+arming TX), and the rungs then auto-advance. Note "run", not "QSO": under `auto_first`
+Call-CQ and the ADR 0059 auto-work run, subsequent contacts within a started run are
+picked up without a further click. **Daemon-initiated sequencing is out of scope and
+unsupported — the QEX FT8 specification forbids automatic operation.** SM does not
+enforce attendance — the precise claim is stated under §"Step (e) sequencer — design". Reusing the ADR 0027 guaranteed-stop
 discipline — `tx_on`/`tx_off` are never `exposed`, only the TX controller keys
 the rig. Build order is **RX-safe first**; RF first enters at (d) — (a)–(c) are
 audio-only / offline.
@@ -1272,12 +1278,18 @@ read by the e2 resolver. Step (e) breaks into increments:
   captured once and reused for an entire Call-CQ pile-up, so it logged a stale/wrong
   band when the QSO started before the rig's frequency poll had landed (seen on the
   IC-7300). The bridge is always on frequency, so reading it at completion is correct.
-- **Automatic / unattended sequencing is OUT OF SCOPE and NOT SUPPORTED.** The FT8
+- **Daemon-initiated sequencing is OUT OF SCOPE and NOT SUPPORTED.** The FT8
   protocol forbids automatic operation (per the QEX FT8 protocol specification),
   and unattended operation is illegal without a special licence in many
-  jurisdictions. SM therefore supports **only operator-initiated (attended)** FT8:
-  every contact is started by a human — answer-a-CQ (click a CQ) and call-CQ
-  (press Call CQ). There is no daemon-initiated auto-answer mode.
+  jurisdictions. SM therefore supports **only operator-initiated** FT8: every RUN
+  is started by a human — answer-a-CQ (click a CQ), work-a-caller (click a caller),
+  and call-CQ (press Call CQ). Nothing starts a run that the operator did not.
+  **Per CONTACT is a weaker claim, and was overstated here until 2026-07-30:**
+  `auto_first`/`auto_strongest` Call-CQ work each answerer, and an ADR 0059
+  auto-work run works each caller, with no further click. What is guaranteed is
+  that the RUN was deliberate, not that every contact in it was.
+  **The one enforced presence check is the OPEN VIEW, not the operator** — see the
+  linger disarm below.
 
 **Scope order: answering a CQ first, then calling CQ** (calling CQ adds
 multi-answerer management).
@@ -1288,16 +1300,32 @@ the operator's judgement is *whom to work* (the click) + arming TX, and rung
 advance is mechanical — so within a QSO the rungs **auto-advance** (the daemon
 walks the ladder via the e2 resolver; the operator intervenes only to
 retry/abandon). i.e. **manual = operator-initiated-per-QSO with automatic rung
-advance** — the operator initiates every QSO (the click + arming TX) and the daemon
-initiates none. A daemon-*initiated* mode would be automatic/unattended operation,
+advance** — on the manual paths (answer-a-CQ, work-a-caller) the operator initiates
+every QSO with the click; on a RUN (Call-CQ, ADR 0059 auto-work) the click starts the
+run and subsequent contacts follow from it. Either way the daemon initiates nothing on
+its own. A daemon-*initiated* mode would be automatic/unattended operation,
 which is **out of scope and unsupported** — the QEX FT8 specification forbids
 automatic operation (see above).
 
 Stated precisely, because the looser phrasing overclaimed: SM does not ENFORCE
-attendance. A Call-CQ run keeps working answerers until Abandon, so an operator can
-start one and walk away and nothing stops it. What SM guarantees is that the run had
+attendance. A Call-CQ run keeps working answerers until Abandon, and an ADR 0059
+auto-work run keeps working callers until Abandon, so an operator can start either and
+walk away from the desk and nothing stops it. What SM guarantees is that the run had
 to be started deliberately; remaining at the rig is the operator's obligation under
-their licence, not a property the software checks (operator, 2026-07-27). Per-rung confirm
+their licence, not a property the software checks (operator, 2026-07-27).
+
+**But one presence check IS enforced, and the phrase "nothing stops it" is wrong
+without it (found 2026-07-30, grepping the tree rather than trusting this
+paragraph): the FT8 VIEW must stay open.** When the last `/v1/ft8/events` subscriber
+goes away past `captureLinger`, `Service.onLingerExpired` calls `disarmTx(false)` —
+dropping PTT and abandoning any active QSO — and only then releases the capture
+device; the disarm is deliberately NOT gated on `capturing`, so it still runs when
+the capture loop has already died (`internal/ft8/service.go:398–429`, 2026-07-25
+review). The code calls this the "attended-only guarantee", which is where the
+over-broad word entered the docs: what it enforces is an open SSE subscription, not
+a human. **So the accurate statement has two halves** — walking away with the
+browser open does not stop a run; closing the browser stops it after the linger. A
+reconnect inside the linger window keeps the session and re-arms TX. Per-rung confirm
 was rejected (the 15 s cadence makes it frantic; the Arm-TX gate already provides
 the deliberate-consent safety). Off-ramps: stop after N unanswered repeats; never
 auto-start a fresh CQ cycle; abort on operator action; never auto-switch targets.
@@ -1342,7 +1370,7 @@ and loops the pile-up until Abandon (`CallerExchange` + `onSlotCalling` +
 2026-06-17** (ADR 0033 amendment): Ctrl+click calling-you decodes onto an SPA-owned FIFO
 that drains via the work-a-caller path — the operator-curated alternative to
 `auto_first`, superseding the daemon `operator_pick` Call-CQ mode.
-**Automatic/unattended sequencing is out of scope and unsupported — the QEX FT8
+**Daemon-initiated sequencing is out of scope and unsupported — the QEX FT8
 specification forbids automatic operation.**
 
 `go-ft8`'s `EncodeStandardMessage` covers standard structured messages, **including
