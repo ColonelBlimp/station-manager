@@ -151,10 +151,15 @@ func (s *Service) openMeterGapWindow() {
 //
 // `at` is passed in rather than read here because the write call does not return
 // at the moment PTT drops: on CI-V it waits for the rig's acknowledgement, so
-// sealing on return would fold the whole ACK latency into the transmission. The
-// caller therefore takes the instant before issuing the write and seals with it
-// only once the write has succeeded — a failed write leaves TX armed for the
-// backstop, and freezing then would freeze a transmission still in progress.
+// sealing on return would fold the whole ACK latency into the transmission.
+//
+// Sealing happens BEFORE the write is issued, not after it succeeds, and the
+// difference is a defect that survived two rounds of review. The seal is what
+// makes noteMeterGap stop accepting frames; while it was applied afterwards, a
+// receive-time frame landing mid-write recorded a gap spanning the unkey and no
+// later sealing could remove it, because this function only computes the TRAILING
+// gap and never revisits the running maximum. An unkey that fails to write is
+// undone by unsealMeterGapWindow.
 //
 // PTT is down from here, but the transmission is not closed for some time yet:
 // the release path waits for unkey confirmation (up to confirmTimeout + 1 s),
@@ -175,6 +180,23 @@ func (s *Service) sealMeterGapWindow(at time.Time) {
 	}
 	s.meterGapKeyedFor = at.Sub(s.meterGapWindowAt)
 	s.meterGapSealed = true
+}
+
+// unsealMeterGapWindow resumes measurement after an unkey that failed to write.
+// Caller holds s.mu.
+//
+// The transmission is NOT over in that case — TX stays armed and the auto-off
+// backstop retries — so the window must keep measuring, and the retry seals it
+// again with its own instant.
+//
+// meterGapMax deliberately keeps whatever the seal folded in: the silence from the
+// last frame up to the attempted unkey genuinely occurred while the rig was keyed.
+// Frames pushed during the failed write are lost to the measurement, which errs
+// towards reporting MORE silence than there was — the safe direction for an
+// instrument hunting for silence, and the rig may well still have been keyed.
+func (s *Service) unsealMeterGapWindow() {
+	s.meterGapKeyedFor = 0
+	s.meterGapSealed = false
 }
 
 // closeMeterGapWindow ends measurement. Caller holds s.mu. Called from

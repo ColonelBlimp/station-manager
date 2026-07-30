@@ -345,6 +345,81 @@ func TestMeterGap_SlowUnkeyWriteDoesNotInflateWindow(t *testing.T) {
 	}
 }
 
+// G11 — a meter push arriving DURING the unkey write must not enlarge the gap
+// either. This is the seam between G9 and G10 and it survived both: G9's push
+// lands after the write returns, G10 slows the write but sends no push, and the
+// interval in between — PTT down, ACK not yet received, window not yet sealed —
+// was still accepting frames. A push at t2 recorded t2 minus the last in-window
+// push permanently, and sealing afterwards with the earlier instant could not
+// remove it, because sealing only computes a TRAILING gap (negative by then) and
+// never revisits the running maximum.
+//
+// Stopping at the cutoff instant is what the rule needs, not stopping once the
+// seal has been recorded.
+func TestMeterGap_PushDuringUnkeyWriteDoesNotEnlargeGap(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	rxMeterFlowing(t, s)
+
+	keyedTestSlot(t, s)
+	feedMeterFor(t, s, "RM0118000", 50*time.Millisecond)
+
+	// The unkey write blocks, and the receive stream comes back in the middle of
+	// it — exactly what a CI-V ACK wait looks like from the meter's side.
+	fake.onWrite = func(w []byte) []byte {
+		if string(w) == "TX0;" {
+			time.Sleep(200 * time.Millisecond)
+			s.observeMeter(meterFrame(t, "RM0118000"))
+			time.Sleep(200 * time.Millisecond)
+		}
+		return nil
+	}
+
+	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
+		t.Fatalf("UnkeyFt8Tx: %v", err)
+	}
+
+	sum := s.lastFt8TxMeters()
+	if !sum.GapMeasured {
+		t.Fatal("no gap measured across a real unkey")
+	}
+	if sum.GapMax > 150*time.Millisecond {
+		t.Errorf("gap_max = %v; a push arriving while the unkey write was in flight was counted as a drive gap", sum.GapMax)
+	}
+}
+
+// G12 — an unkey whose write FAILS must not end the measurement. Sealing before
+// the write creates this state: TX stays armed, the auto-off backstop retries, and
+// the rig may still be transmitting — which is precisely when the operator needs
+// the drive measurement to keep running. A window frozen at the failed attempt
+// would report a transmission that was still in progress as finished.
+func TestMeterGap_FailedUnkeyWriteResumesMeasurement(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	rxMeterFlowing(t, s)
+
+	keyedTestSlot(t, s)
+	feedMeterFor(t, s, "RM0118000", 50*time.Millisecond)
+
+	_ = fake.Close() // the tx-off write now returns ErrClosed
+	if err := s.UnkeyFt8Tx(context.Background()); err == nil {
+		t.Fatal("UnkeyFt8Tx reported success on a dead port; the fixture proves nothing")
+	}
+
+	// Still keyed as far as the bridge knows, so the window is still open.
+	time.Sleep(150 * time.Millisecond)
+	s.finishFt8Tx()
+
+	sum := s.lastFt8TxMeters()
+	if !sum.GapMeasured {
+		t.Fatal("no gap measured after a failed unkey")
+	}
+	if sum.KeyedFor < 150*time.Millisecond {
+		t.Errorf("keyed_ms = %v; the window froze at the FAILED unkey attempt, but the transmission ran on for ~200ms after it",
+			sum.KeyedFor)
+	}
+}
+
 // G7 — a transmission whose window never opened reports NO gap rather than a
 // fabricated one. The window opens after the key write, so a failed or bypassed
 // key leaves it closed; a zero timestamp subtracted from now would print a gap of
