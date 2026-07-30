@@ -16,6 +16,7 @@ function qso(over: Partial<Ft8QsoStatus> = {}): Ft8QsoStatus {
         maxRepeats: 0,
         skipArmed: false,
         nextArmed: false,
+        autoWorkArmed: false,
         ourReport: '',
         theirReport: '',
         theirPeriod: '',

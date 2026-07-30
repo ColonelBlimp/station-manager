@@ -402,6 +402,24 @@
                 {:else}
                     <div class="text-sm text-muted">No active contact</div>
                 {/if}
+                <!-- An armed auto-work run keys the rig at whoever calls next, and
+                     between contacts it renders the same "No active contact" view as a
+                     stopped station. Shown while ACTIVE too: the run is live
+                     throughout, and a badge that vanished during each contact would
+                     read as the run having ended. -->
+                {#if qso.autoWorkArmed}
+                    <div
+                        class="mt-1.5 inline-flex items-center gap-x-1.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-bold text-amber-600 uppercase"
+                        data-testid="auto-work-armed"
+                    >
+                        <span class="size-1.5 rounded-full bg-amber-500"></span>
+                        Auto-work armed
+                    </div>
+                    <div class="mt-1 text-[11px] text-muted">
+                        The next station calling you is worked without a click. Abandon stops the
+                        run.
+                    </div>
+                {/if}
             </div>
         </div>
 

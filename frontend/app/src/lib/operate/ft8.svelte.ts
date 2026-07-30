@@ -72,6 +72,10 @@ export interface Ft8QsoStatus {
      *  from skipArmed — that one ends the session on a SILENT cycle; this one fires
      *  on a station that transmits but never advances. */
     nextArmed: boolean;
+    /** An auto-work-callers run is live: the next station calling us is worked with
+     *  no click. True on IDLE frames too, which is the point — armed-and-waiting and
+     *  stopped are otherwise the same "no active contact" view (ADR 0059). */
+    autoWorkArmed: boolean;
     ourReport: string;
     theirReport: string;
     theirPeriod: string;
@@ -96,6 +100,7 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     maxRepeats: 0,
     skipArmed: false,
     nextArmed: false,
+    autoWorkArmed: false,
     ourReport: '',
     theirReport: '',
     theirPeriod: '',
@@ -734,6 +739,7 @@ export const ft8Link: Ft8EventHandlers = {
             repeats: p.repeats ?? 0,
             skipArmed: p.skip_armed ?? false,
             nextArmed: p.next_armed ?? false,
+            autoWorkArmed: p.auto_work_armed ?? false,
             maxRepeats: p.max_repeats ?? 0,
             ourReport: p.our_report ?? '',
             theirReport: p.their_report ?? '',

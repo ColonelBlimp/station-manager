@@ -77,6 +77,11 @@ export interface QsoPayload {
     skip_armed?: boolean;
     /** Pending Call-CQ Next: park this answerer at the next slot evaluation. */
     next_armed?: boolean;
+    /** An auto-work-callers run is live (ADR 0059): the next station to call us is
+     *  worked with no operator action. Carried on IDLE frames too — that is the
+     *  state the operator cannot otherwise see, since an armed run between contacts
+     *  looks exactly like a finished one. */
+    auto_work_armed?: boolean;
     our_report?: string;
     their_report?: string;
     their_period?: string;
