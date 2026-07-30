@@ -313,6 +313,10 @@ type Service struct {
 	// the recovery report answer a standing alarm rather than firing every slot.
 	driveWatchArmed    bool
 	driveAlarmStanding bool
+	// driveSawKeyedMeter records that the meter spoke INSIDE the keyed window, which
+	// is the only positive evidence this transmission produced about output. Scoped
+	// to the gap window, so it means keyed-time and not receive-time.
+	driveSawKeyedMeter bool
 
 	// Gap measurement over the keyed window — the instrument that answers whether
 	// absent drive reliably leaves a silence wider than driveSilence (finding 1 of

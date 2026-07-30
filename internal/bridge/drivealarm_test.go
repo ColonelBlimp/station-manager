@@ -605,3 +605,133 @@ func TestDriveAlarm_RecoveryLeavesTxSafetyStateAlone(t *testing.T) {
 		t.Errorf("recovery published %d tx-alarm events; want 0", n)
 	}
 }
+
+// E7 — a transmission the detector could not JUDGE is not evidence of health.
+// Arming proves only that a meter frame arrived while RECEIVING; it says nothing
+// about the keyed window. A transmission ended before the silence threshold could
+// elapse, with no keyed-time frames at all, therefore never alarms — and reporting
+// recovery from it would tell the operator "the meter reported output on a later
+// transmission" when the meter reported nothing whatever. That is the same claim
+// the banner's S8 rule forbids, in the recovery half.
+func TestDriveAlarm_TransmissionTooShortToJudgeIsNotRecovery(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 }, "no drive alarm raised")
+	s.finishFt8Tx()
+
+	// Armed (receive-time frames flowed), but unkeyed at once: no keyed-time frame
+	// arrived and the window is far shorter than the silence threshold.
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
+		t.Fatalf("UnkeyFt8Tx: %v", err)
+	}
+
+	time.Sleep(4 * silence) // settle before asserting absence (the D8 pattern)
+
+	for _, p := range w.drivePayloads() {
+		if !p.Active {
+			t.Errorf("recovery published from a transmission too short to judge, with no keyed-time meter frame: %+v",
+				w.drivePayloads())
+		}
+	}
+}
+
+// E8 — an owed recovery SURVIVES a pipeline teardown. The banner does: the SPA's
+// onRigDisconnected only moves rig.cat to 'lost', and nothing clears the drive
+// alarm (resetCatLink is a test seam with no production caller — a comment here
+// once claimed otherwise). So a transient rig disconnect between the alarm and the
+// next healthy transmission must not leave the operator with a banner that can
+// never be answered.
+func TestDriveAlarm_OwedRecoverySurvivesPipelineTeardown(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 }, "no drive alarm raised")
+	s.finishFt8Tx()
+
+	s.resetMeterObservation() // the rig dropped and the supervisor reconnected
+
+	healthySlot(t, s, silence)
+
+	waitFor(t, func() bool { return len(w.drivePayloads()) >= 2 },
+		"no recovery after a healthy transmission following a reconnect; the owed report was forgotten at teardown")
+}
+
+// setDriveSilence changes the threshold on a live service under the lock, so a
+// test can neutralise ONE conjunct of the recovery decision and isolate another.
+// Unlike shortDriveSilence this is safe mid-transmission: armDriveWatch,
+// checkDriveSilence and takeDriveRecoveryLocked all read the field under s.mu.
+func setDriveSilence(s *Service, d time.Duration) {
+	s.mu.Lock()
+	s.driveSilence = d
+	s.mu.Unlock()
+}
+
+// E7b — isolates the KEYED-TIME EVIDENCE conjunct. E7 exercises the real-world
+// shape, where the window is also too short, so either guard alone would catch it
+// and neither is pinned. Here the window guard is deliberately neutralised at the
+// unkey, leaving the keyed-frame requirement as the only thing that can refuse:
+// the meter said nothing whatever while the rig was keyed, so "the meter reported
+// output on a later transmission" would be a claim about a measurement that was
+// never taken.
+//
+// Done by moving the threshold rather than by racing the alarm timer against the
+// end of the transmission — that race is the other way this state is reachable in
+// production, and it is not something a test can hit reliably.
+func TestDriveAlarm_NoKeyedMeterFrameIsNotRecovery(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 }, "no drive alarm raised")
+	s.finishFt8Tx()
+
+	// A threshold long enough that this slot cannot alarm, and no keyed-time frames.
+	setDriveSilence(s, 30*time.Second)
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	time.Sleep(4 * silence)
+
+	// Neutralise the window-length conjunct: the window now comfortably exceeds the
+	// threshold, so only the keyed-frame requirement stands between this and a false
+	// recovery.
+	setDriveSilence(s, time.Millisecond)
+
+	// And a frame arriving AFTER the unkey, during the restore tail — the receive
+	// stream coming back. It must not count as keyed-time evidence, which pins WHERE
+	// the flag is set: inside the gap window (which no-ops once sealed) and not on
+	// every meter push.
+	s.mu.Lock()
+	s.ft8TxRestoreMode = "USB"
+	s.tuneRestoreSettle = 300 * time.Millisecond
+	s.mu.Unlock()
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		s.observeMeter(meterFrame(t, "RM0118000"))
+	}()
+
+	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
+		t.Fatalf("UnkeyFt8Tx: %v", err)
+	}
+	time.Sleep(4 * silence) // settle before asserting absence
+
+	for _, p := range w.drivePayloads() {
+		if !p.Active {
+			t.Errorf("recovery published from a transmission in which the meter never spoke while keyed: %+v",
+				w.drivePayloads())
+		}
+	}
+}

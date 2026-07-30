@@ -152,6 +152,7 @@ func (s *Service) openMeterGapWindow() {
 	s.meterGapMax = 0
 	s.meterGapKeyedFor = 0
 	s.meterGapSealed = false
+	s.driveSawKeyedMeter = false
 }
 
 // sealMeterGapWindow freezes the measurement at `at`, the instant tx_off was
@@ -231,6 +232,9 @@ func (s *Service) noteMeterGap(now time.Time) {
 	if s.meterGapWindowAt.IsZero() || s.meterGapSealed {
 		return
 	}
+	// The one piece of POSITIVE evidence about this transmission: the meter spoke
+	// while the rig was keyed. Arming proves only that it spoke while receiving.
+	s.driveSawKeyedMeter = true
 	if gap := now.Sub(s.meterGapLastAt); gap > s.meterGapMax {
 		s.meterGapMax = gap
 	}
@@ -320,6 +324,21 @@ func (s *Service) checkDriveSilence(gen uint64) {
 // health, however it ended.
 func (s *Service) takeDriveRecoveryLocked() bool {
 	if !s.driveAlarmStanding || !s.driveWatchArmed || s.driveAlarmed {
+		return false
+	}
+	// The banner will say the meter REPORTED OUTPUT on a later transmission, so
+	// require exactly that and nothing weaker. Arming is evidence about the RECEIVE
+	// stream; on its own it would let a transmission where the meter said nothing at
+	// all be reported as proof of health.
+	if !s.driveSawKeyedMeter {
+		return false
+	}
+	// And the window must have been long enough for silence to be detectable at
+	// all. In a shorter one "no silence exceeded the threshold" is trivially true
+	// and establishes nothing — an operator abandoning a slot early would otherwise
+	// clear a standing alarm by accident.
+	measured, _, keyedFor := s.meterGapAtUnkey()
+	if !measured || keyedFor < s.driveSilence {
 		return false
 	}
 	s.driveAlarmStanding = false

@@ -377,10 +377,12 @@ func (s *Service) resetMeterObservation() {
 	// armed, so the previous instance's instrument-alive evidence must not carry
 	// over into the next transmission's drive check (drivealarm.go).
 	s.meterSeenSinceTx = false
-	// The owed recovery report dies with the pipeline too. The SPA clears its drive
-	// alarm on rig-disconnected (resetCatLink), so a recovery published after the
-	// reconnect would answer a banner that is no longer on screen.
-	s.driveAlarmStanding = false
+	// driveAlarmStanding deliberately SURVIVES this reset. An earlier version cleared
+	// it here, claiming the SPA drops its drive banner on rig-disconnected — it does
+	// not: onRigDisconnected only moves rig.cat to 'lost', and resetCatLink is a test
+	// seam with no production caller. The banner outlives a transient disconnect, so
+	// the recovery owed to it has to as well, or the operator is left with a warning
+	// nothing can ever answer.
 }
 
 // meterSelection reports which meter the rig's pushed RM0 value represents,
