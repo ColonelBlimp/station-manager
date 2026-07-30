@@ -59,21 +59,12 @@ func (s *Sequencer) StartWorkCaller(ourCall, theirCall, theirGrid string, theirS
 		s.mu.Unlock()
 		return ErrQsoInProgress
 	}
-	s.mode = seqWorking
-	s.skipIfSilent = false
-	s.sessionGen++
-	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
-	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
-	s.caller = &c
-	s.ourCall = call
-	s.theirPeriod = SlotRefFromTime(t).Period
-	s.offsetHz = offsetHz
-	s.dialFreqMHz = dialFreqMHz
-	s.startedAt = now.UTC()
-	s.repeats = 0
-	st := s.statusLocked()
+	s.commitWorkCallerLocked(&c, call, SlotRefFromTime(t).Period, offsetHz, dialFreqMHz, now)
+	// An operator-started session is what arms an auto-work run (ADR 0059) — the
+	// policy alone never does, which is what keeps every run headed by an operator
+	// action (autowork_test.go W5).
+	s.armAutoWorkLocked(call, offsetHz, dialFreqMHz)
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
-	s.publish(st)
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("their_call", c.TheirCall).Str("their_period", theirPeriod).
@@ -452,4 +443,66 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 		}
 	}
 	s.publishCurrent()
+}
+
+// commitWorkCallerLocked activates a work-a-caller session. Caller holds s.mu and has
+// already established that no session is running.
+//
+// Factored out of StartWorkCaller so the auto-work run (ADR 0059) starts contacts
+// through the SAME transition instead of a second copy of it. Four session paths had
+// already drifted into three different versions of this before retireSessionLocked
+// unified the endings; a hand-copied START would reintroduce exactly that.
+//
+// The status is published while the lock is still held (invariant 3): publishing after
+// the unlock lets a replacement session publish ACTIVE first and be overwritten by this
+// frame.
+func (s *Sequencer) commitWorkCallerLocked(c *CallerExchange, call, theirPeriod string, offsetHz, dialFreqMHz float64, now time.Time) {
+	s.mode = seqWorking
+	s.skipIfSilent = false
+	s.sessionGen++
+	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
+	s.caller = c
+	s.ourCall = call
+	s.theirPeriod = theirPeriod
+	s.offsetHz = offsetHz
+	s.dialFreqMHz = dialFreqMHz
+	s.startedAt = now.UTC()
+	s.repeats = 0
+	s.publish(s.statusLocked())
+}
+
+// onSlotIdleArmed works the next station calling us for an armed auto-work run
+// (ADR 0059). Caller does not hold s.mu.
+//
+// Selection is pickAnswererLocked — the Call-CQ side's matcher, not a second one, so
+// auto_first / auto_strongest, the stalled-call exclusion and the unencodable-caller
+// skip all behave identically here (autowork_test.go W8).
+//
+// Everything the new session needs is taken from the RUN, pinned when the operator
+// started it: our callsign, the TX offset and the dial. Re-reading the dial here would
+// be the ADR 0057 mistake — a contact must be pinned to the frequency the operator
+// armed on, which is also why a dial change ends the run rather than silently moving it.
+func (s *Sequencer) onSlotIdleArmed(ref SlotRef, msgs []goft8.DecodedMessage, now time.Time) {
+	s.mu.Lock()
+	if s.mode != seqIdle || !s.autoWorkArmed {
+		s.mu.Unlock()
+		return
+	}
+	// pickAnswererLocked matches against these two, so the run supplies them: after a
+	// completion the previous session's identity is gone.
+	s.ourCall = s.autoWorkCall
+	s.answerMode = s.autoWorkMode
+	pick, text := s.pickAnswererLocked(msgs)
+	if pick == nil {
+		s.mu.Unlock()
+		return // armed and waiting — nobody is calling this slot
+	}
+	s.commitWorkCallerLocked(pick, s.autoWorkCall, ref.Period, s.autoWorkOffsetHz, s.autoWorkDialMHz, now)
+	theirCall := pick.TheirCall
+	s.mu.Unlock()
+
+	s.log.InfoWith().Str("their_call", theirCall).Str("heard", text).
+		Str("answer_mode", s.autoWorkMode).Msg("ft8 seq: auto-work run picked up a caller")
+	s.fireOpening(now)
 }

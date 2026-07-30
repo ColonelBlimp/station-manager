@@ -291,6 +291,11 @@ type Sequencer struct {
 	autoWorkPolicy bool
 	autoWorkMode   string
 	autoWorkArmed  bool
+	// Pinned when the run arms, from the operator's own session: a later contact must
+	// use the frequency and offset the operator chose, never a live re-read.
+	autoWorkCall     string
+	autoWorkOffsetHz float64
+	autoWorkDialMHz  float64
 	// stalledCalls accumulates the answerers abandoned at the repeat cap since the
 	// current CQ round began. pickAnswererLocked skips them, so a handful of stations
 	// that keep repeating their grid can't be re-selected in rotation and starve the
@@ -595,6 +600,10 @@ func (s *Sequencer) abandonLocked() (bool, string) {
 	s.t4Work = nil
 	s.caller = nil
 	s.confirmHold = nil
+	// Abandon stops the RUN, not just the contact (ADR 0059, autowork_test.go W6).
+	// Leaving it armed would make Abandon look like it worked and then key the rig
+	// again on the next caller.
+	s.autoWorkArmed = false
 	s.repeats = 0
 	s.skipIfSilent = false
 	s.nextArmed = false
@@ -862,7 +871,9 @@ func (s *Sequencer) OnSlot(ref SlotRef, msgs []goft8.DecodedMessage, now time.Ti
 	case seqWorkingT4:
 		s.onSlotWorkingT4(ref, msgs, now)
 	default:
-		// seqIdle — no active session; nothing to drive this slot.
+		// seqIdle — no session to drive. An armed auto-work run picks the next caller
+		// up here (ADR 0059); with no run this stays the no-op it has always been.
+		s.onSlotIdleArmed(ref, msgs, now)
 	}
 }
 
@@ -1597,4 +1608,18 @@ func (s *Sequencer) AutoWorkArmed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.autoWorkArmed
+}
+
+// armAutoWorkLocked arms an auto-work run if the policy allows one, pinning what a
+// later contact will need. Caller holds s.mu; called from the operator-started session
+// paths only — that is the whole mechanism by which every run is headed by an operator
+// action (ADR 0059).
+func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64) {
+	if !s.autoWorkPolicy {
+		return
+	}
+	s.autoWorkArmed = true
+	s.autoWorkCall = call
+	s.autoWorkOffsetHz = offsetHz
+	s.autoWorkDialMHz = dialFreqMHz
 }
