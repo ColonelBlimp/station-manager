@@ -152,6 +152,12 @@ type QsoStatus struct {
 	// NextArmed — the operator pressed Next on a Call-CQ contact: park this answerer
 	// at the next slot evaluation and carry on with the run.
 	NextArmed bool `json:"next_armed,omitempty"`
+	// AutoWorkArmed — an auto-work-callers run is live (ADR 0059): the next station
+	// to call us will be worked WITHOUT an operator action. Carried on IDLE frames
+	// too, unlike the fields above, because that is the whole point of it: an armed
+	// run between contacts is indistinguishable from a finished one, and only one of
+	// them keys the rig when somebody calls.
+	AutoWorkArmed bool `json:"auto_work_armed,omitempty"`
 	// MaxRepeats — the unanswered-rung repeat cap, set ONLY while the current rung is
 	// actually subject to it (an answerer pre-73, or a caller working an answerer
 	// pre-RR73). Zero (omitted) on the uncapped rungs (calling CQ) and the one-shot
@@ -579,15 +585,22 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 // disarm, or off-ramp). Idempotent.
 func (s *Sequencer) Abandon() {
 	s.mu.Lock()
+	// An armed auto-work run is a thing Abandon STOPS even with no contact in
+	// progress, and stopping it has to be published or it happens invisibly: the
+	// operator presses Abandon between contacts, no frame changes, and the indicator
+	// stays lit on a station that is now inert (ADR 0059, autowork_test.go V2).
+	hadRun := s.autoWorkArmed
 	was, reason := s.abandonLocked()
-	if was {
+	if was || hadRun {
 		// Terminal publish under the lock, so a replacement Start* cannot commit and
 		// publish ACTIVE first only to be overwritten by this idle (finalrung.go).
-		s.publish(QsoStatus{Active: false, EndReason: reason})
+		s.publish(s.terminalStatusLocked(reason))
 	}
 	s.mu.Unlock()
 	if was {
 		s.log.InfoWith().Str("reason", reason).Msg("ft8 seq: session abandoned")
+	} else if hadRun {
+		s.log.InfoWith().Msg("ft8 seq: auto-work run stopped")
 	}
 }
 
@@ -741,7 +754,7 @@ func (s *Sequencer) AbandonIfCurrent(gen uint64, reason string) bool {
 		// and this delayed idle then overwrites it — the hub caches idle for a live
 		// session, stranding the operator without session controls (codex P1 on
 		// a76f1f61; the same hazard as 3c1ee047 / a301d350).
-		s.publish(QsoStatus{Active: false, EndReason: reason})
+		s.publish(s.terminalStatusLocked(reason))
 	}
 	s.mu.Unlock()
 	if was {
@@ -1391,6 +1404,11 @@ func (s *Sequencer) statusLocked() QsoStatus {
 		// Session-pinned, not live rig state — see QsoStatus.DialFreqMHz.
 		st.DialFreqMHz = s.dialFreqMHz
 	}
+	// OUTSIDE the Active branch deliberately: the frame that matters is the IDLE one
+	// after a contact ends with the run still live. Setting it only while active
+	// would publish it exactly when the operator can already see a ladder, and omit
+	// it exactly when they cannot tell armed from stopped.
+	st.AutoWorkArmed = s.autoWorkArmed
 	return st
 }
 
@@ -1629,4 +1647,17 @@ func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64
 	s.autoWorkCall = call
 	s.autoWorkOffsetHz = offsetHz
 	s.autoWorkDialMHz = dialFreqMHz
+}
+
+// terminalStatusLocked builds the frame published when a session ends. Caller holds
+// s.mu.
+//
+// A terminal frame is deliberately minimal — the session is over, so the ladder
+// fields carry nothing — but it must still say whether an auto-work RUN is live,
+// because that is precisely the state the operator cannot otherwise see:
+// idle-and-armed and idle-and-stopped are the same frame without it (ADR 0059).
+// Built in ONE place so a fourth way of ending a session cannot quietly omit it, the
+// way the three existing ones each hand-rolled their own frame.
+func (s *Sequencer) terminalStatusLocked(reason string) QsoStatus {
+	return QsoStatus{Active: false, EndReason: reason, AutoWorkArmed: s.autoWorkArmed}
 }

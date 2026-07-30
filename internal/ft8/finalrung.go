@@ -122,7 +122,7 @@ func (s *Sequencer) retireSessionLocked(clear func()) {
 	s.nextArmed = false
 	reason := s.pendingEndReason
 	s.pendingEndReason = ""
-	s.publish(QsoStatus{Active: false, EndReason: reason})
+	s.publish(s.terminalStatusLocked(reason))
 }
 
 func (s *Sequencer) finalRungDoneLocked(c CompletedQso, clear func(), sentMsg, unsentMsg string) func(bool) {

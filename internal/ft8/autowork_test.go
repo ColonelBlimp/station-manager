@@ -387,3 +387,71 @@ func TestAutoWork_OperatorRetuneStopsTheRun(t *testing.T) {
 	require.NoError(t, s.StopForRetune())
 	require.False(t, s.seq.AutoWorkArmed())
 }
+
+// --- VISIBILITY (the criterion's third clause) -------------------------------
+
+// V1 — THE FRAME THAT MATTERS. When a contact ends with the run still live, the
+// published status says so: not active, but armed. Without it the operator sees the
+// same "no session" frame whether the station is finished or about to transmit at
+// whoever calls next.
+func TestAutoWork_IdleStatusReportsAnArmedRun(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	autoWorkRun(t, s, "auto_first")
+
+	st := r.lastStatus()
+	require.False(t, st.Active, "the contact has ended")
+	require.True(t, st.AutoWorkArmed, "...but the run has not, and the frame must say so")
+}
+
+// V2 — and STOPPED is the other value, on an otherwise identical frame. V1 alone
+// would pass on an implementation that always reported armed.
+func TestAutoWork_IdleStatusReportsAStoppedRun(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	autoWorkRun(t, s, "auto_first")
+	require.True(t, r.lastStatus().AutoWorkArmed, "fixture: armed before the abandon")
+
+	s.Abandon()
+
+	st := r.lastStatus()
+	require.False(t, st.Active)
+	require.False(t, st.AutoWorkArmed, "Abandon stopped the run and the frame must say so")
+}
+
+// V3 — with the knob off no frame ever claims an armed run, so the indicator cannot
+// appear on a station that will never auto-work anyone.
+func TestAutoWork_StatusNeverClaimsArmedWithTheKnobOff(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	s.SetAutoWorkCallers(false, "auto_first")
+	require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC FN42", -12)})
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC R-08", -11)})
+
+	r.mu.Lock()
+	published := append([]QsoStatus(nil), r.statuses...)
+	r.mu.Unlock()
+	require.NotEmpty(t, published, "fixture: the session must have published something")
+	for _, st := range published {
+		require.False(t, st.AutoWorkArmed, "no frame may claim a run that cannot exist")
+	}
+}
+
+// V4 — an ACTIVE frame from a run also reports the run. Not decoration: without it
+// the flag is true on the idle frame, false for the whole of the next contact, and
+// true again afterwards, so the operator's indicator blinks off exactly while the run
+// is doing the thing it exists to do. The run is live throughout; the frames must say
+// so throughout.
+func TestAutoWork_ActiveStatusAlsoReportsTheRun(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	autoWorkRun(t, s, "auto_first")
+
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
+
+	st := r.lastStatus()
+	require.True(t, st.Active, "fixture: the run picked a caller up")
+	require.True(t, st.AutoWorkArmed, "the run is still live while working its contact")
+}
