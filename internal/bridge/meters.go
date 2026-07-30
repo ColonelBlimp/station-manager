@@ -4,8 +4,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 
 // Per-transmission rig-meter observation (follow-up (d)).
@@ -113,6 +115,16 @@ type meterSample struct {
 type ft8MeterSummary struct {
 	Present bool
 	Samples []meterSample
+
+	// GapMax is the widest silence in the meter stream inside the keyed window,
+	// and KeyedFor is that window's length. GapMeasured distinguishes "no silence"
+	// from "never measured" — a transmission that never went through the key path
+	// has no window, and reporting a zero-time-based span for it would print a gap
+	// of decades. See metergap_test.go for why the window is key-down through
+	// unkey rather than frame-to-frame.
+	GapMeasured bool
+	GapMax      time.Duration
+	KeyedFor    time.Duration
 }
 
 // observeMeter consumes a decoded meter push. Two SEPARATE layers, and the
@@ -216,6 +228,7 @@ func (s *Service) flushFt8TxMeters() ft8MeterSummary {
 // transmission that had already ended.
 func (s *Service) flushFt8TxMetersLocked() ft8MeterSummary {
 	sum := ft8MeterSummary{Present: true}
+	sum.GapMeasured, sum.GapMax, sum.KeyedFor = s.meterGapAtUnkey()
 	for _, tag := range meterTags {
 		// A tag may have several samples when the selection changed during the
 		// transmission. Sorted by Sel so the summary is deterministic rather than
@@ -254,10 +267,15 @@ func (s *Service) logFt8TxMeters(sum ft8MeterSummary) {
 		return
 	}
 	if len(sum.Samples) == 0 {
-		s.logger.InfoWith().Msg("bridge: ft8 tx meters — rig pushed no meter data for this transmission")
+		// Still carries the gap fields: a transmission with no frames at all is the
+		// most severe reading this instrument can take, and was the shape of 12 of
+		// the sweep's 24 transmissions. A bare "no meter data" line here would go
+		// blank exactly where the measurement matters.
+		withMeterGap(s.logger.InfoWith(), sum).
+			Msg("bridge: ft8 tx meters — rig pushed no meter data for this transmission")
 		return
 	}
-	e := s.logger.InfoWith()
+	e := withMeterGap(s.logger.InfoWith(), sum)
 	names := make([]string, 0, len(sum.Samples))
 	for _, m := range sum.Samples {
 		k := meterFieldPrefix(m)
@@ -268,6 +286,25 @@ func (s *Service) logFt8TxMeters(sum ft8MeterSummary) {
 	// is never mistaken for watts.
 	e.Str("meters", strings.Join(names, ",")).
 		Msg("bridge: ft8 tx meters (raw 0-255 scale)")
+}
+
+// withMeterGap attaches the keyed window's gap fields, in milliseconds because
+// that is the scale the numbers are read against — driveSilence is 3 s and a
+// healthy inter-frame gap is tens of milliseconds.
+//
+// ONE shared path for both log branches (readings and no-readings) on purpose:
+// the fields are asserted through the summary struct rather than the log output,
+// since this package has no log capture, so a second copy of this emit is exactly
+// where the two branches could silently diverge.
+//
+// Absent when nothing was measured. A zero would read as "no silence at all",
+// which is the opposite of the truth for a transmission that never keyed.
+func withMeterGap(e logging.LogEvent, sum ft8MeterSummary) logging.LogEvent {
+	if !sum.GapMeasured {
+		return e
+	}
+	return e.Int("gap_max_ms", int(sum.GapMax.Milliseconds())).
+		Int("keyed_ms", int(sum.KeyedFor.Milliseconds()))
 }
 
 // meterReading is one meter's most recent value, on the rig's raw 0-255 scale.

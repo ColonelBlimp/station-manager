@@ -307,6 +307,17 @@ type Service struct {
 	driveSilence     time.Duration
 	driveTimer       *time.Timer
 
+	// Gap measurement over the keyed window — the instrument that answers whether
+	// absent drive reliably leaves a silence wider than driveSilence (finding 1 of
+	// 2026-07-30). Shares the detector's window exactly, opened and closed by
+	// armDriveWatch/disarmDriveWatch: a measurement of a DIFFERENT window than the
+	// one being judged would be worse than none. meterGapWindowAt zero means no
+	// window is open, which is how a transmission that never keyed is kept from
+	// reporting a gap measured against the zero time.
+	meterGapWindowAt time.Time
+	meterGapLastAt   time.Time
+	meterGapMax      time.Duration
+
 	// TX-uncertainty + stuck-TX alarm state (ADR 0051, all mu-guarded except
 	// where noted). txUncertain: an unkey (or possibly-keyed failed write) has
 	// not been positively confirmed — the rig MAY be transmitting; key paths

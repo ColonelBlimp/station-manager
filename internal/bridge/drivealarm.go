@@ -87,6 +87,11 @@ type DriveAlarmPayload struct {
 // against the next one.
 func (s *Service) armDriveWatch(gen uint64) {
 	s.driveAlarmed = false
+	// The gap measurement opens BEFORE the instrument-alive check, so it keeps
+	// running on exactly the transmissions where the detector declines to act. Its
+	// whole purpose is telling a dead instrument from dead drive, so switching it
+	// off with the alarm would blind it where it is needed (metergap_test.go G6).
+	s.openMeterGapWindow()
 	// No evidence the instrument is alive: do not arm. Silence then means
 	// nothing, and an alarm would misattribute a broken instrument (dead CAT
 	// link, AI mode not armed, a rig that does not push RM) to a dead
@@ -109,6 +114,7 @@ func (s *Service) disarmDriveWatch() {
 		s.driveTimer = nil
 	}
 	s.driveAlarmed = false
+	s.closeMeterGapWindow()
 	// The next transmission must earn its own instrument-alive evidence. A link
 	// that dies mid-session would otherwise stay "known good" for the rest of the
 	// session and alarm on every subsequent transmission.
@@ -120,7 +126,66 @@ func (s *Service) disarmDriveWatch() {
 // count — they are the evidence the instrument is alive.
 func (s *Service) noteMeterPush() {
 	s.meterSeenSinceTx = true
-	s.driveLastMeterAt = time.Now()
+	now := time.Now()
+	s.noteMeterGap(now)
+	s.driveLastMeterAt = now
+}
+
+// openMeterGapWindow starts gap measurement for one transmission. Caller holds
+// s.mu.
+//
+// The first interval is measured from the KEY, not from the first frame, so drive
+// that never comes up at all is measurable rather than undefined — the same
+// reason driveLastMeterAt is seeded here.
+func (s *Service) openMeterGapWindow() {
+	now := time.Now()
+	s.meterGapWindowAt = now
+	s.meterGapLastAt = now
+	s.meterGapMax = 0
+}
+
+// closeMeterGapWindow ends measurement. Caller holds s.mu. Called from
+// disarmDriveWatch, which runs after the summary has been flushed, so the flush
+// still sees the window it is reporting on.
+func (s *Service) closeMeterGapWindow() {
+	s.meterGapWindowAt = time.Time{}
+	s.meterGapLastAt = time.Time{}
+	s.meterGapMax = 0
+}
+
+// noteMeterGap folds one push into the widest-silence measurement. Caller holds
+// s.mu. A no-op outside a keyed window: receive-time pushes are what proves the
+// instrument alive, but they are not part of any transmission's window.
+func (s *Service) noteMeterGap(now time.Time) {
+	if s.meterGapWindowAt.IsZero() {
+		return
+	}
+	if gap := now.Sub(s.meterGapLastAt); gap > s.meterGapMax {
+		s.meterGapMax = gap
+	}
+	s.meterGapLastAt = now
+}
+
+// meterGapAtUnkey reports the transmission's window length and widest silence,
+// including the trailing silence up to this instant. Caller holds s.mu.
+//
+// The tail counts because the detector would have tripped on it: a stream that
+// stops with 6 s of the slot left is the collapse this exists to measure, and
+// ending the measurement at the last frame would report it as healthy.
+//
+// Both spans come from ONE reading of the clock, so a totally silent transmission
+// reports a silence exactly equal to its window rather than two values that
+// disagree by a scheduling delay.
+func (s *Service) meterGapAtUnkey() (measured bool, gapMax, keyedFor time.Duration) {
+	if s.meterGapWindowAt.IsZero() {
+		return false, 0, 0
+	}
+	now := time.Now()
+	gapMax = s.meterGapMax
+	if tail := now.Sub(s.meterGapLastAt); tail > gapMax {
+		gapMax = tail
+	}
+	return true, gapMax, now.Sub(s.meterGapWindowAt)
 }
 
 // checkDriveSilence is the idle-timeout callback: alarm if the stream has been
