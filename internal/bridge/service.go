@@ -314,9 +314,15 @@ type Service struct {
 	// one being judged would be worse than none. meterGapWindowAt zero means no
 	// window is open, which is how a transmission that never keyed is kept from
 	// reporting a gap measured against the zero time.
+	// meterGapSealed freezes the result at the tx_off write, because the release
+	// path then waits for confirmation, settles and restores mode with PTT already
+	// down — counting that would inflate a healthy transmission's widest silence
+	// past the very threshold it is measured against.
 	meterGapWindowAt time.Time
 	meterGapLastAt   time.Time
 	meterGapMax      time.Duration
+	meterGapKeyedFor time.Duration
+	meterGapSealed   bool
 
 	// TX-uncertainty + stuck-TX alarm state (ADR 0051, all mu-guarded except
 	// where noted). txUncertain: an unkey (or possibly-keyed failed write) has

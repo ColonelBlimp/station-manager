@@ -288,6 +288,12 @@ func (s *Service) releaseFt8TxChecked(ctx context.Context, reason string, wantGe
 			Msg("bridge: ft8 tx-off write failed; backstop will retry")
 		return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-off")
 	}
+	// The meter-gap measurement ends HERE, not at finishFt8Tx: PTT is down, and
+	// everything below (confirmation wait, settle, mode restore) is dead air that
+	// would otherwise be reported as part of the keyed window (metergap_test.go G8).
+	s.mu.Lock()
+	s.sealMeterGapWindow()
+	s.mu.Unlock()
 	// ADR 0051 confirm-or-alarm: CI-V's awaited ACK above IS positive
 	// confirmation; a fire-and-forget write is only write-acceptance, so enter
 	// the uncertainty cycle (status query → confirmed idle, or the tx-alarm).

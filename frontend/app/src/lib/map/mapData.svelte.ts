@@ -19,7 +19,13 @@ import { fetchQsoPage, type LogbookQso, type QsoPageOutcome } from '../api/logbo
 import { openLogEvents, type QsoEventPayload } from '../api/log-events';
 import { fetchStationContext } from '../api/seams';
 import { storageGet, storageSet } from '../utils/storage';
-import { gridToDecimal, haversineKm, calculateBearing } from '../utils/bearing';
+import {
+    gridToCell,
+    gridToDecimal,
+    haversineKm,
+    calculateBearing,
+    type GridCell,
+} from '../utils/bearing';
 import { normalizeBand } from './bandColors';
 import type { LatLon } from './engine';
 
@@ -81,14 +87,57 @@ export function qsoEpochMs(qsoDate?: string, timeOn?: string): number | null {
     );
 }
 
-/** Far-end coordinates: enrichment decimal lat/lon first, else the
- *  gridsquare's cell centre, else null (unplottable). parseFloat rejects
- *  import-era ADIF Location strings ("N051 30.000") → grid fallback. */
+/** Coordinates that disagree with their own grid, warned about once each —
+ *  rowPoint runs per row on every windowed refresh, so an unguarded warning
+ *  would repeat for the life of the tab. */
+// A plain Set, not SvelteSet: nothing renders from this and nothing should. It
+// exists only to keep a console warning from repeating, so making it reactive
+// would invite re-renders driven by a logging detail.
+// eslint-disable-next-line svelte/prefer-svelte-reactivity
+const gridConflictSeen = new Set<string>();
+
+/** Whether a coordinate pair falls inside the cell its locator declares.
+ *  Inclusive at the edges: the operator chose no margin, so the boundary
+ *  belongs to the cell rather than to a band of invented tolerance. */
+function agreesWithCell(lat: number, lon: number, cell: GridCell): boolean {
+    return (
+        Math.abs(lat - cell.lat) <= cell.latSpan / 2 &&
+        Math.abs(lon - cell.lon) <= cell.lonSpan / 2
+    );
+}
+
+/** Far-end coordinates: enrichment decimal lat/lon when it agrees with the
+ *  station's own gridsquare, else the grid's cell centre, else null
+ *  (unplottable). parseFloat rejects import-era ADIF Location strings
+ *  ("N051 30.000") → grid fallback.
+ *
+ *  Coordinates are preferred because they are more precise than a cell, but
+ *  only while they are consistent with it. QRZ returns lat/lon and grid as
+ *  independent fields and storage merges them independently, so a station can
+ *  carry a correct grid beside coordinates for somewhere else entirely: two rows
+ *  of the newest 500 in the dogfood log drew arcs to the South Pole that way.
+ *  Trusting the grid in that case loses precision the coordinates never had.
+ *
+ *  With NO usable grid the coordinates are used as given, however odd they look.
+ *  There is nothing to contradict them, and a plausibility rule would relocate
+ *  stations on a guess — a worse fault than the one this avoids, because nothing
+ *  would show it had happened. */
 export function rowPoint(q: LogbookQso): LatLon | null {
     const lat = Number.parseFloat(q.lat ?? '');
     const lon = Number.parseFloat(q.lon ?? '');
-    if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon };
-    return gridToDecimal(q.gridsquare ?? '');
+    const cell = gridToCell(q.gridsquare ?? '');
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        return cell === null ? null : { lat: cell.lat, lon: cell.lon };
+    }
+    if (cell === null || agreesWithCell(lat, lon, cell)) return { lat, lon };
+    const key = `${q.call ?? ''}|${q.gridsquare ?? ''}|${q.lat ?? ''}|${q.lon ?? ''}`;
+    if (!gridConflictSeen.has(key)) {
+        gridConflictSeen.add(key);
+        console.warn(
+            `[map-data] ${q.call ?? '(no call)'} coordinates ${lat},${lon} fall outside grid ${q.gridsquare}; plotting the grid`
+        );
+    }
+    return { lat: cell.lat, lon: cell.lon };
 }
 
 /** A page fetcher, injectable so collectWindow tests need no fetch mock. */

@@ -142,6 +142,33 @@ func (s *Service) openMeterGapWindow() {
 	s.meterGapWindowAt = now
 	s.meterGapLastAt = now
 	s.meterGapMax = 0
+	s.meterGapKeyedFor = 0
+	s.meterGapSealed = false
+}
+
+// sealMeterGapWindow freezes the measurement at the instant tx_off is written.
+// Caller holds s.mu.
+//
+// PTT is down from here, but the transmission is not closed for some time yet:
+// the release path waits for unkey confirmation (up to confirmTimeout + 1 s),
+// pauses for the restore settle, and writes the mode restore. Measuring to the
+// close would report that dead air as part of the keyed window — inflating
+// keyed_ms, and inflating the widest silence past the 3 s it is judged against on
+// a transmission that was fine. The number would then be worse than absent,
+// because it would read as evidence.
+//
+// Idempotent, and a no-op with no window open: a second release (operator unkey
+// racing the auto-off backstop) must not re-seal against a later clock.
+func (s *Service) sealMeterGapWindow() {
+	if s.meterGapWindowAt.IsZero() || s.meterGapSealed {
+		return
+	}
+	now := time.Now()
+	if tail := now.Sub(s.meterGapLastAt); tail > s.meterGapMax {
+		s.meterGapMax = tail
+	}
+	s.meterGapKeyedFor = now.Sub(s.meterGapWindowAt)
+	s.meterGapSealed = true
 }
 
 // closeMeterGapWindow ends measurement. Caller holds s.mu. Called from
@@ -151,6 +178,8 @@ func (s *Service) closeMeterGapWindow() {
 	s.meterGapWindowAt = time.Time{}
 	s.meterGapLastAt = time.Time{}
 	s.meterGapMax = 0
+	s.meterGapKeyedFor = 0
+	s.meterGapSealed = false
 }
 
 // noteMeterGap folds one push into the widest-silence measurement. Caller holds
@@ -167,11 +196,16 @@ func (s *Service) noteMeterGap(now time.Time) {
 }
 
 // meterGapAtUnkey reports the transmission's window length and widest silence,
-// including the trailing silence up to this instant. Caller holds s.mu.
+// including the trailing silence up to unkey. Caller holds s.mu.
 //
 // The tail counts because the detector would have tripped on it: a stream that
 // stops with 6 s of the slot left is the collapse this exists to measure, and
 // ending the measurement at the last frame would report it as healthy.
+//
+// A sealed window returns the frozen result — see sealMeterGapWindow. Falling
+// through to the clock is for the paths that reach the close WITHOUT writing
+// tx_off: a rig that vanished mid-transmission took PTT with it, and "now" is
+// then the honest end of the window.
 //
 // Both spans come from ONE reading of the clock, so a totally silent transmission
 // reports a silence exactly equal to its window rather than two values that
@@ -179,6 +213,9 @@ func (s *Service) noteMeterGap(now time.Time) {
 func (s *Service) meterGapAtUnkey() (measured bool, gapMax, keyedFor time.Duration) {
 	if s.meterGapWindowAt.IsZero() {
 		return false, 0, 0
+	}
+	if s.meterGapSealed {
+		return true, s.meterGapMax, s.meterGapKeyedFor
 	}
 	now := time.Now()
 	gapMax = s.meterGapMax

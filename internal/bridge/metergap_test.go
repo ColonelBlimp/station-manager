@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -30,6 +31,13 @@ import (
 // that definition would report nothing precisely where the answer lives. Both the
 // LEADING silence (G4) and the TRAILING silence (G3) therefore count, because
 // both are silences the detector would have tripped on.
+//
+// "UNKEY" MEANS THE tx_off WRITE, NOT THE END OF THE TRANSMISSION, and the first
+// implementation got that wrong — it measured to finishFt8Tx, which the release
+// path reaches only after the confirmation wait, the settle and the mode restore,
+// all with PTT already down. Those two instants read as the same thing and are
+// seconds apart, and the error inflated the very quantity being measured. G8 pins
+// the distinction; the rules that call finishFt8Tx directly cannot see it.
 //
 // NO THRESHOLD IS INVENTED HERE. A gap is a measurement; the 3 s it will be
 // compared against is already the operator's number. What the data may later
@@ -209,6 +217,49 @@ func TestMeterGap_MeasuredEvenWhenDetectorDidNotArm(t *testing.T) {
 	}
 	if n := w.count(EventDriveAlarm); n != 0 {
 		t.Errorf("drive alarm fired %d time(s) with no instrument-alive evidence; the measurement must not have armed the detector", n)
+	}
+}
+
+// G8 — THE WINDOW ENDS WHEN tx_off IS WRITTEN, not when the release path
+// finishes. Production unkeys, then waits for confirmation (up to confirmTimeout
+// + 1 s), then settles, then writes the mode restore, and only then closes the
+// transmission. PTT is down for all of that, so counting it inflates keyed_ms and
+// — the part that actually matters — can push gap_max past the operator's 3 s on a
+// perfectly healthy transmission, purely because confirmation was slow. A
+// measurement that corrupts the number it exists to produce is worse than none.
+//
+// The other rules call finishFt8Tx directly and cannot see this: they never
+// exercise the release sequence.
+func TestMeterGap_WindowEndsAtUnkeyNotAtRestore(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	rxMeterFlowing(t, s)
+
+	keyedTestSlot(t, s)
+	feedMeterFor(t, s, "RM0118000", 50*time.Millisecond)
+
+	// Production's post-unkey tail: a mode to restore and a settle before it.
+	// Nothing feeds meter frames during it, so it is 200ms of pure silence that
+	// must NOT be attributed to the transmission.
+	s.mu.Lock()
+	s.ft8TxRestoreMode = "USB"
+	s.tuneRestoreSettle = 200 * time.Millisecond
+	s.mu.Unlock()
+
+	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
+		t.Fatalf("UnkeyFt8Tx: %v", err)
+	}
+
+	sum := s.lastFt8TxMeters()
+	if !sum.GapMeasured {
+		t.Fatal("no gap measured across a real unkey")
+	}
+	if sum.KeyedFor > 150*time.Millisecond {
+		t.Errorf("keyed_ms = %v for a ~50ms transmission with a 200ms post-unkey tail; the window is running past the unkey write",
+			sum.KeyedFor)
+	}
+	if sum.GapMax > 100*time.Millisecond {
+		t.Errorf("gap_max = %v; the post-unkey silence is being reported as a drive gap", sum.GapMax)
 	}
 }
 

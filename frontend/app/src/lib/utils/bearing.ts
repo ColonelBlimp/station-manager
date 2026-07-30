@@ -49,12 +49,25 @@ export interface PathInfo {
     longPathDistanceMiles: number;
 }
 
+export interface GridCell extends DecimalCoords {
+    /** Cell height in degrees of latitude: 1° at 4 chars, 2.5′ at 6, 0.25′ at 8. */
+    latSpan: number;
+    /** Cell width in degrees of longitude: 2° at 4 chars, 5′ at 6, 0.5′ at 8. */
+    lonSpan: number;
+}
+
 /**
- * Convert a Maidenhead locator (4 / 6 / 8 chars) to the decimal
- * lat/lon at the cell's centre. Returns `null` for empty or invalid
- * input.
+ * Convert a Maidenhead locator (4 / 6 / 8 chars) to its cell — centre
+ * plus the cell's extent, which is what a locator actually declares.
+ * Returns `null` for empty or invalid input.
+ *
+ * The extent was always computed here to place the centre; it is
+ * returned because a consumer needs to know whether some other
+ * coordinate pair falls inside the locator the station claims. That
+ * makes "these coordinates contradict this grid" answerable from the
+ * data's own precision rather than from a chosen distance.
  */
-export function gridToDecimal(grid: string): DecimalCoords | null {
+export function gridToCell(grid: string): GridCell | null {
     const trimmed = grid.trim().toUpperCase();
     if (trimmed === '' || isValidMaidenhead(trimmed) !== null) {
         return null;
@@ -84,7 +97,17 @@ export function gridToDecimal(grid: string): DecimalCoords | null {
     lon += cellLon / 2.0;
     lat += cellLat / 2.0;
 
-    return { lat, lon };
+    return { lat, lon, latSpan: cellLat, lonSpan: cellLon };
+}
+
+/**
+ * The cell centre alone, for callers that only need a point. Returns a
+ * fresh two-field object rather than the cell, so callers comparing
+ * with deep equality are unaffected by the extent fields.
+ */
+export function gridToDecimal(grid: string): DecimalCoords | null {
+    const cell = gridToCell(grid);
+    return cell === null ? null : { lat: cell.lat, lon: cell.lon };
 }
 
 /**
