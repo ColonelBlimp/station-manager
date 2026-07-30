@@ -677,18 +677,18 @@ func setDriveSilence(s *Service, d time.Duration) {
 	s.mu.Unlock()
 }
 
-// E7b — isolates the KEYED-TIME EVIDENCE conjunct. E7 exercises the real-world
-// shape, where the window is also too short, so either guard alone would catch it
-// and neither is pinned. Here the window guard is deliberately neutralised at the
-// unkey, leaving the keyed-frame requirement as the only thing that can refuse:
-// the meter said nothing whatever while the rig was keyed, so "the meter reported
-// output on a later transmission" would be a claim about a measurement that was
-// never taken.
+// E9 — a transmission whose MEASURED widest silence reached the threshold is not
+// recovery, even when the alarm timer never got to fire. The two are different
+// things: checkDriveSilence takes s.mu on entry, so if finishFt8Tx wins that lock
+// the callback finds the transmission already over and returns without alarming.
+// Resting recovery on "the timer did not fire" therefore reports output normal for
+// a slot that contained exactly the silence being hunted. The frozen gap
+// measurement is the evidence, and it is not subject to that race.
 //
-// Done by moving the threshold rather than by racing the alarm timer against the
-// end of the transmission — that race is the other way this state is reachable in
-// production, and it is not something a test can hit reliably.
-func TestDriveAlarm_NoKeyedMeterFrameIsNotRecovery(t *testing.T) {
+// The threshold is moved rather than the race being run, so the rule is pinned
+// deterministically: a large silence while keyed means no timer fires, and lowering
+// it before the unkey makes the already-measured gap exceed it.
+func TestDriveAlarm_MeasuredSilenceAtThresholdIsNotRecovery(t *testing.T) {
 	s, fake := newCommandTestService(t)
 	silence := shortDriveSilence(s)
 	t.Cleanup(answerTxStatusQueries(s, fake))
@@ -699,30 +699,16 @@ func TestDriveAlarm_NoKeyedMeterFrameIsNotRecovery(t *testing.T) {
 	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 }, "no drive alarm raised")
 	s.finishFt8Tx()
 
-	// A threshold long enough that this slot cannot alarm, and no keyed-time frames.
+	// A threshold too long to fire, so this slot cannot alarm however silent it is.
 	setDriveSilence(s, 30*time.Second)
 	rxMeterFlowing(t, s)
 	keyedTestSlot(t, s)
-	time.Sleep(4 * silence)
+	s.observeMeter(meterFrame(t, "RM0118000")) // one keyed-time frame...
+	time.Sleep(4 * silence)                    // ...then silence for the rest of it
 
-	// Neutralise the window-length conjunct: the window now comfortably exceeds the
-	// threshold, so only the keyed-frame requirement stands between this and a false
-	// recovery.
-	setDriveSilence(s, time.Millisecond)
-
-	// And a frame arriving AFTER the unkey, during the restore tail — the receive
-	// stream coming back. It must not count as keyed-time evidence, which pins WHERE
-	// the flag is set: inside the gap window (which no-ops once sealed) and not on
-	// every meter push.
-	s.mu.Lock()
-	s.ft8TxRestoreMode = "USB"
-	s.tuneRestoreSettle = 300 * time.Millisecond
-	s.mu.Unlock()
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		s.observeMeter(meterFrame(t, "RM0118000"))
-	}()
-
+	// Now the measured gap exceeds the threshold, while the window is still long
+	// enough and no alarm ever fired: only the gap measurement can refuse this.
+	setDriveSilence(s, 2*silence)
 	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
 		t.Fatalf("UnkeyFt8Tx: %v", err)
 	}
@@ -730,7 +716,7 @@ func TestDriveAlarm_NoKeyedMeterFrameIsNotRecovery(t *testing.T) {
 
 	for _, p := range w.drivePayloads() {
 		if !p.Active {
-			t.Errorf("recovery published from a transmission in which the meter never spoke while keyed: %+v",
+			t.Errorf("recovery published for a transmission whose measured silence reached the threshold: %+v",
 				w.drivePayloads())
 		}
 	}

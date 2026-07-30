@@ -152,7 +152,6 @@ func (s *Service) openMeterGapWindow() {
 	s.meterGapMax = 0
 	s.meterGapKeyedFor = 0
 	s.meterGapSealed = false
-	s.driveSawKeyedMeter = false
 }
 
 // sealMeterGapWindow freezes the measurement at `at`, the instant tx_off was
@@ -232,9 +231,6 @@ func (s *Service) noteMeterGap(now time.Time) {
 	if s.meterGapWindowAt.IsZero() || s.meterGapSealed {
 		return
 	}
-	// The one piece of POSITIVE evidence about this transmission: the meter spoke
-	// while the rig was keyed. Arming proves only that it spoke while receiving.
-	s.driveSawKeyedMeter = true
 	if gap := now.Sub(s.meterGapLastAt); gap > s.meterGapMax {
 		s.meterGapMax = gap
 	}
@@ -326,19 +322,25 @@ func (s *Service) takeDriveRecoveryLocked() bool {
 	if !s.driveAlarmStanding || !s.driveWatchArmed || s.driveAlarmed {
 		return false
 	}
-	// The banner will say the meter REPORTED OUTPUT on a later transmission, so
-	// require exactly that and nothing weaker. Arming is evidence about the RECEIVE
-	// stream; on its own it would let a transmission where the meter said nothing at
-	// all be reported as proof of health.
-	if !s.driveSawKeyedMeter {
-		return false
-	}
-	// And the window must have been long enough for silence to be detectable at
-	// all. In a shorter one "no silence exceeded the threshold" is trivially true
-	// and establishes nothing — an operator abandoning a slot early would otherwise
-	// clear a standing alarm by accident.
-	measured, _, keyedFor := s.meterGapAtUnkey()
-	if !measured || keyedFor < s.driveSilence {
+	// THE MEASUREMENT DECIDES, not whether the alarm timer got to run. Those come
+	// apart: checkDriveSilence takes s.mu on entry, so when finishFt8Tx wins that
+	// lock the callback finds the transmission already over and returns without
+	// alarming — leaving driveAlarmed false for a slot that contained exactly the
+	// silence being hunted. The frozen gap is immune to that race and is the direct
+	// evidence for what the banner will claim.
+	//
+	// Two conditions, each doing work the other cannot:
+	//
+	//   - the window must be at least as long as the threshold, because in a shorter
+	//     one "no silence reached the threshold" is trivially true and establishes
+	//     nothing; an operator abandoning a slot early would otherwise clear a
+	//     standing alarm by accident.
+	//   - the widest silence in it must be under the threshold, which is the actual
+	//     claim. It also subsumes a keyed-time-observation check: with no frames at
+	//     all the widest gap IS the whole window, so it cannot be under a threshold
+	//     the window is at least as long as.
+	measured, gapMax, keyedFor := s.meterGapAtUnkey()
+	if !measured || keyedFor < s.driveSilence || gapMax >= s.driveSilence {
 		return false
 	}
 	s.driveAlarmStanding = false
