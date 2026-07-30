@@ -6,6 +6,9 @@ import (
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 /*
@@ -244,4 +247,38 @@ func TestAutoWork_AnsweringACqArmsTheRun(t *testing.T) {
 	require.True(t, s.Active(), "the run must pick the caller up")
 	require.NotNil(t, s.caller)
 	require.Equal(t, "DL9UW", s.caller.TheirCall)
+}
+
+// W10 — THE CONFIG KNOB REACHES THE SEQUENCER. Every rule above sets the policy by
+// hand, so none of them would notice the feature being unreachable in production —
+// which is exactly what a review found after two commits that each looked complete.
+// This one starts from config alone.
+func TestAutoWork_ConfigKnobArmsARealService(t *testing.T) {
+	s := newService(types.Ft8Config{
+		Enabled: true,
+		TX:      &types.Ft8TXConfig{AutoWorkCallers: true},
+	}, logging.Noop(), nil)
+
+	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	require.True(t, s.seq.AutoWorkArmed(),
+		"the ft8.tx.auto_work_callers knob must arm a run without a test reaching in")
+}
+
+// W11 — with the knob on but selection set to operator_pick, NO run is armed. That
+// mode promises the operator chooses; a run under it would either pick nobody or
+// break the promise, and either way reporting it as armed is the false-advertisement
+// failure invariant 7 exists to prevent.
+func TestAutoWork_OperatorPickDoesNotArmARun(t *testing.T) {
+	s := newService(types.Ft8Config{
+		Enabled: true,
+		TX: &types.Ft8TXConfig{
+			AutoWorkCallers:  true,
+			CallerAnswerMode: types.Ft8CallerAnswerOperatorPick,
+		},
+	}, logging.Noop(), nil)
+
+	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	require.False(t, s.seq.AutoWorkArmed(), "operator_pick must not arm an automatic run")
 }
