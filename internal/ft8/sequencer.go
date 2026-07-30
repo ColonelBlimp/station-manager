@@ -282,6 +282,15 @@ type Sequencer struct {
 	ourGrid    string
 	cqMessage  string
 	answerMode string
+
+	// Auto-work-callers run (ADR 0059). autoWorkPolicy is the config knob;
+	// autoWorkArmed is a RUN, set only by an operator-started session and cleared by
+	// Abandon and the other stop conditions. The two are separate because the policy
+	// alone must never work a caller — that would make the daemon initiate a session,
+	// which internal/ft8/CLAUDE.md forbids (autowork_test.go W5).
+	autoWorkPolicy bool
+	autoWorkMode   string
+	autoWorkArmed  bool
 	// stalledCalls accumulates the answerers abandoned at the repeat cap since the
 	// current CQ round began. pickAnswererLocked skips them, so a handful of stations
 	// that keep repeating their grid can't be re-selected in rotation and starve the
@@ -1569,4 +1578,23 @@ func (s *Sequencer) completedQsoLocked() CompletedQso {
 		OffsetHz:       s.offsetHz,
 		DialFreqMHz:    s.dialFreqMHz,
 	}
+}
+
+// SetAutoWorkCallers installs the auto-work-callers policy (ADR 0059) and the
+// answerer-selection mode it should use. Setting the policy does NOT start a run:
+// only an operator-started session arms one.
+func (s *Sequencer) SetAutoWorkCallers(on bool, mode string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.autoWorkPolicy = on
+	s.autoWorkMode = mode
+}
+
+// AutoWorkArmed reports whether a run is armed and waiting for the next caller —
+// the state that is otherwise indistinguishable from stopped, because neither has a
+// contact in progress and only one of them will key the rig.
+func (s *Sequencer) AutoWorkArmed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.autoWorkArmed
 }
