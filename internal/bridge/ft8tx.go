@@ -283,6 +283,9 @@ func (s *Service) releaseFt8TxChecked(ctx context.Context, reason string, wantGe
 	// reported as unkeyed (that would cancel the auto-off backstop and strand
 	// PTT) — the error keeps TX armed so the backstop retries. Yaesu/Kenwood is
 	// the unchanged fire-and-forget write.
+	// Taken BEFORE the write: on CI-V writeKeyedLine waits for the rig's ACK, so it
+	// returns well after PTT dropped (metergap_test.go G10).
+	unkeyAt := time.Now()
 	if err := s.writeKeyedLine(ctx, def, cl, unkey, "ft8 tx-off"); err != nil {
 		s.logger.ErrorWith().Err(err).Str("reason", reason).
 			Msg("bridge: ft8 tx-off write failed; backstop will retry")
@@ -291,8 +294,10 @@ func (s *Service) releaseFt8TxChecked(ctx context.Context, reason string, wantGe
 	// The meter-gap measurement ends HERE, not at finishFt8Tx: PTT is down, and
 	// everything below (confirmation wait, settle, mode restore) is dead air that
 	// would otherwise be reported as part of the keyed window (metergap_test.go G8).
+	// Sealed only after the write SUCCEEDED — a failed write leaves TX armed for the
+	// backstop, so that transmission is not over.
 	s.mu.Lock()
-	s.sealMeterGapWindow()
+	s.sealMeterGapWindow(unkeyAt)
 	s.mu.Unlock()
 	// ADR 0051 confirm-or-alarm: CI-V's awaited ACK above IS positive
 	// confirmation; a fire-and-forget write is only write-acceptance, so enter

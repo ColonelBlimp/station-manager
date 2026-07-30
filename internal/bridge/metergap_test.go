@@ -263,6 +263,88 @@ func TestMeterGap_WindowEndsAtUnkeyNotAtRestore(t *testing.T) {
 	}
 }
 
+// G9 — SEALED MEANS FROZEN. Meter frames keep arriving after the unkey — the rig
+// resumes pushing the S-meter in receive at ~26 Hz — and they must not enlarge
+// the sealed maximum. The first implementation stored the window length at the
+// seal but went on reading the running maximum live, so every transmission in
+// production would have had the TX→RX lull folded into its widest silence, and a
+// rig that fell quiet during the confirmation wait would have contributed the
+// whole of it. G8 could not see this: nothing feeds frames after its unkey, so
+// the sealed and unsealed paths agree there.
+func TestMeterGap_SealedResultIgnoresLaterPushes(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	rxMeterFlowing(t, s)
+
+	keyedTestSlot(t, s)
+	feedMeterFor(t, s, "RM0118000", 50*time.Millisecond)
+
+	// A long post-unkey tail, and one meter frame landing in the middle of it —
+	// the receive stream coming back after a lull far wider than anything inside
+	// the transmission.
+	s.mu.Lock()
+	s.ft8TxRestoreMode = "USB"
+	s.tuneRestoreSettle = 400 * time.Millisecond
+	s.mu.Unlock()
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		s.observeMeter(meterFrame(t, "RM0118000"))
+	}()
+
+	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
+		t.Fatalf("UnkeyFt8Tx: %v", err)
+	}
+
+	sum := s.lastFt8TxMeters()
+	if !sum.GapMeasured {
+		t.Fatal("no gap measured across a real unkey")
+	}
+	if sum.GapMax > 150*time.Millisecond {
+		t.Errorf("gap_max = %v; a push arriving after the seal enlarged the frozen maximum", sum.GapMax)
+	}
+}
+
+// G10 — the window ends when tx_off is ISSUED, not when the write call returns.
+// On CI-V that call waits for the rig's FB/FA acknowledgement before returning,
+// so PTT is already down for the whole of the ACK latency; the same holds for any
+// slow write on any protocol. Measuring from the call's return folds that latency
+// into the transmission. Stated protocol-neutrally, and tested by making the write
+// itself slow, because the defect is about WHEN the instant is taken and not about
+// CI-V.
+func TestMeterGap_SlowUnkeyWriteDoesNotInflateWindow(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	rxMeterFlowing(t, s)
+
+	keyedTestSlot(t, s)
+	feedMeterFor(t, s, "RM0118000", 50*time.Millisecond)
+
+	// The unkey write blocks, modelling an awaited acknowledgement. Only tx_off is
+	// slowed: the key write must stay fast or the fixture would measure that too.
+	fake.onWrite = func(w []byte) []byte {
+		if string(w) == "TX0;" {
+			time.Sleep(200 * time.Millisecond)
+		}
+		return nil
+	}
+
+	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
+		t.Fatalf("UnkeyFt8Tx: %v", err)
+	}
+
+	sum := s.lastFt8TxMeters()
+	if !sum.GapMeasured {
+		t.Fatal("no gap measured across a real unkey")
+	}
+	if sum.KeyedFor > 150*time.Millisecond {
+		t.Errorf("keyed_ms = %v for a ~50ms transmission whose unkey write took 200ms; the instant is taken after the write returns",
+			sum.KeyedFor)
+	}
+	if sum.GapMax > 150*time.Millisecond {
+		t.Errorf("gap_max = %v; the unkey write's own duration is being counted as a drive gap", sum.GapMax)
+	}
+}
+
 // G7 — a transmission whose window never opened reports NO gap rather than a
 // fabricated one. The window opens after the key write, so a failed or bypassed
 // key leaves it closed; a zero timestamp subtracted from now would print a gap of

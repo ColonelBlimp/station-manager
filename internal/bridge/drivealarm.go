@@ -146,8 +146,15 @@ func (s *Service) openMeterGapWindow() {
 	s.meterGapSealed = false
 }
 
-// sealMeterGapWindow freezes the measurement at the instant tx_off is written.
-// Caller holds s.mu.
+// sealMeterGapWindow freezes the measurement at `at`, the instant tx_off was
+// ISSUED. Caller holds s.mu.
+//
+// `at` is passed in rather than read here because the write call does not return
+// at the moment PTT drops: on CI-V it waits for the rig's acknowledgement, so
+// sealing on return would fold the whole ACK latency into the transmission. The
+// caller therefore takes the instant before issuing the write and seals with it
+// only once the write has succeeded — a failed write leaves TX armed for the
+// backstop, and freezing then would freeze a transmission still in progress.
 //
 // PTT is down from here, but the transmission is not closed for some time yet:
 // the release path waits for unkey confirmation (up to confirmTimeout + 1 s),
@@ -159,15 +166,14 @@ func (s *Service) openMeterGapWindow() {
 //
 // Idempotent, and a no-op with no window open: a second release (operator unkey
 // racing the auto-off backstop) must not re-seal against a later clock.
-func (s *Service) sealMeterGapWindow() {
+func (s *Service) sealMeterGapWindow(at time.Time) {
 	if s.meterGapWindowAt.IsZero() || s.meterGapSealed {
 		return
 	}
-	now := time.Now()
-	if tail := now.Sub(s.meterGapLastAt); tail > s.meterGapMax {
+	if tail := at.Sub(s.meterGapLastAt); tail > s.meterGapMax {
 		s.meterGapMax = tail
 	}
-	s.meterGapKeyedFor = now.Sub(s.meterGapWindowAt)
+	s.meterGapKeyedFor = at.Sub(s.meterGapWindowAt)
 	s.meterGapSealed = true
 }
 
@@ -185,8 +191,14 @@ func (s *Service) closeMeterGapWindow() {
 // noteMeterGap folds one push into the widest-silence measurement. Caller holds
 // s.mu. A no-op outside a keyed window: receive-time pushes are what proves the
 // instrument alive, but they are not part of any transmission's window.
+//
+// Also a no-op once SEALED, which is not a detail. The receive stream comes back
+// at ~26 Hz within moments of the unkey, and the window stays open until the
+// release path finishes, so without this every transmission would have the TX→RX
+// lull folded into its widest silence — the frozen result mutating after it was
+// frozen.
 func (s *Service) noteMeterGap(now time.Time) {
-	if s.meterGapWindowAt.IsZero() {
+	if s.meterGapWindowAt.IsZero() || s.meterGapSealed {
 		return
 	}
 	if gap := now.Sub(s.meterGapLastAt); gap > s.meterGapMax {
