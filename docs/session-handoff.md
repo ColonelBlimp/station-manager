@@ -89,14 +89,19 @@ precisely so we don't re-derive state or redo finished work.
 >   header. Related: at operating power `max` was 109 in EVERY state observed, so
 >   the 5 W matrix's `max` thresholds must not be ported upward — `n` carried it
 >   all.
-> - **FINDING 2 — the banner has no time anchor.** A stale alarm is
->   indistinguishable from a fresh one (the operator hit this at ~05:02, three
->   minutes and four healthy slots after the real alarm). Not a code defect — the
->   no-auto-clear is deliberate — but a gap in the criterion, which asked about
->   no-RF vs dead instrument and never about fresh vs stale. Draft criterion and
->   three open judgement calls (absolute vs relative time; whether to show
->   recovery at all; what counts as recovered) are in the inbox, unanswered on
->   purpose.
+> - **FINDING 2 — the banner had no time anchor. BUILT, both halves.** A stale
+>   alarm was indistinguishable from a fresh one (the operator hit this at ~05:02,
+>   three minutes and four healthy slots after the real alarm). Operator's calls:
+>   **absolute time** ("at 05:01:18" — no refresh timer, so it cannot go stale
+>   silently), **show recovery**, **after ONE healthy transmission**. Daemon
+>   publishes recovery as `drive-alarm {active:false}` from `finishFt8Tx`, gated on
+>   a standing alarm + an ARMED watch + no alarm this slot; SPA renders the time
+>   and a recovery clause. **Recovery is NOT a clear** — the banner stays until
+>   dismissed, because a rig whose output came back has still not been looked at;
+>   the SPA handler previously assigned `p.active` straight to `driveAlarmActive`,
+>   which would have made the banner vanish. "Healthy" deliberately means
+>   armed-and-silent, not merely un-alarmed: a transmission that measured nothing
+>   is not evidence of health. 6 daemon rules + 5 SPA rules, all reversion-proved.
 > - **NEW STANDING CONSTRAINT (operator, today): no transmit-path change without
 >   per-instance prior agreement.** Sink 66 level/mute, rig commands, power —
 >   nothing, while the daemon can key the rig. Warning about a problem and ASKING

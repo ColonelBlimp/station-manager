@@ -909,23 +909,35 @@ removing every claim about the rig's key state it also removed every anchor to
 time. The nearest-confusable-state clause was written about no-RF vs dead
 instrument and never asked about **fresh alarm vs stale alarm**.
 
-DRAFT acceptance criterion for the operator to check — *not implemented, and the
-judgement calls are deliberately left open:*
+**BUILT 2026-07-30.** Acceptance criterion, as answered by the operator:
 
 > When the drive alarm has fired and I come back to the screen later, the banner
-> tells me WHEN it fired, and I can tell it apart from an alarm that has just
-> fired for a transmission now in progress.
+> tells me WHEN it fired as a clock time, and once one armed-and-silent
+> transmission has completed it also tells me output has been normal since — and
+> I can tell that apart from an alarm that has just fired for a transmission now
+> in progress. Dismissal stays manual either way.
 
-Open questions that are the operator's call, not to be guessed:
+The three judgement calls and their answers:
 
-1. **Absolute or relative time** — "fired at 05:01:18" or "3 minutes ago"? A
-   relative label needs a refresh cadence; an absolute one needs no timer.
-2. **Should recovery be shown at all** — i.e. a second line once healthy slots
-   have followed ("output has been normal since")? It answers the question that
-   was actually asked, but it softens a banner whose whole point is that it does
-   not clear itself. Dismissal stays manual either way.
-3. **What counts as "recovered"** — one healthy slot, or N? This is exactly the
-   kind of threshold that must not be invented.
+1. **Absolute time** — "at 05:01:18", not "3 minutes ago". A relative label needs
+   a refresh timer and goes stale silently, which is the exact fault being closed.
+2. **Show recovery: yes.** Reported as a second clause on the same banner.
+3. **Recovered after ONE healthy transmission.**
+
+One thing the operator's wording left open, decided and stated rather than
+buried: **"healthy" means the drive watch was ARMED and stayed silent**, not
+merely that no alarm fired. A transmission where the watch never armed — no
+instrument-alive evidence — says nothing about output, so reporting recovery from
+it would claim a measurement never made, the same fault the banner's S8 rule
+exists to prevent.
+
+Mechanism: the daemon owns the recovery signal, because only it can tell a
+healthy FT8 transmission from a tune carrier; the SPA watching `tx-status` go
+1→0 cannot. It rides the existing `drive-alarm` event as `Active=false`, which is
+what that field was reserved for. **It is NOT a clear** — the banner stays until
+dismissed, because a rig whose output came back has still not been looked at.
+That distinction was a live defect: the SPA handler assigned `p.active` straight
+to `driveAlarmActive`, so a recovery would have made the banner vanish.
 
 The states this change would create, each a rule to write BEFORE implementing:
 alarm-raised-and-still-current; alarm-raised-then-recovered; alarm-raised-then-
