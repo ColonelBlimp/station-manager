@@ -818,3 +818,126 @@ down after an earlier volume test.
    future on-air experiment.
 6. **The FT-710 rigdef is untouched.** Its `RM`/`MS` selectors were not verified
    against its own CAT manual and must not be assumed identical to the FTdx10's.
+
+## [2026-07-30] DRIVE ALARM — on-air acceptance PASSED, and two findings that change what it proves
+
+Layer 3 of the ATDD plan, run on the air at operating power (not the 5 W dummy
+load of the sweep) during a live CQ run. Both cases fired; no healthy slot fired.
+Citations are `smd.log` timestamps from 2026-07-30.
+
+| case                              | key-down | alarm    | latency               | n   | clean n |
+|-----------------------------------|----------|----------|-----------------------|-----|---------|
+| collapse mid-slot (muted at ~+6s) | 04:57:15 | 04:57:24 | +9 s = 3 s after last frame | 129 | 327–482 |
+| silent from key-down (muted before) | 05:01:15 | 05:01:18 | **+3 s exactly**      | 35  | ~365    |
+
+Healthy slots either side alarmed nothing: 04:58:58 `n=376`, 04:59:28 `n=349`,
+05:02:28 `n=360`. Two QSOs completed through the run (R2EC KO82, UX7QV KN29).
+
+**Process cost worth recording: the second test was run by muting into a live
+QSO.** The rung was read at 05:00:27 (`calling-cq repeats 9`), the mute applied
+at 05:00:58, and UX7QV had answered at 05:00:45 in the gap — so `UX7QV 7Q5MLV
+-20` repeat 2 did not radiate. The QSO survived only because repeat 1 had already
+gone out. Operator directive follows: **no transmit-path change without
+per-instance prior agreement** (warning and asking are expected; acting is what
+needs approval). Re-read the CURRENT rung immediately before any such action.
+
+### FINDING 1 — absent drive does NOT produce pure silence, and the alarm's margin is thinner than designed
+
+The design comment in `internal/bridge/drivealarm.go` claimed drive that is
+absent "produces SILENCE rather than zero-valued frames, because the rig pushes
+on change and a meter pinned at zero has nothing to report." **The 05:01:15 slot
+disproves the absolute form of that claim.** It logged `min=0 max=109 last=6
+n=35` while muted from before key-down:
+
+- `max=109` can only have come from the unmute at 05:01:27.67, ~0.33 s before the
+  slot ended — muted audio cannot produce full PO.
+- At the measured 12–26 Hz that tail accounts for ~5–9 frames, leaving **~26–30
+  frames that arrived while no RF was leaving the rig**, necessarily reading zero
+  (`min=0`).
+- Yet the alarm fired at exactly +3 s, so those frames were **not** in the first
+  3 s: there was a complete gap from key-down to 05:01:18, then sparse
+  zero-valued pushes at roughly 2–3 Hz for the remainder.
+
+**Why this matters: it is a latent FALSE NEGATIVE.** The detector keys on
+*gaps*, not values. Had those sparse zero-valued frames begun within 3 s of
+key-down instead of after, the gap would never have opened and **no alarm would
+have fired despite zero RF**. The mechanism was believed to be safe because
+absent drive was silent; it is actually safe only because absent drive is silent
+*for long enough*, and nothing measured says how reliably.
+
+*The frame-count arithmetic above is an INFERENCE from a single summary line, not
+a measurement.* The cheap way to settle it — no transmission required, no
+threshold invented — is to log inter-frame gaps or a value histogram for the
+keyed window and read one collapse slot. Do that before deciding whether the
+detector needs a value-aware rule; a "frames are all zero" rule would need a
+definition of zero, which is the operator's call, not an inference.
+
+This also **narrows but does not close** the OPEN QUESTION in
+`drivealarm_test.go`'s header. Frames that flow reading zero are no longer
+hypothetical — the hardware produces them. Still unobserved is frames arriving
+*continuously* (no 3 s gap) all reading zero, which today would not alarm.
+
+### FINDING 1b — at operating power `max` carries no signal at all
+
+The sweep's matrix (5 W, dummy load) had `max` separating "collapsed after coming
+up" (34) from "weak throughout" (5). At operating power `max` was **identical
+across every state observed**: healthy 109, mid-slot collapse 109, silent-from-
+key-down 109 (from the unmute tail), and 112–113 during an accidental 3900% drive
+overdrive. So the earlier claim that "both fields are needed" holds only at the
+bottom of the drive range where it was measured. **`n` carried the entire signal
+here.** Do not port the 5 W matrix's thresholds to operating power.
+
+Related: `wpctl set-volume 66 39` — a `0.39` typo — put 3900% gain on the rig's
+audio drive for two CQ slots (04:57:45, 04:58:15, `max=112`/`113`). An overdriven
+FT8 signal splatters and is unlikely to decode. Nothing in SM can see this: the
+drive alarm watches for the ABSENCE of output and an overdriven slot looks
+healthier than healthy. Worth a thought about whether an upper bound belongs
+anywhere.
+
+### FINDING 2 — the banner has no time anchor, so a stale alarm is indistinguishable from a fresh one
+
+Observed directly: at ~05:02 the operator asked "I have got the NO RF OUTPUT
+banner again... ?" No second alarm had fired. It was the 05:01:18 banner still
+up — correct behaviour (the alarm deliberately has no auto-clear, because "the
+meter started reporting again" is not evidence the operator has checked the
+radio), but the banner says nothing about *when* it fired, and by then three
+minutes and four healthy transmissions had passed.
+
+This is a miss in the criterion, not the code. The wording was made deliberately
+tenseless after three review rounds flip-flopped over tense (`84ed3ffc`), and in
+removing every claim about the rig's key state it also removed every anchor to
+time. The nearest-confusable-state clause was written about no-RF vs dead
+instrument and never asked about **fresh alarm vs stale alarm**.
+
+DRAFT acceptance criterion for the operator to check — *not implemented, and the
+judgement calls are deliberately left open:*
+
+> When the drive alarm has fired and I come back to the screen later, the banner
+> tells me WHEN it fired, and I can tell it apart from an alarm that has just
+> fired for a transmission now in progress.
+
+Open questions that are the operator's call, not to be guessed:
+
+1. **Absolute or relative time** — "fired at 05:01:18" or "3 minutes ago"? A
+   relative label needs a refresh cadence; an absolute one needs no timer.
+2. **Should recovery be shown at all** — i.e. a second line once healthy slots
+   have followed ("output has been normal since")? It answers the question that
+   was actually asked, but it softens a banner whose whole point is that it does
+   not clear itself. Dismissal stays manual either way.
+3. **What counts as "recovered"** — one healthy slot, or N? This is exactly the
+   kind of threshold that must not be invented.
+
+The states this change would create, each a rule to write BEFORE implementing:
+alarm-raised-and-still-current; alarm-raised-then-recovered; alarm-raised-then-
+raised-again (does the timestamp update, or list both?); alarm-raised-then-CAT-
+dropped (recovery unknowable — `resetCatLink()` already clears the alarm state,
+so check that path rather than assuming it).
+
+### CORRECTION to the 2026-07-29 follow-up 5 above
+
+"`ft8.tx.max_repeats = 6` caps a CQ session at six transmissions" is **wrong**,
+and it shaped that day's test plan into 6-transmission blocks. Today's run
+reached `repeats 9` while still calling CQ (05:00:15) and kept going. The cap
+applies to repeats of a rung while working one answerer; **a CQ run is unbounded
+until Abandon**, which is what `robustness-pass-position` and ADR 0033 already
+said. Plan future on-air experiments accordingly.

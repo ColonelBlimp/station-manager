@@ -38,12 +38,34 @@ import (
 // key is permitted — not on the detector's internal state, so the mechanism can
 // change without rewriting them.
 //
-// OPEN QUESTION, deliberately not answered here: frames that FLOW but all read
-// zero. The hardware does not produce this (the rig pushes on change, so a
-// meter pinned at zero goes silent, which is why collapse manifests as silence)
-// but it is reachable in principle. D5 pins only what was decided — frames
-// flowing means no alarm, whatever their value. If that turns out to be wrong,
-// it is a rule to add, not a threshold to invent.
+// ON-HARDWARE ACCEPTANCE (layer 3) PASSED 2026-07-30, on the air at operating
+// power during a live CQ run — both cases inside the slot, no healthy slot
+// firing. Citations are smd.log timestamps:
+//
+//	collapse mid-slot     keyed 04:57:15, alarm 04:57:24 (+9 s = 3 s after the
+//	                      last frame), n=129 against a clean 327-482
+//	silent from key-down  keyed 05:01:15, alarm 05:01:18 (+3 s exactly), n=35
+//
+// OPEN QUESTION, NARROWED by that run and still not answered: frames that flow
+// but all read zero. This header used to say the hardware does not produce them.
+// It does — the 05:01:15 slot pushed ~26-30 zero-valued frames at roughly 2-3 Hz
+// while no RF was leaving the rig, and the alarm fired only because a complete
+// gap preceded them (see drivealarm.go, which now carries the arithmetic). What
+// remains unobserved is frames arriving CONTINUOUSLY at zero, with no gap wide
+// enough to trip the timeout; that case would not alarm today.
+//
+// D5 therefore pins something weaker than it reads: not "frames flowing means no
+// alarm, whatever their value" but "a stream with no 3 s gap means no alarm".
+// Closing the gap between those two needs a definition of "zero" from the
+// operator — a rule to add, never a threshold to invent.
+//
+// KNOWN GAP IN THIS CRITERION, found by the operator at ~05:02 the same day: the
+// banner carries no time anchor, so an alarm three minutes and four healthy
+// transmissions old is indistinguishable from one firing right now. The
+// nearest-confusable-state clause was written about no-RF versus dead instrument
+// and never asked about fresh versus stale. Not a code defect — the alarm's
+// refusal to auto-clear is deliberate — but a rule this file does not yet state.
+// Draft criterion and the open judgement calls: docs/dogfood-inbox.md 2026-07-30.
 
 // shortDriveSilence shortens THIS service's silence threshold so a test does not
 // sit out the real 3 s, and returns it for the test's own waits.

@@ -12,10 +12,26 @@ import "time"
 //
 // The detector is an idle-timeout on the rig's own meter stream. It needs no
 // invented sampling interval: the rig pushes RM0 unprompted (the rigdef arms
-// AI mode with `AI1;`), and drive that is absent produces SILENCE rather than
-// zero-valued frames, because the rig pushes on change and a meter pinned at
-// zero has nothing to report. That is why the controlled sweep saw 12 of 24
-// transmissions produce no frames whatever.
+// AI mode with `AI1;`), and drive that is absent goes mostly SILENT, because the
+// rig pushes on change and a meter pinned at zero has little to report. That is
+// why the controlled sweep saw 12 of 24 transmissions produce no frames whatever.
+//
+// "Mostly" is load-bearing and was learnt on the air, not designed. This comment
+// previously said absent drive produces silence RATHER THAN zero-valued frames;
+// the 2026-07-30 05:01:15 slot (muted from before key-down) disproves the
+// absolute form — `n=35`, of which only ~5-9 frames can be attributed to the
+// unmute at 05:01:27.67, leaving ~26-30 zero-valued frames pushed at roughly
+// 2-3 Hz while no RF was leaving the rig. The alarm still fired at exactly +3 s
+// because those frames began AFTER a complete gap from key-down.
+//
+// So this detector keys on GAPS, not on values, and its safety rests on absent
+// drive being silent for LONG ENOUGH rather than silent at all. If those sparse
+// zero-valued pushes ever start within the window, no gap opens and no alarm
+// fires despite zero output — a latent false negative. Nothing measured says how
+// reliably the gap appears; the cheap way to find out costs no transmission at
+// all, being inter-frame-gap or value-histogram logging over one keyed window.
+// A value-aware rule would need a definition of "zero", which is a judgement for
+// the operator and must not be inferred.
 //
 // The whole difficulty is that silence is ALSO what a dead instrument looks
 // like. The discriminator is the receive-time stream: the rig pushes the

@@ -30,7 +30,48 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-29)
+## Current state (as of 2026-07-30)
+
+> **2026-07-30 — the drive alarm PASSED on-air acceptance. Two findings came out
+> of it; neither is built. No code changed today, only comments and docs.**
+>
+> - **ACCEPTANCE (layer 3) DONE — do not re-run it.** On the air at operating
+>   power during a live CQ run, not the 5 W dummy load: collapse mid-slot keyed
+>   04:57:15 → alarm 04:57:24 (`n=129`); silent from key-down keyed 05:01:15 →
+>   alarm **05:01:18, +3 s exactly** (`n=35`); healthy slots either side
+>   (`n=349–376`) fired nothing. Two QSOs completed through the run (R2EC KO82,
+>   UX7QV KN29). Full write-up + citations: `docs/dogfood-inbox.md` 2026-07-30.
+> - **FINDING 1 — a latent FALSE NEGATIVE in the detector.** Absent drive does
+>   NOT produce pure silence: the 05:01:15 slot pushed ~26–30 zero-valued frames
+>   at ~2–3 Hz while no RF left the rig. The alarm fired only because a complete
+>   gap preceded them. The detector keys on GAPS, not values, so its safety rests
+>   on absent drive being silent for LONG ENOUGH, not silent at all. Settle it
+>   with inter-frame-gap or value-histogram logging over one keyed window — **no
+>   transmission needed**. A value-aware rule needs the operator's definition of
+>   "zero". Reasoning now lives in `internal/bridge/drivealarm.go`'s header.
+>   Related: at operating power `max` was 109 in EVERY state observed, so the 5 W
+>   matrix's `max` thresholds must not be ported upward — `n` carried it all.
+> - **FINDING 2 — the banner has no time anchor.** A stale alarm is
+>   indistinguishable from a fresh one (the operator hit this at ~05:02, three
+>   minutes and four healthy slots after the real alarm). Not a code defect — the
+>   no-auto-clear is deliberate — but a gap in the criterion, which asked about
+>   no-RF vs dead instrument and never about fresh vs stale. Draft criterion and
+>   three open judgement calls (absolute vs relative time; whether to show
+>   recovery at all; what counts as recovered) are in the inbox, unanswered on
+>   purpose.
+> - **NEW STANDING CONSTRAINT (operator, today): no transmit-path change without
+>   per-instance prior agreement.** Sink 66 level/mute, rig commands, power —
+>   nothing, while the daemon can key the rig. Warning about a problem and ASKING
+>   for a test are expected; acting is what needs approval, and approval never
+>   carries to the next slot. Cause: layer 3's second case was run by muting into
+>   a live QSO, the rung having been read 31 s earlier and not re-checked.
+> - **A `wpctl set-volume 66 39` typo put 3900% on the rig's audio drive** for two
+>   CQ slots (04:57:45, 04:58:15, `max=112/113`) — overdriven, unlikely to decode.
+>   Nothing in SM can see this: the drive alarm watches for ABSENCE and an
+>   overdriven slot looks healthier than healthy.
+> - **Correction to yesterday's note:** `ft8.tx.max_repeats = 6` does NOT cap a CQ
+>   run — today's reached `repeats 9` while still calling. It caps repeats of a
+>   rung while working one answerer; a CQ run is unbounded until Abandon.
 
 > **2026-07-29 — the drive collapse HAS A MEASURED SIGNATURE, and an alarm that
 > fires on it. Built end to end; on-hardware acceptance is the only thing left.**
@@ -53,8 +94,9 @@ precisely so we don't re-derive state or redo finished work.
 >   `internal/bridge/meters.go`. **The manual was correct throughout** — see the
 >   corrected write-up; the earlier "the manual got it wrong" framing was false
 >   and is retracted.
-> - **DRIVE-COLLAPSE ALARM (follow-up (1)) — BUILT, both halves, not yet proven
->   on hardware.** Daemon: `internal/bridge/drivealarm.go`, an idle-timeout on
+> - **DRIVE-COLLAPSE ALARM (follow-up (1)) — BUILT, both halves** *(and proven on
+>   hardware 2026-07-30 — see the block above).* Daemon:
+>   `internal/bridge/drivealarm.go`, an idle-timeout on
 >   the meter stream, **3 s** (operator's number), armed AFTER the key write
 >   completes, one alarm per transmission, re-arms next slot. Publishes its OWN
 >   `drive-alarm` SSE event — never `tx-alarm`, and it never sets `txUncertain`
@@ -64,11 +106,8 @@ precisely so we don't re-derive state or redo finished work.
 >   `DriveAlarmBanner`, mounted below `TxAlarmBanner` in `App.svelte`,
 >   dismiss-only (no daemon clear). 11 daemon rules + 9 SPA rules, all
 >   reversion-proved.
-> - **NEXT — layer 3, the on-hardware acceptance run (3 transmissions).** Dummy
->   load, 5 W: (1) **mute sink 66 BEFORE key-down** → amber banner appears
->   mid-slot, ~3 s after keying, and STAYS (correct — no auto-clear); (2)
->   **0.39 clean** → no banner (negative control); (3) optional **mute mid-slot**.
->   Note `ft8.tx.max_repeats = 6` caps a Call-CQ run at six transmissions.
+> - **NEXT — layer 3, the on-hardware acceptance run.** *(DONE 2026-07-30 — see
+>   the block above. Left here for the reasoning; do not re-run it.)*
 > - **THREE NEW CLAUDE.md DIRECTIVES, all operator-approved today.** (1)
 >   *Claims about external systems* — cite it or label it a guess; grep our own
 >   tree before theorising about the rig; cheapest source first (grep → doc →
