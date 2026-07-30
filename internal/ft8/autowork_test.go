@@ -1,6 +1,8 @@
 package ft8
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -281,4 +283,107 @@ func TestAutoWork_OperatorPickDoesNotArmARun(t *testing.T) {
 	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	require.False(t, s.seq.AutoWorkArmed(), "operator_pick must not arm an automatic run")
+}
+
+// --- STOP CONDITIONS (ADR 0059, operator's call 3) ---------------------------
+//
+// Abandon, TX disarmed, rig disconnect / CAT lost, band or dial change.
+//
+// All four already hold, and NOT by accident of this feature: every one of those
+// paths tears down through disarmTx (both branches, including the already-idle one),
+// which calls seq.Abandon, which disarms the run. These rules exist because that is
+// ROUTING, and nothing else would notice it changing: a refactor that stopped
+// disarmTx abandoning, or a new disarm path that skipped it, would leave the run
+// armed and working the next caller the moment TX came back — silently, since an
+// armed run looks exactly like a stopped one.
+//
+// A FOURTH stop falls out and is worth knowing rather than discovering: the last
+// /v1/ft8/events subscriber leaving past the linger window disarms TX as
+// attended-only housekeeping, so closing the browser also ends a run.
+
+// autoWorkService builds a real Service with the knob on and an armed run.
+func autoWorkService(t *testing.T) *Service {
+	t.Helper()
+	s := newService(types.Ft8Config{
+		Enabled: true,
+		TX:      &types.Ft8TXConfig{AutoWorkCallers: true},
+	}, logging.Noop(), nil)
+	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	require.True(t, s.seq.AutoWorkArmed(), "fixture: the run must be armed to prove it stops")
+	return s
+}
+
+// X1 — disarming TX stops the run. Without this an operator who disarms sees the
+// contact end and reasonably concludes the station is quiet, while the run is still
+// armed and will work the next caller as soon as TX is re-armed.
+func TestAutoWork_DisarmingTxStopsTheRun(t *testing.T) {
+	s := autoWorkService(t)
+	require.NoError(t, s.ArmTx(false))
+	require.False(t, s.seq.AutoWorkArmed())
+}
+
+// X2 — losing CAT stops the run. The rig is gone, so the run cannot key; leaving it
+// armed would mean a reconnect silently resumes unattended transmission.
+func TestAutoWork_CatLossStopsTheRun(t *testing.T) {
+	// A REAL capturing service, built the way the existing CAT-gate tests build one:
+	// the earlier version of this fixture set s.capturing by hand and panicked inside
+	// releaseCaptureLocked, because a faked flag is not a capture session.
+	withReconcileInterval(t, time.Hour) // only the reconcileCat() below runs
+	src := newFakeSource()
+	s := newService(types.Ft8Config{
+		Enabled: true,
+		TX:      &types.Ft8TXConfig{AutoWorkCallers: true},
+	}, logging.Noop(), src)
+	var live atomic.Bool
+	live.Store(true) // rig on
+	s.SetCatGate(live.Load)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { _ = s.Stop() })
+
+	_, unsub := s.Subscribe() // FT8 view open + CAT live → capturing
+	defer unsub()
+
+	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	require.True(t, s.seq.AutoWorkArmed(), "fixture: the run must be armed to prove it stops")
+
+	live.Store(false) // the rig drops
+	s.reconcileCat()
+
+	require.False(t, s.seq.AutoWorkArmed())
+}
+
+// X3 — the rig leaving the frequency the run was armed on stops it. The run pins the
+// dial precisely so a contact cannot be worked on a frequency the operator did not
+// choose; continuing on the new one would be the wrong-band QSO invariant 1 forbids.
+func TestAutoWork_DialMoveStopsTheRun(t *testing.T) {
+	s := autoWorkService(t)
+	// A run only ever exists DOWNSTREAM of an armed, dial-bound TX: arming binds a
+	// frequency, sessionTxGate refuses a session without it, and every disarm path
+	// clears the run. The fixture states that rather than leaving TX disarmed, where
+	// onDialMoved correctly returns early because nothing is bound to a frequency —
+	// a state this run cannot be in.
+	s.txMu.Lock()
+	s.txArmed = true
+	s.armDialMHz = 14.074
+	s.txMu.Unlock()
+
+	s.onDialMoved(14.074, 21.074)
+
+	require.False(t, s.seq.AutoWorkArmed())
+}
+
+// X4 — an operator-requested retune stops it too. Same teardown as the dial guard,
+// different initiator: the operator is deliberately moving the station, so a run
+// bound to where it used to be must not survive.
+func TestAutoWork_OperatorRetuneStopsTheRun(t *testing.T) {
+	s := autoWorkService(t)
+	s.txMu.Lock()
+	s.txArmed = true // StopForRetune returns early with nothing armed
+	s.txMu.Unlock()
+
+	require.NoError(t, s.StopForRetune())
+	require.False(t, s.seq.AutoWorkArmed())
 }
