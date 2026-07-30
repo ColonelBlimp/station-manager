@@ -19,6 +19,16 @@
 // therefore stays until dismissed, and a NEW alarm re-shows it — the same
 // dismissal contract the tx-alarm banner already has, where dismissing hides the
 // warning without claiming the fault is fixed.
+//
+// RECOVERY REPORTING added 2026-07-30, from the operator hitting the gap it
+// closes: a banner three minutes and four healthy transmissions old was
+// indistinguishable from one that had just fired. Their calls were ABSOLUTE time
+// and recovery after ONE healthy transmission. The daemon supplies the recovery
+// (Active=false); it is emphatically NOT a clear, and the rules below pin that —
+// a rig whose output came back has still not been looked at, so dismissal stays
+// manual. The time is stamped by the CLIENT on receipt rather than carried on the
+// wire: the event is not hub-cached, so there is no late-subscriber case for a
+// server timestamp to serve, and to within network latency the two agree.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
@@ -38,10 +48,22 @@ function raiseDriveAlarm(): void {
     flushSync();
 }
 
+function reportRecovery(): void {
+    catLink.onDriveAlarm({ active: false, code: 'drive_no_output' });
+    flushSync();
+}
+
+// A fixed local wall-clock instant. Built with the local constructor and asserted
+// against local-time parts, so it is deterministic in any timezone.
+const FIRED_AT = new Date(2026, 6, 30, 5, 1, 18);
+const FIRED_HHMMSS = '05:01:18';
+
 beforeEach(() => {
     rig.driveAlarmActive = false;
     rig.driveAlarmCode = '';
     rig.driveAlarmDismissed = false;
+    rig.driveAlarmAt = null;
+    rig.driveAlarmRecovered = false;
     rig.txAlarmActive = false;
     rig.txAlarmCode = '';
     rig.txAlarmDismissed = false;
@@ -170,5 +192,83 @@ describe('DriveAlarmBanner', () => {
         expect(text).not.toMatch(/\bis keyed\b|\bis transmitting\b|currently transmitting/i);
         // Would be false for the ~9 s the rig is still keyed when it first shows.
         expect(text).not.toMatch(/\bwas keyed\b|\bhas (ended|stopped|finished)\b/i);
+    });
+});
+
+describe('DriveAlarmBanner recovery reporting', () => {
+    // S10 — THE GAP THAT PROMPTED THIS. Without a time the operator cannot tell an
+    // alarm three minutes and four healthy transmissions old from one firing now.
+    it('says when the alarm fired, as a clock time', () => {
+        raiseDriveAlarm();
+        rig.driveAlarmAt = FIRED_AT;
+        flushSync();
+        const { container } = render(DriveAlarmBanner);
+        expect(bannerText(container)).toContain(FIRED_HHMMSS);
+    });
+
+    // S11/S12 are a PAIR: the recovery line must be absent until the daemon has
+    // actually confirmed a healthy transmission, and present afterwards. S11 alone
+    // would pass on a banner that never reports recovery; S12 alone would pass on
+    // one that always claims it.
+    it('does not claim output is normal before a healthy transmission', () => {
+        raiseDriveAlarm();
+        rig.driveAlarmAt = FIRED_AT;
+        flushSync();
+        const { container } = render(DriveAlarmBanner);
+        expect(bannerText(container)).not.toMatch(/normal since|been normal/i);
+    });
+
+    it('reports output normal once a healthy transmission has followed', () => {
+        raiseDriveAlarm();
+        rig.driveAlarmAt = FIRED_AT;
+        flushSync();
+        const { container } = render(DriveAlarmBanner);
+        reportRecovery();
+        expect(bannerText(container)).toMatch(/normal since/i);
+    });
+
+    // S13 — RECOVERY IS NOT A CLEAR. The daemon sends Active=false, and the
+    // pre-existing handler assigned that straight to driveAlarmActive, which would
+    // have made the banner vanish — losing the record that output had failed on a
+    // rig nobody has looked at yet. Dismissal stays the only exit.
+    it('stays visible after recovery, so dismissal remains the only exit', () => {
+        raiseDriveAlarm();
+        flushSync();
+        render(DriveAlarmBanner);
+        expect(screen.getByRole('alert')).toBeTruthy();
+        reportRecovery();
+        expect(screen.getByRole('alert')).toBeTruthy();
+        expect(bannerText(screen.getByRole('alert'))).toContain('NO RF OUTPUT');
+    });
+
+    // S14 — a NEW alarm after a recovery is new information about a new
+    // transmission: the stale recovery line must go, and the time must move. A
+    // banner still reading "output has been normal since" while a fresh collapse is
+    // being reported would be the same confusion S10 exists to remove.
+    it('drops the recovery line and re-times when a new alarm arrives', () => {
+        raiseDriveAlarm();
+        rig.driveAlarmAt = FIRED_AT;
+        flushSync();
+        const { container } = render(DriveAlarmBanner);
+        reportRecovery();
+        expect(bannerText(container)).toMatch(/normal since/i);
+
+        raiseDriveAlarm();
+        const later = new Date(2026, 6, 30, 5, 9, 42);
+        rig.driveAlarmAt = later;
+        flushSync();
+        expect(bannerText(container)).not.toMatch(/normal since/i);
+        expect(bannerText(container)).toContain('05:09:42');
+        expect(bannerText(container)).not.toContain(FIRED_HHMMSS);
+    });
+
+    // S15 — a recovery with no alarm on screen must not conjure a banner. The
+    // daemon suppresses recovery unless an alarm is standing, but the SPA is a
+    // separate process that can miss frames or start mid-session, so it must not
+    // depend on that.
+    it('shows nothing when recovery arrives with no alarm on screen', () => {
+        reportRecovery();
+        render(DriveAlarmBanner);
+        expect(screen.queryByRole('alert')).toBeNull();
     });
 });

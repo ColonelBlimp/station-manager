@@ -307,6 +307,13 @@ type Service struct {
 	driveSilence     time.Duration
 	driveTimer       *time.Timer
 
+	// driveWatchArmed records that THIS transmission is actually being watched, so
+	// a transmission that measured nothing is not mistaken for one that measured
+	// normal output. driveAlarmStanding outlives a transmission: it is what makes
+	// the recovery report answer a standing alarm rather than firing every slot.
+	driveWatchArmed    bool
+	driveAlarmStanding bool
+
 	// Gap measurement over the keyed window — the instrument that answers whether
 	// absent drive reliably leaves a silence wider than driveSilence (finding 1 of
 	// 2026-07-30). Shares the detector's window exactly, opened and closed by

@@ -66,13 +66,15 @@ const DriveAlarmNoOutput = "drive_no_output"
 // DriveAlarmPayload is the drive-alarm event payload. Code is an i18n key (ADR
 // 0010) naming the fault; the SPA owns the wording.
 //
-// Active is always true today: the alarm is a per-transmission ONE-SHOT, not a
-// latched state, so there is no clear event and nothing is hub-cached. That is
-// deliberate. A drive fault is a property of the slot that just failed, and a
-// cached "drive dead" replayed to a tab opening an hour later would be a lie;
-// dismissal is the SPA's business, exactly as it already is for the tx-alarm
-// banner. The field exists so a clear event can be added without a wire break
-// if the alarm ever grows a latched form.
+// Active=true raises the alarm; Active=false REPORTS RECOVERY — output was
+// confirmed normal on a later transmission. Recovery does NOT mean "clear the
+// banner": the banner stays until the operator dismisses it, because a rig whose
+// output came back has still not been looked at. That is why this is one event
+// with a flag rather than a raise and a clear.
+//
+// Nothing is hub-cached, deliberately. A drive fault is a property of the slot
+// that failed, and a cached "drive dead" replayed to a tab opening an hour later
+// would be a lie.
 type DriveAlarmPayload struct {
 	Active bool   `json:"active"`
 	Code   string `json:"code,omitempty"`
@@ -99,6 +101,9 @@ func (s *Service) armDriveWatch(gen uint64) {
 	if !s.meterSeenSinceTx {
 		return
 	}
+	// From here the transmission IS being watched, which is what makes a silent
+	// outcome positive evidence of normal output rather than an absence of data.
+	s.driveWatchArmed = true
 	// Silence is measured from the key, not from the last receive-time push, so
 	// drive that never comes up at all is caught — the common shape.
 	s.driveLastMeterAt = time.Now()
@@ -114,6 +119,9 @@ func (s *Service) disarmDriveWatch() {
 		s.driveTimer = nil
 	}
 	s.driveAlarmed = false
+	// Per-transmission, unlike driveAlarmStanding: the next transmission must earn
+	// its own arming before its silence counts as evidence of anything.
+	s.driveWatchArmed = false
 	s.closeMeterGapWindow()
 	// The next transmission must earn its own instrument-alive evidence. A link
 	// that dies mid-session would otherwise stay "known good" for the rest of the
@@ -282,6 +290,9 @@ func (s *Service) checkDriveSilence(gen uint64) {
 	// 12.6 s slot, and the second one tells the operator nothing the first did
 	// not.
 	s.driveAlarmed = true
+	// Outlives this transmission: the operator has been told output failed, and the
+	// report that it came back is owed until a watched transmission proves it.
+	s.driveAlarmStanding = true
 	s.driveTimer = nil
 	s.mu.Unlock()
 
@@ -292,5 +303,41 @@ func (s *Service) checkDriveSilence(gen uint64) {
 	s.hub.publish(Event{
 		Name:    EventDriveAlarm,
 		Payload: DriveAlarmPayload{Active: true, Code: DriveAlarmNoOutput},
+	})
+}
+
+// takeDriveRecoveryLocked reports whether the transmission now ending is positive
+// evidence that output came back, consuming the standing alarm if it is. Caller
+// holds s.mu, and must call this BEFORE disarmDriveWatch clears the
+// per-transmission flags it reads.
+//
+// All three conditions are load-bearing. Without a standing alarm there is nothing
+// to report and publishing would put an event on every subscriber's stream every
+// slot to say nothing happened. Without driveWatchArmed the transmission measured
+// NOTHING — no instrument-alive evidence — and reporting recovery from it would
+// claim a measurement never made, which is the fault the banner's wording rules
+// exist to prevent. And a transmission that alarmed is plainly not evidence of
+// health, however it ended.
+func (s *Service) takeDriveRecoveryLocked() bool {
+	if !s.driveAlarmStanding || !s.driveWatchArmed || s.driveAlarmed {
+		return false
+	}
+	s.driveAlarmStanding = false
+	return true
+}
+
+// publishDriveRecovery reports that output was confirmed normal after an alarm.
+// Called WITHOUT s.mu — the log write and the fan-out must not block the read loop
+// that feeds the detector.
+//
+// Deliberately not a clear: the SPA keeps the banner up and adds the recovery to
+// it, because the operator asked to be told the rig is fine now without losing the
+// record that it was not.
+func (s *Service) publishDriveRecovery() {
+	s.logger.InfoWith().Str("code", DriveAlarmNoOutput).
+		Msg("bridge: rig output confirmed normal on a later transmission; the drive alarm is no longer current")
+	s.hub.publish(Event{
+		Name:    EventDriveAlarm,
+		Payload: DriveAlarmPayload{Active: false, Code: DriveAlarmNoOutput},
 	})
 }

@@ -255,7 +255,23 @@ reason before the feature exists.
     current mechanism happens to carry. Field-level assertions from that arc were
     all deleted within a round or two; the behavioural ones caught real defects.
   - **Feed inputs where right and wrong actually differ.** A test whose fixture makes
-    both paths agree proves nothing, however behavioural its name.
+    both paths agree proves nothing, however behavioural its name. **The check: for
+    each rule, ask whether THIS fixture would produce a different value under the
+    implementation you are guarding against.** If not, the fixture is decoration.
+    This rule already existed and still caught none of three instances in one day
+    (2026-07-30), so learn the shapes rather than the maxim:
+    - **The fixture never exercises the interval.** A rule that post-unkey silence
+      must not be counted, tested with a fixture that fed no frames after the
+      unkey — so the sealed and unsealed paths agreed, and the defect shipped.
+    - **The fixture never writes the state under test.** A rule that a running
+      maximum does not leak between transmissions, tested with a *silent* first
+      transmission — whose silence is computed at flush as a local and never
+      touches the field that leaks. It passed against code that never reset it.
+    - **The fixture asserts the defect as the intent.** A map test proved "prefer
+      coordinates over grid" by pairing London coordinates with a Malawi grid.
+      That contradiction WAS the bug; the test pinned it as correct behaviour for
+      as long as it existed. A precedence rule whose fixture is a contradiction
+      cannot demonstrate precedence.
   - **The test must be as strong as the RULE it claims to pin.** Three rounds
     running (2026-07-27) the finding was "your test proved a weaker statement than
     your rule": a rule about the cancellation path tested only the synchronous one;
@@ -268,6 +284,22 @@ reason before the feature exists.
     stale and mismatched states; adding a wait creates an ordering. Each is a rule
     to write before implementing. Every finding in the 2026-07-27 dial-guard arc was
     a state the previous round's fix had just introduced.
+  - **Enumerate the STEPS too, and name which one a rule means.** The same
+    discipline applied to time rather than state. Where a rule refers to a moment —
+    "at unkey", "when the request completes", "on save" — an operation is usually a
+    SEQUENCE, and the steps can be seconds apart. List them, pick one, and write the
+    choice into the test header; if two candidate steps differ by more than the
+    quantity being measured, the choice is load-bearing, not a detail. Cautionary
+    tale: "the window ends at unkey" took FIVE review rounds and four real defects
+    (2026-07-30), every one from treating `releaseFt8TxChecked`'s
+    issue → ACK → confirm → settle → restore as a single instant — measuring to the
+    end of the sequence, freezing one field but not another, taking the instant after
+    the write returned (CI-V waits for the ACK), then sealing after the write so
+    frames arriving mid-write still counted. Each fix was correct about the step it
+    named and silent about the next one. Related: an instant chosen inside a sequence
+    creates a rollback state — if a later step FAILS, does the earlier decision still
+    hold? (Here a failed `tx_off` had to unseal, because the transmission was not
+    over.)
   - **If a behaviour test cannot be written without inventing a fact the system does
     not carry, the SYSTEM is missing that fact.** Do not substitute a threshold or a
     heuristic. Worked example: `internal/ft8/dialguard_test.go`, written before its

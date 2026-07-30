@@ -369,10 +369,17 @@ func (s *Service) finishFt8Tx() {
 	// Same critical section, same reason: a drive check firing between clearing
 	// the TX flags and stopping the timer would alarm against a transmission that
 	// had already ended (drivealarm.go).
+	//
+	// The recovery decision is taken BEFORE the disarm, which clears the
+	// per-transmission flags it reads.
+	recovered := s.takeDriveRecoveryLocked()
 	s.disarmDriveWatch()
 	s.mu.Unlock()
 	// Outside the lock — a stalled log write must not block the read loop.
 	s.logFt8TxMeters(sum)
+	if recovered {
+		s.publishDriveRecovery()
+	}
 }
 
 // ft8TxAutoOff is the hard-backstop timer callback (mirrors tuneAutoOff). Runs

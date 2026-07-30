@@ -40,6 +40,26 @@
 
     const detail = $derived(CODE_TEXT[rig.driveAlarmCode] ?? '');
     const show = $derived(rig.driveAlarmActive && !rig.driveAlarmDismissed);
+
+    // WHEN it fired, as a wall clock. The operator asked for absolute rather than
+    // relative time, which also means no refresh timer: "3 minutes ago" would go
+    // stale silently, and staleness is the exact fault this closes. Time-of-day
+    // only, matching the daemon log lines the operator reads alongside it.
+    const p2 = (n: number): string => String(n).padStart(2, '0');
+    const firedAt = $derived(
+        rig.driveAlarmAt === null
+            ? ''
+            : `${p2(rig.driveAlarmAt.getHours())}:${p2(rig.driveAlarmAt.getMinutes())}:${p2(rig.driveAlarmAt.getSeconds())}`
+    );
+
+    // Reported only once the daemon has WATCHED a later transmission and seen
+    // output — never inferred here from time passing or from frames resuming. It
+    // does not hide the banner: the rig came back, but nobody has looked at it.
+    const recovery = $derived(
+        rig.driveAlarmRecovered
+            ? 'Output has been normal since: the meter reported output on a later transmission.'
+            : ''
+    );
 </script>
 
 {#if show}
@@ -62,8 +82,11 @@
             />
         </svg>
         <span>
-            <strong>NO RF OUTPUT</strong> — the power meter reported nothing for several seconds.
+            <strong>NO RF OUTPUT</strong> — the power meter reported nothing for several seconds{firedAt
+                ? ` at ${firedAt}`
+                : ''}.
             {detail}
+            {recovery}
         </span>
         <button
             type="button"

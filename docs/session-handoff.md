@@ -110,18 +110,20 @@ precisely so we don't re-derive state or redo finished work.
 > - **Correction to yesterday's note:** `ft8.tx.max_repeats = 6` does NOT cap a CQ
 >   run — today's reached `repeats 9` while still calling. It caps repeats of a
 >   rung while working one answerer; a CQ run is unbounded until Abandon.
-> - **TWO CLAUDE.md RULES DRAFTED-BUT-NOT-WRITTEN, awaiting the operator.** Both
->   earned today, both about tests that look sound and prove nothing:
->   (1) **Name which STEP of a sequence you mean.** Four defects in one day came
->   from treating a multi-step release path as a single instant; the existing
->   "enumerate the states a change creates" rule applies to time as well as state.
->   (2) **A fixture that cannot tell right from wrong proves nothing** — three
->   instances today: G8 fed no frames after the unkey (so sealed and unsealed
->   agreed), G5's silent transmission never wrote the field it tested for leaks,
->   and the map test paired London coordinates with a Malawi grid, pinning the
->   defect as intended behaviour. CLAUDE.md's "feed inputs where right and wrong
->   actually differ" already says this and caught none of the three, so the value
->   would be in the worked cases.
+> - **TWO CLAUDE.md TESTING RULES ADDED, both earned today, both about tests that
+>   look sound and prove nothing.** (1) **"Enumerate the STEPS too, and name which
+>   one a rule means"** — a NEW bullet beside the existing states one, because the
+>   same discipline applies to time: four defects came from treating
+>   `releaseFt8TxChecked`'s issue → ACK → confirm → settle → restore as a single
+>   instant. It also names the consequence I would not have derived unaided — an
+>   instant chosen inside a sequence creates a ROLLBACK state, which is what forced
+>   the unseal on a failed `tx_off`. (2) The existing **"feed inputs where right and
+>   wrong actually differ"** bullet was EXTENDED rather than duplicated: it already
+>   stated the principle and caught none of the three instances, so it now carries
+>   the check (*would this fixture produce a different value under the
+>   implementation you are guarding against?*) plus the three shapes — fixture never
+>   exercises the interval (G8), never writes the state under test (G5), or asserts
+>   the defect as the intent (London coordinates paired with a Malawi grid).
 > - **STILL OPEN, unchanged from the older backlog:** R9LAU's map row is fixed for
 >   DISPLAY but its stored coordinates remain wrong (see the map bullet); the
 >   auto-work-pile-up ADR; four unseen FT8 paths; the sweep (lumberjack goroutine

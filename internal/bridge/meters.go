@@ -377,6 +377,10 @@ func (s *Service) resetMeterObservation() {
 	// armed, so the previous instance's instrument-alive evidence must not carry
 	// over into the next transmission's drive check (drivealarm.go).
 	s.meterSeenSinceTx = false
+	// The owed recovery report dies with the pipeline too. The SPA clears its drive
+	// alarm on rig-disconnected (resetCatLink), so a recovery published after the
+	// reconnect would answer a banner that is no longer on screen.
+	s.driveAlarmStanding = false
 }
 
 // meterSelection reports which meter the rig's pushed RM0 value represents,

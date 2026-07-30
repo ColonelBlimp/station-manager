@@ -407,3 +407,201 @@ func TestDriveAlarm_BlockedKeyWrite_DoesNotAlarmBeforeTheRigIsKeyed(t *testing.T
 	}
 	<-done
 }
+
+// drivePayloads returns every drive-alarm payload published, in order, so a rule
+// can assert on the ALARM/RECOVERY sequence rather than a bare count.
+func (w *eventWatch) drivePayloads() []DriveAlarmPayload {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]DriveAlarmPayload, 0, 2)
+	for _, e := range w.seen {
+		if e.Name != EventDriveAlarm {
+			continue
+		}
+		if p, ok := e.Payload.(DriveAlarmPayload); ok {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// healthySlot runs one transmission with the meter stream flowing throughout —
+// armed, and silent for no part of it, so it is positive evidence that output was
+// normal.
+func healthySlot(t *testing.T, s *Service, silence time.Duration) {
+	t.Helper()
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	feedMeterFor(t, s, "RM0118000", 2*silence)
+	s.finishFt8Tx()
+}
+
+// RECOVERY REPORTING (operator's calls, 2026-07-30): absolute time in the banner,
+// and "output has been normal since" after ONE healthy transmission.
+//
+// The daemon owns the recovery signal because only it can tell a healthy FT8
+// transmission from a tune carrier or a dropped frame; the SPA seeing tx-status go
+// 1→0 cannot. It rides the EXISTING drive-alarm event as Active=false, which is
+// what that field was reserved for.
+//
+// "HEALTHY" MEANS ARMED AND SILENT, not merely un-alarmed. A transmission where the
+// watch never armed — no instrument-alive evidence — says NOTHING about output, and
+// reporting recovery from it would claim a measurement that was never made. That is
+// the fault DriveAlarmBanner's S8 exists to prevent, applied to the recovery half.
+
+// E1 — a healthy transmission after an alarm reports recovery.
+func TestDriveAlarm_HealthySlotAfterAlarmPublishesRecovery(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	// A transmission that alarms: instrument known good, then no frames at all.
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 }, "no drive alarm raised; the fixture proves nothing")
+	s.finishFt8Tx()
+
+	healthySlot(t, s, silence)
+
+	waitFor(t, func() bool { return len(w.drivePayloads()) >= 2 },
+		"no recovery published after a healthy transmission following an alarm")
+	got := w.drivePayloads()
+	if got[0].Active != true {
+		t.Errorf("first payload = %+v, want the alarm (Active true)", got[0])
+	}
+	if got[len(got)-1].Active != false {
+		t.Errorf("last payload = %+v, want recovery (Active false)", got[len(got)-1])
+	}
+}
+
+// E2 — no alarm has fired, so a healthy transmission reports NOTHING. Recovery is
+// only meaningful against a standing alarm; publishing it every slot would put an
+// event on every subscriber's stream every 15 s to say nothing happened.
+func TestDriveAlarm_HealthySlotWithNoAlarmPublishesNothing(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	healthySlot(t, s, silence)
+	healthySlot(t, s, silence)
+
+	if n := w.count(EventDriveAlarm); n != 0 {
+		t.Errorf("published %d drive-alarm events with no alarm ever raised; want 0", n)
+	}
+}
+
+// E3 — ONE recovery per alarm. The second healthy transmission adds nothing: the
+// operator has already been told, and a per-slot repeat is the same noise E2 avoids.
+func TestDriveAlarm_RecoveryPublishedOncePerAlarm(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 }, "no drive alarm raised")
+	s.finishFt8Tx()
+
+	healthySlot(t, s, silence)
+	waitFor(t, func() bool { return len(w.drivePayloads()) >= 2 }, "no recovery published")
+	healthySlot(t, s, silence)
+	healthySlot(t, s, silence)
+
+	recoveries := 0
+	for _, p := range w.drivePayloads() {
+		if !p.Active {
+			recoveries++
+		}
+	}
+	if recoveries != 1 {
+		t.Errorf("got %d recovery events across three healthy transmissions; want exactly 1", recoveries)
+	}
+}
+
+// E4 — a transmission that ALARMS is not a recovery, however it ends. Without this
+// an implementation keying on "the transmission finished" would report output
+// normal for the very slot that just failed.
+func TestDriveAlarm_AlarmingSlotIsNotRecovery(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	for i := 0; i < 2; i++ {
+		rxMeterFlowing(t, s)
+		keyedTestSlot(t, s)
+		waitFor(t, func() bool { return w.count(EventDriveAlarm) > i }, "no drive alarm raised")
+		s.finishFt8Tx()
+	}
+
+	// Settle before asserting ABSENCE (the D8 pattern): publishing happens inside
+	// finishFt8Tx but the watcher records off a channel, so an immediate read can
+	// pass while the event it should have caught is still in flight.
+	time.Sleep(4 * silence)
+
+	for _, p := range w.drivePayloads() {
+		if !p.Active {
+			t.Fatalf("recovery published for a transmission that alarmed: %+v", w.drivePayloads())
+		}
+	}
+}
+
+// E5 — THE NEAREST CONFUSABLE STATE for the recovery half. A transmission where the
+// watch never armed (nothing proved the instrument alive) is silent about output,
+// not evidence of health, so it must not clear a standing alarm.
+func TestDriveAlarm_UnarmedSlotIsNotRecovery(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 }, "no drive alarm raised")
+	s.finishFt8Tx()
+
+	// No rxMeterFlowing: the watch cannot arm, so this slot measures nothing.
+	keyedTestSlot(t, s)
+	time.Sleep(2 * silence)
+	s.finishFt8Tx()
+
+	// Settle before asserting ABSENCE (the D8 pattern). Without this the rule
+	// passed against an implementation that ignored driveWatchArmed entirely — the
+	// event was published, just not yet recorded when the assertion ran.
+	time.Sleep(4 * silence)
+
+	for _, p := range w.drivePayloads() {
+		if !p.Active {
+			t.Errorf("recovery published from a transmission whose watch never armed: %+v", w.drivePayloads())
+		}
+	}
+}
+
+// E6 — recovery must not touch TX-safety state, exactly as the alarm must not
+// (ADR 0051). It is a report about drive, not about the carrier.
+func TestDriveAlarm_RecoveryLeavesTxSafetyStateAlone(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 }, "no drive alarm raised")
+	s.finishFt8Tx()
+	healthySlot(t, s, silence)
+	waitFor(t, func() bool { return len(w.drivePayloads()) >= 2 }, "no recovery published")
+
+	s.mu.Lock()
+	uncertain, alarmed := s.txUncertain, s.txAlarmActive
+	s.mu.Unlock()
+	if uncertain || alarmed {
+		t.Errorf("txUncertain=%v txAlarmActive=%v after a drive recovery; want both clear", uncertain, alarmed)
+	}
+	if n := w.count(EventTxAlarm); n != 0 {
+		t.Errorf("recovery published %d tx-alarm events; want 0", n)
+	}
+}

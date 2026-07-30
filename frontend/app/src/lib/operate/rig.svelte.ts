@@ -72,6 +72,12 @@ export const rig: {
     driveAlarmActive: boolean;
     driveAlarmCode: string;
     driveAlarmDismissed: boolean;
+    /** When the alarm fired, stamped on receipt. Null until one has. Without it a
+     *  banner minutes old is indistinguishable from one firing now. */
+    driveAlarmAt: Date | null;
+    /** A later transmission was watched and reported normal output. Reported to
+     *  the operator; explicitly NOT a reason to hide the banner. */
+    driveAlarmRecovered: boolean;
 } = $state({
     // band/mode: operator-friendly literals (mode is a sideband, not an ADIF
     // family — resolved at submit). freq is the SELECTED VFO's frequency in
@@ -112,6 +118,8 @@ export const rig: {
     driveAlarmActive: false,
     driveAlarmCode: '',
     driveAlarmDismissed: false,
+    driveAlarmAt: null,
+    driveAlarmRecovered: false,
 });
 
 /**
@@ -696,9 +704,31 @@ export const catLink = {
      *  banner even if a previous one was dismissed, because a new collapse is
      *  new information about a new transmission. */
     onDriveAlarm(p: DriveAlarmPayload): void {
-        rig.driveAlarmActive = p.active;
-        rig.driveAlarmCode = p.code ?? '';
-        if (p.active) rig.driveAlarmDismissed = false;
+        if (p.active) {
+            rig.driveAlarmActive = true;
+            rig.driveAlarmCode = p.code ?? '';
+            // A plain Date, not SvelteDate: it is never MUTATED, only replaced
+            // wholesale on each alarm, and reassigning a $state field is what drives
+            // reactivity here. SvelteDate exists to track in-place mutation
+            // (setHours and friends), which nothing does to this value.
+            // eslint-disable-next-line svelte/prefer-svelte-reactivity
+            rig.driveAlarmAt = new Date();
+            // A new collapse is new information about a new transmission, so any
+            // recovery reported against the PREVIOUS one is stale and must go.
+            rig.driveAlarmRecovered = false;
+            rig.driveAlarmDismissed = false;
+            return;
+        }
+        // Active=false is a RECOVERY REPORT, not a clear: the daemon watched a later
+        // transmission and saw normal output. Assigning it to driveAlarmActive — as
+        // this handler originally did — would hide the banner, losing the record that
+        // output had failed on a rig nobody has looked at yet. Dismissal stays the
+        // only exit.
+        //
+        // Guarded on an alarm being on screen: the daemon suppresses recovery unless
+        // one is standing, but this is a separate process that can miss frames or
+        // start mid-session, so it must not rely on that.
+        if (rig.driveAlarmActive) rig.driveAlarmRecovered = true;
     },
 };
 
@@ -742,4 +772,6 @@ export function resetCatLink(): void {
     rig.driveAlarmActive = false;
     rig.driveAlarmCode = '';
     rig.driveAlarmDismissed = false;
+    rig.driveAlarmAt = null;
+    rig.driveAlarmRecovered = false;
 }
