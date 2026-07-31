@@ -137,7 +137,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// A due re-send owns this slot, so no new contact is picked — the branch
 		// below must stay guarded by caller!=nil or it dereferences a nil contact.
 		if resendRR73 == "" {
-			if pick, text := s.pickAnswererLocked(msgs); pick != nil {
+			if pick, text := s.pickAnswererLocked(msgs, now); pick != nil {
 				s.caller = pick
 				s.startedAt = now.UTC()
 				s.repeats = 0
@@ -380,7 +380,10 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 // skipped, so a few stations that keep repeating their grid can't be re-selected
 // in rotation and starve the rest of the pile-up (113e14b8 review P2). Returns the
 // pick and its decode text. Caller holds s.mu.
-func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage) (*CallerExchange, string) {
+// A caller inside its stalled-caller cool-off is skipped too — see
+// stallCooloffSlots. `now` is the slot's time, taken from the caller rather than
+// read here so the whole selection is decided against one instant.
+func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage, now time.Time) (*CallerExchange, string) {
 	strongest := s.answerMode == types.Ft8CallerAnswerAutoStrongest
 	var pick *CallerExchange
 	var pickText string
@@ -393,6 +396,9 @@ func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage) (*CallerExch
 		c := NewCallerExchange(s.ourCall, pm.from, pm.grid, m.SNR)
 		if slices.Contains(s.stalledCalls, c.TheirCall) {
 			continue // already tried-and-stalled this CQ round — don't re-lock onto it
+		}
+		if s.inStallCooloffLocked(c.TheirCall, now) {
+			continue // stalled a work-a-caller ladder moments ago — let them settle
 		}
 		reply, ok := c.TxMessage()
 		if !ok {
@@ -593,7 +599,7 @@ func (s *Sequencer) parkAnswererLocked(msgs []goft8.DecodedMessage, now time.Tim
 	s.stalledCalls = append(s.stalledCalls, s.caller.TheirCall)
 	s.caller = nil
 	s.repeats = 0
-	if pick, _ := s.pickAnswererLocked(msgs); pick != nil {
+	if pick, _ := s.pickAnswererLocked(msgs, now); pick != nil {
 		s.caller = pick
 		s.startedAt = now.UTC()
 		// Count the rung we are about to transmit. The replacement is handed straight

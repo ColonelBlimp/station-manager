@@ -172,6 +172,15 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 	if s.repeats >= s.maxRepeats {
 		call, attempts := s.caller.TheirCall, s.maxRepeats
+		if !confirming {
+			// A silent answerer: hold them out of selection briefly, or an armed
+			// auto-work run re-picks them on the very next slot and the ladder
+			// stalls again forever, starving the rest of the pile-up (dogfood
+			// 2026-07-31). Deliberately NOT in the confirming branch — that is OUR
+			// RR73 failing to transmit, so that station is still owed a roger and
+			// working them again is the correct on-air behaviour.
+			s.coolOffStalledCallerLocked(call, now)
+		}
 		s.retireSessionLocked(func() { s.caller = nil })
 		s.mu.Unlock()
 		if confirming {
@@ -472,6 +481,40 @@ func (s *Sequencer) commitWorkCallerLocked(c *CallerExchange, call, theirPeriod 
 	s.publish(s.statusLocked())
 }
 
+// stallCooloffSlots is how many slots a station is held out of selection after a
+// work-a-caller ladder stalled on its silence. THE OPERATOR'S NUMBER (2026-07-31),
+// not a derived one.
+//
+// Slots rather than seconds because FT8 time is slots, matching confirmHoldSlotLimit
+// — but applied as a DEADLINE (5 x SlotDuration from the stall) rather than a
+// per-slot countdown, so a capture gap that stops slots arriving cannot freeze the
+// exclusion open while the clock runs on.
+const stallCooloffSlots = 5
+
+// coolOffStalledCallerLocked holds one station out of selection for
+// stallCooloffSlots. Caller holds s.mu.
+func (s *Sequencer) coolOffStalledCallerLocked(call string, now time.Time) {
+	if s.stallCooloff == nil {
+		s.stallCooloff = make(map[string]time.Time, 2)
+	}
+	s.stallCooloff[call] = now.Add(stallCooloffSlots * SlotDuration)
+}
+
+// inStallCooloffLocked reports whether a station is still inside its cool-off,
+// dropping the entry once it has passed so the map cannot grow across a long
+// session. Caller holds s.mu.
+func (s *Sequencer) inStallCooloffLocked(call string, now time.Time) bool {
+	until, ok := s.stallCooloff[call]
+	if !ok {
+		return false
+	}
+	if !now.Before(until) {
+		delete(s.stallCooloff, call)
+		return false
+	}
+	return true
+}
+
 // onSlotIdleArmed works the next station calling us for an armed auto-work run
 // (ADR 0059). Caller does not hold s.mu.
 //
@@ -493,7 +536,7 @@ func (s *Sequencer) onSlotIdleArmed(ref SlotRef, msgs []goft8.DecodedMessage, no
 	// completion the previous session's identity is gone.
 	s.ourCall = s.autoWorkCall
 	s.answerMode = s.autoWorkMode
-	pick, text := s.pickAnswererLocked(msgs)
+	pick, text := s.pickAnswererLocked(msgs, now)
 	if pick == nil {
 		s.mu.Unlock()
 		return // armed and waiting — nobody is calling this slot

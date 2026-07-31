@@ -309,6 +309,19 @@ type Sequencer struct {
 	// preferred stallers ping-pong forever). Reset when a fresh CQ round starts — a
 	// completed contact, the rescan exhausting the live answerers, and StartCallCq.
 	stalledCalls []string
+	// stallCooloff excludes a station from selection until the recorded instant,
+	// after a WORK-A-CALLER contact stalled at the repeat cap. Separate from
+	// stalledCalls because the two have opposite lifetimes: stalledCalls is a
+	// per-CQ-ROUND exclusion cleared the moment a rescan finds nobody else calling
+	// (so the only station answering a CQ is never locked out), whereas in an
+	// auto-work run "nobody else is calling" is the normal quiet state — a shared
+	// list would be wiped on the next empty slot and the stalled station re-picked
+	// at once, which is the loop this exists to break (dogfood 2026-07-31).
+	//
+	// A DEADLINE, not a countdown: five slots is 75 s of slot time, and a counter
+	// would be wrong across a capture gap where slots stop arriving but the clock
+	// does not. Cleared by Abandon (operator's call).
+	stallCooloff map[string]time.Time
 	// confirmHold keeps a just-completed Call-CQ contact "listenable" for one more of
 	// the answerers' slots, so a partner who did NOT copy our closing RR73 can be
 	// answered instead of ignored. See confirmHold / resolveConfirmHoldLocked.
@@ -624,6 +637,10 @@ func (s *Sequencer) abandonLocked() (bool, string) {
 	// Leaving it armed would make Abandon look like it worked and then key the rig
 	// again on the next caller.
 	s.autoWorkArmed = false
+	// Operator's call (2026-07-31): Abandon clears the stalled-caller cool-off.
+	// Abandon is the operator taking the station back, so the daemon's memory of
+	// which callers were going nowhere goes with it.
+	s.stallCooloff = nil
 	s.repeats = 0
 	s.skipIfSilent = false
 	s.nextArmed = false
