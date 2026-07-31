@@ -1,0 +1,70 @@
+version: "2"
+
+# BASELINE MEASUREMENT — this config MEASURES, it does not ENFORCE (2026-07-31).
+#
+# Not wired into CI or the Taskfile, deliberately. Its whole purpose is to answer
+# "where does SM actually sit?" before any threshold is chosen. A threshold picked
+# before seeing the distribution is either noise or a rubber stamp.
+#
+# SCOPE IS NARROW ON PURPOSE: the five metric linters that answer the question
+# asked — maintainability, duplication, cognitive complexity — and nothing else.
+# golangci-lint's correctness linters (errcheck, staticcheck, unused, ...) are a
+# SEPARATE decision with a separate and much larger backlog; enabling them here
+# would bury the maintainability signal under thousands of unrelated findings,
+# and CI already runs gofmt + go vet + race tests.
+
+linters:
+  default: none
+  enable:
+    - gocognit # cognitive complexity — how hard a function is to READ
+    - gocyclo # cyclomatic complexity — independent paths through a function
+    - dupl # duplicated code fragments
+    - funlen # long functions
+    - maintidx # maintainability index per function
+
+  settings:
+    # 10 is the BOTTOM of the range upstream recommends (10-20); the default of 30
+    # reports only the worst offenders. We want the tail visible for one run so the
+    # histogram is real, then we raise it to whatever SM's distribution justifies.
+    gocognit:
+      min-complexity: 10
+    gocyclo:
+      min-complexity: 10
+    # Upstream default. Token-based, so it finds structural repetition rather than
+    # textual similarity.
+    dupl:
+      threshold: 150
+    # NOT optional: funlen's defaults are lines:-1 / statements:-1, which means the
+    # linter runs and reports nothing. 60/40 is the common convention, chosen here
+    # only to produce a first reading.
+    funlen:
+      lines: 60
+      statements: 40
+    # maintidx is left at its own default: upstream's settings page documents no
+    # configuration key for it, and inventing one would fail the config validator
+    # or, worse, be silently ignored.
+
+  exclusions:
+    generated: strict
+    paths:
+      # sqlboiler output — regenerated from the schema and never hand-edited
+      # (project rule). THREE of the ten largest files in the tree live here
+      # (qso.go 1423, logbook.go 1001, qso_upload.go 993) and would dominate every
+      # metric with complexity that is not ours to fix.
+      - internal/database/sqlite/models
+      # Vendored Go inside the SPA dependency trees — not our code at all. CI
+      # already filters these out of `go vet` the same way.
+      - frontend/.*/node_modules
+    rules:
+      # Test code duplicates BY DESIGN — table fixtures, parallel ladder setups for
+      # the seven sequencer modes — and ATDD tests are legitimately long because the
+      # reasoning lives in the file header. Measuring those two here would swamp the
+      # production signal with findings we would not act on.
+      #
+      # Cognitive and cyclomatic complexity still apply to tests: a test too
+      # convoluted to follow is a real problem, and this codebase leans on tests
+      # being readable as the specification.
+      - path: _test\.go
+        linters:
+          - dupl
+          - funlen
