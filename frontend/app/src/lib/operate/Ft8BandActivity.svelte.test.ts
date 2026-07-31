@@ -420,10 +420,13 @@ describe('Ft8BandActivity directed call (double-click a plain row)', () => {
         armReady({
             answerCq: (a) => (got.push(a), okResult()),
         });
+        // ONE reading of the clock, used for both the decode and the expectation.
+        // freshSlot() reads Date.now(), so calling it twice is a RACE: even-parity
+        // slots are 30 s apart, and a slot boundary landing between the two calls
+        // moves the expected value by a whole pair. That turned CI red on 503f31c7.
+        const slot = freshSlot('even');
         render(Ft8BandActivity);
-        ft8Link.onDecode(
-            decode(freshSlot('even'), [{ text: 'K1ABC T22TT RI91', freq_hz: 1200, snr: -7 }])
-        );
+        ft8Link.onDecode(decode(slot, [{ text: 'K1ABC T22TT RI91', freq_hz: 1200, snr: -7 }]));
         flushSync();
 
         const rowBtn = screen.getByTitle(
@@ -436,7 +439,7 @@ describe('Ft8BandActivity directed call (double-click a plain row)', () => {
         expect(got[0]).toMatchObject({
             theirCall: 'T22TT',
             theirGrid: 'RI91',
-            slotUtc: freshSlot('even'),
+            slotUtc: slot,
             offsetHz: 1500,
             fd: false,
             theirSnr: -7,
