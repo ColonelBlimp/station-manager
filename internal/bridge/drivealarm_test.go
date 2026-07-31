@@ -955,6 +955,67 @@ func TestDriveAlarm_SelectorChangedAfterUnkey_StillReportsRecovery(t *testing.T)
 	}
 }
 
+// D24 — A FAILED tx_off PUTS THE TAINT QUESTION BACK (codex 287825b6 P1).
+//
+// D23 stopped meter changes in the post-unkey tail from tainting a transmission.
+// But the seal happens BEFORE the tx_off write is issued, and that write can
+// FAIL — the watchdog bounds it at ~2 s, and releaseFt8TxChecked then UNSEALS,
+// because the rig may still be keyed and the backstop will retry. A selection
+// change discarded during that pending write was simply lost: the rig can sit on
+// ALC without sending another MS frame (MS is pushed on change, not polled), so
+// the still-live drive timer would read the quiet ALC stream as no RF and raise
+// exactly the false alarm this arc exists to remove.
+//
+// This is a rollback state, which the previous round's rule created and did not
+// answer: an instant chosen inside a sequence has to say what happens when a
+// LATER step fails.
+//
+// RE-DERIVED, NOT REPLAYED. The fix asks "what is the meter on NOW?" at unseal
+// rather than remembering the discarded frame, and the difference is real: a
+// switch to ALC and back to PO inside the sealed window would leave a remembered
+// taint wrong, while the current selection is right by construction. observeMeter
+// records meterSel unconditionally — only the taint decision was ever gated — so
+// the answer is always available there.
+//
+// THE WINDOW IS CONSTRUCTED, NOT RACED, following the precedent set by
+// TestKeyFt8Tx_StartsWithEmptyMeterAccumulator: the fake's onWrite hook fires
+// only on writes that SUCCEED, so a failing write cannot be hit deterministically
+// from outside. seal/unseal are the real functions the real path calls, in the
+// real order; the assertion stays on the observable (no alarm published).
+func TestDriveAlarm_MeterMovedWhileUnkeyWritePending_TaintsOnRollback(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	s.observeMeter(meterFrame(t, "MS0")) // PO at key-down: the watch arms clean
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+
+	// The unkey attempt: the keyed window seals at the instant tx_off is issued.
+	s.mu.Lock()
+	s.sealMeterGapWindow(time.Now())
+	s.mu.Unlock()
+
+	// The operator turns the meter to ALC while that write is still pending.
+	s.observeMeter(meterFrame(t, "MS2"))
+
+	// The write FAILS, so the transmission is not over and the window reopens.
+	s.mu.Lock()
+	s.unsealMeterGapWindow()
+	s.mu.Unlock()
+
+	// The rig sends no further MS frame — it is simply sitting on ALC — and the
+	// stream is quiet, as a near-zero ALC reading always is.
+	time.Sleep(4 * silence)
+
+	if n := w.count(EventDriveAlarm); n != 0 {
+		t.Errorf("drive alarm published %d times after a FAILED unkey left the rig keyed "+
+			"with its meter on ALC; want 0 — the selection change arrived while the "+
+			"write was pending and must not be lost when the window reopens", n)
+	}
+}
+
 // D20 — an UNKNOWN selection reports nothing rather than claiming either state.
 // Empty is how every other RigStatePayload field says "this frame carried no
 // value"; the SPA keeps its last. Reporting DriveMonitorOK here would be a claim

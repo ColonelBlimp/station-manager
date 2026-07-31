@@ -241,6 +241,16 @@ func (s *Service) sealMeterGapWindow(at time.Time) {
 func (s *Service) unsealMeterGapWindow() {
 	s.meterGapKeyedFor = 0
 	s.meterGapSealed = false
+	// The transmission is resuming, so the selector question re-opens — and any
+	// selection change that arrived while the write was pending was DISCARDED by
+	// observeMeter's seal check. Answer it from the selection in force NOW rather
+	// than replaying that frame: a switch to ALC and back to PO inside the sealed
+	// window would leave a remembered taint wrong, while the current selection is
+	// right by construction. meterSel is recorded unconditionally — only the taint
+	// decision is gated — so it is always known here (codex 287825b6 P1).
+	if driveMonitorFor(s.meterSel) == DriveMonitorMeterNotPO {
+		s.driveSelTainted = true
+	}
 }
 
 // closeMeterGapWindow ends measurement. Caller holds s.mu. Called from
