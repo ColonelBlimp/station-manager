@@ -38,6 +38,7 @@
 // clock, never the wall clock — see daemonNowMs.
 let daemonAtMs = $state(0);
 let perfAtMs = $state(0);
+let wallAtMs = $state(0);
 let calibrated = $state(false);
 
 /**
@@ -62,6 +63,33 @@ export function daemonNowMs(): number {
     return daemonAtMs + (performance.now() - perfAtMs);
 }
 
+// How far the wall clock and the monotonic clock may disagree before the
+// calibration is treated as untrustworthy. ONE FT8 SLOT — chosen in-domain rather
+// than invented: both readings measure the SAME interval in the same process, so
+// in normal operation they differ by NTP slew (parts per million, milliseconds
+// over an hour). 15 s is far above that and far below anything that could flip a
+// three-minute staleness verdict on its own.
+const CLOCK_DISAGREE_MS = 15_000;
+
+/**
+ * Whether the calibration can still be believed.
+ *
+ * A long SUSPEND freezes performance.now() while the wall clock runs on; a wall
+ * clock STEP does the reverse. From inside the page the two are indistinguishable
+ * — the same disagreement — so this does not try to tell them apart. It reports
+ * that the answer is unknown, and callers fail OPEN: mark nothing stale and let
+ * the daemon, which holds the only clock that matters, adjudicate.
+ *
+ * UNCALIBRATED counts as trusted: that is plain browser time, the best answer
+ * available and the state every session starts in. Treating it as untrusted would
+ * disable the staleness guard for most of a page load.
+ */
+export function daemonClockTrusted(): boolean {
+    if (!calibrated) return true;
+    const drift = Math.abs(Date.now() - wallAtMs - (performance.now() - perfAtMs));
+    return drift <= CLOCK_DISAGREE_MS;
+}
+
 /**
  * Record the daemon's clock from a response's `Date` header. Ignores a missing or
  * unparseable value and keeps the last good skew — an unreadable header says
@@ -75,6 +103,7 @@ export function noteDaemonDate(header: string | null | undefined): void {
     // the gap between them into every later reading.
     daemonAtMs = t;
     perfAtMs = performance.now();
+    wallAtMs = Date.now();
     calibrated = true;
 }
 
@@ -82,5 +111,6 @@ export function noteDaemonDate(header: string | null | undefined): void {
 export function _resetDaemonClockForTests(): void {
     daemonAtMs = 0;
     perfAtMs = 0;
+    wallAtMs = 0;
     calibrated = false;
 }

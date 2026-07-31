@@ -41,7 +41,7 @@ package ft8
 // but bounded, and at the cap the contact is dropped WITHOUT logging, because
 // recording it would invent a QSO the other station does not hold.
 //
-// Group B reuses `maxRepeats` and the existing `s.repeats` counter, which resets
+// Group B reuses `maxRepeats` and the existing `s.contact.repeats` counter, which resets
 // on every advance and so gives the final rung its own budget of attempts. That
 // counter only advances at the final rung when the previous attempt FAILED — a
 // successful one completes the contact — so it counts transmit failures, not
@@ -113,13 +113,11 @@ func (s *Sequencer) retireSessionLocked(clear func()) {
 	s.sessionGen++
 	clear()
 	s.mode = seqIdle
-	s.repeats = 0
-	// Per-session operator flags die with the session. Every Start* also clears
-	// skipIfSilent, so this is belt-and-braces there — but it is what makes this
-	// function the WHOLE transition, which is the point of having one: a caller
-	// should never need to remember a fifth thing to reset by hand.
-	s.skipIfSilent = false
-	s.nextArmed = false
+	// Per-contact operator flags die with the session, in ONE assignment — what
+	// this function exists to be. It used to name each flag, with a comment hoping
+	// "a caller should never need to remember a fifth thing to reset by hand"; the
+	// zero value now enforces that rather than asking for it.
+	s.contact = contactFlags{}
 	reason := s.pendingEndReason
 	s.pendingEndReason = ""
 	s.publish(s.terminalStatusLocked(reason))

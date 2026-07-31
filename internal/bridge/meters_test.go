@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 )
@@ -705,5 +706,112 @@ func TestFormatMeterHist_RendersLowBucketFirst(t *testing.T) {
 
 	if got, want := formatMeterHist(b), "7,0,0,0,0,0,0,0,0,2"; got != want {
 		t.Errorf("formatMeterHist = %q, want %q", got, want)
+	}
+}
+
+/*
+   THE KEYED WINDOW ENDS AT THE SEAL, NOT AT ft8TxActive (2026-07-31).
+
+   R2 already says receive readings must stay out of the per-transmission
+   summary, and it passes — but its fixture sets ft8TxActive=false, which is the
+   state AFTER the whole release path has finished. It never enters the interval
+   where the two candidate answers differ, so both the right and the wrong gate
+   agree in it and it certified neither.
+
+   That interval is the release tail. releaseFt8TxChecked seals the gap window at
+   the instant tx_off is ISSUED — PTT drops there — and then leaves ft8TxActive
+   TRUE through the ACK, the confirm cycle, the restore settle and the mode
+   restore. Every meter frame the rig pushes in that span is a RECEIVE reading,
+   and observeMeter's summary gate admitted all of them.
+
+   WHY IT MATTERS, and it is not cosmetic. Min deliberately ignores leading zeros
+   (meterSample.started: "a zero AFTER onset is the collapse being hunted"), so a
+   zero in the summary is meant to BE the collapse signature. Measured on the
+   dogfood log 2026-07-31: meter_po_min was 0 on 402 of 442 transmissions. The
+   same frames put a phantom count in histogram bucket 0 on every transmission,
+   which is the instrument built the day before to tell steady output from
+   unstable output.
+
+   The nearest confusable state is the whole point: a transmission that genuinely
+   lost drive part-way and one whose zeros are just post-unkey receive frames
+   presently produce the same summary.
+*/
+
+// R16 — THE CRITERION. A reading that arrives after the seal is receive-time
+// data and must not appear in the transmission's summary, even though
+// ft8TxActive is still true.
+func TestObserveMeter_SealedWindowReadingsExcludedFromSummary(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	setFt8Keyed(s, true)
+	s.mu.Lock()
+	s.openMeterGapWindow()
+	s.mu.Unlock()
+
+	// Keyed, with RF: healthy drive, well clear of zero.
+	s.observeMeter(meterFrame(t, "RM5200000"))
+
+	// tx_off is issued. PTT drops HERE; ft8TxActive stays true for the tail.
+	s.mu.Lock()
+	s.sealMeterGapWindow(time.Now())
+	s.mu.Unlock()
+
+	// The receive stream returns within moments of the unkey, reading ~0 on PO.
+	s.observeMeter(meterFrame(t, "RM5000000"))
+	s.observeMeter(meterFrame(t, "RM5000000"))
+
+	sum := s.flushFt8TxMeters()
+	if len(sum.Samples) != 1 {
+		t.Fatalf("got %d samples, want 1: %+v", len(sum.Samples), sum.Samples)
+	}
+	got := sum.Samples[0]
+	if got.Count != 1 || got.Min != 200 || got.Max != 200 || got.Last != 200 {
+		t.Errorf("sample = %+v, want count=1 min=200 max=200 last=200 — the two "+
+			"post-seal receive readings belong to no transmission", got)
+	}
+	// The histogram is where this is most visible: a bucket-0 count on a
+	// transmission that never dropped reads as a collapse.
+	if got.Buckets[0] != 0 {
+		t.Errorf("histogram bucket 0 = %d, want 0; hist=%s — post-unkey receive "+
+			"readings are being counted as collapsed drive",
+			got.Buckets[0], formatMeterHist(got.Buckets))
+	}
+}
+
+// R16b — the rollback state R16 creates. A failed tx_off unseals the window
+// because the transmission is NOT over, and readings must count again.
+//
+// It discriminates in BOTH directions, which is why it is worth its own test:
+// count=2 fails the old ft8TxActive gate (which admitted the reading taken while
+// the unkey was pending), and last=150 fails the obvious over-fix — treating the
+// seal as a sticky "accumulation is finished" flag — which would silently drop
+// the rest of a transmission that carried on after a failed unkey.
+func TestObserveMeter_UnsealedWindowResumesAccumulation(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	setFt8Keyed(s, true)
+	s.mu.Lock()
+	s.openMeterGapWindow()
+	s.mu.Unlock()
+
+	s.observeMeter(meterFrame(t, "RM5200000"))
+
+	s.mu.Lock()
+	s.sealMeterGapWindow(time.Now())
+	s.mu.Unlock()
+	s.observeMeter(meterFrame(t, "RM5000000")) // excluded: unkey pending
+
+	// The write failed — TX is still up and the backstop will retry.
+	s.mu.Lock()
+	s.unsealMeterGapWindow()
+	s.mu.Unlock()
+	s.observeMeter(meterFrame(t, "RM5150000")) // keyed again: counts
+
+	sum := s.flushFt8TxMeters()
+	if len(sum.Samples) != 1 {
+		t.Fatalf("got %d samples, want 1: %+v", len(sum.Samples), sum.Samples)
+	}
+	got := sum.Samples[0]
+	if got.Count != 2 || got.Min != 150 || got.Max != 200 || got.Last != 150 {
+		t.Errorf("sample = %+v, want count=2 min=150 max=200 last=150 — a "+
+			"transmission that outlived a failed unkey keeps being measured", got)
 	}
 }

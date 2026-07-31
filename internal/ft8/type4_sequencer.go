@@ -59,7 +59,7 @@ func (s *Sequencer) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr in
 		return ErrQsoInProgress
 	}
 	s.mode = seqAnsweringT4
-	s.skipIfSilent = false
+	s.contact = contactFlags{}
 	s.sessionGen++
 	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
 	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
@@ -68,7 +68,6 @@ func (s *Sequencer) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr in
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
 	s.startedAt = now.UTC()
-	s.repeats = 0
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.publish(st)
@@ -105,7 +104,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 		}
 		if next, ok := s.t4Ex.Advance(m.Text); ok {
 			*s.t4Ex = next
-			s.repeats = 0
+			s.contact.repeats = 0
 			advanced = true
 			break
 		}
@@ -115,7 +114,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 			Str("now_rung", s.t4Ex.State.label()).Msg("ft8 seq: type-4 decode from worked station")
 	}
 	if advanced {
-		s.skipIfSilent = false // they came back — an armed skip no longer applies
+		s.contact.skipIfSilent = false // they came back — an armed skip no longer applies
 	}
 
 	msg, ok := s.t4Ex.TxMessage()
@@ -150,24 +149,24 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	confirming := s.t4Ex.State == t4Confirming
 	if !confirming {
 		// Operator-armed skip — see onSlotAnswering; same semantics.
-		if s.skipIfSilent && !advanced && s.repeats > 0 {
+		if s.contact.skipIfSilent && !advanced && s.contact.repeats > 0 {
 			s.retireSessionLocked(func() { s.t4Ex = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: type-4 skip-if-silent — no reply; ending without repeat")
 			return
 		}
-		if s.repeats >= s.maxRepeats {
+		if s.contact.repeats >= s.maxRepeats {
 			s.retireSessionLocked(func() { s.t4Ex = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: type-4 no answer after max repeats; abandoning")
 			return
 		}
-		s.repeats++
+		s.contact.repeats++
 	}
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
-	repeats := s.repeats
+	repeats := s.contact.repeats
 	// GROUP A final rung (see finalrung.go): their RR73 is what advanced us here,
 	// so the contact is complete on their side and this 73 is a courtesy — send
 	// once and record the QSO on either outcome.
@@ -244,7 +243,7 @@ func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, thei
 		return ErrQsoInProgress
 	}
 	s.mode = seqWorkingT4
-	s.skipIfSilent = false
+	s.contact = contactFlags{}
 	s.sessionGen++
 	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
 	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
@@ -254,7 +253,6 @@ func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, thei
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
 	s.startedAt = now.UTC()
-	s.repeats = 0
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.publish(st)
@@ -342,7 +340,7 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 	// caller is waiting for, so re-entry means the previous attempt failed to
 	// transmit. There is no pre-final rung here to carry a cap, so bound it directly
 	// — counted only past the guards above, since a deferred slot is not an attempt.
-	if s.repeats >= s.maxRepeats {
+	if s.contact.repeats >= s.maxRepeats {
 		call, attempts := s.t4Work.TheirCall, s.maxRepeats
 		s.retireSessionLocked(func() { s.t4Work = nil })
 		s.mu.Unlock()
@@ -351,7 +349,7 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 			Msg("ft8 seq: type-4 work — final RR73 never transmitted; abandoning without logging")
 		return
 	}
-	s.repeats++
+	s.contact.repeats++
 
 	s.lastTxSlot = txSlot
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz

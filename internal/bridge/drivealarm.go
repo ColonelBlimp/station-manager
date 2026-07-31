@@ -190,6 +190,26 @@ func (s *Service) openMeterGapWindow() {
 	s.meterGapSealed = false
 }
 
+// inKeyedMeterWindowLocked reports whether a meter frame arriving NOW is
+// evidence about the transmission in progress. Caller holds s.mu.
+//
+// ONE name for a moment that three review rounds each answered separately, and
+// wrongly in a different way each time. ft8TxActive is NOT that moment: it means
+// "the TX controller holds the single-flight claim", which is deliberately wider
+// — it stays true through the whole of releaseFt8TxChecked's tail (the tx_off
+// ACK, the confirm cycle, the restore settle, the mode restore) so that nothing
+// else can key the rig meanwhile. PTT drops at the FIRST step of that tail, so
+// every frame after it is a RECEIVE reading.
+//
+// Consumers that ask "may I touch the rig" must keep using ft8TxActive — the
+// answer there is no for the whole tail. This predicate answers the narrower
+// question "is the rig actually radiating", and only meter evidence may use it.
+//
+// A failed tx_off unseals, and correctly: the transmission is then still running.
+func (s *Service) inKeyedMeterWindowLocked() bool {
+	return s.ft8TxActive && !s.meterGapSealed
+}
+
 // sealMeterGapWindow freezes the measurement at `at`, the instant tx_off was
 // ISSUED. Caller holds s.mu.
 //

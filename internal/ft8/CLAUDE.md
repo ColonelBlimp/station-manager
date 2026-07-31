@@ -213,7 +213,22 @@ decision not to fire an opening, recorded at the start function — see
 `StartCallCq`) · the completion snapshot (`completed*QsoLocked`) · and the
 Service-side staging in `servicetx.go`.
 
-Two structural rules the modes already obey, worth keeping:
+Three structural rules the modes already obey, worth keeping:
+
+- **New per-contact state goes INSIDE `contactFlags`, not beside it.** A field
+  whose lifetime is one contact and which is added as a bare `Sequencer` field
+  must then be remembered at nine reset sites (seven `Start*`,
+  `retireSessionLocked`, `abandonLocked`); added to `contactFlags` it is reset by
+  all nine for free, because each does `s.contact = contactFlags{}`. The struct's
+  doc comment enumerates what deliberately stays OUT and why — `autoWork*` (a RUN,
+  which outlives a completed contact), `confirmHold` (set *during* the retire it
+  outlives), `stalledCalls`/`stallCooloff` (exclusion memory on their own clocks),
+  `lastTxSlot` (a property of the RIG, and what stops two sessions transmitting in
+  one slot across a start/abandon boundary). Answer that question before adding a
+  field; the grouping exists to make it answerable rather than to save typing.
+  *The gap that prompted it: `nextArmed`'s own comment claimed it was cleared "at
+  session start", and six of the seven starts did not clear it. Harmless only by
+  luck — both routes to `seqIdle` clear it, so no start could observe it set.*
 
 - **An active mode always has exactly its corresponding exchange pointer**
   (`seqAnswering`↔`ex`, `seqWorking`↔`caller`, and so on). The nil checks scattered

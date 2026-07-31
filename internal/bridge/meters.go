@@ -188,10 +188,12 @@ type ft8MeterSummary struct {
 //     keyed and destroyed the reading, which would have left any consumer (a
 //     browser meter display) blank until the operator transmitted — a
 //     transmission must not be needed to bring a meter to life.
-//   - The per-transmission SUMMARY is gated on ft8TxActive. PO reads ~0 in
-//     receive, so folding receive-time readings into a transmission's range
-//     would peg every minimum at zero and hide the very fault this exists to
-//     catch.
+//   - The per-transmission SUMMARY is gated on inKeyedMeterWindowLocked. PO
+//     reads ~0 in receive, so folding receive-time readings into a
+//     transmission's range would peg every minimum at zero and hide the very
+//     fault this exists to catch. That gate was ft8TxActive until 2026-07-31,
+//     which admitted the whole post-unkey tail and did exactly that: min was 0
+//     on 402 of 442 logged transmissions.
 func (s *Service) observeMeter(status cat.Status) {
 	s.mu.Lock()
 	announce := false
@@ -214,7 +216,7 @@ func (s *Service) observeMeter(status cat.Status) {
 		// so a standing alarm went unretired on evidence that was good (codex
 		// 71bbf123 P1). A failed tx_off unseals, which is correct: the
 		// transmission is then still running and a change again counts.
-		if s.ft8TxActive && !s.meterGapSealed && driveMonitorFor(sel) == DriveMonitorMeterNotPO {
+		if s.inKeyedMeterWindowLocked() && driveMonitorFor(sel) == DriveMonitorMeterNotPO {
 			s.driveSelTainted = true
 		}
 	}
@@ -240,8 +242,8 @@ func (s *Service) observeMeter(status cat.Status) {
 		if s.markMeterSeenLocked() {
 			announce = true
 		}
-		// Layer 2 — only while this rig is actually transmitting.
-		if !s.ft8TxActive {
+		// Layer 2 — only while this rig is actually radiating.
+		if !s.inKeyedMeterWindowLocked() {
 			continue
 		}
 		// Bind the reading to the selection in force RIGHT NOW, not to whatever

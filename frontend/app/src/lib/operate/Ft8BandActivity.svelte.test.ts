@@ -842,6 +842,60 @@ describe('Ft8BandActivity staleness', () => {
         expect(worked).toBe(0);
     });
 
+    // S7 — FAIL OPEN WHEN THE CLOCK IS NOT TRUSTWORTHY (codex 503f31c7 P2). A
+    // suspended laptop freezes the monotonic clock while wall time runs on, and
+    // from inside the page that is indistinguishable from a wall-clock step. The
+    // client therefore stops claiming to know: nothing is greyed, every click goes
+    // through, and the daemon — which holds the only clock that matters — decides.
+    //
+    // Failing open rather than closed is the load-bearing choice. Closed would
+    // re-create the previous round's deadlock: greyed rows block clicks, and the
+    // requests that would recalibrate the clock are exactly those clicks.
+    it('does not grey or block anything while the clock is untrustworthy', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const calls: Ft8WorkArgs[] = [];
+        armReady({
+            workCaller: (a) => {
+                calls.push(a);
+                return okResult();
+            },
+        });
+        // Faked BEFORE render, or the component's re-check interval is a real one
+        // that advanceTimersByTime cannot drive. Only the timers — Date and
+        // performance stay real until the suspend is modelled below.
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+        noteDaemonDate(new Date().toUTCString());
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(ago(10 * MINUTE), [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
+        );
+        ft8Link.onDecode(decode(ago(0), [{ text: 'CQ W1ABC FN42', freq_hz: 1500, snr: -12 }]));
+        flushSync();
+        // Stale while the clock is believed — the discriminator for what follows.
+        expect(screen.getByText('7Q5MLV PA3KUS JO21').closest('tr')?.className).toMatch(/opacity/);
+
+        // The machine sleeps: wall time advances, monotonic time does not. Only the
+        // INTERVAL is faked — Date/performance stay under the spies below, which are
+        // what model the suspend.
+        const perfFrozen = performance.now();
+        const wallAfterSleep = Date.now() + 10 * MINUTE;
+        vi.spyOn(performance, 'now').mockReturnValue(perfFrozen);
+        vi.spyOn(Date, 'now').mockReturnValue(wallAfterSleep);
+        // The component re-checks on its own tick, which is how a resumed tab
+        // notices without any decode arriving.
+        vi.advanceTimersByTime(6000);
+        flushSync();
+        expect(screen.getByText('7Q5MLV PA3KUS JO21').closest('tr')?.className).not.toMatch(
+            /opacity/
+        );
+
+        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'));
+        await flush();
+        expect(calls).toHaveLength(1);
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
     // S4 — an unparseable slot time is NOT stale. Unknown age is not old age, and
     // refusing on a fact we do not have would be worse than allowing the click.
     it('treats a decode with an unparseable slot time as workable', async () => {

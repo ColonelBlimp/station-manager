@@ -52,13 +52,12 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 		return ErrQsoInProgress
 	}
 	s.mode = seqCalling
-	s.skipIfSilent = false
+	s.contact = contactFlags{}
 	s.sessionGen++
 	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
 	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
 	s.caller = nil
 	s.stalledCalls = nil // fresh session — no abandoned answerers to exclude yet
-	s.nextArmed = false
 	s.confirmHold = nil
 	s.ourCall = call
 	s.ourGrid = grid
@@ -66,7 +65,6 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	s.answerMode = answerMode
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
-	s.repeats = 0
 	// Our CQ parity: the operator's explicit even/odd choice (WSJT-X "Tx even/1st"),
 	// else the next slot (fire ASAP — the default). We transmit CQ in our parity and
 	// PROCESS answers in the opposite (answerers') parity — theirPeriod; onSlotCalling
@@ -140,7 +138,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			if pick, text := s.pickAnswererLocked(msgs, now); pick != nil {
 				s.caller = pick
 				s.startedAt = now.UTC()
-				s.repeats = 0
+				s.contact.repeats = 0
 				heard = text
 				advanced = true
 			}
@@ -152,7 +150,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			}
 			if next, ok := s.caller.Advance(m.Text); ok {
 				*s.caller = next
-				s.repeats = 0
+				s.contact.repeats = 0
 				advanced = true
 				break
 			}
@@ -165,7 +163,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	// `advanced` too, when a NEW answerer is picked; clearing there is equally right,
 	// since a press never belongs to a contact that had not started.)
 	if advanced {
-		s.nextArmed = false
+		s.contact.nextArmed = false
 	}
 
 	// Message + rung for the current (our) slot: a confirm-hold re-send if one is
@@ -226,18 +224,18 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	confirming := working && s.caller.State == cqRogering
 	switch {
 	case working && !confirming:
-		if s.nextArmed || s.repeats >= s.maxRepeats {
+		if s.contact.nextArmed || s.contact.repeats >= s.maxRepeats {
 			reason := "answerer silent after max repeats"
-			if s.nextArmed {
+			if s.contact.nextArmed {
 				reason = "operator pressed Next"
 			}
 			msg, rung = s.parkAnswererLocked(msgs, now, reason)
 		} else {
-			s.repeats++
+			s.contact.repeats++
 		}
 	case !working:
 		if resendRR73 == "" {
-			s.repeats++ // CQ repeat count for status; uncapped
+			s.contact.repeats++ // CQ repeat count for status; uncapped
 		}
 		// A confirm-hold re-send is not a CQ, so it must not advance that counter.
 		// It also leaves `confirming` false, so no completion callback is built —
@@ -248,9 +246,9 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// failed to transmit, and an unbounded retry hurts more here than on the
 		// other ladders — the contact only clears on success, so the whole CQ loop
 		// would freeze on one station and the rest of the pile-up goes unworked.
-		if s.nextArmed || s.repeats >= s.maxRepeats {
-			s.log.WarnWith().Str("their_call", s.caller.TheirCall).Int("attempts", s.repeats).
-				Bool("operator_next", s.nextArmed).
+		if s.contact.nextArmed || s.contact.repeats >= s.maxRepeats {
+			s.log.WarnWith().Str("their_call", s.caller.TheirCall).Int("attempts", s.contact.repeats).
+				Bool("operator_next", s.contact.nextArmed).
 				Msg("ft8 seq: caller — final RR73 never transmitted; dropping contact without logging")
 			// Nothing is logged: they never got the roger, so neither side has a QSO.
 			// Park it through the SHARED path so it gets the same rescan-or-clear the
@@ -258,7 +256,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			// for the rest of the SESSION, and if it is the only one answering we would
 			// CQ forever and reject every answer it sends (codex 3c1ee047 P1).
 			reason := "final RR73 never transmitted"
-			if s.nextArmed {
+			if s.contact.nextArmed {
 				reason = "operator pressed Next on the closing rung"
 			}
 			msg, rung = s.parkAnswererLocked(msgs, now, reason)
@@ -266,13 +264,13 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			// the contact we just released.
 			confirming = false
 		} else {
-			s.repeats++
+			s.contact.repeats++
 		}
 	}
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
-	repeats := s.repeats
+	repeats := s.contact.repeats
 	var completed *CompletedQso
 	if confirming {
 		// Capture the QSO data but DO NOT clear the contact or resume CQ yet
@@ -314,9 +312,9 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 				return
 			}
 			s.caller = nil // resume calling CQ (work the pile-up)
-			s.repeats = 0
-			s.stalledCalls = nil // completed — fresh CQ round; previously-stalled callers retry
-			s.nextArmed = false  // the contact it was pressed on is finished
+			s.contact.repeats = 0
+			s.stalledCalls = nil        // completed — fresh CQ round; previously-stalled callers retry
+			s.contact.nextArmed = false // the contact it was pressed on is finished
 			// Stay listenable for one of their slots: if they did not copy this RR73
 			// they will repeat their R-report, which no longer reaches us once the
 			// contact is cleared (see confirmHold).
@@ -595,10 +593,10 @@ func (s *Sequencer) spendConfirmResend() {
 // `heard`: the decode-log line for this slot has already been emitted by the time any
 // caller reaches here. Caller holds s.mu with s.caller non-nil.
 func (s *Sequencer) parkAnswererLocked(msgs []goft8.DecodedMessage, now time.Time, reason string) (msg, rung string) {
-	s.nextArmed = false // consumed: one press parks one answerer
+	s.contact.nextArmed = false // consumed: one press parks one answerer
 	s.stalledCalls = append(s.stalledCalls, s.caller.TheirCall)
 	s.caller = nil
-	s.repeats = 0
+	s.contact.repeats = 0
 	if pick, _ := s.pickAnswererLocked(msgs, now); pick != nil {
 		s.caller = pick
 		s.startedAt = now.UTC()
@@ -609,7 +607,7 @@ func (s *Sequencer) parkAnswererLocked(msgs []goft8.DecodedMessage, now time.Tim
 		// blowing the configured cap and slowing rotation through the pile-up
 		// (codex a301d350 P2). A first-pick answerer reaches its first transmit at
 		// repeats=1; this matches.
-		s.repeats = 1
+		s.contact.repeats = 1
 		if m, ok := pick.TxMessage(); ok { // encodability pinned by the pick
 			msg, rung = m, pick.State.label()
 		}

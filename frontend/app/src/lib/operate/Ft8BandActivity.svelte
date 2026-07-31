@@ -28,7 +28,7 @@
         isCqType4,
         isNonstandardCall,
     } from '../utils/ft8Message';
-    import { daemonNowMs as readDaemonNowMs } from '../api/daemonClock.svelte';
+    import { daemonNowMs as readDaemonNowMs, daemonClockTrusted } from '../api/daemonClock.svelte';
     import { slotParity } from '../utils/ft8Parity';
     import { pathInfo } from '../utils/bearing';
     import { parseFrequency } from '../validators/frequency';
@@ -221,6 +221,11 @@
     // every click, while the daemon would have accepted them (codex 9d7a3f46 P1).
     // nowMs supplies the ticking, so this still advances between slots — the quiet
     // band is the case that matters.
+    const clockTrusted = $derived.by(() => {
+        void nowMs; // re-checked on each tick, like daemonNow below
+        return daemonClockTrusted();
+    });
+
     const daemonNow = $derived.by(() => {
         // nowMs is the REACTIVITY TRIGGER only — the value comes from the daemon
         // clock, which tracks monotonic elapsed time rather than the wall clock, so
@@ -230,6 +235,15 @@
     });
 
     function isStale(row: DecodeRow): boolean {
+        // FAIL OPEN when the two clocks disagree (codex 503f31c7 P2). A suspend
+        // freezes the monotonic clock while wall time runs on; a wall-clock step
+        // does the reverse, and from here the two are indistinguishable. Rather
+        // than guess, stop claiming to know: mark nothing stale and let the daemon
+        // — which holds the only clock that matters, and refuses a stale start
+        // outright — adjudicate. Failing CLOSED would re-create the previous
+        // round's deadlock, since the requests that recalibrate the clock are the
+        // very clicks a closed guard blocks.
+        if (!clockTrusted) return false;
         const t = Date.parse(row.d.startUtc);
         if (Number.isNaN(t)) return false;
         return daemonNow - t > STALE_MS;

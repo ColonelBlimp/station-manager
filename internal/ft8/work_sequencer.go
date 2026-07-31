@@ -108,7 +108,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		}
 		if next, ok := s.caller.Advance(m.Text); ok {
 			*s.caller = next
-			s.repeats = 0
+			s.contact.repeats = 0
 			advanced = true
 			break
 		}
@@ -126,7 +126,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			Str("now_rung", rung).Msg("ft8 seq: working caller — decode from worked station")
 	}
 	if advanced {
-		s.skipIfSilent = false // they came back — an armed skip no longer applies
+		s.contact.skipIfSilent = false // they came back — an armed skip no longer applies
 	}
 
 	// Late-window guard (ADR 0032): too late into our slot and head-truncation loses
@@ -163,16 +163,16 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// Operator-armed skip — see onSlotAnswering; same semantics. Deliberately
 		// pre-final only: it means "stop calling a station that isn't answering",
 		// and at the final rung nobody is being waited for.
-		if s.skipIfSilent && !advanced && s.repeats > 0 {
+		if s.contact.skipIfSilent && !advanced && s.contact.repeats > 0 {
 			s.retireSessionLocked(func() { s.caller = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: working caller — skip-if-silent; ending without repeat")
 			return
 		}
 	}
-	if s.repeats >= s.maxRepeats {
+	if s.contact.repeats >= s.maxRepeats {
 		call, attempts := s.caller.TheirCall, s.maxRepeats
-		if !confirming && s.autoWorkArmed {
+		if !confirming && s.autoWork.armed {
 			// A silent answerer: hold them out of selection briefly, or an armed
 			// auto-work run re-picks them on the very next slot and the ladder
 			// stalls again forever, starving the rest of the pile-up (dogfood
@@ -200,11 +200,11 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		}
 		return
 	}
-	s.repeats++
+	s.contact.repeats++
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
-	repeats := s.repeats
+	repeats := s.contact.repeats
 	var completed *CompletedQso
 	if confirming {
 		// Capture the QSO data but DO NOT clear the contact yet (review follow-up M1):
@@ -307,7 +307,7 @@ func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, 
 		return ErrQsoInProgress
 	}
 	s.mode = seqWorkingFd
-	s.skipIfSilent = false
+	s.contact = contactFlags{}
 	s.sessionGen++
 	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
 	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
@@ -317,7 +317,6 @@ func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, 
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
 	s.startedAt = now.UTC()
-	s.repeats = 0
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.publish(st)
@@ -358,7 +357,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 		}
 		if next, ok := s.fdWork.Advance(m.Text); ok {
 			*s.fdWork = next
-			s.repeats = 0
+			s.contact.repeats = 0
 			advanced = true
 			break
 		}
@@ -376,7 +375,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 			Str("now_rung", rung).Msg("ft8 seq: working caller (FD) — decode from worked station")
 	}
 	if advanced {
-		s.skipIfSilent = false // they came back — an armed skip no longer applies
+		s.contact.skipIfSilent = false // they came back — an armed skip no longer applies
 	}
 
 	curStart, perr := time.Parse(time.RFC3339, ref.StartUTC)
@@ -403,24 +402,24 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 	confirming := s.fdWork.State == fdwRogering
 	if !confirming {
 		// Operator-armed skip — see onSlotAnswering; same semantics.
-		if s.skipIfSilent && !advanced && s.repeats > 0 {
+		if s.contact.skipIfSilent && !advanced && s.contact.repeats > 0 {
 			s.retireSessionLocked(func() { s.fdWork = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: working caller (FD) — skip-if-silent; ending without repeat")
 			return
 		}
-		if s.repeats >= s.maxRepeats {
+		if s.contact.repeats >= s.maxRepeats {
 			s.retireSessionLocked(func() { s.fdWork = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: working caller (FD) — no answer after max repeats; abandoning")
 			return
 		}
-		s.repeats++
+		s.contact.repeats++
 	}
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
-	repeats := s.repeats
+	repeats := s.contact.repeats
 	// GROUP A final rung (see finalrung.go): in Field Day the ANSWERING station
 	// sends the closing RR73, and receiving theirs is what advanced us here — so on
 	// the work side the contact is already complete for them and our RR73 is the
@@ -474,7 +473,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 // frame.
 func (s *Sequencer) commitWorkCallerLocked(c *CallerExchange, call, theirPeriod string, offsetHz, dialFreqMHz float64, now time.Time) {
 	s.mode = seqWorking
-	s.skipIfSilent = false
+	s.contact = contactFlags{}
 	s.sessionGen++
 	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
 	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
@@ -484,7 +483,6 @@ func (s *Sequencer) commitWorkCallerLocked(c *CallerExchange, call, theirPeriod 
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
 	s.startedAt = now.UTC()
-	s.repeats = 0
 	s.publish(s.statusLocked())
 }
 
@@ -535,20 +533,20 @@ func (s *Sequencer) inStallCooloffLocked(call string, now time.Time) bool {
 // armed on, which is also why a dial change ends the run rather than silently moving it.
 func (s *Sequencer) onSlotIdleArmed(ref SlotRef, msgs []goft8.DecodedMessage, now time.Time) {
 	s.mu.Lock()
-	if s.mode != seqIdle || !s.autoWorkArmed {
+	if s.mode != seqIdle || !s.autoWork.armed {
 		s.mu.Unlock()
 		return
 	}
 	// pickAnswererLocked matches against these two, so the run supplies them: after a
 	// completion the previous session's identity is gone.
-	s.ourCall = s.autoWorkCall
+	s.ourCall = s.autoWork.call
 	s.answerMode = s.autoWorkMode
 	pick, text := s.pickAnswererLocked(msgs, now)
 	if pick == nil {
 		s.mu.Unlock()
 		return // armed and waiting — nobody is calling this slot
 	}
-	s.commitWorkCallerLocked(pick, s.autoWorkCall, ref.Period, s.autoWorkOffsetHz, s.autoWorkDialMHz, now)
+	s.commitWorkCallerLocked(pick, s.autoWork.call, ref.Period, s.autoWork.offsetHz, s.autoWork.dialMHz, now)
 	theirCall := pick.TheirCall
 	s.mu.Unlock()
 

@@ -24,7 +24,12 @@
 */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { daemonNowMs, noteDaemonDate, _resetDaemonClockForTests } from './daemonClock.svelte';
+import {
+    daemonNowMs,
+    daemonClockTrusted,
+    noteDaemonDate,
+    _resetDaemonClockForTests,
+} from './daemonClock.svelte';
 
 describe('daemonClock', () => {
     beforeEach(() => _resetDaemonClockForTests());
@@ -62,5 +67,68 @@ describe('daemonClock', () => {
         const after = daemonNowMs();
         expect(Math.abs(after - before)).toBeLessThan(2_000);
         expect(after).toBeLessThan(stepped - 9 * 60_000);
+    });
+});
+
+/*
+    SUSPEND — the other half of the clock trade-off (codex 503f31c7 P2).
+
+    performance.now() is monotonic, which is why elapsed time is measured with it,
+    but on most non-Windows browsers it does NOT advance while the machine sleeps.
+    So the two failure modes are symmetric and we cannot have both:
+
+      wall clock   survives suspend, broken by a clock STEP
+      monotonic    survives a clock step, broken by SUSPEND
+
+    Worse, from inside the page a long suspend and a forward clock step look
+    IDENTICAL — the same disagreement between the two readings. Guessing which
+    happened is what the previous two rounds each got wrong in one direction.
+
+    So this does not guess. When the two clocks disagree the calibration is simply
+    not trustworthy, and the client stops claiming to know: nothing is marked
+    stale, every click goes through, and the DAEMON adjudicates — which it always
+    did, being the actual guarantee. Failing open is right in both directions:
+
+      suspend      stale rows become clickable; the daemon refuses them with a
+                   clear message, and THAT RESPONSE RECALIBRATES (safeFetch samples
+                   every response, including a 409), so it self-heals in one click.
+      clock step   no rows are wrongly greyed, so the deadlock of the previous
+                   round — blocked clicks blocking the requests that would
+                   recalibrate — cannot recur.
+*/
+describe('daemonClock trust', () => {
+    beforeEach(() => _resetDaemonClockForTests());
+    afterEach(() => {
+        vi.restoreAllMocks();
+        _resetDaemonClockForTests();
+    });
+
+    // D4 — the discriminator: in ordinary operation the two clocks agree and the
+    // calibration IS trusted, so failing open is a fault response and not the
+    // permanent state.
+    it('trusts the calibration while both clocks agree', () => {
+        noteDaemonDate(new Date().toUTCString());
+        expect(daemonClockTrusted()).toBe(true);
+    });
+
+    // D5 — THE CRITERION. Monotonic time frozen while wall time advances is
+    // exactly what a suspended laptop looks like on resume.
+    it('distrusts the calibration after a suspend', () => {
+        noteDaemonDate(new Date().toUTCString());
+        const perfFrozen = performance.now();
+        const wallAfterSleep = Date.now() + 10 * 60_000;
+
+        vi.spyOn(performance, 'now').mockReturnValue(perfFrozen);
+        vi.spyOn(Date, 'now').mockReturnValue(wallAfterSleep);
+
+        expect(daemonClockTrusted()).toBe(false);
+    });
+
+    // D6 — an UNCALIBRATED clock is not "untrusted": it is the browser clock,
+    // which is the best available answer and the state every session starts in.
+    // Collapsing the two would disable the staleness guard until the first
+    // request completed, which is most of a page load.
+    it('treats an uncalibrated clock as trusted', () => {
+        expect(daemonClockTrusted()).toBe(true);
     });
 });

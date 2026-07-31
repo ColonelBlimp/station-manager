@@ -264,6 +264,65 @@ type CompletedQso struct {
 	Section string
 }
 
+// contactFlags is the operator-set state whose lifetime is exactly ONE contact.
+//
+// Grouped so that ending a contact is a single assignment rather than N fields
+// remembered at N sites. retireSessionLocked's comment already voiced the concern
+// — "a caller should never need to remember a fifth thing to reset by hand" — and
+// this makes it structural instead of a promise: a field added HERE is reset by
+// every exit for free, whereas a field added beside it in Sequencer is not.
+//
+// WHAT DOES NOT BELONG HERE is the useful half, because it is the question a
+// future field has to answer:
+//
+//   - autoWork* — lifetime is the RUN, which deliberately OUTLIVES a completed
+//     contact (ADR 0059). Its own struct, cleared only by abandon.
+//   - confirmHold — per-contact, but SET during the retire of the contact it
+//     outlives by one slot, so a blanket reset would destroy it.
+//   - stalledCalls / stallCooloff — exclusion memory, with lifetimes (a CQ round;
+//     a wall-clock deadline) deliberately unlike a contact's.
+//   - lastTxSlot — a property of the RIG, not of a session. "We keyed in slot X"
+//     stays true whoever keyed it, and carrying it across a start/abandon boundary
+//     is what stops two sessions both transmitting in one slot.
+type contactFlags struct {
+	repeats int
+	// skipIfSilent — operator-armed "drop this contact instead of repeating an
+	// unanswered rung" (the SPA's deferred Next, moved daemon-side 2026-07-13).
+	// Checked at the silent-repeat sites BEFORE the repeat keys, so a skip never
+	// transmits at a station we've decided to drop (the SPA-side version could
+	// only abandon a repeat already on the air — an audible PTT tick and wasted
+	// RF). Cleared when the partner advances us (they came back), on every
+	// session start, and on Abandon.
+	skipIfSilent bool
+	// nextArmed — the operator pressed Next on a Call-CQ contact: park this answerer
+	// at the next slot evaluation, as if the repeat cap had just been reached.
+	//
+	// Deliberately NOT skipIfSilent, though the buttons look alike. Skip fires on a
+	// SILENT cycle; the case this exists for is a station that is transmitting — it
+	// re-sends the same rung and never advances — so a skip-shaped trigger would
+	// never fire here. The trigger is "did not advance", not "did not transmit".
+	// Cleared when the contact advances (the rung was not stuck after all), when it
+	// is consumed by a park, on completion, on Abandon, and at session start.
+	nextArmed bool
+}
+
+// autoWorkState is an ACTIVE auto-work-callers run (ADR 0059) — a RUN, not a
+// contact: it survives each completed contact and ends only at Abandon or another
+// stop condition. Separate from the autoWorkPolicy config knob for the reason
+// stated there: the policy alone must never work a caller.
+//
+// The three pinned values travel with armed because they are meaningless without
+// it — they are read at exactly one site, behind a `!armed` early return — so
+// arming and disarming are each one assignment and cannot half-apply.
+type autoWorkState struct {
+	armed bool
+	// Pinned when the run arms, from the operator's own session: a later contact
+	// must use the frequency and offset the operator chose, never a live re-read.
+	call     string
+	offsetHz float64
+	dialMHz  float64
+}
+
 // Sequencer owns the (single) active session — answering a CQ or calling CQ, never
 // both. Its dependencies are injected so it stays decoupled from the Service and
 // unit-testable: transmit sends a rung (Service.seqTransmit — current-slot late-dt),
@@ -306,12 +365,7 @@ type Sequencer struct {
 	// which internal/ft8/CLAUDE.md forbids (autowork_test.go W5).
 	autoWorkPolicy bool
 	autoWorkMode   string
-	autoWorkArmed  bool
-	// Pinned when the run arms, from the operator's own session: a later contact must
-	// use the frequency and offset the operator chose, never a live re-read.
-	autoWorkCall     string
-	autoWorkOffsetHz float64
-	autoWorkDialMHz  float64
+	autoWork       autoWorkState
 	// stalledCalls accumulates the answerers abandoned at the repeat cap since the
 	// current CQ round began. pickAnswererLocked skips them, so a handful of stations
 	// that keep repeating their grid can't be re-selected in rotation and starve the
@@ -364,25 +418,9 @@ type Sequencer struct {
 	allowDuplicate        bool
 	pendingAllowDuplicate bool
 	startedAt             time.Time // contact start, stamped as the logged QSO's TIME_ON
-	repeats               int
-	// skipIfSilent — operator-armed "drop this contact instead of repeating an
-	// unanswered rung" (the SPA's deferred Next, moved daemon-side 2026-07-13).
-	// Checked at the silent-repeat sites BEFORE the repeat keys, so a skip never
-	// transmits at a station we've decided to drop (the SPA-side version could
-	// only abandon a repeat already on the air — an audible PTT tick and wasted
-	// RF). Cleared when the partner advances us (they came back), on every
-	// session start, and on Abandon.
-	skipIfSilent bool
-	// nextArmed — the operator pressed Next on a Call-CQ contact: park this answerer
-	// at the next slot evaluation, as if the repeat cap had just been reached.
-	//
-	// Deliberately NOT skipIfSilent, though the buttons look alike. Skip fires on a
-	// SILENT cycle; the case this exists for is a station that is transmitting — it
-	// re-sends the same rung and never advances — so a skip-shaped trigger would
-	// never fire here. The trigger is "did not advance", not "did not transmit".
-	// Cleared when the contact advances (the rung was not stuck after all), when it
-	// is consumed by a park, on completion, on Abandon, and at session start.
-	nextArmed  bool
+	// contact holds the flags whose lifetime is exactly one contact, so ending one
+	// is a single assignment — see contactFlags for what deliberately stays out.
+	contact    contactFlags
 	maxRepeats int
 
 	// sessionGen is bumped on every session-identity change (StartQso /
@@ -560,7 +598,7 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 		return ErrQsoInProgress
 	}
 	s.mode = seqAnswering
-	s.skipIfSilent = false
+	s.contact = contactFlags{}
 	s.sessionGen++
 	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
 	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
@@ -570,7 +608,6 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
 	s.startedAt = now.UTC()
-	s.repeats = 0
 	// Answering a CQ is an operator action, so it arms an auto-work run exactly as
 	// picking a caller does (ADR 0059, autowork_test.go W9). It is also the entry point
 	// the feature was ASKED for — "I answer a CQ call, and now stations are calling me
@@ -623,7 +660,7 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 		return ErrQsoInProgress
 	}
 	s.mode = seqAnsweringFd
-	s.skipIfSilent = false
+	s.contact = contactFlags{}
 	s.sessionGen++
 	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
 	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
@@ -632,7 +669,6 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 	s.offsetHz = offsetHz
 	s.dialFreqMHz = dialFreqMHz
 	s.startedAt = now.UTC()
-	s.repeats = 0
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.publish(st)
@@ -653,7 +689,7 @@ func (s *Sequencer) Abandon() {
 	// progress, and stopping it has to be published or it happens invisibly: the
 	// operator presses Abandon between contacts, no frame changes, and the indicator
 	// stays lit on a station that is now inert (ADR 0059, autowork_test.go V2).
-	hadRun := s.autoWorkArmed
+	hadRun := s.autoWork.armed
 	was, reason := s.abandonLocked()
 	if was || hadRun {
 		// Terminal publish under the lock, so a replacement Start* cannot commit and
@@ -687,14 +723,12 @@ func (s *Sequencer) abandonLocked() (bool, string) {
 	// Abandon stops the RUN, not just the contact (ADR 0059, autowork_test.go W6).
 	// Leaving it armed would make Abandon look like it worked and then key the rig
 	// again on the next caller.
-	s.autoWorkArmed = false
+	s.autoWork.armed = false
 	// Operator's call (2026-07-31): Abandon clears the stalled-caller cool-off.
 	// Abandon is the operator taking the station back, so the daemon's memory of
 	// which callers were going nowhere goes with it.
 	s.stallCooloff = nil
-	s.repeats = 0
-	s.skipIfSilent = false
-	s.nextArmed = false
+	s.contact = contactFlags{}
 	return was, reason
 }
 
@@ -721,7 +755,7 @@ func (s *Sequencer) NextAnswerer() error {
 		s.mu.Unlock()
 		return ErrNoAnswerer
 	}
-	s.nextArmed = true
+	s.contact.nextArmed = true
 	// Publish while the lock is STILL HELD (invariant 3). Snapshotting here and
 	// publishing after the unlock lets an Abandon or a slot evaluation take the lock
 	// in the gap, change or end the session and publish first — leaving this stale
@@ -851,7 +885,7 @@ func (s *Sequencer) SetSkipIfSilent(armed bool) error {
 		}
 	}
 	// Reaching here: either a valid arm (skippable) or a disarm (always ok).
-	s.skipIfSilent = armed
+	s.contact.skipIfSilent = armed
 	// Under the lock — same reason as NextAnswerer above (invariant 3). This is where
 	// that shape came from, so it is corrected here too rather than left as the next
 	// thing to copy.
@@ -995,7 +1029,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		}
 		if next, ok := s.ex.Advance(m.Text, m.SNR); ok {
 			*s.ex = next
-			s.repeats = 0
+			s.contact.repeats = 0
 			advanced = true
 			break
 		}
@@ -1008,7 +1042,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 			Msg("ft8 seq: decode from worked station")
 	}
 	if advanced {
-		s.skipIfSilent = false // they came back — an armed skip no longer applies
+		s.contact.skipIfSilent = false // they came back — an armed skip no longer applies
 	}
 
 	msg, ok := s.ex.TxMessage()
@@ -1051,25 +1085,25 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		// Operator-armed skip: a full silent cycle on an already-sent rung
 		// (repeats > 0 — never before the opening has even transmitted) ends
 		// the session INSTEAD of keying the repeat — no RF at a no-show.
-		if s.skipIfSilent && !advanced && s.repeats > 0 {
+		if s.contact.skipIfSilent && !advanced && s.contact.repeats > 0 {
 			s.retireSessionLocked(func() { s.ex = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: skip-if-silent — no reply; ending without repeat")
 			return
 		}
 		// Calling / Reporting wait for the partner; cap the repeats (off-ramp).
-		if s.repeats >= s.maxRepeats {
+		if s.contact.repeats >= s.maxRepeats {
 			s.retireSessionLocked(func() { s.ex = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: no answer after max repeats; abandoning")
 			return
 		}
-		s.repeats++
+		s.contact.repeats++
 	}
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
-	repeats := s.repeats
+	repeats := s.contact.repeats
 	// GROUP A final rung (see finalrung.go): they already sent RRR/RR73, so the
 	// contact is complete on their side and this 73 is a courtesy — send once and
 	// record the QSO on either outcome. The exchange is NOT cleared here (review
@@ -1154,7 +1188,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		}
 		if next, ok := s.fdEx.Advance(m.Text); ok {
 			*s.fdEx = next
-			s.repeats = 0
+			s.contact.repeats = 0
 			advanced = true
 			break
 		}
@@ -1164,7 +1198,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 			Str("now_rung", s.fdEx.State.label()).Msg("ft8 seq: FD decode from worked station")
 	}
 	if advanced {
-		s.skipIfSilent = false // they came back — an armed skip no longer applies
+		s.contact.skipIfSilent = false // they came back — an armed skip no longer applies
 	}
 
 	msg, ok := s.fdEx.TxMessage()
@@ -1205,14 +1239,14 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 	if !confirming {
 		// Operator-armed skip — see onSlotAnswering; same semantics. Pre-final
 		// only: it means "stop calling a station that isn't answering".
-		if s.skipIfSilent && !advanced && s.repeats > 0 {
+		if s.contact.skipIfSilent && !advanced && s.contact.repeats > 0 {
 			s.retireSessionLocked(func() { s.fdEx = nil })
 			s.mu.Unlock()
 			s.log.InfoWith().Msg("ft8 seq: FD skip-if-silent — no reply; ending without repeat")
 			return
 		}
 	}
-	if s.repeats >= s.maxRepeats {
+	if s.contact.repeats >= s.maxRepeats {
 		call, attempts := s.fdEx.TheirCall, s.maxRepeats
 		s.retireSessionLocked(func() { s.fdEx = nil })
 		s.mu.Unlock()
@@ -1226,11 +1260,11 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		}
 		return
 	}
-	s.repeats++
+	s.contact.repeats++
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
 	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
-	repeats := s.repeats
+	repeats := s.contact.repeats
 	var completed *CompletedQso
 	if confirming {
 		c := s.completedQsoFdLocked()
@@ -1423,14 +1457,14 @@ func (s *Sequencer) fireOpening(now time.Time) {
 		return
 	}
 
-	s.repeats++
+	s.contact.repeats++
 	// Mark this TX slot consumed BEFORE dropping the lock: the same slot's
 	// OnSlot may already be pending (its decode was published just before this
 	// session started), and without the mark it would consume a second repeat —
 	// with max_repeats=1, abandoning the session while the opening is still
 	// playing (review 2026-07-20 #2).
 	s.lastTxSlot = curStart
-	transmit, offset, dial, repeats := s.transmitLocked(), s.offsetHz, s.dialFreqMHz, s.repeats
+	transmit, offset, dial, repeats := s.transmitLocked(), s.offsetHz, s.dialFreqMHz, s.contact.repeats
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -1467,8 +1501,8 @@ func (s *Sequencer) fireOpening(now time.Time) {
 func (s *Sequencer) statusLocked() QsoStatus {
 	st := s.statusModeLocked()
 	if st.Active {
-		st.SkipArmed = s.skipIfSilent
-		st.NextArmed = s.nextArmed
+		st.SkipArmed = s.contact.skipIfSilent
+		st.NextArmed = s.contact.nextArmed
 		// Session-pinned, not live rig state — see QsoStatus.DialFreqMHz.
 		st.DialFreqMHz = s.dialFreqMHz
 	}
@@ -1476,7 +1510,7 @@ func (s *Sequencer) statusLocked() QsoStatus {
 	// after a contact ends with the run still live. Setting it only while active
 	// would publish it exactly when the operator can already see a ladder, and omit
 	// it exactly when they cannot tell armed from stopped.
-	st.AutoWorkArmed = s.autoWorkArmed
+	st.AutoWorkArmed = s.autoWork.armed
 	return st
 }
 
@@ -1494,7 +1528,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			TheirGrid:   s.theirGrid,
 			State:       s.ex.State.label(),
 			NextMessage: msg,
-			Repeats:     s.repeats,
+			Repeats:     s.contact.repeats,
 			TheirPeriod: s.theirPeriod,
 		}
 		// MaxRepeats is advertised exactly when the CURRENT rung is bounded, so the
@@ -1523,7 +1557,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			TheirGrid:    s.fdEx.TheirGrid,
 			State:        s.fdEx.State.label(),
 			NextMessage:  msg,
-			Repeats:      s.repeats,
+			Repeats:      s.contact.repeats,
 			TheirPeriod:  s.theirPeriod,
 			OurClass:     s.fdEx.OurClass,
 			OurSection:   s.fdEx.OurSection,
@@ -1548,7 +1582,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			TheirGrid:    s.fdWork.TheirGrid,
 			State:        s.fdWork.State.label(),
 			NextMessage:  msg,
-			Repeats:      s.repeats,
+			Repeats:      s.contact.repeats,
 			TheirPeriod:  s.theirPeriod,
 			OurClass:     s.fdWork.OurClass,
 			OurSection:   s.fdWork.OurSection,
@@ -1574,7 +1608,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			TheirGrid:   s.t4Ex.TheirGrid,
 			State:       s.t4Ex.State.label(),
 			NextMessage: msg,
-			Repeats:     s.repeats,
+			Repeats:     s.contact.repeats,
 			TheirPeriod: s.theirPeriod,
 		}
 		// Cap governs the pre-73 rung only — the closing 73 is Group A (send-once).
@@ -1600,7 +1634,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			TheirGrid:   s.t4Work.TheirGrid,
 			State:       s.t4Work.State.label(),
 			NextMessage: msg,
-			Repeats:     s.repeats,
+			Repeats:     s.contact.repeats,
 			TheirPeriod: s.theirPeriod,
 		}
 		// The sole rung (RR73) is terminal AND Group B — the caller is waiting on it,
@@ -1613,7 +1647,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 	case seqCalling:
 		// Calling CQ: active from the first CQ. Until a station is being worked
 		// (caller != nil) the rung is "calling-cq" and the next message is the CQ.
-		st := QsoStatus{Active: true, Role: roleCaller, Repeats: s.repeats, TheirPeriod: s.theirPeriod}
+		st := QsoStatus{Active: true, Role: roleCaller, Repeats: s.contact.repeats, TheirPeriod: s.theirPeriod}
 		if s.caller != nil {
 			msg, _ := s.caller.TxMessage()
 			st.TheirCall = s.caller.TheirCall
@@ -1651,7 +1685,7 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 			TheirGrid:   s.caller.TheirGrid,
 			State:       s.caller.State.label(),
 			NextMessage: msg,
-			Repeats:     s.repeats,
+			Repeats:     s.contact.repeats,
 			TheirPeriod: s.theirPeriod,
 		}
 		st.MaxRepeats = s.maxRepeats
@@ -1700,7 +1734,7 @@ func (s *Sequencer) SetAutoWorkCallers(on bool, mode string) {
 func (s *Sequencer) AutoWorkArmed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.autoWorkArmed
+	return s.autoWork.armed
 }
 
 // armAutoWorkLocked arms an auto-work run if the policy allows one, pinning what a
@@ -1711,10 +1745,10 @@ func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64
 	if !s.autoWorkPolicy {
 		return
 	}
-	s.autoWorkArmed = true
-	s.autoWorkCall = call
-	s.autoWorkOffsetHz = offsetHz
-	s.autoWorkDialMHz = dialFreqMHz
+	s.autoWork.armed = true
+	s.autoWork.call = call
+	s.autoWork.offsetHz = offsetHz
+	s.autoWork.dialMHz = dialFreqMHz
 }
 
 // terminalStatusLocked builds the frame published when a session ends. Caller holds
@@ -1727,5 +1761,5 @@ func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64
 // Built in ONE place so a fourth way of ending a session cannot quietly omit it, the
 // way the three existing ones each hand-rolled their own frame.
 func (s *Sequencer) terminalStatusLocked(reason string) QsoStatus {
-	return QsoStatus{Active: false, EndReason: reason, AutoWorkArmed: s.autoWorkArmed}
+	return QsoStatus{Active: false, EndReason: reason, AutoWorkArmed: s.autoWork.armed}
 }
