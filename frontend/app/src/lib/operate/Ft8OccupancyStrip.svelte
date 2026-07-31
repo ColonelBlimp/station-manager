@@ -93,7 +93,7 @@
 
 <div class="flex h-full w-full flex-col px-4 py-2">
     <div class="mb-2 flex items-baseline justify-between text-xs text-muted">
-        <span>Tx Offset — click a channel</span>
+        <span>TX Offset — click a channel</span>
         <span class="font-mono">
             {selected !== null ? `${selected} Hz` : 'auto — daemon pick'}
         </span>

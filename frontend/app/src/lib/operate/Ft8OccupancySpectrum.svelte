@@ -139,7 +139,7 @@
 
 <div class="flex h-full w-full flex-col px-4 py-2">
     <div class="flex items-baseline justify-between text-xs">
-        <span class="text-muted">Tx Offset — click anywhere</span>
+        <span class="text-muted">TX Offset — click anywhere</span>
         <span class="font-mono {captionClass}">{captionText}</span>
     </div>
 
