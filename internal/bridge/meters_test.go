@@ -581,3 +581,129 @@ func TestObserveMeter_IgnoresUnmodelledTags(t *testing.T) {
 		t.Fatalf("unmodelled tags were accumulated: %+v", sum.Samples)
 	}
 }
+
+// PER-TRANSMISSION VALUE HISTOGRAM — follow-up to the 2026-07-31 session, where
+// the operator asked a question the summary structurally could not answer.
+//
+// ACCEPTANCE CRITERION:
+//
+//	When a transmission ends, the meter summary tells me how output was
+//	DISTRIBUTED across it, not just its extremes — so I can tell steady output
+//	apart from output that collapsed part-way in, and both apart from an
+//	instrument that reported almost nothing.
+//
+// WHY. On 2026-07-31 the operator reported RF output was not stable and moved
+// the rig's meter to ALC to investigate. The daemon could not help: every PO
+// transmission that night reported meter_po_max 95-107, before and after, because
+// MAX CANNOT SEE A COLLAPSE — a drop at t=5 s of a 13 s slot still leaves the
+// peak from the first five seconds. Min is onset-relative and pinned low by the
+// key-up ramp, last is one sample, and n conflates push RATE with activity. So
+// the summary answers "did the meter speak" and never "did output hold up".
+//
+// drivealarm.go's own header nominated this fix and priced it: "the cheap way to
+// find out costs no transmission at all, being inter-frame-gap or value-histogram
+// logging over one keyed window." The gap half shipped 2026-07-30; this is the
+// value half.
+//
+// NO INVENTED THRESHOLD, which is why it is a histogram rather than a
+// "collapsed" flag. Defining collapse needs a number from the operator; counting
+// readings into fixed buckets needs none, and the operator reads the SHAPE —
+// steady output clusters, a collapse goes bimodal with a heavy bottom bucket.
+//
+// FIXED 0-255 DECILES, not per-transmission normalisation. The raw scale is what
+// this file reports everywhere else ("the rig's raw 0-255 meter scale, NOT
+// engineering units"), and it stays comparable across transmissions and sessions,
+// which a max-relative scale would not — a fully collapsed transmission has no
+// max to normalise against. The cost is stated rather than hidden: observed FT8
+// output occupies roughly buckets 0-4, so working resolution is ~25 raw units.
+func TestObserveMeter_HistogramSeparatesSteadyFromCollapsed(t *testing.T) {
+	// THE WHOLE POINT OF THIS FIXTURE PAIR: both transmissions are IDENTICAL in
+	// every field the summary reported before this change — same min, same max,
+	// same last, same count — and differ only in WHEN the low readings fell. If
+	// the histogram did not distinguish them, nothing in the summary could, which
+	// is precisely the operator's complaint.
+	//
+	// steady holds ~100 for three quarters and drops at the end (the key-down
+	// tail); collapsed drops after the first reading and never comes back.
+	steady := []string{"RM0100000", "RM0100000", "RM0100000", "RM0020000"}
+	collapsed := []string{"RM0100000", "RM0020000", "RM0020000", "RM0020000"}
+
+	run := func(frames []string) meterSample {
+		t.Helper()
+		s, _ := newCommandTestService(t)
+		s.observeMeter(meterFrame(t, "MS0")) // PO selected — the real shape
+		setFt8Keyed(s, true)
+		for _, f := range frames {
+			s.observeMeter(meterFrame(t, f))
+		}
+		sum := s.flushFt8TxMeters()
+		if len(sum.Samples) != 1 {
+			t.Fatalf("got %d samples, want 1: %+v", len(sum.Samples), sum.Samples)
+		}
+		return sum.Samples[0]
+	}
+
+	a, b := run(steady), run(collapsed)
+
+	// Guard the premise. If these ever diverge the fixture has stopped proving
+	// what it claims, and the histogram assertions below would pass for the wrong
+	// reason — a weaker test wearing this one's name.
+	if a.Min != b.Min || a.Max != b.Max || a.Last != b.Last || a.Count != b.Count {
+		t.Fatalf("fixture broken: the two transmissions must be indistinguishable in the "+
+			"pre-existing fields, else this proves nothing.\n steady    = %+v\n collapsed = %+v", a, b)
+	}
+
+	// 100 -> bucket 3, 20 -> bucket 0 on the fixed 0-255 decile scale.
+	if a.Buckets[3] != 3 || a.Buckets[0] != 1 {
+		t.Errorf("steady histogram = %v, want three readings in bucket 3 and one in bucket 0 "+
+			"— output held for most of the transmission", a.Buckets)
+	}
+	if b.Buckets[3] != 1 || b.Buckets[0] != 3 {
+		t.Errorf("collapsed histogram = %v, want one reading in bucket 3 and three in bucket 0 "+
+			"— output fell away and stayed down", b.Buckets)
+	}
+}
+
+// R-hist2 — the buckets count EVERY reading, so the histogram total reconciles
+// with the sample count the operator reads beside it. A histogram that silently
+// dropped readings (an out-of-range value, an off-by-one at the top of the scale)
+// would misrepresent the shape while looking self-consistent.
+func TestObserveMeter_HistogramCountsEveryReading(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	s.observeMeter(meterFrame(t, "MS0"))
+	setFt8Keyed(s, true)
+
+	// Includes both ends of the raw scale: 255 must land in the top bucket rather
+	// than overflowing to index 10, and 0 in the bottom.
+	for _, f := range []string{"RM0000000", "RM0255000", "RM0128000", "RM0007000"} {
+		s.observeMeter(meterFrame(t, f))
+	}
+
+	sum := s.flushFt8TxMeters()
+	got := sum.Samples[0]
+	total := 0
+	for _, n := range got.Buckets {
+		total += n
+	}
+	if total != got.Count {
+		t.Errorf("histogram totals %d across %v but Count is %d — every reading must be counted "+
+			"exactly once, or the shape misleads", total, got.Buckets, got.Count)
+	}
+	if got.Buckets[len(got.Buckets)-1] != 1 {
+		t.Errorf("histogram = %v, want the 255 reading in the TOP bucket", got.Buckets)
+	}
+}
+
+// R-hist3 — the rendered field is LOW BUCKET FIRST. Ordering is load-bearing for
+// interpretation, not cosmetic: the operator reads a heavy leading number as
+// "output spent that long near zero". Reversed, a collapse renders exactly like a
+// healthy transmission and the field actively misleads.
+func TestFormatMeterHist_RendersLowBucketFirst(t *testing.T) {
+	var b [meterHistBuckets]int
+	b[0] = 7
+	b[meterHistBuckets-1] = 2
+
+	if got, want := formatMeterHist(b), "7,0,0,0,0,0,0,0,0,2"; got != want {
+		t.Errorf("formatMeterHist = %q, want %q", got, want)
+	}
+}

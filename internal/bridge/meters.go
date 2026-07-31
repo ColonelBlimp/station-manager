@@ -88,6 +88,45 @@ type meterKey struct {
 	Sel string
 }
 
+// meterHistBuckets divides the rig's raw 0-255 meter scale into fixed deciles
+// for the per-transmission value histogram.
+//
+// FIXED SCALE, not per-transmission normalisation: the raw scale is what every
+// other field here reports, and it stays comparable across transmissions and
+// sessions — a transmission whose output collapsed entirely has no max to
+// normalise against. Cost stated rather than hidden: observed FT8 output sits
+// around 95-107, so it occupies roughly buckets 0-4 and working resolution is
+// ~25 raw units. That is enough for the question this answers (did output hold,
+// or fall away part-way in) and it needs no threshold from anyone.
+const meterHistBuckets = 10
+
+// meterBucket maps one raw reading to its decile. Clamped at both ends rather
+// than trusted: the scale is documented as 0-255, but a garbled frame that
+// decodes to a number outside it must land somewhere countable instead of
+// panicking on the read loop — and a dropped reading would make the histogram
+// disagree with the Count printed beside it.
+func meterBucket(v int) int {
+	if v < 0 {
+		return 0
+	}
+	i := v * meterHistBuckets / 256
+	if i >= meterHistBuckets {
+		return meterHistBuckets - 1
+	}
+	return i
+}
+
+// formatMeterHist renders a histogram as comma-separated counts, low bucket
+// first. One log field rather than ten: the operator reads the SHAPE, and ten
+// separate keys would bury it and make the line unreadable at a glance.
+func formatMeterHist(b [meterHistBuckets]int) string {
+	parts := make([]string, len(b))
+	for i, n := range b {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ",")
+}
+
 // meterSample is one meter's readings across a single keyed transmission.
 // Values are the rig's raw 0-255 meter scale, NOT engineering units: the CAT
 // reference documents no conversion to watts or SWR ratio, and inventing one
@@ -106,6 +145,12 @@ type meterSample struct {
 	Sel            string
 	Count          int
 	Min, Max, Last int
+	// Buckets counts readings per decile of the raw scale. Min/Max/Last/Count
+	// cannot see a mid-transmission collapse — a drop at t=5 s of a 13 s slot
+	// still leaves the peak from the first five seconds, which is exactly why the
+	// operator could not tell steady output from unstable output on 2026-07-31.
+	// The distribution can: steady output clusters, a collapse goes bimodal.
+	Buckets [meterHistBuckets]int
 	// started records that a non-zero reading has been seen, so Min tracks only
 	// from drive onset. Unexported: an implementation detail of accumulation,
 	// not part of what a transmission reports.
@@ -216,6 +261,7 @@ func (s *Service) observeMeter(status cat.Status) {
 			s.ft8Meters[key] = acc
 		}
 		acc.Count++
+		acc.Buckets[meterBucket(n)]++
 		// Minimum tracks from drive ONSET. Leading zeros are the key-up ramp, not
 		// a fault; a zero AFTER onset is the collapse being hunted.
 		if n != 0 && !acc.started {
@@ -304,7 +350,8 @@ func (s *Service) logFt8TxMeters(sum ft8MeterSummary) {
 	names := make([]string, 0, len(sum.Samples))
 	for _, m := range sum.Samples {
 		k := meterFieldPrefix(m)
-		e = e.Int(k+"_min", m.Min).Int(k+"_max", m.Max).Int(k+"_last", m.Last).Int(k+"_n", m.Count)
+		e = e.Int(k+"_min", m.Min).Int(k+"_max", m.Max).Int(k+"_last", m.Last).Int(k+"_n", m.Count).
+			Str(k+"_hist", formatMeterHist(m.Buckets))
 		names = append(names, k)
 	}
 	// Meters are the rig's raw 0-255 scale — stated in the message so a reading
