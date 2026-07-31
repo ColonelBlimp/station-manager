@@ -137,6 +137,8 @@ func (s *Service) armDriveWatch(gen uint64) {
 	// From here the transmission IS being watched, which is what makes a silent
 	// outcome positive evidence of normal output rather than an absence of data.
 	s.driveWatchArmed = true
+	// Armed on PO; observeMeter taints this if the selection moves while keyed.
+	s.driveSelTainted = false
 	// Silence is measured from the key, not from the last receive-time push, so
 	// drive that never comes up at all is caught — the common shape.
 	s.driveLastMeterAt = time.Now()
@@ -155,6 +157,7 @@ func (s *Service) disarmDriveWatch() {
 	// Per-transmission, unlike driveAlarmStanding: the next transmission must earn
 	// its own arming before its silence counts as evidence of anything.
 	s.driveWatchArmed = false
+	s.driveSelTainted = false
 	s.closeMeterGapWindow()
 	// The next transmission must earn its own instrument-alive evidence. A link
 	// that dies mid-session would otherwise stay "known good" for the rest of the
@@ -314,6 +317,15 @@ func (s *Service) checkDriveSilence(gen uint64) {
 		s.mu.Unlock()
 		return
 	}
+	// The meter was moved off PO while keyed: this stream stopped being about RF,
+	// so its silence is no longer evidence. Drop the watch for the rest of the
+	// transmission rather than re-arming the timer — nothing later in it can
+	// restore the meaning of the interval already elapsed.
+	if s.driveSelTainted {
+		s.driveTimer = nil
+		s.mu.Unlock()
+		return
+	}
 	if since := time.Since(s.driveLastMeterAt); since < s.driveSilence {
 		s.driveTimer = time.AfterFunc(s.driveSilence-since, func() { s.checkDriveSilence(gen) })
 		s.mu.Unlock()
@@ -353,6 +365,11 @@ func (s *Service) checkDriveSilence(gen uint64) {
 // health, however it ended.
 func (s *Service) takeDriveRecoveryLocked() bool {
 	if !s.driveAlarmStanding || !s.driveWatchArmed || s.driveAlarmed {
+		return false
+	}
+	// The meter left PO while keyed, so this transmission measured RF for only
+	// part of its length and cannot support the positive claim recovery makes.
+	if s.driveSelTainted {
 		return false
 	}
 	// THE MEASUREMENT DECIDES, not whether the alarm timer got to run. Those come

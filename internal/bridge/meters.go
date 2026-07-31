@@ -154,6 +154,15 @@ func (s *Service) observeMeter(status cat.Status) {
 	// rather than run through the numeric accumulation below.
 	if sel, ok := status[meterSelTag]; ok && sel != "" {
 		s.meterSel = sel
+		// A selection that moves off PO WHILE KEYED retires this transmission's
+		// drive verdict — the arm-time gate in armDriveWatch cannot see it, and a
+		// live silence timer would go on judging a stream that has stopped being
+		// about RF (codex a0b0ac45 P1). Set here rather than checked at the timer,
+		// because by then only the CURRENT selection is knowable and a switch away
+		// and back inside one transmission would look like it never happened.
+		if s.ft8TxActive && driveMonitorFor(sel) == DriveMonitorMeterNotPO {
+			s.driveSelTainted = true
+		}
 	}
 	for _, tag := range meterTags {
 		v, ok := status[tag]

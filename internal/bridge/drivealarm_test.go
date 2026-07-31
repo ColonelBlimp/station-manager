@@ -816,6 +816,82 @@ func TestDriveAlarm_MeterSelectorGatesTheWatch(t *testing.T) {
 	}
 }
 
+// D21 — THE SELECTOR CAN MOVE MID-TRANSMISSION, and D19 does not cover it: D19
+// fixes the selection before key-down, so it only ever exercises the arm-time
+// gate. A transmission that ARMS on PO and then has the meter switched to ALC
+// while keyed keeps a live silence timer over a stream that has just stopped
+// meaning anything — and raises exactly the false NO RF OUTPUT alarm this whole
+// change exists to prevent (codex a0b0ac45 P1).
+//
+// REACHABLE ON THIS HARDWARE, not a thought experiment. smd.log 2026-07-31
+// 04:04:13 reports `meters=meter_alc,meter_po` — BOTH accumulator buckets inside
+// one transmission, which is the rig's own record of the selection changing while
+// keyed. (Honest scope: that is proof the STATE occurs, not proof it caused
+// tonight's alarms. The 03:58:36 alarm reported only meter_alc with n=8, so that
+// transmission had ALC selected from the start and is D19's case, not this one.)
+//
+// The fixture must switch the meter AFTER arming, or it degenerates into D19 and
+// passes against the already-shipped arm-time gate while proving nothing.
+func TestDriveAlarm_SelectorSwitchedMidTransmission_DoesNotAlarm(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	s.observeMeter(meterFrame(t, "MS0")) // PO at key-down: the watch arms
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+
+	// ... and now the operator turns the meter to ALC to look at drive, which is
+	// precisely what they were doing when this was found.
+	s.observeMeter(meterFrame(t, "MS2"))
+	time.Sleep(4 * silence) // the ALC stream says nothing, as it should
+
+	if n := w.count(EventDriveAlarm); n != 0 {
+		t.Errorf("drive alarm published %d times after the meter moved to ALC mid-transmission; "+
+			"want 0 — the armed timer must stop treating silence as evidence the moment "+
+			"the stream stops being about RF", n)
+	}
+}
+
+// D22 — the same transmission is not evidence of HEALTH either. Recovery is a
+// positive claim ("output was confirmed normal on a later transmission"), and a
+// transmission whose meter stream stopped being about RF part-way through
+// confirms nothing. Without this rule the fix for D21 buys silence on the alarm
+// and pays for it by retiring a standing alarm on no evidence — the more
+// dangerous direction, because the operator is told the fault is gone.
+func TestDriveAlarm_SelectorSwitchedMidTransmission_IsNotRecovery(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	// A genuine alarm first, so there is something a false recovery could retire.
+	s.observeMeter(meterFrame(t, "MS0"))
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 },
+		"no drive alarm raised; the fixture proves nothing")
+	s.finishFt8Tx()
+
+	// A transmission that arms on PO, is switched to ALC, and then runs quietly to
+	// the end — no alarm, but nothing verified either.
+	s.observeMeter(meterFrame(t, "MS0"))
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	s.observeMeter(meterFrame(t, "MS2"))
+	feedMeterFor(t, s, "RM0034000", 2*silence)
+	s.finishFt8Tx()
+	time.Sleep(2 * silence)
+
+	for _, p := range w.drivePayloads() {
+		if !p.Active {
+			t.Errorf("recovery published from a transmission whose meter was switched away "+
+				"from PO while keyed: %+v — that transmission confirmed nothing", w.drivePayloads())
+		}
+	}
+}
+
 // D20 — an UNKNOWN selection reports nothing rather than claiming either state.
 // Empty is how every other RigStatePayload field says "this frame carried no
 // value"; the SPA keeps its last. Reporting DriveMonitorOK here would be a claim

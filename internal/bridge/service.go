@@ -314,6 +314,19 @@ type Service struct {
 	driveWatchArmed    bool
 	driveAlarmStanding bool
 
+	// driveSelTainted records that the rig's meter was switched AWAY from PO at
+	// some point during this transmission, so its meter stream stopped being about
+	// RF part-way through. The arm-time gate cannot cover this: the selection can
+	// move while keyed (smd.log 2026-07-31 04:04:13 reports both meter_alc and
+	// meter_po inside ONE transmission), which would otherwise leave a live
+	// silence timer judging a stream that no longer measures output.
+	//
+	// It suppresses BOTH verdicts, and both directions matter. No alarm, because
+	// the silence is meaningless; and no recovery, because "output was confirmed
+	// normal" is a positive claim this transmission cannot support — retiring a
+	// standing alarm on no evidence is the more dangerous of the two.
+	driveSelTainted bool
+
 	// Gap measurement over the keyed window — the instrument that answers whether
 	// absent drive reliably leaves a silence wider than driveSilence (finding 1 of
 	// 2026-07-30). Shares the detector's window exactly, opened and closed by
