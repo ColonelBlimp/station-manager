@@ -322,6 +322,21 @@ tasks:
     cmds:
       - actionlint
 
+  lint:go:
+    desc: |
+      Maintainability metrics over the Go tree (.golangci.yml) — cognitive and
+      cyclomatic complexity, duplication, maintainability index. Shape, not
+      correctness: gofmt/vet/race cover that and run in ci:local.
+
+      Also run as part of ci:local and in CI (pinned to the same version).
+      Install once with:
+        sudo dnf install golangci-lint
+      To RE-BASELINE, disable the three suppressing defaults or the numbers lie:
+        golangci-lint run --max-issues-per-linter 0 --max-same-issues 0 \
+          --uniq-by-line=false ./cmd/... ./internal/...
+    cmds:
+      - golangci-lint run ./cmd/... ./internal/...
+
   ci:local:
     desc: |
       Local mirror of .github/workflows/ci.yml — runs every gate the

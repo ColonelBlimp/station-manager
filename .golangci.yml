@@ -1,17 +1,50 @@
 version: "2"
 
-# BASELINE MEASUREMENT — this config MEASURES, it does not ENFORCE (2026-07-31).
+# Maintainability metrics — shape, NOT correctness (adopted 2026-07-31).
 #
-# Not wired into CI or the Taskfile, deliberately. Its whole purpose is to answer
-# "where does SM actually sit?" before any threshold is chosen. A threshold picked
-# before seeing the distribution is either noise or a rubber stamp.
+# WHAT THIS IS FOR, and what it is not. These linters measure how hard the code is
+# to READ and how much of it repeats. They do not find bugs: not one of the defects
+# found on 2026-07-31 (the sealed-window meter gate, the clock-reading test flake,
+# the nextArmed lifetime gap) sits in a function any of them would flag. ATDD
+# remains the mechanism that says whether the code does what it SHOULD; this is a
+# slow-moving signal that the codebase is not getting harder to work in.
 #
-# SCOPE IS NARROW ON PURPOSE: the five metric linters that answer the question
-# asked — maintainability, duplication, cognitive complexity — and nothing else.
-# golangci-lint's correctness linters (errcheck, staticcheck, unused, ...) are a
-# SEPARATE decision with a separate and much larger backlog; enabling them here
-# would bury the maintainability signal under thousands of unrelated findings,
-# and CI already runs gofmt + go vet + race tests.
+# Scope is metrics only. golangci-lint's correctness linters (errcheck, staticcheck,
+# unused, ...) are a SEPARATE decision with a much larger backlog, and CI already
+# runs gofmt + go vet + race tests.
+#
+# ---------------------------------------------------------------------------
+# THREE DEFAULTS SUPPRESS FINDINGS, AND ALL THREE CORRUPTED THE FIRST BASELINE.
+# They are disabled under `issues:` below; do not re-enable them for a measuring
+# run, and pass the same flags if you ever measure from the CLI.
+#
+#   max-issues-per-linter  50    gocognit reported EXACTLY 50 and the distribution
+#                                derived from it was fiction (real count: 311).
+#   max-same-issues         3    hid 10 of 18 dupl findings.
+#   uniq-by-line          true   THE WORST ONE. gocognit and gocyclo both report at
+#                                a function's declaration line, so every function
+#                                that tripped gocognit had its gocyclo finding
+#                                silently dropped. It made gocyclo look like it
+#                                peaked at 17 when the true max is 97, and made
+#                                maintidx look like it had zero findings when it
+#                                has 11.
+# ---------------------------------------------------------------------------
+#
+# MEASURED BASELINE (2026-07-31, golangci-lint 2.11.3, ./cmd/... ./internal/...,
+# generated models excluded, all three suppressions off):
+#
+#     gocognit  778 production functions rated, median 5, max 142
+#               > 30: 34 prod / 9 test      > 60: 11 prod / 3 test   <- gated at 60
+#     gocyclo  1068 production functions rated, median 4, max 97
+#               > 20: 38 prod / 7 test      > 50:  3 prod / 0 test   <- gated at 50
+#     dupl       18 findings (8 production across 2 files, 10 in tests)
+#     maintidx   11 findings
+#
+# The three metrics AGREE: maintidx's 11 are almost exactly the gocognit/gocyclo
+# worst offenders, so the exemption list below is one shared set rather than three.
+#
+# KEEP LOCAL AND CI IN STEP: baselined with 2.11.3, and .github/workflows/ci.yml
+# pins the same. Bump both together or the gate and your desk will disagree.
 
 linters:
   default: none
@@ -19,52 +52,142 @@ linters:
     - gocognit # cognitive complexity — how hard a function is to READ
     - gocyclo # cyclomatic complexity — independent paths through a function
     - dupl # duplicated code fragments
-    - funlen # long functions
-    - maintidx # maintainability index per function
+    - maintidx # composite maintainability index per function
 
   settings:
-    # 10 is the BOTTOM of the range upstream recommends (10-20); the default of 30
-    # reports only the worst offenders. We want the tail visible for one run so the
-    # histogram is real, then we raise it to whatever SM's distribution justifies.
+    # Chosen from the measured distribution, not from convention. Both are
+    # deliberately permissive: SM's medians (5 and 4) sit far below, but the tails
+    # are long, and gating at upstream's default of 30 would need 43 exemptions —
+    # at which point the list stops being visible debt and becomes noise. The
+    # entries below are a refactor backlog short enough to actually work through.
+    # LOWER THESE as the list shrinks; that is the ratchet.
     gocognit:
-      min-complexity: 10
+      min-complexity: 60
     gocyclo:
-      min-complexity: 10
-    # Upstream default. Token-based, so it finds structural repetition rather than
-    # textual similarity.
+      min-complexity: 50
     dupl:
       threshold: 150
-    # NOT optional: funlen's defaults are lines:-1 / statements:-1, which means the
-    # linter runs and reports nothing. 60/40 is the common convention, chosen here
-    # only to produce a first reading.
-    funlen:
-      lines: 60
-      statements: 40
-    # maintidx is left at its own default: upstream's settings page documents no
-    # configuration key for it, and inventing one would fail the config validator
-    # or, worse, be silently ignored.
+    # maintidx runs at its own default — upstream documents no configuration key.
 
   exclusions:
     generated: strict
     paths:
       # sqlboiler output — regenerated from the schema and never hand-edited
-      # (project rule). THREE of the ten largest files in the tree live here
-      # (qso.go 1423, logbook.go 1001, qso_upload.go 993) and would dominate every
-      # metric with complexity that is not ours to fix.
+      # (project rule), so its complexity is not ours to fix. Three of the ten
+      # largest files in the tree live here and would dominate every metric.
       - internal/database/sqlite/models
       # Vendored Go inside the SPA dependency trees — not our code at all. CI
       # already filters these out of `go vet` the same way.
       - frontend/.*/node_modules
+
     rules:
       # Test code duplicates BY DESIGN — table fixtures, parallel ladder setups for
-      # the seven sequencer modes — and ATDD tests are legitimately long because the
-      # reasoning lives in the file header. Measuring those two here would swamp the
-      # production signal with findings we would not act on.
-      #
-      # Cognitive and cyclomatic complexity still apply to tests: a test too
-      # convoluted to follow is a real problem, and this codebase leans on tests
-      # being readable as the specification.
+      # the seven sequencer modes (10 of the 18 dupl findings are tests).
+      # Complexity checks still apply to tests, deliberately: this codebase leans on
+      # tests being readable AS the specification, so a test too convoluted to
+      # follow is a real defect.
       - path: _test\.go
         linters:
           - dupl
-          - funlen
+
+      # ---------------------------------------------------------------------
+      # BASELINE DEBT, 2026-07-31 — the functions already over the line on the day
+      # the gate was adopted. Recorded as DEBT, not approval: the gate exists to
+      # stop NEW violations while these are paid down, and DELETING AN ENTRY HERE
+      # IS HOW YOU DO THAT.
+      #
+      # Each entry covers all three complexity linters because all three flag the
+      # same functions; one entry per function keeps the blast radius as small as
+      # the tool allows.
+      #
+      # Known weakness, stated now rather than discovered later: an exempted
+      # function can get WORSE without the gate noticing.
+      # ---------------------------------------------------------------------
+
+      # Daemon wiring and one-shot commands. `run` is the worst function in the
+      # tree on every metric (cognitive 142, cyclomatic 97) and is the obvious
+      # first refactor candidate.
+      - path: cmd/smd/main\.go
+        text: \brun\b # matches both `func \`run\`` and maintidx's "Function name: run,"
+        linters: [gocognit, gocyclo, maintidx]
+      - path: cmd/smd/restore\.go
+        text: runRestore
+        linters: [gocognit, gocyclo, maintidx]
+      - path: cmd/smd/import\.go
+        text: runImport
+        linters: [gocognit, gocyclo, maintidx]
+      - path: cmd/loadgen/main\.go
+        text: \bmain\b
+        linters: [gocognit, gocyclo, maintidx]
+
+      # Rig read loop and Call-CQ slot handler — the two highest in code that keys
+      # the rig. Both are dispatch-shaped and heavily commented; neither is a
+      # candidate for casual refactoring, and both are covered by the FT8 TX
+      # invariants in internal/ft8/CLAUDE.md.
+      - path: internal/bridge/pipeline\.go
+        text: readLoop
+        linters: [gocognit, gocyclo, maintidx]
+      - path: internal/ft8/caller_sequencer\.go
+        text: onSlotCalling
+        linters: [gocognit, gocyclo, maintidx]
+
+      # Reflection-driven DI container — deeply nested tag-scanning walk.
+      - path: internal/iocdi/internal\.go
+        text: injectDependencies
+        linters: [gocognit, gocyclo, maintidx]
+
+      # Config PUT handler and defaulting — wide flat switches over the config
+      # surface rather than deep logic.
+      - path: internal/api/handler_config\.go
+        text: handlePutConfig
+        linters: [gocognit, gocyclo, maintidx]
+      - path: internal/config/config\.go
+        text: applyDefaults
+        linters: [gocognit, gocyclo, maintidx]
+
+      # RIFF/WAV chunk parsing — a format walk with many nested cases.
+      - path: internal/audio/wav\.go
+        text: ReadWAV
+        linters: [gocognit, gocyclo, maintidx]
+
+      # QSO assembly and update — the ADIF field surface is wide, and one-fails-all
+      # -fail means the validation cannot be split without care.
+      - path: internal/qsoservice/submit\.go
+        text: prepareQso
+        linters: [gocognit, gocyclo, maintidx]
+      - path: internal/qsoservice/update\.go
+        text: \bUpdate\b
+        linters: [gocognit, gocyclo, maintidx]
+
+      # The two AST SOURCE GUARDS. These are tree walkers whose whole job is
+      # enumerating what to ACCEPT — the allowlist shape the FT8 invariants require
+      # after three guards were fixed by inverting a denylist. Simplifying them by
+      # relaxing the enumeration is exactly the regression they exist to prevent,
+      # so their complexity is the feature.
+      - path: internal/ft8/sessionend_test\.go
+        text: TestSource_SessionsEndOnlyThroughThePrimitive
+        linters: [gocognit, gocyclo, maintidx]
+      - path: internal/ft8/publishguard_test\.go
+        text: TestSource_NoStatusPublishedAfterUnlock
+        linters: [gocognit, gocyclo, maintidx]
+
+      # Concurrency stress fixture.
+      - path: internal/api/stress_test\.go
+        text: TestStress_20Clients_50QSOs
+        linters: [gocognit, gocyclo, maintidx]
+
+      # Duplication in production, all in two files. api_context.go carries three
+      # copy-paste pairs inside one 2,897-line file — the largest in the tree and a
+      # genuine refactor candidate, not a false positive.
+      - path: internal/database/sqlite/api_context\.go
+        linters: [dupl]
+      - path: internal/forwarding/qrz/response\.go
+        linters: [dupl]
+
+issues:
+  # See the header: every one of these defaults hid real findings from the first
+  # baseline. A GATE that suppresses findings is worse than no gate, because it
+  # reads as coverage it does not have.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false

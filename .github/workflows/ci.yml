@@ -203,6 +203,24 @@ jobs:
       - name: go vet
         run: go vet $(go list ./... | grep -v /node_modules/)
 
+      # Maintainability metrics only (.golangci.yml): cognitive/cyclomatic
+      # complexity, duplication, maintainability index. NOT correctness — the
+      # correctness linters are a separate decision, and gofmt/vet/race already
+      # run above.
+      #
+      # Version is PINNED and must match what the baseline was measured with;
+      # .golangci.yml's thresholds and its exemption list were derived on 2.11.3,
+      # and a different version can change the metrics under them. Bump both
+      # together (see the header of .golangci.yml).
+      #
+      # Scope matches the baseline: ./cmd/... ./internal/... — the config's own
+      # path rules drop generated sqlboiler models and npm-vendored Go.
+      - name: golangci-lint (maintainability metrics)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.3
+          args: ./cmd/... ./internal/...
+
       # Race detector run in -short mode: catches data races in the
       # concurrency-bearing code (scheduler, ring, capture, services,
       # forwarder workers) fast. The slow full-pipeline FT8 decode tests

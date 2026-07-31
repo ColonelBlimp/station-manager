@@ -106,6 +106,20 @@ PKGS="$(go list ./... | grep -v /node_modules/)"
 step "Go: vet"
 go vet $PKGS
 
+# Maintainability metrics (.golangci.yml): cognitive/cyclomatic complexity,
+# duplication, maintainability index. Scope is ./cmd/... ./internal/... to match
+# the measured baseline; the config's own path rules drop generated models and
+# npm-vendored Go. Skipped cleanly when not installed, like the CGO checks below
+# — CI always runs it, so a missing local binary cannot hide a gate failure, it
+# only means you find out on push.
+if command -v golangci-lint >/dev/null 2>&1; then
+    step "Go: golangci-lint (maintainability metrics)"
+    golangci-lint run ./cmd/... ./internal/...
+else
+    step "Go: golangci-lint — SKIPPED (not installed)"
+    note "Install with: sudo dnf install golangci-lint  (CI pins 2.11.3)"
+fi
+
 # Race detector in -short mode (matches CI): the heavy full-pipeline FT8
 # decode tests skip under -short — running a CPU-bound decode under -race
 # adds no race-detection value and used to blow the time budget. The full
