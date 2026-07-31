@@ -334,6 +334,9 @@ setStationSaved((station) => {
 // daemon's e4 sink (the modules never import each other). Refusals carry an
 // operator-facing message (draft preserved); a duplicate is marked so the
 // card can offer a force retry.
+// BASELINE DEBT 2026-07-31 (complexity 39) — the submit seam's error
+// fan-out: each failure mode maps to its own operator-facing message.
+// eslint-disable-next-line complexity
 setSubmit(async (q, opts) => {
     const refuse = (message: string, duplicate = false) => ({
         ok: false as const,

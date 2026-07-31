@@ -209,6 +209,10 @@ function freqMhz(hz: number): string {
     return (hz / 1_000_000).toFixed(6);
 }
 
+// BASELINE DEBT 2026-07-31 (complexity 79, 168 lines) — the worst function in the
+// SPA on every metric. One flat field-by-field walk over the ADIF record; the
+// complexity is the spec's field count, not nested logic (max-depth is 3).
+// eslint-disable-next-line complexity, max-lines-per-function
 export function formatAdifRecord(f: AdifQsoFields): string {
     const lines: string[] = [];
 

@@ -76,6 +76,9 @@
     let enrichNote: string | null = $state(null);
     let enrichExtras: Pick<QsoPatch, 'dxcc' | 'cqz' | 'ituz' | 'cont'> | null = $state(null);
 
+    // BASELINE DEBT 2026-07-31 (complexity 29) — mirrors reEnrichSelected's per-field
+    // merge rules for the single-QSO edit path.
+    // eslint-disable-next-line complexity
     async function reEnrich(): Promise<void> {
         const call = form.call.trim();
         if (call === '' || enriching) return;

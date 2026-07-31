@@ -23,6 +23,9 @@ export interface Ladder {
     step: number;
 }
 
+// BASELINE DEBT 2026-07-31 (complexity 37) — one branch per rung across
+// the seven sequencer modes; splitting it would scatter the ladder's shape.
+// eslint-disable-next-line complexity
 export function buildLadder(
     qso: Ft8QsoStatus,
     transmitting: boolean,

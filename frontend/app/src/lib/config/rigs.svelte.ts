@@ -172,6 +172,9 @@ class RigsState {
         this.draft.audio[which] = name;
     }
 
+    // BASELINE DEBT 2026-07-31 (complexity 38) — validation across the whole rig-def
+    // surface before a write.
+    // eslint-disable-next-line complexity
     async save(): Promise<void> {
         const id = this.selectedId;
         const d = this.draft;

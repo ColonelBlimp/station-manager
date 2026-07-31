@@ -420,6 +420,9 @@ class LogbookState {
      * dropped. Sequential (one lookup at a time) — natural pacing for the
      * upstream providers.
      */
+    // BASELINE DEBT 2026-07-31 (complexity 36) — per-field merge decisions over the
+    // enrichment result, each with its own keep/overwrite rule.
+    // eslint-disable-next-line complexity
     async reEnrichSelected(): Promise<void> {
         if (this.reEnriching) return;
         const onPage = this.rows.filter((r) => this.selected.has(r.id));

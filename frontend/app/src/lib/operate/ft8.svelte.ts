@@ -698,6 +698,9 @@ export const ft8Link: Ft8EventHandlers = {
         };
     },
 
+    // BASELINE DEBT 2026-07-31 (complexity 32) — dispatch over the FT8 QSO status
+    // payload; one arm per session state the daemon can publish.
+    // eslint-disable-next-line complexity
     onQso(p: QsoPayload): void {
         // Remember every station the sequencer has actually engaged this session.
         // `session.qsos` cannot answer "did we just work them?" in time: the daemon

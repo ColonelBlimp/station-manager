@@ -43,6 +43,17 @@ export default defineConfig(
                     caughtErrorsIgnorePattern: '^_',
                 },
             ],
+
+            // ── Maintainability metrics (2026-07-31) ─────────────────────
+            // Same thresholds as frontend/app/eslint.config.js, where the full
+            // rationale and the measured baseline live. Shape, NOT correctness.
+            // This SPA needs no exemptions: measured max complexity 19, max length 49, max depth 2.
+            complexity: ['error', 20],
+            'max-depth': ['error', 3],
+            'max-lines-per-function': [
+                'error',
+                { max: 100, skipBlankLines: true, skipComments: true },
+            ],
         },
     },
     {

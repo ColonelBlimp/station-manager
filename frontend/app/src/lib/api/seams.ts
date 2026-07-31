@@ -15,6 +15,9 @@ import type { AdifModePair } from '../operate/rig.svelte';
 
 /** Real enricher for setEnricher — GET /v1/enrich/callsign. The signal lets a
  *  superseded lookup cancel its in-flight daemon/upstream request. */
+// BASELINE DEBT 2026-07-31 (complexity 27) — maps each enrichment field from the
+// daemon response, tolerating absent ones (enrichment never blocks logging).
+// eslint-disable-next-line complexity
 export async function apiEnrich(call: string, signal?: AbortSignal): Promise<Enrichment | null> {
     const out = await enrichCallsign(call, signal);
     if (out.kind !== 'ok') return null;
