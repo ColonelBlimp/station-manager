@@ -892,6 +892,69 @@ func TestDriveAlarm_SelectorSwitchedMidTransmission_IsNotRecovery(t *testing.T) 
 	}
 }
 
+// D23 — THE KEYED WINDOW ENDS AT THE SEAL, NOT WHEN ft8TxActive CLEARS. The two
+// are seconds apart and the difference is load-bearing (codex 71bbf123 P1).
+//
+// releaseFt8TxChecked is a SEQUENCE, not an instant: seal -> issue tx_off (CI-V
+// waits for the ACK) -> confirm idle -> settle -> restore mode -> finishFt8Tx.
+// ft8TxActive stays true for that whole tail, with PTT already down. D21's taint
+// gated on ft8TxActive alone, so an MS frame arriving anywhere in the tail marked
+// a transmission tainted whose meter never left PO while it was actually keyed —
+// and a tainted transmission publishes no recovery, so a standing alarm would go
+// unretired on evidence that was in fact good.
+//
+// The repo has already paid for this lesson on this exact function: "the window
+// ends at unkey" took five review rounds and four real defects, every one from
+// treating that sequence as a single moment. The right boundary is the one the
+// gap measurement already uses — meterGapSealed, frozen at the instant tx_off is
+// ISSUED and unsealed again if the write fails, because the transmission is then
+// still running.
+//
+// THE FIXTURE MUST USE THE REAL RELEASE PATH. D21/D22 call finishFt8Tx directly,
+// which skips the tail entirely, so neither can see this — the onWrite hook below
+// injects the selection change between the seal and finishFt8Tx, which is the
+// only place the bug lives.
+func TestDriveAlarm_SelectorChangedAfterUnkey_StillReportsRecovery(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	// A genuine alarm, so there is a standing alarm a recovery must retire.
+	s.observeMeter(meterFrame(t, "MS0"))
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 },
+		"no drive alarm raised; the fixture proves nothing")
+	s.finishFt8Tx()
+
+	// A transmission that is healthy on PO for its whole KEYED length.
+	s.observeMeter(meterFrame(t, "MS0"))
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	feedMeterFor(t, s, "RM0118000", 2*silence)
+
+	// The operator turns the meter to ALC during the post-unkey tail — after
+	// tx_off is issued (so the keyed window is sealed) but before finishFt8Tx.
+	fake.onWrite = func(b []byte) []byte {
+		if string(b) == "TX0;" {
+			s.observeMeter(meterFrame(t, "MS2"))
+		}
+		return nil
+	}
+	if err := s.UnkeyFt8Tx(context.Background()); err != nil {
+		t.Fatalf("UnkeyFt8Tx: %v", err)
+	}
+
+	waitFor(t, func() bool { return len(w.drivePayloads()) >= 2 },
+		"no recovery after a transmission that was on PO for its whole keyed length — "+
+			"a meter change made AFTER the unkey must not retire its verdict")
+	got := w.drivePayloads()
+	if got[len(got)-1].Active != false {
+		t.Errorf("last payload = %+v, want recovery (Active false)", got)
+	}
+}
+
 // D20 — an UNKNOWN selection reports nothing rather than claiming either state.
 // Empty is how every other RigStatePayload field says "this frame carried no
 // value"; the SPA keeps its last. Reporting DriveMonitorOK here would be a claim

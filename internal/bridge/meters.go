@@ -160,7 +160,16 @@ func (s *Service) observeMeter(status cat.Status) {
 		// about RF (codex a0b0ac45 P1). Set here rather than checked at the timer,
 		// because by then only the CURRENT selection is knowable and a switch away
 		// and back inside one transmission would look like it never happened.
-		if s.ft8TxActive && driveMonitorFor(sel) == DriveMonitorMeterNotPO {
+		//
+		// The window is the SEALED one, not ft8TxActive: releaseFt8TxChecked seals
+		// at the instant tx_off is issued but leaves ft8TxActive true through the
+		// ACK, the confirm cycle, the settle and the mode restore. Gating on the
+		// flag alone tainted transmissions whose meter never moved while the rig
+		// was actually keyed, and a tainted transmission publishes no recovery —
+		// so a standing alarm went unretired on evidence that was good (codex
+		// 71bbf123 P1). A failed tx_off unseals, which is correct: the
+		// transmission is then still running and a change again counts.
+		if s.ft8TxActive && !s.meterGapSealed && driveMonitorFor(sel) == DriveMonitorMeterNotPO {
 			s.driveSelTainted = true
 		}
 	}
