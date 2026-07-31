@@ -107,8 +107,22 @@ describe('rowPoint', () => {
     // the declared grid", which is what the operator sees, rather than as an
     // exact centre — the rule is about the cell, not about one coordinate pair.
     it.each([
-        { call: 'UA3DPM', lat: '-89.979167', lon: '0.041667', grid: 'KO95', latRange: [55, 56], lonRange: [38, 40] },
-        { call: 'R9LAU', lat: '-89.979167', lon: '-179.958333', grid: 'MO27', latRange: [57, 58], lonRange: [64, 66] },
+        {
+            call: 'UA3DPM',
+            lat: '-89.979167',
+            lon: '0.041667',
+            grid: 'KO95',
+            latRange: [55, 56],
+            lonRange: [38, 40],
+        },
+        {
+            call: 'R9LAU',
+            lat: '-89.979167',
+            lon: '-179.958333',
+            grid: 'MO27',
+            latRange: [57, 58],
+            lonRange: [64, 66],
+        },
     ])('draws $call to its grid, not to the coordinates that contradict it', (c) => {
         const p = rowPoint(q({ lat: c.lat, lon: c.lon, gridsquare: c.grid }));
         expect(p).not.toBeNull();
@@ -168,8 +182,18 @@ describe('rowPoint', () => {
         it('warns once per conflicting row, and separately for another row', () => {
             const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
             try {
-                const a = q({ call: 'UA3DPM', lat: '-89.979167', lon: '0.041667', gridsquare: 'KO95' });
-                const b = q({ call: 'R9LAU', lat: '-89.979167', lon: '-179.958333', gridsquare: 'MO27' });
+                const a = q({
+                    call: 'UA3DPM',
+                    lat: '-89.979167',
+                    lon: '0.041667',
+                    gridsquare: 'KO95',
+                });
+                const b = q({
+                    call: 'R9LAU',
+                    lat: '-89.979167',
+                    lon: '-179.958333',
+                    gridsquare: 'MO27',
+                });
                 rowPoint(a);
                 rowPoint(a);
                 rowPoint(a);

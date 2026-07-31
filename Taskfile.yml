@@ -340,10 +340,12 @@ tasks:
   ci:local:
     desc: |
       Local mirror of .github/workflows/ci.yml — runs every gate the
-      "releasability" CI job runs (SPA lint/type-check/test/build, Go
-      gofmt/vet/race-test, daemon embed-build). Answers "would CI pass
-      right now?" without pushing. Set SKIP_NPM_CI=1 to reuse existing
-      node_modules during tight iteration.
+      "releasability" CI job runs, for ALL THREE gated SPAs (config,
+      logbook, app): lint / prettier format / type-check / test / build
+      each, then the Go gate (gofmt, vet, golangci-lint metrics, race
+      tests, daemon embed-build). Answers "would CI pass right now?"
+      without pushing. Set SKIP_NPM_CI=1 to reuse existing node_modules
+      during tight iteration (~30s saved across the three SPAs).
     cmds:
       - bash scripts/ci-local.sh
 

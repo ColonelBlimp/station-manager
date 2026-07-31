@@ -101,6 +101,15 @@ jobs:
         working-directory: frontend/config
         run: npm run lint
 
+      # Prettier as a CHECK, alongside lint. Formatting was advisory until
+      # 2026-07-31 and drift reached main unnoticed (mapData.svelte.ts +
+      # mapData.test.ts, introduced in 4c122764 and found only when a
+      # maintainability pass happened to run format:check). All three SPAs
+      # were clean when this was added, so it is green on arrival.
+      - name: Config SPA format check
+        working-directory: frontend/config
+        run: npm run format:check
+
       - name: Config SPA type-check
         working-directory: frontend/config
         run: npx svelte-check --fail-on-warnings
@@ -125,6 +134,10 @@ jobs:
         working-directory: frontend/logbook
         run: npm run lint
 
+      - name: Logbook SPA format check
+        working-directory: frontend/logbook
+        run: npm run format:check
+
       - name: Logbook SPA type-check
         working-directory: frontend/logbook
         run: npx svelte-check --fail-on-warnings
@@ -148,6 +161,10 @@ jobs:
       - name: App SPA lint
         working-directory: frontend/app
         run: npm run lint
+
+      - name: App SPA format check
+        working-directory: frontend/app
+        run: npm run format:check
 
       - name: App SPA type-check
         working-directory: frontend/app

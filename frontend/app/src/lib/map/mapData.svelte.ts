@@ -101,8 +101,7 @@ const gridConflictSeen = new Set<string>();
  *  belongs to the cell rather than to a band of invented tolerance. */
 function agreesWithCell(lat: number, lon: number, cell: GridCell): boolean {
     return (
-        Math.abs(lat - cell.lat) <= cell.latSpan / 2 &&
-        Math.abs(lon - cell.lon) <= cell.lonSpan / 2
+        Math.abs(lat - cell.lat) <= cell.latSpan / 2 && Math.abs(lon - cell.lon) <= cell.lonSpan / 2
     );
 }
 

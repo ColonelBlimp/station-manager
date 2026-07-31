@@ -13,9 +13,9 @@
 #
 # Env knobs:
 #   SKIP_NPM_CI=1   skip the `npm ci` reinstall (use existing node_modules
-#                   from your last `task frontend:install`). Saves ~10s
-#                   per run during tight iteration; trade-off is you won't
-#                   catch package-lock drift.
+#                   from your last `task frontend:install`). Saves ~10s per
+#                   SPA — ~30s across the three — during tight iteration;
+#                   trade-off is you won't catch package-lock drift.
 
 set -euo pipefail
 
@@ -44,29 +44,52 @@ note() {
 }
 
 # ───────────────────────────────────────────────────────────────────
-# SPA gate — run before Go gate so the daemon embed sees the fresh
-# dist/ when the Go build step runs.
+# SPA gate — run before the Go gate so the daemon embed sees a fresh
+# dist/ for EVERY embedded SPA when the Go build step runs.
+#
+# ALL THREE SPAs CI gates, in the same order, with the same per-SPA step
+# sequence (install → lint → format → type-check → test → build). Until
+# 2026-07-31 this mirror ran frontend/app ALONE, so a lint, format, type,
+# test or build regression in config or logbook passed locally and failed
+# on push — precisely the surprise this script exists to prevent, and a
+# gap its own "local mirror" header did not admit to.
+#
+# It also makes the Go embed-build below honest: that step compiles the
+# daemon against all three dist/ trees, and previously two of them could
+# be arbitrarily stale.
+#
+# frontend/logging was retired 2026-07-21 (embed + route removed) and is
+# deliberately not gated. config and logbook retire once app is feature
+# complete (backlog.md, ADR 0044) — drop them from this list then.
 # ───────────────────────────────────────────────────────────────────
 
-if [ "${SKIP_NPM_CI:-}" = "1" ]; then
-    step "SPA: skipping npm ci (SKIP_NPM_CI=1)"
-    note "Using existing node_modules — re-run 'task frontend:install' if package.json changed."
-else
-    step "SPA: npm ci"
-    ( cd frontend/app && npm ci )
-fi
+for spa in config logbook app; do
+    if [ "${SKIP_NPM_CI:-}" = "1" ]; then
+        step "SPA/$spa: skipping npm ci (SKIP_NPM_CI=1)"
+        note "Using existing node_modules — re-run 'task frontend:install' if package.json changed."
+    else
+        step "SPA/$spa: npm ci"
+        ( cd "frontend/$spa" && npm ci )
+    fi
 
-step "SPA: lint"
-( cd frontend/app && npm run lint )
+    step "SPA/$spa: lint"
+    ( cd "frontend/$spa" && npm run lint )
 
-step "SPA: svelte-check (--fail-on-warnings)"
-( cd frontend/app && npx svelte-check --fail-on-warnings )
+    # Prettier as a check, matching the gate's position (right after lint).
+    # Formatting was advisory until 2026-07-31 and drift reached main unnoticed.
+    # Fix with: cd frontend/$spa && npm run format
+    step "SPA/$spa: prettier format check"
+    ( cd "frontend/$spa" && npm run format:check )
 
-step "SPA: vitest"
-( cd frontend/app && npx vitest run )
+    step "SPA/$spa: svelte-check (--fail-on-warnings)"
+    ( cd "frontend/$spa" && npx svelte-check --fail-on-warnings )
 
-step "SPA: build (produces dist/ for daemon embed)"
-( cd frontend/app && npm run build )
+    step "SPA/$spa: vitest"
+    ( cd "frontend/$spa" && npx vitest run )
+
+    step "SPA/$spa: build (produces dist/ for daemon embed)"
+    ( cd "frontend/$spa" && npm run build )
+done
 
 # The generated manual is not committed (only manual/public/.gitkeep is), so —
 # exactly as hosted CI does before its Go gate — build it here so the daemon
