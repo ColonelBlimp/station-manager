@@ -31,6 +31,8 @@
         TypeScript's structural typing already does at the call seam.
 */
 
+import { noteDaemonDate } from './daemonClock.svelte';
+
 /**
  * Discriminated outcome of `safeFetch`. The `ok: true` arm hands the
  * `Response` back so the caller can inspect status / headers; the
@@ -123,6 +125,10 @@ export async function safeFetch(
     const signal = withTimeout(init?.signal ?? undefined, timeoutMs);
     try {
         const response = await fetch(input, signal ? { ...init, signal } : init);
+        // Sampled here because this is the ONE place every daemon request passes
+        // through, and because `Date` is stamped at send time — unlike an SSE frame,
+        // it cannot arrive replayed from a cache (see daemonClock).
+        noteDaemonDate(response.headers.get('date'));
         return { ok: true, response };
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

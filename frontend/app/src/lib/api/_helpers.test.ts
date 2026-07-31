@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { daemonSkewMs, _resetDaemonClockForTests } from './daemonClock.svelte';
 import { DEFAULT_TIMEOUT_MS, isPlainObject, isShape, readJsonBody, safeFetch } from './_helpers';
 
 afterEach(() => {
@@ -215,5 +216,73 @@ describe('safeFetch', () => {
         // No caller signal + timeout opted out → init passed through untouched.
         const [, init] = fetchSpy.mock.calls[0];
         expect(init).toBeUndefined();
+    });
+});
+
+/*
+    DAEMON CLOCK CALIBRATION — the one place it happens.
+
+    FT8 decode staleness compares daemon-produced slot times against "now", so the
+    SPA needs the DAEMON's clock, not the browser's (codex 9d7a3f46 P1). It is
+    sampled from the HTTP `Date` header here, in safeFetch, because this is the
+    single chokepoint every daemon request in this directory passes through — and
+    because `Date` is stamped at send time, so unlike an SSE frame it cannot arrive
+    replayed from a cache (codex 0d85428e P2).
+
+    Without these rules the mechanism is only ever exercised by tests that call
+    noteDaemonDate by hand, and nothing pins that a real response calibrates it.
+*/
+describe('safeFetch daemon-clock calibration', () => {
+    beforeEach(() => _resetDaemonClockForTests());
+    afterEach(() => _resetDaemonClockForTests());
+
+    it('records the skew from a response Date header', async () => {
+        const daemonNow = new Date(Date.now() - 5 * 60_000);
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() =>
+                Promise.resolve(
+                    new Response('', { status: 200, headers: { date: daemonNow.toUTCString() } })
+                )
+            )
+        );
+
+        await safeFetch('/v1/anything');
+
+        // Browser-now minus daemon-now ~= 5 minutes. Second-granularity header, so
+        // allow a couple of seconds either side rather than asserting an exact ms.
+        expect(daemonSkewMs()).toBeGreaterThan(5 * 60_000 - 2_000);
+        expect(daemonSkewMs()).toBeLessThan(5 * 60_000 + 2_000);
+    });
+
+    it('keeps the last good skew when the header is missing or unparseable', async () => {
+        const daemonNow = new Date(Date.now() - 5 * 60_000);
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() =>
+                Promise.resolve(
+                    new Response('', { status: 200, headers: { date: daemonNow.toUTCString() } })
+                )
+            )
+        );
+        await safeFetch('/v1/anything');
+        const calibrated = daemonSkewMs();
+
+        // A response with no Date, then one with a broken Date. Neither says
+        // anything about the clock, so guessing would be worse than the last answer.
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(new Response('', { status: 200 })))
+        );
+        await safeFetch('/v1/anything');
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() =>
+                Promise.resolve(new Response('', { status: 200, headers: { date: 'nonsense' } }))
+            )
+        );
+        await safeFetch('/v1/anything');
+
+        expect(daemonSkewMs()).toBe(calibrated);
     });
 });

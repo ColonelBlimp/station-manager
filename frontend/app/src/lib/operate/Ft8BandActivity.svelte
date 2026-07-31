@@ -14,7 +14,6 @@
         answerCq,
         workCaller,
         type DecodeEntry,
-        ft8DaemonSkewMs,
     } from './ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from './ft8Enrich.svelte';
     import { ft8PileupStack } from './ft8Pileup.svelte';
@@ -29,6 +28,7 @@
         isCqType4,
         isNonstandardCall,
     } from '../utils/ft8Message';
+    import { daemonSkewMs } from '../api/daemonClock.svelte';
     import { slotParity } from '../utils/ft8Parity';
     import { pathInfo } from '../utils/bearing';
     import { parseFrequency } from '../validators/frequency';
@@ -221,7 +221,7 @@
     // every click, while the daemon would have accepted them (codex 9d7a3f46 P1).
     // nowMs supplies the ticking, so this still advances between slots — the quiet
     // band is the case that matters.
-    const daemonNowMs = $derived(nowMs - ft8DaemonSkewMs());
+    const daemonNowMs = $derived(nowMs - daemonSkewMs());
 
     function isStale(row: DecodeRow): boolean {
         const t = Date.parse(row.d.startUtc);
