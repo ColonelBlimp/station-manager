@@ -80,6 +80,25 @@ type DriveAlarmPayload struct {
 	Code   string `json:"code,omitempty"`
 }
 
+// driveMonitorFor reports whether drive-collapse detection can run under a given
+// rig meter selection, as a RigStatePayload.DriveMonitor code. Empty for an
+// unknown selection — never guessed, the same discipline meterSelection() keeps.
+//
+// ONE rule with TWO readers, deliberately: armDriveWatch ACTS on it and
+// mapStatusToPayload TELLS THE OPERATOR about it. Split into two comparisons they
+// could drift, and the failure would be the worst shape available — a banner
+// saying monitoring is on while the detector has quietly declined to arm.
+func driveMonitorFor(meterSel string) string {
+	switch meterSel {
+	case "":
+		return ""
+	case meterSelPO:
+		return DriveMonitorOK
+	default:
+		return DriveMonitorMeterNotPO
+	}
+}
+
 // armDriveWatch starts drive-collapse detection for one transmission. Caller
 // holds s.mu; called from the same critical section that commits ft8TxActive,
 // so detection exists from the instant the bridge commits to transmitting.
@@ -99,6 +118,20 @@ func (s *Service) armDriveWatch(gen uint64) {
 	// link, AI mode not armed, a rig that does not push RM) to a dead
 	// transmitter.
 	if !s.meterSeenSinceTx {
+		return
+	}
+	// The rig pushes RM0 = the value of whatever meter is SELECTED, and only PO
+	// says anything about RF. A correctly-driven FT8 signal reads near zero on
+	// ALC, and the rig pushes on CHANGE, so a meter parked at zero goes quiet
+	// while output is perfectly normal — silence stops being evidence. Measured
+	// on the air 2026-07-31: two false alarms with the meter moved to ALC to set
+	// audio drive, sample count 532 -> 8 and the gap 239 ms -> 9.7 s across the
+	// selection change, with RF leaving the rig throughout.
+	//
+	// Deliberately blocks only a KNOWN non-PO selection: unknown (no MS frame
+	// seen, or a rigdef that reports none) still arms, so this fixes the measured
+	// fault without silently disabling detection on rigs that never answer MS.
+	if driveMonitorFor(s.meterSel) == DriveMonitorMeterNotPO {
 		return
 	}
 	// From here the transmission IS being watched, which is what makes a silent

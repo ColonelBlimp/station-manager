@@ -113,7 +113,29 @@ type RigStatePayload struct {
 	SelectedVfo   string `json:"selectedVfo,omitempty"`
 	SplitOverride *bool  `json:"splitOverride,omitempty"`
 	Power         int    `json:"power,omitempty"`
+
+	// DriveMonitor reports whether drive-collapse detection can run, and if not
+	// why — an i18n code (ADR 0010); the SPA owns the wording. Operator's
+	// instruction 2026-07-31, after two false NO-RF alarms caused by the rig's
+	// meter being on ALC: being silently unprotected is worse than being told.
+	//
+	// EMPTY means this frame carried no meter selection and therefore says
+	// nothing — the SPA keeps its last value, exactly like every other field
+	// here. That is why "monitoring is fine" is an explicit code rather than the
+	// zero value: with omitempty the two would be indistinguishable on the wire,
+	// the same trap SplitOverride uses a *bool to avoid.
+	DriveMonitor string `json:"driveMonitor,omitempty"`
 }
+
+// Drive-monitor states reported on RigStatePayload.DriveMonitor.
+const (
+	// DriveMonitorOK — the rig's meter is on PO, so a silent meter stream during
+	// a transmission is evidence about RF and the detector arms.
+	DriveMonitorOK = "ok"
+	// DriveMonitorMeterNotPO — the rig's meter is on something other than PO, so
+	// silence says nothing and drive monitoring is NOT running. See armDriveWatch.
+	DriveMonitorMeterNotPO = "meter_not_po"
+)
 
 // RigDisconnectedCode names a category of "the rig stopped talking"
 // the daemon publishes. The SPA's i18n catalogue keys the localized

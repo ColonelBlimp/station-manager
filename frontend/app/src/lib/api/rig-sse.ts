@@ -21,6 +21,9 @@ export interface RigStatePayload {
     selectedVfo?: string;
     splitOverride?: boolean;
     power?: number;
+    /** Drive-monitor state code, or absent when this frame carried no meter
+     *  selection. Mirrors the daemon's RigStatePayload.DriveMonitor. */
+    driveMonitor?: string;
 }
 
 /** Mirrors the bridge's rig-disconnected / bridge-error payloads (ADR 0010 rev 6). */

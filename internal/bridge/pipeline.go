@@ -1068,6 +1068,16 @@ func mapStatusToPayload(status cat.Status) (RigStatePayload, bool) {
 			populated = true
 		}
 	}
+	if v, ok := status[meterSelTag]; ok && v != "" {
+		// Not the meter READING (those are filtered out here by design — the
+		// "drop waterfall / S-meter" rule above); this is which meter is
+		// SELECTED, which decides whether drive-collapse detection can run at
+		// all. populated is set so an MS frame arriving ALONE still publishes:
+		// turning the rig's meter knob sends no other tag, and without this the
+		// operator's banner would stay stale until something unrelated changed.
+		p.DriveMonitor = driveMonitorFor(v)
+		populated = true
+	}
 	return p, populated
 }
 

@@ -953,3 +953,23 @@ reached `repeats 9` while still calling CQ (05:00:15) and kept going. The cap
 applies to repeats of a rung while working one answerer; **a CQ run is unbounded
 until Abandon**, which is what `robustness-pass-position` and ADR 0033 already
 said. Plan future on-air experiments accordingly.
+
+- [2026-07-31] Move the shell warning banners to **sticky toasts** for consistency.
+  There are now three stacked shell-level surfaces — `TxAlarmBanner`,
+  `DriveAlarmBanner` and the new `DriveMonitorNotice` — and each one reflows the
+  whole page downward, whereas toasts stack in a corner without moving the content
+  being read. That layout cost is the real argument, and it gets worse with each
+  surface added. **Do NOT flatten all three into one channel, though:**
+  `DriveAlarmBanner.svelte.test.ts` rules S5/S6 exist specifically so a drive fault
+  and a stuck transmitter never render as each other — they demand opposite
+  responses ("your audio path died, carry on" vs "your rig may be keyed right now,
+  go and look at it") — and a consistency pass that gives them the same visual
+  weight erodes exactly that. Suggested split: drive alarm + drive-monitor notice →
+  sticky toasts (the drive alarm already has a Dismiss contract that is
+  toast-shaped); tx-alarm stays a banner, because being hard to ignore IS the
+  feature for that one. **Design wrinkle to settle first:** the drive-monitor
+  notice RETRACTS ITSELF when the rig's meter goes back to PO (the daemon knows
+  when the condition ends), whereas toasts are normally dismissed rather than
+  withdrawn — so this needs a keyed, daemon-retractable toast, which the toast
+  system may not have today. Check before scoping. Open question for the operator:
+  does a sticky toast that vanishes on its own read as "handled" or as "lost"?

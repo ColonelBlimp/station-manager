@@ -67,6 +67,13 @@ var meterTags = []string{"METER", "ALC", "PO", "SWR"}
 // drain voltage.
 const meterSelTag = "METERSEL"
 
+// meterSelPO is the METERSEL value (rigdef MS mapping 0:PO) for the power-output
+// meter — the ONLY selection under which a silent push stream is evidence about
+// RF, and therefore the one the drive-collapse detector requires. Every other
+// selection has a legitimate near-zero reading on FT8, which the rig reports by
+// saying nothing. See armDriveWatch.
+const meterSelPO = "PO"
+
 // meterPushedTag is the tag carrying RM0 — the meter the rig actually pushes.
 // It is the ONLY tag whose meaning depends on the MS selection; ALC/PO/SWR name
 // their meter in the query itself.

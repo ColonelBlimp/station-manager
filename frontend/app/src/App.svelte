@@ -3,6 +3,7 @@
     import Header from './lib/ui/Header.svelte';
     import TxAlarmBanner from './lib/ui/TxAlarmBanner.svelte';
     import DriveAlarmBanner from './lib/ui/DriveAlarmBanner.svelte';
+    import DriveMonitorNotice from './lib/ui/DriveMonitorNotice.svelte';
     import Toasts from './lib/ui/Toasts.svelte';
     import SetupCard from './lib/ui/SetupCard.svelte';
     import { setup } from './lib/setup.svelte';
@@ -85,6 +86,7 @@
         <Header />
         <TxAlarmBanner />
         <DriveAlarmBanner />
+        <DriveMonitorNotice />
         <!-- main is the horizontal (and vertical) scroll container. Its width is
              bounded by the rail offsets (content-wrap pl/pr), so a min-width card
              scrolls WITHIN it and the fixed rails can't scroll over the card. -->

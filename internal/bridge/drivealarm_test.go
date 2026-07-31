@@ -721,3 +721,113 @@ func TestDriveAlarm_MeasuredSilenceAtThresholdIsNotRecovery(t *testing.T) {
 		}
 	}
 }
+
+// D19 — THE METER SELECTOR. Silence is only evidence about RF while the rig's
+// meter is on PO.
+//
+// The rig pushes RM0 = "the value of whatever meter is CURRENTLY SELECTED"
+// (meters.go, measured on hardware 2026-07-29), and the rigdef's READ burst
+// (`ID;FA;FB;ST;VS;MD0;MD1;PC;MS;`) never queries RM4/RM5/RM6 — so that ONE
+// selection is the entire meter stream. Select ALC and a correctly-driven FT8
+// signal reads near zero; the rig pushes on CHANGE, so a meter sitting at zero
+// has almost nothing to say and the stream goes quiet while RF leaves the radio
+// perfectly normally.
+//
+// FOUND ON THE AIR 2026-07-31, two false alarms at 03:58:36 and 03:59:06 while
+// the operator had moved the rig's meter to ALC to set audio drive — which is
+// the meter you watch to do that, so this is the normal way to meet the bug.
+// smd.log carries the selection in the summary line itself (meterFieldPrefix
+// names the field after it), and the transition is unambiguous:
+//
+//	03:58:13  meters=meter_po   n=532  gap_max_ms=239
+//	03:58:43  meters=meter_alc  n=8    gap_max_ms=9764
+//
+// RF was leaving the rig throughout — that is how the operator noticed.
+//
+// This is the SECOND instance of the rule armDriveWatch already implements for
+// meterSeenSinceTx: DO NOT ARM WHERE SILENCE IS UNINFORMATIVE. The service
+// already carried the fact needed to know it (Service.meterSel, exposed by
+// meterSelection()); the detector simply never read it — the same shape as the
+// meterGapAtUnkey finding of 2026-07-30, where the answer was already in hand
+// and discarded.
+//
+// SCOPE, chosen deliberately and reversible: the gate blocks only a selection
+// that is KNOWN AND NOT PO. An unknown selection (empty meterSel — no MS frame
+// seen yet, or a rig whose rigdef does not report one) still arms, exactly as
+// today. That keeps this fix to the case measured as wrong rather than silently
+// disabling drive detection on any rig that never answers MS. The residual is
+// stated rather than hidden: such a rig gets no protection from this class of
+// false alarm.
+//
+// The table is the point — the ONLY difference between the two cases is the MS
+// frame, so the PO row is the discriminator that stops this passing against an
+// implementation that simply never arms.
+//
+// wantReported is the second half of the rule, and the reason it lives in THIS
+// table rather than its own test: the operator must be told when monitoring is
+// off (operator's instruction, 2026-07-31), and a banner that says "monitoring
+// on" while armDriveWatch has silently declined to arm is worse than no banner
+// at all. Asserting the reported code and the alarm behaviour against the SAME
+// fixture is what pins them together; driveMonitorFor is the one rule both read.
+func TestDriveAlarm_MeterSelectorGatesTheWatch(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		msFrame      string // MS0 = PO selected, MS2 = ALC selected (rigdef METERSEL map)
+		wantAlarm    bool
+		wantReported string
+	}{
+		{"PO selected — silence means no RF", "MS0", true, DriveMonitorOK},
+		{"ALC selected — silence means nothing about RF", "MS2", false, DriveMonitorMeterNotPO},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, fake := newCommandTestService(t)
+			silence := shortDriveSilence(s)
+			t.Cleanup(answerTxStatusQueries(s, fake))
+			w := watchEvents(t, s)
+
+			// What the operator is told, from the same frame the detector reads.
+			p, populated := mapStatusToPayload(meterFrame(t, tc.msFrame))
+			if !populated {
+				t.Fatal("a meter-selection frame must publish rig state on its own — " +
+					"turning the rig's meter knob sends no other tag, so a frame dropped " +
+					"here leaves the banner stale until something unrelated changes")
+			}
+			if p.DriveMonitor != tc.wantReported {
+				t.Errorf("rig-state reported driveMonitor=%q, want %q", p.DriveMonitor, tc.wantReported)
+			}
+
+			s.observeMeter(meterFrame(t, tc.msFrame))
+			rxMeterFlowing(t, s) // instrument demonstrably alive in receive
+			keyedTestSlot(t, s)  // ... then total silence for the whole slot
+
+			if tc.wantAlarm {
+				waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 },
+					"no drive alarm with the meter on PO and a silent stream — "+
+						"the selector gate must not disable the detector outright")
+				return
+			}
+			time.Sleep(4 * silence)
+			if n := w.count(EventDriveAlarm); n != 0 {
+				t.Errorf("drive alarm published %d times with the rig's meter on ALC; want 0 — "+
+					"a near-zero ALC reading is what correctly-set FT8 drive looks like, so a "+
+					"quiet stream says nothing about whether RF is leaving the rig", n)
+			}
+		})
+	}
+}
+
+// D20 — an UNKNOWN selection reports nothing rather than claiming either state.
+// Empty is how every other RigStatePayload field says "this frame carried no
+// value"; the SPA keeps its last. Reporting DriveMonitorOK here would be a claim
+// the daemon cannot support, and reporting meter_not_po would put a banner up on
+// every rig whose rigdef has no MS tag — while armDriveWatch still arms for them.
+func TestDriveMonitor_UnknownSelectionReportsNothing(t *testing.T) {
+	if got := driveMonitorFor(""); got != "" {
+		t.Errorf("driveMonitorFor(unknown) = %q, want empty", got)
+	}
+	// A frame with no meter selection must not carry a stale verdict either.
+	p, _ := mapStatusToPayload(meterFrame(t, "FA014074000"))
+	if p.DriveMonitor != "" {
+		t.Errorf("driveMonitor=%q on a frame with no meter selection; want empty", p.DriveMonitor)
+	}
+}

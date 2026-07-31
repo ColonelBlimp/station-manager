@@ -78,6 +78,10 @@ export const rig: {
     /** A later transmission was watched and reported normal output. Reported to
      *  the operator; explicitly NOT a reason to hide the banner. */
     driveAlarmRecovered: boolean;
+
+    /** Whether drive-collapse monitoring is running, and if not why (daemon
+     *  code). Empty = the daemon has not reported a meter selection yet. */
+    driveMonitor: string;
 } = $state({
     // band/mode: operator-friendly literals (mode is a sideband, not an ADIF
     // family — resolved at submit). freq is the SELECTED VFO's frequency in
@@ -120,6 +124,7 @@ export const rig: {
     driveAlarmDismissed: false,
     driveAlarmAt: null,
     driveAlarmRecovered: false,
+    driveMonitor: '',
 });
 
 /**
@@ -655,6 +660,12 @@ export const catLink = {
             rig.modeLiteral = p.mode; // raw literal drives the live Option-A dropdown
             rig.mode = friendlyMode(p.mode);
         }
+
+        // Absent means this frame carried no meter selection, NOT "monitoring is
+        // fine" — most frames (a dial push, a mode change) carry no MS tag, so
+        // treating absent as restored would blink the notice off on every VFO
+        // turn. The daemon says "ok" explicitly when it means it.
+        if (p.driveMonitor !== undefined) rig.driveMonitor = p.driveMonitor;
 
         rig.cat = 'connected';
         rig.linkError = ''; // the rig is demonstrably working
