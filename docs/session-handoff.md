@@ -33,13 +33,18 @@ precisely so we don't re-derive state or redo finished work.
 ## Current state (as of 2026-07-31)
 
 > **2026-07-31 — a real meter-summary defect fixed, the FT8 sequencer's per-contact
-> state made structural, and code-quality gates adopted for BOTH halves of the tree
-> (golangci-lint metrics + ESLint complexity + prettier). NOTHING IS DEPLOYED.**
+> state made structural, code-quality gates adopted for BOTH halves of the tree
+> (golangci-lint metrics + ESLint complexity + prettier), and — evening session — the
+> FT8 non-on-air backlog PARKED by the operator plus an alert-surface audit captured
+> as ADR 0060. DEPLOYED AND RUNNING.**
 >
-> - **DEPLOYMENT IS PENDING and this matters for data already logged.** The running
->   daemon still predates the meter fix below, so every `meter_po_min` in the log is
->   contaminated (see next bullet). `task deploy:local:dev` restarts the daemon, so
->   the operator times it.
+> - **DEPLOYED — nothing pending.** RPM `2.0.0~alpha.1.998.gaba61729`, daemon up since
+>   **19:33:16 CAT**. The two commits after `aba61729` (`e9c05c43`, `90d16b82`) are
+>   docs-only, so the running build IS code-current. **`smd` is deliberately NOT
+>   auto-start** (operator, 2026-07-31) — the systemd user unit is `disabled`; a
+>   stopped daemon after a reboot or outage is not a fault, do not flag it as one.
+> - **Historical `meter_po_min` is still contaminated.** The fix below is live from
+>   this build FORWARD ONLY; rows logged before it stay wrong (see next bullet).
 > - **MEASURED-DATA DEFECT FIXED (`inKeyedMeterWindowLocked`).** `observeMeter`'s
 >   two gates disagreed: the taint check used the SEALED window, the per-transmission
 >   SUMMARY used `ft8TxActive` alone — which stays true through the whole
@@ -77,13 +82,59 @@ precisely so we don't re-derive state or redo finished work.
 > - **Worst functions by every metric** (the shared debt list): `cmd/smd/main.go run`
 >   (cognitive 142 / cyclomatic 97), `internal/bridge/pipeline.go readLoop` (76),
 >   `internal/ft8/caller_sequencer.go onSlotCalling` (72).
-> - **NEXT SESSION (operator, 2026-07-31): clear the FT8 backlog — NOT the on-air
->   items — and discuss/work on LOGGING.** The non-on-air FT8 cluster is
->   `backlog.md:52`; the on-air-blocked ones (type-4 ADR 0048 validation, Field Day)
->   stay parked. Two items in that cluster need verifying before they are picked:
->   the shift+ctrl freq-step parity gap was `frontend/logging`-only and that SPA was
->   RETIRED 2026-07-21 (three days after the cluster was last swept), and the
->   attempt-limit control is blocked on the app Settings view, which is a placeholder.
+> - **FT8 NON-ON-AIR BACKLOG: PARKED (operator, 2026-07-31 evening).** It was
+>   re-verified against the code FIRST — the 2026-07-18 sweep had expired when
+>   `frontend/logging` was retired 2026-07-21, three days later, killing three
+>   sub-items and leaving 6 buildable + 1 blocked + 1 decision, not 11. The operator's
+>   verdict on the six: *"none of these are pressing or something I recognise as
+>   needing"*. `backlog.md:52` carries the verified detail behind a PARKED marker —
+>   **do not present that cluster as a session target list; revisit only when the
+>   operator names a specific item.** Worth stating plainly: FT8 now has no open
+>   non-on-air work the operator considers active. (The on-air-blocked items — type-4
+>   ADR 0048 validation, Field Day — were already parked and stay so.)
+> - **ALERT-SURFACE AUDIT → ADR 0060, status Proposed, DO NOT BUILD.** Audited every
+>   operator-facing warning surface in `frontend/app` against an event-vs-state axis
+>   (a toast reports an EVENT that happened; a banner reports a STATE still true).
+>   **The tiering is sound; the PLACEMENT is not.** `TxAlarmBanner` /
+>   `DriveAlarmBanner` / `DriveMonitorNotice` render **in document flow** in
+>   `App.svelte` and push `<main>` down — up to three rows at once, and the drive
+>   alarm raises MID-SLOT with ~9 s of a 12.6 s FT8 slot left, so content jumps while
+>   the operator is reading it and jumps back on dismiss. `Toasts.svelte` is
+>   `fixed inset-0 z-50` and comments *"never reflows the working surface"* — the
+>   discipline exists and was applied only to the transient surface. Operator
+>   constraint: an alert may OVERLAY but must never shift content up or down. His
+>   direction: the header centre (`sticky h-16 shrink-0`, permanently-reserved chrome,
+>   zero shift by construction — the pattern the `rigGate()` dot already validates)
+>   hosts the calm states; **`tx_still_keyed` ALONE** gets a blocking emergency
+>   overlay; the other four TX codes demote to the header. **Blocked on observation by
+>   choice** — he saw some of these messages live today and wants several more runs
+>   before committing. Incidental find, recorded not acted on: ADR 0008 specifies
+>   toasts at `top-4 right-4`, `Toasts.svelte` resolves to bottom-centre.
+> - **THE DAEMON DEPENDENCY THAT DECISION CREATES** (in ADR 0060 and repeated at
+>   `backlog.md:71`, because it is the part most easily lost). `raiseTxAlarm`
+>   publishes ONLY on the false→true edge (`if !already`). So: an unkey times out →
+>   `raiseTxAlarm(TxAlarmUnconfirmed)` → quiet header chip; `startAlarmProbes()` keeps
+>   querying; a probe returns TXSTATUS `"1"` → `raiseTxAlarm(TxAlarmStillKeyed)` is
+>   **SUPPRESSED**. The daemon logs `CHECK YOUR RADIO` and calls
+>   `retryUnkeyStillKeyed()` while the screen still shows the calm chip. The
+>   escalation from *"I can't confirm"* to *"the rig says it is transmitting"* is the
+>   exact moment the overlay exists for, and the one moment currently unreportable.
+>   Harmless TODAY — all five codes render one identical banner, so a suppressed code
+>   change is invisible AND harmless; it becomes load-bearing the moment the code is a
+>   tier selector. Promotion must publish; **demotion must not.**
+> - **FINDING THAT FEEDS THE LOGGING WORKSTREAM: the drive banner is doing duty as a
+>   LOG ENTRY.** `publishDriveRecovery` sends `active=false`, but the SPA deliberately
+>   does NOT clear — `drivealarm.go` states the reason: *"the operator asked to be told
+>   the rig is fine now without losing the record that it was not."* A persistent alert
+>   is standing in for storage because there is nowhere else to put the record.
+>   Consolidated logging would let that banner clear honestly when the rig is confirmed
+>   fine. That is a concrete, already-felt argument for the workstream, not a
+>   speculative one.
+> - **NEXT SESSION: LOGGING.** The FT8 half of the previous plan is parked, so logging
+>   is what remains. The `qso` third is a SURFACING job rather than a design one (see
+>   below) — the ADR is the gate on the rest. First open question, operator-raised and
+>   still unanswered: **is the smcloud admin surface internet-facing, or behind
+>   WireGuard/Tailscale?**
 > - **LOGGING — the operator's shape, stated 2026-07-31: ALL logging into a DB table,
 >   CATEGORISED (qso, notification, daemon, ...)** — one store instead of today's
 >   three mechanisms (QSO rows, transient SSE events, `smd.log`). This is a
