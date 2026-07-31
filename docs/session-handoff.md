@@ -30,8 +30,113 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-30)
+## Current state (as of 2026-07-31)
 
+> **2026-07-31 — a real meter-summary defect fixed, the FT8 sequencer's per-contact
+> state made structural, and code-quality gates adopted for BOTH halves of the tree
+> (golangci-lint metrics + ESLint complexity + prettier). NOTHING IS DEPLOYED.**
+>
+> - **DEPLOYMENT IS PENDING and this matters for data already logged.** The running
+>   daemon still predates the meter fix below, so every `meter_po_min` in the log is
+>   contaminated (see next bullet). `task deploy:local:dev` restarts the daemon, so
+>   the operator times it.
+> - **MEASURED-DATA DEFECT FIXED (`inKeyedMeterWindowLocked`).** `observeMeter`'s
+>   two gates disagreed: the taint check used the SEALED window, the per-transmission
+>   SUMMARY used `ft8TxActive` alone — which stays true through the whole
+>   `releaseFt8TxChecked` tail (tx_off ACK → confirm → settle → mode restore). So
+>   RECEIVE-time meter frames were filed into the transmission's summary. Since `Min`
+>   deliberately ignores leading zeros (`started`: "a zero AFTER onset is the collapse
+>   being hunted"), `meter_po_min: 0` on **402 of 442 logged transmissions** was
+>   post-unkey noise, not 402 drive collapses. `gap_max_ms`, `keyed_ms` and the alarm
+>   itself were always correct — they already used the sealed window, which is exactly
+>   why the inconsistency stayed invisible. **Discount historical `meter_po_min`.**
+> - **Why it survived:** all 15 pre-existing `TestObserveMeter` tests pass against the
+>   broken gate. R2 states the right rule but sets `ft8TxActive=false` — the state
+>   AFTER the release path finishes — so its fixture never enters the interval where
+>   right and wrong differ. New R16/R16b pin it.
+> - **FT8 per-contact state is now one struct** (`contactFlags` = repeats /
+>   skipIfSilent / nextArmed; `autoWorkState` = the RUN). Ending a contact is ONE
+>   assignment at all nine sites (7× `Start*`, `retireSessionLocked`,
+>   `abandonLocked`). Behaviour-preserving; it closed a latent gap where `nextArmed`'s
+>   own comment claimed it was cleared "at session start" and 6 of 7 starts did not —
+>   harmless only by luck, since both routes to `seqIdle` clear it.
+> - **CODE-QUALITY GATES ADOPTED (operator-directed).** Go: `.golangci.yml` —
+>   gocognit 60 / gocyclo 50 / dupl 150 / maintidx, metrics ONLY (not correctness),
+>   green on arrival with **15 documented exemptions** that are the refactor backlog.
+>   SPA: ESLint `complexity 20` / `max-depth 3` / `max-lines-per-function 100` across
+>   all three SPAs, with **8 inline `BASELINE DEBT` disables** in app (grep that
+>   string) and none needed in config/logbook. Prettier `format:check` added to the
+>   gate. `scripts/ci-local.sh` extended from app-only to ALL THREE SPAs.
+> - **TRAP FOR ANY RE-BASELINE — three golangci-lint defaults suppress findings and
+>   all three corrupted the first measurement:** `max-issues-per-linter` (50),
+>   `max-same-issues` (3), and worst `uniq-by-line` (true) — gocognit and gocyclo
+>   report on the same declaration line, so gocyclo findings vanished wherever
+>   gocognit fired. It made gocyclo look like it peaked at 17 (true max **97**) and
+>   maintidx look like it had zero findings (true: 11). They are disabled in the
+>   config; pass the same flags if measuring from the CLI.
+> - **Worst functions by every metric** (the shared debt list): `cmd/smd/main.go run`
+>   (cognitive 142 / cyclomatic 97), `internal/bridge/pipeline.go readLoop` (76),
+>   `internal/ft8/caller_sequencer.go onSlotCalling` (72).
+> - **NEXT SESSION (operator, 2026-07-31): clear the FT8 backlog — NOT the on-air
+>   items — and discuss/work on LOGGING.** The non-on-air FT8 cluster is
+>   `backlog.md:52`; the on-air-blocked ones (type-4 ADR 0048 validation, Field Day)
+>   stay parked. Two items in that cluster need verifying before they are picked:
+>   the shift+ctrl freq-step parity gap was `frontend/logging`-only and that SPA was
+>   RETIRED 2026-07-21 (three days after the cluster was last swept), and the
+>   attempt-limit control is blocked on the app Settings view, which is a placeholder.
+> - **LOGGING — the operator's shape, stated 2026-07-31: ALL logging into a DB table,
+>   CATEGORISED (qso, notification, daemon, ...)** — one store instead of today's
+>   three mechanisms (QSO rows, transient SSE events, `smd.log`). This is a
+>   cross-cutting architectural decision with real alternatives, so it wants an ADR
+>   before code. **DISCUSS FIRST — it collides with three things already decided:**
+>   1. **The log of last resort must not live in the thing most likely to be broken.**
+>      "The only thing that should stop logging is a broken local DB"
+>      (`invariants.md`) — if daemon diagnostics are DB rows, a DB fault destroys the
+>      evidence of the DB fault. Argues for `smd.log` surviving as the low-level sink
+>      whatever else changes.
+>   2. **It reopens the exfiltration path closed the same day.** The notification-rail
+>      inbox note (2026-07-31) says explicitly: feed the rail from events the daemon
+>      publishes FOR DISPLAY, *not* from `smd.log`, because that file holds ~170
+>      `callsign provider error` lines whose text comes from an EXTERNAL provider. A
+>      table that mixes daemon diagnostics with an operator-facing surface puts every
+>      future third-party error string one query from a browser — the exact shape of
+>      the two P1 credential leaks of 2026-07-25.
+>   3. **Write volume vs the QSO write path.** `smd.log` reached 14 MB in ~10 days.
+>      Routing that into the SQLite file that also holds QSOs puts a firehose of
+>      inserts against the one write path that is transactional and must never stall
+>      ("one-fails-all-fail for QSO writes"). Retention/rotation becomes an operator
+>      decision, not an inferred default.
+>
+>   **Likely resolution to put to the operator:** an operator-facing EVENT/AUDIT table
+>   (categories: qso-lifecycle, notification, forwarding, rig) fed from published
+>   events, with `smd.log` retained unchanged as the diagnostic sink — which gets the
+>   queryable categorised history without inheriting any of the three problems.
+>
+>   **THE `qso` CATEGORY IS AN AUDIT TRAIL OF QSO CHANGES (operator-confirmed
+>   2026-07-31) — AND IT IS ALREADY BUILT. Do not design it from scratch.**
+>   `qso_history` (ADR 0016) exists and works: columns `qso_uuid`, `op`, `at`,
+>   `source`, and a full JSON `before_image` that round-trips back to the pre-edit
+>   state. `internal/api/handler_qso_history_test.go` (`TestE2E_PatchWritesAuditRow`)
+>   proves a `PATCH /v1/qso/{uuid}` appends `op=update, source=api`. The rows have
+>   been accumulating correctly for the whole dogfood period.
+>
+>   **What is missing is the way OUT, not the recording:**
+>   - **No HTTP route.** `server.go` registers `GET /v1/contact-history`, which is a
+>     DIFFERENT feature (prior QSOs with a callsign) — easy to confuse, and not this.
+>     Nothing exposes `qso_history`.
+>   - **No SPA surface**, consequently.
+>   - **`FetchQsoHistoryByUUIDWithContext` is called only from tests.** Write-only
+>     from the operator's point of view.
+>   - **`op` is `CHECK (op IN ('update','delete'))`** — no `create` (arguably implicit
+>     in the QSO row) and no `forward` (tracked separately in `qso_upload`). Widening
+>     it is a migration + a decision, not a rebuild.
+>
+>   So the `qso` half is a SURFACING job. That reframes the whole design question:
+>   SM already has one categorised audit table that works, and the real question is
+>   whether `notification` and `daemon` join THAT pattern or stay separate — the
+>   three concerns above apply differently per category, which is what the ADR has to
+>   settle.
+>
 > **2026-07-30 — the drive alarm PASSED on-air acceptance and its open question is
 > instrumented; the map's South-Pole arcs are fixed; and FT8 AUTO-WORK-CALLERS is
 > built, deployed AND SWITCHED ON. The station now works callers back-to-back after
