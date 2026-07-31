@@ -155,10 +155,31 @@
 
     // Full literal class strings (not class: directives — those can't express a
     // `dark:` variant); Tailwind's scanner still finds these in-source.
-    function rowClass(kind: DecodeRow['kind'], worked: boolean | undefined): string {
-        if (kind === 'call') return 'bg-blue-50 dark:bg-blue-500/10';
-        if (kind === 'cq') return worked ? 'text-muted' : 'bg-amber-50 dark:bg-amber-500/10';
-        return '';
+    function rowClass(
+        kind: DecodeRow['kind'],
+        worked: boolean | undefined,
+        stale: boolean
+    ): string {
+        // Faded rather than removed (operator's call): deleting rows would make a
+        // quiet band look identical to a dead decoder, which is exactly the state
+        // the operator has to be able to tell it apart from.
+        const age = stale ? ' opacity-40' : '';
+        if (kind === 'call') return 'bg-blue-50 dark:bg-blue-500/10' + age;
+        if (kind === 'cq') {
+            return (worked ? 'text-muted' : 'bg-amber-50 dark:bg-amber-500/10') + age;
+        }
+        return age.trim();
+    }
+
+    // A stale row keys nothing. The daemon refuses it too (ErrStaleDecode -> 409), so
+    // this is not the guarantee — it is what turns a rejection into a reason, and
+    // stops the operator learning that clicking greyed rows is worth a try.
+    function staleBlocked(row: DecodeRow): boolean {
+        if (!isStale(row)) return false;
+        toasts.info(
+            `That decode is too old to work — ${row.call || 'the station'} may have left the air. Wait for a fresh decode.`
+        );
+        return true;
     }
 
     // ---- Click to work (ADR 0033) — first RF-initiating clicks from this SPA -----
@@ -169,6 +190,36 @@
     // A row is workable only when armed + CAT live + no session already in flight; a
     // plain row (kind '') is never clickable.
     const canStart = $derived(ft8State.tx.armed && catLive && !ft8State.qso.active);
+
+    // DECODE STALENESS (operator's number, 2026-07-31: three minutes). Band Activity
+    // retains by COUNT (historyMax), never by age, so on a quiet band a station that
+    // left the air minutes ago keeps a clickable row — UA4FKT's did for 5m31s, and
+    // clicking it transmitted six rungs at nobody.
+    //
+    // MUST MATCH staleDecodeLimit in internal/ft8/sequencer.go. The daemon is the
+    // guarantee (it refuses the start with ErrStaleDecode -> 409 ft8_stale_decode);
+    // this half stops the click being made at all, so the operator is not taught to
+    // click things that get rejected.
+    const STALE_MS = 3 * 60 * 1000;
+
+    // A TICKING clock, not Date.now() read during render. On the band that produced
+    // this bug ONE decode arrived in five and a half minutes, so nothing would have
+    // re-rendered and the row would never have greyed. The tick is what makes rows
+    // age on their own; 5 s is well inside the three-minute window it drives.
+    let nowMs = $state(Date.now());
+    $effect(() => {
+        const h = setInterval(() => (nowMs = Date.now()), 5000);
+        return () => clearInterval(h);
+    });
+
+    // Unknown age is NOT old age: an unparseable slot time stays workable, the same
+    // discipline the daemon keeps by returning a parse error rather than a staleness
+    // one. Refusing on a fact we do not have would be worse than allowing the click.
+    function isStale(row: DecodeRow): boolean {
+        const t = Date.parse(row.d.startUtc);
+        if (Number.isNaN(t)) return false;
+        return nowMs - t > STALE_MS;
+    }
 
     // Pile-up queue anchors. workableParity = the run's locked slot parity, or (before
     // anything's queued) the live contact's caller parity — a wrong-parity add is
@@ -213,6 +264,7 @@
     function enqueueCaller(row: DecodeRow): void {
         const toMe = parseDirectedToMe(row.d.text, me);
         if (!toMe) return;
+        if (staleBlocked(row)) return;
         const call = toMe.call;
         if (callerActive) {
             toasts.info('Calling CQ — pile-up queue disabled. Abandon to work stations by hand.');
@@ -324,6 +376,7 @@
     // transmission from them must be a deliberate gesture.
     async function onRowDblClick(row: DecodeRow): Promise<void> {
         if (row.kind !== '' || row.dx === null || starting) return;
+        if (staleBlocked(row)) return;
         const pre = txPreflight(row.dx.call);
         if (!pre) return;
         starting = true;
@@ -356,6 +409,7 @@
             return;
         }
         if (row.kind === '' || starting) return;
+        if (staleBlocked(row)) return;
         const pre = txPreflight(row.call);
         if (!pre) return;
         const { offset, opMHz, allowDuplicate } = pre;
@@ -471,7 +525,7 @@
                                     ? ft8EnrichState.info(row.call, rig.band)
                                     : undefined}
                             {@const hover = enrichHover(info)}
-                            <tr class="text-ink {rowClass(row.kind, info?.worked)}">
+                            <tr class="text-ink {rowClass(row.kind, info?.worked, isStale(row))}">
                                 <td class="py-0.5 pr-2 pl-3 text-right"
                                     >{Math.round(row.d.freqHz)}</td
                                 >

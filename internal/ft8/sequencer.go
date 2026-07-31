@@ -46,6 +46,10 @@ var (
 	ErrNoOffset = stderrors.New("ft8: no TX offset selected")
 	// ErrNoCall: StartCallCq without an operator callsign.
 	ErrNoCall = stderrors.New("ft8: no operator callsign configured")
+	// ErrStaleDecode: the decode a start was asked to work is older than
+	// staleDecodeLimit. Distinct from a parse failure on purpose — the operator
+	// gets a different message for "that station has aged out" than for bad input.
+	ErrStaleDecode = stderrors.New("ft8: that decode is too old to work")
 	// ErrFdIdentityUnset: StartQsoFd without the operator's Field Day class+section
 	// (ft8.field_day) — we can't transmit an FD exchange without our own identity.
 	ErrFdIdentityUnset = stderrors.New("ft8: Field Day class/section not configured")
@@ -479,6 +483,38 @@ func (s *Sequencer) SetMaxRepeats(n int) {
 	s.mu.Unlock()
 }
 
+// staleDecodeLimit is how old a decode may be and still be worked. THE
+// OPERATOR'S NUMBER (2026-07-31), not a derived one.
+//
+// The fault it closes, measured: UA4FKT's last decode was 01:27:45 and the
+// operator clicked their row at 01:33:16, because Band Activity retains by COUNT
+// (historyMax 100) and never by age — one decode arrived on the whole band in
+// that window, so nothing was evicted. Six rungs were transmitted at a station
+// that had left the air five and a half minutes earlier.
+const staleDecodeLimit = 3 * time.Minute
+
+// parseFreshSlotUTC parses the RFC3339 slot start a start-request names, and
+// refuses one that has aged out.
+//
+// ONE helper rather than a check per entry point: six Start* paths parse a slot,
+// and a guard on only the path that happened to bite is one the next path evades
+// silently. Sharing the parse means a future entry point that copies the idiom
+// inherits the guard (staledecode_test.go enumerates all six).
+//
+// The two failures stay DISTINCT — a malformed timestamp returns the parse error,
+// not ErrStaleDecode — because they reach the operator as different messages, and
+// folding them together would send someone hunting a clock problem for a typo.
+func parseFreshSlotUTC(theirSlotUTC string, now time.Time) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339, theirSlotUTC)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if now.Sub(t) > staleDecodeLimit {
+		return time.Time{}, ErrStaleDecode
+	}
+	return t, nil
+}
+
 // StartQso begins answering a CQ. theirSlotUTC is the RFC3339 start of the slot
 // the CQ was heard in (it fixes the worked station's parity — we transmit in the
 // opposite one). offsetHz is the operator-picked clear offset. Idempotency: only
@@ -487,7 +523,7 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	if offsetHz <= 0 {
 		return ErrNoOffset
 	}
-	t, err := time.Parse(time.RFC3339, theirSlotUTC)
+	t, err := parseFreshSlotUTC(theirSlotUTC, now)
 	if err != nil {
 		return err
 	}
@@ -551,7 +587,7 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 	if strings.TrimSpace(ourClass) == "" || strings.TrimSpace(ourSection) == "" {
 		return ErrFdIdentityUnset
 	}
-	t, err := time.Parse(time.RFC3339, theirSlotUTC)
+	t, err := parseFreshSlotUTC(theirSlotUTC, now)
 	if err != nil {
 		return err
 	}

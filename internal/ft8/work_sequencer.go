@@ -38,7 +38,7 @@ func (s *Sequencer) StartWorkCaller(ourCall, theirCall, theirGrid string, theirS
 	if strings.TrimSpace(theirCall) == "" {
 		return ErrTxBadMessage
 	}
-	t, err := time.Parse(time.RFC3339, theirSlotUTC)
+	t, err := parseFreshSlotUTC(theirSlotUTC, now)
 	if err != nil {
 		return err
 	}
@@ -282,7 +282,7 @@ func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, 
 	if strings.TrimSpace(theirCall) == "" {
 		return ErrTxBadMessage
 	}
-	t, err := time.Parse(time.RFC3339, theirSlotUTC)
+	t, err := parseFreshSlotUTC(theirSlotUTC, now)
 	if err != nil {
 		return err
 	}

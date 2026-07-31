@@ -25,7 +25,7 @@ import { setFt8Enricher, resetFt8EnrichForTests } from './ft8Enrich.svelte';
 import { ft8PileupStack, _resetPileupForTests } from './ft8Pileup.svelte';
 import { rig } from './rig.svelte';
 import { session } from './session.svelte';
-import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
+import { _resetForTests as resetToasts, toastsState } from '../ui/toasts.svelte';
 import type { DecodeReport } from '../api/ft8-sse';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -69,6 +69,18 @@ function decode(
         slot: { start_utc: startUtc, period: 'even' },
         decodes: lines.map((l) => ({ ...l, dt_s: 0 })),
     };
+}
+
+// A slot start on the 15 s lattice, `slotsAgo` slots before now, with a chosen
+// parity. Fixtures below used a hardcoded 2026-07-09 date until decode staleness
+// landed (2026-07-31): a fixed date ages past the three-minute limit, the row stops
+// being workable, and the test fails for a reason that has nothing to do with what
+// it asserts. Anything testing a CLICK therefore needs a slot that is fresh
+// relative to now. Parity is kept explicit because the pile-up rules depend on it.
+function freshSlot(parity: 'even' | 'odd', slotsAgo = 0): string {
+    let k = Math.floor(Date.now() / 15000) - slotsAgo;
+    if ((k % 2 === 0) !== (parity === 'even')) k -= 1;
+    return new Date(k * 15000).toISOString();
 }
 
 describe('Ft8BandActivity renderer', () => {
@@ -333,7 +345,7 @@ describe('Ft8BandActivity pile-up enqueue (Ctrl+click)', () => {
         setFt8OperatorCall('7Q5MLV');
         render(Ft8BandActivity);
         ft8Link.onDecode(
-            decode('2026-07-09T14:30:00Z', [
+            decode(freshSlot('even'), [
                 { text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }, // calling us
                 { text: 'CQ W1ABC FN42', freq_hz: 1500, snr: -12 }, // a CQ, not a caller
             ])
@@ -352,10 +364,10 @@ describe('Ft8BandActivity pile-up enqueue (Ctrl+click)', () => {
         setFt8OperatorCall('7Q5MLV');
         render(Ft8BandActivity);
         ft8Link.onDecode(
-            decode('2026-07-09T14:30:00Z', [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
+            decode(freshSlot('even'), [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
         );
         ft8Link.onDecode(
-            decode('2026-07-09T14:30:15Z', [{ text: '7Q5MLV DL1XYZ JO31', freq_hz: 900, snr: 1 }])
+            decode(freshSlot('odd'), [{ text: '7Q5MLV DL1XYZ JO31', freq_hz: 900, snr: 1 }])
         );
         flushSync();
 
@@ -373,7 +385,7 @@ describe('Ft8BandActivity row markers', () => {
         setFt8OperatorCall('7Q5MLV');
         render(Ft8BandActivity);
         ft8Link.onDecode(
-            decode('2026-07-09T14:30:00Z', [
+            decode(freshSlot('even'), [
                 { text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }, // caller → queued
                 { text: '7Q5MLV DL1XYZ JO31', freq_hz: 900, snr: 1 }, // caller → will be worked
             ])
@@ -408,7 +420,7 @@ describe('Ft8BandActivity directed call (double-click a plain row)', () => {
         });
         render(Ft8BandActivity);
         ft8Link.onDecode(
-            decode('2026-07-09T14:30:00Z', [{ text: 'K1ABC T22TT RI91', freq_hz: 1200, snr: -7 }])
+            decode(freshSlot('even'), [{ text: 'K1ABC T22TT RI91', freq_hz: 1200, snr: -7 }])
         );
         flushSync();
 
@@ -422,7 +434,7 @@ describe('Ft8BandActivity directed call (double-click a plain row)', () => {
         expect(got[0]).toMatchObject({
             theirCall: 'T22TT',
             theirGrid: 'RI91',
-            slotUtc: '2026-07-09T14:30:00Z',
+            slotUtc: freshSlot('even'),
             offsetHz: 1500,
             fd: false,
             theirSnr: -7,
@@ -482,7 +494,7 @@ describe('Ft8BandActivity directed call (double-click a plain row)', () => {
         });
         render(Ft8BandActivity);
         ft8Link.onDecode(
-            decode('2026-07-09T14:30:00Z', [{ text: 'K1ABC T22TT RI91', freq_hz: 1200, snr: -7 }])
+            decode(freshSlot('even'), [{ text: 'K1ABC T22TT RI91', freq_hz: 1200, snr: -7 }])
         );
         flushSync();
 
@@ -643,5 +655,138 @@ describe('Ft8BandActivity deliberate-repeat intent', () => {
 
         expect(got).toHaveLength(1);
         expect(got[0].allowDuplicate).toBe(false);
+    });
+});
+
+/*
+    DECODE STALENESS — found in dogfooding, 2026-07-31.
+
+    UA4FKT's last decode was 01:27:45 UTC. At 01:33:16 the operator clicked their
+    Band Activity row and SM transmitted a full six-rung ladder at a station that
+    had left the air five and a half minutes earlier. The row was still there
+    because retention is by COUNT (historyMax 100) and never by AGE — exactly ONE
+    decode arrived on the whole band in that window, so the cap evicted nothing.
+
+    ACCEPTANCE CRITERION (operator-approved 2026-07-31, threshold theirs):
+
+      When a station stops transmitting, its row stops looking workable within one
+      freshness window — and I can tell "nobody is calling" apart from "the decoder
+      has stopped".
+
+    GREY, NOT REMOVE (operator's call). Deleting rows would make a quiet band look
+    identical to a dead decoder, which is the confusable state the criterion names.
+
+    THE ROW MUST AGE WITH NO NEW DECODES ARRIVING, and that is the whole subtlety —
+    on the band that produced this bug, ONE decode arrived in five and a half
+    minutes. A staleness test that pushes a fresh decode to trigger the re-render
+    proves nothing about the case it exists for, so S3 advances the clock instead.
+
+    UNPARSEABLE SLOT TIMES ARE NOT STALE (S4). Unknown age is not old age — the
+    same discipline the daemon keeps by returning a parse error rather than
+    ErrStaleDecode.
+*/
+describe('Ft8BandActivity staleness', () => {
+    const MINUTE = 60_000;
+    const ago = (ms: number): string => new Date(Date.now() - ms).toISOString();
+
+    // S1 — THE DISCRIMINATOR. A recent decode is worked exactly as before. Without
+    // it, an implementation that refused every click would pass S2 and S3.
+    it('works a fresh row normally', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const calls: Ft8WorkArgs[] = [];
+        armReady({
+            workCaller: (a) => {
+                calls.push(a);
+                return okResult();
+            },
+        });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(ago(30_000), [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
+        );
+        flushSync();
+
+        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'));
+        await flush();
+
+        expect(calls).toHaveLength(1);
+    });
+
+    // S2 — THE CRITERION. A decode older than the limit keys nothing, and says why.
+    it('does not transmit when a stale row is clicked, and explains', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        let worked = 0;
+        armReady({
+            workCaller: () => {
+                worked++;
+                return okResult();
+            },
+        });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(ago(4 * MINUTE), [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
+        );
+        flushSync();
+
+        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'));
+        await flush();
+
+        expect(worked).toBe(0);
+        // Told, not silently ignored — the criterion's "tell it apart from the click
+        // not registering" clause.
+        expect(toastsState.items.map((t) => t.message).join(' ')).toMatch(/too old|stale/i);
+        // And visibly not workable, so the click is discouraged before it happens.
+        const row = screen.getByText('7Q5MLV PA3KUS JO21').closest('tr');
+        expect(row?.className).toMatch(/opacity/);
+    });
+
+    // S3 — IT AGES ON ITS OWN. No new decode arrives; only time passes. This is the
+    // case the bug actually occurred in, and the one a decode-driven re-render
+    // cannot cover.
+    it('greys a row that ages past the limit with no new decodes arriving', async () => {
+        vi.useFakeTimers();
+        try {
+            setFt8OperatorCall('7Q5MLV');
+            armReady();
+            render(Ft8BandActivity);
+            ft8Link.onDecode(
+                decode(new Date().toISOString(), [
+                    { text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 },
+                ])
+            );
+            flushSync();
+
+            const row = () => screen.getByText('7Q5MLV PA3KUS JO21').closest('tr');
+            expect(row()?.className).not.toMatch(/opacity/);
+
+            // Nothing pushed — the band has simply gone quiet.
+            await vi.advanceTimersByTimeAsync(4 * MINUTE);
+            flushSync();
+
+            expect(row()?.className).toMatch(/opacity/);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    // S4 — an unparseable slot time is NOT stale. Unknown age is not old age, and
+    // refusing on a fact we do not have would be worse than allowing the click.
+    it('treats a decode with an unparseable slot time as workable', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const calls: Ft8WorkArgs[] = [];
+        armReady({
+            workCaller: (a) => {
+                calls.push(a);
+                return okResult();
+            },
+        });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(decode('t1', [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }]));
+        flushSync();
+
+        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'));
+        await flush();
+
+        expect(calls).toHaveLength(1);
     });
 });

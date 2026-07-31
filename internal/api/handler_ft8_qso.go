@@ -446,6 +446,17 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 	case stderr.Is(err, ft8.ErrNoOffset):
 		s.writeError(w, http.StatusBadRequest, "ft8_no_offset",
 			"pick a clear TX offset before starting a QSO", op)
+	case stderr.Is(err, ft8.ErrStaleDecode):
+		// CONFLICT, not bad input: the request was well formed and was valid when
+		// the row was rendered — the world moved on. A 400 would tell the operator
+		// they sent something wrong and send them looking at the SPA for a fault
+		// that is not there. Band Activity retains decodes by count, not age, so on
+		// a quiet band a station that left minutes ago still has a clickable row
+		// (dogfood 2026-07-31: six rungs transmitted at a station last heard 5m31s
+		// earlier). The SPA greys those rows; this is the guarantee behind it.
+		s.writeError(w, http.StatusConflict, "ft8_stale_decode",
+			"that decode is too old to work — the station may have left the air; "+
+				"wait for a fresh decode", op)
 	case stderr.Is(err, ft8.ErrTxBadOffset):
 		s.writeError(w, http.StatusBadRequest, "ft8_bad_offset",
 			"TX offset is outside the usable passband", op)

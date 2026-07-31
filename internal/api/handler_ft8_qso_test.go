@@ -248,6 +248,10 @@ func TestWriteFt8QsoError_Mapping(t *testing.T) {
 		{"not ready", ft8.ErrTxNotReady, http.StatusServiceUnavailable, "rig_not_ready"},
 		{"in progress", ft8.ErrQsoInProgress, http.StatusConflict, "ft8_qso_in_progress"},
 		{"no offset", ft8.ErrNoOffset, http.StatusBadRequest, "ft8_no_offset"},
+		// A stale decode is a CONFLICT, not bad input: the request was well formed and
+		// was valid when the row was rendered — the world moved on. 400 would tell the
+		// operator they sent something wrong, which would send them looking at the SPA.
+		{"stale decode", ft8.ErrStaleDecode, http.StatusConflict, "ft8_stale_decode"},
 		{"bad message", ft8.ErrTxBadMessage, http.StatusBadRequest, "ft8_tx_bad_message"},
 		{"caller mode unsupported", ft8.ErrCallerAnswerModeUnsupported, http.StatusNotImplemented, "ft8_caller_mode_unsupported"},
 		// These two must stay DISTINCT on the wire: "there is no QSO" and "this rung
