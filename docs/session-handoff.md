@@ -137,6 +137,41 @@ precisely so we don't re-derive state or redo finished work.
 >   three concerns above apply differently per category, which is what the ADR has to
 >   settle.
 >
+>   **SECOND DEPLOYMENT, RAISED BY THE OPERATOR 2026-07-31: smcloud needs its own log
+>   store, for ADMIN TROUBLESHOOTING OF USERS' issues over HTTPS.** A genuinely
+>   different problem from the local one, and the ADR should cover both without
+>   merging them. The need is real and lands the moment 7Q8AC onboards: `smcloud`
+>   logs ONLY to the systemd journal on the VPS — host-local, no tenant scoping, no
+>   remote query — so "my QSOs aren't appearing" is unanswerable for someone else's
+>   tenant. Constraints, none of them fatal:
+>   1. **Ordering.** Phase 2 (internet VPS + Caddy TLS) is ALREADY gated on the
+>      ADR 0040 security assessment, which has not happened. An admin HTTPS endpoint
+>      serving logs is exactly what that assessment exists to evaluate, so it belongs
+>      INSIDE it. NB the WireGuard/Tailscale overlay option (noted undecided,
+>      2026-07-20) would keep an admin surface off the public internet entirely.
+>   2. **Cross-tenant exposure becomes the design.** Migration 0004 scoped uuid
+>      uniqueness to `(tenant_id, uuid)` to stop cross-tenant collisions reporting as
+>      success; "ALL logs" in one store deliberately reintroduces a cross-tenant view.
+>      Acceptable for the operator-as-admin, but it must be a stated decision with a
+>      locked-down access path, not a side effect.
+>   3. **The leak shape, one level up — now holding OTHER PEOPLE's data.** Same
+>      lesson as the two P1 credential leaks (2026-07-25) and the ~170 uncontrolled
+>      external-provider error strings in `smd.log`, except the content here includes
+>      other operators' callsigns, timestamps and QSO metadata. They consented to a
+>      BACKUP; "diagnostics retained indefinitely on a VPS" is a wider posture and
+>      needs a retention answer.
+>
+>   **Proposed shape — deliberately the SAME split as the local side, which is a
+>   point in its favour (one principle, two deployments):** a tenant-scoped
+>   STRUCTURED EVENT log (push accepted/rejected, reconcile outcome, auth failure,
+>   rate-limit hit, migration applied) answering "what happened to this user's data";
+>   application diagnostics STAY in journald (log of last resort must not depend on
+>   the DB, and raw diagnostics carry uncontrolled third-party strings); admin auth
+>   SEPARATE from tenant tokens and ideally not internet-facing in Phase 1. Keeps
+>   ADR 0052's "passive store, everything richer is a layer over it" intact — a
+>   diagnostics layer ALONGSIDE the store, never entangled with its tables or
+>   transactions.
+>
 > **2026-07-30 — the drive alarm PASSED on-air acceptance and its open question is
 > instrumented; the map's South-Pole arcs are fixed; and FT8 AUTO-WORK-CALLERS is
 > built, deployed AND SWITCHED ON. The station now works callers back-to-back after
