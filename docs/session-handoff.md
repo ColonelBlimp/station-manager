@@ -130,11 +130,61 @@ precisely so we don't re-derive state or redo finished work.
 >   Consolidated logging would let that banner clear honestly when the rig is confirmed
 >   fine. That is a concrete, already-felt argument for the workstream, not a
 >   speculative one.
-> - **NEXT SESSION: LOGGING.** The FT8 half of the previous plan is parked, so logging
->   is what remains. The `qso` third is a SURFACING job rather than a design one (see
->   below) — the ADR is the gate on the rest. First open question, operator-raised and
->   still unanswered: **is the smcloud admin surface internet-facing, or behind
->   WireGuard/Tailscale?**
+> - **LOGGING ADR WRITTEN — ADR 0061, status Proposed.** Whole-problem by operator's
+>   instruction, with **alarms as the PILOT SLICE**. Shape: an operator-facing EVENT
+>   store fed from *published events*, **explicitly NOT a mirror of `smd.log`**, in
+>   `station-manager.db`, categorised, JSON detail column, build version on every row;
+>   `smd.log` retained unchanged as the diagnostic sink of last resort. My lean, asked
+>   for directly: **keep the files, ADD a small table — an addition, not a migration.**
+>   The decisive fact is that "move logging to a DB" nearly always means "I want to
+>   query it", and 99.5% of the file is not what anyone would query. Alarms go first
+>   because the feed already exists (`EventTxAlarm`/`EventDriveAlarm` via the bridge
+>   hub — only the sink is missing), volume is trivial, they exercise every hard part
+>   cheaply, and they unblock ADR 0060.
+> - **MEASUREMENTS TAKEN 2026-07-31 (live `smd.log`, 14.36 MB / 81,978 lines /
+>   15.1 days) — these are the ADR's evidence base.** **99.5% of lines are `info`**
+>   (81,557 info / 454 warn / 57 error); three message types are **65% of bytes**
+>   (`forwarding: success` 24%, `http request` 23%, `forwarding: submit` 18%); growth
+>   ≈ 1.0–1.8 MB/day on current-shape builds; lumberjack already rotates at 100 MB /
+>   5 backups / **30-day age**, so files self-purge and purge is NOT an open problem
+>   for them. `qso_history` = **2 rows against 6,620 QSOs** (`qso_upload` 9,700).
+>   A selectively-fed event table is ~100–150 rows/day ≈ 50k/year — which is why the
+>   "separate logging DB" and "firehose vs the QSO write path" objections both
+>   evaporate, and they are recorded as triggers to revisit if a category turns out
+>   high-frequency.
+> - **TRAP — ALARM FREQUENCIES CANNOT BE READ OFF THAT LOG.** It spans **58 DISTINCT
+>   BUILDS in 15.1 days**, longest single-build run 0.95 days, and the alarms are
+>   spread across EIGHT of them while the TX-safety code changed repeatedly
+>   (`txrecheck.go` 07-23, drive alarm 07-29/30, the meter gate 07-31). I quoted
+>   "7 still-keyed incidents in 15 days" as if it predicted current behaviour; the
+>   operator corrected it — **the current build `-998-gaba61729` has 0.20 days and
+>   ZERO alarms of any kind.** Alarm behaviour on current code is UNMEASURED. Also
+>   corrected: the suppressed-promotion risk in ADR 0060 is real in the code but
+>   **unobserved** — all five suppressed detections were same-second, same-code
+>   re-detections (the harmless shape); the dangerous `tx_unconfirmed` →
+>   `tx_still_keyed` escalation has not occurred. The window does open though: the
+>   07-28 `tx_unconfirmed` stayed alarmed 27 minutes.
+> - **SHIP GATE ADDED TO THE BACKLOG (top of P2) — four things that happen and leave
+>   NO durable trace,** operator-directed: *"we do need to plug these before shipping
+>   anything"*. (a) **config saves unlogged** — `handler_config.go` logs only
+>   validation warnings (`:670`, `:754`), so "when did this setting change?" is
+>   unanswerable and the daemon rewrites `config.json` at startup; (b) **QSO deletes
+>   unlogged** — `qsoservice.Delete` (`delete.go:37`) has no logger call (the
+>   `qso_history` row still lands, so provenance survives; the admin-readable file
+>   misses it); (c) **the whole notification category has no daemon record** — toasts
+>   are client-side, several with no daemon counterpart at all, so closing the tab
+>   erases them; (d) **log lines carry no build version** — only `level`/`time`/
+>   `message` are on 100% of lines, `"version"` appears ONCE per start
+>   (`cmd/smd/main.go:350`), so attribution needs a forward replay that rotation
+>   breaks and any `grep` loses. Fix for (d) is idiomatic — `internal/logging` wraps
+>   zerolog, `doc.go:21` documents `svc.With().Str(...).Logger()`, and `main.Version`
+>   is in scope. **Format is the operator's decision, unfilled:** full string +22%
+>   (~1.2→1.5 MB/day) vs bare hash +8% but not self-describing in a pasted excerpt.
+> - **NEXT SESSION: the logging build, starting with the alarm pilot** — or settle the
+>   ADR's open questions first, which are listed unfilled in 0061. The gating one is
+>   operator-raised and still unanswered: **is the smcloud admin surface
+>   internet-facing, or behind WireGuard/Tailscale?** It blocks that half entirely
+>   (Phase 2 is already gated on the ADR 0040 security assessment).
 > - **LOGGING — the operator's shape, stated 2026-07-31: ALL logging into a DB table,
 >   CATEGORISED (qso, notification, daemon, ...)** — one store instead of today's
 >   three mechanisms (QSO rows, transient SSE events, `smd.log`). This is a
