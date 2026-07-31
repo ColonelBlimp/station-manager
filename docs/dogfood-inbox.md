@@ -973,3 +973,29 @@ said. Plan future on-air experiments accordingly.
   withdrawn — so this needs a keyed, daemon-retractable toast, which the toast
   system may not have today. Check before scoping. Open question for the operator:
   does a sticky toast that vanishes on its own read as "handled" or as "lost"?
+
+- [2026-07-31] **Notification history rail — transient warnings are unrecoverable
+  today.** Trigger: a red banner flashed and was gone before the operator could
+  read it; answering "what was that?" needed a grep of a 14 MB `smd.log`, which no
+  ordinary user can do. (It was real — `tx_still_keyed` at 05:09:13, cleared
+  05:09:14 after one `tx_off` re-send. 7 such alarms in 10 days; the last 5 all
+  cleared inside 1 s.) Operator's shape: an icon in a rail where toasts also get
+  recorded. **BUILD IT AS A NOTIFICATION HISTORY, NOT A LOG VIEWER**, and the
+  reason is security-by-construction, not taste: `smd.log` is 0600 and clean today
+  (0 hits for api_key/token/password/secret/Authorization/session_key) BUT it holds
+  ~170 `callsign provider error` lines whose text comes from an EXTERNAL provider
+  and is not under our control — serving that file to a browser makes every future
+  third-party error string an exfiltration path, which is the exact shape of the
+  two P1 credential leaks of 2026-07-25. Feed the rail instead from events the
+  daemon already publishes FOR DISPLAY: `tx-alarm`, `drive-alarm`,
+  `rig-disconnected`, `bridge-error`, the new drive-monitor state, plus
+  client-side toasts. Only operator-facing things can then ever appear in it.
+  **Smaller than it sounds:** the hub already caches one slot each for
+  `bridge-error`/`rig-disconnected`/`tune-state` for late subscribers, so a
+  bounded ring buffer generalises a mechanism that exists. **Daemon-side, not
+  client-side** — the motivating cases (looked away, reloaded, was on another tab)
+  are precisely what client state loses. **Partly absorbs the sticky-toast note
+  above:** with a history rail, transient presentation stops being load-bearing,
+  so decide the two together. Open questions for the operator, none to be
+  invented: retention (last N events, or a time window?); survive a daemon restart
+  (persisted) or in-memory only?; unread badge on the icon, or a plain list?
