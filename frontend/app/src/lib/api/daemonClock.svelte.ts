@@ -33,11 +33,33 @@
     three-minute threshold.
 */
 
-let skewMs = $state(0);
+// The calibration is a PAIR: the daemon's epoch at the sample, and the monotonic
+// reading at that same instant. Elapsed time since then comes from the monotonic
+// clock, never the wall clock — see daemonNowMs.
+let daemonAtMs = $state(0);
+let perfAtMs = $state(0);
+let calibrated = $state(false);
 
-/** Browser-now minus daemon-now, in ms. Zero until the first response is seen. */
-export function daemonSkewMs(): number {
-    return skewMs;
+/**
+ * The daemon's current time, in ms since the epoch. Falls back to the browser
+ * clock until the first response has been seen — there is nothing better to say.
+ *
+ * ELAPSED TIME COMES FROM performance.now(), NOT Date.now() (codex cc032082 P1).
+ * Calibration only happens when an ordinary HTTP request completes, and measured
+ * on the dogfood daemon those can be 238 s apart — longer than the staleness
+ * limit. A wall-clock correction inside such a window (NTP stepping a drifted
+ * laptop, an operator changing the clock) would otherwise shift this by the whole
+ * step: forward past the limit and every arriving decode reads stale and every
+ * start click is refused. That DEADLOCKS, because the requests that would
+ * recalibrate are QSO-driven — blocking the clicks blocks the recovery.
+ *
+ * performance.now() is monotonic and unaffected by clock steps, so the daemon's
+ * Date supplies the EPOCH and the monotonic clock supplies the ELAPSED. A
+ * wall-clock step then moves neither.
+ */
+export function daemonNowMs(): number {
+    if (!calibrated) return Date.now();
+    return daemonAtMs + (performance.now() - perfAtMs);
 }
 
 /**
@@ -49,10 +71,16 @@ export function noteDaemonDate(header: string | null | undefined): void {
     if (!header) return;
     const t = Date.parse(header);
     if (Number.isNaN(t)) return;
-    skewMs = Date.now() - t;
+    // Both halves captured together: a pair read at different instants would bake
+    // the gap between them into every later reading.
+    daemonAtMs = t;
+    perfAtMs = performance.now();
+    calibrated = true;
 }
 
 /** Test seam: restore the uncalibrated state. */
 export function _resetDaemonClockForTests(): void {
-    skewMs = 0;
+    daemonAtMs = 0;
+    perfAtMs = 0;
+    calibrated = false;
 }

@@ -28,7 +28,7 @@
         isCqType4,
         isNonstandardCall,
     } from '../utils/ft8Message';
-    import { daemonSkewMs } from '../api/daemonClock.svelte';
+    import { daemonNowMs as readDaemonNowMs } from '../api/daemonClock.svelte';
     import { slotParity } from '../utils/ft8Parity';
     import { pathInfo } from '../utils/bearing';
     import { parseFrequency } from '../validators/frequency';
@@ -221,12 +221,18 @@
     // every click, while the daemon would have accepted them (codex 9d7a3f46 P1).
     // nowMs supplies the ticking, so this still advances between slots — the quiet
     // band is the case that matters.
-    const daemonNowMs = $derived(nowMs - daemonSkewMs());
+    const daemonNow = $derived.by(() => {
+        // nowMs is the REACTIVITY TRIGGER only — the value comes from the daemon
+        // clock, which tracks monotonic elapsed time rather than the wall clock, so
+        // a clock correction cannot shift it (codex cc032082 P1).
+        void nowMs;
+        return readDaemonNowMs();
+    });
 
     function isStale(row: DecodeRow): boolean {
         const t = Date.parse(row.d.startUtc);
         if (Number.isNaN(t)) return false;
-        return daemonNowMs - t > STALE_MS;
+        return daemonNow - t > STALE_MS;
     }
 
     // Pile-up queue anchors. workableParity = the run's locked slot parity, or (before

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { daemonSkewMs, _resetDaemonClockForTests } from './daemonClock.svelte';
+import { daemonNowMs, _resetDaemonClockForTests } from './daemonClock.svelte';
 import { DEFAULT_TIMEOUT_MS, isPlainObject, isShape, readJsonBody, safeFetch } from './_helpers';
 
 afterEach(() => {
@@ -251,8 +251,9 @@ describe('safeFetch daemon-clock calibration', () => {
 
         // Browser-now minus daemon-now ~= 5 minutes. Second-granularity header, so
         // allow a couple of seconds either side rather than asserting an exact ms.
-        expect(daemonSkewMs()).toBeGreaterThan(5 * 60_000 - 2_000);
-        expect(daemonSkewMs()).toBeLessThan(5 * 60_000 + 2_000);
+        // Daemon time now reads ~5 minutes behind this browser's clock.
+        expect(Date.now() - daemonNowMs()).toBeGreaterThan(5 * 60_000 - 2_000);
+        expect(Date.now() - daemonNowMs()).toBeLessThan(5 * 60_000 + 2_000);
     });
 
     it('keeps the last good skew when the header is missing or unparseable', async () => {
@@ -266,7 +267,7 @@ describe('safeFetch daemon-clock calibration', () => {
             )
         );
         await safeFetch('/v1/anything');
-        const calibrated = daemonSkewMs();
+        const calibrated = daemonNowMs();
 
         // A response with no Date, then one with a broken Date. Neither says
         // anything about the clock, so guessing would be worse than the last answer.
@@ -283,6 +284,6 @@ describe('safeFetch daemon-clock calibration', () => {
         );
         await safeFetch('/v1/anything');
 
-        expect(daemonSkewMs()).toBe(calibrated);
+        expect(Math.abs(daemonNowMs() - calibrated)).toBeLessThan(2_000);
     });
 });
