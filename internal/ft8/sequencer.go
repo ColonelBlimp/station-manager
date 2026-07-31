@@ -50,6 +50,12 @@ var (
 	// staleDecodeLimit. Distinct from a parse failure on purpose — the operator
 	// gets a different message for "that station has aged out" than for bad input.
 	ErrStaleDecode = stderrors.New("ft8: that decode is too old to work")
+	// ErrSlotInFuture: the decode's slot starts more than staleDecodeLimit AFTER
+	// now, which no real decode can. Distinct from ErrStaleDecode because the
+	// operator action differs — one means a station left the air, the other means
+	// two clocks disagree, and the stale wording would send someone watching the
+	// band while their clock stayed wrong.
+	ErrSlotInFuture = stderrors.New("ft8: that decode's slot time is in the future — check the clock")
 	// ErrFdIdentityUnset: StartQsoFd without the operator's Field Day class+section
 	// (ft8.field_day) — we can't transmit an FD exchange without our own identity.
 	ErrFdIdentityUnset = stderrors.New("ft8: Field Day class/section not configured")
@@ -511,6 +517,15 @@ func parseFreshSlotUTC(theirSlotUTC string, now time.Time) (time.Time, error) {
 	}
 	if now.Sub(t) > staleDecodeLimit {
 		return time.Time{}, ErrStaleDecode
+	}
+	// The same bound in the other direction (codex 9d7a3f46 P2). slot_utc is
+	// CLIENT-SUPPLIED — echoed back from the SPA — so a browser running fast sends
+	// slot times the daemon reads as future; a one-sided check then yields a
+	// negative age and stops guarding entirely, permanently and silently. Reusing
+	// the operator's number rather than inventing a second tolerance: a slot cannot
+	// legitimately start meaningfully after the moment it was decoded.
+	if t.Sub(now) > staleDecodeLimit {
+		return time.Time{}, ErrSlotInFuture
 	}
 	return t, nil
 }

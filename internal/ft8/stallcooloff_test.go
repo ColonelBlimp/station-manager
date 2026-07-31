@@ -185,3 +185,40 @@ func TestStallCooloff_SurvivesANewSessionWithoutAbandon(t *testing.T) {
 	require.Nil(t, s.caller,
 		"only Abandon clears the cool-off; starting a session must not launder it")
 }
+
+// C6 — SCOPE, added after codex 9edbaa57 P2. The cool-off exists to break the
+// AUTO-WORK re-pick loop; with no armed run there is no loop, and recording one
+// anyway changes ordinary manual/CQ behaviour that nobody asked to change.
+//
+// The reachable cost the reviewer named: with the policy off, an operator works a
+// caller by hand, hits the repeat cap, and goes straight to Call-CQ WITHOUT
+// Abandon (nothing requires it — the session already retired itself). That
+// station then answers the CQ and is silently rejected for 75 s. If they are the
+// only station answering, the round produces nothing while someone is calling.
+//
+// The exclusion is therefore recorded only when a run is actually armed. C1 keeps
+// the armed case honest, so the two together say "exactly when there is a loop to
+// break, and not otherwise".
+func TestStallCooloff_NotRecordedWhenNoRunIsArmed(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	s.maxRepeats = 2
+	s.SetAutoWorkCallers(false, "auto_first") // no run can arm
+
+	require.NoError(t, s.StartWorkCaller("G0XYZ", "DL9UW", "JO41", -8,
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	for _, sec := range []int64{30, 60, 90} {
+		driveTheir(s, sec, nil)
+	}
+	require.Nil(t, s.caller, "fixture: the manual contact must stall at the cap")
+	require.False(t, s.AutoWorkArmed(), "fixture: policy off, so no run is armed")
+
+	// Straight into a CQ round with no Abandon — the workflow named above.
+	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "auto_first", "odd",
+		time.Unix(100, 0).UTC()))
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
+
+	require.NotNil(t, s.caller,
+		"with no run to break, a CQ must work the station that answers it")
+	require.Equal(t, "DL9UW", s.caller.TheirCall)
+}

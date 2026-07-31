@@ -138,3 +138,40 @@ func TestStaleDecode_MalformedSlotIsNotReportedAsStale(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrStaleDecode)
 }
+
+// E4 — A FUTURE SLOT IS NOT A FRESH ONE (codex 9d7a3f46 P2).
+//
+// `now.Sub(t) > staleDecodeLimit` is one-sided, so a timestamp in the FUTURE
+// yields a negative duration and sails through — permanently. That matters
+// because slot_utc is CLIENT-SUPPLIED: it is echoed back from the SPA, so a
+// browser whose clock runs fast sends slot times the daemon reads as future, and
+// the guard silently stops guarding. The failure it was built to prevent then
+// returns intact, with no sign that anything is wrong.
+//
+// Rejected with a DISTINCT sentinel rather than folded into ErrStaleDecode: "that
+// station has left the air" and "our clocks disagree" call for different
+// operator actions, and the stale wording would send someone watching the band
+// for a station that is fine while their clock stays wrong.
+//
+// The bound is the operator's same three minutes, applied in the other direction
+// rather than invented separately — a slot cannot legitimately start meaningfully
+// after the moment it was decoded.
+func TestStaleDecode_FutureSlotIsRefused(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	future := func(offset int64) string {
+		return time.Unix(1000+offset, 0).UTC().Format(time.RFC3339)
+	}
+	start := func(slot string) error {
+		return newTestSeq(&seqRecorder{}).
+			StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12, slot, 1500, 14.074, now)
+	}
+
+	// Clock jitter of a few seconds is not a fault — the discriminator that stops
+	// this being "reject anything not in the past".
+	require.NoError(t, start(future(10)), "a slot seconds ahead is ordinary jitter")
+
+	err := start(future(int64(staleDecodeLimit.Seconds()) + 1))
+	require.ErrorIs(t, err, ErrSlotInFuture)
+	require.NotErrorIs(t, err, ErrStaleDecode,
+		"a clock disagreement must not be reported as a station that has left the air")
+}

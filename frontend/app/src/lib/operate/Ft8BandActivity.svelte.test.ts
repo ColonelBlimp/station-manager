@@ -723,9 +723,13 @@ describe('Ft8BandActivity staleness', () => {
             },
         });
         render(Ft8BandActivity);
+        // The old row, then a NEWER slot that establishes where the daemon's clock
+        // is now. A lone decode cannot be stale — it is the most recent thing the
+        // daemon has said — so staleness needs later activity to be measured against.
         ft8Link.onDecode(
             decode(ago(4 * MINUTE), [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
         );
+        ft8Link.onDecode(decode(ago(0), [{ text: 'CQ W1ABC FN42', freq_hz: 1500, snr: -12 }]));
         flushSync();
 
         await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'));
@@ -767,6 +771,41 @@ describe('Ft8BandActivity staleness', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    // S5 — CLOCK SKEW MUST NOT BLOCK A LIVE BAND (codex 9d7a3f46 P1). Staleness is
+    // measured against the DAEMON's clock, learnt from the per-slot heartbeat, not
+    // against the browser's. A browser running minutes fast would otherwise grey
+    // every row the instant it arrived and refuse every click, while the daemon —
+    // which would have accepted them — never even sees the request. Operating the
+    // SPA from another machine on the LAN is enough to meet this.
+    //
+    // Simulated the only way it can be from outside: decodes whose slot times sit
+    // far from the browser clock. Their ARRIVAL is what says where the daemon is,
+    // so the newest is current by definition however its timestamp compares to
+    // Date.now().
+    it('works rows normally when the browser clock disagrees with the daemon', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const calls: Ft8WorkArgs[] = [];
+        armReady({
+            workCaller: (a) => {
+                calls.push(a);
+                return okResult();
+            },
+        });
+        render(Ft8BandActivity);
+        // Browser clock 20 minutes ahead of the daemon: every slot_utc looks ancient.
+        ft8Link.onDecode(
+            decode(ago(20 * MINUTE), [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
+        );
+        flushSync();
+
+        const row = screen.getByText('7Q5MLV PA3KUS JO21');
+        expect(row.closest('tr')?.className).not.toMatch(/opacity/);
+
+        await fireEvent.click(row);
+        await flush();
+        expect(calls).toHaveLength(1);
     });
 
     // S4 — an unparseable slot time is NOT stale. Unknown age is not old age, and

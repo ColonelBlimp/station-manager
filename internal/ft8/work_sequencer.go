@@ -172,13 +172,20 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 	if s.repeats >= s.maxRepeats {
 		call, attempts := s.caller.TheirCall, s.maxRepeats
-		if !confirming {
+		if !confirming && s.autoWorkArmed {
 			// A silent answerer: hold them out of selection briefly, or an armed
 			// auto-work run re-picks them on the very next slot and the ladder
 			// stalls again forever, starving the rest of the pile-up (dogfood
 			// 2026-07-31). Deliberately NOT in the confirming branch — that is OUR
 			// RR73 failing to transmit, so that station is still owed a roger and
 			// working them again is the correct on-air behaviour.
+			//
+			// Gated on an ARMED RUN (codex 9edbaa57 P2): the exclusion exists to
+			// break the auto re-pick loop, and where there is no loop it only
+			// changes manual/CQ behaviour nobody asked to change — an operator who
+			// stalls a hand-picked contact and goes straight to CQ would have that
+			// station's answer rejected for 75 s, producing an empty round when
+			// they are the only one calling.
 			s.coolOffStalledCallerLocked(call, now)
 		}
 		s.retireSessionLocked(func() { s.caller = nil })

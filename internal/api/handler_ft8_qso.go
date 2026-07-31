@@ -457,6 +457,14 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 		s.writeError(w, http.StatusConflict, "ft8_stale_decode",
 			"that decode is too old to work — the station may have left the air; "+
 				"wait for a fresh decode", op)
+	case stderr.Is(err, ft8.ErrSlotInFuture):
+		// BAD INPUT, not a conflict: unlike a stale decode this was never valid —
+		// no decode can be reported from a slot that has not happened. Kept apart
+		// from ft8_stale_decode because the operator's action differs: fix a clock,
+		// rather than wait for a fresh decode from a station that is fine.
+		s.writeError(w, http.StatusBadRequest, "ft8_slot_in_future",
+			"that decode's slot time is in the future — check the clock on this "+
+				"machine and the daemon's", op)
 	case stderr.Is(err, ft8.ErrTxBadOffset):
 		s.writeError(w, http.StatusBadRequest, "ft8_bad_offset",
 			"TX offset is outside the usable passband", op)

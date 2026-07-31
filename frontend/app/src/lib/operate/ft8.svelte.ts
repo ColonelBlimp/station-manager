@@ -116,6 +116,42 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
 // matters and 2^53 ids outlast any session.
 let decodeSeq = 0;
 
+// ---- Daemon clock ----------------------------------------------------------
+// Decode staleness is measured against the DAEMON's clock, never the browser's.
+// Every slot the daemon publishes an ft8-decode frame — including SILENT slots,
+// which is what makes this a continuous heartbeat rather than a sample of band
+// activity — so its `slot.start_utc` says where the daemon's clock is.
+//
+// WHY (codex 9d7a3f46 P1): comparing daemon-produced timestamps against
+// browser Date.now() means a browser running more than the staleness limit fast
+// greys every row the instant it arrives and refuses every click, while the
+// daemon, which would have accepted them, never sees the request. Operating the
+// SPA from another machine on the LAN is enough to meet that.
+//
+// A SKEW, not a timestamp: the browser clock still supplies the ticking, so
+// daemon-now keeps advancing between slots. That matters because the case
+// staleness exists for is a band that has gone QUIET — freezing the reference at
+// the last decode would make rows stop ageing exactly when they must not.
+const SLOT_MS = 15_000;
+let daemonSkewMs = $state(0);
+
+/** browser-now minus daemon-now, in ms. Zero until the first slot arrives. */
+export function ft8DaemonSkewMs(): number {
+    return daemonSkewMs;
+}
+
+// The frame arrives once the daemon has decoded the slot, so the daemon's clock
+// reads at least slot-start + one slot length by then. Decode latency makes this
+// a slight under-estimate of daemon-now (rows read a second or two older than
+// they are), which is immaterial against a three-minute limit and errs towards
+// calling things stale rather than working a station that has gone.
+function noteDaemonSlot(startUtc: string | undefined): void {
+    if (!startUtc) return;
+    const t = Date.parse(startUtc);
+    if (Number.isNaN(t)) return; // unknown clock: keep the last good skew
+    daemonSkewMs = Date.now() - (t + SLOT_MS);
+}
+
 // The operator's TX-offset pick persists across a page reload (localStorage) so a
 // daemon redeploy — which reloads /app/ to pick up the new build — doesn't silently
 // drop the chosen channel. Best-effort: private-mode / disabled storage falls back
@@ -665,7 +701,10 @@ export const ft8Link: Ft8EventHandlers = {
         // Slot heartbeat: ft8-decode fires EVERY slot (the daemon skips
         // ft8-occupancy on our own TX slots), so advance the slot clock here too —
         // before the empty-slot return, so a silent / own-TX slot still ticks.
-        if (p.slot) ft8State.slot = p.slot;
+        if (p.slot) {
+            ft8State.slot = p.slot;
+            noteDaemonSlot(p.slot.start_utc);
+        }
 
         const lines = p.decodes ?? [];
         if (lines.length === 0) return; // silent slot — nothing to add

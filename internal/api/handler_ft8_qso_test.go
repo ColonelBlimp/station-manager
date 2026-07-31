@@ -252,6 +252,10 @@ func TestWriteFt8QsoError_Mapping(t *testing.T) {
 		// was valid when the row was rendered — the world moved on. 400 would tell the
 		// operator they sent something wrong, which would send them looking at the SPA.
 		{"stale decode", ft8.ErrStaleDecode, http.StatusConflict, "ft8_stale_decode"},
+		// A future slot is BAD INPUT, not a conflict: unlike a stale decode it was
+		// never valid, and the operator's action is to fix a clock rather than wait
+		// for a fresh decode.
+		{"slot in future", ft8.ErrSlotInFuture, http.StatusBadRequest, "ft8_slot_in_future"},
 		{"bad message", ft8.ErrTxBadMessage, http.StatusBadRequest, "ft8_tx_bad_message"},
 		{"caller mode unsupported", ft8.ErrCallerAnswerModeUnsupported, http.StatusNotImplemented, "ft8_caller_mode_unsupported"},
 		// These two must stay DISTINCT on the wire: "there is no QSO" and "this rung

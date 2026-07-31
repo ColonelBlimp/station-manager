@@ -14,6 +14,7 @@
         answerCq,
         workCaller,
         type DecodeEntry,
+        ft8DaemonSkewMs,
     } from './ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from './ft8Enrich.svelte';
     import { ft8PileupStack } from './ft8Pileup.svelte';
@@ -215,10 +216,17 @@
     // Unknown age is NOT old age: an unparseable slot time stays workable, the same
     // discipline the daemon keeps by returning a parse error rather than a staleness
     // one. Refusing on a fact we do not have would be worse than allowing the click.
+    // Measured against the DAEMON's clock (ft8DaemonSkewMs), not the browser's: a
+    // browser running fast would otherwise grey every row on arrival and refuse
+    // every click, while the daemon would have accepted them (codex 9d7a3f46 P1).
+    // nowMs supplies the ticking, so this still advances between slots — the quiet
+    // band is the case that matters.
+    const daemonNowMs = $derived(nowMs - ft8DaemonSkewMs());
+
     function isStale(row: DecodeRow): boolean {
         const t = Date.parse(row.d.startUtc);
         if (Number.isNaN(t)) return false;
-        return nowMs - t > STALE_MS;
+        return daemonNowMs - t > STALE_MS;
     }
 
     // Pile-up queue anchors. workableParity = the run's locked slot parity, or (before
