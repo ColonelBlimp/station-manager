@@ -324,6 +324,12 @@ func run() error {
 		return err
 	}
 
+	// The hub was built before the container (services inject it), so this is the
+	// first point a logger exists to give it. It reports slow-reader evictions —
+	// a subscriber dropped for not keeping up, which ends its SSE stream and is
+	// otherwise indistinguishable from the client disconnecting normally.
+	hub.SetLogger(loggerSvc)
+
 	// Register logger cleanup first (defer-LIFO means it runs last, after
 	// dbSvc close below, so later defers can still use the logger).
 	defer func() {

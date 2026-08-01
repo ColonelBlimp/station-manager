@@ -921,7 +921,7 @@ func TestHub_CachesBridgeErrorForLateSubscriber(t *testing.T) {
 // stays focused on the cache semantics and doesn't depend on the
 // 30s liveness timeout firing.
 func TestHub_CachesRigDisconnectedForLateSubscriber(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	defer h.close()
 
 	disconnect := Event{Name: EventRigDisconnected, Payload: RigDisconnectedPayload{Code: RigCodeNoData}}
@@ -968,7 +968,7 @@ func TestHub_CachesRigDisconnectedForLateSubscriber(t *testing.T) {
 // rig-disconnected describes transient state that the
 // implicit-reconnect flow (ADR 0009) naturally resolves.
 func TestHub_ClearsRigDisconnectedCacheOnRigState(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	defer h.close()
 
 	// Disconnect, then a rig push (rig came back online).

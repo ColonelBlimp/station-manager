@@ -11,7 +11,7 @@ func decodeEvent(text string) hubEvent {
 }
 
 func TestHub_PublishFanout(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	a, unsubA := h.subscribe()
 	b, unsubB := h.subscribe()
 	defer unsubA()
@@ -35,7 +35,7 @@ func TestHub_PublishFanout(t *testing.T) {
 // rig is on NOW, and the SPA's effectiveOffset can then transmit on an offset
 // never measured on that band. A stale decode list is only cosmetic, so it stays.
 func TestHub_ReplaysDecodeButNeverOccupancyOnSubscribe(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	h.publish(decodeEvent("CQ K1ABC"))
 	h.publish(occEvent(2200))
 
@@ -64,7 +64,7 @@ func TestHub_ReplaysDecodeButNeverOccupancyOnSubscribe(t *testing.T) {
 // replay-on-subscribe was dropped. Guard that distinction so a future change
 // doesn't quietly restore the replay by way of the cache.
 func TestHub_StillCachesOccupancyDespiteNoReplay(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	h.publish(occEvent(1400))
 	if rep := h.latestOccupancy(); rep == nil || rep.Suggested[0] != 1400 {
 		t.Fatalf("latestOccupancy = %+v, want the published report cached", rep)
@@ -72,7 +72,7 @@ func TestHub_StillCachesOccupancyDespiteNoReplay(t *testing.T) {
 }
 
 func TestHub_CachesLatestPerType(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	h.publish(occEvent(100))
 	h.publish(occEvent(200)) // newer occupancy overwrites the cache slot
 
@@ -82,7 +82,7 @@ func TestHub_CachesLatestPerType(t *testing.T) {
 }
 
 func TestHub_LatestOccupancyNilBeforePublish(t *testing.T) {
-	if h := newHub(); h.latestOccupancy() != nil {
+	if h := newHub(nil); h.latestOccupancy() != nil {
 		t.Fatal("latestOccupancy should be nil before any publish")
 	}
 }
@@ -93,7 +93,7 @@ func TestHub_LatestOccupancyNilBeforePublish(t *testing.T) {
 // session's decodes" bug. The TX cache must survive (daemon-owned, capture-
 // independent), so a later subscriber still gets the armed/idle TX state.
 func TestHub_ClearActivityDropsDecodeAndOccupancyButKeepsTx(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	h.publish(decodeEvent("CQ K1ABC"))
 	h.publish(occEvent(2200))
 	h.publish(hubEvent{name: EventTx, payload: TxState{Armed: true}})
@@ -126,7 +126,7 @@ func TestHub_ClearActivityDropsDecodeAndOccupancyButKeepsTx(t *testing.T) {
 }
 
 func TestHub_EvictsSlowSubscriber(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	ch, unsub := h.subscribe()
 	defer unsub()
 
@@ -149,7 +149,7 @@ func TestHub_EvictsSlowSubscriber(t *testing.T) {
 }
 
 func TestHub_CloseDisconnects(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	ch, unsub := h.subscribe()
 	defer unsub()
 
@@ -165,7 +165,7 @@ func TestHub_CloseDisconnects(t *testing.T) {
 }
 
 func TestHub_CloseIdempotent(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	h.close()
 	h.close()
 }

@@ -135,6 +135,16 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - ~~[2026-07-25] session panel: map button is redundant~~ **→ DONE 2026-07-26.** Removed. The sidebar's bottom-utilities Map link is always on screen and opens the identical new tab (same href/target/rel), so the tile button was pure duplication. Its test coverage MOVED rather than vanished — the map link was previously tested only through SessionPanel, so a new `Sidebar.svelte.test.ts` now guards it (the `target="_blank"` matters: opening in-tab would unmount a live FT8 run).
 - ~~[2026-07-26] ftp-all.txt should be enhanced to do archiving (gzip) and log rotation.~~ **→ DONE 2026-07-26: `ft8-all.txt` now rotates via lumberjack (10 MB × 5 gzipped backups) and is created 0600 (was 0644, and a legacy log is tightened on open). `smd.log` already had rotation + gzip (100 MB × 5 / 30 days); the survey also found `cmd/smd/startuplog.go` creating smd.log 0644 — fixed to 0600.**
 - [2026-07-26] add a world time widget
+  — **TRIAGED 2026-08-01, not started.** Nothing exists: no clock component anywhere
+  in `frontend/app/src` (the UTC references are all timestamp FORMATTING inside
+  Ft8/Logging cards, not a clock). SPA-only, no daemon change, no rig interaction —
+  so it is deployable without touching the running daemon, which makes it unusually
+  cheap to land. **Open questions for the operator, none to be invented:** which
+  zones (UTC only? UTC + local? a chosen set for skeds?), where it lives (shell
+  header beside the session timer, or a tile), and whether it needs to be
+  second-accurate — FT8 already depends on system time being right, so a clock that
+  disagreed with the slot clock would be actively misleading, and that argues for
+  driving it from the same source rather than a fresh `new Date()`.
 - [2026-07-27] FT8 TX drive collapsed mid-session — rig keyed but made almost no
   power, so the amp (needs ~10 W) never came up. ROOT CAUSE UNKNOWN. Everything
   upstream was verified healthy: CAT ok, PTT asserted (ft8-all.txt "Transmitting"
@@ -167,6 +177,24 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   middle of an unattended TX run, on the same morning as a real stuck-TX incident.
   An SSE client that loses its connection while hidden should retry when the tab
   becomes visible again.
+  — **RE-VERIFIED 2026-08-01: STILL OPEN, and the banner was a red herring.**
+  "Cannot reach the daemon" is a FETCH failure string (`api/logbooks.ts:78`,
+  `setup.ts:31`, `qso-patch.ts:55`) — it is not emitted by any SSE path, so what the
+  operator saw was a request failing on refocus, with the dead stream as the
+  separate symptom. All three SSE clients (`log-events.ts`, `ft8-sse.ts`,
+  `rig-sse.ts`) still state the same contract — *"the browser owns reconnect on
+  transient drops — no retry loop here"* — and **nothing anywhere recreates an
+  EventSource on `visibilitychange`.**
+  **The map already carries a partial answer, from an independent dogfood report
+  (2026-07-18):** `mapData.svelte.ts:310` installs a `visibilitychange` handler whose
+  comment names this exact cause — *"Hidden tabs get throttled timers and possibly a
+  silently-dead stream, so a backgrounded map goes stale and NOTHING forces a
+  catch-up"*. But it heals DATA by refetching; it does not revive the stream, so
+  `mapData.live` stays false and every other surface has neither. **Two reports, two
+  surfaces, one root cause** — worth fixing once at the SSE layer rather than a third
+  time per-view. Open for the operator: on becoming visible, always recreate, or only
+  when the stream is known dead (which needs a liveness signal the clients do not
+  currently keep).
 - [2026-07-28] **STUCK TX — 4th incident, and the first where the RIG stopped
   answering CAT while still keyed.** 80m FT8 CQ run (3.573 MHz, +2750 Hz), operator
   in the shack 2 m away and NOT touching the rig; no rig settings changed since the
@@ -1018,4 +1046,38 @@ said. Plan future on-air experiments accordingly.
   green and V5 red. No SPA change: it rebuilds the whole `qso` object per frame, so the
   `omitempty` on `auto_work_armed` reads as false and the pill goes out.
 - [2026-08-01] add to the map the ablity to filter (select) by band: all to whatever configured bands are in the config.
+  — **TRIAGED 2026-08-01, not started. Most of the machinery already exists**, which
+  makes this smaller than it sounds: every map row already carries a normalised
+  `band` (`mapData.svelte.ts:57`), `bandRank` already gives wavelength ordering,
+  and **MapView already renders a legend of "the bands actually in the window"**
+  (`MapView.svelte:59-67`) — the natural place to hang the control. What is missing
+  is only the filter itself; the map has no filtering of any kind today.
+  **THE ONE AMBIGUITY, and it needs the operator: "configured bands in the config"
+  most likely means `logging_station.operating_bands`** — it exists
+  (`types/station.go:44`), is already exposed to the SPA as `operatingBands`
+  (`seams.ts:135`), and its doc says *"Empty/unset means all bands"*. But that
+  default is the problem: on a station that has never set it, the selector would be
+  EMPTY. And a band present in the logged data but absent from `operating_bands`
+  would become unreachable — the operator could not select the band they are looking
+  at. So the choice is between (a) config `operating_bands`, (b) the bands actually
+  present in the window (what the legend already computes, never empty and never
+  hides data), or (c) both — config as the ordering/whitelist with a fallback to the
+  data. **My read is (b) with (a) as the ordering hint**, but it is the operator's
+  call and (a) alone has a failure mode worth stating out loud.
 - [2026-08-01] ad adjustable (width) headers to the session panel, plus the ability to order columns: asc, desc, raw
+  — **TRIAGED 2026-08-01, not started.** `SessionPanel.svelte` has 8 columns at FIXED
+  Tailwind widths (`w-20` Time, `w-27` Call, `w-12` Band, `w-14` Mode, `w-10` Sent,
+  `w-10` Rcvd, `w-32` Name, `w-32` Country) and no sorting — `{#each session.qsos}`
+  renders insertion order, so **"raw" is what it does today** and the third sort
+  state is "get me back to logging order", which is the right instinct for a session
+  log where order carries meaning.
+  **The width half collides with an existing fix, and that is the thing to know
+  before starting.** The table is deliberately `table-fixed`, with a comment dated
+  dogfood 2026-07-18: auto layout ignores `w-*` as a cap, so long names/countries
+  stretched the table instead of ellipsizing. Column widths therefore BIND, and any
+  resize UI has to keep that property — a naive drag-to-resize that reverts to auto
+  layout reintroduces the 07-18 bug. Persisting widths also needs a decision
+  (localStorage vs daemon config); the map's band colours went to daemon config,
+  which is the precedent for "operator display preference that should survive a
+  different browser". **Open for the operator:** persist or per-session, and whether
+  sorting is per-column or one active sort at a time.

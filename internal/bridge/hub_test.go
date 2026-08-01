@@ -61,7 +61,7 @@ func TestBridgeErrorCode_IsTransient(t *testing.T) {
 // dropped once the rig recovers and pushes state, so a SPA tab opening after
 // recovery does NOT get the stale toast replayed.
 func TestHub_ClearsTransientBridgeErrorOnRigState(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 
 	// First boot: rig off, supervisor publishes a transient open failure to
 	// zero subscribers; it caches.
@@ -94,7 +94,7 @@ func TestHub_ClearsTransientBridgeErrorOnRigState(t *testing.T) {
 // definite identity mismatch is also a bridge-error but halts the pipeline, so
 // no rig-state follows it; this test models the advisory-then-rig-state flow.)
 func TestHub_KeepsPermanentBridgeErrorAcrossRigState(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	h.publish(bridgeErr(BridgeErrCodeIdentityMismatch))
 	h.publish(Event{Name: EventRigState, Payload: RigStatePayload{Mode: "USB"}})
 

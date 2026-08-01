@@ -521,7 +521,7 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 	return &Service{
 		cfg:      cfg,
 		logger:   logger,
-		hub:      newHub(),
+		hub:      newHub(logger),
 		stopDone: make(chan struct{}),
 		openClient: func(c serial.Config) (serial.Client, error) {
 			return serial.Open(c)

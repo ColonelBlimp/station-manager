@@ -1,6 +1,10 @@
 package ft8
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+)
 
 // subscriberBufferSize is the per-subscriber channel capacity. FT8 events fire
 // at most a couple per slot (one decode + one occupancy every 15 s), so a small
@@ -33,6 +37,7 @@ type hubEvent struct {
 type hub struct {
 	mu     sync.Mutex
 	subs   map[int64]chan hubEvent
+	logger logging.Logger
 	nextID int64
 	closed bool
 
@@ -42,8 +47,8 @@ type hub struct {
 	lastQso       *hubEvent
 }
 
-func newHub() *hub {
-	return &hub{subs: make(map[int64]chan hubEvent)}
+func newHub(logger logging.Logger) *hub {
+	return &hub{subs: make(map[int64]chan hubEvent), logger: logger}
 }
 
 // publish caches the event by type and fans it out. A subscriber whose buffer
@@ -51,8 +56,8 @@ func newHub() *hub {
 // block on a stuck SSE client. Publish on a closed hub is a no-op.
 func (h *hub) publish(evt hubEvent) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.closed {
+		h.mu.Unlock()
 		return
 	}
 	cp := evt
@@ -66,14 +71,22 @@ func (h *hub) publish(evt hubEvent) {
 	case EventQso:
 		h.lastQso = &cp
 	}
+	before := len(h.subs)
+	var evicted []evictedSubscriber
 	for id, ch := range h.subs {
 		select {
 		case ch <- evt:
 		default:
+			// Depth read BEFORE the close, so a later reordering cannot report zero
+			// for the very buffer that overflowed.
+			evicted = append(evicted, evictedSubscriber{id: id, depth: len(ch), capacity: cap(ch)})
 			close(ch)
 			delete(h.subs, id)
 		}
 	}
+	logger, after := h.logger, len(h.subs)
+	h.mu.Unlock()
+	logEvictions(logger, evt.name, before, after, evicted)
 }
 
 // subscribe registers a new subscriber, returning a receive-only channel and an
@@ -178,4 +191,46 @@ func (h *hub) subscriberCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.subs)
+}
+
+// evictedSubscriber is one slow reader dropped by a single publish.
+type evictedSubscriber struct {
+	id       int64
+	depth    int
+	capacity int
+}
+
+// logEvictions reports slow-reader evictions, one record each. Called WITHOUT
+// h.mu — the publisher must never be slowed by a log write, the same reason publish does
+// not block on a subscriber.
+//
+// WARN, not Error: the hub behaved exactly as designed and the daemon is
+// healthy — a client could not keep up.
+//
+// IT MATTERS MOST HERE. Eviction closes the channel; the SSE handler treats that
+// as "stream ended" and unsubscribes; if it was the last subscriber the linger
+// expires and onLingerExpired calls disarmTx, dropping PTT and ABANDONING AN
+// ACTIVE QSO. That teardown is deliberate and stays (operator, 2026-08-01) — the
+// enforced proxy is a FUNCTIONING subscription, not an open tab, and a reconnect
+// inside the linger cancels it. This record is what makes the difference visible.
+//
+// The field set is DUPLICATED across internal/events, internal/bridge and
+// internal/ft8, each of which has its own hub type. A shared helper would be a
+// framework for three call sites; what stops them drifting is that all three
+// packages assert the SAME names. Canonical criterion + the operator's reasoning:
+// internal/events/hub_eviction_test.go.
+func logEvictions(logger logging.Logger, evtName string, before, after int, evicted []evictedSubscriber) {
+	if logger == nil {
+		return
+	}
+	for _, e := range evicted {
+		logger.WarnWith().
+			Int64("subscriber_id", e.id).
+			Str("event", evtName).
+			Int("queue_depth", e.depth).
+			Int("queue_capacity", e.capacity).
+			Int("subs_before", before).
+			Int("subs_after", after).
+			Msg("ft8: subscriber evicted — too slow to keep up; its stream ended and it must reconnect")
+	}
 }

@@ -238,7 +238,7 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		occCfg:    resolveOccupancyConfig(occOverride),
 		log:       log,
 		src:       src,
-		hub:       newHub(),
+		hub:       newHub(log),
 		stopDone:  make(chan struct{}),
 		newPlayer: newTxPlayer, // build-tagged; CGO-free build returns ErrTxUnavailable
 	}

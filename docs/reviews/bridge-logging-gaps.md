@@ -120,6 +120,44 @@ and the SSE banner is transient client state, so nothing durable records it.
 
 ### B2. Hub slow-reader eviction is silent — SAME DEFECT AS `ft8-logging-gaps.md` FINDING 1
 
+> ✅ **FIXED 2026-08-01** as a THREE-hub class fix — the audits found two sites, and
+> review found a third the same day: `internal/events/hub.go`, which feeds the map's
+> event stream. All three had the identical bare `close(ch); delete(...)`.
+>
+> Each now emits ONE Warn per evicted subscriber carrying `subscriber_id`, `event`,
+> `queue_depth`, `queue_capacity`, `subs_before`, `subs_after` — the last two being
+> what reveals a LAST-subscriber eviction, which in `internal/ft8` is the one with a
+> TX consequence. Emitted after the mutex is released, like every other publish path.
+>
+> **The teardown is UNCHANGED — operator's ruling, and the reasoning is the part to
+> preserve:** the enforced proxy is a FUNCTIONING SSE subscription, not an open
+> browser tab. Once the channel overflows, operator-facing state is no longer
+> flowing; EventSource reconnect plus the existing linger already IS the recovery
+> distinction. Exempting eviction could leave TX running behind a dead display, or
+> create a phantom subscriber that can never later unsubscribe. **Buffers stay at
+> 8 (ft8) / 64 (bridge, events) until these new records show HEALTHY clients being
+> evicted.**
+>
+> Canonical criterion: `internal/events/hub_eviction_test.go`. Rules in all three
+> packages (E1-E8, H1-H4, F1-F5), with the three logging sites proven SEPARATELY —
+> reverting one turns only its own package red, which is the "one fix, N sites, N
+> proofs" lesson from earlier the same day. Production wiring for the general hub is
+> guarded by an AST check on `cmd/smd/main.go`, because every test in
+> `internal/events` installs its own logger and deleting the one real call left the
+> whole suite green.
+>
+> **The TX-behaviour rules took two rounds and the first version of this note was
+> wrong.** F3 originally called the handler's unsubscribe BY HAND, so deleting
+> `defer unsub()` from the SSE handler would not have failed it — it now drives the
+> real `HTTPHandler` with a client that stalls mid-write, which is what a slow
+> reader is. And F4 was said to need a "double revert" because two mechanisms keep a
+> reconnect from being torn down; that is true but MISLEADING, because the two cover
+> different interleavings and F4 can only reach one. `onSubscriberAdded`'s
+> `Timer.Stop` handles a reconnect before the timer fires; `onLingerExpired`'s
+> subCount re-check handles one that lands AFTER it fired (service.go:394), which
+> Stop cannot help with. **F5 covers that case and proves the guard alone.**
+
+
 `internal/bridge/hub.go:157-158` — `publish` closes and deletes a full subscriber's
 channel with no log. The file has **260 lines and zero log calls**.
 

@@ -1,6 +1,10 @@
 package bridge
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+)
 
 // subscriberBufferSize is the per-subscriber channel capacity.
 // Same default as internal/events.Hub — small enough to evict
@@ -22,6 +26,7 @@ const subscriberBufferSize = 64
 type hub struct {
 	mu        sync.Mutex
 	subs      map[int64]chan Event
+	logger    logging.Logger
 	nextSubID int64
 	closed    bool
 
@@ -96,9 +101,10 @@ func (h *hub) clearCachedBridgeError(code BridgeErrorCode) {
 	}
 }
 
-func newHub() *hub {
+func newHub(logger logging.Logger) *hub {
 	return &hub{
-		subs: make(map[int64]chan Event),
+		subs:   make(map[int64]chan Event),
+		logger: logger,
 	}
 }
 
@@ -109,8 +115,8 @@ func newHub() *hub {
 // loop on a stuck SSE client.
 func (h *hub) publish(evt Event) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.closed {
+		h.mu.Unlock()
 		return
 	}
 	// Cache bridge-error events so late subscribers (SPA tab opening
@@ -150,14 +156,22 @@ func (h *hub) publish(evt Event) {
 		cp := evt
 		h.lastTxAlarm = &cp
 	}
+	before := len(h.subs)
+	var evicted []evictedSubscriber
 	for id, ch := range h.subs {
 		select {
 		case ch <- evt:
 		default:
+			// Depth read BEFORE the close, so a later reordering cannot report zero
+			// for the very buffer that overflowed.
+			evicted = append(evicted, evictedSubscriber{id: id, depth: len(ch), capacity: cap(ch)})
 			close(ch)
 			delete(h.subs, id)
 		}
 	}
+	logger, after := h.logger, len(h.subs)
+	h.mu.Unlock()
+	logEvictions(logger, string(evt.Name), before, after, evicted)
 }
 
 // subscribe registers a new subscriber. Returns the receive-only
@@ -257,4 +271,39 @@ func (h *hub) subscriberCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.subs)
+}
+
+// evictedSubscriber is one slow reader dropped by a single publish.
+type evictedSubscriber struct {
+	id       int64
+	depth    int
+	capacity int
+}
+
+// logEvictions reports slow-reader evictions, one record each. Called WITHOUT
+// h.mu — the publisher must never be slowed by a log write, the same reason publish does
+// not block on a subscriber.
+//
+// WARN, not Error: the hub behaved exactly as designed and the daemon is
+// healthy — a client could not keep up.
+//
+// The field set is DUPLICATED across internal/events, internal/bridge and
+// internal/ft8, each of which has its own hub type. A shared helper would be a
+// framework for three call sites; what stops them drifting is that all three
+// packages assert the SAME names. Canonical criterion + the operator's reasoning:
+// internal/events/hub_eviction_test.go.
+func logEvictions(logger logging.Logger, evtName string, before, after int, evicted []evictedSubscriber) {
+	if logger == nil {
+		return
+	}
+	for _, e := range evicted {
+		logger.WarnWith().
+			Int64("subscriber_id", e.id).
+			Str("event", evtName).
+			Int("queue_depth", e.depth).
+			Int("queue_capacity", e.capacity).
+			Int("subs_before", before).
+			Int("subs_after", after).
+			Msg("bridge: subscriber evicted — too slow to keep up; its stream ended and it must reconnect")
+	}
 }
