@@ -36,6 +36,40 @@ missing line for something nobody acts on does not.
 
 ### B1. The drive-collapse detector declines to arm silently — and one branch is reported NOWHERE
 
+> ✅ **FIXED 2026-08-01**, and the fix went WIDER than this finding on two operator
+> decisions. Drive-watch state is now a four-state transition machine
+> (`armed` / `no_meter` / `meter_not_po` / `meter_moved_off_po`) reported at **Warn**
+> on entering a dark state and **Info** on recovery, with NO line when the state is
+> unchanged — the operator's design, and the reason Warn is affordable: 691
+> transmissions on 2026-08-01 against 460 warns in the whole 15-day log, so a
+> per-transmission line would have inverted what Warn means. Level was his call
+> against my initial hesitation, and the measurement backed him: the declined
+> branches are ~3% of transmissions here, not the sticky whole-session state I
+> predicted.
+>
+> Two things this finding had NOT identified, both added on his direction:
+> **(1)** a FOURTH dark reason — `checkDriveSilence`'s mid-transmission taint branch
+> was a third silent early return that no arm-time transition could ever see;
+> **(2)** the per-transmission `drive_watch` field on the existing meters record,
+> absent when a transmission never reached the arm point.
+>
+> And the finding had the PRIORITY wrong. I ranked B1 first on the grounds that it
+> had a measured cost that morning — but the two 08:45 alarms took the ARMED path,
+> so B1's fix would not have explained them. What would have, and what shipped in
+> the same commit, is the **Error alarm's own evidence**: it carried `code` and
+> nothing else while holding the meter selection, sample count, PO max and both gap
+> measurements at the emit point. Same shape as the `meterGapAtUnkey` finding of
+> 2026-07-30 — the value that settles it was already computed and discarded.
+>
+> One request deliberately NOT implemented: tainted-selection state on the alarm
+> line. The alarm path returns early when the taint is set, so at the emit point it
+> is always `false` — a constant field reads as evidence while carrying none. It is
+> reported on its own transition line instead, where it is real.
+>
+> Rules + reasoning: `internal/bridge/drivewatch_test.go` (DW1-DW8), which also
+> gives this package log capture for the first time — `withMeterContext`'s comment
+> had noted that its two branches could diverge undetectably without it.
+
 `internal/bridge/drivealarm.go:109-146` — `armDriveWatch` has **two** early returns
 that leave the transmission unmonitored, neither of which logs:
 

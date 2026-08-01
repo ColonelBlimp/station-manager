@@ -63,6 +63,24 @@ var driveSilenceTimeout = 3 * time.Second
 // and it has reported nothing for driveSilenceTimeout.
 const DriveAlarmNoOutput = "drive_no_output"
 
+// The drive-watch states, as they appear in the log. One vocabulary for the
+// per-transmission `drive_watch` field AND the transition lines, so a reader
+// never has to map one set of words onto another.
+//
+// driveWatchUnknown is the zero value and means "no transmission has arrived at
+// the arm point yet" — reported as a transition's `from`, never as an outcome.
+const (
+	driveWatchUnknown    = "unknown"
+	driveWatchArmed      = "armed"
+	driveWatchNoMeter    = "no_meter"
+	driveWatchMeterNotPO = "meter_not_po"
+	// driveWatchMovedOffPO is reached MID-transmission only: the watch armed on PO
+	// and the operator turned the meter knob while keyed, so the remaining silence
+	// stopped being evidence about RF. Distinct from meter_not_po, which is the
+	// arm-time refusal — the two have different causes and different fixes.
+	driveWatchMovedOffPO = "meter_moved_off_po"
+)
+
 // DriveAlarmPayload is the drive-alarm event payload. Code is an i18n key (ADR
 // 0010) naming the fault; the SPA owns the wording.
 //
@@ -106,7 +124,7 @@ func driveMonitorFor(meterSel string) string {
 // gen is the ft8TxGen of this transmission — the callback is gated on it like
 // the auto-off backstop, so a timer outliving its transmission cannot alarm
 // against the next one.
-func (s *Service) armDriveWatch(gen uint64) {
+func (s *Service) armDriveWatch(gen uint64) driveWatchTransition {
 	s.driveAlarmed = false
 	// The gap measurement opens BEFORE the instrument-alive check, so it keeps
 	// running on exactly the transmissions where the detector declines to act. Its
@@ -118,7 +136,7 @@ func (s *Service) armDriveWatch(gen uint64) {
 	// link, AI mode not armed, a rig that does not push RM) to a dead
 	// transmitter.
 	if !s.meterSeenSinceTx {
-		return
+		return s.enterDriveWatchStateLocked(driveWatchNoMeter, gen)
 	}
 	// The rig pushes RM0 = the value of whatever meter is SELECTED, and only PO
 	// says anything about RF. A correctly-driven FT8 signal reads near zero on
@@ -132,7 +150,7 @@ func (s *Service) armDriveWatch(gen uint64) {
 	// seen, or a rigdef that reports none) still arms, so this fixes the measured
 	// fault without silently disabling detection on rigs that never answer MS.
 	if driveMonitorFor(s.meterSel) == DriveMonitorMeterNotPO {
-		return
+		return s.enterDriveWatchStateLocked(driveWatchMeterNotPO, gen)
 	}
 	// From here the transmission IS being watched, which is what makes a silent
 	// outcome positive evidence of normal output rather than an absence of data.
@@ -143,6 +161,69 @@ func (s *Service) armDriveWatch(gen uint64) {
 	// drive that never comes up at all is caught — the common shape.
 	s.driveLastMeterAt = time.Now()
 	s.driveTimer = time.AfterFunc(s.driveSilence, func() { s.checkDriveSilence(gen) })
+	return s.enterDriveWatchStateLocked(driveWatchArmed, gen)
+}
+
+// driveWatchTransition is a CHANGE in whether drive detection is running. The
+// zero value means "no change", which is the overwhelmingly common case — 691
+// transmissions on 2026-08-01 against a whole-log warn population of 460, so a
+// per-transmission line would invert what Warn means in this log.
+type driveWatchTransition struct {
+	changed  bool
+	from, to string
+	gen      uint64
+}
+
+// enterDriveWatchStateLocked records this transmission's outcome and reports any
+// change from the last one. Caller holds s.mu.
+//
+// TWO fields, and the split is load-bearing. driveWatchOutcome is
+// per-transmission and is cleared by disarmDriveWatch, so a transmission that
+// never reaches the arm point (a failed key write, a teardown racing it) carries
+// no outcome and its meters record omits the field rather than inheriting the
+// previous transmission's. driveWatchState is the cross-transmission memory the
+// transition machine compares against, and must NOT be cleared — clearing it
+// would re-report every state as new after each transmission, which is exactly
+// the per-transmission spray this design exists to avoid.
+func (s *Service) enterDriveWatchStateLocked(next string, gen uint64) driveWatchTransition {
+	s.driveWatchOutcome = next
+	prev := s.driveWatchState
+	if prev == "" {
+		prev = driveWatchUnknown
+	}
+	if prev == next {
+		return driveWatchTransition{}
+	}
+	s.driveWatchState = next
+	return driveWatchTransition{changed: true, from: prev, to: next, gen: gen}
+}
+
+// logDriveWatchTransition reports a change in monitoring state. Called WITHOUT
+// s.mu — a stalled log write must not block the read loop that feeds the
+// detector, the same rule the alarm and the meter summary follow.
+//
+// WARN, not Error, and the distinction is the operator's (2026-08-01): this is a
+// safety-monitoring DEGRADATION, not a confirmed transmitter failure. Error stays
+// reserved for DriveAlarmNoOutput, so an Error in this log continues to mean "the
+// rig is keyed and nothing is coming out".
+func (s *Service) logDriveWatchTransition(tr driveWatchTransition) {
+	if !tr.changed {
+		return
+	}
+	if tr.to == driveWatchArmed {
+		// unknown -> armed is the ordinary first transmission of a healthy session.
+		// Nothing was ever reported lost, so there is nothing to restore, and a line
+		// here would fire once per daemon start to say the station is working.
+		if tr.from == driveWatchUnknown {
+			return
+		}
+		s.logger.InfoWith().Str("from", tr.from).Str("to", tr.to).Uint64("tx_gen", tr.gen).
+			Msg("bridge: drive detection restored")
+		return
+	}
+	s.logger.WarnWith().Str("from", tr.from).Str("to", tr.to).Uint64("tx_gen", tr.gen).
+		Str("meter_sel", s.meterSelection()).
+		Msg("bridge: drive detection went dark — a transmitter failure would not be reported")
 }
 
 // disarmDriveWatch stops detection and clears the per-transmission state.
@@ -157,6 +238,10 @@ func (s *Service) disarmDriveWatch() {
 	// Per-transmission, unlike driveAlarmStanding: the next transmission must earn
 	// its own arming before its silence counts as evidence of anything.
 	s.driveWatchArmed = false
+	// Per-transmission for the same reason, and NOT driveWatchState — see
+	// enterDriveWatchStateLocked. Cleared so a transmission that never reaches the
+	// arm point reports no outcome instead of inheriting the previous one.
+	s.driveWatchOutcome = ""
 	s.driveSelTainted = false
 	s.closeMeterGapWindow()
 	// The next transmission must earn its own instrument-alive evidence. A link
@@ -258,7 +343,7 @@ func (s *Service) sealMeterGapWindow(at time.Time) {
 // Frames pushed during the failed write are lost to the measurement, which errs
 // towards reporting MORE silence than there was — the safe direction for an
 // instrument hunting for silence, and the rig may well still have been keyed.
-func (s *Service) unsealMeterGapWindow() {
+func (s *Service) unsealMeterGapWindow() driveWatchTransition {
 	s.meterGapKeyedFor = 0
 	s.meterGapSealed = false
 	// The transmission is resuming, so the selector question re-opens — and any
@@ -270,7 +355,16 @@ func (s *Service) unsealMeterGapWindow() {
 	// decision is gated — so it is always known here (codex 287825b6 P1).
 	if driveMonitorFor(s.meterSel) == DriveMonitorMeterNotPO {
 		s.driveSelTainted = true
+		// Same reconciliation as observeMeter's taint site, and for the same reason:
+		// this transmission is RESUMING after a failed unkey, so its remaining
+		// silence stops being evidence from here — and there may be no further timer
+		// tick to notice. Gated on an armed watch, since with none there is no
+		// protection to report lost.
+		if s.driveWatchArmed {
+			return s.enterDriveWatchStateLocked(driveWatchMovedOffPO, s.ft8MeterGen)
+		}
 	}
+	return driveWatchTransition{}
 }
 
 // closeMeterGapWindow ends measurement. Caller holds s.mu. Called from
@@ -353,7 +447,13 @@ func (s *Service) checkDriveSilence(gen uint64) {
 	// restore the meaning of the interval already elapsed.
 	if s.driveSelTainted {
 		s.driveTimer = nil
+		// Protection disappeared MID-transmission, which no arm-time transition can
+		// see: this watch armed and succeeded. Reported here so the slot that lost
+		// detection is the slot that says so — the next arm would report it one
+		// transmission late, against a different tx_gen (operator's call, 2026-08-01).
+		tr := s.enterDriveWatchStateLocked(driveWatchMovedOffPO, gen)
 		s.mu.Unlock()
+		s.logDriveWatchTransition(tr)
 		return
 	}
 	if since := time.Since(s.driveLastMeterAt); since < s.driveSilence {
@@ -369,16 +469,73 @@ func (s *Service) checkDriveSilence(gen uint64) {
 	// report that it came back is owed until a watched transmission proves it.
 	s.driveAlarmStanding = true
 	s.driveTimer = nil
+	// The evidence for this alarm, taken under the SAME lock that decided to raise
+	// it. Every value here was already in hand and was being discarded — the same
+	// shape as the meterGapAtUnkey finding of 2026-07-30. Without them, judging an
+	// alarm means finding the separate meters record emitted at unkey and joining
+	// the two by timestamp, which is what cost the time on 2026-08-01: two alarms
+	// that could only be shown almost certainly false that way.
+	//
+	// driveSelTainted is deliberately ABSENT. The taint branch above returns before
+	// reaching here, so at this point it is always false — a constant, and a
+	// constant field reads as evidence while carrying none. It is reported on its
+	// own transition line instead, at the moment it becomes true.
+	meterN, meterPoMax := s.driveMeterEvidenceLocked()
+	sinceLast := time.Since(s.driveLastMeterAt)
+	// The gap that just TRIPPED the alarm is still running, so it is not yet in
+	// meterGapMax — noteMeterGap only folds an interval in when the next frame
+	// arrives, and on a totally silent transmission no next frame ever comes.
+	// Reporting the stored maximum alone gave gap_ms≈3000 beside gap_max_ms=0 on
+	// exactly the worst case this alarm exists for, which reads as "no silence at
+	// all" next to the silence that raised the alarm.
+	gapMax := s.meterGapMax
+	if sinceLast > gapMax {
+		gapMax = sinceLast
+	}
+	meterSel := s.meterSel
 	s.mu.Unlock()
 
 	// Outside the lock — the log write and the fan-out to every subscriber must
 	// not block the read loop that feeds this detector.
 	s.logger.ErrorWith().Str("code", DriveAlarmNoOutput).
+		Str("meter_sel", meterSel).
+		Int("meter_n", meterN).
+		Int("meter_po_max", meterPoMax).
+		Int("gap_ms", int(sinceLast.Milliseconds())).
+		Int("gap_max_ms", int(gapMax.Milliseconds())).
+		Uint64("tx_gen", gen).
 		Msg("bridge: rig is keyed but the meter reports no output — check drive to the radio")
 	s.hub.publish(Event{
 		Name:    EventDriveAlarm,
 		Payload: DriveAlarmPayload{Active: true, Code: DriveAlarmNoOutput},
 	})
+}
+
+// driveMeterEvidenceLocked summarises what the meter stream has said about the
+// transmission SO FAR, without consuming the accumulator — flushFt8TxMetersLocked
+// clears it, and the transmission is still running here. Caller holds s.mu.
+//
+// Two numbers, answering the two questions actually asked of a drive alarm:
+// meter_n says whether anything arrived at all, which separates a dead instrument
+// from dead drive; meter_po_max says whether output was EVER seen, which
+// separates drive that collapsed part-way from drive that never came up. Both
+// were the numbers reached for by hand on 2026-08-01.
+//
+// A pushed reading is keyed {METER, <selection>} while an explicit query answer is
+// keyed {PO, ""} — see meterKey. Both are PO readings and both count, because the
+// question is what the rig said about output, not which frame carried it.
+func (s *Service) driveMeterEvidenceLocked() (n, poMax int) {
+	for k, acc := range s.ft8Meters {
+		if acc == nil {
+			continue
+		}
+		n += acc.Count
+		isPO := (k.Tag == meterPushedTag && k.Sel == meterSelPO) || k.Tag == meterSelPO
+		if isPO && acc.Max > poMax {
+			poMax = acc.Max
+		}
+	}
+	return n, poMax
 }
 
 // takeDriveRecoveryLocked reports whether the transmission now ending is positive

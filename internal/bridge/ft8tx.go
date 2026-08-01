@@ -130,6 +130,13 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 	// Generation-armed backstop — see StartTune's twin (finding 6).
 	s.ft8TxGen++
 	ft8Gen := s.ft8TxGen
+	// The identity the meter summary reports, captured HERE because this is the
+	// one point where a transmission's generation is established, alongside the
+	// accumulator it labels. Reading s.ft8TxGen at flush time would be off by one:
+	// finishFt8Tx increments the generation BEFORE flushing, so the summary would
+	// carry the NEXT transmission's number and the join to the drive alarm — the
+	// whole reason this field exists — would silently fail.
+	s.ft8MeterGen = ft8Gen
 	s.ft8TxTimer = time.AfterFunc(ft8TxMaxDuration, func() { s.ft8TxAutoOff(ft8Gen) })
 	s.mu.Unlock()
 
@@ -206,10 +213,14 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 	// Generation re-checked because clearFt8TxOnDisconnect takes only s.mu, not
 	// keyMu — a teardown can land between the write returning and this line.
 	s.mu.Lock()
+	var driveTr driveWatchTransition
 	if s.ft8TxActive && s.ft8TxGen == ft8Gen {
-		s.armDriveWatch(ft8Gen)
+		driveTr = s.armDriveWatch(ft8Gen)
 	}
 	s.mu.Unlock()
+	// Outside the lock, like every other emit on this path — a stalled log write
+	// must not block the read loop that feeds the detector.
+	s.logDriveWatchTransition(driveTr)
 	return nil
 }
 
@@ -299,8 +310,9 @@ func (s *Service) releaseFt8TxChecked(ctx context.Context, reason string, wantGe
 	s.mu.Unlock()
 	if err := s.writeKeyedLine(ctx, def, cl, unkey, "ft8 tx-off"); err != nil {
 		s.mu.Lock()
-		s.unsealMeterGapWindow()
+		driveTr := s.unsealMeterGapWindow()
 		s.mu.Unlock()
+		s.logDriveWatchTransition(driveTr)
 		s.logger.ErrorWith().Err(err).Str("reason", reason).
 			Msg("bridge: ft8 tx-off write failed; backstop will retry")
 		return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-off")

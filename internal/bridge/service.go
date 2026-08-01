@@ -314,6 +314,29 @@ type Service struct {
 	driveWatchArmed    bool
 	driveAlarmStanding bool
 
+	// driveWatchOutcome is THIS transmission's drive-watch state, reported on its
+	// meters record; driveWatchState is the last state REPORTED to the operator and
+	// is what the transition machine compares against.
+	//
+	// Two fields rather than one, deliberately. driveWatchOutcome is cleared by
+	// disarmDriveWatch, so a transmission that never reaches the arm point (a failed
+	// key write, a teardown racing it) omits the field instead of inheriting the
+	// previous transmission's answer. driveWatchState must survive that clear, or
+	// every state would look new on the next transmission and the transition lines
+	// would degenerate into one per transmission — which is the whole thing the
+	// design avoids (691 transmissions on 2026-08-01 against 460 warns in the entire
+	// 15-day log).
+	driveWatchOutcome string
+	driveWatchState   string
+
+	// ft8MeterGen is the generation of the transmission the meter accumulator
+	// belongs to, set where that generation is established (ft8tx.go) rather than
+	// read at flush time — finishFt8Tx increments ft8TxGen BEFORE flushing, so the
+	// live counter would label the summary with the NEXT transmission's number and
+	// the join between the meters record, the drive alarm and the transition lines
+	// would silently point at the wrong slot.
+	ft8MeterGen uint64
+
 	// driveSelTainted records that the rig's meter was switched AWAY from PO at
 	// some point during this transmission, so its meter stream stopped being about
 	// RF part-way through. The arm-time gate cannot cover this: the selection can

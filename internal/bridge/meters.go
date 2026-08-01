@@ -177,6 +177,24 @@ type ft8MeterSummary struct {
 	GapMeasured bool
 	GapMax      time.Duration
 	KeyedFor    time.Duration
+
+	// DriveWatch is what drive-collapse detection DID for this transmission —
+	// armed, or which of the reasons it declined. Without it a silent transmission
+	// that was watched is indistinguishable in the log from one that was never
+	// watched, and only the first is evidence that output was normal.
+	//
+	// EMPTY when the transmission never reached the arm point (a failed key write,
+	// a teardown racing it). Absent rather than a named fourth value, matching
+	// GapMeasured's rule directly above: reporting a state for a decision never
+	// taken would read as evidence.
+	DriveWatch string
+
+	// Gen is the transmission's ft8TxGen, so this record JOINS to the drive alarm
+	// and to the drive-watch transition lines, which carry the same tx_gen. Without
+	// it the alarm's identity leads nowhere: a state that has not changed emits no
+	// transition line, so the meters record is the only other place the
+	// transmission appears. Zero means no transmission (generations start at 1).
+	Gen uint64
 }
 
 // observeMeter consumes a decoded meter push. Two SEPARATE layers, and the
@@ -197,6 +215,7 @@ type ft8MeterSummary struct {
 func (s *Service) observeMeter(status cat.Status) {
 	s.mu.Lock()
 	announce := false
+	var driveTr driveWatchTransition
 	// The selection is a mapped literal ("PO"), not a number, so it is recorded
 	// rather than run through the numeric accumulation below.
 	if sel, ok := status[meterSelTag]; ok && sel != "" {
@@ -218,6 +237,17 @@ func (s *Service) observeMeter(status cat.Status) {
 		// transmission is then still running and a change again counts.
 		if s.inKeyedMeterWindowLocked() && driveMonitorFor(sel) == DriveMonitorMeterNotPO {
 			s.driveSelTainted = true
+			// Reconciled HERE, at the instant protection is lost, not at the silence
+			// timer that reacts to it. The timer only runs every driveSilence and is
+			// cancelled by disarmDriveWatch, so a taint arriving inside the final
+			// interval — up to 3 s of a 12.6 s slot — was never reported at all, and
+			// the meters record went on claiming drive_watch=armed for a window that
+			// had stopped measuring RF. Only when the watch was actually ARMED: with
+			// no watch running there is no protection to lose, and driveSelTainted is
+			// still set unconditionally because recovery suppression depends on it.
+			if s.driveWatchArmed {
+				driveTr = s.enterDriveWatchStateLocked(driveWatchMovedOffPO, s.ft8MeterGen)
+			}
 		}
 	}
 	for _, tag := range meterTags {
@@ -285,6 +315,7 @@ func (s *Service) observeMeter(status cat.Status) {
 			Str("meters", strings.Join(meterTags, ",")).
 			Msg("bridge: rig pushes meter frames (RM); meter observation is live")
 	}
+	s.logDriveWatchTransition(driveTr)
 }
 
 // flushFt8TxMeters returns the readings accumulated during the transmission
@@ -302,6 +333,11 @@ func (s *Service) flushFt8TxMeters() ft8MeterSummary {
 func (s *Service) flushFt8TxMetersLocked() ft8MeterSummary {
 	sum := ft8MeterSummary{Present: true}
 	sum.GapMeasured, sum.GapMax, sum.KeyedFor = s.meterGapAtUnkey()
+	// Read BEFORE disarmDriveWatch clears it — the end-of-TX path flushes the
+	// summary first for exactly this reason (see the call site in ft8tx.go).
+	sum.DriveWatch = s.driveWatchOutcome
+	// NOT s.ft8TxGen: finishFt8Tx increments that before flushing. See ft8tx.go.
+	sum.Gen = s.ft8MeterGen
 	for _, tag := range meterTags {
 		// A tag may have several samples when the selection changed during the
 		// transmission. Sorted by Sel so the summary is deterministic rather than
@@ -344,11 +380,11 @@ func (s *Service) logFt8TxMeters(sum ft8MeterSummary) {
 		// most severe reading this instrument can take, and was the shape of 12 of
 		// the sweep's 24 transmissions. A bare "no meter data" line here would go
 		// blank exactly where the measurement matters.
-		withMeterGap(s.logger.InfoWith(), sum).
+		withMeterContext(s.logger.InfoWith(), sum).
 			Msg("bridge: ft8 tx meters — rig pushed no meter data for this transmission")
 		return
 	}
-	e := withMeterGap(s.logger.InfoWith(), sum)
+	e := withMeterContext(s.logger.InfoWith(), sum)
 	names := make([]string, 0, len(sum.Samples))
 	for _, m := range sum.Samples {
 		k := meterFieldPrefix(m)
@@ -362,18 +398,28 @@ func (s *Service) logFt8TxMeters(sum ft8MeterSummary) {
 		Msg("bridge: ft8 tx meters (raw 0-255 scale)")
 }
 
-// withMeterGap attaches the keyed window's gap fields, in milliseconds because
-// that is the scale the numbers are read against — driveSilence is 3 s and a
-// healthy inter-frame gap is tens of milliseconds.
+// withMeterContext attaches the per-transmission fields that BOTH meter log
+// branches must carry: the keyed window's gap measurements, in milliseconds
+// because that is the scale the numbers are read against (driveSilence is 3 s and
+// a healthy inter-frame gap is tens of milliseconds), and what drive-collapse
+// detection did for the transmission.
 //
-// ONE shared path for both log branches (readings and no-readings) on purpose:
-// the fields are asserted through the summary struct rather than the log output,
-// since this package has no log capture, so a second copy of this emit is exactly
-// where the two branches could silently diverge.
+// ONE shared path for both log branches (readings and no-readings) on purpose: a
+// second copy of this emit is exactly where the two branches could silently
+// diverge. That reasoning used to end "since this package has no log capture" —
+// it now does, and drivewatch_test.go DW6 exercises both branches through it.
 //
-// Absent when nothing was measured. A zero would read as "no silence at all",
-// which is the opposite of the truth for a transmission that never keyed.
-func withMeterGap(e logging.LogEvent, sum ft8MeterSummary) logging.LogEvent {
+// Each field is ABSENT when its fact was never established, never zero-filled. A
+// zero gap would read as "no silence at all", the opposite of the truth for a
+// transmission that never keyed; an invented drive_watch would name a decision
+// that was never taken.
+func withMeterContext(e logging.LogEvent, sum ft8MeterSummary) logging.LogEvent {
+	if sum.Gen != 0 {
+		e = e.Uint64("tx_gen", sum.Gen)
+	}
+	if sum.DriveWatch != "" {
+		e = e.Str("drive_watch", sum.DriveWatch)
+	}
 	if !sum.GapMeasured {
 		return e
 	}
