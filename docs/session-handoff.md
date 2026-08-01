@@ -32,15 +32,18 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-08-01)
 
-> **2026-08-01, LATER THE SAME DAY — the audit findings started shipping. Four more
-> commits: the auto-work pill fix, bridge B1 (drive-watch state reporting, two
-> commits), and api A7. DEPLOYED MID-SESSION and validated on the air on 12 m;
-> A7 is the only thing not running.**
+> **2026-08-01, LATER THE SAME DAY — the audit findings started shipping. SIX
+> findings across six commits: the auto-work pill fix, bridge B1 (drive-watch state
+> reporting), api A7, and the three-hub eviction class fix. Deployed mid-session and
+> validated on the air on 12 m; everything after that deploy is NOT running.**
 >
-> - **DEPLOY STATE:** running `2.0.0-alpha.1-1021-gda962028` since **14:47:36**,
->   version stamp verified against HEAD (not `dev` — the `-X` trap did not bite).
->   **HEAD is `3fdba1a2` (A7), which is NOT deployed.** So a datastore fault right
->   now still reports as unset config.
+> - **DEPLOY STATE — FOUR COMMITS BEHIND.** Running
+>   `2.0.0-alpha.1-1021-gda962028` since **14:47:36**; version stamp verified
+>   against HEAD at the time (not `dev` — the `-X` trap did not bite). HEAD is now
+>   `cb21cf8b`. **NOT running: api A7 and all three eviction logs.** Two
+>   consequences: a datastore fault still reports as unset configuration, and the
+>   eviction records — the evidence the operator wants before deciding anything
+>   about buffer sizes — do not start accruing until a deploy.
 > - **`b93bd417` — starting a Call-CQ run stops an armed auto-work run.** From a
 >   dogfood report ("the auto-work armed stays active, or the pill stays viewable").
 >   It was BOTH and the pill was innocent: `StartCallCq` reset caller / stalledCalls
@@ -98,10 +101,44 @@ precisely so we don't re-derive state or redo finished work.
 >   They were logged by the pre-deploy build and carry `code` alone. Anything firing
 >   after `da962028` carries full evidence and joins to its meters record by `tx_gen`.
 >   The 10:08:35 one was never looked at.
-> - **NEXT:** the two silent hub evictions (`ft8` #1 + `bridge` B2 — one defect, two
->   hubs, one commit); the FT8 side ends a live QSO via eviction → unsub → linger →
->   `disarmTx`, indistinguishable from the operator closing the browser. Then SHIP
->   GATE (a) config saves and (c) notification records. **~57 of 66 findings remain.**
+> - **`57619abe` + `cb21cf8b` — THE THREE-HUB EVICTION CLASS FIX** (ft8 #1 +
+>   bridge B2, plus a THIRD site the audits missed: `internal/events/hub.go`, which
+>   feeds the map's stream). All three dropped a too-slow subscriber with a bare
+>   `close(ch); delete(...)` and said nothing. Each now emits ONE Warn per evicted
+>   subscriber with `subscriber_id`, `event`, `queue_depth`, `queue_capacity`,
+>   `subs_before`, `subs_after`.
+>   **THE TEARDOWN IS UNCHANGED — operator's ruling, and the reasoning is the part
+>   to preserve:** the enforced proxy is a FUNCTIONING SSE subscription, not an open
+>   browser tab; once the channel overflows, operator-facing state is no longer
+>   flowing, and EventSource reconnect plus the existing linger already IS the
+>   recovery distinction. Exempting eviction could leave TX running behind a dead
+>   display or create a phantom subscriber that can never unsubscribe. **Buffers stay
+>   at 8 (ft8) / 64 (bridge, events) until the new records show HEALTHY clients being
+>   evicted.**
+>   **A codex P2 was REFUTED, not fixed** (rationale in all three `logEvictions`
+>   comments): the eviction log is synchronous and zerolog writes straight to
+>   lumberjack, so the mechanism is real — but these goroutines already emit **1,502
+>   `ft8 tx meters` records against 0 evictions** in 15 days, so it is the rarest
+>   instance of an accepted pattern, not a new class. If a stalled log destination
+>   endangers them it belongs at the logging layer, fixed once.
+> - **FIVE REVIEW ROUNDS ON THAT ONE, AND EVERY FINDING WAS A PROOF GAP, NOT A BUG.**
+>   The implementation was right early; the tests were not. In order: F3 called the
+>   handler's unsubscribe BY HAND, so deleting `defer unsub()` would not have failed
+>   it (now drives the real `HTTPHandler` with a client that stalls mid-write) · F4
+>   could not reach the raced-timer interleaving at all, so the subCount guard was
+>   unproven (F5 added, entering `onLingerExpired` directly) · `subscriber_id` was
+>   checked only for non-negativity, which a constant 0 passed (fixtures now burn id
+>   0) · the production wiring guard was `strings.Contains`, which a commented-out
+>   call, `logging.Noop()`, `(*logging.Service)(nil)` and a local rebinding all
+>   passed (now an AST check requiring `loggerSvc` resolved from the container) · F3's
+>   barrier counted writes cumulatively, and the hub replays cached events on
+>   subscribe so it was pre-satisfied (now a signal raised by `Write` at the gate).
+>   **The generalisable one: a green test after touching ONE of two redundant
+>   mechanisms is not evidence the other is dead code.**
+> - **NEXT:** SHIP GATE (a) config saves and (c) notification records — the last two
+>   open gate items. **~55 of 66 audit findings remain.** Also queued from the
+>   inbox triage: the SSE-reconnect-on-visible fix, which two separate dogfood
+>   reports (07-18 map, 07-28 daemon-unreachable) turn out to share.
 > - **PARKED, operator-flagged for "shortly":** a Call-CQ run has **no auto_off** —
 >   the answer-mode enum is three values and `operator_pick`, the only manual one, is
 >   rejected at runtime (`servicetx.go:855`) while config validation still ACCEPTS it,
