@@ -41,9 +41,44 @@ import (
 	     Call-CQ run already has. W5 is that rule, and it is the one whose failure
 	     would make the daemon initiate operation on its own.
 	  2. A QSO that ends WITHOUT a completed exchange continues the run (W4).
-	  3. Stops on Abandon, TX disarmed, rig disconnect / CAT lost, band or dial change.
+	  3. Stops on Abandon, TX disarmed, rig disconnect / CAT lost, band or dial change,
+	     and on starting a Call-CQ run (W12, added 2026-08-01).
 	  4. Duplicates unchanged from the Call-CQ loop's ratified position: no
 	     completed-call suppression.
+
+	SECOND CRITERION, added 2026-08-01 from a dogfood report — "when answering a cq
+	and auto-work armed, when the contact has completed and nobody calls you, so you
+	start a cq call - the auto-work armed stays active, or the pill stays viewable":
+
+	  When I start calling CQ, the "Auto-work armed" indicator goes out in the same
+	  frame that announces the CQ — so the indicator names the machine that is
+	  actually running, and I can tell "the CQ run is working answerers" apart from
+	  "an auto-work run is armed and waiting", which otherwise render identically.
+
+	The report was an either/or — state or display — and it is BOTH. StartCallCq
+	resets caller / stalledCalls / confirmHold / contact for the fresh session and
+	never touched autoWork, so the run really did survive it and the pill was
+	honestly reporting a real state.
+
+	It could NOT fire: onSlotIdleArmed gates on mode == seqIdle, and a Call-CQ
+	contact resumes CQ rather than ending (see retireSessionLocked's comment), so the
+	only exit from the run is Abandon, which disarms. This is therefore not a
+	rogue-transmission fix. What it removes is an indicator naming the wrong
+	mechanism — during a CQ run answerers ARE worked without a click, but by
+	pickAnswererLocked, not by the auto-work run — and a call/offset/dial pinned from
+	the PREVIOUS session that any future path back to seqIdle would transmit on.
+
+	Operator's call (2026-08-01): CLEAR it. Starting a CQ is a new operator-started
+	session and pins its own parameters, and Abandon stops everything; re-arming on
+	the CQ's parameters instead would mean an abandoned CQ left the station still
+	auto-working callers, which contradicts what Abandon means everywhere else.
+
+	W12 pins the state; V5 pins that the CQ's OWN frame already carries it. V5 is the
+	load-bearing half: StartCallCq's sequence is set-mode → reset fields →
+	statusLocked → publish → unlock, and a clear placed after the publish leaves the
+	field right internally while the frame the SPA receives still says armed — the
+	pill stays lit until something else happens to publish. Naming which step the
+	clear belongs to is the whole rule.
 
 	NOT REBUILT, and deliberately so: pickAnswererLocked already selects a station
 	calling us from one slot's decodes, honouring auto_first / auto_strongest, skipping
@@ -454,4 +489,51 @@ func TestAutoWork_ActiveStatusAlsoReportsTheRun(t *testing.T) {
 	st := r.lastStatus()
 	require.True(t, st.Active, "fixture: the run picked a caller up")
 	require.True(t, st.AutoWorkArmed, "the run is still live while working its contact")
+}
+
+// W12 — STARTING A CALL-CQ RUN STOPS THE AUTO-WORK RUN. The second criterion's state
+// half. StartCallCq already resets the rest of the per-session state for a fresh
+// session (caller, stalledCalls, confirmHold, contact); the run was simply missed, so
+// it survived into a session that pins its own callsign, offset and dial.
+//
+// The fixture starts the CQ on a DIFFERENT offset from the seeding QSO's on purpose.
+// That is the real shape of the report — the operator picks a clear frequency to call
+// on — and it is what makes the surviving run's pinned 1500 Hz wrong rather than
+// merely redundant.
+func TestAutoWork_StartingCallCqStopsTheRun(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	autoWorkRun(t, s, "auto_first")
+	require.True(t, s.AutoWorkArmed(),
+		"fixture: a run must be armed before the CQ starts, or this rule proves nothing")
+
+	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1200, 14.074, "auto_first", "",
+		time.Unix(90, 0).UTC()))
+
+	require.False(t, s.AutoWorkArmed(),
+		"a Call-CQ run is a new operator-started session; the previous run must not survive it")
+}
+
+// V5 — and the frame that ANNOUNCES the CQ already carries the stopped run, so the
+// indicator goes out at the moment the operator acts rather than at some later
+// publish.
+//
+// Separate from W12 because the two fail differently, which is the point of writing
+// both: clearing the run AFTER s.publish(st) satisfies W12 (the field ends up right)
+// and fails this one (the frame the SPA actually receives still claims an armed run).
+// The SPA rebuilds its whole qso object per frame, so a stale "armed" persists until
+// something else publishes — and a CQ waiting for answerers may not publish again for
+// a long time.
+func TestAutoWork_CallCqFrameReportsTheStoppedRun(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	autoWorkRun(t, s, "auto_first")
+	require.True(t, r.lastStatus().AutoWorkArmed, "fixture: the pre-CQ frame must claim the armed run")
+
+	require.NoError(t, s.StartCallCq("G0XYZ", "IO91", 1200, 14.074, "auto_first", "",
+		time.Unix(90, 0).UTC()))
+
+	st := r.lastStatus()
+	require.Equal(t, "calling-cq", st.State, "fixture: this must be the frame the CQ start published")
+	require.False(t, st.AutoWorkArmed, "the CQ's own frame must already report the run stopped")
 }

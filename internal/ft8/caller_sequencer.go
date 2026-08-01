@@ -59,6 +59,21 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	s.caller = nil
 	s.stalledCalls = nil // fresh session — no abandoned answerers to exclude yet
 	s.confirmHold = nil
+	// A Call-CQ run is itself an operator-started session and pins its own callsign,
+	// offset and dial, so a run armed by the PREVIOUS session must not carry into it
+	// (ADR 0059; autowork_test.go W12/V5). Without this the indicator stayed lit
+	// through the CQ, naming the auto-work run while the machine actually working
+	// answerers was pickAnswererLocked — one badge for two mechanisms.
+	//
+	// The whole struct rather than the flag alone: the pinned offset/dial are what
+	// onSlotIdleArmed transmits on, and leaving them behind a false flag parks a
+	// stale frequency for any future path back to seqIdle to fire on. Only the flag
+	// half is pinned by a test (armAutoWorkLocked overwrites the rest on the next
+	// arm, so the pin is unobservable today); the reset is deliberate belt-and-braces.
+	//
+	// Placed here, ahead of the statusLocked/publish below, so the frame that
+	// announces the CQ already reports the run stopped — V5.
+	s.autoWork = autoWorkState{}
 	s.ourCall = call
 	s.ourGrid = grid
 	s.cqMessage = cq

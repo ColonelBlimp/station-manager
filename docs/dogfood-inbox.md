@@ -1000,3 +1000,20 @@ said. Plan future on-air experiments accordingly.
   invented: retention (last N events, or a time window?); survive a daemon restart
   (persisted) or in-memory only?; unread badge on the icon, or a plain list?
 - [2026-08-01] when answering a cq and auto-work armed, when the contact has completed and nobody calls you, so you start a cq call - the auto-work armed stays active, or the pill stays viewable
+  — **TRIAGED + FIXED 2026-08-01.** The either/or is BOTH, and the pill was innocent:
+  `StartCallCq` reset `caller` / `stalledCalls` / `confirmHold` / `contact` for the fresh
+  session and never touched `autoWork`, so the run genuinely survived and the badge was
+  honestly reporting it. **It could not fire** — `onSlotIdleArmed` gates on
+  `mode == seqIdle`, and a Call-CQ contact resumes CQ rather than ending, so the only
+  exit is Abandon, which disarms. So this was never a rogue-transmission risk. What it
+  cost was an indicator naming the wrong mechanism (during a CQ run answerers *are*
+  worked without a click, but by `pickAnswererLocked`, not the auto-work run), plus a
+  call/offset/dial still pinned from the PREVIOUS session that any future path back to
+  `seqIdle` would have transmitted on. Operator's call: **clear it** — starting a CQ is a
+  new operator-started session that pins its own parameters, and Abandon stops
+  everything. Fix is one assignment in `caller_sequencer.go` ahead of the
+  `statusLocked`/`publish`, so the frame announcing the CQ already reports the run
+  stopped. Pinned by `autowork_test.go` **W12** (state) and **V5** (that frame) — V5
+  demonstrated load-bearing by moving the clear after the publish, which leaves W12
+  green and V5 red. No SPA change: it rebuilds the whole `qso` object per frame, so the
+  `omitempty` on `auto_work_armed` reads as false and the pill goes out.
