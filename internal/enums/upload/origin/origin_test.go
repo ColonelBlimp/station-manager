@@ -1,14 +1,19 @@
 package origin
 
 import (
+	_ "embed"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
+
+// originSource is the package's own source, compiled into the test binary so the
+// enum guard below never touches the filesystem. See its comment for why.
+//
+//go:embed origin.go
+var originSource string
 
 // Mirrors action_test.go / status_test.go, plus one guard the others do not need:
 // origin's value set is duplicated in a database CHECK constraint (migration
@@ -93,21 +98,24 @@ func TestParse_RejectsDeliberatelyExcludedValues(t *testing.T) {
 // CHECK constraint, so a constant added here and taught to neither Parse nor the
 // CHECK is a split brain that surfaces only on the write path.
 func TestParse_CoversEveryDeclaredConstant(t *testing.T) {
-	// Resolve the source next to THIS FILE, not via the working directory.
-	// `go test` happens to start in the package dir, but a binary built with
-	// `go test -c` and run from anywhere else does not — it failed with
-	// "open origin.go: no such file or directory" before testing anything
-	// (clean-room review of 0701874c). runtime.Caller is location-independent.
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed; cannot locate the package source")
-	}
-	src := filepath.Join(filepath.Dir(thisFile), "origin.go")
-
+	// The source is EMBEDDED, not located. Two clean-room reviews in a row caught
+	// this test failing before it tested anything, each time because it tried to
+	// find origin.go on disk:
+	//
+	//   * plain "origin.go" assumed the process started in the package directory —
+	//     fine under `go test`, broken for a `go test -c` binary run elsewhere;
+	//   * runtime.Caller(0) then returned a MODULE-relative path under
+	//     `-trimpath`, so filepath.Dir produced something that opens nowhere.
+	//
+	// The second fix replaced one path-resolution mechanism with another and
+	// inherited the same class of bug. //go:embed removes the filesystem from the
+	// problem: the bytes are compiled into the test binary, so working directory,
+	// -trimpath and where the binary is run all stop mattering. The filename below
+	// is only a label for parser error messages.
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, src, nil, parser.ParseComments)
+	f, err := parser.ParseFile(fset, "origin.go", originSource, parser.ParseComments)
 	if err != nil {
-		t.Fatalf("parse %s: %v", src, err)
+		t.Fatalf("parse embedded origin.go: %v", err)
 	}
 
 	declared := map[string]string{} // const name -> literal value
