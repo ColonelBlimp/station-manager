@@ -394,12 +394,13 @@ func (w *Worker) persistOutcome(
 		disp    disposition
 		cause   error
 		attempt = &attemptFields{}
+		stamped bool
 	)
 
 	switch res.Outcome {
 	case forwarding.OutcomeSuccess:
 		attempt.upstreamID = res.UpstreamID
-		disp = w.markSuccess(ctx, row, res.UpstreamID)
+		disp, stamped = w.markSuccess(ctx, row, res.UpstreamID)
 
 	case forwarding.OutcomeTerminal:
 		// The Forwarder contract sets Result.Err on a non-success outcome, but
@@ -432,6 +433,15 @@ func (w *Worker) persistOutcome(
 	}
 
 	w.logAttempt(row, call, outcome, disp, cause, submitDur, attempt)
+
+	// Strictly AFTER the record. The stamp bumped the QSO's revision, so the
+	// row-mirror forwarder(s) must be told or their copy drifts until the hourly
+	// reconcile heals it with a full-manifest diff. But the hook is best-effort and
+	// fallible, and the upload has already persisted — so its trace is written
+	// first, and a hook that blocks or panics can no longer erase it.
+	if stamped && w.cfg.OnQsoStamped != nil {
+		w.cfg.OnQsoStamped(ctx, row.QsoID)
+	}
 }
 
 // attemptFields carries the per-outcome extras onto the attempt record without
@@ -637,14 +647,22 @@ func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr st
 //   - otherwise → MarkUploadSuccessWithAdifStamp, which updates
 //     qso_upload AND the QSO row's <PREFIX>_QSO_UPLOAD_{STATUS,DATE}
 //     in one transaction, honouring the one-fails-all-fail invariant.
-func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamID string) disposition {
+//
+// The bool reports whether an ADIF stamp COMMITTED, so the caller can fire the
+// best-effort stamp-sync hook AFTER the attempt record is written. The hook must
+// not run inside here: it is fallible (it can block or panic), and with the
+// attempt record now emitted after markSuccess returns, a hook failure would
+// erase the only trace of an upload that already persisted — which is exactly
+// what the pre-restructure ordering could not do (clean-room review of f31738bc).
+func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamID string) (disposition, bool) {
+	stamped := false
 	prefix := w.fwd.AdifPrefix()
 	if prefix != "" && row.Action != action.Delete.String() {
 		err := w.db.MarkUploadSuccessWithAdifStampWithContext(
 			ctx, row.ID, upstreamID, row.QsoID, prefix,
 		)
 		if w.reArmed(err, row.ID, "success+stamp") {
-			return dispRearmed // no stamp committed → no mirror hook, no succeeded event
+			return dispRearmed, false // no stamp committed → no mirror hook, no succeeded event
 		}
 		if err != nil {
 			w.logger.ErrorWith().
@@ -654,17 +672,15 @@ func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamI
 				Str("adif_prefix", prefix).
 				Err(err).
 				Msg("forwarder: mark success + adif stamp failed")
-			return dispPersistFailed
+			return dispPersistFailed, false
 		}
-		// The stamp just bumped the QSO row's revision — tell the row-mirror
-		// forwarder(s) so their copy doesn't drift until the hourly reconcile.
-		if w.cfg.OnQsoStamped != nil {
-			w.cfg.OnQsoStamped(ctx, row.QsoID)
-		}
+		// The stamp bumped the QSO row's revision, so the row-mirror forwarder(s)
+		// need telling — but that call is the caller's to make, after logging.
+		stamped = true
 	} else {
 		err := w.db.MarkUploadSuccessWithContext(ctx, row.ID, upstreamID)
 		if w.reArmed(err, row.ID, "success") {
-			return dispRearmed
+			return dispRearmed, false
 		}
 		if err != nil {
 			w.logger.ErrorWith().
@@ -672,7 +688,7 @@ func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamI
 				Int64("upload_id", row.ID).
 				Err(err).
 				Msg("forwarder: mark success failed")
-			return dispPersistFailed
+			return dispPersistFailed, false
 		}
 	}
 
@@ -683,7 +699,7 @@ func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamI
 		UpstreamID:    upstreamID,
 		Attempts:      int(row.Attempts) + 1,
 	})
-	return dispPersisted
+	return dispPersisted, stamped
 }
 
 func errText(err error) string {

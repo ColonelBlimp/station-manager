@@ -350,3 +350,52 @@ func TestAttemptLogging_PersistFailureIsErrorAndNotCompleted(t *testing.T) {
 			recs[0]["level"])
 	}
 }
+
+// A panicking OnQsoStamped hook must not erase the attempt record for an upload
+// that ALREADY persisted.
+//
+// Found by clean-room review of f31738bc, and it is a regression this diff
+// introduced: before the restructure the success line was written BEFORE
+// markSuccess ran, so a failing hook could not suppress it. Moving the record
+// after persistence — which is the whole point of the change — put the
+// best-effort hook in front of it. The record must sit between the database
+// transition and any fallible callback.
+//
+// The panic also makes processRowSafely reset an already-uploaded row for retry,
+// which is pre-existing behaviour and out of scope here; what this pins is that
+// the completed attempt still leaves a trace.
+func TestAttemptLogging_StampHookPanicDoesNotSuppressTheAttemptRecord(t *testing.T) {
+	h, buf := captureHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "qrz", "qrz", action.Insert)
+
+	fwd := &stampingForwarder{
+		typeName: "qrz",
+		prefix:   "QRZCOM",
+		result:   forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "logid-1001"},
+	}
+	cfg := defaultCfg("qrz")
+	cfg.OnQsoStamped = func(context.Context, int64) { panic("stamp-sync hook blew up") }
+
+	w, err := New(cfg, fwd, h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+	// Claim the row first: processRowSafely on an unclaimed row would resolve as
+	// `rearmed` and never reach the stamping branch the hook hangs off, so the
+	// fixture would prove nothing about hook ordering.
+	claimed, cerr := h.db.ClaimPendingUploadsWithContext(context.Background(), "qrz", 1)
+	if cerr != nil || len(claimed) != 1 {
+		t.Fatalf("claim: %v (rows=%d)", cerr, len(claimed))
+	}
+	w.processRowSafely(context.Background(), claimed[0])
+
+	recs := withMessage(t, buf, msgAttempt)
+	if len(recs) != 1 {
+		t.Fatalf("attempt records = %d, want exactly 1 — the upload persisted, "+
+			"so a failing best-effort hook must not erase its trace\n%s", len(recs), buf.String())
+	}
+	if recs[0]["disposition"] != wantPersisted {
+		t.Errorf("disposition = %v, want %q", recs[0]["disposition"], wantPersisted)
+	}
+}

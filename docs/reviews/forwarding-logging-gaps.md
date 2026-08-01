@@ -1,6 +1,6 @@
 # URGENT TODO — `internal/forwarding` logging gaps
 
-**Status:** open · **Raised:** 2026-08-01 · **16 findings** · **Source:** package
+**Status:** open · **Raised:** 2026-08-01 · **17 findings** (F1-F3 first pass, F4-F16 second, **F17 filed 2026-08-01 while fixing the clean-room P2 on `f31738bc`**) · **Source:** package
 logging review of `internal/forwarding` (3,558 non-test lines, 11 files, **21 log call
 sites**), operator-directed, review only — no code was changed. F1-F3 from the first
 pass; **F4-F16 added the same day from a second source**, each verified against the code
@@ -343,6 +343,54 @@ arrives does `:324` report the missing key — as `OutcomeUnreachable`, producin
 
 ---
 
+### F17. Panic recovery is phase-insensitive: a post-commit hook failure is reported as a pre-commit row failure — Tier 2
+
+**Filed 2026-08-01**, surfaced while fixing the clean-room P2 on `f31738bc`. Distinct
+from **F6**: F6 governs *when completion may be claimed*; this is about panic recovery
+being blind to *which phase* it caught.
+
+`processRowSafely` (`worker.go:188-211`) wraps the whole of `processRow` in one recover
+boundary and treats every panic as a row that failed to process — but the best-effort
+`OnQsoStamped` hook runs **after** the upload has committed. A panic there produces:
+
+| Line | Level | Claim | Truth |
+|---|---|---|---|
+| `forwarder: panic processing row; resetting to retry` | **Error** | the row is being reset | it is `uploaded` and stays so |
+| `upload completion skipped: row re-armed by a concurrent edit` (`api_context.go:2384`) | Debug | an operator edited the row | nobody did |
+| `forwarder: completion skipped — row re-armed by a concurrent edit` (`worker.go` `reArmed`) | Debug | as above | as above |
+
+The chain: recover → `markTransientInternal` → `markTransientRetry` → the UPDATE is
+conditional on `status='in_progress'` and the row is `uploaded`, so zero rows change →
+`classifyZeroRowCompletion` **misclassifies zero-rows as re-armed** and returns
+`ErrUploadReArmed` → `reArmed` logs it again.
+
+**No data is harmed** — that conditional write is exactly what prevents an uploaded row
+being re-queued, and criterion 1 below is a regression guard rather than a fix target.
+What is harmed is the record: an Error line asserting a reset that did not happen, and
+two lines blaming a concurrent operator edit that never occurred.
+
+**And the actual failure gets no diagnosis at all.** The stamp-sync mirror re-enqueue
+silently did not happen, so the smcloud copy drifts until the hourly reconcile heals it
+with a full-manifest GET — the expensive path **F2** and the backlog's stamp-drift item
+are both about. Nothing names the hook as the cause.
+
+- **Confusable with:** a genuine mid-upload panic (which *would* need the retry), and
+  with a concurrent operator edit. Three lines, all wrong, and the one true fault
+  unrecorded.
+- **Acceptance criteria (operator, 2026-08-01) — file the behaviour first; a dedicated
+  recovery boundary around the hook is the likely eventual shape:**
+  1. A panic in `OnQsoStamped` cannot alter or retry an already-uploaded row.
+  2. It produces a hook-specific **Error** identifying the forwarder and QSO, and
+     stating that reconcile remains the backstop.
+  3. It produces neither *"resetting to retry"* nor *"re-armed by a concurrent edit"*.
+  4. The worker continues with later rows.
+  5. The completed attempt record remains, exactly once — **already covered** by
+     `TestAttemptLogging_StampHookPanicDoesNotSuppressTheAttemptRecord`.
+- **Note for whoever builds it:** `classifyZeroRowCompletion` treats *every* zero-row
+  completion as re-armed. That is right for a `pending` row and wrong for an `uploaded`
+  one, so the misclassification may be worth fixing at that seam rather than only at the
+  worker.
+
 ### F14. Other accepted upstream dispositions collapse into generic success — Tier 3
 
 QRZ's insert `REPLACE`, update `OK` meaning newly-inserted, and delete `FAIL` meaning
@@ -430,7 +478,8 @@ Checked against the code and the live log on 2026-08-01.
 6. **F9** with `api-logging-gaps.md` **A2** — two halves of one summary.
 7. **F2** — resolve as part of `qsoservice-logging-gaps.md` **Q4**; likely no new line
    is needed on this side.
-8. **F3** (retry-age half only), then **F14, F15, F16** whenever adjacent code is open.
+8. **F17** — behaviour is filed, not built; it needs a recovery boundary around the best-effort hook, and possibly a fix at `classifyZeroRowCompletion`.
+9. **F3** (retry-age half only), then **F14, F15, F16** whenever adjacent code is open.
 
 Per the standing TDD directive, the behaviour statement for each is the
 confusable-state clause above. For F1 specifically, the acceptance criterion is worth
