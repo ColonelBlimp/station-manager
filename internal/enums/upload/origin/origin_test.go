@@ -4,6 +4,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -91,10 +93,21 @@ func TestParse_RejectsDeliberatelyExcludedValues(t *testing.T) {
 // CHECK constraint, so a constant added here and taught to neither Parse nor the
 // CHECK is a split brain that surfaces only on the write path.
 func TestParse_CoversEveryDeclaredConstant(t *testing.T) {
+	// Resolve the source next to THIS FILE, not via the working directory.
+	// `go test` happens to start in the package dir, but a binary built with
+	// `go test -c` and run from anywhere else does not — it failed with
+	// "open origin.go: no such file or directory" before testing anything
+	// (clean-room review of 0701874c). runtime.Caller is location-independent.
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed; cannot locate the package source")
+	}
+	src := filepath.Join(filepath.Dir(thisFile), "origin.go")
+
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "origin.go", nil, parser.ParseComments)
+	f, err := parser.ParseFile(fset, src, nil, parser.ParseComments)
 	if err != nil {
-		t.Fatalf("parse origin.go: %v", err)
+		t.Fatalf("parse %s: %v", src, err)
 	}
 
 	declared := map[string]string{} // const name -> literal value
