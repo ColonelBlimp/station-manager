@@ -40,23 +40,28 @@ state?**
 
 ## Tier 1
 
-### F1. ⚠️ HALF SHIPPED 2026-08-01 (`f31738bc`) — volume fixed, provenance still open
+### F1. ✅ FIXED 2026-08-01 — both halves
 
-**The restructuring half is done** (Option 3′, operator's decision): `forwarding: submit`
+**Volume (Diff A, `f31738bc`, corrected by `191ac370`):** Option 3′ — `forwarding: submit`
 demoted to Debug, one `forwarding: attempt` record at the outcome carrying
-`submit_duration_ms` (timed around `Forwarder.Submit` alone). Projected effect once
-deployed and rotated: this package drops from **41% of the log to ~23%**, and the whole
-log from 14.31 → 12.57 MiB over a 15.51-day window.
+`submit_duration_ms` (timed around `Forwarder.Submit` alone). Projected once deployed and
+rotated: this package drops from **41% of the log to ~23%**, the whole log 14.31 → 12.57
+MiB over a 15.51-day window.
 
-**The actual finding — missing provenance — is NOT fixed.** It needs the `origin` field,
-which the operator established is a `qso_upload` schema **and** public-API change
-(`GET /v1/qso/{uuid}/uploads` returns `types.QsoUpload` directly), so it ships separately
-as **Diff B**. Vocabulary decided: `live` · `import` · `edit` · `manual` · `stamp_sync` ·
-`reconcile` · `legacy`. Do not close F1 until that lands.
+**Provenance (Diff B, `59542a8a` + `ed0f0657`):** `qso_upload.origin`, NOT NULL with no
+default and a closed CHECK over `live` · `import` · `edit` · `manual` · `stamp_sync` ·
+`reconcile` · `legacy`; migration 0007 rebuilds the table (carrying the trigger and both
+partial indexes forward) and copies existing rows as `legacy`. Six producer values are threaded
+across eight enqueue call sites (`legacy` is migration-only and no producer ever
+assigns it); the re-arm UPSERT REPLACES origin while preserving `upstream_id`, and it is an additive
+public field on `GET /v1/qso/{uuid}/uploads` (`api-endpoints.md` updated). Every producer
+carries a reversion proof; two — `submit.go`'s `isImport` derivation and `update.go` —
+were found unguarded BY that proof and are now pinned.
 
-**Decided together with SHIP GATE item (d):** full version string, which the restructure
-makes affordable — **+6% vs today** (29.4 MiB at 30 days) instead of **+23%** (34.0 MiB)
-for version stamping alone. Both figures on the corrected 15.51-day divisor.
+**SHIP GATE item (d) is decided but NOT shipped:** full version string, which this
+restructure makes affordable — **+6% vs today** (29.4 MiB at 30 days) instead of **+23%**
+(34.0 MiB) for version stamping alone, on the corrected 15.51-day divisor. That is
+**Diff C**, still open.
 
 Original finding below; its measurement narrative is the evidence for the decision and
 is worth keeping until Diff B closes it.

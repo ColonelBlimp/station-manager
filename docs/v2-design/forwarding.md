@@ -552,8 +552,18 @@ last_attempt_at   INTEGER (unix) — diagnostic only, workers do not read
 next_attempt_at   INTEGER (unix) — load-bearing for the claim query (§5)
 last_error        TEXT   -- most recent Result.Err message when not success
 upstream_id       TEXT   -- optional; set from Result.UpstreamID on success
+origin            TEXT   -- (migration 0007) NOT NULL, no default; WHY the row exists:
+                  --   'live'|'import'|'edit'|'manual'|'stamp_sync'|'reconcile'|'legacy'
+                  --   Distinct from `action`, which is WHAT is being forwarded.
+                  --   'legacy' is migration-only; no producer assigns it.
 UNIQUE(qso_id, forwarder_name, action)
 ```
+
+> **Tier-2 note (2026-08-01):** this file is a historical design brief
+> (`docs/README.md`), not a live reference — but the block above is a schema
+> *contract* others code against, so `origin` was appended rather than left to
+> read as complete. The authoritative shape is the migration set; see
+> `0007_qso_upload_origin.up.sql`.
 
 ### Changes from v1
 

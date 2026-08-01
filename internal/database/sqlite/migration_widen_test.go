@@ -13,7 +13,7 @@ import (
 // insert — a 500 on a live submit and, worse, a hard abort of a bulk import. Values
 // past the new ceilings still reject, so the guard isn't simply removed.
 func TestMigrate0006_WidensModeAndCall(t *testing.T) {
-	svc := testService(t) // all migrations applied, including 0006
+	svc := testService(t) // all migrations applied (head), including 0006
 	db := svc.handle
 
 	if _, err := db.Exec(`INSERT INTO logbook (id, callsign, name) VALUES (1, 'G4ABC', 'L')`); err != nil {
@@ -54,7 +54,7 @@ func TestMigrate0006_WidensModeAndCall(t *testing.T) {
 // parses and rebuilds the three tables cleanly, and that the narrower CHECK is truly
 // back in force between the two steps.
 func TestMigrate0006_DownRoundTrips(t *testing.T) {
-	svc := testService(t) // at head (0006)
+	svc := testService(t) // at head; 0006 is no longer head, hence the absolute target below
 
 	// Roll back just 0006 — TO version 5, explicitly. Relative steps broke the
 	// moment 0007 landed (this read -1 and rolled back the wrong migration), and

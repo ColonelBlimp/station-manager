@@ -214,11 +214,14 @@ func TestReconciler_EndToEnd(t *testing.T) {
 
 // Reconcile's producer mapping for Diff B (docs/reviews/forwarding-logging-gaps.md
 // F1). Covers BOTH distinct enqueue call sites, because reconcile shares
-// EnqueueUploads/EnqueueDeleteUploads with the MANUAL backfill — the pair most
-// easily collapsed onto one constant, and the pair whose confusion made "why is
-// smcloud busy?" a day-bucketing exercise in the first place. `manual` is pinned
-// from the other side in internal/api, so a single hard-coded value fails one of
-// the two.
+// EnqueueUploads with the MANUAL backfill — the pair most easily collapsed onto
+// one constant, and the pair whose confusion made "why is smcloud busy?" a
+// day-bucketing exercise in the first place. `manual` is pinned from the other
+// side in internal/api, so a single hard-coded value fails one of the two.
+//
+// EnqueueDeleteUploads is NOT shared: reconcile is its only caller. It still gets
+// its own assertion below because it is a SECOND call site that could be wired to
+// the wrong constant independently.
 //
 // Each half asserts the expected queue ROW AND ACTION exists BEFORE asserting its
 // origin. Without that, a fixture that never reached the enqueue path would report

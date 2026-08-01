@@ -27,8 +27,8 @@ import (
 //   - stamp_sync, whose enqueue is a different method entirely.
 //
 // `reconcile` is pinned in internal/forwarding/smcloud, where the reconciler can
-// actually be driven; it shares EnqueueUploads/EnqueueDeleteUploads with `manual`,
-// which is exactly why both ends need their own assertion.
+// actually be driven. It shares EnqueueUploads with `manual`, which is exactly why
+// both ends need their own assertion; EnqueueDeleteUploads is reconcile-only.
 //
 // These read the stored row rather than a log line: origin is queue state, and
 // the log record merely reports it.

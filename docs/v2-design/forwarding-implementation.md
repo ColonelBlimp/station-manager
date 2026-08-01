@@ -237,8 +237,9 @@ returns a concrete `Forwarder` or an error.
 
 ### 4.3 The `qso_upload` table
 
-Defined in `internal/database/sqlite/migrations/0001_init.up.sql` ≈
-line 150. Columns worth knowing about:
+Defined in `internal/database/sqlite/migrations/log/0001_init.up.sql` ≈
+line 150, as amended by later migrations (0004 timestamps, 0006 widths,
+0007 `origin`). Columns worth knowing about:
 
 | Column            | Notes                                                 |
 |-------------------|-------------------------------------------------------|
@@ -252,6 +253,7 @@ line 150. Columns worth knowing about:
 | `next_attempt_at` | Unix time; **load-bearing**. Claim filter uses it.    |
 | `last_error`      | Short text. Cleared on `uploaded`.                    |
 | `upstream_id`     | Stored NULL when the forwarder returns `""`.          |
+| `origin`          | *(migration 0007)* `NOT NULL`, **no default**, `CHECK IN ('live','import','edit','manual','stamp_sync','reconcile','legacy')`. WHY the row exists, as against `action` = WHAT is forwarded. No default so a raw/generated insert omitting provenance fails loudly. A re-enqueue by a different cause REPLACES it; an ordinary retry does not. `legacy` is assigned only by the migration. |
 
 Constraints:
 
@@ -296,12 +298,45 @@ for _, fwd := range s.Config.Forwarders() {
     if !shouldEnqueue(fwd, action.Insert) {
         continue
     }
-    if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type); err != nil {
+    // origin (migration 0007) names WHY the row exists; see below.
+    if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type, org); err != nil {
         _ = tx.Rollback()
         return ...
     }
 }
 ```
+
+> **Amended 2026-08-01 — `origin`, and there are now more than three producers.**
+> This section predates migration 0007 and the F1 provenance work
+> (`docs/reviews/forwarding-logging-gaps.md`); it is a Tier-2 historical brief
+> (`docs/README.md`), so the original text stands and the current shape is
+> recorded here rather than rewritten above.
+>
+> `InsertQsoUploadTx` takes a trailing `origin.Origin`. **Six producer values
+> across eight enqueue call sites** — `legacy` is assigned only by the migration
+> and by no producer:
+>
+> | Producer | Site | `origin` |
+> |---|---|---|
+> | live logging | `submit.go` (`isImport == false`) | `live` |
+> | bulk import | `submit_batch.go`, and `submit.go` when `isImport` | `import` |
+> | operator edit | `update.go` | `edit` |
+> | operator delete | `delete.go` | `edit` (the row's `action` is `delete`) |
+> | manual backfill | `enqueue.go` via `EnqueueUploads`, called by the API handler | `manual` |
+> | stamp-sync mirror | `stamp_sync.go` | `stamp_sync` |
+> | reconcile repair | `enqueue.go` via `EnqueueUploads` **and** `EnqueueDeleteUploads`, both called by the smcloud reconciler | `reconcile` |
+>
+> `EnqueueUploads` is shared by the manual and reconcile producers, so it takes
+> `origin` as a **parameter** rather than inferring it — `force` does not separate
+> them. `EnqueueDeleteUploads` has only the reconcile caller but takes it too, for
+> the same reason it could acquire another.
+>
+> **Re-enqueue REPLACES origin; an ordinary retry PRESERVES it.** The conflict
+> branch of the upsert sets `origin = excluded.origin` while deliberately
+> preserving `upstream_id` — opposite treatments of two columns in one statement.
+> Retry bookkeeping (`MarkUploadTransientRetryWithContext`) and the startup orphan
+> reset touch neither, so a row keeps the provenance of whatever last *enqueued*
+> it, not of whatever last *attempted* it.
 
 `shouldEnqueue` is defined once in `forwarders.go`:
 

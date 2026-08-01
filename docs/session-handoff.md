@@ -51,11 +51,25 @@ precisely so we don't re-derive state or redo finished work.
 >   `writer_service_test.go` — note the precise one: a later `Initialize()` still
 >   RETURNS the nil-ConfigService error; what cannot happen is the capture logger being
 >   replaced.
-> - **PROCESS FAULT WORTH REMEMBERING: `b1c50913` left main RED.** RED tests were
->   committed without their implementation, and CI gates every push — the
->   `638b3198`/`1be5ae65` case from CLAUDE.md, now with a broken revision in
->   `git bisect`'s path. Codex filed both P1s correctly. `0265f04a` closed it. **Ship
->   tests + implementation as ONE commit.**
+> - **PROCESS FAULT, NOW THREE TIMES IN ONE DAY: RED tests committed without their
+>   implementation.** `b1c50913` (closed by `0265f04a`), the `f31738bc` pair, and
+>   `59542a8a` (followed by `ed0f0657`). CI gates every push, so each left main red
+>   on a revision that was never a release candidate and put a broken commit in
+>   `git bisect`'s path. Codex filed a correct P1 on each.
+>   **ACCEPTED HISTORICAL DAMAGE, NOT "CLOSED."** All three are on `origin/main`.
+>   A later commit makes the TREE correct; it does not repair the history, and
+>   rewriting shared main would be worse than the damage. So `git bisect` across
+>   this day's range will land on revisions that do not build or that serve a wrong
+>   API shape — expect it, do not re-litigate it.
+>   **The third is materially worse and is the one to remember.** `59542a8a` carried
+>   `types.QsoUpload.Origin` — `json:"origin"` with no `omitempty` — without its
+>   migration or producers, so that revision **changed the public API to emit
+>   `"origin": ""`** on every item of `GET /v1/qso/{uuid}/uploads`. Not a failing
+>   gate: a wire contract shipped with a wrong value. The operator had explicitly
+>   said the field "must remain part of the same atomic Diff B and never ship
+>   alone", and that warning was written verbatim into the field's own doc comment.
+>   **Ship tests + implementation as ONE commit — and STAGE it as one, rather than
+>   describing a diff as atomic and leaving the split to the commit step.**
 > - **A REVERSION PROOF LIED, AND WAS CAUGHT.** The first A9 revert deleted the
 >   `ErrorLog` field, which broke the build — the test never ran, so the proof was
 >   worthless. It surfaced only because the run produced NO matching output and the

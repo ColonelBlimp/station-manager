@@ -1,10 +1,14 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 )
 
 // Migration proof for Diff B of docs/reviews/forwarding-logging-gaps.md — the
@@ -345,3 +349,65 @@ func TestMigrate0007_DownPreservesEveryPreExistingColumn(t *testing.T) {
 // proof. It now lives in internal/api/uploads_origin_test.go, driven through two
 // real producers (live logging, then a manual backfill of the same QSO), which
 // also pins the shared EnqueueUploads path.
+
+// The Go-boundary guard on origin (InsertQsoUploadTx's origin.Parse call).
+//
+// It exists ALONGSIDE the column CHECK, not instead of it: this one fails at the
+// call site, naming both the offending VALUE and the OPERATION, before issuing
+// any qso_upload SQL. (Not "before the transaction does any work" — the caller
+// has usually already written the QSO row in the same tx.) The CHECK is the
+// backstop for anything that reaches SQL by another route.
+//
+// Added after review found it untested (2026-08-01) — the schema half was pinned
+// and the Go half was asserted only by the code's own comment.
+func TestInsertQsoUpload_RejectsUnknownOriginAtTheGoBoundary(t *testing.T) {
+	svc := testService(t)
+	seedLogbookAndQsoRow(t, svc.handle)
+
+	ctx := context.Background()
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer cancel()
+	defer func() { _ = tx.Rollback() }()
+
+	err = svc.InsertQsoUploadTx(ctx, tx, 1, action.Insert, "qrz", "qrz", origin.Origin("invalid"))
+	if err == nil {
+		t.Fatal("an unknown origin must be refused; the closed value set is the whole point of the column")
+	}
+	// All three, because the comment above claims all three. Without the value and
+	// the operation this is no better than the bare CHECK violation the guard
+	// exists to improve on — which is exactly what removing origin.Parse produces:
+	//   "constraint failed: CHECK constraint failed: origin IN (…)"
+	for _, want := range []string{
+		"unknown upload origin",            // what went wrong
+		`"invalid"`,                        // WHICH value
+		"sqlite.Service.InsertQsoUploadTx", // WHICH operation
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+// The valid case, so the guard above cannot pass by refusing everything.
+func TestInsertQsoUpload_AcceptsAKnownOrigin(t *testing.T) {
+	svc := testService(t)
+	seedLogbookAndQsoRow(t, svc.handle)
+
+	ctx := context.Background()
+	tx, cancel, err := svc.BeginTxContext(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer cancel()
+
+	if err := svc.InsertQsoUploadTx(ctx, tx, 1, action.Insert, "qrz", "qrz", origin.Manual); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("a known origin must be accepted: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}

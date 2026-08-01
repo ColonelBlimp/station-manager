@@ -2807,7 +2807,9 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 		return errors.New(op).WithMsg("forwarderType is empty")
 	}
 	// Validated Go-side as well as by the column CHECK: this fails at the call
-	// site naming the offending value, before a transaction does any work.
+	// site, naming both the offending value and this operation, before issuing any
+	// qso_upload SQL. Not "before the transaction does any work" — the caller has
+	// usually already written the QSO row in the same tx.
 	if _, err := origin.Parse(org.String()); err != nil {
 		return errors.New(op).WithErr(err)
 	}
