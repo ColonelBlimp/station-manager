@@ -213,14 +213,13 @@ func (s *Service) KeyFt8Tx(ctx context.Context, mode string) error {
 	// Generation re-checked because clearFt8TxOnDisconnect takes only s.mu, not
 	// keyMu — a teardown can land between the write returning and this line.
 	s.mu.Lock()
-	var driveTr driveWatchTransition
 	if s.ft8TxActive && s.ft8TxGen == ft8Gen {
-		driveTr = s.armDriveWatch(ft8Gen)
+		s.armDriveWatch(ft8Gen)
 	}
 	s.mu.Unlock()
 	// Outside the lock, like every other emit on this path — a stalled log write
 	// must not block the read loop that feeds the detector.
-	s.logDriveWatchTransition(driveTr)
+	s.flushDriveWatchLog()
 	return nil
 }
 
@@ -310,9 +309,9 @@ func (s *Service) releaseFt8TxChecked(ctx context.Context, reason string, wantGe
 	s.mu.Unlock()
 	if err := s.writeKeyedLine(ctx, def, cl, unkey, "ft8 tx-off"); err != nil {
 		s.mu.Lock()
-		driveTr := s.unsealMeterGapWindow()
+		s.unsealMeterGapWindow()
 		s.mu.Unlock()
-		s.logDriveWatchTransition(driveTr)
+		s.flushDriveWatchLog()
 		s.logger.ErrorWith().Err(err).Str("reason", reason).
 			Msg("bridge: ft8 tx-off write failed; backstop will retry")
 		return errors.New(errOp).WithErr(err).WithMsg("write ft8 tx-off")

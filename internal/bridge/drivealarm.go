@@ -124,7 +124,7 @@ func driveMonitorFor(meterSel string) string {
 // gen is the ft8TxGen of this transmission — the callback is gated on it like
 // the auto-off backstop, so a timer outliving its transmission cannot alarm
 // against the next one.
-func (s *Service) armDriveWatch(gen uint64) driveWatchTransition {
+func (s *Service) armDriveWatch(gen uint64) {
 	s.driveAlarmed = false
 	// The gap measurement opens BEFORE the instrument-alive check, so it keeps
 	// running on exactly the transmissions where the detector declines to act. Its
@@ -136,7 +136,8 @@ func (s *Service) armDriveWatch(gen uint64) driveWatchTransition {
 	// link, AI mode not armed, a rig that does not push RM) to a dead
 	// transmitter.
 	if !s.meterSeenSinceTx {
-		return s.enterDriveWatchStateLocked(driveWatchNoMeter, gen)
+		s.enterDriveWatchStateLocked(driveWatchNoMeter, gen)
+		return
 	}
 	// The rig pushes RM0 = the value of whatever meter is SELECTED, and only PO
 	// says anything about RF. A correctly-driven FT8 signal reads near zero on
@@ -150,7 +151,8 @@ func (s *Service) armDriveWatch(gen uint64) driveWatchTransition {
 	// seen, or a rigdef that reports none) still arms, so this fixes the measured
 	// fault without silently disabling detection on rigs that never answer MS.
 	if driveMonitorFor(s.meterSel) == DriveMonitorMeterNotPO {
-		return s.enterDriveWatchStateLocked(driveWatchMeterNotPO, gen)
+		s.enterDriveWatchStateLocked(driveWatchMeterNotPO, gen)
+		return
 	}
 	// From here the transmission IS being watched, which is what makes a silent
 	// outcome positive evidence of normal output rather than an absence of data.
@@ -161,17 +163,21 @@ func (s *Service) armDriveWatch(gen uint64) driveWatchTransition {
 	// drive that never comes up at all is caught — the common shape.
 	s.driveLastMeterAt = time.Now()
 	s.driveTimer = time.AfterFunc(s.driveSilence, func() { s.checkDriveSilence(gen) })
-	return s.enterDriveWatchStateLocked(driveWatchArmed, gen)
+	s.enterDriveWatchStateLocked(driveWatchArmed, gen)
 }
 
 // driveWatchTransition is a CHANGE in whether drive detection is running. The
 // zero value means "no change", which is the overwhelmingly common case — 691
 // transmissions on 2026-08-01 against a whole-log warn population of 460, so a
 // per-transmission line would invert what Warn means in this log.
+// meterSel is captured when the transition is RECORDED, not when it is emitted.
+// Reading the live selection at emit time reported whatever the knob was on by
+// then, which on the very transition that says the meter moved is the wrong
+// answer by construction.
 type driveWatchTransition struct {
-	changed  bool
 	from, to string
 	gen      uint64
+	meterSel string
 }
 
 // enterDriveWatchStateLocked records this transmission's outcome and reports any
@@ -185,31 +191,64 @@ type driveWatchTransition struct {
 // transition machine compares against, and must NOT be cleared — clearing it
 // would re-report every state as new after each transmission, which is exactly
 // the per-transmission spray this design exists to avoid.
-func (s *Service) enterDriveWatchStateLocked(next string, gen uint64) driveWatchTransition {
+// It QUEUES any change rather than returning it for the caller to log, because
+// the state changes under s.mu while the emit happens after the unlock. Two
+// goroutines — the pipeline read loop in observeMeter and whoever is keying —
+// could therefore record A then B and emit B then A, leaving "drive detection
+// restored" as the last line while the state was actually dark. That inverts the
+// one fact this feature exists to report (codex P1 on 1273752d).
+func (s *Service) enterDriveWatchStateLocked(next string, gen uint64) {
 	s.driveWatchOutcome = next
 	prev := s.driveWatchState
 	if prev == "" {
 		prev = driveWatchUnknown
 	}
 	if prev == next {
-		return driveWatchTransition{}
+		return
 	}
 	s.driveWatchState = next
-	return driveWatchTransition{changed: true, from: prev, to: next, gen: gen}
+	s.drivePendingLog = append(s.drivePendingLog, driveWatchTransition{
+		from: prev, to: next, gen: gen, meterSel: s.meterSel,
+	})
 }
 
-// logDriveWatchTransition reports a change in monitoring state. Called WITHOUT
-// s.mu — a stalled log write must not block the read loop that feeds the
-// detector, the same rule the alarm and the meter summary follow.
+// flushDriveWatchLog emits queued transitions in the order the state actually
+// changed. Called WITHOUT s.mu — a stalled log write must not block the read loop
+// that feeds the detector, the same rule the alarm and the meter summary follow.
+//
+// The ordering guarantee comes from two locks doing different jobs. Records are
+// APPENDED under s.mu, which is what serialises the state changes themselves; they
+// are DRAINED under driveLogMu, which admits one emitter at a time. A drainer
+// takes whatever is queued in FIFO order, so a caller that records first is
+// reported first even if a later caller reaches the emitter first.
+//
+// Every path that records must call this after unlocking. It is safe to call with
+// nothing queued, and safe for two callers to race — one drains both records and
+// the other finds an empty queue.
+func (s *Service) flushDriveWatchLog() {
+	s.driveLogMu.Lock()
+	defer s.driveLogMu.Unlock()
+	for {
+		s.mu.Lock()
+		if len(s.drivePendingLog) == 0 {
+			s.mu.Unlock()
+			return
+		}
+		tr := s.drivePendingLog[0]
+		s.drivePendingLog = s.drivePendingLog[1:]
+		s.mu.Unlock()
+		s.emitDriveWatchTransition(tr)
+	}
+}
+
+// emitDriveWatchTransition writes one transition. Caller holds driveLogMu and no
+// other lock.
 //
 // WARN, not Error, and the distinction is the operator's (2026-08-01): this is a
 // safety-monitoring DEGRADATION, not a confirmed transmitter failure. Error stays
 // reserved for DriveAlarmNoOutput, so an Error in this log continues to mean "the
 // rig is keyed and nothing is coming out".
-func (s *Service) logDriveWatchTransition(tr driveWatchTransition) {
-	if !tr.changed {
-		return
-	}
+func (s *Service) emitDriveWatchTransition(tr driveWatchTransition) {
 	if tr.to == driveWatchArmed {
 		// unknown -> armed is the ordinary first transmission of a healthy session.
 		// Nothing was ever reported lost, so there is nothing to restore, and a line
@@ -222,7 +261,7 @@ func (s *Service) logDriveWatchTransition(tr driveWatchTransition) {
 		return
 	}
 	s.logger.WarnWith().Str("from", tr.from).Str("to", tr.to).Uint64("tx_gen", tr.gen).
-		Str("meter_sel", s.meterSelection()).
+		Str("meter_sel", tr.meterSel).
 		Msg("bridge: drive detection went dark — a transmitter failure would not be reported")
 }
 
@@ -343,7 +382,7 @@ func (s *Service) sealMeterGapWindow(at time.Time) {
 // Frames pushed during the failed write are lost to the measurement, which errs
 // towards reporting MORE silence than there was — the safe direction for an
 // instrument hunting for silence, and the rig may well still have been keyed.
-func (s *Service) unsealMeterGapWindow() driveWatchTransition {
+func (s *Service) unsealMeterGapWindow() {
 	s.meterGapKeyedFor = 0
 	s.meterGapSealed = false
 	// The transmission is resuming, so the selector question re-opens — and any
@@ -361,10 +400,9 @@ func (s *Service) unsealMeterGapWindow() driveWatchTransition {
 		// tick to notice. Gated on an armed watch, since with none there is no
 		// protection to report lost.
 		if s.driveWatchArmed {
-			return s.enterDriveWatchStateLocked(driveWatchMovedOffPO, s.ft8MeterGen)
+			s.enterDriveWatchStateLocked(driveWatchMovedOffPO, s.ft8MeterGen)
 		}
 	}
-	return driveWatchTransition{}
 }
 
 // closeMeterGapWindow ends measurement. Caller holds s.mu. Called from
@@ -451,9 +489,9 @@ func (s *Service) checkDriveSilence(gen uint64) {
 		// see: this watch armed and succeeded. Reported here so the slot that lost
 		// detection is the slot that says so — the next arm would report it one
 		// transmission late, against a different tx_gen (operator's call, 2026-08-01).
-		tr := s.enterDriveWatchStateLocked(driveWatchMovedOffPO, gen)
+		s.enterDriveWatchStateLocked(driveWatchMovedOffPO, gen)
 		s.mu.Unlock()
-		s.logDriveWatchTransition(tr)
+		s.flushDriveWatchLog()
 		return
 	}
 	if since := time.Since(s.driveLastMeterAt); since < s.driveSilence {

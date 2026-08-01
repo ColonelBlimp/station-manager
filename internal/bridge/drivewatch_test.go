@@ -108,6 +108,22 @@ import (
 // call) each turn it red on their own. The lesson generalises past this file —
 // when a fix touches N call sites, the proof must revert each of them separately,
 // or N-1 of them are unguarded.
+//
+// A FIFTH, and the only one that was a genuine logic defect rather than a fixture
+// failure: EVERY RULE ABOVE IS SINGLE-THREADED, and the subject is not. State
+// changes under s.mu but emits happen after the unlock, so the read loop inside
+// observeMeter and whoever is keying could record A then B and emit B then A —
+// leaving "drive detection restored" as the final line while detection was dark.
+// The rules all passed because each drove one goroutine. Fixed by queueing records
+// under s.mu and draining them under a separate emit lock, so log order is
+// record order; DW12 pins the operator-facing claim (the last transition line
+// agrees with the state) and DW13 pins that a went-dark line reports the selection
+// as it was WHEN it changed, which the emit-time read got wrong by construction on
+// the one transition whose subject is the selection moving. Proof O1 drains LIFO —
+// the race's exact signature — and DW12 then fails with the reviewer's own words.
+//
+// The generalisation worth keeping: a rule that never runs two of the subject's
+// goroutines cannot see an ordering defect, however behavioural its assertion.
 
 // syncBuf is a mutex-guarded buffer. logging.Service serialises its own writes,
 // but a test reading while the detector's timer goroutine writes would still
@@ -525,6 +541,92 @@ func TestDriveWatch_TaintOnFailedUnkey_ReportsAndLabelsTheSummary(t *testing.T) 
 		t.Errorf("meters record drive_watch = %q, want %q — after a failed unkey the rig "+
 			"is still keyed with its meter off PO, so the window cannot read as armed",
 			dw, driveWatchMovedOffPO)
+	}
+}
+
+// DW12 — THE LAST TRANSITION LINE AGREES WITH REALITY. Two goroutines record
+// transitions: the pipeline read loop inside observeMeter, and whoever is keying.
+// The state changes under s.mu but the emit happens after the unlock, so without
+// ordering the two can record A then B and emit B then A — leaving "drive
+// detection restored" as the final line while detection is actually dark. That
+// inverts the single fact this whole feature exists to report, which makes it
+// worse than emitting nothing (codex P1 on 1273752d).
+//
+// THE INTERLEAVING IS CONSTRUCTED, NOT RACED, following the precedent D19 set for
+// the sealed-window case: two records are made under one lock hold, which is
+// exactly the state two racing recorders leave behind — both queued before either
+// emitter runs. The assertion is on the observable: the order records appear in
+// the log, and whether the last one matches the state the daemon is actually in.
+func TestDriveWatch_TransitionsAreLoggedInTheOrderTheStateChanged(t *testing.T) {
+	s, fake, buf := newDriveWatchService(t)
+	shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+
+	slot(t, s, "", false) // establish a dark state (no_meter) with its own Warn
+
+	// Both recorded before either is emitted — the racing case.
+	s.mu.Lock()
+	s.driveWatchArmed = true
+	s.enterDriveWatchStateLocked(driveWatchArmed, 7)      // A: detection came back
+	s.enterDriveWatchStateLocked(driveWatchMovedOffPO, 7) // B: and went dark again
+	s.mu.Unlock()
+	s.flushDriveWatchLog()
+
+	restored := matching(t, buf, restoredMsg)
+	dark := matching(t, buf, wentDarkMsg)
+	if len(restored) != 1 {
+		t.Fatalf("restored records = %d, want 1", len(restored))
+	}
+	if len(dark) != 2 {
+		t.Fatalf("went-dark records = %d, want 2 (the initial no_meter, then B)", len(dark))
+	}
+
+	// The observable claim: read the log top to bottom and the last thing it says
+	// about detection must be true.
+	var lastTransition string
+	for _, rec := range records(t, buf) {
+		msg, _ := rec["message"].(string)
+		switch {
+		case strings.Contains(msg, restoredMsg):
+			lastTransition = restoredMsg
+		case strings.Contains(msg, wentDarkMsg):
+			lastTransition = wentDarkMsg
+		}
+	}
+	if lastTransition != wentDarkMsg {
+		t.Errorf("the last transition line says %q, but the state is dark — an operator "+
+			"reading down the log is told protection is running when it is not",
+			lastTransition)
+	}
+	if to, _ := dark[1]["to"].(string); to != driveWatchMovedOffPO {
+		t.Errorf("final went-dark record to = %q, want %q", to, driveWatchMovedOffPO)
+	}
+}
+
+// DW13 — the went-dark line reports the selection AS IT WAS when the state
+// changed, not whenever the record happens to be emitted. Reading the live
+// selection at emit time is wrong by construction on the one transition whose
+// subject IS the selection moving: by then the knob may have moved again.
+func TestDriveWatch_WentDarkReportsTheSelectionAtTransitionTime(t *testing.T) {
+	s, fake, buf := newDriveWatchService(t)
+	shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+
+	s.mu.Lock()
+	s.meterSel = "ALC"
+	s.enterDriveWatchStateLocked(driveWatchMeterNotPO, 3)
+	// The operator keeps turning the knob before anything is emitted.
+	s.meterSel = "SWR"
+	s.mu.Unlock()
+	s.flushDriveWatchLog()
+
+	got := matching(t, buf, wentDarkMsg)
+	if len(got) != 1 {
+		t.Fatalf("went-dark records = %d, want 1", len(got))
+	}
+	if sel, _ := got[0]["meter_sel"].(string); sel != "ALC" {
+		t.Errorf("meter_sel = %q, want ALC — the selection that made the watch go dark, "+
+			"not whatever the knob reached before the record was written", sel)
 	}
 }
 

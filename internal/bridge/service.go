@@ -329,6 +329,18 @@ type Service struct {
 	driveWatchOutcome string
 	driveWatchState   string
 
+	// drivePendingLog holds transitions recorded but not yet emitted (guarded by
+	// s.mu); driveLogMu admits ONE emitter at a time so they reach the log in the
+	// order the state changed.
+	//
+	// Both are needed because the state changes under s.mu and the emit happens
+	// after the unlock. Without the queue, the read loop in observeMeter and
+	// whoever is keying could record A then B and emit B then A, leaving "drive
+	// detection restored" as the last line while the state was dark — inverting the
+	// one fact this reporting exists for (codex P1 on 1273752d).
+	drivePendingLog []driveWatchTransition
+	driveLogMu      sync.Mutex
+
 	// ft8MeterGen is the generation of the transmission the meter accumulator
 	// belongs to, set where that generation is established (ft8tx.go) rather than
 	// read at flush time — finishFt8Tx increments ft8TxGen BEFORE flushing, so the

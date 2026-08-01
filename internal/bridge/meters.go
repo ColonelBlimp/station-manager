@@ -215,7 +215,6 @@ type ft8MeterSummary struct {
 func (s *Service) observeMeter(status cat.Status) {
 	s.mu.Lock()
 	announce := false
-	var driveTr driveWatchTransition
 	// The selection is a mapped literal ("PO"), not a number, so it is recorded
 	// rather than run through the numeric accumulation below.
 	if sel, ok := status[meterSelTag]; ok && sel != "" {
@@ -246,7 +245,7 @@ func (s *Service) observeMeter(status cat.Status) {
 			// no watch running there is no protection to lose, and driveSelTainted is
 			// still set unconditionally because recovery suppression depends on it.
 			if s.driveWatchArmed {
-				driveTr = s.enterDriveWatchStateLocked(driveWatchMovedOffPO, s.ft8MeterGen)
+				s.enterDriveWatchStateLocked(driveWatchMovedOffPO, s.ft8MeterGen)
 			}
 		}
 	}
@@ -315,7 +314,7 @@ func (s *Service) observeMeter(status cat.Status) {
 			Str("meters", strings.Join(meterTags, ",")).
 			Msg("bridge: rig pushes meter frames (RM); meter observation is live")
 	}
-	s.logDriveWatchTransition(driveTr)
+	s.flushDriveWatchLog()
 }
 
 // flushFt8TxMeters returns the readings accumulated during the transmission
