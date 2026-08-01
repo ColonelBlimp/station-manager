@@ -16,10 +16,19 @@ import (
 var originSource string
 
 // Mirrors action_test.go / status_test.go, plus one guard the others do not need:
-// origin's value set is duplicated in a database CHECK constraint (migration
-// 0007), so the two can drift silently. TestParse_CoversEveryDeclaredConstant
-// reads the const block from source and fails when a constant is added here
-// without being taught to Parse — the half of that drift this package can see.
+// TestParse_CoversEveryDeclaredConstant reads the const block from source and
+// fails when a constant is declared without being taught to Parse.
+//
+// SCOPE, deliberately narrow (operator, 2026-08-01): these tests prove things
+// about THIS PACKAGE only — that every declared Origin parses, and that a set of
+// specific non-members does not. origin's values are also duplicated in migration
+// 0007's CHECK constraint, and NOTHING HERE PROVES THE TWO AGREE: this package
+// cannot see the schema, and a constant taught to Parse but missing from the
+// CHECK would pass every test in this file. Go↔schema agreement is a separate
+// concern, owned by the schema side (internal/database/sqlite,
+// TestMigrate0007_OriginIsClosedAndHasNoDefault) and by the Go-boundary guard
+// (TestInsertQsoUpload_RejectsUnknownOriginAtTheGoBoundary). Do not let this
+// file's comments grow into a claim about either.
 
 func TestOriginString(t *testing.T) {
 	cases := map[Origin]string{
@@ -74,9 +83,12 @@ func TestParse_UnknownReturnsError(t *testing.T) {
 	}
 }
 
-// A value the DB CHECK would reject must not parse either. `startup_recovery` is
-// the specific one considered and deliberately NOT added (2026-08-01): orphan
-// recovery preserves the existing origin rather than assigning a new one.
+// Values outside the enum must not parse. `startup_recovery` is the specific one
+// considered and deliberately NOT added (2026-08-01): orphan recovery preserves
+// the existing origin rather than assigning a new one.
+//
+// This asserts Parse's behaviour, NOT that the DB would reject the same strings —
+// see the scope note at the top of the file.
 func TestParse_RejectsDeliberatelyExcludedValues(t *testing.T) {
 	for _, s := range []string{"startup_recovery", "backfill", "sync", "LIVE", ""} {
 		if _, err := Parse(s); err == nil {
@@ -94,9 +106,14 @@ func TestParse_RejectsDeliberatelyExcludedValues(t *testing.T) {
 // the test claimed to detect exactly the drift it was blind to (found in review,
 // 2026-08-01). Reading the const block is the only way the claim can be true.
 //
-// The drift this guards is real: the value set is duplicated in migration 0007's
-// CHECK constraint, so a constant added here and taught to neither Parse nor the
-// CHECK is a split brain that surfaces only on the write path.
+// What this proves, exactly: every constant declared in origin.go round-trips
+// through Parse. That is worth guarding because a constant declared and not
+// taught to Parse is rejected by the very code meant to accept it — a failure
+// only the write path would surface.
+//
+// What it does NOT prove: that migration 0007's CHECK contains the same set. This
+// package cannot see the schema, and the reverse gap (taught to Parse, absent
+// from the CHECK) would pass here. See the scope note at the top of the file.
 func TestParse_CoversEveryDeclaredConstant(t *testing.T) {
 	// The source is EMBEDDED, not located. Two clean-room reviews in a row caught
 	// this test failing before it tested anything, each time because it tried to
