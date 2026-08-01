@@ -51,6 +51,17 @@ func testServerWithCfg(t *testing.T, mutate func(cfg *config.Config)) *Server {
 // mux (rather than calling its handler directly) must build the server this way.
 func testServerWithFt8(t *testing.T, mutate func(cfg *config.Config), ft8Svc *ft8.Service) *Server {
 	t.Helper()
+	return testServerWithLogger(t, mutate, ft8Svc, nil)
+}
+
+// testServerWithLogger is testServerWithFt8 with an optional logger override, so a
+// test can assert on what the server LOGS rather than only what it returns. Pass
+// logging.NewForWriter(&buf); nil builds the usual file-backed logger, leaving
+// every existing caller unchanged.
+func testServerWithLogger(
+	t *testing.T, mutate func(cfg *config.Config), ft8Svc *ft8.Service, logOverride *logging.Service,
+) *Server {
+	t.Helper()
 
 	cfg := config.DefaultConfig(t.TempDir())
 	cfg.Datastore.Path = ":memory:"
@@ -63,11 +74,14 @@ func testServerWithFt8(t *testing.T, mutate func(cfg *config.Config), ft8Svc *ft
 		t.Fatalf("config init: %v", err)
 	}
 
-	logSvc := &logging.Service{}
-	logSvc.ConfigService = cfgSvc
-	logSvc.WorkingDir = cfgSvc.WorkingDir()
-	if err := logSvc.Initialize(); err != nil {
-		t.Fatalf("logging init: %v", err)
+	logSvc := logOverride
+	if logSvc == nil {
+		logSvc = &logging.Service{}
+		logSvc.ConfigService = cfgSvc
+		logSvc.WorkingDir = cfgSvc.WorkingDir()
+		if err := logSvc.Initialize(); err != nil {
+			t.Fatalf("logging init: %v", err)
+		}
 	}
 
 	dbSvc := &sqlite.Service{}
