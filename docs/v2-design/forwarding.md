@@ -198,7 +198,7 @@ issues one confidential key per application and auto-deletes any key it
 finds published in source code, so SM keeps it out of both source AND
 `config.json`: it is stamped into the binary at build time via `-ldflags`
 from the gitignored `.env` (`CLUBLOG_API_KEY` → `clublog.InjectedAPIKey`,
-the same `-X` channel as `main.Version`). A compiled binary is not source
+the same `-X` channel as `internal/buildinfo.Version`). **NB:** the symbol moved from `main.Version` to `…/internal/buildinfo.Version` on 2026-08-01. `-X` on a symbol that does not exist **exits 0 and stamps nothing**, so a stale `-X main.Version=` silently produces a `dev` build.. A compiled binary is not source
 code, so this honours ClubLog's rule. A binary built without the key still
 constructs the forwarder (a `Build()` error would abort the whole daemon)
 but short-circuits every upload to Unreachable with no network call, so the

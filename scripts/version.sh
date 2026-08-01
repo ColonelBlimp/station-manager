@@ -4,8 +4,11 @@
 # it can be sourced from the bash build scripts and from Taskfile `sh:` vars.
 #
 # The version flows two places that differ in what they accept:
-#   - cmd/smd's `main.Version` (via -X) → daemon User-Agent + ADIF
-#     PROGRAMVERSION + /v1/version. Wants the readable semver-ish string.
+#   - `internal/buildinfo.Version` (via -X) → daemon User-Agent, ADIF
+#     PROGRAMVERSION, GET /v1/version, and the `version` field on EVERY log
+#     record. Wants the readable semver-ish string. NB: -X on a nonexistent
+#     symbol exits 0 and stamps NOTHING, so the old `-X main.Version=` silently
+#     produces a `dev` build.
 #   - the RPM `Version:` field → cannot contain '-' (the NVR separator), so
 #     it needs sanitising.
 

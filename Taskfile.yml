@@ -5,7 +5,9 @@ dotenv: ['.env']
 vars:
   # Build version derived from git (v2.* tags, via scripts/version.sh) so
   # `task`-built and `task run` daemons carry the same semver as the RPM
-  # builds — feeds cmd/smd main.Version → User-Agent + ADIF PROGRAMVERSION.
+  # builds — feeds internal/buildinfo.Version → User-Agent, ADIF PROGRAMVERSION
+  # and the `version` field on every log record. (-X on a symbol that no longer
+  # exists exits 0 and stamps nothing: main.Version was removed 2026-08-01.)
   SM_VERSION:
     sh: bash -c '. scripts/version.sh && sm_git_version'
   # Container runtime for the smcloud dev Postgres. Defaults to podman (Fedora-
@@ -26,7 +28,7 @@ tasks:
     desc: Compile the whole module and build the daemon binary (CGO on → live FT8 capture)
     cmds:
       - CGO_ENABLED=1 go build ./...
-      - CGO_ENABLED=1 go build -tags dev -ldflags="-X main.Version={{.SM_VERSION}} -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" -o build/bin/smd ./cmd/smd
+      - CGO_ENABLED=1 go build -tags dev -ldflags="-X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version={{.SM_VERSION}} -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" -o build/bin/smd ./cmd/smd
 
   # --- SM Cloud P1 (ADR 0040) — dev Postgres + sqlboiler codegen -------------
   # Workflow: `task db:pg:up && task migrate:cloud:up && task models:cloud`.
@@ -148,7 +150,7 @@ tasks:
       shape) use build:smd:static; for faster decode use build:smd:pocketfft.
     deps: [frontend:build:all, manual:build]
     cmds:
-      - CGO_ENABLED=1 go build -tags dev -ldflags="-X main.Version={{.SM_VERSION}} -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" -o build/bin/smd ./cmd/smd
+      - CGO_ENABLED=1 go build -tags dev -ldflags="-X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version={{.SM_VERSION}} -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" -o build/bin/smd ./cmd/smd
 
   build:smd:static:
     desc: |
@@ -158,7 +160,7 @@ tasks:
       for a headless / network-only aggregator node.
     deps: [frontend:build:all, manual:build]
     cmds:
-      - CGO_ENABLED=0 go build -ldflags="-X main.Version={{.SM_VERSION}} -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" -o build/bin/smd ./cmd/smd
+      - CGO_ENABLED=0 go build -ldflags="-X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version={{.SM_VERSION}} -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" -o build/bin/smd ./cmd/smd
 
   build:smd:pocketfft:
     desc: |
@@ -170,7 +172,7 @@ tasks:
       CGO-free shape.
     deps: [frontend:build:all, manual:build]
     cmds:
-      - CGO_ENABLED=1 go build -tags "dev pocketfft" -ldflags="-X main.Version={{.SM_VERSION}} -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" -o build/bin/smd ./cmd/smd
+      - CGO_ENABLED=1 go build -tags "dev pocketfft" -ldflags="-X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version={{.SM_VERSION}} -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" -o build/bin/smd ./cmd/smd
 
   build:smcloud:
     desc: |
@@ -200,7 +202,7 @@ tasks:
     desc: |
       Build a development RPM ready for local install. Output:
       build/release/station-manager-dev.x86_64.rpm. Internal version
-      string is "dev" (also injected as cmd/smd's Version → daemon
+      string is "dev" (also injected as internal/buildinfo.Version → daemon
       User-Agent and ADIF PROGRAMVERSION). For a one-command
       build→install→restart, use `task deploy:local:dev` instead.
       CGO-free/static by default; for the PocketFFT (CGO) variant use
@@ -297,7 +299,7 @@ tasks:
       # restart flap). Tolerant of not-running / unit-not-installed.
       - echo "stopping systemd smd (if running) to free :8080 - restart it later with systemctl --user start smd"
       - systemctl --user stop smd 2>/dev/null || true
-      - CGO_ENABLED=1 go run -tags dev -ldflags="-X main.Version={{.SM_VERSION}} -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" ./cmd/smd
+      - CGO_ENABLED=1 go run -tags dev -ldflags="-X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version={{.SM_VERSION}} -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" ./cmd/smd
 
   tag:
     desc: |

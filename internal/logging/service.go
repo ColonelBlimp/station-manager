@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/buildinfo"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -119,7 +120,14 @@ func (s *Service) Initialize() error {
 			}
 		}
 
-		logger := zerolog.New(mw).With().Logger()
+		// Build version on EVERY record's base context (SHIP GATE item (d)). Before
+		// this it appeared once per daemon start, so attribution meant replaying a
+		// file forward from a marker — which breaks on rotation (a rotated file can
+		// open mid-run) and is lost entirely by any grep. buildinfo.Version is the
+		// single carrier; "dev" when unstamped — the FIELD is always present, but
+		// "dev" says only that the build was unstamped, not WHICH build wrote the
+		// record. Exact attribution needs a stamped build.
+		logger := zerolog.New(mw).With().Str("version", buildinfo.Version).Logger()
 
 		level, levelErr := zerolog.ParseLevel(s.LoggingConfig.Level)
 		if levelErr != nil {

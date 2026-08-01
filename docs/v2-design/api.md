@@ -649,7 +649,8 @@ pointer ids.
   reachable. `{"status":"ok"}`.
 - `GET /v1/version` — diagnostic. Shape:
   `{"daemon":"<build>","go":"<runtime>","schema":{"version":N,"dirty":bool}?}`.
-  `daemon` is the `-X main.Version=...` ldflag value (defaults
+  `daemon` is the `-X …/internal/buildinfo.Version=...` ldflag value (defaults
+  to `dev`). **NB:** the symbol moved from `main.Version` to `…/internal/buildinfo.Version` on 2026-08-01. `-X` on a symbol that does not exist **exits 0 and stamps nothing**, so a stale `-X main.Version=` silently produces a `dev` build.
   to `"dev"`). `schema` is omitted (not failed) if the
   migration-version probe errors — the rest of the info still
   responds 200.

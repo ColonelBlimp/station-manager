@@ -4,6 +4,8 @@ import (
 	"io"
 	"sync"
 
+	"github.com/ColonelBlimp/station-manager/internal/buildinfo"
+
 	"github.com/rs/zerolog"
 )
 
@@ -49,7 +51,11 @@ func NewForWriter(w io.Writer) *Service {
 	}
 	s := &Service{}
 	s.initOnce.Do(func() {
-		logger := zerolog.New(&lockedWriter{w: w}).Level(zerolog.TraceLevel)
+		// Same base-context stamp as the real initialiser, so a test asserting on
+		// captured records sees what the daemon actually writes.
+		logger := zerolog.New(&lockedWriter{w: w}).
+			Level(zerolog.TraceLevel).
+			With().Str("version", buildinfo.Version).Logger()
 		s.logger.Store(&logger)
 		s.isInitialized.Store(true)
 	})

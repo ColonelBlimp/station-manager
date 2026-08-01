@@ -58,10 +58,13 @@ public field on `GET /v1/qso/{uuid}/uploads` (`api-endpoints.md` updated). Every
 carries a reversion proof; two — `submit.go`'s `isImport` derivation and `update.go` —
 were found unguarded BY that proof and are now pinned.
 
-**SHIP GATE item (d) is decided but NOT shipped:** full version string, which this
-restructure makes affordable — **+6% vs today** (29.4 MiB at 30 days) instead of **+23%**
-(34.0 MiB) for version stamping alone, on the corrected 15.51-day divisor. That is
-**Diff C**, still open.
+**SHIP GATE item (d) SHIPPED 2026-08-01 (Diff C):** full version string on every
+record's base logger context, plus the pre-logger `logStartupFailure` writer that
+bypasses `logging.Service`. `internal/buildinfo.Version` is the single carrier —
+`cmd/smd`'s `main.Version` was REMOVED, not aliased, and all smd ldflags retargeted
+(`cmd/smcloud` keeps its own, out of scope). Cost as decided: **+6% vs today**
+(29.4 MiB at 30 days) instead of **+23%** (34.0 MiB) had it shipped without this
+restructure, on the corrected 15.51-day divisor.
 
 Original finding below; its measurement narrative is the evidence for the decision and
 is worth keeping until Diff B closes it.

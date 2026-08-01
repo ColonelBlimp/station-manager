@@ -88,7 +88,7 @@ fi
 echo "── [2/3] Building daemon → build/bin/smd (version: ${VERSION}, FFT: ${FFT_BACKEND}) ──"
 mkdir -p build/bin
 CGO_ENABLED=$CGO_VAL go build -trimpath -tags "${BUILD_TAGS}" \
-    -ldflags="-s -w -X main.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" \
+    -ldflags="-s -w -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" \
     -o build/bin/smd ./cmd/smd
 
 echo "── [3/3] Packaging RPM → ${OUTPUT} (RPM version: ${RPM_VERSION}) ──"

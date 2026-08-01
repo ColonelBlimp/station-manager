@@ -22,6 +22,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/api"
 	"github.com/ColonelBlimp/station-manager/internal/bridge"
+	"github.com/ColonelBlimp/station-manager/internal/buildinfo"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/email"
@@ -53,10 +54,6 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
-
-// Version is the daemon build version, served by /v1/version. Override
-// at build time with: go build -ldflags "-X main.Version=1.2.3" ...
-var Version = "dev"
 
 // Process exit codes. Named so service managers (systemd, monit,
 // supervisord) can distinguish a clean startup-error exit from an
@@ -181,7 +178,7 @@ func run() error {
 	// headers. Package global; process-lifetime, set once at daemon
 	// boot. Tests that import the adif package must reset it if they
 	// care about isolation.
-	adif.ProgramVersion = Version
+	adif.ProgramVersion = buildinfo.Version
 
 	// ---- Load configuration ----
 	// defaultConfigPath calls utils.WorkingDir as part of its
@@ -209,10 +206,10 @@ func run() error {
 	// with surrounding whitespace (review 2026-06-06 L1).
 	cfg.UserAgent = strings.TrimSpace(cfg.UserAgent)
 	if cfg.UserAgent == "" {
-		cfg.UserAgent = "station-manager/" + Version
+		cfg.UserAgent = "station-manager/" + buildinfo.Version
 	}
 	if cfg.UserAgent == "" {
-		err := fmt.Errorf("global UserAgent resolved to empty string; cannot start daemon (build version=%q)", Version)
+		err := fmt.Errorf("global UserAgent resolved to empty string; cannot start daemon (build version=%q)", buildinfo.Version)
 		logStartupFailure(err)
 		return err
 	}
@@ -345,8 +342,10 @@ func run() error {
 			Str("path", firstRunPath).
 			Msg("first run: wrote default config to disk")
 	}
+	// No Str("version", …) here: the base logger context carries it on every
+	// record now, and setting it again would emit the key TWICE — legal JSON that
+	// json.Unmarshal silently collapses, and two values that could drift.
 	loggerSvc.InfoWith().
-		Str("version", Version).
 		Msg("smd starting")
 
 	// Confirmation line so an operator can verify their config.json
@@ -836,7 +835,7 @@ func run() error {
 		pskreporter.Receiver{
 			Call:     pskRxCall,
 			Locator:  strings.TrimSpace(cfg.LoggingStation.MyGridsquare),
-			Software: "StationManager " + Version,
+			Software: "StationManager " + buildinfo.Version,
 			Antenna:  strings.TrimSpace(cfg.LoggingStation.MyAntenna), // ADIF MY_ANTENNA — single source
 		},
 		loggerSvc,
@@ -898,7 +897,7 @@ func run() error {
 	}()
 
 	// ---- Start HTTP server ----
-	server := api.New(cfg, Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc, bridgeSvc, ft8Svc)
+	server := api.New(cfg, buildinfo.Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc, bridgeSvc, ft8Svc)
 	if smcloudRec != nil {
 		// On-demand reconcile (the "back up / check now" action) — same
 		// Reconciler instance as the periodic loop.

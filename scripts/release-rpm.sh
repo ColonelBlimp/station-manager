@@ -12,7 +12,7 @@
 # Example: scripts/release-rpm.sh 2.0.0
 #          scripts/release-rpm.sh v2.0.0-rc.1   (leading 'v' is stripped)
 #
-# The explicit <version> is the readable build version (-X main.Version →
+# The explicit <version> is the readable build version (-X …/internal/buildinfo.Version →
 # daemon User-Agent + ADIF PROGRAMVERSION). It is sanitised for the RPM
 # Version field, which cannot contain '-' (see scripts/version.sh). For the
 # git-derived dogfood version, use scripts/dev-rpm.sh instead.
@@ -99,14 +99,15 @@ fi
 
 echo "── [2/3] Building daemon → build/bin/smd (version: ${VERSION}, FFT: ${FFT_BACKEND}) ──"
 mkdir -p build/bin
-# -X main.Version injects the build version into cmd/smd's `var Version`
+# -X …/internal/buildinfo.Version injects the build version into the single
+# carrier buildinfo.Version (cmd/smd no longer declares its own)
 # which feeds both the User-Agent header on outbound HTTP and the
 # PROGRAMVERSION field on ADIF exports.
 # CLUBLOG_API_KEY (the build-injected ClubLog app key) arrives from the caller's
 # env — passed into the release container by scripts/release.sh (-e), or from the
 # shell/.env for a bare run. Empty → the ClubLog forwarder stays inert.
 CGO_ENABLED=$CGO_VAL go build -trimpath "${TAGS_ARG[@]}" \
-    -ldflags="-s -w -X main.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" \
+    -ldflags="-s -w -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" \
     -o build/bin/smd ./cmd/smd
 
 echo "── [3/3] Packaging RPM → build/release/ (RPM version: ${RPM_VERSION}) ──"

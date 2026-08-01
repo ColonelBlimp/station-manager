@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/buildinfo"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
@@ -48,9 +49,14 @@ func logStartupFailure(startupErr error) {
 	}
 	defer func() { _ = f.Close() }()
 
+	// version from the SAME carrier the logging service uses (buildinfo.Version),
+	// not a local copy: this record is written when config.json is missing or
+	// malformed, i.e. on a fresh deploy, where "which build is this?" is the first
+	// question and there is no other stamped line in the file to answer it.
 	line, err := json.Marshal(map[string]string{
 		"level":   "error",
 		"time":    time.Now().UTC().Format(time.RFC3339),
+		"version": buildinfo.Version,
 		"message": "smd startup failed (fatal) before logging was initialised — check config.json",
 		"error":   startupErr.Error(),
 	})
