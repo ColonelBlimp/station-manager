@@ -30,8 +30,46 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-07-31)
+## Current state (as of 2026-08-01)
 
+> **2026-08-01 — FIVE package logging audits (66 findings, one file each in
+> `docs/reviews/*-logging-gaps.md`), then the first fix batch shipped: the
+> "why did the daemon stop?" trio. NOT DEPLOYED — the running build predates it.**
+>
+> - **THE AUDITS.** `internal/ft8` (14) · `internal/bridge` (14) · `internal/api` (12) ·
+>   `internal/qsoservice` (10) · `internal/forwarding` (16). Each file has a
+>   **"verified NOT gaps"** section — in three of the five it is longer than the
+>   findings and is the part that stops a later pass re-filing settled questions or
+>   applying a dangerous fix. **Read it before acting on any finding.**
+> - **SHIPPED (`b1c50913` tests + `0265f04a` implementation): api A1, api A9,
+>   forwarding F4** — three independent routes by which "why did the daemon stop?"
+>   bypassed `smd.log`. Marked ✅ in their files with shipped detail; backlog index
+>   lines updated so they are not re-picked.
+> - **NEW TEST SEAM: `logging.NewForWriter(io.Writer) *Service`.** Before it, no
+>   package outside `internal/logging` could assert on emitted records. It unblocks the
+>   remaining 63 findings, not just these three. Its own guarantees are pinned in
+>   `writer_service_test.go` — note the precise one: a later `Initialize()` still
+>   RETURNS the nil-ConfigService error; what cannot happen is the capture logger being
+>   replaced.
+> - **PROCESS FAULT WORTH REMEMBERING: `b1c50913` left main RED.** RED tests were
+>   committed without their implementation, and CI gates every push — the
+>   `638b3198`/`1be5ae65` case from CLAUDE.md, now with a broken revision in
+>   `git bisect`'s path. Codex filed both P1s correctly. `0265f04a` closed it. **Ship
+>   tests + implementation as ONE commit.**
+> - **A REVERSION PROOF LIED, AND WAS CAUGHT.** The first A9 revert deleted the
+>   `ErrorLog` field, which broke the build — the test never ran, so the proof was
+>   worthless. It surfaced only because the run produced NO matching output and the
+>   failure text was read rather than the silence accepted. The valid proof reverts to
+>   `stdlog.New(os.Stderr, …)`, the actual pre-fix behaviour.
+> - **TWO STALE-DOC CORRECTIONS, both found by grepping code not docs.** SHIP GATE item
+>   (b) ("QSO deletes write no log line") is **FALSE** — `delete.go:85` has logged since
+>   `d516d816`, 2026-05-17, *before the entry was written*; struck in the backlog. And
+>   `registry.go` documented a startup log that did not exist; F4 made the comment true.
+> - **NEXT: see "NEXT SESSION" below.** The volume decision (forwarding F1 +
+>   SHIP GATE item (d)) should come before adding further lines.
+>
+> ---
+>
 > **2026-07-31 — a real meter-summary defect fixed, the FT8 sequencer's per-contact
 > state made structural, code-quality gates adopted for BOTH halves of the tree
 > (golangci-lint metrics + ESLint complexity + prettier), and — evening session — the

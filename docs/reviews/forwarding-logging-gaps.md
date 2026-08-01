@@ -173,7 +173,20 @@ the interesting transitions carry no line at all.** They are the same defect see
 two ends, and the restructuring decision in F1 should be made with F5/F6/F7 in view —
 those are the lines that should exist.
 
-### F4. `registry.go` documents a startup-fatal log that does not exist — Tier 1
+### F4. ✅ FIXED 2026-08-01 (`0265f04a`) — `registry.go` documented a log that did not exist
+
+**Shipped.** `spawnForwarderWorkers` (`cmd/smd/main.go:1294`) now logs at **Error** with
+`forwarder`, `type` and the fault before returning — named fields only, never the
+config, so a credential cannot be serialized. Not zerolog `Fatal`: returning the error
+must stay responsible for the orderly deferred cleanup `os.Exit` would skip.
+`registry.go`'s doc comment now reads *"logged at Error before startup aborts"* — true
+rather than aspirational. Scope stayed narrow per the operator: the `forwarding.Build`
+failure only; missing retry defaults and `worker.New` failures were **not** folded in,
+and `TestForwarderBuildFailure_NotEmittedForOtherStartupFailures` pins that. The
+credential test refuses to pass vacuously. Original finding below.
+
+---
+
 
 `registry.go:63-64` states, as the justification for a security rule:
 

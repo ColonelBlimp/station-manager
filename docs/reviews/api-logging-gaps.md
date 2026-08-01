@@ -38,7 +38,19 @@ state?**
 
 ## Tier 1
 
-### A1. The shutdown path logs nothing — `HTTP server listening` has no closing bracket
+### A1. ✅ FIXED 2026-08-01 (`0265f04a`) — The shutdown path logs nothing
+
+**Shipped.** `StopAccepting` emits `HTTP server draining` exactly once (via
+`draining.Swap`, so the idempotent method cannot duplicate the marker); `Shutdown`
+emits `HTTP server shutdown complete` once and **only on success**, guarded by a new
+`shutdownLogged` — `shutdownOnce` could not serve, being consumed by the channel close
+on the first call even when that call failed. A failed Shutdown deliberately leaves the
+opening unmatched, which is the accurate report. The trigger stays in `cmd/smd` per the
+operator's decision. Pinned by `internal/api/shutdown_logging_test.go`, including the
+repeated-call case. Original finding below.
+
+---
+
 
 `server.go:438` logs `HTTP server listening` with protocol and address. There is no
 counterpart anywhere. Both shutdown entry points are silent:
@@ -275,7 +287,19 @@ operator assumes.
 - **Secret-safe, and this is not optional here:** field names and counts only. Never the
   request body, never the merged config, never a credential value. See NOT gaps.
 
-### A9. `http.Server.ErrorLog` is unset, so Go's own diagnostics bypass `smd.log` — Tier 2
+### A9. ✅ FIXED 2026-08-01 (`0265f04a`) — `http.Server.ErrorLog` unset
+
+**Shipped.** `httpErrorLogWriter` (`internal/api/middleware.go`) adapts net/http's
+`*log.Logger` sink onto the structured logger at **Warn**, per the operator's decision
+that Debug would hide exactly what this restores. It never returns an error —
+propagating a logging fault into net/http's error path would turn it into a serving
+fault. Pinned by `TestHTTPServerErrorLog_*`, including the negative case.
+**Reversion-proof note:** the first revert attempt (deleting the field) broke the build
+and proved nothing; the valid proof reverts to `stdlog.New(os.Stderr, …)` — the actual
+pre-fix behaviour. Original finding below.
+
+---
+
 
 `server.go:331-332` constructs `&http.Server{Handler: …, ReadHeaderTimeout: …, …}` and
 never sets `ErrorLog`. Go therefore falls back to `log.Default()` — stderr.
