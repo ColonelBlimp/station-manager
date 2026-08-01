@@ -32,7 +32,85 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Current state (as of 2026-08-01)
 
-> **2026-08-01 — FIVE package logging audits (66 findings, one file each in
+> **2026-08-01, LATER THE SAME DAY — the audit findings started shipping. Four more
+> commits: the auto-work pill fix, bridge B1 (drive-watch state reporting, two
+> commits), and api A7. DEPLOYED MID-SESSION and validated on the air on 12 m;
+> A7 is the only thing not running.**
+>
+> - **DEPLOY STATE:** running `2.0.0-alpha.1-1021-gda962028` since **14:47:36**,
+>   version stamp verified against HEAD (not `dev` — the `-X` trap did not bite).
+>   **HEAD is `3fdba1a2` (A7), which is NOT deployed.** So a datastore fault right
+>   now still reports as unset config.
+> - **`b93bd417` — starting a Call-CQ run stops an armed auto-work run.** From a
+>   dogfood report ("the auto-work armed stays active, or the pill stays viewable").
+>   It was BOTH and the pill was innocent: `StartCallCq` reset caller / stalledCalls
+>   / confirmHold / contact and never touched `autoWork`. It could not FIRE
+>   (`onSlotIdleArmed` needs `mode == seqIdle`, and a Call-CQ contact resumes CQ
+>   rather than ending), so this was never a rogue-transmission risk — it removed an
+>   indicator naming the wrong mechanism plus a stale offset/dial pin. Cleared ahead
+>   of the status publish; W12 pins the state, **V5 pins that the CQ's own frame
+>   carries it** and is demonstrably load-bearing (move the clear after the publish:
+>   W12 green, V5 red).
+> - **`1273752d` + `da962028` — bridge B1, and it went WIDER than the finding.**
+>   Drive-watch is now a four-state transition machine (`armed` / `no_meter` /
+>   `meter_not_po` / `meter_moved_off_po`), **Warn on entering a dark state, Info on
+>   recovery, NO line when unchanged** — the operator's design, and the level was his
+>   call against my hesitation. The measurement backed him: the declined branches are
+>   ~3% of transmissions here, not the sticky whole-session state I predicted. Also
+>   added on his direction: a per-transmission `drive_watch` field on the existing
+>   meters record, and the mid-TX taint branch (a third silent early return no
+>   arm-time transition could see). **The Error alarm now carries its own evidence** —
+>   `meter_sel`, `meter_n`, `meter_po_max`, `gap_ms`, `gap_max_ms`, `tx_gen` — all of
+>   which were already computed at the emit point and discarded.
+>   **B1 had the priority wrong and I stated it wrongly too:** I ranked it first
+>   because it had a measured cost that morning, but the 08:45 alarms took the ARMED
+>   path, so B1's own fix would not have explained them. The alarm-evidence half is
+>   what addresses them.
+> - **`3fdba1a2` — api A7, and the operator OVERRULED the finding's own
+>   prescription, correctly.** "Log only, do not change the fail-closed behaviour"
+>   would have logged the cause while leaving the operator reading *"set your station
+>   callsign in My Station"* with a broken database. His ruling: **fail closed means
+>   never fall back to another callsign and never transmit; it does not require
+>   preserving the misleading 400.** So: unexpected DB error → **503 `db_unavailable`**
+>   (the code `handler_health.go` already uses) + Error log with cause, `logbook_id`,
+>   `op`; genuinely unset config → 400 `no_station_callsign`, unchanged. Neither
+>   starts a session or keys PTT, and **neither disarms** — these routes require TX
+>   already armed. The SPA needed no change (`ft8qso.ts` already maps ≥500 to a
+>   `server` outcome carrying the daemon's message).
+> - **ON-AIR VALIDATION, 12 m, 16 transmissions:** all `drive_watch=armed`, **zero
+>   transition lines, zero alarms**, `gap_max_ms` 245–269 ms against a 3000 ms
+>   threshold, `po_max` 109, `po_n` 559–615. That is the no-spray design confirmed in
+>   production rather than predicted — a per-transmission scheme would have emitted 16
+>   warns for those slots.
+> - **THE DAY'S REAL LESSON — FIVE WAYS A RULE CAN BE GREEN AND WORTHLESS.** The
+>   drive-watch work took five review rounds and four of the findings were FIXTURE
+>   failures, not logic errors. All five shapes are written into
+>   `internal/bridge/drivewatch_test.go`'s header with their proofs: (1) the fixture
+>   excluded the interval; (2) presence asserted instead of value; (3) an identifier
+>   that identified nothing (and the obvious fix carried the WRONG generation, because
+>   `finishFt8Tx` increments before flushing); (4) **one fix, two sites, one proof** —
+>   when a fix touches N call sites the proof must revert each separately or N-1 are
+>   unguarded; (5) **every rule was single-threaded and the subject is not** — twelve
+>   green rules could not see an ordering defect that left "drive detection restored"
+>   as the last line while detection was dark. Read that header before writing rules
+>   for anything concurrent.
+> - **THREE DRIVE ALARMS TODAY (08:45:03, 08:45:33, 10:08:35) CANNOT BE RE-EXAMINED.**
+>   They were logged by the pre-deploy build and carry `code` alone. Anything firing
+>   after `da962028` carries full evidence and joins to its meters record by `tx_gen`.
+>   The 10:08:35 one was never looked at.
+> - **NEXT:** the two silent hub evictions (`ft8` #1 + `bridge` B2 — one defect, two
+>   hubs, one commit); the FT8 side ends a live QSO via eviction → unsub → linger →
+>   `disarmTx`, indistinguishable from the operator closing the browser. Then SHIP
+>   GATE (a) config saves and (c) notification records. **~57 of 66 findings remain.**
+> - **PARKED, operator-flagged for "shortly":** a Call-CQ run has **no auto_off** —
+>   the answer-mode enum is three values and `operator_pick`, the only manual one, is
+>   rejected at runtime (`servicetx.go:855`) while config validation still ACCEPTS it,
+>   so saving it disables Call CQ until the error is noticed. The "off" the operator
+>   wants is the unbuilt pile-up stack. Memory: `ft8-cq-answerer-selection`.
+>
+> ---
+>
+> **2026-08-01 (earlier) — FIVE package logging audits (66 findings, one file each in
 > `docs/reviews/*-logging-gaps.md`), then SIX findings shipped across four atomic
 > diffs, plus SHIP GATE item (d). NOT DEPLOYED — the running build predates all
 > of it.**
@@ -108,21 +186,21 @@ precisely so we don't re-derive state or redo finished work.
 >   (b) ("QSO deletes write no log line") is **FALSE** — `delete.go:85` has logged since
 >   `d516d816`, 2026-05-17, *before the entry was written*; struck in the backlog. And
 >   `registry.go` documented a startup log that did not exist; F4 made the comment true.
-> - **NEXT — the volume decision is DONE, so the remaining 60 findings are now
->   unblocked.** Highest value first: `api-logging-gaps.md` **A7** (a failing
->   database is reported to the operator as unset configuration — the only finding
->   in the series where the daemon tells them to take the WRONG action), then
->   `bridge-logging-gaps.md` **B1** (the drive-collapse detector declines to arm
->   silently, and one branch is reported nowhere), then the two silent hub
->   evictions (`ft8` #1 + `bridge` B2 — one defect, two hubs, fix in one commit).
-> - **STILL UNDEPLOYED, and it matters for reading the log:** the running daemon is
->   `aba61729`. This morning's two `drive_no_output` alarms (08:45:03, 08:45:33)
->   are almost certainly FALSE — 6–7 meter samples against ~490 on healthy
->   transmissions, a 12.88 s gap in a 13.36 s key, and `meter_po_max` **120 vs 98**,
->   i.e. the rig reported MORE output on the few samples it sent. Operator disarmed
->   and re-armed at 08:44:24/08:44:31, seven seconds before the first. Cause not
->   established; cheapest next step is the operator's recollection of what changed,
->   then passive `cmd/catcli` observation. No transmission needed for either.
+> - ~~**NEXT — A7, then B1, then the hub evictions.**~~ **A7 and B1 both SHIPPED
+>   later the same day — see the block above.** The ordering advice itself was
+>   partly wrong: B1 was ranked ahead of the hub evictions because it "had a
+>   measured cost this morning", but the 08:45 alarms took the armed path and B1's
+>   fix would not have explained them. Remaining next step is unchanged: the two
+>   silent hub evictions.
+> - **This morning's two `drive_no_output` alarms (08:45:03, 08:45:33) are almost
+>   certainly FALSE** — 6–7 meter samples against ~490 on healthy transmissions, a
+>   12.88 s gap in a 13.36 s key, and `meter_po_max` **120 vs 98**, i.e. the rig
+>   reported MORE output on the few samples it sent. Operator disarmed and re-armed
+>   at 08:44:24/08:44:31, seven seconds before the first. **Cause never established,
+>   and now unestablishable** — they predate the deploy, so they carry `code` alone.
+>   A third alarm at 10:08:35 was never examined. The post-deploy 12 m session gives
+>   the healthy baseline to judge any future one against: `gap_max_ms` 245–269 ms,
+>   `po_max` 109, `po_n` 559–615.
 >
 > ---
 >
