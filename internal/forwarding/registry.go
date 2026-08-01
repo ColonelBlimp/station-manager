@@ -61,11 +61,11 @@ func Register(typeName string, ctor Constructor) {
 // config (bad credentials, etc.).
 //
 // A constructor's error MUST NOT embed a credential value. These errors are
-// logged as a startup fatal by spawnForwarderWorkers and raised again by the
-// config PUT's startup probe, so an echoed value lands in the daemon log — and a
-// URL credential can hide userinfo (https://user:token@host) that looks innocuous
-// in a format string. Name the field and the fault ("credentials.url has no
-// host"), never the value.
+// logged at Error before startup aborts by spawnForwarderWorkers and raised
+// again by the config PUT's startup probe, so an echoed value lands in the
+// daemon log — and a URL credential can hide userinfo (https://user:token@host)
+// that looks innocuous in a format string. Name the field and the fault
+// ("credentials.url has no host"), never the value.
 func Build(fc types.ForwarderConfig) (Forwarder, error) {
 	const op errors.Op = "forwarding.Build"
 

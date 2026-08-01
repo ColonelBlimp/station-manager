@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	stderr "errors"
+	stdlog "log"
 	"net"
 	"net/http"
 	"net/http/pprof"
@@ -81,6 +82,11 @@ type Server struct {
 	// them — so without this gate a client could reach a stopping/stopped
 	// subsystem over a held connection (review 2026-07-22 #3).
 	draining atomic.Bool
+	// shutdownLogged guards the shutdown-completion marker so it is emitted at
+	// most once even though Shutdown is idempotent. Separate from shutdownOnce,
+	// which is consumed by the shutdownCh close on the FIRST call regardless of
+	// whether that call succeeded.
+	shutdownLogged atomic.Bool
 }
 
 // New constructs a Server from the resolved services and config. The
@@ -330,6 +336,15 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	//                       middleware like limitSubmitRate / limitEventSubscribers)
 	s.httpServer = &http.Server{
 		Handler: s.logRequests(s.rejectWhenDraining(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(mux))))),
+		// net/http writes its own diagnostics — accept errors, TLS handshake
+		// failures, and panics on paths recoverPanic does not wrap — through
+		// ErrorLog. Left nil it falls back to log.Default(), i.e. stderr, so those
+		// land in the journal rather than smd.log: the file an operator is told to
+		// read and a remote admin is sent. Warn, not Debug: these are transport
+		// abnormalities, not routine access events, and Debug would hide them
+		// under the default Info configuration — which is the whole fault being
+		// fixed (operator, 2026-08-01).
+		ErrorLog: stdlog.New(&httpErrorLogWriter{logger: s.logger}, "", 0),
 		// ReadHeaderTimeout caps the pre-handler request-header read
 		// independently of ReadTimeout (which budgets headers + body
 		// together and is operator-tunable up to longer values for
@@ -459,7 +474,21 @@ func (s *Server) StopAccepting() {
 	// Raise the drain gate FIRST so rejectWhenDraining turns away any request
 	// arriving over an already-established keep-alive connection while the
 	// listener closes and subsystems tear down (review 2026-07-22 #3).
-	s.draining.Store(true)
+	// Swap rather than Store so the lifecycle marker below is emitted EXACTLY
+	// once. This method is idempotent and is called on paths that may repeat, so
+	// logging on entry would produce duplicate opening markers — and a duplicate
+	// opening destroys the only signal that distinguishes "drain began and did
+	// not complete" from "drain completed", which is what the marker exists for.
+	// Everything after this point stays unconditional: the operations are
+	// themselves idempotent and the log must not change teardown behaviour.
+	alreadyDraining := s.draining.Swap(true)
+	if !alreadyDraining {
+		// The TRIGGER (signal / restart request / serve error) is deliberately not
+		// carried here — cmd/smd already logs it immediately before calling this,
+		// so recording it again would widen this package's interface for a fact
+		// that is already in the log (operator, 2026-08-01).
+		s.logger.InfoWith().Msg("HTTP server draining")
+	}
 	// Stop honouring keep-alive too: in-flight responses get Connection: close so
 	// a client can't reuse a connection into the dying daemon after this returns.
 	if s.httpServer != nil {
@@ -490,6 +519,15 @@ func (s *Server) StopAccepting() {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.shutdownOnce.Do(func() { close(s.shutdownCh) })
 	err := s.httpServer.Shutdown(ctx)
+	// Completion is logged only on SUCCESS, and only once. A failed Shutdown
+	// (deadline exceeded with connections still open) has NOT completed the
+	// transition, so recording it would assert something untrue; leaving the
+	// opening marker unmatched is the accurate report. shutdownOnce cannot serve
+	// here — it is consumed by the channel close on the first call, which may be
+	// the call that failed.
+	if err == nil && !s.shutdownLogged.Swap(true) {
+		s.logger.InfoWith().Msg("HTTP server shutdown complete")
+	}
 	if s.protocol == "unix" && s.socketPath != "" {
 		// Ignore the remove error: the kernel may have already unlinked
 		// the file when the listener closed, and we're on the way out.

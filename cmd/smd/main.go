@@ -1293,6 +1293,22 @@ func spawnForwarderWorkers(
 
 		fwd, err := forwarding.Build(fc)
 		if err != nil {
+			// Startup aborts on the return below, and the returned error reaches
+			// only stderr (main.go's run() wrapper) — so without this line a
+			// credential or config fault leaves `smd starting` followed by
+			// `smd stopped` in smd.log with no cause. Error, deliberately not
+			// zerolog Fatal: returning the error must stay responsible for the
+			// orderly deferred cleanup that os.Exit would skip.
+			//
+			// Named fields only. Serializing fc would write the operator's
+			// credentials into a 0644 file — the rule stated at
+			// internal/forwarding/registry.go, whose doc comment this line makes
+			// true (it previously described logging that did not exist).
+			loggerSvc.ErrorWith().
+				Str("forwarder", fc.Name).
+				Str("type", fc.Type).
+				Err(err).
+				Msg("forwarder build failed")
 			return errors.New(op).WithErr(err).WithMsgf("build forwarder %q", fc.Name)
 		}
 

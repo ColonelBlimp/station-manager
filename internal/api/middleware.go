@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 
 // sseEventsPath is the daemon-firehose SSE endpoint.
@@ -27,6 +28,24 @@ func isSSEPath(p string) bool {
 	default:
 		return false
 	}
+}
+
+// httpErrorLogWriter adapts net/http's *log.Logger sink onto the structured
+// logger, so the server's own diagnostics reach smd.log instead of stderr. One
+// Write is one log record: net/http emits a complete line per diagnostic, and
+// the trailing newline is stripped so the field holds the message alone.
+//
+// It never returns an error — reporting a failure back into net/http's error
+// path is how a logging fault becomes a serving fault.
+type httpErrorLogWriter struct {
+	logger *logging.Service
+}
+
+func (w *httpErrorLogWriter) Write(p []byte) (int, error) {
+	w.logger.WarnWith().
+		Str("error", strings.TrimRight(string(p), "\n")).
+		Msg("http server error")
+	return len(p), nil
 }
 
 // recoverPanic wraps an http.Handler with a panic safety net.
