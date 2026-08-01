@@ -12,8 +12,14 @@
     `ft8-qso` SSE events. Our own callsign/grid are resolved server-side from the
     station config, not sent here. All return 202 with no body on success. Errors
     carry the daemon's {code, message} envelope — e.g. `ft8_tx_not_armed` /
-    `ft8_qso_in_progress` (409), `ft8_no_offset` / `no_station_callsign` (400).
-    Mirrors lib/api/ft8tx.ts.
+    `ft8_qso_in_progress` (409), `ft8_no_offset` / `no_station_callsign` (400),
+    `db_unavailable` (503). Mirrors lib/api/ft8tx.ts.
+
+    `no_station_callsign` and `db_unavailable` are deliberately DIFFERENT outcomes
+    and must stay that way in any wording: the first means the operator has not set
+    their callsign and can fix it in Settings, the second means the daemon cannot
+    read its logbook datastore and Settings is the wrong place to send them. They
+    were one 400 until 2026-08-01 (api audit finding A7).
 
     The operating-freq convention matters: the logged QSO frequency IS the rig dial
     frequency (FT8 places the signal at dial + audio-offset, but logs the dial), so

@@ -236,6 +236,42 @@ the config-commit case into **A4**. A8 below is the genuinely new half of that l
 
 ### A7. A database failure is reported to the operator as unset configuration — Tier 1
 
+> ✅ **FIXED 2026-08-01**, and the operator OVERRULED this entry's own prescription —
+> correctly. "Record the underlying error … do not change the fail-closed behaviour"
+> would have logged the cause while leaving the operator at the screen still reading
+> *"set your station callsign in My Station"*. His ruling: **fail closed means never
+> fall back to another callsign and never transmit after a DB error; it does not
+> require preserving the misleading 400.**
+>
+> So `currentStationIdentity` now returns an error, and all three FT8 TX entry points
+> split the two cases:
+>
+> | condition | response |
+> |---|---|
+> | logbook missing/empty AND config callsign empty | 400 `no_station_callsign` (unchanged) |
+> | unexpected datastore error | **503 `db_unavailable`** + Error log with cause, `logbook_id`, `op` |
+>
+> Neither starts a session nor keys PTT, and neither disarms: these routes require TX
+> already armed and the refusal leaves that state alone. `db_unavailable` is not new vocabulary — `handler_health.go`
+> already answers this fault with that status and code, so the operator meets one
+> name for one condition.
+>
+> **The trap, called out by the operator before the build:** `writeServerError`
+> hardcodes 500 (`httpkit.go:99`), so reaching for it here would have reported a 500
+> for a 503 condition. Proof R2 demonstrates it — `status = 500, want 503`.
+>
+> Rules + reasoning: `internal/api/station_identity_test.go` (S1-S4). The DB fault is
+> real, not mocked — closing the sqlite service makes `getOpenHandle` fail, which is
+> the shape an unreadable datastore actually produces. `api-endpoints.md` updated in
+> the same commit per the route-change rule.
+>
+> One rule deliberately NOT written, so its absence is not read as an oversight: the
+> criterion's "neither refusal starts a session or keys PTT" has no test of its own, because TX is
+> never armed in these fixtures — so no session could start whatever the handler did,
+> and a fixture that makes both paths agree proves nothing. S1/S2 pin it instead by
+> asserting the exact code: reaching the sequencer would answer with the arm-gate
+> refusal, so the codes ARE the evidence of the early return.
+
 `handler_ft8_qso.go:30-43`, `currentStationIdentity`:
 
 ```go

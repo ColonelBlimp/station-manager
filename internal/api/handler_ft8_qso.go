@@ -24,22 +24,55 @@ import (
 // call there could transmit the wrong call while qsoservice logs the logbook's
 // once the DB recovers (codex review of c93da89b, #1). The config fallback
 // applies only when the logbook is genuinely absent (pre-setup) or empty; any
-// other error returns callsign "" so the caller refuses to arm/transmit.
-// logbookID is always the current default (needed only when the callsign is
-// non-empty, i.e. when we actually arm).
-func (s *Server) currentStationIdentity(ctx context.Context) (callsign string, logbookID int64) {
+// other error returns callsign "" so no session is started and no PTT is keyed.
+// logbookID is always the current default. It is needed both when the callsign
+// resolves (pinned into the session at arm) and when the datastore fails, where it
+// names the logbook that could not be read on the diagnostic record.
+// The returned error is non-nil ONLY for an unexpected datastore failure, and
+// that is the whole point of it: an empty callsign with a nil error means the
+// station is genuinely unconfigured, which is a different fault demanding a
+// different action from the operator. Collapsing the two — as this did until
+// 2026-08-01 — reported a broken database as unset configuration and sent the
+// operator to a Settings screen to fix a field that was already correct
+// (internal/api logging audit, finding A7).
+//
+// Fail-closed is unchanged: a datastore error still yields no callsign, so no
+// session is started and no PTT is keyed on one. Note what this does NOT do — these
+// routes require TX to be armed already, and refusing here does not disarm it.
+func (s *Server) currentStationIdentity(ctx context.Context) (callsign string, logbookID int64, err error) {
 	snap := s.cfg.Snapshot()
 	logbookID = snap.DefaultLogbookID
-	lbCall, err := s.db.LogbookCallsignByIDWithContext(ctx, logbookID)
-	if err == nil {
+	lbCall, dbErr := s.db.LogbookCallsignByIDWithContext(ctx, logbookID)
+	if dbErr == nil {
 		if c := strings.TrimSpace(lbCall); c != "" {
-			return c, logbookID
+			return c, logbookID, nil
 		}
 	}
-	if err == nil || stderr.Is(err, errors.ErrNotFound) {
-		return strings.TrimSpace(snap.LoggingStation.StationCallsign), logbookID
+	if dbErr == nil || stderr.Is(dbErr, errors.ErrNotFound) {
+		return strings.TrimSpace(snap.LoggingStation.StationCallsign), logbookID, nil
 	}
-	return "", logbookID
+	return "", logbookID, dbErr
+}
+
+// writeStationIdentityUnavailable records why the datastore could not be read and
+// refuses the request with 503.
+//
+// NOT writeServerError, which hardcodes 500 (httpkit.go:99). This is a 503: the
+// daemon is healthy and its datastore is not, which is the distinction
+// handler_health.go already draws with the same `db_unavailable` code — so the
+// operator meets one name for one condition rather than two.
+//
+// The cause, the logbook that could not be read and the operation all go on the
+// record. Without them the log says only that something failed, which is where
+// finding A7 found things.
+func (s *Server) writeStationIdentityUnavailable(
+	w http.ResponseWriter, op errors.Op, err error, logbookID int64,
+) {
+	s.logger.ErrorWith().Err(err).Str("op", string(op)).Int64("logbook_id", logbookID).
+		Str("code", "db_unavailable").
+		Msg("station identity unreadable; refusing to start an ft8 session")
+	s.writeError(w, http.StatusServiceUnavailable, "db_unavailable",
+		"database is not reachable", op)
 }
 
 // validFt8SlotUTC reports whether v is the RFC3339 UTC timestamp the FT8
@@ -144,7 +177,11 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ls := s.cfg.Snapshot().LoggingStation
-	ourCall, logbookID := s.currentStationIdentity(r.Context())
+	ourCall, logbookID, idErr := s.currentStationIdentity(r.Context())
+	if idErr != nil {
+		s.writeStationIdentityUnavailable(w, op, idErr, logbookID)
+		return
+	}
 	if ourCall == "" {
 		s.writeError(w, http.StatusBadRequest, "no_station_callsign",
 			"set your station callsign in My Station before transmitting", op)
@@ -217,7 +254,11 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ls := s.cfg.Snapshot().LoggingStation
-	ourCall, logbookID := s.currentStationIdentity(r.Context())
+	ourCall, logbookID, idErr := s.currentStationIdentity(r.Context())
+	if idErr != nil {
+		s.writeStationIdentityUnavailable(w, op, idErr, logbookID)
+		return
+	}
 	if ourCall == "" {
 		s.writeError(w, http.StatusBadRequest, "no_station_callsign",
 			"set your station callsign in My Station before calling CQ", op)
@@ -296,7 +337,11 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 	// logbook can't be resolved (pre-setup, or a fail-closed transient DB error)
 	// → refuse to transmit rather than key the wrong call (codex review of
 	// 23907ffd, #1).
-	ourCall, logbookID := s.currentStationIdentity(r.Context())
+	ourCall, logbookID, idErr := s.currentStationIdentity(r.Context())
+	if idErr != nil {
+		s.writeStationIdentityUnavailable(w, op, idErr, logbookID)
+		return
+	}
 	if ourCall == "" {
 		s.writeError(w, http.StatusBadRequest, "no_station_callsign",
 			"set your station callsign in My Station before transmitting", op)

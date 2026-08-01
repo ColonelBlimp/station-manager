@@ -1017,3 +1017,5 @@ said. Plan future on-air experiments accordingly.
   demonstrated load-bearing by moving the clear after the publish, which leaves W12
   green and V5 red. No SPA change: it rebuilds the whole `qso` object per frame, so the
   `omitempty` on `auto_work_armed` reads as false and the pill goes out.
+- [2026-08-01] add to the map the ablity to filter (select) by band: all to whatever configured bands are in the config.
+- [2026-08-01] ad adjustable (width) headers to the session panel, plus the ability to order columns: asc, desc, raw
