@@ -3,9 +3,7 @@ package ft8
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/printer"
-	"go/token"
 	"os"
 	"runtime"
 	"sort"
@@ -143,21 +141,9 @@ func locksOnEntry(fd *ast.FuncDecl, calleeOf func(ast.Node) (string, bool)) bool
 }
 
 func TestSource_NoStatusPublishedAfterUnlock(t *testing.T) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
-	if err != nil {
-		t.Fatalf("parse package: %v", err)
-	}
-	var files []*ast.File
-	names := map[*ast.File]string{}
-	for _, pkg := range pkgs {
-		for name, f := range pkg.Files {
-			files = append(files, f)
-			names[f] = name
-		}
-	}
+	// Embedded sources, not ParseDir(".") — see source_guard_test.go. Read from
+	// disk this guard passed vacuously outside the package directory.
+	fset, files, names := packageSourceFiles(t)
 
 	render := func(e ast.Expr) string {
 		var b strings.Builder

@@ -2,10 +2,8 @@ package ft8
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/printer"
 	"go/token"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -222,15 +220,11 @@ func TestSource_SessionsEndOnlyThroughThePrimitive(t *testing.T) {
 		"seqAnsweringT4": true, "seqWorkingT4": true,
 	}
 
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
-	if err != nil {
-		t.Fatalf("parse package: %v", err)
-	}
-	for _, pkg := range pkgs {
-		for name, file := range pkg.Files {
+	// Embedded sources, not ParseDir(".") — see source_guard_test.go.
+	fset, sourceFiles, sourceNames := packageSourceFiles(t)
+	{
+		for _, file := range sourceFiles {
+			name := sourceNames[file]
 			for _, d := range file.Decls {
 				fd, ok := d.(*ast.FuncDecl)
 				if !ok || fd.Body == nil {
