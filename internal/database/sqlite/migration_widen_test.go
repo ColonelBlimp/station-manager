@@ -56,8 +56,10 @@ func TestMigrate0006_WidensModeAndCall(t *testing.T) {
 func TestMigrate0006_DownRoundTrips(t *testing.T) {
 	svc := testService(t) // at head (0006)
 
-	// Roll back just 0006.
-	applyMigrationSteps(t, svc, -1)
+	// Roll back just 0006 — TO version 5, explicitly. Relative steps broke the
+	// moment 0007 landed (this read -1 and rolled back the wrong migration), and
+	// would break again on every future one; naming the target version does not.
+	migrateToVersion(t, svc, 5)
 
 	if _, err := svc.handle.Exec(`INSERT INTO logbook (id, callsign, name) VALUES (1, 'G4ABC', 'L')`); err != nil {
 		t.Fatalf("seed logbook: %v", err)
@@ -74,7 +76,7 @@ func TestMigrate0006_DownRoundTrips(t *testing.T) {
 	}
 
 	// Re-apply 0006; DIGITALVOICE stores again.
-	applyMigrationSteps(t, svc, 1)
+	migrateToVersion(t, svc, 6)
 	if _, err := svc.handle.Exec(`INSERT INTO qso
 		(uuid, call, band, mode, freq, qso_date, time_on, time_off,
 		 rst_sent, rst_rcvd, country, dedupe_key, logbook_id)

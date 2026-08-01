@@ -7,6 +7,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -87,7 +88,7 @@ func TestEnqueueUploads_NoBulkBackfill_RefusesNoHistoryRows(t *testing.T) {
 	lbID := seedLogbook(t, s, "Main", "M0ABC")
 	u1, id1 := seedStoredQso(t, s, lbID, "K1AAA", "1200")
 
-	res, err := s.EnqueueUploads(context.Background(), "clublog", []string{u1}, false)
+	res, err := s.EnqueueUploads(context.Background(), "clublog", []string{u1}, false, origin.Manual)
 	require.NoError(t, err)
 	require.Zero(t, res.Enqueued)
 	require.Equal(t, []string{u1}, res.SkippedNoHistory)
@@ -106,7 +107,7 @@ func TestEnqueueUploads_NoBulkBackfill_RejectsForce(t *testing.T) {
 	lbID := seedLogbook(t, s, "Main", "M0ABC")
 	u1, id1 := seedStoredQso(t, s, lbID, "K1AAA", "1200")
 
-	_, err := s.EnqueueUploads(context.Background(), "clublog", []string{u1}, true)
+	_, err := s.EnqueueUploads(context.Background(), "clublog", []string{u1}, true, origin.Manual)
 	se := IsSubmitError(err)
 	require.NotNil(t, se, "want a SubmitError, got %v", err)
 	require.Equal(t, "force_unsupported", se.Code)
@@ -130,7 +131,7 @@ func TestEnqueueUploads_NoBulkBackfill_UploadedRowIsNotProvenance(t *testing.T) 
 	// so the stamp skip-check cannot mask the history classification.
 	tx, cancel, err := s.DB.BeginTxContext(ctx)
 	require.NoError(t, err)
-	require.NoError(t, s.DB.InsertQsoUploadTx(ctx, tx, id1, action.Insert, "clublog", "clublog"))
+	require.NoError(t, s.DB.InsertQsoUploadTx(ctx, tx, id1, action.Insert, "clublog", "clublog", origin.Live))
 	require.NoError(t, tx.Commit())
 	cancel()
 	claimed, err := s.DB.ClaimPendingUploadsWithContext(ctx, "clublog", 10)
@@ -138,7 +139,7 @@ func TestEnqueueUploads_NoBulkBackfill_UploadedRowIsNotProvenance(t *testing.T) 
 	require.Len(t, claimed, 1)
 	require.NoError(t, s.DB.MarkUploadSuccessWithContext(ctx, claimed[0].ID, "cl-1"))
 
-	res, err := s.EnqueueUploads(ctx, "clublog", []string{u1}, false)
+	res, err := s.EnqueueUploads(ctx, "clublog", []string{u1}, false, origin.Manual)
 	require.NoError(t, err)
 	require.Zero(t, res.Enqueued)
 	require.Equal(t, []string{u1}, res.SkippedNoHistory)
@@ -166,7 +167,7 @@ func TestEnqueueUploads_NoBulkBackfill_RetriesFailedLiveRow(t *testing.T) {
 	// queue row exists for clublog, driven to failed via the worker lifecycle.
 	tx, cancel, err := s.DB.BeginTxContext(ctx)
 	require.NoError(t, err)
-	require.NoError(t, s.DB.InsertQsoUploadTx(ctx, tx, id1, action.Insert, "clublog", "clublog"))
+	require.NoError(t, s.DB.InsertQsoUploadTx(ctx, tx, id1, action.Insert, "clublog", "clublog", origin.Live))
 	require.NoError(t, tx.Commit())
 	cancel()
 	claimed, err := s.DB.ClaimPendingUploadsWithContext(ctx, "clublog", 10)
@@ -174,7 +175,7 @@ func TestEnqueueUploads_NoBulkBackfill_RetriesFailedLiveRow(t *testing.T) {
 	require.Len(t, claimed, 1)
 	require.NoError(t, s.DB.MarkUploadFailedWithContext(ctx, claimed[0].ID, "auth rejected (403)"))
 
-	res, err := s.EnqueueUploads(ctx, "clublog", []string{u1, u2}, false)
+	res, err := s.EnqueueUploads(ctx, "clublog", []string{u1, u2}, false, origin.Manual)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Enqueued, "the failed live row must be re-armed")
 	require.Equal(t, []string{u2}, res.SkippedNoHistory, "the never-queued row stays refused")
@@ -197,7 +198,7 @@ func TestEnqueueUploads_EnqueuesSelectedGaps(t *testing.T) {
 	u1, id1 := seedStoredQso(t, s, lbID, "K1AAA", "1200")
 	u2, id2 := seedStoredQso(t, s, lbID, "K2BBB", "1201")
 
-	res, err := s.EnqueueUploads(ctx, "qrz", []string{u1, u2}, false)
+	res, err := s.EnqueueUploads(ctx, "qrz", []string{u1, u2}, false, origin.Manual)
 	require.NoError(t, err)
 	require.Equal(t, 2, res.Enqueued)
 	require.Equal(t, 0, res.SkippedUploaded)
@@ -218,7 +219,7 @@ func TestEnqueueUploads_SkipsAlreadyUploadedUnlessForce(t *testing.T) {
 	// Drive the row to uploaded via the real worker lifecycle: enqueue → claim →
 	// mark success WITH the ADIF stamp (the durable per-destination "done" signal
 	// the skip-check reads — the stamp, not the queue row, so it survives import).
-	_, err := s.EnqueueUploads(ctx, "qrz", []string{u1}, false)
+	_, err := s.EnqueueUploads(ctx, "qrz", []string{u1}, false, origin.Manual)
 	require.NoError(t, err)
 	claimed, err := s.DB.ClaimPendingUploadsWithContext(ctx, "qrz", 10)
 	require.NoError(t, err)
@@ -226,13 +227,13 @@ func TestEnqueueUploads_SkipsAlreadyUploadedUnlessForce(t *testing.T) {
 	require.NoError(t, s.DB.MarkUploadSuccessWithAdifStampWithContext(ctx, claimed[0].ID, "upstream-1", id1, "QRZCOM"))
 
 	// Default (no force): the uploaded QSO is skipped, nothing re-queued.
-	res, err := s.EnqueueUploads(ctx, "qrz", []string{u1}, false)
+	res, err := s.EnqueueUploads(ctx, "qrz", []string{u1}, false, origin.Manual)
 	require.NoError(t, err)
 	require.Equal(t, 0, res.Enqueued)
 	require.Equal(t, 1, res.SkippedUploaded)
 
 	// force=true re-arms the row to pending so the worker re-sends.
-	res, err = s.EnqueueUploads(ctx, "qrz", []string{u1}, true)
+	res, err = s.EnqueueUploads(ctx, "qrz", []string{u1}, true, origin.Manual)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Enqueued)
 	require.Equal(t, 0, res.SkippedUploaded)
@@ -273,7 +274,7 @@ func TestEnqueueUploads_RejectsIneligibleForwarder(t *testing.T) {
 			lbID := seedLogbook(t, s, "Main", "M0ABC")
 			u1, _ := seedStoredQso(t, s, lbID, "K1AAA", "1200")
 
-			_, err := s.EnqueueUploads(ctx, c.dest, []string{u1}, false)
+			_, err := s.EnqueueUploads(ctx, c.dest, []string{u1}, false, origin.Manual)
 			require.Error(t, err)
 			se := IsSubmitError(err)
 			require.NotNil(t, se)
@@ -298,7 +299,7 @@ func TestEnqueueUploads_ClassifiesMissingAndDeleted(t *testing.T) {
 	unknown := utils.NewUUIDv7() // valid shape, never stored
 	const malformed = "not-a-uuid"
 
-	res, err := s.EnqueueUploads(ctx, "qrz", []string{live, delUUID, unknown, malformed}, false)
+	res, err := s.EnqueueUploads(ctx, "qrz", []string{live, delUUID, unknown, malformed}, false, origin.Manual)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Enqueued, "only the live QSO")
 	require.ElementsMatch(t, []string{delUUID}, res.SkippedDeleted)

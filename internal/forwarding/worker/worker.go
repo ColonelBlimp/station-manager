@@ -498,6 +498,11 @@ func (w *Worker) logAttempt(
 		Str("call", call).
 		Str("outcome", outcome).
 		Str("disposition", string(disp)).
+		// What CAUSED this row to be queued. Without it the two highest-volume
+		// lines in the daemon cannot explain their own volume: live logging, a
+		// backfill, a stamp-sync mirror and a reconcile repair are otherwise
+		// identical records (docs/reviews/forwarding-logging-gaps.md F1).
+		Str("origin", row.Origin).
 		Int64("submit_duration_ms", submitDur.Milliseconds())
 
 	if extra != nil {

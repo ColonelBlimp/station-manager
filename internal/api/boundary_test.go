@@ -29,29 +29,43 @@ const modulePrefix = "github.com/ColonelBlimp/station-manager/"
 // To add an entry you must edit this list deliberately — and the edit is the
 // signal to ask whether the new coupling belongs behind an httpkit-style port.
 var frozenInternalImports = map[string]struct{}{
-	"frontend":                 {},
-	"internal/adif":            {},
-	"internal/api/httpkit":     {},
-	"internal/bridge":          {},
-	"internal/buildinfo":       {},
-	"internal/cat":             {},
-	"internal/config":          {},
-	"internal/database/sqlite": {},
-	"internal/email":           {},
-	"internal/enums/bands":     {},
-	"internal/enums/modes":     {},
-	"internal/enums/source":    {},
-	"internal/errors":          {},
-	"internal/events":          {},
-	"internal/forwarding":      {},
-	"internal/ft8":             {},
-	"internal/hardware":        {},
-	"internal/logging":         {},
-	"internal/lookup":          {},
-	"internal/qsoservice":      {},
-	"internal/types":           {},
-	"internal/utils":           {},
-	"manual":                   {},
+	"frontend":             {},
+	"internal/adif":        {},
+	"internal/api/httpkit": {},
+	"internal/bridge":      {},
+	"internal/buildinfo":   {},
+	// Added 2026-08-01 with intent (Diff B, docs/reviews/forwarding-logging-gaps.md
+	// F1). POST /v1/forwarder/{name}/uploads IS the manual-backfill producer, so it
+	// must name its own provenance when calling qsoservice.EnqueueUploads — that
+	// function is shared with the smcloud reconciler and the two are exactly what
+	// the origin field exists to tell apart.
+	//
+	// Considered and rejected: defaulting EnqueueUploads to `manual` so the handler
+	// need not name it. That makes a caller who forgets acquire `manual` silently —
+	// the fail-open shape deliberately rejected for the column's DB default, and it
+	// would let a future producer mislabel itself by omission.
+	//
+	// A leaf enum package: constants, String and Parse, no behaviour, no further
+	// internal imports — the same class of dependency as enums/upload/action.
+	"internal/enums/upload/origin": {},
+	"internal/cat":                 {},
+	"internal/config":              {},
+	"internal/database/sqlite":     {},
+	"internal/email":               {},
+	"internal/enums/bands":         {},
+	"internal/enums/modes":         {},
+	"internal/enums/source":        {},
+	"internal/errors":              {},
+	"internal/events":              {},
+	"internal/forwarding":          {},
+	"internal/ft8":                 {},
+	"internal/hardware":            {},
+	"internal/logging":             {},
+	"internal/lookup":              {},
+	"internal/qsoservice":          {},
+	"internal/types":               {},
+	"internal/utils":               {},
+	"manual":                       {},
 }
 
 // TestPackageBoundary_ApiImportsAreFrozen freezes internal/api's module-internal

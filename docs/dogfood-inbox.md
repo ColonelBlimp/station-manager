@@ -999,3 +999,4 @@ said. Plan future on-air experiments accordingly.
   so decide the two together. Open questions for the operator, none to be
   invented: retention (last N events, or a time window?); survive a daemon restart
   (persisted) or in-memory only?; unread badge on the icon, or a plain list?
+- [2026-08-01] when answering a cq and auto-work armed, when the contact has completed and nobody calls you, so you start a cq call - the auto-work armed stays active, or the pill stays viewable

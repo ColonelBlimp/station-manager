@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -56,7 +57,7 @@ func (s *Service) EnqueueStampSync(ctx context.Context, qsoIDs []int64) (int, er
 	n := 0
 	for _, fc := range targets {
 		for _, qsoID := range qsoIDs {
-			if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Update, fc.Name, fc.Type); err != nil {
+			if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Update, fc.Name, fc.Type, origin.StampSync); err != nil {
 				_ = tx.Rollback()
 				return 0, errors.New(op).WithErr(err).WithMsg("insert mirror upload-queue row")
 			}

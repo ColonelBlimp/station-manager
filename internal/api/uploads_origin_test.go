@@ -166,3 +166,36 @@ func TestUploadsEndpoint_ManualReEnqueueReplacesLiveOrigin(t *testing.T) {
 			"different cause must REPLACE the origin, not keep the original", got)
 	}
 }
+
+// The QSO-update producer (qsoservice/update.go). Its origin is `edit` for the
+// same reason the delete path's is: origin says WHY the queue entry exists, and
+// `action` already says WHAT mutation — an update and a delete are the same
+// operator-driven logbook mutation class.
+//
+// Added after the reversion proof found update.go unguarded: the delete test
+// above covers a different producer, and nothing else exercised a PATCH.
+func TestUploadsEndpoint_UpdateRowCarriesEditOrigin(t *testing.T) {
+	srv := serverWithForwarders(t,
+		forwarderCfg("qrz", "qrz", true, "insert", "update", "delete"),
+	)
+	lbID := createTestLogbook(t, srv, "My Log", "G4ABC")
+	_, qsoUUID := submitAndGetID(t, srv, lbID, testQsoADIF)
+
+	if w := patchQso(t, srv, qsoUUID, `{"comment":"edited"}`); w.Code != http.StatusOK {
+		t.Fatalf("patch: status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var updateRow map[string]any
+	for _, it := range uploadOriginItems(t, srv, qsoUUID) {
+		if it["action"] == "update" {
+			updateRow = it
+			break
+		}
+	}
+	if updateRow == nil {
+		t.Fatal("no update upload row returned — the fixture never reached the enqueue path")
+	}
+	if got := updateRow["origin"]; got != "edit" {
+		t.Errorf("update row origin = %v, want edit", got)
+	}
+}

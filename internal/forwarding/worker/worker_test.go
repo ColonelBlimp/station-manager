@@ -15,6 +15,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
@@ -171,7 +172,7 @@ func (h *testHarness) enqueueUpload(qsoID int64, fwdName, fwdType string, act ac
 	}
 	defer cancel()
 
-	if err = h.db.InsertQsoUploadTx(ctx, tx, qsoID, act, fwdName, fwdType); err != nil {
+	if err = h.db.InsertQsoUploadTx(ctx, tx, qsoID, act, fwdName, fwdType, origin.Live); err != nil {
 		_ = tx.Rollback()
 		h.t.Fatalf("insert qso_upload: %v", err)
 	}

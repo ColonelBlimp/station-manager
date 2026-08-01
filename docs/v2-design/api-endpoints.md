@@ -83,6 +83,7 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 - **Gating:** Always-on.
 - **Request:** Path `{uuid}`.
 - **Response:** **200**, body `{"items": [types.QsoUpload, …]}` (never null; ordered by forwarder_name, action). Includes soft-deleted QSOs (delete forwarding stays observable).
+- **`origin` (added 2026-08-01, migration 0007):** each item carries `origin` — **what CAUSED the queue entry to exist**, distinct from `action`, which says what mutation is being forwarded. One of `live` · `import` · `edit` · `manual` · `stamp_sync` · `reconcile` · `legacy`. A QSO the operator deleted is `action: "delete", origin: "edit"`; a reconcile repairing that same missed delete re-enqueues the row as `action: "delete", origin: "reconcile"`. `legacy` marks rows that pre-date the column and is never assigned by a producer. **Additive and backward-compatible**, and deliberately **not** `omitempty`: an absent field and an unknown provenance must not look the same, so the key is always present and never empty. A re-enqueue by a different cause REPLACES origin (an ordinary retry does not).
 - **Errors:** 400 `invalid_uuid`; 404 `not_found`; 500 `db_error`.
 
 ### `POST /v1/forwarder/{name}/uploads`

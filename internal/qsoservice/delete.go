@@ -6,6 +6,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -62,7 +63,7 @@ func (s *Service) Delete(ctx context.Context, existing types.Qso, src source.Sou
 		if !shouldEnqueue(fwd, action.Delete) {
 			continue
 		}
-		if err = s.DB.InsertQsoUploadTx(ctx, tx, existing.ID, action.Delete, fwd.Name, fwd.Type); err != nil {
+		if err = s.DB.InsertQsoUploadTx(ctx, tx, existing.ID, action.Delete, fwd.Name, fwd.Type, origin.Edit); err != nil {
 			_ = tx.Rollback()
 			return errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
 		}

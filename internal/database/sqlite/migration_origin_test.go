@@ -1,6 +1,8 @@
 package sqlite
 
 import (
+	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -44,22 +46,32 @@ func schemaVersion(t *testing.T, svc *Service) int {
 	return v
 }
 
+// seedLogbookAndQsoRow inserts the logbook + QSO that a qso_upload row hangs off.
+// Plain INSERTs, not INSERT OR IGNORE: an ignored failure here surfaces later as
+// a bare FOREIGN KEY error on the upload row, which says nothing about the cause
+// (it cost a round to find that dedupe_key must be the full 64-char digest).
+func seedLogbookAndQsoRow(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO logbook (id, callsign, name) VALUES (1,'G4ABC','L')`); err != nil {
+		t.Fatalf("seed logbook: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO qso
+		(id, uuid, call, band, mode, freq, qso_date, time_on, time_off,
+		 rst_sent, rst_rcvd, country, dedupe_key, logbook_id)
+		VALUES (1,'01920000-0000-7000-8000-000000000001','G4ABC','40m','SSB',7050000,
+		        '20250508','0845','0845','59','59','Test',?,1)`,
+		fmt.Sprintf("%064d", 1)); err != nil {
+		t.Fatalf("seed qso: %v", err)
+	}
+}
+
 // seedUploadRow inserts a logbook + qso + one qso_upload row, returning the
 // upload row's id. Kept explicit rather than reusing a helper so the columns this
 // proof depends on are visible at the call site.
 func seedUploadRow(t *testing.T, svc *Service, forwarder string) int64 {
 	t.Helper()
 	db := svc.handle
-	if _, err := db.Exec(`INSERT OR IGNORE INTO logbook (id, callsign, name) VALUES (1,'G4ABC','L')`); err != nil {
-		t.Fatalf("seed logbook: %v", err)
-	}
-	if _, err := db.Exec(`INSERT OR IGNORE INTO qso
-		(id, uuid, call, band, mode, freq, qso_date, time_on, time_off,
-		 rst_sent, rst_rcvd, country, dedupe_key, logbook_id)
-		VALUES (1,'01920000-0000-7000-8000-000000000001','G4ABC','40m','SSB',7050000,
-		        '20250508','0845','0845','59','59','Test','deadbeef',1)`); err != nil {
-		t.Fatalf("seed qso: %v", err)
-	}
+	seedLogbookAndQsoRow(t, db)
 	res, err := db.Exec(`INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status, origin)
 		VALUES (1, ?, 'stub', 'insert', 'pending', 'live')`, forwarder)
 	if err != nil {
@@ -114,16 +126,7 @@ func TestMigrate0007_ExistingRowsBecomeLegacyAndSurviveRetry(t *testing.T) {
 
 	// Roll back 0007, insert a row as v6 would have (no origin column), roll forward.
 	applyMigrationSteps(t, svc, -1)
-	if _, err := db.Exec(`INSERT OR IGNORE INTO logbook (id, callsign, name) VALUES (1,'G4ABC','L')`); err != nil {
-		t.Fatalf("seed logbook: %v", err)
-	}
-	if _, err := db.Exec(`INSERT OR IGNORE INTO qso
-		(id, uuid, call, band, mode, freq, qso_date, time_on, time_off,
-		 rst_sent, rst_rcvd, country, dedupe_key, logbook_id)
-		VALUES (1,'01920000-0000-7000-8000-000000000001','G4ABC','40m','SSB',7050000,
-		        '20250508','0845','0845','59','59','Test','deadbeef',1)`); err != nil {
-		t.Fatalf("seed qso: %v", err)
-	}
+	seedLogbookAndQsoRow(t, db)
 	if _, err := db.Exec(`INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status)
 		VALUES (1, 'qrz', 'qrz', 'insert', 'pending')`); err != nil {
 		t.Fatalf("seed pre-0007 upload row: %v", err)

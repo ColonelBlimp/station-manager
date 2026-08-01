@@ -12,6 +12,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -214,6 +215,28 @@ func TestMigrate_SplitSetsIsolateTables(t *testing.T) {
 		if tableExists(t, refSvc, tbl) {
 			t.Errorf("reference connection unexpectedly has log table %q", tbl)
 		}
+	}
+}
+
+// migrateToVersion migrates the log set to an ABSOLUTE version.
+//
+// Prefer this over applyMigrationSteps for characterization tests that target a
+// specific migration: relative steps silently retarget every time a new
+// migration lands (0007 did exactly that to the 0006 widen test, 2026-08-01).
+func migrateToVersion(t *testing.T, svc *Service, version uint) {
+	t.Helper()
+	srcDriver, dbDriver, err := GetMigrationDrivers(svc.handle, MigrationSetLog)
+	if err != nil {
+		t.Fatalf("migration drivers: %v", err)
+	}
+	defer func() { _ = srcDriver.Close() }()
+
+	m, err := migratepkg.NewWithInstance("iofs", srcDriver, svc.DatabaseConfig.Driver, dbDriver)
+	if err != nil {
+		t.Fatalf("migrate instance: %v", err)
+	}
+	if err := m.Migrate(version); err != nil {
+		t.Fatalf("migrate to %d: %v", version, err)
 	}
 }
 
@@ -425,7 +448,7 @@ func TestMigrate_RelaxesRSTLengthFromVersion1(t *testing.T) {
 
 	before := validTestQso(logbookID, "M0CMC", "20m", "SSB", "20240615", "1253")
 	beforeID := insertQsoRawV1(t, svc, before)
-	enqueueUpload(t, svc, beforeID, "qrz-main", "qrz", action.Insert)
+	enqueueUploadPreV7(t, svc, beforeID, "qrz-main", "qrz", action.Insert)
 	insertQsoHistory(t, svc, before.UUID, action.Update, source.API, []byte(`{"call":"M0CMC"}`))
 
 	if err := svc.Migrate(); err != nil {
@@ -504,11 +527,11 @@ func TestMigrate_DownRestoresRSTLengthConstraint(t *testing.T) {
 	enqueueUpload(t, svc, qsoID, "qrz-main", "qrz", action.Insert)
 	insertQsoHistory(t, svc, qso.UUID, action.Update, source.API, []byte(`{"call":"M0CMC"}`))
 
-	// Step down THREE: past 0004 (utc_timestamps), 0003 (allow_time_seconds), then
-	// 0002 (relax_rst_length), so the strict pre-0002 RST constraint is restored.
-	// (Each later migration was added on top, so the count tracks the number of
-	// migrations above the 0002 target — bump it when a new migration lands.)
-	applyMigrationSteps(t, svc, -3)
+	// Down to version 1: past 0002 (relax_rst_length), so the strict pre-0002 RST
+	// constraint is restored. Named as an absolute version rather than a step
+	// count — the count used to need bumping with every new migration, which its
+	// own comment asked for and 0007 duly broke (2026-08-01).
+	migrateToVersion(t, svc, 1)
 
 	uploads, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
 	if err != nil {
@@ -1233,6 +1256,8 @@ func TestUpdateCountry(t *testing.T) {
 // enqueueUpload is a test-only helper that inserts one qso_upload row via
 // the transactional API. Wraps BeginTx/InsertQsoUploadTx/Commit so the
 // upload-methods tests can set up fixtures without repeating the dance.
+// enqueueUpload inserts a qso_upload row through the LIVE write path, i.e. the
+// current schema. Most callers want this.
 func enqueueUpload(t *testing.T, svc *Service, qsoID int64, name, typ string, act action.Action) {
 	t.Helper()
 	ctx := context.Background()
@@ -1241,12 +1266,29 @@ func enqueueUpload(t *testing.T, svc *Service, qsoID int64, name, typ string, ac
 		t.Fatalf("begin tx: %v", err)
 	}
 	defer cancel()
-	if err = svc.InsertQsoUploadTx(ctx, tx, qsoID, act, name, typ); err != nil {
+	if err = svc.InsertQsoUploadTx(ctx, tx, qsoID, act, name, typ, origin.Live); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("insert upload: %v", err)
 	}
 	if err = tx.Commit(); err != nil {
 		t.Fatalf("commit: %v", err)
+	}
+}
+
+// enqueueUploadPreV7 inserts a qso_upload row with raw SQL shaped for the schema
+// BEFORE migration 0007 added `origin`.
+//
+// A version-frozen writer, for the same reason insertQsoRawV1 above is one:
+// migration CHARACTERIZATION tests stand up an OLD schema and then migrate it, so
+// they must write what that old schema accepts. The live writer always speaks the
+// CURRENT schema — which is precisely what those tests are not on (Diff B,
+// 2026-08-01).
+func enqueueUploadPreV7(t *testing.T, svc *Service, qsoID int64, name, typ string, act action.Action) {
+	t.Helper()
+	if _, err := svc.handle.Exec(`
+		INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status)
+		VALUES (?, ?, ?, ?, 'pending')`, qsoID, name, typ, act.String()); err != nil {
+		t.Fatalf("insert upload (pre-0007 shape): %v", err)
 	}
 }
 
@@ -1997,7 +2039,7 @@ func TestInsertQsoUploadTx_ReArmOnConflict(t *testing.T) {
 		t.Fatalf("begin tx: %v", err)
 	}
 	defer cancel()
-	if err = svc.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, "qrz", "qrz"); err != nil {
+	if err = svc.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, "qrz", "qrz", origin.Live); err != nil {
 		t.Fatalf("re-enqueue: %v (want nil — UPSERT should re-arm, not fail)", err)
 	}
 	if err = tx.Commit(); err != nil {

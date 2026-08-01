@@ -11,6 +11,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/reconcile"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
@@ -218,14 +219,14 @@ func (r *Reconciler) RunOnce(ctx context.Context) (ReconcileSummary, error) {
 	}
 
 	if len(upserts) > 0 {
-		res, err := r.qso.EnqueueUploads(ctx, r.forwarderName, upserts, true)
+		res, err := r.qso.EnqueueUploads(ctx, r.forwarderName, upserts, true, origin.Reconcile)
 		if err != nil {
 			return sum, errors.New(op).WithErr(err).WithMsg("enqueue upserts")
 		}
 		sum.EnqueuedUpserts = res.Enqueued
 	}
 	if len(deletes) > 0 {
-		res, err := r.qso.EnqueueDeleteUploads(ctx, r.forwarderName, deletes)
+		res, err := r.qso.EnqueueDeleteUploads(ctx, r.forwarderName, deletes, origin.Reconcile)
 		if err != nil {
 			return sum, errors.New(op).WithErr(err).WithMsg("enqueue deletes")
 		}

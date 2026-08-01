@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
@@ -58,7 +59,10 @@ type EnqueueResult struct {
 // InsertQsoUploadTx UPSERT). A genuine DB failure rolls the whole batch back and
 // surfaces as an error; the read-side classification has already happened, so a
 // retry is safe and idempotent.
-func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuids []string, force bool) (EnqueueResult, error) {
+// org names what is asking — manual backfill or a reconcile repair. It is a
+// PARAMETER rather than something inferred here because both callers share this
+// function and `force` does not separate them (docs/reviews/forwarding-logging-gaps.md F1).
+func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuids []string, force bool, org origin.Origin) (EnqueueResult, error) {
 	const op errors.Op = "qsoservice.EnqueueUploads"
 
 	fwd, ok := s.findEnabledInsertForwarder(forwarderName)
@@ -189,7 +193,7 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 	defer cancel()
 
 	for _, qsoID := range enqueueIDs {
-		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type); err != nil {
+		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type, org); err != nil {
 			_ = tx.Rollback()
 			return EnqueueResult{}, errors.New(op).WithErr(err).WithMsg("insert upload-queue row")
 		}
@@ -246,7 +250,8 @@ type EnqueueDeleteResult struct {
 // reconciler (ADR 0040 S4) uses it to push tombstones the cloud still shows
 // as live. Per-row best-effort like EnqueueUploads: a live or unknown UUID is
 // reported, never fatal.
-func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string, uuids []string) (EnqueueDeleteResult, error) {
+// org names what is asking — see EnqueueUploads.
+func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string, uuids []string, org origin.Origin) (EnqueueDeleteResult, error) {
 	const op errors.Op = "qsoservice.EnqueueDeleteUploads"
 
 	fwd, ok := s.findEnabledForwarderFor(forwarderName, action.Delete)
@@ -299,7 +304,7 @@ func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string
 	}
 	defer cancel()
 	for _, qsoID := range enqueueIDs {
-		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Delete, fwd.Name, fwd.Type); err != nil {
+		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Delete, fwd.Name, fwd.Type, org); err != nil {
 			_ = tx.Rollback()
 			return EnqueueDeleteResult{}, errors.New(op).WithErr(err).WithMsg("insert delete upload-queue row")
 		}

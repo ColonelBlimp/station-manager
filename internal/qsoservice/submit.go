@@ -15,6 +15,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -469,7 +470,15 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		if isImport && !forwarderNamed(forwardTo, fwd.Name) {
 			continue
 		}
-		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type); err != nil {
+		// live vs import from the SAME flag that already distinguishes the two
+		// callers of this function — SubmitImport(true) and the batch fallback set
+		// it, Submit(false) does not. Deriving it here covers the fallback path for
+		// free (submit_batch.importBatchFallback re-runs through here).
+		org := origin.Live
+		if isImport {
+			org = origin.Import
+		}
+		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type, org); err != nil {
 			_ = tx.Rollback()
 			return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
 		}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -184,7 +185,7 @@ func (s *Service) importBatch(
 				if !shouldEnqueue(fwd, action.Insert) || !forwarderNamed(forwardTo, fwd.Name) {
 					continue
 				}
-				if uerr := s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type); uerr != nil {
+				if uerr := s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type, origin.Import); uerr != nil {
 					_ = tx.Rollback()
 					return s.importBatchFallback(ctx, logbookID, batch, baseIndex, forwardTo, res)
 				}

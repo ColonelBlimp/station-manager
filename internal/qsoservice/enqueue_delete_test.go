@@ -2,6 +2,7 @@ package qsoservice
 
 import (
 	"context"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"testing"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/source"
@@ -55,7 +56,7 @@ func TestEnqueueDeleteUploads(t *testing.T) {
 		liveUUID,
 		"0197f9a0-9999-7999-8999-999999999999", // unknown
 		"not-a-uuid",
-	})
+	}, origin.Reconcile)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Enqueued, "only the tombstone enqueues")
 	require.Equal(t, []string{liveUUID}, res.SkippedLive, "a live QSO must never get a delete row")
@@ -65,7 +66,7 @@ func TestEnqueueDeleteUploads(t *testing.T) {
 	require.False(t, hasDeleteRow(t, s, liveID, "cloud"))
 
 	// Unknown / disabled forwarder → forwarder_unavailable, nothing queued.
-	_, err = s.EnqueueDeleteUploads(ctx, "nope", []string{deletedUUID})
+	_, err = s.EnqueueDeleteUploads(ctx, "nope", []string{deletedUUID}, origin.Reconcile)
 	se := IsSubmitError(err)
 	require.NotNil(t, se)
 	require.Equal(t, "forwarder_unavailable", se.Code)

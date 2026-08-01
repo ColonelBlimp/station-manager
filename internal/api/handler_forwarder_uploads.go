@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 )
@@ -62,7 +63,7 @@ func (s *Server) handleEnqueueForwarderUploads(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	res, err := s.qso.EnqueueUploads(r.Context(), name, uuids, req.Force)
+	res, err := s.qso.EnqueueUploads(r.Context(), name, uuids, req.Force, origin.Manual)
 	if err != nil {
 		if se := qsoservice.IsSubmitError(err); se != nil {
 			s.writeError(w, http.StatusBadRequest, se.Code, se.Message, op)

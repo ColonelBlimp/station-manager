@@ -41,8 +41,8 @@ func TestVersion_HappyPath(t *testing.T) {
 	// at the latest migration and not dirty. Bump this with each new migration —
 	// currently 6 (0001_init + 0002_relax_rst_length + 0003_allow_time_seconds +
 	// 0004_utc_timestamps + 0005_qso_revision + 0006_widen_mode_call).
-	if !strings.Contains(body, `"schema":{"version":6,"dirty":false}`) {
-		t.Fatalf("body = %q, want schema:{version:6,dirty:false}", body)
+	if !strings.Contains(body, `"schema":{"version":7,"dirty":false}`) {
+		t.Fatalf("body = %q, want schema:{version:7,dirty:false}", body)
 	}
 }
 

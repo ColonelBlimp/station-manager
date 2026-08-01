@@ -14,6 +14,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
 	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -2788,7 +2789,7 @@ func (s *Service) DeleteQsoByIDTx(ctx context.Context, tx *sql.Tx, id int64) (in
 // row was uploaded, failed, or still pending. Raw SQL is used here because sqlboiler's
 // Upsert helper can't express the "overwrite specific columns, leave id alone" update set
 // with a conflict target cleanly.
-func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64, action action.Action, forwarderName, forwarderType string) error {
+func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64, action action.Action, forwarderName, forwarderType string, org origin.Origin) error {
 	const op errors.Op = "sqlite.Service.InsertQsoUploadTx"
 	if err := checkService(op, s); err != nil {
 		return err
@@ -2805,17 +2806,28 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 	if forwarderType == "" {
 		return errors.New(op).WithMsg("forwarderType is empty")
 	}
+	// Validated Go-side as well as by the column CHECK: this fails at the call
+	// site naming the offending value, before a transaction does any work.
+	if _, err := origin.Parse(org.String()); err != nil {
+		return errors.New(op).WithErr(err)
+	}
 
 	// Re-arm preserves upstream_id deliberately: FetchPriorUpstreamIDWithContext
 	// reads it back for the QRZ delete-after-insert flow, and the worker's
 	// own success path overwrites it on the next successful attempt.
 	// Clearing it here would lose history a re-armed insert (the rare
 	// force=true edge case) might want to keep.
+	// origin is REPLACED on re-arm while upstream_id is PRESERVED — deliberately
+	// opposite treatments in one statement, so do not "tidy" them into agreement.
+	// upstream_id is history the QRZ delete-after-insert flow reads back; origin
+	// answers "why does this queue entry exist NOW", and after a re-enqueue the
+	// honest answer is whatever just re-armed it, not what first created it.
 	const q = `
-		INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status, origin)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT (qso_id, forwarder_name, action) DO UPDATE SET
 			forwarder_type  = excluded.forwarder_type,
+			origin          = excluded.origin,
 			status          = 'pending',
 			attempts        = 0,
 			next_attempt_at = strftime('%s', 'now'),
@@ -2823,7 +2835,7 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 			last_error      = NULL`
 
 	if _, err := tx.ExecContext(ctx, q,
-		qsoId, forwarderName, forwarderType, action.String(), status.Pending.String(),
+		qsoId, forwarderName, forwarderType, action.String(), status.Pending.String(), org.String(),
 	); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("upserting qso_upload row failed")
 	}

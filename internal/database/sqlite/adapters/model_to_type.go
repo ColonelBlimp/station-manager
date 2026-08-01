@@ -179,5 +179,6 @@ func QsoUploadModelToType(model *models.QsoUpload) (types.QsoUpload, error) {
 		NextAttemptAt: model.NextAttemptAt,
 		LastError:     model.LastError.String,
 		UpstreamID:    model.UpstreamID.String,
+		Origin:        model.Origin,
 	}, nil
 }

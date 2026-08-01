@@ -88,27 +88,54 @@ func TestOrigin_ImportBatchEnqueuesAsImport(t *testing.T) {
 		"a bulk import must record origin=import, not the live-logging value")
 }
 
-// The batch fallback path. importBatchFallback re-runs the batch record-by-record
-// through submit() after a transactional write fails, so it is a SECOND route to
-// the same enqueue — and it only executes when something has already gone wrong,
-// which is precisely when nobody is watching the provenance.
+// The batch fallback path — importBatchFallback re-runs a failed batch
+// record-by-record through submit(..., isImport=true), which is a SECOND route to
+// the same enqueue and only executes once something has already gone wrong.
 //
-// The fixture forces the fallback by putting a record that violates a DB
-// constraint alongside a good one: the batch write aborts, the fallback stores
-// the good record individually, and its origin must still be `import`.
+// FIXTURE NOTE (two earlier attempts were wrong, 2026-08-01; the reversion proof
+// is what exposed them, because reverting submit.go's derivation broke nothing):
+//
+//   - An over-long MODE is rejected by validation in phase 1, so the batch commits
+//     the good record alone via the BATCH producer.
+//   - Two records sharing a dedupe key are caught by the in-batch `batchKeys` map
+//     (submit_batch.go:150) before the DB is consulted.
+//
+// Both left the test exercising the batch path under a fallback name. The failure
+// has to happen INSIDE the phase-2 transaction, and a UUID collision does exactly
+// that: it collides on UNIQUE(uuid), which the dedupe pre-read cannot see because
+// the dedupe FIELDS differ. Fixture shape borrowed from the proven
+// TestSubmitImportBatch_UUIDCollisionReportedNotFatal.
+//
+// That the batch transaction rolled back is what makes this decisive: the good
+// record's upload row can only have been written by the fallback.
 func TestOrigin_ImportBatchFallbackStillEnqueuesAsImport(t *testing.T) {
 	s := newTestService(t, enabledClublog())
 	lbID := seedLogbook(t, s, "Main", "G0XYZ")
+	ctx := context.Background()
 
-	good := importRecord("M0BBB", "0902")
-	bad := importRecord("M0CCC", "0903")
-	bad.QsoDetails.Mode = "THIS_MODE_IS_FAR_TOO_LONG_FOR_THE_CHECK" // >20 chars → CHECK violation
+	const uuid = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+	rec := func(uid, call, timeOn string) adif.Record {
+		r := importRecord(call, timeOn)
+		r.AppSmQsoID = uid
+		return r
+	}
 
-	res, err := s.SubmitImportBatch(context.Background(), lbID,
-		[]adif.Record{good, bad}, []string{"clublog"}, 10, nil)
+	// Pre-store the UUID so a later record carrying it collides on UNIQUE(uuid).
+	pre, err := s.SubmitImport(ctx, lbID, rec(uuid, "K1AAA", "1200"), false, nil)
+	require.NoError(t, err)
+	require.Equal(t, "stored", pre.Status)
+
+	// One good record, then the collision — same UUID, DIFFERENT dedupe fields, so
+	// phase-1 dedupe passes it through and phase 2 aborts on the unique index.
+	res, err := s.SubmitImportBatch(ctx, lbID,
+		[]adif.Record{rec("", "M0BBB", "0902"), rec(uuid, "K3CCC", "1400")},
+		[]string{"clublog"}, 10, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Stored, "the good record must survive via the fallback")
-	require.NotEmpty(t, res.Errors, "the bad record must be reported, proving the fallback ran")
+	require.Len(t, res.Errors, 1, "the collision must be reported per-record")
+	require.Contains(t, res.Errors[0].Reason, "uuid_conflict",
+		"proves phase 2 aborted and importBatchFallback ran — without it the batch "+
+			"would have committed and this would be testing the batch producer")
 
 	qsoID := qsoIDByCall(t, s, lbID, "M0BBB")
 	require.Equal(t, "import", originOf(t, s, qsoID, "clublog", "insert"),
