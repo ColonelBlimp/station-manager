@@ -110,6 +110,30 @@ type evictedSubscriber struct {
 // WARN, not Error: the hub behaved exactly as designed and the daemon is healthy —
 // a client could not keep up. Error stays for faults the daemon itself has.
 //
+// SYNCHRONOUS, and that was challenged in review (codex P2 on 57619abe). The
+// concern is real in mechanism — zerolog's Msg writes straight to lumberjack, so a
+// stalled disk delays the publisher — but it is NOT a new class of risk here, and
+// the proposed remedy (a bounded async path) would be new machinery for the rarest
+// line in the package:
+//
+//   - The requirement these hubs actually document is that a publisher must not
+//     block ON A SLOW SUBSCRIBER. That is untouched: the select is still
+//     non-blocking, and the eviction is complete and the lock released before
+//     anything is written.
+//   - These goroutines ALREADY log synchronously, far more often. Measured on the
+//     live log over 15 days: 1,502 `ft8 tx meters` records (one per transmission,
+//     the same unkey path) and 8 drive alarms, against 0 evictions.
+//   - An eviction is self-limiting — the subscriber is removed, so it cannot
+//     repeat — and these hubs are documented for 1-3 concurrent subscribers, so the
+//     worst case is a handful of writes, once.
+//
+// So: if a stalled log destination endangers these goroutines it endangers the
+// whole package, and belongs at the logging layer, fixed once. Giving the least
+// frequent line its own asynchronous path would leave the 1,502 more frequent ones
+// exactly as exposed while adding a mechanism to maintain. Revisit if evictions
+// ever become common — the same evidence the operator is waiting for before
+// tuning the buffers.
+//
 // The field set is DUPLICATED in internal/bridge and internal/ft8, which have
 // their own hubs. A shared helper would be a framework for three call sites; what
 // stops the three drifting is that each package's rules assert the same names, so
