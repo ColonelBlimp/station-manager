@@ -40,7 +40,30 @@ state?**
 
 ## Tier 1
 
-### F1. This package is 43.3% of the daemon log, and neither of its two big lines carries provenance
+### F1. ⚠️ HALF SHIPPED 2026-08-01 (`f31738bc`) — volume fixed, provenance still open
+
+**The restructuring half is done** (Option 3′, operator's decision): `forwarding: submit`
+demoted to Debug, one `forwarding: attempt` record at the outcome carrying
+`submit_duration_ms` (timed around `Forwarder.Submit` alone). Projected effect once
+deployed and rotated: this package drops from **41% of the log to ~23%**, and the whole
+log from 14.31 → 12.57 MiB over a 15.51-day window.
+
+**The actual finding — missing provenance — is NOT fixed.** It needs the `origin` field,
+which the operator established is a `qso_upload` schema **and** public-API change
+(`GET /v1/qso/{uuid}/uploads` returns `types.QsoUpload` directly), so it ships separately
+as **Diff B**. Vocabulary decided: `live` · `import` · `edit` · `manual` · `stamp_sync` ·
+`reconcile` · `legacy`. Do not close F1 until that lands.
+
+**Decided together with SHIP GATE item (d):** full version string, which the restructure
+makes affordable — **+6% vs today** (29.4 MiB at 30 days) instead of **+23%** (34.0 MiB)
+for version stamping alone. Both figures on the corrected 15.51-day divisor.
+
+Original finding below; its measurement narrative is the evidence for the decision and
+is worth keeping until Diff B closes it.
+
+---
+
+#### F1 as originally filed (measurement narrative — the evidence for the decision)
 
 Measured on the live log (84,151 lines / 14.04 MB):
 
@@ -107,10 +130,12 @@ line would have answered it directly.
 
 ### F2. The stamp-sync chain is invisible at the default level from end to end
 
-`worker.go:572-574`, inside `markSuccess`:
+`worker.go`, at the end of `persistOutcome` (it lived inside `markSuccess` when this was
+filed; `191ac370` moved it out so a hook panic cannot suppress the attempt record — the
+call is unchanged and still silent):
 
 ```go
-if w.cfg.OnQsoStamped != nil {
+if stamped && w.cfg.OnQsoStamped != nil {
     w.cfg.OnQsoStamped(ctx, row.QsoID)   // fires silently
 }
 ```
@@ -231,7 +256,26 @@ So a row that spent a day cycling on DB errors and then succeeded leaves no trac
 - **Record:** mirror the two lines the forwarder-caused path already has, tagged as
   internal.
 
-### F6. `forwarding: success` is logged BEFORE the local completion is persisted — Tier 1
+### F6. ✅ FIXED 2026-08-01 (`f31738bc`, corrected by `191ac370`) — success logged before persistence
+
+**Shipped.** `persistOutcome` now resolves the local disposition *before* logging and
+emits one `forwarding: attempt` record carrying both halves — upstream `outcome` and
+local `disposition` (`persisted` / `persist_failed` / `rearmed`). The `mark*` functions
+return a disposition instead of writing their own lines; five log sites collapse to one.
+Severity comes from both halves: Error on a persistence failure however the upstream
+answered, Warn for terminal/exhausted, Info for success and scheduled retries.
+
+**It introduced a regression, caught by clean-room review and fixed in `191ac370`:**
+moving the record after persistence put the best-effort `OnQsoStamped` hook *in front of
+it*, so a hook panic erased the trace of an upload that had already committed. The hook
+now runs strictly after the record. See **F17** for the phase-insensitive panic recovery
+that failure also exposed — filed, not built.
+
+Pinned by `internal/forwarding/worker/attempt_logging_test.go` (8 tests, including both
+non-`persisted` dispositions and the hook-panic case). Original finding below.
+
+---
+
 
 `persistOutcome` logs success at `:370-378`, then calls `markSuccess` at `:379`.
 
@@ -465,10 +509,12 @@ Checked against the code and the live log on 2026-08-01.
 1. **F4** first — a one-line fix that closes the third of three routes by which "why did
    the daemon stop?" bypasses `smd.log` (with `api-logging-gaps.md` A1 and A9), and it
    makes an existing security comment true instead of aspirational.
-2. **F1 with F5, F6, F7 and SHIP GATE item (d)** — one conversation. (d) adds ~22% to
-   every line; F1 is where 43% of the lines are; F5/F6/F7 are the lines that should
-   exist instead. Deciding them apart means paying the version cost on redundant lines
-   while the informative ones stay missing.
+2. ~~**F1 with F5, F6, F7 and SHIP GATE item (d)**~~ — **PARTLY DONE.** F6 shipped and
+   F1's volume half with it (`f31738bc`); the decision was Option 3′ + full version
+   string. **What remains: Diff B (`origin`, schema + API) closes F1, and Diff C applies
+   the version stamp** — including `cmd/smd/startuplog.go`'s hand-written pre-logger
+   line, which bypasses `logging.Service` and would otherwise be missed. F5 and F7 are
+   still open and are the "lines that should exist" half.
 3. **F13** — a startup Warn that stops a permanent stream of a message that is false.
 4. **F12** — align the submit path with the claim path, which already suppresses
    cancellation correctly; this is what makes the 86 `host unreachable` lines readable.

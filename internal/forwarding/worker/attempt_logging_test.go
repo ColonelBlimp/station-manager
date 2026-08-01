@@ -399,3 +399,37 @@ func TestAttemptLogging_StampHookPanicDoesNotSuppressTheAttemptRecord(t *testing
 		t.Errorf("disposition = %v, want %q", recs[0]["disposition"], wantPersisted)
 	}
 }
+
+// Contract 1 of Diff B (docs/reviews/forwarding-logging-gaps.md F1): the attempt
+// record must name what enqueued the row, so "why is this forwarder busy?" is a
+// lookup rather than a day-bucketing exercise across two message types.
+//
+// Asserted as present-and-non-empty rather than as a specific value: the
+// value-per-producer mapping is pinned where the producers live
+// (internal/api/uploads_origin_test.go), and "the wire mirrors the stored row" is
+// contract 3's job. Duplicating either here would couple this test to a table it
+// does not own.
+func TestAttemptLogging_RecordCarriesTheRowsOrigin(t *testing.T) {
+	h, buf := captureHarness(t)
+	qsoID := h.seedLogbookAndQso()
+	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
+
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+	runUntil(t, w, h, qsoID, func(u types.QsoUpload) bool { return u.Status == "uploaded" })
+
+	recs := withMessage(t, buf, msgAttempt)
+	if len(recs) != 1 {
+		t.Fatalf("attempt records = %d, want 1\n%s", len(recs), buf.String())
+	}
+	got, present := recs[0]["origin"]
+	if !present {
+		t.Fatalf("attempt record carries no `origin` — the provenance half of F1 is "+
+			"what the whole field exists for\n%s", buf.String())
+	}
+	if s, _ := got.(string); s == "" {
+		t.Errorf("attempt record origin is empty; every queue row has a provenance")
+	}
+}

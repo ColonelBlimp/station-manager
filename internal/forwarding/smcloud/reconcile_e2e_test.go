@@ -211,3 +211,108 @@ func TestReconciler_EndToEnd(t *testing.T) {
 	require.Equal(t, 1, sum.LocalCount)
 	require.Equal(t, 1, sum.CloudCount)
 }
+
+// Reconcile's producer mapping for Diff B (docs/reviews/forwarding-logging-gaps.md
+// F1). Covers BOTH distinct enqueue call sites, because reconcile shares
+// EnqueueUploads/EnqueueDeleteUploads with the MANUAL backfill — the pair most
+// easily collapsed onto one constant, and the pair whose confusion made "why is
+// smcloud busy?" a day-bucketing exercise in the first place. `manual` is pinned
+// from the other side in internal/api, so a single hard-coded value fails one of
+// the two.
+//
+// Each half asserts the expected queue ROW AND ACTION exists BEFORE asserting its
+// origin. Without that, a fixture that never reached the enqueue path would report
+// origin "" and look like honest RED while proving nothing — the same masquerade a
+// skipped test performs, and the reason this file's Postgres gate matters.
+// reconcileOriginStack builds a local stack + reconciler against the fake cloud,
+// plus a helper that reads the origin recorded on a QSO's upload row.
+//
+// The helper asserts the expected row AND action EXIST before returning an
+// origin. Without that, a fixture that never reached the enqueue path would
+// yield "" and read as honest RED while proving nothing — the same masquerade a
+// skipped test performs, which is exactly what this file's Postgres gate hid
+// until it was brought up.
+func reconcileOriginStack(t *testing.T) (
+	*qsoservice.Service, *sqlite.Service, *Reconciler, forwarding.Forwarder, int64,
+	func(uuid string, act forwarding.Action) string,
+) {
+	t.Helper()
+	cloud := newCloudStack(t) // skips without a dev Postgres (task db:pg:up)
+	ctx := context.Background()
+
+	qsoSvc, dbSvc, logSvc, fc := newLocalStack(t, cloud.URL)
+	lbID, err := dbSvc.InsertLogbook(types.Logbook{Name: "Main", Callsign: "7Q5MLV"})
+	require.NoError(t, err)
+	rec, err := NewReconciler(fc, lbID, dbSvc, qsoSvc, logSvc)
+	require.NoError(t, err)
+	fwd, err := New(fc)
+	require.NoError(t, err)
+
+	originFor := func(uuid string, act forwarding.Action) string {
+		t.Helper()
+		q, err := dbSvc.FetchQsoByUUIDIncludingDeletedWithContext(ctx, uuid)
+		require.NoError(t, err)
+		rows, err := dbSvc.FetchUploadsByQsoIDWithContext(ctx, q.ID)
+		require.NoError(t, err)
+		for _, r := range rows {
+			if r.Action == act.String() {
+				return r.Origin
+			}
+		}
+		t.Fatalf("no %s upload row for %s — the fixture never reached the enqueue path, "+
+			"so any origin assertion would prove nothing", act, uuid)
+		return ""
+	}
+	return qsoSvc, dbSvc, rec, fwd, lbID, originFor
+}
+
+// Reconcile's FIRST enqueue call site (EnqueueUploads, cloud-missing repair) for
+// Diff B. Split from the delete case so BOTH call sites are independently
+// demonstrable: with them in one test the first require would abort before the
+// second ever ran, and only half the pair would ever be seen to fail.
+//
+// reconcile shares EnqueueUploads with the MANUAL backfill — pinned from the
+// other side in internal/api — so a single hard-coded constant fails one of them.
+func TestReconcile_UpsertRepairCarriesReconcileOrigin(t *testing.T) {
+	ctx := context.Background()
+	qsoSvc, _, rec, _, lbID, originFor := reconcileOriginStack(t)
+
+	u1 := importQso(t, qsoSvc, lbID, "DL9UW", "120000")
+	sum, err := rec.RunOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, sum.EnqueuedUpserts, "fixture must reach the upsert enqueue: %+v", sum)
+
+	require.Equal(t, "reconcile", originFor(u1, action.Insert),
+		"a cloud-missing repair must be distinguishable from the manual backfill "+
+			"that shares EnqueueUploads with it")
+}
+
+// Reconcile's SECOND enqueue call site (EnqueueDeleteUploads, missed-delete
+// repair). Also re-proves contract 2's replace rule at this site: the local
+// Delete already wrote a delete row with origin `edit`, which the reconcile
+// repair re-enqueues over.
+func TestReconcile_DeleteRepairCarriesReconcileOrigin(t *testing.T) {
+	ctx := context.Background()
+	qsoSvc, dbSvc, rec, fwd, lbID, originFor := reconcileOriginStack(t)
+
+	u1 := importQso(t, qsoSvc, lbID, "DL9UW", "120000")
+	_, err := rec.RunOnce(ctx)
+	require.NoError(t, err)
+	drainTo(t, fwd, dbSvc, u1, action.Insert)
+
+	q1, err := dbSvc.FetchQsoByUUIDWithContext(ctx, u1)
+	require.NoError(t, err)
+	require.NoError(t, qsoSvc.Delete(ctx, q1, source.Source("test")))
+	// The local Delete has now written a delete row with origin `edit` (pinned in
+	// internal/api). Deliberately NOT asserted here: pre-implementation it is also
+	// "", so asserting it would abort before the reconcile assertion below and this
+	// call site would never be seen to fail on its own rule. Post-implementation the
+	// edit -> reconcile transition is what contract 2's replace rule looks like at
+	// this site.
+	sum, err := rec.RunOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, sum.EnqueuedDeletes, "fixture must reach the delete enqueue: %+v", sum)
+
+	require.Equal(t, "reconcile", originFor(u1, action.Delete),
+		"the delete repair must record reconcile, replacing the edit origin")
+}
