@@ -48,6 +48,15 @@ type testHarness struct {
 
 func newHarness(t *testing.T) *testHarness {
 	t.Helper()
+	return newHarnessWithLogger(t, nil)
+}
+
+// newHarnessWithLogger is newHarness with an optional logger override, so a test
+// can assert on what the worker LOGS rather than only on the queue row it leaves
+// behind. Pass logging.NewForWriter(&buf); nil builds the usual file-backed
+// logger, leaving every existing caller unchanged.
+func newHarnessWithLogger(t *testing.T, logOverride *logging.Service) *testHarness {
+	t.Helper()
 
 	tmp := t.TempDir()
 	cfg := config.DefaultConfig(tmp)
@@ -65,11 +74,14 @@ func newHarness(t *testing.T) *testHarness {
 		t.Fatalf("config init: %v", err)
 	}
 
-	logSvc := &logging.Service{}
-	logSvc.ConfigService = cfgSvc
-	logSvc.WorkingDir = cfgSvc.WorkingDir()
-	if err := logSvc.Initialize(); err != nil {
-		t.Fatalf("logging init: %v", err)
+	logSvc := logOverride
+	if logSvc == nil {
+		logSvc = &logging.Service{}
+		logSvc.ConfigService = cfgSvc
+		logSvc.WorkingDir = cfgSvc.WorkingDir()
+		if err := logSvc.Initialize(); err != nil {
+			t.Fatalf("logging init: %v", err)
+		}
 	}
 
 	dbSvc := &sqlite.Service{}

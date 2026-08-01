@@ -229,7 +229,7 @@ func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
 			Int64("upload_id", row.ID).
 			Str("action", row.Action).
 			Msg("forwarder: row carries unknown action string")
-		w.markFailed(ctx, row, fmt.Sprintf("unknown action %q", row.Action))
+		_ = w.markFailed(ctx, row, fmt.Sprintf("unknown action %q", row.Action))
 		return
 	}
 
@@ -245,15 +245,30 @@ func (w *Worker) processRow(ctx context.Context, row types.QsoUpload) {
 
 	call := qso.ContactedStation.Call
 
-	w.logger.InfoWith().
+	// DEBUG, not Info: this is the prospective breadcrumb for an attempt that may
+	// never return (a hung upstream, a daemon killed mid-upload). It is worth
+	// having, but not at the default level — with the outcome record below it made
+	// this package 41% of every line in smd.log while saying nothing the outcome
+	// does not. Demoted rather than deleted: deleting saves nothing further at the
+	// default level and loses the trace entirely when it is wanted.
+	w.logger.DebugWith().
 		Str("forwarder", w.cfg.Name).
 		Int64("qso_id", row.QsoID).
 		Str("action", row.Action).
 		Str("call", call).
 		Msg("forwarding: submit")
 
+	// Timed around Forwarder.Submit ALONE. The queue write and the stamp-sync hook
+	// that follow are deliberately outside it: the one question this number exists
+	// to answer is whether the UPSTREAM is slow, and folding local work in would
+	// make a slow disk look like a slow API. (It identifies a slow upstream; it
+	// does not positively identify a slow local write — that needs a second
+	// duration this does not add.)
+	start := time.Now()
 	res := w.fwd.Submit(ctx, qso, act, priorUpstreamID)
-	w.persistOutcome(ctx, row, call, res)
+	submitDur := time.Since(start)
+
+	w.persistOutcome(ctx, row, call, res, submitDur)
 }
 
 // resolvePriorUpstreamID fetches the upstream_id recorded on the prior
@@ -318,11 +333,11 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 	// QSO absent or soft-deleted. §4 semantics:
 	switch act {
 	case action.Insert:
-		w.markFailed(ctx, row, "qso soft-deleted before insert forwarded")
+		_ = w.markFailed(ctx, row, "qso soft-deleted before insert forwarded")
 		return types.Qso{}, true
 
 	case action.Update:
-		w.markFailed(ctx, row, "qso soft-deleted; delete row supersedes")
+		_ = w.markFailed(ctx, row, "qso soft-deleted; delete row supersedes")
 		return types.Qso{}, true
 
 	case action.Delete:
@@ -337,7 +352,7 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 			// Not even a soft-deleted row exists. The qso_upload row points
 			// at a nonexistent QSO — ingest should never produce this, so
 			// mark terminal and move on.
-			w.markFailed(ctx, row, "qso not found for delete forwarding")
+			_ = w.markFailed(ctx, row, "qso not found for delete forwarding")
 			return types.Qso{}, true
 		}
 		w.markTransientInternal(ctx, row, err)
@@ -353,7 +368,7 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 		Int64("upload_id", row.ID).
 		Str("action", act.String()).
 		Msg("forwarder: switch reached unreachable action")
-	w.markFailed(ctx, row, fmt.Sprintf("unreachable action %q", act))
+	_ = w.markFailed(ctx, row, fmt.Sprintf("unreachable action %q", act))
 	return types.Qso{}, true
 }
 
@@ -364,39 +379,42 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 //
 // call is the contacted-station callsign for log lines; persistOutcome
 // itself doesn't otherwise touch the QSO row.
-func (w *Worker) persistOutcome(ctx context.Context, row types.QsoUpload, call string, res forwarding.Result) {
+func (w *Worker) persistOutcome(
+	ctx context.Context, row types.QsoUpload, call string, res forwarding.Result, submitDur time.Duration,
+) {
+	// Both halves of the result, resolved before anything is written to the log.
+	//
+	// The ORDER is the fix: the success line used to be written BEFORE
+	// markSuccess ran, so an upstream-accepted row whose queue write then failed —
+	// or was re-armed by a concurrent edit and will therefore be SENT AGAIN — was
+	// indistinguishable in the log from a completed upload. Persist first, then
+	// report what actually happened to both the upstream and the local row.
+	var (
+		outcome = string(res.Outcome)
+		disp    disposition
+		cause   error
+		attempt = &attemptFields{}
+	)
+
 	switch res.Outcome {
 	case forwarding.OutcomeSuccess:
-		w.logger.InfoWith().
-			Str("forwarder", w.cfg.Name).
-			Int64("qso_id", row.QsoID).
-			Str("action", row.Action).
-			Str("call", call).
-			Str("upstream_id", res.UpstreamID).
-			Msg("forwarding: success")
-		w.markSuccess(ctx, row, res.UpstreamID)
+		attempt.upstreamID = res.UpstreamID
+		disp = w.markSuccess(ctx, row, res.UpstreamID)
 
 	case forwarding.OutcomeTerminal:
 		// The Forwarder contract sets Result.Err on a non-success outcome, but
 		// don't trust it blindly — a nil here would store an empty last_error
 		// and emit an empty forward.failed reason (review 2026-06-05 L2).
-		cause := nonNilErr(res.Err, "forwarder reported terminal outcome without an error")
-		w.logger.WarnWith().
-			Str("forwarder", w.cfg.Name).
-			Int64("qso_id", row.QsoID).
-			Str("action", row.Action).
-			Str("call", call).
-			Err(cause).
-			Msg("forwarding: terminal failure")
-		w.markFailed(ctx, row, cause.Error())
+		cause = nonNilErr(res.Err, "forwarder reported terminal outcome without an error")
+		disp = w.markFailed(ctx, row, cause.Error())
 
 	case forwarding.OutcomeTransient:
-		w.markTransientFromForwarder(ctx, row, call,
-			nonNilErr(res.Err, "forwarder reported transient outcome without an error"))
+		cause = nonNilErr(res.Err, "forwarder reported transient outcome without an error")
+		outcome, disp = w.markTransientFromForwarder(ctx, row, cause, attempt)
 
 	case forwarding.OutcomeUnreachable:
-		w.markUnreachable(ctx, row, call,
-			nonNilErr(res.Err, "forwarder reported unreachable outcome without an error"))
+		cause = nonNilErr(res.Err, "forwarder reported unreachable outcome without an error")
+		disp = w.markUnreachable(ctx, row, cause, attempt)
 
 	default:
 		// Unknown outcome from the forwarder — treat as terminal so we
@@ -409,38 +427,108 @@ func (w *Worker) persistOutcome(ctx context.Context, row types.QsoUpload, call s
 			Int64("upload_id", row.ID).
 			Str("outcome", string(res.Outcome)).
 			Msg("forwarder: returned unrecognised Outcome")
-		w.markFailed(ctx, row, fmt.Sprintf("unknown outcome %q: %s", res.Outcome, errText(res.Err)))
+		cause = nonNilErr(res.Err, "forwarder reported an unrecognised outcome")
+		disp = w.markFailed(ctx, row, fmt.Sprintf("unknown outcome %q: %s", res.Outcome, errText(res.Err)))
 	}
+
+	w.logAttempt(row, call, outcome, disp, cause, submitDur, attempt)
 }
 
-// markTransientFromForwarder records a transient forwarder outcome,
-// promoting to 'failed' when the retry budget is exhausted.
-func (w *Worker) markTransientFromForwarder(ctx context.Context, row types.QsoUpload, call string, cause error) {
-	nextAttempts := row.Attempts + 1
-	if nextAttempts >= int64(w.cfg.Retry.MaxAttempts) {
-		w.logger.WarnWith().
-			Str("forwarder", w.cfg.Name).
-			Int64("qso_id", row.QsoID).
-			Str("action", row.Action).
-			Str("call", call).
-			Int64("attempts", nextAttempts).
-			Err(cause).
-			Msg("forwarding: retry budget exhausted")
-		w.markFailed(ctx, row, errText(cause))
-		return
+// attemptFields carries the per-outcome extras onto the attempt record without
+// widening every mark* signature: retry bookkeeping for the transient paths, the
+// upstream id for success. Zero values are omitted from the record.
+type attemptFields struct {
+	upstreamID string
+	attempts   int64
+	delay      time.Duration
+}
+
+// disposition is what happened to the QUEUE ROW locally, independent of what the
+// upstream said. The two are orthogonal and both are needed: an upload the
+// upstream accepted can still be re-armed or fail to persist, and reporting only
+// the upstream half is what made a will-be-sent-again row look completed.
+type disposition string
+
+const (
+	// dispPersisted — the queue transition committed.
+	dispPersisted disposition = "persisted"
+	// dispPersistFailed — the upstream call happened, the local write did not.
+	dispPersistFailed disposition = "persist_failed"
+	// dispRearmed — a concurrent operator edit re-armed the claimed row, so the
+	// transition never committed and the row WILL be submitted again. Not a
+	// failure, and deliberately not conflated with one.
+	dispRearmed disposition = "rearmed"
+)
+
+// logAttempt emits the single default-visible attempt-result record, after the
+// local disposition is known.
+//
+// Severity is chosen from BOTH halves: a persistence failure is an Error however
+// the upstream answered, an exhausted budget or a terminal rejection is a Warn,
+// and an ordinary success or scheduled retry is Info. Reporting everything at one
+// level would bury the outcomes that need attention among the ~98% that do not.
+func (w *Worker) logAttempt(
+	row types.QsoUpload, call, outcome string, disp disposition,
+	cause error, submitDur time.Duration, extra *attemptFields,
+) {
+	var ev logging.LogEvent
+	switch {
+	case disp == dispPersistFailed:
+		ev = w.logger.ErrorWith()
+	case outcome == outcomeExhausted || outcome == string(forwarding.OutcomeTerminal):
+		ev = w.logger.WarnWith()
+	default:
+		ev = w.logger.InfoWith()
 	}
-	delay := computeBackoff(nextAttempts, w.cfg.Retry)
-	nextAt := time.Now().Add(delay).Unix()
-	w.logger.InfoWith().
+
+	ev = ev.
 		Str("forwarder", w.cfg.Name).
 		Int64("qso_id", row.QsoID).
 		Str("action", row.Action).
 		Str("call", call).
-		Int64("attempts", nextAttempts).
-		Dur("delay", delay).
-		Err(cause).
-		Msg("forwarding: transient — will retry")
-	w.markTransientRetry(ctx, row, nextAt, errText(cause))
+		Str("outcome", outcome).
+		Str("disposition", string(disp)).
+		Int64("submit_duration_ms", submitDur.Milliseconds())
+
+	if extra != nil {
+		if extra.upstreamID != "" {
+			ev = ev.Str("upstream_id", extra.upstreamID)
+		}
+		if extra.attempts > 0 {
+			ev = ev.Int64("attempts", extra.attempts)
+		}
+		if extra.delay > 0 {
+			ev = ev.Dur("retry_in", extra.delay)
+		}
+	}
+	if cause != nil {
+		ev = ev.Err(cause)
+	}
+	ev.Msg("forwarding: attempt")
+}
+
+// outcomeExhausted is the attempt-record outcome for a transient failure that
+// consumed the last retry. Distinct from `terminal` (an upstream rejection) and
+// from `transient` (one that will be retried) because the operator action
+// differs: exhausted means SM gave up on a row it could have kept trying.
+const outcomeExhausted = "exhausted"
+
+// markTransientFromForwarder records a transient forwarder outcome, promoting to
+// 'failed' when the retry budget is exhausted. Returns the attempt-record outcome
+// (transient vs exhausted — the operator action differs) and the local
+// disposition; the caller emits the single record.
+func (w *Worker) markTransientFromForwarder(
+	ctx context.Context, row types.QsoUpload, cause error, extra *attemptFields,
+) (string, disposition) {
+	nextAttempts := row.Attempts + 1
+	extra.attempts = nextAttempts
+	if nextAttempts >= int64(w.cfg.Retry.MaxAttempts) {
+		return outcomeExhausted, w.markFailed(ctx, row, errText(cause))
+	}
+	delay := computeBackoff(nextAttempts, w.cfg.Retry)
+	extra.delay = delay
+	nextAt := time.Now().Add(delay).Unix()
+	return string(forwarding.OutcomeTransient), w.markTransientRetry(ctx, row, nextAt, errText(cause))
 }
 
 // markUnreachable records a connectivity failure: the upstream host could
@@ -452,20 +540,14 @@ func (w *Worker) markTransientFromForwarder(ctx context.Context, row types.QsoUp
 // still increments (useful diagnostics, and it drives backoff toward the
 // cap) but never triggers give-up. `failed` stays reserved for host-up
 // rejections, which keeps it a clean "needs operator attention" signal.
-func (w *Worker) markUnreachable(ctx context.Context, row types.QsoUpload, call string, cause error) {
+func (w *Worker) markUnreachable(
+	ctx context.Context, row types.QsoUpload, cause error, extra *attemptFields,
+) disposition {
 	nextAttempts := row.Attempts + 1
 	delay := computeBackoff(nextAttempts, w.cfg.Retry)
+	extra.attempts, extra.delay = nextAttempts, delay
 	nextAt := time.Now().Add(delay).Unix()
-	w.logger.InfoWith().
-		Str("forwarder", w.cfg.Name).
-		Int64("qso_id", row.QsoID).
-		Str("action", row.Action).
-		Str("call", call).
-		Int64("attempts", nextAttempts).
-		Dur("delay", delay).
-		Err(cause).
-		Msg("forwarding: host unreachable — will retry (no give-up)")
-	w.markTransientRetry(ctx, row, nextAt, errText(cause))
+	return w.markTransientRetry(ctx, row, nextAt, errText(cause))
 }
 
 // markTransientInternal records a transient outcome caused by an
@@ -475,12 +557,14 @@ func (w *Worker) markUnreachable(ctx context.Context, row types.QsoUpload, call 
 func (w *Worker) markTransientInternal(ctx context.Context, row types.QsoUpload, cause error) {
 	nextAttempts := row.Attempts + 1
 	if nextAttempts >= int64(w.cfg.Retry.MaxAttempts) {
-		w.markFailed(ctx, row, "internal: "+errText(cause))
+		// Disposition discarded: this path emits no attempt record (Forwarder.Submit
+		// was never reached). Its own missing logging is forwarding F5, not this diff.
+		_ = w.markFailed(ctx, row, "internal: "+errText(cause))
 		return
 	}
 	delay := computeBackoff(nextAttempts, w.cfg.Retry)
 	nextAt := time.Now().Add(delay).Unix()
-	w.markTransientRetry(ctx, row, nextAt, "internal: "+errText(cause))
+	_ = w.markTransientRetry(ctx, row, nextAt, "internal: "+errText(cause))
 }
 
 // reArmed reports whether a completion write was a no-op because a concurrent
@@ -500,10 +584,12 @@ func (w *Worker) reArmed(err error, uploadID int64, completion string) bool {
 	return true
 }
 
-func (w *Worker) markTransientRetry(ctx context.Context, row types.QsoUpload, nextAt int64, lastErr string) {
+func (w *Worker) markTransientRetry(
+	ctx context.Context, row types.QsoUpload, nextAt int64, lastErr string,
+) disposition {
 	err := w.db.MarkUploadTransientRetryWithContext(ctx, row.ID, nextAt, lastErr)
 	if w.reArmed(err, row.ID, "transient-retry") {
-		return
+		return dispRearmed
 	}
 	if err != nil {
 		w.logger.ErrorWith().
@@ -511,13 +597,15 @@ func (w *Worker) markTransientRetry(ctx context.Context, row types.QsoUpload, ne
 			Int64("upload_id", row.ID).
 			Err(err).
 			Msg("forwarder: mark transient retry failed")
+		return dispPersistFailed
 	}
+	return dispPersisted
 }
 
-func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr string) {
+func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr string) disposition {
 	err := w.db.MarkUploadFailedWithContext(ctx, row.ID, lastErr)
 	if w.reArmed(err, row.ID, "failed") {
-		return
+		return dispRearmed
 	}
 	if err != nil {
 		w.logger.ErrorWith().
@@ -525,7 +613,7 @@ func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr st
 			Int64("upload_id", row.ID).
 			Err(err).
 			Msg("forwarder: mark failed failed")
-		return
+		return dispPersistFailed
 	}
 	w.hub.Publish(events.NameForwardFailed, events.ForwardFailedPayload{
 		QsoID:         row.QsoID,
@@ -534,6 +622,7 @@ func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr st
 		Attempts:      int(row.Attempts) + 1,
 		Reason:        lastErr,
 	})
+	return dispPersisted
 }
 
 // markSuccess persists a success outcome, dispatching between the
@@ -548,14 +637,14 @@ func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr st
 //   - otherwise → MarkUploadSuccessWithAdifStamp, which updates
 //     qso_upload AND the QSO row's <PREFIX>_QSO_UPLOAD_{STATUS,DATE}
 //     in one transaction, honouring the one-fails-all-fail invariant.
-func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamID string) {
+func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamID string) disposition {
 	prefix := w.fwd.AdifPrefix()
 	if prefix != "" && row.Action != action.Delete.String() {
 		err := w.db.MarkUploadSuccessWithAdifStampWithContext(
 			ctx, row.ID, upstreamID, row.QsoID, prefix,
 		)
 		if w.reArmed(err, row.ID, "success+stamp") {
-			return // no stamp committed → no mirror hook, no succeeded event
+			return dispRearmed // no stamp committed → no mirror hook, no succeeded event
 		}
 		if err != nil {
 			w.logger.ErrorWith().
@@ -565,7 +654,7 @@ func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamI
 				Str("adif_prefix", prefix).
 				Err(err).
 				Msg("forwarder: mark success + adif stamp failed")
-			return
+			return dispPersistFailed
 		}
 		// The stamp just bumped the QSO row's revision — tell the row-mirror
 		// forwarder(s) so their copy doesn't drift until the hourly reconcile.
@@ -575,7 +664,7 @@ func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamI
 	} else {
 		err := w.db.MarkUploadSuccessWithContext(ctx, row.ID, upstreamID)
 		if w.reArmed(err, row.ID, "success") {
-			return
+			return dispRearmed
 		}
 		if err != nil {
 			w.logger.ErrorWith().
@@ -583,7 +672,7 @@ func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamI
 				Int64("upload_id", row.ID).
 				Err(err).
 				Msg("forwarder: mark success failed")
-			return
+			return dispPersistFailed
 		}
 	}
 
@@ -594,6 +683,7 @@ func (w *Worker) markSuccess(ctx context.Context, row types.QsoUpload, upstreamI
 		UpstreamID:    upstreamID,
 		Attempts:      int(row.Attempts) + 1,
 	})
+	return dispPersisted
 }
 
 func errText(err error) string {
