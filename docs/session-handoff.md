@@ -33,8 +33,37 @@ precisely so we don't re-derive state or redo finished work.
 ## Current state (as of 2026-08-01)
 
 > **2026-08-01 — FIVE package logging audits (66 findings, one file each in
-> `docs/reviews/*-logging-gaps.md`), then the first fix batch shipped: the
-> "why did the daemon stop?" trio. NOT DEPLOYED — the running build predates it.**
+> `docs/reviews/*-logging-gaps.md`), then SIX findings shipped across four atomic
+> diffs, plus SHIP GATE item (d). NOT DEPLOYED — the running build predates all
+> of it.**
+>
+> - **SHIPPED TODAY, in order:** api A1 + A9 + forwarding F4 (`b1c50913`/`0265f04a`)
+>   · forwarding F6 and F1's volume half — the `forwarding: attempt` restructure
+>   (`f31738bc`, regression fixed by `191ac370`) · F1's provenance half —
+>   `qso_upload.origin` + migration 0007 (`59542a8a`/`ed0f0657`) · **SHIP GATE (d)**
+>   — version stamping on every record (`116cf34b`) · the ft8 structural-guard fix
+>   (`336329a6`). **Backlog: forwarding 14 of 17 remain; api 10 of 12.**
+> - **MEASURED EFFECT once deployed and rotated:** `internal/forwarding` drops from
+>   41% of `smd.log` to ~23%; the whole log 14.31 → 15.18 MiB *including* full
+>   version stamping — **+6%**, against **+23%** had (d) shipped without the F1
+>   restructure. Both decided together for exactly that reason. Figures on a
+>   corrected 15.51-day divisor (an earlier pass wrongly divided by 17 distinct
+>   calendar days).
+> - **SHIP GATE now: (a) config saves and (c) notification records still open;
+>   (b) STRUCK as false; (d) SHIPPED.**
+> - **TRAP, now documented in seven places:** `-X` on a symbol that no longer
+>   exists **exits 0 and stamps nothing**, so any stale `-X main.Version=` silently
+>   produces a `dev` build. `internal/buildinfo.Version` is the single carrier;
+>   `cmd/smd`'s `main.Version` was REMOVED, not aliased. `cmd/smcloud` keeps its
+>   own and is out of scope.
+> - **A GUARD CLASS THAT READ AS COVERAGE.** Four tests inspected their own source
+>   via a relative path, so outside the package directory they parsed nothing and
+>   PASSED. Two were pre-existing and load-bearing: `internal/ft8`'s
+>   publish-atomicity and session-end AST checks, which exist *because* 23 of 39
+>   publish sites have no test. Proven by injecting real invariant violations —
+>   they failed in-package and passed from `/tmp`. All four now use `//go:embed`,
+>   and each fails if it parses nothing. **If you write a test that reads source,
+>   embed it; a relative path is a silent no-op waiting for a different runner.**
 >
 > - **THE AUDITS.** `internal/ft8` (14) · `internal/bridge` (14) · `internal/api` (12) ·
 >   `internal/qsoservice` (10) · `internal/forwarding` (16). Each file has a
@@ -79,8 +108,21 @@ precisely so we don't re-derive state or redo finished work.
 >   (b) ("QSO deletes write no log line") is **FALSE** — `delete.go:85` has logged since
 >   `d516d816`, 2026-05-17, *before the entry was written*; struck in the backlog. And
 >   `registry.go` documented a startup log that did not exist; F4 made the comment true.
-> - **NEXT: see "NEXT SESSION" below.** The volume decision (forwarding F1 +
->   SHIP GATE item (d)) should come before adding further lines.
+> - **NEXT — the volume decision is DONE, so the remaining 60 findings are now
+>   unblocked.** Highest value first: `api-logging-gaps.md` **A7** (a failing
+>   database is reported to the operator as unset configuration — the only finding
+>   in the series where the daemon tells them to take the WRONG action), then
+>   `bridge-logging-gaps.md` **B1** (the drive-collapse detector declines to arm
+>   silently, and one branch is reported nowhere), then the two silent hub
+>   evictions (`ft8` #1 + `bridge` B2 — one defect, two hubs, fix in one commit).
+> - **STILL UNDEPLOYED, and it matters for reading the log:** the running daemon is
+>   `aba61729`. This morning's two `drive_no_output` alarms (08:45:03, 08:45:33)
+>   are almost certainly FALSE — 6–7 meter samples against ~490 on healthy
+>   transmissions, a 12.88 s gap in a 13.36 s key, and `meter_po_max` **120 vs 98**,
+>   i.e. the rig reported MORE output on the few samples it sent. Operator disarmed
+>   and re-armed at 08:44:24/08:44:31, seven seconds before the first. Cause not
+>   established; cheapest next step is the operator's recollection of what changed,
+>   then passive `cmd/catcli` observation. No transmission needed for either.
 >
 > ---
 >
