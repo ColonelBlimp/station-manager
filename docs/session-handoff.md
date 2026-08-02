@@ -50,21 +50,28 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **DEPLOY IS 7 COMMITS BEHIND.** RPM at `2c6c22f3`, HEAD `5d328d74`. NOT
-  running: the forwarder `label` field, the **`endpoints` carry-over fix**, and
-  the whole Forwarding tab. Consequence while behind: a forwarder save from the
-  OLD config SPA still drops custom `endpoints` (harmless for this operator —
-  theirs equal the registry defaults). `task deploy:local:dev` when ready.
-  Daemon runs on demand (`smd` is deliberately NOT auto-start — a stopped daemon
-  is not a fault).
+- **DEPLOY IS 9 COMMITS BEHIND.** RPM at `2c6c22f3`, HEAD `b6efaf6c`. NOT
+  running: the forwarder `label` field, the **`endpoints` carry-over fix**, the
+  whole Forwarding tab, and the **logging-card centring fix**. Consequence while
+  behind: a forwarder save from the OLD config SPA still drops custom
+  `endpoints` (harmless for this operator — theirs equal the registry defaults),
+  and the Phone/CW logging card still sits ~105px left of centre.
+  `task deploy:local:dev` when ready. Daemon runs on demand (`smd` is
+  deliberately NOT auto-start — a stopped daemon is not a fault).
 - **Shipped today:** SHIP GATE (a) config-save records (closed api A4 + A8); the
   **SessionStart hook fix** (it had been emitting 231 KB, truncated to a 2 KB
-  preview, so the RECONCILE warning had never once been delivered); and the
-  **Forwarding tab** ported into app Settings.
+  preview, so the RECONCILE warning had never once been delivered); the
+  **Forwarding tab** ported into app Settings; and the **logging card re-centred**
+  — it lost its auto-margin centring when ADR 0058 retired the ADR 0046 tile
+  board, leaving a fixed-width card flex-start-aligned in a wider container.
 - **Next, unblocked, pick one:** (a) port **Email** or **Enrichment** — both
   reuse the masked-credential + `Clearable` pattern Forwarding just proved;
   (b) **SSE reconnect on `visibilitychange`**, which closes two dogfood reports
-  at once; (c) surface the forwarder `label` in the logbook upload-status column.
+  at once; (c) surface the forwarder `label` in the logbook upload-status column;
+  (d) a Playwright bounding-box/screenshot check for layout — THREE centring
+  defects landed today (Forwarding width, Rigs centring, the logging card) and
+  none is catchable in vitest, because jsdom does no layout and the only
+  assertable thing is a class name.
 - **BLOCKED, do not start as a standalone build:** SHIP GATE (c) notification
   records — it is ADR 0061's subject matter and that ADR is still `Proposed`
   with the "does `notification` join the event table" question unanswered. The
