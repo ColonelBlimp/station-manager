@@ -88,8 +88,14 @@
                          Save or Cancel is the way out — both clear hasEdits,
                          and Cancel is always available, so a card cannot get
                          stuck open. -->
+                    <!-- The <summary> itself keeps its DEFAULT display, which is
+                         what renders the browser's native disclosure triangle —
+                         same as Rigs → Mode mappings. Putting `flex` on the
+                         summary suppresses that marker (it belongs to
+                         display:list-item), so the row layout lives on an
+                         inline-flex wrapper inside instead. -->
                     <summary
-                        class="flex cursor-pointer items-center gap-2 px-3 py-2 select-none"
+                        class="cursor-pointer px-3 py-2 select-none"
                         title={edited ? 'Save or cancel before collapsing' : undefined}
                         onclick={(e) => {
                             if (
@@ -101,39 +107,45 @@
                             }
                         }}
                     >
-                        <!-- The operator's config.json label wins over the name
+                        <!-- inline-flex so the row sits BESIDE the native
+                             triangle rather than below it: a block-level child
+                             would start its own line box and push the content
+                             under the marker. -->
+                        <span class="inline-flex items-center gap-2 align-middle">
+                            <!-- The operator's config.json label wins over the name
                              baked into the binary, which is a build+deploy to
                              change and already dates (smcloud's "SM Cloud
                              backup"). Falls back to the built-in, then to the
                              raw type, so a destination is never nameless. -->
-                        <span class="font-semibold text-ink">
-                            {f.label || td?.display_name || f.type}{#if edited}<span
-                                    class="text-warning"
-                                    title="Unsaved changes">*</span
-                                >{/if}
-                        </span>
-                        <!-- No mono `name` here. It is the durable key
+                            <span class="font-semibold text-ink">
+                                {f.label || td?.display_name || f.type}{#if edited}<span
+                                        class="text-warning"
+                                        title="Unsaved changes">*</span
+                                    >{/if}
+                            </span>
+                            <!-- No mono `name` here. It is the durable key
                              (qso_upload.forwarder_name) but it is not operator
                              information: ADR 0039 seeds one entry per type, so
                              it always equals the type and just repeats the
                              service name in a second font. -->
-                        <!-- Same pill as the active-rig badge (RigsSection.svelte:119):
+                            <!-- Same pill as the active-rig badge (RigsSection.svelte:119):
                              identical geometry and type, green when on. Disabled keeps
                              the shape and drops to neutral, because unlike a rig — where
                              exactly one is active and the rest offer a button — every
                              destination shows its state, so the row has to read at a
                              glance either way. Text is lower-case; the uppercase is CSS,
                              matching the rig pill. -->
-                        <span
-                            class="rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase {f.enabled
-                                ? 'border-green-500/40 bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-400'
-                                : 'border-line bg-surface-muted text-muted'}"
-                        >
-                            {f.enabled ? 'enabled' : 'disabled'}
+                            <span
+                                class="rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase {f.enabled
+                                    ? 'border-green-500/40 bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-400'
+                                    : 'border-line bg-surface-muted text-muted'}"
+                            >
+                                {f.enabled ? 'enabled' : 'disabled'}
+                            </span>
+                            {#if !td}
+                                <span class="text-xs text-warning">unsupported</span>
+                            {/if}
                         </span>
-                        {#if !td}
-                            <span class="text-xs text-warning">unsupported</span>
-                        {/if}
                     </summary>
 
                     <div class="border-t border-line px-3 py-3">
