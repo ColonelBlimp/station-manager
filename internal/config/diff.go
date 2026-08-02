@@ -91,8 +91,8 @@ func diffValue(path string, before, after any, out *[]FieldChange) {
 	bList, bIsList := before.([]any)
 	aList, aIsList := after.([]any)
 	if bIsList || aIsList {
-		bKeyed, bPlain := keyList(bList)
-		aKeyed, aPlain := keyList(aList)
+		bKeyed, bOrder, bPlain := keyList(bList)
+		aKeyed, aOrder, aPlain := keyList(aList)
 		if bPlain || aPlain {
 			// A list of scalars (action_filter, rig_modes) has no stable
 			// identity per element, so it is compared whole — reporting
@@ -101,6 +101,18 @@ func diffValue(path string, before, after any, out *[]FieldChange) {
 				emit(path, renderScalarList(bList), renderScalarList(aList), out)
 			}
 			return
+		}
+		// ORDER IS DATA. Keying by identity compares members and silently
+		// discards their sequence, but lookup.chain is priority-ordered —
+		// runChain returns the first non-empty result (orchestrator.go:576) —
+		// so a swap changes what the daemon does. Without this the change
+		// committed to disk and diffed to nothing.
+		//
+		// Reported only when the MEMBERSHIP is unchanged: adding or removing an
+		// entry necessarily shifts the sequence, and firing then would
+		// double-report every list edit and drain the signal of meaning.
+		if sameMembers(bOrder, aOrder) && !sameSequence(bOrder, aOrder) {
+			emit(path, renderKeyOrder(bOrder), renderKeyOrder(aOrder), out)
 		}
 		for _, k := range unionKeys(bKeyed, aKeyed) {
 			diffValue(fmt.Sprintf("%s[%s]", path, k), bKeyed[k], aKeyed[k], out)
@@ -128,7 +140,7 @@ func emit(path, from, to string, out *[]FieldChange) {
 	case policyURL:
 		*out = append(*out, FieldChange{Field: path, From: originOf(from), To: originOf(to)})
 	default:
-		*out = append(*out, FieldChange{Field: path, From: from, To: to})
+		*out = append(*out, FieldChange{Field: path, From: originIfURL(from), To: originIfURL(to)})
 	}
 }
 
@@ -153,6 +165,13 @@ var secretLeaves = map[string]bool{
 // urlLeaves log scheme + host only: a provider key can ride in the query
 // string, so the tail is dropped. Same instinct as csrf.go, which parses the
 // Origin rather than trusting the raw header.
+//
+// This list is a FLOOR, not the mechanism — originIfURL reduces any
+// URL-shaped value wherever it appears. Naming the fields was the original
+// design and it was wrong: forwarders[x].endpoints is a map keyed by ACTION,
+// so its URLs sit at leaves called "insert" and "delete" and sailed straight
+// past a check that looked for leaves called "url". Asking the question of the
+// field name is a denylist; asking it of the value is not.
 var urlLeaves = map[string]bool{"url": true, "view_url": true}
 
 // valueAllowlist is the set of path prefixes whose leaves may carry their
@@ -166,14 +185,21 @@ var valueAllowlist = []string{
 	"version", "data_dir", "useragent", "socket_path", "setup_complete",
 	"default_logbook_id", "default_operator", "default_rig_id",
 	"bridge_enabled", "ft8_enabled", "restore_rig_on_mode_switch",
-	"server.", "datastore.", "logging.", "logging_station.", "operators[",
-	"rigs[", "bridge.", "bridge_timeouts.", "bridge_tune.",
+	"server.", "datastore.", "logging.", "logging_station.", "operators",
+	"rigs", "bridge.", "bridge_timeouts.", "bridge_tune.",
 	"ft8.", "psk_reporter.", "map.", "qsl.", "mailer.",
 	"smtp.enabled", "smtp.host", "smtp.port", "smtp.username", "smtp.from",
 	"smtp.default_recipient", "smtp.starttls", "smtp.timeout_sec",
 	"lookup.country_ttl_days", "lookup.station_ttl_days", "lookup.refresh_max_in_flight",
-	"lookup.", "forwarders[",
+	"lookup.", "forwarders",
 }
+
+// The list prefixes above are BARE ("forwarders", not "forwarders[") so the
+// container path itself is allowlisted too — otherwise a reorder, which is
+// reported against the container, renders as a redacted "(set) -> (set)" and
+// tells the operator nothing. This does not widen credential exposure:
+// valuePolicy checks secretLeaves and ".credentials." BEFORE the allowlist, and
+// URL-shaped values are reduced by originIfURL regardless of policy.
 
 func valuePolicy(path string) policy {
 	leaf := path
@@ -212,6 +238,25 @@ func originOf(raw string) string {
 	return u.Scheme + "://" + u.Host
 }
 
+// originIfURL reduces a URL-SHAPED value to scheme://host and leaves anything
+// else alone. Applied to every value-logged field, because a URL can live at a
+// leaf with any name at all (see urlLeaves). The "://" pre-check keeps
+// url.Parse — which accepts almost any string — from quietly mangling ordinary
+// values such as a rig model or a grid square.
+func originIfURL(v string) string {
+	if !strings.Contains(v, "://") {
+		return v
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.Host == "" {
+		// Shaped like a URL but unparseable. Report presence rather than echo
+		// it: whatever made it fail to parse is not worth printing into a 0644
+		// file to find out.
+		return presenceSet
+	}
+	return u.Scheme + "://" + u.Host
+}
+
 func presence(v string) string {
 	if v == "" {
 		return presenceUnset
@@ -231,26 +276,65 @@ func listKey(m map[string]any) (string, bool) {
 	return "", false
 }
 
-// keyList indexes a list of objects by identity. The second return reports
-// that the list is NOT keyable (scalars, or objects with no identity field),
-// in which case the caller compares it whole.
-func keyList(list []any) (map[string]any, bool) {
+// keyList indexes a list of objects by identity, returning both the map and
+// the keys IN LIST ORDER — order is a property of the config, not an artefact
+// of iteration, and lookup.chain's order decides which provider answers first.
+// The final return reports that the list is NOT keyable (scalars, or objects
+// with no identity field), in which case the caller compares it whole.
+func keyList(list []any) (map[string]any, []string, bool) {
 	if len(list) == 0 {
-		return map[string]any{}, false
+		return map[string]any{}, nil, false
 	}
 	out := make(map[string]any, len(list))
+	order := make([]string, 0, len(list))
 	for _, item := range list {
 		m, ok := item.(map[string]any)
 		if !ok {
-			return nil, true
+			return nil, nil, true
 		}
 		k, ok := listKey(m)
 		if !ok {
-			return nil, true
+			return nil, nil, true
 		}
 		out[k] = m
+		order = append(order, k)
 	}
-	return out, false
+	return out, order, false
+}
+
+// sameMembers reports whether two key sequences contain the same identities,
+// regardless of position.
+func sameMembers(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, k := range a {
+		seen[k]++
+	}
+	for _, k := range b {
+		seen[k]--
+		if seen[k] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func sameSequence(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func renderKeyOrder(keys []string) string {
+	return "[" + strings.Join(keys, " ") + "]"
 }
 
 func renderScalarList(list []any) string {

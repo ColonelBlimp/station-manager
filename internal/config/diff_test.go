@@ -1,0 +1,172 @@
+package config
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/ColonelBlimp/station-manager/internal/types"
+)
+
+// SHIP GATE (a) — THE VALUE POLICY AND THE COMPARISON ITSELF.
+//
+// These rules sit at internal/config because that is where the policy lives.
+// The daemon-boundary rules (internal/api/config_save_log_test.go CS1-CS10,
+// cmd/smd/config_save_startup_test.go B1-B3) prove the record reaches smd.log;
+// these prove what may legally be IN it, and that a committed change cannot
+// diff to nothing.
+//
+// Both rules below come from the clean-room review of 7b21b2b1, and both were
+// real. Recorded here rather than in a commit message because each is a
+// standing constraint, not a one-off fix:
+//
+//   - D1: keying "is this a URL?" on the leaf NAME is a denylist wearing an
+//     allowlist's clothes. forwarders[x].endpoints.insert is a URL whose leaf
+//     is called "insert", so it sailed past a check that looked for leaves
+//     named "url" and was then logged in full by the forwarders[ allowlist.
+//     The question has to be asked of the VALUE.
+//   - D2: a list keyed by identity compares members but discards ORDER, and
+//     lookup.chain is priority-ordered — runChain returns the first non-empty
+//     result (orchestrator.go:576-586). So swapping two providers changes what
+//     the daemon does, commits to disk, and produced an empty diff: a
+//     committed change that the audit trail silently omitted.
+
+func diffFor(t *testing.T, before, after Config) []FieldChange {
+	t.Helper()
+	return Diff(before, after)
+}
+
+func findChange(changes []FieldChange, field string) (FieldChange, bool) {
+	for _, c := range changes {
+		if c.Field == field {
+			return c, true
+		}
+	}
+	return FieldChange{}, false
+}
+
+// D1 — A URL IS REDUCED WHEREVER IT APPEARS, NOT WHERE IT IS NAMED "url".
+// Forwarder endpoints are a map keyed by action, so the leaf carries the action
+// name. An operator who put a token in an endpoint's query would have had it
+// copied verbatim into a 0644 log out of a 0600 file.
+func TestDiff_ForwarderEndpointUrlIsReducedToOrigin(t *testing.T) {
+	const secretInQuery = "ENDPOINTTOKEN456"
+
+	before := DefaultConfig(t.TempDir())
+	before.Forwarders = []types.ForwarderConfig{{
+		Name: "qrz", Type: "qrz",
+		Endpoints: map[string]string{"insert": "https://old.example.com/api?token=" + secretInQuery},
+	}}
+	after := before.Clone()
+	after.Forwarders[0].Endpoints = map[string]string{"insert": "https://new.example.com/api/v2?token=OTHER"}
+
+	changes := diffFor(t, before, after)
+
+	rendered, err := json.Marshal(changes)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(rendered), secretInQuery) {
+		t.Fatalf("an endpoint query value reached the record: %s", rendered)
+	}
+	if strings.Contains(string(rendered), "/api/v2") {
+		t.Errorf("the endpoint PATH reached the record: %s", rendered)
+	}
+
+	ch, ok := findChange(changes, "forwarders[qrz].endpoints.insert")
+	if !ok {
+		t.Fatalf("the endpoint change is not reported at all: %v — silence would pass "+
+			"the leak checks above vacuously", changes)
+	}
+	if ch.From != "https://old.example.com" {
+		t.Errorf("from = %q, want the origin only", ch.From)
+	}
+	if ch.To != "https://new.example.com" {
+		t.Errorf("to = %q, want the origin only", ch.To)
+	}
+}
+
+// D2 — REORDERING A PRIORITY-ORDERED LIST IS A CHANGE. The members are
+// identical, so a comparison keyed purely by identity sees nothing; the daemon
+// meanwhile consults a different provider first.
+//
+// The fixture swaps two providers whose OTHER fields are untouched. If any
+// field differed the rule would pass on that difference alone and prove nothing
+// about ordering.
+func TestDiff_LookupChainReorderIsReported(t *testing.T) {
+	qrz := types.LookupConfig{Name: "qrz", Enabled: true, URL: "https://qrz.example.com"}
+	hamqth := types.LookupConfig{Name: "hamqth", Enabled: true, URL: "https://hamqth.example.com"}
+
+	before := DefaultConfig(t.TempDir())
+	before.Lookup.Chain = []types.LookupConfig{qrz, hamqth}
+	after := before.Clone()
+	after.Lookup.Chain = []types.LookupConfig{hamqth, qrz}
+
+	changes := diffFor(t, before, after)
+	if len(changes) == 0 {
+		t.Fatal("reordering the priority-ordered lookup chain produced NO change; " +
+			"the daemon now queries a different provider first and the log says nothing")
+	}
+
+	ch, ok := findChange(changes, "lookup.chain")
+	if !ok {
+		t.Fatalf("no change reported against lookup.chain itself: %v", changes)
+	}
+	if ch.From != "[qrz hamqth]" {
+		t.Errorf("from = %q, want the previous order", ch.From)
+	}
+	if ch.To != "[hamqth qrz]" {
+		t.Errorf("to = %q, want the new order", ch.To)
+	}
+}
+
+// D2b — AND AN ORDER CHANGE IS NOT INVENTED WHEN MEMBERSHIP CHANGES. Adding a
+// provider necessarily shifts the sequence; reporting that as a reorder on top
+// of the per-field changes would be double-counting, and would make the
+// ordering signal meaningless by firing on every list edit.
+func TestDiff_AddingChainMemberIsNotReportedAsReorder(t *testing.T) {
+	qrz := types.LookupConfig{Name: "qrz", Enabled: true, URL: "https://qrz.example.com"}
+	hamqth := types.LookupConfig{Name: "hamqth", Enabled: true, URL: "https://hamqth.example.com"}
+
+	before := DefaultConfig(t.TempDir())
+	before.Lookup.Chain = []types.LookupConfig{qrz}
+	after := before.Clone()
+	after.Lookup.Chain = []types.LookupConfig{qrz, hamqth}
+
+	changes := diffFor(t, before, after)
+	if _, ok := findChange(changes, "lookup.chain"); ok {
+		t.Errorf("adding a member was reported as a reorder as well: %v", changes)
+	}
+	if _, ok := findChange(changes, "lookup.chain[hamqth].enabled"); !ok {
+		t.Errorf("the added provider is not reported at all: %v", changes)
+	}
+}
+
+// D3 — AN UNRECOGNISED PATH IS REDACTED, NOT LOGGED. The allowlist's whole
+// purpose: a field added later is silent about its contents until someone
+// decides otherwise. A denylist would publish it on the day it lands.
+func TestDiff_UnknownPathIsRedacted(t *testing.T) {
+	before := DefaultConfig(t.TempDir())
+	before.Smtp.Password = "OLDPASSWORD"
+	after := before.Clone()
+	after.Smtp.Password = "NEWPASSWORD"
+
+	changes := diffFor(t, before, after)
+
+	rendered, err := json.Marshal(changes)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, leaked := range []string{"OLDPASSWORD", "NEWPASSWORD"} {
+		if strings.Contains(string(rendered), leaked) {
+			t.Fatalf("password value %q reached the record: %s", leaked, rendered)
+		}
+	}
+	ch, ok := findChange(changes, "smtp.password")
+	if !ok {
+		t.Fatalf("the password change is not reported at all: %v", changes)
+	}
+	if !ch.Secret {
+		t.Errorf("smtp.password is not marked secret: %+v", ch)
+	}
+}
