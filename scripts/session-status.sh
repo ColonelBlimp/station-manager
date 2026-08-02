@@ -53,6 +53,10 @@ asof="$(grep -m1 -oE '## Current state \(as of ([0-9]{4}-[0-9]{2}-[0-9]{2})' "$H
         | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}')"
 last_commit="$(git log -1 --format=%cs 2>/dev/null)"
 
+# Built into a variable, not echoed directly, so its size can be charged
+# against the same budget as the body below (codex 381ccdf4 P1: the warning is
+# unbounded — up to 12 commit subjects — so capping only the body caps nothing).
+warning="$(
 if [ -z "$asof" ]; then
   echo "⚠  HANDOFF FORMAT PROBLEM — no '## Current state (as of YYYY-MM-DD)' heading found."
   echo "   The staleness guard cannot run. Fix the heading before trusting this doc."
@@ -68,6 +72,8 @@ elif [ -n "$last_commit" ] && [[ "$last_commit" > "$asof" ]]; then
   git log --since="${asof} 00:00:00" --format='     %cs %h %s' 2>/dev/null | head -12
   echo
 fi
+)"
+[ -n "$warning" ] && printf '%s\n' "$warning"
 
 # --- 2. THE "## Now" SECTION ---------------------------------------------
 # One heading-to-next-heading slice, and deliberately ONLY that one. The whole
@@ -90,24 +96,59 @@ section() {
 }
 
 # --- 3. EMIT, UNDER THE CAP ----------------------------------------------
-# Collected first, then truncated as a whole. The warning above is already out
-# and is never at risk; only this part can be cut, and it says so when it is.
-# An unenforced cap is the bug this script exists to not repeat, so the
-# truncation is applied here rather than assumed from the section sizes.
+# Collected first, then truncated as a whole. The warning is already out and is
+# never cut; the body absorbs whatever budget the warning left.
+#
+# MEASURED IN BYTES, NOT CHARACTERS (codex 381ccdf4 P1). `${#s}` and `${s:0:n}`
+# count CHARACTERS under a UTF-8 locale, so a cap written that way undercounts
+# every multibyte glyph — and this very file's "## Now" is full of em-dashes and
+# ⚠. A section of emoji measured 6,000 "bytes" and emitted 24,843, which is the
+# precise failure the cap exists to prevent, reintroduced by the fix for it.
+# wc -c and head -c both count bytes, so they agree with the harness.
 body="$(
-  if ! section '^## Now'; then
+  # Anchored with a boundary: a bare '^## Now' also matches '## Nowhere' and
+  # '## Now archived', so a MISSING section could silently inject an unrelated
+  # one and suppress the degraded-orientation warning (codex 381ccdf4 P2).
+  if ! section '^## Now([[:space:]]|$)'; then
     echo "⚠  No '## Now' section in ${HANDOFF}. Orientation is DEGRADED — that"
     echo "   section is the ONLY one injected here; without it this hook shows"
     echo "   nothing about current state. Read ${HANDOFF} directly this session."
   fi
 )"
 
-if [ "${#body}" -gt "$MAX_BYTES" ]; then
-  printf '%s\n' "${body:0:$MAX_BYTES}"
+warn_bytes=$(printf '%s' "$warning" | wc -c)
+body_bytes=$(printf '%s' "$body" | wc -c)
+# What is left after the warning, which is never truncated. Floored at 500 so a
+# pathological warning cannot reduce the body to nothing without saying so.
+# Reserve for the truncation notice and the trailing pointers, which are emitted
+# AFTER the body: charging only the body left the total over MAX_BYTES, which is
+# the one number this whole block exists to hold.
+budget=$(( MAX_BYTES - warn_bytes - 500 ))
+[ "$budget" -lt 500 ] && budget=500
+
+if [ "$body_bytes" -gt "$budget" ]; then
+  # head -c can slice a multibyte character in half, so the tail is re-encoded
+  # to drop an incomplete trailing sequence. iconv -c discards exactly that and
+  # keeps every COMPLETE character.
+  #
+  # An earlier attempt dropped the last LINE instead (`sed '$d'`) and was worse
+  # than the problem: a section that is one long line has its entire payload on
+  # that line, so the cut removed everything and the hook emitted a truncation
+  # notice with nothing above it — silence, which is the original failure. Cut
+  # by character, never by line.
+  #
+  # Falls back to the raw bytes where iconv is missing: one mangled glyph is a
+  # far smaller problem than losing the orientation.
+  if command -v iconv >/dev/null 2>&1; then
+    printf '%s' "$body" | head -c "$budget" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null
+  else
+    printf '%s' "$body" | head -c "$budget"
+  fi
   echo
-  echo "⚠  TRUNCATED at ${MAX_BYTES} bytes (block was ${#body}). The newest block has"
-  echo "   outgrown the orientation budget — trim it in ${HANDOFF}, and read that"
-  echo "   file directly this session."
+  echo
+  echo "⚠  TRUNCATED at ${budget} bytes (block was ${body_bytes}). '## Now' has"
+  echo "   outgrown the orientation budget — TRIM IT in ${HANDOFF} rather than"
+  echo "   raising the cap, and read that file directly this session."
 else
   printf '%s\n' "$body"
 fi
