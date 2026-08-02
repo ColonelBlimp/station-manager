@@ -48,6 +48,24 @@ echo
 
 [ -f "$HANDOFF" ] || { echo "(no ${HANDOFF} found)"; exit 0; }
 
+# utf8_trim drops a possibly-incomplete trailing multibyte sequence from stdin,
+# so anything cut with `head -c` is still valid UTF-8. ONE helper for both
+# truncation sites: they had different fallbacks (the body checked for iconv,
+# the warning piped to `cat` and emitted raw half-characters), which is two
+# behaviours for one problem and only one of them correct — codex b0a0e2c5 P2.
+#
+# The iconv-free path deletes the final multibyte sequence whether or not it is
+# complete. Losing one whole glyph off a truncation notice is a fair price for
+# never emitting a byte sequence the consumer may reject. LC_ALL=C so the ranges
+# are matched as BYTES.
+utf8_trim() {
+  if command -v iconv >/dev/null 2>&1; then
+    iconv -c -f UTF-8 -t UTF-8 2>/dev/null
+  else
+    LC_ALL=C sed 's/[\xC2-\xF4][\x80-\xBF]*$//'
+  fi
+}
+
 # --- 1. STALENESS CHECK, FIRST -------------------------------------------
 asof="$(grep -m1 -oE '## Current state \(as of ([0-9]{4}-[0-9]{2}-[0-9]{2})' "$HANDOFF" \
         | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}')"
@@ -88,8 +106,7 @@ fi
 # is the output-too-large failure this script exists to prevent.
 WARN_MAX=$(( MAX_BYTES / 2 ))
 if [ "$(printf '%s' "$warning" | wc -c)" -gt "$WARN_MAX" ]; then
-  warning="$(printf '%s' "$warning" | head -c "$WARN_MAX" \
-    | { iconv -c -f UTF-8 -t UTF-8 2>/dev/null || cat; })
+  warning="$(printf '%s' "$warning" | head -c "$WARN_MAX" | utf8_trim)
    … commit list truncated; run: git log --since=${asof}"
 fi
 [ -n "$warning" ] && printf '%s\n' "$warning"
@@ -158,11 +175,7 @@ if [ "$body_bytes" -gt "$budget" ]; then
   #
   # Falls back to the raw bytes where iconv is missing: one mangled glyph is a
   # far smaller problem than losing the orientation.
-  if command -v iconv >/dev/null 2>&1; then
-    printf '%s' "$body" | head -c "$budget" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null
-  else
-    printf '%s' "$body" | head -c "$budget"
-  fi
+  printf '%s' "$body" | head -c "$budget" | utf8_trim
   echo
   echo
   echo "⚠  TRUNCATED at ${budget} bytes (block was ${body_bytes}). '## Now' has"
