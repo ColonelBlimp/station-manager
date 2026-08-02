@@ -7,13 +7,15 @@
     // mappings, and the rest land in follow-up increments.
     import StationSection from './StationSection.svelte';
     import RigsSection from './RigsSection.svelte';
+    import ForwardingSection from './ForwardingSection.svelte';
     import { restartDaemon, waitForDaemonBack, fetchDaemonInstance } from '../api/restart';
     import { toasts } from '../ui/toasts.svelte';
 
-    type SectionId = 'station' | 'rigs';
+    type SectionId = 'station' | 'rigs' | 'forwarding';
     const sections: { id: SectionId; label: string }[] = [
         { id: 'station', label: 'Station' },
         { id: 'rigs', label: 'Rigs' },
+        { id: 'forwarding', label: 'Forwarding' },
     ];
     let active = $state<SectionId>('station');
 
@@ -109,5 +111,8 @@
     </div>
     <div class:hidden={active !== 'rigs'}>
         <RigsSection />
+    </div>
+    <div class:hidden={active !== 'forwarding'}>
+        <ForwardingSection />
     </div>
 </div>

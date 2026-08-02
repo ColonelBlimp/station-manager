@@ -31,8 +31,19 @@ import "encoding/json"
 // constructor falls back to its package default const for any key the operator
 // left unset. The operator never needs to type a URL for the common case.
 type ForwarderConfig struct {
-	Name            string            `json:"name"`
-	Type            string            `json:"type"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	// Label is the operator's own display name for this destination, settable
+	// ONLY by hand in config.json — no API surface writes it and the SPA has no
+	// control for it. Empty means "use the type's built-in DisplayName".
+	//
+	// It exists because that built-in name is a string in the binary
+	// (smcloud.go's "SM Cloud backup"), so renaming is a build and a deploy, and
+	// an operator cannot do it at all. Label is deliberately NOT Name: Name is
+	// the durable key that qso_upload's UNIQUE (qso_id, forwarder_name, action)
+	// is built on, so renaming THAT would make the daemon forget which QSOs it
+	// had already sent and re-upload them upstream. Nothing joins on Label.
+	Label           string            `json:"label,omitempty"`
 	Enabled         bool              `json:"enabled"`
 	Credentials     json.RawMessage   `json:"credentials,omitempty"`
 	ActionFilter    []string          `json:"action_filter,omitempty"`

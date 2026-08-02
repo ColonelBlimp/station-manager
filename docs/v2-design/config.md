@@ -226,6 +226,27 @@ seed wouldn't survive) and is a no-op when the registry is empty (config unit
 tests that don't import the forwarder packages). `cfg.Forwarders = nil` stays the
 base default.
 
+`label` (added 2026-08-02) is the operator's own display name for a destination,
+settable **only by hand in config.json** — no API surface writes it and the
+Settings tab has no control for it. Empty means "use the type's built-in
+`DisplayName`". It exists because that built-in is a string in the binary
+(`smcloud.go`'s `"SM Cloud backup"`), so renaming it is a build + deploy the
+operator cannot perform, and names date as a service grows. It is deliberately
+**not** `name`: `name` is the durable key behind `qso_upload`'s
+`UNIQUE (qso_id, forwarder_name, action)`, so renaming *that* would make the
+daemon forget which QSOs had already been sent and re-upload them upstream.
+Nothing joins on `label`.
+
+**`label` and `endpoints` are both config-only, so `mergeForwarders` must carry
+them over explicitly** (`handler_config.go`): a PUT rebuilds each entry from the
+SPA payload and keeps only the fields it names, so anything absent from the wire
+is deleted by an unrelated save. `endpoints` had exactly that defect until
+2026-08-02 and it was silent — the save wrote the map out empty and
+`applyDefaults` re-seeded the registry default at the next Load, replacing an
+operator's override with the stock URL. Pinned by `internal/api/forwarder_label_test.go`
+(L2/L3). **Any future config-only field on `ForwarderConfig` belongs in that
+carry-over too.**
+
 `endpoints` is an **action-keyed** map (`insert`/`update`/`delete` → URL) so
 single-URL (QRZ) and per-action (ClubLog) forwarders share one shape; the value
 lives in config (overridable without a recompile) with the package

@@ -250,10 +250,13 @@ type LookupInfo struct {
 // values. ActionFilter is sent by the SPA (derived from the type's supported
 // actions), so it round-trips without daemon defaulting.
 type ForwarderInfo struct {
-	Name           string            `json:"name"`
-	Type           string            `json:"type"`
-	Enabled        bool              `json:"enabled"`
-	ActionFilter   []string          `json:"action_filter,omitempty"`
+	Name         string   `json:"name"`
+	Type         string   `json:"type"`
+	Enabled      bool     `json:"enabled"`
+	ActionFilter []string `json:"action_filter,omitempty"`
+	// Label is READ-ONLY on this wire: served on GET so the SPA can display it,
+	// ignored on PUT because config.json is the only place it may be set.
+	Label          string            `json:"label,omitempty"`
 	CredentialsSet []string          `json:"credentials_set,omitempty"`
 	Credentials    map[string]string `json:"credentials,omitempty"`
 }
@@ -1022,6 +1025,7 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 			fwds = append(fwds, ForwarderInfo{
 				Name:           fc.Name,
 				Type:           fc.Type,
+				Label:          fc.Label,
 				Enabled:        fc.Enabled,
 				ActionFilter:   fc.ActionFilter,
 				CredentialsSet: credentialKeysSet(fc.Credentials),
@@ -1256,6 +1260,21 @@ func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig)
 			fc.TickIntervalSec = ex.TickIntervalSec
 			fc.BatchSize = ex.BatchSize
 			fc.Retry = ex.Retry
+			// Label and Endpoints are config.json-only: no API surface writes
+			// them, so they are absent from every PUT and would be DELETED by
+			// this rebuild unless carried over explicitly.
+			//
+			// Endpoints is the older of the two and the loss was silent: the
+			// save wrote the map out empty and applyDefaults re-seeded the
+			// registry DEFAULT at the next Load (config.go:1077), so an
+			// operator's override was replaced by the stock URL and only a
+			// config diff would have shown it. Pinned by L2/L3 in
+			// forwarder_label_test.go.
+			//
+			// Anything else added to ForwarderConfig that the SPA does not send
+			// belongs here too — this rebuild keeps only what it names.
+			fc.Label = ex.Label
+			fc.Endpoints = ex.Endpoints
 		}
 		// Merge credentials: stored base overlaid with supplied (typed) fields. A
 		// blank KEEPS the stored value unless the field is explicitly Clearable.
