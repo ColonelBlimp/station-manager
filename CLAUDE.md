@@ -25,15 +25,23 @@ state). Read it to find the right doc; don't maintain a second index here.
 
 **Session-start orientation is automated.** A `SessionStart` hook
 (`.claude/settings.json` → `scripts/session-status.sh`, committed so it reaches
-every machine) injects `docs/session-handoff.md`'s Current-state block on every
-resume — and prints a **RECONCILE warning when commits exist after the
-handoff's "as of" date**, because only `CLAUDE.md` + `MEMORY.md` auto-load and a
-stale handoff/backlog once led a resume to re-open finished work (2026-07-05).
-So: **at session end, update `session-handoff.md`'s Current state AND bump its
-"(as of YYYY-MM-DD)" date** — the hook's staleness check keys off that date, and
-a skipped update is exactly what the guard exists to catch. If a resume shows the
-RECONCILE warning, check `git log` and confirm an item is still open before
-acting on any backlog "open" line.
+every machine) injects **only `docs/session-handoff.md`'s `## Now` section** on
+every resume, preceded by a **RECONCILE warning when commits exist after the
+handoff's "as of" date** — because only `CLAUDE.md` + `MEMORY.md` auto-load and a
+stale handoff once led a resume to re-open finished work (2026-07-05).
+So: **at session end, update `## Now` AND bump its "(as of YYYY-MM-DD)" date** —
+the staleness check keys off that date, and a skipped update is exactly what the
+guard exists to catch. If a resume shows the RECONCILE warning, check `git log`
+and confirm an item is still open before acting on any "open" line.
+
+**`## Now` is bounded on purpose (~25 lines) and the hook hard-caps its own
+output at 6 KB.** Reworked 2026-08-02 after the hook was found emitting 231 KB —
+it sliced the ever-growing `## Current state` at a prose marker that had since
+been deleted, so it printed to EOF; the harness truncated that to a 2 KB preview
+and the RECONCILE warning underneath **never reached a single session**. Two
+rules follow: a section that grows without limit must never be the injected one,
+and if the hook prints its `TRUNCATED` notice, trim `## Now` rather than raising
+the cap. Detail belongs in `## Current state` (not injected) or the archive.
 
 Before a non-trivial design choice, the load-bearing reads are still the
 v1-analysis baseline — **`docs/v1-analysis/invariants.md`** (rules that must
