@@ -30,8 +30,88 @@ precisely so we don't re-derive state or redo finished work.
 
 ---
 
-## Current state (as of 2026-08-01)
+## Current state (as of 2026-08-02)
 
+> **2026-08-02 — SHIP GATE (a) SHIPPED, both write sites, across four commits.
+> "When did this setting change, and to what?" now has an answer. Three of four
+> clean-room review rounds found a real defect and TWO of those were in the
+> previous round's fix; the fourth came back clean, which is what settled it.**
+>
+> - **DEPLOY STATE — AT HEAD.** Installed RPM is
+>   `2.0.0~alpha.1.1030.g2c6c22f3` = HEAD (`2c6c22f3`). The daemon is currently
+>   **inactive**, which is normal — `smd` is deliberately not auto-start, so a
+>   stopped daemon is not a fault. **This supersedes the "FOUR COMMITS BEHIND"
+>   line in the 2026-08-01 block below, which was already stale before this
+>   session began** (the operator deployed at 17:01:38 on 08-01).
+> - **`e8b36905` — go-ft8 v0.7.0 → v0.7.1.** Its own commit, per the dependency
+>   rule. The substantive change is a **hash-table transactional snapshot**: the
+>   concurrent candidate path (which SM runs) previously mutated the live table
+>   during unpacking, out of candidate order; workers now use an isolated
+>   snapshot and commit saves in order. That table resolves compound/nonstandard
+>   callsigns. The commit message's "stricter option validation" oversells an
+>   overflow-safe rewrite of a `blocks` guard SM never passes. Also: `pfft` now
+>   PANICS on use-after-Close (was a nil plan into C) — in the live dogfood path,
+>   but `ft8.decoder` runs under `safego.GoTracked`, so a decode-slot panic is
+>   recovered. Tested on BOTH backends deliberately: the CGO-free default suite
+>   does not exercise pocketfft, which is what the deploy actually uses.
+> - **`7b21b2b1` — the record itself, closing api A4 AND A8 in one edit.** One
+>   Info `config saved` per committed change, carrying a field-level delta,
+>   `source` (`api` | `startup`) and `setup_completed`. Emitted **before**
+>   `buildConfigResponse`, which is what closes A8 — a change that commits and
+>   then 500s still leaves proof it applied. Criterion + the five operator
+>   rulings live in the header of `internal/api/config_save_log_test.go`
+>   (CS1–CS10); startup half in `cmd/smd/config_save_startup_test.go` (B1–B3);
+>   the diff engine is `internal/config/diff.go`.
+> - **OPERATOR RULINGS, 2026-08-02 (asked before implementing, not inferred).**
+>   (1) Non-secret fields log their VALUE; secrets log only THAT they changed,
+>   mirroring the API's `credentials_set`/`password_set` masking. Email fields
+>   (`smtp.username`/`from`/`default_recipient`) count as non-secret; lookup URLs
+>   log scheme+host only. Classification is an **allowlist**. (2) Compute the
+>   delta, before→after. (3) Info. (4) No-op saves log nothing — falls out of the
+>   delta. (5) The startup rewrite is in scope. **#2, #4 and #5 turned out to be
+>   ONE decision** — all three reduce to "does the handler compute a delta?".
+> - **A CORRECTION OF A CORRECTION, worth not repeating.** Mid-session I
+>   "corrected" A4's claim that the daemon rewrites `config.json` at startup,
+>   having checked only `config.Load` (which indeed does not write). **A4 was
+>   right and I was wrong:** `cmd/smd/main.go:237` calls `Update` on every start
+>   and `config.Service.Update` (`config.go:1746`) writes **unconditionally, with
+>   no delta check**. So mtime moves every boot — which is exactly why `source`
+>   is on the record. Re-verified and written into A4's banner with the citation.
+> - **`479245e9` — review round 2, both findings REAL.** (P1) forwarder
+>   `Endpoints` is `map[string]string` keyed by ACTION, so its URLs sit at leaves
+>   called `insert`/`delete` and sailed past a `urlLeaves` check that asked the
+>   question of the FIELD NAME — a denylist in the one place the comment claimed
+>   an allowlist. A token in an endpoint would have gone from a 0600 file into a
+>   0644 one. Fixed by `originIfURL`, which reduces any URL-**shaped** value
+>   wherever it appears. (P2) `keyList` indexed by identity and DISCARDED ORDER,
+>   but `lookup.chain` is priority-ordered (`orchestrator.go:576`, first non-empty
+>   wins) — so a provider swap committed to disk and diffed to **nothing**. Now
+>   reported against the container, but only when membership is unchanged (D2b
+>   pins that; P11 proves the guard is load-bearing).
+> - **`2c6c22f3` — review round 3, and the fix was 8× the report.** The reviewer
+>   named three bare prefixes (`forwarders`, `rigs`, `operators`) that made
+>   `HasPrefix` match sibling top-level fields like `forwarders_api_token`. I had
+>   flagged that exact change for a second pair of eyes when I made it. Rather
+>   than patch the three, the constraint went on the LIST — every prefix entry
+>   must end in `.` or `[` — and that guard immediately found **23** unbounded
+>   entries (`version` matching `versionsecret`, `smtp.username` matching
+>   `smtp.username_token`). Split into `valueAllowlistExact` (whole-path, all
+>   scalars + the three container paths so a reorder renders its order) and
+>   `valueAllowlistPrefix` (subtree, all delimiter-bound). D4 states the rule over
+>   `valuePolicy` **paths rather than a Config**, because the fields it guards
+>   against do not exist yet — that is the point.
+> - **13 REVERSION PROOFS**, each red on its OWN rule's assertion, harness at
+>   `scratchpad/prove.sh`. Guards that earned their keep this session: the
+>   match-count check aborted 5 of 7 on the first run (`grep -cF` counts LINES,
+>   so every multi-line pattern miscounted), and the compile check aborted 2 more
+>   where the revert orphaned a variable. **A proof that does not apply certifies
+>   the implementation it was meant to challenge.**
+> - **THREE FIXTURES WERE WRONG BEFORE THEY WERE RIGHT**, all caught by asserting
+>   preconditions. Sharpest: CS4 (commit logged despite a 500) originally CHANGED
+>   the callsign, which trips the callsign-lock guard at `handler_config.go:621`
+>   — that guard reads the DB and 500s **before** the commit. Same status code,
+>   no commit; the rule would have passed against a daemon that logged nothing.
+>
 > **2026-08-01, LATER THE SAME DAY — the audit findings started shipping. SIX
 > findings across six commits: the auto-work pill fix, bridge B1 (drive-watch state
 > reporting), api A7, and the three-hub eviction class fix. Deployed mid-session and
@@ -2400,7 +2480,45 @@ precisely so we don't re-derive state or redo finished work.
 
 ## Active cycle (the 1–3 things in flight now)
 
-> **▶ RE-UPDATED later 2026-07-25 after the robustness pass. The queue is now
+> **▶ RE-UPDATED 2026-08-02. Nothing is mid-flight — SHIP GATE (a) closed clean
+> and the tree is committed, deployed and at HEAD. These are the next picks, in
+> the order the operator and I last discussed them.**
+>
+> - **1. SHIP GATE (c) — notification records. THE LAST GATE ITEM.** The whole
+>   notification category has no daemon record: toasts are client-side, several
+>   with no daemon counterpart at all, so closing the tab erases them. This is
+>   what still blocks "ship anything". (a) and (d) are done; (b) QSO deletes
+>   remains open but is partly covered — the `qso_history` row lands, so
+>   provenance survives; it is the admin-readable file that misses it.
+> - **2. The config UI port — five tabs.** The operator's framing when picking
+>   (a): *"(a) also points us toward completing the config implementation for the
+>   UI."* The standalone config SPA is STILL SERVED at `/config/`
+>   (`internal/api/server.go:309`), so nothing is unreachable — this is
+>   consolidation debt under ADR 0044, not a functional gap. App-shell Settings
+>   has **Station + Rigs**; still to port: **General (174 ln), FT8 (219),
+>   Email (158), Enrichment (128), Forwarding (114)**. Budget realistically:
+>   Station's 178-line tab became 413 lines with its state module and tests, and
+>   Rigs' 273 became 1,273 — so ~2,500–3,500 lines over five increments, not one
+>   sitting. **Now cheaper to verify:** every save the new tabs make is logged
+>   with a field-level delta, so a ported tab is checkable against `smd.log`
+>   rather than by eyeballing `config.json`.
+> - **3. SSE reconnect on `visibilitychange`.** From the 2026-08-01 inbox triage:
+>   the 07-28 "Cannot reach the daemon" report and the 07-18 map-staleness report
+>   share ONE root cause — nothing recreates a dead `EventSource` when a tab is
+>   restored. `mapData.svelte.ts:310` heals map DATA but not the stream. Fix once
+>   at the SSE layer and both reports close.
+> - **PARKED, operator-flagged "come back to this shortly":** `operator_pick` /
+>   Call-CQ auto_off. A Call-CQ run ALWAYS auto-works answerers; the one manual
+>   mode is accepted by config validation and REJECTED at runtime as
+>   unimplemented. Detail in the `ft8-cq-answerer-selection` memory. **Not scoped
+>   — do not start without the operator.**
+> - **EVIDENCE NOW ACCRUING (no action, just don't lose it):** the three hub
+>   eviction logs have been live since the 08-01 17:01 deploy. The operator's
+>   standing instruction is **DO NOT TUNE THE BUFFERS** (8 ft8 / 64 bridge/events)
+>   until those records show healthy clients actually being evicted. Zero
+>   evictions in the 15 days before the feature existed.
+
+> **▶ SUPERSEDED — RE-UPDATED later 2026-07-25 after the robustness pass. The queue is now
 > dominated by DEPLOY + ON-AIR VALIDATION — a large amount of TX-path and
 > config-path code has landed unproven:**
 >
