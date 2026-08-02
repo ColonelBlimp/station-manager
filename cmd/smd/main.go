@@ -234,29 +234,8 @@ func run() error {
 	// QSOs with the in-memory UA value, the operator just doesn't see
 	// it persisted in config.json. Stderr is the only available
 	// channel here (structured logger isn't built yet).
-	if uerr := cfgSvc.Update(func(c *config.Config) error {
-		c.UserAgent = cfg.UserAgent
-		// Scrub any legacy ClubLog application API key left in config
-		// credentials. The key is build-injected now (ADR 0054); an older config
-		// carried it in credentials.api in PLAINTEXT. The SPA no longer renders
-		// that field, so this startup scrub is the only path that clears it from
-		// disk — leaving it there defeats the whole point of moving the key out
-		// of config. GUARD: only scrub when THIS build actually has a baked
-		// replacement — a keyless build must not delete the operator's only
-		// usable key (and would break a rollback to a pre-0054 binary that still
-		// requires credentials.api).
-		if strings.TrimSpace(clublog.InjectedAPIKey) != "" {
-			for i := range c.Forwarders {
-				if c.Forwarders[i].Type != clublog.Type {
-					continue
-				}
-				if scrubbed, ok := stripCredentialKey(c.Forwarders[i].Credentials, "api"); ok {
-					c.Forwarders[i].Credentials = scrubbed
-				}
-			}
-		}
-		return nil
-	}); uerr != nil {
+	startupChanges, uerr := persistResolvedConfig(cfgSvc, cfg.UserAgent)
+	if uerr != nil {
 		_, _ = fmt.Fprintf(os.Stderr,
 			"smd: could not persist resolved config (UserAgent / ClubLog key scrub) to config.json: %v (continuing with in-memory values)\n",
 			uerr)
@@ -347,6 +326,18 @@ func run() error {
 		loggerSvc.InfoWith().
 			Str("path", firstRunPath).
 			Msg("first run: wrote default config to disk")
+	}
+	// Deferred from persistResolvedConfig above, which runs before the logger
+	// exists — same shape as the first-run line. `source` is what separates
+	// this from an operator's save; without it the two records are the same
+	// event as far as a grep is concerned, which is the confusable state this
+	// whole feature exists to break.
+	if len(startupChanges) > 0 {
+		loggerSvc.InfoWith().
+			Str("source", "startup").
+			Int("change_count", len(startupChanges)).
+			Interface("changes", startupChanges).
+			Msg("config saved")
 	}
 	// No Str("version", …) here: the base logger context carries it on every
 	// record now, and setting it again would emit the key TWICE — legal JSON that
@@ -1216,6 +1207,52 @@ func ensureDefaultLogbook(
 // to scrub the legacy build-injected ClubLog API key (credentials.api) out of
 // config.json (ADR 0054). A blob that is empty, not a JSON object, or lacks the
 // key is returned unchanged with false, so a normal config is never rewritten.
+// persistResolvedConfig writes the startup-resolved values back to config.json
+// and reports what it changed, for the save record emitted once the logger is
+// up (SHIP GATE (a), site B).
+//
+// This runs on EVERY start and config.Service.Update writes unconditionally, so
+// the file's mtime moves each boot whether or not anything moved with it. That
+// is precisely why the record has to be delta-driven: an unconditional line
+// here would be one noise entry per start, and mtime alone can never tell an
+// operator's save from this one.
+//
+// Soft-failure is the caller's business — a read-only working dir is degraded,
+// not fatal, and the daemon still serves with the in-memory values.
+func persistResolvedConfig(cfgSvc *config.Service, userAgent string) ([]config.FieldChange, error) {
+	var before, after config.Config
+	err := cfgSvc.Update(func(c *config.Config) error {
+		before = c.Clone()
+		c.UserAgent = userAgent
+		// Scrub any legacy ClubLog application API key left in config
+		// credentials. The key is build-injected now (ADR 0054); an older config
+		// carried it in credentials.api in PLAINTEXT. The SPA no longer renders
+		// that field, so this startup scrub is the only path that clears it from
+		// disk — leaving it there defeats the whole point of moving the key out
+		// of config. GUARD: only scrub when THIS build actually has a baked
+		// replacement — a keyless build must not delete the operator's only
+		// usable key (and would break a rollback to a pre-0054 binary that still
+		// requires credentials.api).
+		if strings.TrimSpace(clublog.InjectedAPIKey) != "" {
+			for i := range c.Forwarders {
+				if c.Forwarders[i].Type != clublog.Type {
+					continue
+				}
+				if scrubbed, ok := stripCredentialKey(c.Forwarders[i].Credentials, "api"); ok {
+					c.Forwarders[i].Credentials = scrubbed
+				}
+			}
+		}
+		after = c.Clone()
+		return nil
+	})
+	if err != nil {
+		// Nothing reached disk, so there is nothing to report as saved.
+		return nil, err
+	}
+	return config.Diff(before, after), nil
+}
+
 func stripCredentialKey(raw json.RawMessage, key string) (json.RawMessage, bool) {
 	if len(raw) == 0 {
 		return raw, false

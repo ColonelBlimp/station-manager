@@ -164,6 +164,29 @@ origin" is the finding; today it is discarded.
 
 ### A4. Config logging is failure-only, so grepping `config` is systematically misleading
 
+> ✅ **FIXED 2026-08-02 — this was SHIP GATE (a), and it closed A8 with it.** A
+> committed save now emits one Info `config saved` record carrying a field-level
+> delta, `source` (`api` vs `startup`), and `setup_completed` on the first-run PUT.
+> Criterion + the five operator rulings are in the header of
+> `internal/api/config_save_log_test.go` (CS1–CS10); the startup half is
+> `cmd/smd/config_save_startup_test.go` (B1–B3). The delta lives in
+> `internal/config/diff.go`.
+>
+> **The operator OVERRULED this entry's implied prescription (and A8's explicit
+> one) that the record carry "field names and counts only":** non-secret fields
+> log their VALUES, because names alone answer *when* and *which* but not "and to
+> what?", which is half the question the gate was opened for. Secrets carry
+> presence only, mirroring the API's existing `credentials_set` / `password_set`
+> masking. Classification is an **allowlist** — a field added later is redacted by
+> default, since a denylist fails open.
+>
+> **One thing this entry got right and a later reading got wrong.** The claim
+> below that the daemon rewrites `config.json` at startup was challenged during the
+> fix and re-verified as TRUE: `config.Load` does not write, but
+> `cmd/smd/main.go:237` calls `Update` on every start and `config.Service.Update`
+> (`config.go:1746`) writes unconditionally with no delta check. So mtime moves
+> every boot, and that is exactly why `source` is on the record.
+
 `handler_config.go` is 1,263 lines with **two** log calls — `:670` and `:754` — and both
 fire only when a PUT is **rejected** for an unstartable forwarder. A successful config
 change writes nothing.
@@ -301,6 +324,21 @@ unreadable.
   failing closed. Do not change the fail-closed behaviour.
 
 ### A8. A config PUT can return 500 with the change already committed — Tier 1
+
+> ✅ **FIXED 2026-08-02, together with A4 as this entry prescribed.** The record is
+> emitted immediately after `Update` returns and BEFORE `buildConfigResponse`, so a
+> response-build failure still leaves proof that the change applied. Pinned by CS4
+> (`TestConfigSave_CommitLoggedEvenWhenResponseFails`), which breaks the DB after
+> setup and asserts the 500.
+>
+> **CS4's first fixture was wrong in a way worth recording:** it changed the
+> station callsign, which trips the callsign-lock guard at `:621` — that guard
+> reads the DB and 500s *before* the commit. Same status code, no commit, so the
+> rule passed against a daemon that logged nothing. The fixture now repeats the
+> callsign unchanged and edits a different field. A rule asserting "the commit is
+> logged despite the 500" is worthless if the 500 arrives before the commit.
+>
+> The "field names and counts only" line below was overruled — see A4's banner.
 
 `handler_config.go:778`. The commit happens inside `s.cfg.Update(...)` (`:704`). If
 `buildConfigResponse` then fails, the handler calls `writeServerError` → **HTTP 500**,

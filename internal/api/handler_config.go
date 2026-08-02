@@ -701,7 +701,15 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// client (it can embed a credential value). Captured here rather than logged
 	// inside the closure so nothing writes to the log under the config lock.
 	var forwarderCause error
+	// before/after bracket the mutation for the save record (SHIP GATE (a)).
+	// Both are taken INSIDE the closure, against the fresh clone Update hands
+	// us — diffing a pre-lock Snapshot against a post-Update one would
+	// attribute a concurrent save's fields to this request, the same
+	// lost-update trap the overlay itself avoids above.
+	var before, after config.Config
+	var setupCompleted bool
 	if err := s.cfg.Update(func(cfg *config.Config) error {
+		before = cfg.Clone()
 		overlayConfig(cfg, &req)
 		config.Normalize(cfg)
 		if f := firstBlockingFinding(config.Validate(*cfg)); f != nil {
@@ -730,6 +738,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		// when unset. Guarded on cfg.SetupComplete (the fresh value) so a racing
 		// setup can't double-apply.
 		if completingSetup && !cfg.SetupComplete {
+			setupCompleted = true
 			cfg.SetupComplete = true
 			if setupLogbookID != 0 {
 				cfg.DefaultLogbookID = setupLogbookID
@@ -747,6 +756,8 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			// until a restart (codex review of 23d2df7a, #3).
 			config.SeedOperatorRoster(cfg)
 		}
+		// LAST, after every mutation above — this is the committed shape.
+		after = cfg.Clone()
 		return nil
 	}); err != nil {
 		if stderr.Is(err, errPutValidation) {
@@ -760,6 +771,13 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeServerError(w, op, err, "config_write_error", "failed to persist config update")
 		return
 	}
+
+	// Emitted here, immediately after the commit and BEFORE the response is
+	// built: buildConfigResponse below reads the DB and can fail, turning a
+	// change that IS on disk into an HTTP 500 (finding A8). Logging later
+	// would leave exactly that case — the one where the operator is most
+	// likely to be misled — with no record at all.
+	s.logConfigSave(before, after, setupCompleted)
 
 	// Live-apply the FT8 repeat cap to the running sequencer — the one config field
 	// that takes effect without a restart, so the operator can dial it down mid-pile-up.
@@ -782,6 +800,32 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, resp)
+}
+
+// logConfigSave records a committed config change (SHIP GATE (a)). Silent when
+// nothing moved: the SPA saves whole tabs, so a delta-free PUT is routine and a
+// line per save would restore the noise this record exists to cut through.
+//
+// Info, not Warn: a successful save is normal operation. The volume is bounded
+// by the delta rather than by how often the operator presses Save.
+//
+// Values follow config.Diff's policy — never a credential, URLs reduced to
+// scheme + host, unrecognised paths redacted. smd.log is 0644 and this data
+// came out of a 0600 file, so the allowlist lives with the diff and is not
+// re-decided here.
+func (s *Server) logConfigSave(before, after config.Config, setupCompleted bool) {
+	changes := config.Diff(before, after)
+	if len(changes) == 0 {
+		return
+	}
+	ev := s.logger.InfoWith().
+		Str("source", "api").
+		Int("change_count", len(changes)).
+		Interface("changes", changes)
+	if setupCompleted {
+		ev = ev.Bool("setup_completed", true)
+	}
+	ev.Msg("config saved")
 }
 
 // seedDefaultLogbook ensures a logbook row exists at the configured
