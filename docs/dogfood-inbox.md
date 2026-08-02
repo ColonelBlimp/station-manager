@@ -195,6 +195,33 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   time per-view. Open for the operator: on becoming visible, always recreate, or only
   when the stream is known dead (which needs a liveness signal the clients do not
   currently keep).
+  — **NARROWED 2026-08-02, against `smd.log` rather than reasoning.** Two things
+  changed the scope, and both SHRINK it:
+  **(1) The screen-blank half is already closed.** Idle inhibition landed the same
+  day as this report (`65dbcee5`, `internal/ft8/idleinhibit.go`): a logind
+  `idle:sleep` block + `org.freedesktop.ScreenSaver` held for as long as FT8 TX is
+  ARMED, proven by controlled A/B on KDE Plasma (44 min untouched with the lock
+  held, vs a lock within 5 min once disarmed). So "screen blanks mid-run and the
+  stream dies" should not recur. It does NOT cover TX-unarmed monitoring, Phone/CW,
+  Logbook, or the map — and it does not stop a TAB being backgrounded, which
+  browsers throttle/freeze regardless of whether the screen is on.
+  **(2) A dropped stream has NEVER silently ended a run — checked, not assumed.**
+  The suspicion was that a dead SSE → subCount 0 → `captureLinger` → `onLingerExpired`
+  disarms TX and abandons the QSO. On 2026-07-28 the sequence `06:16:47 session
+  abandoned / 06:17:08 session abandoned / 06:17:55 ft8 tx: disarmed` looked exactly
+  like that. It was not: every one carries an HTTP request, i.e. a click —
+  `POST /v1/ft8/qso/abandon` 06:16:47, `POST /v1/ft8/cq/start` 06:17:06, `POST
+  /v1/ft8/qso/abandon` 06:17:08, `POST /v1/ft8/tx/arm` 06:17:55 (an arm re-runs the
+  disarm path, which is why the "disarmed" line sits there). Timing disconfirms it
+  too: last SSE disconnect 06:16:55 + 5 s linger = ~06:17:00, a full minute earlier.
+  And both "disconnects" that day were RELOADS — `/app/operate/ft8` + `index.js` +
+  `index.css` + `logo.svg` fetched in the same second, with the SSE reopening
+  immediately.
+  **Consequence: this is a STALE-MAP fix, not a TX-safety fix — rank it accordingly.**
+  The live target is the 2026-07-18 background-tab report. The argument for
+  only-when-dead over always-recreate still holds, but for TAB SWITCHING rather than
+  screen blanking: closing `/v1/ft8/events` starts the 5 s linger, and a reopen that
+  fails would disarm TX mid-run, so a healthy stream must never be torn down.
 - [2026-07-28] **STUCK TX — 4th incident, and the first where the RIG stopped
   answering CAT while still keyed.** 80m FT8 CQ run (3.573 MHz, +2750 Hz), operator
   in the shack 2 m away and NOT touching the rig; no rig settings changed since the

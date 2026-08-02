@@ -11,6 +11,8 @@
 // owns SSE auto-reconnect on transient drops.
 
 /** One occupied audio-frequency range. Mirrors internal/ft8.Band (snake_case wire). */
+import { openReviving } from './sse-reviving';
+
 export interface Ft8Band {
     low_hz: number;
     high_hz: number;
@@ -140,6 +142,8 @@ function parse<T>(ev: MessageEvent<string>, label: string): T | null {
     }
 }
 
+const SSE_URL = '/v1/ft8/events';
+
 /**
  * Open the FT8 event stream and wire the handlers. Returns a close function;
  * calling it tears the EventSource down (the daemon then releases the capture
@@ -147,31 +151,29 @@ function parse<T>(ev: MessageEvent<string>, label: string): T | null {
  * each call opens one source and hands back its own closer.
  */
 export function openFt8Events(handlers: Ft8EventHandlers): () => void {
-    const src = new EventSource('/v1/ft8/events');
+    return openReviving(SSE_URL, (src) => {
+        src.addEventListener('open', () => handlers.onOpen());
+        src.addEventListener('error', () => handlers.onError());
 
-    src.addEventListener('open', () => handlers.onOpen());
-    src.addEventListener('error', () => handlers.onError());
-
-    src.addEventListener('ft8-occupancy', (ev: MessageEvent<string>) => {
-        const p = parse<OccupancyPayload>(ev, 'ft8-occupancy');
-        if (p !== null) handlers.onOccupancy(p);
+        src.addEventListener('ft8-occupancy', (ev: MessageEvent<string>) => {
+            const p = parse<OccupancyPayload>(ev, 'ft8-occupancy');
+            if (p !== null) handlers.onOccupancy(p);
+        });
+        src.addEventListener('ft8-decode', (ev: MessageEvent<string>) => {
+            const p = parse<DecodeReport>(ev, 'ft8-decode');
+            if (p !== null) handlers.onDecode(p);
+        });
+        src.addEventListener('ft8-tx', (ev: MessageEvent<string>) => {
+            const p = parse<TxPayload>(ev, 'ft8-tx');
+            if (p !== null) handlers.onTx(p);
+        });
+        src.addEventListener('ft8-qso', (ev: MessageEvent<string>) => {
+            const p = parse<QsoPayload>(ev, 'ft8-qso');
+            if (p !== null) handlers.onQso(p);
+        });
+        src.addEventListener('ft8-logged', (ev: MessageEvent<string>) => {
+            const p = parse<LoggedPayload>(ev, 'ft8-logged');
+            if (p !== null) handlers.onLogged(p);
+        });
     });
-    src.addEventListener('ft8-decode', (ev: MessageEvent<string>) => {
-        const p = parse<DecodeReport>(ev, 'ft8-decode');
-        if (p !== null) handlers.onDecode(p);
-    });
-    src.addEventListener('ft8-tx', (ev: MessageEvent<string>) => {
-        const p = parse<TxPayload>(ev, 'ft8-tx');
-        if (p !== null) handlers.onTx(p);
-    });
-    src.addEventListener('ft8-qso', (ev: MessageEvent<string>) => {
-        const p = parse<QsoPayload>(ev, 'ft8-qso');
-        if (p !== null) handlers.onQso(p);
-    });
-    src.addEventListener('ft8-logged', (ev: MessageEvent<string>) => {
-        const p = parse<LoggedPayload>(ev, 'ft8-logged');
-        if (p !== null) handlers.onLogged(p);
-    });
-
-    return () => src.close();
 }

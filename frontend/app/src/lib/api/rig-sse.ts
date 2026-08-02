@@ -3,8 +3,9 @@
 // the payload to injected handlers (ADR 0045 — the rig state module owns the
 // transitions and never imports this layer). The path is relative because the
 // SPA is served from the daemon's origin; cross-origin EventSource is not a
-// supported topology. The browser owns reconnect on transient drops — no
-// retry loop here.
+// supported topology. The browser owns reconnect on transient drops;
+// openReviving adds the one case it does not — a stream that died while the
+// tab was hidden is recreated on return, and ONLY when dead.
 //
 // rig-clients is a daemon event this SPA doesn't consume yet (no multi-tab
 // banner in frontend/app) — it arrives on the same stream and is not listened
@@ -12,6 +13,8 @@
 // reflects it, confirm-by-push).
 
 /** Mirrors internal/bridge.RigStatePayload — all fields optional (partial merge). */
+import { openReviving } from './sse-reviving';
+
 export interface RigStatePayload {
     rigIdentity?: string;
     vfoA?: number;
@@ -79,48 +82,48 @@ function parse<T>(ev: MessageEvent<string>, label: string): T | null {
     }
 }
 
+const SSE_URL = '/v1/rig/events';
+
 /**
  * Open the stream and wire the handlers. Returns a close function; calling
  * it tears the EventSource down (the handlers see no further events).
  */
 export function openRigEvents(handlers: RigEventHandlers): () => void {
-    const src = new EventSource('/v1/rig/events');
+    return openReviving(SSE_URL, (src) => {
+        src.addEventListener('open', () => handlers.onOpen());
+        src.addEventListener('error', () => handlers.onTransportError());
 
-    src.addEventListener('open', () => handlers.onOpen());
-    src.addEventListener('error', () => handlers.onTransportError());
+        src.addEventListener('rig-state', (ev: MessageEvent<string>) => {
+            const p = parse<RigStatePayload>(ev, 'rig-state');
+            if (p !== null) handlers.onRigState(p);
+        });
 
-    src.addEventListener('rig-state', (ev: MessageEvent<string>) => {
-        const p = parse<RigStatePayload>(ev, 'rig-state');
-        if (p !== null) handlers.onRigState(p);
+        src.addEventListener('rig-disconnected', (ev: MessageEvent<string>) => {
+            const p = parse<BridgeCodePayload>(ev, 'rig-disconnected');
+            if (p !== null) handlers.onRigDisconnected(p);
+        });
+
+        src.addEventListener('bridge-error', (ev: MessageEvent<string>) => {
+            const p = parse<BridgeCodePayload>(ev, 'bridge-error');
+            if (p !== null) handlers.onBridgeError(p);
+        });
+
+        src.addEventListener('tune-state', (ev: MessageEvent<string>) => {
+            const p = parse<TuneStatePayload>(ev, 'tune-state');
+            if (p !== null) handlers.onTuneState(p);
+        });
+
+        src.addEventListener('tx-alarm', (ev: MessageEvent<string>) => {
+            const p = parse<TxAlarmPayload>(ev, 'tx-alarm');
+            if (p !== null) handlers.onTxAlarm(p);
+        });
+
+        // A separate listener because it is a separate event: EventSource delivers
+        // only the named types registered here, so an unregistered event vanishes in
+        // the browser with nothing to show it arrived.
+        src.addEventListener('drive-alarm', (ev: MessageEvent<string>) => {
+            const p = parse<DriveAlarmPayload>(ev, 'drive-alarm');
+            if (p !== null) handlers.onDriveAlarm(p);
+        });
     });
-
-    src.addEventListener('rig-disconnected', (ev: MessageEvent<string>) => {
-        const p = parse<BridgeCodePayload>(ev, 'rig-disconnected');
-        if (p !== null) handlers.onRigDisconnected(p);
-    });
-
-    src.addEventListener('bridge-error', (ev: MessageEvent<string>) => {
-        const p = parse<BridgeCodePayload>(ev, 'bridge-error');
-        if (p !== null) handlers.onBridgeError(p);
-    });
-
-    src.addEventListener('tune-state', (ev: MessageEvent<string>) => {
-        const p = parse<TuneStatePayload>(ev, 'tune-state');
-        if (p !== null) handlers.onTuneState(p);
-    });
-
-    src.addEventListener('tx-alarm', (ev: MessageEvent<string>) => {
-        const p = parse<TxAlarmPayload>(ev, 'tx-alarm');
-        if (p !== null) handlers.onTxAlarm(p);
-    });
-
-    // A separate listener because it is a separate event: EventSource delivers
-    // only the named types registered here, so an unregistered event vanishes in
-    // the browser with nothing to show it arrived.
-    src.addEventListener('drive-alarm', (ev: MessageEvent<string>) => {
-        const p = parse<DriveAlarmPayload>(ev, 'drive-alarm');
-        if (p !== null) handlers.onDriveAlarm(p);
-    });
-
-    return () => src.close();
 }
