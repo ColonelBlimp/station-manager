@@ -50,25 +50,32 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **DEPLOY IS 9 COMMITS BEHIND.** RPM at `2c6c22f3`, HEAD `b6efaf6c`. NOT
-  running: the forwarder `label` field, the **`endpoints` carry-over fix**, the
-  whole Forwarding tab, and the **logging-card centring fix**. Consequence while
-  behind: a forwarder save from the OLD config SPA still drops custom
-  `endpoints` (harmless for this operator — theirs equal the registry defaults),
-  and the Phone/CW logging card still sits ~105px left of centre.
-  `task deploy:local:dev` when ready. Daemon runs on demand (`smd` is
-  deliberately NOT auto-start — a stopped daemon is not a fault).
+- **DEPLOYED AT HEAD** (`663c7eff`), daemon active. Everything below is live.
+  `smd` is deliberately NOT auto-start — a stopped daemon is not a fault.
+- **AWAITING ON-DESKTOP VALIDATION — the SSE revival, and it is the half no test
+  can reach.** Background the MAP tab (another tab in the SAME window; browsers
+  throttle on visibility, not focus, so a second monitor will not reproduce it),
+  leave it, come back: the map should go live again with no reload. **If it does
+  not, the trigger is wrong, not the logic** — `visibilitychange` may never fire
+  on this desktop when a tab is backgrounded, which the unit rules cannot tell
+  us. Diagnostic: `addEventListener('visibilitychange', () =>
+  console.log(document.visibilityState))` in devtools. A negative result means
+  re-picking the hook (`focus` / `online` / `resume` / periodic liveness), NOT
+  patching `openReviving`.
 - **Shipped today:** SHIP GATE (a) config-save records (closed api A4 + A8); the
   **SessionStart hook fix** (it had been emitting 231 KB, truncated to a 2 KB
   preview, so the RECONCILE warning had never once been delivered); the
-  **Forwarding tab** ported into app Settings; and the **logging card re-centred**
-  — it lost its auto-margin centring when ADR 0058 retired the ADR 0046 tile
-  board, leaving a fixed-width card flex-start-aligned in a wider container.
+  **Forwarding tab** ported into app Settings; the **logging card re-centred**
+  (it lost its auto-margin centring when ADR 0058 retired the ADR 0046 tile
+  board); and **SSE revival** on returning to a hidden tab.
+- **Also newly live, worth an eyeball:** Settings → Forwarding (disclosures,
+  pills, reset on `smcloud.logbook` only); `grep 'config saved'` in `smd.log`
+  after any settings change; and `"label": "SM Cloud"` on the smcloud forwarder
+  in config.json + restart, which overrides the binary's "SM Cloud backup".
 - **Next, unblocked, pick one:** (a) port **Email** or **Enrichment** — both
   reuse the masked-credential + `Clearable` pattern Forwarding just proved;
-  (b) **SSE reconnect on `visibilitychange`**, which closes two dogfood reports
-  at once; (c) surface the forwarder `label` in the logbook upload-status column;
-  (d) a Playwright bounding-box/screenshot check for layout — THREE centring
+  (b) surface the forwarder `label` in the logbook upload-status column;
+  (c) a Playwright bounding-box/screenshot check for layout — THREE centring
   defects landed today (Forwarding width, Rigs centring, the logging card) and
   none is catchable in vitest, because jsdom does no layout and the only
   assertable thing is a class name.
@@ -88,6 +95,50 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ## Current state (as of 2026-08-02)
 
+> **2026-08-02, LAST — SSE REVIVAL SHIPPED, and its scope was CUT IN HALF by
+> reading `smd.log` instead of reasoning. Deployed at HEAD; the acceptance test
+> is on-desktop and still outstanding.**
+>
+> - **THE SUSPICION WAS WRONG, and checking cost one query.** The 2026-07-28
+>   report reads as though a dead SSE might have ended an FT8 run: subscriber
+>   count → 0, `captureLinger` (5 s) → `onLingerExpired` → **disarm TX + abandon
+>   the QSO**. The log that day shows `06:16:47 session abandoned / 06:17:08
+>   session abandoned / 06:17:55 ft8 tx: disarmed`, which looks exactly like it.
+>   **It was four operator CLICKS** — every one carries an HTTP request
+>   (`POST qso/abandon`, `cq/start`, `qso/abandon`, `tx/arm`; an arm re-runs the
+>   disarm path, hence that log line). Timing disconfirms it independently: last
+>   SSE disconnect 06:16:55 + 5 s = ~06:17:00, a minute earlier. **And both
+>   "disconnects" were RELOADS** — `/app/operate/ft8` + `index.js` + `index.css`
+>   + `logo.svg` in the same second, SSE reopening immediately. **A dropped
+>   stream has never silently ended a run.**
+> - **THE OTHER HALF WAS ALREADY FIXED.** Idle inhibition (`65dbcee5`, landed the
+>   same day as the report) holds a logind `idle:sleep` block +
+>   `org.freedesktop.ScreenSaver` while FT8 TX is ARMED — proven by the
+>   operator's own KDE A/B, 44 min untouched vs a lock within 5 min once
+>   disarmed. So "screen blanks mid-run" is closed. It does NOT cover
+>   TX-unarmed monitoring, Phone/CW, Logbook or the map, and it does not stop a
+>   TAB being backgrounded, which browsers throttle regardless of screen state.
+> - **NET: this is a STALE-MAP fix, not a TX-safety fix.** The live target is the
+>   2026-07-18 background-tab report. The inbox entry carries the full
+>   correction so triage cannot re-inflate it.
+> - **`openReviving` — one wrapper, all three clients.** Revives ONLY when dead:
+>   `OPEN` → leave; `CLOSED` → revive; `CONNECTING` with no error → a first
+>   connect, leave; `CONNECTING` after an error → stuck retrying, revive. **No
+>   thresholds** — the error-since-last-open flag is what separates the last two,
+>   and a `CLOSED`-only check would miss exactly the silent failure. **Never
+>   "always recreate"**: tearing down a healthy `/v1/ft8/events` starts the
+>   capture linger, and a failed reopen disarms TX mid-run. R1 proves it — that
+>   one-line simplification turns FIVE rules red.
+> - **A second redundant-guard pair, same shape as the Forwarding one.** Teardown
+>   is protected by removing the listener AND by `src === null` in `isDead()`;
+>   removing either alone left V6 green, only both turn it red. They are NOT
+>   equivalent — the listener removal is the sole defence against a leak onto
+>   `document` per route change, which no behaviour test can observe. Written up
+>   in the code rather than papered over with a mechanism assertion.
+> - **STILL OPEN, and it is the whole point:** jsdom cannot suspend a tab. The
+>   rules pin POLICY. Whether `visibilitychange` fires on this desktop is
+>   unverified — see `## Now`.
+>
 > **2026-08-02, LATER — THE ORIENTATION HOOK WAS BROKEN, AND THE FORWARDING TAB
 > LANDED. Seven more commits. The operator's question was "why is there confusion
 > every session — are we monitoring too many documents?" The answer turned out to
@@ -232,121 +283,6 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 >   the callsign, which trips the callsign-lock guard at `handler_config.go:621`
 >   — that guard reads the DB and 500s **before** the commit. Same status code,
 >   no commit; the rule would have passed against a daemon that logged nothing.
->
-> **2026-08-01, LATER THE SAME DAY — the audit findings started shipping. SIX
-> findings across six commits: the auto-work pill fix, bridge B1 (drive-watch state
-> reporting), api A7, and the three-hub eviction class fix. Deployed mid-session and
-> validated on the air on 12 m; everything after that deploy is NOT running.**
->
-> - **DEPLOY STATE — FOUR COMMITS BEHIND.** Running
->   `2.0.0-alpha.1-1021-gda962028` since **14:47:36**; version stamp verified
->   against HEAD at the time (not `dev` — the `-X` trap did not bite). HEAD is now
->   `cb21cf8b`. **NOT running: api A7 and all three eviction logs.** Two
->   consequences: a datastore fault still reports as unset configuration, and the
->   eviction records — the evidence the operator wants before deciding anything
->   about buffer sizes — do not start accruing until a deploy.
-> - **`b93bd417` — starting a Call-CQ run stops an armed auto-work run.** From a
->   dogfood report ("the auto-work armed stays active, or the pill stays viewable").
->   It was BOTH and the pill was innocent: `StartCallCq` reset caller / stalledCalls
->   / confirmHold / contact and never touched `autoWork`. It could not FIRE
->   (`onSlotIdleArmed` needs `mode == seqIdle`, and a Call-CQ contact resumes CQ
->   rather than ending), so this was never a rogue-transmission risk — it removed an
->   indicator naming the wrong mechanism plus a stale offset/dial pin. Cleared ahead
->   of the status publish; W12 pins the state, **V5 pins that the CQ's own frame
->   carries it** and is demonstrably load-bearing (move the clear after the publish:
->   W12 green, V5 red).
-> - **`1273752d` + `da962028` — bridge B1, and it went WIDER than the finding.**
->   Drive-watch is now a four-state transition machine (`armed` / `no_meter` /
->   `meter_not_po` / `meter_moved_off_po`), **Warn on entering a dark state, Info on
->   recovery, NO line when unchanged** — the operator's design, and the level was his
->   call against my hesitation. The measurement backed him: the declined branches are
->   ~3% of transmissions here, not the sticky whole-session state I predicted. Also
->   added on his direction: a per-transmission `drive_watch` field on the existing
->   meters record, and the mid-TX taint branch (a third silent early return no
->   arm-time transition could see). **The Error alarm now carries its own evidence** —
->   `meter_sel`, `meter_n`, `meter_po_max`, `gap_ms`, `gap_max_ms`, `tx_gen` — all of
->   which were already computed at the emit point and discarded.
->   **B1 had the priority wrong and I stated it wrongly too:** I ranked it first
->   because it had a measured cost that morning, but the 08:45 alarms took the ARMED
->   path, so B1's own fix would not have explained them. The alarm-evidence half is
->   what addresses them.
-> - **`3fdba1a2` — api A7, and the operator OVERRULED the finding's own
->   prescription, correctly.** "Log only, do not change the fail-closed behaviour"
->   would have logged the cause while leaving the operator reading *"set your station
->   callsign in My Station"* with a broken database. His ruling: **fail closed means
->   never fall back to another callsign and never transmit; it does not require
->   preserving the misleading 400.** So: unexpected DB error → **503 `db_unavailable`**
->   (the code `handler_health.go` already uses) + Error log with cause, `logbook_id`,
->   `op`; genuinely unset config → 400 `no_station_callsign`, unchanged. Neither
->   starts a session or keys PTT, and **neither disarms** — these routes require TX
->   already armed. The SPA needed no change (`ft8qso.ts` already maps ≥500 to a
->   `server` outcome carrying the daemon's message).
-> - **ON-AIR VALIDATION, 12 m, 16 transmissions:** all `drive_watch=armed`, **zero
->   transition lines, zero alarms**, `gap_max_ms` 245–269 ms against a 3000 ms
->   threshold, `po_max` 109, `po_n` 559–615. That is the no-spray design confirmed in
->   production rather than predicted — a per-transmission scheme would have emitted 16
->   warns for those slots.
-> - **THE DAY'S REAL LESSON — FIVE WAYS A RULE CAN BE GREEN AND WORTHLESS.** The
->   drive-watch work took five review rounds and four of the findings were FIXTURE
->   failures, not logic errors. All five shapes are written into
->   `internal/bridge/drivewatch_test.go`'s header with their proofs: (1) the fixture
->   excluded the interval; (2) presence asserted instead of value; (3) an identifier
->   that identified nothing (and the obvious fix carried the WRONG generation, because
->   `finishFt8Tx` increments before flushing); (4) **one fix, two sites, one proof** —
->   when a fix touches N call sites the proof must revert each separately or N-1 are
->   unguarded; (5) **every rule was single-threaded and the subject is not** — twelve
->   green rules could not see an ordering defect that left "drive detection restored"
->   as the last line while detection was dark. Read that header before writing rules
->   for anything concurrent.
-> - **THREE DRIVE ALARMS TODAY (08:45:03, 08:45:33, 10:08:35) CANNOT BE RE-EXAMINED.**
->   They were logged by the pre-deploy build and carry `code` alone. Anything firing
->   after `da962028` carries full evidence and joins to its meters record by `tx_gen`.
->   The 10:08:35 one was never looked at.
-> - **`57619abe` + `cb21cf8b` — THE THREE-HUB EVICTION CLASS FIX** (ft8 #1 +
->   bridge B2, plus a THIRD site the audits missed: `internal/events/hub.go`, which
->   feeds the map's stream). All three dropped a too-slow subscriber with a bare
->   `close(ch); delete(...)` and said nothing. Each now emits ONE Warn per evicted
->   subscriber with `subscriber_id`, `event`, `queue_depth`, `queue_capacity`,
->   `subs_before`, `subs_after`.
->   **THE TEARDOWN IS UNCHANGED — operator's ruling, and the reasoning is the part
->   to preserve:** the enforced proxy is a FUNCTIONING SSE subscription, not an open
->   browser tab; once the channel overflows, operator-facing state is no longer
->   flowing, and EventSource reconnect plus the existing linger already IS the
->   recovery distinction. Exempting eviction could leave TX running behind a dead
->   display or create a phantom subscriber that can never unsubscribe. **Buffers stay
->   at 8 (ft8) / 64 (bridge, events) until the new records show HEALTHY clients being
->   evicted.**
->   **A codex P2 was REFUTED, not fixed** (rationale in all three `logEvictions`
->   comments): the eviction log is synchronous and zerolog writes straight to
->   lumberjack, so the mechanism is real — but these goroutines already emit **1,502
->   `ft8 tx meters` records against 0 evictions** in 15 days, so it is the rarest
->   instance of an accepted pattern, not a new class. If a stalled log destination
->   endangers them it belongs at the logging layer, fixed once.
-> - **FIVE REVIEW ROUNDS ON THAT ONE, AND EVERY FINDING WAS A PROOF GAP, NOT A BUG.**
->   The implementation was right early; the tests were not. In order: F3 called the
->   handler's unsubscribe BY HAND, so deleting `defer unsub()` would not have failed
->   it (now drives the real `HTTPHandler` with a client that stalls mid-write) · F4
->   could not reach the raced-timer interleaving at all, so the subCount guard was
->   unproven (F5 added, entering `onLingerExpired` directly) · `subscriber_id` was
->   checked only for non-negativity, which a constant 0 passed (fixtures now burn id
->   0) · the production wiring guard was `strings.Contains`, which a commented-out
->   call, `logging.Noop()`, `(*logging.Service)(nil)` and a local rebinding all
->   passed (now an AST check requiring `loggerSvc` resolved from the container) · F3's
->   barrier counted writes cumulatively, and the hub replays cached events on
->   subscribe so it was pre-satisfied (now a signal raised by `Write` at the gate).
->   **The generalisable one: a green test after touching ONE of two redundant
->   mechanisms is not evidence the other is dead code.**
-> - **NEXT:** SHIP GATE (a) config saves and (c) notification records — the last two
->   open gate items. **~55 of 66 audit findings remain.** Also queued from the
->   inbox triage: the SSE-reconnect-on-visible fix, which two separate dogfood
->   reports (07-18 map, 07-28 daemon-unreachable) turn out to share.
-> - **PARKED, operator-flagged for "shortly":** a Call-CQ run has **no auto_off** —
->   the answer-mode enum is three values and `operator_pick`, the only manual one, is
->   rejected at runtime (`servicetx.go:855`) while config validation still ACCEPTS it,
->   so saving it disables Call CQ until the error is noticed. The "off" the operator
->   wants is the unbuilt pile-up stack. Memory: `ft8-cq-answerer-selection`.
->
-> ---
 >
 ## Active cycle (the 1–3 things in flight now)
 

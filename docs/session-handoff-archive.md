@@ -12152,3 +12152,124 @@ keeping the live doc at the enforced 3-arc window.
 >
 > ---
 >
+
+---
+
+**Rolled off 2026-08-02 (third roll):** oldest `## Current state` arc,
+holding the live doc at the enforced 3-arc window.
+
+> **2026-08-01, LATER THE SAME DAY — the audit findings started shipping. SIX
+> findings across six commits: the auto-work pill fix, bridge B1 (drive-watch state
+> reporting), api A7, and the three-hub eviction class fix. Deployed mid-session and
+> validated on the air on 12 m; everything after that deploy is NOT running.**
+>
+> - **DEPLOY STATE — FOUR COMMITS BEHIND.** Running
+>   `2.0.0-alpha.1-1021-gda962028` since **14:47:36**; version stamp verified
+>   against HEAD at the time (not `dev` — the `-X` trap did not bite). HEAD is now
+>   `cb21cf8b`. **NOT running: api A7 and all three eviction logs.** Two
+>   consequences: a datastore fault still reports as unset configuration, and the
+>   eviction records — the evidence the operator wants before deciding anything
+>   about buffer sizes — do not start accruing until a deploy.
+> - **`b93bd417` — starting a Call-CQ run stops an armed auto-work run.** From a
+>   dogfood report ("the auto-work armed stays active, or the pill stays viewable").
+>   It was BOTH and the pill was innocent: `StartCallCq` reset caller / stalledCalls
+>   / confirmHold / contact and never touched `autoWork`. It could not FIRE
+>   (`onSlotIdleArmed` needs `mode == seqIdle`, and a Call-CQ contact resumes CQ
+>   rather than ending), so this was never a rogue-transmission risk — it removed an
+>   indicator naming the wrong mechanism plus a stale offset/dial pin. Cleared ahead
+>   of the status publish; W12 pins the state, **V5 pins that the CQ's own frame
+>   carries it** and is demonstrably load-bearing (move the clear after the publish:
+>   W12 green, V5 red).
+> - **`1273752d` + `da962028` — bridge B1, and it went WIDER than the finding.**
+>   Drive-watch is now a four-state transition machine (`armed` / `no_meter` /
+>   `meter_not_po` / `meter_moved_off_po`), **Warn on entering a dark state, Info on
+>   recovery, NO line when unchanged** — the operator's design, and the level was his
+>   call against my hesitation. The measurement backed him: the declined branches are
+>   ~3% of transmissions here, not the sticky whole-session state I predicted. Also
+>   added on his direction: a per-transmission `drive_watch` field on the existing
+>   meters record, and the mid-TX taint branch (a third silent early return no
+>   arm-time transition could see). **The Error alarm now carries its own evidence** —
+>   `meter_sel`, `meter_n`, `meter_po_max`, `gap_ms`, `gap_max_ms`, `tx_gen` — all of
+>   which were already computed at the emit point and discarded.
+>   **B1 had the priority wrong and I stated it wrongly too:** I ranked it first
+>   because it had a measured cost that morning, but the 08:45 alarms took the ARMED
+>   path, so B1's own fix would not have explained them. The alarm-evidence half is
+>   what addresses them.
+> - **`3fdba1a2` — api A7, and the operator OVERRULED the finding's own
+>   prescription, correctly.** "Log only, do not change the fail-closed behaviour"
+>   would have logged the cause while leaving the operator reading *"set your station
+>   callsign in My Station"* with a broken database. His ruling: **fail closed means
+>   never fall back to another callsign and never transmit; it does not require
+>   preserving the misleading 400.** So: unexpected DB error → **503 `db_unavailable`**
+>   (the code `handler_health.go` already uses) + Error log with cause, `logbook_id`,
+>   `op`; genuinely unset config → 400 `no_station_callsign`, unchanged. Neither
+>   starts a session or keys PTT, and **neither disarms** — these routes require TX
+>   already armed. The SPA needed no change (`ft8qso.ts` already maps ≥500 to a
+>   `server` outcome carrying the daemon's message).
+> - **ON-AIR VALIDATION, 12 m, 16 transmissions:** all `drive_watch=armed`, **zero
+>   transition lines, zero alarms**, `gap_max_ms` 245–269 ms against a 3000 ms
+>   threshold, `po_max` 109, `po_n` 559–615. That is the no-spray design confirmed in
+>   production rather than predicted — a per-transmission scheme would have emitted 16
+>   warns for those slots.
+> - **THE DAY'S REAL LESSON — FIVE WAYS A RULE CAN BE GREEN AND WORTHLESS.** The
+>   drive-watch work took five review rounds and four of the findings were FIXTURE
+>   failures, not logic errors. All five shapes are written into
+>   `internal/bridge/drivewatch_test.go`'s header with their proofs: (1) the fixture
+>   excluded the interval; (2) presence asserted instead of value; (3) an identifier
+>   that identified nothing (and the obvious fix carried the WRONG generation, because
+>   `finishFt8Tx` increments before flushing); (4) **one fix, two sites, one proof** —
+>   when a fix touches N call sites the proof must revert each separately or N-1 are
+>   unguarded; (5) **every rule was single-threaded and the subject is not** — twelve
+>   green rules could not see an ordering defect that left "drive detection restored"
+>   as the last line while detection was dark. Read that header before writing rules
+>   for anything concurrent.
+> - **THREE DRIVE ALARMS TODAY (08:45:03, 08:45:33, 10:08:35) CANNOT BE RE-EXAMINED.**
+>   They were logged by the pre-deploy build and carry `code` alone. Anything firing
+>   after `da962028` carries full evidence and joins to its meters record by `tx_gen`.
+>   The 10:08:35 one was never looked at.
+> - **`57619abe` + `cb21cf8b` — THE THREE-HUB EVICTION CLASS FIX** (ft8 #1 +
+>   bridge B2, plus a THIRD site the audits missed: `internal/events/hub.go`, which
+>   feeds the map's stream). All three dropped a too-slow subscriber with a bare
+>   `close(ch); delete(...)` and said nothing. Each now emits ONE Warn per evicted
+>   subscriber with `subscriber_id`, `event`, `queue_depth`, `queue_capacity`,
+>   `subs_before`, `subs_after`.
+>   **THE TEARDOWN IS UNCHANGED — operator's ruling, and the reasoning is the part
+>   to preserve:** the enforced proxy is a FUNCTIONING SSE subscription, not an open
+>   browser tab; once the channel overflows, operator-facing state is no longer
+>   flowing, and EventSource reconnect plus the existing linger already IS the
+>   recovery distinction. Exempting eviction could leave TX running behind a dead
+>   display or create a phantom subscriber that can never unsubscribe. **Buffers stay
+>   at 8 (ft8) / 64 (bridge, events) until the new records show HEALTHY clients being
+>   evicted.**
+>   **A codex P2 was REFUTED, not fixed** (rationale in all three `logEvictions`
+>   comments): the eviction log is synchronous and zerolog writes straight to
+>   lumberjack, so the mechanism is real — but these goroutines already emit **1,502
+>   `ft8 tx meters` records against 0 evictions** in 15 days, so it is the rarest
+>   instance of an accepted pattern, not a new class. If a stalled log destination
+>   endangers them it belongs at the logging layer, fixed once.
+> - **FIVE REVIEW ROUNDS ON THAT ONE, AND EVERY FINDING WAS A PROOF GAP, NOT A BUG.**
+>   The implementation was right early; the tests were not. In order: F3 called the
+>   handler's unsubscribe BY HAND, so deleting `defer unsub()` would not have failed
+>   it (now drives the real `HTTPHandler` with a client that stalls mid-write) · F4
+>   could not reach the raced-timer interleaving at all, so the subCount guard was
+>   unproven (F5 added, entering `onLingerExpired` directly) · `subscriber_id` was
+>   checked only for non-negativity, which a constant 0 passed (fixtures now burn id
+>   0) · the production wiring guard was `strings.Contains`, which a commented-out
+>   call, `logging.Noop()`, `(*logging.Service)(nil)` and a local rebinding all
+>   passed (now an AST check requiring `loggerSvc` resolved from the container) · F3's
+>   barrier counted writes cumulatively, and the hub replays cached events on
+>   subscribe so it was pre-satisfied (now a signal raised by `Write` at the gate).
+>   **The generalisable one: a green test after touching ONE of two redundant
+>   mechanisms is not evidence the other is dead code.**
+> - **NEXT:** SHIP GATE (a) config saves and (c) notification records — the last two
+>   open gate items. **~55 of 66 audit findings remain.** Also queued from the
+>   inbox triage: the SSE-reconnect-on-visible fix, which two separate dogfood
+>   reports (07-18 map, 07-28 daemon-unreachable) turn out to share.
+> - **PARKED, operator-flagged for "shortly":** a Call-CQ run has **no auto_off** —
+>   the answer-mode enum is three values and `operator_pick`, the only manual one, is
+>   rejected at runtime (`servicetx.go:855`) while config validation still ACCEPTS it,
+>   so saving it disables Call CQ until the error is noticed. The "off" the operator
+>   wants is the unbuilt pile-up stack. Memory: `ft8-cq-answerer-selection`.
+>
+> ---
+>
