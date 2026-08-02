@@ -69,10 +69,29 @@ elif [ -n "$last_commit" ] && [[ "$last_commit" > "$asof" ]]; then
   echo "   still open BEFORE re-implementing it. A stale line is not a work order."
   echo
   echo "   Commits since the handoff's as-of date:"
-  git log --since="${asof} 00:00:00" --format='     %cs %h %s' 2>/dev/null | head -12
+  # Each subject CUT to 100 chars. This is the only unbounded input in the whole
+  # script — a subject has no length limit, and this repo routinely writes
+  # 250-300 character ones, so twelve of them was ~4 KB before the fixed text
+  # (codex 1fd07b96 P1). Orientation needs to IDENTIFY the commits, not reproduce
+  # them; the hash is right there for anything that needs reading in full.
+  git log --since="${asof} 00:00:00" --format='     %cs %h %s' 2>/dev/null \
+    | head -12 | cut -c 1-100
   echo
 fi
 )"
+
+# Belt and braces: the per-line cut above bounds the usual case, but it counts
+# CHARACTERS, so a subject of multibyte glyphs could still be 4x its length in
+# bytes. The warning is the one thing that must never be dropped, so it is
+# bounded here in bytes rather than trusted to stay small — otherwise a large
+# warning pushes the body onto its floor and the TOTAL exceeds MAX_BYTES, which
+# is the output-too-large failure this script exists to prevent.
+WARN_MAX=$(( MAX_BYTES / 2 ))
+if [ "$(printf '%s' "$warning" | wc -c)" -gt "$WARN_MAX" ]; then
+  warning="$(printf '%s' "$warning" | head -c "$WARN_MAX" \
+    | { iconv -c -f UTF-8 -t UTF-8 2>/dev/null || cat; })
+   … commit list truncated; run: git log --since=${asof}"
+fi
 [ -n "$warning" ] && printf '%s\n' "$warning"
 
 # --- 2. THE "## Now" SECTION ---------------------------------------------
