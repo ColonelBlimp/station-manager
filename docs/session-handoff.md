@@ -52,16 +52,24 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 - **DEPLOYED AT HEAD** (`663c7eff`), daemon active. Everything below is live.
   `smd` is deliberately NOT auto-start — a stopped daemon is not a fault.
-- **AWAITING ON-DESKTOP VALIDATION — the SSE revival, and it is the half no test
-  can reach.** Background the MAP tab (another tab in the SAME window; browsers
-  throttle on visibility, not focus, so a second monitor will not reproduce it),
-  leave it, come back: the map should go live again with no reload. **If it does
-  not, the trigger is wrong, not the logic** — `visibilitychange` may never fire
-  on this desktop when a tab is backgrounded, which the unit rules cannot tell
-  us. Diagnostic: `addEventListener('visibilitychange', () =>
-  console.log(document.visibilityState))` in devtools. A negative result means
-  re-picking the hook (`focus` / `online` / `resume` / periodic liveness), NOT
-  patching `openReviving`.
+- **OBSERVE WHEN THE CHANCE ARISES — NOT tasks, and they gate nothing.** The
+  operator does not go on air every day; do not schedule these, do not treat
+  them as blocking, and do not open a session by asking whether they are done.
+  Confirm opportunistically and record the result.
+  - **SSE revival** (shipped today): background the MAP tab — another tab in the
+    SAME window, since browsers throttle on visibility not focus — leave it,
+    come back. Map should go live again with no reload. **A negative result
+    means the TRIGGER is wrong, not the logic:** `visibilitychange` may never
+    fire on this desktop. Diagnostic: `addEventListener('visibilitychange',
+    () => console.log(document.visibilityState))`. If it never fires, re-pick
+    the hook (`focus` / `online` / `resume` / periodic liveness) — do NOT patch
+    `openReviving`.
+  - **FT8 dead-source watchdog** — at the next Plasma device fiddle, or forced
+    with `pw-cli destroy` on the codec node mid-capture.
+  - **ADR 0059 auto-work** — needs on-air confirmation.
+  - **Stuck-TX / RF-ingress experiment** — 2 s tune trials INTO THE ANTENNA on
+    20 m. Operator's call on RF exposure; both dummy-load hypotheses are dead
+    and the antenna is the remaining variable.
 - **Shipped today:** SHIP GATE (a) config-save records (closed api A4 + A8); the
   **SessionStart hook fix** (it had been emitting 231 KB, truncated to a 2 KB
   preview, so the RECONCILE warning had never once been delivered); the
@@ -72,7 +80,7 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   pills, reset on `smcloud.logbook` only); `grep 'config saved'` in `smd.log`
   after any settings change; and `"label": "SM Cloud"` on the smcloud forwarder
   in config.json + restart, which overrides the binary's "SM Cloud backup".
-- **Next, unblocked, pick one:** (a) port **Email** or **Enrichment** — both
+- **NEXT ACTUAL WORK (this is the list to pick from):** (a) port **Email** or **Enrichment** — both
   reuse the masked-credential + `Clearable` pattern Forwarding just proved;
   (b) surface the forwarder `label` in the logbook upload-status column;
   (c) a Playwright bounding-box/screenshot check for layout — THREE centring
@@ -96,8 +104,8 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 ## Current state (as of 2026-08-02)
 
 > **2026-08-02, LAST — SSE REVIVAL SHIPPED, and its scope was CUT IN HALF by
-> reading `smd.log` instead of reasoning. Deployed at HEAD; the acceptance test
-> is on-desktop and still outstanding.**
+> reading `smd.log` instead of reasoning. Deployed at HEAD; its on-desktop
+> confirmation is an opportunistic OBSERVATION, not a scheduled task.**
 >
 > - **THE SUSPICION WAS WRONG, and checking cost one query.** The 2026-07-28
 >   report reads as though a dead SSE might have ended an FT8 run: subscriber
