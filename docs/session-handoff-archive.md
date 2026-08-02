@@ -12052,3 +12052,103 @@ guide — use this, not an inferred version):
   oldest block into `session-handoff-archive.md` (newest-first, verbatim). Last
   roll-off: 2026-07-18 later (Sessions 209–211 → archive; live kept 212–223). Prior: 2026-07-18 (203–208),
   2026-07-13 (Sessions 182–197 → archive).
+
+---
+
+**Rolled off 2026-08-02 (second roll):** the oldest `## Current state` arc,
+keeping the live doc at the enforced 3-arc window.
+
+> **2026-08-01 (earlier) — FIVE package logging audits (66 findings, one file each in
+> `docs/reviews/*-logging-gaps.md`), then SIX findings shipped across four atomic
+> diffs, plus SHIP GATE item (d). NOT DEPLOYED — the running build predates all
+> of it.**
+>
+> - **SHIPPED TODAY, in order:** api A1 + A9 + forwarding F4 (`b1c50913`/`0265f04a`)
+>   · forwarding F6 and F1's volume half — the `forwarding: attempt` restructure
+>   (`f31738bc`, regression fixed by `191ac370`) · F1's provenance half —
+>   `qso_upload.origin` + migration 0007 (`59542a8a`/`ed0f0657`) · **SHIP GATE (d)**
+>   — version stamping on every record (`116cf34b`) · the ft8 structural-guard fix
+>   (`336329a6`). **Backlog: forwarding 14 of 17 remain; api 10 of 12.**
+> - **MEASURED EFFECT once deployed and rotated:** `internal/forwarding` drops from
+>   41% of `smd.log` to ~23%; the whole log 14.31 → 15.18 MiB *including* full
+>   version stamping — **+6%**, against **+23%** had (d) shipped without the F1
+>   restructure. Both decided together for exactly that reason. Figures on a
+>   corrected 15.51-day divisor (an earlier pass wrongly divided by 17 distinct
+>   calendar days).
+> - **SHIP GATE now: (a) config saves and (c) notification records still open;
+>   (b) STRUCK as false; (d) SHIPPED.**
+> - **TRAP, now documented in seven places:** `-X` on a symbol that no longer
+>   exists **exits 0 and stamps nothing**, so any stale `-X main.Version=` silently
+>   produces a `dev` build. `internal/buildinfo.Version` is the single carrier;
+>   `cmd/smd`'s `main.Version` was REMOVED, not aliased. `cmd/smcloud` keeps its
+>   own and is out of scope.
+> - **A GUARD CLASS THAT READ AS COVERAGE.** Four tests inspected their own source
+>   via a relative path, so outside the package directory they parsed nothing and
+>   PASSED. Two were pre-existing and load-bearing: `internal/ft8`'s
+>   publish-atomicity and session-end AST checks, which exist *because* 23 of 39
+>   publish sites have no test. Proven by injecting real invariant violations —
+>   they failed in-package and passed from `/tmp`. All four now use `//go:embed`,
+>   and each fails if it parses nothing. **If you write a test that reads source,
+>   embed it; a relative path is a silent no-op waiting for a different runner.**
+>
+> - **THE AUDITS.** `internal/ft8` (14) · `internal/bridge` (14) · `internal/api` (12) ·
+>   `internal/qsoservice` (10) · `internal/forwarding` (16). Each file has a
+>   **"verified NOT gaps"** section — in three of the five it is longer than the
+>   findings and is the part that stops a later pass re-filing settled questions or
+>   applying a dangerous fix. **Read it before acting on any finding.**
+> - **SHIPPED (`b1c50913` tests + `0265f04a` implementation): api A1, api A9,
+>   forwarding F4** — three independent routes by which "why did the daemon stop?"
+>   bypassed `smd.log`. Marked ✅ in their files with shipped detail; backlog index
+>   lines updated so they are not re-picked.
+> - **NEW TEST SEAM: `logging.NewForWriter(io.Writer) *Service`.** Before it, no
+>   package outside `internal/logging` could assert on emitted records. It unblocks the
+>   remaining 63 findings, not just these three. Its own guarantees are pinned in
+>   `writer_service_test.go` — note the precise one: a later `Initialize()` still
+>   RETURNS the nil-ConfigService error; what cannot happen is the capture logger being
+>   replaced.
+> - **PROCESS FAULT, NOW THREE TIMES IN ONE DAY: RED tests committed without their
+>   implementation.** `b1c50913` (closed by `0265f04a`), the `f31738bc` pair, and
+>   `59542a8a` (followed by `ed0f0657`). CI gates every push, so each left main red
+>   on a revision that was never a release candidate and put a broken commit in
+>   `git bisect`'s path. Codex filed a correct P1 on each.
+>   **ACCEPTED HISTORICAL DAMAGE, NOT "CLOSED."** All three are on `origin/main`.
+>   A later commit makes the TREE correct; it does not repair the history, and
+>   rewriting shared main would be worse than the damage. So `git bisect` across
+>   this day's range will land on revisions that do not build or that serve a wrong
+>   API shape — expect it, do not re-litigate it.
+>   **The third is materially worse and is the one to remember.** `59542a8a` carried
+>   `types.QsoUpload.Origin` — `json:"origin"` with no `omitempty` — without its
+>   migration or producers, so that revision **changed the public API to emit
+>   `"origin": ""`** on every item of `GET /v1/qso/{uuid}/uploads`. Not a failing
+>   gate: a wire contract shipped with a wrong value. The operator had explicitly
+>   said the field "must remain part of the same atomic Diff B and never ship
+>   alone", and that warning was written verbatim into the field's own doc comment.
+>   **Ship tests + implementation as ONE commit — and STAGE it as one, rather than
+>   describing a diff as atomic and leaving the split to the commit step.**
+> - **A REVERSION PROOF LIED, AND WAS CAUGHT.** The first A9 revert deleted the
+>   `ErrorLog` field, which broke the build — the test never ran, so the proof was
+>   worthless. It surfaced only because the run produced NO matching output and the
+>   failure text was read rather than the silence accepted. The valid proof reverts to
+>   `stdlog.New(os.Stderr, …)`, the actual pre-fix behaviour.
+> - **TWO STALE-DOC CORRECTIONS, both found by grepping code not docs.** SHIP GATE item
+>   (b) ("QSO deletes write no log line") is **FALSE** — `delete.go:85` has logged since
+>   `d516d816`, 2026-05-17, *before the entry was written*; struck in the backlog. And
+>   `registry.go` documented a startup log that did not exist; F4 made the comment true.
+> - ~~**NEXT — A7, then B1, then the hub evictions.**~~ **A7 and B1 both SHIPPED
+>   later the same day — see the block above.** The ordering advice itself was
+>   partly wrong: B1 was ranked ahead of the hub evictions because it "had a
+>   measured cost this morning", but the 08:45 alarms took the armed path and B1's
+>   fix would not have explained them. Remaining next step is unchanged: the two
+>   silent hub evictions.
+> - **This morning's two `drive_no_output` alarms (08:45:03, 08:45:33) are almost
+>   certainly FALSE** — 6–7 meter samples against ~490 on healthy transmissions, a
+>   12.88 s gap in a 13.36 s key, and `meter_po_max` **120 vs 98**, i.e. the rig
+>   reported MORE output on the few samples it sent. Operator disarmed and re-armed
+>   at 08:44:24/08:44:31, seven seconds before the first. **Cause never established,
+>   and now unestablishable** — they predate the deploy, so they carry `code` alone.
+>   A third alarm at 10:08:35 was never examined. The post-deploy 12 m session gives
+>   the healthy baseline to judge any future one against: `gap_max_ms` 245–269 ms,
+>   `po_max` 109, `po_n` 559–615.
+>
+> ---
+>

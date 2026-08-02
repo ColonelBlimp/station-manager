@@ -50,18 +50,25 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **Deployed:** RPM at HEAD; daemon runs on demand (`smd` is deliberately NOT
-  auto-start — a stopped daemon is not a fault).
-- **Just shipped:** SHIP GATE (a) — config saves now leave a durable record
-  (field-level delta, `source` api/startup, secrets masked). Closed api A4 + A8.
-  Four commits, four review rounds, the last clean.
-- **Next (proposed, awaiting operator):** port the **Forwarding** tab from the
-  standalone config SPA into the app shell. Smallest of the five remaining tabs
-  AND the one carrying the unsolved masked-credential + `Clearable` reset
-  problem that Email and Enrichment will both reuse.
-- **Also open, unblocked:** SSE reconnect on `visibilitychange` (closes two
-  dogfood reports at once); SHIP GATE (c) notification records — BLOCKED on ADR
-  0061's open questions, do not start it as a standalone build.
+- **DEPLOY IS 7 COMMITS BEHIND.** RPM at `2c6c22f3`, HEAD `5d328d74`. NOT
+  running: the forwarder `label` field, the **`endpoints` carry-over fix**, and
+  the whole Forwarding tab. Consequence while behind: a forwarder save from the
+  OLD config SPA still drops custom `endpoints` (harmless for this operator —
+  theirs equal the registry defaults). `task deploy:local:dev` when ready.
+  Daemon runs on demand (`smd` is deliberately NOT auto-start — a stopped daemon
+  is not a fault).
+- **Shipped today:** SHIP GATE (a) config-save records (closed api A4 + A8); the
+  **SessionStart hook fix** (it had been emitting 231 KB, truncated to a 2 KB
+  preview, so the RECONCILE warning had never once been delivered); and the
+  **Forwarding tab** ported into app Settings.
+- **Next, unblocked, pick one:** (a) port **Email** or **Enrichment** — both
+  reuse the masked-credential + `Clearable` pattern Forwarding just proved;
+  (b) **SSE reconnect on `visibilitychange`**, which closes two dogfood reports
+  at once; (c) surface the forwarder `label` in the logbook upload-status column.
+- **BLOCKED, do not start as a standalone build:** SHIP GATE (c) notification
+  records — it is ADR 0061's subject matter and that ADR is still `Proposed`
+  with the "does `notification` join the event table" question unanswered. The
+  ADR's own prescription is to ship the alarm pilot first and let it decide.
 - **PARKED — do not start without the operator:** `operator_pick` / Call-CQ
   auto_off (see the `ft8-cq-answerer-selection` memory).
 - **STANDING:** do not tune the hub buffers (8 ft8 / 64 bridge+events) until the
@@ -74,6 +81,71 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ## Current state (as of 2026-08-02)
 
+> **2026-08-02, LATER — THE ORIENTATION HOOK WAS BROKEN, AND THE FORWARDING TAB
+> LANDED. Seven more commits. The operator's question was "why is there confusion
+> every session — are we monitoring too many documents?" The answer turned out to
+> be mechanical, not editorial.**
+>
+> - **THE HOOK HAD BEEN DEAD FOR AN UNKNOWN NUMBER OF SESSIONS.**
+>   `scripts/session-status.sh` sliced `## Current state` at a prose marker,
+>   `/Earlier arc/`, which had been deleted from the handoff at some point.
+>   `grep -c` returned **0**, so the awk never exited and printed to EOF: **231
+>   KB**. The harness caps injected output, so every session received `Output too
+>   large` plus a **2 KB preview** — about 40 lines. **And the RECONCILE staleness
+>   warning was printed AFTER that block, so it had never been delivered at all.**
+>   The guard built after the 2026-07-05 re-opened-finished-work incident was
+>   unreachable for its whole life. Now 1,596 bytes.
+> - **THE FIX IS A SPLIT, NOT A TRIM.** Orientation and the record were one
+>   section that had to be both short and complete. `## Now` (≤25 lines) is the
+>   ONLY injected section; `## Current state` is the rolling record and is NOT
+>   injected. Live doc 3,005 → ~400 lines; 2,612 lines rolled to the archive with
+>   line-by-line accounting that nothing was lost. **Rule: a section that grows
+>   without limit must never be the injected one.**
+> - **FOUR REVIEW ROUNDS ON THAT SCRIPT, THREE FINDING A DEFECT IN THE PREVIOUS
+>   ROUND'S FIX.** Worth reading before touching it again: (1) the cap counted
+>   CHARACTERS (`${#s}`), so multibyte content overflowed it — 6,000 "bytes"
+>   emitted 24,843; (2) my fix for that dropped the last LINE to avoid slicing a
+>   glyph, which DELETED EVERYTHING when the section was one long line — silence,
+>   the original failure; (3) the RECONCILE warning was itself unbounded (12
+>   commit subjects; this repo writes 250–300 char ones, 2,666 bytes for twelve),
+>   so it could floor the body and still bust the cap; (4) the two truncation
+>   sites had different iconv fallbacks. Round 5 clean. **Every fix added a code
+>   path whose failure mode nobody had enumerated; the one that finally held
+>   REMOVED a path (one `utf8_trim` helper for both sites).**
+> - **`47e5225e` — forwarder `label`, and a data-loss bug found by writing its
+>   rule first.** `label` is operator-set in config.json ONLY (no API write, no
+>   Settings control) because the built-in display name is a string in the binary
+>   — "SM Cloud backup" is already dated and renaming it is a release. It is
+>   deliberately NOT `name`: `qso_upload` keys `UNIQUE (qso_id, forwarder_name,
+>   action)` on that, so renaming it would make the daemon forget which QSOs were
+>   already sent and **re-upload them to ClubLog and QRZ**. Asking "what else does
+>   `mergeForwarders` drop?" found that **`Endpoints` was never carried over** —
+>   a save wrote it empty and `applyDefaults` re-seeded the registry default at
+>   the next Load, silently reverting an operator's override. Both now carried;
+>   L2/L3 pin them. **Any future config-only field on `ForwarderConfig` must join
+>   that carry-over** — recorded in `docs/v2-design/config.md`.
+> - **THE FORWARDING TAB (app Settings, ADR 0044).** Three blank states exist and
+>   only one may reach the wire: never-touched and typed-then-erased are omitted
+>   (daemon keeps the stored value), and ONLY an explicit reset sends `""`.
+>   `Clearable` is far narrower than the backlog implied — exactly **two** fields
+>   system-wide (`smcloud.logbook`, dev-only `stub.mode`) and **no password is
+>   clearable anywhere**, because emptying a required credential is a daemon that
+>   won't restart. Destinations collapse into `<details>` disclosures; an edited
+>   card is starred and **refuses to collapse**, so a pending change cannot hide.
+> - **THREE MORE DEFECTS THE RULES CAUGHT, none in the feature being built:**
+>   `reset()` (the Cancel button) restored drafts from the dirty-compare
+>   projection, which carries no `type` — so Cancel silently made every
+>   destination "unsupported"; the Rigs pill read **active** while branching on
+>   `default_rig_id`, claiming "you are on air with this rig" exactly when a
+>   pending restart made it false (relabelled **default**; the rig LIST already
+>   said "default", so the component contradicted itself); and `display: flex` on
+>   a `<summary>` suppresses the native disclosure triangle.
+> - **CORRECTED MID-SESSION, twice, both mine:** `smd.log` is **0600**, not 0644
+>   (I cited 0644 all session as the redaction rationale — the policy stands, the
+>   argument overstated it); and I "corrected" A4's startup-rewrite claim on the
+>   strength of `config.Load` alone before finding `main.go:237` rewrites on every
+>   start. **Grep the whole path before contradicting a written finding.**
+>
 > **2026-08-02 — SHIP GATE (a) SHIPPED, both write sites, across four commits.
 > "When did this setting change, and to what?" now has an answer. Three of four
 > clean-room review rounds found a real defect and TWO of those were in the
@@ -266,100 +338,6 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 >   rejected at runtime (`servicetx.go:855`) while config validation still ACCEPTS it,
 >   so saving it disables Call CQ until the error is noticed. The "off" the operator
 >   wants is the unbuilt pile-up stack. Memory: `ft8-cq-answerer-selection`.
->
-> ---
->
-> **2026-08-01 (earlier) — FIVE package logging audits (66 findings, one file each in
-> `docs/reviews/*-logging-gaps.md`), then SIX findings shipped across four atomic
-> diffs, plus SHIP GATE item (d). NOT DEPLOYED — the running build predates all
-> of it.**
->
-> - **SHIPPED TODAY, in order:** api A1 + A9 + forwarding F4 (`b1c50913`/`0265f04a`)
->   · forwarding F6 and F1's volume half — the `forwarding: attempt` restructure
->   (`f31738bc`, regression fixed by `191ac370`) · F1's provenance half —
->   `qso_upload.origin` + migration 0007 (`59542a8a`/`ed0f0657`) · **SHIP GATE (d)**
->   — version stamping on every record (`116cf34b`) · the ft8 structural-guard fix
->   (`336329a6`). **Backlog: forwarding 14 of 17 remain; api 10 of 12.**
-> - **MEASURED EFFECT once deployed and rotated:** `internal/forwarding` drops from
->   41% of `smd.log` to ~23%; the whole log 14.31 → 15.18 MiB *including* full
->   version stamping — **+6%**, against **+23%** had (d) shipped without the F1
->   restructure. Both decided together for exactly that reason. Figures on a
->   corrected 15.51-day divisor (an earlier pass wrongly divided by 17 distinct
->   calendar days).
-> - **SHIP GATE now: (a) config saves and (c) notification records still open;
->   (b) STRUCK as false; (d) SHIPPED.**
-> - **TRAP, now documented in seven places:** `-X` on a symbol that no longer
->   exists **exits 0 and stamps nothing**, so any stale `-X main.Version=` silently
->   produces a `dev` build. `internal/buildinfo.Version` is the single carrier;
->   `cmd/smd`'s `main.Version` was REMOVED, not aliased. `cmd/smcloud` keeps its
->   own and is out of scope.
-> - **A GUARD CLASS THAT READ AS COVERAGE.** Four tests inspected their own source
->   via a relative path, so outside the package directory they parsed nothing and
->   PASSED. Two were pre-existing and load-bearing: `internal/ft8`'s
->   publish-atomicity and session-end AST checks, which exist *because* 23 of 39
->   publish sites have no test. Proven by injecting real invariant violations —
->   they failed in-package and passed from `/tmp`. All four now use `//go:embed`,
->   and each fails if it parses nothing. **If you write a test that reads source,
->   embed it; a relative path is a silent no-op waiting for a different runner.**
->
-> - **THE AUDITS.** `internal/ft8` (14) · `internal/bridge` (14) · `internal/api` (12) ·
->   `internal/qsoservice` (10) · `internal/forwarding` (16). Each file has a
->   **"verified NOT gaps"** section — in three of the five it is longer than the
->   findings and is the part that stops a later pass re-filing settled questions or
->   applying a dangerous fix. **Read it before acting on any finding.**
-> - **SHIPPED (`b1c50913` tests + `0265f04a` implementation): api A1, api A9,
->   forwarding F4** — three independent routes by which "why did the daemon stop?"
->   bypassed `smd.log`. Marked ✅ in their files with shipped detail; backlog index
->   lines updated so they are not re-picked.
-> - **NEW TEST SEAM: `logging.NewForWriter(io.Writer) *Service`.** Before it, no
->   package outside `internal/logging` could assert on emitted records. It unblocks the
->   remaining 63 findings, not just these three. Its own guarantees are pinned in
->   `writer_service_test.go` — note the precise one: a later `Initialize()` still
->   RETURNS the nil-ConfigService error; what cannot happen is the capture logger being
->   replaced.
-> - **PROCESS FAULT, NOW THREE TIMES IN ONE DAY: RED tests committed without their
->   implementation.** `b1c50913` (closed by `0265f04a`), the `f31738bc` pair, and
->   `59542a8a` (followed by `ed0f0657`). CI gates every push, so each left main red
->   on a revision that was never a release candidate and put a broken commit in
->   `git bisect`'s path. Codex filed a correct P1 on each.
->   **ACCEPTED HISTORICAL DAMAGE, NOT "CLOSED."** All three are on `origin/main`.
->   A later commit makes the TREE correct; it does not repair the history, and
->   rewriting shared main would be worse than the damage. So `git bisect` across
->   this day's range will land on revisions that do not build or that serve a wrong
->   API shape — expect it, do not re-litigate it.
->   **The third is materially worse and is the one to remember.** `59542a8a` carried
->   `types.QsoUpload.Origin` — `json:"origin"` with no `omitempty` — without its
->   migration or producers, so that revision **changed the public API to emit
->   `"origin": ""`** on every item of `GET /v1/qso/{uuid}/uploads`. Not a failing
->   gate: a wire contract shipped with a wrong value. The operator had explicitly
->   said the field "must remain part of the same atomic Diff B and never ship
->   alone", and that warning was written verbatim into the field's own doc comment.
->   **Ship tests + implementation as ONE commit — and STAGE it as one, rather than
->   describing a diff as atomic and leaving the split to the commit step.**
-> - **A REVERSION PROOF LIED, AND WAS CAUGHT.** The first A9 revert deleted the
->   `ErrorLog` field, which broke the build — the test never ran, so the proof was
->   worthless. It surfaced only because the run produced NO matching output and the
->   failure text was read rather than the silence accepted. The valid proof reverts to
->   `stdlog.New(os.Stderr, …)`, the actual pre-fix behaviour.
-> - **TWO STALE-DOC CORRECTIONS, both found by grepping code not docs.** SHIP GATE item
->   (b) ("QSO deletes write no log line") is **FALSE** — `delete.go:85` has logged since
->   `d516d816`, 2026-05-17, *before the entry was written*; struck in the backlog. And
->   `registry.go` documented a startup log that did not exist; F4 made the comment true.
-> - ~~**NEXT — A7, then B1, then the hub evictions.**~~ **A7 and B1 both SHIPPED
->   later the same day — see the block above.** The ordering advice itself was
->   partly wrong: B1 was ranked ahead of the hub evictions because it "had a
->   measured cost this morning", but the 08:45 alarms took the armed path and B1's
->   fix would not have explained them. Remaining next step is unchanged: the two
->   silent hub evictions.
-> - **This morning's two `drive_no_output` alarms (08:45:03, 08:45:33) are almost
->   certainly FALSE** — 6–7 meter samples against ~490 on healthy transmissions, a
->   12.88 s gap in a 13.36 s key, and `meter_po_max` **120 vs 98**, i.e. the rig
->   reported MORE output on the few samples it sent. Operator disarmed and re-armed
->   at 08:44:24/08:44:31, seven seconds before the first. **Cause never established,
->   and now unestablishable** — they predate the deploy, so they carry `code` alone.
->   A third alarm at 10:08:35 was never examined. The post-deploy 12 m session gives
->   the healthy baseline to judge any future one against: `gap_max_ms` 245–269 ms,
->   `po_max` 109, `po_n` 559–615.
 >
 > ---
 >
