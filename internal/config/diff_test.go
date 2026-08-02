@@ -142,6 +142,55 @@ func TestDiff_AddingChainMemberIsNotReportedAsReorder(t *testing.T) {
 	}
 }
 
+// D4 — A SIBLING FIELD DOES NOT INHERIT A CONTAINER'S ALLOWLIST ENTRY. From the
+// clean-room review of 479245e9, and it was a regression I had just introduced:
+// widening "forwarders[" to bare "forwarders" so a reorder could render its
+// order also made strings.HasPrefix match every future top-level field STARTING
+// with that word. `forwarders_api_token` would have been logged verbatim.
+//
+// The rule is stated over valuePolicy rather than over a Config, because the
+// fields it guards against do not exist yet — that is the entire point. A test
+// that could only use today's schema could not express "and whatever is added
+// next".
+func TestValuePolicy_SiblingFieldsDoNotInheritContainerEntries(t *testing.T) {
+	for _, path := range []string{
+		"forwarders_api_token", "rigs_private_data", "operators_secret_value",
+		"useragent_token", "versionsecret", "map_credentials",
+	} {
+		if got := valuePolicy(path); got == policyValue {
+			t.Errorf("valuePolicy(%q) = policyValue; an unrecognised field must be "+
+				"redacted by default or the allowlist fails open", path)
+		}
+	}
+
+	// ...while the containers and their real children still log values, or the
+	// fix above would have been achieved by breaking the feature.
+	for _, path := range []string{
+		"forwarders", "forwarders[qrz].name", "rigs", "rigs[1].model",
+		"operators", "operators[7Q5MLV].name", "useragent", "version",
+	} {
+		if got := valuePolicy(path); got != policyValue {
+			t.Errorf("valuePolicy(%q) = %v, want policyValue", path, got)
+		}
+	}
+}
+
+// D5 — EVERY PREFIX ENTRY IS DELIMITER-BOUND. The structural half of D4: that
+// rule catches the six paths it happens to name, this one catches the next
+// entry someone adds. A prefix that does not end in "." or "[" matches sibling
+// words, which is exactly how the regression arrived.
+func TestValueAllowlist_PrefixesAreDelimiterBound(t *testing.T) {
+	for _, p := range valueAllowlistPrefix {
+		if !strings.HasSuffix(p, ".") && !strings.HasSuffix(p, "[") {
+			t.Errorf("prefix %q is not delimiter-bound; it will match sibling "+
+				"fields such as %q. Put exact paths in valueAllowlistExact instead.", p, p+"_token")
+		}
+	}
+	if len(valueAllowlistPrefix) == 0 {
+		t.Fatal("no prefixes to check; this rule would pass vacuously")
+	}
+}
+
 // D3 — AN UNRECOGNISED PATH IS REDACTED, NOT LOGGED. The allowlist's whole
 // purpose: a field added later is silent about its contents until someone
 // decides otherwise. A denylist would publish it on the day it lands.

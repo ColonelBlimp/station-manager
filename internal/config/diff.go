@@ -181,25 +181,33 @@ var urlLeaves = map[string]bool{"url": true, "view_url": true}
 //
 // Adding a prefix here is a decision to publish those values into a 0644 file
 // that came from a 0600 one. Check what the block can hold before extending it.
-var valueAllowlist = []string{
+// valueAllowlistExact matches a WHOLE path and nothing else. Every scalar
+// belongs here rather than in the prefix list: "version" as a prefix also
+// matches "versionsecret", and "smtp.username" also matches
+// "smtp.username_token". The container paths (forwarders, rigs, operators) are
+// here too, so a reorder — which is reported against the container — renders
+// its order instead of a useless redacted "(set) -> (set)".
+var valueAllowlistExact = []string{
 	"version", "data_dir", "useragent", "socket_path", "setup_complete",
 	"default_logbook_id", "default_operator", "default_rig_id",
 	"bridge_enabled", "ft8_enabled", "restore_rig_on_mode_switch",
-	"server.", "datastore.", "logging.", "logging_station.", "operators",
-	"rigs", "bridge.", "bridge_timeouts.", "bridge_tune.",
-	"ft8.", "psk_reporter.", "map.", "qsl.", "mailer.",
+	"forwarders", "rigs", "operators",
 	"smtp.enabled", "smtp.host", "smtp.port", "smtp.username", "smtp.from",
 	"smtp.default_recipient", "smtp.starttls", "smtp.timeout_sec",
-	"lookup.country_ttl_days", "lookup.station_ttl_days", "lookup.refresh_max_in_flight",
-	"lookup.", "forwarders",
 }
 
-// The list prefixes above are BARE ("forwarders", not "forwarders[") so the
-// container path itself is allowlisted too — otherwise a reorder, which is
-// reported against the container, renders as a redacted "(set) -> (set)" and
-// tells the operator nothing. This does not widen credential exposure:
-// valuePolicy checks secretLeaves and ".credentials." BEFORE the allowlist, and
-// URL-shaped values are reduced by originIfURL regardless of policy.
+// valueAllowlistPrefix matches a path and everything beneath it. EVERY entry
+// must end in "." or "[" — a bare word matches sibling top-level fields, which
+// is how `forwarders_api_token` came to be publishable by an entry meant for
+// the forwarders block (clean-room review of 479245e9). That constraint is
+// enforced on the LIST itself, not on the entries someone happens to remember:
+// TestValueAllowlist_PrefixesAreDelimiterBound.
+var valueAllowlistPrefix = []string{
+	"server.", "datastore.", "logging.", "logging_station.",
+	"bridge.", "bridge_timeouts.", "bridge_tune.",
+	"ft8.", "psk_reporter.", "map.", "qsl.", "mailer.", "lookup.",
+	"forwarders[", "rigs[", "operators[",
+}
 
 func valuePolicy(path string) policy {
 	leaf := path
@@ -215,8 +223,13 @@ func valuePolicy(path string) policy {
 	if urlLeaves[leaf] {
 		return policyURL
 	}
-	for _, prefix := range valueAllowlist {
-		if path == prefix || strings.HasPrefix(path, prefix) {
+	for _, exact := range valueAllowlistExact {
+		if path == exact {
+			return policyValue
+		}
+	}
+	for _, prefix := range valueAllowlistPrefix {
+		if strings.HasPrefix(path, prefix) {
 			return policyValue
 		}
 	}
