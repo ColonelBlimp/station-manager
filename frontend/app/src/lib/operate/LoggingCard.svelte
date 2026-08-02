@@ -159,7 +159,17 @@
 
 <DuplicateDialog />
 
-<div class="card w-(--card-w)">
+<!-- mx-auto is load-bearing, not cosmetic. --card-w is a FIXED 558px (φ × 354),
+     and a fixed-width box does not stretch inside Operate's `flex flex-col`
+     container (max-w-3xl / 768px) — it is placed at the START of the cross axis,
+     i.e. hard left, ~105px off centre.
+     It used to be centred by the ADR 0046 tile board, whose CSS did it with auto
+     margins ("Centred when it fits", app.css:306). ADR 0058 retired that board
+     for a plain flex column and the card kept its width but lost the mechanism
+     that centred it. Fixed here rather than with `items-center` on the
+     container: the sibling tiles have NO fixed width and rely on the default
+     stretch, so centring the container would shrink them all to content width. -->
+<div class="card mx-auto w-(--card-w)">
     <div class="flex flex-col">
         <div class="flex flex-row gap-x-6">
             <div class="flex flex-col">
