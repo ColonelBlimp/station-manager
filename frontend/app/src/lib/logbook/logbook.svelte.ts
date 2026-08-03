@@ -24,7 +24,7 @@ import { patchQso, type QsoPatch } from '../api/qso-patch';
 import { fetchMailer, fetchForwarders } from '../api/config-blocks';
 import { enqueueUploads } from '../api/uploads';
 import { enrichCallsign } from '../api/enrichment';
-import { hasUploadStamp, type ForwarderInfo } from './uploadStatus';
+import { forwarderLabel, hasUploadStamp, type ForwarderInfo } from './uploadStatus';
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
@@ -151,6 +151,24 @@ class LogbookState {
      *  valid upload TARGET; the operator just sees the whole logbook while it is
      *  selected. SM Cloud is the case in practice — a row mirror holding a full
      *  copy — but "no stamp" does not imply mirroring; see hasUploadStamp. */
+    /**
+     * What to CALL the selected destination in front of the operator.
+     *
+     * Exists because `selectedDestination` is a KEY — it addresses
+     * POST /v1/forwarder/{name}/uploads and matches `missing_from` — and it was
+     * also being rendered in three places, so a labelled destination appeared as
+     * "QRZ (club account)" in the dropdown and "qrz" in the button, notice and
+     * empty-state within one workflow (review 288518755c52). One getter, so the
+     * display sites cannot drift from each other again.
+     *
+     * Falls back to the raw name for a destination no longer in the list —
+     * disabled between the pick and the render — rather than going blank.
+     */
+    get selectedDestinationLabel(): string {
+        const f = this.forwarders.find((x) => x.name === this.selectedDestination);
+        return f ? forwarderLabel(f) : this.selectedDestination;
+    }
+
     get destinationTracksUploads(): boolean {
         const f = this.forwarders.find((x) => x.name === this.selectedDestination);
         return f !== undefined && hasUploadStamp(f.type);
@@ -394,7 +412,8 @@ class LogbookState {
             return;
         }
         const r = out.result;
-        const bits = [`Queued ${r.enqueued} to ${dest}`];
+        // Label for the operator; `dest` (the name) went to the daemon above.
+        const bits = [`Queued ${r.enqueued} to ${this.selectedDestinationLabel}`];
         if (r.skipped_uploaded > 0) bits.push(`${r.skipped_uploaded} already uploaded`);
         const skippedDeleted = r.skipped_deleted?.length ?? 0;
         if (skippedDeleted > 0) bits.push(`${skippedDeleted} deleted (skipped)`);

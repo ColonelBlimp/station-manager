@@ -316,3 +316,83 @@ describe('markEmailed — filtered paging reset', () => {
         expect(fetchFn).not.toHaveBeenCalled();
     });
 });
+
+/*
+    L5/L6 — THE SELECTED DESTINATION IS NAMED BY LABEL EVERYWHERE IT IS SHOWN,
+    AND BY NAME EVERYWHERE IT IS SENT.
+
+    The first pass at forwarder labels (commit 28851875) did the dropdown and
+    the tooltip and stopped there, so picking "QRZ (club account)" produced
+    "Upload 1 to qrz" and then "Queued 1 to qrz" — the same destination under two
+    identities inside one workflow (clean-room review 288518755c52).
+
+    The failure was an enumeration one: `selectedDestination` was treated as
+    purely a key because that is its job in enqueueUploads, and the three places
+    it is ALSO rendered went unlooked-for. The complete set is the upload button,
+    the empty-filter message, and this notice.
+
+    L6b is the guard that stops the fix over-applying. Every one of these strings
+    is cosmetic; the argument to enqueueUploads is not, and swapping the label in
+    there would address a destination the daemon has never heard of.
+*/
+describe('selected destination labelling', () => {
+    afterEach(() => {
+        logbookState.forwarders = [];
+        logbookState.selectedDestination = '';
+        logbookState.notice = null;
+    });
+
+    // L5 — the label getter resolves the selected destination through the
+    // operator's label, and falls back to the raw name for an unlabelled one.
+    it('L5: resolves the selected destination to its label', () => {
+        logbookState.forwarders = [
+            { name: 'qrz', label: 'QRZ (club account)', type: 'qrz', enabled: true },
+            { name: 'clublog', label: '', type: 'clublog', enabled: true },
+        ];
+
+        logbookState.selectedDestination = 'qrz';
+        expect(logbookState.selectedDestinationLabel).toBe('QRZ (club account)');
+
+        logbookState.selectedDestination = 'clublog';
+        expect(logbookState.selectedDestinationLabel).toBe('clublog');
+    });
+
+    // L5b — a destination that is no longer in the list (disabled between the
+    // pick and the render) still names itself rather than going blank.
+    it('L5b: falls back to the raw name for an unknown destination', () => {
+        logbookState.forwarders = [];
+        logbookState.selectedDestination = 'vanished';
+        expect(logbookState.selectedDestinationLabel).toBe('vanished');
+    });
+
+    // L6 — the success notice uses the label...
+    it('L6: the queued notice names the destination by label', async () => {
+        const calls: string[] = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((input: RequestInfo | URL) => {
+                calls.push(urlText(input));
+                return Promise.resolve(
+                    new Response(JSON.stringify({ enqueued: 1, skipped_uploaded: 0 }), {
+                        status: 200,
+                    })
+                );
+            })
+        );
+        logbookState.forwarders = [
+            { name: 'qrz', label: 'QRZ (club account)', type: 'qrz', enabled: true },
+        ];
+        logbookState.selectedDestination = 'qrz';
+        logbookState.rows = [qso(1, 'u-1')];
+        logbookState.toggleRow(logbookState.rows[0]);
+
+        await logbookState.uploadSelected();
+
+        expect(logbookState.notice).toContain('QRZ (club account)');
+        expect(logbookState.notice).not.toContain('to qrz');
+
+        // L6b — ...while the REQUEST still addresses the durable name.
+        expect(calls.some((u) => u.includes('/v1/forwarder/qrz/uploads'))).toBe(true);
+        vi.restoreAllMocks();
+    });
+});

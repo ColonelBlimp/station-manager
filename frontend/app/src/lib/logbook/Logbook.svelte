@@ -153,7 +153,7 @@
                         onclick={() => logbookState.uploadSelected()}
                         >{logbookState.uploading
                             ? 'Uploading…'
-                            : `Upload ${logbookState.selectedCount} to ${logbookState.selectedDestination}`}</button
+                            : `Upload ${logbookState.selectedCount} to ${logbookState.selectedDestinationLabel}`}</button
                     >
                 {/if}
                 <button
@@ -301,7 +301,7 @@
                                     {:else if logbookState.notEmailedOnly}
                                         No QSOs still need emailing.
                                     {:else if logbookState.missingFromParam !== undefined}
-                                        No QSOs still to upload to {logbookState.selectedDestination}.
+                                        No QSOs still to upload to {logbookState.selectedDestinationLabel}.
                                     {:else}
                                         No QSOs in this logbook.
                                     {/if}
