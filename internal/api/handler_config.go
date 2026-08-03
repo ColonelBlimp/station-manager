@@ -205,7 +205,10 @@ type ConfigResponse struct {
 // rather than state: never emitted on GET, so echoing a GET body back cannot
 // wipe a credential.
 type LookupProviderInfo struct {
-	Name          string `json:"name"`
+	Name string `json:"name"`
+	// Label is READ-ONLY on this wire: served on GET so the section can display
+	// it, ignored on PUT because config.json is the only place it may be set.
+	Label         string `json:"label,omitempty"`
 	Enabled       bool   `json:"enabled"`
 	URL           string `json:"url,omitempty"`
 	Username      string `json:"username,omitempty"`
@@ -1100,6 +1103,7 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 // set/unset flag, the value is dropped.
 func lookupProviderInfoFrom(c types.LookupConfig) LookupProviderInfo {
 	return LookupProviderInfo{
+		Label:       c.Label,
 		Name:        c.Name,
 		Enabled:     c.Enabled,
 		URL:         c.URL,
@@ -1200,7 +1204,14 @@ func resolveMaskedPassword(clear bool, typed, stored string) string {
 func mergeLookupProvider(in LookupProviderInfo, ex types.LookupConfig) types.LookupConfig {
 	pw := resolveMaskedPassword(in.PasswordClear, in.Password, ex.Password)
 	return types.LookupConfig{
-		Name:           in.Name,
+		Name: in.Name,
+		// Label is config.json-only: no API surface writes it, so it is absent
+		// from every PUT and would be DELETED by this rebuild unless carried
+		// over explicitly. Same defect class as mergeForwarders' Label and
+		// Endpoints (see the note there) — and this rebuild, like that one,
+		// keeps only what it names. Taking it from `ex` rather than `in` is
+		// also what makes a label sent by a client a no-op rather than a rename.
+		Label:          ex.Label,
 		Enabled:        in.Enabled,
 		URL:            in.URL,
 		Username:       in.Username,

@@ -207,12 +207,48 @@ const is a *ceiling*, not a default, and must stay non-overridable.
 | `defaultLogbookID` / `defaultRigID` | 1 / 1 | `default_logbook_id` / `default_rig_id` |
 | `defaultForwarderTickIntervalSec` / `BatchSize` | 120 / 5 | `forwarders[].tick_interval_sec` / `batch_size` |
 | (per-type, registry-seeded) `endpoints` / `action_filter` / `retry` | each forwarder package registers its defaults (`RegisterDefaultEndpoints` / `RegisterSupportedActions` / `RegisterDefaultRetry`) | `forwarders[].endpoints` (action-keyed URLs) / `action_filter` / `retry` (ADR 0039) |
-| `defaultCountryTTLDays` / `StationTTLDays` / `RefreshMaxInFlight` | 365 / 90 / 4 | `lookup.country_ttl_days` / `station_ttl_days` / `refresh_max_in_flight` |
+| `defaultCountryTTLDays` / `StationTTLDays` | 365 / 90 | `lookup.country_ttl_days` / `station_ttl_days` — **`*int`: absent = default, explicit `0` = "never goes stale"** (see below) |
+| `defaultRefreshMaxInFlight` | 4 | `lookup.refresh_max_in_flight` (plain int; `0` = package default in both the accessor and the defaults pass, so it has no absent-vs-zero conflict) |
 | `defaultLookupHTTPTimeoutSec` | 10 | `lookup.hamnut.timeout_sec`, `lookup.chain[].timeout_sec` |
 | `defaultSmtpPort` / `defaultSmtpTimeoutSec` | 587 / 30 | `smtp.port` / `smtp.timeout_sec` |
 | (inline) protocol / socket | `tcp` / `127.0.0.1:8080` (tcp) or `$TMP/smd.sock` | `server.protocol` / `socket_path` |
 | (inline) datastore driver / path | `sqlite` / `${DataDir}/db/station-manager.db` | `datastore.driver` / `path` |
 | (inline) logging level / dir | `info` / `log` | `logging.level` / `rel_log_file_dir` |
+
+### (a‴) lookup sources: `label`, and what a TTL of `0` means
+
+`lookup.hamnut.label` / `lookup.chain[].label` (added 2026-08-03) is the exact
+counterpart of the forwarder `label` documented below: the operator's own
+display name for a source, settable **only by hand in config.json**, empty
+meaning "use the name this build knows". It matters slightly more here, because
+a source the build does not recognise has **no** built-in name and otherwise
+displays its raw service id (`hamqth`); a label is the only way to give it a
+readable one without shipping a new binary. Deliberately **not** `name` — that
+is the key `mergeLookup` matches on to carry a provider's stored password across
+a save, and the key `LookupServiceConfig` resolves at startup, so renaming it
+silently detaches the credentials. **`mergeLookupProvider` carries `label` over
+from the stored entry explicitly**, for exactly the reason spelled out for
+forwarders below: the rebuild keeps only what it names, so an unrelated save
+would otherwise delete it. Pinned by `internal/api/lookup_label_test.go` (M2/M3).
+
+**The two cache TTLs are `*int` (changed 2026-08-03).** `nil`/absent means "use
+the default" and is filled by `config.Normalize`; an explicit **`0` means "trust
+this cache indefinitely"** — the reading `lookup.Orchestrator.isStale` has always
+applied to a non-positive TTL. Before the change the field was a plain `int` and
+`applyDefaults` stamped 365/90 over any zero, so an operator who set `0` got what
+they asked for until the next restart and then silently got a year. The defaults
+live in `Normalize` rather than `applyDefaults` so they apply on **PUT** as well
+as Load (the same reason `normalizeLookupURLs` and `normalizeSmtpDefaults` are
+there). A negative is still a validation error.
+
+**An ENABLED source that needs credentials must have usable ones**, enforced at
+save time by `validateLookupProvider` against `types.QRZMinUsernameLen` /
+`QRZMinPasswordLen` — the same limits QRZ's own `Initialize` applies. Without
+that gate a PUT emptying or shortening them returned 200 and the daemon then
+failed to **start** at the next restart (`buildEnrichment`'s error aborts `run()`),
+hours later and with nothing linking the two. The limits live in `internal/types`
+because `internal/config` cannot import `internal/lookup/qrz` — qrz reads its own
+config back through the config service, which would be a cycle.
 
 ### (a″) forwarders are non-sparse + config-driven (ADR 0039)
 

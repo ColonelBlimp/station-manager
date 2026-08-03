@@ -41,7 +41,19 @@ func LookupProviderNeedsCredentials(name string) bool {
 // every provider — there's no operational reason for QRZ vs hamnut
 // to identify themselves differently to upstream services.
 type LookupConfig struct {
-	Name           string `json:"name"`
+	Name string `json:"name"`
+	// Label is the operator's own display name for this source, settable ONLY
+	// in config.json — no API surface writes it. The friendly name otherwise
+	// lives in the SPA's provider map, so changing it is a build + deploy and
+	// the operator cannot do it at all; a source this build does not recognise
+	// has no friendly name whatsoever and displays its raw id, which a label is
+	// the only way to fix without shipping a new binary.
+	//
+	// Deliberately NOT Name: Name is the key mergeLookup matches on to carry a
+	// provider's stored password across a save, and the key
+	// LookupServiceConfig resolves at startup. Renaming it silently detaches
+	// the credentials. Nothing joins on Label.
+	Label          string `json:"label,omitempty"`
 	Enabled        bool   `json:"enabled"`
 	URL            string `json:"url"`
 	Username       string `json:"username"`

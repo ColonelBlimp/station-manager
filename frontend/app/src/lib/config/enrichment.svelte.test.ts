@@ -67,6 +67,7 @@ const CONFIG = {
                 password_set: true,
                 timeout_sec: 10,
                 view_url: 'https://www.qrz.com/db/',
+                label: 'QRZ (club account)',
             },
             // A provider this build renders no UI for. It must survive a save.
             {
@@ -229,6 +230,30 @@ describe('enrichmentState wire behaviour', () => {
         await enrichmentState.save();
 
         expect((lookupOf(puts[0]).hamnut as Provider).enabled).toBe(true);
+    });
+
+    /*
+        W11/W11b — THE OPERATOR'S LABEL IS DISPLAY-ONLY AND MUST NOT RIDE.
+
+        `label` is config.json-only: mergeLookupProvider takes it from the
+        STORED entry, never the payload, so sending it is at best a no-op. It
+        must still be absent from the payload — a field that the daemon
+        deliberately ignores is one refactor away from being honoured, and then
+        this section would be able to rename a source it has no control for.
+    */
+    it('W11: the label is not sent on save', async () => {
+        const puts = await loadFresh();
+        qrzDraft().username = 'M0XYZ';
+        await enrichmentState.save();
+
+        expect('label' in providerNamed(puts[0], 'qrzlookupservice')!).toBe(false);
+        expect('label' in (lookupOf(puts[0]).hamnut as Provider)).toBe(false);
+    });
+
+    // W11b — but it IS loaded, or there is nothing to display.
+    it('W11b: the label is loaded from the daemon', async () => {
+        await loadFresh();
+        expect(qrzDraft().label).toBe('QRZ (club account)');
     });
 
     // W4b — and typing after a remove cancels the remove (last intent wins).

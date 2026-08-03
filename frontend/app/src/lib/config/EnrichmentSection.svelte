@@ -91,7 +91,7 @@
                              triangle rather than below it. -->
                         <span class="inline-flex items-center gap-2 align-middle">
                             <span class="font-semibold text-ink">
-                                {enrichmentState.labelFor(p.name)}{#if edited}<span
+                                {enrichmentState.labelFor(p)}{#if edited}<span
                                         class="text-warning"
                                         title="Unsaved changes">*</span
                                     >{/if}

@@ -57,6 +57,8 @@ const PROVIDERS: Record<string, ProviderMeta> = {
 /** One lookup source as the form holds it: the masked entry plus local edits. */
 export interface ProviderDraft {
     name: string;
+    /** Operator's config.json display name; '' means use the built-in. */
+    label: string;
     /** hamnut is the single country provider; the rest are the callsign chain. */
     country: boolean;
     enabled: boolean;
@@ -84,6 +86,7 @@ export interface EnrichmentDraft {
 const BLANK: LookupEntry = {
     hamnut: {
         name: HAMNUT_PROVIDER,
+        label: '',
         enabled: false,
         url: '',
         username: '',
@@ -100,6 +103,7 @@ const BLANK: LookupEntry = {
 function providerDraft(p: LookupProvider, country: boolean): ProviderDraft {
     return {
         name: p.name,
+        label: p.label,
         country,
         enabled: p.enabled,
         username: p.username,
@@ -141,9 +145,18 @@ class EnrichmentState {
         return PROVIDERS[name];
     }
 
-    /** A provider's display name, never blank — falls back to its wire name. */
-    labelFor(name: string): string {
-        return PROVIDERS[name]?.label ?? name;
+    /**
+     * A source's display name: the OPERATOR'S label first, then the name this
+     * build knows, then the raw wire id.
+     *
+     * The operator's wins because the built-in lives in the binary — changing
+     * it is a build and a deploy, and they cannot do it at all. The last step
+     * is not a formality: an unrecognised source has no built-in name, so
+     * without a label `hamqth` is all it can ever show. Same chain Forwarding
+     * uses (ForwardingSection.svelte: label || display_name || type).
+     */
+    labelFor(p: ProviderDraft): string {
+        return p.label || PROVIDERS[p.name]?.label || p.name;
     }
 
     /**

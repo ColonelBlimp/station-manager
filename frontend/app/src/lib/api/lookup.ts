@@ -36,6 +36,8 @@ export const QRZ_PROVIDER = 'qrzlookupservice';
 /** One provider as GET /v1/config reports it — password masked to a flag. */
 export interface LookupProvider {
     name: string;
+    /** Operator's config.json display name. '' = fall back to the built-in. */
+    label: string;
     enabled: boolean;
     url: string;
     username: string;
@@ -79,6 +81,7 @@ function toProvider(v: unknown): LookupProvider {
     const o = isPlainObject(v) ? v : {};
     return {
         name: typeof o.name === 'string' ? o.name : '',
+        label: typeof o.label === 'string' ? o.label : '',
         enabled: o.enabled === true,
         url: typeof o.url === 'string' ? o.url : '',
         username: typeof o.username === 'string' ? o.username : '',

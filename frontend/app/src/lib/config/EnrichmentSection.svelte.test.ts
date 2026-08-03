@@ -27,6 +27,14 @@ import { enrichmentState } from './enrichment.svelte';
     reading applies, and say it only when 0 is actually entered.
 */
 
+/**
+ * What the QRZ card is TITLED on screen. The fixture gives it a config.json
+ * label, and the label wins over the built-in name (D5) — so this is the
+ * operator's string, not 'QRZ.com'. Named once so the display rule has one
+ * place to change rather than a literal in every scoped query.
+ */
+const QRZ_CARD = 'QRZ (club account)';
+
 function qrzDraft() {
     return enrichmentState.draft.providers.find((p) => p.name === 'qrzlookupservice')!;
 }
@@ -62,6 +70,7 @@ function mockConfig(passwordSet: boolean, countryTtl = 365) {
                                     username: 'M0ABC',
                                     password_set: passwordSet,
                                     timeout_sec: 10,
+                                    label: 'QRZ (club account)',
                                 },
                                 // A provider this build has no specific
                                 // knowledge of. It must be VISIBLE, not merely
@@ -146,9 +155,55 @@ describe('EnrichmentSection disclosures', () => {
             (s) => s.textContent ?? ''
         );
 
-        expect(summaries.some((t) => /QRZ\.com/.test(t) && /enabled/i.test(t))).toBe(true);
+        // The QRZ card displays the operator's label (see D5), not the
+        // built-in name — this assertion moved when labels landed.
+        expect(summaries.some((t) => t.includes('QRZ (club account)') && /enabled/i.test(t))).toBe(
+            true
+        );
         expect(summaries.some((t) => /Hamnut/.test(t) && /enabled/i.test(t))).toBe(true);
         expect(summaries.some((t) => /hamqth/.test(t) && /disabled/i.test(t))).toBe(true);
+    });
+
+    /*
+        D5/D5b/D5c — THE OPERATOR'S LABEL WINS, WITH A FALLBACK CHAIN.
+
+        Criterion (operator, 2026-08-03): a lookup source set with a `label` in
+        config.json shows my name for it; one without still shows the built-in
+        name rather than a raw service id.
+
+        Same three-step chain Forwarding uses (label → built-in → raw key), and
+        it matters MORE here: an unrecognised source has no built-in name at
+        all, so without a label it can only ever display `hamqth`. All three
+        steps are asserted because a fallback chain is exactly the shape where
+        one broken link hides behind the others — a `labelFor` that ignored the
+        operator label entirely would still pass D5b and D5c.
+    */
+    it('D5: the operator label wins over the built-in name', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        const summaries = [...container.querySelectorAll('summary')].map(
+            (s) => s.textContent ?? ''
+        );
+
+        expect(summaries.some((t) => t.includes('QRZ (club account)'))).toBe(true);
+        // ...and the built-in name is not ALSO shown, which would read as two
+        // different services.
+        expect(summaries.some((t) => /QRZ\.com/.test(t))).toBe(false);
+    });
+
+    it('D5b: a source with no label shows the built-in name', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        const summaries = [...container.querySelectorAll('summary')].map(
+            (s) => s.textContent ?? ''
+        );
+        expect(summaries.some((t) => t.includes('Hamnut'))).toBe(true);
+    });
+
+    it('D5c: an unrecognised source with no label falls back to its raw id', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        const summaries = [...container.querySelectorAll('summary')].map(
+            (s) => s.textContent ?? ''
+        );
+        expect(summaries.some((t) => t.includes('hamqth'))).toBe(true);
     });
 
     // D3 — an unrecognised source is LABELLED as such, so "no fields to edit"
@@ -170,7 +225,7 @@ describe('EnrichmentSection', () => {
     // U1 — N1. The stored-or-not distinction, carried by the placeholder.
     it('U1: says a QRZ password is stored without showing one', async () => {
         const { container } = await renderLoadedWithContainer(true);
-        const box = within(card(container, 'QRZ.com')).getByPlaceholderText(
+        const box = within(card(container, QRZ_CARD)).getByPlaceholderText(
             /set — leave blank to keep/i
         );
         expect((box as HTMLInputElement).value).toBe('');
@@ -179,7 +234,7 @@ describe('EnrichmentSection', () => {
     it('U1b: shows no "set" hint when none is stored', async () => {
         const { container } = await renderLoadedWithContainer(false);
         expect(
-            within(card(container, 'QRZ.com')).queryByPlaceholderText(/set — leave blank to keep/i)
+            within(card(container, QRZ_CARD)).queryByPlaceholderText(/set — leave blank to keep/i)
         ).toBeNull();
     });
 
@@ -189,7 +244,7 @@ describe('EnrichmentSection', () => {
     it('U2: offers Remove only when a password is stored', async () => {
         const { container } = await renderLoadedWithContainer(false);
         expect(
-            within(card(container, 'QRZ.com')).queryByRole('button', {
+            within(card(container, QRZ_CARD)).queryByRole('button', {
                 name: /remove stored password/i,
             })
         ).toBeNull();
@@ -198,7 +253,7 @@ describe('EnrichmentSection', () => {
     it('U2b: offers Remove when one is stored', async () => {
         const { container } = await renderLoadedWithContainer(true);
         expect(
-            within(card(container, 'QRZ.com')).getByRole('button', {
+            within(card(container, QRZ_CARD)).getByRole('button', {
                 name: /remove stored password/i,
             })
         ).toBeTruthy();
@@ -207,7 +262,7 @@ describe('EnrichmentSection', () => {
     // U3 — J1's discriminator. A pending removal must be visible and reversible.
     it('U3: shows a pending removal, and can undo it', async () => {
         const { container } = await renderLoadedWithContainer(true);
-        const qrz = () => within(card(container, 'QRZ.com'));
+        const qrz = () => within(card(container, QRZ_CARD));
 
         await fireEvent.click(qrz().getByRole('button', { name: /remove stored password/i }));
         expect(qrz().getByText(/will be removed when you save/i)).toBeTruthy();
@@ -272,11 +327,11 @@ describe('EnrichmentSection', () => {
         leaves the source mysteriously switched off.
     */
     function qrzToggle(container: HTMLElement): HTMLInputElement {
-        return within(card(container, 'QRZ.com')).getByLabelText<HTMLInputElement>(/^enabled$/i);
+        return within(card(container, QRZ_CARD)).getByLabelText<HTMLInputElement>(/^enabled$/i);
     }
     async function pressRemove(container: HTMLElement): Promise<void> {
         await fireEvent.click(
-            within(card(container, 'QRZ.com')).getByRole('button', {
+            within(card(container, QRZ_CARD)).getByRole('button', {
                 name: /remove stored password/i,
             })
         );
@@ -292,7 +347,7 @@ describe('EnrichmentSection', () => {
         // ...and says so, rather than silently flipping a toggle the operator
         // did not touch.
         expect(
-            within(card(container, 'QRZ.com')).getByText(/switched off|turned off/i)
+            within(card(container, QRZ_CARD)).getByText(/switched off|turned off/i)
         ).toBeTruthy();
     });
 
@@ -321,7 +376,7 @@ describe('EnrichmentSection', () => {
         expect(qrzToggle(container).checked).toBe(false);
 
         await fireEvent.click(
-            within(card(container, 'QRZ.com')).getByRole('button', {
+            within(card(container, QRZ_CARD)).getByRole('button', {
                 name: /keep stored password/i,
             })
         );
@@ -358,8 +413,7 @@ describe('EnrichmentSection', () => {
     // change could still mislead.
     it('U6c: the summary pill reflects a pending removal', async () => {
         const { container } = await renderLoadedWithContainer(true);
-        const summary = () =>
-            card(container, 'QRZ.com').querySelector('summary')?.textContent ?? '';
+        const summary = () => card(container, QRZ_CARD).querySelector('summary')?.textContent ?? '';
         expect(summary()).toMatch(/enabled/i);
 
         await pressRemove(container);
