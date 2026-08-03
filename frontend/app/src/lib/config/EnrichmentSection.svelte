@@ -63,6 +63,10 @@
             {#each enrichmentState.draft.providers as p (p.name)}
                 {@const meta = enrichmentState.metaFor(p.name)}
                 {@const edited = enrichmentState.hasEdits(p.name)}
+                <!-- The EFFECTIVE enabled state, shared by the summary pill and
+                     the toggle below so the two can never disagree: a collapsed
+                     card is all an operator sees for most sources. -->
+                {@const on = enrichmentState.effectiveEnabled(p)}
                 <details class="rounded-md border border-line" open={edited || undefined}>
                     <!-- A source with unsaved edits CANNOT be collapsed: hiding
                          a pending change behind a closed disclosure is how an
@@ -98,11 +102,11 @@
                             <!-- Same pill as Forwarding's, so the two sections
                                  read as one page. -->
                             <span
-                                class="rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase {p.enabled
+                                class="rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase {on
                                     ? 'border-green-500/40 bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-400'
                                     : 'border-line bg-surface-muted text-muted'}"
                             >
-                                {p.enabled ? 'enabled' : 'disabled'}
+                                {on ? 'enabled' : 'disabled'}
                             </span>
                             {#if !meta}
                                 <span class="text-xs text-warning">unrecognised</span>
@@ -121,11 +125,24 @@
                             </p>
                         {/if}
 
-                        <label class="flex w-fit items-center gap-1.5 text-sm text-ink">
+                        <!-- Reads the EFFECTIVE state, not the raw toggle: a
+                             pending credential removal forces a credentialed
+                             source off. Deliberately NOT a bind — the displayed
+                             value is derived, and writing back through it would
+                             re-introduce the mutation whose missing reversal
+                             was the P2 (review a6a3b1fcb40d). Locked while the
+                             removal is pending, because a toggle that cannot
+                             take effect is indistinguishable from a broken one. -->
+                        <label
+                            class="flex w-fit items-center gap-1.5 text-sm text-ink"
+                            class:opacity-60={enrichmentState.removalPending(p)}
+                        >
                             <input
                                 type="checkbox"
-                                bind:checked={p.enabled}
                                 class="cursor-pointer"
+                                checked={enrichmentState.effectiveEnabled(p)}
+                                disabled={enrichmentState.removalPending(p)}
+                                onchange={(e) => (p.enabled = e.currentTarget.checked)}
                             />
                             Enabled
                         </label>

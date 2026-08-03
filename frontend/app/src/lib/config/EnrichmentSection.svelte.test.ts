@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import EnrichmentSection from './EnrichmentSection.svelte';
 import { enrichmentState } from './enrichment.svelte';
 
@@ -270,18 +271,24 @@ describe('EnrichmentSection', () => {
         U6b is the pair: Cancel must put BOTH back, or an abandoned removal
         leaves the source mysteriously switched off.
     */
-    it('U6: removing a stored password also disables that source', async () => {
-        const { container } = await renderLoadedWithContainer(true);
-        expect(qrzDraft().enabled).toBe(true);
-
+    function qrzToggle(container: HTMLElement): HTMLInputElement {
+        return within(card(container, 'QRZ.com')).getByLabelText<HTMLInputElement>(/^enabled$/i);
+    }
+    async function pressRemove(container: HTMLElement): Promise<void> {
         await fireEvent.click(
             within(card(container, 'QRZ.com')).getByRole('button', {
                 name: /remove stored password/i,
             })
         );
+    }
 
-        expect(qrzDraft().passwordCleared).toBe(true);
-        expect(qrzDraft().enabled).toBe(false);
+    it('U6: a pending removal shows the source as switched off', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        expect(qrzToggle(container).checked).toBe(true);
+
+        await pressRemove(container);
+
+        expect(qrzToggle(container).checked).toBe(false);
         // ...and says so, rather than silently flipping a toggle the operator
         // did not touch.
         expect(
@@ -289,17 +296,85 @@ describe('EnrichmentSection', () => {
         ).toBeTruthy();
     });
 
-    it('U6b: cancelling restores both the password and the enabled state', async () => {
+    /*
+        U7/U7b — BOTH WAYS BACK RESTORE THE TOGGLE.
+
+        The first version of the auto-disable MUTATED `enabled`, and neither
+        reversal path put it back: "Keep stored password" and typing a
+        replacement each cancelled the removal and left the source off, so an
+        operator who changed their mind saved QRZ disabled — while the notice
+        told them entering a new password would make it usable again
+        (clean-room review a6a3b1fcb40d, P2).
+
+        The fix REMOVES state instead of adding a restore step: `enabled` is
+        never mutated, and the effective value is derived as "enabled AND no
+        removal pending". There is no saved-and-restored copy to get wrong,
+        which is why there are now two reversal rules and not two restore calls.
+
+        U3 above already exercised the Keep path but asserted only that
+        `passwordCleared` went false — a weaker statement than the rule it
+        claimed to pin, and exactly why the defect survived it.
+    */
+    it('U7: Keep stored password restores the toggle', async () => {
         const { container } = await renderLoadedWithContainer(true);
+        await pressRemove(container);
+        expect(qrzToggle(container).checked).toBe(false);
+
         await fireEvent.click(
             within(card(container, 'QRZ.com')).getByRole('button', {
-                name: /remove stored password/i,
+                name: /keep stored password/i,
             })
         );
+
+        expect(qrzToggle(container).checked).toBe(true);
+    });
+
+    it('U7b: typing a replacement password restores the toggle', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        await pressRemove(container);
+
+        enrichmentState.setPassword('qrzlookupservice', 'brand-new-pw');
+        await tick();
+
+        expect(qrzToggle(container).checked).toBe(true);
+    });
+
+    // U8 — while a removal is pending the toggle is not operable. Leaving it
+    // clickable would offer an action that cannot take effect (the payload
+    // forces enabled:false), which is the same "control that does nothing"
+    // failure U2 guards against at the Remove button.
+    it('U8: the enable toggle is locked while a removal is pending', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        expect(qrzToggle(container).disabled).toBe(false);
+
+        await pressRemove(container);
+
+        expect(qrzToggle(container).disabled).toBe(true);
+    });
+
+    // U6c — the summary pill agrees with the toggle. A collapsed card is the
+    // only thing an operator sees for most sources, so a pill still reading
+    // "enabled" while the source is being switched off is the one place this
+    // change could still mislead.
+    it('U6c: the summary pill reflects a pending removal', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        const summary = () =>
+            card(container, 'QRZ.com').querySelector('summary')?.textContent ?? '';
+        expect(summary()).toMatch(/enabled/i);
+
+        await pressRemove(container);
+
+        expect(summary()).toMatch(/disabled/i);
+    });
+
+    it('U6b: cancelling restores both the password and the enabled state', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        await pressRemove(container);
         enrichmentState.reset();
+        await tick();
 
         expect(qrzDraft().passwordCleared).toBe(false);
-        expect(qrzDraft().enabled).toBe(true);
+        expect(qrzToggle(container).checked).toBe(true);
     });
 
     // U5 — restart-only, so "saved" is not read as "in effect".

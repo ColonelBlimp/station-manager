@@ -188,6 +188,49 @@ describe('enrichmentState wire behaviour', () => {
         expect('password' in qrz).toBe(false);
     });
 
+    /*
+        W4c — A PENDING REMOVAL FORCES enabled:false ON THE WIRE, WITHOUT
+        DESTROYING THE OPERATOR'S SETTING.
+
+        The daemon refuses an enabled credentialed provider with no password
+        (it used to accept it and then fail to START — review 9732ab7914af), so
+        the payload has to switch the source off. The first version did that by
+        MUTATING draft.enabled, and neither way back restored it, so changing
+        your mind saved QRZ disabled (review a6a3b1fcb40d).
+
+        Deriving it instead means the draft keeps what the operator chose and
+        every reversal is automatic. This rule pins BOTH halves — the wire says
+        off, the draft still says on — because either alone is satisfiable by
+        the version that was wrong.
+    */
+    it('W4c: a pending removal sends enabled:false but leaves the draft intact', async () => {
+        const puts = await loadFresh();
+        expect(qrzDraft().enabled).toBe(true);
+
+        enrichmentState.clearPassword(QRZ);
+        // Checked BEFORE the save: a successful save re-hydrates the draft from
+        // the response, so asserting afterwards would pass whether or not
+        // clearPassword had mutated it — the fixture would make both paths
+        // agree, which is no rule at all.
+        expect(qrzDraft().enabled).toBe(true);
+
+        await enrichmentState.save();
+
+        const qrz = providerNamed(puts[0], 'qrzlookupservice')!;
+        expect(qrz.enabled).toBe(false);
+        expect(qrz.password_clear).toBe(true);
+    });
+
+    // W4d — a source that needs no credentials is never force-disabled: hamnut
+    // is anonymous, so a removal there says nothing about whether it can run.
+    it('W4d: an anonymous source is not disabled by a removal', async () => {
+        const puts = await loadFresh();
+        enrichmentState.clearPassword(HAMNUT);
+        await enrichmentState.save();
+
+        expect((lookupOf(puts[0]).hamnut as Provider).enabled).toBe(true);
+    });
+
     // W4b — and typing after a remove cancels the remove (last intent wins).
     it('W4b: typing after a remove cancels the remove', async () => {
         const puts = await loadFresh();

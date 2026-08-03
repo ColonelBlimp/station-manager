@@ -210,19 +210,42 @@ class EnrichmentState {
     /**
      * Mark a stored password for removal, discarding any half-typed value.
      *
-     * ALSO SWITCHES THE SOURCE OFF when it is one that cannot work without
-     * credentials. The daemon refuses an enabled QRZ with no password (it used
-     * to accept it and then fail to START at the next restart — clean-room
-     * review 9732ab7914af), so leaving the toggle on would build a payload
-     * guaranteed to 400. Turning it off is also what removing a login MEANS:
-     * rotating one is served by typing a new value, not by removing the old.
+     * Deliberately does NOT touch `enabled` — see effectiveEnabled, which
+     * derives the switched-off state instead. An earlier version mutated it
+     * here and neither way back restored it, so an operator who removed a
+     * password and then changed their mind saved the source disabled while the
+     * UI told them a new password would make it usable again (clean-room review
+     * a6a3b1fcb40d). Deriving removes the state that has to be put back, rather
+     * than adding a second place to remember to put it back.
      */
     clearPassword(name: string): void {
         const p = this.draft.providers.find((x) => x.name === name);
         if (!p) return;
         p.password = '';
         p.passwordCleared = true;
-        if (this.metaFor(p.name)?.credentialed) p.enabled = false;
+    }
+
+    /**
+     * Whether this source will actually be ON after the save — the operator's
+     * toggle, minus a pending credential removal.
+     *
+     * A credentialed source with its password being removed cannot run: the
+     * daemon refuses an enabled QRZ with no password (it used to accept it and
+     * then fail to START at the next restart — review 9732ab7914af). So the
+     * payload must switch it off, the toggle must SHOW it off, and the toggle
+     * must be locked while that is true, because a control that cannot take
+     * effect is indistinguishable from a broken one.
+     *
+     * Anonymous sources are unaffected: removing a credential hamnut never had
+     * says nothing about whether it can run.
+     */
+    effectiveEnabled(p: ProviderDraft): boolean {
+        return p.enabled && !(p.passwordCleared && this.metaFor(p.name)?.credentialed === true);
+    }
+
+    /** True while a removal is forcing this source off, so the UI can lock it. */
+    removalPending(p: ProviderDraft): boolean {
+        return p.passwordCleared && this.metaFor(p.name)?.credentialed === true;
     }
 
     /** Undo a pending removal. */
@@ -245,9 +268,10 @@ class EnrichmentState {
         const hamnut = d.providers.find((p) => p.country);
         const chain = d.providers.filter((p) => !p.country);
 
+        const h = hamnut ?? providerDraft(BLANK.hamnut, true);
         const payload: LookupPayload = {
-            hamnut: toPayload(hamnut ?? providerDraft(BLANK.hamnut, true)),
-            chain: chain.map(toPayload),
+            hamnut: toPayload(h, this.effectiveEnabled(h)),
+            chain: chain.map((p) => toPayload(p, this.effectiveEnabled(p))),
             refresh_max_in_flight: Number(d.refreshMaxInFlight) || 0,
         };
         // Omit a blank TTL — that is how the wire says "use the default". An
@@ -268,10 +292,12 @@ class EnrichmentState {
  * verbatim: the daemon takes them AS SENT and re-stamps defaults only for the
  * two names Normalize knows, so anything else is silently emptied if dropped.
  */
-function toPayload(p: ProviderDraft): LookupProviderPayload {
+function toPayload(p: ProviderDraft, enabled: boolean): LookupProviderPayload {
     const out: LookupProviderPayload = {
         name: p.name,
-        enabled: p.enabled,
+        // The EFFECTIVE state, not the raw toggle: a pending credential removal
+        // forces a credentialed source off (see effectiveEnabled).
+        enabled,
         url: p.url,
         username: p.username.trim(),
         timeout_sec: p.timeoutSec,
