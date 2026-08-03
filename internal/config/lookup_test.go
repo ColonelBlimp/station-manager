@@ -15,11 +15,11 @@ import (
 
 func TestDefaultConfig_LookupDefaults(t *testing.T) {
 	cfg := DefaultConfig(t.TempDir())
-	if cfg.Lookup.CountryTTLDays != 365 {
-		t.Errorf("CountryTTLDays = %d, want 365", cfg.Lookup.CountryTTLDays)
+	if got := resolveTTLDays(cfg.Lookup.CountryTTLDays, -1); got != 365 {
+		t.Errorf("CountryTTLDays = %d, want 365", got)
 	}
-	if cfg.Lookup.StationTTLDays != 90 {
-		t.Errorf("StationTTLDays = %d, want 90", cfg.Lookup.StationTTLDays)
+	if got := resolveTTLDays(cfg.Lookup.StationTTLDays, -1); got != 90 {
+		t.Errorf("StationTTLDays = %d, want 90", got)
 	}
 	if cfg.Lookup.RefreshMaxInFlight != 4 {
 		t.Errorf("RefreshMaxInFlight = %d, want 4", cfg.Lookup.RefreshMaxInFlight)
@@ -65,11 +65,11 @@ func TestLoad_PreservesOperatorTTLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Lookup.CountryTTLDays != 30 {
-		t.Errorf("CountryTTLDays = %d, want 30 (operator value)", cfg.Lookup.CountryTTLDays)
+	if got := resolveTTLDays(cfg.Lookup.CountryTTLDays, -1); got != 30 {
+		t.Errorf("CountryTTLDays = %d, want 30 (operator value)", got)
 	}
-	if cfg.Lookup.StationTTLDays != 7 {
-		t.Errorf("StationTTLDays = %d, want 7 (operator value)", cfg.Lookup.StationTTLDays)
+	if got := resolveTTLDays(cfg.Lookup.StationTTLDays, -1); got != 7 {
+		t.Errorf("StationTTLDays = %d, want 7 (operator value)", got)
 	}
 	if cfg.Lookup.RefreshMaxInFlight != 8 {
 		t.Errorf("RefreshMaxInFlight = %d, want 8 (operator value)", cfg.Lookup.RefreshMaxInFlight)
@@ -174,12 +174,12 @@ func TestValidateLookup_RejectsChainEntryCollidingWithHamnut(t *testing.T) {
 }
 
 func TestValidateLookup_RejectsNegativeTTL(t *testing.T) {
-	lc := types.EnrichmentConfig{CountryTTLDays: -1}
+	lc := types.EnrichmentConfig{CountryTTLDays: intPtr(-1)}
 	if err := validateLookup(lc); err == nil {
 		t.Error("expected error for negative country_ttl_days")
 	}
 
-	lc = types.EnrichmentConfig{StationTTLDays: -1}
+	lc = types.EnrichmentConfig{StationTTLDays: intPtr(-1)}
 	if err := validateLookup(lc); err == nil {
 		t.Error("expected error for negative station_ttl_days")
 	}
@@ -195,8 +195,8 @@ func TestValidateLookup_RejectsNegativeTTL(t *testing.T) {
 func TestService_TTLAccessors(t *testing.T) {
 	svc := New(Config{
 		Lookup: types.EnrichmentConfig{
-			CountryTTLDays: 365,
-			StationTTLDays: 90,
+			CountryTTLDays: intPtr(365),
+			StationTTLDays: intPtr(90),
 		},
 	})
 	if got := svc.CountryTTL(); got != 365*24*time.Hour {
@@ -301,8 +301,8 @@ func TestLoad_ValidLookupBlock(t *testing.T) {
 	if cfg.Lookup.Chain[0].Username != "tester" {
 		t.Errorf("chain[0].Username = %q, want tester", cfg.Lookup.Chain[0].Username)
 	}
-	if cfg.Lookup.CountryTTLDays != 180 {
-		t.Errorf("CountryTTLDays = %d, want 180", cfg.Lookup.CountryTTLDays)
+	if got := resolveTTLDays(cfg.Lookup.CountryTTLDays, -1); got != 180 {
+		t.Errorf("CountryTTLDays = %d, want 180", got)
 	}
 }
 

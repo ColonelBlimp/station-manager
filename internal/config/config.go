@@ -760,7 +760,29 @@ func Normalize(cfg *Config) {
 	}
 
 	normalizeLookupURLs(cfg)
+	normalizeLookupTTLs(&cfg.Lookup)
 	normalizeSmtpDefaults(&cfg.Smtp)
+}
+
+// normalizeLookupTTLs fills the two cache TTLs when the operator did not supply
+// them. ONLY nil is filled — an explicit 0 is the operator saying "trust this
+// cache indefinitely" (Orchestrator.isStale reads a non-positive TTL that way)
+// and overwriting it is the defect this replaced: applyDefaults used to stamp
+// 365/90 over any zero, so a deliberate 0 worked until the next restart and then
+// silently became a year.
+//
+// In Normalize for the same reason as normalizeSmtpDefaults: applyDefaults runs
+// only on Load, and a PUT that omits a TTL must still end up with a definite
+// value before Validate and before the accessors read it.
+func normalizeLookupTTLs(lc *types.EnrichmentConfig) {
+	if lc.CountryTTLDays == nil {
+		d := defaultCountryTTLDays
+		lc.CountryTTLDays = &d
+	}
+	if lc.StationTTLDays == nil {
+		d := defaultStationTTLDays
+		lc.StationTTLDays = &d
+	}
 }
 
 // normalizeSmtpDefaults stamps the two SMTP numbers that HAVE a sane default
@@ -1129,12 +1151,11 @@ func applyDefaults(cfg *Config, baseDir string) {
 	// operator licenses / addresses change more often (shorter
 	// contacted_station TTL). RefreshMaxInFlight matches
 	// refresher.DefaultMaxInFlight — operator can tune via config.
-	if cfg.Lookup.CountryTTLDays == 0 {
-		cfg.Lookup.CountryTTLDays = defaultCountryTTLDays
-	}
-	if cfg.Lookup.StationTTLDays == 0 {
-		cfg.Lookup.StationTTLDays = defaultStationTTLDays
-	}
+	// TTL defaults live in Normalize (normalizeLookupTTLs) so they apply on PUT
+	// too, not just Load — otherwise a save that omits a TTL stores nil and the
+	// accessors have to invent a meaning for it. Called here as well because
+	// DefaultConfig runs applyDefaults without Normalize.
+	normalizeLookupTTLs(&cfg.Lookup)
 	if cfg.Lookup.RefreshMaxInFlight == 0 {
 		cfg.Lookup.RefreshMaxInFlight = defaultRefreshMaxInFlight
 	}
@@ -1399,11 +1420,13 @@ func validateForwarders(fwds []types.ForwarderConfig) error {
 // Type-specific credential validation (QRZ wants username/password)
 // happens later when each provider is constructed at daemon startup.
 func validateLookup(lc types.EnrichmentConfig) error {
-	if lc.CountryTTLDays < 0 {
-		return fmt.Errorf("country_ttl_days must be >= 0, got %d", lc.CountryTTLDays)
+	// nil is "use the default", not a value to range-check. An explicit 0 is a
+	// legitimate instruction ("never goes stale"); only a negative is a typo.
+	if lc.CountryTTLDays != nil && *lc.CountryTTLDays < 0 {
+		return fmt.Errorf("country_ttl_days must be >= 0, got %d", *lc.CountryTTLDays)
 	}
-	if lc.StationTTLDays < 0 {
-		return fmt.Errorf("station_ttl_days must be >= 0, got %d", lc.StationTTLDays)
+	if lc.StationTTLDays != nil && *lc.StationTTLDays < 0 {
+		return fmt.Errorf("station_ttl_days must be >= 0, got %d", *lc.StationTTLDays)
 	}
 	if lc.RefreshMaxInFlight < 0 {
 		return fmt.Errorf("refresh_max_in_flight must be >= 0, got %d", lc.RefreshMaxInFlight)
@@ -1911,17 +1934,30 @@ func (s *Service) Enrichment() types.EnrichmentConfig {
 // time.Duration. Operator config holds the value in days; this
 // accessor performs the conversion so consumers (the orchestrator)
 // don't have to.
+// An explicit 0 converts to a zero Duration, which Orchestrator.isStale reads
+// as "trust the cache indefinitely" — that is the operator's knob, not a bug.
+// nil falls back to the default here as well as in Normalize, because a Service
+// can be constructed directly from a Config that was never normalised.
 func (s *Service) CountryTTL() time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return time.Duration(s.Cfg.Lookup.CountryTTLDays) * 24 * time.Hour
+	return time.Duration(resolveTTLDays(s.Cfg.Lookup.CountryTTLDays, defaultCountryTTLDays)) * 24 * time.Hour
 }
 
 // StationTTL returns the contacted_station staleness threshold.
 func (s *Service) StationTTL() time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return time.Duration(s.Cfg.Lookup.StationTTLDays) * 24 * time.Hour
+	return time.Duration(resolveTTLDays(s.Cfg.Lookup.StationTTLDays, defaultStationTTLDays)) * 24 * time.Hour
+}
+
+// resolveTTLDays is the ONE place that reads a nil TTL as "use the default", so
+// Normalize and the accessors cannot drift about what absent means.
+func resolveTTLDays(p *int, def int) int {
+	if p == nil {
+		return def
+	}
+	return *p
 }
 
 // RefreshMaxInFlight returns the bound on concurrent async refresh

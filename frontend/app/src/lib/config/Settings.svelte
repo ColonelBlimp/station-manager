@@ -9,15 +9,17 @@
     import RigsSection from './RigsSection.svelte';
     import ForwardingSection from './ForwardingSection.svelte';
     import EmailSection from './EmailSection.svelte';
+    import EnrichmentSection from './EnrichmentSection.svelte';
     import { restartDaemon, waitForDaemonBack, fetchDaemonInstance } from '../api/restart';
     import { toasts } from '../ui/toasts.svelte';
 
-    type SectionId = 'station' | 'rigs' | 'forwarding' | 'email';
+    type SectionId = 'station' | 'rigs' | 'forwarding' | 'email' | 'enrichment';
     const sections: { id: SectionId; label: string }[] = [
         { id: 'station', label: 'Station' },
         { id: 'rigs', label: 'Rigs' },
         { id: 'forwarding', label: 'Forwarding' },
         { id: 'email', label: 'Email' },
+        { id: 'enrichment', label: 'Enrichment' },
     ];
     let active = $state<SectionId>('station');
 
@@ -120,5 +122,8 @@
     </div>
     <div class:hidden={active !== 'email'}>
         <EmailSection />
+    </div>
+    <div class:hidden={active !== 'enrichment'}>
+        <EnrichmentSection />
     </div>
 </div>

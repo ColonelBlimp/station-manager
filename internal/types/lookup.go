@@ -39,13 +39,24 @@ type LookupConfig struct {
 // station data.
 //
 // TTLs are in days (operator-friendly unit; the config Service
-// converts to time.Duration via accessors). RefreshMaxInFlight bounds
-// the async-refresh worker (refresher.Service); zero falls through
-// to the package default.
+// converts to time.Duration via accessors).
+//
+// The two TTLs are POINTERS because absent and explicitly-zero are
+// different instructions and only a pointer can carry both: nil means
+// "use the default" (365 / 90, filled by config.Normalize), while an
+// explicit 0 means "trust this cache indefinitely" — the reading
+// lookup.Orchestrator.isStale has always applied to a non-positive
+// TTL. Until 2026-08-03 the field was a plain int and applyDefaults
+// stamped 365/90 over any zero, so an operator who set 0 got what they
+// asked for until the next restart and then silently got a year.
+//
+// RefreshMaxInFlight stays a plain int on purpose: zero falls through
+// to the refresher package default in BOTH the accessor and the
+// defaults pass, so it has no absent-vs-zero conflict to express.
 type EnrichmentConfig struct {
 	Hamnut             LookupConfig   `json:"hamnut"`
 	Chain              []LookupConfig `json:"chain,omitempty"`
-	CountryTTLDays     int            `json:"country_ttl_days"`
-	StationTTLDays     int            `json:"station_ttl_days"`
+	CountryTTLDays     *int           `json:"country_ttl_days,omitempty"`
+	StationTTLDays     *int           `json:"station_ttl_days,omitempty"`
 	RefreshMaxInFlight int            `json:"refresh_max_in_flight"`
 }

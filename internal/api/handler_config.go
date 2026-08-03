@@ -196,30 +196,40 @@ type ConfigResponse struct {
 //
 //   - On GET: name/enabled/url/username/timeout_sec/view_url + PasswordSet (is a
 //     password stored). Password is "" (masked).
-//   - On PUT: + Password (new value; blank = keep the stored one). PasswordSet is
-//     ignored.
+//   - On PUT: + Password (new value; blank = keep the stored one) and
+//     PasswordClear (remove the stored one). PasswordSet is ignored.
 //
 // Username is shown on GET (a QRZ login/callsign, not a secret); only Password
-// is masked.
+// is masked. PasswordClear follows the same contract as SmtpInfo's — see
+// resolveMaskedPassword, which both merges call — and is likewise a command
+// rather than state: never emitted on GET, so echoing a GET body back cannot
+// wipe a credential.
 type LookupProviderInfo struct {
-	Name        string `json:"name"`
-	Enabled     bool   `json:"enabled"`
-	URL         string `json:"url,omitempty"`
-	Username    string `json:"username,omitempty"`
-	PasswordSet bool   `json:"password_set"`
-	Password    string `json:"password,omitempty"`
-	TimeoutSec  int    `json:"timeout_sec,omitempty"`
-	ViewURL     string `json:"view_url,omitempty"`
+	Name          string `json:"name"`
+	Enabled       bool   `json:"enabled"`
+	URL           string `json:"url,omitempty"`
+	Username      string `json:"username,omitempty"`
+	PasswordSet   bool   `json:"password_set"`
+	Password      string `json:"password,omitempty"`
+	PasswordClear bool   `json:"password_clear,omitempty"`
+	TimeoutSec    int    `json:"timeout_sec,omitempty"`
+	ViewURL       string `json:"view_url,omitempty"`
 }
 
 // LookupInfo mirrors types.EnrichmentConfig for the wire, with each provider's
-// password masked (LookupProviderInfo). The config SPA's Enrichment tab edits
-// hamnut + the callsign chain (QRZ today) + the cache TTLs.
+// password masked (LookupProviderInfo). The Settings → Enrichment section (and
+// the config SPA's Enrichment tab) edits hamnut + the callsign chain (QRZ
+// today) + the cache TTLs.
+//
+// The TTLs carry types.EnrichmentConfig's pointer semantics onto the wire
+// unchanged: OMIT one to mean "use the default", send an explicit 0 to mean
+// "trust this cache indefinitely". GET always populates them (Normalize has
+// resolved nil by then), so a client sees effective values rather than holes.
 type LookupInfo struct {
 	Hamnut             LookupProviderInfo   `json:"hamnut"`
 	Chain              []LookupProviderInfo `json:"chain"`
-	CountryTTLDays     int                  `json:"country_ttl_days"`
-	StationTTLDays     int                  `json:"station_ttl_days"`
+	CountryTTLDays     *int                 `json:"country_ttl_days,omitempty"`
+	StationTTLDays     *int                 `json:"station_ttl_days,omitempty"`
 	RefreshMaxInFlight int                  `json:"refresh_max_in_flight"`
 }
 
@@ -1131,13 +1141,7 @@ func smtpInfoFrom(s types.SmtpConfig) SmtpInfo {
 // deliberately: a stale password field is exactly what a form bug leaves
 // populated, whereas the flag is set solely by pressing the control.
 func mergeSmtp(in SmtpInfo, ex types.SmtpConfig) types.SmtpConfig {
-	pw := ex.Password
-	switch {
-	case in.PasswordClear:
-		pw = ""
-	case in.Password != "":
-		pw = in.Password
-	}
+	pw := resolveMaskedPassword(in.PasswordClear, in.Password, ex.Password)
 	return types.SmtpConfig{
 		Enabled:          in.Enabled,
 		Host:             in.Host,
@@ -1165,14 +1169,36 @@ func lookupInfoFrom(lc types.EnrichmentConfig) LookupInfo {
 	}
 }
 
+// resolveMaskedPassword is the ONE rule every masked-on-GET password field
+// follows, so the SMTP block and the lookup providers cannot drift apart on it:
+//
+//   - clear set      → removed. The only way to delete a stored secret.
+//   - typed value    → replaces the stored one.
+//   - blank, no clear→ the stored one is KEPT. This is the common case: it is
+//     what an operator editing any OTHER field sends on every save, which is
+//     exactly why blank must not be overloaded to mean "erase".
+//
+// Clear beats a typed value (operator's ruling, 2026-08-03: fail-safe for secret
+// removal, and sensible against stale form state). Our own clients never send
+// both — pressing Remove discards any half-typed value — so that arm exists for
+// a client that got it wrong, and of the two only the flag can have been set
+// deliberately: a stale password field is what a form bug leaves populated.
+func resolveMaskedPassword(clear bool, typed, stored string) string {
+	switch {
+	case clear:
+		return ""
+	case typed != "":
+		return typed
+	default:
+		return stored
+	}
+}
+
 // mergeLookupProvider rebuilds a provider from the PUT payload, keeping the
 // stored password when the operator left the field blank (masked-on-GET means
 // the SPA never had it to echo). Matched against the stored entry `ex`.
 func mergeLookupProvider(in LookupProviderInfo, ex types.LookupConfig) types.LookupConfig {
-	pw := ex.Password
-	if in.Password != "" {
-		pw = in.Password
-	}
+	pw := resolveMaskedPassword(in.PasswordClear, in.Password, ex.Password)
 	return types.LookupConfig{
 		Name:           in.Name,
 		Enabled:        in.Enabled,
