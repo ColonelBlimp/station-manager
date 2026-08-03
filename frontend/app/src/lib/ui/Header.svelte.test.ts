@@ -3,7 +3,7 @@
 // operator hit dogfooding — no way to see the active logbook/rig from the FT8 view).
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Header from './Header.svelte';
 import { setStationInfo, setLogbookCount, _resetStationForTests } from '../operate/station.svelte';
@@ -87,8 +87,7 @@ describe('Header CAT chip vs FT8', () => {
 // can't see).
 describe('Header CAT chip → Rig Control panel', () => {
     async function clickChip(): Promise<void> {
-        const { fireEvent } = await import('@testing-library/svelte');
-        // The chip is the only button in the header.
+        // On Operate the chip is the only button in the header.
         await fireEvent.click(screen.getByRole('button'));
         flushSync();
     }
@@ -108,13 +107,78 @@ describe('Header CAT chip → Rig Control panel', () => {
         expect(isVisible('rig')).toBe(false);
     });
 
-    it('from another view: click navigates to Operate and reveals — never toggles off', async () => {
+    /*
+        OFF OPERATE THE CHIP IS A READOUT, NOT A CONTROL (operator, 2026-08-03).
+
+        It used to navigate to Operate and reveal the panel, and H0 below is the
+        test that pinned it — deliberate behaviour, deliberately tested. The
+        operator ruled it out after hitting it from Settings: the chip sits in
+        the header of every view, so a glance at the frequency was one stray
+        click away from leaving the page.
+
+        The cost is not the navigation itself, it is what leaving Settings does.
+        There is NO unsaved-changes guard anywhere (router.svelte.ts:93 —
+        navigate() just switches the view), and Settings is mounted behind
+        {#if router.view === 'config'}, so leaving unmounts it. The draft
+        survives (module singleton) but returning re-fires onMount → load() →
+        #apply(), which overwrites it. Unsaved config edits are therefore
+        discarded, and discarded on RETURN rather than on leaving, so there is
+        no moment at which the operator could be warned.
+
+        NARROW BY INSTRUCTION: the sidebar links still navigate away from dirty
+        Settings and still discard edits the same way. That is the same defect
+        through a different door, and it is knowingly left open here — the
+        operator chose the narrow fix over a navigation guard.
+
+        H2 is the half that is easy to skip. A chip that keeps a button's
+        semantics and hover affordance while doing nothing is worse than one
+        that navigates: the operator clicks, nothing happens, and there is no
+        way to tell that from a broken control. Same rule as the Email
+        section's Remove button (U2) — do not offer an action you won't take.
+    */
+
+    // H1 — off Operate, the chip changes NOTHING. Both halves are asserted: a
+    // fix that only stopped the navigation would still pop the panel open
+    // underneath, which is a layout change the operator never asked for and
+    // cannot see from here.
+    it('from another view: clicking the chip neither navigates nor touches the panel', async () => {
         router.view = 'logbook';
-        // Panel already visible (left open earlier) — arriving must keep it open.
+        render(Header);
+
+        const chip = screen.getByTitle('Waiting for confirmation');
+        await fireEvent.click(chip);
+        flushSync();
+
+        expect(router.view).toBe('logbook');
+        expect(isVisible('rig')).toBe(false);
+    });
+
+    // H1b — and the same with the panel already open: "does nothing" has to mean
+    // nothing in both directions, not just "doesn't reveal".
+    it('from another view: an open panel is left open, not toggled', async () => {
+        router.view = 'logbook';
         toggleTile('rig');
         render(Header);
-        await clickChip();
-        expect(router.view).toBe('operate');
+
+        await fireEvent.click(screen.getByTitle('Waiting for confirmation'));
+        flushSync();
+
+        expect(router.view).toBe('logbook');
         expect(isVisible('rig')).toBe(true);
+    });
+
+    // H2 — off Operate it must not present itself as a control at all.
+    it('from another view: the chip is not a button', () => {
+        router.view = 'logbook';
+        render(Header);
+        expect(screen.queryByRole('button')).toBeNull();
+    });
+
+    // H2b — and on Operate it still is one, so H2 cannot be satisfied by
+    // removing the control everywhere.
+    it('on Operate: the chip is still a button', () => {
+        router.view = 'operate';
+        render(Header);
+        expect(screen.getByRole('button')).toBeInTheDocument();
     });
 });

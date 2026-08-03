@@ -2,15 +2,18 @@
     // Sticky top bar. Carries the ADR 0044 rig chip — the always-visible
     // freq/mode/band glance anchor AND the CAT gate's status light (green
     // live / grey confirmed-manual / amber confirm-needed / red lost).
-    // Clicking it TOGGLES the Rig Control panel (from another view it first
-    // jumps to Operate and reveals it — never a blind toggle-off of a panel
-    // the operator can't see). Leading (left) is the operating-session
-    // timer — the other always-visible ambient readout, at the opposite end
-    // so the eye finds each.
+    // On Operate, clicking it TOGGLES the Rig Control panel. Everywhere else
+    // it is a READOUT ONLY (operator, 2026-08-03): it used to jump to Operate
+    // and reveal the panel, which put "leave this page" one stray click away
+    // from a glance at the frequency — costly from Settings, where navigating
+    // away silently discards unsaved edits (no navigation guard exists; see
+    // Header.svelte.test.ts for the full reasoning). Leading (left) is the
+    // operating-session timer — the other always-visible ambient readout, at
+    // the opposite end so the eye finds each.
     import { rig, rigGate } from '../operate/rig.svelte';
     import { station } from '../operate/station.svelte';
-    import { showTile, toggleTile } from '../operate/layout.svelte';
-    import { navigate, router } from '../router.svelte';
+    import { toggleTile } from '../operate/layout.svelte';
+    import { router } from '../router.svelte';
     import SessionTimer from './SessionTimer.svelte';
 
     // Thousands-grouped QSO count (e.g. "1,234") beside the logbook name.
@@ -49,17 +52,11 @@
                   : 'Waiting for confirmation'
     );
 
-    // Chip click: already on Operate → toggle the Rig Control panel (a second
-    // click dismisses what the first revealed); anywhere else → navigate there
-    // and reveal it (show, not toggle, so the arrival state is deterministic).
-    function toggleRigPanel(): void {
-        if (router.view !== 'operate') {
-            navigate('operate');
-            showTile('rig');
-            return;
-        }
-        toggleTile('rig');
-    }
+    // The chip only acts on Operate, where the Rig Control panel it toggles
+    // actually lives. Off Operate it renders as a plain readout rather than a
+    // disabled button: an inert control the operator can still click, hover and
+    // focus is indistinguishable from a broken one.
+    const interactive = $derived(router.view === 'operate');
 </script>
 
 <header
@@ -107,11 +104,11 @@
         </span>
     </div>
 
-    <button
-        class="ml-auto flex cursor-pointer items-center gap-x-2 rounded-full bg-surface-muted px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-muted/70 sm:ml-4"
-        title={chipTitle}
-        onclick={toggleRigPanel}
-    >
+    <!-- One snippet, two wrappers: the chip looks identical either way, so the
+         content must not be duplicated between the branches where it could
+         drift. Only the affordances differ — cursor, hover, and whether it is a
+         button at all. -->
+    {#snippet chipBody()}
         <span
             class="size-2 shrink-0 rounded-full"
             class:bg-green-500={rigGate() === 'live'}
@@ -125,5 +122,22 @@
         <span class="text-muted">·</span>
         <span>{rig.band}</span>
         <span class="text-xs text-muted">{gateLabel}</span>
-    </button>
+    {/snippet}
+
+    {#if interactive}
+        <button
+            class="ml-auto flex cursor-pointer items-center gap-x-2 rounded-full bg-surface-muted px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-muted/70 sm:ml-4"
+            title={chipTitle}
+            onclick={() => toggleTile('rig')}
+        >
+            {@render chipBody()}
+        </button>
+    {:else}
+        <div
+            class="ml-auto flex items-center gap-x-2 rounded-full bg-surface-muted px-3 py-1.5 text-sm font-medium text-ink sm:ml-4"
+            title={chipTitle}
+        >
+            {@render chipBody()}
+        </div>
+    {/if}
 </header>
