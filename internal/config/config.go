@@ -633,35 +633,12 @@ func DefaultConfig(dataDir string) Config {
 	cfg.Forwarders = nil
 	// Hamnut country provider — disabled by default, prepopulated
 	// with the canonical public endpoint. Operator flips enabled=true
-	// to activate; nothing else needs editing for the common case.
-	// applyDefaults below still fills Name + HttpTimeoutSec but the
-	// URL is set here so it survives a deletion-and-restart cycle.
-	cfg.Lookup.Hamnut = types.LookupConfig{
-		Name:           types.HamNutLookupServiceName,
-		Enabled:        false,
-		URL:            "https://api.hamnut.com/v1/call-signs/prefixes",
-		HttpTimeoutSec: defaultLookupHTTPTimeoutSec,
-	}
-	// Symmetric: a disabled QRZ lookup chain entry, prepopulated with
-	// the canonical QRZ XML endpoint and a placeholder credential
-	// pair. Operator fills in username + password and flips
-	// enabled=true. Same DefaultConfig-not-applyDefaults rationale as
-	// the forwarder above.
-	cfg.Lookup.Chain = []types.LookupConfig{
-		{
-			Name:           types.QRZLookupServiceName,
-			Enabled:        false,
-			URL:            "https://xmldata.qrz.com/xml/current",
-			Username:       "",
-			Password:       "",
-			HttpTimeoutSec: defaultLookupHTTPTimeoutSec,
-			// Profile URL prefix — the SPA concatenates the
-			// uppercased callsign onto the end (e.g.
-			// "https://www.qrz.com/db/M0CMC"). Trailing slash is
-			// load-bearing; v1 had the same comment in defaults.go.
-			ViewURL: "https://www.qrz.com/db/",
-		},
-	}
+	// The enrichment providers are NOT hardcoded here. applyDefaults seeds one
+	// DISABLED entry per REGISTERED provider (ADR 0062), so the list is
+	// non-sparse and a provider compiled into the daemon appears in Settings
+	// ready to be given credentials — the same add-missing shape forwarders use
+	// (ADR 0039). Seeding by name here would reintroduce the hardcoding the
+	// registry exists to remove, and would list QRZ even in a build without it.
 	applyDefaults(&cfg, dataDir)
 	return cfg
 }
@@ -839,6 +816,72 @@ func normalizeLookupURLs(cfg *Config) {
 //
 // The generic timeout fallback stays unconditional: "some positive timeout" is
 // safe for any provider, and validateLookupProvider requires one when enabled.
+// seedRegisteredLookupProviders makes the provider list NON-SPARSE: every
+// provider compiled into this daemon gets an entry, DISABLED, carrying its own
+// declared defaults. Same add-missing shape as forwarders (ADR 0039), and the
+// reason enabling a source is a toggle in Settings rather than a config.json
+// edit.
+//
+// Without it the registry defeated its own purpose (clean-room review
+// 83d595f88838): a newly registered provider appeared in GET /v1/lookup-types
+// but in no config block, so the Settings section had no row for it. "Adding a
+// provider is a package plus an import" was only true if the operator also
+// hand-wrote the JSON.
+//
+// ADD-MISSING, never overwrite: an entry the operator already has keeps its
+// settings, and re-running is a no-op. applyDefaults runs on every Load and the
+// daemon rewrites config.json, so an unconditional append would add a duplicate
+// per restart until validateLookup's duplicate-name check refused to start.
+//
+// A no-op on an empty registry — the normal state in this package's own tests,
+// which cannot import a provider package, and in a build compiled without any.
+func seedRegisteredLookupProviders(lc *types.EnrichmentConfig) {
+	have := make(map[string]struct{}, len(lc.Chain))
+	for _, c := range lc.Chain {
+		have[c.Name] = struct{}{}
+	}
+	for _, d := range lookupdef.Descriptors() {
+		seed := types.LookupConfig{
+			Name:           d.Name,
+			Enabled:        false,
+			URL:            d.DefaultURL,
+			ViewURL:        d.DefaultViewURL,
+			HttpTimeoutSec: d.DefaultTimeoutSec,
+		}
+		switch d.Kind {
+		case lookupdef.KindCountry:
+			// Exactly one country slot (EnrichmentConfig.Hamnut), so this fills
+			// it only when the operator has not named a provider there. With
+			// more than one country provider registered, the first by name wins
+			// — deterministic, and the operator can change it in config.json.
+			//
+			// FIELD-WISE, never a wholesale replace: an operator can leave the
+			// name out while still setting a URL (the old canonical-name stamp
+			// existed for exactly that config shape), and assigning the seed
+			// over the block threw their URL away.
+			if lc.Hamnut.Name == "" {
+				lc.Hamnut.Name = d.Name
+			}
+			if lc.Hamnut.Name == d.Name {
+				if lc.Hamnut.URL == "" {
+					lc.Hamnut.URL = d.DefaultURL
+				}
+				if lc.Hamnut.ViewURL == "" {
+					lc.Hamnut.ViewURL = d.DefaultViewURL
+				}
+				if lc.Hamnut.HttpTimeoutSec == 0 {
+					lc.Hamnut.HttpTimeoutSec = d.DefaultTimeoutSec
+				}
+			}
+		case lookupdef.KindCallsign:
+			if _, present := have[d.Name]; !present {
+				lc.Chain = append(lc.Chain, seed)
+				have[d.Name] = struct{}{}
+			}
+		}
+	}
+}
+
 func normalizeLookupProvider(c *types.LookupConfig) {
 	if d, ok := lookupdef.Descriptor(c.Name); ok {
 		if c.URL == "" {
@@ -1175,15 +1218,7 @@ func applyDefaults(cfg *Config, baseDir string) {
 	if cfg.Lookup.RefreshMaxInFlight == 0 {
 		cfg.Lookup.RefreshMaxInFlight = defaultRefreshMaxInFlight
 	}
-	// Stamp the canonical Hamnut name when the operator left it empty
-	// — keeps LookupServiceConfig(name) lookups predictable without
-	// forcing the operator to type the magic string in their config.
-	if cfg.Lookup.Hamnut.Name == "" {
-		cfg.Lookup.Hamnut.Name = types.HamNutLookupServiceName
-	}
-	// Per-provider URL + timeout defaults live in Normalize (normalizeLookupURLs)
-	// so they apply on PUT too, not just Load — an enabled provider added via the
-	// config SPA needs them stamped before validateLookupProvider runs.
+	seedRegisteredLookupProviders(&cfg.Lookup)
 
 	// SMTP port + timeout defaults live in Normalize (normalizeSmtpDefaults) so
 	// they apply on PUT too, not just Load — a blank port saved from the Settings

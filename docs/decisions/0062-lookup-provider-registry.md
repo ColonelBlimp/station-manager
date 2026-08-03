@@ -141,11 +141,17 @@ source without a build.
   tests must register a descriptor explicitly — which is an improvement, since
   it makes each test state the providers it assumes instead of inheriting them
   from a global.
-- **Accepted cost:** `applyDefaults` seeding a config entry per registered
-  provider (the forwarder non-sparse behaviour) would make every known provider
-  appear in config.json and in the Enrichment list as a disabled row. That is
-  the forwarder behaviour and probably right, but it is a visible change to a
-  section shipped hours earlier.
+- **`applyDefaults` seeds a DISABLED config entry per registered provider** (the
+  forwarder non-sparse behaviour), so every known provider appears in config.json
+  and as a disabled row in Enrichment. Written here first as an optional
+  "accepted cost" and deliberately left out of the initial build — which was
+  wrong: a clean-room review (83d595f88838) filed it P1, correctly, because
+  without it a newly registered provider appears in `/v1/lookup-types` and in no
+  config block, so the section has no row for it and it cannot be enabled. The
+  decision's own goal — adding a provider is a package plus an import — was
+  false until seeding landed. It also removed the LAST hardcoded provider name
+  (`DefaultConfig` seeded QRZ by name), which the first build had missed while
+  claiming all five sites were gone.
 
 ## Triggers to revisit
 

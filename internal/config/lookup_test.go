@@ -2,6 +2,7 @@ package config
 
 import (
 	stderrs "errors"
+	"github.com/ColonelBlimp/station-manager/internal/lookupdef"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 // ---- defaults ----
 
 func TestDefaultConfig_LookupDefaults(t *testing.T) {
+	// The TTL / refresh defaults are config's OWN and stay registry-independent.
 	cfg := DefaultConfig(t.TempDir())
 	if got := resolveTTLDays(cfg.Lookup.CountryTTLDays, -1); got != 365 {
 		t.Errorf("CountryTTLDays = %d, want 365", got)
@@ -24,27 +26,50 @@ func TestDefaultConfig_LookupDefaults(t *testing.T) {
 	if cfg.Lookup.RefreshMaxInFlight != 4 {
 		t.Errorf("RefreshMaxInFlight = %d, want 4", cfg.Lookup.RefreshMaxInFlight)
 	}
-	if cfg.Lookup.Hamnut.Name != types.HamNutLookupServiceName {
-		t.Errorf("Hamnut.Name = %q, want canonical %q", cfg.Lookup.Hamnut.Name, types.HamNutLookupServiceName)
+}
+
+// TestDefaultConfig_SeedsProvidersFromRegistry replaces the half of
+// TestDefaultConfig_LookupDefaults that asserted a hardcoded hamnut block and a
+// hardcoded QRZ chain entry. Those names are no longer in config at all (ADR
+// 0062) — a fresh config carries one disabled entry per REGISTERED provider, so
+// the test now declares the providers it expects instead of asserting two the
+// package used to name itself.
+//
+// What the old assertions checked, and where each went: canonical hamnut name →
+// the country slot takes the registered provider's name; hamnut timeout 10 and
+// QRZ URL/timeout → the seed takes the DESCRIPTOR's defaults, which the
+// descriptor here sets deliberately different from QRZ's real ones so a
+// leftover hardcoded seed could not satisfy this; QRZ disabled → still asserted,
+// seeds are opt-in.
+func TestDefaultConfig_SeedsProvidersFromRegistry(t *testing.T) {
+	lookupdef.ResetForTests()
+	t.Cleanup(lookupdef.ResetForTests)
+	lookupdef.RegisterProvider(lookupdef.ProviderDescriptor{
+		Name: "ctry", DisplayName: "Country Src", Kind: lookupdef.KindCountry,
+		DefaultURL: "https://ctry.example.org/", DefaultTimeoutSec: 11,
+	})
+	lookupdef.RegisterProvider(lookupdef.ProviderDescriptor{
+		Name: "callsign", DisplayName: "Callsign Src", Kind: lookupdef.KindCallsign,
+		DefaultURL: "https://callsign.example.org/xml", DefaultTimeoutSec: 13,
+	})
+
+	cfg := DefaultConfig(t.TempDir())
+
+	if cfg.Lookup.Hamnut.Name != "ctry" || cfg.Lookup.Hamnut.HttpTimeoutSec != 11 {
+		t.Errorf("country slot not seeded from the registry: %+v", cfg.Lookup.Hamnut)
 	}
-	if cfg.Lookup.Hamnut.HttpTimeoutSec != 10 {
-		t.Errorf("Hamnut.HttpTimeoutSec = %d, want 10", cfg.Lookup.Hamnut.HttpTimeoutSec)
+	if cfg.Lookup.Hamnut.Enabled {
+		t.Error("seeded country provider is enabled; seeds are opt-in")
 	}
 	if len(cfg.Lookup.Chain) != 1 {
-		t.Fatalf("default chain should have one prepopulated entry, got %d", len(cfg.Lookup.Chain))
+		t.Fatalf("chain has %d entries, want the one registered callsign provider", len(cfg.Lookup.Chain))
 	}
-	qrz := cfg.Lookup.Chain[0]
-	if qrz.Name != types.QRZLookupServiceName {
-		t.Errorf("default chain[0].Name = %q, want %q", qrz.Name, types.QRZLookupServiceName)
+	got := cfg.Lookup.Chain[0]
+	if got.Name != "callsign" || got.URL != "https://callsign.example.org/xml" || got.HttpTimeoutSec != 13 {
+		t.Errorf("chain entry not seeded from the descriptor: %+v", got)
 	}
-	if qrz.Enabled {
-		t.Error("default chain[0].Enabled = true, want false (template entry, operator opts in)")
-	}
-	if qrz.URL != "https://xmldata.qrz.com/xml/current" {
-		t.Errorf("default chain[0].URL = %q, want canonical QRZ XML endpoint", qrz.URL)
-	}
-	if qrz.HttpTimeoutSec != 10 {
-		t.Errorf("default chain[0].HttpTimeoutSec = %d, want 10", qrz.HttpTimeoutSec)
+	if got.Enabled {
+		t.Error("seeded chain provider is enabled; seeds are opt-in")
 	}
 }
 
@@ -76,17 +101,26 @@ func TestLoad_PreservesOperatorTTLs(t *testing.T) {
 	}
 }
 
-func TestLoad_StampCanonicalHamnutName(t *testing.T) {
+// TestLoad_FillsUnnamedCountrySlotFromRegistry replaces
+// TestLoad_StampCanonicalHamnutName. Same intent — a country block the operator
+// left unnamed must acquire a name, or LookupServiceConfig cannot find it — but
+// the name now comes from the registered provider rather than a constant
+// compiled into config (ADR 0062).
+func TestLoad_FillsUnnamedCountrySlotFromRegistry(t *testing.T) {
+	lookupdef.ResetForTests()
+	t.Cleanup(lookupdef.ResetForTests)
+	lookupdef.RegisterProvider(lookupdef.ProviderDescriptor{
+		Name: "ctry", DisplayName: "Country Src", Kind: lookupdef.KindCountry,
+		DefaultURL: "https://ctry.example.org/", DefaultTimeoutSec: 11,
+	})
+
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "config.json")
-	// Operator omits the `name` field — applyDefaults stamps the
-	// canonical service name so LookupServiceConfig() can find it.
 	content := `{
 		"lookup": {
 			"hamnut": {
 				"enabled": true,
-				"url": "https://api.hamnut.example/v1/call-signs/prefixes",
-				"useragent": "smd/test"
+				"url": "https://api.hamnut.example/v1/call-signs/prefixes"
 			}
 		}
 	}`
@@ -97,9 +131,12 @@ func TestLoad_StampCanonicalHamnutName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Lookup.Hamnut.Name != types.HamNutLookupServiceName {
-		t.Errorf("Hamnut.Name = %q, want %q (defaults must stamp canonical)",
-			cfg.Lookup.Hamnut.Name, types.HamNutLookupServiceName)
+	if cfg.Lookup.Hamnut.Name != "ctry" {
+		t.Errorf("Hamnut.Name = %q, want the registered country provider", cfg.Lookup.Hamnut.Name)
+	}
+	// The operator's own URL survives the fill.
+	if cfg.Lookup.Hamnut.URL != "https://api.hamnut.example/v1/call-signs/prefixes" {
+		t.Errorf("operator URL overwritten: %q", cfg.Lookup.Hamnut.URL)
 	}
 }
 
