@@ -50,17 +50,19 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **DEPLOY IS BEHIND, `smd` IS STOPPED, NOTHING FROM TODAY IS LIVE.** Last build
-  run was `1049-g0c6b9fdd-dirty` (a mid-work dirty build, not a release point);
-  HEAD is `bd845ed4`. Next `task deploy:local:dev` picks it all up. A stopped
-  `smd` is deliberate, NOT a fault — start it after deploying. **Know before you
-  deploy:** the lookup TTLs became `*int`, so an explicit `0` in config.json now
-  means "never goes stale" instead of being rewritten to 365 — the fix working,
-  but on config you already have.
-- **Shipped today:** **Settings → Email** + **Settings → Enrichment**, the four
-  daemon gaps those ports exposed, a **stale-reload class fix** across all four
-  Settings sections, the **CAT chip** as a readout outside Operate, and operator
-  **`label`s** on lookup sources. Detail in Current state.
+- **DEPLOY IS BEHIND — `smd` runs `1054-gd9ab91d7`, HEAD is `af86e22e`.** Live:
+  Email, Enrichment, the stale-reload fix, the CAT chip. **NOT live: all of ADR
+  0062** (provider registry, seeding, `/v1/lookup-types`, the country rule).
+  **Two things to know before deploying:** `applyDefaults` now seeds a DISABLED
+  config entry per registered provider (yours has both, so expect a no-op), and
+  the daemon refuses to start if a SECOND country provider is ever registered
+  (unreachable with hamnut alone).
+- **Shipped today:** **Settings → Email** + **Settings → Enrichment**; the SIX
+  daemon defects those ports exposed; a **stale-reload class fix** across all
+  four Settings sections; the **CAT chip** as a readout outside Operate;
+  operator **`label`s** on lookup sources; and **ADR 0062** — enrichment
+  providers now self-register, so adding one is a package plus an import line.
+  Detail in Current state.
 - **EYEBALL WHEN CONVENIENT** (none of it seen by hand; vitest checks the DOM,
   not the look): Email's password keep / type / remove states and its 587/30
   placeholders; Enrichment's disclosures, TTL-of-0 notice, and Remove switching
@@ -99,7 +101,53 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ## Current state (as of 2026-08-03)
 
-> **2026-08-03, LAST — SETTINGS → ENRICHMENT SHIPPED, over four commits and four
+> **2026-08-03, LAST — ADR 0062: ENRICHMENT PROVIDERS SELF-REGISTER. Three
+> commits, three reviews; the first two each found a real gap and both were
+> mine.**
+>
+> - **THE TRIGGER WAS THE OPERATOR, ONE SENTENCE AFTER THE PORT SHIPPED:**
+>   "adding another service becomes a code change rather than a config
+>   addition." Counting the sites proved him right — FIVE besides the provider
+>   package, four of them hand-written name checks, and TWO of those added that
+>   same day by the port. The gap had been *observed* during the port ("there is
+>   no `/v1/lookup-types` the way Forwarding has") and used as an argument FOR
+>   hardcoding rather than raised as the defect.
+> - **THE ADR'S FEASIBILITY CLAIM WAS WRONG AND THE BUILD FOUND IT IN A MINUTE.**
+>   It said the registry could live in `internal/lookup` because that package
+>   does not import `internal/config`. It does — TRANSITIVELY, via
+>   `internal/database/sqlite`. One hop checked, feasibility asserted. The
+>   registry therefore splits: **`internal/lookupdef`** (true leaf) holds
+>   descriptors that `config` and `api` read; **`internal/lookup`** holds
+>   constructors, where the provider interfaces already are.
+> - **THREE STRUCTURAL GUARDS FIRED, ALL CORRECTLY.** The ADR 0043 import ratchet
+>   rejected `api` → `lookupdef` (added with intent — `api` has always imported
+>   `internal/forwarding` for the same reason). `maintidx` tripped because ONE
+>   added route pushed `api.New` over; the exemption list is documented as the
+>   refactor backlog, so `registerRoutes` was extracted instead of growing it.
+>   And a UI test caught two fail-opens being collapsed: the validator must not
+>   REQUIRE credentials for an undescribed provider, but the UI must not HIDE
+>   its credential fields — same instinct, opposite directions.
+> - **REVIEW 1 (P1): SEEDING WAS MISSING**, which defeated the ADR's own goal — a
+>   newly registered provider appeared in `/v1/lookup-types` and in no config
+>   block, so Settings had no row for it. I had flagged seeding as an optional
+>   "accepted cost" and left it out; that was wrong. Verifying the finding also
+>   turned up what the review did not mention: `DefaultConfig` still seeded QRZ
+>   BY NAME, so the claim "all five hardcoded sites are gone" was false. Fixing
+>   the P1 removed it.
+> - **MY OWN NEW TEST THEN CAUGHT A BUG IN THAT FIX**: an operator who sets a
+>   country URL but omits the `name` — exactly the shape the old canonical-name
+>   stamp existed for — had their URL destroyed, because the seed replaced the
+>   whole block. Now filled FIELD-WISE.
+> - **REVIEW 2 (P2): A SECOND COUNTRY PROVIDER DROPPED SILENTLY**, behind a
+>   comment I had written excusing it ("the first by name wins — deterministic").
+>   A defect dressed as a design note. Config has ONE country slot by decision
+>   (ADR 0017, country data is single-source), so the fix is to refuse the second
+>   at registration, not to represent it.
+> - **NET:** adding a provider is now a package plus a blank import in `cmd/smd`.
+>   The config entry seeds itself disabled, the descriptor endpoint feeds
+>   Settings, the SPA changes not at all.
+
+> **2026-08-03 — SETTINGS → ENRICHMENT SHIPPED, over four commits and four
 > reviews. The two middle reviews each found a real defect in the PREVIOUS fix.**
 >
 > - **PORTING FOUND TWO MORE DAEMON DEFECTS**, both predating the port and both
