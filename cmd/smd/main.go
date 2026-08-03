@@ -45,8 +45,8 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
-	"github.com/ColonelBlimp/station-manager/internal/lookup/hamnut"
-	lookupqrz "github.com/ColonelBlimp/station-manager/internal/lookup/qrz"
+	_ "github.com/ColonelBlimp/station-manager/internal/lookup/hamnut" // registers the hamnut country provider (descriptor + constructor) via init()
+	_ "github.com/ColonelBlimp/station-manager/internal/lookup/qrz"    // registers the QRZ callsign provider (descriptor + constructor) via init()
 	"github.com/ColonelBlimp/station-manager/internal/lookup/refresher"
 	"github.com/ColonelBlimp/station-manager/internal/pskreporter"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
@@ -1441,16 +1441,27 @@ func buildEnrichment(
 ) (*lookup.Orchestrator, *refresher.Service, error) {
 	const op errors.Op = "smd.buildEnrichment"
 
+	// Providers are wired from the REGISTRY (ADR 0062), not a switch on name:
+	// each provider package registers its constructor in init() and cmd/smd
+	// imports it (see the blank imports at the top). Adding a provider is a
+	// package plus an import line — not an edit here, in config's defaults, in
+	// config's credential rules, and in the SPA.
 	var countryProvider lookup.CountryProvider
 	if cfg.Lookup.Hamnut.Enabled {
-		hamnutCfg := cfg.Lookup.Hamnut
-		hamnutSvc := hamnut.NewService(loggerSvc, cfgSvc, &hamnutCfg, nil)
-		hamnutSvc.UserAgent = cfg.UserAgent
-		if err := hamnutSvc.Initialize(workerCtx); err != nil {
-			return nil, nil, errors.New(op).WithErr(err).WithMsg("initialize hamnut provider")
+		countryCfg := cfg.Lookup.Hamnut
+		ctor, ok := lookup.CountryConstructorFor(countryCfg.Name)
+		if !ok {
+			return nil, nil, errors.New(op).WithMsgf(
+				"unknown lookup country provider %q (no constructor registered in this build)",
+				countryCfg.Name,
+			)
 		}
-		countryProvider = hamnutSvc
-		loggerSvc.InfoWith().Str("provider", hamnutSvc.Name()).Msg("lookup: country provider enabled")
+		svc := ctor(loggerSvc, &countryCfg, cfg.UserAgent)
+		if err := svc.Initialize(workerCtx); err != nil {
+			return nil, nil, errors.New(op).WithErr(err).WithMsgf("initialize country provider %q", countryCfg.Name)
+		}
+		countryProvider = svc
+		loggerSvc.InfoWith().Str("provider", svc.Name()).Msg("lookup: country provider enabled")
 	}
 
 	chain := make([]lookup.CallsignProvider, 0, len(cfg.Lookup.Chain))
@@ -1460,34 +1471,27 @@ func buildEnrichment(
 			continue
 		}
 		entryCopy := entry
-		switch entry.Name {
-		case types.QRZLookupServiceName:
-			qrzSvc := lookupqrz.NewService(loggerSvc, cfgSvc, &entryCopy, nil)
-			qrzSvc.UserAgent = cfg.UserAgent
-			if err := qrzSvc.Initialize(workerCtx); err != nil {
-				return nil, nil, errors.New(op).WithErr(err).WithMsgf("initialize chain provider %q", entry.Name)
-			}
-			// Defensive only — currently UNREACHABLE: config-disabled entries are
-			// already filtered above (entry.Enabled), and a session-key FAILURE no
-			// longer flips this flag (QRZ stays enabled and lazily re-auths on
-			// lookups — see qrz.Initialize), so a flaky-link blip at boot can't drop
-			// the provider from the chain. Kept as belt-and-suspenders in case the
-			// upstream filter changes.
-			if !qrzSvc.Config.Enabled {
-				loggerSvc.InfoWith().Str("provider", entry.Name).Msg("lookup: chain provider disabled; skipping")
-				continue
-			}
-			chain = append(chain, qrzSvc)
-			loggerSvc.InfoWith().Str("provider", qrzSvc.Name()).Msg("lookup: chain provider enabled")
-		default:
-			// Unknown provider name in config. Loud failure beats
-			// silent skip — operator's config has an entry that no
-			// daemon binary knows how to wire.
+		ctor, ok := lookup.CallsignConstructorFor(entry.Name)
+		if !ok {
+			// Loud failure beats a silent skip: the operator's config names a
+			// provider no binary in this build knows how to wire, and quietly
+			// dropping it would degrade enrichment with no explanation.
 			return nil, nil, errors.New(op).WithMsgf(
-				"unknown lookup chain provider %q (no constructor wired in cmd/smd)",
+				"unknown lookup chain provider %q (no constructor registered in this build)",
 				entry.Name,
 			)
 		}
+		svc := ctor(loggerSvc, &entryCopy, cfg.UserAgent)
+		if err := svc.Initialize(workerCtx); err != nil {
+			return nil, nil, errors.New(op).WithErr(err).WithMsgf("initialize chain provider %q", entry.Name)
+		}
+		// The old wiring re-checked the provider's own Config.Enabled here. That
+		// was documented UNREACHABLE (entry.Enabled is filtered above and a QRZ
+		// session-key failure no longer flips the flag) and it read a concrete
+		// type's field, which the registry's interface deliberately does not
+		// expose. Dropped with the switch it lived in.
+		chain = append(chain, svc)
+		loggerSvc.InfoWith().Str("provider", svc.Name()).Msg("lookup: chain provider enabled")
 	}
 
 	if countryProvider == nil && len(chain) == 0 {

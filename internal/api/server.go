@@ -125,6 +125,54 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	}
 
 	mux := http.NewServeMux()
+	s.registerRoutes(mux, cfg, logger, br, ft8Svc)
+
+	// Middleware chain — outermost first:
+	//   logRequests       — access log; observes every completion (incl.
+	//                       503 from limitConcurrent and 500 from recoverPanic)
+	//   limitConcurrent   — non-SSE concurrent-request cap
+	//   recoverPanic      — panic safety net + structured panic log
+	//   mux               — per-route handlers (with their own per-route
+	//                       middleware like limitSubmitRate / limitEventSubscribers)
+	s.httpServer = &http.Server{
+		Handler: s.logRequests(s.rejectWhenDraining(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(mux))))),
+		// net/http writes its own diagnostics — accept errors, TLS handshake
+		// failures, and panics on paths recoverPanic does not wrap — through
+		// ErrorLog. Left nil it falls back to log.Default(), i.e. stderr, so those
+		// land in the journal rather than smd.log: the file an operator is told to
+		// read and a remote admin is sent. Warn, not Debug: these are transport
+		// abnormalities, not routine access events, and Debug would hide them
+		// under the default Info configuration — which is the whole fault being
+		// fixed (operator, 2026-08-01).
+		ErrorLog: stdlog.New(&httpErrorLogWriter{logger: s.logger}, "", 0),
+		// ReadHeaderTimeout caps the pre-handler request-header read
+		// independently of ReadTimeout (which budgets headers + body
+		// together and is operator-tunable up to longer values for
+		// slow clients). A short fixed cap here closes a
+		// slowloris-style slow-headers DoS surface — a malicious or
+		// buggy client holding the connection open in the headers
+		// phase consumes a TCP socket but no MaxConcurrentRequests
+		// slot until the handler runs, so without this cap the
+		// concurrent-request limit doesn't protect the listener
+		// itself. Review finding M3 (2026-05-07).
+		ReadHeaderTimeout: time.Duration(cfg.Server.ReadHeaderTimeoutSec) * time.Second,
+		ReadTimeout:       time.Duration(cfg.Server.ReadTimeoutSec) * time.Second,
+		WriteTimeout:      time.Duration(cfg.Server.WriteTimeoutSec) * time.Second,
+		IdleTimeout:       time.Duration(cfg.Server.IdleTimeoutSec) * time.Second,
+	}
+
+	return s
+}
+
+// registerRoutes wires every HTTP route onto the mux.
+//
+// Split out of New during the ADR 0062 build, when adding ONE route tripped the
+// maintidx gate. The routing table is the part of New that grows with every
+// endpoint and it is pure wiring — no state, no ordering relationship with the
+// struct literal above it — so it is the natural seam. Middleware composition
+// deliberately stays in New: that one HAS an order that matters, and reading it
+// beside the server it wraps is the point.
+func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *logging.Service, br *bridge.Service, ft8Svc *ft8.Service) {
 
 	// QSO — POST /v1/qso carries the hottest per-endpoint cap (token
 	// bucket). See docs/v2-design/api.md §6 for the threat model.
@@ -192,6 +240,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	// Data-driven forwarder-type descriptors for the config SPA's Forwarding tab
 	// (display name, supported actions, credential field shapes).
 	mux.HandleFunc("GET /v1/forwarder-types", s.handleForwarderTypes)
+	mux.HandleFunc("GET /v1/lookup-types", s.handleLookupTypes)
 
 	// Operational
 	mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
@@ -326,42 +375,6 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		// is a clean 404 rather than SPA HTML.
 		mux.Handle("GET /{$}", http.RedirectHandler("/app/", http.StatusFound))
 	}
-
-	// Middleware chain — outermost first:
-	//   logRequests       — access log; observes every completion (incl.
-	//                       503 from limitConcurrent and 500 from recoverPanic)
-	//   limitConcurrent   — non-SSE concurrent-request cap
-	//   recoverPanic      — panic safety net + structured panic log
-	//   mux               — per-route handlers (with their own per-route
-	//                       middleware like limitSubmitRate / limitEventSubscribers)
-	s.httpServer = &http.Server{
-		Handler: s.logRequests(s.rejectWhenDraining(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(mux))))),
-		// net/http writes its own diagnostics — accept errors, TLS handshake
-		// failures, and panics on paths recoverPanic does not wrap — through
-		// ErrorLog. Left nil it falls back to log.Default(), i.e. stderr, so those
-		// land in the journal rather than smd.log: the file an operator is told to
-		// read and a remote admin is sent. Warn, not Debug: these are transport
-		// abnormalities, not routine access events, and Debug would hide them
-		// under the default Info configuration — which is the whole fault being
-		// fixed (operator, 2026-08-01).
-		ErrorLog: stdlog.New(&httpErrorLogWriter{logger: s.logger}, "", 0),
-		// ReadHeaderTimeout caps the pre-handler request-header read
-		// independently of ReadTimeout (which budgets headers + body
-		// together and is operator-tunable up to longer values for
-		// slow clients). A short fixed cap here closes a
-		// slowloris-style slow-headers DoS surface — a malicious or
-		// buggy client holding the connection open in the headers
-		// phase consumes a TCP socket but no MaxConcurrentRequests
-		// slot until the handler runs, so without this cap the
-		// concurrent-request limit doesn't protect the listener
-		// itself. Review finding M3 (2026-05-07).
-		ReadHeaderTimeout: time.Duration(cfg.Server.ReadHeaderTimeoutSec) * time.Second,
-		ReadTimeout:       time.Duration(cfg.Server.ReadTimeoutSec) * time.Second,
-		WriteTimeout:      time.Duration(cfg.Server.WriteTimeoutSec) * time.Second,
-		IdleTimeout:       time.Duration(cfg.Server.IdleTimeoutSec) * time.Second,
-	}
-
-	return s
 }
 
 // tuneStopper and ft8Stopper adapt each SM-owned transmitter to the retune

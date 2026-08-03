@@ -33,6 +33,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
+	"github.com/ColonelBlimp/station-manager/internal/lookupdef"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -40,6 +41,47 @@ import (
 // ServiceName is the DI bean ID and the LookupConfig.Name value the
 // orchestrator matches on.
 const ServiceName = types.QRZLookupServiceName
+
+// Credential minimums, enforced here at Initialize AND — via the descriptor
+// below — by the config validator at save time. Both matter: the validator
+// stops an unusable ENABLED provider being written at all, because reaching
+// Initialize with one aborts daemon startup long after the PUT returned 200
+// (ADR 0062). They are one declaration so the two cannot drift.
+const (
+	minUsernameLen = 3
+	minPasswordLen = 5
+	// The provider's own default HTTP timeout, declared here because the
+	// descriptor is now the single source for it. config keeps a generic
+	// fallback for the empty-registry case (its own unit tests).
+	defaultHTTPTimeoutSec = 10
+)
+
+// Registering the descriptor here, next to the implementation, is what makes
+// adding a provider a package rather than a sweep across buildEnrichment,
+// config's URL defaults, config's credential rules and the SPA's display map
+// (ADR 0062). cmd/smd imports this package to trigger it.
+func init() {
+	lookupdef.RegisterProvider(lookupdef.ProviderDescriptor{
+		Name:              ServiceName,
+		DisplayName:       "QRZ.com",
+		Help:              "Fills name, grid and address from QRZ. Needs a QRZ subscription with XML/API access.",
+		Kind:              lookupdef.KindCallsign,
+		NeedsCredentials:  true,
+		MinUsernameLen:    minUsernameLen,
+		MinPasswordLen:    minPasswordLen,
+		DefaultURL:        types.QRZLookupDefaultURL,
+		DefaultViewURL:    types.QRZLookupDefaultViewURL,
+		DefaultTimeoutSec: defaultHTTPTimeoutSec,
+	})
+	// The constructor half (see internal/lookup/constructors.go for why the two
+	// registries are separate). This is what removes buildEnrichment's
+	// switch-on-name: the daemon wires whatever is registered.
+	lookup.RegisterCallsignProvider(ServiceName, func(logger *logging.Service, cfg *types.LookupConfig, userAgent string) lookup.CallsignProvider {
+		s := NewService(logger, nil, cfg, nil)
+		s.UserAgent = userAgent
+		return s
+	})
+}
 
 // Compile-time check that Service satisfies lookup.CallsignProvider.
 var _ lookup.CallsignProvider = (*Service)(nil)

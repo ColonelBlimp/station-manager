@@ -23,8 +23,9 @@
 */
 import {
     fetchLookup,
+    fetchLookupTypes,
     saveLookup,
-    QRZ_PROVIDER,
+    type LookupType,
     HAMNUT_PROVIDER,
     type LookupEntry,
     type LookupPayload,
@@ -33,26 +34,14 @@ import {
 } from '../api/lookup';
 import { toasts } from '../ui/toasts.svelte';
 
-/** What this build knows about a provider, beyond the uniform wire shape. */
-export interface ProviderMeta {
-    label: string;
-    blurb: string;
-    /** False only for a provider that is anonymous by design (hamnut). */
-    credentialed: boolean;
-}
-
-const PROVIDERS: Record<string, ProviderMeta> = {
-    [HAMNUT_PROVIDER]: {
-        label: 'Hamnut',
-        blurb: 'Resolves DXCC / CQ / ITU zones from the callsign prefix. Free and anonymous — no credentials needed.',
-        credentialed: false,
-    },
-    [QRZ_PROVIDER]: {
-        label: 'QRZ.com',
-        blurb: 'Fills name, grid and address from QRZ. Needs a QRZ subscription with XML/API access.',
-        credentialed: true,
-    },
-};
+/*
+    Provider PRESENTATION comes from GET /v1/lookup-types (ADR 0062), not from a
+    map in here. A hardcoded map meant adding a lookup service was a code change
+    in this SPA on top of the four in Go — the operator's objection, and the
+    reason for the registry. A provider the daemon does not describe still
+    renders, generically: the wire shape (LookupProviderInfo) is uniform, so only
+    the friendly name and blurb are unknown, not the form.
+*/
 
 /** One lookup source as the form holds it: the masked entry plus local edits. */
 export interface ProviderDraft {
@@ -135,14 +124,28 @@ class EnrichmentState {
     loaded = $state(false);
     error = $state('');
     draft = $state<EnrichmentDraft>(draftFrom(BLANK));
+    /** Descriptors from the daemon. Empty until load() resolves. */
+    types = $state<LookupType[]>([]);
 
     #pristine = $state(JSON.stringify(draftFrom(BLANK)));
 
     dirty = $derived(JSON.stringify(this.draft) !== this.#pristine);
 
-    /** What this build knows about a provider, or undefined if it doesn't. */
-    metaFor(name: string): ProviderMeta | undefined {
-        return PROVIDERS[name];
+    /**
+     * Whether a provider is unusable without a login.
+     *
+     * Defaults to FALSE for a provider the daemon did not describe — the same
+     * fail-open the config validator applies (ADR 0062). Guessing "probably
+     * needs one" would force-disable a provider from a newer build on every
+     * save, which is worse than showing it credential boxes it ignores.
+     */
+    needsCredentials(name: string): boolean {
+        return this.metaFor(name)?.needs_credentials === true;
+    }
+
+    /** The daemon's descriptor for a provider, or undefined if it has none. */
+    metaFor(name: string): LookupType | undefined {
+        return this.types.find((t) => t.name === name);
     }
 
     /**
@@ -156,7 +159,7 @@ class EnrichmentState {
      * uses (ForwardingSection.svelte: label || display_name || type).
      */
     labelFor(p: ProviderDraft): string {
-        return p.label || PROVIDERS[p.name]?.label || p.name;
+        return p.label || this.metaFor(p.name)?.display_name || p.name;
     }
 
     /**
@@ -184,12 +187,18 @@ class EnrichmentState {
         // draft is not known-current and must neither render nor save.
         this.loaded = false;
         this.error = '';
-        const out = await fetchLookup();
+        const [out, types] = await Promise.all([fetchLookup(), fetchLookupTypes()]);
         this.loading = false;
         if (out.kind === 'error') {
             this.error = out.message;
             return;
         }
+        // A failed DESCRIPTOR fetch is not fatal: the sources still render with
+        // their enable toggles and credential fields, just without friendly
+        // names or blurbs — the same degraded state a provider this build does
+        // not know already gets. Mirrors forwarding.svelte.ts's handling of a
+        // failed /v1/forwarder-types.
+        this.types = types.kind === 'ok' ? types.types : [];
         this.#apply(out.lookup);
         this.loaded = true;
     }
@@ -253,12 +262,12 @@ class EnrichmentState {
      * says nothing about whether it can run.
      */
     effectiveEnabled(p: ProviderDraft): boolean {
-        return p.enabled && !(p.passwordCleared && this.metaFor(p.name)?.credentialed === true);
+        return p.enabled && !(p.passwordCleared && this.needsCredentials(p.name));
     }
 
     /** True while a removal is forcing this source off, so the UI can lock it. */
     removalPending(p: ProviderDraft): boolean {
-        return p.passwordCleared && this.metaFor(p.name)?.credentialed === true;
+        return p.passwordCleared && this.needsCredentials(p.name);
     }
 
     /** Undo a pending removal. */

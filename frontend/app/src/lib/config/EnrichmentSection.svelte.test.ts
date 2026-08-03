@@ -47,11 +47,43 @@ afterEach(() => {
     enrichmentState.error = '';
 });
 
+/** What GET /v1/lookup-types serves — the daemon's provider descriptors. The
+ *  section reads display names and credential facts from here now, not from a
+ *  map in the SPA (ADR 0062). `hamqth` deliberately has NO descriptor: that is
+ *  the unrecognised-provider case. */
+const TYPES = {
+    types: [
+        {
+            name: 'hamnutlookupservice',
+            display_name: 'Hamnut',
+            help: 'Resolves DXCC / CQ / ITU zones from the callsign prefix.',
+            kind: 'country',
+            needs_credentials: false,
+        },
+        {
+            name: 'qrzlookupservice',
+            display_name: 'QRZ.com',
+            help: 'Fills name, grid and address from QRZ.',
+            kind: 'callsign',
+            needs_credentials: true,
+        },
+    ],
+};
+
 function mockConfig(passwordSet: boolean, countryTtl = 365) {
     vi.stubGlobal(
         'fetch',
-        vi.fn(() =>
-            Promise.resolve(
+        vi.fn((url: RequestInfo | URL) => {
+            const u = url instanceof URL ? url.href : typeof url === 'string' ? url : url.url;
+            if (u.includes('lookup-types')) {
+                return Promise.resolve(
+                    new Response(JSON.stringify(TYPES), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            }
+            return Promise.resolve(
                 new Response(
                     JSON.stringify({
                         lookup: {
@@ -91,8 +123,8 @@ function mockConfig(passwordSet: boolean, countryTtl = 365) {
                     }),
                     { status: 200, headers: { 'Content-Type': 'application/json' } }
                 )
-            )
-        )
+            );
+        })
     );
 }
 
@@ -204,6 +236,40 @@ describe('EnrichmentSection disclosures', () => {
             (s) => s.textContent ?? ''
         );
         expect(summaries.some((t) => t.includes('hamqth'))).toBe(true);
+    });
+
+    /*
+        D6 — THE TWO FAIL-OPENS POINT OPPOSITE WAYS, and collapsing them into one
+        helper is a mistake I made and U3 caught.
+
+          - The VALIDATOR must not REQUIRE credentials for a source the daemon
+            cannot describe: it would refuse to save a config from a newer build.
+            So `needsCredentials()` is false on a miss.
+          - The UI must not HIDE credential fields for that same source: it can
+            carry a stored password (password_set says so), and no boxes means no
+            way to rotate it from here.
+
+        Both are "be permissive about the unknown"; they just permit different
+        things. D6 pins the UI half — the half that has no wire rule to catch it,
+        because nothing about the payload changes when a field is merely absent
+        from the page.
+    */
+    it('D6: an unrecognised source still offers its credential fields', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        const unknown = within(card(container, 'hamqth'));
+
+        expect(unknown.getByPlaceholderText(/set — leave blank to keep/i)).toBeTruthy();
+        expect(unknown.getByRole('button', { name: /remove stored password/i })).toBeTruthy();
+    });
+
+    // D6b — while a source the daemon says is anonymous gets none, so D6 is not
+    // just "always show them".
+    it('D6b: an anonymous source gets no credential fields', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        const hamnut = within(card(container, 'Hamnut'));
+
+        expect(hamnut.queryByPlaceholderText(/set — leave blank to keep/i)).toBeNull();
+        expect(hamnut.queryByRole('button', { name: /remove stored password/i })).toBeNull();
     });
 
     // D3 — an unrecognised source is LABELLED as such, so "no fields to edit"

@@ -74,6 +74,52 @@ export interface LookupPayload {
     refresh_max_in_flight: number;
 }
 
+/**
+ * One provider's descriptor from GET /v1/lookup-types (ADR 0062) — what the
+ * daemon knows about a provider, replacing the hardcoded map this section used
+ * to carry. A provider compiled into the daemon appears here; adding one needs
+ * no change in this SPA.
+ */
+export interface LookupType {
+    name: string;
+    display_name: string;
+    help?: string;
+    /** "country" (the single prefix provider) | "callsign" (the chain). */
+    kind: string;
+    /** False for a provider anonymous BY DESIGN — it gets no credential inputs. */
+    needs_credentials: boolean;
+}
+
+export type LookupTypesOutcome =
+    { kind: 'ok'; types: LookupType[] } | { kind: 'error'; message: string };
+
+function toType(v: unknown): LookupType | null {
+    if (!isPlainObject(v) || typeof v.name !== 'string' || typeof v.display_name !== 'string') {
+        return null;
+    }
+    return {
+        name: v.name,
+        display_name: v.display_name,
+        help: typeof v.help === 'string' ? v.help : undefined,
+        kind: typeof v.kind === 'string' ? v.kind : '',
+        needs_credentials: v.needs_credentials === true,
+    };
+}
+
+export async function fetchLookupTypes(signal?: AbortSignal): Promise<LookupTypesOutcome> {
+    const fetched = await safeFetch('/v1/lookup-types', { signal });
+    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    if (!fetched.response.ok) return { kind: 'error', message: `HTTP ${fetched.response.status}` };
+    const body = await readJsonBody(fetched.response);
+    const raw = isPlainObject(body) && Array.isArray(body.types) ? body.types : [];
+    const types: LookupType[] = [];
+    for (const t of raw) {
+        const parsed = toType(t);
+        if (parsed) types.push(parsed);
+    }
+    return { kind: 'ok', types };
+}
+
 export type LookupOutcome =
     { kind: 'ok'; lookup: LookupEntry } | { kind: 'error'; message: string };
 

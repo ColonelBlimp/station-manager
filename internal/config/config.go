@@ -22,6 +22,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
+	"github.com/ColonelBlimp/station-manager/internal/lookupdef"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -818,28 +819,43 @@ func normalizeSmtpDefaults(s *types.SmtpConfig) {
 // with no URL gets the default before validateLookup's "enabled provider needs a
 // URL" check. Idempotent; a non-empty operator URL is left untouched.
 func normalizeLookupURLs(cfg *Config) {
-	if cfg.Lookup.Hamnut.URL == "" {
-		cfg.Lookup.Hamnut.URL = types.HamNutLookupDefaultURL
-	}
-	if cfg.Lookup.Hamnut.HttpTimeoutSec == 0 {
-		cfg.Lookup.Hamnut.HttpTimeoutSec = defaultLookupHTTPTimeoutSec
-	}
+	normalizeLookupProvider(&cfg.Lookup.Hamnut)
 	for i := range cfg.Lookup.Chain {
-		c := &cfg.Lookup.Chain[i]
-		if c.Name == types.QRZLookupServiceName {
-			if c.URL == "" {
-				c.URL = types.QRZLookupDefaultURL
-			}
-			if c.ViewURL == "" {
-				c.ViewURL = types.QRZLookupDefaultViewURL
-			}
+		normalizeLookupProvider(&cfg.Lookup.Chain[i])
+	}
+}
+
+// normalizeLookupProvider fills one provider's endpoint defaults from its
+// REGISTERED DESCRIPTOR (ADR 0062) — the provider declares them next to its own
+// implementation, so adding a provider needs no edit here.
+//
+// An UNREGISTERED provider keeps whatever the operator wrote. That is the
+// important case and it has two sources: a config naming a provider from a
+// newer build, and internal/config's own unit tests, which cannot import a
+// provider package (internal/lookup/qrz imports internal/config) and therefore
+// always see an empty registry. Inventing defaults for an unknown provider
+// would be guessing; refusing to load it would strand the operator on a daemon
+// that will not start.
+//
+// The generic timeout fallback stays unconditional: "some positive timeout" is
+// safe for any provider, and validateLookupProvider requires one when enabled.
+func normalizeLookupProvider(c *types.LookupConfig) {
+	if d, ok := lookupdef.Descriptor(c.Name); ok {
+		if c.URL == "" {
+			c.URL = d.DefaultURL
 		}
-		// Per-provider timeout default — here (Normalize, both Load + PUT) rather
-		// than applyDefaults so an enabled provider added via the config SPA passes
-		// validateLookupProvider's "timeout_sec > 0 when enabled" check.
-		if c.HttpTimeoutSec == 0 {
-			c.HttpTimeoutSec = defaultLookupHTTPTimeoutSec
+		if c.ViewURL == "" {
+			c.ViewURL = d.DefaultViewURL
 		}
+		if c.HttpTimeoutSec == 0 && d.DefaultTimeoutSec > 0 {
+			c.HttpTimeoutSec = d.DefaultTimeoutSec
+		}
+	}
+	// Per-provider timeout default — here (Normalize, both Load + PUT) rather
+	// than applyDefaults so an enabled provider added via the config SPA passes
+	// validateLookupProvider's "timeout_sec > 0 when enabled" check.
+	if c.HttpTimeoutSec == 0 {
+		c.HttpTimeoutSec = defaultLookupHTTPTimeoutSec
 	}
 }
 
@@ -1483,14 +1499,18 @@ func validateLookupProvider(label string, p types.LookupConfig) error {
 	// come back up, with nothing to connect it to the settings change that did
 	// it. Reachable in one click since the Settings → Enrichment "Remove stored
 	// password" control shipped (clean-room review 9732ab7914af).
-	if types.LookupProviderNeedsCredentials(p.Name) {
-		if len(p.Username) < types.QRZMinUsernameLen {
+	// The requirement comes from the provider's own descriptor (ADR 0062), so a
+	// new provider brings its rule with it. An UNREGISTERED provider is not
+	// assumed to need a login — guessing would refuse to save a config the next
+	// build supports, and internal/config's tests always see an empty registry.
+	if d, ok := lookupdef.Descriptor(p.Name); ok && d.NeedsCredentials {
+		if len(p.Username) < d.MinUsernameLen {
 			return fmt.Errorf("lookup.%s: username must be at least %d characters when enabled",
-				label, types.QRZMinUsernameLen)
+				label, d.MinUsernameLen)
 		}
-		if len(p.Password) < types.QRZMinPasswordLen {
+		if len(p.Password) < d.MinPasswordLen {
 			return fmt.Errorf("lookup.%s: password must be at least %d characters when enabled",
-				label, types.QRZMinPasswordLen)
+				label, d.MinPasswordLen)
 		}
 	}
 	// User-Agent is checked at provider Initialize time (sourced from

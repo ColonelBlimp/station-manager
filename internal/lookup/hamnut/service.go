@@ -26,6 +26,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
+	"github.com/ColonelBlimp/station-manager/internal/lookupdef"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -33,6 +34,35 @@ import (
 // ServiceName is the DI bean ID and the LookupConfig.Name value the
 // orchestrator matches on. Mirrors the v1 constant.
 const ServiceName = types.HamNutLookupServiceName
+
+// The provider's own default HTTP timeout; the descriptor below is the single
+// source for it (ADR 0062).
+const defaultHTTPTimeoutSec = 10
+
+// Registering next to the implementation is what makes adding a provider a
+// package rather than a sweep across buildEnrichment, config's URL defaults,
+// config's credential rules and the SPA's display map (ADR 0062). cmd/smd
+// imports this package to trigger it.
+//
+// NeedsCredentials is FALSE and that is a design fact, not an omission: hamnut
+// is anonymous, so the Settings section must not offer it credential boxes and
+// the config validator must not demand a login before it can be enabled.
+func init() {
+	lookupdef.RegisterProvider(lookupdef.ProviderDescriptor{
+		Name:              ServiceName,
+		DisplayName:       "Hamnut",
+		Help:              "Resolves DXCC / CQ / ITU zones from the callsign prefix. Free and anonymous — no credentials needed.",
+		Kind:              lookupdef.KindCountry,
+		NeedsCredentials:  false,
+		DefaultURL:        types.HamNutLookupDefaultURL,
+		DefaultTimeoutSec: defaultHTTPTimeoutSec,
+	})
+	lookup.RegisterCountryProvider(ServiceName, func(logger *logging.Service, cfg *types.LookupConfig, userAgent string) lookup.CountryProvider {
+		s := NewService(logger, nil, cfg, nil)
+		s.UserAgent = userAgent
+		return s
+	})
+}
 
 // errorBodyLimit bounds how much of a non-2xx response body is read into the
 // error message — enough for an upstream error string without slurping a

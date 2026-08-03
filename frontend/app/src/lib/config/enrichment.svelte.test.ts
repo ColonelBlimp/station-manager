@@ -85,11 +85,43 @@ const CONFIG = {
     },
 };
 
+/** What GET /v1/lookup-types serves — the daemon's provider descriptors. The
+ *  section reads display names and credential facts from here now, not from a
+ *  map in the SPA (ADR 0062). `hamqth` deliberately has NO descriptor: that is
+ *  the unrecognised-provider case. */
+const TYPES = {
+    types: [
+        {
+            name: 'hamnutlookupservice',
+            display_name: 'Hamnut',
+            help: 'Resolves DXCC / CQ / ITU zones from the callsign prefix.',
+            kind: 'country',
+            needs_credentials: false,
+        },
+        {
+            name: 'qrzlookupservice',
+            display_name: 'QRZ.com',
+            help: 'Fills name, grid and address from QRZ.',
+            kind: 'callsign',
+            needs_credentials: true,
+        },
+    ],
+};
+
 function mockDaemon(putResponse: unknown = CONFIG, putStatus = 200) {
     const puts: Record<string, unknown>[] = [];
     vi.stubGlobal(
         'fetch',
         vi.fn((url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const u = url instanceof URL ? url.href : typeof url === 'string' ? url : url.url;
+            if (u.includes('lookup-types')) {
+                return Promise.resolve(
+                    new Response(JSON.stringify(TYPES), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            }
             if (init?.method === 'PUT') {
                 puts.push(
                     JSON.parse(typeof init.body === 'string' ? init.body : '{}') as Record<

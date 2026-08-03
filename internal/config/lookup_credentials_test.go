@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ColonelBlimp/station-manager/internal/lookupdef"
+
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -38,16 +40,38 @@ import (
 	not. The lesson is that "the same masked-credential pattern" says nothing
 	about whether the credential is OPTIONAL.
 
-	WHY THE LIMITS LIVE IN types. Duplicating 3 and 5 here would be two copies of
-	one rule, free to drift; importing internal/lookup/qrz from internal/config is
-	a cycle (qrz reads its config through the config service). A pair of constants
-	in types — which imports only stdlib — is the one place both can see.
+	WHERE THE LIMITS LIVE (revised by ADR 0062). They were briefly a pair of
+	constants in internal/types, purely to dodge the import cycle
+	(internal/lookup/qrz imports internal/config, so config cannot import qrz).
+	They now live in QRZ's own registered descriptor, next to the Initialize
+	check that enforces the same numbers — one declaration, so the save-time gate
+	and the startup gate cannot drift.
 
 	C3/C4 are what stop this becoming "credentials are mandatory": a DISABLED
 	provider must still be storable half-configured (that is how an operator
 	stages one), and an anonymous provider must never be asked for credentials at
 	all.
 */
+
+// qrzDescriptor is what the real QRZ package registers (internal/lookup/qrz's
+// init). These tests declare it explicitly because internal/config CANNOT
+// import that package — internal/lookup/qrz imports internal/config, so the
+// dependency runs one way only and the registry is empty here (ADR 0062).
+// Stating it beats inheriting it from a hardcoded list, which is what this
+// replaced.
+func qrzDescriptor() lookupdef.ProviderDescriptor {
+	return lookupdef.ProviderDescriptor{
+		Name:              types.QRZLookupServiceName,
+		DisplayName:       "QRZ.com",
+		Kind:              lookupdef.KindCallsign,
+		NeedsCredentials:  true,
+		MinUsernameLen:    3,
+		MinPasswordLen:    5,
+		DefaultURL:        types.QRZLookupDefaultURL,
+		DefaultViewURL:    types.QRZLookupDefaultViewURL,
+		DefaultTimeoutSec: 10,
+	}
+}
 
 func qrzProvider(username, password string, enabled bool) types.EnrichmentConfig {
 	return types.EnrichmentConfig{
@@ -65,6 +89,7 @@ func qrzProvider(username, password string, enabled bool) types.EnrichmentConfig
 // C1 — the exact path the Remove control creates: enabled, username intact,
 // password gone.
 func TestValidateLookup_RejectsEnabledQrzWithClearedPassword(t *testing.T) {
+	withProvider(t, qrzDescriptor())
 	err := validateLookup(qrzProvider("M0ABC", "", true))
 	if err == nil {
 		t.Fatal("expected an error for an enabled QRZ with no password")
@@ -78,6 +103,7 @@ func TestValidateLookup_RejectsEnabledQrzWithClearedPassword(t *testing.T) {
 // either. Both are asserted because they are separate checks in qrz's own code
 // and a fix that mirrored only one would leave the other reachable.
 func TestValidateLookup_RejectsEnabledQrzWithShortCredentials(t *testing.T) {
+	withProvider(t, qrzDescriptor())
 	if err := validateLookup(qrzProvider("M0", "longenough", true)); err == nil {
 		t.Error("expected an error for a too-short QRZ username")
 	}
@@ -90,6 +116,7 @@ func TestValidateLookup_RejectsEnabledQrzWithShortCredentials(t *testing.T) {
 // existing "stash a partially-configured entry" behaviour (validateLookupProvider's
 // own doc comment) and the fix must not take it away.
 func TestValidateLookup_AllowsDisabledQrzWithNoCredentials(t *testing.T) {
+	withProvider(t, qrzDescriptor())
 	if err := validateLookup(qrzProvider("", "", false)); err != nil {
 		t.Errorf("a disabled QRZ with no credentials must remain valid, got: %v", err)
 	}
@@ -99,6 +126,11 @@ func TestValidateLookup_AllowsDisabledQrzWithNoCredentials(t *testing.T) {
 // rule would be "every enabled provider needs a login", which would make hamnut
 // — free and anonymous by design — impossible to enable.
 func TestValidateLookup_AllowsEnabledHamnutWithoutCredentials(t *testing.T) {
+	withProvider(t, lookupdef.ProviderDescriptor{
+		Name: types.HamNutLookupServiceName, DisplayName: "Hamnut",
+		Kind: lookupdef.KindCountry, NeedsCredentials: false,
+		DefaultURL: types.HamNutLookupDefaultURL, DefaultTimeoutSec: 10,
+	})
 	lc := types.EnrichmentConfig{
 		Hamnut: types.LookupConfig{
 			Name: types.HamNutLookupServiceName, Enabled: true,
@@ -113,6 +145,7 @@ func TestValidateLookup_AllowsEnabledHamnutWithoutCredentials(t *testing.T) {
 // C5 — a fully-credentialed enabled QRZ still passes, so the guard cannot be
 // satisfied by rejecting everything.
 func TestValidateLookup_AllowsEnabledQrzWithGoodCredentials(t *testing.T) {
+	withProvider(t, qrzDescriptor())
 	if err := validateLookup(qrzProvider("M0ABC", "s3cret", true)); err != nil {
 		t.Errorf("a properly configured QRZ must validate, got: %v", err)
 	}

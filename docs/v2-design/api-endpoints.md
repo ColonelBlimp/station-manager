@@ -216,6 +216,12 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 - **Errors:** None on the wire (always 200).
 - **Notes:** **Read-only.** The **write path is `PUT /v1/config`** (presence-aware `rigs` + `default_rig_id` — see above), used by the config SPA's Rigs tab: it GETs the catalogue here, edits a whole-catalogue draft, and PUTs it back. The SPA re-GETs this endpoint after a save (the PUT response doesn't carry the catalogue) to re-hydrate the canonical view.
 
+### `GET /v1/lookup-types`
+- **Purpose:** Data-driven descriptors for every enrichment provider compiled into this daemon, so Settings → Enrichment renders labels, help text and credential fields without a hardcoded map (ADR 0062). The direct counterpart of `/v1/forwarder-types`.
+- **Gating:** Always-on (config editing, independent of whether enrichment is enabled).
+- **Response:** **200**, body `{"types": [...]}` where each entry is `{name, display_name, help?, kind, needs_credentials, min_username_len?, min_password_len?, default_url?, default_view_url?, default_timeout_sec?}`. `kind` is `"country"` (the single prefix provider) or `"callsign"` (the ordered chain). `needs_credentials` is **always present, never omitted** — a client must be able to tell "anonymous by design" from "field absent", because hamnut sprouting login boxes is the failure it prevents.
+- **Notes:** Read-only. Only providers registered via `lookupdef.RegisterProvider` appear, i.e. those this build can actually wire. A provider present in the operator's config but ABSENT here is the "unrecognised" case: the section still renders it (the `LookupProviderInfo` shape is uniform) with its raw name and generic fields, which is what a config from a newer build looks like. An empty registry serves `{"types": []}`, never `null`. Write path for the providers themselves is `PUT /v1/config`'s `lookup` block.
+
 ### `GET /v1/forwarder-types`
 - **Purpose:** Data-driven descriptors for the config SPA's Forwarding tab, so the add-forwarder credential form renders without hardcoded per-type forms (adding a forwarder type in Go needs zero SPA change).
 - **Gating:** Always-on.

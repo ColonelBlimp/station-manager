@@ -1,29 +1,5 @@
 package types
 
-// QRZ credential limits, mirrored by QRZ's own Initialize check
-// (internal/lookup/qrz/internal.go). They live here — the one package both the
-// provider and the CONFIG VALIDATOR can import — because the validator has to
-// refuse an unusable enabled provider at PUT time. Without that, a save that
-// empties or shortens these returns 200 and the daemon fails to START at the
-// next restart, hours later, with nothing linking the two (clean-room review
-// 9732ab7914af). internal/config cannot import internal/lookup/qrz directly:
-// qrz reads its own config back through the config service, so that is a cycle.
-const (
-	QRZMinUsernameLen = 3
-	QRZMinPasswordLen = 5
-)
-
-// LookupProviderNeedsCredentials reports whether a provider is unusable without
-// a username and password. Keyed by NAME because that is all the config layer
-// has — the provider implementations are not reachable from there.
-//
-// Anonymous by design (hamnut) and any provider this build does not know are
-// both false: an unknown provider's requirements are unknowable, and refusing to
-// save one on a guess would strand config the daemon is perfectly happy with.
-func LookupProviderNeedsCredentials(name string) bool {
-	return name == QRZLookupServiceName
-}
-
 // LookupConfig is one provider's configuration block — used by both
 // CountryProvider implementations (hamnut) and CallsignProvider
 // implementations (QRZ.com, HamQTH, QRZCQ, …) under ADR 0017.

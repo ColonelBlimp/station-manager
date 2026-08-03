@@ -242,13 +242,30 @@ as Load (the same reason `normalizeLookupURLs` and `normalizeSmtpDefaults` are
 there). A negative is still a validation error.
 
 **An ENABLED source that needs credentials must have usable ones**, enforced at
-save time by `validateLookupProvider` against `types.QRZMinUsernameLen` /
-`QRZMinPasswordLen` — the same limits QRZ's own `Initialize` applies. Without
-that gate a PUT emptying or shortening them returned 200 and the daemon then
-failed to **start** at the next restart (`buildEnrichment`'s error aborts `run()`),
-hours later and with nothing linking the two. The limits live in `internal/types`
-because `internal/config` cannot import `internal/lookup/qrz` — qrz reads its own
-config back through the config service, which would be a cycle.
+save time by `validateLookupProvider`. Without that gate a PUT emptying or
+shortening them returned 200 and the daemon then failed to **start** at the next
+restart (`buildEnrichment`'s error aborts `run()`), hours later and with nothing
+linking the two.
+
+**Where a provider's facts come from: its own registration (ADR 0062).** Each
+provider package's `init()` registers a descriptor in `internal/lookupdef` — a
+true leaf — carrying its display name, help text, credential requirements and
+endpoint defaults, plus a constructor in `internal/lookup`. `config` reads the
+descriptors for URL/timeout defaulting and the credential rule; `cmd/smd`
+blank-imports the provider packages to trigger registration and wires whatever is
+registered. Adding a provider is a package and an import line, not an edit to
+`buildEnrichment`, config's defaults, config's validator and the SPA.
+
+Two consequences to know when reading config code:
+
+- **An UNREGISTERED provider is left alone**, never defaulted to empty and never
+  refused: the operator may be running config from a newer build, and refusing to
+  load it would strand them on a daemon that will not start.
+- **`internal/config`'s own unit tests see an EMPTY registry**, because they
+  cannot import a provider package (`internal/lookup/qrz` imports
+  `internal/config`). They register the descriptors they assume — which is why
+  each test now states its providers instead of inheriting them from a hardcoded
+  list.
 
 ### (a″) forwarders are non-sparse + config-driven (ADR 0039)
 

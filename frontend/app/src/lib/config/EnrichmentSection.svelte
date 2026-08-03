@@ -9,10 +9,11 @@
     // service, whether it is on, whether this build can edit it, and whether it
     // has unsaved changes.
     //
-    // Unlike Forwarding there is no descriptor endpoint, so the friendly name
-    // and blurb come from a small map in enrichment.svelte.ts. A provider not in
-    // it still renders, with the uniform wire fields — LookupProviderInfo has a
-    // fixed shape, so only the presentation is unknown, not the form.
+    // Friendly name, blurb and whether a source needs a login all come from
+    // GET /v1/lookup-types (ADR 0062) — the same data-driven shape Forwarding
+    // uses, so adding a provider in Go needs no change here. A provider the
+    // daemon does not describe still renders: the wire shape is uniform, so only
+    // the presentation is unknown, not the form.
     import { onMount } from 'svelte';
     import { enrichmentState } from './enrichment.svelte';
     import MaskedField from './MaskedField.svelte';
@@ -96,9 +97,6 @@
                                         title="Unsaved changes">*</span
                                     >{/if}
                             </span>
-                            <span class="text-xs text-muted">
-                                {p.country ? 'country' : 'callsign'}
-                            </span>
                             <!-- Same pill as Forwarding's, so the two sections
                                  read as one page. -->
                             <span
@@ -115,8 +113,8 @@
                     </summary>
 
                     <div class="space-y-3 border-t border-line px-3 py-3">
-                        {#if meta}
-                            <p class="text-sm text-muted">{meta.blurb}</p>
+                        {#if meta?.help}
+                            <p class="text-sm text-muted">{meta.help}</p>
                         {:else}
                             <p class="text-sm text-warning">
                                 This lookup source is not recognised by this build, so there is no
@@ -153,7 +151,17 @@
                              unrecognised source does get them: the wire shape is
                              uniform, so the fields are known even when the
                              service is not. -->
-                        {#if !meta || meta.credentialed}
+                        <!-- Credential fields show when the daemon says this source needs
+                             them OR when it does not describe the source at all. That
+                             second case is deliberately the OPPOSITE fail-open to the
+                             validator's: the validator must not REQUIRE a login it
+                             cannot vouch for (it would refuse to save a config from a
+                             newer build), but the UI must not HIDE fields the provider
+                             plainly uses — an unrecognised source can carry a stored
+                             password, and hiding the box makes it unrotatable from
+                             here. Hamnut is the only source that gets no boxes, and
+                             only because the daemon says so. -->
+                        {#if !meta || meta.needs_credentials}
                             <label class="flex w-72 flex-col gap-1">
                                 <span class="text-sm font-medium text-ink">Username</span>
                                 <input

@@ -61,11 +61,23 @@ var frozenInternalImports = map[string]struct{}{
 	"internal/ft8":                 {},
 	"internal/hardware":            {},
 	"internal/logging":             {},
-	"internal/lookup":              {},
-	"internal/qsoservice":          {},
-	"internal/types":               {},
-	"internal/utils":               {},
-	"manual":                       {},
+	// Added 2026-08-03 with intent (ADR 0062). GET /v1/lookup-types serves the
+	// enrichment-provider descriptors, exactly as GET /v1/forwarder-types serves
+	// forwarder ones from internal/forwarding — which this package has always
+	// imported for the same reason. Without it the Settings section keeps a
+	// hardcoded provider map and adding a lookup service stays an SPA change.
+	//
+	// A LEAF: descriptors, a registry, and nothing else — no behaviour, no
+	// further internal imports beyond internal/types. Deliberately split out of
+	// internal/lookup, which pulls in internal/database/sqlite and could not be
+	// imported here or from internal/config without a cycle. Same class of
+	// dependency as enums/upload/origin above.
+	"internal/lookupdef":  {},
+	"internal/lookup":     {},
+	"internal/qsoservice": {},
+	"internal/types":      {},
+	"internal/utils":      {},
+	"manual":              {},
 }
 
 // TestPackageBoundary_ApiImportsAreFrozen freezes internal/api's module-internal
