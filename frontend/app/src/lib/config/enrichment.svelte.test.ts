@@ -131,19 +131,31 @@ function providerNamed(body: Record<string, unknown>, name: string): Provider | 
     return chainOf(body).find((p) => p.name === name);
 }
 
+const QRZ = 'qrzlookupservice';
+const HAMNUT = 'hamnutlookupservice';
+
+/** The live QRZ draft. Every source is a draft now, so edits go through these. */
+function qrzDraft() {
+    return enrichmentState.draft.providers.find((p) => p.name === QRZ)!;
+}
+function hamnutDraft() {
+    return enrichmentState.draft.providers.find((p) => p.name === HAMNUT)!;
+}
+
 describe('enrichmentState wire behaviour', () => {
     // W1 — the secret never arrives; only that one is stored.
     it('W1: loads QRZ password_set without any value', async () => {
         await loadFresh();
-        expect(enrichmentState.draft.qrzPasswordSet).toBe(true);
-        expect(enrichmentState.draft.qrzPassword).toBe('');
-        expect(enrichmentState.draft.qrzUsername).toBe('M0ABC');
+        const qrz = qrzDraft();
+        expect(qrz.passwordSet).toBe(true);
+        expect(qrz.password).toBe('');
+        expect(qrz.username).toBe('M0ABC');
     });
 
     // W2 — N2. An untouched password box puts no `password` on the wire.
     it('W2: saving an unrelated edit sends no QRZ password field', async () => {
         const puts = await loadFresh();
-        enrichmentState.draft.qrzUsername = 'M0XYZ';
+        qrzDraft().username = 'M0XYZ';
         await enrichmentState.save();
 
         const qrz = providerNamed(puts[0], 'qrzlookupservice')!;
@@ -155,7 +167,7 @@ describe('enrichmentState wire behaviour', () => {
     // W3 — N3. Wire-only by necessity; see the header.
     it('W3: a typed QRZ password rides', async () => {
         const puts = await loadFresh();
-        enrichmentState.setQrzPassword('typed-pw');
+        enrichmentState.setPassword(QRZ, 'typed-pw');
         await enrichmentState.save();
 
         const qrz = providerNamed(puts[0], 'qrzlookupservice')!;
@@ -167,8 +179,8 @@ describe('enrichmentState wire behaviour', () => {
     // value so the two intents can never both be on the wire.
     it('W4: an explicit remove sends password_clear and no password', async () => {
         const puts = await loadFresh();
-        enrichmentState.setQrzPassword('half-typed');
-        enrichmentState.clearQrzPassword();
+        enrichmentState.setPassword(QRZ, 'half-typed');
+        enrichmentState.clearPassword(QRZ);
         await enrichmentState.save();
 
         const qrz = providerNamed(puts[0], 'qrzlookupservice')!;
@@ -179,8 +191,8 @@ describe('enrichmentState wire behaviour', () => {
     // W4b — and typing after a remove cancels the remove (last intent wins).
     it('W4b: typing after a remove cancels the remove', async () => {
         const puts = await loadFresh();
-        enrichmentState.clearQrzPassword();
-        enrichmentState.setQrzPassword('changed-mind');
+        enrichmentState.clearPassword(QRZ);
+        enrichmentState.setPassword(QRZ, 'changed-mind');
         await enrichmentState.save();
 
         const qrz = providerNamed(puts[0], 'qrzlookupservice')!;
@@ -192,7 +204,7 @@ describe('enrichmentState wire behaviour', () => {
     // survive the save.
     it('W5: a provider this build cannot render is preserved, not deleted', async () => {
         const puts = await loadFresh();
-        enrichmentState.draft.qrzEnabled = false;
+        qrzDraft().enabled = false;
         await enrichmentState.save();
 
         const names = chainOf(puts[0]).map((p) => p.name);
@@ -203,7 +215,7 @@ describe('enrichmentState wire behaviour', () => {
     // pass W5 and leave a provider the daemon rejects the moment it is enabled.
     it('W5b: the preserved provider keeps its url, username and timeout', async () => {
         const puts = await loadFresh();
-        enrichmentState.draft.qrzEnabled = false;
+        qrzDraft().enabled = false;
         await enrichmentState.save();
 
         const other = providerNamed(puts[0], 'hamqth')!;
@@ -220,7 +232,7 @@ describe('enrichmentState wire behaviour', () => {
     // re-defaulted because QRZ happens to be a provider Normalize knows.
     it('W5c: QRZ keeps its daemon-defaulted url and view_url', async () => {
         const puts = await loadFresh();
-        enrichmentState.draft.qrzUsername = 'M0XYZ';
+        qrzDraft().username = 'M0XYZ';
         await enrichmentState.save();
 
         const qrz = providerNamed(puts[0], 'qrzlookupservice')!;
@@ -234,7 +246,7 @@ describe('enrichmentState wire behaviour', () => {
     // concurrent identity or power change made between our GET and our PUT.
     it('W6: the PUT carries only lookup — no station blocks to clobber', async () => {
         const puts = await loadFresh();
-        enrichmentState.draft.hamnutEnabled = false;
+        hamnutDraft().enabled = false;
         await enrichmentState.save();
 
         expect(Object.keys(puts[0])).toEqual(['lookup']);
@@ -267,14 +279,14 @@ describe('enrichmentState wire behaviour', () => {
     // W8 — N8. Cancel drops both transient intents, not just the visible fields.
     it('W8: cancel discards a typed password and a pending remove', async () => {
         await loadFresh();
-        enrichmentState.draft.qrzUsername = 'EDITED';
-        enrichmentState.setQrzPassword('typed');
-        enrichmentState.clearQrzPassword();
+        qrzDraft().username = 'EDITED';
+        enrichmentState.setPassword(QRZ, 'typed');
+        enrichmentState.clearPassword(QRZ);
         enrichmentState.reset();
 
-        expect(enrichmentState.draft.qrzUsername).toBe('M0ABC');
-        expect(enrichmentState.draft.qrzPassword).toBe('');
-        expect(enrichmentState.draft.qrzPasswordCleared).toBe(false);
+        expect(qrzDraft().username).toBe('M0ABC');
+        expect(qrzDraft().password).toBe('');
+        expect(qrzDraft().passwordCleared).toBe(false);
         expect(enrichmentState.dirty).toBe(false);
     });
 
@@ -283,7 +295,7 @@ describe('enrichmentState wire behaviour', () => {
     it('W9: a pending remove alone marks the form dirty', async () => {
         await loadFresh();
         expect(enrichmentState.dirty).toBe(false);
-        enrichmentState.clearQrzPassword();
+        enrichmentState.clearPassword(QRZ);
         expect(enrichmentState.dirty).toBe(true);
     });
 
@@ -293,13 +305,13 @@ describe('enrichmentState wire behaviour', () => {
             { code: 'invalid_lookup', message: 'lookup.chain[0]: url is empty' },
             400
         );
-        enrichmentState.draft.qrzUsername = 'M0XYZ';
-        enrichmentState.setQrzPassword('kept-pw');
+        qrzDraft().username = 'M0XYZ';
+        enrichmentState.setPassword(QRZ, 'kept-pw');
         await enrichmentState.save();
 
         expect(puts).toHaveLength(1);
-        expect(enrichmentState.draft.qrzUsername).toBe('M0XYZ');
-        expect(enrichmentState.draft.qrzPassword).toBe('kept-pw');
+        expect(qrzDraft().username).toBe('M0XYZ');
+        expect(qrzDraft().password).toBe('kept-pw');
         expect(enrichmentState.dirty).toBe(true);
     });
 });

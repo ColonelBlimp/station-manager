@@ -1476,6 +1476,23 @@ func validateLookupProvider(label string, p types.LookupConfig) error {
 	if (p.Username != "" || p.Password != "") && !lookupTransportSecure(p.URL) {
 		return fmt.Errorf("lookup.%s: url must use https when credentials are set (http allowed only for loopback)", label)
 	}
+	// An ENABLED provider that cannot authenticate must be refused HERE, at the
+	// save, rather than at the next daemon start. QRZ's own Initialize enforces
+	// these same limits, and a failure there aborts buildEnrichment and with it
+	// the whole daemon — so a 200 on this PUT would be a station that does not
+	// come back up, with nothing to connect it to the settings change that did
+	// it. Reachable in one click since the Settings → Enrichment "Remove stored
+	// password" control shipped (clean-room review 9732ab7914af).
+	if types.LookupProviderNeedsCredentials(p.Name) {
+		if len(p.Username) < types.QRZMinUsernameLen {
+			return fmt.Errorf("lookup.%s: username must be at least %d characters when enabled",
+				label, types.QRZMinUsernameLen)
+		}
+		if len(p.Password) < types.QRZMinPasswordLen {
+			return fmt.Errorf("lookup.%s: password must be at least %d characters when enabled",
+				label, types.QRZMinPasswordLen)
+		}
+	}
 	// User-Agent is checked at provider Initialize time (sourced from
 	// the daemon's global Config.UserAgent, not per-provider config).
 	return nil

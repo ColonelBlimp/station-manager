@@ -1,11 +1,18 @@
 <script lang="ts">
-    // Enrichment section — callsign/country lookup providers + cache freshness
+    // Enrichment section — callsign/country lookup sources + cache freshness
     // (ADR 0017). Ported from the standalone config SPA's Enrichment tab.
     //
-    // Provider-SPECIFIC by choice (QRZ + Hamnut), not a generic chain editor:
-    // those are the only two implemented, and unlike Forwarding there is no
-    // descriptor endpoint to drive a data-driven form from. The save still
-    // round-trips every provider — see enrichment.svelte.ts.
+    // One disclosure per SOURCE, the Forwarding shape (operator, 2026-08-03):
+    // the list grows with every provider the daemon gains, so everything
+    // expanded is a page that only gets longer, and the summary has to carry
+    // enough that collapsing loses nothing an operator scans for — which
+    // service, whether it is on, whether this build can edit it, and whether it
+    // has unsaved changes.
+    //
+    // Unlike Forwarding there is no descriptor endpoint, so the friendly name
+    // and blurb come from a small map in enrichment.svelte.ts. A provider not in
+    // it still renders, with the uniform wire fields — LookupProviderInfo has a
+    // fixed shape, so only the presentation is unknown, not the form.
     import { onMount } from 'svelte';
     import { enrichmentState } from './enrichment.svelte';
     import MaskedField from './MaskedField.svelte';
@@ -48,91 +55,145 @@
         <div class="space-y-8">
             <p class="text-sm text-muted">
                 Where Station Manager fills in a contacted station’s details. Lookups never block
-                logging — when a provider is unreachable the QSO is logged with whatever is known.
+                logging — when a source is unreachable the QSO is logged with whatever is known.
+                Passwords are stored on the daemon and never sent back to the browser, so leaving
+                one blank keeps the saved value.
             </p>
 
-            <section class="space-y-3">
-                <h2 class="text-base font-semibold text-ink">Callsign lookup — QRZ.com</h2>
-                <p class="text-sm text-muted">
-                    Fills name, grid and address from QRZ. Needs a QRZ subscription with XML/API
-                    access.
-                </p>
-                <label class="flex items-center gap-2 text-sm text-ink">
-                    <input
-                        type="checkbox"
-                        class="cursor-pointer"
-                        bind:checked={enrichmentState.draft.qrzEnabled}
-                    />
-                    Enabled
-                </label>
-                <label class="flex w-72 flex-col gap-1">
-                    <span class="text-sm font-medium text-ink">Username</span>
-                    <input
-                        class="input"
-                        autocomplete="off"
-                        spellcheck="false"
-                        bind:value={enrichmentState.draft.qrzUsername}
-                    />
-                </label>
-                <label class="flex w-72 flex-col gap-1">
-                    <span class="text-sm font-medium text-ink">Password</span>
-                    <MaskedField
-                        value={enrichmentState.draft.qrzPassword}
-                        oninput={(v: string) => enrichmentState.setQrzPassword(v)}
-                        placeholder={enrichmentState.draft.qrzPasswordSet
-                            ? '•••••••• (set — leave blank to keep)'
-                            : ''}
-                    />
-                </label>
-
-                <!-- Removal is a third state the box cannot express: it looks
-                     identical whether blank means "keep" or "erase". Offered
-                     only when something is stored — a control that appears to
-                     work and does nothing teaches the operator it worked. -->
-                {#if enrichmentState.draft.qrzPasswordSet}
-                    {#if enrichmentState.draft.qrzPasswordCleared}
-                        <div
-                            class="flex w-72 flex-col gap-2 rounded-md border border-warning bg-surface-muted px-3 py-2"
-                        >
-                            <span class="text-xs text-warning">
-                                The stored QRZ password will be removed when you save. Lookups will
-                                fail until a new one is entered.
+            {#each enrichmentState.draft.providers as p (p.name)}
+                {@const meta = enrichmentState.metaFor(p.name)}
+                {@const edited = enrichmentState.hasEdits(p.name)}
+                <details class="rounded-md border border-line" open={edited || undefined}>
+                    <!-- A source with unsaved edits CANNOT be collapsed: hiding
+                         a pending change behind a closed disclosure is how an
+                         operator saves something they have forgotten they
+                         typed. preventDefault stops the toggle outright rather
+                         than letting it close and snapping back, which reads as
+                         a broken control. Save or Cancel is the way out. -->
+                    <summary
+                        class="cursor-pointer px-3 py-2 select-none"
+                        title={edited ? 'Save or cancel before collapsing' : undefined}
+                        onclick={(e) => {
+                            if (
+                                edited &&
+                                e.currentTarget.parentElement instanceof HTMLDetailsElement &&
+                                e.currentTarget.parentElement.open
+                            ) {
+                                e.preventDefault();
+                            }
+                        }}
+                    >
+                        <!-- inline-flex so the row sits BESIDE the native
+                             triangle rather than below it. -->
+                        <span class="inline-flex items-center gap-2 align-middle">
+                            <span class="font-semibold text-ink">
+                                {enrichmentState.labelFor(p.name)}{#if edited}<span
+                                        class="text-warning"
+                                        title="Unsaved changes">*</span
+                                    >{/if}
                             </span>
-                            <button
-                                class="btn self-start"
-                                type="button"
-                                onclick={() => enrichmentState.keepQrzPassword()}
+                            <span class="text-xs text-muted">
+                                {p.country ? 'country' : 'callsign'}
+                            </span>
+                            <!-- Same pill as Forwarding's, so the two sections
+                                 read as one page. -->
+                            <span
+                                class="rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase {p.enabled
+                                    ? 'border-green-500/40 bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-400'
+                                    : 'border-line bg-surface-muted text-muted'}"
                             >
-                                Keep stored password
-                            </button>
-                        </div>
-                    {:else}
-                        <button
-                            class="btn self-start"
-                            type="button"
-                            onclick={() => enrichmentState.clearQrzPassword()}
-                        >
-                            Remove stored password
-                        </button>
-                    {/if}
-                {/if}
-            </section>
+                                {p.enabled ? 'enabled' : 'disabled'}
+                            </span>
+                            {#if !meta}
+                                <span class="text-xs text-warning">unrecognised</span>
+                            {/if}
+                        </span>
+                    </summary>
 
-            <section class="space-y-3">
-                <h2 class="text-base font-semibold text-ink">Country lookup — Hamnut</h2>
-                <p class="text-sm text-muted">
-                    Resolves DXCC / CQ / ITU zones from the callsign prefix. Free and anonymous — no
-                    credentials needed.
-                </p>
-                <label class="flex items-center gap-2 text-sm text-ink">
-                    <input
-                        type="checkbox"
-                        class="cursor-pointer"
-                        bind:checked={enrichmentState.draft.hamnutEnabled}
-                    />
-                    Enabled
-                </label>
-            </section>
+                    <div class="space-y-3 border-t border-line px-3 py-3">
+                        {#if meta}
+                            <p class="text-sm text-muted">{meta.blurb}</p>
+                        {:else}
+                            <p class="text-sm text-warning">
+                                This lookup source is not recognised by this build, so there is no
+                                description for it. Its settings are preserved on save, and the
+                                fields below still apply.
+                            </p>
+                        {/if}
+
+                        <label class="flex w-fit items-center gap-1.5 text-sm text-ink">
+                            <input
+                                type="checkbox"
+                                bind:checked={p.enabled}
+                                class="cursor-pointer"
+                            />
+                            Enabled
+                        </label>
+
+                        <!-- Hamnut is anonymous BY DESIGN, so it gets no
+                             credential boxes at all rather than empty ones the
+                             operator might think they are meant to fill. An
+                             unrecognised source does get them: the wire shape is
+                             uniform, so the fields are known even when the
+                             service is not. -->
+                        {#if !meta || meta.credentialed}
+                            <label class="flex w-72 flex-col gap-1">
+                                <span class="text-sm font-medium text-ink">Username</span>
+                                <input
+                                    class="input"
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                    bind:value={p.username}
+                                />
+                            </label>
+                            <label class="flex w-72 flex-col gap-1">
+                                <span class="text-sm font-medium text-ink">Password</span>
+                                <MaskedField
+                                    value={p.password}
+                                    oninput={(v: string) => enrichmentState.setPassword(p.name, v)}
+                                    placeholder={p.passwordSet
+                                        ? '•••••••• (set — leave blank to keep)'
+                                        : ''}
+                                />
+                            </label>
+
+                            <!-- Removal is a third state the box cannot express:
+                                 it looks identical whether blank means "keep" or
+                                 "erase". Offered only when something is stored —
+                                 a control that appears to work and does nothing
+                                 teaches the operator that it worked. -->
+                            {#if p.passwordSet}
+                                {#if p.passwordCleared}
+                                    <div
+                                        class="flex w-72 flex-col gap-2 rounded-md border border-warning bg-surface-muted px-3 py-2"
+                                    >
+                                        <span class="text-xs text-warning">
+                                            The stored password will be removed when you save, and
+                                            this source has been switched off — it can't run without
+                                            a login. Enter a new password to use it again.
+                                        </span>
+                                        <button
+                                            class="btn self-start"
+                                            type="button"
+                                            onclick={() => enrichmentState.keepPassword(p.name)}
+                                        >
+                                            Keep stored password
+                                        </button>
+                                    </div>
+                                {:else}
+                                    <button
+                                        class="btn self-start"
+                                        type="button"
+                                        onclick={() => enrichmentState.clearPassword(p.name)}
+                                    >
+                                        Remove stored password
+                                    </button>
+                                {/if}
+                            {/if}
+                        {/if}
+                    </div>
+                </details>
+            {/each}
 
             <section>
                 <h2 class="mb-3 text-base font-semibold text-ink">Cache freshness</h2>

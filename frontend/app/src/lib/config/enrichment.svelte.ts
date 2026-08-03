@@ -2,25 +2,24 @@
     Enrichment settings state (app Settings → Enrichment, ADR 0044 / ADR 0017) —
     the port of the standalone config SPA's Enrichment tab.
 
-    THE SECTION IS PROVIDER-SPECIFIC; THE PAYLOAD IS NOT. Only two providers are
-    implemented (hamnut for country, QRZ for callsign) and there is no
-    /v1/lookup-types descriptor endpoint the way Forwarding has, so a "generic"
-    chain editor would hardcode the same field knowledge with more machinery —
-    CLAUDE.md's build-specific rule. But `mergeLookup` replaces the chain WHOLE,
-    so the payload must still carry every provider, including any this build
-    cannot render. That asymmetry is the whole risk in this module: the UI knows
-    about QRZ, and the save has to know about everything.
+    EVERY SOURCE THE DAEMON REPORTS IS A DRAFT, including ones this build has no
+    specific knowledge of. That is not generality for its own sake: `mergeLookup`
+    replaces the chain WHOLE, with no merge-by-name for absent entries, so a
+    payload that omits a provider DELETES it. Holding every provider as a draft
+    makes the safe payload the natural one to build, rather than something the
+    save has to remember to reconstruct.
 
-    Hence #entry — the last loaded daemon view, kept verbatim and used as the
-    base for every payload. The form edits a few named fields on top of it; it
-    never becomes the source of the payload.
+    Per-provider PRESENTATION is still specific (PROVIDERS below): only hamnut
+    and QRZ are implemented, and unlike Forwarding there is no descriptor
+    endpoint to drive a data-driven form from. An unrecognised provider gets the
+    generic treatment — the wire shape (LookupProviderInfo) is uniform, so its
+    username/password are editable; only the friendly name and blurb are missing.
 
-    Passwords follow the same three-state contract as Email (see
-    email.svelte.ts): omitted = keep, typed = replace, `password_clear` = remove.
-    TTLs are the mirror-image case and easy to get backwards: here 0 is a
-    MEANINGFUL value ("never goes stale") and BLANK is the one that means
-    "default", which is why they are held as strings — as numbers the two
-    collapse into the same 0.
+    Passwords follow the same three-state contract as Email (email.svelte.ts):
+    omitted = keep, typed = replace, `password_clear` = remove. TTLs are the
+    mirror-image case and easy to get backwards — here 0 is MEANINGFUL ("never
+    goes stale") and BLANK means "use the default", which is why they are held as
+    strings: as numbers the two collapse into the same 0.
 */
 import {
     fetchLookup,
@@ -34,17 +33,48 @@ import {
 } from '../api/lookup';
 import { toasts } from '../ui/toasts.svelte';
 
-/** The named fields the form edits. Everything else rides via #entry. */
-export interface EnrichmentDraft {
-    hamnutEnabled: boolean;
-    qrzEnabled: boolean;
-    qrzUsername: string;
+/** What this build knows about a provider, beyond the uniform wire shape. */
+export interface ProviderMeta {
+    label: string;
+    blurb: string;
+    /** False only for a provider that is anonymous by design (hamnut). */
+    credentialed: boolean;
+}
+
+const PROVIDERS: Record<string, ProviderMeta> = {
+    [HAMNUT_PROVIDER]: {
+        label: 'Hamnut',
+        blurb: 'Resolves DXCC / CQ / ITU zones from the callsign prefix. Free and anonymous — no credentials needed.',
+        credentialed: false,
+    },
+    [QRZ_PROVIDER]: {
+        label: 'QRZ.com',
+        blurb: 'Fills name, grid and address from QRZ. Needs a QRZ subscription with XML/API access.',
+        credentialed: true,
+    },
+};
+
+/** One lookup source as the form holds it: the masked entry plus local edits. */
+export interface ProviderDraft {
+    name: string;
+    /** hamnut is the single country provider; the rest are the callsign chain. */
+    country: boolean;
+    enabled: boolean;
+    username: string;
     /** What the operator typed. Blank = not retyped, never "erase it". */
-    qrzPassword: string;
-    /** Whether the daemon holds a QRZ password. Read-only; from the masked GET. */
-    qrzPasswordSet: boolean;
+    password: string;
+    /** Whether the daemon holds one. Read-only; from the masked GET. */
+    passwordSet: boolean;
     /** Operator pressed Remove — the stored password goes on the next save. */
-    qrzPasswordCleared: boolean;
+    passwordCleared: boolean;
+    /** Round-tripped untouched: the daemon takes these AS SENT. */
+    url: string;
+    timeoutSec: number;
+    viewUrl: string;
+}
+
+export interface EnrichmentDraft {
+    providers: ProviderDraft[];
     /** Blank = use the daemon default. "0" = never goes stale. Not the same. */
     countryTtlDays: string;
     stationTtlDays: string;
@@ -67,33 +97,31 @@ const BLANK: LookupEntry = {
     refresh_max_in_flight: 0,
 };
 
-function draftFrom(e: LookupEntry): EnrichmentDraft {
-    const qrz = e.chain.find((p) => p.name === QRZ_PROVIDER);
+function providerDraft(p: LookupProvider, country: boolean): ProviderDraft {
     return {
-        hamnutEnabled: e.hamnut.enabled,
-        qrzEnabled: qrz?.enabled ?? false,
-        qrzUsername: qrz?.username ?? '',
-        qrzPassword: '',
-        qrzPasswordSet: qrz?.password_set ?? false,
-        qrzPasswordCleared: false,
+        name: p.name,
+        country,
+        enabled: p.enabled,
+        username: p.username,
+        password: '',
+        passwordSet: p.password_set,
+        passwordCleared: false,
+        url: p.url,
+        timeoutSec: p.timeout_sec,
+        viewUrl: p.view_url,
+    };
+}
+
+function draftFrom(e: LookupEntry): EnrichmentDraft {
+    return {
+        // hamnut first: it is the country source and the only non-chain entry.
+        providers: [providerDraft(e.hamnut, true), ...e.chain.map((p) => providerDraft(p, false))],
         // A stored 0 renders as "0", NOT as blank — unlike the SMTP port, where
         // 0 meant "unset". Here 0 is the operator's "never goes stale" and
         // blanking the box would misreport it as "using the default".
         countryTtlDays: String(e.country_ttl_days),
         stationTtlDays: String(e.station_ttl_days),
         refreshMaxInFlight: String(e.refresh_max_in_flight),
-    };
-}
-
-/** Round-trip a provider unchanged: every field the daemon gave us goes back. */
-function preserve(p: LookupProvider): LookupProviderPayload {
-    return {
-        name: p.name,
-        enabled: p.enabled,
-        url: p.url,
-        username: p.username,
-        timeout_sec: p.timeout_sec,
-        view_url: p.view_url,
     };
 }
 
@@ -104,13 +132,37 @@ class EnrichmentState {
     error = $state('');
     draft = $state<EnrichmentDraft>(draftFrom(BLANK));
 
-    // The daemon's last view, verbatim. The base of every payload — see the
-    // module header. NOT reactive state the form binds to.
-    #entry: LookupEntry = BLANK;
-
     #pristine = $state(JSON.stringify(draftFrom(BLANK)));
 
     dirty = $derived(JSON.stringify(this.draft) !== this.#pristine);
+
+    /** What this build knows about a provider, or undefined if it doesn't. */
+    metaFor(name: string): ProviderMeta | undefined {
+        return PROVIDERS[name];
+    }
+
+    /** A provider's display name, never blank — falls back to its wire name. */
+    labelFor(name: string): string {
+        return PROVIDERS[name]?.label ?? name;
+    }
+
+    /**
+     * True when THIS source has unsaved edits.
+     *
+     * Exists because each source collapses into a disclosure: the footer can say
+     * "unsaved changes" but not where, so a collapsed card has to mark itself.
+     * Compared against the pristine snapshot rather than tracked as a flag, so
+     * an edit that is typed and then undone stops counting.
+     */
+    hasEdits(name: string): boolean {
+        const base = (JSON.parse(this.#pristine) as EnrichmentDraft).providers.find(
+            (p) => p.name === name
+        );
+        const now = this.draft.providers.find((p) => p.name === name);
+        if (!now) return false;
+        if (!base) return true; // unknown to the snapshot — treat as changed
+        return JSON.stringify(now) !== JSON.stringify(base);
+    }
 
     async load(): Promise<void> {
         if (this.loading) return;
@@ -130,8 +182,8 @@ class EnrichmentState {
     }
 
     async save(): Promise<void> {
-        // `loaded` is a precondition: a whole-chain write built from an entry we
-        // never successfully fetched would delete every provider.
+        // `loaded` is a precondition: a whole-chain write built from a draft we
+        // never successfully filled would delete every provider.
         if (this.saving || !this.loaded || !this.dirty) return;
         this.saving = true;
         try {
@@ -148,20 +200,35 @@ class EnrichmentState {
     }
 
     /** Record a typed password; supersedes a pending removal. */
-    setQrzPassword(v: string): void {
-        this.draft.qrzPassword = v;
-        if (v !== '') this.draft.qrzPasswordCleared = false;
+    setPassword(name: string, v: string): void {
+        const p = this.draft.providers.find((x) => x.name === name);
+        if (!p) return;
+        p.password = v;
+        if (v !== '') p.passwordCleared = false;
     }
 
-    /** Mark the stored QRZ password for removal, discarding any half-typed value. */
-    clearQrzPassword(): void {
-        this.draft.qrzPassword = '';
-        this.draft.qrzPasswordCleared = true;
+    /**
+     * Mark a stored password for removal, discarding any half-typed value.
+     *
+     * ALSO SWITCHES THE SOURCE OFF when it is one that cannot work without
+     * credentials. The daemon refuses an enabled QRZ with no password (it used
+     * to accept it and then fail to START at the next restart — clean-room
+     * review 9732ab7914af), so leaving the toggle on would build a payload
+     * guaranteed to 400. Turning it off is also what removing a login MEANS:
+     * rotating one is served by typing a new value, not by removing the old.
+     */
+    clearPassword(name: string): void {
+        const p = this.draft.providers.find((x) => x.name === name);
+        if (!p) return;
+        p.password = '';
+        p.passwordCleared = true;
+        if (this.metaFor(p.name)?.credentialed) p.enabled = false;
     }
 
     /** Undo a pending removal. */
-    keepQrzPassword(): void {
-        this.draft.qrzPasswordCleared = false;
+    keepPassword(name: string): void {
+        const p = this.draft.providers.find((x) => x.name === name);
+        if (p) p.passwordCleared = false;
     }
 
     reset(): void {
@@ -169,29 +236,18 @@ class EnrichmentState {
     }
 
     /**
-     * Build the PUT payload from the LOADED ENTRY, with the form's edits applied
-     * on top — never from the form alone. The chain is a whole-list replace
-     * daemon-side, so a provider missing here is a provider deleted.
+     * Build the PUT payload. EVERY provider rides, because the chain is a
+     * whole-list replace daemon-side — a provider missing here is a provider
+     * deleted, along with its url and timeout.
      */
     buildPayload(): LookupPayload {
         const d = this.draft;
-
-        const chain = this.#entry.chain.map(preserve);
-        let qrz = chain.find((p) => p.name === QRZ_PROVIDER);
-        if (!qrz) {
-            // First run: the daemon seeds a QRZ template, but a config that
-            // predates it (or had the entry removed by hand) still needs one.
-            qrz = { name: QRZ_PROVIDER, enabled: false };
-            chain.push(qrz);
-        }
-        qrz.enabled = d.qrzEnabled;
-        qrz.username = d.qrzUsername.trim();
-        if (d.qrzPasswordCleared) qrz.password_clear = true;
-        else if (d.qrzPassword !== '') qrz.password = d.qrzPassword;
+        const hamnut = d.providers.find((p) => p.country);
+        const chain = d.providers.filter((p) => !p.country);
 
         const payload: LookupPayload = {
-            hamnut: { ...preserve(this.#entry.hamnut), enabled: d.hamnutEnabled },
-            chain,
+            hamnut: toPayload(hamnut ?? providerDraft(BLANK.hamnut, true)),
+            chain: chain.map(toPayload),
             refresh_max_in_flight: Number(d.refreshMaxInFlight) || 0,
         };
         // Omit a blank TTL — that is how the wire says "use the default". An
@@ -202,10 +258,28 @@ class EnrichmentState {
     }
 
     #apply(e: LookupEntry): void {
-        this.#entry = e;
         this.draft = draftFrom(e);
         this.#pristine = JSON.stringify(this.draft);
     }
+}
+
+/**
+ * One provider on the wire. url / timeout_sec / view_url are round-tripped
+ * verbatim: the daemon takes them AS SENT and re-stamps defaults only for the
+ * two names Normalize knows, so anything else is silently emptied if dropped.
+ */
+function toPayload(p: ProviderDraft): LookupProviderPayload {
+    const out: LookupProviderPayload = {
+        name: p.name,
+        enabled: p.enabled,
+        url: p.url,
+        username: p.username.trim(),
+        timeout_sec: p.timeoutSec,
+        view_url: p.viewUrl,
+    };
+    if (p.passwordCleared) out.password_clear = true;
+    else if (p.password !== '') out.password = p.password;
+    return out;
 }
 
 export const enrichmentState = new EnrichmentState();

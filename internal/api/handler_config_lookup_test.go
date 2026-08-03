@@ -48,7 +48,7 @@ func TestHandlePutConfig_LookupPasswordCleared(t *testing.T) {
 	})
 
 	body := `{"lookup":{"hamnut":{"name":"hamnutlookupservice"},` +
-		`"chain":[{"name":"qrzlookupservice","enabled":true,"username":"M0ABC",` +
+		`"chain":[{"name":"qrzlookupservice","enabled":false,"username":"M0ABC",` +
 		`"password_clear":true}]}}`
 	w := putConfigSmtp(t, srv, body)
 	if w.Code != http.StatusOK {
@@ -63,7 +63,7 @@ func TestHandlePutConfig_LookupPasswordCleared(t *testing.T) {
 		t.Errorf("stored password = %q after an explicit clear, want removed", chain[0].Password)
 	}
 	// The rest of the provider is untouched by the clear.
-	if chain[0].Username != "M0ABC" || !chain[0].Enabled {
+	if chain[0].Username != "M0ABC" {
 		t.Errorf("clearing the password disturbed the provider: %+v", chain[0])
 	}
 
@@ -86,7 +86,7 @@ func TestHandlePutConfig_LookupClearBeatsTypedPassword(t *testing.T) {
 	})
 
 	body := `{"lookup":{"hamnut":{"name":"hamnutlookupservice"},` +
-		`"chain":[{"name":"qrzlookupservice","enabled":true,"username":"M0ABC",` +
+		`"chain":[{"name":"qrzlookupservice","enabled":false,"username":"M0ABC",` +
 		`"password":"typed-pw","password_clear":true}]}}`
 	w := putConfigSmtp(t, srv, body)
 	if w.Code != http.StatusOK {
@@ -97,6 +97,42 @@ func TestHandlePutConfig_LookupClearBeatsTypedPassword(t *testing.T) {
 	// all three outcomes apart: kept-stored, took-typed, cleared.
 	if got := srv.cfg.Snapshot().Lookup.Chain[0].Password; got != "" {
 		t.Errorf("stored password = %q, want the explicit clear to win", got)
+	}
+}
+
+// L2b: clearing the password of a provider left ENABLED is REFUSED, and the
+// stored config is untouched.
+//
+// This is the P1 from clean-room review 9732ab7914af. The save used to return
+// 200 and the daemon then failed to START at the next restart, because QRZ's own
+// Initialize rejects an empty password and buildEnrichment's error aborts run().
+// Hours could separate the settings change from the dead station.
+//
+// The second assertion is the load-bearing half: a 400 that had already written
+// the empty password would leave exactly the state the 400 exists to prevent.
+func TestHandlePutConfig_LookupClearOnEnabledProviderRefused(t *testing.T) {
+	srv := testServerWithCfg(t, func(cfg *config.Config) {
+		cfg.Lookup.Chain = []types.LookupConfig{{
+			Name: types.QRZLookupServiceName, Enabled: true,
+			Username: "M0ABC", Password: "stored-pw",
+			URL: types.QRZLookupDefaultURL, HttpTimeoutSec: 10,
+		}}
+	})
+
+	body := `{"lookup":{"hamnut":{"name":"hamnutlookupservice"},` +
+		`"chain":[{"name":"qrzlookupservice","enabled":true,"username":"M0ABC",` +
+		`"password_clear":true}]}}`
+	w := putConfigSmtp(t, srv, body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s; want 400", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid_lookup") {
+		t.Errorf("body = %s, want invalid_lookup", w.Body.String())
+	}
+
+	// The write is ABANDONED, not partially applied.
+	if got := srv.cfg.Snapshot().Lookup.Chain[0].Password; got != "stored-pw" {
+		t.Errorf("stored password = %q after a refused save, want it untouched", got)
 	}
 }
 
