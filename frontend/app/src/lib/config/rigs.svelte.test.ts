@@ -635,4 +635,50 @@ describe('rigsState', () => {
         expect(rigsState.loaded).toBe(false);
         expect(rigsState.error).not.toBe('');
     });
+
+    it('a pending reload immediately marks the section unloaded', async () => {
+        const body = rigsBody(1, [1]);
+        mockJSON(200, body);
+        await rigsState.load();
+
+        const releases: { url: string; resolve: (response: Response) => void }[] = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                (url: string) =>
+                    new Promise<Response>((resolve) => {
+                        releases.push({ url, resolve });
+                    })
+            )
+        );
+        const reload = rigsState.load();
+
+        expect(rigsState.loading).toBe(true);
+        expect(rigsState.loaded).toBe(false);
+
+        for (const pending of releases) {
+            const responseBody = pending.url.includes('/v1/hardware')
+                ? { serial_ports: [], audio: { available: false } }
+                : body;
+            pending.resolve(
+                new Response(JSON.stringify(responseBody), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            );
+        }
+        await reload;
+        expect(rigsState.loaded).toBe(true);
+    });
+
+    it('save is refused while the section is not loaded', async () => {
+        const puts = mockCluster(rigsBody(1, [1]));
+        await rigsState.load();
+        rigsState.setDraftPort('/dev/changed');
+        rigsState.loaded = false;
+
+        await rigsState.save();
+
+        expect(puts).toHaveLength(0);
+    });
 });

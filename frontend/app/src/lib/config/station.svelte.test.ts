@@ -164,4 +164,46 @@ describe('stationState stale-reload guard', () => {
         expect(stationState.loaded).toBe(false);
         expect(stationState.error).not.toBe('');
     });
+
+    it('a pending reload immediately marks the section unloaded', async () => {
+        const body = configBody();
+        mockJSON(200, body);
+        await stationState.load();
+
+        let release!: (response: Response) => void;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                () =>
+                    new Promise<Response>((resolve) => {
+                        release = resolve;
+                    })
+            )
+        );
+        const reload = stationState.load();
+
+        expect(stationState.loading).toBe(true);
+        expect(stationState.loaded).toBe(false);
+
+        release(
+            new Response(JSON.stringify(body), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+        await reload;
+        expect(stationState.loaded).toBe(true);
+    });
+
+    it('save is refused while the section is not loaded', async () => {
+        const spy = mockJSON(200, configBody());
+        await stationState.load();
+        const calls = spy.mock.calls.length;
+        stationState.form.operator = 'STALE';
+        stationState.loaded = false;
+
+        await stationState.save();
+
+        expect(spy.mock.calls).toHaveLength(calls);
+    });
 });

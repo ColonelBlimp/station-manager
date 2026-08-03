@@ -122,6 +122,10 @@ class RigsState {
     async load(): Promise<void> {
         if (this.loading) return;
         this.loading = true;
+        // Invalidate before awaiting: while a reload is pending the retained
+        // catalogue is not known-current and must neither render nor save
+        // (clean-room review 2c64c7aa P1).
+        this.loaded = false;
         this.error = '';
         // Rigs are required; hardware is best-effort (a failure degrades the
         // pickers to read-only text, it must not block the list).
@@ -133,7 +137,6 @@ class RigsState {
             // Settings unmounts on navigation while this module survives, so a
             // failed remount reload would leave the previous catalogue on
             // screen looking current, and a rigs save PUTs the WHOLE catalogue.
-            this.loaded = false;
             return;
         }
         this.#applyFetched(res.data);
@@ -187,7 +190,8 @@ class RigsState {
         // so a connection save and a set-default can't overlap — otherwise a save
         // that re-fetched the OLD default could apply it via #applyFetched after
         // set-default moved the badge, reverting it (codex e539a080 P2).
-        if (this.saving || this.settingDefault || !this.dirty || !d || id === null) return;
+        if (this.saving || this.settingDefault || !this.loaded || !this.dirty || !d || id === null)
+            return;
         this.saving = true;
         // Re-fetch so we merge onto the CURRENT catalogue, not the mount snapshot
         // — otherwise the whole-replace would overwrite a concurrent change to
@@ -281,7 +285,7 @@ class RigsState {
     // Optimistic: the badge moves on success. No-op if it's already the default or
     // another write is in flight.
     async setDefault(id: number): Promise<void> {
-        if (this.settingDefault || this.saving || id === this.defaultRigId) return;
+        if (this.settingDefault || this.saving || !this.loaded || id === this.defaultRigId) return;
         this.settingDefault = true;
         const outcome = await setDefaultRig(id);
         this.settingDefault = false;

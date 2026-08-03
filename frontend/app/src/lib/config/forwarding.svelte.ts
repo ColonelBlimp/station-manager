@@ -92,6 +92,10 @@ class ForwardingState {
     async load(): Promise<void> {
         if (this.loading) return;
         this.loading = true;
+        // Invalidate before awaiting: while a reload is pending the retained
+        // list is not known-current and must neither render nor save
+        // (clean-room review 2c64c7aa P1).
+        this.loaded = false;
         this.error = '';
         const [cfg, types] = await Promise.all([fetchForwarders(), fetchForwarderTypes()]);
         this.loading = false;
@@ -101,7 +105,6 @@ class ForwardingState {
             // Settings unmounts on navigation while this module survives, so a
             // failed remount reload would leave stale destinations on screen
             // looking current, and the forwarders block is replaced WHOLE.
-            this.loaded = false;
             return;
         }
         // A failed type fetch is NOT fatal: the destinations still render with
@@ -112,7 +115,10 @@ class ForwardingState {
     }
 
     async save(): Promise<void> {
-        if (this.saving || !this.dirty) return;
+        // Whole-list writes require a successfully loaded baseline. The
+        // component hides Save while unloaded; this is the last line before
+        // the wire if another caller or a rendering race invokes it anyway.
+        if (this.saving || !this.loaded || !this.dirty) return;
         this.saving = true;
         try {
             const res = await saveForwarders(this.buildPayload());

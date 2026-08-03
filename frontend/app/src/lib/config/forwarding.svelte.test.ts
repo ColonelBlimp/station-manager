@@ -320,4 +320,55 @@ describe('forwardingState credential safety', () => {
         expect(forwardingState.loaded).toBe(false);
         expect(forwardingState.error).not.toBe('');
     });
+
+    // F8b — invalidation happens before the two reload requests settle, so a
+    // slow daemon cannot leave the retained whole-list draft writable
+    // (clean-room review 2c64c7aa P1).
+    it('F8b: a pending reload immediately marks the section unloaded', async () => {
+        await loadFresh();
+
+        let releaseConfig!: (response: Response) => void;
+        let releaseTypes!: (response: Response) => void;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((url: RequestInfo | URL) => {
+                const u = url instanceof URL ? url.href : typeof url === 'string' ? url : url.url;
+                return new Promise<Response>((resolve) => {
+                    if (u.includes('forwarder-types')) releaseTypes = resolve;
+                    else releaseConfig = resolve;
+                });
+            })
+        );
+        const reload = forwardingState.load();
+
+        expect(forwardingState.loading).toBe(true);
+        expect(forwardingState.loaded).toBe(false);
+
+        releaseConfig(
+            new Response(JSON.stringify(CONFIG), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+        releaseTypes(
+            new Response(JSON.stringify(TYPES), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+        await reload;
+        expect(forwardingState.loaded).toBe(true);
+    });
+
+    // F8c — the state layer also refuses an unloaded whole-list write, even if
+    // a future component regression exposes its Save control.
+    it('F8c: save is refused while the section is not loaded', async () => {
+        const puts = await loadFresh();
+        forwardingState.drafts[0].enabled = !forwardingState.drafts[0].enabled;
+        forwardingState.loaded = false;
+
+        await forwardingState.save();
+
+        expect(puts).toHaveLength(0);
+    });
 });

@@ -102,6 +102,11 @@ class EmailState {
     async load(): Promise<void> {
         if (this.loading) return;
         this.loading = true;
+        // Invalidate BEFORE the request. Clearing this only after a failure
+        // leaves the retained singleton draft writable for the whole pending
+        // reload, which is exactly when we do not know whether it is current
+        // (clean-room review 2c64c7aa P1).
+        this.loaded = false;
         this.error = '';
         const out = await fetchEmail();
         this.loading = false;
@@ -115,7 +120,6 @@ class EmailState {
             // while !loaded. Since the PUT replaces the smtp block WHOLE,
             // editing one field of a stale form writes every other field back
             // at its stale value (clean-room review dcb0316e69b9).
-            this.loaded = false;
             return;
         }
         this.#apply(out.smtp);

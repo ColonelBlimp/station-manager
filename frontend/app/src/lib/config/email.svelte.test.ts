@@ -306,6 +306,37 @@ describe('emailState wire behaviour', () => {
         expect(emailState.error).not.toBe('');
     });
 
+    // R1b — invalidation happens when the reload STARTS, not only after it
+    // fails. Otherwise a slow daemon leaves the stale whole-block form live
+    // for the entire request (clean-room review 2c64c7aa P1).
+    it('R1b: a pending reload immediately marks the form unloaded', async () => {
+        await loadFresh();
+
+        let release!: (response: Response) => void;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                () =>
+                    new Promise<Response>((resolve) => {
+                        release = resolve;
+                    })
+            )
+        );
+        const reload = emailState.load();
+
+        expect(emailState.loading).toBe(true);
+        expect(emailState.loaded).toBe(false);
+
+        release(
+            new Response(JSON.stringify(CONFIG), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        );
+        await reload;
+        expect(emailState.loaded).toBe(true);
+    });
+
     // R2 — and the state module refuses the write outright, so no component bug
     // can put a stale or blank whole-block PUT on the wire.
     it('R2: save is refused while the section is not loaded', async () => {

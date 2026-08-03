@@ -63,6 +63,10 @@ class StationState {
     async load(): Promise<void> {
         if (this.loading) return;
         this.loading = true;
+        // Invalidate before awaiting: while a reload is pending the retained
+        // identity is not known-current and must neither render nor save
+        // (clean-room review 2c64c7aa P1).
+        this.loaded = false;
         this.error = '';
         const res = await fetchStation();
         this.loading = false;
@@ -72,7 +76,6 @@ class StationState {
             // Settings unmounts on navigation while this module survives, so a
             // failed remount reload would leave stale values on screen looking
             // current, and logging_station is round-tripped WHOLE.
-            this.loaded = false;
             return;
         }
         this.#apply(res.config);
@@ -80,7 +83,9 @@ class StationState {
     }
 
     async save(): Promise<void> {
-        if (this.saving || !this.dirty) return;
+        // logging_station is a whole-block write, so a successfully loaded
+        // baseline is a data-safety precondition, not merely a UI status.
+        if (this.saving || !this.loaded || !this.dirty) return;
         this.saving = true;
         // Hold `saving` across BOTH the PUT and the onSaved context refresh
         // (finally), not just the PUT: clearing it early let a second save start
