@@ -850,10 +850,11 @@ func seedRegisteredLookupProviders(lc *types.EnrichmentConfig) {
 		}
 		switch d.Kind {
 		case lookupdef.KindCountry:
-			// Exactly one country slot (EnrichmentConfig.Hamnut), so this fills
-			// it only when the operator has not named a provider there. With
-			// more than one country provider registered, the first by name wins
-			// — deterministic, and the operator can change it in config.json.
+			// Exactly one country slot (EnrichmentConfig.Hamnut), filled only
+			// when the operator has not named a provider there. There can be
+			// only one country descriptor — lookupdef.RegisterProvider refuses a
+			// second, because config could not represent it and it would drop
+			// silently here (review a47cccfb3b93).
 			//
 			// FIELD-WISE, never a wholesale replace: an operator can leave the
 			// name out while still setting a URL (the old canonical-name stamp

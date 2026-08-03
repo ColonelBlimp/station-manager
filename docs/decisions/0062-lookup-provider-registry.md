@@ -164,7 +164,10 @@ source without a build.
   this ADR's "uniform shape" assumption is what breaks.
 - If the country side ever fans out beyond a single provider, `EnrichmentConfig`'s
   hamnut-is-one-block shape has to change too, and the registry should cover both
-  legs rather than just the chain.
+  legs rather than just the chain. **`RegisterProvider` currently PANICS on a
+  second country descriptor** — added after a clean-room review (a47cccfb3b93)
+  found seeding dropping it silently — so that shape change is the first step,
+  not an afterthought.
 
 ## References
 

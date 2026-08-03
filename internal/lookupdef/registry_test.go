@@ -128,6 +128,56 @@ func TestRegistry_IncompleteRegistrationPanics(t *testing.T) {
 	}
 }
 
+/*
+R7 — A SECOND COUNTRY PROVIDER IS REFUSED AT REGISTRATION.
+
+The config shape has exactly ONE country slot (EnrichmentConfig.Hamnut) and
+that is a decided invariant, not an oversight: ADR 0017 makes country data
+single-source ("country source-of-truth doesn't fan out") precisely to stop
+a callsign-class provider contradicting it — the "QRZ records Malawi for an
+English call" pathology in its Context.
+
+So a build registering two country providers has a bug that config cannot
+represent. Seeding used to absorb it silently — the first by name won and the
+rest were dropped, which I documented as "deterministic, and the operator can
+change it in config.json". That was a defect dressed as a design note
+(clean-room review a47cccfb3b93): the dropped provider appears in
+/v1/lookup-types, has no config row, and cannot be enabled from Settings at
+all.
+
+Failing at init() is the same call the duplicate-name rule makes, for the
+same reason — a binary bug, not an operator mistake. If country lookup ever
+SHOULD fan out, EnrichmentConfig changes first and this rule goes with it
+(ADR 0062's triggers to revisit says so).
+*/
+func TestRegistry_SecondCountryProviderPanics(t *testing.T) {
+	reset()
+	first := desc("ctry-a")
+	first.Kind = KindCountry
+	RegisterProvider(first)
+
+	defer func() {
+		if recover() == nil {
+			t.Error("expected a panic on a second country provider")
+		}
+	}()
+	second := desc("ctry-b")
+	second.Kind = KindCountry
+	RegisterProvider(second)
+}
+
+// R7b — while the CALLSIGN chain is a list by design, so several are fine. This
+// is what stops R7 becoming "one provider of any kind".
+func TestRegistry_MultipleCallsignProvidersAreFine(t *testing.T) {
+	reset()
+	RegisterProvider(desc("callsign-a"))
+	RegisterProvider(desc("callsign-b"))
+
+	if got := len(Descriptors()); got != 2 {
+		t.Errorf("registered %d callsign providers, want 2", got)
+	}
+}
+
 // R5 — THE EMPTY-REGISTRY CASE. internal/config reads this registry and its
 // tests never import a provider package, so "no descriptors at all" is a normal
 // state, not a fault. Enumerating must yield an empty slice rather than nil-

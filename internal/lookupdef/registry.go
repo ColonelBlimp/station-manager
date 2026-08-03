@@ -89,6 +89,21 @@ func RegisterProvider(d ProviderDescriptor) {
 	if _, dup := descriptors[d.Name]; dup {
 		panic("lookupdef.RegisterProvider: duplicate provider " + d.Name)
 	}
+	// Exactly ONE country provider is representable: EnrichmentConfig has a
+	// single country slot, and that is decided (ADR 0017 — country data is
+	// single-source so a callsign-class provider cannot contradict it). A second
+	// one could be registered but never seeded, never configured and never
+	// enabled, so it fails here rather than vanishing inside the seeding pass
+	// (clean-room review a47cccfb3b93). If country lookup should ever fan out,
+	// EnrichmentConfig changes first and this rule goes with it.
+	if d.Kind == KindCountry {
+		for _, existing := range descriptors {
+			if existing.Kind == KindCountry {
+				panic("lookupdef.RegisterProvider: second country provider " + d.Name +
+					" (already have " + existing.Name + "); config has one country slot")
+			}
+		}
+	}
 	descriptors[d.Name] = d
 }
 
