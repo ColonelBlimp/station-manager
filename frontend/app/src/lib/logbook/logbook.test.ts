@@ -365,6 +365,49 @@ describe('selected destination labelling', () => {
         expect(logbookState.selectedDestinationLabel).toBe('vanished');
     });
 
+    // L6c — THE LABEL IS CAPTURED BEFORE THE AWAIT, like `dest` already was.
+    //
+    // The destination <select> is NOT disabled during an upload (only the button
+    // is), so the operator can change it while the request is in flight. Reading
+    // the label after the await then reports "Queued 1 to <the NEW destination>"
+    // for records that went to the old one — a notice that names somewhere the
+    // QSOs were never sent (review 72a61e962f52).
+    //
+    // The pre-existing code already captured `dest` before awaiting for exactly
+    // this reason; resolving the label afterwards broke that symmetry. The
+    // fixture changes the selection WHILE the request is gated open, which is
+    // the only way the two orderings differ.
+    it('L6c: the notice names the destination the upload was SENT to', async () => {
+        let release!: () => void;
+        const gate = new Promise<void>((r) => (release = r));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => {
+                await gate;
+                return new Response(JSON.stringify({ enqueued: 1, skipped_uploaded: 0 }), {
+                    status: 200,
+                });
+            })
+        );
+        logbookState.forwarders = [
+            { name: 'qrz', label: 'QRZ (club account)', type: 'qrz', enabled: true },
+            { name: 'clublog', label: 'ClubLog (contest)', type: 'clublog', enabled: true },
+        ];
+        logbookState.selectedDestination = 'qrz';
+        logbookState.rows = [qso(1, 'u-1')];
+        logbookState.toggleRow(logbookState.rows[0]);
+
+        const inFlight = logbookState.uploadSelected();
+        // Operator changes their mind mid-request. The selector is live.
+        logbookState.selectedDestination = 'clublog';
+        release();
+        await inFlight;
+
+        expect(logbookState.notice).toContain('QRZ (club account)');
+        expect(logbookState.notice).not.toContain('ClubLog (contest)');
+        vi.restoreAllMocks();
+    });
+
     // L6 — the success notice uses the label...
     it('L6: the queued notice names the destination by label', async () => {
         const calls: string[] = [];

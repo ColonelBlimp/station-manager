@@ -401,6 +401,12 @@ class LogbookState {
     async uploadSelected(): Promise<void> {
         if (this.selectedDestination === '' || this.selectedUuids.length === 0) return;
         const dest = this.selectedDestination;
+        // Captured WITH dest, before the await, for the same reason dest is: the
+        // destination <select> stays live during an upload (only the button is
+        // disabled), so resolving the label afterwards would name whatever the
+        // operator switched to — a notice pointing at somewhere the QSOs were
+        // never sent (review 72a61e962f52).
+        const destLabel = this.selectedDestinationLabel;
         const uuids = this.selectedUuids;
         this.uploading = true;
         this.error = null;
@@ -412,8 +418,7 @@ class LogbookState {
             return;
         }
         const r = out.result;
-        // Label for the operator; `dest` (the name) went to the daemon above.
-        const bits = [`Queued ${r.enqueued} to ${this.selectedDestinationLabel}`];
+        const bits = [`Queued ${r.enqueued} to ${destLabel}`];
         if (r.skipped_uploaded > 0) bits.push(`${r.skipped_uploaded} already uploaded`);
         const skippedDeleted = r.skipped_deleted?.length ?? 0;
         if (skippedDeleted > 0) bits.push(`${skippedDeleted} deleted (skipped)`);
