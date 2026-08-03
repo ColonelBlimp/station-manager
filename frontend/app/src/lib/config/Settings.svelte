@@ -8,14 +8,16 @@
     import StationSection from './StationSection.svelte';
     import RigsSection from './RigsSection.svelte';
     import ForwardingSection from './ForwardingSection.svelte';
+    import EmailSection from './EmailSection.svelte';
     import { restartDaemon, waitForDaemonBack, fetchDaemonInstance } from '../api/restart';
     import { toasts } from '../ui/toasts.svelte';
 
-    type SectionId = 'station' | 'rigs' | 'forwarding';
+    type SectionId = 'station' | 'rigs' | 'forwarding' | 'email';
     const sections: { id: SectionId; label: string }[] = [
         { id: 'station', label: 'Station' },
         { id: 'rigs', label: 'Rigs' },
         { id: 'forwarding', label: 'Forwarding' },
+        { id: 'email', label: 'Email' },
     ];
     let active = $state<SectionId>('station');
 
@@ -73,7 +75,8 @@
         <div>
             <h1 class="text-2xl font-semibold text-ink">Settings</h1>
             <p class="mt-1 text-sm text-muted">
-                Station configuration — rigs, mode mappings, forwarders, and station identity.
+                Station configuration — rigs, mode mappings, forwarders, outgoing email, and station
+                identity.
             </p>
         </div>
         <button
@@ -100,7 +103,7 @@
         {/each}
     </nav>
 
-    <!-- Both sections stay MOUNTED; the inactive one is just hidden. A
+    <!-- Every section stays MOUNTED; the inactive ones are just hidden. A
          conditional {#if} would unmount the hidden section, and remounting it
          re-runs its onMount load() — which would overwrite unsaved form edits
          (and re-fetch on every tab switch). Keeping them mounted preserves
@@ -114,5 +117,8 @@
     </div>
     <div class:hidden={active !== 'forwarding'}>
         <ForwardingSection />
+    </div>
+    <div class:hidden={active !== 'email'}>
+        <EmailSection />
     </div>
 </div>

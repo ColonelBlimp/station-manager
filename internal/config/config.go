@@ -760,6 +760,33 @@ func Normalize(cfg *Config) {
 	}
 
 	normalizeLookupURLs(cfg)
+	normalizeSmtpDefaults(&cfg.Smtp)
+}
+
+// normalizeSmtpDefaults stamps the two SMTP numbers that HAVE a sane default
+// when the operator left them blank. Port 587 is the IANA submission port (RFC
+// 6409) — right for any operator going through their ISP or a hosted provider;
+// TimeoutSec bounds the whole connect+auth+send round-trip, and 30s tolerates a
+// flaky link.
+//
+// In Normalize (not applyDefaults) for the same reason as normalizeLookupURLs
+// above: applyDefaults runs only on Load, so a blank arriving over PUT was stored
+// as 0 and silently became 587 at the NEXT daemon start — and on an enabled block
+// it never got that far, because validateSmtp rejects port 0 with a 400 telling
+// the operator to supply a number the daemon already knows. Running here puts the
+// resolved value in front of Validate on both paths, and in the PUT response, so
+// what the operator sees after saving is what was stored.
+//
+// Deliberately narrow: host / from / username / password have no default that
+// could be correct, so they stay empty and validateSmtp goes on refusing an
+// enabled block without them. Idempotent; an operator value is never overwritten.
+func normalizeSmtpDefaults(s *types.SmtpConfig) {
+	if s.Port == 0 {
+		s.Port = defaultSmtpPort
+	}
+	if s.TimeoutSec == 0 {
+		s.TimeoutSec = defaultSmtpTimeoutSec
+	}
 }
 
 // normalizeLookupURLs stamps the canonical public endpoint for the known
@@ -1121,20 +1148,13 @@ func applyDefaults(cfg *Config, baseDir string) {
 	// so they apply on PUT too, not just Load — an enabled provider added via the
 	// config SPA needs them stamped before validateLookupProvider runs.
 
-	// SMTP defaults. Port 587 is the IANA submission port (RFC 6409)
-	// — the right default for any operator running through their ISP
-	// or a hosted SMTP provider. TimeoutSec bounds the entire
-	// connect+auth+send round-trip; 30s tolerates the operator's
-	// flaky-internet baseline (per the operator-network memory).
-	// Host / From / Username / Password / DefaultRecipient stay empty
-	// — the operator fills them. Enabled stays false (zero value) so
-	// no surprise sends happen until the operator opts in.
-	if cfg.Smtp.Port == 0 {
-		cfg.Smtp.Port = defaultSmtpPort
-	}
-	if cfg.Smtp.TimeoutSec == 0 {
-		cfg.Smtp.TimeoutSec = defaultSmtpTimeoutSec
-	}
+	// SMTP port + timeout defaults live in Normalize (normalizeSmtpDefaults) so
+	// they apply on PUT too, not just Load — a blank port saved from the Settings
+	// Email section needs the default stamped before validateSmtp runs. Host /
+	// From / Username / Password / DefaultRecipient stay empty — the operator
+	// fills them. Enabled stays false (zero value) so no surprise sends happen
+	// until the operator opts in.
+	normalizeSmtpDefaults(&cfg.Smtp)
 
 	// Bridge has no defaults to backfill — Serial.Port and Cat.Driver
 	// MUST be operator-supplied when Enabled=true (no sane default is

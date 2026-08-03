@@ -299,8 +299,16 @@ type MailerInfo struct {
 // ForwarderInfo / LookupProviderInfo):
 //   - On GET: enabled/host/port/username/from/default_recipient/starttls/
 //     timeout_sec + PasswordSet (is a password stored). Password is "" (masked).
-//   - On PUT: + Password (new value; blank = keep the stored one). PasswordSet is
-//     ignored.
+//   - On PUT: + Password (new value; blank = keep the stored one) and
+//     PasswordClear (remove the stored one). PasswordSet is ignored.
+//
+// PasswordClear exists because blank has to go on meaning KEEP — it is what an
+// operator editing the host sends every time — so removal needs a signal of its
+// own. Deliberately NOT the forwarder Clearable idiom (where blank means reset
+// for opted-in fields): that works there because opting in is decided per
+// credential, and a password is never a safe field to opt in. It is a command,
+// not state — only ever read from a PUT, never emitted on GET, so a client that
+// echoes a GET body straight back cannot wipe the secret by accident.
 //
 // Username is shown on GET (an SMTP login, not masked the way the password is) —
 // the same call LookupProviderInfo makes. validateSmtp (config pipeline) gates the
@@ -317,6 +325,7 @@ type SmtpInfo struct {
 	TimeoutSec       int    `json:"timeout_sec,omitempty"`
 	PasswordSet      bool   `json:"password_set"`
 	Password         string `json:"password,omitempty"`
+	PasswordClear    bool   `json:"password_clear,omitempty"`
 }
 
 // BridgeInfo is the SPA-visible subset of the bridge subsystem config.
@@ -1110,10 +1119,23 @@ func smtpInfoFrom(s types.SmtpConfig) SmtpInfo {
 
 // mergeSmtp rebuilds the SMTP block from the PUT payload, keeping the stored
 // password when the operator left the field blank — same keep-on-blank rule as
-// mergeLookupProvider (masked-on-GET means the SPA never had the secret to echo).
+// mergeLookupProvider (masked-on-GET means the SPA never had the secret to echo)
+// — unless PasswordClear asks for it to be removed outright.
+//
+// Clear beats a typed value — OPERATOR'S RULING, 2026-08-03, weighed against
+// rejecting the pair with a 400: clear-wins is fail-safe for secret removal and
+// handles stale form state sensibly. The two are mutually exclusive intents and
+// our own client never sends both (pressing Remove discards any half-typed
+// value, as forwarding's clear() does), so this arm only fires for a client
+// that got it wrong — and of the two, only the flag can have been set
+// deliberately: a stale password field is exactly what a form bug leaves
+// populated, whereas the flag is set solely by pressing the control.
 func mergeSmtp(in SmtpInfo, ex types.SmtpConfig) types.SmtpConfig {
 	pw := ex.Password
-	if in.Password != "" {
+	switch {
+	case in.PasswordClear:
+		pw = ""
+	case in.Password != "":
 		pw = in.Password
 	}
 	return types.SmtpConfig{
