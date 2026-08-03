@@ -63,7 +63,14 @@ export async function fetchForwarders(signal?: AbortSignal): Promise<ForwardersO
     const forwarders: ForwarderInfo[] = [];
     for (const f of raw) {
         if (isPlainObject(f) && typeof f.name === 'string' && typeof f.type === 'string') {
-            forwarders.push({ name: f.name, type: f.type, enabled: f.enabled === true });
+            forwarders.push({
+                name: f.name,
+                // The operator's config.json display name. Absent for a
+                // destination they haven't renamed; forwarderLabel falls back.
+                label: typeof f.label === 'string' ? f.label : '',
+                type: f.type,
+                enabled: f.enabled === true,
+            });
         }
     }
     return { kind: 'ok', forwarders };

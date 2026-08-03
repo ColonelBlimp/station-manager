@@ -9,7 +9,13 @@
     import { onMount } from 'svelte';
     import { logbookState } from './logbook.svelte';
     import { formatQsoDate, formatTime, formatFreq, formatMode } from './format';
-    import { uploadState, uploadTooltip, uploadColorClass, hasUploadStamp } from './uploadStatus';
+    import {
+        uploadState,
+        uploadTooltip,
+        uploadColorClass,
+        hasUploadStamp,
+        forwarderLabel,
+    } from './uploadStatus';
     import { dxccFlag } from '../utils/dxccFlag';
     import EditQsoModal from './EditQsoModal.svelte';
     import LogbookEmailControls from './LogbookEmailControls.svelte';
@@ -81,9 +87,15 @@
                          Cloud is the case in practice — a row mirror holding a
                          full copy — but "no stamp" does not by itself mean
                          mirrored: the dev stub registers no prefix either.) -->
+                    <!-- TEXT is the operator's label; VALUE stays the config
+                         name. `name` is the durable key the daemon matches on
+                         (`missing_from`, POST /v1/forwarder/{name}/uploads), so
+                         labelling the value too would read correctly and then
+                         ask about a destination that does not exist. -->
                     {#each logbookState.enabledForwarders as f (f.name)}
+                        {@const shown = forwarderLabel(f)}
                         <option value={f.name}>
-                            {hasUploadStamp(f.type) ? `Not on ${f.name}` : `Upload to ${f.name}`}
+                            {hasUploadStamp(f.type) ? `Not on ${shown}` : `Upload to ${shown}`}
                         </option>
                     {/each}
                 </select>

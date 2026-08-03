@@ -414,3 +414,53 @@ describe('Logbook destination picker: destinations that stamp nothing', () => {
         expect(screen.getByText(/no per-QSO upload stamp to filter on/)).toBeInTheDocument();
     });
 });
+
+/*
+    L3 — THE DROPDOWN SHOWS THE LABEL BUT STILL SENDS THE NAME.
+
+    `name` is the durable key: qso_upload's UNIQUE (qso_id, forwarder_name,
+    action) is on it, the `missing_from` filter matches it, and
+    POST /v1/forwarder/{name}/uploads is addressed by it. Swapping the label in
+    everywhere would make this dropdown read correctly and then ask the daemon
+    about a destination it has never heard of.
+
+    Both halves are asserted in ONE test on purpose. Either alone is satisfiable
+    by the mistake: checking only the text passes when the value changed too,
+    and checking only the value passes when nothing changed at all. The fixture
+    carries one LABELLED and one UNLABELLED destination so "uses labels" and
+    "ignores labels" cannot both look right.
+*/
+describe('Logbook destination dropdown labelling', () => {
+    it('L3: shows the operator label as text, keeps the name as the value', async () => {
+        const fetchMock = vi.mocked(globalThis.fetch);
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+            const url = urlText(input);
+            if (url.includes('/count')) return Promise.resolve(jsonResponse({ count: 0 }));
+            if (url.includes('/qso'))
+                return Promise.resolve(jsonResponse({ items: [], next_cursor: null }));
+            if (url === '/v1/logbook')
+                return Promise.resolve(
+                    jsonResponse([{ id: 1, name: 'Malawi 2026', callsign: '7Q5MLV' }])
+                );
+            return Promise.resolve(
+                jsonResponse({
+                    mailer: { enabled: false },
+                    forwarders: [
+                        { name: 'qrz', type: 'qrz', enabled: true, label: 'QRZ (club account)' },
+                        { name: 'clublog', type: 'clublog', enabled: true },
+                    ],
+                })
+            );
+        });
+        render(Logbook);
+
+        const labelled = await screen.findByRole<HTMLOptionElement>('option', {
+            name: /QRZ \(club account\)/,
+        });
+        expect(labelled.value).toBe('qrz');
+
+        // The unlabelled one still names itself, so L3 is not "labels only".
+        const plain = screen.getByRole<HTMLOptionElement>('option', { name: /clublog/ });
+        expect(plain.value).toBe('clublog');
+    });
+});

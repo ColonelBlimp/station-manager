@@ -17,8 +17,30 @@ import type { LogbookQso } from '../api/logbooks';
 /** One enabled forwarder, from /v1/config's masked forwarders block. */
 export interface ForwarderInfo {
     name: string;
+    /** Operator's config.json display name; '' means fall back to the name. */
+    label: string;
     type: string;
     enabled: boolean;
+}
+
+/**
+ * What to CALL a destination in front of the operator: their own label, else
+ * its config name.
+ *
+ * Never its `name` when a label exists, and never blank — a destination whose
+ * row reads empty looks like a rendering fault. Strictly a DISPLAY helper:
+ * `name` remains the durable key everywhere it is sent (qso_upload's UNIQUE
+ * constraint, the `missing_from` filter, POST /v1/forwarder/{name}/uploads), so
+ * anything addressing the daemon must keep using it.
+ *
+ * One step shorter than Settings → Forwarding's chain (label → display_name →
+ * type): the logbook does not fetch /v1/forwarder-types, so an unlabelled
+ * destination shows "smcloud" here where Settings shows "SM Cloud backup".
+ * Deliberate — a second endpoint fetch and its failure mode is a lot to carry
+ * for a name the operator can set themselves.
+ */
+export function forwarderLabel(f: ForwarderInfo): string {
+    return f.label.trim() || f.name;
 }
 
 /** type → the QSO JSON field carrying its ADIF upload-status stamp. */
@@ -84,7 +106,7 @@ export function uploadTooltip(row: LogbookQso, enabled: ForwarderInfo[]): string
     const missingList: string[] = [];
     for (const f of enabled) {
         if (!stampField(f.type)) continue;
-        (isStamped(row, f.type) ? onList : missingList).push(f.name);
+        (isStamped(row, f.type) ? onList : missingList).push(forwarderLabel(f));
     }
     if (onList.length === 0 && missingList.length === 0) return '';
     const parts: string[] = [];
