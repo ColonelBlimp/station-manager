@@ -97,6 +97,11 @@ class ForwardingState {
         this.loading = false;
         if (cfg.kind === 'error') {
             this.error = cfg.message;
+            // Unloaded, not merely errored — see the note on emailState.load.
+            // Settings unmounts on navigation while this module survives, so a
+            // failed remount reload would leave stale destinations on screen
+            // looking current, and the forwarders block is replaced WHOLE.
+            this.loaded = false;
             return;
         }
         // A failed type fetch is NOT fatal: the destinations still render with

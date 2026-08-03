@@ -612,4 +612,27 @@ describe('rigsState', () => {
         await rigsState.save();
         expect(puts.length).toBe(0); // save refused — no overlapping connection PUT
     });
+
+    // A failed RELOAD marks the section unloaded, not just errored. Settings is
+    // mounted behind a router branch (App.svelte:100), so leaving unmounts it
+    // while this module — a singleton — survives; returning re-fires onMount →
+    // load(). Leaving `loaded` true there renders the previous catalogue as
+    // though current, and a rigs save PUTs the WHOLE catalogue, so a stale one
+    // can revert a rig added or re-ported meanwhile. Full reasoning in
+    // email.svelte.test.ts (clean-room review dcb0316e69b9).
+    it('a failed reload after a successful one clears loaded', async () => {
+        mockJSON(200, {
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        expect(rigsState.loaded).toBe(true);
+
+        mockJSON(503, {});
+        await rigsState.load();
+
+        expect(rigsState.loaded).toBe(false);
+        expect(rigsState.error).not.toBe('');
+    });
 });

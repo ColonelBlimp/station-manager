@@ -298,4 +298,26 @@ describe('forwardingState credential safety', () => {
 
         expect(Object.keys(puts[0] as object)).toEqual(['forwarders']);
     });
+
+    // F8 — A FAILED RELOAD MARKS THE SECTION UNLOADED, not just errored.
+    // Settings is mounted behind a router branch (App.svelte:100), so leaving
+    // unmounts it while this module — a singleton — survives; returning
+    // re-fires onMount → load(). Leaving `loaded` true there renders the
+    // previous session's destinations as though current, and F6 above is
+    // exactly why that is dangerous: the whole list rides every save, so a
+    // stale one rewrites every destination at its stale enabled-state. Full
+    // reasoning in email.svelte.test.ts (clean-room review dcb0316e69b9).
+    it('F8: a failed reload after a successful one clears loaded', async () => {
+        await loadFresh();
+        expect(forwardingState.loaded).toBe(true);
+
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(new Response('nope', { status: 503 })))
+        );
+        await forwardingState.load();
+
+        expect(forwardingState.loaded).toBe(false);
+        expect(forwardingState.error).not.toBe('');
+    });
 });

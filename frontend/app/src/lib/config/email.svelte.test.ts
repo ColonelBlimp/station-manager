@@ -256,6 +256,68 @@ describe('emailState wire behaviour', () => {
         expect(emailState.dirty).toBe(false);
     });
 
+    /*
+        A FAILED RELOAD MUST NOT LEAVE STALE SETTINGS LOOKING CURRENT.
+        (clean-room review dcb0316e69b9, P1 — verified reachable before fixing.)
+
+        Criterion:
+
+            When I come back to Settings and the daemon can't be reached, I see
+            that the refresh failed and can retry — and I can tell that apart
+            from looking at settings that are actually current. I cannot save a
+            stale copy over the daemon's state.
+
+        REACHABILITY, checked rather than assumed: App.svelte:100 renders
+        <Settings /> behind {#if router.view === 'config'}, so leaving the view
+        UNMOUNTS it while these state modules — module-level singletons —
+        survive. Returning re-fires onMount → load(). If that request fails,
+        `loaded` was left true, the component's error branch
+        ({#if !loaded && error}) never fired, and the form rendered the previous
+        session's values with nothing to say so.
+
+        WHY IT IS A P1 AND NOT COSMETIC: the PUT replaces the smtp block WHOLE.
+        Editing one field on a stale form therefore writes every OTHER field
+        back at its stale value — silently reverting anything changed in the
+        meantime, including a password removal that had already been applied.
+
+        R2 IS THE LAST LINE AND IS NOT MERELY REDUNDANT. It also closes a
+        window R1 cannot: between mount and onMount's load, the state is
+        loaded=false / loading=false / error='', which falls through the
+        component's {:else} into the FORM — bound to the blank placeholder
+        block. Without R2 a save in that window would write blanks.
+    */
+
+    // R1 — a failed reload after a successful one marks the section unloaded,
+    // so the component shows its error card instead of stale values. The first
+    // load must SUCCEED here: asserting against a first-load failure would pass
+    // trivially, since `loaded` was never true to begin with.
+    it('R1: a failed reload clears loaded, so the failure is visible', async () => {
+        await loadFresh();
+        expect(emailState.loaded).toBe(true);
+        expect(emailState.draft.host).toBe('smtp.example.org');
+
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(new Response('nope', { status: 503 })))
+        );
+        await emailState.load();
+
+        expect(emailState.loaded).toBe(false);
+        expect(emailState.error).not.toBe('');
+    });
+
+    // R2 — and the state module refuses the write outright, so no component bug
+    // can put a stale or blank whole-block PUT on the wire.
+    it('R2: save is refused while the section is not loaded', async () => {
+        const puts = await loadFresh();
+        emailState.draft.host = 'stale.example.org';
+        emailState.loaded = false;
+
+        await emailState.save();
+
+        expect(puts).toHaveLength(0);
+    });
+
     // W9 — E5. A refused save keeps what the operator typed, so they can fix the
     // one bad field instead of re-entering the form. Asserting only that an
     // error is reported would pass against a save that reset the draft.

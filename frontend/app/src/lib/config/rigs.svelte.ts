@@ -129,6 +129,11 @@ class RigsState {
         this.loading = false;
         if (res.kind === 'error') {
             this.error = res.message;
+            // Unloaded, not merely errored — see the note on emailState.load.
+            // Settings unmounts on navigation while this module survives, so a
+            // failed remount reload would leave the previous catalogue on
+            // screen looking current, and a rigs save PUTs the WHOLE catalogue.
+            this.loaded = false;
             return;
         }
         this.#applyFetched(res.data);

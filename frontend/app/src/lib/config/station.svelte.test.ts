@@ -143,3 +143,25 @@ describe('stationState', () => {
         expect(stationState.saving).toBe(false);
     });
 });
+
+// A failed RELOAD must mark the section unloaded, not just record an error.
+// Settings is mounted behind a router branch (App.svelte:100), so navigating
+// away unmounts it while this module — a singleton — survives; returning
+// re-fires onMount → load(). Leaving `loaded` true there renders the previous
+// session's identity as though it were current, and logging_station is
+// round-tripped WHOLE, so one edit rewrites every other field at its stale
+// value. Full reasoning in email.svelte.test.ts (clean-room review
+// dcb0316e69b9); this is the same defect in a sibling section.
+describe('stationState stale-reload guard', () => {
+    it('a failed reload after a successful one clears loaded', async () => {
+        mockJSON(200, configBody());
+        await stationState.load();
+        expect(stationState.loaded).toBe(true);
+
+        mockJSON(503, {});
+        await stationState.load();
+
+        expect(stationState.loaded).toBe(false);
+        expect(stationState.error).not.toBe('');
+    });
+});

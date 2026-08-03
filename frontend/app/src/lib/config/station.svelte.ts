@@ -68,6 +68,11 @@ class StationState {
         this.loading = false;
         if (res.kind === 'error') {
             this.error = res.message;
+            // Unloaded, not merely errored — see the note on emailState.load.
+            // Settings unmounts on navigation while this module survives, so a
+            // failed remount reload would leave stale values on screen looking
+            // current, and logging_station is round-tripped WHOLE.
+            this.loaded = false;
             return;
         }
         this.#apply(res.config);

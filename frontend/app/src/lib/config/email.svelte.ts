@@ -107,6 +107,15 @@ class EmailState {
         this.loading = false;
         if (out.kind === 'error') {
             this.error = out.message;
+            // Unloaded, NOT merely errored. Settings unmounts when the operator
+            // navigates away (App.svelte renders it behind a router branch)
+            // while this module survives, so a failed remount reload would
+            // otherwise leave the previous session's values on screen with
+            // `loaded` still true — and the component only reports an error
+            // while !loaded. Since the PUT replaces the smtp block WHOLE,
+            // editing one field of a stale form writes every other field back
+            // at its stale value (clean-room review dcb0316e69b9).
+            this.loaded = false;
             return;
         }
         this.#apply(out.smtp);
@@ -114,7 +123,13 @@ class EmailState {
     }
 
     async save(): Promise<void> {
-        if (this.saving || !this.dirty) return;
+        // `loaded` is a precondition, not a status: a whole-block PUT built from
+        // a draft we never successfully filled writes stale or blank values over
+        // the daemon's. Redundant with the component (which renders no Save
+        // button while unloaded) and deliberately so — this is the last line
+        // before the wire. It also covers the tick between mount and onMount's
+        // load, where the component's {:else} branch does show the form.
+        if (this.saving || !this.loaded || !this.dirty) return;
         this.saving = true;
         try {
             const res = await saveEmail(this.buildPayload());
