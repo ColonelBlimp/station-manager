@@ -41,7 +41,7 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-02)
+## Now (as of 2026-08-03)
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
@@ -50,47 +50,34 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **DEPLOYED AT HEAD** (`663c7eff`), daemon active. Everything below is live.
-  `smd` is deliberately NOT auto-start — a stopped daemon is not a fault.
-- **OBSERVE WHEN THE CHANCE ARISES — NOT tasks, and they gate nothing.** The
-  operator does not go on air every day; do not schedule these, do not treat
-  them as blocking, and do not open a session by asking whether they are done.
-  Confirm opportunistically and record the result.
-  - **SSE revival** (shipped today): background the MAP tab — another tab in the
-    SAME window, since browsers throttle on visibility not focus — leave it,
-    come back. Map should go live again with no reload. **A negative result
-    means the TRIGGER is wrong, not the logic:** `visibilitychange` may never
-    fire on this desktop. Diagnostic: `addEventListener('visibilitychange',
-    () => console.log(document.visibilityState))`. If it never fires, re-pick
-    the hook (`focus` / `online` / `resume` / periodic liveness) — do NOT patch
-    `openReviving`.
-  - **FT8 dead-source watchdog** — at the next Plasma device fiddle, or forced
-    with `pw-cli destroy` on the codec node mid-capture.
-  - **ADR 0059 auto-work** — needs on-air confirmation.
-  - **Stuck-TX / RF-ingress experiment** — 2 s tune trials INTO THE ANTENNA on
-    20 m. Operator's call on RF exposure; both dummy-load hypotheses are dead
-    and the antenna is the remaining variable.
-- **Shipped today:** SHIP GATE (a) config-save records (closed api A4 + A8); the
-  **SessionStart hook fix** (it had been emitting 231 KB, truncated to a 2 KB
-  preview, so the RECONCILE warning had never once been delivered); the
-  **Forwarding tab** ported into app Settings; the **logging card re-centred**
-  (it lost its auto-margin centring when ADR 0058 retired the ADR 0046 tile
-  board); and **SSE revival** on returning to a hidden tab.
-- **Also newly live, worth an eyeball:** Settings → Forwarding (disclosures,
-  pills, reset on `smcloud.logbook` only); `grep 'config saved'` in `smd.log`
-  after any settings change; and `"label": "SM Cloud"` on the smcloud forwarder
-  in config.json + restart, which overrides the binary's "SM Cloud backup".
-- **NEXT ACTUAL WORK (this is the list to pick from):** (a) port **Email** or **Enrichment** — both
-  reuse the masked-credential + `Clearable` pattern Forwarding just proved;
-  (b) surface the forwarder `label` in the logbook upload-status column;
-  (c) a Playwright bounding-box/screenshot check for layout — THREE centring
-  defects landed today (Forwarding width, Rigs centring, the logging card) and
-  none is catchable in vitest, because jsdom does no layout and the only
-  assertable thing is a class name.
-- **BLOCKED, do not start as a standalone build:** SHIP GATE (c) notification
-  records — it is ADR 0061's subject matter and that ADR is still `Proposed`
-  with the "does `notification` join the event table" question unanswered. The
-  ADR's own prescription is to ship the alarm pilot first and let it decide.
+- **DEPLOYED AT HEAD** (`bba15ede`, daemon started 10:22, smcloud reconcile
+  `in_sync` 6919/6919). Everything below is live. `smd` is deliberately NOT
+  auto-start — a stopped daemon is not a fault.
+- **Shipped today:** **Settings → Email**, plus the two daemon gaps the port
+  exposed (a stored SMTP password could never be REMOVED; a blank port/timeout
+  stored 0 and became 587/30 only at the next restart). Also a **stale-reload
+  class fix** across all four Settings sections, and the **CAT chip** is now a
+  readout outside Operate. Detail in Current state.
+- **EYEBALL WHEN CONVENIENT:** Email's password keep / type / remove states and
+  the 587/30 placeholders — live but never seen by hand; vitest checks the DOM,
+  not the look.
+- **OBSERVE WHEN THE CHANCE ARISES — NOT tasks, and they gate nothing.** Do not
+  schedule these and do not open a session asking whether they are done; confirm
+  opportunistically. SSE revival (background the MAP tab — same window, browsers
+  throttle on visibility not focus; **a negative result means the TRIGGER is
+  wrong, not `openReviving`** — see Current state) · FT8 dead-source watchdog ·
+  ADR 0059 auto-work · stuck-TX / RF-ingress 2 s tune trials INTO THE ANTENNA
+  (operator's call on RF exposure).
+- **NEXT ACTUAL WORK (the list to pick from):** (a) port **Enrichment** — same
+  masked-credential pattern, but its wire shape is a provider CHAIN while the
+  config SPA renders a QRZ-specific section, so porting re-opens that choice;
+  (b) a **Settings navigation guard** — sidebar links still discard unsaved
+  edits silently (knowingly open; reasoning in `Header.svelte.test.ts`);
+  (c) forwarder **`label` in the logbook upload-status column** (verified open
+  2026-08-03); (d) **Playwright** layout check — NOT scaffolded at all, so it is
+  config + CI + a first spec, not just a test.
+- **BLOCKED, not as a standalone build:** SHIP GATE (c) notification records —
+  ADR 0061's subject matter, and that ADR is still `Proposed`.
 - **PARKED — do not start without the operator:** `operator_pick` / Call-CQ
   auto_off (see the `ft8-cq-answerer-selection` memory).
 - **STANDING:** do not tune the hub buffers (8 ft8 / 64 bridge+events) until the
@@ -101,9 +88,68 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Current state (as of 2026-08-02)
+## Current state (as of 2026-08-03)
 
-> **2026-08-02, LAST — SSE REVIVAL SHIPPED, and its scope was CUT IN HALF by
+> **2026-08-03, LAST — SETTINGS → EMAIL SHIPPED, and the port exposed two daemon
+> defects that had nothing to do with the SPA. Deployed at HEAD (`bba15ede`).**
+>
+> - **PORTING IS A DEFECT DETECTOR.** Neither gap was in the Email tab; both were
+>   in the daemon, and both had been shipped for months. (1) **A stored SMTP
+>   password could never be REMOVED.** `mergeSmtp` keeps the stored value on
+>   blank and SMTP has no `Clearable` concept, so once set it could only be
+>   replaced — short of stopping the daemon and hand-editing config.json.
+>   Unauthenticated relays are a legitimate setup, so this was a real dead end.
+>   Fixed with an explicit `password_clear` command, NOT by overloading blank:
+>   blank has to go on meaning KEEP, because it is what an operator editing the
+>   host sends on every single save. Operator's ruling on the both-fields case:
+>   **clear wins** (fail-safe for secret removal, sensible against stale form
+>   state) — recorded at the code site and in the test that guards it, so a later
+>   "surely that should be a 400" rewrite has to argue with a test.
+>   (2) **A blank port/timeout stored 0** and silently became 587/30 at the NEXT
+>   restart, because `applyDefaults` runs only on Load while the PUT path runs
+>   `Normalize`. On an ENABLED block it never got that far — `validateSmtp`
+>   returned a 400 telling the operator to type a number the daemon already knew.
+>   Fixed by `normalizeSmtpDefaults` in `Normalize`, following the precedent two
+>   lines away (`normalizeLookupURLs`, moved for exactly this reason).
+> - **THE RED STEP FOR A GREENFIELD SPA MODULE IS THE CARELESS PORT.** There is
+>   nothing to revert when the file does not exist yet, so the config SPA's
+>   `saveEmail` was copied across verbatim first and the tests run against it.
+>   Four wire rules and three UI rules failed — including that it sends
+>   `logging_station` and `station` (the clobber review 2026-07-20 #3 removed
+>   from Station), and that it has no Remove control and no default placeholders.
+>   The other eight passed against the naive port and are guards, not
+>   discoveries. **Say which is which** rather than reporting "all red".
+> - **ONE CRITERION WAS NOT OPERATOR-OBSERVABLE AND WAS LABELLED, NOT FAKED.**
+>   "A typed password replaced the old one" cannot be seen in a browser —
+>   `password_set` reads true either way, and the only human proof is a
+>   successful send. Its proof is a wire assertion, and the test header says so.
+> - **A P1 CAME BACK ON THE FIX, TWICE, AND BOTH ROUNDS WERE RIGHT.** Round 1
+>   (`dcb0316e`): a failed RELOAD left `loaded` true, so the section rendered the
+>   previous session's values with no error — and since every Settings PUT
+>   replaces its block WHOLE, editing one field rewrites the rest at stale
+>   values. Reachable because `App.svelte:100` mounts Settings behind a router
+>   branch while the state modules are singletons. **It was in all four sections,
+>   not just Email** — the commit replicated a pre-existing pattern. Round 2
+>   (`2c64c7aa` → `bba15ede`): clearing `loaded` only in the error branch still
+>   leaves the retained draft live for the whole PENDING reload; it must be
+>   invalidated BEFORE the await. That round also pushed the `!loaded` save
+>   precondition to all four (it had been Email-only) and to `rigs.setDefault`,
+>   which is the same class of write and had been missed.
+> - **CAT CHIP IS A READOUT OUTSIDE OPERATE** (operator's call). It used to
+>   navigate to Operate and reveal the rig panel — deliberate, and pinned by its
+>   own test, which had to be DELETED. That is the spec changing, not the code
+>   being wrong, so the reversal's reasoning went into the test file rather than
+>   letting the old rule look like it never existed. Rendered as a `<div>`, not a
+>   disabled button: an inert control you can still click and hover is
+>   indistinguishable from a broken one. **NARROW BY INSTRUCTION** — every
+>   sidebar link still leaves dirty Settings and discards the edits on RETURN
+>   (the reload's `#apply` overwrites the draft), so there is no moment at which
+>   the operator could be warned. Recorded as knowingly open.
+> - **`api-endpoints.md` was missing the whole `lookup` block** on both GET and
+>   PUT — found while documenting `smtp`. Added, along with `password_clear` and
+>   the default resolution.
+
+> **2026-08-02 — SSE REVIVAL SHIPPED, and its scope was CUT IN HALF by
 > reading `smd.log` instead of reasoning. Deployed at HEAD; its on-desktop
 > confirmation is an opportunistic OBSERVATION, not a scheduled task.**
 >
