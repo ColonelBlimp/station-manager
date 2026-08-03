@@ -204,7 +204,10 @@ func TestHandlePutConfig_SmtpPasswordCleared(t *testing.T) {
 
 // S2: clear and a typed value cannot both be honoured, so the destructive
 // intent wins and the rule is stated rather than left to whichever the merge
-// happens to read last.
+// happens to read last. Clear-wins over a 400 is the OPERATOR'S RULING
+// (2026-08-03): fail-safe for secret removal, and sensible against stale form
+// state. This test is what stops a later "surely that should be an error"
+// rewrite from changing it silently.
 //
 // Our own SPA never sends this pair (pressing Remove discards any half-typed
 // value, the same way forwarding's clear() does), so this is the daemon
