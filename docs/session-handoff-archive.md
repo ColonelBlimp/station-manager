@@ -12573,3 +12573,64 @@ holding the live doc at the enforced 3-arc window.
 >   `mergeLookupProvider` carries it from the STORED entry, because the rebuild
 >   keeps only what it names — the same trap that silently ate forwarder
 >   `endpoints` for a while.
+
+> **2026-08-03 — ADR 0062: ENRICHMENT PROVIDERS SELF-REGISTER. Three
+> commits, three reviews; the first two each found a real gap and both were
+> mine.**
+>
+> - **THE TRIGGER WAS THE OPERATOR, ONE SENTENCE AFTER THE PORT SHIPPED:**
+>   "adding another service becomes a code change rather than a config
+>   addition." Counting the sites proved him right — FIVE besides the provider
+>   package, four of them hand-written name checks, and TWO of those added that
+>   same day by the port. The gap had been *observed* during the port ("there is
+>   no `/v1/lookup-types` the way Forwarding has") and used as an argument FOR
+>   hardcoding rather than raised as the defect.
+> - **THE ADR'S FEASIBILITY CLAIM WAS WRONG AND THE BUILD FOUND IT IN A MINUTE.**
+>   It said the registry could live in `internal/lookup` because that package
+>   does not import `internal/config`. It does — TRANSITIVELY, via
+>   `internal/database/sqlite`. One hop checked, feasibility asserted. The
+>   registry therefore splits: **`internal/lookupdef`** (true leaf) holds
+>   descriptors that `config` and `api` read; **`internal/lookup`** holds
+>   constructors, where the provider interfaces already are.
+> - **THREE STRUCTURAL GUARDS FIRED, ALL CORRECTLY.** The ADR 0043 import ratchet
+>   rejected `api` → `lookupdef` (added with intent — `api` has always imported
+>   `internal/forwarding` for the same reason). `maintidx` tripped because ONE
+>   added route pushed `api.New` over; the exemption list is documented as the
+>   refactor backlog, so `registerRoutes` was extracted instead of growing it.
+>   And a UI test caught two fail-opens being collapsed: the validator must not
+>   REQUIRE credentials for an undescribed provider, but the UI must not HIDE
+>   its credential fields — same instinct, opposite directions.
+> - **REVIEW 1 (P1): SEEDING WAS MISSING**, which defeated the ADR's own goal — a
+>   newly registered provider appeared in `/v1/lookup-types` and in no config
+>   block, so Settings had no row for it. I had flagged seeding as an optional
+>   "accepted cost" and left it out; that was wrong. Verifying the finding also
+>   turned up what the review did not mention: `DefaultConfig` still seeded QRZ
+>   BY NAME, so the claim "all five hardcoded sites are gone" was false. Fixing
+>   the P1 removed it.
+> - **MY OWN NEW TEST THEN CAUGHT A BUG IN THAT FIX**: an operator who sets a
+>   country URL but omits the `name` — exactly the shape the old canonical-name
+>   stamp existed for — had their URL destroyed, because the seed replaced the
+>   whole block. Now filled FIELD-WISE.
+> - **REVIEW 2 (P2): A SECOND COUNTRY PROVIDER DROPPED SILENTLY**, behind a
+>   comment I had written excusing it ("the first by name wins — deterministic").
+>   A defect dressed as a design note. Config has ONE country slot by decision
+>   (ADR 0017, country data is single-source), so the fix is to refuse the second
+>   at registration, not to represent it.
+> - **NET:** adding a provider is now a package plus a blank import in `cmd/smd`.
+>   The config entry seeds itself disabled, the descriptor endpoint feeds
+>   Settings, the SPA changes not at all.
+> - **THEN THE FORWARDER `label` REACHED THE LOGBOOK** (3 commits, 2 more review
+>   findings, both mine). The first pass did the tooltip and dropdown and stopped:
+>   `selectedDestination` was treated as purely a KEY — its job in
+>   enqueueUploads — so the three places it is ALSO RENDERED went unlooked-for,
+>   and one destination appeared under two identities in a single workflow
+>   ("Upload 1 to qrz" after picking "QRZ (club account)"). Fixed with ONE getter
+>   so the display sites cannot drift again. The follow-up review then caught a
+>   RACE in that fix: the `<select>` is not disabled during an upload, and the
+>   label was resolved AFTER the await, so a mid-flight change of destination
+>   produced a notice naming somewhere the QSOs were never sent. The pre-existing
+>   code already captured `dest` before awaiting for exactly that reason —
+>   the second read broke a symmetry that was deliberate. **`name` stays the
+>   durable key everywhere it is sent** (`qso_upload`'s UNIQUE constraint,
+>   `missing_from`, `POST /v1/forwarder/{name}/uploads`); the label is display
+>   only.

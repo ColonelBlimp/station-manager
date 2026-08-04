@@ -50,11 +50,11 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **HEAD is `4e637b42`; the DAEMON still runs `d13fcb22`.** The four coordinate
-  commits are NOT live — they are preventive, and the bad rows they concern are
-  historical, so this is not urgent. Everything from the morning IS deployed and
-  was verified in the running build. `smd` is deliberately NOT auto-start — a
-  stopped daemon is not a fault.
+- **HEAD is `4665b5a9`; the DAEMON still runs `d13fcb22`.** Seven commits behind —
+  the coordinate arc, the map band filter and the first FT8 ship-gate chunk. All
+  preventive or additive; nothing urgent, but the **band filter** is the one thing
+  you would actually see, so a deploy is worth it before the next operating
+  session. `smd` is deliberately NOT auto-start — a stopped daemon is not a fault.
 - **Shipped 2026-08-04, morning (DEPLOYED):** the **Settings navigation guard**
   (ADR 0063) and **FT8 session-end causes** — `Abandon()` is reached from twelve
   places and only the dial paths named themselves, so a session that DIED logged
@@ -80,16 +80,21 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   revival (background the MAP tab; **a negative result means the TRIGGER is
   wrong, not `openReviving`**) · FT8 dead-source watchdog · stuck-TX /
   RF-ingress 2 s tune trials INTO THE ANTENNA (operator's call on RF exposure).
-- **NEXT ACTUAL WORK:** (a) **Playwright** layout check — NOT scaffolded at all,
-  so config + CI + a first spec; (b) config-SPA retirement needs **FT8** and
-  **General**, the last two unported tabs. ~~the R9LAU map bug~~ — **CLOSED**:
-  the display was fixed 2026-07-30 and the data cause is now fixed at ingress.
-  ~~band filter~~ — **SHIPPED**. Still open on the map, none urgent: the **FT8
-  RX propagation overlay** (P2), the **whole-log Dashboard map** (P3, needs a
-  `/v1/logbook/{id}/map` aggregate), a **solar-time-zone overlay** (analysed
-  2026-08-04, `dogfood-inbox.md` — read it before starting; the licensing and
-  solar-vs-political forks are already settled there), and the SSE-revival item
-  listed below.
+- **IN FLIGHT — the `internal/ft8` LOGGING SHIP GATE. 5 of 14 findings closed,
+  9 to go.** Source of truth is `docs/reviews/ft8-logging-gaps.md`, which now
+  carries per-finding ✅ notes and a Progress block — **read it, do not work from
+  this summary**, and do not delete the file until all 14 ship. Closed: 1
+  (2026-08-01) · 6, 2, 3, 14 (2026-08-04). **Resume at finding 4**, whose sites
+  were read but nothing written: `service.go:841` / `:880` / `:903`. Then 5 + 11
+  with it (one story — "a slot passed and the log cannot say why"; 11 spans 15
+  sites), then 7 + 8, then 12 + 13, then 9 + 10.
+- **OPERATOR RULING, ALREADY MADE — do not re-open finding 6.** A keyed
+  transmission records TWO INDEPENDENT WITNESSES: wall `keyed_ms` and `samples`
+  submitted. It deliberately does NOT prove RF left the rig — that is the drive
+  alarm's job — and `txcontroller.go` says so, so it is not overclaimed later.
+- **NEXT AFTER THE SHIP GATE:** (a) **Playwright** layout check — NOT scaffolded
+  at all; (b) config-SPA retirement needs **FT8** and **General**, the last two
+  unported tabs.
 - **DECIDED, DO NOT REOPEN — no FT8 dupe guard.** Reaffirmed 2026-08-04 after a
   50-QSO run logged KK2A twice: they never copied our RR73 (asked twice,
   re-sent twice), so the re-work was CORRECT on-air behaviour. The reasoning is
@@ -114,7 +119,44 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ## Current state (as of 2026-08-04)
 
-> **2026-08-04 (afternoon), LAST — THE COORDINATE ARC. Four commits, six
+> **2026-08-04 (evening), LAST — THE `internal/ft8` LOGGING SHIP GATE, STARTED.
+> 5 of 14 findings closed, 9 to go. STOPPED MID-FINDING-4 at the operator's
+> instruction; nothing is half-written, the tree is clean at `4665b5a9`.**
+>
+> - **Read `docs/reviews/ft8-logging-gaps.md`, not this summary.** It now carries
+>   a ✅ note per closed finding (what shipped, in which commit, and where the
+>   review's own suggestion was WRONG) plus a Progress block naming what is left
+>   and where to resume. **Do not delete the file until all 14 ship** — it is the
+>   only place the confusable-state statements live, and those are the behaviour
+>   specs the tests are written from.
+> - **The operator's decision on finding 6, which was the gate's only open one:**
+>   a keyed transmission records **two independent witnesses** — wall `keyed_ms`
+>   and `samples` submitted. Each covers the other's blind spot. **It does NOT
+>   prove RF left the rig**, and `txcontroller.go` says so in as many words: that
+>   belongs to the drive alarm watching the rig's PO meter, and this record is
+>   what the alarm gets correlated against. Written down precisely so a later
+>   reader does not upgrade it into a claim it cannot support.
+> - **Two places the review was wrong, both found by building it.** Finding 2
+>   suggested `ActiveCallsign()` for the abandon line — that returns OUR call (the
+>   TX identity), not the partner's, so it needed a new `partnerCallLocked()`
+>   reading the exchange BEFORE `abandonLocked` clears the pointers. Finding 3
+>   said five disarm causes; there are SIX (the retune path was missed).
+> - **Shape worth copying for the remaining nine:** the review's own instruction
+>   is that "a test asserting only 'a line was emitted' is weaker than the rule —
+>   assert that the two confusable states produce DISTINGUISHABLE output". R21
+>   therefore drives operator-disarm AND unattended-linger and compares them,
+>   rather than checking either alone; R23 guards the enumeration against two
+>   causes collapsing to the same string, which would restore the defect while
+>   every individual rule still passed.
+> - **MY PROCESS FAILURES, twice each, both repeats from earlier the same day.**
+>   (1) A reversion proof broke the BUILD (unused variable) instead of failing a
+>   test — inconclusive, and it looks like a pass if you only read the exit code.
+>   (2) I used `git checkout <file>` to undo a probe and **wiped uncommitted work**,
+>   because HEAD does not have work that is not committed. That cost a reapply
+>   both times. **Back up to the scratchpad before every reversion probe; never
+>   `git checkout` a file with uncommitted changes in it.**
+
+> **2026-08-04 (afternoon) — THE COORDINATE ARC. Four commits, six
 > reviews, five P1s, every one mine — plus the map band filter. Started as "what
 > map items are left?" and became the whole coordinate perimeter.**
 >
@@ -251,67 +293,6 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 >   step-shaped transitions (109→95 between consecutive slots, not a ramp), which
 >   also validated the drive-alarm instrumentation in the field: a deliberate 13%
 >   drop for 25 minutes raised nothing.
-
-> **2026-08-03 — ADR 0062: ENRICHMENT PROVIDERS SELF-REGISTER. Three
-> commits, three reviews; the first two each found a real gap and both were
-> mine.**
->
-> - **THE TRIGGER WAS THE OPERATOR, ONE SENTENCE AFTER THE PORT SHIPPED:**
->   "adding another service becomes a code change rather than a config
->   addition." Counting the sites proved him right — FIVE besides the provider
->   package, four of them hand-written name checks, and TWO of those added that
->   same day by the port. The gap had been *observed* during the port ("there is
->   no `/v1/lookup-types` the way Forwarding has") and used as an argument FOR
->   hardcoding rather than raised as the defect.
-> - **THE ADR'S FEASIBILITY CLAIM WAS WRONG AND THE BUILD FOUND IT IN A MINUTE.**
->   It said the registry could live in `internal/lookup` because that package
->   does not import `internal/config`. It does — TRANSITIVELY, via
->   `internal/database/sqlite`. One hop checked, feasibility asserted. The
->   registry therefore splits: **`internal/lookupdef`** (true leaf) holds
->   descriptors that `config` and `api` read; **`internal/lookup`** holds
->   constructors, where the provider interfaces already are.
-> - **THREE STRUCTURAL GUARDS FIRED, ALL CORRECTLY.** The ADR 0043 import ratchet
->   rejected `api` → `lookupdef` (added with intent — `api` has always imported
->   `internal/forwarding` for the same reason). `maintidx` tripped because ONE
->   added route pushed `api.New` over; the exemption list is documented as the
->   refactor backlog, so `registerRoutes` was extracted instead of growing it.
->   And a UI test caught two fail-opens being collapsed: the validator must not
->   REQUIRE credentials for an undescribed provider, but the UI must not HIDE
->   its credential fields — same instinct, opposite directions.
-> - **REVIEW 1 (P1): SEEDING WAS MISSING**, which defeated the ADR's own goal — a
->   newly registered provider appeared in `/v1/lookup-types` and in no config
->   block, so Settings had no row for it. I had flagged seeding as an optional
->   "accepted cost" and left it out; that was wrong. Verifying the finding also
->   turned up what the review did not mention: `DefaultConfig` still seeded QRZ
->   BY NAME, so the claim "all five hardcoded sites are gone" was false. Fixing
->   the P1 removed it.
-> - **MY OWN NEW TEST THEN CAUGHT A BUG IN THAT FIX**: an operator who sets a
->   country URL but omits the `name` — exactly the shape the old canonical-name
->   stamp existed for — had their URL destroyed, because the seed replaced the
->   whole block. Now filled FIELD-WISE.
-> - **REVIEW 2 (P2): A SECOND COUNTRY PROVIDER DROPPED SILENTLY**, behind a
->   comment I had written excusing it ("the first by name wins — deterministic").
->   A defect dressed as a design note. Config has ONE country slot by decision
->   (ADR 0017, country data is single-source), so the fix is to refuse the second
->   at registration, not to represent it.
-> - **NET:** adding a provider is now a package plus a blank import in `cmd/smd`.
->   The config entry seeds itself disabled, the descriptor endpoint feeds
->   Settings, the SPA changes not at all.
-> - **THEN THE FORWARDER `label` REACHED THE LOGBOOK** (3 commits, 2 more review
->   findings, both mine). The first pass did the tooltip and dropdown and stopped:
->   `selectedDestination` was treated as purely a KEY — its job in
->   enqueueUploads — so the three places it is ALSO RENDERED went unlooked-for,
->   and one destination appeared under two identities in a single workflow
->   ("Upload 1 to qrz" after picking "QRZ (club account)"). Fixed with ONE getter
->   so the display sites cannot drift again. The follow-up review then caught a
->   RACE in that fix: the `<select>` is not disabled during an upload, and the
->   label was resolved AFTER the await, so a mid-flight change of destination
->   produced a notice naming somewhere the QSOs were never sent. The pre-existing
->   code already captured `dest` before awaiting for exactly that reason —
->   the second read broke a symmetry that was deliberate. **`name` stays the
->   durable key everywhere it is sent** (`qso_upload`'s UNIQUE constraint,
->   `missing_from`, `POST /v1/forwarder/{name}/uploads`); the label is display
->   only.
 
 ## Active cycle (the 1–3 things in flight now)
 

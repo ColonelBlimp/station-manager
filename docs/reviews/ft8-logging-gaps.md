@@ -116,6 +116,14 @@ only trace is `ft8 tx: disarmed` followed by `ft8 seq: session abandoned reason=
 
 ### 2. `ft8 seq: session abandoned` carries no callsign, and usually a blank reason
 
+> ✅ **FIXED — reason 2026-08-04 (commit `3531e1ed`), callsign 2026-08-04 (`4665b5a9`).**
+> The reason half shipped first as its own arc: `Abandon()` is reached from TWELVE
+> places, not four, and only the two dial paths staged anything. The callsign half
+> needed a NEW accessor — `ActiveCallsign()` returns OUR call (the TX identity), not
+> the partner's, so the review's suggestion would not have worked as written;
+> `partnerCallLocked()` reads the exchange BEFORE `abandonLocked` clears the pointers.
+> Rules: `abandoncause_test.go` R1-R23.
+
 `internal/ft8/sequencer.go:701` logs `Str("reason", reason)`, where `reason` is
 `s.pendingEndReason` — staged only by the dial guard (`servicetx.go:1181`).
 
@@ -140,6 +148,14 @@ and already used by the decode loop (`service.go:856`).
   caller passes a reason (`endReasonForRefusal`, `EndReasonDialMoved`).
 
 ### 3. `disarmTx` logs one message for five distinct causes
+
+> ✅ **FIXED 2026-08-04 (`4665b5a9`), together with finding 14 as the review advised.**
+> Six call sites (not five — the retune path was missed by the audit) now name their
+> cause: `operator` / `unattended` / `cat_lost` / `shutdown` / `band_change` /
+> `dial_moved`. The old `closing bool` is DERIVED from the cause rather than carried
+> beside it — two parameters that must agree are a bug waiting. R21 pairs
+> operator-vs-unattended rather than checking either alone, per this file's own
+> instruction that a "a line was emitted" assertion is weaker than the rule.
 
 `internal/ft8/servicetx.go:352` — `ft8 tx: disarmed`, reached from the operator, linger
 expiry, CAT drop, dial move, and Stop.
@@ -209,7 +225,25 @@ and attempts); the resulting exclusion is not.
 - **Record:** callsign + expiry when the cool-off is set; callsign + reason when a
   pick is skipped for either exclusion.
 
-### 6. A successful transmission logs nothing at the Service layer — OPEN DECISION
+### 6. A successful transmission logs nothing at the Service layer — DECIDED + FIXED
+
+> ✅ **DECIDED 2026-08-04 (operator) and FIXED the same day (`4665b5a9`).**
+> **The ruling: TWO INDEPENDENT WITNESSES per keyed transmission** — the wall
+> key-to-unkey time and the sample count handed to the device. Each covers the
+> other's blind spot: `keyed_ms` catches a play that returned instantly even when the
+> audio layer reports success; `samples` catches a truncated or empty waveform even
+> when the timing looks right. The diagnostic is their RELATIONSHIP.
+>
+> **WHAT IT DOES NOT PROVE, written into `txcontroller.go` so it is not overclaimed:**
+> `samples` is what SM SUBMITTED, not what the device emitted. A device that accepts a
+> full waveform and radiates nothing still logs a healthy line. THAT case is the drive
+> alarm's (`internal/bridge/drivealarm.go`, watching the rig's PO meter); this record
+> is what the alarm gets correlated against. It does NOT close the 2026-07-28 incident.
+>
+> `keyed_ms` is measured INSIDE the unkey closure, with the log defer registered
+> BEFORE the unkey defer so LIFO runs it after — otherwise it would stop at the return
+> statement and could not show a short transmission. A FAILED rung emits nothing.
+> Rules: `txcontroller_test.go` T1-T3.
 
 `../../internal/ft8/servicetx.go` has **6 log calls in 1415 lines**: armed (`:219`),
 disarmed (`:352`), panicked (`:622`), failed (`:624`), retune (`:1134`), dial-moved
@@ -411,6 +445,8 @@ deferred flush also fails silently.
 
 ### 14. TX teardown reports success after a cleanup failure — Tier 4
 
+> ✅ **FIXED 2026-08-04 (`4665b5a9`), with finding 3 as advised — same line, different axis.**
+
 `servicetx.go:347-350` discards `dev.Stop()` and `dev.Close()`, then `:351-353` logs
 `ft8 tx: disarmed` unconditionally on `wasArmed`.
 
@@ -462,6 +498,17 @@ them. Each was checked against the code on 2026-08-01.
   `type4.go`, `caller.go`, `field_day.go`, `sequence.go`.
 
 ---
+
+## Progress (2026-08-04)
+
+**5 of 14 closed:** 1 (2026-08-01), then 6, 2, 3, 14 (2026-08-04). **9 remain:**
+4, 5, 11 (the "a slot passed and the log cannot say why" cluster — do together),
+7, 8 (data integrity, small), 12, 13 (one file), 9, 10 (whenever adjacent).
+
+Next in the order below is **4**, and the work was stopped mid-investigation with
+the sites read but nothing written: `service.go:841` (decode skipped), `:880`
+(sequencer not fed), `:903` (`unplaceable` occupancy). Finding 6's answer — which
+the order said would shape finding 4's lines — is now known, so 4 is unblocked.
 
 ## Suggested order
 
