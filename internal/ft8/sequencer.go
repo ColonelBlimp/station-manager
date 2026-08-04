@@ -519,12 +519,15 @@ type Sequencer struct {
 // transmit closure. Rung sites capture it under s.mu (in place of s.transmit)
 // so the commit-time isCurrent check compares against the generation the rung
 // was decided for — not whatever is current when the closure finally runs.
-func (s *Sequencer) transmitLocked() func(message string, offsetHz, dialMHz float64, onDone func(ok bool)) error {
+// It also RETURNS that generation, so a rung whose transmit fails can scope its
+// teardown to the session it belonged to instead of ending whatever is current
+// by then (CLAUDE.md invariant 5; codex ea0c91a5 P1).
+func (s *Sequencer) transmitLocked() (func(message string, offsetHz, dialMHz float64, onDone func(ok bool)) error, uint64) {
 	gen := s.sessionGen
 	tx := s.transmit
 	return func(message string, offsetHz, dialMHz float64, onDone func(ok bool)) error {
 		return tx(message, offsetHz, dialMHz, gen, onDone)
-	}
+	}, gen
 }
 
 // isCurrent reports whether gen is still the live session generation. The
@@ -741,6 +744,27 @@ func (s *Sequencer) Abandon() { s.abandonNamed("", causeOperator) }
 // indistinguishable from a session that DIED — the defect this closes.
 func (s *Sequencer) abandonNamed(frameReason, logFallback string) {
 	s.mu.Lock()
+	s.finishAbandonLocked(frameReason, logFallback)
+}
+
+// abandonNamedIfCurrent is abandonNamed scoped to ONE session generation: a no-op
+// unless gen is still live. Every teardown driven by a rung must use this. The
+// check and the teardown happen under a SINGLE lock hold, so a session started
+// after the check cannot be caught by it — CLAUDE.md invariant 5, whose cautionary
+// tale is an unconditional abandon killing a valid session started in the meantime.
+func (s *Sequencer) abandonNamedIfCurrent(gen uint64, frameReason, logFallback string) {
+	s.mu.Lock()
+	if s.sessionGen != gen {
+		s.mu.Unlock()
+		return // the session this rung belonged to is already gone
+	}
+	s.finishAbandonLocked(frameReason, logFallback)
+}
+
+// finishAbandonLocked performs the teardown. The CALLER holds s.mu; this releases
+// it (the terminal publish must happen while the lock still excludes a replacement
+// Start* — invariant 3).
+func (s *Sequencer) finishAbandonLocked(frameReason, logFallback string) {
 	// An armed auto-work run is a thing Abandon STOPS even with no contact in
 	// progress, and stopping it has to be published or it happens invisibly: the
 	// operator presses Abandon between contacts, no frame changes, and the indicator
@@ -1172,7 +1196,8 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
-	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
+	transmit, gen := s.transmitLocked()
+	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
 	// GROUP A final rung (see finalrung.go): they already sent RRR/RR73, so the
 	// contact is complete on their side and this 73 is a courtesy — send once and
@@ -1224,7 +1249,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		// encode — review M1) are terminal; anything else (e.g. ErrTxInFlight) is
 		// transient and the untouched state retries next slot.
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.abandonNamed(endReasonForTxErr(err), "")
+			s.abandonNamedIfCurrent(gen, endReasonForTxErr(err), "")
 			return
 		}
 		s.publishCurrent()
@@ -1333,14 +1358,14 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 	s.contact.repeats++
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
-	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
+	transmit, gen := s.transmitLocked()
+	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
 	var completed *CompletedQso
 	if confirming {
 		c := s.completedQsoFdLocked()
 		completed = &c
 	}
-	gen := s.sessionGen
 	prepareComplete, onComplete := s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
@@ -1382,7 +1407,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: FD rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.abandonNamed(endReasonForTxErr(err), "")
+			s.abandonNamedIfCurrent(gen, endReasonForTxErr(err), "")
 			return
 		}
 		s.publishCurrent()
@@ -1534,7 +1559,8 @@ func (s *Sequencer) fireOpening(now time.Time) {
 	// with max_repeats=1, abandoning the session while the opening is still
 	// playing (review 2026-07-20 #2).
 	s.lastTxSlot = curStart
-	transmit, offset, dial, repeats := s.transmitLocked(), s.offsetHz, s.dialFreqMHz, s.contact.repeats
+	transmit, gen := s.transmitLocked()
+	offset, dial, repeats := s.offsetHz, s.dialFreqMHz, s.contact.repeats
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("msg", msg).Str("rung", rung).Float64("offset_hz", offset).
@@ -1548,7 +1574,7 @@ func (s *Sequencer) fireOpening(now time.Time) {
 		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.abandonNamed(endReasonForTxErr(err), "") // TX gone / message can't encode — can't continue.
+			s.abandonNamedIfCurrent(gen, endReasonForTxErr(err), "") // TX gone / message can't encode — can't continue.
 			return
 		}
 	}

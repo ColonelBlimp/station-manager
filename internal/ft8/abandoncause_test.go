@@ -241,3 +241,47 @@ func TestAbandonCause_TxFailureDoesNotClobberAStagedReason(t *testing.T) {
 	require.Equal(t, EndReasonDialMoved, r.lastStatus().EndReason,
 		"a safety stop reported as a transmit failure sends the operator after the wrong fault")
 }
+
+// R8: a rung whose transmit failed must not end a session that REPLACED the one
+// it belonged to.
+//
+// codex ea0c91a5 P1. `transmit` returning a terminal error is not instantaneous —
+// the handler logs, then abandons — and ErrTxBadMessage comes from ENCODING
+// (servicetx.go), so TX stays armed and the operator can abandon and start a
+// fresh session inside that window. An unconditional teardown then kills the
+// replacement and stamps the dead rung's failure on it as an end reason. This is
+// the hazard CLAUDE.md invariant 5 names ("anything that retires a session must
+// be generation-scoped … an unconditional abandon killed a valid session started
+// on the new dial in the meantime") — the same trap, reached down a new path.
+//
+// Deterministic: beforeErr performs the operator's abandon-and-restart INSIDE the
+// transmit call, which is exactly the window.
+func TestAbandonCause_StaleTxFailureCannotEndAReplacementSession(t *testing.T) {
+	sink, log := newLogSink()
+	r := &seqRecorder{}
+	s := newTestSeqLogged(r, log)
+	startedSession(t, s)
+
+	slot := time.Unix(0, 0).UTC().Format(time.RFC3339)
+	r.transmitErr = ErrTxBadMessage
+	r.beforeErr = func() {
+		r.beforeErr = nil // the replacement's own opening rung must not re-enter
+		r.transmitErr = nil
+		s.Abandon()
+		// A DIFFERENT partner, so the surviving session is unmistakably the new one.
+		_ = s.StartQso("G0XYZ", "IO91", "W1XYZ", "FN31", slot, 1500, 14.074, time.Unix(0, 0).UTC())
+	}
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC FN42", -12)})
+
+	require.True(t, s.Active(),
+		"the replacement session must survive a stale rung's failure")
+	require.Equal(t, "W1XYZ", s.statusForTest().TheirCall,
+		"and it must still be the REPLACEMENT, not a revived corpse")
+	require.NotEqual(t, EndReasonTxBadMessage, r.lastStatus().EndReason,
+		"a dead rung's failure must never be stamped on the session that replaced it")
+
+	// The operator's own abandon of the ORIGINAL is what the log should carry.
+	reason, found := sink.abandonReason(t)
+	require.True(t, found)
+	require.Equal(t, causeOperator, reason)
+}

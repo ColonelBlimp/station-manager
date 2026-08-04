@@ -165,7 +165,8 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	}
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
-	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
+	transmit, gen := s.transmitLocked()
+	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
 	// GROUP A final rung (see finalrung.go): their RR73 is what advanced us here,
 	// so the contact is complete on their side and this 73 is a courtesy — send
@@ -198,7 +199,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 			return
 		}
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.abandonNamed(endReasonForTxErr(err), "")
+			s.abandonNamedIfCurrent(gen, endReasonForTxErr(err), "")
 			return
 		}
 		s.publishCurrent()
@@ -352,9 +353,9 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 	s.contact.repeats++
 
 	s.lastTxSlot = txSlot
-	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
+	transmit, gen := s.transmitLocked()
+	offset, dial := s.offsetHz, s.dialFreqMHz
 	c := s.completedT4WorkQsoLocked()
-	gen := s.sessionGen
 	prepareComplete, onComplete := s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
@@ -393,7 +394,7 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: type-4 work rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.abandonNamed(endReasonForTxErr(err), "")
+			s.abandonNamedIfCurrent(gen, endReasonForTxErr(err), "")
 			return
 		}
 	}

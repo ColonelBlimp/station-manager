@@ -203,7 +203,8 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	s.contact.repeats++
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
-	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
+	transmit, gen := s.transmitLocked()
+	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
 	var completed *CompletedQso
 	if confirming {
@@ -213,7 +214,6 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		c := s.completedCallerQsoLocked()
 		completed = &c
 	}
-	gen := s.sessionGen
 	prepareComplete, onComplete := s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
@@ -264,7 +264,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// onDone never fired, so a final-rung QSO is correctly not logged. Terminal
 		// errors abandon; transient ones leave the contact for the next slot to retry.
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.abandonNamed(endReasonForTxErr(err), "")
+			s.abandonNamedIfCurrent(gen, endReasonForTxErr(err), "")
 			return
 		}
 	}
@@ -418,7 +418,8 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
-	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
+	transmit, gen := s.transmitLocked()
+	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
 	// GROUP A final rung (see finalrung.go): in Field Day the ANSWERING station
 	// sends the closing RR73, and receiving theirs is what advanced us here — so on
@@ -453,7 +454,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 			return
 		}
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.abandonNamed(endReasonForTxErr(err), "")
+			s.abandonNamedIfCurrent(gen, endReasonForTxErr(err), "")
 			return
 		}
 	}

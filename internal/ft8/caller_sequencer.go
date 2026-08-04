@@ -284,7 +284,8 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 
 	s.lastTxSlot = curStart.Add(SlotDuration)
-	transmit, offset, dial := s.transmitLocked(), s.offsetHz, s.dialFreqMHz
+	transmit, gen := s.transmitLocked()
+	offset, dial := s.offsetHz, s.dialFreqMHz
 	repeats := s.contact.repeats
 	var completed *CompletedQso
 	if confirming {
@@ -296,7 +297,6 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		c := s.completedCallerQsoLocked()
 		completed = &c
 	}
-	gen := s.sessionGen
 	publish, prepareComplete, onComplete := s.publish, s.prepareComplete, s.onComplete
 	s.mu.Unlock()
 
@@ -374,7 +374,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// ErrTxNotArmed / ErrTxBadMessage are terminal (review M1); else transient
 		// — the contact is untouched (still cqRogering), so the next slot retries.
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.abandonNamed(endReasonForTxErr(err), "")
+			s.abandonNamedIfCurrent(gen, endReasonForTxErr(err), "")
 			return
 		}
 	}
