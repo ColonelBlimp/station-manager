@@ -100,6 +100,20 @@ class RigsState {
             : false
     );
 
+    // Unsaved edits on ANY rig, not just the one on screen. Drafts persist per
+    // rig id so that switching rigs doesn't discard edits, which means `dirty`
+    // — scoped to the SELECTION — answers "no" while rig 1 still holds unsaved
+    // changes. Anything asking on behalf of the whole section (the exit guard)
+    // needs this one; anything driving the editor's own Save/Cancel wants
+    // `dirty`.
+    anyDirty = $derived(
+        Object.keys(this.drafts).some((k) => {
+            const id = Number(k);
+            const b = this.baselines[id];
+            return b !== undefined && JSON.stringify(this.drafts[id]) !== JSON.stringify(b);
+        })
+    );
+
     defFor(rig: RigConfig): RigDef | undefined {
         return this.catalogue[rig.model];
     }
@@ -150,6 +164,18 @@ class RigsState {
         this.baselines = {};
         this.#ensureDraft();
         this.loaded = true;
+    }
+
+    // Drop every unsaved connection edit and re-clone from the current server
+    // values — exactly what a fresh load() does to them (it wipes drafts and
+    // baselines outright), made callable so the navigation guard can honour
+    // "will be discarded" at the moment the operator agrees rather than leaving
+    // it to the next mount. Not resetDraft(): that covers only the SELECTED
+    // rig, and edits persist per rig id.
+    discardDrafts(): void {
+        this.drafts = {};
+        this.baselines = {};
+        this.#ensureDraft();
     }
 
     select(id: number): void {

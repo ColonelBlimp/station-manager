@@ -90,13 +90,40 @@ storageSet(MODE_KEY, router.mode); // remember a deep-linked mode
     }
 }
 
+// A view may refuse to be left. Settings uses this to ask before its unsaved
+// edits are discarded (lib/config/unsaved.ts) — the discard happens on RETURN,
+// when the remount reloads over the draft, so leaving is the last moment at
+// which the operator can still act on it.
+//
+// ONE slot, not a registry of guards: there is exactly one guarded view, and a
+// framework for a single caller is the shape lessons-for-v2 warns against.
+type LeaveGuard = () => boolean;
+let leaveGuard: LeaveGuard | null = null;
+
+export function setLeaveGuard(g: LeaveGuard | null): void {
+    leaveGuard = g;
+}
+
+// Asked only when config is genuinely being LEFT. Re-navigating to config (the
+// Settings tab strip does not route, but the sidebar item is clickable while
+// already there) is not leaving, and must not prompt.
+function mayLeave(to: View): boolean {
+    if (router.view !== 'config' || to === 'config') return true;
+    return leaveGuard === null || leaveGuard();
+}
+
 export function navigate(view: View): void {
+    if (!mayLeave(view)) return;
     router.view = view;
     const path = urlFor(view, router.mode);
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
 }
 
 export function setMode(mode: OpMode): void {
+    // Also an exit from Settings: OperateNav lives in the always-visible
+    // sidebar, so its mode buttons leave config without going through
+    // navigate(). Guarding only navigate() would leave this door open.
+    if (!mayLeave('operate')) return;
     router.view = 'operate';
     router.mode = mode;
     storageSet(MODE_KEY, mode);
@@ -107,6 +134,14 @@ export function setMode(mode: OpMode): void {
 // Sync on browser back/forward.
 window.addEventListener('popstate', () => {
     const loc = parse(subPath(), router.mode);
+    if (!mayLeave(loc.view)) {
+        // popstate fires AFTER the address bar has already moved, so refusing
+        // is not enough — the URL has to be put back, or the view stays on
+        // Settings underneath the previous entry's path and a reload would
+        // then land somewhere the operator never chose.
+        window.history.pushState({}, '', urlFor('config', router.mode));
+        return;
+    }
     router.view = loc.view;
     router.mode = loc.mode;
 });

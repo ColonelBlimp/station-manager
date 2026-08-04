@@ -21,6 +21,14 @@
     import { router, type View } from './lib/router.svelte';
     import { operate } from './lib/operate/state.svelte';
     import { storageSet } from './lib/utils/storage';
+    import { onMount } from 'svelte';
+    import { installSettingsGuards } from './lib/config/unsaved';
+
+    // Ask before unsaved Settings edits are discarded. Installed from the SHELL,
+    // not from Settings: Settings unmounts the moment the operator navigates
+    // away, which is precisely when the guard has to still be listening.
+    // installSettingsGuards returns its uninstall, which onMount runs on destroy.
+    onMount(installSettingsGuards);
 
     // Reflect shell state onto <html> (drives the token swap + collapse rules)
     // and persist it. Initial attributes are set pre-mount in index.html, so
