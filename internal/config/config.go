@@ -702,12 +702,35 @@ func Normalize(cfg *Config) {
 	ls.Operator = strings.ToUpper(strings.TrimSpace(ls.Operator))
 	ls.OwnerCallsign = strings.ToUpper(strings.TrimSpace(ls.OwnerCallsign))
 	ls.MyGridsquare = utils.NormalizeMaidenhead(ls.MyGridsquare)
-	if ls.MyGridsquare == "" {
-		ls.MyLat = ""
-		ls.MyLon = ""
-	} else if lat, lon, ok := utils.MaidenheadToADIFLatLon(ls.MyGridsquare); ok {
-		ls.MyLat = lat
-		ls.MyLon = lon
+	// The grid SUGGESTS a position; it does not impose one (operator's ruling,
+	// 2026-08-04). Derived only when none is held, and in DECIMAL degrees — the
+	// canonical internal form everything else already speaks. This field used to
+	// be re-derived unconditionally in ADIF Location form, which made it the one
+	// place storing a wire format AND destroyed any value the operator set, at
+	// every startup. Their own station is the one position we could know exactly,
+	// and a 6-character locator is a ~5x10 km cell.
+	//
+	// A position that CONTRADICTS the grid is not corrected here: a human typed
+	// it and is present to be told, so validate.go refuses it by name. Silently
+	// relocating an operator to their own cell centre would ignore their input
+	// and explain nothing.
+	// MIGRATION, and it is load-bearing: every config.json written before
+	// 2026-08-04 holds MY_LAT in ADIF Location form ("S011 26.250"). Converting
+	// it here is what stops the new validation refusing an existing install at
+	// startup — leaving it would turn a format change into a daemon that will
+	// not boot, which is the shape of the QRZ-password defect found the same day.
+	// It also absorbs a client that still PUTs the wire form.
+	if dec, err := utils.ConvertFromXDDDMMM(ls.MyLat, true); err == nil {
+		ls.MyLat = dec
+	}
+	if dec, err := utils.ConvertFromXDDDMMM(ls.MyLon, false); err == nil {
+		ls.MyLon = dec
+	}
+	if ls.MyLat == "" && ls.MyLon == "" && ls.MyGridsquare != "" {
+		if lat, lon, ok := utils.MaidenheadToDecimal(ls.MyGridsquare); ok {
+			ls.MyLat = strconv.FormatFloat(lat, 'f', 6, 64)
+			ls.MyLon = strconv.FormatFloat(lon, 'f', 6, 64)
+		}
 	}
 	ls.MyCqZone = strings.TrimSpace(ls.MyCqZone)
 	ls.MyITUZone = strings.TrimSpace(ls.MyITUZone)

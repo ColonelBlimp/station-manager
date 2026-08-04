@@ -1,68 +1,21 @@
 package sqlite
 
 import (
-	"math"
 	"strconv"
-	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
-// coordsReadable reports whether both values parse as decimal degrees — i.e.
-// whether a comparison against a grid is possible AT ALL.
-//
-// Separate from coordsInsideGrid on purpose. "These coordinates contradict the
-// grid" and "these coordinates cannot be read here" are different facts: the
-// first is a comparison that happened and failed, the second is a comparison
-// that never took place. One predicate returning false for both let an
-// unreadable value be recorded as a contradiction and overwritten with the cell
-// centre — 3.57 km, silently, destroying the supplied value (2026-08-04).
-func coordsReadable(lat, lon string) bool {
-	_, errLat := strconv.ParseFloat(lat, 64)
-	_, errLon := strconv.ParseFloat(lon, 64)
-	return errLat == nil && errLon == nil
-}
+// The readable / inside-the-cell predicates live in utils so provider ingress,
+// this merge and operator-config validation cannot drift on what "contradicts"
+// means. Thin aliases keep the call sites below readable.
+func coordsReadable(lat, lon string) bool { return utils.CoordsReadable(lat, lon) }
 
-// coordsInsideGrid reports whether decimal lat/lon fall within the locator's
-// own cell. The cell IS the test — a locator declares an extent, so anything
-// inside it is consistent with it by definition and no distance threshold has
-// to be invented. Callers must establish coordsReadable first: an unreadable
-// value is not inside the cell, but it is not outside it either.
-//
-// Same predicate as agreesWithCell() in the SPA's map layer; they must not
-// drift, or the map and the stored row disagree about what contradicts what.
+func isPlaceholderGrid(grid string) bool { return utils.IsPlaceholderGrid(grid) }
+
 func coordsInsideGrid(grid, lat, lon string) bool {
-	cLat, cLon, latSpan, lonSpan, ok := utils.MaidenheadToCell(grid)
-	if !ok {
-		return false
-	}
-	gotLat, errLat := strconv.ParseFloat(lat, 64)
-	gotLon, errLon := strconv.ParseFloat(lon, 64)
-	if errLat != nil || errLon != nil {
-		return false
-	}
-	return math.Abs(gotLat-cLat) <= latSpan/2 && math.Abs(gotLon-cLon) <= lonSpan/2
-}
-
-// isPlaceholderGrid reports whether a locator is the AA00 sentinel — the
-// all-minimum square that means "never set", not a position.
-//
-// EVIDENCE (2026-08-04, R9LAU's QRZ profile at www.qrz.com/db/R9LAU): "Grid
-// Square AA00aa / Geo Source: From Grid". QRZ DERIVES coordinates from it, so
-// the grid and the coordinates agree by construction and the mismatch rule
-// cannot reject them — the pair has to be caught by the sentinel itself.
-//
-// AA00 is the ONLY locator treated this way, because it is the only one there is
-// evidence for. Adding others on suspicion would start relocating real stations.
-// A station genuinely in AA00 (Antarctic, at the antimeridian) is knowingly
-// accepted collateral: vanishingly rare, and an on-air grid still corrects it.
-// This catches sentinels and self-contradiction — a plausible but FALSE grid is
-// indistinguishable from a true one with the data held here, and nothing in this
-// file should pretend otherwise.
-func isPlaceholderGrid(grid string) bool {
-	g := strings.ToUpper(strings.TrimSpace(grid))
-	return strings.HasPrefix(g, "AA00") && utils.IsValidMaidenhead(g)
+	return utils.CoordsInsideGrid(grid, lat, lon)
 }
 
 // reconcileStationCoords keeps a station's coordinates and its gridsquare from
@@ -87,12 +40,17 @@ func isPlaceholderGrid(grid string) bool {
 // when there is no valid grid to contradict them, because a plausibility rule
 // would relocate stations on a guess with nothing to show it had happened.
 func reconcileStationCoords(st types.ContactedStation) types.ContactedStation {
-	// The sentinel first: it is self-consistent with the coordinates derived
-	// from it, so agreement cannot reject it. Both fields go — a placeholder is
-	// an absence of location, and storing it would plot and EXPORT a station at
-	// the South Pole.
+	// A sentinel grid is not an arbiter — coordinates derived from it agree with
+	// it by construction, so it can neither confirm nor contradict anything. It
+	// is REJECTED AT INGRESS (lookup.NormalizeProviderStation) so it should never
+	// reach here; a historical row that still holds one is left exactly as it is.
+	//
+	// Clearing here is what the earlier version did, and it destroyed data: the
+	// merge retains coordinates when the incoming record has none, so a refresh
+	// carrying only the sentinel wiped a real grid AND the precise coordinates
+	// beside it (codex c3d99362 P1). Reconciliation must never be the thing that
+	// removes a location.
 	if isPlaceholderGrid(st.Gridsquare) {
-		st.Gridsquare, st.Lat, st.Lon = "", "", ""
 		return st
 	}
 	if st.Lat == "" && st.Lon == "" {

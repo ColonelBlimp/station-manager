@@ -115,6 +115,10 @@ func QsoToRecord(q types.Qso) Record {
 	r.ContactedStation.Lat = adifLocation(q.ContactedStation.Lat, true)
 	r.ContactedStation.Lon = adifLocation(q.ContactedStation.Lon, false)
 	r.LoggingStation = q.LoggingStation
+	// The operator's own position crosses the same perimeter: config stores it in
+	// decimal, ADIF carries the Location type.
+	r.LoggingStation.MyLat = adifLocation(q.LoggingStation.MyLat, true)
+	r.LoggingStation.MyLon = adifLocation(q.LoggingStation.MyLon, false)
 	// Map QSL
 	r.QslSection = QslSection{
 		QslMsg:                 q.Qsl.QslMsg,
@@ -173,7 +177,7 @@ func RecordToQso(rec Record, logbookID int64) types.Qso {
 		LogbookID:        logbookID,
 		QsoDetails:       rec.QsoDetails,
 		ContactedStation: contactedStationToStorage(rec.ContactedStation),
-		LoggingStation:   rec.LoggingStation,
+		LoggingStation:   loggingStationToStorage(rec.LoggingStation),
 		Qsl: types.Qsl{
 			QslMsg:       rec.QslSection.QslMsg,
 			QslMsgRcvd:   rec.QslSection.QslMsgRcvd,

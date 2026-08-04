@@ -131,3 +131,77 @@ func TestIngressCoords_I5_HalfAPairIsNotAPosition(t *testing.T) {
 		t.Fatalf("half a pair was admitted: lat=%q lon=%q", got.Lat, got.Lon)
 	}
 }
+
+/*
+   I6/I7 — "parses" is not "is a coordinate", and a hemisphere belongs to an axis.
+
+   codex fd3062b7, both P1. canonicalCoord treated any successful ParseFloat as
+   canonical, so NaN, ±Inf, latitude 91 and longitude 181 entered as though they
+   were positions — and then ADIF export, which DOES validate, emitted nothing,
+   while the map and distance maths consumed the garbage. And because the ADIF
+   branch called an axis-agnostic parser, "E022 58.119" was accepted as a
+   LATITUDE.
+
+   The boundary that promises a canonical value is the one that has to enforce
+   what makes it canonical. Anything less makes the promise the interior relies
+   on untrue in exactly the cases that matter.
+*/
+
+func TestIngressCoords_I6_NonFiniteAndOutOfRangeDecimalsAreRefused(t *testing.T) {
+	// A DISTINCT callsign per case: enrichWith seeds the cache, so reusing one
+	// makes every iteration after the first a cache hit that never reaches the
+	// provider — the helper's own guard caught exactly that.
+	for _, tc := range []struct{ call, lat, lon string }{
+		{"G0AA1", "NaN", "10.0"},
+		{"G0AA2", "10.0", "Inf"},
+		{"G0AA3", "91.0", "10.0"},  // past the pole
+		{"G0AA4", "10.0", "181.0"}, // past the antimeridian
+		{"G0AA5", "-90.5", "10.0"},
+	} {
+		got := enrichWith(t, types.ContactedStation{
+			Call: tc.call, Gridsquare: "IO91", Lat: tc.lat, Lon: tc.lon,
+		})
+		if got.Lat != "" || got.Lon != "" {
+			t.Fatalf("admitted a non-position (%s,%s): lat=%q lon=%q",
+				tc.lat, tc.lon, got.Lat, got.Lon)
+		}
+	}
+}
+
+func TestIngressCoords_I7_AHemisphereFromTheWrongAxisIsRefused(t *testing.T) {
+	got := enrichWith(t, types.ContactedStation{
+		Call: "G0ABC", Gridsquare: "IO91", Lat: "E022 58.119", Lon: "N040 36.544",
+	})
+	if got.Lat != "" || got.Lon != "" {
+		t.Fatalf("axis-swapped hemispheres were admitted: lat=%q lon=%q", got.Lat, got.Lon)
+	}
+}
+
+/*
+   I8 — the placeholder grid is rejected HERE, not at the merge.
+
+   codex c3d99362 P1, verified before fixing: a station cached with a real grid
+   and precise coordinates, refreshed by a provider whose record carries AA00aa
+   and no coordinates, came back as grid="" lat="" lon="". The merge kept the
+   old coordinates (incoming were empty) and replaced the grid, and the sentinel
+   then cleared all three — a placeholder meaning "I have no location for this
+   station" DESTROYED a location we already had. R9LAU's QRZ profile carries
+   exactly that grid, so this was reachable on any refresh.
+
+   The placement was the error, and it is the same distinction this file already
+   draws: a placeholder is a property of ONE INPUT — "this provider supplied no
+   location" — not of the merged record. Rejected at ingress it never reaches
+   the merge, and the merge keeps what it already knew.
+*/
+
+func TestIngressCoords_I8_APlaceholderGridSuppliesNoLocation(t *testing.T) {
+	got := enrichWith(t, types.ContactedStation{
+		Call: "R9LAU", Gridsquare: "AA00aa", Lat: "-89.979167", Lon: "-179.958333",
+	})
+	if got.Gridsquare != "" {
+		t.Fatalf("the sentinel grid entered: %q", got.Gridsquare)
+	}
+	if got.Lat != "" || got.Lon != "" {
+		t.Fatalf("coordinates derived from the sentinel entered: lat=%q lon=%q", got.Lat, got.Lon)
+	}
+}

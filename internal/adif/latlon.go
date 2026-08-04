@@ -36,15 +36,17 @@ func adifLocation(v string, isLat bool) string {
 }
 
 // storageLocation is adifLocation's inverse: an ADIF Location becomes signed
-// decimal degrees, which is the shape storage and the SPA map use. Anything that
+// decimal degrees, which is the shape storage and the SPA map use. isLat is
+// load-bearing — without it a LAT field accepted "E022 58.119" and a hemisphere
+// from the wrong axis was silently converted (codex c3d99362 P1). Anything that
 // is not a Location — notably a bare decimal, which is what SM's own files
 // carried before 2026-08-04 — is returned UNCHANGED, so importing a
 // decimal-bearing file is a no-op rather than a corruption.
-func storageLocation(v string) string {
+func storageLocation(v string, isLat bool) string {
 	if v == "" {
 		return ""
 	}
-	out, err := utils.ConvertFromXDDDMMM(v)
+	out, err := utils.ConvertFromXDDDMMM(v, isLat)
 	if err != nil {
 		return v
 	}
@@ -56,7 +58,15 @@ func storageLocation(v string) string {
 // export would leave our own export→import cycle storing Location strings the
 // map cannot parse — trading a wire defect for a silent display one.
 func contactedStationToStorage(st types.ContactedStation) types.ContactedStation {
-	st.Lat = storageLocation(st.Lat)
-	st.Lon = storageLocation(st.Lon)
+	st.Lat = storageLocation(st.Lat, true)
+	st.Lon = storageLocation(st.Lon, false)
 	return st
+}
+
+// loggingStationToStorage is contactedStationToStorage's twin for the operator's
+// own position, so the round trip is lossless in shape on both sides of a QSO.
+func loggingStationToStorage(ls types.LoggingStation) types.LoggingStation {
+	ls.MyLat = storageLocation(ls.MyLat, true)
+	ls.MyLon = storageLocation(ls.MyLon, false)
+	return ls
 }

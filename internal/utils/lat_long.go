@@ -119,18 +119,27 @@ func IsXDDDMMM(s string) bool {
 // Location ("XDDD MM.MMM") back to signed decimal degrees, formatted to six
 // decimal places to match what enrichment stores.
 //
-// Exists so an ADIF round trip is lossless in SHAPE. ADIF carries the Location
-// type; SM stores decimal degrees, because that is what QRZ returns and what the
-// SPA map parses. Export converts one way; without this, import stored the ADIF
-// string verbatim and the row stopped being plottable — parseFloat rejects it
-// and the map silently falls back to the grid's cell centre.
+// isLat is not optional, and its absence was a defect (codex c3d99362 /
+// fd3062b7, both P1). The forward direction validates the hemisphere against
+// the axis and the degrees against that axis's limit; an inverse that did not
+// accepted "E022 58.119" as a LATITUDE and "N180 00.000" as anything, turning
+// malformed input into plausible decimals and admitting positions beyond the
+// poles. An inverse must be exactly as strict as the function it inverts, or it
+// is a hole in whichever boundary calls it.
 //
-// Anything that is not a well-formed Location is REFUSED rather than guessed at,
-// including a bare decimal: callers treat the error as "leave this value alone",
-// which is what keeps an import of a decimal-bearing file unchanged.
-func ConvertFromXDDDMMM(s string) (string, error) {
+// Anything that is not a well-formed Location for THIS axis is refused rather
+// than guessed at, including a bare decimal: callers treat the error as "leave
+// this value alone" or "do not admit it", depending on which side they guard.
+func ConvertFromXDDDMMM(s string, isLat bool) (string, error) {
 	if !IsXDDDMMM(s) {
 		return emptyString, fmt.Errorf("not an ADIF Location: %q", s)
+	}
+	hemi := s[0]
+	if isLat && hemi != 'N' && hemi != 'S' {
+		return emptyString, fmt.Errorf("hemisphere %q is not a latitude: %q", string(hemi), s)
+	}
+	if !isLat && hemi != 'E' && hemi != 'W' {
+		return emptyString, fmt.Errorf("hemisphere %q is not a longitude: %q", string(hemi), s)
 	}
 	deg, err := strconv.ParseFloat(s[1:4], 64)
 	if err != nil {
@@ -141,7 +150,16 @@ func ConvertFromXDDDMMM(s string) (string, error) {
 		return emptyString, err
 	}
 	val := deg + min/60.0
-	if s[0] == 'S' || s[0] == 'W' {
+	limit := 180.0
+	kind := "longitude"
+	if isLat {
+		limit = 90.0
+		kind = "latitude"
+	}
+	if val > limit {
+		return emptyString, fmt.Errorf("%s out of range (%g > %g): %q", kind, val, limit, s)
+	}
+	if hemi == 'S' || hemi == 'W' {
 		val = -val
 	}
 	return strconv.FormatFloat(val, 'f', 6, 64), nil

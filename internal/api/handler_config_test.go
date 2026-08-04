@@ -547,16 +547,22 @@ func TestHandlePutConfig_PersistsToFile(t *testing.T) {
 	}
 }
 
-// TestHandlePutConfig_DerivesLatLonFromGridsquare confirms the daemon
-// fills MY_LAT / MY_LON from MY_GRIDSQUARE on PUT and ignores any
-// client-supplied values for those derived fields. The wire format is
-// ADIF "XDDD MM.MMM" — the same shape used elsewhere for coordinates.
-func TestHandlePutConfig_DerivesLatLonFromGridsquare(t *testing.T) {
+// TestHandlePutConfig_SuggestsLatLonFromGridsquare pins the CURRENT contract
+// (operator's ruling, 2026-08-04). It previously read "Derives…" and asserted
+// the daemon OVERWRITES any client-supplied coordinates with the cell centre,
+// in ADIF "XDDD MM.MMM" form. Both halves of that changed and the reversal is
+// recorded rather than deleted:
+//
+//   - storage is DECIMAL now — MY_LAT was the one field holding a wire format;
+//   - the grid SUGGESTS a position rather than imposing one, because their own
+//     station is the single position we could know exactly and a locator is a
+//     cell, not a point. A contradiction is refused by name (see the sibling
+//     test) instead of silently corrected.
+func TestHandlePutConfig_SuggestsLatLonFromGridsquare(t *testing.T) {
 	srv := testServer(t)
 
-	// Client sends bogus lat/lon alongside a valid grid. The daemon
-	// must overwrite both with the centre of the IO91 cell.
-	body := `{"logging_station": {"station_callsign": "M0XYZ", "my_gridsquare": "IO91", "my_lat": "N000 00.000", "my_lon": "W000 00.000"}}`
+	// A grid with no coordinates: the daemon supplies the cell centre.
+	body := `{"logging_station": {"station_callsign": "M0XYZ", "my_gridsquare": "IO91"}}`
 	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -570,11 +576,51 @@ func TestHandlePutConfig_DerivesLatLonFromGridsquare(t *testing.T) {
 	if resp.LoggingStation.MyGridsquare != "IO91" {
 		t.Errorf("MyGridsquare = %q, want IO91", resp.LoggingStation.MyGridsquare)
 	}
-	if resp.LoggingStation.MyLat != "N051 30.000" {
-		t.Errorf("MyLat = %q, want N051 30.000 (centre of IO91)", resp.LoggingStation.MyLat)
+	if resp.LoggingStation.MyLat != "51.500000" {
+		t.Errorf("MyLat = %q, want 51.500000 (centre of IO91, decimal)", resp.LoggingStation.MyLat)
 	}
-	if resp.LoggingStation.MyLon != "W001 00.000" {
-		t.Errorf("MyLon = %q, want W001 00.000 (centre of IO91)", resp.LoggingStation.MyLon)
+	if resp.LoggingStation.MyLon != "-1.000000" {
+		t.Errorf("MyLon = %q, want -1.000000 (centre of IO91, decimal)", resp.LoggingStation.MyLon)
+	}
+}
+
+// TestHandlePutConfig_RefusesAPositionOutsideTheDeclaredGrid is the other half:
+// an operator is present to be told, so a contradiction is a 400 naming the
+// field rather than a silent relocation to their own cell centre.
+func TestHandlePutConfig_RefusesAPositionOutsideTheDeclaredGrid(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ", "my_gridsquare": "IO91", "my_lat": "-11.443917", "my_lon": "34.009600"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("a position outside IO91 was accepted: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "my_lat") {
+		t.Errorf("the refusal must name the field: %s", w.Body.String())
+	}
+}
+
+// TestHandlePutConfig_KeepsAPositionInsideTheDeclaredGrid — the reason the rule
+// exists: a locator is a ~110 km cell at 4 characters, so a real position inside
+// it is strictly better information and must survive the round trip.
+func TestHandlePutConfig_KeepsAPositionInsideTheDeclaredGrid(t *testing.T) {
+	srv := testServer(t)
+
+	body := `{"logging_station": {"station_callsign": "M0XYZ", "my_gridsquare": "IO91", "my_lat": "51.478000", "my_lon": "-0.461000"}}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handlePutConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp ConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.LoggingStation.MyLat != "51.478000" {
+		t.Errorf("a position inside the cell was overwritten: %q", resp.LoggingStation.MyLat)
 	}
 }
 

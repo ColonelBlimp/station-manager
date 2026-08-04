@@ -280,6 +280,21 @@ func validateLoggingStation(ls types.LoggingStation) []Finding {
 	if ls.MyGridsquare != "" && !utils.IsValidMaidenhead(ls.MyGridsquare) {
 		add("logging_station.my_gridsquare", "my_gridsquare must be a 4, 6, or 8 character Maidenhead locator")
 	}
+	// The operator's own position, checked against the locator they declared.
+	// Refused rather than corrected: unlike third-party coordinates there is a
+	// human here to tell, and silently moving them to their cell centre would
+	// ignore the input and explain nothing. The cell IS the tolerance — a
+	// locator declares an extent, so no distance threshold is invented.
+	if ls.MyLat != "" || ls.MyLon != "" {
+		switch {
+		case !utils.CoordsReadable(ls.MyLat, ls.MyLon):
+			add("logging_station.my_lat", "my_lat and my_lon must both be decimal degrees (e.g. -11.443917)")
+		case ls.MyGridsquare != "" && utils.IsValidMaidenhead(ls.MyGridsquare) &&
+			!utils.CoordsInsideGrid(ls.MyGridsquare, ls.MyLat, ls.MyLon):
+			add("logging_station.my_lat",
+				fmt.Sprintf("my_lat / my_lon are outside grid %s — correct them, or change my_gridsquare", ls.MyGridsquare))
+		}
+	}
 	if ls.MyCqZone != "" && !zoneInRange(ls.MyCqZone, minCQZone, maxCQZone) {
 		add("logging_station.my_cq_zone", fmt.Sprintf("my_cq_zone must be a number between %d and %d", minCQZone, maxCQZone))
 	}

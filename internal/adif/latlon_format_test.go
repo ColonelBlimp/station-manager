@@ -231,3 +231,42 @@ func within(got, want string, tol float64) bool {
 	w, err2 := strconv.ParseFloat(want, 64)
 	return err1 == nil && err2 == nil && math.Abs(g-w) <= tol
 }
+
+/*
+   D4/D5 — MY_LAT / MY_LON cross the same perimeter as LAT / LON.
+
+   Config now stores the operator's own position in decimal (2026-08-04), so the
+   field that was previously correct BY ACCIDENT — storage happening to match
+   the wire — needs the conversion the contacted station already had. Without
+   it, changing storage would have silently started emitting decimals in MY_LAT,
+   which is the defect this file exists for, reintroduced from the other side.
+*/
+
+func TestLatLonFormat_D4_MyCoordinatesLeaveAsAdifLocation(t *testing.T) {
+	q := types.Qso{}
+	q.LoggingStation = types.LoggingStation{MyLat: "-11.437500", MyLon: "34.041667"}
+	out, err := ComposeToAdifString(types.QsoSlice{q})
+	if err != nil {
+		t.Fatalf("compose: %v", err)
+	}
+	lat, ok := emitted(t, out, "MY_LAT")
+	if !ok {
+		t.Fatal("MY_LAT was not emitted")
+	}
+	if lat != "S011 26.250" {
+		t.Fatalf("MY_LAT did not leave as an ADIF Location: %q", lat)
+	}
+	if lon, _ := emitted(t, out, "MY_LON"); lon != "E034 02.500" {
+		t.Fatalf("MY_LON did not leave as an ADIF Location: %q", lon)
+	}
+}
+
+func TestLatLonFormat_D5_MyCoordinatesReturnToDecimalOnImport(t *testing.T) {
+	rec := Record{}
+	rec.LoggingStation = types.LoggingStation{MyLat: "S011 26.250", MyLon: "E034 02.500"}
+	got := RecordToQso(rec, 1).LoggingStation
+	if got.MyLat != "-11.437500" || got.MyLon != "34.041667" {
+		t.Fatalf("MY_LAT/MY_LON were not returned to storage shape: lat=%q lon=%q",
+			got.MyLat, got.MyLon)
+	}
+}

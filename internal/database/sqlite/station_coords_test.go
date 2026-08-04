@@ -255,19 +255,50 @@ func assertInsideGrid(t *testing.T, grid, lat, lon string) {
    accepted (they are vanishingly rare, and the on-air grid still corrects them).
 */
 
-func TestStationCoords_R7_ThePlaceholderGridIsNoLocationAtAll(t *testing.T) {
+func TestStationCoords_R7_ASentinelGridArbitratesNothingAndDestroysNothing(t *testing.T) {
+	// MOVED 2026-08-04. This rule used to assert that storage CLEARED a sentinel
+	// grid and its coordinates. That placement was the defect (codex c3d99362
+	// P1): the merge retains coordinates when the incoming record has none, so
+	// clearing on the merged row destroyed data the incoming record never
+	// mentioned. Rejection now happens at INGRESS, where the sentinel is a
+	// property of the one input that carried it — see lookup's I8.
+	//
+	// What remains true HERE is narrower and non-destructive: a sentinel cannot
+	// confirm or contradict anything (coordinates derived from it agree with it
+	// by construction), so it arbitrates nothing and nothing is removed.
 	svc := testService(t)
-	// Exactly what a cold QRZ lookup of R9LAU returns: the sentinel grid and the
-	// coordinates QRZ derived from it. They AGREE, so nothing but the sentinel
-	// itself can reject them.
 	got := upsertAndFetch(t, svc, types.ContactedStation{
 		Call: "R9LAU", Gridsquare: "AA00aa", Lat: polarLat, Lon: polarLon,
 	})
-	if got.Lat != "" || got.Lon != "" {
-		t.Fatalf("placeholder-derived coordinates were stored: lat=%q lon=%q", got.Lat, got.Lon)
+	if got.Lat != polarLat || got.Lon != polarLon || got.Gridsquare != "AA00aa" {
+		t.Fatalf("reconciliation altered a sentinel row: grid=%q lat=%q lon=%q",
+			got.Gridsquare, got.Lat, got.Lon)
 	}
-	if got.Gridsquare != "" {
-		t.Fatalf("the placeholder grid was stored as a location: %q", got.Gridsquare)
+}
+
+func TestStationCoords_R7b_ASentinelRefreshMustNotEraseAKnownLocation(t *testing.T) {
+	// THE P1, as a regression guard. Verified against the pre-fix code before
+	// fixing: grid="" lat="" lon="" — a station we knew precisely, erased by a
+	// refresh whose only content was a placeholder. R9LAU's QRZ profile carries
+	// exactly that grid, so every refresh of that station did this.
+	svc := testService(t)
+	ctx := context.Background()
+	if err := svc.UpsertContactedStationWithContext(ctx, types.ContactedStation{
+		Call: "R9LAU", Gridsquare: "MO27", Lat: "57.173356", Lon: "65.559720",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// The sentinel driven STRAIGHT at storage, bypassing ingress. Written this
+	// way deliberately: the post-ingress shape (an empty grid) passes by
+	// construction and would prove nothing, so the fixture has to reproduce what
+	// the merge actually saw when this erased data — a non-empty sentinel grid
+	// beating the stored one, with no coordinates to replace the retained pair.
+	got := upsertAndFetch(t, svc, types.ContactedStation{Call: "R9LAU", Gridsquare: "AA00aa"})
+	if got.Gridsquare == "" {
+		t.Fatal("a known grid was erased outright")
+	}
+	if got.Lat != "57.173356" || got.Lon != "65.559720" {
+		t.Fatalf("known coordinates were erased: lat=%q lon=%q", got.Lat, got.Lon)
 	}
 }
 
@@ -275,10 +306,11 @@ func TestStationCoords_R8_ARealGridStillArrivesAndWins(t *testing.T) {
 	svc := testService(t)
 	ctx := context.Background()
 	// Rejecting the sentinel must not block the correction that follows it.
+	// What ingress hands the merge for a sentinel-only provider record: nothing.
 	if err := svc.UpsertContactedStationWithContext(ctx, types.ContactedStation{
-		Call: "R9LAU", Gridsquare: "AA00AA", Lat: polarLat, Lon: polarLon,
+		Call: "R9LAU",
 	}); err != nil {
-		t.Fatalf("cold placeholder insert: %v", err)
+		t.Fatalf("cold empty insert: %v", err)
 	}
 	got := upsertAndFetch(t, svc, types.ContactedStation{Call: "R9LAU", Gridsquare: "MO27"})
 	if got.Gridsquare != "MO27" {

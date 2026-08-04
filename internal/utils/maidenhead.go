@@ -2,7 +2,9 @@ package utils
 
 import (
 	"fmt"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -135,4 +137,59 @@ func MaidenheadToADIFLatLon(s string) (myLat, myLon string, ok bool) {
 		return "", "", false
 	}
 	return latStr, lonStr, true
+}
+
+// CoordsReadable reports whether both values parse as decimal degrees — i.e.
+// whether a comparison against a grid is possible AT ALL.
+//
+// Separate from CoordsInsideGrid deliberately. "These contradict the grid" and
+// "these cannot be read" are different facts: the first is a comparison that
+// happened and failed, the second one that never took place. Collapsing them
+// into a single false let an unreadable value be treated as contradictory and
+// overwritten with a cell centre — 3.57 km, silently (2026-08-04).
+func CoordsReadable(lat, lon string) bool {
+	_, errLat := strconv.ParseFloat(lat, 64)
+	_, errLon := strconv.ParseFloat(lon, 64)
+	return errLat == nil && errLon == nil
+}
+
+// CoordsInsideGrid reports whether decimal lat/lon fall within the locator's own
+// cell. The cell IS the test — a locator declares an extent, so anything inside
+// it is consistent with it by definition and no distance threshold has to be
+// invented.
+//
+// Callers must establish CoordsReadable first: an unreadable value is not inside
+// the cell, but it is not outside it either.
+//
+// Lives here so the three layers that ask the question — provider ingress, the
+// storage merge, and operator-config validation — cannot drift on what
+// "contradicts" means. The SPA's agreesWithCell is the fourth, in TypeScript.
+func CoordsInsideGrid(grid, lat, lon string) bool {
+	cLat, cLon, latSpan, lonSpan, ok := MaidenheadToCell(grid)
+	if !ok {
+		return false
+	}
+	gotLat, errLat := strconv.ParseFloat(lat, 64)
+	gotLon, errLon := strconv.ParseFloat(lon, 64)
+	if errLat != nil || errLon != nil {
+		return false
+	}
+	return math.Abs(gotLat-cLat) <= latSpan/2 && math.Abs(gotLon-cLon) <= lonSpan/2
+}
+
+// IsPlaceholderGrid reports whether a locator is the AA00 sentinel — the
+// all-minimum square that means "never set", not a position.
+//
+// EVIDENCE (2026-08-04, R9LAU's QRZ profile at www.qrz.com/db/R9LAU): "Grid
+// Square AA00aa / Geo Source: From Grid". QRZ DERIVES coordinates from it, so
+// the grid and the coordinates agree by construction and no consistency check
+// can reject the pair — it has to be caught by the sentinel itself.
+//
+// AA00 is the ONLY locator treated this way, because it is the only one there is
+// evidence for. Adding others on suspicion would start relocating real stations.
+// A station genuinely in AA00 (Antarctic, at the antimeridian) is knowingly
+// accepted collateral: vanishingly rare, and an on-air grid still corrects it.
+func IsPlaceholderGrid(grid string) bool {
+	g := strings.ToUpper(strings.TrimSpace(grid))
+	return strings.HasPrefix(g, "AA00") && IsValidMaidenhead(g)
 }

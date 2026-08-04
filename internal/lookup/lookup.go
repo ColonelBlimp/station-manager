@@ -25,6 +25,7 @@
 package lookup
 
 import (
+	"math"
 	"strconv"
 
 	"context"
@@ -159,11 +160,21 @@ func FilterToCallsignFields(cs types.ContactedStation) types.ContactedStation {
 // (sqlite.reconcileStationCoords). Format is local to one input; truth is not.
 func NormalizeProviderStation(cs types.ContactedStation) (types.ContactedStation, bool) {
 	cs = FilterToCallsignFields(cs)
+	// The AA00 sentinel means "this provider has no location for the station",
+	// so it supplies neither a grid nor the coordinates derived from it. Rejected
+	// HERE and not at the storage merge: it is a property of one input, and
+	// applying it to the merged record destroyed a location we already held —
+	// a refresh returning the sentinel wiped a real grid and precise coordinates
+	// (codex c3d99362 P1). Nothing downstream should ever see it.
+	if utils.IsPlaceholderGrid(cs.Gridsquare) {
+		cs.Gridsquare, cs.Lat, cs.Lon = "", "", ""
+		return cs, false
+	}
 	if cs.Lat == "" && cs.Lon == "" {
 		return cs, false // nothing supplied; nothing to normalise or report
 	}
-	lat, latOK := canonicalCoord(cs.Lat)
-	lon, lonOK := canonicalCoord(cs.Lon)
+	lat, latOK := canonicalCoord(cs.Lat, true)
+	lon, lonOK := canonicalCoord(cs.Lon, false)
 	if !latOK || !lonOK {
 		cs.Lat, cs.Lon = "", ""
 		return cs, true // dropped — the caller reports it; a silent drop reads
@@ -173,13 +184,30 @@ func NormalizeProviderStation(cs types.ContactedStation) (types.ContactedStation
 	return cs, false
 }
 
-// canonicalCoord returns v as decimal degrees. Decimal is already canonical;
-// an ADIF Location is converted; anything else is refused.
-func canonicalCoord(v string) (string, bool) {
-	if _, err := strconv.ParseFloat(v, 64); err == nil {
+// canonicalCoord returns v as decimal degrees for the given axis. Decimal is
+// already canonical; an ADIF Location is converted; anything else is refused.
+//
+// "Parses as a float" is NOT the same as "is a coordinate" (codex fd3062b7 P1).
+// strconv.ParseFloat accepts NaN and ±Inf, and says nothing about range, so a
+// latitude of 91 or a longitude of 181 passed straight through this boundary and
+// on into the map and distance maths — while ADIF export, which DOES validate,
+// then emitted nothing. The boundary that promises a canonical value has to
+// enforce what makes it one.
+func canonicalCoord(v string, isLat bool) (string, bool) {
+	if f, err := strconv.ParseFloat(v, 64); err == nil {
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return "", false
+		}
+		limit := 180.0
+		if isLat {
+			limit = 90.0
+		}
+		if math.Abs(f) > limit {
+			return "", false
+		}
 		return v, true
 	}
-	if dec, err := utils.ConvertFromXDDDMMM(v); err == nil {
+	if dec, err := utils.ConvertFromXDDDMMM(v, isLat); err == nil {
 		return dec, true
 	}
 	return "", false
