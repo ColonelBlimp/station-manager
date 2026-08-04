@@ -25,7 +25,10 @@
 package lookup
 
 import (
+	"strconv"
+
 	"context"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -116,9 +119,12 @@ type CallsignProvider interface {
 // merging into contacted_station storage so provider authors don't
 // have to remember to clear the fields manually.
 //
-// Lat / Lon / Altitude pass through — they're either provider-supplied
-// directly or derived from gridsquare downstream, but they aren't
-// part of the country-table-derived data.
+// Altitude passes through — it isn't country-table-derived data.
+//
+// Lat / Lon used to pass through too. They no longer do: see
+// NormalizeProviderStation, which owns the coordinate FORMAT at this boundary.
+// Passing them through stored whatever a provider happened to send, which
+// worked only because QRZ sends decimals — luck, not design.
 func FilterToCallsignFields(cs types.ContactedStation) types.ContactedStation {
 	cs.Country = ""
 	cs.Cont = ""
@@ -126,4 +132,55 @@ func FilterToCallsignFields(cs types.ContactedStation) types.ContactedStation {
 	cs.ITUZ = ""
 	cs.DXCC = ""
 	return cs
+}
+
+// NormalizeProviderStation makes a CallsignProvider result safe to merge: it
+// applies the ADR 0017 #2 narrowing and converts coordinates to the canonical
+// internal form (decimal degrees).
+//
+// This is the ingress half of the perimeter rule (operator, 2026-08-04): every
+// boundary converts to decimal on the way in and away from it on the way out, so
+// nothing in the interior ever has to ask what format a value is in. It lives at
+// the shared seam for the same reason FilterToCallsignFields does — "so provider
+// authors don't have to remember" — which means a provider added tomorrow
+// inherits it without writing any code.
+//
+// A coordinate that cannot be interpreted does NOT enter. Admitting it would
+// break the one guarantee the boundary exists to make, and everything
+// downstream — map, bearing, distance, the grid-agreement test — parses these
+// as decimals. The pair is dropped together: a readable latitude beside an
+// unreadable longitude is not half a position, it is no position. The grid is
+// untouched, so a station usually keeps a usable location anyway.
+//
+// It deliberately does NOT arbitrate between the coordinates and the gridsquare.
+// That contradiction arrives across TWO writes from two sources — a provider's
+// grid in one, the on-air exchange's in another, which never passes through here
+// at all — so it can only be judged where the merged record exists
+// (sqlite.reconcileStationCoords). Format is local to one input; truth is not.
+func NormalizeProviderStation(cs types.ContactedStation) (types.ContactedStation, bool) {
+	cs = FilterToCallsignFields(cs)
+	if cs.Lat == "" && cs.Lon == "" {
+		return cs, false // nothing supplied; nothing to normalise or report
+	}
+	lat, latOK := canonicalCoord(cs.Lat)
+	lon, lonOK := canonicalCoord(cs.Lon)
+	if !latOK || !lonOK {
+		cs.Lat, cs.Lon = "", ""
+		return cs, true // dropped — the caller reports it; a silent drop reads
+		// exactly like a provider that sends no coordinates at all
+	}
+	cs.Lat, cs.Lon = lat, lon
+	return cs, false
+}
+
+// canonicalCoord returns v as decimal degrees. Decimal is already canonical;
+// an ADIF Location is converted; anything else is refused.
+func canonicalCoord(v string) (string, bool) {
+	if _, err := strconv.ParseFloat(v, 64); err == nil {
+		return v, true
+	}
+	if dec, err := utils.ConvertFromXDDDMMM(v); err == nil {
+		return dec, true
+	}
+	return "", false
 }

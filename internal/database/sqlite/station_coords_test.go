@@ -63,6 +63,12 @@ package sqlite
      · R5 — a grid with NO coordinates. Deriving here would be inventing data
        that was never supplied; the row simply has no position. Distinct from
        "coordinates were rejected".
+     · R6 — "these coordinates CONTRADICT the grid" versus "these coordinates
+       are UNREADABLE here". The first is a comparison that happened and failed;
+       the second is a comparison that never took place. Treating them alike
+       silently relocated a station 3.57 km and destroyed the original value,
+       while recording it as a contradiction — the sharpest confusable pair in
+       this file, and the one that shipped wrong for an hour.
 */
 
 import (
@@ -180,15 +186,41 @@ func TestStationCoords_R5_AGridWithNoCoordinatesInventsNone(t *testing.T) {
 	}
 }
 
-func TestStationCoords_R6_UnparseableCoordinatesDeferToTheGrid(t *testing.T) {
+func TestStationCoords_R6_UnreadableCoordinatesAreLeftAsSupplied(t *testing.T) {
+	// REVISED 2026-08-04. This rule originally read "unparseable coordinates
+	// defer to the grid" and overwrote them with the cell centre. That conflated
+	// two different facts: coordinates that CONTRADICT the grid (we compared them
+	// and they lost) and coordinates we simply CANNOT READ (we never compared
+	// anything). Only the first is evidence of anything.
+	//
+	// Measured cost of the conflation: a value in ADIF Location form for a
+	// station inside its own grid was replaced by the cell centre — 3.57 km off,
+	// silently, and recorded internally as "contradicts the grid" when it agreed
+	// perfectly. The original was destroyed in the process.
+	//
+	// Leaving it alone costs nothing on screen: the map's parseFloat rejects the
+	// string either way and falls back to the same cell centre for DISPLAY. The
+	// difference is that the supplied value survives in storage instead of being
+	// overwritten by a derived one.
 	svc := testService(t)
-	// Import-era rows carry ADIF Location strings ("N051 30.000") in these
-	// fields rather than decimals; they cannot be checked against the cell, so
-	// the grid — which IS checkable — is the honest answer.
 	got := upsertAndFetch(t, svc, types.ContactedStation{
 		Call: "TEST3", Gridsquare: "IO91", Lat: "N051 30.000", Lon: "W000 07.000",
 	})
-	assertInsideGrid(t, "IO91", got.Lat, got.Lon)
+	if got.Lat != "N051 30.000" || got.Lon != "W000 07.000" {
+		t.Fatalf("unreadable coordinates were overwritten: lat=%q lon=%q", got.Lat, got.Lon)
+	}
+}
+
+func TestStationCoords_R6b_HalfAPairIsNotAPosition(t *testing.T) {
+	// One readable value and one not: still nothing to compare, so still nothing
+	// to judge. Guards the parse check against being written per-field.
+	svc := testService(t)
+	got := upsertAndFetch(t, svc, types.ContactedStation{
+		Call: "TEST4", Gridsquare: "IO91", Lat: "51.500000", Lon: "not a number",
+	})
+	if got.Lat != "51.500000" || got.Lon != "not a number" {
+		t.Fatalf("a half-readable pair was rewritten: lat=%q lon=%q", got.Lat, got.Lon)
+	}
 }
 
 func assertInsideGrid(t *testing.T, grid, lat, lon string) {

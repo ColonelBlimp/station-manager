@@ -9,11 +9,26 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
+// coordsReadable reports whether both values parse as decimal degrees — i.e.
+// whether a comparison against a grid is possible AT ALL.
+//
+// Separate from coordsInsideGrid on purpose. "These coordinates contradict the
+// grid" and "these coordinates cannot be read here" are different facts: the
+// first is a comparison that happened and failed, the second is a comparison
+// that never took place. One predicate returning false for both let an
+// unreadable value be recorded as a contradiction and overwritten with the cell
+// centre — 3.57 km, silently, destroying the supplied value (2026-08-04).
+func coordsReadable(lat, lon string) bool {
+	_, errLat := strconv.ParseFloat(lat, 64)
+	_, errLon := strconv.ParseFloat(lon, 64)
+	return errLat == nil && errLon == nil
+}
+
 // coordsInsideGrid reports whether decimal lat/lon fall within the locator's
 // own cell. The cell IS the test — a locator declares an extent, so anything
 // inside it is consistent with it by definition and no distance threshold has
-// to be invented. False when either input is absent or unparseable (import-era
-// rows hold ADIF Location strings here) or the grid is not a valid locator.
+// to be invented. Callers must establish coordsReadable first: an unreadable
+// value is not inside the cell, but it is not outside it either.
 //
 // Same predicate as agreesWithCell() in the SPA's map layer; they must not
 // drift, or the map and the stored row disagree about what contradicts what.
@@ -86,6 +101,14 @@ func reconcileStationCoords(st types.ContactedStation) types.ContactedStation {
 	cLat, cLon, _, _, ok := utils.MaidenheadToCell(st.Gridsquare)
 	if !ok {
 		return st // no usable locator, so nothing can contradict them
+	}
+	if !coordsReadable(st.Lat, st.Lon) {
+		// Unreadable is NOT contradictory — nothing was compared, so nothing was
+		// disproved, and overwriting would destroy the supplied value on a
+		// judgement never made. Costs nothing on screen: the map's parseFloat
+		// rejects it either way and falls back to the same cell centre for
+		// DISPLAY. Storage keeps what arrived.
+		return st
 	}
 	if coordsInsideGrid(st.Gridsquare, st.Lat, st.Lon) {
 		return st // more precise than the cell, and consistent with it

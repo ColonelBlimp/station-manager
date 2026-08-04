@@ -319,7 +319,7 @@ func (o *Orchestrator) enrich(ctx context.Context, callsign string, force bool) 
 	// from hamnut's truth (if available). After these two steps the
 	// station carries either hamnut's country values or empty —
 	// never the upstream's wrong values.
-	s.data = FilterToCallsignFields(s.data)
+	s.data = o.normalizeProviderStation(callsign, s.data)
 	s.data = MergeStationFromCountry(s.data, c.data)
 	if !IsEmpty(s.data) && s.data.Call == "" {
 		s.data.Call = callsign // already upper-cased at the boundary (L3)
@@ -658,7 +658,7 @@ func (o *Orchestrator) scheduleStationRefresh(callsign string) {
 		if source == SourceNone {
 			return
 		}
-		station = FilterToCallsignFields(station)
+		station = o.normalizeProviderStation(callsign, station)
 
 		// Read the country (cached value at refresh time). We don't
 		// trigger a hamnut call here — country has its own staleness
@@ -690,6 +690,28 @@ func (o *Orchestrator) warn(msg string, err error) {
 		return
 	}
 	o.Logger.WarnWith().Err(err).Msg(msg)
+}
+
+// normalizeProviderStation applies the ingress perimeter to a provider result
+// (lookup.NormalizeProviderStation) and REPORTS a coordinate it had to drop.
+//
+// The report is the point of the wrapper: a silently dropped coordinate is
+// indistinguishable from a provider that sends none, which is the normal case
+// for most of them — so a provider that changed format, or one whose format we
+// never established, would degrade in complete silence. Warn, because it is a
+// real loss of data we were offered; never fatal, because enrichment must never
+// block logging.
+func (o *Orchestrator) normalizeProviderStation(callsign string, cs types.ContactedStation) types.ContactedStation {
+	lat, lon := cs.Lat, cs.Lon
+	out, dropped := NormalizeProviderStation(cs)
+	if dropped && o.Logger != nil {
+		o.Logger.WarnWith().
+			Str("callsign", callsign).
+			Str("lat", lat).
+			Str("lon", lon).
+			Msg("lookup: provider coordinates were not decimal or ADIF Location; dropped")
+	}
+	return out
 }
 
 // logCheckDB returns the connection used for the new-entity qso-table check:
