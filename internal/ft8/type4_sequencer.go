@@ -158,7 +158,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 		if s.contact.repeats >= s.maxRepeats {
 			s.retireSessionLocked(func() { s.t4Ex = nil })
 			s.mu.Unlock()
-			s.log.InfoWith().Msg("ft8 seq: type-4 no answer after max repeats; abandoning")
+			s.log.InfoWith().Str("reason", causeNoAnswer).Msg("ft8 seq: type-4 no answer after max repeats; abandoning")
 			return
 		}
 		s.contact.repeats++
@@ -198,8 +198,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 			return
 		}
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.setPendingEndReason(endReasonForTxErr(err))
-			s.Abandon()
+			s.abandonNamed(endReasonForTxErr(err), "")
 			return
 		}
 		s.publishCurrent()
@@ -394,8 +393,7 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: type-4 work rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.setPendingEndReason(endReasonForTxErr(err))
-			s.Abandon()
+			s.abandonNamed(endReasonForTxErr(err), "")
 			return
 		}
 	}

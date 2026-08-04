@@ -165,7 +165,7 @@ func TestAbandonCause_DisarmIsDistinctFromAbandon(t *testing.T) {
 
 	// R4: both are the operator's own doing, both silent on the frame — and they
 	// were the SAME empty string in the log before this.
-	s.abandonWithCause(causeTxDisarmed)
+	s.abandonNamed("", causeTxDisarmed)
 
 	reason, _ := sink.abandonReason(t)
 	require.Equal(t, causeTxDisarmed, reason)
@@ -186,7 +186,7 @@ func TestAbandonCause_LogLineIsNeverBlank(t *testing.T) {
 		s := newTestSeqLogged(r, log)
 		startedSession(t, s)
 
-		s.abandonWithCause(cause)
+		s.abandonNamed("", cause)
 
 		reason, found := sink.abandonReason(t)
 		require.True(t, found, "cause %q wrote no record", cause)
@@ -205,10 +205,39 @@ func TestAbandonCause_StagedReasonWinsOverTheCallSiteFallback(t *testing.T) {
 	// it would report a dial-guard stop as a routine disarm. Mirrors the rule
 	// AbandonIfCurrent already applies.
 	s.setPendingEndReason(EndReasonDialMoved)
-	s.abandonWithCause(causeTxDisarmed)
+	s.abandonNamed("", causeTxDisarmed)
 
 	reason, _ := sink.abandonReason(t)
 	require.Equal(t, EndReasonDialMoved, reason)
 	require.Equal(t, EndReasonDialMoved, r.lastStatus().EndReason,
 		"a staged reason is operator-visible; the fallback it beat is not")
+}
+
+// R7: a terminal transmit failure must NOT go through the shared staging slot.
+//
+// codex 3531e1ed P2, and a regression I introduced. The eight rung sites staged
+// their reason under one lock hold and abandoned under a second, so a teardown
+// landing between the two consumed it — the operator's own Abandon reported "SM
+// could not transmit". The same shared slot is what the DIAL GUARD stages into,
+// which gives the defect a deterministic and worse face: a rung failure racing a
+// dial-guard teardown OVERWRITES the guard's explanation, and a safety stop is
+// then reported as a transmit failure. R6 says a staged reason wins; this says
+// the rung must not be staging in the first place.
+func TestAbandonCause_TxFailureDoesNotClobberAStagedReason(t *testing.T) {
+	sink, log := newLogSink()
+	r := &seqRecorder{}
+	s := newTestSeqLogged(r, log)
+	startedSession(t, s)
+
+	// The dial guard has staged its reason; the rung then fails on the same session.
+	s.setPendingEndReason(EndReasonDialMoved)
+	r.transmitErr = ErrTxNotArmed
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC FN42", -12)})
+
+	reason, found := sink.abandonReason(t)
+	require.True(t, found)
+	require.Equal(t, EndReasonDialMoved, reason,
+		"the dial guard's explanation must survive a rung failure, not be overwritten by it")
+	require.Equal(t, EndReasonDialMoved, r.lastStatus().EndReason,
+		"a safety stop reported as a transmit failure sends the operator after the wrong fault")
 }

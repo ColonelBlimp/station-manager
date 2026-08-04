@@ -157,6 +157,16 @@ const (
 const (
 	causeOperator   = "operator"
 	causeTxDisarmed = "tx_disarmed"
+	// causeNoAnswer: the repeat cap was reached — the partner stopped answering.
+	// Log-only, and that is a DECISION, not an omission (codex 3531e1ed P2 #2,
+	// accepted-with-scope 2026-08-04): unlike a transmit failure this end is
+	// telegraphed, because `repeats`/`max_repeats` ride every status frame and the
+	// SPA renders the countdown — the operator watches it arrive. Promoting it to
+	// a terminal frame reason would toast every unanswered call, which is the
+	// noise the "absent for a normal end" rule exists to avoid, and whether that
+	// notice is wanted is the operator's call, not one to make inside a review
+	// fix. The LOG half IS the gap and is closed here.
+	causeNoAnswer = "no_answer"
 )
 
 // endReasonForTxErr names which TERMINAL transmit failure ended the session. Only
@@ -713,16 +723,23 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 
 // Abandon drops the active session — answering or calling CQ (operator action,
 // disarm, or off-ramp). Idempotent.
-func (s *Sequencer) Abandon() { s.abandonWithCause(causeOperator) }
+func (s *Sequencer) Abandon() { s.abandonNamed("", causeOperator) }
 
-// abandonWithCause is Abandon with the LOG label to use when nothing was staged.
+// abandonNamed ends the session, naming what the OPERATOR sees (frameReason —
+// empty when they caused it) and what the LOG falls back to (logFallback).
 //
-// The two carriers diverge on purpose. The FRAME gets only a STAGED reason: the
-// fallback names an operator action, and publishing it would turn every abandon
-// and every disarm into a toast telling the operator what they just did. The LOG
-// gets the fallback, because "" there could not be told apart from a session that
-// DIED — which is the defect this exists to close.
-func (s *Sequencer) abandonWithCause(fallback string) {
+// frameReason is an ARGUMENT, not staged. Staging it would put this call site's
+// cause into the one slot every other teardown consumes: a rung failure that
+// staged tx_not_armed and then abandoned under a SECOND lock hold could have its
+// reason picked up by an operator Abandon landing in between — reporting "SM
+// could not transmit" for a stop the operator had just requested — and could
+// overwrite a reason the dial guard had already staged, reporting a safety stop
+// as a transmit failure (codex 3531e1ed P2). One lock hold, no shared slot.
+//
+// The two carriers still diverge on purpose. The FRAME gets only a reason that
+// is NOT the operator's own doing; the LOG always gets something, because "" was
+// indistinguishable from a session that DIED — the defect this closes.
+func (s *Sequencer) abandonNamed(frameReason, logFallback string) {
 	s.mu.Lock()
 	// An armed auto-work run is a thing Abandon STOPS even with no contact in
 	// progress, and stopping it has to be published or it happens invisibly: the
@@ -730,20 +747,26 @@ func (s *Sequencer) abandonWithCause(fallback string) {
 	// stays lit on a station that is now inert (ADR 0059, autowork_test.go V2).
 	hadRun := s.autoWork.armed
 	was, staged := s.abandonLocked()
+	// A STAGED reason still wins: the dial guard stages before its teardown runs,
+	// and its explanation must survive whichever path performs it.
+	reason := staged
+	if reason == "" {
+		reason = frameReason
+	}
 	if was || hadRun {
 		// Terminal publish under the lock, so a replacement Start* cannot commit and
 		// publish ACTIVE first only to be overwritten by this idle (finalrung.go).
 		// STAGED only — see the doc comment on why the fallback must not go here.
-		s.publish(s.terminalStatusLocked(staged))
+		s.publish(s.terminalStatusLocked(reason))
 	}
 	s.mu.Unlock()
 	if was {
 		// A staged reason wins over the call site's label — the precedence
 		// AbandonIfCurrent already applies, so the dial guard's explanation is not
 		// overwritten by whichever teardown path happened to run it.
-		cause := staged
+		cause := reason
 		if cause == "" {
-			cause = fallback
+			cause = logFallback
 		}
 		s.log.InfoWith().Str("reason", cause).Msg("ft8 seq: session abandoned")
 	} else if hadRun {
@@ -1142,7 +1165,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		if s.contact.repeats >= s.maxRepeats {
 			s.retireSessionLocked(func() { s.ex = nil })
 			s.mu.Unlock()
-			s.log.InfoWith().Msg("ft8 seq: no answer after max repeats; abandoning")
+			s.log.InfoWith().Str("reason", causeNoAnswer).Msg("ft8 seq: no answer after max repeats; abandoning")
 			return
 		}
 		s.contact.repeats++
@@ -1201,8 +1224,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 		// encode — review M1) are terminal; anything else (e.g. ErrTxInFlight) is
 		// transient and the untouched state retries next slot.
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.setPendingEndReason(endReasonForTxErr(err))
-			s.Abandon()
+			s.abandonNamed(endReasonForTxErr(err), "")
 			return
 		}
 		s.publishCurrent()
@@ -1304,7 +1326,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 			s.log.WarnWith().Str("their_call", call).Int("attempts", attempts).
 				Msg("ft8 seq: FD final RR73 never transmitted; abandoning without logging")
 		} else {
-			s.log.InfoWith().Msg("ft8 seq: FD no answer after max repeats; abandoning")
+			s.log.InfoWith().Str("reason", causeNoAnswer).Msg("ft8 seq: FD no answer after max repeats; abandoning")
 		}
 		return
 	}
@@ -1360,8 +1382,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: FD rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.setPendingEndReason(endReasonForTxErr(err))
-			s.Abandon()
+			s.abandonNamed(endReasonForTxErr(err), "")
 			return
 		}
 		s.publishCurrent()
@@ -1527,8 +1548,7 @@ func (s *Sequencer) fireOpening(now time.Time) {
 		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.setPendingEndReason(endReasonForTxErr(err))
-			s.Abandon() // TX gone / message can't encode — can't continue.
+			s.abandonNamed(endReasonForTxErr(err), "") // TX gone / message can't encode — can't continue.
 			return
 		}
 	}

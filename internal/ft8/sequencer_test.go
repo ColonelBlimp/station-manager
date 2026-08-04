@@ -14,6 +14,9 @@ import (
 // seqRecorder captures the sequencer's side effects (transmits, published
 // statuses, completions) for assertions.
 type seqRecorder struct {
+	// beforeErr, when set, is invoked inside transmit just before it returns
+	// transmitErr — the seam for interleaving a concurrent teardown.
+	beforeErr   func()
 	mu          sync.Mutex
 	sent        []string
 	offsets     []float64
@@ -51,7 +54,14 @@ func (r *seqRecorder) transmit(msg string, off, dialMHz float64, _ uint64, onDon
 	r.mu.Lock()
 	if r.transmitErr != nil {
 		err := r.transmitErr
+		hook := r.beforeErr
 		r.mu.Unlock()
+		// beforeErr runs INSIDE the transmit call, i.e. exactly where a concurrent
+		// operator Abandon can land: after the rung committed and before its
+		// failure handler runs. Lets a race be driven deterministically.
+		if hook != nil {
+			hook()
+		}
 		return err
 	}
 	r.sent = append(r.sent, msg)

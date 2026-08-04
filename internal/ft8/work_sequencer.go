@@ -196,7 +196,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 			s.log.WarnWith().Str("their_call", call).Int("attempts", attempts).
 				Msg("ft8 seq: working caller — final RR73 never transmitted; abandoning without logging")
 		} else {
-			s.log.InfoWith().Msg("ft8 seq: working caller — no answer after max repeats; abandoning")
+			s.log.InfoWith().Str("reason", causeNoAnswer).Msg("ft8 seq: working caller — no answer after max repeats; abandoning")
 		}
 		return
 	}
@@ -264,8 +264,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// onDone never fired, so a final-rung QSO is correctly not logged. Terminal
 		// errors abandon; transient ones leave the contact for the next slot to retry.
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.setPendingEndReason(endReasonForTxErr(err))
-			s.Abandon()
+			s.abandonNamed(endReasonForTxErr(err), "")
 			return
 		}
 	}
@@ -412,7 +411,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 		if s.contact.repeats >= s.maxRepeats {
 			s.retireSessionLocked(func() { s.fdWork = nil })
 			s.mu.Unlock()
-			s.log.InfoWith().Msg("ft8 seq: working caller (FD) — no answer after max repeats; abandoning")
+			s.log.InfoWith().Str("reason", causeNoAnswer).Msg("ft8 seq: working caller (FD) — no answer after max repeats; abandoning")
 			return
 		}
 		s.contact.repeats++
@@ -454,8 +453,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 			return
 		}
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
-			s.setPendingEndReason(endReasonForTxErr(err))
-			s.Abandon()
+			s.abandonNamed(endReasonForTxErr(err), "")
 			return
 		}
 	}

@@ -299,7 +299,7 @@ func (s *Service) disarmTxLocked(closing bool) {
 		// Still abandon under the gate: a session could be active from a start
 		// that raced an earlier disarm; clear it now that armed is false.
 		if s.seq != nil {
-			s.seq.abandonWithCause(causeTxDisarmed)
+			s.seq.abandonNamed("", causeTxDisarmed)
 		}
 		return
 	}
@@ -341,7 +341,7 @@ func (s *Service) disarmTxLocked(closing bool) {
 	// Armed state is false (under the gate); abandon whatever survived the
 	// completion. A start blocked on seqGate will observe txArmed=false and refuse.
 	if s.seq != nil {
-		s.seq.abandonWithCause(causeTxDisarmed)
+		s.seq.abandonNamed("", causeTxDisarmed)
 	}
 
 	if dev != nil {
