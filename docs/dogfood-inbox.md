@@ -145,6 +145,43 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   second-accurate — FT8 already depends on system time being right, so a clock that
   disagreed with the slot clock would be actively misleading, and that argues for
   driving it from the same source rather than a fresh `new Date()`.
+- [2026-08-04] Map: overlay the time zones — or the CURRENT TIME along each zone
+  line. Raised while reviewing what is left on the map. **Analysed, not started;
+  the analysis is here so it is not re-derived.**
+  — **RELATED TO THE WORLD-TIME WIDGET ABOVE, and the first thing to settle:**
+  they answer different questions. A widget says what time it is in Tokyo; the
+  overlay says what time it is WHERE THIS ARC LANDS. Decide whether the overlay
+  supersedes the widget, or they are complementary, before building either.
+  — **TWO DIFFERENT FEATURES SHARE THE NAME.** (A) SOLAR / nautical zones: 24
+  bands of 15°, offset = round(lon/15). No dataset at all — pure geometry plus
+  arithmetic, exact, never stale, no licensing question. (B) POLITICAL zones:
+  real boundaries, half-hour offsets, DST. Needs a boundary dataset, and the
+  usual one (timezone-boundary-builder) is OSM-derived → **ODbL, which the
+  basemap decision explicitly excludes** ("AVOID OSM/ODbL-derived data
+  (share-alike)", dogfood 2026-07-04). Natural Earth publishes a public-domain
+  time-zones layer that would sidestep that — UNVERIFIED whether it is available
+  in the TopoJSON shape we use, and at what size; `countries-50m` is already
+  756 kB and the chunk-size warning limit was raised to 800 kB for it.
+  — **RECOMMENDATION: (A), and not merely because it is cheaper.** The map's
+  headline overlay is the GREY LINE, a solar phenomenon, and everything an
+  operator reads this map for tracks solar time — grey-line enhancement, MUF,
+  sunrise/sunset. Political time is LESS useful for that decision and far more
+  expensive: China spans five solar zones on one clock, India is +5:30, DST
+  shifts twice a year. Label it **solar time**, honestly. Labelling nautical
+  bands "local time" is the one genuinely wrong option.
+  — **CHEAPER THAN IT LOOKS, because the parts exist:** the 60 s clock already
+  ticks for the terminator (`MapView.svelte`), `geoPath` already draws arbitrary
+  geometry through the projection, the overlay pattern IS the terminator, and the
+  toggle+persistence pattern is Grey line. It SHOULD persist, by the same
+  reasoning that says the band filter should not: this ADDS an overlay, so a
+  remembered setting cannot make the map look broken.
+  — **CORRECTION TO THE OBVIOUS MENTAL PICTURE:** the projection is
+  `geoNaturalEarth1()`, NOT equirectangular, so meridians are CURVES, not
+  vertical lines. Not extra work (d3-geo projects a meridian LineString exactly
+  like the country outlines) but it changes label placement.
+  — **Open for the operator, none to be invented:** labels at the top edge or
+  along a latitude; every band or thinned on a narrow window; and whether the
+  lines show at all zoom levels.
 - [2026-07-27] FT8 TX drive collapsed mid-session — rig keyed but made almost no
   power, so the amp (needs ~10 W) never came up. ROOT CAUSE UNKNOWN. Everything
   upstream was verified healthy: CAT ok, PTT asserted (ft8-all.txt "Transmitting"

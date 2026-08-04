@@ -86,7 +86,10 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   the display was fixed 2026-07-30 and the data cause is now fixed at ingress.
   ~~band filter~~ — **SHIPPED**. Still open on the map, none urgent: the **FT8
   RX propagation overlay** (P2), the **whole-log Dashboard map** (P3, needs a
-  `/v1/logbook/{id}/map` aggregate), and the SSE-revival item listed below.
+  `/v1/logbook/{id}/map` aggregate), a **solar-time-zone overlay** (analysed
+  2026-08-04, `dogfood-inbox.md` — read it before starting; the licensing and
+  solar-vs-political forks are already settled there), and the SSE-revival item
+  listed below.
 - **DECIDED, DO NOT REOPEN — no FT8 dupe guard.** Reaffirmed 2026-08-04 after a
   50-QSO run logged KK2A twice: they never copied our RR73 (asked twice,
   re-sent twice), so the re-work was CORRECT on-air behaviour. The reasoning is
