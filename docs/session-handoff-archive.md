@@ -12522,3 +12522,54 @@ holding the live doc at the enforced 3-arc window.
 > - **`api-endpoints.md` was missing the whole `lookup` block** on both GET and
 >   PUT — found while documenting `smtp`. Added, along with `password_clear` and
 >   the default resolution.
+
+> **2026-08-03 — SETTINGS → ENRICHMENT SHIPPED, over four commits and four
+> reviews. The two middle reviews each found a real defect in the PREVIOUS fix.**
+>
+> - **PORTING FOUND TWO MORE DAEMON DEFECTS**, both predating the port and both
+>   reachable from the config SPA too. (1) **A lookup TTL of 0 was silently
+>   rewritten.** `Orchestrator.isStale` treats a non-positive TTL as "trust the
+>   cache indefinitely" — which is what the UI has always told the operator —
+>   but `applyDefaults` treated 0 as unset and stamped 365/90 over it at every
+>   Load. So a deliberate 0 worked until the next restart and then meant a year.
+>   Fixed by making the two TTLs `*int` (nil = default, filled in `Normalize` so
+>   it applies on PUT too; explicit 0 survives). **I nearly filed the opposite
+>   finding** — the UI text looked wrong until I read `isStale` itself. The
+>   inference was wrong; only the code settled which half was broken.
+>   (2) **An enabled QRZ with no password returned 200 and then stopped the
+>   daemon starting** (`qrz.Initialize` rejects it → `buildEnrichment` →
+>   `run()` returns). Now refused at save time by `validateLookupProvider`, with
+>   the limits in `internal/types` because `internal/config` → `internal/lookup/qrz`
+>   would be a cycle.
+> - **THE SECOND DEFECT WAS ONE I INTRODUCED BY PATTERN-MATCHING.** The Remove
+>   control was carried over from Email, where `validateSmtp` has never required
+>   a password because unauthenticated submission is legitimate. QRZ's is not.
+>   `forwarding.svelte.ts` ALREADY documents this exact failure mode ("emptying a
+>   required credential is not a reset — the forwarder's New() rejects it,
+>   aborting startup after the PUT returned 200"). **"The same masked-credential
+>   pattern" says nothing about whether the credential is OPTIONAL.**
+> - **THEN THE FIX CARRIED ITS OWN DEFECT, TWICE OVER.** Auto-disabling on Remove
+>   mutated `enabled`, and neither way back restored it — so changing your mind
+>   saved QRZ disabled while the notice said a new password would revive it. The
+>   fix that stuck REMOVES state rather than adding a restore step: `enabled` is
+>   never mutated and the effective value is derived as "enabled AND no removal
+>   pending", which also drives the toggle, its locked state and the summary
+>   pill from one place. My own U3 had exercised the reversal path but asserted
+>   only `passwordCleared` — **a weaker statement than the rule it claimed to
+>   pin**, which is why the defect survived it.
+> - **A TEST WAS PASSING FOR THE WRONG REASON** and is worth remembering as a
+>   shape: W4c asserted the draft was intact AFTER `save()`, but a successful
+>   save re-hydrates the draft from the response, so it held whether or not the
+>   mutation had happened. Moved before the save, it failed correctly.
+> - **EVERY SOURCE IS A DISCLOSURE** (operator's call), the Forwarding shape.
+>   More than a restyle: the flat layout rendered only QRZ and Hamnut, so a
+>   provider this build does not recognise was PRESERVED BUT INVISIBLE. Listing
+>   every source makes the thing the whole-chain rule protects something the
+>   operator can see. `mergeLookup` replaces the chain WHOLE, so the state model
+>   holds every provider as a draft — that makes the safe payload the natural one
+>   to build rather than something the save must remember to reconstruct.
+> - **`label` ON LOOKUP SOURCES**, mirroring forwarders: operator-set in
+>   config.json, read-only on the wire, display chain label → built-in → raw id.
+>   `mergeLookupProvider` carries it from the STORED entry, because the rebuild
+>   keeps only what it names — the same trap that silently ate forwarder
+>   `endpoints` for a while.
