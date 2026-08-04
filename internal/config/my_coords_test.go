@@ -150,3 +150,29 @@ func TestMyCoords_M7_AnExistingAdifFormatConfigStillStarts(t *testing.T) {
 		t.Fatalf("an existing install would fail to start: %v", errs)
 	}
 }
+
+func TestMyCoords_M8_ImpossibleCoordinatesAreRefusedEvenWithNoGrid(t *testing.T) {
+	// codex fbaafe73 P1. Validation used CoordsReadable, which asks only whether
+	// ParseFloat succeeded — and ParseFloat happily returns NaN, ±Inf and any
+	// magnitude. With no grid there is no cell check either, so latitude 91 and
+	// NaN were accepted and persisted.
+	//
+	// The inconsistency is the tell: the SAME commit bound-checked coordinates at
+	// the provider ingress and not at this one. A boundary that promises a
+	// canonical value has to enforce the same thing wherever values enter, or the
+	// promise is only true for whichever door the author was looking at.
+	for _, tc := range []struct{ lat, lon string }{
+		{"91.0", "10.0"},
+		{"10.0", "181.0"},
+		{"NaN", "10.0"},
+		{"10.0", "Inf"},
+		{"-90.5", "10.0"},
+	} {
+		cfg := &Config{}
+		cfg.LoggingStation = types.LoggingStation{MyLat: tc.lat, MyLon: tc.lon}
+		Normalize(cfg)
+		if !mentions(Validate(*cfg), "my_lat") {
+			t.Fatalf("accepted an impossible position (%s,%s)", tc.lat, tc.lon)
+		}
+	}
+}

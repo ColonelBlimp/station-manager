@@ -28,11 +28,20 @@ func adifLocation(v string, isLat bool) string {
 	if v == "" {
 		return "" // absent, not the equator: never invent "N000 00.000"
 	}
-	out, err := utils.ConvertToXDDDMMM(v, isLat)
-	if err != nil {
+	if out, err := utils.ConvertToXDDDMMM(v, isLat); err == nil {
+		return out
+	}
+	// Already an ADIF Location FOR THIS AXIS — an import-era value, which rides
+	// out as it came in. The axis check matters: "E022 58.119" is a valid
+	// Location but not a valid LATITUDE.
+	if _, err := utils.ConvertFromXDDDMMM(v, isLat); err == nil {
 		return v
 	}
-	return out
+	// Neither. Omit rather than emit it raw: "<MY_LAT:4>91.0" is not an ADIF
+	// Location and a consumer may reject the whole record, whereas an absent
+	// field is valid ADIF. The value stays in storage — nothing is lost that was
+	// not already unusable (codex fbaafe73 P1).
+	return ""
 }
 
 // storageLocation is adifLocation's inverse: an ADIF Location becomes signed

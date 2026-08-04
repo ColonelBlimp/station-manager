@@ -194,15 +194,12 @@ func NormalizeProviderStation(cs types.ContactedStation) (types.ContactedStation
 // then emitted nothing. The boundary that promises a canonical value has to
 // enforce what makes it one.
 func canonicalCoord(v string, isLat bool) (string, bool) {
+	limit := 180.0
+	if isLat {
+		limit = 90.0
+	}
 	if f, err := strconv.ParseFloat(v, 64); err == nil {
-		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return "", false
-		}
-		limit := 180.0
-		if isLat {
-			limit = 90.0
-		}
-		if math.Abs(f) > limit {
+		if math.IsNaN(f) || math.IsInf(f, 0) || math.Abs(f) > limit {
 			return "", false
 		}
 		return v, true

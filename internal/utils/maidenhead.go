@@ -153,6 +153,27 @@ func CoordsReadable(lat, lon string) bool {
 	return errLat == nil && errLon == nil
 }
 
+// CoordsValid reports whether both values are usable coordinates for their axis:
+// readable, finite, and within ±90 / ±180.
+//
+// Distinct from CoordsReadable, which asks only whether a COMPARISON is possible.
+// strconv.ParseFloat accepts NaN and ±Inf and says nothing about range, so
+// "parses as a float" is not "is a position" — latitude 91 and NaN reached
+// operator config and were then emitted raw into MY_LAT, which is not an ADIF
+// Location (codex fbaafe73 P1). Every boundary that ADMITS a value asks this
+// one; the storage merge, which only compares, asks CoordsReadable.
+func CoordsValid(lat, lon string) bool {
+	return coordValid(lat, 90.0) && coordValid(lon, 180.0)
+}
+
+func coordValid(v string, limit float64) bool {
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return false
+	}
+	return math.Abs(f) <= limit
+}
+
 // CoordsInsideGrid reports whether decimal lat/lon fall within the locator's own
 // cell. The cell IS the test — a locator declares an extent, so anything inside
 // it is consistent with it by definition and no distance threshold has to be

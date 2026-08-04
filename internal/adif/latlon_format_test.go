@@ -270,3 +270,28 @@ func TestLatLonFormat_D5_MyCoordinatesReturnToDecimalOnImport(t *testing.T) {
 			got.MyLat, got.MyLon)
 	}
 }
+
+func TestLatLonFormat_C6_AnUnrenderableCoordinateIsOmittedNotEmittedRaw(t *testing.T) {
+	// codex fbaafe73 P1, second half. adifLocation returned the input unchanged
+	// on any conversion error, so an out-of-range value left as "<MY_LAT:4>91.0"
+	// — not an ADIF Location, and a consumer may reject the whole record.
+	// Omitting the field is valid ADIF; emitting nonsense is not. The value is
+	// still in storage, so nothing is lost that was not already unusable.
+	q := types.Qso{}
+	q.LoggingStation = types.LoggingStation{MyLat: "91.0", MyLon: "10.0"}
+	q.ContactedStation = types.ContactedStation{Call: "G0ABC", Lat: "not a number", Lon: "5.0"}
+	out, err := ComposeToAdifString(types.QsoSlice{q})
+	if err != nil {
+		t.Fatalf("compose: %v", err)
+	}
+	if v, ok := emitted(t, out, "MY_LAT"); ok {
+		t.Fatalf("an impossible latitude was emitted: %q", v)
+	}
+	if v, ok := emitted(t, out, "LAT"); ok {
+		t.Fatalf("an unrenderable latitude was emitted: %q", v)
+	}
+	// The QSO itself still leaves — a bad coordinate must not cost the record.
+	if call, _ := emitted(t, out, "CALL"); call != "G0ABC" {
+		t.Fatalf("the QSO did not survive: %q", call)
+	}
+}

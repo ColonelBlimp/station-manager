@@ -287,8 +287,9 @@ func validateLoggingStation(ls types.LoggingStation) []Finding {
 	// locator declares an extent, so no distance threshold is invented.
 	if ls.MyLat != "" || ls.MyLon != "" {
 		switch {
-		case !utils.CoordsReadable(ls.MyLat, ls.MyLon):
-			add("logging_station.my_lat", "my_lat and my_lon must both be decimal degrees (e.g. -11.443917)")
+		case !utils.CoordsValid(ls.MyLat, ls.MyLon):
+			add("logging_station.my_lat",
+				"my_lat and my_lon must both be decimal degrees within ±90 / ±180 (e.g. -11.443917)")
 		case ls.MyGridsquare != "" && utils.IsValidMaidenhead(ls.MyGridsquare) &&
 			!utils.CoordsInsideGrid(ls.MyGridsquare, ls.MyLat, ls.MyLon):
 			add("logging_station.my_lat",
