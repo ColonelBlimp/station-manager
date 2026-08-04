@@ -110,6 +110,10 @@ func QsoToRecord(q types.Qso) Record {
 	// QsoDetails, ContactedStation, LoggingStation are already flat and compatible
 	r.QsoDetails = q.QsoDetails
 	r.ContactedStation = q.ContactedStation
+	// Contacted-station coordinates are stored as decimal degrees; ADIF wants the
+	// Location type. Converted at the boundary only — see adifLocation.
+	r.ContactedStation.Lat = adifLocation(q.ContactedStation.Lat, true)
+	r.ContactedStation.Lon = adifLocation(q.ContactedStation.Lon, false)
 	r.LoggingStation = q.LoggingStation
 	// Map QSL
 	r.QslSection = QslSection{
@@ -168,7 +172,7 @@ func RecordToQso(rec Record, logbookID int64) types.Qso {
 		UUID:             rec.AppSmQsoID,
 		LogbookID:        logbookID,
 		QsoDetails:       rec.QsoDetails,
-		ContactedStation: rec.ContactedStation,
+		ContactedStation: contactedStationToStorage(rec.ContactedStation),
 		LoggingStation:   rec.LoggingStation,
 		Qsl: types.Qsl{
 			QslMsg:       rec.QslSection.QslMsg,

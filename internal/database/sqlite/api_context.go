@@ -1414,6 +1414,9 @@ func (s *Service) writeContactedStation(ctx context.Context, station types.Conta
 	default:
 		return errors.New(op).WithErr(ferr)
 	}
+	// One choke point for all three routes above (merge, replace, cold miss):
+	// coordinates must not contradict the gridsquare they are stored beside.
+	row = reconcileStationCoords(row)
 	row.LastRefreshedAt = time.Now().UTC()
 
 	model, mErr := adapters.ContactedStationTypeToModel(row)

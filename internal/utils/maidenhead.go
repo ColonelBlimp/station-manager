@@ -67,9 +67,26 @@ func NormalizeMaidenhead(s string) string {
 // centre of the supplied locator's cell, in decimal degrees. ok is
 // false when the input is empty or fails validation.
 func MaidenheadToDecimal(s string) (lat, lon float64, ok bool) {
+	lat, lon, _, _, ok = MaidenheadToCell(s)
+	return lat, lon, ok
+}
+
+// MaidenheadToCell returns the locator's cell — its centre AND its extent,
+// which is what a locator actually declares.
+//
+// The extent was always computed here to place the centre; it is returned
+// because a consumer needs to know whether some OTHER coordinate pair falls
+// inside the locator a station claims. That makes "these coordinates
+// contradict this grid" answerable from the data's own precision rather than
+// from an invented distance threshold. Mirrors gridToCell() in the SPA
+// (frontend/app/src/lib/utils/bearing.ts) deliberately: both sides must agree
+// on what "contradicts" means, or the map and the stored row disagree.
+//
+// ok is false when the input is empty or fails validation.
+func MaidenheadToCell(s string) (lat, lon, latSpan, lonSpan float64, ok bool) {
 	trimmed := strings.ToUpper(strings.TrimSpace(s))
 	if trimmed == "" || !maidenheadPattern.MatchString(trimmed) {
-		return 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 
 	lon = -180.0 + 20.0*float64(trimmed[0]-'A')
@@ -97,7 +114,7 @@ func MaidenheadToDecimal(s string) (lat, lon float64, ok bool) {
 	lon += cellLon / 2.0
 	lat += cellLat / 2.0
 
-	return lat, lon, true
+	return lat, lon, cellLat, cellLon, true
 }
 
 // MaidenheadToADIFLatLon converts a locator to ADIF "XDDD MM.MMM"

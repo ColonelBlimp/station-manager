@@ -114,3 +114,35 @@ func IsXDDDMMM(s string) bool {
 
 	return true
 }
+
+// ConvertFromXDDDMMM is the inverse of ConvertToXDDDMMM: it parses an ADIF
+// Location ("XDDD MM.MMM") back to signed decimal degrees, formatted to six
+// decimal places to match what enrichment stores.
+//
+// Exists so an ADIF round trip is lossless in SHAPE. ADIF carries the Location
+// type; SM stores decimal degrees, because that is what QRZ returns and what the
+// SPA map parses. Export converts one way; without this, import stored the ADIF
+// string verbatim and the row stopped being plottable — parseFloat rejects it
+// and the map silently falls back to the grid's cell centre.
+//
+// Anything that is not a well-formed Location is REFUSED rather than guessed at,
+// including a bare decimal: callers treat the error as "leave this value alone",
+// which is what keeps an import of a decimal-bearing file unchanged.
+func ConvertFromXDDDMMM(s string) (string, error) {
+	if !IsXDDDMMM(s) {
+		return emptyString, fmt.Errorf("not an ADIF Location: %q", s)
+	}
+	deg, err := strconv.ParseFloat(s[1:4], 64)
+	if err != nil {
+		return emptyString, err
+	}
+	min, err := strconv.ParseFloat(s[5:], 64)
+	if err != nil {
+		return emptyString, err
+	}
+	val := deg + min/60.0
+	if s[0] == 'S' || s[0] == 'W' {
+		val = -val
+	}
+	return strconv.FormatFloat(val, 'f', 6, 64), nil
+}
