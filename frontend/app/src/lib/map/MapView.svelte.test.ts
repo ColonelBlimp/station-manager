@@ -50,6 +50,7 @@ vi.mock('../api/logbooks', () => ({
     },
 }));
 
+import { setOperatingBands } from '../operate/rig.svelte';
 import MapView from './MapView.svelte';
 
 beforeEach(() => {
@@ -169,5 +170,120 @@ describe('MapView', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+/*
+    Band filter (dogfood-inbox 2026-08-01). A select, defaulting to "All", whose
+    options are the station's CONFIGURED operating bands.
+
+    WHY THE LIST IS THE STATION'S BANDS AND NOT THE WINDOW'S. Offering only the
+    bands present in the current window would make the control flicker as QSOs
+    age out of the window and would hide a band the operator works — the list
+    describes the STATION, which is stable, not the current six hours. It is the
+    same `station.operating_bands` that already drives the Phone/CW band grid and
+    the FT8 buttons, so a station that skips 160/60/30 never sees them anywhere.
+
+    WHY IT IS NOT PERSISTED, unlike the grey-line toggle beside it. A filter that
+    survives into the next session opens the map on an apparently empty world
+    with no indication why — the "why is my map broken" trap. Grey line is safe
+    to persist because it adds an overlay; this one REMOVES contacts.
+
+    THE NEAREST CONFUSABLE STATE (B2): a filtered-empty map versus a broken one.
+    The count line keeps saying how many QSOs the window holds, so "0 of 46
+    plotted" reads as a filter doing its job rather than a failure.
+*/
+
+describe('MapView band filter', () => {
+    beforeEach(() => {
+        // The station's configured bands — the real store, as main.ts fills it
+        // from station.operating_bands. 15m is configured but unworked in this
+        // window; 160m is not configured at all.
+        setOperatingBands(['15m', '20m', '40m']);
+    });
+
+    const twoBandPage = (): void => {
+        const ts = nowAdif();
+        fetchQsoPage.mockResolvedValue({
+            kind: 'ok',
+            items: [
+                { id: 1, uuid: 'u1', call: 'G4ABC', gridsquare: 'IO91', band: '20M', ...ts },
+                { id: 2, uuid: 'u2', call: 'ZS6DX', gridsquare: 'KG44', band: '40m', ...ts },
+                { id: 3, uuid: 'u3', call: 'VK3XX', gridsquare: 'QF22', band: '20m', ...ts },
+            ],
+            nextCursor: null,
+        });
+    };
+
+    it('B1: defaults to All and plots the whole window', async () => {
+        twoBandPage();
+        const { container } = render(MapView);
+        await screen.findByTestId('plotted');
+
+        const sel = screen.getByLabelText<HTMLSelectElement>('Band');
+        expect(sel.value).toBe('');
+        expect(container.querySelectorAll('[data-testid="arc"]')).toHaveLength(3);
+    });
+
+    it('B2: selecting a band plots only that band, and says what was hidden', async () => {
+        twoBandPage();
+        const { container } = render(MapView);
+        await screen.findByTestId('plotted');
+
+        const sel = screen.getByLabelText<HTMLSelectElement>('Band');
+        sel.value = '40m';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        await Promise.resolve();
+
+        expect(container.querySelectorAll('[data-testid="arc"]')).toHaveLength(1);
+        // The window's size is still stated, so an empty result is legible as a
+        // filter rather than a fault.
+        expect(screen.getByTestId('plotted').textContent).toContain('of 3');
+    });
+
+    it('B3/B4: the options are the configured bands, including ones absent from the window', async () => {
+        twoBandPage();
+        render(MapView);
+        await screen.findByTestId('plotted');
+
+        const opts = [...screen.getByLabelText<HTMLSelectElement>('Band').options].map(
+            (o) => o.value
+        );
+        expect(opts[0]).toBe(''); // All
+        // 15m is configured but has no QSO in this window — still offered.
+        expect(opts).toContain('15m');
+        expect(opts).toContain('20m');
+        expect(opts).toContain('40m');
+        // 160m is NOT in this station's configured list and must not appear.
+        expect(opts).not.toContain('160m');
+    });
+
+    it('B5: the legend describes what is plotted, not the whole window', async () => {
+        twoBandPage();
+        const { container } = render(MapView);
+        await screen.findByTestId('plotted');
+
+        const sel = screen.getByLabelText<HTMLSelectElement>('Band');
+        sel.value = '40m';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        await Promise.resolve();
+
+        const legend = container.querySelector('[data-testid="legend"]')?.textContent ?? '';
+        expect(legend).toContain('40m');
+        expect(legend).not.toContain('20m');
+    });
+
+    it('B6: a band with no contacts plots nothing but still reports the window', async () => {
+        twoBandPage();
+        const { container } = render(MapView);
+        await screen.findByTestId('plotted');
+
+        const sel = screen.getByLabelText<HTMLSelectElement>('Band');
+        sel.value = '15m';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        await Promise.resolve();
+
+        expect(container.querySelectorAll('[data-testid="arc"]')).toHaveLength(0);
+        expect(screen.getByTestId('plotted').textContent).toContain('of 3');
     });
 });

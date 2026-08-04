@@ -12,7 +12,8 @@
 <script lang="ts">
     import WorldMap from './WorldMap.svelte';
     import { mapData, setDuration, startMapData, DURATIONS } from './mapData.svelte';
-    import { bandColor, bandRank } from './bandColors';
+    import { bandColor, bandRank, normalizeBand } from './bandColors';
+    import { operatingBands } from '../operate/rig.svelte';
     import { storageGet, storageSet } from '../utils/storage';
 
     const teardown = startMapData();
@@ -36,6 +37,24 @@
         return () => clearInterval(timer);
     });
 
+    // Band filter (dogfood 2026-08-01). '' = All, the default.
+    //
+    // The options are the station's CONFIGURED bands, not the bands present in
+    // the window: the window's contents change as QSOs age out, so a list built
+    // from them would flicker and would hide a band the operator actually works.
+    // Same source as the Phone/CW grid and the FT8 buttons, so a station that
+    // skips 160/60/30 never sees them anywhere.
+    //
+    // Deliberately NOT persisted, unlike the grey-line toggle beside it: a
+    // filter that survives into the next session opens the map on an apparently
+    // empty world with nothing to explain why. Grey line ADDS an overlay; this
+    // REMOVES contacts, so the failure mode is not symmetric.
+    let band = $state('');
+    const bandOptions = $derived(operatingBands());
+    const visible = $derived(
+        band === '' ? mapData.qsos : mapData.qsos.filter((q) => normalizeBand(q.band) === band)
+    );
+
     const arcs = $derived.by(() => {
         const origin = mapData.origin;
         if (origin === null) return [];
@@ -44,7 +63,7 @@
         // not under them. mapData.qsos is newest-first (newest-first paging), so
         // reverse the mapped arcs; .map() already returns a fresh array, so this
         // in-place reverse never touches mapData.qsos.
-        return mapData.qsos
+        return visible
             .map((q) => ({
                 key: q.key,
                 from: origin,
@@ -60,7 +79,7 @@
     // last) — colour-coding is only readable with the key alongside.
     const legend = $derived.by(() => {
         const counts: Record<string, number> = {};
-        for (const q of mapData.qsos) {
+        for (const q of visible) {
             counts[q.band] = (counts[q.band] ?? 0) + 1;
         }
         return Object.entries(counts)
@@ -98,6 +117,21 @@
             </select>
         </label>
 
+        <label class="flex items-center gap-x-2 text-xs text-muted">
+            Band
+            <select
+                class="rounded-md bg-surface px-2 py-1 text-xs font-medium text-ink outline-1
+                       -outline-offset-1 outline-line focus:outline-2 focus:-outline-offset-2
+                       focus:outline-focus"
+                bind:value={band}
+            >
+                <option value="">All</option>
+                {#each bandOptions as b (b)}
+                    <option value={b}>{b}</option>
+                {/each}
+            </select>
+        </label>
+
         <label class="flex items-center gap-x-1.5 text-xs text-muted select-none">
             <input type="checkbox" class="accent-focus" bind:checked={greyline} />
             Grey line
@@ -125,7 +159,7 @@
         <div class="ml-auto flex items-center gap-x-3 text-xs text-muted">
             {#if mapData.status === 'ok'}
                 <span data-testid="plotted">
-                    {mapData.qsos.length} of {mapData.total} plotted{unplotted > 0
+                    {visible.length} of {mapData.total} plotted{unplotted > 0
                         ? ` (${unplotted} without a location)`
                         : ''}
                 </span>
