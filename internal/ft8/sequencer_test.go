@@ -2,6 +2,7 @@ package ft8
 
 import (
 	stderrors "errors"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"sync"
 	"testing"
 	"time"
@@ -100,7 +101,12 @@ func (r *seqRecorder) lastStatus() QsoStatus {
 // and one run then names every site instead of only the first. The rule is stated
 // explicitly in publishatomicity_test.go; this makes the whole suite enforce it on
 // every path any test happens to drive.
-func newTestSeq(r *seqRecorder) *Sequencer {
+func newTestSeq(r *seqRecorder) *Sequencer { return newTestSeqLogged(r, nil) }
+
+// newTestSeqLogged is newTestSeq with a real logger attached, for the tests that
+// assert on the RECORD a session end writes (abandoncause_test.go). Same publish
+// guard — a second constructor that skipped it would be a hole in the rule.
+func newTestSeqLogged(r *seqRecorder, log logging.Logger) *Sequencer {
 	var s *Sequencer
 	publish := func(st QsoStatus) {
 		// Held → TryLock fails. Succeeding means the caller already let go.
@@ -110,7 +116,7 @@ func newTestSeq(r *seqRecorder) *Sequencer {
 		}
 		r.publish(st)
 	}
-	s = newSequencer(r.transmit, publish, 0, nil) // 0 → defaultSeqMaxRepeats
+	s = newSequencer(r.transmit, publish, 0, log) // 0 → defaultSeqMaxRepeats
 	s.onComplete = func(c CompletedQso) {
 		r.mu.Lock()
 		r.completed = append(r.completed, c)

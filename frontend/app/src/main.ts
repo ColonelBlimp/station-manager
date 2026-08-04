@@ -125,10 +125,19 @@ const SESSION_END_TEXT: Record<string, string> = {
     // The operator asked to move; saying the rig drifted would be a small lie, and
     // the notice is only worth having if it is true.
     band_change: 'you changed frequency, so SM stopped transmitting first',
+    // Not frequency faults — the rig could not be KEYED. Kept distinct because the
+    // operator's next action differs: re-arm, versus give up on that station.
+    tx_not_armed: 'transmit was no longer armed, so the exchange could not continue',
+    tx_bad_message: 'the next message could not be encoded for that station',
 };
 
 setFt8SessionEndedSink((reason, theirCall) => {
-    const why = SESSION_END_TEXT[reason] ?? 'the rig frequency could not be verified';
+    // The fallback must stay CAUSE-AGNOSTIC. It used to say the frequency could not
+    // be verified, which was safe only while every code was frequency-related; the
+    // 2026-08-04 tx_* codes made that fallback state a specific and false cause for
+    // anything it did not recognise — worst on the TX path, where the operator acts
+    // on what it says.
+    const why = SESSION_END_TEXT[reason] ?? 'SM could not safely continue the exchange';
     const who = theirCall !== '' ? ` with ${theirCall}` : '';
     // Says the PENDING message was blocked, not that the session sent nothing: the
     // guard usually fires partway through an exchange, after earlier rungs have

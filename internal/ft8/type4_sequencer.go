@@ -198,6 +198,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 			return
 		}
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
+			s.setPendingEndReason(endReasonForTxErr(err))
 			s.Abandon()
 			return
 		}
@@ -393,6 +394,7 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 		}
 		s.log.WarnWith().Err(err).Str("msg", msg).Msg("ft8 seq: type-4 work rung transmit failed")
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
+			s.setPendingEndReason(endReasonForTxErr(err))
 			s.Abandon()
 			return
 		}

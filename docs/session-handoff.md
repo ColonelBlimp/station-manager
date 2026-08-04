@@ -41,7 +41,7 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-03)
+## Now (as of 2026-08-04)
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
@@ -50,50 +50,40 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **DEPLOYED AT HEAD** (`ce989c1d`), daemon active. Everything below is live,
-  **including ADR 0062 — and it is verified on the REAL config**: both providers
-  wired through the registry (`lookup: country provider enabled` / `chain
-  provider enabled` in `smd.log`), the config block unchanged at hamnut + QRZ,
-  TTLs 365/90. The startup seeding was the no-op predicted. `smd` is deliberately
-  NOT auto-start — a stopped daemon is not a fault.
-- **Shipped today:** **Settings → Email** + **Settings → Enrichment**; the FOUR
-  daemon defects those ports exposed (SMTP password unremovable; blank SMTP
-  port/timeout; lookup TTL 0 silently rewritten; enabled QRZ with no password
-  stopping the daemon starting); a **stale-reload class fix** across all
-  four Settings sections; the **CAT chip** as a readout outside Operate;
-  operator **`label`s** on lookup sources; **ADR 0062** — enrichment providers
-  now self-register, so adding one is a package plus an import line; and the
-  forwarder **`label` in the logbook** (tooltip, dropdown, upload button, empty
-  message, queued notice — display only; `name` stays the durable key).
-  Detail in Current state.
+- **HEAD is `b653ea86`; the DAEMON is still running `ce989c1d`.** The Settings
+  navigation guard is committed but **NOT LIVE** — it is SPA-only, and the SPA
+  is `go:embed`ed, so it ships on the next `task deploy:local:dev`. Everything
+  else below is deployed. `smd` is deliberately NOT auto-start — a stopped
+  daemon is not a fault.
+- **Shipped 2026-08-04:** (1) the **Settings navigation guard** + **ADR 0063** —
+  confirm-on-leave naming the dirty sections, `beforeunload` for tab close,
+  immediate discard on confirm, and **three exits, not one** (sidebar
+  `navigate()`, browser Back via `popstate`, and `setMode()` from the
+  always-visible OperateNav); review caught two P1/P2s, both mine. (2) **Session
+  ends now say WHY** — `Abandon()` is reached from twelve places and only the two
+  dial paths named themselves, so a session that DIED logged identically to one
+  the operator stopped. Log always names a cause; the frame stays silent for
+  operator-caused ends. Detail in Current state.
 - **EYEBALL WHEN CONVENIENT** (none of it seen by hand; vitest checks the DOM,
-  not the look): Email's password keep / type / remove states and its 587/30
-  placeholders; Enrichment's disclosures, TTL-of-0 notice, and Remove switching
-  a source off.
+  not the look): the guard's confirm text + the F5 browser dialog (needs the
+  deploy first); after the next FT8 run, check `smd.log` session-end reasons are
+  populated; Email's password keep / type / remove states and its 587/30
+  placeholders; Enrichment's disclosures and TTL-of-0 notice.
 - **OBSERVE WHEN THE CHANCE ARISES — NOT tasks, and they gate nothing.** Do not
-  schedule these and do not open a session asking whether they are done; confirm
-  opportunistically. SSE revival (background the MAP tab — same window, browsers
-  throttle on visibility not focus; **a negative result means the TRIGGER is
-  wrong, not `openReviving`** — see Current state) · FT8 dead-source watchdog ·
-  ADR 0059 auto-work · stuck-TX / RF-ingress 2 s tune trials INTO THE ANTENNA
-  (operator's call on RF exposure).
-- **NEXT ACTUAL WORK — (a) IS THE ONE THE OPERATOR PICKED, deferred only because
-  the session ended:** (a) a **Settings navigation guard**. **Draft the
-  acceptance criteria BEFORE any mechanism** — two things are non-obvious and
-  neither is mine to decide. The discard happens on RETURN, not on leaving (the
-  draft survives navigation; the remount's `load()` → `#apply()` overwrites it),
-  so there is no natural moment for an "as you leave" warning and the guard has
-  to be placed deliberately. And "leaving Settings" has several readings —
-  sidebar links, browser back, tab close, switching BETWEEN Settings sections
-  while one is dirty — which do not all deserve the same treatment. Open
-  questions for the operator: block or warn, and should unsaved edits SURVIVE a
-  round trip rather than be discarded at all.
-  Then: (b) **Playwright** layout check — NOT scaffolded at all, so config + CI
-  + a first spec; (c) the **R9LAU map bug** — verify against the DB first.
-- **CONFIG-SPA RETIREMENT (checked 2026-08-03):** Settings now has Station ·
-  Rigs · Forwarding · Email · Enrichment. Two tabs remain unported — **FT8**
-  (colours, display, PSK Reporter, decode log) and **General** (operating,
-  contacts map, about). Those are the last blockers on retiring it.
+  schedule these and do not open a session asking whether they are done. SSE
+  revival (background the MAP tab; **a negative result means the TRIGGER is
+  wrong, not `openReviving`**) · FT8 dead-source watchdog · stuck-TX /
+  RF-ingress 2 s tune trials INTO THE ANTENNA (operator's call on RF exposure).
+- **NEXT ACTUAL WORK:** (a) **Playwright** layout check — NOT scaffolded at all,
+  so config + CI + a first spec; (b) the **R9LAU map bug** — verify against the
+  DB first; (c) config-SPA retirement needs **FT8** and **General**, the last
+  two unported tabs and the only blockers on retiring it.
+- **DECIDED, DO NOT REOPEN — no FT8 dupe guard.** Reaffirmed 2026-08-04 after a
+  50-QSO run logged KK2A twice: they never copied our RR73 (asked twice,
+  re-sent twice), so the re-work was CORRECT on-air behaviour. The reasoning is
+  in `caller_sequencer.go` above `confirmHold`. The defect is the extra ROW, not
+  the QSO; any fix belongs at log level. **An absent feature here was a
+  decision — grep before reporting one as a gap.**
 - **BLOCKED, not as a standalone build:** SHIP GATE (c) notification records —
   ADR 0061's subject matter, and that ADR is still `Proposed`.
 - **PARKED — do not start without the operator:** `operator_pick` / Call-CQ
@@ -102,13 +92,57 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   eviction records show healthy clients actually being evicted.
 - **Watch out:** `~/pCloudDrive/station-manager/` is an ABANDONED data dir
   (July 3). The live one is `~/.local/share/station-manager/`; logs are
-  `log/smd.log` there, mode 0600.
+  `log/smd.log` there, mode 0600 — and UNROTATED at 17.8 MB back to 16 July.
 
 ---
 
-## Current state (as of 2026-08-03)
+## Current state (as of 2026-08-04)
 
-> **2026-08-03, LAST — ADR 0062: ENRICHMENT PROVIDERS SELF-REGISTER. Three
+> **2026-08-04, LAST — TWO SHIPS AND ONE DECISION REAFFIRMED. Both ships were
+> caught wrong by review or by the operator before they were right.**
+>
+> - **Settings navigation guard (ADR 0063).** Confirm-on-leave naming the dirty
+>   sections; `beforeunload`; a confirmed discard happens THERE AND THEN, so the
+>   app stops holding edits it has reported as gone. **Three exits, not one** —
+>   `navigate()`, `popstate` (which bypasses it, and needs the URL pushed BACK
+>   because it fires after the address bar moved), and `setMode()` from the
+>   always-visible OperateNav. Rigs needed a new `anyDirty`: `dirty` answers only
+>   for the SELECTED rig. **Two review findings, both mine.** P1: I exempted Rigs
+>   because `#applyFetched` preserves dirty drafts — and `load()` wipes drafts
+>   and baselines outright two statements later, so the exemption was built on
+>   half a sequence and rig edits were lost silently. P2: the confirm promised a
+>   discard while a PUT was already on the wire, which the daemon would then
+>   persist. Both fixed; `R3b` is the characterisation test whose absence let the
+>   first one ship. MDN settled `beforeunload` — `preventDefault()` **and**
+>   `returnValue`, quoted in the code.
+> - **Session ends now say WHY.** Dogfooding a 50-QSO run showed seven of eight
+>   `session abandoned` records carrying `reason: ""`. Not one missing label:
+>   `Abandon()` is reached from TWELVE places and only the two dial paths staged
+>   a reason, so a session that DIED read exactly like one the operator stopped.
+>   Three families now: operator Abandon and TX disarm are named in the LOG only
+>   (`operator` / `tx_disarmed`) — the frame stays silent because the operator
+>   caused them and a toast would narrate their own click; the eight terminal-TX
+>   sites stage `tx_not_armed` / `tx_bad_message`, which DO reach the frame per
+>   invariant 5. **The trap found on the way:** the SPA's unknown-code fallback
+>   said "the rig frequency could not be verified" — safe only while every code
+>   was frequency-related, and a lie the moment a `tx_*` code existed. Now
+>   cause-agnostic. `api-endpoints.md` corrected too (it still listed two codes
+>   and had never gained `band_change`).
+> - **FT8 dupe guard: asked for, then correctly NOT built.** The 50-QSO audit
+>   found KK2A logged twice. `caller_sequencer.go` carries an operator-ratified
+>   2026-07-26 note saying **do not** suppress the re-work; the log showed KK2A
+>   asked twice and we re-sent twice, so they never copied the RR73 and the
+>   second contact is the only one they got. Operator reaffirmed: no way to know
+>   whether they logged it, and the dupe costs little. **The defect is the extra
+>   ROW, not the QSO.**
+> - **The rest of the run was clean:** 50 stored, 50 forwarded to QRZ + ClubLog +
+>   smcloud, zero errors, no drive alarms, `meter_po_max` never zero across 246
+>   keyings. The power dips were the operator adjusting volume — confirmed by
+>   step-shaped transitions (109→95 between consecutive slots, not a ramp), which
+>   also validated the drive-alarm instrumentation in the field: a deliberate 13%
+>   drop for 25 minutes raised nothing.
+
+> **2026-08-03 — ADR 0062: ENRICHMENT PROVIDERS SELF-REGISTER. Three
 > commits, three reviews; the first two each found a real gap and both were
 > mine.**
 >
@@ -219,65 +253,6 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 >   `mergeLookupProvider` carries it from the STORED entry, because the rebuild
 >   keeps only what it names — the same trap that silently ate forwarder
 >   `endpoints` for a while.
-
-> **2026-08-03 — SETTINGS → EMAIL SHIPPED, and the port exposed two daemon
-> defects that had nothing to do with the SPA. Deployed at HEAD (`bba15ede`).**
->
-> - **PORTING IS A DEFECT DETECTOR.** Neither gap was in the Email tab; both were
->   in the daemon, and both had been shipped for months. (1) **A stored SMTP
->   password could never be REMOVED.** `mergeSmtp` keeps the stored value on
->   blank and SMTP has no `Clearable` concept, so once set it could only be
->   replaced — short of stopping the daemon and hand-editing config.json.
->   Unauthenticated relays are a legitimate setup, so this was a real dead end.
->   Fixed with an explicit `password_clear` command, NOT by overloading blank:
->   blank has to go on meaning KEEP, because it is what an operator editing the
->   host sends on every single save. Operator's ruling on the both-fields case:
->   **clear wins** (fail-safe for secret removal, sensible against stale form
->   state) — recorded at the code site and in the test that guards it, so a later
->   "surely that should be a 400" rewrite has to argue with a test.
->   (2) **A blank port/timeout stored 0** and silently became 587/30 at the NEXT
->   restart, because `applyDefaults` runs only on Load while the PUT path runs
->   `Normalize`. On an ENABLED block it never got that far — `validateSmtp`
->   returned a 400 telling the operator to type a number the daemon already knew.
->   Fixed by `normalizeSmtpDefaults` in `Normalize`, following the precedent two
->   lines away (`normalizeLookupURLs`, moved for exactly this reason).
-> - **THE RED STEP FOR A GREENFIELD SPA MODULE IS THE CARELESS PORT.** There is
->   nothing to revert when the file does not exist yet, so the config SPA's
->   `saveEmail` was copied across verbatim first and the tests run against it.
->   Four wire rules and three UI rules failed — including that it sends
->   `logging_station` and `station` (the clobber review 2026-07-20 #3 removed
->   from Station), and that it has no Remove control and no default placeholders.
->   The other eight passed against the naive port and are guards, not
->   discoveries. **Say which is which** rather than reporting "all red".
-> - **ONE CRITERION WAS NOT OPERATOR-OBSERVABLE AND WAS LABELLED, NOT FAKED.**
->   "A typed password replaced the old one" cannot be seen in a browser —
->   `password_set` reads true either way, and the only human proof is a
->   successful send. Its proof is a wire assertion, and the test header says so.
-> - **A P1 CAME BACK ON THE FIX, TWICE, AND BOTH ROUNDS WERE RIGHT.** Round 1
->   (`dcb0316e`): a failed RELOAD left `loaded` true, so the section rendered the
->   previous session's values with no error — and since every Settings PUT
->   replaces its block WHOLE, editing one field rewrites the rest at stale
->   values. Reachable because `App.svelte:100` mounts Settings behind a router
->   branch while the state modules are singletons. **It was in all four sections,
->   not just Email** — the commit replicated a pre-existing pattern. Round 2
->   (`2c64c7aa` → `bba15ede`): clearing `loaded` only in the error branch still
->   leaves the retained draft live for the whole PENDING reload; it must be
->   invalidated BEFORE the await. That round also pushed the `!loaded` save
->   precondition to all four (it had been Email-only) and to `rigs.setDefault`,
->   which is the same class of write and had been missed.
-> - **CAT CHIP IS A READOUT OUTSIDE OPERATE** (operator's call). It used to
->   navigate to Operate and reveal the rig panel — deliberate, and pinned by its
->   own test, which had to be DELETED. That is the spec changing, not the code
->   being wrong, so the reversal's reasoning went into the test file rather than
->   letting the old rule look like it never existed. Rendered as a `<div>`, not a
->   disabled button: an inert control you can still click and hover is
->   indistinguishable from a broken one. **NARROW BY INSTRUCTION** — every
->   sidebar link still leaves dirty Settings and discards the edits on RETURN
->   (the reload's `#apply` overwrites the draft), so there is no moment at which
->   the operator could be warned. Recorded as knowingly open.
-> - **`api-endpoints.md` was missing the whole `lookup` block** on both GET and
->   PUT — found while documenting `smtp`. Added, along with `password_clear` and
->   the default resolution.
 
 ## Active cycle (the 1–3 things in flight now)
 

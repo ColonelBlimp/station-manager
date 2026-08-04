@@ -12463,3 +12463,62 @@ holding the live doc at the enforced 3-arc window.
 >
 > ---
 >
+
+> **2026-08-03 — SETTINGS → EMAIL SHIPPED, and the port exposed two daemon
+> defects that had nothing to do with the SPA. Deployed at HEAD (`bba15ede`).**
+>
+> - **PORTING IS A DEFECT DETECTOR.** Neither gap was in the Email tab; both were
+>   in the daemon, and both had been shipped for months. (1) **A stored SMTP
+>   password could never be REMOVED.** `mergeSmtp` keeps the stored value on
+>   blank and SMTP has no `Clearable` concept, so once set it could only be
+>   replaced — short of stopping the daemon and hand-editing config.json.
+>   Unauthenticated relays are a legitimate setup, so this was a real dead end.
+>   Fixed with an explicit `password_clear` command, NOT by overloading blank:
+>   blank has to go on meaning KEEP, because it is what an operator editing the
+>   host sends on every single save. Operator's ruling on the both-fields case:
+>   **clear wins** (fail-safe for secret removal, sensible against stale form
+>   state) — recorded at the code site and in the test that guards it, so a later
+>   "surely that should be a 400" rewrite has to argue with a test.
+>   (2) **A blank port/timeout stored 0** and silently became 587/30 at the NEXT
+>   restart, because `applyDefaults` runs only on Load while the PUT path runs
+>   `Normalize`. On an ENABLED block it never got that far — `validateSmtp`
+>   returned a 400 telling the operator to type a number the daemon already knew.
+>   Fixed by `normalizeSmtpDefaults` in `Normalize`, following the precedent two
+>   lines away (`normalizeLookupURLs`, moved for exactly this reason).
+> - **THE RED STEP FOR A GREENFIELD SPA MODULE IS THE CARELESS PORT.** There is
+>   nothing to revert when the file does not exist yet, so the config SPA's
+>   `saveEmail` was copied across verbatim first and the tests run against it.
+>   Four wire rules and three UI rules failed — including that it sends
+>   `logging_station` and `station` (the clobber review 2026-07-20 #3 removed
+>   from Station), and that it has no Remove control and no default placeholders.
+>   The other eight passed against the naive port and are guards, not
+>   discoveries. **Say which is which** rather than reporting "all red".
+> - **ONE CRITERION WAS NOT OPERATOR-OBSERVABLE AND WAS LABELLED, NOT FAKED.**
+>   "A typed password replaced the old one" cannot be seen in a browser —
+>   `password_set` reads true either way, and the only human proof is a
+>   successful send. Its proof is a wire assertion, and the test header says so.
+> - **A P1 CAME BACK ON THE FIX, TWICE, AND BOTH ROUNDS WERE RIGHT.** Round 1
+>   (`dcb0316e`): a failed RELOAD left `loaded` true, so the section rendered the
+>   previous session's values with no error — and since every Settings PUT
+>   replaces its block WHOLE, editing one field rewrites the rest at stale
+>   values. Reachable because `App.svelte:100` mounts Settings behind a router
+>   branch while the state modules are singletons. **It was in all four sections,
+>   not just Email** — the commit replicated a pre-existing pattern. Round 2
+>   (`2c64c7aa` → `bba15ede`): clearing `loaded` only in the error branch still
+>   leaves the retained draft live for the whole PENDING reload; it must be
+>   invalidated BEFORE the await. That round also pushed the `!loaded` save
+>   precondition to all four (it had been Email-only) and to `rigs.setDefault`,
+>   which is the same class of write and had been missed.
+> - **CAT CHIP IS A READOUT OUTSIDE OPERATE** (operator's call). It used to
+>   navigate to Operate and reveal the rig panel — deliberate, and pinned by its
+>   own test, which had to be DELETED. That is the spec changing, not the code
+>   being wrong, so the reversal's reasoning went into the test file rather than
+>   letting the old rule look like it never existed. Rendered as a `<div>`, not a
+>   disabled button: an inert control you can still click and hover is
+>   indistinguishable from a broken one. **NARROW BY INSTRUCTION** — every
+>   sidebar link still leaves dirty Settings and discards the edits on RETURN
+>   (the reload's `#apply` overwrites the draft), so there is no moment at which
+>   the operator could be warned. Recorded as knowingly open.
+> - **`api-endpoints.md` was missing the whole `lookup` block** on both GET and
+>   PUT — found while documenting `smtp`. Added, along with `password_clear` and
+>   the default resolution.

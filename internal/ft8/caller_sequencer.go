@@ -374,6 +374,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// ErrTxNotArmed / ErrTxBadMessage are terminal (review M1); else transient
 		// — the contact is untouched (still cqRogering), so the next slot retries.
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
+			s.setPendingEndReason(endReasonForTxErr(err))
 			s.Abandon()
 			return
 		}

@@ -264,6 +264,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// onDone never fired, so a final-rung QSO is correctly not logged. Terminal
 		// errors abandon; transient ones leave the contact for the next slot to retry.
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
+			s.setPendingEndReason(endReasonForTxErr(err))
 			s.Abandon()
 			return
 		}
@@ -453,6 +454,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 			return
 		}
 		if stderrors.Is(err, ErrTxNotArmed) || stderrors.Is(err, ErrTxBadMessage) {
+			s.setPendingEndReason(endReasonForTxErr(err))
 			s.Abandon()
 			return
 		}
