@@ -50,25 +50,31 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **HEAD is `b653ea86`; the DAEMON is still running `ce989c1d`.** The Settings
-  navigation guard is committed but **NOT LIVE** — it is SPA-only, and the SPA
-  is `go:embed`ed, so it ships on the next `task deploy:local:dev`. Everything
-  else below is deployed. `smd` is deliberately NOT auto-start — a stopped
-  daemon is not a fault.
+- **DEPLOYED AT HEAD** (`2.0.0-alpha.1-1066-gd13fcb22`, up 08:37:22), and both
+  halves VERIFIED in the running build, not assumed: the embedded SPA carries the
+  guard's "will be discarded" and the corrected cause-agnostic end-reason
+  fallback; the daemon logged a clean start (three forwarder workers, smcloud
+  reconciler, both lookup providers via the ADR 0062 registry, bridge CAT
+  active), zero errors, only the benign RTS/DTR advisory. FT8 capture is still
+  on-demand, so nothing holds the mic. `smd` is deliberately NOT auto-start — a
+  stopped daemon is not a fault.
 - **Shipped 2026-08-04:** (1) the **Settings navigation guard** + **ADR 0063** —
-  confirm-on-leave naming the dirty sections, `beforeunload` for tab close,
-  immediate discard on confirm, and **three exits, not one** (sidebar
-  `navigate()`, browser Back via `popstate`, and `setMode()` from the
-  always-visible OperateNav); review caught two P1/P2s, both mine. (2) **Session
-  ends now say WHY** — `Abandon()` is reached from twelve places and only the two
-  dial paths named themselves, so a session that DIED logged identically to one
-  the operator stopped. Log always names a cause; the frame stays silent for
-  operator-caused ends. Detail in Current state.
+  confirm-on-leave naming the dirty sections, `beforeunload`, immediate discard
+  on confirm, and **three exits, not one** (sidebar `navigate()`, browser Back
+  via `popstate`, and `setMode()` from the always-visible OperateNav). (2)
+  **Session ends now say WHY** — `Abandon()` is reached from twelve places and
+  only the two dial paths named themselves, so a session that DIED logged
+  identically to one the operator stopped; the log always names a cause, the
+  frame stays silent for operator-caused ends, and rung teardowns are
+  generation-scoped. **Five review findings across the two, every one mine, and
+  three of them were defects in the PREVIOUS fix** — detail in Current state.
 - **EYEBALL WHEN CONVENIENT** (none of it seen by hand; vitest checks the DOM,
-  not the look): the guard's confirm text + the F5 browser dialog (needs the
-  deploy first); after the next FT8 run, check `smd.log` session-end reasons are
-  populated; Email's password keep / type / remove states and its 587/30
-  placeholders; Enrichment's disclosures and TTL-of-0 notice.
+  not the look): the guard's confirm text, and F5 with an edit pending (browser
+  dialog); after the next FT8 run, `smd.log` session-end reasons should be
+  populated — an Abandon now reads `reason: operator` where the 08-04 run gave
+  seven blanks (**but only when a session was ACTIVE**; abandoning with nothing
+  running still logs nothing, which is correct); Email's password keep / type /
+  remove states and its 587/30 placeholders; Enrichment's disclosures.
 - **OBSERVE WHEN THE CHANCE ARISES — NOT tasks, and they gate nothing.** Do not
   schedule these and do not open a session asking whether they are done. SSE
   revival (background the MAP tab; **a negative result means the TRIGGER is
@@ -115,19 +121,35 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 >   persist. Both fixed; `R3b` is the characterisation test whose absence let the
 >   first one ship. MDN settled `beforeunload` — `preventDefault()` **and**
 >   `returnValue`, quoted in the code.
-> - **Session ends now say WHY.** Dogfooding a 50-QSO run showed seven of eight
->   `session abandoned` records carrying `reason: ""`. Not one missing label:
->   `Abandon()` is reached from TWELVE places and only the two dial paths staged
->   a reason, so a session that DIED read exactly like one the operator stopped.
->   Three families now: operator Abandon and TX disarm are named in the LOG only
->   (`operator` / `tx_disarmed`) — the frame stays silent because the operator
->   caused them and a toast would narrate their own click; the eight terminal-TX
->   sites stage `tx_not_armed` / `tx_bad_message`, which DO reach the frame per
->   invariant 5. **The trap found on the way:** the SPA's unknown-code fallback
->   said "the rig frequency could not be verified" — safe only while every code
->   was frequency-related, and a lie the moment a `tx_*` code existed. Now
->   cause-agnostic. `api-endpoints.md` corrected too (it still listed two codes
->   and had never gained `band_change`).
+> - **Session ends now say WHY** (three commits, three reviews — `3531e1ed`,
+>   `ea0c91a5`, `d13fcb22`, the last clean). Dogfooding a 50-QSO run showed seven
+>   of eight `session abandoned` records carrying `reason: ""`. Not one missing
+>   label: `Abandon()` is reached from TWELVE places and only the two dial paths
+>   staged a reason, so a session that DIED read exactly like one the operator
+>   stopped. Three families now: operator Abandon and TX disarm are named in the
+>   LOG only (`operator` / `tx_disarmed`) — the frame stays silent because the
+>   operator caused them and a toast would narrate their own click; the eight
+>   terminal-TX sites carry `tx_not_armed` / `tx_bad_message`, which DO reach the
+>   frame per invariant 5. Repeat-cap ends log `no_answer`; their frame half is
+>   ACCEPTED with the rationale at the code site (the countdown already
+>   telegraphs it, so a toast per unanswered call is noise).
+>   **The trap found on the way:** the SPA's unknown-code fallback said "the rig
+>   frequency could not be verified" — safe only while every code was
+>   frequency-related, and a lie the moment a `tx_*` code existed. Now
+>   cause-agnostic. `api-endpoints.md` corrected too (it listed two codes and had
+>   never gained `band_change`).
+>   **THEN TWO ROUNDS OF MY OWN FIXES BEING THE DEFECT.** Round 2: I staged the
+>   reason under one lock hold and abandoned under a second, so a teardown landing
+>   between them consumed it — and because the dial guard stages into that SAME
+>   slot, a rung failure could OVERWRITE its explanation and report a safety stop
+>   as a transmit failure. Fixed by passing the cause as an argument through one
+>   lock hold. Round 3 (**P1**): the teardown was still unconditional, so a stale
+>   rung could end the session that REPLACED its own — invariant 5's named hazard,
+>   reached down a new path. **I had declined exactly this in round 2**, saying the
+>   generation was hidden inside `transmitLocked`'s closure and gen-scoping was "a
+>   larger change". It was five lines: make the function return the generation it
+>   had already bound. "Not in scope" was a fact about the signature, which I
+>   treated as a fact about the cost. See [[review-findings-fix-dont-defer]].
 > - **FT8 dupe guard: asked for, then correctly NOT built.** The 50-QSO audit
 >   found KK2A logged twice. `caller_sequencer.go` carries an operator-ratified
 >   2026-07-26 note saying **do not** suppress the re-work; the log showed KK2A
