@@ -765,6 +765,11 @@ func (s *Sequencer) abandonNamedIfCurrent(gen uint64, frameReason, logFallback s
 // it (the terminal publish must happen while the lock still excludes a replacement
 // Start* — invariant 3).
 func (s *Sequencer) finishAbandonLocked(frameReason, logFallback string) {
+	// Read the partner BEFORE abandonLocked clears the exchange pointers: the
+	// line said a session ended and never which contact was lost, so four
+	// different operator actions produced one indistinguishable record
+	// (ft8-logging-gaps finding 2).
+	call := s.partnerCallLocked()
 	// An armed auto-work run is a thing Abandon STOPS even with no contact in
 	// progress, and stopping it has to be published or it happens invisibly: the
 	// operator presses Abandon between contacts, no frame changes, and the indicator
@@ -792,7 +797,8 @@ func (s *Sequencer) finishAbandonLocked(frameReason, logFallback string) {
 		if cause == "" {
 			cause = logFallback
 		}
-		s.log.InfoWith().Str("reason", cause).Msg("ft8 seq: session abandoned")
+		s.log.InfoWith().Str("reason", cause).Str("their_call", call).
+			Msg("ft8 seq: session abandoned")
 	} else if hadRun {
 		s.log.InfoWith().Msg("ft8 seq: auto-work run stopped")
 	}
@@ -1000,6 +1006,30 @@ func (s *Sequencer) Active() bool {
 // source for self-decode filtering: only an active session keys TX, so an idle
 // sequencer returns "" and nothing is filtered (nothing of ours is on the air).
 // No DB lookup, no fallback — the call was resolved once at arm and carried here.
+// partnerCallLocked is the station currently being worked, or "" when idle.
+//
+// Distinct from ActiveCallsign, which returns OUR call for the session (the TX
+// identity). The abandon line needs the PARTNER — "a session ended" without
+// saying which contact was lost is the half of finding 2 that survived the
+// first fix. Caller holds s.mu.
+func (s *Sequencer) partnerCallLocked() string {
+	switch {
+	case s.ex != nil:
+		return s.ex.TheirCall
+	case s.fdEx != nil:
+		return s.fdEx.TheirCall
+	case s.fdWork != nil:
+		return s.fdWork.TheirCall
+	case s.t4Ex != nil:
+		return s.t4Ex.TheirCall
+	case s.t4Work != nil:
+		return s.t4Work.TheirCall
+	case s.caller != nil:
+		return s.caller.TheirCall
+	}
+	return ""
+}
+
 func (s *Sequencer) ActiveCallsign() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

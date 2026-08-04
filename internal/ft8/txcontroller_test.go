@@ -567,3 +567,103 @@ func TestTransmit_PreKeyCheckRefusesWithoutKeying(t *testing.T) {
 		require.Equal(t, 1, p.plays())
 	})
 }
+
+/*
+   A completed transmission leaves EVIDENCE in the log.
+
+   THE INCIDENT THIS ANSWERS (ft8-logging-gaps finding 6, the review's one open
+   decision; `idleinhibit.go:8-15`): on 2026-07-28 an unattended 80 m run kept
+   keying and the decode log kept recording "Transmitting", while no audio
+   reached the rig for 24 minutes and 48 CQ calls. `servicetx.go` has 6 log
+   calls in 1415 lines; an intermediate rung logs its INTENT and then nothing,
+   so SILENCE MEANS SUCCESS — a healthy run and a run playing into a dead device
+   handle are byte-identical in smd.log.
+
+   OPERATOR'S RULING (2026-08-04): record TWO INDEPENDENT WITNESSES per keyed
+   transmission — the wall key-to-unkey time, and the sample count handed to the
+   device. Each catches what the other misses. A play that returns instantly is
+   caught by keyed_ms even if the audio layer reports success; a truncated or
+   empty waveform is caught by samples even if the timing looks right.
+
+   WHAT THIS DOES **NOT** PROVE, stated so nobody reads it as more than it is:
+   `samples` is what SM SUBMITTED, not what the device emitted. A device that
+   accepts a full waveform and radiates nothing still logs a healthy-looking
+   line here. That failure — no RF despite a clean play — is the drive alarm's
+   job (`internal/bridge/drivealarm.go`, shipped 2026-07-30), which watches the
+   rig's own PO meter. This line exists so that alarm has a per-transmission
+   record to be correlated against, and so the OTHER failure shapes stop being
+   invisible. Claiming it closes the 2026-07-28 incident would be false.
+
+   THE NEAREST CONFUSABLE STATES:
+     · T1 vs T2 — a transmission that ran its full length versus one that
+       returned early. Before this they were the same absence of a line.
+     · T3 — a FAILED transmission must not emit the evidence line at all, or
+       "we transmitted" becomes untrue in exactly the case that matters.
+*/
+
+func TestTxEvidence_T1_ASuccessfulTransmissionRecordsBothWitnesses(t *testing.T) {
+	sink, log := newLogSink()
+	k := &fakeKeyer{}
+	p := newFakePlayer()
+	c := NewTxController(k, p, "", log)
+
+	wave := make([]int16, 4096)
+	go func() { p.finishPlayback() }()
+	if err := c.transmit(context.Background(), wave, time.Time{}, nil); err != nil {
+		t.Fatalf("transmit: %v", err)
+	}
+
+	rec, ok := sink.record(t, "ft8 tx: transmitted")
+	if !ok {
+		t.Fatal("a completed transmission left no evidence in the log")
+	}
+	if rec["samples"] == nil {
+		t.Fatalf("no sample count on the evidence line: %v", rec)
+	}
+	if rec["keyed_ms"] == nil {
+		t.Fatalf("no keyed duration on the evidence line: %v", rec)
+	}
+	// Both witnesses must be REAL, not zero placeholders — a line carrying two
+	// zeroes would look like evidence and prove nothing.
+	if n, _ := rec["samples"].(float64); n <= 0 {
+		t.Fatalf("sample count is not a real measurement: %v", rec["samples"])
+	}
+}
+
+func TestTxEvidence_T2_TheKeyedTimeIsTheREALPttDownDuration(t *testing.T) {
+	// The witness has to span the whole keying, or it cannot distinguish a full
+	// transmission from one that returned early — which is the entire point.
+	sink, log := newLogSink()
+	k := &fakeKeyer{}
+	p := newFakePlayer()
+	c := NewTxController(k, p, "", log)
+
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		p.finishPlayback()
+	}()
+	if err := c.transmit(context.Background(), make([]int16, 4096), time.Time{}, nil); err != nil {
+		t.Fatalf("transmit: %v", err)
+	}
+
+	rec, _ := sink.record(t, "ft8 tx: transmitted")
+	ms, _ := rec["keyed_ms"].(float64)
+	if ms < 30 {
+		t.Fatalf("keyed_ms=%v did not span the playback — it cannot show a short transmission", ms)
+	}
+}
+
+func TestTxEvidence_T3_AFailedTransmissionClaimsNothing(t *testing.T) {
+	sink, log := newLogSink()
+	k := &fakeKeyer{}
+	p := newFakePlayer()
+	p.playErr = stderrors.New("device gone")
+	c := NewTxController(k, p, "", log)
+
+	if err := c.transmit(context.Background(), make([]int16, 4096), time.Time{}, nil); err == nil {
+		t.Fatal("fixture: the play was supposed to fail")
+	}
+	if _, ok := sink.record(t, "ft8 tx: transmitted"); ok {
+		t.Fatal("a failed transmission claimed it transmitted")
+	}
+}

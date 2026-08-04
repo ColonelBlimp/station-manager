@@ -417,7 +417,7 @@ func (s *Service) onLingerExpired() {
 	// action) is never delayed by releaseCaptureLocked's decode-log close, which can
 	// block on a stalled disk. disarmTx takes its own txMu and waits on an in-flight
 	// transmission to drain (txWg); idempotent — a no-op when TX isn't armed.
-	s.disarmTx(false)
+	s.disarmTx(disarmUnattended)
 
 	// Then release the capture device. Re-check under s.mu: a subscriber that
 	// reconnected during the disarm window keeps the session (skip the release);
@@ -493,7 +493,7 @@ func (s *Service) reconcileCat() {
 	dropMic := s.capturing && !live && s.started && !s.stopped
 	s.mu.Unlock()
 	if dropMic {
-		s.disarmTx(false)
+		s.disarmTx(disarmCatLost)
 		s.mu.Lock()
 		if s.capturing && !s.stopped && !s.catLive() {
 			s.log.InfoWith().Msg("ft8: rig/CAT dropped — releasing capture")
@@ -738,7 +738,7 @@ func (s *Service) Stop() error {
 		// Disarm TX first: drops PTT if a transmission is mid-flight and closes
 		// the output device. Done before taking s.mu — disarm serialises on txMu
 		// and waits on the TX goroutine, so it must not nest under s.mu.
-		s.disarmTx(true)
+		s.disarmTx(disarmShutdown)
 
 		s.mu.Lock()
 		s.stopped = true

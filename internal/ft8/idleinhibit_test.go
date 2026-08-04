@@ -235,7 +235,7 @@ func TestIdleInhibit_ReleasedOnClose(t *testing.T) {
 		t.Fatalf("fixture: expected 1 held after arm, got %d", in.held())
 	}
 
-	s.disarmTx(true) // the Stop path
+	s.disarmTx(disarmShutdown) // the Stop path
 
 	if got := in.held(); got != 0 {
 		t.Errorf("after close: want 0 held, got %d", got)

@@ -189,7 +189,7 @@ func (c *TxController) transmitAligned(ctx context.Context, waveform []int16, bo
 // (success, play error, or ctx cancel) via a deferred guard, on a background
 // context so a cancelled parent ctx can't skip the unkey — the bridge's
 // auto-off backstop is the further safety net.
-func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal time.Time, onKeyed func()) error {
+func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal time.Time, onKeyed func()) (err error) {
 	const op errors.Op = "ft8.TxController.transmit"
 
 	// Last gate before RF. Deliberately inside transmit rather than at the call
@@ -207,12 +207,48 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 	if onKeyed != nil {
 		onKeyed()
 	}
+
+	// EVIDENCE THAT A TRANSMISSION HAPPENED (operator's ruling, 2026-08-04;
+	// ft8-logging-gaps finding 6). Before this, an intermediate rung logged its
+	// INTENT and then nothing, so silence meant success — and on 2026-07-28 a run
+	// kept keying for 24 minutes with no audio reaching the rig while smd.log was
+	// byte-identical to a healthy one.
+	//
+	// TWO INDEPENDENT WITNESSES, because either alone has a blind spot: the wall
+	// PTT-down time catches a play that returned instantly even when the audio
+	// layer reports success, and the submitted sample count catches a truncated or
+	// empty waveform even when the timing looks right. The diagnostic is their
+	// RELATIONSHIP — keyed_ms should track the waveform's own duration.
+	//
+	// `samples` is what SM SUBMITTED, not what the device emitted: a device that
+	// accepts a full waveform and radiates nothing still logs a healthy line here.
+	// That case belongs to the drive alarm, which watches the rig's PO meter; this
+	// record is what the alarm gets correlated against. Do not read it as proof of RF.
+	keyedAt := time.Now()
+	var keyedFor time.Duration
+	submitted := 0
+	truncated := 0
+	// Registered BEFORE the unkey defer so LIFO runs it AFTER: keyedFor is then
+	// the true key-to-unkey span, not the time up to the return statement.
+	defer func() {
+		if err != nil {
+			return // a failed rung must never claim it transmitted
+		}
+		c.log.InfoWith().
+			Int("samples", submitted).
+			Float64("audio_s", float64(submitted)/float64(goft8.SampleRate)).
+			Int64("keyed_ms", keyedFor.Milliseconds()).
+			Int64("truncated_ms", int64(float64(truncated)/float64(goft8.SampleRate)*1000)).
+			Msg("ft8 tx: transmitted")
+	}()
+
 	unkeyed := false
 	unkey := func() {
 		if unkeyed {
 			return
 		}
 		unkeyed = true
+		keyedFor = time.Since(keyedAt)
 		if err := c.keyer.UnkeyTx(context.Background()); err != nil {
 			c.log.ErrorWith().Err(err).Msg("ft8 tx: unkey failed (backstop will retry)")
 		}
@@ -250,9 +286,12 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 		}
 	}
 
-	done, err := c.player.Play(wave)
-	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("play waveform")
+	submitted = len(wave)
+	truncated = len(waveform) - len(wave)
+
+	done, perr := c.player.Play(wave)
+	if perr != nil {
+		return errors.New(op).WithErr(perr).WithMsg("play waveform")
 	}
 
 	// Play returns once the device is RUNNING, and getting it there is unbounded

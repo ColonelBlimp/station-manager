@@ -78,21 +78,33 @@ func newLogSink() (*logSink, logging.Logger) {
 	return &logSink{buf: buf, w: w}, logging.NewForWriter(w)
 }
 
-// abandonReason returns the `reason` field of the session-abandoned record, and
-// whether such a record was written at all.
-func (l *logSink) abandonReason(t *testing.T) (string, bool) {
+// record returns the first log record whose message contains `msg`, decoded,
+// and whether one was written at all. Used by every rule that asserts on what
+// smd.log actually carries rather than on a builder having been called.
+func (l *logSink) record(t *testing.T, msg string) (map[string]any, bool) {
 	t.Helper()
 	require.NoError(t, l.w.Flush())
 	for _, line := range strings.Split(l.buf.String(), "\n") {
-		if !strings.Contains(line, "session abandoned") {
+		if !strings.Contains(line, msg) {
 			continue
 		}
 		var rec map[string]any
 		require.NoError(t, json.Unmarshal([]byte(line), &rec), "log line is not JSON: %s", line)
-		reason, _ := rec["reason"].(string)
-		return reason, true
+		return rec, true
 	}
-	return "", false
+	return nil, false
+}
+
+// abandonReason returns the `reason` field of the session-abandoned record, and
+// whether such a record was written at all.
+func (l *logSink) abandonReason(t *testing.T) (string, bool) {
+	t.Helper()
+	rec, ok := l.record(t, "session abandoned")
+	if !ok {
+		return "", false
+	}
+	reason, _ := rec["reason"].(string)
+	return reason, true
 }
 
 // startedSession puts the sequencer into an active answer-a-CQ session whose next
@@ -284,4 +296,71 @@ func TestAbandonCause_StaleTxFailureCannotEndAReplacementSession(t *testing.T) {
 	reason, found := sink.abandonReason(t)
 	require.True(t, found)
 	require.Equal(t, causeOperator, reason)
+}
+
+/*
+   R21-R23 — the four ways a session ends are distinguishable, and the abandon
+   line says WHICH CONTACT was lost.
+
+   ft8-logging-gaps findings 2 and 3. `disarmTx` reached one `ft8 tx: disarmed`
+   line from five causes, and the abandon beneath it carried no callsign. So the
+   ONE automatic safety teardown SM performs — the linger expiry enforcing the
+   open-view presence check, the only presence guarantee in the system — was
+   byte-identical to an operator pressing a button, and neither said which
+   station was being worked when it happened.
+
+   The review's own instruction is the shape of these rules: "a test that
+   asserts only 'a line was emitted' is weaker than the rule; assert that the
+   two confusable states produce DISTINGUISHABLE output." So R21 pairs the two
+   causes rather than checking one in isolation.
+*/
+
+func TestAbandonCause_R21_TheAutomaticTeardownIsDistinguishableFromAButtonPress(t *testing.T) {
+	// The pair that matters: an operator disarm and the unattended safety stop.
+	seen := map[string]string{}
+	for _, cause := range []string{disarmOperator, disarmUnattended} {
+		sink, log := newLogSink()
+		r := &seqRecorder{}
+		s := newTestSeqLogged(r, log)
+		startedSession(t, s)
+
+		s.abandonNamed("", cause)
+
+		reason, found := sink.abandonReason(t)
+		require.True(t, found, "%s wrote no record", cause)
+		seen[cause] = reason
+	}
+	require.NotEqual(t, seen[disarmOperator], seen[disarmUnattended],
+		"an operator disarm and the enforced presence stop must not read alike")
+	require.Equal(t, disarmUnattended, seen[disarmUnattended],
+		"the only automatic safety teardown must name itself")
+}
+
+func TestAbandonCause_R22_TheAbandonLineNamesTheContactThatWasLost(t *testing.T) {
+	sink, log := newLogSink()
+	r := &seqRecorder{}
+	s := newTestSeqLogged(r, log)
+	startedSession(t, s) // works K1ABC
+
+	s.Abandon()
+
+	rec, ok := sink.record(t, "session abandoned")
+	require.True(t, ok)
+	require.Equal(t, "K1ABC", rec["their_call"],
+		"a session ended and the log cannot say which contact went with it")
+}
+
+func TestAbandonCause_R23_EveryDisarmCauseIsItsOwnValue(t *testing.T) {
+	// Guards the enumeration against two causes being given the same string —
+	// which would restore the defect while every individual rule still passed.
+	all := []string{
+		disarmOperator, disarmUnattended, disarmCatLost,
+		disarmShutdown, disarmBandChange, disarmDialMoved,
+	}
+	seen := map[string]bool{}
+	for _, c := range all {
+		require.NotEmpty(t, c, "a blank cause is the defect this closes")
+		require.False(t, seen[c], "duplicate disarm cause %q", c)
+		seen[c] = true
+	}
 }

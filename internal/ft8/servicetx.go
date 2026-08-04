@@ -130,7 +130,7 @@ func (s *Service) ArmTx(armed bool) error {
 	if armed {
 		return s.armTx()
 	}
-	s.disarmTx(false)
+	s.disarmTx(disarmOperator)
 	return nil
 }
 
@@ -263,17 +263,34 @@ func (s *Service) wasTxSlot(startUTC string) bool {
 	return false
 }
 
+// Why a disarm happened. Five distinct causes reached one `ft8 tx: disarmed`
+// line, so the ONE automatic safety teardown SM performs — the linger expiry
+// that enforces the open-view presence check — was indistinguishable from an
+// operator pressing a button (ft8-logging-gaps finding 3).
+//
+// disarmShutdown also LATCHES the subsystem closed; it is the only cause that
+// does, which is why the old `closing bool` is derived from the cause rather
+// than carried beside it. Two parameters that must agree are a bug waiting.
+const (
+	disarmOperator   = "operator"    // ArmTx(false)
+	disarmUnattended = "unattended"  // linger expired — the enforced presence check
+	disarmCatLost    = "cat_lost"    // the rig went away
+	disarmShutdown   = "shutdown"    // daemon Stop
+	disarmBandChange = "band_change" // operator retune
+	disarmDialMoved  = "dial_moved"  // the rig left the session's frequency
+)
+
 // disarmTx tears down the TX path: aborts any in-flight transmission, drains
-// the TX goroutine, and closes the output device. closing=true also latches the
+// the TX goroutine, and closes the output device. disarmShutdown also latches the
 // subsystem so it can never be re-armed (used by Stop). Idempotent. Also abandons
 // any active sequenced QSO (ADR 0031 off-ramp: disarm aborts the contact).
-func (s *Service) disarmTx(closing bool) {
+func (s *Service) disarmTx(cause string) {
 	// seqGate: clear the armed state AND abandon the sequencer atomically w.r.t.
 	// a concurrent StartQso/StartCallCq (review M3), so a start can't slip an
 	// active session in between. Order seqGate → txMu.
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
-	s.disarmTxLocked(closing)
+	s.disarmTxLocked(cause)
 }
 
 // disarmTxLocked is disarmTx with seqGate already held, so a caller that must
@@ -281,9 +298,9 @@ func (s *Service) disarmTx(closing bool) {
 // deciding outside the gate and tearing down inside it lets a replacement session
 // commit in between and be killed for a move it was never subject to (codex P1 on
 // 6e974717) — the same class of bug as the round-8 unconditional abandon.
-func (s *Service) disarmTxLocked(closing bool) {
+func (s *Service) disarmTxLocked(cause string) {
 	s.txMu.Lock()
-	if closing {
+	if cause == disarmShutdown {
 		s.txClosed = true
 	}
 	if !s.txArmed && s.txCancel == nil {
@@ -299,7 +316,7 @@ func (s *Service) disarmTxLocked(closing bool) {
 		// Still abandon under the gate: a session could be active from a start
 		// that raced an earlier disarm; clear it now that armed is false.
 		if s.seq != nil {
-			s.seq.abandonNamed("", causeTxDisarmed)
+			s.seq.abandonNamed("", cause)
 		}
 		return
 	}
@@ -341,15 +358,25 @@ func (s *Service) disarmTxLocked(closing bool) {
 	// Armed state is false (under the gate); abandon whatever survived the
 	// completion. A start blocked on seqGate will observe txArmed=false and refuse.
 	if s.seq != nil {
-		s.seq.abandonNamed("", causeTxDisarmed)
+		s.seq.abandonNamed("", cause)
 	}
 
+	// The device errors were discarded and `disarmed` logged unconditionally, so a
+	// backend that failed to RELEASE the handle — exactly the shape that leaves the
+	// next arm unable to acquire it — was unobservable from anywhere: disarmTx
+	// returns nothing and ArmTx(false) returns nil, so the HTTP layer answers 202
+	// regardless (ft8-logging-gaps finding 14). Report them; never assert a clean
+	// teardown that was not verified.
 	if dev != nil {
-		_ = dev.Stop()
-		_ = dev.Close()
+		if err := dev.Stop(); err != nil {
+			s.log.WarnWith().Err(err).Str("cause", cause).Msg("ft8 tx: audio device stop failed")
+		}
+		if err := dev.Close(); err != nil {
+			s.log.WarnWith().Err(err).Str("cause", cause).Msg("ft8 tx: audio device close failed")
+		}
 	}
 	if wasArmed {
-		s.log.InfoWith().Msg("ft8 tx: disarmed")
+		s.log.InfoWith().Str("cause", cause).Msg("ft8 tx: disarmed")
 	}
 	s.publishTxState()
 }
@@ -1135,7 +1162,7 @@ func (s *Service) StopForRetune() error {
 	// Same teardown the dial guard performs, and for the same reason — the only
 	// difference is who initiated it, which is what the reason code records.
 	s.seq.setPendingEndReason(EndReasonBandChange)
-	s.disarmTxLocked(false)
+	s.disarmTxLocked(disarmBandChange)
 	s.txMu.Lock()
 	s.sessionDialMHz = 0
 	s.txMu.Unlock()
@@ -1179,7 +1206,7 @@ func (s *Service) onDialMoved(fromMHz, toMHz float64) {
 	// disarmTx abandons through the plain path, which is reasonless by default
 	// because an operator abandon needs no explanation. This one does.
 	s.seq.setPendingEndReason(EndReasonDialMoved)
-	s.disarmTxLocked(false)
+	s.disarmTxLocked(disarmDialMoved)
 	s.txMu.Lock()
 	s.sessionDialMHz = 0
 	s.txMu.Unlock()
