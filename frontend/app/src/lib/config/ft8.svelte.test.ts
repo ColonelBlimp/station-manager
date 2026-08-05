@@ -657,6 +657,137 @@ describe('ft8 settings — an ambiguous write (clean-room review 569b2236 P2)', 
         expect(ft8SettingsState.draft.feedMode).toBe('accumulate');
     });
 
+    it('W24: an edit made WHILE the save is in flight is not undone by the reconcile', async () => {
+        /*
+            Clean-room review e647f454 P2 — a regression the mergeEdits fix
+            introduced. Only Save and Cancel are disabled during a save
+            (Ft8Section.svelte); every input stays live for the whole timeout
+            window, which is 15 s plus the reconcile GET.
+
+            So "did this operator ask for this field?" cannot be asked of the
+            LIVE draft. An operator who edits a field, saves, then puts it back
+            while the request is pending leaves draft === before, which reads
+            as untouched — and the merge then overwrites their newest value
+            with the daemon's. Answering from the SNAPSHOT ACTUALLY SENT
+            separates the two: what this save asked for, versus what they have
+            typed since.
+
+            FIXTURE: feedMode is edited too and does NOT move, which is what
+            forces the "some" branch. Without it the port alone would move,
+            the verdict would be "all", and the run would take #apply instead
+            of the merge this rule is about.
+        */
+        let putSeen = false;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_url: string, init?: RequestInit) => {
+                if (init?.method === 'PUT') {
+                    putSeen = true;
+                    // The operator changes their mind while the request hangs.
+                    ft8SettingsState.draft.pskPort = '2525';
+                    const e = new Error('timed out');
+                    e.name = 'TimeoutError';
+                    return Promise.reject(e);
+                }
+                // The daemon DID store 9999 — the write landed, invisibly.
+                const body = putSeen
+                    ? { ...CONFIG, psk_reporter: { ...CONFIG.psk_reporter, port: 9999 } }
+                    : CONFIG;
+                return Promise.resolve(
+                    new Response(JSON.stringify(body), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            })
+        );
+
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.pskPort = '9999';
+        ft8SettingsState.draft.feedMode = 'accumulate'; // edited, will not move
+        await ft8SettingsState.save();
+
+        // Their LATEST intent wins over both the daemon's value and the one
+        // this save carried.
+        expect(ft8SettingsState.draft.pskPort).toBe('2525');
+    });
+
+    it('W25: an in-flight edit to a field this save never carried survives too', async () => {
+        /*
+            Added because W24's reversion proof did NOT fail when the
+            "changed since the request went out" half of the ownership test was
+            removed: in W24 the field was also one the save carried, so the
+            first half covered it alone. This is the case only the second half
+            catches — the operator edits a field the in-flight request knows
+            nothing about, and nothing else marks it as theirs.
+        */
+        let putSeen = false;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_url: string, init?: RequestInit) => {
+                if (init?.method === 'PUT') {
+                    putSeen = true;
+                    ft8SettingsState.draft.pskHost = 'typed-mid-flight.example.org';
+                    const e = new Error('timed out');
+                    e.name = 'TimeoutError';
+                    return Promise.reject(e);
+                }
+                void putSeen;
+                return Promise.resolve(
+                    new Response(JSON.stringify(CONFIG), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            })
+        );
+
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.feedMode = 'accumulate'; // the only field sent
+        await ft8SettingsState.save();
+
+        expect(ft8SettingsState.draft.pskHost).toBe('typed-mid-flight.example.org');
+    });
+
+    it('W26: the verdict describes what was SENT, so an in-flight revert cannot fake "not stored"', async () => {
+        /*
+            The other unpinned half. Judging the verdict from the live draft
+            makes W24's reverted port look unedited, leaving only the unmoved
+            feedMode — verdict "none", whose message asserts the daemon does
+            not have the changes. It does: it stored 9999. Same false claim
+            reviews bcfbd8ea and 9f2c0535 were about, reached by a new route.
+        */
+        let putSeen = false;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_url: string, init?: RequestInit) => {
+                if (init?.method === 'PUT') {
+                    putSeen = true;
+                    ft8SettingsState.draft.pskPort = '2525'; // reverted mid-flight
+                    const e = new Error('timed out');
+                    e.name = 'TimeoutError';
+                    return Promise.reject(e);
+                }
+                const body = putSeen
+                    ? { ...CONFIG, psk_reporter: { ...CONFIG.psk_reporter, port: 9999 } }
+                    : CONFIG;
+                return Promise.resolve(
+                    new Response(JSON.stringify(body), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            })
+        );
+
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.pskPort = '9999';
+        ft8SettingsState.draft.feedMode = 'accumulate';
+        await ft8SettingsState.save();
+
+        expect(lastToast()).not.toMatch(/does not appear/i);
+    });
+
     it('W16: a genuine connection failure is still a failure, not an unknown', async () => {
         vi.stubGlobal(
             'fetch',

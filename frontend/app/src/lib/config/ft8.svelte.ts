@@ -189,11 +189,17 @@ class Ft8SettingsState {
         // snapshot rather than aliasing `this.draft`, which the reconcile needs
         // to compare against and which stays live throughout.
         const before = JSON.parse(this.#pristine) as Ft8Draft;
+        // What this save CARRIES. The inputs stay live while a save is in
+        // flight (only Save/Cancel are disabled), so the live draft can move
+        // underneath the request — and "did this save ask for this field?" has
+        // to be answered from what was sent, not from what is on screen when
+        // the answer finally arrives (review e647f454 P2).
+        const sent = { ...this.draft };
         try {
             const res = await saveFt8Settings(this.buildPayload());
             if (res.kind === 'error') {
                 if (res.timedOut) {
-                    await this.#reconcileAfterTimeout(needsRestart, before);
+                    await this.#reconcileAfterTimeout(needsRestart, before, sent);
                     return;
                 }
                 toasts.error(`Save failed: ${res.message}`);
@@ -261,7 +267,11 @@ class Ft8SettingsState {
      * Either way the live view is pushed from what is STORED, never from what
      * was attempted.
      */
-    async #reconcileAfterTimeout(needsRestart: boolean, before: Ft8Draft): Promise<void> {
+    async #reconcileAfterTimeout(
+        needsRestart: boolean,
+        before: Ft8Draft,
+        sent: Ft8Draft
+    ): Promise<void> {
         const out = await fetchFt8Settings();
         if (out.kind === 'error') {
             toasts.error(
@@ -271,9 +281,9 @@ class Ft8SettingsState {
         }
         onPrefsSaved?.(livePrefs(out.settings.display));
         const stored = draftFrom(out.settings);
-        // Computed against the PRE-merge draft — it is what identifies the
-        // fields this save asked to change.
-        const verdict = editedFieldsMoved(before, this.draft, stored);
+        // Computed from what was SENT, not the live draft: an in-flight edit
+        // must not change the verdict on a request already on the wire.
+        const verdict = editedFieldsMoved(before, sent, stored);
         if (verdict === 'all') {
             this.#apply(out.settings);
             toasts.warn(
@@ -292,7 +302,7 @@ class Ft8SettingsState {
         // The baseline follows the daemon too, so `dirty` means "differs from
         // what is stored NOW" and Cancel reveals it rather than pre-save values
         // the daemon may no longer hold.
-        this.draft = mergeEdits(before, this.draft, stored);
+        this.draft = mergeEdits(before, sent, this.draft, stored);
         this.#pristine = JSON.stringify(stored);
         switch (verdict) {
             case 'some':
@@ -385,10 +395,16 @@ class Ft8SettingsState {
  * the same bug — they chose that value explicitly, and the last explicit writer
  * should win.
  */
-function mergeEdits(before: Ft8Draft, draft: Ft8Draft, stored: Ft8Draft): Ft8Draft {
+function mergeEdits(before: Ft8Draft, sent: Ft8Draft, draft: Ft8Draft, stored: Ft8Draft): Ft8Draft {
     const out: Ft8Draft = { ...stored };
     for (const k of Object.keys(before) as (keyof Ft8Draft)[]) {
-        if (draft[k] === before[k]) continue;
+        // Operator-owned two ways: this save asked to change it and that still
+        // stands, OR they have changed it since the request went out. The
+        // second is why the live draft alone is not enough — putting a field
+        // back to its old value mid-flight looks identical to never touching
+        // it (review e647f454 P2).
+        const owned = sent[k] !== before[k] || draft[k] !== sent[k];
+        if (!owned) continue;
         // Same key both sides, so the value type matches by construction —
         // TypeScript cannot see that through a keyof union.
         Object.assign(out, { [k]: draft[k] });
