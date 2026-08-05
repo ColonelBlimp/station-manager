@@ -187,6 +187,10 @@ class Ft8SettingsState {
         try {
             const res = await saveFt8Settings(this.buildPayload());
             if (res.kind === 'error') {
+                if (res.timedOut) {
+                    await this.#reconcileAfterTimeout(needsRestart);
+                    return;
+                }
                 toasts.error(`Save failed: ${res.message}`);
                 return;
             }
@@ -205,6 +209,52 @@ class Ft8SettingsState {
         } finally {
             this.saving = false;
         }
+    }
+
+    /**
+     * Settle a write whose outcome we never learned (clean-room review
+     * 569b2236 P2).
+     *
+     * A timed-out PUT reached the daemon with no response, so it may already
+     * have committed. Saying "Save failed" asserts the one thing we do not
+     * know, and the retry it invites resends all four blocks as whole-block
+     * replaces — which can overwrite a change made in between.
+     *
+     * So: re-read, and re-baseline the PRISTINE ONLY. The draft is left exactly
+     * as typed — discarding an operator's input on our own guess is the worse
+     * error of the two, and A5 already promises it survives a rejection. With
+     * the baseline refreshed, `dirty` answers the question the timeout left
+     * open: clean means the daemon has their values, dirty means it does not
+     * and Save is still there. The live view is pushed from what is STORED,
+     * never from what was attempted.
+     *
+     * The row cap makes one case imperfect: a value the daemon clamps settles
+     * as still-dirty (draft "5" vs stored "10") even though the write landed.
+     * That errs toward "press Save again", which is a harmless no-op — the
+     * alternative errs toward telling them it saved when it may not have.
+     */
+    async #reconcileAfterTimeout(needsRestart: boolean): Promise<void> {
+        const out = await fetchFt8Settings();
+        if (out.kind === 'error') {
+            toasts.error(
+                'Save timed out and the daemon could not be re-read — it is unknown whether your FT8 settings were stored.'
+            );
+            return;
+        }
+        const stored = draftFrom(out.settings);
+        this.#pristine = JSON.stringify(stored);
+        onPrefsSaved?.(livePrefs(out.settings.display));
+        // Compared explicitly rather than reading `this.dirty`, so the message
+        // cannot depend on when the derived happens to recompute.
+        if (JSON.stringify(this.draft) === this.#pristine) {
+            toasts.warn(
+                needsRestart
+                    ? 'Save timed out, but the daemon does have your FT8 settings — restart the daemon to apply them.'
+                    : 'Save timed out, but the daemon does have your FT8 settings.'
+            );
+            return;
+        }
+        toasts.warn('Save timed out and the daemon does NOT have your changes — press Save again.');
     }
 
     /** Revert edits to the last loaded/saved snapshot. */

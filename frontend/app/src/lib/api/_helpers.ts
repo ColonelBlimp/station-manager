@@ -47,8 +47,17 @@ export type FetchOutcome =
     /** `timedOut` distinguishes the AMBIGUOUS network failure: the request
      *  reached (or may have reached) the daemon and the RESPONSE never came,
      *  so a write may already have committed. A plain connection failure
-     *  (refused/unreachable) definitely did not commit. Write callers use
-     *  this to say "outcome unknown" instead of "failed". */
+     *  (refused/unreachable) definitely did not commit.
+     *
+     *  A write caller SHOULD use this to say "outcome unknown" instead of
+     *  "failed", and reconcile with a fresh GET. As of 2026-08-05 exactly one
+     *  does — `api/ft8-config.ts` + `config/ft8.svelte.ts` (clean-room review
+     *  569b2236 P2); every other write path still flattens it into a generic
+     *  failure. This note says "one" rather than "callers" on purpose: it read
+     *  as an established contract while nothing honoured it, which is how the
+     *  gap survived. Widening it is an open piece of work, and each write needs
+     *  its own answer — a config PUT can be reconciled by re-reading, a QSO
+     *  POST cannot be retried blindly. */
     | { ok: false; kind: 'network'; message: string; timedOut?: boolean };
 
 /**

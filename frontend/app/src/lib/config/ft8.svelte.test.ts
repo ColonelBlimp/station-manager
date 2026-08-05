@@ -326,6 +326,110 @@ describe('ft8 settings — what the save CONFIRMATION says (A3)', () => {
     });
 });
 
+describe('ft8 settings — an ambiguous write (clean-room review 569b2236 P2)', () => {
+    /*
+        A2/A5 both assume the save had an OUTCOME. A timed-out PUT has none: the
+        request reached the daemon and the response did not come back, so the
+        write may or may not have committed. `safeFetch` flags exactly this case
+        (`timedOut`), and reporting it as "Save failed" states as fact the one
+        thing we do not know — then invites a retry that resends all four blocks
+        as whole-block replaces.
+
+        The reconcile is a GET, and it is what turns the unknown back into
+        something the operator can act on. It re-baselines the PRISTINE only and
+        deliberately leaves the DRAFT alone: their typed values are never
+        discarded on our guess, and `dirty` then means precisely "what I have
+        differs from what the daemon holds" — true in both branches, and the
+        answer to "did it land?" without asking anyone.
+
+        FIXTURE: the two cases differ only in what the reconcile GET reports, so
+        a single flow proves both. Asserting one alone would pass against an
+        implementation that hard-coded either verdict.
+    */
+    function mockTimedOutPut(reconcile: Body): ReturnType<typeof vi.fn> {
+        let gets = 0;
+        const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+            if (init?.method === 'PUT') {
+                // What AbortSignal.timeout() raises — safeFetch keys on the name.
+                const e = new Error('timed out');
+                e.name = 'TimeoutError';
+                return Promise.reject(e);
+            }
+            gets++;
+            return Promise.resolve(
+                new Response(JSON.stringify(gets === 1 ? CONFIG : reconcile), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            );
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        return fetchMock;
+    }
+
+    const LANDED = { ...CONFIG, ft8_display: { ...CONFIG.ft8_display, feed_mode: 'accumulate' } };
+
+    it('W13: a timed-out save is never reported as failed', async () => {
+        mockTimedOutPut(LANDED);
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.feedMode = 'accumulate';
+        await ft8SettingsState.save();
+
+        expect(lastToast()).not.toMatch(/failed/i);
+        expect(lastToast()).toMatch(/timed out/i);
+    });
+
+    it('W14: when the write DID land, the form settles clean and the view is updated', async () => {
+        mockTimedOutPut(LANDED);
+        const seen: Partial<Ft8DisplayPrefs>[] = [];
+        setFt8PrefsSaved((p) => seen.push(p));
+
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.feedMode = 'accumulate';
+        await ft8SettingsState.save();
+
+        expect(ft8SettingsState.draft.feedMode).toBe('accumulate'); // never discarded
+        expect(ft8SettingsState.dirty).toBe(false); // matches the daemon → it landed
+        expect(seen.at(-1)?.feedMode).toBe('accumulate');
+    });
+
+    it('W15: when it did NOT land, the edit survives and still reads as unsaved', async () => {
+        mockTimedOutPut(CONFIG); // the daemon still holds the pre-save block
+        const seen: Partial<Ft8DisplayPrefs>[] = [];
+        setFt8PrefsSaved((p) => seen.push(p));
+
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.feedMode = 'accumulate';
+        await ft8SettingsState.save();
+
+        expect(ft8SettingsState.draft.feedMode).toBe('accumulate'); // still typed
+        expect(ft8SettingsState.dirty).toBe(true); // differs from the daemon
+        // The live view mirrors what is STORED, not what was attempted.
+        expect(seen.at(-1)?.feedMode).toBe('single');
+    });
+
+    it('W16: a genuine connection failure is still a failure, not an unknown', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_url: string, init?: RequestInit) => {
+                if (init?.method === 'PUT') return Promise.reject(new TypeError('refused'));
+                return Promise.resolve(
+                    new Response(JSON.stringify(CONFIG), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            })
+        );
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.feedMode = 'accumulate';
+        await ft8SettingsState.save();
+
+        expect(lastToast()).toMatch(/failed/i);
+        expect(ft8SettingsState.dirty).toBe(true);
+    });
+});
+
 describe('ft8 settings — live apply (A2)', () => {
     it('W9: a saved display pref reaches the FT8 view without a reload', async () => {
         // The PUT response is spelled out rather than echoed from the GET: the

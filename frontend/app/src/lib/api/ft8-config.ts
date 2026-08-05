@@ -63,7 +63,11 @@ export interface Ft8Settings {
 }
 
 export type Ft8SettingsOutcome =
-    { kind: 'ok'; settings: Ft8Settings } | { kind: 'error'; message: string };
+    | { kind: 'ok'; settings: Ft8Settings }
+    /** `timedOut` marks the AMBIGUOUS write: the PUT reached the daemon and the
+     *  response never came, so it may already have committed. Callers must not
+     *  report that as a failure — see the reconcile in ft8.svelte.ts. */
+    | { kind: 'error'; message: string; timedOut?: boolean };
 
 function str(v: unknown): string {
     return typeof v === 'string' ? v : '';
@@ -133,7 +137,16 @@ export async function saveFt8Settings(
         }),
         signal,
     });
-    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    if (!fetched.ok) {
+        // Carry the ambiguity outward rather than flattening it into "failed".
+        // An HTTP status, by contrast, IS an answer: the daemon replied, so a
+        // non-2xx below is a definite rejection with nothing committed.
+        return {
+            kind: 'error',
+            message: fetched.message,
+            timedOut: fetched.kind === 'network' && fetched.timedOut === true,
+        };
+    }
     const body = await readJsonBody(fetched.response);
     if (!fetched.response.ok) {
         const err = isPlainObject(body) ? (body as { message?: string }) : null;
