@@ -278,17 +278,18 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   slow/absent hamnut or DB answer never stalls the feed. Results are cached per
   `call|band` for the session (CQ stations recur, so steady-state lookups ≈ 0).
   Only CQ messages are decorated today (one unambiguous callsign); reply/report
-  lines stay plain. The two highlight colours are operator-configurable from the
-  **Settings tab** (daemon-backed `ft8.display.highlight_unworked` /
-  `highlight_worked`; defaults green = new, grey = worked). **Answering (e3):** a
+  lines stay plain. Worked-vs-new is shown with the app's own **theme-aware
+  palette** — amber tint = not worked on this band, muted text = worked before
+  (`Ft8BandActivity.svelte` `rowClass`) — and NOT from the
+  `ft8.display.highlight_*` config keys, which nothing reads (see the
+  `ft8.display.*` table below). **Answering (e3):** a
   CQ row is clickable to start a sequenced QSO when TX is armed + a clear offset is
   picked + no QSO is already running (the daemon then auto-advances the ladder).
   **Working a caller — the pile-up (ADR 0033 "work a caller"):** a decode that is a
   station *calling you* — the grid-bearing opening `<yourCall> <theirCall> <grid>`
-  (e.g. `7Q5MLV PA3KUS JO21`) — is tinted with the **calling colour** (daemon-backed
-  `ft8.display.highlight_calling`, default amber `#b45309`; **no LSPA picker** — it's
-  edited via config.json / the config SPA, the LSPA only reads + round-trips it) so it
-  stands out from band chatter,
+  (e.g. `7Q5MLV PA3KUS JO21`) — is given a **blue tint** by the same theme-aware
+  palette (`ft8.display.highlight_calling` is stored but not read — see the
+  `ft8.display.*` table) so it stands out from band chatter,
   and is **clickable** (under the same gate as answering: armed + offset + idle) to
   work that station via `POST /v1/ft8/qso/work`. The amber tint shows live — even mid-
   contact, so you can see who's waiting — but the row only becomes clickable once you
@@ -954,21 +955,35 @@ config.
 ### Config — `ft8.display.*` (Band Activity preferences)
 
 Operator display settings, served resolved on `/v1/config` (`ft8_display`) and PUT back
-to persist. Edited across a few surfaces: `history_max` / `feed_mode` / `cq_to_top` from
-the **FT8 Settings tab**; `hide_hashed_calls` from the **Band Activity filter funnel**
-(auto-saves on toggle); the three `highlight_*` colours from the **config SPA**. The
+to persist. Edited from **Settings → FT8** in the app shell
+(`frontend/app/src/lib/config/Ft8Section.svelte`) — the only writer. The Band Activity
+**filter funnel** merely reflects `hide_hashed_calls` in its "active" cue; it is
+read-only there (the auto-save-on-toggle funnel belonged to the retired logging SPA). The
 daemon does not consume these — they're pure SPA presentation — it stores + resolves them
-(`types.ResolveFt8Display`), so a fresh config still yields sensible values.
+(`types.ResolveFt8Display`), so a fresh config still yields sensible values. A save is
+applied to the RUNNING view (`setFt8PrefsSaved` → `setFt8DisplayPrefs`), so no restart
+and no reload.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `history_max` | 100 | Band Activity row cap (clamped 10–2000) |
 | `feed_mode` | `accumulate` | `accumulate` (roll slots up) or `single` (current slot only) |
-| `highlight_unworked` | `#15803d` | CQ tint — not worked on this band (attention) |
-| `highlight_worked` | `#9ca3af` | CQ tint — worked-before (muted) |
-| `highlight_calling` | `#b45309` | text colour for a station calling you (toMe/pile-up rows) — no LSPA picker, config-SPA/hand-edited |
+| `highlight_unworked` | `#15803d` | **VESTIGIAL** — see below |
+| `highlight_worked` | `#9ca3af` | **VESTIGIAL** — see below |
+| `highlight_calling` | `#b45309` | **VESTIGIAL** — see below |
 | `cq_to_top` | `false` | float CQ rows to the top of Band Activity (separators suppressed) |
 | `hide_hashed_calls` | `false` | hide decodes with an unresolved hashed call (`<...>`); stations calling you still show |
+
+**The three `highlight_*` keys are stored but not read by anything** (operator's
+ruling, 2026-08-05). Their only consumer was the `frontend/logging` SPA, retired
+2026-07-21; the app shell's Band Activity uses a **theme-aware palette** instead
+(`Ft8BandActivity.svelte` `rowClass`), because a single operator-picked hex cannot
+serve both light and dark — a row tint chosen for one is unreadable on the other. So
+Settings → FT8 deliberately offers **no colour pickers**: a control the app cannot
+honour is indistinguishable from a broken one. They are still **round-tripped
+verbatim** on every save (`ft8_display` is a whole-block replace daemon-side, so
+omitting them would erase a hand-set config.json value), and `ResolveFt8Display` still
+defaults them — so nothing breaks if the decision is revisited.
 
 Daemon-backed rather than browser localStorage so they survive a browser change /
 data clear and follow the operator (per the "settings live in config.json, not

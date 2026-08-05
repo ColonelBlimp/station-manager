@@ -37,6 +37,7 @@ import { toasts } from '../ui/toasts.svelte';
 import { emailState } from './email.svelte';
 import { enrichmentState } from './enrichment.svelte';
 import { forwardingState } from './forwarding.svelte';
+import { ft8SettingsState } from './ft8.svelte';
 import { rigsState } from './rigs.svelte';
 import { stationState } from './station.svelte';
 
@@ -66,6 +67,12 @@ const SECTIONS: Section[] = [
         dirty: () => rigsState.anyDirty,
         saving: () => rigsState.saving,
         discard: () => rigsState.discardDrafts(),
+    },
+    {
+        label: 'FT8',
+        dirty: () => ft8SettingsState.dirty,
+        saving: () => ft8SettingsState.saving,
+        discard: () => ft8SettingsState.reset(),
     },
     {
         label: 'Forwarding',

@@ -43,6 +43,7 @@ import {
 import { toasts } from './lib/ui/toasts.svelte';
 import { setup, setSetupSave } from './lib/setup.svelte';
 import { setStationSaved } from './lib/config/station.svelte';
+import { setFt8PrefsSaved } from './lib/config/ft8.svelte';
 import { completeSetup } from './lib/api/setup';
 import { sendRigTune } from './lib/api/rig-tune';
 import { sendRigCommand } from './lib/api/rig-command';
@@ -337,6 +338,15 @@ setStationSaved((station) => {
         station.station_callsign || ctx.stationCallsign
     );
 });
+
+// Settings → FT8 save: push the just-saved Band Activity display prefs into the
+// running FT8 view, so a changed feed mode / row cap / CQ-float / hide-hashed
+// takes effect at once. Without this they are read only at boot (see the
+// setFt8DisplayPrefs call in applyStationContext) and a save would look like it
+// had done nothing until a reload — indistinguishable from one that failed
+// silently. The values come from the daemon's post-save response, so the live
+// view honours what was STORED (it clamps the row cap) and not what was typed.
+setFt8PrefsSaved((p) => setFt8DisplayPrefs(p));
 
 // Submit sink: draft + rig context + displayed enrichment → one ADIF record →
 // POST /v1/qso — the same composition-at-the-wiring-layer shape as the

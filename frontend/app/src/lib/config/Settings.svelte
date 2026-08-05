@@ -7,16 +7,22 @@
     // mappings, and the rest land in follow-up increments.
     import StationSection from './StationSection.svelte';
     import RigsSection from './RigsSection.svelte';
+    import Ft8Section from './Ft8Section.svelte';
     import ForwardingSection from './ForwardingSection.svelte';
     import EmailSection from './EmailSection.svelte';
     import EnrichmentSection from './EnrichmentSection.svelte';
     import { restartDaemon, waitForDaemonBack, fetchDaemonInstance } from '../api/restart';
     import { toasts } from '../ui/toasts.svelte';
 
-    type SectionId = 'station' | 'rigs' | 'forwarding' | 'email' | 'enrichment';
+    // Strip order groups the station and how it operates (Station, Rigs, FT8)
+    // ahead of the outside services it talks to (Forwarding, Email,
+    // Enrichment). unsaved.ts walks the same order, so the leave prompt reads
+    // as a walk across the tabs — keep the two in step.
+    type SectionId = 'station' | 'rigs' | 'ft8' | 'forwarding' | 'email' | 'enrichment';
     const sections: { id: SectionId; label: string }[] = [
         { id: 'station', label: 'Station' },
         { id: 'rigs', label: 'Rigs' },
+        { id: 'ft8', label: 'FT8' },
         { id: 'forwarding', label: 'Forwarding' },
         { id: 'email', label: 'Email' },
         { id: 'enrichment', label: 'Enrichment' },
@@ -77,8 +83,8 @@
         <div>
             <h1 class="text-2xl font-semibold text-ink">Settings</h1>
             <p class="mt-1 text-sm text-muted">
-                Station configuration — rigs, mode mappings, forwarders, outgoing email, and station
-                identity.
+                Station configuration — rigs, mode mappings, FT8, forwarders, outgoing email, and
+                station identity.
             </p>
         </div>
         <button
@@ -116,6 +122,9 @@
     </div>
     <div class:hidden={active !== 'rigs'}>
         <RigsSection />
+    </div>
+    <div class:hidden={active !== 'ft8'}>
+        <Ft8Section />
     </div>
     <div class:hidden={active !== 'forwarding'}>
         <ForwardingSection />

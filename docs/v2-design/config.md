@@ -329,7 +329,7 @@ provider templates. **A known wart:** this split exists only because these field
 
 | Resolver | Defaults |
 |---|---|
-| `ResolveFt8Display` | history_max 100 (clamp [10,2000]), feed_mode `accumulate`, highlight_unworked `#15803d`, highlight_worked `#9ca3af`, highlight_calling `#b45309` (calling-us tint; no LSPA picker) |
+| `ResolveFt8Display` | history_max 100 (clamp [10,2000]), feed_mode `accumulate`, highlight_unworked `#15803d`, highlight_worked `#9ca3af`, highlight_calling `#b45309` (the three `highlight_*` are **vestigial** as of 2026-08-05 — resolved and round-tripped, read by nothing; see `docs/ft8.md`) |
 | `ResolveFt8Frequencies` | `DefaultFt8Frequencies()` per band, operator overrides where `>0` |
 | `ResolveFt8CallerAnswerMode` | `auto_first` |
 

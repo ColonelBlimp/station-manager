@@ -127,14 +127,20 @@ type Ft8DisplayConfig struct {
 	// capped at HistoryMax) or "single" (show only the current 15 s slot).
 	// Empty → default "accumulate".
 	FeedMode string `json:"feed_mode,omitempty"`
-	// HighlightUnworked / HighlightWorked are the CQ-row tint colours (CSS hex)
-	// for a station not-yet-worked-on-this-band vs worked-before. Empty → defaults.
+	// HighlightUnworked / HighlightWorked / HighlightCalling were the CQ-row tint
+	// colours (CSS hex) for not-yet-worked-on-this-band vs worked-before, and the
+	// text colour for a station calling US.
+	//
+	// ALL THREE ARE VESTIGIAL as of 2026-08-05 (operator's ruling): their only
+	// consumer was the frontend/logging SPA, retired 2026-07-21, and the app
+	// shell's Band Activity uses a theme-aware palette instead — a single hex
+	// cannot serve both light and dark. Settings → FT8 therefore renders no
+	// colour pickers. They are still resolved here and round-tripped verbatim by
+	// the SPA, because ft8_display is a whole-block replace: dropping them from a
+	// payload would erase a hand-set config.json value. Empty → defaults.
 	HighlightUnworked string `json:"highlight_unworked,omitempty"`
 	HighlightWorked   string `json:"highlight_worked,omitempty"`
-	// HighlightCalling is the text colour (CSS hex) for a station calling US — the
-	// pile-up/toMe rows in Band Activity. Empty → default (amber). No LSPA picker:
-	// it's edited via config.json / the config SPA (the LSPA only reads + applies it).
-	HighlightCalling string `json:"highlight_calling,omitempty"`
+	HighlightCalling  string `json:"highlight_calling,omitempty"`
 	// CqToTop floats CQ decodes to the top of the Band Activity feed (the
 	// actionable rows — the ones you can answer — pinned above the rest) instead
 	// of leaving them interleaved by slot. Plain bool: default false (off) is the

@@ -96,6 +96,7 @@ import { rigsState } from './rigs.svelte';
 import { forwardingState } from './forwarding.svelte';
 import { emailState } from './email.svelte';
 import { enrichmentState } from './enrichment.svelte';
+import { ft8SettingsState } from './ft8.svelte';
 import { navigate, router, setMode } from '../router.svelte';
 
 // Each state back to not-dirty. Uses their OWN reset() — which restores the
@@ -108,6 +109,7 @@ function makeAllClean(): void {
     forwardingState.reset();
     emailState.reset();
     enrichmentState.reset();
+    ft8SettingsState.reset();
     rigsState.drafts = {};
     rigsState.baselines = {};
     rigsState.selectedId = null;
@@ -129,6 +131,16 @@ function dirtyEmail(): string {
     emailState.draft.host = host;
     expect(emailState.dirty).toBe(true);
     return host;
+}
+
+/**
+ * Make FT8 unmistakably dirty and PROVE the fixture did so — same unique-value
+ * discipline as dirtyEmail, and for the same reason.
+ */
+let ft8Seq = 0;
+function dirtyFt8(): void {
+    ft8SettingsState.draft.pskHost = `psk${++ft8Seq}.example.net`;
+    expect(ft8SettingsState.dirty).toBe(true);
 }
 
 /** Serve GET /v1/rigs + /v1/hardware so rigsState.load() can complete. */
@@ -269,10 +281,15 @@ describe('which sections have unsaved edits', () => {
     });
 
     it('R7: lists every dirty section, in the order the tabs are shown', () => {
+        // FT8 sits third on the strip, so this pins its POSITION and not merely
+        // that it is counted — a section appended to the end of SECTIONS would
+        // still be listed, just in an order that no longer reads as a walk
+        // across the tabs.
         stationState.form = { station_callsign: '7Q5MLV' };
+        dirtyFt8();
         dirtyEmail();
         enrichmentState.draft.countryTtlDays = '5';
-        expect(unsavedSections()).toEqual(['Station', 'Email', 'Enrichment']);
+        expect(unsavedSections()).toEqual(['Station', 'FT8', 'Email', 'Enrichment']);
     });
 });
 
