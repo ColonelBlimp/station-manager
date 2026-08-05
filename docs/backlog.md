@@ -82,6 +82,7 @@ next, and in what order" is answered.
 **P3 — deferred / large / needs a trigger**
 - CAT poll mode (ADR 0034) · FT8 semi-auto watch-list (SET ASIDE) · spot-submitter registry (on 2nd destination) · operator / user profiles (contesting lens: bundle op-identity + contest params, swap mid-event — dogfood 2026-07-06) · outbound UDP telemetry (WSJT-X-compatible) · FT8 occupancy waterfall render · POTA fields · config hot-reload · settings help tooltips + beginner/expert mode · FT8 Monitor/Listen toggle (DISCUSSION) · download-site install page · `PUT /v1/config` `default_logbook.id` wiring (no consumer yet)
 - _Never-captured gaps (2026-07-20 "what's left" survey — in NO doc until now):_ **LoTW forwarder** (the most-expected destination after QRZ for a general audience; a different integration shape — TQSL signing/certificates, not REST) · **eQSL** · **awards tracking** (DXCC/WAS/WAZ worked/confirmed per band-mode — the natural consumer of the ADR 0052 QSL-confirmation layer if that's ever decided) · **logbook statistics/analytics** (QSOs by band/mode/year, rate charts — a logbook staple) · **inbound DX cluster client** (spot CONSUMPTION for phone/CW hunting; only outbound spot-submission was captured). **inbound DX cluster client is now ADR 0053 (Accepted 2026-07-20)** — a new `internal/dxcluster` telnet subsystem — enrichment (DXCC) + exact-callsign contest-dupe + a NEW needed-entity logbook aggregation (contest-dupe is exact-callsign, can't answer needed-DXCC) for the wanted decision; SSE spot feed + watch-list alerts; FREQUENCY-first click-to-QSY (spots carry no mode; mode best-effort inferred → rig literal, omitted if unknown since SendCommands is atomic) via the bridge seam; P2/post-ship. Also from the survey: logbook management (multi-logbook create/switch — `default_logbook.id` deliberately unwired), DB management (no operator-facing backup/restore/integrity surface), and contesting (serials, Cabrillo, contest definitions/score — design-first; only FT8 FD + contest-dupe exist) are design-first workstreams whose UI homes belong in the app shell, not the legacy SPAs. **Two more surfaced by the 2026-07-20 qso-director.com feature scan:** (a) **POTA / activation management as a first-class workflow** — SM has the ADIF fields (`MY_SIG`/`MY_IOTA`/`MY_WWFF_REF`) but no activation workflow (park/summit lookup, activation-mode logging, a LIVE POTA-spot feed); POTA is hugely popular and composes with the ADR 0053 cluster/spot subsystem — strongest genuinely-new candidate, possibly its own ADR. (b) **"Call Sense"-style predictive callsign assistance** — super-check-partial completion as you type, from your own log + a master callsign DB, with previous-QSO recall; SM only enriches AFTER a full call is typed, so assisted/predictive entry is a real logging-UX win for DX/contest. Both P2/post-ship. (The scan otherwise VALIDATED existing direction: DX cluster+alerts=ADR 0053, WSJT-X/GridTracker UDP interop already backlogged, contest scoring + dockable layout already noted; SDR spectrum scope + external-WSJT-X integration judged out of SM's lane.)
+- _Review-arc finding 2026-08-05:_ **`frontend/app/src/lib/operate/rig.svelte` — one owner for "where is the rig, including commands in flight".** Four mechanisms answer the same question today and none of them talk to each other; the mode-restore arc took five clean-room review rounds converging on it. Detail below.
 - _Dogfood triage 2026-07-23:_ **QTH on the Phone/CW card** — WAI today (QTH lives in the ContactDialog by design); build only if the operator confirms they want it promoted into the Contact-details disclosure.
 - _Dogfood triage 2026-07-25 (note only, no code yet):_ **rig Time-Out Timer (TOT) surfaced / set via CAT.** The FTdx10/FT-710 has a menu TOT (operator's is 3 min); on 2026-07-25 it cut two long SSB transmissions with a triple-beep — diagnosed as **rig-side, NOT SM** (SM wrote nothing at the drops; two TX were both exactly 180.0s — see `session-handoff.md`). SM could read the current TOT via CAT and surface it, so a "long TX will be cut in Ns" warning is possible before the rig times you out, and optionally set it — but per **ADR 0057** the TOT is a REQUIRED TX-safety prerequisite (SM's dead-wire backstop, the only stop that survives a dead CAT link mid-tune/FT8-TX), so any CAT-set MUST keep it enabled and bounded, NEVER OFF. **Weigh against narrow-daemon scope first** — this is operating UX (rig control), not log/forward. NB SM's own tune (≤20s) + FT8-TX (≤18s) sit well under any TOT, so this is purely for manual phone/CW ragchews, not an SM-TX blocker.
 - _Deferred features / design (dogfood triage 2026-07-08):_ `MY_RIG` follow the CAT-identified rig when connected (config = fallback) · single-source the freq→band table + regional band-plan design (three hand-synced copies today) · FT8 tune-carrier occupancy-skip (pending HW check on whether the RTTY tune tone bleeds into RX audio) · whole-log **Dashboard map** (time-window contacts map SHIPPED 2026-07-16 → archive; the dashboard reuses its engine — needs the `GET /v1/logbook/{id}/map` aggregate) · FT8 auto band-hop / "run the bands" · voice keyer + phone/CW auto-CQ + QSO copilot (crosses the v1 "no phone/CW PTT-for-operating" line — post-ship) · movable / dockable nav · propagation / conditions panel (external online data source — dogfood 2026-07-09) · 2nd callsign-enrichment provider (HamQTH/QRZCQ/qrz.digital candidates as a fallback link in the lookup chain, catches QRZ-absent calls — dogfood 2026-07-13/24) · smcloud "am I being heard?" pile-up status site (community-phase, capture-don't-build — dogfood 2026-07-11)
@@ -95,6 +96,70 @@ next, and in what order" is answered.
 - _Future thinking:_ "design our own sequencing / timing".
 
 ## Bugs (detail)
+
+- **P3 · `frontend/app/src/lib/operate/rig.svelte` — no single owner for "where is the
+  rig, including commands in flight".** _(Surfaced 2026-08-05 by the operating-mode
+  restore arc: five clean-room review rounds, each finding a real defect in the
+  previous round's fix — `c52e9b80` → `809f7890`. Every one was the same mistake at a
+  finer grain, and they converge on a concept the codebase does not have.)_
+
+  **The question nobody owns.** Between issuing a CAT command and the rig's confirming
+  push, `rig.vfoA` / `rig.vfoB` / `rig.modeLiteral` still read where the rig is
+  *leaving*. Any code that must know the rig's position in that gap has to answer
+  "what have we commanded that has not come back yet?" — and today four different
+  mechanisms answer it, independently and incompatibly:
+
+  1. **`pendingFreqHz`** (`rig.svelte`) — per-VFO commanded frequency, seeded by
+     `setFreq` / `nudgeFreq` / `seedFreqTarget`. Frequency only. Never cleared by a
+     report; instead `nudgeFreq` decides it is stale via a **350 ms time window**
+     (`FREQ_REPEAT_WINDOW_MS`), which is a key-repeat heuristic, not a CAT round-trip
+     guarantee.
+  2. **Optimistic write + rollback** — `setMode` writes `rig.modeLiteral` + `rig.mode`
+     immediately and reverts on rejection; `swapVfoLive` does the same for `rig.vfoB`.
+     Correct, but only for those two fields, and it mutates the DISPLAY state.
+  3. **`held` + `rigReports`** (`modeRestore.svelte`) — per-field commanded value dated
+     with that field's rig-report counter, superseded the moment the rig reports that
+     field. This is the most correct of the four and the only one with no threshold in
+     it — but it is private to mode-restore.
+  4. **Nothing at all** — `selectBand` and `bandUp`/`bandDown` (`set_band`,
+     `band_up`/`band_down`) deliberately have no optimistic write and wait for the
+     push. Reasonable in isolation; invisible to (1) and (3).
+
+  **The live defect this leaves.** `modeRestore`'s holds only know about the commands
+  `modeRestore` itself issued. A frequency moved by `setFreq`, `nudgeFreq`,
+  `selectBand`, `bandUp`/`bandDown` or `ft8SelectBand` leaves no trace it can see, so
+  a Phone/CW ↔ FT8 switch **within one CAT round-trip of any of those** snapshots the
+  pre-command frequency and can later return the rig to it. Narrow (sub-second) and
+  not the same bug as any of the five that were fixed — but it is the same shape, and
+  it is the one the current design cannot close from inside `modeRestore`.
+
+  **The refactor.** Lift the concept into `rig.svelte` as the module's own answer —
+  roughly: every command path records `{field, value, reportSeq}` as it issues, every
+  rig-state report supersedes the matching field, and one exported accessor returns
+  the rig's effective position. `modeRestore.held` / `effective()` then delete
+  outright; `pendingFreqHz` folds into it (losing the 350 ms window, which the
+  report counters make unnecessary); `setMode` / `swapVfoLive` keep their display
+  optimism but stop being the only record.
+
+  **Blast radius — this is why it is P3 and not P2.** It touches EVERY path that moves
+  the radio: `setFreq`, `nudgeFreq` (+ Coarse/Fine/Jump), `selectBand`, `bandUp`,
+  `bandDown`, `setMode`, `selectVfo`/`swapVfo`, `ft8SelectBand`, and mode-restore.
+  That is the TX-adjacent surface, so it wants characterization tests over the
+  existing behaviour FIRST (`rig.svelte.test.ts` is already substantial), then the
+  lift — per the "characterization tests before refactoring" lesson. It does **not**
+  touch `tx_on`/`tx_off`: those are never `exposed` (ADR 0026/0030) and no accessor
+  here can reach them.
+
+  **Do not "simplify" it with a timeout.** The first three attempts in the arc each
+  reached for a tolerance and each was wrong. "Has the rig reported this field since
+  we commanded it" is a fact the system can carry exactly, via the per-field counters
+  already in `rig.svelte` (`rigReports`, bumped in `onRigState` where each field is
+  written). Keep that property.
+
+  **Prior art to read before starting:** `modeRestore.svelte.ts` (the converged
+  version) and `modeRestore.svelte.test.ts` — its header carries acceptance criteria
+  A1–A19 and the reasoning for each rule, including the four failed models. The five
+  review rounds are in the git log between `c52e9b80` and `809f7890`.
 
 - **P2 · `frontend/app/src/lib/map` + the FT8 decode stream — RX propagation overlay
   ("what can I hear right now").** _(From a 2026-07-26 discussion about PSK Reporter
