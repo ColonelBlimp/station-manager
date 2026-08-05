@@ -86,7 +86,45 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   repo still serves 2.1.221 (what is installed). `dnf` says "Nothing to do"
   correctly. Nothing to do.
 
-## Current state (as of 2026-08-04)
+## Current state (as of 2026-08-05)
+
+### 2026-08-05 — stopped mid-session for a POWER CUT
+
+Tree clean at `4d131720`; every codex review triaged and deleted. **Deploy is
+10 commits behind** — the QSO-row coordinate reconcile is the only part that
+matters live.
+
+**Shipped.** Settings → **FT8** section (the config-SPA port; **General** is the
+last tab before that SPA retires) — no colour pickers, because the three
+`ft8_display.highlight_*` keys are vestigial (stored, round-tripped, read by
+nothing; Band Activity uses a theme-aware palette). Map **arc fan-out**: repeat
+contacts with one station resolved to the same point and drew byte-identical
+paths, so 6 QSOs showed 5 arcs and the hidden one was always the older band.
+**QSO-row coordinate reconcile**: `ReconcileStationCoords` moved to `adapters`
+and applied in `QsoTypeToModel`, the choke point all five QSO write paths share
+— the cache had been guarded since 08-04, but the QSO ROW is what ADIF export
+and the forwarding worker read. FT8 **band buttons now assert the rig data
+mode**; that was an unfinished implementation rather than a design gap (the
+daemon already served `ft8_mode` and its field comment said the band buttons
+drive `set_mode` with it). SSB only looks automatic because `set_band` triggers
+the RIG's band-stack recall; FT8 uses `set_freq`, which triggers none.
+
+**Found, not fixed, undecided.** A full scan of 6,975 QSOs: **121 rows across
+104 callsigns** carry coordinates outside their own grid, and the cause is
+systematic — 48 distinct pairs, led by 39× the Ukraine centroid and 16× Moscow,
+i.e. QRZ returning a country centroid while the grid came from the on-air
+exchange. Separately, **5,640 rows (82%)** still hold ADIF-format coordinates
+(`"N034 44.378"`) predating the ingress normalisation; they export fine but the
+map plots them at grid resolution.
+
+**The arc worth remembering.** The FT8 save-timeout reconcile took SEVEN review
+rounds, six of them fixing a defect the previous fix had introduced. It
+converged clean, and the current behaviour is safe. The cause is the contract,
+not the code: a whole-block `PUT /v1/config` with no revision cannot tell "my
+write landed" from "someone else's did", so every remedy is an inference over
+four mutable snapshots. **If it draws another finding, add `If-Match`/revision
+to the endpoint instead of another inference** — operator's call, not started.
+
 
 > **2026-08-04 (evening), LAST — THE `internal/ft8` LOGGING SHIP GATE, STARTED.
 > 5 of 14 findings closed, 9 to go. STOPPED MID-FINDING-4 at the operator's
