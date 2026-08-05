@@ -82,9 +82,11 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 - **STILL QUEUED from 2026-08-04:** the `internal/ft8` LOGGING SHIP GATE, 5 of
   14 closed — resume at **finding 4**; source of truth
   `docs/reviews/ft8-logging-gaps.md`. Then Playwright scaffolding.
-- **Claude Code update notice is a false alarm** — 2.1.222 is on npm, the RPM
-  repo still serves 2.1.221 (what is installed). `dnf` says "Nothing to do"
-  correctly. Nothing to do.
+- **Claude Code update notice is REAL** (corrected 2026-08-05 — the earlier
+  "false alarm" reading was wrong). The RPM repo *does* serve 2.1.222; 2.1.221
+  is installed. `dnf upgrade` said "Nothing to do" because root's metadata cache
+  was written 2026-08-04 16:02 and the repo sets no `metadata_expire`, so it
+  answered from yesterday's index. Fix: `sudo dnf --refresh upgrade claude-code`.
 
 ## Current state (as of 2026-08-05)
 
