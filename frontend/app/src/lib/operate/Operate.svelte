@@ -11,6 +11,7 @@
     import { router } from '../router.svelte';
     import UtilRail from './UtilRail.svelte';
     import PileupDrawer from './PileupDrawer.svelte';
+    import CallsignStackPanel from './CallsignStackPanel.svelte';
     import ExportDialog from './ExportDialog.svelte';
     import RigKeys from './RigKeys.svelte';
     import Ft8View from './Ft8View.svelte';
@@ -31,6 +32,8 @@
                 <div data-card={id}><Card /></div>
             {/if}
         {/each}
+        <!-- Data-driven: present only while calls are stacked (Shift+Enter). -->
+        <CallsignStackPanel />
     </div>
 {:else}
     <Ft8View />
@@ -38,7 +41,13 @@
 
 <!-- Rail + drawer + overlays for the whole Operate view. -->
 <UtilRail />
-<PileupDrawer />
+<!-- FT8's queue drawer is FT8-ONLY. It renders nothing useful in Phone/CW —
+     nothing can add to that queue outside Band Activity — and while it was
+     mounted there, opening it disabled Ctrl+Enter and Esc on the logging card.
+     Phone/CW has its own pile-up (CallsignStackPanel), which needs no toggle. -->
+{#if router.mode === 'ft8'}
+    <PileupDrawer />
+{/if}
 <ExportDialog />
 
 <!-- The AMBIENT host: the one home for the rail-toggled reference panels

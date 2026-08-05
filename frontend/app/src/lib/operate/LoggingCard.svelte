@@ -35,6 +35,8 @@
     import EnrichmentCard from './EnrichmentCard.svelte';
     import { enrich } from './enrich.svelte';
     import { isValidMaidenhead } from '../validators/maidenhead';
+    import { isValidCallsign } from '../validators/callsign';
+    import { callsignStack } from './callsignStack.svelte';
 
     // Contact-details disclosure (grid / QTH / rig / RX power / notes to edit; QRZ
     // page link + looked-up email + CQ/ITU zone to read — all for the contacted
@@ -101,18 +103,74 @@
             }
             return;
         }
-        // Pile-up drawer open: it owns its own Escape (PileupDrawer's window
-        // handler closes it), so the logging shortcuts just stay inert here —
-        // otherwise Esc would ALSO clear the draft, and Ctrl+Enter would log.
-        if (operate.pileup) return;
+        // NO `operate.pileup` GUARD HERE. It used to stand the logging
+        // shortcuts down whenever FT8's pile-up drawer was open, on the
+        // reasoning that the drawer owns its own Escape. Sound in FT8 — but
+        // that drawer used to render over Phone/CW too, where it can never hold
+        // anything, so opening it killed Ctrl+Enter and Esc mid-pile-up for no
+        // benefit. Worse, the flag is view state that survives a mode switch,
+        // so Phone/CW could inherit it SET with no drawer on screen to explain
+        // the silence. The drawer is now FT8-only (Operate.svelte) and this card
+        // is Phone/CW-only, so the two can no longer be on screen together.
         if (e.key === 'Enter' && e.ctrlKey && !e.altKey && !e.shiftKey) {
             e.preventDefault();
             void logAndRefocus();
-        } else if (e.key === 'Escape') {
+            return;
+        }
+        if (e.key === 'Escape') {
             e.preventDefault();
             clearDraft();
             callInput?.focus();
+            return;
         }
+        pileupKeydown(e);
+    }
+
+    // Pile-up capture (ported from the retired SPA's QsoPanel). Shift+Enter sets
+    // the typed call aside and clears the draft — the same "start fresh" effect
+    // as Esc, plus the push. Shift+Up/Down take one back: newest and oldest, so
+    // a pile-up can be worked from either end. Split out of windowKeydown to
+    // keep either half readable, not to satisfy a complexity budget.
+    function pileupKeydown(e: KeyboardEvent): void {
+        if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            stackCall();
+            return;
+        }
+        // NOT while typing — Shift+Arrow is native select-to-line — and NOT with
+        // Ctrl, which is the rig freq-step family in RigKeys.
+        if (isTextEntry(e.target) || !e.shiftKey || e.ctrlKey || e.metaKey) return;
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            loadPopped(callsignStack.popTop());
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            loadPopped(callsignStack.popBottom());
+        }
+    }
+
+    function isTextEntry(t: EventTarget | null): boolean {
+        if (!(t instanceof HTMLElement)) return false;
+        const tag = t.tagName;
+        return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable;
+    }
+
+    // Capture the typed call. Validated the same way logging is — an empty or
+    // malformed field is a silent no-op rather than a junk stack entry.
+    function stackCall(): void {
+        const call = draft.callsign.trim().toUpperCase();
+        if (call === '' || isValidCallsign(call) !== null) return;
+        callsignStack.push(call);
+        clearDraft();
+        callInput?.focus();
+    }
+
+    // Pop = load: the call moves into the draft and leaves the stack, so it is
+    // never in both. An empty stack leaves whatever is typed alone.
+    function loadPopped(call: string | undefined): void {
+        if (call === undefined) return;
+        draft.callsign = call;
+        callInput?.focus();
     }
 
     // Tab out of the callsign field = "I'm working this station": stamps
