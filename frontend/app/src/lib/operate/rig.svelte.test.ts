@@ -34,6 +34,7 @@ import {
     nudgeFreqFine,
     bandForDigit,
     setFt8Frequencies,
+    setFt8Mode,
     ft8SelectBand,
 } from './rig.svelte';
 
@@ -575,5 +576,112 @@ describe('ft8SelectBand — FT8 watering-hole band pick', () => {
         setFt8Frequencies({ '20m': 14074000 });
         const r = await ft8SelectBand('6m');
         expect(r.ok).toBe(false);
+    });
+
+    /*
+        PICKING AN FT8 BAND ALSO ASSERTS THE DATA MODE (operator, 2026-08-05).
+
+        Reported as "clicking CAT in FT8 doesn't change the mode to DATA-U".
+        The rig's OWN band-stack recall is what changes mode to USB/LSB on a
+        Phone/CW band pick — selectBand sends set_band and the radio restores
+        that band's last mode. FT8 uses set_FREQ instead (the WSJT-X dial, not
+        the band stack), which moves the dial without any stack recall, so the
+        mode stayed wherever the operator left it.
+
+        This is finishing an implementation, not a new design: the daemon
+        already resolves and serves the literal, and its own field comment says
+        "The SPA's FT8 Main-Freq band buttons drive set_mode with it so picking
+        an FT8 band also puts the rig in data mode" (handler_config.go). The
+        retired logging SPA did exactly this (Ft8Panel.svelte tuneToFt8Band);
+        the app-shell port dropped it.
+
+        ACCEPTANCE CRITERIA (operator-observable):
+          B1  CAT live → the rig lands on the FT8 dial freq AND in the rig's
+              data mode, tellable apart from "freq moved, mode unchanged".
+          B2  No configured ft8_mode ("" = leave current mode) → dial moves,
+              mode untouched. Not the same as writing an empty mode.
+          B3  CAT off → exactly today's behaviour, no mode write.
+          B4  A failed mode write still leaves the dial moved and says so.
+
+        B3 IS THE ONE THAT BITES. Off-CAT setMode writes its argument into
+        rig.mode, which holds the operator-FRIENDLY mode the log resolves ADIF
+        from. Pushing a rig literal ("DATA-U") in there is not a mode, it is
+        corruption of the manual state — which is why the reference guarded on
+        the link being live and why this does too.
+
+        ORDER IS FREQ-THEN-MODE, and B4 is why: the dial move is the operator's
+        primary intent and today's whole behaviour, so a mode write that fails
+        must not cost them it.
+    */
+    function catLive(ops: string[]): { op: string; value?: string | number }[] {
+        setRigCaps({ ops, tune: false, rigModes: ['USB', 'DATA-U'] });
+        catLink.onRigState({ vfoA: 14255000, selectedVfo: 'A' });
+        const sent: { op: string; value?: string | number }[] = [];
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve({ ok: true, message: '' });
+        });
+        return sent;
+    }
+
+    it('B1: CAT-live drives set_freq AND set_mode with the rig FT8 literal', async () => {
+        setFt8Frequencies({ '40m': 7074000 });
+        setFt8Mode('DATA-U');
+        const sent = catLive(['set_freq', 'set_mode']);
+
+        const r = await ft8SelectBand('40m');
+
+        expect(r.ok).toBe(true);
+        // Both, and in this order — see the note above on B4.
+        expect(sent).toEqual([
+            { op: 'set_freq', value: '7074000' },
+            { op: 'set_mode', value: 'DATA-U' },
+        ]);
+    });
+
+    it('B2: no configured FT8 mode leaves the mode alone', async () => {
+        setFt8Frequencies({ '40m': 7074000 });
+        setFt8Mode(''); // rigdef has none / operator chose "leave current mode"
+        const sent = catLive(['set_freq', 'set_mode']);
+
+        const r = await ft8SelectBand('40m');
+
+        expect(r.ok).toBe(true);
+        expect(sent).toEqual([{ op: 'set_freq', value: '7074000' }]);
+    });
+
+    it('B3: CAT-off never writes the rig literal into the manual friendly mode', async () => {
+        setFt8Frequencies({ '40m': 7074000 });
+        setFt8Mode('DATA-U');
+        rig.mode = 'USB'; // the operator's manual pick, in FRIENDLY vocabulary
+
+        const r = await ft8SelectBand('40m');
+
+        expect(r.ok).toBe(true);
+        expect(rig.freq).toBe('7.074.000');
+        expect(rig.mode).toBe('USB'); // untouched — a literal here is corruption
+    });
+
+    it('B4: a rejected mode write still leaves the dial moved, and says so', async () => {
+        setFt8Frequencies({ '40m': 7074000 });
+        setFt8Mode('DATA-U');
+        setRigCaps({ ops: ['set_freq', 'set_mode'], tune: false, rigModes: ['USB', 'DATA-U'] });
+        catLink.onRigState({ vfoA: 14255000, selectedVfo: 'A' });
+        const sent: { op: string; value?: string | number }[] = [];
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            // The dial move succeeds; only the mode is refused.
+            return Promise.resolve(
+                op === 'set_mode'
+                    ? { ok: false, message: 'rig refused the mode' }
+                    : { ok: true, message: '' }
+            );
+        });
+
+        const r = await ft8SelectBand('40m');
+
+        expect(sent.map((c) => c.op)).toEqual(['set_freq', 'set_mode']);
+        expect(r.ok).toBe(false);
+        expect(r.message).toContain('mode');
     });
 });

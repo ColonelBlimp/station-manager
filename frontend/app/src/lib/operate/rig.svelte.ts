@@ -490,6 +490,16 @@ export function setFt8Frequencies(f: Record<string, number>): void {
     ft8Frequencies = f;
 }
 
+// The rig's own mode literal for FT8 (config bridge.ft8_mode — rigdef default,
+// overridable per rig: "DATA-U" on the FTdx10/FT-710, "USB-D" on the IC-7300).
+// Injected once at boot beside the frequencies. Empty means the operator chose
+// "leave current mode", or no driver is configured — either way, don't touch it.
+let ft8Mode = '';
+
+export function setFt8Mode(m: string): void {
+    ft8Mode = m;
+}
+
 /**
  * Set the selected VFO to an ABSOLUTE frequency (Hz). CAT off → the manual freq
  * field (band follows the freq); CAT live → set_freq (VFO-A) / set_freq_b (VFO-B),
@@ -525,7 +535,25 @@ export async function ft8SelectBand(band: string): Promise<RigWriteResult> {
     if (hz === undefined) {
         return { ok: false, message: `No FT8 frequency configured for ${band}.` };
     }
-    return setFreq(hz);
+    const tuned = await setFreq(hz);
+    // FREQUENCY FIRST, then the mode. The dial move is the operator's primary
+    // intent and was this function's entire behaviour until 2026-08-05, so a
+    // refused mode write must not cost them it. A failed dial move DOES stop
+    // here: asserting a data mode on a frequency we did not reach is not what
+    // was asked for.
+    if (!tuned.ok) return tuned;
+    // Why the mode needs asserting at all: a Phone/CW band pick sends set_band
+    // and the RIG's own band-stack recall restores that band's last mode — which
+    // is what makes SSB "just work". FT8 sends set_FREQ (the WSJT-X dial, not
+    // the band stack), so no recall happens and the mode stayed put.
+    //
+    // Live link only: off-CAT setMode writes its argument into rig.mode, the
+    // operator-FRIENDLY mode the log resolves ADIF from, and a rig literal there
+    // is corruption rather than a mode. Empty ft8Mode is the configured "leave
+    // current mode". Capability-gated separately, so a rig that cannot set_mode
+    // still gets its dial move reported as the success it was.
+    if (rig.cat !== 'connected' || ft8Mode === '' || !hasOp('set_mode')) return tuned;
+    return setMode(ft8Mode);
 }
 
 /** Test seam — clear the optimistic freq-step state between cases so a prior

@@ -158,6 +158,11 @@ export interface StationContext {
      *  defaults + operator overrides, merged daemon-side). Drives the FT8 rig card's
      *  band buttons (jump to the watering-hole, not the rig's band-stack freq). */
     ft8Frequencies: Record<string, number>;
+    /** The rig's OWN mode literal for FT8 (config `bridge.ft8_mode` — rigdef
+     *  default, overridable per rig: "DATA-U" on the FTdx10, "USB-D" on the
+     *  IC-7300). An FT8 band pick asserts it so the dial move also puts the rig
+     *  in data mode. '' = leave the current mode (or no driver configured). */
+    ft8Mode: string;
     /** Contacts-map per-band arc colour overrides (config `map.band_colors`,
      *  band→"#rrggbb", sparse) — layered over the map's built-in palette
      *  (lib/map/bandColors). Empty = all defaults. */
@@ -185,6 +190,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8CqToTop: false,
         ft8HideHashed: false,
         ft8Frequencies: {},
+        ft8Mode: '',
         mapBandColors: {},
         logbookName: '',
         rigName: '',
@@ -225,6 +231,8 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8CqToTop: fd.cq_to_top === true,
         ft8HideHashed: fd.hide_hashed_calls === true,
         ft8Frequencies: toNumberMap(body.ft8_frequencies),
+        // In the BRIDGE block beside ops/rig_modes — it is rig-driver data.
+        ft8Mode: str(br.ft8_mode),
         mapBandColors: toStringMap(isPlainObject(body.map) ? body.map.band_colors : undefined),
         logbookName: str(lb.name),
         rigName: str(br.rig_name),

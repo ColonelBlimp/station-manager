@@ -225,6 +225,23 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect((await fetchStationContext()).ft8Frequencies).toEqual({});
     });
 
+    it('reads bridge.ft8_mode — the rig literal an FT8 band pick asserts', async () => {
+        // Lives in the BRIDGE block beside ops/rig_modes, not at the top level
+        // next to ft8_frequencies, which is the easy thing to get wrong.
+        mockConfig({
+            logging_station: { station_callsign: '7Q5MLV' },
+            bridge: { enabled: true, ft8_mode: 'DATA-U' },
+        });
+        expect((await fetchStationContext()).ft8Mode).toBe('DATA-U');
+    });
+
+    it('defaults ft8_mode to empty — "leave the current mode" — when absent', async () => {
+        // omitempty daemon-side: absent whenever no driver is configured or the
+        // operator picked "leave current mode". Both mean don't touch the rig.
+        mockConfig({ logging_station: { station_callsign: '7Q5MLV' }, bridge: { enabled: true } });
+        expect((await fetchStationContext()).ft8Mode).toBe('');
+    });
+
     it('reads map.band_colors (band→colour), dropping non-string values', async () => {
         mockConfig({
             logging_station: { station_callsign: '7Q5MLV' },

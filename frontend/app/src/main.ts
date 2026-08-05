@@ -14,6 +14,7 @@ import {
     setCommandSender,
     setOperatingBands,
     setFt8Frequencies,
+    setFt8Mode,
 } from './lib/operate/rig.svelte';
 import { openRigEvents } from './lib/api/rig-sse';
 import { openFt8Events } from './lib/api/ft8-sse';
@@ -205,6 +206,7 @@ const ctx: StationContext = {
     ft8CqToTop: false,
     ft8HideHashed: false,
     ft8Frequencies: {},
+    ft8Mode: '',
     mapBandColors: {},
     logbookName: '',
     rigName: '',
@@ -267,6 +269,11 @@ function applyStationContext(c: StationContext): void {
     // Per-band FT8 watering-hole freqs → the FT8 rig card's band buttons jump to the
     // configured dial freq (set_freq) instead of the rig's band-stack freq.
     setFt8Frequencies(c.ft8Frequencies);
+    // …and the rig's own FT8 mode literal, which those same band buttons assert
+    // alongside the dial move. A Phone/CW band pick gets its mode for free from
+    // the rig's band-stack recall (set_band); FT8 uses set_freq, which triggers
+    // no recall, so without this the rig stays in whatever mode it was in.
+    setFt8Mode(c.ft8Mode);
     // Tune-carrier write seam: adapt the rich rig-tune outcome to {ok,message}.
     // The daemon owns keying + the guaranteed stop; the SPA sends only intent.
     setTuneSender(async (active) => {
