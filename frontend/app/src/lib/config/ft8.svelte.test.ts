@@ -622,6 +622,41 @@ describe('ft8 settings — an ambiguous write (clean-room review 569b2236 P2)', 
         expect(ft8SettingsState.dirty).toBe(false);
     });
 
+    it('W23: a field someone ELSE changed is refreshed, so saving again cannot revert it', async () => {
+        /*
+            Clean-room review 07a7e4c0 P1, demonstrated by W22's own fixture.
+            The retained draft was the WHOLE pre-save block, so fields the
+            operator never edited still held pre-save values. The toast tells
+            them to save again; buildPayload sends all four blocks; the stale
+            copy overwrites whatever another client had since stored. "Safe
+            under both readings" was simply false.
+
+            The fix keeps every TYPED value and refreshes only the untouched
+            ones from what the GET found. Nothing the operator chose is
+            discarded, and the advice becomes true.
+
+            A field they DID edit still wins over a concurrent change — that is
+            not this bug. They typed it; the last explicit writer should win.
+        */
+        mockTimedOutPut({
+            ...CONFIG,
+            psk_reporter: { ...CONFIG.psk_reporter, host: 'third-party.example.org' },
+            ft8_display: { ...CONFIG.ft8_display, feed_mode: 'accumulate' },
+        });
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.feedMode = 'accumulate'; // moves → verdict "some"
+        ft8SettingsState.draft.pskPort = '9999'; // does not move
+        await ft8SettingsState.save();
+
+        // Untouched by this operator → now shows what the daemon holds, so the
+        // retry the toast recommends carries it forward instead of reverting it.
+        expect(ft8SettingsState.draft.pskHost).toBe('third-party.example.org');
+        expect(ft8SettingsState.buildPayload().psk.host).toBe('third-party.example.org');
+        // Typed values survive untouched.
+        expect(ft8SettingsState.draft.pskPort).toBe('9999');
+        expect(ft8SettingsState.draft.feedMode).toBe('accumulate');
+    });
+
     it('W16: a genuine connection failure is still a failure, not an unknown', async () => {
         vi.stubGlobal(
             'fetch',

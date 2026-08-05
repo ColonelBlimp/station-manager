@@ -271,20 +271,30 @@ class Ft8SettingsState {
         }
         onPrefsSaved?.(livePrefs(out.settings.display));
         const stored = draftFrom(out.settings);
-        // The baseline follows the daemon in every outcome, so `dirty` means
-        // "differs from what is stored NOW" and Cancel shows that rather than
-        // pre-save values the daemon may no longer hold. Only `all` also moves
-        // the draft; the other two leave what was typed exactly as typed.
+        // Computed against the PRE-merge draft — it is what identifies the
+        // fields this save asked to change.
+        const verdict = editedFieldsMoved(before, this.draft, stored);
+        if (verdict === 'all') {
+            this.#apply(out.settings);
+            toasts.warn(
+                needsRestart
+                    ? 'Save timed out, but the daemon does have your FT8 settings — restart the daemon to apply them.'
+                    : 'Save timed out, but the daemon does have your FT8 settings.'
+            );
+            return;
+        }
+        // Keep every TYPED value; refresh the rest from what the daemon now
+        // holds. Retaining the whole pre-save block left fields another client
+        // had changed sitting stale in the form, and buildPayload writes all
+        // four blocks — so the retry this advises would have reverted them
+        // (review 07a7e4c0 P1, demonstrated by W22's own fixture).
+        //
+        // The baseline follows the daemon too, so `dirty` means "differs from
+        // what is stored NOW" and Cancel reveals it rather than pre-save values
+        // the daemon may no longer hold.
+        this.draft = mergeEdits(before, this.draft, stored);
         this.#pristine = JSON.stringify(stored);
-        switch (editedFieldsMoved(before, this.draft, stored)) {
-            case 'all':
-                this.#apply(out.settings);
-                toasts.warn(
-                    needsRestart
-                        ? 'Save timed out, but the daemon does have your FT8 settings — restart the daemon to apply them.'
-                        : 'Save timed out, but the daemon does have your FT8 settings.'
-                );
-                return;
+        switch (verdict) {
             case 'some':
                 // Neither claim is available here, so make neither. A write that
                 // landed can show a partial move (an edit the daemon normalises
@@ -361,6 +371,31 @@ class Ft8SettingsState {
  * a clean draft), but "no request, therefore success" is the wrong default for
  * a helper that decides whether to overwrite the operator's form.
  */
+/**
+ * The daemon's current values, with this save's TYPED edits laid back over
+ * them.
+ *
+ * Retaining the raw pre-save draft is what review 07a7e4c0 filed as a P1: the
+ * fields the operator never touched still held pre-save values, buildPayload
+ * writes all four blocks whole, and the retry the unconfirmed-save toast
+ * recommends would have overwritten whatever another client had stored in the
+ * meantime. Nothing typed is dropped; only the untouched fields move.
+ *
+ * A field the operator DID edit still beats a concurrent change. That is not
+ * the same bug — they chose that value explicitly, and the last explicit writer
+ * should win.
+ */
+function mergeEdits(before: Ft8Draft, draft: Ft8Draft, stored: Ft8Draft): Ft8Draft {
+    const out: Ft8Draft = { ...stored };
+    for (const k of Object.keys(before) as (keyof Ft8Draft)[]) {
+        if (draft[k] === before[k]) continue;
+        // Same key both sides, so the value type matches by construction —
+        // TypeScript cannot see that through a keyof union.
+        Object.assign(out, { [k]: draft[k] });
+    }
+    return out;
+}
+
 type MoveVerdict = 'all' | 'some' | 'none';
 
 function editedFieldsMoved(before: Ft8Draft, draft: Ft8Draft, stored: Ft8Draft): MoveVerdict {
