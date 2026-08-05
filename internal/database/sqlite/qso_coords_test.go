@@ -62,6 +62,7 @@ package sqlite
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -176,6 +177,64 @@ func TestQsoCoords_Q5_APlaceholderGridArbitratesNothing(t *testing.T) {
 	if got.ContactedStation.Lat != "51.500000" || got.ContactedStation.Lon != "-0.100000" {
 		t.Fatalf("a placeholder grid was treated as an arbiter: lat=%q lon=%q",
 			got.ContactedStation.Lat, got.ContactedStation.Lon)
+	}
+}
+
+func TestQsoCoords_Q7_ARestoredRowIsReconciledToo(t *testing.T) {
+	/*
+	   Clean-room review bcfbd8ea called this a P1 — that reconciling inside the
+	   shared adapter makes SM Cloud restore lossy, against a contract that
+	   restored fields "land verbatim". REFUTED, on three checks:
+
+	     1. That phrase (manifest.go, InsertRestoredQsoWithContext) is scoped to
+	        modified_at / deleted_at and the update trigger — "INSERT does not
+	        fire the update trigger, so the values land verbatim". It is not a
+	        claim about QSO DATA fields, and no test pinned one:
+	        TestRestore_RoundTripPreservesEverything carries a grid and no
+	        coordinates at all.
+	     2. It causes no drift churn. The cloud reconcile hash is over
+	        (uuid, modified_at, revision) — identity and recency, not content
+	        (internal/cloud/reconcile) — and this preserves all three, as the
+	        second half of this test asserts.
+	     3. Skipping it would REOPEN the leak for exactly the rows most likely
+	        to carry it. A restored row is read by ADIF export and re-read by
+	        the forwarding worker like any other, so a pre-fix backup would
+	        upload its contradictory coordinates to QRZ and ClubLog — the whole
+	        harm this work exists to prevent. Restore is not an archive; it
+	        writes live operational data.
+
+	   The residue, stated rather than waved off: a restored row can now differ
+	   from its cloud twin in a field the reconcile hash cannot see. That is
+	   invisible, self-healing on the next edit of that QSO, and strictly less
+	   bad than re-importing a known-contradictory position and shipping it out
+	   again.
+	*/
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "7Q5MLV"})
+	ctx := context.Background()
+
+	q := qsoWithCoords(lbID, "RESTORED", us2ywGrid, us2ywLat, us2ywLon)
+	q.ModifiedAt = time.Date(2026, 6, 1, 14, 30, 0, 0, time.UTC)
+	q.Revision = 7 // the cloud-exported edit-sequence position
+	if _, err := svc.InsertRestoredQsoWithContext(ctx, q); err != nil {
+		t.Fatalf("insert restored qso: %v", err)
+	}
+
+	got, err := svc.FetchQsoByUUIDWithContext(ctx, q.UUID)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if !utils.CoordsInsideGrid(us2ywGrid, got.ContactedStation.Lat, got.ContactedStation.Lon) {
+		t.Fatalf("a restore reintroduced contradictory coordinates: lat=%q lon=%q",
+			got.ContactedStation.Lat, got.ContactedStation.Lon)
+	}
+	// The contract that IS documented survives untouched — this is the half of
+	// the finding that would have been a real defect.
+	if !got.ModifiedAt.Equal(q.ModifiedAt) {
+		t.Fatalf("restore stopped preserving modified_at: got %v want %v", got.ModifiedAt, q.ModifiedAt)
+	}
+	if got.Revision != 7 {
+		t.Fatalf("restore stopped preserving revision: got %d want 7", got.Revision)
 	}
 }
 

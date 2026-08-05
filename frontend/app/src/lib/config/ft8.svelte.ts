@@ -268,18 +268,30 @@ class Ft8SettingsState {
             return;
         }
         onPrefsSaved?.(livePrefs(out.settings.display));
-        if (editedFieldsMoved(before, this.draft, draftFrom(out.settings))) {
-            this.#apply(out.settings);
-            toasts.warn(
-                needsRestart
-                    ? 'Save timed out, but the daemon does have your FT8 settings — restart the daemon to apply them.'
-                    : 'Save timed out, but the daemon does have your FT8 settings.'
-            );
-            return;
+        switch (editedFieldsMoved(before, this.draft, draftFrom(out.settings))) {
+            case 'all':
+                this.#apply(out.settings);
+                toasts.warn(
+                    needsRestart
+                        ? 'Save timed out, but the daemon does have your FT8 settings — restart the daemon to apply them.'
+                        : 'Save timed out, but the daemon does have your FT8 settings.'
+                );
+                return;
+            case 'some':
+                // Neither claim is available here, so make neither. A write that
+                // landed can show a partial move (an edit the daemon normalises
+                // back to the stored value never moves), and so can a write that
+                // failed beside another client's edit.
+                toasts.warn(
+                    'Save timed out and could not be confirmed — compare the FT8 settings and save again if they are not what you wanted.'
+                );
+                return;
+            case 'none':
+                toasts.warn(
+                    'Save timed out and the daemon does not appear to have your changes — press Save again.'
+                );
+                return;
         }
-        toasts.warn(
-            'Save timed out and the daemon does not appear to have your changes — press Save again.'
-        );
     }
 
     /** Revert edits to the last loaded/saved snapshot. */
@@ -317,22 +329,35 @@ class Ft8SettingsState {
 }
 
 /**
- * Whether every field this save asked to change is now different from what was
+ * How much of what this save asked to change is now different from what was
  * there before it — the closest thing to "my write landed" available after a
  * timeout (see #reconcileAfterTimeout).
  *
- * EVERY edited field, not any: a partial move is not this save's signature, and
- * treating it as one is how another client's edit gets adopted as ours.
+ * THREE OUTCOMES, because there are three things worth saying:
  *
- * False when nothing was edited. That cannot happen through save() (it refuses
+ *   all  — every edited field moved. This save's signature; adopt the response.
+ *   some — ambiguous, and BOTH readings are real. A write that LANDED shows a
+ *          partial move whenever the daemon normalises an edit back to the
+ *          value already stored (a row cap already at the clamp floor); a write
+ *          that FAILED shows one when another client moved a field we happened
+ *          to edit. Never adopt, and never claim either way — the message here
+ *          used to assert the changes were not stored (review bcfbd8ea P2).
+ *   none — nothing we asked for moved.
+ *
+ * `none` when nothing was edited. That cannot happen through save() (it refuses
  * a clean draft), but "no request, therefore success" is the wrong default for
  * a helper that decides whether to overwrite the operator's form.
  */
-function editedFieldsMoved(before: Ft8Draft, draft: Ft8Draft, stored: Ft8Draft): boolean {
+type MoveVerdict = 'all' | 'some' | 'none';
+
+function editedFieldsMoved(before: Ft8Draft, draft: Ft8Draft, stored: Ft8Draft): MoveVerdict {
     const edited = (Object.keys(before) as (keyof Ft8Draft)[]).filter(
         (k) => draft[k] !== before[k]
     );
-    return edited.length > 0 && edited.every((k) => stored[k] !== before[k]);
+    if (edited.length === 0) return 'none';
+    const moved = edited.filter((k) => stored[k] !== before[k]);
+    if (moved.length === edited.length) return 'all';
+    return moved.length === 0 ? 'none' : 'some';
 }
 
 /** The stored display block as the live view's setter takes it. history_max is

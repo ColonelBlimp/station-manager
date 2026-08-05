@@ -469,13 +469,19 @@ describe('ft8 settings — an ambiguous write (clean-room review 569b2236 P2)', 
             Added because W18's reversion proof did not fail when `every` was
             swapped for `some` — the code drew a distinction no rule pinned.
 
-            A PUT is atomic, so our write cannot have landed halfway. Two
-            edited fields with only one of them moved therefore means someone
-            else moved it, and adopting the response would discard the other
-            edit. `every` also carries a false NEGATIVE — an edit the daemon
-            normalises back to its existing value never moves — but that costs
-            one redundant Save press, where a false positive costs the
-            operator's typed input.
+            A partial move has TWO readings and neither can be ruled out from
+            here: another client moved a field we edited while our write
+            failed, OR our write landed and the daemon normalised one edit back
+            to the value already stored. Adopting the response would discard
+            the operator's other edit under the first reading, so it does not.
+
+            WHAT THIS COMMENT USED TO SAY WAS WRONG, and the correction is the
+            point: it claimed a partial move MUST mean someone else moved it,
+            reasoning from PUT atomicity. Atomicity rules out a half-applied
+            write; it does not rule out a fully applied write whose effect on
+            one field is invisible. Clean-room review bcfbd8ea P2 caught it,
+            and W20 now pins the consequence — the verdict stays conservative,
+            but the message must not assert the changes were not stored.
         */
         mockTimedOutPut({
             ...CONFIG,
@@ -489,6 +495,66 @@ describe('ft8 settings — an ambiguous write (clean-room review 569b2236 P2)', 
         expect(ft8SettingsState.draft.pskHost).toBe('mine.example.org');
         expect(ft8SettingsState.dirty).toBe(true);
         expect(lastToast()).not.toMatch(/does have your/i);
+    });
+
+    it('W20: a partial move is reported as UNCONFIRMED, never as "not stored"', async () => {
+        /*
+            Clean-room review bcfbd8ea P2. W19 keeps the conservative verdict —
+            a partial move must not adopt the response — but the MESSAGE that
+            went with it asserted the daemon did not have the changes, and that
+            is not something a partial move establishes.
+
+            The daemon normalises: an edit that resolves back to the value
+            already stored never moves. Here the row cap is already AT the clamp
+            floor, so typing 5 stores 10 again — no movement — while the feed
+            mode moves. That is a fully successful atomic write showing as a
+            partial move, and telling the operator it did not land is false.
+
+            FIXTURE: the row cap must already be 10. At any other starting value
+            the clamp WOULD move it, both fields would move, and the case this
+            rule exists for could not arise.
+        */
+        const atFloor = { ...CONFIG, ft8_display: { ...CONFIG.ft8_display, history_max: 10 } };
+        mockTimedOutPut({
+            ...atFloor,
+            ft8_display: { ...atFloor.ft8_display, feed_mode: 'accumulate' },
+        });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_url: string, init?: RequestInit) => {
+                if (init?.method === 'PUT') {
+                    const e = new Error('timed out');
+                    e.name = 'TimeoutError';
+                    return Promise.reject(e);
+                }
+                return Promise.resolve(
+                    new Response(
+                        JSON.stringify(
+                            ft8SettingsState.loaded
+                                ? {
+                                      ...atFloor,
+                                      ft8_display: {
+                                          ...atFloor.ft8_display,
+                                          feed_mode: 'accumulate',
+                                      },
+                                  }
+                                : atFloor
+                        ),
+                        { status: 200, headers: { 'Content-Type': 'application/json' } }
+                    )
+                );
+            })
+        );
+
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.historyMax = '5'; // clamps back to the 10 already stored
+        ft8SettingsState.draft.feedMode = 'accumulate'; // moves
+        await ft8SettingsState.save();
+
+        expect(lastToast()).not.toMatch(/does not appear|press Save again/i);
+        // Still conservative: nothing typed is discarded (W19's half).
+        expect(ft8SettingsState.draft.historyMax).toBe('5');
+        expect(ft8SettingsState.dirty).toBe(true);
     });
 
     it('W16: a genuine connection failure is still a failure, not an unknown', async () => {

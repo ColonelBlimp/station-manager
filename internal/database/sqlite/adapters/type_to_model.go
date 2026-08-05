@@ -37,6 +37,14 @@ func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 	//
 	// The QSO row is the one that leaves the station: ADIF export reads it, and
 	// the forwarding worker re-reads it from the database before submitting.
+	//
+	// YES, THIS INCLUDES THE SM CLOUD RESTORE WRITER, deliberately — clean-room
+	// review bcfbd8ea filed that as a P1 and it was refuted on evidence, with
+	// the three checks and the accepted residue written up in
+	// qso_coords_test.go (Q7, which pins both halves: coordinates reconciled,
+	// modified_at + revision still verbatim). The short version: a restored row
+	// is exported and uploaded like any other, so exempting it would reopen
+	// this leak for exactly the pre-fix backups most likely to carry it.
 	qso.ContactedStation = ReconcileStationCoords(qso.ContactedStation)
 
 	// qso.QsoDetails.Freq is the ADIF-native MHz decimal string (e.g.
