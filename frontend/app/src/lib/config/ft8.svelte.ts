@@ -252,9 +252,11 @@ class Ft8SettingsState {
      * success path does, so the operator ends up where they would have been
      * had the response arrived (including the daemon's clamped value).
      *
-     * Otherwise → keep the draft exactly as typed, leave the baseline alone so
-     * `dirty` still points at the difference, and hedge the wording. Never
-     * discard typed input on an inference.
+     * Otherwise → keep the draft exactly as typed and hedge the wording; never
+     * discard typed input on an inference. The BASELINE still moves to what was
+     * fetched, so `dirty` means "differs from what is stored now" and Cancel
+     * reveals the daemon's values — without that, the only escape hatch shows
+     * pre-save state the daemon may no longer hold (review 9f2c0535 P2).
      *
      * Either way the live view is pushed from what is STORED, never from what
      * was attempted.
@@ -268,7 +270,13 @@ class Ft8SettingsState {
             return;
         }
         onPrefsSaved?.(livePrefs(out.settings.display));
-        switch (editedFieldsMoved(before, this.draft, draftFrom(out.settings))) {
+        const stored = draftFrom(out.settings);
+        // The baseline follows the daemon in every outcome, so `dirty` means
+        // "differs from what is stored NOW" and Cancel shows that rather than
+        // pre-save values the daemon may no longer hold. Only `all` also moves
+        // the draft; the other two leave what was typed exactly as typed.
+        this.#pristine = JSON.stringify(stored);
+        switch (editedFieldsMoved(before, this.draft, stored)) {
             case 'all':
                 this.#apply(out.settings);
                 toasts.warn(
@@ -282,8 +290,13 @@ class Ft8SettingsState {
                 // landed can show a partial move (an edit the daemon normalises
                 // back to the stored value never moves), and so can a write that
                 // failed beside another client's edit.
+                //
+                // Saving again is safe under BOTH readings — the same values go
+                // out either way — so that is the instruction. It replaced "compare
+                // the FT8 settings", which asked for something impossible: the form
+                // shows the DRAFT, not what the GET found (review 9f2c0535 P2).
                 toasts.warn(
-                    'Save timed out and could not be confirmed — compare the FT8 settings and save again if they are not what you wanted.'
+                    'Save timed out and could not be confirmed — press Save again to be sure, or Cancel to see what the daemon holds now.'
                 );
                 return;
             case 'none':

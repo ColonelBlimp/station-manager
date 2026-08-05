@@ -551,10 +551,75 @@ describe('ft8 settings — an ambiguous write (clean-room review 569b2236 P2)', 
         ft8SettingsState.draft.feedMode = 'accumulate'; // moves
         await ft8SettingsState.save();
 
-        expect(lastToast()).not.toMatch(/does not appear|press Save again/i);
+        // The forbidden thing is the CLAIM, not the instruction. This assertion
+        // originally also barred "press Save again" and had to be narrowed:
+        // saving again is the right advice here (W21), so forbidding it made
+        // the two rules contradict each other rather than reinforce.
+        expect(lastToast()).not.toMatch(/does not appear/i);
         // Still conservative: nothing typed is discarded (W19's half).
         expect(ft8SettingsState.draft.historyMax).toBe('5');
         expect(ft8SettingsState.dirty).toBe(true);
+    });
+
+    it('W21: an unconfirmed save tells the operator what to DO', async () => {
+        /*
+            Clean-room review 9f2c0535 P2. The first "some" message said to
+            compare the FT8 settings — which the operator cannot do, because
+            the form goes on showing their draft, not what the GET found. It
+            also dropped the one actionable instruction, so an operator whose
+            write had NOT landed could read it as "nothing to do".
+
+            Saving again is safe under BOTH readings of an unconfirmed save: if
+            it landed, the same values go out again; if it did not, they land
+            now. So recommend it — without asserting which happened.
+        */
+        mockTimedOutPut({
+            ...CONFIG,
+            ft8_display: { ...CONFIG.ft8_display, feed_mode: 'accumulate' },
+        });
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.feedMode = 'accumulate'; // moves
+        ft8SettingsState.draft.pskHost = 'mine.example.org'; // does not
+        await ft8SettingsState.save();
+
+        expect(lastToast()).toMatch(/save again/i);
+        // The instruction that cannot be followed: the form shows the draft,
+        // so there is nothing on screen to compare the daemon's state against.
+        expect(lastToast()).not.toMatch(/compare/i);
+        expect(lastToast()).not.toMatch(/does not appear|does have your/i);
+    });
+
+    it('W22: after an unconfirmed save, Cancel shows what the DAEMON holds', async () => {
+        /*
+            The other half of the same finding: "see what it holds" has to be
+            reachable. Cancel restores the baseline, so the baseline must be
+            re-pointed at what the reconcile GET actually found — otherwise
+            Cancel shows PRE-SAVE values the daemon may no longer have, which
+            is a quieter version of the same lie.
+
+            FIXTURE: the moved-by-someone-else field (pskHost) is one this save
+            did NOT edit, so the verdict stays "some". An earlier version of
+            this test edited it as well, which made BOTH edited fields move,
+            turned the verdict into "all", and tested the adopt path instead —
+            it failed on its first assertion rather than the one it exists for.
+            The host value is one NEITHER side held before, so "shows the
+            daemon's value" cannot be confused with the pre-save value or the
+            draft.
+        */
+        mockTimedOutPut({
+            ...CONFIG,
+            psk_reporter: { ...CONFIG.psk_reporter, host: 'third-party.example.org' },
+            ft8_display: { ...CONFIG.ft8_display, feed_mode: 'accumulate' },
+        });
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.feedMode = 'accumulate'; // moves
+        ft8SettingsState.draft.pskPort = '9999'; // does not — stored stays 2525
+        await ft8SettingsState.save();
+
+        expect(ft8SettingsState.draft.pskPort).toBe('9999'); // still theirs
+        ft8SettingsState.reset();
+        expect(ft8SettingsState.draft.pskHost).toBe('third-party.example.org');
+        expect(ft8SettingsState.dirty).toBe(false);
     });
 
     it('W16: a genuine connection failure is still a failure, not an unknown', async () => {
