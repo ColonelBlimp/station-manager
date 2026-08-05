@@ -13,7 +13,15 @@
       A8  Clicking a stacked call loads it and takes it off the list; the small ×
           beside it drops the call WITHOUT loading it. Apart from the two doing
           the same thing, which would make one of them a trap.
-      A9  In Phone/CW there is no FT8 pile-up drawer and no rail button for one.
+      A9  In Phone/CW there is no FT8 pile-up drawer (its rail button now drives
+          the callsign stack instead — see A21).
+      A22 The pile-up slides in from the right, against the inside edge of the
+          right-hand rail — the same place FT8's does, because it is the same
+          affordance for the same job. Apart from a card in the content column,
+          which reflows the logging card underneath as it appears and moves
+          where the operator is typing.
+      A23 It starts CLOSED. Apart from a drawer that opens itself on every visit
+          to Phone/CW and pushes the content across to show an empty list.
 
     A7 and A9 are the trap fix expressed as render rules; the keyboard half is
     R10/R11 in pileupKeys.svelte.test.ts.
@@ -30,10 +38,16 @@ import { draft, clearDraft } from './qso.svelte';
 import { router } from '../router.svelte';
 import { operate } from './state.svelte';
 
+// Read at IMPORT time — beforeEach below sets this flag, so by the time any
+// test body runs the shipped default is gone. A15 was asserting its own setup
+// until this was captured here.
+const SHIPPED_CALLSTACK_DEFAULT = operate.callStack;
+
 beforeEach(() => {
     callsignStack.clear();
     clearDraft();
     operate.pileup = false;
+    operate.callStack = true; // most rules below are about the OPEN drawer
     router.mode = 'phone';
     flushSync();
 });
@@ -129,20 +143,24 @@ describe('Phone/CW pile-up rail affordance', () => {
         expect(await screen.findByTitle('Pile-up')).toBeTruthy();
     });
 
-    it('P10: the icon toggles the list', async () => {
+    // A drawer stays MOUNTED and slides out of view, so open/closed is
+    // `data-open`, not presence — the same contract as FT8's.
+    it('P10: the icon toggles the list open and shut', async () => {
         render(UtilRail);
         render(CallsignStackPanel);
         callsignStack.push('G0ABC');
         flushSync();
-        expect(screen.queryByLabelText('Pile-up')).not.toBeNull();
+        const openState = (): string | null | undefined =>
+            screen.queryByLabelText('Pile-up')?.getAttribute('data-open');
+        expect(openState()).toBe('true');
 
         (await screen.findByTitle('Pile-up')).click();
         flushSync();
-        expect(screen.queryByLabelText('Pile-up')).toBeNull();
+        expect(openState()).toBe('false');
 
         (await screen.findByTitle('Pile-up')).click();
         flushSync();
-        expect(screen.queryByLabelText('Pile-up')).not.toBeNull();
+        expect(openState()).toBe('true');
     });
 
     /*
@@ -156,20 +174,51 @@ describe('Phone/CW pile-up rail affordance', () => {
         bindings are written down. That is the whole payload.
     */
     it('P13: opens an empty list, showing how to fill it, and closes again', async () => {
+        operate.callStack = false; // A23: the shipped default
         render(UtilRail);
         render(CallsignStackPanel);
         flushSync();
         expect(callsignStack.items).toEqual([]);
 
-        // Default is open, so the first click CLOSES.
-        (await screen.findByTitle('Pile-up')).click();
-        flushSync();
-        expect(screen.queryByLabelText('Pile-up')).toBeNull();
-
         (await screen.findByTitle('Pile-up')).click();
         flushSync();
         const panel = await screen.findByLabelText('Pile-up');
+        expect(panel.getAttribute('data-open')).toBe('true');
         expect(panel.textContent).toContain('Shift+Enter');
+
+        (await screen.findByTitle('Pile-up')).click();
+        flushSync();
+        expect(panel.getAttribute('data-open')).toBe('false');
+    });
+
+    // A22 + A23. Placement is what the operator sees move; these pin the two
+    // things that make it a DRAWER rather than a card in the column.
+    /*
+        jsdom does no layout, so "slides in beside the rail" is not directly
+        observable. The two things that ARE: it lives outside the workflow
+        column (so it cannot reflow the cards), and it carries the shared
+        `.pileup-drawer` positioning contract — the same class FT8's drawer
+        uses, which is what puts it against the rail's inside edge.
+
+        Note the first assertion needs `[data-surface]`, not `[data-card]`: as a
+        card the panel was a SIBLING of the data-card divs, never inside one, so
+        a closest('[data-card]') check passed in both placements and proved
+        nothing.
+    */
+    it('P14: is a drawer beside the rail, not a card in the content column', () => {
+        const { container } = render(Operate);
+        flushSync();
+
+        const drawer = container.querySelector('aside[data-list="calls"]');
+        expect(drawer).not.toBeNull();
+        expect(drawer?.closest('[data-surface="workflow"]')).toBeNull();
+        expect(drawer?.classList.contains('pileup-drawer')).toBe(true);
+    });
+
+    // The SHIPPED default, captured at import — asserting it after beforeEach
+    // has set the flag would only re-read the setup.
+    it('P15: ships closed, so arriving in Phone/CW does not push the content across', () => {
+        expect(SHIPPED_CALLSTACK_DEFAULT).toBe(false);
     });
 
     // Closing the list must not hide the FACT that calls are waiting — that is
@@ -216,10 +265,11 @@ describe("FT8's pile-up drawer stays in FT8", () => {
     });
 
     it('P8: Phone/CW renders no FT8 pile-up drawer', () => {
-        render(Operate);
+        const { container } = render(Operate);
         flushSync();
-        // The drawer marks itself open/closed with data-open; in Phone/CW it is
-        // not in the tree at all, so nothing carries that attribute.
-        expect(document.querySelector('aside[data-open]')).toBeNull();
+        // Both drawers are <aside data-open>, so they are told apart by WHICH
+        // list they show: FT8's callers vs Phone/CW's stacked calls.
+        expect(container.querySelector('aside[data-list="callers"]')).toBeNull();
+        expect(container.querySelector('aside[data-list="calls"]')).not.toBeNull();
     });
 });

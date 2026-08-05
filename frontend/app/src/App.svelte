@@ -52,7 +52,10 @@
     $effect(() => {
         const railOn = router.view === 'operate';
         document.documentElement.dataset.rail = railOn ? 'on' : '';
-        document.documentElement.dataset.drawer = railOn && operate.pileup ? 'open' : '';
+        // Either workspace's pile-up drawer offsets the content: FT8's caller
+        // queue or Phone/CW's callsign stack. They are never both mounted.
+        const drawerOpen = router.mode === 'ft8' ? operate.pileup : operate.callStack;
+        document.documentElement.dataset.drawer = railOn && drawerOpen ? 'open' : '';
     });
 
     const titles: Record<View, string> = {

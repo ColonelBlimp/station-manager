@@ -7,10 +7,12 @@ export const operate = $state({
     pileup: false,
     // Phone/CW's callsign stack (a DIFFERENT list from FT8's queue above, and a
     // different flag on purpose: one toggle driving both would mean opening the
-    // list here moved FT8's drawer on the next mode switch). Open by default —
-    // the rail icon carries the depth either way, so closing it never hides the
-    // fact that calls are waiting.
-    callStack: true,
+    // list here moved FT8's drawer on the next mode switch). CLOSED by default,
+    // like FT8's: it is a drawer that pushes the content across, so opening
+    // itself on every arrival in Phone/CW to show an empty list would be rude.
+    // The rail icon carries the depth, so a closed drawer never hides the fact
+    // that calls are waiting.
+    callStack: false,
     // Export/email dialog (opened from the Session tile's header action).
     exportOpen: false,
 });

@@ -25,15 +25,13 @@
     <!-- Responsive flow, matching FT8 (ADR 0058 retired the tile board). The
          data-card marker is the test seam for "this panel is on the surface";
          nothing positions by it. -->
-    <div class="mx-auto flex w-full max-w-3xl flex-col gap-3 px-3 py-3">
+    <div data-surface="workflow" class="mx-auto flex w-full max-w-3xl flex-col gap-3 px-3 py-3">
         {#each WORKFLOW_TILES as id (id)}
             {#if isVisible(id)}
                 {@const Card = TILES[id].component}
                 <div data-card={id}><Card /></div>
             {/if}
         {/each}
-        <!-- Data-driven: present only while calls are stacked (Shift+Enter). -->
-        <CallsignStackPanel />
     </div>
 {:else}
     <Ft8View />
@@ -47,6 +45,8 @@
      Phone/CW has its own pile-up (CallsignStackPanel), which needs no toggle. -->
 {#if router.mode === 'ft8'}
     <PileupDrawer />
+{:else}
+    <CallsignStackPanel />
 {/if}
 <ExportDialog />
 
