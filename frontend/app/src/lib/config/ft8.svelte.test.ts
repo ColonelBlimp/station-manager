@@ -408,6 +408,29 @@ describe('ft8 settings — an ambiguous write (clean-room review 569b2236 P2)', 
         expect(seen.at(-1)?.feedMode).toBe('single');
     });
 
+    it('W17: a value the daemon NORMALISES is not reported as missing', async () => {
+        /*
+            Clean-room review e41425f1 P2. The verdict cannot be "does the
+            draft equal what is stored?", because the daemon normalises on the
+            way in — a row cap of 5 is stored as 10, a host is trimmed. Every
+            such save would then be reported as not landed, with the form left
+            dirty and the operator told to retry a write that had succeeded.
+
+            The sound question is whether the daemon's state MOVED from what we
+            held before the write. Nobody else is writing, so it moved because
+            of us — and the response is then authoritative, exactly as on the
+            unambiguous success path.
+        */
+        mockTimedOutPut({ ...CONFIG, ft8_display: { ...CONFIG.ft8_display, history_max: 10 } });
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.historyMax = '5'; // below the daemon's clamp floor
+        await ft8SettingsState.save();
+
+        expect(lastToast()).not.toMatch(/does NOT have|press Save again/i);
+        expect(ft8SettingsState.draft.historyMax).toBe('10'); // what was stored
+        expect(ft8SettingsState.dirty).toBe(false);
+    });
+
     it('W16: a genuine connection failure is still a failure, not an unknown', async () => {
         vi.stubGlobal(
             'fetch',

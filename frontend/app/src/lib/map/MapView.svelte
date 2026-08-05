@@ -13,6 +13,7 @@
     import WorldMap from './WorldMap.svelte';
     import { mapData, setDuration, startMapData, DURATIONS } from './mapData.svelte';
     import { bandColor, bandRank, normalizeBand } from './bandColors';
+    import { fanBows } from './engine';
     import { operatingBands } from '../operate/rig.svelte';
     import { storageGet, storageSet } from '../utils/storage';
 
@@ -58,18 +59,29 @@
     const arcs = $derived.by(() => {
         const origin = mapData.origin;
         if (origin === null) return [];
+        // Several QSOs with ONE station resolve to the SAME point, so their
+        // arcs were byte-identical and painted exactly on top of each other —
+        // six contacts drew five visible arcs, and the one you lost was the
+        // older band (newest paints last). Fan them apart; a destination
+        // worked once still draws the plain great circle.
+        //
+        // Keyed on the RESOLVED point, not the callsign: the same operator
+        // from two locations belongs on two paths, and two different calls at
+        // one grid centre genuinely do overlap.
+        const bows = fanBows(visible.map((q) => `${q.point.lat},${q.point.lon}`));
         // Oldest-first so the NEWEST contact's arc paints last — SVG paint order
         // is document order, so a fresh QSO should sit on top of the older ones,
         // not under them. mapData.qsos is newest-first (newest-first paging), so
         // reverse the mapped arcs; .map() already returns a fresh array, so this
         // in-place reverse never touches mapData.qsos.
         return visible
-            .map((q) => ({
+            .map((q, i) => ({
                 key: q.key,
                 from: origin,
                 to: q.point,
                 label: q.label,
                 color: bandColor(q.band, mapData.bandColors),
+                bow: bows[i],
             }))
             .reverse();
     });

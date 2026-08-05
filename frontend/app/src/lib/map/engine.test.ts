@@ -8,6 +8,8 @@ import {
     createEngine,
     worldCountries,
     arcPath,
+    bowedArc,
+    fanBows,
     sampleArc,
     project,
     geometryPath,
@@ -16,6 +18,7 @@ import {
     subsolarPoint,
     SPHERE,
     TWILIGHT_RADII,
+    type LatLon,
 } from './engine';
 
 const W = 960;
@@ -181,5 +184,123 @@ describe('subsolarPoint / nightCap (grey line)', () => {
         const lats = ring.map((c) => c[1]);
         expect(Math.max(...lats)).toBeGreaterThan(85);
         expect(Math.min(...lats)).toBeLessThan(-85);
+    });
+});
+
+/*
+    FANNED ARCS — several QSOs with the SAME station (dogfood 2026-08-05).
+
+    Two contacts with one station resolve to the same point, so their arcs
+    were byte-identical and painted exactly on top of each other: six QSOs
+    drew five visible arcs, and the hidden one was the OLDER band (paint
+    order puts the newest on top). The legend counted both; the picture did
+    not.
+
+    ACCEPTANCE CRITERIA (operator-observable, before any mechanism):
+
+        M1  When I work the same station twice, the map draws two
+            DISTINGUISHABLE arcs — the arcs I can see match the plotted
+            count.
+        M2  When a destination has only one QSO, its arc is unchanged. I
+            can tell "duplicates fan out" apart from "everything is now
+            slightly bent".
+        M3  A fanned arc still starts at my QTH and ends ON the station —
+            I can tell a BOWED arc apart from a MOVED one.
+
+    The rules below pin the geometry; the DOM half (that two same-point
+    QSOs actually render two different paths) is in MapView.svelte.test.ts,
+    because only there is "what the operator sees" observable.
+
+    NO TOLERANCE IS INVENTED for "the same destination": it is exact
+    equality of the resolved point. Arcs to merely NEARBY points already
+    draw distinguishably, so there is nothing for a threshold to decide.
+*/
+describe('bowed arcs (fanning duplicate destinations)', () => {
+    const engine = createEngine(W, H);
+
+    it('M2: a zero bow is the plain two-point geodesic, unchanged', () => {
+        // Compared against the LITERAL two-point line rather than against
+        // arcPath's own default argument. The obvious spelling —
+        // arcPath(a,b,0) === arcPath(a,b) — compares the function to itself
+        // and passes no matter what it does; its reversion proof caught that.
+        //
+        // Byte-identical matters here: every single-QSO arc goes through this,
+        // and d3's ADAPTIVE sampling of a two-point line draws a better great
+        // circle than the fixed step count bowedArc has to use.
+        const straight = engine.path({
+            type: 'LineString',
+            coordinates: [
+                [LILONGWE.lon, LILONGWE.lat],
+                [LONDON.lon, LONDON.lat],
+            ],
+        });
+        expect(arcPath(engine, LILONGWE, LONDON, 0)).toBe(straight);
+        expect(arcPath(engine, LILONGWE, LONDON)).toBe(straight);
+    });
+
+    it('M1: a non-zero bow draws a different path', () => {
+        const straight = arcPath(engine, LILONGWE, LONDON);
+        const bowed = arcPath(engine, LILONGWE, LONDON, 0.05);
+        expect(bowed).not.toBeNull();
+        expect(bowed).not.toBe(straight);
+    });
+
+    it('M1: opposite bows go to opposite sides of the great circle', () => {
+        // Same magnitude, mirrored — otherwise a "fan" could put both arcs on
+        // the same side, which separates them from the straight path but not
+        // from EACH OTHER, and that is the bug.
+        const mid = (bow: number): LatLon => bowedArc(LILONGWE, LONDON, bow, 8)[4];
+        const left = mid(0.05);
+        const right = mid(-0.05);
+        const centre = mid(0);
+        expect(left.lat).not.toBeCloseTo(right.lat, 3);
+        // The straight arc's midpoint sits BETWEEN them.
+        expect(Math.sign(left.lat - centre.lat)).toBe(-Math.sign(right.lat - centre.lat));
+    });
+
+    it('M3: the endpoints are exact for any bow', () => {
+        for (const bow of [-0.2, -0.05, 0, 0.05, 0.2]) {
+            const pts = bowedArc(LILONGWE, TOKYO, bow, 16);
+            expect(pts[0].lat).toBeCloseTo(LILONGWE.lat, 9);
+            expect(pts[0].lon).toBeCloseTo(LILONGWE.lon, 9);
+            expect(pts.at(-1)!.lat).toBeCloseTo(TOKYO.lat, 9);
+            expect(pts.at(-1)!.lon).toBeCloseTo(TOKYO.lon, 9);
+        }
+    });
+
+    it('M3: a degenerate pair (same point both ends) does not explode', () => {
+        // No great-circle plane exists, so there is no direction to bow in.
+        const pts = bowedArc(LONDON, LONDON, 0.05, 8);
+        expect(pts.every((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon))).toBe(true);
+        expect(arcPath(engine, LONDON, LONDON, 0.05)).not.toBeUndefined();
+    });
+});
+
+describe('fanBows', () => {
+    it('leaves distinct destinations straight', () => {
+        expect(fanBows(['a', 'b', 'c'])).toEqual([0, 0, 0]);
+    });
+
+    it('M1: splits a duplicated destination symmetrically about the true path', () => {
+        const [x, y] = fanBows(['a', 'a']);
+        expect(x).not.toBe(0);
+        expect(x).toBe(-y); // mirrored, so the straight path stays the axis
+    });
+
+    it('keeps the middle arc straight when three share a destination', () => {
+        const [x, y, z] = fanBows(['a', 'a', 'a']);
+        expect(y).toBe(0);
+        expect(x).toBe(-z);
+        expect(Math.abs(x)).toBeGreaterThan(0);
+    });
+
+    it('fans each destination independently, in render order', () => {
+        // Interleaved on purpose: a per-destination counter that walked the
+        // list assuming duplicates were adjacent would pass a grouped fixture.
+        expect(fanBows(['a', 'b', 'a'])).toEqual([
+            ...fanBows(['a', 'a']).slice(0, 1),
+            0,
+            fanBows(['a', 'a'])[1],
+        ]);
     });
 });

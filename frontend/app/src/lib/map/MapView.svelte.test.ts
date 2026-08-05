@@ -287,3 +287,94 @@ describe('MapView band filter', () => {
         expect(screen.getByTestId('plotted').textContent).toContain('of 3');
     });
 });
+
+/*
+    FANNED DUPLICATE DESTINATIONS (dogfood 2026-08-05).
+
+    Working one station on two bands resolves both QSOs to the same point, so
+    the arcs were byte-identical and painted exactly on top of each other: the
+    map drew 5 arcs for 6 contacts while the legend counted all 6. The hidden
+    one was the OLDER band, because paint order puts the newest on top.
+
+    FIXTURE: both rows carry the SAME grid and no lat/lon, so the resolved
+    points are identical. With different grids the paths would differ whatever
+    the implementation did, and the rule would prove nothing — which is exactly
+    the shape of decoration test this file has been bitten by before.
+*/
+describe('MapView — several QSOs with one station', () => {
+    it('M1/M3: draws distinguishable arcs that still share both endpoints', async () => {
+        const ts = nowAdif();
+        fetchQsoPage.mockResolvedValue({
+            kind: 'ok',
+            items: [
+                { id: 2, uuid: 'u2', call: 'CX6TU', gridsquare: 'GF25', band: '40m', ...ts },
+                { id: 1, uuid: 'u1', call: 'CX6TU', gridsquare: 'GF25', band: '80m', ...ts },
+            ],
+            nextCursor: null,
+        });
+
+        const { container } = render(MapView);
+        const plotted = await screen.findByTestId('plotted');
+        expect(plotted.textContent).toContain('2 of 2 plotted');
+
+        const ds = [...container.querySelectorAll('[data-testid="arc"] path')].map(
+            (p) => p.getAttribute('d') ?? ''
+        );
+        expect(ds).toHaveLength(2);
+        // M1 — two arcs the operator can actually tell apart.
+        expect(ds[0]).not.toBe(ds[1]);
+
+        // M3 — bowed, not moved: both still leave the QTH and land on CX6TU.
+        const ends = (d: string): [string, string] => {
+            const pts = d.match(/-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?/g) ?? [];
+            return [pts[0] ?? '', pts.at(-1) ?? ''];
+        };
+        const [startA, endA] = ends(ds[0]);
+        const [startB, endB] = ends(ds[1]);
+        expect(startA).toBe(startB);
+        expect(endA).toBe(endB);
+        expect(endA).not.toBe('');
+    });
+
+    it('M2: fanning applies per destination — a lone arc is untouched, a duplicated one is not', async () => {
+        const ts = nowAdif();
+        const page = (items: unknown[]) => ({ kind: 'ok', items, nextCursor: null });
+        const solo = { id: 1, uuid: 'u1', call: 'G4ABC', gridsquare: 'IO91', band: '20m', ...ts };
+        const cx40 = { id: 2, uuid: 'u2', call: 'CX6TU', gridsquare: 'GF25', band: '40m', ...ts };
+        const cx80 = { id: 3, uuid: 'u3', call: 'CX6TU', gridsquare: 'GF25', band: '80m', ...ts };
+
+        // Reference renders: each destination ALONE, so nothing can be fanned.
+        const drawnAlone = async (row: unknown): Promise<string> => {
+            fetchQsoPage.mockResolvedValue(page([row]));
+            const r = render(MapView);
+            await screen.findByTestId('plotted');
+            const d =
+                r.container.querySelector('[data-testid="arc"] path')?.getAttribute('d') ?? '';
+            r.unmount();
+            expect(d).not.toBe('');
+            return d;
+        };
+        const soloAlone = await drawnAlone(solo);
+        const cxAlone = await drawnAlone(cx40);
+
+        // Now all three together. BOTH directions in one render, which is the
+        // point: asserting only that the lone arc is unchanged would pass
+        // against an implementation that fanned nothing at all.
+        //
+        // LIMIT, found by reversion proof: this cannot catch a bow applied to
+        // EVERY arc, because the reference renders above would be bowed the
+        // same way and still compare equal. "A lone destination is straight"
+        // in absolute terms is pinned in engine.test.ts, against the literal
+        // two-point geodesic. This rule pins the per-destination part only.
+        fetchQsoPage.mockResolvedValue(page([solo, cx40, cx80]));
+        const all = render(MapView);
+        await screen.findByTestId('plotted');
+        const ds = [...all.container.querySelectorAll('[data-testid="arc"] path')].map(
+            (p) => p.getAttribute('d') ?? ''
+        );
+
+        expect(ds).toHaveLength(3);
+        expect(ds).toContain(soloAlone); // worked once → still the plain geodesic
+        expect(ds.filter((d) => d === cxAlone)).toHaveLength(0); // both CX arcs moved off it
+    });
+});

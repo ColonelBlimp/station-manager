@@ -38,6 +38,10 @@
         label?: string;
         /** Stroke colour (e.g. the band colour); theme accent when absent. */
         color?: string;
+        /** Lateral bow, so several QSOs with ONE station don't draw the same
+         *  path on top of itself. 0 (the default) is the plain great circle —
+         *  the parent decides, because only it can see the other arcs. */
+        bow?: number;
     }
 
     interface Props {
@@ -83,7 +87,7 @@
     const originXY = $derived(origin === null ? null : project(engine, origin));
     const drawnArcs = $derived(
         arcs.flatMap((a) => {
-            const d = arcPath(engine, a.from, a.to);
+            const d = arcPath(engine, a.from, a.to, a.bow ?? 0);
             const end = project(engine, a.to);
             return d === null || end === null
                 ? []

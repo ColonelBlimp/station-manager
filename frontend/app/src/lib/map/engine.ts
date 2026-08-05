@@ -100,15 +100,138 @@ export function geometryPath(engine: MapEngine, geom: object): string | null {
  * the great circle and clips at the antimeridian (a Pacific-crossing
  * arc renders as two segments, not a horizontal smear across the map).
  */
-export function arcPath(engine: MapEngine, from: LatLon, to: LatLon): string | null {
+export function arcPath(engine: MapEngine, from: LatLon, to: LatLon, bow = 0): string | null {
+    // bow 0 keeps the ORIGINAL two-point line, not a sampled approximation of
+    // it: every single-QSO arc goes through here, and d3's adaptive sampling
+    // draws a better great circle than any fixed step count we would pick.
     const line: LineString = {
         type: 'LineString',
-        coordinates: [
-            [from.lon, from.lat],
-            [to.lon, to.lat],
-        ],
+        coordinates:
+            bow === 0
+                ? [
+                      [from.lon, from.lat],
+                      [to.lon, to.lat],
+                  ]
+                : bowedArc(from, to, bow).map((p) => [p.lon, p.lat]),
     };
     return engine.path(line);
+}
+
+/**
+ * Spread between adjacent arcs that share a destination, as a fraction of the
+ * arc's OWN angular length.
+ *
+ * Proportional rather than absolute so the fan reads the same on a 500 km hop
+ * and a 15 000 km path — a fixed angular offset is invisible on one and absurd
+ * on the other. EYEBALL THIS: it is a visual judgement, not a derived value.
+ */
+export const FAN_SPREAD = 0.05;
+
+/**
+ * Sample a great circle from `from` to `to`, bowed to one side.
+ *
+ * Exists because several QSOs with the same station resolve to the same point,
+ * so their arcs were identical and painted exactly on top of one another — the
+ * map drew five arcs for six contacts and the hidden one was the older band.
+ *
+ * The displacement is perpendicular to the great-circle PLANE and scaled by
+ * sin(πt), so it vanishes at both ends: the arc bows, it never moves. A
+ * positive bow goes to one side of the true path and a negative bow to the
+ * other, which is what lets a pair straddle it rather than both leaning the
+ * same way (the latter separates each from the true path but not from each
+ * other — the bug restated).
+ *
+ * `steps` is fixed rather than adaptive: these paths are always short-lived
+ * render output, and the alternative — asking d3 to adaptively resample a
+ * curve that is no longer a geodesic — is not something d3-geo offers.
+ */
+export function bowedArc(from: LatLon, to: LatLon, bow: number, steps = 48): LatLon[] {
+    const a = toVec(from);
+    const b = toVec(to);
+    // Normal to the plane the two points define. Its LENGTH is sin(angle), so
+    // it goes to zero for identical or antipodal endpoints — there is then no
+    // unique great circle and so no side to bow toward. Fall through straight.
+    const n: Vec3 = [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ];
+    const nLen = Math.hypot(n[0], n[1], n[2]);
+    const interp = geoInterpolate([from.lon, from.lat], [to.lon, to.lat]);
+    const sample = (t: number): LatLon => {
+        const [lon, lat] = interp(t);
+        return { lat, lon };
+    };
+    if (bow === 0 || nLen === 0) {
+        return Array.from({ length: steps + 1 }, (_, i) => sample(i / steps));
+    }
+    // atan2(sin, cos) rather than acos: stable for the near-antipodal arcs a
+    // 7Q station actually works.
+    const angle = Math.atan2(nLen, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+    const amplitude = bow * angle;
+    const un: Vec3 = [n[0] / nLen, n[1] / nLen, n[2] / nLen];
+
+    const out: LatLon[] = [];
+    for (let i = 0; i <= steps; i++) {
+        // Endpoints are copied, not computed: "ends ON the station" is the
+        // difference between a bowed arc and a moved one, and it should not
+        // rest on floating-point luck at t=0 and t=1.
+        if (i === 0) {
+            out.push({ ...from });
+            continue;
+        }
+        if (i === steps) {
+            out.push({ ...to });
+            continue;
+        }
+        const t = i / steps;
+        const p = toVec(sample(t));
+        const w = amplitude * Math.sin(Math.PI * t);
+        const v: Vec3 = [p[0] + un[0] * w, p[1] + un[1] * w, p[2] + un[2] * w];
+        const len = Math.hypot(v[0], v[1], v[2]);
+        out.push(toLatLon([v[0] / len, v[1] / len, v[2] / len]));
+    }
+    return out;
+}
+
+/**
+ * Bow for each arc, given its destination key in RENDER ORDER.
+ *
+ * A destination with one contact gets 0 — the overwhelmingly common case must
+ * draw exactly what it drew before. Duplicates are spread symmetrically about
+ * the true path, so with three the middle one is still the geodesic.
+ *
+ * "Same destination" is EXACT equality of the key the caller builds from the
+ * resolved point. No proximity tolerance: arcs to merely nearby points are
+ * already distinguishable, so there is nothing for a threshold to decide, and
+ * inventing one would start bending arcs that were never superimposed.
+ */
+export function fanBows(destKeys: string[]): number[] {
+    const total = new Map<string, number>();
+    for (const k of destKeys) total.set(k, (total.get(k) ?? 0) + 1);
+    // Counted per key rather than by walking runs: the render order is by TIME,
+    // so two contacts with one station are usually NOT adjacent.
+    const seen = new Map<string, number>();
+    return destKeys.map((k) => {
+        const n = total.get(k) ?? 1;
+        if (n === 1) return 0;
+        const i = seen.get(k) ?? 0;
+        seen.set(k, i + 1);
+        return FAN_SPREAD * (i - (n - 1) / 2);
+    });
+}
+
+type Vec3 = [number, number, number];
+
+function toVec(p: LatLon): Vec3 {
+    const la = p.lat * RAD;
+    const lo = p.lon * RAD;
+    const c = Math.cos(la);
+    return [c * Math.cos(lo), c * Math.sin(lo), Math.sin(la)];
+}
+
+function toLatLon(v: Vec3): LatLon {
+    return { lat: Math.asin(v[2]) / RAD, lon: Math.atan2(v[1], v[0]) / RAD };
 }
 
 /**

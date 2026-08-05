@@ -184,11 +184,14 @@ class Ft8SettingsState {
         // with `dirty` at the same moment, leaving nothing to say a restart is
         // still owed.
         const needsRestart = this.restartRequired;
+        // The baseline as it stands BEFORE the write — the only thing a timed-out
+        // save can be judged against (see #reconcileAfterTimeout).
+        const before = this.#pristine;
         try {
             const res = await saveFt8Settings(this.buildPayload());
             if (res.kind === 'error') {
                 if (res.timedOut) {
-                    await this.#reconcileAfterTimeout(needsRestart);
+                    await this.#reconcileAfterTimeout(needsRestart, before);
                     return;
                 }
                 toasts.error(`Save failed: ${res.message}`);
@@ -220,20 +223,29 @@ class Ft8SettingsState {
      * know, and the retry it invites resends all four blocks as whole-block
      * replaces — which can overwrite a change made in between.
      *
-     * So: re-read, and re-baseline the PRISTINE ONLY. The draft is left exactly
-     * as typed — discarding an operator's input on our own guess is the worse
-     * error of the two, and A5 already promises it survives a rejection. With
-     * the baseline refreshed, `dirty` answers the question the timeout left
-     * open: clean means the daemon has their values, dirty means it does not
-     * and Save is still there. The live view is pushed from what is STORED,
-     * never from what was attempted.
+     * So: re-read, and ask whether the daemon's state MOVED from the baseline
+     * we held before the write.
      *
-     * The row cap makes one case imperfect: a value the daemon clamps settles
-     * as still-dirty (draft "5" vs stored "10") even though the write landed.
-     * That errs toward "press Save again", which is a harmless no-op — the
-     * alternative errs toward telling them it saved when it may not have.
+     * The tempting question — "does the stored block equal my draft?" — is
+     * wrong, and was shipped once (clean-room review e41425f1 P2). The daemon
+     * NORMALISES on the way in: a row cap of 5 is stored as 10, a host is
+     * trimmed. Comparing against the raw draft therefore reports every
+     * normalised write as missing, leaving the form dirty and telling the
+     * operator to retry a write that had already succeeded.
+     *
+     * Moved → the write landed (nothing else writes this config), so adopt the
+     * response exactly as the unambiguous success path does; the operator ends
+     * up where they would have been had the response arrived.
+     *
+     * Unchanged → either it never landed or it was a no-op. Keep the draft
+     * exactly as typed and leave the baseline alone, so `dirty` still points at
+     * the difference and Save is one press away. The wording hedges, because
+     * these two are genuinely indistinguishable from here.
+     *
+     * Either way the live view is pushed from what is STORED, never from what
+     * was attempted.
      */
-    async #reconcileAfterTimeout(needsRestart: boolean): Promise<void> {
+    async #reconcileAfterTimeout(needsRestart: boolean, before: string): Promise<void> {
         const out = await fetchFt8Settings();
         if (out.kind === 'error') {
             toasts.error(
@@ -241,12 +253,9 @@ class Ft8SettingsState {
             );
             return;
         }
-        const stored = draftFrom(out.settings);
-        this.#pristine = JSON.stringify(stored);
         onPrefsSaved?.(livePrefs(out.settings.display));
-        // Compared explicitly rather than reading `this.dirty`, so the message
-        // cannot depend on when the derived happens to recompute.
-        if (JSON.stringify(this.draft) === this.#pristine) {
+        if (JSON.stringify(draftFrom(out.settings)) !== before) {
+            this.#apply(out.settings);
             toasts.warn(
                 needsRestart
                     ? 'Save timed out, but the daemon does have your FT8 settings — restart the daemon to apply them.'
@@ -254,7 +263,9 @@ class Ft8SettingsState {
             );
             return;
         }
-        toasts.warn('Save timed out and the daemon does NOT have your changes — press Save again.');
+        toasts.warn(
+            'Save timed out and the daemon does not appear to have your changes — press Save again.'
+        );
     }
 
     /** Revert edits to the last loaded/saved snapshot. */
