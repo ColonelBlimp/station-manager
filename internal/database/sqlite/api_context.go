@@ -1416,7 +1416,10 @@ func (s *Service) writeContactedStation(ctx context.Context, station types.Conta
 	}
 	// One choke point for all three routes above (merge, replace, cold miss):
 	// coordinates must not contradict the gridsquare they are stored beside.
-	row = reconcileStationCoords(row)
+	// The QSO-row write path applies the SAME function from its own choke point
+	// (adapters.QsoTypeToModel) — guarding only this one left the copy that
+	// actually leaves the station unreconciled (dogfood 2026-08-05).
+	row = adapters.ReconcileStationCoords(row)
 	row.LastRefreshedAt = time.Now().UTC()
 
 	model, mErr := adapters.ContactedStationTypeToModel(row)

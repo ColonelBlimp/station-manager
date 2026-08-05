@@ -431,6 +431,66 @@ describe('ft8 settings — an ambiguous write (clean-room review 569b2236 P2)', 
         expect(ft8SettingsState.dirty).toBe(false);
     });
 
+    it('W18: another client’s change is not proof that MY save landed', async () => {
+        /*
+            Clean-room review f5ff2df5 P2. "The stored block differs from my
+            baseline" is not the same claim as "my write landed" — the config
+            SPA is still served at /config/ until its General tab is ported, so
+            a second writer genuinely exists. Treating any movement as success
+            would replace the operator's draft with the other client's values
+            and announce it as theirs.
+
+            So the question narrows to the FIELDS THIS SAVE CHANGED: did they
+            move? That needs no knowledge of the daemon's normalisation — only
+            whether what we asked to change is now different from what was
+            there. Someone else editing a DIFFERENT field no longer counts.
+
+            FIXTURE: the reconcile GET moves pskHost (someone else) while
+            leaving feed_mode — the field this save edited — untouched. With a
+            fixture that moved the edited field too, "landed" and "someone
+            else wrote" would be indistinguishable and the rule would prove
+            nothing.
+        */
+        mockTimedOutPut({
+            ...CONFIG,
+            psk_reporter: { ...CONFIG.psk_reporter, host: 'someone-else.example.org' },
+        });
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.feedMode = 'accumulate';
+        await ft8SettingsState.save();
+
+        expect(ft8SettingsState.draft.feedMode).toBe('accumulate'); // never discarded
+        expect(ft8SettingsState.dirty).toBe(true);
+        expect(lastToast()).not.toMatch(/does have your/i);
+    });
+
+    it('W19: a PARTIAL move is not this save’s signature either', async () => {
+        /*
+            Added because W18's reversion proof did not fail when `every` was
+            swapped for `some` — the code drew a distinction no rule pinned.
+
+            A PUT is atomic, so our write cannot have landed halfway. Two
+            edited fields with only one of them moved therefore means someone
+            else moved it, and adopting the response would discard the other
+            edit. `every` also carries a false NEGATIVE — an edit the daemon
+            normalises back to its existing value never moves — but that costs
+            one redundant Save press, where a false positive costs the
+            operator's typed input.
+        */
+        mockTimedOutPut({
+            ...CONFIG,
+            ft8_display: { ...CONFIG.ft8_display, feed_mode: 'accumulate' },
+        });
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.feedMode = 'accumulate'; // moved in the response
+        ft8SettingsState.draft.pskHost = 'mine.example.org'; // did NOT move
+        await ft8SettingsState.save();
+
+        expect(ft8SettingsState.draft.pskHost).toBe('mine.example.org');
+        expect(ft8SettingsState.dirty).toBe(true);
+        expect(lastToast()).not.toMatch(/does have your/i);
+    });
+
     it('W16: a genuine connection failure is still a failure, not an unknown', async () => {
         vi.stubGlobal(
             'fetch',

@@ -28,6 +28,17 @@ import (
 func QsoTypeToModel(qso types.Qso) (models.Qso, error) {
 	const op errors.Op = "sqlite.adapters.QsoTypeToModel"
 
+	// Coordinates must not contradict the gridsquare stored beside them. Applied
+	// HERE because all five QSO write paths (Insert/Update × context/tx, plus the
+	// manifest restore) convert through this function, and the defect this fixes
+	// existed precisely because one call site was the entire mechanism. Ahead of
+	// both the blob marshal and the promoted-column reads below, so the stored
+	// row is reconciled whichever copy a reader takes.
+	//
+	// The QSO row is the one that leaves the station: ADIF export reads it, and
+	// the forwarding worker re-reads it from the database before submitting.
+	qso.ContactedStation = ReconcileStationCoords(qso.ContactedStation)
+
 	// qso.QsoDetails.Freq is the ADIF-native MHz decimal string (e.g.
 	// "14.074"). The sqlite schema stores integer kHz; convert here at the
 	// type→model boundary.

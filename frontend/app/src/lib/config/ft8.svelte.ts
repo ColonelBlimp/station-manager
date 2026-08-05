@@ -184,9 +184,11 @@ class Ft8SettingsState {
         // with `dirty` at the same moment, leaving nothing to say a restart is
         // still owed.
         const needsRestart = this.restartRequired;
-        // The baseline as it stands BEFORE the write — the only thing a timed-out
-        // save can be judged against (see #reconcileAfterTimeout).
-        const before = this.#pristine;
+        // The baseline as it stands BEFORE the write — what a timed-out save is
+        // judged against (see #reconcileAfterTimeout). Parsed from the pristine
+        // snapshot rather than aliasing `this.draft`, which the reconcile needs
+        // to compare against and which stays live throughout.
+        const before = JSON.parse(this.#pristine) as Ft8Draft;
         try {
             const res = await saveFt8Settings(this.buildPayload());
             if (res.kind === 'error') {
@@ -223,29 +225,41 @@ class Ft8SettingsState {
      * know, and the retry it invites resends all four blocks as whole-block
      * replaces — which can overwrite a change made in between.
      *
-     * So: re-read, and ask whether the daemon's state MOVED from the baseline
-     * we held before the write.
+     * So: re-read, and ask whether THE FIELDS THIS SAVE CHANGED have moved.
      *
-     * The tempting question — "does the stored block equal my draft?" — is
-     * wrong, and was shipped once (clean-room review e41425f1 P2). The daemon
-     * NORMALISES on the way in: a row cap of 5 is stored as 10, a host is
-     * trimmed. Comparing against the raw draft therefore reports every
-     * normalised write as missing, leaving the form dirty and telling the
-     * operator to retry a write that had already succeeded.
+     * Two narrower questions were tried first and both were wrong:
      *
-     * Moved → the write landed (nothing else writes this config), so adopt the
-     * response exactly as the unambiguous success path does; the operator ends
-     * up where they would have been had the response arrived.
+     *   "Does the stored block equal my draft?" (clean-room review e41425f1
+     *   P2) — the daemon NORMALISES on the way in: a row cap of 5 is stored as
+     *   10, a host is trimmed. Every normalised write then reports as missing,
+     *   leaving the form dirty and the operator retrying a write that had
+     *   succeeded.
      *
-     * Unchanged → either it never landed or it was a no-op. Keep the draft
-     * exactly as typed and leave the baseline alone, so `dirty` still points at
-     * the difference and Save is one press away. The wording hedges, because
-     * these two are genuinely indistinguishable from here.
+     *   "Does the stored block differ from my baseline?" (clean-room review
+     *   f5ff2df5 P2) — that is movement by ANYONE. The standalone config SPA
+     *   is still served at /config/ until its General tab is ported, so a
+     *   second writer genuinely exists; its change would be read as proof of
+     *   ours, replacing the operator's draft with someone else's values and
+     *   announcing them as theirs.
+     *
+     * Asking only about the edited fields needs no knowledge of the daemon's
+     * normalisation — just whether what we asked to change is now different
+     * from what was there. Someone editing a different field no longer counts.
+     * A second client editing THE SAME field in this window is genuinely
+     * indistinguishable, and nothing available here can separate them.
+     *
+     * Moved → the write landed; adopt the response exactly as the unambiguous
+     * success path does, so the operator ends up where they would have been
+     * had the response arrived (including the daemon's clamped value).
+     *
+     * Otherwise → keep the draft exactly as typed, leave the baseline alone so
+     * `dirty` still points at the difference, and hedge the wording. Never
+     * discard typed input on an inference.
      *
      * Either way the live view is pushed from what is STORED, never from what
      * was attempted.
      */
-    async #reconcileAfterTimeout(needsRestart: boolean, before: string): Promise<void> {
+    async #reconcileAfterTimeout(needsRestart: boolean, before: Ft8Draft): Promise<void> {
         const out = await fetchFt8Settings();
         if (out.kind === 'error') {
             toasts.error(
@@ -254,7 +268,7 @@ class Ft8SettingsState {
             return;
         }
         onPrefsSaved?.(livePrefs(out.settings.display));
-        if (JSON.stringify(draftFrom(out.settings)) !== before) {
+        if (editedFieldsMoved(before, this.draft, draftFrom(out.settings))) {
             this.#apply(out.settings);
             toasts.warn(
                 needsRestart
@@ -300,6 +314,25 @@ class Ft8SettingsState {
         this.draft = draftFrom(s);
         this.#pristine = JSON.stringify(this.draft);
     }
+}
+
+/**
+ * Whether every field this save asked to change is now different from what was
+ * there before it — the closest thing to "my write landed" available after a
+ * timeout (see #reconcileAfterTimeout).
+ *
+ * EVERY edited field, not any: a partial move is not this save's signature, and
+ * treating it as one is how another client's edit gets adopted as ours.
+ *
+ * False when nothing was edited. That cannot happen through save() (it refuses
+ * a clean draft), but "no request, therefore success" is the wrong default for
+ * a helper that decides whether to overwrite the operator's form.
+ */
+function editedFieldsMoved(before: Ft8Draft, draft: Ft8Draft, stored: Ft8Draft): boolean {
+    const edited = (Object.keys(before) as (keyof Ft8Draft)[]).filter(
+        (k) => draft[k] !== before[k]
+    );
+    return edited.length > 0 && edited.every((k) => stored[k] !== before[k]);
 }
 
 /** The stored display block as the live view's setter takes it. history_max is
