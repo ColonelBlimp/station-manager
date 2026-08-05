@@ -96,15 +96,80 @@ describe('Phone/CW pile-up panel', () => {
     });
 });
 
+/*
+    A21, from operating 2026-08-05 — the deploy that removed FT8's rail icon
+    from Phone/CW left NO affordance there at all: with an empty stack there was
+    nothing on screen to say the pile-up exists. v1 got away with that because it
+    never had a rail icon; v2 did, so removing it read as a regression.
+
+      A21 In Phone/CW the rail always shows a pile-up icon with the number of
+          calls stacked, and clicking it opens or closes the list. Apart from a
+          feature I can only find by already knowing the shortcut, and apart
+          from closing the list losing track of what is in it.
+
+    Safe to make it openable-while-empty because the trap was never the empty
+    panel — it was `operate.pileup` gating the logging shortcuts inside
+    LoggingCard, which is gone. This uses its OWN flag regardless, so toggling
+    the Phone/CW list can never move FT8's drawer.
+*/
+describe('Phone/CW pile-up rail affordance', () => {
+    it('P9: shows a pile-up icon in Phone/CW even with nothing stacked', async () => {
+        render(UtilRail);
+        flushSync();
+        expect(await screen.findByTitle('Pile-up')).toBeTruthy();
+    });
+
+    it('P10: the icon toggles the list', async () => {
+        render(UtilRail);
+        render(CallsignStackPanel);
+        callsignStack.push('G0ABC');
+        flushSync();
+        expect(screen.queryByLabelText('Pile-up')).not.toBeNull();
+
+        (await screen.findByTitle('Pile-up')).click();
+        flushSync();
+        expect(screen.queryByLabelText('Pile-up')).toBeNull();
+
+        (await screen.findByTitle('Pile-up')).click();
+        flushSync();
+        expect(screen.queryByLabelText('Pile-up')).not.toBeNull();
+    });
+
+    // Closing the list must not hide the FACT that calls are waiting — that is
+    // what makes closing it safe mid-pile-up.
+    it('P11: the icon carries the stacked count even while the list is closed', async () => {
+        render(UtilRail);
+        callsignStack.push('G0ABC');
+        callsignStack.push('M0XYZ');
+        flushSync();
+
+        (await screen.findByTitle('Pile-up')).click(); // close it
+        flushSync();
+
+        expect((await screen.findByTitle('Pile-up')).textContent).toContain('2');
+    });
+
+    // No cross-talk: the two modes' toggles are separate pieces of state, so
+    // closing one cannot open or close the other.
+    it('P12: toggling the Phone/CW list leaves FT8s drawer state alone', async () => {
+        render(UtilRail);
+        flushSync();
+        operate.pileup = true; // FT8's drawer, open
+
+        (await screen.findByTitle('Pile-up')).click();
+        flushSync();
+
+        expect(operate.pileup).toBe(true);
+    });
+});
+
 describe("FT8's pile-up drawer stays in FT8", () => {
     // A9. The drawer's own aria-label is "Pile-up" on an <aside>; the panel
     // above uses the same label on a <section>, so these assert on the RAIL
     // button and the drawer's toggle state, which only FT8 can reach.
-    it('P6: Phone/CW offers no rail button for the FT8 pile-up', () => {
-        render(UtilRail);
-        flushSync();
-        expect(screen.queryByTitle('Pile-up')).toBeNull();
-    });
+    // P6 used to assert Phone/CW had NO rail button at all. A21 reversed that —
+    // it now has its own. What must still hold is that the button there drives
+    // the CALLSIGN STACK and never FT8's queue; P12 above pins that.
 
     it('P7: FT8 still offers it', async () => {
         router.mode = 'ft8';

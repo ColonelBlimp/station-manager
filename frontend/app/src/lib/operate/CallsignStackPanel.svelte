@@ -17,7 +17,7 @@
     */
     import { callsignStack } from './callsignStack.svelte';
     import { draft } from './qso.svelte';
-    import { focusCallsign } from './state.svelte';
+    import { focusCallsign, operate } from './state.svelte';
 
     function pop(index: number): void {
         const call = callsignStack.popAt(index);
@@ -27,7 +27,7 @@
     }
 </script>
 
-{#if callsignStack.items.length > 0}
+{#if callsignStack.items.length > 0 && operate.callStack}
     <section class="card" aria-label="Pile-up">
         <div class="flex items-center justify-between">
             <h3 class="text-sm font-semibold text-ink">

@@ -5,6 +5,12 @@
 
 export const operate = $state({
     pileup: false,
+    // Phone/CW's callsign stack (a DIFFERENT list from FT8's queue above, and a
+    // different flag on purpose: one toggle driving both would mean opening the
+    // list here moved FT8's drawer on the next mode switch). Open by default —
+    // the rail icon carries the depth either way, so closing it never hides the
+    // fact that calls are waiting.
+    callStack: true,
     // Export/email dialog (opened from the Session tile's header action).
     exportOpen: false,
 });
@@ -19,6 +25,10 @@ export function closeExport(): void {
 
 export function setPileup(open: boolean): void {
     operate.pileup = open;
+}
+
+export function setCallStack(open: boolean): void {
+    operate.callStack = open;
 }
 
 // Focus hand-back seam: LoggingCard registers its callsign input; chrome

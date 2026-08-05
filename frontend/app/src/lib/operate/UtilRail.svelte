@@ -6,12 +6,20 @@
     // Operate → Phone/CW (render gate in Operate; visibility on data-rail).
     import { toggleUtil } from '../ui/state.svelte';
     import { router } from '../router.svelte';
-    import { setPileup, focusCallsign } from './state.svelte';
+    import { setPileup, setCallStack, focusCallsign } from './state.svelte';
     import { operate } from './state.svelte';
     import { ft8PileupStack } from './ft8Pileup.svelte';
+    import { callsignStack } from './callsignStack.svelte';
     import { toggleTile, isVisible, RAIL_TILES, type TileId } from './layout.svelte';
     import { rig } from './rig.svelte';
     import { session } from './session.svelte';
+
+    // The rail's pile-up control drives whichever list the current workspace
+    // owns: FT8's caller queue, or Phone/CW's callsign stack. Two different
+    // lists behind one affordance — they are never both on screen.
+    const pileupCount = $derived(
+        router.mode === 'ft8' ? ft8PileupStack.count : callsignStack.count
+    );
 
     // Worked/Session are read-only: after showing one the operator's next act is
     // typing, so focus goes home to the callsign field. The Rig tile is read-only
@@ -138,36 +146,39 @@
                  in Phone/CW this offered a drawer that could never fill — and
                  opening it used to disable the logging shortcuts. Phone/CW's own
                  pile-up appears by itself when calls are stacked. -->
-            {#if router.mode === 'ft8'}
-                <button
-                    class="rail-item relative"
-                    title="Pile-up"
-                    data-active={operate.pileup ? 'true' : 'false'}
-                    onclick={() => setPileup(!operate.pileup)}
+            <button
+                class="rail-item relative"
+                title="Pile-up"
+                data-active={(router.mode === 'ft8' ? operate.pileup : operate.callStack)
+                    ? 'true'
+                    : 'false'}
+                onclick={() =>
+                    router.mode === 'ft8'
+                        ? setPileup(!operate.pileup)
+                        : setCallStack(!operate.callStack)}
+            >
+                <svg
+                    class="size-6 shrink-0"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="1.5"
+                    stroke="currentColor"
+                    aria-hidden="true"
                 >
-                    <svg
-                        class="size-6 shrink-0"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke-width="1.5"
-                        stroke="currentColor"
-                        aria-hidden="true"
-                    >
-                        <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            d="M6 6.878V6a2.25 2.25 0 0 1 2.25-2.25h7.5A2.25 2.25 0 0 1 18 6v.878m-12 0c.235-.083.487-.128.75-.128h10.5c.263 0 .515.045.75.128m-12 0A2.25 2.25 0 0 0 4.5 9v.878m13.5-3A2.25 2.25 0 0 1 19.5 9v.878m0 0a2.246 2.246 0 0 0-.75-.128H5.25c-.263 0-.515.045-.75.128m15 0A2.25 2.25 0 0 1 21 12v6a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 18v-6c0-.98.626-1.813 1.5-2.122"
-                        />
-                    </svg>
-                    <span class="rail-label">Pile-up</span>
-                    {#if ft8PileupStack.count > 0}
-                        {@render countBadge(
-                            ft8PileupStack.count,
-                            `${ft8PileupStack.count} caller${ft8PileupStack.count === 1 ? '' : 's'} queued`
-                        )}
-                    {/if}
-                </button>
-            {/if}
+                    <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M6 6.878V6a2.25 2.25 0 0 1 2.25-2.25h7.5A2.25 2.25 0 0 1 18 6v.878m-12 0c.235-.083.487-.128.75-.128h10.5c.263 0 .515.045.75.128m-12 0A2.25 2.25 0 0 0 4.5 9v.878m13.5-3A2.25 2.25 0 0 1 19.5 9v.878m0 0a2.246 2.246 0 0 0-.75-.128H5.25c-.263 0-.515.045-.75.128m15 0A2.25 2.25 0 0 1 21 12v6a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 18v-6c0-.98.626-1.813 1.5-2.122"
+                    />
+                </svg>
+                <span class="rail-label">Pile-up</span>
+                {#if pileupCount > 0}
+                    {@render countBadge(
+                        pileupCount,
+                        `${pileupCount} ${router.mode === 'ft8' ? 'caller' : 'call'}${pileupCount === 1 ? '' : 's'} ${router.mode === 'ft8' ? 'queued' : 'stacked'}`
+                    )}
+                {/if}
+            </button>
             <button class="rail-item" title="Collapse" onclick={toggleUtil}>
                 <svg
                     class="util-chevron size-6 shrink-0"
