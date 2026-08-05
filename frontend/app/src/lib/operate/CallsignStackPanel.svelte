@@ -3,11 +3,16 @@
         Phone/CW pile-up scratchpad — the calls set aside with Shift+Enter,
         ported from the retired SPA's StackingDrawer.
 
-        DATA-DRIVEN VISIBILITY: rendered iff the stack is non-empty. No toggle,
-        no chrome to manage, and — the reason it matters here — no empty drawer
-        that can be opened. FT8's pile-up drawer IS toggleable, and opening it
-        over Phone/CW used to disable the logging shortcuts; a panel that cannot
-        exist while empty cannot repeat that.
+        VISIBILITY IS THE RAIL TOGGLE, not emptiness. It was emptiness at first,
+        on the reasoning that an un-openable panel could not repeat FT8's trap.
+        But the trap was never the empty panel — it was `operate.pileup` gating
+        the logging shortcuts inside LoggingCard, which is gone — and hiding the
+        panel when empty meant the rail icon did NOTHING until you already knew
+        the shortcut that fills it (operating, 2026-08-05).
+
+        So the empty state stays rendered, and it carries the bindings. That is
+        the whole point of it: this is where an operator finds out the feature
+        exists.
 
         Pop semantics match the Shift+Up / Shift+Down keys in LoggingCard:
         clicking an entry moves the call INTO the draft and out of the stack —
@@ -27,23 +32,28 @@
     }
 </script>
 
-{#if callsignStack.items.length > 0 && operate.callStack}
+{#if operate.callStack}
     <section class="card" aria-label="Pile-up">
         <div class="flex items-center justify-between">
             <h3 class="text-sm font-semibold text-ink">
                 Pile-up <span class="text-muted">({callsignStack.count})</span>
             </h3>
-            <button
-                type="button"
-                class="cursor-pointer rounded-md px-1 text-sm leading-none text-muted hover:text-ink"
-                title="Discard all"
-                aria-label="Discard all stacked callsigns"
-                onclick={() => callsignStack.clear()}>×</button
-            >
+            {#if callsignStack.items.length > 0}
+                <button
+                    type="button"
+                    class="cursor-pointer rounded-md px-1 text-sm leading-none text-muted hover:text-ink"
+                    title="Discard all"
+                    aria-label="Discard all stacked callsigns"
+                    onclick={() => callsignStack.clear()}>×</button
+                >
+            {/if}
         </div>
         <p class="mt-1 text-xs text-muted">
             Shift+Enter sets one aside · Shift+↑ newest · Shift+↓ oldest
         </p>
+        {#if callsignStack.items.length === 0}
+            <p class="mt-3 text-sm text-muted">Nothing set aside yet.</p>
+        {/if}
         <ul class="mt-3 flex flex-wrap gap-1.5">
             {#each callsignStack.items as call, index (call)}
                 <li class="flex items-center overflow-hidden rounded-md border border-line">

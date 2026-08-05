@@ -3,10 +3,13 @@
 
     ACCEPTANCE CRITERIA (continuing pileupKeys.svelte.test.ts's A1–A6):
 
-      A7  The pile-up list is not on screen when nothing is stacked, so there is
-          no empty panel to open. Apart from a toggleable drawer — which is what
-          FT8 has, and what disabled the Phone/CW logging shortcuts when it was
-          mounted there.
+      A7  SUPERSEDED BY A21 (operating, 2026-08-05). It read: "the list is not
+          on screen when nothing is stacked, so there is no empty panel to
+          open". That was written to keep FT8's trap from recurring — but the
+          trap was `operate.pileup` gating the logging shortcuts in
+          LoggingCard, not the empty panel, and hiding it when empty made the
+          rail icon do nothing until you already knew the shortcut. The list is
+          now governed by its toggle; see A21.
       A8  Clicking a stacked call loads it and takes it off the list; the small ×
           beside it drops the call WITHOUT loading it. Apart from the two doing
           the same thing, which would make one of them a trap.
@@ -36,11 +39,14 @@ beforeEach(() => {
 });
 
 describe('Phone/CW pile-up panel', () => {
-    // A7
-    it('P1: is absent while nothing is stacked', () => {
+    // A21, replacing A7's rule. Presence follows the TOGGLE; an empty list is
+    // still shown, because that is where the bindings are written down.
+    it('P1: is on screen with nothing stacked, and says so', async () => {
         render(CallsignStackPanel);
         flushSync();
-        expect(screen.queryByLabelText('Pile-up')).toBeNull();
+
+        const panel = await screen.findByLabelText('Pile-up');
+        expect(panel.textContent).toContain('Nothing set aside');
     });
 
     it('P2: appears with the stacked calls once one is captured', async () => {
@@ -83,7 +89,9 @@ describe('Phone/CW pile-up panel', () => {
         expect(draft.callsign).toBe('');
     });
 
-    it('P5: discard-all empties the list and takes the panel off screen', async () => {
+    // Discard-all drops the CALLS, not the panel — the panel is the toggle's to
+    // hide. It also stops offering itself once there is nothing left to discard.
+    it('P5: discard-all empties the list and leaves the panel showing it is empty', async () => {
         render(CallsignStackPanel);
         callsignStack.push('G0ABC');
         flushSync();
@@ -92,7 +100,9 @@ describe('Phone/CW pile-up panel', () => {
         flushSync();
 
         expect(callsignStack.items).toEqual([]);
-        expect(screen.queryByLabelText('Pile-up')).toBeNull();
+        const panel = await screen.findByLabelText('Pile-up');
+        expect(panel.textContent).toContain('Nothing set aside');
+        expect(screen.queryByLabelText('Discard all stacked callsigns')).toBeNull();
     });
 });
 
@@ -133,6 +143,33 @@ describe('Phone/CW pile-up rail affordance', () => {
         (await screen.findByTitle('Pile-up')).click();
         flushSync();
         expect(screen.queryByLabelText('Pile-up')).not.toBeNull();
+    });
+
+    /*
+        THE EMPTY CASE — the one A21 actually exists for, and the one P10 above
+        does not reach because it pushes a call before clicking. With nothing
+        stacked the icon toggled a flag and the panel stayed hidden, so clicking
+        it did nothing at all: precisely the "findable only if you already know
+        the shortcut" state the criterion was written against.
+
+        An empty list is not chrome for its own sake here — it is where the
+        bindings are written down. That is the whole payload.
+    */
+    it('P13: opens an empty list, showing how to fill it, and closes again', async () => {
+        render(UtilRail);
+        render(CallsignStackPanel);
+        flushSync();
+        expect(callsignStack.items).toEqual([]);
+
+        // Default is open, so the first click CLOSES.
+        (await screen.findByTitle('Pile-up')).click();
+        flushSync();
+        expect(screen.queryByLabelText('Pile-up')).toBeNull();
+
+        (await screen.findByTitle('Pile-up')).click();
+        flushSync();
+        const panel = await screen.findByLabelText('Pile-up');
+        expect(panel.textContent).toContain('Shift+Enter');
     });
 
     // Closing the list must not hide the FACT that calls are waiting — that is
