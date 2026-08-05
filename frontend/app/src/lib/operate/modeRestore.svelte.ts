@@ -30,7 +30,6 @@ import {
     clampFreq,
     seedFreqTarget,
     rigReportVersions,
-    type RigReportVersions,
     setMode as rigSetMode,
 } from './rig.svelte';
 import { ft8State } from './ft8.svelte';
@@ -88,13 +87,26 @@ function transmitting(): boolean {
 let unrestored: OpMode | null = null;
 
 /*
-    What we last returned the rig to, with the per-field rig-report counters as
-    of the moment we commanded it. A field whose counter is unchanged has not
-    been reported since, so `snap` — what we commanded — describes it better
-    than rig.*, which still reads the value being left behind. Dropped when
-    another restore begins, and superseded field by field as reports arrive.
+    What each field was last COMMANDED to, dated with that field's rig-report
+    counter as of the moment the command went out. While the counter is
+    unchanged the rig has said nothing about that field since, so the commanded
+    value describes it better than rig.*, which still reads what it was told to
+    leave. A report supersedes the hold; the next command replaces it.
+
+    PER FIELD AND PER COMMAND, both. One baseline for the whole restore mis-dates
+    every field commanded after the first await: a report arriving in that gap
+    looks newer than the command that follows it, so the app records the reported
+    value while the rig has been sent somewhere else entirely (clean-room review
+    e0dad4c7). "Has the rig spoken since this value was sent" can only be
+    answered at the moment it is sent.
 */
-let restored: { snap: OperatingSnapshot; at: RigReportVersions } | null = null;
+type Hold<T> = { value: T; seq: number } | null;
+
+const held: { vfoA: Hold<number>; vfoB: Hold<number>; mode: Hold<string> } = {
+    vfoA: null,
+    vfoB: null,
+    mode: null,
+};
 
 /*
     Switches are SERIALISED. Each restore awaits the rig between commands, so
@@ -115,10 +127,6 @@ export function onOperatingModeChange(from: OpMode, to: OpMode): Promise<void> {
 }
 
 async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
-    // Read BEFORE the first command goes out: a report arriving mid-restore has
-    // to count as newer than anything recorded at the end, or an optimistic
-    // value would outlive the report that superseded it.
-    const at = rigReportVersions();
     // Where the rig actually is, resolved ONCE and used for both jobs below —
     // what to remember about the mode being left, and what still needs
     // commanding for the one being entered. They are the same question, and
@@ -162,44 +170,51 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
     // the rig at one operating point together. Carrying on past a refused
     // set_freq is how a data mode ends up asserted on a phone frequency, and it
     // would also seed a nudge target the rig never reached.
-    restored = null;
-    // Where the restore actually LEAVES the rig — which starts as where it
-    // already is, because a command that is never sent moves nothing. Each gate
-    // below can skip a whole field (no capability, no reported value, nothing to
-    // change), and recording the wish instead of the outcome makes the app
-    // believe the rig reached a frequency it has never been on. That belief
-    // outlives the capability that suppressed the command, because rig
-    // capabilities are re-applied whenever the station context reloads.
-    const settled: OperatingSnapshot = { ...here };
+    // Each field is re-compared against the rig's CURRENT effective position
+    // immediately before its own command, not against `here`. `here` was read
+    // before the first await, and the rig can report in the gaps between
+    // commands — comparing a later field against a pre-restore reading decides
+    // whether to move the rig from stale information.
+    //
+    // A field is recorded as commanded ONLY when its command went out and
+    // succeeded. A gate that skips one (no capability, no reported value,
+    // nothing to change) leaves the rig where it was, and recording the wish
+    // instead of the outcome makes the app believe the rig reached somewhere it
+    // has never been — a belief that outlives the capability which suppressed
+    // the command, since capabilities are re-applied on any context reload.
     const selected = rig.selectedVfo;
-    if (incoming.vfoA !== null && incoming.vfoA !== here.vfoA && hasOp('set_freq')) {
+    if (incoming.vfoA !== null && hasOp('set_freq') && incoming.vfoA !== effective().vfoA) {
         const hz = clampFreq(incoming.vfoA);
+        const seq = rigReportVersions().vfoA;
         const r = await driveRig('set_freq', String(hz));
         if (!r.ok) return abandon(to, r.message);
-        settled.vfoA = hz;
+        held.vfoA = { value: hz, seq };
         if (selected === 'A') seedFreqTarget('A', hz);
     }
-    if (incoming.vfoB !== null && incoming.vfoB !== here.vfoB && hasOp('set_freq_b')) {
+    if (incoming.vfoB !== null && hasOp('set_freq_b') && incoming.vfoB !== effective().vfoB) {
         const hz = clampFreq(incoming.vfoB);
+        const seq = rigReportVersions().vfoB;
         const r = await driveRig('set_freq_b', String(hz));
         if (!r.ok) return abandon(to, r.message);
-        settled.vfoB = hz;
+        held.vfoB = { value: hz, seq };
         if (selected === 'B') seedFreqTarget('B', hz);
     }
-    if (incoming.liveMode !== '' && incoming.liveMode !== here.liveMode && hasOp('set_mode')) {
+    if (
+        incoming.liveMode !== '' &&
+        hasOp('set_mode') &&
+        incoming.liveMode !== effective().liveMode
+    ) {
         // rig.setMode, not a raw set_mode: it owns the optimistic write of BOTH
         // the literal and its friendly form plus the rollback on rejection.
         // Hand-copying that here would be a second copy to keep in step. The
         // capability check stays OUTSIDE it — setMode reports an unsupported op
         // as a failure, and a rig that simply cannot change mode is not an
         // error worth interrupting the operator over.
+        const seq = rigReportVersions().mode;
         const r = await rigSetMode(incoming.liveMode);
         if (!r.ok) return abandon(to, r.message);
-        settled.liveMode = incoming.liveMode;
+        held.mode = { value: incoming.liveMode, seq };
     }
-    // What we have just commanded now describes the rig better than its own
-    // last report does, until it sends the next one.
-    restored = { snap: settled, at };
 }
 
 /*
@@ -211,7 +226,9 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
 */
 function abandon(to: OpMode, message: string): void {
     unrestored = to;
-    restored = null;
+    // Holds for fields that DID land are kept: those commands really happened,
+    // and forgetting them would put the app back to reading a rig position the
+    // rig has already left.
     toasts.error(`Could not return the rig: ${message}`);
 }
 
@@ -228,13 +245,13 @@ function abandon(to: OpMode, message: string): void {
  */
 function effective(): OperatingSnapshot {
     const now = snapshotOperating();
-    if (restored === null) return now;
     const seen = rigReportVersions();
     return {
         ...now,
-        vfoA: seen.vfoA === restored.at.vfoA ? restored.snap.vfoA : now.vfoA,
-        vfoB: seen.vfoB === restored.at.vfoB ? restored.snap.vfoB : now.vfoB,
-        liveMode: seen.mode === restored.at.mode ? restored.snap.liveMode : now.liveMode,
+        vfoA: held.vfoA !== null && seen.vfoA === held.vfoA.seq ? held.vfoA.value : now.vfoA,
+        vfoB: held.vfoB !== null && seen.vfoB === held.vfoB.seq ? held.vfoB.value : now.vfoB,
+        liveMode:
+            held.mode !== null && seen.mode === held.mode.seq ? held.mode.value : now.liveMode,
     };
 }
 
@@ -244,6 +261,8 @@ export function resetModeRestore(): void {
     snapshots.ft8 = null;
     restoreOnSwitch = true;
     unrestored = null;
-    restored = null;
+    held.vfoA = null;
+    held.vfoB = null;
+    held.mode = null;
     queue = Promise.resolve();
 }

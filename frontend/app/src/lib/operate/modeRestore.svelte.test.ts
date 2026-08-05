@@ -695,6 +695,133 @@ describe('operating-state restore across a mode switch', () => {
         expect(freqsSent()).toContain('14260000');
     });
 
+    /*
+        A18, from clean-room review e0dad4c7 — R24 was too narrow. It covered a
+        report for the field whose command was already in flight, and left the
+        commoner case untested: a report for a field whose command has not been
+        SENT yet. One baseline taken before the whole restore mis-dates those:
+        the report looks newer than the command that follows it, so the app
+        records the reported value while the rig has been sent somewhere else.
+
+        A18  Whatever the rig reports mid-restore, the app ends up believing the
+             rig is where it was last COMMANDED — not where an earlier report
+             found it. Apart from the next switch quietly sending the rig to
+             that earlier reading.
+
+        Baselines are therefore per field AND taken as each command goes out,
+        which is the only moment that answers "has the rig spoken since THIS
+        value was sent".
+    */
+    it('R25: dates each field against its own command, not the start of the restore', async () => {
+        const held: { release: (() => void) | null } = { release: null };
+        let holdNext = true;
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            if (!holdNext) return Promise.resolve({ ok: true, message: '' });
+            holdNext = false;
+            return new Promise((res) => {
+                held.release = () => res({ ok: true, message: '' });
+            });
+        });
+        const settle = async (): Promise<void> => {
+            for (let i = 0; i < 20; i++) await Promise.resolve();
+        };
+
+        livePhone(); // Phone VFO B on 7.100
+        await onOperatingModeChange('phone', 'ft8');
+        rig.vfoA = 14_074_000;
+        rig.vfoB = 3_500_000;
+        rig.modeLiteral = 'DATA-U';
+
+        const back = onOperatingModeChange('ft8', 'phone');
+        await settle();
+        expect(held.release).not.toBeNull(); // suspended on the VFO-A command
+        // A VFO-B report lands BEFORE the VFO-B command has been sent.
+        catLink.onRigState({ vfoB: 3_600_000 });
+        held.release?.();
+        await back;
+
+        // VFO B was then commanded to Phone's 7.100, so that is where the app
+        // must believe it is — a round trip has to bring it back there.
+        await onOperatingModeChange('phone', 'ft8');
+        sent = [];
+        await onOperatingModeChange('ft8', 'phone');
+
+        const vfoB = sent.filter((s) => s.op === 'set_freq_b').map((s) => s.value);
+        expect(vfoB).toContain('7100000');
+        expect(vfoB).not.toContain('3600000');
+    });
+
+    // A18's other half — the comparison, not just the dating. A18 says each
+    // field is settled against the rig's position AT ITS OWN COMMAND; a field
+    // the rig has meanwhile arrived at by itself needs no command at all, and
+    // sending one anyway is a CAT write the operator did not ask for (A7 at the
+    // right moment).
+    it('R26: skips a field the rig reaches on its own while an earlier command is pending', async () => {
+        const held: { release: (() => void) | null } = { release: null };
+        let holdNext = true;
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            if (!holdNext) return Promise.resolve({ ok: true, message: '' });
+            holdNext = false;
+            return new Promise((res) => {
+                held.release = () => res({ ok: true, message: '' });
+            });
+        });
+        const settle = async (): Promise<void> => {
+            for (let i = 0; i < 20; i++) await Promise.resolve();
+        };
+
+        livePhone(); // Phone VFO B on 7.100
+        await onOperatingModeChange('phone', 'ft8');
+        rig.vfoA = 14_074_000;
+        rig.vfoB = 3_500_000;
+        rig.modeLiteral = 'DATA-U';
+
+        const back = onOperatingModeChange('ft8', 'phone');
+        await settle();
+        // VFO B arrives at Phone's value by itself, before its command is sent.
+        catLink.onRigState({ vfoB: 7_100_000 });
+        held.release?.();
+        await back;
+
+        expect(sent.filter((s) => s.op === 'set_freq_b')).toEqual([]);
+    });
+
+    // A19  A restore that fails partway still leaves the app knowing how far it
+    //      got. Apart from it forgetting the commands that DID land and then
+    //      reading the rig's stale report as current — at which point the next
+    //      switch decides the rig is already where it needs to be and sends
+    //      nothing, stranding it in the mode I have just left.
+    it('R27: keeps what landed when a later command in the same restore fails', async () => {
+        let failB = true;
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve(
+                failB && op === 'set_freq_b'
+                    ? { ok: false, message: 'rig said no' }
+                    : { ok: true, message: '' }
+            );
+        });
+
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        rig.vfoA = 14_074_000;
+        rig.vfoB = 3_500_000;
+        rig.modeLiteral = 'DATA-U';
+
+        // VFO A lands on 14.255; VFO B is refused, abandoning the rest.
+        await onOperatingModeChange('ft8', 'phone');
+        expect(freqsSent()).toContain('14255000');
+
+        failB = false;
+        sent = [];
+        await onOperatingModeChange('phone', 'ft8');
+
+        // The rig really is on 14.255, so going back to FT8 must move it.
+        expect(freqsSent()).toContain('14074000');
+    });
+
     // A11. Without the seed the nudge would step from rig.vfoA, which the
     // restore has just superseded.
     it('R13: a frequency nudge straight after a restore steps from the restored frequency', async () => {
