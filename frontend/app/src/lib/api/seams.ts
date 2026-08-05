@@ -167,6 +167,12 @@ export interface StationContext {
      *  band→"#rrggbb", sparse) — layered over the map's built-in palette
      *  (lib/map/bandColors). Empty = all defaults. */
     mapBandColors: Record<string, string>;
+    /** Whether a Phone/CW ↔ FT8 switch returns a CAT-live rig to that mode's
+     *  last frequency and mode (config `restore_rig_on_mode_switch`, default
+     *  ON). Served resolved, so absent means an older daemon — which takes the
+     *  default, not "off". Gates lib/operate/modeRestore's re-tune only; the
+     *  CAT-off display restore is unconditional. */
+    restoreRigOnModeSwitch: boolean;
 }
 
 export async function fetchStationContext(): Promise<StationContext> {
@@ -192,6 +198,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8Frequencies: {},
         ft8Mode: '',
         mapBandColors: {},
+        restoreRigOnModeSwitch: true,
         logbookName: '',
         rigName: '',
     };
@@ -234,6 +241,8 @@ export async function fetchStationContext(): Promise<StationContext> {
         // In the BRIDGE block beside ops/rig_modes — it is rig-driver data.
         ft8Mode: str(br.ft8_mode),
         mapBandColors: toStringMap(isPlainObject(body.map) ? body.map.band_colors : undefined),
+        // Only an explicit false disables it — see the field's doc above.
+        restoreRigOnModeSwitch: body.restore_rig_on_mode_switch !== false,
         logbookName: str(lb.name),
         rigName: str(br.rig_name),
     };

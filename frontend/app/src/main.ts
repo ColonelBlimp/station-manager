@@ -45,6 +45,8 @@ import { toasts } from './lib/ui/toasts.svelte';
 import { setup, setSetupSave } from './lib/setup.svelte';
 import { setStationSaved } from './lib/config/station.svelte';
 import { setFt8PrefsSaved } from './lib/config/ft8.svelte';
+import { setModeChangeHook } from './lib/router.svelte';
+import { onOperatingModeChange, setRestoreOnModeSwitch } from './lib/operate/modeRestore.svelte';
 import { completeSetup } from './lib/api/setup';
 import { sendRigTune } from './lib/api/rig-tune';
 import { sendRigCommand } from './lib/api/rig-command';
@@ -208,6 +210,7 @@ const ctx: StationContext = {
     ft8Frequencies: {},
     ft8Mode: '',
     mapBandColors: {},
+    restoreRigOnModeSwitch: true,
     logbookName: '',
     rigName: '',
 };
@@ -274,6 +277,9 @@ function applyStationContext(c: StationContext): void {
     // the rig's band-stack recall (set_band); FT8 uses set_freq, which triggers
     // no recall, so without this the rig stays in whatever mode it was in.
     setFt8Mode(c.ft8Mode);
+    // Whether a Phone/CW ↔ FT8 switch returns a CAT-live rig to that mode's last
+    // frequency and mode. Opt-out only: the default is ON.
+    setRestoreOnModeSwitch(c.restoreRigOnModeSwitch);
     // Tune-carrier write seam: adapt the rich rig-tune outcome to {ok,message}.
     // The daemon owns keying + the guaranteed stop; the SPA sends only intent.
     setTuneSender(async (active) => {
@@ -311,6 +317,13 @@ function applyStationContext(c: StationContext): void {
         openRigEvents(catLink);
     }
 }
+
+// Operating-state restore across a Phone/CW ↔ FT8 switch. Installed once, at
+// boot rather than in applyStationContext — that runs again after first-run
+// setup, and re-installing a single-slot hook there would be a no-op at best.
+// The restore is fire-and-forget: it commands the rig and the confirming push
+// arrives over the CAT stream, so nothing here waits on it.
+setModeChangeHook((from, to) => void onOperatingModeChange(from, to));
 
 void fetchStationContext().then((c) => {
     applyStationContext(c);

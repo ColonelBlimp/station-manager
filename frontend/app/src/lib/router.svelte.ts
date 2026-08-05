@@ -104,6 +104,28 @@ export function setLeaveGuard(g: LeaveGuard | null): void {
     leaveGuard = g;
 }
 
+/*
+    Operating-mode change notification. A Phone/CW ↔ FT8 switch is decided HERE,
+    so this is the only place that sees every one of them — the sidebar buttons
+    and browser Back/Forward alike. lib/operate/modeRestore listens, and returns
+    the rig to where that mode left it.
+
+    ONE slot again, for the same reason as the leave guard above: one listener
+    exists, and a registry for a single caller is the shape lessons-for-v2 warns
+    against. Fired only when the mode actually CHANGES, and only after router
+    state has moved — the listener reads it.
+*/
+type ModeChangeHook = (from: OpMode, to: OpMode) => void;
+let modeChangeHook: ModeChangeHook | null = null;
+
+export function setModeChangeHook(h: ModeChangeHook | null): void {
+    modeChangeHook = h;
+}
+
+function modeChanged(from: OpMode, to: OpMode): void {
+    if (from !== to) modeChangeHook?.(from, to);
+}
+
 // Asked only when config is genuinely being LEFT. Re-navigating to config (the
 // Settings tab strip does not route, but the sidebar item is clickable while
 // already there) is not leaving, and must not prompt.
@@ -124,11 +146,13 @@ export function setMode(mode: OpMode): void {
     // sidebar, so its mode buttons leave config without going through
     // navigate(). Guarding only navigate() would leave this door open.
     if (!mayLeave('operate')) return;
+    const from = router.mode;
     router.view = 'operate';
     router.mode = mode;
     storageSet(MODE_KEY, mode);
     const path = urlFor('operate', mode);
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
+    modeChanged(from, mode);
 }
 
 // Sync on browser back/forward.
@@ -142,6 +166,8 @@ window.addEventListener('popstate', () => {
         window.history.pushState({}, '', urlFor('config', router.mode));
         return;
     }
+    const from = router.mode;
     router.view = loc.view;
     router.mode = loc.mode;
+    modeChanged(from, loc.mode);
 });

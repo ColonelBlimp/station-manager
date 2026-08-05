@@ -239,7 +239,14 @@ export function setCommandSender(fn: CommandSender): void {
     commandSender = fn;
 }
 
-async function driveRig(op: string, value?: string | number): Promise<RigWriteResult> {
+/*
+    Exported for modeRestore.svelte, which drives the per-physical-VFO ops
+    (set_freq/set_freq_b) that no action here wraps. Widening this is safe by
+    construction rather than by discipline: the op vocabulary is the daemon's
+    `exposed` list, and tx_on/tx_off are never on it (ADR 0026/0030), so no op
+    string reachable through here can key the transmitter.
+*/
+export async function driveRig(op: string, value?: string | number): Promise<RigWriteResult> {
     if (commandSender === null) return { ok: false, message: 'Rig control is unavailable.' };
     return commandSender(op, value);
 }
@@ -424,7 +431,9 @@ const pendingFreqHz: { A: number | null; B: number | null } = { A: null, B: null
 let lastFreqNudgeAt = 0;
 let lastFreqVfo: 'A' | 'B' | null = null;
 
-function clampFreq(hz: number): number {
+/** Exported for modeRestore.svelte — a snapshot is replayed as a command, so it
+ *  gets the same bounds check as freshly-entered values. */
+export function clampFreq(hz: number): number {
     if (hz < 0) return 0;
     if (hz > MAX_FREQ_HZ) return MAX_FREQ_HZ;
     return hz;
@@ -554,6 +563,19 @@ export async function ft8SelectBand(band: string): Promise<RigWriteResult> {
     // still gets its dial move reported as the success it was.
     if (rig.cat !== 'connected' || ft8Mode === '' || !hasOp('set_mode')) return tuned;
     return setMode(ft8Mode);
+}
+
+/**
+ * Seed the optimistic nudge target for a VFO — the same thing setFreq does after
+ * commanding one, exported for modeRestore, which commands the physical VFOs
+ * directly. Without it a freq key pressed straight after a mode switch would
+ * step from the frequency the OTHER mode left the rig on, because the confirming
+ * push for the restore hasn't landed yet.
+ */
+export function seedFreqTarget(vfo: 'A' | 'B', hz: number): void {
+    pendingFreqHz[vfo] = hz;
+    lastFreqVfo = vfo;
+    lastFreqNudgeAt = Date.now();
 }
 
 /** Test seam — clear the optimistic freq-step state between cases so a prior

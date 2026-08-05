@@ -256,6 +256,27 @@ describe('fetchStationContext bridge block (stubbed fetch)', () => {
         expect((await fetchStationContext()).mapBandColors).toEqual({});
     });
 
+    // The daemon serves this one RESOLVED (handler_config.go: true when unset),
+    // so absent means an OLDER daemon, not "off" — and the feature's default is
+    // ON. Only an explicit false may disable it, which is also what stops a
+    // malformed value from silently parking the rig where the other mode left it.
+    it('reads restore_rig_on_mode_switch, defaulting ON unless explicitly false', async () => {
+        mockConfig({ logging_station: { station_callsign: '7Q5MLV' } });
+        expect((await fetchStationContext()).restoreRigOnModeSwitch).toBe(true);
+
+        mockConfig({
+            logging_station: { station_callsign: '7Q5MLV' },
+            restore_rig_on_mode_switch: false,
+        });
+        expect((await fetchStationContext()).restoreRigOnModeSwitch).toBe(false);
+
+        mockConfig({
+            logging_station: { station_callsign: '7Q5MLV' },
+            restore_rig_on_mode_switch: true,
+        });
+        expect((await fetchStationContext()).restoreRigOnModeSwitch).toBe(true);
+    });
+
     it('reads default_logbook.name and bridge.rig_name for the header identity', async () => {
         mockConfig({
             logging_station: { station_callsign: '7Q5MLV' },

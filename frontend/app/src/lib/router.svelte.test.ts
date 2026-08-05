@@ -3,8 +3,8 @@
 // writing the URL — otherwise the initial normalise reverts '/app/…' to '/', which
 // is a DIFFERENT SPA. These pin the base round-trip (the bug: URL jumped off /app/).
 
-import { describe, it, expect } from 'vitest';
-import { subPathOf, urlOf } from './router.svelte';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { subPathOf, urlOf, router, setMode, setModeChangeHook } from './router.svelte';
 
 describe('router base-path handling', () => {
     it('strips the /app base before parsing', () => {
@@ -28,5 +28,63 @@ describe('router base-path handling', () => {
         expect(subPathOf('/', '')).toBe('/');
         expect(urlOf('operate', 'ft8', '')).toBe('/operate/ft8');
         expect(urlOf('dashboard', 'phone', '')).toBe('/');
+    });
+});
+
+/*
+    The operating-mode change notification — the router is where a Phone/CW ↔ FT8
+    switch is decided, so it is where the rig's operating-state restore has to be
+    told (lib/operate/modeRestore). Two doors reach it, and the operator's ruling
+    (2026-08-05) is that BOTH count as a switch: the sidebar buttons and browser
+    Back/Forward. Back landing you on Phone with the rig still on the FT8 dial is
+    the confusion the feature exists to remove, whichever way you got there.
+
+    What these pin is the WIRING — that both doors notify, that a click which
+    changes nothing stays silent, and that the mode has already moved when the
+    notification lands. What is DONE with it (snapshot, diff, re-tune, the TX
+    refusal) belongs to modeRestore and is pinned in its own tests.
+*/
+describe('operating-mode change notification', () => {
+    let seen: { from: string; to: string; modeThen: string }[] = [];
+
+    beforeEach(() => {
+        seen = [];
+        setModeChangeHook((from, to) => {
+            // Captured INSIDE the hook: the restore reads router state, so it
+            // matters that the mode has already moved by the time it runs.
+            seen.push({ from, to, modeThen: router.mode });
+        });
+        setMode('phone');
+        seen = [];
+    });
+
+    afterEach(() => {
+        setModeChangeHook(null);
+        vi.restoreAllMocks();
+    });
+
+    it('notifies on a mode switch from the sidebar, with the mode already moved', () => {
+        setMode('ft8');
+        expect(seen).toEqual([{ from: 'phone', to: 'ft8', modeThen: 'ft8' }]);
+    });
+
+    // Clicking the mode you are already in is a view change at most (it exits
+    // Settings). Re-tuning the rig on it would be a command nobody asked for.
+    it('stays silent when the selected mode is the one already active', () => {
+        setMode('phone');
+        expect(seen).toEqual([]);
+    });
+
+    it('notifies on browser Back/Forward', () => {
+        window.history.pushState({}, '', '/operate/ft8');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(seen).toEqual([{ from: 'phone', to: 'ft8', modeThen: 'ft8' }]);
+    });
+
+    it('stays silent on a Back/Forward that does not change the mode', () => {
+        window.history.pushState({}, '', '/logbook');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(seen).toEqual([]);
+        expect(router.view).toBe('logbook');
     });
 });
