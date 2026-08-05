@@ -284,27 +284,29 @@ class Ft8SettingsState {
         // Computed from what was SENT, not the live draft: an in-flight edit
         // must not change the verdict on a request already on the wire.
         const verdict = editedFieldsMoved(before, sent, stored);
-        if (verdict === 'all') {
-            this.#apply(out.settings);
-            toasts.warn(
-                needsRestart
-                    ? 'Save timed out, but the daemon does have your FT8 settings — restart the daemon to apply them.'
-                    : 'Save timed out, but the daemon does have your FT8 settings.'
-            );
-            return;
-        }
-        // Keep every TYPED value; refresh the rest from what the daemon now
-        // holds. Retaining the whole pre-save block left fields another client
+        // ONE path for the form in every outcome: the daemon's values with the
+        // operator's own laid back over them. Only the definition of "theirs"
+        // varies, and it lives in mergeEdits.
+        //
+        // Retaining the whole pre-save draft instead left fields another client
         // had changed sitting stale in the form, and buildPayload writes all
         // four blocks — so the retry this advises would have reverted them
-        // (review 07a7e4c0 P1, demonstrated by W22's own fixture).
+        // (review 07a7e4c0 P1). Adopting the response wholesale on "all" threw
+        // away edits made while the request was in flight (review c0d6488e P1).
         //
         // The baseline follows the daemon too, so `dirty` means "differs from
         // what is stored NOW" and Cancel reveals it rather than pre-save values
         // the daemon may no longer hold.
-        this.draft = mergeEdits(before, sent, this.draft, stored);
+        this.draft = mergeEdits(before, sent, this.draft, stored, verdict);
         this.#pristine = JSON.stringify(stored);
         switch (verdict) {
+            case 'all':
+                toasts.warn(
+                    needsRestart
+                        ? 'Save timed out, but the daemon does have your FT8 settings — restart the daemon to apply them.'
+                        : 'Save timed out, but the daemon does have your FT8 settings.'
+                );
+                return;
             case 'some':
                 // Neither claim is available here, so make neither. A write that
                 // landed can show a partial move (an edit the daemon normalises
@@ -395,15 +397,27 @@ class Ft8SettingsState {
  * the same bug — they chose that value explicitly, and the last explicit writer
  * should win.
  */
-function mergeEdits(before: Ft8Draft, sent: Ft8Draft, draft: Ft8Draft, stored: Ft8Draft): Ft8Draft {
+function mergeEdits(
+    before: Ft8Draft,
+    sent: Ft8Draft,
+    draft: Ft8Draft,
+    stored: Ft8Draft,
+    verdict: MoveVerdict
+): Ft8Draft {
+    // "all" means the request landed, so the fields it CARRIED are now best
+    // represented by what the daemon stored — including any clamping applied.
+    // Under the other verdicts its fate is unknown, so those edits still stand.
+    const landed = verdict === 'all';
     const out: Ft8Draft = { ...stored };
     for (const k of Object.keys(before) as (keyof Ft8Draft)[]) {
-        // Operator-owned two ways: this save asked to change it and that still
-        // stands, OR they have changed it since the request went out. The
-        // second is why the live draft alone is not enough — putting a field
-        // back to its old value mid-flight looks identical to never touching
-        // it (review e647f454 P2).
-        const owned = sent[k] !== before[k] || draft[k] !== sent[k];
+        // Operator-owned two ways: this save asked to change it and that claim
+        // still stands, OR they have changed it since the request went out.
+        //
+        // The second half holds under EVERY verdict — no in-flight request can
+        // speak for a value typed after it left (review c0d6488e P1). It is also
+        // why the live draft alone is not enough: putting a field back to its old
+        // value mid-flight looks identical to never touching it (e647f454 P2).
+        const owned = (!landed && sent[k] !== before[k]) || draft[k] !== sent[k];
         if (!owned) continue;
         // Same key both sides, so the value type matches by construction —
         // TypeScript cannot see that through a keyof union.

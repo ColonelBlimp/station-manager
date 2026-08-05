@@ -788,6 +788,58 @@ describe('ft8 settings — an ambiguous write (clean-room review 569b2236 P2)', 
         expect(lastToast()).not.toMatch(/does not appear/i);
     });
 
+    it('W27: a mid-flight edit survives even when every SENT field moved', async () => {
+        /*
+            Clean-room review c0d6488e P1 — and a hazard the previous round
+            spotted and waved through as "pre-existing, out of scope". Moving
+            the verdict onto `sent` is precisely what stopped it being
+            pre-existing: the live-draft verdict used to notice the new host
+            edit, see it unmoved, and take the merge path. Judged from `sent`
+            alone the run reaches "all", and #apply replaced the WHOLE draft.
+
+            No in-flight request can speak for a value typed after it left, so
+            an edit made since `sent` is the operator's under every verdict.
+            "all" only licenses adopting the fields the request CARRIED.
+
+            FIXTURE: the sent field (feedMode) moves, which is what forces
+            "all" — the branch W24–W26 deliberately steered around, and the
+            reason this defect survived three rounds of tests about this exact
+            function.
+        */
+        let putSeen = false;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_url: string, init?: RequestInit) => {
+                if (init?.method === 'PUT') {
+                    putSeen = true;
+                    ft8SettingsState.draft.pskHost = 'typed-mid-flight.example.org';
+                    const e = new Error('timed out');
+                    e.name = 'TimeoutError';
+                    return Promise.reject(e);
+                }
+                const body = putSeen
+                    ? { ...CONFIG, ft8_display: { ...CONFIG.ft8_display, feed_mode: 'accumulate' } }
+                    : CONFIG;
+                return Promise.resolve(
+                    new Response(JSON.stringify(body), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            })
+        );
+
+        await ft8SettingsState.load();
+        ft8SettingsState.draft.feedMode = 'accumulate'; // sent, and it moves → "all"
+        await ft8SettingsState.save();
+
+        expect(ft8SettingsState.draft.pskHost).toBe('typed-mid-flight.example.org');
+        // The carried field still takes the daemon's stored value.
+        expect(ft8SettingsState.draft.feedMode).toBe('accumulate');
+        // …and the surviving edit is still unsaved, so it is not lost silently.
+        expect(ft8SettingsState.dirty).toBe(true);
+    });
+
     it('W16: a genuine connection failure is still a failure, not an unknown', async () => {
         vi.stubGlobal(
             'fetch',
