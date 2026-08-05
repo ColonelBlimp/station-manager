@@ -41,7 +41,8 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-04)
+## Now (as of 2026-08-05)
+
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
@@ -50,72 +51,40 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **HEAD is `4665b5a9`; the DAEMON still runs `d13fcb22`.** Seven commits behind —
-  the coordinate arc, the map band filter and the first FT8 ship-gate chunk. All
-  preventive or additive; nothing urgent, but the **band filter** is the one thing
-  you would actually see, so a deploy is worth it before the next operating
-  session. `smd` is deliberately NOT auto-start — a stopped daemon is not a fault.
-- **Shipped 2026-08-04, morning (DEPLOYED):** the **Settings navigation guard**
-  (ADR 0063) and **FT8 session-end causes** — `Abandon()` is reached from twelve
-  places and only the dial paths named themselves, so a session that DIED logged
-  identically to one the operator stopped.
-- **Shipped 2026-08-04, afternoon (NOT deployed) — the COORDINATE arc, four
-  commits, six reviews, five P1s, every one mine.** Coordinates are decimal
-  everywhere internally and convert only at the perimeter: provider ingress, both
-  ADIF directions, and operator config. **The grid ARBITRATES rather than
-  supplies** — precise coordinates survive while the grid vouches for them, and
-  `AA00` is rejected as a sentinel. Four predicates now live once in `utils`
-  (`CoordsValid` / `CoordsReadable` / `CoordsInsideGrid` / `IsPlaceholderGrid`)
-  so the four layers cannot drift on what "contradicts" means. Detail + the
-  review lessons in Current state.
-- **EYEBALL WHEN CONVENIENT** (none of it seen by hand; vitest checks the DOM,
-  not the look): the guard's confirm text, and F5 with an edit pending (browser
-  dialog); after the next FT8 run, `smd.log` session-end reasons should be
-  populated — an Abandon now reads `reason: operator` where the 08-04 run gave
-  seven blanks (**but only when a session was ACTIVE**; abandoning with nothing
-  running still logs nothing, which is correct); Email's password keep / type /
-  remove states and its 587/30 placeholders; Enrichment's disclosures.
-- **OBSERVE WHEN THE CHANCE ARISES — NOT tasks, and they gate nothing.** Do not
-  schedule these and do not open a session asking whether they are done. SSE
-  revival (background the MAP tab; **a negative result means the TRIGGER is
-  wrong, not `openReviving`**) · FT8 dead-source watchdog · stuck-TX /
-  RF-ingress 2 s tune trials INTO THE ANTENNA (operator's call on RF exposure).
-- **IN FLIGHT — the `internal/ft8` LOGGING SHIP GATE. 5 of 14 findings closed,
-  9 to go.** Source of truth is `docs/reviews/ft8-logging-gaps.md`, which now
-  carries per-finding ✅ notes and a Progress block — **read it, do not work from
-  this summary**, and do not delete the file until all 14 ship. Closed: 1
-  (2026-08-01) · 6, 2, 3, 14 (2026-08-04). **Resume at finding 4**, whose sites
-  were read but nothing written: `service.go:841` / `:880` / `:903`. Then 5 + 11
-  with it (one story — "a slot passed and the log cannot say why"; 11 spans 15
-  sites), then 7 + 8, then 12 + 13, then 9 + 10.
-- **OPERATOR RULING, ALREADY MADE — do not re-open finding 6.** A keyed
-  transmission records TWO INDEPENDENT WITNESSES: wall `keyed_ms` and `samples`
-  submitted. It deliberately does NOT prove RF left the rig — that is the drive
-  alarm's job — and `txcontroller.go` says so, so it is not overclaimed later.
-- **NEXT AFTER THE SHIP GATE:** (a) **Playwright** layout check — NOT scaffolded
-  at all; (b) config-SPA retirement needs **FT8** and **General**, the last two
-  unported tabs.
-- **DECIDED, DO NOT REOPEN — no FT8 dupe guard.** Reaffirmed 2026-08-04 after a
-  50-QSO run logged KK2A twice: they never copied our RR73 (asked twice,
-  re-sent twice), so the re-work was CORRECT on-air behaviour. The reasoning is
-  in `caller_sequencer.go` above `confirmHold`. The defect is the extra ROW, not
-  the QSO; any fix belongs at log level. **An absent feature here was a
-  decision — grep before reporting one as a gap.**
-- **BLOCKED, not as a standalone build:** SHIP GATE (c) notification records —
-  ADR 0061's subject matter, and that ADR is still `Proposed`.
-- **PARKED — do not start without the operator:** `operator_pick` / Call-CQ
-  auto_off (see the `ft8-cq-answerer-selection` memory).
-- **STANDING:** do not tune the hub buffers (8 ft8 / 64 bridge+events) until the
-  eviction records show healthy clients actually being evicted.
-- **Watch out:** `~/pCloudDrive/station-manager/` is an ABANDONED data dir
-  (July 3). The live one is `~/.local/share/station-manager/`; logs are
-  `log/smd.log` there, mode 0600 — and UNROTATED at 17.8 MB back to 16 July.
-- **DECIDED, DO NOT REOPEN — the five polar QSO rows are NOT being repaired or
-  re-uploaded** (operator, 2026-08-04). QRZ shows the CORRECT position for them
-  (its logbook page for the 2026-07-27 R9LAU QSO reads 57.173356 N / 65.559720 E),
-  so the bad coordinates did not land there. ClubLog unchecked.
-
----
+- **STOPPED FOR A POWER CUT, 2026-08-05.** Tree CLEAN at `4d131720`, everything
+  committed and every codex review triaged + deleted. Nothing half-done.
+- **DEPLOY FIRST: the daemon is 10 commits behind** (running
+  `2.0.0-alpha.1-1081-gbc67a5b4`). Everything since is SPA-side EXCEPT the
+  QSO-row coordinate reconcile — the one you want live before the next
+  operating session, because it is what stops contradictory coordinates
+  reaching QRZ/ClubLog. `task deploy:local:dev`.
+- **Shipped 2026-08-05:** Settings → **FT8** tab (the config-SPA port; only
+  **General** is left before that SPA can retire) · map **arc fan-out** for
+  repeat contacts · **QSO-row coordinate reconcile** · FT8 **band buttons now
+  assert the data mode** (DATA-U/USB-D).
+- **DECIDED, DO NOT REOPEN — no colour pickers in Settings → FT8.** The three
+  `ft8_display.highlight_*` keys are VESTIGIAL: stored, round-tripped, read by
+  nothing. Band Activity uses a theme-aware palette. Written up in `docs/ft8.md`.
+- **STOP PATCHING THE FT8 TIMEOUT RECONCILE.** Seven review rounds, six of them
+  fixing a defect the previous fix introduced. It converged (`4d131720`, no
+  findings) and is safe: nothing typed is discarded, nothing false is claimed,
+  a retry cannot revert a concurrent change. The cause is the CONTRACT — a
+  whole-block PUT with no revision cannot tell "my write landed" from "someone
+  else's did". If it draws another finding, add `If-Match`/revision to
+  `PUT /v1/config` instead of another inference. Operator's call; not started.
+- **OPEN, not started — 121 QSO rows carry coordinates outside their own grid**
+  (104 calls; mostly QRZ country centroids — 39× the Ukraine centroid, 16×
+  Moscow). The reconcile is PREVENTIVE and does not touch them. Repair is the
+  operator's call (the 2026-08-04 no-repair ruling covered only the 5 polar rows).
+- **OPEN, not started — 5,640 rows (82%) hold ADIF-format coordinates**
+  (`"N034 44.378"`), pre-dating the ingress normalisation. They export fine, but
+  the map's parseFloat rejects them and plots the grid centre instead.
+- **STILL QUEUED from 2026-08-04:** the `internal/ft8` LOGGING SHIP GATE, 5 of
+  14 closed — resume at **finding 4**; source of truth
+  `docs/reviews/ft8-logging-gaps.md`. Then Playwright scaffolding.
+- **Claude Code update notice is a false alarm** — 2.1.222 is on npm, the RPM
+  repo still serves 2.1.221 (what is installed). `dnf` says "Nothing to do"
+  correctly. Nothing to do.
 
 ## Current state (as of 2026-08-04)
 
