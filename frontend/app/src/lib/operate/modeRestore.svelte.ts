@@ -115,6 +115,10 @@ export function onOperatingModeChange(from: OpMode, to: OpMode): Promise<void> {
 }
 
 async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
+    // Read BEFORE the first command goes out: a report arriving mid-restore has
+    // to count as newer than anything recorded at the end, or an optimistic
+    // value would outlive the report that superseded it.
+    const at = rigReportVersions();
     // Where the rig actually is, resolved ONCE and used for both jobs below —
     // what to remember about the mode being left, and what still needs
     // commanding for the one being entered. They are the same question, and
@@ -159,17 +163,27 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
     // set_freq is how a data mode ends up asserted on a phone frequency, and it
     // would also seed a nudge target the rig never reached.
     restored = null;
+    // Where the restore actually LEAVES the rig — which starts as where it
+    // already is, because a command that is never sent moves nothing. Each gate
+    // below can skip a whole field (no capability, no reported value, nothing to
+    // change), and recording the wish instead of the outcome makes the app
+    // believe the rig reached a frequency it has never been on. That belief
+    // outlives the capability that suppressed the command, because rig
+    // capabilities are re-applied whenever the station context reloads.
+    const settled: OperatingSnapshot = { ...here };
     const selected = rig.selectedVfo;
     if (incoming.vfoA !== null && incoming.vfoA !== here.vfoA && hasOp('set_freq')) {
         const hz = clampFreq(incoming.vfoA);
         const r = await driveRig('set_freq', String(hz));
         if (!r.ok) return abandon(to, r.message);
+        settled.vfoA = hz;
         if (selected === 'A') seedFreqTarget('A', hz);
     }
     if (incoming.vfoB !== null && incoming.vfoB !== here.vfoB && hasOp('set_freq_b')) {
         const hz = clampFreq(incoming.vfoB);
         const r = await driveRig('set_freq_b', String(hz));
         if (!r.ok) return abandon(to, r.message);
+        settled.vfoB = hz;
         if (selected === 'B') seedFreqTarget('B', hz);
     }
     if (incoming.liveMode !== '' && incoming.liveMode !== here.liveMode && hasOp('set_mode')) {
@@ -181,10 +195,11 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
         // error worth interrupting the operator over.
         const r = await rigSetMode(incoming.liveMode);
         if (!r.ok) return abandon(to, r.message);
+        settled.liveMode = incoming.liveMode;
     }
     // What we have just commanded now describes the rig better than its own
     // last report does, until it sends the next one.
-    restored = { snap: incoming, at: rigReportVersions() };
+    restored = { snap: settled, at };
 }
 
 /*

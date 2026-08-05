@@ -609,6 +609,92 @@ describe('operating-state restore across a mode switch', () => {
         expect(freqsSent()).toContain('14260000');
     });
 
+    /*
+        A16, from clean-room review b8d422c9 — a defect the A15 fix introduced.
+
+        A16  The app never sends my rig to a frequency it was never on. Apart
+             from it being sent to one I really did operate, which is the whole
+             point of the feature.
+
+        What we commanded and what we WANTED are different things: each command
+        is capability-gated, so a rig that cannot set VFO B leaves that VFO
+        wherever it was. Recording the wish as though it were the outcome makes
+        the app believe the rig is somewhere it has never been — and the belief
+        outlives the capability that suppressed the command, because rig
+        capabilities are re-applied whenever the station context reloads.
+    */
+    it('R23: never adopts a value the rig was not actually commanded to', async () => {
+        setRigCaps({ ops: ['set_freq', 'set_mode'], tune: false, rigModes: [] });
+        livePhone(); // VFO B on 7.100
+        await onOperatingModeChange('phone', 'ft8');
+
+        // FT8 moves both VFOs and the mode.
+        rig.vfoA = 14_074_000;
+        rig.vfoB = 3_500_000;
+        rig.modeLiteral = 'DATA-U';
+
+        // VFO B cannot be commanded, so the rig stays on 3.500 — it never
+        // reaches Phone's 7.100.
+        await onOperatingModeChange('ft8', 'phone');
+        await onOperatingModeChange('phone', 'ft8');
+
+        // The rig definition is refreshed and VFO B becomes settable, exactly as
+        // a station-context reload does.
+        setRigCaps({ ops: [...ALL_OPS], tune: false, rigModes: [] });
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(sent.filter((s) => s.value === '7100000')).toEqual([]);
+    });
+
+    /*
+        A17  If I turn the dial while the app is mid-restore, my dial wins.
+             Apart from the app quietly keeping the frequency it was restoring
+             to and putting the rig back there at the next switch.
+
+        The restore is a sequence with the rig answering in between, so a report
+        can land inside it. Recording "has the rig spoken?" AFTER the last
+        command counts that report as one of our own confirmations and lets the
+        optimistic value outlive the report that superseded it.
+    */
+    it('R24: lets a dial report that lands mid-restore win over the restore', async () => {
+        // Only the FIRST command is held, so the restore is reliably suspended
+        // at a known point; everything after it resolves at once.
+        // A holder, not a bare `let`: TypeScript narrows a local assigned only
+        // inside a callback to `null` at the call site.
+        const held: { release: (() => void) | null } = { release: null };
+        let holdNext = true;
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            if (!holdNext) return Promise.resolve({ ok: true, message: '' });
+            holdNext = false;
+            return new Promise((res) => {
+                held.release = () => res({ ok: true, message: '' });
+            });
+        });
+        const settle = async (): Promise<void> => {
+            for (let i = 0; i < 20; i++) await Promise.resolve();
+        };
+
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+
+        const back = onOperatingModeChange('ft8', 'phone'); // commands 14.255…
+        await settle();
+        expect(held.release).not.toBeNull(); // suspended inside the restore
+        catLink.onRigState({ vfoA: 14_260_000 }); // …operator turns the dial
+        held.release?.();
+        await back;
+
+        await onOperatingModeChange('phone', 'ft8');
+        sent = [];
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(freqsSent()).toContain('14260000');
+    });
+
     // A11. Without the seed the nudge would step from rig.vfoA, which the
     // restore has just superseded.
     it('R13: a frequency nudge straight after a restore steps from the restored frequency', async () => {
