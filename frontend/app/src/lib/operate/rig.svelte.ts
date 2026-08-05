@@ -566,23 +566,32 @@ export async function ft8SelectBand(band: string): Promise<RigWriteResult> {
 }
 
 /*
-    Rig-report counter — bumped on every rig-state frame the daemon pushes.
+    Rig-report counters — one PER FIELD, bumped when the rig reports that field.
 
-    It answers ONE question, for modeRestore: has the rig said anything since we
-    last commanded it? Frequency here is confirm-by-push (unlike mode, which
-    setMode reflects optimistically), so straight after a command rig.vfoA still
-    reads where the rig is LEAVING. Without this, a mode switch in that gap
+    They answer one question for modeRestore: has the rig told us about THIS
+    value since we last commanded it? Frequency is confirm-by-push (unlike mode,
+    which setMode reflects optimistically), so straight after a command rig.vfoA
+    still reads where the rig is LEAVING. Without this, a mode switch in that gap
     snapshots the outgoing mode at a frequency it has already been told to
     abandon, and the next switch returns the rig to the wrong place.
 
-    A counter rather than a timeout: "the rig has reported" is a fact the system
-    can carry exactly, and a tolerance guessed at the CAT round-trip would be a
-    number nobody could justify.
-*/
-let rigStateSeq = 0;
+    PER FIELD, not one counter for the whole frame: rig-state frames carry only
+    what changed (every field of RigStatePayload is optional), so a mode-only
+    confirmation says nothing about the dial. A single counter treated it as if
+    it did, and quietly restored the defect above through a narrower window —
+    narrower but ROUTINE, since a restore sends set_freq then set_mode and the
+    two confirmations arrive independently (clean-room review c89db207).
 
-export function rigStateVersion(): number {
-    return rigStateSeq;
+    Counters rather than a timeout: "the rig has reported this field" is a fact
+    the system can carry exactly, and a tolerance guessed at the CAT round-trip
+    would be a number nobody could justify.
+*/
+const rigReports = { vfoA: 0, vfoB: 0, mode: 0 };
+
+export type RigReportVersions = { vfoA: number; vfoB: number; mode: number };
+
+export function rigReportVersions(): RigReportVersions {
+    return { ...rigReports };
 }
 
 /**
@@ -711,12 +720,18 @@ export const catLink = {
     },
 
     onRigState(p: RigStatePayload): void {
-        rigStateSeq++;
         // A rig-state event carries only what changed; the merge combines it
-        // with the last-known VFOs + selection held in the state itself.
+        // with the last-known VFOs + selection held in the state itself. Each
+        // field present is also a REPORT of that field — see rigReports.
         if (p.rigIdentity !== undefined) rig.identity = p.rigIdentity;
-        if (p.vfoA !== undefined) rig.vfoA = p.vfoA;
-        if (p.vfoB !== undefined) rig.vfoB = p.vfoB;
+        if (p.vfoA !== undefined) {
+            rig.vfoA = p.vfoA;
+            rigReports.vfoA++;
+        }
+        if (p.vfoB !== undefined) {
+            rig.vfoB = p.vfoB;
+            rigReports.vfoB++;
+        }
         if (p.selectedVfo === 'A' || p.selectedVfo === 'B') rig.selectedVfo = p.selectedVfo;
 
         const hz = rig.selectedVfo === 'A' ? rig.vfoA : rig.vfoB;
@@ -730,6 +745,7 @@ export const catLink = {
         if (p.mode !== undefined) {
             rig.modeLiteral = p.mode; // raw literal drives the live Option-A dropdown
             rig.mode = friendlyMode(p.mode);
+            rigReports.mode++;
         }
 
         // Absent means this frame carried no meter selection, NOT "monitoring is

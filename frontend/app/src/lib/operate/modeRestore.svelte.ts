@@ -29,7 +29,8 @@ import {
     driveRig,
     clampFreq,
     seedFreqTarget,
-    rigStateVersion,
+    rigReportVersions,
+    type RigReportVersions,
     setMode as rigSetMode,
 } from './rig.svelte';
 import { ft8State } from './ft8.svelte';
@@ -87,13 +88,13 @@ function transmitting(): boolean {
 let unrestored: OpMode | null = null;
 
 /*
-    The mode we last returned the rig to, with the rig-report counter as of the
-    moment we commanded it. While that counter is unchanged the rig has told us
-    nothing since, so `snap` — what we commanded — describes where it is going
-    more accurately than rig.*, which still reads the frequency being left.
-    Cleared as soon as a report arrives or another mode is restored.
+    What we last returned the rig to, with the per-field rig-report counters as
+    of the moment we commanded it. A field whose counter is unchanged has not
+    been reported since, so `snap` — what we commanded — describes it better
+    than rig.*, which still reads the value being left behind. Dropped when
+    another restore begins, and superseded field by field as reports arrive.
 */
-let restored: { mode: OpMode; snap: OperatingSnapshot; seq: number } | null = null;
+let restored: { snap: OperatingSnapshot; at: RigReportVersions } | null = null;
 
 /*
     Switches are SERIALISED. Each restore awaits the rig between commands, so
@@ -183,7 +184,7 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
     }
     // What we have just commanded now describes the rig better than its own
     // last report does, until it sends the next one.
-    restored = { mode: to, snap: incoming, seq: rigStateVersion() };
+    restored = { snap: incoming, at: rigReportVersions() };
 }
 
 /*
@@ -201,22 +202,25 @@ function abandon(to: OpMode, message: string): void {
 
 /**
  * Where the rig is, as well as we can know. Normally its own last report — but
- * once we have commanded it and it has not reported back, that report still
- * describes the frequency it was told to leave, so what we commanded is the
- * truer answer. The display fields always come from rig.*: they are used only
- * on the CAT-off path, where nothing is ever commanded and so nothing lags.
+ * once we have commanded a value and the rig has not reported THAT value back,
+ * its last report still describes what it was told to leave, so what we
+ * commanded is the truer answer.
+ *
+ * Resolved field by field: the rig confirms frequency and mode in separate
+ * frames, and a mode confirmation is no evidence about the dial. The display
+ * fields always come from rig.* — they are used only on the CAT-off path, where
+ * nothing is ever commanded and so nothing lags.
  */
 function effective(): OperatingSnapshot {
     const now = snapshotOperating();
-    if (restored !== null && restored.seq === rigStateVersion()) {
-        return {
-            ...now,
-            vfoA: restored.snap.vfoA,
-            vfoB: restored.snap.vfoB,
-            liveMode: restored.snap.liveMode,
-        };
-    }
-    return now;
+    if (restored === null) return now;
+    const seen = rigReportVersions();
+    return {
+        ...now,
+        vfoA: seen.vfoA === restored.at.vfoA ? restored.snap.vfoA : now.vfoA,
+        vfoB: seen.vfoB === restored.at.vfoB ? restored.snap.vfoB : now.vfoB,
+        liveMode: seen.mode === restored.at.mode ? restored.snap.liveMode : now.liveMode,
+    };
 }
 
 /** Test seam — drop both snapshots and re-arm the knob. */

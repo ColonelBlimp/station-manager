@@ -61,6 +61,7 @@ import {
     setRigCaps,
     setCommandSender,
     nudgeFreqCoarse,
+    catLink,
 } from './rig.svelte';
 import { ft8State, resetFt8ForTests } from './ft8.svelte';
 import { toasts } from '../ui/toasts.svelte';
@@ -556,6 +557,56 @@ describe('operating-state restore across a mode switch', () => {
         await onOperatingModeChange('ft8', 'phone');
 
         expect(freqsSent()).toContain('14255000');
+    });
+
+    /*
+        A15, from clean-room review c89db207 — a defect the A12 fix introduced.
+
+        A15  A rig that confirms my mode change before it confirms my frequency
+             change does not cost me the frequency. Apart from the rig later
+             returning to the frequency it was on BEFORE the restore, which is
+             the original A12 defect wearing a narrower window.
+
+        Rig-state frames carry only what changed (every field of
+        RigStatePayload is optional), so "the rig has reported" is not one fact
+        but one PER FIELD. A mode confirmation says nothing about the dial. The
+        restore's own sequence makes this routine rather than exotic: it sends
+        set_freq then set_mode, and the two confirmations arrive independently.
+    */
+    it('R21: keeps the restored frequency when the rig confirms only the mode', async () => {
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        await onOperatingModeChange('ft8', 'phone'); // commands 14.255 + USB
+
+        // The mode confirmation lands first; the dial has not been reported yet,
+        // so rig.vfoA still reads the FT8 frequency.
+        catLink.onRigState({ mode: 'USB' });
+        expect(rig.vfoA).toBe(14_074_000);
+
+        await onOperatingModeChange('phone', 'ft8');
+        sent = [];
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(freqsSent()).toContain('14255000');
+    });
+
+    // …and the other direction, so the invalidation is not simply switched off:
+    // once the rig DOES report a frequency, that is the operator turning the
+    // dial, and it must win over anything we commanded earlier.
+    it('R22: adopts a frequency the rig reports after a restore', async () => {
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        await onOperatingModeChange('ft8', 'phone'); // commands 14.255
+
+        catLink.onRigState({ vfoA: 14_260_000 }); // operator turns the dial
+
+        await onOperatingModeChange('phone', 'ft8');
+        sent = [];
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(freqsSent()).toContain('14260000');
     });
 
     // A11. Without the seed the nudge would step from rig.vfoA, which the
