@@ -565,6 +565,26 @@ export async function ft8SelectBand(band: string): Promise<RigWriteResult> {
     return setMode(ft8Mode);
 }
 
+/*
+    Rig-report counter — bumped on every rig-state frame the daemon pushes.
+
+    It answers ONE question, for modeRestore: has the rig said anything since we
+    last commanded it? Frequency here is confirm-by-push (unlike mode, which
+    setMode reflects optimistically), so straight after a command rig.vfoA still
+    reads where the rig is LEAVING. Without this, a mode switch in that gap
+    snapshots the outgoing mode at a frequency it has already been told to
+    abandon, and the next switch returns the rig to the wrong place.
+
+    A counter rather than a timeout: "the rig has reported" is a fact the system
+    can carry exactly, and a tolerance guessed at the CAT round-trip would be a
+    number nobody could justify.
+*/
+let rigStateSeq = 0;
+
+export function rigStateVersion(): number {
+    return rigStateSeq;
+}
+
 /**
  * Seed the optimistic nudge target for a VFO — the same thing setFreq does after
  * commanding one, exported for modeRestore, which commands the physical VFOs
@@ -691,6 +711,7 @@ export const catLink = {
     },
 
     onRigState(p: RigStatePayload): void {
+        rigStateSeq++;
         // A rig-state event carries only what changed; the merge combines it
         // with the last-known VFOs + selection held in the state itself.
         if (p.rigIdentity !== undefined) rig.identity = p.rigIdentity;

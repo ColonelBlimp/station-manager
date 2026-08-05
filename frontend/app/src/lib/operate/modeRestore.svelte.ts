@@ -23,7 +23,15 @@
 */
 
 import type { OpMode } from '../router.svelte';
-import { rig, hasOp, driveRig, clampFreq, seedFreqTarget } from './rig.svelte';
+import {
+    rig,
+    hasOp,
+    driveRig,
+    clampFreq,
+    seedFreqTarget,
+    rigStateVersion,
+    setMode as rigSetMode,
+} from './rig.svelte';
 import { ft8State } from './ft8.svelte';
 import { toasts } from '../ui/toasts.svelte';
 
@@ -78,13 +86,47 @@ function transmitting(): boolean {
 */
 let unrestored: OpMode | null = null;
 
-export async function onOperatingModeChange(from: OpMode, to: OpMode): Promise<void> {
+/*
+    The mode we last returned the rig to, with the rig-report counter as of the
+    moment we commanded it. While that counter is unchanged the rig has told us
+    nothing since, so `snap` — what we commanded — describes where it is going
+    more accurately than rig.*, which still reads the frequency being left.
+    Cleared as soon as a report arrives or another mode is restored.
+*/
+let restored: { mode: OpMode; snap: OperatingSnapshot; seq: number } | null = null;
+
+/*
+    Switches are SERIALISED. Each restore awaits the rig between commands, so
+    two overlapping ones interleave their commands and finish in call order,
+    not click order — the earlier restore resumes after the later one and leaves
+    the rig in the mode the operator only clicked THROUGH. Chaining also means
+    the outgoing snapshot is taken once the previous restore has actually been
+    applied, rather than from a rig halfway through it.
+*/
+let queue: Promise<void> = Promise.resolve();
+
+export function onOperatingModeChange(from: OpMode, to: OpMode): Promise<void> {
+    const run = queue.then(() => applySwitch(from, to));
+    // The chain must survive a rejected link, or one thrown error wedges every
+    // later switch.
+    queue = run.catch(() => undefined);
+    return run;
+}
+
+async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
+    // Where the rig actually is, resolved ONCE and used for both jobs below —
+    // what to remember about the mode being left, and what still needs
+    // commanding for the one being entered. They are the same question, and
+    // answering them differently is what let a stale read decide the rig was
+    // already where it was about to be sent.
+    const here = effective();
+
     const foreign = from === unrestored;
     unrestored = null;
     // Taken FIRST, before anything below moves the rig — and taken even when
     // the restore is then refused, since a refused re-tune is not an abandoned
     // switch and the mode being left still needs something to return to.
-    if (!foreign) snapshots[from] = snapshotOperating();
+    if (!foreign) snapshots[from] = here;
 
     const incoming = snapshots[to];
     if (incoming === null) return; // never operated this mode: nothing to return to
@@ -110,20 +152,71 @@ export async function onOperatingModeChange(from: OpMode, to: OpMode): Promise<v
     // per-physical-VFO ops are selection-independent, so no VFO swap is needed
     // — and none is sent deliberately: swap_vfo exchanges VFO CONTENTS, and the
     // selection survives an excursion anyway (both modes tune the selected VFO).
+    //
+    // A REJECTION ABANDONS THE REST. The commands are not independent: they put
+    // the rig at one operating point together. Carrying on past a refused
+    // set_freq is how a data mode ends up asserted on a phone frequency, and it
+    // would also seed a nudge target the rig never reached.
+    restored = null;
     const selected = rig.selectedVfo;
-    if (incoming.vfoA !== null && incoming.vfoA !== rig.vfoA && hasOp('set_freq')) {
+    if (incoming.vfoA !== null && incoming.vfoA !== here.vfoA && hasOp('set_freq')) {
         const hz = clampFreq(incoming.vfoA);
-        await driveRig('set_freq', String(hz));
+        const r = await driveRig('set_freq', String(hz));
+        if (!r.ok) return abandon(to, r.message);
         if (selected === 'A') seedFreqTarget('A', hz);
     }
-    if (incoming.vfoB !== null && incoming.vfoB !== rig.vfoB && hasOp('set_freq_b')) {
+    if (incoming.vfoB !== null && incoming.vfoB !== here.vfoB && hasOp('set_freq_b')) {
         const hz = clampFreq(incoming.vfoB);
-        await driveRig('set_freq_b', String(hz));
+        const r = await driveRig('set_freq_b', String(hz));
+        if (!r.ok) return abandon(to, r.message);
         if (selected === 'B') seedFreqTarget('B', hz);
     }
-    if (incoming.liveMode !== '' && incoming.liveMode !== rig.modeLiteral && hasOp('set_mode')) {
-        await driveRig('set_mode', incoming.liveMode);
+    if (incoming.liveMode !== '' && incoming.liveMode !== here.liveMode && hasOp('set_mode')) {
+        // rig.setMode, not a raw set_mode: it owns the optimistic write of BOTH
+        // the literal and its friendly form plus the rollback on rejection.
+        // Hand-copying that here would be a second copy to keep in step. The
+        // capability check stays OUTSIDE it — setMode reports an unsupported op
+        // as a failure, and a rig that simply cannot change mode is not an
+        // error worth interrupting the operator over.
+        const r = await rigSetMode(incoming.liveMode);
+        if (!r.ok) return abandon(to, r.message);
     }
+    // What we have just commanded now describes the rig better than its own
+    // last report does, until it sends the next one.
+    restored = { mode: to, snap: incoming, seq: rigStateVersion() };
+}
+
+/*
+    A restore the rig refused leaves it on the OTHER mode's frequencies, which
+    is the same position a TX refusal leaves it in — so it earns the same
+    snapshot protection (see `unrestored`). Reported, because unlike the TX
+    refusal this one is a fault: the operator asked for nothing and the rig said
+    no to something they cannot see.
+*/
+function abandon(to: OpMode, message: string): void {
+    unrestored = to;
+    restored = null;
+    toasts.error(`Could not return the rig: ${message}`);
+}
+
+/**
+ * Where the rig is, as well as we can know. Normally its own last report — but
+ * once we have commanded it and it has not reported back, that report still
+ * describes the frequency it was told to leave, so what we commanded is the
+ * truer answer. The display fields always come from rig.*: they are used only
+ * on the CAT-off path, where nothing is ever commanded and so nothing lags.
+ */
+function effective(): OperatingSnapshot {
+    const now = snapshotOperating();
+    if (restored !== null && restored.seq === rigStateVersion()) {
+        return {
+            ...now,
+            vfoA: restored.snap.vfoA,
+            vfoB: restored.snap.vfoB,
+            liveMode: restored.snap.liveMode,
+        };
+    }
+    return now;
 }
 
 /** Test seam — drop both snapshots and re-arm the knob. */
@@ -132,4 +225,6 @@ export function resetModeRestore(): void {
     snapshots.ft8 = null;
     restoreOnSwitch = true;
     unrestored = null;
+    restored = null;
+    queue = Promise.resolve();
 }

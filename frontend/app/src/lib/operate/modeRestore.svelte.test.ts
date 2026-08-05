@@ -38,8 +38,14 @@
     reading it later would capture values the restore itself had begun to
     change. The distinction is load-bearing for A9: a refused re-tune still
     takes the outgoing snapshot, so the NEXT switch restores correctly. Rule
-    R9b is the one that pins it, and it is the half a "no commands sent"
+    R9c is the one that pins it, and it is the half a "no commands sent"
     assertion alone would miss.
+
+    …and the last step of that sequence is where A12 lives: the rig's confirming
+    push arrives AFTER the command is acknowledged, so between the two, rig.vfoA
+    still reads the frequency the rig has been told to leave. Every rule below
+    that survives a fast second switch depends on that gap being handled, not on
+    it being rare.
 
     NOT ASSERTED HERE: that Back/Forward reaches this at all — that is the
     router's wiring, and it is pinned in router.svelte.test.ts where the
@@ -370,8 +376,190 @@ describe('operating-state restore across a mode switch', () => {
         expect(rigGate()).toBe('unconfirmed');
     });
 
-    // A11. The rig has not yet confirmed the restore (rig.vfoA still reads the
-    // FT8 frequency), so an unseeded nudge would step from 14.074, not 14.255.
+    /*
+        A12–A14, added after clean-room review c52e9b80 filed two P1s.
+
+        A12  Clicking Phone then FT8 faster than the rig can answer leaves the
+             rig in the mode I ended on, with both modes' frequencies still
+             remembered correctly. Apart from the rig ending up on the mode I
+             clicked THROUGH, and from a snapshot silently taking the other
+             mode's frequency as its own.
+        A13  When the rig rejects a restore command, the rest of the restore is
+             abandoned rather than half-applied. Apart from a rig sitting in the
+             new mode on the old frequency — which is what "keep going" produces,
+             and is the shape that puts a data mode on a phone frequency.
+        A14  A rejected restore tells me, and does not cost me the frequency it
+             failed to return to.
+
+        WHY THESE READ THE RIG STATE. The commanded values are reflected into
+        rig.* on success and rolled back on rejection — the idiom setMode and
+        swapVfoLive already use for SPA-issued commands (rig.svelte:297–330).
+        Confirm-by-push is the rule for DAEMON-owned state (tune, TX alarms),
+        not for commands this SPA issued and has an answer for. Without it the
+        next snapshot reads a frequency the rig has already been told to leave,
+        which is P1 one's second half.
+    */
+
+    // A12. The gate holds every command pending so a second switch can arrive
+    // mid-restore — the ordering is the assertion, not the values.
+    it('R14: does not interleave two restores when a switch arrives mid-flight', async () => {
+        const gate: (() => void)[] = [];
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return new Promise((res) => gate.push(() => res({ ok: true, message: '' })));
+        });
+        // Fixed number of turns, not "until the gate empties": a released
+        // command's continuation queues the NEXT one a microtask later, so
+        // stopping at the first empty gate strands the rest of the restore.
+        const drain = async (): Promise<void> => {
+            for (let i = 0; i < 40; i++) {
+                if (gate.length > 0) gate.shift()?.();
+                await Promise.resolve();
+                await Promise.resolve();
+            }
+        };
+
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        await drain();
+        // FT8 on a DIFFERENT band from where Phone sat, so the two restores
+        // cannot agree by accident and the last command names its own mode.
+        rig.vfoA = 21_074_000;
+        rig.modeLiteral = 'DATA-U';
+        sent = [];
+
+        const a = onOperatingModeChange('ft8', 'phone');
+        await Promise.resolve();
+        const b = onOperatingModeChange('phone', 'ft8');
+        await drain();
+        await a;
+        await b;
+        await drain();
+
+        // The operator ended on FT8, so the LAST thing sent to the rig must be
+        // FT8's frequency. Overlapping restores end the other way round: the
+        // Phone run resumes after the FT8 one and leaves the rig on 14.255 —
+        // the mode that was only ever clicked through.
+        expect(freqsSent().at(-1)).toBe('21074000');
+    });
+
+    // A12's second half. Nothing has pushed since the restore was commanded, so
+    // an implementation that re-reads the rig would snapshot Phone as 14.074 —
+    // the frequency it has just told the rig to leave — and the final switch
+    // would then have nothing to command.
+    it('R15: snapshots a mode at the frequency just restored, not the one it left', async () => {
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        await onOperatingModeChange('ft8', 'phone'); // commands 14.255 USB
+        await onOperatingModeChange('phone', 'ft8'); // snapshots Phone…
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone'); // …and must return to it
+
+        expect(freqsSent()).toContain('14255000');
+    });
+
+    // A13. set_freq is rejected, so the rig is still on the FT8 frequency —
+    // sending set_mode now would put it in USB there.
+    it('R16: abandons the rest of the restore when a command is rejected', async () => {
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve(
+                op === 'set_freq'
+                    ? { ok: false, message: 'rig said no' }
+                    : { ok: true, message: '' }
+            );
+        });
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(modesSent()).toEqual([]);
+        expect(sent.filter((s) => s.op === 'set_freq_b')).toEqual([]);
+    });
+
+    // The mode readout must follow the rig back, not sit on FT8 until the push
+    // lands. This is rig.setMode's optimistic write, which the restore gets by
+    // CALLING it — a hand-rolled driveRig('set_mode') would leave the readout
+    // reading DATA-U/FT8 on a rig that has been returned to USB, and would drop
+    // its rollback with it.
+    it('R17: shows the restored mode as soon as the rig accepts it', async () => {
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(rig.modeLiteral).toBe('USB');
+        expect(rig.mode).toBe('USB');
+    });
+
+    // A13. The rejected target must not become the nudge base either, or the
+    // next frequency key steps from a frequency the rig never reached.
+    it('R18: does not seed a rejected frequency as the nudge target', async () => {
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve(
+                op === 'set_freq'
+                    ? { ok: false, message: 'rig said no' }
+                    : { ok: true, message: '' }
+            );
+        });
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        await onOperatingModeChange('ft8', 'phone');
+        sent = [];
+
+        await nudgeFreqCoarse(1);
+
+        // Steps from where the rig actually is (14.074), not the refused 14.255.
+        expect(freqsSent()).toEqual(['14074100']);
+    });
+
+    // A14
+    it('R19: reports a rejected restore', async () => {
+        const err = vi.spyOn(toasts, 'error');
+        setCommandSender(() => Promise.resolve({ ok: false, message: 'rig said no' }));
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(err).toHaveBeenCalled();
+    });
+
+    // A14's second half. A failed restore leaves the rig on the other mode's
+    // frequencies — the same state a TX refusal leaves — so the mode it failed
+    // to reach needs the same snapshot protection (R9d).
+    it('R20: protects the snapshot of a mode whose restore was rejected', async () => {
+        let reject = true;
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve(
+                reject ? { ok: false, message: 'rig said no' } : { ok: true, message: '' }
+            );
+        });
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        await onOperatingModeChange('ft8', 'phone'); // rejected; rig stays on FT8
+        reject = false;
+        await onOperatingModeChange('phone', 'ft8'); // rig already there
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(freqsSent()).toContain('14255000');
+    });
+
+    // A11. Without the seed the nudge would step from rig.vfoA, which the
+    // restore has just superseded.
     it('R13: a frequency nudge straight after a restore steps from the restored frequency', async () => {
         livePhone();
         await onOperatingModeChange('phone', 'ft8');
