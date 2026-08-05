@@ -133,6 +133,13 @@
     // keep either half readable, not to satisfy a complexity budget.
     function pileupKeydown(e: KeyboardEvent): void {
         if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+            // Only from the callsign field, or from no field at all. In Notes
+            // Shift+Enter is an ordinary NEWLINE, and stacking there also ran
+            // clearDraft() — erasing every field of a QSO in progress from a
+            // keystroke that looked like typing. v1 reasoned that Shift+Enter
+            // has "no text-editing meaning, so it stays live even in a field",
+            // which holds for an <input> and not for a <textarea>.
+            if (isTextEntry(e.target) && e.target !== callInput) return;
             e.preventDefault();
             stackCall();
             return;

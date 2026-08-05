@@ -198,6 +198,73 @@ describe('Phone/CW pile-up keyboard', () => {
         expect(draft.callsign).toBe('');
     });
 
+    /*
+        A20, from clean-room review 70f3a178. Shift+Enter was captured at the
+        WINDOW with no check on where the keystroke came from — so pressing it in
+        Notes, where Shift+Enter is an ordinary newline, stacked the call and
+        called clearDraft(), erasing every field of a QSO in progress.
+
+        A20  Shift+Enter only sets a call aside when I am not typing into a
+             field. In Notes it puts in a newline; in any other field it does
+             nothing at all. Apart from it clearing the QSO I am part-way
+             through — which is what it did, silently, from any control.
+
+        Inherited from v1, whose comment reasoned that Shift+Enter has "no
+        text-editing meaning, so it stays live even in a field". True of an
+        <input>; false of a <textarea>, where it is a newline.
+    */
+    it('R12: Shift+Enter in the Notes textarea neither stacks nor clears the draft', () => {
+        const { container } = render(LoggingCard);
+        workableDraft('G0ABC');
+        draft.notes = 'part-way through';
+        flushSync();
+        const notes = container.querySelector('#lc-notes');
+        expect(notes).not.toBeNull();
+
+        notes?.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true })
+        );
+        flushSync();
+
+        expect(callsignStack.items).toEqual([]);
+        expect(draft.callsign).toBe('G0ABC');
+        expect(draft.notes).toBe('part-way through');
+    });
+
+    it('R13: Shift+Enter in another entry field neither stacks nor clears', () => {
+        const { container } = render(LoggingCard);
+        workableDraft('G0ABC');
+        draft.name = 'Marc';
+        flushSync();
+        const name = container.querySelector('#lc-name');
+        expect(name).not.toBeNull();
+
+        name?.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true })
+        );
+        flushSync();
+
+        expect(callsignStack.items).toEqual([]);
+        expect(draft.name).toBe('Marc');
+    });
+
+    // …but the field the call is TYPED in is exactly where the operator presses
+    // it, so that one must still work.
+    it('R14: Shift+Enter in the callsign field still sets the call aside', () => {
+        const { container } = render(LoggingCard);
+        workableDraft('G0ABC');
+        const call = container.querySelector('#lc-call');
+        expect(call).not.toBeNull();
+
+        call?.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true })
+        );
+        flushSync();
+
+        expect(callsignStack.items).toEqual(['G0ABC']);
+        expect(draft.callsign).toBe('');
+    });
+
     // A1's guard: an empty or malformed field must not stack a junk entry.
     it('R8: Shift+Enter on an empty callsign stacks nothing', () => {
         render(LoggingCard);
