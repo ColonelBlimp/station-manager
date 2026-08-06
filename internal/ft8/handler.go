@@ -120,6 +120,15 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 		keepalive := time.NewTicker(sseKeepAliveInterval)
 		defer keepalive.Stop()
 
+		// Audio-level meter: PULL delivery (review d22eff6b — pushed at ~4 Hz
+		// it filled the subscriber buffer during a write stall and got the
+		// subscriber evicted). Each writer polls the hub's latest reading and
+		// emits only on generation change, so a fresh tab shows the current
+		// level within one tick and a stalled one just catches up to newest.
+		audioTick := time.NewTicker(audioLevelEmitInterval)
+		defer audioTick.Stop()
+		var audioSeen uint64
+
 		for {
 			select {
 			case <-r.Context().Done():
@@ -137,6 +146,18 @@ func (s *Service) HTTPHandler(shutdownCh <-chan struct{}) http.Handler {
 				}
 				armWrite()
 				if err := s.writeEvent(w, evt); err != nil {
+					return
+				}
+				flusher.Flush()
+
+			case <-audioTick.C:
+				evt, gen := s.hub.latestAudio()
+				if evt == nil || gen == audioSeen {
+					continue
+				}
+				audioSeen = gen
+				armWrite()
+				if err := s.writeEvent(w, *evt); err != nil {
 					return
 				}
 				flusher.Flush()

@@ -45,6 +45,18 @@ type hub struct {
 	lastDecode    *hubEvent
 	lastTx        *hubEvent
 	lastQso       *hubEvent
+
+	// Audio-level meter: PULL delivery, never the subscriber buffers (review
+	// d22eff6b). At ~4 Hz the meter filled the 8-slot buffer within a ~2 s
+	// SSE write stall, after which the next event EVICTED the subscriber —
+	// and through the capture linger that can disarm TX mid-QSO. Latest-wins
+	// by construction: each SSE writer polls latestAudio on its own ticker
+	// (audioLevelEmitInterval) and emits on generation change, so a stalled
+	// reader just emits the newest value when it recovers. The 2026-08-01
+	// eviction ruling (buffers stay 8) keeps its arithmetic: real events
+	// have the whole buffer to themselves.
+	lastAudio *hubEvent
+	audioGen  uint64
 }
 
 func newHub(logger logging.Logger) *hub {
@@ -142,6 +154,26 @@ func (h *hub) subscribe() (<-chan hubEvent, func()) {
 		}
 	}
 	return ch, unsub
+}
+
+// publishAudio stores the meter newest reading for pull delivery (see the
+// lastAudio field note). No-op on a closed hub, like publish.
+func (h *hub) publishAudio(evt hubEvent) {
+	h.mu.Lock()
+	if !h.closed {
+		cp := evt
+		h.lastAudio = &cp
+		h.audioGen++
+	}
+	h.mu.Unlock()
+}
+
+// latestAudio returns the newest audio-level event and its generation
+// (0 = none published yet).
+func (h *hub) latestAudio() (*hubEvent, uint64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.lastAudio, h.audioGen
 }
 
 // latestOccupancy returns the most recent occupancy report, or nil if none has

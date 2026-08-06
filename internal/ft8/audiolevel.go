@@ -3,6 +3,7 @@ package ft8
 import (
 	"context"
 	"math"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/safego"
 )
@@ -22,6 +23,10 @@ const audioLevelFloorDbfs = -120.0
 // pipeline's 12 kHz → ~4 Hz on the wire. Snappy enough to watch while
 // turning a gain knob, light enough to be noise on the SSE stream.
 const audioLevelWindowSamples = 3000
+
+// audioLevelEmitInterval paces each SSE writer's pull of the latest reading
+// (handler.go). Package var so tests can dial it down.
+var audioLevelEmitInterval = 250 * time.Millisecond
 
 // AudioLevel is the ft8-audio-level SSE payload: one measurement window of
 // the incoming capture audio. dBFS (0 = full-scale int16), rounded to
@@ -73,9 +78,10 @@ func (m *audioLevelMeter) feed(batch []int16) {
 func (s *Service) teeAudioLevel(ctx context.Context, in <-chan []int16) <-chan []int16 {
 	out := make(chan []int16)
 	meter := newAudioLevelMeter(audioLevelWindowSamples, func(peak, rms float64) {
-		// hub.publish is mutex-guarded with non-blocking per-subscriber sends,
-		// so publishing from the tee goroutine cannot stall the sample flow.
-		s.hub.publish(hubEvent{name: EventAudioLevel, payload: AudioLevel{
+		// publishAudio is a latest-wins store, never a buffered send — meter
+		// ticks must not occupy or evict subscriber buffers (review d22eff6b),
+		// and storing cannot stall the sample flow.
+		s.hub.publishAudio(hubEvent{name: EventAudioLevel, payload: AudioLevel{
 			PeakDbfs: math.Round(peak*10) / 10,
 			RmsDbfs:  math.Round(rms*10) / 10,
 		}})
