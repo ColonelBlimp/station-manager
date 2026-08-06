@@ -66,9 +66,12 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   test header). jsdom caveat: the suite pins the POLICY against a fake
   EventSource — whether the desktop browser fires 'online' after a real
   bounce is confirmed only by the next natural bounce (or Playwright, later).
-- **Deploy state:** daemon runs `…1100-g510cb4fa-dirty` = `67ba8a66`; the
-  online fix is SPA-only and needs a redeploy (+ tab reload) to go live —
-  mind that a redeploy restarts the daemon mid-operating.
+- **DEPLOYED AT HEAD 2026-08-06** (`…1104-gc741a0ee`, clean build, tab
+  reloaded): the revive-on-'online' fix and the WorkedPanel centring are LIVE.
+  The Phone/CW ↔ FT8 restore feature passed its first ON-HARDWARE check
+  (operator, same morning). The 'online' revive itself is confirmed only by
+  the next natural network bounce — nothing to do, just don't call it
+  field-proven yet.
 - **STOP PATCHING THE FT8 TIMEOUT RECONCILE** — converged at `4d131720`; if it
   draws another finding, add `If-Match`/revision to `PUT /v1/config` instead.
 - **OPEN (operator decisions, not started):** 121 QSO rows with coordinates

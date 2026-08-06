@@ -32,6 +32,28 @@
       A11 A frequency key pressed straight after a switch steps from where I
           have just been returned to — not from the other mode's frequency.
 
+      A25 (operator-directed 2026-08-06, after FT8 entry left the rig on
+          14.225 USB) Switching to FT8 with no FT8 state to return to tunes
+          the rig to the CURRENT band's configured FT8 frequency and asserts
+          the data mode — I land ready to operate, not parked on the phone
+          frequency. I can tell a SEED (the watering hole) from a RESTORE (my
+          last FT8 dial): only the latter follows a previous FT8 visit. A
+          seed the rig refused or TX blocked says so, and never lets the
+          phone position masquerade as FT8's state — the next entry tries
+          again, unless I really operated FT8 in between (then THAT state is
+          kept). A band with no configured FT8 frequency stays the
+          pre-feature no-op, silently — an unconfigured FT8 is a steady
+          state, not a fault to nag about.
+          AMENDS A3/A4: their "first switch re-tunes nothing" now covers the
+          phone direction (no canonical home to establish) and an
+          unconfigured FT8 only. The reload rationale survives — a seed goes
+          to the band's configured home, never to a stale snapshot.
+          Judgement calls, drafted not operator-ratified: the same
+          restore_rig_on_mode_switch knob gates the seed (it is a rig move on
+          a mode switch); CAT-off seeds nothing (the displayed context is the
+          operator's own); a rig with no set_freq seeds nothing at all —
+          asserting a data mode on a phone frequency is worse than nothing.
+
     WHICH STEP "the switch" MEANS. A mode change is a sequence: the router
     updates, the view swaps, the rig is commanded, the rig confirms by push.
     The snapshot is taken at the FIRST step, before anything is commanded —
@@ -62,6 +84,8 @@ import {
     setCommandSender,
     nudgeFreqCoarse,
     catLink,
+    setFt8Frequencies,
+    setFt8Mode,
 } from './rig.svelte';
 import { ft8State, resetFt8ForTests } from './ft8.svelte';
 import { toasts } from '../ui/toasts.svelte';
@@ -93,7 +117,18 @@ beforeEach(() => {
         return Promise.resolve({ ok: true, message: '' });
     });
     setRigCaps({ ops: [...ALL_OPS], tune: false, rigModes: [] });
+    // The R rules run with an UNCONFIGURED FT8 (no watering holes) — the
+    // no-freq seed path is a designed no-op, so their fixtures see exactly the
+    // pre-A25 behaviour. The S rules configure FT8 per test via configureFt8().
+    setFt8Frequencies({});
+    setFt8Mode('');
 });
+
+/** The configured-FT8 boot the S rules run under. */
+function configureFt8(): void {
+    setFt8Frequencies({ '20m': 14_074_000, '40m': 7_074_000 });
+    setFt8Mode('DATA-U');
+}
 
 afterEach(() => {
     vi.useRealTimers();
@@ -159,6 +194,9 @@ describe('operating-state restore across a mode switch', () => {
 
     // A3 — and A4, which is the same rule seen after a reload: the module
     // starts with no snapshots, exactly as resetModeRestore leaves it.
+    // Since A25 this holds only because the harness leaves FT8 UNCONFIGURED
+    // (no watering holes to seed); a configured boot seeds instead — S1. The
+    // phone direction stays a no-op either way — S3b.
     it('R3: commands nothing on the first switch into a mode this session', async () => {
         livePhone();
 
@@ -834,5 +872,239 @@ describe('operating-state restore across a mode switch', () => {
         await nudgeFreqCoarse(1); // +100 Hz, within the repeat window
 
         expect(freqsSent()).toEqual(['14255100']);
+    });
+
+    // ------------------------------------------------------------------
+    // S rules — the A25 first-entry seed (configured FT8; see configureFt8).
+    // ------------------------------------------------------------------
+
+    // S1 — THE REPORTED CASE: phone on 20m, first FT8 entry, rig moves to the
+    // band's configured FT8 dial and then the data mode — frequency FIRST,
+    // matching ft8SelectBand's rationale (a refused mode write must not cost
+    // the dial move; a data mode on a phone frequency is the bad outcome).
+    it('S1: seeds the current band FT8 frequency and data mode on first entry', async () => {
+        configureFt8();
+        livePhone();
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(sent.map((s) => [s.op, s.value])).toEqual([
+            ['set_freq', '14074000'],
+            ['set_mode', 'DATA-U'],
+        ]);
+    });
+
+    // S2 — A SEED IS NOT A RESTORE. Once FT8 has real state (the operator
+    // nudged off the watering hole), coming back restores THAT dial; a seed
+    // here would drag them back to 14.074 and erase the nudge.
+    it('S2: restores the last FT8 dial instead of re-seeding the watering hole', async () => {
+        configureFt8();
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        // The rig confirms the seed, then the operator nudges off the hole.
+        catLink.onRigState({ vfoA: 14_075_500, mode: 'DATA-U' });
+        await onOperatingModeChange('ft8', 'phone');
+        catLink.onRigState({ vfoA: 14_255_000, mode: 'USB' });
+        sent = [];
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(freqsSent()).toContain('14075500');
+        expect(freqsSent()).not.toContain('14074000');
+    });
+
+    // S3 — NO CONFIGURED FREQUENCY = THE PRE-A25 NO-OP, silently and stably:
+    // no commands, no toast (an unconfigured FT8 is a steady state, and a
+    // nag on every entry would train the operator to ignore toasts), and no
+    // retry loop — the exit snapshot takes over exactly as before A25.
+    it('S3: stays the silent pre-feature no-op when the band has no FT8 frequency', async () => {
+        const info = vi.spyOn(toasts, 'info');
+        const err = vi.spyOn(toasts, 'error');
+        livePhone(); // harness leaves FT8 unconfigured
+        await onOperatingModeChange('phone', 'ft8');
+        await onOperatingModeChange('ft8', 'phone');
+        sent = [];
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(sent).toEqual([]);
+        expect(info).not.toHaveBeenCalled();
+        expect(err).not.toHaveBeenCalled();
+    });
+
+    // S3b — THE PHONE DIRECTION HAS NO SEED: there is no canonical phone home
+    // to establish, configured FT8 or not. First entry to phone stays a no-op.
+    // The rig sits OFF the watering hole (a hand-tuned 14.076) deliberately:
+    // parked exactly on 14.074, a wrong implementation that seeds phone too
+    // would command nothing and this fixture could not tell it from the rule.
+    it('S3b: seeds nothing on the first switch into phone', async () => {
+        configureFt8();
+        livePhone();
+        rig.vfoA = 14_076_000;
+        rig.modeLiteral = 'DATA-U'; // the rig sits where FT8 left it
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(sent).toEqual([]);
+    });
+
+    // S4 — THE KNOB GATES THE SEED (A5's promise: knob off, CAT live, no
+    // switch moves the rig — a seed is a rig move on a mode switch).
+    it('S4: seeds nothing with the restore knob off', async () => {
+        configureFt8();
+        setRestoreOnModeSwitch(false);
+        livePhone();
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(sent).toEqual([]);
+    });
+
+    // S5 — CAT OFF SEEDS NOTHING. The displayed context is the operator's own
+    // manual entry; rewriting it to a watering hole they may not be on is
+    // invention, not restoration.
+    it('S5: seeds nothing without a live CAT link', async () => {
+        configureFt8();
+        livePhone();
+        rig.cat = 'lost';
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(sent).toEqual([]);
+    });
+
+    // S6 — TX BLOCKS THE SEED AND SAYS SO, and the block does not poison:
+    // FT8 never got its state, so the next entry tries again rather than
+    // restoring the phone position the rig happened to sit on.
+    it('S6: skips the seed while the tune carrier is up, then retries next entry', async () => {
+        configureFt8();
+        const info = vi.spyOn(toasts, 'info');
+        livePhone();
+        rig.tuneActive = true;
+        await onOperatingModeChange('phone', 'ft8');
+        expect(sent).toEqual([]);
+        expect(info).toHaveBeenCalledOnce();
+
+        rig.tuneActive = false;
+        await onOperatingModeChange('ft8', 'phone');
+        sent = [];
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(freqsSent()).toContain('14074000');
+    });
+
+    // S7 — A REFUSED SEED IS REPORTED AND RETRIED. Same shape as S6 but the
+    // rig said no: the operator is told (they asked for nothing and the rig
+    // refused something they cannot see), and FT8 stays unestablished.
+    it('S7: reports a refused seed and retries on the next entry', async () => {
+        configureFt8();
+        const err = vi.spyOn(toasts, 'error');
+        let refuse = true;
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve(
+                refuse && op === 'set_freq'
+                    ? { ok: false, message: 'rig said no' }
+                    : { ok: true, message: '' }
+            );
+        });
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        expect(err).toHaveBeenCalledOnce();
+
+        refuse = false;
+        await onOperatingModeChange('ft8', 'phone');
+        sent = [];
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(freqsSent()).toContain('14074000');
+    });
+
+    // S8 — THE SEED RECORDS THE OUTCOME IT COMMANDED (the held-value rule the
+    // restore already obeys). Switch back before the rig confirms: without a
+    // hold, effective() still reads the phone frequency, the phone restore
+    // sees "already there" and sends NOTHING — the operator lands in phone
+    // view with the rig on its way to 14.074.
+    it('S8: a fast switch-back still returns the rig to the phone frequency', async () => {
+        configureFt8();
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8'); // seed sent, NOT confirmed
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(freqsSent()).toContain('14255000');
+        expect(modesSent()).toContain('USB');
+    });
+
+    // S9 — EMPTY ft8Mode MEANS "LEAVE THE MODE ALONE" (the configured
+    // contract ft8SelectBand documents): the dial still seeds, no set_mode
+    // goes out.
+    it('S9: seeds the dial only when no FT8 mode literal is configured', async () => {
+        setFt8Frequencies({ '20m': 14_074_000 });
+        setFt8Mode('');
+        livePhone();
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(sent.map((s) => [s.op, s.value])).toEqual([['set_freq', '14074000']]);
+    });
+
+    // S10 — REAL FT8 OPERATION DURING A FAILED-SEED VISIT IS KEPT. The
+    // retry-next-entry rule (S6/S7) must not discard state the operator
+    // established by hand after the refusal — the rig reporting is the
+    // evidence that FT8 really was operated there.
+    it('S10: keeps a hand-tuned FT8 state made after a refused seed', async () => {
+        configureFt8();
+        let refuse = true;
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve(
+                refuse && op === 'set_freq'
+                    ? { ok: false, message: 'rig said no' }
+                    : { ok: true, message: '' }
+            );
+        });
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8'); // seed refused
+        catLink.onRigState({ vfoA: 14_076_000, mode: 'DATA-U' }); // operator tunes by hand
+        refuse = false;
+        await onOperatingModeChange('ft8', 'phone');
+        catLink.onRigState({ vfoA: 14_255_000, mode: 'USB' });
+        sent = [];
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(freqsSent()).toContain('14076000');
+        expect(freqsSent()).not.toContain('14074000');
+    });
+
+    // S11 — A RIG WITHOUT set_mode STILL GETS ITS DIAL SEEDED, silently (the
+    // R5 tolerance, seed edition): the missing capability is not a fault.
+    it('S11: seeds the dial and stays silent on a rig with no set_mode', async () => {
+        configureFt8();
+        const err = vi.spyOn(toasts, 'error');
+        setRigCaps({ ops: ['set_freq', 'set_freq_b'], tune: false, rigModes: [] });
+        livePhone();
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(sent.map((s) => [s.op, s.value])).toEqual([['set_freq', '14074000']]);
+        expect(err).not.toHaveBeenCalled();
+    });
+
+    // S12 — A RIG WITHOUT set_freq SEEDS NOTHING AT ALL. Establishing FT8
+    // starts at the dial; asserting a data mode on a phone frequency is the
+    // exact outcome the freq-first ordering exists to prevent.
+    it('S12: seeds nothing on a rig that cannot set frequency', async () => {
+        configureFt8();
+        setRigCaps({ ops: ['set_mode'], tune: false, rigModes: [] });
+        livePhone();
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(sent).toEqual([]);
     });
 });

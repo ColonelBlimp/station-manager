@@ -11,9 +11,15 @@
     It cannot live in rig.svelte: ft8.svelte already imports that, so reading
     the FT8 TX state from there would close an import cycle.
 
-    Snapshots are in-memory only. A reload starts with none, so the first
-    switch after one re-tunes nothing — a page refresh must never surprise the
-    operator by moving the rig to where they were an hour ago.
+    Snapshots are in-memory only. A reload starts with none — a page refresh
+    must never surprise the operator by restoring where they were an hour ago.
+    What a first FT8 entry DOES get (A25, operator-directed 2026-08-06) is a
+    SEED: the current band's configured FT8 dial plus the data-mode literal,
+    the same operating point the FT8 band buttons establish. Derived from
+    config, never from a stale snapshot, so the reload rationale stands. The
+    phone direction stays a no-op — phone has no canonical home to establish —
+    and an UNCONFIGURED FT8 (no watering hole for the band) stays the
+    pre-seed no-op too, silently: it is a steady state, not a fault.
 
     Ported from the retired logging SPA (`rigControl.ts` snapshot/restore,
     driven by a LoggingCard $effect). Two things changed in the move:
@@ -31,6 +37,9 @@ import {
     seedFreqTarget,
     rigReportVersions,
     setMode as rigSetMode,
+    ft8FrequencyFor,
+    ft8ModeLiteral,
+    type RigReportVersions,
 } from './rig.svelte';
 import { ft8State } from './ft8.svelte';
 import { toasts } from '../ui/toasts.svelte';
@@ -87,6 +96,29 @@ function transmitting(): boolean {
 let unrestored: OpMode | null = null;
 
 /*
+    The seed's sibling of `unrestored`, protecting NULL-ness rather than a
+    snapshot: after a seed that could not run (rig refusal, TX in flight), FT8
+    is displayed while the rig sits on phone frequencies. Snapshotting that on
+    the way out would hand every later entry a "restore" to the phone position
+    — permanently, because a non-null snapshot also stops the seed retrying.
+    But blanket-skipping the exit snapshot would DISCARD a state the operator
+    then established by hand, so the rig-report counters for the two fields
+    the seed owns are recorded at the refusal: unchanged at exit means the rig
+    genuinely never moved (skip the snapshot, retry next entry); changed means
+    FT8 really was operated (keep it). The fact needed was already carried —
+    rigReportVersions — so no timer or threshold is invented here.
+*/
+let seedRefusedAt: RigReportVersions | null = null;
+
+function seedNeverRan(from: OpMode): boolean {
+    if (from !== 'ft8' || seedRefusedAt === null) return false;
+    const now = rigReportVersions();
+    // vfoA and mode only — the fields a seed establishes. vfoB traffic says
+    // nothing about whether THIS operating point was ever set up.
+    return now.vfoA === seedRefusedAt.vfoA && now.mode === seedRefusedAt.mode;
+}
+
+/*
     What each field was last COMMANDED to, dated with that field's rig-report
     counter as of the moment the command went out. While the counter is
     unchanged the rig has said nothing about that field since, so the commanded
@@ -134,15 +166,21 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
     // already where it was about to be sent.
     const here = effective();
 
-    const foreign = from === unrestored;
+    const foreign = from === unrestored || seedNeverRan(from);
     unrestored = null;
+    seedRefusedAt = null;
     // Taken FIRST, before anything below moves the rig — and taken even when
     // the restore is then refused, since a refused re-tune is not an abandoned
     // switch and the mode being left still needs something to return to.
     if (!foreign) snapshots[from] = here;
 
     const incoming = snapshots[to];
-    if (incoming === null) return; // never operated this mode: nothing to return to
+    if (incoming === null) {
+        // Never operated this mode: nothing to RESTORE — but FT8 has a
+        // canonical home to ESTABLISH (A25). Phone does not; it stays a no-op.
+        if (to === 'ft8') await seedFt8();
+        return;
+    }
 
     // CAT off (or lost): rewrite what's displayed. No rig is touched, so the
     // opt-out knob has nothing to opt out of here.
@@ -161,27 +199,31 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
         return;
     }
 
-    // Only what FT8 (or Phone) actually changed, each capability-gated. The
-    // per-physical-VFO ops are selection-independent, so no VFO swap is needed
-    // — and none is sent deliberately: swap_vfo exchanges VFO CONTENTS, and the
-    // selection survives an excursion anyway (both modes tune the selected VFO).
-    //
-    // A REJECTION ABANDONS THE REST. The commands are not independent: they put
-    // the rig at one operating point together. Carrying on past a refused
-    // set_freq is how a data mode ends up asserted on a phone frequency, and it
-    // would also seed a nudge target the rig never reached.
-    // Each field is re-compared against the rig's CURRENT effective position
-    // immediately before its own command, not against `here`. `here` was read
-    // before the first await, and the rig can report in the gaps between
-    // commands — comparing a later field against a pre-restore reading decides
-    // whether to move the rig from stale information.
-    //
-    // A field is recorded as commanded ONLY when its command went out and
-    // succeeded. A gate that skips one (no capability, no reported value,
-    // nothing to change) leaves the rig where it was, and recording the wish
-    // instead of the outcome makes the app believe the rig reached somewhere it
-    // has never been — a belief that outlives the capability which suppressed
-    // the command, since capabilities are re-applied on any context reload.
+    await applyRestore(to, incoming);
+}
+
+// Only what FT8 (or Phone) actually changed, each capability-gated. The
+// per-physical-VFO ops are selection-independent, so no VFO swap is needed
+// — and none is sent deliberately: swap_vfo exchanges VFO CONTENTS, and the
+// selection survives an excursion anyway (both modes tune the selected VFO).
+//
+// A REJECTION ABANDONS THE REST. The commands are not independent: they put
+// the rig at one operating point together. Carrying on past a refused
+// set_freq is how a data mode ends up asserted on a phone frequency, and it
+// would also seed a nudge target the rig never reached.
+// Each field is re-compared against the rig's CURRENT effective position
+// immediately before its own command, not against applySwitch's opening read —
+// the rig can report in the gaps between commands, and comparing a later field
+// against a pre-restore reading decides whether to move the rig from stale
+// information.
+//
+// A field is recorded as commanded ONLY when its command went out and
+// succeeded. A gate that skips one (no capability, no reported value,
+// nothing to change) leaves the rig where it was, and recording the wish
+// instead of the outcome makes the app believe the rig reached somewhere it
+// has never been — a belief that outlives the capability which suppressed
+// the command, since capabilities are re-applied on any context reload.
+async function applyRestore(to: OpMode, incoming: OperatingSnapshot): Promise<void> {
     const selected = rig.selectedVfo;
     if (incoming.vfoA !== null && hasOp('set_freq') && incoming.vfoA !== effective().vfoA) {
         const hz = clampFreq(incoming.vfoA);
@@ -214,6 +256,60 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
         const r = await rigSetMode(incoming.liveMode);
         if (!r.ok) return abandon(to, r.message);
         held.mode = { value: incoming.liveMode, seq };
+    }
+}
+
+/*
+    First-entry FT8 seed (A25): the band's configured dial, then the data mode
+    — the ft8SelectBand order and rationale (a refused mode write must not
+    cost the dial move; a data mode on a phone frequency is the bad outcome),
+    but issued here with modeRestore's own per-command holds, because a seed
+    inside a switch has the same wish-vs-outcome gap as a restore: switch back
+    before the rig confirms and, without the hold, effective() still reads the
+    phone frequency — the phone restore then agrees with a rig that is
+    actually on its way to the watering hole, and the exit snapshot records
+    the phone position as FT8's.
+*/
+async function seedFt8(): Promise<void> {
+    if (rig.cat !== 'connected') return; // the CAT-off display context is the operator's own
+    if (!restoreOnSwitch) return; // the knob's promise: no switch moves a live rig
+    const hz = ft8FrequencyFor(rig.band);
+    if (hz === undefined) return; // unconfigured: nothing to establish, and no nagging
+    // No set_freq means no dial to establish — and without the dial, the mode
+    // assert alone would be exactly the wrong-frequency data mode.
+    if (!hasOp('set_freq')) return;
+    if (transmitting()) {
+        seedRefusedAt = rigReportVersions();
+        toasts.info('Transmitting — the rig was left where it is, not tuned for FT8.');
+        return;
+    }
+
+    const selected = rig.selectedVfo;
+    const target = clampFreq(hz);
+    if (target !== effective().vfoA) {
+        const seq = rigReportVersions().vfoA;
+        const r = await driveRig('set_freq', String(target));
+        if (!r.ok) {
+            seedRefusedAt = rigReportVersions();
+            toasts.error(`Could not tune for FT8: ${r.message}`);
+            return;
+        }
+        held.vfoA = { value: target, seq };
+        if (selected === 'A') seedFreqTarget('A', target);
+    }
+    const literal = ft8ModeLiteral();
+    if (literal !== '' && hasOp('set_mode') && literal !== effective().liveMode) {
+        const seq = rigReportVersions().mode;
+        const r = await rigSetMode(literal);
+        if (!r.ok) {
+            // The dial landed and its hold is kept (that command really
+            // happened); only the mode is outstanding, so the retry logic
+            // re-enters with the dial already effective and sends mode alone.
+            seedRefusedAt = rigReportVersions();
+            toasts.error(`Could not set the FT8 mode: ${r.message}`);
+            return;
+        }
+        held.mode = { value: literal, seq };
     }
 }
 
@@ -261,6 +357,7 @@ export function resetModeRestore(): void {
     snapshots.ft8 = null;
     restoreOnSwitch = true;
     unrestored = null;
+    seedRefusedAt = null;
     held.vfoA = null;
     held.vfoB = null;
     held.mode = null;

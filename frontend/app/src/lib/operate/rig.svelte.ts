@@ -509,6 +509,18 @@ export function setFt8Mode(m: string): void {
     ft8Mode = m;
 }
 
+/** The configured FT8 dial for a band — read by modeRestore's first-entry
+ *  seed, which needs the value (not the ft8SelectBand command bundle) so it
+ *  can date each command against the rig-report counters it keeps. */
+export function ft8FrequencyFor(band: string): number | undefined {
+    return ft8Frequencies[band];
+}
+
+/** The configured FT8 rig-mode literal ('' = leave the mode alone). */
+export function ft8ModeLiteral(): string {
+    return ft8Mode;
+}
+
 /**
  * Set the selected VFO to an ABSOLUTE frequency (Hz). CAT off → the manual freq
  * field (band follows the freq); CAT live → set_freq (VFO-A) / set_freq_b (VFO-B),
