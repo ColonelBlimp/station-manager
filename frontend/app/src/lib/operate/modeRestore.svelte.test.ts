@@ -1110,4 +1110,69 @@ describe('operating-state restore across a mode switch', () => {
 
         expect(sent).toEqual([]);
     });
+
+    // S13 — THE SEED DRIVES THE SELECTED VFO (clean-room review c0df1c8a).
+    // FT8 operates on the selected VFO — rig.band derives from it and
+    // ft8SelectBand/setFreq route the dial move by it. A seed that always
+    // sends set_freq under a B selection tunes the WRONG dial and then
+    // asserts the data mode on the phone frequency still selected.
+    it('S13: seeds the selected VFO, not always VFO A', async () => {
+        configureFt8();
+        livePhone();
+        rig.selectedVfo = 'B';
+        rig.vfoB = 14_255_000; // phone on 20m, operating VFO B
+        rig.vfoA = 7_100_000;
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(sent.map((s) => [s.op, s.value])).toEqual([
+            ['set_freq_b', '14074000'],
+            ['set_mode', 'DATA-U'],
+        ]);
+    });
+
+    // S13b — …and the no-dial-no-seed gate (S12) is the SELECTED VFO's
+    // capability: a rig that can only set VFO A cannot establish FT8 while B
+    // is selected, so nothing is sent — not a VFO-A tune the operator isn't on.
+    it('S13b: seeds nothing when the selected VFO cannot be set', async () => {
+        configureFt8();
+        setRigCaps({ ops: ['set_freq', 'set_mode'], tune: false, rigModes: [] });
+        livePhone();
+        rig.selectedVfo = 'B';
+        rig.vfoB = 14_255_000;
+        rig.vfoA = 7_100_000;
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(sent).toEqual([]);
+    });
+
+    // S14 — A REFUSED MODE IS RETRIED even when the landed dial command
+    // confirms before the operator leaves FT8 (clean-room review c0df1c8a).
+    // The confirmation is the seed's own doing: counting it as "the operator
+    // established FT8" keeps a snapshot of {FT8 dial, phone mode}, and every
+    // later entry restores that instead of retrying the data mode — the
+    // half-seeded state becomes permanent.
+    it('S14: retries a refused data mode after its own dial confirmation', async () => {
+        configureFt8();
+        let refuse = true;
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve(
+                refuse && op === 'set_mode'
+                    ? { ok: false, message: 'rig said no' }
+                    : { ok: true, message: '' }
+            );
+        });
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8'); // dial lands, mode refused
+        catLink.onRigState({ vfoA: 14_074_000 }); // the seed's OWN dial confirm
+        refuse = false;
+        await onOperatingModeChange('ft8', 'phone');
+        sent = [];
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        expect(modesSent()).toContain('DATA-U');
+    });
 });

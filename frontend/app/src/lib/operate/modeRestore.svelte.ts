@@ -102,20 +102,26 @@ let unrestored: OpMode | null = null;
     the way out would hand every later entry a "restore" to the phone position
     — permanently, because a non-null snapshot also stops the seed retrying.
     But blanket-skipping the exit snapshot would DISCARD a state the operator
-    then established by hand, so the rig-report counters for the two fields
-    the seed owns are recorded at the refusal: unchanged at exit means the rig
-    genuinely never moved (skip the snapshot, retry next entry); changed means
-    FT8 really was operated (keep it). The fact needed was already carried —
-    rigReportVersions — so no timer or threshold is invented here.
+    then established by hand, so rig-report counters are recorded at the
+    refusal: unchanged at exit means the rig genuinely never moved (skip the
+    snapshot, retry next entry); changed means FT8 really was operated (keep
+    it). The fact needed was already carried — rigReportVersions — so no timer
+    or threshold is invented here.
+
+    Watched fields are ONLY the ones still OUTSTANDING at the refusal (review
+    c0df1c8a): a command that landed will confirm and bump its own counter,
+    and that confirmation is the seed's doing, not evidence the operator
+    established FT8 — counting it kept a {FT8 dial, phone mode} snapshot alive
+    and the refused data mode was never retried.
 */
-let seedRefusedAt: RigReportVersions | null = null;
+let seedRefusedAt: { fields: ('vfoA' | 'vfoB' | 'mode')[]; versions: RigReportVersions } | null =
+    null;
 
 function seedNeverRan(from: OpMode): boolean {
     if (from !== 'ft8' || seedRefusedAt === null) return false;
+    const at = seedRefusedAt;
     const now = rigReportVersions();
-    // vfoA and mode only — the fields a seed establishes. vfoB traffic says
-    // nothing about whether THIS operating point was ever set up.
-    return now.vfoA === seedRefusedAt.vfoA && now.mode === seedRefusedAt.mode;
+    return at.fields.every((f) => now[f] === at.versions[f]);
 }
 
 /*
@@ -275,27 +281,37 @@ async function seedFt8(): Promise<void> {
     if (!restoreOnSwitch) return; // the knob's promise: no switch moves a live rig
     const hz = ft8FrequencyFor(rig.band);
     if (hz === undefined) return; // unconfigured: nothing to establish, and no nagging
-    // No set_freq means no dial to establish — and without the dial, the mode
-    // assert alone would be exactly the wrong-frequency data mode.
-    if (!hasOp('set_freq')) return;
+
+    // FT8 operates on the SELECTED VFO — rig.band derives from it and
+    // ft8SelectBand/setFreq route the dial move by it (review c0df1c8a:
+    // seeding VFO A under a B selection tunes the wrong dial and then asserts
+    // the data mode on the phone frequency still selected). Everything
+    // downstream — command, capability gate, comparison, hold, retry watch —
+    // is that VFO's.
+    const selected = rig.selectedVfo;
+    const vfoField = selected === 'B' ? 'vfoB' : ('vfoA' as const);
+    const freqOp = selected === 'B' ? 'set_freq_b' : 'set_freq';
+    // No dial op for the operating VFO means no dial to establish — and
+    // without the dial, the mode assert alone would be exactly the
+    // wrong-frequency data mode.
+    if (!hasOp(freqOp)) return;
     if (transmitting()) {
-        seedRefusedAt = rigReportVersions();
+        seedRefusedAt = { fields: [vfoField, 'mode'], versions: rigReportVersions() };
         toasts.info('Transmitting — the rig was left where it is, not tuned for FT8.');
         return;
     }
 
-    const selected = rig.selectedVfo;
     const target = clampFreq(hz);
-    if (target !== effective().vfoA) {
-        const seq = rigReportVersions().vfoA;
-        const r = await driveRig('set_freq', String(target));
+    if (target !== effective()[vfoField]) {
+        const seq = rigReportVersions()[vfoField];
+        const r = await driveRig(freqOp, String(target));
         if (!r.ok) {
-            seedRefusedAt = rigReportVersions();
+            seedRefusedAt = { fields: [vfoField, 'mode'], versions: rigReportVersions() };
             toasts.error(`Could not tune for FT8: ${r.message}`);
             return;
         }
-        held.vfoA = { value: target, seq };
-        if (selected === 'A') seedFreqTarget('A', target);
+        held[vfoField] = { value: target, seq };
+        seedFreqTarget(selected, target);
     }
     const literal = ft8ModeLiteral();
     if (literal !== '' && hasOp('set_mode') && literal !== effective().liveMode) {
@@ -303,9 +319,12 @@ async function seedFt8(): Promise<void> {
         const r = await rigSetMode(literal);
         if (!r.ok) {
             // The dial landed and its hold is kept (that command really
-            // happened); only the mode is outstanding, so the retry logic
+            // happened); ONLY the mode is outstanding, so only the mode
+            // counter is watched — the landed dial command will confirm and
+            // bump its own counter, and that confirmation is the seed's
+            // doing, not operator evidence (review c0df1c8a). The retry
             // re-enters with the dial already effective and sends mode alone.
-            seedRefusedAt = rigReportVersions();
+            seedRefusedAt = { fields: ['mode'], versions: rigReportVersions() };
             toasts.error(`Could not set the FT8 mode: ${r.message}`);
             return;
         }
