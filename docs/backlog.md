@@ -189,15 +189,19 @@ next, and in what order" is answered.
      (state-coloured icon collapsed; TX stand-down). Defaults −60/−10 dBFS
      AWAIT HARDWARE CALIBRATION against the PCM2903C — config.json edit +
      restart to tune.
-  2. **TX drive indicator — now ADR 0064 (Proposed, 2026-08-06): windowed
-     mid-TX `RM4;` (ALC) polling.** The earlier premise here was WRONG twice:
-     the bridge does NOT stream ALC (only the selected meter is pushed —
-     METERSEL stays PO for the drive watch), and the "can't query during TX"
-     objection was our own empirical caution hardened into a rule — the CAT
-     spec places NO restriction on reads while keyed (verified against the
-     full 2308-F manual, 2026-08-06). The ADR carries the invariants (unkey
-     never waits, drive watch untouched, poll failure = degradation only)
-     and the operator's open calls (guard margin, cadence, red threshold).
+  2. **TX drive indicator — now ADR 0064 (Proposed, 2026-08-06): CONTINUOUS
+     `RM4;RM5;` polling while an FT8 capture session is live** (250 ms
+     cadence / 100 ms answer timeout, both operator-ratified same day; the
+     timeout, not the cadence, is the load-bearing safety number). The
+     earlier premise here was WRONG twice: the bridge does NOT stream ALC
+     (only the selected meter is pushed — METERSEL stays PO for the drive
+     watch), and the "can't query during TX" objection died on the wire —
+     TWO catcli experiments (2026-08-06, one operator-keyed) proved queries
+     answer DURING transmission with live values, and that nothing
+     subscribes continuing answers. Most of the mechanism exists (ADR 0035
+     poll loop + rigdef RM4/RM5 decode + meterTags slots). Open: Tune
+     coverage, SPA red threshold (first datum: ALC 026 at normal voice
+     drive).
   3. **Per-band Pwr control** — WSJT-X precedent CITED (user guide: the Pwr
      slider at the main window's right edge, dB on hover, remembered per band
      and separately for Tune; JTDX inherits the layout — inference). Mechanism
