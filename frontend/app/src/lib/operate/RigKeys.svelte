@@ -24,6 +24,7 @@
     } from './rig.svelte';
     import { operate } from './state.svelte';
     import { submitState } from './qso.svelte';
+    import { sessionEdit } from './sessionEdit.svelte';
     import { toasts } from '../ui/toasts.svelte';
 
     // A text field is focused → Ctrl+Shift+Arrow is native word-select, so the
@@ -45,8 +46,13 @@
 
     function onKeydown(e: KeyboardEvent): void {
         // A modal overlay owns the keyboard while open — don't tune underneath it.
-        // (The pile-up drawer is docked, not modal, so shortcuts stay live there.)
-        if (operate.exportOpen || submitState.duplicate) return;
+        // The session-edit modal is the one that bit: its own window handler
+        // does Escape/Ctrl+Enter, but window listeners don't shadow each
+        // other, so the rig family stayed live and could detune a live rig
+        // under the editor (keyboard audit 2026-08-06, A27 in
+        // pileupKeys.svelte.test.ts). (The pile-up drawer is docked, not
+        // modal, so shortcuts stay live there.)
+        if (operate.exportOpen || submitState.duplicate || sessionEdit.row !== null) return;
         if (!e.ctrlKey || !e.shiftKey) return; // the rig family is Ctrl+Shift only
 
         if (e.code === 'Backslash') {

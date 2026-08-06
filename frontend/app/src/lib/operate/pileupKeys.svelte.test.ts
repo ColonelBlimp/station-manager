@@ -20,6 +20,18 @@
       A6  Shift+↑/↓ inside a text field still selects text, and Ctrl+Shift+↑/↓
           still steps the rig frequency. Apart from either being swallowed.
 
+      A27 (keyboard audit, 2026-08-06) While I edit a logged QSO from the
+          Session panel, the keyboard belongs to the editor: Escape closes
+          only the editor — the draft I was typing below SURVIVES — and
+          Ctrl+Enter saves only the edit, logging nothing underneath; the
+          pile-up and rig shortcuts are inert until the editor closes. Apart
+          from the pre-fix behaviour: EditQsoModal registers its own window
+          keydown, but window listeners do not shadow each other, so Escape
+          also wiped the draft and Ctrl+Enter could LOG a half-typed QSO
+          under the modal. The retired SPA's handleKeydown opened with
+          `if (qsoEditState.open) return` — the port dropped that first
+          guard, and this criterion restores it.
+
     WHY THE STACK IS SEPARATE FROM FT8's PILE-UP. They share a name and nothing
     else: FT8's queue carries grid/SNR/slot/parity and is drained by the
     sequencer, this one is a list of callsigns the operator heard. One
@@ -34,10 +46,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import LoggingCard from './LoggingCard.svelte';
+import RigKeys from './RigKeys.svelte';
 import { callsignStack } from './callsignStack.svelte';
 import { draft, clearDraft, setSubmit, submitState } from './qso.svelte';
-import { rig, confirmRig, resetCatLink } from './rig.svelte';
+import { rig, confirmRig, resetCatLink, setCommandSender, setRigCaps } from './rig.svelte';
 import { operate } from './state.svelte';
+import { sessionEdit } from './sessionEdit.svelte';
+import type { LogbookQso } from '../api/logbooks';
 
 let logged: string[] = [];
 
@@ -50,6 +65,7 @@ beforeEach(() => {
     operate.pileup = false;
     submitState.duplicate = false;
     operate.exportOpen = false;
+    sessionEdit.row = null;
     logged = [];
     setSubmit((q) => {
         logged.push(q.callsign);
@@ -282,5 +298,80 @@ describe('Phone/CW pile-up keyboard', () => {
         key({ key: 'ArrowUp', shiftKey: true });
 
         expect(draft.callsign).toBe('G0ABC');
+    });
+
+    // ------------------------------------------------------------------
+    // K rules — A27: the session-edit modal owns the keyboard.
+    // Each has a closed-modal control half, so a broken shortcut cannot
+    // masquerade as a working guard.
+    // ------------------------------------------------------------------
+
+    // K1 — Escape under the open editor leaves the draft alone; after the
+    // editor closes, the same key clears it again.
+    it('K1: Escape does not clear the draft while the session editor is open', () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+        sessionEdit.row = { callsign: 'M0EDIT' } as unknown as LogbookQso;
+
+        key({ key: 'Escape' });
+        expect(draft.callsign).toBe('G0ABC');
+
+        sessionEdit.row = null;
+        key({ key: 'Escape' });
+        expect(draft.callsign).toBe('');
+    });
+
+    // K2 — Ctrl+Enter under the open editor logs NOTHING; the draft is still
+    // there and loggable once the editor closes.
+    it('K2: Ctrl+Enter does not log the draft while the session editor is open', async () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+        sessionEdit.row = { callsign: 'M0EDIT' } as unknown as LogbookQso;
+
+        key({ key: 'Enter', ctrlKey: true });
+        await Promise.resolve();
+        expect(logged).toEqual([]);
+
+        sessionEdit.row = null;
+        key({ key: 'Enter', ctrlKey: true });
+        await vi.waitFor(() => expect(logged).toEqual(['G0ABC']));
+    });
+
+    // K3 — the pile-up keys are inert under the editor too: Shift+Enter must
+    // not stack-and-wipe a draft the operator cannot see being destroyed.
+    it('K3: Shift+Enter does not stack while the session editor is open', () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+        sessionEdit.row = { callsign: 'M0EDIT' } as unknown as LogbookQso;
+
+        key({ key: 'Enter', shiftKey: true });
+
+        expect(callsignStack.items).toEqual([]);
+        expect(draft.callsign).toBe('G0ABC');
+    });
+
+    // K4 — the rig family stands down as well: Ctrl+Shift+Arrow while editing
+    // must not detune a live rig under the modal. Control half: the same key
+    // steps the frequency once the editor closes.
+    it('K4: rig shortcuts do not drive the rig while the session editor is open', async () => {
+        const sent: string[] = [];
+        setCommandSender((op) => {
+            sent.push(op);
+            return Promise.resolve({ ok: true, message: '' });
+        });
+        setRigCaps({ ops: ['set_freq', 'set_freq_b'], tune: false, rigModes: [] });
+        rig.cat = 'connected';
+        rig.vfoA = 14_255_000;
+        rig.selectedVfo = 'A';
+        render(RigKeys);
+        sessionEdit.row = { callsign: 'M0EDIT' } as unknown as LogbookQso;
+
+        key({ code: 'ArrowUp', key: 'ArrowUp', ctrlKey: true, shiftKey: true });
+        await Promise.resolve();
+        expect(sent).toEqual([]);
+
+        sessionEdit.row = null;
+        key({ code: 'ArrowUp', key: 'ArrowUp', ctrlKey: true, shiftKey: true });
+        await vi.waitFor(() => expect(sent).toEqual(['set_freq']));
     });
 });

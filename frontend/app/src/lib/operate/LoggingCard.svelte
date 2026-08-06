@@ -37,6 +37,7 @@
     import { isValidMaidenhead } from '../validators/maidenhead';
     import { isValidCallsign } from '../validators/callsign';
     import { callsignStack } from './callsignStack.svelte';
+    import { sessionEdit } from './sessionEdit.svelte';
 
     // Contact-details disclosure (grid / QTH / rig / RX power / notes to edit; QRZ
     // page link + looked-up email + CQ/ITU zone to read — all for the contacted
@@ -87,6 +88,13 @@
     }
 
     function windowKeydown(e: KeyboardEvent): void {
+        // Session-edit modal open: it owns the keyboard OUTRIGHT (its own
+        // window handler saves on Ctrl+Enter and closes on Escape) — and
+        // window listeners do not shadow each other, so without this guard
+        // Escape ALSO wiped the draft being typed below and Ctrl+Enter could
+        // LOG it. The retired SPA's handleKeydown opened with exactly this
+        // guard; the port dropped it (keyboard audit 2026-08-06, A27).
+        if (sessionEdit.row !== null) return;
         // Export modal open: it owns the keys. Esc closes it; the log/clear
         // shortcuts are inert so they can't act on the card behind the modal.
         if (operate.exportOpen) {
