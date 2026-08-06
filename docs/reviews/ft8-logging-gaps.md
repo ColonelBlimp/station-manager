@@ -175,6 +175,16 @@ of its own at all.
 
 ### 4. Dial-moved slot suppression is silent
 
+> ✅ **FIXED 2026-08-06.** One Info line per suppressed slot ("ft8: slot
+> suppressed") naming the rule (`dial_moved` / `unplaceable`), its SCOPE
+> (`decode+sequencer+occupancy` vs `occupancy` — the two rules withhold
+> different things, which this review's text glossed), the slot ref and the
+> dial. TX slots deliberately excluded (expected every other slot of a run;
+> they stay on the per-slot Debug record, which existed with all the fields
+> but at a level the production log filters — the trap this fix names).
+> Tests: `slotsuppression_test.go` G1–G3, confusable-state form: the same run
+> feeds a quiet slot and a moved slot and asserts the DISTINCTION.
+
 `internal/ft8/service.go:841`, `:850`, `:880` — when `slot.DialChanged` is true the
 slot is: not decoded, **not fed to the sequencer**, and not published as occupancy.
 None of the three writes a log line.
@@ -499,16 +509,14 @@ them. Each was checked against the code on 2026-08-01.
 
 ---
 
-## Progress (2026-08-04)
+## Progress (2026-08-06)
 
-**5 of 14 closed:** 1 (2026-08-01), then 6, 2, 3, 14 (2026-08-04). **9 remain:**
-4, 5, 11 (the "a slot passed and the log cannot say why" cluster — do together),
-7, 8 (data integrity, small), 12, 13 (one file), 9, 10 (whenever adjacent).
-
-Next in the order below is **4**, and the work was stopped mid-investigation with
-the sites read but nothing written: `service.go:841` (decode skipped), `:880`
-(sequencer not fed), `:903` (`unplaceable` occupancy). Finding 6's answer — which
-the order said would shape finding 4's lines — is now known, so 4 is unblocked.
+**6 of 14 closed:** 1 (2026-08-01), then 6, 2, 3, 14 (2026-08-04), then 4
+(2026-08-06). **8 remain:** 5, 11 (the rest of the "a slot passed and the log
+cannot say why" cluster — do together, NEXT), 7, 8 (data integrity, small),
+12, 13 (one file — NB the decode log became SERVICE-lifetime on 2026-08-06,
+which makes 12 MORE pressing: line-loss reporting now defers to daemon
+shutdown, not view close), 9, 10 (whenever adjacent).
 
 ## Suggested order
 

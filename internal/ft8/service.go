@@ -968,6 +968,30 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 			s.hub.publish(hubEvent{name: EventOccupancy, payload: rep})
 		}
 
+		// Ship-gate finding 4 (ft8-logging-gaps): a SUPPRESSED slot says so at
+		// a level the operator's production log actually carries. The Debug
+		// record below has the fields but Debug is filtered at the default
+		// level, so "Band Activity went blank and the ladder didn't advance"
+		// stayed unexplainable from smd.log — the same invisible-safety-action
+		// class as the dial guard's session half (dogfood 2026-07-27). One
+		// line, naming the rule AND its scope, because the two rules withhold
+		// different things. A TX slot is deliberately excluded: our own
+		// transmission is expected every other slot of a run, and at Info it
+		// would bury the two lines that matter. Info per the gaps doc: rate is
+		// bounded by slots. Tests: slotsuppression_test.go.
+		if (dialMoved || unplaceable) && !txSlot {
+			rule, scope := "unplaceable", "occupancy"
+			if dialMoved {
+				rule, scope = "dial_moved", "decode+sequencer+occupancy"
+			}
+			s.log.InfoWith().
+				Str("slot", ref.StartUTC).
+				Str("rule", rule).
+				Str("suppressed", scope).
+				Float64("dial_mhz", slot.DialMHz).
+				Msg("ft8: slot suppressed")
+		}
+
 		s.log.DebugWith().
 			Str("slot", ref.StartUTC).
 			Bool("tx_slot", txSlot).
