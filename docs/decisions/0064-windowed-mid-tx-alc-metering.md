@@ -52,6 +52,52 @@ An earlier idea — adding a command to the rigdef `INIT` list — cannot work:
 quiet-rig liveness probe, which by construction never fires mid-transmission.
 There is no CAT command that subscribes to a second meter.
 
+**Measured 2026-08-06 (catcli, daemon stopped, RX only — no keying):** the
+hypothesis that a meter query under AI subscribes continuing answers is
+FALSE. Method: in one port session, query `RM1;` (S-meter — a value the
+concurrent `RM0` push flood proved was changing every few frames, 034–044)
+and keep listening 15 s. Result: exactly one `RM1` answer, ~30 pushed `RM0`
+frames per second throughout, zero further `RM1`. The changing-value control
+is what makes the negative conclusive — a static meter (ALC at rest) could
+have hidden a change-driven subscription. Also observed live: a send's "next
+frame" can be a pushed `RM0`, not the query's answer (the catcli Exec read
+grabbed one) — the poller must match answers by `RM4` prefix, never by
+arrival order. The rigdef already decodes `RM4nnn000` to the `ALC` tag
+(`RM4000000 → ALC:000`, same session).
+
+**Measured 2026-08-06 (second catcli experiment — operator-keyed, mic audio,
+60 s window): `RM5;`/`RM4;` ANSWER DURING TRANSMISSION**, with live values
+(`RM5029000` / `RM4026000` — PO 029, ALC 026 on the 0–255 scale; non-zero
+readings exist only under drive). The mid-TX-query feasibility question is
+settled by measurement, not spec inference. The same window also delivered
+the strongest form of the no-subscription result — the pushed RM0 stream
+swept 000–085 with the audio envelope (values changing constantly), and the
+queried meters still answered exactly once each — plus one design gift: the
+rig pushes `TX0` at unkey under AI, so the wire itself announces the TX→RX
+transition. ALC 026 under the operator's normal voice drive is the first
+live datum for the red-threshold calibration.
+
+**Most of the mechanism already exists (established 2026-08-06, after the
+catcli experiment):** ADR 0035's poll loop (`runPollLoop`, rigdef `POLL`
+command as the data-driven switch, 1 s default cadence, config
+`bridge.timeouts.civ_poll_interval_ms`) is generic plumbing the FTdx10 simply
+never declares — and the rigdef's decode table already maps `RM4→ALC` and
+`RM5→PO` into the accumulator slots `meterTags` reserved in July. Two
+findings bound the delta:
+
+- The CI-V collision back-off is inert on Yaesu (`lastBroadcastAt` is set
+  only by `cat.IsCIVBroadcast`), so a declared POLL fires on schedule.
+- The existing loop **hard-skips keyed intervals** — `tuneActive ||
+  ft8TxActive → continue`, re-checked under `cmdMu` — citing the 2026-07-18
+  TX-safety finding (a five-frame snapshot holding `cmdMu` directly ahead of
+  an emergency `tx_off`). So declaring `"POLL": "RM4;RM5;"` today yields
+  1 Hz meter reads exactly when they are meaningless (receive) and nothing
+  when they matter (keyed). The build is therefore NOT a new poller: it is a
+  keyed-interval variant of the existing one — a two-frame meter read (a
+  fraction of the five-frame snapshot the skip was written against) allowed
+  inside the window rules below, with the unkey still waiting on at most one
+  short in-flight exchange, quantified in the guard margin.
+
 ## Decision
 
 **Proposed:** during FT8 keyed transmissions (and the ADR 0027 tune carrier),

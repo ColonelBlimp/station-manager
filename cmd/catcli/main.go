@@ -122,6 +122,13 @@ func main() {
 
 	switch {
 	case *listen:
+		// -cmd + -listen: send the command, print its answer, KEEP LISTENING on
+		// the same port session. Built for the ADR 0064 probe: "does a meter
+		// query under AI subscribe continuing answers?" can only be answered
+		// without a port close between the ask and the watch.
+		if *cmd != "" {
+			runSingle(port, haveRig, def, []byte(*cmd), *readTimeout)
+		}
 		runListen(port, haveRig, def, cfg, *readTimeout)
 	case *cmd != "":
 		runSingle(port, haveRig, def, []byte(*cmd), *readTimeout)
