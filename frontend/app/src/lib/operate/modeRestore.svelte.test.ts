@@ -48,11 +48,13 @@
           phone direction (no canonical home to establish) and an
           unconfigured FT8 only. The reload rationale survives — a seed goes
           to the band's configured home, never to a stale snapshot.
-          Judgement calls, drafted not operator-ratified: the same
-          restore_rig_on_mode_switch knob gates the seed (it is a rig move on
-          a mode switch); CAT-off seeds nothing (the displayed context is the
-          operator's own); a rig with no set_freq seeds nothing at all —
-          asserting a data mode on a phone frequency is worse than nothing.
+          CAT-off seeds nothing — RATIFIED (operator, 2026-08-06): "Cat-off -
+          ft8 cannot work." There is nothing to establish for a mode that
+          cannot operate; the FT8 rig panel's requiresCat encodes the same
+          fact. Judgement calls still drafted, not operator-ratified: the
+          same restore_rig_on_mode_switch knob gates the seed (it is a rig
+          move on a mode switch); a rig with no set_freq seeds nothing at all
+          — asserting a data mode on a phone frequency is worse than nothing.
 
     WHICH STEP "the switch" MEANS. A mode change is a sequence: the router
     updates, the view swaps, the rig is commanded, the rig confirms by push.
@@ -960,9 +962,10 @@ describe('operating-state restore across a mode switch', () => {
         expect(sent).toEqual([]);
     });
 
-    // S5 — CAT OFF SEEDS NOTHING. The displayed context is the operator's own
-    // manual entry; rewriting it to a watering hole they may not be on is
-    // invention, not restoration.
+    // S5 — CAT OFF SEEDS NOTHING, because CAT-off FT8 cannot work at all
+    // (operator, 2026-08-06) — there is no operating point to establish for a
+    // mode that cannot operate. Same fact the FT8 rig panel's requiresCat
+    // encodes.
     it('S5: seeds nothing without a live CAT link', async () => {
         configureFt8();
         livePhone();

@@ -271,7 +271,7 @@ async function applyRestore(to: OpMode, incoming: OperatingSnapshot): Promise<vo
     the phone position as FT8's.
 */
 async function seedFt8(): Promise<void> {
-    if (rig.cat !== 'connected') return; // the CAT-off display context is the operator's own
+    if (rig.cat !== 'connected') return; // CAT-off FT8 cannot work at all — nothing to establish (operator, 2026-08-06)
     if (!restoreOnSwitch) return; // the knob's promise: no switch moves a live rig
     const hz = ft8FrequencyFor(rig.band);
     if (hz === undefined) return; // unconfigured: nothing to establish, and no nagging
