@@ -202,6 +202,13 @@ func (h *hub) clearActivity() {
 	defer h.mu.Unlock()
 	h.lastDecode = nil
 	h.lastOccupancy = nil
+	// The audio pull cache dies with its capture session too (review a1529400
+	// P1): left in place, a tab connecting after release was served the DEAD
+	// session's level as live — the no-capture state must publish nothing.
+	// audioGen is NOT reset: an existing connection's seen-generation is from
+	// the old numbering, and a reset that lands the new session on the same
+	// small numbers would swallow live emits. Monotonic forever, nil value.
+	h.lastAudio = nil
 }
 
 // close disconnects all subscribers and marks the hub closed. Idempotent.

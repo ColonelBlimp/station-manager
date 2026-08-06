@@ -87,6 +87,33 @@ func TestHub_LatestOccupancyNilBeforePublish(t *testing.T) {
 	}
 }
 
+// H2 — RELEASE CLEARS THE CACHED AUDIO READING (clean-room review a1529400,
+// P1): the pull cache outlived its capture session, so a tab connecting after
+// release was shown the DEAD session's level as live — exactly the
+// no-capture-publishes-nothing clause the meter's criterion rests on. The
+// GENERATION is deliberately NOT reset: an existing connection's audioSeen is
+// from the old numbering, and a reset that lands the new session on the same
+// small numbers would silently swallow emits; nil-value + monotonic counter
+// gives "nothing to emit" without ever re-using a generation.
+func TestHub_ClearActivityDropsAudioReading(t *testing.T) {
+	h := newHub(nil)
+	h.publishAudio(hubEvent{name: EventAudioLevel, payload: AudioLevel{PeakDbfs: -20, RmsDbfs: -30}})
+	if evt, gen := h.latestAudio(); evt == nil || gen == 0 {
+		t.Fatal("fixture: a reading must be cached before the release")
+	}
+	genBefore := func() uint64 { _, g := h.latestAudio(); return g }()
+
+	h.clearActivity()
+
+	evt, gen := h.latestAudio()
+	if evt != nil {
+		t.Fatalf("latestAudio = %+v, want nil after clearActivity — a dead session's level must not be served as live", evt)
+	}
+	if gen < genBefore {
+		t.Fatalf("generation went backwards (%d -> %d); reuse can swallow a live emit", genBefore, gen)
+	}
+}
+
 // clearActivity drops the decode + occupancy replay caches (called on capture
 // release) so a tab connecting after the session ended isn't shown a stale slot
 // from the prior session — the reported "rig off, Band Activity holds last
