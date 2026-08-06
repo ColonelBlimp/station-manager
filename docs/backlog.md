@@ -78,6 +78,7 @@ next, and in what order" is answered.
 - _Alert surfaces (**ADR 0060, status Proposed — DO NOT BUILD YET**):_ the three shell alerts (`TxAlarmBanner`/`DriveAlarmBanner`/`DriveMonitorNotice`) render **in document flow** in `App.svelte` and push `<main>` down — up to three rows, and the drive alarm raises mid-slot with ~9 s of a 12.6 s FT8 slot left, so content jumps while the operator is reading it. Audit (2026-07-31) found the event-vs-state tiering already sound; only placement is wrong. Proposed direction: nothing in flow · header centre (permanently-reserved chrome, zero shift) hosts the calm states · **`tx_still_keyed` alone** gets a blocking emergency overlay, the other four TX codes demote to the header. **BLOCKED ON OBSERVATION, deliberately** — operator saw some of these live 2026-07-31 and wants several more runs before committing; the ADR is a record, not a mandate. **Carries a daemon dependency:** `raiseTxAlarm` publishes only on the false→true edge (`if !already`), so an alarm that escalates `tx_unconfirmed` → `tx_still_keyed` on a later probe is **suppressed** — harmless today (all five codes render one banner), load-bearing the moment the code becomes a tier selector. Open questions are the operator's call and are listed unfilled in the ADR. Incidental: ADR 0008 specifies toasts at `top-4 right-4`, `Toasts.svelte` resolves to bottom-centre — one is out of date.
 - _Code-review lows (2026-07-05 SPA review; re-verified in the 2026-07-18 sweep):_ 13 verified low-severity fixes (the fetch-timeout standout was promoted to P1 and SHIPPED 2026-07-05 → archive) — state-reset gaps (**mostly done**: tabCount + freqKnown resets confirmed in `bridge.svelte.ts`; stale-decodes / enrich-zombies unverified — check those two when picked up) · FT8 UI nits (**partially done**: bearing-360° + canAnswer TX-guard confirmed built; drain-abort / FD tooltip / isWorking split unverified)
 - _Bridge/TX hardening (2026-07-05 review):_ ~~generation counter · identity poisoning~~ **PROMOTED to the P0 TX-safety companion batch (2026-07-18 review re-found both with sharper mechanisms)** · `bridge.New` nil-checks (NB the item's premise drifted: New takes an `openClient` closure, not Serial/Cat fields — `Initialize` checks only the logger; re-scope to "validate injected closure + logger deps" when picked up)
+- _FT8 audio levels (dogfood 2026-08-06, triaged same day):_ RX level bar (capture RMS, cheapest) · TX drive indicator from the ALC/PO metering the bridge already streams · **WSJT-X-style per-band Pwr control via `txAmplitude`** (waveform attenuation, NOT mixer control) — the operator's live pain: hand-adjusting PC volume when the linear amp's indicated power looks wrong. Detail below.
 
 **P3 — deferred / large / needs a trigger**
 - CAT poll mode (ADR 0034) · FT8 semi-auto watch-list (SET ASIDE) · spot-submitter registry (on 2nd destination) · operator / user profiles (contesting lens: bundle op-identity + contest params, swap mid-event — dogfood 2026-07-06) · outbound UDP telemetry (WSJT-X-compatible) · FT8 occupancy waterfall render · POTA fields · config hot-reload · settings help tooltips + beginner/expert mode · FT8 Monitor/Listen toggle (DISCUSSION) · download-site install page · `PUT /v1/config` `default_logbook.id` wiring (no consumer yet)
@@ -160,6 +161,57 @@ next, and in what order" is answered.
   version) and `modeRestore.svelte.test.ts` — its header carries acceptance criteria
   A1–A19 and the reasoning for each rule, including the four failed models. The five
   review rounds are in the git log between `c52e9b80` and `809f7890`.
+
+- **P2 · `internal/ft8` + FT8 view — audio level indicators + a WSJT-X-style
+  per-band Pwr control.** _(Dogfood 2026-08-06: "add audio in and out controls for
+  ft8 with an indicator level bar green==good, red==too high, orange==too low";
+  assessed same day — this entry IS the triage, mechanism-corrected after the
+  operator pointed at WSJT-X/JTDX precedent.)_
+
+  **The operator's live pain is TX-side (stated 2026-08-06):** "I have recently
+  been adjusting the volume on the PC when the indicated pwr output on the linear
+  amp is not looking correct" — i.e. TX drive is corrected by hand at the OS
+  mixer, with the AMP's meter as the only feedback. That is the same behaviour
+  the 2026-08-01 50-QSO run recorded as step-shaped power dips, and hand-mixer
+  changes are the class that produced the 2026-07-30 muted-into-live-QSO
+  incident. The feature's value centre is removing that loop: set drive in-app,
+  read the RIG's own meters on-screen.
+
+  **Staged, cheapest-first:**
+  1. **RX level bar** — the daemon already owns the capture stream; peak/RMS per
+     block is arithmetic on data in hand, published on the existing
+     `/v1/ft8/events` SSE. Green/orange/red THRESHOLDS ARE THE OPERATOR'S CALLS
+     (WSJT-X's ~30 dB-on-0–90 convention is the reference). CGO builds only —
+     the static build has no capture, and the bar must say "no capture", not
+     "too low". Nearest-confusable-states: *too low* vs *silent band* vs *dead
+     device* — `deadsource.go` already carries the third; the bar must consume
+     it, never render a dead device as orange.
+  2. **TX drive indicator** — the daemon never hears its own TX audio (it
+     synthesises the tones), so an "output audio level" is a meaningless
+     constant. The real feedback is the rig's meters, which the bridge ALREADY
+     streams live (`internal/bridge/meters.go`, tags METER/ALC/PO/SWR):
+     sustained ALC deflection = too high (red), PO in the expected window =
+     green, PO low = orange. Thresholds: operator's call, per the drive-watch
+     arc's standing lesson.
+  3. **Per-band Pwr control** — WSJT-X precedent CITED (user guide: the Pwr
+     slider at the main window's right edge, dB on hover, remembered per band
+     and separately for Tune; JTDX inherits the layout — inference). Mechanism
+     is NOT mixer control: it attenuates the GENERATED waveform, and our hook
+     already exists — `internal/ft8/modulate.go` `txAmplitude = 0.5`, the
+     constant that scales the normalised waveform into int16. Make it an
+     adjustable dB attenuation: no PipeWire volume API, no session-scoped sink
+     IDs, no second-writer-against-the-mixer problem. STILL TX-PATH-SENSITIVE —
+     design questions before build: behaviour if moved mid-transmission;
+     per-band memory (that is what makes it replace the mixer habit); and how
+     deliberately-lowered drive interacts with the drive-watch's PO
+     expectations so turning it down does not read as the collapse signature.
+     Live-TX-path rollout discipline applies (on-hardware acceptance procedure
+     written first, passive checks before keyed ones).
+
+  **Input CONTROL (as opposed to the bar): capture-side gain via the OS —**
+  deliberately not staged; WSJT-X ships meter-only input (recollection, not
+  cited) and the RX bar likely dissolves the need. Revisit only on a new
+  operator ask.
 
 - **P2 · `frontend/app/src/lib/map` + the FT8 decode stream — RX propagation overlay
   ("what can I hear right now").** _(From a 2026-07-26 discussion about PSK Reporter

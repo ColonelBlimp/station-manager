@@ -1146,4 +1146,3 @@ said. Plan future on-air experiments accordingly.
   different browser". **Open for the operator:** persist or per-session, and whether
   sorting is per-column or one active sort at a time.
 - [2026-08-02] Rigs tab: expose the daemon's ACTIVE rig (the one the bridge actually has open, qsoservice activeRigID) so the tab can distinguish it from the configured default. Today only default_rig_id reaches the SPA, so after "Set as default" the two diverge until a restart while the UI can't tell. Needs the active rig on the wire (e.g. /v1/config or /v1/rig/...), then show "active" only when the bridge really has that rig open, plus a "default changed — restart to apply" indicator when default != active. Follow-up to the 2026-08-02 relabel that changed the pill from "active" to "default".
-- [2026-08-06] add audio in and out controls for ft8 with an indicator level bar green==good, red==too high, orange==too low
