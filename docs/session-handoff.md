@@ -51,7 +51,9 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **Revive-on-'online' fix BUILT 2026-08-06, awaiting operator commit.** The
+- **Revive-on-'online' fix SHIPPED 2026-08-06** (`254bbd88` — note its subject
+  line wrongly repeats `67ba8a66`'s inert-drawer text; content is the SSE
+  fix. Codex review: clean, deleted). The
   morning's "CAT link lost" was the router swap killing the browser's loopback
   SSE with the tab visible — `sse-reviving.ts` now registers ONE
   reviveIfVisibleAndDead handler for BOTH visibilitychange and window
