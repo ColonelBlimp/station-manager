@@ -51,9 +51,16 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **DEPLOYED AT HEAD 2026-08-06** (`…1107-g9c012341`), operator-checked live:
-  "All looks good." Everything shipped today is on the air; tree clean, every
-  codex review triaged + deleted.
+- **DEPLOYED 2026-08-06** as `…1107-g9c012341-dirty` — the dirty content WAS
+  `7ff244a0`, so the running build is functionally HEAD; only the version
+  string lags. Operator-checked live twice ("All looks good", then "Checked"
+  on the disclosure). Tree clean, every codex review triaged + deleted.
+- **Also shipped 2026-08-06 (late): Contact-details disclosure no longer
+  reflows** (`7ff244a0`, three operator-corrected rounds — the final UI is
+  the ORIGINAL in-flow look, with the card's lower half reproduced out of
+  flow and the card at z-10 painting over the Worked panel; W2 pins the
+  mechanism, and the extension hard-codes the card's p-5 in its inset calc —
+  change one, change both).
 - **Shipped 2026-08-06:** revive-on-'online' SSE fix (`254bbd88` — its subject
   line wrongly repeats the inert-drawer text; content is the SSE fix. The
   router-swap "CAT lost" was the browser killing its loopback SSE, tab
