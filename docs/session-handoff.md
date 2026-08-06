@@ -51,53 +51,41 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **IN THE TREE, awaiting operator commit — FT8 RX audio-level meter, stage 1
-  of the backlog's "FT8 audio levels" entry (operator-directed).** Daemon:
-  `internal/ft8/audiolevel.go` meter + tee (OUTSIDE the invariant-guarded
-  slot path) + `ft8-audio-level` SSE (~4 Hz, not cached) + `ft8.audio`
-  config window (resolved `ft8_audio` on GET, read-only over PUT, validated
-  on the RESOLVED pair) + config.md/api-endpoints.md same-commit. SPA:
-  `audioLevel.svelte.ts` classifier (fixed −1 dBFS clip; 2 s staleness =
-  dead capture, distinct from the −120 silence floor which reads 'low') +
-  `AudioLevelCard` bottom-left chip/card (state-coloured icon collapsed; TX
-  stand-down), mounted by Ft8View. Gates: Go full suite + `-race` on ft8,
-  SPA 1152 tests, all clean. **Defaults −60/−10 dBFS await hardware
-  calibration** (config.json edit + restart). This is a DAEMON change —
-  the next deploy is not SPA-only.
-- **DEPLOYED 2026-08-06** as `…1107-g9c012341-dirty` — the dirty content WAS
-  `7ff244a0`, so that deploy was functionally HEAD-at-the-time. Since then:
-  keyboard commits (`a5a54866`/`6af12ca9`/`922e9e25`) + the meter above are
-  NOT live. Operator-checked live twice earlier ("All looks good", "Checked").
-- **Also shipped 2026-08-06 (late): Contact-details disclosure no longer
-  reflows** (`7ff244a0`, three operator-corrected rounds — the final UI is
-  the ORIGINAL in-flow look, with the card's lower half reproduced out of
-  flow and the card at z-10 painting over the Worked panel; W2 pins the
-  mechanism, and the extension hard-codes the card's p-5 in its inset calc —
-  change one, change both).
-- **Shipped 2026-08-06:** revive-on-'online' SSE fix (`254bbd88` — its subject
-  line wrongly repeats the inert-drawer text; content is the SSE fix. The
-  router-swap "CAT lost" was the browser killing its loopback SSE, tab
-  visible, so the visibilitychange-only revive never fired) · WorkedPanel
-  centring (`c741a0ee`, same missing-mx-auto defect LoggingCard had after
-  ADR 0058) · **A25 FT8 first-entry SEED** (`c0df1c8a` + `9c012341`): FT8
-  entry with no snapshot tunes the SELECTED VFO to the band's configured FT8
-  dial then asserts the data mode; unconfigured band/CAT-off/no-dial-op stay
-  silent no-ops (CAT-off RATIFIED: "Cat-off - ft8 cannot work"); refused
-  seeds report, retry next entry, and watch only OUTSTANDING fields' rig
-  counters so the seed's own confirm isn't mistaken for operator activity
-  (review c0df1c8a, two real P1s: wrong VFO + suppressed retry).
-- **Unratified judgement calls, flagged in test headers:** sse-reviving —
-  'online' while HIDDEN revives nothing; modeRestore — the restore knob gates
-  the seed; no-set_freq rig seeds nothing. The 'online' revive is deployed
-  but field-proven only by the next natural network bounce.
-- **STOP PATCHING THE FT8 TIMEOUT RECONCILE** — converged at `4d131720`; if it
-  draws another finding, add `If-Match`/revision to `PUT /v1/config` instead.
-- **OPEN (operator decisions, not started):** 121 QSO rows with coordinates
-  outside their own grid · 5,640 rows with ADIF-format coordinates (map plots
-  grid centre for them).
-- **QUEUED:** Settings → **General** tab (last before the config SPA retires) ·
-  `internal/ft8` LOGGING SHIP GATE, resume at **finding 4**
-  (`docs/reviews/ft8-logging-gaps.md`) · Playwright scaffolding.
+- **END OF DAY 2026-08-06: tree CLEAN at `a2b94c64`, every review triaged +
+  deleted, the RX-meter hardening arc CONVERGED (round 8 clean).**
+- **DEPLOY IS BEHIND: daemon runs `…1121-g68888a1d`** — missing the back half
+  of the meter hardening (capture-generation ownership `c5bbbcbf`, decode-log
+  rounds `9aafc206`/`220bc363`, service-lifetime decode log `a2b94c64`).
+  `task deploy:local:dev` before next FT8 operating.
+- **Shipped 2026-08-06, a very large day:** revive-on-'online' SSE fix ·
+  WorkedPanel centring · A25 FT8 first-entry seed (selected VFO + data mode;
+  CAT-off ratified "ft8 cannot work") · Contact-details disclosure overlay
+  (3 operator-corrected rounds; W2 pins it; extension hard-codes card p-5) ·
+  Phone/CW keyboard audit (A27 session-editor owns the keyboard — real
+  collision fixed; F3 timer toggle + callsign Enter/Space ported; F3
+  auto-repeat guard; F2 + Cmd ruled MOOT in pileupKeys header) · **FT8 RX
+  audio-level meter, full stack** (daemon tee → `ft8-audio-level` SSE →
+  `ft8.audio` config window → bottom-left chip/card; −60/−10 dBFS defaults
+  AWAIT HARDWARE CALIBRATION, config.json edit + restart) · ★ occupancy
+  stacking leak isolated (Z1) · meter card anchored above Occupancy panel.
+- **The meter's 7-round hardening arc, all fixed + converged:** push→PULL
+  delivery (eviction) → clearActivity cache → session tokens → capture-gen
+  ownership → decode-log swap-under-lock → close-outside-lock → decode log
+  is now SERVICE-LIFETIME (Stop owns the one close). Lesson re-proven: the
+  arc closed when the fix REMOVED lifecycle, not added ordering.
+- **ADR 0064 (Proposed): continuous `RM4;RM5;` ALC/PO polling while an FT8
+  capture session is live** — 250 ms / 100 ms timeout OPERATOR-RATIFIED (the
+  timeout is the load-bearing safety number). Grounded in TWO catcli wire
+  experiments (one operator-keyed: queries ANSWER during TX; nothing
+  subscribes; `TX0` pushed at unkey). Open: Tune coverage, SPA red threshold
+  (first datum: ALC 026 at normal voice drive). FTdx10 CAT manual converted
+  to `docs/ftdx10-cat.md` — GITIGNORED (Yaesu copyright), local only.
+- **QUEUED:** ADR 0064 build (mechanism mostly exists: ADR 0035 poll loop +
+  rigdef RM4/RM5 decode + meterTags slots) · Settings → **General** tab ·
+  the 2 coordinate decisions · ft8 LOGGING SHIP GATE at finding 4 ·
+  Playwright (customers piling up: drawers, centring, meter card, revive).
+- **STOP PATCHING THE FT8 TIMEOUT RECONCILE** — converged at `4d131720`; the
+  same rule now applies to the meter arc: it converged at `a2b94c64`.
 
 ## Current state (as of 2026-08-06)
 
