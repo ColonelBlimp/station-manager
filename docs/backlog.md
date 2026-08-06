@@ -189,13 +189,15 @@ next, and in what order" is answered.
      (state-coloured icon collapsed; TX stand-down). Defaults −60/−10 dBFS
      AWAIT HARDWARE CALIBRATION against the PCM2903C — config.json edit +
      restart to tune.
-  2. **TX drive indicator** — the daemon never hears its own TX audio (it
-     synthesises the tones), so an "output audio level" is a meaningless
-     constant. The real feedback is the rig's meters, which the bridge ALREADY
-     streams live (`internal/bridge/meters.go`, tags METER/ALC/PO/SWR):
-     sustained ALC deflection = too high (red), PO in the expected window =
-     green, PO low = orange. Thresholds: operator's call, per the drive-watch
-     arc's standing lesson.
+  2. **TX drive indicator — now ADR 0064 (Proposed, 2026-08-06): windowed
+     mid-TX `RM4;` (ALC) polling.** The earlier premise here was WRONG twice:
+     the bridge does NOT stream ALC (only the selected meter is pushed —
+     METERSEL stays PO for the drive watch), and the "can't query during TX"
+     objection was our own empirical caution hardened into a rule — the CAT
+     spec places NO restriction on reads while keyed (verified against the
+     full 2308-F manual, 2026-08-06). The ADR carries the invariants (unkey
+     never waits, drive watch untouched, poll failure = degradation only)
+     and the operator's open calls (guard margin, cadence, red threshold).
   3. **Per-band Pwr control** — WSJT-X precedent CITED (user guide: the Pwr
      slider at the main window's right edge, dB on hover, remembered per band
      and separately for Tune; JTDX inherits the layout — inference). Mechanism

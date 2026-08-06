@@ -62,3 +62,7 @@ config.json
 !/.claude/settings.json
 .tailwindplus
 /smcloud
+
+# Yaesu FTdx10 CAT manual (markitdown conversion) — manufacturer copyright,
+# local reference only; never commit into the GPL repo.
+docs/ftdx10-cat.md
