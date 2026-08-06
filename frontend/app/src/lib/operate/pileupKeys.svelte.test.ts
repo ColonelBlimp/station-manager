@@ -426,6 +426,22 @@ describe('Phone/CW pile-up keyboard', () => {
         expect(qsoClock.started).toBe(true);
     });
 
+    // T5 — a HELD F3 is ONE press (clean-room review 6af12ca9): the key
+    // auto-repeats, and without a repeat guard the first repeated keydown
+    // lands while the clock is ticking and freezes Time Off milliseconds
+    // after starting it — a slightly long press silently becomes
+    // start-and-stop.
+    it('T5: F3 auto-repeat does not toggle the timer it just started', () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+
+        key({ key: 'F3' });
+        key({ key: 'F3', repeat: true });
+        key({ key: 'F3', repeat: true });
+
+        expect(qsoClock.ticking).toBe(true);
+    });
+
     // T4 — no call, no clock: a timer with nobody on the other end is
     // meaningless (Tab's gate, mirrored).
     it('T4: F3 with an empty callsign starts nothing', () => {

@@ -144,6 +144,10 @@
         // has no text-editing meaning, so it stays live inside fields.
         if (e.key === 'F3') {
             e.preventDefault();
+            // A held key auto-repeats, and a repeat landing after the start
+            // would freeze Time Off milliseconds later — one PRESS is one
+            // action, however long it lasts (review 6af12ca9).
+            if (e.repeat) return;
             if (qsoClock.ticking) holdOffTimes();
             else if (!qsoClock.started && draft.callsign.trim() !== '') startQso();
             return;
