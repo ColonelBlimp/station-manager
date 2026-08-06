@@ -556,11 +556,18 @@ func (s *Service) startCaptureLocked() {
 	// path that the TX + attribution invariants guard.
 	samples = s.teeAudioLevel(runCtx, samples)
 
-	// Open the JTDX ALL.TXT decode log for this session if the operator enabled it
-	// (ft8.decode_log). Fail-soft: openDecodeLog returns nil on any error, leaving
-	// the writer a no-op. Closed in releaseCaptureLocked after the decode goroutine
-	// drains, so no RX write can race the close.
-	if dl := s.cfg.DecodeLog; dl != nil && dl.Enabled {
+	// Open the JTDX ALL.TXT decode log on the FIRST session and keep it for the
+	// SERVICE lifetime (reviews 9aafc206 + 220bc363: per-session open/close had
+	// two mutually-exclusive hazards — closing under s.mu blocked the service
+	// on slow storage, closing after unlock let a replacement open the SAME
+	// configured file while the old lumberjack instance still drained, racing
+	// rotation and interleaving appends). The path is config-snapshotted and
+	// cannot change mid-run, so one instance serves every session; a late line
+	// from a dying session is a timestamped entry in the right file. Closed
+	// only in Stop, after the goroutines drain. Fail-soft: openDecodeLog
+	// returns nil on error, leaving the writer a no-op — and the ==nil guard
+	// retries on the next session start.
+	if dl := s.cfg.DecodeLog; dl != nil && dl.Enabled && s.decLog.Load() == nil {
 		s.decLog.Store(openDecodeLog(dl.Path, s.workingDir, s.log))
 	}
 
@@ -674,24 +681,11 @@ func (s *Service) onCaptureLoopExit(runCtx context.Context, gen uint64, who stri
 	// that capturing=false). Safe even though the sibling loop may still be winding
 	// down: only the decode goroutine writes RX, and it is the one exiting here.
 	//
-	// The SWAP runs under s.mu, inside the generation-validated section
-	// (review c5bbbcbf P1): swapped after the unlock, a replacement session
-	// starting in the gap had its FRESH log swapped out and closed by this
-	// stale-by-then callback, silently losing the live session's RX/TX
-	// entries. Ownership decides WHICH log is removed, so the swap is
-	// session-owned teardown.
-	//
-	// The CLOSE runs after the unlock (review 9aafc206 P2): Close drains the
-	// writer goroutine and flushes the file, and a slow or stalled target —
-	// the decode-log path is operator-configurable, so a network/FUSE mount
-	// is legitimate — must not hold s.mu against subscriber lifecycle, CAT
-	// reconcile, capture restart and Stop. Closing the captured pointer
-	// cannot affect a replacement's fresh log.
-	oldLog := s.decLog.Swap(nil)
 	s.mu.Unlock()
-	if oldLog != nil {
-		oldLog.Close()
-	}
+	// The decode log is deliberately NOT touched here: it is service-lifetime
+	// (see startCaptureLocked — reviews c5bbbcbf, 9aafc206 and 220bc363 each
+	// found a different defect in per-session teardown of it; the mechanism,
+	// not the placement, was wrong). Stop owns the close.
 	if wasCapturing {
 		s.log.ErrorWith().Str("goroutine", who).
 			Msg("ft8: capture loop exited unexpectedly; capture stopped — re-open the FT8 view to restart")
@@ -734,12 +728,8 @@ func (s *Service) releaseCaptureLocked() {
 
 	s.capturing = false
 	s.releasing = false
-	// Close the decode log AFTER the decode goroutine has drained, so no RX write
-	// is in flight. A late TX write is safe regardless — DecodeLog serialises
-	// writes against Close and no-ops after it.
-	if dl := s.decLog.Swap(nil); dl != nil {
-		dl.Close()
-	}
+	// The decode log survives the release — service-lifetime, closed in Stop
+	// (see startCaptureLocked). A reacquired session reuses the same instance.
 	// Invalidate the Band Activity / occupancy replay cache: with the session
 	// ended, a later subscriber must not be handed this session's last slot (it
 	// would show stale decodes when the rig is off and capture can't reacquire).
@@ -803,6 +793,16 @@ func (s *Service) Stop() error {
 			bgCancel()
 		}
 		s.bgWg.Wait()
+
+		// Close the SERVICE-LIFETIME decode log, with every writer drained
+		// (scheduler/decoder via s.wg above; a straggler TX write no-ops —
+		// DecodeLog serialises writes against Close). Stop is the ONLY closer:
+		// per-session teardown of this log produced three consecutive review
+		// findings (c5bbbcbf, 9aafc206, 220bc363) before the lifecycle moved
+		// here — see startCaptureLocked.
+		if dl := s.decLog.Swap(nil); dl != nil {
+			dl.Close()
+		}
 
 		// Disconnect any ft8 SSE subscribers so they return promptly rather
 		// than waiting on the daemon's graceful timeout.

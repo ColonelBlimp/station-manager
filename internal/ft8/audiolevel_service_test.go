@@ -226,6 +226,40 @@ func awaitAudioLevelOn(t *testing.T, _ <-chan hubEvent, s *Service) AudioLevel {
 	return AudioLevel{}
 }
 
+// D1 — THE DECODE LOG IS SERVICE-LIFETIME, NOT SESSION-LIFETIME (reviews
+// 9aafc206 + 220bc363, the pair that proved per-session open/close wrong by
+// bouncing between its two hazards: close under s.mu blocks the service on
+// slow storage; close after unlock lets a replacement open the SAME
+// configured file while the old lumberjack instance still drains —
+// interleaved appends and rotation races). The path is config-snapshotted
+// and cannot change mid-run, so ONE instance serves every session: opened at
+// first capture, untouched by session teardown (a late line from a dying
+// session is a timestamped entry in the right file), closed only at Stop.
+func TestDecodeLog_SurvivesSessionCycleClosesAtStop(t *testing.T) {
+	src := newFakeSource()
+	s := newService(types.Ft8Config{
+		Enabled: true, Device: "test",
+		DecodeLog: &types.Ft8DecodeLogConfig{Enabled: true, Path: t.TempDir() + "/all.txt"},
+	}, logging.Noop(), src)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	_, unsub := s.Subscribe()
+	defer unsub()
+	require.Equal(t, 1, src.startCount())
+	first := s.decLog.Load()
+	require.NotNil(t, first, "fixture: the log must open with the first session")
+
+	// Kill and restart the capture session (the dead-source path).
+	s.onDeadCaptureSource("test")
+	require.Eventually(t, func() bool { return src.startCount() == 2 }, 5*time.Second, 10*time.Millisecond)
+
+	require.Same(t, first, s.decLog.Load(),
+		"the decode log must survive a session cycle — one instance, one file, no overlap window")
+
+	require.NoError(t, s.Stop())
+	require.Nil(t, s.decLog.Load(), "Stop owns the close")
+}
+
 // W3 — RELEASE STILL DRAINS. The tee is one more session goroutine between
 // source and scheduler; Stop returning proves it exits with the pair and
 // cannot wedge the release (the F1/F2 drain discipline).
