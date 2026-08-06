@@ -53,6 +53,10 @@
     const gridInvalid = $derived(
         draft.gridsquare !== '' && isValidMaidenhead(draft.gridsquare) !== null
     );
+    // Disclosure open-state, mirrored from the native <details> via bind:open.
+    // Drives which of the two action-row sites renders accessibly and the
+    // details' open-state rounding — see the markup comments at both places.
+    let detailsOpen = $state(false);
     function upperGrid(): void {
         draft.gridsquare = draft.gridsquare.toUpperCase();
     }
@@ -234,7 +238,12 @@
      that centred it. Fixed here rather than with `items-center` on the
      container: the sibling tiles have NO fixed width and rely on the default
      stretch, so centring the container would shrink them all to content width. -->
-<div class="card mx-auto w-(--card-w)">
+<!-- relative z-10: "the whole logging panel at a greater z" (operator,
+     2026-08-06) — the Contact-details expansion overflows the card's slot,
+     and this is what paints it (and the card) OVER the Worked panel below
+     instead of underneath it. Still under the drawers (z-20) and the ambient
+     host (z-40). -->
+<div class="card relative z-10 mx-auto w-(--card-w)">
     <div class="flex flex-col">
         <div class="flex flex-row gap-x-6">
             <div class="flex flex-col">
@@ -358,148 +367,200 @@
                 />
             </div>
         </div>
-        <!-- Contact details (extends the card): contacted-station fields kept
-     off the fast path — QTH / Rig / RX power / Notes to edit, QRZ page link +
-     looked-up email to read. QTH is enrichment-filled (correctable here).
-     Sits where the Comment row used to be. -->
-        <details class="mt-2 rounded-md border border-line">
+        <!-- Contact details: contacted-station fields kept off the fast path —
+     QTH / Rig / RX power / Notes to edit, QRZ page link + looked-up email to
+     read. QTH is enrichment-filled (correctable here). Sits where the Comment
+     row used to be.
+
+     The open UI is UNCHANGED from the original in-flow disclosure (operator,
+     2026-08-06, three rounds: the Worked panel must not move; "a disclosure
+     EXTENDS the current panel - the Clear and Log QSO buttons should move
+     down"; "the disclosures' UI should remain unchanged"): one bordered box
+     under the summary, the action row below the box at card level, the card
+     frame wrapping it all. What changed is WHERE that lower half lives: z
+     alone cannot stop a reflow (an in-flow expansion pushes siblings
+     whatever it paints over), so everything from the content down is an
+     out-of-flow extension that REPRODUCES the card's lower half — content
+     box, mt-4 action row, card padding (p-5 = the 1.25rem in the inset
+     calc), border and bottom rounding — spanning the full card width. The
+     details is the relative anchor; top-full puts the extension flush under
+     the summary (border-b-0 while open, so the box continues seamlessly).
+     While open, the in-flow action row keeps its SPACE invisibly: the card
+     must not shrink either, or the Worked panel moves UP instead of down.
+     The card's z-10 paints the whole card over the Worked panel (whose
+     auto-open is fine to obscure); drawers (z-20) and the ambient host
+     (z-40) still cover it. W2 pins the contract. -->
+        <details
+            class="relative mt-2 border border-line"
+            class:rounded-md={!detailsOpen}
+            class:rounded-t-md={detailsOpen}
+            class:border-b-0={detailsOpen}
+            bind:open={detailsOpen}
+        >
             <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-ink select-none">
                 Contact details
             </summary>
-            <div class="space-y-3 border-t border-line px-3 py-3">
-                <!-- Read-only, looked-up: QRZ page link + email. -->
-                <div class="flex flex-col gap-y-1 text-sm">
-                    {#if qrzUrl !== null}
-                        <a
-                            href={qrzUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="inline-flex w-fit items-center gap-x-1 font-medium text-focus hover:underline"
-                        >
-                            Lookup on QRZ.com
-                            <svg
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.5"
-                                aria-hidden="true"
-                                class="size-4"
+            <div
+                class="absolute top-full -inset-x-[calc(1.25rem+1px)] rounded-b-xl border-x border-b border-line bg-surface px-5 pb-5 shadow-sm"
+            >
+                <div class="space-y-3 rounded-b-md border border-line px-3 py-3">
+                    <!-- Read-only, looked-up: QRZ page link + email. -->
+                    <div class="flex flex-col gap-y-1 text-sm">
+                        {#if qrzUrl !== null}
+                            <a
+                                href={qrzUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="inline-flex w-fit items-center gap-x-1 font-medium text-focus hover:underline"
                             >
-                                <path
-                                    d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                />
-                            </svg>
-                        </a>
-                    {:else}
-                        <span class="text-muted">Enter a callsign for the QRZ link.</span>
-                    {/if}
-                    <div>
-                        <span class="text-muted">Email:</span>
-                        <span class="text-ink">{enrichData?.email || '—'}</span>
-                    </div>
-                    <div class="flex gap-x-6">
+                                Lookup on QRZ.com
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.5"
+                                    aria-hidden="true"
+                                    class="size-4"
+                                >
+                                    <path
+                                        d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                    />
+                                </svg>
+                            </a>
+                        {:else}
+                            <span class="text-muted">Enter a callsign for the QRZ link.</span>
+                        {/if}
                         <div>
-                            <span class="text-muted">CQ Zone:</span>
-                            <span class="tabular-nums text-ink">{enrichData?.cqZone || '—'}</span>
+                            <span class="text-muted">Email:</span>
+                            <span class="text-ink">{enrichData?.email || '—'}</span>
                         </div>
-                        <div>
-                            <span class="text-muted">ITU Zone:</span>
-                            <span class="tabular-nums text-ink">{enrichData?.ituZone || '—'}</span>
+                        <div class="flex gap-x-6">
+                            <div>
+                                <span class="text-muted">CQ Zone:</span>
+                                <span class="tabular-nums text-ink"
+                                    >{enrichData?.cqZone || '—'}</span
+                                >
+                            </div>
+                            <div>
+                                <span class="text-muted">ITU Zone:</span>
+                                <span class="tabular-nums text-ink"
+                                    >{enrichData?.ituZone || '—'}</span
+                                >
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                <!-- Editable contacted-station fields. Gridsquare + QTH are
+                    <!-- Editable contacted-station fields. Gridsquare + QTH are
                      enrichment-filled (correctable); Rig + RX power share a row
                      (Rig fills; power stays narrow). -->
-                <div>
-                    <label for="lc-grid" class="block text-sm font-medium text-ink"
-                        >Gridsquare</label
-                    >
-                    <input
-                        id="lc-grid"
-                        class="input w-full uppercase"
-                        class:input-error={gridInvalid}
-                        autocomplete="off"
-                        spellcheck="false"
-                        placeholder="e.g. KH66"
-                        bind:value={draft.gridsquare}
-                        oninput={upperGrid}
-                    />
-                    {#if gridInvalid}
-                        <p class="mt-1 text-xs text-invalid">Not a valid grid square</p>
-                    {/if}
-                </div>
-                <div>
-                    <label for="lc-qth" class="block text-sm font-medium text-ink">QTH</label>
-                    <input
-                        id="lc-qth"
-                        class="input w-full"
-                        autocomplete="off"
-                        placeholder="City / town"
-                        bind:value={draft.qth}
-                    />
-                </div>
-                <div class="flex items-end gap-x-2">
-                    <div class="flex-1">
-                        <label for="lc-rig" class="block text-sm font-medium text-ink">Rig</label>
-                        <input
-                            id="lc-rig"
-                            class="input w-full"
-                            autocomplete="off"
-                            bind:value={draft.rig}
-                        />
-                    </div>
                     <div>
-                        <label for="lc-rxpwr" class="block text-sm font-medium text-ink"
-                            >RX Power (W)</label
+                        <label for="lc-grid" class="block text-sm font-medium text-ink"
+                            >Gridsquare</label
                         >
                         <input
-                            id="lc-rxpwr"
-                            class="input w-24"
-                            class:input-error={p.rxPwr}
-                            inputmode="numeric"
-                            maxlength="10"
+                            id="lc-grid"
+                            class="input w-full uppercase"
+                            class:input-error={gridInvalid}
                             autocomplete="off"
-                            bind:value={draft.rxPwr}
+                            spellcheck="false"
+                            placeholder="e.g. KH66"
+                            bind:value={draft.gridsquare}
+                            oninput={upperGrid}
+                        />
+                        {#if gridInvalid}
+                            <p class="mt-1 text-xs text-invalid">Not a valid grid square</p>
+                        {/if}
+                    </div>
+                    <div>
+                        <label for="lc-qth" class="block text-sm font-medium text-ink">QTH</label>
+                        <input
+                            id="lc-qth"
+                            class="input w-full"
+                            autocomplete="off"
+                            placeholder="City / town"
+                            bind:value={draft.qth}
                         />
                     </div>
+                    <div class="flex items-end gap-x-2">
+                        <div class="flex-1">
+                            <label for="lc-rig" class="block text-sm font-medium text-ink"
+                                >Rig</label
+                            >
+                            <input
+                                id="lc-rig"
+                                class="input w-full"
+                                autocomplete="off"
+                                bind:value={draft.rig}
+                            />
+                        </div>
+                        <div>
+                            <label for="lc-rxpwr" class="block text-sm font-medium text-ink"
+                                >RX Power (W)</label
+                            >
+                            <input
+                                id="lc-rxpwr"
+                                class="input w-24"
+                                class:input-error={p.rxPwr}
+                                inputmode="numeric"
+                                maxlength="10"
+                                autocomplete="off"
+                                bind:value={draft.rxPwr}
+                            />
+                        </div>
+                    </div>
+                    <div>
+                        <label for="lc-notes" class="block text-sm font-medium text-ink"
+                            >Notes</label
+                        >
+                        <textarea
+                            id="lc-notes"
+                            class="input w-full resize-y"
+                            rows="2"
+                            autocomplete="off"
+                            bind:value={draft.notes}
+                        ></textarea>
+                    </div>
                 </div>
-                <div>
-                    <label for="lc-notes" class="block text-sm font-medium text-ink">Notes</label>
-                    <textarea
-                        id="lc-notes"
-                        class="input w-full resize-y"
-                        rows="2"
-                        autocomplete="off"
-                        bind:value={draft.notes}
-                    ></textarea>
-                </div>
+                {#if detailsOpen}
+                    <div class="mt-4" data-action-row>{@render actionRow()}</div>
+                {/if}
             </div>
         </details>
-        <div class="mt-4 flex justify-end gap-x-2">
-            <button
-                class="btn"
-                title="Esc"
-                onclick={() => {
-                    clearDraft();
-                    callInput?.focus();
-                }}>Clear</button
-            >
-            <!-- CAT/rig gate (ADR 0044): 'lost' and 'unconfirmed' block
-                 logging — the context may be stale or never asserted;
-                 'live' and confirmed-'manual' log. Enforced in logDraft
-                 too; this disabled state is the UX face of it.
-                 busy = in-flight POST (double-log guard). -->
-            <button
-                class="btn btn-primary"
-                onclick={() => logAndRefocus()}
-                disabled={!canLog() || !rigReady() || submitState.busy}
-                title={gateTitle ?? 'Ctrl+Enter'}
-                >{submitState.busy ? 'Logging…' : 'Log QSO'}</button
-            >
+        <!-- ONE action row in exactly one ACCESSIBLE place: the expansion's
+             bottom while open (the {#if} above), in flow otherwise. The
+             in-flow wrapper below always renders its copy and hides it with
+             visibility (not an {#if}): an emptied wrapper collapses, the card
+             shrinks, and the Worked panel moves UP — the same niggle in the
+             other direction. visibility:hidden keeps the space and takes the
+             copy out of the focus order and accessibility tree. -->
+        {#snippet actionRow()}
+            <div class="flex justify-end gap-x-2">
+                <button
+                    class="btn"
+                    title="Esc"
+                    onclick={() => {
+                        clearDraft();
+                        callInput?.focus();
+                    }}>Clear</button
+                >
+                <!-- CAT/rig gate (ADR 0044): 'lost' and 'unconfirmed' block
+                     logging — the context may be stale or never asserted;
+                     'live' and confirmed-'manual' log. Enforced in logDraft
+                     too; this disabled state is the UX face of it.
+                     busy = in-flight POST (double-log guard). -->
+                <button
+                    class="btn btn-primary"
+                    onclick={() => logAndRefocus()}
+                    disabled={!canLog() || !rigReady() || submitState.busy}
+                    title={gateTitle ?? 'Ctrl+Enter'}
+                    >{submitState.busy ? 'Logging…' : 'Log QSO'}</button
+                >
+            </div>
+        {/snippet}
+        <div class="mt-4" data-action-row class:invisible={detailsOpen}>
+            {@render actionRow()}
         </div>
     </div>
 </div>

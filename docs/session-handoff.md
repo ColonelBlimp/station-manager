@@ -51,27 +51,25 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **Revive-on-'online' fix SHIPPED 2026-08-06** (`254bbd88` — note its subject
-  line wrongly repeats `67ba8a66`'s inert-drawer text; content is the SSE
-  fix. Codex review: clean, deleted). The
-  morning's "CAT link lost" was the router swap killing the browser's loopback
-  SSE with the tab visible — `sse-reviving.ts` now registers ONE
-  reviveIfVisibleAndDead handler for BOTH visibilitychange and window
-  'online' (rig/daemon were healthy throughout; evidence in `## Current
-  state` → 2026-08-06). O1–O7 shipped alongside the V-series: RED was
-  informative (O1/O4/O7), a wrong-impl probe proved O2/O3/O5's teeth, the
-  reversion proof failed for the right reason, and the full gate is green
-  (1105 tests, lint/format/check/build clean). Judgement call for the
-  operator to ratify: 'online' while HIDDEN revives nothing (flagged in the
-  test header). jsdom caveat: the suite pins the POLICY against a fake
-  EventSource — whether the desktop browser fires 'online' after a real
-  bounce is confirmed only by the next natural bounce (or Playwright, later).
-- **DEPLOYED AT HEAD 2026-08-06** (`…1104-gc741a0ee`, clean build, tab
-  reloaded): the revive-on-'online' fix and the WorkedPanel centring are LIVE.
-  The Phone/CW ↔ FT8 restore feature passed its first ON-HARDWARE check
-  (operator, same morning). The 'online' revive itself is confirmed only by
-  the next natural network bounce — nothing to do, just don't call it
-  field-proven yet.
+- **DEPLOYED AT HEAD 2026-08-06** (`…1107-g9c012341`), operator-checked live:
+  "All looks good." Everything shipped today is on the air; tree clean, every
+  codex review triaged + deleted.
+- **Shipped 2026-08-06:** revive-on-'online' SSE fix (`254bbd88` — its subject
+  line wrongly repeats the inert-drawer text; content is the SSE fix. The
+  router-swap "CAT lost" was the browser killing its loopback SSE, tab
+  visible, so the visibilitychange-only revive never fired) · WorkedPanel
+  centring (`c741a0ee`, same missing-mx-auto defect LoggingCard had after
+  ADR 0058) · **A25 FT8 first-entry SEED** (`c0df1c8a` + `9c012341`): FT8
+  entry with no snapshot tunes the SELECTED VFO to the band's configured FT8
+  dial then asserts the data mode; unconfigured band/CAT-off/no-dial-op stay
+  silent no-ops (CAT-off RATIFIED: "Cat-off - ft8 cannot work"); refused
+  seeds report, retry next entry, and watch only OUTSTANDING fields' rig
+  counters so the seed's own confirm isn't mistaken for operator activity
+  (review c0df1c8a, two real P1s: wrong VFO + suppressed retry).
+- **Unratified judgement calls, flagged in test headers:** sse-reviving —
+  'online' while HIDDEN revives nothing; modeRestore — the restore knob gates
+  the seed; no-set_freq rig seeds nothing. The 'online' revive is deployed
+  but field-proven only by the next natural network bounce.
 - **STOP PATCHING THE FT8 TIMEOUT RECONCILE** — converged at `4d131720`; if it
   draws another finding, add `If-Match`/revision to `PUT /v1/config` instead.
 - **OPEN (operator decisions, not started):** 121 QSO rows with coordinates
@@ -82,6 +80,31 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   (`docs/reviews/ft8-logging-gaps.md`) · Playwright scaffolding.
 
 ## Current state (as of 2026-08-06)
+
+### 2026-08-06 (later) — the A25 FT8 first-entry seed
+
+Operator report from the deployed build: phone→FT8 left the rig on 14.225 USB
+("should move to DATA and 14,074"). Root cause was DESIGNED behaviour — the
+restore's "no snapshot → nothing" rule (old A3/A4), which after a reload also
+poisoned FT8's snapshot with the phone position on exit. The retired SPA never
+auto-tuned on FT8 entry either (its watering-hole jump was the band BUTTON), so
+this was a new criterion, not a port gap: **A25**, amending A3/A4 to the phone
+direction + unconfigured FT8 only. Operator settled the frequency source
+mid-build: "use the band the rig is on, just move to an appropriate frequency."
+
+Mechanism: `seedFt8()` in modeRestore — the ft8SelectBand order (dial first,
+then mode; a data mode on a phone frequency is the guarded-against outcome)
+issued with modeRestore's own per-command holds. Review `c0df1c8a` filed two
+real P1s the same afternoon: the seed drove VFO A regardless of selection
+(rig.band derives from the SELECTED VFO; setFreq routes by it — the hand-copy
+missed that), and the retry marker counted the seed's own dial confirmation as
+operator evidence, making a half-seeded {FT8 dial, phone mode} snapshot
+permanent. Both fixed in `9c012341` (S13/S13b/S14, red-first against the
+committed code); the marker now watches only OUTSTANDING fields. 16 S rules
+total; probes A–E proved the constraint rules' teeth (probe E caught S3b's own
+decorative fixture — rig parked exactly on the watering hole distinguishes
+nothing). CAT-off-seeds-nothing is RATIFIED with the correct rationale:
+"Cat-off - ft8 cannot work" — not my drafted display-context reading.
 
 ### 2026-08-06 — power cut mid-task: the revive-on-'online' fix
 

@@ -77,6 +77,80 @@ describe('Operate surface without the tile board', () => {
         }
     });
 
+    // W2 — THE CONTACT-DETAILS DISCLOSURE EXTENDS THE CARD WITHOUT REFLOW
+    // (operator, 2026-08-06, three rounds: "could it open on-top of the
+    // Worked Panel?"; rejecting a detached sheet — "a disclosure EXTENDS the
+    // current panel - the Clear and Log QSO buttons should move down"; then
+    // rejecting buttons-inside-the-box — "the disclosures' UI should remain
+    // unchanged"). The open UI is the ORIGINAL one: content box under the
+    // summary, action row below the box at card level, the card frame around
+    // it all — the extension REPRODUCES the card's lower half out of flow.
+    // The Worked panel does not move and is painted over ("it's almost
+    // natural that it should" be obscured). z alone cannot deliver that:
+    // reflow is a flow phenomenon, so the expansion must be OUT of flow
+    // while the action row rides inside it. This rule pins the mechanism,
+    // which survived the round-3 restyle unchanged; the styling that makes
+    // it LOOK like the original card is jsdom-invisible and belongs to the
+    // Playwright layer. The contract:
+    //   - the CARD root carries relative + a z utility — the operator's
+    //     "whole logging panel at a greater z", and what paints the
+    //     extension over the Worked panel;
+    //   - the DETAILS element is relative: the anchor that puts the
+    //     expansion directly under the summary, where the old in-flow
+    //     content opened;
+    //   - the expansion div is absolute + top-full: out of flow, so opening
+    //     cannot grow the card and push the column;
+    //   - the action row MOVES DOWN with the content: while open, the
+    //     in-flow row holds its space invisibly (the card must not shrink —
+    //     that would move the Worked panel UP) and the single accessible
+    //     Clear/Log row renders at the expansion's bottom.
+    // jsdom does no layout: this pins the mechanism; the geometric outcome
+    // is Playwright's when that layer exists.
+    it('W2: the contact-details disclosure extends the card out of flow', async () => {
+        render(Operate);
+        await flush();
+
+        const card = document.querySelector('[data-card="logging"] > .card');
+        expect(card, 'logging card root present').not.toBeNull();
+        expect(card!.classList.contains('relative'), 'card is a stacking anchor').toBe(true);
+        expect(
+            [...card!.classList].some((c) => /^z-\d+$/.test(c)),
+            'card paints over the Worked panel'
+        ).toBe(true);
+
+        const details = document.querySelector<HTMLDetailsElement>('[data-card="logging"] details');
+        expect(details, 'disclosure present').not.toBeNull();
+        expect(details!.classList.contains('relative'), 'details anchors the expansion').toBe(true);
+
+        const panel = details!.querySelector('div');
+        expect(panel, 'expansion panel present').not.toBeNull();
+        expect(panel!.classList.contains('absolute'), 'expansion out of flow').toBe(true);
+        expect(panel!.classList.contains('top-full'), 'expansion under the summary').toBe(true);
+
+        // Closed: ONE action row, in flow, visible. The expansion's copy must
+        // not exist yet — jsdom applies no UA hiding to closed details, so a
+        // permanently-rendered copy would double every "Log QSO" query.
+        const inFlowRow = document.querySelector('[data-action-row]');
+        expect(inFlowRow, 'in-flow action row present').not.toBeNull();
+        expect(inFlowRow!.classList.contains('invisible')).toBe(false);
+        expect(panel!.querySelector('[data-action-row]')).toBeNull();
+
+        // Open: the in-flow row keeps its SPACE but goes invisible (the card
+        // must not shrink), and the accessible row is the expansion's.
+        details!.open = true;
+        details!.dispatchEvent(new Event('toggle'));
+        await flush();
+
+        expect(
+            inFlowRow!.classList.contains('invisible'),
+            'in-flow row holds space invisibly while open'
+        ).toBe(true);
+        expect(
+            panel!.querySelector('[data-action-row]'),
+            'action row rides at the expansion bottom'
+        ).not.toBeNull();
+    });
+
     it('offers no arrange affordance in either workspace', () => {
         for (const mode of ['phone', 'ft8'] as const) {
             router.mode = mode;
