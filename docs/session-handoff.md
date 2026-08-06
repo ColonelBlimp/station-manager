@@ -80,10 +80,22 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   subscribes; `TX0` pushed at unkey). Open: Tune coverage, SPA red threshold
   (first datum: ALC 026 at normal voice drive). FTdx10 CAT manual converted
   to `docs/ftdx10-cat.md` — GITIGNORED (Yaesu copyright), local only.
-- **QUEUED:** ADR 0064 build (mechanism mostly exists: ADR 0035 poll loop +
-  rigdef RM4/RM5 decode + meterTags slots) · Settings → **General** tab ·
-  the 2 coordinate decisions · ft8 LOGGING SHIP GATE at finding 4 ·
-  Playwright (customers piling up: drawers, centring, meter card, revive).
+- **SHIP GATE: finding 4 CLOSED 2026-08-06 (6 of 14)** — suppressed slots now
+  log at Info with rule + scope (`slotsuppression_test.go`). **Next session
+  resumes at 5 + 11 together** (operator's pick: "logging first"; the
+  `operator_pick` answerer mode is the other queued item). NB the
+  service-lifetime decode log makes finding 12 MORE pressing — noted in the
+  gaps doc progress block.
+- **F4MQS/P worked on FT8 (2026-08-06 16:20)** — first on-air validation of
+  the suffixed-call work-a-caller path end to end (stored + forwarded). The
+  reduced type-4 ladder stays UNSEEN (suffix calls ride the standard encoder).
+- **SM Cloud leg DOWN since the router swap** (no route to 192.168.1.200) —
+  operator knows the cause; rows persist + retry, hourly reconcile heals on
+  the box's return. Worker backoffs are hours-long; the reconciler is the
+  healer. No software action.
+- **QUEUED:** ship gate 5+11 · ADR 0064 build (mechanism mostly exists) ·
+  `operator_pick` answerer mode · Settings → **General** tab · the 2
+  coordinate decisions · Playwright (drawers, centring, meter card, revive).
 - **STOP PATCHING THE FT8 TIMEOUT RECONCILE** — converged at `4d131720`; the
   same rule now applies to the meter arc: it converged at `a2b94c64`.
 
