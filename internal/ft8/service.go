@@ -83,6 +83,7 @@ type Service struct {
 	// previous session's goroutines before mu is dropped.
 	subCount      int                // live /v1/ft8/events subscribers
 	capturing     bool               // a capture session is currently running
+	captureGen    uint64             // bumped per session start; loop-exit callbacks revalidate ownership against it (review ed13a9c6)
 	releasing     bool               // a release is draining s.wg with s.mu dropped (F2)
 	captureCancel context.CancelFunc // cancels the current capture run
 	lingerTimer   *time.Timer        // pending release after the last unsubscribe
@@ -547,6 +548,8 @@ func (s *Service) startCaptureLocked() {
 	}
 	s.captureCancel = cancel
 	s.capturing = true
+	s.captureGen++
+	gen := s.captureGen
 
 	// RX audio-level meter tee (audiolevel.go): measures peak/RMS on the way
 	// past and forwards untouched — deliberately OUTSIDE the scheduler/slot
@@ -583,11 +586,11 @@ func (s *Service) startCaptureLocked() {
 		safego.Go(runCtx, "ft8.dialguard", s.onPanic, func() { s.onDialMoved(from, to) }, false)
 	})
 	safego.GoTracked(runCtx, "ft8.scheduler", s.onPanic, func() {
-		defer s.onCaptureLoopExit(runCtx, "ft8.scheduler")
+		defer s.onCaptureLoopExit(runCtx, gen, "ft8.scheduler")
 		_ = sch.Run(runCtx)
 	}, false, &s.wg)
 	safego.GoTracked(runCtx, "ft8.decoder", s.onPanic, func() {
-		defer s.onCaptureLoopExit(runCtx, "ft8.decoder")
+		defer s.onCaptureLoopExit(runCtx, gen, "ft8.decoder")
 		s.decodeLoop(sch.Slots())
 	}, false, &s.wg)
 
@@ -629,11 +632,24 @@ func (s *Service) onDeadCaptureSource(reason string) {
 // panic too (safego recovers outside the goroutine body). There is no automatic
 // restart: re-opening the FT8 view re-acquires capture. Does NOT wait on s.wg,
 // so it can't deadlock a concurrent releaseCaptureLocked drain.
-func (s *Service) onCaptureLoopExit(runCtx context.Context, who string) {
+func (s *Service) onCaptureLoopExit(runCtx context.Context, gen uint64, who string) {
 	if runCtx.Err() != nil {
 		return // normal teardown: release/Stop cancelled the session first
 	}
 	s.mu.Lock()
+	// Ownership revalidation UNDER the lock (review ed13a9c6 P1): both loops
+	// defer this handler and both can pass the unlocked fast-path above before
+	// either locks. The second callback can then run after a REPLACEMENT
+	// session has started — and without this check it tore the replacement
+	// down: capturing=false, the replacement's cancel, its source stopped, its
+	// audio-publish token retired (permanently muting the live meter). A
+	// callback owns exactly the generation it was spawned under; anything else
+	// is a no-op. The ctx re-check catches the same-generation double (first
+	// callback already cancelled), sparing a harmless-but-noisy double clear.
+	if gen != s.captureGen || runCtx.Err() != nil {
+		s.mu.Unlock()
+		return
+	}
 	wasCapturing := s.capturing
 	s.capturing = false
 	if s.captureCancel != nil {

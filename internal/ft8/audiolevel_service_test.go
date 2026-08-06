@@ -170,6 +170,62 @@ func TestAudioLevel_PublishesRoundedMeasurements(t *testing.T) {
 	require.NoError(t, s.Stop())
 }
 
+// H4 — A STALE LOOP-EXIT CALLBACK CANNOT TOUCH A SESSION IT DOES NOT OWN
+// (clean-room review ed13a9c6, P1): both scheduler and decoder defer
+// onCaptureLoopExit, and both can pass its UNLOCKED runCtx fast-path before
+// either locks. The second callback, running after a replacement capture has
+// started, then tore the REPLACEMENT down — capturing=false, the
+// replacement's context cancelled, its source stopped, and (post the
+// session-token fix) its publish token retired, permanently muting the live
+// meter. Ownership is a capture GENERATION captured at goroutine spawn and
+// revalidated under the lock: a callback whose generation is not current is
+// a no-op. The fixture calls the handler directly with a live ctx (passing
+// the unlocked fast-path, as in the race) and a stale generation — the
+// deterministic form of the interleaving.
+func TestCaptureLoopExit_StaleCallbackCannotKillReplacement(t *testing.T) {
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true, Device: "test"}, logging.Noop(), src)
+	require.NoError(t, s.Initialize())
+	require.NoError(t, s.Start(context.Background()))
+	ch, unsub := s.Subscribe()
+	defer unsub()
+	require.True(t, src.wasStarted(), "fixture: the live session this callback must not touch")
+
+	s.mu.Lock()
+	staleGen := s.captureGen - 1 // a prior session's generation
+	s.mu.Unlock()
+	s.onCaptureLoopExit(context.Background(), staleGen, "test-stale")
+
+	s.mu.Lock()
+	stillCapturing := s.capturing
+	s.mu.Unlock()
+	require.True(t, stillCapturing, "stale callback tore down a session it does not own")
+	require.Zero(t, src.stopCount(), "stale callback stopped the live session's source")
+
+	// The live session's meter still publishes — its token was not retired.
+	src.push(make([]int16, audioLevelWindowSamples))
+	lvl := awaitAudioLevelOn(t, ch, s)
+	require.Equal(t, audioLevelFloorDbfs, lvl.RmsDbfs)
+	require.NoError(t, s.Stop())
+}
+
+// awaitAudioLevelOn polls the hub's latest-audio cache (pull delivery) until a
+// reading lands — the subscriber channel never carries audio events.
+func awaitAudioLevelOn(t *testing.T, _ <-chan hubEvent, s *Service) AudioLevel {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if evt, gen := s.hub.latestAudio(); evt != nil && gen > 0 {
+			lvl, ok := evt.payload.(AudioLevel)
+			require.True(t, ok)
+			return lvl
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no audio level landed in the hub within 5s")
+	return AudioLevel{}
+}
+
 // W3 — RELEASE STILL DRAINS. The tee is one more session goroutine between
 // source and scheduler; Stop returning proves it exits with the pair and
 // cannot wedge the release (the F1/F2 drain discipline).
