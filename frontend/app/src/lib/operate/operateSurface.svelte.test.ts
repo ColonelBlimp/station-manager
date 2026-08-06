@@ -53,6 +53,30 @@ describe('Operate surface without the tile board', () => {
         expect(document.querySelector('[data-card="worked"]')).toBeNull();
     });
 
+    // W1 — A FIXED-WIDTH WORKFLOW CARD CENTRES ITSELF. A fixed-width box in
+    // Operate's flex column is placed at the START of the cross axis — hard
+    // left — unless it carries its own auto margins. The ADR 0046 tile board
+    // used to centre every card; ADR 0058 retired it and each card keeping a
+    // fixed width had to inherit the mechanism itself. LoggingCard did
+    // (its comment calls mx-auto load-bearing); WorkedPanel did not, and sat
+    // off the logging card's axis (operator, 2026-08-06). jsdom does no
+    // layout, so this pins the MECHANISM — every card root under a data-card
+    // wrapper self-centres — and the geometric outcome (shared vertical axis)
+    // belongs to the Playwright layer when it exists.
+    it('W1: every workflow card root centres itself in the column', async () => {
+        render(Operate);
+        showTile('worked');
+        await flush();
+
+        for (const id of ['logging', 'worked'] as const) {
+            const roots = document.querySelectorAll(`[data-card="${id}"] > .card`);
+            expect(roots.length, `${id}: card root present`).toBeGreaterThan(0);
+            for (const root of roots) {
+                expect(root.classList.contains('mx-auto'), `${id} must self-centre`).toBe(true);
+            }
+        }
+    });
+
     it('offers no arrange affordance in either workspace', () => {
         for (const mode of ['phone', 'ft8'] as const) {
             router.mode = mode;

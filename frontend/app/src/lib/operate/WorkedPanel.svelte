@@ -10,7 +10,12 @@
     const tableHeight = 'h-55';
 </script>
 
-<div class="card w-2xl">
+<!-- mx-auto: a fixed-width card in Operate's flex column sits hard left
+     without its own auto margins — same defect and fix as LoggingCard, whose
+     comment carries the full ADR 0058 story. Centring keeps this on the
+     logging card's vertical axis; the widths differ by design (a table needs
+     the room). -->
+<div class="card mx-auto w-2xl">
     <div class="flex items-center justify-between">
         <h3 class="text-sm font-semibold text-ink">Worked</h3>
         <div class="flex items-center gap-x-2">
