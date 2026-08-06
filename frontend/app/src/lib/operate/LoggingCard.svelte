@@ -135,6 +135,19 @@
             callInput?.focus();
             return;
         }
+        // F3 — the timer toggle (A28, ported from the retired SPA's
+        // TimerControls mirror by operator direction): freeze a running Time
+        // Off (the contact has ended; details are still being typed), or
+        // start the clock for a typed call. After a hold it is a SILENT
+        // no-op — re-ticking would overwrite an end time set by hand, the
+        // exact value holdOffTimes exists to protect. Focus-independent: F3
+        // has no text-editing meaning, so it stays live inside fields.
+        if (e.key === 'F3') {
+            e.preventDefault();
+            if (qsoClock.ticking) holdOffTimes();
+            else if (!qsoClock.started && draft.callsign.trim() !== '') startQso();
+            return;
+        }
         pileupKeydown(e);
     }
 
@@ -192,25 +205,47 @@
         callInput?.focus();
     }
 
-    // Tab out of the callsign field = "I'm working this station": stamps
-    // Date/Time On and starts the ticking Time Off (the QSO timer), and surfaces
-    // the worked-before panel if nothing is open. Tab is not swallowed — focus
-    // moves on to RST as normal. If the rig gate isn't confirmed the QSO still
-    // starts (the clock runs), but it CAN'T be logged — so warn at start rather
-    // than let the operator discover it only at the disabled Log button.
-    function callKeydown(e: KeyboardEvent): void {
-        if (e.key === 'Tab' && !e.shiftKey && draft.callsign.trim() !== '') {
-            const fresh = !qsoClock.started;
-            startQso();
-            openWorkedForQso(draft.callsign);
-            if (fresh && !rigReady()) {
-                toasts.warn(
-                    rigGate() === 'lost'
-                        ? 'CAT link lost — confirm the rig in the Rig panel before you can log this QSO.'
-                        : 'Rig not confirmed — confirm the band in the Rig panel before you can log this QSO.'
-                );
-            }
+    // Committing the call = "I'm working this station": stamps Date/Time On,
+    // starts the ticking Time Off (the QSO timer), and surfaces the
+    // worked-before panel if nothing is open. If the rig gate isn't confirmed
+    // the QSO still starts (the clock runs), but it CAN'T be logged — so warn
+    // at start rather than let the operator discover it only at the disabled
+    // Log button.
+    function commitCall(): void {
+        const fresh = !qsoClock.started;
+        startQso();
+        openWorkedForQso(draft.callsign);
+        if (fresh && !rigReady()) {
+            toasts.warn(
+                rigGate() === 'lost'
+                    ? 'CAT link lost — confirm the rig in the Rig panel before you can log this QSO.'
+                    : 'Rig not confirmed — confirm the band in the Rig panel before you can log this QSO.'
+            );
         }
+    }
+
+    // Callsign-field keys (A29, retired-SPA semantics by operator direction):
+    // Tab commits and moves focus on to RST as normal (not swallowed; its
+    // shipped non-empty gate is deliberately untouched). Enter commits
+    // WITHOUT moving focus, and Space both commits and is swallowed — a
+    // callsign is a single token, so a literal space is never wanted, even
+    // mid-edit of an invalid call. Enter/Space require a VALID call (the
+    // retired gate): a Space habit must not start the clock on a half-typed
+    // call. Modified variants bail untouched so the window-level meanings
+    // survive — Shift+Enter stacks, Ctrl+Enter logs.
+    function callKeydown(e: KeyboardEvent): void {
+        if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.key === 'Tab') {
+            if (draft.callsign.trim() !== '') commitCall();
+            return;
+        }
+        const isSpace = e.key === ' ' || e.code === 'Space';
+        if (isSpace) e.preventDefault();
+        if (e.key !== 'Enter' && !isSpace) return;
+        if (e.key === 'Enter') e.preventDefault();
+        const trimmed = draft.callsign.trim();
+        if (trimmed === '' || isValidCallsign(trimmed) !== null) return;
+        commitCall();
     }
 
     // The worked-before lookup is driven here, not in WorkedPanel: it must run

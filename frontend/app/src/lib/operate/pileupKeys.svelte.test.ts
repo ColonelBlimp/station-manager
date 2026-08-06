@@ -32,6 +32,29 @@
           `if (qsoEditState.open) return` — the port dropped that first
           guard, and this criterion restores it.
 
+      A28 (F3, ported by operator direction 2026-08-06) F3 while the QSO
+          timer runs FREEZES Time Off — the contact has ended even though I
+          am still typing details — and I can tell it from the timer still
+          running (Time Off stops advancing). With no QSO started and a call
+          typed, F3 starts the clock exactly as Tab does. With no call, or
+          once the off time is already held, F3 does nothing, silently —
+          re-ticking would overwrite an end time I set by hand. Works
+          wherever focus is. Judgement calls, drafted not ratified: the
+          start gate is Tab's (a non-empty call), not the retired SPA's
+          lookup-committed gate — lookups run automatically here, so that
+          gate no longer exists to mirror.
+
+      A29 (callsign Enter/Space, ported by operator direction 2026-08-06)
+          Enter in the callsign field commits the call — the QSO clock
+          starts and the worked lookup opens — without moving focus. Space
+          NEVER types into the field (a callsign is a single token), and
+          with a valid call typed it commits like Enter. A malformed call
+          commits nothing from either key, and modified variants keep their
+          window-level meanings (Shift+Enter stacks, Ctrl+Enter logs).
+          Judgement call, drafted not ratified: Enter/Space require a VALID
+          call (the retired SPA's gate); Tab keeps its shipped non-empty
+          gate untouched.
+
     WHY THE STACK IS SEPARATE FROM FT8's PILE-UP. They share a name and nothing
     else: FT8's queue carries grid/SNR/slot/parity and is drained by the
     sequencer, this one is a list of callsigns the operator heard. One
@@ -40,6 +63,11 @@
     NOT ASSERTED HERE: the stack's own contract (order, dedupe, the three pops)
     — that is `callsignStack.svelte.test.ts`, ported verbatim from v1 along with
     the module, and it passed unchanged.
+
+    RULED MOOT (operator, 2026-08-06, closing the keyboard audit): the retired
+    SPA's F2 lookup-only "peek" — lookups run automatically as the call is
+    typed, so the peek needs no key — and Cmd/metaKey variants of the log
+    shortcut (a Linux station). Do not port either without a new ruling.
 */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -48,10 +76,11 @@ import { flushSync } from 'svelte';
 import LoggingCard from './LoggingCard.svelte';
 import RigKeys from './RigKeys.svelte';
 import { callsignStack } from './callsignStack.svelte';
-import { draft, clearDraft, setSubmit, submitState } from './qso.svelte';
+import { draft, clearDraft, setSubmit, submitState, qsoClock } from './qso.svelte';
 import { rig, confirmRig, resetCatLink, setCommandSender, setRigCaps } from './rig.svelte';
 import { operate } from './state.svelte';
 import { sessionEdit } from './sessionEdit.svelte';
+import { hideTile, isVisible } from './layout.svelte';
 import type { LogbookQso } from '../api/logbooks';
 
 let logged: string[] = [];
@@ -348,6 +377,140 @@ describe('Phone/CW pile-up keyboard', () => {
 
         expect(callsignStack.items).toEqual([]);
         expect(draft.callsign).toBe('G0ABC');
+    });
+
+    // ------------------------------------------------------------------
+    // T rules — A28: the F3 timer toggle.
+    // ------------------------------------------------------------------
+
+    // T1 — F3 with a call typed and no QSO started starts the clock (Tab's
+    // start half, focus-independent).
+    it('T1: F3 starts the QSO clock for a typed call', () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+        expect(qsoClock.started).toBe(false);
+
+        key({ key: 'F3' });
+
+        expect(qsoClock.started).toBe(true);
+        expect(qsoClock.ticking).toBe(true);
+        expect(draft.timeOn).not.toBe('');
+    });
+
+    // T2 — F3 while ticking freezes Time Off: the QSO has ended. The frozen
+    // value survives — nothing resumes ticking over it.
+    it('T2: F3 while ticking holds the off time', () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+        key({ key: 'F3' }); // start
+        const frozenOff = draft.timeOff;
+
+        key({ key: 'F3' }); // stop
+
+        expect(qsoClock.ticking).toBe(false);
+        expect(qsoClock.started).toBe(true); // the QSO happened; TIME_ON stands
+        expect(draft.timeOff).toBe(frozenOff);
+    });
+
+    // T3 — a third F3 is a SILENT no-op: re-ticking would overwrite an end
+    // time the hold exists to protect.
+    it('T3: F3 after a hold restarts nothing', () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+        key({ key: 'F3' });
+        key({ key: 'F3' });
+
+        key({ key: 'F3' });
+
+        expect(qsoClock.ticking).toBe(false);
+        expect(qsoClock.started).toBe(true);
+    });
+
+    // T4 — no call, no clock: a timer with nobody on the other end is
+    // meaningless (Tab's gate, mirrored).
+    it('T4: F3 with an empty callsign starts nothing', () => {
+        render(LoggingCard);
+
+        key({ key: 'F3' });
+
+        expect(qsoClock.started).toBe(false);
+    });
+
+    // ------------------------------------------------------------------
+    // E rules — A29: Enter/Space in the callsign field.
+    // ------------------------------------------------------------------
+
+    /** Dispatch a key on the callsign input itself (callKeydown, not window). */
+    function callFieldKey(init: KeyboardEventInit): boolean {
+        const input = document.querySelector<HTMLInputElement>('#lc-call')!;
+        const ev = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+        const notPrevented = input.dispatchEvent(ev);
+        flushSync();
+        return notPrevented;
+    }
+
+    // E1 — Enter commits a valid call: the clock starts, as Tab does.
+    it('E1: Enter in the callsign field commits a valid call', () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+
+        callFieldKey({ key: 'Enter' });
+
+        expect(qsoClock.started).toBe(true);
+    });
+
+    // E2 — a malformed call commits nothing (pure letters carry no digit and
+    // the validator rejects them).
+    it('E2: Enter on a malformed call starts no QSO', () => {
+        render(LoggingCard);
+        workableDraft('ABCDEF');
+
+        callFieldKey({ key: 'Enter' });
+
+        expect(qsoClock.started).toBe(false);
+    });
+
+    // E3 — Space with a valid call commits AND is swallowed: a callsign is a
+    // single token, so the literal space must never reach the field.
+    it('E3: Space commits a valid call and never types', () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+
+        const notPrevented = callFieldKey({ key: ' ', code: 'Space' });
+
+        expect(notPrevented).toBe(false); // preventDefault fired
+        expect(qsoClock.started).toBe(true);
+    });
+
+    // E4 — Space is swallowed even mid-edit of an invalid call, and commits
+    // nothing: the swallow is about the field's shape, not the call's state.
+    it('E4: Space on a malformed call is swallowed and commits nothing', () => {
+        render(LoggingCard);
+        workableDraft('ABCDEF');
+
+        const notPrevented = callFieldKey({ key: ' ', code: 'Space' });
+
+        expect(notPrevented).toBe(false);
+        expect(qsoClock.started).toBe(false);
+    });
+
+    // E5 — modified variants pass through untouched: Shift+Enter from the
+    // field must still reach the window-level stack handler (R14's path), so
+    // the field handler may not commit on it. The clock alone cannot pin
+    // this — the stack path's clearDraft resets it, hiding an illicit
+    // commit (the first probe proved exactly that) — so the assertion is the
+    // commit's surviving side effect: the worked panel auto-opening for a
+    // call that was being STACKED, not worked.
+    it('E5: modified Enter is left for the window-level shortcuts', () => {
+        render(LoggingCard);
+        hideTile('worked');
+        workableDraft('G0ABC');
+
+        callFieldKey({ key: 'Enter', shiftKey: true });
+
+        expect(callsignStack.items).toEqual(['G0ABC']);
+        expect(qsoClock.started).toBe(false);
+        expect(isVisible('worked'), 'no commit happened on the way').toBe(false);
     });
 
     // K4 — the rig family stands down as well: Ctrl+Shift+Arrow while editing
