@@ -59,6 +59,10 @@
         return Math.max(0, Math.min(100, ((v + 90) / 90) * 100));
     }
     const fmt = (v: number | null): string => (v === null ? '—' : `${v.toFixed(1)}`);
+    /** Bar + readout states, as opposed to the message-only trio. */
+    const measuring: () => boolean = $derived(
+        () => state() !== 'tx' && state() !== 'off' && state() !== 'stale'
+    );
 </script>
 
 {#if !audioLevel.open}
@@ -116,11 +120,19 @@
             </button>
         </div>
 
-        {#if state() === 'tx' || state() === 'off' || state() === 'stale'}
-            <p class="mt-2 text-xs text-muted">{labelByState[state()]}</p>
-        {:else}
-            <!-- RMS fill + peak tick over the -90..0 dBFS span. -->
-            <div class="relative mt-2 h-2.5 overflow-hidden rounded-full bg-surface-muted">
+        <!-- FIXED STRUCTURE IN EVERY STATE (dogfood 2026-08-06: the card's
+             height jumped when TX started — layouts must not swap). The bar
+             track and both fixed-height lines always render; only content
+             varies: measuring fills the bar and line 1 carries the readout;
+             tx/off/stale leave the bar empty and line 1 carries the state;
+             line 2 carries the low/high hint and is otherwise blank. h-4
+             matches text-xs line height, so blank lines hold their space.
+             V6 pins the structure; equal heights are Playwright's. -->
+        <div
+            data-meter-bar
+            class="relative mt-2 h-2.5 overflow-hidden rounded-full bg-surface-muted"
+        >
+            {#if measuring()}
                 <div
                     class="h-full rounded-full {toneByState[state()]}"
                     style="width: {pct(audioLevel.rmsDbfs)}%"
@@ -130,13 +142,17 @@
                     style="left: {pct(audioLevel.peakDbfs)}%"
                     aria-hidden="true"
                 ></div>
-            </div>
-            <p class="mt-1.5 text-xs tabular-nums text-muted">
-                RMS {fmt(audioLevel.rmsDbfs)} dB · Peak {fmt(audioLevel.peakDbfs)} dB
-            </p>
-            {#if state() !== 'good'}
-                <p class="mt-1 text-xs text-muted">{labelByState[state()]}</p>
             {/if}
-        {/if}
+        </div>
+        <p data-meter-line class="mt-1.5 h-4 text-xs tabular-nums text-muted">
+            {#if measuring()}
+                RMS {fmt(audioLevel.rmsDbfs)} dB · Peak {fmt(audioLevel.peakDbfs)} dB
+            {:else}
+                {labelByState[state()]}
+            {/if}
+        </p>
+        <p data-meter-line class="mt-1 h-4 text-xs text-muted">
+            {#if measuring() && state() !== 'good'}{labelByState[state()]}{/if}
+        </p>
     </div>
 {/if}

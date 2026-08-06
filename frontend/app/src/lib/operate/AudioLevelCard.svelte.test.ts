@@ -89,6 +89,61 @@ describe('AudioLevelCard', () => {
         expect(chip()!.dataset.state).toBe('off');
     });
 
+    // V6 — THE OPEN CARD'S STRUCTURE IS STATE-INDEPENDENT (dogfood
+    // 2026-08-06: "when TX'ing the panel changes height. Height should
+    // remain consistent with temp gauge or msg"). The body previously
+    // swapped whole layouts per state — bar + readout when measuring, a
+    // lone message for TX/off/stale, an EXTRA hint line only in low/high —
+    // so the card's height jumped exactly when the operator's eye was on
+    // it. The contract: the bar track and BOTH fixed-height text lines
+    // render in EVERY state; only their content varies. jsdom does no
+    // layout, so this pins the structure; equal heights are Playwright's.
+    it('V6: renders the same structure in every state', () => {
+        render(AudioLevelCard);
+        setAudioLevelOpen(true);
+
+        const structure = (): string => {
+            const c = card()!;
+            return [
+                c.querySelectorAll('[data-meter-bar]').length,
+                c.querySelectorAll('[data-meter-line]').length,
+            ].join('/');
+        };
+
+        // good
+        onAudioLevel({ peak_dbfs: -20, rms_dbfs: -30 });
+        flushSync();
+        const reference = structure();
+        expect(reference).toBe('1/2');
+
+        // high (hint line state)
+        onAudioLevel({ peak_dbfs: -0.2, rms_dbfs: -5 });
+        flushSync();
+        expect(structure(), 'high').toBe(reference);
+
+        // low
+        onAudioLevel({ peak_dbfs: -70, rms_dbfs: -80 });
+        flushSync();
+        expect(structure(), 'low').toBe(reference);
+
+        // tx — the reported case
+        ft8State.tx.transmitting = true;
+        flushSync();
+        expect(structure(), 'tx').toBe(reference);
+        ft8State.tx.transmitting = false;
+
+        // stale
+        vi.advanceTimersByTime(2100);
+        flushSync();
+        expect(structure(), 'stale').toBe(reference);
+
+        // off
+        resetAudioLevel();
+        setAudioLevelOpen(true);
+        flushSync();
+        expect(structure(), 'off').toBe(reference);
+    });
+
     // V5 — the open card carries the numeric readout the operator calibrates
     // against.
     it('V5: the open card shows the dB readout', () => {
