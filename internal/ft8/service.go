@@ -669,14 +669,21 @@ func (s *Service) onCaptureLoopExit(runCtx context.Context, gen uint64, who stri
 	// Invalidate the replay cache for the dead session — a later subscriber
 	// must not be handed this session's last slot as if it were live.
 	s.hub.clearActivity()
-	s.mu.Unlock()
 	// Close the decode log so the dead session doesn't leak the open file or let a
 	// later TX write to a stale log (releaseCaptureLocked would early-return now
 	// that capturing=false). Safe even though the sibling loop may still be winding
 	// down: only the decode goroutine writes RX, and it is the one exiting here.
+	//
+	// UNDER s.mu, inside the generation-validated section (review c5bbbcbf P1):
+	// swapped after the unlock, a replacement session starting in the gap had
+	// its FRESH log swapped out and closed by this stale-by-then callback,
+	// silently losing the live session's RX/TX entries. Every piece of
+	// session-owned teardown belongs inside the ownership check — the same
+	// under-lock placement releaseCaptureLocked already uses for this close.
 	if dl := s.decLog.Swap(nil); dl != nil {
 		dl.Close()
 	}
+	s.mu.Unlock()
 	if wasCapturing {
 		s.log.ErrorWith().Str("goroutine", who).
 			Msg("ft8: capture loop exited unexpectedly; capture stopped — re-open the FT8 view to restart")
