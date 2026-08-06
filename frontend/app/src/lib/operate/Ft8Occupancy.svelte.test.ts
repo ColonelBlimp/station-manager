@@ -231,4 +231,29 @@ describe('Ft8Occupancy band attribution (dial_mhz)', () => {
         flushSync();
         expect(ft8State.hasOccupancy).toBe(false);
     });
+
+    // Z1 — IN-PANEL STACKING STAYS IN THE PANEL (operator, 2026-08-06: "the
+    // Occupancy Panel is overlaying" the RX audio-level meter). The ★ top-pick
+    // marker carries z-50 to win against its SIBLING ▼ markers when offsets
+    // crowd — but its positioned ancestors created no stacking context, so
+    // that z-50 leaked into the page's ROOT context and painted over every
+    // fixed overlay below z-50: the meter card (z-30), the drawers (z-20).
+    // `isolate` on the marker container is the containment; the ★ KEEPS its
+    // z-50 for the sibling contest, which is why this asserts both halves —
+    // dropping either one quietly reintroduces a defect (remove isolate → the
+    // leak; remove z-50 → ▼ markers can bury the recommendation). jsdom does
+    // no painting: this pins the mechanism; the visual outcome is
+    // Playwright's when that layer exists.
+    it('Z1: contains the top-pick marker stacking inside the spectrum', () => {
+        render(Ft8Occupancy);
+        ft8Link.onOccupancy(occupancy());
+        flushSync();
+
+        const star = screen.getByTitle(/top pick/);
+        expect(star.className).toContain('z-50');
+        expect(
+            star.parentElement!.classList.contains('isolate'),
+            'in-panel z must stay in-panel'
+        ).toBe(true);
+    });
 });

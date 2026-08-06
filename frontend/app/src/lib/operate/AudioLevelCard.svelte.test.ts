@@ -50,8 +50,10 @@ describe('AudioLevelCard', () => {
         expect(chip()!.dataset.state).toBe('good');
     });
 
-    // V2 — the toggle: chip opens the card, the card's close collapses back.
-    it('V2: chip opens the card and close collapses it', async () => {
+    // V2 — the toggle: chip opens the card; the card's MINIMISE (a minus,
+    // not an X — the meter is never 'closed', it folds back to the live chip)
+    // collapses it again.
+    it('V2: chip opens the card and minimise folds it back', async () => {
         render(AudioLevelCard);
         flushSync();
 
@@ -60,7 +62,7 @@ describe('AudioLevelCard', () => {
         expect(card()).not.toBeNull();
         expect(chip()).toBeNull();
 
-        card()!.querySelector<HTMLButtonElement>('[data-audio-close]')!.click();
+        card()!.querySelector<HTMLButtonElement>('[data-audio-collapse]')!.click();
         flushSync();
         expect(card()).toBeNull();
         expect(chip()).not.toBeNull();

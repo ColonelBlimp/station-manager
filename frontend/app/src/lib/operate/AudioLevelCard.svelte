@@ -11,7 +11,9 @@
         drawer): a continuous instrument's collapsed form must stay visible to
         be worth anything, which the fully-hidden ambient panels cannot do —
         and the toggle lives ON the card, not in the rail across the screen.
-        FT8-only: mounted by Ft8View; capture only runs there.
+        FT8-only, and POSITIONED BY Ft8View (anchored above the Occupancy
+        panel — operator, 2026-08-06); this component owns no placement, so
+        the anchor and the grid constants it depends on live in one file.
 
         TX STAND-DOWN is this card's rule (not the classifier's): while the
         rig is keyed the capture path carries nothing useful, so the card
@@ -64,7 +66,7 @@
         type="button"
         data-audio-chip
         data-state={state()}
-        class="fixed bottom-4 left-4 z-30 flex cursor-pointer items-center gap-x-1.5 rounded-full border border-line bg-surface py-1.5 pr-2.5 pl-2 shadow-md"
+        class="flex cursor-pointer items-center gap-x-1.5 rounded-full border border-line bg-surface py-1.5 pr-2.5 pl-2 shadow-md"
         title={labelByState[state()]}
         aria-label="Open the RX audio level meter — {labelByState[state()]}"
         onclick={() => setAudioLevelOpen(true)}
@@ -87,19 +89,18 @@
         <span class="size-2.5 rounded-full {toneByState[state()]}" aria-hidden="true"></span>
     </button>
 {:else}
-    <div
-        data-audio-card
-        data-state={state()}
-        class="card fixed bottom-4 left-4 z-30 w-64 !p-4 shadow-lg"
-    >
+    <div data-audio-card data-state={state()} class="card w-64 !p-4 shadow-lg">
         <div class="flex items-center justify-between">
             <h3 class="text-sm font-semibold text-ink">RX audio</h3>
+            <!-- A MINUS, deliberately not an X: the meter is not closed by
+                 this — it folds back to the live chip (operator, 2026-08-06:
+                 "X implies close, but it is not closed"). -->
             <button
                 type="button"
-                data-audio-close
+                data-audio-collapse
                 class="cursor-pointer rounded-md text-muted hover:text-ink"
-                title="Collapse"
-                aria-label="Collapse the RX audio level meter"
+                title="Minimise to the chip"
+                aria-label="Minimise the RX audio level meter to its chip"
                 onclick={() => setAudioLevelOpen(false)}
             >
                 <svg
@@ -110,7 +111,7 @@
                     class="size-4"
                     aria-hidden="true"
                 >
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14" />
                 </svg>
             </button>
         </div>

@@ -145,7 +145,12 @@
 
     {#if hasSlot}
         <!-- soft shading = a signal · green/amber/orange band = your pick · ▼ = daemon clear offset, ★ = top pick -->
-        <div class="relative my-3 pt-3">
+        <!-- isolate: the ★'s z-50 exists to win against its SIBLING ▼ markers
+             when offsets crowd. Without a stacking context here it leaked into
+             the page's ROOT context and painted over every fixed overlay below
+             z-50 — found as "the Occupancy Panel is overlaying" the z-30 RX
+             audio meter (operator, 2026-08-06). Z1 pins the pair. -->
+        <div class="relative isolate my-3 pt-3">
             <!-- Suggested clear offsets — clickable markers centred on each offset's
                  footprint. Clicking one commits that exact offset. ★ = top pick. -->
             {#each suggested as s (s)}

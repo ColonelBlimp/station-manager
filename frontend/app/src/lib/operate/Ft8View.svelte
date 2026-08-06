@@ -29,15 +29,22 @@
     $effect(() => ft8State.noteOperatingBand(rig.band));
 </script>
 
-<div class="ft8-grid">
+<div class="ft8-grid relative">
     <div style="grid-area:ba; min-height:0"><Ft8BandActivity /></div>
     <div style="grid-area:op; min-height:0"><Ft8Operate /></div>
     <div style="grid-area:occ; min-height:0"><Ft8Occupancy /></div>
-</div>
 
-<!-- RX audio-level corner instrument (bottom-left, fixed) — FT8-only: capture
-     runs only while this view is open, so the meter lives and dies with it. -->
-<AudioLevelCard />
+    <!-- RX audio-level instrument — FT8-only: capture runs only while this
+         view is open, so the meter lives and dies with it. Anchored to the
+         grid's bottom-left JUST ABOVE the Occupancy panel (operator,
+         2026-08-06 — bottom-of-viewport sat ON the panel): the offset is the
+         occ row's 180px + the grid's 0.75rem gap, both defined in the style
+         block below — change one, change both. The open card grows UPWARD
+         from this anchor, over Band Activity, never over Occupancy. -->
+    <div class="absolute bottom-[calc(180px+0.75rem)] left-0 z-30">
+        <AudioLevelCard />
+    </div>
+</div>
 
 <style>
     .ft8-grid {
