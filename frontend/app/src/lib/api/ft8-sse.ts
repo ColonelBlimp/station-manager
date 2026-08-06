@@ -8,7 +8,11 @@
 // subscriber and releases it after the LAST leaves, so the FT8 view opens this
 // on mount and calls the returned close fn on destroy — the daemon only holds
 // the microphone while the operator is actually looking at FT8. The browser
-// owns SSE auto-reconnect on transient drops.
+// owns SSE auto-reconnect on transient drops; openReviving recreates a DEAD
+// stream on return-to-visible or on the window 'online' event. Note the
+// stakes here: this stream dying starts the daemon's 5 s capture linger and
+// then disarms TX, so a network bounce longer than the linger still ends a
+// run — the revive brings the SURFACE back, it cannot un-ring that bell.
 
 /** One occupied audio-frequency range. Mirrors internal/ft8.Band (snake_case wire). */
 import { openReviving } from './sse-reviving';

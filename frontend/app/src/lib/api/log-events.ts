@@ -6,9 +6,11 @@
 // event name and logbook_id. The reconnect contract is the documented one:
 // the stream keeps no backlog, so consumers open the stream FIRST, then
 // fetch baseline state — events for already-fetched rows are idempotent.
-// The browser owns reconnect on transient drops; openReviving adds the one
-// case it does not — a stream that died while the tab was hidden is recreated
-// on return, and ONLY when dead (a healthy one is never torn down).
+// The browser owns reconnect on transient drops; openReviving adds the two
+// cases it does not — a stream that died while the tab was hidden is recreated
+// on return, and one killed by a network bounce with the tab visible is
+// recreated on the window 'online' event. Both ONLY when dead (a healthy one
+// is never torn down).
 
 /** Mirrors internal/events.QsoStoredPayload (and updated/deleted — same
  *  minimal shape by design: clients re-query for details). */

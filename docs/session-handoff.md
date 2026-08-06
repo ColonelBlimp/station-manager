@@ -41,7 +41,7 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-05)
+## Now (as of 2026-08-06)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
@@ -51,44 +51,97 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
-- **STOPPED FOR A POWER CUT, 2026-08-05.** Tree CLEAN at `4d131720`, everything
-  committed and every codex review triaged + deleted. Nothing half-done.
-- **DEPLOY FIRST: the daemon is 10 commits behind** (running
-  `2.0.0-alpha.1-1081-gbc67a5b4`). Everything since is SPA-side EXCEPT the
-  QSO-row coordinate reconcile — the one you want live before the next
-  operating session, because it is what stops contradictory coordinates
-  reaching QRZ/ClubLog. `task deploy:local:dev`.
-- **Shipped 2026-08-05:** Settings → **FT8** tab (the config-SPA port; only
-  **General** is left before that SPA can retire) · map **arc fan-out** for
-  repeat contacts · **QSO-row coordinate reconcile** · FT8 **band buttons now
-  assert the data mode** (DATA-U/USB-D).
-- **DECIDED, DO NOT REOPEN — no colour pickers in Settings → FT8.** The three
-  `ft8_display.highlight_*` keys are VESTIGIAL: stored, round-tripped, read by
-  nothing. Band Activity uses a theme-aware palette. Written up in `docs/ft8.md`.
-- **STOP PATCHING THE FT8 TIMEOUT RECONCILE.** Seven review rounds, six of them
-  fixing a defect the previous fix introduced. It converged (`4d131720`, no
-  findings) and is safe: nothing typed is discarded, nothing false is claimed,
-  a retry cannot revert a concurrent change. The cause is the CONTRACT — a
-  whole-block PUT with no revision cannot tell "my write landed" from "someone
-  else's did". If it draws another finding, add `If-Match`/revision to
-  `PUT /v1/config` instead of another inference. Operator's call; not started.
-- **OPEN, not started — 121 QSO rows carry coordinates outside their own grid**
-  (104 calls; mostly QRZ country centroids — 39× the Ukraine centroid, 16×
-  Moscow). The reconcile is PREVENTIVE and does not touch them. Repair is the
-  operator's call (the 2026-08-04 no-repair ruling covered only the 5 polar rows).
-- **OPEN, not started — 5,640 rows (82%) hold ADIF-format coordinates**
-  (`"N034 44.378"`), pre-dating the ingress normalisation. They export fine, but
-  the map's parseFloat rejects them and plots the grid centre instead.
-- **STILL QUEUED from 2026-08-04:** the `internal/ft8` LOGGING SHIP GATE, 5 of
-  14 closed — resume at **finding 4**; source of truth
-  `docs/reviews/ft8-logging-gaps.md`. Then Playwright scaffolding.
-- **Claude Code update notice is REAL** (corrected 2026-08-05 — the earlier
-  "false alarm" reading was wrong). The RPM repo *does* serve 2.1.222; 2.1.221
-  is installed. `dnf upgrade` said "Nothing to do" because root's metadata cache
-  was written 2026-08-04 16:02 and the repo sets no `metadata_expire`, so it
-  answered from yesterday's index. Fix: `sudo dnf --refresh upgrade claude-code`.
+- **Revive-on-'online' fix BUILT 2026-08-06, awaiting operator commit.** The
+  morning's "CAT link lost" was the router swap killing the browser's loopback
+  SSE with the tab visible — `sse-reviving.ts` now registers ONE
+  reviveIfVisibleAndDead handler for BOTH visibilitychange and window
+  'online' (rig/daemon were healthy throughout; evidence in `## Current
+  state` → 2026-08-06). O1–O7 shipped alongside the V-series: RED was
+  informative (O1/O4/O7), a wrong-impl probe proved O2/O3/O5's teeth, the
+  reversion proof failed for the right reason, and the full gate is green
+  (1105 tests, lint/format/check/build clean). Judgement call for the
+  operator to ratify: 'online' while HIDDEN revives nothing (flagged in the
+  test header). jsdom caveat: the suite pins the POLICY against a fake
+  EventSource — whether the desktop browser fires 'online' after a real
+  bounce is confirmed only by the next natural bounce (or Playwright, later).
+- **Deploy state:** daemon runs `…1100-g510cb4fa-dirty` = `67ba8a66`; the
+  online fix is SPA-only and needs a redeploy (+ tab reload) to go live —
+  mind that a redeploy restarts the daemon mid-operating.
+- **STOP PATCHING THE FT8 TIMEOUT RECONCILE** — converged at `4d131720`; if it
+  draws another finding, add `If-Match`/revision to `PUT /v1/config` instead.
+- **OPEN (operator decisions, not started):** 121 QSO rows with coordinates
+  outside their own grid · 5,640 rows with ADIF-format coordinates (map plots
+  grid centre for them).
+- **QUEUED:** Settings → **General** tab (last before the config SPA retires) ·
+  `internal/ft8` LOGGING SHIP GATE, resume at **finding 4**
+  (`docs/reviews/ft8-logging-gaps.md`) · Playwright scaffolding.
 
-## Current state (as of 2026-08-05)
+## Current state (as of 2026-08-06)
+
+### 2026-08-06 — power cut mid-task: the revive-on-'online' fix
+
+**Morning session (operating day).** Operator committed yesterday's pile-up
+drawer work as `67ba8a66` (inert on both drawers); its codex review had no
+findings and is deleted. The daemon was deployed at 05:06 from the then-dirty
+tree (`2.0.0-alpha.1-1100-g510cb4fa-dirty`) — functionally identical to
+`67ba8a66`, so the deploy is NOT behind in behaviour, only in version string.
+
+**"CAT link lost" investigated and root-caused (all passive, nothing keyed).**
+The operator swapped internet routers. Timeline, cited:
+
+- NetworkManager journal: `enp10s0 activated → unavailable (carrier-changed)`
+  05:23:33; DISCONNECTED 05:23:34; carrier back 05:23:39; new DHCP lease
+  (same IP 192.168.1.147) 05:24:17; CONNECTED_GLOBAL 05:24:18.
+- smd.log: `GET /v1/rig/events` completed 05:23:39 after 999,623 ms — the
+  browser's rig SSE stream, open since page load, died at the carrier drop.
+  (`http request` lines log at request COMPLETION — an open SSE shows nothing.)
+- After that: ZERO reconnect attempts in smd.log and zero established sockets
+  to :8080 (`ss`). The tab's EventSource was dead and not retrying.
+- Bridge/serial/daemon healthy throughout: pipeline up since 05:06:56, meters
+  live, a rig command at 05:21:39 fine; `GET /app/` answered 200 in 0.4 ms
+  during the incident. The ONLY daemon-side symptoms were external-network
+  errors (pskreporter UDP unreachable 05:17:02, QRZ TLS timeout 05:12:20).
+- Not a server timeout: historical rig-events streams lived 3.5+ h, and the
+  SSE handlers use per-write deadlines (`internal/api/handler_events.go`).
+- Mechanism (labelled inference): the browser reset its connections on the OS
+  network-change signal — loopback included, which no router can break at TCP
+  level. `rig.svelte.ts:719` maps the transport error to `cat = 'lost'`.
+- Gap: `sse-reviving.ts` revives dead streams ONLY on visibilitychange →
+  visible (built for the 2026-07-18 hidden-tab case). Tab visible the whole
+  time ⇒ never fired. Workaround used: F5.
+
+**Fix in flight (operator: "Go ahead with the online revive fix - TDD").**
+Plan agreed with myself before the cut, not yet executed past the header:
+
+1. O-series rules in `sse-reviving.test.ts` (mirror V-series): O1 revive a
+   CLOSED stream on window `online` while visible (the incident); O2 healthy
+   stream untouched (FT8-linger safety — also under SPURIOUS online events,
+   navigator.onLine is unreliable); O3 first-connect untouched; O4 revive
+   stuck-CONNECTING-after-error, and assert the old stream was close()d first
+   (retry-timer race); O5 online while HIDDEN revives nothing (JUDGEMENT CALL,
+   flagged in the header for the operator — return-to-visible already covers
+   it, and a hidden FT8 tab must not re-grab audio capture); O6 teardown is
+   final (window listener removed + `src === null` guard, the V6 pair); O7 the
+   revived stream is rewired via the caller's WireFn.
+2. Fixture trap to avoid, already noted: O1 must NOT dispatch visibilitychange
+   after killing the stream (that trigger would revive and make the online
+   assertion vacuous). Needs a silent visibilityState setter split out of
+   setVisibility(), plus an afterEach reset to 'visible'.
+3. RED: O1/O4/O7 fail on their own assertions against current code. O2/O3/O5/O6
+   pass vacuously — their teeth get a wrong-implementation probe (unconditional
+   recreate on online ⇒ O2/O3/O5 must each go red) before the real
+   implementation is kept.
+4. Implementation sketch: extract `reviveIfVisibleAndDead()` (visible check +
+   isDead() + close/reset/create) and register the SAME handler for document
+   visibilitychange AND window `online`; teardown removes both.
+5. Reversion proof (remove only the online registration; O1/O4/O7 red for the
+   right reason, V-series green), full SPA gate, then refresh the stale "adds
+   the one case" comments in `rig-sse.ts` (line ~7), `log-events.ts` (line ~9)
+   and `sse-reviving.ts`'s own WHY header — there are now TWO revive cases.
+
+**Also for the operator:** a network bounce during an FT8 run will still
+abandon the QSO — stream death starts the 5 s capture linger and the DHCP
+outage was 44 s; the revive fix does not (and should not) change that.
 
 ### 2026-08-05 — stopped mid-session for a POWER CUT
 

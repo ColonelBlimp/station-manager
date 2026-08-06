@@ -4,8 +4,11 @@
 // transitions and never imports this layer). The path is relative because the
 // SPA is served from the daemon's origin; cross-origin EventSource is not a
 // supported topology. The browser owns reconnect on transient drops;
-// openReviving adds the one case it does not — a stream that died while the
-// tab was hidden is recreated on return, and ONLY when dead.
+// openReviving adds the two cases it does not — a stream that died while the
+// tab was hidden is recreated on return, and one killed by a network bounce
+// with the tab visible (the 2026-08-06 router swap, which parked the CAT
+// banner on 'lost') is recreated on the window 'online' event. Both ONLY
+// when dead.
 //
 // rig-clients is a daemon event this SPA doesn't consume yet (no multi-tab
 // banner in frontend/app) — it arrives on the same stream and is not listened
