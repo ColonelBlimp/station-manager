@@ -55,8 +55,9 @@ type hub struct {
 	// reader just emits the newest value when it recovers. The 2026-08-01
 	// eviction ruling (buffers stay 8) keeps its arithmetic: real events
 	// have the whole buffer to themselves.
-	lastAudio *hubEvent
-	audioGen  uint64
+	lastAudio    *hubEvent
+	audioGen     uint64
+	audioSession uint64
 }
 
 func newHub(logger logging.Logger) *hub {
@@ -156,11 +157,24 @@ func (h *hub) subscribe() (<-chan hubEvent, func()) {
 	return ch, unsub
 }
 
-// publishAudio stores the meter newest reading for pull delivery (see the
-// lastAudio field note). No-op on a closed hub, like publish.
-func (h *hub) publishAudio(evt hubEvent) {
+// audioSessionToken returns the CURRENT capture session's publish token —
+// read once when a session's tee is built. clearActivity retires it.
+func (h *hub) audioSessionToken() uint64 {
 	h.mu.Lock()
-	if !h.closed {
+	defer h.mu.Unlock()
+	return h.audioSession
+}
+
+// publishAudio stores the meter newest reading for pull delivery (see the
+// lastAudio field note). No-op on a closed hub, like publish — and on a
+// RETIRED session token (review 940e5577): the unexpected-loop-exit teardown
+// cannot drain the tee before clearing (it runs on one of the goroutines it
+// would wait for), so a mid-batch feed can publish after the clear. The
+// token comparison under this mutex closes that window without any ordering
+// requirement on the teardown paths.
+func (h *hub) publishAudio(session uint64, evt hubEvent) {
+	h.mu.Lock()
+	if !h.closed && session == h.audioSession {
 		cp := evt
 		h.lastAudio = &cp
 		h.audioGen++
@@ -208,7 +222,10 @@ func (h *hub) clearActivity() {
 	// audioGen is NOT reset: an existing connection's seen-generation is from
 	// the old numbering, and a reset that lands the new session on the same
 	// small numbers would swallow live emits. Monotonic forever, nil value.
+	// The session token is retired with the value: a tee still winding down
+	// holds the old token and its late publishes are dropped (review 940e5577).
 	h.lastAudio = nil
+	h.audioSession++
 }
 
 // close disconnects all subscribers and marks the hub closed. Idempotent.

@@ -97,7 +97,7 @@ func TestHub_LatestOccupancyNilBeforePublish(t *testing.T) {
 // gives "nothing to emit" without ever re-using a generation.
 func TestHub_ClearActivityDropsAudioReading(t *testing.T) {
 	h := newHub(nil)
-	h.publishAudio(hubEvent{name: EventAudioLevel, payload: AudioLevel{PeakDbfs: -20, RmsDbfs: -30}})
+	h.publishAudio(h.audioSessionToken(), hubEvent{name: EventAudioLevel, payload: AudioLevel{PeakDbfs: -20, RmsDbfs: -30}})
 	if evt, gen := h.latestAudio(); evt == nil || gen == 0 {
 		t.Fatal("fixture: a reading must be cached before the release")
 	}
@@ -111,6 +111,34 @@ func TestHub_ClearActivityDropsAudioReading(t *testing.T) {
 	}
 	if gen < genBefore {
 		t.Fatalf("generation went backwards (%d -> %d); reuse can swallow a live emit", genBefore, gen)
+	}
+}
+
+// H3 — A LATE PUBLISH FROM A TORN-DOWN SESSION CANNOT REPOPULATE THE CACHE
+// (clean-room review 940e5577, P2): the unexpected-loop-exit path clears the
+// cache WITHOUT draining the tee first (it runs on one of the very goroutines
+// it would have to wait for), so a tee mid-batch could publish after the
+// clear and revive the dead session's reading. Every publish carries the
+// session token issued when its tee was built; clearActivity retires the
+// token, and a retired token's publishes are dropped under the same mutex
+// that guards the cache — no ordering to get right, no window. A token
+// issued AFTER the clear still lands: the next session must not be muted by
+// its predecessor's funeral.
+func TestHub_LatePublishFromTornDownSessionIsRejected(t *testing.T) {
+	h := newHub(nil)
+	old := h.audioSessionToken()
+	h.publishAudio(old, hubEvent{name: EventAudioLevel, payload: AudioLevel{PeakDbfs: -20, RmsDbfs: -30}})
+	h.clearActivity() // the dead session's invalidation (loop-exit or release)
+
+	h.publishAudio(old, hubEvent{name: EventAudioLevel, payload: AudioLevel{PeakDbfs: -5, RmsDbfs: -8}})
+	if evt, _ := h.latestAudio(); evt != nil {
+		t.Fatalf("latestAudio = %+v after a torn-down session's late publish, want nil", evt)
+	}
+
+	fresh := h.audioSessionToken()
+	h.publishAudio(fresh, hubEvent{name: EventAudioLevel, payload: AudioLevel{PeakDbfs: -22, RmsDbfs: -33}})
+	if evt, _ := h.latestAudio(); evt == nil {
+		t.Fatal("a new session's publish must land after the clear")
 	}
 }
 

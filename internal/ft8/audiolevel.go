@@ -77,11 +77,17 @@ func (m *audioLevelMeter) feed(batch []int16) {
 // nobody will receive would wedge releaseCaptureLocked's s.wg.Wait forever.
 func (s *Service) teeAudioLevel(ctx context.Context, in <-chan []int16) <-chan []int16 {
 	out := make(chan []int16)
+	// The session token binds every publish to THIS capture session: after
+	// clearActivity retires it (release, or the unexpected-loop-exit path
+	// that cannot drain us first), a late publish from a mid-batch feed is
+	// dropped at the hub instead of reviving the dead session's reading
+	// (review 940e5577).
+	session := s.hub.audioSessionToken()
 	meter := newAudioLevelMeter(audioLevelWindowSamples, func(peak, rms float64) {
 		// publishAudio is a latest-wins store, never a buffered send — meter
 		// ticks must not occupy or evict subscriber buffers (review d22eff6b),
 		// and storing cannot stall the sample flow.
-		s.hub.publishAudio(hubEvent{name: EventAudioLevel, payload: AudioLevel{
+		s.hub.publishAudio(session, hubEvent{name: EventAudioLevel, payload: AudioLevel{
 			PeakDbfs: math.Round(peak*10) / 10,
 			RmsDbfs:  math.Round(rms*10) / 10,
 		}})
