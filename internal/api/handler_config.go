@@ -78,6 +78,12 @@ type ConfigResponse struct {
 	// (no Settings control yet) and a PUT never carries it, so it's left untouched on
 	// write (it survives in the in-memory cfg, rewritten with the rest).
 	Ft8Frequencies map[string]int `json:"ft8_frequencies,omitempty"`
+	// Ft8Audio is the RX level meter's classification window (dBFS), always
+	// served RESOLVED on GET (defaults + operator overrides) for the FT8 view's
+	// level indicator. Read-only over /v1/config like Ft8Frequencies —
+	// calibration is a config.json edit + restart (deliberate until the
+	// defaults are hardware-calibrated); a PUT never carries it.
+	Ft8Audio *types.Ft8AudioLevels `json:"ft8_audio,omitempty"`
 	// Ft8CallerAnswerMode is the FT8 Call-CQ answerer-selection strategy
 	// (ft8.tx.caller_answer_mode): "auto_first" (first valid answerer by decode
 	// order) or "auto_strongest" (highest-SNR valid answerer in the slot). Always
@@ -1005,6 +1011,10 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// FT8 per-band dial frequencies, always resolved (defaults + overrides) for the
 	// SPA's Main-Freq band buttons.
 	resp.Ft8Frequencies = types.ResolveFt8Frequencies(cfg.Ft8.Frequencies)
+
+	// RX level meter window, resolved for the FT8 view's level indicator.
+	audio := types.ResolveFt8Audio(cfg.Ft8.Audio)
+	resp.Ft8Audio = &audio
 
 	// Bridge timeouts + tune params, served RESOLVED (defaults filled, ceilings
 	// applied) like the FT8 blocks above — config.json stays sparse. Uses the same

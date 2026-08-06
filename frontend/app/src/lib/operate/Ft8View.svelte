@@ -9,6 +9,7 @@
     import Ft8BandActivity from './Ft8BandActivity.svelte';
     import Ft8Operate from './Ft8Operate.svelte';
     import Ft8Occupancy from './Ft8Occupancy.svelte';
+    import AudioLevelCard from './AudioLevelCard.svelte';
 
     // View-scoped stream lifecycle: open on mount, close on destroy, so the
     // daemon holds the capture device only while the FT8 view is shown. The
@@ -33,6 +34,10 @@
     <div style="grid-area:op; min-height:0"><Ft8Operate /></div>
     <div style="grid-area:occ; min-height:0"><Ft8Occupancy /></div>
 </div>
+
+<!-- RX audio-level corner instrument (bottom-left, fixed) — FT8-only: capture
+     runs only while this view is open, so the meter lives and dies with it. -->
+<AudioLevelCard />
 
 <style>
     .ft8-grid {

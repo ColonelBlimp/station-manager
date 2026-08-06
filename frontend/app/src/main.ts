@@ -29,6 +29,7 @@ import {
     type Ft8TxResult,
 } from './lib/operate/ft8.svelte';
 import { setStationInfo, setLogbookCount } from './lib/operate/station.svelte';
+import { setFt8AudioWindow } from './lib/operate/audioLevel.svelte';
 import { setFt8Enricher, setFt8Dupe, ft8EnrichState } from './lib/operate/ft8Enrich.svelte';
 import { fetchContestDupe } from './lib/api/contest-dupe';
 import { armFt8Tx, type Ft8TxOutcome } from './lib/api/ft8tx';
@@ -209,6 +210,8 @@ const ctx: StationContext = {
     ft8HideHashed: false,
     ft8Frequencies: {},
     ft8Mode: '',
+    ft8AudioLowDbfs: -60,
+    ft8AudioHighDbfs: -10,
     mapBandColors: {},
     restoreRigOnModeSwitch: true,
     logbookName: '',
@@ -277,6 +280,9 @@ function applyStationContext(c: StationContext): void {
     // the rig's band-stack recall (set_band); FT8 uses set_freq, which triggers
     // no recall, so without this the rig stays in whatever mode it was in.
     setFt8Mode(c.ft8Mode);
+    // RX audio-level window (ft8.audio, served resolved) — the level meter's
+    // good/low/high classification bounds, calibratable in config.json.
+    setFt8AudioWindow(c.ft8AudioLowDbfs, c.ft8AudioHighDbfs);
     // Whether a Phone/CW ↔ FT8 switch returns a CAT-live rig to that mode's last
     // frequency and mode. Opt-out only: the default is ON.
     setRestoreOnModeSwitch(c.restoreRigOnModeSwitch);

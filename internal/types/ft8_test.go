@@ -199,3 +199,32 @@ func TestResolveFt8InhibitIdle(t *testing.T) {
 		}
 	}
 }
+
+// ResolveFt8Audio — the RX level meter's classification thresholds (dogfood
+// 2026-08-06). The daemon publishes measurements; the SPA classifies against
+// THESE, served resolved on /v1/config, so an unset config still yields a
+// working meter and an operator can calibrate by editing config.json.
+// Defaults are the pre-hardware-calibration WSJT-X-convention window and are
+// expected to be tuned against the PCM2903C — they are starting points, not
+// findings.
+func TestResolveFt8Audio(t *testing.T) {
+	low, high := -70.0, -20.0
+	cases := []struct {
+		name     string
+		in       *Ft8AudioConfig
+		wantLow  float64
+		wantHigh float64
+	}{
+		{"nil block → defaults", nil, DefaultFt8AudioLowDbfs, DefaultFt8AudioHighDbfs},
+		{"empty block → defaults", &Ft8AudioConfig{}, DefaultFt8AudioLowDbfs, DefaultFt8AudioHighDbfs},
+		{"both set → honoured", &Ft8AudioConfig{LowDbfs: &low, HighDbfs: &high}, -70, -20},
+		{"one set → other defaults", &Ft8AudioConfig{LowDbfs: &low}, -70, DefaultFt8AudioHighDbfs},
+	}
+	for _, c := range cases {
+		got := ResolveFt8Audio(c.in)
+		if got.LowDbfs != c.wantLow || got.HighDbfs != c.wantHigh {
+			t.Errorf("%s: ResolveFt8Audio = (%v, %v), want (%v, %v)",
+				c.name, got.LowDbfs, got.HighDbfs, c.wantLow, c.wantHigh)
+		}
+	}
+}

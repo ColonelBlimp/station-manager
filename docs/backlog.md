@@ -178,14 +178,17 @@ next, and in what order" is answered.
   read the RIG's own meters on-screen.
 
   **Staged, cheapest-first:**
-  1. **RX level bar** — the daemon already owns the capture stream; peak/RMS per
-     block is arithmetic on data in hand, published on the existing
-     `/v1/ft8/events` SSE. Green/orange/red THRESHOLDS ARE THE OPERATOR'S CALLS
-     (WSJT-X's ~30 dB-on-0–90 convention is the reference). CGO builds only —
-     the static build has no capture, and the bar must say "no capture", not
-     "too low". Nearest-confusable-states: *too low* vs *silent band* vs *dead
-     device* — `deadsource.go` already carries the third; the bar must consume
-     it, never render a dead device as orange.
+  1. ~~**RX level bar**~~ **BUILT 2026-08-06** (same day): daemon
+     `internal/ft8/audiolevel.go` (peak/RMS dBFS per 250 ms window, tee between
+     source and scheduler, `ft8-audio-level` SSE ~4 Hz, not replay-cached) ·
+     config `ft8.audio` low/high dBFS window (resolved on GET as `ft8_audio`,
+     read-only over PUT, validated on the RESOLVED pair) · SPA
+     `audioLevel.svelte.ts` classifier (clip = fixed −1 dBFS peak; staleness
+     2 s = dead-capture state, distinct from the −120 silence floor which
+     truthfully reads 'low') + `AudioLevelCard.svelte` bottom-left chip/card
+     (state-coloured icon collapsed; TX stand-down). Defaults −60/−10 dBFS
+     AWAIT HARDWARE CALIBRATION against the PCM2903C — config.json edit +
+     restart to tune.
   2. **TX drive indicator** — the daemon never hears its own TX audio (it
      synthesises the tones), so an "output audio level" is a meaningless
      constant. The real feedback is the rig's meters, which the bridge ALREADY

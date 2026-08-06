@@ -40,6 +40,7 @@ function makeHandlers(): Ft8EventHandlers {
         onTx: vi.fn(),
         onQso: vi.fn(),
         onLogged: vi.fn(),
+        onAudioLevel: vi.fn(),
     };
 }
 

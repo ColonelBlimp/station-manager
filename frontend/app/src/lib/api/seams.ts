@@ -163,6 +163,10 @@ export interface StationContext {
      *  IC-7300). An FT8 band pick asserts it so the dial move also puts the rig
      *  in data mode. '' = leave the current mode (or no driver configured). */
     ft8Mode: string;
+    /** RX audio-level window (config `ft8.audio`, served resolved as
+     *  `ft8_audio`): dBFS bounds the level meter classifies against. */
+    ft8AudioLowDbfs: number;
+    ft8AudioHighDbfs: number;
     /** Contacts-map per-band arc colour overrides (config `map.band_colors`,
      *  band→"#rrggbb", sparse) — layered over the map's built-in palette
      *  (lib/map/bandColors). Empty = all defaults. */
@@ -197,6 +201,8 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8HideHashed: false,
         ft8Frequencies: {},
         ft8Mode: '',
+        ft8AudioLowDbfs: -60,
+        ft8AudioHighDbfs: -10,
         mapBandColors: {},
         restoreRigOnModeSwitch: true,
         logbookName: '',
@@ -213,6 +219,7 @@ export async function fetchStationContext(): Promise<StationContext> {
     const ml = isPlainObject(body.mailer) ? body.mailer : {};
     const st = isPlainObject(body.station) ? body.station : {};
     const fd = isPlainObject(body.ft8_display) ? body.ft8_display : {};
+    const fa = isPlainObject(body.ft8_audio) ? body.ft8_audio : {};
     const str = (v: unknown): string => (typeof v === 'string' ? v : '');
     return {
         configOk: true,
@@ -240,6 +247,9 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8Frequencies: toNumberMap(body.ft8_frequencies),
         // In the BRIDGE block beside ops/rig_modes — it is rig-driver data.
         ft8Mode: str(br.ft8_mode),
+        // Served resolved; the fallbacks only cover an older daemon.
+        ft8AudioLowDbfs: typeof fa.low_dbfs === 'number' ? fa.low_dbfs : -60,
+        ft8AudioHighDbfs: typeof fa.high_dbfs === 'number' ? fa.high_dbfs : -10,
         mapBandColors: toStringMap(isPlainObject(body.map) ? body.map.band_colors : undefined),
         // Only an explicit false disables it — see the field's doc above.
         restoreRigOnModeSwitch: body.restore_rig_on_mode_switch !== false,

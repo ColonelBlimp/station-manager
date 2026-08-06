@@ -350,6 +350,20 @@ and a default cannot be written into a block that does not exist. Readers go
 through `types.ResolveFt8InhibitIdle`, which treats an absent BLOCK and an absent
 FIELD alike. Same reason `ft8.tx.max_repeats` resolves rather than defaults.
 
+**`ft8.audio` (`Ft8AudioConfig`, both fields `*float64`, resolver
+`types.ResolveFt8Audio`, added 2026-08-06):** the RX audio-level meter's
+classification window in dBFS — `low_dbfs` (default −60; below = too quiet to
+decode reliably) and `high_dbfs` (default −10; above = running hot). Served
+RESOLVED on GET as `ft8_audio`; **read-only over `/v1/config`** (like
+`ft8_frequencies` — a PUT never carries it, calibration is a config.json edit +
+restart). Validation checks the RESOLVED pair (a lone override can invert the
+window against a default): both within [−120, 0], low strictly below high.
+Defaults are WSJT-X-convention starting points awaiting hardware calibration
+against the operator's PCM2903C. The daemon publishes raw measurements
+(`ft8-audio-level` on `/v1/ft8/events`, ~4 Hz, peak+RMS dBFS); the SPA
+classifies. Clipping is pinned SPA-side at a fixed near-0 dBFS peak check, not
+configured here.
+
 ### (d) safety-ceiling — const is a non-overridable MAX, not a default ⚠️
 
 These must survive any redesign as ceilings; flattening them into ordinary defaults

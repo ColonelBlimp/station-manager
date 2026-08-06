@@ -57,6 +57,14 @@ type Ft8Config struct {
 	// the same inert-block reason as TX/Display; nil or Enabled=false → no file.
 	DecodeLog *Ft8DecodeLogConfig `json:"decode_log,omitempty"`
 
+	// Audio holds the RX audio-level meter's classification thresholds
+	// (dogfood 2026-08-06). SPA-facing like Frequencies: the daemon publishes
+	// raw dBFS measurements on /v1/ft8/events and the SPA classifies against
+	// these, served resolved on /v1/config. Pointer-typed for the inert-block
+	// discipline; calibration is a config.json edit + restart (no PUT path or
+	// Settings UI yet — deliberate, until the numbers are hardware-calibrated).
+	Audio *Ft8AudioConfig `json:"audio,omitempty"`
+
 	// Frequencies maps a band label (e.g. "20m") to its FT8 dial frequency in Hz.
 	// SPA-facing (the daemon doesn't consume it): the Main-Freq band buttons tune to
 	// these and highlight the one matching the live dial. Stored sparse, served
@@ -176,6 +184,43 @@ func Ft8FeedModeValid(s string) bool {
 // override yields the defaults unchanged. The clamp on HistoryMax matches the
 // SPA's former bounds so a hand-edited config can't hide every row or balloon
 // the feed.
+// Ft8AudioConfig is the stored (sparse) form of the RX level thresholds —
+// dBFS bounds of the good decoding window. Unset fields take the defaults.
+type Ft8AudioConfig struct {
+	LowDbfs  *float64 `json:"low_dbfs,omitempty"`
+	HighDbfs *float64 `json:"high_dbfs,omitempty"`
+}
+
+// Ft8AudioLevels is the resolved form served on /v1/config.
+type Ft8AudioLevels struct {
+	LowDbfs  float64 `json:"low_dbfs"`
+	HighDbfs float64 `json:"high_dbfs"`
+}
+
+// Default RX-level window (dBFS): below Low the decoder is starving, above
+// High the input is running hot (clipping itself is pinned at the SPA's fixed
+// near-0 dBFS peak check, not here). WSJT-X-convention starting points —
+// expected to be calibrated on hardware, not findings.
+const (
+	DefaultFt8AudioLowDbfs  = -60.0
+	DefaultFt8AudioHighDbfs = -10.0
+)
+
+// ResolveFt8Audio applies the defaults to a sparse (or absent) audio block.
+func ResolveFt8Audio(c *Ft8AudioConfig) Ft8AudioLevels {
+	r := Ft8AudioLevels{LowDbfs: DefaultFt8AudioLowDbfs, HighDbfs: DefaultFt8AudioHighDbfs}
+	if c == nil {
+		return r
+	}
+	if c.LowDbfs != nil {
+		r.LowDbfs = *c.LowDbfs
+	}
+	if c.HighDbfs != nil {
+		r.HighDbfs = *c.HighDbfs
+	}
+	return r
+}
+
 func ResolveFt8Display(c *Ft8DisplayConfig) Ft8DisplayConfig {
 	d := Ft8DisplayConfig{
 		HistoryMax:        DefaultFt8HistoryMax,

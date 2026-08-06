@@ -51,10 +51,23 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      Current-state section (231 KB), the harness truncated it to a 2 KB preview,
      and the RECONCILE warning underneath was never delivered at all. -->
 
+- **IN THE TREE, awaiting operator commit — FT8 RX audio-level meter, stage 1
+  of the backlog's "FT8 audio levels" entry (operator-directed).** Daemon:
+  `internal/ft8/audiolevel.go` meter + tee (OUTSIDE the invariant-guarded
+  slot path) + `ft8-audio-level` SSE (~4 Hz, not cached) + `ft8.audio`
+  config window (resolved `ft8_audio` on GET, read-only over PUT, validated
+  on the RESOLVED pair) + config.md/api-endpoints.md same-commit. SPA:
+  `audioLevel.svelte.ts` classifier (fixed −1 dBFS clip; 2 s staleness =
+  dead capture, distinct from the −120 silence floor which reads 'low') +
+  `AudioLevelCard` bottom-left chip/card (state-coloured icon collapsed; TX
+  stand-down), mounted by Ft8View. Gates: Go full suite + `-race` on ft8,
+  SPA 1152 tests, all clean. **Defaults −60/−10 dBFS await hardware
+  calibration** (config.json edit + restart). This is a DAEMON change —
+  the next deploy is not SPA-only.
 - **DEPLOYED 2026-08-06** as `…1107-g9c012341-dirty` — the dirty content WAS
-  `7ff244a0`, so the running build is functionally HEAD; only the version
-  string lags. Operator-checked live twice ("All looks good", then "Checked"
-  on the disclosure). Tree clean, every codex review triaged + deleted.
+  `7ff244a0`, so that deploy was functionally HEAD-at-the-time. Since then:
+  keyboard commits (`a5a54866`/`6af12ca9`/`922e9e25`) + the meter above are
+  NOT live. Operator-checked live twice earlier ("All looks good", "Checked").
 - **Also shipped 2026-08-06 (late): Contact-details disclosure no longer
   reflows** (`7ff244a0`, three operator-corrected rounds — the final UI is
   the ORIGINAL in-flow look, with the card's lower half reproduced out of

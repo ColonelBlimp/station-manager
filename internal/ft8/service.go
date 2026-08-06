@@ -548,6 +548,11 @@ func (s *Service) startCaptureLocked() {
 	s.captureCancel = cancel
 	s.capturing = true
 
+	// RX audio-level meter tee (audiolevel.go): measures peak/RMS on the way
+	// past and forwards untouched — deliberately OUTSIDE the scheduler/slot
+	// path that the TX + attribution invariants guard.
+	samples = s.teeAudioLevel(runCtx, samples)
+
 	// Open the JTDX ALL.TXT decode log for this session if the operator enabled it
 	// (ft8.decode_log). Fail-soft: openDecodeLog returns nil on any error, leaving
 	// the writer a no-op. Closed in releaseCaptureLocked after the decode goroutine

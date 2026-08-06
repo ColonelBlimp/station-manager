@@ -28,6 +28,11 @@ const (
 	// session list. Deliberately NOT cached for replay (see hub.publish): a late
 	// subscriber re-receiving an old logged event would duplicate the session row.
 	EventLogged = "ft8-logged"
+	// EventAudioLevel carries an AudioLevel — the RX capture level meter
+	// (~4 Hz while capture is live; audiolevel.go). NOT cached for replay:
+	// the next window lands within 250 ms, and a replayed stale level could
+	// masquerade as a live one to exactly the staleness check the SPA runs.
+	EventAudioLevel = "ft8-audio-level"
 )
 
 // sseKeepAliveInterval matches the /v1/events and rig-events handlers — 30 s of

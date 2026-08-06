@@ -82,6 +82,7 @@ func Validate(cfg Config) []Finding {
 	out = append(out, validateOperators(cfg)...)
 	out = append(out, validateStationPrefs(cfg.Station)...)
 	out = append(out, validateFt8Display(cfg.Ft8.Display)...)
+	out = append(out, validateFt8Audio(cfg.Ft8.Audio)...)
 	out = append(out, validateFt8Occupancy(cfg.Ft8.TX)...)
 	out = append(out, validateFt8FieldDay(cfg.Ft8.FieldDay)...)
 	// Advisory findings (non-fatal) — currently just the non-loopback-bind notice.
@@ -336,6 +337,27 @@ func validateStationPrefs(s types.StationConfig) []Finding {
 		seen[b] = true
 	}
 	return out
+}
+
+// validateFt8Audio checks the RX level meter's window bounds against the
+// RESOLVED values (defaults + overrides): a lone override can invert the
+// window against a default, and the resolved pair is exactly what the SPA
+// classifies with. Bounds [-120, 0] dBFS (the meter's silence floor to full
+// scale), low strictly below high.
+func validateFt8Audio(a *types.Ft8AudioConfig) []Finding {
+	r := types.ResolveFt8Audio(a)
+	inBounds := func(v float64) bool { return v >= -120 && v <= 0 }
+	if !inBounds(r.LowDbfs) || !inBounds(r.HighDbfs) {
+		return []Finding{{Field: "ft8.audio", Code: "invalid_field_value",
+			Message: fmt.Sprintf("ft8.audio dBFS bounds (%g, %g) must be within [-120, 0]",
+				r.LowDbfs, r.HighDbfs)}}
+	}
+	if r.LowDbfs >= r.HighDbfs {
+		return []Finding{{Field: "ft8.audio", Code: "invalid_field_value",
+			Message: fmt.Sprintf("ft8.audio low_dbfs %g must be below high_dbfs %g (resolved values)",
+				r.LowDbfs, r.HighDbfs)}}
+	}
+	return nil
 }
 
 // validateFt8Display checks the one ft8_display enum (the rest is normalised by

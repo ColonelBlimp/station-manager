@@ -17,8 +17,10 @@ import type {
     TxPayload,
     QsoPayload,
     LoggedPayload,
+    AudioLevelPayload,
     Ft8EventHandlers,
 } from '../api/ft8-sse';
+import { onAudioLevel as audioLevelReceive } from './audioLevel.svelte';
 import { ft8PileupStack } from './ft8Pileup.svelte';
 import { sessionGet, sessionSet, sessionRemove } from '../utils/storage';
 import { frequencyToBand } from '../utils/frequency';
@@ -758,6 +760,12 @@ export const ft8Link: Ft8EventHandlers = {
 
     onLogged(p: LoggedPayload): void {
         if (loggedSink) loggedSink(p);
+    },
+
+    // RX level meter (audioLevel.svelte) — a pure hand-off: classification,
+    // staleness and presentation all live there and in AudioLevelCard.
+    onAudioLevel(p: AudioLevelPayload): void {
+        audioLevelReceive(p);
     },
 };
 

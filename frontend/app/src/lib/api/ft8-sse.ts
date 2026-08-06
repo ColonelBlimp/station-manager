@@ -126,6 +126,13 @@ export interface LoggedPayload {
     name?: string;
 }
 
+/** Mirrors internal/ft8.AudioLevel — one 250 ms RX capture measurement
+ *  window (~4 Hz while capture is live; nothing at all without capture). */
+export interface AudioLevelPayload {
+    peak_dbfs: number;
+    rms_dbfs: number;
+}
+
 export interface Ft8EventHandlers {
     onOpen: () => void;
     /** Transient drop (browser auto-retries) or terminal — either way, not carrying frames. */
@@ -135,6 +142,7 @@ export interface Ft8EventHandlers {
     onTx: (p: TxPayload) => void;
     onQso: (p: QsoPayload) => void;
     onLogged: (p: LoggedPayload) => void;
+    onAudioLevel: (p: AudioLevelPayload) => void;
 }
 
 function parse<T>(ev: MessageEvent<string>, label: string): T | null {
@@ -178,6 +186,10 @@ export function openFt8Events(handlers: Ft8EventHandlers): () => void {
         src.addEventListener('ft8-logged', (ev: MessageEvent<string>) => {
             const p = parse<LoggedPayload>(ev, 'ft8-logged');
             if (p !== null) handlers.onLogged(p);
+        });
+        src.addEventListener('ft8-audio-level', (ev: MessageEvent<string>) => {
+            const p = parse<AudioLevelPayload>(ev, 'ft8-audio-level');
+            if (p !== null) handlers.onAudioLevel(p);
         });
     });
 }
