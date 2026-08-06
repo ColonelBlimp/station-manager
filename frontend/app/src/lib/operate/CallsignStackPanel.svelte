@@ -42,7 +42,17 @@
     }
 </script>
 
-<aside class="pileup-drawer" data-open={operate.callStack} data-list="calls" aria-label="Pile-up">
+<!-- inert while closed: the drawer stays MOUNTED and is hidden by a transform,
+     so without it Tab still walks into Load / Remove / Discard-all buttons the
+     operator cannot see — and activating one replaces the callsign being typed
+     or drops a stacked call. `pointer-events: none` stops the mouse only. -->
+<aside
+    class="pileup-drawer"
+    data-open={operate.callStack}
+    data-list="calls"
+    inert={!operate.callStack}
+    aria-label="Pile-up"
+>
     <div
         class="flex h-full flex-col border-l border-line bg-surface"
         class:shadow-xl={operate.callStack}

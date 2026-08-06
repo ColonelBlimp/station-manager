@@ -57,7 +57,15 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<aside class="pileup-drawer" data-open={operate.pileup} aria-label="Pile-up">
+<!-- inert while closed — see CallsignStackPanel. Same defect, and it predates
+     that drawer: a hidden-by-transform subtree is still in the focus order. -->
+<aside
+    class="pileup-drawer"
+    data-open={operate.pileup}
+    data-list="callers"
+    inert={!operate.pileup}
+    aria-label="Pile-up"
+>
     <div
         class="flex h-full flex-col border-l border-line bg-surface"
         class:shadow-xl={operate.pileup}

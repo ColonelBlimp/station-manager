@@ -20,6 +20,11 @@
           affordance for the same job. Apart from a card in the content column,
           which reflows the logging card underneath as it appears and moves
           where the operator is typing.
+      A24 A closed drawer cannot be reached at all — not by Tab, not by a screen
+          reader. Apart from a drawer that is merely invisible, where tabbing
+          past the logging card lands on Load/Remove buttons the operator cannot
+          see and activating one silently replaces the callsign they are typing
+          or deletes a stacked call.
       A23 It starts CLOSED. Apart from a drawer that opens itself on every visit
           to Phone/CW and pushes the content across to show an empty list.
 
@@ -246,6 +251,50 @@ describe('Phone/CW pile-up rail affordance', () => {
         flushSync();
 
         expect(operate.pileup).toBe(true);
+    });
+});
+
+/*
+    A24. `inert` is the platform primitive for this: it drops the subtree from
+    the focus order AND the accessibility tree in one attribute.
+
+    THESE ASSERT THE PROPERTY, NOT THE OUTCOME — deliberately, and it is the
+    weaker statement. jsdom does not implement inert (.focus() still lands on a
+    button inside a subtree marked inert), so "Tab cannot reach it" is not
+    observable in this runner. What we can pin is the contract handed to the
+    browser; exercising what the browser then does belongs in the Playwright
+    layer still on the backlog.
+
+    The PROPERTY, not the attribute: Svelte compiles `inert={…}` to
+    `el.inert = …`, which is the canonical interface and is what a browser acts
+    on — no attribute ever appears. An attribute assertion here failed against a
+    correct implementation.
+*/
+describe('a closed drawer is out of reach', () => {
+    it('P16: the Phone/CW pile-up is inert while closed, and reachable while open', () => {
+        const { container } = render(Operate);
+        flushSync();
+        const drawer = container.querySelector('aside[data-list="calls"]') as HTMLElement;
+        expect(drawer.inert).toBe(false);
+
+        operate.callStack = false;
+        flushSync();
+        expect(drawer.inert).toBe(true);
+    });
+
+    // The same defect exists in FT8's drawer and predates the Phone/CW one —
+    // both are permanently mounted and hidden by transform alone.
+    it('P17: FT8s caller queue is inert while closed too', () => {
+        router.mode = 'ft8';
+        operate.pileup = true;
+        const { container } = render(Operate);
+        flushSync();
+        const drawer = container.querySelector('aside[data-list="callers"]') as HTMLElement;
+        expect(drawer.inert).toBe(false);
+
+        operate.pileup = false;
+        flushSync();
+        expect(drawer.inert).toBe(true);
     });
 });
 
