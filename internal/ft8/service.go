@@ -674,16 +674,24 @@ func (s *Service) onCaptureLoopExit(runCtx context.Context, gen uint64, who stri
 	// that capturing=false). Safe even though the sibling loop may still be winding
 	// down: only the decode goroutine writes RX, and it is the one exiting here.
 	//
-	// UNDER s.mu, inside the generation-validated section (review c5bbbcbf P1):
-	// swapped after the unlock, a replacement session starting in the gap had
-	// its FRESH log swapped out and closed by this stale-by-then callback,
-	// silently losing the live session's RX/TX entries. Every piece of
-	// session-owned teardown belongs inside the ownership check — the same
-	// under-lock placement releaseCaptureLocked already uses for this close.
-	if dl := s.decLog.Swap(nil); dl != nil {
-		dl.Close()
-	}
+	// The SWAP runs under s.mu, inside the generation-validated section
+	// (review c5bbbcbf P1): swapped after the unlock, a replacement session
+	// starting in the gap had its FRESH log swapped out and closed by this
+	// stale-by-then callback, silently losing the live session's RX/TX
+	// entries. Ownership decides WHICH log is removed, so the swap is
+	// session-owned teardown.
+	//
+	// The CLOSE runs after the unlock (review 9aafc206 P2): Close drains the
+	// writer goroutine and flushes the file, and a slow or stalled target —
+	// the decode-log path is operator-configurable, so a network/FUSE mount
+	// is legitimate — must not hold s.mu against subscriber lifecycle, CAT
+	// reconcile, capture restart and Stop. Closing the captured pointer
+	// cannot affect a replacement's fresh log.
+	oldLog := s.decLog.Swap(nil)
 	s.mu.Unlock()
+	if oldLog != nil {
+		oldLog.Close()
+	}
 	if wasCapturing {
 		s.log.ErrorWith().Str("goroutine", who).
 			Msg("ft8: capture loop exited unexpectedly; capture stopped — re-open the FT8 view to restart")
