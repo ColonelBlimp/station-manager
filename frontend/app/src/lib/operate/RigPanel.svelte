@@ -113,10 +113,13 @@
         if (!r.ok) toasts.error(r.message);
     }
 
-    // Click-to-swap (ADR 0026): with two VFOs, "select the other" === swap_vfo
-    // (SV;) — clicking the non-selected box swaps A↔B. Only offered when the rig
-    // is live AND exposes swap_vfo; otherwise the boxes stay plain read-outs.
-    const canSwap = $derived(locked && hasOp('swap_vfo'));
+    // Clickable VFO boxes (ADR 0026): a rig with select_vfo (FTdx10 VS) truly
+    // SELECTS — the boxes keep their contents and operation moves; one with
+    // only swap_vfo (SV;) swaps contents ("select the other" == swap). The
+    // title says which, because they read very differently at the dial. Boxes
+    // stay plain read-outs when the rig is not live or has neither op.
+    const canSelect = $derived(locked && hasOp('select_vfo'));
+    const canSwap = $derived(locked && (canSelect || hasOp('swap_vfo')));
 
     async function onSelectVfo(v: 'A' | 'B'): Promise<void> {
         const r = await selectVfo(v);
@@ -256,7 +259,9 @@
                             onclick={() => onSelectVfo(v)}
                             title={rig.selectedVfo === v
                                 ? 'Selected VFO'
-                                : 'Click to swap onto this VFO'}
+                                : canSelect
+                                  ? 'Click to select this VFO'
+                                  : 'Click to swap onto this VFO'}
                         >
                             {shown}
                         </button>

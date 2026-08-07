@@ -51,6 +51,13 @@ func TestEncodeCommand(t *testing.T) {
 		{name: "set_mode USB", cmd: "set_mode", value: "USB", want: "MD02;"},
 		{name: "set_mode LSB", cmd: "set_mode", value: "LSB", want: "MD01;"},
 		{name: "swap_vfo valueless", cmd: "swap_vfo", value: "", want: "SV;"},
+		// select_vfo (2026-08-07 dogfood report): VS moves OPERATION onto a
+		// specific VFO — manual legend "P1 0: VFO-A Operation / 1: VFO-B
+		// Operation" (docs/ftdx10-cat.md VS). Friendly values are the SELECT
+		// state mapping's, so the SPA speaks the same vocabulary it reads.
+		{name: "select_vfo A", cmd: "select_vfo", value: "VFO-A", want: "VS0;"},
+		{name: "select_vfo B", cmd: "select_vfo", value: "VFO-B", want: "VS1;"},
+		{name: "select_vfo unknown value", cmd: "select_vfo", value: "VFO-C", wantErr: ErrUnmappedValue},
 		{name: "band_up valueless", cmd: "band_up", value: "", want: "BU0;"},
 		{name: "band_down valueless", cmd: "band_down", value: "", want: "BD0;"},
 		{name: "set_freq missing value", cmd: "set_freq", value: "", wantErr: ErrMissingValue},
@@ -140,8 +147,15 @@ func TestEncodeCommandBijection(t *testing.T) {
 // the FT-710's added 2026-06-06 — but neither is Exposed, so the advertised
 // vocabulary is unchanged.)
 func TestExposedCommands(t *testing.T) {
-	want := []string{"set_freq", "set_freq_b", "set_mode", "swap_vfo", "band_up", "band_down", "set_band", "set_power"}
-	for _, id := range []string{"yaesu-ftdx10", "yaesu-ft710"} {
+	// select_vfo is FTdx10-only for now: its VS legend is cited from that
+	// rig's own manual (docs/ftdx10-cat.md). The FT-710 almost certainly
+	// matches, but per the external-claims rule its rigdef gains the op when
+	// its own manual page has been read, not by analogy.
+	wants := map[string][]string{
+		"yaesu-ftdx10": {"set_freq", "set_freq_b", "set_mode", "swap_vfo", "select_vfo", "band_up", "band_down", "set_band", "set_power"},
+		"yaesu-ft710":  {"set_freq", "set_freq_b", "set_mode", "swap_vfo", "band_up", "band_down", "set_band", "set_power"},
+	}
+	for id, want := range wants {
 		def, ok := Lookup(id)
 		if !ok {
 			t.Fatalf("Lookup(%q) not found", id)

@@ -802,13 +802,18 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   establish". Consequence: any page session whose FIRST phone entry follows
   FT8 — reload or deep-link into the FT8 view, operate, switch to phone — has
   no phone snapshot, and the switch leaves the rig on the FT8 dial in DATA-U.
-  **Open question (operator's call):** should a snapshot-less FT8→phone switch
-  establish a phone position anyway? A candidate seed exists that invents no
-  frequency: `set_band` to the current band triggers the RIG's OWN band-stack
-  recall — the rig's own phone memory, the same mechanism that makes the SSB
-  band buttons work. **Caveat:** if phone WAS operated earlier in the same
-  page session and the restore still didn't fire (no toast — the refusal paths
-  toast), that is a different, real defect; say so and it gets chased.
+  **FIXED 2026-08-07 late night (A26, operator directed "fix these two"):**
+  a session that boots into the FT8 view captures the rig's position from its
+  FIRST full rig report (dial + mode), and the first switch to phone returns
+  the rig there — where it physically was when the session began, which is
+  what "reset" means leaving FT8. The band-stack `set_band` idea from the
+  first triage was DROPPED: the manual's BS section is silent on same-band
+  behaviour (front-panel same-band presses CYCLE the stack), so it gambles;
+  boot-capture never does worse than the old no-op. AMENDS criterion A4's
+  letter (its no-stale-snapshot rationale survives — flagged as drafted, not
+  yet operator-ratified, in the `modeRestore.svelte.test.ts` header, A26 +
+  MB1–MB5). **Caveat stands:** if phone WAS operated earlier in the same page
+  session and a restore still doesn't fire, that's a different defect.
 - [2026-08-07] bug - when selecting VFO-B the freq is change to the current freq shown in VFO-A - vfo select does not work
   **TRIAGED 2026-08-07 late night — the observable is the DESIGNED behaviour
   (click-to-select is implemented as SWAP), and the premise under that design
@@ -827,12 +832,18 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   `set_vfo`/VS round-tripped clean when first added (archive S~2675, HW-proven
   2026-06-04) and the daemon still PARSES pushed VS frames (rigdef SELECT tag
   → `rig.selectedVfo`).
-  **Next step (passive, no TX):** set VFO-B to a deliberately different
-  frequency, then `catcli -cmd "VS1;" -listen` and watch whether the pushed
-  dial/IF follows VFO-B. If it does: rigdef regains `select_vfo` (VS%s), the
-  box click sends it instead of swap, keyboard swap (true SV) stays. If it
-  genuinely doesn't: CAT select doesn't exist on this rig and the UI should
-  stop implying it (boxes present as "swap onto", not "select").
+  **FIXED 2026-08-07 late night (operator directed "fix these two"), built on
+  the manual's legend — ON-HARDWARE VALIDATION STILL PENDING:** the FTdx10
+  rigdef regained `select_vfo` (`VS%s;`, SELECT value map — VS0/VS1), and the
+  VFO box click now SELECTS on a rig exposing it: the dot moves, both boxes
+  keep their contents, optimistic + rollback, confirm via the pushed VS frame
+  the daemon already parses. Keyboard Shift+Ctrl+\ stays a true swap; rigs
+  without the op keep click-to-swap. Spec: `rig.svelte.test.ts` SV1–SV4 with
+  the pre-registered acceptance in the header — FIRST CLICK AT THE RIG, with
+  VFO-B on a deliberately DIFFERENT frequency, must move the operating dial
+  to B's own content and show VFO-B operation on the panel. If the rig
+  refutes the manual (the S~2527 observation un-confounded), the revert is
+  the `select_vfo` branch in `selectVfo` + one rigdef line.
 
 ---
 

@@ -252,13 +252,23 @@ export async function driveRig(op: string, value?: string | number): Promise<Rig
 }
 
 /**
- * Select VFO A or B (the mouse click-to-swap path; the keyboard swap shares
- * swapVfo). CAT off → local selection only (the app shows no VFO boxes in
- * manual mode, so this is inert there). CAT live → the FTdx10 has no "move onto
- * a specific VFO" CAT command that changes the operating frequency (VS toggles
- * a flag only); the working op is swap_vfo (SV;), which exchanges A↔B. With two
- * VFOs, "select the other" === "swap", so a live select of the non-current VFO
- * swaps; selecting the already-current one is a no-op.
+ * Select VFO A or B (the mouse click path; the keyboard swap shares swapVfo).
+ * CAT off → local selection only (the app shows no VFO boxes in manual mode,
+ * so this is inert there). Selecting the already-current VFO is a no-op.
+ *
+ * CAT live, rig exposes select_vfo (FTdx10 VS — manual legend "P1 0: VFO-A
+ * Operation / 1: VFO-B Operation", docs/ftdx10-cat.md): a true SELECT — the
+ * rig moves its operation onto that VFO, both VFOs KEEP their contents, and
+ * only the selection (and so the operating dial) changes. Optimistic dot,
+ * confirm-by-push (the rig pushes VS), rolled back on refusal. This replaces
+ * the earlier "select the other == swap" reading, whose content mirror was the
+ * 2026-08-07 dogfood report ("selecting VFO-B changes the freq to VFO-A's") —
+ * that reading rested on an on-rig observation ("VS toggles a flag only")
+ * plausibly confounded by equal VFO contents; on-hardware validation of the
+ * select is pre-registered in rig.svelte.test.ts (SV rules).
+ *
+ * Without select_vfo the old behaviour stands: with two VFOs, "select the
+ * other" degrades to swap_vfo (SV; exchanges contents).
  */
 export async function selectVfo(vfo: 'A' | 'B'): Promise<RigWriteResult> {
     if (rig.cat !== 'connected') {
@@ -266,6 +276,13 @@ export async function selectVfo(vfo: 'A' | 'B'): Promise<RigWriteResult> {
         return { ok: true, message: '' };
     }
     if (vfo === rig.selectedVfo) return { ok: true, message: '' };
+    if (hasOp('select_vfo')) {
+        const prev = rig.selectedVfo;
+        rig.selectedVfo = vfo;
+        const r = await driveRig('select_vfo', vfo === 'A' ? 'VFO-A' : 'VFO-B');
+        if (!r.ok) rig.selectedVfo = prev;
+        return r;
+    }
     return swapVfoLive();
 }
 

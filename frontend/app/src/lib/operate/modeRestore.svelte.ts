@@ -68,6 +68,37 @@ export function setRestoreOnModeSwitch(on: boolean): void {
 
 const snapshots: Record<OpMode, OperatingSnapshot | null> = { phone: null, ft8: null };
 
+/*
+    Boot-into-FT8 phone fallback (A26, 2026-08-07 dogfood report). A session
+    that BEGINS on the FT8 view — reload or deep link, routine straight after
+    a deploy — never runs a phone→ft8 switch, so nothing snapshots a phone
+    position and the first FT8→phone switch used to leave the rig parked on
+    the FT8 dial in a data mode. The fix: the FIRST full rig report of such a
+    session (dial + mode both known) is captured as the phone snapshot — where
+    the rig physically was when the session began, which is what "reset" means
+    to the operator leaving FT8. This amends A4's letter, not its rationale:
+    no STALE pre-reload snapshot is ever restored; the reload rationale in the
+    header above stands.
+
+    The window is boot-only: any mode switch closes it (from then on the real
+    entry snapshots own the slots), a successful capture closes it, and only
+    reports arriving while the app sits in ft8 mode qualify — booting into
+    phone captures nothing, because FT8's null slot belongs to the A25 seed
+    (filing a phone position there would suppress the seed and "restore" FT8
+    to a phone frequency). A partial report (dial without mode) is skipped:
+    restoring the dial while leaving the data mode asserted would be half the
+    reported bug, and the honest degradation is the old no-op.
+*/
+let bootWindowClosed = false;
+
+/** Called on every rig-state report (main.ts) with the router's current mode. */
+export function noteRigReport(mode: OpMode): void {
+    if (bootWindowClosed || mode !== 'ft8') return;
+    if (rig.vfoA === null || rig.modeLiteral === '') return; // wait for a full report
+    if (snapshots.phone === null) snapshots.phone = snapshotOperating();
+    bootWindowClosed = true;
+}
+
 export function snapshotOperating(): OperatingSnapshot {
     return {
         vfoA: rig.vfoA,
@@ -165,6 +196,11 @@ export function onOperatingModeChange(from: OpMode, to: OpMode): Promise<void> {
 }
 
 async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
+    // Any switch closes the boot-capture window: from here on the exit
+    // snapshot below owns the slots (A26 — the capture only ever fills the
+    // never-switched case).
+    bootWindowClosed = true;
+
     // Where the rig actually is, resolved ONCE and used for both jobs below —
     // what to remember about the mode being left, and what still needs
     // commanding for the one being entered. They are the same question, and
@@ -374,6 +410,7 @@ function effective(): OperatingSnapshot {
 export function resetModeRestore(): void {
     snapshots.phone = null;
     snapshots.ft8 = null;
+    bootWindowClosed = false;
     restoreOnSwitch = true;
     unrestored = null;
     seedRefusedAt = null;

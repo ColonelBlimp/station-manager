@@ -348,9 +348,72 @@ describe('VFO swap / select (ADR 0026)', () => {
         expect(sent).toEqual([]);
     });
 
-    it('selectVfo of the other VFO swaps', async () => {
-        const { sent } = live(); // selectedVfo A
+    it('selectVfo falls back to swap when the rig lacks select_vfo', async () => {
+        const { sent } = live(); // selectedVfo A; ops = swap_vfo only
         await selectVfo('B');
+        expect(sent).toEqual([{ op: 'swap_vfo', value: undefined }]);
+    });
+
+    /*
+        Click-to-SELECT (2026-08-07 dogfood report: "selecting VFO-B changes
+        the freq to the current freq shown in VFO-A — vfo select does not
+        work"). When the rig's CAT can move OPERATION onto a specific VFO —
+        FTdx10 VS, manual legend "P1 0: VFO-A Operation / 1: VFO-B Operation"
+        (docs/ftdx10-cat.md) — clicking the non-selected box SELECTS it: the
+        dot moves and both boxes KEEP their frequencies. Distinguishable from
+        the click-to-swap it replaces, whose optimistic content mirror
+        (vfoB = vfoA) was the report's exact observable. Rigs without the op
+        keep the swap fallback (previous test).
+
+        The replaced premise ("VS toggles a flag only", archive S~2527) is
+        contradicted by the manual and was plausibly CONFOUNDED — with equal
+        VFO contents a true select is visually indistinguishable from a flag.
+        ON-HARDWARE VALIDATION, pre-registered, passive (no TX): with VFO-B
+        holding a deliberately DIFFERENT frequency, clicking VFO-B must move
+        the operating dial to B's own content and the panel must show VFO-B
+        operation. If the rig refutes the manual, the revert is the
+        select_vfo branch in selectVfo plus one rigdef line.
+    */
+    function liveSelect(): { sent: { op: string; value?: string | number }[] } {
+        catLink.onRigState({ vfoA: 14_100_000, vfoB: 14_200_000, selectedVfo: 'A' });
+        setRigCaps({ ops: ['swap_vfo', 'select_vfo'], tune: false, rigModes: [] });
+        const sent: { op: string; value?: string | number }[] = [];
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            return Promise.resolve({ ok: true, message: '' });
+        });
+        return { sent };
+    }
+
+    it('SV1: selectVfo SELECTS when the rig can — the boxes keep their contents', async () => {
+        const { sent } = liveSelect();
+        const r = await selectVfo('B');
+        expect(r.ok).toBe(true);
+        expect(sent).toEqual([{ op: 'select_vfo', value: 'VFO-B' }]);
+        expect(rig.selectedVfo).toBe('B'); // optimistic dot; the VS push confirms
+        expect(rig.vfoA).toBe(14_100_000); // NEITHER box changes value — the swap
+        expect(rig.vfoB).toBe(14_200_000); // mirror was the reported bug
+    });
+
+    it('SV2: a refused select rolls the dot back', async () => {
+        catLink.onRigState({ vfoA: 14_100_000, vfoB: 14_200_000, selectedVfo: 'A' });
+        setRigCaps({ ops: ['swap_vfo', 'select_vfo'], tune: false, rigModes: [] });
+        setCommandSender(() => Promise.resolve({ ok: false, message: 'refused' }));
+        const r = await selectVfo('B');
+        expect(r.ok).toBe(false);
+        expect(rig.selectedVfo).toBe('A');
+    });
+
+    it('SV3: selecting the already-selected VFO stays a no-op', async () => {
+        const { sent } = liveSelect();
+        const r = await selectVfo('A');
+        expect(r.ok).toBe(true);
+        expect(sent).toEqual([]);
+    });
+
+    it('SV4: the keyboard swap stays a true swap even when select_vfo exists', async () => {
+        const { sent } = liveSelect();
+        await swapVfo();
         expect(sent).toEqual([{ op: 'swap_vfo', value: undefined }]);
     });
 

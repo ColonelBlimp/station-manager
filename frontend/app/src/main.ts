@@ -51,8 +51,12 @@ import { toasts } from './lib/ui/toasts.svelte';
 import { setup, setSetupSave } from './lib/setup.svelte';
 import { setStationSaved } from './lib/config/station.svelte';
 import { setFt8PrefsSaved } from './lib/config/ft8.svelte';
-import { setModeChangeHook } from './lib/router.svelte';
-import { onOperatingModeChange, setRestoreOnModeSwitch } from './lib/operate/modeRestore.svelte';
+import { router, setModeChangeHook } from './lib/router.svelte';
+import {
+    onOperatingModeChange,
+    setRestoreOnModeSwitch,
+    noteRigReport,
+} from './lib/operate/modeRestore.svelte';
 import { completeSetup } from './lib/api/setup';
 import { sendRigTune } from './lib/api/rig-tune';
 import { sendRigCommand } from './lib/api/rig-command';
@@ -370,8 +374,18 @@ function applyStationContext(c: StationContext): void {
     if (c.catEnabled && !rigEventsOpen) {
         rigEventsOpen = true;
         // rig-meters routes to the TX-drive store here (ADR 0045: coupling in
-        // main.ts); everything else is catLink's.
-        openRigEvents({ ...catLink, onRigMeters: (p) => onRigMeters(p, Date.now()) });
+        // main.ts); everything else is catLink's. The rig-state interpose feeds
+        // modeRestore's boot-into-FT8 capture (A26) — wired here because
+        // modeRestore may not import the router (it takes the mode as an
+        // argument) and rig.svelte may not import modeRestore (cycle).
+        openRigEvents({
+            ...catLink,
+            onRigState: (p) => {
+                catLink.onRigState(p);
+                noteRigReport(router.mode);
+            },
+            onRigMeters: (p) => onRigMeters(p, Date.now()),
+        });
     }
 }
 

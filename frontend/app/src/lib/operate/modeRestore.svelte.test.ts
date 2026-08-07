@@ -56,6 +56,32 @@
           move on a mode switch); a rig with no set_freq seeds nothing at all
           — asserting a data mode on a phone frequency is worse than nothing.
 
+    A26 (drafted 2026-08-07 from the dogfood report "changing from ft8 to
+        phone/cw the mode and freq are not reset"; judgement calls drafted,
+        NOT yet operator-ratified — flagged in the session report): a page
+        session that BEGINS on the FT8 view (reload or deep link — routine
+        straight after a deploy) captures the rig's position as first
+        reported after boot, and the first switch to Phone/CW returns the
+        rig there. I can tell it from the old behaviour, where the rig
+        silently stayed on the FT8 dial in a data mode: the dial and mode
+        move back.
+        AMENDS A4 for exactly this direction. A4's rationale — never move
+        the rig to a STALE pre-reload position — survives: the captured
+        point is where the rig physically was when THIS session started,
+        not an hour-old snapshot. What A4 still forbids (and its rule still
+        pins) is restoring a pre-reload SNAPSHOT.
+        Confusable states, each pinned below:
+        - a session that entered FT8 FROM phone: the REAL phone snapshot
+          wins — the boot capture only ever fills the never-switched case;
+        - the rig moved during FT8: the restore returns to the BOOT
+          position, not a later mid-session report (later reports are FT8
+          activity, exactly what the return must undo);
+        - the rig already parked on the FT8 point at boot: the restore
+          returns it there — indistinguishable from a no-op, which is the
+          old behaviour, never worse;
+        - no full report before the switch (CAT down, or dial-without-mode):
+          nothing captured, nothing restores — the old behaviour.
+
     WHICH STEP "the switch" MEANS. A mode change is a sequence: the router
     updates, the view swaps, the rig is commanded, the rig confirms by push.
     The snapshot is taken at the FIRST step, before anything is commanded —
@@ -95,6 +121,7 @@ import {
     onOperatingModeChange,
     setRestoreOnModeSwitch,
     resetModeRestore,
+    noteRigReport,
 } from './modeRestore.svelte';
 
 interface Sent {
@@ -1174,5 +1201,89 @@ describe('operating-state restore across a mode switch', () => {
         await onOperatingModeChange('phone', 'ft8');
 
         expect(modesSent()).toContain('DATA-U');
+    });
+});
+
+describe('boot-into-FT8 phone fallback (A26)', () => {
+    /** The session began ON the FT8 route: no switch has fired; the first rig
+     *  report arrives with the app already in ft8 mode (main.ts passes
+     *  router.mode to noteRigReport on every rig-state). */
+    function bootIntoFt8AtPhonePosition(): void {
+        livePhone(); // where the rig physically was when the session began
+        noteRigReport('ft8');
+    }
+
+    it('MB1: the first switch to phone returns the rig to its boot position', async () => {
+        bootIntoFt8AtPhonePosition();
+        moveToFt8(); // FT8 activity moved the rig (band button / operator)
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(freqsSent()).toContain('14255000');
+        expect(modesSent()).toContain('USB');
+    });
+
+    it('MB2: a REAL phone snapshot from a later entry wins over the boot capture', async () => {
+        bootIntoFt8AtPhonePosition(); // boot position 14.255
+        moveToFt8();
+        await onOperatingModeChange('ft8', 'phone'); // restores boot position
+        // The operator then works phone somewhere else. A rig REPORT, not a
+        // direct field write: the restore's outstanding command holds until
+        // the rig speaks (the per-field hold), and an unreported mutation is
+        // exactly what effective() is designed to ignore.
+        catLink.onRigState({ vfoA: 14_310_000, mode: 'USB' });
+        await onOperatingModeChange('phone', 'ft8'); // real entry snapshots 14.310
+        moveToFt8();
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(freqsSent()).toContain('14310000');
+        expect(freqsSent()).not.toContain('14255000'); // the boot capture must not resurface
+    });
+
+    it('MB3: booting into PHONE captures nothing — the FT8 seed still owns the first entry', async () => {
+        configureFt8();
+        livePhone();
+        noteRigReport('phone'); // reports arriving while the app sits in phone mode
+        sent = [];
+
+        await onOperatingModeChange('phone', 'ft8');
+
+        // A capture wrongly filed under FT8's slot would turn this into a
+        // restore toward the phone position (nothing to send); the seed sends
+        // the watering hole + data mode.
+        expect(freqsSent()).toContain('14074000');
+        expect(modesSent()).toContain('DATA-U');
+    });
+
+    it('MB4: the capture is the FIRST report — later reports are FT8 activity, not the home', async () => {
+        bootIntoFt8AtPhonePosition(); // 14.255 USB
+        // The operator tunes within FT8; more reports arrive.
+        rig.vfoA = 14_074_000;
+        rig.modeLiteral = 'DATA-U';
+        noteRigReport('ft8'); // must NOT re-capture
+        moveToFt8();
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(freqsSent()).toContain('14255000');
+        expect(freqsSent()).not.toContain('14074000');
+    });
+
+    it('MB5: a partial boot report (dial without mode) captures nothing', async () => {
+        rig.cat = 'connected';
+        rig.vfoA = 14_255_000; // dial known, mode never reported
+        noteRigReport('ft8');
+        moveToFt8();
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        // Restoring the dial while leaving DATA-U asserted would be half the
+        // reported bug; with no full picture the old no-op is the honest state.
+        expect(sent).toEqual([]);
     });
 });
