@@ -1203,35 +1203,46 @@ said. Plan future on-air experiments accordingly.
   **→ backlog P2 (triage 2026-08-07):** port `commentHistory.svelte.ts` (bounded MRU
   + dropdown) from the retired SPA into frontend/app's Phone/CW card — port, never
   patch the source. Behind the FT8 focus.
-- [2026-08-07] export session card - when clicking send, a toast appears by it is not on top, but overlayed by the Export session card and thus dimmed.
-  — **TRIAGED 2026-08-07, fix queued — root cause found:** `Toasts.svelte` and
-  `ExportDialog.svelte` are BOTH `z-50`; the later-mounted dialog wins. NB commit
-  `f6c6fe48` says "Fix toast overlay issue" but its diff is only this /log line —
-  nothing was fixed. One-line layer fix.
-- [2026-08-07] 07:20: clicked VK5GR and got a toast saying already worked this session - but I had not worked
-  — **TRIAGED 2026-08-07 — same defect as the abandon item below, one fix.** The
-  toast keys on the ENGAGED set (deliberately includes abandoned/incomplete
-  contacts, persisted per-tab in sessionStorage), so an earlier engagement that
-  never logged still reads "worked". Mechanism stays (allow_duplicate's
-  over-marking is the safe direction); the WORDING must split: "worked" only on a
-  `session.qsos` hit, engaged-only needs its own message (wording = operator's
-  call, queued for the 2026-08-07 design session).
-- [2026-08-07] answering a CQ automatically arms auto-work.
-  — **TRIAGED 2026-08-07 — as designed, not a bug** (ADR 0059 W9,
-  `sequencer.go:687`: an operator-started session arms a run; answering a CQ is
-  the entry point the feature was asked for). Gated on `ft8.tx.auto_work_callers`
-  — off today stops it. Whether the CHOICE should be per-click instead of policy
-  → the design session below.
-- [2026-08-07] answering a cq-> abandon->answer same cq->toast 'already worked this session' - this should only be true if the QSO has been successfully logged
-  — **TRIAGED 2026-08-07 — folded with the VK5GR item above (one fix, wording
-  split logged-vs-engaged).**
-- [2026-08-07] there should be a way to answer a cq call without arming auto-work. Maybe (discussion only) ctrl+shift+click-on-cq == auto-work; single click-on-cq == work that station only; ctrl+click == add station to pile-up queue?
-  — **TRIAGED 2026-08-07 → design session (auto-work · CQ-answer · operator_pick
-  as one grammar).** Current gestures: single-click CQ = answer (+ auto-work when
-  policy on) · ctrl/cmd-click calling-you row = pile-up · double-click plain row =
-  directed call. The sketch moves the auto-work decision from config policy to
-  per-click; intersects the open `operator_pick` thread (config-accepted,
-  runtime-rejected).
-- [2026-08-07] add a simple search as you typoe field to the session panel for callsigns
-  — **TRIAGED 2026-08-07, fix queued:** nothing exists in `SessionPanel.svelte`;
-  small SPA-only filter field.
+- ~~[2026-08-07] export session card - when clicking send, a toast appears by it is not on top, but overlayed by the Export session card and thus dimmed.~~
+  — **FIXED 2026-08-07 (same day):** `Toasts.svelte` and `ExportDialog.svelte` were
+  BOTH `z-50`; the later-mounted dialog won. Toast layer moved to `z-60`, strictly
+  above the modal layer; the test pins the COMPARISON (toast > dialog), not the
+  number (`Toasts.svelte.test.ts` "Toasts layering"). NB commit `f6c6fe48` says
+  "Fix toast overlay issue" but its diff is only this /log line — the commit-message
+  generator mislabeled a capture; the fix is this one.
+- ~~[2026-08-07] 07:20: clicked VK5GR and got a toast saying already worked this session - but I had not worked~~
+  — **FIXED 2026-08-07 (same day; ADR 0065 fork 4).** Log-reconstructed end to end:
+  VK5GR called 07:15:30, was worked (3× `-18`, no reply), abandoned 07:17:24;
+  called again 07:19:45 and the 07:20:09 re-click's toast keyed on the ENGAGED set
+  (deliberately includes abandoned contacts) while claiming "worked" — nothing had
+  been logged; the contact then completed as qso 7096. Fix: the toast splits by
+  evidence — "already worked" is reserved for a `session.qsos` hit; engaged-only
+  says "You started {call} earlier this session — nothing was logged. Working as
+  new." Mechanism (allow_duplicate over-marking) unchanged. Pinned by
+  `Ft8BandActivity.svelte.test.ts` "worked-vs-engaged toast wording" WS1-WS4.
+- ~~[2026-08-07] answering a CQ automatically arms auto-work.~~
+  — **DECIDED 2026-08-07 → ADR 0065.** Was as-designed (ADR 0059 W9: an
+  operator-started session arms a run; answering a CQ was the entry point the
+  feature was asked for) — but the log showed the Abandon-debt collected twice
+  this morning (06:01:17, 07:26:06). Decision: plain click works one station
+  only; arming becomes explicit (ctrl+shift+click + visible toggle). Build
+  pending.
+- ~~[2026-08-07] answering a cq-> abandon->answer same cq->toast 'already worked this session' - this should only be true if the QSO has been successfully logged~~
+  — **FIXED 2026-08-07 (same day) — one fix with the VK5GR item above** (this
+  morning's live occurrence was M9KJY: answered 06:07:03, abandoned 06:07:12,
+  re-answered 06:08:01 → false "already worked").
+- ~~[2026-08-07] there should be a way to answer a cq call without arming auto-work. Maybe (discussion only) ctrl+shift+click-on-cq == auto-work; single click-on-cq == work that station only; ctrl+click == add station to pile-up queue?~~
+  — **DECIDED 2026-08-07 → ADR 0065 (all four forks operator-ratified).** Plain
+  click = work that station only · ctrl+shift+click + visible Auto-work toggle =
+  arm a run (two handles, one state; pill click disarms) · `operator_pick` =
+  answerers→pile-up during Call-CQ runs, CQ continues until the operator pops ·
+  toast wording split logged-vs-engaged (shipped same day). The sketch's third
+  gesture (ctrl+click on a CQ row → pile-up) is recorded as an OPEN question in
+  the ADR — enqueue today exists only for calling-you rows. Build pending.
+- ~~[2026-08-07] add a simple search as you typoe field to the session panel for callsigns~~
+  — **FIXED 2026-08-07 (same day):** search-as-you-type field in the Session panel
+  header — substring, case-insensitive (a "did I work them?" lookup, deliberately
+  NOT the Band Activity prefix-funnel semantics); a VIEW only (header count stays
+  the sitting total); no-match state reads "No callsigns match…" so it can't be
+  confused with an empty session. `SessionPanel.svelte` +
+  `SessionPanel.svelte.test.ts` "callsign search".

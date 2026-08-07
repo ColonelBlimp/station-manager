@@ -266,23 +266,32 @@
         if (ft8State.qso.active) starting = false;
     });
 
-    // Same-session dupe (band-scoped): a call already logged this session on this
-    // band. Cross-band the same call is not a dupe, and a prior-session contact is
-    // not one either. This is ADVISORY only — the operator is the licensee and may
-    // work a station as often as they choose; callers use it to say so, never to
-    // refuse. (The pile-up DRAIN is the one exception: it transmits with no operator
-    // present at that instant, so it still skips — see Ft8Operate.)
+    // Same-session dupe (band-scoped): a call already engaged or logged this session
+    // on this band. Cross-band the same call is not a dupe, and a prior-session
+    // contact is not one either. This is ADVISORY only — the operator is the
+    // licensee and may work a station as often as they choose; callers use it to say
+    // so, never to refuse. (The pile-up DRAIN is the one exception: it transmits
+    // with no operator present at that instant, so it still skips — see Ft8Operate.)
     // Two sources, because neither alone is timely AND durable: `session.qsos` only
     // learns of a contact after the daemon's asynchronous enrich+submit finishes
     // (the terminal idle is published first), while the engaged-call set knows the
     // instant the sequencer touches a station but is forgotten on reload. Together
     // they cover the immediate-repair window this whole feature exists for
     // (codex 0f08d2b2 P1).
-    function workedThisSession(call: string): boolean {
-        return (
-            ft8EngagedThisSession(call, rig.band) ||
-            session.qsos.some((q) => q.callsign === call && q.band === rig.band)
-        );
+    // The EVIDENCE LEVEL is reported, not folded to a boolean, because the two
+    // sources support different claims: "already worked" is reserved for a
+    // session.qsos hit; an engaged-only hit is a started-but-unlogged attempt
+    // (abandoned, or still inside the async-logging window) and saying "worked"
+    // there is false (ADR 0065 fork 4 — VK5GR, dogfood 2026-08-07). Logged is
+    // checked first so the stronger truthful claim wins when both hold. The
+    // duplicate-protection mechanism treats the levels identically.
+    type WorkedEvidence = 'logged' | 'engaged' | '';
+    function workedEvidence(call: string): WorkedEvidence {
+        if (session.qsos.some((q) => q.callsign === call && q.band === rig.band)) {
+            return 'logged';
+        }
+        if (ft8EngagedThisSession(call, rig.band)) return 'engaged';
+        return '';
     }
 
     // Ctrl/Cmd+click a calling-you row → PILE-UP queue (pure capture, works in ANY TX
@@ -307,9 +316,14 @@
         // a legitimate operator choice (a repair, a sked, a second report). The entry
         // is marked `repeat` so the drain honours it instead of dropping it as a stale
         // duplicate, or the accepted action could never actually happen.
-        const repeat = workedThisSession(call);
-        if (repeat) {
+        const evidence = workedEvidence(call);
+        const repeat = evidence !== '';
+        if (evidence === 'logged') {
             toasts.info(`${call} already worked this session — queued anyway.`);
+        } else if (evidence === 'engaged') {
+            toasts.info(
+                `You started ${call} earlier this session — nothing was logged. Queued as new.`
+            );
         }
         // Already queued? Do NOT return — fall through to push, which dedupes by call
         // and refreshes the entry in place. Returning here discarded two things: the
@@ -387,9 +401,14 @@
         // actually STORED. Without it the second contact hashes to the first's dedupe
         // key inside one minute and is silently dropped — the operator would transmit
         // a full exchange and see no row (codex c2a8bea6 P1).
-        const allowDuplicate = workedThisSession(call);
-        if (allowDuplicate) {
+        const evidence = workedEvidence(call);
+        const allowDuplicate = evidence !== '';
+        if (evidence === 'logged') {
             toasts.info(`${call} already worked this session — working again.`);
+        } else if (evidence === 'engaged') {
+            toasts.info(
+                `You started ${call} earlier this session — nothing was logged. Working as new.`
+            );
         }
         return { offset, opMHz: opHz / 1_000_000, allowDuplicate };
     }

@@ -98,6 +98,7 @@ type fakeTxPlayer struct {
 	playN   int
 	stopN   int
 	initErr error
+	stopErr error
 	done    chan struct{}
 }
 
@@ -111,7 +112,7 @@ func (p *fakeTxPlayer) Play(s []int16) (<-chan struct{}, error) {
 	p.playN++
 	return p.done, nil
 }
-func (p *fakeTxPlayer) Stop() error { p.mu.Lock(); defer p.mu.Unlock(); p.stopN++; return nil }
+func (p *fakeTxPlayer) Stop() error { p.mu.Lock(); defer p.mu.Unlock(); p.stopN++; return p.stopErr }
 func (p *fakeTxPlayer) inits() int  { p.mu.Lock(); defer p.mu.Unlock(); return p.initN }
 func (p *fakeTxPlayer) closes() int { p.mu.Lock(); defer p.mu.Unlock(); return p.closeN }
 

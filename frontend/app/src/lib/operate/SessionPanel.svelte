@@ -16,6 +16,18 @@
     import EditQsoModal from '../logbook/EditQsoModal.svelte';
     import type { QsoPatch } from '../api/qso-patch';
     const tableHeight = 'h-55';
+
+    // Callsign search (dogfood 2026-08-07) — a VIEW over the sitting's rows,
+    // never a mutation: the header count stays the total. Substring, not
+    // prefix, because this is a "did/when did I work them?" lookup, not the
+    // Band Activity funnel (which is deliberately prefix — "calls starting
+    // with VK"). Case folded both sides.
+    let callsignSearch = $state('');
+    const shownQsos = $derived.by(() => {
+        const q = callsignSearch.trim().toUpperCase();
+        if (q === '') return session.qsos;
+        return session.qsos.filter((r) => r.callsign.toUpperCase().includes(q));
+    });
 </script>
 
 <div class="card w-2xl">
@@ -35,6 +47,13 @@
                  entry point on this tile was pure duplication (operator,
                  2026-07-25). The map itself is still a standalone time-window
                  view launched in its own tab (ADR 0049 rejection). -->
+            <input
+                type="search"
+                bind:value={callsignSearch}
+                placeholder="Find call"
+                aria-label="Search session callsigns"
+                class="w-24 rounded border border-line bg-surface px-2 py-1 text-xs text-ink uppercase focus:ring-2 focus:ring-focus-ring focus:outline-none"
+            />
             <!-- Export / email the session — disabled with an empty log. -->
             <button class="btn text-xs" disabled={session.qsos.length === 0} onclick={openExport}>
                 Export…
@@ -91,7 +110,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {#each session.qsos as q (q.id)}
+                        {#each shownQsos as q (q.id)}
                             <tr class="border-b text-sm border-line-soft text-ink last:border-0">
                                 <td class="tabular-nums">{q.timeOn}</td>
                                 <td class="font-medium">
@@ -122,6 +141,14 @@
                         {/each}
                     </tbody>
                 </table>
+                <!-- The no-match state must not look like an empty session — a
+                     filter that hides everything and says nothing reads as "no
+                     QSOs logged", the nearest confusable state. -->
+                {#if shownQsos.length === 0}
+                    <div class="py-4 text-center text-sm text-muted">
+                        No callsigns match “{callsignSearch.trim()}”.
+                    </div>
+                {/if}
             </div>
         {:else}
             <div class="flex {tableHeight} items-center justify-center text-sm text-muted">

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/audio/playback"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -380,7 +381,18 @@ func (s *Service) disarmTxLocked(cause string) {
 	// teardown that was not verified.
 	if dev != nil {
 		if err := dev.Stop(); err != nil {
-			s.log.WarnWith().Err(err).Str("cause", cause).Msg("ft8 tx: audio device stop failed")
+			// ErrNotPlaying is the EXPECTED result of an idle disarm — Play/Stop
+			// are per-slot, so between transmissions there is nothing to stop and
+			// the backend says so. Warning on it put one false alarm in smd.log
+			// per disarm (9 on 2026-08-07 alone) and teaches the reader to skip
+			// the line that matters on a real stuck teardown. Every OTHER error
+			// keeps the finding-14 warn.
+			if stderrors.Is(err, playback.ErrNotPlaying) {
+				s.log.DebugWith().Str("cause", cause).
+					Msg("ft8 tx: audio device was idle at disarm; nothing to stop")
+			} else {
+				s.log.WarnWith().Err(err).Str("cause", cause).Msg("ft8 tx: audio device stop failed")
+			}
 		}
 		if err := dev.Close(); err != nil {
 			s.log.WarnWith().Err(err).Str("cause", cause).Msg("ft8 tx: audio device close failed")

@@ -920,3 +920,136 @@ describe('Ft8BandActivity staleness', () => {
         expect(calls).toHaveLength(1);
     });
 });
+
+/*
+    WORKED-vs-ENGAGED TOAST WORDING — ADR 0065 fork 4 (operator-ratified
+    2026-08-07). Live failure: VK5GR, 2026-08-07 07:20 — worked at 07:15:49,
+    no reply, abandoned 07:17:24; the re-click's toast claimed "already worked
+    this session" when nothing had been logged (the ENGAGED set deliberately
+    includes abandoned contacts — the safe direction for allow_duplicate, the
+    wrong word for the operator).
+
+    The rule: "already worked" is RESERVED for a session.qsos hit (a logged
+    QSO). An engaged-only hit says "started earlier — nothing was logged", so
+    the operator can tell a real duplicate from a failed earlier attempt.
+    The MECHANISM is unchanged either way: allowDuplicate / repeat stay true
+    for both evidence levels.
+
+    Fixture honesty: WS1/WS4 differentiate old vs new (the old code emits
+    "already worked" on an engaged-only fixture). WS2 is the reservation
+    guard (identical output before and after — it pins that the split did not
+    cost the logged case its wording). WS3 differentiates against an
+    implementation that checks the engaged set first.
+*/
+describe('Ft8BandActivity worked-vs-engaged toast wording', () => {
+    function engage(call: string): void {
+        // Sequencer engaged the call on 20 m (dial 14.074), then went idle —
+        // nothing logged, session.qsos stays empty.
+        ft8Link.onQso({ active: true, role: 'answerer', their_call: call, dial_freq_mhz: 14.074 });
+        ft8Link.onQso({ active: false });
+    }
+
+    function logQso(call: string): void {
+        session.qsos.push({
+            id: 1,
+            callsign: call,
+            timeOn: '05:20:09',
+            band: '20m',
+            mode: 'FT8',
+            rstSent: '-07',
+            rstRcvd: '-10',
+            name: '',
+            country: '',
+            comment: '',
+        });
+    }
+
+    const toastText = (): string => toastsState.items.map((t) => t.message).join(' | ');
+
+    // WS1 — answer path, engaged-only: truthful wording, mechanism untouched.
+    it('an engaged-but-unlogged station toasts "started earlier — nothing was logged", not "already worked"', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        engage('W1ABC');
+        expect(session.qsos).toHaveLength(0);
+
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
+        );
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+
+        expect(toastText()).toMatch(/started W1ABC earlier this session/);
+        expect(toastText()).toMatch(/nothing was logged/i);
+        expect(toastText()).not.toMatch(/already worked/i);
+        // The deliberate-repeat mechanism is NOT demoted by the wording split.
+        expect(got).toHaveLength(1);
+        expect(got[0].allowDuplicate).toBe(true);
+    });
+
+    // WS2 — answer path, logged: the reserved wording survives the split.
+    it('a genuinely logged station keeps the "already worked — working again" toast', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        logQso('W1ABC');
+
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
+        );
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+
+        expect(toastText()).toMatch(/W1ABC already worked this session — working again/);
+        expect(toastText()).not.toMatch(/nothing was logged/i);
+        expect(got).toHaveLength(1);
+        expect(got[0].allowDuplicate).toBe(true);
+    });
+
+    // WS3 — logged outranks engaged: the async-logging window ends with BOTH
+    // sources true, and the stronger (truthful) claim must win.
+    it('a station both engaged and logged toasts "already worked", not "started earlier"', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        armReady({ answerCq: okResult });
+        engage('W1ABC');
+        logQso('W1ABC');
+
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
+        );
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+
+        expect(toastText()).toMatch(/already worked/i);
+        expect(toastText()).not.toMatch(/nothing was logged/i);
+    });
+
+    // WS4 — pile-up enqueue path gets the same split; the entry still carries
+    // repeat:true so the drain honours it (codex 0f9aa672 P1 carve-out).
+    it('ctrl+click enqueue of an engaged-but-unlogged caller says "Queued as new", not "already worked"', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        armReady();
+        engage('W1ABC');
+
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: '7Q5MLV W1ABC JO21', freq_hz: 900, snr: -3 }])
+        );
+        flushSync();
+        await fireEvent.click(screen.getByText('7Q5MLV W1ABC JO21'), { ctrlKey: true });
+        await flush();
+
+        expect(toastText()).toMatch(/started W1ABC earlier this session/);
+        expect(toastText()).toMatch(/Queued as new/);
+        expect(toastText()).not.toMatch(/already worked/i);
+        expect(ft8PileupStack.items).toHaveLength(1);
+        expect(ft8PileupStack.items[0].repeat).toBe(true);
+    });
+});

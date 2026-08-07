@@ -91,7 +91,11 @@
      pass through the empty space); each panel re-enables pointer events.
      Bottom-centre placement (operator choice 2026-07-08): unobtrusive, off
      the logging card and clear of the header chip. -->
-<div class="pointer-events-none fixed inset-0 z-50 flex items-end px-4 py-6 sm:p-6">
+<!-- z-60: strictly above the z-50 modal layer (ExportDialog / DuplicateDialog /
+     EditQsoModal / Sidebar) — toasts are the feedback for actions taken INSIDE
+     those modals, so a tie lets the later-mounted dialog dim them (dogfood
+     2026-08-07). The layering test pins the comparison, not the number. -->
+<div class="pointer-events-none fixed inset-0 z-60 flex items-end px-4 py-6 sm:p-6">
     <div class="flex w-full flex-col items-center space-y-4">
         {#each toastsState.items as toast (toast.id)}
             <div

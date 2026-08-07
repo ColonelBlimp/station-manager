@@ -28,12 +28,8 @@ const (
 	defaultCallbackFrames = 512
 )
 
-var (
-	ErrNotInitialized = stderr.New("audio playback not initialized")
-	ErrAlreadyPlaying = stderr.New("audio playback already playing")
-	ErrNotPlaying     = stderr.New("audio playback not playing")
-	ErrClosed         = stderr.New("audio playback closed")
-)
+// Lifecycle sentinel errors live in errors.go (build-tag-free) so consumers
+// can classify them in the CGO-free build too.
 
 // Config holds audio playback configuration.
 type Config struct {

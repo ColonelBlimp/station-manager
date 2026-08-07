@@ -30,3 +30,36 @@ describe('Toasts renderer', () => {
         expect(item.textContent).toContain('boom');
     });
 });
+
+/*
+    LAYER CONTRACT — dogfood 2026-08-07: clicking Send in the Export session
+    card raised a toast UNDER the card's overlay, dimmed by its backdrop —
+    both layers sat at z-50 and the later-mounted dialog won. The rule is
+    comparative, not a pinned literal: the toast layer must sit STRICTLY
+    above every modal overlay, because toasts are the feedback for actions
+    taken INSIDE those modals. Renumbering layers is fine; a tie is not.
+*/
+describe('Toasts layering', () => {
+    it('the toast layer sits strictly above the export dialog overlay', async () => {
+        const { openExport } = await import('../operate/state.svelte');
+        const { default: ExportDialog } = await import('../operate/ExportDialog.svelte');
+
+        render(Toasts);
+        render(ExportDialog);
+        openExport();
+        toasts.info('Session emailed ✓');
+        flushSync();
+
+        const zOf = (el: Element | null): number => {
+            const m = /(?:^|\s)z-(\d+)(?:\s|$)/.exec(el?.className ?? '');
+            expect(
+                m,
+                `no z-N utility on ${el?.getAttribute('role') ?? el?.tagName}`
+            ).not.toBeNull();
+            return Number(m![1]);
+        };
+        const toastLayer = (await screen.findByRole('status')).closest('.fixed');
+        const dialogLayer = screen.getByRole('dialog');
+        expect(zOf(toastLayer)).toBeGreaterThan(zOf(dialogLayer));
+    });
+});

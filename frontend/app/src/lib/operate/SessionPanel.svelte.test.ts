@@ -153,3 +153,78 @@ describe('SessionPanel header count', () => {
         expect(screen.getByRole('heading', { name: /Session \(3\)/ })).toBeInTheDocument();
     });
 });
+
+/*
+    CALLSIGN SEARCH — dogfood 2026-08-07 ("add a simple search as you type
+    field to the session panel for callsigns"). A long FT8 sitting runs to
+    dozens of rows; finding whether/when a call was worked means scrolling.
+    Rules:
+    - substring match, case-insensitive (subsumes prefix; "5gr" finds VK5GR —
+      the fixture differentiates a prefix-only or case-sensitive cut);
+    - the filter is a VIEW: the header count stays the sitting's total;
+    - the no-match state must be tellable from the nearest confusable state,
+      an EMPTY SESSION — different message, and only while a filter is typed.
+*/
+describe('SessionPanel callsign search', () => {
+    const qso = (callsign: string) => ({
+        callsign,
+        timeOn: '14:30:00',
+        band: '20m',
+        mode: 'FT8',
+        rstSent: '',
+        rstRcvd: '',
+        name: '',
+        country: '',
+        comment: '',
+    });
+
+    it('narrows rows to callsigns containing the typed text, case-insensitive', async () => {
+        addSessionQso(qso('W1ABC'));
+        addSessionQso(qso('VK5GR'));
+        addSessionQso(qso('G0XYZ'));
+        render(SessionPanel);
+
+        const box = screen.getByRole('searchbox', { name: /Search session callsigns/ });
+        await fireEvent.input(box, { target: { value: '5gr' } });
+
+        expect(screen.getByText('VK5GR')).toBeInTheDocument();
+        expect(screen.queryByText('W1ABC')).toBeNull();
+        expect(screen.queryByText('G0XYZ')).toBeNull();
+    });
+
+    it('clearing the search restores every row', async () => {
+        addSessionQso(qso('W1ABC'));
+        addSessionQso(qso('VK5GR'));
+        render(SessionPanel);
+
+        const box = screen.getByRole('searchbox', { name: /Search session callsigns/ });
+        await fireEvent.input(box, { target: { value: 'VK' } });
+        expect(screen.queryByText('W1ABC')).toBeNull();
+        await fireEvent.input(box, { target: { value: '' } });
+
+        expect(screen.getByText('W1ABC')).toBeInTheDocument();
+        expect(screen.getByText('VK5GR')).toBeInTheDocument();
+    });
+
+    it('keeps the header count at the sitting total while filtering', async () => {
+        addSessionQso(qso('W1ABC'));
+        addSessionQso(qso('VK5GR'));
+        render(SessionPanel);
+
+        const box = screen.getByRole('searchbox', { name: /Search session callsigns/ });
+        await fireEvent.input(box, { target: { value: 'VK' } });
+
+        expect(screen.getByRole('heading', { name: /Session \(2\)/ })).toBeInTheDocument();
+    });
+
+    it('a no-match search reads differently from an empty session', async () => {
+        addSessionQso(qso('W1ABC'));
+        render(SessionPanel);
+
+        const box = screen.getByRole('searchbox', { name: /Search session callsigns/ });
+        await fireEvent.input(box, { target: { value: 'ZZZZ' } });
+
+        expect(screen.getByText(/No callsigns match/)).toBeInTheDocument();
+        expect(screen.queryByText(/No QSOs logged/)).toBeNull();
+    });
+});
