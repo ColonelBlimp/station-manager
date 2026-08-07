@@ -1,10 +1,12 @@
 package qsoservice
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -33,4 +35,29 @@ func forwarderNamed(names []string, name string) bool {
 	return slices.ContainsFunc(names, func(n string) bool {
 		return strings.EqualFold(n, name)
 	})
+}
+
+// refuseBulkBackfillImport gates an import's forwardTo selection (review
+// 2026-08-07 #1): an import IS a bulk catch-up batch by definition, so naming
+// a destination that forbids bulk backfill (forwarding.NoBulkBackfill —
+// ClubLog's realtime.php rule, a written commitment whose violation gets the
+// application API key blocked) refuses the whole import UP FRONT, before
+// anything is stored. Refusal, not silent narrowing, per the force_unsupported
+// posture (enqueue.go review round 2 #1): an operator who asked for clublog
+// must not be told "imported" while nothing was queued. Matches names the way
+// forwarderNamed does, since the CLI passes the operator's own typing. The
+// LIVE submit path never calls this — as-you-log realtime is the sanctioned
+// use of these destinations.
+func refuseBulkBackfillImport(forwardTo []string, forwarders []types.ForwarderConfig) error {
+	for _, fwd := range forwarders {
+		if forwarding.NoBulkBackfill(fwd.Type) && forwarderNamed(forwardTo, fwd.Name) {
+			return &SubmitError{
+				Code: "backfill_unsupported",
+				Message: fmt.Sprintf("forwarder %q accepts retries of failed uploads only; an "+
+					"import is a bulk catch-up batch — upload an ADIF export on the destination's "+
+					"website instead", fwd.Name),
+			}
+		}
+	}
+	return nil
 }

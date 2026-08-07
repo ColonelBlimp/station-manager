@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/enums/bands"
@@ -211,26 +210,18 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	if merged.ContactedStation.Country == "" {
 		return types.Qso{}, &SubmitError{Code: "missing_required_field", Message: "country cannot be empty"}
 	}
+	// Schema-mirroring length caps, shared with prepareQso (review 2026-08-07 #3).
+	if err := validateSchemaLengths(merged.QsoDetails.RstSent, merged.QsoDetails.RstRcvd,
+		merged.ContactedStation.Country, false); err != nil {
+		return types.Qso{}, err
+	}
 
 	// ---- Time coherence ----
-	// Minute precision so a mixed HHMM/HHMMSS pair can't trip a false overnight
-	// error via lexical comparison of unequal widths.
-	if utils.TimeToHHMM(merged.QsoDetails.TimeOn) > utils.TimeToHHMM(merged.QsoDetails.TimeOff) {
-		if merged.QsoDetails.QsoDateOff == "" || merged.QsoDetails.QsoDateOff == merged.QsoDetails.QsoDate {
-			return types.Qso{}, &SubmitError{
-				Code:    "invalid_time_range",
-				Message: "time_on is after time_off without a qso_date_off on the following day",
-			}
-		}
-		onDate, _ := time.Parse("20060102", merged.QsoDetails.QsoDate)
-		offDate, _ := time.Parse("20060102", merged.QsoDetails.QsoDateOff)
-		if !offDate.Equal(onDate.AddDate(0, 0, 1)) {
-			return types.Qso{}, &SubmitError{
-				Code: "invalid_time_range",
-				Message: fmt.Sprintf("qso_date_off (%s) must be the day after qso_date (%s) when time_on is after time_off",
-					merged.QsoDetails.QsoDateOff, merged.QsoDetails.QsoDate),
-			}
-		}
+	// Both directions, seconds-aware where both times carry them — the shared
+	// validateTimeCoherence (review 2026-08-07 #4).
+	if err := validateTimeCoherence(merged.QsoDetails.TimeOn, merged.QsoDetails.TimeOff,
+		merged.QsoDetails.QsoDate, merged.QsoDetails.QsoDateOff, false); err != nil {
+		return types.Qso{}, err
 	}
 
 	// ---- Dedupe recompute + collision check ----
@@ -306,6 +297,17 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 			return types.Qso{}, &SubmitError{
 				Code:    "duplicate_key",
 				Message: "edit would collide with another QSO in this logbook",
+			}
+		}
+		// The revision guard refused a stale snapshot (review 2026-08-07 #2): a
+		// concurrent edit committed after this request fetched the row. Without
+		// the refusal the second write would silently revert the first edit's
+		// unrelated fields and append a duplicate before-image to the audit
+		// chain. 409: the caller re-fetches and re-applies.
+		if stderr.Is(err, errors.ErrStaleRevision) {
+			return types.Qso{}, &SubmitError{
+				Code:    "edit_conflict",
+				Message: "the QSO changed while this edit was in flight — reload it and re-apply the edit",
 			}
 		}
 		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to update QSO")

@@ -76,8 +76,12 @@ func (s *Service) Submit(ctx context.Context, logbookID int64, rec adif.Record, 
 // a historical logbook must never auto-upload to QRZ/ClubLog (retrospective
 // backfill is operator-driven, never automatic — ADR 0022). `smd import
 // --forward qrz,…` is the explicit opt-in; bulk backfill of an already-stored
-// log is the logbook SPA's job, not the importer's.
+// log is the logbook SPA's job, not the importer's. A destination that forbids
+// bulk backfill entirely refuses up front (refuseBulkBackfillImport).
 func (s *Service) SubmitImport(ctx context.Context, logbookID int64, rec adif.Record, force bool, forwardTo []string) (SubmitResult, error) {
+	if err := refuseBulkBackfillImport(forwardTo, s.Config.Forwarders()); err != nil {
+		return SubmitResult{}, err
+	}
 	return s.submit(ctx, logbookID, rec, force, true, forwardTo)
 }
 
@@ -222,23 +226,10 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 	}
 
 	// ---- Validate time coherence ----
-	// Compare at minute precision so a mixed HHMM/HHMMSS pair can't trip a false
-	// "TIME_ON after TIME_OFF" via lexical string comparison of unequal widths.
-	if utils.TimeToHHMM(timeOn) > utils.TimeToHHMM(timeOff) {
-		if qsoDateOff == "" || qsoDateOff == qsoDate {
-			return types.Qso{}, "", &SubmitError{
-				Code:    "invalid_time_range",
-				Message: "TIME_ON is after TIME_OFF without a QSO_DATE_OFF on the following day",
-			}
-		}
-		onDate, _ := time.Parse("20060102", qsoDate)
-		offDate, _ := time.Parse("20060102", qsoDateOff)
-		if !offDate.Equal(onDate.AddDate(0, 0, 1)) {
-			return types.Qso{}, "", &SubmitError{
-				Code:    "invalid_time_range",
-				Message: fmt.Sprintf("QSO_DATE_OFF (%s) must be the day after QSO_DATE (%s) when TIME_ON is after TIME_OFF", qsoDateOff, qsoDate),
-			}
-		}
+	// Both directions, seconds-aware where both times carry them — the shared
+	// validateTimeCoherence (review 2026-08-07 #4).
+	if err := validateTimeCoherence(timeOn, timeOff, qsoDate, qsoDateOff, true); err != nil {
+		return types.Qso{}, "", err
 	}
 
 	// ---- Normalize frequency ----
@@ -318,6 +309,13 @@ func (s *Service) prepareQso(rec adif.Record, logbookID int64, logbookCallsign s
 		if strings.TrimSpace(qso.QsoDetails.RstRcvd) == "" {
 			qso.QsoDetails.RstRcvd = "59"
 		}
+	}
+
+	// Schema-mirroring length caps, after the defaults so the final values are
+	// what is checked (review 2026-08-07 #3).
+	if err := validateSchemaLengths(qso.QsoDetails.RstSent, qso.QsoDetails.RstRcvd,
+		qso.ContactedStation.Country, true); err != nil {
+		return types.Qso{}, "", err
 	}
 
 	// ---- Dedupe key ----

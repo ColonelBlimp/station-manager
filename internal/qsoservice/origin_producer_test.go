@@ -75,16 +75,19 @@ func importRecord(call, timeOn string) adif.Record {
 // submit(); only the isImport flag separates them, which is what makes this the
 // easiest pair in the daemon to get backwards.
 func TestOrigin_ImportBatchEnqueuesAsImport(t *testing.T) {
-	s := newTestService(t, enabledClublog())
+	// qrz, not clublog: the import gate refuses no-bulk-backfill destinations
+	// outright (review 2026-08-07 #1), and this test's rule is ORIGIN attribution,
+	// not destination policy.
+	s := newTestService(t, enabledQRZ())
 	lbID := seedLogbook(t, s, "Main", "G0XYZ")
 
 	res, err := s.SubmitImportBatch(context.Background(), lbID,
-		[]adif.Record{importRecord("M0AAA", "0901")}, []string{"clublog"}, 10, nil)
+		[]adif.Record{importRecord("M0AAA", "0901")}, []string{"qrz"}, 10, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Stored)
 
 	qsoID := qsoIDByCall(t, s, lbID, "M0AAA")
-	require.Equal(t, "import", originOf(t, s, qsoID, "clublog", "insert"),
+	require.Equal(t, "import", originOf(t, s, qsoID, "qrz", "insert"),
 		"a bulk import must record origin=import, not the live-logging value")
 }
 
@@ -109,7 +112,8 @@ func TestOrigin_ImportBatchEnqueuesAsImport(t *testing.T) {
 // That the batch transaction rolled back is what makes this decisive: the good
 // record's upload row can only have been written by the fallback.
 func TestOrigin_ImportBatchFallbackStillEnqueuesAsImport(t *testing.T) {
-	s := newTestService(t, enabledClublog())
+	// qrz for the same reason as the batch test above (review 2026-08-07 #1).
+	s := newTestService(t, enabledQRZ())
 	lbID := seedLogbook(t, s, "Main", "G0XYZ")
 	ctx := context.Background()
 
@@ -129,7 +133,7 @@ func TestOrigin_ImportBatchFallbackStillEnqueuesAsImport(t *testing.T) {
 	// phase-1 dedupe passes it through and phase 2 aborts on the unique index.
 	res, err := s.SubmitImportBatch(ctx, lbID,
 		[]adif.Record{rec("", "M0BBB", "0902"), rec(uuid, "K3CCC", "1400")},
-		[]string{"clublog"}, 10, nil)
+		[]string{"qrz"}, 10, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Stored, "the good record must survive via the fallback")
 	require.Len(t, res.Errors, 1, "the collision must be reported per-record")
@@ -138,7 +142,7 @@ func TestOrigin_ImportBatchFallbackStillEnqueuesAsImport(t *testing.T) {
 			"would have committed and this would be testing the batch producer")
 
 	qsoID := qsoIDByCall(t, s, lbID, "M0BBB")
-	require.Equal(t, "import", originOf(t, s, qsoID, "clublog", "insert"),
+	require.Equal(t, "import", originOf(t, s, qsoID, "qrz", "insert"),
 		"the record-by-record fallback must record the same origin as the batch path")
 }
 

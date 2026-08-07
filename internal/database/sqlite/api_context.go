@@ -480,7 +480,23 @@ func (s *Service) SchemaVersionWithContext(ctx context.Context) (version uint64,
 // errors.ErrNotFound when no active row matched. exec is *sql.DB or *sql.Tx.
 func updateActiveQso(ctx context.Context, exec boil.ContextExecutor, model models.Qso) error {
 	const op errors.Op = "sqlite.updateActiveQso"
-	cols := models.M{
+	n, err := models.Qsos(
+		models.QsoWhere.ID.EQ(model.ID),
+		models.QsoWhere.DeletedAt.IsNull(),
+	).UpdateAll(ctx, exec, activeQsoCols(model))
+	if err != nil {
+		return errors.New(op).WithErr(err)
+	}
+	if n == 0 {
+		return errors.New(op).WithErr(errors.ErrNotFound).WithMsgf("no active QSO with id %d", model.ID)
+	}
+	return nil
+}
+
+// activeQsoCols is the one column map both active-row updaters share, so the
+// CAS variant below cannot drift from the plain one.
+func activeQsoCols(model models.Qso) models.M {
+	return models.M{
 		models.QsoColumns.UUID:           model.UUID,
 		models.QsoColumns.LogbookID:      model.LogbookID,
 		models.QsoColumns.Call:           model.Call,
@@ -497,14 +513,40 @@ func updateActiveQso(ctx context.Context, exec boil.ContextExecutor, model model
 		models.QsoColumns.DedupeKey:      model.DedupeKey,
 		models.QsoColumns.ModifiedAt:     model.ModifiedAt,
 	}
+}
+
+// updateActiveQsoAtRevision is updateActiveQso with an optimistic-concurrency
+// guard on the trigger-maintained revision counter (ADR 0050; review
+// 2026-08-07 #2): the UPDATE matches only while the row still holds the
+// caller's fetched revision, so two edits that both read revision N cannot
+// both write — the loser's UPDATE matches zero rows. A zero-row result is
+// disambiguated with a same-executor active-row probe: still present means
+// the revision moved (ErrStaleRevision → the edit path's 409 edit_conflict);
+// absent keeps updateActiveQso's ErrNotFound semantics (deleted/vanished →
+// 404). The revision column itself stays OUT of the column map — the 0005
+// trigger owns the bump.
+func updateActiveQsoAtRevision(ctx context.Context, exec boil.ContextExecutor, model models.Qso, expectedRev int64) error {
+	const op errors.Op = "sqlite.updateActiveQsoAtRevision"
 	n, err := models.Qsos(
 		models.QsoWhere.ID.EQ(model.ID),
 		models.QsoWhere.DeletedAt.IsNull(),
-	).UpdateAll(ctx, exec, cols)
+		models.QsoWhere.Revision.EQ(expectedRev),
+	).UpdateAll(ctx, exec, activeQsoCols(model))
 	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
 	if n == 0 {
+		exists, eerr := models.Qsos(
+			models.QsoWhere.ID.EQ(model.ID),
+			models.QsoWhere.DeletedAt.IsNull(),
+		).Exists(ctx, exec)
+		if eerr != nil {
+			return errors.New(op).WithErr(eerr).WithMsg("disambiguating zero-row revision-guarded update")
+		}
+		if exists {
+			return errors.New(op).WithErr(errors.ErrStaleRevision).
+				WithMsgf("QSO %d changed since revision %d was fetched", model.ID, expectedRev)
+		}
 		return errors.New(op).WithErr(errors.ErrNotFound).WithMsgf("no active QSO with id %d", model.ID)
 	}
 	return nil
@@ -2741,7 +2783,10 @@ func (s *Service) UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) er
 
 	model.ModifiedAt = null.TimeFrom(time.Now().UTC())
 
-	return updateActiveQso(ctx, tx, model)
+	// The edit path is revision-guarded: qso.Revision is the caller's fetched
+	// snapshot (json:"-", so it can only come from a fetch), and the write
+	// refuses if the row has moved past it (review 2026-08-07 #2).
+	return updateActiveQsoAtRevision(ctx, tx, model, qso.Revision)
 }
 
 // DeleteQsoByIDTx soft-deletes a QSO within the caller-supplied tx by

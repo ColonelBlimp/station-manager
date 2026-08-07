@@ -101,7 +101,10 @@ func (s *Server) handleUpdateQso(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if se := qsoservice.IsSubmitError(err); se != nil {
 			status := http.StatusBadRequest
-			if se.Code == "duplicate_key" {
+			// duplicate_key: the edit collides with another QSO's dedupe key.
+			// edit_conflict: the row changed since this request fetched it
+			// (revision CAS, review 2026-08-07 #2) — re-fetch and re-apply.
+			if se.Code == "duplicate_key" || se.Code == "edit_conflict" {
 				status = http.StatusConflict
 			}
 			s.writeError(w, status, se.Code, se.Message, op)

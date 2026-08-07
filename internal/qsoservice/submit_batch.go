@@ -67,6 +67,12 @@ func (s *Service) SubmitImportBatch(
 		batchSize = defaultImportBatchSize
 	}
 
+	// Before ANY record is stored: a forwardTo naming a no-bulk-backfill
+	// destination refuses the whole run (review 2026-08-07 #1).
+	if err := refuseBulkBackfillImport(forwardTo, s.Config.Forwarders()); err != nil {
+		return ImportBatchResult{}, err
+	}
+
 	logbookCallsign, lberr := s.DB.LogbookCallsignByIDWithContext(ctx, logbookID)
 	if lberr != nil {
 		if stderr.Is(lberr, errors.ErrNotFound) {

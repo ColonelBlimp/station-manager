@@ -2,9 +2,11 @@ package qsoservice
 
 import (
 	"context"
+	stderr "errors"
 	"strconv"
 	"strings"
 
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -56,10 +58,15 @@ func (s *Service) Restore(ctx context.Context, logbookID int64, qso types.Qso) (
 	}
 
 	// Idempotence: an existing row (live OR tombstone) wins — restore fills
-	// gaps, never overwrites.
+	// gaps, never overwrites. A probe FAULT is not absence (review 2026-08-07
+	// #5, the 2026-07-21 #6 shape): falling through would attempt the insert
+	// on an unproven premise and attribute whatever happens next to the wrong
+	// operation, so anything but a clean not-found propagates.
 	if _, err := s.DB.FetchQsoByUUIDIncludingDeletedWithContext(ctx, qso.UUID); err == nil {
 		s.logRestore(qso.UUID, logbookID, RestoreSkippedExisting)
 		return RestoreSkippedExisting, nil
+	} else if !stderr.Is(err, errors.ErrNotFound) {
+		return "", errors.New(op).WithErr(err).WithMsgf("qso %s uuid existence check", qso.UUID)
 	}
 
 	qso.ID = 0 // the cloud payload may carry the OLD local id; never reuse it
@@ -84,10 +91,29 @@ func (s *Service) Restore(ctx context.Context, logbookID int64, qso types.Qso) (
 	}
 
 	if _, err := s.DB.InsertRestoredQsoWithContext(ctx, qso); err != nil {
-		return "", errors.New(op).WithErr(err).WithMsgf("insert restored qso %s", qso.UUID)
+		return s.classifyRestoreInsertErr(ctx, qso.UUID, logbookID, err)
 	}
 	s.logRestore(qso.UUID, logbookID, RestoreStored)
 	return RestoreStored, nil
+}
+
+// classifyRestoreInsertErr resolves an InsertRestoredQso failure (review
+// 2026-08-07 #5). A UNIQUE violation can be the check-to-insert race on uuid —
+// another restore of the same row committed after this call's existence probe
+// — and the documented contract is idempotence, so refetch by uuid: found
+// means the row simply already exists (skipped_existing), exactly what the
+// probe would have reported a moment later. Everything else — including a
+// dedupe-key collision with a row of DIFFERENT identity, where the refetch
+// misses — propagates, attributed to the insert.
+func (s *Service) classifyRestoreInsertErr(ctx context.Context, uuid string, logbookID int64, insertErr error) (RestoreStatus, error) {
+	const op errors.Op = "qsoservice.Restore"
+	if sqlite.IsUniqueConstraintError(insertErr) {
+		if _, ferr := s.DB.FetchQsoByUUIDIncludingDeletedWithContext(ctx, uuid); ferr == nil {
+			s.logRestore(uuid, logbookID, RestoreSkippedExisting)
+			return RestoreSkippedExisting, nil
+		}
+	}
+	return "", errors.New(op).WithErr(insertErr).WithMsgf("insert restored qso %s", uuid)
 }
 
 // logRestore writes the per-call restore record (logging-gaps Q1): stored and

@@ -68,7 +68,7 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 - **Gating:** Always-on.
 - **Request:** Path `{uuid}`. JSON body overlaid on the existing QSO (empty → no-op); immutable fields (upload statuses) stash-restored.
 - **Response:** **200**, body = updated `types.Qso`.
-- **Errors:** 400 `invalid_uuid`/`invalid_json`/`missing_required_field`/`invalid_field_value`/`invalid_time_range`; 409 `duplicate_key`; 404 `not_found`; 500 `update_failed`/`db_error`.
+- **Errors:** 400 `invalid_uuid`/`invalid_json`/`missing_required_field`/`invalid_field_value`/`invalid_time_range`; 409 `duplicate_key` (dedupe collision) / `edit_conflict` (the QSO changed since this request fetched it — revision CAS; re-fetch and re-apply); 404 `not_found`; 500 `update_failed`/`db_error`.
 
 ### `DELETE /v1/qso/{uuid}`
 - **Purpose:** Soft-delete a QSO and enqueue a delete-forward.

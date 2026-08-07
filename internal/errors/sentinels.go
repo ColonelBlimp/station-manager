@@ -31,3 +31,13 @@ var ErrLogbookHasQsos = stderr.New("logbook contains QSOs")
 // internal/forwarding #4). Distinct from ErrNotFound (the row is gone
 // — a genuine bug).
 var ErrUploadReArmed = stderr.New("upload row re-armed by concurrent edit")
+
+// ErrStaleRevision signals an optimistic-concurrency refusal on the QSO edit
+// path (review 2026-08-07 #2): the row's trigger-maintained revision counter
+// (ADR 0050) moved between the caller's fetch and its UPDATE, so the
+// revision-guarded write matched zero rows. Distinct from ErrNotFound (the
+// row is gone or soft-deleted): here the row EXISTS at a newer revision, and
+// the caller must refuse the stale edit — silently re-applying it would
+// overwrite the newer one (the lost-update shape) and write a duplicate
+// before-image into the audit chain. Handlers map this to 409 edit_conflict.
+var ErrStaleRevision = stderr.New("stale revision")
