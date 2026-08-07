@@ -134,7 +134,7 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - ~~[2026-07-25] the worked panel for phone/cw needs the table to be set to table-fixed as the columns are bleeding into each other and a large field (note) overscolls.~~ **→ DONE 2026-07-26.** `table-fixed` was already there — the missing piece was **`w-full`**. Per CSS 2.1 §17.5.2 a table with `width: auto` uses the AUTOMATIC layout algorithm and `table-layout: fixed` is ignored, so the `w-*` on the th row never bound: cells grew to fit content (the bleeding) and a long Notes value stretched the table into a horizontal overscroll instead of ellipsizing. Exactly the SessionPanel bug fixed 2026-07-18, same one-word fix. A survey of every `<table>` in the app confirms WorkedPanel was the ONLY one missing `w-full`; the other three already had it.
 - ~~[2026-07-25] session panel: map button is redundant~~ **→ DONE 2026-07-26.** Removed. The sidebar's bottom-utilities Map link is always on screen and opens the identical new tab (same href/target/rel), so the tile button was pure duplication. Its test coverage MOVED rather than vanished — the map link was previously tested only through SessionPanel, so a new `Sidebar.svelte.test.ts` now guards it (the `target="_blank"` matters: opening in-tab would unmount a live FT8 run).
 - ~~[2026-07-26] ftp-all.txt should be enhanced to do archiving (gzip) and log rotation.~~ **→ DONE 2026-07-26: `ft8-all.txt` now rotates via lumberjack (10 MB × 5 gzipped backups) and is created 0600 (was 0644, and a legacy log is tightened on open). `smd.log` already had rotation + gzip (100 MB × 5 / 30 days); the survey also found `cmd/smd/startuplog.go` creating smd.log 0644 — fixed to 0600.**
-- [2026-07-26] add a world time widget
+- ~~[2026-07-26] add a world time widget~~ **→ backlog P3 (triage 2026-08-07): decide together with the map time-zone overlay below — they answer different questions and one decision should cover both.** The 2026-08-01 analysis below stands (open questions remain the operator's).
   — **TRIAGED 2026-08-01, not started.** Nothing exists: no clock component anywhere
   in `frontend/app/src` (the UTC references are all timestamp FORMATTING inside
   Ft8/Logging cards, not a clock). SPA-only, no daemon change, no rig interaction —
@@ -145,9 +145,10 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   second-accurate — FT8 already depends on system time being right, so a clock that
   disagreed with the slot clock would be actively misleading, and that argues for
   driving it from the same source rather than a fresh `new Date()`.
-- [2026-08-04] Map: overlay the time zones — or the CURRENT TIME along each zone
-  line. Raised while reviewing what is left on the map. **Analysed, not started;
-  the analysis is here so it is not re-derived.**
+- ~~[2026-08-04] Map: overlay the time zones — or the CURRENT TIME along each zone
+  line.~~ **→ backlog P3 (triage 2026-08-07): one decision with the world-time widget
+  above; recommendation (A) solar stands.** Raised while reviewing what is left on
+  the map. **Analysed, not started; the analysis is here so it is not re-derived.**
   — **RELATED TO THE WORLD-TIME WIDGET ABOVE, and the first thing to settle:**
   they answer different questions. A widget says what time it is in Tokyo; the
   overlay says what time it is WHERE THIS ARC LANDS. Decide whether the overlay
@@ -182,8 +183,15 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   — **Open for the operator, none to be invented:** labels at the top edge or
   along a latitude; every band or thinned on a narrow window; and whether the
   lines show at all zoom levels.
-- [2026-07-27] FT8 TX drive collapsed mid-session — rig keyed but made almost no
-  power, so the amp (needs ~10 W) never came up. ROOT CAUSE UNKNOWN. Everything
+- ~~[2026-07-27] FT8 TX drive collapsed mid-session — rig keyed but made almost no
+  power~~ **TRIAGED 2026-08-07 — detection SHIPPED, text kept as the reasoning
+  trail.** The "read the rig's PO meter" fix this entry proposed was built as the
+  drive alarm (2026-07-29/30) and extended by ADR 0064 continuous ALC/PO polling
+  (2026-08-07). Of the two "either way" follow-ups: (a) `ft8.tx.amplitude` is
+  tracked in backlog P2 "FT8 audio levels" (`txAmplitude` Pwr control); (b)
+  arm-time sink-name+volume logging → backlog (triage 2026-08-07). Original:
+  rig keyed but made almost no power, so the amp (needs ~10 W) never came up.
+  ROOT CAUSE UNKNOWN. Everything
   upstream was verified healthy: CAT ok, PTT asserted (ft8-all.txt "Transmitting"
   lines prove KeyTx succeeded), mode DATA-U, correct frequency, correct default
   sink (the rig's PCM2903C codec), and a full QSO had completed on the same build
@@ -204,8 +212,11 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   and hung. The 07-28 entry establishes the collapse is silently detectable from
   the decode log (answers stop while decodes continue) and proposes the real fix:
   read the rig's PO meter while keyed.**
-- [2026-07-28] SPA shows **"Cannot reach the daemon"** on a tab that was backgrounded
-  while the screen blanked (operator had to log back in). The daemon was healthy
+- ~~[2026-07-28] SPA shows **"Cannot reach the daemon"** on a tab that was backgrounded
+  while the screen blanked~~ **→ backlog P2 infra (triage 2026-08-07): fix ONCE at
+  the SSE-client layer, only-when-dead (a healthy `/v1/ft8/events` stream must never
+  be torn down — closing it starts the TX-disarm linger). The 2026-08-02 narrowing
+  stands: stale-display fix, not TX-safety.** Original: operator had to log back in. The daemon was healthy
   throughout — `smd` active, no restart, answering HTTP 200, FT8 still transmitting
   and decoding, and a QSO (IK6DLK) logged after the unlock. So the browser suspended
   the backgrounded tab, its SSE `EventSource` dropped, and **it did not
@@ -259,8 +270,15 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   only-when-dead over always-recreate still holds, but for TAB SWITCHING rather than
   screen blanking: closing `/v1/ft8/events` starts the 5 s linger, and a reopen that
   fails would disarm TX mid-run, so a healthy stream must never be torn down.
-- [2026-07-28] **STUCK TX — 4th incident, and the first where the RIG stopped
-  answering CAT while still keyed.** 80m FT8 CQ run (3.573 MHz, +2750 Hz), operator
+- ~~[2026-07-28] **STUCK TX — 4th incident, and the first where the RIG stopped
+  answering CAT while still keyed.**~~ **TRIAGED 2026-08-07 — the build follow-ups
+  are all dispatched; text kept as the reasoning trail.** Closed: (d) meter reads →
+  drive alarm + ADR 0064 · (b) alarm-window probe logging → `txrecheck.go` · (g)
+  idle inhibitor → built + A/B-proven. Moved: (a) mode-scoped TOT → appended to the
+  backlog P3 TOT entry · (e)/(f) playback reopen-on-collapse → backlog P3
+  (needs-trigger; the disarm/re-arm recovery is still UNVERIFIED — try it at the
+  next occurrence). Operator-side (not code): (c) choke/ferrites · the 80 m power
+  ladder · deliberate mic unplug/replug test. Original entry: 80m FT8 CQ run (3.573 MHz, +2750 Hz), operator
   in the shack 2 m away and NOT touching the rig; no rig settings changed since the
   2026-07-23 RTS fix. Ended when the operator switched the radio off at ~04:15:30.
   **Trace** (local time, `smd.log`): 50 clean CQ cycles, every one keying
@@ -710,8 +728,12 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   next to the TOT section it depends on, stating that the results are
   unpredictable at best and can damage equipment at worst; plus a cause paragraph
   in the troubleshooting *"The rig transmits and won't stop"* entry.
-- [2026-07-28] **THE RIG INTERMITTENTLY IGNORES THE FIRST `TX0;` — 6 occurrences,
-  and it is NOT RF, NOT power, and NOT the antenna.** Separate finding from the
+- ~~[2026-07-28] **THE RIG INTERMITTENTLY IGNORES THE FIRST `TX0;` — 6 occurrences,
+  and it is NOT RF, NOT power, and NOT the antenna.**~~ **→ backlog P3 (triage
+  2026-08-07, parked on thin data): the recovery machinery works in the field
+  (attempt 1, ~1 s, every time); open halves are the common-factor sweep (4 usable
+  samples) and the persistent-`2` escalation re-look (needs a duration threshold —
+  operator's call). Text kept as the reasoning trail.** Separate finding from the
   stuck-TX entry above, and deliberately NOT filed as part of it (see "two
   readings" below). Signature: after a normal unkey the FTdx10 answers **`1`** —
   CAT TX still keyed — to the confirmation query. SM's `case "1"` path raises
@@ -775,6 +797,13 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 
 **Status: MEASURED, on hardware, with a controlled drive sweep and a recovery
 control. This is the first time the collapse has been made observable.**
+
+**TRIAGED 2026-08-07 — follow-ups dispatched:** 1 (alarm on silence) BUILT →
+`drivealarm.go` · 2 (`last` onset treatment) still open — carried to backlog P3
+with the FT-710 item · 3 (finer sweep) operator/optional · 4 (push-rate
+tolerance) honoured by every consumer built since · 5 CORRECTED by the 07-30
+entry (CQ runs are unbounded) · 6 (FT-710 rigdef `RM`/`MS`/`METERPOLL`
+unverified) still true → backlog P3. Text kept as the reasoning trail.
 
 ### What was built
 
@@ -913,6 +942,15 @@ down after an earlier volume test.
 
 ## [2026-07-30] DRIVE ALARM — on-air acceptance PASSED, and two findings that change what it proves
 
+**TRIAGED 2026-08-07:** Finding 2 (banner time anchor) was BUILT same day.
+Finding 1's evidence step (inter-frame gaps + value histogram in the keyed
+window) is BUILT — `withMeterContext` gap fields + `_hist` buckets in
+`meters.go` — so the value-aware-rule decision now waits on the next real
+collapse being read from that logging. Finding 1b (overdrive invisible) is
+PARTLY covered by ADR 0064: the ALC chip shows red on overdrive whenever the
+FT8 view is open; an overdrive ALARM remains undecided. Text kept as the
+reasoning trail.
+
 Layer 3 of the ATDD plan, run on the air at operating power (not the 5 W dummy
 load of the sweep) during a live CQ run. Both cases fired; no healthy slot fired.
 Citations are `smd.log` timestamps from 2026-07-30.
@@ -1046,7 +1084,10 @@ applies to repeats of a rung while working one answerer; **a CQ run is unbounded
 until Abandon**, which is what `robustness-pass-position` and ADR 0033 already
 said. Plan future on-air experiments accordingly.
 
-- [2026-07-31] Move the shell warning banners to **sticky toasts** for consistency.
+- ~~[2026-07-31] Move the shell warning banners to **sticky toasts** for consistency.~~
+  **→ backlog P3 (triage 2026-08-07): decide together with the notification history
+  rail below and ADR 0060 (alert placement, itself blocked on observation). The
+  S5/S6 don't-flatten constraint and the daemon-retractable-toast wrinkle stand.**
   There are now three stacked shell-level surfaces — `TxAlarmBanner`,
   `DriveAlarmBanner` and the new `DriveMonitorNotice` — and each one reflows the
   whole page downward, whereas toasts stack in a corner without moving the content
@@ -1066,8 +1107,11 @@ said. Plan future on-air experiments accordingly.
   system may not have today. Check before scoping. Open question for the operator:
   does a sticky toast that vanishes on its own read as "handled" or as "lost"?
 
-- [2026-07-31] **Notification history rail — transient warnings are unrecoverable
-  today.** Trigger: a red banner flashed and was gone before the operator could
+- ~~[2026-07-31] **Notification history rail — transient warnings are unrecoverable
+  today.**~~ **→ backlog P3 (triage 2026-08-07): decide with the sticky-toast note
+  above; the substrate is ADR 0061's event store (alarms pilot slice) + ship-gate
+  (c) — build the rail on that, never on `smd.log`. Retention/persistence/badge
+  questions remain the operator's.** Original: Trigger: a red banner flashed and was gone before the operator could
   read it; answering "what was that?" needed a grep of a 14 MB `smd.log`, which no
   ordinary user can do. (It was real — `tx_still_keyed` at 05:09:13, cleared
   05:09:14 after one `tx_off` re-send. 7 such alarms in 10 days; the last 5 all
@@ -1091,7 +1135,7 @@ said. Plan future on-air experiments accordingly.
   so decide the two together. Open questions for the operator, none to be
   invented: retention (last N events, or a time window?); survive a daemon restart
   (persisted) or in-memory only?; unread badge on the icon, or a plain list?
-- [2026-08-01] when answering a cq and auto-work armed, when the contact has completed and nobody calls you, so you start a cq call - the auto-work armed stays active, or the pill stays viewable
+- ~~[2026-08-01] when answering a cq and auto-work armed, when the contact has completed and nobody calls you, so you start a cq call - the auto-work armed stays active, or the pill stays viewable~~
   — **TRIAGED + FIXED 2026-08-01.** The either/or is BOTH, and the pill was innocent:
   `StartCallCq` reset `caller` / `stalledCalls` / `confirmHold` / `contact` for the fresh
   session and never touched `autoWork`, so the run genuinely survived and the badge was
@@ -1109,7 +1153,10 @@ said. Plan future on-air experiments accordingly.
   demonstrated load-bearing by moving the clear after the publish, which leaves W12
   green and V5 red. No SPA change: it rebuilds the whole `qso` object per frame, so the
   `omitempty` on `auto_work_armed` reads as false and the pill goes out.
-- [2026-08-01] add to the map the ablity to filter (select) by band: all to whatever configured bands are in the config.
+- ~~[2026-08-01] add to the map the ablity to filter (select) by band: all to whatever configured bands are in the config.~~
+  **→ backlog P3 (triage 2026-08-07): the 08-01 analysis stands; open question
+  (band-list source (a)/(b)/(c), read = (b) with (a) as ordering hint) is the
+  operator's.**
   — **TRIAGED 2026-08-01, not started. Most of the machinery already exists**, which
   makes this smaller than it sounds: every map row already carries a normalised
   `band` (`mapData.svelte.ts:57`), `bandRank` already gives wavelength ordering,
@@ -1128,7 +1175,10 @@ said. Plan future on-air experiments accordingly.
   hides data), or (c) both — config as the ordering/whitelist with a fallback to the
   data. **My read is (b) with (a) as the ordering hint**, but it is the operator's
   call and (a) alone has a failure mode worth stating out loud.
-- [2026-08-01] ad adjustable (width) headers to the session panel, plus the ability to order columns: asc, desc, raw
+- ~~[2026-08-01] ad adjustable (width) headers to the session panel, plus the ability to order columns: asc, desc, raw~~
+  **→ backlog P3 (triage 2026-08-07): the 08-01 analysis stands — any resize UI
+  must keep `table-fixed` binding widths (the 07-18 fix); persistence + sort-model
+  questions are the operator's.**
   — **TRIAGED 2026-08-01, not started.** `SessionPanel.svelte` has 8 columns at FIXED
   Tailwind widths (`w-20` Time, `w-27` Call, `w-12` Band, `w-14` Mode, `w-10` Sent,
   `w-10` Rcvd, `w-32` Name, `w-32` Country) and no sorting — `{#each session.qsos}`
@@ -1145,12 +1195,43 @@ said. Plan future on-air experiments accordingly.
   which is the precedent for "operator display preference that should survive a
   different browser". **Open for the operator:** persist or per-session, and whether
   sorting is per-column or one active sort at a time.
-- [2026-08-02] Rigs tab: expose the daemon's ACTIVE rig (the one the bridge actually has open, qsoservice activeRigID) so the tab can distinguish it from the configured default. Today only default_rig_id reaches the SPA, so after "Set as default" the two diverge until a restart while the UI can't tell. Needs the active rig on the wire (e.g. /v1/config or /v1/rig/...), then show "active" only when the bridge really has that rig open, plus a "default changed — restart to apply" indicator when default != active. Follow-up to the 2026-08-02 relabel that changed the pill from "active" to "default".
+- ~~[2026-08-02] Rigs tab: expose the daemon's ACTIVE rig (the one the bridge actually has open, qsoservice activeRigID) so the tab can distinguish it from the configured default.~~
+  **→ backlog P2 (triage 2026-08-07): small daemon+SPA feature, needs the active
+  rig on the wire first.** Original: Today only default_rig_id reaches the SPA, so after "Set as default" the two diverge until a restart while the UI can't tell. Needs the active rig on the wire (e.g. /v1/config or /v1/rig/...), then show "active" only when the bridge really has that rig open, plus a "default changed — restart to apply" indicator when default != active. Follow-up to the 2026-08-02 relabel that changed the pill from "active" to "default".
 - ~~[2026-08-06] ft8 rx audio - when TX'ing the panel changes height. Height should remain consistent with temp gauge or msg.~~ **FIXED same day:** the open card now renders a fixed structure in every state — bar track + two fixed-height lines always present, content varies inside them (V6 pins it, `AudioLevelCard.svelte.test.ts`).
-- [2026-08-07] phone/cw port the paste list from the comment field in the logging SPA
+- ~~[2026-08-07] phone/cw port the paste list from the comment field in the logging SPA~~
+  **→ backlog P2 (triage 2026-08-07):** port `commentHistory.svelte.ts` (bounded MRU
+  + dropdown) from the retired SPA into frontend/app's Phone/CW card — port, never
+  patch the source. Behind the FT8 focus.
 - [2026-08-07] export session card - when clicking send, a toast appears by it is not on top, but overlayed by the Export session card and thus dimmed.
+  — **TRIAGED 2026-08-07, fix queued — root cause found:** `Toasts.svelte` and
+  `ExportDialog.svelte` are BOTH `z-50`; the later-mounted dialog wins. NB commit
+  `f6c6fe48` says "Fix toast overlay issue" but its diff is only this /log line —
+  nothing was fixed. One-line layer fix.
 - [2026-08-07] 07:20: clicked VK5GR and got a toast saying already worked this session - but I had not worked
+  — **TRIAGED 2026-08-07 — same defect as the abandon item below, one fix.** The
+  toast keys on the ENGAGED set (deliberately includes abandoned/incomplete
+  contacts, persisted per-tab in sessionStorage), so an earlier engagement that
+  never logged still reads "worked". Mechanism stays (allow_duplicate's
+  over-marking is the safe direction); the WORDING must split: "worked" only on a
+  `session.qsos` hit, engaged-only needs its own message (wording = operator's
+  call, queued for the 2026-08-07 design session).
 - [2026-08-07] answering a CQ automatically arms auto-work.
+  — **TRIAGED 2026-08-07 — as designed, not a bug** (ADR 0059 W9,
+  `sequencer.go:687`: an operator-started session arms a run; answering a CQ is
+  the entry point the feature was asked for). Gated on `ft8.tx.auto_work_callers`
+  — off today stops it. Whether the CHOICE should be per-click instead of policy
+  → the design session below.
 - [2026-08-07] answering a cq-> abandon->answer same cq->toast 'already worked this session' - this should only be true if the QSO has been successfully logged
+  — **TRIAGED 2026-08-07 — folded with the VK5GR item above (one fix, wording
+  split logged-vs-engaged).**
 - [2026-08-07] there should be a way to answer a cq call without arming auto-work. Maybe (discussion only) ctrl+shift+click-on-cq == auto-work; single click-on-cq == work that station only; ctrl+click == add station to pile-up queue?
+  — **TRIAGED 2026-08-07 → design session (auto-work · CQ-answer · operator_pick
+  as one grammar).** Current gestures: single-click CQ = answer (+ auto-work when
+  policy on) · ctrl/cmd-click calling-you row = pile-up · double-click plain row =
+  directed call. The sketch moves the auto-work decision from config policy to
+  per-click; intersects the open `operator_pick` thread (config-accepted,
+  runtime-rejected).
 - [2026-08-07] add a simple search as you typoe field to the session panel for callsigns
+  — **TRIAGED 2026-08-07, fix queued:** nothing exists in `SessionPanel.svelte`;
+  small SPA-only filter field.
