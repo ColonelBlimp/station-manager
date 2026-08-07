@@ -50,12 +50,12 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 - **END OF DAY 2026-08-07: tree CLEAN at `d217ed73`, every review triaged +
   deleted** (9 review rounds today — 8 codex + 1 pasted external — 6 real
-  findings, all fixed same-day RED-first). **DEPLOYED `1152-g80db5a92` at
-  13:55 and went ON AIR**; the deploy now trails THREE runtime commits —
-  `c3d67c82` (ALC amber band → chip reads green at healthy drive),
-  `5c22fdd9` (TX-path fixes: PSK spot attribution + a PTT panic guard),
-  `d217ed73` (logging: duplicate-refusal + enqueue outcome lines) —
-  **redeploy before the next on-air session**.
+  findings, all fixed same-day RED-first). **DEPLOY LEDGER CLEAR:**
+  redeployed at 16:31 on `1159-g90bb2d4d`, postdating the whole tree — the
+  amber chip, TX-path fixes and logging lines are all LIVE (three deploys
+  today: 13:55, ~14:5x, 16:31; on air after the first two). **SM Cloud
+  verified IN SYNC** at the 15:57 reconcile — local 7127 = cloud 7127, zero
+  repairs, every push/stamp_sync success (31 rows added today, 7096→7127).
 - **First live ADR 0064 data:** healthy FT8 drive = **ALC 15–18 every slot,
   PO flat** — broke the chip's zero-only green; **colour bands ratified +
   built** same afternoon (`alc_amber` 30 RATIFIED; `alc_red` 50 still
@@ -80,12 +80,24 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 - **Earlier today** (detail in Current state): ADR 0065 end to end (per-click
   arming + operator_pick, 10 ratified forks) · ADR 0064 full build · inbox
   fully triaged · toast split · session search · morning-log diagnosis.
-- **NEXT:** redeploy (`d217ed73`) → on-air: §4 iii deliberate overdrive →
-  ratify `alc_red` → flip 0064 Accepted · the 0065 sanity checks above ·
-  api A2/A3 (last Tier-1 logging) · findings 9/10 · paste-list port ·
-  ctrl+click-on-CQ gesture (0065, undecided) · Tune-coverage question.
+- **NEXT:** on-air: §4 iii deliberate overdrive → ratify `alc_red` → flip
+  0064 Accepted · the 0065 sanity checks above · api A2/A3 (last Tier-1
+  logging) · findings 9/10 · paste-list port · ctrl+click-on-CQ gesture
+  (0065, undecided) · Tune-coverage question.
 
 ## Current state (as of 2026-08-07)
+
+### 2026-08-07 (close of day) — redeployed; SM Cloud verified in sync
+
+Operator redeployed at 16:31 (`1159-g90bb2d4d`, third deploy of the day after
+13:55 and ~14:5x) — everything in the tree is live, the deploy ledger is
+clear. SMC checked on request: the 15:57 hourly reconcile read `in_sync:true`
+local 7127 = cloud 7127 with zero repairs; the 16:30:43 stamp_sync burst
+(post-upload ADIF stamps re-riding the worker) was all success/persisted; no
+failed or unreachable outcomes in the recent log. 31 rows added today
+(7096→7127), cloud tracking exactly. The fresh reconciler started with the
+16:31 restart and confirms on its first run (~2 min after start, going by the
+morning's pattern).
 
 ### 2026-08-07 (late evening) — the logging round: two quick wins and Tier 1 closed
 
