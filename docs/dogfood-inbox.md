@@ -1152,3 +1152,4 @@ said. Plan future on-air experiments accordingly.
 - [2026-08-07] 07:20: clicked VK5GR and got a toast saying already worked this session - but I had not worked
 - [2026-08-07] answering a CQ automatically arms auto-work.
 - [2026-08-07] answering a cq-> abandon->answer same cq->toast 'already worked this session' - this should only be true if the QSO has been successfully logged
+- [2026-08-07] there should be a way to answer a cq call without arming auto-work. Maybe (discussion only) ctrl+shift+click-on-cq == auto-work; single click-on-cq == work that station only; ctrl+click == add station to pile-up queue?
