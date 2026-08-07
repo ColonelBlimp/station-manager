@@ -109,6 +109,13 @@ type Service struct {
 	// so it adds no lock nesting at all.
 	dialSource func() (float64, bool)
 
+	// captureListener reports the capture-session lifecycle outward (ADR 0064:
+	// cmd/smd wires it to bridge.SetFt8CaptureLive so the FT8 meter poll lives
+	// and dies with the session). Called under s.mu at the three flip sites —
+	// same s.mu → bridge lock order as catLive, and the bridge never calls
+	// back into ft8. Nil (no bridge / tests) is fine.
+	captureListener func(live bool)
+
 	bgCancel context.CancelFunc // cancels subsystem-lifetime loops (catReconcile)
 	bgWg     sync.WaitGroup     // subsystem-lifetime loops; drained by Stop
 
@@ -555,7 +562,7 @@ func (s *Service) startCaptureLocked() {
 		return
 	}
 	s.captureCancel = cancel
-	s.capturing = true
+	s.setCapturingLocked(true)
 	s.captureGen++
 	gen := s.captureGen
 
@@ -666,7 +673,7 @@ func (s *Service) onCaptureLoopExit(runCtx context.Context, gen uint64, who stri
 		return
 	}
 	wasCapturing := s.capturing
-	s.capturing = false
+	s.setCapturingLocked(false)
 	if s.captureCancel != nil {
 		s.captureCancel()
 		s.captureCancel = nil
@@ -734,7 +741,7 @@ func (s *Service) releaseCaptureLocked() {
 	s.wg.Wait()
 	s.mu.Lock()
 
-	s.capturing = false
+	s.setCapturingLocked(false)
 	s.releasing = false
 	// The decode log survives the release — service-lifetime, closed in Stop
 	// (see startCaptureLocked). A reacquired session reuses the same instance.
@@ -1033,4 +1040,23 @@ func (s *Service) onPanic(name string, panicValue any, stack []byte) {
 		Interface("panic", panicValue).
 		Bytes("stack", stack).
 		Msg("ft8: subsystem goroutine panicked (recovered)")
+}
+
+// SetCaptureListener injects the capture-session lifecycle listener (ADR
+// 0064). Call before Start, like the other seams.
+func (s *Service) SetCaptureListener(fn func(live bool)) {
+	s.captureListener = fn
+}
+
+// setCapturingLocked flips the capture flag and reports a REAL transition to
+// the listener — change-only, so the linger's reconnect continuity and the
+// several release paths cannot double-report. Caller holds s.mu.
+func (s *Service) setCapturingLocked(live bool) {
+	if s.capturing == live {
+		return
+	}
+	s.capturing = live
+	if s.captureListener != nil {
+		s.captureListener(live)
+	}
 }

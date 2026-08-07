@@ -23,6 +23,8 @@ func TestResolveTimeouts(t *testing.T) {
 		CivAckMs:               500,
 		CivPollIntervalMs:      1000,
 		CivPollQuietMs:         250,
+		Ft8MeterPollIntervalMs: 250,
+		Ft8MeterPollTimeoutMs:  100,
 	}
 	if got != want {
 		t.Fatalf("ResolveTimeouts(zero) = %+v, want %+v", got, want)

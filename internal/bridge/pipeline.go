@@ -244,6 +244,17 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 			pollBytes = nil
 		}
 	}
+	// METERPOLL is optional exactly like POLL (ADR 0064): only rigs whose CAT
+	// answers explicit meter reads during TX declare it. Absent → no FT8 meter
+	// poll loop; declared-but-unencodable is a rigdef bug, non-fatal.
+	var meterPollBytes []byte
+	if cat.HasCommand(def, meterPollCommandName) {
+		if meterPollBytes, err = cat.Encode(def, meterPollCommandName); err != nil {
+			s.logger.WarnWith().Err(err).Str("driver", def.ID).
+				Msg("bridge: rigdef METERPOLL command failed to encode; running without FT8 meter poll")
+			meterPollBytes = nil
+		}
+	}
 
 	client, err := s.openClient(serialCfg)
 	if err != nil {
@@ -385,6 +396,21 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		}()
 		defer pollWg.Wait()
 		defer pollCancel()
+	}
+
+	// The ADR 0064 FT8 meter poll — same lifecycle discipline as the state-
+	// mirror loop above (cancel + drain before the port closes), different
+	// keyed-interval policy (it polls THROUGH keyed slots; see meterpoll.go).
+	if len(meterPollBytes) > 0 {
+		mpCtx, mpCancel := context.WithCancel(ctx)
+		var mpWg sync.WaitGroup
+		mpWg.Add(1)
+		go func() {
+			defer mpWg.Done()
+			s.runMeterPollLoop(mpCtx, client, meterPollBytes, civSnapshot)
+		}()
+		defer mpWg.Wait()
+		defer mpCancel()
 	}
 
 	return s.readLoop(ctx, client, def, initBytes, readBytes)
@@ -846,6 +872,9 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		// summarised in one line when it ends (meters.go). Read-only and
 		// listen-only: nothing is written to the rig for this.
 		s.observeMeter(status)
+		// ADR 0064: decoded RM4/RM5 poll answers fan out to the SPA on
+		// rig-meters (query answers only — the pushed RM0 stays off it).
+		s.publishMeterAnswers(status)
 		s.observeRigData()
 
 		payload, hasFields := mapStatusToPayload(status)

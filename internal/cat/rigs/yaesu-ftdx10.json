@@ -25,6 +25,7 @@
   "commands": [
     {"name": "INIT",     "cmd": "AI1;"},
     {"name": "READ",     "cmd": "ID;FA;FB;ST;VS;MD0;MD1;PC;MS;"},
+    {"name": "METERPOLL", "cmd": "RM4;RM5;"},
     {"name": "PLAYBACK", "cmd": "PB0%s;"},
     {"name": "set_freq",   "cmd": "FA%s;", "pad": 9, "min": 30000, "max": 75000000, "exposed": true},
     {"name": "set_freq_b", "cmd": "FB%s;", "pad": 9, "min": 30000, "max": 75000000, "exposed": true},

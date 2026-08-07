@@ -163,6 +163,15 @@ type BridgeTimeoutsConfig struct {
 	// real-time anyway and the missed gap-read recovers on the next tick.
 	CivPollIntervalMs int `json:"civ_poll_interval_ms,omitempty"`
 	CivPollQuietMs    int `json:"civ_poll_quiet_ms,omitempty"`
+
+	// Ft8MeterPollIntervalMs / Ft8MeterPollTimeoutMs are the ADR 0064 FT8
+	// ALC/PO meter poll knobs (defaults 250 / 100, operator-ratified
+	// 2026-08-06). The interval is the RM4;RM5; cadence while an FT8 capture
+	// session is live; the timeout bounds each poll write so the unkey never
+	// queues behind more than one bounded exchange. Only rigs whose rigdef
+	// declares a METERPOLL command poll.
+	Ft8MeterPollIntervalMs int `json:"ft8_meter_poll_interval_ms,omitempty"`
+	Ft8MeterPollTimeoutMs  int `json:"ft8_meter_poll_timeout_ms,omitempty"`
 }
 
 // BridgeTuneConfig holds the tune-carrier knobs (ADR 0027). Both are optional

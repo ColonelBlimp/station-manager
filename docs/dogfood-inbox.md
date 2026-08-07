@@ -1149,3 +1149,4 @@ said. Plan future on-air experiments accordingly.
 - ~~[2026-08-06] ft8 rx audio - when TX'ing the panel changes height. Height should remain consistent with temp gauge or msg.~~ **FIXED same day:** the open card now renders a fixed structure in every state — bar track + two fixed-height lines always present, content varies inside them (V6 pins it, `AudioLevelCard.svelte.test.ts`).
 - [2026-08-07] phone/cw port the paste list from the comment field in the logging SPA
 - [2026-08-07] export session card - when clicking send, a toast appears by it is not on top, but overlayed by the Export session card and thus dimmed.
+- [2026-08-07] 07:20: clicked VK5GR and got a toast saying already worked this session - but I had not worked

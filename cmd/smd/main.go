@@ -680,6 +680,10 @@ func run() error {
 		// internal/bridge. Without CAT there is nothing to attribute with, and
 		// reports simply carry no frequency.
 		ft8Svc.SetDialSource(bridgeSvc.CurrentDialMHz)
+		// ADR 0064: the bridge's continuous ALC/PO meter poll lives and dies
+		// with the FT8 capture session — this listener is the whole lifecycle
+		// signal (no windowing state machine). Same injection shape as above.
+		ft8Svc.SetCaptureListener(bridgeSvc.SetFt8CaptureLive)
 	}
 	// Wire the completed-QSO sink (ADR 0029 step e4): a finished FT8 exchange
 	// becomes a logged QSO. The assembly + submit live here (the composition

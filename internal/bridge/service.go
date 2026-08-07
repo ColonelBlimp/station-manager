@@ -166,6 +166,15 @@ type Service struct {
 	civAckTimeout                  time.Duration
 	civPollInterval                time.Duration
 	civPollQuiet                   time.Duration
+	ft8MeterPollInterval           time.Duration
+	ft8MeterPollTimeout            time.Duration
+
+	// ADR 0064 FT8 meter poll state, under mu: the capture-session gate
+	// (SetFt8CaptureLive), the last decoded RM4/RM5 answer, and whether the
+	// sustained-loss notice has fired for the current loss episode.
+	ft8CaptureLive   bool
+	meterAnswerAt    time.Time
+	meterAnswerStale bool
 
 	// CI-V wait-for-ACK command-path state (ADR 0034). The IC-7300 confirms a
 	// set-command with a bare FB/FA ACK and never broadcasts the change, so
@@ -535,6 +544,8 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		civAckTimeout:                  resolveTimeout(cfg.Timeouts.CivAckMs, civAckTimeout),
 		civPollInterval:                resolveTimeout(cfg.Timeouts.CivPollIntervalMs, civPollInterval),
 		civPollQuiet:                   resolveTimeout(cfg.Timeouts.CivPollQuietMs, civPollQuiet),
+		ft8MeterPollInterval:           resolveTimeout(cfg.Timeouts.Ft8MeterPollIntervalMs, ft8MeterPollInterval),
+		ft8MeterPollTimeout:            resolveTimeout(cfg.Timeouts.Ft8MeterPollTimeoutMs, ft8MeterPollTimeout),
 		confirmTimeout:                 txConfirmTimeout,
 		driveSilence:                   driveSilenceTimeout,
 		tunePowerW:                     tunePower,
@@ -625,6 +636,8 @@ func ResolveTimeouts(c types.BridgeTimeoutsConfig) types.BridgeTimeoutsConfig {
 		CivAckMs:               ms(resolveTimeout(c.CivAckMs, civAckTimeout)),
 		CivPollIntervalMs:      ms(resolveTimeout(c.CivPollIntervalMs, civPollInterval)),
 		CivPollQuietMs:         ms(resolveTimeout(c.CivPollQuietMs, civPollQuiet)),
+		Ft8MeterPollIntervalMs: ms(resolveTimeout(c.Ft8MeterPollIntervalMs, ft8MeterPollInterval)),
+		Ft8MeterPollTimeoutMs:  ms(resolveTimeout(c.Ft8MeterPollTimeoutMs, ft8MeterPollTimeout)),
 	}
 }
 

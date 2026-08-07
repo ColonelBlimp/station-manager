@@ -257,6 +257,7 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
   - `rig-disconnected` → `{code: "rig_no_data"|"serial_port_error", details?}`.
   - `bridge-error` → `{code: "unknown_driver"|"serial_config_invalid"|"missing_init_command"|"missing_read_command"|"serial_open_failed"|"init_write_failed"|"identity_unrecognised"|"identity_mismatch", details?}`.
   - `tune-state` → `{active: bool}`.
+  - `rig-meters` → `{meter: "ALC"|"PO", value: 0-255}` (ADR 0064) — one decoded `RM4;`/`RM5;` poll answer, raw rig scale (the SPA owns thresholds/rendering). Flows only while an FT8 capture session is live AND the rigdef declares a `METERPOLL` command (FTdx10 today); deliberately NOT replay-cached — a stale reading is worse than none, and the next answer is ≤ one poll interval (default 250 ms) away. Clients infer "no meter data" from staleness, distinct from a zero reading.
 - **Errors:** 503 `server_busy`.
 - **Notes:** Hub one-slot replay cache for `bridge-error`/`rig-disconnected`/`tune-state`; disconnect cache cleared on next `rig-state`. Codes carry `{code, details}` for SPA i18n (no human strings on the wire).
 

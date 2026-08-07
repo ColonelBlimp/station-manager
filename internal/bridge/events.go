@@ -22,6 +22,13 @@ const (
 	// both cases (field-by-field overwrite into catState).
 	EventRigState EventName = "rig-state"
 
+	// EventRigMeters carries one decoded RM4/RM5 poll answer (ADR 0064): the
+	// meter named by the query prefix plus its raw 0-255 value. Published only
+	// while the FT8 meter poll runs (capture session live, METERPOLL rigdef);
+	// deliberately NOT replay-cached — a stale reading is worse than none, and
+	// the next answer is at most one poll interval away.
+	EventRigMeters EventName = "rig-meters"
+
 	// EventRigDisconnected fires when the bridge concludes the rig
 	// is no longer alive — no data has flowed for the timeout window
 	// (ADR 0010 passive liveness) or the serial port returns
@@ -280,4 +287,12 @@ type RigClientsPayload struct {
 type TxAlarmPayload struct {
 	Active bool   `json:"active"`
 	Code   string `json:"code,omitempty"`
+}
+
+// RigMetersPayload is the rig-meters SSE payload (ADR 0064): one meter
+// reading from an RM4/RM5 poll answer. Value is the rig's raw 0-255 scale —
+// the SPA owns thresholds/rendering, the daemon stays policy-free.
+type RigMetersPayload struct {
+	Meter string `json:"meter"` // "ALC" | "PO"
+	Value int    `json:"value"` // raw 0-255
 }

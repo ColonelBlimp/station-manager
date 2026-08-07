@@ -1,0 +1,152 @@
+package bridge
+
+import (
+	"context"
+	"strconv"
+	"time"
+
+	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/serial"
+)
+
+// ADR 0064 — continuous ALC/PO meter polling while an FT8 capture session is
+// live. The rigdef's METERPOLL command (FTdx10: `RM4;RM5;`) is the per-rig
+// capability flag; a rig that doesn't declare it never meter-polls, which is
+// the ADR's "a rig whose CAT reference restricts during-TX reads" trigger
+// built in as data.
+//
+// This is the bridge's one deliberate source of keyed-interval CAT traffic.
+// It is safe where the ADR 0035 Icom snapshot poll is not because the shape
+// is different: ONE two-frame ASCII burst (12 bytes, ~3 ms at 38400 baud)
+// bounded by ft8MeterPollTimeout as a write deadline, not a five-frame CI-V
+// burst holding cmdMu for seconds — which is why runMeterPollLoop polls
+// THROUGH keyed intervals while runPollLoop hard-skips them (the divergence
+// is the point: mid-TX ALC is the feature, measured answering live on
+// 2026-08-06). The unkey's worst-case wait is one such bounded exchange
+// (invariant 1); a lost answer is a skipped cycle, never a retry
+// (invariant 2).
+
+// meterPollCommandName is the optional rigdef command holding the meter-query
+// burst. Optional exactly like POLL: absent → no meter poll loop.
+const meterPollCommandName = "METERPOLL"
+
+// Defaults, operator-ratified 2026-08-06 (ADR 0064). Config overrides live in
+// bridge.timeouts.{ft8_meter_poll_interval_ms,ft8_meter_poll_timeout_ms}.
+var (
+	ft8MeterPollInterval = 250 * time.Millisecond
+	ft8MeterPollTimeout  = 100 * time.Millisecond
+)
+
+// meterAnswerStaleAfter is how many silent poll intervals raise the one
+// sustained-loss notice (ADR 0064 invariant 2: "sustained loss at most
+// surfaces a monitoring notice"). 8 intervals = 2 s at the default cadence —
+// long enough to ride out a TX→RX tail eating a couple of answers.
+// PROVISIONAL: not operator-ratified; adjust freely.
+const meterAnswerStaleAfter = 8
+
+// SetFt8CaptureLive gates the ADR 0064 meter poll on the FT8 capture-session
+// lifecycle (invariant 5: the session lifecycle IS the state machine — no
+// windowing of its own). Wired in cmd/smd from the FT8 service's capture
+// listener; idempotent, safe with no pipeline running.
+func (s *Service) SetFt8CaptureLive(live bool) {
+	s.mu.Lock()
+	s.ft8CaptureLive = live
+	if !live {
+		// The staleness clock is session-scoped: a notice must not carry from
+		// one capture session into the next.
+		s.meterAnswerAt = time.Time{}
+		s.meterAnswerStale = false
+	}
+	s.mu.Unlock()
+}
+
+// runMeterPollLoop fires the rigdef's METERPOLL burst on its own ticker while
+// an FT8 capture session is live — receive and transmit alike (see the file
+// header for why keyed intervals are polled through, not skipped). Answers
+// ride the normal readLoop → decode path and publish via publishMeterAnswers;
+// this loop only writes. Single-flight is structural: one write per tick,
+// sequential by construction.
+func (s *Service) runMeterPollLoop(ctx context.Context, client serial.Client, pollBytes []byte, civ bool) {
+	ticker := time.NewTicker(s.ft8MeterPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			live := s.ft8CaptureLive
+			busy := time.Since(s.lastBroadcastAt) < s.civPollQuiet
+			s.mu.Unlock()
+			if !live || busy {
+				continue
+			}
+			// The write deadline is the ratified answer-timeout bound: however
+			// the port behaves, the cmdMu hold (CI-V) / port occupancy (ASCII
+			// CAT) ends inside one timeout, so an unkey never queues behind
+			// more than one bounded exchange. No retry on any failure — a
+			// missed cycle recovers at the next tick (invariant 2).
+			wctx, cancel := context.WithTimeout(ctx, s.ft8MeterPollTimeout)
+			err := s.underCmdMuCIV(civ, func() error {
+				return s.writeSnapshotReads(wctx, client, civ, pollBytes)
+			})
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				s.logger.WarnWith().Str("error", errMessage(err)).
+					Msg("bridge: ft8 meter poll write failed")
+				continue
+			}
+			s.noteMeterPollCycle()
+		}
+	}
+}
+
+// noteMeterPollCycle raises the one sustained-loss notice when polls are being
+// written but no RM4/RM5 answer has decoded for meterAnswerStaleAfter
+// intervals. Recovery (any answer) re-arms it, so the log carries one line per
+// loss episode, not one per silent cycle.
+func (s *Service) noteMeterPollCycle() {
+	s.mu.Lock()
+	if s.meterAnswerAt.IsZero() {
+		// No answer yet this session: seed the clock from the first written
+		// poll so a rig that never answers still trips the notice.
+		s.meterAnswerAt = time.Now()
+		s.mu.Unlock()
+		return
+	}
+	stale := time.Since(s.meterAnswerAt) > time.Duration(meterAnswerStaleAfter)*s.ft8MeterPollInterval
+	fire := stale && !s.meterAnswerStale
+	if fire {
+		s.meterAnswerStale = true
+	}
+	s.mu.Unlock()
+	if fire {
+		s.logger.WarnWith().Int("intervals", meterAnswerStaleAfter).
+			Msg("bridge: ft8 meter poll answers missing (rig silent on RM4/RM5)")
+	}
+}
+
+// publishMeterAnswers fans decoded RM4/RM5 poll answers out on the rig-meters
+// SSE event. Called from readLoop beside observeMeter. ONLY the query answers
+// publish here — they name their meter in the frame; the pushed RM0 stream
+// does not say which meter it is (that is METERSEL's job) and stays off this
+// event. Matched by decoded tag, which the rigdef derives from the frame
+// prefix — never by arrival order (ADR 0064 invariant 3; the push stream
+// interleaves freely, observed live).
+func (s *Service) publishMeterAnswers(status cat.Status) {
+	for _, tag := range []string{"ALC", "PO"} {
+		v, ok := status[tag]
+		if !ok || v == "" {
+			continue
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			continue // a garbled frame is not a reading
+		}
+		s.mu.Lock()
+		s.meterAnswerAt = time.Now()
+		s.meterAnswerStale = false
+		s.mu.Unlock()
+		s.hub.publish(Event{Name: EventRigMeters, Payload: RigMetersPayload{Meter: tag, Value: n}})
+	}
+}

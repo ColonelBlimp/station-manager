@@ -35,10 +35,16 @@ import (
 // while transmitting — receive values sat at 103-132 matching RM1 (S-meter),
 // then dropped to a 0-33 band tracking speech envelope under mic modulation.
 //
-// Nothing here writes to the rig. Adding CAT traffic to the key-down path would
-// put frames on a half-duplex bus that ADR 0057 already documents as dropping
-// commands in the TX→RX tail, and the guaranteed-stop unkey is the one write
-// that must never queue behind anything.
+// Nothing in THIS FILE writes to the rig — but since ADR 0064 that is no
+// longer a subsystem-wide rule: the FT8 meter poll (meterpoll.go) deliberately
+// writes `RM4;RM5;` on the key-down path, under a narrower invariant — one
+// two-frame burst bounded by an answer timeout, so the guaranteed-stop unkey
+// never queues behind more than one bounded exchange. The absolute half that
+// SURVIVES is the unkey's right of way; the old blanket prohibition rested
+// partly on the ADR 0057 TX→RX-tail observation, which is empirical (July
+// incidents), not spec — the CAT reference places no restriction on reads
+// during transmission (verified 2026-08-06). Poll ANSWERS feed the
+// accumulator below but never the pushed-stream liveness (see observeMeter).
 //
 // Readings are accumulated per keyed transmission and summarised in ONE log
 // line when it ends, rather than logged per frame. That needs no invented
@@ -267,9 +273,19 @@ func (s *Service) observeMeter(status cat.Status) {
 		// (drivealarm.go). Recorded in the UNCONDITIONAL layer on purpose: the
 		// receive-time stream is what proves something is reading, and it is the
 		// only thing that distinguishes absent drive from an absent instrument.
-		s.noteMeterPush()
-		if s.markMeterSeenLocked() {
-			announce = true
+		//
+		// PUSHED frames only (ADR 0064): the RM4/RM5 poll answers arrive at
+		// 4 Hz whenever the FT8 meter poll runs, and feeding them here would
+		// cap every measured gap at the poll cadence and keep the instrument
+		// looking alive while the PUSHED stream — the drive-collapse signal —
+		// went quiet. A polled PO of 000 is a value; the push stream going
+		// silent is the evidence. The answers still reach meterLatest and the
+		// keyed accumulator below, which is the ADR's intent.
+		if tag == meterPushedTag {
+			s.noteMeterPush()
+			if s.markMeterSeenLocked() {
+				announce = true
+			}
 		}
 		// Layer 2 — only while this rig is actually radiating.
 		if !s.inKeyedMeterWindowLocked() {
