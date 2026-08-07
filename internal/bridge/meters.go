@@ -37,10 +37,12 @@ import (
 //
 // Nothing in THIS FILE writes to the rig — but since ADR 0064 that is no
 // longer a subsystem-wide rule: the FT8 meter poll (meterpoll.go) deliberately
-// writes `RM4;RM5;` on the key-down path, under a narrower invariant — one
-// two-frame burst bounded by an answer timeout, so the guaranteed-stop unkey
-// never queues behind more than one bounded exchange. The absolute half that
-// SURVIVES is the unkey's right of way; the old blanket prohibition rested
+// writes `RM4;RM5;` on the key-down path, under a narrower invariant — at most
+// one two-frame burst ahead of the unkey: ~3 ms healthy, and on a wedged port
+// the serial write watchdog (500 ms default) frees the path by closing the
+// port (see meterpoll.go for why the poll's own timeout cannot bound a blocked
+// write). The absolute half that SURVIVES is the unkey's right of way; the old
+// blanket prohibition rested
 // partly on the ADR 0057 TX→RX-tail observation, which is empirical (July
 // incidents), not spec — the CAT reference places no restriction on reads
 // during transmission (verified 2026-08-06). Poll ANSWERS feed the

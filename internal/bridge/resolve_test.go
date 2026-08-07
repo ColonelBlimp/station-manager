@@ -18,7 +18,7 @@ func TestResolveTimeouts(t *testing.T) {
 		BackoffInitialMs:       1000,
 		BackoffMaxMs:           30000,
 		SteadyStateThresholdMs: 10000,
-		WriteWatchdogMs:        2000,
+		WriteWatchdogMs:        500,
 		CivReadGapMs:           50,
 		CivAckMs:               500,
 		CivPollIntervalMs:      1000,

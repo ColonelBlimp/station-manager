@@ -45,10 +45,19 @@ var (
 // serial.Config.WriteTimeoutMS). go.bug.st/serial has no write deadline, so a
 // hung port.Write would otherwise block the writer goroutine — and the tune
 // guaranteed-stop — forever; on overrun the port closes and the supervisor
-// reopens. Generous on purpose (a hang backstop, not a per-write SLA); operators
-// override via `bridge.timeouts.write_watchdog_ms`. Package var so tests can
-// dial it down (review 2026-06-04 H4).
-var writeWatchdog = 2 * time.Second
+// reopens. A hang backstop, not a per-write SLA; operators override via
+// `bridge.timeouts.write_watchdog_ms`. Package var so tests can dial it down
+// (review 2026-06-04 H4).
+//
+// 500 ms (was 2 s) since ADR 0064's amendment, operator-ratified 2026-08-07:
+// with the FT8 meter poll writing every 250 ms THROUGH keyed transmissions,
+// this watchdog is the true fault-path bound on how long an emergency unkey
+// can queue on writeMu behind a wedged poll write — the poll's own ctx
+// deadline cannot interrupt a blocked write(2) (ctx is honoured only between
+// writes). A healthy 12-byte burst completes in ~3 ms at 38400 baud, so
+// 500 ms keeps enormous margin against false trips while cutting the
+// worst-case unkey delay fourfold.
+var writeWatchdog = 500 * time.Millisecond
 
 // civReadGap is the default inter-frame delay between the read frames of a CI-V
 // state snapshot. CI-V is half-duplex: a back-to-back read-freq + read-mode

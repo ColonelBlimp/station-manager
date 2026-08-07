@@ -109,6 +109,22 @@ timeout bounds that wait even when the TX→RX tail eats the answer.
    timeout.** Single-flight is structural, and the poll's `cmdMu` hold may
    never exceed the timeout — no retry inside the hold, no multi-frame
    bursts.
+
+   > **AMENDED 2026-08-07 (build-time finding, codex P1 on d7c4dcdc,
+   > operator-ratified).** The answer timeout cannot bound a BLOCKED write:
+   > `internal/serial` honours ctx only between `write(2)` calls, and the
+   > poll burst is a single call. The deliverable bound is therefore
+   > two-tier — **healthy path ~3 ms** (one 12-byte burst at 38400 baud;
+   > single-flight holds), **fault path = the serial write watchdog**
+   > (`bridge.timeouts.write_watchdog_ms`), which frees the write path by
+   > closing the port. To keep the fault-path bound tight now that a write
+   > sits in every keyed interval, the watchdog default was tightened
+   > **2 s → 500 ms** with this amendment (~170× a healthy write; the
+   > wedged-port-mid-TX consequence itself predates this ADR — any CAT
+   > write could always wedge — this ADR changes the exposure, and the
+   > amendment cuts the whole system's bound fourfold). The answer timeout
+   > keeps its other jobs: the CI-V between-frames bound and the
+   > answer-freshness discipline (skip, never retry).
 2. **Timeout is skip, not failure.** A lost answer (transition tail, busy
    rig) ends that cycle silently; sustained loss at most surfaces a
    monitoring notice. Polling never touches TX state, the session, or the

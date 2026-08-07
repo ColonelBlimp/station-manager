@@ -17,13 +17,15 @@ import (
 //
 // This is the bridge's one deliberate source of keyed-interval CAT traffic.
 // It is safe where the ADR 0035 Icom snapshot poll is not because the shape
-// is different: ONE two-frame ASCII burst (12 bytes, ~3 ms at 38400 baud)
-// bounded by ft8MeterPollTimeout as a write deadline, not a five-frame CI-V
-// burst holding cmdMu for seconds — which is why runMeterPollLoop polls
-// THROUGH keyed intervals while runPollLoop hard-skips them (the divergence
-// is the point: mid-TX ALC is the feature, measured answering live on
-// 2026-08-06). The unkey's worst-case wait is one such bounded exchange
-// (invariant 1); a lost answer is a skipped cycle, never a retry
+// is different: ONE two-frame ASCII burst (12 bytes, ~3 ms at 38400 baud),
+// not a five-frame CI-V burst holding cmdMu for seconds — which is why
+// runMeterPollLoop polls THROUGH keyed intervals while runPollLoop hard-skips
+// them (the divergence is the point: mid-TX ALC is the feature, measured
+// answering live on 2026-08-06). The unkey's worst-case wait behind a poll
+// write is ~3 ms healthy, and on a WEDGED port the serial write watchdog
+// (500 ms default since the 0064 amendment, operator-ratified 2026-08-07) —
+// NOT ft8MeterPollTimeout, which cannot interrupt a blocked write(2) (codex
+// P1 on d7c4dcdc). A lost answer is a skipped cycle, never a retry
 // (invariant 2).
 
 // meterPollCommandName is the optional rigdef command holding the meter-query
@@ -81,11 +83,15 @@ func (s *Service) runMeterPollLoop(ctx context.Context, client serial.Client, po
 			if !live || busy {
 				continue
 			}
-			// The write deadline is the ratified answer-timeout bound: however
-			// the port behaves, the cmdMu hold (CI-V) / port occupancy (ASCII
-			// CAT) ends inside one timeout, so an unkey never queues behind
-			// more than one bounded exchange. No retry on any failure — a
-			// missed cycle recovers at the next tick (invariant 2).
+			// The ctx deadline bounds the HEALTHY path (and the CI-V
+			// between-frames gap); it CANNOT interrupt a single blocked
+			// write(2) — serial honours ctx only between writes (codex P1 on
+			// d7c4dcdc). The fault-path bound on how long an unkey can queue
+			// behind a wedged poll write is the serial write watchdog
+			// (write_watchdog_ms, 500 ms default since the 0064 amendment),
+			// which frees writeMu by closing the port. Healthy hold: one
+			// 12-byte burst, ~3 ms at 38400 baud. No retry on any failure —
+			// a missed cycle recovers at the next tick (invariant 2).
 			wctx, cancel := context.WithTimeout(ctx, s.ft8MeterPollTimeout)
 			err := s.underCmdMuCIV(civ, func() error {
 				return s.writeSnapshotReads(wctx, client, civ, pollBytes)
