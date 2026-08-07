@@ -790,6 +790,8 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   **Next, if this is picked up:** sweep the occurrences for a common factor. Four
   usable samples is thin, and message type is already not it — the 07-26 pair were
   mid-QSO rungs (`R-17`, `RR73`), the 07-28 pair were both CQ.
+- [2026-08-07] bug - when changing from ft8 to phone/cw the mode and freq are not reset
+- [2026-08-07] bug - when selecting VFO-B the freq is change to the current freq shown in VFO-A - vfo select does not work
 
 ---
 
