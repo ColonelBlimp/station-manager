@@ -48,30 +48,74 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **END OF DAY 2026-08-07: tree CLEAN at `6f45a510`, every review triaged +
-  deleted.** Deploy sits ~at `fad26bad` (ALC chip was live in dogfood);
-  missing only the chip vertical-stack/card/marker commits — redeploy before
-  judging the ALC face.
-- **Shipped today:** ship-gate logging CLOSED as directed work — findings
-  5+11, 7+8, 12+13 (+ async drop-warn P1 amendment) = 12 of 14, rest is
-  Tier-4 whenever-adjacent · **dial-disarm visibility** (`disarm_cause` on
-  ft8-tx + toast; 3-round arc: replay-order hold, cause-matched clear) ·
-  **ADR 0064 FULL BUILD** — METERPOLL rigdef + `runMeterPollLoop` polling
-  THROUGH keyed slots, capture-session gate seam (ft8→bridge via smd),
-  `rig-meters` SSE, drive-watch liveness protected from poll answers (P4),
-  **write watchdog 2s→500ms** (P1: a ctx deadline cannot bound a blocked
-  write; ADR amended, operator-ratified), `ft8.meter.alc_red` config
-  (**PROVISIONAL 50**), TX-drive chip/card stacked above the RX meter.
-- **On-air this morning:** dial guard behaved textbook on a real nudge
-  (06:07 log) and exposed the dial-disarm gap same-day-fixed above;
-  finding-4 suppression logging had its first production firing.
-- **NEXT:** ADR 0064 on-hardware acceptance (§4, passive-first) → calibrate
-  `alc_red` → flip ADR to Accepted · Tune-coverage question · operator_pick ·
-  inbox cluster: auto-work arms on CQ answer + abandon→"already worked" toast
-  + click-modifier sketch + VK5GR false positive · session-panel callsign
-  search · paste-list port · export-card toast z-order · findings 9/10.
+- **END OF DAY 2026-08-07 (second session): tree CLEAN at `80db5a92`, every
+  review triaged + deleted** (5 codex rounds today, 3 real findings, all fixed
+  same-day RED-first). **DEPLOY IS BEHIND by the whole day** — daemon+SPA must
+  ship TOGETHER (`task deploy:local:dev`): an old SPA never sends `auto_work`
+  and never renders `answerers`. operator_pick additionally needs
+  `ft8.tx.caller_answer_mode: "operator_pick"` in config.json (ratified as
+  config.json-only — the `/v1/config` PUT 400 is enforcement, not a gap).
+- **Shipped this session — ADR 0065 END TO END** (designed, ratified via 6+4
+  forks, BOTH phases built): plain CQ-click works one station (Abandon-debt
+  gone) · arming = ctrl+shift+click OR standing one-shot toggle ·
+  `auto_work_callers` = pure GATE · run-only stop (pill click +
+  `/v1/ft8/autowork/stop`) · **operator_pick**: CQ-run answerers listed on
+  ft8-qso frames (3-min staleness, swept at slots AND at the pop-refusal),
+  drawer "Answering your CQ" + `POST /v1/ft8/cq/pick`, parks never auto-pick.
+  Spec: `internal/ft8/operatorpick_test.go`. Also: engaged-vs-logged toast
+  split (VK5GR) · session-panel callsign search · toast z-order · idle-disarm
+  warn quieted · inbox FULLY triaged (13 dispositions) + morning-log diagnosis.
+- **Morning session (same day):** ADR 0064 FULL BUILD (meter poll through
+  keyed slots, 500ms write watchdog, `alc_red` PROVISIONAL 50, TX-drive chip)
+  — detail in Current state.
+- **NEXT:** deploy → on-air: ADR 0064 §4 acceptance (passive-first) →
+  calibrate `alc_red` → flip 0064 Accepted; same session sanity-checks 0065
+  (pill on a work-caller arm · FD click leaves toggle lit, no toast · a pick
+  run) · findings 9/10 · enrichment ctx-cancel WARN→debug · paste-list port ·
+  ctrl+click-on-CQ gesture (0065, undecided) · Tune-coverage question.
 
-## Current state (as of 2026-08-06)
+## Current state (as of 2026-08-07)
+
+### 2026-08-07 (second session) — ADR 0065 designed, ratified and built in one day
+
+The directed work was "triage the inbox → diagnose the morning's on-air logs →
+design auto-work/cq-answer/operator_pick", with a stated focus of clearing FT8
+features and niggles. All three parts landed, and the design became a full build.
+
+- **Inbox triage:** all 17 untriaged entries dispatched — 13 dispositions
+  (backlog moves committed as `213cd1`), 4 fixed same-day, 2 grew into
+  ADR 0065. Non-FT8 items (map filter, world clock, session-panel chrome,
+  paste-list port, notification rail) went to the backlog per the focus.
+- **Log diagnosis (morning session):** VK5GR worked 07:15, no reply, abandoned,
+  re-clicked 07:20 → FALSE "already worked" toast, then completed + logged
+  (qso 7096) — became fork 4's evidence. Two Abandon-debts (06:01:17,
+  07:26:06) — became the ADR's core evidence. 9/24 warnings were idle-disarm
+  noise (fixed: Debug when the device was idle). 3 QSOs logged, zero alarms.
+- **ADR 0065 (Accepted, both phases built):** per-click auto-work intent
+  staged like the logbook pin; gate-refused arms never block the contact (the
+  frame's `auto_work_armed:false` is the verdict — SPA toasts once);
+  plain start CLEARS an armed run (W12 precedent); FD/type-4 never arm;
+  ctrl+shift+click = the ONE modifier chord that starts TX; standing toggle is
+  one-shot + in-memory. operator_pick: sequencer lists answerers
+  (`answer_mode`+`answerers` on caller frames), `POST /v1/ft8/cq/pick`
+  commits, three DISTINCT refusals (no-pick-run 409 / not-listed 404 /
+  contact-in-flight 409), parks neither auto-pick nor blacklist,
+  stalled/cool-off deliberately do NOT filter the list (auto-re-lock guards,
+  not operator guards). Build forks all ratified: 3-min staleness (= SPA
+  STALE_MS), refuse mid-contact pops, badge-only discovery, config.json-only.
+- **Review rounds:** `b8867450` clean · `7de6708e` P1 (arm ordered AFTER the
+  work-caller commit publish → granted arm's first frame read unarmed; moved
+  before, pinned G8) + P2 (FD/type-4 clicks leaked the intent → false refusal
+  toast ate the toggle; call-site + wrapper guard, pinned AW5) · `883663bb`
+  clean · `6b1cf93b` P2 (stale pop refused WITHOUT delisting/publishing — the
+  drawer kept offering a gone station; pop now sweeps + publishes on refusal,
+  shared `expireAnswerersLocked`) · `80db5a92` clean (incl. -race).
+- **Also fixed:** pre-existing lint red at `883663bb` (`onRowClick` complexity
+  22>20 — the prior round's "lint clean" claim was wrong; split into
+  `answerCqRow`/`workCallerRow`) · engaged-vs-logged toast wording ·
+  session-panel callsign search (SR1-SR4) · toast z-60 over dialogs ·
+  `ErrNotPlaying` disarm warn → Debug (sentinels moved to untagged
+  `internal/audio/playback/errors.go`).
 
 ### 2026-08-06 (later) — the A25 FT8 first-entry seed
 
