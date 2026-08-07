@@ -99,6 +99,7 @@ import (
 func autoWorkRun(t *testing.T, s *Sequencer, mode string) {
 	t.Helper()
 	s.SetAutoWorkCallers(true, mode)
+	s.setPendingAutoWork(true) // the operator's per-click intent (ADR 0065)
 	require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC FN42", -12)}) // our report
@@ -268,6 +269,11 @@ func TestAutoWork_AnsweringACqArmsTheRun(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	s.SetAutoWorkCallers(true, "auto_first")
+	// ADR 0065 amended the arming rule: an operator-started session arms the run
+	// only when the click CARRIED the intent. The entry point is unchanged —
+	// answering a CQ still arms — but the intent is now explicit, not implied by
+	// the policy. G2 below pins the flip side (no intent → no run).
+	s.setPendingAutoWork(true)
 
 	// Answer K1ABC's CQ and run the exchange to completion.
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
@@ -289,13 +295,16 @@ func TestAutoWork_AnsweringACqArmsTheRun(t *testing.T) {
 // W10 — THE CONFIG KNOB REACHES THE SEQUENCER. Every rule above sets the policy by
 // hand, so none of them would notice the feature being unreachable in production —
 // which is exactly what a review found after two commits that each looked complete.
-// This one starts from config alone.
+// This one starts from config alone. Since ADR 0065 the knob is the GATE half of
+// arming (intent is the other half), so the start here carries the intent; G3 pins
+// the gate's refusing side.
 func TestAutoWork_ConfigKnobArmsARealService(t *testing.T) {
 	s := newService(types.Ft8Config{
 		Enabled: true,
 		TX:      &types.Ft8TXConfig{AutoWorkCallers: true},
 	}, logging.Noop(), nil)
 
+	s.seq.setPendingAutoWork(true)
 	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	require.True(t, s.seq.AutoWorkArmed(),
@@ -315,6 +324,7 @@ func TestAutoWork_OperatorPickDoesNotArmARun(t *testing.T) {
 		},
 	}, logging.Noop(), nil)
 
+	s.seq.setPendingAutoWork(true) // even a click carrying the intent must not arm under this mode
 	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	require.False(t, s.seq.AutoWorkArmed(), "operator_pick must not arm an automatic run")
@@ -343,6 +353,7 @@ func autoWorkService(t *testing.T) *Service {
 		Enabled: true,
 		TX:      &types.Ft8TXConfig{AutoWorkCallers: true},
 	}, logging.Noop(), nil)
+	s.seq.setPendingAutoWork(true) // the operator's per-click intent (ADR 0065)
 	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	require.True(t, s.seq.AutoWorkArmed(), "fixture: the run must be armed to prove it stops")
@@ -380,6 +391,7 @@ func TestAutoWork_CatLossStopsTheRun(t *testing.T) {
 	_, unsub := s.Subscribe() // FT8 view open + CAT live → capturing
 	defer unsub()
 
+	s.seq.setPendingAutoWork(true) // the operator's per-click intent (ADR 0065)
 	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	require.True(t, s.seq.AutoWorkArmed(), "fixture: the run must be armed to prove it stops")
@@ -536,4 +548,133 @@ func TestAutoWork_CallCqFrameReportsTheStoppedRun(t *testing.T) {
 	st := r.lastStatus()
 	require.Equal(t, "calling-cq", st.State, "fixture: this must be the frame the CQ start published")
 	require.False(t, st.AutoWorkArmed, "the CQ's own frame must already report the run stopped")
+}
+
+/*
+	--- ADR 0065: PER-CLICK ARMING GRAMMAR (operator-ratified 2026-08-07) ---
+
+	The policy knob stops arming anything by itself: it becomes a GATE, and the
+	operator's click carries the intent (staged per start, like the logbook and
+	the deliberate-repeat flag). Evidence for the change is in the day's log:
+	the always-arm rule collected an Abandon-debt twice in one morning
+	(06:01:17, 07:26:06 — a run the operator never asked for had to be
+	explicitly stopped after every CQ answer).
+
+	Fixture honesty: G2 and G5 are the differentiating rules (the pre-0065 code
+	arms on ANY start when the policy is on, so both fail against it); W9/W10
+	pin that the intent path still arms; G3 pins the gate's refusing side —
+	against pre-0065 code it passes (the policy check existed), so what it
+	guards is a FUTURE implementation arming on intent alone. G6/G7 pin the new
+	run-only stop, which no other control provides (Abandon ends the contact
+	too).
+*/
+
+// G2 — THE FLIP of W9: a start WITHOUT the intent (the plain click, "work that
+// station only") arms nothing, even with the policy on. A caller after the
+// contact is left alone — the exact behaviour the operator asked for.
+func TestAutoWork_PlainStartDoesNotArm(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	s.SetAutoWorkCallers(true, "auto_first")
+	// No setPendingAutoWork — the plain click.
+
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
+	require.False(t, s.Active(), "fixture: the exchange must complete")
+	require.False(t, s.AutoWorkArmed(), "a plain click must not arm a run (ADR 0065 fork 1)")
+
+	before := len(r.sentMsgs())
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
+	require.False(t, s.Active(), "a caller after a work-only contact is left alone")
+	require.Len(t, r.sentMsgs(), before)
+}
+
+// G3 — THE GATE. Intent carried, policy off: the CONTACT proceeds normally and
+// no run is armed. A refused arm must never cost the QSO — the 15 s slot window
+// leaves no room for a retry after a rejection.
+func TestAutoWork_GateRefusesArmNotContact(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	// Policy never enabled — the gate is closed.
+	s.setPendingAutoWork(true)
+
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	require.True(t, s.Active(), "the contact must start despite the refused arm")
+	require.False(t, s.AutoWorkArmed(), "a closed gate refuses the arm")
+	require.False(t, r.lastStatus().AutoWorkArmed,
+		"the frame must tell the SPA the arm was refused, so intent-vs-outcome can toast")
+
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
+	require.False(t, s.Active(), "the refused arm must not disturb the exchange")
+}
+
+// G5 — a plain start CLEARS an armed run. "Work that station only" defines the
+// operator's whole intent, and leaving the old run armed would resume
+// auto-working on call/offset/dial pinned by a PREVIOUS session — the same
+// stale-pin hazard the StartCallCq clear removed (W12).
+func TestAutoWork_PlainStartClearsAnArmedRun(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	autoWorkRun(t, s, "auto_first")
+	require.True(t, s.AutoWorkArmed(), "fixture: a run is armed")
+
+	s.setPendingAutoWork(false) // the next click is plain
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "M7ABC", "IO83",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+
+	require.False(t, s.AutoWorkArmed(),
+		"a work-only start must clear the previous session's run, not inherit its pins")
+	require.False(t, r.lastStatus().AutoWorkArmed, "…and the frame must say so")
+}
+
+// G6 — StopAutoWorkRun during an ACTIVE contact stops ONLY the run. Abandon is
+// the other control and it ends both; the pill needs one that does not.
+func TestAutoWork_StopRunLeavesActiveContact(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	s.SetAutoWorkCallers(true, "auto_first")
+	s.setPendingAutoWork(true)
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	require.True(t, s.Active())
+	require.True(t, s.AutoWorkArmed())
+
+	s.StopAutoWorkRun()
+
+	require.False(t, s.AutoWorkArmed(), "the run is stopped")
+	require.True(t, s.Active(), "the active contact must survive a run-only stop")
+	st := r.lastStatus()
+	require.True(t, st.Active, "the frame still reports the live session")
+	require.False(t, st.AutoWorkArmed, "…with the run cleared")
+}
+
+// G7 — StopAutoWorkRun while idle-and-armed publishes the cleared state (the V2
+// shape: armed-and-waiting is invisible without a frame), and a second stop is
+// an idempotent no-publish no-op.
+func TestAutoWork_StopRunWhileIdlePublishesAndIsIdempotent(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	autoWorkRun(t, s, "auto_first")
+	require.True(t, s.AutoWorkArmed())
+
+	s.StopAutoWorkRun()
+	require.False(t, s.AutoWorkArmed())
+	st := r.lastStatus()
+	require.False(t, st.Active)
+	require.False(t, st.AutoWorkArmed, "the pill must go out on the wire, not just internally")
+
+	r.mu.Lock()
+	n := len(r.statuses)
+	r.mu.Unlock()
+	s.StopAutoWorkRun()
+	r.mu.Lock()
+	after := len(r.statuses)
+	r.mu.Unlock()
+	require.Equal(t, n, after, "stopping a stopped run publishes nothing")
 }

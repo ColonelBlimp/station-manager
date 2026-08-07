@@ -26,6 +26,7 @@ import {
     setFt8LoggedSink,
     setFt8SessionEndedSink,
     setFt8TxDisarmedSink,
+    setFt8AutoWorkRefusedSink,
     setFt8DisplayPrefs,
     type Ft8TxResult,
 } from './lib/operate/ft8.svelte';
@@ -40,6 +41,7 @@ import {
     startFt8WorkCaller,
     startFt8Cq,
     abandonFt8Qso,
+    stopFt8AutoWork,
     skipFt8Qso,
     nextFt8Answerer,
     type Ft8QsoOutcome,
@@ -99,7 +101,8 @@ setFt8TxActions({
             a.opFreqMHz,
             a.type4 ? 'type4' : a.fd ? 'fd' : 'standard',
             a.theirSnr,
-            a.allowDuplicate
+            a.allowDuplicate,
+            a.autoWork
         ).then(toTxResult),
     workCaller: (a) =>
         startFt8WorkCaller(
@@ -110,11 +113,19 @@ setFt8TxActions({
             a.offsetHz,
             a.opFreqMHz,
             a.fd,
-            a.allowDuplicate
+            a.allowDuplicate,
+            a.autoWork
         ).then(toTxResult),
     abandon: () => abandonFt8Qso().then(toTxResult),
     skip: (armed) => skipFt8Qso(armed).then(toTxResult),
     next: () => nextFt8Answerer().then(toTxResult),
+    stopAutoWork: () => stopFt8AutoWork().then(toTxResult),
+});
+
+// A sent auto-work intent the daemon's gate refused (ft8.tx.auto_work_callers
+// off): the contact proceeds — say why no run appeared (ADR 0065 G3).
+setFt8AutoWorkRefusedSink(() => {
+    toasts.info('Auto-work is disabled in FT8 settings — working this station only.');
 });
 
 // Session-ended sink (ft8-qso, terminal frame with a reason): the daemon ends a

@@ -96,15 +96,26 @@ natural manual-selection surface — is disabled during CQ runs.
 - The engaged-set toast split is SPA-only (`workedThisSession` callers in
   `Ft8BandActivity.svelte` / `Ft8Operate.svelte` learn WHICH source hit).
 
-## Open questions (deliberately not decided here)
+## Open questions — two RATIFIED at build time (same day, 2026-08-07)
 
-- **`ft8.tx.auto_work_callers` semantics after the change.** Proposed:
-  it becomes a gate — `false` refuses the arm gesture/toggle with an
-  explanatory toast; `true` (default) allows it. It no longer arms
-  anything by itself. To settle at build time with the operator.
+- ~~**`ft8.tx.auto_work_callers` semantics after the change.**~~ **RATIFIED:
+  a GATE.** `true` (default) allows the arm gesture/toggle; `false` means an
+  arm request starts the CONTACT but arms no run — a refused arm must never
+  cost the QSO in a 15 s window. The refusal is visible as the active
+  `ft8-qso` frame carrying `auto_work_armed:false` after an intent-carrying
+  start; the SPA toasts the explanation once (autowork_test.go G3 + the SPA
+  refused-sink tests). The knob arms nothing by itself.
+- ~~**Whether the Auto-work toggle can be armed while idle.**~~ **RATIFIED:
+  yes — standing intent.** Toggle on while idle = "the next contact I start
+  also starts a run", giving mouse-only operators a full arming path. The
+  run still arms only ON a session start, so ADR 0059's operator-headed rule
+  holds. The intent is ONE-SHOT (consumed by the start that carries it) and
+  in-memory (dies with the tab; the RUN itself lives in the daemon).
+- **Build clarification made explicit:** a start WITHOUT the intent also
+  CLEARS any armed run — "work that station only" defines the operator's
+  whole intent, and leaving the old run armed would resume auto-working on
+  parameters pinned by a previous session (the W12 stale-pin hazard). Pinned
+  by autowork_test.go G5.
 - **ctrl+click on a CQ row** (the sketch's third gesture): today pile-up
   enqueue exists only for calling-YOU rows. Whether a CQ-ing station
-  should be enqueueable too is a separate feature — not decided.
-- **Whether the Auto-work toggle can be armed while idle** (pre-armed
-  before any click) or only alongside/after a session start. ADR 0059's
-  "every run is headed by an operator action" must hold either way.
+  should be enqueueable too is a separate feature — still not decided.

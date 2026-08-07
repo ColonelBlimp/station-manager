@@ -15,6 +15,8 @@
         nextAnswerer,
         ft8EngagedThisSession,
         workCaller,
+        stopAutoWork,
+        ft8AutoWorkIntent,
     } from './ft8.svelte';
     import { rig } from './rig.svelte';
     import { session } from './session.svelte';
@@ -413,17 +415,40 @@
                      throughout, and a badge that vanished during each contact would
                      read as the run having ended. -->
                 {#if qso.autoWorkArmed}
-                    <div
-                        class="mt-1.5 inline-flex items-center gap-x-1.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-bold text-amber-600 uppercase"
+                    <!-- The pill is a CONTROL, not just status (ADR 0065): clicking it
+                         stops the RUN without touching an active contact — the one stop
+                         Abandon can't provide. -->
+                    <button
+                        type="button"
+                        class="mt-1.5 inline-flex cursor-pointer items-center gap-x-1.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-bold text-amber-600 uppercase hover:bg-amber-500/25"
                         data-testid="auto-work-armed"
+                        title="Stop the auto-work run (any active contact continues)"
+                        onclick={() => void stopAutoWork()}
                     >
                         <span class="size-1.5 rounded-full bg-amber-500"></span>
-                        Auto-work armed
-                    </div>
+                        Auto-work armed — stop
+                    </button>
                     <div class="mt-1 text-[11px] text-muted">
                         The next station calling you is worked without a click. Abandon stops the
                         run.
                     </div>
+                {:else}
+                    <!-- Standing intent (ADR 0065): the mouse-only arming path — the
+                         next contact started also starts a run. One-shot: consumed by
+                         the start that carries it. ctrl+shift+click on a CQ is the
+                         keyboard-fast equivalent. -->
+                    <label
+                        class="mt-1.5 inline-flex cursor-pointer items-center gap-x-1.5 text-[11px] text-muted select-none"
+                        title="Arm auto-work on the next contact you start (ctrl+shift+click a CQ does the same)"
+                    >
+                        <input
+                            type="checkbox"
+                            bind:checked={ft8AutoWorkIntent.on}
+                            data-testid="auto-work-intent"
+                            class="size-3 accent-amber-500"
+                        />
+                        Auto-work the next contact
+                    </label>
                 {/if}
             </div>
         </div>

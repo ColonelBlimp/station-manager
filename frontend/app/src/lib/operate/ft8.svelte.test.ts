@@ -241,6 +241,7 @@ describe('TX action wrappers', () => {
                 workCaller: (a) => (calls.push(`work:${a.theirCall}`), ok),
                 abandon: () => (calls.push('abandon'), ok),
                 next: () => (calls.push('next'), ok),
+                stopAutoWork: () => (calls.push('stopAutoWork'), ok),
                 skip: (a) => (calls.push(`skip:${a}`), ok),
             },
         };

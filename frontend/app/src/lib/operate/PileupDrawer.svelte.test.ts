@@ -31,6 +31,7 @@ beforeEach(() => {
         abandon: okResult,
         skip: okResult,
         next: okResult,
+        stopAutoWork: okResult,
     });
 });
 

@@ -134,6 +134,12 @@ type ft8QsoStartRequest struct {
 	// protection; the SPA sets it only when the operator acted on a station it already
 	// shows as worked this session.
 	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
+	// AutoWork is the operator's per-click auto-work intent (ADR 0065): true arms an
+	// auto-work-callers run alongside this contact (the ctrl+shift gesture or the
+	// Auto-work toggle), gated daemon-side on ft8.tx.auto_work_callers. Absent/false
+	// works this station only — and clears any run a previous session armed.
+	// Standard exchange mode only; FD and type-4 sessions never arm a run.
+	AutoWork bool `json:"auto_work,omitempty"`
 }
 
 // handleFt8QsoStart begins a manual answer-a-CQ exchange (ADR 0031, step e3).
@@ -208,7 +214,7 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	default:
 		err = s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AutoWork)
 	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)
@@ -302,6 +308,12 @@ type ft8QsoWorkRequest struct {
 	// protection; the SPA sets it only when the operator acted on a station it already
 	// shows as worked this session.
 	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
+	// AutoWork is the operator's per-click auto-work intent (ADR 0065): true arms an
+	// auto-work-callers run alongside this contact (the ctrl+shift gesture or the
+	// Auto-work toggle), gated daemon-side on ft8.tx.auto_work_callers. Absent/false
+	// works this station only — and clears any run a previous session armed.
+	// Standard exchange mode only; FD and type-4 sessions never arm a run.
+	AutoWork bool `json:"auto_work,omitempty"`
 }
 
 // handleFt8QsoWork begins working a station that is calling us (ADR 0033). The operator
@@ -366,7 +378,7 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	default:
 		err = s.ft8.StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AutoWork)
 	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)
@@ -445,6 +457,14 @@ func (s *Server) handleFt8QsoNext(w http.ResponseWriter, _ *http.Request) {
 // Idempotent — abandoning when idle is a 202 no-op.
 func (s *Server) handleFt8QsoAbandon(w http.ResponseWriter, _ *http.Request) {
 	s.ft8.AbandonQso()
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleFt8AutoWorkStop disarms an armed auto-work run WITHOUT ending any active
+// contact — the Auto-work pill's click action (ADR 0065). Distinct from abandon,
+// which stops both. Idempotent — stopping a stopped run is a 202 no-op.
+func (s *Server) handleFt8AutoWorkStop(w http.ResponseWriter, _ *http.Request) {
+	s.ft8.StopAutoWorkRun()
 	w.WriteHeader(http.StatusAccepted)
 }
 

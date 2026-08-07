@@ -11,6 +11,7 @@
         ft8CqToTop,
         ft8HideHashed,
         ft8EngagedThisSession,
+        ft8AutoWorkIntent,
         answerCq,
         workCaller,
         type DecodeEntry,
@@ -449,9 +450,13 @@
     }
 
     async function onRowClick(e: MouseEvent, row: DecodeRow): Promise<void> {
-        // Ctrl/Cmd+click a calling-you row queues it (capture only). A modifier click
-        // NEVER triggers a work-now TX.
-        if (e.ctrlKey || e.metaKey) {
+        // Modifier grammar (ADR 0065, operator-ratified): ctrl+shift+click on a CQ
+        // answers it AND arms an auto-work run — the ONE modifier chord that starts
+        // TX, deliberately revising the older "a modifier click never TXes" rule for
+        // this chord only. Plain ctrl/cmd+click stays capture-only (pile-up enqueue
+        // of a calling-you row).
+        const armGesture = (e.ctrlKey || e.metaKey) && e.shiftKey && row.kind === 'cq';
+        if ((e.ctrlKey || e.metaKey) && !armGesture) {
             if (row.kind === 'call') enqueueCaller(row);
             return;
         }
@@ -483,6 +488,8 @@
                 type4,
                 theirSnr: row.d.snr,
                 allowDuplicate,
+                // The gesture or the standing toggle — either arms (daemon-gated).
+                autoWork: armGesture || ft8AutoWorkIntent.on,
             });
         } else {
             // Work a caller: try the FD shape first (more specific), else standard.
@@ -501,6 +508,7 @@
                 opFreqMHz: opMHz,
                 fd: fd ? { class: fd.class, section: fd.section } : undefined,
                 allowDuplicate,
+                autoWork: ft8AutoWorkIntent.on,
             });
         }
         if (!r.ok) {

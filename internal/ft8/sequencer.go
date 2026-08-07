@@ -490,7 +490,12 @@ type Sequencer struct {
 	// intent to express there.
 	allowDuplicate        bool
 	pendingAllowDuplicate bool
-	startedAt             time.Time // contact start, stamped as the logged QSO's TIME_ON
+	// pendingAutoWork is the operator's per-click auto-work intent (ADR 0065),
+	// staged by the Service with the two fields above and consumed by
+	// armAutoWorkLocked atomically with mode activation. Intent, not state: the
+	// RUN lives in autoWork.
+	pendingAutoWork bool
+	startedAt       time.Time // contact start, stamped as the logged QSO's TIME_ON
 	// contact holds the flags whose lifetime is exactly one contact, so ending one
 	// is a single assignment — see contactFlags for what deliberately stays out.
 	contact    contactFlags
@@ -1123,6 +1128,43 @@ func (s *Sequencer) setPendingAllowDuplicate(allow bool) {
 	s.mu.Lock()
 	s.pendingAllowDuplicate = allow
 	s.mu.Unlock()
+}
+
+// setPendingAutoWork stages the operator's per-click auto-work intent (ADR 0065)
+// for the NEXT accepted start, on the same terms as the two setters above:
+// consumed by armAutoWorkLocked under s.mu atomically with mode activation. A
+// rejected start leaves it unconsumed and the next start overwrites it — every
+// start stages it fresh, so it cannot leak between operator actions.
+func (s *Sequencer) setPendingAutoWork(autoWork bool) {
+	s.mu.Lock()
+	s.pendingAutoWork = autoWork
+	s.mu.Unlock()
+}
+
+// StopAutoWorkRun disarms the auto-work run WITHOUT ending any active contact —
+// the Auto-work pill's click action (ADR 0065). Distinct from Abandon, which
+// stops both. Idempotent: stopping a stopped run publishes nothing.
+func (s *Sequencer) StopAutoWorkRun() {
+	s.mu.Lock()
+	hadRun := s.autoWork.armed
+	s.autoWork = autoWorkState{}
+	if hadRun {
+		if s.mode != seqIdle {
+			// A contact is live: its own status frame carries the cleared flag.
+			s.publish(s.statusLocked())
+		} else {
+			// Idle-and-armed — the V2 shape: the indicator must go out even though
+			// no session frame would otherwise move. Empty reason deliberately:
+			// this is an operator action on the RUN, not a session end. (A late
+			// subscriber loses the previous terminal's end_reason; acceptable —
+			// the operator who clicked is present and the reason was shown.)
+			s.publish(s.terminalStatusLocked(""))
+		}
+	}
+	s.mu.Unlock()
+	if hadRun {
+		s.log.InfoWith().Msg("ft8 seq: auto-work run stopped (operator)")
+	}
 }
 
 // OnSlot is the per-slot driver, called by the decode loop once each completed slot.
@@ -1901,12 +1943,25 @@ func (s *Sequencer) AutoWorkArmed() bool {
 	return s.autoWork.armed
 }
 
-// armAutoWorkLocked arms an auto-work run if the policy allows one, pinning what a
-// later contact will need. Caller holds s.mu; called from the operator-started session
-// paths only — that is the whole mechanism by which every run is headed by an operator
-// action (ADR 0059).
+// armAutoWorkLocked arms an auto-work run when the operator's click carried the
+// intent AND the policy gate allows one, pinning what a later contact will need.
+// Caller holds s.mu; called from the operator-started session paths only — that is
+// the whole mechanism by which every run is headed by an operator action (ADR 0059).
+//
+// ADR 0065 changed both halves of the decision:
+//   - The staged per-click intent (setPendingAutoWork) is required — the policy no
+//     longer arms by itself. The always-arm rule collected an Abandon-debt twice in
+//     one morning (2026-08-07 06:01:17, 07:26:06).
+//   - A start WITHOUT the intent also CLEARS any armed run: "work that station
+//     only" defines the operator's whole intent, and leaving the old run armed
+//     would resume auto-working on call/offset/dial pinned by a PREVIOUS session —
+//     the stale-pin hazard the StartCallCq clear removed (autowork_test.go W12).
+//   - The gate refusing (policy off, intent carried) must never block the CONTACT;
+//     the start proceeds and the published frame's AutoWorkArmed=false is how the
+//     SPA learns the arm was refused (G3).
 func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64) {
-	if !s.autoWorkPolicy {
+	if !s.pendingAutoWork || !s.autoWorkPolicy {
+		s.autoWork = autoWorkState{}
 		return
 	}
 	s.autoWork.armed = true

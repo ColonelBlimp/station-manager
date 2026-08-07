@@ -544,6 +544,11 @@ export interface Ft8AnswerArgs {
      *  transmits a full exchange and sees no row. Only set from an explicit operator
      *  action on a station the UI already shows as worked. */
     allowDuplicate?: boolean;
+    /** Per-click auto-work intent (ADR 0065): true arms an auto-work run alongside
+     *  this contact (ctrl+shift gesture or the Auto-work toggle). Daemon-gated on
+     *  ft8.tx.auto_work_callers; absent/false works this station only and clears
+     *  any previously-armed run. */
+    autoWork?: boolean;
 }
 
 export interface Ft8WorkArgs {
@@ -563,6 +568,11 @@ export interface Ft8WorkArgs {
      *  transmits a full exchange and sees no row. Only set from an explicit operator
      *  action on a station the UI already shows as worked. */
     allowDuplicate?: boolean;
+    /** Per-click auto-work intent (ADR 0065): true arms an auto-work run alongside
+     *  this contact (ctrl+shift gesture or the Auto-work toggle). Daemon-gated on
+     *  ft8.tx.auto_work_callers; absent/false works this station only and clears
+     *  any previously-armed run. */
+    autoWork?: boolean;
 }
 
 export interface Ft8TxActions {
@@ -577,6 +587,9 @@ export interface Ft8TxActions {
     abandon(): Promise<Ft8TxResult>;
     skip(armed: boolean): Promise<Ft8TxResult>;
     next(): Promise<Ft8TxResult>;
+    /** Stop the auto-work run WITHOUT ending any active contact (ADR 0065 — the
+     *  Auto-work pill's click action; abandon stops both). */
+    stopAutoWork(): Promise<Ft8TxResult>;
 }
 
 let txActions: Ft8TxActions | null = null;
@@ -603,14 +616,55 @@ export function callCq(
         : Promise.resolve(txUnavailable);
 }
 
+// Standing auto-work intent (ADR 0065): the visible toggle's state — "the next
+// contact I start also starts a run". The RUN itself lives in the daemon
+// (qso.autoWorkArmed); this is only the operator's pre-arm for the next click,
+// so it is in-memory and dies with the tab. One-shot by design: consumed (reset)
+// when a start carries it, so a forgotten toggle can't arm runs for the rest of
+// the sitting.
+export const ft8AutoWorkIntent = $state({ on: false });
+
+// Intent sent on the last start, awaiting the daemon's verdict: the arm is gated
+// daemon-side on ft8.tx.auto_work_callers, and a refusal is visible ONLY as the
+// active frame arriving with auto_work_armed=false (a refused arm must never
+// block the contact — G3). The sink says so once; without it the operator watches
+// a toggle they set produce no pill, unexplained.
+let pendingAutoWorkIntent = false;
+let autoWorkRefusedSink: (() => void) | null = null;
+
+export function setFt8AutoWorkRefusedSink(fn: (() => void) | null): void {
+    autoWorkRefusedSink = fn;
+}
+
 /** Start answering a CQ (standard or FD) from a clicked Band Activity decode. */
 export function answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult> {
-    return txActions ? txActions.answerCq(a) : Promise.resolve(txUnavailable);
+    if (!txActions) return Promise.resolve(txUnavailable);
+    if (a.autoWork) {
+        pendingAutoWorkIntent = true;
+        ft8AutoWorkIntent.on = false; // consumed — one-shot
+    }
+    return txActions.answerCq(a).then((r) => {
+        if (!r.ok) pendingAutoWorkIntent = false; // start refused — no frame will come
+        return r;
+    });
 }
 
 /** Start working a station calling us from a clicked directed-at-me decode. */
 export function workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult> {
-    return txActions ? txActions.workCaller(a) : Promise.resolve(txUnavailable);
+    if (!txActions) return Promise.resolve(txUnavailable);
+    if (a.autoWork) {
+        pendingAutoWorkIntent = true;
+        ft8AutoWorkIntent.on = false; // consumed — one-shot
+    }
+    return txActions.workCaller(a).then((r) => {
+        if (!r.ok) pendingAutoWorkIntent = false;
+        return r;
+    });
+}
+
+/** Stop the auto-work run only — the Auto-work pill's click action (ADR 0065). */
+export function stopAutoWork(): Promise<Ft8TxResult> {
+    return txActions ? txActions.stopAutoWork() : Promise.resolve(txUnavailable);
 }
 
 /** Abandon any active sequenced session. */
@@ -767,6 +821,14 @@ export const ft8Link: Ft8EventHandlers = {
         // path the operator can re-click well inside it (codex 0f08d2b2 P1). The
         // ft8-logged event that feeds session.qsos is also one-shot and not replayed,
         // so a missed event or a fresh tab never learns it at all.
+        // Resolve a sent auto-work intent against the daemon's verdict: the arm is
+        // gated on ft8.tx.auto_work_callers and a refusal is visible only as the
+        // active frame carrying auto_work_armed=false (G3 — a refused arm never
+        // blocks the contact). One shot: cleared on the first active frame either way.
+        if (p.active === true && pendingAutoWorkIntent) {
+            pendingAutoWorkIntent = false;
+            if (p.auto_work_armed !== true) autoWorkRefusedSink?.();
+        }
         const engaged = (p.their_call ?? '').trim();
         // Band comes from the SESSION-PINNED dial the daemon reports, never from live
         // rig state: the two are independent streams, so a band change mid-contact —
@@ -903,6 +965,9 @@ export function resetFt8ForTests(): void {
     suppressDisarmNoticeFor = '';
     heldDisarmNotice = '';
     txActions = null;
+    ft8AutoWorkIntent.on = false;
+    pendingAutoWorkIntent = false;
+    autoWorkRefusedSink = null;
     operatorCall = '';
     myGrid = '';
     displayPrefs = {

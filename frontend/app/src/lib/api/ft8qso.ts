@@ -85,6 +85,7 @@ export function startFt8Qso(
     mode: 'standard' | 'fd' | 'type4' = 'standard',
     theirSnr?: number,
     allowDuplicate?: boolean,
+    autoWork?: boolean,
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
@@ -99,6 +100,9 @@ export function startFt8Qso(
             // derives its report from the exchange, so it sends neither.
             ...(mode === 'fd' || mode === 'type4' ? { mode, their_snr: theirSnr ?? 0 } : {}),
             ...(allowDuplicate ? { allow_duplicate: true } : {}),
+            // Per-click auto-work intent (ADR 0065) — standard mode only; the daemon
+            // ignores it for fd/type4, which never arm a run.
+            ...(autoWork ? { auto_work: true } : {}),
         },
         signal
     );
@@ -119,6 +123,7 @@ export function startFt8WorkCaller(
     operatingFreqMHz: number,
     fd?: { class: string; section: string },
     allowDuplicate?: boolean,
+    autoWork?: boolean,
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
@@ -132,6 +137,7 @@ export function startFt8WorkCaller(
             operating_freq_mhz: operatingFreqMHz,
             ...(fd ? { mode: 'fd', their_class: fd.class, their_section: fd.section } : {}),
             ...(allowDuplicate ? { allow_duplicate: true } : {}),
+            ...(autoWork ? { auto_work: true } : {}),
         },
         signal
     );
@@ -161,6 +167,13 @@ export function startFt8Cq(
 /** Abandon any active sequenced session — answer-a-CQ, work-a-caller, or Call-CQ. */
 export function abandonFt8Qso(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
     return postFt8Qso('/v1/ft8/qso/abandon', {}, signal);
+}
+
+/** Stop the auto-work run WITHOUT ending any active contact (ADR 0065) — the
+ *  Auto-work pill's click action. Idempotent daemon-side; the cleared state rides
+ *  the ft8-qso SSE. */
+export function stopFt8AutoWork(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
+    return postFt8Qso('/v1/ft8/autowork/stop', {}, signal);
 }
 
 /** Short-circuit the repeat cap on a stuck Call-CQ contact: park this answerer at

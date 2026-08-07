@@ -59,6 +59,7 @@ function armReady(over: Partial<Ft8TxActions> = {}): Calls {
             calls.next++;
             return okResult();
         },
+        stopAutoWork: okResult,
         ...over,
     });
     rig.cat = 'connected';

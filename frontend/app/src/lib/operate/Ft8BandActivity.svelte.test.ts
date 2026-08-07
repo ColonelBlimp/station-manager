@@ -10,6 +10,7 @@ import Ft8BandActivity from './Ft8BandActivity.svelte';
 import {
     ft8State,
     ft8Link,
+    ft8AutoWorkIntent,
     setFt8OperatorCall,
     setFt8MyGrid,
     setFt8TxActions,
@@ -43,6 +44,7 @@ function armReady(over: Partial<Ft8TxActions> = {}): void {
         abandon: okResult,
         skip: okResult,
         next: okResult,
+        stopAutoWork: okResult,
         ...over,
     });
     rig.cat = 'connected';
@@ -1051,5 +1053,81 @@ describe('Ft8BandActivity worked-vs-engaged toast wording', () => {
         expect(toastText()).not.toMatch(/already worked/i);
         expect(ft8PileupStack.items).toHaveLength(1);
         expect(ft8PileupStack.items[0].repeat).toBe(true);
+    });
+});
+
+/*
+    PER-CLICK AUTO-WORK GRAMMAR — ADR 0065 forks 1+2 (operator-ratified
+    2026-08-07). A plain click works that station only; ctrl+shift+click on a CQ
+    answers AND arms a run; the standing toggle (ft8AutoWorkIntent) makes the
+    next plain click carry the intent and is consumed by it (one-shot).
+    AW1 is the flip that differentiates the pre-0065 behaviour (policy-implied
+    arming — the daemon side of that is pinned in autowork_test.go G2; here the
+    rule is that the CLICK carries no intent). AW2/AW3 pin the two arming
+    handles.
+*/
+describe('Ft8BandActivity auto-work click grammar', () => {
+    it('AW1: a plain CQ click carries no auto-work intent', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
+        );
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+        expect(got).toHaveLength(1);
+        expect(got[0].autoWork ?? false).toBe(false);
+    });
+
+    it('AW2: ctrl+shift+click on a CQ answers WITH the intent', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
+        );
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'), {
+            ctrlKey: true,
+            shiftKey: true,
+        });
+        await flush();
+        expect(got).toHaveLength(1);
+        expect(got[0].autoWork).toBe(true);
+    });
+
+    it('AW3: the standing toggle arms the next plain click and is consumed by it', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        ft8AutoWorkIntent.on = true;
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
+        );
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
+        await flush();
+        expect(got).toHaveLength(1);
+        expect(got[0].autoWork).toBe(true);
+        expect(ft8AutoWorkIntent.on).toBe(false);
+    });
+
+    it('AW4: plain ctrl/cmd+click stays capture-only (no TX start, even on a CQ)', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        const got: Ft8AnswerArgs[] = [];
+        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
+        );
+        flushSync();
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'), { ctrlKey: true });
+        await flush();
+        expect(got).toHaveLength(0);
     });
 });

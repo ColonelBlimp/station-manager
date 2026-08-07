@@ -11,7 +11,14 @@
 import { it, expect, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import Ft8Operate from './Ft8Operate.svelte';
-import { ft8State, resetFt8ForTests, ft8Link, setFt8TxActions } from './ft8.svelte';
+import {
+    ft8State,
+    resetFt8ForTests,
+    ft8Link,
+    setFt8TxActions,
+    setFt8AutoWorkRefusedSink,
+    answerCq,
+} from './ft8.svelte';
 
 // Abandon is also gated on TX being armed, so a rule about the RUN must not be
 // satisfied (or defeated) by the arm state.
@@ -26,6 +33,7 @@ function armReadyForAbandon(): void {
         abandon: ok,
         skip: ok,
         next: ok,
+        stopAutoWork: ok,
     });
     ft8State.tx.armed = true;
 }
@@ -97,4 +105,93 @@ it('leaves Abandon disabled when idle with no run', () => {
     render(Ft8Operate);
 
     expect(screen.getByRole('button', { name: 'Abandon' }).hasAttribute('disabled')).toBe(true);
+});
+
+/*
+    ADR 0065: the daemon gate's refusal is visible only as the ACTIVE frame
+    arriving with auto_work_armed=false after a start that CARRIED the intent
+    (autowork_test.go G3 — a refused arm never blocks the contact). The sink says
+    so once — without it the operator watches a toggle they set produce no pill,
+    unexplained. A start WITHOUT the intent must never fire it (the ordinary
+    plain-click case), and the verdict is one-shot (later frames stay quiet).
+    And the pill is a CONTROL: clicking it stops the run without abandoning.
+*/
+it('fires the refused sink once when an intent-carrying start comes back unarmed', async () => {
+    armReadyForAbandon();
+    let refused = 0;
+    setFt8AutoWorkRefusedSink(() => refused++);
+
+    await answerCq({
+        theirCall: 'K1ABC',
+        theirGrid: 'FN42',
+        slotUtc: '2026-08-07T05:00:00Z',
+        offsetHz: 1500,
+        opFreqMHz: 14.074,
+        fd: false,
+        theirSnr: -10,
+        autoWork: true,
+    });
+    // The daemon's verdict: contact active, arm refused (gate off).
+    ft8Link.onQso({ active: true, role: 'answerer', their_call: 'K1ABC', auto_work_armed: false });
+    expect(refused).toBe(1);
+    // One-shot: a later frame does not re-toast.
+    ft8Link.onQso({ active: true, role: 'answerer', their_call: 'K1ABC', auto_work_armed: false });
+    expect(refused).toBe(1);
+});
+
+it('does not fire the refused sink for a plain start or a granted arm', async () => {
+    armReadyForAbandon();
+    let refused = 0;
+    setFt8AutoWorkRefusedSink(() => refused++);
+
+    // Plain start (no intent): an unarmed frame is the NORMAL outcome.
+    await answerCq({
+        theirCall: 'K1ABC',
+        theirGrid: 'FN42',
+        slotUtc: '2026-08-07T05:00:00Z',
+        offsetHz: 1500,
+        opFreqMHz: 14.074,
+        fd: false,
+        theirSnr: -10,
+    });
+    ft8Link.onQso({ active: true, role: 'answerer', their_call: 'K1ABC', auto_work_armed: false });
+    expect(refused).toBe(0);
+
+    // Intent granted: armed frame — nothing to explain.
+    await answerCq({
+        theirCall: 'W2DEF',
+        theirGrid: 'FN31',
+        slotUtc: '2026-08-07T05:01:00Z',
+        offsetHz: 1500,
+        opFreqMHz: 14.074,
+        fd: false,
+        theirSnr: -10,
+        autoWork: true,
+    });
+    ft8Link.onQso({ active: true, role: 'answerer', their_call: 'W2DEF', auto_work_armed: true });
+    expect(refused).toBe(0);
+});
+
+it('clicking the armed pill calls the run-only stop action', async () => {
+    let stops = 0;
+    const ok = (): Promise<{ ok: boolean; message: string }> =>
+        Promise.resolve({ ok: true, message: '' });
+    setFt8TxActions({
+        arm: ok,
+        callCq: ok,
+        answerCq: ok,
+        workCaller: ok,
+        abandon: ok,
+        skip: ok,
+        next: ok,
+        stopAutoWork: () => (stops++, ok()),
+    });
+    ft8State.tx.armed = true;
+    ft8State.qso.autoWorkArmed = true;
+    render(Ft8Operate);
+
+    const pill = screen.getByTestId('auto-work-armed');
+    pill.click();
+    await Promise.resolve();
+    expect(stops).toBe(1);
 });

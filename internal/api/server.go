@@ -304,6 +304,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 		mux.HandleFunc("POST /v1/ft8/qso/work", s.handleFt8QsoWork)
 		mux.HandleFunc("POST /v1/ft8/qso/path", s.handleFt8QsoPath)
 		mux.HandleFunc("POST /v1/ft8/qso/abandon", s.handleFt8QsoAbandon)
+		// Stop the auto-work run only (ADR 0065) — abandon stops run AND contact.
+		mux.HandleFunc("POST /v1/ft8/autowork/stop", s.handleFt8AutoWorkStop)
 		mux.HandleFunc("POST /v1/ft8/qso/skip", s.handleFt8QsoSkip)
 		mux.HandleFunc("POST /v1/ft8/qso/next", s.handleFt8QsoNext)
 		// Caller-side sequencer (ADR 0033) — start a Call-CQ session that works the
