@@ -261,6 +261,19 @@ func runRestore(args []string) error {
 		}
 	}
 
+	// The DURABLE run summary (logging-gaps Q1): stdout dies with the terminal,
+	// and a restore is the record least able to rely on anything else having
+	// survived — an idempotent re-run and a real recovery must stay tellable
+	// apart in smd.log after the fact. Per-row outcomes are the service's
+	// Debug lines; this is the one-line Info account of the run.
+	loggerSvc.InfoWith().
+		Int("requested", len(records)).
+		Int("stored", stored).
+		Int("skipped_existing", skipped).
+		Int("failed", failed).
+		Int64("logbook_id", logbookID).
+		Msg("restore: run complete")
+
 	_, _ = fmt.Fprintf(os.Stdout, "restored %d record(s) in %s\n", len(records), time.Since(start).Round(time.Millisecond))
 	_, _ = fmt.Fprintf(os.Stdout, "  stored:            %d\n", stored)
 	_, _ = fmt.Fprintf(os.Stdout, "  skipped (existing): %d\n", skipped)

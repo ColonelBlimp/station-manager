@@ -58,6 +58,7 @@ func (s *Service) Restore(ctx context.Context, logbookID int64, qso types.Qso) (
 	// Idempotence: an existing row (live OR tombstone) wins — restore fills
 	// gaps, never overwrites.
 	if _, err := s.DB.FetchQsoByUUIDIncludingDeletedWithContext(ctx, qso.UUID); err == nil {
+		s.logRestore(qso.UUID, logbookID, RestoreSkippedExisting)
 		return RestoreSkippedExisting, nil
 	}
 
@@ -85,5 +86,21 @@ func (s *Service) Restore(ctx context.Context, logbookID int64, qso types.Qso) (
 	if _, err := s.DB.InsertRestoredQsoWithContext(ctx, qso); err != nil {
 		return "", errors.New(op).WithErr(err).WithMsgf("insert restored qso %s", qso.UUID)
 	}
+	s.logRestore(qso.UUID, logbookID, RestoreStored)
 	return RestoreStored, nil
+}
+
+// logRestore writes the per-call restore record (logging-gaps Q1): stored and
+// skipped_existing used to be identical silence, and telling a real recovery
+// (every row stored) from an idempotent re-run (every row skipped) is the
+// entire question during a recovery — the one time the log is least able to
+// rely on anything else having survived. Debug, because a restore is a bulk
+// loop; the per-run stored/skipped/failed summary is the caller's Info line
+// (cmd/smd restore).
+func (s *Service) logRestore(uuid string, logbookID int64, outcome RestoreStatus) {
+	s.Logger.DebugWith().
+		Str("uuid", uuid).
+		Int64("logbook_id", logbookID).
+		Str("outcome", string(outcome)).
+		Msg("restore: qso")
 }

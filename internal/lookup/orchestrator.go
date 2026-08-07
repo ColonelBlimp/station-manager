@@ -685,8 +685,21 @@ func (o *Orchestrator) scheduleStationRefresh(callsign string) {
 
 // warn is a small wrapper that no-ops when LoggerService is nil so
 // the orchestrator stays usable in tests that don't wire a logger.
+//
+// A cancelled context logs at DEBUG, not warn: cancellation is the CALLER's
+// decision — the SPA aborted its enrichment fetch, the HTTP request died with
+// its connection, or the daemon is shutting down — not a provider or DB
+// fault, and it arrived in bursts of full Warn error-chains that drowned the
+// real warnings (dogfood 2026-08-07: 9 of one session's 24 warnings). The
+// demotion lives HERE so all call sites share one rule and cannot drift.
+// context.DeadlineExceeded deliberately stays a warn: that is our own timeout
+// catching a slow provider, a fact the operator tunes against.
 func (o *Orchestrator) warn(msg string, err error) {
 	if o.Logger == nil {
+		return
+	}
+	if stderrs.Is(err, context.Canceled) {
+		o.Logger.DebugWith().Err(err).Msg(msg)
 		return
 	}
 	o.Logger.WarnWith().Err(err).Msg(msg)

@@ -89,7 +89,14 @@ and the fan-out.
 
 ## Tier 1
 
-### Q1. `restore.go` is the only CRUD verb that logs nothing — and it is the disaster-recovery path
+### Q1. ✅ FIXED 2026-08-07 — `restore.go` is the only CRUD verb that logs nothing — and it is the disaster-recovery path
+
+> ✅ **FIXED 2026-08-07** as prescribed: per-call Debug in `qsoservice.Restore`
+> (`logRestore` — uuid, logbook_id, outcome; stored and skipped_existing
+> distinguishable, which was the whole finding) + the durable per-run Info
+> summary in `cmd/smd/restore.go` (requested/stored/skipped_existing/failed +
+> logbook), landing in smd.log alongside the stdout report. Spec:
+> `logginggaps_test.go` TestRestore_OutcomesAreDistinguishableInTheLog.
 
 Four verbs, three logged:
 
@@ -117,7 +124,17 @@ landed versus how many were skipped as already-present.
 - **Record:** per-call status at Debug (a restore is a bulk loop) plus a summary line
   per run at Info — stored / skipped counts and the target logbook.
 
-### Q2. The enqueue log omits three of five outcomes — including the ClubLog compliance refusal
+### Q2. ✅ FIXED 2026-08-07 — The enqueue log omits three of five outcomes — including the ClubLog compliance refusal
+
+> ✅ **FIXED 2026-08-07** as prescribed, both amendments included: one outcome
+> line (`logEnqueueResult`) fires on EVERY successful return — the zero-enqueue
+> early return included, so the pure ClubLog-compliance case (all refused) is
+> no longer the same silence as never-invoked — carrying `requested` plus all
+> five counts, lengths only. The delete-repair path got the sibling
+> (`logEnqueueDeleteResult`: every return + `not_found`). Spec:
+> `logginggaps_test.go` (all-refused / five-counts / delete-zero rules). The
+> handler-layer half of the pairing (api A2) remains open — the count is now
+> durable at the service layer either way.
 
 `EnqueueResult` (`enqueue.go:20-32`) carries five outcome fields. The log at `:202-208`
 carries two of them plus `force`:
@@ -155,7 +172,13 @@ the log. The delete-repair path (`:310-317`) additionally omits `NotFound`.
 - **Pairs with `api-logging-gaps.md` A2** (the handler doesn't log its summary either).
   Neither layer records it; fix both or the count still only exists in the response.
 
-### Q3. A duplicate submit is silent while a stored submit logs
+### Q3. ✅ FIXED 2026-08-07 — A duplicate submit is silent while a stored submit logs
+
+> ✅ **FIXED 2026-08-07** as prescribed: `logDuplicateRefused` (Info —
+> logbook, submitted call/date/time, colliding uuid + qso_id) on BOTH
+> duplicate returns — the dedupe pre-check and the unique-index race path —
+> via one shared helper so the two records cannot drift. Spec:
+> `logginggaps_test.go` TestSubmit_DuplicateRefusalIsLogged.
 
 `submit.go` returns `SubmitResult{Status: "duplicate", …}` at `:377` and `:430`. Neither
 path logs. The `stored` path at `:482` does.

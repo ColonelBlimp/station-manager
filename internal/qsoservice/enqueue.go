@@ -183,6 +183,12 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 	}
 
 	if len(enqueueIDs) == 0 {
+		// Every successful return logs — THIS one especially (logging-gaps Q2):
+		// a selection in which every QSO was refused is the pure ClubLog-
+		// compliance case (skipped_no_history honours the 2026-07-19
+		// realtime.php grant condition), and it used to write nothing at all —
+		// all-refused and never-invoked were the same silence.
+		s.logEnqueueResult(fwd.Name, fwd.Type, len(uuids), force, res)
 		return res, nil
 	}
 
@@ -203,16 +209,28 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 	}
 
 	res.Enqueued = len(enqueueIDs)
+	s.logEnqueueResult(fwd.Name, fwd.Type, len(uuids), force, res)
+	return res, nil
+}
 
+// logEnqueueResult writes the manual-backfill outcome line (logging-gaps Q2):
+// the requested selection size plus ALL FIVE outcome counts — {enqueued:12}
+// and {enqueued:12, skipped_no_history:300} used to be the same line, and the
+// refusals SM makes to honour its written ClubLog commitment existed only in a
+// browser response. Lengths only: the UUID lists belong to the response (and
+// Debug if anywhere), not Info.
+func (s *Service) logEnqueueResult(fwdName, fwdType string, requested int, force bool, res EnqueueResult) {
 	s.Logger.InfoWith().
-		Str("forwarder", fwd.Name).
-		Str("type", fwd.Type).
+		Str("forwarder", fwdName).
+		Str("type", fwdType).
+		Int("requested", requested).
 		Int("enqueued", res.Enqueued).
 		Int("skipped_uploaded", res.SkippedUploaded).
+		Int("skipped_deleted", len(res.SkippedDeleted)).
+		Int("not_found", len(res.NotFound)).
+		Int("skipped_no_history", len(res.SkippedNoHistory)).
 		Bool("force", force).
-		Msg("manual upload backfill enqueued")
-
-	return res, nil
+		Msg("manual upload backfill result")
 }
 
 // findEnabledInsertForwarder resolves a forwarder by name (case-insensitive) and
@@ -295,6 +313,10 @@ func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string
 	}
 
 	if len(enqueueIDs) == 0 {
+		// Same rule as the insert path (logging-gaps Q2): the zero-enqueue
+		// return logs too, or a repair that repaired nothing is confusable
+		// with one never attempted.
+		s.logEnqueueDeleteResult(fwd.Name, fwd.Type, len(uuids), res)
 		return res, nil
 	}
 
@@ -313,12 +335,20 @@ func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string
 		return EnqueueDeleteResult{}, errors.New(op).WithErr(err).WithMsg("commit transaction")
 	}
 	res.Enqueued = len(enqueueIDs)
+	s.logEnqueueDeleteResult(fwd.Name, fwd.Type, len(uuids), res)
+	return res, nil
+}
 
+// logEnqueueDeleteResult is the delete-repair sibling of logEnqueueResult
+// (logging-gaps Q2): every return path logs, all outcome counts carried —
+// NotFound was omitted even when the old line did fire. Lengths only.
+func (s *Service) logEnqueueDeleteResult(fwdName, fwdType string, requested int, res EnqueueDeleteResult) {
 	s.Logger.InfoWith().
-		Str("forwarder", fwd.Name).
-		Str("type", fwd.Type).
+		Str("forwarder", fwdName).
+		Str("type", fwdType).
+		Int("requested", requested).
 		Int("enqueued", res.Enqueued).
 		Int("skipped_live", len(res.SkippedLive)).
-		Msg("delete upload rows enqueued (reconcile repair)")
-	return res, nil
+		Int("not_found", len(res.NotFound)).
+		Msg("delete upload backfill result (reconcile repair)")
 }

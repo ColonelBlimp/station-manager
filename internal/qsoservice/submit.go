@@ -375,6 +375,8 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	if !force {
 		existing, derr := s.DB.FetchQsoByDedupeKeyWithContext(ctx, logbookID, dedupeKey)
 		if derr == nil {
+			s.logDuplicateRefused(logbookID, call, qso.QsoDetails.QsoDate,
+				qso.QsoDetails.TimeOn, existing.UUID, existing.ID)
 			return SubmitResult{Status: "duplicate", UUID: existing.UUID, ID: existing.ID}, nil
 		}
 		if !stderr.Is(derr, errors.ErrNotFound) {
@@ -428,6 +430,8 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 			existing, ferr := s.DB.FetchQsoByDedupeKeyWithContext(refetchCtx, logbookID, dedupeKey)
 			refetchCancel()
 			if ferr == nil {
+				s.logDuplicateRefused(logbookID, call, qso.QsoDetails.QsoDate,
+					qso.QsoDetails.TimeOn, existing.UUID, existing.ID)
 				return SubmitResult{Status: "duplicate", UUID: existing.UUID, ID: existing.ID}, nil
 			}
 			// The dedupe refetch missed, so the violated index wasn't
@@ -541,3 +545,20 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 // local copy detected the wrong driver's typed error type — daemon
 // uses modernc.org/sqlite, not mattn/go-sqlite3 — and fell through
 // to the substring fallback at runtime.)
+
+// logDuplicateRefused records a submit the dedupe check turned away
+// (logging-gaps Q3): the QSO that was NOT written is the one the operator
+// will ask about — they saw the rejection — yet only the stored path logged,
+// which is backwards for diagnosis. Info, naming the refused submission and
+// the row it collided with. Shared by the pre-transaction dedupe check and
+// the unique-index race path so the two records cannot drift apart.
+func (s *Service) logDuplicateRefused(logbookID int64, call, qsoDate, timeOn, existingUUID string, existingID int64) {
+	s.Logger.InfoWith().
+		Int64("logbook_id", logbookID).
+		Str("call", call).
+		Str("qso_date", qsoDate).
+		Str("time_on", timeOn).
+		Str("existing_uuid", existingUUID).
+		Int64("existing_qso_id", existingID).
+		Msg("QSO duplicate refused")
+}

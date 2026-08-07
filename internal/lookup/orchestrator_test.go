@@ -3,6 +3,8 @@ package lookup_test
 import (
 	"context"
 	"encoding/json"
+	stderrs "errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1583,4 +1585,59 @@ func TestEnrich_ReturnsPromptlyOnContextCancel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Enrich did not return after context cancellation; it blocked on a ctx-ignoring provider")
 	}
+}
+
+// ----- ctx-cancel warns are noise, not faults (dogfood 2026-08-07) -----
+
+// A cancelled context is the CALLER's decision — the SPA aborted its
+// enrichment fetch, the HTTP request died with its connection, or the daemon
+// is shutting down — not a provider or DB fault. It used to log the same
+// multi-line Warn error-chain a genuine provider outage does, in bursts (9 of
+// one session's 24 warnings were exactly this). The two confusable states
+// must stay distinguishable in the log: real fault → warn, caller hung up →
+// debug, same message either way. context.DeadlineExceeded deliberately stays
+// a WARN: that is our own timeout catching a slow provider, a fact the
+// operator tunes against. The rule lives in the shared warn helper, so it
+// covers all ten call sites at once and cannot drift per-site.
+func TestEnrich_CanceledProviderErrorLogsDebugNotWarn(t *testing.T) {
+	db := newTestSqlite(t)
+
+	run := func(t *testing.T, provErr error) string {
+		t.Helper()
+		var buf strings.Builder
+		o := &lookup.Orchestrator{
+			DB:         db,
+			Chain:      []lookup.CallsignProvider{&stubCallsignProvider{name: "qrz", err: provErr}},
+			CountryTTL: time.Hour,
+			StationTTL: time.Hour,
+			Refresher:  &syncRefresher{},
+			Logger:     logging.NewForWriter(&buf),
+		}
+		o.Enrich(context.Background(), "M0AAA")
+		return buf.String()
+	}
+
+	t.Run("canceled → debug", func(t *testing.T) {
+		out := run(t, fmt.Errorf("Get \"https://xmldata.qrz.com\": %w", context.Canceled))
+		if strings.Contains(out, `"level":"warn"`) {
+			t.Errorf("a canceled lookup must not warn — the caller hung up; log:\n%s", out)
+		}
+		if !strings.Contains(out, `"level":"debug"`) || !strings.Contains(out, "callsign provider error: qrz") {
+			t.Errorf("the cancellation must still be visible at debug, same message; log:\n%s", out)
+		}
+	})
+
+	t.Run("real fault → warn (control)", func(t *testing.T) {
+		out := run(t, stderrs.New("connection refused"))
+		if !strings.Contains(out, `"level":"warn"`) {
+			t.Errorf("a genuine provider error must still warn; log:\n%s", out)
+		}
+	})
+
+	t.Run("deadline → warn (our timeout on a slow provider)", func(t *testing.T) {
+		out := run(t, fmt.Errorf("Get \"https://xmldata.qrz.com\": %w", context.DeadlineExceeded))
+		if !strings.Contains(out, `"level":"warn"`) {
+			t.Errorf("a deadline expiry is our own timeout firing — it must warn; log:\n%s", out)
+		}
+	})
 }
