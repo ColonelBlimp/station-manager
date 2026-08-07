@@ -48,11 +48,13 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **END OF DAY 2026-08-07 (three sessions): tree CLEAN at `c3d67c82`, every
-  review triaged + deleted** (7 codex rounds today, 3 real findings, all fixed
-  same-day RED-first). **DEPLOYED `1152-g80db5a92` at 13:55 and went ON AIR**
-  — the deploy now trails ONLY the amber-band commit `c3d67c82`: redeploy and
-  the TX-drive chip reads GREEN at healthy drive.
+- **END OF DAY 2026-08-07: tree CLEAN at `5c22fdd9`, every review triaged +
+  deleted** (8 review rounds today — 7 codex + 1 pasted external — 6 real
+  findings, all fixed same-day RED-first). **DEPLOYED `1152-g80db5a92` at
+  13:55 and went ON AIR**; the deploy now trails TWO commits — `c3d67c82`
+  (ALC amber band → chip reads green at healthy drive) and `5c22fdd9`
+  (TX-path fixes: PSK spot attribution + a PTT panic guard) — **redeploy
+  before the next on-air session**.
 - **First live ADR 0064 data (on air, afternoon):** healthy FT8 drive =
   **ALC 15–18 every slot, PO flat** — which broke the chip's zero-only green
   (healthy TX always rendered amber, nagging at correct drive; operator
@@ -65,17 +67,55 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   checks still open: pill lights on a work-caller arm · FD click leaves the
   toggle lit, no toast · a pick run (needs `ft8.tx.caller_answer_mode:
   "operator_pick"` in config.json — stop smd, edit, start).
-- **Earlier today:** ADR 0065 end to end (per-click arming grammar +
-  operator_pick pile-up, 10 ratified forks, spec
-  `internal/ft8/operatorpick_test.go`) · ADR 0064 full build · inbox fully
-  triaged · engaged-vs-logged toast split · session search · morning-log
-  diagnosis — detail in Current state.
-- **NEXT:** redeploy (`c3d67c82`) → on-air: §4 iii deliberate overdrive →
+- **Evening: a pasted external review found 3 REAL TX-path defects, all fixed**
+  (detail in Current state): a panic between KeyTx and the unkey defer left
+  PTT up (guard now registers the line after KeyTx) · decode reports now stamp
+  their CAPTURE dial (`ft8-decode` `dial_mhz`) — the PSK sink spotted a whole
+  slot on the wrong band across a QSY, and the SPA drops late wrong-band rows
+  · an arm no longer pins a pre-lock dial reading (commit-time re-check).
+- **Earlier today** (detail in Current state): ADR 0065 end to end (per-click
+  arming + operator_pick, 10 ratified forks) · ADR 0064 full build · inbox
+  fully triaged · toast split · session search · morning-log diagnosis.
+- **NEXT:** redeploy (`5c22fdd9`) → on-air: §4 iii deliberate overdrive →
   ratify `alc_red` → flip 0064 Accepted · the 0065 sanity checks above ·
   findings 9/10 · enrichment ctx-cancel WARN→debug · paste-list port ·
   ctrl+click-on-CQ gesture (0065, undecided) · Tune-coverage question.
 
 ## Current state (as of 2026-08-07)
+
+### 2026-08-07 (evening) — pasted external review: three real FT8 TX-path defects
+
+All three verified against the code, fixed RED-first with reversion probes,
+gates green under CGO + CGO-free + -race; the fix commit's codex round was
+clean. Nothing here changes behaviour the operator chose — all three are
+correctness holes found by inspection.
+
+- **P1 — PTT panic window** (`txcontroller.go`): `onKeyed` ran between a
+  successful `KeyTx` and the unkey defer's registration, so a panic in the
+  callback escaped with PTT asserted (bridge 18 s auto-off as the only net) —
+  on exactly the path the function's contract says is covered. The guard now
+  registers the line after `KeyTx`; a second idempotent registration after the
+  evidence defer preserves the LIFO order that makes `keyed_ms` the true
+  key-to-unkey span, and an onKeyed panic writes no false "transmitted" line.
+- **P1 — decode reports lose their capture dial**: the PSK Reporter sink
+  re-read the LIVE dial at publish time; publication lags capture by the
+  decode (~0.7–1.6 s), so a QSY in that gap spotted a whole slot on the wrong
+  band — the moved-slot suppression can't catch a move that POSTDATES the
+  window. `DecodeReport` now stamps `dial_mhz` from `Slot.DialMHz` (same rule
+  as occupancy), the PSK sink spots from the stamp (skips unattributable
+  slots), and the SPA withholds rows whose capture band differs from the
+  view's band (late-arrival tail after the band-change feed clear; no stamp =
+  fail-open display). Daemon test pins the captured value AGAINST a live
+  source already reading elsewhere.
+- **P2 — stale arm pin** (`servicetx.go`): armTx reads the dial before txMu
+  (lock order) and committed that entry reading; a QSY inside the window
+  pinned the old frequency, and onDialMoved's `!armed` early-return never
+  repaired it — with no capture running there is NO move callback at all, so
+  the armed-but-every-key-refused state was indefinite. Fix: post-commit
+  compare-and-repair under a fresh hold (interim fails closed); an unknown
+  re-read keeps the entry pin deliberately (refuse-and-re-arm covers the
+  QSY+CAT-blink double fault) — reasoning at the code site. The test also
+  pins the repaired VALUE, so a fix-by-zero-pin (7c2e66ad hazard) fails.
 
 ### 2026-08-07 (late afternoon) — first live meter data flips the ALC colour grammar
 
