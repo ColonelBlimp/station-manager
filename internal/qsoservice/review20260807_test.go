@@ -290,6 +290,34 @@ func TestUpdate_OverlongRstRefused(t *testing.T) {
 	require.Equal(t, "invalid_field_value", se.Code)
 }
 
+// LV5 (codex bb04a661 P2): the caps mirror SQLite length(), which counts
+// CHARACTERS, not bytes — so the validator must count runes. A 50-rune
+// country of two-byte characters (100 bytes) satisfies the schema's
+// length(trim(country)) <= 50 and must be ACCEPTED; the byte-counting first
+// implementation rejected it, refusing values the database and every prior
+// build accepted. The fixture stores through the REAL DB, so its acceptance
+// also measures the external claim about length() semantics.
+func TestSubmit_CountryLengthCountsCharactersNotBytes(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	rec := ssbRec("M0ABC", "K1ABC")
+	rec.ContactedStation.Country = strings.Repeat("é", 50) // 50 chars, 100 bytes
+	res, err := s.Submit(ctx, lbID, rec, false)
+	require.NoError(t, err, "LV5: 50 characters satisfies the schema CHECK — a byte count "+
+		"rejects what the database accepts")
+	require.Equal(t, "stored", res.Status)
+
+	rec = ssbRec("M0ABC", "K2DEF")
+	rec.ContactedStation.Country = strings.Repeat("é", 51) // 51 chars — over the cap
+	_, err = s.Submit(ctx, lbID, rec, false)
+	require.Error(t, err, "51 characters exceeds the CHECK regardless of encoding")
+	se := IsSubmitError(err)
+	require.NotNil(t, se)
+	require.Equal(t, "invalid_field_value", se.Code)
+}
+
 // ---- Finding 4: time coherence covers the non-decreasing direction -----------
 
 func TestSubmit_DateOffMustMatchQsoDateWhenTimesDoNotDecrease(t *testing.T) {

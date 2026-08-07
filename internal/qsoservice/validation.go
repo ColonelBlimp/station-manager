@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -59,8 +60,11 @@ const (
 // validateSchemaLengths applies the caps above to the three free-text columns
 // no earlier check bounds (every other CHECKed column is covered upstream:
 // call/band/mode by their validators, dates/times by format checks, freq by
-// the band table). Shared by prepareQso and Update so the paths cannot drift;
-// adifNames selects the caller's field vocabulary for the message.
+// the band table). Counts RUNES, not bytes (codex bb04a661 P2): SQLite's
+// length() counts characters for TEXT, so a byte count would reject
+// multi-byte values the CHECK — and every prior build — accepts. Shared by
+// prepareQso and Update so the paths cannot drift; adifNames selects the
+// caller's field vocabulary for the message.
 func validateSchemaLengths(rstSent, rstRcvd, country string, adifNames bool) error {
 	name := func(adif, js string) string {
 		if adifNames {
@@ -68,15 +72,15 @@ func validateSchemaLengths(rstSent, rstRcvd, country string, adifNames bool) err
 		}
 		return js
 	}
-	if len(rstSent) > maxRstLen {
+	if utf8.RuneCountInString(rstSent) > maxRstLen {
 		return &SubmitError{Code: "invalid_field_value",
 			Message: fmt.Sprintf("%s must be at most %d characters", name("RST_SENT", "rst_sent"), maxRstLen)}
 	}
-	if len(rstRcvd) > maxRstLen {
+	if utf8.RuneCountInString(rstRcvd) > maxRstLen {
 		return &SubmitError{Code: "invalid_field_value",
 			Message: fmt.Sprintf("%s must be at most %d characters", name("RST_RCVD", "rst_rcvd"), maxRstLen)}
 	}
-	if len(strings.TrimSpace(country)) > maxCountryLen {
+	if utf8.RuneCountInString(strings.TrimSpace(country)) > maxCountryLen {
 		return &SubmitError{Code: "invalid_field_value",
 			Message: fmt.Sprintf("%s must be at most %d characters", name("COUNTRY", "country"), maxCountryLen)}
 	}
