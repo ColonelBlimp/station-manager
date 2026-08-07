@@ -90,4 +90,55 @@ describe('TX disarm cause visibility', () => {
 
         expect(seen).toEqual([]);
     });
+
+    // The hub replays cached events tx-BEFORE-qso (internal/ft8/hub.go), so a
+    // reconnect after an outage presents the S4 event in the OPPOSITE order to
+    // live publication: the disarm edge arrives while the session still shows
+    // active, and the terminal frame with the explanation follows (codex P2 on
+    // a11079b8). A disarm edge with a locally-active session therefore HOLDS
+    // its notice and lets the next qso frame decide.
+    it('S6: replayed order — disarm frame first, then the terminal session frame: still one notice', () => {
+        const disarms: string[] = [];
+        const ends: string[] = [];
+        setFt8TxDisarmedSink((cause) => disarms.push(cause));
+        setFt8SessionEndedSink((reason) => ends.push(reason));
+
+        ft8Link.onTx({ armed: true });
+        ft8Link.onQso({ active: true, role: 'caller', their_call: 'K1ABC' });
+        // Reconnect replay: cached ft8-tx first, cached terminal ft8-qso second.
+        ft8Link.onTx({ armed: false, disarm_cause: 'dial_moved' });
+        expect(disarms).toEqual([]);
+        ft8Link.onQso({ active: false, end_reason: 'dial_moved' });
+
+        expect(ends).toEqual(['dial_moved']);
+        expect(disarms).toEqual([]);
+    });
+
+    // The hold must never LOSE the notice: kills the suppress-outright
+    // alternative, which trades the double toast for a silent safety stop.
+    // Passes against the pre-fix code too (which fires early) — its teeth are
+    // the pairing with S6, which that code fails.
+    it('S7: a held notice fires when the following session frame carries no reason', () => {
+        const disarms: string[] = [];
+        const ends: string[] = [];
+        setFt8TxDisarmedSink((cause) => disarms.push(cause));
+        setFt8SessionEndedSink((reason) => ends.push(reason));
+
+        ft8Link.onTx({ armed: true });
+        ft8Link.onQso({ active: true, role: 'caller', their_call: 'K1ABC' });
+        // Replay after an outage in which the operator abandoned (no end_reason
+        // on the cached terminal frame) and a dial nudge then disarmed TX.
+        ft8Link.onTx({ armed: false, disarm_cause: 'dial_moved' });
+        ft8Link.onQso({ active: false });
+
+        expect(ends).toEqual([]);
+        // The safety stop must not go unannounced.
+        expect(disarms).toEqual(['dial_moved']);
+
+        // And the hold is gone once used: a fresh arm + reasonless frame later
+        // must not resurrect it.
+        ft8Link.onTx({ armed: true });
+        ft8Link.onQso({ active: false });
+        expect(disarms).toEqual(['dial_moved']);
+    });
 });

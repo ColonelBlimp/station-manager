@@ -360,6 +360,13 @@ export function setFt8TxDisarmedSink(fn: (cause: string) => void): void {
  *  suppress a LATER unrelated disarm. */
 let suppressDisarmNoticeFor = '';
 
+/** A disarm notice held while the session still shows locally active: the hub
+ *  replays cached events tx-BEFORE-qso, so after a reconnect the disarm edge
+ *  arrives ahead of the terminal frame that explains it (codex P2 on a11079b8).
+ *  The next qso frame decides — a reasoned session end drops it (one notice per
+ *  event), a reasonless frame flushes it (a safety stop is never lost). */
+let heldDisarmNotice = '';
+
 /** Band Activity display prefs (config.json ft8.display). Defaults until /v1/config
  *  loads: accumulate the feed, cap at 100 rows, don't float CQ rows to the top.
  *  `$state` because /v1/config is fetched async — on a hard reload it lands AFTER
@@ -733,10 +740,18 @@ export const ft8Link: Ft8EventHandlers = {
             const cause = ft8State.tx.disarmCause;
             const suppressed = cause !== '' && cause === suppressDisarmNoticeFor;
             if (!suppressed && cause !== '' && cause !== 'operator') {
-                txDisarmedSink?.(cause);
+                if (ft8State.qso.active) {
+                    // A session is (locally) live, so a qso frame is in flight
+                    // behind this one — replay order, or a teardown mid-stream.
+                    // Hold the notice and let that frame decide.
+                    heldDisarmNotice = cause;
+                } else {
+                    txDisarmedSink?.(cause);
+                }
             }
         } else if (ft8State.tx.armed) {
             suppressDisarmNoticeFor = '';
+            heldDisarmNotice = '';
         }
     },
 
@@ -773,11 +788,20 @@ export const ft8Link: Ft8EventHandlers = {
         const endReason = (p.end_reason ?? '').trim();
         if (endReason !== '' && p.active !== true && ft8State.qso.active) {
             sessionEndedSink?.(endReason, ft8State.qso.theirCall);
-            // The guard that ended this session also disarms TX, and its ft8-tx
-            // frame follows this one (published at the end of the same teardown).
-            // One knob turn deserves one notice, so stage a one-shot suppression
-            // for a disarm with the SAME cause code.
+            // The guard that ended this session also disarms TX. One knob turn
+            // deserves one notice, whichever frame lands first: stage a one-shot
+            // suppression for the disarm frame that FOLLOWS (live order), and
+            // drop a notice held from a disarm frame that PRECEDED (replay
+            // order) — this frame is the explanation either way.
             suppressDisarmNoticeFor = endReason;
+            heldDisarmNotice = '';
+        } else if (heldDisarmNotice !== '') {
+            // The frame the hold was waiting on explains nothing (no reason —
+            // an abandon or a completed contact), so the disarm speaks for
+            // itself after all.
+            const cause = heldDisarmNotice;
+            heldDisarmNotice = '';
+            txDisarmedSink?.(cause);
         }
         ft8State.qso = {
             active: p.active ?? false,
@@ -867,6 +891,7 @@ export function resetFt8ForTests(): void {
     sessionEndedSink = null;
     txDisarmedSink = null;
     suppressDisarmNoticeFor = '';
+    heldDisarmNotice = '';
     txActions = null;
     operatorCall = '';
     myGrid = '';
