@@ -434,14 +434,18 @@ func (s *Sequencer) PickAnswerer(call string, now time.Time) error {
 		return ErrCqContactInFlight
 	}
 	call = strings.ToUpper(strings.TrimSpace(call))
-	idx := -1
-	for i, a := range s.answerers {
-		if a.call == call && now.Sub(a.lastHeard) <= cqAnswererStaleAfter {
-			idx = i
-			break
-		}
-	}
+	// Freshness is re-checked at the pop by SWEEPING, not by a lookup-side
+	// condition: a sweep that removes anything must publish — refusal or not —
+	// because the drawer renders only from ft8-qso frames, so a refusal that
+	// mutates nothing leaves the operator re-clicking a station the daemon
+	// already knows is gone, collecting the same 404 until the next slot
+	// evaluation happens to age it out and publish (codex P2 on 6b1cf93b).
+	changed := s.expireAnswerersLocked(now)
+	idx := slices.IndexFunc(s.answerers, func(a cqAnswerer) bool { return a.call == call })
 	if idx < 0 {
+		if changed {
+			s.publish(s.statusLocked())
+		}
 		s.mu.Unlock()
 		return ErrAnswererNotListed
 	}
@@ -461,6 +465,25 @@ func (s *Sequencer) PickAnswerer(call string, now time.Time) error {
 	return nil
 }
 
+// expireAnswerersLocked drops candidates unheard past cqAnswererStaleAfter,
+// reporting whether the list changed. The ONE expiry implementation, shared by
+// the slot-side sweep (collectAnswerersLocked) and the pop-side re-check
+// (PickAnswerer) so the two bounds cannot drift apart. Caller holds s.mu.
+func (s *Sequencer) expireAnswerersLocked(now time.Time) bool {
+	kept := s.answerers[:0]
+	for _, a := range s.answerers {
+		if now.Sub(a.lastHeard) <= cqAnswererStaleAfter {
+			kept = append(kept, a)
+		} else {
+			s.log.InfoWith().Str("answerer", a.call).
+				Msg("ft8 seq: delisting answerer — unheard past the staleness bound")
+		}
+	}
+	changed := len(kept) != len(s.answerers)
+	s.answerers = kept
+	return changed
+}
+
 // collectAnswerersLocked maintains the operator_pick candidate list from one slot
 // of the answerers' decodes: ages out stations unheard past cqAnswererStaleAfter,
 // then adds/refreshes this slot's workable answerers. Dedup is by call — a
@@ -474,16 +497,7 @@ func (s *Sequencer) PickAnswerer(call string, now time.Time) error {
 // The in-flight station is never its own candidate — its grid repeats just mean
 // it missed our report (rule 9). Caller holds s.mu.
 func (s *Sequencer) collectAnswerersLocked(msgs []goft8.DecodedMessage, now time.Time) {
-	kept := s.answerers[:0]
-	for _, a := range s.answerers {
-		if now.Sub(a.lastHeard) <= cqAnswererStaleAfter {
-			kept = append(kept, a)
-		} else {
-			s.log.InfoWith().Str("answerer", a.call).
-				Msg("ft8 seq: delisting answerer — unheard past the staleness bound")
-		}
-	}
-	s.answerers = kept
+	s.expireAnswerersLocked(now)
 	for _, m := range msgs {
 		pm := parseMessage(m.Text)
 		if pm.kind != msgGrid || pm.to != s.ourCall {

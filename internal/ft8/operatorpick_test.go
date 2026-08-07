@@ -245,12 +245,22 @@ func TestOperatorPick_CandidatesExpireWhenUnheard(t *testing.T) {
 		"a station gone 3+ minutes is no longer offered")
 
 	// And the pop itself re-checks, so a stale pop between slots is refused too.
-	s2 := newTestSeq(&seqRecorder{})
+	r2 := &seqRecorder{}
+	s2 := newTestSeq(r2)
 	startCqPick(t, s2)
 	driveTheir(s2, 30, []goft8.DecodedMessage{dm("7Q5MLV DL9UW JO41", -8)})
+	require.Equal(t, []CqAnswerer{{Call: "DL9UW", Snr: -8}}, r2.lastStatus().Answerers,
+		"fixture: the station is on the frame the operator is clicking from")
 	require.ErrorIs(t, s2.PickAnswerer("DL9UW", time.Unix(300, 0).UTC()),
 		ErrAnswererNotListed,
 		"popping a station last heard 4+ minutes ago transmits at nobody")
+	// The refusal DELISTS on the frame it leaves behind (codex P2 on 6b1cf93b):
+	// the drawer renders only from ft8-qso frames, so a refusal that mutates
+	// nothing leaves the operator re-clicking a station the daemon already knows
+	// is gone — same 404 every time — until the next slot evaluation happens to
+	// sweep and publish. The pop's sweep must publish, refusal or not.
+	require.Empty(t, r2.lastStatus().Answerers,
+		"the refused station must leave the frame with the refusal, not ~30 s later")
 }
 
 // --- 7: a park never auto-picks, and park is not a blacklist -----------------
