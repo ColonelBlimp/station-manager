@@ -25,6 +25,7 @@ import {
     setFt8TxActions,
     setFt8LoggedSink,
     setFt8SessionEndedSink,
+    setFt8TxDisarmedSink,
     setFt8DisplayPrefs,
     type Ft8TxResult,
 } from './lib/operate/ft8.svelte';
@@ -150,6 +151,30 @@ setFt8SessionEndedSink((reason, theirCall) => {
     // false about that prior activity, and the point of this notice is to be
     // trustworthy about what did and did not reach the air (codex P2 on f1a8836d).
     toasts.warn(`FT8 session ended${who} — ${why}. The pending message was not sent.`);
+});
+
+// TX-disarmed sink (ft8-tx, disarm_cause): the arm-only sibling of the notice
+// above. The morning it exists for: a 200 Hz dial nudge with NO session active
+// disarmed TX, and the only visible change was the armed chip flipping — the
+// cause lived in smd.log alone (dogfood 2026-08-07). The sink already filters
+// out the operator's own disarm and the same-teardown duplicate of a session-end
+// notice, so everything arriving here deserves to be said.
+const TX_DISARM_TEXT: Record<string, string> = {
+    dial_moved: 'the rig moved off the frequency TX was armed on',
+    // The operator turned the knob; the notice is that TX dropped, not why they moved.
+    band_change: 'you changed frequency',
+    cat_lost: 'the rig connection was lost',
+    // Only ever seen by a still-open second tab — the linger fires when the last
+    // FT8 view closes, which is what it is telling that tab about.
+    unattended: 'the FT8 view was closed past its grace period',
+    shutdown: 'the daemon is stopping',
+};
+
+setFt8TxDisarmedSink((cause) => {
+    // Cause-agnostic fallback, same rule as SESSION_END_TEXT's: an unknown code
+    // from a newer daemon must not be dressed up as a specific false cause.
+    const why = TX_DISARM_TEXT[cause] ?? 'SM could not keep transmit armed';
+    toasts.warn(`FT8 TX disarmed — ${why}.`);
 });
 
 // Completed-FT8-QSO sink (ft8-logged SSE): a finished exchange is logged daemon-side

@@ -111,6 +111,12 @@ type TxState struct {
 	// Error is an i18n code for the last failed transmission ("" = none), so a
 	// reconnecting SPA can surface it; cleared when the next transmission starts.
 	Error string `json:"error,omitempty"`
+	// DisarmCause is the stable code (the disarm* constants) for the disarm this
+	// frame reports ("" while armed, and on daemons predating the field). Carried
+	// so an arm-only safety teardown — dial nudge with no session active — is not
+	// invisible in the SPA (dogfood 2026-08-07); which causes deserve a toast is
+	// the SPA's decision, so ALL causes ride the wire, operator included.
+	DisarmCause string `json:"disarm_cause,omitempty"`
 }
 
 // SetTxKeyer injects the PTT keyer (the bridge, in cmd/smd). Called once during
@@ -195,6 +201,7 @@ func (s *Service) armTx() error {
 	}
 	s.txArmed = true
 	s.txLastErr = ""
+	s.txDisarmCause = "" // the cause never outlives the disarm it explains
 	// An ARM is bound to a frequency exactly as a session is, pinned HERE — under
 	// the same lock hold that sets txArmed. TX is independent of capture, so with no
 	// scheduler running the pre-key gate is the only thing between an arm made on
@@ -323,6 +330,10 @@ func (s *Service) disarmTxLocked(cause string) {
 	wasArmed := s.txArmed
 	s.txArmed = false
 	s.armDialMHz = 0 // the binding dies with the arm
+	// Recorded HERE, below the idle early-return, so a later no-op re-disarm
+	// (cat drop after an operator disarm) cannot rewrite which teardown the
+	// cached frame reports.
+	s.txDisarmCause = cause
 	if s.txCancel != nil {
 		s.txCancel() // abort in-flight; controller drops PTT on the cancel path
 	}
@@ -1380,6 +1391,7 @@ func (s *Service) publishTxState() {
 		Message:      s.txMessage,
 		OffsetHz:     s.txOffsetHz,
 		Error:        s.txLastErr,
+		DisarmCause:  s.txDisarmCause,
 	}
 	s.txMu.Unlock()
 	s.hub.publish(hubEvent{name: EventTx, payload: st})

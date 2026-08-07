@@ -53,7 +53,7 @@ describe('AudioLevelCard', () => {
     // V2 — the toggle: chip opens the card; the card's MINIMISE (a minus,
     // not an X — the meter is never 'closed', it folds back to the live chip)
     // collapses it again.
-    it('V2: chip opens the card and minimise folds it back', async () => {
+    it('V2: chip opens the card and minimise folds it back', () => {
         render(AudioLevelCard);
         flushSync();
 

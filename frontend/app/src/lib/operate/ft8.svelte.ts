@@ -46,6 +46,8 @@ export interface Ft8TxStatus {
     message: string;
     offsetHz: number;
     error: string;
+    /** Stable cause code for the disarm the frame reports ("" while armed). */
+    disarmCause: string;
 }
 
 const emptyTxStatus = (): Ft8TxStatus => ({
@@ -54,6 +56,7 @@ const emptyTxStatus = (): Ft8TxStatus => ({
     message: '',
     offsetHz: 0,
     error: '',
+    disarmCause: '',
 });
 
 /** Manual sequencer status (ft8-qso) — the active contact the Operate ladder renders. */
@@ -338,6 +341,24 @@ let sessionEndedSink: ((reason: string, theirCall: string) => void) | null = nul
 export function setFt8SessionEndedSink(fn: (reason: string, theirCall: string) => void): void {
     sessionEndedSink = fn;
 }
+
+/** Notified when TX disarms underneath the operator, with the daemon's stable
+ *  cause code — the arm-only sibling of the session-ended sink. The morning it
+ *  exists for: a 200 Hz dial nudge with no session active disarmed TX, and the
+ *  only visible change was the armed chip flipping (dogfood 2026-08-07). Fires
+ *  only on an OBSERVED armed→disarmed edge with a non-operator cause, and not
+ *  when the same event already produced a session-ended notice. */
+let txDisarmedSink: ((cause: string) => void) | null = null;
+
+export function setFt8TxDisarmedSink(fn: (cause: string) => void): void {
+    txDisarmedSink = fn;
+}
+
+/** One-shot suppression: a session end sets it, the disarm edge of the same
+ *  teardown consumes it (the daemon publishes the terminal ft8-qso frame first,
+ *  from inside the disarm). Cleared on any arm/disarm edge so it cannot
+ *  suppress a LATER unrelated disarm. */
+let suppressDisarmNoticeFor = '';
 
 /** Band Activity display prefs (config.json ft8.display). Defaults until /v1/config
  *  loads: accumulate the feed, cap at 100 rows, don't float CQ rows to the top.
@@ -691,13 +712,32 @@ export const ft8Link: Ft8EventHandlers = {
     },
 
     onTx(p: TxPayload): void {
+        const wasArmed = ft8State.tx.armed;
         ft8State.tx = {
             armed: p.armed ?? false,
             transmitting: p.transmitting ?? false,
             message: p.message ?? '',
             offsetHz: p.offset_hz ?? 0,
             error: p.error ?? '',
+            disarmCause: p.disarm_cause ?? '',
         };
+        // Announce a disarm only on an OBSERVED armed→disarmed edge: a replayed
+        // frame after a reconnect starts from armed=false and is not a disarm
+        // happening now. "operator" is silent (they pressed the button), and so
+        // is a missing cause (an older daemon — nothing truthful to say). The
+        // session-end suppression mutes only its own teardown's disarm frame:
+        // any LATER disarm edge requires an observed armed frame first, and
+        // every armed frame clears the staged suppression below — that clear is
+        // what makes the suppression one-shot.
+        if (wasArmed && !ft8State.tx.armed) {
+            const cause = ft8State.tx.disarmCause;
+            const suppressed = cause !== '' && cause === suppressDisarmNoticeFor;
+            if (!suppressed && cause !== '' && cause !== 'operator') {
+                txDisarmedSink?.(cause);
+            }
+        } else if (ft8State.tx.armed) {
+            suppressDisarmNoticeFor = '';
+        }
     },
 
     // BASELINE DEBT 2026-07-31 (complexity 32) — dispatch over the FT8 QSO status
@@ -733,6 +773,11 @@ export const ft8Link: Ft8EventHandlers = {
         const endReason = (p.end_reason ?? '').trim();
         if (endReason !== '' && p.active !== true && ft8State.qso.active) {
             sessionEndedSink?.(endReason, ft8State.qso.theirCall);
+            // The guard that ended this session also disarms TX, and its ft8-tx
+            // frame follows this one (published at the end of the same teardown).
+            // One knob turn deserves one notice, so stage a one-shot suppression
+            // for a disarm with the SAME cause code.
+            suppressDisarmNoticeFor = endReason;
         }
         ft8State.qso = {
             active: p.active ?? false,
@@ -820,6 +865,8 @@ export function resetFt8ForTests(): void {
     closeFn = null;
     loggedSink = null;
     sessionEndedSink = null;
+    txDisarmedSink = null;
+    suppressDisarmNoticeFor = '';
     txActions = null;
     operatorCall = '';
     myGrid = '';

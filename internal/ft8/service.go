@@ -140,6 +140,7 @@ type Service struct {
 	idleRelease   func()
 	keyer         TxKeyer
 	txArmed       bool
+	txDisarmCause string // cause of the last real teardown ("" while armed); rides TxState
 	txInFlight    bool
 	txClosed      bool   // set on Stop; refuses further arming
 	txMessage     string // message of the in-flight transmission ("" = none)

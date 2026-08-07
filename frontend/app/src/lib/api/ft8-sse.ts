@@ -67,6 +67,10 @@ export interface TxPayload {
     message?: string;
     offset_hz?: number;
     error?: string;
+    /** Stable code for the disarm this frame reports (internal/ft8 disarm*
+     *  constants: operator | unattended | cat_lost | shutdown | band_change |
+     *  dial_moved). "" while armed, and absent from daemons predating it. */
+    disarm_cause?: string;
 }
 
 /** ft8-qso — internal/ft8.QsoStatus (the active manual-sequencer contact;
