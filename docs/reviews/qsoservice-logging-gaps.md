@@ -132,9 +132,16 @@ landed versus how many were skipped as already-present.
 > no longer the same silence as never-invoked — carrying `requested` plus all
 > five counts, lengths only. The delete-repair path got the sibling
 > (`logEnqueueDeleteResult`: every return + `not_found`). Spec:
-> `logginggaps_test.go` (all-refused / five-counts / delete-zero rules). The
-> handler-layer half of the pairing (api A2) remains open — the count is now
-> durable at the service layer either way.
+> `logginggaps_test.go` (all-refused / five-counts / delete-zero rules).
+>
+> **Corrected 2026-08-08 (session of 2026-08-07), during the api A2 round:**
+> the first wording hardcoded "manual upload backfill result", and
+> `EnqueueUploads` is ALSO the reconciler's heal path — so for one day a
+> reconcile heal logged as an operator press (and the delete sibling claimed
+> "(reconcile repair)" for manual calls). Both lines now carry `origin` and
+> the messages claim no attribution the field could contradict
+> (`*_LogNamesItsOrigin` rules). api A2 is closed WITHOUT a handler-layer
+> duplicate — rationale in that entry's banner.
 
 `EnqueueResult` (`enqueue.go:20-32`) carries five outcome fields. The log at `:202-208`
 carries two of them plus `force`:

@@ -906,7 +906,7 @@ func run() error {
 		// On-demand reconcile (the "back up / check now" action) — same
 		// Reconciler instance as the periodic loop.
 		server.SetSmcloudReconcile(func(ctx context.Context) (any, error) {
-			return smcloudRec.RunOnce(ctx)
+			return smcloudRec.RunOnce(ctx, smcloud.TriggerManual)
 		})
 	}
 

@@ -80,7 +80,32 @@ entire lifetime as `duration_ms` — and nothing saying when or why draining beg
 - **Record:** a line at `StopAccepting` (drain begun, and why if known) and one at
   `Shutdown` (streams closed, socket released).
 
-### A2. Operator actions on OUTBOUND data record the action but not the outcome
+### A2. ✅ FIXED 2026-08-08 (session of 2026-08-07) — Operator actions on OUTBOUND data record the action but not the outcome
+
+> ✅ **FIXED, both halves — and with one deliberate deviation from this entry's
+> prescription.** The record lives at the SERVICE layer, not the handler:
+>
+> - **Reconcile:** `Reconciler.RunOnce` now takes a `trigger`
+>   (`TriggerManual` from the on-demand wiring, `TriggerPeriodic` from the
+>   loop) and writes the run-complete summary itself on success — so no
+>   trigger path can complete a run without leaving a record, and an operator
+>   press is distinguishable from the hourly loop firing around the same
+>   time. Spec: `internal/forwarding/smcloud/reconcile_log_test.go` (RC1–RC3,
+>   criterion in the header).
+> - **Enqueue:** closed by Q2's `logEnqueueResult` (all five counts, every
+>   return path) **plus a correction made here**: Q2's line hardcoded
+>   "manual upload backfill result", and `EnqueueUploads` is ALSO called by
+>   the reconciler's heal path — so a reconcile heal logged as an operator
+>   press for one day. The line now carries `origin` (manual/reconcile) and
+>   the message claims no attribution the field could contradict. Spec:
+>   `logginggaps_test.go` `*_LogNamesItsOrigin`.
+>
+> **The "handler logs the summary it returns" half of the amendment below was
+> deliberately NOT built.** With origin on the service line, a handler-layer
+> duplicate would add no fact not already durable — the access line supplies
+> the HTTP context, the service line the outcome + who asked — at the price
+> of doubling the volume of every backfill. Same-layer reasoning as A4's
+> `source` field, one line instead of two.
 
 Two endpoints run real work against external services and return a result summary that
 exists only in the HTTP response the browser then discards:
@@ -121,7 +146,20 @@ exactly the fact that would be asked for afterwards.
   logs all five outcomes. Detail in
   [`qsoservice-logging-gaps.md`](qsoservice-logging-gaps.md) **Q2**.
 
-### A3. CSRF rejections record that one happened, not what was rejected
+### A3. ✅ FIXED 2026-08-08 (session of 2026-08-07) — CSRF rejections record that one happened, not what was rejected
+
+> ✅ **FIXED, per the AMENDMENT below, not the original wording.** Both
+> refusal paths emit a dedicated Warn record (distinct messages) carrying the
+> refused destination as PARSED fields only: `host` via a `url.Parse("//"+…)`
+> round-trip that structurally sheds userinfo (net/url keeps it in `u.User`,
+> never `u.Host`), `origin_scheme`/`origin_host` from the parsed Origin with
+> the port preserved (the port IS the stale-bookmark diagnosis). A value that
+> does not parse to a host — or exceeds 260 octets (RFC 1035's 253-octet name
+> cap + ":65535") — logs `*_unparseable=true` and never the raw bytes; that
+> length bound is the one judgement call made without asking, on the grounds
+> that it is a protocol constant, not an operator tolerance. Spec + criterion:
+> `internal/api/csrf_log_test.go` (CL1–CL6), including the
+> credential-never-in-the-log rules this amendment exists for.
 
 `csrf.go:36-53`. Both rejection paths call `writeError` with a **static** message:
 

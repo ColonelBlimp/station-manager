@@ -188,7 +188,7 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 		// compliance case (skipped_no_history honours the 2026-07-19
 		// realtime.php grant condition), and it used to write nothing at all —
 		// all-refused and never-invoked were the same silence.
-		s.logEnqueueResult(fwd.Name, fwd.Type, len(uuids), force, res)
+		s.logEnqueueResult(fwd.Name, fwd.Type, len(uuids), force, org, res)
 		return res, nil
 	}
 
@@ -209,20 +209,24 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 	}
 
 	res.Enqueued = len(enqueueIDs)
-	s.logEnqueueResult(fwd.Name, fwd.Type, len(uuids), force, res)
+	s.logEnqueueResult(fwd.Name, fwd.Type, len(uuids), force, org, res)
 	return res, nil
 }
 
-// logEnqueueResult writes the manual-backfill outcome line (logging-gaps Q2):
-// the requested selection size plus ALL FIVE outcome counts — {enqueued:12}
-// and {enqueued:12, skipped_no_history:300} used to be the same line, and the
+// logEnqueueResult writes the backfill outcome line (logging-gaps Q2): the
+// requested selection size plus ALL FIVE outcome counts — {enqueued:12} and
+// {enqueued:12, skipped_no_history:300} used to be the same line, and the
 // refusals SM makes to honour its written ClubLog commitment existed only in a
 // browser response. Lengths only: the UUID lists belong to the response (and
-// Debug if anywhere), not Info.
-func (s *Service) logEnqueueResult(fwdName, fwdType string, requested int, force bool, res EnqueueResult) {
+// Debug if anywhere), not Info. The origin field answers who asked — the
+// manual-backfill handler and the reconciler's heal path both land here, and
+// the message deliberately claims no attribution the field could contradict
+// (its first wording said "manual" and mislabelled every reconcile heal).
+func (s *Service) logEnqueueResult(fwdName, fwdType string, requested int, force bool, org origin.Origin, res EnqueueResult) {
 	s.Logger.InfoWith().
 		Str("forwarder", fwdName).
 		Str("type", fwdType).
+		Str("origin", org.String()).
 		Int("requested", requested).
 		Int("enqueued", res.Enqueued).
 		Int("skipped_uploaded", res.SkippedUploaded).
@@ -230,7 +234,7 @@ func (s *Service) logEnqueueResult(fwdName, fwdType string, requested int, force
 		Int("not_found", len(res.NotFound)).
 		Int("skipped_no_history", len(res.SkippedNoHistory)).
 		Bool("force", force).
-		Msg("manual upload backfill result")
+		Msg("upload backfill result")
 }
 
 // findEnabledInsertForwarder resolves a forwarder by name (case-insensitive) and
@@ -316,7 +320,7 @@ func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string
 		// Same rule as the insert path (logging-gaps Q2): the zero-enqueue
 		// return logs too, or a repair that repaired nothing is confusable
 		// with one never attempted.
-		s.logEnqueueDeleteResult(fwd.Name, fwd.Type, len(uuids), res)
+		s.logEnqueueDeleteResult(fwd.Name, fwd.Type, len(uuids), org, res)
 		return res, nil
 	}
 
@@ -335,20 +339,23 @@ func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string
 		return EnqueueDeleteResult{}, errors.New(op).WithErr(err).WithMsg("commit transaction")
 	}
 	res.Enqueued = len(enqueueIDs)
-	s.logEnqueueDeleteResult(fwd.Name, fwd.Type, len(uuids), res)
+	s.logEnqueueDeleteResult(fwd.Name, fwd.Type, len(uuids), org, res)
 	return res, nil
 }
 
 // logEnqueueDeleteResult is the delete-repair sibling of logEnqueueResult
 // (logging-gaps Q2): every return path logs, all outcome counts carried —
-// NotFound was omitted even when the old line did fire. Lengths only.
-func (s *Service) logEnqueueDeleteResult(fwdName, fwdType string, requested int, res EnqueueDeleteResult) {
+// NotFound was omitted even when the old line did fire. Lengths only. Origin
+// on the line, attribution out of the message, same as the insert path (the
+// first wording hardcoded "(reconcile repair)").
+func (s *Service) logEnqueueDeleteResult(fwdName, fwdType string, requested int, org origin.Origin, res EnqueueDeleteResult) {
 	s.Logger.InfoWith().
 		Str("forwarder", fwdName).
 		Str("type", fwdType).
+		Str("origin", org.String()).
 		Int("requested", requested).
 		Int("enqueued", res.Enqueued).
 		Int("skipped_live", len(res.SkippedLive)).
 		Int("not_found", len(res.NotFound)).
-		Msg("delete upload backfill result (reconcile repair)")
+		Msg("delete upload backfill result")
 }

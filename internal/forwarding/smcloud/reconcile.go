@@ -51,6 +51,15 @@ const reconcileStartupDelay = 2 * time.Minute
 // between them, so an unbounded first-run backfill can't swamp it.
 const maxEnqueuePerRun = 5000
 
+// Trigger names for the run-complete record — which path asked for the run.
+// The on-demand summary used to exist only in the HTTP response the browser
+// discarded (api-logging-gaps A2); the trigger keeps an operator press
+// distinguishable from the hourly loop firing around the same time.
+const (
+	TriggerPeriodic = "periodic"
+	TriggerManual   = "manual"
+)
+
 // ReconcileSummary is one run's outcome — returned by RunOnce and served by
 // the on-demand endpoint.
 type ReconcileSummary struct {
@@ -127,17 +136,16 @@ func (r *Reconciler) Run(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		if sum, err := r.RunOnce(ctx); err != nil {
+		if _, err := r.RunOnce(ctx, TriggerPeriodic); err != nil {
 			r.log.WarnWith().Err(err).Msg("smcloud reconcile: run failed (next tick retries)")
-		} else {
-			r.logSummary(sum)
 		}
 		t.Reset(r.interval)
 	}
 }
 
-func (r *Reconciler) logSummary(sum ReconcileSummary) {
+func (r *Reconciler) logSummary(sum ReconcileSummary, trigger string) {
 	ev := r.log.InfoWith().
+		Str("trigger", trigger).
 		Bool("in_sync", sum.InSync).
 		Int("local", sum.LocalCount).
 		Int("cloud", sum.CloudCount).
@@ -159,7 +167,23 @@ func (r *Reconciler) logSummary(sum ReconcileSummary) {
 // mismatch, manifest diff + re-enqueue. Safe to call concurrently with the
 // periodic loop (worst case: duplicate queue rows, which the UUID-keyed
 // upsert absorbs idempotently).
-func (r *Reconciler) RunOnce(ctx context.Context) (ReconcileSummary, error) {
+//
+// trigger names the asking path (TriggerPeriodic / TriggerManual) for the
+// run-complete record. On success the record is written HERE, not by the
+// callers, so no trigger path can complete a run without leaving one — the
+// on-demand endpoint used to return its summary only to the browser
+// (api-logging-gaps A2). A failed run logs nothing at this level: failure
+// reporting stays the caller's (the loop's warn-and-retry; the endpoint's
+// 500, whose cause writeServerError logs).
+func (r *Reconciler) RunOnce(ctx context.Context, trigger string) (ReconcileSummary, error) {
+	sum, err := r.runOnce(ctx)
+	if err == nil {
+		r.logSummary(sum, trigger)
+	}
+	return sum, err
+}
+
+func (r *Reconciler) runOnce(ctx context.Context) (ReconcileSummary, error) {
 	const op errors.Op = "smcloud.Reconciler.RunOnce"
 
 	local, err := r.db.FetchQsoManifestWithContext(ctx, r.localLogbook)

@@ -41,6 +41,18 @@ import (
 	     backwards for diagnosis: the operator saw the rejection and is the one
 	     asking. Confusable: a refused duplicate vs a submit never attempted.
 	     The refusal logs at Info with the colliding row's identity.
+
+	Q2 correction (found during the api A2 round, 2026-08-08 session of
+	2026-08-07): EnqueueUploads has TWO callers — the manual-backfill handler
+	(origin manual) and the SM Cloud reconciler's heal path (origin reconcile) —
+	and the Q2 line hardcoded "manual upload backfill result" for both, so a
+	reconcile heal logged as an operator press. The delete sibling hardcoded the
+	opposite attribution ("(reconcile repair)") and is equally callable with
+	origin manual. Confusable: an operator's press vs the reconciler healing
+	divergence on its own — the exact who-asked question the org parameter
+	exists to answer, discarded one call before the log. The rule: the outcome
+	line CARRIES its origin, and the message asserts no attribution the field
+	could contradict.
 */
 
 // logbuf swaps the service's logger for a buffer-backed one, so assertions
@@ -150,6 +162,47 @@ func TestEnqueueDeleteUploads_ZeroEnqueueStillLogs(t *testing.T) {
 		"the delete-repair path's zero-enqueue return was equally silent")
 	require.Contains(t, out, `"not_found":1`,
 		"NotFound was omitted from the delete-path line even when it did log")
+}
+
+// --- Q2 correction: the outcome line names its origin --------------------------
+
+func TestEnqueueUploads_LogNamesItsOrigin(t *testing.T) {
+	s := newTestService(t, enabledQRZ())
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	u1, _ := seedStoredQso(t, s, lbID, "K1AAA", "1200")
+	u2, _ := seedStoredQso(t, s, lbID, "K2BBB", "1201")
+	buf := logbuf(s)
+	ctx := context.Background()
+
+	_, err := s.EnqueueUploads(ctx, "qrz", []string{u1}, false, origin.Manual)
+	require.NoError(t, err)
+	_, err = s.EnqueueUploads(ctx, "qrz", []string{u2}, true, origin.Reconcile)
+	require.NoError(t, err)
+
+	out := buf.String()
+	require.Contains(t, out, `"origin":"manual"`,
+		"the operator's press names itself")
+	require.Contains(t, out, `"origin":"reconcile"`,
+		"a reconciler heal is NOT an operator press — identical lines for the two "+
+			"was the defect")
+	require.NotContains(t, out, "manual upload backfill",
+		"the message must assert no attribution the origin field could contradict — "+
+			"a reconcile heal logged as 'manual upload backfill result'")
+}
+
+func TestEnqueueDeleteUploads_LogNamesItsOrigin(t *testing.T) {
+	s := newTestService(t, enabledQRZ())
+	seedLogbook(t, s, "Main", "M0ABC")
+	buf := logbuf(s)
+
+	_, err := s.EnqueueDeleteUploads(context.Background(), "qrz", []string{"not-a-uuid"}, origin.Manual)
+	require.NoError(t, err)
+
+	out := buf.String()
+	require.Contains(t, out, `"origin":"manual"`,
+		"the delete-repair line carries who asked")
+	require.NotContains(t, out, "reconcile repair",
+		"the sibling defect mirrored: a manual delete repair logged as the reconciler's")
 }
 
 // --- Q3: a refused duplicate leaves a record ----------------------------------

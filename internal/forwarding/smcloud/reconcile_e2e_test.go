@@ -176,7 +176,7 @@ func TestReconciler_EndToEnd(t *testing.T) {
 	u2 := importQso(t, qsoSvc, lbID, "9A4ZM", "120100")
 
 	// 1. Empty cloud → the whole logbook is divergence (the first backfill).
-	sum, err := rec.RunOnce(ctx)
+	sum, err := rec.RunOnce(ctx, TriggerManual)
 	require.NoError(t, err)
 	require.False(t, sum.InSync)
 	require.EqualValues(t, 0, sum.CloudLogbookID, "logbook not on the cloud yet")
@@ -187,7 +187,7 @@ func TestReconciler_EndToEnd(t *testing.T) {
 	// 2. Drain the queue (worker stand-in) → in sync.
 	drainTo(t, fwd, dbSvc, u1, action.Insert)
 	drainTo(t, fwd, dbSvc, u2, action.Insert)
-	sum, err = rec.RunOnce(ctx)
+	sum, err = rec.RunOnce(ctx, TriggerManual)
 	require.NoError(t, err)
 	require.True(t, sum.InSync, "after drain: %+v", sum)
 	require.Equal(t, 2, sum.CloudCount)
@@ -197,7 +197,7 @@ func TestReconciler_EndToEnd(t *testing.T) {
 	q2, err := dbSvc.FetchQsoByUUIDWithContext(ctx, u2)
 	require.NoError(t, err)
 	require.NoError(t, qsoSvc.Delete(ctx, q2, source.Source("test")))
-	sum, err = rec.RunOnce(ctx)
+	sum, err = rec.RunOnce(ctx, TriggerManual)
 	require.NoError(t, err)
 	require.False(t, sum.InSync)
 	require.Equal(t, 1, sum.EnqueuedDeletes, "%+v", sum)
@@ -205,7 +205,7 @@ func TestReconciler_EndToEnd(t *testing.T) {
 
 	// 4. Drain the tombstone → in sync again (1 live row both sides).
 	drainTo(t, fwd, dbSvc, u2, action.Delete)
-	sum, err = rec.RunOnce(ctx)
+	sum, err = rec.RunOnce(ctx, TriggerManual)
 	require.NoError(t, err)
 	require.True(t, sum.InSync, "after tombstone drain: %+v", sum)
 	require.Equal(t, 1, sum.LocalCount)
@@ -281,7 +281,7 @@ func TestReconcile_UpsertRepairCarriesReconcileOrigin(t *testing.T) {
 	qsoSvc, _, rec, _, lbID, originFor := reconcileOriginStack(t)
 
 	u1 := importQso(t, qsoSvc, lbID, "DL9UW", "120000")
-	sum, err := rec.RunOnce(ctx)
+	sum, err := rec.RunOnce(ctx, TriggerManual)
 	require.NoError(t, err)
 	require.Equal(t, 1, sum.EnqueuedUpserts, "fixture must reach the upsert enqueue: %+v", sum)
 
@@ -299,7 +299,7 @@ func TestReconcile_DeleteRepairCarriesReconcileOrigin(t *testing.T) {
 	qsoSvc, dbSvc, rec, fwd, lbID, originFor := reconcileOriginStack(t)
 
 	u1 := importQso(t, qsoSvc, lbID, "DL9UW", "120000")
-	_, err := rec.RunOnce(ctx)
+	_, err := rec.RunOnce(ctx, TriggerManual)
 	require.NoError(t, err)
 	drainTo(t, fwd, dbSvc, u1, action.Insert)
 
@@ -312,7 +312,7 @@ func TestReconcile_DeleteRepairCarriesReconcileOrigin(t *testing.T) {
 	// call site would never be seen to fail on its own rule. Post-implementation the
 	// edit -> reconcile transition is what contract 2's replace rule looks like at
 	// this site.
-	sum, err := rec.RunOnce(ctx)
+	sum, err := rec.RunOnce(ctx, TriggerManual)
 	require.NoError(t, err)
 	require.Equal(t, 1, sum.EnqueuedDeletes, "fixture must reach the delete enqueue: %+v", sum)
 

@@ -98,7 +98,7 @@ func TestRestore_FullCycle(t *testing.T) {
 	// possible only if every modified_at survived backup → restore verbatim.
 	rec, err := NewReconciler(fc, lb2, db2, qsoSvc2, logSvc2)
 	require.NoError(t, err)
-	sum, err := rec.RunOnce(ctx)
+	sum, err := rec.RunOnce(ctx, TriggerManual)
 	require.NoError(t, err)
 	require.True(t, sum.InSync, "restored DB must reconcile in sync: %+v", sum)
 	require.Equal(t, 1, sum.LocalCount)

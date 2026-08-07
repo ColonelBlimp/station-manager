@@ -34,6 +34,7 @@ func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 			return
 		}
 		if !s.hostAllowed(hostOnly(r.Host)) {
+			s.logHostRefused(r)
 			s.writeError(w, http.StatusForbidden, "cross_origin", "host not allowed", op)
 			return
 		}
@@ -47,6 +48,7 @@ func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 			trusted = r.Host
 		}
 		if origin := r.Header.Get("Origin"); origin != "" && !originAllowed(origin, trusted) {
+			s.logOriginRefused(r, origin)
 			s.writeError(w, http.StatusForbidden, "cross_origin",
 				"cross-origin request rejected", op)
 			return
@@ -126,4 +128,63 @@ func hostOnly(host string) string {
 		return h
 	}
 	return host
+}
+
+// ---- refusal logging (api-logging-gaps A3) ----------------------------------
+//
+// A refusal here is the API's only security control firing, and the static 403
+// discards its entire diagnostic content — WHICH destination was refused. That
+// value separates states demanding opposite actions: a rebinding attempt
+// (investigate) vs a LAN deployment refusing legitimate traffic under a
+// wildcard bind (fix the bind), a foreign page vs a stale bookmark on the
+// wrong port. A dedicated Warn line rather than access-log fields: a security
+// refusal at Info interleaved with routine traffic reads as routine. Volume is
+// bounded by the access log's own — at most one line per refused request.
+//
+// Only PARSED fields are logged, never a raw header (the A3 amendment): Origin
+// and Host are client-controlled and can carry user:pass@host — the
+// credential-into-a-0644-file shape of the 2026-07-25 P1s. url.URL keeps
+// userinfo in u.User, never in u.Host, so logging u.Host sheds it; a value
+// that doesn't parse to a host logs the fact of unparseability only.
+
+// maxLoggedHost bounds a logged destination: RFC 1035 §2.3.4 caps a DNS name
+// at 253 octets, plus ":65535" — anything longer is not a real destination and
+// is reported unparseable rather than copied into the log.
+const maxLoggedHost = 260
+
+// sanitizedHostForLog reduces a client-controlled host[:port] (a Host header,
+// or a parsed Origin's u.Host) to a loggable value, per the rules above.
+func sanitizedHostForLog(raw string) (string, bool) {
+	u, err := url.Parse("//" + raw)
+	if err != nil || u.Host == "" || len(u.Host) > maxLoggedHost {
+		return "", false
+	}
+	return u.Host, true
+}
+
+func (s *Server) logHostRefused(r *http.Request) {
+	ev := s.logger.WarnWith().
+		Str("remote", r.RemoteAddr).Str("method", r.Method).Str("path", r.URL.Path)
+	if h, ok := sanitizedHostForLog(r.Host); ok {
+		ev = ev.Str("host", h)
+	} else {
+		ev = ev.Bool("host_unparseable", true)
+	}
+	ev.Msg("cross-origin refused: request host not allowed")
+}
+
+func (s *Server) logOriginRefused(r *http.Request, origin string) {
+	ev := s.logger.WarnWith().
+		Str("remote", r.RemoteAddr).Str("method", r.Method).Str("path", r.URL.Path)
+	// The request Host passed hostAllowed to reach this refusal — it is what
+	// the Origin failed to match, so it rides along for the diagnosis.
+	if h, ok := sanitizedHostForLog(r.Host); ok {
+		ev = ev.Str("host", h)
+	}
+	if u, err := url.Parse(origin); err == nil && u.Host != "" && len(u.Host) <= maxLoggedHost {
+		ev = ev.Str("origin_scheme", u.Scheme).Str("origin_host", u.Host)
+	} else {
+		ev = ev.Bool("origin_unparseable", true)
+	}
+	ev.Msg("cross-origin refused: origin not allowed")
 }
