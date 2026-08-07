@@ -791,7 +791,48 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   usable samples is thin, and message type is already not it — the 07-26 pair were
   mid-QSO rungs (`R-17`, `RR73`), the 07-28 pair were both CQ.
 - [2026-08-07] bug - when changing from ft8 to phone/cw the mode and freq are not reset
+  **TRIAGED 2026-08-07 late night — the restore machinery EXISTS; the report
+  matches its DESIGNED no-op case, so this is a design question, not a broken
+  feature.** `modeRestore.svelte.ts` snapshots the outgoing mode and restores
+  the incoming one on every router switch (wired `main.ts:383`;
+  `restore_rig_on_mode_switch` default ON). But snapshots are IN-MEMORY by
+  design (a reload must never restore an hour-old position), and phone
+  deliberately has no canonical home to seed — A25 gave FT8 one (band watering
+  hole + data mode); the module header records "phone has no canonical home to
+  establish". Consequence: any page session whose FIRST phone entry follows
+  FT8 — reload or deep-link into the FT8 view, operate, switch to phone — has
+  no phone snapshot, and the switch leaves the rig on the FT8 dial in DATA-U.
+  **Open question (operator's call):** should a snapshot-less FT8→phone switch
+  establish a phone position anyway? A candidate seed exists that invents no
+  frequency: `set_band` to the current band triggers the RIG's OWN band-stack
+  recall — the rig's own phone memory, the same mechanism that makes the SSB
+  band buttons work. **Caveat:** if phone WAS operated earlier in the same
+  page session and the restore still didn't fire (no toast — the refusal paths
+  toast), that is a different, real defect; say so and it gets chased.
 - [2026-08-07] bug - when selecting VFO-B the freq is change to the current freq shown in VFO-A - vfo select does not work
+  **TRIAGED 2026-08-07 late night — the observable is the DESIGNED behaviour
+  (click-to-select is implemented as SWAP), and the premise under that design
+  now has evidence on BOTH sides; one controlled probe settles it.** Clicking
+  a VFO box sends `swap_vfo` (SV;) with an optimistic `vfoB = vfoA` mirror
+  (`rig.svelte.ts selectVfo` → `swapVfoLive`): contents exchange, B's box
+  repaints with A's old frequency, the selection dot stays on A — exactly the
+  report. (The DIAL does land on B's old frequency — swap reaches the same
+  operating point a select would; the presentation is what contradicts the
+  operator's mental model.) The premise, from a real on-rig observation
+  (archive S~2527): "`VS` moved the display indicator but not the operating
+  frequency — select-flag only". The CAT manual's VS legend says the opposite:
+  "P1 0: VFO-A Operation / 1: VFO-B Operation" (set/read/answer). The earlier
+  observation is CONFOUNDED if both VFOs held the same frequency at probe time
+  — a true select is then visually indistinguishable from a flag. Note
+  `set_vfo`/VS round-tripped clean when first added (archive S~2675, HW-proven
+  2026-06-04) and the daemon still PARSES pushed VS frames (rigdef SELECT tag
+  → `rig.selectedVfo`).
+  **Next step (passive, no TX):** set VFO-B to a deliberately different
+  frequency, then `catcli -cmd "VS1;" -listen` and watch whether the pushed
+  dial/IF follows VFO-B. If it does: rigdef regains `select_vfo` (VS%s), the
+  box click sends it instead of swap, keyboard swap (true SV) stays. If it
+  genuinely doesn't: CAT select doesn't exist on this rig and the UI should
+  stop implying it (boxes present as "swap onto", not "select").
 
 ---
 
