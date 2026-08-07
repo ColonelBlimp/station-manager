@@ -1303,10 +1303,15 @@ describe('selection restore (codex ec2fd42d P1)', () => {
                whatever is selected when it lands).
         SEL2 — an unchanged selection sends nothing (no select chatter on
                every switch).
-        SEL3 — a rig WITHOUT select_vfo sends neither select nor swap for a
-               drifted selection (a foreign VS push, e.g. front-panel A/B):
-               the swap fallback would exchange the very contents this
-               restore just set.
+        SEL3 — a rig WITHOUT select_vfo ABANDONS the restore for a drifted
+               selection (a foreign VS push, e.g. front-panel A/B): no swap
+               (it would exchange the very contents the restore sets), and no
+               continuing either — set_freq/set_mode past a wrong selection
+               writes the mode onto the wrong VFO, the exact corruption SEL1
+               orders against (codex 8092fa81 P1: the first shape of this
+               rule skipped the selection but carried on). The abandon toast
+               names the front panel as the fix; the unrestored protection
+               makes the next switch retry once the operator has pressed A/B.
         SEL4 — a refused select abandons the rest, per the existing rule: the
                commands put the rig at one operating point together, and a
                mode asserted onto the wrong VFO is exactly the state the
@@ -1338,7 +1343,7 @@ describe('selection restore (codex ec2fd42d P1)', () => {
         expect(sent.map((s) => s.op)).not.toContain('select_vfo');
     });
 
-    it('SEL3: a rig without select_vfo neither selects nor swaps for a drifted selection', async () => {
+    it('SEL3: a rig without select_vfo ABANDONS the restore for a drifted selection', async () => {
         setRigCaps({
             ops: ['set_freq', 'set_freq_b', 'set_mode', 'swap_vfo'],
             tune: false,
@@ -1355,6 +1360,9 @@ describe('selection restore (codex ec2fd42d P1)', () => {
         const ops = sent.map((s) => s.op);
         expect(ops).not.toContain('select_vfo');
         expect(ops).not.toContain('swap_vfo'); // the fallback would corrupt contents
+        expect(ops).not.toContain('set_freq'); // …and carrying on past the wrong
+        expect(ops).not.toContain('set_mode'); // selection writes the mode onto the
+        expect(sent).toEqual([]); //              wrong VFO — abandon sends NOTHING
     });
 
     it('SEL4: a refused select abandons the rest of the restore', async () => {

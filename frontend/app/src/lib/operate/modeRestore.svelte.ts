@@ -275,9 +275,20 @@ async function applyRestore(to: OpMode, incoming: OperatingSnapshot): Promise<vo
     // writes it onto the wrong VFO. Capability-gated on select_vfo itself
     // rather than routed through selectVfo's fallback: on a rig without the
     // op the fallback is a content SWAP, which would corrupt the values this
-    // restore sets — for a drifted selection there (front-panel A/B), leaving
-    // the selection alone is the only safe move.
-    if (incoming.selectedVfo !== rig.selectedVfo && hasOp('select_vfo')) {
+    // restore sets. A drifted selection that CANNOT be restored (front-panel
+    // A/B on such a rig) abandons the whole restore — carrying on would put
+    // the mode on the wrong VFO, the exact corruption the ordering prevents
+    // (codex 8092fa81 P1: the first shape skipped the selection and carried
+    // on). The abandon names the front panel as the fix; the unrestored
+    // protection retries on the next switch, once the operator has pressed
+    // A/B back.
+    if (incoming.selectedVfo !== rig.selectedVfo) {
+        if (!hasOp('select_vfo')) {
+            return abandon(
+                to,
+                `this rig cannot select VFO-${incoming.selectedVfo} over CAT — press the rig's A/B, then switch modes again`
+            );
+        }
         const r = await rigSelectVfo(incoming.selectedVfo);
         if (!r.ok) return abandon(to, r.message);
     }
