@@ -10,6 +10,7 @@
     import Ft8Operate from './Ft8Operate.svelte';
     import Ft8Occupancy from './Ft8Occupancy.svelte';
     import AudioLevelCard from './AudioLevelCard.svelte';
+    import TxDriveChip from './TxDriveChip.svelte';
 
     // View-scoped stream lifecycle: open on mount, close on destroy, so the
     // daemon holds the capture device only while the FT8 view is shown. The
@@ -41,8 +42,11 @@
          occ row's 180px + the grid's 0.75rem gap, both defined in the style
          block below — change one, change both. The open card grows UPWARD
          from this anchor, over Band Activity, never over Occupancy. -->
-    <div class="absolute bottom-[calc(180px+0.75rem)] left-0 z-30">
+    <div class="absolute bottom-[calc(180px+0.75rem)] left-0 z-30 flex items-end gap-2">
         <AudioLevelCard />
+        <!-- ADR 0064: TX-drive (ALC) chip — renders nothing until the first
+             poll answer, so non-METERPOLL rigs never see an empty shell. -->
+        <TxDriveChip />
     </div>
 </div>
 

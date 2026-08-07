@@ -9,6 +9,11 @@
 import { enrichCallsign } from './enrichment';
 import { fetchContactHistory, type ContactHistory } from './contact-history';
 import { isPlainObject, readJsonBody, safeFetch } from './_helpers';
+
+/** Number-typed field with an older-daemon fallback. */
+function numOr(v: unknown, fallback: number): number {
+    return typeof v === 'number' ? v : fallback;
+}
 import type { Enrichment } from '../operate/enrich.svelte';
 import type { WorkedQso } from '../operate/worked.svelte';
 import type { AdifModePair } from '../operate/rig.svelte';
@@ -167,6 +172,14 @@ export interface StationContext {
      *  `ft8_audio`): dBFS bounds the level meter classifies against. */
     ft8AudioLowDbfs: number;
     ft8AudioHighDbfs: number;
+    /** TX-drive display red threshold (config `ft8.meter.alc_red`, served
+     *  resolved as `ft8_meter`): raw rig ALC scale (1-255). PROVISIONAL
+     *  default until calibrated on hardware (ADR 0064). */
+    ft8AlcRed: number;
+    /** The daemon's FT8 meter-poll cadence (`bridge_timeouts.
+     *  ft8_meter_poll_interval_ms`, served resolved) — the TX-drive chip
+     *  derives its staleness window from it. */
+    ft8MeterPollIntervalMs: number;
     /** Contacts-map per-band arc colour overrides (config `map.band_colors`,
      *  band→"#rrggbb", sparse) — layered over the map's built-in palette
      *  (lib/map/bandColors). Empty = all defaults. */
@@ -203,6 +216,8 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8Mode: '',
         ft8AudioLowDbfs: -60,
         ft8AudioHighDbfs: -10,
+        ft8AlcRed: 50,
+        ft8MeterPollIntervalMs: 250,
         mapBandColors: {},
         restoreRigOnModeSwitch: true,
         logbookName: '',
@@ -220,6 +235,8 @@ export async function fetchStationContext(): Promise<StationContext> {
     const st = isPlainObject(body.station) ? body.station : {};
     const fd = isPlainObject(body.ft8_display) ? body.ft8_display : {};
     const fa = isPlainObject(body.ft8_audio) ? body.ft8_audio : {};
+    const fm = isPlainObject(body.ft8_meter) ? body.ft8_meter : {};
+    const bt = isPlainObject(body.bridge_timeouts) ? body.bridge_timeouts : {};
     const str = (v: unknown): string => (typeof v === 'string' ? v : '');
     return {
         configOk: true,
@@ -250,6 +267,8 @@ export async function fetchStationContext(): Promise<StationContext> {
         // Served resolved; the fallbacks only cover an older daemon.
         ft8AudioLowDbfs: typeof fa.low_dbfs === 'number' ? fa.low_dbfs : -60,
         ft8AudioHighDbfs: typeof fa.high_dbfs === 'number' ? fa.high_dbfs : -10,
+        ft8AlcRed: numOr(fm.alc_red, 50),
+        ft8MeterPollIntervalMs: numOr(bt.ft8_meter_poll_interval_ms, 250),
         mapBandColors: toStringMap(isPlainObject(body.map) ? body.map.band_colors : undefined),
         // Only an explicit false disables it — see the field's doc above.
         restoreRigOnModeSwitch: body.restore_rig_on_mode_switch !== false,

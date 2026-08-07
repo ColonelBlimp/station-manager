@@ -228,3 +228,30 @@ func TestResolveFt8Audio(t *testing.T) {
 		}
 	}
 }
+
+// ResolveFt8Meter — the TX-drive (ALC) display threshold (ADR 0064). The
+// default is PROVISIONAL until the on-hardware calibration step (ADR 0064
+// acceptance §4 iii) ratifies a number; the rule here is only the resolve
+// shape: nil/sparse → default, explicit value honoured, out-of-range clamped
+// to the rig's raw 1–255 scale (0 would make every reading "red").
+func TestResolveFt8Meter(t *testing.T) {
+	iv := func(n int) *int { return &n }
+	cases := []struct {
+		name string
+		in   *Ft8MeterConfig
+		want int
+	}{
+		{"nil block → default", nil, DefaultFt8AlcRed},
+		{"empty block → default", &Ft8MeterConfig{}, DefaultFt8AlcRed},
+		{"explicit value honoured", &Ft8MeterConfig{AlcRed: iv(30)}, 30},
+		{"zero clamps to 1", &Ft8MeterConfig{AlcRed: iv(0)}, 1},
+		{"over-scale clamps to 255", &Ft8MeterConfig{AlcRed: iv(999)}, 255},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ResolveFt8Meter(c.in); got.AlcRed != c.want {
+				t.Fatalf("ResolveFt8Meter(%+v).AlcRed = %d, want %d", c.in, got.AlcRed, c.want)
+			}
+		})
+	}
+}

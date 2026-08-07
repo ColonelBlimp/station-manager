@@ -84,6 +84,10 @@ type ConfigResponse struct {
 	// calibration is a config.json edit + restart (deliberate until the
 	// defaults are hardware-calibrated); a PUT never carries it.
 	Ft8Audio *types.Ft8AudioLevels `json:"ft8_audio,omitempty"`
+
+	// Ft8Meter is the TX-drive (ALC) display threshold (ADR 0064), always
+	// resolved (provisional default until calibrated on hardware).
+	Ft8Meter *types.Ft8MeterLevels `json:"ft8_meter,omitempty"`
 	// Ft8CallerAnswerMode is the FT8 Call-CQ answerer-selection strategy
 	// (ft8.tx.caller_answer_mode): "auto_first" (first valid answerer by decode
 	// order) or "auto_strongest" (highest-SNR valid answerer in the slot). Always
@@ -1015,6 +1019,11 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// RX level meter window, resolved for the FT8 view's level indicator.
 	audio := types.ResolveFt8Audio(cfg.Ft8.Audio)
 	resp.Ft8Audio = &audio
+
+	// TX-drive (ALC) display threshold (ADR 0064), resolved; the default is
+	// provisional pending on-hardware calibration.
+	meter := types.ResolveFt8Meter(cfg.Ft8.Meter)
+	resp.Ft8Meter = &meter
 
 	// Bridge timeouts + tune params, served RESOLVED (defaults filled, ceilings
 	// applied) like the FT8 blocks above — config.json stays sparse. Uses the same

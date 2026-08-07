@@ -65,6 +65,10 @@ type Ft8Config struct {
 	// Settings UI yet — deliberate, until the numbers are hardware-calibrated).
 	Audio *Ft8AudioConfig `json:"audio,omitempty"`
 
+	// Meter holds the TX-drive (ALC) display threshold (ADR 0064); sparse,
+	// resolved via ResolveFt8Meter for /v1/config.
+	Meter *Ft8MeterConfig `json:"meter,omitempty"`
+
 	// Frequencies maps a band label (e.g. "20m") to its FT8 dial frequency in Hz.
 	// SPA-facing (the daemon doesn't consume it): the Main-Freq band buttons tune to
 	// these and highlight the one matching the live dial. Stored sparse, served
@@ -487,4 +491,39 @@ type Ft8OccupancyConfig struct {
 	// Larger values yield safer placement but fewer options in a busy band
 	// (a gap must be signalWidthHz + 2·N wide to offer anything).
 	GuardMarginHz *int `json:"guard_margin_hz,omitempty"`
+}
+
+// Ft8MeterConfig is the stored (sparse) form of the TX-drive display
+// threshold (ADR 0064): the raw ALC value (rig 0-255 scale) at which the
+// SPA's readout turns red. Unset takes the default.
+type Ft8MeterConfig struct {
+	AlcRed *int `json:"alc_red,omitempty"`
+}
+
+// Ft8MeterLevels is the resolved form served on /v1/config.
+type Ft8MeterLevels struct {
+	AlcRed int `json:"alc_red"`
+}
+
+// DefaultFt8AlcRed is PROVISIONAL — not operator-ratified. The only live
+// datum is ALC 026 under normal VOICE drive (2026-08-06 catcli experiment);
+// the on-hardware calibration step (ADR 0064 acceptance §4 iii: compare the
+// on-screen value against the front panel under deliberate overdrive) is
+// what produces the real number. Adjust via ft8.meter.alc_red.
+const DefaultFt8AlcRed = 50
+
+// ResolveFt8Meter applies the default to a sparse (or absent) meter block,
+// clamping to the rig's usable 1-255 scale (0 would flag every reading).
+func ResolveFt8Meter(c *Ft8MeterConfig) Ft8MeterLevels {
+	r := Ft8MeterLevels{AlcRed: DefaultFt8AlcRed}
+	if c != nil && c.AlcRed != nil {
+		r.AlcRed = *c.AlcRed
+	}
+	if r.AlcRed < 1 {
+		r.AlcRed = 1
+	}
+	if r.AlcRed > 255 {
+		r.AlcRed = 255
+	}
+	return r
 }

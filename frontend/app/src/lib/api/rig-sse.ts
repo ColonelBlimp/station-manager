@@ -48,6 +48,14 @@ export interface TuneStatePayload {
  *  alarm: active=true means the daemon cannot confirm the transmitter is
  *  unkeyed (the rig MAY be transmitting). Hub-replayed, so a late tab still
  *  learns of a standing alarm. */
+/** rig-meters — internal/bridge.RigMetersPayload (ADR 0064): one decoded
+ *  RM4/RM5 poll answer, raw rig 0-255 scale. Not replay-cached; flows only
+ *  while an FT8 capture session is live on a METERPOLL-capable rigdef. */
+export interface RigMetersPayload {
+    meter?: string;
+    value?: number;
+}
+
 export interface TxAlarmPayload {
     active: boolean;
     code?: string;
@@ -74,6 +82,7 @@ export interface RigEventHandlers {
     onTuneState: (payload: TuneStatePayload) => void;
     onTxAlarm: (payload: TxAlarmPayload) => void;
     onDriveAlarm: (payload: DriveAlarmPayload) => void;
+    onRigMeters: (payload: RigMetersPayload) => void;
 }
 
 function parse<T>(ev: MessageEvent<string>, label: string): T | null {
@@ -127,6 +136,11 @@ export function openRigEvents(handlers: RigEventHandlers): () => void {
         src.addEventListener('drive-alarm', (ev: MessageEvent<string>) => {
             const p = parse<DriveAlarmPayload>(ev, 'drive-alarm');
             if (p !== null) handlers.onDriveAlarm(p);
+        });
+
+        src.addEventListener('rig-meters', (ev: MessageEvent<string>) => {
+            const p = parse<RigMetersPayload>(ev, 'rig-meters');
+            if (p !== null) handlers.onRigMeters(p);
         });
     });
 }

@@ -1150,3 +1150,5 @@ said. Plan future on-air experiments accordingly.
 - [2026-08-07] phone/cw port the paste list from the comment field in the logging SPA
 - [2026-08-07] export session card - when clicking send, a toast appears by it is not on top, but overlayed by the Export session card and thus dimmed.
 - [2026-08-07] 07:20: clicked VK5GR and got a toast saying already worked this session - but I had not worked
+- [2026-08-07] answering a CQ automatically arms auto-work.
+- [2026-08-07] answering a cq-> abandon->answer same cq->toast 'already worked this session' - this should only be true if the QSO has been successfully logged

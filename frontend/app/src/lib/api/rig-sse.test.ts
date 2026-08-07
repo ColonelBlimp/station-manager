@@ -41,6 +41,7 @@ function makeHandlers(): RigEventHandlers {
         onTuneState: vi.fn(),
         onTxAlarm: vi.fn(),
         onDriveAlarm: vi.fn(),
+        onRigMeters: vi.fn(),
     };
 }
 
@@ -90,6 +91,9 @@ describe('openRigEvents', () => {
         src.emit('drive-alarm', '{"active":true,"code":"drive_no_output"}');
         expect(h.onDriveAlarm).toHaveBeenCalledWith({ active: true, code: 'drive_no_output' });
         expect(h.onTxAlarm).toHaveBeenCalledTimes(1);
+
+        src.emit('rig-meters', '{"meter":"ALC","value":26}');
+        expect(h.onRigMeters).toHaveBeenCalledWith({ meter: 'ALC', value: 26 });
 
         src.emit('error');
         expect(h.onTransportError).toHaveBeenCalledOnce();

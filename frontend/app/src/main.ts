@@ -31,6 +31,7 @@ import {
 } from './lib/operate/ft8.svelte';
 import { setStationInfo, setLogbookCount } from './lib/operate/station.svelte';
 import { setFt8AudioWindow } from './lib/operate/audioLevel.svelte';
+import { setTxDriveConfig, onRigMeters } from './lib/operate/txDrive.svelte';
 import { setFt8Enricher, setFt8Dupe, ft8EnrichState } from './lib/operate/ft8Enrich.svelte';
 import { fetchContestDupe } from './lib/api/contest-dupe';
 import { armFt8Tx, type Ft8TxOutcome } from './lib/api/ft8tx';
@@ -237,6 +238,8 @@ const ctx: StationContext = {
     ft8Mode: '',
     ft8AudioLowDbfs: -60,
     ft8AudioHighDbfs: -10,
+    ft8AlcRed: 50,
+    ft8MeterPollIntervalMs: 250,
     mapBandColors: {},
     restoreRigOnModeSwitch: true,
     logbookName: '',
@@ -308,6 +311,9 @@ function applyStationContext(c: StationContext): void {
     // RX audio-level window (ft8.audio, served resolved) — the level meter's
     // good/low/high classification bounds, calibratable in config.json.
     setFt8AudioWindow(c.ft8AudioLowDbfs, c.ft8AudioHighDbfs);
+    // TX-drive (ALC) chip: red threshold (provisional until calibrated) + the
+    // meter-poll cadence its staleness window derives from (ADR 0064).
+    setTxDriveConfig(c.ft8AlcRed, c.ft8MeterPollIntervalMs);
     // Whether a Phone/CW ↔ FT8 switch returns a CAT-live rig to that mode's last
     // frequency and mode. Opt-out only: the default is ON.
     setRestoreOnModeSwitch(c.restoreRigOnModeSwitch);
@@ -345,7 +351,9 @@ function applyStationContext(c: StationContext): void {
     });
     if (c.catEnabled && !rigEventsOpen) {
         rigEventsOpen = true;
-        openRigEvents(catLink);
+        // rig-meters routes to the TX-drive store here (ADR 0045: coupling in
+        // main.ts); everything else is catLink's.
+        openRigEvents({ ...catLink, onRigMeters: (p) => onRigMeters(p, Date.now()) });
     }
 }
 
