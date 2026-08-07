@@ -24,9 +24,15 @@ export type TxDriveStatus = 'hidden' | 'good' | 'warn' | 'red' | 'stale';
 
 interface TxDriveState {
     alc: { value: number; at: number } | null;
+    /** Chip ↔ card toggle (same grammar as the RX audio meter beside it). */
+    open: boolean;
 }
 
-export const txDriveState: TxDriveState = $state({ alc: null });
+export const txDriveState: TxDriveState = $state({ alc: null, open: false });
+
+export function setTxDriveOpen(on: boolean): void {
+    txDriveState.open = on;
+}
 
 // Config-served knobs (setTxDriveConfig from main.ts): defaults cover an
 // older daemon that serves neither.
@@ -51,6 +57,11 @@ export function onRigMeters(p: RigMetersPayload, atMs: number): void {
     txDriveState.alc = { value: p.value, at: atMs };
 }
 
+/** The configured red threshold — the card renders its marker at this value. */
+export function txDriveRedThreshold(): number {
+    return alcRed;
+}
+
 export function txDriveStatus(nowMs: number): TxDriveStatus {
     const a = txDriveState.alc;
     if (a === null) return 'hidden';
@@ -63,6 +74,7 @@ export function txDriveStatus(nowMs: number): TxDriveStatus {
 /** Test seam — restore module state between cases. */
 export function resetTxDriveForTests(): void {
     txDriveState.alc = null;
+    txDriveState.open = false;
     alcRed = 50;
     pollIntervalMs = 250;
 }

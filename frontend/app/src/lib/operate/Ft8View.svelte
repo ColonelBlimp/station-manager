@@ -42,11 +42,14 @@
          occ row's 180px + the grid's 0.75rem gap, both defined in the style
          block below — change one, change both. The open card grows UPWARD
          from this anchor, over Band Activity, never over Occupancy. -->
-    <div class="absolute bottom-[calc(180px+0.75rem)] left-0 z-30 flex items-end gap-2">
-        <AudioLevelCard />
-        <!-- ADR 0064: TX-drive (ALC) chip — renders nothing until the first
-             poll answer, so non-METERPOLL rigs never see an empty shell. -->
+    <div class="absolute bottom-[calc(180px+0.75rem)] left-0 z-30 flex flex-col items-start gap-2">
+        <!-- ADR 0064: TX-drive (ALC) readout — stacked ABOVE the RX audio
+             meter (operator, 2026-08-07: vertical, not horizontal), so the
+             audio chip keeps its anchored spot at the bottom. Renders nothing
+             until the first poll answer, so non-METERPOLL rigs never see an
+             empty shell. -->
         <TxDriveChip />
+        <AudioLevelCard />
     </div>
 </div>
 

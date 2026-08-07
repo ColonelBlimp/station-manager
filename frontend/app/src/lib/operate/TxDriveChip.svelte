@@ -1,24 +1,27 @@
 <script lang="ts">
     /*
-        TX-drive (ALC) chip (ADR 0064) — the always-visible readout for "is my
-        FT8 drive level right?". Renders nothing until the first ALC poll
-        answer of this page-load (no METERPOLL rigdef / CAT off / no capture
-        session yet: an instrument that cannot read must not paint a value);
-        then one of four states, colour + text:
+        TX-drive (ALC) readout (ADR 0064) — collapsed it is a value chip
+        ("ALC 26" + state dot), open it is a small card with the 0-255 bar and
+        the red-threshold marker, following the RX audio card's interaction
+        grammar exactly (chip click opens, MINUS folds back — not an X, the
+        meter is never closed). Renders nothing until the first ALC poll
+        answer of this page-load (an instrument that cannot read must not
+        paint a value).
 
-          good  — ALC 0, drive right (green);
-          warn  — ALC deflecting below the red threshold (amber, value shown);
-          red   — at/over ft8.meter.alc_red: overdrive (red, value shown);
-          stale — answers stopped: NO DATA (grey dash) — deliberately distinct
-                  from good, because a dead poll and a clean zero must never
-                  render the same.
-
-        Chip-only (no expandable card): the value + colour IS the whole
-        instrument. Sits beside the RX AudioLevelCard chip in Ft8View's
-        bottom-left anchor; this component owns no placement. data-state
-        carries the state for jsdom (same contract as the audio chip).
+        States (logic pinned in txDrive.svelte.test.ts): good (ALC 0, drive
+        right) / warn (deflecting) / red (≥ ft8.meter.alc_red: overdrive) /
+        stale (answers stopped: NO DATA, deliberately distinct from a clean
+        zero). Card structure is FIXED in every state (the audio card's V6
+        lesson: layouts must not swap) — bar track + two h-4 lines always
+        render, only content varies.
     */
-    import { txDriveState, txDriveStatus, type TxDriveStatus } from './txDrive.svelte';
+    import {
+        txDriveState,
+        txDriveStatus,
+        txDriveRedThreshold,
+        setTxDriveOpen,
+        type TxDriveStatus,
+    } from './txDrive.svelte';
 
     // Staleness needs a clock: re-evaluate twice per poll-cadence-ish so the
     // stale flip lands within ~500 ms of the window expiring.
@@ -39,24 +42,98 @@
         stale: 'bg-zinc-500',
     };
 
-    const label: () => string = $derived(() =>
+    const labelByState: Record<Exclude<TxDriveStatus, 'hidden'>, string> = {
+        good: 'drive right (ALC at zero)',
+        warn: 'ALC deflecting',
+        red: 'overdrive — reduce the audio level',
+        stale: 'no poll answers',
+    };
+
+    const chipText: () => string = $derived(() =>
         status() === 'stale' ? 'ALC —' : `ALC ${txDriveState.alc?.value ?? 0}`
     );
+
+    const pct = (v: number): number => Math.min(100, Math.max(0, (v / 255) * 100));
 </script>
 
 {#if status() !== 'hidden'}
-    <div
-        data-txdrive-chip
-        data-state={status()}
-        class="flex items-center gap-x-1.5 rounded-full border border-line bg-surface px-2.5 py-1.5 shadow-md"
-        title="TX drive — rig ALC (0–255) polled live. Red = overdrive; grey dash = no answers. Threshold: ft8.meter.alc_red"
-    >
-        <span class="font-mono text-xs text-muted">{label()}</span>
-        <span
-            class="size-2.5 rounded-full {toneByState[
+    {#if !txDriveState.open}
+        <button
+            type="button"
+            data-txdrive-chip
+            data-state={status()}
+            class="flex cursor-pointer items-center gap-x-1.5 rounded-full border border-line bg-surface px-2.5 py-1.5 shadow-md"
+            title="TX drive — rig ALC (0–255) polled live. {labelByState[
                 status() as Exclude<TxDriveStatus, 'hidden'>
             ]}"
-            aria-hidden="true"
-        ></span>
-    </div>
+            aria-label="Open the TX drive (ALC) meter"
+            onclick={() => setTxDriveOpen(true)}
+        >
+            <span class="font-mono text-xs text-muted">{chipText()}</span>
+            <span
+                class="size-2.5 rounded-full {toneByState[
+                    status() as Exclude<TxDriveStatus, 'hidden'>
+                ]}"
+                aria-hidden="true"
+            ></span>
+        </button>
+    {:else}
+        <div data-txdrive-card data-state={status()} class="card w-64 !p-4 shadow-lg">
+            <div class="flex items-center justify-between">
+                <h3 class="text-sm font-semibold text-ink">TX drive (ALC)</h3>
+                <button
+                    type="button"
+                    data-txdrive-collapse
+                    class="cursor-pointer rounded-md text-muted hover:text-ink"
+                    title="Minimise to the chip"
+                    aria-label="Minimise the TX drive meter to its chip"
+                    onclick={() => setTxDriveOpen(false)}
+                >
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.5"
+                        class="size-4"
+                        aria-hidden="true"
+                    >
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Fixed structure in every state: bar + two h-4 lines. The red
+                 marker sits at the configured threshold; the fill is the raw
+                 ALC value on the same 0-255 scale. -->
+            <div
+                data-meter-bar
+                class="relative mt-2 h-2.5 overflow-hidden rounded-full bg-surface-muted"
+            >
+                {#if status() !== 'stale'}
+                    <div
+                        class="h-full rounded-full {toneByState[
+                            status() as Exclude<TxDriveStatus, 'hidden'>
+                        ]}"
+                        style="width: {pct(txDriveState.alc?.value ?? 0)}%"
+                    ></div>
+                {/if}
+                <div
+                    data-alc-red-marker
+                    class="absolute top-0 h-full w-0.5 bg-red-600/80"
+                    style="left: {pct(txDriveRedThreshold())}%"
+                    aria-hidden="true"
+                ></div>
+            </div>
+            <div data-meter-line class="mt-1.5 h-4 font-mono text-xs text-muted">
+                {status() === 'stale'
+                    ? 'no poll answers'
+                    : `ALC ${txDriveState.alc?.value ?? 0} of 255`}
+            </div>
+            <div data-meter-line class="h-4 text-xs text-muted">
+                {status() === 'stale'
+                    ? 'rig silent on RM4 — CAT or session gone?'
+                    : labelByState[status() as Exclude<TxDriveStatus, 'hidden'>]}
+            </div>
+        </div>
+    {/if}
 {/if}
