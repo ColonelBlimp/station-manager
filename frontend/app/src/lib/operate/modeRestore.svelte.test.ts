@@ -133,7 +133,7 @@ let sent: Sent[] = [];
 
 /** Every op the FTdx10 exposes for this path. tx_on/tx_off are never on an
  *  `exposed` list (ADR 0026/0030) and are deliberately absent here too. */
-const ALL_OPS = ['set_freq', 'set_freq_b', 'set_mode', 'set_band', 'swap_vfo'];
+const ALL_OPS = ['set_freq', 'set_freq_b', 'set_mode', 'set_band', 'swap_vfo', 'select_vfo'];
 
 beforeEach(() => {
     vi.useFakeTimers();
@@ -1285,5 +1285,95 @@ describe('boot-into-FT8 phone fallback (A26)', () => {
         // Restoring the dial while leaving DATA-U asserted would be half the
         // reported bug; with no full picture the old no-op is the honest state.
         expect(sent).toEqual([]);
+    });
+});
+
+describe('selection restore (codex ec2fd42d P1)', () => {
+    /*
+        Until select_vfo existed (2026-08-07) the selection genuinely could not
+        change during an excursion — the UI only swapped CONTENTS — so the
+        restore never touched it. Now it can, and the stakes are more than the
+        dot: set_mode (MD0) acts on the OPERATING VFO, so a restore that
+        rewrites contents and asserts the mode while the wrong VFO is selected
+        writes the mode onto the wrong VFO and leaves the rig operating — and
+        logging — from the other one.
+
+        SEL1 — the selection is restored, FIRST: it must precede the mode
+               write (ordering is load-bearing, not cosmetic — MD0 targets
+               whatever is selected when it lands).
+        SEL2 — an unchanged selection sends nothing (no select chatter on
+               every switch).
+        SEL3 — a rig WITHOUT select_vfo sends neither select nor swap for a
+               drifted selection (a foreign VS push, e.g. front-panel A/B):
+               the swap fallback would exchange the very contents this
+               restore just set.
+        SEL4 — a refused select abandons the rest, per the existing rule: the
+               commands put the rig at one operating point together, and a
+               mode asserted onto the wrong VFO is exactly the state the
+               abandon exists to prevent.
+    */
+    it('SEL1: restores the selected VFO before the mode write', async () => {
+        livePhone(); // phone on VFO-A
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        catLink.onRigState({ selectedVfo: 'B' }); // operator selects B mid-FT8
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        const ops = sent.map((s) => s.op);
+        expect(sent).toContainEqual({ op: 'select_vfo', value: 'VFO-A' });
+        expect(rig.selectedVfo).toBe('A');
+        expect(ops.indexOf('select_vfo')).toBeLessThan(ops.indexOf('set_mode'));
+    });
+
+    it('SEL2: an unchanged selection sends no select command', async () => {
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8(); // selection stays A throughout
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        expect(sent.map((s) => s.op)).not.toContain('select_vfo');
+    });
+
+    it('SEL3: a rig without select_vfo neither selects nor swaps for a drifted selection', async () => {
+        setRigCaps({
+            ops: ['set_freq', 'set_freq_b', 'set_mode', 'swap_vfo'],
+            tune: false,
+            rigModes: [],
+        });
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        catLink.onRigState({ selectedVfo: 'B' }); // front-panel A/B, pushed
+        sent = [];
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        const ops = sent.map((s) => s.op);
+        expect(ops).not.toContain('select_vfo');
+        expect(ops).not.toContain('swap_vfo'); // the fallback would corrupt contents
+    });
+
+    it('SEL4: a refused select abandons the rest of the restore', async () => {
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        catLink.onRigState({ selectedVfo: 'B' });
+        sent = [];
+        setCommandSender((op, value) => {
+            sent.push({ op, value });
+            if (op === 'select_vfo') return Promise.resolve({ ok: false, message: 'refused' });
+            return Promise.resolve({ ok: true, message: '' });
+        });
+
+        await onOperatingModeChange('ft8', 'phone');
+
+        const ops = sent.map((s) => s.op);
+        expect(ops).toContain('select_vfo');
+        expect(ops).not.toContain('set_freq'); // nothing after the refusal —
+        expect(ops).not.toContain('set_mode'); // MD0 would land on the wrong VFO
     });
 });

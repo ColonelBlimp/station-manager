@@ -37,6 +37,7 @@ import {
     seedFreqTarget,
     rigReportVersions,
     setMode as rigSetMode,
+    selectVfo as rigSelectVfo,
     ft8FrequencyFor,
     ft8ModeLiteral,
     type RigReportVersions,
@@ -245,9 +246,12 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
 }
 
 // Only what FT8 (or Phone) actually changed, each capability-gated. The
-// per-physical-VFO ops are selection-independent, so no VFO swap is needed
-// — and none is sent deliberately: swap_vfo exchanges VFO CONTENTS, and the
-// selection survives an excursion anyway (both modes tune the selected VFO).
+// per-physical-VFO ops (FA/FB) are selection-independent; the SELECTION
+// itself is restored first when it drifted and the rig can move it
+// (select_vfo — before that op existed the selection genuinely could not
+// change during an excursion, which is why this step didn't: codex ec2fd42d
+// P1). No swap_vfo is ever sent here: it exchanges VFO CONTENTS, which
+// would corrupt the very values this restore sets.
 //
 // A REJECTION ABANDONS THE REST. The commands are not independent: they put
 // the rig at one operating point together. Carrying on past a refused
@@ -266,6 +270,17 @@ async function applySwitch(from: OpMode, to: OpMode): Promise<void> {
 // has never been — a belief that outlives the capability which suppressed
 // the command, since capabilities are re-applied on any context reload.
 async function applyRestore(to: OpMode, incoming: OperatingSnapshot): Promise<void> {
+    // Selection FIRST — ordering is load-bearing, not cosmetic: set_mode (MD0)
+    // acts on the OPERATING VFO, so restoring the mode before the selection
+    // writes it onto the wrong VFO. Capability-gated on select_vfo itself
+    // rather than routed through selectVfo's fallback: on a rig without the
+    // op the fallback is a content SWAP, which would corrupt the values this
+    // restore sets — for a drifted selection there (front-panel A/B), leaving
+    // the selection alone is the only safe move.
+    if (incoming.selectedVfo !== rig.selectedVfo && hasOp('select_vfo')) {
+        const r = await rigSelectVfo(incoming.selectedVfo);
+        if (!r.ok) return abandon(to, r.message);
+    }
     const selected = rig.selectedVfo;
     if (incoming.vfoA !== null && hasOp('set_freq') && incoming.vfoA !== effective().vfoA) {
         const hz = clampFreq(incoming.vfoA);
