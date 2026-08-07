@@ -847,11 +847,14 @@ func run() error {
 		if !cfg.PskReporter.Enabled || pskRxCall == "" {
 			return
 		}
-		// Absolute frequency needs the rig dial (the bridge has it; FT8 logs the
-		// dial, not dial+offset). No reliable dial → skip the slot rather than
-		// report a wrong/zero frequency (frequency is a required spot field).
-		dialMHz, ok := bridgeSvc.CurrentDialMHz()
-		if !ok {
+		// Absolute frequency = the dial the slot was CAPTURED on, stamped on the
+		// report — never a live bridge read: publication lags capture by the
+		// decode (~0.7–1.6 s), so a live read files a whole slot's spots on the
+		// wrong band when the operator QSYs in that gap (review P1, 2026-08-07;
+		// same attribution rule as occupancy). 0 = the slot was unattributable →
+		// skip rather than spot at a guessed frequency (required field).
+		dialMHz := r.DialMHz
+		if dialMHz == 0 {
 			return
 		}
 		t, err := time.Parse(time.RFC3339, r.Slot.StartUTC)

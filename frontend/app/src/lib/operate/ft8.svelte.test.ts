@@ -87,6 +87,39 @@ describe('decode feed', () => {
         const ids = ft8State.decodes.map((d) => d.id);
         expect(new Set(ids).size).toBe(ids.length);
     });
+
+    // Review P1 (2026-08-07): a report captured before a QSY can ARRIVE after
+    // the band-change watcher cleared the feed — publication lags capture by
+    // the decode (~0.7–1.6 s) — and its rows would repopulate the new band's
+    // view with the old band's stations. The report now stamps the dial its
+    // slot was captured on; rows join the feed only when that dial's band
+    // matches the band the view is on. The heartbeat still ticks either way,
+    // and a report with no stamp (older daemon, no CAT) keeps today's
+    // fail-open display behaviour.
+    it('drops a late report whose capture dial belongs to another band', () => {
+        ft8State.noteOperatingBand('15m'); // the view is on 15m after a QSY
+
+        ft8Link.onDecode({
+            slot: { start_utc: 't-late', period: 'even' },
+            dial_mhz: 14.074, // captured before the QSY, on 20m
+            decodes: [{ text: 'CQ W1ABC FN42', freq_hz: 1500, snr: -12, dt_s: 0.1 }],
+        });
+        expect(ft8State.decodes).toEqual([]);
+        expect(ft8State.slot?.start_utc).toBe('t-late'); // slot clock still ticks
+
+        ft8Link.onDecode({
+            slot: { start_utc: 't-ok', period: 'odd' },
+            dial_mhz: 21.074, // captured on the band the view is on
+            decodes: [{ text: 'CQ JA1XYZ PM95', freq_hz: 800, snr: -15, dt_s: 0.1 }],
+        });
+        expect(ft8State.decodes.map((d) => d.text)).toEqual(['CQ JA1XYZ PM95']);
+
+        ft8Link.onDecode({
+            slot: { start_utc: 't-nodial', period: 'even' },
+            decodes: [{ text: 'CQ VE3XYZ FN03', freq_hz: 1660, snr: -9, dt_s: 0.1 }],
+        });
+        expect(ft8State.decodes.map((d) => d.text)).toContain('CQ VE3XYZ FN03');
+    });
 });
 
 describe('occupancy + status mirrors', () => {

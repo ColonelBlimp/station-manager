@@ -204,6 +204,28 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 	if err := c.keyer.KeyTx(ctx, c.mode); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("key tx")
 	}
+	// From this line RF is up, so the unkey guard is registered BEFORE anything
+	// else runs — onKeyed is arbitrary caller code, and a panic in it (or in any
+	// later registration) must not escape with PTT still asserted (review P1,
+	// 2026-08-07: the guard used to be registered after the callback, leaving
+	// the bridge's 18 s auto-off as the only protection on exactly the path this
+	// function's contract claims to cover). Idempotent (unkeyed flag): a second
+	// registration after the evidence defer below restores the LIFO order that
+	// makes keyed_ms the true key-to-unkey span on the normal paths.
+	keyedAt := time.Now()
+	var keyedFor time.Duration
+	unkeyed := false
+	unkey := func() {
+		if unkeyed {
+			return
+		}
+		unkeyed = true
+		keyedFor = time.Since(keyedAt)
+		if err := c.keyer.UnkeyTx(context.Background()); err != nil {
+			c.log.ErrorWith().Err(err).Msg("ft8 tx: unkey failed (backstop will retry)")
+		}
+	}
+	defer unkey()
 	if onKeyed != nil {
 		onKeyed()
 	}
@@ -224,12 +246,13 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 	// accepts a full waveform and radiates nothing still logs a healthy line here.
 	// That case belongs to the drive alarm, which watches the rig's PO meter; this
 	// record is what the alarm gets correlated against. Do not read it as proof of RF.
-	keyedAt := time.Now()
-	var keyedFor time.Duration
 	submitted := 0
 	truncated := 0
-	// Registered BEFORE the unkey defer so LIFO runs it AFTER: keyedFor is then
-	// the true key-to-unkey span, not the time up to the return statement.
+	// Registered BEFORE the second unkey defer so LIFO runs that one FIRST:
+	// keyedFor is then the true key-to-unkey span, not the time up to the
+	// return statement. An onKeyed panic never reaches this registration, so
+	// no false "transmitted" evidence line is written for a rung that died in
+	// the callback — only the unkey guard above runs there.
 	defer func() {
 		if err != nil {
 			return // a failed rung must never claim it transmitted
@@ -241,18 +264,6 @@ func (c *TxController) transmit(ctx context.Context, waveform []int16, nominal t
 			Int64("truncated_ms", int64(float64(truncated)/float64(goft8.SampleRate)*1000)).
 			Msg("ft8 tx: transmitted")
 	}()
-
-	unkeyed := false
-	unkey := func() {
-		if unkeyed {
-			return
-		}
-		unkeyed = true
-		keyedFor = time.Since(keyedAt)
-		if err := c.keyer.UnkeyTx(context.Background()); err != nil {
-			c.log.ErrorWith().Err(err).Msg("ft8 tx: unkey failed (backstop will retry)")
-		}
-	}
 	defer unkey()
 
 	// Let PTT engage before audio.

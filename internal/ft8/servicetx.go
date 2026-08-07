@@ -208,6 +208,34 @@ func (s *Service) armTx() error {
 	inhibitor := s.idleInhibitor
 	s.txMu.Unlock()
 
+	// Re-validate the pin against the COMMIT-TIME dial (review P2, 2026-08-07).
+	// The entry read above predates txMu + the player build (lock order: the
+	// dial source must not be called under txMu), so a QSY inside that window
+	// committed a stale pin — and because the move lands before txArmed=true,
+	// onDialMoved's !armed early-return repairs nothing; with no capture running
+	// there is no move callback at all. Every key was then refused (live vs pin)
+	// until a manual disarm/re-arm. Compare-and-repair under a fresh hold: only
+	// while still armed with the pin still the entry reading — a concurrent
+	// disarm or re-arm cycle owns the state otherwise. Between the commit above
+	// and this repair the gates fail CLOSED (mismatch refuses), so the window is
+	// never a safety hole, only an availability one. An UNKNOWN re-read keeps
+	// the entry pin deliberately: the pre-key gate refuses unknown and mismatch
+	// alike, so that double fault (QSY + CAT blink inside one arm call) stays
+	// fail-closed and recoverable by re-arm — repairing it on a later reading
+	// would duplicate exactly the machinery onDialMoved already is.
+	if post, tracked, known := s.dialState(); tracked && known && post != dialAtArm {
+		s.txMu.Lock()
+		repaired := s.txArmed && s.armDialMHz == dialAtArm
+		if repaired {
+			s.armDialMHz = post
+		}
+		s.txMu.Unlock()
+		if repaired {
+			s.log.InfoWith().Float64("from_mhz", dialAtArm).Float64("to_mhz", post).
+				Msg("ft8 tx: dial moved during arm; pin updated to the commit-time dial")
+		}
+	}
+
 	// AFTER the arm has committed, never before: an arm refused by the switch above
 	// returns without reaching here, so a refusal cannot leak an inhibition that
 	// nothing would ever release. Arms are refused routinely (CAT blink, unreadable

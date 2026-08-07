@@ -730,3 +730,49 @@ func TestDecodeLoop_MovedSlotPublishesNoDecodes(t *testing.T) {
 		t.Fatalf("settled slot decoded nothing; the moved-slot assertion proves nothing")
 	}
 }
+
+// Review P1 (2026-08-07): the decode report carries the dial its slot was
+// CAPTURED on. Publication lags capture by the decode (~0.7–1.6 s), so a
+// consumer attributing decodes against live rig state — the PSK Reporter sink
+// re-read bridge.CurrentDialMHz at publish time — files a whole slot on the
+// wrong band when the operator QSYs inside that gap; DialChanged cannot catch
+// it because the move postdates the capture window. Same rule as
+// OccupancyReport.DialMHz. The fixture pins the CAPTURED value against a live
+// dial source that has ALREADY moved elsewhere: an implementation that stamps
+// a publish-time re-read produces 21.074 here and fails.
+func TestDecodeLoop_ReportCarriesTheCaptureDial(t *testing.T) {
+	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+
+	run := func(t *testing.T, slot Slot) []DecodeReport {
+		t.Helper()
+		s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), newFakeSource())
+		// The rig has ALREADY QSYed by the time the decode publishes.
+		s.SetDialSource(func() (float64, bool) { return 21.074, true })
+		var sunk []DecodeReport
+		s.SetDecodeSink(func(r DecodeReport) { sunk = append(sunk, r) })
+		ch := make(chan Slot, 1)
+		ch <- slot
+		close(ch)
+		s.decodeLoop(ch)
+		return sunk
+	}
+
+	got := run(t, Slot{StartUTC: start, DialMHz: 14.074, DialTracked: true})
+	if len(got) != 1 {
+		t.Fatalf("decode sink got %d reports, want 1", len(got))
+	}
+	if got[0].DialMHz != 14.074 {
+		t.Errorf("report dial = %v, want the CAPTURE dial 14.074 (live reads 21.074)",
+			got[0].DialMHz)
+	}
+
+	// An unattributable slot (dial never known) must say so — 0, so consumers
+	// like the PSK sink skip it rather than spot at a guessed frequency.
+	unknown := run(t, Slot{StartUTC: start, DialTracked: true})
+	if len(unknown) != 1 {
+		t.Fatalf("decode sink got %d reports for the unknown-dial slot, want 1", len(unknown))
+	}
+	if unknown[0].DialMHz != 0 {
+		t.Errorf("unknown-dial report dial = %v, want 0 (unattributable)", unknown[0].DialMHz)
+	}
+}

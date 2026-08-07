@@ -783,6 +783,19 @@ export const ft8Link: Ft8EventHandlers = {
         const lines = p.decodes ?? [];
         if (lines.length === 0) return; // silent slot — nothing to add
 
+        // Attribution guard (review P1, 2026-08-07): rows join the feed only
+        // when the dial their slot was CAPTURED on maps to the band this view
+        // is on. Publication lags capture by the decode (~0.7–1.6 s), so a
+        // pre-QSY slot can arrive AFTER the band-change watcher cleared the
+        // feed and would repopulate the new band's view with the old band's
+        // stations. The slot heartbeat above already ticked — only the rows
+        // are withheld. No stamp (older daemon, no CAT) or no band bookkeeping
+        // yet → keep the fail-open display behaviour.
+        if (typeof p.dial_mhz === 'number' && p.dial_mhz > 0 && ft8State.lastSeenBand !== '') {
+            const reportBand = frequencyToBand(p.dial_mhz * 1e6);
+            if (reportBand !== '' && reportBand !== ft8State.lastSeenBand) return;
+        }
+
         const startUtc = p.slot?.start_utc ?? '';
         // Frequency-ascending within the slot so the new block reads like a band.
         const fresh: DecodeEntry[] = [...lines]

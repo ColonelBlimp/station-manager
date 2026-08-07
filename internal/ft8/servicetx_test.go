@@ -168,6 +168,46 @@ func drainTxState(t *testing.T, ch <-chan hubEvent, want func(TxState) bool) TxS
 	}
 }
 
+// TestArmTx_DialMovedDuringArmPinsTheCommitTimeDial (review P2, 2026-08-07):
+// armTx reads the dial BEFORE txMu + player init (lock order — the dial source
+// must not be called under txMu) and committed that EARLY reading as the arm's
+// pin. A QSY inside that window pinned the old frequency; and because the move
+// lands before txArmed=true, onDialMoved's !armed early-return repairs
+// nothing — with no capture running there is no move callback at all. Result:
+// armed, but every key refused (live dial vs stale pin) until a manual
+// disarm/re-arm. The rule: an arm binds to the frequency the rig is ON when
+// the arm commits.
+func TestArmTx_DialMovedDuringArmPinsTheCommitTimeDial(t *testing.T) {
+	k := &fakeKeyer{}
+	s := newTxTestService(k, newFakeTxPlayer(), nil)
+	// The rig QSYs 14.074 → 21.074 between armTx's entry read and its commit:
+	// the first read returns the old dial, every later one the new.
+	reads := 0
+	s.SetDialSource(func() (float64, bool) {
+		reads++
+		if reads == 1 {
+			return 14.074, true
+		}
+		return 21.074, true
+	})
+	require.NoError(t, s.ArmTx(true))
+	defer func() { _ = s.ArmTx(false) }()
+
+	// The observable is the gate adjacent to PTT: keying at the rig's ACTUAL
+	// frequency must be allowed. With the stale pin it returned ErrTxSuperseded
+	// for every transmission the operator tried.
+	require.NoError(t, s.preKeyDialCheck(),
+		"an arm must bind to the dial the rig is on at commit, not the entry reading")
+	// And the pin itself must be the real frequency — an implementation that
+	// "fixes" the mismatch by pinning 0 would pass the gate above while turning
+	// the arm into "any frequency will do" (the codex P1 on 7c2e66ad hazard).
+	s.txMu.Lock()
+	pinned := s.armDialMHz
+	s.txMu.Unlock()
+	require.Equal(t, 21.074, pinned,
+		"the pin is the commit-time dial — never zero, never the entry reading")
+}
+
 func TestArmTx_RequiresReadyKeyer(t *testing.T) {
 	t.Run("no keyer wired", func(t *testing.T) {
 		s := newTxTestService(nil, newFakeTxPlayer(), nil)

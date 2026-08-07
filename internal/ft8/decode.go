@@ -17,6 +17,15 @@ const opDecodeFile errors.Op = "ft8.DecodeFile"
 type DecodeReport struct {
 	Slot    SlotRef      `json:"slot"`
 	Decodes []DecodeLine `json:"decodes"`
+	// DialMHz is the rig dial this slot's audio was CAPTURED on (Slot.DialMHz),
+	// 0/omitted when unknown. Publication lags capture by the decode
+	// (~0.7–1.6 s), so consumers must attribute these decodes to a band from
+	// THIS value, never from live rig state — a QSY in that gap otherwise files
+	// stations heard on band A as band B (wrong PSK Reporter spots, wrong-band
+	// Band Activity rows). DialChanged suppression cannot catch it: the move
+	// postdates the capture window. Same attribution rule, and the same reason,
+	// as OccupancyReport.DialMHz (review P1, 2026-08-07).
+	DialMHz float64 `json:"dial_mhz,omitempty"`
 }
 
 // DecodeLine is one decoded message in operator-facing form: the base-tone
@@ -55,12 +64,15 @@ func dropOwnTransmissions(msgs []goft8.DecodedMessage, ownCall string) []goft8.D
 }
 
 // newDecodeReport projects go-ft8's decodes into the wire DTO for one slot.
-func newDecodeReport(slot SlotRef, msgs []goft8.DecodedMessage) DecodeReport {
+// dialMHz is the slot's CAPTURED dial (Slot.DialMHz, 0 = unknown) — stamped
+// here so no consumer has to attribute the decodes against live rig state
+// (see DecodeReport.DialMHz).
+func newDecodeReport(slot SlotRef, dialMHz float64, msgs []goft8.DecodedMessage) DecodeReport {
 	lines := make([]DecodeLine, 0, len(msgs))
 	for _, m := range msgs {
 		lines = append(lines, DecodeLine{Text: m.Text, FreqHz: m.FreqHz, DTSec: m.DTSec, SNR: m.SNR})
 	}
-	return DecodeReport{Slot: slot, Decodes: lines}
+	return DecodeReport{Slot: slot, Decodes: lines, DialMHz: dialMHz}
 }
 
 // DecodeSlot decodes one 15-second FT8 slot from 12 kHz mono signed-16-bit

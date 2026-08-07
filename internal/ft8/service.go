@@ -935,7 +935,7 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// Publish the decode feed every slot (empty on our TX slots) so the SPA's slot
 		// clock stays live; the decode + occupancy publish independent SSE events on
 		// one stream, order between them doesn't matter to the SPA.
-		report := newDecodeReport(ref, msgs)
+		report := newDecodeReport(ref, slot.DialMHz, msgs)
 		s.hub.publish(hubEvent{name: EventDecode, payload: report})
 		if s.decodeSink != nil {
 			s.decodeSink(report)

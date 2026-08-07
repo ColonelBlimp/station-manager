@@ -57,6 +57,12 @@ export interface DecodeLine {
 export interface DecodeReport {
     slot: Ft8SlotRef;
     decodes: DecodeLine[] | null;
+    /** The rig dial this slot's audio was CAPTURED on (MHz), absent when
+     *  unknown. Attribute these decodes to a band from THIS, never from live
+     *  rig state: publication lags capture by the decode, so a QSY in that gap
+     *  otherwise files stations heard on band A as band B (review P1,
+     *  2026-08-07; same rule as the occupancy report's dial_mhz). */
+    dial_mhz?: number;
 }
 
 /** ft8-tx — internal/ft8.TxState (arm/transmit + in-flight message; hub-cached

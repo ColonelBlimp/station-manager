@@ -142,6 +142,26 @@ func TestTransmit_PlayError(t *testing.T) {
 	require.Equal(t, 1, k.unkeys(), "must unkey after a play error")
 }
 
+// TestTransmit_PanicInOnKeyedStillUnkeys: PTT comes down on EVERY exit from a
+// successful key, panic unwinding included (review P1, 2026-08-07). onKeyed is
+// arbitrary caller code running AFTER RF is up; before the fix the unkey guard
+// was registered only after it returned, so a panic there escaped with PTT
+// still asserted — the bridge's 18 s auto-off as the only thing between the
+// operator and a stuck carrier, on the one path the function's own contract
+// ("unkeyed on EVERY return path") claimed to cover.
+func TestTransmit_PanicInOnKeyedStillUnkeys(t *testing.T) {
+	zeroTiming(t)
+	k := &fakeKeyer{}
+	p := newFakePlayer()
+	c := NewTxController(k, p, "", logging.Noop())
+
+	require.PanicsWithValue(t, "boom", func() {
+		_ = c.transmit(context.Background(), []int16{1}, time.Time{}, func() { panic("boom") })
+	})
+	require.Equal(t, 1, k.keys(), "fixture: the key succeeded before the panic")
+	require.Equal(t, 1, k.unkeys(), "PTT must drop even when the post-key callback panics")
+}
+
 // TestTransmit_ContextCancel: cancelling mid-playback stops the player and
 // unkeys — the guaranteed stop holds on the cancel path.
 func TestTransmit_ContextCancel(t *testing.T) {
