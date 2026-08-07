@@ -149,7 +149,7 @@ func TestCallerExchangeLogsTheReportItTransmits(t *testing.T) {
 
 	// The same exchange, logged the way the sequencer logs it.
 	c := CompletedQso{TheirCall: e.TheirCall, OurReport: e.SendSnr, HasOurReport: e.HasSendSnr}
-	q := BuildQso(c, types.LoggingStation{Operator: "7Q5MLV"}, 1, time.Unix(0, 0).UTC())
+	q := BuildQso(c, types.LoggingStation{Operator: "7Q5MLV"}, 1, time.Unix(0, 0).UTC(), nil)
 
 	if want := "+49"; onAir != want {
 		t.Fatalf("on-air report = %q, want %q", onAir, want)

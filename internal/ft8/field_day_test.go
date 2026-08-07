@@ -185,7 +185,7 @@ func TestBuildQso_FieldDay(t *testing.T) {
 		DialFreqMHz:  14.074,
 		StartedAt:    time.Unix(0, 0).UTC(),
 	}
-	q := BuildQso(c, types.LoggingStation{Operator: "G0XYZ"}, 1, time.Unix(0, 0).UTC())
+	q := BuildQso(c, types.LoggingStation{Operator: "G0XYZ"}, 1, time.Unix(0, 0).UTC(), nil)
 	require.Equal(t, "K1ABC", q.Call)
 	require.Equal(t, "FT8", q.Mode)
 	require.Equal(t, "2A", q.Class)

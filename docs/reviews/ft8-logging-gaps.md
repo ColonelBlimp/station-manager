@@ -301,7 +301,14 @@ device handle are byte-identical in `smd.log`.
 
 ## Tier 3 — silent degradation of stored and forwarded data
 
-### 7. `qsolog.go` has zero log calls and four silent degradations
+### 7. `qsolog.go` has zero log calls and four silent degradations — ✅ FIXED 2026-08-07
+
+Closed as specified: `BuildQso`/`NewLoggedQso` take a nil-safe injected
+`logging.Logger` (the functions stay assembly-pure — no storage import) and Warn
+on each degradation with the input that failed to resolve; fail-soft behaviour
+unchanged, clean build emits nothing, an EMPTY `NewLoggedQso` field is absence
+(no line), only a malformed one warns. Rules Q1–Q5 in
+`internal/ft8/qsologwarn_test.go`; reversion-proved.
 
 All four land on data that is **stored and forwarded to QRZ / ClubLog / SM Cloud** —
 durable, outbound, and not correctable by the operator after the fact.
@@ -324,7 +331,12 @@ branch ever fires in production, nothing anywhere records that it did.
   the fail-soft behaviour — degrading is correct (`enrichment never blocks logging`);
   degrading *invisibly* is the defect.
 
-### 8. A completed exchange with no sink wired is discarded silently
+### 8. A completed exchange with no sink wired is discarded silently — ✅ FIXED 2026-08-07
+
+Closed as specified: the `onComplete` nil-sink branch logs Error
+`ft8: completed QSO discarded — no QSO sink wired` with the callsign. Rule Q6
+(both halves: nil-sink errors, wired sink receives silently) in
+`internal/ft8/qsologwarn_test.go`; reversion-proved.
 
 `internal/ft8/service.go:274` — `if s.qsoLogger != nil { ... }`, with no `else`.
 
@@ -531,13 +543,12 @@ them. Each was checked against the code on 2026-08-01.
 
 ## Progress (2026-08-07)
 
-**8 of 14 closed:** 1 (2026-08-01), then 6, 2, 3, 14 (2026-08-04), then 4
-(2026-08-06), then 5, 11 (2026-08-07). **6 remain:** 7, 8 (data integrity,
-small — NEXT), 12, 13 (one file — NB the decode log became SERVICE-lifetime
-on 2026-08-06, which makes 12 MORE pressing: line-loss reporting now defers
-to daemon shutdown, not view close), 9, 10 (whenever adjacent). Carried
-forward from 11: fireOpening's missing SSE frame on deferral is a WIRE
-change outside this gate.
+**10 of 14 closed:** 1 (2026-08-01), then 6, 2, 3, 14 (2026-08-04), then 4
+(2026-08-06), then 5, 11, 7, 8 (2026-08-07). **4 remain:** 12, 13 (one file —
+NEXT; NB the decode log became SERVICE-lifetime on 2026-08-06, which makes 12
+MORE pressing: line-loss reporting now defers to daemon shutdown, not view
+close), 9, 10 (whenever adjacent). Carried forward from 11: fireOpening's
+missing SSE frame on deferral is a WIRE change outside this gate.
 
 ## Suggested order
 

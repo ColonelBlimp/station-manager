@@ -27,7 +27,7 @@ func TestBuildQso(t *testing.T) {
 	}
 	now := time.Date(2026, 6, 10, 14, 30, 45, 0, time.UTC)
 
-	q := BuildQso(c, station, 7, now)
+	q := BuildQso(c, station, 7, now, nil)
 
 	require.Equal(t, int64(7), q.LogbookID)
 	require.Equal(t, "K1ABC", q.Call)
@@ -67,7 +67,7 @@ func TestBuildQso_Type4(t *testing.T) {
 	}
 	now := time.Date(2026, 7, 16, 14, 30, 0, 0, time.UTC)
 
-	q := BuildQso(c, station, 3, now)
+	q := BuildQso(c, station, 3, now, nil)
 
 	require.Equal(t, "PJ4/NA2AA", q.Call, "the spelled nonstandard call is logged, not a hash")
 	require.Equal(t, "FT8", q.Mode)
@@ -86,7 +86,7 @@ func TestBuildQso_TimeOn(t *testing.T) {
 	t.Run("TIME_ON is the start instant, TIME_OFF the completion", func(t *testing.T) {
 		c := base
 		c.StartedAt = time.Date(2026, 6, 10, 14, 28, 30, 0, time.UTC)
-		q := BuildQso(c, station, 1, time.Date(2026, 6, 10, 14, 30, 15, 0, time.UTC))
+		q := BuildQso(c, station, 1, time.Date(2026, 6, 10, 14, 30, 15, 0, time.UTC), nil)
 		require.Equal(t, "142830", q.TimeOn)
 		require.Equal(t, "143015", q.TimeOff)
 		require.Equal(t, "20260610", q.QsoDate)
@@ -97,13 +97,13 @@ func TestBuildQso_TimeOn(t *testing.T) {
 		loc := time.FixedZone("CEST", 2*60*60)
 		c := base
 		c.StartedAt = time.Date(2026, 6, 10, 16, 28, 30, 0, loc)
-		q := BuildQso(c, station, 1, time.Date(2026, 6, 10, 16, 30, 0, 0, loc))
+		q := BuildQso(c, station, 1, time.Date(2026, 6, 10, 16, 30, 0, 0, loc), nil)
 		require.Equal(t, "142830", q.TimeOn)
 		require.Equal(t, "143000", q.TimeOff)
 	})
 
 	t.Run("a zero start falls back to the completion instant", func(t *testing.T) {
-		q := BuildQso(base, station, 1, time.Date(2026, 6, 10, 14, 30, 0, 0, time.UTC))
+		q := BuildQso(base, station, 1, time.Date(2026, 6, 10, 14, 30, 0, 0, time.UTC), nil)
 		require.Equal(t, "143000", q.TimeOn)
 		require.Equal(t, "143000", q.TimeOff)
 		require.Equal(t, "20260610", q.QsoDate)
@@ -112,7 +112,7 @@ func TestBuildQso_TimeOn(t *testing.T) {
 	t.Run("QSO_DATE follows the start when the exchange crosses midnight", func(t *testing.T) {
 		c := base
 		c.StartedAt = time.Date(2026, 6, 10, 23, 59, 30, 0, time.UTC)
-		q := BuildQso(c, station, 1, time.Date(2026, 6, 11, 0, 0, 13, 0, time.UTC))
+		q := BuildQso(c, station, 1, time.Date(2026, 6, 11, 0, 0, 13, 0, time.UTC), nil)
 		require.Equal(t, "20260610", q.QsoDate) // start date, not completion date
 		require.Equal(t, "235930", q.TimeOn)
 		require.Equal(t, "000013", q.TimeOff)
@@ -125,7 +125,7 @@ func TestBuildQso_TimeOn(t *testing.T) {
 	t.Run("a same-day QSO sets QSO_DATE_OFF equal to QSO_DATE (always populated)", func(t *testing.T) {
 		c := base
 		c.StartedAt = time.Date(2026, 6, 10, 14, 28, 30, 0, time.UTC)
-		q := BuildQso(c, station, 1, time.Date(2026, 6, 10, 14, 30, 15, 0, time.UTC))
+		q := BuildQso(c, station, 1, time.Date(2026, 6, 10, 14, 30, 15, 0, time.UTC), nil)
 		require.Equal(t, "20260610", q.QsoDateOff)
 	})
 }
@@ -137,7 +137,7 @@ func TestBuildQso_AntPath(t *testing.T) {
 	t.Run("short stamps ANT_PATH + short bearing/distance", func(t *testing.T) {
 		c := base
 		c.AntPath = "S"
-		q := BuildQso(c, station, 1, time.Now())
+		q := BuildQso(c, station, 1, time.Now(), nil)
 		require.Equal(t, "S", q.AntPath)
 		require.NotEmpty(t, q.AntennaAzimuth, "ANT_AZ should be set when both grids resolve")
 		require.NotEmpty(t, q.Distance)
@@ -146,11 +146,11 @@ func TestBuildQso_AntPath(t *testing.T) {
 	t.Run("long stamps ANT_PATH=L + the long-path bearing/distance", func(t *testing.T) {
 		short := base
 		short.AntPath = "S"
-		qs := BuildQso(short, station, 1, time.Now())
+		qs := BuildQso(short, station, 1, time.Now(), nil)
 
 		long := base
 		long.AntPath = "L"
-		ql := BuildQso(long, station, 1, time.Now())
+		ql := BuildQso(long, station, 1, time.Now(), nil)
 
 		require.Equal(t, "L", ql.AntPath)
 		// Long-path bearing/distance differ from short for a non-degenerate pair.
@@ -159,7 +159,7 @@ func TestBuildQso_AntPath(t *testing.T) {
 	})
 
 	t.Run("unset path leaves ANT_PATH empty (default short is stamped by the Service)", func(t *testing.T) {
-		q := BuildQso(base, station, 1, time.Now()) // c.AntPath == ""
+		q := BuildQso(base, station, 1, time.Now(), nil) // c.AntPath == ""
 		require.Empty(t, q.AntPath)
 		require.Empty(t, q.AntennaAzimuth)
 	})
@@ -168,7 +168,7 @@ func TestBuildQso_AntPath(t *testing.T) {
 		c := base
 		c.TheirGrid = ""
 		c.AntPath = "L"
-		q := BuildQso(c, station, 1, time.Now())
+		q := BuildQso(c, station, 1, time.Now(), nil)
 		require.Equal(t, "L", q.AntPath)
 		require.Empty(t, q.AntennaAzimuth)
 		require.Empty(t, q.Distance)
@@ -179,7 +179,7 @@ func TestBuildQso_StationCallsignFallsBackToOperator(t *testing.T) {
 	// Operator set, StationCallsign empty → STATION_CALLSIGN must fall back so
 	// the submit's required-field check passes.
 	station := types.LoggingStation{Operator: "G0XYZ"}
-	q := BuildQso(CompletedQso{TheirCall: "K1ABC", DialFreqMHz: 14.074}, station, 1, time.Now())
+	q := BuildQso(CompletedQso{TheirCall: "K1ABC", DialFreqMHz: 14.074}, station, 1, time.Now(), nil)
 	require.Equal(t, "G0XYZ", q.StationCallsign)
 }
 
@@ -199,14 +199,14 @@ func TestNewLoggedQso(t *testing.T) {
 		DialFreqMHz:    14.074,
 	}
 	now := time.Date(2026, 6, 10, 9, 5, 0, 0, time.UTC)
-	q := BuildQso(c, station, 7, now)
+	q := BuildQso(c, station, 7, now, nil)
 	// Country and Name are filled by the cmd/smd sink's enrichment before submit
 	// (BuildQso itself leaves them empty); the payload must carry them through to
 	// the SPA so the session-list row shows them for FT8 QSOs.
 	q.Country = "United States"
 	q.Name = "Fred"
 
-	l := NewLoggedQso(q, "uuid-123")
+	l := NewLoggedQso(q, "uuid-123", nil)
 
 	require.Equal(t, "uuid-123", l.UUID)
 	require.Equal(t, "K1ABC", l.Callsign)
@@ -228,7 +228,7 @@ func TestNewLoggedQso(t *testing.T) {
 func TestNewLoggedQso_MalformedFieldsDegrade(t *testing.T) {
 	// A QSO with unparseable freq / short time / date must not panic — the QSO is
 	// already logged; the payload just carries zero/blank for the bad fields.
-	l := NewLoggedQso(types.Qso{}, "uuid-x")
+	l := NewLoggedQso(types.Qso{}, "uuid-x", nil)
 	require.Equal(t, "uuid-x", l.UUID)
 	require.Equal(t, int64(0), l.FreqHz)
 	require.Equal(t, "", l.TimeOn)

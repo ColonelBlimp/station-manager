@@ -274,6 +274,13 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		// pinned session logbook (ADR 0055) — nothing to add here.
 		if s.qsoLogger != nil {
 			s.qsoLogger(s.base(), c)
+		} else {
+			// finalrung logs "QSO complete" on this same path, so a silent drop
+			// here leaves the log AFFIRMING a QSO that was never handed anywhere.
+			// cmd/smd always wires the sink before Start — reaching this branch is
+			// a wiring bug, hence Error, not a runtime condition to degrade over.
+			s.log.ErrorWith().Str("their_call", c.TheirCall).
+				Msg("ft8: completed QSO discarded — no QSO sink wired")
 		}
 	}
 	return s

@@ -263,7 +263,7 @@ func TestExchangeLogsTheReportItTransmits(t *testing.T) {
 		TheirCall: e.TheirCall, OurReport: e.SendSnr, HasOurReport: e.HasSendSnr,
 		TheirReport: e.RcvdReport, HasTheirReport: e.HasRcvdReport,
 	}
-	q := BuildQso(c, types.LoggingStation{Operator: "G0XYZ"}, 1, time.Unix(0, 0).UTC())
+	q := BuildQso(c, types.LoggingStation{Operator: "G0XYZ"}, 1, time.Unix(0, 0).UTC(), nil)
 	if q.RstSent != "-50" {
 		t.Fatalf("logged RST_SENT = %q, want %q", q.RstSent, "-50")
 	}

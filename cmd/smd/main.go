@@ -730,7 +730,7 @@ func run() error {
 			if logbookID < 1 {
 				logbookID = snap.DefaultLogbookID
 			}
-			q := ft8.BuildQso(c, snap.LoggingStation, logbookID, time.Now().UTC())
+			q := ft8.BuildQso(c, snap.LoggingStation, logbookID, time.Now().UTC(), loggerSvc)
 			// ARRL Field Day RST_RCVD default (config ft8.field_day.default_rst_rcvd):
 			// FD exchanges class/section, not a report, so we never receive an RST.
 			// RST_SENT is the measured SNR (set by BuildQso); some OQRS systems require
@@ -812,7 +812,7 @@ func run() error {
 			// Surface the logged QSO to the SPA's session list (ADR 0029 step e4).
 			// The canonical UUID flows through so the SPA's email-out / edit paths
 			// work for FT8 rows; best-effort, after a confirmed store.
-			ft8Svc.PublishQsoLogged(ft8.NewLoggedQso(q, res.UUID))
+			ft8Svc.PublishQsoLogged(ft8.NewLoggedQso(q, res.UUID, loggerSvc))
 		})
 	})
 	// PSK Reporter upload (opt-in): every FT8 decode is a "heard this station"

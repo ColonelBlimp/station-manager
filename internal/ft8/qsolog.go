@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -24,7 +25,10 @@ import (
 //   - The whole LoggingStation identity block is copied in; STATION_CALLSIGN
 //     falls back to OPERATOR (ADIF rule) so the submit's required-field check
 //     passes when the operator set only OPERATOR.
-func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now time.Time) types.Qso {
+func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now time.Time, log logging.Logger) types.Qso {
+	if log == nil {
+		log = logging.Noop()
+	}
 	now = now.UTC()
 	freq := fmt.Sprintf("%.6f", c.DialFreqMHz)
 
@@ -38,6 +42,15 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 	q.Mode = "FT8"
 	q.Freq = freq
 	q.Band = utils.FrequencyToBand(freq)
+	// Every degradation below is Warn'd rather than silent: the row is stored AND
+	// forwarded (QRZ/ClubLog/SM Cloud) — durable, outbound data that cannot be
+	// corrected after the fact, so an invisible fallback is unauditable. Degrading
+	// itself is correct (enrichment never blocks logging); each line carries the
+	// input that failed to resolve, and a clean build emits nothing.
+	if q.Band == "" {
+		log.WarnWith().Str("freq", freq).Str("their_call", c.TheirCall).
+			Msg("ft8: QSO band unresolved from dial")
+	}
 	// time_on/time_off are HHMMSS — FT8 has the exact slot instant, so we keep the
 	// real seconds (the storage CHECK now accepts HHMM or HHMMSS, and the QSL
 	// manager's OQRS matches on the full timestamp; dedupe stays minute-precision
@@ -48,6 +61,11 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 	start := c.StartedAt
 	if start.IsZero() {
 		start = now
+		// A zero StartedAt means a path failed to stamp the start — a defect
+		// indicator, not an expected input; the fallback keeps the QSO but the
+		// record must exist.
+		log.WarnWith().Str("their_call", c.TheirCall).
+			Msg("ft8: QSO start instant was never stamped")
 	}
 	start = start.UTC()
 	q.QsoDate = start.Format("20060102")
@@ -83,6 +101,9 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 			// sub-degree precision is spurious (FormatFloat rounds at prec 0).
 			q.AntennaAzimuth = strconv.FormatFloat(bearing, 'f', 0, 64)
 			q.Distance = strconv.FormatFloat(dist, 'f', 0, 64)
+		} else {
+			log.WarnWith().Str("my_grid", station.MyGridsquare).Str("their_grid", c.TheirGrid).
+				Msg("ft8: antenna path unresolved")
 		}
 	}
 	// ARRL Field Day exchange (answer-a-CQ-FD): the worked station's class + section,
@@ -123,10 +144,20 @@ type LoggedQso struct {
 // SPA-friendly shapes the session list expects: FREQ MHz → Hz, TIME_ON "HHMMSS"
 // → "HH:MM:SS", QSO_DATE "YYYYMMDD" → "YYYY-MM-DD". A malformed freq/time/date degrades
 // to a zero/blank field rather than failing — the QSO is already logged.
-func NewLoggedQso(q types.Qso, uuid string) LoggedQso {
+func NewLoggedQso(q types.Qso, uuid string, log logging.Logger) LoggedQso {
+	if log == nil {
+		log = logging.Noop()
+	}
+	// Malformed-field degradations are Warn'd per field (same rationale as
+	// BuildQso's lines: the blank/zero lands in the operator-visible session row
+	// with no explanation otherwise). An EMPTY field is absence, not malformation
+	// — it passes through blank without a line.
 	var freqHz int64
 	if mhz, err := strconv.ParseFloat(q.Freq, 64); err == nil {
 		freqHz = int64(mhz*1_000_000 + 0.5)
+	} else if q.Freq != "" {
+		log.WarnWith().Str("field", "freq").Str("value", q.Freq).Str("call", q.Call).
+			Msg("ft8: logged-QSO field malformed")
 	}
 	// Colon-separate at the precision the record actually carries: HHMMSS →
 	// "HH:MM:SS", HHMM → "HH:MM". This used to truncate to HH:MM unconditionally
@@ -141,10 +172,18 @@ func NewLoggedQso(q types.Qso, uuid string) LoggedQso {
 		timeOn = timeOn[:2] + ":" + timeOn[2:4] + ":" + timeOn[4:6]
 	case 4:
 		timeOn = timeOn[:2] + ":" + timeOn[2:4]
+	default:
+		if timeOn != "" {
+			log.WarnWith().Str("field", "time_on").Str("value", timeOn).Str("call", q.Call).
+				Msg("ft8: logged-QSO field malformed")
+		}
 	}
 	qsoDate := q.QsoDate
 	if len(qsoDate) == 8 {
 		qsoDate = qsoDate[:4] + "-" + qsoDate[4:6] + "-" + qsoDate[6:]
+	} else if qsoDate != "" {
+		log.WarnWith().Str("field", "qso_date").Str("value", qsoDate).Str("call", q.Call).
+			Msg("ft8: logged-QSO field malformed")
 	}
 	return LoggedQso{
 		UUID:       uuid,

@@ -45,7 +45,7 @@ func TestFt8CompletedQsoLogsToDB(t *testing.T) {
 	now := time.Date(2026, 6, 12, 9, 10, 15, 0, time.UTC)
 
 	// The exact chain cmd/smd's SetQsoLogger sink runs.
-	q := ft8.BuildQso(c, station, lbID, now)
+	q := ft8.BuildQso(c, station, lbID, now, nil)
 	rec := adif.QsoToRecord(q)
 	res, err := srv.qso.Submit(context.Background(), lbID, rec, false)
 	if err != nil {
@@ -101,7 +101,7 @@ func TestFt8CallerBareRogerNoFalseRst(t *testing.T) {
 	station := types.LoggingStation{StationCallsign: "7Q5MLV", Operator: "7Q5MLV", MyGridsquare: "KH78"}
 	now := time.Date(2026, 6, 12, 9, 10, 15, 0, time.UTC)
 
-	q := ft8.BuildQso(c, station, lbID, now)
+	q := ft8.BuildQso(c, station, lbID, now, nil)
 	rec := adif.QsoToRecord(q)
 	res, err := srv.qso.Submit(context.Background(), lbID, rec, false)
 	if err != nil {
@@ -141,7 +141,7 @@ func TestFt8MidnightQsoLogsToDB(t *testing.T) {
 	station := types.LoggingStation{StationCallsign: "7Q5MLV", Operator: "7Q5MLV", MyGridsquare: "KH78"}
 	now := time.Date(2026, 6, 13, 0, 0, 20, 0, time.UTC) // completes just after midnight
 
-	q := ft8.BuildQso(c, station, lbID, now)
+	q := ft8.BuildQso(c, station, lbID, now, nil)
 	rec := adif.QsoToRecord(q)
 	res, err := srv.qso.Submit(context.Background(), lbID, rec, false)
 	if err != nil {
