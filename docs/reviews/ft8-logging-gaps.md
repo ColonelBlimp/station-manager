@@ -442,7 +442,15 @@ Three things make this worse than the one-line summary:
   path already logs `dt_s` on `ft8 seq: transmitting rung` (`:1128`, `:1470`) — so the
   fast rungs are measurable and the deferred ones are not, which is backwards.
 
-### 12. Decode-log line loss is reported only at Close — Tier 2
+### 12. Decode-log line loss is reported only at Close — Tier 2 — ✅ FIXED 2026-08-07
+
+Closed as specified: `enqueue` warns on the FIRST drop and then on each
+doubling of the running total (1, 2, 4, …) —
+`ft8: decode log dropping lines (queue full / slow disk)` with the count. A
+growth threshold (the Record clause's second option) over a timer: no extra
+goroutine, deterministic, and it bounds smd.log's exposure to the firehose
+the queue absorbs. Close's total warn stays. Rules D1–D2 in
+`internal/ft8/decodelogloss_test.go`; reversion-proved.
 
 `decodelog.go:183` — `enqueue` drops the line and bumps `d.dropped` (`:190`) with no
 log. The warning exists only in `Close()` (`:246`), which runs when the capture session
@@ -460,7 +468,14 @@ record they would have consulted is already incomplete.
 - **This corrects the "NOT gaps" entry below**, which credited `decodelog.go` with
   covering dropped lines. The line exists; the coverage does not.
 
-### 13. The final decode-log flush and close discard their errors — Tier 3
+### 13. The final decode-log flush and close discard their errors — Tier 3 — ✅ FIXED 2026-08-07
+
+Closed as specified: both deferred errors warn —
+`ft8: decode log final flush failed — buffered lines lost` (distinct from the
+retryable mid-session flush message) and `ft8: decode log close failed`. The
+discarded `WriteString` errors are covered by bufio's sticky error surfacing
+through whichever flush runs next, now that none is silent. Rules E1–E2 in
+`internal/ft8/decodelogloss_test.go`; reversion-proved.
 
 `decodelog.go:152-153`, in `run`'s deferred cleanup:
 
@@ -543,12 +558,11 @@ them. Each was checked against the code on 2026-08-01.
 
 ## Progress (2026-08-07)
 
-**10 of 14 closed:** 1 (2026-08-01), then 6, 2, 3, 14 (2026-08-04), then 4
-(2026-08-06), then 5, 11, 7, 8 (2026-08-07). **4 remain:** 12, 13 (one file —
-NEXT; NB the decode log became SERVICE-lifetime on 2026-08-06, which makes 12
-MORE pressing: line-loss reporting now defers to daemon shutdown, not view
-close), 9, 10 (whenever adjacent). Carried forward from 11: fireOpening's
-missing SSE frame on deferral is a WIRE change outside this gate.
+**12 of 14 closed:** 1 (2026-08-01), then 6, 2, 3, 14 (2026-08-04), then 4
+(2026-08-06), then 5, 11, 7, 8, 12, 13 (2026-08-07). **2 remain:** 9, 10
+(Tier 4, whenever adjacent code is open). Carried forward from 11:
+fireOpening's missing SSE frame on deferral is a WIRE change outside this
+gate.
 
 ## Suggested order
 

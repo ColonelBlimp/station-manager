@@ -58,6 +58,9 @@ type DecodeLog struct {
 	closeOnce sync.Once
 	closed    atomic.Bool
 	dropped   atomic.Uint64
+	// nextDropWarn is the dropped-total at which the next live loss warning
+	// fires (zero value catches the first drop). See enqueue.
+	nextDropWarn atomic.Uint64
 
 	// w/wc are touched ONLY by the writer goroutine (run), so they need no lock.
 	// wc is the rotating sink (lumberjack), which owns size/backup/gzip policy.
@@ -149,8 +152,16 @@ func (d *DecodeLog) run() {
 		if r := recover(); r != nil {
 			d.log.WarnWith().Interface("panic", r).Msg("ft8: decode log writer panicked; stopping")
 		}
-		_ = d.w.Flush()
-		_ = d.wc.Close()
+		// The teardown flush carries everything still buffered at exit — the
+		// one flush whose failure is data loss with no retry behind it, so it
+		// must not be the silent one (the mid-session flush below already
+		// warns). Distinct message: that one is retryable, this one is final.
+		if err := d.w.Flush(); err != nil {
+			d.log.WarnWith().Err(err).Msg("ft8: decode log final flush failed — buffered lines lost")
+		}
+		if err := d.wc.Close(); err != nil {
+			d.log.WarnWith().Err(err).Msg("ft8: decode log close failed")
+		}
 	}()
 	flush := func() {
 		if err := d.w.Flush(); err != nil {
@@ -187,7 +198,17 @@ func (d *DecodeLog) enqueue(line string) {
 	select {
 	case d.lines <- line:
 	default:
-		d.dropped.Add(1)
+		n := d.dropped.Add(1)
+		// Report loss as it happens, not only at Close — the decode log is
+		// service-lifetime, so Close means daemon shutdown, hours after the
+		// ALL.TXT record went incomplete. Warn on the first drop, then on each
+		// doubling of the total (1, 2, 4, …): immediate visibility without
+		// handing smd.log the per-slot firehose this queue exists to absorb.
+		// A lost CAS just skips one re-warn, which the backoff tolerates.
+		if next := d.nextDropWarn.Load(); n >= next && d.nextDropWarn.CompareAndSwap(next, n*2) {
+			d.log.WarnWith().Uint64("dropped", n).
+				Msg("ft8: decode log dropping lines (queue full / slow disk)")
+		}
 	}
 }
 
