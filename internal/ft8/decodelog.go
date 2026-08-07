@@ -206,8 +206,19 @@ func (d *DecodeLog) enqueue(line string) {
 		// handing smd.log the per-slot firehose this queue exists to absorb.
 		// A lost CAS just skips one re-warn, which the backoff tolerates.
 		if next := d.nextDropWarn.Load(); n >= next && d.nextDropWarn.CompareAndSwap(next, n*2) {
-			d.log.WarnWith().Uint64("dropped", n).
-				Msg("ft8: decode log dropping lines (queue full / slow disk)")
+			// Emitted OFF the producer goroutine: enqueue sits on the decode and
+			// TX paths, whose non-blocking contract is this queue's whole reason
+			// to exist — and the daemon log's write is synchronous, on a file
+			// that by default lives NEXT TO the decode log, so the moment a drop
+			// happens is exactly the moment that write is likely to stall too
+			// (codex P1 on 891a3920). One goroutine per threshold crossing,
+			// bounded by the doubling to ≤64 over the daemon's lifetime.
+			go func() {
+				// A lost diagnostics line must never take the daemon down.
+				defer func() { _ = recover() }()
+				d.log.WarnWith().Uint64("dropped", n).
+					Msg("ft8: decode log dropping lines (queue full / slow disk)")
+			}()
 		}
 	}
 }

@@ -34,6 +34,7 @@ package ft8
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func logLines(buf *bytes.Buffer, message string) []string {
+// buf is any String()-bearing sink (*bytes.Buffer, or decodelogloss_test's
+// concurrency-safe syncBuf for records emitted off the test goroutine).
+func logLines(buf fmt.Stringer, message string) []string {
 	var out []string
 	for _, line := range strings.Split(buf.String(), "\n") {
 		if strings.Contains(line, `"message":"`+message+`"`) {

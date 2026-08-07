@@ -452,6 +452,14 @@ goroutine, deterministic, and it bounds smd.log's exposure to the firehose
 the queue absorbs. Close's total warn stays. Rules D1–D2 in
 `internal/ft8/decodelogloss_test.go`; reversion-proved.
 
+Amended same day (codex P1 on 891a3920): the warn is emitted from a spawned
+one-shot goroutine, never the producer — the daemon log's write is
+synchronous on a file that by default shares the decode log's filesystem, so
+a producer-path warn would block the decode/TX goroutines at exactly the
+moment the shared disk stalls, breaking the non-blocking contract the queue
+exists to keep. Spawn count is bounded by the doubling (≤64 per daemon
+lifetime); D1–D2 assert in eventually-form with a settle re-check.
+
 `decodelog.go:183` — `enqueue` drops the line and bumps `d.dropped` (`:190`) with no
 log. The warning exists only in `Close()` (`:246`), which runs when the capture session
 is released.

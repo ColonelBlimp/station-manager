@@ -32,12 +32,24 @@ package ft8
    writer goroutine never runs IS a stalled disk, distilled — the only
    deterministic way to fill the queue. enqueue/run touch nothing that
    construction path skips.
+
+   The drop warn is emitted from a SPAWNED goroutine, never the producer:
+   the daemon log's write is synchronous on a file that by default shares
+   the decode log's filesystem, so a producer-path warn would block the
+   decode/TX goroutines at exactly the moment the shared disk stalls —
+   the contract this queue exists to keep (codex P1 on 891a3920). D1/D2
+   therefore assert in eventually-form against a concurrency-safe sink,
+   with a settle re-check so a surplus in-flight warn (the per-drop
+   firehose implementation) still fails the count.
 */
 
 import (
 	"bufio"
 	"bytes"
 	"errors"
+	"io"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,33 +58,68 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const dropWarnMsg = "ft8: decode log dropping lines (queue full / slow disk)"
+
+// syncBuf is a concurrency-safe log sink: the drop warn arrives from a spawned
+// goroutine, so the test reads String() while a write may be in flight.
+// logging.NewForWriter serialises its own writes but cannot guard our reads.
+type syncBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // newStalledDecodeLog is a DecodeLog whose writer goroutine is never started:
 // the queue fills and never drains, deterministically.
-func newStalledDecodeLog(buf *bytes.Buffer, capacity int) *DecodeLog {
+func newStalledDecodeLog(w io.Writer, capacity int) *DecodeLog {
 	return &DecodeLog{
 		lines: make(chan string, capacity),
 		quit:  make(chan struct{}),
 		done:  make(chan struct{}),
-		log:   logging.NewForWriter(buf),
+		log:   logging.NewForWriter(w),
 	}
 }
 
-// D1 — THE FIRST DROP WARNS IMMEDIATELY; AN ABSORBED ENQUEUE NEVER DOES. The
+// requireDropWarns waits for exactly want async drop-warn lines, then
+// re-checks after a settle so a SURPLUS in-flight line (the per-drop firehose
+// implementation) still fails the count rather than sneaking in after the
+// wait exits early.
+func requireDropWarns(t *testing.T, buf *syncBuf, want int, why string) []string {
+	t.Helper()
+	require.Eventually(t, func() bool { return len(logLines(buf, dropWarnMsg)) >= want },
+		2*time.Second, 2*time.Millisecond, why)
+	time.Sleep(50 * time.Millisecond)
+	lines := logLines(buf, dropWarnMsg)
+	require.Len(t, lines, want, why)
+	return lines
+}
+
+// D1 — THE FIRST DROP WARNS PROMPTLY; AN ABSORBED ENQUEUE NEVER DOES. The
 // same run feeds both: two lines the queue accepts (no warn — backpressure
 // absorbed is not loss), then the drop, which draws exactly one warn carrying
-// the running total.
+// the running total. An absorbed-enqueue warn would surface here as a surplus
+// line or a wrong count.
 func TestDecodeLogLoss_FirstDropWarnsAbsorbedEnqueueDoesNot(t *testing.T) {
-	buf := &bytes.Buffer{}
+	buf := &syncBuf{}
 	d := newStalledDecodeLog(buf, 2)
 
 	d.enqueue("line-1\n")
 	d.enqueue("line-2\n")
-	require.Empty(t, logLines(buf, "ft8: decode log dropping lines (queue full / slow disk)"),
-		"an enqueue the queue absorbed must not warn")
+	require.Empty(t, logLines(buf, dropWarnMsg), "an enqueue the queue absorbed must not warn")
 
 	d.enqueue("line-3\n") // queue full — this one is lost
-	lines := logLines(buf, "ft8: decode log dropping lines (queue full / slow disk)")
-	require.Len(t, lines, 1, "the first drop must be on record immediately, not at Close")
+	lines := requireDropWarns(t, buf, 1, "the first drop must be on record promptly, not at Close")
 	require.Contains(t, lines[0], `"level":"warn"`)
 	require.Contains(t, lines[0], `"dropped":1`)
 }
@@ -81,20 +128,26 @@ func TestDecodeLogLoss_FirstDropWarnsAbsorbedEnqueueDoesNot(t *testing.T) {
 // drops draw warns at totals 1, 2 and 4 only. One line per drop would hand
 // smd.log the load the queue exists to absorb; only-at-Close is the defect
 // this fixes. Both wrong implementations fail this fixture (5 lines / 0
-// lines vs the required 3).
+// lines vs the required 3). The spawned emitters race each other, so the
+// totals are asserted as a set, not an order.
 func TestDecodeLogLoss_RewarnsOnDoublingOnly(t *testing.T) {
-	buf := &bytes.Buffer{}
+	buf := &syncBuf{}
 	d := newStalledDecodeLog(buf, 0) // every enqueue drops
 
 	for i := 0; i < 5; i++ {
 		d.enqueue("lost\n")
 	}
 
-	lines := logLines(buf, "ft8: decode log dropping lines (queue full / slow disk)")
-	require.Len(t, lines, 3, "warns at totals 1, 2, 4 — not per-drop, not silent")
-	require.Contains(t, lines[0], `"dropped":1`)
-	require.Contains(t, lines[1], `"dropped":2`)
-	require.Contains(t, lines[2], `"dropped":4`)
+	lines := requireDropWarns(t, buf, 3, "warns at totals 1, 2, 4 — not per-drop, not silent")
+	got := map[string]bool{}
+	for _, l := range lines {
+		for _, v := range []string{`"dropped":1`, `"dropped":2`, `"dropped":4`} {
+			if strings.Contains(l, v) {
+				got[v] = true
+			}
+		}
+	}
+	require.Len(t, got, 3, "one line per doubling threshold: totals 1, 2 and 4")
 }
 
 // failingSink errors every Write and Close — the disk that dies before
