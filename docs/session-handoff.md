@@ -48,33 +48,58 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **END OF DAY 2026-08-07 (second session): tree CLEAN at `80db5a92`, every
-  review triaged + deleted** (5 codex rounds today, 3 real findings, all fixed
-  same-day RED-first). **DEPLOY IS BEHIND by the whole day** — daemon+SPA must
-  ship TOGETHER (`task deploy:local:dev`): an old SPA never sends `auto_work`
-  and never renders `answerers`. operator_pick additionally needs
-  `ft8.tx.caller_answer_mode: "operator_pick"` in config.json (ratified as
-  config.json-only — the `/v1/config` PUT 400 is enforcement, not a gap).
-- **Shipped this session — ADR 0065 END TO END** (designed, ratified via 6+4
-  forks, BOTH phases built): plain CQ-click works one station (Abandon-debt
-  gone) · arming = ctrl+shift+click OR standing one-shot toggle ·
-  `auto_work_callers` = pure GATE · run-only stop (pill click +
-  `/v1/ft8/autowork/stop`) · **operator_pick**: CQ-run answerers listed on
-  ft8-qso frames (3-min staleness, swept at slots AND at the pop-refusal),
-  drawer "Answering your CQ" + `POST /v1/ft8/cq/pick`, parks never auto-pick.
-  Spec: `internal/ft8/operatorpick_test.go`. Also: engaged-vs-logged toast
-  split (VK5GR) · session-panel callsign search · toast z-order · idle-disarm
-  warn quieted · inbox FULLY triaged (13 dispositions) + morning-log diagnosis.
-- **Morning session (same day):** ADR 0064 FULL BUILD (meter poll through
-  keyed slots, 500ms write watchdog, `alc_red` PROVISIONAL 50, TX-drive chip)
-  — detail in Current state.
-- **NEXT:** deploy → on-air: ADR 0064 §4 acceptance (passive-first) →
-  calibrate `alc_red` → flip 0064 Accepted; same session sanity-checks 0065
-  (pill on a work-caller arm · FD click leaves toggle lit, no toast · a pick
-  run) · findings 9/10 · enrichment ctx-cancel WARN→debug · paste-list port ·
+- **END OF DAY 2026-08-07 (three sessions): tree CLEAN at `c3d67c82`, every
+  review triaged + deleted** (7 codex rounds today, 3 real findings, all fixed
+  same-day RED-first). **DEPLOYED `1152-g80db5a92` at 13:55 and went ON AIR**
+  — the deploy now trails ONLY the amber-band commit `c3d67c82`: redeploy and
+  the TX-drive chip reads GREEN at healthy drive.
+- **First live ADR 0064 data (on air, afternoon):** healthy FT8 drive =
+  **ALC 15–18 every slot, PO flat** — which broke the chip's zero-only green
+  (healthy TX always rendered amber, nagging at correct drive; operator
+  caught it live). Same afternoon: **colour grammar ratified + built** —
+  green = healthy band (`ft8.meter.alc_amber`, RATIFIED 30), amber = 30–49
+  genuinely elevated, `alc_red` 50 still PROVISIONAL (needs the §4 iii
+  deliberate-overdrive datum). AP2TN worked + logged on the new build.
+- **ADR 0065 (both phases BUILT earlier today) is deployed but UNEXERCISED on
+  air** — the afternoon run was `auto_first`, no arm gesture used. Sanity
+  checks still open: pill lights on a work-caller arm · FD click leaves the
+  toggle lit, no toast · a pick run (needs `ft8.tx.caller_answer_mode:
+  "operator_pick"` in config.json — stop smd, edit, start).
+- **Earlier today:** ADR 0065 end to end (per-click arming grammar +
+  operator_pick pile-up, 10 ratified forks, spec
+  `internal/ft8/operatorpick_test.go`) · ADR 0064 full build · inbox fully
+  triaged · engaged-vs-logged toast split · session search · morning-log
+  diagnosis — detail in Current state.
+- **NEXT:** redeploy (`c3d67c82`) → on-air: §4 iii deliberate overdrive →
+  ratify `alc_red` → flip 0064 Accepted · the 0065 sanity checks above ·
+  findings 9/10 · enrichment ctx-cancel WARN→debug · paste-list port ·
   ctrl+click-on-CQ gesture (0065, undecided) · Tune-coverage question.
 
 ## Current state (as of 2026-08-07)
+
+### 2026-08-07 (late afternoon) — first live meter data flips the ALC colour grammar
+
+Deployed `1152-g80db5a92` at 13:55 and operated FT8 under the new meter poll —
+the first live ADR 0064 data. Healthy drive measured **ALC 15–18 (min 15) every
+slot, PO flat at 155–157**, low-power slots earlier read 7–12 — and ALC is
+**never zero while keyed** on this rig, which falsified the chip's original
+grammar (green = ALC exactly 0): every correct transmission rendered amber, and
+amber reads "act to make this green" — the operator asked exactly that from the
+rig, which was the finding. Ratified (two forks, recommended options): green =
+the healthy band below a new `ft8.meter.alc_amber` floor (default **30**,
+covering every healthy datum: FT8 15–18, low-power 7–12, voice 26); amber =
+floor..red−1 relabeled "ALC elevated — approaching the red line"; red ≥
+`alc_red` unchanged (50, still PROVISIONAL — no overdrive datum exists; §4 iii
+produces it). Built TDD both halves (`ResolveFt8Meter` amber floor with
+clamp-down-to-red for a floor above the line; `txDriveStatus` band flip pinned
+by T2's "ALC 18 must be green"; `setTxDriveConfig` became named-options so
+three positional numbers can't transpose). Review clean. Also closed two doc
+gaps found on the way: `GET /v1/config`'s response doc listed neither
+`ft8_audio` nor `ft8_meter`; config.md had no `ft8.meter` entry.
+
+Log facts from the session worth keeping: the run was `answer_mode:auto_first`
+with no arm gesture — **ADR 0065 remains unexercised on air**; AP2TN worked +
+logged 14:47 on the new build; zero drive alarms.
 
 ### 2026-08-07 (second session) — ADR 0065 designed, ratified and built in one day
 
