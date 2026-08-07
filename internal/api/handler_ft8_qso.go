@@ -278,6 +278,38 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// ft8CqPickRequest is the POST /v1/ft8/cq/pick body (ADR 0065 decision 3): commit
+// the listed operator_pick answerer `call` into the live Call-CQ run. Everything
+// else about the contact (grid, SNR, offset, dial) is daemon-owned — the candidate
+// list the SPA renders came from the daemon's ft8-qso frames in the first place.
+type ft8CqPickRequest struct {
+	Call string `json:"call"`
+}
+
+// handleFt8CqPick commits a listed answerer into an operator_pick Call-CQ run
+// (sequencing rules in internal/ft8/operatorpick_test.go). A 202 means the run
+// will transmit our report to that station at its next slot evaluation; the
+// commit itself is confirmed by push (the ft8-qso SSE frame published by the
+// pop). Refusals: 409 ft8_no_cq_pick_run / 404 ft8_answerer_not_listed /
+// 409 ft8_cq_contact_in_flight.
+func (s *Server) handleFt8CqPick(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleFt8CqPick"
+
+	var req ft8CqPickRequest
+	if !s.readJSONBody(w, r, op, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Call) == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "call is required", op)
+		return
+	}
+	if err := s.ft8.PickAnswerer(req.Call); err != nil {
+		s.writeFt8QsoError(w, op, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
 // ft8QsoWorkRequest is the POST /v1/ft8/qso/work body (ADR 0033 "work a caller"):
 // work the station `their_call` (grid `their_grid`) that is calling US, heard in the
 // slot at `slot_utc` (which fixes its parity), transmitting on `offset_hz`. `their_snr`
@@ -537,10 +569,21 @@ func (s *Server) writeFt8QsoError(w http.ResponseWriter, op errors.Op, err error
 		s.writeError(w, http.StatusBadRequest, "ft8_tx_bad_message",
 			"that station can't be worked on FT8 — only standard messages transmit "+
 				"(compound/portable calls and free text can't be encoded)", op)
-	case stderr.Is(err, ft8.ErrCallerAnswerModeUnsupported):
-		s.writeError(w, http.StatusNotImplemented, "ft8_caller_mode_unsupported",
-			"operator_pick answerer selection is not yet implemented; "+
-				"set ft8.tx.caller_answer_mode to auto_first", op)
+	// The pop's three refusals (ADR 0065; internal/ft8/operatorpick_test.go rule 5)
+	// stay distinct on the wire because the operator's next action differs: nothing
+	// to do / wait for a fresh answer / finish the contact or press Next first.
+	// Not-listed is a 404 — the named resource is gone (the station stopped
+	// calling or was never heard), which is a fact about the world, not a conflict
+	// with the run's state.
+	case stderr.Is(err, ft8.ErrNoCqPickRun):
+		s.writeError(w, http.StatusConflict, "ft8_no_cq_pick_run",
+			"no operator-pick Call-CQ run is live", op)
+	case stderr.Is(err, ft8.ErrAnswererNotListed):
+		s.writeError(w, http.StatusNotFound, "ft8_answerer_not_listed",
+			"that station is no longer answering your CQ — pick a listed one", op)
+	case stderr.Is(err, ft8.ErrCqContactInFlight):
+		s.writeError(w, http.StatusConflict, "ft8_cq_contact_in_flight",
+			"the run is already working a contact — finish it or press Next first", op)
 	case stderr.Is(err, ft8.ErrFdIdentityUnset):
 		s.writeError(w, http.StatusBadRequest, "ft8_field_day_unset",
 			"set your Field Day class and section (ft8.field_day) before answering a CQ FD", op)

@@ -58,6 +58,7 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
 	s.caller = nil
 	s.stalledCalls = nil // fresh session — no abandoned answerers to exclude yet
+	s.answerers = nil    // fresh session — the previous run's pick list must not resurrect (rule 10)
 	s.confirmHold = nil
 	// A Call-CQ run is itself an operator-started session and pins its own callsign,
 	// offset and dial, so a run armed by the PREVIOUS session must not carry into it
@@ -149,7 +150,9 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	if s.caller == nil {
 		// A due re-send owns this slot, so no new contact is picked — the branch
 		// below must stay guarded by caller!=nil or it dereferences a nil contact.
-		if resendRR73 == "" {
+		// Under operator_pick nothing is picked here at all: answerers are LISTED
+		// (collectAnswerersLocked below) and committed only by PickAnswerer.
+		if resendRR73 == "" && s.answerMode != types.Ft8CallerAnswerOperatorPick {
 			if pick, text := s.pickAnswererLocked(msgs, now); pick != nil {
 				s.caller = pick
 				s.startedAt = now.UTC()
@@ -179,6 +182,16 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	// since a press never belongs to a contact that had not started.)
 	if advanced {
 		s.contact.nextArmed = false
+	}
+
+	// operator_pick: list this slot's workable answerers (and age out the gone
+	// ones) — in BOTH phases, since answerers keep arriving while a popped contact
+	// is worked and the list must be ready when CQ resumes (rule 9). Placed before
+	// the late-window/dedup early-returns below so a slot we cannot transmit in
+	// still updates the list — the operator can pick from a deferred slot's
+	// answerers exactly as the auto modes commit from one.
+	if s.answerMode == types.Ft8CallerAnswerOperatorPick {
+		s.collectAnswerersLocked(msgs, now)
 	}
 
 	// Message + rung for the current (our) slot: a confirm-hold re-send if one is
@@ -383,10 +396,131 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	s.publishCurrent()
 }
 
+// cqAnswererStaleAfter bounds how long an operator_pick candidate stays listed
+// after it was last heard. A station that stopped calling has probably moved on
+// or been worked by someone else, and popping it transmits at nobody — but a
+// deep QSB fade can silence a live station for several slots, so the bound is
+// generous. 3 min matches the SPA's act-on-decode staleness rule (STALE_MS in
+// Ft8BandActivity.svelte), so "too old to act on" is ONE rule everywhere.
+// Operator-ratified 2026-08-07 (ADR 0065 build fork) — ask before changing.
+const cqAnswererStaleAfter = 3 * time.Minute
+
+// cqAnswerer is one operator_pick candidate: an answerer to our CQ whose reply
+// encodes, kept daemon-side with the grid the pop needs (the wire carries only
+// call+SNR — see CqAnswerer). lastHeard drives the staleness bound above.
+type cqAnswerer struct {
+	call, grid string
+	snr        int
+	lastHeard  time.Time
+}
+
+// PickAnswerer commits a listed operator_pick candidate into the Call-CQ run
+// (ADR 0065 decision 3; POST /v1/ft8/cq/pick): the run's next slot evaluation
+// transmits our report to the chosen station and the contact then advances
+// exactly as an auto-picked one, RR73 logging included. The three refusals are
+// distinct sentinels because the operator's next action differs (rule 5), and
+// freshness is re-checked HERE, not only at slot evaluations — a pop can arrive
+// minutes after the last slot listed the station (rule 6). No encodability
+// re-check: collectAnswerersLocked only lists (and only refreshes) candidates
+// whose reply encodes. Specified in operatorpick_test.go.
+func (s *Sequencer) PickAnswerer(call string, now time.Time) error {
+	s.mu.Lock() // first statement — the publish below stays under the lock (invariant 3)
+	if s.mode != seqCalling || s.answerMode != types.Ft8CallerAnswerOperatorPick {
+		s.mu.Unlock()
+		return ErrNoCqPickRun
+	}
+	if s.caller != nil {
+		s.mu.Unlock()
+		return ErrCqContactInFlight
+	}
+	call = strings.ToUpper(strings.TrimSpace(call))
+	idx := -1
+	for i, a := range s.answerers {
+		if a.call == call && now.Sub(a.lastHeard) <= cqAnswererStaleAfter {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		s.mu.Unlock()
+		return ErrAnswererNotListed
+	}
+	a := s.answerers[idx]
+	c := NewCallerExchange(s.ourCall, a.call, a.grid, a.snr)
+	s.caller = &c
+	s.startedAt = now.UTC()
+	s.contact.repeats = 0
+	s.answerers = slices.Delete(s.answerers, idx, idx+1)
+	// Publish while the lock is still held, like NextAnswerer: an Abandon or slot
+	// evaluation in the gap could end or change the session and publish first,
+	// leaving this stale "reporting" frame cached by the hub as the last word.
+	s.publish(s.statusLocked())
+	s.mu.Unlock()
+	s.log.InfoWith().Str("answerer", a.call).Str("grid", a.grid).Int("snr", a.snr).
+		Msg("ft8 seq: operator picked answerer; working them")
+	return nil
+}
+
+// collectAnswerersLocked maintains the operator_pick candidate list from one slot
+// of the answerers' decodes: ages out stations unheard past cqAnswererStaleAfter,
+// then adds/refreshes this slot's workable answerers. Dedup is by call — a
+// re-heard station refreshes grid/SNR/lastHeard in place without losing its
+// oldest-first position. The filters mirror pickAnswererLocked's WORKABILITY
+// checks (grid answer addressed to us, reply encodes) but deliberately NOT its
+// exclusion sets (stalledCalls, stall cool-off): those exist to stop AUTO
+// re-lock, and here the operator is the selector — hiding a station that is
+// factually calling both starves a one-station run forever and second-guesses a
+// choice that is the operator's to make (rule 7; same reasoning as Next rule 4).
+// The in-flight station is never its own candidate — its grid repeats just mean
+// it missed our report (rule 9). Caller holds s.mu.
+func (s *Sequencer) collectAnswerersLocked(msgs []goft8.DecodedMessage, now time.Time) {
+	kept := s.answerers[:0]
+	for _, a := range s.answerers {
+		if now.Sub(a.lastHeard) <= cqAnswererStaleAfter {
+			kept = append(kept, a)
+		} else {
+			s.log.InfoWith().Str("answerer", a.call).
+				Msg("ft8 seq: delisting answerer — unheard past the staleness bound")
+		}
+	}
+	s.answerers = kept
+	for _, m := range msgs {
+		pm := parseMessage(m.Text)
+		if pm.kind != msgGrid || pm.to != s.ourCall {
+			continue
+		}
+		if s.caller != nil && pm.from == s.caller.TheirCall {
+			continue
+		}
+		c := NewCallerExchange(s.ourCall, pm.from, pm.grid, m.SNR)
+		reply, ok := c.TxMessage()
+		if !ok {
+			continue
+		}
+		if _, err := goft8.EncodeStandardMessage(reply); err != nil {
+			// Same hazard pickAnswererLocked skips (review M2), moved from pick
+			// time to list time: a pop of this station would hand seqTransmit a
+			// terminal ErrTxBadMessage and end the whole run.
+			s.log.InfoWith().Str("answerer", pm.from).
+				Msg("ft8 seq: not listing answerer — our reply does not encode (compound/portable call?)")
+			continue
+		}
+		e := cqAnswerer{call: c.TheirCall, grid: c.TheirGrid, snr: m.SNR, lastHeard: now}
+		if i := slices.IndexFunc(s.answerers, func(a cqAnswerer) bool { return a.call == e.call }); i >= 0 {
+			s.answerers[i] = e
+			continue
+		}
+		s.answerers = append(s.answerers, e)
+		s.log.InfoWith().Str("answerer", e.call).Int("snr", e.snr).
+			Msg("ft8 seq: answerer listed for operator pick")
+	}
+}
+
 // pickAnswererLocked scans one slot's decodes for an answerer to our CQ
 // ("<ourCall> <them> <grid>") whose reply encodes: auto_first takes the first by
 // decode order; auto_strongest the highest-SNR one in the slot (clear the loud
-// ones first). operator_pick is rejected before seqCalling is ever entered, so
+// ones first). operator_pick never reaches this — onSlotCalling routes it to
+// collectAnswerersLocked instead (list, don't commit) — so
 // only the two auto modes reach this. A compound/portable answerer (e.g.
 // K1ABC/P) yields an unencodable response, which seqTransmit would treat as
 // terminal and abandon the whole Call-CQ loop (review M2) — such an answerer is
@@ -620,6 +754,20 @@ func (s *Sequencer) spendConfirmResend() {
 // caller reaches here. Caller holds s.mu with s.caller non-nil.
 func (s *Sequencer) parkAnswererLocked(msgs []goft8.DecodedMessage, now time.Time, reason string) (msg, rung string) {
 	s.contact.nextArmed = false // consumed: one press parks one answerer
+	if s.answerMode == types.Ft8CallerAnswerOperatorPick {
+		// No rescan, no exclusion (rule 7): the pick is the operator's, so the run
+		// resumes CQ, and the parked station — if still calling — simply relists at
+		// the next evaluation. Same reasoning as Next rule 4: a park means "not
+		// waiting out the retries", never "I do not want this station", and under
+		// operator_pick an exclusion would starve a one-station run forever (the
+		// auto modes escape that via the empty-rescan clear below, which has no
+		// analogue when nothing rescans).
+		s.log.InfoWith().Str("parked", s.caller.TheirCall).
+			Msg("ft8 seq: caller — " + reason + "; resuming CQ (operator_pick)")
+		s.caller = nil
+		s.contact.repeats = 0
+		return s.cqMessage, "calling-cq"
+	}
 	s.stalledCalls = append(s.stalledCalls, s.caller.TheirCall)
 	s.caller = nil
 	s.contact.repeats = 0

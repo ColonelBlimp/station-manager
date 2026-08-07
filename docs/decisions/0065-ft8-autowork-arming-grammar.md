@@ -119,3 +119,28 @@ natural manual-selection surface — is disabled during CQ runs.
 - **ctrl+click on a CQ row** (the sketch's third gesture): today pile-up
   enqueue exists only for calling-YOU rows. Whether a CQ-ing station
   should be enqueueable too is a separate feature — still not decided.
+
+## Decision 3 build forks (operator_pick) — all four RATIFIED 2026-08-07
+
+Built the same day (spec: `internal/ft8/operatorpick_test.go`; wire:
+`ft8-qso` `answer_mode` + `answerers`, `POST /v1/ft8/cq/pick`).
+
+- **Candidate staleness: 3 min unheard** (6 answerer-slots), enforced
+  daemon-side at slot evaluations AND at the pop. Matches the SPA's existing
+  3-min act-on-decode bound so "too old to act on" is one rule everywhere.
+  Alternatives: 1 min (a two-slot QSB fade delists a live station), never/show-age
+  (a pop at a gone station wastes ~max_repeats calls).
+- **A pop while a contact is in flight is REFUSED** (409
+  `ft8_cq_contact_in_flight`) — Next parks, then pop. One click = one effect;
+  a pop never silently abandons a contact one rung from logging.
+- **Discovery is the rail badge only** — the pile-up count includes the
+  daemon's answerers; no toast (spams a busy run), no auto-open.
+- **The mode stays config.json-only** — no app-SPA settings surface; the
+  `/v1/config` PUT rejection of `operator_pick` now ENFORCES this fork rather
+  than guarding an unimplemented literal.
+- **Build clarification (rule 7):** a park under operator_pick never
+  auto-picks a replacement AND is not a blacklist — the parked station relists
+  while it keeps calling. The auto modes' `stalledCalls`/cool-off exclusions do
+  not filter the list: they exist to stop AUTO re-lock, and here the operator
+  is the selector (hiding the only answering station would also starve a
+  one-station run forever, with no rescan-empty clear to escape through).

@@ -83,12 +83,6 @@ var (
 	// the SPA mis-supplied (review 2026-06-19 M1). Distinct from ErrNoOffset
 	// (offset 0 = "operator hasn't picked one yet").
 	ErrTxBadOffset = stderrors.New("ft8: TX offset outside the usable passband")
-	// ErrCallerAnswerModeUnsupported: a Call-CQ session was requested with an
-	// answerer-selection mode that is configured but not yet implemented
-	// (operator_pick — the pile-up stack is future work). Rejected at start so a
-	// config'd operator_pick fails loudly rather than silently auto-picking the
-	// first answerer (review H2 / ADR 0033).
-	ErrCallerAnswerModeUnsupported = stderrors.New("ft8: caller answer mode not supported")
 )
 
 // txPlayer is the daemon's owned FT8 transmit output device. It extends the
@@ -899,14 +893,10 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
 	}
-	// Reject operator_pick until the pile-up stack exists (review H2): the
-	// sequencer would otherwise silently auto-pick the first answerer, which is
-	// NOT what operator_pick promises. Fail loudly so a config typo is visible.
+	// All three configured modes are implemented (operator_pick since ADR 0065
+	// decision 3 — review H2's start-time rejection is deliberately gone; the
+	// flip is pinned by operatorpick_test.go rule 1).
 	mode := types.ResolveFt8CallerAnswerMode(s.cfg.TX)
-	if mode == types.Ft8CallerAnswerOperatorPick {
-		return errors.New(op).WithErr(ErrCallerAnswerModeUnsupported).
-			WithMsg("operator_pick answerer selection is not yet implemented; use auto_first")
-	}
 	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
@@ -1369,6 +1359,19 @@ func (s *Service) NextAnswerer() error {
 		return ErrNoAnswerer
 	}
 	return s.seq.NextAnswerer()
+}
+
+// PickAnswerer commits a listed operator_pick candidate into the Call-CQ run
+// (ADR 0065 decision 3): the run's next slot evaluation transmits our report to
+// the chosen station instead of the CQ. Nil sequencer → ErrNoCqPickRun (no run
+// to pick for). Like NextAnswerer this does NOT touch the transmitter — nothing
+// can be worked before the next slot boundary anyway, so the rung already on
+// the air simply finishes.
+func (s *Service) PickAnswerer(call string) error {
+	if s.seq == nil {
+		return ErrNoCqPickRun
+	}
+	return s.seq.PickAnswerer(call, time.Now().UTC())
 }
 
 // AbandonQso drops any active sequenced QSO (operator action). Idempotent.

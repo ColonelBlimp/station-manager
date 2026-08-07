@@ -312,6 +312,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 		// stations that answer (auto_first / operator_pick per ft8.tx.caller_answer_mode);
 		// abandon uses the shared qso/abandon route. Same enablement gate.
 		mux.HandleFunc("POST /v1/ft8/cq/start", s.handleFt8CqStart)
+		// Commit a listed operator_pick answerer into the run (ADR 0065) — the
+		// candidate list rides the ft8-qso SSE (answerers).
+		mux.HandleFunc("POST /v1/ft8/cq/pick", s.handleFt8CqPick)
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default

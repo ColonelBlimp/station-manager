@@ -8,6 +8,7 @@ import { flushSync } from 'svelte';
 import UtilRail from './UtilRail.svelte';
 import { router } from '../router.svelte';
 import { session, type SessionQso } from './session.svelte';
+import { ft8State, resetFt8ForTests } from './ft8.svelte';
 
 function sessionQso(call: string): SessionQso {
     return {
@@ -103,5 +104,33 @@ describe('UtilRail session count badge', () => {
         for (let i = 0; i < 999; i++) session.qsos.push(sessionQso(`T${i}`));
         flushSync();
         expect(screen.getByTitle('999 QSOs this session')).toHaveTextContent('999');
+    });
+});
+
+// The rail badge is the ratified discovery mechanism for operator_pick (ADR 0065
+// build fork, 2026-08-07: "badge only") — a station answering the CQ must raise
+// the pile-up count even though nothing was ctrl-clicked into the curated stack,
+// because during a pick run the daemon's candidate list IS the drawer's content.
+describe('UtilRail pile-up badge counts operator_pick answerers', () => {
+    beforeEach(() => {
+        resetFt8ForTests();
+        router.mode = 'ft8';
+    });
+
+    it('includes daemon-published answerers in FT8 mode', () => {
+        ft8State.qso = {
+            ...ft8State.qso,
+            active: true,
+            role: 'caller',
+            state: 'calling-cq',
+            answerMode: 'operator_pick',
+            answerers: [
+                { call: 'DL9UW', snr: -8 },
+                { call: 'K1ABC', snr: -12 },
+            ],
+        };
+        render(UtilRail);
+        flushSync();
+        expect(screen.getByText('2')).toBeInTheDocument();
     });
 });

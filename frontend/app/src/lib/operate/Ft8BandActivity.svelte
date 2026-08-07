@@ -15,6 +15,7 @@
         answerCq,
         workCaller,
         type DecodeEntry,
+        type Ft8TxResult,
     } from './ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from './ft8Enrich.svelte';
     import { ft8PileupStack } from './ft8Pileup.svelte';
@@ -305,7 +306,15 @@
         if (staleBlocked(row)) return;
         const call = toMe.call;
         if (callerActive) {
-            toasts.info('Calling CQ — pile-up queue disabled. Abandon to work stations by hand.');
+            // The curated queue stays disabled during any CQ run, but the
+            // explanation differs: under operator_pick the daemon queues answerers
+            // into the drawer itself (ADR 0065), so the operator's captures are not
+            // lost — telling them to Abandon would be exactly wrong there.
+            toasts.info(
+                ft8State.qso.answerMode === 'operator_pick'
+                    ? 'Calling CQ — answerers queue in the pile-up automatically.'
+                    : 'Calling CQ — pile-up queue disabled. Abandon to work stations by hand.'
+            );
             return;
         }
         // Never re-queue the station in flight (its grid re-calls still decode).
@@ -464,62 +473,76 @@
         if (staleBlocked(row)) return;
         const pre = txPreflight(row.call);
         if (!pre) return;
-        const { offset, opMHz, allowDuplicate } = pre;
         starting = true;
-        let r;
-        if (row.kind === 'cq') {
-            const cq = parseCq(row.d.text);
-            if (!cq) {
-                starting = false;
-                return;
-            }
-            // A CQ FD answers with the operator's Field Day exchange (daemon config); a
-            // CQ from a nonstandard/compound call routes to the reduced type-4 ladder
-            // (ADR 0048). theirSnr (our SNR of their CQ) is logged as RST_SENT for both
-            // (neither exchanges a report). The three modes are mutually exclusive.
-            const type4 = isCqType4(row.d.text);
-            const fd = isCqFd(row.d.text);
-            r = await answerCq({
-                theirCall: cq.call,
-                theirGrid: type4 ? '' : cq.grid,
-                slotUtc: row.d.startUtc,
-                offsetHz: offset,
-                opFreqMHz: opMHz,
-                fd,
-                type4,
-                theirSnr: row.d.snr,
-                allowDuplicate,
-                // The gesture or the standing toggle — either arms (daemon-gated).
-                // STANDARD exchanges only: FD/type-4 never arm a run (ADR 0065 scope
-                // note), and carrying the intent there consumed the toggle and read
-                // the daemon's unarmed frame as a false settings-refusal (codex P2 on
-                // 7de6708e). The standing intent survives for the next standard click.
-                autoWork: (armGesture || ft8AutoWorkIntent.on) && !fd && !type4,
-            });
-        } else {
-            // Work a caller: try the FD shape first (more specific), else standard.
-            const fd = parseDirectedToMeFd(row.d.text, me);
-            const toMe = fd ?? parseDirectedToMe(row.d.text, me);
-            if (!toMe) {
-                starting = false;
-                return;
-            }
-            r = await workCaller({
-                theirCall: toMe.call,
-                theirGrid: toMe.grid,
-                theirSnr: row.d.snr, // our SNR of their call → RST_SENT
-                slotUtc: row.d.startUtc,
-                offsetHz: offset,
-                opFreqMHz: opMHz,
-                fd: fd ? { class: fd.class, section: fd.section } : undefined,
-                allowDuplicate,
-                autoWork: ft8AutoWorkIntent.on,
-            });
+        const pending =
+            row.kind === 'cq' ? answerCqRow(row, pre, armGesture) : workCallerRow(row, pre);
+        if (!pending) {
+            starting = false;
+            return;
         }
+        const r = await pending;
         if (!r.ok) {
             starting = false;
             toasts.error(r.message);
         }
+    }
+
+    // The two TX starts a plain row click can launch, split out of onRowClick so the
+    // guard chain there stays readable (eslint complexity ceiling). Null when the
+    // row's text doesn't parse into the expected shape — the caller releases its
+    // in-flight latch.
+
+    function answerCqRow(
+        row: DecodeRow,
+        pre: { offset: number; opMHz: number; allowDuplicate: boolean },
+        armGesture: boolean
+    ): Promise<Ft8TxResult> | null {
+        const cq = parseCq(row.d.text);
+        if (!cq) return null;
+        // A CQ FD answers with the operator's Field Day exchange (daemon config); a
+        // CQ from a nonstandard/compound call routes to the reduced type-4 ladder
+        // (ADR 0048). theirSnr (our SNR of their CQ) is logged as RST_SENT for both
+        // (neither exchanges a report). The three modes are mutually exclusive.
+        const type4 = isCqType4(row.d.text);
+        const fd = isCqFd(row.d.text);
+        return answerCq({
+            theirCall: cq.call,
+            theirGrid: type4 ? '' : cq.grid,
+            slotUtc: row.d.startUtc,
+            offsetHz: pre.offset,
+            opFreqMHz: pre.opMHz,
+            fd,
+            type4,
+            theirSnr: row.d.snr,
+            allowDuplicate: pre.allowDuplicate,
+            // The gesture or the standing toggle — either arms (daemon-gated).
+            // STANDARD exchanges only: FD/type-4 never arm a run (ADR 0065 scope
+            // note), and carrying the intent there consumed the toggle and read
+            // the daemon's unarmed frame as a false settings-refusal (codex P2 on
+            // 7de6708e). The standing intent survives for the next standard click.
+            autoWork: (armGesture || ft8AutoWorkIntent.on) && !fd && !type4,
+        });
+    }
+
+    function workCallerRow(
+        row: DecodeRow,
+        pre: { offset: number; opMHz: number; allowDuplicate: boolean }
+    ): Promise<Ft8TxResult> | null {
+        // Work a caller: try the FD shape first (more specific), else standard.
+        const fd = parseDirectedToMeFd(row.d.text, me);
+        const toMe = fd ?? parseDirectedToMe(row.d.text, me);
+        if (!toMe) return null;
+        return workCaller({
+            theirCall: toMe.call,
+            theirGrid: toMe.grid,
+            theirSnr: row.d.snr, // our SNR of their call → RST_SENT
+            slotUtc: row.d.startUtc,
+            offsetHz: pre.offset,
+            opFreqMHz: pre.opMHz,
+            fd: fd ? { class: fd.class, section: fd.section } : undefined,
+            allowDuplicate: pre.allowDuplicate,
+            autoWork: ft8AutoWorkIntent.on,
+        });
     }
 </script>
 

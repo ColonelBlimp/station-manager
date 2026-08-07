@@ -111,6 +111,14 @@ export interface QsoPayload {
     our_section?: string;
     their_class?: string;
     their_section?: string;
+    /** The Call-CQ run's answerer-selection mode (caller frames only) — lets a
+     *  client tell an operator_pick run from an auto one before any answerer
+     *  arrives. The mode itself is config.json-only (ft8.tx.caller_answer_mode). */
+    answer_mode?: string;
+    /** operator_pick candidate list (ADR 0065): stations currently answering our
+     *  CQ that the run can actually work, oldest first. Pop one via
+     *  POST /v1/ft8/cq/pick; grid/offset/dial stay daemon-side. */
+    answerers?: { call: string; snr: number }[];
 }
 
 /** ft8-logged — internal/ft8.LoggedQso (a completed exchange the daemon stored).

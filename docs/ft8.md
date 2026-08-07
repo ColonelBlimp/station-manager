@@ -110,12 +110,18 @@ on any PUT):
   logging SPA's **FT8 Settings tab → Call CQ → Answer** (First answerer / Strongest
   signal), surfaced over `/v1/config` as `ft8_caller_answer_mode`; the wire surface
   only ever carries those two auto answer modes. Default `auto_first`;
-  empty/invalid → the default. The third literal `"operator_pick"` is a
-  **config.json-only** value, **superseded by the SPA pile-up stack** and **rejected**
-  at Call-CQ start (501 `ft8_caller_mode_unsupported`) — the SPA dropdown never offers
-  it and a `/v1/config` PUT carrying it is a 400. (The pile-up stack always drains
-  **FIFO** regardless of this knob — the mode governs only the hands-off
-  auto-answerer.)
+  empty/invalid → the default. The third literal `"operator_pick"` is **implemented
+  since 2026-08-07 (ADR 0065 decision 3)** but stays a **config.json-only** value
+  (operator-ratified): during a CQ run the daemon LISTS answerers on the `ft8-qso`
+  frames (`answerers`, expiring 3 min after last heard) instead of auto-committing,
+  the SPA's pile-up drawer renders them, and clicking one commits it via
+  `POST /v1/ft8/cq/pick`; the CQ keeps calling until then and the run resumes CQ
+  after the contact. A park (Next / the repeat cap) under this mode never
+  auto-picks a replacement. The SPA dropdown still never offers it and a
+  `/v1/config` PUT carrying it is still a 400 — enforcement of the config.json-only
+  decision, no longer a missing feature. (The ctrl-click pile-up stack always
+  drains **FIFO** regardless of this knob — the mode governs only how a Call-CQ
+  run selects its answerers.)
 - **`tx.max_repeats`** — how many times the sequencer re-sends an unanswered rung
   before it auto-abandons the contact (ADR 0031 off-ramp; the caller side drops the
   silent contact and, since 2026-07-17, first re-scans that slot's decodes for
@@ -307,8 +313,11 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   the SPA works them when it can. The Operate view **drains** the stack via the
   work-a-caller path whenever the rig is armed + idle, advancing as each contact
   completes, while you keep adding. SPA-only (daemon untouched); in-memory (erased on
-  tab/browser close, like the Phone/CW `callsignStack`). This is the realised
-  operator-pick experience and **supersedes** the daemon `operator_pick` Call-CQ mode.
+  tab/browser close, like the Phone/CW `callsignStack`). This is the operator-pick
+  experience for callers that did NOT come from a CQ run; since ADR 0065 the daemon
+  `operator_pick` Call-CQ mode complements it — during such a run the same drawer
+  renders the DAEMON's answerer list first ("Answering your CQ", from the `ft8-qso`
+  frames) and clicking one commits it into the run via `POST /v1/ft8/cq/pick`.
 
   *The drawer* hangs off the **right edge of the logging card** (mounted alongside the
   Phone/CW Call Stack), always visible while non-empty regardless of which FT8 sub-tab
@@ -1046,7 +1055,7 @@ audio-only / offline.
 | (b) | GFSK modulator + offline round-trip vs the shipped decoder (zero RF) | **done** |
 | (c) | Audio-output device (malgo, `//go:build cgo`, fail-soft, probe-listed) | **done** |
 | (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | **done — bench path; ADR 0030** |
-| (e) | Manual sequencer + QSO logging; **interactive picker** | e1–e4 shipped 2026-06-10 (TX path, resolver, sequencer ADR 0031, logging) — **answer-a-CQ complete + logged**. **Call-CQ `auto_first` shipped 2026-06-12 (ADR 0033)** — Call CQ → daemon works the pile-up (first answerer) → logged, looping until Abandon. The **operator-pick experience shipped as the SPA pile-up stack** (Ctrl/Cmd+click a caller → FIFO → work-a-caller drain) — the daemon `caller_answer_mode=operator_pick` mode is **superseded by it** and rejected 501 (`ft8_caller_mode_unsupported`), not a pending roadmap item. Automatic/unattended sequencing is out of scope — QEX-forbidden. |
+| (e) | Manual sequencer + QSO logging; **interactive picker** | e1–e4 shipped 2026-06-10 (TX path, resolver, sequencer ADR 0031, logging) — **answer-a-CQ complete + logged**. **Call-CQ `auto_first` shipped 2026-06-12 (ADR 0033)** — Call CQ → daemon works the pile-up (first answerer) → logged, looping until Abandon. The **SPA pile-up stack shipped 2026-06-17** (Ctrl/Cmd+click a caller → FIFO → work-a-caller drain — the curated path for callers outside a CQ run). **`caller_answer_mode=operator_pick` shipped 2026-08-07 (ADR 0065)** — a CQ run lists answerers in the drawer and the operator commits one via `POST /v1/ft8/cq/pick` (config.json-only knob). Automatic/unattended sequencing is out of scope — QEX-forbidden. |
 
 **Step (c) — audio output (shipped 2026-06-07).** `internal/audio/playback` is the
 output mirror of `internal/audio/capture`: a malgo/miniaudio **S16, 12 kHz, mono**
@@ -1384,7 +1393,12 @@ and loops the pile-up until Abandon (`CallerExchange` + `onSlotCalling` +
 `POST /v1/ft8/cq/start`; needs on-air validation). **Pile-up callsign stacking shipped
 2026-06-17** (ADR 0033 amendment): Ctrl+click calling-you decodes onto an SPA-owned FIFO
 that drains via the work-a-caller path — the operator-curated alternative to
-`auto_first`, superseding the daemon `operator_pick` Call-CQ mode.
+`auto_first` for callers outside a CQ run. **`operator_pick` shipped 2026-08-07 (ADR
+0065 decision 3)**: under `caller_answer_mode=operator_pick` a CQ run lists its
+answerers (`ft8-qso` `answerers`, 3-min staleness) in the same drawer and the operator
+commits one via `POST /v1/ft8/cq/pick`; CQ continues until then, parks never
+auto-pick, and the run resumes CQ after each contact. Spec:
+`internal/ft8/operatorpick_test.go`.
 **Daemon-initiated sequencing is out of scope and unsupported — the QEX FT8
 specification forbids automatic operation.**
 

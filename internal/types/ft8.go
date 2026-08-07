@@ -324,13 +324,13 @@ type Ft8TXConfig struct {
 	// CallerAnswerMode selects how a sequenced Call-CQ session picks which station
 	// to work when stations answer (ADR 0033): "auto_first" works the first valid
 	// answerer by decode order (WSJT-X "Auto Seq"); "auto_strongest" works the
-	// highest-SNR valid answerer in the slot (clear the strong ones first). Both are
-	// operator-writable from the logging SPA's FT8 Settings tab. "operator_pick" is
-	// **superseded by the SPA pile-up stack** (Ctrl/Cmd+click a caller → FIFO →
-	// work-a-caller drain) and is **rejected at start** (501 ft8_caller_mode_unsupported)
-	// rather than silently auto-picking — it is a config.json-only literal, never
-	// offered over the wire. Empty/invalid → the ResolveFt8CallerAnswerMode default
-	// (auto_first).
+	// highest-SNR valid answerer in the slot (clear the strong ones first);
+	// "operator_pick" (ADR 0065 decision 3, implemented 2026-08-07) lists answerers
+	// on the ft8-qso frames instead of auto-committing — the CQ keeps calling until
+	// the operator pops one via POST /v1/ft8/cq/pick, and the run resumes CQ after
+	// the contact. All three are config.json-only knobs (the app SPA has no ft8.tx
+	// settings surface; operator-ratified 2026-08-07). Empty/invalid → the
+	// ResolveFt8CallerAnswerMode default (auto_first).
 	CallerAnswerMode string `json:"caller_answer_mode,omitempty"`
 
 	// MaxRepeats caps how many times an unanswered rung is re-sent before the

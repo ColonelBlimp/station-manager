@@ -34,6 +34,7 @@ function armReadyForAbandon(): void {
         skip: ok,
         next: ok,
         stopAutoWork: ok,
+        pickAnswerer: ok,
     });
     ft8State.tx.armed = true;
 }
@@ -185,6 +186,7 @@ it('clicking the armed pill calls the run-only stop action', async () => {
         skip: ok,
         next: ok,
         stopAutoWork: () => (stops++, ok()),
+        pickAnswerer: ok,
     });
     ft8State.tx.armed = true;
     ft8State.qso.autoWorkArmed = true;

@@ -260,7 +260,14 @@ func TestWriteFt8QsoError_Mapping(t *testing.T) {
 		// for a fresh decode.
 		{"slot in future", ft8.ErrSlotInFuture, http.StatusBadRequest, "ft8_slot_in_future"},
 		{"bad message", ft8.ErrTxBadMessage, http.StatusBadRequest, "ft8_tx_bad_message"},
-		{"caller mode unsupported", ft8.ErrCallerAnswerModeUnsupported, http.StatusNotImplemented, "ft8_caller_mode_unsupported"},
+		// The pop's three refusals (ADR 0065; operatorpick_test.go rule 5) must stay
+		// DISTINCT on the wire — the operator's next action differs: nothing to do /
+		// wait for a fresh answer / finish or press Next first. Not-listed is a 404
+		// (the named resource is gone — the station left), the other two conflicts.
+		// ft8_caller_mode_unsupported (501) retired with review H2's rejection.
+		{"no cq pick run", ft8.ErrNoCqPickRun, http.StatusConflict, "ft8_no_cq_pick_run"},
+		{"answerer not listed", ft8.ErrAnswererNotListed, http.StatusNotFound, "ft8_answerer_not_listed"},
+		{"cq contact in flight", ft8.ErrCqContactInFlight, http.StatusConflict, "ft8_cq_contact_in_flight"},
 		// These two must stay DISTINCT on the wire: "there is no QSO" and "this rung
 		// cannot be skipped" are different facts, and the operator acts differently on
 		// them (start something / abandon what is running).
@@ -317,5 +324,45 @@ func TestHandleFt8QsoNext_RouteIsWiredAndRefusesWithoutAnAnswerer(t *testing.T) 
 	}
 	if got := decodeErrCode(t, w); got != "ft8_no_answerer" {
 		t.Fatalf("code=%q, want ft8_no_answerer (body %s)", got, w.Body.String())
+	}
+}
+
+// The operator_pick pop endpoint (ADR 0065; sequencing rules in
+// internal/ft8/operatorpick_test.go). Driven through the full server handler for
+// the same reason as Next above: an unwired route answers 404 and the drawer's
+// only symptom would be a Work button that silently does nothing. With no keyer
+// there is no run, so the reachable assertion is the ft8_no_cq_pick_run refusal —
+// which proves route, body parsing and mapping in one pass.
+func TestHandleFt8CqPick_RouteIsWiredAndRefusesWithoutARun(t *testing.T) {
+	srv := testServerWithFt8(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
+	req := httptest.NewRequest(http.MethodPost, "/v1/ft8/cq/pick", strings.NewReader(`{"call":"DL9UW"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "127.0.0.1:8080" // loopback: satisfies requireSameOrigin, which wraps the mux
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status=%d, want %d (body %s)", w.Code, http.StatusConflict, w.Body.String())
+	}
+	if got := decodeErrCode(t, w); got != "ft8_no_cq_pick_run" {
+		t.Fatalf("code=%q, want ft8_no_cq_pick_run (body %s)", got, w.Body.String())
+	}
+}
+
+// A pop without a call names nothing to work — 400 before the service is asked,
+// matching the start handlers' invalid_field_value convention.
+func TestHandleFt8CqPick_MissingCallIs400(t *testing.T) {
+	srv := testServerWithFt8(t, nil, ft8.NewService(types.Ft8Config{Enabled: true}, &logging.Service{}, ""))
+	req := httptest.NewRequest(http.MethodPost, "/v1/ft8/cq/pick", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "127.0.0.1:8080"
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 (body %s)", w.Code, w.Body.String())
+	}
+	if got := decodeErrCode(t, w); got != "invalid_field_value" {
+		t.Fatalf("code=%q, want invalid_field_value (body %s)", got, w.Body.String())
 	}
 }

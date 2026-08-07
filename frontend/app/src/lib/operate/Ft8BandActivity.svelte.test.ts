@@ -45,6 +45,7 @@ function armReady(over: Partial<Ft8TxActions> = {}): void {
         skip: okResult,
         next: okResult,
         stopAutoWork: okResult,
+        pickAnswerer: okResult,
         ...over,
     });
     rig.cat = 'connected';
@@ -362,6 +363,30 @@ describe('Ft8BandActivity pile-up enqueue (Ctrl+click)', () => {
         // Ctrl+click on a CQ row does NOT queue (only callers do).
         await fireEvent.click(screen.getByText('CQ W1ABC FN42'), { ctrlKey: true });
         expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['PA3KUS']);
+    });
+
+    // ADR 0065: during an operator_pick CQ run the curated queue stays disabled
+    // (unchanged), but the explanation must not tell the operator their answerers
+    // are lost — the daemon queues them into the drawer automatically.
+    it('ctrl+click during an operator_pick CQ run says answerers queue automatically', async () => {
+        setFt8OperatorCall('7Q5MLV');
+        render(Ft8BandActivity);
+        ft8Link.onQso({
+            active: true,
+            role: 'caller',
+            state: 'calling-cq',
+            answer_mode: 'operator_pick',
+        });
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
+        );
+        flushSync();
+        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'), { ctrlKey: true });
+
+        expect(toastsState.items.map((t) => t.message).join(' ')).toMatch(
+            /answerers queue in the pile-up automatically/i
+        );
+        expect(ft8PileupStack.items).toHaveLength(0);
     });
 
     it('rejects a wrong-parity add (single-parity run)', async () => {

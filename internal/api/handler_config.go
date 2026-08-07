@@ -94,9 +94,9 @@ type ConfigResponse struct {
 	// served RESOLVED on GET (default auto_first) for the logging SPA's FT8 Settings
 	// tab. Operator-writable; **presence-aware** on PUT (omitting it leaves the
 	// stored value untouched). Pointer-typed so the handler tells "sent" from
-	// "absent". The config-only "operator_pick" literal is NOT accepted here (it's
-	// rejected at Call-CQ start), so the wire surface only ever carries the two
-	// attended auto modes.
+	// "absent". The "operator_pick" literal is NOT accepted here — implemented
+	// since ADR 0065, but the mode stays a config.json-only knob (operator-ratified
+	// 2026-08-07), so the wire surface only ever carries the two auto modes.
 	Ft8CallerAnswerMode *string `json:"ft8_caller_answer_mode,omitempty"`
 	// Ft8MaxRepeats is the FT8 sequencer's unanswered-rung repeat cap
 	// (ft8.tx.max_repeats): how many times an unanswered rung is re-sent before the
@@ -992,8 +992,9 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	resp.Ft8Display = &ft8Display
 
 	// FT8 Call-CQ answerer-selection mode, resolved (default auto_first) for the
-	// Settings tab. A config holding operator_pick still reads back as-is here, but
-	// the SPA dropdown only offers the two auto modes and a PUT rejects anything else.
+	// Settings tab. A config holding operator_pick (a working, config.json-only
+	// mode since ADR 0065) still reads back as-is here, but the SPA dropdown only
+	// offers the two auto modes and a PUT rejects anything else.
 	callerMode := types.ResolveFt8CallerAnswerMode(cfg.Ft8.TX)
 	resp.Ft8CallerAnswerMode = &callerMode
 

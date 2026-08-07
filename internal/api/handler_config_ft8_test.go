@@ -128,8 +128,9 @@ func TestConfig_Ft8CallerAnswerMode_OmittedPutDoesNotClobber(t *testing.T) {
 	}
 }
 
-// The SPA wire surface accepts only the two attended auto modes; operator_pick (a
-// config.json-only literal, rejected at Call-CQ start) and any junk are a 400.
+// The SPA wire surface accepts only the two auto modes; operator_pick — a working
+// mode since ADR 0065, but a config.json-only knob (operator-ratified 2026-08-07)
+// — and any junk are a 400.
 func TestConfig_Ft8CallerAnswerMode_InvalidValue400(t *testing.T) {
 	srv := testServer(t)
 	for _, bad := range []string{"operator_pick", "bogus"} {

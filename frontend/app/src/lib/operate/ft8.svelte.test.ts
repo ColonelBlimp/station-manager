@@ -120,6 +120,26 @@ describe('occupancy + status mirrors', () => {
         expect(ft8State.qso.maxRepeats).toBe(6);
     });
 
+    // ADR 0065 operator_pick: the candidate list the pile-up drawer renders comes
+    // from these two frame fields — daemon rules in internal/ft8/operatorpick_test.go.
+    it('onQso maps answer_mode + the operator_pick answerer list', () => {
+        ft8Link.onQso({
+            active: true,
+            role: 'caller',
+            state: 'calling-cq',
+            answer_mode: 'operator_pick',
+            answerers: [{ call: 'DL9UW', snr: -8 }],
+        });
+        expect(ft8State.qso.answerMode).toBe('operator_pick');
+        expect(ft8State.qso.answerers).toEqual([{ call: 'DL9UW', snr: -8 }]);
+
+        // Absent on the wire (idle frames, auto-mode runs) → empty, never stale:
+        // a terminal frame must clear the drawer with the run (daemon rule 10).
+        ft8Link.onQso({ active: false });
+        expect(ft8State.qso.answerMode).toBe('');
+        expect(ft8State.qso.answerers).toEqual([]);
+    });
+
     it('onLogged routes to the injected sink', () => {
         const seen: string[] = [];
         setFt8LoggedSink((p) => seen.push(p.uuid ?? ''));
@@ -242,6 +262,7 @@ describe('TX action wrappers', () => {
                 abandon: () => (calls.push('abandon'), ok),
                 next: () => (calls.push('next'), ok),
                 stopAutoWork: () => (calls.push('stopAutoWork'), ok),
+                pickAnswerer: () => (calls.push('pickAnswerer'), ok),
                 skip: (a) => (calls.push(`skip:${a}`), ok),
             },
         };

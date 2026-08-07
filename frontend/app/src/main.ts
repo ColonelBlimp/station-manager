@@ -44,6 +44,7 @@ import {
     stopFt8AutoWork,
     skipFt8Qso,
     nextFt8Answerer,
+    pickFt8CqAnswerer,
     type Ft8QsoOutcome,
 } from './lib/api/ft8qso';
 import { toasts } from './lib/ui/toasts.svelte';
@@ -120,6 +121,7 @@ setFt8TxActions({
     skip: (armed) => skipFt8Qso(armed).then(toTxResult),
     next: () => nextFt8Answerer().then(toTxResult),
     stopAutoWork: () => stopFt8AutoWork().then(toTxResult),
+    pickAnswerer: (call) => pickFt8CqAnswerer(call).then(toTxResult),
 });
 
 // A sent auto-work intent the daemon's gate refused (ft8.tx.auto_work_callers

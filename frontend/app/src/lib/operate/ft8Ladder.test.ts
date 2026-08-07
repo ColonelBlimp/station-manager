@@ -26,6 +26,8 @@ function qso(over: Partial<Ft8QsoStatus> = {}): Ft8QsoStatus {
         ourSection: '',
         theirClass: '',
         theirSection: '',
+        answerMode: '',
+        answerers: [],
         ...over,
     };
 }

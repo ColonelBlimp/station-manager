@@ -9,6 +9,7 @@
     import { setPileup, setCallStack, focusCallsign } from './state.svelte';
     import { operate } from './state.svelte';
     import { ft8PileupStack } from './ft8Pileup.svelte';
+    import { ft8State } from './ft8.svelte';
     import { callsignStack } from './callsignStack.svelte';
     import { toggleTile, isVisible, RAIL_TILES, type TileId } from './layout.svelte';
     import { rig } from './rig.svelte';
@@ -16,9 +17,14 @@
 
     // The rail's pile-up control drives whichever list the current workspace
     // owns: FT8's caller queue, or Phone/CW's callsign stack. Two different
-    // lists behind one affordance — they are never both on screen.
+    // lists behind one affordance — they are never both on screen. In FT8 the
+    // count also carries the daemon's operator_pick answerers (ADR 0065): the
+    // badge rising is the ratified discovery mechanism for a new answerer
+    // ("badge only" — no toast, no auto-open), so it must count them.
     const pileupCount = $derived(
-        router.mode === 'ft8' ? ft8PileupStack.count : callsignStack.count
+        router.mode === 'ft8'
+            ? ft8PileupStack.count + ft8State.qso.answerers.length
+            : callsignStack.count
     );
 
     // Worked/Session are read-only: after showing one the operator's next act is

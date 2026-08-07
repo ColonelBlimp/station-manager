@@ -10,7 +10,7 @@ import PileupDrawer from './PileupDrawer.svelte';
 import { ft8PileupStack, _resetPileupForTests } from './ft8Pileup.svelte';
 import { ft8State, setFt8TxActions, resetFt8ForTests, type Ft8TxResult } from './ft8.svelte';
 import { setPileup } from './state.svelte';
-import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
+import { _resetForTests as resetToasts, toastsState } from '../ui/toasts.svelte';
 
 const okResult = (): Promise<Ft8TxResult> => Promise.resolve({ ok: true, message: '' });
 
@@ -32,6 +32,7 @@ beforeEach(() => {
         skip: okResult,
         next: okResult,
         stopAutoWork: okResult,
+        pickAnswerer: okResult,
     });
 });
 
@@ -108,5 +109,97 @@ describe('PileupDrawer', () => {
         flushSync();
         expect(ft8PileupStack.items).toEqual([]);
         expect(ft8PileupStack.enabled).toBe(false);
+    });
+});
+
+// ---- operator_pick candidates (ADR 0065 decision 3) -------------------------
+//
+// During an operator_pick Call-CQ run the drawer's primary content is the
+// DAEMON's candidate list (ft8State.qso.answerers — stations answering the CQ),
+// not the operator-curated ctrl-click stack: clicking one POSTs /v1/ft8/cq/pick
+// and the commit comes back by push on the ft8-qso SSE. Sequencing rules live in
+// internal/ft8/operatorpick_test.go; this suite guards the drawer wiring.
+describe('PileupDrawer operator_pick candidates', () => {
+    function pickRun(answerers: { call: string; snr: number }[]): void {
+        ft8State.qso = {
+            ...ft8State.qso,
+            active: true,
+            role: 'caller',
+            state: 'calling-cq',
+            answerMode: 'operator_pick',
+            answerers,
+        };
+    }
+
+    function actions(pickAnswerer: (call: string) => Promise<Ft8TxResult>): void {
+        setFt8TxActions({
+            arm: okResult,
+            callCq: okResult,
+            answerCq: okResult,
+            workCaller: okResult,
+            abandon: okResult,
+            skip: okResult,
+            next: okResult,
+            stopAutoWork: okResult,
+            pickAnswerer,
+        });
+    }
+
+    it('lists the daemon-published answerers and pops one on click', async () => {
+        const picked: string[] = [];
+        actions((call) => {
+            picked.push(call);
+            return okResult();
+        });
+        pickRun([
+            { call: 'DL9UW', snr: -8 },
+            { call: 'K1ABC', snr: -12 },
+        ]);
+        render(PileupDrawer);
+        flushSync();
+
+        expect(screen.getByText('Answering your CQ')).toBeInTheDocument();
+        expect(screen.getByText('DL9UW')).toBeInTheDocument();
+        expect(screen.getByText('-8 dB')).toBeInTheDocument();
+        await fireEvent.click(screen.getByLabelText('Work DL9UW now'));
+        expect(picked).toEqual(['DL9UW']);
+    });
+
+    it('a refused pop surfaces the daemon message as a toast', async () => {
+        actions(() =>
+            Promise.resolve({
+                ok: false,
+                message: 'that station is no longer answering your CQ — pick a listed one',
+            })
+        );
+        pickRun([{ call: 'DL9UW', snr: -8 }]);
+        render(PileupDrawer);
+        flushSync();
+        await fireEvent.click(screen.getByLabelText('Work DL9UW now'));
+        await Promise.resolve();
+        expect(toastsState.items.map((t) => t.message).join(' ')).toMatch(/no longer answering/);
+    });
+
+    it('a pick run with no answerers yet explains itself instead of the ctrl-click hint', () => {
+        pickRun([]);
+        render(PileupDrawer);
+        flushSync();
+        expect(screen.getByText(/stations that answer your CQ appear here/i)).toBeInTheDocument();
+        expect(screen.queryByText(/Ctrl-click/)).toBeNull();
+    });
+
+    it('an auto-mode caller run keeps the curated view untouched', () => {
+        ft8State.qso = {
+            ...ft8State.qso,
+            active: true,
+            role: 'caller',
+            state: 'calling-cq',
+            answerMode: 'auto_first',
+            answerers: [],
+        };
+        render(PileupDrawer);
+        flushSync();
+        expect(screen.queryByText('Answering your CQ')).toBeNull();
+        expect(screen.getByText(/Ctrl-click/)).toBeInTheDocument();
     });
 });

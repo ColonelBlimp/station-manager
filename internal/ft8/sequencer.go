@@ -105,6 +105,21 @@ var (
 	// ErrNoAnswerer — Next was pressed with no answerer being worked. Distinct from
 	// ErrNoActiveQso: a Call-CQ run IS active while it is merely calling.
 	ErrNoAnswerer = stderrors.New("ft8: no answerer to move on from")
+
+	// operator_pick pop refusals (ADR 0065 decision 3; operatorpick_test.go rule 5).
+	// Three distinct sentinels because the operator's next action differs:
+	// nothing to do / wait for a fresh answer / finish or press Next first.
+	//
+	// ErrNoCqPickRun — a pop with no operator_pick Call-CQ run live. Covers idle
+	// AND an auto-mode run: a pop against auto_first is client drift, not a
+	// listing miss, so it must not read as "that station left".
+	ErrNoCqPickRun = stderrors.New("ft8: no operator-pick call-cq run")
+	// ErrAnswererNotListed — the named station is not on the candidate list
+	// (never heard, or unheard past cqAnswererStaleAfter).
+	ErrAnswererNotListed = stderrors.New("ft8: that answerer is not listed")
+	// ErrCqContactInFlight — the run is already working a contact; a pop never
+	// silently ends one (operator-ratified 2026-08-07 — Next parks, then pop).
+	ErrCqContactInFlight = stderrors.New("ft8: the run is already working a contact")
 )
 
 // seqMode is the active sequencer session: idle, answering a CQ (ex drives), or
@@ -241,6 +256,17 @@ type QsoStatus struct {
 	// run between contacts is indistinguishable from a finished one, and only one of
 	// them keys the rig when somebody calls.
 	AutoWorkArmed bool `json:"auto_work_armed,omitempty"`
+	// AnswerMode — the Call-CQ run's answerer-selection mode (caller frames only).
+	// Carried so the SPA can tell an operator_pick run from an auto one BEFORE any
+	// answerer arrives — the pile-up drawer's empty state differs ("answerers will
+	// appear here" vs the ctrl-click hint), and nothing else on the wire says which
+	// run this is (the mode is config.json-only).
+	AnswerMode string `json:"answer_mode,omitempty"`
+	// Answerers — the operator_pick candidate list (ADR 0065 decision 3): stations
+	// currently answering our CQ that the run can actually work, oldest first.
+	// Present only on operator_pick caller frames with a non-empty list; the
+	// pile-up drawer renders from this and POST /v1/ft8/cq/pick names one to work.
+	Answerers []CqAnswerer `json:"answerers,omitempty"`
 	// MaxRepeats — the unanswered-rung repeat cap, set ONLY while the current rung is
 	// actually subject to it (an answerer pre-73, or a caller working an answerer
 	// pre-RR73). Zero (omitted) on the uncapped rungs (calling CQ) and the one-shot
@@ -283,6 +309,15 @@ type QsoStatus struct {
 	// can only be worked next if it shares this parity, so wrong-parity decodes are
 	// blocked from the queue. Empty when idle.
 	TheirPeriod string `json:"their_period,omitempty"`
+}
+
+// CqAnswerer is one operator_pick candidate on the wire (QsoStatus.Answerers):
+// a station currently answering our CQ that the run can actually work. Snr is
+// our measurement of their signal — the report a pop would send them. The grid
+// stays daemon-side (the pop is by call; the daemon owns the exchange data).
+type CqAnswerer struct {
+	Call string `json:"call"`
+	Snr  int    `json:"snr"`
 }
 
 // CompletedQso is captured when an exchange finishes (73 sent) — the data e4 maps
@@ -463,6 +498,15 @@ type Sequencer struct {
 	// the answerers' slots, so a partner who did NOT copy our closing RR73 can be
 	// answered instead of ignored. See confirmHold / resolveConfirmHoldLocked.
 	confirmHold *confirmHold
+	// answerers is the operator_pick candidate list (ADR 0065 decision 3): stations
+	// currently answering our CQ that the run can actually work, oldest first.
+	// Populated only under operator_pick — the auto modes consume answerers at pick
+	// time and never list them. RUN-scoped, so deliberately NOT in contactFlags: it
+	// outlives every contact within the run (candidates collected while working one
+	// station are what the operator pops next). Reset by StartCallCq like
+	// stalledCalls; entries unheard past cqAnswererStaleAfter are aged out at slot
+	// evaluations and re-checked at the pop (collectAnswerersLocked / PickAnswerer).
+	answerers []cqAnswerer
 
 	// Shared by both modes. theirPeriod is the parity of the slots we PROCESS (the
 	// worked station's when answering, or — when calling CQ — the answerers', i.e.
@@ -1854,6 +1898,13 @@ func (s *Sequencer) statusModeLocked() QsoStatus {
 		// Calling CQ: active from the first CQ. Until a station is being worked
 		// (caller != nil) the rung is "calling-cq" and the next message is the CQ.
 		st := QsoStatus{Active: true, Role: roleCaller, Repeats: s.contact.repeats, TheirPeriod: s.theirPeriod}
+		// Every caller frame names the run's answerer-selection mode, and an
+		// operator_pick run carries its candidate list — in BOTH phases, so the
+		// drawer stays live while a popped contact is worked (rule 9).
+		st.AnswerMode = s.answerMode
+		for _, a := range s.answerers {
+			st.Answerers = append(st.Answerers, CqAnswerer{Call: a.call, Snr: a.snr})
+		}
 		if s.caller != nil {
 			msg, _ := s.caller.TxMessage()
 			st.TheirCall = s.caller.TheirCall

@@ -92,6 +92,21 @@ export interface Ft8QsoStatus {
     ourSection: string;
     theirClass: string;
     theirSection: string;
+    /** The Call-CQ run's answerer-selection mode ('' outside caller frames) — how
+     *  the drawer tells an operator_pick run from an auto one before any answerer
+     *  arrives (ADR 0065; the knob itself is config.json-only). */
+    answerMode: string;
+    /** operator_pick candidates (ADR 0065): stations currently answering our CQ
+     *  that the run can actually work, oldest first — the pile-up drawer's content
+     *  during a pick run. Empty outside one; a terminal frame clears it. */
+    answerers: Ft8CqAnswerer[];
+}
+
+/** One operator_pick candidate off the ft8-qso frame — snr is our measurement of
+ *  their signal, the report a pop would send them. */
+export interface Ft8CqAnswerer {
+    call: string;
+    snr: number;
 }
 
 const emptyQsoStatus = (): Ft8QsoStatus => ({
@@ -115,6 +130,8 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     ourSection: '',
     theirClass: '',
     theirSection: '',
+    answerMode: '',
+    answerers: [],
 });
 
 // Monotonic key source for decode rows. Never reset — uniqueness is all that
@@ -590,6 +607,9 @@ export interface Ft8TxActions {
     /** Stop the auto-work run WITHOUT ending any active contact (ADR 0065 — the
      *  Auto-work pill's click action; abandon stops both). */
     stopAutoWork(): Promise<Ft8TxResult>;
+    /** Commit a listed answerer into an operator_pick Call-CQ run (ADR 0065) —
+     *  the pile-up drawer's per-candidate Work action. */
+    pickAnswerer(call: string): Promise<Ft8TxResult>;
 }
 
 let txActions: Ft8TxActions | null = null;
@@ -668,6 +688,12 @@ export function workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult> {
 /** Stop the auto-work run only — the Auto-work pill's click action (ADR 0065). */
 export function stopAutoWork(): Promise<Ft8TxResult> {
     return txActions ? txActions.stopAutoWork() : Promise.resolve(txUnavailable);
+}
+
+/** Pop a listed operator_pick answerer into the Call-CQ run (ADR 0065). The commit
+ *  is confirmed by push — the ft8-qso frame the pop publishes. */
+export function pickAnswerer(call: string): Promise<Ft8TxResult> {
+    return txActions ? txActions.pickAnswerer(call) : Promise.resolve(txUnavailable);
 }
 
 /** Abandon any active sequenced session. */
@@ -899,6 +925,8 @@ export const ft8Link: Ft8EventHandlers = {
             ourSection: p.our_section ?? '',
             theirClass: p.their_class ?? '',
             theirSection: p.their_section ?? '',
+            answerMode: p.answer_mode ?? '',
+            answerers: p.answerers ?? [],
         };
     },
 

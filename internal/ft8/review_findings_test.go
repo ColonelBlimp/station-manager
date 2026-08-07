@@ -6,7 +6,6 @@ import (
 	"time"
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
-	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -223,19 +222,11 @@ func TestCallerSequencer_StartCallCqRejectsUnencodableCq(t *testing.T) {
 	require.Empty(t, r.sentMsgs())
 }
 
-// --- H2: operator_pick is rejected at start until the stack exists -----------
-
-func TestStartCallCq_RejectsOperatorPick(t *testing.T) {
-	s := newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
-	s.cfg.TX.CallerAnswerMode = types.Ft8CallerAnswerOperatorPick
-	require.NoError(t, s.ArmTx(true))
-	defer func() { _ = s.ArmTx(false) }()
-
-	err := s.StartCallCq("G0XYZ", "IO91", 1500, 14.074, "", 1)
-	require.ErrorIs(t, err, ErrCallerAnswerModeUnsupported,
-		"operator_pick must be rejected, not silently auto-picked (review H2)")
-	require.False(t, s.seq.Active(), "no session for an unsupported answer mode")
-}
+// --- H2: RETIRED 2026-08-07 (ADR 0065 decision 3) ----------------------------
+// TestStartCallCq_RejectsOperatorPick pinned the start-time rejection "until the
+// stack exists". The stack now exists, so the rejection — and its sentinel — are
+// deliberately gone; the flip is pinned by operatorpick_test.go rule 1
+// (TestOperatorPick_StartCallCqIsAccepted), which is that test's inverse.
 
 // --- M3: disarm and QSO-start cannot leave an active session after disarm ----
 

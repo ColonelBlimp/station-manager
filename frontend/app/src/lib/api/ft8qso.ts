@@ -176,6 +176,15 @@ export function stopFt8AutoWork(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
     return postFt8Qso('/v1/ft8/autowork/stop', {}, signal);
 }
 
+/** Commit a listed answerer into an operator_pick Call-CQ run (ADR 0065): the run's
+ *  next slot evaluation transmits our report to that station instead of the CQ. The
+ *  candidate list rides the ft8-qso SSE (answerers); the commit comes back by push
+ *  (the frame the pop publishes). Distinct refusals: 409 no pick run / 404 not
+ *  listed (the station left) / 409 contact in flight (finish or Next first). */
+export function pickFt8CqAnswerer(call: string, signal?: AbortSignal): Promise<Ft8QsoOutcome> {
+    return postFt8Qso('/v1/ft8/cq/pick', { call }, signal);
+}
+
 /** Short-circuit the repeat cap on a stuck Call-CQ contact: park this answerer at
  *  the next slot evaluation, then work another live answerer or resume calling CQ.
  *  The run CONTINUES — ending it is abandon's job. Not the same control as skip:
