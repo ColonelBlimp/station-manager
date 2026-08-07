@@ -72,8 +72,11 @@ describe('TxDriveChip', () => {
 
         expect(card()!.querySelector('[data-meter-bar]')).not.toBeNull();
         expect(card()!.querySelectorAll('[data-meter-line]').length).toBe(2);
+        // Anchored by RIGHT so the marker's 2px body always sits INSIDE the
+        // overflow-hidden track — left-anchoring clipped it entirely at the
+        // valid threshold 255 (left:100%, codex P2 on 84886af2).
         const marker = card()!.querySelector<HTMLElement>('[data-alc-red-marker]')!;
-        expect(marker.style.left).toBe('20%');
+        expect(marker.style.right).toBe('80%');
         expect(card()!.textContent).toContain('ALC 26 of 255');
 
         // Stale: same structure, no-data content (a dead poll must not look
@@ -84,5 +87,19 @@ describe('TxDriveChip', () => {
         expect(card()!.querySelector('[data-meter-bar]')).not.toBeNull();
         expect(card()!.querySelectorAll('[data-meter-line]').length).toBe(2);
         expect(card()!.textContent).toContain('no poll answers');
+    });
+
+    it('the marker stays visible at the maximum valid threshold (255)', () => {
+        setTxDriveConfig(255, 250);
+        render(TxDriveChip);
+        onRigMeters({ meter: 'ALC', value: 10 }, Date.now());
+        flushSync();
+        chip()!.click();
+        flushSync();
+
+        const marker = card()!.querySelector<HTMLElement>('[data-alc-red-marker]')!;
+        // right: 0% puts the marker's right edge at the track's right edge,
+        // its body extending inward — never into the clipped overflow.
+        expect(marker.style.right).toBe('0%');
     });
 });

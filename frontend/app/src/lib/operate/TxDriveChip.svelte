@@ -117,10 +117,15 @@
                         style="width: {pct(txDriveState.alc?.value ?? 0)}%"
                     ></div>
                 {/if}
+                <!-- Anchored by RIGHT: right = (100 - threshold%), so the
+                     marker's 2px body extends INWARD from the threshold and
+                     survives the track's overflow-hidden even at the valid
+                     maximum 255 (left-anchoring rendered left:100% there and
+                     clipped it entirely — codex P2 on 84886af2). -->
                 <div
                     data-alc-red-marker
                     class="absolute top-0 h-full w-0.5 bg-red-600/80"
-                    style="left: {pct(txDriveRedThreshold())}%"
+                    style="right: {100 - pct(txDriveRedThreshold())}%"
                     aria-hidden="true"
                 ></div>
             </div>
