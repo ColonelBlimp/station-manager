@@ -41,63 +41,35 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-06)
+## Now (as of 2026-08-07)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
-     I not do". Detail belongs in Current state below, which is NOT injected.
-     The 2026-08-02 failure that created this split: the hook printed the whole
-     Current-state section (231 KB), the harness truncated it to a 2 KB preview,
-     and the RECONCILE warning underneath was never delivered at all. -->
+     I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **END OF DAY 2026-08-06: tree CLEAN at `a2b94c64`, every review triaged +
-  deleted, the RX-meter hardening arc CONVERGED (round 8 clean).**
-- **DEPLOY IS BEHIND: daemon runs `…1121-g68888a1d`** — missing the back half
-  of the meter hardening (capture-generation ownership `c5bbbcbf`, decode-log
-  rounds `9aafc206`/`220bc363`, service-lifetime decode log `a2b94c64`).
-  `task deploy:local:dev` before next FT8 operating.
-- **Shipped 2026-08-06, a very large day:** revive-on-'online' SSE fix ·
-  WorkedPanel centring · A25 FT8 first-entry seed (selected VFO + data mode;
-  CAT-off ratified "ft8 cannot work") · Contact-details disclosure overlay
-  (3 operator-corrected rounds; W2 pins it; extension hard-codes card p-5) ·
-  Phone/CW keyboard audit (A27 session-editor owns the keyboard — real
-  collision fixed; F3 timer toggle + callsign Enter/Space ported; F3
-  auto-repeat guard; F2 + Cmd ruled MOOT in pileupKeys header) · **FT8 RX
-  audio-level meter, full stack** (daemon tee → `ft8-audio-level` SSE →
-  `ft8.audio` config window → bottom-left chip/card; −60/−10 dBFS defaults
-  AWAIT HARDWARE CALIBRATION, config.json edit + restart) · ★ occupancy
-  stacking leak isolated (Z1) · meter card anchored above Occupancy panel.
-- **The meter's 7-round hardening arc, all fixed + converged:** push→PULL
-  delivery (eviction) → clearActivity cache → session tokens → capture-gen
-  ownership → decode-log swap-under-lock → close-outside-lock → decode log
-  is now SERVICE-LIFETIME (Stop owns the one close). Lesson re-proven: the
-  arc closed when the fix REMOVED lifecycle, not added ordering.
-- **ADR 0064 (Proposed): continuous `RM4;RM5;` ALC/PO polling while an FT8
-  capture session is live** — 250 ms / 100 ms timeout OPERATOR-RATIFIED (the
-  timeout is the load-bearing safety number). Grounded in TWO catcli wire
-  experiments (one operator-keyed: queries ANSWER during TX; nothing
-  subscribes; `TX0` pushed at unkey). Open: Tune coverage, SPA red threshold
-  (first datum: ALC 026 at normal voice drive). FTdx10 CAT manual converted
-  to `docs/ftdx10-cat.md` — GITIGNORED (Yaesu copyright), local only.
-- **SHIP GATE: finding 4 CLOSED 2026-08-06 (6 of 14)** — suppressed slots now
-  log at Info with rule + scope (`slotsuppression_test.go`). **Next session
-  resumes at 5 + 11 together** (operator's pick: "logging first"; the
-  `operator_pick` answerer mode is the other queued item). NB the
-  service-lifetime decode log makes finding 12 MORE pressing — noted in the
-  gaps doc progress block.
-- **F4MQS/P worked on FT8 (2026-08-06 16:20)** — first on-air validation of
-  the suffixed-call work-a-caller path end to end (stored + forwarded). The
-  reduced type-4 ladder stays UNSEEN (suffix calls ride the standard encoder).
-- **SM Cloud leg DOWN since the router swap** (no route to 192.168.1.200) —
-  operator knows the cause; rows persist + retry, hourly reconcile heals on
-  the box's return. Worker backoffs are hours-long; the reconciler is the
-  healer. No software action.
-- **QUEUED:** ship gate 5+11 · ADR 0064 build (mechanism mostly exists) ·
-  `operator_pick` answerer mode · Settings → **General** tab · the 2
-  coordinate decisions · Playwright (drawers, centring, meter card, revive).
-- **STOP PATCHING THE FT8 TIMEOUT RECONCILE** — converged at `4d131720`; the
-  same rule now applies to the meter arc: it converged at `a2b94c64`.
+- **END OF DAY 2026-08-07: tree CLEAN at `6f45a510`, every review triaged +
+  deleted.** Deploy sits ~at `fad26bad` (ALC chip was live in dogfood);
+  missing only the chip vertical-stack/card/marker commits — redeploy before
+  judging the ALC face.
+- **Shipped today:** ship-gate logging CLOSED as directed work — findings
+  5+11, 7+8, 12+13 (+ async drop-warn P1 amendment) = 12 of 14, rest is
+  Tier-4 whenever-adjacent · **dial-disarm visibility** (`disarm_cause` on
+  ft8-tx + toast; 3-round arc: replay-order hold, cause-matched clear) ·
+  **ADR 0064 FULL BUILD** — METERPOLL rigdef + `runMeterPollLoop` polling
+  THROUGH keyed slots, capture-session gate seam (ft8→bridge via smd),
+  `rig-meters` SSE, drive-watch liveness protected from poll answers (P4),
+  **write watchdog 2s→500ms** (P1: a ctx deadline cannot bound a blocked
+  write; ADR amended, operator-ratified), `ft8.meter.alc_red` config
+  (**PROVISIONAL 50**), TX-drive chip/card stacked above the RX meter.
+- **On-air this morning:** dial guard behaved textbook on a real nudge
+  (06:07 log) and exposed the dial-disarm gap same-day-fixed above;
+  finding-4 suppression logging had its first production firing.
+- **NEXT:** ADR 0064 on-hardware acceptance (§4, passive-first) → calibrate
+  `alc_red` → flip ADR to Accepted · Tune-coverage question · operator_pick ·
+  inbox cluster: auto-work arms on CQ answer + abandon→"already worked" toast
+  + click-modifier sketch + VK5GR false positive · session-panel callsign
+  search · paste-list port · export-card toast z-order · findings 9/10.
 
 ## Current state (as of 2026-08-06)
 
