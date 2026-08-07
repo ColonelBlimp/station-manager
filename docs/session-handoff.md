@@ -48,40 +48,80 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **END OF DAY 2026-08-07: tree CLEAN at `5c22fdd9`, every review triaged +
-  deleted** (8 review rounds today — 7 codex + 1 pasted external — 6 real
+- **END OF DAY 2026-08-07: tree CLEAN at `d217ed73`, every review triaged +
+  deleted** (9 review rounds today — 8 codex + 1 pasted external — 6 real
   findings, all fixed same-day RED-first). **DEPLOYED `1152-g80db5a92` at
-  13:55 and went ON AIR**; the deploy now trails TWO commits — `c3d67c82`
-  (ALC amber band → chip reads green at healthy drive) and `5c22fdd9`
-  (TX-path fixes: PSK spot attribution + a PTT panic guard) — **redeploy
-  before the next on-air session**.
-- **First live ADR 0064 data (on air, afternoon):** healthy FT8 drive =
-  **ALC 15–18 every slot, PO flat** — which broke the chip's zero-only green
-  (healthy TX always rendered amber, nagging at correct drive; operator
-  caught it live). Same afternoon: **colour grammar ratified + built** —
-  green = healthy band (`ft8.meter.alc_amber`, RATIFIED 30), amber = 30–49
-  genuinely elevated, `alc_red` 50 still PROVISIONAL (needs the §4 iii
-  deliberate-overdrive datum). AP2TN worked + logged on the new build.
-- **ADR 0065 (both phases BUILT earlier today) is deployed but UNEXERCISED on
-  air** — the afternoon run was `auto_first`, no arm gesture used. Sanity
-  checks still open: pill lights on a work-caller arm · FD click leaves the
-  toggle lit, no toast · a pick run (needs `ft8.tx.caller_answer_mode:
-  "operator_pick"` in config.json — stop smd, edit, start).
-- **Evening: a pasted external review found 3 REAL TX-path defects, all fixed**
-  (detail in Current state): a panic between KeyTx and the unkey defer left
-  PTT up (guard now registers the line after KeyTx) · decode reports now stamp
-  their CAPTURE dial (`ft8-decode` `dial_mhz`) — the PSK sink spotted a whole
-  slot on the wrong band across a QSY, and the SPA drops late wrong-band rows
-  · an arm no longer pins a pre-lock dial reading (commit-time re-check).
+  13:55 and went ON AIR**; the deploy now trails THREE runtime commits —
+  `c3d67c82` (ALC amber band → chip reads green at healthy drive),
+  `5c22fdd9` (TX-path fixes: PSK spot attribution + a PTT panic guard),
+  `d217ed73` (logging: duplicate-refusal + enqueue outcome lines) —
+  **redeploy before the next on-air session**.
+- **First live ADR 0064 data:** healthy FT8 drive = **ALC 15–18 every slot,
+  PO flat** — broke the chip's zero-only green; **colour bands ratified +
+  built** same afternoon (`alc_amber` 30 RATIFIED; `alc_red` 50 still
+  PROVISIONAL, needs the §4 iii deliberate-overdrive datum).
+- **ADR 0065 is deployed but UNEXERCISED on air** (afternoon ran
+  `auto_first`, no arm gesture). Open checks: pill on a work-caller arm · FD
+  click leaves toggle lit, no toast · a pick run
+  (`ft8.tx.caller_answer_mode: "operator_pick"` in config.json — stop smd,
+  edit, start).
+- **Evening: pasted external review, 3 REAL TX-path defects fixed** (detail
+  in Current state): PTT panic guard now registers the line after KeyTx ·
+  decode reports stamp their CAPTURE dial (`ft8-decode` `dial_mhz`; PSK sink
+  + SPA attribute from it, never live state) · an arm re-checks the dial at
+  commit (stale pre-lock pin).
+- **Late evening — the logging round** (detail in Current state): enrichment
+  ctx-cancel warns → Debug (one rule in the shared helper, all ten sites) ·
+  **qsoservice Tier 1 CLOSED** (Q1 restore outcomes, Q2 enqueue all-paths
+  all-five-counts, Q3 duplicate-refusal record — spec `logginggaps_test.go`) ·
+  log rotation VERIFIED ALREADY BUILT (lumberjack, 100 MB/5/30 d/compress in
+  config.json — the "untracked gap" claim was wrong; nothing filed). Logging
+  backlog's remaining Tier 1: api A2/A3 only.
 - **Earlier today** (detail in Current state): ADR 0065 end to end (per-click
   arming + operator_pick, 10 ratified forks) · ADR 0064 full build · inbox
   fully triaged · toast split · session search · morning-log diagnosis.
-- **NEXT:** redeploy (`5c22fdd9`) → on-air: §4 iii deliberate overdrive →
+- **NEXT:** redeploy (`d217ed73`) → on-air: §4 iii deliberate overdrive →
   ratify `alc_red` → flip 0064 Accepted · the 0065 sanity checks above ·
-  findings 9/10 · enrichment ctx-cancel WARN→debug · paste-list port ·
+  api A2/A3 (last Tier-1 logging) · findings 9/10 · paste-list port ·
   ctrl+click-on-CQ gesture (0065, undecided) · Tune-coverage question.
 
 ## Current state (as of 2026-08-07)
+
+### 2026-08-07 (late evening) — the logging round: two quick wins and Tier 1 closed
+
+Directed as "the two honest quick wins + the qsoservice Tier 1 block". One of
+the quick wins dissolved on verification; the rest built TDD (all rules
+RED-first, six reversion probes, full `go test ./...` green, codex clean).
+
+- **Enrichment ctx-cancel → Debug:** the demotion lives in the orchestrator's
+  shared `warn` helper so all TEN call sites follow one rule — an error rooted
+  in `context.Canceled` is the CALLER hanging up (aborted SPA fetch,
+  connection death, shutdown), not a provider fault, and it was logging full
+  Warn error-chains in bursts (9 of the morning session's 24 warnings).
+  `DeadlineExceeded` deliberately stays Warn: our own timeout catching a slow
+  provider. Three-way spec: canceled→debug (message intact) / real fault→warn
+  / deadline→warn.
+- **Log rotation: nothing to build — the claim was wrong.** Verification
+  found lumberjack fully wired with config.json values 100 MB / 5 backups /
+  30 days / compress; the 39.5 MB file just hasn't hit the threshold. No
+  backlog entry filed (an entry for something that works is the stale-entry
+  trap). The "untracked gap" statement in the outstanding-items answer was an
+  inference from file size, made without the one grep that would have
+  settled it — same failure shape as [[verify-backlog-before-building]].
+- **qsoservice Tier 1 (Q1–Q3) CLOSED**, spec
+  `internal/qsoservice/logginggaps_test.go` with each finding's confusable
+  pair in the header: Q1 — `Restore` logs per-call Debug with distinguishable
+  `outcome` (real recovery vs idempotent re-run was identical silence) + a
+  durable per-run Info summary in `cmd/smd/restore.go` (that one main-package
+  line is the single untested piece, mirroring the adjacent stdout prints);
+  Q2 — the enqueue outcome line fires on EVERY return path incl. the
+  zero-enqueue early return (all-refused ClubLog-compliance vs never-invoked
+  were the same silence), carrying `requested` + all five counts, lengths
+  only; delete-repair path got the sibling + its missing `not_found`;
+  Q3 — a refused duplicate logs at Info naming the submission and the
+  colliding row, one helper on both the pre-check and unique-index race
+  paths. Gaps doc annotated ✅; the package's remaining tail is Q4–Q10
+  (Tier 2/3), and the audit's remaining Tier 1 anywhere is api A2/A3.
 
 ### 2026-08-07 (evening) — pasted external review: three real FT8 TX-path defects
 
