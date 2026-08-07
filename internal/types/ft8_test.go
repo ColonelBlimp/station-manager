@@ -255,3 +255,38 @@ func TestResolveFt8Meter(t *testing.T) {
 		})
 	}
 }
+
+// The amber floor (ft8.meter.alc_amber) — where green ends and amber begins
+// (operator-ratified 2026-08-07: green is the HEALTHY band, not "ALC at
+// zero"; the first live FT8 TX data measured healthy drive at ALC 15–18 with
+// PO flat, so a zero-only green could never show during a correct
+// transmission and amber nagged toward an action that would cost output).
+// Default 30 covers every healthy datum measured (FT8 15–18, low-power slots
+// 7–12, voice 26). Same 1–255 clamp as alc_red, plus one cross-rule: an
+// amber floor ABOVE the red line is unreachable (red is checked first), so it
+// clamps down to alc_red — which degrades honestly to the binary green/red
+// grammar rather than leaving a phantom band.
+func TestResolveFt8Meter_AmberFloor(t *testing.T) {
+	iv := func(n int) *int { return &n }
+	cases := []struct {
+		name string
+		in   *Ft8MeterConfig
+		want int
+	}{
+		{"nil block → ratified default", nil, DefaultFt8AlcAmber},
+		{"empty block → ratified default", &Ft8MeterConfig{}, DefaultFt8AlcAmber},
+		{"explicit value honoured", &Ft8MeterConfig{AlcAmber: iv(20)}, 20},
+		{"zero clamps to 1", &Ft8MeterConfig{AlcAmber: iv(0)}, 1},
+		{"amber above red clamps to red — binary grammar, no phantom band",
+			&Ft8MeterConfig{AlcAmber: iv(100), AlcRed: iv(50)}, 50},
+		{"amber above the DEFAULT red clamps too",
+			&Ft8MeterConfig{AlcAmber: iv(999)}, DefaultFt8AlcRed},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ResolveFt8Meter(c.in); got.AlcAmber != c.want {
+				t.Fatalf("ResolveFt8Meter(%+v).AlcAmber = %d, want %d", c.in, got.AlcAmber, c.want)
+			}
+		})
+	}
+}

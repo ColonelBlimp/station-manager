@@ -8,10 +8,11 @@
         answer of this page-load (an instrument that cannot read must not
         paint a value).
 
-        States (logic pinned in txDrive.svelte.test.ts): good (ALC 0, drive
-        right) / warn (deflecting) / red (≥ ft8.meter.alc_red: overdrive) /
-        stale (answers stopped: NO DATA, deliberately distinct from a clean
-        zero). Card structure is FIXED in every state (the audio card's V6
+        States (logic pinned in txDrive.svelte.test.ts): good (< alc_amber:
+        the healthy band, ratified 2026-08-07) / warn (amber ≤ value < red:
+        genuinely elevated) / red (≥ ft8.meter.alc_red: overdrive) / stale
+        (answers stopped: NO DATA, deliberately distinct from a healthy
+        reading). Card structure is FIXED in every state (the audio card's V6
         lesson: layouts must not swap) — bar track + two h-4 lines always
         render, only content varies.
     */
@@ -43,8 +44,10 @@
     };
 
     const labelByState: Record<Exclude<TxDriveStatus, 'hidden'>, string> = {
-        good: 'drive right (ALC at zero)',
-        warn: 'ALC deflecting',
+        // Green is the HEALTHY band, not "ALC at zero" (ratified 2026-08-07:
+        // healthy FT8 drive measures ALC 15–18 here, never zero while keyed).
+        good: 'drive right',
+        warn: 'ALC elevated — approaching the red line',
         red: 'overdrive — reduce the audio level',
         stale: 'no poll answers',
     };

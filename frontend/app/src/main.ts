@@ -251,6 +251,7 @@ const ctx: StationContext = {
     ft8Mode: '',
     ft8AudioLowDbfs: -60,
     ft8AudioHighDbfs: -10,
+    ft8AlcAmber: 30,
     ft8AlcRed: 50,
     ft8MeterPollIntervalMs: 250,
     mapBandColors: {},
@@ -326,7 +327,11 @@ function applyStationContext(c: StationContext): void {
     setFt8AudioWindow(c.ft8AudioLowDbfs, c.ft8AudioHighDbfs);
     // TX-drive (ALC) chip: red threshold (provisional until calibrated) + the
     // meter-poll cadence its staleness window derives from (ADR 0064).
-    setTxDriveConfig(c.ft8AlcRed, c.ft8MeterPollIntervalMs);
+    setTxDriveConfig({
+        red: c.ft8AlcRed,
+        amber: c.ft8AlcAmber,
+        intervalMs: c.ft8MeterPollIntervalMs,
+    });
     // Whether a Phone/CW ↔ FT8 switch returns a CAT-live rig to that mode's last
     // frequency and mode. Opt-out only: the default is ON.
     setRestoreOnModeSwitch(c.restoreRigOnModeSwitch);

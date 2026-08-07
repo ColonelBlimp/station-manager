@@ -364,6 +364,19 @@ against the operator's PCM2903C. The daemon publishes raw measurements
 classifies. Clipping is pinned SPA-side at a fixed near-0 dBFS peak check, not
 configured here.
 
+**`ft8.meter` (`Ft8MeterConfig`, both fields `*int`, resolver
+`types.ResolveFt8Meter`, added 2026-08-07):** the TX-drive (ALC) readout's
+colour bands on the rig's raw 0–255 scale (ADR 0064). `alc_amber` (default 30,
+**operator-RATIFIED 2026-08-07** — green is the HEALTHY band: live FT8 TX
+measured ALC 15–18 with PO flat, never zero while keyed, so a zero-only green
+could never show during a correct transmission) is where green ends and amber
+("genuinely elevated") begins; `alc_red` (default 50, **PROVISIONAL** until a
+deliberate-overdrive datum exists) is where red (overdrive) begins. Both clamp
+to 1–255; an amber floor above the resolved red clamps DOWN to red (an
+unreachable band degrades honestly to binary green/red). Served RESOLVED on GET
+as `ft8_meter`; read-only over `/v1/config` (calibration is a config.json edit +
+restart, like `ft8.audio`).
+
 ### (d) safety-ceiling — const is a non-overridable MAX, not a default ⚠️
 
 These must survive any redesign as ceilings; flattening them into ordinary defaults

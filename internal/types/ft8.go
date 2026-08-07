@@ -494,16 +494,28 @@ type Ft8OccupancyConfig struct {
 }
 
 // Ft8MeterConfig is the stored (sparse) form of the TX-drive display
-// threshold (ADR 0064): the raw ALC value (rig 0-255 scale) at which the
-// SPA's readout turns red. Unset takes the default.
+// thresholds (ADR 0064), raw rig 0-255 ALC scale: alc_amber is where green
+// (healthy drive) ends and amber begins; alc_red is where amber ends and red
+// (overdrive) begins. Unset fields take the defaults.
 type Ft8MeterConfig struct {
-	AlcRed *int `json:"alc_red,omitempty"`
+	AlcAmber *int `json:"alc_amber,omitempty"`
+	AlcRed   *int `json:"alc_red,omitempty"`
 }
 
 // Ft8MeterLevels is the resolved form served on /v1/config.
 type Ft8MeterLevels struct {
-	AlcRed int `json:"alc_red"`
+	AlcAmber int `json:"alc_amber"`
+	AlcRed   int `json:"alc_red"`
 }
+
+// DefaultFt8AlcAmber is the amber floor — operator-RATIFIED 2026-08-07 from
+// the first live FT8 TX data: healthy drive measured ALC 15–18 (min 15, max
+// 18, every slot; low-power slots 7–12; voice datum 26) with PO flat at
+// target, so green must cover the healthy band — a zero-only green could
+// never show during a correct transmission, and amber nagged toward reducing
+// audio that was already right. 30 clears every healthy datum with headroom;
+// amber then means genuinely elevated (30–49 at the default red line).
+const DefaultFt8AlcAmber = 30
 
 // DefaultFt8AlcRed is PROVISIONAL — not operator-ratified. The only live
 // datum is ALC 026 under normal VOICE drive (2026-08-06 catcli experiment);
@@ -512,18 +524,33 @@ type Ft8MeterLevels struct {
 // what produces the real number. Adjust via ft8.meter.alc_red.
 const DefaultFt8AlcRed = 50
 
-// ResolveFt8Meter applies the default to a sparse (or absent) meter block,
-// clamping to the rig's usable 1-255 scale (0 would flag every reading).
+// ResolveFt8Meter applies the defaults to a sparse (or absent) meter block,
+// clamping both thresholds to the rig's usable 1-255 scale (0 would flag
+// every reading). One cross-rule: an amber floor ABOVE the red line is
+// unreachable (the red check wins), so it clamps down to the resolved red —
+// which degrades honestly to a binary green/red grammar instead of leaving a
+// phantom band in the config.
 func ResolveFt8Meter(c *Ft8MeterConfig) Ft8MeterLevels {
-	r := Ft8MeterLevels{AlcRed: DefaultFt8AlcRed}
+	r := Ft8MeterLevels{AlcAmber: DefaultFt8AlcAmber, AlcRed: DefaultFt8AlcRed}
 	if c != nil && c.AlcRed != nil {
 		r.AlcRed = *c.AlcRed
 	}
-	if r.AlcRed < 1 {
-		r.AlcRed = 1
+	if c != nil && c.AlcAmber != nil {
+		r.AlcAmber = *c.AlcAmber
 	}
-	if r.AlcRed > 255 {
-		r.AlcRed = 255
+	clamp := func(v int) int {
+		if v < 1 {
+			return 1
+		}
+		if v > 255 {
+			return 255
+		}
+		return v
+	}
+	r.AlcRed = clamp(r.AlcRed)
+	r.AlcAmber = clamp(r.AlcAmber)
+	if r.AlcAmber > r.AlcRed {
+		r.AlcAmber = r.AlcRed
 	}
 	return r
 }

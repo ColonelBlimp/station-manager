@@ -63,7 +63,7 @@ describe('TxDriveChip', () => {
     // The threshold marker sits at the configured red value on the 0-255
     // scale, so the operator can SEE how close the fill is to red.
     it('card keeps its structure across states and marks the red threshold', () => {
-        setTxDriveConfig(51, 250); // 51/255 = 20% — a round marker position
+        setTxDriveConfig({ red: 51, amber: 30, intervalMs: 250 }); // 51/255 = 20% — a round marker position
         render(TxDriveChip);
         onRigMeters({ meter: 'ALC', value: 26 }, Date.now());
         flushSync();
@@ -90,7 +90,7 @@ describe('TxDriveChip', () => {
     });
 
     it('the marker stays visible at the maximum valid threshold (255)', () => {
-        setTxDriveConfig(255, 250);
+        setTxDriveConfig({ red: 255, amber: 30, intervalMs: 250 });
         render(TxDriveChip);
         onRigMeters({ meter: 'ALC', value: 10 }, Date.now());
         flushSync();

@@ -144,6 +144,16 @@ timeout bounds that wait even when the TX→RX tail eats the answer.
   open — the question is only the no-FT8-view case).
 - The SPA-side **red threshold** for ALC display (0–255 scale; config-served
   like `ft8.audio`; first live datum: ALC 026 at normal voice drive).
+  **PARTLY RATIFIED 2026-08-07, first on-air FT8 session:** healthy FT8 drive
+  measured ALC 15–18 (min 15, every slot; low-power slots 7–12) with PO flat
+  at target — and never zero while keyed, which broke the chip's original
+  zero-only green: healthy transmissions always rendered amber, a colour that
+  reads "act to make this green" and pointed at reducing audio that was
+  already right (operator's own observation, on air). Ratified: **green is
+  the healthy band**, ceiling `ft8.meter.alc_amber` = **30** (clears every
+  healthy datum with headroom); amber = 30..red−1, genuinely elevated.
+  `alc_red` = 50 stays **PROVISIONAL** — no overdrive datum exists yet; the
+  §4 iii deliberate-overdrive calibration is what produces it.
 
 ## Alternatives considered
 

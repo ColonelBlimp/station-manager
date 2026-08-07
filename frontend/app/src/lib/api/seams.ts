@@ -172,9 +172,12 @@ export interface StationContext {
      *  `ft8_audio`): dBFS bounds the level meter classifies against. */
     ft8AudioLowDbfs: number;
     ft8AudioHighDbfs: number;
-    /** TX-drive display red threshold (config `ft8.meter.alc_red`, served
-     *  resolved as `ft8_meter`): raw rig ALC scale (1-255). PROVISIONAL
-     *  default until calibrated on hardware (ADR 0064). */
+    /** TX-drive display thresholds (config `ft8.meter`, served resolved as
+     *  `ft8_meter`), raw rig ALC scale (1-255): amber = where the healthy
+     *  green band ends (RATIFIED 30, 2026-08-07 — measured healthy FT8 drive
+     *  is ALC 15–18); red = overdrive (PROVISIONAL until a
+     *  deliberate-overdrive datum exists, ADR 0064). */
+    ft8AlcAmber: number;
     ft8AlcRed: number;
     /** The daemon's FT8 meter-poll cadence (`bridge_timeouts.
      *  ft8_meter_poll_interval_ms`, served resolved) — the TX-drive chip
@@ -216,6 +219,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8Mode: '',
         ft8AudioLowDbfs: -60,
         ft8AudioHighDbfs: -10,
+        ft8AlcAmber: 30,
         ft8AlcRed: 50,
         ft8MeterPollIntervalMs: 250,
         mapBandColors: {},
@@ -267,6 +271,7 @@ export async function fetchStationContext(): Promise<StationContext> {
         // Served resolved; the fallbacks only cover an older daemon.
         ft8AudioLowDbfs: typeof fa.low_dbfs === 'number' ? fa.low_dbfs : -60,
         ft8AudioHighDbfs: typeof fa.high_dbfs === 'number' ? fa.high_dbfs : -10,
+        ft8AlcAmber: numOr(fm.alc_amber, 30),
         ft8AlcRed: numOr(fm.alc_red, 50),
         ft8MeterPollIntervalMs: numOr(bt.ft8_meter_poll_interval_ms, 250),
         mapBandColors: toStringMap(isPlainObject(body.map) ? body.map.band_colors : undefined),
