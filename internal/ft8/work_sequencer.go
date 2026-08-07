@@ -138,6 +138,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
 	if dt < 0 || dt > txLateWindowSec {
+		s.logTxDeferral("work", dt)
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -146,6 +147,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
 	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		s.logSameSlotDedup("work", curStart.Add(SlotDuration))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -385,6 +387,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
 	if dt < 0 || dt > txLateWindowSec {
+		s.logTxDeferral("work_fd", dt)
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -393,6 +396,7 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
 	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		s.logSameSlotDedup("work_fd", curStart.Add(SlotDuration))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -503,7 +507,17 @@ func (s *Sequencer) coolOffStalledCallerLocked(call string, now time.Time) {
 	if s.stallCooloff == nil {
 		s.stallCooloff = make(map[string]time.Time, 2)
 	}
-	s.stallCooloff[call] = now.Add(stallCooloffSlots * SlotDuration)
+	until := now.Add(stallCooloffSlots * SlotDuration)
+	s.stallCooloff[call] = until
+	// Ship-gate finding 5 (ft8-logging-gaps): the STALL was logged but the
+	// exclusion it causes was not — "SM ignored a caller it can hear" and
+	// "the band went quiet" looked identical, and stallCooloffSlots (the
+	// operator's number) could not be judged without both ends of the
+	// interval on record. Tests: seqsilence_test.go.
+	s.log.InfoWith().Str("their_call", call).
+		Str("until", until.UTC().Format(time.RFC3339)).
+		Int("slots", stallCooloffSlots).
+		Msg("ft8 seq: stalled caller cooled off — excluded from selection")
 }
 
 // inStallCooloffLocked reports whether a station is still inside its cool-off,

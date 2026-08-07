@@ -132,6 +132,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	}
 	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
 	if dt < 0 || dt > txLateWindowSec {
+		s.logTxDeferral("type4_answer", dt)
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -140,6 +141,7 @@ func (s *Sequencer) onSlotAnsweringT4(ref SlotRef, msgs []goft8.DecodedMessage, 
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
 	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		s.logSameSlotDedup("type4_answer", curStart.Add(SlotDuration))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -330,7 +332,15 @@ func (s *Sequencer) fireWorkT4RungLocked(msg, rung string, txSlot time.Time, dt 
 	// Too early/late in the slot, or this exact slot already fired (an immediate
 	// fire vs its own pending OnSlot — review 2026-07-20 #2): leave it for the next
 	// qualifying slot; the session stays active.
-	if dt < 0 || dt > txLateWindowSec || s.lastTxSlot.Equal(txSlot) {
+	if dt < 0 || dt > txLateWindowSec {
+		s.logTxDeferral("type4_work", dt)
+		st := s.statusLocked()
+		s.publish(st)
+		s.mu.Unlock()
+		return
+	}
+	if s.lastTxSlot.Equal(txSlot) {
+		s.logSameSlotDedup("type4_work", txSlot)
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()

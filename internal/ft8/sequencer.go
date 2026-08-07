@@ -38,6 +38,39 @@ const defaultSeqMaxRepeats = types.DefaultFt8MaxRepeats
 // itself lives in the TxController. Package var so tests can dial it.
 var txLateWindowSec = 4.5
 
+// logTxDeferral records why a qualifying slot passed without RF (ship-gate
+// finding 11, ft8-logging-gaps): every sequencer family shared one silent
+// `dt < 0 || dt > txLateWindowSec` branch, which hid two DIFFERENT
+// situations. A decode that landed too late is EXPECTED — ADR 0032's
+// truncation budget exists for it — and records at Info so repeated lateness
+// no longer reads as a quiet band, a waiting partner, or a wedged sequencer.
+// A NEGATIVE offset means "our slot has not started yet": the scheduler
+// delivers slots after their window closes, so on a healthy clock that
+// cannot happen — it is a clock or slot-ref fault and warns, distinctly.
+// Factored with a per-site path tag because fifteen hand-copied lines across
+// four files is how levels drift apart. Tests: seqsilence_test.go.
+func (s *Sequencer) logTxDeferral(path string, dt float64) {
+	if dt < 0 {
+		s.log.WarnWith().Str("path", path).Float64("dt_sec", dt).
+			Msg("ft8 seq: rung skipped — slot offset negative (clock or slot-ref fault?)")
+		return
+	}
+	s.log.InfoWith().Str("path", path).Float64("dt_sec", dt).
+		Float64("window_sec", txLateWindowSec).
+		Msg("ft8 seq: rung deferred — decode landed too late to transmit this slot")
+}
+
+// logSameSlotDedup is finding 11's third reason a slot passes without a NEW
+// transmission: a rung already went out in this physical slot (an immediate
+// fireOpening racing its own pending OnSlot — review 2026-07-20 #2). RF DID
+// leave the slot, so it is expected mechanics at Debug — but distinguishable
+// from both deferral records, or three reasons collapse back into one
+// silence.
+func (s *Sequencer) logSameSlotDedup(path string, txSlot time.Time) {
+	s.log.DebugWith().Str("path", path).Str("slot", txSlot.UTC().Format(time.RFC3339)).
+		Msg("ft8 seq: rung dedup — already transmitted in this slot")
+}
+
 // Sequencer sentinels (mapped to HTTP by the api layer).
 var (
 	// ErrQsoInProgress: a StartQso/StartCallCq while a session is already active.
@@ -1187,6 +1220,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
 	if dt < 0 || dt > txLateWindowSec {
+		s.logTxDeferral("answer", dt)
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -1198,6 +1232,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	// dedup is per physical slot, not per session — two transmissions in one
 	// slot are impossible regardless of session identity.
 	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		s.logSameSlotDedup("answer", curStart.Add(SlotDuration))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -1341,6 +1376,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 	}
 	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
 	if dt < 0 || dt > txLateWindowSec {
+		s.logTxDeferral("answer_fd", dt)
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -1349,6 +1385,7 @@ func (s *Sequencer) onSlotAnsweringFd(ref SlotRef, msgs []goft8.DecodedMessage, 
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
 	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		s.logSameSlotDedup("answer_fd", curStart.Add(SlotDuration))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -1578,6 +1615,7 @@ func (s *Sequencer) fireOpening(now time.Time) {
 	}
 	dt := now.Sub(curStart).Seconds()
 	if dt < 0 || dt > txLateWindowSec {
+		s.logTxDeferral("fire_opening", dt)
 		s.mu.Unlock()
 		return
 	}

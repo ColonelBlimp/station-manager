@@ -212,6 +212,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	}
 	dt := now.Sub(curStart.Add(SlotDuration)).Seconds()
 	if dt < 0 || dt > txLateWindowSec {
+		s.logTxDeferral("call_cq", dt)
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -220,6 +221,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	// Slot already fired (immediate fireOpening vs this slot's pending OnSlot —
 	// review 2026-07-20 #2); see onSlotAnswering.
 	if s.lastTxSlot.Equal(curStart.Add(SlotDuration)) {
+		s.logSameSlotDedup("call_cq", curStart.Add(SlotDuration))
 		st := s.statusLocked()
 		s.publish(st)
 		s.mu.Unlock()
@@ -408,9 +410,18 @@ func (s *Sequencer) pickAnswererLocked(msgs []goft8.DecodedMessage, now time.Tim
 		}
 		c := NewCallerExchange(s.ourCall, pm.from, pm.grid, m.SNR)
 		if slices.Contains(s.stalledCalls, c.TheirCall) {
+			// Finding 5: each exclusion skip names the call and WHICH
+			// mechanism held it out — the unencodable skip below already
+			// agreed "why we did not answer" deserves a line.
+			s.log.InfoWith().Str("answerer", c.TheirCall).
+				Str("reason", "stalled_this_round").
+				Msg("ft8 seq: skipping answerer — excluded")
 			continue // already tried-and-stalled this CQ round — don't re-lock onto it
 		}
 		if s.inStallCooloffLocked(c.TheirCall, now) {
+			s.log.InfoWith().Str("answerer", c.TheirCall).
+				Str("reason", "stall_cooloff").
+				Msg("ft8 seq: skipping answerer — excluded")
 			continue // stalled a work-a-caller ladder moments ago — let them settle
 		}
 		reply, ok := c.TxMessage()

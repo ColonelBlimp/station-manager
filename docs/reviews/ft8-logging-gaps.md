@@ -213,6 +213,15 @@ suppresses occupancy the same way, also silently.
 
 ### 5. Stalled-caller cool-off is unlogged, both when set and when it skips
 
+> ✅ **FIXED 2026-08-07.** The SET logs at Info with `their_call` + `until`
+> (both ends of the operator's stallCooloffSlots interval on record) +
+> `slots`; each pick SKIP logs at Info with `answerer` + `reason`
+> (`stall_cooloff` / `stalled_this_round` — the two mechanisms stay
+> distinguishable), joining the unencodable-reply skip this finding cited as
+> the asymmetry. Tests: `seqsilence_test.go` C1–C3, confusable-state form —
+> one cooled and one fresh answerer in the same slot, the fresh one worked
+> with no line.
+
 - set: `work_sequencer.go:501` `coolOffStalledCallerLocked`
 - skip: `work_sequencer.go:511` `inStallCooloffLocked`, consulted at
   `caller_sequencer.go:398`
@@ -365,6 +374,17 @@ is visible.
 
 ### 11. Late-slot transmit deferrals are silent — Tier 2
 
+> ✅ **FIXED 2026-08-07.** Two factored Sequencer helpers with a per-site
+> `path` tag (fifteen hand-copied lines is how levels drift), wired at all 8
+> late-window sites + all 7 same-slot dedup sites; the type4-work COMBINED
+> condition was split so its two reasons stop sharing one branch. The three
+> reasons record distinguishably: too-late → Info (`dt_sec` + `window_sec`),
+> dt<0 → Warn naming the clock/slot-ref fault, dedup → Debug (RF did leave
+> the slot). Tests: `seqsilence_test.go` L1–L3, confusable-state form.
+> NOT done here (out of the logging gate's scope, recorded so it isn't
+> lost): fireOpening still publishes no SSE frame on a deferral — the
+> operator-facing half of "the quietest of the eight" needs a wire change.
+
 **8 sites**, not one — every sequencer family plus the immediate opening:
 
 | Site | Path |
@@ -509,14 +529,15 @@ them. Each was checked against the code on 2026-08-01.
 
 ---
 
-## Progress (2026-08-06)
+## Progress (2026-08-07)
 
-**6 of 14 closed:** 1 (2026-08-01), then 6, 2, 3, 14 (2026-08-04), then 4
-(2026-08-06). **8 remain:** 5, 11 (the rest of the "a slot passed and the log
-cannot say why" cluster — do together, NEXT), 7, 8 (data integrity, small),
-12, 13 (one file — NB the decode log became SERVICE-lifetime on 2026-08-06,
-which makes 12 MORE pressing: line-loss reporting now defers to daemon
-shutdown, not view close), 9, 10 (whenever adjacent).
+**8 of 14 closed:** 1 (2026-08-01), then 6, 2, 3, 14 (2026-08-04), then 4
+(2026-08-06), then 5, 11 (2026-08-07). **6 remain:** 7, 8 (data integrity,
+small — NEXT), 12, 13 (one file — NB the decode log became SERVICE-lifetime
+on 2026-08-06, which makes 12 MORE pressing: line-loss reporting now defers
+to daemon shutdown, not view close), 9, 10 (whenever adjacent). Carried
+forward from 11: fireOpening's missing SSE frame on deferral is a WIRE
+change outside this gate.
 
 ## Suggested order
 
