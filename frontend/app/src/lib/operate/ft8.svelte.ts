@@ -794,7 +794,17 @@ export const ft8Link: Ft8EventHandlers = {
             // drop a notice held from a disarm frame that PRECEDED (replay
             // order) — this frame is the explanation either way.
             suppressDisarmNoticeFor = endReason;
-            heldDisarmNotice = '';
+            if (heldDisarmNotice === endReason) {
+                heldDisarmNotice = '';
+            } else if (heldDisarmNotice !== '') {
+                // A different cause than this session end: the tx and qso replay
+                // caches are independent, so this is a SECOND event from the same
+                // outage (re-arm, then another safety disarm) — say both, in
+                // event order (the held disarm postdates the session end).
+                const cause = heldDisarmNotice;
+                heldDisarmNotice = '';
+                txDisarmedSink?.(cause);
+            }
         } else if (heldDisarmNotice !== '') {
             // The frame the hold was waiting on explains nothing (no reason —
             // an abandon or a completed contact), so the disarm speaks for

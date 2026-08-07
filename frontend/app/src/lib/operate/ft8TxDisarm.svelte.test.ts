@@ -141,4 +141,28 @@ describe('TX disarm cause visibility', () => {
         ft8Link.onQso({ active: false });
         expect(disarms).toEqual(['dial_moved']);
     });
+
+    // The tx and qso replay caches are INDEPENDENT, so one outage can contain
+    // two separate events: the session ended for one reason, and a later
+    // arm-only disarm for another (re-arm, then cat drop — the newer tx frame
+    // replaces the cached one). A held notice whose cause does not match the
+    // terminal frame's reason is a DIFFERENT event, not the same-teardown
+    // duplicate: both must be said (codex P2 on 3f4afcf3). Same-cause matching
+    // stays the dedup key, mirroring the live-order suppression.
+    it('S8: a held notice with a different cause than the session end announces both', () => {
+        const disarms: string[] = [];
+        const ends: string[] = [];
+        setFt8TxDisarmedSink((cause) => disarms.push(cause));
+        setFt8SessionEndedSink((reason) => ends.push(reason));
+
+        ft8Link.onTx({ armed: true });
+        ft8Link.onQso({ active: true, role: 'caller', their_call: 'K1ABC' });
+        // Replay: the LATEST tx frame is a cat-lost disarm from after a re-arm;
+        // the cached terminal frame is the earlier dial-moved session end.
+        ft8Link.onTx({ armed: false, disarm_cause: 'cat_lost' });
+        ft8Link.onQso({ active: false, end_reason: 'dial_moved' });
+
+        expect(ends).toEqual(['dial_moved']);
+        expect(disarms).toEqual(['cat_lost']);
+    });
 });
