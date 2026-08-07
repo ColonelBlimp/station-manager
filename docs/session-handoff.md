@@ -48,44 +48,91 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **END OF DAY 2026-08-07: tree CLEAN at `d217ed73`, every review triaged +
-  deleted** (9 review rounds today — 8 codex + 1 pasted external — 6 real
-  findings, all fixed same-day RED-first). **DEPLOY LEDGER CLEAR:**
-  redeployed at 16:31 on `1159-g90bb2d4d`, postdating the whole tree — the
-  amber chip, TX-path fixes and logging lines are all LIVE (three deploys
-  today: 13:55, ~14:5x, 16:31; on air after the first two). **SM Cloud
-  verified IN SYNC** at the 15:57 reconcile — local 7127 = cloud 7127, zero
-  repairs, every push/stamp_sync success (31 rows added today, 7096→7127).
-- **First live ADR 0064 data:** healthy FT8 drive = **ALC 15–18 every slot,
-  PO flat** — broke the chip's zero-only green; **colour bands ratified +
-  built** same afternoon (`alc_amber` 30 RATIFIED; `alc_red` 50 still
-  PROVISIONAL, needs the §4 iii deliberate-overdrive datum).
-- **ADR 0065 is deployed but UNEXERCISED on air** (afternoon ran
-  `auto_first`, no arm gesture). Open checks: pill on a work-caller arm · FD
-  click leaves toggle lit, no toast · a pick run
-  (`ft8.tx.caller_answer_mode: "operator_pick"` in config.json — stop smd,
-  edit, start).
-- **Evening: pasted external review, 3 REAL TX-path defects fixed** (detail
-  in Current state): PTT panic guard now registers the line after KeyTx ·
-  decode reports stamp their CAPTURE dial (`ft8-decode` `dial_mhz`; PSK sink
-  + SPA attribute from it, never live state) · an arm re-checks the dial at
-  commit (stale pre-lock pin).
-- **Late evening — the logging round** (detail in Current state): enrichment
-  ctx-cancel warns → Debug (one rule in the shared helper, all ten sites) ·
-  **qsoservice Tier 1 CLOSED** (Q1 restore outcomes, Q2 enqueue all-paths
-  all-five-counts, Q3 duplicate-refusal record — spec `logginggaps_test.go`) ·
-  log rotation VERIFIED ALREADY BUILT (lumberjack, 100 MB/5/30 d/compress in
-  config.json — the "untracked gap" claim was wrong; nothing filed). Logging
-  backlog's remaining Tier 1: api A2/A3 only.
-- **Earlier today** (detail in Current state): ADR 0065 end to end (per-click
-  arming + operator_pick, 10 ratified forks) · ADR 0064 full build · inbox
-  fully triaged · toast split · session search · morning-log diagnosis.
-- **NEXT:** on-air: §4 iii deliberate overdrive → ratify `alc_red` → flip
-  0064 Accepted · the 0065 sanity checks above · api A2/A3 (last Tier-1
-  logging) · findings 9/10 · paste-list port · ctrl+click-on-CQ gesture
-  (0065, undecided) · Tune-coverage question.
+- **LATE NIGHT 2026-08-07: tree CLEAN at `273d749e`**, every review triaged
+  + deleted (13 rounds today, 12 real findings, all fixed same-day
+  RED-first). **DEPLOY LEDGER NO LONGER CLEAR:** the daemon still runs the
+  16:31 build `1159-g90bb2d4d`; the four later commits (logging A2/A3 + the
+  five-finding review round + the rune fix) are NOT live. Nothing
+  rig-critical — redeploy at next start. SM Cloud verified IN SYNC at 15:57
+  (7127 = 7127).
+- **Logging backlog: ZERO Tier 1 remaining.** api A2/A3 closed late night:
+  reconcile `RunOnce` logs run-complete with `trigger` (manual/periodic) ·
+  backfill lines carry `origin` (found + fixed a Q2 mislabel — reconcile
+  heals logged as "manual") · CSRF refusals log the parsed host/origin,
+  credential-safe (`csrf_log_test.go` CL1–CL6).
+- **FIVE real pre-existing qsoservice defects** (codex on `8d9ab622`), all
+  fixed — spec `review20260807_test.go`: import `--forward clublog` now
+  REFUSED (`backfill_unsupported`; was the prohibited catch-up batch) ·
+  PATCH revision CAS → **409 `edit_conflict`, a NEW API code** (SPA shows a
+  generic error; richer UI handling is the operator's call) · RST/country
+  length validation, RUNE-counted to match SQLite `length()` (follow-up P2)
+  · time coherence now covers non-decreasing dates + both-seconds pairs ·
+  restore probe faults propagate; check-to-insert race → skipped_existing.
+- **Dogfood inbox: 2 new bugs captured, untriaged** — FT8→phone/CW leaves
+  mode/freq unreset · VFO-B select snaps to VFO-A's frequency.
+- **Still open from the afternoon:** `alc_red` 50 PROVISIONAL (needs the
+  §4 iii deliberate-overdrive datum → flip ADR 0064 Accepted) · ADR 0065
+  deployed but UNEXERCISED on air (pill on a work-caller arm · FD click
+  leaves toggle lit, no toast · a pick run — `ft8.tx.caller_answer_mode:
+  "operator_pick"` in config.json; stop smd, edit, start).
+- **NEXT:** redeploy → on-air §4 iii overdrive + the 0065 sanity checks ·
+  triage the 2 inbox bugs · findings 9/10 · paste-list port ·
+  ctrl+click-on-CQ gesture (0065, undecided) · Tune-coverage question.
 
 ## Current state (as of 2026-08-07)
+
+### 2026-08-07 (late night) — api A2/A3 closed; the five-finding review round
+
+**Logging A2/A3 (commit `8d9ab622`).** A2 closed at the SERVICE layer, not the
+handler: `Reconciler.RunOnce(ctx, trigger)` writes its own run-complete record
+(`TriggerManual` from the on-demand wiring, `TriggerPeriodic` from the loop),
+so no caller can complete a run without leaving one — the on-demand summary
+used to exist only in the HTTP response. On the way in: `EnqueueUploads` is
+ALSO the reconciler's heal path, and Q2's day-old line hardcoded "manual
+upload backfill result" — reconcile heals logged as operator presses. Both
+backfill lines now carry `origin` and the messages are attribution-neutral.
+The handler-layer duplicate A2 prescribed was deliberately NOT built
+(rationale in the A2 banner). A3: both CSRF refusal paths emit a dedicated
+Warn with PARSED fields only — a `url.Parse` round-trip sheds userinfo, >260
+octets reports unparseable (RFC 1035's 253 + ":65535" — the one uninvited
+judgement call, flagged). Spec `internal/api/csrf_log_test.go` CL1–CL6,
+including credential-never-in-the-log.
+
+**The codex review of that commit roamed the package and found FIVE real
+pre-existing defects — all verified, fixed RED-first, combined reversion
+proof; spec `internal/qsoservice/review20260807_test.go` (15 rules), commit
+`bb04a661` + rune follow-up `273d749e`:**
+
+1. **Import forwarding bypassed NoBulkBackfill** — `--forward clublog` would
+   have queued a whole log to realtime.php. Both import entries now refuse UP
+   FRONT (`backfill_unsupported`); live clublog enqueue pinned untouched.
+2. **PATCH lost updates** — revision CAS (`updateActiveQsoAtRevision`:
+   predicate id + active + revision; zero rows with the row present →
+   `ErrStaleRevision`) → **409 `edit_conflict`**, a NEW code on
+   `PATCH /v1/qso` (api-endpoints.md updated). Closes the two-request window;
+   a stale FORM is out of scope (revision is `json:"-"`, never
+   client-supplied). The refused edit writes NO history row, so the audit
+   chain stays linear.
+3. **RST/COUNTRY lengths unvalidated** — an overlong value was a DB-CHECK 500
+   and, on batch import, a fallback ABORT sinking every later record. Now
+   `invalid_field_value`, caps mirroring migrations 0002/0006 — counted in
+   RUNES (follow-up P2): SQLite `length()` counts characters; LV5 measures
+   this through the real DB with a 50×2-byte country.
+4. **Time coherence one-directional** — non-decreasing times now require
+   `QSO_DATE_OFF == QSO_DATE` (any date, even years off, was accepted);
+   both-HHMMSS pairs compare at seconds (120059→120000 stored a negative
+   interval); mixed HHMM/HHMMSS same-minute stays ACCEPTED (HHMM names the
+   minute — the preserveSeconds reading). Shared `validateTimeCoherence`.
+5. **Restore probe faults read as absence** — now propagate ("uuid existence
+   check" attribution); a uuid check-to-insert race classifies
+   `skipped_existing` via refetch (`classifyRestoreInsertErr` — tested at the
+   classifier; the branch is concurrent-only).
+
+Two origin-attribution fixtures retargeted clublog→qrz (their old fixture is
+the combination fix 1 now forbids; their rule — origin=import on both paths —
+is unchanged). Reviews: `bb04a661` = 1 real P2 (fixed), `273d749e` = clean.
+Also captured, untriaged: two dogfood-inbox bugs (FT8→phone/CW mode/freq not
+reset; VFO-B select snapping to VFO-A's frequency).
 
 ### 2026-08-07 (close of day) — redeployed; SM Cloud verified in sync
 
