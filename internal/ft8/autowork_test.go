@@ -678,3 +678,24 @@ func TestAutoWork_StopRunWhileIdlePublishesAndIsIdempotent(t *testing.T) {
 	r.mu.Unlock()
 	require.Equal(t, n, after, "stopping a stopped run publishes nothing")
 }
+
+// G8 — the FIRST published frame of an intent-carrying work-caller start already
+// carries the granted arm (codex P1 on 7de6708e: commitWorkCallerLocked publishes
+// as its last act, and arming AFTER it made the first frame report
+// auto_work_armed=false on a GRANTED arm — which the SPA's one-shot verdict logic
+// correctly reads as a refusal, toasting "disabled in settings" on a run that is
+// live). The frame is the observable; s.AutoWorkArmed() alone proved too little.
+func TestAutoWork_WorkCallerFirstFrameCarriesTheGrantedArm(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	s.SetAutoWorkCallers(true, "auto_first")
+	s.setPendingAutoWork(true)
+
+	require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+
+	st := r.lastStatus()
+	require.True(t, st.Active)
+	require.True(t, st.AutoWorkArmed,
+		"the start's own frame must carry the verdict — the SPA treats the first active frame as final")
+}

@@ -1131,3 +1131,30 @@ describe('Ft8BandActivity auto-work click grammar', () => {
         expect(got).toHaveLength(0);
     });
 });
+
+// AW5 — FD/type-4 exchanges never arm a run (ADR 0065 scope note), so a click on
+// them must not CARRY the intent, must not CONSUME the standing toggle, and must
+// not later toast a false "disabled in settings" refusal (codex P2 on 7de6708e:
+// the daemon ignores the field on those paths and publishes an unarmed frame,
+// which the one-shot verdict logic read as the gate refusing). The intent
+// survives for the next STANDARD contact — that is what "next contact" means.
+it('AW5: an FD CQ click carries no intent and leaves the standing toggle for the next standard contact', async () => {
+    setFt8OperatorCall('7Q5MLV');
+    const got: Ft8AnswerArgs[] = [];
+    armReady({ answerCq: (a) => (got.push(a), okResult()) });
+    ft8AutoWorkIntent.on = true;
+    render(Ft8BandActivity);
+    ft8Link.onDecode(
+        decode(freshSlot('even'), [{ text: 'CQ FD K1ABC FN42', freq_hz: 1200, snr: -12 }])
+    );
+    flushSync();
+    await fireEvent.click(screen.getByText('CQ FD K1ABC FN42'), {
+        ctrlKey: true,
+        shiftKey: true,
+    });
+    await flush();
+    expect(got).toHaveLength(1);
+    expect(got[0].fd).toBe(true);
+    expect(got[0].autoWork ?? false).toBe(false);
+    expect(ft8AutoWorkIntent.on).toBe(true);
+});

@@ -639,7 +639,10 @@ export function setFt8AutoWorkRefusedSink(fn: (() => void) | null): void {
 /** Start answering a CQ (standard or FD) from a clicked Band Activity decode. */
 export function answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult> {
     if (!txActions) return Promise.resolve(txUnavailable);
-    if (a.autoWork) {
+    // FD/type-4 never arm a run, so an intent that slips through on one must not
+    // establish a pending verdict — the daemon's unarmed frame would read as a
+    // false gate refusal (codex P2 on 7de6708e; call sites also exclude them).
+    if (a.autoWork && !a.fd && !a.type4) {
         pendingAutoWorkIntent = true;
         ft8AutoWorkIntent.on = false; // consumed — one-shot
     }

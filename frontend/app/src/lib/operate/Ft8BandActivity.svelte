@@ -478,18 +478,23 @@
             // (ADR 0048). theirSnr (our SNR of their CQ) is logged as RST_SENT for both
             // (neither exchanges a report). The three modes are mutually exclusive.
             const type4 = isCqType4(row.d.text);
+            const fd = isCqFd(row.d.text);
             r = await answerCq({
                 theirCall: cq.call,
                 theirGrid: type4 ? '' : cq.grid,
                 slotUtc: row.d.startUtc,
                 offsetHz: offset,
                 opFreqMHz: opMHz,
-                fd: isCqFd(row.d.text),
+                fd,
                 type4,
                 theirSnr: row.d.snr,
                 allowDuplicate,
                 // The gesture or the standing toggle — either arms (daemon-gated).
-                autoWork: armGesture || ft8AutoWorkIntent.on,
+                // STANDARD exchanges only: FD/type-4 never arm a run (ADR 0065 scope
+                // note), and carrying the intent there consumed the toggle and read
+                // the daemon's unarmed frame as a false settings-refusal (codex P2 on
+                // 7de6708e). The standing intent survives for the next standard click.
+                autoWork: (armGesture || ft8AutoWorkIntent.on) && !fd && !type4,
             });
         } else {
             // Work a caller: try the FD shape first (more specific), else standard.
