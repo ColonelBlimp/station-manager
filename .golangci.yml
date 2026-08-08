@@ -131,6 +131,20 @@ linters:
         text: onSlotCalling
         linters: [gocognit, gocyclo, maintidx]
 
+      # Their siblings, which crossed maintidx AFTER the 2026-07-31 baseline
+      # (both to MI 19 vs the 20 floor) by growing with ratified feature work,
+      # not decay: runPipeline gained the ADR 0064 meter-poll lifecycle wiring
+      # (d7c4dcdc + the 3b36ca6a watchdog amendment), onSlotWorking the ADR
+      # 0065 arming refinement (883663bb). Same class as the pair above —
+      # dispatch-shaped, comment-dense, TX-path, invariant-covered — and the
+      # same refactor-backlog standing: exempted 2026-08-08, not blessed.
+      - path: internal/bridge/pipeline\.go
+        text: runPipeline
+        linters: [maintidx]
+      - path: internal/ft8/work_sequencer\.go
+        text: onSlotWorking
+        linters: [maintidx]
+
       # Reflection-driven DI container — deeply nested tag-scanning walk.
       - path: internal/iocdi/internal\.go
         text: injectDependencies
