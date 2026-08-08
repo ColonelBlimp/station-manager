@@ -87,16 +87,20 @@ func TestConfig_Ft8Display_OmittedPutDoesNotClobber(t *testing.T) {
 	}
 }
 
-// GET resolves the caller-answer mode (default auto_first on a fresh config) so
-// the Settings-tab dropdown has a value to render without a prior save.
+// GET resolves the caller-answer mode — default operator_pick on a fresh
+// config (operator-ratified 2026-08-08: automation is an explicit opt-in; a
+// clean install must not auto-work anyone). Note the wire asymmetry this
+// creates, deliberately: GET can serve operator_pick while PUT refuses the
+// literal (the ADR 0065 config.json-only fork) — a UI rendering this field
+// shows the pick default read-only and offers only the two auto modes.
 func TestConfig_Ft8CallerAnswerMode_GetReturnsDefault(t *testing.T) {
 	srv := testServer(t)
 	resp := ft8GetConfig(t, srv)
 	if resp.Ft8CallerAnswerMode == nil {
 		t.Fatal("ft8_caller_answer_mode absent on GET; want resolved default")
 	}
-	if *resp.Ft8CallerAnswerMode != types.Ft8CallerAnswerAutoFirst {
-		t.Errorf("mode = %q, want %q", *resp.Ft8CallerAnswerMode, types.Ft8CallerAnswerAutoFirst)
+	if *resp.Ft8CallerAnswerMode != types.Ft8CallerAnswerOperatorPick {
+		t.Errorf("mode = %q, want %q", *resp.Ft8CallerAnswerMode, types.Ft8CallerAnswerOperatorPick)
 	}
 }
 

@@ -78,15 +78,22 @@ func TestFt8FeedModeValid(t *testing.T) {
 	}
 }
 
+// The resolve default is operator_pick (operator-ratified 2026-08-08,
+// superseding ADR 0033's auto_first): automatic operation has licensing
+// implications in many jurisdictions, so a station whose operator never
+// CHOSE an auto mode must not auto-work anyone — a clean install, an absent
+// key, and an invalid literal all fail toward the NON-automatic mode. The
+// expectations below are hardcoded literals, not the Default const, so a
+// regression of the const cannot re-derive its own expectation.
 func TestResolveFt8CallerAnswerMode(t *testing.T) {
 	cases := []struct {
 		name string
 		in   *Ft8TXConfig
 		want string
 	}{
-		{"nil TX block → default", nil, DefaultFt8CallerAnswerMode},
-		{"empty → default", &Ft8TXConfig{}, Ft8CallerAnswerAutoFirst},
-		{"invalid → default", &Ft8TXConfig{CallerAnswerMode: "bogus"}, Ft8CallerAnswerAutoFirst},
+		{"nil TX block → operator_pick", nil, "operator_pick"},
+		{"empty → operator_pick", &Ft8TXConfig{}, "operator_pick"},
+		{"invalid → operator_pick, never an auto mode", &Ft8TXConfig{CallerAnswerMode: "bogus"}, "operator_pick"},
 		{"auto_first honoured", &Ft8TXConfig{CallerAnswerMode: "auto_first"}, Ft8CallerAnswerAutoFirst},
 		{"auto_strongest honoured", &Ft8TXConfig{CallerAnswerMode: "auto_strongest"}, Ft8CallerAnswerAutoStrongest},
 		{"operator_pick honoured", &Ft8TXConfig{CallerAnswerMode: "operator_pick"}, Ft8CallerAnswerOperatorPick},
@@ -96,8 +103,8 @@ func TestResolveFt8CallerAnswerMode(t *testing.T) {
 			t.Errorf("%s: ResolveFt8CallerAnswerMode = %q, want %q", c.name, got, c.want)
 		}
 	}
-	if DefaultFt8CallerAnswerMode != Ft8CallerAnswerAutoFirst {
-		t.Errorf("default = %q, want auto_first", DefaultFt8CallerAnswerMode)
+	if DefaultFt8CallerAnswerMode != Ft8CallerAnswerOperatorPick {
+		t.Errorf("default = %q, want operator_pick", DefaultFt8CallerAnswerMode)
 	}
 	for _, m := range []string{Ft8CallerAnswerAutoFirst, Ft8CallerAnswerAutoStrongest, Ft8CallerAnswerOperatorPick} {
 		if !Ft8CallerAnswerModeValid(m) {
@@ -106,6 +113,23 @@ func TestResolveFt8CallerAnswerMode(t *testing.T) {
 	}
 	if Ft8CallerAnswerModeValid("bogus") {
 		t.Error("Ft8CallerAnswerModeValid(bogus) = true, want false")
+	}
+}
+
+// The default-flip's sharpest consequence, pinned on its own: auto_work_callers
+// = true with NO chosen answer mode arms NOTHING — the absent mode resolves to
+// operator_pick, which ResolveFt8AutoWorkCallers excludes (invariant 7: a run
+// that cannot pick must not advertise). Before 2026-08-08 this combination
+// silently armed auto_first runs; automation now requires BOTH opt-ins. The
+// second case is the differentiator: the same knob with an explicit auto mode
+// still arms, so a regression that re-arms the absent-mode case fails the
+// first assertion, and one that breaks arming entirely fails the second.
+func TestResolveFt8AutoWorkCallers_AbsentModeDoesNotArm(t *testing.T) {
+	if ResolveFt8AutoWorkCallers(&Ft8TXConfig{AutoWorkCallers: true}) {
+		t.Error("auto_work_callers with an ABSENT answer mode must not arm (resolves to operator_pick)")
+	}
+	if !ResolveFt8AutoWorkCallers(&Ft8TXConfig{AutoWorkCallers: true, CallerAnswerMode: "auto_first"}) {
+		t.Error("auto_work_callers with an explicit auto mode must still arm")
 	}
 }
 

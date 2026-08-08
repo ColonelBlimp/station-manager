@@ -160,3 +160,12 @@ operator never chose per-station).
   `CallerExchange`).
 - `docs/backlog.md` — "FT8 caller-side sequencing — pile-up work-stack."
 - Memory `project_sm_ft8_attended_only`.
+
+## Dated note (2026-08-08) — the default flipped to operator_pick
+
+The revisit trigger above fired, though on different grounds than anticipated:
+the default `caller_answer_mode` is now `operator_pick` for LICENSING reasons
+(automatic operation must be an explicit opt-in), operator-ratified
+2026-08-08. Reasoning and consequences recorded in ADR 0065's dated note;
+`auto_first`/`auto_strongest` behaviour is unchanged for operators who set
+them.

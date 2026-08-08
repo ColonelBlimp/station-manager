@@ -144,3 +144,28 @@ Built the same day (spec: `internal/ft8/operatorpick_test.go`; wire:
   not filter the list: they exist to stop AUTO re-lock, and here the operator
   is the selector (hiding the only answering station would also starve a
   one-station run forever, with no rescan-empty clear to escape through).
+
+## Dated note — default flipped to operator_pick (operator-ratified 2026-08-08)
+
+`DefaultFt8CallerAnswerMode` is now `operator_pick`, superseding ADR 0033's
+`auto_first`. The operator's stated reasoning, recorded verbatim in substance:
+**automatic operations might have a licensing impact** — the subsystem's
+foundational posture (automatic operation forbidden by the QEX FT8 spec;
+unattended operation licence-restricted in many jurisdictions) means a station
+whose operator never CHOSE an auto mode must not auto-work anyone. Scope
+ratified as the RESOLVE FALLBACK, not a first-run seed: a clean install, an
+absent key, and an invalid literal all resolve to the non-automatic mode, so
+automation is an explicit opt-in everywhere and an invalid value fails safe.
+Two consequences carried knowingly: (1) an existing config with
+`auto_work_callers: true` but no `caller_answer_mode` stops arming runs until
+an auto mode is written (`ResolveFt8AutoWorkCallers` excludes operator_pick —
+with the knob also defaulting off, a fresh install is fully manual until BOTH
+automations are opted into); (2) the wire grows a deliberate asymmetry — GET
+serves the resolved `operator_pick` while PUT still refuses the literal (the
+config.json-only fork above), so a Settings UI renders the pick default
+read-only and offers only the two auto modes. ADR 0033 anticipated this flip
+in its Triggers to revisit ("flip the default to operator_pick"), though on
+pile-up-ergonomics grounds; the trigger that actually fired was licensing.
+Spec: `TestResolveFt8CallerAnswerMode` +
+`TestResolveFt8AutoWorkCallers_AbsentModeDoesNotArm` (types),
+`TestConfig_Ft8CallerAnswerMode_GetReturnsDefault` (api).

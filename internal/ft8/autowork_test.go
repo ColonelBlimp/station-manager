@@ -301,7 +301,11 @@ func TestAutoWork_AnsweringACqArmsTheRun(t *testing.T) {
 func TestAutoWork_ConfigKnobArmsARealService(t *testing.T) {
 	s := newService(types.Ft8Config{
 		Enabled: true,
-		TX:      &types.Ft8TXConfig{AutoWorkCallers: true},
+		TX: &types.Ft8TXConfig{AutoWorkCallers: true,
+			// Explicit since the 2026-08-08 default flip (absent mode now
+			// resolves operator_pick and arms nothing — pinned in types):
+			// these rules need an ARMED run, i.e. a config that opted in.
+			CallerAnswerMode: types.Ft8CallerAnswerAutoFirst},
 	}, logging.Noop(), nil)
 
 	s.seq.setPendingAutoWork(true)
@@ -351,7 +355,11 @@ func autoWorkService(t *testing.T) *Service {
 	t.Helper()
 	s := newService(types.Ft8Config{
 		Enabled: true,
-		TX:      &types.Ft8TXConfig{AutoWorkCallers: true},
+		TX: &types.Ft8TXConfig{AutoWorkCallers: true,
+			// Explicit since the 2026-08-08 default flip (absent mode now
+			// resolves operator_pick and arms nothing — pinned in types):
+			// these rules need an ARMED run, i.e. a config that opted in.
+			CallerAnswerMode: types.Ft8CallerAnswerAutoFirst},
 	}, logging.Noop(), nil)
 	s.seq.setPendingAutoWork(true) // the operator's per-click intent (ADR 0065)
 	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
@@ -379,7 +387,11 @@ func TestAutoWork_CatLossStopsTheRun(t *testing.T) {
 	src := newFakeSource()
 	s := newService(types.Ft8Config{
 		Enabled: true,
-		TX:      &types.Ft8TXConfig{AutoWorkCallers: true},
+		TX: &types.Ft8TXConfig{AutoWorkCallers: true,
+			// Explicit since the 2026-08-08 default flip (absent mode now
+			// resolves operator_pick and arms nothing — pinned in types):
+			// these rules need an ARMED run, i.e. a config that opted in.
+			CallerAnswerMode: types.Ft8CallerAnswerAutoFirst},
 	}, logging.Noop(), src)
 	var live atomic.Bool
 	live.Store(true) // rig on

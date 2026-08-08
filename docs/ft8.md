@@ -106,11 +106,19 @@ on any PUT):
 - **`tx.caller_answer_mode`** — when WE call CQ, which answering station the daemon
   works next (ADR 0033): `"auto_first"` works the first valid answerer by decode
   order (WSJT-X "Auto Seq"); `"auto_strongest"` works the highest-SNR valid answerer
-  in the slot (clear the loud signals first). Both are operator-writable from the
-  logging SPA's **FT8 Settings tab → Call CQ → Answer** (First answerer / Strongest
-  signal), surfaced over `/v1/config` as `ft8_caller_answer_mode`; the wire surface
-  only ever carries those two auto answer modes. Default `auto_first`;
-  empty/invalid → the default. The third literal `"operator_pick"` is **implemented
+  in the slot (clear the loud signals first). The two auto modes are PUT-writable
+  over `/v1/config` as `ft8_caller_answer_mode` (the retired logging SPA had the
+  dropdown; the app's Settings→FT8 does not yet — port gap filed 2026-08-08); the
+  PUT surface only ever carries those two auto answer modes, though GET can serve
+  `operator_pick` since that is now the default. **Default `operator_pick`
+  (operator-ratified 2026-08-08, superseding ADR 0033's `auto_first`):** automatic
+  operation is licence-restricted in many jurisdictions, so a station whose
+  operator never CHOSE an auto mode must not auto-work anyone — a clean install,
+  an absent key, and an invalid literal all resolve to the non-automatic mode,
+  and with `auto_work_callers` also defaulting off, a fresh install is fully
+  manual until both automations are explicitly opted into. Consequence:
+  `auto_work_callers = true` with no `caller_answer_mode` arms NOTHING (the
+  resolved operator_pick is excluded from run arming per invariant 7). The third literal `"operator_pick"` is **implemented
   since 2026-08-07 (ADR 0065 decision 3)** but stays a **config.json-only** value
   (operator-ratified): during a CQ run the daemon LISTS answerers on the `ft8-qso`
   frames (`answerers`, expiring 3 min after last heard) instead of auto-committing,
@@ -516,8 +524,10 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   RX row below while listening. **The ladder is LIVE and role-aware**
   (`ft8State.qso.role`): answering a CQ (`answerer`, e3) shows the answer ladder
   (grid → R-report → 73); **Call CQ** (`caller`, ADR 0033) starts a *sequenced*
-  session — the daemon calls CQ and auto-works the answerers (per
-  `ft8.tx.caller_answer_mode`, default `auto_first`), the caller ladder highlights the
+  session — the daemon calls CQ and works the answerers per
+  `ft8.tx.caller_answer_mode` (default `operator_pick` since 2026-08-08 — an
+  unconfigured station lists answerers for the operator instead of
+  auto-working), the caller ladder highlights the
   real rung (`calling-cq → reporting → rogering`), and the button reads "Calling CQ…"
   **and turns red** while the run is live (2026-06-27 — an unmistakable "I'm running CQ"
   cue, distinct from the per-slot ON AIR pulse below).

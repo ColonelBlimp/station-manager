@@ -330,7 +330,8 @@ type Ft8TXConfig struct {
 	// the operator pops one via POST /v1/ft8/cq/pick, and the run resumes CQ after
 	// the contact. All three are config.json-only knobs (the app SPA has no ft8.tx
 	// settings surface; operator-ratified 2026-08-07). Empty/invalid → the
-	// ResolveFt8CallerAnswerMode default (auto_first).
+	// ResolveFt8CallerAnswerMode default (operator_pick as of 2026-08-08 — see
+	// DefaultFt8CallerAnswerMode).
 	CallerAnswerMode string `json:"caller_answer_mode,omitempty"`
 
 	// MaxRepeats caps how many times an unanswered rung is re-sent before the
@@ -375,8 +376,19 @@ const (
 	Ft8CallerAnswerAutoStrongest = "auto_strongest" // work the highest-SNR valid answerer in the slot
 	Ft8CallerAnswerOperatorPick  = "operator_pick"  // queue answerers; operator pops one (pile-up stack)
 
-	// DefaultFt8CallerAnswerMode is the resolve fallback (ADR 0033).
-	DefaultFt8CallerAnswerMode = Ft8CallerAnswerAutoFirst
+	// DefaultFt8CallerAnswerMode is the resolve fallback — operator_pick
+	// (operator-ratified 2026-08-08, superseding ADR 0033's auto_first; dated
+	// note in ADR 0065). The reasoning is the subsystem's licensing posture:
+	// automatic operation is licence-restricted in many jurisdictions, so a
+	// station whose operator never CHOSE an auto mode must not auto-work
+	// anyone. A clean install, an absent key, and an invalid literal all fail
+	// toward the non-automatic mode; with auto_work_callers also defaulting
+	// off, a fresh install is fully manual until BOTH automations are
+	// explicitly opted into. Consequence carried knowingly: an existing
+	// config with auto_work_callers=true but no caller_answer_mode stops
+	// arming runs until an auto mode is written (ResolveFt8AutoWorkCallers
+	// excludes operator_pick).
+	DefaultFt8CallerAnswerMode = Ft8CallerAnswerOperatorPick
 )
 
 // Ft8CallerAnswerModeValid reports whether s is an accepted caller-answer-mode literal.
@@ -425,9 +437,10 @@ func ResolveFt8MaxRepeats(c *Ft8TXConfig) int {
 }
 
 // ResolveFt8CallerAnswerMode returns the effective caller-answer mode: the operator's
-// setting when valid, else the default (auto_first). A nil TX block resolves to the
-// default. ADR 0033 — when WE call CQ, which answering station do we work: the first
-// one automatically, or one the operator picks from the stack.
+// setting when valid, else the default (operator_pick — see the const's licensing
+// rationale). A nil TX block resolves to the default. ADR 0033 — when WE call CQ,
+// which answering station do we work: one the operator picks from the stack, or the
+// first/strongest automatically for operators who opted into automation.
 func ResolveFt8CallerAnswerMode(c *Ft8TXConfig) string {
 	if c == nil || !Ft8CallerAnswerModeValid(c.CallerAnswerMode) {
 		return DefaultFt8CallerAnswerMode

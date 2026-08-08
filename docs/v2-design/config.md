@@ -116,7 +116,7 @@ secretly are) rig-specific.
 | `EnableOSD` (`*bool`) | D | start | — | nil→true |
 | `TX.Device` (playback) | D | start | **yes** (not yet projected) | Should follow `RigConfig.Audio` like capture |
 | `TX.Mode` | D | start (read at arm via `txMode()`) | **YES — rig-specific but GLOBAL** | `"DATA-U"` is Yaesu vocabulary; the trigger for this review |
-| `TX.CallerAnswerMode` | D | start (resolved) | — | `auto_first` / `operator_pick` |
+| `TX.CallerAnswerMode` | D | start (resolved) | — | `auto_first` / `auto_strongest` / `operator_pick`; default **operator_pick** since 2026-08-08 (automation = explicit opt-in; ADR 0065 dated note) |
 | `TX.Occupancy.*` | D | start (per-slot read of snapshot) | — | Occupancy detector tuning |
 | `FieldDay.{Class,Section}` | D (TX) | served; PUT-writable (presence-aware) | — | Operator's ARRL Field Day exchange — consumed by both FD paths (answer a CQ FD + work a caller in FD; ADR 0037, shipped). Empty = unset. Class strict (`^[1-9][0-9]?[A-F]$`, in `types`); Section checked against go-ft8's canonical ARRL/RAC list (`ValidARRLFieldDaySection`, in `internal/config` — `types` stays stdlib-only). Stored upper-cased |
 | `FieldDay.DefaultRstRcvd` | D (TX) | served; PUT-writable (presence-aware) | — | RST_RCVD logged for an FD QSO (FD exchanges no report; some OQRS require it non-empty). Operator string (`59`/`599`/`-15`); empty = blank. Trimmed, NOT upper-cased. Applied in the `cmd/smd` e4 sink; RST_SENT is the measured SNR via `BuildQso` |
@@ -331,7 +331,7 @@ provider templates. **A known wart:** this split exists only because these field
 |---|---|
 | `ResolveFt8Display` | history_max 100 (clamp [10,2000]), feed_mode `accumulate`, highlight_unworked `#15803d`, highlight_worked `#9ca3af`, highlight_calling `#b45309` (the three `highlight_*` are **vestigial** as of 2026-08-05 — resolved and round-tripped, read by nothing; see `docs/ft8.md`) |
 | `ResolveFt8Frequencies` | `DefaultFt8Frequencies()` per band, operator overrides where `>0` |
-| `ResolveFt8CallerAnswerMode` | `auto_first` |
+| `ResolveFt8CallerAnswerMode` | `operator_pick` (2026-08-08, was `auto_first` — absent/invalid fail toward the non-automatic mode; licensing posture, ADR 0065 dated note) |
 
 These differ from (a): defaults are applied at **GET-serve / read time**, not at load.
 

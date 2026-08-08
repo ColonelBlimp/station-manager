@@ -913,6 +913,26 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   and whether one hot slot suffices or it wants persistence across slots.
   Do NOT rebuild it as an ALC threshold — that shape is what the fold
   removed, and the instrument cannot carry it.
+- [2026-08-08] PORT GAP (surfaced when the operator went looking for the
+  knob): Settings→FT8 has NO `caller_answer_mode` control. The dropdown
+  (auto_first / auto_strongest) lived in the RETIRED logging SPA
+  (`frontend/logging/.../config.svelte.ts:318`) and was never ported into
+  the app's `Ft8Section.svelte`; the wire field `ft8_caller_answer_mode` is
+  alive and presence-aware, so the build is UI-only. Scope note:
+  `operator_pick` stays OUT of any UI — the PUT 400 on that literal is ADR
+  0065 enforcement (config.json-only, operator-ratified 2026-08-07), so the
+  control offers exactly the two auto modes. UPDATED same day: the DEFAULT
+  is now operator_pick (resolve fallback, licensing posture — ADR 0065
+  dated note), so on an unconfigured station GET serves a value the
+  dropdown cannot offer; the control must render that state read-only
+  ("operator_pick — set in config.json") rather than silently snapping the
+  selection to an auto mode, which a save would then WRITE, flipping the
+  station into automation as a side effect of opening Settings. Related stale note while here:
+  the parked FT8 cluster's "attempt-limit control — gated on the app
+  Settings view, still a placeholder" reason has EXPIRED (the FT8 section
+  shipped 2026-08-05); `ft8_max_repeats` also has wire + live push and no
+  UI, so if the answer-mode dropdown is built, the attempt-limit input is
+  the natural same-card sibling.
 
 ---
 
