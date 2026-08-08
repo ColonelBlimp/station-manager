@@ -1097,3 +1097,29 @@ func TestDriveAlarm_StalePositivePoll_StillAlarms(t *testing.T) {
 	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 },
 		"a positive poll older than the silence window is not evidence about THIS silence")
 }
+
+// DP4 — codex 773cc0b9 P1: the witness's trust must END when its freshness
+// window does. The first shape re-armed for a FULL driveSilence from callback
+// time, extending a positive poll's effective lifetime to nearly 2x — and a
+// collapse whose polls died right after one positive answer could see its
+// alarm deferred past unkey, where the timer is cancelled and nothing fires.
+// Timeline here (silence 200 ms): key -> one positive poll at ~+100 ->
+// everything silent -> unkey at ~+350. Correct re-arm (remaining lifetime)
+// fires at ~+300, BEFORE unkey; the buggy full-window re-arm would fire at
+// ~+400, after unkey — cancelled, no alarm ever.
+func TestDriveAlarm_WitnessExpiryIsNotExtendedByRearm(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	s.driveSilence = 200 * time.Millisecond
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	time.Sleep(100 * time.Millisecond)
+	s.observeMeter(meterFrame(t, "RM5105")) // the one positive witness
+	time.Sleep(250 * time.Millisecond)      // witness expires at ~+300; we are at ~+350
+
+	if n := w.count(EventDriveAlarm); n == 0 {
+		t.Fatal("the alarm must fire once the witness expires, not a full window later")
+	}
+}

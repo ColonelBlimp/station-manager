@@ -516,8 +516,15 @@ func (s *Service) checkDriveSilence(gen uint64) {
 	// SAME driveSilence window — no new threshold. The watch re-arms rather
 	// than retiring: if the polls die mid-slot too, the remaining silence
 	// alarms.
-	if !s.pollPoPositiveAt.IsZero() && time.Since(s.pollPoPositiveAt) < s.driveSilence {
-		s.driveTimer = time.AfterFunc(s.driveSilence, func() { s.checkDriveSilence(gen) })
+	if witnessAge := time.Since(s.pollPoPositiveAt); !s.pollPoPositiveAt.IsZero() && witnessAge < s.driveSilence {
+		// Re-arm for the witness's REMAINING lifetime, not a fresh full window
+		// (codex 773cc0b9 P1): a full-window re-arm trusted one positive poll
+		// for up to nearly 2x the freshness bound, and near slot-end that
+		// deferred a real collapse's alarm past unkey, where the timer is
+		// cancelled and nothing ever fires. At expiry the pushed silence is
+		// already past threshold, so the alarm lands the moment the witness
+		// dies — unless a newer positive poll has refreshed it by then.
+		s.driveTimer = time.AfterFunc(s.driveSilence-witnessAge, func() { s.checkDriveSilence(gen) })
 		s.enterDriveWatchStateLocked(driveWatchPollOutput, gen)
 		s.mu.Unlock()
 		s.flushDriveWatchLog()
