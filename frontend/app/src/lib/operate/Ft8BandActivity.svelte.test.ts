@@ -10,7 +10,6 @@ import Ft8BandActivity from './Ft8BandActivity.svelte';
 import {
     ft8State,
     ft8Link,
-    ft8AutoWorkIntent,
     setFt8OperatorCall,
     setFt8MyGrid,
     setFt8TxActions,
@@ -23,7 +22,6 @@ import {
     type Ft8TxActions,
 } from './ft8.svelte';
 import { setFt8Enricher, resetFt8EnrichForTests } from './ft8Enrich.svelte';
-import { ft8PileupStack, _resetPileupForTests } from './ft8Pileup.svelte';
 import { rig } from './rig.svelte';
 import { session } from './session.svelte';
 import { _resetForTests as resetToasts, toastsState } from '../ui/toasts.svelte';
@@ -46,6 +44,9 @@ function armReady(over: Partial<Ft8TxActions> = {}): void {
         next: okResult,
         stopAutoWork: okResult,
         pickAnswerer: okResult,
+        bagAnswerer: okResult,
+        unbagAnswerer: okResult,
+        resumeDrain: okResult,
         ...over,
     });
     rig.cat = 'connected';
@@ -57,7 +58,6 @@ function armReady(over: Partial<Ft8TxActions> = {}): void {
 beforeEach(() => {
     resetFt8ForTests();
     resetFt8EnrichForTests();
-    _resetPileupForTests();
     resetToasts();
     _resetDaemonClockForTests();
     session.qsos.length = 0;
@@ -345,86 +345,101 @@ describe('Ft8BandActivity click-to-work (first RF path)', () => {
     });
 });
 
-describe('Ft8BandActivity pile-up enqueue (Ctrl+click)', () => {
-    it('Ctrl+clicking a calling-you row queues it; a CQ row is not queued', async () => {
-        setFt8OperatorCall('7Q5MLV');
-        render(Ft8BandActivity);
-        ft8Link.onDecode(
-            decode(freshSlot('even'), [
-                { text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }, // calling us
-                { text: 'CQ W1ABC FN42', freq_hz: 1500, snr: -12 }, // a CQ, not a caller
-            ])
-        );
-        flushSync();
-
-        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'), { ctrlKey: true });
-        expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['PA3KUS']);
-
-        // Ctrl+click on a CQ row does NOT queue (only callers do).
-        await fireEvent.click(screen.getByText('CQ W1ABC FN42'), { ctrlKey: true });
-        expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['PA3KUS']);
-    });
-
-    // ADR 0065: during an operator_pick CQ run the curated queue stays disabled
-    // (unchanged), but the explanation must not tell the operator their answerers
-    // are lost — the daemon queues them into the drawer automatically.
-    it('ctrl+click during an operator_pick CQ run says answerers queue automatically', async () => {
-        setFt8OperatorCall('7Q5MLV');
-        render(Ft8BandActivity);
-        ft8Link.onQso({
-            active: true,
-            role: 'caller',
-            state: 'calling-cq',
-            answer_mode: 'operator_pick',
+describe('Ft8BandActivity ctrl+click bags daemon-side (ADR 0067)', () => {
+    // The curated SPA stack retired: ctrl/cmd+click on a calling-you row POSTs
+    // the bag verb (capture-only — no TX start), and the daemon's refusals come
+    // back as toasts. The old rules this replaces — CQ rows never queue, and the
+    // single-parity lock — moved daemon-side: bag refuses a station that isn't
+    // LISTED (`ft8_answerer_not_listed`), and the listing itself is what carries
+    // parity (internal/ft8/adr0067_test.go B-rules, collectAnswerersLocked).
+    it('ctrl+clicking a calling-you row posts the bag verb and starts no TX', async () => {
+        const bagged: string[] = [];
+        const answered: string[] = [];
+        armReady({
+            bagAnswerer: (call) => {
+                bagged.push(call);
+                return okResult();
+            },
+            answerCq: (a) => {
+                answered.push(a.theirCall);
+                return okResult();
+            },
+            workCaller: (a) => {
+                answered.push(a.theirCall);
+                return okResult();
+            },
         });
-        ft8Link.onDecode(
-            decode(freshSlot('even'), [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
-        );
-        flushSync();
-        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'), { ctrlKey: true });
-
-        expect(toastsState.items.map((t) => t.message).join(' ')).toMatch(
-            /answerers queue in the pile-up automatically/i
-        );
-        expect(ft8PileupStack.items).toHaveLength(0);
-    });
-
-    it('rejects a wrong-parity add (single-parity run)', async () => {
         setFt8OperatorCall('7Q5MLV');
         render(Ft8BandActivity);
         ft8Link.onDecode(
             decode(freshSlot('even'), [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
         );
+        flushSync();
+
+        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'), { ctrlKey: true });
+        expect(bagged).toEqual(['PA3KUS']);
+        expect(answered).toEqual([]); // capture, not a TX start
+    });
+
+    it('ctrl+click on a CQ row posts nothing — only callers bag', async () => {
+        const bagged: string[] = [];
+        armReady({
+            bagAnswerer: (call) => {
+                bagged.push(call);
+                return okResult();
+            },
+        });
+        setFt8OperatorCall('7Q5MLV');
+        render(Ft8BandActivity);
         ft8Link.onDecode(
-            decode(freshSlot('odd'), [{ text: '7Q5MLV DL1XYZ JO31', freq_hz: 900, snr: 1 }])
+            decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1500, snr: -12 }])
         );
         flushSync();
 
-        // First (even :00) locks the run to even.
+        await fireEvent.click(screen.getByText('CQ W1ABC FN42'), { ctrlKey: true });
+        expect(bagged).toEqual([]);
+    });
+
+    it('a refused bag surfaces the daemon message as a toast', async () => {
+        armReady({
+            bagAnswerer: () =>
+                Promise.resolve({
+                    ok: false,
+                    message: 'no pick run is listing callers — start one first',
+                }),
+        });
+        setFt8OperatorCall('7Q5MLV');
+        render(Ft8BandActivity);
+        ft8Link.onDecode(
+            decode(freshSlot('even'), [{ text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }])
+        );
+        flushSync();
+
         await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'), { ctrlKey: true });
-        expect(ft8PileupStack.lockedParity).toBe('even');
-        // An odd (:15) caller is rejected — the queue stays single-parity.
-        await fireEvent.click(screen.getByText('7Q5MLV DL1XYZ JO31'), { ctrlKey: true });
-        expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['PA3KUS']);
+        await flush();
+        expect(toastsState.items.map((t) => t.message).join(' ')).toMatch(/no pick run/);
     });
 });
 
 describe('Ft8BandActivity row markers', () => {
-    it('marks a queued caller (Q) and the currently-worked station (working dot)', async () => {
+    // The Q badge follows the DAEMON's bagged queue (ADR 0067) — a ctrl+click
+    // alone marks nothing, because the bag is confirm-by-push; the badge
+    // appears when the ft8-qso frame carries the station in `queue`.
+    it('marks a bagged caller (Q) and the currently-worked station (working dot)', () => {
         setFt8OperatorCall('7Q5MLV');
         render(Ft8BandActivity);
         ft8Link.onDecode(
             decode(freshSlot('even'), [
-                { text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }, // caller → queued
+                { text: '7Q5MLV PA3KUS JO21', freq_hz: 800, snr: 2 }, // caller → bagged
                 { text: '7Q5MLV DL1XYZ JO31', freq_hz: 900, snr: 1 }, // caller → will be worked
             ])
         );
         flushSync();
 
-        // Queue PA3KUS → Q badge, and nothing is being worked yet.
-        await fireEvent.click(screen.getByText('7Q5MLV PA3KUS JO21'), { ctrlKey: true });
+        // The daemon reports PA3KUS bagged → Q badge, and nothing worked yet.
+        ft8State.qso.queue = [{ call: 'PA3KUS', snr: 2 }];
         flushSync();
-        expect(screen.getByTitle('In the pile-up queue')).toBeInTheDocument();
+        expect(screen.getByTitle('Bagged — the drain works these in order')).toBeInTheDocument();
         expect(screen.queryByTitle('Working now')).toBeNull();
 
         // A QSO with DL1XYZ goes active → its row gets the working dot; PA3KUS keeps Q.
@@ -432,7 +447,7 @@ describe('Ft8BandActivity row markers', () => {
         ft8State.qso.theirCall = 'DL1XYZ';
         flushSync();
         expect(screen.getByTitle('Working now')).toBeInTheDocument();
-        expect(screen.getByTitle('In the pile-up queue')).toBeInTheDocument();
+        expect(screen.getByTitle('Bagged — the drain works these in order')).toBeInTheDocument();
     });
 });
 
@@ -1058,68 +1073,31 @@ describe('Ft8BandActivity worked-vs-engaged toast wording', () => {
         expect(toastText()).not.toMatch(/nothing was logged/i);
     });
 
-    // WS4 — pile-up enqueue path gets the same split; the entry still carries
-    // repeat:true so the drain honours it (codex 0f9aa672 P1 carve-out).
-    it('ctrl+click enqueue of an engaged-but-unlogged caller says "Queued as new", not "already worked"', async () => {
-        setFt8OperatorCall('7Q5MLV');
-        armReady();
-        engage('W1ABC');
-
-        render(Ft8BandActivity);
-        ft8Link.onDecode(
-            decode(freshSlot('even'), [{ text: '7Q5MLV W1ABC JO21', freq_hz: 900, snr: -3 }])
-        );
-        flushSync();
-        await fireEvent.click(screen.getByText('7Q5MLV W1ABC JO21'), { ctrlKey: true });
-        await flush();
-
-        expect(toastText()).toMatch(/started W1ABC earlier this session/);
-        expect(toastText()).toMatch(/Queued as new/);
-        expect(toastText()).not.toMatch(/already worked/i);
-        expect(ft8PileupStack.items).toHaveLength(1);
-        expect(ft8PileupStack.items[0].repeat).toBe(true);
-    });
+    // WS4 retired with the curated stack (ADR 0067): ctrl+click now POSTs the
+    // bag verb with no worked-before interception — bagging is itself the
+    // operator's deliberate choice, and the daemon's list is the source of
+    // truth for who is workable. The engaged/logged wording split above still
+    // governs the ANSWER paths, which is where a TX actually starts.
 });
 
 /*
-    PER-CLICK AUTO-WORK GRAMMAR — ADR 0065 forks 1+2 (operator-ratified
-    2026-08-07). A plain click works that station only; ctrl+shift+click on a CQ
-    answers AND arms a run; the standing toggle (ft8AutoWorkIntent) makes the
-    next plain click carry the intent and is consumed by it (one-shot).
-    AW1 is the flip that differentiates the pre-0065 behaviour (policy-implied
-    arming — the daemon side of that is pinned in autowork_test.go G2; here the
-    rule is that the CLICK carries no intent). AW2/AW3 pin the two arming
-    handles.
+    CLICK GRAMMAR UNDER THE ONE-RULE MODEL — ADR 0067 (supersedes the ADR 0065
+    per-click intent grammar AW1–AW5 that lived here). The click no longer
+    carries any run intent: the session's Answer mode ALONE decides how a run
+    treats callers, and the wrapper stamps it on every start (pinned in
+    ft8AutoWork.svelte.test.ts). What remains for this file is the negative
+    space: the old arming chord must start NOTHING, and plain ctrl/cmd+click
+    stays capture-only (it bags — see the bag describe above).
 */
-describe('Ft8BandActivity auto-work click grammar', () => {
-    // ADR 0066: the intent only survives the answerCq wrapper under an auto
-    // session mode — the reset default is operator_pick (the licensing-safe
-    // seed), which drops it at the source. These rules are about the CLICK
-    // grammar, so they run under an auto mode; the drop rule itself is pinned
-    // in ft8AutoWork.svelte.test.ts SP2.
-    beforeEach(() => {
-        ft8State.answerMode = 'auto_first';
-    });
-
-    it('AW1: a plain CQ click carries no auto-work intent', async () => {
+describe('Ft8BandActivity click grammar (ADR 0067)', () => {
+    it('AW1: the old arming chord (ctrl+shift+click on a CQ) starts no TX and posts no verb', async () => {
         setFt8OperatorCall('7Q5MLV');
         const got: Ft8AnswerArgs[] = [];
-        armReady({ answerCq: (a) => (got.push(a), okResult()) });
-        render(Ft8BandActivity);
-        ft8Link.onDecode(
-            decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
-        );
-        flushSync();
-        await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
-        await flush();
-        expect(got).toHaveLength(1);
-        expect(got[0].autoWork ?? false).toBe(false);
-    });
-
-    it('AW2: ctrl+shift+click on a CQ answers WITH the intent', async () => {
-        setFt8OperatorCall('7Q5MLV');
-        const got: Ft8AnswerArgs[] = [];
-        armReady({ answerCq: (a) => (got.push(a), okResult()) });
+        const bagged: string[] = [];
+        armReady({
+            answerCq: (a) => (got.push(a), okResult()),
+            bagAnswerer: (c) => (bagged.push(c), okResult()),
+        });
         render(Ft8BandActivity);
         ft8Link.onDecode(
             decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
@@ -1130,15 +1108,14 @@ describe('Ft8BandActivity auto-work click grammar', () => {
             shiftKey: true,
         });
         await flush();
-        expect(got).toHaveLength(1);
-        expect(got[0].autoWork).toBe(true);
+        expect(got).toHaveLength(0); // no answer — the chord is not a TX gesture
+        expect(bagged).toHaveLength(0); // and a CQ row is not a caller to bag
     });
 
-    it('AW3: the standing toggle arms the next plain click and is consumed by it', async () => {
+    it('AW2: a plain CQ click answers exactly once — the mode, not the click, shapes the run', async () => {
         setFt8OperatorCall('7Q5MLV');
         const got: Ft8AnswerArgs[] = [];
         armReady({ answerCq: (a) => (got.push(a), okResult()) });
-        ft8AutoWorkIntent.on = true;
         render(Ft8BandActivity);
         ft8Link.onDecode(
             decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
@@ -1147,48 +1124,6 @@ describe('Ft8BandActivity auto-work click grammar', () => {
         await fireEvent.click(screen.getByText('CQ W1ABC FN42'));
         await flush();
         expect(got).toHaveLength(1);
-        expect(got[0].autoWork).toBe(true);
-        expect(ft8AutoWorkIntent.on).toBe(false);
+        expect(got[0].theirCall).toBe('W1ABC');
     });
-
-    it('AW4: plain ctrl/cmd+click stays capture-only (no TX start, even on a CQ)', async () => {
-        setFt8OperatorCall('7Q5MLV');
-        const got: Ft8AnswerArgs[] = [];
-        armReady({ answerCq: (a) => (got.push(a), okResult()) });
-        render(Ft8BandActivity);
-        ft8Link.onDecode(
-            decode(freshSlot('even'), [{ text: 'CQ W1ABC FN42', freq_hz: 1200, snr: -12 }])
-        );
-        flushSync();
-        await fireEvent.click(screen.getByText('CQ W1ABC FN42'), { ctrlKey: true });
-        await flush();
-        expect(got).toHaveLength(0);
-    });
-});
-
-// AW5 — FD/type-4 exchanges never arm a run (ADR 0065 scope note), so a click on
-// them must not CARRY the intent, must not CONSUME the standing toggle, and must
-// not later toast a false "disabled in settings" refusal (codex P2 on 7de6708e:
-// the daemon ignores the field on those paths and publishes an unarmed frame,
-// which the one-shot verdict logic read as the gate refusing). The intent
-// survives for the next STANDARD contact — that is what "next contact" means.
-it('AW5: an FD CQ click carries no intent and leaves the standing toggle for the next standard contact', async () => {
-    setFt8OperatorCall('7Q5MLV');
-    const got: Ft8AnswerArgs[] = [];
-    armReady({ answerCq: (a) => (got.push(a), okResult()) });
-    ft8AutoWorkIntent.on = true;
-    render(Ft8BandActivity);
-    ft8Link.onDecode(
-        decode(freshSlot('even'), [{ text: 'CQ FD K1ABC FN42', freq_hz: 1200, snr: -12 }])
-    );
-    flushSync();
-    await fireEvent.click(screen.getByText('CQ FD K1ABC FN42'), {
-        ctrlKey: true,
-        shiftKey: true,
-    });
-    await flush();
-    expect(got).toHaveLength(1);
-    expect(got[0].fd).toBe(true);
-    expect(got[0].autoWork ?? false).toBe(false);
-    expect(ft8AutoWorkIntent.on).toBe(true);
 });

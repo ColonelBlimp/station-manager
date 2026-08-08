@@ -4,6 +4,7 @@
     // (working station · slot-timing pill · role-aware message ladder); the TX
     // control bar (Arm / Call CQ / Abandon / Next) + click-to-start is the next
     // increment (first RF from this SPA), kept a deliberate boundary.
+    import RunSurface from './RunSurface.svelte';
     import {
         ft8State,
         ft8OperatorCall,
@@ -13,14 +14,8 @@
         abandonQso,
         skipQso,
         nextAnswerer,
-        ft8EngagedThisSession,
-        workCaller,
-        stopAutoWork,
-        ft8AutoWorkIntent,
     } from './ft8.svelte';
     import { rig } from './rig.svelte';
-    import { session } from './session.svelte';
-    import { ft8PileupStack } from './ft8Pileup.svelte';
     import { buildLadder } from './ft8Ladder';
     import { parseFrequency } from '../validators/frequency';
     import { toasts } from '../ui/toasts.svelte';
@@ -143,7 +138,7 @@
     //     which hands over to the pile-up drain — so that one keeps the queue gate.
     const callerWorking = $derived(callerActive && qso.theirCall !== '');
     const canNext = $derived(
-        tx.armed && qso.active && (callerActive ? callerWorking : ft8PileupStack.count > 0)
+        tx.armed && qso.active && (callerActive ? callerWorking : qso.queue.length > 0)
     );
 
     // Deferred "skip if no reply" (the Next control while working a station) —
@@ -206,7 +201,6 @@
         try {
             const r = await abandonQso();
             if (!r.ok) toasts.error(r.message);
-            else ft8PileupStack.pause();
         } finally {
             abandoning = false;
         }
@@ -230,10 +224,11 @@
         void setSkip(true);
     }
 
-    // Call-CQ Next. Deliberately does NOT touch ft8PileupStack: this used to abandon
-    // the run and resume the drain, which quietly switched the operator from calling
-    // CQ to working their curated queue. The drawer is for a pile-up that did not come
-    // from a CQ call, and the drain cannot run during a live session anyway.
+    // Call-CQ Next. Posts the park verb and nothing else: an ancestor of this
+    // used to abandon the run and hand over to the SPA drain, which quietly
+    // switched the operator from calling CQ to working their curated queue. The
+    // queue is daemon state now (ADR 0067) and the daemon's own drain decides
+    // what follows a parked answerer.
     async function moveOn(): Promise<void> {
         if (nexting) return;
         nexting = true;
@@ -263,7 +258,6 @@
         if (prevSkipArmed && !armed) {
             if (!active) {
                 toasts.info(`No reply from ${prevSkipCall} — next.`);
-                ft8PileupStack.resume();
             } else if (call === prevSkipCall) {
                 toasts.info(`${call} replied — continuing.`);
             }
@@ -272,114 +266,10 @@
         if (armed) prevSkipCall = call;
     });
 
-    // ---- Pile-up drain (SPA-only) ---------------------------------------------
-    // The operator curates a FIFO of stations calling them (Ctrl+click in Band
-    // Activity → ft8PileupStack). Whenever the rig is armed + CAT-live + idle + an
-    // offset & dial freq are known + auto-drain is enabled, work the head via the
-    // work-a-caller path, advancing as each contact completes. The queue lives
-    // wholly in the SPA; the daemon is untouched (the same workCaller start the
-    // click-to-work path uses). `draining` latches from the workCaller call until
-    // qso.active confirms, so the effect can't double-fire in the window before the
-    // daemon pushes the active state.
-    let draining = false;
-    // Re-fire trigger + per-head retry counter for transient start failures. Right
-    // after a contact completes (or Abandon/Next), the rig is briefly not ready —
-    // the TX→RX settle — so an immediate work gets a rig_not_ready. That is
-    // transient: keep the head and re-attempt rather than dropping the caller AND
-    // stalling the drain (nothing reactive would otherwise re-fire this effect).
-    // retryTick is reactive so a scheduled bump re-runs the drain. The TX seam
-    // flattens the daemon's {kind,code} to {ok,message}, so we can't tell a
-    // transient rig settle from a hard reject here — treat every failure as
-    // retryable up to the cap, then pause (keeping the queue) so no caller is lost.
-    const WORK_RETRY_MS = 1500;
-    const MAX_WORK_RETRIES = 6; // ~9s of settle before concluding the rig is really down
-    let retryTick = $state(0);
-    let workRetries = 0;
-
-    // Same-session dupe (band-scoped). NOTE the deliberate asymmetry with
-    // Ft8BandActivity, where this is advisory only: there the operator is clicking
-    // and may work a station as often as they like. HERE nobody is present at the
-    // moment of transmission — the drain keys automatically off a queue entry made
-    // earlier — so an already-satisfied entry is dropped rather than re-worked. That
-    // is queue hygiene, not a veto on the operator: their intent (one contact with
-    // this station) has already been met, and the automatic path is exactly where an
-    // unintended duplicate has no human to catch it.
-    // Two sources, because neither alone is timely AND durable: `session.qsos` only
-    // learns of a contact after the daemon's asynchronous enrich+submit finishes
-    // (the terminal idle is published first), while the engaged-call set knows the
-    // instant the sequencer touches a station but is forgotten on reload. Together
-    // they cover the immediate-repair window this whole feature exists for
-    // (codex 0f08d2b2 P1).
-    function workedThisSession(call: string): boolean {
-        return (
-            ft8EngagedThisSession(call, rig.band) ||
-            session.qsos.some((q) => q.callsign === call && q.band === rig.band)
-        );
-    }
-
-    $effect(() => {
-        // Touch retryTick so a scheduled bump re-runs this effect (registers the dep).
-        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-        retryTick;
-        // A contact is active → never drain, and clear the latch: our start landed.
-        if (qso.active) {
-            draining = false;
-            return;
-        }
-        if (draining) return;
-        if (!ft8PileupStack.enabled || ft8PileupStack.items.length === 0) return;
-        if (!tx.armed || !catLive || opFreqHz === null || offset === null) return;
-        const head = ft8PileupStack.peek();
-        if (!head) return;
-        // Don't re-work a station already logged this session — a manual work during
-        // an Abandon pause can leave a now-duplicate entry. Drop it; the dequeue
-        // re-fires this effect for the next head.
-        // `repeat` marks an entry the operator queued KNOWING the station was worked
-        // — a deliberate repair/sked, not a stale entry — so it is honoured. Without
-        // that carve-out the panel accepts the add and this silently discards it
-        // (codex 0f9aa672 P1).
-        if (!head.repeat && workedThisSession(head.call)) {
-            ft8PileupStack.dequeue();
-            return;
-        }
-        draining = true;
-        const off = offset;
-        const opMHz = opFreqHz / 1_000_000;
-        void workCaller({
-            theirCall: head.call,
-            theirGrid: head.grid,
-            theirSnr: head.snr,
-            slotUtc: head.slotUtc,
-            offsetHz: off,
-            opFreqMHz: opMHz,
-            // The entry's deliberate-repeat marker must reach persistence, not just
-            // this drain's skip check: honouring the operator's intent on air and then
-            // letting the dedupe key discard the result would be the same silent loss
-            // in a different place (codex c2a8bea6 P1).
-            allowDuplicate: head.repeat,
-        }).then((r) => {
-            if (r.ok) {
-                // Now being worked — remove from the queue. The latch clears when
-                // qso.active flips true (above).
-                ft8PileupStack.dequeue();
-                workRetries = 0;
-                return;
-            }
-            draining = false;
-            if (workRetries < MAX_WORK_RETRIES) {
-                // Keep the head; re-attempt shortly (TX→RX settle after a contact).
-                workRetries++;
-                setTimeout(() => retryTick++, WORK_RETRY_MS);
-                return;
-            }
-            workRetries = 0;
-            toasts.error(r.message || 'Could not work the pile-up head.');
-            // Still failing after several tries → pause (keep the queue) so the
-            // operator can fix the rig / remove the stuck entry and Resume, rather
-            // than losing callers.
-            ft8PileupStack.pause();
-        });
-    });
+    // The pile-up drain is DAEMON state since ADR 0067 (slice B): bagged
+    // stations are worked by the sequencer's own drain, in bag order, with
+    // Stop-pauses/Resume semantics. The SPA-side curated stack and its drain
+    // $effect retired with it.
 </script>
 
 <section class="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-surface">
@@ -409,56 +299,9 @@
                 {:else}
                     <div class="text-sm text-muted">No active contact</div>
                 {/if}
-                <!-- An armed auto-work run keys the rig at whoever calls next, and
-                     between contacts it renders the same "No active contact" view as a
-                     stopped station. Shown while ACTIVE too: the run is live
-                     throughout, and a badge that vanished during each contact would
-                     read as the run having ended. -->
-                {#if qso.autoWorkArmed}
-                    <!-- The pill is a CONTROL, not just status (ADR 0065): clicking it
-                         stops the RUN without touching an active contact — the one stop
-                         Abandon can't provide. -->
-                    <button
-                        type="button"
-                        class="mt-1.5 inline-flex cursor-pointer items-center gap-x-1.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-bold text-amber-600 uppercase hover:bg-amber-500/25"
-                        data-testid="auto-work-armed"
-                        title="Stop the auto-work run (any active contact continues)"
-                        onclick={() => void stopAutoWork()}
-                    >
-                        <span class="size-1.5 rounded-full bg-amber-500"></span>
-                        Auto-work armed — stop
-                    </button>
-                    <div class="mt-1 text-[11px] text-muted">
-                        The next station calling you is worked without a click. Abandon stops the
-                        run.
-                    </div>
-                {:else}
-                    <!-- Standing intent (ADR 0065): the mouse-only arming path — the
-                         next contact started also starts a run. One-shot: consumed by
-                         the start that carries it. ctrl+shift+click on a CQ is the
-                         keyboard-fast equivalent. -->
-                    <!-- Under "I pick" the control explains itself instead of a
-                         silent gate refusal (ADR 0066 fork 6): a pick run cannot
-                         auto-work — the operator IS the selector. -->
-                    <label
-                        class="mt-1.5 inline-flex items-center gap-x-1.5 text-[11px] text-muted select-none {ft8State.answerMode ===
-                        'operator_pick'
-                            ? 'cursor-not-allowed opacity-50'
-                            : 'cursor-pointer'}"
-                        title={ft8State.answerMode === 'operator_pick'
-                            ? 'Auto-work needs an auto Answer mode — under “I pick” you choose every station'
-                            : 'Arm auto-work on the next contact you start (ctrl+shift+click a CQ does the same)'}
-                    >
-                        <input
-                            type="checkbox"
-                            bind:checked={ft8AutoWorkIntent.on}
-                            disabled={ft8State.answerMode === 'operator_pick'}
-                            data-testid="auto-work-intent"
-                            class="size-3 accent-amber-500"
-                        />
-                        Auto-work the next contact
-                    </label>
-                {/if}
+                <!-- The RUN SURFACE (ADR 0067) — one home for the run lifecycle,
+                     replacing the checkbox/chip morph that used to live here. -->
+                <RunSurface />
             </div>
         </div>
 
@@ -506,35 +349,11 @@
          when a caller is queued); Arm sits alone at the bottom (its own divider) as
          the operator's explicit consent to key. -->
     <div class="border-t border-line px-4 py-3">
-        <!-- The run's start parameters (ADR 0066): one centred row — little
-             horizontal space, operator-specified. The TX offset readout that
-             used to live here is duplicated in the Occupancy panel; its one
-             unique job (explaining a no-offset disabled Call CQ) moved into
-             the button's title. Both selectors lock while a run is active
-             (the parity precedent): changes apply to the NEXT run. -->
-        <div class="mb-2 flex items-center justify-between gap-x-4 text-xs">
-            <label class="flex items-center gap-x-1 text-muted">
-                <span>Answer mode</span>
-                <!-- Locked while a run is ARMED too, not just active (codex
-                     d7fbf935 P1): an armed auto-work run holds its pinned mode
-                     past each contact, so an editable selector there would let
-                     the UI claim "I pick" while the run auto-works with the
-                     old mode. Stop the run (the pill) to change it. -->
-                <select
-                    class="rounded border border-line bg-surface px-1 py-0.5 text-xs text-ink disabled:opacity-50"
-                    bind:value={ft8State.answerMode}
-                    disabled={qso.active || qso.autoWorkArmed}
-                    data-testid="answer-mode"
-                    aria-label="Call CQ answerer selection mode"
-                    title={qso.autoWorkArmed && !qso.active
-                        ? 'A run is armed with this mode — stop it (click the pill) to change'
-                        : "How a CQ run answers callers — config.json holds the default; this is the session's choice"}
-                >
-                    <option value="auto_first">First answerer</option>
-                    <option value="auto_strongest">Strongest</option>
-                    <option value="operator_pick">I pick</option>
-                </select>
-            </label>
+        <!-- The CQ-slot parity — genuinely CQ-scoped, so it stays beside Call
+             CQ (ADR 0067: the Answer mode moved into the run surface; the TX
+             offset readout lives in the Occupancy panel, its no-offset
+             explanation in the Call CQ button title). -->
+        <div class="mb-2 flex items-center justify-end gap-x-4 text-xs">
             <label class="flex items-center gap-x-1 text-muted">
                 <span>CQ slot</span>
                 <select

@@ -1,28 +1,30 @@
-// Pile-up drawer render/interaction test: the drawer lists ft8PileupStack FIFO
-// (head first, no up-arrow on the head), per-row remove / move-up work, and the
-// footer Resume (paused only) + Clear & abandon drive the stack. Queue mechanics
-// are unit-tested in ft8Pileup.svelte.test.ts; this guards the drawer wiring.
+// Pile-up drawer render/interaction test (ADR 0067): the drawer renders the
+// DAEMON's two lists — "Calling you" (listed answerers; Work commits one now,
+// Bag queues it) and "Bagged" (the drain's queue, in bag order; × unbags) —
+// plus the paused indicator and the footer Resume. Every verb is
+// confirm-by-push: the click POSTs and the list changes only when the ft8-qso
+// SSE says so, so these tests assert on the POSTs and on rendering, never on
+// local mutation. Queue/drain semantics live in internal/ft8/adr0067_test.go
+// (B-rules); this suite guards the drawer wiring. The operator-curated
+// ctrl-click stack this file used to pin retired with the ADR.
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import PileupDrawer from './PileupDrawer.svelte';
-import { ft8PileupStack, _resetPileupForTests } from './ft8Pileup.svelte';
-import { ft8State, setFt8TxActions, resetFt8ForTests, type Ft8TxResult } from './ft8.svelte';
-import { setPileup } from './state.svelte';
+import {
+    ft8State,
+    setFt8TxActions,
+    resetFt8ForTests,
+    type Ft8TxResult,
+    type Ft8TxActions,
+} from './ft8.svelte';
+import { operate, setPileup } from './state.svelte';
 import { _resetForTests as resetToasts, toastsState } from '../ui/toasts.svelte';
 
 const okResult = (): Promise<Ft8TxResult> => Promise.resolve({ ok: true, message: '' });
 
-function caller(call: string, snr = -12, slotUtc = '2026-06-17T14:30:00Z') {
-    return { call, grid: 'FN42', snr, slotUtc };
-}
-
-beforeEach(() => {
-    resetFt8ForTests();
-    _resetPileupForTests();
-    resetToasts();
-    setPileup(true); // render the body content (open); it renders regardless, but be explicit
+function actions(over: Partial<Ft8TxActions> = {}): void {
     setFt8TxActions({
         arm: okResult,
         callCq: okResult,
@@ -33,146 +35,113 @@ beforeEach(() => {
         next: okResult,
         stopAutoWork: okResult,
         pickAnswerer: okResult,
+        bagAnswerer: okResult,
+        unbagAnswerer: okResult,
+        resumeDrain: okResult,
+        ...over,
     });
+}
+
+beforeEach(() => {
+    resetFt8ForTests();
+    resetToasts();
+    setPileup(true); // open — the body renders regardless, but be explicit
+    actions();
 });
 
-describe('PileupDrawer', () => {
-    it('shows the empty-state hint when the queue is empty', () => {
+describe('PileupDrawer sections', () => {
+    it('empty state: both sections explain themselves', () => {
         render(PileupDrawer);
-        expect(screen.getByText(/Ctrl-click/)).toBeInTheDocument();
+        expect(screen.getByTestId('listed-heading')).toBeInTheDocument();
+        expect(screen.getByTestId('bagged-heading')).toBeInTheDocument();
+        expect(screen.getByText(/stations calling you are listed here/i)).toBeInTheDocument();
+        expect(screen.getByText(/Nothing bagged/)).toBeInTheDocument();
     });
 
-    it('lists callers FIFO with a count; the head has no move-up control', () => {
-        ft8PileupStack.push(caller('K1ABC'));
-        ft8PileupStack.push(caller('9A4ZM'));
-        ft8PileupStack.push(caller('PA3KUS'));
-        render(PileupDrawer);
-        flushSync();
-        // Count badge in the header.
-        expect(screen.getByText('(3)')).toBeInTheDocument();
-        // Head (K1ABC) has no up-arrow; the other two do.
-        expect(screen.queryByLabelText('Move K1ABC up the pile-up')).toBeNull();
-        expect(screen.getByLabelText('Move 9A4ZM up the pile-up')).toBeInTheDocument();
-        expect(screen.getByLabelText('Move PA3KUS up the pile-up')).toBeInTheDocument();
-    });
-
-    it('per-row remove drops that caller', async () => {
-        ft8PileupStack.push(caller('K1ABC'));
-        ft8PileupStack.push(caller('9A4ZM'));
-        render(PileupDrawer);
-        flushSync();
-        await fireEvent.click(screen.getByLabelText('Remove K1ABC from the pile-up'));
-        flushSync();
-        expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['9A4ZM']);
-    });
-
-    it('per-row move-up promotes a caller toward the head', async () => {
-        ft8PileupStack.push(caller('K1ABC'));
-        ft8PileupStack.push(caller('9A4ZM'));
-        render(PileupDrawer);
-        flushSync();
-        await fireEvent.click(screen.getByLabelText('Move 9A4ZM up the pile-up'));
-        flushSync();
-        expect(ft8PileupStack.items.map((e) => e.call)).toEqual(['9A4ZM', 'K1ABC']);
-    });
-
-    it('Resume shows only when paused and un-pauses the drain', async () => {
-        ft8PileupStack.push(caller('K1ABC'));
-        render(PileupDrawer);
-        flushSync();
-        // Not paused → no Resume.
-        expect(screen.queryByText('Resume')).toBeNull();
-        ft8PileupStack.pause();
-        flushSync();
-        const resume = screen.getByText('Resume');
-        await fireEvent.click(resume);
-        flushSync();
-        expect(ft8PileupStack.enabled).toBe(true);
-    });
-
-    it('hides Resume during a caller (Call-CQ) run even when paused', () => {
-        ft8PileupStack.push(caller('K1ABC'));
-        ft8PileupStack.pause();
-        ft8State.qso.active = true;
-        ft8State.qso.role = 'caller';
-        render(PileupDrawer);
-        flushSync();
-        expect(screen.queryByText('Resume')).toBeNull();
-    });
-
-    it('Clear & abandon pauses and empties the queue', async () => {
-        ft8PileupStack.push(caller('K1ABC'));
-        ft8PileupStack.push(caller('9A4ZM'));
-        render(PileupDrawer);
-        flushSync();
-        await fireEvent.click(screen.getByText(/Clear & abandon/));
-        flushSync();
-        expect(ft8PileupStack.items).toEqual([]);
-        expect(ft8PileupStack.enabled).toBe(false);
-    });
-});
-
-// ---- operator_pick candidates (ADR 0065 decision 3) -------------------------
-//
-// During an operator_pick Call-CQ run the drawer's primary content is the
-// DAEMON's candidate list (ft8State.qso.answerers — stations answering the CQ),
-// not the operator-curated ctrl-click stack: clicking one POSTs /v1/ft8/cq/pick
-// and the commit comes back by push on the ft8-qso SSE. Sequencing rules live in
-// internal/ft8/operatorpick_test.go; this suite guards the drawer wiring.
-describe('PileupDrawer operator_pick candidates', () => {
-    function pickRun(answerers: { call: string; snr: number }[]): void {
-        ft8State.qso = {
-            ...ft8State.qso,
-            active: true,
-            role: 'caller',
-            state: 'calling-cq',
-            answerMode: 'operator_pick',
-            answerers,
-        };
-    }
-
-    function actions(pickAnswerer: (call: string) => Promise<Ft8TxResult>): void {
-        setFt8TxActions({
-            arm: okResult,
-            callCq: okResult,
-            answerCq: okResult,
-            workCaller: okResult,
-            abandon: okResult,
-            skip: okResult,
-            next: okResult,
-            stopAutoWork: okResult,
-            pickAnswerer,
-        });
-    }
-
-    it('lists the daemon-published answerers and pops one on click', async () => {
-        const picked: string[] = [];
-        actions((call) => {
-            picked.push(call);
-            return okResult();
-        });
-        pickRun([
+    it('header count totals listed + bagged', () => {
+        ft8State.qso.answerers = [
             { call: 'DL9UW', snr: -8 },
             { call: 'K1ABC', snr: -12 },
-        ]);
+        ];
+        ft8State.qso.queue = [{ call: '9A4ZM', snr: -3 }];
+        render(PileupDrawer);
+        flushSync();
+        expect(screen.getByText('(3)')).toBeInTheDocument();
+    });
+
+    it('lists the daemon-published answerers; Work posts the pick', async () => {
+        const picked: string[] = [];
+        actions({
+            pickAnswerer: (call) => {
+                picked.push(call);
+                return okResult();
+            },
+        });
+        ft8State.qso.answerers = [
+            { call: 'DL9UW', snr: -8 },
+            { call: 'K1ABC', snr: -12 },
+        ];
         render(PileupDrawer);
         flushSync();
 
-        expect(screen.getByText('Answering your CQ')).toBeInTheDocument();
         expect(screen.getByText('DL9UW')).toBeInTheDocument();
         expect(screen.getByText('-8 dB')).toBeInTheDocument();
         await fireEvent.click(screen.getByLabelText('Work DL9UW now'));
         expect(picked).toEqual(['DL9UW']);
     });
 
-    it('a refused pop surfaces the daemon message as a toast', async () => {
-        actions(() =>
-            Promise.resolve({
-                ok: false,
-                message: 'that station is no longer answering your CQ — pick a listed one',
-            })
+    it('Bag posts the bag verb and mutates nothing locally — the SSE owns the lists', async () => {
+        const bagged: string[] = [];
+        actions({
+            bagAnswerer: (call) => {
+                bagged.push(call);
+                return okResult();
+            },
+        });
+        ft8State.qso.answerers = [{ call: 'DL9UW', snr: -8 }];
+        render(PileupDrawer);
+        flushSync();
+
+        await fireEvent.click(screen.getByLabelText('Bag DL9UW'));
+        expect(bagged).toEqual(['DL9UW']);
+        // Confirm-by-push: still listed, still un-bagged, until a frame arrives.
+        expect(ft8State.qso.answerers.map((a) => a.call)).toEqual(['DL9UW']);
+        expect(ft8State.qso.queue).toEqual([]);
+    });
+
+    it('renders the bagged queue in bag order and unbags via ×', async () => {
+        const unbagged: string[] = [];
+        actions({
+            unbagAnswerer: (call) => {
+                unbagged.push(call);
+                return okResult();
+            },
+        });
+        ft8State.qso.queue = [
+            { call: '9A4ZM', snr: -3 },
+            { call: 'PA3KUS', snr: -15 },
+        ];
+        render(PileupDrawer);
+        flushSync();
+
+        const list = screen.getByTestId('bagged-list');
+        const rows = Array.from(list.querySelectorAll('li')).map((li) =>
+            li.textContent?.includes('9A4ZM') ? '9A4ZM' : 'PA3KUS'
         );
-        pickRun([{ call: 'DL9UW', snr: -8 }]);
+        expect(rows).toEqual(['9A4ZM', 'PA3KUS']); // bag order, head first
+        await fireEvent.click(screen.getByLabelText('Unbag PA3KUS'));
+        expect(unbagged).toEqual(['PA3KUS']);
+    });
+
+    it('a refused verb surfaces the daemon message as a toast', async () => {
+        actions({
+            pickAnswerer: () =>
+                Promise.resolve({
+                    ok: false,
+                    message: 'that station is no longer answering your CQ — pick a listed one',
+                }),
+        });
+        ft8State.qso.answerers = [{ call: 'DL9UW', snr: -8 }];
         render(PileupDrawer);
         flushSync();
         await fireEvent.click(screen.getByLabelText('Work DL9UW now'));
@@ -180,26 +149,50 @@ describe('PileupDrawer operator_pick candidates', () => {
         expect(toastsState.items.map((t) => t.message).join(' ')).toMatch(/no longer answering/);
     });
 
-    it('a pick run with no answerers yet explains itself instead of the ctrl-click hint', () => {
-        pickRun([]);
+    it('the header × closes the drawer without posting any verb', async () => {
+        const verbs: string[] = [];
+        actions({
+            stopAutoWork: () => (verbs.push('stop'), okResult()),
+            resumeDrain: () => (verbs.push('resume'), okResult()),
+            unbagAnswerer: (c) => (verbs.push(`unbag:${c}`), okResult()),
+        });
+        ft8State.qso.queue = [{ call: '9A4ZM', snr: -3 }];
         render(PileupDrawer);
         flushSync();
-        expect(screen.getByText(/stations that answer your CQ appear here/i)).toBeInTheDocument();
-        expect(screen.queryByText(/Ctrl-click/)).toBeNull();
+        await fireEvent.click(screen.getByText('Close panel'));
+        expect(operate.pileup).toBe(false);
+        expect(verbs).toEqual([]); // a slide-over close never destroys run state
+    });
+});
+
+describe('PileupDrawer paused drain', () => {
+    it('shows Paused + footer Resume only when paused with a queue; Resume posts the verb', async () => {
+        let resumed = 0;
+        actions({
+            resumeDrain: () => {
+                resumed++;
+                return okResult();
+            },
+        });
+        ft8State.qso.queue = [{ call: '9A4ZM', snr: -3 }];
+        render(PileupDrawer);
+        flushSync();
+
+        // Not paused → no Resume, no Paused badge.
+        expect(screen.queryByTestId('drawer-resume')).toBeNull();
+        expect(screen.queryByText('Paused')).toBeNull();
+
+        ft8State.qso.drainPaused = true;
+        flushSync();
+        expect(screen.getByText('Paused')).toBeInTheDocument();
+        await fireEvent.click(screen.getByTestId('drawer-resume'));
+        expect(resumed).toBe(1);
     });
 
-    it('an auto-mode caller run keeps the curated view untouched', () => {
-        ft8State.qso = {
-            ...ft8State.qso,
-            active: true,
-            role: 'caller',
-            state: 'calling-cq',
-            answerMode: 'auto_first',
-            answerers: [],
-        };
+    it('paused with an EMPTY queue offers no Resume — nothing to drain', () => {
+        ft8State.qso.drainPaused = true;
         render(PileupDrawer);
         flushSync();
-        expect(screen.queryByText('Answering your CQ')).toBeNull();
-        expect(screen.getByText(/Ctrl-click/)).toBeInTheDocument();
+        expect(screen.queryByTestId('drawer-resume')).toBeNull();
     });
 });

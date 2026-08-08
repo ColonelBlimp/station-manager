@@ -21,7 +21,6 @@ import type {
     Ft8EventHandlers,
 } from '../api/ft8-sse';
 import { onAudioLevel as audioLevelReceive } from './audioLevel.svelte';
-import { ft8PileupStack } from './ft8Pileup.svelte';
 import { sessionGet, sessionSet, sessionRemove } from '../utils/storage';
 import { frequencyToBand } from '../utils/frequency';
 import { rig } from './rig.svelte';
@@ -100,6 +99,10 @@ export interface Ft8QsoStatus {
      *  that the run can actually work, oldest first — the pile-up drawer's content
      *  during a pick run. Empty outside one; a terminal frame clears it. */
     answerers: Ft8CqAnswerer[];
+    /** Bagged stations (ADR 0067) — the drain works these in order. */
+    queue: Ft8CqAnswerer[];
+    /** Stop paused the drain; Resume continues (ADR 0067). */
+    drainPaused: boolean;
 }
 
 /** One operator_pick candidate off the ft8-qso frame — snr is our measurement of
@@ -132,6 +135,8 @@ const emptyQsoStatus = (): Ft8QsoStatus => ({
     theirSection: '',
     answerMode: '',
     answerers: [],
+    queue: [],
+    drainPaused: false,
 });
 
 // Monotonic key source for decode rows. Never reset — uniqueness is all that
@@ -323,7 +328,7 @@ class Ft8State {
     /** Last operating band seen by noteOperatingBand — transition bookkeeping,
      *  plain (non-reactive) and deliberately NOT reset on view close: a band
      *  change made while the FT8 view is closed must still clear the
-     *  (persistent, module-singleton) pile-up queue on reopen. */
+     *  (module-singleton) decode feed on reopen. */
     lastSeenBand = '';
 
     /** Band-change watcher for Band Activity (ported from the logging SPA's
@@ -332,15 +337,15 @@ class Ft8State {
      *  feed — accumulated rows are the previous band's watering hole and would
      *  be misleading mixed with the new band's traffic. Intra-band dial nudges
      *  don't wipe the list, and an empty band ('' — no/invalid dial freq) is
-     *  ignored so a transient unknown doesn't clear it. On a GENUINE
-     *  band-to-band change (not the first sighting) the pile-up queue drops
-     *  too: its callers were heard on the old band and aren't workable here. */
+     *  ignored so a transient unknown doesn't clear it. The pick queue is
+     *  daemon state (ADR 0067) with no SPA copy to clear: a dial move ends
+     *  the session AND the run daemon-side (the dial guard abandons, and
+     *  abandon stops the run — ADR 0059 W6), and the published status only
+     *  carries the queue inside a pick context (`pickContextLocked`). */
     noteOperatingBand(band: string): void {
         if (band === '' || band === this.lastSeenBand) return;
-        const genuineChange = this.lastSeenBand !== '';
         this.lastSeenBand = band;
         this.clearDecodes();
-        if (genuineChange) ft8PileupStack.clear();
     }
 }
 
@@ -569,11 +574,6 @@ export interface Ft8AnswerArgs {
      *  transmits a full exchange and sees no row. Only set from an explicit operator
      *  action on a station the UI already shows as worked. */
     allowDuplicate?: boolean;
-    /** Per-click auto-work intent (ADR 0065): true arms an auto-work run alongside
-     *  this contact (ctrl+shift gesture or the Auto-work toggle). Daemon-gated on
-     *  ft8.tx.auto_work_callers; absent/false works this station only and clears
-     *  any previously-armed run. */
-    autoWork?: boolean;
 }
 
 export interface Ft8WorkArgs {
@@ -596,11 +596,6 @@ export interface Ft8WorkArgs {
      *  transmits a full exchange and sees no row. Only set from an explicit operator
      *  action on a station the UI already shows as worked. */
     allowDuplicate?: boolean;
-    /** Per-click auto-work intent (ADR 0065): true arms an auto-work run alongside
-     *  this contact (ctrl+shift gesture or the Auto-work toggle). Daemon-gated on
-     *  ft8.tx.auto_work_callers; absent/false works this station only and clears
-     *  any previously-armed run. */
-    autoWork?: boolean;
 }
 
 export interface Ft8TxActions {
@@ -619,6 +614,9 @@ export interface Ft8TxActions {
     /** Stop the auto-work run WITHOUT ending any active contact (ADR 0065 — the
      *  Auto-work pill's click action; abandon stops both). */
     stopAutoWork(): Promise<Ft8TxResult>;
+    bagAnswerer(call: string): Promise<Ft8TxResult>;
+    unbagAnswerer(call: string): Promise<Ft8TxResult>;
+    resumeDrain(): Promise<Ft8TxResult>;
     /** Commit a listed answerer into an operator_pick Call-CQ run (ADR 0065) —
      *  the pile-up drawer's per-candidate Work action. */
     pickAnswerer(call: string): Promise<Ft8TxResult>;
@@ -634,7 +632,7 @@ export function setFt8TxActions(a: Ft8TxActions): void {
  *  DEFAULTS — the answer mode seeds the session selector, and the auto-work
  *  knob seeds the one-shot toggle's initial state. Called once from main.ts
  *  with the /v1/config GET; the session then owns both. */
-export function setFt8SessionDefaults(answerMode: string, autoWorkOn: boolean): void {
+export function setFt8SessionDefaults(answerMode: string): void {
     if (
         answerMode === 'auto_first' ||
         answerMode === 'auto_strongest' ||
@@ -642,7 +640,6 @@ export function setFt8SessionDefaults(answerMode: string, autoWorkOn: boolean): 
     ) {
         ft8State.answerMode = answerMode;
     }
-    ft8AutoWorkIntent.on = autoWorkOn;
 }
 
 const txUnavailable: Ft8TxResult = { ok: false, message: 'FT8 transmit is unavailable.' };
@@ -663,64 +660,42 @@ export function callCq(
         : Promise.resolve(txUnavailable);
 }
 
-// Standing auto-work intent (ADR 0065): the visible toggle's state — "the next
-// contact I start also starts a run". The RUN itself lives in the daemon
-// (qso.autoWorkArmed); this is only the operator's pre-arm for the next click,
-// so it is in-memory and dies with the tab. One-shot by design: consumed (reset)
-// when a start carries it, so a forgotten toggle can't arm runs for the rest of
-// the sitting.
-export const ft8AutoWorkIntent = $state({ on: false });
-
-// Intent sent on the last start, awaiting the daemon's verdict: the arm is gated
-// daemon-side on ft8.tx.auto_work_callers, and a refusal is visible ONLY as the
-// active frame arriving with auto_work_armed=false (a refused arm must never
-// block the contact — G3). The sink says so once; without it the operator watches
-// a toggle they set produce no pill, unexplained.
-let pendingAutoWorkIntent = false;
-let autoWorkRefusedSink: (() => void) | null = null;
-
-export function setFt8AutoWorkRefusedSink(fn: (() => void) | null): void {
-    autoWorkRefusedSink = fn;
-}
-
-/** Start answering a CQ (standard or FD) from a clicked Band Activity decode. */
+// ADR 0067 retired the per-click auto-work intent grammar (toggle, chord,
+// wire flag, refusal verdict): the session's Answer mode alone decides run
+// behaviour, and the run surface renders it.
+/** Start answering a CQ (standard or FD) from a clicked Band Activity decode.
+ *  The session's Answer mode rides every start (ADR 0067) — it alone decides
+ *  whether a run follows and how it selects. */
 export function answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult> {
     if (!txActions) return Promise.resolve(txUnavailable);
-    // Under "I pick" the intent is dropped at the source (ADR 0066 fork 6): the
-    // toggle renders disabled with the reason, so sending the intent would only
-    // earn a daemon refusal for a state the UI already explained.
-    const autoWork = a.autoWork && ft8State.answerMode !== 'operator_pick';
-    // FD/type-4 never arm a run, so an intent that slips through on one must not
-    // establish a pending verdict — the daemon's unarmed frame would read as a
-    // false gate refusal (codex P2 on 7de6708e; call sites also exclude them).
-    if (autoWork && !a.fd && !a.type4) {
-        pendingAutoWorkIntent = true;
-        ft8AutoWorkIntent.on = false; // consumed — one-shot
-    }
-    return txActions.answerCq({ ...a, autoWork, answerMode: ft8State.answerMode }).then((r) => {
-        if (!r.ok) pendingAutoWorkIntent = false; // start refused — no frame will come
-        return r;
-    });
+    return txActions.answerCq({ ...a, answerMode: ft8State.answerMode });
 }
 
 /** Start working a station calling us from a clicked directed-at-me decode. */
 export function workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult> {
     if (!txActions) return Promise.resolve(txUnavailable);
-    // Same "I pick" intent drop as answerCq (ADR 0066 fork 6).
-    const autoWork = a.autoWork && ft8State.answerMode !== 'operator_pick';
-    if (autoWork) {
-        pendingAutoWorkIntent = true;
-        ft8AutoWorkIntent.on = false; // consumed — one-shot
-    }
-    return txActions.workCaller({ ...a, autoWork, answerMode: ft8State.answerMode }).then((r) => {
-        if (!r.ok) pendingAutoWorkIntent = false;
-        return r;
-    });
+    return txActions.workCaller({ ...a, answerMode: ft8State.answerMode });
 }
 
-/** Stop the auto-work run only — the Auto-work pill's click action (ADR 0065). */
+/** Stop the run — the run surface's Stop (ADR 0067): an auto run stops
+ *  outright; a pick run's drain PAUSES (queue kept; resumeDrain continues). */
 export function stopAutoWork(): Promise<Ft8TxResult> {
     return txActions ? txActions.stopAutoWork() : Promise.resolve(txUnavailable);
+}
+
+/** Bag a listed caller into the pick queue (ADR 0067). */
+export function bagAnswerer(call: string): Promise<Ft8TxResult> {
+    return txActions ? txActions.bagAnswerer(call) : Promise.resolve(txUnavailable);
+}
+
+/** Return a bagged station to the listed set (ADR 0067). */
+export function unbagAnswerer(call: string): Promise<Ft8TxResult> {
+    return txActions ? txActions.unbagAnswerer(call) : Promise.resolve(txUnavailable);
+}
+
+/** Continue a paused pick-queue drain (ADR 0067). */
+export function resumeDrain(): Promise<Ft8TxResult> {
+    return txActions ? txActions.resumeDrain() : Promise.resolve(txUnavailable);
 }
 
 /** Pop a listed operator_pick answerer into the Call-CQ run (ADR 0065). The commit
@@ -896,14 +871,6 @@ export const ft8Link: Ft8EventHandlers = {
         // path the operator can re-click well inside it (codex 0f08d2b2 P1). The
         // ft8-logged event that feeds session.qsos is also one-shot and not replayed,
         // so a missed event or a fresh tab never learns it at all.
-        // Resolve a sent auto-work intent against the daemon's verdict: the arm is
-        // gated on ft8.tx.auto_work_callers and a refusal is visible only as the
-        // active frame carrying auto_work_armed=false (G3 — a refused arm never
-        // blocks the contact). One shot: cleared on the first active frame either way.
-        if (p.active === true && pendingAutoWorkIntent) {
-            pendingAutoWorkIntent = false;
-            if (p.auto_work_armed !== true) autoWorkRefusedSink?.();
-        }
         const engaged = (p.their_call ?? '').trim();
         // Band comes from the SESSION-PINNED dial the daemon reports, never from live
         // rig state: the two are independent streams, so a band change mid-contact —
@@ -973,6 +940,8 @@ export const ft8Link: Ft8EventHandlers = {
             theirSection: p.their_section ?? '',
             answerMode: p.answer_mode ?? '',
             answerers: p.answerers ?? [],
+            queue: p.queue ?? [],
+            drainPaused: p.drain_paused ?? false,
         };
     },
 
@@ -1042,9 +1011,6 @@ export function resetFt8ForTests(): void {
     suppressDisarmNoticeFor = '';
     heldDisarmNotice = '';
     txActions = null;
-    ft8AutoWorkIntent.on = false;
-    pendingAutoWorkIntent = false;
-    autoWorkRefusedSink = null;
     operatorCall = '';
     myGrid = '';
     displayPrefs = {

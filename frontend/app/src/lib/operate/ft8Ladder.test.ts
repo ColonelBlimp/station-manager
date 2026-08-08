@@ -28,6 +28,8 @@ function qso(over: Partial<Ft8QsoStatus> = {}): Ft8QsoStatus {
         theirSection: '',
         answerMode: '',
         answerers: [],
+        queue: [],
+        drainPaused: false,
         ...over,
     };
 }

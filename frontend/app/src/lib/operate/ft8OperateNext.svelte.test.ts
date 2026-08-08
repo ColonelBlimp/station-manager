@@ -27,7 +27,6 @@ import {
     type Ft8TxResult,
     type Ft8TxActions,
 } from './ft8.svelte';
-import { ft8PileupStack, _resetPileupForTests } from './ft8Pileup.svelte';
 import { rig } from './rig.svelte';
 import { _resetForTests as resetToasts, toastsState } from '../ui/toasts.svelte';
 
@@ -61,6 +60,9 @@ function armReady(over: Partial<Ft8TxActions> = {}): Calls {
         },
         stopAutoWork: okResult,
         pickAnswerer: okResult,
+        bagAnswerer: okResult,
+        unbagAnswerer: okResult,
+        resumeDrain: okResult,
         ...over,
     });
     rig.cat = 'connected';
@@ -102,7 +104,6 @@ const clickNext = async (): Promise<void> => {
 describe('Next by mode', () => {
     beforeEach(() => {
         resetFt8ForTests();
-        _resetPileupForTests();
         resetToasts();
         setFt8OperatorCall('7Q5MLV');
         setFt8MyGrid('KH78');
@@ -124,7 +125,7 @@ describe('Next by mode', () => {
     it('offers Next during a CQ run even with an empty pile-up queue', () => {
         armReady();
         callingCqWorking();
-        expect(ft8PileupStack.count).toBe(0);
+        expect(ft8State.qso.queue.length).toBe(0);
         render(Ft8Operate);
 
         // The old gate required a queued station, because Next handed over to the
@@ -134,16 +135,9 @@ describe('Next by mode', () => {
         expect(screen.queryByRole('button', { name: 'Next' })).not.toBeNull();
     });
 
-    it('leaves the pile-up queue alone — the drawer is not part of the CQ side', async () => {
-        armReady();
-        callingCqWorking();
-        ft8PileupStack.pause();
-        render(Ft8Operate);
-
-        await clickNext();
-
-        expect(ft8PileupStack.enabled).toBe(false);
-    });
+    // "Leaves the pile-up queue alone" retired with the SPA drain (ADR 0067):
+    // the queue and its pause are daemon state now, and Next never posts a
+    // bag/unbag/resume verb — the recorder above would count one if it did.
 
     it('is not offered while merely calling CQ — there is no contact to move on from', () => {
         armReady();
@@ -151,12 +145,7 @@ describe('Next by mode', () => {
         // A QUEUED station, deliberately: without it this passes for the wrong reason
         // (the old gate hid the button whenever the queue was empty) and would stay
         // green against any implementation at all.
-        ft8PileupStack.push({
-            call: 'G0ABC',
-            grid: 'IO91',
-            snr: -10,
-            slotUtc: '2026-06-17T14:30:00Z',
-        });
+        ft8State.qso.queue = [{ call: 'G0ABC', snr: -10 }];
         render(Ft8Operate);
 
         expect(screen.queryByRole('button', { name: 'Next' })).toBeNull();
@@ -165,12 +154,7 @@ describe('Next by mode', () => {
     it('still arms the deferred skip when answering a CQ', async () => {
         const calls = armReady();
         answering();
-        ft8PileupStack.push({
-            call: 'G0ABC',
-            grid: 'IO91',
-            snr: -10,
-            slotUtc: '2026-06-17T14:30:00Z',
-        });
+        ft8State.qso.queue = [{ call: 'G0ABC', snr: -10 }];
         render(Ft8Operate);
 
         await clickNext();

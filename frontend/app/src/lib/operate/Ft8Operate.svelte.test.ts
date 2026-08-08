@@ -1,8 +1,8 @@
-// Pile-up drain test: the Operate view auto-works the operator-curated FIFO
-// (ft8PileupStack) whenever the rig is armed + CAT-live + idle + an offset & dial
-// freq are known + auto-drain is enabled. Guards the drain $effect's gates and its
-// dequeue/skip/pause behaviour. The queue mechanics themselves are covered in
-// ft8Pileup.svelte.test.ts; the click-to-enqueue wiring in Ft8BandActivity's test.
+// Ft8Operate wiring tests: ladder reactivity, the Next control (deferred
+// skip-if-silent), and Abandon. The SPA-side pile-up drain that used to be this
+// file's subject retired with ADR 0067 — bagged stations are DAEMON state,
+// worked by the sequencer's own drain (internal/ft8/adr0067_test.go B-rules);
+// the SPA only renders qso.queue and posts bag/unbag/resume verbs.
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
@@ -14,13 +14,11 @@ import {
     setFt8MyGrid,
     setFt8TxActions,
     resetFt8ForTests,
-    type Ft8WorkArgs,
     type Ft8TxResult,
     type Ft8TxActions,
 } from './ft8.svelte';
-import { ft8PileupStack, _resetPileupForTests } from './ft8Pileup.svelte';
 import { rig } from './rig.svelte';
-import { session, type SessionQso } from './session.svelte';
+import { session } from './session.svelte';
 import { _resetForTests as resetToasts } from '../ui/toasts.svelte';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -39,6 +37,9 @@ function armReady(over: Partial<Ft8TxActions> = {}): void {
         next: okResult,
         stopAutoWork: okResult,
         pickAnswerer: okResult,
+        bagAnswerer: okResult,
+        unbagAnswerer: okResult,
+        resumeDrain: okResult,
         ...over,
     });
     rig.cat = 'connected';
@@ -47,28 +48,8 @@ function armReady(over: Partial<Ft8TxActions> = {}): void {
     ft8State.tx.armed = true;
 }
 
-function caller(call: string, slotUtc = '2026-06-17T14:30:00Z') {
-    return { call, grid: 'FN42', snr: -12, slotUtc };
-}
-
-function sessionQso(call: string, band = '20m'): SessionQso {
-    return {
-        id: 1,
-        callsign: call,
-        timeOn: '14:30:00',
-        band,
-        mode: 'FT8',
-        rstSent: '-12',
-        rstRcvd: '-08',
-        name: '',
-        country: '',
-        comment: '',
-    };
-}
-
 beforeEach(() => {
     resetFt8ForTests();
-    _resetPileupForTests();
     resetToasts();
     session.qsos.length = 0;
     setFt8OperatorCall('7Q5MLV');
@@ -78,133 +59,10 @@ beforeEach(() => {
     rig.freq = '14.255.000';
 });
 
-describe('Ft8Operate pile-up drain', () => {
-    it('works the queue head via workCaller when armed + idle, then dequeues', async () => {
-        const worked: Ft8WorkArgs[] = [];
-        armReady({
-            workCaller: (a) => {
-                worked.push(a);
-                return okResult();
-            },
-        });
-        render(Ft8Operate);
-        ft8PileupStack.push(caller('K1ABC'));
-        flushSync();
-        await flush();
-        expect(worked.map((w) => w.theirCall)).toEqual(['K1ABC']);
-        expect(worked[0].offsetHz).toBe(1500);
-        // A successful start removes the head from the queue.
-        expect(ft8PileupStack.items).toEqual([]);
-    });
-
-    it('does not drain while a contact is active', async () => {
-        const worked: Ft8WorkArgs[] = [];
-        armReady({
-            workCaller: (a) => {
-                worked.push(a);
-                return okResult();
-            },
-        });
-        ft8State.qso.active = true;
-        render(Ft8Operate);
-        ft8PileupStack.push(caller('K1ABC'));
-        flushSync();
-        await flush();
-        expect(worked).toEqual([]);
-        expect(ft8PileupStack.items.length).toBe(1); // kept for later
-    });
-
-    it('does not drain while paused (auto-drain disabled)', async () => {
-        const worked: Ft8WorkArgs[] = [];
-        armReady({
-            workCaller: (a) => {
-                worked.push(a);
-                return okResult();
-            },
-        });
-        ft8PileupStack.pause();
-        render(Ft8Operate);
-        ft8PileupStack.push(caller('K1ABC'));
-        flushSync();
-        await flush();
-        expect(worked).toEqual([]);
-        expect(ft8PileupStack.items.length).toBe(1);
-    });
-
-    it('does not drain when the rig is not armed', async () => {
-        const worked: Ft8WorkArgs[] = [];
-        armReady({
-            workCaller: (a) => {
-                worked.push(a);
-                return okResult();
-            },
-        });
-        ft8State.tx.armed = false;
-        render(Ft8Operate);
-        ft8PileupStack.push(caller('K1ABC'));
-        flushSync();
-        await flush();
-        expect(worked).toEqual([]);
-        expect(ft8PileupStack.items.length).toBe(1);
-    });
-
-    it('skips (drops) a head already worked this session without transmitting', async () => {
-        const worked: Ft8WorkArgs[] = [];
-        armReady({
-            workCaller: (a) => {
-                worked.push(a);
-                return okResult();
-            },
-        });
-        session.qsos.push(sessionQso('K1ABC', '20m'));
-        render(Ft8Operate);
-        ft8PileupStack.push(caller('K1ABC'));
-        flushSync();
-        await flush();
-        expect(worked).toEqual([]);
-        expect(ft8PileupStack.items).toEqual([]); // dropped, not worked
-    });
-
-    // ...but an entry the operator queued KNOWING the station was worked carries
-    // `repeat`, and the drain must honour it. Ctrl+click accepts such an add and says
-    // "queued anyway"; dropping it here would make the accepted action impossible and
-    // leave a doomed entry holding the run's parity lock (codex 0f9aa672 P1).
-    it('works a head marked repeat even though the station was worked this session', async () => {
-        const worked: Ft8WorkArgs[] = [];
-        armReady({
-            workCaller: (a) => {
-                worked.push(a);
-                return okResult();
-            },
-        });
-        session.qsos.push(sessionQso('K1ABC', '20m'));
-        render(Ft8Operate);
-        ft8PileupStack.push({ ...caller('K1ABC'), repeat: true });
-        flushSync();
-        await flush();
-        expect(worked.length).toBe(1);
-        expect(worked[0]).toMatchObject({ theirCall: 'K1ABC' });
-    });
-
-    it('keeps the head (does not pause) on a single transient failure', async () => {
-        const worked: Ft8WorkArgs[] = [];
-        armReady({
-            workCaller: (a) => {
-                worked.push(a);
-                return Promise.resolve({ ok: false, message: 'rig not ready' });
-            },
-        });
-        render(Ft8Operate);
-        ft8PileupStack.push(caller('K1ABC'));
-        flushSync();
-        await flush();
-        // Attempted once, failed → head retained, drain still enabled (a retry is
-        // scheduled; we don't advance timers here, only assert nothing was lost).
-        expect(worked.length).toBe(1);
-        expect(ft8PileupStack.items.length).toBe(1);
-        expect(ft8PileupStack.enabled).toBe(true);
-    });
-});
+// The 'Ft8Operate pile-up drain' describe (7 rules: gates, dequeue, worked-this-
+// session skip, transient-failure retry) retired with the SPA drain $effect it
+// pinned. The daemon drain's equivalents live in internal/ft8/adr0067_test.go
+// (B2 drain order/parity, B3 stop-pauses, B5 staleness expiry, B9 CQ-run drain).
 
 describe('Ft8Operate ladder reactivity', () => {
     // Regression: a hard reload (cache bypassed) resolves /v1/config AFTER first paint,
@@ -233,7 +91,7 @@ function workingWithQueue(theirCall = 'K1ABC', queued = '9A4ZM'): void {
     ft8State.qso.theirCall = theirCall;
     ft8State.qso.state = 'calling';
     ft8State.qso.repeats = 0;
-    ft8PileupStack.push(caller(queued));
+    ft8State.qso.queue = [{ call: queued, snr: -12 }];
 }
 
 describe('Ft8Operate Next control (deferred skip-if-silent)', () => {
@@ -248,8 +106,7 @@ describe('Ft8Operate Next control (deferred skip-if-silent)', () => {
 
     it('is hidden when idle even with a queue (nothing to advance from)', () => {
         armReady();
-        ft8PileupStack.pause(); // keep the queue static (idle)
-        ft8PileupStack.push(caller('K1ABC'));
+        ft8State.qso.queue = [{ call: 'K1ABC', snr: -12 }];
         render(Ft8Operate);
         flushSync();
         expect(screen.queryByRole('button', { name: 'Next' })).toBeNull();
@@ -291,7 +148,8 @@ describe('Ft8Operate Next control (deferred skip-if-silent)', () => {
         flushSync();
         await flush();
         expect(abandoned).toBe(0); // the daemon ended it — no client abandon
-        expect(ft8PileupStack.enabled).toBe(true); // drain resumed → next head worked
+        // (What happens NEXT is the daemon's business: its drain takes the
+        // queue head — adr0067_test.go B2. The SPA no longer resumes anything.)
     });
 
     it('a reply disarms the skip daemon-side and the button returns to Next', () => {
@@ -337,16 +195,32 @@ describe('Ft8Operate Next control (deferred skip-if-silent)', () => {
 });
 
 describe('Ft8Operate Abandon', () => {
-    it('pauses the drain (stops the run) and keeps the queue', async () => {
-        armReady({ abandon: () => okResult() });
+    // Under ADR 0067 Abandon posts the abandon verb and NOTHING else — no
+    // pause, no queue touch. Daemon-side, abandon stops the whole run (ADR
+    // 0059 W6), which is a harder stop than the old SPA behaviour (pause +
+    // keep queue). Stop on the run surface is the pause now.
+    it('POSTs abandon only — the daemon owns what happens to the run and queue', async () => {
+        let abandoned = 0;
+        const verbs: string[] = [];
+        armReady({
+            abandon: () => {
+                abandoned++;
+                return okResult();
+            },
+            bagAnswerer: (c) => (verbs.push(`bag:${c}`), okResult()),
+            unbagAnswerer: (c) => (verbs.push(`unbag:${c}`), okResult()),
+            resumeDrain: () => (verbs.push('resume'), okResult()),
+            stopAutoWork: () => (verbs.push('stop'), okResult()),
+        });
         ft8State.qso.active = true;
         ft8State.qso.role = 'worker';
-        ft8PileupStack.push(caller('K1ABC'));
+        ft8State.qso.queue = [{ call: 'K1ABC', snr: -12 }];
         render(Ft8Operate);
         flushSync();
         await fireEvent.click(screen.getByRole('button', { name: 'Abandon' }));
         await flush();
-        expect(ft8PileupStack.enabled).toBe(false); // paused → no takeover
-        expect(ft8PileupStack.items.length).toBe(1); // queue kept for Resume
+        expect(abandoned).toBe(1);
+        expect(verbs).toEqual([]); // no queue verb rode along
+        expect(ft8State.qso.queue.length).toBe(1); // SPA state untouched — SSE owns it
     });
 });

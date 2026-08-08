@@ -556,6 +556,19 @@ func (s *Sequencer) collectAnswerersLocked(period string, msgs []goft8.DecodedMe
 		if s.ex != nil && pm.from == s.ex.TheirCall {
 			continue
 		}
+		// A BAGGED station that keeps calling REFRESHES its queue entry
+		// instead of relisting (codex f6e93efd P1): relisting lets the
+		// operator bag it twice — the drain would work it twice — and
+		// without the refresh their queue entry goes stale while they are
+		// audibly still calling. The staleness bound runs from the last
+		// hearing, exactly as it does for listed stations.
+		if qi := slices.IndexFunc(s.pickQueue, func(a cqAnswerer) bool { return a.call == pm.from }); qi >= 0 {
+			s.pickQueue[qi].snr = m.SNR
+			s.pickQueue[qi].lastHeard = now
+			s.pickQueue[qi].period = period
+			continue
+		}
+
 		c := NewCallerExchange(s.ourCall, pm.from, pm.grid, m.SNR)
 		reply, ok := c.TxMessage()
 		if !ok {

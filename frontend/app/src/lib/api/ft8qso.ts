@@ -85,7 +85,6 @@ export function startFt8Qso(
     mode: 'standard' | 'fd' | 'type4' = 'standard',
     theirSnr?: number,
     allowDuplicate?: boolean,
-    autoWork?: boolean,
     answerMode = '',
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
@@ -101,11 +100,9 @@ export function startFt8Qso(
             // derives its report from the exchange, so it sends neither.
             ...(mode === 'fd' || mode === 'type4' ? { mode, their_snr: theirSnr ?? 0 } : {}),
             ...(allowDuplicate ? { allow_duplicate: true } : {}),
-            // Per-click auto-work intent (ADR 0065) — standard mode only; the daemon
-            // ignores it for fd/type4, which never arm a run. The session's answer
-            // mode rides with it (ADR 0066): it is what the armed run selects with.
-            ...(autoWork ? { auto_work: true } : {}),
-            ...(autoWork && answerMode ? { answer_mode: answerMode } : {}),
+            // The session's answer mode (ADR 0067): it ALONE decides whether a
+            // run follows this start and how it selects.
+            ...(answerMode ? { answer_mode: answerMode } : {}),
         },
         signal
     );
@@ -126,7 +123,6 @@ export function startFt8WorkCaller(
     operatingFreqMHz: number,
     fd?: { class: string; section: string },
     allowDuplicate?: boolean,
-    autoWork?: boolean,
     answerMode = '',
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
@@ -141,8 +137,7 @@ export function startFt8WorkCaller(
             operating_freq_mhz: operatingFreqMHz,
             ...(fd ? { mode: 'fd', their_class: fd.class, their_section: fd.section } : {}),
             ...(allowDuplicate ? { allow_duplicate: true } : {}),
-            ...(autoWork ? { auto_work: true } : {}),
-            ...(autoWork && answerMode ? { answer_mode: answerMode } : {}),
+            ...(answerMode ? { answer_mode: answerMode } : {}),
         },
         signal
     );
@@ -176,6 +171,21 @@ export function startFt8Cq(
 /** Abandon any active sequenced session — answer-a-CQ, work-a-caller, or Call-CQ. */
 export function abandonFt8Qso(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
     return postFt8Qso('/v1/ft8/qso/abandon', {}, signal);
+}
+
+/** Bag a listed pick-run caller into the queue (ADR 0067). */
+export function bagFt8Answerer(call: string, signal?: AbortSignal): Promise<Ft8QsoOutcome> {
+    return postFt8Qso('/v1/ft8/cq/bag', { call }, signal);
+}
+
+/** Return a bagged station to the listed set (ADR 0067). */
+export function unbagFt8Answerer(call: string, signal?: AbortSignal): Promise<Ft8QsoOutcome> {
+    return postFt8Qso('/v1/ft8/cq/unbag', { call }, signal);
+}
+
+/** Continue a paused pick-queue drain (ADR 0067 — the drawer's Resume). */
+export function resumeFt8Drain(signal?: AbortSignal): Promise<Ft8QsoOutcome> {
+    return postFt8Qso('/v1/ft8/cq/resume', {}, signal);
 }
 
 /** Stop the auto-work run WITHOUT ending any active contact (ADR 0065) — the

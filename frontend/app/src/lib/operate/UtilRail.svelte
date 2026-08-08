@@ -8,7 +8,6 @@
     import { router } from '../router.svelte';
     import { setPileup, setCallStack, focusCallsign } from './state.svelte';
     import { operate } from './state.svelte';
-    import { ft8PileupStack } from './ft8Pileup.svelte';
     import { ft8State } from './ft8.svelte';
     import { callsignStack } from './callsignStack.svelte';
     import { toggleTile, isVisible, RAIL_TILES, type TileId } from './layout.svelte';
@@ -23,7 +22,7 @@
     // ("badge only" — no toast, no auto-open), so it must count them.
     const pileupCount = $derived(
         router.mode === 'ft8'
-            ? ft8PileupStack.count + ft8State.qso.answerers.length
+            ? ft8State.qso.answerers.length + ft8State.qso.queue.length
             : callsignStack.count
     );
 

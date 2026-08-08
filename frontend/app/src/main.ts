@@ -27,7 +27,6 @@ import {
     setFt8LoggedSink,
     setFt8SessionEndedSink,
     setFt8TxDisarmedSink,
-    setFt8AutoWorkRefusedSink,
     setFt8DisplayPrefs,
     type Ft8TxResult,
 } from './lib/operate/ft8.svelte';
@@ -43,6 +42,9 @@ import {
     startFt8Cq,
     abandonFt8Qso,
     stopFt8AutoWork,
+    bagFt8Answerer,
+    unbagFt8Answerer,
+    resumeFt8Drain,
     skipFt8Qso,
     nextFt8Answerer,
     pickFt8CqAnswerer,
@@ -108,7 +110,6 @@ setFt8TxActions({
             a.type4 ? 'type4' : a.fd ? 'fd' : 'standard',
             a.theirSnr,
             a.allowDuplicate,
-            a.autoWork,
             a.answerMode
         ).then(toTxResult),
     workCaller: (a) =>
@@ -121,22 +122,16 @@ setFt8TxActions({
             a.opFreqMHz,
             a.fd,
             a.allowDuplicate,
-            a.autoWork,
             a.answerMode
         ).then(toTxResult),
     abandon: () => abandonFt8Qso().then(toTxResult),
     skip: (armed) => skipFt8Qso(armed).then(toTxResult),
     next: () => nextFt8Answerer().then(toTxResult),
     stopAutoWork: () => stopFt8AutoWork().then(toTxResult),
+    bagAnswerer: (call) => bagFt8Answerer(call).then(toTxResult),
+    unbagAnswerer: (call) => unbagFt8Answerer(call).then(toTxResult),
+    resumeDrain: () => resumeFt8Drain().then(toTxResult),
     pickAnswerer: (call) => pickFt8CqAnswerer(call).then(toTxResult),
-});
-
-// A sent auto-work intent the daemon's gate refused: the contact proceeds —
-// say why no run appeared (ADR 0065 G3). Since ADR 0066 the gate refuses on
-// the session's answer mode, and the SPA drops the intent under "I pick"
-// before sending, so this fires only on a genuine SPA/daemon disagreement.
-setFt8AutoWorkRefusedSink(() => {
-    toasts.info('Auto-work needs an auto Answer mode — working this station only.');
 });
 
 // Session-ended sink (ft8-qso, terminal frame with a reason): the daemon ends a
@@ -337,7 +332,7 @@ function applyStationContext(c: StationContext): void {
     setFt8AudioWindow(c.ft8AudioLowDbfs, c.ft8AudioHighDbfs);
     // Session-knob defaults (ADR 0066): config seeds the Answer selector and
     // the one-shot Auto-work toggle; the session owns both from here on.
-    setFt8SessionDefaults(c.ft8CallerAnswerMode, c.ft8AutoWorkCallers);
+    setFt8SessionDefaults(c.ft8CallerAnswerMode);
     // TX-drive (ALC) chip: the amber floor (the ONLY threshold — red folded
     // into amber 2026-08-08) + the meter-poll cadence its staleness window
     // derives from (ADR 0064).

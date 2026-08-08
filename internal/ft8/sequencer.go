@@ -1247,9 +1247,10 @@ func (s *Sequencer) BagAnswerer(call string, now time.Time) error {
 	a := s.answerers[idx]
 	s.answerers = slices.Delete(s.answerers, idx, idx+1)
 	s.pickQueue = append(s.pickQueue, a)
+	queueLen := len(s.pickQueue) // captured under s.mu (codex f6e93efd P2)
 	s.publish(s.statusLocked())
 	s.mu.Unlock()
-	s.log.InfoWith().Str("answerer", a.call).Int("queue_len", len(s.pickQueue)).
+	s.log.InfoWith().Str("answerer", a.call).Int("queue_len", queueLen).
 		Msg("ft8 seq: caller bagged into the pick queue")
 	return nil
 }

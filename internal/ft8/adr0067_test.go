@@ -329,3 +329,31 @@ func TestAdr0067_CqRunDrainsQueue(t *testing.T) {
 	require.NotNil(t, s.caller, "the CQ run works the queue head")
 	require.Equal(t, "DL9UW", s.caller.TheirCall)
 }
+
+// B11 — codex f6e93efd P1: a bagged station that keeps calling must not be
+// LISTED again (the operator could bag it twice → the drain works it twice),
+// and its queue entry must REFRESH — the staleness bound runs from the last
+// time they were heard, not from the bag.
+func TestAdr0067_ReheardBaggedCallerRefreshesNotRelists(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	listedCaller(t, s, r) // DL9UW heard at slot 90
+	require.NoError(t, s.BagAnswerer("DL9UW", time.Unix(95, 0).UTC()))
+	// Paused BEFORE the re-hear: an unpaused drain would work the head at the
+	// very slot that re-hears it, hiding what this rule pins.
+	s.StopAutoWorkRun()
+
+	// They keep calling. Heard again at slot 240 — 150 s after the first.
+	driveTheir(s, 240, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -7)})
+	st := r.lastStatus()
+	require.Empty(t, st.Answerers, "a bagged station must not relist")
+	require.Len(t, st.Queue, 1, "…and must not duplicate in the queue")
+
+	// Resume at a time stale from the FIRST hearing but fresh from the
+	// SECOND: the drain must still work them — the refresh keeps the choice
+	// alive while they are audibly still calling.
+	require.NoError(t, s.ResumeDrain(time.Unix(300, 0).UTC()))
+	driveTheir(s, 330, nil) // 330-90=240s > bound from first; 330-256≈74s < bound from second
+	require.NotNil(t, s.caller, "the refreshed entry must still drain")
+	require.Equal(t, "DL9UW", s.caller.TheirCall)
+}

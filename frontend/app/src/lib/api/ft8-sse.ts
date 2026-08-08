@@ -125,6 +125,11 @@ export interface QsoPayload {
      *  CQ that the run can actually work, oldest first. Pop one via
      *  POST /v1/ft8/cq/pick; grid/offset/dial stay daemon-side. */
     answerers?: { call: string; snr: number }[];
+    /** The pick run's BAGGED stations (ADR 0067), in bag order — the operator's
+     *  explicit choices, auto-worked by the drain. */
+    queue?: { call: string; snr: number }[];
+    /** Stop paused the drain (queue kept); Resume continues (ADR 0067). */
+    drain_paused?: boolean;
 }
 
 /** ft8-logged — internal/ft8.LoggedQso (a completed exchange the daemon stored).

@@ -11,14 +11,13 @@
         ft8CqToTop,
         ft8HideHashed,
         ft8EngagedThisSession,
-        ft8AutoWorkIntent,
         answerCq,
         workCaller,
+        bagAnswerer,
         type DecodeEntry,
         type Ft8TxResult,
     } from './ft8.svelte';
     import { ft8EnrichState, type Ft8CallInfo } from './ft8Enrich.svelte';
-    import { ft8PileupStack } from './ft8Pileup.svelte';
     import { rig } from './rig.svelte';
     import { session } from './session.svelte';
     import {
@@ -251,15 +250,6 @@
         return daemonNow - t > STALE_MS;
     }
 
-    // Pile-up queue anchors. workableParity = the run's locked slot parity, or (before
-    // anything's queued) the live contact's caller parity — a wrong-parity add is
-    // rejected in enqueueCaller. callerActive = WE'RE running Call CQ (queue disabled
-    // then: the caller sequencer owns the rig, a competing queue would fight it).
-    const workableParity = $derived(
-        ft8PileupStack.lockedParity || (ft8State.qso.active ? ft8State.qso.theirPeriod : '')
-    );
-    const callerActive = $derived(ft8State.qso.active && ft8State.qso.role === 'caller');
-
     // In-flight latch for the click-start POST→SSE window: set synchronously so a
     // second click can't fire a second start. Released when the daemon confirms the
     // session is active (below) or the start fails.
@@ -294,82 +284,6 @@
         }
         if (ft8EngagedThisSession(call, rig.band)) return 'engaged';
         return '';
-    }
-
-    // Ctrl/Cmd+click a calling-you row → PILE-UP queue (pure capture, works in ANY TX
-    // state, so callers spotted mid-QSO aren't lost). The Operate view drains it FIFO
-    // (increment 3). Single-parity run: the first add locks the parity; a wrong-parity
-    // add is rejected with an explain-toast.
-    function enqueueCaller(row: DecodeRow): void {
-        const toMe = parseDirectedToMe(row.d.text, me);
-        if (!toMe) return;
-        if (staleBlocked(row)) return;
-        const call = toMe.call;
-        if (callerActive) {
-            // The curated queue stays disabled during any CQ run, but the
-            // explanation differs: under operator_pick the daemon queues answerers
-            // into the drawer itself (ADR 0065), so the operator's captures are not
-            // lost — telling them to Abandon would be exactly wrong there.
-            toasts.info(
-                ft8State.qso.answerMode === 'operator_pick'
-                    ? 'Calling CQ — answerers queue in the pile-up automatically.'
-                    : 'Calling CQ — pile-up queue disabled. Abandon to work stations by hand.'
-            );
-            return;
-        }
-        // Never re-queue the station in flight (its grid re-calls still decode).
-        if (ft8State.qso.active && call === ft8State.qso.theirCall) {
-            toasts.info(`Already working ${call}.`);
-            return;
-        }
-        // Inform, don't refuse — see txPreflight. Queuing a station worked earlier is
-        // a legitimate operator choice (a repair, a sked, a second report). The entry
-        // is marked `repeat` so the drain honours it instead of dropping it as a stale
-        // duplicate, or the accepted action could never actually happen.
-        const evidence = workedEvidence(call);
-        const repeat = evidence !== '';
-        if (evidence === 'logged') {
-            toasts.info(`${call} already worked this session — queued anyway.`);
-        } else if (evidence === 'engaged') {
-            toasts.info(
-                `You started ${call} earlier this session — nothing was logged. Queued as new.`
-            );
-        }
-        // Already queued? Do NOT return — fall through to push, which dedupes by call
-        // and refreshes the entry in place. Returning here discarded two things: the
-        // documented "a later decode is the better data to work from" refresh, and —
-        // since `repeat` is decided above — an operator re-clicking to UPGRADE a
-        // queued entry into a deliberate repeat, which the drain would then still
-        // drop as stale (codex c2a8bea6 P2).
-        const queued = ft8PileupStack.items.some((x) => x.call === call);
-        if (queued) {
-            toasts.info(
-                repeat
-                    ? `${call} already in the pile-up — marked to work again.`
-                    : `${call} is already in the pile-up — refreshed.`
-            );
-        }
-        // Fresh run? Empty queue + no contact → the previous run is over, so unlock; the
-        // first add sets a new parity. A live run holds the lock across the drain.
-        if (ft8PileupStack.items.length === 0 && !ft8State.qso.active) {
-            ft8PileupStack.clearLock();
-        }
-        const parity = slotParity(row.d.startUtc);
-        if (workableParity !== '' && parity !== '' && parity !== workableParity) {
-            toasts.info(
-                `${parity} slot — can't add to this ${workableParity} run. Finish or Abandon first.`
-            );
-            return;
-        }
-        const added = ft8PileupStack.push({
-            call,
-            grid: toMe.grid,
-            snr: row.d.snr,
-            slotUtc: row.d.startUtc,
-            repeat,
-        });
-        // Only a genuinely NEW caller resumes a paused drain (Abandon stays in control).
-        if (added) ft8PileupStack.resume();
     }
 
     // The guard chain every TX-starting row interaction runs — each miss explains
@@ -459,14 +373,16 @@
     }
 
     async function onRowClick(e: MouseEvent, row: DecodeRow): Promise<void> {
-        // Modifier grammar (ADR 0065, operator-ratified): ctrl+shift+click on a CQ
-        // answers it AND arms an auto-work run — the ONE modifier chord that starts
-        // TX, deliberately revising the older "a modifier click never TXes" rule for
-        // this chord only. Plain ctrl/cmd+click stays capture-only (pile-up enqueue
-        // of a calling-you row).
-        const armGesture = (e.ctrlKey || e.metaKey) && e.shiftKey && row.kind === 'cq';
-        if ((e.ctrlKey || e.metaKey) && !armGesture) {
-            if (row.kind === 'call') enqueueCaller(row);
+        // ADR 0067 retired the arming chord: the session's Answer mode alone
+        // decides whether a run follows a click. Ctrl/cmd+click on a calling-you
+        // row BAGS the station into the pick queue (capture-only — no TX): the
+        // daemon-refusal toasts explain a station that isn't listed or a session
+        // that isn't in pick mode.
+        if (e.ctrlKey || e.metaKey) {
+            if (row.kind === 'call') {
+                const r = await bagAnswerer(row.call);
+                if (!r.ok) toasts.error(r.message);
+            }
             return;
         }
         if (row.kind === '' || starting) return;
@@ -474,8 +390,7 @@
         const pre = txPreflight(row.call);
         if (!pre) return;
         starting = true;
-        const pending =
-            row.kind === 'cq' ? answerCqRow(row, pre, armGesture) : workCallerRow(row, pre);
+        const pending = row.kind === 'cq' ? answerCqRow(row, pre) : workCallerRow(row, pre);
         if (!pending) {
             starting = false;
             return;
@@ -494,8 +409,7 @@
 
     function answerCqRow(
         row: DecodeRow,
-        pre: { offset: number; opMHz: number; allowDuplicate: boolean },
-        armGesture: boolean
+        pre: { offset: number; opMHz: number; allowDuplicate: boolean }
     ): Promise<Ft8TxResult> | null {
         const cq = parseCq(row.d.text);
         if (!cq) return null;
@@ -515,12 +429,8 @@
             type4,
             theirSnr: row.d.snr,
             allowDuplicate: pre.allowDuplicate,
-            // The gesture or the standing toggle — either arms (daemon-gated).
-            // STANDARD exchanges only: FD/type-4 never arm a run (ADR 0065 scope
-            // note), and carrying the intent there consumed the toggle and read
-            // the daemon's unarmed frame as a false settings-refusal (codex P2 on
-            // 7de6708e). The standing intent survives for the next standard click.
-            autoWork: (armGesture || ft8AutoWorkIntent.on) && !fd && !type4,
+            // ADR 0067: no per-click arming — the session's Answer mode alone
+            // decides whether a run follows (the wrapper carries it).
         });
     }
 
@@ -541,7 +451,6 @@
             opFreqMHz: pre.opMHz,
             fd: fd ? { class: fd.class, section: fd.section } : undefined,
             allowDuplicate: pre.allowDuplicate,
-            autoWork: ft8AutoWorkIntent.on,
         });
     }
 </script>
@@ -652,9 +561,9 @@
                                         >{/if}{#if ft8State.qso.active && ft8State.qso.theirCall !== '' && (row.call === ft8State.qso.theirCall || row.dx?.call === ft8State.qso.theirCall)}<span
                                             class="ml-1 rounded bg-green-600 px-1 text-[10px] font-bold text-white"
                                             title="Working now">●</span
-                                        >{:else if row.kind === 'call' && ft8PileupStack.items.some((x) => x.call === row.call)}<span
+                                        >{:else if row.kind === 'call' && ft8State.qso.queue.some((x) => x.call === row.call)}<span
                                             class="ml-1 rounded bg-focus px-1 text-[10px] font-bold text-white"
-                                            title="In the pile-up queue">Q</span
+                                            title="Bagged — the drain works these in order">Q</span
                                         >{/if}</td
                                 >
                             </tr>
