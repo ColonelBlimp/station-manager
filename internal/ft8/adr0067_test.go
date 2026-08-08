@@ -173,3 +173,159 @@ func TestAdr0067_FdStartArmsNothing(t *testing.T) {
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	require.False(t, s.AutoWorkArmed(), "an FD start must not arm a run")
 }
+
+/*
+	Slice B — the pick QUEUE (bag-and-drain), ratified semantics:
+
+	  Bagged stations are auto-worked from the queue in order — each was
+	  individually chosen, so the drain keeps every transmission
+	  operator-selected. `Stop run` on a pick run PAUSES the drain (queue
+	  kept; Resume continues) — today's curated-stack semantics carried over
+	  so a stop never costs the operator their choices. Confusables:
+
+	  B1 — bagged vs merely-listed rendered the same: the frame must move the
+	       station from `answerers` to `queue`, in bag order.
+	  B2/B3 — the drain: a completed contact + a fresh queue head = the head
+	       is worked WITHOUT a further gesture, in order, until empty.
+	  B4/B5 — Stop pauses (nothing drains, queue+run survive, the frame says
+	       paused); Resume continues.
+	  B6 — bag refusals mirror the pop's (not-listed / no pick run).
+	  B7 — a STALE queue entry is expired at drain, not transmitted at (the
+	       0065 rationale: a pop at a gone station wastes ~max_repeats calls).
+	  B8 — unbag returns the station to the listed set.
+	  B9 — Stop on an AUTO run still stops it outright (G6-family unchanged).
+	  B10 — the CQ run drains its queue too, resuming CQ when it empties.
+*/
+
+func listedCaller(t *testing.T, s *Sequencer, r *seqRecorder) {
+	t.Helper()
+	stagedStart(t, s, "operator_pick")
+	completeSeedContact(t, s)
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
+	require.NotEmpty(t, r.lastStatus().Answerers, "fixture: DL9UW is listed")
+}
+
+// B1 — bagging moves the station from the listed set to the queue, in order.
+func TestAdr0067_BagMovesListedToQueue(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	listedCaller(t, s, r)
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("G0XYZ M0AAA IO83", -15)})
+
+	require.NoError(t, s.BagAnswerer("DL9UW", time.Unix(125, 0).UTC()))
+	require.NoError(t, s.BagAnswerer("M0AAA", time.Unix(126, 0).UTC()))
+
+	st := r.lastStatus()
+	require.Empty(t, st.Answerers, "bagged stations leave the listed set")
+	require.Len(t, st.Queue, 2)
+	require.Equal(t, "DL9UW", st.Queue[0].Call, "bag order is queue order")
+	require.Equal(t, "M0AAA", st.Queue[1].Call)
+}
+
+// B2/B3 — the drain works the queue in order without further gestures.
+func TestAdr0067_QueueDrainsInOrder(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	listedCaller(t, s, r)
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("G0XYZ M0AAA IO83", -15)})
+	require.NoError(t, s.BagAnswerer("DL9UW", time.Unix(125, 0).UTC()))
+	require.NoError(t, s.BagAnswerer("M0AAA", time.Unix(126, 0).UTC()))
+
+	// The next slot evaluation drains the head: DL9UW is worked.
+	driveTheir(s, 150, nil)
+	require.NotNil(t, s.caller, "the queue head must be worked without a gesture")
+	require.Equal(t, "DL9UW", s.caller.TheirCall)
+
+	// Complete DL9UW; the drain continues with M0AAA.
+	driveTheir(s, 180, []goft8.DecodedMessage{dm("G0XYZ DL9UW R-08", -8)})
+	require.Nil(t, s.caller, "fixture: DL9UW's QSO completes")
+	driveTheir(s, 210, nil)
+	require.NotNil(t, s.caller, "the drain continues")
+	require.Equal(t, "M0AAA", s.caller.TheirCall)
+}
+
+// B4/B5 — Stop pauses the drain; Resume continues it.
+func TestAdr0067_StopPausesDrainResumeContinues(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	listedCaller(t, s, r)
+	require.NoError(t, s.BagAnswerer("DL9UW", time.Unix(95, 0).UTC()))
+
+	s.StopAutoWorkRun()
+	st := r.lastStatus()
+	require.True(t, st.DrainPaused, "the frame must say the drain is paused")
+	require.Len(t, st.Queue, 1, "the queue survives a Stop")
+
+	driveTheir(s, 120, nil)
+	require.Nil(t, s.caller, "nothing drains while paused")
+
+	require.NoError(t, s.ResumeDrain(time.Unix(125, 0).UTC()))
+	driveTheir(s, 150, nil)
+	require.NotNil(t, s.caller, "Resume lets the drain continue")
+	require.Equal(t, "DL9UW", s.caller.TheirCall)
+}
+
+// B6 — bag refusals mirror the pop's.
+func TestAdr0067_BagRefusals(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.ErrorIs(t, s.BagAnswerer("DL9UW", time.Unix(0, 0).UTC()), ErrNoCqPickRun,
+		"no pick run — nothing to bag into")
+	listedCaller(t, s, r)
+	require.ErrorIs(t, s.BagAnswerer("W1AW", time.Unix(95, 0).UTC()), ErrAnswererNotListed,
+		"a station never listed cannot be bagged")
+}
+
+// B7 — a stale queue entry is expired at drain, never transmitted at.
+func TestAdr0067_StaleQueueEntryExpiresAtDrain(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	listedCaller(t, s, r)
+	require.NoError(t, s.BagAnswerer("DL9UW", time.Unix(95, 0).UTC()))
+
+	// Far past the staleness bound with DL9UW never heard again.
+	before := len(r.sentMsgs())
+	driveTheir(s, 90+400, nil)
+	require.Nil(t, s.caller, "a stale entry must not be worked")
+	require.Len(t, r.sentMsgs(), before, "nothing transmits at a gone station")
+	require.Empty(t, r.lastStatus().Queue, "the stale entry is expired off the queue")
+}
+
+// B8 — unbag returns the station to the listed set.
+func TestAdr0067_UnbagReturnsToListed(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	listedCaller(t, s, r)
+	require.NoError(t, s.BagAnswerer("DL9UW", time.Unix(95, 0).UTC()))
+	require.NoError(t, s.UnbagAnswerer("DL9UW", time.Unix(96, 0).UTC()))
+	st := r.lastStatus()
+	require.Empty(t, st.Queue)
+	require.Len(t, st.Answerers, 1)
+	require.Equal(t, "DL9UW", st.Answerers[0].Call)
+}
+
+// B9 — Stop on an AUTO run still stops it outright.
+func TestAdr0067_StopOnAutoRunStillStops(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	stagedStart(t, s, "auto_first")
+	completeSeedContact(t, s)
+	require.True(t, s.AutoWorkArmed())
+	s.StopAutoWorkRun()
+	require.False(t, s.AutoWorkArmed(), "an auto run stops outright — no pause semantics")
+}
+
+// B10 — the CQ run drains its queue too, resuming CQ when it empties.
+func TestAdr0067_CqRunDrainsQueue(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	require.NoError(t,
+		s.StartCallCq("G0XYZ", "KH78", 2700, 28.074, "operator_pick", "", time.Unix(0, 0).UTC()))
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
+	require.NotEmpty(t, r.lastStatus().Answerers, "fixture: an answerer is listed")
+
+	require.NoError(t, s.BagAnswerer("DL9UW", time.Unix(35, 0).UTC()))
+	driveTheir(s, 60, nil)
+	require.NotNil(t, s.caller, "the CQ run works the queue head")
+	require.Equal(t, "DL9UW", s.caller.TheirCall)
+}

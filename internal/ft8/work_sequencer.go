@@ -105,7 +105,7 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	// ADR 0067 (rule 9 generalised): under a pick run the caller list stays
 	// warm DURING the contact, so it is ready the moment this one completes.
 	if s.autoWork.armed && s.autoWork.selectMode == types.Ft8CallerAnswerOperatorPick {
-		s.collectAnswerersLocked(msgs, now)
+		s.collectAnswerersLocked(ref.Period, msgs, now)
 	}
 
 	// Advance on their decode directed to us (records their report). Capture what the
@@ -566,11 +566,24 @@ func (s *Sequencer) onSlotIdleArmed(ref SlotRef, msgs []goft8.DecodedMessage, no
 	// run supplies them: after a completion the previous session's identity is gone.
 	s.ourCall = s.autoWork.call
 	s.answerMode = s.autoWork.selectMode
-	// ADR 0067: under operator_pick the run LISTS — collect this slot's callers,
-	// publish the list, and commit nothing. The pop (PickAnswerer) is the only
-	// path from here to a transmission.
+	// ADR 0067: under operator_pick the run LISTS — collect this slot's callers
+	// and publish. The only paths from here to a transmission are the pop and
+	// the QUEUE DRAIN (slice B): a bagged head, still fresh, is worked without
+	// a further gesture — the operator chose it when they bagged it.
 	if s.autoWork.selectMode == types.Ft8CallerAnswerOperatorPick {
-		s.collectAnswerersLocked(msgs, now)
+		s.collectAnswerersLocked(ref.Period, msgs, now)
+		if head, _ := s.nextQueuedLocked(now); head != nil {
+			c := NewCallerExchange(s.autoWork.call, head.call, head.grid, head.snr)
+			s.commitWorkCallerLocked(&c, s.autoWork.call,
+				head.period, s.autoWork.offsetHz, s.autoWork.dialMHz, now)
+			theirCall := head.call
+			s.publish(s.statusLocked())
+			s.mu.Unlock()
+			s.log.InfoWith().Str("their_call", theirCall).
+				Msg("ft8 seq: drained bagged caller from the pick queue; working them")
+			s.fireOpening(now)
+			return
+		}
 		s.publish(s.statusLocked())
 		s.mu.Unlock()
 		return

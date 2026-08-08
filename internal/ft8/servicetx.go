@@ -1415,6 +1415,31 @@ func (s *Service) PickAnswerer(call string) error {
 	return s.seq.PickAnswerer(call, time.Now().UTC())
 }
 
+// BagAnswerer moves a listed pick-run caller into the queue (ADR 0067 slice B).
+func (s *Service) BagAnswerer(call string) error {
+	if s.seq == nil {
+		return ErrNoCqPickRun
+	}
+	return s.seq.BagAnswerer(call, time.Now().UTC())
+}
+
+// UnbagAnswerer returns a bagged station to the listed set (ADR 0067 slice B).
+func (s *Service) UnbagAnswerer(call string) error {
+	if s.seq == nil {
+		return ErrNoCqPickRun
+	}
+	return s.seq.UnbagAnswerer(call, time.Now().UTC())
+}
+
+// ResumeDrain continues a paused pick-queue drain (ADR 0067 slice B — the
+// drawer's Resume; Stop paused it via StopAutoWorkRun's pick branch).
+func (s *Service) ResumeDrain() error {
+	if s.seq == nil {
+		return ErrNoCqPickRun
+	}
+	return s.seq.ResumeDrain(time.Now().UTC())
+}
+
 // AbandonQso drops any active sequenced QSO (operator action). Idempotent.
 // Abandon is the operator's immediate off-ramp: besides stopping the sequencer
 // (no further rungs), it cancels any in-flight transmission NOW — dropping PTT

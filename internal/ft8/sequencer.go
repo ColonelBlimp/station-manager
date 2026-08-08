@@ -9,6 +9,7 @@ import (
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"slices"
 )
 
 // FT8 manual sequencer (ADR 0031): operator-initiated, auto-advancing. The
@@ -267,6 +268,13 @@ type QsoStatus struct {
 	// Present only on operator_pick caller frames with a non-empty list; the
 	// pile-up drawer renders from this and POST /v1/ft8/cq/pick names one to work.
 	Answerers []CqAnswerer `json:"answerers,omitempty"`
+	// Queue is the pick run's BAGGED stations (ADR 0067), in bag order — the
+	// operator's explicit choices, auto-worked by the drain. Distinct from
+	// Answerers (merely heard) so the drawer renders the two apart.
+	Queue []CqAnswerer `json:"queue,omitempty"`
+	// DrainPaused: Stop on a pick run pauses the drain (queue kept; Resume
+	// continues) rather than clearing the run — the ratified stack semantics.
+	DrainPaused bool `json:"drain_paused,omitempty"`
 	// MaxRepeats — the unanswered-rung repeat cap, set ONLY while the current rung is
 	// actually subject to it (an answerer pre-73, or a caller working an answerer
 	// pre-RR73). Zero (omitted) on the uncapped rungs (calling CQ) and the one-shot
@@ -541,6 +549,15 @@ type Sequencer struct {
 	// intent to express there.
 	allowDuplicate        bool
 	pendingAllowDuplicate bool
+	// pickQueue is the pick run's BAGGED stations (ADR 0067 slice B), in bag
+	// order — the operator's explicit choices, auto-worked by the drain.
+	// Run-scoped: cleared wherever the run is replaced or dies.
+	pickQueue []cqAnswerer
+	// drainPaused: Stop on a pick run pauses the drain instead of clearing
+	// the run (queue kept; ResumeDrain continues) — the ratified stack
+	// semantics, so a stop never costs the operator their choices.
+	drainPaused bool
+
 	// pendingAnswerMode is the session's answerer-selection mode (ADR 0066),
 	// staged by every Service start and consumed by armAutoWorkLocked
 	// atomically with mode activation. Since ADR 0067 it is the WHOLE arming
@@ -1191,13 +1208,130 @@ func (s *Sequencer) setPendingAnswerMode(mode string) {
 	s.mu.Unlock()
 }
 
+// pickContextLocked reports whether a pick run exists to bag/drain against:
+// the pick CQ run (any phase) or an armed pick run (any session mode —
+// bagging DURING a contact is the point). Caller holds s.mu.
+func (s *Sequencer) pickContextLocked() bool {
+	if s.mode == seqCalling && s.answerMode == types.Ft8CallerAnswerOperatorPick {
+		return true
+	}
+	return s.autoWork.armed && s.autoWork.selectMode == types.Ft8CallerAnswerOperatorPick
+}
+
+// clearPickQueueLocked resets the queue and the pause with the run whose
+// choices they were. Caller holds s.mu.
+func (s *Sequencer) clearPickQueueLocked() {
+	s.pickQueue = nil
+	s.drainPaused = false
+}
+
+// BagAnswerer moves a LISTED caller into the pick queue (ADR 0067 slice B):
+// the operator's explicit "work this one too", honoured by the drain in bag
+// order. Refusals mirror the pop's — the drawer acts on the same list.
+func (s *Sequencer) BagAnswerer(call string, now time.Time) error {
+	s.mu.Lock() // first statement — publishes stay under the lock (invariant 3)
+	if !s.pickContextLocked() {
+		s.mu.Unlock()
+		return ErrNoCqPickRun
+	}
+	call = strings.ToUpper(strings.TrimSpace(call))
+	changed := s.expireAnswerersLocked(now)
+	idx := slices.IndexFunc(s.answerers, func(a cqAnswerer) bool { return a.call == call })
+	if idx < 0 {
+		if changed {
+			s.publish(s.statusLocked())
+		}
+		s.mu.Unlock()
+		return ErrAnswererNotListed
+	}
+	a := s.answerers[idx]
+	s.answerers = slices.Delete(s.answerers, idx, idx+1)
+	s.pickQueue = append(s.pickQueue, a)
+	s.publish(s.statusLocked())
+	s.mu.Unlock()
+	s.log.InfoWith().Str("answerer", a.call).Int("queue_len", len(s.pickQueue)).
+		Msg("ft8 seq: caller bagged into the pick queue")
+	return nil
+}
+
+// UnbagAnswerer returns a bagged station to the listed set (its heard-time
+// intact — the normal expiry governs it there).
+func (s *Sequencer) UnbagAnswerer(call string, now time.Time) error {
+	s.mu.Lock()
+	if !s.pickContextLocked() {
+		s.mu.Unlock()
+		return ErrNoCqPickRun
+	}
+	call = strings.ToUpper(strings.TrimSpace(call))
+	idx := slices.IndexFunc(s.pickQueue, func(a cqAnswerer) bool { return a.call == call })
+	if idx < 0 {
+		s.mu.Unlock()
+		return ErrAnswererNotListed
+	}
+	a := s.pickQueue[idx]
+	s.pickQueue = slices.Delete(s.pickQueue, idx, idx+1)
+	s.answerers = append(s.answerers, a)
+	s.publish(s.statusLocked())
+	s.mu.Unlock()
+	return nil
+}
+
+// ResumeDrain continues a paused pick-queue drain (the drawer's Resume).
+func (s *Sequencer) ResumeDrain(now time.Time) error {
+	s.mu.Lock()
+	if !s.pickContextLocked() {
+		s.mu.Unlock()
+		return ErrNoCqPickRun
+	}
+	s.drainPaused = false
+	s.publish(s.statusLocked())
+	s.mu.Unlock()
+	s.log.InfoWith().Msg("ft8 seq: pick-queue drain resumed (operator)")
+	return nil
+}
+
+// nextQueuedLocked pops the freshest workable queue head, expiring stale
+// entries (ADR 0067 B7 — a drain at a gone station wastes ~max_repeats
+// calls; the 0065 pop rationale applied to the queue). Returns nil when the
+// queue is empty or paused. Caller holds s.mu; reports whether anything
+// expired so the caller can publish the shrink.
+func (s *Sequencer) nextQueuedLocked(now time.Time) (*cqAnswerer, bool) {
+	if s.drainPaused {
+		return nil, false
+	}
+	expired := false
+	for len(s.pickQueue) > 0 {
+		head := s.pickQueue[0]
+		s.pickQueue = s.pickQueue[1:]
+		if now.Sub(head.lastHeard) <= cqAnswererStaleAfter {
+			return &head, expired
+		}
+		expired = true
+		s.log.InfoWith().Str("answerer", head.call).
+			Msg("ft8 seq: bagged caller expired unworked — not heard within the staleness bound")
+	}
+	return nil, expired
+}
+
 // StopAutoWorkRun disarms the auto-work run WITHOUT ending any active contact —
 // the Auto-work pill's click action (ADR 0065). Distinct from Abandon, which
 // stops both. Idempotent: stopping a stopped run publishes nothing.
 func (s *Sequencer) StopAutoWorkRun() {
 	s.mu.Lock()
+	// ADR 0067: Stop on a PICK context pauses the drain — the run and the
+	// queue survive, Resume continues. Only auto runs stop outright: their
+	// Stop means "no more hands-off transmissions", which pausing already
+	// achieves for pick (a paused pick run transmits nothing anyway).
+	if s.pickContextLocked() {
+		s.drainPaused = true
+		s.publish(s.statusLocked())
+		s.mu.Unlock()
+		s.log.InfoWith().Msg("ft8 seq: pick-queue drain paused (operator stop)")
+		return
+	}
 	hadRun := s.autoWork.armed
 	s.autoWork = autoWorkState{}
+	s.clearPickQueueLocked()
 	if hadRun {
 		if s.mode != seqIdle {
 			// A contact is live: its own status frame carries the cleared flag.
@@ -1269,7 +1403,7 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	// ADR 0067 (rule 9 generalised): under a pick run the caller list stays
 	// warm DURING the contact, so it is ready the moment this one completes.
 	if s.autoWork.armed && s.autoWork.selectMode == types.Ft8CallerAnswerOperatorPick {
-		s.collectAnswerersLocked(msgs, now)
+		s.collectAnswerersLocked(ref.Period, msgs, now)
 	}
 
 	// Advance on their decode directed to us (records their report + our SNR).
@@ -1784,6 +1918,14 @@ func (s *Sequencer) statusLocked() QsoStatus {
 			st.Answerers = append(st.Answerers, CqAnswerer{Call: a.call, Snr: a.snr})
 		}
 	}
+	// The pick QUEUE (ADR 0067 slice B) rides every frame of a pick context,
+	// with the pause flag — the drawer renders bagged apart from listed.
+	if s.pickContextLocked() {
+		for _, a := range s.pickQueue {
+			st.Queue = append(st.Queue, CqAnswerer{Call: a.call, Snr: a.snr})
+		}
+		st.DrainPaused = s.drainPaused
+	}
 	return st
 }
 
@@ -2029,9 +2171,11 @@ func (s *Sequencer) AutoWorkArmed() bool {
 func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64) {
 	if !types.Ft8CallerAnswerModeValid(s.pendingAnswerMode) {
 		s.autoWork = autoWorkState{}
+		s.clearPickQueueLocked()
 		return
 	}
 	s.answerers = nil
+	s.clearPickQueueLocked()
 	s.autoWork.armed = true
 	s.autoWork.call = call
 	s.autoWork.offsetHz = offsetHz

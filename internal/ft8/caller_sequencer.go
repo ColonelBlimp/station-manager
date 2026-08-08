@@ -59,6 +59,7 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	s.caller = nil
 	s.stalledCalls = nil // fresh session — no abandoned answerers to exclude yet
 	s.answerers = nil    // fresh session — the previous run's pick list must not resurrect (rule 10)
+	s.clearPickQueueLocked()
 	s.confirmHold = nil
 	// A Call-CQ run is itself an operator-started session and pins its own callsign,
 	// offset and dial, so a run armed by the PREVIOUS session must not carry into it
@@ -150,14 +151,24 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	if s.caller == nil {
 		// A due re-send owns this slot, so no new contact is picked — the branch
 		// below must stay guarded by caller!=nil or it dereferences a nil contact.
-		// Under operator_pick nothing is picked here at all: answerers are LISTED
-		// (collectAnswerersLocked below) and committed only by PickAnswerer.
+		// Under operator_pick nothing is picked automatically: answerers are
+		// LISTED (collectAnswerersLocked below) and committed by PickAnswerer —
+		// or by the QUEUE DRAIN (ADR 0067 slice B): a bagged head, still
+		// fresh, is worked next, the CQ resuming when the queue empties.
 		if resendRR73 == "" && s.answerMode != types.Ft8CallerAnswerOperatorPick {
 			if pick, text := s.pickAnswererLocked(msgs, now); pick != nil {
 				s.caller = pick
 				s.startedAt = now.UTC()
 				s.contact.repeats = 0
 				heard = text
+				advanced = true
+			}
+		} else if resendRR73 == "" && s.answerMode == types.Ft8CallerAnswerOperatorPick {
+			if head, _ := s.nextQueuedLocked(now); head != nil {
+				c := NewCallerExchange(s.ourCall, head.call, head.grid, head.snr)
+				s.caller = &c
+				s.startedAt = now.UTC()
+				s.contact.repeats = 0
 				advanced = true
 			}
 		}
@@ -191,7 +202,7 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	// still updates the list — the operator can pick from a deferred slot's
 	// answerers exactly as the auto modes commit from one.
 	if s.answerMode == types.Ft8CallerAnswerOperatorPick {
-		s.collectAnswerersLocked(msgs, now)
+		s.collectAnswerersLocked(ref.Period, msgs, now)
 	}
 
 	// Message + rung for the current (our) slot: a confirm-hold re-send if one is
@@ -412,6 +423,12 @@ type cqAnswerer struct {
 	call, grid string
 	snr        int
 	lastHeard  time.Time
+	// period is the parity of the SLOT the station was last heard in — the
+	// parity they transmit on, which a drained/popped contact must answer
+	// opposite to. NOT derivable from lastHeard: that is a processing
+	// timestamp stamped ~1 s into the NEXT slot, one parity off (ADR 0067
+	// B2 caught the drain committing exchanges that could never advance).
+	period string
 }
 
 // PickAnswerer commits a listed operator_pick candidate into the Call-CQ run
@@ -471,7 +488,7 @@ func (s *Sequencer) PickAnswerer(call string, now time.Time) error {
 		// The caller's parity comes from the slot they were last heard in.
 		c := NewCallerExchange(s.autoWork.call, a.call, a.grid, a.snr)
 		s.commitWorkCallerLocked(&c, s.autoWork.call,
-			SlotRefFromTime(a.lastHeard).Period, s.autoWork.offsetHz, s.autoWork.dialMHz, now)
+			a.period, s.autoWork.offsetHz, s.autoWork.dialMHz, now)
 		s.publish(s.statusLocked())
 		s.mu.Unlock()
 		s.log.InfoWith().Str("answerer", a.call).Str("grid", a.grid).Int("snr", a.snr).
@@ -524,7 +541,7 @@ func (s *Sequencer) expireAnswerersLocked(now time.Time) bool {
 // choice that is the operator's to make (rule 7; same reasoning as Next rule 4).
 // The in-flight station is never its own candidate — its grid repeats just mean
 // it missed our report (rule 9). Caller holds s.mu.
-func (s *Sequencer) collectAnswerersLocked(msgs []goft8.DecodedMessage, now time.Time) {
+func (s *Sequencer) collectAnswerersLocked(period string, msgs []goft8.DecodedMessage, now time.Time) {
 	s.expireAnswerersLocked(now)
 	for _, m := range msgs {
 		pm := parseMessage(m.Text)
@@ -552,7 +569,7 @@ func (s *Sequencer) collectAnswerersLocked(msgs []goft8.DecodedMessage, now time
 				Msg("ft8 seq: not listing answerer — our reply does not encode (compound/portable call?)")
 			continue
 		}
-		e := cqAnswerer{call: c.TheirCall, grid: c.TheirGrid, snr: m.SNR, lastHeard: now}
+		e := cqAnswerer{call: c.TheirCall, grid: c.TheirGrid, snr: m.SNR, lastHeard: now, period: period}
 		if i := slices.IndexFunc(s.answerers, func(a cqAnswerer) bool { return a.call == e.call }); i >= 0 {
 			s.answerers[i] = e
 			continue

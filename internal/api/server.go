@@ -315,6 +315,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 		// Commit a listed operator_pick answerer into the run (ADR 0065) — the
 		// candidate list rides the ft8-qso SSE (answerers).
 		mux.HandleFunc("POST /v1/ft8/cq/pick", s.handleFt8CqPick)
+		mux.HandleFunc("POST /v1/ft8/cq/bag", s.handleFt8CqBag)
+		mux.HandleFunc("POST /v1/ft8/cq/unbag", s.handleFt8CqUnbag)
+		mux.HandleFunc("POST /v1/ft8/cq/resume", s.handleFt8CqResume)
 	}
 
 	// pprof — opt-in via cfg.Server.EnableProfiling. Off by default

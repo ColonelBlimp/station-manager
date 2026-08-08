@@ -341,6 +341,56 @@ func (s *Server) handleFt8CqPick(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// handleFt8CqBag bags a listed caller into the pick queue (ADR 0067 slice B):
+// the operator's explicit "work this one too", honoured by the drain in bag
+// order. Same body and refusal vocabulary as cq/pick — the drawer acts on the
+// same list either way.
+func (s *Server) handleFt8CqBag(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleFt8CqBag"
+	var req ft8CqPickRequest
+	if !s.readJSONBody(w, r, op, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Call) == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "call is required", op)
+		return
+	}
+	if err := s.ft8.BagAnswerer(req.Call); err != nil {
+		s.writeFt8QsoError(w, op, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleFt8CqUnbag returns a bagged station to the listed set (ADR 0067).
+func (s *Server) handleFt8CqUnbag(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleFt8CqUnbag"
+	var req ft8CqPickRequest
+	if !s.readJSONBody(w, r, op, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Call) == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value", "call is required", op)
+		return
+	}
+	if err := s.ft8.UnbagAnswerer(req.Call); err != nil {
+		s.writeFt8QsoError(w, op, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleFt8CqResume continues a paused pick-queue drain (ADR 0067 — the
+// drawer's Resume; the Stop control paused it).
+func (s *Server) handleFt8CqResume(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleFt8CqResume"
+	if err := s.ft8.ResumeDrain(); err != nil {
+		s.writeFt8QsoError(w, op, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
 // ft8QsoWorkRequest is the POST /v1/ft8/qso/work body (ADR 0033 "work a caller"):
 // work the station `their_call` (grid `their_grid`) that is calling US, heard in the
 // slot at `slot_utc` (which fixes its parity), transmitting on `offset_hz`. `their_snr`
