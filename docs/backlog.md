@@ -39,10 +39,10 @@ next, and in what order" is answered.
 > `docs/session-handoff.md`; this index is the full ranked queue.
 
 **P0 — correctness / safety (do first)**
-- _None open — the TX-safety batches shipped and were swept to `backlog-archive.md` (2026-07-24). Two code-complete items still need ON-AIR validation: the tx-alarm self-clear (P1) and the reduced type-4 ladder (P2)._
+- _None open — the TX-safety batches shipped and were swept to `backlog-archive.md` (2026-07-24). One code-complete item still needs ON-AIR validation: the reduced type-4 ladder (P2). The tx-alarm self-clear validated on air 2026-08-08 (closed entry in P1)._
 
 **P1 — finish in-flight / validate (small; closes open arcs)**
-- **VALIDATE (on-air): tx-alarm self-clear.** Code shipped 2026-07-23 (`internal/bridge/txrecheck.go` — bounded alarm-driven re-probe + `POST /v1/rig/tx/recheck` Re-check button; only `confirmTxIdle` on a positive RX answer retires the alarm). Provoke a stuck-TX alarm on air and confirm it self-clears within a probe interval. _(Code done; detail in git + `backlog-archive.md`; dogfood 2026-07-21 2nd incident.)_
+- ~~**VALIDATE (on-air): tx-alarm self-clear.**~~ **VALIDATED on air 2026-08-08 — CLOSED (operator's word, same day).** The fault fired naturally during the 200-QSO 17m run: at 15:31:46 a closing RR73's unkey came back unconfirmed (tx-status `2`, uncertain) → TX ALARM raised (`tx_unconfirmed`) + ft8 mode restore correctly refused → within the same second the re-probe confirmed idle (`tx state confirmed idle {how: tx-status 0}`) and `tx alarm cleared (transmitter confirmed idle)`; the QSO (BD8TE) logged normally and the run picked up its next caller 14 s later. No operator action, no stuck RF, rich log trail — exactly the self-clear-within-a-probe-interval criterion, met by a natural occurrence rather than a provoked one. _(Struck rather than deleted so a stale copy of this list can't resurrect the item.)_
 - Behavioural retest of shipped daemon changes on the dogfood daemon (session 192/193 batch). _Sweep note (2026-07-18): the batch = DXCC numeric-match (`HasQsoForDxcc` on `json_extract('$.dxcc')`), the `ft8_decode_log` config toggle, and the `tx_parity` CQ-sequencer path — shipped 2026-06-25/26. ~3.5 weeks of daily FT8 dogfooding since has plausibly exercised DXCC-match (new-entity markers) and tx-parity implicitly; decode-log only matters if enabled. Operator's call to close._
 
 **P2 — next features (open one workstream per active focus)**

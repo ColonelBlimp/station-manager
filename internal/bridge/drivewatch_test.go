@@ -704,3 +704,75 @@ func TestDriveWatch_MeterMovedOffPoWhileKeyed_WarnsOnce(t *testing.T) {
 		t.Errorf("drive alarms = %d, want 0 — a tainted window cannot support the claim", len(alarms))
 	}
 }
+
+// The poll-witness message substring, beside its siblings above.
+const pollWitnessMsg = "poll witness monitoring"
+
+// DW7 — ARMED -> POLL_OUTPUT is NOT a degradation and must not say it is
+// (operator, 2026-08-08, after the 200-QSO run put 391 went-dark Warns in one
+// afternoon's log). On this rig the pushed stream goes quiet on EVERY dead-flat
+// envelope — healthy TX — while the ADR 0064 poll keeps measuring output, and
+// the DP rules keep the alarm live off the poll (a zero or stale poll still
+// fires). So the went-dark Warn's own claim, "a transmitter failure would not
+// be reported", is FALSE for this transition: monitoring continues by another
+// instrument. It reports at DEBUG under its own message — invisible at the
+// default Info level, present when a session is being debugged — and the Warn
+// stays reserved for the dark states where protection genuinely stopped
+// (DW1/DW2 pin those unchanged; DW5's once-per-transition arithmetic is what
+// made Warn affordable and is exactly what 391-per-day inverted).
+func TestDriveWatch_PollWitnessTransitionIsDebugNotDark(t *testing.T) {
+	s, fake, buf := newDriveWatchService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	// Pushed stream silent all slot; the poll keeps answering full output —
+	// DP1's exact healthy-flat-envelope session.
+	feedMeterFor(t, s, "RM5105", 4*silence)
+
+	if got := matching(t, buf, wentDarkMsg); len(got) != 0 {
+		t.Fatalf("went-dark records = %d, want 0 — the poll witness is still monitoring, so \"a transmitter failure would not be reported\" is untrue here", len(got))
+	}
+	got := matching(t, buf, pollWitnessMsg)
+	if len(got) != 1 {
+		t.Fatalf("poll-witness records = %d, want exactly 1", len(got))
+	}
+	if lvl, _ := got[0]["level"].(string); lvl != "debug" {
+		t.Errorf("level = %q, want debug — once per healthy transmission is noise at any visible level", lvl)
+	}
+	if from, _ := got[0]["from"].(string); from != driveWatchArmed {
+		t.Errorf("from = %q, want %q", from, driveWatchArmed)
+	}
+	if to, _ := got[0]["to"].(string); to != driveWatchPollOutput {
+		t.Errorf("to = %q, want %q", to, driveWatchPollOutput)
+	}
+}
+
+// DW8 — the PAIRED restore stays at the pair's level: POLL_OUTPUT -> ARMED at
+// DEBUG, or the log keeps one visible "restored" per transmission whose dark
+// half is invisible — half the 391-line noise back under another name. The
+// restore from a REAL dark state stays Info (DW4 pins meter_not_po -> armed),
+// which is the differentiator: level follows what the dark half claimed.
+func TestDriveWatch_PollWitnessRestoreIsDebug(t *testing.T) {
+	s, fake, buf := newDriveWatchService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	feedMeterFor(t, s, "RM5105", 4*silence) // poll_output
+	s.finishFt8Tx()                         // the slot ends — unkey
+	slot(t, s, "MS0", true)                 // pushed PO flows again → armed
+
+	got := matching(t, buf, restoredMsg)
+	if len(got) != 1 {
+		t.Fatalf("restored records = %d, want exactly 1", len(got))
+	}
+	if from, _ := got[0]["from"].(string); from != driveWatchPollOutput {
+		t.Fatalf("fixture: restore came from %q, want %q", from, driveWatchPollOutput)
+	}
+	if lvl, _ := got[0]["level"].(string); lvl != "debug" {
+		t.Errorf("level = %q, want debug — the visible level of a transition pair follows its dark half", lvl)
+	}
+}

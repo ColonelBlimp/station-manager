@@ -255,6 +255,14 @@ func (s *Service) flushDriveWatchLog() {
 // safety-monitoring DEGRADATION, not a confirmed transmitter failure. Error stays
 // reserved for DriveAlarmNoOutput, so an Error in this log continues to mean "the
 // rig is keyed and nothing is coming out".
+//
+// poll_output is the EXCEPTION, at Debug both ways (operator, 2026-08-08, after
+// the 200-QSO run logged 391 went-dark Warns in one afternoon): on this rig the
+// pushed stream goes quiet on every dead-flat healthy envelope, and the DP rules
+// keep the alarm live off the poll — so "a transmitter failure would not be
+// reported" is untrue for that transition, and once per healthy transmission
+// inverts what Warn means (the DW5 arithmetic). Its restore pairs down with it:
+// a visible "restored" whose dark half is invisible is half the noise back.
 func (s *Service) emitDriveWatchTransition(tr driveWatchTransition) {
 	if tr.to == driveWatchArmed {
 		// unknown -> armed is the ordinary first transmission of a healthy session.
@@ -263,8 +271,18 @@ func (s *Service) emitDriveWatchTransition(tr driveWatchTransition) {
 		if tr.from == driveWatchUnknown {
 			return
 		}
-		s.logger.InfoWith().Str("from", tr.from).Str("to", tr.to).Uint64("tx_gen", tr.gen).
+		ev := s.logger.InfoWith()
+		if tr.from == driveWatchPollOutput {
+			ev = s.logger.DebugWith()
+		}
+		ev.Str("from", tr.from).Str("to", tr.to).Uint64("tx_gen", tr.gen).
 			Msg("bridge: drive detection restored")
+		return
+	}
+	if tr.to == driveWatchPollOutput {
+		s.logger.DebugWith().Str("from", tr.from).Str("to", tr.to).Uint64("tx_gen", tr.gen).
+			Str("meter_sel", tr.meterSel).
+			Msg("bridge: pushed meter stream quiet — poll witness monitoring output")
 		return
 	}
 	s.logger.WarnWith().Str("from", tr.from).Str("to", tr.to).Uint64("tx_gen", tr.gen).

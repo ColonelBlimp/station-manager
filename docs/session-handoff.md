@@ -67,9 +67,18 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   retired. NOTE for the operator: **Abandon now stops run+queue outright**
   (0059 W6) — harder than the old SPA stack's pause-and-keep; flagged, one
   small daemon change if unwanted.
-- **NEXT: commit slice D → `task deploy:local:dev` → on-air try-and-adjust**
-  (the 0065/0066/0067 arc is entirely UNEXERCISED on air). Then: Settings
-  defaults dropdown; max_repeats-to-session still open (0066 watch-list).
+- **LATE AFTERNOON: 200-QSO 17m Call-CQ run (auto_first, pre-0067 build) —
+  clean end to end** (200 stored/logged/forwarded 200-200-all; poll witness
+  VALIDATED at scale: 31 alarms all pre-witness 12:28-12:47, ZERO after;
+  stuck-TX self-clear VALIDATED naturally at 15:31:46 → backlog item CLOSED).
+  Then: api review round — 4 findings (socket unlink P1, duplicate-email P1,
+  repeat-cap race P2, stamp-date P3) all FIXED red-first, committed
+  `a9151fea`, CI green. **0067 build DEPLOYED after the run.** TREE HOLDS:
+  the went-dark Warn demotion (poll_output pair → Debug, DW7/DW8) + the
+  backlog closure, uncommitted.
+- **NEXT: commit the demotion → on-air try-and-adjust of the 0067 run model**
+  (now deployed, still unexercised). Then: Settings defaults dropdown;
+  max_repeats-to-session (0066 watch-list); Abandon-vs-queue flag still open.
 
 ## Current state (as of 2026-08-08)
 
