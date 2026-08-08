@@ -1903,6 +1903,19 @@ func (s *Sequencer) statusLocked() QsoStatus {
 		// Session-pinned, not live rig state — see QsoStatus.DialFreqMHz.
 		st.DialFreqMHz = s.dialFreqMHz
 	}
+	return s.applyRunStateLocked(st)
+}
+
+// applyRunStateLocked decorates a frame with the RUN-scoped state that must ride
+// EVERY published frame — active, idle, or terminal. Caller holds s.mu.
+//
+// One function for both statusLocked and terminalStatusLocked deliberately: the
+// SPA renders the run surface and the drawer solely from the latest ft8-qso
+// frame, and the terminal frame is replay-cached, so any frame this carriage
+// skips makes a live pick run masquerade as an auto run — drawer emptied,
+// Resume withheld while paused — until a later slot publishes a decorated
+// status (codex dd44784b P2: terminal frames carried only AutoWorkArmed).
+func (s *Sequencer) applyRunStateLocked(st QsoStatus) QsoStatus {
 	// OUTSIDE the Active branch deliberately: the frame that matters is the IDLE one
 	// after a contact ends with the run still live. Setting it only while active
 	// would publish it exactly when the operator can already see a ladder, and omit
@@ -2192,7 +2205,10 @@ func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64
 // because that is precisely the state the operator cannot otherwise see:
 // idle-and-armed and idle-and-stopped are the same frame without it (ADR 0059).
 // Built in ONE place so a fourth way of ending a session cannot quietly omit it, the
-// way the three existing ones each hand-rolled their own frame.
+// way the three existing ones each hand-rolled their own frame. The run-scoped
+// carriage (armed flag, pick mode + lists + pause) comes from the same
+// applyRunStateLocked as every other frame — see its comment for why a terminal
+// frame that skipped it broke the pick run's rendering.
 func (s *Sequencer) terminalStatusLocked(reason string) QsoStatus {
-	return QsoStatus{Active: false, EndReason: reason, AutoWorkArmed: s.autoWork.armed}
+	return s.applyRunStateLocked(QsoStatus{Active: false, EndReason: reason})
 }

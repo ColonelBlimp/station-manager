@@ -162,3 +162,15 @@ Both halves, TDD with reversion probes on each:
 Watch-list for the adjust phase: whether the seeded one-shot toggle
 (config `auto_work_callers: true` → lit once per page load) feels right in
 use, and whether `max_repeats` joins the session surface.
+
+---
+
+**Dated note (2026-08-08, ADR 0067):** the core of this ADR — the knobs are
+SESSION state, config.json holds only defaults, `answer_mode` rides every
+start — survives and is how ADR 0067's one-rule model gets its input. What
+0067 retired from here: fork 5's arming gate (intent + auto mode → now the
+mode ALONE), fork 6's toggle-disable (the toggle itself is gone), and the
+`ft8_auto_work_callers` GET seed. The Answer selector moved from the TX
+control bar to the run surface. The watch-list's "does the seeded one-shot
+toggle feel right" resolved itself: the toggle retired before it was ever
+dogfooded; `max_repeats` joining the session surface remains open.

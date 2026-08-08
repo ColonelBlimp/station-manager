@@ -86,3 +86,14 @@ operator's obligation under their licence.
   settled where that check belongs: in the transmit path, not in a slot flag).
 - Largely makes the FT8 pile-up drawer redundant for the auto modes; the drawer
   stays for `operator_pick`.
+
+---
+
+**Dated note (2026-08-08, ADR 0067):** the run mechanics here — operator-only
+initiation, the four stop conditions, W-rules — survive as the run model's
+foundation, but the ARMING INPUT changed twice since: ADR 0065 made arming a
+per-click intent, and ADR 0067 then replaced that grammar entirely — the
+session's Answer mode ALONE arms (auto modes = hands-off runs with no gesture;
+`operator_pick` arms a LISTING run + a bag-and-drain queue). The
+`ft8.tx.auto_work_callers` key this ADR introduced retired with ADR 0067 (a
+legacy key on disk is ignored). Current spec: `internal/ft8/adr0067_test.go`.

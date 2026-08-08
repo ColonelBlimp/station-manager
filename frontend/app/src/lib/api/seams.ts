@@ -172,9 +172,6 @@ export interface StationContext {
      *  served resolved — operator_pick on an unconfigured station since
      *  2026-08-08). Seeds the session's Answer selector (ADR 0066). */
     ft8CallerAnswerMode: string;
-    /** The Auto-work toggle's boot seed (`ft8_auto_work_callers`, ADR 0066
-     *  fork 5 — the knob no longer gates arming daemon-side). */
-    ft8AutoWorkCallers: boolean;
     /** RX audio-level window (config `ft8.audio`, served resolved as
      *  `ft8_audio`): dBFS bounds the level meter classifies against. */
     ft8AudioLowDbfs: number;
@@ -225,7 +222,6 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8Frequencies: {},
         ft8Mode: '',
         ft8CallerAnswerMode: 'operator_pick',
-        ft8AutoWorkCallers: false,
         ft8AudioLowDbfs: -60,
         ft8AudioHighDbfs: -10,
         ft8AlcAmber: 30,
@@ -277,7 +273,6 @@ export async function fetchStationContext(): Promise<StationContext> {
         // In the BRIDGE block beside ops/rig_modes — it is rig-driver data.
         ft8Mode: str(br.ft8_mode),
         ft8CallerAnswerMode: str(body.ft8_caller_answer_mode) || 'operator_pick',
-        ft8AutoWorkCallers: body.ft8_auto_work_callers === true,
         // Served resolved; the fallbacks only cover an older daemon.
         ft8AudioLowDbfs: typeof fa.low_dbfs === 'number' ? fa.low_dbfs : -60,
         ft8AudioHighDbfs: typeof fa.high_dbfs === 'number' ? fa.high_dbfs : -10,

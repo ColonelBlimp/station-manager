@@ -97,11 +97,6 @@ type ConfigResponse struct {
 	// the config-only world it guarded). **Presence-aware** on PUT;
 	// pointer-typed so the handler tells "sent" from "absent".
 	Ft8CallerAnswerMode *string `json:"ft8_caller_answer_mode,omitempty"`
-	// Ft8AutoWorkCallers is the SPA Auto-work toggle's boot seed
-	// (ft8.tx.auto_work_callers; ADR 0066 fork 5 — the knob no longer gates
-	// arming daemon-side). Served on GET; read-only here (a config.json edit,
-	// like the other ft8.tx defaults pending a Settings surface).
-	Ft8AutoWorkCallers *bool `json:"ft8_auto_work_callers,omitempty"`
 	// Ft8MaxRepeats is the FT8 sequencer's unanswered-rung repeat cap
 	// (ft8.tx.max_repeats): how many times an unanswered rung is re-sent before the
 	// exchange gives up so the operator's Next can advance — the "N calls" readout.
@@ -1007,12 +1002,6 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	// 2026-08-08) — the seed for the session's Answer selector (ADR 0066).
 	callerMode := types.ResolveFt8CallerAnswerMode(cfg.Ft8.TX)
 	resp.Ft8CallerAnswerMode = &callerMode
-	// The auto-work toggle's boot seed (ADR 0066 fork 5): the config knob no
-	// longer gates arming daemon-side; its whole remaining meaning is the
-	// initial state of the SPA's one-shot Auto-work toggle.
-	autoWorkSeed := cfg.Ft8.TX != nil && cfg.Ft8.TX.AutoWorkCallers
-	resp.Ft8AutoWorkCallers = &autoWorkSeed
-
 	// FT8 unanswered-rung repeat cap, resolved (default 6, clamp [1, Ft8MaxRepeatsCeiling])
 	// so the Settings-tab field shows the effective value even on a fresh config.
 	maxRepeats := types.ResolveFt8MaxRepeats(cfg.Ft8.TX)

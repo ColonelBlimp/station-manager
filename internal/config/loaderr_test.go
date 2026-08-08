@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"os"
 	"path/filepath"
 	"strings"
@@ -368,5 +369,27 @@ func TestStringStateAt(t *testing.T) {
 	// An escaped quote must not flip the state.
 	if stringStateAt([]byte(`"a\"b"`), 6) {
 		t.Fatal("escaped quote miscounted, leaving the state inside a string")
+	}
+}
+
+// ADR 0067 (slice D): ft8.tx.auto_work_callers retired with the one-shot
+// toggle it seeded. A config.json written by an older build still carries the
+// key, and an upgrade must not refuse to boot over it — lenient decode
+// ignores it, exactly as the retired alc_red key is ignored. Green before AND
+// after the field's removal by design: this is a tolerance pin for upgraded
+// installs, not a red-first behaviour change.
+func TestLoad_LegacyAutoWorkCallersKeyTolerated(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	legacy := `{"version":2,"logging_station":{"station_callsign":"7Q5MLV"},` +
+		`"ft8":{"tx":{"auto_work_callers":true,"caller_answer_mode":"auto_first"}}}`
+	if err := os.WriteFile(p, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load rejected a config carrying the legacy key: %v", err)
+	}
+	if got := types.ResolveFt8CallerAnswerMode(cfg.Ft8.TX); got != types.Ft8CallerAnswerAutoFirst {
+		t.Fatalf("neighbouring keys must survive the ignored one: mode = %q", got)
 	}
 }

@@ -48,63 +48,56 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **AFTERNOON 2026-08-08: pushed through `2da99b89`, CI GREEN (14m03s,
-  full pipeline — the 0066 arc is through the gate); daemon DEPLOYED at
-  `1183-g2da99b89`.** Earlier CI drama: one silently-FAILED push (found
-  via `ahead 2` — pushes can fail without anyone noticing) and one lint
-  red (3 `no-unnecessary-type-assertion` a flaky local pass had hidden —
-  casts→annotations). **TREE HOLDS the drive-alarm poll-witness fix,
-  uncommitted** (next bullet).
-- **DRIVE ALARM FALSE POSITIVE, live at 12:29 — fix PUSHED (`773cc0b9`,
-  CI watched); tree holds its review P1 follow-up (DP4: re-arm from
-  witness EXPIRY, not a fresh full window — the full-window re-arm could
-  defer a real collapse past unkey). Wants: commit DP4 + redeploy:**
-  `drive_no_output` fired on EVERY transmission while
-  the ADR 0064 poll measured PO 104–108 at 53 answers/slot — full output.
-  The pushed RM0 stream had collapsed to 6–8 frames/slot (hypothesis: the
-  rig pushes on CHANGE and the envelope was dead flat, po_min=po_max=105;
-  this also CORRECTS the morning's gap dismissal — those gaps tracked
-  steady PO, not hands on the rig). Fix: the alarm now consults the poll
-  as a second witness — a polled PO **> 0** inside the silence window
-  withholds the alarm (zero IS the alarm's claim; a measurement beat it);
-  polls at zero or stale still alarm (the real collapse keeps firing).
-  Spec DP1–DP3 in `drivealarm_test.go`; new watch state `poll_output`;
-  recovery untouched (it keys off the pushed gap). P4 intact — the push
-  liveness bookkeeping is not fed.
-- **ADR 0066 (Accepted try-and-adjust, designed+built same day): FT8 run
-  knobs are SESSION STATE; config.json holds only defaults.** Born on air:
-  "auto-work next contact is not working" was the flip working as ratified
-  (explicit operator_pick in config from the 7c prep edit — NOT an absent
-  key; my grep missed the space), and the operator ruled the config-knob
-  model too confusing. Now: the **Answer mode selector** in the TX control
-  bar (with CQ slot, justified to the row's far ends; TX-offset readout
-  removed → Call CQ button title) is the live control, carried on
-  cq/start + the auto-work intent; **the arming gate reads the session,
-  not config** (`SetAutoWorkCallers`/`autoWorkPolicy` DELETED; config knob
-  = the toggle's boot seed, served as `ft8_auto_work_callers`); under "I
-  pick" the toggle disables-with-reason and the intent drops at the
-  source; the config PUT accepts all three literals as DEFAULTS (the 0065
-  fence retired). Specs `internal/ft8/adr0066_test.go` R1–R6 +
-  `ft8AutoWork.svelte.test.ts` SP1–SP4b, all reversion-probed.
-- **Review rounds on the arc:** d7fbf935 P1 (selector editable while
-  idle-and-ARMED — a UI claiming "I pick" while an armed run auto-works;
-  lock widened to `active || autoWorkArmed`) · a1a0aaca, c1e17c12,
-  2da99b89 all clean. ALC chip is now label+dot (number on the card only).
-- **OPERATIONALLY, at the rig right now (1183):** the Answer mode selector
-  seeds to "I pick" from your config; flip it to **First answerer** to
-  restore auto-working — no config edit, ever. A pick run = leave it and
-  Call CQ (= check 7c in normal use). Until the alarm fix deploys, treat
-  the "no RF output" banner as noise — every summary line carries the poll
-  PO proving output.
-- **NEXT:** on-air try-and-adjust (selector flow · pill on a work-caller
-  arm · FD click · adjust-list: seeded one-shot toggle's feel,
-  max_repeats session scope) · redeploy at leisure (cosmetics) · Settings
-  dropdown = DEFAULTS editor now · findings 9/10 · paste-list ·
-  Tune-coverage · Q4–Q10 · backlog strikes await the word. Morning's
-  record (hardware 4/4, ADR 0064 Accepted, stuck-TX parked, PSK announce)
-  is in Current state.
+- **EVENING 2026-08-08: ADR 0067 (the one-rule run model) is FULLY BUILT —
+  slices A–D, same day it was ratified.** A (mode-only arming + pick listing
+  run) and B (bag-and-drain queue) committed `67084472`/`f6e93efd`; C (the
+  SPA run surface) committed `dd44784b`; **the TREE HOLDS slice D,
+  uncommitted**: the `ft8.tx.auto_work_callers` retirement (legacy key
+  tolerated-ignored, like alc_red), the `ft8_auto_work_callers` GET seed and
+  `auto_work` wire fields removed, the docs sweep (ft8.md run model,
+  api-endpoints, ADR 0059/0065/0066 dated notes, internal/ft8/CLAUDE.md),
+  PLUS the slice-C review P2 fix: `terminalStatusLocked` now carries the
+  pick run's mode/lists/pause via the factored `applyRunStateLocked`
+  (B12 in adr0067_test.go — a completed pick contact's terminal frame no
+  longer blanks the drawer/Resume). Review doc triaged + deleted.
+- **One rule now: the session's Answer mode ALONE decides how every run
+  treats callers.** Auto modes = hands-off runs, NO gesture; pick (the
+  default) = listing run + drawer (Work now / Bag several; daemon drains in
+  bag order; Stop pauses, Resume continues). Chord/toggle/stack/intent all
+  retired. NOTE for the operator: **Abandon now stops run+queue outright**
+  (0059 W6) — harder than the old SPA stack's pause-and-keep; flagged, one
+  small daemon change if unwanted.
+- **NEXT: commit slice D → `task deploy:local:dev` → on-air try-and-adjust**
+  (the 0065/0066/0067 arc is entirely UNEXERCISED on air). Then: Settings
+  defaults dropdown; max_repeats-to-session still open (0066 watch-list).
 
 ## Current state (as of 2026-08-08)
+
+### 2026-08-08 (evening) — ADR 0067 built A–D in one day
+
+**The one-rule run model went from ratified to fully built.** Slice A
+replaced the 0065 intent grammar with mode-only arming (`armAutoWorkLocked`
+reads `pendingAnswerMode` alone; pick arms a LISTING run that transmits
+nothing unpicked). Slice B added the daemon bag-and-drain queue
+(`cq/bag`/`unbag`/`resume`; drain order = bag order with 3-min staleness
+expiry at drain; Stop pauses/Resume continues; its review found a P1 —
+re-heard bagged callers now REFRESH their queue entry instead of relisting,
+B11 — and a P2 lock race, both fixed). Slice C rebuilt the SPA: ONE run
+surface in the old checkbox/chip slot (Answer-mode selector relocated +
+locked under a run, ratified state strings verbatim in
+`RunSurface.svelte.test.ts`, Stop/Resume), the drawer rewritten around the
+daemon's two lists (Work/Bag per listed row; × unbags; footer Resume),
+ctrl/cmd+click bags daemon-side, and the whole SPA drain machinery deleted
+(`ft8Pileup.svelte.ts` + drain `$effect` + parity lock + UtilRail/badge
+reads). Its review found a real P2: terminal frames carried only
+`AutoWorkArmed`, so a completed pick contact blanked the drawer until the
+next slot — fixed by factoring `applyRunStateLocked` onto BOTH statusLocked
+and terminalStatusLocked (B12 pins it). Slice D (in tree) retired the
+config key/GET seed/wire fields and swept the docs; ADRs 0059/0065/0066
+carry dated supersession notes. Six slice-C reversion probes all red on
+their own assertions — one first attempt was INVALID (called an unimported
+symbol, test stayed green) and was caught by reading the failure, redone.
+
 
 ### 2026-08-08 (afternoon) — ADR 0066 designed+built in hours; the drive alarm's poll witness
 

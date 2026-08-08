@@ -135,17 +135,13 @@ type ft8QsoStartRequest struct {
 	// protection; the SPA sets it only when the operator acted on a station it already
 	// shows as worked this session.
 	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
-	// AutoWork is the operator's per-click auto-work intent (ADR 0065): true arms an
-	// auto-work-callers run alongside this contact (the ctrl+shift gesture or the
-	// Auto-work toggle). INERT since ADR 0067 — the session's answer_mode alone
-	// decides run behaviour; accepted (and ignored) for old clients. Absent/false
-	// works this station only — and clears any run a previous session armed.
-	// Standard exchange mode only; FD and type-4 sessions never arm a run.
-	AutoWork bool `json:"auto_work,omitempty"`
-	// AnswerMode is the SESSION's answerer-selection mode (ADR 0066) an armed
-	// auto-work run would select the next caller with. Empty = the config
-	// default; junk is a 400. Only meaningful alongside auto_work — a plain
-	// start ignores it.
+	// AnswerMode is the SESSION's answer mode (ADR 0066/0067) — the ONE input
+	// that decides how the run this start leaves behind treats callers (auto
+	// modes arm a hands-off run; operator_pick leaves a listing run that
+	// transmits at nobody until the operator chooses). Empty = the config
+	// default; junk is a 400. The retired auto_work intent field (ADR 0065)
+	// is an ignored unknown key if an old client still sends it — lenient
+	// decode, the same tolerance the legacy config key gets.
 	AnswerMode string `json:"answer_mode,omitempty"`
 }
 
@@ -421,17 +417,13 @@ type ft8QsoWorkRequest struct {
 	// protection; the SPA sets it only when the operator acted on a station it already
 	// shows as worked this session.
 	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
-	// AutoWork is the operator's per-click auto-work intent (ADR 0065): true arms an
-	// auto-work-callers run alongside this contact (the ctrl+shift gesture or the
-	// Auto-work toggle). INERT since ADR 0067 — the session's answer_mode alone
-	// decides run behaviour; accepted (and ignored) for old clients. Absent/false
-	// works this station only — and clears any run a previous session armed.
-	// Standard exchange mode only; FD and type-4 sessions never arm a run.
-	AutoWork bool `json:"auto_work,omitempty"`
-	// AnswerMode is the SESSION's answerer-selection mode (ADR 0066) an armed
-	// auto-work run would select the next caller with. Empty = the config
-	// default; junk is a 400. Only meaningful alongside auto_work — a plain
-	// start ignores it.
+	// AnswerMode is the SESSION's answer mode (ADR 0066/0067) — the ONE input
+	// that decides how the run this start leaves behind treats callers (auto
+	// modes arm a hands-off run; operator_pick leaves a listing run that
+	// transmits at nobody until the operator chooses). Empty = the config
+	// default; junk is a 400. The retired auto_work intent field (ADR 0065)
+	// is an ignored unknown key if an old client still sends it — lenient
+	// decode, the same tolerance the legacy config key gets.
 	AnswerMode string `json:"answer_mode,omitempty"`
 }
 

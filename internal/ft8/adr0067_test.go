@@ -357,3 +357,50 @@ func TestAdr0067_ReheardBaggedCallerRefreshesNotRelists(t *testing.T) {
 	require.NotNil(t, s.caller, "the refreshed entry must still drain")
 	require.Equal(t, "DL9UW", s.caller.TheirCall)
 }
+
+// B12 — codex dd44784b P2: the TERMINAL frame of a completed pick contact must
+// carry the run's whole pick state — mode, listed callers, bagged queue, pause
+// flag — not just auto_work_armed. The SPA renders drawer + run surface solely
+// from the latest ft8-qso frame, and the terminal frame is replay-cached, so a
+// bare terminal frame makes a live pick run masquerade as an auto run: the
+// drawer empties, a paused queue loses its Resume control, the state line
+// stops opening the drawer — until the next slot happens to publish a
+// decorated status (or indefinitely, for a client that reconnects into the
+// replay). The nearest confusable is exactly that auto-run appearance, so the
+// fixture pins every field the confusion would blank: paused drain, one
+// bagged, one still listed.
+func TestAdr0067_TerminalFrameCarriesPickRunState(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	listedCaller(t, s, r) // pick listing run; DL9UW listed at slot 90
+
+	// A second caller, bagged; then Stop pauses the drain (queue kept).
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("G0XYZ M0AAA IO83", -15)})
+	require.NoError(t, s.BagAnswerer("M0AAA", time.Unix(125, 0).UTC()))
+	s.StopAutoWorkRun()
+
+	// The operator works DL9UW now (a pop is not the drain — the pause does
+	// not gate it), and the contact completes.
+	require.NoError(t, s.PickAnswerer("DL9UW", time.Unix(130, 0).UTC()))
+	require.NotNil(t, s.caller, "fixture: the pop must commit DL9UW")
+	// A third station calls DURING the contact (A5 collection) — it must be
+	// listed on the terminal frame too, or the drawer's top half blanks.
+	driveTheir(s, 150, []goft8.DecodedMessage{
+		dm("G0XYZ DL9UW R-08", -8),
+		dm("G0XYZ PA3KUS IO70", -17),
+	})
+	require.Nil(t, s.caller, "fixture: DL9UW's QSO must complete")
+
+	// The frame published BY the completion — no further slot may decorate it.
+	st := r.lastStatus()
+	require.False(t, st.Active, "fixture: the last frame is the terminal one")
+	require.True(t, st.AutoWorkArmed, "the run survives the completed contact (W4)")
+	require.Equal(t, "operator_pick", st.AnswerMode,
+		"the terminal frame must keep saying this is a pick run")
+	require.Len(t, st.Answerers, 1, "callers listed mid-contact must ride the terminal frame")
+	require.Equal(t, "PA3KUS", st.Answerers[0].Call)
+	require.Len(t, st.Queue, 1, "the bagged queue must ride the terminal frame")
+	require.Equal(t, "M0AAA", st.Queue[0].Call)
+	require.True(t, st.DrainPaused,
+		"the pause must ride the terminal frame — it is what offers Resume")
+}

@@ -254,7 +254,6 @@ const ctx: StationContext = {
     ft8Frequencies: {},
     ft8Mode: '',
     ft8CallerAnswerMode: 'operator_pick',
-    ft8AutoWorkCallers: false,
     ft8AudioLowDbfs: -60,
     ft8AudioHighDbfs: -10,
     ft8AlcAmber: 30,

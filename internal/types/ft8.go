@@ -342,17 +342,10 @@ type Ft8TXConfig struct {
 	// value) can never leave the rig calling a dead station for minutes on end.
 	MaxRepeats int `json:"max_repeats,omitempty"`
 
-	// AutoWorkCallers keeps working stations that call US after an operator-started
-	// QSO completes, until Abandon (ADR 0059). DEFAULT OFF: the run transmits without
-	// a click per contact, so enabling it on upgrade would change what the station
-	// does on the air without the operator asking.
-	//
-	// It never applies from idle — a run is armed only by an operator action — which
-	// is what keeps every session operator-initiated. Selection reuses
-	// CallerAnswerMode, and only the two AUTO modes arm a run: operator_pick promises
-	// the operator chooses, so arming under it would advertise a run that must not
-	// pick anyone (invariant 7 — do not offer a control where it cannot act).
-	AutoWorkCallers bool `json:"auto_work_callers,omitempty"`
+	// The auto_work_callers key (ADR 0059's run gate, then ADR 0066's toggle
+	// seed) retired with ADR 0067: the session's Answer mode alone decides run
+	// behaviour, so there is no toggle left to seed. A legacy key in an older
+	// config.json is silently ignored by decode (the alc_red precedent).
 
 	// Occupancy tunes the per-slot occupancy detector and clear-offset ranking
 	// (ADR 0029 step a). Pointer-typed for the same inert-block reason as TX.
@@ -381,13 +374,11 @@ const (
 	// note in ADR 0065). The reasoning is the subsystem's licensing posture:
 	// automatic operation is licence-restricted in many jurisdictions, so a
 	// station whose operator never CHOSE an auto mode must not auto-work
-	// anyone. A clean install, an absent key, and an invalid literal all fail
-	// toward the non-automatic mode; with auto_work_callers also defaulting
-	// off, a fresh install is fully manual until BOTH automations are
-	// explicitly opted into. Consequence carried knowingly: an existing
-	// config with auto_work_callers=true but no caller_answer_mode stops
-	// arming runs until an auto mode is written (ResolveFt8AutoWorkCallers
-	// excludes operator_pick).
+	// anyone. A clean install, an absent key, and an invalid literal all
+	// fail toward the non-automatic mode. Since ADR 0067 the mode is the
+	// run model's ONLY input, so this default alone keeps a fresh install
+	// fully manual until an auto mode is explicitly chosen (the retired
+	// auto_work_callers gate used to share this posture).
 	DefaultFt8CallerAnswerMode = Ft8CallerAnswerOperatorPick
 )
 
@@ -446,26 +437,6 @@ func ResolveFt8CallerAnswerMode(c *Ft8TXConfig) string {
 		return DefaultFt8CallerAnswerMode
 	}
 	return c.CallerAnswerMode
-}
-
-// ResolveFt8AutoWorkCallers reports whether an auto-work-callers run may be armed
-// (ADR 0059): the knob must be on AND the answerer-selection mode must be one of the
-// two AUTO modes.
-//
-// operator_pick is excluded deliberately rather than treated as auto_first. It
-// promises the operator chooses the station, so a run under it would either pick
-// nobody or contradict the promise — and reporting a run as armed when it cannot
-// select is the false-advertisement failure invariant 7 exists to prevent.
-func ResolveFt8AutoWorkCallers(c *Ft8TXConfig) bool {
-	if c == nil || !c.AutoWorkCallers {
-		return false
-	}
-	switch ResolveFt8CallerAnswerMode(c) {
-	case Ft8CallerAnswerAutoFirst, Ft8CallerAnswerAutoStrongest:
-		return true
-	default:
-		return false
-	}
 }
 
 // Ft8OccupancyConfig tunes the per-slot occupancy detector and the clear-offset

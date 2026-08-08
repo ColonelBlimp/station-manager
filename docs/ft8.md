@@ -103,44 +103,36 @@ on any PUT):
   `set_mode` uses), restored after the transmission. Empty leaves the rig's
   current mode untouched, for operators who keep the rig in the data mode
   themselves.
-- **`tx.caller_answer_mode`** — when WE call CQ, which answering station the daemon
-  works next (ADR 0033): `"auto_first"` works the first valid answerer by decode
-  order (WSJT-X "Auto Seq"); `"auto_strongest"` works the highest-SNR valid answerer
-  in the slot (clear the loud signals first). **SESSION STATE since ADR 0066
-  (operator: "all the config knobs should be available session based"):** the
-  live control is the **Answer selector** in the TX control bar (`Answer | CQ
-  slot`, one centred row; locked while a run is active — changes apply to the
-  next run), carried on `POST /v1/ft8/cq/start` as `answer_mode` exactly as
-  `tx_parity` is, and on `qso/start`/`qso/work` alongside the auto-work intent
-  (it is what an armed run selects with). `ft8.tx.caller_answer_mode` is only
-  the DEFAULT that seeds the selector at page load; the `/v1/config` PUT
-  accepts all three literals as defaults (fork 4 retired the ADR 0065
-  operator_pick fence with the config-only world it guarded). **Default
-  `operator_pick` (operator-ratified 2026-08-08, superseding ADR 0033's
-  `auto_first`):** automatic operation is licence-restricted in many
-  jurisdictions, so a station whose operator never CHOSE an auto mode must not
-  auto-work anyone — a clean install starts every session listing answerers
-  for the operator, and with `auto_work_callers` also defaulting off, fully
-  manual until both automations are opted into (now visible per-session
-  gestures, which serves the licensing intent better than a config edit).
-  **The auto-work arming gate reads the SESSION, not config** (ADR 0066 fork
-  5): intent + an auto session mode arms; under "I pick" the SPA disables the
-  toggle with the reason and drops the intent at the source (a pick run cannot
-  auto-work — invariant 7); `ft8.tx.auto_work_callers` survives only as the
-  toggle's boot seed, served on GET as `ft8_auto_work_callers`. Spec:
-  `internal/ft8/adr0066_test.go` (daemon R-rules) +
-  `ft8AutoWork.svelte.test.ts` SP-rules (SPA). The third literal `"operator_pick"` is **implemented
-  since 2026-08-07 (ADR 0065 decision 3)** but stays a **config.json-only** value
-  (operator-ratified): during a CQ run the daemon LISTS answerers on the `ft8-qso`
-  frames (`answerers`, expiring 3 min after last heard) instead of auto-committing,
-  the SPA's pile-up drawer renders them, and clicking one commits it via
-  `POST /v1/ft8/cq/pick`; the CQ keeps calling until then and the run resumes CQ
-  after the contact. A park (Next / the repeat cap) under this mode never
-  auto-picks a replacement. The SPA dropdown still never offers it and a
-  `/v1/config` PUT carrying it is still a 400 — enforcement of the config.json-only
-  decision, no longer a missing feature. (The ctrl-click pile-up stack always
-  drains **FIFO** regardless of this knob — the mode governs only how a Call-CQ
-  run selects its answerers.)
+- **`tx.caller_answer_mode`** — the DEFAULT **Answer mode**, the ONE rule of the
+  run model (ADR 0067, superseding ADR 0065's per-click intent grammar and ADR
+  0066's toggle fork): however a session starts (answer a CQ, call CQ,
+  double-click a station, FD, type-4), the session's Answer mode ALONE decides
+  how the run it leaves behind treats callers. `"auto_first"` / `"auto_strongest"`
+  arm a hands-off run (first-come / strongest-first) with NO arming gesture —
+  selecting an auto mode on the visible selector IS the opt-in; `"operator_pick"`
+  arms a LISTING run: callers are listed on the `ft8-qso` frames (`answerers`,
+  expiring 3 min after last heard) and NOTHING transmits until the operator picks
+  one (`POST /v1/ft8/cq/pick`) or bags several (`cq/bag`) into the queue the
+  daemon then drains in bag order — each transmission still operator-selected.
+  **SESSION STATE since ADR 0066:** the live control is the **Answer mode
+  selector on the run surface** (the Operate panel's run block, ADR 0067 —
+  locked while a run is active or armed; changes apply to the next run), carried
+  on `cq/start`, `qso/start` and `qso/work` as `answer_mode`; the config key is
+  only the DEFAULT that seeds the selector at page load, and the `/v1/config`
+  PUT accepts all three literals as defaults (fork 4 retired the ADR 0065
+  operator_pick fence). **Default `operator_pick` (operator-ratified
+  2026-08-08, superseding ADR 0033's `auto_first`):** automatic operation is
+  licence-restricted in many jurisdictions, so a station whose operator never
+  CHOSE an auto mode must not auto-work anyone — a clean install lists callers
+  and stays fully manual until an auto mode is explicitly selected. (The former
+  `ft8.tx.auto_work_callers` gate and its one-shot SPA toggle retired with ADR
+  0067; a legacy key in an older config.json is ignored by decode, like
+  `alc_red`.) A park (Next / the repeat cap) under pick never auto-picks a
+  replacement; Stop on a pick run PAUSES the drain (queue kept — Resume
+  continues), on an auto run stops it outright. Specs:
+  `internal/ft8/adr0067_test.go` (A/B rules) + `adr0066_test.go` (R-rules,
+  session carriage) + `RunSurface.svelte.test.ts` / `ft8AutoWork.svelte.test.ts`
+  (SPA).
 - **`tx.max_repeats`** — how many times the sequencer re-sends an unanswered rung
   before it auto-abandons the contact (ADR 0031 off-ramp; the caller side drops the
   silent contact and, since 2026-07-17, first re-scans that slot's decodes for
@@ -323,85 +315,44 @@ CAT-live re-tune is opt-out** via the daemon config `restore_rig_on_mode_switch`
   → RR73 → log) and returns to idle. Detection is SPA-side (`parseDirectedToMe`); only
   the unambiguous grid opening is matched, not the mid-exchange `R-12`/`RR73`/`73`
   replies.
-  **Pile-up callsign stacking (ADR 0033, shipped 2026-06-17):** because a calling-you
-  row is only *clickable* when armed + idle, callers you spot mid-QSO are gone before
-  you can act. **Ctrl/Cmd+click** a calling-you decode instead to push it onto a
-  **pile-up stack** — a FIFO (`ft8PileupStack`), worked **oldest-first**. Ctrl+click is
-  available in **any** state (mid-QSO, disarmed; it's pure capture, no TX — a ✓ marks a
-  row already stacked), so you grab callers the instant you see them in your RX slot and
-  the SPA works them when it can. The Operate view **drains** the stack via the
-  work-a-caller path whenever the rig is armed + idle, advancing as each contact
-  completes, while you keep adding. SPA-only (daemon untouched); in-memory (erased on
-  tab/browser close, like the Phone/CW `callsignStack`). This is the operator-pick
-  experience for callers that did NOT come from a CQ run; since ADR 0065 the daemon
-  `operator_pick` Call-CQ mode complements it — during such a run the same drawer
-  renders the DAEMON's answerer list first ("Answering your CQ", from the `ft8-qso`
-  frames) and clicking one commits it into the run via `POST /v1/ft8/cq/pick`.
+  **Bagging callers (ADR 0067, replacing the 2026-06-17 SPA pile-up stack):**
+  because a calling-you row is only *clickable* when armed + idle, callers you
+  spot mid-QSO are gone before you can act. **Ctrl/Cmd+click** a calling-you
+  decode to **bag** it into the DAEMON's pick queue (`POST /v1/ft8/cq/bag` —
+  pure capture, no TX; a **Q** badge marks a bagged row). Bagging needs a live
+  pick context — an `operator_pick` CQ run or the listing run every pick
+  session leaves behind — because the queue is run state; outside one the
+  daemon refuses and the toast explains. The daemon **drains** the queue in
+  bag order whenever the run is idle (each entry was individually chosen, so
+  every transmission stays operator-selected), expiring entries unheard past
+  the 3-min bound instead of transmitting at them; a bagged station heard
+  again refreshes its entry (SNR/period/freshness) rather than relisting, so
+  it cannot be bagged twice. **Stop on the run surface PAUSES the drain**
+  (queue kept; Resume — on the surface or the drawer footer — continues);
+  Abandon stops the whole run, queue included. Parity is daemon-owned too:
+  each listed caller carries the period it was HEARD in, and commits reply on
+  that period (the old SPA-side single-parity lock retired with the stack).
 
-  *The drawer* hangs off the **right edge of the logging card** (mounted alongside the
-  Phone/CW Call Stack), always visible while non-empty regardless of which FT8 sub-tab
-  is open; the Operate tab also carries a depth badge. It is a deliberate twin of the
-  Phone/CW Call Stack so it operates the same on sight. It **auto-hides when empty** —
-  it isn't shown until a caller is queued, and disappears once the queue drains or is
-  cleared. Per-row **×** removes that one caller; the header **×** ("Clear all &
-  abandon") clears the queue *and* abandons the run (aborts the active exchange if one
-  is in flight). Clicking a row **does nothing** — unlike the Phone/CW stack (where a
-  click loads the call into the QSO draft), the FT8 daemon auto-drains the queue for
-  you, so there's nothing to "load." Grid/SNR are captured per entry but not displayed.
-
-  **Re-clicking a station already on the stack is harmless.** The push de-dups by
-  callsign: it **refreshes** that entry's grid/SNR/slot in place (a later decode is
-  better data to work from) **without** adding a duplicate and **without** changing its
-  FIFO position. (A ✓ on the Band Activity row tells you it's already queued.)
-
-  **Auto-drain pause/resume.** The stack **starts draining** (enabled by default) and
-  stays that way through QSO completions, decode gaps, and errors — nothing pauses it
-  automatically. It is **suspended only by Abandon**: the ladder's **Abandon** button
-  pauses the drain but *keeps* the queue (the drawer shows "· paused" + a **Resume**
-  button), and the header **×** also pauses but then clears the queue so the drawer
-  hides. It **resumes** when you press **Resume** — *or* when you Ctrl/Cmd+click a
-  **new** caller (enqueuing a genuinely new station re-enables the drain). Re-clicking a
-  station **already** on the stack only refreshes its data and does **not** un-pause —
-  so once you've hit Abandon you stay paused until you explicitly Resume or stack a
-  caller you haven't queued yet.
-
-  **Single-parity rule (2026-06-27).** FT8 is half-duplex on a two-parity 15 s grid, so
-  every station you can work in one run must sit on **your RX parity** — the slot parity
-  you receive on (= opposite your TX = the parity of the CQ you answered). The pile-up is
-  therefore **single-parity**, enforced against a **stable run-parity lock**
-  (`ft8PileupStack.lockedParity`): the FIRST station added fixes the run's parity, and the
-  lock is **held across the drain emptying the queue** between contacts — so Ctrl/Cmd+click
-  rejects any later add whose slot parity differs (info toast + the wrong-parity calling-you
-  row is **muted/greyed** with a reason). The lock **releases** when a fresh run starts —
-  detected lazily at enqueue time: queue empty **and** no contact active means the previous
-  run is over, so the next add relocks to its parity — and on Abandon/Clear. (Earlier this
-  anchored on the live queue *head*, which the drain kept clearing, so the rule almost never
-  bit — the lock fix is what makes it stick.) Band Activity rows carry an **even/odd badge**
-  (E sky / O purple, derived SPA-side from the slot time via `utils/ft8Parity.ts`; even =
-  :00/:30, odd = :15/:45 UTC), and the pile-up drawer header shows the run's parity
-  (`Pile-up (N) · odd`). **Expected, not a bug:** while *working* a pile-up you transmit on
-  one parity and are therefore **deaf to it**, so Band Activity only ever shows your RX
-  parity for the whole run (all-E if you're replying on odd) — the other parity only appears
-  when you're not transmitting (idle gaps), which is the only time a wrong-parity add is even
-  possible. The daemon's `their_period` (on the `ft8-qso` SSE) seeds the workable parity
-  before anything is queued; once a station is queued the SPA lock is authoritative.
-
-  **Queueing is disabled while *calling* CQ (2026-06-27).** During a Call-CQ session the
-  daemon's auto-pick is the single "who's next" engine, so Ctrl/Cmd+click does **not**
-  enqueue — it shows a "Calling CQ — pile-up queue disabled" toast. (Letting it enqueue
-  built a second, competing controller: a non-empty stack lit the **Next** button, whose
-  click abandoned the CQ run and silently handed the rig to the pile-up drain, which never
-  resumed CQ.) **Abandon** is the one way to stop a Call-CQ run. Queueing stays available
-  in answer-a-CQ / work-a-caller (role ≠ caller), where it's the whole point.
+  *The drawer* (the pile-up slide-over, opened from the run surface's state
+  line or the util-rail badge) renders the pick context's TWO lists: **Calling
+  you** — the daemon's listed answerers, each with **Work** (commit now via
+  `cq/pick`) and **Bag** (queue it via `cq/bag`) — and **Bagged** — the queue
+  in bag order, head marked "worked next", per-row **×** unbagging back to the
+  listed set (`cq/unbag`). A **Paused** header badge and a footer **Resume**
+  appear while the drain is paused with stations waiting. The header **×**
+  only CLOSES the slide-over — stopping the run lives on the run surface.
+  Every verb is confirm-by-push: the lists change when the next `ft8-qso`
+  frame says so, and a refusal (no pick run / station no longer listed /
+  contact in flight) surfaces as a toast with the daemon's own message.
 
   **Currently-working station + same-session dupes (2026-06-27).** The station you're
   working *this exchange* (`qso.their_call` while active) is **highlighted** in Band
   Activity (indigo row + ring — any decode mentioning their call) so it reads as the live
-  contact, not an available caller, and **can't be re-queued** (its grid-opening re-calls
-  still decode, but Ctrl+click shows "Already working <call>" — it was just dequeued when
-  the contact started). Separately, a **same-session dupe** — a call already logged on the
+  contact, not an available caller — and a Ctrl+click on it gets the daemon's
+  refusal (the station being worked is never listed, so a bag returns
+  `ft8_answerer_not_listed`). Separately, a **same-session dupe** — a call already logged on the
   **current band this session** (`sessionQsosState`, contest-dupe style) — is **greyed
-  out** and **blocked** from being worked or queued (answer/work/enqueue all short-circuit
+  out** and **blocked** from being worked (answer/work short-circuit
   with "Already worked <call> this session"). This is **session-scoped on purpose**:
   re-working a station you hold in the **durable logbook from a *prior* session is fine**
   (left freely workable, only the existing worked-before *tint* applies); only a repeat
@@ -755,16 +706,15 @@ realities — neither a fault in SM, and both visible in the log as a string of
   while the one you picked never replies. That is the pile-up, not a sequencing bug.
 
 **Operational takeaway:** from a sought-after location, work the callers in your
-pile-up rather than chasing weak-path CQs — **press Call CQ** and SM works the
-answerers for you (ADR 0033 caller-side sequencing: it calls CQ, auto-works one
-answerer through RR73, logs it, and resumes — looping the pile-up until you Abandon).
-Which answerer it picks each round is the **FT8 Settings tab → Call CQ → Answer**
-knob: **First answerer** (`auto_first`, by decode order) or **Strongest signal**
-(`auto_strongest`, highest SNR in the slot — clears the loud ones first). To choose
-*which* callers to work and in what order yourself, use **pile-up callsign stacking**
-instead: **Ctrl/Cmd+click** each calling-you decode to queue it, and SM works the stack
-oldest-first (FIFO, see "Working a caller" above). Auto-answer Call CQ is the hands-off
-option; the stack is the operator-curated one.
+pile-up rather than chasing weak-path CQs — **press Call CQ** and the session's
+**Answer mode** (the run surface selector, ADR 0067) decides how SM treats the
+answerers: **First answerer** (`auto_first`, by decode order) or **Strongest
+signal** (`auto_strongest`, highest SNR in the slot) run hands-off — CQ, work
+one through RR73, log, resume, until you Abandon. To choose *which* callers to
+work and in what order yourself, run **I pick** (`operator_pick`, the default):
+answerers are listed in the drawer, and you **Work** one now or **Bag** several
+(Ctrl/Cmd+click on Band Activity bags too) for the daemon to work in bag order
+— hands-off throughput with every station your own choice.
 
 ### Call CQ — the confirm-hold (why you no longer work the same station twice)
 
@@ -1076,7 +1026,7 @@ audio-only / offline.
 | (b) | GFSK modulator + offline round-trip vs the shipped decoder (zero RF) | **done** |
 | (c) | Audio-output device (malgo, `//go:build cgo`, fail-soft, probe-listed) | **done** |
 | (d) | PTT + slot-timing controller (daemon-owned guaranteed stop) | **done — bench path; ADR 0030** |
-| (e) | Manual sequencer + QSO logging; **interactive picker** | e1–e4 shipped 2026-06-10 (TX path, resolver, sequencer ADR 0031, logging) — **answer-a-CQ complete + logged**. **Call-CQ `auto_first` shipped 2026-06-12 (ADR 0033)** — Call CQ → daemon works the pile-up (first answerer) → logged, looping until Abandon. The **SPA pile-up stack shipped 2026-06-17** (Ctrl/Cmd+click a caller → FIFO → work-a-caller drain — the curated path for callers outside a CQ run). **`caller_answer_mode=operator_pick` shipped 2026-08-07 (ADR 0065)** — a CQ run lists answerers in the drawer and the operator commits one via `POST /v1/ft8/cq/pick` (config.json-only knob). Automatic/unattended sequencing is out of scope — QEX-forbidden. |
+| (e) | Manual sequencer + QSO logging; **interactive picker** | e1–e4 shipped 2026-06-10 (TX path, resolver, sequencer ADR 0031, logging) — **answer-a-CQ complete + logged**. **Call-CQ `auto_first` shipped 2026-06-12 (ADR 0033)** — Call CQ → daemon works the pile-up (first answerer) → logged, looping until Abandon. The **SPA pile-up stack shipped 2026-06-17** (Ctrl/Cmd+click a caller → FIFO → work-a-caller drain — the curated path for callers outside a CQ run). **`caller_answer_mode=operator_pick` shipped 2026-08-07 (ADR 0065)** — a CQ run lists answerers in the drawer and the operator commits one via `POST /v1/ft8/cq/pick`. **The one-rule run model shipped 2026-08-08 (ADR 0067)**, superseding the 0065 intent grammar and retiring the SPA stack: the session's Answer mode alone shapes every run; pick gained the daemon bag-and-drain queue (`cq/bag`/`unbag`/`resume`). Automatic/unattended sequencing is out of scope — QEX-forbidden. |
 
 **Step (c) — audio output (shipped 2026-06-07).** `internal/audio/playback` is the
 output mirror of `internal/audio/capture`: a malgo/miniaudio **S16, 12 kHz, mono**
@@ -1412,14 +1362,15 @@ sequencing shipped 2026-06-12 (ADR 0033, `auto_first`):** Call CQ starts a seque
 session — the daemon calls CQ, auto-works the first answerer through RR73, logs it,
 and loops the pile-up until Abandon (`CallerExchange` + `onSlotCalling` +
 `POST /v1/ft8/cq/start`; needs on-air validation). **Pile-up callsign stacking shipped
-2026-06-17** (ADR 0033 amendment): Ctrl+click calling-you decodes onto an SPA-owned FIFO
-that drains via the work-a-caller path — the operator-curated alternative to
-`auto_first` for callers outside a CQ run. **`operator_pick` shipped 2026-08-07 (ADR
-0065 decision 3)**: under `caller_answer_mode=operator_pick` a CQ run lists its
-answerers (`ft8-qso` `answerers`, 3-min staleness) in the same drawer and the operator
-commits one via `POST /v1/ft8/cq/pick`; CQ continues until then, parks never
-auto-pick, and the run resumes CQ after each contact. Spec:
-`internal/ft8/operatorpick_test.go`.
+2026-06-17** (ADR 0033 amendment; RETIRED 2026-08-08 by ADR 0067 — Ctrl+click now
+bags into the daemon's pick queue). **`operator_pick` shipped 2026-08-07 (ADR
+0065 decision 3)**: a CQ run lists its answerers (`ft8-qso` `answerers`, 3-min
+staleness) in the drawer and the operator commits one via `POST /v1/ft8/cq/pick`;
+CQ continues until then, parks never auto-pick, and the run resumes CQ after each
+contact (spec: `internal/ft8/operatorpick_test.go`). **The one-rule run model
+shipped 2026-08-08 (ADR 0067)**: the session's Answer mode ALONE decides how every
+run treats callers — auto modes arm hands-off runs with no gesture, pick leaves a
+listing run + the bag-and-drain queue. Spec: `internal/ft8/adr0067_test.go`.
 **Daemon-initiated sequencing is out of scope and unsupported — the QEX FT8
 specification forbids automatic operation.**
 

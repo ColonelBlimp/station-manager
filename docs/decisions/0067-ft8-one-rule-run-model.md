@@ -3,7 +3,8 @@ number: 0067
 title: FT8 runs — one rule: the Answer mode alone decides how callers are worked
 status: Accepted (2026-08-08 — behavioural model AND the UI representation
   both operator-ratified in conversation, worked through entry point by
-  entry point; not yet built)
+  entry point; BUILT same day, slices A–D: daemon arming + listing run,
+  bag-and-drain queue, the SPA run surface, and the config/wire retirements)
 date: 2026-08-08
 ---
 

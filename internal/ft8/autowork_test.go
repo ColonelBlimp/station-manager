@@ -317,17 +317,13 @@ func TestAutoWork_ConfigDefaultArmsThroughARealService(t *testing.T) {
 		"the config default mode must arm a run through the Service path without a test reaching in")
 }
 
-// W11 — with the knob on but selection set to operator_pick, NO run is armed. That
-// mode promises the operator chooses; a run under it would either pick nobody or
-// break the promise, and either way reporting it as armed is the false-advertisement
-// failure invariant 7 exists to prevent.
+// W11 — under operator_pick no AUTO-working run is armed. That mode promises the
+// operator chooses; a run that auto-picked would break the promise, and reporting
+// one as armed is the false-advertisement failure invariant 7 exists to prevent.
 func TestAutoWork_OperatorPickDoesNotArmARun(t *testing.T) {
 	s := newService(types.Ft8Config{
 		Enabled: true,
-		TX: &types.Ft8TXConfig{
-			AutoWorkCallers:  true,
-			CallerAnswerMode: types.Ft8CallerAnswerOperatorPick,
-		},
+		TX:      &types.Ft8TXConfig{CallerAnswerMode: types.Ft8CallerAnswerOperatorPick},
 	}, logging.Noop(), nil)
 
 	s.seq.setPendingAnswerMode("operator_pick")
@@ -360,11 +356,10 @@ func autoWorkService(t *testing.T) *Service {
 	t.Helper()
 	s := newService(types.Ft8Config{
 		Enabled: true,
-		TX: &types.Ft8TXConfig{AutoWorkCallers: true,
-			// Explicit since the 2026-08-08 default flip (absent mode now
-			// resolves operator_pick and arms nothing — pinned in types):
-			// these rules need an ARMED run, i.e. a config that opted in.
-			CallerAnswerMode: types.Ft8CallerAnswerAutoFirst},
+		// An explicit auto mode: these rules need an ARMED run, i.e. a
+		// session that opted in (the setPendingAnswerMode below is the
+		// arming input since ADR 0067; the config mode is only its default).
+		TX: &types.Ft8TXConfig{CallerAnswerMode: types.Ft8CallerAnswerAutoFirst},
 	}, logging.Noop(), nil)
 	s.seq.setPendingAnswerMode("auto_first") // the session's auto mode (ADR 0066)
 	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
@@ -392,11 +387,10 @@ func TestAutoWork_CatLossStopsTheRun(t *testing.T) {
 	src := newFakeSource()
 	s := newService(types.Ft8Config{
 		Enabled: true,
-		TX: &types.Ft8TXConfig{AutoWorkCallers: true,
-			// Explicit since the 2026-08-08 default flip (absent mode now
-			// resolves operator_pick and arms nothing — pinned in types):
-			// these rules need an ARMED run, i.e. a config that opted in.
-			CallerAnswerMode: types.Ft8CallerAnswerAutoFirst},
+		// An explicit auto mode: these rules need an ARMED run, i.e. a
+		// session that opted in (the setPendingAnswerMode below is the
+		// arming input since ADR 0067; the config mode is only its default).
+		TX: &types.Ft8TXConfig{CallerAnswerMode: types.Ft8CallerAnswerAutoFirst},
 	}, logging.Noop(), src)
 	var live atomic.Bool
 	live.Store(true) // rig on

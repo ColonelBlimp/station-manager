@@ -288,3 +288,24 @@ func TestConfig_Ft8Display_InvalidFeedMode400(t *testing.T) {
 		t.Errorf("code = %q, want invalid_field_value", code)
 	}
 }
+
+// ADR 0067 (slice D): the ft8_auto_work_callers GET seed retires WITH the
+// one-shot toggle it seeded — a key that only ever fed a control that no
+// longer exists would read as live config surface to anyone building a
+// client. Asserted on the RAW body (not the typed response) so the rule
+// compiles on both sides of the removal and red means "still served".
+// The legacy ft8.tx.auto_work_callers key on disk stays tolerated-ignored
+// (lenient decode — the alc_red precedent); the pin for that is
+// TestConfig_LegacyAutoWorkCallersKeyTolerated below.
+func TestConfig_Ft8AutoWorkCallersSeed_Retired(t *testing.T) {
+	srv := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config", nil)
+	w := httptest.NewRecorder()
+	srv.handleGetConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /v1/config = %d, body %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "ft8_auto_work_callers") {
+		t.Error("GET /v1/config still serves ft8_auto_work_callers; the seed retired with ADR 0067")
+	}
+}

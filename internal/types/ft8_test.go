@@ -116,22 +116,12 @@ func TestResolveFt8CallerAnswerMode(t *testing.T) {
 	}
 }
 
-// The default-flip's sharpest consequence, pinned on its own: auto_work_callers
-// = true with NO chosen answer mode arms NOTHING — the absent mode resolves to
-// operator_pick, which ResolveFt8AutoWorkCallers excludes (invariant 7: a run
-// that cannot pick must not advertise). Before 2026-08-08 this combination
-// silently armed auto_first runs; automation now requires BOTH opt-ins. The
-// second case is the differentiator: the same knob with an explicit auto mode
-// still arms, so a regression that re-arms the absent-mode case fails the
-// first assertion, and one that breaks arming entirely fails the second.
-func TestResolveFt8AutoWorkCallers_AbsentModeDoesNotArm(t *testing.T) {
-	if ResolveFt8AutoWorkCallers(&Ft8TXConfig{AutoWorkCallers: true}) {
-		t.Error("auto_work_callers with an ABSENT answer mode must not arm (resolves to operator_pick)")
-	}
-	if !ResolveFt8AutoWorkCallers(&Ft8TXConfig{AutoWorkCallers: true, CallerAnswerMode: "auto_first"}) {
-		t.Error("auto_work_callers with an explicit auto mode must still arm")
-	}
-}
+// ResolveFt8AutoWorkCallers and the auto_work_callers knob retired with ADR
+// 0067 — the licensing rule they enforced ("no automation the operator never
+// chose") now rests entirely on the mode default: an absent/invalid mode
+// resolves operator_pick (pinned above), and the arming gate reads the
+// SESSION's mode alone (internal/ft8/adr0067_test.go A1-A3 — pick arms only a
+// LISTING run that transmits nothing without a pop).
 
 func TestFt8FieldDayClassValid(t *testing.T) {
 	valid := []string{"1A", "2A", "5F", "1D", "10A", "99F"}

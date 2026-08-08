@@ -1,7 +1,8 @@
 ---
 number: 0065
 title: FT8 auto-work arming grammar — per-click intent, and operator_pick as the pile-up
-status: Accepted
+status: Accepted; the per-click arming grammar (decisions 1–2) superseded
+  by ADR 0067 (2026-08-08) — operator_pick (decision 3) survives, generalised
 date: 2026-08-07
 ---
 
@@ -169,3 +170,18 @@ pile-up-ergonomics grounds; the trigger that actually fired was licensing.
 Spec: `TestResolveFt8CallerAnswerMode` +
 `TestResolveFt8AutoWorkCallers_AbsentModeDoesNotArm` (types),
 `TestConfig_Ft8CallerAnswerMode_GetReturnsDefault` (api).
+
+---
+
+**Dated note (2026-08-08, ADR 0067):** one day after acceptance the operator
+worked the run model through entry point by entry point and ratified ONE rule
+instead: the session's Answer mode alone decides how every run treats callers.
+That supersedes this ADR's per-click grammar — the checkbox, the
+ctrl+shift+click chord, the `auto_work` wire intent, the arm-refusal verdict
+all retired (the wire field is now an ignored unknown key). Decision 3
+(`operator_pick`) SURVIVES and was generalised: the listing now rides every
+pick session (not just CQ runs), and slice B added the bag-and-drain queue
+(`cq/bag`/`unbag`/`resume`). The
+`TestResolveFt8AutoWorkCallers_AbsentModeDoesNotArm` spec named above retired
+with the resolver; the licensing rule it pinned lives in the mode default
+(`internal/types/ft8_test.go`) plus `internal/ft8/adr0067_test.go` A1–A3.
