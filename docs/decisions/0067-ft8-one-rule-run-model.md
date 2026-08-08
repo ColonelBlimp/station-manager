@@ -1,9 +1,9 @@
 ---
 number: 0067
 title: FT8 runs — one rule: the Answer mode alone decides how callers are worked
-status: Proposed (behavioural model operator-ratified in conversation
-  2026-08-08, worked through entry point by entry point; the UI
-  representation is the open half — deliberately not designed here)
+status: Accepted (2026-08-08 — behavioural model AND the UI representation
+  both operator-ratified in conversation, worked through entry point by
+  entry point; not yet built)
 date: 2026-08-08
 ---
 
@@ -90,8 +90,9 @@ Consequences the rule already implies, stated so nobody re-derives them:
 
 ## Survives unchanged
 
-- The **pill** — as run STATUS plus the Stop control (stop the run, never
-  the active contact). Its arming half retires with the intent.
+- Run STATUS + the Stop control (stop the run, never the active contact) —
+  though their WIDGET changes: the pill retires into the run surface below,
+  which owns both.
 - The repeat cap, Next, Abandon (and Abandon's pause-the-drain behaviour is
   an open question below, not silently inherited).
 - ADR 0066's session/default split: the Answer mode stays session state
@@ -99,12 +100,52 @@ Consequences the rule already implies, stated so nobody re-derives them:
   run is active or armed.
 - Run stop conditions (disarm, CAT loss, dial move, band change).
 
-## Acceptance criteria (drafted for ratification with the UI half)
+## Decision — the UI (ratified 2026-08-08)
+
+**One run surface, in the panel slot the checkbox/chip morph occupies
+today, replacing the morphing outright.** Fixed structure in every state
+(the audio card's V6 lesson) — three rows; only text and the Stop button's
+presence vary:
+
+    ┌─ Run ────────────────────────────────┐
+    │ Answer mode  [First answerer ▾]      │
+    │ ● <state line>                       │
+    │ [ Stop run ]     (only when live)    │
+    └──────────────────────────────────────┘
+
+- **The Answer mode selector RELOCATES into the surface.** The TX control
+  bar's parameter row keeps only the genuinely CQ-scoped `CQ slot` parity
+  selector — resolving the location-implies-CQ complaint — and the bar
+  keeps its verbs (Call CQ / Abandon / Next).
+- **The pill retires.** The surface's state dot + line IS the run status;
+  `Stop run` replaces the pill click.
+- **The state strings are the ratified wording** (they are the
+  "explains itself"):
+
+  | Mode · state | Dot | State line |
+  |---|---|---|
+  | auto · no run | grey | "Your next contact starts a run — callers worked first come" / "…strongest first" |
+  | auto · run live, in contact | amber | "Run live — working DL9UW (first come)" |
+  | auto · run live, waiting | amber | "Run live — waiting for callers (strongest first)" |
+  | I pick · no session | grey | "Manual — callers will be listed; nothing transmits until you choose" |
+  | I pick · listing | blue | "3 calling you — open the drawer to work or bag" |
+  | I pick · queue draining | amber | "Working your queue — 2 bagged left" |
+
+- **`Stop run` on a draining queue PAUSES the drain** (ratified): the queue
+  is kept and Resume (drawer) continues it — today's stack semantics carry
+  over deliberately, so a stop never costs the operator their curated
+  choices.
+- **The state line is click-to-open** for the drawer (ratified): an
+  operator-initiated click is not the unprompted surfacing the badge-only
+  discovery rule (0065) forbade — that rule stays for toasts/auto-open,
+  which remain out.
+
+## Acceptance criteria (ratified with the model)
 
 1. When I start a session by ANY of the five entry points with the mode on
    an auto setting, callers are worked hands-off in that mode's order — and
-   I can tell a live run from a stopped one at a glance (the pill), in the
-   same place, in every case.
+   I can tell a live run from a stopped one at a glance from the run
+   surface, in the same place, in every case.
 2. When the mode is "I pick", NOTHING transmits beyond the contact I
    started until I choose a station; callers appear in one list, the same
    list, whatever the entry point — and I can tell "listing, waiting for
@@ -120,16 +161,11 @@ Consequences the rule already implies, stated so nobody re-derives them:
 
 ## Open questions — the operator's calls, deliberately unfilled
 
-- **The UI representation** — the whole point of the next discussion: one
-  run surface that renders mode + state + stop uniformly, where it lives,
-  and what each state says. Nothing here presupposes the answer.
 - Queue order under pick: strictly bag order? Reorderable (the old stack
   had ↑)?
-- Abandon vs the pick queue: today's stack PAUSES the drain on Abandon so
-  the operator regains control (Resume continues). Keep, or does Abandon
-  also stop the run under the one-rule model?
-- Pill wording per mode (an auto run vs a pick run listing callers are
-  different states worth different words).
+- Abandon vs the pick queue: `Stop run` PAUSES the drain (ratified above);
+  whether Abandon does the same (today's stack behaviour) or also stops the
+  run — decide at build time with a test pinning the choice.
 - Whether `max_repeats` joins the same surface (carried over from ADR
   0066's open questions).
 
