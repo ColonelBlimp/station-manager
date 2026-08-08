@@ -41,45 +41,105 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-07)
+## Now (as of 2026-08-08)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **LATE NIGHT 2026-08-07: tree CLEAN at `273d749e`**, every review triaged
-  + deleted (13 rounds today, 12 real findings, all fixed same-day
-  RED-first). **DEPLOY LEDGER NO LONGER CLEAR:** the daemon still runs the
-  16:31 build `1159-g90bb2d4d`; the four later commits (logging A2/A3 + the
-  five-finding review round + the rune fix) are NOT live. Nothing
-  rig-critical — redeploy at next start. SM Cloud verified IN SYNC at 15:57
-  (7127 = 7127).
-- **Logging backlog: ZERO Tier 1 remaining.** api A2/A3 closed late night:
-  reconcile `RunOnce` logs run-complete with `trigger` (manual/periodic) ·
-  backfill lines carry `origin` (found + fixed a Q2 mislabel — reconcile
-  heals logged as "manual") · CSRF refusals log the parsed host/origin,
-  credential-safe (`csrf_log_test.go` CL1–CL6).
-- **FIVE real pre-existing qsoservice defects** (codex on `8d9ab622`), all
-  fixed — spec `review20260807_test.go`: import `--forward clublog` now
-  REFUSED (`backfill_unsupported`; was the prohibited catch-up batch) ·
-  PATCH revision CAS → **409 `edit_conflict`, a NEW API code** (SPA shows a
-  generic error; richer UI handling is the operator's call) · RST/country
-  length validation, RUNE-counted to match SQLite `length()` (follow-up P2)
-  · time coherence now covers non-decreasing dates + both-seconds pairs ·
-  restore probe faults propagate; check-to-insert race → skipped_existing.
-- **Dogfood inbox: 2 new bugs captured, untriaged** — FT8→phone/CW leaves
-  mode/freq unreset · VFO-B select snaps to VFO-A's frequency.
-- **Still open from the afternoon:** `alc_red` 50 PROVISIONAL (needs the
-  §4 iii deliberate-overdrive datum → flip ADR 0064 Accepted) · ADR 0065
-  deployed but UNEXERCISED on air (pill on a work-caller arm · FD click
-  leaves toggle lit, no toast · a pick run — `ft8.tx.caller_answer_mode:
-  "operator_pick"` in config.json; stop smd, edit, start).
-- **NEXT:** redeploy → on-air §4 iii overdrive + the 0065 sanity checks ·
-  triage the 2 inbox bugs · findings 9/10 · paste-list port ·
-  ctrl+click-on-CQ gesture (0065, undecided) · Tune-coverage question.
+- **EARLY 2026-08-08: tree CLEAN at `8a9e94d8`**, every review triaged +
+  deleted (the VFO arc drew 3 real findings across 4 commits, all fixed
+  RED-first; final round clean). **DEPLOY IS 11 COMMITS BEHIND:** the daemon
+  still runs 2026-08-07's 16:31 build `1159-g90bb2d4d` — logging A2/A3, the
+  five-finding qsoservice round + rune fix, and BOTH dogfood bug fixes are
+  NOT live. Nothing rig-critical — redeploy at next start.
+- **Both dogfood bugs FIXED** (triaged, then built on direction): a session
+  booting INTO FT8 now captures the first full rig report as the phone
+  snapshot (A26 — amends A4's LETTER only; drafted, NOT operator-ratified) ·
+  FTdx10 gains TRUE VFO select (`select_vfo` = `VS%s;` via the SELECT map;
+  other rigs keep the swap fallback). The reviews hardened the selection
+  RESTORE: selection first (MD0 acts on the operating VFO) · an
+  unrestorable drifted selection abandons the WHOLE restore · the abandon
+  toast scripts the recovery order that works (back, press A/B there,
+  return).
+- **VFO select is UNVALIDATED ON HARDWARE** — built on the manual's VS
+  legend, which contradicts an archived "VS is a flag only" observation
+  (plausibly confounded by equal VFO contents). Pre-registered check: with
+  VFO-B on a deliberately DIFFERENT frequency, clicking VFO-B must move the
+  operating dial to B's own content. Revert = one SPA branch + one rigdef
+  line.
+- **Logging backlog: ZERO Tier 1** (A2/A3 closed; five qsoservice defects
+  fixed incl. PATCH CAS → NEW 409 `edit_conflict`; detail in Current state).
+- **Still open from 2026-08-07:** `alc_red` 50 PROVISIONAL (§4 iii
+  deliberate-overdrive datum → ADR 0064 Accepted) · ADR 0065 UNEXERCISED on
+  air (pill on a work-caller arm · FD click · an `operator_pick` run —
+  stop smd, edit config.json, start).
+- **NEXT:** redeploy → on-air: §4 iii overdrive · 0065 sanity · VFO-select
+  validation (a phone→FT8→select-B→back round trip also exercises the
+  selection restore) · A26 ratification — then findings 9/10 · paste-list
+  port · ctrl+click-on-CQ (0065, undecided) · Tune-coverage question.
 
-## Current state (as of 2026-08-07)
+## Current state (as of 2026-08-08)
+
+### 2026-08-08 (early hours) — both dogfood bugs triaged and fixed; the select_vfo arc
+
+Directed as "triage the inbox" (verify, annotate, don't build) and then "fix
+these two bugs". Both of 2026-08-07's captures resolved to design-level
+causes with cited evidence, then both were built; commits `ec2fd42d` →
+`8092fa81` → `b3eb919f` → `8a9e94d8`, dogfood-inbox annotations updated
+TRIAGED→FIXED.
+
+**Bug 1 — FT8→phone/CW leaves mode/freq unreset (A26).** The mode-switch
+hook fires only on from≠to, so a session that BOOTS into the FT8 route
+(reload/deep link — routine right after a deploy) never snapshots a phone
+position, and the first FT8→phone switch had nothing to restore. Fix: the
+FIRST full rig report (dial + mode both known) arriving while the app sits
+in ft8 mode is captured as the phone snapshot — where the rig physically was
+when the session began. Any switch or a successful capture closes the
+window; booting into phone captures nothing (FT8's null slot belongs to the
+A25 seed). This amends criterion A4's LETTER (the no-stale-snapshot
+rationale survives untouched) — **drafted, NOT operator-ratified**. A
+band-stack seed variant was dropped: the manual's BS section is silent on
+same-band behaviour (cycling risk). Spec: MB1–MB5 in
+`modeRestore.svelte.test.ts`.
+
+**Bug 2 — VFO-B select snapped to VFO-A's frequency.** The SPA's "select"
+was a CONTENT SWAP (`swap_vfo`) on every rig. The FTdx10 rigdef gains
+`select_vfo` = `VS%s;` through the existing SELECT value map (the state the
+daemon already parses from VS pushes); the SPA does a true select when the
+op exists (optimistic dot + rollback, contents untouched) and keeps the swap
+fallback otherwise; Shift+Ctrl+\ stays a true swap. Built on the manual's VS
+legend ("P1 0: VFO-A Operation / 1: VFO-B Operation"), which contradicts
+archive S~2527's "VS is a flag only" observation — plausibly confounded by
+equal VFO contents at the time, hence the pre-registered hardware check in
+## Now. The FT-710 deliberately does NOT get the op (its manual page
+unread — the external-claims rule, cited in `commands_test.go`).
+
+**Three review rounds hardened the selection restore** (every finding real,
+fixed RED-first with asserted reversion probes; spec SEL1–SEL6):
+
+- `ec2fd42d` P1 — select_vfo made the selection DRIFTABLE (front-panel A/B
+  during an excursion) but applyRestore never restored it, so set_mode (MD0
+  acts on the OPERATING VFO) could land on the wrong VFO. Fix: selection
+  restored FIRST, capability-gated on `select_vfo` itself — selectVfo's
+  fallback would swap the very contents the restore sets.
+- `8092fa81` P1 — my first shape SKIPPED an unrestorable drifted selection
+  and carried on, still writing freq/mode past the wrong selection. Fix:
+  abandon the WHOLE restore (SEL3 asserts `sent == []`); the abandon names
+  the front panel as the fix.
+- `b3eb919f` P2 — the abandon toast's instruction order was wrong:
+  press-A/B-first breaks the switch-back leg (the OTHER mode's snapshot
+  carries the drifted selection) and earns a second abandon. The toast now
+  scripts the order that works — switch back, press A/B THERE, then return
+  (SEL5 pins message + sequence; SEL6 pins that press-first stays silent
+  and still converges — the treadmill is noisy, never a trap).
+- `8a9e94d8` (the SEL5/SEL6 commit) reviewed clean.
+
+Noted for the operator, NOT built (behaviour call): auto-completing the owed
+restore when the A/B press report shows the selection matching would remove
+the mode-switch dance — but that is the app moving the rig off a front-panel
+press rather than a UI gesture.
 
 ### 2026-08-07 (late night) — api A2/A3 closed; the five-finding review round
 
@@ -131,8 +191,8 @@ proof; spec `internal/qsoservice/review20260807_test.go` (15 rules), commit
 Two origin-attribution fixtures retargeted clublog→qrz (their old fixture is
 the combination fix 1 now forbids; their rule — origin=import on both paths —
 is unchanged). Reviews: `bb04a661` = 1 real P2 (fixed), `273d749e` = clean.
-Also captured, untriaged: two dogfood-inbox bugs (FT8→phone/CW mode/freq not
-reset; VFO-B select snapping to VFO-A's frequency).
+~~Also captured, untriaged: two dogfood-inbox bugs~~ — **both triaged AND
+fixed 2026-08-08, see the section above.**
 
 ### 2026-08-07 (close of day) — redeployed; SM Cloud verified in sync
 
