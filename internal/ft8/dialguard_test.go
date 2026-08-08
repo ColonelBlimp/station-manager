@@ -110,7 +110,7 @@ func startGuardCq(t *testing.T, s *Service) *[]QsoStatus {
 	t.Helper()
 	var published []QsoStatus
 	s.seq.publish = func(st QsoStatus) { published = append(published, st) }
-	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", 1))
+	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.074, "", "", 1))
 	require.True(t, s.seq.Active(), "fixture: a session must be running to test its end")
 	return &published
 }
@@ -247,11 +247,11 @@ func TestDialGuard_DisarmsTransmit(t *testing.T) {
 
 	require.ErrorIs(t, s.TransmitNext("CQ 7Q5MLV IO91", 1500), ErrTxNotArmed,
 		"TX must be disarmed by the move")
-	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.075, "", 1), ErrTxNotArmed,
+	require.ErrorIs(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.075, "", "", 1), ErrTxNotArmed,
 		"and a new session must not start until the operator re-arms")
 
 	require.NoError(t, s.ArmTx(true), "re-arming is all it takes")
-	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.075, "", 1),
+	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.075, "", "", 1),
 		"and then work continues on the new frequency")
 	s.AbandonQso()
 }
@@ -483,7 +483,7 @@ func TestDialGuard_DoesNotEndASessionStartedAfterTheMove(t *testing.T) {
 	dial = 14.075
 	s.onDialMoved(14.074, 14.075)
 	require.NoError(t, s.ArmTx(true))
-	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.075, "", 1))
+	require.NoError(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.075, "", "", 1))
 	require.True(t, s.seq.Active(), "fixture: a replacement session is running on 14.075")
 
 	// A late handler for the ORIGINAL move finally runs.
@@ -617,7 +617,7 @@ func TestDialGuard_RefusesAStartWhenTheRigIsNotOnTheArmedFrequency(t *testing.T)
 
 	dial = 14.075 // QSY with nothing observing
 
-	require.Error(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.075, "", 1),
+	require.Error(t, s.StartCallCq("7Q5MLV", "IO91", 1500, 14.075, "", "", 1),
 		"the rig is not where TX was armed; the start must be refused up front")
 	require.False(t, s.seq.Active(),
 		"and no session may be left active-but-mute, blocking the next one")

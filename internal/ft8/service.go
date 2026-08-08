@@ -259,10 +259,8 @@ func newService(cfg types.Ft8Config, log logging.Logger, src captureSource) *Ser
 		types.ResolveFt8MaxRepeats(cfg.TX),
 		log,
 	)
-	// Auto-work-callers policy from config (ADR 0059). Pushed here so the knob is
-	// live for the operator's next session; the run itself is still armed only by an
-	// operator action, so this cannot start anything on its own.
-	s.seq.SetAutoWorkCallers(types.ResolveFt8AutoWorkCallers(cfg.TX), types.ResolveFt8CallerAnswerMode(cfg.TX))
+	// No auto-work policy install (ADR 0066): the config knob seeds the SPA
+	// toggle only; arming consumes the per-start staged intent + session mode.
 	// Stamp the antenna choice onto the per-attempt CompletedQso when the final
 	// rung succeeds. Keeping the stamp on the QSO (rather than in a Service
 	// singleton) prevents overlapping completion callbacks from stealing it.

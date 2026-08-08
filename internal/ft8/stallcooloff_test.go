@@ -203,7 +203,7 @@ func TestStallCooloff_NotRecordedWhenNoRunIsArmed(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	s.maxRepeats = 2
-	s.SetAutoWorkCallers(false, "auto_first") // no run can arm
+	// No intent staged — no run can arm (ADR 0066: the knob gate is gone).
 
 	require.NoError(t, s.StartWorkCaller("G0XYZ", "DL9UW", "JO41", -8,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))

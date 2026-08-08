@@ -1092,6 +1092,15 @@ describe('Ft8BandActivity worked-vs-engaged toast wording', () => {
     handles.
 */
 describe('Ft8BandActivity auto-work click grammar', () => {
+    // ADR 0066: the intent only survives the answerCq wrapper under an auto
+    // session mode — the reset default is operator_pick (the licensing-safe
+    // seed), which drops it at the source. These rules are about the CLICK
+    // grammar, so they run under an auto mode; the drop rule itself is pinned
+    // in ft8AutoWork.svelte.test.ts SP2.
+    beforeEach(() => {
+        ft8State.answerMode = 'auto_first';
+    });
+
     it('AW1: a plain CQ click carries no auto-work intent', async () => {
         setFt8OperatorCall('7Q5MLV');
         const got: Ft8AnswerArgs[] = [];

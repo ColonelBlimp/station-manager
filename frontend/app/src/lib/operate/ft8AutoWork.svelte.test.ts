@@ -119,6 +119,10 @@ it('leaves Abandon disabled when idle with no run', () => {
 */
 it('fires the refused sink once when an intent-carrying start comes back unarmed', async () => {
     armReadyForAbandon();
+    // ADR 0066: the intent only leaves the SPA under an auto session mode —
+    // under the pick default it is dropped at the source (SP2 below), and this
+    // rule is about the daemon-refusal path, which needs the intent SENT.
+    ft8State.answerMode = 'auto_first';
     let refused = 0;
     setFt8AutoWorkRefusedSink(() => refused++);
 
@@ -196,4 +200,129 @@ it('clicking the armed pill calls the run-only stop action', async () => {
     pill.click();
     await Promise.resolve();
     expect(stops).toBe(1);
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0066 — session knobs. The daemon half is internal/ft8/adr0066_test.go;
+// pinned here is the SPA's half of the contract: the session's Answer mode
+// reaches every start, "I pick" suppresses the auto-work intent AT THE SOURCE
+// (the control explains itself; no refusal round-trip), and config only SEEDS.
+// ---------------------------------------------------------------------------
+
+import { callCq, workCaller, setFt8SessionDefaults, ft8AutoWorkIntent } from './ft8.svelte';
+
+interface SentStart {
+    kind: string;
+    autoWork?: boolean;
+    answerMode?: string;
+}
+
+function recordingActions(sent: SentStart[]): void {
+    const ok = (): Promise<{ ok: boolean; message: string }> =>
+        Promise.resolve({ ok: true, message: '' });
+    setFt8TxActions({
+        arm: ok,
+        callCq: (_o, _f, _p, answerMode) => {
+            sent.push({ kind: 'cq', answerMode });
+            return ok();
+        },
+        answerCq: (a) => {
+            sent.push({ kind: 'answer', autoWork: a.autoWork, answerMode: a.answerMode });
+            return ok();
+        },
+        workCaller: (a) => {
+            sent.push({ kind: 'work', autoWork: a.autoWork, answerMode: a.answerMode });
+            return ok();
+        },
+        abandon: ok,
+        skip: ok,
+        next: ok,
+        stopAutoWork: ok,
+        pickAnswerer: ok,
+    });
+}
+
+// SP1 — Call CQ carries the SESSION's mode, and changing the selector changes
+// the next start (no config edit anywhere in sight).
+it('callCq sends the session answer mode', async () => {
+    const sent: SentStart[] = [];
+    recordingActions(sent);
+    ft8State.answerMode = 'auto_strongest';
+    await callCq(1500, 14.074, 'next');
+    ft8State.answerMode = 'operator_pick';
+    await callCq(1500, 14.074, 'next');
+    expect(sent.map((x) => x.answerMode)).toEqual(['auto_strongest', 'operator_pick']);
+});
+
+// SP2 — "I pick" suppresses the intent at the source: the start goes out
+// WITHOUT auto_work, and the one-shot toggle is NOT consumed (the operator's
+// standing intent survives for a session where it can act).
+it('operator_pick drops the auto-work intent and preserves the toggle', async () => {
+    const sent: SentStart[] = [];
+    recordingActions(sent);
+    ft8State.answerMode = 'operator_pick';
+    ft8AutoWorkIntent.on = true;
+    await workCaller({
+        theirCall: 'K1ABC',
+        theirGrid: 'FN42',
+        theirSnr: -12,
+        slotUtc: '2026-08-08T08:00:00Z',
+        offsetHz: 1500,
+        opFreqMHz: 14.074,
+        autoWork: true,
+    });
+    expect(sent[0].autoWork).toBe(false);
+    expect(ft8AutoWorkIntent.on).toBe(true);
+});
+
+// SP2b — the discriminating pair: an auto mode passes the intent through and
+// consumes the toggle (the pre-0066 behaviour survives where it should).
+it('an auto mode passes the intent through and consumes the toggle', async () => {
+    const sent: SentStart[] = [];
+    recordingActions(sent);
+    ft8State.answerMode = 'auto_first';
+    ft8AutoWorkIntent.on = true;
+    await workCaller({
+        theirCall: 'K1ABC',
+        theirGrid: 'FN42',
+        theirSnr: -12,
+        slotUtc: '2026-08-08T08:00:00Z',
+        offsetHz: 1500,
+        opFreqMHz: 14.074,
+        autoWork: true,
+    });
+    expect(sent[0].autoWork).toBe(true);
+    expect(sent[0].answerMode).toBe('auto_first');
+    expect(ft8AutoWorkIntent.on).toBe(false);
+});
+
+// SP3 — config only SEEDS: the setter installs both defaults, junk is ignored
+// (the session keeps the licensing-safe pick default), and reset restores it.
+it('setFt8SessionDefaults seeds the selector and the toggle; junk is ignored', () => {
+    setFt8SessionDefaults('auto_first', true);
+    expect(ft8State.answerMode).toBe('auto_first');
+    expect(ft8AutoWorkIntent.on).toBe(true);
+    setFt8SessionDefaults('bogus', false);
+    expect(ft8State.answerMode).toBe('auto_first');
+    expect(ft8AutoWorkIntent.on).toBe(false);
+    resetFt8ForTests();
+    expect(ft8State.answerMode).toBe('operator_pick');
+});
+
+// SP4 — the render half: the Answer selector is in the control bar, locked
+// while a run is active (the parity precedent — changes apply to the NEXT
+// run), and the auto-work toggle is disabled-with-reason under "I pick".
+it('the Answer selector renders, and locks while a run is active', () => {
+    ft8Link.onQso({ active: true, their_call: 'DL9UW' });
+    render(Ft8Operate);
+    const sel = screen.getByTestId('answer-mode') as HTMLSelectElement;
+    expect(sel.disabled).toBe(true);
+});
+
+it('the auto-work toggle is disabled under operator_pick', () => {
+    ft8State.answerMode = 'operator_pick';
+    ft8Link.onQso({ active: false, auto_work_armed: false });
+    render(Ft8Operate);
+    const box = screen.getByTestId('auto-work-intent') as HTMLInputElement;
+    expect(box.disabled).toBe(true);
 });

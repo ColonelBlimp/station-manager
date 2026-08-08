@@ -48,37 +48,107 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **MORNING 2026-08-08: tree CLEAN at `02733fa3`**, every review clean +
-  deleted. **DEPLOY: daemon at `f9444aac` (05:59), 2 commits behind** — the
-  ratification records + the alc fold, display/config-shape only; redeploy
-  at leisure, nothing rig-critical.
-- **Hardware-acceptance batch — every check passed FIRST TRY:** VFO select
-  VALIDATED (the pre-registered click moved the dial to B's own content —
-  VS is a true select; archive S~2527's "flag only" was the equal-contents
-  confound) · selection-restore round trip confirmed (mode landed on the
-  right VFO) · A26 boot-capture RATIFIED by the on-hardware demo (boot on
-  /app/operate/ft8 left the rig untouched; the switch to phone returned it
-  to the parked position — amends A4's letter, now ratified).
-- **ADR 0064 ACCEPTED.** The §4 overdrive run produced an INSTRUMENT
-  finding, not a threshold: **RM ALC SATURATES at ~30 of 255** — sink at
-  the 1.0 digital ceiling, front-panel needle +20 dB over the zone, in-band
-  PO collapsed 121→35, while the answer read 29–30. No ALC-only red can
-  ever fire, so **red was FOLDED INTO AMBER (operator-ratified)**: amber =
-  terminal "reduce the audio level", `alc_red` REMOVED end to end (legacy
-  config key ignored; spec `TestResolveFt8Meter` + `txDrive.svelte.test.ts`;
-  measurement cited in `internal/bridge/meters.go`). The paired ALC+PO
-  overdrive detector is CAPTURED in the inbox, not built — do NOT rebuild
-  red as an ALC threshold.
-- **Logging backlog: ZERO Tier 1** (A2/A3 closed 2026-08-07; five
-  qsoservice defects fixed incl. PATCH CAS → 409 `edit_conflict`).
-- **Still open: ADR 0065 UNEXERCISED on air** — pill on a work-caller arm ·
-  FD ctrl+shift+click (stays-lit is a pending operator judgement) · an
-  `operator_pick` run (stop smd, edit config.json, start).
-- **NEXT:** 0065 gestures on air · redeploy (picks up the fold) · findings
-  9/10 · paste-list port · ctrl+click-on-CQ (0065, undecided) ·
-  Tune-coverage (0064's remaining open question) · qsoservice Q4–Q10.
+- **MIDDAY 2026-08-08: tree CLEAN at `8dd2beb2`; CI GREEN — first green in
+  40+ runs.** The gate (the trunk workflow's ONLY merge protection) had sat
+  red ~2 days on two maintidx crossings from the 0064/0065 feature work
+  (`runPipeline`, `onSlotWorking`, both MI 19) — exempted-with-rationale in
+  `.golangci.yml`. A full green run costs ~14 min; the 3–4 min figures all
+  week were failures truncating at lint. NEW HABIT: `gh run list -L1` rides
+  the post-commit review loop.
+- **DEFAULT FLIP — a BEHAVIOUR CHANGE riding the next deploy:**
+  `caller_answer_mode` now RESOLVES to `operator_pick` (operator-ratified,
+  licensing: automation is an explicit opt-in; absent/invalid fail to the
+  non-automatic mode; dated notes in ADR 0065 + 0033). On the next
+  deploy+restart the dogfood station runs operator_pick AND auto-work stops
+  arming — write `auto_first` into config.json (smd stopped) to restore
+  auto-working. Check 7c then needs NO config edit: an unconfigured Call CQ
+  IS a pick run. Wire asymmetry is deliberate: GET serves pick, PUT refuses
+  the literal (codex P1 REFUTED — no served client echoes the field;
+  rationale in handler_config.go).
+- **Stuck-TX thread PARKED ON EVIDENCE.** The pre-registered antenna
+  RF-ingress repro ran 3/3 CLEAN (08:30, 20 m, 20 W — tune power is the
+  code-const 20 W; the incident's "30 W" was SSB operating power). No
+  hypothesis survives (duration + FT8-residue died 07-24, ingress
+  unconfirmed now): fault filed INTERMITTENT, no further deliberate keying;
+  the next natural stick self-recovers (re-unkey retry) and logs richly.
+- **Morning batch (earlier today, all recorded):** hardware acceptance 4/4
+  (VFO select validated · selection restore · A26 ratified) · ADR 0064
+  ACCEPTED (RM ALC saturates ~30/255 → red folded into amber, `alc_red`
+  removed) · PSK IPFIX announcement SENT to the PSK Reporter group
+  (collector feedback → inbox).
+- **NEXT:** redeploy (MIND THE FLIP above) → 0065 gestures (7c = just Call
+  CQ) · Settings→FT8 dropdown port gap (+ `ft8_max_repeats` sibling; a
+  resolved operator_pick must render READ-ONLY, never snap-and-save) ·
+  findings 9/10 · paste-list port · Tune-coverage · qsoservice Q4–Q10 ·
+  backlog strikes (auto_first validation, 192/193 retest) await the word.
 
 ## Current state (as of 2026-08-08)
+
+### 2026-08-08 (midday) — antenna repro clean; the operator_pick default flip; the CI gate found red and fixed
+
+**Stuck-TX: the antenna experiment closed the deliberate-repro programme.**
+Pre-registered in the inbox before the run (per ATDD), executed by the
+operator at 08:30: three 2 s tunes into the DX Commander on 20 m, every off
+confirmed idle within ~2 s, zero alarms/re-unkeys/auto-offs in the whole
+hour. With duration and FT8-residue refuted on 2026-07-24 and ingress now
+unconfirmed, no hypothesis survives with evidence — the fault is filed
+intermittent, deliberate keying stops, and the next natural occurrence on a
+current build self-recovers (the txrecheck re-unkey retry) and logs richly.
+Two corrections recorded on the way: tune power is the ADR 0027 code-const
+20 W (the incident narrative's "30 W" was the SSB operating power, so power
+fidelity held automatically), and the 07:23 `tune auto-off fired` lines were
+the overdrive session's deliberate full-length carriers, not the 05:10
+anomaly class. The backlog P1 "tx-alarm self-clear" validation stays open
+but passive — it needs a real stick, and provoking one is no longer
+justified.
+
+**The operator_pick default flip (built TDD, dated notes in ADR 0065 +
+0033).** Asking where the Settings knob for `caller_answer_mode` lived
+surfaced two things: the knob is a PORT GAP (the dropdown existed only in
+the retired logging SPA — inbox entry filed, `ft8_max_repeats` is the
+natural same-card sibling since its "blocked on placeholder Settings"
+reason expired 2026-08-05), and the DEFAULT contradicted the operator's
+licensing intent. Ratified same session: `DefaultFt8CallerAnswerMode` =
+`operator_pick`, scoped as the RESOLVE FALLBACK (option A — absent AND
+invalid keys fail toward the non-automatic mode, everywhere, not just
+fresh installs). Spec: `TestResolveFt8CallerAnswerMode` (hardcoded
+literals), `TestResolveFt8AutoWorkCallers_AbsentModeDoesNotArm` (the
+sharpest consequence: knob-on + no mode arms NOTHING), the api GET default
+test; reversion probe put all five failures on their own assertions. Five
+ft8 run-semantics tests had their fixtures opt into automation explicitly.
+Docs swept (config.md, ft8.md, api-endpoints.md, ft8/CLAUDE.md). The codex
+P1 on the follow-up ("fresh installs can't save — the frontend echoes the
+resolved pick back and PUT 400s") was REFUTED with rationale in
+handler_config.go: no served client echoes the field (app sends
+display/psk/decode_log only; config SPA never touches it; the one client
+that did was retired + un-embedded 2026-07-21). The kernel it contained —
+a future hydrate-echo UI would 400 — is the read-only-render constraint
+now recorded at the validation site and the inbox port-gap entry.
+
+**The CI gate had been red ~2 days and nobody noticed.** Every push since
+mid-2026-08-07 failed at golangci-lint: `runPipeline` and `onSlotWorking`
+crossed the maintidx floor (both MI 19 vs 20) by GROWING with ratified
+work — the ADR 0064 meter-poll lifecycle and the ADR 0065 arming
+refinement. Not drift (2.11.3 pinned both ends, reproduced locally
+byte-for-byte). Fix: exemptions-with-rationale in `.golangci.yml`, same
+class as their already-exempted siblings readLoop/onSlotCalling
+(dispatch-shaped, comment-dense, TX-path, invariant-covered) — "exempted,
+not blessed", they join the refactor backlog the list is. Because every
+red run truncated at lint, the tail (race, five build shapes, FT8 decode
+test) had run dark for days — de-risked locally before the push (race
+suite, static + pocketfft builds all green), then the push produced the
+first fully-green run in 40+: **14m02s is the honest cost of the full
+gate**. Habit fix folded into the codex-reviews memory: `gh run list -L1`
+in the post-commit loop. Cosmetic follow-up noted: the workflow's
+checkout/setup actions target deprecated Node 20 — a version-bump commit
+someday, own-commit rule.
+
+**Also:** the PSK Reporter IPFIX announcement was wordsmithed, its
+test-collector detail verified (tree + external sources agree: production
+`report.pskreporter.info:4739`, test listener 14739, analyse-don't-write),
+and SENT to the PSK Reporter Google group — collector-side feedback, if
+any, lands in the inbox. Incidental: our ipfix.go cites RFC 5101; the
+current IPFIX RFC is 7011 (same wire version 0x000A) — cosmetic.
 
 ### 2026-08-08 (morning) — hardware-acceptance day: everything validated, ADR 0064 Accepted
 

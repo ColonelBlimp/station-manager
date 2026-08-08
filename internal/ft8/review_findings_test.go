@@ -241,7 +241,7 @@ func TestService_StartDisarmRace(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_ = s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", slot, 1500, 14.074, 1, false, false)
+			_ = s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42", slot, 1500, 14.074, 1, false, false, "")
 		}()
 		go func() {
 			defer wg.Done()

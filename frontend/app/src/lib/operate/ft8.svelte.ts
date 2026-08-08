@@ -218,6 +218,11 @@ class Ft8State {
     selectedOffset: number | null = $state(loadSelectedOffset());
     /** Call-CQ slot parity (WSJT-X "Tx even/1st"). 'next' = fire next slot regardless. */
     txParity: 'next' | 'even' | 'odd' = $state('next');
+    /** The SESSION's answerer-selection mode (ADR 0066) — the Answer selector
+     *  in the TX control bar. Seeded from the config default at boot
+     *  (setFt8SessionDefaults); plain state, so a reload reasserts the
+     *  default. The run about to start obeys THIS, never config directly. */
+    answerMode: 'auto_first' | 'auto_strongest' | 'operator_pick' = $state('operator_pick');
     /** Which Occupancy presentation the operator prefers — 'spectrum' (continuous
      *  click-anywhere bar, the default — operator 2026-07-13) or 'channels'
      *  (discrete ~50 Hz strip). Both render the same snapshot and write the same
@@ -554,6 +559,9 @@ export interface Ft8AnswerArgs {
     /** Our SNR of their CQ — logged as RST_SENT for an FD or type-4 answer (neither
      *  exchanges a report). */
     theirSnr: number;
+    /** The session's answerer-selection mode (ADR 0066) — filled by the answerCq
+     *  wrapper from ft8State; callers never set it. */
+    answerMode?: string;
     /** True when the operator is deliberately working a station ALREADY logged this
      *  session — a repair (they never copied our RR73), a sked, a second report. SM
      *  deduplicates on call+band+mode+freq+date+HH:MM, so without this a second contact
@@ -573,6 +581,9 @@ export interface Ft8WorkArgs {
     theirGrid: string;
     /** Our SNR of their call to us — the report we send back (RST_SENT). */
     theirSnr: number;
+    /** The session's answerer-selection mode (ADR 0066) — filled by the workCaller
+     *  wrapper from ft8State; callers never set it. */
+    answerMode?: string;
     slotUtc: string;
     offsetHz: number;
     opFreqMHz: number;
@@ -597,7 +608,8 @@ export interface Ft8TxActions {
     callCq(
         offsetHz: number,
         opFreqMHz: number,
-        parity: 'next' | 'even' | 'odd'
+        parity: 'next' | 'even' | 'odd',
+        answerMode: string
     ): Promise<Ft8TxResult>;
     answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult>;
     workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult>;
@@ -618,6 +630,21 @@ export function setFt8TxActions(a: Ft8TxActions): void {
     txActions = a;
 }
 
+/** Boot seed for the session knobs (ADR 0066): config.json holds only the
+ *  DEFAULTS — the answer mode seeds the session selector, and the auto-work
+ *  knob seeds the one-shot toggle's initial state. Called once from main.ts
+ *  with the /v1/config GET; the session then owns both. */
+export function setFt8SessionDefaults(answerMode: string, autoWorkOn: boolean): void {
+    if (
+        answerMode === 'auto_first' ||
+        answerMode === 'auto_strongest' ||
+        answerMode === 'operator_pick'
+    ) {
+        ft8State.answerMode = answerMode;
+    }
+    ft8AutoWorkIntent.on = autoWorkOn;
+}
+
 const txUnavailable: Ft8TxResult = { ok: false, message: 'FT8 transmit is unavailable.' };
 
 /** Arm (true) or disarm (false) the TX path — the operator's consent to key. */
@@ -632,7 +659,7 @@ export function callCq(
     parity: 'next' | 'even' | 'odd'
 ): Promise<Ft8TxResult> {
     return txActions
-        ? txActions.callCq(offsetHz, opFreqMHz, parity)
+        ? txActions.callCq(offsetHz, opFreqMHz, parity, ft8State.answerMode)
         : Promise.resolve(txUnavailable);
 }
 
@@ -659,14 +686,18 @@ export function setFt8AutoWorkRefusedSink(fn: (() => void) | null): void {
 /** Start answering a CQ (standard or FD) from a clicked Band Activity decode. */
 export function answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult> {
     if (!txActions) return Promise.resolve(txUnavailable);
+    // Under "I pick" the intent is dropped at the source (ADR 0066 fork 6): the
+    // toggle renders disabled with the reason, so sending the intent would only
+    // earn a daemon refusal for a state the UI already explained.
+    const autoWork = a.autoWork && ft8State.answerMode !== 'operator_pick';
     // FD/type-4 never arm a run, so an intent that slips through on one must not
     // establish a pending verdict — the daemon's unarmed frame would read as a
     // false gate refusal (codex P2 on 7de6708e; call sites also exclude them).
-    if (a.autoWork && !a.fd && !a.type4) {
+    if (autoWork && !a.fd && !a.type4) {
         pendingAutoWorkIntent = true;
         ft8AutoWorkIntent.on = false; // consumed — one-shot
     }
-    return txActions.answerCq(a).then((r) => {
+    return txActions.answerCq({ ...a, autoWork, answerMode: ft8State.answerMode }).then((r) => {
         if (!r.ok) pendingAutoWorkIntent = false; // start refused — no frame will come
         return r;
     });
@@ -675,11 +706,13 @@ export function answerCq(a: Ft8AnswerArgs): Promise<Ft8TxResult> {
 /** Start working a station calling us from a clicked directed-at-me decode. */
 export function workCaller(a: Ft8WorkArgs): Promise<Ft8TxResult> {
     if (!txActions) return Promise.resolve(txUnavailable);
-    if (a.autoWork) {
+    // Same "I pick" intent drop as answerCq (ADR 0066 fork 6).
+    const autoWork = a.autoWork && ft8State.answerMode !== 'operator_pick';
+    if (autoWork) {
         pendingAutoWorkIntent = true;
         ft8AutoWorkIntent.on = false; // consumed — one-shot
     }
-    return txActions.workCaller(a).then((r) => {
+    return txActions.workCaller({ ...a, autoWork, answerMode: ft8State.answerMode }).then((r) => {
         if (!r.ok) pendingAutoWorkIntent = false;
         return r;
     });
@@ -1031,6 +1064,7 @@ export function resetFt8ForTests(): void {
     ft8State.selectedOffset = null;
     saveSelectedOffset(null);
     ft8State.txParity = 'next';
+    ft8State.answerMode = 'operator_pick';
     ft8State.occupancyView = 'spectrum';
     ft8State.tx = emptyTxStatus();
     ft8State.qso = emptyQsoStatus();

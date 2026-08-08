@@ -11,6 +11,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
@@ -140,6 +141,11 @@ type ft8QsoStartRequest struct {
 	// works this station only — and clears any run a previous session armed.
 	// Standard exchange mode only; FD and type-4 sessions never arm a run.
 	AutoWork bool `json:"auto_work,omitempty"`
+	// AnswerMode is the SESSION's answerer-selection mode (ADR 0066) an armed
+	// auto-work run would select the next caller with. Empty = the config
+	// default; junk is a 400. Only meaningful alongside auto_work — a plain
+	// start ignores it.
+	AnswerMode string `json:"answer_mode,omitempty"`
 }
 
 // handleFt8QsoStart begins a manual answer-a-CQ exchange (ADR 0031, step e3).
@@ -182,6 +188,11 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !validFt8AnswerMode(req.AnswerMode) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"answer_mode must be auto_first, auto_strongest or operator_pick", op)
+		return
+	}
 	ls := s.cfg.Snapshot().LoggingStation
 	ourCall, logbookID, idErr := s.currentStationIdentity(r.Context())
 	if idErr != nil {
@@ -214,7 +225,7 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	default:
 		err = s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AutoWork)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AutoWork, req.AnswerMode)
 	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)
@@ -238,6 +249,20 @@ type ft8CqStartRequest struct {
 	// next slot regardless of parity (the default, fastest first CQ). Operating
 	// state, sent per Call-CQ session — not a persisted daemon setting.
 	TxParity string `json:"tx_parity,omitempty"`
+	// AnswerMode is the SESSION's answerer-selection mode (ADR 0066): one of the
+	// three ft8.tx.caller_answer_mode literals, chosen in the TX control bar's
+	// Answer selector per run. Empty = the config default (old clients keep the
+	// pre-0066 behaviour); any other junk is a 400. Operating state, like
+	// TxParity — config.json holds only the default that seeds the selector.
+	AnswerMode string `json:"answer_mode,omitempty"`
+}
+
+// validFt8AnswerMode accepts an ABSENT session answer mode (empty — the config
+// default applies, ADR 0066) or one of the three caller_answer_mode literals.
+// Junk is a client bug and 400s rather than silently resolving to a default the
+// operator never chose.
+func validFt8AnswerMode(m string) bool {
+	return m == "" || types.Ft8CallerAnswerModeValid(m)
 }
 
 // handleFt8CqStart begins a sequenced Call-CQ session (ADR 0033, step e + caller
@@ -258,6 +283,11 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 			"operating_freq_mhz must be a positive known-band frequency (the rig dial)", op)
 		return
 	}
+	if !validFt8AnswerMode(req.AnswerMode) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"answer_mode must be auto_first, auto_strongest or operator_pick", op)
+		return
+	}
 
 	ls := s.cfg.Snapshot().LoggingStation
 	ourCall, logbookID, idErr := s.currentStationIdentity(r.Context())
@@ -271,7 +301,7 @@ func (s *Server) handleFt8CqStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.ft8.StartCallCq(ourCall, ls.MyGridsquare, req.OffsetHz, req.OperatingFreqMHz, req.TxParity, logbookID); err != nil {
+	if err := s.ft8.StartCallCq(ourCall, ls.MyGridsquare, req.OffsetHz, req.OperatingFreqMHz, req.AnswerMode, req.TxParity, logbookID); err != nil {
 		s.writeFt8QsoError(w, op, err)
 		return
 	}
@@ -346,6 +376,11 @@ type ft8QsoWorkRequest struct {
 	// works this station only — and clears any run a previous session armed.
 	// Standard exchange mode only; FD and type-4 sessions never arm a run.
 	AutoWork bool `json:"auto_work,omitempty"`
+	// AnswerMode is the SESSION's answerer-selection mode (ADR 0066) an armed
+	// auto-work run would select the next caller with. Empty = the config
+	// default; junk is a 400. Only meaningful alongside auto_work — a plain
+	// start ignores it.
+	AnswerMode string `json:"answer_mode,omitempty"`
 }
 
 // handleFt8QsoWork begins working a station that is calling us (ADR 0033). The operator
@@ -376,6 +411,11 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !validFt8AnswerMode(req.AnswerMode) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+			"answer_mode must be auto_first, auto_strongest or operator_pick", op)
+		return
+	}
 	// TX identity is the CURRENT logbook's callsign (ADR 0055) — never OPERATOR
 	// (a club station's operator differs from its station call). Empty means the
 	// logbook can't be resolved (pre-setup, or a fail-closed transient DB error)
@@ -410,7 +450,7 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	default:
 		err = s.ft8.StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AutoWork)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AutoWork, req.AnswerMode)
 	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)

@@ -838,7 +838,7 @@ func (s *Service) dialState() (mhz float64, tracked, known bool) {
 // theirSlotUTC) and a clear offset. Requires TX **armed** — the sequencer keys
 // through the armed controller. ourCall/ourGrid are the station identity the api
 // layer resolved from config.
-func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate, autoWork bool) error {
+func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate, autoWork bool, answerMode string) error {
 	const op errors.Op = "ft8.Service.StartQso"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -869,6 +869,7 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	s.seq.setPendingLogbook(logbookID)
 	s.seq.setPendingAllowDuplicate(allowDuplicate)
 	s.seq.setPendingAutoWork(autoWork)
+	s.seq.setPendingAnswerMode(s.effectiveAnswerMode(answerMode))
 	if err := s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
@@ -910,21 +911,33 @@ func (s *Service) StartQsoFd(ourCall, theirCall, theirGrid string, theirSnr int,
 	return nil
 }
 
+// effectiveAnswerMode resolves a session-carried answerer-selection mode (ADR
+// 0066): a valid literal wins; empty or invalid falls back to the config
+// default, so an old client that sends nothing keeps the pre-0066 behaviour
+// and junk never reaches the sequencer (the api layer 400s it anyway —
+// this is the defence half).
+func (s *Service) effectiveAnswerMode(answerMode string) string {
+	if types.Ft8CallerAnswerModeValid(answerMode) {
+		return answerMode
+	}
+	return types.ResolveFt8CallerAnswerMode(s.cfg.TX)
+}
+
 // StartCallCq begins a sequenced Call-CQ session (ADR 0033): we call CQ in our slot
 // parity and work the stations that answer, one at a time, looping until AbandonQso.
 // Requires TX **armed** — the sequencer keys through the armed controller. The
 // answerer-selection mode is read from ft8.tx.caller_answer_mode (default auto_first).
 // ourCall/ourGrid are the station identity the api layer resolved from config;
 // offsetHz is our TX offset; dialFreqMHz is the rig dial for the logged QSO frequency.
-func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64, txParity string, logbookID int64) error {
+func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz float64, answerMode, txParity string, logbookID int64) error {
 	const op errors.Op = "ft8.Service.StartCallCq"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
 	}
-	// All three configured modes are implemented (operator_pick since ADR 0065
-	// decision 3 — review H2's start-time rejection is deliberately gone; the
-	// flip is pinned by operatorpick_test.go rule 1).
-	mode := types.ResolveFt8CallerAnswerMode(s.cfg.TX)
+	// All three modes are implemented (operator_pick since ADR 0065 decision 3).
+	// The SESSION's carried mode wins (ADR 0066); empty or invalid falls back to
+	// the config default, so an old client keeps the pre-0066 behaviour.
+	mode := s.effectiveAnswerMode(answerMode)
 	// seqGate: armed-check + sequencer commit are atomic w.r.t. disarm (M3).
 	s.seqGate.Lock()
 	defer s.seqGate.Unlock()
@@ -939,6 +952,7 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 	// intent to express — stage FALSE explicitly so a flag left over from a
 	// previous per-station start cannot leak into this session.
 	s.seq.setPendingAllowDuplicate(false)
+	s.seq.setPendingAnswerMode(mode)
 	if err := s.seq.StartCallCq(ourCall, ourGrid, offsetHz, dialFreqMHz, mode, txParity, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err
@@ -952,7 +966,7 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 // is our SNR of that signal (the report we send back). Requires TX **armed** — the
 // sequencer keys through the armed controller. ourCall is the station identity the
 // api layer resolved from config.
-func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate, autoWork bool) error {
+func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate, autoWork bool, answerMode string) error {
 	const op errors.Op = "ft8.Service.StartWorkCaller"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -969,6 +983,7 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 	s.seq.setPendingLogbook(logbookID)
 	s.seq.setPendingAllowDuplicate(allowDuplicate)
 	s.seq.setPendingAutoWork(autoWork)
+	s.seq.setPendingAnswerMode(s.effectiveAnswerMode(answerMode))
 	if err := s.seq.StartWorkCaller(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
 		return err

@@ -437,13 +437,22 @@
                          next contact started also starts a run. One-shot: consumed by
                          the start that carries it. ctrl+shift+click on a CQ is the
                          keyboard-fast equivalent. -->
+                    <!-- Under "I pick" the control explains itself instead of a
+                         silent gate refusal (ADR 0066 fork 6): a pick run cannot
+                         auto-work — the operator IS the selector. -->
                     <label
-                        class="mt-1.5 inline-flex cursor-pointer items-center gap-x-1.5 text-[11px] text-muted select-none"
-                        title="Arm auto-work on the next contact you start (ctrl+shift+click a CQ does the same)"
+                        class="mt-1.5 inline-flex items-center gap-x-1.5 text-[11px] text-muted select-none {ft8State.answerMode ===
+                        'operator_pick'
+                            ? 'cursor-not-allowed opacity-50'
+                            : 'cursor-pointer'}"
+                        title={ft8State.answerMode === 'operator_pick'
+                            ? 'Auto-work needs an auto Answer mode — under “I pick” you choose every station'
+                            : 'Arm auto-work on the next contact you start (ctrl+shift+click a CQ does the same)'}
                     >
                         <input
                             type="checkbox"
                             bind:checked={ft8AutoWorkIntent.on}
+                            disabled={ft8State.answerMode === 'operator_pick'}
                             data-testid="auto-work-intent"
                             class="size-3 accent-amber-500"
                         />
@@ -497,10 +506,28 @@
          when a caller is queued); Arm sits alone at the bottom (its own divider) as
          the operator's explicit consent to key. -->
     <div class="border-t border-line px-4 py-3">
-        <div class="mb-2 flex items-center justify-between gap-x-2 text-xs">
-            <span class="text-muted"
-                >TX offset <span class="font-mono text-ink">{offsetLabel}</span></span
-            >
+        <!-- The run's start parameters (ADR 0066): one centred row — little
+             horizontal space, operator-specified. The TX offset readout that
+             used to live here is duplicated in the Occupancy panel; its one
+             unique job (explaining a no-offset disabled Call CQ) moved into
+             the button's title. Both selectors lock while a run is active
+             (the parity precedent): changes apply to the NEXT run. -->
+        <div class="mb-2 flex items-center justify-center gap-x-4 text-xs">
+            <label class="flex items-center gap-x-1 text-muted">
+                <span>Answer</span>
+                <select
+                    class="rounded border border-line bg-surface px-1 py-0.5 text-xs text-ink disabled:opacity-50"
+                    bind:value={ft8State.answerMode}
+                    disabled={qso.active}
+                    data-testid="answer-mode"
+                    aria-label="Call CQ answerer selection mode"
+                    title="How a CQ run answers callers — config.json holds the default; this is the session's choice"
+                >
+                    <option value="auto_first">First answerer</option>
+                    <option value="auto_strongest">Strongest</option>
+                    <option value="operator_pick">I pick</option>
+                </select>
+            </label>
             <label class="flex items-center gap-x-1 text-muted">
                 <span>CQ slot</span>
                 <select
@@ -523,6 +550,9 @@
                     : 'bg-focus text-surface hover:opacity-90'}"
                 onclick={onCallCq}
                 disabled={!canSend || sending}
+                title={offset === null
+                    ? 'No clear channel yet — the occupancy scan picks the TX offset'
+                    : `TX offset ${offsetLabel}`}
             >
                 {callerActive ? 'Calling CQ…' : 'Call CQ'}
             </button>

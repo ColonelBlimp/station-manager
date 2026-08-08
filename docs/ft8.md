@@ -106,19 +106,30 @@ on any PUT):
 - **`tx.caller_answer_mode`** — when WE call CQ, which answering station the daemon
   works next (ADR 0033): `"auto_first"` works the first valid answerer by decode
   order (WSJT-X "Auto Seq"); `"auto_strongest"` works the highest-SNR valid answerer
-  in the slot (clear the loud signals first). The two auto modes are PUT-writable
-  over `/v1/config` as `ft8_caller_answer_mode` (the retired logging SPA had the
-  dropdown; the app's Settings→FT8 does not yet — port gap filed 2026-08-08); the
-  PUT surface only ever carries those two auto answer modes, though GET can serve
-  `operator_pick` since that is now the default. **Default `operator_pick`
-  (operator-ratified 2026-08-08, superseding ADR 0033's `auto_first`):** automatic
-  operation is licence-restricted in many jurisdictions, so a station whose
-  operator never CHOSE an auto mode must not auto-work anyone — a clean install,
-  an absent key, and an invalid literal all resolve to the non-automatic mode,
-  and with `auto_work_callers` also defaulting off, a fresh install is fully
-  manual until both automations are explicitly opted into. Consequence:
-  `auto_work_callers = true` with no `caller_answer_mode` arms NOTHING (the
-  resolved operator_pick is excluded from run arming per invariant 7). The third literal `"operator_pick"` is **implemented
+  in the slot (clear the loud signals first). **SESSION STATE since ADR 0066
+  (operator: "all the config knobs should be available session based"):** the
+  live control is the **Answer selector** in the TX control bar (`Answer | CQ
+  slot`, one centred row; locked while a run is active — changes apply to the
+  next run), carried on `POST /v1/ft8/cq/start` as `answer_mode` exactly as
+  `tx_parity` is, and on `qso/start`/`qso/work` alongside the auto-work intent
+  (it is what an armed run selects with). `ft8.tx.caller_answer_mode` is only
+  the DEFAULT that seeds the selector at page load; the `/v1/config` PUT
+  accepts all three literals as defaults (fork 4 retired the ADR 0065
+  operator_pick fence with the config-only world it guarded). **Default
+  `operator_pick` (operator-ratified 2026-08-08, superseding ADR 0033's
+  `auto_first`):** automatic operation is licence-restricted in many
+  jurisdictions, so a station whose operator never CHOSE an auto mode must not
+  auto-work anyone — a clean install starts every session listing answerers
+  for the operator, and with `auto_work_callers` also defaulting off, fully
+  manual until both automations are opted into (now visible per-session
+  gestures, which serves the licensing intent better than a config edit).
+  **The auto-work arming gate reads the SESSION, not config** (ADR 0066 fork
+  5): intent + an auto session mode arms; under "I pick" the SPA disables the
+  toggle with the reason and drops the intent at the source (a pick run cannot
+  auto-work — invariant 7); `ft8.tx.auto_work_callers` survives only as the
+  toggle's boot seed, served on GET as `ft8_auto_work_callers`. Spec:
+  `internal/ft8/adr0066_test.go` (daemon R-rules) +
+  `ft8AutoWork.svelte.test.ts` SP-rules (SPA). The third literal `"operator_pick"` is **implemented
   since 2026-08-07 (ADR 0065 decision 3)** but stays a **config.json-only** value
   (operator-ratified): during a CQ run the daemon LISTS answerers on the `ft8-qso`
   frames (`answerers`, expiring 3 min after last heard) instead of auto-committing,

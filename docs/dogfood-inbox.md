@@ -918,16 +918,13 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   (auto_first / auto_strongest) lived in the RETIRED logging SPA
   (`frontend/logging/.../config.svelte.ts:318`) and was never ported into
   the app's `Ft8Section.svelte`; the wire field `ft8_caller_answer_mode` is
-  alive and presence-aware, so the build is UI-only. Scope note:
-  `operator_pick` stays OUT of any UI — the PUT 400 on that literal is ADR
-  0065 enforcement (config.json-only, operator-ratified 2026-08-07), so the
-  control offers exactly the two auto modes. UPDATED same day: the DEFAULT
-  is now operator_pick (resolve fallback, licensing posture — ADR 0065
-  dated note), so on an unconfigured station GET serves a value the
-  dropdown cannot offer; the control must render that state read-only
-  ("operator_pick — set in config.json") rather than silently snapping the
-  selection to an auto mode, which a save would then WRITE, flipping the
-  station into automation as a side effect of opening Settings. Related stale note while here:
+  alive and presence-aware, so the build is UI-only. RESCOPED same day by
+  ADR 0066 (session knobs): the LIVE control is now the Answer selector in
+  the TX control bar — BUILT — so the Settings dropdown becomes a DEFAULTS
+  editor ("what a fresh page load starts on"), may offer all three literals
+  (fork 4 retired the PUT 400 on operator_pick, and with it the read-only
+  constraint an earlier version of this entry carried), and should say it
+  edits the default, not the session. Related stale note while here:
   the parked FT8 cluster's "attempt-limit control — gated on the app
   Settings view, still a placeholder" reason has EXPIRED (the FT8 section
   shipped 2026-08-05); `ft8_max_repeats` also has wire + live push and no

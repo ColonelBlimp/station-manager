@@ -88,20 +88,20 @@ type ConfigResponse struct {
 	// Ft8Meter is the TX-drive (ALC) display threshold (ADR 0064), always
 	// resolved (provisional default until calibrated on hardware).
 	Ft8Meter *types.Ft8MeterLevels `json:"ft8_meter,omitempty"`
-	// Ft8CallerAnswerMode is the FT8 Call-CQ answerer-selection strategy
-	// (ft8.tx.caller_answer_mode): "auto_first" (first valid answerer by decode
-	// order) or "auto_strongest" (highest-SNR valid answerer in the slot). Always
-	// served RESOLVED on GET — default operator_pick since 2026-08-08 (automation
-	// is an explicit opt-in; ADR 0065 dated note). No served client renders it
-	// yet (the dropdown is a filed port gap; the logging SPA that had one was
-	// retired 2026-07-21). Operator-writable; **presence-aware** on PUT (omitting
-	// it leaves the stored value untouched). Pointer-typed so the handler tells
-	// "sent" from "absent". The "operator_pick" literal is NOT accepted on PUT —
-	// implemented since ADR 0065, but the mode stays a config.json-only knob
-	// (operator-ratified 2026-08-07), so the PUT surface only ever carries the
-	// two auto modes while GET can serve the pick default (see the validation
-	// comment below for why that asymmetry breaks nothing).
+	// Ft8CallerAnswerMode is the DEFAULT FT8 Call-CQ answerer-selection mode
+	// (ft8.tx.caller_answer_mode) — since ADR 0066 the live control is the
+	// session's Answer selector in the TX control bar, and this field only
+	// seeds it. Served RESOLVED on GET (default operator_pick since
+	// 2026-08-08: automation is an explicit opt-in); PUT accepts all three
+	// literals (fork 4 retired the ADR 0065 operator_pick fence along with
+	// the config-only world it guarded). **Presence-aware** on PUT;
+	// pointer-typed so the handler tells "sent" from "absent".
 	Ft8CallerAnswerMode *string `json:"ft8_caller_answer_mode,omitempty"`
+	// Ft8AutoWorkCallers is the SPA Auto-work toggle's boot seed
+	// (ft8.tx.auto_work_callers; ADR 0066 fork 5 — the knob no longer gates
+	// arming daemon-side). Served on GET; read-only here (a config.json edit,
+	// like the other ft8.tx defaults pending a Settings surface).
+	Ft8AutoWorkCallers *bool `json:"ft8_auto_work_callers,omitempty"`
 	// Ft8MaxRepeats is the FT8 sequencer's unanswered-rung repeat cap
 	// (ft8.tx.max_repeats): how many times an unanswered rung is re-sent before the
 	// exchange gives up so the operator's Next can advance — the "N calls" readout.
@@ -626,21 +626,18 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// lock. Each checks the request value in isolation (it doesn't consult stored
 	// config), matching feed_mode's strict-wire contract (vs Validate, which
 	// tolerates a bad value → default).
-	// Since the 2026-08-08 default flip, GET can serve operator_pick while
-	// this PUT rejects it — a deliberate asymmetry (ADR 0065 dated note), NOT
-	// a fresh-install save-breaker (codex 5fbc3baa P1, refuted): no served
-	// client echoes this field back on PUT. The app SPA's FT8 save carries
-	// display/psk/decode_log only and the field is presence-aware; the config
-	// SPA never touches it; the one client that DID hydrate-and-echo it (the
-	// logging SPA) was retired and un-embedded 2026-07-21. The constraint the
-	// asymmetry places on a FUTURE settings UI is recorded in the
-	// dogfood-inbox port-gap entry: render a resolved operator_pick
-	// read-only — never snap it to an auto mode whose save would flip the
-	// station into automation as a side effect of opening Settings.
+	// All THREE literals are accepted since ADR 0066 fork 4: this PUT edits
+	// the DEFAULT that seeds the session's Answer selector — the selector is
+	// the live control, so the old ADR 0065 fence (400 on operator_pick,
+	// guarding a world where config WAS the live control) is retired, and
+	// with it the GET/PUT asymmetry a codex P1 once probed (5fbc3baa,
+	// refuted then, moot now). Junk still 400s — silently resolving a typo
+	// to a default the operator never chose is the failure the strict wire
+	// check exists to prevent.
 	if req.Ft8CallerAnswerMode != nil {
-		if m := *req.Ft8CallerAnswerMode; m != types.Ft8CallerAnswerAutoFirst && m != types.Ft8CallerAnswerAutoStrongest {
+		if !types.Ft8CallerAnswerModeValid(*req.Ft8CallerAnswerMode) {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
-				"ft8_caller_answer_mode must be auto_first or auto_strongest", op)
+				"ft8_caller_answer_mode must be auto_first, auto_strongest or operator_pick", op)
 			return
 		}
 	}
@@ -1006,12 +1003,15 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	ft8Display := types.ResolveFt8Display(cfg.Ft8.Display)
 	resp.Ft8Display = &ft8Display
 
-	// FT8 Call-CQ answerer-selection mode, resolved (default auto_first) for the
-	// Settings tab. A config holding operator_pick (a working, config.json-only
-	// mode since ADR 0065) still reads back as-is here, but the SPA dropdown only
-	// offers the two auto modes and a PUT rejects anything else.
+	// FT8 Call-CQ answerer-selection DEFAULT, resolved (operator_pick since
+	// 2026-08-08) — the seed for the session's Answer selector (ADR 0066).
 	callerMode := types.ResolveFt8CallerAnswerMode(cfg.Ft8.TX)
 	resp.Ft8CallerAnswerMode = &callerMode
+	// The auto-work toggle's boot seed (ADR 0066 fork 5): the config knob no
+	// longer gates arming daemon-side; its whole remaining meaning is the
+	// initial state of the SPA's one-shot Auto-work toggle.
+	autoWorkSeed := cfg.Ft8.TX != nil && cfg.Ft8.TX.AutoWorkCallers
+	resp.Ft8AutoWorkCallers = &autoWorkSeed
 
 	// FT8 unanswered-rung repeat cap, resolved (default 6, clamp [1, Ft8MaxRepeatsCeiling])
 	// so the Settings-tab field shows the effective value even on a fresh config.

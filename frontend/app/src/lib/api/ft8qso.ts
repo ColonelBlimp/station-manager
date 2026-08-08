@@ -86,6 +86,7 @@ export function startFt8Qso(
     theirSnr?: number,
     allowDuplicate?: boolean,
     autoWork?: boolean,
+    answerMode = '',
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
@@ -101,8 +102,10 @@ export function startFt8Qso(
             ...(mode === 'fd' || mode === 'type4' ? { mode, their_snr: theirSnr ?? 0 } : {}),
             ...(allowDuplicate ? { allow_duplicate: true } : {}),
             // Per-click auto-work intent (ADR 0065) — standard mode only; the daemon
-            // ignores it for fd/type4, which never arm a run.
+            // ignores it for fd/type4, which never arm a run. The session's answer
+            // mode rides with it (ADR 0066): it is what the armed run selects with.
             ...(autoWork ? { auto_work: true } : {}),
+            ...(autoWork && answerMode ? { answer_mode: answerMode } : {}),
         },
         signal
     );
@@ -124,6 +127,7 @@ export function startFt8WorkCaller(
     fd?: { class: string; section: string },
     allowDuplicate?: boolean,
     autoWork?: boolean,
+    answerMode = '',
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
@@ -138,6 +142,7 @@ export function startFt8WorkCaller(
             ...(fd ? { mode: 'fd', their_class: fd.class, their_section: fd.section } : {}),
             ...(allowDuplicate ? { allow_duplicate: true } : {}),
             ...(autoWork ? { auto_work: true } : {}),
+            ...(autoWork && answerMode ? { answer_mode: answerMode } : {}),
         },
         signal
     );
@@ -151,6 +156,7 @@ export function startFt8Cq(
     offsetHz: number,
     operatingFreqMHz: number,
     txParity: 'next' | 'even' | 'odd' = 'next',
+    answerMode = '',
     signal?: AbortSignal
 ): Promise<Ft8QsoOutcome> {
     return postFt8Qso(
@@ -159,6 +165,9 @@ export function startFt8Cq(
             offset_hz: offsetHz,
             operating_freq_mhz: operatingFreqMHz,
             ...(txParity === 'next' ? {} : { tx_parity: txParity }),
+            // The SESSION's answerer-selection mode (ADR 0066) — the run obeys
+            // this, not config. Empty = let the daemon apply the config default.
+            ...(answerMode ? { answer_mode: answerMode } : {}),
         },
         signal
     );

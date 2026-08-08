@@ -231,6 +231,36 @@ func TestHandleFt8Qso_RejectsUnloggableFrequency(t *testing.T) {
 	}
 }
 
+// ADR 0066 H-rule: a junk session answer_mode is a client bug and 400s at all
+// three start surfaces — silently resolving it to a default the operator never
+// chose is the confusable state (an "I pick" operator suddenly auto-working).
+// Empty stays valid (the config default; old clients).
+func TestHandleFt8Qso_RejectsJunkAnswerMode(t *testing.T) {
+	cases := []struct {
+		name, path, body string
+		h                func(*Server) http.HandlerFunc
+	}{
+		{"cq/start junk answer_mode", "/v1/ft8/cq/start",
+			`{"offset_hz":1500,"operating_freq_mhz":14.074,"answer_mode":"bogus"}`,
+			func(s *Server) http.HandlerFunc { return s.handleFt8CqStart }},
+		{"qso/start junk answer_mode", "/v1/ft8/qso/start",
+			`{"their_call":"K1ABC","their_grid":"FN42","slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":14.074,"answer_mode":"bogus"}`,
+			func(s *Server) http.HandlerFunc { return s.handleFt8QsoStart }},
+		{"qso/work junk answer_mode", "/v1/ft8/qso/work",
+			`{"their_call":"K1ABC","their_grid":"FN42","their_snr":-12,"slot_utc":"2026-06-10T14:30:00Z","offset_hz":1500,"operating_freq_mhz":14.074,"answer_mode":"bogus"}`,
+			func(s *Server) http.HandlerFunc { return s.handleFt8QsoWork }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := ft8QsoTestServer(t, "G0TST")
+			w := postFt8Qso(t, srv, tc.path, tc.body, tc.h(srv))
+			if w.Code != http.StatusBadRequest || decodeErrCode(t, w) != "invalid_field_value" {
+				t.Fatalf("status=%d code=%q, want 400 invalid_field_value (body %s)", w.Code, decodeErrCode(t, w), w.Body.String())
+			}
+		})
+	}
+}
+
 // TestWriteFt8QsoError_Mapping pins the error-classification surface directly
 // (review 2026-06-19 L2): each known FT8 sentinel maps to its stable
 // status+code, and an unknown error becomes a generic 500 internal_error that

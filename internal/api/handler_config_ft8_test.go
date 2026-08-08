@@ -89,10 +89,8 @@ func TestConfig_Ft8Display_OmittedPutDoesNotClobber(t *testing.T) {
 
 // GET resolves the caller-answer mode — default operator_pick on a fresh
 // config (operator-ratified 2026-08-08: automation is an explicit opt-in; a
-// clean install must not auto-work anyone). Note the wire asymmetry this
-// creates, deliberately: GET can serve operator_pick while PUT refuses the
-// literal (the ADR 0065 config.json-only fork) — a UI rendering this field
-// shows the pick default read-only and offers only the two auto modes.
+// clean install must not auto-work anyone). Since ADR 0066 this field is the
+// session selector's SEED; PUT accepts all three literals (fork 4).
 func TestConfig_Ft8CallerAnswerMode_GetReturnsDefault(t *testing.T) {
 	srv := testServer(t)
 	resp := ft8GetConfig(t, srv)
@@ -132,19 +130,33 @@ func TestConfig_Ft8CallerAnswerMode_OmittedPutDoesNotClobber(t *testing.T) {
 	}
 }
 
-// The SPA wire surface accepts only the two auto modes; operator_pick — a working
-// mode since ADR 0065, but a config.json-only knob (operator-ratified 2026-08-07)
-// — and any junk are a 400.
-func TestConfig_Ft8CallerAnswerMode_InvalidValue400(t *testing.T) {
+// ADR 0066 fork 4: the PUT edits the DEFAULT (the session selector is the live
+// control now), so all THREE literals are accepted — including operator_pick,
+// which the retired ADR 0065 fence used to 400. Junk still 400s: silently
+// resolving a typo to a default the operator never chose is the confusable
+// state. The GET/PUT asymmetry this retires is documented at the validation
+// site's history comment.
+func TestConfig_Ft8CallerAnswerMode_AllThreeLiteralsAccepted(t *testing.T) {
 	srv := testServer(t)
-	for _, bad := range []string{"operator_pick", "bogus"} {
-		w := ft8PutConfig(t, srv, `{"ft8_caller_answer_mode":"`+bad+`"}`)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("PUT %q = %d, want 400 (body %s)", bad, w.Code, w.Body.String())
+	for _, mode := range []string{"auto_first", "auto_strongest", "operator_pick"} {
+		if w := ft8PutConfig(t, srv, `{"ft8_caller_answer_mode":"`+mode+`"}`); w.Code != http.StatusOK {
+			t.Fatalf("PUT %q = %d, want 200 (body %s)", mode, w.Code, w.Body.String())
 		}
-		if code := decodeErrCode(t, w); code != "invalid_field_value" {
-			t.Errorf("PUT %q code = %q, want invalid_field_value", bad, code)
+		resp := ft8GetConfig(t, srv)
+		if resp.Ft8CallerAnswerMode == nil || *resp.Ft8CallerAnswerMode != mode {
+			t.Fatalf("after PUT %q, GET = %v", mode, resp.Ft8CallerAnswerMode)
 		}
+	}
+}
+
+func TestConfig_Ft8CallerAnswerMode_JunkValue400(t *testing.T) {
+	srv := testServer(t)
+	w := ft8PutConfig(t, srv, `{"ft8_caller_answer_mode":"bogus"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("PUT bogus = %d, want 400 (body %s)", w.Code, w.Body.String())
+	}
+	if code := decodeErrCode(t, w); code != "invalid_field_value" {
+		t.Fatalf("code = %q, want invalid_field_value", code)
 	}
 }
 

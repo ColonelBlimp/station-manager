@@ -558,7 +558,7 @@ func (s *Sequencer) onSlotIdleArmed(ref SlotRef, msgs []goft8.DecodedMessage, no
 	// pickAnswererLocked matches against these two, so the run supplies them: after a
 	// completion the previous session's identity is gone.
 	s.ourCall = s.autoWork.call
-	s.answerMode = s.autoWorkMode
+	s.answerMode = s.autoWork.selectMode
 	pick, text := s.pickAnswererLocked(msgs, now)
 	if pick == nil {
 		s.mu.Unlock()
@@ -569,6 +569,6 @@ func (s *Sequencer) onSlotIdleArmed(ref SlotRef, msgs []goft8.DecodedMessage, no
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("their_call", theirCall).Str("heard", text).
-		Str("answer_mode", s.autoWorkMode).Msg("ft8 seq: auto-work run picked up a caller")
+		Str("answer_mode", s.autoWork.selectMode).Msg("ft8 seq: auto-work run picked up a caller")
 	s.fireOpening(now)
 }

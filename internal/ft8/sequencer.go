@@ -429,6 +429,13 @@ type autoWorkState struct {
 	call     string
 	offsetHz float64
 	dialMHz  float64
+	// selectMode is the answerer-selection mode the run picks callers with —
+	// the SESSION's mode, pinned at arm time from the staged value (ADR 0066).
+	// Per-run state, not a global: two runs armed under different session
+	// choices must each select their own way. NOT named "mode": the
+	// sessionend AST guard rightly refuses any write to a .mode selector
+	// that is not an enumerated active sequencer mode.
+	selectMode string
 }
 
 // Sequencer owns the (single) active session — answering a CQ or calling CQ, never
@@ -466,14 +473,14 @@ type Sequencer struct {
 	cqMessage  string
 	answerMode string
 
-	// Auto-work-callers run (ADR 0059). autoWorkPolicy is the config knob;
-	// autoWorkArmed is a RUN, set only by an operator-started session and cleared by
-	// Abandon and the other stop conditions. The two are separate because the policy
-	// alone must never work a caller — that would make the daemon initiate a session,
-	// which internal/ft8/CLAUDE.md forbids (autowork_test.go W5).
-	autoWorkPolicy bool
-	autoWorkMode   string
-	autoWork       autoWorkState
+	// Auto-work-callers run (ADR 0059; gate re-derived by ADR 0066).
+	// autoWork.armed is a RUN, set only by an operator-started session carrying
+	// the per-click intent AND an auto session mode, cleared by Abandon and the
+	// other stop conditions. The config knob no longer gates here — it is only
+	// the SPA toggle's boot seed — because intent alone must never work a
+	// caller: that would make the daemon initiate a session, which
+	// internal/ft8/CLAUDE.md forbids (autowork_test.go W5).
+	autoWork autoWorkState
 	// stalledCalls accumulates the answerers abandoned at the repeat cap since the
 	// current CQ round began. pickAnswererLocked skips them, so a handful of stations
 	// that keep repeating their grid can't be re-selected in rotation and starve the
@@ -539,7 +546,10 @@ type Sequencer struct {
 	// armAutoWorkLocked atomically with mode activation. Intent, not state: the
 	// RUN lives in autoWork.
 	pendingAutoWork bool
-	startedAt       time.Time // contact start, stamped as the logged QSO's TIME_ON
+	// pendingAnswerMode is the session's answerer-selection mode (ADR 0066),
+	// staged by every Service start on the same contract as pendingAutoWork.
+	pendingAnswerMode string
+	startedAt         time.Time // contact start, stamped as the logged QSO's TIME_ON
 	// contact holds the flags whose lifetime is exactly one contact, so ending one
 	// is a single assignment — see contactFlags for what deliberately stays out.
 	contact    contactFlags
@@ -1182,6 +1192,16 @@ func (s *Sequencer) setPendingAllowDuplicate(allow bool) {
 func (s *Sequencer) setPendingAutoWork(autoWork bool) {
 	s.mu.Lock()
 	s.pendingAutoWork = autoWork
+	s.mu.Unlock()
+}
+
+// setPendingAnswerMode stages the SESSION's answerer-selection mode (ADR 0066)
+// for the NEXT accepted start, on the pendingAutoWork contract: consumed under
+// s.mu atomically with mode activation, staged fresh by every start so it
+// cannot leak between operator actions.
+func (s *Sequencer) setPendingAnswerMode(mode string) {
+	s.mu.Lock()
+	s.pendingAnswerMode = mode
 	s.mu.Unlock()
 }
 
@@ -1975,16 +1995,6 @@ func (s *Sequencer) completedQsoLocked() CompletedQso {
 	}
 }
 
-// SetAutoWorkCallers installs the auto-work-callers policy (ADR 0059) and the
-// answerer-selection mode it should use. Setting the policy does NOT start a run:
-// only an operator-started session arms one.
-func (s *Sequencer) SetAutoWorkCallers(on bool, mode string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.autoWorkPolicy = on
-	s.autoWorkMode = mode
-}
-
 // AutoWorkArmed reports whether a run is armed and waiting for the next caller —
 // the state that is otherwise indistinguishable from stopped, because neither has a
 // contact in progress and only one of them will key the rig.
@@ -1999,19 +2009,26 @@ func (s *Sequencer) AutoWorkArmed() bool {
 // Caller holds s.mu; called from the operator-started session paths only — that is
 // the whole mechanism by which every run is headed by an operator action (ADR 0059).
 //
-// ADR 0065 changed both halves of the decision:
-//   - The staged per-click intent (setPendingAutoWork) is required — the policy no
-//     longer arms by itself. The always-arm rule collected an Abandon-debt twice in
+// ADR 0065 changed both halves of the decision, and ADR 0066 re-derived the
+// gate from the config knob to the SESSION:
+//   - The staged per-click intent (setPendingAutoWork) is required — nothing
+//     arms by itself. The always-arm rule collected an Abandon-debt twice in
 //     one morning (2026-08-07 06:01:17, 07:26:06).
 //   - A start WITHOUT the intent also CLEARS any armed run: "work that station
 //     only" defines the operator's whole intent, and leaving the old run armed
 //     would resume auto-working on call/offset/dial pinned by a PREVIOUS session —
 //     the stale-pin hazard the StartCallCq clear removed (autowork_test.go W12).
-//   - The gate refusing (policy off, intent carried) must never block the CONTACT;
-//     the start proceeds and the published frame's AutoWorkArmed=false is how the
-//     SPA learns the arm was refused (G3).
+//   - The staged SESSION mode must be an AUTO mode (ADR 0066): under
+//     operator_pick the operator chooses every station, so a run would either
+//     pick nobody or break that promise — invariant 7. The config knob's old
+//     gate role ended here; config seeds the SPA controls and nothing else.
+//   - The gate refusing (no intent, or a pick-mode session) must never block
+//     the CONTACT; the start proceeds and the published frame's
+//     AutoWorkArmed=false is how the SPA learns the arm was refused (G3).
 func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64) {
-	if !s.pendingAutoWork || !s.autoWorkPolicy {
+	auto := s.pendingAnswerMode == types.Ft8CallerAnswerAutoFirst ||
+		s.pendingAnswerMode == types.Ft8CallerAnswerAutoStrongest
+	if !s.pendingAutoWork || !auto {
 		s.autoWork = autoWorkState{}
 		return
 	}
@@ -2019,6 +2036,7 @@ func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64
 	s.autoWork.call = call
 	s.autoWork.offsetHz = offsetHz
 	s.autoWork.dialMHz = dialFreqMHz
+	s.autoWork.selectMode = s.pendingAnswerMode
 }
 
 // terminalStatusLocked builds the frame published when a session ends. Caller holds

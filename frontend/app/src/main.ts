@@ -23,6 +23,7 @@ import {
     setFt8OperatorCall,
     setFt8MyGrid,
     setFt8TxActions,
+    setFt8SessionDefaults,
     setFt8LoggedSink,
     setFt8SessionEndedSink,
     setFt8TxDisarmedSink,
@@ -95,8 +96,8 @@ const toTxResult = (o: Ft8TxOutcome | Ft8QsoOutcome): Ft8TxResult =>
     o.kind === 'ok' ? { ok: true, message: '' } : { ok: false, message: o.message };
 setFt8TxActions({
     arm: (armed) => armFt8Tx(armed).then(toTxResult),
-    callCq: (offsetHz, opFreqMHz, parity) =>
-        startFt8Cq(offsetHz, opFreqMHz, parity).then(toTxResult),
+    callCq: (offsetHz, opFreqMHz, parity, answerMode) =>
+        startFt8Cq(offsetHz, opFreqMHz, parity, answerMode).then(toTxResult),
     answerCq: (a) =>
         startFt8Qso(
             a.theirCall,
@@ -107,7 +108,8 @@ setFt8TxActions({
             a.type4 ? 'type4' : a.fd ? 'fd' : 'standard',
             a.theirSnr,
             a.allowDuplicate,
-            a.autoWork
+            a.autoWork,
+            a.answerMode
         ).then(toTxResult),
     workCaller: (a) =>
         startFt8WorkCaller(
@@ -119,7 +121,8 @@ setFt8TxActions({
             a.opFreqMHz,
             a.fd,
             a.allowDuplicate,
-            a.autoWork
+            a.autoWork,
+            a.answerMode
         ).then(toTxResult),
     abandon: () => abandonFt8Qso().then(toTxResult),
     skip: (armed) => skipFt8Qso(armed).then(toTxResult),
@@ -128,10 +131,12 @@ setFt8TxActions({
     pickAnswerer: (call) => pickFt8CqAnswerer(call).then(toTxResult),
 });
 
-// A sent auto-work intent the daemon's gate refused (ft8.tx.auto_work_callers
-// off): the contact proceeds — say why no run appeared (ADR 0065 G3).
+// A sent auto-work intent the daemon's gate refused: the contact proceeds —
+// say why no run appeared (ADR 0065 G3). Since ADR 0066 the gate refuses on
+// the session's answer mode, and the SPA drops the intent under "I pick"
+// before sending, so this fires only on a genuine SPA/daemon disagreement.
 setFt8AutoWorkRefusedSink(() => {
-    toasts.info('Auto-work is disabled in FT8 settings — working this station only.');
+    toasts.info('Auto-work needs an auto Answer mode — working this station only.');
 });
 
 // Session-ended sink (ft8-qso, terminal frame with a reason): the daemon ends a
@@ -253,6 +258,8 @@ const ctx: StationContext = {
     ft8HideHashed: false,
     ft8Frequencies: {},
     ft8Mode: '',
+    ft8CallerAnswerMode: 'operator_pick',
+    ft8AutoWorkCallers: false,
     ft8AudioLowDbfs: -60,
     ft8AudioHighDbfs: -10,
     ft8AlcAmber: 30,
@@ -328,6 +335,9 @@ function applyStationContext(c: StationContext): void {
     // RX audio-level window (ft8.audio, served resolved) — the level meter's
     // good/low/high classification bounds, calibratable in config.json.
     setFt8AudioWindow(c.ft8AudioLowDbfs, c.ft8AudioHighDbfs);
+    // Session-knob defaults (ADR 0066): config seeds the Answer selector and
+    // the one-shot Auto-work toggle; the session owns both from here on.
+    setFt8SessionDefaults(c.ft8CallerAnswerMode, c.ft8AutoWorkCallers);
     // TX-drive (ALC) chip: the amber floor (the ONLY threshold — red folded
     // into amber 2026-08-08) + the meter-poll cadence its staleness window
     // derives from (ADR 0064).
