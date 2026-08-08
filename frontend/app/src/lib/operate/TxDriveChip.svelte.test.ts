@@ -32,11 +32,13 @@ describe('TxDriveChip', () => {
         expect(chip()!.textContent).toContain('ALC 0');
     });
 
-    it('an over-threshold reading renders red with the value', () => {
+    // 62 sits above the OLD red line (50) — warn here pins the fold (red
+    // folded into amber 2026-08-08) at the render level too.
+    it('an over-threshold reading renders warn with the value', () => {
         render(TxDriveChip);
         onRigMeters({ meter: 'ALC', value: 62 }, Date.now());
         flushSync();
-        expect(chip()!.dataset.state).toBe('red');
+        expect(chip()!.dataset.state).toBe('warn');
         expect(chip()!.textContent).toContain('ALC 62');
     });
 
@@ -60,10 +62,10 @@ describe('TxDriveChip', () => {
 
     // The card's fixed structure (the audio card's V6 lesson): bar track +
     // two lines render in a value state AND in stale — only content varies.
-    // The threshold marker sits at the configured red value on the 0-255
-    // scale, so the operator can SEE how close the fill is to red.
-    it('card keeps its structure across states and marks the red threshold', () => {
-        setTxDriveConfig({ red: 51, amber: 30, intervalMs: 250 }); // 51/255 = 20% — a round marker position
+    // The threshold marker sits at the configured amber floor on the 0-255
+    // scale, so the operator can SEE how close the fill is to "reduce".
+    it('card keeps its structure across states and marks the amber floor', () => {
+        setTxDriveConfig({ amber: 51, intervalMs: 250 }); // 51/255 = 20% — a round marker position
         render(TxDriveChip);
         onRigMeters({ meter: 'ALC', value: 26 }, Date.now());
         flushSync();
@@ -75,7 +77,7 @@ describe('TxDriveChip', () => {
         // Anchored by RIGHT so the marker's 2px body always sits INSIDE the
         // overflow-hidden track — left-anchoring clipped it entirely at the
         // valid threshold 255 (left:100%, codex P2 on 84886af2).
-        const marker = card()!.querySelector<HTMLElement>('[data-alc-red-marker]')!;
+        const marker = card()!.querySelector<HTMLElement>('[data-alc-amber-marker]')!;
         expect(marker.style.right).toBe('80%');
         expect(card()!.textContent).toContain('ALC 26 of 255');
 
@@ -90,14 +92,14 @@ describe('TxDriveChip', () => {
     });
 
     it('the marker stays visible at the maximum valid threshold (255)', () => {
-        setTxDriveConfig({ red: 255, amber: 30, intervalMs: 250 });
+        setTxDriveConfig({ amber: 255, intervalMs: 250 });
         render(TxDriveChip);
         onRigMeters({ meter: 'ALC', value: 10 }, Date.now());
         flushSync();
         chip()!.click();
         flushSync();
 
-        const marker = card()!.querySelector<HTMLElement>('[data-alc-red-marker]')!;
+        const marker = card()!.querySelector<HTMLElement>('[data-alc-amber-marker]')!;
         // right: 0% puts the marker's right edge at the track's right edge,
         // its body extending inward — never into the clipped overflow.
         expect(marker.style.right).toBe('0%');

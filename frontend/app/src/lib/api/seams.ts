@@ -175,10 +175,10 @@ export interface StationContext {
     /** TX-drive display thresholds (config `ft8.meter`, served resolved as
      *  `ft8_meter`), raw rig ALC scale (1-255): amber = where the healthy
      *  green band ends (RATIFIED 30, 2026-08-07 — measured healthy FT8 drive
-     *  is ALC 15–18); red = overdrive (PROVISIONAL until a
-     *  deliberate-overdrive datum exists, ADR 0064). */
+     *  is ALC 15–18) and the TERMINAL "reduce drive" state (red folded into
+     *  amber 2026-08-08: the RM ALC answer saturates at ~30, so an ALC-only
+     *  red could never fire — ADR 0064 §4). */
     ft8AlcAmber: number;
-    ft8AlcRed: number;
     /** The daemon's FT8 meter-poll cadence (`bridge_timeouts.
      *  ft8_meter_poll_interval_ms`, served resolved) — the TX-drive chip
      *  derives its staleness window from it. */
@@ -220,7 +220,6 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8AudioLowDbfs: -60,
         ft8AudioHighDbfs: -10,
         ft8AlcAmber: 30,
-        ft8AlcRed: 50,
         ft8MeterPollIntervalMs: 250,
         mapBandColors: {},
         restoreRigOnModeSwitch: true,
@@ -272,7 +271,6 @@ export async function fetchStationContext(): Promise<StationContext> {
         ft8AudioLowDbfs: typeof fa.low_dbfs === 'number' ? fa.low_dbfs : -60,
         ft8AudioHighDbfs: typeof fa.high_dbfs === 'number' ? fa.high_dbfs : -10,
         ft8AlcAmber: numOr(fm.alc_amber, 30),
-        ft8AlcRed: numOr(fm.alc_red, 50),
         ft8MeterPollIntervalMs: numOr(bt.ft8_meter_poll_interval_ms, 250),
         mapBandColors: toStringMap(isPlainObject(body.map) ? body.map.band_colors : undefined),
         // Only an explicit false disables it — see the field's doc above.

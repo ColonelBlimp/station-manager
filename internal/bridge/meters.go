@@ -48,6 +48,20 @@ import (
 // during transmission (verified 2026-08-06). Poll ANSWERS feed the
 // accumulator below but never the pushed-stream liveness (see observeMeter).
 //
+// MEASURED ON HARDWARE, 2026-08-08 (ADR 0064 §4 deliberate-overdrive run):
+// the RM ALC answer SATURATES around 30 of 255. Three FT8 slots driven with
+// the PipeWire sink at 1.0 (the digital ceiling; calibrated level ~0.4)
+// answered alc_max 29-30 while the operator watched the front-panel ALC
+// needle deflect far past the zone into the +20 dB over-region, and in-band
+// PO collapsed from the healthy 109-121 to ~35 on both PO witnesses (pushed
+// and polled). Consequences: an ALC reading of ~30 means AT LEAST zone-edge
+// drive, not a measurement of how far over; no ALC-only threshold above ~30
+// can ever fire on this rig; and gross overdrive IS detectable, but only by
+// pairing ALC-at-ceiling with collapsed PO — both already travel in the
+// summary line this file emits. (The PO collapse is consistent with clipped
+// audio spreading energy outside the TX filter — inference, unverified;
+// the readings themselves are the measurement.)
+//
 // Readings are accumulated per keyed transmission and summarised in ONE log
 // line when it ends, rather than logged per frame. That needs no invented
 // sampling interval — the boundaries are the key/unkey events the bridge

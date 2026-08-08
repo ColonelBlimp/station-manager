@@ -11,10 +11,15 @@
                drive at ALC 15–18 with PO flat and never zero while keyed, so
                a zero-only green could not show during a correct transmission
                and amber nagged toward an action that would cost output;
-      warn   — fresh answer, amber ≤ value < red: genuinely elevated,
-               approaching the red line;
-      red    — fresh answer, value ≥ ft8.meter.alc_red (config, served
-               resolved; PROVISIONAL default until calibrated on hardware);
+      warn   — fresh answer, value ≥ amber: drive high — reduce the audio
+               level. TERMINAL (operator-ratified 2026-08-08, red folded into
+               amber): the §4 deliberate-overdrive run measured the RM ALC
+               answer SATURATING at ~30 of 255 while the front-panel needle
+               sat +20 dB over the zone (internal/bridge/meters.go carries
+               the measurement), so a reading at the floor means AT LEAST
+               zone-edge drive and no ALC-only threshold above it can ever
+               fire — the provisional red line (50) was unreachable and was
+               removed rather than documented dead;
       stale  — answers stopped (> 6 × the served poll cadence): NO DATA,
                deliberately distinct from `good` — a healthy reading and a
                dead poll must never render the same (the
@@ -26,7 +31,7 @@
 
 import type { RigMetersPayload } from '../api/rig-sse';
 
-export type TxDriveStatus = 'hidden' | 'good' | 'warn' | 'red' | 'stale';
+export type TxDriveStatus = 'hidden' | 'good' | 'warn' | 'stale';
 
 interface TxDriveState {
     alc: { value: number; at: number } | null;
@@ -42,8 +47,7 @@ export function setTxDriveOpen(on: boolean): void {
 
 // Config-served knobs (setTxDriveConfig from main.ts): defaults cover an
 // older daemon that serves none of them. alcAmber's default is the RATIFIED
-// 30 (green ceiling); alcRed's 50 is still provisional.
-let alcRed = 50;
+// 30 (green ceiling; terminal amber per the header).
 let alcAmber = 30;
 let pollIntervalMs = 250;
 
@@ -53,8 +57,7 @@ let pollIntervalMs = 250;
 // same standing as the daemon's meterAnswerStaleAfter.
 const staleFactor = 6;
 
-export function setTxDriveConfig(cfg: { red: number; amber: number; intervalMs: number }): void {
-    if (Number.isFinite(cfg.red) && cfg.red >= 1) alcRed = cfg.red;
+export function setTxDriveConfig(cfg: { amber: number; intervalMs: number }): void {
     if (Number.isFinite(cfg.amber) && cfg.amber >= 1) alcAmber = cfg.amber;
     if (Number.isFinite(cfg.intervalMs) && cfg.intervalMs > 0) pollIntervalMs = cfg.intervalMs;
 }
@@ -66,16 +69,15 @@ export function onRigMeters(p: RigMetersPayload, atMs: number): void {
     txDriveState.alc = { value: p.value, at: atMs };
 }
 
-/** The configured red threshold — the card renders its marker at this value. */
-export function txDriveRedThreshold(): number {
-    return alcRed;
+/** The configured amber floor — the card renders its marker at this value. */
+export function txDriveAmberThreshold(): number {
+    return alcAmber;
 }
 
 export function txDriveStatus(nowMs: number): TxDriveStatus {
     const a = txDriveState.alc;
     if (a === null) return 'hidden';
     if (nowMs - a.at > staleFactor * pollIntervalMs) return 'stale';
-    if (a.value >= alcRed) return 'red';
     if (a.value >= alcAmber) return 'warn';
     return 'good';
 }
@@ -84,7 +86,6 @@ export function txDriveStatus(nowMs: number): TxDriveStatus {
 export function resetTxDriveForTests(): void {
     txDriveState.alc = null;
     txDriveState.open = false;
-    alcRed = 50;
     alcAmber = 30;
     pollIntervalMs = 250;
 }

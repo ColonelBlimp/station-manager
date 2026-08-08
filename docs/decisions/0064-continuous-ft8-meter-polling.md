@@ -1,7 +1,8 @@
 ---
 number: 0064
 title: Continuous ALC/PO meter polling while an FT8 capture session is live
-status: Proposed
+status: Accepted (2026-08-08 — §4 on-hardware acceptance complete; colour
+  grammar fully ratified: green/amber only, red folded into amber)
 date: 2026-08-06
 ---
 
@@ -152,8 +153,25 @@ timeout bounds that wait even when the TX→RX tail eats the answer.
   already right (operator's own observation, on air). Ratified: **green is
   the healthy band**, ceiling `ft8.meter.alc_amber` = **30** (clears every
   healthy datum with headroom); amber = 30..red−1, genuinely elevated.
-  `alc_red` = 50 stays **PROVISIONAL** — no overdrive datum exists yet; the
-  §4 iii deliberate-overdrive calibration is what produces it.
+  ~~`alc_red` = 50 stays **PROVISIONAL** — no overdrive datum exists yet; the
+  §4 (ii) deliberate-overdrive calibration is what produces it.~~
+  **CLOSED 2026-08-08 — RED FOLDED INTO AMBER (operator-ratified) and
+  `alc_red` REMOVED.** The §4 (ii) run produced the datum, and it was about
+  the instrument, not the threshold: with the PipeWire sink at 1.0 (the
+  digital ceiling; calibrated level ~0.4) the RM ALC answer SATURATED at
+  29–30 of 255 across three slots while the operator watched the front-panel
+  needle deflect far past the zone into the +20 dB over-region, and in-band
+  PO collapsed from the healthy 109–121 to ~35 on both PO witnesses. So §4
+  (iii)'s meter-face agreement FAILS in the over-region — the RM answer
+  cannot distinguish zone-edge drive from gross overdrive — and no ALC-only
+  threshold above ~30 can ever fire. Amber (≥ alc_amber) is therefore the
+  TERMINAL state and its message carries the action ("reduce the audio
+  level"); the unreachable red band was removed rather than documented dead
+  (`internal/bridge/meters.go` holds the measurement; the SPA/daemon spec is
+  `txDrive.svelte.test.ts` + `TestResolveFt8Meter`). A DISTINCT overdrive
+  state remains buildable from facts SM already carries — ALC-at-ceiling
+  paired with collapsed PO (121→35 in the run) — captured in
+  `docs/dogfood-inbox.md` as a follow-up option, not built.
 
 ## Alternatives considered
 
@@ -217,6 +235,21 @@ mid-transmission. Mechanically unable to deliver the feature.
   before the build.
 
 ## Acceptance criteria (drafted for operator ratification)
+
+> **RESULTS, 2026-08-08 — all four criteria met; ADR flipped Accepted.**
+> Criterion 1: live ALC updating with distinct states — observed on air
+> 2026-08-07 and through the overdrive run (amber during hot slots).
+> Criteria 2 + 3: per-TX meter summaries, drive-watch arming, `keyed_ms`
+> and alarm behaviour all unchanged across every polled session (passive,
+> from `smd.log`). §4 (i) normal slots ✓ (ALC 7–18, PO flat) · (ii)
+> operator-driven overdrive ✓ — the run produced the saturation finding
+> recorded under Open questions (RM ALC clips at ~30; PO collapsed 121→35)
+> · (iii) meter-face comparison ✓ run, with the qualified outcome that
+> agreement HOLDS in the healthy region and FAILS in the over-region (panel
+> +20 dB over vs RM 30) — which is the §4 (ii) finding restated, not a
+> polling defect. Meter-frame gaps of 2.0–2.5 s appeared ONLY on slots where
+> the operator was hands-on (meter-face flip, mixer slide); every hands-off
+> slot stayed ≤ 400 ms. Re-check trigger: a 2 s+ gap on a hands-off slot.
 
 1. When transmitting FT8 with the rig's meter on PO, I see a live ALC
    reading updating through the transmission — and I can tell *ALC

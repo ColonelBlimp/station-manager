@@ -851,6 +851,22 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   to B's own content and show VFO-B operation on the panel. If the rig
   refutes the manual (the S~2527 observation un-confounded), the revert is
   the `select_vfo` branch in `selectVfo` + one rigdef line.
+- [2026-08-08] OPTION, captured not built (came out of the ADR 0064 §4
+  overdrive run): a TRUE overdrive detector from facts SM already carries.
+  The RM ALC answer saturates at ~30 of 255 (measurement in
+  `internal/bridge/meters.go`), so no ALC-only state can distinguish
+  zone-edge drive from gross overdrive — the red band was folded into amber
+  for exactly that reason (operator-ratified 2026-08-08). But the overdriven
+  state has a clean two-witness signature in the same per-TX summary line:
+  ALC AT CEILING (~30) **and** in-band PO COLLAPSED (healthy 109–121 → ~35
+  in the run, on both the pushed and polled PO). A paired detector could
+  restore a distinct "you are splattering" state (chip colour, or a
+  drive-alarm-style banner). Open judgement calls if picked up: the PO
+  collapse floor (the run suggests healthy ≥ ~100 vs collapsed ~35, but the
+  boundary is the operator's), whether it renders as chip state or alarm,
+  and whether one hot slot suffices or it wants persistence across slots.
+  Do NOT rebuild it as an ALC threshold — that shape is what the fold
+  removed, and the instrument cannot carry it.
 
 ---
 

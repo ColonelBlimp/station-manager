@@ -1,6 +1,9 @@
 package types
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestResolveFt8Display(t *testing.T) {
 	t.Run("nil yields all defaults", func(t *testing.T) {
@@ -229,44 +232,20 @@ func TestResolveFt8Audio(t *testing.T) {
 	}
 }
 
-// ResolveFt8Meter — the TX-drive (ALC) display threshold (ADR 0064). The
-// default is PROVISIONAL until the on-hardware calibration step (ADR 0064
-// acceptance §4 iii) ratifies a number; the rule here is only the resolve
-// shape: nil/sparse → default, explicit value honoured, out-of-range clamped
-// to the rig's raw 1–255 scale (0 would make every reading "red").
+// ResolveFt8Meter — the TX-drive (ALC) display threshold (ADR 0064). ONE
+// threshold as of 2026-08-08: the amber floor (ft8.meter.alc_amber, ratified
+// 30 on 2026-08-07 — green is the HEALTHY band: live FT8 measured 15–18,
+// low-power 7–12, voice 26). The red band was FOLDED INTO AMBER
+// (operator-ratified 2026-08-08) after the §4 deliberate-overdrive run
+// measured the RM ALC answer SATURATING at ~30 of 255 while the front-panel
+// needle sat +20 dB over the zone: no ALC-only threshold above ~30 can ever
+// fire, so amber is the terminal "reduce drive" state and alc_red was
+// removed. Rules: nil/sparse → default, explicit value honoured, clamp to
+// the usable 1–255 scale (0 would flag every reading; the old amber>red
+// cross-clamp died with the red line — 999 now clamps to 255, not to 50).
+// The nearest confusable regression: a resolver still carrying alc_red in
+// its served JSON, which the SPA would dutifully render as a phantom red.
 func TestResolveFt8Meter(t *testing.T) {
-	iv := func(n int) *int { return &n }
-	cases := []struct {
-		name string
-		in   *Ft8MeterConfig
-		want int
-	}{
-		{"nil block → default", nil, DefaultFt8AlcRed},
-		{"empty block → default", &Ft8MeterConfig{}, DefaultFt8AlcRed},
-		{"explicit value honoured", &Ft8MeterConfig{AlcRed: iv(30)}, 30},
-		{"zero clamps to 1", &Ft8MeterConfig{AlcRed: iv(0)}, 1},
-		{"over-scale clamps to 255", &Ft8MeterConfig{AlcRed: iv(999)}, 255},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := ResolveFt8Meter(c.in); got.AlcRed != c.want {
-				t.Fatalf("ResolveFt8Meter(%+v).AlcRed = %d, want %d", c.in, got.AlcRed, c.want)
-			}
-		})
-	}
-}
-
-// The amber floor (ft8.meter.alc_amber) — where green ends and amber begins
-// (operator-ratified 2026-08-07: green is the HEALTHY band, not "ALC at
-// zero"; the first live FT8 TX data measured healthy drive at ALC 15–18 with
-// PO flat, so a zero-only green could never show during a correct
-// transmission and amber nagged toward an action that would cost output).
-// Default 30 covers every healthy datum measured (FT8 15–18, low-power slots
-// 7–12, voice 26). Same 1–255 clamp as alc_red, plus one cross-rule: an
-// amber floor ABOVE the red line is unreachable (red is checked first), so it
-// clamps down to alc_red — which degrades honestly to the binary green/red
-// grammar rather than leaving a phantom band.
-func TestResolveFt8Meter_AmberFloor(t *testing.T) {
 	iv := func(n int) *int { return &n }
 	cases := []struct {
 		name string
@@ -277,10 +256,8 @@ func TestResolveFt8Meter_AmberFloor(t *testing.T) {
 		{"empty block → ratified default", &Ft8MeterConfig{}, DefaultFt8AlcAmber},
 		{"explicit value honoured", &Ft8MeterConfig{AlcAmber: iv(20)}, 20},
 		{"zero clamps to 1", &Ft8MeterConfig{AlcAmber: iv(0)}, 1},
-		{"amber above red clamps to red — binary grammar, no phantom band",
-			&Ft8MeterConfig{AlcAmber: iv(100), AlcRed: iv(50)}, 50},
-		{"amber above the DEFAULT red clamps too",
-			&Ft8MeterConfig{AlcAmber: iv(999)}, DefaultFt8AlcRed},
+		{"over-scale clamps to 255 — no red line to cross-clamp to",
+			&Ft8MeterConfig{AlcAmber: iv(999)}, 255},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -288,5 +265,32 @@ func TestResolveFt8Meter_AmberFloor(t *testing.T) {
 				t.Fatalf("ResolveFt8Meter(%+v).AlcAmber = %d, want %d", c.in, got.AlcAmber, c.want)
 			}
 		})
+	}
+}
+
+// The served shape carries ONLY alc_amber. A resolved payload still holding
+// alc_red would hand the SPA a phantom red band back; the wire shape is the
+// contract the fold has to hold at.
+func TestResolveFt8Meter_ServedShapeHasNoRed(t *testing.T) {
+	b, err := json.Marshal(ResolveFt8Meter(nil))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if got, want := string(b), `{"alc_amber":30}`; got != want {
+		t.Fatalf("served ft8_meter shape = %s, want %s", got, want)
+	}
+}
+
+// A config.json written before the fold may still hold ft8.meter.alc_red.
+// It must be IGNORED — tolerated by decode (no strict field check) and
+// absent from resolution — not an error that stops the daemon loading its
+// own previous config.
+func TestResolveFt8Meter_LegacyRedKeyIgnored(t *testing.T) {
+	var c Ft8MeterConfig
+	if err := json.Unmarshal([]byte(`{"alc_amber":40,"alc_red":50}`), &c); err != nil {
+		t.Fatalf("legacy alc_red must not break decoding: %v", err)
+	}
+	if got := ResolveFt8Meter(&c); got.AlcAmber != 40 {
+		t.Fatalf("AlcAmber = %d, want 40", got.AlcAmber)
 	}
 }

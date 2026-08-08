@@ -494,18 +494,17 @@ type Ft8OccupancyConfig struct {
 }
 
 // Ft8MeterConfig is the stored (sparse) form of the TX-drive display
-// thresholds (ADR 0064), raw rig 0-255 ALC scale: alc_amber is where green
-// (healthy drive) ends and amber begins; alc_red is where amber ends and red
-// (overdrive) begins. Unset fields take the defaults.
+// threshold (ADR 0064), raw rig 0-255 ALC scale: alc_amber is where green
+// (healthy drive) ends and amber begins. ONE threshold: the red band was
+// folded into amber 2026-08-08 (see DefaultFt8AlcAmber); a legacy alc_red
+// key in an older config.json is silently ignored by decode.
 type Ft8MeterConfig struct {
 	AlcAmber *int `json:"alc_amber,omitempty"`
-	AlcRed   *int `json:"alc_red,omitempty"`
 }
 
 // Ft8MeterLevels is the resolved form served on /v1/config.
 type Ft8MeterLevels struct {
 	AlcAmber int `json:"alc_amber"`
-	AlcRed   int `json:"alc_red"`
 }
 
 // DefaultFt8AlcAmber is the amber floor — operator-RATIFIED 2026-08-07 from
@@ -513,44 +512,32 @@ type Ft8MeterLevels struct {
 // 18, every slot; low-power slots 7–12; voice datum 26) with PO flat at
 // target, so green must cover the healthy band — a zero-only green could
 // never show during a correct transmission, and amber nagged toward reducing
-// audio that was already right. 30 clears every healthy datum with headroom;
-// amber then means genuinely elevated (30–49 at the default red line).
+// audio that was already right. 30 clears every healthy datum with headroom.
+//
+// Amber is the TERMINAL state (operator-ratified 2026-08-08): the §4
+// deliberate-overdrive run measured the RM ALC answer SATURATING at ~30 of
+// 255 while the front-panel needle sat +20 dB over the zone and in-band PO
+// collapsed 121→35 (internal/bridge/meters.go carries the measurement), so
+// an ALC reading of ~30 means AT LEAST zone-edge drive and no ALC-only
+// threshold above it can ever fire. The provisional alc_red (50) was
+// therefore unreachable and was removed rather than documented dead; a
+// distinct overdrive state would need ALC-at-ceiling paired with collapsed
+// PO (captured in docs/dogfood-inbox.md, not built).
 const DefaultFt8AlcAmber = 30
 
-// DefaultFt8AlcRed is PROVISIONAL — not operator-ratified. The only live
-// datum is ALC 026 under normal VOICE drive (2026-08-06 catcli experiment);
-// the on-hardware calibration step (ADR 0064 acceptance §4 iii: compare the
-// on-screen value against the front panel under deliberate overdrive) is
-// what produces the real number. Adjust via ft8.meter.alc_red.
-const DefaultFt8AlcRed = 50
-
-// ResolveFt8Meter applies the defaults to a sparse (or absent) meter block,
-// clamping both thresholds to the rig's usable 1-255 scale (0 would flag
-// every reading). One cross-rule: an amber floor ABOVE the red line is
-// unreachable (the red check wins), so it clamps down to the resolved red —
-// which degrades honestly to a binary green/red grammar instead of leaving a
-// phantom band in the config.
+// ResolveFt8Meter applies the default to a sparse (or absent) meter block,
+// clamping the threshold to the rig's usable 1-255 scale (0 would flag
+// every reading).
 func ResolveFt8Meter(c *Ft8MeterConfig) Ft8MeterLevels {
-	r := Ft8MeterLevels{AlcAmber: DefaultFt8AlcAmber, AlcRed: DefaultFt8AlcRed}
-	if c != nil && c.AlcRed != nil {
-		r.AlcRed = *c.AlcRed
-	}
+	r := Ft8MeterLevels{AlcAmber: DefaultFt8AlcAmber}
 	if c != nil && c.AlcAmber != nil {
 		r.AlcAmber = *c.AlcAmber
 	}
-	clamp := func(v int) int {
-		if v < 1 {
-			return 1
-		}
-		if v > 255 {
-			return 255
-		}
-		return v
+	if r.AlcAmber < 1 {
+		r.AlcAmber = 1
 	}
-	r.AlcRed = clamp(r.AlcRed)
-	r.AlcAmber = clamp(r.AlcAmber)
-	if r.AlcAmber > r.AlcRed {
-		r.AlcAmber = r.AlcRed
+	if r.AlcAmber > 255 {
+		r.AlcAmber = 255
 	}
 	return r
 }

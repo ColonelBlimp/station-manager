@@ -256,7 +256,6 @@ const ctx: StationContext = {
     ft8AudioLowDbfs: -60,
     ft8AudioHighDbfs: -10,
     ft8AlcAmber: 30,
-    ft8AlcRed: 50,
     ft8MeterPollIntervalMs: 250,
     mapBandColors: {},
     restoreRigOnModeSwitch: true,
@@ -329,10 +328,10 @@ function applyStationContext(c: StationContext): void {
     // RX audio-level window (ft8.audio, served resolved) — the level meter's
     // good/low/high classification bounds, calibratable in config.json.
     setFt8AudioWindow(c.ft8AudioLowDbfs, c.ft8AudioHighDbfs);
-    // TX-drive (ALC) chip: red threshold (provisional until calibrated) + the
-    // meter-poll cadence its staleness window derives from (ADR 0064).
+    // TX-drive (ALC) chip: the amber floor (the ONLY threshold — red folded
+    // into amber 2026-08-08) + the meter-poll cadence its staleness window
+    // derives from (ADR 0064).
     setTxDriveConfig({
-        red: c.ft8AlcRed,
         amber: c.ft8AlcAmber,
         intervalMs: c.ft8MeterPollIntervalMs,
     });

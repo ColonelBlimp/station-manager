@@ -2,24 +2,26 @@
     /*
         TX-drive (ALC) readout (ADR 0064) — collapsed it is a value chip
         ("ALC 26" + state dot), open it is a small card with the 0-255 bar and
-        the red-threshold marker, following the RX audio card's interaction
+        the amber-floor marker, following the RX audio card's interaction
         grammar exactly (chip click opens, MINUS folds back — not an X, the
         meter is never closed). Renders nothing until the first ALC poll
         answer of this page-load (an instrument that cannot read must not
         paint a value).
 
         States (logic pinned in txDrive.svelte.test.ts): good (< alc_amber:
-        the healthy band, ratified 2026-08-07) / warn (amber ≤ value < red:
-        genuinely elevated) / red (≥ ft8.meter.alc_red: overdrive) / stale
-        (answers stopped: NO DATA, deliberately distinct from a healthy
-        reading). Card structure is FIXED in every state (the audio card's V6
-        lesson: layouts must not swap) — bar track + two h-4 lines always
-        render, only content varies.
+        the healthy band, ratified 2026-08-07) / warn (≥ alc_amber: drive
+        high, reduce the audio level — TERMINAL, red folded into amber
+        2026-08-08: the RM ALC answer saturates at ~30 of 255, so no ALC-only
+        red could ever fire; internal/bridge/meters.go carries the
+        measurement) / stale (answers stopped: NO DATA, deliberately distinct
+        from a healthy reading). Card structure is FIXED in every state (the
+        audio card's V6 lesson: layouts must not swap) — bar track + two h-4
+        lines always render, only content varies.
     */
     import {
         txDriveState,
         txDriveStatus,
-        txDriveRedThreshold,
+        txDriveAmberThreshold,
         setTxDriveOpen,
         type TxDriveStatus,
     } from './txDrive.svelte';
@@ -39,7 +41,6 @@
     const toneByState: Record<Exclude<TxDriveStatus, 'hidden'>, string> = {
         good: 'bg-emerald-500',
         warn: 'bg-amber-500',
-        red: 'bg-red-600',
         stale: 'bg-zinc-500',
     };
 
@@ -47,8 +48,9 @@
         // Green is the HEALTHY band, not "ALC at zero" (ratified 2026-08-07:
         // healthy FT8 drive measures ALC 15–18 here, never zero while keyed).
         good: 'drive right',
-        warn: 'ALC elevated — approaching the red line',
-        red: 'overdrive — reduce the audio level',
+        // Terminal: the instrument cannot say how far over (RM ALC saturates
+        // at the zone edge), so the message is the action, not a severity.
+        warn: 'ALC high — reduce the audio level',
         stale: 'no poll answers',
     };
 
@@ -105,9 +107,9 @@
                 </button>
             </div>
 
-            <!-- Fixed structure in every state: bar + two h-4 lines. The red
-                 marker sits at the configured threshold; the fill is the raw
-                 ALC value on the same 0-255 scale. -->
+            <!-- Fixed structure in every state: bar + two h-4 lines. The
+                 amber marker sits at the configured floor; the fill is the
+                 raw ALC value on the same 0-255 scale. -->
             <div
                 data-meter-bar
                 class="relative mt-2 h-2.5 overflow-hidden rounded-full bg-surface-muted"
@@ -124,11 +126,13 @@
                      marker's 2px body extends INWARD from the threshold and
                      survives the track's overflow-hidden even at the valid
                      maximum 255 (left-anchoring rendered left:100% there and
-                     clipped it entirely — codex P2 on 84886af2). -->
+                     clipped it entirely — codex P2 on 84886af2). The marker
+                     sits at the AMBER floor — the only threshold since the
+                     fold — where "reduce the audio level" begins. -->
                 <div
-                    data-alc-red-marker
-                    class="absolute top-0 h-full w-0.5 bg-red-600/80"
-                    style="right: {100 - pct(txDriveRedThreshold())}%"
+                    data-alc-amber-marker
+                    class="absolute top-0 h-full w-0.5 bg-amber-500/80"
+                    style="right: {100 - pct(txDriveAmberThreshold())}%"
                     aria-hidden="true"
                 ></div>
             </div>

@@ -364,18 +364,20 @@ against the operator's PCM2903C. The daemon publishes raw measurements
 classifies. Clipping is pinned SPA-side at a fixed near-0 dBFS peak check, not
 configured here.
 
-**`ft8.meter` (`Ft8MeterConfig`, both fields `*int`, resolver
-`types.ResolveFt8Meter`, added 2026-08-07):** the TX-drive (ALC) readout's
-colour bands on the rig's raw 0–255 scale (ADR 0064). `alc_amber` (default 30,
-**operator-RATIFIED 2026-08-07** — green is the HEALTHY band: live FT8 TX
-measured ALC 15–18 with PO flat, never zero while keyed, so a zero-only green
-could never show during a correct transmission) is where green ends and amber
-("genuinely elevated") begins; `alc_red` (default 50, **PROVISIONAL** until a
-deliberate-overdrive datum exists) is where red (overdrive) begins. Both clamp
-to 1–255; an amber floor above the resolved red clamps DOWN to red (an
-unreachable band degrades honestly to binary green/red). Served RESOLVED on GET
-as `ft8_meter`; read-only over `/v1/config` (calibration is a config.json edit +
-restart, like `ft8.audio`).
+**`ft8.meter` (`Ft8MeterConfig`, one `*int` field, resolver
+`types.ResolveFt8Meter`, added 2026-08-07; red folded into amber 2026-08-08):**
+the TX-drive (ALC) readout's colour threshold on the rig's raw 0–255 scale
+(ADR 0064). `alc_amber` (default 30, **operator-RATIFIED 2026-08-07** — green
+is the HEALTHY band: live FT8 TX measured ALC 15–18 with PO flat, never zero
+while keyed, so a zero-only green could never show during a correct
+transmission) is where green ends and amber begins, and amber is the TERMINAL
+"reduce the audio level" state (**ratified 2026-08-08**: the §4
+deliberate-overdrive run measured the RM ALC answer saturating at ~30 of 255
+while the front panel sat +20 dB over the zone — no ALC-only threshold above
+~30 can ever fire, so the provisional `alc_red` was removed; a legacy
+`alc_red` key in an older config.json is ignored). Clamps to 1–255. Served
+RESOLVED on GET as `ft8_meter` (`{"alc_amber":N}`); read-only over
+`/v1/config` (calibration is a config.json edit + restart, like `ft8.audio`).
 
 ### (d) safety-ceiling — const is a non-overridable MAX, not a default ⚠️
 
