@@ -1,7 +1,8 @@
 <script lang="ts">
     /*
-        TX-drive (ALC) readout (ADR 0064) — collapsed it is a value chip
-        ("ALC 26" + state dot), open it is a small card with the 0-255 bar and
+        TX-drive (ALC) readout (ADR 0064) — collapsed it is a label chip
+        ("ALC" + state dot; the number was dropped 2026-08-08 — colour is the
+        at-a-glance signal), open it is a small card with the 0-255 bar and
         the amber-floor marker, following the RX audio card's interaction
         grammar exactly (chip click opens, MINUS folds back — not an X, the
         meter is never closed). Renders nothing until the first ALC poll
@@ -54,9 +55,10 @@
         stale: 'no poll answers',
     };
 
-    const chipText: () => string = $derived(() =>
-        status() === 'stale' ? 'ALC —' : `ALC ${txDriveState.alc?.value ?? 0}`
-    );
+    // Label + dot only (operator, 2026-08-08): colour is the at-a-glance
+    // signal; the raw value lives on the opened card. Stale keeps its dash —
+    // "no data" must never render like a healthy label.
+    const chipText: () => string = $derived(() => (status() === 'stale' ? 'ALC —' : 'ALC'));
 
     const pct = (v: number): number => Math.min(100, Math.max(0, (v / 255) * 100));
 </script>

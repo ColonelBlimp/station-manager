@@ -24,22 +24,26 @@ describe('TxDriveChip', () => {
         expect(chip()).toBeNull();
     });
 
-    it('a fresh zero renders good with the value', () => {
+    // The chip is label + state dot ONLY (operator, 2026-08-08): the raw
+    // number added nothing at a glance — colour is the signal — and the
+    // value still lives on the opened card ('ALC N of 255').
+    it('a fresh zero renders good without the raw value', () => {
         render(TxDriveChip);
         onRigMeters({ meter: 'ALC', value: 0 }, Date.now());
         flushSync();
         expect(chip()!.dataset.state).toBe('good');
-        expect(chip()!.textContent).toContain('ALC 0');
+        expect(chip()!.textContent).toContain('ALC');
+        expect(chip()!.textContent).not.toContain('0');
     });
 
     // 62 sits above the OLD red line (50) — warn here pins the fold (red
     // folded into amber 2026-08-08) at the render level too.
-    it('an over-threshold reading renders warn with the value', () => {
+    it('an over-threshold reading renders warn, still without the value', () => {
         render(TxDriveChip);
         onRigMeters({ meter: 'ALC', value: 62 }, Date.now());
         flushSync();
         expect(chip()!.dataset.state).toBe('warn');
-        expect(chip()!.textContent).toContain('ALC 62');
+        expect(chip()!.textContent).not.toContain('62');
     });
 
     // Same interaction grammar as the RX audio meter beside it: chip click
