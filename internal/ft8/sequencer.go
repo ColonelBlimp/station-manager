@@ -676,6 +676,15 @@ func (s *Sequencer) SetMaxRepeats(n int) {
 	s.mu.Unlock()
 }
 
+// MaxRepeats reports the live repeat cap — the read half of SetMaxRepeats, so
+// the config PUT's live-apply can be checked against what the sequencer will
+// actually enforce (codex 2026-08-08 P2).
+func (s *Sequencer) MaxRepeats() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxRepeats
+}
+
 // staleDecodeLimit is how old a decode may be and still be worked. THE
 // OPERATOR'S NUMBER (2026-07-31), not a derived one.
 //

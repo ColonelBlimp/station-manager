@@ -138,6 +138,19 @@ func (s *Service) DefaultRecipient() string {
 // ctx bounds the entire round-trip via a deadline derived from
 // cfg.TimeoutSec. SMTP servers vary widely in tolerance for slow
 // clients; 30s is the configured default.
+// Timeout reports the configured SMTP transaction budget — the same value
+// Send arms its connection deadline with. Callers that must stay responsive
+// PAST a send (the session-email handler extends its HTTP write deadline over
+// it, codex 2026-08-08 P1) size against this rather than re-reading config,
+// which can have changed since the Service was built. Zero when nil/blank —
+// the caller's margin still applies.
+func (s *Service) Timeout() time.Duration {
+	if s == nil {
+		return 0
+	}
+	return time.Duration(s.cfg.TimeoutSec) * time.Second
+}
+
 func (s *Service) Send(ctx context.Context, msg Message) error {
 	const op errors.Op = "email.Send"
 

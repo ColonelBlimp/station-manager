@@ -2276,7 +2276,7 @@ WHERE  id = ?`,
 // session-email handler logs that gap rather than failing the send,
 // since the mail has already gone out (the "missed" case the Logbook
 // SPA reconciles).
-func (s *Service) MarkSessionEmailedWithContext(ctx context.Context, qsoIDs []int64) (int64, error) {
+func (s *Service) MarkSessionEmailedWithContext(ctx context.Context, qsoIDs []int64, stampDate string) (int64, error) {
 	const op errors.Op = "sqlite.Service.MarkSessionEmailedWithContext"
 	if err := checkService(op, s); err != nil {
 		return 0, err
@@ -2298,8 +2298,11 @@ func (s *Service) MarkSessionEmailedWithContext(ctx context.Context, qsoIDs []in
 	// no string interpolation of caller data.
 	placeholders := make([]string, len(qsoIDs))
 	args := make([]any, 0, len(qsoIDs)+2)
-	today := time.Now().UTC().Format("20060102")
-	args = append(args, adif.YesString, today)
+	// stampDate comes from the CALLER so the date it reports onward (the api
+	// response the SPA renders optimistically) is BY CONSTRUCTION the date
+	// stored — two independent clock readings disagreed across UTC midnight
+	// (codex 2026-08-08 P3).
+	args = append(args, adif.YesString, stampDate)
 	for i, id := range qsoIDs {
 		placeholders[i] = "?"
 		args = append(args, id)

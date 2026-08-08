@@ -830,9 +830,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// until the next restart (review 2026-07-22 #5). The snapshot reflects whichever
 	// save committed last under the config lock.
 	if req.Ft8MaxRepeats != nil {
-		if tx := s.cfg.Snapshot().Ft8.TX; tx != nil {
-			s.ft8.SetMaxRepeats(tx.MaxRepeats)
-		}
+		s.applyCommittedFt8MaxRepeats()
 	}
 
 	resp, err := s.buildConfigResponse(r, s.cfg.Snapshot())
@@ -1406,4 +1404,28 @@ func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig)
 		out = append(out, fc)
 	}
 	return out
+}
+
+// applyCommittedFt8MaxRepeats pushes the COMMITTED ft8.tx.max_repeats value to
+// the running sequencer (the one /v1/config field applied live).
+//
+// ft8ApplyMu makes snapshot→apply atomic against other saves: without it, two
+// interleaved PUTs could commit A-then-B but apply B-then-A, leaving the rig
+// on a cap no response ever reported until the next save or restart (codex
+// 2026-08-08 P2 — the 2026-07-22 #5 fix moved the apply to a committed
+// snapshot but left the pair unserialized). The snapshot is taken INSIDE the
+// lock so whoever applies last applies the latest committed value; lock order
+// is ft8ApplyMu → cfg.mu (Snapshot) → seq.mu (SetMaxRepeats), and nothing
+// takes ft8ApplyMu further down, so no cycle.
+func (s *Server) applyCommittedFt8MaxRepeats() {
+	s.ft8ApplyMu.Lock()
+	defer s.ft8ApplyMu.Unlock()
+	snap := s.cfg.Snapshot()
+	if gap := s.ft8ApplyTestGap; gap != nil { // one-shot interleaving point, tests only
+		s.ft8ApplyTestGap = nil
+		gap()
+	}
+	if tx := snap.Ft8.TX; tx != nil {
+		s.ft8.SetMaxRepeats(tx.MaxRepeats)
+	}
 }

@@ -70,6 +70,12 @@ type SessionEmailResponse struct {
 // The body part is a one-line "ADIF for session ... attached."
 // summary; future versions can let the operator type a free-text
 // note from the panel before send.
+// sessionEmailResponseMargin is head-and-tailroom around the SMTP budget for
+// the session-email response write deadline: the DB fetch, ADIF compose,
+// archive write and forwarded-by-email stamp share the extended window with
+// the send itself.
+const sessionEmailResponseMargin = 30 * time.Second
+
 func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	const op errors.Op = "api.handleSessionEmail"
 
@@ -125,6 +131,18 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	// the set-based stamp SQL counts it once — producing a spurious "fewer rows
 	// stamped than sent" warning (review 2026-06-19 L1).
 	reqUUIDs := dedupeStrings(req.UUIDs)
+
+	// A successful send must always be REPORTABLE: the server's WriteTimeout
+	// armed this connection's write deadline before the handler ran, while
+	// the SMTP budget below can lawfully exceed it (config), so SMTP could
+	// accept the message and the 200 then hit a dead connection — the client
+	// retries and a REAL recipient gets the session twice (codex 2026-08-08
+	// P1). Extend this response's own deadline past the mailer's budget plus
+	// sessionEmailResponseMargin for the fetch/compose/archive/stamp around
+	// the send. Best-effort: a recorder or a transport without deadlines
+	// just keeps today's shape.
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(s.mailer.Timeout() + sessionEmailResponseMargin))
 
 	// Rebuild the ADIF from the live DB rows. The daemon is the source
 	// of truth: it emails exactly the rows it will stamp, current as of
@@ -230,8 +248,11 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	// which the SPA renders as still-unsent. The Logbook SPA (or a
 	// re-send) reconciles the gap. UTC YYYYMMDD matches the upload
 	// stamp's granularity.
-	stampDate := now.Format("20060102")
-	n, err := s.db.MarkSessionEmailedWithContext(r.Context(), stampIDs)
+	// ONE clock reading, taken now (not the pre-send `now`) and passed into
+	// the stamp, so the stored date and the reported date cannot diverge when
+	// a slow send crosses UTC midnight (codex 2026-08-08 P3).
+	stampDate := time.Now().UTC().Format("20060102")
+	n, err := s.db.MarkSessionEmailedWithContext(r.Context(), stampIDs, stampDate)
 	if err != nil {
 		s.logger.ErrorWith().Err(err).Int("qso_count", len(stampIDs)).
 			Msg("session email sent but stamping forwarded-by-email flag failed")

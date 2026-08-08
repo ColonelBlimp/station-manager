@@ -42,7 +42,7 @@ func TestListQsoByLogbook_NotEmailedFiltersEmailed(t *testing.T) {
 
 	// Stamp the first QSO "forwarded by email" (the durable additional_data flag
 	// the filter keys on — the same stamp a real session email writes).
-	if _, err := srv.db.MarkSessionEmailedWithContext(t.Context(), []int64{emailedID}); err != nil {
+	if _, err := srv.db.MarkSessionEmailedWithContext(t.Context(), []int64{emailedID}, "20260808"); err != nil {
 		t.Fatalf("mark emailed: %v", err)
 	}
 

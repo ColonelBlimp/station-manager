@@ -513,6 +513,10 @@ func TestSessionEmailBody_QsoCountAndPluralisation(t *testing.T) {
 type apiSmtpFake struct {
 	listener net.Listener
 	wg       sync.WaitGroup
+	// stall delays the 220 banner — a slow-but-WORKING server: the
+	// transaction still completes, it just takes longer than the HTTP
+	// server's WriteTimeout (the codex 2026-08-08 P1 duplicate-send window).
+	stall time.Duration
 }
 
 func newAPISmtpFake(t *testing.T) *apiSmtpFake {
@@ -562,6 +566,10 @@ func (f *apiSmtpFake) handle(c net.Conn) {
 	flush := func(line string) {
 		_, _ = w.WriteString(line + "\r\n")
 		_ = w.Flush()
+	}
+	if f.stall > 0 {
+		_ = c.SetDeadline(time.Now().Add(f.stall + 5*time.Second))
+		time.Sleep(f.stall)
 	}
 	flush("220 fake.localhost ESMTP")
 

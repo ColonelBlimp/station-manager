@@ -1129,6 +1129,15 @@ func (s *Service) SetMaxRepeats(n int) {
 	s.seq.SetMaxRepeats(n)
 }
 
+// MaxRepeats reports the sequencer's live repeat cap; 0 when FT8 is disabled
+// (nil Service) — the read half of SetMaxRepeats (codex 2026-08-08 P2).
+func (s *Service) MaxRepeats() int {
+	if s == nil || s.seq == nil {
+		return 0
+	}
+	return s.seq.MaxRepeats()
+}
+
 // exchPathLocked resolves the active exchange's antenna path, "S" or "L", applying
 // the short-path default for an unset selection. Caller holds s.txMu.
 //

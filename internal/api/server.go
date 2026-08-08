@@ -44,11 +44,18 @@ type Server struct {
 	// the rig off frequency. Injected by cmd/smd (same shape as ft8.SetTxKeyer /
 	// SetDialSource) so internal/api can compose the two subsystems without either
 	// importing the other. Nil when there is no FT8 subsystem to stop.
-	stopTxForRetune          func() error
-	limits                   *loadLimiter
-	kit                      *httpkit.Kit
-	protocol                 string
-	socketPath               string
+	stopTxForRetune func() error
+	limits          *loadLimiter
+	kit             *httpkit.Kit
+	protocol        string
+	// ft8ApplyTestGap, when non-nil, runs ONCE between the config snapshot and
+	// the sequencer apply in applyCommittedFt8MaxRepeats — the deterministic
+	// interleaving point for the stale-apply race test (codex 2026-08-08 P2).
+	// The window is a few instructions wide, so a stress test never hits it;
+	// nil in production.
+	ft8ApplyTestGap func()
+	// ft8ApplyMu serializes applyCommittedFt8MaxRepeats — see its comment.
+	ft8ApplyMu               sync.Mutex
 	defaultPageLimit         int
 	maxPageLimit             int
 	maxContactHistoryResults int
@@ -469,7 +476,6 @@ func (s *Server) ListenAndServe(socketPath string) error {
 	s.listenerMu.Lock()
 	s.listener = ln
 	s.listenerMu.Unlock()
-	s.socketPath = socketPath // cached for Shutdown's socket-file cleanup
 
 	s.logger.InfoWith().Str("protocol", s.protocol).Str("address", socketPath).Msg("HTTP server listening")
 
@@ -533,10 +539,16 @@ func (s *Server) StopAccepting() {
 // shutdownCh is a no-op for short-lived request handlers — they
 // don't watch it.
 //
-// On Unix-socket deployments the socket file is best-effort removed
-// afterwards so operators grepping /tmp for daemon state don't see a
-// stale file between runs. The next startup's pre-bind cleanup also
-// handles this, but removing on exit keeps the filesystem honest.
+// On Unix-socket deployments the socket file needs NO removal here:
+// Go unlinks a net-created Unix socket when the listener closes
+// (net.UnixListener.SetUnlinkOnClose — "The default behavior is to
+// unlink the socket file only when package net created it"), and
+// http.Server.Shutdown closes listeners before draining, so the path
+// is free by the time Shutdown returns. An explicit os.Remove here
+// raced a REPLACEMENT daemon binding the same path in that window and
+// deleted the successor's live socket (codex 2026-08-08 P1); a crash
+// leftover — the one case unlink-on-close misses — is the pre-bind
+// cleanup's job in ListenAndServe.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.shutdownOnce.Do(func() { close(s.shutdownCh) })
 	err := s.httpServer.Shutdown(ctx)
@@ -548,11 +560,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// the call that failed.
 	if err == nil && !s.shutdownLogged.Swap(true) {
 		s.logger.InfoWith().Msg("HTTP server shutdown complete")
-	}
-	if s.protocol == "unix" && s.socketPath != "" {
-		// Ignore the remove error: the kernel may have already unlinked
-		// the file when the listener closed, and we're on the way out.
-		_ = os.Remove(s.socketPath)
 	}
 	return err
 }
