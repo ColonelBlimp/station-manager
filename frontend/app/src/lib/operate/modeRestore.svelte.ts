@@ -279,14 +279,17 @@ async function applyRestore(to: OpMode, incoming: OperatingSnapshot): Promise<vo
     // A/B on such a rig) abandons the whole restore — carrying on would put
     // the mode on the wrong VFO, the exact corruption the ordering prevents
     // (codex 8092fa81 P1: the first shape skipped the selection and carried
-    // on). The abandon names the front panel as the fix; the unrestored
-    // protection retries on the next switch, once the operator has pressed
-    // A/B back.
+    // on). The abandon names the front panel as the fix, and its instruction
+    // order is load-bearing (codex b3eb919f P2): the retry fires on the next
+    // ENTRY to this mode, and the other mode's snapshot carries the drifted
+    // selection — so the A/B press must happen over THERE. Press-first breaks
+    // the switch-back leg's match and earns a second abandon instead.
     if (incoming.selectedVfo !== rig.selectedVfo) {
         if (!hasOp('select_vfo')) {
             return abandon(
                 to,
-                `this rig cannot select VFO-${incoming.selectedVfo} over CAT — press the rig's A/B, then switch modes again`
+                `this rig cannot select VFO-${incoming.selectedVfo} over CAT — ` +
+                    `switch back, press the rig's A/B to VFO-${incoming.selectedVfo}, then return`
             );
         }
         const r = await rigSelectVfo(incoming.selectedVfo);

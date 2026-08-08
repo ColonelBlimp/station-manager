@@ -1310,12 +1310,25 @@ describe('selection restore (codex ec2fd42d P1)', () => {
                writes the mode onto the wrong VFO, the exact corruption SEL1
                orders against (codex 8092fa81 P1: the first shape of this
                rule skipped the selection but carried on). The abandon toast
-               names the front panel as the fix; the unrestored protection
-               makes the next switch retry once the operator has pressed A/B.
+               names the front panel as the fix.
         SEL4 — a refused select abandons the rest, per the existing rule: the
                commands put the rig at one operating point together, and a
                mode asserted onto the wrong VFO is exactly the state the
                abandon exists to prevent.
+        SEL5 — the abandon toast scripts the recovery that WORKS with the
+               retry-on-next-switch mechanism: switch back (the outgoing
+               mode's snapshot carries the drifted selection, so it matches
+               and its restore is clean), press A/B THERE, then return. The
+               order is load-bearing — pressing A/B first breaks the
+               switch-back leg's match (codex b3eb919f P2: the first message
+               said "press A/B, then switch", the order that fails). The
+               nearest confusable state: a toast whose literal instruction
+               triggers the very abandon it explains.
+        SEL6 — the wrong order (press A/B first) is SAFE, just noisy: the
+               away leg abandons and sends NOTHING — carrying on would be the
+               8092fa81 corruption — and coming straight back finds the
+               selection already matching, so the owed restore completes. The
+               treadmill is not a trap.
     */
     it('SEL1: restores the selected VFO before the mode write', async () => {
         livePhone(); // phone on VFO-A
@@ -1383,5 +1396,67 @@ describe('selection restore (codex ec2fd42d P1)', () => {
         expect(ops).toContain('select_vfo');
         expect(ops).not.toContain('set_freq'); // nothing after the refusal —
         expect(ops).not.toContain('set_mode'); // MD0 would land on the wrong VFO
+    });
+
+    /** SEL3's abandoned state, ready for a recovery walk: phone owed, rig on
+     *  the FT8 position with VFO-B selected, no select_vfo op. */
+    async function abandonedPhoneRestore(): Promise<void> {
+        setRigCaps({
+            ops: ['set_freq', 'set_freq_b', 'set_mode', 'swap_vfo'],
+            tune: false,
+            rigModes: [],
+        });
+        livePhone();
+        await onOperatingModeChange('phone', 'ft8');
+        moveToFt8();
+        catLink.onRigState({ selectedVfo: 'B' }); // front-panel A/B, pushed
+        await onOperatingModeChange('ft8', 'phone'); // abandons (SEL3)
+    }
+
+    it('SEL5: the abandon toast scripts the recovery that works — back, press A/B there, return', async () => {
+        const err = vi.spyOn(toasts, 'error');
+        await abandonedPhoneRestore();
+
+        // The instruction must match the mechanism: the retry fires on the
+        // next entry, so the selection has to be corrected in the OTHER mode.
+        expect(err).toHaveBeenCalledWith(
+            'Could not return the rig: this rig cannot select VFO-A over CAT — ' +
+                "switch back, press the rig's A/B to VFO-A, then return"
+        );
+
+        // Leg 1 — switch back with B still selected: the FT8 snapshot carries
+        // the drifted selection, so it matches; the rig never left the FT8
+        // position, so nothing needs commanding and no second toast fires.
+        sent = [];
+        await onOperatingModeChange('phone', 'ft8');
+        expect(sent).toEqual([]);
+        expect(err).toHaveBeenCalledTimes(1);
+
+        // Leg 2 — A/B pressed while in FT8 … Leg 3 — return: the phone
+        // restore, owed since the abandon, now completes.
+        catLink.onRigState({ selectedVfo: 'A' });
+        await onOperatingModeChange('ft8', 'phone');
+        expect(freqsSent()).toContain('14255000');
+        expect(modesSent()).toContain('USB');
+    });
+
+    it('SEL6: pressing A/B FIRST aborts the away leg but sends nothing, and the round trip converges', async () => {
+        const err = vi.spyOn(toasts, 'error');
+        await abandonedPhoneRestore();
+
+        // The wrong order: A/B pressed immediately. The FT8 snapshot expects
+        // the drifted B, so the away leg must abandon too — and stay silent
+        // (contents/mode past a wrong selection is the 8092fa81 corruption).
+        catLink.onRigState({ selectedVfo: 'A' });
+        sent = [];
+        await onOperatingModeChange('phone', 'ft8');
+        expect(sent).toEqual([]);
+        expect(err).toHaveBeenCalledTimes(2);
+
+        // Coming straight back finds the phone selection already matching:
+        // the owed restore completes rather than looping forever.
+        await onOperatingModeChange('ft8', 'phone');
+        expect(freqsSent()).toContain('14255000');
+        expect(modesSent()).toContain('USB');
     });
 });
