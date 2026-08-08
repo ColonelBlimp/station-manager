@@ -129,9 +129,12 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
 - ~~[2026-07-23]~~ **→ stuck-TX subsystem tracking (triaged 2026-07-24): investigation, not a build. Duration + FT8-residue hypotheses both refuted on a dummy load; RF ingress into the antenna is the remaining lead. Next step is an operator RF experiment (2 s tune into the antenna, 20 m) — if it reproduces, the fix direction is RF mitigation + the hardware-PTT avenue parked in ADR 0057, NOT more CAT detection logic.** **Stuck-tune reproduction attempts — BOTH leading hypotheses DEAD.** All trials into a **dummy load**, via `scripts/tune-duration-probe.sh`, on the pre-fix build (deliberately: the new re-unkey retry would have fought a stuck carrier and masked the raw rig behaviour). **(1) Duration — 0 of 3 stuck at 5 s, 0 of 3 at 2 s.** The "a ~2-second tune catches the FTdx10 mid-TX-ramp" hypothesis is refuted. **(2) FT8 residue — 0 of 3 stuck.** A faithful replay of the incident shape: FT8 CQ transmitting `08:09:00` → session abandoned + `ft8 tx: disarmed` `08:09:15` → tune ON `08:09:27` (12 s later; the incident was 13 s) → three 2 s tune cycles, all `confirmed idle`. **Zero alarms logged since 08:00.** **CORRECTION to the earlier `tx-status 2` lead:** "TX by other means" appears on these CLEAN tune confirmations too, so it is simply how this FTdx10 reports post-unkey state in these modes — NOT evidence that something else is asserting PTT, and not the thread it looked like. **REMAINING VARIABLE: the antenna.** Every test today was into a dummy load; the incident was into the DX Commander vertical at 30 W on 20 m. RF ingress on the CAT/USB path is therefore back as the leading candidate (and it was already the 2026-07-21 hypothesis on 30 m). Next experiment, operator's call on RF exposure: the same 2 s trials **into the antenna** on 20 m. If that reproduces, the fix direction is RF mitigation (common-mode choke on the USB lead, ferrites) plus the hardware-PTT-line avenue parked in ADR 0057 — NOT more CAT-level detection logic. If it does not reproduce, the fault is intermittent and we wait for the next occurrence with a timestamp. **Tooling caveat worth knowing:** the probe script's alarm counter was buggy on first use (`grep -c || echo 0` yields `0\n0` on a clean log, breaking the comparison so a stuck trial would print "clean"). These results are unaffected — the log already held the 06:36 alarm, so the count returned a clean integer — but it was luck, not design. Fixed, along with unvalidated HTTP statuses (a refused stop used to print "clean" while the carrier was potentially still up) and an off-by-one that reported "0 of 4" for a 3-trial run.
   **PRE-REGISTERED 2026-08-08 — the ANTENNA experiment (the surviving lead),
   written before the run.** Same trials, one changed variable: into the DX
-  Commander on 20 m at the configured tune power (the incident's 30 W;
-  reducing is the operator's RF-exposure call, fidelity argues for
-  matching). Run on the CURRENT build — the script header's "no re-unkey
+  Commander on 20 m. Tune power is the ADR 0027 CODE CONST 20 W (config can
+  raise it ≤ 40 W; not set here — operator-corrected 2026-08-08 after this
+  pre-registration first said "the incident's 30 W": that figure was the
+  SSB operating power in the incident narrative, while the incident's tune
+  carrier itself was also the clamped 20 W, so power fidelity holds
+  automatically). Run on the CURRENT build — the script header's "no re-unkey
   retry" instruction was for the raw-characterisation phase, which is over;
   this run validates detection + recovery UNDER the fault, so the retry
   belongs in. Procedure: FT8 idle (view closed, TX disarmed), park on a
@@ -155,6 +158,21 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   and logs richly. (c) Any `bridge: tune auto-off fired` during the run is
   the SECOND anomaly class (the 05:10 off-click that never took effect) —
   record it separately, it is not the stick.
+  **RESULTS 2026-08-08 (run 08:30:33–08:31:00, build `1174-g3e9b8081`,
+  antenna, 20 m, 20 W): outcome (b) — ALL THREE TRIALS CLEAN.** Each off
+  confirmed idle within ~2 s of its on (offs at :36 / :48 / :31:00, every
+  one `tx-status 0`); zero alarms, zero `tx_still_keyed`, zero re-unkeys,
+  zero auto-offs in the entire hour. RF ingress is UNCONFIRMED at this
+  power/band — the antenna variable did NOT reproduce the stick in 3
+  trials, so no hypothesis survives with evidence: the fault is filed as
+  INTERMITTENT. Per the pre-registration: no further deliberate keying;
+  the next natural occurrence on a current build self-recovers (re-unkey
+  retry) and logs richly enough to analyse. The backlog P1 "tx-alarm
+  self-clear" live validation stays open — it needs a real stick to
+  observe, and provoking one is no longer justified. (The two
+  `tune auto-off fired` lines at 07:23:57/07:24:20 predate the run — those
+  were the overdrive session's deliberate full-length tune carriers, no
+  off ever sent, the backstop working as designed — not the 05:10 class.)
 - ~~[2026-07-23]~~ **→ backlog (triaged 2026-07-24): folds into the existing "Operator log viewer (daemon diagnostics) — DB-manager tab" item (backlog); the user-manual "how to read `smd.log` after a stuck-TX" note is the concrete first use case. No new entry needed.** at some point we need to build a logviewer - notice in the notes you added to the user manual: **How to tell.** In `smd.log`, look at what the rig answered after the stop:
 - ~~[2026-07-24] https://qrz.digital/api/swagger-ui/index.html - for further investigation~~ **→ backlog (triaged 2026-07-24): candidate for the "2nd callsign-enrichment provider" item (a REST/OpenAPI service); folded there with the two below as providers to evaluate. Role — enrichment lookup vs logbook forwarder — is part of that deferred investigation.**
 - ~~[2026-07-24] https://www.qrzcq.com/page/developers - for further investigation~~ **→ backlog (triaged 2026-07-24): candidate provider for the "2nd callsign-enrichment provider" item; QRZCQ also hosts a logbook, so possibly a forwarder destination too. Folded (capture-for-evaluation).**
