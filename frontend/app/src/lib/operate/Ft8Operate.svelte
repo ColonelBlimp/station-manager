@@ -512,9 +512,9 @@
              unique job (explaining a no-offset disabled Call CQ) moved into
              the button's title. Both selectors lock while a run is active
              (the parity precedent): changes apply to the NEXT run. -->
-        <div class="mb-2 flex items-center justify-center gap-x-4 text-xs">
+        <div class="mb-2 flex items-center justify-between gap-x-4 text-xs">
             <label class="flex items-center gap-x-1 text-muted">
-                <span>Answer</span>
+                <span>Answer mode</span>
                 <!-- Locked while a run is ARMED too, not just active (codex
                      d7fbf935 P1): an armed auto-work run holds its pinned mode
                      past each contact, so an editable selector there would let

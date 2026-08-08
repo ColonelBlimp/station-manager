@@ -53,6 +53,9 @@ the answer mode as a parameter; only the wire and the SPA treat it as config.
    the bar as duplicated in the Occupancy panel. The one thing that readout
    uniquely explained — "no clear channel yet" on a disabled Call CQ — moves
    into the Call CQ button's disabled tooltip so the explanation survives.)
+   ADJUSTED from use, same day: the two selectors justify to the row's far
+   ends (`justify-between`, was centred), and the label reads "Answer mode".
+   The first adjust of the try-and-adjust phase — recorded, not re-ratified.
 
 3. **Parity-precedent semantics (proposed):** the selector is
    `disabled` while a run is active — changes apply to the next run, which

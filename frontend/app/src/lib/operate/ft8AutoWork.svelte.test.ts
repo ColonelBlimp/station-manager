@@ -315,7 +315,7 @@ it('setFt8SessionDefaults seeds the selector and the toggle; junk is ignored', (
 it('the Answer selector renders, and locks while a run is active', () => {
     ft8Link.onQso({ active: true, their_call: 'DL9UW' });
     render(Ft8Operate);
-    const sel = screen.getByTestId('answer-mode') as HTMLSelectElement;
+    const sel: HTMLSelectElement = screen.getByTestId('answer-mode');
     expect(sel.disabled).toBe(true);
 });
 
@@ -327,7 +327,7 @@ it('the Answer selector renders, and locks while a run is active', () => {
 it('the Answer selector stays locked while an auto-work run is armed', () => {
     ft8Link.onQso({ active: false, auto_work_armed: true });
     render(Ft8Operate);
-    const sel = screen.getByTestId('answer-mode') as HTMLSelectElement;
+    const sel: HTMLSelectElement = screen.getByTestId('answer-mode');
     expect(sel.disabled).toBe(true);
 });
 
@@ -335,6 +335,6 @@ it('the auto-work toggle is disabled under operator_pick', () => {
     ft8State.answerMode = 'operator_pick';
     ft8Link.onQso({ active: false, auto_work_armed: false });
     render(Ft8Operate);
-    const box = screen.getByTestId('auto-work-intent') as HTMLInputElement;
+    const box: HTMLInputElement = screen.getByTestId('auto-work-intent');
     expect(box.disabled).toBe(true);
 });
