@@ -541,13 +541,10 @@ type Sequencer struct {
 	// intent to express there.
 	allowDuplicate        bool
 	pendingAllowDuplicate bool
-	// pendingAutoWork is the operator's per-click auto-work intent (ADR 0065),
-	// staged by the Service with the two fields above and consumed by
-	// armAutoWorkLocked atomically with mode activation. Intent, not state: the
-	// RUN lives in autoWork.
-	pendingAutoWork bool
 	// pendingAnswerMode is the session's answerer-selection mode (ADR 0066),
-	// staged by every Service start on the same contract as pendingAutoWork.
+	// staged by every Service start and consumed by armAutoWorkLocked
+	// atomically with mode activation. Since ADR 0067 it is the WHOLE arming
+	// input — the per-click intent it used to accompany is retired.
 	pendingAnswerMode string
 	startedAt         time.Time // contact start, stamped as the logged QSO's TIME_ON
 	// contact holds the flags whose lifetime is exactly one contact, so ending one
@@ -1184,19 +1181,8 @@ func (s *Sequencer) setPendingAllowDuplicate(allow bool) {
 	s.mu.Unlock()
 }
 
-// setPendingAutoWork stages the operator's per-click auto-work intent (ADR 0065)
-// for the NEXT accepted start, on the same terms as the two setters above:
-// consumed by armAutoWorkLocked under s.mu atomically with mode activation. A
-// rejected start leaves it unconsumed and the next start overwrites it — every
-// start stages it fresh, so it cannot leak between operator actions.
-func (s *Sequencer) setPendingAutoWork(autoWork bool) {
-	s.mu.Lock()
-	s.pendingAutoWork = autoWork
-	s.mu.Unlock()
-}
-
 // setPendingAnswerMode stages the SESSION's answerer-selection mode (ADR 0066)
-// for the NEXT accepted start, on the pendingAutoWork contract: consumed under
+// for the NEXT accepted start: consumed under
 // s.mu atomically with mode activation, staged fresh by every start so it
 // cannot leak between operator actions.
 func (s *Sequencer) setPendingAnswerMode(mode string) {
@@ -1278,6 +1264,12 @@ func (s *Sequencer) onSlotAnswering(ref SlotRef, msgs []goft8.DecodedMessage, no
 	if ref.Period != s.theirPeriod {
 		s.mu.Unlock()
 		return
+	}
+
+	// ADR 0067 (rule 9 generalised): under a pick run the caller list stays
+	// warm DURING the contact, so it is ready the moment this one completes.
+	if s.autoWork.armed && s.autoWork.selectMode == types.Ft8CallerAnswerOperatorPick {
+		s.collectAnswerersLocked(msgs, now)
 	}
 
 	// Advance on their decode directed to us (records their report + our SNR).
@@ -1781,6 +1773,17 @@ func (s *Sequencer) statusLocked() QsoStatus {
 	// would publish it exactly when the operator can already see a ladder, and omit
 	// it exactly when they cannot tell armed from stopped.
 	st.AutoWorkArmed = s.autoWork.armed
+	// ADR 0067: the caller LIST rides every frame of a pick session or listing
+	// run — one list, whatever the entry point — not just CQ-run frames (which
+	// statusModeLocked already populated; the st.AnswerMode=="" check keeps the
+	// CQ path's own carriage authoritative).
+	if st.AnswerMode == "" && s.autoWork.armed &&
+		s.autoWork.selectMode == types.Ft8CallerAnswerOperatorPick {
+		st.AnswerMode = s.autoWork.selectMode
+		for _, a := range s.answerers {
+			st.Answerers = append(st.Answerers, CqAnswerer{Call: a.call, Snr: a.snr})
+		}
+	}
 	return st
 }
 
@@ -2009,29 +2012,26 @@ func (s *Sequencer) AutoWorkArmed() bool {
 // Caller holds s.mu; called from the operator-started session paths only — that is
 // the whole mechanism by which every run is headed by an operator action (ADR 0059).
 //
-// ADR 0065 changed both halves of the decision, and ADR 0066 re-derived the
-// gate from the config knob to the SESSION:
-//   - The staged per-click intent (setPendingAutoWork) is required — nothing
-//     arms by itself. The always-arm rule collected an Abandon-debt twice in
-//     one morning (2026-08-07 06:01:17, 07:26:06).
-//   - A start WITHOUT the intent also CLEARS any armed run: "work that station
-//     only" defines the operator's whole intent, and leaving the old run armed
-//     would resume auto-working on call/offset/dial pinned by a PREVIOUS session —
-//     the stale-pin hazard the StartCallCq clear removed (autowork_test.go W12).
-//   - The staged SESSION mode must be an AUTO mode (ADR 0066): under
-//     operator_pick the operator chooses every station, so a run would either
-//     pick nobody or break that promise — invariant 7. The config knob's old
-//     gate role ended here; config seeds the SPA controls and nothing else.
-//   - The gate refusing (no intent, or a pick-mode session) must never block
-//     the CONTACT; the start proceeds and the published frame's
-//     AutoWorkArmed=false is how the SPA learns the arm was refused (G3).
+// ADR 0067 — one rule: the staged SESSION MODE alone decides. Every
+// operator-started STANDARD session arms a run (the per-click intent grammar
+// of ADR 0065 is retired; the visible session mode selection is the opt-in
+// that answers 0065's silent-arming history). What the run DOES depends on
+// the mode it pinned:
+//   - an AUTO mode: onSlotIdleArmed commits the next caller hands-off;
+//   - operator_pick: a LISTING run — callers are collected and published,
+//     NOTHING transmits without a pop. It "advertises" only what it does
+//     (listing), so invariant 7 holds without an arm-refusal.
+//
+// Each fresh arm REPLACES the previous run and clears the listed callers —
+// a station listed for the old session must not resurrect into the new one
+// (the StartCallCq clear's sibling; adr0067_test.go A6). FD/type-4 starts
+// never reach this (ADR 0059 scope note).
 func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64) {
-	auto := s.pendingAnswerMode == types.Ft8CallerAnswerAutoFirst ||
-		s.pendingAnswerMode == types.Ft8CallerAnswerAutoStrongest
-	if !s.pendingAutoWork || !auto {
+	if !types.Ft8CallerAnswerModeValid(s.pendingAnswerMode) {
 		s.autoWork = autoWorkState{}
 		return
 	}
+	s.answerers = nil
 	s.autoWork.armed = true
 	s.autoWork.call = call
 	s.autoWork.offsetHz = offsetHz

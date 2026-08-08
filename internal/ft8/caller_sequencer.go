@@ -425,7 +425,21 @@ type cqAnswerer struct {
 // whose reply encodes. Specified in operatorpick_test.go.
 func (s *Sequencer) PickAnswerer(call string, now time.Time) error {
 	s.mu.Lock() // first statement — the publish below stays under the lock (invariant 3)
-	if s.mode != seqCalling || s.answerMode != types.Ft8CallerAnswerOperatorPick {
+	// ADR 0067: the pop serves TWO run shapes — the pick CQ run (as since ADR
+	// 0065) and the idle LISTING run any pick session leaves behind. A pop
+	// during an active contact is refused in both (the ratified
+	// refuse-mid-contact rule: one click, one effect; Next parks first).
+	pickRun := s.autoWork.armed && s.autoWork.selectMode == types.Ft8CallerAnswerOperatorPick
+	idlePop := s.mode == seqIdle && pickRun
+	switch {
+	case s.mode == seqCalling && s.answerMode == types.Ft8CallerAnswerOperatorPick:
+		// the CQ-run pop, unchanged below
+	case idlePop:
+		// the listing-run pop — commits a work-caller session further down
+	case (s.mode == seqWorking || s.mode == seqAnswering) && pickRun:
+		s.mu.Unlock()
+		return ErrCqContactInFlight
+	default:
 		s.mu.Unlock()
 		return ErrNoCqPickRun
 	}
@@ -450,11 +464,25 @@ func (s *Sequencer) PickAnswerer(call string, now time.Time) error {
 		return ErrAnswererNotListed
 	}
 	a := s.answerers[idx]
+	s.answerers = slices.Delete(s.answerers, idx, idx+1)
+	if idlePop {
+		// The listing run commits a WORK-CALLER session from its own pinned
+		// facts (call/offset/dial — the ADR 0057 rule: never a live re-read).
+		// The caller's parity comes from the slot they were last heard in.
+		c := NewCallerExchange(s.autoWork.call, a.call, a.grid, a.snr)
+		s.commitWorkCallerLocked(&c, s.autoWork.call,
+			SlotRefFromTime(a.lastHeard).Period, s.autoWork.offsetHz, s.autoWork.dialMHz, now)
+		s.publish(s.statusLocked())
+		s.mu.Unlock()
+		s.log.InfoWith().Str("answerer", a.call).Str("grid", a.grid).Int("snr", a.snr).
+			Msg("ft8 seq: operator picked caller from the listing run; working them")
+		s.fireOpening(now)
+		return nil
+	}
 	c := NewCallerExchange(s.ourCall, a.call, a.grid, a.snr)
 	s.caller = &c
 	s.startedAt = now.UTC()
 	s.contact.repeats = 0
-	s.answerers = slices.Delete(s.answerers, idx, idx+1)
 	// Publish while the lock is still held, like NextAnswerer: an Abandon or slot
 	// evaluation in the gap could end or change the session and publish first,
 	// leaving this stale "reporting" frame cached by the hub as the last word.
@@ -504,6 +532,11 @@ func (s *Sequencer) collectAnswerersLocked(msgs []goft8.DecodedMessage, now time
 			continue
 		}
 		if s.caller != nil && pm.from == s.caller.TheirCall {
+			continue
+		}
+		// ADR 0067: the list is collected during answer-a-CQ sessions too — the
+		// station WE are answering must never list itself as a caller.
+		if s.ex != nil && pm.from == s.ex.TheirCall {
 			continue
 		}
 		c := NewCallerExchange(s.ourCall, pm.from, pm.grid, m.SNR)

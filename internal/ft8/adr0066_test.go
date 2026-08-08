@@ -42,7 +42,7 @@ import (
 	       carried another: the run's selection mode is per-run state, pinned
 	       by a fixture where first-by-decode-order and strongest DIFFER.
 	  R6 — a staged mode leaking between operator actions: every start stages
-	       fresh (the pendingAutoWork contract, inherited).
+	       fresh (the staged-setter contract, inherited).
 */
 
 // startCqWithMode is the service-level start used by R1/R2/R6: TX armed, then
@@ -77,8 +77,7 @@ func TestAdr0066_EmptyModeFallsBackToConfigDefault(t *testing.T) {
 // the post-0066 shape of autowork_test.go's autoWorkRun helper.
 func stagedRun(t *testing.T, s *Sequencer, mode string) {
 	t.Helper()
-	s.setPendingAutoWork(true)
-	s.setPendingAnswerMode(mode)
+	s.setPendingAnswerMode(mode) // ADR 0067: the mode IS the arming input
 	require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 	driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC FN42", -12)})
@@ -95,16 +94,18 @@ func TestAdr0066_SessionFactsArmWithoutAnyConfigKnob(t *testing.T) {
 		"intent + an auto session mode must arm with no config knob involved")
 }
 
-// R4 — intent under "I pick" refuses the arm and leaves the contact alone.
-func TestAdr0066_PickModeRefusesArmContactProceeds(t *testing.T) {
+// R4 — re-derived by ADR 0067: "I pick" now arms a LISTING run beside the
+// contact (the old arm-refusal is superseded — the run advertises exactly
+// what it does). The contact proceeds; adr0067_test.go A3 pins that the
+// listing run transmits nothing without a pop.
+func TestAdr0066_PickModeArmsAListingRunContactProceeds(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	s.setPendingAutoWork(true)
 	s.setPendingAnswerMode("operator_pick")
 	require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
-	require.True(t, s.Active(), "the contact itself must start — the gate refuses the RUN only")
-	require.False(t, s.AutoWorkArmed(), "a run that cannot pick must not advertise")
+	require.True(t, s.Active(), "the contact itself must start")
+	require.True(t, s.AutoWorkArmed(), "a listing run is armed beside it")
 }
 
 // R5 — the armed run selects with the mode the SESSION carried. Two callers,

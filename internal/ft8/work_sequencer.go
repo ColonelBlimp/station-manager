@@ -6,6 +6,7 @@ import (
 	"time"
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // FT8 "work a caller" sequencing (ADR 0033) — working a station that is calling US.
@@ -99,6 +100,12 @@ func (s *Sequencer) onSlotWorking(ref SlotRef, msgs []goft8.DecodedMessage, now 
 	if ref.Period != s.theirPeriod {
 		s.mu.Unlock()
 		return
+	}
+
+	// ADR 0067 (rule 9 generalised): under a pick run the caller list stays
+	// warm DURING the contact, so it is ready the moment this one completes.
+	if s.autoWork.armed && s.autoWork.selectMode == types.Ft8CallerAnswerOperatorPick {
+		s.collectAnswerersLocked(msgs, now)
 	}
 
 	// Advance on their decode directed to us (records their report). Capture what the
@@ -555,10 +562,19 @@ func (s *Sequencer) onSlotIdleArmed(ref SlotRef, msgs []goft8.DecodedMessage, no
 		s.mu.Unlock()
 		return
 	}
-	// pickAnswererLocked matches against these two, so the run supplies them: after a
-	// completion the previous session's identity is gone.
+	// pickAnswererLocked / collectAnswerersLocked match against these two, so the
+	// run supplies them: after a completion the previous session's identity is gone.
 	s.ourCall = s.autoWork.call
 	s.answerMode = s.autoWork.selectMode
+	// ADR 0067: under operator_pick the run LISTS — collect this slot's callers,
+	// publish the list, and commit nothing. The pop (PickAnswerer) is the only
+	// path from here to a transmission.
+	if s.autoWork.selectMode == types.Ft8CallerAnswerOperatorPick {
+		s.collectAnswerersLocked(msgs, now)
+		s.publish(s.statusLocked())
+		s.mu.Unlock()
+		return
+	}
 	pick, text := s.pickAnswererLocked(msgs, now)
 	if pick == nil {
 		s.mu.Unlock()

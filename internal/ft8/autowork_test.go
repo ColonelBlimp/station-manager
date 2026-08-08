@@ -100,7 +100,6 @@ import (
 // daemon's to continue.
 func autoWorkRun(t *testing.T, s *Sequencer, mode string) {
 	t.Helper()
-	s.setPendingAutoWork(true) // the operator's per-click intent (ADR 0065)
 	s.setPendingAnswerMode(mode)
 	require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
@@ -193,7 +192,6 @@ func TestAutoWork_NeverArmsFromIdle(t *testing.T) {
 	s := newTestSeq(r)
 	// ADR 0066: even WITH intent and an auto mode staged, no slot can arm a
 	// run — only an operator-started session consumes the staging.
-	s.setPendingAutoWork(true)
 	s.setPendingAnswerMode("auto_first")
 
 	driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
@@ -273,12 +271,10 @@ func lastSent(r *seqRecorder) string {
 func TestAutoWork_AnsweringACqArmsTheRun(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	s.setPendingAnswerMode("auto_first") // the session's auto mode (ADR 0066)
-	// ADR 0065 amended the arming rule: an operator-started session arms the run
-	// only when the click CARRIED the intent. The entry point is unchanged —
-	// answering a CQ still arms — but the intent is now explicit, not implied by
-	// the policy. G2 below pins the flip side (no intent → no run).
-	s.setPendingAutoWork(true)
+	// ADR 0067: the staged session mode IS the arming input — the per-click
+	// intent grammar is retired. The entry point is unchanged: answering a CQ
+	// under an auto mode arms the run.
+	s.setPendingAnswerMode("auto_first")
 
 	// Answer K1ABC's CQ and run the exchange to completion.
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
@@ -316,7 +312,7 @@ func TestAutoWork_ConfigDefaultArmsThroughARealService(t *testing.T) {
 	// the real clock. The run arms AT START (armAutoWorkLocked runs in the
 	// start path), so no exchange needs driving.
 	require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
-		time.Now().UTC().Format(time.RFC3339), 1500, 14.074, 1, false, true, ""))
+		time.Now().UTC().Format(time.RFC3339), 1500, 14.074, 1, false, ""))
 	require.True(t, s.seq.AutoWorkArmed(),
 		"the config default mode must arm a run through the Service path without a test reaching in")
 }
@@ -334,10 +330,13 @@ func TestAutoWork_OperatorPickDoesNotArmARun(t *testing.T) {
 		},
 	}, logging.Noop(), nil)
 
-	s.seq.setPendingAutoWork(true) // even a click carrying the intent must not arm under this mode
+	s.seq.setPendingAnswerMode("operator_pick")
 	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
-	require.False(t, s.seq.AutoWorkArmed(), "operator_pick must not arm an automatic run")
+	// Re-derived by ADR 0067: pick now arms a LISTING run — the promise it
+	// advertises is listing, not auto-working, and adr0067_test.go A3 pins
+	// that such a run transmits NOTHING without a pop.
+	require.True(t, s.seq.AutoWorkArmed(), "operator_pick arms a listing run")
 }
 
 // --- STOP CONDITIONS (ADR 0059, operator's call 3) ---------------------------
@@ -367,7 +366,6 @@ func autoWorkService(t *testing.T) *Service {
 			// these rules need an ARMED run, i.e. a config that opted in.
 			CallerAnswerMode: types.Ft8CallerAnswerAutoFirst},
 	}, logging.Noop(), nil)
-	s.seq.setPendingAutoWork(true)           // the operator's per-click intent (ADR 0065)
 	s.seq.setPendingAnswerMode("auto_first") // the session's auto mode (ADR 0066)
 	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
@@ -410,7 +408,6 @@ func TestAutoWork_CatLossStopsTheRun(t *testing.T) {
 	_, unsub := s.Subscribe() // FT8 view open + CAT live → capturing
 	defer unsub()
 
-	s.seq.setPendingAutoWork(true)           // the operator's per-click intent (ADR 0065)
 	s.seq.setPendingAnswerMode("auto_first") // the session's auto mode (ADR 0066)
 	require.NoError(t, s.seq.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
@@ -589,14 +586,15 @@ func TestAutoWork_CallCqFrameReportsTheStoppedRun(t *testing.T) {
 	too).
 */
 
-// G2 — THE FLIP of W9: a start WITHOUT the intent (the plain click, "work that
-// station only") arms nothing, even with an auto session mode staged. A caller
-// after the contact is left alone — the exact behaviour the operator asked for.
-func TestAutoWork_PlainStartDoesNotArm(t *testing.T) {
+// G2 — re-derived by ADR 0067 (the old rule — a plain start arms nothing —
+// is SUPERSEDED; adr0067_test.go A2 pins the new behaviour): a start with NO
+// session mode staged arms nothing. Unreachable through the Service (it
+// always stages a resolved mode) — this pins the sequencer-level staging
+// contract so a future start path cannot skip the staging and inherit a run.
+func TestAutoWork_NoStagedModeArmsNothing(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	s.setPendingAnswerMode("auto_first")
-	// No setPendingAutoWork — the plain click.
+	// No setPendingAnswerMode — the staging contract violation under test.
 
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
@@ -612,14 +610,14 @@ func TestAutoWork_PlainStartDoesNotArm(t *testing.T) {
 	require.Len(t, r.sentMsgs(), before)
 }
 
-// G3 — THE GATE. Intent carried, policy off: the CONTACT proceeds normally and
-// no run is armed. A refused arm must never cost the QSO — the 15 s slot window
-// leaves no room for a retry after a rejection.
+// G3 — THE GATE's refusing side (re-derived by ADR 0067: no mode staged —
+// the one refusal left): the CONTACT proceeds normally and no run is armed.
+// A refused arm must never cost the QSO — the 15 s slot window leaves no
+// room for a retry after a rejection.
 func TestAutoWork_GateRefusesArmNotContact(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	// Policy never enabled — the gate is closed.
-	s.setPendingAutoWork(true)
+	// No mode staged — the gate's only refusing condition now.
 
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
@@ -638,18 +636,21 @@ func TestAutoWork_GateRefusesArmNotContact(t *testing.T) {
 // operator's whole intent, and leaving the old run armed would resume
 // auto-working on call/offset/dial pinned by a PREVIOUS session — the same
 // stale-pin hazard the StartCallCq clear removed (W12).
-func TestAutoWork_PlainStartClearsAnArmedRun(t *testing.T) {
+func TestAutoWork_UnstagedStartClearsAnArmedRun(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
 	autoWorkRun(t, s, "auto_first")
 	require.True(t, s.AutoWorkArmed(), "fixture: a run is armed")
 
-	s.setPendingAutoWork(false) // the next click is plain
+	// Re-derived by ADR 0067: every start REPLACES the run; one that stages
+	// no mode (unreachable through the Service) must CLEAR rather than
+	// inherit the previous session's pins — the stale-pin hazard unchanged.
+	s.setPendingAnswerMode("")
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "M7ABC", "IO83",
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
 
 	require.False(t, s.AutoWorkArmed(),
-		"a work-only start must clear the previous session's run, not inherit its pins")
+		"an unstaged start must clear the previous session's run, not inherit its pins")
 	require.False(t, r.lastStatus().AutoWorkArmed, "…and the frame must say so")
 }
 
@@ -658,7 +659,6 @@ func TestAutoWork_PlainStartClearsAnArmedRun(t *testing.T) {
 func TestAutoWork_StopRunLeavesActiveContact(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	s.setPendingAutoWork(true)
 	s.setPendingAnswerMode("auto_first")
 	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
 		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
@@ -708,7 +708,6 @@ func TestAutoWork_StopRunWhileIdlePublishesAndIsIdempotent(t *testing.T) {
 func TestAutoWork_WorkCallerFirstFrameCarriesTheGrantedArm(t *testing.T) {
 	r := &seqRecorder{}
 	s := newTestSeq(r)
-	s.setPendingAutoWork(true)
 	s.setPendingAnswerMode("auto_first")
 
 	require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,

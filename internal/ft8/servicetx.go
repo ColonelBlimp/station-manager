@@ -838,7 +838,7 @@ func (s *Service) dialState() (mhz float64, tracked, known bool) {
 // theirSlotUTC) and a clear offset. Requires TX **armed** — the sequencer keys
 // through the armed controller. ourCall/ourGrid are the station identity the api
 // layer resolved from config.
-func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate, autoWork bool, answerMode string) error {
+func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool, answerMode string) error {
 	const op errors.Op = "ft8.Service.StartQso"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -868,7 +868,6 @@ func (s *Service) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC 
 	// start overwrites it (all serialised by seqGate), so no restore is needed here.
 	s.seq.setPendingLogbook(logbookID)
 	s.seq.setPendingAllowDuplicate(allowDuplicate)
-	s.seq.setPendingAutoWork(autoWork)
 	s.seq.setPendingAnswerMode(s.effectiveAnswerMode(answerMode))
 	if err := s.seq.StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)
@@ -966,7 +965,7 @@ func (s *Service) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz flo
 // is our SNR of that signal (the report we send back). Requires TX **armed** — the
 // sequencer keys through the armed controller. ourCall is the station identity the
 // api layer resolved from config.
-func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate, autoWork bool, answerMode string) error {
+func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr int, theirSlotUTC string, offsetHz, dialFreqMHz float64, logbookID int64, allowDuplicate bool, answerMode string) error {
 	const op errors.Op = "ft8.Service.StartWorkCaller"
 	if err := s.validateTxOffset(op, offsetHz); err != nil {
 		return err
@@ -982,7 +981,6 @@ func (s *Service) StartWorkCaller(ourCall, theirCall, theirGrid string, theirSnr
 	// Stage the arm-time logbook before the start (ADR 0055) — see StartQso.
 	s.seq.setPendingLogbook(logbookID)
 	s.seq.setPendingAllowDuplicate(allowDuplicate)
-	s.seq.setPendingAutoWork(autoWork)
 	s.seq.setPendingAnswerMode(s.effectiveAnswerMode(answerMode))
 	if err := s.seq.StartWorkCaller(ourCall, theirCall, theirGrid, theirSnr, theirSlotUTC, offsetHz, dialFreqMHz, time.Now().UTC()); err != nil {
 		s.restoreExchangePath(prevPath, prevGen)

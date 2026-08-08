@@ -137,7 +137,8 @@ type ft8QsoStartRequest struct {
 	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
 	// AutoWork is the operator's per-click auto-work intent (ADR 0065): true arms an
 	// auto-work-callers run alongside this contact (the ctrl+shift gesture or the
-	// Auto-work toggle), gated daemon-side on ft8.tx.auto_work_callers. Absent/false
+	// Auto-work toggle). INERT since ADR 0067 — the session's answer_mode alone
+	// decides run behaviour; accepted (and ignored) for old clients. Absent/false
 	// works this station only — and clears any run a previous session armed.
 	// Standard exchange mode only; FD and type-4 sessions never arm a run.
 	AutoWork bool `json:"auto_work,omitempty"`
@@ -225,7 +226,7 @@ func (s *Server) handleFt8QsoStart(w http.ResponseWriter, r *http.Request) {
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	default:
 		err = s.ft8.StartQso(ourCall, ls.MyGridsquare, req.TheirCall, req.TheirGrid, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AutoWork, req.AnswerMode)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AnswerMode)
 	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)
@@ -372,7 +373,8 @@ type ft8QsoWorkRequest struct {
 	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
 	// AutoWork is the operator's per-click auto-work intent (ADR 0065): true arms an
 	// auto-work-callers run alongside this contact (the ctrl+shift gesture or the
-	// Auto-work toggle), gated daemon-side on ft8.tx.auto_work_callers. Absent/false
+	// Auto-work toggle). INERT since ADR 0067 — the session's answer_mode alone
+	// decides run behaviour; accepted (and ignored) for old clients. Absent/false
 	// works this station only — and clears any run a previous session armed.
 	// Standard exchange mode only; FD and type-4 sessions never arm a run.
 	AutoWork bool `json:"auto_work,omitempty"`
@@ -450,7 +452,7 @@ func (s *Server) handleFt8QsoWork(w http.ResponseWriter, r *http.Request) {
 			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate)
 	default:
 		err = s.ft8.StartWorkCaller(ourCall, req.TheirCall, req.TheirGrid, req.TheirSnr, req.SlotUTC,
-			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AutoWork, req.AnswerMode)
+			req.OffsetHz, req.OperatingFreqMHz, logbookID, req.AllowDuplicate, req.AnswerMode)
 	}
 	if err != nil {
 		s.writeFt8QsoError(w, op, err)
