@@ -515,13 +515,20 @@
         <div class="mb-2 flex items-center justify-center gap-x-4 text-xs">
             <label class="flex items-center gap-x-1 text-muted">
                 <span>Answer</span>
+                <!-- Locked while a run is ARMED too, not just active (codex
+                     d7fbf935 P1): an armed auto-work run holds its pinned mode
+                     past each contact, so an editable selector there would let
+                     the UI claim "I pick" while the run auto-works with the
+                     old mode. Stop the run (the pill) to change it. -->
                 <select
                     class="rounded border border-line bg-surface px-1 py-0.5 text-xs text-ink disabled:opacity-50"
                     bind:value={ft8State.answerMode}
-                    disabled={qso.active}
+                    disabled={qso.active || qso.autoWorkArmed}
                     data-testid="answer-mode"
                     aria-label="Call CQ answerer selection mode"
-                    title="How a CQ run answers callers — config.json holds the default; this is the session's choice"
+                    title={qso.autoWorkArmed && !qso.active
+                        ? 'A run is armed with this mode — stop it (click the pill) to change'
+                        : "How a CQ run answers callers — config.json holds the default; this is the session's choice"}
                 >
                     <option value="auto_first">First answerer</option>
                     <option value="auto_strongest">Strongest</option>
