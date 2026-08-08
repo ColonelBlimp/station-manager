@@ -57,8 +57,11 @@
           — asserting a data mode on a phone frequency is worse than nothing.
 
     A26 (drafted 2026-08-07 from the dogfood report "changing from ft8 to
-        phone/cw the mode and freq are not reset"; judgement calls drafted,
-        NOT yet operator-ratified — flagged in the session report): a page
+        phone/cw the mode and freq are not reset"; RATIFIED 2026-08-08 by
+        the on-hardware demo — park on 14.255 USB, boot the browser on
+        /app/operate/ft8 [rig untouched, confirming boot is not a switch],
+        FT8 band click moves the rig, switch to phone returns it to the
+        parked position — operator confirmed every step): a page
         session that BEGINS on the FT8 view (reload or deep link — routine
         straight after a deploy) captures the rig's position as first
         reported after boot, and the first switch to Phone/CW returns the

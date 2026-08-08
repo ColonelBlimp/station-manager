@@ -810,10 +810,13 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   first triage was DROPPED: the manual's BS section is silent on same-band
   behaviour (front-panel same-band presses CYCLE the stack), so it gambles;
   boot-capture never does worse than the old no-op. AMENDS criterion A4's
-  letter (its no-stale-snapshot rationale survives — flagged as drafted, not
-  yet operator-ratified, in the `modeRestore.svelte.test.ts` header, A26 +
-  MB1–MB5). **Caveat stands:** if phone WAS operated earlier in the same page
-  session and a restore still doesn't fire, that's a different defect.
+  letter (its no-stale-snapshot rationale survives) — **RATIFIED 2026-08-08
+  by the on-hardware demo** (park 14.255 USB → boot on /app/operate/ft8, rig
+  untouched → FT8 band click moves it → switch to phone returns it to the
+  parked position; operator confirmed every step; criterion header A26 +
+  MB1–MB5 in `modeRestore.svelte.test.ts`). **Caveat stands:** if phone WAS
+  operated earlier in the same page session and a restore still doesn't
+  fire, that's a different defect.
 - [2026-08-07] bug - when selecting VFO-B the freq is change to the current freq shown in VFO-A - vfo select does not work
   **TRIAGED 2026-08-07 late night — the observable is the DESIGNED behaviour
   (click-to-select is implemented as SWAP), and the premise under that design
@@ -833,7 +836,11 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   2026-06-04) and the daemon still PARSES pushed VS frames (rigdef SELECT tag
   → `rig.selectedVfo`).
   **FIXED 2026-08-07 late night (operator directed "fix these two"), built on
-  the manual's legend — ON-HARDWARE VALIDATION STILL PENDING:** the FTdx10
+  the manual's legend — VALIDATED ON HARDWARE 2026-08-08: the pre-registered
+  first click, run by the operator with VFO-B on a deliberately different
+  frequency, moved the operating dial to B's own content. VS is a true
+  select; the manual legend holds; S~2527's "flag only" observation was the
+  equal-contents confound as suspected.** The FTdx10
   rigdef regained `select_vfo` (`VS%s;`, SELECT value map — VS0/VS1), and the
   VFO box click now SELECTS on a rig exposing it: the dot moves, both boxes
   keep their contents, optimistic + rollback, confirm via the pushed VS frame

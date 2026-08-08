@@ -264,8 +264,11 @@ export async function driveRig(op: string, value?: string | number): Promise<Rig
  * the earlier "select the other == swap" reading, whose content mirror was the
  * 2026-08-07 dogfood report ("selecting VFO-B changes the freq to VFO-A's") —
  * that reading rested on an on-rig observation ("VS toggles a flag only")
- * plausibly confounded by equal VFO contents; on-hardware validation of the
- * select is pre-registered in rig.svelte.test.ts (SV rules).
+ * plausibly confounded by equal VFO contents. VALIDATED ON HARDWARE
+ * 2026-08-08 (the pre-registered check, operator at the FTdx10): with VFO-B
+ * on a deliberately different frequency, clicking VFO-B moved the operating
+ * dial to B's own content — VS is a true select, the manual legend holds,
+ * and the "flag only" observation was indeed the equal-contents confound.
  *
  * Without select_vfo the old behaviour stands: with two VFOs, "select the
  * other" degrades to swap_vfo (SV; exchanges contents).
