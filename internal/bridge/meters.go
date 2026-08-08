@@ -293,10 +293,17 @@ func (s *Service) observeMeter(status cat.Status) {
 		// PUSHED frames only (ADR 0064): the RM4/RM5 poll answers arrive at
 		// 4 Hz whenever the FT8 meter poll runs, and feeding them here would
 		// cap every measured gap at the poll cadence and keep the instrument
-		// looking alive while the PUSHED stream — the drive-collapse signal —
-		// went quiet. A polled PO of 000 is a value; the push stream going
-		// silent is the evidence. The answers still reach meterLatest and the
-		// keyed accumulator below, which is the ADR's intent.
+		// looking alive while the PUSHED stream went quiet. The answers still
+		// reach meterLatest and the keyed accumulator below, which is the
+		// ADR's intent. AMENDED 2026-08-08: pushed silence alone stopped
+		// being sufficient no-output evidence — the rig pushes on CHANGE, so
+		// a dead-flat PO envelope pushes almost nothing while the poll
+		// measures full output (104-108 at 53 answers/slot, live). The gap
+		// bookkeeping here stays push-only (this comment's original rule);
+		// the ALARM now also consults pollPoPositiveAt, recorded below.
+		if tag == "PO" && n > 0 {
+			s.pollPoPositiveAt = time.Now()
+		}
 		if tag == meterPushedTag {
 			s.noteMeterPush()
 			if s.markMeterSeenLocked() {

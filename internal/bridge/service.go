@@ -323,6 +323,13 @@ type Service struct {
 	driveWatchArmed    bool
 	driveAlarmStanding bool
 
+	// pollPoPositiveAt is when the last ADR 0064 poll answer measured PO
+	// ABOVE ZERO — the drive alarm's second witness (dogfood 2026-08-08:
+	// pushed frames collapsed to 6-8/slot on a dead-flat envelope while the
+	// poll measured 104-108 all slot long, and the alarm cried no-output on
+	// every transmission). Guarded by s.mu with the rest of the meter state.
+	pollPoPositiveAt time.Time
+
 	// driveWatchOutcome is THIS transmission's drive-watch state, reported on its
 	// meters record; driveWatchState is the last state REPORTED to the operator and
 	// is what the transition machine compares against.

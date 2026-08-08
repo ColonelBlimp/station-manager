@@ -48,39 +48,58 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **MIDDAY 2026-08-08: tree CLEAN at `8dd2beb2`; CI GREEN — first green in
-  40+ runs.** The gate (the trunk workflow's ONLY merge protection) had sat
-  red ~2 days on two maintidx crossings from the 0064/0065 feature work
-  (`runPipeline`, `onSlotWorking`, both MI 19) — exempted-with-rationale in
-  `.golangci.yml`. A full green run costs ~14 min; the 3–4 min figures all
-  week were failures truncating at lint. NEW HABIT: `gh run list -L1` rides
-  the post-commit review loop.
-- **DEFAULT FLIP — a BEHAVIOUR CHANGE riding the next deploy:**
-  `caller_answer_mode` now RESOLVES to `operator_pick` (operator-ratified,
-  licensing: automation is an explicit opt-in; absent/invalid fail to the
-  non-automatic mode; dated notes in ADR 0065 + 0033). On the next
-  deploy+restart the dogfood station runs operator_pick AND auto-work stops
-  arming — write `auto_first` into config.json (smd stopped) to restore
-  auto-working. Check 7c then needs NO config edit: an unconfigured Call CQ
-  IS a pick run. Wire asymmetry is deliberate: GET serves pick, PUT refuses
-  the literal (codex P1 REFUTED — no served client echoes the field;
-  rationale in handler_config.go).
-- **Stuck-TX thread PARKED ON EVIDENCE.** The pre-registered antenna
-  RF-ingress repro ran 3/3 CLEAN (08:30, 20 m, 20 W — tune power is the
-  code-const 20 W; the incident's "30 W" was SSB operating power). No
-  hypothesis survives (duration + FT8-residue died 07-24, ingress
-  unconfirmed now): fault filed INTERMITTENT, no further deliberate keying;
-  the next natural stick self-recovers (re-unkey retry) and logs richly.
-- **Morning batch (earlier today, all recorded):** hardware acceptance 4/4
-  (VFO select validated · selection restore · A26 ratified) · ADR 0064
-  ACCEPTED (RM ALC saturates ~30/255 → red folded into amber, `alc_red`
-  removed) · PSK IPFIX announcement SENT to the PSK Reporter group
-  (collector feedback → inbox).
-- **NEXT:** redeploy (MIND THE FLIP above) → 0065 gestures (7c = just Call
-  CQ) · Settings→FT8 dropdown port gap (+ `ft8_max_repeats` sibling; a
-  resolved operator_pick must render READ-ONLY, never snap-and-save) ·
-  findings 9/10 · paste-list port · Tune-coverage · qsoservice Q4–Q10 ·
-  backlog strikes (auto_first validation, 192/193 retest) await the word.
+- **AFTERNOON 2026-08-08: pushed through `2da99b89`, CI GREEN (14m03s,
+  full pipeline — the 0066 arc is through the gate); daemon DEPLOYED at
+  `1183-g2da99b89`.** Earlier CI drama: one silently-FAILED push (found
+  via `ahead 2` — pushes can fail without anyone noticing) and one lint
+  red (3 `no-unnecessary-type-assertion` a flaky local pass had hidden —
+  casts→annotations). **TREE HOLDS the drive-alarm poll-witness fix,
+  uncommitted** (next bullet).
+- **DRIVE ALARM FALSE POSITIVE, live at 12:29 — FIXED IN TREE, wants a
+  commit + redeploy:** `drive_no_output` fired on EVERY transmission while
+  the ADR 0064 poll measured PO 104–108 at 53 answers/slot — full output.
+  The pushed RM0 stream had collapsed to 6–8 frames/slot (hypothesis: the
+  rig pushes on CHANGE and the envelope was dead flat, po_min=po_max=105;
+  this also CORRECTS the morning's gap dismissal — those gaps tracked
+  steady PO, not hands on the rig). Fix: the alarm now consults the poll
+  as a second witness — a polled PO **> 0** inside the silence window
+  withholds the alarm (zero IS the alarm's claim; a measurement beat it);
+  polls at zero or stale still alarm (the real collapse keeps firing).
+  Spec DP1–DP3 in `drivealarm_test.go`; new watch state `poll_output`;
+  recovery untouched (it keys off the pushed gap). P4 intact — the push
+  liveness bookkeeping is not fed.
+- **ADR 0066 (Accepted try-and-adjust, designed+built same day): FT8 run
+  knobs are SESSION STATE; config.json holds only defaults.** Born on air:
+  "auto-work next contact is not working" was the flip working as ratified
+  (explicit operator_pick in config from the 7c prep edit — NOT an absent
+  key; my grep missed the space), and the operator ruled the config-knob
+  model too confusing. Now: the **Answer mode selector** in the TX control
+  bar (with CQ slot, justified to the row's far ends; TX-offset readout
+  removed → Call CQ button title) is the live control, carried on
+  cq/start + the auto-work intent; **the arming gate reads the session,
+  not config** (`SetAutoWorkCallers`/`autoWorkPolicy` DELETED; config knob
+  = the toggle's boot seed, served as `ft8_auto_work_callers`); under "I
+  pick" the toggle disables-with-reason and the intent drops at the
+  source; the config PUT accepts all three literals as DEFAULTS (the 0065
+  fence retired). Specs `internal/ft8/adr0066_test.go` R1–R6 +
+  `ft8AutoWork.svelte.test.ts` SP1–SP4b, all reversion-probed.
+- **Review rounds on the arc:** d7fbf935 P1 (selector editable while
+  idle-and-ARMED — a UI claiming "I pick" while an armed run auto-works;
+  lock widened to `active || autoWorkArmed`) · a1a0aaca, c1e17c12,
+  2da99b89 all clean. ALC chip is now label+dot (number on the card only).
+- **OPERATIONALLY, at the rig right now (1183):** the Answer mode selector
+  seeds to "I pick" from your config; flip it to **First answerer** to
+  restore auto-working — no config edit, ever. A pick run = leave it and
+  Call CQ (= check 7c in normal use). Until the alarm fix deploys, treat
+  the "no RF output" banner as noise — every summary line carries the poll
+  PO proving output.
+- **NEXT:** on-air try-and-adjust (selector flow · pill on a work-caller
+  arm · FD click · adjust-list: seeded one-shot toggle's feel,
+  max_repeats session scope) · redeploy at leisure (cosmetics) · Settings
+  dropdown = DEFAULTS editor now · findings 9/10 · paste-list ·
+  Tune-coverage · Q4–Q10 · backlog strikes await the word. Morning's
+  record (hardware 4/4, ADR 0064 Accepted, stuck-TX parked, PSK announce)
+  is in Current state.
 
 ## Current state (as of 2026-08-08)
 

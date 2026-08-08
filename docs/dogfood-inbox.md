@@ -913,6 +913,25 @@ Format: one bullet per note, newest at the bottom, date-stamped `[YYYY-MM-DD]`.
   and whether one hot slot suffices or it wants persistence across slots.
   Do NOT rebuild it as an ALC threshold — that shape is what the fold
   removed, and the instrument cannot carry it.
+- [2026-08-08] BUG (live on air, 12:29, EVERY transmission): **drive alarm
+  false positive — "no RF output" while transmitting at full power.**
+  `drive_no_output` fired on every keyed slot (gap_ms 3000, meter_sel PO)
+  while the SAME summary lines show the ADR 0064 POLL answering 53×/slot
+  with PO steady 104–108 — full power, measured, all slot long. The alarm
+  predates the poll and consults ONLY the pushed RM0 stream, whose rate had
+  collapsed to 6–8 frames/13 s (gap_max up to 12.9 s). Push-collapse
+  mechanism (HYPOTHESIS, labelled): AI pushes fire on value CHANGES, and the
+  PO envelope was dead flat (po_min 105 = po_max 105) — a rock-steady needle
+  pushes nothing; July's healthy ~150/slot had jitter. CORRECTS the
+  morning's gap dismissal: the 2–2.5 s gaps on the overdrive slots
+  correlated with STEADY PO (collapsed ~35 flat), not with hands on the rig
+  — the pre-registered re-check trigger fired same day. FIX (built same
+  day): the alarm consults the poll answers as a second witness — a recent
+  polled PO **> 0** (the alarm's literal claim, tested against a
+  measurement; not an invented threshold) suppresses the no-output
+  inference, because a genuinely dead drive polls at zero. P4 ("poll
+  answers must NEVER feed noteMeterPush") is untouched — the push-liveness
+  bookkeeping is not fed; the ALARM gains a second condition.
 - [2026-08-08] PORT GAP (surfaced when the operator went looking for the
   knob): Settings→FT8 has NO `caller_answer_mode` control. The dropdown
   (auto_first / auto_strongest) lived in the RETIRED logging SPA

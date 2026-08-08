@@ -79,6 +79,13 @@ const (
 	// stopped being evidence about RF. Distinct from meter_not_po, which is the
 	// arm-time refusal — the two have different causes and different fixes.
 	driveWatchMovedOffPO = "meter_moved_off_po"
+	// driveWatchPollOutput: the pushed stream went silent past the threshold but
+	// the ADR 0064 poll measured PO ABOVE ZERO within the window — output is
+	// real, the alarm is withheld, and the watch keeps running (dogfood
+	// 2026-08-08: a dead-flat envelope pushes almost nothing, the rig pushing
+	// on change; the poll answered 53x/slot at 104-108 while the old
+	// push-only alarm cried no-output every transmission).
+	driveWatchPollOutput = "poll_output"
 )
 
 // DriveAlarmPayload is the drive-alarm event payload. Code is an i18n key (ADR
@@ -497,6 +504,23 @@ func (s *Service) checkDriveSilence(gen uint64) {
 	if since := time.Since(s.driveLastMeterAt); since < s.driveSilence {
 		s.driveTimer = time.AfterFunc(s.driveSilence-since, func() { s.checkDriveSilence(gen) })
 		s.mu.Unlock()
+		return
+	}
+	// THE SECOND WITNESS (dogfood 2026-08-08). Pushed silence is what tripped
+	// this timer, but the rig pushes on CHANGE — a dead-flat PO envelope pushes
+	// almost nothing while output is perfectly normal. A poll answer that
+	// measured PO ABOVE ZERO inside the same window is direct contrary evidence
+	// to the claim this alarm makes ("no RF output" — zero is the claim, and a
+	// measurement beat it). A genuinely dead drive still answers polls, at
+	// zero, so the real collapse keeps alarming; and the freshness bound is the
+	// SAME driveSilence window — no new threshold. The watch re-arms rather
+	// than retiring: if the polls die mid-slot too, the remaining silence
+	// alarms.
+	if !s.pollPoPositiveAt.IsZero() && time.Since(s.pollPoPositiveAt) < s.driveSilence {
+		s.driveTimer = time.AfterFunc(s.driveSilence, func() { s.checkDriveSilence(gen) })
+		s.enterDriveWatchStateLocked(driveWatchPollOutput, gen)
+		s.mu.Unlock()
+		s.flushDriveWatchLog()
 		return
 	}
 	// Once per transmission. A ticker would raise four banners for one fault in a

@@ -1031,3 +1031,69 @@ func TestDriveMonitor_UnknownSelectionReportsNothing(t *testing.T) {
 		t.Errorf("driveMonitor=%q on a frame with no meter selection; want empty", p.DriveMonitor)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The poll witness (dogfood 2026-08-08 12:29, EVERY transmission alarming).
+// The pushed RM0 stream collapsed to 6-8 frames/13 s while the ADR 0064 poll
+// answered 53x/slot with PO steady 104-108 — full output, measured, the whole
+// slot — and the alarm cried "no RF output" anyway, because its only witness
+// was the pushed stream. The rig pushes on CHANGE, and a dead-flat PO
+// envelope (po_min = po_max = 105) pushes almost nothing, so pushed silence
+// stopped being sufficient evidence the moment the poll existed.
+//
+// DP1 — pushes silent + polls measuring POSITIVE output: NO alarm. The
+//       operator's exact session, and the confusable it guards is the alarm
+//       state itself (a false "no RF" on every slot trains the operator to
+//       ignore the banner that exists for a real collapse).
+// DP2 — pushes silent + polls answering ZERO: the alarm FIRES. A genuinely
+//       dead drive still polls — at zero. "Positive" is the alarm's own
+//       claim tested against a measurement, not an invented threshold.
+// DP3 — a positive poll OLDER than the silence window does not suppress:
+//       freshness is bounded by the same driveSilence window, no new number.
+// ---------------------------------------------------------------------------
+
+func TestDriveAlarm_PollsMeasurePositiveOutput_DoesNotAlarm(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	// The pushed stream is SILENT for the whole slot; the poll answers keep
+	// measuring full output (RM5 -> tag PO, value 105).
+	feedMeterFor(t, s, "RM5105", 4*silence)
+
+	if n := w.count(EventDriveAlarm); n != 0 {
+		t.Fatalf("drive alarm fired %d time(s) while the poll measured positive output", n)
+	}
+}
+
+func TestDriveAlarm_PollsAnswerZero_StillAlarms(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	silence := shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	rxMeterFlowing(t, s)
+	keyedTestSlot(t, s)
+	feedMeterFor(t, s, "RM5000", 4*silence)
+
+	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 },
+		"pushes silent and polls at ZERO is the real collapse; the alarm must fire")
+}
+
+func TestDriveAlarm_StalePositivePoll_StillAlarms(t *testing.T) {
+	s, fake := newCommandTestService(t)
+	shortDriveSilence(s)
+	t.Cleanup(answerTxStatusQueries(s, fake))
+	w := watchEvents(t, s)
+
+	rxMeterFlowing(t, s)
+	// One positive poll answer BEFORE the key — then nothing at all.
+	s.observeMeter(meterFrame(t, "RM5105"))
+	keyedTestSlot(t, s)
+
+	waitFor(t, func() bool { return w.count(EventDriveAlarm) > 0 },
+		"a positive poll older than the silence window is not evidence about THIS silence")
+}
