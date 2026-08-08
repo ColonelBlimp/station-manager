@@ -91,12 +91,16 @@ type ConfigResponse struct {
 	// Ft8CallerAnswerMode is the FT8 Call-CQ answerer-selection strategy
 	// (ft8.tx.caller_answer_mode): "auto_first" (first valid answerer by decode
 	// order) or "auto_strongest" (highest-SNR valid answerer in the slot). Always
-	// served RESOLVED on GET (default auto_first) for the logging SPA's FT8 Settings
-	// tab. Operator-writable; **presence-aware** on PUT (omitting it leaves the
-	// stored value untouched). Pointer-typed so the handler tells "sent" from
-	// "absent". The "operator_pick" literal is NOT accepted here — implemented
-	// since ADR 0065, but the mode stays a config.json-only knob (operator-ratified
-	// 2026-08-07), so the wire surface only ever carries the two auto modes.
+	// served RESOLVED on GET — default operator_pick since 2026-08-08 (automation
+	// is an explicit opt-in; ADR 0065 dated note). No served client renders it
+	// yet (the dropdown is a filed port gap; the logging SPA that had one was
+	// retired 2026-07-21). Operator-writable; **presence-aware** on PUT (omitting
+	// it leaves the stored value untouched). Pointer-typed so the handler tells
+	// "sent" from "absent". The "operator_pick" literal is NOT accepted on PUT —
+	// implemented since ADR 0065, but the mode stays a config.json-only knob
+	// (operator-ratified 2026-08-07), so the PUT surface only ever carries the
+	// two auto modes while GET can serve the pick default (see the validation
+	// comment below for why that asymmetry breaks nothing).
 	Ft8CallerAnswerMode *string `json:"ft8_caller_answer_mode,omitempty"`
 	// Ft8MaxRepeats is the FT8 sequencer's unanswered-rung repeat cap
 	// (ft8.tx.max_repeats): how many times an unanswered rung is re-sent before the
@@ -622,6 +626,17 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// lock. Each checks the request value in isolation (it doesn't consult stored
 	// config), matching feed_mode's strict-wire contract (vs Validate, which
 	// tolerates a bad value → default).
+	// Since the 2026-08-08 default flip, GET can serve operator_pick while
+	// this PUT rejects it — a deliberate asymmetry (ADR 0065 dated note), NOT
+	// a fresh-install save-breaker (codex 5fbc3baa P1, refuted): no served
+	// client echoes this field back on PUT. The app SPA's FT8 save carries
+	// display/psk/decode_log only and the field is presence-aware; the config
+	// SPA never touches it; the one client that DID hydrate-and-echo it (the
+	// logging SPA) was retired and un-embedded 2026-07-21. The constraint the
+	// asymmetry places on a FUTURE settings UI is recorded in the
+	// dogfood-inbox port-gap entry: render a resolved operator_pick
+	// read-only — never snap it to an auto mode whose save would flip the
+	// station into automation as a side effect of opening Settings.
 	if req.Ft8CallerAnswerMode != nil {
 		if m := *req.Ft8CallerAnswerMode; m != types.Ft8CallerAnswerAutoFirst && m != types.Ft8CallerAnswerAutoStrongest {
 			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
