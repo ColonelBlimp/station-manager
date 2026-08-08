@@ -48,39 +48,89 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **EARLY 2026-08-08: tree CLEAN at `8a9e94d8`**, every review triaged +
-  deleted (the VFO arc drew 3 real findings across 4 commits, all fixed
-  RED-first; final round clean). **DEPLOY IS 11 COMMITS BEHIND:** the daemon
-  still runs 2026-08-07's 16:31 build `1159-g90bb2d4d` — logging A2/A3, the
-  five-finding qsoservice round + rune fix, and BOTH dogfood bug fixes are
-  NOT live. Nothing rig-critical — redeploy at next start.
-- **Both dogfood bugs FIXED** (triaged, then built on direction): a session
-  booting INTO FT8 now captures the first full rig report as the phone
-  snapshot (A26 — amends A4's LETTER only; drafted, NOT operator-ratified) ·
-  FTdx10 gains TRUE VFO select (`select_vfo` = `VS%s;` via the SELECT map;
-  other rigs keep the swap fallback). The reviews hardened the selection
-  RESTORE: selection first (MD0 acts on the operating VFO) · an
-  unrestorable drifted selection abandons the WHOLE restore · the abandon
-  toast scripts the recovery order that works (back, press A/B there,
-  return).
-- **VFO select is UNVALIDATED ON HARDWARE** — built on the manual's VS
-  legend, which contradicts an archived "VS is a flag only" observation
-  (plausibly confounded by equal VFO contents). Pre-registered check: with
-  VFO-B on a deliberately DIFFERENT frequency, clicking VFO-B must move the
-  operating dial to B's own content. Revert = one SPA branch + one rigdef
-  line.
-- **Logging backlog: ZERO Tier 1** (A2/A3 closed; five qsoservice defects
-  fixed incl. PATCH CAS → NEW 409 `edit_conflict`; detail in Current state).
-- **Still open from 2026-08-07:** `alc_red` 50 PROVISIONAL (§4 iii
-  deliberate-overdrive datum → ADR 0064 Accepted) · ADR 0065 UNEXERCISED on
-  air (pill on a work-caller arm · FD click · an `operator_pick` run —
-  stop smd, edit config.json, start).
-- **NEXT:** redeploy → on-air: §4 iii overdrive · 0065 sanity · VFO-select
-  validation (a phone→FT8→select-B→back round trip also exercises the
-  selection restore) · A26 ratification — then findings 9/10 · paste-list
-  port · ctrl+click-on-CQ (0065, undecided) · Tune-coverage question.
+- **MORNING 2026-08-08: tree CLEAN at `02733fa3`**, every review clean +
+  deleted. **DEPLOY: daemon at `f9444aac` (05:59), 2 commits behind** — the
+  ratification records + the alc fold, display/config-shape only; redeploy
+  at leisure, nothing rig-critical.
+- **Hardware-acceptance batch — every check passed FIRST TRY:** VFO select
+  VALIDATED (the pre-registered click moved the dial to B's own content —
+  VS is a true select; archive S~2527's "flag only" was the equal-contents
+  confound) · selection-restore round trip confirmed (mode landed on the
+  right VFO) · A26 boot-capture RATIFIED by the on-hardware demo (boot on
+  /app/operate/ft8 left the rig untouched; the switch to phone returned it
+  to the parked position — amends A4's letter, now ratified).
+- **ADR 0064 ACCEPTED.** The §4 overdrive run produced an INSTRUMENT
+  finding, not a threshold: **RM ALC SATURATES at ~30 of 255** — sink at
+  the 1.0 digital ceiling, front-panel needle +20 dB over the zone, in-band
+  PO collapsed 121→35, while the answer read 29–30. No ALC-only red can
+  ever fire, so **red was FOLDED INTO AMBER (operator-ratified)**: amber =
+  terminal "reduce the audio level", `alc_red` REMOVED end to end (legacy
+  config key ignored; spec `TestResolveFt8Meter` + `txDrive.svelte.test.ts`;
+  measurement cited in `internal/bridge/meters.go`). The paired ALC+PO
+  overdrive detector is CAPTURED in the inbox, not built — do NOT rebuild
+  red as an ALC threshold.
+- **Logging backlog: ZERO Tier 1** (A2/A3 closed 2026-08-07; five
+  qsoservice defects fixed incl. PATCH CAS → 409 `edit_conflict`).
+- **Still open: ADR 0065 UNEXERCISED on air** — pill on a work-caller arm ·
+  FD ctrl+shift+click (stays-lit is a pending operator judgement) · an
+  `operator_pick` run (stop smd, edit config.json, start).
+- **NEXT:** 0065 gestures on air · redeploy (picks up the fold) · findings
+  9/10 · paste-list port · ctrl+click-on-CQ (0065, undecided) ·
+  Tune-coverage (0064's remaining open question) · qsoservice Q4–Q10.
 
 ## Current state (as of 2026-08-08)
+
+### 2026-08-08 (morning) — hardware-acceptance day: everything validated, ADR 0064 Accepted
+
+Operator deployed at 05:59 (`1171-gf9444aac`, = HEAD at the time) and ran
+the itemised acceptance list top to bottom. Commits: `eaba629b`
+(ratification records) + `02733fa3` (the fold); both reviews clean.
+
+**Passive batch — four for four, first try.** Deploy confirmed from the log
+version field. VFO select validated exactly as pre-registered: VFO-B on a
+deliberately different frequency, one click, the operating dial moved to
+B's own content — VS is a true select, the manual legend holds, and archive
+S~2527's "flag only" observation was the equal-contents confound (citations
+written at verification time into `rig.svelte.ts` selectVfo + the inbox
+entry). Selection-restore round trip confirmed on hardware. A26 boot-capture
+demonstrated and RATIFIED (park on phone → boot the browser on
+/app/operate/ft8 → rig untouched, confirming boot-is-not-a-switch → FT8
+band click moves it → switch to phone returns it): the A4 amendment is no
+longer drafted-only; the criterion header records the ratifying demo.
+
+**The overdrive run — the datum was about the INSTRUMENT.** First attempt
+"couldn't reach red": sink pushed to the 1.0 digital ceiling, RM ALC
+answered max 30. Operator then reported the front-panel needle +20 dB OVER
+the zone — and the log agreed something was badly hot: in-band PO collapsed
+from the healthy 109–121 to ~35 on both PO witnesses across three slots
+while ALC answered 29–30. Conclusion, measured: **the RM ALC answer
+saturates at ~30 of 255** — it cannot distinguish zone-edge drive from
+gross overdrive, §4 (iii)'s meter-face agreement fails in the over-region,
+and no ALC-only threshold above ~30 can ever fire (even the 3900% mixer
+typo would read 30). Measurement recorded in `internal/bridge/meters.go`'s
+measured-on-hardware lineage. Meter-frame gaps of 2.0–2.5 s appeared ONLY
+on hands-on slots (meter-face flip, mixer slide; hands-off ≤ 400 ms) —
+dismissed on that correlation, re-check trigger: a 2 s+ gap hands-off.
+
+**Red folded into amber (operator-ratified) — built TDD both halves.**
+Daemon: `ft8.meter` is amber-only (`Ft8MeterConfig`/`Ft8MeterLevels`,
+`DefaultFt8AlcRed` gone, no cross-clamp — 999 clamps to 255 now); served
+shape pinned (`{"alc_amber":30}`); a legacy `alc_red` key is tolerated and
+ignored (pinned; the dogfood config.json has no meter block at all —
+verified). SPA: `red` state removed, amber terminal with the action label
+("ALC high — reduce the audio level"), card marker moved to the amber
+floor. Informative RED both halves, reversion probes both halves (each spec
+failed on its own fold assertion against the restored old code), full gates
+green. ADR 0064 flipped **Accepted** with a §4 results block (including the
+qualified (iii) outcome and the gap dismissal); the §4 "iii"→"(ii)"
+cross-reference fixed; config.md + api-endpoints.md match. The paired
+ALC+PO overdrive detector (ALC-at-ceiling AND PO-collapsed — the run's
+two-witness signature) is captured in the inbox with its open judgement
+calls (PO floor, chip-vs-alarm, persistence), explicitly NOT built.
+
+**Deploy note:** the fold is not live until the next redeploy — the running
+daemon serves the old two-threshold shape, the SPA falls back fine either
+way. Nothing rig-critical.
 
 ### 2026-08-08 (early hours) — both dogfood bugs triaged and fixed; the select_vfo arc
 
