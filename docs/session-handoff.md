@@ -138,7 +138,22 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   permanent_reject→local quarantine); ingest = ONE transaction with
   suppression checked first + suppressed UUIDs tombstoned + unresolved-hash
   limit stated; lookup tokens STATELESS signed (HMAC), cache by canonical
-  (station,callsign) with per-station+global caps.
+  (station,callsign) with per-station+global caps. ROUND 6 on Draft 3 (7
+  findings): go-ft8 prerequisite expanded to 4 evidence-grade requirements
+  (payload-even-if-unsupported-text, per-msg AP provenance, NO
+  evidence-level filtering, stateful per-stream Decoder — SMD currently
+  stateless per decode.go's own comment); presence authority state made
+  EXPLICIT (authorityToken + per-authority rev + receipt time; candidates
+  outside ordering until transfer; "newest wins" language deleted); heard
+  BAND-SCOPED during runs (pinned dial + >= runStartedAt in EVERY privacy
+  mode; outside runs band shown prominently; deterministic winner rule);
+  ended-run grace persisted locally + SMC retains newest grace record
+  independent of later snapshots; per-slot COVERAGE records
+  (decoded/no_decode/tx/dial_changed/decoder_error/capture_dropped) +
+  loss reporter survives its own failure path (crash limit stated);
+  finite refresh budget + single-flight cache population; opt-out spans
+  ALL public answer sources (page-wide), operator's operational state
+  untouched.
 - **NEXT: operator passes the doc out for external review → on-air 0067.**
   Then: Settings defaults dropdown; max_repeats-to-session (0066 watch-list);
   Abandon-vs-queue flag still open.

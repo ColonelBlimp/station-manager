@@ -148,12 +148,27 @@ and turn this into a different product.
 **Three named prerequisites**, so the plan does not discover them
 mid-build:
 
-1. **The decode result must widen.** `DecodeLine` today exposes normalised
-   text, frequency, `dt` and SNR only (`internal/ft8/decode.go`); the
-   verified 77-bit payload (extracted from the decoded 174-bit LDPC
-   codeword after CRC), AP-assisted marking and decoder metrics stop
-   inside go-ft8. Exposing them is go-ft8/SMD work and is prerequisite to
-   every row §4 promises.
+1. **The decode path must become evidence-grade, which is more than
+   widening one struct.** `DecodeLine` today exposes normalised text,
+   frequency, `dt` and SNR only (`internal/ft8/decode.go`), and much of
+   what §4 promises is discarded upstream of it. Four concrete
+   requirements:
+   - a **verified-payload result even when text unpacking is
+     unsupported** — go-ft8 documents decode gaps (DXpedition/Fox-Hound,
+     telemetry families), and today an unsupported-but-CRC-valid payload
+     never reaches SMD at all; evidence capture stores the payload with
+     `text: unsupported`, it does not require the parser to keep up with
+     the protocol;
+   - **per-message AP/decoder provenance** carried on each result (much of
+     this already exists publicly in go-ft8 — SMD's projection is what
+     discards it);
+   - **no evidence-level filtering of valid payloads** — operator-view
+     filters (own-transmission drop, display curation) apply to the view,
+     never to the evidence stream;
+   - **one stateful `goft8.Decoder` per receiver stream** — SMD currently
+     uses the stateless per-slot API (its own comment defers the stateful
+     decoder), losing cross-slot callsign-hash context that `<...>`
+     resolution (§5.3) depends on.
 2. **The decode sink must fan out.** `SetDecodeSink` is a single injected
    observer, currently occupied by the PSK Reporter uploader
    (`internal/ft8/servicetx.go`). Capture is a second consumer (and a
@@ -191,6 +206,20 @@ over:
   intervals are tiny rows: they sync like observations, so SMC's copy of
   the history carries its own honesty metadata. A gap you know about is
   data quality; one you don't is corruption;
+- cap-driven drops are not the only way evidence goes missing, so each
+  slot writes a lightweight **coverage record** with an outcome —
+  `decoded / no_decode / tx / dial_changed / decoder_error /
+  capture_dropped` — one tiny row per 15 s, which is what makes an empty
+  stretch of archive *interpretable* (transmitting? band change? decoder
+  fault?) rather than ambiguous. "Complete" in this document means
+  complete **relative to these records**, never an unqualified claim;
+- loss and coverage reporting must survive the failure it reports: the
+  reporter is a **reserved in-memory accumulator, persisted with priority
+  when the writer recovers** — an overloaded evidence writer must not lose
+  the record of its own overload through the same failing path. The honest
+  crash-time limit is stated: losses accumulated but not yet persisted at
+  a hard crash are gone, and that boundary is documented rather than
+  papered over;
 - the local synced flag is a **scheduling optimisation, not sync state**:
   with per-UUID acknowledgement there is no cursor to reconstruct, and a
   restored backup's rolled-back flags merely cause harmless duplicate
@@ -328,9 +357,17 @@ absence was a found defect:
   POST plus its retry cannot mint two incarnations and strand the client on
   a stale one.
 - Snapshots PUT `(token, snapshotRev)`; `snapshotRev` is per-session,
-  monotonic from zero, no client persistence needed. SMC orders by
-  `(incarnation, snapshotRev)` and only ever moves forward; the newest
-  session always wins because the newest session *is* the live client.
+  monotonic from zero, no client persistence needed. SMC's presence state
+  is explicit, so ordering and authority never blur into "newest wins":
+  it holds the **authority token** (the one incarnation whose snapshots are
+  currently accepted), the **last accepted revision for that authority**,
+  and its **last receipt time**. Revision ordering applies *within* the
+  authority only — a candidate session **does not participate in ordering
+  at all** until its transfer (below) succeeds, and a candidate's rejected
+  first snapshot consumes no revision state and disturbs the standing
+  authority in no way: a higher incarnation can exist, rejected, while a
+  lower one goes on publishing. Incarnation numbers order *attempts*, not
+  *authority*.
 - **Authority transfers on the first snapshot, not on session creation —
   and only over a currently-stale authority.** A newly minted incarnation
   becomes authoritative **atomically with the acceptance of its first valid
@@ -413,6 +450,13 @@ the *only* snapshot, and without them it would carry no identity or end
 time for the grace-period run. SMC computes grace from `runEndedAt`
 (validated for skew like every client timestamp, §6.1), never from
 reconnect time — starting grace at reconnect would extend it incorrectly.
+Two durability rules keep the grace record from being volatile state:
+SMD **persists the minimal ended-run record locally** (id, end time) until
+grace expires, so a daemon restart while disconnected does not erase it
+before SMC ever hears of it; and SMC **retains the newest unexpired grace
+record independently of later snapshots** — a snapshot without ended-run
+fields (a replacement authority's fresh session, a client restarted past
+its own grace) does not clear an existing grace record; only expiry does.
 
 **Run identity is new cross-cutting state — the one thing here the daemon
 does not already hold.** Neither `QsoStatus` nor `CompletedQso` carries a
@@ -465,8 +509,13 @@ lookup share one entry — and the cache carries **explicit per-station and
 global entry caps**, because "bounded by token count" bounds nothing when
 distributed probes mint tokens freely. Two budgets, deliberately split:
 **new-callsign probes** carry the oracle rate limits; **refreshes of a
-valid token** are cheap and must not exhaust their own caller's probe
-allowance. Tokens expire (provisionally one hour) and a fresh probe
+valid token** carry their own **higher-but-finite budget** per station,
+source, and token — statelessness bounds memory, not traffic, and a valid
+signed token replayed without limit would otherwise be a free query lever.
+Cache population is **single-flight**: concurrent misses for one canonical
+callsign produce one database query, so rotating callsigns through the
+capped cache degrades to bounded, serialised work rather than a query
+amplifier. Tokens expire (provisionally one hour) and a fresh probe
 re-establishes them. Five-second polling makes a
 typical ~13 s FT8 keyed interval coarsely but honestly visible; the
 `transmitting` flag is displayed on that understanding. SSE is the upgrade
@@ -513,6 +562,17 @@ operator ratifies them:
   backfilled history naturally. A slow client clock understates recency and
   can fail the 30-second criterion; that failure direction is conservative
   and accepted — no clock-offset correction mechanism is attempted.
+- **Heard is band-scoped while a run is active.** A caller decoded on 20 m
+  must not read "heard" against a page header showing a 40 m pile-up — that
+  answer would persuade exactly the wrong stations to stop calling. During
+  an active run, a heard result requires the observation to match the run's
+  pinned dial/band **and** `observed_at >= runStartedAt` — this holds in
+  every privacy mode, not just on-air-only (§6.2's rule is the privacy
+  case of the same principle). Outside a run, heard answers from any recent
+  band, with **the observation's band displayed prominently** in the
+  result — useful information, honestly labelled, rather than suppressed.
+- **The winning observation is deterministic**: the latest valid
+  `observed_at` in scope; ties break on higher SNR, then observation UUID.
 - **Stale presence downgrades, never asserts.** When heartbeats have
   stopped, *queued* and *being worked* must not render as current claims —
   a dead station's last snapshot telling a caller "hang tight" is the worst
@@ -590,8 +650,18 @@ working stations.
   durable by deletion tombstones (§5.2), without which a routine backup
   restore would resurrect deleted records. The policy distinguishes two
   different requests: **historical deletion** (a one-time purge of existing
-  records) and an **ongoing opt-out** (a callsign suppression list applied
-  at ingest, so future observations of that call are not retained either).
+  records) and an **ongoing opt-out** — and the opt-out spans **every
+  public answer source, not just evidence**. Ingest suppression (§5.3)
+  stops observation retention, but *queued*, *being worked*, and
+  previously-logged answers derive from presence snapshots and the QSO
+  store — separate sources that would otherwise keep answering for a
+  suppressed callsign. An opted-out callsign therefore gets no public
+  lookup answer at all (the page behaves as if the call were unknown),
+  while the operator's own operational state is untouched: the daemon
+  still queues and works the station normally, and the operator's log
+  still records the contact. The opt-out governs what the *page* says,
+  plus what *evidence* is retained — both halves, stated so neither is
+  assumed to imply the other.
   And it states the local-copy boundary plainly: an SMC deletion reaches
   SMC; the operator's private local store is the operator's own record of
   what their receiver decoded — the same standing as a paper logbook — and
