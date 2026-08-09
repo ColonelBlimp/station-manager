@@ -66,7 +66,7 @@ func (s *Sequencer) StartWorkCaller(ourCall, theirCall, theirGrid string, theirS
 	// indistinguishable from the gate refusing (codex P1 on 7de6708e, G8). An
 	// operator-started session is what arms a run (ADR 0059) — the policy alone
 	// never does, which keeps every run headed by an operator action (W5).
-	s.armAutoWorkLocked(call, offsetHz, dialFreqMHz)
+	s.armAutoWorkLocked(call, offsetHz, dialFreqMHz, now)
 	s.commitWorkCallerLocked(&c, call, SlotRefFromTime(t).Period, offsetHz, dialFreqMHz, now)
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.mu.Unlock()

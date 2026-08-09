@@ -194,11 +194,24 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   perf testing** (operator, 2026-08-09). When tagged: dependency bump =
   its own commit; then SM-side prerequisite 2 (rich-result split) →
   evidence.db writer (§4.1 contract).
-- **NEXT: commit the CONVERGED Draft 3 (13 review rounds; whole-doc pass
-  clean, 3 must-fix items verified in) → await go-ft8 perf verdict →
-  implementation planning (prereq 2 first) → on-air 0067.** Then: Settings
-  defaults dropdown; max_repeats-to-session (0066 watch-list);
-  Abandon-vs-queue flag still open.
+- **RUN IDENTITY (prereq 3) BUILT 2026-08-09, in tree uncommitted** —
+  while the operator ran a 95+ pile-up (mid-run health sweep clean; first
+  natural tx_still_keyed SELF-RECOVERY at 14:43:43, re-unkey path validated
+  live). Spec `internal/ft8/runidentity_test.go` RI1–RI7 (header carries
+  the criteria): UUIDv7 minted at StartCallCq + armAutoWorkLocked (doc
+  §6.2 amended — mode-only arming means ANY arming start births a run),
+  Sequencer-level runID/runStartedAt (CQ shape runs with armed=false, so
+  NOT in autoWorkState; outlives contacts, so NOT contactFlags), carriage
+  in applyRunStateLocked (terminals included, B12 rule), ends at
+  abandonLocked/auto-Stop/invalid-arm, stamped via completedCallerQsoLocked
+  → BuildQso → types.Qso.AppSmRunID (app_sm_run_id; additional_data +
+  cloud payload ride free) + adif round-trip + spec classification. 6
+  reversion probes each bit exactly. ft8/adif/api/qsoservice green, race
+  green, gofmt/vet clean.
+- **NEXT: commit run identity + the CONVERGED Draft 3 → await go-ft8 perf
+  verdict → next slice (presence vertical §6 or evidence machinery §4.1) →
+  on-air 0067 pick-run try.** Then: Settings defaults dropdown;
+  max_repeats-to-session (0066 watch-list); Abandon-vs-queue flag open.
 
 ## Current state (as of 2026-08-08)
 

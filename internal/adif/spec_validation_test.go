@@ -234,6 +234,7 @@ var specField = map[string]adifType{
 
 	// APP_ extension fields (type by APP_ convention)
 	"APP_SM_QSO_ID":      typString,
+	"APP_SM_RUN_ID":      typString,
 	"APP_SM_REQUEST_QSL": typBoolean,
 	"APP_QRZLOG_LOGID":   typString,
 }

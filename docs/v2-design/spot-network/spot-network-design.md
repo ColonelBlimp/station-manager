@@ -594,11 +594,15 @@ run id today, and the Cloud QSO store cannot be queried by one until the id
 travels the whole path: minted by the sequencer, carried on `QsoStatus`
 (presence) and on `CompletedQso` → the local QSO record → the existing
 cloud sync. The lifecycle rules, so they are decided rather than
-discovered: a run id is **minted at run start** (`cq/start`); it
+discovered: a run id is **minted where the run begins** — `cq/start`, or
+any operator start that arms a run under ADR 0067's mode-only arming (an
+answer or work-caller start under an auto or pick session mode begins a
+run too; amended at build time, 2026-08-09, to match the ratified arming
+semantics); it
 **survives Stop/Resume** — a paused bag-and-drain queue is the same
 logical run — and it **survives presence reconnection** (it is daemon
 state, not session state); it **ends at Abandon or run end** (ADR 0059
-W6). Everything else in the snapshot is composition of inputs the daemon
+W6, an auto run's Stop included). Everything else in the snapshot is composition of inputs the daemon
 already holds — FT8 lifecycle, sequencer status, bridge TX state.
 
 **And its scope is narrower than `on_air`, deliberately.** `on_air` covers

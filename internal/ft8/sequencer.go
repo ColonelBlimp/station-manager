@@ -9,6 +9,7 @@ import (
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	"github.com/ColonelBlimp/station-manager/internal/utils"
 	"slices"
 )
 
@@ -275,6 +276,14 @@ type QsoStatus struct {
 	// DrainPaused: Stop on a pick run pauses the drain (queue kept; Resume
 	// continues) rather than clearing the run — the ratified stack semantics.
 	DrainPaused bool `json:"drain_paused,omitempty"`
+	// RunID identifies the live run (spot-network design §6.2): one UUIDv7 per
+	// operator-started run, stable across every contact the run works and across
+	// a pick pause, replaced on a fresh start, gone when the run ends. Carried on
+	// every frame of a live run — including a completed contact's terminal frame
+	// (the B12 replay rule) — so a consumer can scope "this run" without joining
+	// state across frames. RunStartedAt is its Unix start time.
+	RunID        string `json:"run_id,omitempty"`
+	RunStartedAt int64  `json:"run_started_at,omitempty"`
 	// MaxRepeats — the unanswered-rung repeat cap, set ONLY while the current rung is
 	// actually subject to it (an answerer pre-73, or a caller working an answerer
 	// pre-RR73). Zero (omitted) on the uncapped rungs (calling CQ) and the one-shot
@@ -343,6 +352,12 @@ type CompletedQso struct {
 	// minute-granular dedupe key. False is the safe default: an ordinary contact
 	// keeps the duplicate protection.
 	AllowDuplicate bool
+	// RunID is the run this contact was worked under (spot-network design §6.2),
+	// empty for contacts outside a run (FD, type-4, an unarmed session). Stamped
+	// from the sequencer's live run at completion; BuildQso carries it onto the
+	// QSO as the app_sm_run_id APP field, which is what lets "logged this run"
+	// be answered from the QSO store.
+	RunID          string
 	TheirCall      string
 	TheirGrid      string
 	OurReport      int // the report WE sent (our SNR of their signal)
@@ -489,6 +504,16 @@ type Sequencer struct {
 	// caller: that would make the daemon initiate a session, which
 	// internal/ft8/CLAUDE.md forbids (autowork_test.go W5).
 	autoWork autoWorkState
+	// runID identifies the live run (spot-network design §6.2): one UUIDv7 per
+	// operator-started run, minted at the run's two birth sites — StartCallCq and
+	// armAutoWorkLocked (mode-only arming means ANY arming start begins a run,
+	// adr0067_test.go A1/A2) — and cleared only where the run ends (abandonLocked
+	// per W6, an auto run's Stop, an invalid-mode arm). A Sequencer field rather
+	// than part of autoWorkState because the Call-CQ shape runs with armed=false
+	// (seqCalling IS that run); not in contactFlags because the run outlives its
+	// contacts (W4). runStartedAt publishes beside it as run_started_at.
+	runID        string
+	runStartedAt time.Time
 	// stalledCalls accumulates the answerers abandoned at the repeat cap since the
 	// current CQ round began. pickAnswererLocked skips them, so a handful of stations
 	// that keep repeating their grid can't be re-selected in rotation and starve the
@@ -772,7 +797,7 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	// directly" — and arming only the work-a-caller path left it silently dead.
 	// ex.OurCall is the normalised form the exchange was built with; pickAnswererLocked
 	// matches directed calls against it.
-	s.armAutoWorkLocked(ex.OurCall, offsetHz, dialFreqMHz)
+	s.armAutoWorkLocked(ex.OurCall, offsetHz, dialFreqMHz, now)
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.publish(st)
@@ -939,6 +964,11 @@ func (s *Sequencer) abandonLocked() (bool, string) {
 	// Leaving it armed would make Abandon look like it worked and then key the rig
 	// again on the next caller.
 	s.autoWork.armed = false
+	// And with the run goes its identity — the terminal frame published after
+	// this abandon is the first with no run_id (runidentity_test.go RI4). This
+	// covers BOTH run shapes: the armed run (flag above) and the Call-CQ
+	// session, whose run has no armed flag to clear.
+	s.endRunLocked()
 	// Operator's call (2026-07-31): Abandon clears the stalled-caller cool-off.
 	// Abandon is the operator taking the station back, so the daemon's memory of
 	// which callers were going nowhere goes with it.
@@ -1342,6 +1372,9 @@ func (s *Sequencer) StopAutoWorkRun() {
 	hadRun := s.autoWork.armed
 	s.autoWork = autoWorkState{}
 	s.clearPickQueueLocked()
+	// An auto run's Stop ENDS the run (only pick pauses, above), so its
+	// identity ends with it (runidentity_test.go RI5).
+	s.endRunLocked()
 	if hadRun {
 		if s.mode != seqIdle {
 			// A contact is live: its own status frame carries the cleared flag.
@@ -1930,6 +1963,13 @@ func (s *Sequencer) applyRunStateLocked(st QsoStatus) QsoStatus {
 	// would publish it exactly when the operator can already see a ladder, and omit
 	// it exactly when they cannot tell armed from stopped.
 	st.AutoWorkArmed = s.autoWork.armed
+	// The run identity rides EVERY frame of a live run — terminal frames
+	// included (runidentity_test.go RI1; the B12 replay rule) — and is absent
+	// from the first frame after the run ends.
+	if s.runID != "" {
+		st.RunID = s.runID
+		st.RunStartedAt = s.runStartedAt.Unix()
+	}
 	// ADR 0067: the caller LIST rides every frame of a pick session or listing
 	// run — one list, whatever the entry point — not just CQ-run frames (which
 	// statusModeLocked already populated; the st.AnswerMode=="" check keeps the
@@ -2191,10 +2231,11 @@ func (s *Sequencer) AutoWorkArmed() bool {
 // a station listed for the old session must not resurrect into the new one
 // (the StartCallCq clear's sibling; adr0067_test.go A6). FD/type-4 starts
 // never reach this (ADR 0059 scope note).
-func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64) {
+func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64, now time.Time) {
 	if !types.Ft8CallerAnswerModeValid(s.pendingAnswerMode) {
 		s.autoWork = autoWorkState{}
 		s.clearPickQueueLocked()
+		s.endRunLocked() // no valid mode, no run — and no stale identity either
 		return
 	}
 	s.answerers = nil
@@ -2204,6 +2245,23 @@ func (s *Sequencer) armAutoWorkLocked(call string, offsetHz, dialFreqMHz float64
 	s.autoWork.offsetHz = offsetHz
 	s.autoWork.dialMHz = dialFreqMHz
 	s.autoWork.selectMode = s.pendingAnswerMode
+	s.beginRunLocked(now)
+}
+
+// beginRunLocked mints a fresh run identity: every operator start that begins
+// a run REPLACES the previous run (adr0067_test.go A6), so identity is never
+// reused across runs (runidentity_test.go RI4). Caller holds s.mu.
+func (s *Sequencer) beginRunLocked(now time.Time) {
+	s.runID = utils.NewUUIDv7At(now)
+	s.runStartedAt = now
+}
+
+// endRunLocked clears the run identity; the caller's next published frame is
+// the first that carries no run id. Deliberately NOT part of
+// retireSessionLocked — the run outlives its contacts (W4). Caller holds s.mu.
+func (s *Sequencer) endRunLocked() {
+	s.runID = ""
+	s.runStartedAt = time.Time{}
 }
 
 // terminalStatusLocked builds the frame published when a session ends. Caller holds

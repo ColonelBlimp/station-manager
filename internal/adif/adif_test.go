@@ -291,3 +291,36 @@ func TestRecordToQso_RoundTripsAppSmRequestQsl(t *testing.T) {
 		t.Errorf("AppSmRequestQsl lost in round-trip; emitted: %s", emitted)
 	}
 }
+
+// TestAppSmRunID_RoundTrips pins the FT8 run identity's ADIF carriage
+// (runidentity_test.go RI7's export half): a QSO carrying AppSmRunID emits
+// APP_SM_RUN_ID and a parsed record restores it; empty emits nothing.
+func TestAppSmRunID_RoundTrips(t *testing.T) {
+	runID := "01910d3a-7000-7abc-8def-0123456789ab"
+	q := types.Qso{
+		AppSmRunID: runID,
+		QsoDetails: types.QsoDetails{
+			Band: "17m", Mode: "FT8", Freq: "18.100",
+			QsoDate: "20260809", TimeOn: "154500", TimeOff: "154600",
+			RstSent: "-08", RstRcvd: "-12",
+		},
+		ContactedStation: types.ContactedStation{Call: "DL9UW"},
+		LoggingStation:   types.LoggingStation{StationCallsign: "7Q5MLV"},
+	}
+
+	out := ConvertQsoToAdifNoHeader(q)
+	want := "<APP_SM_RUN_ID:36>" + runID
+	if !strings.Contains(out, want) {
+		t.Fatalf("ADIF output missing %q\nGot:\n%s", want, out)
+	}
+
+	back := RecordToQso(Record{AppSmRunID: runID}, 1)
+	if back.AppSmRunID != runID {
+		t.Fatalf("RecordToQso dropped app_sm_run_id: got %q", back.AppSmRunID)
+	}
+
+	q.AppSmRunID = ""
+	if strings.Contains(ConvertQsoToAdifNoHeader(q), "APP_SM_RUN_ID") {
+		t.Fatal("empty run id must emit no APP_SM_RUN_ID tag")
+	}
+}

@@ -76,6 +76,10 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	// Placed here, ahead of the statusLocked/publish below, so the frame that
 	// announces the CQ already reports the run stopped — V5.
 	s.autoWork = autoWorkState{}
+	// A Call-CQ session IS a run (spot-network design §6.2): mint its identity
+	// now so the announcing frame below already carries run_id/run_started_at.
+	// This replaces any previous run's identity, mirroring the state clear above.
+	s.beginRunLocked(nowUTC)
 	s.ourCall = call
 	s.ourGrid = grid
 	s.cqMessage = cq
@@ -879,6 +883,10 @@ func (s *Sequencer) completedCallerQsoLocked() CompletedQso {
 	return CompletedQso{
 		LogbookID:      s.logbookID,
 		AllowDuplicate: s.allowDuplicate,
+		// The live run's identity, empty outside a run — this single stamp
+		// site serves both run shapes AND the one-off work-a-caller contact
+		// correctly, because runID is exactly as scoped as the run itself.
+		RunID:          s.runID,
 		TheirCall:      s.caller.TheirCall,
 		TheirGrid:      s.caller.TheirGrid,
 		OurReport:      s.caller.SendSnr,

@@ -42,6 +42,10 @@ func BuildQso(c CompletedQso, station types.LoggingStation, logbookID int64, now
 	q.Mode = "FT8"
 	q.Freq = freq
 	q.Band = utils.FrequencyToBand(freq)
+	// The run identity persists with the QSO (app_sm_run_id via additional_data,
+	// and thence the cloud payload) — what "logged this run" is answered from.
+	// Empty for non-run contacts; omitempty keeps it off those records entirely.
+	q.AppSmRunID = c.RunID
 	// Every degradation below is Warn'd rather than silent: the row is stored AND
 	// forwarded (QRZ/ClubLog/SM Cloud) — durable, outbound data that cannot be
 	// corrected after the fact, so an invisible fallback is unauditable. Degrading

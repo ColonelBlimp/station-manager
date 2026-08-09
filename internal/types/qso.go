@@ -90,6 +90,16 @@ type Qso struct {
 	// /v1/qso/{uuid} edit path (JSON body) persists it directly — so a
 	// missed flag can also be corrected via the SessionPanel edit overlay.
 	AppSmRequestQsl bool `json:"app_sm_request_qsl,omitempty"`
+
+	// AppSmRunID identifies the FT8 run this QSO was worked under (ADR 0067
+	// runs; spot-network design §6.2) — one UUIDv7 per operator-started run,
+	// shared by every contact the run works. Empty for non-run contacts and
+	// everything outside FT8. Same APP_<programid>_<fieldname> extension
+	// mechanism and additional_data persistence as AppSmRequestQsl above;
+	// round-trips through the adif `app_sm_run_id` tag. Because the cloud
+	// sync carries the QSO JSON as its payload, this field is also what lets
+	// SMC answer "logged this run" without any schema addition of its own.
+	AppSmRunID string `json:"app_sm_run_id,omitempty"`
 	/*
 		All the below fields are compatible with the ADI format and are populated by the adapter.
 		The only exception to this is the [xx]ID/ID fields, which are required by database functions.
