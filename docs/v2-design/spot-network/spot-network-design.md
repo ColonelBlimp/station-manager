@@ -15,14 +15,15 @@ slice, buildable on infrastructure that already exists.
 
 ## 1. Summary
 
-While the FT8 subsystem is running — passive monitoring or active operating —
-Station Manager Desktop (SMD) records every useful decoded observation into
-its local SQLite database. That history synchronises to Station Manager
-Cloud (SMC) over the existing authenticated SMD ↔ SMC channel. Live TX / run
-/ queue state travels separately, as a current-state snapshot with a
-heartbeat. From these two flows plus the QSO store it already holds, SMC
-serves one public, callsign-specific page answering three questions for a
-calling station:
+With local evidence capture enabled, while the FT8 subsystem is running —
+passive monitoring or active operating — Station Manager Desktop (SMD)
+records every useful decoded observation into its local SQLite database.
+With SMC evidence sync enabled, that history synchronises to Station Manager
+Cloud (SMC) over the existing authenticated SMD ↔ SMC channel. With public
+publication also enabled, live TX / run / queue state travels separately as
+a current-state snapshot with a heartbeat, and SMC combines those two flows
+with the QSO store it already holds to serve one public, callsign-specific
+page answering three questions for a calling station:
 
 1. **"I am on air"** — this station is running FT8 now (band, mode).
 2. **"You have been heard"** — your signal was decoded here (SNR, how long
@@ -88,24 +89,26 @@ reviews came from letting history and liveness share a channel.
 ### 3.1 Durable history
 
 Decoded observations: SQLite rows on SMD, synchronised to SMC over the
-existing authenticated HTTP channel (the same family as QSO stamp sync).
-Delayed uploads and retries are *fine* — history is history whenever it
-arrives, and the page displays age honestly.
+existing authenticated HTTP channel (the same family as QSO stamp sync)
+only while SMC evidence sync is enabled (§8). Delayed uploads and retries
+are *fine* — history is history whenever it arrives, and the page displays
+age honestly.
 
 One quality-of-service rule keeps the heard answer fresh without a third
-flow: **sync is prompt while live** — when the FT8 subsystem is running and
-SMC is reachable, new observations push at decode-cycle cadence (a cycle's
-batch is tiny) — and **lazy for backlog** — after an outage, accumulated
-history drains at leisure behind current data.
+flow: **sync is prompt while live** — when sync is enabled, the FT8
+subsystem is running and SMC is reachable, new observations push at
+decode-cycle cadence (a cycle's batch is tiny) — and **lazy for backlog** —
+after an outage, accumulated history drains at leisure behind current data.
 
 ### 3.2 Live state
 
-TX / run / queue state: a **current-state snapshot** with a heartbeat, sent
-to a dedicated latest-state endpoint. It bypasses the history sync entirely,
-by construction: a backlog of old observations draining after an outage must
-never make a station appear live, and presence must never queue behind
-history. Snapshots are full-state and latest-wins — idempotent, matching
-SMD's own confirm-by-push philosophy.
+When publication is enabled (§8), TX / run / queue state is a
+**current-state snapshot** with a heartbeat, sent to a dedicated latest-state
+endpoint. It bypasses the history sync entirely, by construction: a backlog
+of old observations draining after an outage must never make a station
+appear live, and presence must never queue behind history. Snapshots are
+full-state and latest-wins — idempotent, matching SMD's own confirm-by-push
+philosophy.
 
 ### 3.3 The three answers, derived
 
@@ -219,7 +222,8 @@ over:
   opening rationale), which makes the physical definition load-bearing
   rather than pedantic. Capture **never blocks decoding or logging** —
   under pressure it drops, never stalls;
-- drop order prefers observations SMC has already acknowledged, and
+- drop order prefers records SMC has already acknowledged, starting with
+  observations, and
   **every cap purge is recorded — acknowledged and unacknowledged alike**,
   as two record kinds with different meanings, and the loss taxonomy is
   three-valued because "unacknowledged" does not mean "absent from SMC" —
@@ -228,11 +232,12 @@ over:
   unsynced observations is a **loss interval** — start/end time, reason,
   count, band/dial context — carrying a `remote_status`: `never_offered`
   (definitely absent remotely) or `offered_unacknowledged` (remote
-  presence **unknown**, never claimed lost). Purging *acknowledged*
-  observations is a **local-retention record** — range, count, reason, and
-  the acknowledged status — a statement that the local archive ends here
-  while the data was present in SMC at acknowledgement time (subject to
-  cloud retention and deletion thereafter). Purges and their records
+  presence **unknown**, never claimed lost). Purging *acknowledged* records
+  writes a **local-retention record** — range, counts by record
+  kind, reason, and the acknowledged status — a statement that the local
+  archive ends here while those records were present in SMC at
+  acknowledgement time (subject to cloud retention and deletion
+  thereafter). Purges and their records
   commit in the **same SQLite transaction**: a crash between deletion and
   record creation would produce exactly the invisible gap this machinery
   exists to prevent. Both are tiny rows and both sync,
@@ -260,7 +265,24 @@ over:
   `decoded` coverage row whose observations were locally purged — is
   legitimate and self-explaining, because the purge wrote a
   local-retention record (above) saying what was removed, why, and that
-  SMC holds it;
+  SMC had acknowledged it at purge time;
+- **metadata is bounded too** — "tiny" is not a retention policy. Coverage
+  rows may be removed once the observations for their slots have left the
+  local store and the coverage rows themselves have a terminal SMC
+  outcome; the local-retention record counts both kinds, so the resulting
+  local boundary remains explicit. Adjacent loss and local-retention
+  records of the same kind whose reason, remote/acknowledgement status and
+  band/dial context agree are compacted into a new UUIDv7 summary carrying
+  a bounded list of the direct predecessor UUIDs it supersedes;
+  creation of the summary and removal of its local predecessors is one
+  SQLite transaction, and SMC applies the supersession idempotently. This
+  keeps exact totals and the outer time range without retaining one row per
+  purge forever. Metadata compaction **does not create retention metadata
+  about metadata** — that would recurse without bound. The cap reserves a
+  fixed metadata budget; under sustained offline pressure the reserved
+  accumulator extends a bounded current interval in memory and capture
+  drops, rather than allocating unbounded rows. The hard-crash limit on
+  that accumulator is the one stated below;
 - loss and coverage reporting must survive the failure it reports: the
   reporter is a **reserved in-memory accumulator, persisted with priority
   when the writer recovers** — an overloaded evidence writer must not lose
@@ -390,11 +412,19 @@ lookup-token binding, cache keys, deletion, and opt-out. The ladder spans
 three sources and the opt-out promises suppression across all of them — a
 function applied to only one lets a portable form be *heard* under its
 base identity yet fail to appear *queued*, or escape suppression through
-the QSO store. The function is **versioned**: stored records keep exact
-forms, matching applies the current version at query time, so a
-canonicalisation improvement re-partitions every source consistently and
-at once, never one table at a time. Results always display the exact form
-that was heard.
+the QSO store. The function is **versioned**, and a version change is a
+coordinated data cutover rather than a code deployment that lets requests
+straddle two identity partitions. SMC builds the next version's occurrence,
+presence, QSO and opt-out indexes in shadow while ingest either dual-writes
+them or replays through a cutover watermark. Before activation it
+re-evaluates ongoing opt-outs under the new function and purges/tombstones
+any newly matched retained observations. One atomic identity-epoch switch
+then makes the new indexes, token version and cache namespace current
+together; old lookup tokens carry their canonicalisation version and are
+rejected with a remint response, and old cache entries are unreachable by
+construction. Rollback is the same epoch switch to a complete prior
+partition, never a mixture of versions. Stored records retain exact forms
+throughout, and results always display the exact form that was heard.
 
 **Ingest is one transaction, suppression checked first.** Parsing, the
 ongoing-opt-out suppression check (§8), the raw observation row and its
@@ -425,6 +455,10 @@ locator precision aside).
 ---
 
 ## 6. Presence (live state)
+
+This flow exists only while public station presence and callsign lookup are
+enabled (§8); ordinary FT8 operation and local evidence capture do not open a
+presence session by themselves.
 
 ### 6.1 Session and ordering
 
@@ -723,8 +757,26 @@ working stations.
 
 ## 8. Privacy, consent, retention
 
-- **Opt-in, default off**, with plain-language disclosure of what leaves the
-  machine and what the page shows, before the first byte ships.
+- **Consent is three separately controlled, default-off layers**, because
+  local value, cloud retention and public visibility are different decisions.
+  **Local evidence capture** writes `evidence.db` only; disabling it stops
+  new capture but neither deletes retained rows nor changes ordinary FT8
+  operation. **SMC evidence sync** authorises transmission of retained and
+  new evidence after a plain-language disclosure of exactly what leaves the
+  machine; enabling capture never enables sync, and disabling sync stops
+  new and backlog uploads before the next network write. Sync may drain an
+  existing backlog while new local capture is disabled. **Public station
+  presence and callsign lookup** authorises the page and the live snapshot
+  flow after a separate disclosure of what the page reveals; it requires
+  evidence sync, while evidence sync does not imply publication. Disabling
+  sync disables publication first. Disabling publication attempts the
+  terminal snapshot and then sends an authenticated publication-disable
+  command; SMC makes the page unavailable and releases presence authority
+  atomically on that command, so suppression does not depend on terminal
+  delivery. It does not delete local or already-synced evidence. The
+  monitoring/on-air-only choice (§6.2) remains a fourth, narrower visibility
+  setting inside publication. No network byte is sent under either network
+  control before its own explicit opt-in.
 - **What is published:** the station's own on-air state; per-call heard
   results (call, SNR, age); queue membership and worked/logged status for
   stations that called us. The norm cover is long-established: PSK
@@ -794,12 +846,14 @@ working stations.
 - Capture, sync, and presence must **never block or delay decoding,
   logging, or operating**. Local queue, fire-and-forget, drop on sustained
   failure (§4.1).
-- SMD functions normally with SMC unreachable, degraded, or the feature
-  disabled.
-- Sync resumes from SMC's acknowledgement; presence coalesces to the latest
-  snapshot; heartbeats run exactly while the FT8 subsystem is advertised
-  (§6.2) and stop with it — a client must not fake liveness in either
-  direction.
+- SMD functions normally with SMC unreachable or degraded, and with any
+  consent layer disabled; disabling sync or publication does not disable
+  ordinary FT8 operation or local capture unless the operator separately
+  disables capture.
+- Sync resumes from SMC's acknowledgement; while publication is enabled,
+  presence coalesces to the latest snapshot and heartbeats run exactly while
+  the FT8 subsystem is advertised (§6.2), stopping with it — a client must
+  not fake liveness in either direction.
 
 ---
 
