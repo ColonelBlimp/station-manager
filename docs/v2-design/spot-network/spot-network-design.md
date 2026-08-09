@@ -221,12 +221,21 @@ over:
   under pressure it drops, never stalls;
 - drop order prefers observations SMC has already acknowledged, and
   **every cap purge is recorded — acknowledged and unacknowledged alike**,
-  as two record kinds with different meanings. Dropping *unsynced*
-  observations is a **loss interval** — start/end time, reason, count,
-  band/dial context — data gone from everywhere. Purging *acknowledged*
+  as two record kinds with different meanings, and the loss taxonomy is
+  three-valued because "unacknowledged" does not mean "absent from SMC" —
+  an offered batch whose acknowledgement was lost in transit may be
+  committed remotely without the client ever learning it. Dropping
+  unsynced observations is a **loss interval** — start/end time, reason,
+  count, band/dial context — carrying a `remote_status`: `never_offered`
+  (definitely absent remotely) or `offered_unacknowledged` (remote
+  presence **unknown**, never claimed lost). Purging *acknowledged*
   observations is a **local-retention record** — range, count, reason, and
-  the SMC-acknowledged status — a statement that the local archive ends
-  here while the data lives on in SMC. Both are tiny rows and both sync,
+  the acknowledged status — a statement that the local archive ends here
+  while the data was present in SMC at acknowledgement time (subject to
+  cloud retention and deletion thereafter). Purges and their records
+  commit in the **same SQLite transaction**: a crash between deletion and
+  record creation would produce exactly the invisible gap this machinery
+  exists to prevent. Both are tiny rows and both sync,
   so either archive can describe its own boundaries; this also resolves
   the coverage coupling honestly — a `decoded` coverage row whose local
   observations were purged is interpretable through the retention record
@@ -289,9 +298,16 @@ a not-measured sentinel rather than a number that looks like dBm.
 ### 5.1 Shape
 
 JSON batches on the existing authenticated SMD ↔ SMC HTTP channel. A batch
-is any set of observations — contiguity carries no meaning — and SMC
-answers with a **per-row terminal outcome**, because "acknowledged UUIDs"
-alone cannot express the failure modes the design itself defines:
+carries **tagged sync records under one envelope** — observations, coverage
+records, loss intervals, local-retention records, profile versions — and
+the idempotency contract is uniform across every kind: **each record has a
+stable UUIDv7 identity, a content digest, and receives a per-row
+outcome**. Nothing about a record's kind exempts it from the rules; a loss
+interval that could be silently double-ingested or silently dropped would
+undermine the very honesty it exists to provide. A batch is any set of
+records — contiguity carries no meaning — and SMC answers with the
+per-row terminal outcome, because "acknowledged UUIDs" alone cannot
+express the failure modes the design itself defines:
 
 > `accepted` · `already_present` · `tombstoned` · `suppressed` ·
 > `retryable_missing_profile` · `permanent_reject(reason)`
@@ -361,12 +377,24 @@ decoder build and options, and the **client-stamped callsign occurrences**
 with role and hash-resolution kind. SMC may re-derive and validate the
 ordinarily-parseable fields against the payload, but the client's
 decode-time hash resolutions are **preserved as submitted** — they are
-knowledge that existed only in that decoder at that moment. Callsign
-identity is canonicalised here too: occurrences store the **exact
-transmitted form** (`K1ABC/P`, `K1ABC/R`, compound forms) beside a
-**canonical base call**; public lookup and opt-out match on the canonical
-base (one licence holder, one identity), while results display the exact
-form that was heard.
+knowledge that existed only in that decoder at that moment.
+
+Callsign identity is **one versioned canonicalisation function, applied
+everywhere identity is compared** — not a rule local to occurrence rows.
+Every source stores the **exact form** it saw (`K1ABC/P`, `K1ABC/R`,
+compound forms); every comparison matches on the **canonical base call**
+(one licence holder, one identity) computed by the same function:
+occurrence matching, presence queue and working-call matching, QSO-store
+lookups (*queued* / *being worked* / *logged* / *previously worked*),
+lookup-token binding, cache keys, deletion, and opt-out. The ladder spans
+three sources and the opt-out promises suppression across all of them — a
+function applied to only one lets a portable form be *heard* under its
+base identity yet fail to appear *queued*, or escape suppression through
+the QSO store. The function is **versioned**: stored records keep exact
+forms, matching applies the current version at query time, so a
+canonicalisation improvement re-partitions every source consistently and
+at once, never one table at a time. Results always display the exact form
+that was heard.
 
 **Ingest is one transaction, suppression checked first.** Parsing, the
 ongoing-opt-out suppression check (§8), the raw observation row and its
@@ -815,10 +843,12 @@ Recorded so the option is preserved and the reasoning is not re-derived:
 - **Backfill is option-preserving for retained observations, with
   observable gaps.** Because capture stores complete decoded-message records
   under stable UUIDs, any future collector can be seeded from the archive —
-  minus only what was truly lost — observations dropped before ever being
-  acknowledged, which the loss intervals record (§4.1); locally purged but
-  acknowledged history already lives in SMC, with the local-retention
-  records saying so.
+  minus what was truly lost — never-offered observations, which the loss
+  intervals record as such (§4.1); offered-but-unacknowledged drops are
+  *possibly* present in SMC (recorded `remote_status: unknown`, never
+  claimed either way), and locally purged acknowledged history was present
+  in SMC at acknowledgement time, with the local-retention records saying
+  so.
   Nothing built today forecloses anything; what the cap shed is honestly
   gone.
 - **Optional outbound reporting adapters.** A WSJT-X-compatible UDP decode

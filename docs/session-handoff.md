@@ -178,7 +178,16 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   recorded — loss INTERVALS for unsynced (gone everywhere) vs
   local-RETENTION records for acked (lives on SMC), both synced, §11
   backfill claim reconciled, decoded-coverage-orphan self-explaining.
-  Reviewer standard: implementation-ready once P1s close — closed.
+  ROUND 9 on Draft 3 (3 P1s): loss taxonomy THREE-valued
+  (never_offered / offered_unacknowledged=remote-UNKNOWN / acked —
+  "unacknowledged" ≠ "absent from SMC", lost-ack case); ONE tagged sync
+  envelope — every record kind (obs/coverage/loss/retention/profiles)
+  gets UUIDv7 + digest + per-row outcome, purge+audit-record in ONE SQLite
+  transaction; callsign canonicalisation = ONE VERSIONED function applied
+  at every comparison point (occurrences, queue/working, QSO lookups,
+  tokens, cache keys, deletion, opt-out — exact forms stored, current
+  version applied at query time). Reviewer standard: implementation-ready
+  once P1s close — closed.
 - **NEXT: operator passes the doc out for external review → on-air 0067.**
   Then: Settings defaults dropdown; max_repeats-to-session (0066 watch-list);
   Abandon-vs-queue flag still open.
