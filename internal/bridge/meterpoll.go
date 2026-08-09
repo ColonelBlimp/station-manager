@@ -39,10 +39,12 @@ var (
 	ft8MeterPollTimeout  = 100 * time.Millisecond
 )
 
-// meterAnswerStaleAfter is how many silent poll intervals raise the one
-// sustained-loss notice (ADR 0064 invariant 2: "sustained loss at most
-// surfaces a monitoring notice"). 8 intervals = 2 s at the default cadence —
-// long enough to ride out a TX→RX tail eating a couple of answers.
+// meterAnswerStaleAfter is how many consecutive WRITTEN-but-unanswered polls
+// raise the one sustained-loss notice (ADR 0064 invariant 2: "sustained loss
+// at most surfaces a monitoring notice"). 8 polls ≈ 2 s at the default
+// cadence — long enough to ride out a TX→RX tail eating a couple of answers.
+// Written polls, not wall time: a skipped or never-scheduled poll cannot have
+// lost an answer (codex 2026-08-09 P3).
 // PROVISIONAL: not operator-ratified; adjust freely.
 const meterAnswerStaleAfter = 8
 
@@ -54,9 +56,9 @@ func (s *Service) SetFt8CaptureLive(live bool) {
 	s.mu.Lock()
 	s.ft8CaptureLive = live
 	if !live {
-		// The staleness clock is session-scoped: a notice must not carry from
+		// The loss window is session-scoped: a notice must not carry from
 		// one capture session into the next.
-		s.meterAnswerAt = time.Time{}
+		s.meterUnansweredPolls = 0
 		s.meterAnswerStale = false
 	}
 	s.mu.Unlock()
@@ -107,27 +109,25 @@ func (s *Service) runMeterPollLoop(ctx context.Context, client serial.Client, po
 	}
 }
 
-// noteMeterPollCycle raises the one sustained-loss notice when polls are being
-// written but no RM4/RM5 answer has decoded for meterAnswerStaleAfter
-// intervals. Recovery (any answer) re-arms it, so the log carries one line per
-// loss episode, not one per silent cycle.
+// noteMeterPollCycle counts a WRITTEN poll toward the sustained-loss notice,
+// which fires when meterAnswerStaleAfter consecutive written polls go
+// unanswered. Skipped ticks (capture gate off, broadcast-storm quiet window)
+// never reach here, and pipeline teardown resets the count — a poll that was
+// never written cannot have lost an answer, so neither may age the window
+// (codex 2026-08-09 P3: the wall-clock predecessor warned on the first poll
+// written after a reconnect or storm, before its answer could arrive).
+// Recovery (any answer) re-arms it, so the log carries one line per loss
+// episode, not one per silent cycle.
 func (s *Service) noteMeterPollCycle() {
 	s.mu.Lock()
-	if s.meterAnswerAt.IsZero() {
-		// No answer yet this session: seed the clock from the first written
-		// poll so a rig that never answers still trips the notice.
-		s.meterAnswerAt = time.Now()
-		s.mu.Unlock()
-		return
-	}
-	stale := time.Since(s.meterAnswerAt) > time.Duration(meterAnswerStaleAfter)*s.ft8MeterPollInterval
-	fire := stale && !s.meterAnswerStale
+	s.meterUnansweredPolls++
+	fire := s.meterUnansweredPolls >= meterAnswerStaleAfter && !s.meterAnswerStale
 	if fire {
 		s.meterAnswerStale = true
 	}
 	s.mu.Unlock()
 	if fire {
-		s.logger.WarnWith().Int("intervals", meterAnswerStaleAfter).
+		s.logger.WarnWith().Int("polls", meterAnswerStaleAfter).
 			Msg("bridge: ft8 meter poll answers missing (rig silent on RM4/RM5)")
 	}
 }
@@ -150,7 +150,7 @@ func (s *Service) publishMeterAnswers(status cat.Status) {
 			continue // a garbled frame is not a reading
 		}
 		s.mu.Lock()
-		s.meterAnswerAt = time.Now()
+		s.meterUnansweredPolls = 0
 		s.meterAnswerStale = false
 		s.mu.Unlock()
 		s.hub.publish(Event{Name: EventRigMeters, Payload: RigMetersPayload{Meter: tag, Value: n}})

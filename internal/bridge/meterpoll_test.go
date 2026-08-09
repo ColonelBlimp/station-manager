@@ -34,6 +34,26 @@ package bridge
    P5 — a rigdef with no METERPOLL command (FT-710 today) never meter-polls,
         whatever the gate says: the capability is per-rigdef data, which is the
         ADR's "second rig with a during-TX read restriction" trigger built in.
+
+   P6–P8 pin the answer-loss notice's window (codex 2026-08-09 P3: staleness
+   was wall time since the last answer, so dead time the loop never polled
+   through — a broadcast-storm skip, or a pipeline reconnect with FT8 capture
+   still live — aged the window, and the FIRST poll written afterwards warned
+   before its answer could physically arrive). The ratified meaning: the
+   notice fires when meterAnswerStaleAfter consecutive WRITTEN polls go
+   unanswered — a poll that was never written cannot have lost an answer.
+
+   P6 — the window counts written polls, not wall time: one written poll after
+        an arbitrarily long answerless gap must not warn. Confusable state:
+        P8's genuine loss, where the same count of polls WAS written.
+   P7 — pipeline teardown starts a fresh window: polls the old pipeline wrote
+        cannot be answered by the new one, so after resetMeterObservation the
+        next written polls get the full window — and the window still closes
+        (the full count of new unanswered polls warns; a reconnect must not
+        become a place a real loss can hide).
+   P8 — genuine loss: the notice fires when the count of written unanswered
+        polls reaches meterAnswerStaleAfter, NOT before, once per episode; any
+        answer re-arms it for the next episode.
 */
 
 import (
@@ -208,6 +228,84 @@ func TestMeterPoll_AnswersDoNotFeedPushedStreamLiveness(t *testing.T) {
 	s.mu.Unlock()
 	if afterPush.IsZero() {
 		t.Fatalf("a pushed RM0 frame did not refresh driveLastMeterAt — liveness broke the other way")
+	}
+}
+
+// P6 — THE LOSS WINDOW COUNTS WRITTEN POLLS, NOT WALL TIME. The interval is
+// dialled to 1ns so ANY elapsed wall time dwarfs the old 8-interval clock:
+// an implementation measuring wall-since-last-answer fires here on the first
+// written poll; one measuring written polls cannot.
+func TestMeterPoll_LossNoticeCountsWrittenPollsNotWallTime(t *testing.T) {
+	s, _, buf := newDriveWatchService(t)
+	s.ft8MeterPollInterval = time.Nanosecond
+
+	s.publishMeterAnswers(meterFrame(t, "RM5029000")) // healthy answer, then quiet
+	time.Sleep(2 * time.Millisecond)                  // ≫ 8 "intervals" of wall time, zero polls written
+	s.noteMeterPollCycle()                            // the first poll actually written since
+
+	if n := len(matching(t, buf, "answers missing")); n != 0 {
+		t.Fatalf("loss notice fired on the first written poll after an unpolled gap (%d records) — staleness must count written polls, not wall time", n)
+	}
+}
+
+// P7 — PIPELINE TEARDOWN STARTS A FRESH WINDOW, AND THE FRESH WINDOW STILL
+// CLOSES. Seven polls go unanswered, the pipeline tears down (reconnect with
+// FT8 capture still live), and the new pipeline's first seven unanswered
+// polls must stay quiet — then the eighth warns, so a reconnect is not a
+// place a genuine loss can hide.
+func TestMeterPoll_ReconnectStartsFreshLossWindow(t *testing.T) {
+	s, _, buf := newDriveWatchService(t)
+	s.ft8MeterPollInterval = time.Nanosecond
+
+	s.publishMeterAnswers(meterFrame(t, "RM5029000"))
+	for i := 0; i < meterAnswerStaleAfter-1; i++ {
+		s.noteMeterPollCycle()
+	}
+	s.resetMeterObservation() // pipeline teardown
+	time.Sleep(2 * time.Millisecond)
+
+	for i := 0; i < meterAnswerStaleAfter-1; i++ {
+		s.noteMeterPollCycle()
+	}
+	if n := len(matching(t, buf, "answers missing")); n != 0 {
+		t.Fatalf("loss notice exists before the post-reconnect window closed (%d records)", n)
+	}
+	s.noteMeterPollCycle()
+	if n := len(matching(t, buf, "answers missing")); n != 1 {
+		t.Fatalf("full window of unanswered polls after reconnect produced %d notices; want exactly 1", n)
+	}
+}
+
+// P8 — GENUINE LOSS: the notice fires when written unanswered polls reach
+// meterAnswerStaleAfter, NOT before, once per episode; an answer re-arms it.
+// This is P6's confusable state — same silence, but here the polls WERE
+// written, so the notice is owed.
+func TestMeterPoll_GenuineLossWarnsAtWindowOncePerEpisode(t *testing.T) {
+	s, _, buf := newDriveWatchService(t)
+	s.ft8MeterPollInterval = time.Nanosecond
+
+	// A rig that never answers at all still trips the notice (the seed case).
+	for i := 0; i < meterAnswerStaleAfter-1; i++ {
+		s.noteMeterPollCycle()
+	}
+	if n := len(matching(t, buf, "answers missing")); n != 0 {
+		t.Fatalf("notice fired after %d written polls; the window is %d", meterAnswerStaleAfter-1, meterAnswerStaleAfter)
+	}
+	s.noteMeterPollCycle()
+	if n := len(matching(t, buf, "answers missing")); n != 1 {
+		t.Fatalf("notice count after the window closed = %d; want 1", n)
+	}
+	s.noteMeterPollCycle() // still silent: one line per episode, not per cycle
+	if n := len(matching(t, buf, "answers missing")); n != 1 {
+		t.Fatalf("notice repeated inside one loss episode (%d records)", n)
+	}
+
+	s.publishMeterAnswers(meterFrame(t, "RM4026000")) // recovery re-arms
+	for i := 0; i < meterAnswerStaleAfter; i++ {
+		s.noteMeterPollCycle()
+	}
+	if n := len(matching(t, buf, "answers missing")); n != 2 {
+		t.Fatalf("second loss episode produced %d total notices; want 2", n)
 	}
 }
 

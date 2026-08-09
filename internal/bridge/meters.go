@@ -535,6 +535,12 @@ func (s *Service) resetMeterObservation() {
 	// armed, so the previous instance's instrument-alive evidence must not carry
 	// over into the next transmission's drive check (drivealarm.go).
 	s.meterSeenSinceTx = false
+	// The answer-loss window is per-pipeline too: polls the old pipeline wrote
+	// cannot be answered by the new one, and dead reconnect time must not age
+	// the window (codex 2026-08-09 P3) — the first polls written after reopen
+	// get the full meterAnswerStaleAfter window before a notice.
+	s.meterUnansweredPolls = 0
+	s.meterAnswerStale = false
 	// driveAlarmStanding deliberately SURVIVES this reset. An earlier version cleared
 	// it here, claiming the SPA drops its drive banner on rig-disconnected — it does
 	// not: onRigDisconnected only moves rig.cat to 'lost', and resetCatLink is a test

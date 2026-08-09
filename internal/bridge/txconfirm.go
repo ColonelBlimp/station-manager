@@ -135,7 +135,11 @@ func (s *Service) beginTxConfirmCycle(def cat.RigDefinition, cl serial.Client, r
 // uncertainty window opened) must not alarm the wrong transition.
 func (s *Service) txConfirmTimeout(gen uint64) {
 	s.mu.Lock()
-	fire := s.txUncertain && s.txConfirmGen == gen && !s.txAlarmActive
+	// The stopped gate handles the callback Stop could not unschedule: a
+	// timer that fired before Stop's timer.Stop() proceeds once Stop
+	// releases s.mu, and must not mutate alarm state after Stop returned
+	// (codex 2026-08-09 P3). Same pattern as startAlarmProbes.
+	fire := !s.stopped && s.txUncertain && s.txConfirmGen == gen && !s.txAlarmActive
 	if fire {
 		s.txAlarmActive = true
 		s.closeTxConfirmDoneLocked() // cycle resolved (alarmed): wake waiters

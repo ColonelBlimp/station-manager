@@ -132,6 +132,16 @@ type Service struct {
 	// runSupervisor reads/clears from its own context.
 	lastPublishedExitKey string
 
+	// pipelineStartedAt is when the CURRENT runPipeline attempt began.
+	// The publishExit* helpers read it to apply the steady-state key
+	// clear AT PUBLISH TIME: the supervisor's own clear runs only after
+	// runPipeline returns, which is after the terminating error has
+	// already been through the dedup — so without this, a steady
+	// session's real disconnect could be eaten by a key left from an
+	// earlier short run with the same code (codex 2026-08-09 P2).
+	// Mu-guarded like lastPublishedExitKey.
+	pipelineStartedAt time.Time
+
 	// stopOnce + stopDone serialise concurrent Stop calls so the
 	// "Stop returned, therefore stopped" contract holds for every
 	// caller. The first Stop runs the teardown work and closes
@@ -170,11 +180,17 @@ type Service struct {
 	ft8MeterPollTimeout            time.Duration
 
 	// ADR 0064 FT8 meter poll state, under mu: the capture-session gate
-	// (SetFt8CaptureLive), the last decoded RM4/RM5 answer, and whether the
-	// sustained-loss notice has fired for the current loss episode.
-	ft8CaptureLive   bool
-	meterAnswerAt    time.Time
-	meterAnswerStale bool
+	// (SetFt8CaptureLive), the count of consecutive WRITTEN polls with no
+	// RM4/RM5 answer decoded, and whether the sustained-loss notice has fired
+	// for the current loss episode. Written polls, not wall time (codex
+	// 2026-08-09 P3): time the loop never polled through — a broadcast-storm
+	// skip, or a pipeline reconnect with capture still live — must not age
+	// the loss window, or the first poll written afterwards warns before its
+	// answer could arrive. Reset by any answer, by capture-session end, and
+	// by pipeline teardown (resetMeterObservation).
+	ft8CaptureLive       bool
+	meterUnansweredPolls int
+	meterAnswerStale     bool
 
 	// CI-V wait-for-ACK command-path state (ADR 0034). The IC-7300 confirms a
 	// set-command with a bare FB/FA ACK and never broadcasts the change, so
@@ -743,6 +759,17 @@ func (s *Service) Stop() error {
 		s.mu.Lock()
 		cancel := s.cancel
 		s.stopped = true
+		// An unresolved TX confirmation must not outlive Stop (codex
+		// 2026-08-09 P3): stop its timer, and resolve its waiters now —
+		// they read the still-uncertain state and correctly skip their
+		// restore (the safe state). A callback that already fired and is
+		// queued on s.mu cannot be unscheduled by Stop; the s.stopped
+		// gate inside txConfirmTimeout covers that interleaving.
+		if s.txConfirmTimer != nil {
+			s.txConfirmTimer.Stop()
+			s.txConfirmTimer = nil
+		}
+		s.closeTxConfirmDoneLocked()
 		s.mu.Unlock()
 
 		if cancel != nil {

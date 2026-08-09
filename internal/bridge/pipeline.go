@@ -186,6 +186,10 @@ const pollCommandName = "POLL"
 //     exitPermanent. The supervisor gives up — retrying won't fix
 //     an operator typo.
 func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
+	s.mu.Lock()
+	s.pipelineStartedAt = time.Now()
+	s.mu.Unlock()
+
 	def, ok := cat.Lookup(s.cfg.Cat.Driver)
 	if !ok {
 		s.logger.ErrorWith().
@@ -989,14 +993,9 @@ func (s *Service) publishBridgeError(code BridgeErrorCode, details map[string]st
 // with the wrong ID) keep using publishBridgeError directly because
 // they're a one-shot per pipeline run, not a retry-driven repeat.
 func (s *Service) publishExitBridgeError(code BridgeErrorCode, details map[string]string) {
-	key := "bridge-error:" + string(code)
-	s.mu.Lock()
-	if s.lastPublishedExitKey == key {
-		s.mu.Unlock()
+	if s.exitKeyAlreadyPublished("bridge-error:" + string(code)) {
 		return
 	}
-	s.lastPublishedExitKey = key
-	s.mu.Unlock()
 	s.publishBridgeError(code, details)
 }
 
@@ -1008,15 +1007,36 @@ func (s *Service) publishExitBridgeError(code BridgeErrorCode, details map[strin
 // scope there: a single quiet-rig event per session, with implicit
 // recovery on the next decoded line.
 func (s *Service) publishExitDisconnect(code RigDisconnectedCode, details map[string]string) {
-	key := "rig-disconnected:" + string(code)
-	s.mu.Lock()
-	if s.lastPublishedExitKey == key {
-		s.mu.Unlock()
+	if s.exitKeyAlreadyPublished("rig-disconnected:" + string(code)) {
 		return
 	}
-	s.lastPublishedExitKey = key
-	s.mu.Unlock()
 	s.publishDisconnect(code, details)
+}
+
+// exitKeyAlreadyPublished is the shared dedup decision for the two
+// publishExit* helpers. It reports whether key was already published this
+// failure cycle, recording it as published otherwise.
+//
+// The steady-state clear happens HERE as well as in runSupervisor, and the
+// duplication is load-bearing: the supervisor's clear runs only after
+// runPipeline returns, but the error that ENDS a steady run reaches this
+// dedup before returning — so judged only by the supervisor, a disconnect
+// after minutes of clean session would be suppressed against a key left by
+// an earlier short run with the same code, and connected SPA clients would
+// keep rendering live rig state through the outage (codex 2026-08-09 P2).
+// The supervisor's clear still covers a steady run that exits without
+// publishing anything.
+func (s *Service) exitKeyAlreadyPublished(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.pipelineStartedAt.IsZero() && time.Since(s.pipelineStartedAt) > s.supervisorSteadyStateThreshold {
+		s.lastPublishedExitKey = ""
+	}
+	if s.lastPublishedExitKey == key {
+		return true
+	}
+	s.lastPublishedExitKey = key
+	return false
 }
 
 // clearLastPublishedExitKey resets the supervisor's dedup state.

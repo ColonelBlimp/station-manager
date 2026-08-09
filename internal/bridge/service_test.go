@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -198,6 +199,77 @@ func TestStop_Idempotent(t *testing.T) {
 	}
 	if err := s.Stop(); err != nil {
 		t.Fatalf("second Stop: %v", err)
+	}
+}
+
+// TestStop_ConfirmTimeoutAfterStop_DoesNotAlarm — codex 2026-08-09 P3.
+// CRITERION: after Stop returns, an unresolved TX confirmation must not
+// mutate alarm state — distinguishable from the pre-Stop case, where the
+// same timeout MUST alarm (TestReleaseFt8Tx… / txrecheck rules pin that
+// side).
+//
+// The race this pins: beginTxConfirm arms an untracked time.AfterFunc.
+// Stop stops the timer, but a callback that has ALREADY fired and is
+// waiting on s.mu when Stop runs cannot be unscheduled — it proceeds
+// after Stop releases the lock, so the callback body itself must observe
+// s.stopped. The test drives that exact interleaving by invoking the
+// callback directly after Stop, with the real timer parked on an hour so
+// it provably isn't the thing under test.
+func TestStop_ConfirmTimeoutAfterStop_DoesNotAlarm(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	s.confirmTimeout = time.Hour
+	def, ok := cat.Lookup("yaesu-ftdx10")
+	if !ok {
+		t.Fatal("yaesu-ftdx10 rigdef missing")
+	}
+
+	s.beginTxConfirm(def, nil)
+	s.mu.Lock()
+	gen := s.txConfirmGen
+	s.mu.Unlock()
+
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	s.txConfirmTimeout(gen) // the in-flight callback landing after Stop
+
+	s.mu.Lock()
+	alarmed := s.txAlarmActive
+	s.mu.Unlock()
+	if alarmed {
+		t.Fatal("confirm-timeout callback raised the TX alarm after Stop returned — alarm state mutated outside the documented lifecycle")
+	}
+}
+
+// TestStop_ResolvesPendingTxConfirmWaiters — same finding, the waiter half.
+// CRITERION: a release path blocked in waitTxConfirm when Stop runs returns
+// promptly (and reports NOT-confirmed, so the caller skips its restore —
+// the safe state), rather than sleeping out the full confirm grace after
+// the daemon has shut down.
+func TestStop_ResolvesPendingTxConfirmWaiters(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	s.confirmTimeout = time.Hour
+	def, ok := cat.Lookup("yaesu-ftdx10")
+	if !ok {
+		t.Fatal("yaesu-ftdx10 rigdef missing")
+	}
+
+	s.beginTxConfirm(def, nil)
+	res := make(chan bool, 1)
+	go func() { res <- s.waitTxConfirm() }()
+
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	select {
+	case confirmed := <-res:
+		if confirmed {
+			t.Fatal("waitTxConfirm reported confirmed-idle for a cycle Stop cut short — the caller would run its restore")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitTxConfirm still blocked 2s after Stop — Stop must resolve the pending confirmation cycle")
 	}
 }
 

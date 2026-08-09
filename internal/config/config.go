@@ -1748,6 +1748,18 @@ func validateBridge(b types.BridgeConfig) error {
 	if err := checkTimeout("bridge.timeouts.civ_poll_quiet_ms", b.Timeouts.CivPollQuietMs); err != nil {
 		return err
 	}
+	// FT8 meter-poll cadence + answer bound (ADR 0064). Same sane-range guard,
+	// but here the range is load-bearing beyond typo-catching: these two feed
+	// time.NewTicker / context.WithTimeout via a raw ms→Duration multiply in
+	// bridge.New, so an overflow-scale positive value becomes a non-positive
+	// Duration and panics the ticker at the first FT8 capture session, and a
+	// 1 ms interval saturates the CAT link (codex 2026-08-09 P2).
+	if err := checkTimeout("bridge.timeouts.ft8_meter_poll_interval_ms", b.Timeouts.Ft8MeterPollIntervalMs); err != nil {
+		return err
+	}
+	if err := checkTimeout("bridge.timeouts.ft8_meter_poll_timeout_ms", b.Timeouts.Ft8MeterPollTimeoutMs); err != nil {
+		return err
+	}
 	if b.Timeouts.BackoffInitialMs > 0 && b.Timeouts.BackoffMaxMs > 0 && b.Timeouts.BackoffInitialMs > b.Timeouts.BackoffMaxMs {
 		return fmt.Errorf("bridge.timeouts.backoff_initial_ms (%d) must not exceed backoff_max_ms (%d)", b.Timeouts.BackoffInitialMs, b.Timeouts.BackoffMaxMs)
 	}

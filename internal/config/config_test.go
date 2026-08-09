@@ -676,6 +676,52 @@ func TestValidateBridge_TimeoutRangeChecks(t *testing.T) {
 		}
 	})
 
+	// The two ADR 0064 FT8 meter-poll fields feed time.NewTicker via a raw
+	// ms→Duration multiply (bridge.New → runMeterPollLoop), so they are the one
+	// pair where an out-of-range value is not merely wrong but fatal: a large
+	// enough positive interval overflows time.Duration to non-positive and
+	// panics the ticker at the first FT8 capture session, and a 1 ms interval
+	// saturates the CAT link with RM4;RM5; bursts. Same sane-range guard as
+	// every other bridge timeout (codex 2026-08-09 P2).
+	t.Run("rejects below-min ft8_meter_poll_interval_ms", func(t *testing.T) {
+		err := validateBridge(types.BridgeConfig{
+			Timeouts: types.BridgeTimeoutsConfig{Ft8MeterPollIntervalMs: 1},
+		})
+		if err == nil || !strings.Contains(err.Error(), "ft8_meter_poll_interval_ms") {
+			t.Errorf("expected error naming ft8_meter_poll_interval_ms; got %v", err)
+		}
+	})
+
+	t.Run("rejects overflow-scale ft8_meter_poll_interval_ms", func(t *testing.T) {
+		// 1e13 ms × time.Millisecond overflows int64 nanoseconds to a negative
+		// Duration — the time.NewTicker panic vector. The range check must
+		// reject it long before the bridge can construct a ticker from it.
+		err := validateBridge(types.BridgeConfig{
+			Timeouts: types.BridgeTimeoutsConfig{Ft8MeterPollIntervalMs: 10_000_000_000_000},
+		})
+		if err == nil || !strings.Contains(err.Error(), "ft8_meter_poll_interval_ms") {
+			t.Errorf("expected error naming ft8_meter_poll_interval_ms; got %v", err)
+		}
+	})
+
+	t.Run("rejects below-min ft8_meter_poll_timeout_ms", func(t *testing.T) {
+		err := validateBridge(types.BridgeConfig{
+			Timeouts: types.BridgeTimeoutsConfig{Ft8MeterPollTimeoutMs: 1},
+		})
+		if err == nil || !strings.Contains(err.Error(), "ft8_meter_poll_timeout_ms") {
+			t.Errorf("expected error naming ft8_meter_poll_timeout_ms; got %v", err)
+		}
+	})
+
+	t.Run("rejects above-max ft8_meter_poll_timeout_ms", func(t *testing.T) {
+		err := validateBridge(types.BridgeConfig{
+			Timeouts: types.BridgeTimeoutsConfig{Ft8MeterPollTimeoutMs: 9_000_000},
+		})
+		if err == nil || !strings.Contains(err.Error(), "ft8_meter_poll_timeout_ms") {
+			t.Errorf("expected error naming ft8_meter_poll_timeout_ms; got %v", err)
+		}
+	})
+
 	t.Run("accepts in-range values", func(t *testing.T) {
 		err := validateBridge(types.BridgeConfig{
 			Timeouts: types.BridgeTimeoutsConfig{
@@ -684,6 +730,8 @@ func TestValidateBridge_TimeoutRangeChecks(t *testing.T) {
 				BackoffMaxMs:           30000,
 				SteadyStateThresholdMs: 10000,
 				WriteWatchdogMs:        2000,
+				Ft8MeterPollIntervalMs: 500,
+				Ft8MeterPollTimeoutMs:  200,
 			},
 		})
 		if err != nil {

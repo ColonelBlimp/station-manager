@@ -287,6 +287,107 @@ drain:
 	}
 }
 
+// TestSupervisor_SteadyRunDisconnectPublishesDespiteEarlierKey — codex
+// 2026-08-09 P2. CRITERION: when the rig disconnects after a steady session,
+// the SPA receives the rig-disconnected toast even if a brief earlier outage
+// failed with the SAME code — distinguishable from the retry-flood dedup
+// (previous test) because there a short run repeats the key within the
+// threshold and stays suppressed.
+//
+// The defect shape: runSupervisor clears lastPublishedExitKey only after
+// runPipeline RETURNS and is judged steady, but the terminating error has
+// already been through the deduplicating publisher inside the run — so a key
+// left by an earlier short run (here: fake #1 dying right after INIT) eats
+// the steady session's real disconnect, and connected SPA clients keep
+// rendering live rig state through the outage. The steady-state judgement
+// must therefore also happen AT PUBLISH TIME.
+//
+// Timing: the steady threshold is scaled to 300ms and the test waits 400ms+
+// measured from fake #2's open before killing it. Against the FIXED code the
+// test cannot flake under load in either direction — both runs publish
+// whether or not run #1 accidentally counts as steady. The margins matter
+// only for the certification direction (run #1, a ~10ms sequence, must stay
+// inside the threshold for the OLD code to fail), so the threshold carries
+// ~30× headroom over run #1's healthy duration.
+func TestSupervisor_SteadyRunDisconnectPublishesDespiteEarlierKey(t *testing.T) {
+	scaleSupervisorBackoff(t, 1*time.Millisecond, 2*time.Millisecond, 300*time.Millisecond)
+
+	s := New(types.BridgeConfig{
+		Enabled: true,
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ft710"},
+	}, &logging.Service{})
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	fakeCh := make(chan *fakeSerial, 4)
+	s.openClient = func(_ serial.Config) (serial.Client, error) {
+		f := newFakeSerial()
+		select {
+		case fakeCh <- f:
+		default:
+		}
+		return f, nil
+	}
+
+	ch, unsub := s.Subscribe()
+	defer unsub()
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	// Run 1: die on the read path right after INIT lands, well inside the
+	// steady threshold — this leaves the serial_port_error key set.
+	var first *fakeSerial
+	select {
+	case first = <-fakeCh:
+	case <-time.After(time.Second):
+		t.Fatal("first open did not happen within 1s")
+	}
+	if !waitForFirstWrite(first, []byte("AI1;"), time.Second) {
+		t.Fatalf("INIT did not reach fake #1; writes=%q", first.recordedWrites())
+	}
+	_ = first.Close()
+
+	// Run 2: live past the steady threshold, then die the same way.
+	var second *fakeSerial
+	select {
+	case second = <-fakeCh:
+	case <-time.After(time.Second):
+		t.Fatal("supervisor did not reopen after the first failure")
+	}
+	secondOpenedAt := time.Now()
+	if !waitForFirstWrite(second, []byte("AI1;"), time.Second) {
+		t.Fatalf("INIT did not reach fake #2; writes=%q", second.recordedWrites())
+	}
+	for time.Since(secondOpenedAt) < 400*time.Millisecond {
+		time.Sleep(10 * time.Millisecond)
+	}
+	_ = second.Close()
+
+	// Both outages must reach the subscriber. The old code delivers only the
+	// first: run 2's disconnect carries the same key and the supervisor's
+	// clear runs too late.
+	disconnects := 0
+	deadline := time.After(2 * time.Second)
+	for disconnects < 2 {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				t.Fatalf("hub closed with %d rig-disconnected events; want 2", disconnects)
+			}
+			if evt.Name == EventRigDisconnected {
+				disconnects++
+			}
+		case <-deadline:
+			t.Fatalf("saw %d rig-disconnected events; want 2 — the steady run's real disconnect was suppressed by the earlier run's key", disconnects)
+		}
+	}
+}
+
 // waitForFirstWrite polls fake.recordedWrites until the first write
 // equals want, or the deadline expires. Returns true on match.
 // Helper kept local because the existing pipeline tests all repeat

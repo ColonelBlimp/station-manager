@@ -41,44 +41,36 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-08)
+## Now (as of 2026-08-09)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **EVENING 2026-08-08: ADR 0067 (the one-rule run model) is FULLY BUILT —
-  slices A–D, same day it was ratified.** A (mode-only arming + pick listing
-  run) and B (bag-and-drain queue) committed `67084472`/`f6e93efd`; C (the
-  SPA run surface) committed `dd44784b`; **the TREE HOLDS slice D,
-  uncommitted**: the `ft8.tx.auto_work_callers` retirement (legacy key
-  tolerated-ignored, like alc_red), the `ft8_auto_work_callers` GET seed and
-  `auto_work` wire fields removed, the docs sweep (ft8.md run model,
-  api-endpoints, ADR 0059/0065/0066 dated notes, internal/ft8/CLAUDE.md),
-  PLUS the slice-C review P2 fix: `terminalStatusLocked` now carries the
-  pick run's mode/lists/pause via the factored `applyRunStateLocked`
-  (B12 in adr0067_test.go — a completed pick contact's terminal frame no
-  longer blanks the drawer/Resume). Review doc triaged + deleted.
-- **One rule now: the session's Answer mode ALONE decides how every run
-  treats callers.** Auto modes = hands-off runs, NO gesture; pick (the
-  default) = listing run + drawer (Work now / Bag several; daemon drains in
-  bag order; Stop pauses, Resume continues). Chord/toggle/stack/intent all
-  retired. NOTE for the operator: **Abandon now stops run+queue outright**
-  (0059 W6) — harder than the old SPA stack's pause-and-keep; flagged, one
-  small daemon change if unwanted.
-- **LATE AFTERNOON: 200-QSO 17m Call-CQ run (auto_first, pre-0067 build) —
-  clean end to end** (200 stored/logged/forwarded 200-200-all; poll witness
-  VALIDATED at scale: 31 alarms all pre-witness 12:28-12:47, ZERO after;
-  stuck-TX self-clear VALIDATED naturally at 15:31:46 → backlog item CLOSED).
-  Then: api review round — 4 findings (socket unlink P1, duplicate-email P1,
-  repeat-cap race P2, stamp-date P3) all FIXED red-first, committed
-  `a9151fea`, CI green. **0067 build DEPLOYED after the run.** TREE HOLDS:
-  the went-dark Warn demotion (poll_output pair → Debug, DW7/DW8) + the
-  backlog closure, uncommitted.
-- **NEXT: commit the demotion → on-air try-and-adjust of the 0067 run model**
-  (now deployed, still unexercised). Then: Settings defaults dropdown;
-  max_repeats-to-session (0066 watch-list); Abandon-vs-queue flag still open.
+- **ADR 0067 (one-rule run model) is FULLY BUILT and DEPLOYED, on-air still
+  open.** Slices A–D committed (`67084472`/`f6e93efd`/`dd44784b`/`ce971f32`).
+  Answer mode ALONE decides run behaviour: auto modes hands-off, pick (the
+  default) = listing run + drawer (Work/Bag, daemon drains; Stop pauses).
+  Operator NOTE still open: **Abandon stops run+queue outright** (0059 W6) —
+  harder than the old SPA pause-and-keep; one small daemon change if unwanted.
+- **2026-08-08: 200-QSO 17m run clean end to end**; poll witness + stuck-TX
+  self-clear both VALIDATED on air; went-dark Warn demotion committed
+  `ef791091` and PUSHED.
+- **CI FLAKE, assessed not caused**: `ef791091`'s CI run failed on
+  `TestHTTPHandler_StreamsPipelineEvents` (bridge, 1s subscribe+bootstrap
+  wait) on a heavily loaded runner (api 405s, sqlite 186s under -race); the
+  commit touched only drivealarm log levels. Next push re-tests it; if it
+  recurs, harden the two 1s waits in handler_test.go.
+- **TREE HOLDS, uncommitted: 4 codex bridge findings FIXED red-first**
+  (2026-08-09): steady-run disconnect no longer eaten by the supervisor dedup
+  key (publish-time steady clear, pipeline.go); ft8_meter_poll_*_ms now
+  range-validated (ticker-panic vector closed, config.go); Stop stops the
+  TX-confirm timer + wakes waiters, callback stop-gated (txconfirm/service);
+  meter answer-loss notice now counts WRITTEN polls, not wall time (no false
+  warn after reconnect/storm). Bridge+config green incl. -race; probes done.
+- **NEXT: commit the fixes → watch CI (the flaky test) → on-air 0067.**
+  Then: Settings defaults dropdown; max_repeats-to-session (0066 watch-list).
 
 ## Current state (as of 2026-08-08)
 
