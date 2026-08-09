@@ -48,184 +48,189 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **ADR 0067 (one-rule run model) is FULLY BUILT and DEPLOYED, on-air still
-  open.** Slices A–D committed (`67084472`/`f6e93efd`/`dd44784b`/`ce971f32`).
-  Answer mode ALONE decides run behaviour: auto modes hands-off, pick (the
-  default) = listing run + drawer (Work/Bag, daemon drains; Stop pauses).
-  Operator NOTE still open: **Abandon stops run+queue outright** (0059 W6) —
-  harder than the old SPA pause-and-keep; one small daemon change if unwanted.
-- **2026-08-08: 200-QSO 17m run clean end to end**; poll witness + stuck-TX
-  self-clear both VALIDATED on air; went-dark Warn demotion committed
-  `ef791091` and PUSHED.
-- **CI FLAKE, assessed not caused**: `ef791091`'s CI run failed on
-  `TestHTTPHandler_StreamsPipelineEvents` (bridge, 1s subscribe+bootstrap
-  wait) on a heavily loaded runner (api 405s, sqlite 186s under -race); the
-  commit touched only drivealarm log levels. Next push re-tests it; if it
-  recurs, harden the two 1s waits in handler_test.go.
-- **2026-08-09 day: 5 codex bridge findings FIXED red-first** (steady-dedup
-  disconnect, meter-poll config validation, Stop vs confirm timer, answer-loss
-  poll counter, count-before-write race) — all committed (`2653e859`,
-  `004f547b`), pushed, **CI GREEN** (the flaky handler test passed untouched,
-  supporting the flake assessment; if it recurs, harden its two 1s waits).
-- **TREE HOLDS: the spot-network doc REWRITTEN as Draft 3 — the operator's
-  vertical slice** (docs/v2-design/spot-network/spot-network-design.md;
-  title now "FT8 Evidence Capture and Live Station Presence"). Build =
-  SQLite evidence capture (decoded-message records + dt + flags + versioned
-  profiles, size cap, loss counters) → sync over the EXISTING SMD↔SMC
-  channel (prompt while live, lazy backlog; store-generation + write-once
-  assignment + digest, distilled from 4 review rounds) → separate
-  latest-state presence endpoint (incarnation token + snapshotRev, all the
-  ordering rules kept) → ONE public per-call lookup page (not heard /
-  heard / queued / worked / in-log ladder) → time-boxed pilot with
-  pre-registered go/no-go. NO SBE/QUIC/TimescaleDB/MQTT/research-network —
-  all moved to a short "future directions" section, gated on a researcher
-  asking or an implementer committing; the full protocol design survives in
-  this file's git history. MQTT question RESOLVED: heard comes from our own
-  synced decodes (first-hand, fresher); MQTT noted only as a someday
-  option for non-SM stations. DRAFT-3 REVIEW ROUND folded in (8 findings):
-  sync identity now UUIDv7-per-observation (ADR 0016 pattern — DELETES the
-  generation/sequence machinery; drops leave honest gaps, no tombstones);
-  explicit state model offline/monitoring/on_air + transmitting flag
-  (sources: ft8 lifecycle / sequencer / bridge TxActive; heartbeats span
-  subsystem life, not run life); "logged" ladder rung scoped to THE RUN via
-  runId (unscoped log lookup inverts the ladder); profile sync §5.4;
-  two named pipeline prerequisites (widen DecodeLine — payload77/AP/metrics
-  stop inside go-ft8; decode-sink fan-out, single slot now PSK-occupied);
+- **2026-08-09 power cut ended the session; position fully clean on resume.**
+  The day's five commits are PUSHED (2 spot-doc, handoff `89209b5e`, run
+  identity `f3043e80`, go-ft8 v0.8.0 bump `1df6d94d`, review fixes
+  `5011dc83`), CI GREEN on the final push, all reviews triaged clean.
+- **Spot-network design CONVERGED as Draft 3 — "FT8 Evidence Capture and
+  Live Station Presence"** (docs/v2-design/spot-network/spot-network-design.md):
+  SQLite evidence capture → sync over the existing SMD↔SMC channel →
+  latest-state presence endpoint → ONE public per-call lookup page →
+  time-boxed pilot. NINE review rounds folded; reviewer standard
+  "implementation-ready once P1s close" — closed. Round-by-round record in
+  Current state below.
+- **Prereq 1 (go-ft8 evidence-grade decode) SHIPPED upstream, v0.8.0 bumped**
+  (`1df6d94d`). Behaviour change: CRC-valid unsupported payloads now arrive
+  TEXT-LESS — `dropUnparsed` at DecodeSlot's return is the curated-branch
+  filter (design §4 prereq 2's first stone). **Prereq 3 (run identity) BUILT**
+  (`f3043e80` + `5011dc83`): UUIDv7 per operator-started run, pin-at-commit
+  (completions read contactFlags.runID, never live s.runID), stamped to
+  types.Qso.AppSmRunID; RI1–RI9 all reversion-probed.
+- **ADR 0067 on-air validation still OPEN** (pick-run try). Operator NOTE:
+  Abandon stops run+queue outright (0059 W6) — flag if unwanted.
+- **CI flake watch**: `TestHTTPHandler_StreamsPipelineEvents` failed once on
+  a loaded runner (`ef791091`), passed untouched on both pushes since. If it
+  recurs, harden its two 1s waits in bridge handler_test.go.
+- **NEXT: prerequisite 2 — the rich-result split** (evidence branch
+  unfiltered/unprojected at the go-ft8 rich result; curated branch = own-TX
+  filter + projection → sequencer/UI/PSK) **+ stateful ft8.Decoder adoption**,
+  characterization tests freezing the curated branch first. Then: on-air
+  0067 · Settings defaults dropdown · max_repeats-to-session (0066).
+
+## Current state (as of 2026-08-09)
+
+### 2026-08-09 — Draft 3 convergence (9 review rounds), run identity, go-ft8 v0.8.0
+
+**Morning: 5 codex bridge findings FIXED red-first** (steady-dedup
+disconnect, meter-poll config validation, Stop vs confirm timer, answer-loss
+poll counter, count-before-write race) — committed (`2653e859`, `004f547b`),
+pushed, CI GREEN. The flaky handler test passed untouched, supporting the
+flake assessment (see the flake entry under 2026-08-08 below).
+
+**The spot-network doc REWRITTEN as Draft 3 — the operator's vertical
+slice** (docs/v2-design/spot-network/spot-network-design.md; title now
+"FT8 Evidence Capture and Live Station Presence"). Build = SQLite evidence
+capture (decoded-message records + dt + flags + versioned profiles, size
+cap, loss counters) → sync over the EXISTING SMD↔SMC channel (prompt while
+live, lazy backlog) → separate latest-state presence endpoint (incarnation
+token + snapshotRev, all the ordering rules kept) → ONE public per-call
+lookup page (not heard / heard / queued / worked / in-log ladder) →
+time-boxed pilot with pre-registered go/no-go. NO
+SBE/QUIC/TimescaleDB/MQTT/research-network — all moved to a short "future
+directions" section, gated on a researcher asking or an implementer
+committing; the full protocol design survives in this file's git history.
+MQTT question RESOLVED: heard comes from our own synced decodes
+(first-hand, fresher); MQTT noted only as a someday option for non-SM
+stations.
+
+**Draft 3 review rounds, all findings verified then folded:**
+
+- **Round 1 (8 findings):** sync identity now UUIDv7-per-observation
+  (ADR 0016 pattern — DELETES the generation/sequence machinery; drops
+  leave honest gaps); explicit state model offline/monitoring/on_air +
+  transmitting flag (sources: ft8 lifecycle / sequencer / bridge;
+  heartbeats span subsystem life, not run life); "logged" ladder rung
+  scoped to THE RUN via runId (unscoped log lookup inverts the ladder);
+  profile sync §5.4; two named pipeline prerequisites (evidence-grade
+  go-ft8 results; decode-sink fan-out, single slot now PSK-occupied);
   lookup-as-queue-oracle ACCEPTED explicitly + rate limits; RBN/WSJT-X-UDP
   adapter recorded in §11 (also in dogfood inbox); dt claim narrowed to
-  timing diagnosis. ROUND 2 on Draft 3 (7 findings folded): deletion
-  TOMBSTONES by UUID (else backup restore resurrects deleted rows) +
-  deletion-vs-ongoing-opt-out policy split + local-copy boundary stated;
-  RUN IDENTITY named as NEW cross-cutting state (mint at cq/start, survives
-  Stop/Resume + reconnection, ends at Abandon/run-end; threads QsoStatus →
-  CompletedQso → local QSO → cloud sync; prerequisite 3); immediate
-  snapshot on EVERY transition (heartbeat = backstop only) + transmitting
-  sources FT8-specific keyed state, NOT TxActive() (tune conflation);
-  normative lookup rules (heard TTL 10min provisional, stale DOWNGRADES
-  "last known as of", run-id grace period); loss COUNTERS → loss INTERVALS
+  timing diagnosis.
+- **Round 2 (7 findings):** deletion TOMBSTONES by UUID (else backup
+  restore resurrects deleted rows) + deletion-vs-ongoing-opt-out policy
+  split + local-copy boundary stated; RUN IDENTITY named as NEW
+  cross-cutting state (mint at run start, survives Stop/Resume +
+  reconnection, ends at Abandon/run-end; threads QsoStatus → CompletedQso
+  → local QSO → cloud sync; prerequisite 3); immediate snapshot on EVERY
+  transition (heartbeat = backstop only) + transmitting sources
+  FT8-specific keyed state, NOT TxActive() (tune conflation); normative
+  lookup rules (heard TTL 10min provisional, stale DOWNGRADES to "last
+  known as of", run-id grace period); loss COUNTERS → loss INTERVALS
   (synced); pilot metric restated as decoded-repeats PROXY; 77-bit payload
-  vs 174-bit codeword terminology. ROUND 3 on Draft 3 (6 findings folded):
-  evidence gets its OWN evidence.db (WAL single-writer + 5s busy_timeout
-  would let purges stall a QSO commit — invariant by structure not
-  discipline); presence authority transfers on FIRST SNAPSHOT not POST
-  (crashed token-holder must not lock out the live client); page delivery
-  SPECIFIED = 5s short polling of a cached status endpoint (budgeted apart
-  from oracle limits; criteria now end-to-end); cursor language deleted
-  (synced flag = scheduling optimisation; SMC-side rollback out of scope,
-  manifest endpoint the named future remedy); monitoring visibility = two
-  COHERENT modes (hidden label + fresh heard answers = privacy in name
-  only); run-grace precedence (current run always wins) + criterion 5
-  (logged-this-run within 1min provisional). ROUND 4 on Draft 3 (5
-  findings): superseded client YIELDS on 409 (recreate-on-409 = endless
-  takeover loop; re-acquire only on authority staleness via 409-carried
-  age, or operator takeover); per-call ladder refresh via callsign-bound
-  TOKEN (probe rate-limited, refresh cheap — generic poll can't carry
-  per-call state without exposing the queue); ladder run-rungs scoped to
-  Call-CQ runs ONLY (on_air stays honest for answer/one-off sessions;
-  just-logged one-offs surface via previously-worked); on-air-only mode
-  requires observed_at >= runStartedAt (else run start exposes the hidden
-  monitoring period); heard TTL runs on VALIDATED observation time
-  (archive verbatim, public view skew-checked). ROUND 5 on Draft 3 (6
-  findings): takeover staleness checked ATOMICALLY by SMC at
-  first-snapshot acceptance (409-carried age is advisory only — sampled
-  age let two healthy clients alternate at the staleness interval);
-  snapshots carry lastEndedRunId+runEndedAt until grace expires (coalesced
-  reconnect snapshot must self-describe an offline-ended run; grace from
-  runEndedAt never reconnect); heard validation ONE-SIDED (future-beyond-
-  skew excluded; ingest−observed distance is DELAY, never grounds — slow
-  clock accepted as conservative); per-row terminal outcomes (accepted/
-  already_present/tombstoned/suppressed/retryable_missing_profile/
+  vs 174-bit codeword terminology.
+- **Round 3 (6 findings):** evidence gets its OWN evidence.db (WAL
+  single-writer + 5s busy_timeout would let purges stall a QSO commit —
+  invariant by structure not discipline); presence authority transfers on
+  FIRST SNAPSHOT not POST (crashed token-holder must not lock out the live
+  client); page delivery SPECIFIED = 5s short polling of a cached status
+  endpoint (budgeted apart from oracle limits); cursor language deleted
+  (synced flag = scheduling optimisation; manifest endpoint the named
+  future remedy); monitoring visibility = two COHERENT modes (hidden label
+  + fresh heard answers = privacy in name only); run-grace precedence
+  (current run always wins) + criterion 5 (logged-this-run within 1min
+  provisional).
+- **Round 4 (5 findings):** superseded client YIELDS on 409
+  (recreate-on-409 = endless takeover loop; re-acquire only on authority
+  staleness or operator takeover); per-call ladder refresh via
+  callsign-bound TOKEN (probe rate-limited, refresh cheap); ladder
+  run-rungs scoped to Call-CQ runs ONLY (on_air stays honest for
+  answer/one-off sessions); on-air-only mode requires observed_at >=
+  runStartedAt (else run start exposes the hidden monitoring period);
+  heard TTL runs on VALIDATED observation time (archive verbatim, public
+  view skew-checked).
+- **Round 5 (6 findings):** takeover staleness checked ATOMICALLY by SMC
+  at first-snapshot acceptance (sampled age let two healthy clients
+  alternate); snapshots carry lastEndedRunId+runEndedAt until grace
+  expires (grace from runEndedAt never reconnect); heard validation
+  ONE-SIDED (future-beyond-skew excluded; ingest−observed distance is
+  DELAY, never grounds); per-row terminal outcomes (accepted /
+  already_present / tombstoned / suppressed / retryable_missing_profile /
   permanent_reject→local quarantine); ingest = ONE transaction with
-  suppression checked first + suppressed UUIDs tombstoned + unresolved-hash
-  limit stated; lookup tokens STATELESS signed (HMAC), cache by canonical
-  (station,callsign) with per-station+global caps. ROUND 6 on Draft 3 (7
-  findings): go-ft8 prerequisite expanded to 4 evidence-grade requirements
-  (payload-even-if-unsupported-text, per-msg AP provenance, NO
-  evidence-level filtering, stateful per-stream Decoder — SMD currently
-  stateless per decode.go's own comment); presence authority state made
-  EXPLICIT (authorityToken + per-authority rev + receipt time; candidates
-  outside ordering until transfer; "newest wins" language deleted); heard
+  suppression checked first + suppressed UUIDs tombstoned; lookup tokens
+  STATELESS signed (HMAC), cache by canonical (station,callsign) with
+  per-station+global caps.
+- **Round 6 (7 findings):** go-ft8 prerequisite expanded to 4
+  evidence-grade requirements (payload-even-if-unsupported-text, per-msg
+  AP provenance, NO evidence-level filtering, stateful per-stream
+  Decoder); presence authority state made EXPLICIT (authorityToken +
+  per-authority rev + receipt time; "newest wins" language deleted); heard
   BAND-SCOPED during runs (pinned dial + >= runStartedAt in EVERY privacy
-  mode; outside runs band shown prominently; deterministic winner rule);
-  ended-run grace persisted locally + SMC retains newest grace record
-  independent of later snapshots; per-slot COVERAGE records
-  (decoded/no_decode/tx/dial_changed/decoder_error/capture_dropped) +
-  loss reporter survives its own failure path (crash limit stated);
-  finite refresh budget + single-flight cache population; opt-out spans
-  ALL public answer sources (page-wide), operator's operational state
-  untouched. ROUND 7 on Draft 3 (6 findings + 1 wording): decode split at
-  the RICH go-ft8 result (evidence branch unfiltered/unprojected; curated
-  branch = sequencer/PSK/UDP — SetDecodeSink sits after filter+projection,
+  mode; deterministic winner rule); ended-run grace persisted locally +
+  SMC retains newest grace record; per-slot COVERAGE records (decoded /
+  no_decode / tx / dial_changed / decoder_error / capture_dropped) + loss
+  reporter survives its own failure path; finite refresh budget +
+  single-flight cache population; opt-out spans ALL public answer sources.
+- **Round 7 (6 findings + 1 wording):** decode split at the RICH go-ft8
+  result (evidence branch unfiltered/unprojected; curated branch =
+  sequencer/PSK/UDP — SetDecodeSink sits after filter+projection,
   service.go:898 verified); destructive requests need a VERIFIED workflow
-  (email + community identity evidence at pilot scale, audit record,
-  idempotent, revocable — the lookup proves nothing by design); presence
-  authority = a PostgreSQL station-presence ROW under row-lock/CAS (a
-  process mutex splits brain across replicas + restart re-admits old
-  tokens); synced observations carry decode-time interpretation (nullable
-  text, parse status, decoder build, client-stamped occurrences preserved
-  as submitted) + canonical-base-call identity rule (/P //R match base,
-  display exact); stateless-token scope clarified (ephemeral counters by
-  token digest) + per-station/global query semaphore vs distinct-callsign
-  rotation; coverage records = first-class synced rows with retention
-  coupled to their interval; graceful stop sends a TERMINAL offline
-  snapshot (distinguishable from stale). ROUND 8 on Draft 3 (3 P1s):
-  terminal snapshot RELEASES authority atomically (else a polite shutdown
-  locks the restarted daemon out until its own goodbye goes stale;
-  duplicate terminal PUTs idempotent); size cap = PHYSICAL bytes over
+  (identity evidence at pilot scale, audit record, idempotent, revocable);
+  presence authority = a PostgreSQL station-presence ROW under
+  row-lock/CAS (a process mutex splits brain across replicas); synced
+  observations carry decode-time interpretation (nullable text, parse
+  status, decoder build) + canonical-base-call identity rule (/P //R match
+  base, display exact); stateless-token scope clarified + per-station /
+  global query semaphore; coverage records = first-class synced rows with
+  retention coupled to their interval; graceful stop sends a TERMINAL
+  offline snapshot (distinguishable from stale).
+- **Round 8 (3 P1s):** terminal snapshot RELEASES authority atomically
+  (else a polite shutdown locks the restarted daemon out; duplicate
+  terminal PUTs idempotent); size cap = PHYSICAL bytes over
   evidence.db+WAL+temp with headroom + short reader transactions (WAL
-  outgrows logical caps under long readers; full filesystem would break
+  outgrows logical caps under long readers; a full filesystem would break
   the QSO path the separate file exists to protect); every cap purge
   recorded — loss INTERVALS for unsynced (gone everywhere) vs
-  local-RETENTION records for acked (lives on SMC), both synced, §11
-  backfill claim reconciled, decoded-coverage-orphan self-explaining.
-  ROUND 9 on Draft 3 (3 P1s): loss taxonomy THREE-valued
-  (never_offered / offered_unacknowledged=remote-UNKNOWN / acked —
-  "unacknowledged" ≠ "absent from SMC", lost-ack case); ONE tagged sync
-  envelope — every record kind (obs/coverage/loss/retention/profiles)
-  gets UUIDv7 + digest + per-row outcome, purge+audit-record in ONE SQLite
-  transaction; callsign canonicalisation = ONE VERSIONED function applied
-  at every comparison point (occurrences, queue/working, QSO lookups,
-  tokens, cache keys, deletion, opt-out — exact forms stored, current
-  version applied at query time). Reviewer standard: implementation-ready
-  once P1s close — closed.
-- **go-ft8 UPSTREAM: the §4 prerequisite-1 evidence-grade features
-  (verified payload incl. unsupported families, AP/decoder provenance,
-  unfiltered results, stateful per-stream Decoder) are IMPLEMENTED and in
-  perf testing** (operator, 2026-08-09). When tagged: dependency bump =
-  its own commit; then SM-side prerequisite 2 (rich-result split) →
-  evidence.db writer (§4.1 contract).
-- **RUN IDENTITY (prereq 3) BUILT 2026-08-09, in tree uncommitted** —
-  while the operator ran a 95+ pile-up (mid-run health sweep clean; first
-  natural tx_still_keyed SELF-RECOVERY at 14:43:43, re-unkey path validated
-  live). Spec `internal/ft8/runidentity_test.go` RI1–RI7 (header carries
-  the criteria): UUIDv7 minted at StartCallCq + armAutoWorkLocked (doc
-  §6.2 amended — mode-only arming means ANY arming start births a run),
-  Sequencer-level runID/runStartedAt (CQ shape runs with armed=false, so
-  NOT in autoWorkState; outlives contacts, so NOT contactFlags), carriage
-  in applyRunStateLocked (terminals included, B12 rule), ends at
-  abandonLocked/auto-Stop/invalid-arm, stamped via completedCallerQsoLocked
-  → BuildQso → types.Qso.AppSmRunID (app_sm_run_id; additional_data +
-  cloud payload ride free) + adif round-trip + spec classification. 6
-  reversion probes each bit exactly. ft8/adif/api/qsoservice green, race
-  green, gofmt/vet clean.
-- **go-ft8 v0.8.0 BUMPED + committed (1df6d94d); run identity committed
-  (f3043e80). TREE HOLDS the two review rounds' fixes, uncommitted:**
-  run-identity P1a+P1b — the pin-at-commit model (contactFlags.runID pinned
-  at all 5 contact-commit sites, 3 factored into commitCqContactLocked;
-  completions read the PIN, never live s.runID — answer-seed contacts
-  carry their run (RI8), a Stop mid-contact no longer strips the in-flight
-  contact's association (RI9); 6 probes bit exactly). PLUS the bump review
-  P2: dropUnparsed at DecodeSlot's return — v0.8.0 surfaces CRC-valid
-  unsupported/reserved/invalid payloads as TEXT-LESS messages (v0.7.1
-  rejected them); the curated consumers filter to ParseStatusParsed; the
-  comment marks this as THE curated-branch filter with the evidence branch
-  tapping upstream (design §4 prereq 2 arriving early).
-- **NEXT: commit the fixes → prerequisite 2 (rich-result split + stateful
-  Decoder adoption, now fully unblocked by v0.8.0) → on-air 0067 pick-run
-  try.** Then: Settings defaults dropdown; max_repeats-to-session (0066
-  watch-list); Abandon-vs-queue flag open.
+  local-RETENTION records for acked (lives on SMC), both synced.
+- **Round 9 (3 P1s):** loss taxonomy THREE-valued (never_offered /
+  offered_unacknowledged=remote-UNKNOWN / acked — "unacknowledged" ≠
+  "absent from SMC", the lost-ack case); ONE tagged sync envelope — every
+  record kind (obs/coverage/loss/retention/profiles) gets UUIDv7 + digest
+  + per-row outcome, purge+audit-record in ONE SQLite transaction;
+  callsign canonicalisation = ONE VERSIONED function applied at every
+  comparison point (exact forms stored, current version applied at query
+  time). Reviewer standard: implementation-ready once P1s close — closed.
 
-## Current state (as of 2026-08-08)
+**go-ft8 v0.8.0 landed the §4 prerequisite-1 evidence-grade features**
+(verified payload incl. unsupported families, AP/decoder provenance,
+unfiltered results, stateful per-stream Decoder) — bumped in `1df6d94d`.
+Its review's P2: v0.8.0 surfaces CRC-valid unsupported/reserved/invalid
+payloads as TEXT-LESS messages (v0.7.1 rejected them), so `dropUnparsed`
+at DecodeSlot's return now filters curated consumers to ParseStatusParsed;
+the comment marks this as THE curated-branch filter with the evidence
+branch tapping upstream (design §4 prereq 2 arriving early).
+
+**RUN IDENTITY (prereq 3) BUILT** — while the operator ran a 95+ pile-up
+(mid-run health sweep clean; first natural tx_still_keyed SELF-RECOVERY at
+14:43:43, the re-unkey path validated live). Spec
+`internal/ft8/runidentity_test.go` RI1–RI9 (header carries the criteria):
+UUIDv7 minted at StartCallCq + armAutoWorkLocked (doc §6.2 amended —
+mode-only arming means ANY arming start births a run), Sequencer-level
+runID/runStartedAt (CQ shape runs with armed=false, so NOT in
+autoWorkState; outlives contacts, so NOT contactFlags), carriage in
+applyRunStateLocked (terminals included, B12 rule), ends at
+abandonLocked/auto-Stop/invalid-arm, stamped via completedCallerQsoLocked
+→ BuildQso → types.Qso.AppSmRunID (app_sm_run_id; additional_data + cloud
+payload ride free) + adif round-trip + spec classification. Its review's
+2 P1s produced the **pin-at-commit model** (`5011dc83`):
+contactFlags.runID pinned at all 5 contact-commit sites (3 factored into
+commitCqContactLocked); completions read the PIN, never live s.runID —
+answer-seed contacts carry their run (RI8), a Stop mid-contact no longer
+strips the in-flight contact's association (RI9). All probes bit exactly;
+ft8/adif/api/qsoservice green, race green, gofmt/vet clean. Review of
+`5011dc83`: NO FINDINGS.
+
+**Session ended by power cut**; all five commits were pushed beforehand.
+On resume: CI confirmed GREEN, `.codex-reviews/` empty.
 
 ### 2026-08-08 (evening) — ADR 0067 built A–D in one day
 
