@@ -153,7 +153,23 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   loss reporter survives its own failure path (crash limit stated);
   finite refresh budget + single-flight cache population; opt-out spans
   ALL public answer sources (page-wide), operator's operational state
-  untouched.
+  untouched. ROUND 7 on Draft 3 (6 findings + 1 wording): decode split at
+  the RICH go-ft8 result (evidence branch unfiltered/unprojected; curated
+  branch = sequencer/PSK/UDP — SetDecodeSink sits after filter+projection,
+  service.go:898 verified); destructive requests need a VERIFIED workflow
+  (email + community identity evidence at pilot scale, audit record,
+  idempotent, revocable — the lookup proves nothing by design); presence
+  authority = a PostgreSQL station-presence ROW under row-lock/CAS (a
+  process mutex splits brain across replicas + restart re-admits old
+  tokens); synced observations carry decode-time interpretation (nullable
+  text, parse status, decoder build, client-stamped occurrences preserved
+  as submitted) + canonical-base-call identity rule (/P //R match base,
+  display exact); stateless-token scope clarified (ephemeral counters by
+  token digest) + per-station/global query semaphore vs distinct-callsign
+  rotation; coverage records = first-class synced rows with retention
+  coupled to their interval; graceful stop sends a TERMINAL offline
+  snapshot (distinguishable from stale). Reviewer: implementation-ready
+  once these close — now closed.
 - **NEXT: operator passes the doc out for external review → on-air 0067.**
   Then: Settings defaults dropdown; max_repeats-to-session (0066 watch-list);
   Abandon-vs-queue flag still open.

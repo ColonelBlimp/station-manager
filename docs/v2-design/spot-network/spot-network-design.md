@@ -169,12 +169,25 @@ mid-build:
      uses the stateless per-slot API (its own comment defers the stateful
      decoder), losing cross-slot callsign-hash context that `<...>`
      resolution (§5.3) depends on.
-2. **The decode sink must fan out.** `SetDecodeSink` is a single injected
-   observer, currently occupied by the PSK Reporter uploader
-   (`internal/ft8/servicetx.go`). Capture is a second consumer (and a
-   WSJT-X-compatible UDP emitter, §11, would be a third), so the single
-   slot becomes a fan-out — preserving the existing rule that no consumer
-   may block decoding.
+2. **The split happens at the rich result, not at the existing sink.**
+   `SetDecodeSink` receives a `DecodeReport` only *after*
+   `dropOwnTransmissions` and after the rich go-ft8 results are projected
+   to four fields (`internal/ft8/service.go`) — fan-out there inherits the
+   filtering and the projection and can never recover what they discarded.
+   The branch point is upstream:
+
+   ```
+   go-ft8 rich result (stateful decoder, per stream)
+       ├── evidence capture — unfiltered, unprojected
+       └── curated operational stream (own-TX filter, projection)
+             ├── sequencer / UI
+             ├── PSK Reporter
+             └── optional WSJT-X-compatible UDP (§11)
+   ```
+
+   The existing sink and every view-shaped consumer live on the curated
+   branch; evidence taps the rich result before any of it. The rule that
+   no consumer may block decoding applies to both branches.
 3. **Run identity must be threaded end to end** (§6.2): sequencer-minted,
    carried on `QsoStatus` and `CompletedQso`, stored with the local QSO,
    and synced to the Cloud store — none of which exists today. "Logged
@@ -212,7 +225,14 @@ over:
   capture_dropped` — one tiny row per 15 s, which is what makes an empty
   stretch of archive *interpretable* (transmitting? band change? decoder
   fault?) rather than ambiguous. "Complete" in this document means
-  complete **relative to these records**, never an unqualified claim;
+  complete **relative to these records**, never an unqualified claim.
+  Coverage records are **first-class synced rows**: UUIDv7 identity,
+  per-row outcomes, the same batch protocol as observations (§5) — so the
+  synced archive can explain its gaps, not just the local one — and their
+  retention is **coupled to the interval they describe**: cap purging
+  never removes a slot's coverage record while retaining that slot's
+  observations, or the archive would keep data while discarding the
+  explanation of what's missing around it;
 - loss and coverage reporting must survive the failure it reports: the
   reporter is a **reserved in-memory accumulator, persisted with priority
   when the writer recovers** — an overloaded evidence writer must not lose
@@ -314,6 +334,21 @@ that **K1XYZ** was received — JA1ABC merely appears in the message. Heard
 lookups select transmitter-role rows only; deletion by callsign spans every
 role.
 
+**A synced observation carries its decode-time interpretation, not just the
+payload.** The raw payload alone cannot reproduce a hash resolution the
+stateful decoder learned from earlier slots, so each observation includes:
+nullable decoded text, a parse status (`parsed / unsupported / partial`),
+decoder build and options, and the **client-stamped callsign occurrences**
+with role and hash-resolution kind. SMC may re-derive and validate the
+ordinarily-parseable fields against the payload, but the client's
+decode-time hash resolutions are **preserved as submitted** — they are
+knowledge that existed only in that decoder at that moment. Callsign
+identity is canonicalised here too: occurrences store the **exact
+transmitted form** (`K1ABC/P`, `K1ABC/R`, compound forms) beside a
+**canonical base call**; public lookup and opt-out match on the canonical
+base (one licence holder, one identity), while results display the exact
+form that was heard.
+
 **Ingest is one transaction, suppression checked first.** Parsing, the
 ongoing-opt-out suppression check (§8), the raw observation row and its
 occurrence rows commit **atomically** — there is never a state where a raw
@@ -372,7 +407,14 @@ absence was a found defect:
   and only over a currently-stale authority.** A newly minted incarnation
   becomes authoritative **atomically with the acceptance of its first valid
   full snapshot**, and SMC evaluates the takeover condition **at that
-  moment, under its own lock**: the transfer succeeds only if there is no
+  moment, in the database** — a single PostgreSQL **station-presence row**
+  holds the authority token, incarnation counter, last accepted revision
+  and last receipt time, and both session creation and first-snapshot
+  transfer read-modify-write that row under a row lock / compare-and-swap
+  transaction. A process mutex is explicitly not the mechanism: it would
+  let two SMC replicas accept different authorities, and in-memory
+  authority state lost to a restart would re-admit a superseded token. The
+  transfer succeeds only if there is no
   current authority, the current authority is stale *right now* (its last
   snapshot older than the staleness bound at acceptance time), or the
   snapshot carries an explicit operator-takeover flag. A candidate whose
@@ -420,7 +462,7 @@ them distinct because they come from three different subsystems:
 
 | Public state | Meaning | Source of truth |
 |---|---|---|
-| `offline` | no live heartbeat | absence of the below |
+| `offline` | subsystem stopped, or presence lost | a **terminal snapshot** on graceful stop; staleness as the fallback |
 | `monitoring` | FT8 subsystem running, RX only | FT8 capture-session lifecycle |
 | `on_air` | a run/QSO session is active | sequencer state (`QsoStatus`, ADR 0067) |
 | `transmitting` | FT8 TX keyed at this instant | the bridge's FT8-TX keyed state — not `TxActive()`, which unites tune carriers with FT8 TX and would show a tune as "transmitting"; never the sequencer |
@@ -484,8 +526,12 @@ line (band and time, minutes old) — serviceable without a queue that
 doesn't exist claiming otherwise.
 
 **Heartbeats run for as long as the FT8 subsystem is being advertised** —
-through monitoring, between runs, across a run's whole life — and stop when
-the subsystem stops or presence is disabled. (An earlier draft tied
+through monitoring, between runs, across a run's whole life. A graceful
+stop sends an explicit **terminal snapshot** (state `offline`) before
+heartbeats cease, so the page flips to offline immediately and a deliberate
+shutdown stays distinguishable from an unexpectedly stale station ("went
+offline at ⟨time⟩" versus "last seen ⟨time⟩, presumed offline"); staleness
+remains the fallback for the crash case only. (An earlier draft tied
 heartbeats to the run; that would have made a monitoring station
 indistinguishable from an offline one, contradicting the state model
 above.)
@@ -512,11 +558,16 @@ distributed probes mint tokens freely. Two budgets, deliberately split:
 valid token** carry their own **higher-but-finite budget** per station,
 source, and token — statelessness bounds memory, not traffic, and a valid
 signed token replayed without limit would otherwise be a free query lever.
-Cache population is **single-flight**: concurrent misses for one canonical
-callsign produce one database query, so rotating callsigns through the
-capped cache degrades to bounded, serialised work rather than a query
-amplifier. Tokens expire (provisionally one hour) and a fresh probe
-re-establishes them. Five-second polling makes a
+"Stateless" is scoped precisely: the token needs **no durable lookup or
+session row**; the rate limiter keeps **bounded ephemeral counters keyed
+by token digest**, which expire with the tokens they meter. Cache
+population is **single-flight per canonical callsign** (concurrent misses
+for one call produce one query) — and since single-flight does nothing
+against *distinct* callsigns rotated through the capped cache, database
+queries from the public lookup also pass a **per-station and global
+concurrency semaphore**, so the worst distributed probe pattern degrades
+to bounded, queued work rather than a query amplifier. Tokens expire
+(provisionally one hour) and a fresh probe re-establishes them. Five-second polling makes a
 typical ~13 s FT8 keyed interval coarsely but honestly visible; the
 `transmitting` flag is displayed on that understanding. SSE is the upgrade
 path if polling ever feels crude at pilot scale; a page that only updated
@@ -662,6 +713,20 @@ working stations.
   still records the contact. The opt-out governs what the *page* says,
   plus what *evidence* is retained — both halves, stated so neither is
   assumed to imply the other.
+- **Destructive requests require a verified workflow — the public lookup
+  can never be their authority.** The lookup deliberately proves no
+  callsign ownership, which is fine for reading and disqualifying for
+  deletion: an unauthenticated deletion or opt-out path would let anyone
+  suppress a rival's visibility and mint permanent tombstones in their
+  name. Deletion and opt-out therefore run through a separate, verified
+  request workflow — at pilot scale, request by email with the operator
+  verifying the requester against community-standard identity evidence
+  (published contact routes, LoTW membership) and adjudicating manually.
+  Every executed request writes an **audit record** (who, what, when,
+  verification evidence); execution is **idempotent** (a repeated request
+  is a no-op, not a second purge); and **opt-out is revocable** through
+  the same verified path — revocation lifts page suppression and future
+  retention, while what was already purged stays purged.
   And it states the local-copy boundary plainly: an SMC deletion reaches
   SMC; the operator's private local store is the operator's own record of
   what their receiver decoded — the same standing as a paper logbook — and
