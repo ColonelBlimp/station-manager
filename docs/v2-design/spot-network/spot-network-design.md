@@ -304,6 +304,13 @@ over:
 Versioned station profiles — transmit power, antenna type and height,
 feedline, locator — recorded locally with `validFrom` lineage, never mutated
 in place, so an antenna change does not rewrite the meaning of history.
+`configId` is the stable identity of one logical station-configuration
+lineage; `version` is a strictly increasing integer within that lineage, and
+a later version supersedes the earlier one from its `validFrom` time. A
+replacement or edit therefore creates a new version under the same
+`configId`, while a configuration that exists concurrently — for example a
+second receiver/antenna path — receives a different `configId`; every
+observation still references the exact immutable profile-version UUID.
 This has logbook value independent of everything else ("which antenna made
 this QSO", the ADIF `MY_*` fields), and it is what makes the evidence
 interpretable later.
@@ -636,13 +643,16 @@ the server cache TTL at or below the poll period. The per-call ladder
 refreshes by a **callsign-bound token**, because a generic status poll
 cannot carry per-call state without exposing the queue: the initial lookup
 — the rate-limited, oracle-guarded query (§8) — returns a **stateless
-signed token** (an HMAC over station, canonical callsign, and expiry — the
-server stores nothing per token), and the open result then polls by token
-at the same cadence. The refresh cache is keyed by canonical
-`(station, callsign)`, not by token, so a thousand tokens for the same
-lookup share one entry — and the cache carries **explicit per-station and
-global entry caps**, because "bounded by token count" bounds nothing when
-distributed probes mint tokens freely. Two budgets, deliberately split:
+signed token** (an HMAC over station, canonical callsign,
+`identityEpoch`/canonicalisation version, and expiry — the server stores
+nothing per token), and the open result then polls by token at the same
+cadence. A token whose identity epoch is no longer current is rejected with
+§5.3's remint response. The refresh cache is keyed by canonical
+`(station, identityEpoch, callsign)`, not by token, so a thousand tokens for
+the same lookup share one entry while an epoch cutover makes every old entry
+unreachable — and the cache carries **explicit per-station and global entry
+caps**, because "bounded by token count" bounds nothing when distributed
+probes mint tokens freely. Two budgets, deliberately split:
 **new-callsign probes** carry the oracle rate limits; **refreshes of a
 valid token** carry their own **higher-but-finite budget** per station,
 source, and token — statelessness bounds memory, not traffic, and a valid
@@ -650,8 +660,9 @@ signed token replayed without limit would otherwise be a free query lever.
 "Stateless" is scoped precisely: the token needs **no durable lookup or
 session row**; the rate limiter keeps **bounded ephemeral counters keyed
 by token digest**, which expire with the tokens they meter. Cache
-population is **single-flight per canonical callsign** (concurrent misses
-for one call produce one query) — and since single-flight does nothing
+population is **single-flight per canonical `(identityEpoch, callsign)`**
+(concurrent misses for one call in one epoch produce one query) — and since
+single-flight does nothing
 against *distinct* callsigns rotated through the capped cache, database
 queries from the public lookup also pass a **per-station and global
 concurrency semaphore**, so the worst distributed probe pattern degrades
@@ -850,10 +861,11 @@ working stations.
   consent layer disabled; disabling sync or publication does not disable
   ordinary FT8 operation or local capture unless the operator separately
   disables capture.
-- Sync resumes from SMC's acknowledgement; while publication is enabled,
-  presence coalesces to the latest snapshot and heartbeats run exactly while
-  the FT8 subsystem is advertised (§6.2), stopping with it — a client must
-  not fake liveness in either direction.
+- History sync re-offers every record that lacks a terminal per-row outcome;
+  the local synced flag is upload scheduling only (§4.1). While publication
+  is enabled, presence coalesces to the latest snapshot and heartbeats run
+  exactly while the FT8 subsystem is advertised (§6.2), stopping with it —
+  a client must not fake liveness in either direction.
 
 ---
 
