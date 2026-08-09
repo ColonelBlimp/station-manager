@@ -94,33 +94,65 @@ func (s *Service) runMeterPollLoop(ctx context.Context, client serial.Client, po
 			// which frees writeMu by closing the port. Healthy hold: one
 			// 12-byte burst, ~3 ms at 38400 baud. No retry on any failure —
 			// a missed cycle recovers at the next tick (invariant 2).
+			//
+			// Count BEFORE the write: the answer is decoded on the readLoop
+			// goroutine and can be processed before this write call returns,
+			// and a count taken afterwards loses the race with its own
+			// answer — the reset lands first and the increment leaves an
+			// answered poll counted as unanswered (codex 2026-08-09 P2 on
+			// 2653e859). Counting first makes the reset always win.
+			s.countMeterPollWritten()
 			wctx, cancel := context.WithTimeout(ctx, s.ft8MeterPollTimeout)
 			err := s.underCmdMuCIV(civ, func() error {
 				return s.writeSnapshotReads(wctx, client, civ, pollBytes)
 			})
 			cancel()
-			if err != nil && ctx.Err() == nil {
-				s.logger.WarnWith().Str("error", errMessage(err)).
-					Msg("bridge: ft8 meter poll write failed")
+			if err != nil {
+				if ctx.Err() == nil {
+					s.logger.WarnWith().Str("error", errMessage(err)).
+						Msg("bridge: ft8 meter poll write failed")
+				}
+				s.retractMeterPollWritten()
 				continue
 			}
-			s.noteMeterPollCycle()
+			s.checkMeterPollLoss()
 		}
 	}
 }
 
-// noteMeterPollCycle counts a WRITTEN poll toward the sustained-loss notice,
-// which fires when meterAnswerStaleAfter consecutive written polls go
-// unanswered. Skipped ticks (capture gate off, broadcast-storm quiet window)
-// never reach here, and pipeline teardown resets the count — a poll that was
-// never written cannot have lost an answer, so neither may age the window
-// (codex 2026-08-09 P3: the wall-clock predecessor warned on the first poll
-// written after a reconnect or storm, before its answer could arrive).
-// Recovery (any answer) re-arms it, so the log carries one line per loss
-// episode, not one per silent cycle.
-func (s *Service) noteMeterPollCycle() {
+// countMeterPollWritten counts a poll toward the sustained-loss window,
+// BEFORE its bytes are written (see the call site for why the order is
+// load-bearing). Skipped ticks (capture gate off, broadcast-storm quiet
+// window) never reach here, and pipeline teardown resets the count — a poll
+// that was never written cannot have lost an answer, so neither may age the
+// window (codex 2026-08-09 P3: the wall-clock predecessor warned on the
+// first poll written after a reconnect or storm, before its answer could
+// arrive).
+func (s *Service) countMeterPollWritten() {
 	s.mu.Lock()
 	s.meterUnansweredPolls++
+	s.mu.Unlock()
+}
+
+// retractMeterPollWritten undoes countMeterPollWritten when the write FAILED —
+// a poll that never left the host cannot lose an answer. Floored at zero
+// rather than trusted: a previous poll's answer arriving between the count
+// and the retraction has already reset the window, and the retraction must
+// not drive it negative.
+func (s *Service) retractMeterPollWritten() {
+	s.mu.Lock()
+	if s.meterUnansweredPolls > 0 {
+		s.meterUnansweredPolls--
+	}
+	s.mu.Unlock()
+}
+
+// checkMeterPollLoss raises the one sustained-loss notice when
+// meterAnswerStaleAfter consecutive written polls have gone unanswered.
+// Recovery (any answer) re-arms it, so the log carries one line per loss
+// episode, not one per silent cycle.
+func (s *Service) checkMeterPollLoss() {
+	s.mu.Lock()
 	fire := s.meterUnansweredPolls >= meterAnswerStaleAfter && !s.meterAnswerStale
 	if fire {
 		s.meterAnswerStale = true

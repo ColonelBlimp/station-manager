@@ -54,11 +54,19 @@ package bridge
    P8 — genuine loss: the notice fires when the count of written unanswered
         polls reaches meterAnswerStaleAfter, NOT before, once per episode; any
         answer re-arms it for the next episode.
+   P9 — an ANSWERED poll is never counted unanswered, whatever the scheduler
+        does (codex 2026-08-09 P2 on 2653e859): the answer rides the readLoop
+        goroutine and can be processed before the poll's write call even
+        returns on the poll-loop goroutine. If the count ran after the write,
+        the answer's reset would land first and the increment would survive
+        it — seven further unanswered polls would then fire the notice one
+        poll early. The count must therefore precede the write.
 */
 
 import (
 	"bytes"
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,6 +75,14 @@ import (
 )
 
 var meterPollBurst = []byte("RM4;RM5;")
+
+// meterPollTick mirrors runMeterPollLoop's healthy write sequence for the
+// window rules below: count the poll before its write, check the window
+// after it. P9 covers the ordering itself against the real loop.
+func meterPollTick(s *Service) {
+	s.countMeterPollWritten()
+	s.checkMeterPollLoss()
+}
 
 func countMeterPolls(writes [][]byte) int {
 	n := 0
@@ -241,7 +257,7 @@ func TestMeterPoll_LossNoticeCountsWrittenPollsNotWallTime(t *testing.T) {
 
 	s.publishMeterAnswers(meterFrame(t, "RM5029000")) // healthy answer, then quiet
 	time.Sleep(2 * time.Millisecond)                  // ≫ 8 "intervals" of wall time, zero polls written
-	s.noteMeterPollCycle()                            // the first poll actually written since
+	meterPollTick(s)                                  // the first poll actually written since
 
 	if n := len(matching(t, buf, "answers missing")); n != 0 {
 		t.Fatalf("loss notice fired on the first written poll after an unpolled gap (%d records) — staleness must count written polls, not wall time", n)
@@ -259,18 +275,18 @@ func TestMeterPoll_ReconnectStartsFreshLossWindow(t *testing.T) {
 
 	s.publishMeterAnswers(meterFrame(t, "RM5029000"))
 	for i := 0; i < meterAnswerStaleAfter-1; i++ {
-		s.noteMeterPollCycle()
+		meterPollTick(s)
 	}
 	s.resetMeterObservation() // pipeline teardown
 	time.Sleep(2 * time.Millisecond)
 
 	for i := 0; i < meterAnswerStaleAfter-1; i++ {
-		s.noteMeterPollCycle()
+		meterPollTick(s)
 	}
 	if n := len(matching(t, buf, "answers missing")); n != 0 {
 		t.Fatalf("loss notice exists before the post-reconnect window closed (%d records)", n)
 	}
-	s.noteMeterPollCycle()
+	meterPollTick(s)
 	if n := len(matching(t, buf, "answers missing")); n != 1 {
 		t.Fatalf("full window of unanswered polls after reconnect produced %d notices; want exactly 1", n)
 	}
@@ -286,26 +302,105 @@ func TestMeterPoll_GenuineLossWarnsAtWindowOncePerEpisode(t *testing.T) {
 
 	// A rig that never answers at all still trips the notice (the seed case).
 	for i := 0; i < meterAnswerStaleAfter-1; i++ {
-		s.noteMeterPollCycle()
+		meterPollTick(s)
 	}
 	if n := len(matching(t, buf, "answers missing")); n != 0 {
 		t.Fatalf("notice fired after %d written polls; the window is %d", meterAnswerStaleAfter-1, meterAnswerStaleAfter)
 	}
-	s.noteMeterPollCycle()
+	meterPollTick(s)
 	if n := len(matching(t, buf, "answers missing")); n != 1 {
 		t.Fatalf("notice count after the window closed = %d; want 1", n)
 	}
-	s.noteMeterPollCycle() // still silent: one line per episode, not per cycle
+	meterPollTick(s) // still silent: one line per episode, not per cycle
 	if n := len(matching(t, buf, "answers missing")); n != 1 {
 		t.Fatalf("notice repeated inside one loss episode (%d records)", n)
 	}
 
 	s.publishMeterAnswers(meterFrame(t, "RM4026000")) // recovery re-arms
 	for i := 0; i < meterAnswerStaleAfter; i++ {
-		s.noteMeterPollCycle()
+		meterPollTick(s)
 	}
 	if n := len(matching(t, buf, "answers missing")); n != 2 {
 		t.Fatalf("second loss episode produced %d total notices; want 2", n)
+	}
+}
+
+// P9 — AN ANSWERED POLL IS NEVER COUNTED UNANSWERED. The fixture forces the
+// extreme of the race: the FIRST poll's answer is processed synchronously
+// INSIDE the fake's write hook — i.e. before the write call has even
+// returned to the poll loop. Seven genuinely unanswered polls follow; no
+// notice may exist at that point (defective accounting reaches the
+// threshold here, one poll early). The NINTH write is held on a channel as
+// the deterministic observation window — the loop is sequential, so poll
+// 8's accounting is provably complete and poll 9's post-write check
+// provably has not run. Released, the ninth poll is the eighth consecutive
+// unanswered one and the notice is owed: the same test pins the confusable
+// state (P8's genuine loss) on the other side of the window.
+func TestMeterPoll_AnswerRacingItsOwnWriteIsNotCountedUnanswered(t *testing.T) {
+	buf := &syncBuf{}
+	s := New(types.BridgeConfig{
+		Enabled: true,
+		Serial:  &types.BridgeSerialConfig{Port: "fake"},
+		Cat:     &types.BridgeCatConfig{Driver: "yaesu-ftdx10"},
+	}, logging.NewForWriter(buf))
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	fake := installFakeSerial(s)
+	s.ft8MeterPollInterval = 20 * time.Millisecond
+
+	var polls atomic.Int32
+	ninthStarted := make(chan struct{})
+	release := make(chan struct{})
+	fake.onWrite = func(w []byte) []byte {
+		if !bytes.Equal(w, meterPollBurst) {
+			return nil // INIT etc.
+		}
+		switch n := polls.Add(1); {
+		case n == 1:
+			// The answer beats the write's return: processed on this stack,
+			// inside WriteCommandBytes. (Called directly rather than fed to
+			// the read stream so no LATER decode can reset the count again.)
+			s.publishMeterAnswers(meterFrame(t, "RM5029000"))
+		case n == 9:
+			close(ninthStarted)
+			<-release
+		}
+		return nil
+	}
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+	defer func() { // release before Stop so the blocked write can finish
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	s.SetFt8CaptureLive(true)
+
+	select {
+	case <-ninthStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("ninth meter poll not reached; polls=%d", polls.Load())
+	}
+	// Polls so far: 1 answered + 7 unanswered, all fully accounted. The
+	// blocked ninth's own check cannot have run.
+	if n := len(matching(t, buf, "answers missing")); n != 0 {
+		t.Fatalf("loss notice exists after only 7 unanswered polls — the answered poll was counted unanswered (%d records)", n)
+	}
+
+	close(release)
+	// The released ninth poll is the 8th consecutive unanswered: notice owed.
+	deadline := time.Now().Add(2 * time.Second)
+	for len(matching(t, buf, "answers missing")) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("expected exactly 1 loss notice after the 8th unanswered poll; got %d", len(matching(t, buf, "answers missing")))
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
