@@ -216,3 +216,26 @@ func TestDropOwnTransmissions(t *testing.T) {
 		t.Errorf("blank ownCall kept %d, want %d (no-op)", n, len(msgs))
 	}
 }
+
+// TestDropUnparsed pins the curated-path filter (codex P2 on 1df6d94d):
+// go-ft8 v0.8.0 surfaces CRC-valid unsupported/reserved/invalid payloads as
+// text-less DecodedMessages, and every curated consumer assumes text — only
+// ParseStatusParsed rows may pass. The evidence branch (design §4) will tap
+// upstream of this filter; nothing here may run before it captures.
+func TestDropUnparsed(t *testing.T) {
+	parsed := goft8.DecodedMessage{Text: "CQ K1ABC FN42", ParseStatus: goft8.ParseStatusParsed, SNR: -8}
+	unsupported := goft8.DecodedMessage{ParseStatus: goft8.ParseStatusUnsupported, SNR: -12}
+	invalid := goft8.DecodedMessage{ParseStatus: goft8.ParseStatusInvalid, SNR: -20}
+
+	out := dropUnparsed([]goft8.DecodedMessage{unsupported, parsed, invalid})
+	if len(out) != 1 {
+		t.Fatalf("filter kept %d messages, want only the parsed one: %+v", len(out), out)
+	}
+	if out[0].Text != "CQ K1ABC FN42" {
+		t.Fatalf("filter kept the wrong message: %+v", out[0])
+	}
+
+	if got := dropUnparsed(nil); len(got) != 0 {
+		t.Fatalf("nil in, non-empty out: %+v", got)
+	}
+}

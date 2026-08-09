@@ -213,6 +213,63 @@ func TestRunIdentity_NonRunContactCarriesNone(t *testing.T) {
 		"RI6: and the standing run keeps its identity through the interlude")
 }
 
+// RI8 (codex P1a on f3043e80) — the ANSWER-a-CQ seed contact belongs to the
+// run it starts. StartQso arms the run (A2) but completes through
+// completedQsoLocked, a different snapshot from the caller-side one — a stamp
+// on only one of them splits a run's QSO history and drops the seed contact
+// from "logged this run".
+func TestRunIdentity_AnswerSeedContactCarriesTheRun(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	var logged []CompletedQso
+	s.onComplete = func(c CompletedQso) { logged = append(logged, c) }
+
+	s.setPendingAnswerMode("auto_first")
+	require.NoError(t, s.StartQso("G0XYZ", "IO91", "K1ABC", "FN42",
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	runID := r.lastStatus().RunID
+	require.NotEmpty(t, runID, "fixture: answering under an auto mode arms the run (A2)")
+
+	// The answer ladder to completion (the TestSequencer_HappyPath drive):
+	// their report → our roger-report → their RR73 → our 73, QSO logs.
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("CQ K1ABC FN42", -1)})
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC -10", -12)})
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ K1ABC RR73", -11)})
+	require.Len(t, logged, 1, "fixture: the answer contact must complete")
+	require.Equal(t, runID, logged[0].RunID,
+		"RI8: the answer seed contact carries the run it started")
+}
+
+// RI9 (codex P1b on f3043e80) — a contact in flight when the operator stops
+// an auto run STILL belongs to that run: identity is pinned per contact at
+// commit (the ADR 0055 pin-at-arm discipline), never read live at completion.
+// The confusable pair: the run's PUBLIC state, which correctly reports the
+// run ended the moment Stop lands, versus the contact's DURABLE association,
+// which must not depend on when the operator pressed Stop.
+func TestRunIdentity_StopMidContactKeepsTheContactsRun(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	var logged []CompletedQso
+	s.onComplete = func(c CompletedQso) { logged = append(logged, c) }
+
+	stagedStart(t, s, "auto_first")
+	completeSeedContact(t, s)
+	runID := r.lastStatus().RunID
+	require.NotEmpty(t, runID)
+
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
+	require.NotNil(t, s.caller, "fixture: the auto run must pick DL9UW up")
+
+	s.StopAutoWorkRun() // run ends NOW; the contact runs on
+	require.Empty(t, r.lastStatus().RunID,
+		"the run's public identity ends with the stop — that half is correct")
+
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("G0XYZ DL9UW R-08", -8)})
+	require.Len(t, logged, 2, "fixture: the in-flight contact must complete")
+	require.Equal(t, runID, logged[1].RunID,
+		"RI9: the contact keeps the run that worked it, however the run ended")
+}
+
 // RI7 — BuildQso carries the id onto the QSO's APP field; empty stays empty.
 func TestRunIdentity_BuildQsoStampsAppField(t *testing.T) {
 	station := types.LoggingStation{StationCallsign: "G0XYZ", MyGridsquare: "IO91"}

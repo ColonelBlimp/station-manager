@@ -161,18 +161,14 @@ func (s *Sequencer) onSlotCalling(ref SlotRef, msgs []goft8.DecodedMessage, now 
 		// fresh, is worked next, the CQ resuming when the queue empties.
 		if resendRR73 == "" && s.answerMode != types.Ft8CallerAnswerOperatorPick {
 			if pick, text := s.pickAnswererLocked(msgs, now); pick != nil {
-				s.caller = pick
-				s.startedAt = now.UTC()
-				s.contact.repeats = 0
+				s.commitCqContactLocked(pick, now)
 				heard = text
 				advanced = true
 			}
 		} else if resendRR73 == "" && s.answerMode == types.Ft8CallerAnswerOperatorPick {
 			if head, _ := s.nextQueuedLocked(now); head != nil {
 				c := NewCallerExchange(s.ourCall, head.call, head.grid, head.snr)
-				s.caller = &c
-				s.startedAt = now.UTC()
-				s.contact.repeats = 0
+				s.commitCqContactLocked(&c, now)
 				advanced = true
 			}
 		}
@@ -501,9 +497,7 @@ func (s *Sequencer) PickAnswerer(call string, now time.Time) error {
 		return nil
 	}
 	c := NewCallerExchange(s.ourCall, a.call, a.grid, a.snr)
-	s.caller = &c
-	s.startedAt = now.UTC()
-	s.contact.repeats = 0
+	s.commitCqContactLocked(&c, now)
 	// Publish while the lock is still held, like NextAnswerer: an Abandon or slot
 	// evaluation in the gap could end or change the session and publish first,
 	// leaving this stale "reporting" frame cached by the hub as the last word.
@@ -877,16 +871,30 @@ func (s *Sequencer) parkAnswererLocked(msgs []goft8.DecodedMessage, now time.Tim
 	return s.cqMessage, "calling-cq"
 }
 
+// commitCqContactLocked establishes a Call-CQ phase-2 contact — the picked or
+// drained answerer's exchange, a fresh rung count, and the run-identity pin
+// (contactFlags.runID: the contact belongs to the run that commits it,
+// whatever later happens to the run — codex P1b on f3043e80). One helper for
+// the three pick shapes (auto-pick, queue drain, operator pop) so the pin
+// cannot be present in two of them and missing from the third. Caller holds
+// s.mu; the CQ session's mode stays seqCalling throughout.
+func (s *Sequencer) commitCqContactLocked(c *CallerExchange, now time.Time) {
+	s.caller = c
+	s.startedAt = now.UTC()
+	s.contact.repeats = 0
+	s.contact.runID = s.runID
+}
+
 // completedCallerQsoLocked captures the finished caller-side contact for logging.
 // Caller holds s.mu and s.caller is the just-completed exchange.
 func (s *Sequencer) completedCallerQsoLocked() CompletedQso {
 	return CompletedQso{
 		LogbookID:      s.logbookID,
 		AllowDuplicate: s.allowDuplicate,
-		// The live run's identity, empty outside a run — this single stamp
-		// site serves both run shapes AND the one-off work-a-caller contact
-		// correctly, because runID is exactly as scoped as the run itself.
-		RunID:          s.runID,
+		// The contact's PINNED run (contactFlags.runID), never the live
+		// s.runID: a run stopped mid-contact must not strip the in-flight
+		// contact's association (codex P1b on f3043e80, runidentity RI9).
+		RunID:          s.contact.runID,
 		TheirCall:      s.caller.TheirCall,
 		TheirGrid:      s.caller.TheirGrid,
 		OurReport:      s.caller.SendSnr,

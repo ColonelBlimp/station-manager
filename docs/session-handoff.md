@@ -208,10 +208,22 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   cloud payload ride free) + adif round-trip + spec classification. 6
   reversion probes each bit exactly. ft8/adif/api/qsoservice green, race
   green, gofmt/vet clean.
-- **NEXT: commit run identity + the CONVERGED Draft 3 → await go-ft8 perf
-  verdict → next slice (presence vertical §6 or evidence machinery §4.1) →
-  on-air 0067 pick-run try.** Then: Settings defaults dropdown;
-  max_repeats-to-session (0066 watch-list); Abandon-vs-queue flag open.
+- **go-ft8 v0.8.0 BUMPED + committed (1df6d94d); run identity committed
+  (f3043e80). TREE HOLDS the two review rounds' fixes, uncommitted:**
+  run-identity P1a+P1b — the pin-at-commit model (contactFlags.runID pinned
+  at all 5 contact-commit sites, 3 factored into commitCqContactLocked;
+  completions read the PIN, never live s.runID — answer-seed contacts
+  carry their run (RI8), a Stop mid-contact no longer strips the in-flight
+  contact's association (RI9); 6 probes bit exactly). PLUS the bump review
+  P2: dropUnparsed at DecodeSlot's return — v0.8.0 surfaces CRC-valid
+  unsupported/reserved/invalid payloads as TEXT-LESS messages (v0.7.1
+  rejected them); the curated consumers filter to ParseStatusParsed; the
+  comment marks this as THE curated-branch filter with the evidence branch
+  tapping upstream (design §4 prereq 2 arriving early).
+- **NEXT: commit the fixes → prerequisite 2 (rich-result split + stateful
+  Decoder adoption, now fully unblocked by v0.8.0) → on-air 0067 pick-run
+  try.** Then: Settings defaults dropdown; max_repeats-to-session (0066
+  watch-list); Abandon-vs-queue flag open.
 
 ## Current state (as of 2026-08-08)
 

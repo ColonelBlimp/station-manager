@@ -435,6 +435,14 @@ type contactFlags struct {
 	// Cleared when the contact advances (the rung was not stuck after all), when it
 	// is consumed by a park, on completion, on Abandon, and at session start.
 	nextArmed bool
+	// runID pins the run this CONTACT belongs to, copied from the live s.runID
+	// at contact commit — the ADR 0055 pin-at-arm discipline applied to run
+	// identity. Completions read THIS, never the live field: an auto run
+	// stopped mid-contact must not strip the in-flight contact's association
+	// (codex P1b on f3043e80), and the answer-a-CQ seed contact must carry the
+	// run it started (P1a). Zero for FD/type-4/no-run contacts, because their
+	// starts reset contactFlags and never pin.
+	runID string
 }
 
 // autoWorkState is an ACTIVE auto-work-callers run (ADR 0059) — a RUN, not a
@@ -798,6 +806,9 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	// ex.OurCall is the normalised form the exchange was built with; pickAnswererLocked
 	// matches directed calls against it.
 	s.armAutoWorkLocked(ex.OurCall, offsetHz, dialFreqMHz, now)
+	// Pin the freshly-minted run onto this contact (contactFlags.runID doc):
+	// the answer seed belongs to the run it starts (runidentity_test.go RI8).
+	s.contact.runID = s.runID
 	st := s.statusLocked()
 	theirPeriod := s.theirPeriod // capture under s.mu; the log below runs after Unlock
 	s.publish(st)
@@ -2191,6 +2202,10 @@ func (s *Sequencer) completedQsoLocked() CompletedQso {
 	return CompletedQso{
 		LogbookID:      s.logbookID,
 		AllowDuplicate: s.allowDuplicate,
+		// The pinned run (contactFlags.runID): the answer-a-CQ seed contact
+		// belongs to the run it starts under an arming mode (codex P1a on
+		// f3043e80, runidentity RI8); empty when no run was armed.
+		RunID:          s.contact.runID,
 		TheirCall:      s.ex.TheirCall,
 		TheirGrid:      s.theirGrid,
 		OurReport:      s.ex.SendSnr,

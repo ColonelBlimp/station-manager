@@ -489,6 +489,11 @@ func (s *Sequencer) onSlotWorkingFd(ref SlotRef, msgs []goft8.DecodedMessage, no
 func (s *Sequencer) commitWorkCallerLocked(c *CallerExchange, call, theirPeriod string, offsetHz, dialFreqMHz float64, now time.Time) {
 	s.mode = seqWorking
 	s.contact = contactFlags{}
+	// Pin the run onto the contact (contactFlags.runID doc; runidentity_test.go
+	// RI9): every caller of this commit arms or inherits the run FIRST, so the
+	// live id is the one this contact belongs to — and after this instant, only
+	// the pin decides what the completion records.
+	s.contact.runID = s.runID
 	s.sessionGen++
 	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
 	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it

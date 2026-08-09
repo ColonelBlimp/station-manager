@@ -162,7 +162,12 @@ func DecodeSlot(samples []int16, enableOSD bool, log logging.Logger) (msgs []gof
 		Int("unique_messages", d.UniqueMessages).
 		Msg("ft8 slot decoded")
 
-	return report.Messages
+	// Curated boundary (see dropUnparsed): payload-only decodes stop here for
+	// every current consumer; the future evidence branch taps report.Messages
+	// ABOVE this line. The per-decode debug loop above deliberately logs the
+	// unfiltered stream — until evidence capture exists it is the only trace
+	// that a payload-only decode happened.
+	return dropUnparsed(report.Messages)
 }
 
 // DecodeFile reads a WAV fixture into an int16 slot and decodes it. The WAV
@@ -189,4 +194,24 @@ func DecodeFile(path string, enableOSD bool, log logging.Logger) ([]goft8.Decode
 			len(samples), SlotSamples, slotSeconds, goft8.SampleRate)
 	}
 	return DecodeSlot(samples, enableOSD, log), nil
+}
+
+// dropUnparsed filters a slot's decodes to those with canonical text
+// (ParseStatusParsed) for the CURATED consumers — Band Activity, the RX decode
+// log, the sequencer, PSK Reporter — which all assume usable text. go-ft8
+// v0.8.0 returns CRC-valid but unsupported/reserved/invalid payloads as
+// text-less messages (v0.7.1 rejected them); unfiltered they render blank
+// Band Activity rows and malformed RX log records (codex P2 on 1df6d94d).
+//
+// THIS IS THE CURATED BRANCH'S FILTER from the evidence-capture design (§4,
+// prerequisite 2): when the evidence branch lands it taps the rich result
+// UPSTREAM of this call — payload-only decodes are evidence, never view rows.
+func dropUnparsed(msgs []goft8.DecodedMessage) []goft8.DecodedMessage {
+	kept := msgs[:0]
+	for _, m := range msgs {
+		if m.ParseStatus == goft8.ParseStatusParsed {
+			kept = append(kept, m)
+		}
+	}
+	return kept
 }
