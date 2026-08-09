@@ -188,8 +188,16 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   tokens, cache keys, deletion, opt-out — exact forms stored, current
   version applied at query time). Reviewer standard: implementation-ready
   once P1s close — closed.
-- **NEXT: operator passes the doc out for external review → on-air 0067.**
-  Then: Settings defaults dropdown; max_repeats-to-session (0066 watch-list);
+- **go-ft8 UPSTREAM: the §4 prerequisite-1 evidence-grade features
+  (verified payload incl. unsupported families, AP/decoder provenance,
+  unfiltered results, stateful per-stream Decoder) are IMPLEMENTED and in
+  perf testing** (operator, 2026-08-09). When tagged: dependency bump =
+  its own commit; then SM-side prerequisite 2 (rich-result split) →
+  evidence.db writer (§4.1 contract).
+- **NEXT: commit the CONVERGED Draft 3 (13 review rounds; whole-doc pass
+  clean, 3 must-fix items verified in) → await go-ft8 perf verdict →
+  implementation planning (prereq 2 first) → on-air 0067.** Then: Settings
+  defaults dropdown; max_repeats-to-session (0066 watch-list);
   Abandon-vs-queue flag still open.
 
 ## Current state (as of 2026-08-08)
