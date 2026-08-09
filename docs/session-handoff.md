@@ -62,15 +62,86 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   wait) on a heavily loaded runner (api 405s, sqlite 186s under -race); the
   commit touched only drivealarm log levels. Next push re-tests it; if it
   recurs, harden the two 1s waits in handler_test.go.
-- **TREE HOLDS, uncommitted: 4 codex bridge findings FIXED red-first**
-  (2026-08-09): steady-run disconnect no longer eaten by the supervisor dedup
-  key (publish-time steady clear, pipeline.go); ft8_meter_poll_*_ms now
-  range-validated (ticker-panic vector closed, config.go); Stop stops the
-  TX-confirm timer + wakes waiters, callback stop-gated (txconfirm/service);
-  meter answer-loss notice now counts WRITTEN polls, not wall time (no false
-  warn after reconnect/storm). Bridge+config green incl. -race; probes done.
-- **NEXT: commit the fixes → watch CI (the flaky test) → on-air 0067.**
-  Then: Settings defaults dropdown; max_repeats-to-session (0066 watch-list).
+- **2026-08-09 day: 5 codex bridge findings FIXED red-first** (steady-dedup
+  disconnect, meter-poll config validation, Stop vs confirm timer, answer-loss
+  poll counter, count-before-write race) — all committed (`2653e859`,
+  `004f547b`), pushed, **CI GREEN** (the flaky handler test passed untouched,
+  supporting the flake assessment; if it recurs, harden its two 1s waits).
+- **TREE HOLDS: the spot-network doc REWRITTEN as Draft 3 — the operator's
+  vertical slice** (docs/v2-design/spot-network/spot-network-design.md;
+  title now "FT8 Evidence Capture and Live Station Presence"). Build =
+  SQLite evidence capture (decoded-message records + dt + flags + versioned
+  profiles, size cap, loss counters) → sync over the EXISTING SMD↔SMC
+  channel (prompt while live, lazy backlog; store-generation + write-once
+  assignment + digest, distilled from 4 review rounds) → separate
+  latest-state presence endpoint (incarnation token + snapshotRev, all the
+  ordering rules kept) → ONE public per-call lookup page (not heard /
+  heard / queued / worked / in-log ladder) → time-boxed pilot with
+  pre-registered go/no-go. NO SBE/QUIC/TimescaleDB/MQTT/research-network —
+  all moved to a short "future directions" section, gated on a researcher
+  asking or an implementer committing; the full protocol design survives in
+  this file's git history. MQTT question RESOLVED: heard comes from our own
+  synced decodes (first-hand, fresher); MQTT noted only as a someday
+  option for non-SM stations. DRAFT-3 REVIEW ROUND folded in (8 findings):
+  sync identity now UUIDv7-per-observation (ADR 0016 pattern — DELETES the
+  generation/sequence machinery; drops leave honest gaps, no tombstones);
+  explicit state model offline/monitoring/on_air + transmitting flag
+  (sources: ft8 lifecycle / sequencer / bridge TxActive; heartbeats span
+  subsystem life, not run life); "logged" ladder rung scoped to THE RUN via
+  runId (unscoped log lookup inverts the ladder); profile sync §5.4;
+  two named pipeline prerequisites (widen DecodeLine — payload77/AP/metrics
+  stop inside go-ft8; decode-sink fan-out, single slot now PSK-occupied);
+  lookup-as-queue-oracle ACCEPTED explicitly + rate limits; RBN/WSJT-X-UDP
+  adapter recorded in §11 (also in dogfood inbox); dt claim narrowed to
+  timing diagnosis. ROUND 2 on Draft 3 (7 findings folded): deletion
+  TOMBSTONES by UUID (else backup restore resurrects deleted rows) +
+  deletion-vs-ongoing-opt-out policy split + local-copy boundary stated;
+  RUN IDENTITY named as NEW cross-cutting state (mint at cq/start, survives
+  Stop/Resume + reconnection, ends at Abandon/run-end; threads QsoStatus →
+  CompletedQso → local QSO → cloud sync; prerequisite 3); immediate
+  snapshot on EVERY transition (heartbeat = backstop only) + transmitting
+  sources FT8-specific keyed state, NOT TxActive() (tune conflation);
+  normative lookup rules (heard TTL 10min provisional, stale DOWNGRADES
+  "last known as of", run-id grace period); loss COUNTERS → loss INTERVALS
+  (synced); pilot metric restated as decoded-repeats PROXY; 77-bit payload
+  vs 174-bit codeword terminology. ROUND 3 on Draft 3 (6 findings folded):
+  evidence gets its OWN evidence.db (WAL single-writer + 5s busy_timeout
+  would let purges stall a QSO commit — invariant by structure not
+  discipline); presence authority transfers on FIRST SNAPSHOT not POST
+  (crashed token-holder must not lock out the live client); page delivery
+  SPECIFIED = 5s short polling of a cached status endpoint (budgeted apart
+  from oracle limits; criteria now end-to-end); cursor language deleted
+  (synced flag = scheduling optimisation; SMC-side rollback out of scope,
+  manifest endpoint the named future remedy); monitoring visibility = two
+  COHERENT modes (hidden label + fresh heard answers = privacy in name
+  only); run-grace precedence (current run always wins) + criterion 5
+  (logged-this-run within 1min provisional). ROUND 4 on Draft 3 (5
+  findings): superseded client YIELDS on 409 (recreate-on-409 = endless
+  takeover loop; re-acquire only on authority staleness via 409-carried
+  age, or operator takeover); per-call ladder refresh via callsign-bound
+  TOKEN (probe rate-limited, refresh cheap — generic poll can't carry
+  per-call state without exposing the queue); ladder run-rungs scoped to
+  Call-CQ runs ONLY (on_air stays honest for answer/one-off sessions;
+  just-logged one-offs surface via previously-worked); on-air-only mode
+  requires observed_at >= runStartedAt (else run start exposes the hidden
+  monitoring period); heard TTL runs on VALIDATED observation time
+  (archive verbatim, public view skew-checked). ROUND 5 on Draft 3 (6
+  findings): takeover staleness checked ATOMICALLY by SMC at
+  first-snapshot acceptance (409-carried age is advisory only — sampled
+  age let two healthy clients alternate at the staleness interval);
+  snapshots carry lastEndedRunId+runEndedAt until grace expires (coalesced
+  reconnect snapshot must self-describe an offline-ended run; grace from
+  runEndedAt never reconnect); heard validation ONE-SIDED (future-beyond-
+  skew excluded; ingest−observed distance is DELAY, never grounds — slow
+  clock accepted as conservative); per-row terminal outcomes (accepted/
+  already_present/tombstoned/suppressed/retryable_missing_profile/
+  permanent_reject→local quarantine); ingest = ONE transaction with
+  suppression checked first + suppressed UUIDs tombstoned + unresolved-hash
+  limit stated; lookup tokens STATELESS signed (HMAC), cache by canonical
+  (station,callsign) with per-station+global caps.
+- **NEXT: operator passes the doc out for external review → on-air 0067.**
+  Then: Settings defaults dropdown; max_repeats-to-session (0066 watch-list);
+  Abandon-vs-queue flag still open.
 
 ## Current state (as of 2026-08-08)
 
