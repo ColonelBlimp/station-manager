@@ -71,11 +71,15 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 - **CI flake watch**: `TestHTTPHandler_StreamsPipelineEvents` failed once on
   a loaded runner (`ef791091`), passed untouched on both pushes since. If it
   recurs, harden its two 1s waits in bridge handler_test.go.
-- **NEXT: prerequisite 2 — the rich-result split** (evidence branch
-  unfiltered/unprojected at the go-ft8 rich result; curated branch = own-TX
-  filter + projection → sequencer/UI/PSK) **+ stateful ft8.Decoder adoption**,
-  characterization tests freezing the curated branch first. Then: on-air
-  0067 · Settings defaults dropdown · max_repeats-to-session (0066).
+- **Prereq 2 (rich-result split + stateful decoder) BUILT, in tree
+  uncommitted**: `slotDecoder` (one stateful goft8.Decoder per capture
+  session, loop-local) + `curateDecodes` boundary in decodeLoop; skipped
+  slots advance state via zero-slot decode (operator decision — swap for
+  Decoder.SkipSlot() when upstream ships one). Spec + criteria:
+  `internal/ft8/decodesplit_test.go` (AC1–AC7 in header; 5 reversion probes
+  bit). ft8 green, race green, tree -short green.
+- **NEXT: commit prereq 2 → evidence.db writer (§4.1) is the next slice.**
+  Then: on-air 0067 · Settings defaults dropdown · max_repeats-to-session.
 
 ## Current state (as of 2026-08-09)
 

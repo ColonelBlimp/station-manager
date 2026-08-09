@@ -37,7 +37,16 @@ func main() {
 		}
 		fmt.Printf("%s: %d decode(s)\n", path, len(msgs))
 		for _, m := range msgs {
-			fmt.Printf("  %7.1f Hz  dt=%+4.1f  %s\n", m.FreqHz, m.DTSec, m.Text)
+			// DecodeFile returns the RICH result: a CRC-valid payload whose
+			// family go-ft8 cannot render as text (unsupported/reserved/invalid)
+			// arrives text-less — show its parse status and raw 77-bit payload
+			// rather than a blank, since seeing those rows is this tool's value
+			// as an evidence-path diagnostic.
+			text := m.Text
+			if text == "" {
+				text = fmt.Sprintf("(%s payload %x)", m.ParseStatus, m.Payload)
+			}
+			fmt.Printf("  %7.1f Hz  dt=%+4.1f  %s\n", m.FreqHz, m.DTSec, text)
 		}
 	}
 	os.Exit(exit)

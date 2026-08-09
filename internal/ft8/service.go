@@ -842,7 +842,11 @@ func (s *Service) Enabled() bool {
 // is cheap (one averaged FFT per slot, ~tens of ms) next to the decode, so it adds
 // negligible time to the slot budget.
 func (s *Service) decodeLoop(slots <-chan Slot) {
-	osd := s.osdEnabled()
+	// ONE stateful decoder per capture session (this loop's lifetime, one
+	// goroutine): cross-slot hash/A7 state lets "<...>" references resolve to
+	// calls heard in earlier slots, and dies with the session so no stale
+	// context survives a release/re-acquire (see slotDecoder).
+	dec := newSlotDecoder(s.osdEnabled(), s.log)
 	// Previously-recommended top offset, carried across slots for the
 	// clear-offset hysteresis (stickySuggested): the ★ recommendation stays put
 	// while it remains clear instead of hopping to a marginally wider gap each
@@ -894,18 +898,26 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// as ghost Band Activity rows; the raw-spectrum energy detector would mark our
 		// own offset "busy" and flicker the readout busy↔clear in lockstep with TX/RX
 		// (the occupancy sibling of the self-decode filter). WSJT-X likewise doesn't
-		// decode its own TX slot.
-		var msgs []goft8.DecodedMessage
+		// decode its own TX slot. A skipped slot still ADVANCES the stateful
+		// decoder (dec.skip — a zero-slot decode whose output is nothing), so the
+		// parity-keyed A7 hint buckets stay aligned across it; the slot's real
+		// reason is still what publishes below (empty report, suppression line).
+		var rich []goft8.DecodedMessage
 		if !txSlot && !dialMoved {
-			msgs = DecodeSlot(slot.Samples, osd, s.log)
-			// Drop our own transmissions self-decoded off residual rig TX-audio bleed,
-			// so Band Activity / the sequencer never see our own signal. The callsign
-			// is the ACTIVE session's pinned call (ADR 0055, pin-at-arm) — no per-slot
-			// DB lookup, no fallback: idle → "" → no-op (nothing of ours is on the air).
-			if oc := s.seq.ActiveCallsign(); oc != "" {
-				msgs = dropOwnTransmissions(msgs, oc)
-			}
+			rich = dec.decode(slot.Samples)
+		} else {
+			dec.skip()
 		}
+		// THE BRANCH POINT (design §4 prerequisite 2): `rich` is the complete
+		// go-ft8 result — every parse status, own-TX included. The evidence
+		// branch taps it HERE, upstream of every curated filter, when the
+		// evidence.db writer lands. Everything below is the curated branch.
+		//
+		// curateDecodes = parse-status filter + own-transmission drop. The
+		// callsign is the ACTIVE session's pinned call (ADR 0055, pin-at-arm) —
+		// no per-slot DB lookup, no fallback: idle → "" → no own-drop (nothing
+		// of ours is on the air).
+		msgs := curateDecodes(rich, s.seq.ActiveCallsign())
 
 		// JTDX ALL.TXT RX lines (ft8.decode_log) — independent of the daemon log
 		// level. nil-safe no-op when the decode log is disabled (and on a TX slot,

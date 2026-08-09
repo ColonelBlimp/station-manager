@@ -1,0 +1,561 @@
+package ft8
+
+/*
+   Design §4 prerequisite 2 (docs/v2-design/spot-network/spot-network-design.md):
+   the decode path splits at the RICH go-ft8 result — an evidence branch
+   (unfiltered, unprojected; the future evidence.db writer taps it) and the
+   curated operational stream (own-TX filter + parse-status filter + the
+   four-field projection) feeding the sequencer, Band Activity, the RX decode
+   log and PSK Reporter — and the live path adopts ONE stateful goft8.Decoder
+   per receiver stream (capture session), gaining cross-slot callsign-hash
+   resolution and A7 hints.
+
+   ACCEPTANCE CRITERIA (operator-checked 2026-08-09, this session):
+
+   AC1  A CRC-valid payload whose text is unsupported reaches NO curated
+        surface — no Band Activity row, no RX-log line, no sequencer action,
+        no PSK spot — distinguishable from "never decoded" because the rich
+        result upstream still carries it (payload + parse status).
+   AC2  The COMPLETE decode set (all parse statuses, own-TX included,
+        provenance/metrics intact) is available at a seam upstream of every
+        filter.
+   AC3  Own-TX filtering is curated-only: a loopback decode of our own
+        transmission reaches no curated consumer but is present in the rich
+        result.
+   AC4  Statefulness is operator-observable as hash resolution: a nonstandard
+        call heard in full in slot N renders RESOLVED (not "<...>") when slot
+        N+2 carries it by hash.
+   AC5  Decoder state is per capture session: after release + re-acquire, a
+        hash learned in the old session does not resolve in the new one.
+   AC6  Every skipped physical slot (TX, dial-moved) advances decoder state
+        via one zero-slot decode — current A7 parity bucket cleared, parity
+        advanced, hash table preserved — and the zero decode's output is
+        DISCARDED (no curated rows, no evidence); the published empty slot
+        report is unchanged. Operator decision 2026-08-09: measured cost
+        6–8 ms clearing a 26–40-hint bucket, 0.09–0.12 ms once empty; replace
+        with goft8 Decoder.SkipSlot() when a release provides it.
+   AC7  No wire-visible change for parsed-only slots: ft8-decode SSE shape,
+        RX-log format, sequencer feed and PSK sink payload are identical —
+        frozen by the characterization tests below BEFORE the refactor.
+
+   TESTABILITY HONESTY (AC6): the parity-ALIGNMENT consequence is observable
+   only through A7-assisted recovery of a signal too weak for the normal
+   passes — not deterministically synthesizable in CI. The behavioural anchor
+   here is hash-survival-across-skip (real audio, real decoder, operator-
+   visible text); zero-slot parity semantics are go-ft8's documented
+   mechanics (a7.go: history[seq] rewritten per call, seq toggles per call).
+
+   FIXTURE DISCRIMINATION: the unsupported-payload half of AC1/AC2 cannot be
+   synthesized as audio (the encoder deliberately refuses non-standard
+   families), so it is pinned at the curate seam with hand-built messages
+   (TestCurateDecodes) while the audio-level tests pin the own-TX half and
+   the loop's routing THROUGH that seam. Composition, stated: the loop
+   provably routes rich results through curateDecodes (own-TX fixture), and
+   curateDecodes provably drops unparsed rows.
+*/
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
+)
+
+// mixSlot synthesises one slot carrying several messages at distinct audio
+// offsets, each at ~45% amplitude so the sum never clips.
+func mixSlot(t *testing.T, msgs map[string]float64) []int16 {
+	t.Helper()
+	sum := make([]int32, SlotSamples)
+	for text, offset := range msgs {
+		slot, err := EncodeToSlot(text, offset, 0.5)
+		if err != nil {
+			t.Fatalf("EncodeToSlot(%q): %v", text, err)
+		}
+		for i, v := range slot {
+			sum[i] += int32(float64(v) * 0.45)
+		}
+	}
+	out := make([]int16, SlotSamples)
+	for i, v := range sum {
+		if v > 32767 {
+			v = 32767
+		} else if v < -32768 {
+			v = -32768
+		}
+		out[i] = int16(v)
+	}
+	return out
+}
+
+// sinkRecorder captures every DecodeReport handed to the PSK-shaped sink.
+type sinkRecorder struct {
+	mu      sync.Mutex
+	reports []DecodeReport
+}
+
+func (r *sinkRecorder) record(rep DecodeReport) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reports = append(r.reports, rep)
+}
+
+func (r *sinkRecorder) all() []DecodeReport {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]DecodeReport(nil), r.reports...)
+}
+
+// drainDecodeEvents non-blockingly drains the subscriber buffer, returning the
+// ft8-decode payloads and the count of occupancy events. Call only after
+// decodeLoop has returned — publishes are synchronous, so everything is
+// buffered by then.
+func drainDecodeEvents(ch <-chan hubEvent) (decodes []DecodeReport, occupancy int) {
+	for {
+		select {
+		case e, ok := <-ch:
+			if !ok {
+				return
+			}
+			switch e.name {
+			case EventDecode:
+				decodes = append(decodes, e.payload.(DecodeReport))
+			case EventOccupancy:
+				occupancy++
+			}
+		default:
+			return
+		}
+	}
+}
+
+// recentEvenSlotStart returns a recent UTC slot boundary with EVEN parity
+// ((unix/15)%2 == 0 ⇔ unix%30 == 0), so tests can feed slots whose parity is
+// the OPPOSITE of a session started with txParity "odd" — the sequencer
+// listens on them and never fires a rung mid-test.
+func recentEvenSlotStart() time.Time {
+	now := time.Now().UTC()
+	return time.Unix(now.Unix()-now.Unix()%30, 0).UTC()
+}
+
+// newSplitHarness builds a TX-capable service with a hub subscription, a sink
+// recorder and a file-backed RX decode log — every curated surface observable.
+func newSplitHarness(t *testing.T) (s *Service, sink *sinkRecorder, events <-chan hubEvent, decLogPath string) {
+	t.Helper()
+	s = newTxTestService(&fakeKeyer{}, newFakeTxPlayer(), nil)
+	sink = &sinkRecorder{}
+	s.SetDecodeSink(sink.record)
+	dir := t.TempDir()
+	decLogPath = filepath.Join(dir, "all.txt")
+	dl := openDecodeLog(decLogPath, dir, logging.Noop())
+	if dl == nil {
+		t.Fatal("openDecodeLog returned nil")
+	}
+	s.decLog.Store(dl)
+	events, unsub := s.hub.subscribe()
+	t.Cleanup(unsub)
+	return s, sink, events, decLogPath
+}
+
+// readDecodeLog flushes and reads the RX decode log's content.
+func readDecodeLog(t *testing.T, s *Service, path string) string {
+	t.Helper()
+	s.decLog.Load().Close()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read decode log: %v", err)
+	}
+	return string(b)
+}
+
+// ---------------------------------------------------------------------------
+// CHARACTERIZATION (AC7 + the own-TX half of AC1/AC3): frozen CURRENT
+// behaviour, written and green BEFORE the split so the refactor cannot drift
+// the curated wire surfaces.
+// ---------------------------------------------------------------------------
+
+// TestDecodeLoop_CuratedSurfaces_Frozen pins all four curated surfaces for one
+// real mixed slot: our own loopback CQ (the session's pinned call transmitting
+// off rig audio bleed) plus another station's CQ. The own row must reach NO
+// surface; the other station must reach ALL of them with the projected fields.
+// The fixture discriminates: an implementation that skipped the own-TX filter
+// would show 2 rows everywhere.
+func TestDecodeLoop_CuratedSurfaces_Frozen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	s, sink, events, logPath := newSplitHarness(t)
+
+	// Arm + start a Call-CQ session so ActiveCallsign() pins our call. txParity
+	// "odd" with even fed slots keeps the sequencer listening, never keying.
+	if err := s.ArmTx(true); err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	if err := s.StartCallCq("K1ABC", "FN42", 1500, 14.074, "", "odd", 1); err != nil {
+		t.Fatalf("StartCallCq: %v", err)
+	}
+
+	samples := mixSlot(t, map[string]float64{
+		"CQ K1ABC FN42": 800,  // our own loopback → must be dropped everywhere
+		"CQ A61DI LL64": 2200, // another station → must surface everywhere
+	})
+	ch := make(chan Slot, 1)
+	ch <- Slot{StartUTC: recentEvenSlotStart(), Samples: samples, DialTracked: true, DialMHz: 14.074}
+	close(ch)
+	s.decodeLoop(ch)
+
+	decodes, occupancy := drainDecodeEvents(events)
+	if len(decodes) != 1 {
+		t.Fatalf("ft8-decode events = %d, want 1", len(decodes))
+	}
+	rep := decodes[0]
+	if len(rep.Decodes) != 1 {
+		t.Fatalf("Band Activity rows = %d, want 1 (own CQ filtered, other kept): %+v",
+			len(rep.Decodes), rep.Decodes)
+	}
+	row := rep.Decodes[0]
+	if row.Text != "CQ A61DI LL64" {
+		t.Errorf("surviving row = %q, want the other station's CQ", row.Text)
+	}
+	// The projection's four fields, populated and plausible (wire shape AC7).
+	if row.FreqHz < 2150 || row.FreqHz > 2250 {
+		t.Errorf("row FreqHz = %.1f, want ~2200", row.FreqHz)
+	}
+	if row.DTSec < 0.1 || row.DTSec > 0.9 {
+		t.Errorf("row DTSec = %.2f, want ~0.5", row.DTSec)
+	}
+	if rep.DialMHz != 14.074 {
+		t.Errorf("report DialMHz = %v, want the slot's captured dial 14.074", rep.DialMHz)
+	}
+	if occupancy != 1 {
+		t.Errorf("occupancy events = %d, want 1 (RX slot with a known dial)", occupancy)
+	}
+
+	// PSK sink sees the same curated report.
+	reports := sink.all()
+	if len(reports) != 1 || len(reports[0].Decodes) != 1 || reports[0].Decodes[0].Text != "CQ A61DI LL64" {
+		t.Errorf("sink reports = %+v, want exactly the curated report", reports)
+	}
+
+	// RX decode log carries one line for the other station, none for our own.
+	logText := readDecodeLog(t, s, logPath)
+	if !strings.Contains(logText, "~ CQ A61DI LL64") {
+		t.Errorf("decode log missing the other station's RX line:\n%s", logText)
+	}
+	if strings.Contains(logText, "K1ABC") {
+		t.Errorf("decode log carries our own loopback:\n%s", logText)
+	}
+}
+
+// TestDecodeLoop_SkippedSlots_EmptySurfaces_Frozen pins the skip semantics for
+// a TX slot and a dial-moved slot, each fed DECODABLE audio: the slot clock
+// still ticks (one empty ft8-decode report per slot, sink included), nothing
+// reaches the RX log, and no occupancy is published. The decodable audio is
+// the discrimination — a loop that decoded anyway would surface the row.
+func TestDecodeLoop_SkippedSlots_EmptySurfaces_Frozen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	s, sink, events, logPath := newSplitHarness(t)
+
+	audible, err := EncodeToSlot("CQ W1AW FN31", 1500, 0.5)
+	if err != nil {
+		t.Fatalf("EncodeToSlot: %v", err)
+	}
+
+	txStart := recentEvenSlotStart()
+	s.markTxSlot(txStart)
+	movedStart := txStart.Add(15 * time.Second)
+
+	ch := make(chan Slot, 2)
+	ch <- Slot{StartUTC: txStart, Samples: audible, DialTracked: true, DialMHz: 14.074}
+	// A moved slot ships DialMHz 0 — the scheduler cannot place a window the
+	// dial moved through (Slot doc); occupancy is then suppressed as unplaceable.
+	ch <- Slot{StartUTC: movedStart, Samples: audible, DialTracked: true, DialMHz: 0, DialChanged: true}
+	close(ch)
+	s.decodeLoop(ch)
+
+	decodes, occupancy := drainDecodeEvents(events)
+	if len(decodes) != 2 {
+		t.Fatalf("ft8-decode events = %d, want 2 (slot clock ticks on skipped slots)", len(decodes))
+	}
+	for i, rep := range decodes {
+		if len(rep.Decodes) != 0 {
+			t.Errorf("skipped slot %d published %d rows, want 0: %+v", i, len(rep.Decodes), rep.Decodes)
+		}
+	}
+	if occupancy != 0 {
+		t.Errorf("occupancy events = %d, want 0 (TX slot and moved slot both suppress it)", occupancy)
+	}
+	for i, rep := range sink.all() {
+		if len(rep.Decodes) != 0 {
+			t.Errorf("sink report %d has %d rows, want 0", i, len(rep.Decodes))
+		}
+	}
+	if logText := readDecodeLog(t, s, logPath); strings.Contains(logText, "W1AW") {
+		t.Errorf("skipped slots must write no RX lines, got:\n%s", logText)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ACCEPTANCE: the split + the stateful decoder. Written RED before the
+// implementation.
+// ---------------------------------------------------------------------------
+
+// Hash-resolution fixture (AC4/AC5/AC6): "CQ G0XYZ IO91" teaches the decoder
+// hash(G0XYZ) — unpackStandard saves every heard second call (go-ft8 v0.8.0
+// unpack.go:236). "<G0XYZ> PJ4/K1ABC RR73" carries G0XYZ as a 12-bit hash
+// (type 4) and renders "<...>" unless the decoder's hash history resolves it
+// (encode.go doc). Both forms encode (verified against v0.8.0, 2026-08-09).
+const (
+	hashTeachText  = "CQ G0XYZ IO91"
+	hashRefText    = "<G0XYZ> PJ4/K1ABC RR73"
+	hashUnresolved = "<...> PJ4/K1ABC RR73"
+	hashResolved   = "<G0XYZ> PJ4/K1ABC RR73"
+)
+
+func encodeSlotOrFatal(t *testing.T, text string, offsetHz float64) []int16 {
+	t.Helper()
+	slot, err := EncodeToSlot(text, offsetHz, 0.5)
+	if err != nil {
+		t.Fatalf("EncodeToSlot(%q): %v", text, err)
+	}
+	return slot
+}
+
+func textsOf(msgs []goft8.DecodedMessage) []string {
+	out := make([]string, len(msgs))
+	for i, m := range msgs {
+		out[i] = m.Text
+	}
+	return out
+}
+
+// TestCurateDecodes pins the curated seam every view consumer sits behind
+// (AC1 + AC3): only ParseStatusParsed rows from OTHER stations pass. The
+// unsupported-payload rows here are hand-built because the encoder refuses to
+// synthesize them as audio — this unit seam plus the loop-level own-TX proof
+// (TestDecodeLoop_CuratedSurfaces_Frozen) compose into the full AC1 claim.
+func TestCurateDecodes(t *testing.T) {
+	msgs := []goft8.DecodedMessage{
+		{Text: "CQ A61DI LL64", ParseStatus: goft8.ParseStatusParsed},
+		{Text: "CQ K1ABC FN42", ParseStatus: goft8.ParseStatusParsed},         // our own loopback
+		{ParseStatus: goft8.ParseStatusUnsupported},                           // CRC-valid, text-less
+		{ParseStatus: goft8.ParseStatusInvalid},                               // CRC-valid, bad field
+		{Text: "7Q5MLV G0XYZ -10", ParseStatus: goft8.ParseStatusUnknownType}, // never trust text on a non-parsed status
+	}
+
+	got := curateDecodes(msgs, "K1ABC")
+	if len(got) != 1 || got[0].Text != "CQ A61DI LL64" {
+		t.Fatalf("curateDecodes kept %v, want exactly [CQ A61DI LL64]", textsOf(got))
+	}
+
+	// No own call → only the parse-status filter applies.
+	got = curateDecodes(msgs, "")
+	if len(got) != 2 {
+		t.Fatalf("curateDecodes with no own call kept %v, want the two parsed rows", textsOf(got))
+	}
+
+	if got := curateDecodes(nil, "K1ABC"); len(got) != 0 {
+		t.Fatalf("nil in, non-empty out: %v", textsOf(got))
+	}
+}
+
+// TestCurateDecodes_NeverMutatesInput pins the seam's non-aliasing contract:
+// the input is the rich slice the evidence branch taps, so the curated
+// filters must copy, never filter in place — an in-place dropUnparsed
+// (kept := msgs[:0]) compacts survivors over the rich slice's early elements
+// and silently corrupts the evidence stream the moment its writer lands.
+func TestCurateDecodes_NeverMutatesInput(t *testing.T) {
+	in := []goft8.DecodedMessage{
+		{ParseStatus: goft8.ParseStatusUnsupported, SNR: -12},
+		{Text: "CQ A61DI LL64", ParseStatus: goft8.ParseStatusParsed},
+		{ParseStatus: goft8.ParseStatusInvalid, SNR: -20},
+		{Text: "CQ K1ABC FN42", ParseStatus: goft8.ParseStatusParsed},
+	}
+	want := append([]goft8.DecodedMessage(nil), in...)
+
+	curateDecodes(in, "K1ABC")
+
+	for i := range want {
+		if in[i] != want[i] {
+			t.Fatalf("curateDecodes mutated its input at [%d]: got %+v, want %+v", i, in[i], want[i])
+		}
+	}
+}
+
+// TestDecodeLoop_SkipAdvancesDecoderOncePerSkippedSlot pins the loop half of
+// AC6 at its only observable: the skip advance's debug trace, once per
+// skipped physical slot (TX, dial-moved) and never for a decoded slot. The
+// parity consequence itself is A7-internal (header note); this guards the
+// CALL discipline the zero-slot decision depends on — without it, deleting
+// dec.skip() would fail no test at all.
+func TestDecodeLoop_SkipAdvancesDecoderOncePerSkippedSlot(t *testing.T) {
+	buf := &bytes.Buffer{}
+	s := newService(types.Ft8Config{Enabled: true}, logging.NewForWriter(buf), newFakeSource())
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	start := recentEvenSlotStart()
+	s.markTxSlot(start.Add(15 * time.Second))
+
+	// Short sample slices keep the decoded slots cheap (rejected before decode
+	// work); skip runs regardless of the slot's samples — it feeds zeros.
+	ch := make(chan Slot, 3)
+	ch <- Slot{StartUTC: start, Samples: make([]int16, 1000)}
+	ch <- Slot{StartUTC: start.Add(15 * time.Second), Samples: make([]int16, 1000)}
+	ch <- Slot{StartUTC: start.Add(30 * time.Second), Samples: make([]int16, 1000), DialChanged: true, DialTracked: true}
+	close(ch)
+	s.decodeLoop(ch)
+
+	if got := strings.Count(buf.String(), "decoder state advanced"); got != 2 {
+		t.Fatalf("skip advances = %d, want exactly 2 (the TX slot and the moved slot):\n%s",
+			got, buf.String())
+	}
+}
+
+// TestSlotDecoder_HashResolvesAcrossSlots is AC4 at the wrapper: one
+// slotDecoder carries hash state between slots, so the hash reference resolves
+// — where a FRESH decoder (the control, asserted first) renders "<...>". The
+// control is what makes a red informative: if IT fails, the fixture is wrong,
+// not the statefulness.
+func TestSlotDecoder_HashResolvesAcrossSlots(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	teach := encodeSlotOrFatal(t, hashTeachText, 1500)
+	ref := encodeSlotOrFatal(t, hashRefText, 1500)
+
+	// Control: statelessly, the hash cannot resolve.
+	control := newSlotDecoder(true, logging.Noop())
+	if got := textsOf(control.decode(ref)); !containsText(got, hashUnresolved) {
+		t.Fatalf("fixture control: fresh decode = %v, want %q (fixture broken if absent)", got, hashUnresolved)
+	}
+
+	d := newSlotDecoder(true, logging.Noop())
+	if got := textsOf(d.decode(teach)); !containsText(got, hashTeachText) {
+		t.Fatalf("teach slot decoded %v, want %q", got, hashTeachText)
+	}
+	got := d.decode(ref)
+	if !containsText(textsOf(got), hashResolved) {
+		t.Fatalf("stateful decode = %v, want %q (hash state must carry across slots)",
+			textsOf(got), hashResolved)
+	}
+	// AC2's field claim at the seam: the rich result reaches the caller with
+	// decode provenance intact, not projected away.
+	for _, m := range got {
+		if m.Text == hashResolved && m.Provenance.Algorithm == "" {
+			t.Errorf("rich result lost its provenance: %+v", m)
+		}
+	}
+}
+
+// TestSlotDecoder_SkipPreservesHashState is AC6 at the wrapper: skip()
+// advances the decoder across a slot we refuse to decode (own TX, moved dial)
+// WITHOUT losing hash state — the reference still resolves on the far side.
+// Parity-bucket clearing is go-ft8's zero-slot mechanics (a7.go rewrites
+// history[seq] every call) and is not deterministically observable here — see
+// the header's testability note.
+func TestSlotDecoder_SkipPreservesHashState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	d := newSlotDecoder(true, logging.Noop())
+
+	// skip on a fresh decoder must be harmless.
+	d.skip()
+
+	if got := textsOf(d.decode(encodeSlotOrFatal(t, hashTeachText, 1500))); !containsText(got, hashTeachText) {
+		t.Fatalf("teach slot decoded %v, want %q", got, hashTeachText)
+	}
+	d.skip() // the TX slot between them
+	got := textsOf(d.decode(encodeSlotOrFatal(t, hashRefText, 1500)))
+	if !containsText(got, hashResolved) {
+		t.Fatalf("decode after skip = %v, want %q (skip must advance state, not destroy it)",
+			got, hashResolved)
+	}
+}
+
+// TestDecodeLoop_HashStateSpansTxSlots is AC4+AC6 at the operator surface: a
+// station heard before our TX slot resolves by hash in the slot after it —
+// the Band Activity row carries the resolved call. This is what the stateless
+// per-slot API can never do, and the reason the run path (TX every other
+// slot) is exactly where statefulness pays.
+func TestDecodeLoop_HashStateSpansTxSlots(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	s, _, events, _ := newSplitHarness(t)
+
+	start := recentEvenSlotStart()
+	txStart := start.Add(15 * time.Second)
+	s.markTxSlot(txStart)
+
+	ch := make(chan Slot, 3)
+	ch <- Slot{StartUTC: start, Samples: encodeSlotOrFatal(t, hashTeachText, 1500), DialTracked: true, DialMHz: 14.074}
+	ch <- Slot{StartUTC: txStart, Samples: encodeSlotOrFatal(t, "CQ W1AW FN31", 1500), DialTracked: true, DialMHz: 14.074}
+	ch <- Slot{StartUTC: start.Add(30 * time.Second), Samples: encodeSlotOrFatal(t, hashRefText, 1500), DialTracked: true, DialMHz: 14.074}
+	close(ch)
+	s.decodeLoop(ch)
+
+	decodes, _ := drainDecodeEvents(events)
+	if len(decodes) != 3 {
+		t.Fatalf("ft8-decode events = %d, want 3", len(decodes))
+	}
+	last := decodes[2]
+	if len(last.Decodes) != 1 {
+		t.Fatalf("final slot rows = %d, want 1: %+v", len(last.Decodes), last.Decodes)
+	}
+	if got := last.Decodes[0].Text; got != hashResolved {
+		t.Fatalf("Band Activity rendered %q, want %q (decoder state must span the TX slot)",
+			got, hashResolved)
+	}
+}
+
+// TestDecodeLoop_FreshDecoderPerCaptureSession is AC5. Each decodeLoop call is
+// one capture session (service.go spawns one per acquire); a hash learned in
+// session 1 must NOT resolve in session 2 — cross-session state would carry
+// stale hint/hash context across an operator-length gap or a band change.
+//
+// NOTE this test passes against BOTH the current stateless code and the
+// correct per-session implementation; it exists to refuse the ADJACENT WRONG
+// implementation (a Service-lifetime decoder). Its red proof is therefore a
+// reversion probe against that variant — decoder hoisted to a Service field —
+// not a pre-implementation red.
+func TestDecodeLoop_FreshDecoderPerCaptureSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	s, _, events, _ := newSplitHarness(t)
+	start := recentEvenSlotStart()
+
+	ch1 := make(chan Slot, 1)
+	ch1 <- Slot{StartUTC: start, Samples: encodeSlotOrFatal(t, hashTeachText, 1500), DialTracked: true, DialMHz: 14.074}
+	close(ch1)
+	s.decodeLoop(ch1)
+
+	ch2 := make(chan Slot, 1)
+	ch2 <- Slot{StartUTC: start.Add(30 * time.Second), Samples: encodeSlotOrFatal(t, hashRefText, 1500), DialTracked: true, DialMHz: 14.074}
+	close(ch2)
+	s.decodeLoop(ch2)
+
+	decodes, _ := drainDecodeEvents(events)
+	if len(decodes) != 2 {
+		t.Fatalf("ft8-decode events = %d, want 2", len(decodes))
+	}
+	rows := decodes[1].Decodes
+	if len(rows) != 1 {
+		t.Fatalf("session-2 rows = %d, want 1: %+v", len(rows), rows)
+	}
+	if got := rows[0].Text; got != hashUnresolved {
+		t.Fatalf("session 2 rendered %q, want %q (a fresh session must not inherit hash state)",
+			got, hashUnresolved)
+	}
+}

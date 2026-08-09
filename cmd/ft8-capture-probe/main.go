@@ -203,7 +203,13 @@ func runSchedulerMode(c *capture.Capture, cfg capture.Config, slotsToRun int, ou
 		msgs := ft8.DecodeSlot(slot.Samples, osd, logging.Noop())
 		fmt.Printf("  decoded %d msg(s) in %s\n", len(msgs), time.Since(t0).Round(time.Millisecond))
 		for i, m := range msgs {
-			fmt.Printf("    [%d] %8.2f Hz  %+.2f s  sync=%.2f  %q\n", i, m.FreqHz, m.DTSec, m.Sync, m.Text)
+			// DecodeSlot returns the RICH result — label a CRC-valid but
+			// text-less payload rather than printing "".
+			text := m.Text
+			if text == "" {
+				text = fmt.Sprintf("(%s payload %x)", m.ParseStatus, m.Payload)
+			}
+			fmt.Printf("    [%d] %8.2f Hz  %+.2f s  sync=%.2f  %q\n", i, m.FreqHz, m.DTSec, m.Sync, text)
 		}
 
 		if collected >= slotsToRun {
