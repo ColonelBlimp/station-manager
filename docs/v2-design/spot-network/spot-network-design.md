@@ -209,16 +209,31 @@ queues unboundedly), and chunked purges. The behavioural rules the decode
 log already established (rotate and drop rather than ever block FT8) carry
 over:
 
-- an operator-configurable size cap; capture **never blocks decoding or
-  logging** — under pressure it drops, never stalls;
-- drop order prefers observations SMC has already acknowledged; dropping
-  *unsynced* observations is recorded as a **loss interval** — start/end
-  time, reason, count, and band/dial context — not a lifetime counter,
-  because "when and for how long was capture incomplete" is exactly what a
-  later consumer of the archive needs and a single number cannot say. Loss
-  intervals are tiny rows: they sync like observations, so SMC's copy of
-  the history carries its own honesty metadata. A gap you know about is
-  data quality; one you don't is corruption;
+- an operator-configurable size cap that is a **physical-disk guarantee,
+  not a logical row target**: it is defined over `evidence.db` *plus* its
+  WAL and temporary allocation, with reserved headroom, and capture starts
+  dropping **before** the physical limit is reached. SQLite's WAL can
+  outgrow any logical target when a long reader blocks checkpointing, so
+  evidence readers are bounded to short transactions — a full shared
+  filesystem would break the QSO path this file exists to isolate (§4.1's
+  opening rationale), which makes the physical definition load-bearing
+  rather than pedantic. Capture **never blocks decoding or logging** —
+  under pressure it drops, never stalls;
+- drop order prefers observations SMC has already acknowledged, and
+  **every cap purge is recorded — acknowledged and unacknowledged alike**,
+  as two record kinds with different meanings. Dropping *unsynced*
+  observations is a **loss interval** — start/end time, reason, count,
+  band/dial context — data gone from everywhere. Purging *acknowledged*
+  observations is a **local-retention record** — range, count, reason, and
+  the SMC-acknowledged status — a statement that the local archive ends
+  here while the data lives on in SMC. Both are tiny rows and both sync,
+  so either archive can describe its own boundaries; this also resolves
+  the coverage coupling honestly — a `decoded` coverage row whose local
+  observations were purged is interpretable through the retention record
+  that says where they went. "When and for how long was the record
+  incomplete, and where" is exactly what a later consumer needs, and a
+  lifetime counter cannot say it. A gap you know about is data quality;
+  one you don't is corruption;
 - cap-driven drops are not the only way evidence goes missing, so each
   slot writes a lightweight **coverage record** with an outcome —
   `decoded / no_decode / tx / dial_changed / decoder_error /
@@ -232,7 +247,11 @@ over:
   retention is **coupled to the interval they describe**: cap purging
   never removes a slot's coverage record while retaining that slot's
   observations, or the archive would keep data while discarding the
-  explanation of what's missing around it;
+  explanation of what's missing around it. The reverse orphan — a
+  `decoded` coverage row whose observations were locally purged — is
+  legitimate and self-explaining, because the purge wrote a
+  local-retention record (above) saying what was removed, why, and that
+  SMC holds it;
 - loss and coverage reporting must survive the failure it reports: the
   reporter is a **reserved in-memory accumulator, persisted with priority
   when the writer recovers** — an overloaded evidence writer must not lose
@@ -531,7 +550,15 @@ stop sends an explicit **terminal snapshot** (state `offline`) before
 heartbeats cease, so the page flips to offline immediately and a deliberate
 shutdown stays distinguishable from an unexpectedly stale station ("went
 offline at ⟨time⟩" versus "last seen ⟨time⟩, presumed offline"); staleness
-remains the fallback for the crash case only. (An earlier draft tied
+remains the fallback for the crash case only. **Accepting a terminal
+snapshot atomically marks the token terminal and releases authority** in
+the station-presence row (§6.1) while retaining the public offline state —
+without the release, the terminal snapshot would be the freshest
+authoritative snapshot and a normally-restarted daemon would be rejected
+until its own *goodbye* went stale, locked out of its own presence by
+having shut down politely. A duplicate terminal PUT (transport retry) is
+idempotently acknowledged, not 409'd: the token is recognised as terminal
+rather than superseded. (An earlier draft tied
 heartbeats to the run; that would have made a monitoring station
 indistinguishable from an offline one, contradicting the state model
 above.)
@@ -788,8 +815,10 @@ Recorded so the option is preserved and the reasoning is not re-derived:
 - **Backfill is option-preserving for retained observations, with
   observable gaps.** Because capture stores complete decoded-message records
   under stable UUIDs, any future collector can be seeded from the archive —
-  minus whatever the bounded store dropped, which the loss intervals record
-  (§4.1) — when, why, and how much.
+  minus only what was truly lost — observations dropped before ever being
+  acknowledged, which the loss intervals record (§4.1); locally purged but
+  acknowledged history already lives in SMC, with the local-retention
+  records saying so.
   Nothing built today forecloses anything; what the cap shed is honestly
   gone.
 - **Optional outbound reporting adapters.** A WSJT-X-compatible UDP decode

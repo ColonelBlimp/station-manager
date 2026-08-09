@@ -168,8 +168,17 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   token digest) + per-station/global query semaphore vs distinct-callsign
   rotation; coverage records = first-class synced rows with retention
   coupled to their interval; graceful stop sends a TERMINAL offline
-  snapshot (distinguishable from stale). Reviewer: implementation-ready
-  once these close — now closed.
+  snapshot (distinguishable from stale). ROUND 8 on Draft 3 (3 P1s):
+  terminal snapshot RELEASES authority atomically (else a polite shutdown
+  locks the restarted daemon out until its own goodbye goes stale;
+  duplicate terminal PUTs idempotent); size cap = PHYSICAL bytes over
+  evidence.db+WAL+temp with headroom + short reader transactions (WAL
+  outgrows logical caps under long readers; full filesystem would break
+  the QSO path the separate file exists to protect); every cap purge
+  recorded — loss INTERVALS for unsynced (gone everywhere) vs
+  local-RETENTION records for acked (lives on SMC), both synced, §11
+  backfill claim reconciled, decoded-coverage-orphan self-explaining.
+  Reviewer standard: implementation-ready once P1s close — closed.
 - **NEXT: operator passes the doc out for external review → on-air 0067.**
   Then: Settings defaults dropdown; max_repeats-to-session (0066 watch-list);
   Abandon-vs-queue flag still open.
