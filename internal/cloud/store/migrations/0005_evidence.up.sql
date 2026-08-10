@@ -17,6 +17,14 @@
 -- verbatim; JSON validity and digest verification are enforced at ingest
 -- (store.UpsertEvidence), and any consumer that wants jsonb operators
 -- casts (payload::jsonb).
+--
+-- History note: this column was JSONB for the two unpushed commits between
+-- c8df1e9d and its review fix, and the file was edited IN PLACE — legal
+-- exactly because no database ever applied version 5 in that window
+-- (c8df1e9d was never pushed or deployed; the dev container rebuilds from
+-- these files per test, verified bare on 2026-08-10). Had any v5 database
+-- existed, this would have been a 0006 ALTER instead — in-place migration
+-- edits are otherwise forbidden.
 CREATE TABLE evidence_records (
     tenant_id   BIGINT      NOT NULL REFERENCES tenants (id),
     kind        TEXT        NOT NULL CHECK (kind IN ('observation', 'coverage', 'loss_interval', 'profile')),

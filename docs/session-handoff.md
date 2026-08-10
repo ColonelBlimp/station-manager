@@ -73,19 +73,16 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   SY1 known-URL wall); race green (evidence+cloud, real Postgres), tree
   -short green, lint 0 issues; config.md + api-endpoints.md + cloud
   doc.go same-change.
-- **§5 committed `c8df1e9d` (UNPUSHED); its codex review found 3 REAL P1s,
-  ALL FIXED in tree uncommitted:** digest now VERIFIED at ingest (never
-  trusted; unknown digest versions reject — E9); profiles bounded by the
-  batch cap (priority ≠ exemption; >1000 accumulated profiles would have
-  wedged sync forever — SY10); payload column JSONB→TEXT (jsonb reformats
-  numeric LEXEMES, which are digest content — byte-verbatim now, E10).
-  Migration 0005 edited post-commit: SAFE, no deployed DB has applied it
-  (c8df1e9d never pushed/deployed). 4 reversion proofs bit. **The commit
-  also MISSED cmd/smd/main.go (the sync wiring — still staged); it rides
-  the fix commit.** Review doc triaged + deleted.
-- **NEXT: OPERATOR commits the P1 fixes + staged main.go (watch the
-  auto-review; dev Postgres `sm-pg` RUNNING — `podman start sm-pg`, the
-  task fails on name collision) + pushes both → CI → retention slice** ·
+- **§5 review loop CLOSED: `c8df1e9d` (slice) + `6f4486e3` (3 P1 fixes +
+  the missed main.go wiring), both UNPUSHED.** 6f4486e3's review raised 1
+  P1 (in-place 0005 edit strands v5-JSONB databases) — REFUTED on
+  deployment fact: NO database ever applied v5 in the window (c8df1e9d
+  never pushed/deployed; dev container verified bare 2026-08-10);
+  rationale now a history note IN 0005's header, in tree uncommitted
+  (docs-ish one-liner, rides any next commit). Review docs all deleted.
+- **NEXT: OPERATOR commits the 0005 history note (tiny; auto-review will
+  run — .sql is in scope) + pushes all → CI → retention slice** (dev
+  Postgres: `podman start sm-pg`; the task fails on name collision) ·
   on-air 0067 (Abandon-stops-queue flag open) · Settings defaults
   dropdown · max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
