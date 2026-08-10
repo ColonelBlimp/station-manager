@@ -85,9 +85,9 @@ func newLocalStack(t *testing.T, cloudURL string) (*qsoservice.Service, *sqlite.
 // skip-gate + advisory lock as the other smcloud suites).
 func newCloudStack(t *testing.T) *httptest.Server {
 	t.Helper()
-	dsn := os.Getenv("SMCLOUD_TEST_DSN")
-	if dsn == "" {
-		dsn = roundtripTestDSN
+	dsn, skip := store.ResolveTestDSN()
+	if skip != "" {
+		t.Skip(skip)
 	}
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -107,10 +107,6 @@ func newCloudStack(t *testing.T) *httptest.Server {
 		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, 0x534d434c)
 		_ = conn.Close()
 	})
-
-	// Refuse to wipe a database that holds real data with no test sentinel
-	// (package review, 2026-08-10) — the default DSN could be a dev database.
-	require.NoError(t, store.RefuseNonTestDatabase(db))
 
 	// The evidence tables (migrations 0005/0006) reference tenants, so they
 	// drop FIRST — without them this multi-statement exec errors on the

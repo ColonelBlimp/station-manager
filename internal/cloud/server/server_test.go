@@ -28,7 +28,6 @@ import (
 // PUT → store → export → deep-equal — UUID, HH:MM:SS seconds, and
 // additional_data-carried fields intact — before anything real flows.
 
-const defaultTestDSN = "postgres://smcloud:smcloud@localhost:5432/smcloud?sslmode=disable"
 
 const (
 	testToken   = "test-token-7q5mlv"
@@ -41,9 +40,9 @@ const (
 // reachable Postgres.
 func testServer(t *testing.T) (*httptest.Server, *store.Store, int64) {
 	t.Helper()
-	dsn := os.Getenv("SMCLOUD_TEST_DSN")
-	if dsn == "" {
-		dsn = defaultTestDSN
+	dsn, skip := store.ResolveTestDSN()
+	if skip != "" {
+		t.Skip(skip)
 	}
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -56,9 +55,6 @@ func testServer(t *testing.T) (*httptest.Server, *store.Store, int64) {
 		t.Skipf("smcloud server tests need a dev Postgres (task db:pg:up): ping: %v", err)
 	}
 	lockTestDatabase(t, db)
-	if err := store.RefuseNonTestDatabase(db); err != nil {
-		t.Fatal(err)
-	}
 	// Clean slate via the migration files (drop then the runtime applier —
 	// which this also exercises). evidence_records (0005) references
 	// tenants, so its down runs before 0001's tenant drop.

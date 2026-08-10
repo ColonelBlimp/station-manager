@@ -259,31 +259,31 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   package-review arc is CLOSED (bf07a552 → dd751b28 → 59e9aa4e: 6 original
   findings + 2 review-of-review P2s on the starved-window code, all
   fixed/proven, final review clean). ft8 commits UNPUSHED (ahead of origin).
-- **internal/cloud (SMC evidence-sync) PACKAGE REVIEW — 4 P1 + 2 P2, all
-  CONFIRMED REAL + FIXED in tree, UNCOMMITTED (sm-pg up for the tests):**
-  - ✅P1 test-DB-erase: harnesses wiped the default-DSN DB with no opt-in →
-    `store.RefuseNonTestDatabase` sentinel (`__sm_test_db__`); refuses a
-    data-bearing DB with no marker, wired into all 3 harnesses.
-  - ✅P1 invalid profile_uuid aborted the batch: now validated in Go before
-    the PG UUID probe → per-row `invalid_profile_ref` (covers ""/non-v7),
-    batch-mates survive.
-  - ✅P1 conflicting summary still deleted predecessors: supersession now
-    runs ONLY after a fresh accept (moved after the insert).
-  - ✅P1 concurrent re-offer resurrected a superseded record: batch now
-    SERIALIZABLE + bounded retry (isSerializationFailure 40001/40P01);
-    deterministic hook test proves no resurrection.
-  - ✅P2 supersedes unbounded: reject self-supersession, cap at 128, sort
-    for consistent lock/hit order.
-  - ✅P2 duplicate JSON keys collided digests: `rejectDuplicateKeys` token
-    walk in digest v1 errors on any repeated object key (D7).
-  RED-first; 6 reversion proofs bit (incl. revert-SERIALIZABLE→resurrection,
-  neutered-guard→silent-wipe). Race/lint/gofmt clean, cloud+smcloud suites
-  green, tree -short green. NOTE: store now imports lib/pq directly (was
-  test-only) for the SQLSTATE check — fine, SMC store is PG-specific.
-- **NEXT: OPERATOR pushes BOTH stacks (ft8 `bf07a552..59e9aa4e` +
-  this cloud fix) → CI (verify `gh run list -L1` = completed success) →
-  redeploy smd (evidence.db v4→v5; picks up ft8 fixes) → redeploy smcloud
-  (picks up the ingest fixes; pg 0005/0006 already applied) → FT8 soak.**
+- **internal/cloud (SMC evidence-sync) PACKAGE REVIEW — 4 P1 + 2 P2 all
+  fixed, COMMITTED + PUSHED `61d83228`, CI green (`31397353110`).** Round 1:
+  test-DB guard, per-row `invalid_profile_ref` (no batch abort), accept-gated
+  supersession, SERIALIZABLE batch + retry (40001/40P01) vs resurrection,
+  supersedes bounds (self-reject, cap 128, sorted), digest v1 duplicate-key
+  rejection (D7). Store now imports lib/pq directly (SQLSTATE check) — fine,
+  SMC store is PG-specific.
+- **Round-2 test-DB P1 (codex auto-review of `61d83228`) — FIXED in tree,
+  UNCOMMITTED.** The round-1 persistent sentinel (`__sm_test_db__`) authorized
+  wiping a DB that was empty during one test run and later repurposed for real.
+  Replaced with an explicit CURRENT opt-in `store.ResolveTestDSN()`: an
+  ordinary `go test` SKIPS the destructive smcloud integration tests; they run
+  only with `SMCLOUD_TEST_DSN` (a named disposable DB) or
+  `SMCLOUD_TEST_ALLOW_DEFAULT=1` (the localhost default). All 3 harnesses +
+  migrate/roundtrip/reconcile e2e use it; CI (both go-test steps), Taskfile
+  `test:` and `scripts/ci-local.sh` set the env. `RefuseNonTestDatabase` +
+  sentinel table removed. RED-first (`TestResolveTestDSN`, no DB touched);
+  reversion proof bit (unsafe-default-DSN → guard test red on its own
+  assertion); gofmt/vet clean, tree -short green (real Postgres). Review doc
+  consumed. Ready for operator commit.
+- **NEXT: OPERATOR commits the round-2 test-DB fix, then pushes BOTH stacks
+  (ft8 `bf07a552..59e9aa4e` + the round-2 fix) → CI (verify `gh run list -L1`
+  = completed success) → redeploy smd (evidence.db v4→v5; picks up ft8 fixes)
+  → redeploy smcloud (picks up the ingest fixes; pg 0005/0006 already
+  applied) → FT8 soak.**
   on-air 0067 · Settings defaults dropdown · max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the

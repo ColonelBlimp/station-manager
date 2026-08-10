@@ -1,64 +1,38 @@
 package store
 
-import (
-	"database/sql"
-	"fmt"
-)
+import "os"
 
-// testSentinelTable marks a database as a disposable test database. Its
-// presence is what lets the integration-test harnesses run their destructive
-// schema teardown; it survives the migration drops (only the migration tables
-// are dropped), so a database wiped once stays marked.
-const testSentinelTable = "__sm_test_db__"
+// DefaultTestDSN is the disposable Postgres the integration tests use when the
+// default is explicitly enabled (task db:pg:up brings it up; CI runs a fresh
+// service container at the same address).
+const DefaultTestDSN = "postgres://smcloud:smcloud@localhost:5432/smcloud?sslmode=disable"
 
-// RefuseNonTestDatabase guards the destructive schema teardown the integration
-// tests run against a real Postgres (package review, 2026-08-10). The default
-// DSN is postgres://smcloud:smcloud@localhost:5432/smcloud, which could equally
-// be a developer's working database, and the advisory lock only serialises
-// test runs — it does not protect application data. This refuses to proceed
-// unless the target is safe to wipe:
+// ResolveTestDSN returns the Postgres DSN the integration tests should use and,
+// when they must be skipped for lack of an explicit test-database opt-in, a
+// non-empty reason (package review, 2026-08-10).
 //
-//   - a database already carrying the test sentinel (a prior test run) → allow;
-//   - a database with NO application data → stamp the sentinel and allow;
-//   - a database holding application rows but no sentinel → REFUSE, so an
-//     ordinary `go test` can never erase a real database. Point the tests at a
-//     disposable database via SMCLOUD_TEST_DSN (e.g. `task db:pg:up`).
+// The default DSN (postgres://smcloud:smcloud@localhost:5432/smcloud) could
+// equally be a developer's working database, and these tests run destructive
+// schema teardown. The safe signal is a CURRENT, explicit opt-in — never a
+// persistent marker, which authorizes wiping a database that was empty during
+// one run and later repurposed for real:
 //
-// It is exported so every test harness (store, server, and the smcloud
-// forwarder e2e) shares one implementation.
-func RefuseNonTestDatabase(db *sql.DB) error {
-	var hasSentinel bool
-	if err := db.QueryRow(
-		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
-		  WHERE table_schema = 'public' AND table_name = $1)`, testSentinelTable).Scan(&hasSentinel); err != nil {
-		return fmt.Errorf("smcloud test guard: probe sentinel: %w", err)
+//   - SMCLOUD_TEST_DSN set → the caller named a specific database; that IS the
+//     opt-in, so it is used as-is.
+//   - otherwise the default localhost DSN is used ONLY when
+//     SMCLOUD_TEST_ALLOW_DEFAULT is set (task test and CI set it, since both
+//     run against a disposable database); an ordinary `go test` skips rather
+//     than risk erasing whatever is at the default address.
+//
+// Exported so every harness (store, server, and the smcloud forwarder e2e)
+// shares one policy.
+func ResolveTestDSN() (dsn, skip string) {
+	if d := os.Getenv("SMCLOUD_TEST_DSN"); d != "" {
+		return d, ""
 	}
-	if hasSentinel {
-		return nil
+	if os.Getenv("SMCLOUD_TEST_ALLOW_DEFAULT") == "" {
+		return "", "smcloud integration tests skipped: set SMCLOUD_TEST_DSN to a disposable database, " +
+			"or SMCLOUD_TEST_ALLOW_DEFAULT=1 to use the default localhost DSN (task test / `task db:pg:up` do this)"
 	}
-
-	var hasTenants bool
-	if err := db.QueryRow(
-		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
-		  WHERE table_schema = 'public' AND table_name = 'tenants')`).Scan(&hasTenants); err != nil {
-		return fmt.Errorf("smcloud test guard: probe tenants: %w", err)
-	}
-	if hasTenants {
-		var rows int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM tenants`).Scan(&rows); err != nil {
-			return fmt.Errorf("smcloud test guard: count tenants: %w", err)
-		}
-		if rows > 0 {
-			return fmt.Errorf(
-				"refusing to run destructive smcloud tests: the target database holds application data (%d tenants) "+
-					"and carries no %s sentinel — point the tests at a disposable database via SMCLOUD_TEST_DSN "+
-					"(e.g. `task db:pg:up`)", rows, testSentinelTable)
-		}
-	}
-
-	if _, err := db.Exec(
-		`CREATE TABLE IF NOT EXISTS ` + testSentinelTable + ` (created_at timestamptz NOT NULL DEFAULT now())`); err != nil {
-		return fmt.Errorf("smcloud test guard: stamp sentinel: %w", err)
-	}
-	return nil
+	return DefaultTestDSN, ""
 }

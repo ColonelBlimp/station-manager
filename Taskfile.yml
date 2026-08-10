@@ -251,6 +251,12 @@ tasks:
 
   test:
     desc: Run tests with race detector and -short
+    # SMCLOUD_TEST_ALLOW_DEFAULT opts the destructive smcloud integration tests
+    # in to the disposable localhost Postgres from `task db:pg:up`. Without it
+    # they skip rather than run schema teardown against whatever is at the
+    # default DSN (store.ResolveTestDSN, package review 2026-08-10).
+    env:
+      SMCLOUD_TEST_ALLOW_DEFAULT: "1"
     cmds:
       - go test -race -short ./...
 

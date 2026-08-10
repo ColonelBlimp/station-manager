@@ -27,12 +27,10 @@ import (
 // forwarder's locally-declared envelope against the server's at compile+run
 // time. Skips without the dev Postgres (task db:pg:up), like the cloud suites.
 
-const roundtripTestDSN = "postgres://smcloud:smcloud@localhost:5432/smcloud?sslmode=disable"
-
 func TestSubmit_AgainstRealCloudServer(t *testing.T) {
-	dsn := os.Getenv("SMCLOUD_TEST_DSN")
-	if dsn == "" {
-		dsn = roundtripTestDSN
+	dsn, skip := store.ResolveTestDSN()
+	if skip != "" {
+		t.Skip(skip)
 	}
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {

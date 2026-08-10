@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"os"
 	"testing"
 	"time"
 
@@ -18,9 +17,9 @@ import (
 // here instead of as a boot failure on the production box. Same
 // Postgres-or-skip gate as the rest of the suite.
 func TestMigrate_UpgradesExistingDatabaseWithData(t *testing.T) {
-	dsn := os.Getenv("SMCLOUD_TEST_DSN")
-	if dsn == "" {
-		dsn = defaultTestDSN
+	dsn, skip := ResolveTestDSN()
+	if skip != "" {
+		t.Skip(skip)
 	}
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -33,9 +32,6 @@ func TestMigrate_UpgradesExistingDatabaseWithData(t *testing.T) {
 		t.Skipf("smcloud store tests need a dev Postgres (task db:pg:up): ping: %v", err)
 	}
 	lockTestDatabase(t, db)
-	if err := RefuseNonTestDatabase(db); err != nil {
-		t.Fatal(err)
-	}
 
 	// Rebuild the version-1 world: schema from 0001 only, migration tracking
 	// pinned at 1, and live rows in every table.

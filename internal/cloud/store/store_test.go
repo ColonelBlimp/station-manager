@@ -7,7 +7,6 @@ import (
 	stderr "errors"
 	"os"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -25,16 +24,14 @@ import (
 // hasn't started the container — every test skips rather than fails. Point it at
 // a different instance with SMCLOUD_TEST_DSN.
 
-const defaultTestDSN = "postgres://smcloud:smcloud@localhost:5432/smcloud?sslmode=disable"
-
 // testStore connects to the dev Postgres, lays down a CLEAN schema from the
 // migration files (so the test is independent of migrate:cloud:up and of any
 // prior run's rows), and returns a Store. Skips when no dev DB is reachable.
 func testStore(t *testing.T) *Store {
 	t.Helper()
-	dsn := os.Getenv("SMCLOUD_TEST_DSN")
-	if dsn == "" {
-		dsn = defaultTestDSN
+	dsn, skip := ResolveTestDSN()
+	if skip != "" {
+		t.Skip(skip)
 	}
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -47,9 +44,6 @@ func testStore(t *testing.T) *Store {
 		t.Skipf("smcloud store tests need a dev Postgres (task db:pg:up): ping: %v", err)
 	}
 	lockTestDatabase(t, db)
-	if err := RefuseNonTestDatabase(db); err != nil {
-		t.Fatal(err)
-	}
 	// Clean slate: downs (IF EXISTS, safe on first run) then every up in
 	// order. 0001's down drops the QSO tables, taking later migrations'
 	// constraints with them — but evidence_records (0005) references
@@ -72,40 +66,36 @@ func testStore(t *testing.T) *Store {
 	return New(db)
 }
 
-// Package review (2026-08-10): RefuseNonTestDatabase must reject a database
-// that holds application data without the test sentinel, so an ordinary
-// `go test` against a real smcloud database at the default DSN cannot erase it.
-func TestRefuseNonTestDatabase(t *testing.T) {
-	s := testStore(t) // establishes the sentinel + a clean schema under the lock
-	ctx := context.Background()
-
-	// With the sentinel present (testStore stamped it), the guard allows.
-	if err := RefuseNonTestDatabase(s.db); err != nil {
-		t.Fatalf("a sentinel-marked database must be allowed: %v", err)
-	}
-
-	// Simulate a real database: drop the sentinel and seed a tenant. The guard
-	// must now REFUSE. (Restored by testStore's cleanup dropping everything.)
-	if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS `+testSentinelTable); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.EnsureTenant(ctx, "9Z9ZZ", "real data"); err != nil {
-		t.Fatal(err)
-	}
-	err := RefuseNonTestDatabase(s.db)
-	if err == nil {
-		t.Fatal("P1: the guard must refuse a data-bearing database with no sentinel")
-	}
-	if !strings.Contains(err.Error(), "refusing to run destructive") {
-		t.Fatalf("unexpected refusal message: %v", err)
-	}
-	// The refusal did NOT stamp a sentinel (it must not silently mark a real DB).
-	var stamped bool
-	_ = s.db.QueryRowContext(ctx,
-		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`, testSentinelTable).Scan(&stamped)
-	if stamped {
-		t.Fatal("P1: a refused database must not have been marked as a test database")
-	}
+// Package review (2026-08-10): the destructive integration tests require a
+// CURRENT, explicit opt-in — an explicit SMCLOUD_TEST_DSN, or
+// SMCLOUD_TEST_ALLOW_DEFAULT for the default localhost DSN. An ordinary
+// `go test` (neither set) SKIPS rather than risk erasing whatever database is
+// at the default address. This is the round-2 replacement for a persistent
+// sentinel, which authorized wiping a database repurposed for real use after
+// one empty test run. No DB is touched.
+func TestResolveTestDSN(t *testing.T) {
+	t.Run("explicit SMCLOUD_TEST_DSN is the opt-in", func(t *testing.T) {
+		t.Setenv("SMCLOUD_TEST_DSN", "postgres://x:y@host/db")
+		dsn, skip := ResolveTestDSN()
+		if skip != "" || dsn != "postgres://x:y@host/db" {
+			t.Fatalf("explicit DSN must be used as-is: dsn=%q skip=%q", dsn, skip)
+		}
+	})
+	t.Run("no opt-in skips (never wipes the default database)", func(t *testing.T) {
+		t.Setenv("SMCLOUD_TEST_DSN", "")
+		t.Setenv("SMCLOUD_TEST_ALLOW_DEFAULT", "")
+		if _, skip := ResolveTestDSN(); skip == "" {
+			t.Fatal("without an opt-in the tests must skip, not run destructive teardown against the default DSN")
+		}
+	})
+	t.Run("allow-default is the opt-in for the localhost DSN", func(t *testing.T) {
+		t.Setenv("SMCLOUD_TEST_DSN", "")
+		t.Setenv("SMCLOUD_TEST_ALLOW_DEFAULT", "1")
+		dsn, skip := ResolveTestDSN()
+		if skip != "" || dsn != DefaultTestDSN {
+			t.Fatalf("allow-default must use the default DSN: dsn=%q skip=%q", dsn, skip)
+		}
+	})
 }
 
 // smcloudTestLockID is the advisory-lock key every smcloud test-DB user takes

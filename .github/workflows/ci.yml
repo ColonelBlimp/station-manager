@@ -45,10 +45,13 @@ jobs:
     # guards, µs modified_at canonicalisation, tombstone semantics — go
     # undefended. The tests self-apply the schema from migrations/, so no
     # migrate step is needed here; ports:5432 maps the service onto localhost,
-    # which is the tests' default DSN (smcloud/smcloud/smcloud), so no
-    # SMCLOUD_TEST_DSN override is required either. Short image name resolves
-    # fine — GitHub runners use Docker, not podman (cf. Taskfile db:pg:up, which
-    # must fully-qualify it for rootless podman).
+    # which is the tests' default DSN (smcloud/smcloud/smcloud). Since 2026-08-10
+    # those destructive tests refuse the default DSN without an explicit opt-in
+    # (store.ResolveTestDSN), so the go-test steps below set
+    # SMCLOUD_TEST_ALLOW_DEFAULT=1 — this service container IS a disposable
+    # database. Short image name resolves fine — GitHub runners use Docker, not
+    # podman (cf. Taskfile db:pg:up, which must fully-qualify it for rootless
+    # podman).
     services:
       postgres:
         image: postgres:16
@@ -258,6 +261,8 @@ jobs:
       # hiding a genuine hang (a real deadlock still blows 10m). The heavy stress
       # tests scale themselves down under -short so this stays a quick gate.
       - name: go test (race detector, -short)
+        env:
+          SMCLOUD_TEST_ALLOW_DEFAULT: "1"
         run: go test -race -short -timeout 10m $(go list ./... | grep -v /node_modules/)
 
       # Full run without the race detector: exercises the slow FT8
@@ -265,6 +270,8 @@ jobs:
       # round-trips) that -short skips above. Generous timeout — these
       # are CPU-heavy but ~7x faster than under -race.
       - name: go test (full, no race)
+        env:
+          SMCLOUD_TEST_ALLOW_DEFAULT: "1"
         run: go test -timeout 12m $(go list ./... | grep -v /node_modules/)
 
       # CGO_ENABLED=0 is explicit: ubuntu-latest ships gcc, so a bare `go build`
