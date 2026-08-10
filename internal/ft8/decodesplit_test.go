@@ -27,16 +27,35 @@ package ft8
         N+2 carries it by hash.
    AC5  Decoder state is per capture session: after release + re-acquire, a
         hash learned in the old session does not resolve in the new one.
-   AC6  Every skipped physical slot (TX, dial-moved) advances decoder state
-        via one zero-slot decode — current A7 parity bucket cleared, parity
-        advanced, hash table preserved — and the zero decode's output is
-        DISCARDED (no curated rows, no evidence); the published empty slot
-        report is unchanged. Operator decision 2026-08-09: measured cost
-        6–8 ms clearing a 26–40-hint bucket, 0.09–0.12 ms once empty; replace
-        with goft8 Decoder.SkipSlot() when a release provides it.
+   AC6  Every skipped TX slot advances decoder state via one zero-slot
+        decode — current A7 parity bucket cleared, parity advanced, hash
+        table preserved — and the zero decode's output is DISCARDED (no
+        curated rows, no evidence); the published empty slot report is
+        unchanged. Operator decision 2026-08-09: measured cost 6–8 ms
+        clearing a 26–40-hint bucket, 0.09–0.12 ms once empty; replace with
+        goft8 Decoder.SkipSlot() when a release provides it.
+        AMENDED (review cd1757a7cda2 P1): a DIAL-MOVED slot RESETS the
+        decoder instead of advancing it. The receiver context changed, and
+        the hash table is band-blind — carrying it across a QSY lets a 10/12-
+        bit hash reference on the new band resolve to a call heard on the
+        old one, and a collision then renders a valid-looking but WRONG call
+        into Band Activity and PSK Reporter. Exactly one slot is flagged per
+        QSY (per-batch dial sampling brackets every instant), so reset-on-
+        moved covers every band change; a TX slot is the same receiver
+        context and must keep its state — that split is the P1 fix.
    AC7  No wire-visible change for parsed-only slots: ft8-decode SSE shape,
         RX-log format, sequencer feed and PSK sink payload are identical —
         frozen by the characterization tests below BEFORE the refactor.
+   AC8  (review cd1757a7cda2 P2) Decoder state advances for OMITTED physical
+        slots, not only delivered ones: the scheduler skips a boundary
+        serviced over two seconds late and drops slots on a full channel
+        (sch.Dropped()), so the loop must detect StartUTC gaps and advance
+        once per missing slot — an odd-length gap otherwise swaps the two
+        parity-indexed A7 buckets for the rest of the session. Advancing
+        (not resetting) is deliberate: the receiver context is unchanged, so
+        the hash table must survive a gap; per-slot cost after the first two
+        skips is ~0.1 ms (bucket already empty), so no gap-length cap is
+        needed.
 
    TESTABILITY HONESTY (AC6): the parity-ALIGNMENT consequence is observable
    only through A7-assisted recovery of a signal too weak for the normal
@@ -392,9 +411,10 @@ func TestCurateDecodes_NeverMutatesInput(t *testing.T) {
 
 // TestDecodeLoop_SkipAdvancesDecoderOncePerSkippedSlot pins the loop half of
 // AC6 at its only observable: the skip advance's debug trace, once per
-// skipped physical slot (TX, dial-moved) and never for a decoded slot. The
-// parity consequence itself is A7-internal (header note); this guards the
-// CALL discipline the zero-slot decision depends on — without it, deleting
+// skipped TX slot and never for a decoded slot — and, per the P1 amendment,
+// a dial-moved slot RESETS instead (its own trace, no advance). The parity
+// consequence itself is A7-internal (header note); this guards the CALL
+// discipline the zero-slot decision depends on — without it, deleting
 // dec.skip() would fail no test at all.
 func TestDecodeLoop_SkipAdvancesDecoderOncePerSkippedSlot(t *testing.T) {
 	buf := &bytes.Buffer{}
@@ -415,9 +435,108 @@ func TestDecodeLoop_SkipAdvancesDecoderOncePerSkippedSlot(t *testing.T) {
 	close(ch)
 	s.decodeLoop(ch)
 
-	if got := strings.Count(buf.String(), "decoder state advanced"); got != 2 {
-		t.Fatalf("skip advances = %d, want exactly 2 (the TX slot and the moved slot):\n%s",
+	if got := strings.Count(buf.String(), "decoder state advanced"); got != 1 {
+		t.Fatalf("skip advances = %d, want exactly 1 (the TX slot only — a moved slot resets):\n%s",
 			got, buf.String())
+	}
+	if got := strings.Count(buf.String(), "decoder state reset"); got != 1 {
+		t.Fatalf("decoder resets = %d, want exactly 1 (the dial-moved slot):\n%s",
+			got, buf.String())
+	}
+}
+
+// TestDecodeLoop_DialMoveResetsDecoderState is the P1 fix's hash observable
+// (review cd1757a7cda2): a hash learned BEFORE a dial-moved slot must NOT
+// resolve after it — the QSY replaced the receiver context, and a band-blind
+// hash table would let a collision render a wrong call as resolved on the
+// new band. The moved slot carries decodable audio on purpose: under the
+// pre-fix skip() behaviour the hash survives and the reference resolves, so
+// the fixture discriminates reset from skip.
+func TestDecodeLoop_DialMoveResetsDecoderState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	s, _, events, _ := newSplitHarness(t)
+	start := recentEvenSlotStart()
+
+	ch := make(chan Slot, 3)
+	ch <- Slot{StartUTC: start, Samples: encodeSlotOrFatal(t, hashTeachText, 1500), DialTracked: true, DialMHz: 14.074}
+	ch <- Slot{StartUTC: start.Add(15 * time.Second), Samples: encodeSlotOrFatal(t, "CQ W1AW FN31", 1500), DialTracked: true, DialMHz: 0, DialChanged: true}
+	ch <- Slot{StartUTC: start.Add(30 * time.Second), Samples: encodeSlotOrFatal(t, hashRefText, 1500), DialTracked: true, DialMHz: 21.074}
+	close(ch)
+	s.decodeLoop(ch)
+
+	decodes, _ := drainDecodeEvents(events)
+	if len(decodes) != 3 {
+		t.Fatalf("ft8-decode events = %d, want 3", len(decodes))
+	}
+	rows := decodes[2].Decodes
+	if len(rows) != 1 {
+		t.Fatalf("post-QSY rows = %d, want 1: %+v", len(rows), rows)
+	}
+	if got := rows[0].Text; got != hashUnresolved {
+		t.Fatalf("post-QSY decode rendered %q, want %q (a dial move must reset hash state)",
+			got, hashUnresolved)
+	}
+}
+
+// TestDecodeLoop_GapSlotsAdvanceDecoder is AC8's call-discipline guard
+// (review cd1757a7cda2 P2), at the same trace observable as the TX-skip
+// test: two consecutive deliveries 45 s apart mean two physical slots were
+// omitted (scheduler skip or drop), so the decoder must advance exactly
+// twice between them. Without gap detection an odd-length gap swaps the A7
+// parity buckets for the rest of the session.
+func TestDecodeLoop_GapSlotsAdvanceDecoder(t *testing.T) {
+	buf := &bytes.Buffer{}
+	s := newService(types.Ft8Config{Enabled: true}, logging.NewForWriter(buf), newFakeSource())
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	start := recentEvenSlotStart()
+	ch := make(chan Slot, 2)
+	ch <- Slot{StartUTC: start, Samples: make([]int16, 1000)}
+	ch <- Slot{StartUTC: start.Add(45 * time.Second), Samples: make([]int16, 1000)}
+	close(ch)
+	s.decodeLoop(ch)
+
+	if got := strings.Count(buf.String(), "decoder state advanced"); got != 2 {
+		t.Fatalf("gap advances = %d, want exactly 2 (two omitted physical slots):\n%s",
+			got, buf.String())
+	}
+}
+
+// TestDecodeLoop_GapPreservesHashState pins AC8's deliberate choice of
+// ADVANCE over RESET for a gap: the receiver context is unchanged, so a hash
+// learned before an omitted slot still resolves after it. This refuses the
+// adjacent wrong implementation — reset-per-gap would pass the trace test
+// above while throwing away context a lossy channel never invalidated. Like
+// AC5's test it is green before and after the fix; its red proof is a
+// reversion probe against the reset-per-gap variant.
+func TestDecodeLoop_GapPreservesHashState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	s, _, events, _ := newSplitHarness(t)
+	start := recentEvenSlotStart()
+
+	ch := make(chan Slot, 2)
+	ch <- Slot{StartUTC: start, Samples: encodeSlotOrFatal(t, hashTeachText, 1500), DialTracked: true, DialMHz: 14.074}
+	ch <- Slot{StartUTC: start.Add(45 * time.Second), Samples: encodeSlotOrFatal(t, hashRefText, 1500), DialTracked: true, DialMHz: 14.074}
+	close(ch)
+	s.decodeLoop(ch)
+
+	decodes, _ := drainDecodeEvents(events)
+	if len(decodes) != 2 {
+		t.Fatalf("ft8-decode events = %d, want 2", len(decodes))
+	}
+	rows := decodes[1].Decodes
+	if len(rows) != 1 {
+		t.Fatalf("post-gap rows = %d, want 1: %+v", len(rows), rows)
+	}
+	if got := rows[0].Text; got != hashResolved {
+		t.Fatalf("post-gap decode rendered %q, want %q (a gap must advance, not reset)",
+			got, hashResolved)
 	}
 }
 

@@ -845,8 +845,12 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 	// ONE stateful decoder per capture session (this loop's lifetime, one
 	// goroutine): cross-slot hash/A7 state lets "<...>" references resolve to
 	// calls heard in earlier slots, and dies with the session so no stale
-	// context survives a release/re-acquire (see slotDecoder).
+	// context survives a release/re-acquire (see slotDecoder). Mid-session a
+	// QSY resets it (the dial-moved case below) and delivery gaps advance it.
 	dec := newSlotDecoder(s.osdEnabled(), s.log)
+	// Previous delivered slot's boundary, for the omitted-slot advance below.
+	// Zero until the session's first slot arrives.
+	var prevSlotStart time.Time
 	// Previously-recommended top offset, carried across slots for the
 	// clear-offset hysteresis (stickySuggested): the ★ recommendation stays put
 	// while it remains clear instead of hopping to a marginally wider gap each
@@ -893,20 +897,43 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// dial alone. This flag now governs only what we PUBLISH from this slot.
 		dialMoved := slot.DialChanged
 
+		// The scheduler's deliveries are NOT contiguous — it skips a boundary
+		// serviced over two seconds late and drops slots on a full channel
+		// (Dropped()) — and the decoder's A7 buckets are parity-indexed, so an
+		// odd-length gap would swap them for the rest of the session. Advance
+		// once per OMITTED physical slot (AC8, review cd1757a7cda2 P2);
+		// advancing rather than resetting is deliberate — the receiver context
+		// is unchanged, so the hash table must survive a lossy channel, and a
+		// skip on an already-empty bucket costs ~0.1 ms, so no cap is needed.
+		if !prevSlotStart.IsZero() {
+			missed := int(slot.StartUTC.Sub(prevSlotStart).Round(SlotDuration)/SlotDuration) - 1
+			for i := 0; i < missed; i++ {
+				dec.skip()
+			}
+		}
+		prevSlotStart = slot.StartUTC
+
 		// Skip decode + occupancy for a slot we transmitted in: the captured audio is
 		// our own TX (rig bleed). Decoding it wastes ~1 s and can surface garbled bleed
 		// as ghost Band Activity rows; the raw-spectrum energy detector would mark our
 		// own offset "busy" and flicker the readout busy↔clear in lockstep with TX/RX
 		// (the occupancy sibling of the self-decode filter). WSJT-X likewise doesn't
-		// decode its own TX slot. A skipped slot still ADVANCES the stateful
-		// decoder (dec.skip — a zero-slot decode whose output is nothing), so the
-		// parity-keyed A7 hint buckets stay aligned across it; the slot's real
-		// reason is still what publishes below (empty report, suppression line).
+		// decode its own TX slot. A TX slot still ADVANCES the stateful decoder
+		// (dec.skip — a zero-slot decode whose output is nothing) so the
+		// parity-keyed A7 hint buckets stay aligned across it, while a
+		// DIAL-MOVED slot RESETS it — the QSY replaced the receiver context,
+		// and the band-blind hash table must not cross it (see slotDecoder.reset;
+		// review cd1757a7cda2 P1). Reset wins when a slot is both. Either way
+		// the slot's real reason is still what publishes below (empty report,
+		// suppression line).
 		var rich []goft8.DecodedMessage
-		if !txSlot && !dialMoved {
-			rich = dec.decode(slot.Samples)
-		} else {
+		switch {
+		case dialMoved:
+			dec.reset()
+		case txSlot:
 			dec.skip()
+		default:
+			rich = dec.decode(slot.Samples)
 		}
 		// THE BRANCH POINT (design §4 prerequisite 2): `rich` is the complete
 		// go-ft8 result — every parse status, own-TX included. The evidence

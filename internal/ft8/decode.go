@@ -134,17 +134,20 @@ var zeroSlot = make([]int16, SlotSamples)
 // state across adjacent slots (its a7.go), which is what lets a "<...>" hash
 // reference resolve to a call heard two slots earlier; the instance is NOT
 // goroutine-safe, so it lives loop-local in decodeLoop (one goroutine per
-// capture session, sessions serialised by the Service — and a fresh decoder
-// per session means no stale hint/hash context survives an operator-length
-// gap or a band change).
+// capture session, sessions serialised by the Service). Freshness has two
+// mechanisms, and both are load-bearing: a fresh decoder per session covers
+// operator-length gaps, and the loop calls reset() on a dial-moved slot so a
+// MID-SESSION band change clears state too (review cd1757a7cda2 P1 — the
+// session boundary alone does not cover a QSY).
 //
 // decode returns the RICH result — every parse status, own-TX included. The
 // curated filters (curateDecodes) apply strictly downstream at the branch
 // point, so the future evidence branch can tap the rich result upstream of
 // them (design §4 prerequisite 2).
 type slotDecoder struct {
-	dec *goft8.Decoder
-	log logging.Logger
+	dec  *goft8.Decoder
+	opts goft8.DecoderOptions
+	log  logging.Logger
 }
 
 // newSlotDecoder builds the per-stream decoder. enableOSD and the logging
@@ -153,9 +156,11 @@ func newSlotDecoder(enableOSD bool, log logging.Logger) *slotDecoder {
 	if log == nil {
 		log = logging.Noop()
 	}
+	opts := goft8.DecoderOptions{EnableOSD: enableOSD}
 	return &slotDecoder{
-		dec: goft8.NewDecoderWithOptions(goft8.DecoderOptions{EnableOSD: enableOSD}),
-		log: log,
+		dec:  goft8.NewDecoderWithOptions(opts),
+		opts: opts,
+		log:  log,
 	}
 }
 
@@ -243,6 +248,19 @@ func (d *slotDecoder) skip() {
 	// the decoder advance over my TX slot?") and the executable guard the
 	// loop-level test pins the once-per-skipped-slot rule against.
 	d.log.DebugWith().Msg("ft8 skipped slot; decoder state advanced")
+}
+
+// reset replaces the underlying decoder with a fresh one — hash table, A7
+// hints and parity all cleared. For a DIAL-MOVED slot, where skip's
+// state-preserving advance is wrong (review cd1757a7cda2 P1): the hash table
+// is band-blind, so carrying it across a QSY lets a hash reference on the
+// new band resolve to a call heard on the old one — a collision then renders
+// a valid-looking but wrong call into Band Activity and PSK Reporter. A TX
+// slot keeps skip(): same receiver context, state must survive. The trace
+// line is this transition's only observable, mirroring skip's.
+func (d *slotDecoder) reset() {
+	d.dec = goft8.NewDecoderWithOptions(d.opts)
+	d.log.DebugWith().Msg("ft8 dial moved; decoder state reset")
 }
 
 // curateDecodes is THE curated branch's boundary (design §4 prerequisite 2):
