@@ -115,22 +115,57 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   object · cloud doc.go · SY2 header amended (sync never deletes;
   cap purge may, as `rejected`). Old drop-new fixtures dial
   metadataBudgetBytes=0 (ruled full-§4.1 change, comments say so).
-- **RETENTION committed `1bce385c` (UNPUSHED). CI on main is RED since
-  the §5 push — MY false green: `gh run watch | tail` swallowed the
-  --exit-status code (never pipe it). Cause: the smcloud e2e harness's
-  inline drop list lacked the evidence tables → tenants drop failed →
-  next test's clean-slate errored (reconcile_e2e:114). FIXED in tree.
-  1bce385c's review: P1 (v3 synced rows stranded outside both purge
-  classes → wedge) FIXED via `legacy_synced` backfill in 3→4 + joined
-  cloudPresent + the 3→4 backfill now gated near-cap like 1→2 (factored
-  migrationBackfillGate); P2 (budget check didn't reserve the incoming
-  receipt) FIXED via receiptReserveBytes=256. All RED-first, 3 more
-  proofs bit; race green evidence+cloud+smcloud; tree -short green; lint
-  0. Review doc deleted.**
-- **NEXT: OPERATOR commits the CI fix + P1/P2 fixes (one commit; watch
-  auto-review) → push → CI MUST GO GREEN (verify `gh run list -L1`
-  directly, never a piped watch) → §6/§7 or dogfood consent** · on-air
-  0067 · Settings defaults dropdown · max_repeats-to-session.
+- **Retention arc LANDED: pushed through `38a2a4fa`, CI GREEN
+  (`31381987118`, `completed success` verified from output — see
+  verify-ci-verdicts-from-output memory for the piped-watch false-green
+  it corrects). Whole §4/§5 pipeline on main: capture → profiles → sync →
+  retention, every review round fixed or refuted.**
+- **DOGFOOD CONSENT APPLIED (operator-directed 2026-08-10): live
+  config.json now carries evidence {capture:true, sync:true, antennas:
+  DX Commander 80/40/30 h=0 coax · VHQ Hex beam 20/17/15/12/10/6 h=12;
+  locator OMITTED deliberately — the KG49dj fixture value was untrusted
+  vs station grid KH78an}. Backup: config.json.pre-evidence. smd was
+  STOPPED; deployed build still `1192-ga9151fea` (pre-evidence).**
+- **DEPLOYED + VERIFIED 2026-08-10 13:24 local (`1225-g38a2a4fa-dirty`):
+  capture textbook — profiles ACTIVE (2 lineages, 9 bands mapped, minted
+  11:24:03Z), retention zeros, no unprofiled rows, no drops. Sync in
+  HONEST BACKOFF: `SMC answered 404` — the production SMC
+  (192.168.1.200:8091) runs the pre-§5 server without PUT /v1/evidence;
+  2 profiles wait unsynced; one warn, no spam — exactly the SY1/SY8
+  posture.**
+- **OPERATOR-run PACKAGE review of internal/evidence (on 38a2a4fa): 4 P1
+  + 3 P2, ALL judged REAL. Fix progress (RED-first, in tree):
+  ✅P1-2 Status held s.mu through db aggregates → CaptureSlot stall
+  (snapshot-then-query restructure; statusQueryDelay seam travels with
+  queries; fillProfileCounts/fillSyncCounts/fillRetentionCounts unlocked).
+  ✅P1-1 activation gate now accepts watermark-with-freelist (post-purge
+  file never shrinks; manufactured-state fixture — organic ones dodge via
+  tail truncation). ✅P1-3 hard-cap ceiling: freelist never authorizes a
+  write at/past cap (tryFreeSpace re-check; checkpoint result inspected,
+  busy → Debug; activation gate same ceiling). Fixture sweep: dialed
+  headroom 4096→64K, cap margins 48K (shm 32K made old margins a
+  forbidden config the ceiling exposed).
+  ✅P1-4 metadata honesty: receipt end = maxSlot+15s; compaction requires
+  TEMPORAL adjacency (prev.end==next.start); retention receipts carry
+  dial_mhz — SCHEMA v5 (proper migrate4to5, conditional column; v4 was
+  deployed so no in-place edit; frozen-DDL V4→V5 test). ✅P2-1 pragmas
+  ride the DSN (_pragma params reach EVERY pooled conn — modernc
+  verified by test; the one-time Exec left pool conns at busy_timeout 0).
+  ✅P2-2 unsynced purge now GLOBAL oldest-first, selected set split into
+  per-class receipts (rejected/offered_unacked/never_offered) in one txn.
+  ✅P2-3 200-responses decode through a 1 MiB LimitReader; quarantine
+  reasons truncate at 256 runes. ALL SEVEN FIXED; 11 reversion proofs
+  bit; fixture physics lessons: tail-truncation collapses small-archive
+  pressure (manufactured states + direct-seam tests where organic
+  fixtures dissolve); dialed headroom must absorb shm 32K (sweep to 64K/
+  48K margins). Race green evidence+cloud+smcloud; tree -short green;
+  lint 0; suite ×3 stable.**
+- **Dogfood NOTE: smd RUNS the pre-fix build — all findings latent there
+  (archive young, far from cap); REDEPLOY after commit (evidence.db will
+  migrate v4→v5 at start). SMC deploy still pending (sync in honest 404
+  backoff).**
+- **NEXT: operator commits (watch auto-review; sm-pg running) → push →
+  CI → redeploy smd → smcloud deploy → soak → §6/§7.**
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.

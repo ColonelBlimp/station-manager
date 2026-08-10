@@ -46,7 +46,7 @@ package evidence
 // state (asserted only through Status) but persisted so a later boot can
 // tell a retired lineage from an unchanged one (re-add must mint), and so
 // the archive stays self-describing for sync.
-const schemaVersion = "4"
+const schemaVersion = "5"
 
 const profileTablesSQL = `
 CREATE TABLE IF NOT EXISTS profiles (
@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS retention_records (
 	coverage          INTEGER NOT NULL,
 	reason            TEXT NOT NULL,
 	acknowledged      INTEGER NOT NULL,
+	dial_mhz          REAL NOT NULL DEFAULT 0,
 	supersedes        TEXT,
 	synced            INTEGER NOT NULL DEFAULT 0,
 	offered_at        TEXT,
@@ -99,7 +100,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 	k TEXT PRIMARY KEY,
 	v TEXT NOT NULL
 );
-INSERT INTO schema_meta (k, v) VALUES ('schema_version', '4')
+INSERT INTO schema_meta (k, v) VALUES ('schema_version', '5')
 	ON CONFLICT(k) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS observations (
@@ -233,4 +234,20 @@ const legacySyncedOutcome = "legacy_synced"
 
 const migrateProfiles3to4SQL = `
 ALTER TABLE profiles ADD COLUMN sync_outcome TEXT;
+`
+
+// migrate4to5SQL (package-review P1-4c, 2026-08-10): retention receipts
+// carry dial context — §4.1's compaction criterion requires band/dial
+// agreement for BOTH metadata kinds, and a receipt without it lets
+// cross-band purges merge. Pre-v5 receipts arrive as 0: unattributed is
+// honest for a receipt that never recorded its dial. v4 IS deployed
+// (dogfood, 2026-08-10), so this is a real migration, never an in-place
+// v4 edit. The ALTER is conditional in migrate4to5 (chained archives
+// created the table from the current DDL).
+const migrate4to5SQL = `
+UPDATE schema_meta SET v = '5' WHERE k = 'schema_version';
+`
+
+const migrateRetention4to5SQL = `
+ALTER TABLE retention_records ADD COLUMN dial_mhz REAL NOT NULL DEFAULT 0;
 `

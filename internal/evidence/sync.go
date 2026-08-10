@@ -49,6 +49,12 @@ var (
 	syncBackoffMin      = 30 * time.Second
 	syncBackoffMax      = 15 * time.Minute
 	syncHTTPTimeout     = 30 * time.Second
+	// syncMaxResponseBytes caps a 200 response body; a real batch response
+	// is a few KB per hundred rows, so 1 MiB is generous headroom
+	// (package-review P2).
+	syncMaxResponseBytes = int64(1 << 20)
+	// quarantineReasonMaxRunes bounds the persisted permanent_reject reason.
+	quarantineReasonMaxRunes = 256
 )
 
 // Sync-health states surfaced by Status.Sync.State.
@@ -555,8 +561,12 @@ func (s *Service) postBatch(ctx context.Context, rows []syncRow) ([]evidencewire
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("evidence sync: SMC answered %d", resp.StatusCode)
 	}
+	// A 200 body is decoded through a byte cap too (package-review P2): an
+	// erroneous or compromised endpoint must not consume daemon memory. An
+	// over-cap response truncates mid-document, fails the decode, and
+	// consumes no rows — the same posture as any invalid response.
 	var out evidencewire.PutResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, syncMaxResponseBytes)).Decode(&out); err != nil {
 		return nil, fmt.Errorf("evidence sync: undecodable response: %w", err)
 	}
 	if len(out.Outcomes) != len(rows) {
@@ -599,6 +609,11 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 			if reason == "" {
 				reason = "unspecified"
 			}
+			// Bounded before persisting (package-review P2): the reason is
+			// remote-controlled text landing in the archive and status.
+			if r := []rune(reason); len(r) > quarantineReasonMaxRunes {
+				reason = string(r[:quarantineReasonMaxRunes])
+			}
 			if _, err := tx.Exec(`UPDATE `+table+` SET quarantine_reason = ? WHERE uuid = ?`, reason, r.uuid); err != nil {
 				return err
 			}
@@ -616,19 +631,12 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 	return tx.Commit()
 }
 
-// syncStatusLocked builds Status.Sync. Requires s.mu held.
-func (s *Service) syncStatusLocked() *SyncStatus {
-	ss := &SyncStatus{Enabled: s.cfg.Sync}
-	if !s.cfg.Sync || s.db == nil {
-		return ss
-	}
-	ss.State = s.syncState
-	if ss.State == "" {
-		ss.State = syncStateIdle
-	}
-	ss.LastError = s.syncLastErr
-	if !s.syncLastSuccess.IsZero() {
-		ss.LastSuccess = s.syncLastSuccess.UTC().Format(time.RFC3339)
+// fillSyncCounts adds the database-derived halves to a Status.Sync
+// snapshot. Runs WITHOUT s.mu (package-review P1: status aggregates must
+// never stall CaptureSlot).
+func (s *Service) fillSyncCounts(ss *SyncStatus) {
+	if s.db == nil {
+		return
 	}
 	ss.Unsynced = map[string]int64{}
 	for _, t := range syncTables {
@@ -643,5 +651,4 @@ func (s *Service) syncStatusLocked() *SyncStatus {
 			ss.Quarantined += q
 		}
 	}
-	return ss
 }

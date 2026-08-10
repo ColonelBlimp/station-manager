@@ -74,6 +74,10 @@ var (
 	writerQueueSize = 64
 	// writerDelay is a test-only stall for the writer goroutine.
 	writerDelay time.Duration
+	// statusQueryDelay is a test-only stall that travels WITH Status's
+	// database aggregates — proving they run outside s.mu (a status poll
+	// must never stall CaptureSlot on the decode goroutine).
+	statusQueryDelay time.Duration
 )
 
 // migrationSlackBytes pads the v1→v2 migration's projected WAL peak beyond
@@ -248,21 +252,21 @@ func (s *Service) Start() error {
 		return nil
 	}
 
-	db, err := sql.Open("sqlite", s.cfg.Path)
+	// Pragmas ride the DSN (package-review P2, 2026-08-10): busy_timeout
+	// and synchronous are CONNECTION-scoped, and the writer, sync loop and
+	// status readers each draw pooled connections — a one-time Exec reaches
+	// exactly one of them, leaving the rest at busy_timeout 0 and failing
+	// concurrent writes with SQLITE_BUSY. The modernc driver applies
+	// _pragma parameters to every connection it opens (pinned by
+	// TestPragmas_ApplyToEveryPooledConnection).
+	db, err := sql.Open("sqlite",
+		"file:"+s.cfg.Path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(2000)&_pragma=synchronous(NORMAL)")
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("open evidence.db")
 	}
-	// One writer goroutine owns all writes; a second connection would only
-	// serve Status reads, which the same handle covers.
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA busy_timeout=2000",
-		"PRAGMA synchronous=NORMAL",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			_ = db.Close()
-			return errors.New(op).WithErr(err).WithMsgf("apply %s", pragma)
-		}
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		_ = db.Close()
+		return errors.New(op).WithErr(err).WithMsg("apply WAL journal mode")
 	}
 	if err := s.migrateSchema(db); err != nil {
 		_ = db.Close()
@@ -378,11 +382,42 @@ func (s *Service) Status() Status {
 		s.mu.Unlock()
 		return st
 	}
-	st.Profiles = s.profilesStatusLocked()
-	st.Sync = s.syncStatusLocked()
-	st.Retention = s.retentionStatusLocked()
+	// Snapshot every mu-guarded field, then release: the database
+	// aggregates below run OUTSIDE the lock, because CaptureSlot takes
+	// s.mu synchronously on the FT8 decode goroutine — a status poll over
+	// a cap-sized archive must never stall decoding (package-review P1,
+	// 2026-08-10).
+	prof := &ProfilesStatus{State: s.profState, Reason: s.profReason}
+	if s.profState == ProfilesActive && len(s.profActive) > 0 {
+		prof.Active = make(map[string]ProfileActive, len(s.profActive))
+		for band, pa := range s.profActive {
+			prof.Active[band] = pa
+		}
+	}
+	syn := &SyncStatus{Enabled: s.cfg.Sync}
+	if s.cfg.Sync {
+		syn.State = s.syncState
+		if syn.State == "" {
+			syn.State = syncStateIdle
+		}
+		syn.LastError = s.syncLastErr
+		if !s.syncLastSuccess.IsZero() {
+			syn.LastSuccess = s.syncLastSuccess.UTC().Format(time.RFC3339)
+		}
+	}
+	ret := &RetentionStatus{Pressure: s.pressure}
 	s.mu.Unlock()
+
+	if statusQueryDelay > 0 {
+		time.Sleep(statusQueryDelay)
+	}
 	st.UsageBytes = s.physicalUsage()
+	s.fillProfileCounts(prof)
+	if s.cfg.Sync {
+		s.fillSyncCounts(syn)
+	}
+	s.fillRetentionCounts(ret)
+	st.Profiles, st.Sync, st.Retention = prof, syn, ret
 	_ = db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&st.Observations)
 	_ = db.QueryRow(`SELECT COUNT(*) FROM observations WHERE profile_uuid IS NULL`).
 		Scan(&st.UnprofiledObservations)
@@ -452,12 +487,18 @@ func (s *Service) migrateSchema(db *sql.DB) error {
 		if err := s.migrate2to3(db); err != nil {
 			return err
 		}
-		return s.migrate3to4(db)
+		if err := s.migrate3to4(db); err != nil {
+			return err
+		}
+		return s.migrate4to5(db)
 	case v == "2":
 		if err := s.migrate2to3(db); err != nil {
 			return err
 		}
-		return s.migrate3to4(db)
+		if err := s.migrate3to4(db); err != nil {
+			return err
+		}
+		return s.migrate4to5(db)
 	case v == "3":
 		// A GENUINE v3 archive can hold synced rows, so 3→4's
 		// legacy_synced backfill dirties ~every synced page — the same
@@ -473,7 +514,9 @@ func (s *Service) migrateSchema(db *sql.DB) error {
 		if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
 			return errors.New(op).WithErr(err).WithMsg("truncate WAL after v3→v4 migration")
 		}
-		return nil
+		return s.migrate4to5(db)
+	case v == "4":
+		return s.migrate4to5(db)
 	default:
 		return errors.New(op).WithMsgf("evidence.db schema version %q is newer than this build understands", v)
 	}
@@ -498,6 +541,34 @@ func (s *Service) migrationBackfillGate(op errors.Op, label string) error {
 		return errors.New(op).WithMsgf(
 			"%s migration projected peak %d B would exceed the cap %d B; evidence stays idle until the cap is raised or the archive shrinks",
 			label, projected, s.cfg.CapBytes)
+	}
+	return nil
+}
+
+// migrate4to5 adds the receipts' dial context (package-review P1-4c) —
+// conditional like the profiles halves: chained archives created
+// retention_records from the current DDL.
+func (s *Service) migrate4to5(db *sql.DB) error {
+	const op errors.Op = "evidence.Service.migrate4to5"
+	tx, err := db.Begin()
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("begin v4→v5 migration")
+	}
+	defer func() { _ = tx.Rollback() }()
+	var hasCol int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('retention_records') WHERE name = 'dial_mhz'`).Scan(&hasCol); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("probe retention_records shape")
+	}
+	stmts := migrate4to5SQL
+	if hasCol == 0 {
+		stmts = migrateRetention4to5SQL + stmts
+	}
+	if _, err := tx.Exec(stmts); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("apply v4→v5 migration")
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("commit v4→v5 migration")
 	}
 	return nil
 }

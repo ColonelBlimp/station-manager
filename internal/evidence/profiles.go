@@ -165,10 +165,18 @@ func (s *Service) reconcileProfiles(now time.Time) error {
 	// Effective again at the next restart once capacity returns or the cap
 	// is raised. An EMPTY declaration only shrinks (mapping delete) and is
 	// always allowed.
+	//
+	// Retention amendment (package-review P1, 2026-08-10): after purging,
+	// the file legitimately sits at the watermark FOREVER — DELETE does not
+	// shrink SQLite; reusable freelist pages carry the real capacity. The
+	// gate therefore accepts watermark-with-freelist exactly like the slot
+	// write-through does, or the first restart after a purge would
+	// permanently degrade profiles.
 	if len(decls) > 0 {
-		if usage, watermark := s.physicalUsage(), s.cfg.CapBytes-headroomBytes; usage >= watermark {
+		usage, watermark := s.physicalUsage(), s.cfg.CapBytes-headroomBytes
+		if usage >= s.cfg.CapBytes || (usage >= watermark && s.freelistBytes() < slotWriteReserveBytes) {
 			return errors.New(op).WithMsgf(
-				"physical usage %d B is at or past the activation watermark %d B (cap %d B minus reserved headroom); the declaration cannot activate without risking the hard cap",
+				"physical usage %d B is at or past the activation watermark %d B (cap %d B minus reserved headroom) with no reusable pages; the declaration cannot activate without risking the hard cap",
 				usage, watermark, s.cfg.CapBytes)
 		}
 	}
@@ -287,41 +295,34 @@ func (s *Service) stampLocked(sc *SlotCapture) {
 	}
 }
 
-// profilesStatusLocked builds the Status.Profiles object. Requires s.mu held.
-// The db reads run on the shared handle, same as the other Status counts.
-func (s *Service) profilesStatusLocked() *ProfilesStatus {
-	p := &ProfilesStatus{State: s.profState, Reason: s.profReason}
+// fillProfileCounts adds the database-derived halves to a Status.Profiles
+// snapshot. Runs WITHOUT s.mu — Status released the lock first, because
+// these aggregates must never stall CaptureSlot (package-review P1).
+func (s *Service) fillProfileCounts(p *ProfilesStatus) {
 	if s.db == nil {
-		return p
+		return
 	}
 	var lineages, versions int64
 	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT lineage), COUNT(*) FROM profiles`).
 		Scan(&lineages, &versions); err == nil {
 		p.Lineages, p.Versions = &lineages, &versions
 	}
-	if s.profState == ProfilesActive && len(s.profActive) > 0 {
-		p.Active = make(map[string]ProfileActive, len(s.profActive))
-		for band, pa := range s.profActive {
-			p.Active[band] = pa
-		}
-	}
 	rows, err := s.db.Query(
 		`SELECT unprofiled_reason, COUNT(*) FROM observations
 		 WHERE unprofiled_reason IS NOT NULL GROUP BY unprofiled_reason`)
 	if err != nil {
-		return p
+		return
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var reason string
 		var n int64
 		if err := rows.Scan(&reason, &n); err != nil {
-			return p
+			return
 		}
 		if p.Unprofiled == nil {
 			p.Unprofiled = map[string]int64{}
 		}
 		p.Unprofiled[reason] = n
 	}
-	return p
 }

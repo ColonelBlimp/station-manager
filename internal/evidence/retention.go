@@ -90,7 +90,18 @@ func (s *Service) tryFreeSpace() bool {
 	if s.freelistBytes() < target {
 		s.purgeChunk()
 	}
+	// Reusable pages authorize the write ONLY below the hard cap
+	// (package-review P1, 2026-08-10): freelist reuse keeps the db file
+	// flat, but the WAL still grows per write — and when checkpointing is
+	// blocked, total physical usage climbs while the freelist keeps saying
+	// yes. The cap is a ceiling; at or past it, capture drops, however
+	// many pages are free inside the file. When the freelist itself was
+	// the blocker, purgeChunk already recorded the specific pressure.
 	ok := s.freelistBytes() >= slotWriteReserveBytes
+	if ok && s.physicalUsage() >= s.cfg.CapBytes {
+		ok = false
+		s.setPressure(pressureCap)
+	}
 	if ok {
 		s.setPressure("")
 	}
@@ -158,7 +169,16 @@ func (s *Service) purgeChunk() {
 	s.setPressure("")
 	// Bounded checkpoint folds the chunk's WAL so freed pages are reusable
 	// and physical usage reflects reality — never VACUUM on the live path.
-	_, _ = s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	// The result row is INSPECTED (package-review P1): busy != 0 means a
+	// reader blocked the fold and physical usage still carries the WAL —
+	// the hard-cap re-check in tryFreeSpace is what stops writes then, but
+	// the operator deserves the trace.
+	var busy, logFrames, checkpointed int64
+	if err := s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).
+		Scan(&busy, &logFrames, &checkpointed); err == nil && busy != 0 {
+		s.log.DebugWith().Int64("wal_frames", logFrames).
+			Msg("evidence: post-purge checkpoint blocked by a reader; WAL retained until it finishes")
+	}
 	s.maybeCompact()
 }
 
@@ -173,6 +193,22 @@ type purgeSet struct {
 	classCount int
 }
 
+func (p *purgeSet) add(uuid, slot string, dial float64) {
+	p.uuids = append(p.uuids, uuid)
+	p.slots[slot] = true
+	if p.minSlot == "" || slot < p.minSlot {
+		p.minSlot = slot
+	}
+	if slot > p.maxSlot {
+		p.maxSlot = slot
+	}
+	if !p.haveDial {
+		p.dial, p.haveDial = dial, true
+	} else if dial != p.dial {
+		p.sameDial = false
+	}
+}
+
 func scanPurgeRows(rs *sql.Rows) (*purgeSet, error) {
 	p := &purgeSet{slots: map[string]bool{}, sameDial: true}
 	for rs.Next() {
@@ -182,19 +218,7 @@ func scanPurgeRows(rs *sql.Rows) (*purgeSet, error) {
 			_ = rs.Close()
 			return nil, err
 		}
-		p.uuids = append(p.uuids, uuid)
-		p.slots[slot] = true
-		if p.minSlot == "" || slot < p.minSlot {
-			p.minSlot = slot
-		}
-		if slot > p.maxSlot {
-			p.maxSlot = slot
-		}
-		if !p.haveDial {
-			p.dial, p.haveDial = dial, true
-		} else if dial != p.dial {
-			p.sameDial = false
-		}
+		p.add(uuid, slot, dial)
 	}
 	return p, rs.Close()
 }
@@ -274,23 +298,37 @@ func (s *Service) purgeAckedChunk() (bool, error) {
 	if cov.maxSlot > end {
 		end = cov.maxSlot
 	}
+	// The range covers the LAST slot (package-review P1-4a): end is that
+	// slot's start plus the slot duration, or a one-slot purge would claim
+	// a zero-length interval.
+	if t, err := time.Parse(time.RFC3339, end); err == nil {
+		end = t.Add(slotDuration).Format(time.RFC3339)
+	}
+	// Dial context (P1-4c): agreement across every deleted row, 0 = mixed.
+	dial := obs.dialOrZero()
+	if len(obs.uuids) == 0 {
+		dial = cov.dialOrZero()
+	} else if len(cov.uuids) > 0 && (!cov.sameDial || !obs.sameDial || cov.dial != obs.dial) {
+		dial = 0
+	}
 	// The receipt commits WITH the deletions — RT2's whole point.
 	if _, err := tx.Exec(
-		`INSERT INTO retention_records (uuid, start_utc, end_utc, observations, coverage, reason, acknowledged)
-		 VALUES (?, ?, ?, ?, ?, 'cap', 1)`,
-		utils.NewUUIDv7At(time.Now()), start, end, len(obs.uuids), len(cov.uuids)); err != nil {
+		`INSERT INTO retention_records (uuid, start_utc, end_utc, observations, coverage, reason, acknowledged, dial_mhz)
+		 VALUES (?, ?, ?, ?, ?, 'cap', 1, ?)`,
+		utils.NewUUIDv7At(time.Now()), start, end, len(obs.uuids), len(cov.uuids), dial); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()
 }
 
 // purgeUnsyncedChunk implements the full-§4.1 ruling: once nothing
-// cloud-present remains, the OLDEST unsynced observations drop so current
-// capture wins — receipted as a sealed loss interval whose remote_status is
-// honest per class: never_offered (offered_at NULL), offered_unacknowledged
-// (offered, no ack), or rejected (quarantined — KNOWN remotely absent). One
-// class per chunk, decided by the oldest unsynced row, so each receipt's
-// status is exact.
+// cloud-present remains, the GLOBALLY OLDEST unsynced observations drop so
+// current capture wins (package-review P2: selection is oldest-first
+// across every class — picking one class first would drop newer rows of
+// that class while older rows of another survive). The selected set splits
+// into per-class receipts, each a sealed loss interval whose remote_status
+// is honest: never_offered (offered_at NULL), offered_unacknowledged
+// (offered, no ack), or rejected (quarantined — KNOWN remotely absent).
 func (s *Service) purgeUnsyncedChunk() (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -298,53 +336,65 @@ func (s *Service) purgeUnsyncedChunk() (bool, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var offered, quarantined bool
-	err = tx.QueryRow(
-		`SELECT offered_at IS NOT NULL, quarantine_reason IS NOT NULL
-		   FROM observations WHERE synced = 0 ORDER BY uuid ASC LIMIT 1`).
-		Scan(&offered, &quarantined)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	status, filter := remoteNeverOffered, `offered_at IS NULL AND quarantine_reason IS NULL`
-	switch {
-	case quarantined:
-		status, filter = remoteRejected, `quarantine_reason IS NOT NULL`
-	case offered:
-		status, filter = remoteOfferedUnacked, `offered_at IS NOT NULL AND quarantine_reason IS NULL`
-	}
-
 	rs, err := tx.Query(
-		`SELECT uuid, slot_start_utc, dial_mhz FROM observations
-		  WHERE synced = 0 AND `+filter+` ORDER BY uuid ASC LIMIT ?`, purgeChunkMaxRows)
+		`SELECT uuid, slot_start_utc, dial_mhz,
+		        offered_at IS NOT NULL, quarantine_reason IS NOT NULL
+		   FROM observations WHERE synced = 0 ORDER BY uuid ASC LIMIT ?`, purgeChunkMaxRows)
 	if err != nil {
 		return false, err
 	}
-	set, err := scanPurgeRows(rs)
-	if err != nil {
+	classes := map[string]*purgeSet{}
+	var all []string
+	for rs.Next() {
+		var uuid, slot string
+		var dial float64
+		var offered, quarantined bool
+		if err := rs.Scan(&uuid, &slot, &dial, &offered, &quarantined); err != nil {
+			_ = rs.Close()
+			return false, err
+		}
+		status := remoteNeverOffered
+		switch {
+		case quarantined:
+			status = remoteRejected
+		case offered:
+			status = remoteOfferedUnacked
+		}
+		set := classes[status]
+		if set == nil {
+			set = &purgeSet{slots: map[string]bool{}, sameDial: true}
+			classes[status] = set
+		}
+		set.add(uuid, slot, dial)
+		all = append(all, uuid)
+	}
+	if err := rs.Close(); err != nil {
 		return false, err
 	}
-	if len(set.uuids) == 0 {
+	if len(all) == 0 {
 		return false, nil
 	}
-	if err := deleteByUUID(tx, "observations", set.uuids); err != nil {
+	if err := deleteByUUID(tx, "observations", all); err != nil {
 		return false, err
 	}
-	end, err := time.Parse(time.RFC3339, set.maxSlot)
-	if err != nil {
-		end = time.Now().UTC()
-	} else {
-		end = end.Add(slotDuration)
-	}
-	if _, err := tx.Exec(
-		`INSERT INTO loss_intervals (uuid, start_utc, end_utc, slots, observations, reason, remote_status, dial_mhz, sealed)
-		 VALUES (?, ?, ?, ?, ?, 'cap', ?, ?, 1)`,
-		utils.NewUUIDv7At(time.Now()), set.minSlot, end.Format(time.RFC3339),
-		len(set.slots), len(set.uuids), status, set.dialOrZero()); err != nil {
-		return false, err
+	for _, status := range []string{remoteRejected, remoteOfferedUnacked, remoteNeverOffered} {
+		set := classes[status]
+		if set == nil {
+			continue
+		}
+		end, err := time.Parse(time.RFC3339, set.maxSlot)
+		if err != nil {
+			end = time.Now().UTC()
+		} else {
+			end = end.Add(slotDuration)
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO loss_intervals (uuid, start_utc, end_utc, slots, observations, reason, remote_status, dial_mhz, sealed)
+			 VALUES (?, ?, ?, ?, ?, 'cap', ?, ?, 1)`,
+			utils.NewUUIDv7At(time.Now()), set.minSlot, end.Format(time.RFC3339),
+			len(set.slots), len(set.uuids), status, set.dialOrZero()); err != nil {
+			return false, err
+		}
 	}
 	return true, tx.Commit()
 }
@@ -393,7 +443,7 @@ func (s *Service) compactOnce() {
 		  ORDER BY start_utc ASC, uuid ASC LIMIT 512`)
 	s.compactKind("retention_records",
 		`SELECT uuid, start_utc, end_utc, observations, coverage,
-		        reason || '|' || CAST(acknowledged AS TEXT)
+		        reason || '|' || CAST(acknowledged AS TEXT) || '|' || CAST(dial_mhz AS TEXT)
 		   FROM retention_records
 		  WHERE supersedes IS NULL OR `+cloudPresent+`
 		  ORDER BY start_utc ASC, uuid ASC LIMIT 512`)
@@ -416,11 +466,16 @@ func (s *Service) compactKind(table, query string) {
 	_ = rs.Close()
 
 	// The first adjacent run of ≥2 agreeing rows, capped at the direct-
-	// predecessor bound.
+	// predecessor bound. Adjacency is TEMPORAL as well as key-wise
+	// (package-review P1-4b): each member must begin where the previous
+	// ended, or separated intervals would merge into one
+	// continuous-looking summary — the exact dishonesty these records
+	// exist to prevent.
 	runStart := -1
 	for i := 0; i < len(rows); i++ {
 		n := 1
-		for i+n < len(rows) && rows[i+n].key == rows[i].key && n < compactionMaxPreds {
+		for i+n < len(rows) && rows[i+n].key == rows[i].key &&
+			rows[i+n].start == rows[i+n-1].end && n < compactionMaxPreds {
 			n++
 		}
 		if n >= 2 {
@@ -470,9 +525,9 @@ func (s *Service) compactKind(table, query string) {
 	} else {
 		parts := splitKey(rows[0].key)
 		if _, err := tx.Exec(
-			`INSERT INTO retention_records (uuid, start_utc, end_utc, observations, coverage, reason, acknowledged, supersedes)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			summary, minStart, maxEnd, sumA, sumB, parts[0], parts[1], string(supersedes)); err != nil {
+			`INSERT INTO retention_records (uuid, start_utc, end_utc, observations, coverage, reason, acknowledged, dial_mhz, supersedes)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			summary, minStart, maxEnd, sumA, sumB, parts[0], parts[1], parts[2], string(supersedes)); err != nil {
 			return
 		}
 	}
@@ -494,17 +549,17 @@ func splitKey(key string) []string {
 	return append(parts, key[start:])
 }
 
-// retentionStatusLocked builds Status.Retention. Requires s.mu held.
-func (s *Service) retentionStatusLocked() *RetentionStatus {
+// fillRetentionCounts adds the database-derived halves to a
+// Status.Retention snapshot. Runs WITHOUT s.mu (package-review P1: status
+// aggregates must never stall CaptureSlot).
+func (s *Service) fillRetentionCounts(rs *RetentionStatus) {
 	if s.db == nil {
-		return nil
+		return
 	}
-	rs := &RetentionStatus{Pressure: s.pressure}
 	_ = s.db.QueryRow(
 		`SELECT COALESCE(SUM(observations), 0), COALESCE(SUM(coverage), 0), COUNT(*) FROM retention_records`).
 		Scan(&rs.PurgedObservations, &rs.PurgedCoverage, &rs.Records)
 	rs.MetadataBytes = s.metadataBytes()
-	return rs
 }
 
 var _ = evidencewire.KindRetention // wire kind used by sync.go's table map
