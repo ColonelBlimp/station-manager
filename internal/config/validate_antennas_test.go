@@ -48,6 +48,7 @@ package config
 */
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -178,6 +179,62 @@ func TestValidateAntennas_OverlongValueNotEchoed(t *testing.T) {
 		if strings.Contains(f.Message, long) {
 			t.Fatalf("finding echoes the over-long value (%d-char message)", len(f.Message))
 		}
+	}
+}
+
+// SY1's validation half (§5 sync slice, operator ruling 2026-08-10):
+// evidence.sync reuses the enabled smcloud forwarder's credentials — one
+// boolean, no second token surface — so sync WITHOUT that forwarder (absent,
+// disabled, or credential-less) refuses at validation, and the resolution
+// helper hands cmd/smd the same url/token the forwarder uses.
+func TestValidateEvidenceSync_RequiresSmcloudForwarder(t *testing.T) {
+	smcloudFwd := func(enabled bool, creds string) types.ForwarderConfig {
+		return types.ForwarderConfig{Name: "smcloud", Type: "smcloud", Enabled: enabled,
+			Credentials: json.RawMessage(creds)}
+	}
+	syncOn := types.EvidenceConfig{Capture: true, CapBytes: 524288000, Sync: true}
+	cases := []struct {
+		name    string
+		fwds    []types.ForwarderConfig
+		wantErr bool
+	}{
+		{"no forwarders at all", nil, true},
+		{"smcloud disabled", []types.ForwarderConfig{smcloudFwd(false, `{"url":"https://smc.example","token":"tok"}`)}, true},
+		{"smcloud enabled but tokenless", []types.ForwarderConfig{smcloudFwd(true, `{"url":"https://smc.example"}`)}, true},
+		{"smcloud enabled with credentials", []types.ForwarderConfig{smcloudFwd(true, `{"url":"https://smc.example","token":"tok"}`)}, false},
+	}
+	for _, c := range cases {
+		cfg := Config{Evidence: syncOn, Forwarders: c.fwds}
+		found := false
+		for _, f := range Validate(cfg) {
+			if f.Field == "evidence.sync" && !f.Warning {
+				found = true
+			}
+		}
+		if found != c.wantErr {
+			t.Errorf("%s: evidence.sync finding = %v, want %v", c.name, found, c.wantErr)
+		}
+	}
+	// Sync OFF never demands a forwarder (consent-inert, like the cap floor).
+	cfg := Config{Evidence: types.EvidenceConfig{Capture: true, CapBytes: 524288000}}
+	for _, f := range Validate(cfg) {
+		if f.Field == "evidence.sync" {
+			t.Fatalf("sync disabled must not demand a forwarder: %+v", f)
+		}
+	}
+}
+
+func TestEvidenceSyncCredentials_ResolvesForwarderCreds(t *testing.T) {
+	cfg := Config{Forwarders: []types.ForwarderConfig{{
+		Name: "smcloud", Type: "smcloud", Enabled: true,
+		Credentials: json.RawMessage(`{"url":"https://smc.example/","token":"tok-1","logbook":"main"}`),
+	}}}
+	url, token, err := EvidenceSyncCredentials(cfg)
+	if err != nil || url != "https://smc.example/" || token != "tok-1" {
+		t.Fatalf("resolved (%q, %q, %v), want the smcloud forwarder's url/token", url, token, err)
+	}
+	if _, _, err := EvidenceSyncCredentials(Config{}); err == nil {
+		t.Fatal("resolution without an smcloud forwarder must error, not return empties")
 	}
 }
 

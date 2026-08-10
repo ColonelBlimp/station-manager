@@ -46,15 +46,19 @@ func testStore(t *testing.T) *Store {
 		t.Skipf("smcloud store tests need a dev Postgres (task db:pg:up): ping: %v", err)
 	}
 	lockTestDatabase(t, db)
-	// Clean slate: down (IF EXISTS, safe on first run) then every up in
-	// order. 0001's down drops the tables, taking later migrations'
-	// constraints with them, so no other downs are needed.
+	// Clean slate: downs (IF EXISTS, safe on first run) then every up in
+	// order. 0001's down drops the QSO tables, taking later migrations'
+	// constraints with them — but evidence_records (0005) references
+	// tenants, so its own down must run FIRST or 0001's tenant drop fails.
+	execSQLFile(t, db, "migrations/0005_evidence.down.sql")
 	execSQLFile(t, db, "migrations/0001_init.down.sql")
 	execSQLFile(t, db, "migrations/0001_init.up.sql")
 	execSQLFile(t, db, "migrations/0002_qsos_logbook_tenant_fk.up.sql")
 	execSQLFile(t, db, "migrations/0003_qsos_revision.up.sql")
 	execSQLFile(t, db, "migrations/0004_qsos_tenant_scoped_uuid.up.sql")
+	execSQLFile(t, db, "migrations/0005_evidence.up.sql")
 	t.Cleanup(func() {
+		execSQLFile(t, db, "migrations/0005_evidence.down.sql")
 		execSQLFile(t, db, "migrations/0001_init.down.sql")
 		_ = db.Close()
 	})

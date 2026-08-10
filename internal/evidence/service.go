@@ -1,7 +1,9 @@
 package evidence
 
 import (
+	"context"
 	"database/sql"
+	"net/http"
 	"os"
 	"runtime/debug"
 	"sync"
@@ -89,6 +91,16 @@ type Config struct {
 	// by internal/config). Restart-only by construction: it is read once at
 	// Start and reconciled into immutable profile versions.
 	Antennas []types.AntennaDecl
+
+	// Sync is §8 consent layer 2, one boolean (operator ruling 2026-08-10).
+	// SyncURL/SyncToken are resolved by cmd/smd from the enabled smcloud
+	// forwarder's credentials — no second account or token surface, and
+	// this package stays free of config/forwarding imports. Validation
+	// (sync requires a configured smcloud forwarder) lives in
+	// internal/config.
+	Sync      bool
+	SyncURL   string
+	SyncToken string
 }
 
 // SlotCapture is one physical slot's evidence as handed over by the decode
@@ -119,6 +131,7 @@ type Status struct {
 	UnprofiledObservations int64           `json:"unprofiled_observations"`
 	DroppedSlots           int64           `json:"dropped_slots"`
 	Profiles               *ProfilesStatus `json:"profiles,omitempty"`
+	Sync                   *SyncStatus     `json:"sync,omitempty"`
 }
 
 // lossAccum is the reserved in-memory accumulator: the record of dropping
@@ -160,6 +173,21 @@ type Service struct {
 	profState  string
 	profReason string
 	profActive map[string]ProfileActive
+
+	// §5 sync engine state (sync.go). syncCh/syncDone/syncClient are
+	// created in Start when sync is enabled and never change after;
+	// the remaining fields are guarded by mu. syncCancelBacklog is
+	// non-nil exactly while a BACKLOG request is in flight — notifyLive
+	// calls it (the ruling's intentional cancellation, no backoff
+	// advance).
+	syncCh            chan struct{}
+	syncDone          chan struct{}
+	syncClient        *http.Client
+	syncState         string
+	syncLastErr       string
+	syncLastSuccess   time.Time
+	syncCancelBacklog context.CancelFunc
+	syncLiveInterrupt bool
 }
 
 func New(cfg Config, log logging.Logger) *Service {
@@ -257,6 +285,12 @@ func (s *Service) Start() error {
 	s.started = true
 	s.ch = make(chan SlotCapture, writerQueueSize)
 	go s.writerLoop()
+	if s.cfg.Sync {
+		s.syncCh = make(chan struct{}, 1)
+		s.syncDone = make(chan struct{})
+		s.syncClient = &http.Client{Timeout: syncHTTPTimeout}
+		go s.syncLoop()
+	}
 	s.log.InfoWith().
 		Str("path", s.cfg.Path).
 		Int64("cap_bytes", s.cfg.CapBytes).
@@ -280,6 +314,9 @@ func (s *Service) Stop() {
 	}
 	close(s.quit)
 	<-s.done
+	if s.syncDone != nil {
+		<-s.syncDone
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closeLossLocked()
@@ -335,10 +372,12 @@ func (s *Service) Status() Status {
 	started := s.started
 	if !started || db == nil {
 		st.Profiles = &ProfilesStatus{State: ProfilesDisabled}
+		st.Sync = &SyncStatus{Enabled: false}
 		s.mu.Unlock()
 		return st
 	}
 	st.Profiles = s.profilesStatusLocked()
+	st.Sync = s.syncStatusLocked()
 	s.mu.Unlock()
 	st.UsageBytes = s.physicalUsage()
 	_ = db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&st.Observations)
@@ -413,10 +452,44 @@ func (s *Service) migrateSchema(db *sql.DB) error {
 		if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
 			return errors.New(op).WithErr(err).WithMsg("truncate WAL after v1→v2 migration")
 		}
-		return nil
+		return s.migrate2to3(db)
+	case v == "2":
+		return s.migrate2to3(db)
 	default:
 		return errors.New(op).WithMsgf("evidence.db schema version %q is newer than this build understands", v)
 	}
+}
+
+// migrate2to3 adds the v3 sync columns. No cap gate: ADD COLUMN without a
+// non-constant default touches the schema page only — no row rewrite
+// (https://sqlite.org/lang_altertable.html, ALTER TABLE ADD COLUMN) — so
+// the growth is bounded far under the reserved headroom, unlike 1→2's
+// every-row backfill. The profiles half is conditional because a v1
+// archive's 1→2 step created that table from the CURRENT profileTablesSQL,
+// which already carries the columns.
+func (s *Service) migrate2to3(db *sql.DB) error {
+	const op errors.Op = "evidence.Service.migrate2to3"
+	tx, err := db.Begin()
+	if err != nil {
+		return errors.New(op).WithErr(err).WithMsg("begin v2→v3 migration")
+	}
+	defer func() { _ = tx.Rollback() }()
+	var hasCols int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('profiles') WHERE name = 'offered_at'`).Scan(&hasCols); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("probe profiles shape")
+	}
+	stmts := migrate2to3SQL
+	if hasCols == 0 {
+		stmts = migrateProfiles2to3SQL + stmts
+	}
+	if _, err := tx.Exec(stmts); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("apply v2→v3 migration")
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("commit v2→v3 migration")
+	}
+	return nil
 }
 
 func (s *Service) writerLoop() {
@@ -490,7 +563,10 @@ func (s *Service) processSlot(sc SlotCapture) {
 		s.dropped++
 		s.accumulateLocked(sc, lossReasonWriter)
 		s.mu.Unlock()
+		return
 	}
+	// §5 live lane: the slot just committed — wake the sync loop (SY5).
+	s.notifyLive()
 }
 
 // writeSlot commits one slot — its coverage row and every observation — as

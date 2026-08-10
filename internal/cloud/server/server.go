@@ -76,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/health", s.handleHealth)
 	mux.HandleFunc("GET /v1/version", s.handleVersion)
 	mux.HandleFunc("PUT /v1/qsos", s.auth(s.handlePutQsos))
+	mux.HandleFunc("PUT /v1/evidence", s.auth(s.handlePutEvidence))
 	mux.HandleFunc("GET /v1/logbooks", s.auth(s.handleLogbooks))
 	mux.HandleFunc("GET /v1/logbooks/{id}/reconcile", s.auth(s.handleReconcile))
 	mux.HandleFunc("GET /v1/logbooks/{id}/manifest", s.auth(s.handleManifest))

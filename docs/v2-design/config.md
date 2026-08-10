@@ -176,6 +176,15 @@ capacity returns). Validation: `cap_bytes` ≥ `types.EvidenceMinCapBytes`
 Read at startup → `internal/evidence`; **not on `/v1/config`** (hand-edit +
 restart, like the SMTP block); observe via `GET /v1/evidence/status`.
 
+**`sync`** (§5 sync slice, operator rulings 2026-08-10) — consent layer 2,
+one boolean, default **false**: the archive synchronises to SM Cloud over
+the **enabled smcloud forwarder's** existing `{url, token}` credentials —
+deliberately no second account/URL/token surface. Validation refuses
+`sync: true` without that forwarder configured (absent, disabled, or
+credential-less → error finding `evidence_sync_needs_smcloud`). Disabling
+sync stops offering; it deletes and un-syncs nothing. Cadence and batch
+sizing are internal engineering constants, not configuration.
+
 **`antennas`** (§4.2 station profiles, operator rulings 2026-08-10) — the
 per-band operating declaration, a list of entries, each: `name` (required;
 the trimmed, case-sensitive lineage identity — renaming starts a new

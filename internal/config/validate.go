@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -88,6 +89,7 @@ func Validate(cfg Config) []Finding {
 	out = append(out, validateFt8Occupancy(cfg.Ft8.TX)...)
 	out = append(out, validateFt8FieldDay(cfg.Ft8.FieldDay)...)
 	out = append(out, validateEvidence(cfg.Evidence)...)
+	out = append(out, validateEvidenceSync(cfg)...)
 	// Advisory findings (non-fatal) — currently just the non-loopback-bind notice.
 	for _, w := range Warnings(cfg) {
 		out = append(out, Finding{Field: "socket_path", Code: "insecure_bind", Message: w, Warning: true})
@@ -408,6 +410,52 @@ func validateEvidence(e types.EvidenceConfig) []Finding {
 // far past any real antenna description and keeps the worst valid
 // declaration around 30 KB.
 const maxAntennaFieldRunes = 128
+
+// EvidenceSyncCredentials resolves the §5 evidence-sync destination from
+// the enabled smcloud forwarder's credentials (operator ruling 2026-08-10:
+// one boolean, no second account or token surface). cmd/smd calls it to
+// fill evidence.Config; validateEvidenceSync refuses configs where it
+// errors, so a running daemon never reaches the error path.
+func EvidenceSyncCredentials(cfg Config) (url, token string, err error) {
+	for _, fc := range cfg.Forwarders {
+		if fc.Type != "smcloud" || !fc.Enabled {
+			continue
+		}
+		var creds struct {
+			URL   string `json:"url"`
+			Token string `json:"token"`
+		}
+		if len(fc.Credentials) > 0 {
+			if jerr := json.Unmarshal(fc.Credentials, &creds); jerr != nil {
+				return "", "", fmt.Errorf("smcloud forwarder %q credentials are not valid JSON", fc.Name)
+			}
+		}
+		if creds.URL == "" || creds.Token == "" {
+			return "", "", fmt.Errorf("smcloud forwarder %q is missing url or token in its credentials", fc.Name)
+		}
+		return creds.URL, creds.Token, nil
+	}
+	return "", "", fmt.Errorf("no enabled smcloud forwarder is configured")
+}
+
+// validateEvidenceSync is SY1's validation half: evidence.sync reuses the
+// smcloud forwarder's channel, so enabling it without that forwarder
+// (absent, disabled, or credential-less) is refused rather than left to
+// fail silently at runtime. Consent-inert when sync is off.
+func validateEvidenceSync(cfg Config) []Finding {
+	if !cfg.Evidence.Sync {
+		return nil
+	}
+	if _, _, err := EvidenceSyncCredentials(cfg); err != nil {
+		return []Finding{{
+			Field: "evidence.sync",
+			Code:  "evidence_sync_needs_smcloud",
+			Message: fmt.Sprintf(
+				"evidence.sync requires the smcloud forwarder's credentials (%s); sync reuses that channel — there is no separate evidence account", err),
+		}}
+	}
+	return nil
+}
 
 // validateAntennas enforces the §4.2 declaration rules (operator rulings
 // 2026-08-10; acceptance in validate_antennas_test.go). The trimmed name is

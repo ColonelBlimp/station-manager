@@ -48,36 +48,37 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **Spot-network arc, position 2026-08-10 night.** §4.1 evidence writer +
-  the slot-tracking/tail fixes PUSHED through `cbe4a2a3`; CI GREEN
-  (`31357815032`, maintidx arc closed); codex review of cbe4a2a3 clean.
-- **§4.2 STATION PROFILES COMMITTED `fc945b6b` + field-cap fix `00115dec`
-  2026-08-10 (operator-directed; both UNPUSHED). Review loop CLOSED: the
-  fc945b6b review's 1 P1 (free-text declaration fields unbounded vs the
-  16 MiB activation headroom) fixed as the 128-rune cap on
-  name/type/feedline (length reported, value never echoed; spec + proof in
-  `validate_antennas_test.go`); the 00115dec review came back clean. Both
-  review docs triaged + deleted.**
-  Criteria-first (rulings O1–O6 +
-  the two codex-P1 rulings in the §4.2 dated amendments): per-band
-  declaration `evidence.antennas`; restart-only one-txn activation;
-  per-row `unprofiled_reason` (schema v2); status `profiles` object.
-  Codex P1 rulings: **bands are pinned facts** (`profiles.bands` column,
-  membership change mints — PR10) and **cap boundary is reserved, not
-  measured** (WAL spills mid-txn + rollback doesn't shrink, MEASURED vs
-  modernc v1.48.1: activation refuses at the WATERMARK; v1→v2 migration
-  refuses on pre-write projection ≈ db size; post-migration WAL TRUNCATE —
-  the "post-write check + rollback" pick was substituted on that evidence,
-  flagged to operator). Spec PR1–PR10 + amended O5 in
-  `internal/evidence/profiles_test.go` (+`validate_antennas_test.go`);
-  RED-first; 14 reversion proofs bit; evidence+config+ft8 race green,
-  tree -short green, lint 0 issues; spot-network §4.2 + config.md
-  same-change; codex doc 63c19670 triaged + deleted. Deferred BY NAME:
-  same-band override · Settings/app UI · my_antenna/QSO/PSK coupling ·
-  profile sync · noise floor · transmit power.
-- **NEXT: OPERATOR pushes (`fc945b6b` + `00115dec`) → CI (`gh run list
-  -L1`) → §5 sync slice** · on-air 0067 (Abandon-stops-queue flag open) ·
-  Settings defaults dropdown · max_repeats-to-session.
+- **Spot-network arc, position 2026-08-10 evening.** §4.1 + §4.2 PUSHED
+  through `1100cff3`; CI GREEN (`31368590522`); all codex reviews triaged
+  clean + deleted.
+- **§5 SYNC SLICE BUILT 2026-08-10 — in tree, UNCOMMITTED (operator
+  commits).** Criteria-first; four operator rulings taken + dated
+  amendments in §4.1/§5.1/§5.3: retention/purge SPLIT OUT as the named
+  next slice (this slice deletes nothing, preserves offered-vs-never
+  metadata); occurrences/canonicalisation DEFERRED to the page slice
+  (replay-complete rows, no identity semantics); `evidence.sync` ONE
+  boolean reusing smcloud forwarder creds (validation refuses without);
+  ratified constants 1 s · 500 rows · 10 s · 30 s→15 min · 30 s HTTP.
+  Built: shared wire contract `internal/cloud/evidencewire` (6 outcomes,
+  canonical digest v1 — lexeme-preserving); SMC `PUT /v1/evidence` +
+  Postgres migration 0005 (digest identity (tenant,kind,uuid),
+  missing-profile probe, row faults never block batch-mates); evidence
+  schema v3 (offered_at send-intent COALESCE + quarantine_reason, 1→2→3
+  chain); sync engine (live/backlog lanes, live CANCELS in-flight backlog
+  without backoff advance, newest-first selection, profile re-offer heals
+  SMC restore, invalid response consumes nothing); status `sync` object.
+  Specs: SY1–SY9 (`internal/evidence/sync_test.go`) · E1–E8 (store) ·
+  H1–H4 (server) · D1–D6 (digest) · V3 (schema). RED-first; 9 reversion
+  proofs bit (2 caught real fixture gaps: RFC3339Nano offered_at,
+  SY1 known-URL wall); race green (evidence+cloud, real Postgres), tree
+  -short green, lint 0 issues; config.md + api-endpoints.md + cloud
+  doc.go same-change.
+- **NEXT: OPERATOR commits the §5 slice (watch the auto-review; the
+  dev Postgres `sm-pg` container is RUNNING for the cloud tests) + pushes
+  → CI → retention slice (purge/acked-first drop/local-retention/
+  compaction — the named next slice)** · on-air 0067 (Abandon-stops-queue
+  flag open) · Settings defaults dropdown · max_repeats-to-session ·
+  §4.2 deferred-by-name list unchanged.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.

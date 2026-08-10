@@ -591,8 +591,10 @@ func TestPR9_AdoptionPreservesTheArchive(t *testing.T) {
 
 	db := openRaw(t, cfg.Path)
 	var ver string
-	if err := db.QueryRow(`SELECT v FROM schema_meta WHERE k = 'schema_version'`).Scan(&ver); err != nil || ver != "2" {
-		t.Fatalf("PR9: schema_version = %q (err %v), want \"2\"", ver, err)
+	// The current version, not a frozen one: adoption lands at whatever this
+	// build runs (the 1→2→3 chain itself is pinned in syncschema_test.go).
+	if err := db.QueryRow(`SELECT v FROM schema_meta WHERE k = 'schema_version'`).Scan(&ver); err != nil || ver != schemaVersion {
+		t.Fatalf("PR9: schema_version = %q (err %v), want %q", ver, err, schemaVersion)
 	}
 	if n := countRows(t, db, `SELECT COUNT(*) FROM observations WHERE uuid IN ('v1-obs-a','v1-obs-b')`); n != 2 {
 		t.Fatalf("PR9: %d of the v1 observations survive, want 2 (UUIDs preserved)", n)

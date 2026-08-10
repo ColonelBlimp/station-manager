@@ -309,6 +309,19 @@ over:
   layer — and a UUID manifest/reconciliation endpoint is the named future
   remedy if it is ever needed.
 
+**Slice-sequencing amendment (operator, 2026-08-10, scoping the §5 sync
+slice):** the purge / acked-first drop machinery — local-retention records
+and metadata compaction with it — moves OUT of the sync slice into the
+explicitly named next slice (the retention slice). The sync slice
+synchronises the four record kinds that exist locally today, deletes
+nothing (drop-new at the watermark stays the only cap behaviour), and must
+preserve the acknowledgement metadata the retention slice will need:
+per-row terminal outcomes, and the durable offered-but-unacknowledged vs
+never-offered distinction this section's three-valued loss taxonomy
+depends on — a row that has been included in a sent batch must be
+distinguishable from one never offered, even when no acknowledgement ever
+arrived. Unacknowledged deletion is not introduced anywhere.
+
 ### 4.2 Station configuration
 
 Versioned station profiles — transmit power, antenna type and height,
@@ -460,6 +473,36 @@ dropped observation is simply absent and counted, and a high-water mark
 that could neither advance across a gap nor acknowledge out-of-order
 uploads is not part of the design.
 
+**Sync-slice amendment (operator rulings, 2026-08-10):** this slice's
+envelope carries the FOUR record kinds that exist locally today —
+observations, coverage records, loss intervals, profile versions; the
+local-retention kind's wire tag is reserved and joins with the retention
+slice (§4.1 sequencing amendment). The full six-outcome vocabulary is
+pinned on the wire from day one; `tombstoned` and `suppressed` are emitted
+only once §8 deletion/opt-out machinery exists. Consent layer 2 is ONE
+boolean — `evidence.sync` — reusing the enabled smcloud forwarder's
+`{url, token, logbook}` credentials: no second account or token surface,
+and validation refuses `sync: true` without a configured smcloud
+forwarder. Live-push cadence and backlog batch sizing are internal
+engineering constants (ratified with the mechanism sketch), not operator
+configuration.
+
+**Ratified mechanism contracts (operator, 2026-08-10):** constants 1 s
+live debounce · 500-row backlog batch · 10 s backlog cadence · 30 s→15 min
+loop backoff · the existing bounded 30 s HTTP request timeout. Tightened
+clauses: SY1's wall stops **evidence** requests only — QSO traffic on its
+independent path continues; `retryable_missing_profile` re-offers the
+referenced LOCAL profile even if previously marked synced (profile-first
+is **selection priority**, not envelope order — it heals an SMC-side
+restore); the one-cycle live guarantee is the **healthy-channel**
+guarantee, a live signal cancels an in-flight backlog request, and that
+intentional cancellation does not advance backoff; `offered_at` is
+conservative durable **send-intent**, set with COALESCE before dispatch —
+it means "possibly offered, unacknowledged", since a crash can precede
+bytes leaving; digest identity is `(tenant, kind, uuid)` over versioned
+canonical immutable content; an invalid or incomplete response consumes
+no rows.
+
 ### 5.2 Identity and idempotency
 
 Every observation is identified by a **UUIDv7 minted at capture time** —
@@ -548,6 +591,18 @@ limit is stated too: suppression matches callsigns *knowable at ingest* —
 an unresolved `<...>` hash carries no callsign to check and is stored in
 its hash form; suppression is a filter on resolvable identity, not
 cryptanalysis.
+
+**Sequencing amendment (operator, 2026-08-10):** the callsign-occurrence
+index, the versioned canonicalisation function, and every
+identity-comparison surface defer to the page slice. The sync slice
+stores REPLAY-COMPLETE observations — raw payload, the decode-time
+interpretation as submitted, timestamps, and source identity — and
+exposes no provisional callsign-identity semantics on the wire or in the
+store. The page slice introduces canonicalisation v1 and atomically
+builds/backfills occurrence rows by replaying stored observations.
+Suppression-at-ingest likewise waits for the identity function it filters
+on: the one-transaction ingest shape stands, and gains its suppression
+check with §8.
 
 ### 5.4 Configuration sync
 

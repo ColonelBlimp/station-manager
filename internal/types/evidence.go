@@ -15,8 +15,15 @@ package types
 // dropping itself) and resumes if capacity returns. 0 = the default
 // 524,288,000 bytes (500 MiB exactly — an exact byte count to avoid unit
 // ambiguity).
+// Sync is the SECOND consent layer (§5 sync slice, operator ruling
+// 2026-08-10): one boolean, default off. When enabled, the evidence archive
+// synchronises to SM Cloud over the enabled smcloud forwarder's existing
+// credentials — there is deliberately no second account, URL, or token
+// surface, and validation refuses sync without that forwarder configured.
+// Disabling sync stops offering; it deletes and un-syncs nothing.
 type EvidenceConfig struct {
 	Capture  bool          `json:"capture"`
+	Sync     bool          `json:"sync,omitempty"`
 	CapBytes int64         `json:"cap_bytes,omitempty"`
 	Antennas []AntennaDecl `json:"antennas,omitempty"`
 }
