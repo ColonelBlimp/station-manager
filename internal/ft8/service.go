@@ -88,10 +88,6 @@ type Service struct {
 	captureCancel context.CancelFunc // cancels the current capture run
 	lingerTimer   *time.Timer        // pending release after the last unsubscribe
 	wg            sync.WaitGroup     // scheduler + decoder of the current session
-	// curSched is the live session's scheduler, retained so the release path
-	// can read its trailing undelivered run after the drain (review 68514620
-	// P1). Set/cleared under s.mu at start/release.
-	curSched *Scheduler
 
 	// catLive gates capture acquisition on the rig/CAT being live: no live rig →
 	// no microphone, even with the FT8 view open (the boot-time mic-grab bug —
@@ -601,9 +597,6 @@ func (s *Service) startCaptureLocked() {
 	// subsystem is marked not-capturing + a terminal error logged, so the operator
 	// isn't left with a live-looking but dead capture (review 2026-06-19 M2).
 	sch := NewScheduler(samples, s.log)
-	// Retained for the release path's trailing-undelivered read (under s.mu —
-	// startCaptureLocked holds it).
-	s.curSched = sch
 	// Dead-stream watchdog (deadsource.go): a desktop audio reshuffle can leave
 	// the capture stream dangling with no error anywhere — the watchdog turns
 	// that into an automatic release + reacquire.
@@ -619,8 +612,7 @@ func (s *Service) startCaptureLocked() {
 		safego.Go(runCtx, "ft8.dialguard", s.onPanic, func() { s.onDialMoved(from, to) }, false)
 	})
 	safego.GoTracked(runCtx, "ft8.scheduler", s.onPanic, func() {
-		defer s.onCaptureLoopExit(runCtx, gen, "ft8.scheduler")
-		_ = sch.Run(runCtx)
+		s.runSchedulerSession(runCtx, gen, sch)
 	}, false, &s.wg)
 	safego.GoTracked(runCtx, "ft8.decoder", s.onPanic, func() {
 		defer s.onCaptureLoopExit(runCtx, gen, "ft8.decoder")
@@ -631,6 +623,30 @@ func (s *Service) startCaptureLocked() {
 		Str("device", s.cfg.Device).
 		Bool("osd", s.osdEnabled()).
 		Msg("ft8: subscriber present; capture started, decoding live slots")
+}
+
+// runSchedulerSession is the scheduler goroutine's session body: run the
+// scheduler, then emit its trailing undelivered run as capture_dropped
+// evidence. The emission lives HERE — on the goroutine whose fields they
+// are, the moment Run returns — because it is race-free by construction and
+// covers EVERY exit path with one call site: normal release, Stop, a dead
+// source, or the sibling loop dying. Homing it on the release path missed
+// every abnormal exit (onCaptureLoopExit sets capturing=false, so the later
+// release early-returned and the tail died with the session — review
+// c76818a8 P1). The exit handler is deferred, so it runs strictly AFTER the
+// emission.
+func (s *Service) runSchedulerSession(runCtx context.Context, gen uint64, sch *Scheduler) {
+	defer s.onCaptureLoopExit(runCtx, gen, "ft8.scheduler")
+	_ = sch.Run(runCtx)
+	// No dial context on the emitted rows: the slots were never observed.
+	if start, n := sch.UndeliveredTail(); n > 0 && s.evidenceSink != nil {
+		for i := 0; i < n; i++ {
+			s.evidenceSink(EvidenceSlot{
+				Slot:    SlotRefFromTime(start.Add(time.Duration(i) * SlotDuration)),
+				Outcome: EvidenceCaptureDropped,
+			})
+		}
+	}
 }
 
 // onDeadCaptureSource handles the scheduler's dead-source verdict (deadsource.go):
@@ -751,24 +767,6 @@ func (s *Service) releaseCaptureLocked() {
 	s.mu.Unlock()
 	s.wg.Wait()
 	s.mu.Lock()
-
-	// The session's trailing undelivered run — drops or lateness skips with
-	// NO later delivery — is invisible to the decode loop forever, so its
-	// capture_dropped coverage is emitted here, after the drain proved both
-	// session goroutines exited (the happens-before for the scheduler's
-	// plain tail fields; review 68514620 P1). No dial context: the slots
-	// were never observed.
-	if s.curSched != nil {
-		if start, n := s.curSched.UndeliveredTail(); n > 0 && s.evidenceSink != nil {
-			for i := 0; i < n; i++ {
-				s.evidenceSink(EvidenceSlot{
-					Slot:    SlotRefFromTime(start.Add(time.Duration(i) * SlotDuration)),
-					Outcome: EvidenceCaptureDropped,
-				})
-			}
-		}
-		s.curSched = nil
-	}
 
 	s.setCapturingLocked(false)
 	s.releasing = false

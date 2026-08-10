@@ -69,20 +69,20 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   default OFF per §8 consent) + `GET /v1/evidence/status` + smd wiring.
   Spec EV1–EV9 in `internal/evidence/evidence_test.go`; 5 probes bit; all
   touched packages + race + tree -short green; docs updated same-change.
-- **CI IS RED on the pushed evidence batch (`31354256513`): golangci-lint
-  maintidx — decodeLoop hit MI 18 (< 20) after the evidence emission grew
-  it. FIXED IN TREE: the two emission blocks extracted to
-  `emitOmittedEvidence` / `emitSlotEvidence` (structure, not an exemption);
-  project-config lint now 0 issues. COMMIT + PUSH PROMPTLY — main's gate
-  stays red until this lands.** Also in the same tree: the evidence
-  commit's review P1+P2 FIXED red-first (review docs triaged + deleted):
-  P1 session-BOUNDARY omissions — the scheduler tracks its consecutive
-  undelivered run (drops + lateness skips), stamps `Slot.OmittedBefore`
-  (read for the FIRST delivered slot only), and the release path emits the
-  trailing run after the drain; P2 omitted-slot rows claim NO dial context.
-  AC8 amended; 3 probes bit; ft8+evidence+race green. Flake note: the FT8
-  decode-log test failed transiently once here AND once in the clean-room
-  review's run — twice dismissed is a finding; watch it.
+- **CI IS STILL RED on main (maintidx, run `31354256513`) — the fix
+  (emitOmittedEvidence/emitSlotEvidence extraction, lint 0 issues) is
+  committed in `c76818a8` but UNPUSHED (ahead 1 + the new fixes in tree).
+  PUSH PROMPTLY.** c76818a8's own review found two REAL P1s in the boundary
+  fix, both FIXED red-first in tree (review doc triaged + deleted): the
+  trailing-tail emission is RE-HOMED onto the scheduler goroutine itself
+  (emits the moment Run returns — race-free, covers release/Stop/dead-
+  source/sibling-death; the release-path home missed every abnormal exit
+  because capturing=false made it early-return; curSched field deleted);
+  and a lateness STALL now counts every boundary it consumed
+  (noteLateBoundaries — one per firing under-reported a 32 s stall by 2
+  slots). AC8 amended again; 2 probes bit; lint 0 issues, ft8+race green.
+  Flake watch: the FT8 decode-log test failed transiently once here and
+  once in a clean-room review run — twice dismissed is a finding.
 - **NEXT: commit → push → watch CI green → §4.2 profiles slice (before
   sync).** Then: on-air 0067 (Abandon-stops-queue flag still open) ·
   Settings defaults dropdown · max_repeats-to-session. Dogfood

@@ -254,6 +254,24 @@ func (s *Scheduler) UndeliveredTail() (time.Time, int) {
 	return s.undeliveredStart, s.undeliveredN
 }
 
+// noteLateBoundaries joins every physical slot a lateness stall consumed to
+// the undelivered run — a single stall can carry the goroutine past SEVERAL
+// boundaries (the timer is reset only after servicing), and Run then resyncs
+// to nextSlotBoundary(now), so each boundary in [target, now] is a slot that
+// will never emit: counting one per FIRING under-reported the rest (review
+// c76818a8 P1). Boundary b's lost slot starts at b−SlotDuration. Only once
+// the ring is full: a cold-start stall lost no session audio (emitSlot's own
+// early return mirrors this — and a ring never shrinks once filled, so one
+// check covers the whole stall).
+func (s *Scheduler) noteLateBoundaries(ring *sampleRing, target, now time.Time) {
+	if ring.Filled() < int64(ring.Cap()) {
+		return
+	}
+	for b := target; !b.After(now); b = b.Add(SlotDuration) {
+		s.noteUndelivered(b.Add(-SlotDuration))
+	}
+}
+
 // noteUndelivered extends the consecutive undelivered run with the physical
 // slot starting at start.
 func (s *Scheduler) noteUndelivered(start time.Time) {
@@ -314,13 +332,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			// StartUTC/parity (which the sequencer keys rung timing off). Skip and
 			// resync at the next future boundary (review follow-up M2).
 			if slotTooLate(now, target) {
-				// A lateness skip is an undelivered PHYSICAL slot exactly like
-				// a channel-full drop, and joins the same run — but only once
-				// the ring is full: a cold-start boundary lost no session
-				// audio (emitSlot's own early return mirrors this).
-				if ring.Filled() >= int64(ring.Cap()) {
-					s.noteUndelivered(target.Add(-SlotDuration))
-				}
+				s.noteLateBoundaries(ring, target, now)
 				s.log.WarnWith().
 					Str("missed_target", target.Format(time.RFC3339)).
 					Str("now", now.Format(time.RFC3339)).

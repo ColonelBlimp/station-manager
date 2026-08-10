@@ -67,12 +67,19 @@ package ft8
         no predecessor, and after the last there is no successor. The
         scheduler therefore tracks its consecutive undelivered run (channel-
         full drops + lateness skips; cold-start boundaries excluded — no
-        session audio existed to lose), stamps it on each delivered slot
-        (Slot.OmittedBefore, read by the loop ONLY for the first slot), and
-        the release path emits the trailing run after the drain. And an
-        omitted slot's evidence row claims NO dial context (untracked,
+        session audio existed to lose) and stamps it on each delivered slot
+        (Slot.OmittedBefore, read by the loop ONLY for the first slot). And
+        an omitted slot's evidence row claims NO dial context (untracked,
         dial 0) — it was never observed, so inheriting a neighbour's
         tracking state would be an unmeasured assertion.
+        AMENDED (review c76818a8 P1×2): the trailing run is emitted by the
+        SCHEDULER GOROUTINE itself the moment Run returns — race-free on its
+        own fields and covering every exit path (release, Stop, dead source,
+        sibling death); homing it on the release path missed every abnormal
+        exit, whose capturing=false made the release early-return. And a
+        lateness STALL consumes every boundary in [target, now], not one per
+        firing — each joins the run (a 32 s stall past a 12:00:15 target
+        loses the 12:00:00, :15 and :30 slots).
 
    TESTABILITY HONESTY (AC6): the parity-ALIGNMENT consequence is observable
    only through A7-assisted recovery of a signal too weak for the normal
@@ -92,6 +99,7 @@ package ft8
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -902,13 +910,18 @@ func TestDecodeLoop_FirstSlotOmittedBefore(t *testing.T) {
 	}
 }
 
-// TestReleaseCapture_EmitsUndeliveredTail is the teardown half of review
-// 68514620 P1: the trailing undelivered run — drops or skips with NO later
-// delivery — is invisible to the loop forever, so the release path (after
-// the drain proves both session goroutines exited) reads the scheduler's
-// tail and emits its capture_dropped coverage. Without this, an incomplete
-// capture is indistinguishable from one that stopped cleanly.
-func TestReleaseCapture_EmitsUndeliveredTail(t *testing.T) {
+// TestSchedulerSession_EmitsTailOnExit is the teardown half of review
+// 68514620 P1, re-homed by review c76818a8 P1b: the trailing undelivered
+// run — drops or skips with NO later delivery — is invisible to the loop
+// forever, and homing its emission on the RELEASE path missed every
+// abnormal exit (dead source, sibling death set capturing=false and the
+// release early-returned; the tail died with the session). The scheduler
+// GOROUTINE therefore emits its own tail the moment Run returns — its own
+// fields, quiescent, race-free — which covers every exit path with one
+// call site. This test drives the actual production session body
+// (runSchedulerSession) with a pre-cancelled context: Run returns at once
+// and the preloaded tail must reach the sink.
+func TestSchedulerSession_EmitsTailOnExit(t *testing.T) {
 	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), newFakeSource())
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -921,11 +934,9 @@ func TestReleaseCapture_EmitsUndeliveredTail(t *testing.T) {
 	sch.undeliveredStart = tail
 	sch.undeliveredN = 2
 
-	s.mu.Lock()
-	s.capturing = true
-	s.curSched = sch
-	s.releaseCaptureLocked()
-	s.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.runSchedulerSession(ctx, 0, sch)
 
 	evs := rec.all()
 	if len(evs) != 2 {
@@ -936,6 +947,36 @@ func TestReleaseCapture_EmitsUndeliveredTail(t *testing.T) {
 		if e.Outcome != EvidenceCaptureDropped || e.Slot.StartUTC != wantStart || e.DialTracked {
 			t.Errorf("evidence[%d] = %+v, want capture_dropped@%s untracked", i, e, wantStart)
 		}
+	}
+}
+
+// TestScheduler_LateStallCountsEveryBoundary is review c76818a8 P1a: a
+// single stall can carry the goroutine past SEVERAL boundaries — servicing
+// a 12:00:15 target at 12:00:47 loses the slots starting 12:00:00,
+// 12:00:15 AND 12:00:30 — and counting one omission per late FIRING
+// under-reports the other two. Every boundary the stall consumed joins the
+// undelivered run. Mid-session the gap inference would mask this; at
+// session boundaries nothing would.
+func TestScheduler_LateStallCountsEveryBoundary(t *testing.T) {
+	sch := NewScheduler(nil, logging.Noop())
+	ring := newSampleRing(SlotSamples)
+	ring.Append(make([]int16, SlotSamples))
+
+	target := time.Date(2026, 8, 10, 12, 0, 15, 0, time.UTC)
+	sch.noteLateBoundaries(ring, target, target.Add(32*time.Second)) // serviced at 12:00:47
+
+	start, n := sch.UndeliveredTail()
+	if n != 3 || !start.Equal(target.Add(-15*time.Second)) {
+		t.Fatalf("tail = (%v, %d), want (%v, 3): slots 12:00:00, :15 and :30 all elapsed",
+			start, n, target.Add(-15*time.Second))
+	}
+
+	// A cold-start stall (ring never filled) is not loss — no complete slot
+	// of session audio existed.
+	cold := NewScheduler(nil, logging.Noop())
+	cold.noteLateBoundaries(newSampleRing(SlotSamples), target, target.Add(32*time.Second))
+	if _, n := cold.UndeliveredTail(); n != 0 {
+		t.Fatalf("cold-start stall counted %d, want 0", n)
 	}
 }
 
