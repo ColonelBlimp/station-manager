@@ -69,9 +69,23 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   default OFF per §8 consent) + `GET /v1/evidence/status` + smd wiring.
   Spec EV1–EV9 in `internal/evidence/evidence_test.go`; 5 probes bit; all
   touched packages + race + tree -short green; docs updated same-change.
-- **NEXT: commit the evidence writer → push → watch CI → §4.2 profiles
-  slice (before sync).** Then: on-air 0067 (Abandon-stops-queue flag still
-  open) · Settings defaults dropdown · max_repeats-to-session. Dogfood
+- **CI IS RED on the pushed evidence batch (`31354256513`): golangci-lint
+  maintidx — decodeLoop hit MI 18 (< 20) after the evidence emission grew
+  it. FIXED IN TREE: the two emission blocks extracted to
+  `emitOmittedEvidence` / `emitSlotEvidence` (structure, not an exemption);
+  project-config lint now 0 issues. COMMIT + PUSH PROMPTLY — main's gate
+  stays red until this lands.** Also in the same tree: the evidence
+  commit's review P1+P2 FIXED red-first (review docs triaged + deleted):
+  P1 session-BOUNDARY omissions — the scheduler tracks its consecutive
+  undelivered run (drops + lateness skips), stamps `Slot.OmittedBefore`
+  (read for the FIRST delivered slot only), and the release path emits the
+  trailing run after the drain; P2 omitted-slot rows claim NO dial context.
+  AC8 amended; 3 probes bit; ft8+evidence+race green. Flake note: the FT8
+  decode-log test failed transiently once here AND once in the clean-room
+  review's run — twice dismissed is a finding; watch it.
+- **NEXT: commit → push → watch CI green → §4.2 profiles slice (before
+  sync).** Then: on-air 0067 (Abandon-stops-queue flag still open) ·
+  Settings defaults dropdown · max_repeats-to-session. Dogfood
   inbox: 80m SM6MUY bug DIAGNOSED (stale-fade vs worked-mute visual
   collision — full timeline + remedy options in the inbox item; operator to
   pick a remedy, nothing built). CI flake watch: bridge handler test (harden

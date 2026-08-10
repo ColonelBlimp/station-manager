@@ -62,6 +62,17 @@ package ft8
         between consecutive delivered slots resets the decoder exactly as a
         delivered moved slot would; the gap advance runs only when the dial
         held.
+        AMENDED (review 68514620 P1+P2): gap inference alone cannot see
+        omissions at SESSION BOUNDARIES — before the first delivery there is
+        no predecessor, and after the last there is no successor. The
+        scheduler therefore tracks its consecutive undelivered run (channel-
+        full drops + lateness skips; cold-start boundaries excluded — no
+        session audio existed to lose), stamps it on each delivered slot
+        (Slot.OmittedBefore, read by the loop ONLY for the first slot), and
+        the release path emits the trailing run after the drain. And an
+        omitted slot's evidence row claims NO dial context (untracked,
+        dial 0) — it was never observed, so inheriting a neighbour's
+        tracking state would be an unmeasured assertion.
 
    TESTABILITY HONESTY (AC6): the parity-ALIGNMENT consequence is observable
    only through A7-assisted recovery of a signal too weak for the normal
@@ -815,6 +826,116 @@ func TestDecodeLoop_EvidenceOutcomesPerPhysicalSlot(t *testing.T) {
 		evs[4].Slot.StartUTC != start.Add(60*time.Second).UTC().Format(time.RFC3339) {
 		t.Errorf("capture_dropped slots = %s / %s, want the two omitted boundaries",
 			evs[3].Slot.StartUTC, evs[4].Slot.StartUTC)
+	}
+	// An omitted slot was never OBSERVED, so its dial context claims nothing:
+	// inheriting the next slot's DialTracked would assert a tracking state for
+	// an interval nobody measured (review 68514620 P2).
+	if evs[3].DialTracked || evs[4].DialTracked || evs[3].DialMHz != 0 || evs[4].DialMHz != 0 {
+		t.Errorf("capture_dropped rows must claim no dial context, got %+v / %+v", evs[3], evs[4])
+	}
+}
+
+// TestScheduler_TracksUndeliveredRun is the scheduler half of review 68514620
+// P1: a slot the scheduler fails to deliver (channel full) joins a
+// consecutive undelivered run; a successful emit stamps that run onto the
+// delivered slot as OmittedBefore and resets it, so the tail left when a
+// session ends is exactly the run no later slot could ever report.
+func TestScheduler_TracksUndeliveredRun(t *testing.T) {
+	sch := NewScheduler(nil, logging.Noop())
+	ring := newSampleRing(SlotSamples)
+	ring.Append(make([]int16, SlotSamples)) // full ring: emitSlot won't cold-start skip
+
+	// Occupy the (capacity 1) channel so emits drop.
+	sch.out <- Slot{}
+
+	t1 := time.Date(2026, 8, 10, 12, 0, 15, 0, time.UTC) // boundary; slot start = -15 s
+	sch.emitSlot(ring, t1, t1)
+	sch.emitSlot(ring, t1.Add(15*time.Second), t1.Add(15*time.Second))
+
+	start, n := sch.UndeliveredTail()
+	if n != 2 || !start.Equal(t1.Add(-15*time.Second)) {
+		t.Fatalf("tail = (%v, %d), want (%v, 2)", start, n, t1.Add(-15*time.Second))
+	}
+
+	<-sch.out // free the channel
+	sch.emitSlot(ring, t1.Add(30*time.Second), t1.Add(30*time.Second))
+	delivered := <-sch.out
+	if delivered.OmittedBefore != 2 {
+		t.Fatalf("delivered OmittedBefore = %d, want 2 (the run before it)", delivered.OmittedBefore)
+	}
+	if _, n := sch.UndeliveredTail(); n != 0 {
+		t.Fatalf("tail after delivery = %d, want 0 (run reset)", n)
+	}
+}
+
+// TestDecodeLoop_FirstSlotOmittedBefore covers the before-first-delivery hole
+// (review 68514620 P1): slots dropped before the session's FIRST delivery
+// have no predecessor for the gap inference, so the loop reads the delivered
+// slot's OmittedBefore stamp instead — coverage rows only, no decoder
+// advance (the decoder is fresh at first delivery; there is no parity state
+// to keep aligned). Mid-session the stamp is deliberately ignored: the gap
+// inference is the one pinned mechanism there, and both count the same run.
+func TestDecodeLoop_FirstSlotOmittedBefore(t *testing.T) {
+	s, _, _, _ := newSplitHarness(t)
+	rec := &evidenceRecorder{}
+	s.SetEvidenceSink(rec.record)
+
+	start := recentEvenSlotStart()
+	ch := make(chan Slot, 1)
+	ch <- Slot{StartUTC: start, Samples: make([]int16, 1000), OmittedBefore: 2}
+	close(ch)
+	s.decodeLoop(ch)
+
+	evs := rec.all()
+	if len(evs) != 3 {
+		got := make([]string, len(evs))
+		for i, e := range evs {
+			got[i] = e.Outcome + "@" + e.Slot.StartUTC
+		}
+		t.Fatalf("evidence slots = %v, want 2× capture_dropped then the delivered slot", got)
+	}
+	for i := 0; i < 2; i++ {
+		wantStart := start.Add(time.Duration(i-2) * 15 * time.Second).UTC().Format(time.RFC3339)
+		if evs[i].Outcome != EvidenceCaptureDropped || evs[i].Slot.StartUTC != wantStart {
+			t.Errorf("evidence[%d] = %s@%s, want capture_dropped@%s", i, evs[i].Outcome, evs[i].Slot.StartUTC, wantStart)
+		}
+	}
+}
+
+// TestReleaseCapture_EmitsUndeliveredTail is the teardown half of review
+// 68514620 P1: the trailing undelivered run — drops or skips with NO later
+// delivery — is invisible to the loop forever, so the release path (after
+// the drain proves both session goroutines exited) reads the scheduler's
+// tail and emits its capture_dropped coverage. Without this, an incomplete
+// capture is indistinguishable from one that stopped cleanly.
+func TestReleaseCapture_EmitsUndeliveredTail(t *testing.T) {
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), newFakeSource())
+	if err := s.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rec := &evidenceRecorder{}
+	s.SetEvidenceSink(rec.record)
+
+	tail := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	sch := NewScheduler(nil, logging.Noop())
+	sch.undeliveredStart = tail
+	sch.undeliveredN = 2
+
+	s.mu.Lock()
+	s.capturing = true
+	s.curSched = sch
+	s.releaseCaptureLocked()
+	s.mu.Unlock()
+
+	evs := rec.all()
+	if len(evs) != 2 {
+		t.Fatalf("evidence slots = %d, want the 2 trailing undelivered", len(evs))
+	}
+	for i, e := range evs {
+		wantStart := tail.Add(time.Duration(i) * 15 * time.Second).UTC().Format(time.RFC3339)
+		if e.Outcome != EvidenceCaptureDropped || e.Slot.StartUTC != wantStart || e.DialTracked {
+			t.Errorf("evidence[%d] = %+v, want capture_dropped@%s untracked", i, e, wantStart)
+		}
 	}
 }
 

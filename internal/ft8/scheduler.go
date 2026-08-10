@@ -51,6 +51,16 @@ type Slot struct {
 	// decode worker can hand it straight to DecodeSlot.
 	Samples []int16
 
+	// OmittedBefore counts the physical slots the scheduler failed to
+	// deliver immediately before this one — channel-full drops plus
+	// late-boundary skips since the last successful emit. Mid-session the
+	// consumer already infers omissions from StartUTC gaps (AC8), so this
+	// matters for the FIRST delivered slot of a session, which has no
+	// predecessor to infer from (review 68514620 P1). Cold-start boundaries
+	// (ring not yet full) are not omissions — no complete slot of session
+	// audio existed to lose.
+	OmittedBefore int
+
 	// DialMHz is the rig dial frequency this slot's audio was captured on, or
 	// 0 when the slot could not be placed on one (no CAT, the frequency
 	// unknown, or the dial moved during the window). Occupancy is band-specific
@@ -131,6 +141,17 @@ type Scheduler struct {
 	slotDialMoved   bool // the dial moved somewhere inside the slot being captured
 
 	dropped atomic.Int64
+
+	// undeliveredStart/undeliveredN track the CONSECUTIVE run of physical
+	// slots not delivered (dropped on a full channel, or skipped past the
+	// lateness budget) since the last successful emit. Written only from the
+	// Run goroutine; the Service reads the trailing run via UndeliveredTail
+	// AFTER Run returns (its wg.Wait supplies the happens-before), so plain
+	// fields suffice. A successful emit stamps the run onto the delivered
+	// slot (Slot.OmittedBefore) and resets it — what remains at Run exit is
+	// exactly the tail no later slot could ever report (review 68514620 P1).
+	undeliveredStart time.Time
+	undeliveredN     int
 }
 
 // NewScheduler constructs a Scheduler reading from source. nil logger →
@@ -225,6 +246,23 @@ func (s *Scheduler) observeDial() {
 	}
 }
 
+// UndeliveredTail returns the consecutive run of physical slots not
+// delivered since the last successful emit — the session's trailing loss.
+// Call only after Run has returned (the Service's drain provides the
+// happens-before); the release path turns it into capture_dropped coverage.
+func (s *Scheduler) UndeliveredTail() (time.Time, int) {
+	return s.undeliveredStart, s.undeliveredN
+}
+
+// noteUndelivered extends the consecutive undelivered run with the physical
+// slot starting at start.
+func (s *Scheduler) noteUndelivered(start time.Time) {
+	if s.undeliveredN == 0 {
+		s.undeliveredStart = start
+	}
+	s.undeliveredN++
+}
+
 // Dropped returns the number of slots that were discarded because the
 // Slots channel was full when the boundary fired. A non-zero value means
 // the decode consumer is too slow to keep up with the slot cadence; the
@@ -276,6 +314,13 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			// StartUTC/parity (which the sequencer keys rung timing off). Skip and
 			// resync at the next future boundary (review follow-up M2).
 			if slotTooLate(now, target) {
+				// A lateness skip is an undelivered PHYSICAL slot exactly like
+				// a channel-full drop, and joins the same run — but only once
+				// the ring is full: a cold-start boundary lost no session
+				// audio (emitSlot's own early return mirrors this).
+				if ring.Filled() >= int64(ring.Cap()) {
+					s.noteUndelivered(target.Add(-SlotDuration))
+				}
 				s.log.WarnWith().
 					Str("missed_target", target.Format(time.RFC3339)).
 					Str("now", now.Format(time.RFC3339)).
@@ -332,10 +377,16 @@ func (s *Scheduler) emitSlot(ring *sampleRing, target, now time.Time) {
 	if !s.slotDialMoved && s.lastDialOK {
 		slot.DialMHz = s.lastDial
 	}
+	// Stamp the undelivered run BEFORE the send: a delivered slot reports the
+	// omissions immediately before it (Slot.OmittedBefore), and a successful
+	// send resets the run — leaving only a trailing tail for UndeliveredTail.
+	slot.OmittedBefore = s.undeliveredN
 	select {
 	case s.out <- slot:
+		s.undeliveredN = 0
 	default:
 		s.dropped.Add(1)
+		s.noteUndelivered(slot.StartUTC)
 		s.log.WarnWith().
 			Int64("offset_ms", slot.OffsetMs).
 			Int64("total_dropped", s.dropped.Load()).

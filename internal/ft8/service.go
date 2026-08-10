@@ -88,6 +88,10 @@ type Service struct {
 	captureCancel context.CancelFunc // cancels the current capture run
 	lingerTimer   *time.Timer        // pending release after the last unsubscribe
 	wg            sync.WaitGroup     // scheduler + decoder of the current session
+	// curSched is the live session's scheduler, retained so the release path
+	// can read its trailing undelivered run after the drain (review 68514620
+	// P1). Set/cleared under s.mu at start/release.
+	curSched *Scheduler
 
 	// catLive gates capture acquisition on the rig/CAT being live: no live rig →
 	// no microphone, even with the FT8 view open (the boot-time mic-grab bug —
@@ -597,6 +601,9 @@ func (s *Service) startCaptureLocked() {
 	// subsystem is marked not-capturing + a terminal error logged, so the operator
 	// isn't left with a live-looking but dead capture (review 2026-06-19 M2).
 	sch := NewScheduler(samples, s.log)
+	// Retained for the release path's trailing-undelivered read (under s.mu —
+	// startCaptureLocked holds it).
+	s.curSched = sch
 	// Dead-stream watchdog (deadsource.go): a desktop audio reshuffle can leave
 	// the capture stream dangling with no error anywhere — the watchdog turns
 	// that into an automatic release + reacquire.
@@ -744,6 +751,24 @@ func (s *Service) releaseCaptureLocked() {
 	s.mu.Unlock()
 	s.wg.Wait()
 	s.mu.Lock()
+
+	// The session's trailing undelivered run — drops or lateness skips with
+	// NO later delivery — is invisible to the decode loop forever, so its
+	// capture_dropped coverage is emitted here, after the drain proved both
+	// session goroutines exited (the happens-before for the scheduler's
+	// plain tail fields; review 68514620 P1). No dial context: the slots
+	// were never observed.
+	if s.curSched != nil {
+		if start, n := s.curSched.UndeliveredTail(); n > 0 && s.evidenceSink != nil {
+			for i := 0; i < n; i++ {
+				s.evidenceSink(EvidenceSlot{
+					Slot:    SlotRefFromTime(start.Add(time.Duration(i) * SlotDuration)),
+					Outcome: EvidenceCaptureDropped,
+				})
+			}
+		}
+		s.curSched = nil
+	}
 
 	s.setCapturingLocked(false)
 	s.releasing = false
@@ -924,22 +949,7 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// missing boundary, whatever the decoder does about them — coverage is
 		// about the archive's completeness, not decoder state (§4.1: an empty
 		// stretch must be interpretable).
-		var missed int
-		if !prevSlotStart.IsZero() {
-			missed = int(slot.StartUTC.Sub(prevSlotStart).Round(SlotDuration)/SlotDuration) - 1
-			if missed < 0 {
-				missed = 0
-			}
-			if s.evidenceSink != nil {
-				for i := 1; i <= missed; i++ {
-					s.evidenceSink(EvidenceSlot{
-						Slot:        SlotRefFromTime(prevSlotStart.Add(time.Duration(i) * SlotDuration)),
-						DialTracked: slot.DialTracked,
-						Outcome:     EvidenceCaptureDropped,
-					})
-				}
-			}
-		}
+		missed := s.emitOmittedEvidence(prevSlotStart, slot)
 		contextChanged := dialMoved ||
 			(!prevSlotStart.IsZero() && slot.DialMHz != prevSlotDial)
 		if contextChanged {
@@ -982,28 +992,8 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// THE BRANCH POINT (design §4 prerequisite 2): `rich` is the complete
 		// go-ft8 result — every parse status, own-TX included. The evidence
 		// sink taps it HERE, upstream of every curated filter, with the slot's
-		// true coverage outcome — decoder_error is a REJECTED decode, distinct
-		// from a silent band. Everything below is the curated branch.
-		if s.evidenceSink != nil {
-			outcome := EvidenceNoDecode
-			switch {
-			case dialMoved:
-				outcome = EvidenceDialChanged
-			case txSlot:
-				outcome = EvidenceTx
-			case !decodeOK:
-				outcome = EvidenceDecoderError
-			case len(rich) > 0:
-				outcome = EvidenceDecoded
-			}
-			s.evidenceSink(EvidenceSlot{
-				Slot:        ref,
-				DialMHz:     slot.DialMHz,
-				DialTracked: slot.DialTracked,
-				Outcome:     outcome,
-				Decodes:     rich,
-			})
-		}
+		// true coverage outcome. Everything below is the curated branch.
+		s.emitSlotEvidence(ref, slot, dialMoved, txSlot, decodeOK, rich)
 		//
 		// curateDecodes = parse-status filter + own-transmission drop. The
 		// callsign is the ACTIVE session's pinned call (ADR 0055, pin-at-arm) —
@@ -1123,6 +1113,72 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 			Int("suggested", len(rep.Suggested)).
 			Msg("ft8 slot processed")
 	}
+}
+
+// emitOmittedEvidence tells the coverage story of every physical slot OMITTED
+// before the delivered one, and returns how many were omitted mid-session
+// (the count the decoder-state advance consumes). Two witnesses, one per
+// boundary case: mid-session the StartUTC gap against the previous delivered
+// slot (AC8 — the pinned mechanism); before the session's FIRST delivery
+// there is no predecessor, so the scheduler's Slot.OmittedBefore stamp is the
+// only witness (review 68514620 P1) — coverage only, and the stamp is
+// deliberately IGNORED once a predecessor exists, because both count the same
+// run and two mechanisms would double-report. An omitted slot was never
+// OBSERVED, so its row claims no dial context at all — inheriting the next
+// slot's DialTracked would assert a tracking state for an interval nobody
+// measured (review 68514620 P2; dial 0 is the established unknown sentinel).
+func (s *Service) emitOmittedEvidence(prevSlotStart time.Time, slot Slot) (missed int) {
+	if prevSlotStart.IsZero() {
+		if s.evidenceSink != nil {
+			for i := slot.OmittedBefore; i >= 1; i-- {
+				s.evidenceSink(EvidenceSlot{
+					Slot:    SlotRefFromTime(slot.StartUTC.Add(time.Duration(-i) * SlotDuration)),
+					Outcome: EvidenceCaptureDropped,
+				})
+			}
+		}
+		return 0
+	}
+	missed = int(slot.StartUTC.Sub(prevSlotStart).Round(SlotDuration)/SlotDuration) - 1
+	if missed < 0 {
+		missed = 0
+	}
+	if s.evidenceSink != nil {
+		for i := 1; i <= missed; i++ {
+			s.evidenceSink(EvidenceSlot{
+				Slot:    SlotRefFromTime(prevSlotStart.Add(time.Duration(i) * SlotDuration)),
+				Outcome: EvidenceCaptureDropped,
+			})
+		}
+	}
+	return missed
+}
+
+// emitSlotEvidence hands the delivered slot's rich result to the evidence
+// sink with its true coverage outcome — decoder_error is a REJECTED decode,
+// distinct from a silent band (no_decode).
+func (s *Service) emitSlotEvidence(ref SlotRef, slot Slot, dialMoved, txSlot, decodeOK bool, rich []goft8.DecodedMessage) {
+	if s.evidenceSink == nil {
+		return
+	}
+	outcome := EvidenceNoDecode
+	switch {
+	case dialMoved:
+		outcome = EvidenceDialChanged
+	case txSlot:
+		outcome = EvidenceTx
+	case !decodeOK:
+		outcome = EvidenceDecoderError
+	case len(rich) > 0:
+		outcome = EvidenceDecoded
+	}
+	s.evidenceSink(EvidenceSlot{
+		Slot:        ref,
+		DialMHz:     slot.DialMHz,
+		DialTracked: slot.DialTracked,
+		Outcome:     outcome,
+		Decodes:     rich,
+	})
 }
 
 // LatestOccupancy returns the most recent per-slot occupancy report, or nil if
