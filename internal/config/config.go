@@ -203,6 +203,13 @@ type Config struct {
 	// means the system default capture device.
 	Ft8 types.Ft8Config `json:"ft8"`
 
+	// Evidence configures local FT8 evidence capture (spot-network design
+	// §4.1) — a DEFAULT-OFF consent layer (§8): no evidence.db exists until
+	// the operator opts in, and disabling capture later deletes nothing.
+	// The db path is not configurable this slice: evidence.db lives beside
+	// the working directory's other state. See types.EvidenceConfig.
+	Evidence types.EvidenceConfig `json:"evidence"`
+
 	// Rigs is the rig catalogue (ADR 0028) — the operator's installed
 	// rigs, each a reused types.RigConfig (+audio) bundling the CAT driver
 	// (Model), serial Port, and audio device. DefaultRigID selects the
@@ -991,6 +998,12 @@ func applyDefaults(cfg *Config, baseDir string) {
 
 	if cfg.DataDir == "" {
 		cfg.DataDir = baseDir
+	}
+
+	// Evidence capture: only the cap defaults — Capture itself is a consent
+	// layer and stays exactly as the operator left it (default off).
+	if cfg.Evidence.CapBytes == 0 {
+		cfg.Evidence.CapBytes = defaultEvidenceCapBytes
 	}
 
 	// Server protocol defaults to TCP on first run because SM is

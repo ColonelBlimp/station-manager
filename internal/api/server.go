@@ -20,6 +20,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/email"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/evidence"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
@@ -40,6 +41,7 @@ type Server struct {
 	mailer     *email.Service
 	bridge     *bridge.Service
 	ft8        *ft8.Service
+	evidence   *evidence.Service
 	// stopTxForRetune stops any SM-owned transmission before a command that moves
 	// the rig off frequency. Injected by cmd/smd (same shape as ft8.SetTxKeyer /
 	// SetDialSource) so internal/api can compose the two subsystems without either
@@ -292,6 +294,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// multi-subscriber fan-out are handled there. Shares the SSE subscriber cap
 	// (limitEventSubscribers) with the other two long-lived streams. Live
 	// occupancy needs a CGO capture build; on the static build the subsystem is
+	// Evidence capture status (spot-network design §4.1's local honesty
+	// surface) — registered unconditionally: "disabled" is itself the answer
+	// when no writer exists, and gating the route would make "capture off"
+	// indistinguishable from "endpoint missing".
+	mux.HandleFunc("GET /v1/evidence/status", s.handleEvidenceStatus)
+
 	// idle and the stream simply carries keepalives until a slot is processed.
 	if ft8Svc != nil && ft8Svc.Enabled() {
 		mux.Handle("GET /v1/ft8/events", s.limitEventSubscribers(ft8Svc.HTTPHandler(s.shutdownCh)))

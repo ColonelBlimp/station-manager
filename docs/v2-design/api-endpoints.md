@@ -396,6 +396,15 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 
 ---
 
+## Evidence capture (spot-network design §4.1)
+
+### `GET /v1/evidence/status`
+- **Purpose:** The local honesty surface for FT8 evidence capture (the default-off consent layer, config `evidence.capture`): capture state, physical disk usage against the cap/watermark, archive counts, and drops.
+- **Gating:** **Always-on** — "disabled" is itself the answer when capture is off or no writer exists; gating the route would make "capture off" indistinguishable from "endpoint missing".
+- **Response:** **200** `{"enabled": bool, "state": "disabled"|"capturing"|"drop_new", "cap_bytes": int, "watermark_bytes": int, "usage_bytes": int, "observations": int, "unprofiled_observations": int, "dropped_slots": int}`. `usage_bytes` is physical (evidence.db + WAL + shm); `drop_new` means usage crossed the soft watermark and new capture is being counted as loss intervals rather than written; `unprofiled_observations` is the §5.4 missing-profile tally (this slice records all observations NULL-profiled).
+
+---
+
 ## Diagnostics & SPA
 
 ### `GET|POST /debug/pprof/*`

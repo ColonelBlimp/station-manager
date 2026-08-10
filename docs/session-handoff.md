@@ -41,58 +41,88 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-09)
+## Now (as of 2026-08-10)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **2026-08-09 power cut ended the session; position fully clean on resume.**
-  The day's five commits are PUSHED (2 spot-doc, handoff `89209b5e`, run
-  identity `f3043e80`, go-ft8 v0.8.0 bump `1df6d94d`, review fixes
-  `5011dc83`), CI GREEN on the final push, all reviews triaged clean.
-- **Spot-network design CONVERGED as Draft 3 — "FT8 Evidence Capture and
-  Live Station Presence"** (docs/v2-design/spot-network/spot-network-design.md):
-  SQLite evidence capture → sync over the existing SMD↔SMC channel →
-  latest-state presence endpoint → ONE public per-call lookup page →
-  time-boxed pilot. NINE review rounds folded; reviewer standard
-  "implementation-ready once P1s close" — closed. Round-by-round record in
-  Current state below.
-- **Prereq 1 (go-ft8 evidence-grade decode) SHIPPED upstream, v0.8.0 bumped**
-  (`1df6d94d`). Behaviour change: CRC-valid unsupported payloads now arrive
-  TEXT-LESS — `dropUnparsed` at DecodeSlot's return is the curated-branch
-  filter (design §4 prereq 2's first stone). **Prereq 3 (run identity) BUILT**
-  (`f3043e80` + `5011dc83`): UUIDv7 per operator-started run, pin-at-commit
-  (completions read contactFlags.runID, never live s.runID), stamped to
-  types.Qso.AppSmRunID; RI1–RI9 all reversion-probed.
-- **ADR 0067 on-air validation still OPEN** (pick-run try). Operator NOTE:
-  Abandon stops run+queue outright (0059 W6) — flag if unwanted.
-- **CI flake watch**: `TestHTTPHandler_StreamsPipelineEvents` failed once on
-  a loaded runner (`ef791091`), passed untouched on both pushes since. If it
-  recurs, harden its two 1s waits in bridge handler_test.go.
-- **Prereq 2 (rich-result split + stateful decoder) COMMITTED `cd1757a7`,
-  UNPUSHED**: `slotDecoder` (one stateful goft8.Decoder per capture session,
-  loop-local) + `curateDecodes` boundary in decodeLoop; skipped slots advance
-  state via zero-slot decode (swap for Decoder.SkipSlot() when upstream ships
-  one). Spec: `internal/ft8/decodesplit_test.go` (AC1–AC7 in header; 5
-  reversion probes bit). ft8 + race + tree -short green.
-- **Decoder-state review arc CLOSED clean (2026-08-10, three rounds).**
-  `75f40264` (dial-moved slots RESET via slotDecoder.reset(), delivery gaps
-  ADVANCE per omitted slot) + `d8c11a0a` (the composition hole: the
-  scheduler can DROP the slot carrying DialChanged, so a dial DIFFERENCE
-  between consecutive delivered slots now resets too; gap advance only when
-  the dial held). Review of d8c11a0a: **NO FINDINGS** — arc converged. CI
-  **GREEN** on the cd1757a7+75f40264 push (`31349738895`, 12m47s; the
-  flake-watch handler test passed again). Spec trail: AC6/AC8 amendments in
-  `decodesplit_test.go`.
-- **NEXT: push `d8c11a0a` (ahead 1) + watch its CI → evidence.db writer
-  (§4.1) is the next build slice.** Then: on-air 0067 · Settings defaults
-  dropdown · max_repeats-to-session. Dogfood inbox has a NEW on-air bug from
-  this morning's 80m session (SM6MUY worked-indication vs still-working,
-  04:27) awaiting triage.
+- **Spot-network arc, position 2026-08-10 evening.** Draft 3 design frozen
+  implementation-ready (9 review rounds; record in Current state). Prereq 1
+  (go-ft8 v0.8.0 evidence-grade decode) + prereq 3 (run identity, UUIDv7
+  pin-at-commit → AppSmRunID) + prereq 2 (rich-result split + one stateful
+  slotDecoder per capture session) ALL SHIPPED and PUSHED through
+  `d8c11a0a`; the decoder-state review arc closed clean in three rounds
+  (dial-moved/dial-difference RESET, gap ADVANCE per omitted slot; final
+  review NO FINDINGS; CI GREEN `31349738895`).
+- **Evidence writer (§4.1 first capture slice) BUILT 2026-08-10, in tree
+  uncommitted.** Operator rulings folded into the design doc: NULL profile
+  ref = "explicitly unprofiled" (§5.4; profiles ship BEFORE sync), drop-new
+  at a soft WATERMARK below the cap (resume when capacity returns), cap
+  default 500 MiB EXACT. New `internal/evidence` (own evidence.db, WAL,
+  bounded non-blocking writer, one-txn slot commits, coalesced
+  never_offered loss intervals, physical usage = db+WAL+shm, boundary
+  test); ft8 `SetEvidenceSink` emits one EvidenceSlot per PHYSICAL slot
+  (rich decodes + true outcome incl. capture_dropped for omitted slots and
+  decoder_error as a distinct fact); config `evidence` block (capture
+  default OFF per §8 consent) + `GET /v1/evidence/status` + smd wiring.
+  Spec EV1–EV9 in `internal/evidence/evidence_test.go`; 5 probes bit; all
+  touched packages + race + tree -short green; docs updated same-change.
+- **NEXT: commit the evidence writer → push → watch CI → §4.2 profiles
+  slice (before sync).** Then: on-air 0067 (Abandon-stops-queue flag still
+  open) · Settings defaults dropdown · max_repeats-to-session. Dogfood
+  inbox: NEW 80m bug (SM6MUY worked-indication vs still-working, 04:27)
+  awaiting triage. CI flake watch: bridge handler test (harden its two 1s
+  waits if it recurs).
 
-## Current state (as of 2026-08-09)
+## Current state (as of 2026-08-10)
+
+### 2026-08-10 — decoder-state review arc closed; evidence writer built
+
+**The decoder-state arc (prereq 2's reviews) converged in three rounds, each
+fix red-first with probes:** `75f40264` — dial-moved slots RESET the decoder
+(`slotDecoder.reset()`; the band-blind hash table must not cross a QSY; TX
+slots keep the state-preserving zero-slot skip) and delivery gaps ADVANCE
+once per omitted physical slot (StartUTC ÷ SlotDuration; hash survives a
+lossy channel; empty-bucket skips ~0.1 ms so no cap). `d8c11a0a` — the
+composition hole its own review found: the scheduler can DROP the slot
+carrying DialChanged (emitSlot best-effort send), so a dial DIFFERENCE
+between consecutive delivered slots now resets exactly like a delivered
+moved slot, and the gap advance runs only when the dial held. Final review:
+NO FINDINGS. CI GREEN on the push (`31349738895`). Spec trail: AC6/AC8
+dated amendments in `internal/ft8/decodesplit_test.go`.
+
+**The §4.1 evidence writer (first capture slice) was built the same day**,
+criteria-first with three operator rulings taken before mechanism (each also
+folded into the design doc as dated amendments): (1) observations ship with
+a NULLABLE profile ref now — NULL means "explicitly unprofiled", never
+"pending"; profiles are their own slice BEFORE sync, and sync will treat
+null-profile rows as accepted, `retryable_missing_profile` only for non-null
+UUIDs absent remotely; (2) the cap is enforced as drop-new at a soft
+WATERMARK below the hard physical limit (headroom for WAL/checkpoint + one
+coalesced loss interval; decode continues, only evidence writes stop;
+resume when capacity returns; purge/acked-first machinery lands with sync);
+(3) default cap 500 MiB EXACT (524,288,000 bytes). Build: new
+`internal/evidence` package (own evidence.db via modernc — WAL, versioned
+schema with synced flags pre-provisioned for sync; bounded non-blocking
+writer; one-transaction slot commits; coalesced never_offered loss
+intervals via the reserved in-memory accumulator; physical usage measured
+over db+WAL+shm; boundary test pins it never imports ft8/sqlite/bridge);
+ft8-side `SetEvidenceSink` emitting one EvidenceSlot per PHYSICAL slot —
+rich decodes with true outcomes, capture_dropped rows for scheduler-omitted
+slots, and decode-failure made a distinct fact (`decoder_error` vs a silent
+band); `evidence` config block (capture default OFF per §8 consent;
+`types.EvidenceMinCapBytes` floor — in types because config→evidence would
+cycle через logging); `GET /v1/evidence/status` (api's ADR 0043 ratchet
+entry added with intent); cmd/smd wiring with evidence Stop AFTER ft8 Stop.
+Spec EV1–EV9 in `internal/evidence/evidence_test.go`; 5 reversion probes
+bit (watermark, gap emission, Validate wiring, defaults fill, non-blocking
+enqueue); the one implementation failure caught en route was the cap test's
+unphysical 4 KiB headroom fixture — the headroom's sizing rule (must absorb
+shm + one slot's WAL growth) is now documented on the var. Also this
+morning: the SM6MUY worked-indication bug captured to the dogfood inbox
+(untriaged).
 
 ### 2026-08-09 — Draft 3 convergence (9 review rounds), run identity, go-ft8 v0.8.0
 

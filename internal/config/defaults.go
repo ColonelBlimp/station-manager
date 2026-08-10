@@ -86,4 +86,9 @@ const (
 	defaultLookupHTTPTimeoutSec = 10
 	defaultSmtpPort             = 587
 	defaultSmtpTimeoutSec       = 30
+
+	// Evidence capture (spot-network design §4.1): 500 MiB exactly — an
+	// exact byte count, not a rounded unit, to avoid MB/MiB ambiguity
+	// (operator, 2026-08-10). The physical cap over evidence.db + WAL + shm.
+	defaultEvidenceCapBytes = 524288000
 )

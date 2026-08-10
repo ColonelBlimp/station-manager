@@ -205,6 +205,12 @@ type Service struct {
 	// created after wiring — happens-before holds).
 	qsoLogger func(ctx context.Context, c CompletedQso)
 
+	// evidenceSink observes every PHYSICAL slot's rich evidence (§4 prereq 2
+	// branch point); injected via SetEvidenceSink before Start (cmd/smd wires
+	// the evidence writer's adapter). nil = no observer. Called from the
+	// decode goroutine; the contract is on SetEvidenceSink.
+	evidenceSink func(EvidenceSlot)
+
 	// decodeSink observes every slot's decodes (e.g. the PSK Reporter uploader);
 	// injected via SetDecodeSink before Start. nil = no observer. Called from the
 	// decode goroutine after the SSE publish. DI keeps internal/ft8 free of the
@@ -912,20 +918,40 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// moved slot, then 0→B), harmless on already-empty state; a no-CAT
 		// rig's dial is always 0, never differs, and keeps full cross-slot
 		// state.
+		// Omitted physical slots (the scheduler skips a boundary serviced over
+		// two seconds late and drops slots on a full channel — Dropped()) get
+		// their coverage told FIRST: one capture_dropped evidence row per
+		// missing boundary, whatever the decoder does about them — coverage is
+		// about the archive's completeness, not decoder state (§4.1: an empty
+		// stretch must be interpretable).
+		var missed int
+		if !prevSlotStart.IsZero() {
+			missed = int(slot.StartUTC.Sub(prevSlotStart).Round(SlotDuration)/SlotDuration) - 1
+			if missed < 0 {
+				missed = 0
+			}
+			if s.evidenceSink != nil {
+				for i := 1; i <= missed; i++ {
+					s.evidenceSink(EvidenceSlot{
+						Slot:        SlotRefFromTime(prevSlotStart.Add(time.Duration(i) * SlotDuration)),
+						DialTracked: slot.DialTracked,
+						Outcome:     EvidenceCaptureDropped,
+					})
+				}
+			}
+		}
 		contextChanged := dialMoved ||
 			(!prevSlotStart.IsZero() && slot.DialMHz != prevSlotDial)
 		if contextChanged {
 			dec.reset()
-		} else if !prevSlotStart.IsZero() {
-			// Same context, lossy channel: the scheduler skips a boundary
-			// serviced over two seconds late and drops slots on a full channel
-			// (Dropped()), and the decoder's A7 buckets are parity-indexed, so
-			// an odd-length gap would swap them for the rest of the session.
-			// Advance once per OMITTED physical slot (AC8, review cd1757a7cda2
-			// P2); advancing rather than resetting is deliberate — the hash
-			// table must survive a lossy channel, and a skip on an
-			// already-empty bucket costs ~0.1 ms, so no cap is needed.
-			missed := int(slot.StartUTC.Sub(prevSlotStart).Round(SlotDuration)/SlotDuration) - 1
+		} else {
+			// Same context, lossy channel: the decoder's A7 buckets are
+			// parity-indexed, so an odd-length gap would swap them for the
+			// rest of the session. Advance once per OMITTED physical slot
+			// (AC8, review cd1757a7cda2 P2); advancing rather than resetting
+			// is deliberate — the hash table must survive a lossy channel,
+			// and a skip on an already-empty bucket costs ~0.1 ms, so no cap
+			// is needed.
 			for i := 0; i < missed; i++ {
 				dec.skip()
 			}
@@ -944,18 +970,40 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// slot's real reason is still what publishes below (empty report,
 		// suppression line).
 		var rich []goft8.DecodedMessage
+		decodeOK := true
 		switch {
 		case dialMoved:
 			// Unattributable window: nothing to decode; its reset ran above.
 		case txSlot:
 			dec.skip()
 		default:
-			rich = dec.decode(slot.Samples)
+			rich, decodeOK = dec.decode(slot.Samples)
 		}
 		// THE BRANCH POINT (design §4 prerequisite 2): `rich` is the complete
 		// go-ft8 result — every parse status, own-TX included. The evidence
-		// branch taps it HERE, upstream of every curated filter, when the
-		// evidence.db writer lands. Everything below is the curated branch.
+		// sink taps it HERE, upstream of every curated filter, with the slot's
+		// true coverage outcome — decoder_error is a REJECTED decode, distinct
+		// from a silent band. Everything below is the curated branch.
+		if s.evidenceSink != nil {
+			outcome := EvidenceNoDecode
+			switch {
+			case dialMoved:
+				outcome = EvidenceDialChanged
+			case txSlot:
+				outcome = EvidenceTx
+			case !decodeOK:
+				outcome = EvidenceDecoderError
+			case len(rich) > 0:
+				outcome = EvidenceDecoded
+			}
+			s.evidenceSink(EvidenceSlot{
+				Slot:        ref,
+				DialMHz:     slot.DialMHz,
+				DialTracked: slot.DialTracked,
+				Outcome:     outcome,
+				Decodes:     rich,
+			})
+		}
 		//
 		// curateDecodes = parse-status filter + own-transmission drop. The
 		// callsign is the ACTIVE session's pinned call (ADR 0055, pin-at-arm) —

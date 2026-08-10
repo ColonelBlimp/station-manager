@@ -52,15 +52,23 @@ var frozenInternalImports = map[string]struct{}{
 	"internal/config":              {},
 	"internal/database/sqlite":     {},
 	"internal/email":               {},
-	"internal/enums/bands":         {},
-	"internal/enums/modes":         {},
-	"internal/enums/source":        {},
-	"internal/errors":              {},
-	"internal/events":              {},
-	"internal/forwarding":          {},
-	"internal/ft8":                 {},
-	"internal/hardware":            {},
-	"internal/logging":             {},
+	// Added 2026-08-10 with intent (spot-network §4.1 first capture slice).
+	// GET /v1/evidence/status serves evidence.Status directly — the writer's
+	// own honesty surface (state, physical usage, counts), which only the
+	// writer can answer. A port would re-declare that struct verbatim for one
+	// read-only getter; the service is otherwise injected via SetEvidence
+	// (nil-safe) and api holds no evidence behaviour. Same class as the
+	// bridge/ft8 status couplings already in this set.
+	"internal/evidence":     {},
+	"internal/enums/bands":  {},
+	"internal/enums/modes":  {},
+	"internal/enums/source": {},
+	"internal/errors":       {},
+	"internal/events":       {},
+	"internal/forwarding":   {},
+	"internal/ft8":          {},
+	"internal/hardware":     {},
+	"internal/logging":      {},
 	// Added 2026-08-03 with intent (ADR 0062). GET /v1/lookup-types serves the
 	// enrichment-provider descriptors, exactly as GET /v1/forwarder-types serves
 	// forwarder ones from internal/forwarding — which this package has always

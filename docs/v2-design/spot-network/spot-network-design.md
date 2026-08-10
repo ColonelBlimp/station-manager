@@ -215,7 +215,17 @@ over:
 - an operator-configurable size cap that is a **physical-disk guarantee,
   not a logical row target**: it is defined over `evidence.db` *plus* its
   WAL and temporary allocation, with reserved headroom, and capture starts
-  dropping **before** the physical limit is reached. SQLite's WAL can
+  dropping **before** the physical limit is reached.
+  *Implementation amendment (operator, 2026-08-10), first capture slice:*
+  the cap is enforced as **drop-new at a soft watermark** below the hard
+  physical limit — headroom reserved for WAL/checkpoint activity and one
+  coalesced loss interval. Once crossed, FT8 decoding continues and only
+  evidence writes stop; dropped slots accumulate as `never_offered` loss;
+  no old evidence is deleted (so no retention records arise); capture
+  resumes if capacity becomes available or the cap is raised. Default cap
+  **500 MiB exactly (524,288,000 bytes)**, operator-configurable; usage and
+  the drop-new state are exposed locally. The full purge / acked-first drop
+  machinery lands with the sync slice. SQLite's WAL can
   outgrow any logical target when a long reader blocks checkpointing, so
   evidence readers are bounded to short transactions — a full shared
   filesystem would break the QSO path this file exists to isolate (§4.1's
@@ -458,6 +468,17 @@ reference to an unknown profile as retryable, not fatal, so a reordered
 upload heals itself. Profiles are cloud-stored for context and later
 analysis; the page renders none of their content (the operator's chosen
 locator precision aside).
+
+**Implementation amendment (operator, 2026-08-10):** the capture slice ships
+before §4.2 profiles, so an observation's profile reference is **nullable**,
+and NULL means "no profile was recorded" — never "profile upload pending".
+Profiles are never inferred or retroactively backfilled; once a profile is
+configured, every NEW observation receives an immutable profile-version
+UUID; the missing-profile count is surfaced locally. Profiles ship before
+sync does, and the sync semantics split accordingly:
+`retryable_missing_profile` applies only to a **non-null** profile UUID
+absent from SMC; a null-profile observation is accepted as **explicitly
+unprofiled**, not retried.
 
 ---
 

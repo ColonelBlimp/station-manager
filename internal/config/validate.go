@@ -85,6 +85,7 @@ func Validate(cfg Config) []Finding {
 	out = append(out, validateFt8Audio(cfg.Ft8.Audio)...)
 	out = append(out, validateFt8Occupancy(cfg.Ft8.TX)...)
 	out = append(out, validateFt8FieldDay(cfg.Ft8.FieldDay)...)
+	out = append(out, validateEvidence(cfg.Evidence)...)
 	// Advisory findings (non-fatal) — currently just the non-loopback-bind notice.
 	for _, w := range Warnings(cfg) {
 		out = append(out, Finding{Field: "socket_path", Code: "insecure_bind", Message: w, Warning: true})
@@ -375,6 +376,25 @@ func validateFt8Display(d *types.Ft8DisplayConfig) []Finding {
 // types; Section is checked against go-ft8's canonical ARRL/RAC list
 // (ValidARRLFieldDaySection, which trims + upper-cases internally) — go-ft8 owns that
 // enumeration because it encodes the section into the FD frame.
+// validateEvidence checks the evidence block only when capture is enabled
+// (a disabled block is inert; its cap starts mattering at the moment of
+// consent). The floor is types.EvidenceMinCapBytes — shared with the
+// evidence package through the one place both can import, so the
+// operator-facing finding and the writer cannot drift: a cap at or below
+// the reserved headroom would leave capture nowhere to write before
+// dropping.
+func validateEvidence(e types.EvidenceConfig) []Finding {
+	if !e.Capture || e.CapBytes >= types.EvidenceMinCapBytes {
+		return nil
+	}
+	return []Finding{{
+		Field: "evidence.cap_bytes",
+		Code:  "evidence_cap_too_small",
+		Message: fmt.Sprintf("evidence cap %d bytes is below the minimum %d (reserved headroom + working floor); capture would drop immediately",
+			e.CapBytes, types.EvidenceMinCapBytes),
+	}}
+}
+
 func validateFt8FieldDay(d *types.Ft8FieldDayConfig) []Finding {
 	if d == nil {
 		return nil

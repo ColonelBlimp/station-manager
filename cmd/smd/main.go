@@ -30,6 +30,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/evidence"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/clublog" // registers "clublog" forwarder + default retry via init(); main also sets clublog.UserAgent below
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"     // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
@@ -819,6 +820,39 @@ func run() error {
 			ft8Svc.PublishQsoLogged(ft8.NewLoggedQso(q, res.UUID, loggerSvc))
 		})
 	})
+	// Evidence capture (spot-network design §4.1, default-off consent layer):
+	// the writer owns its own evidence.db beside the working directory's other
+	// state, and receives every PHYSICAL slot's rich decode set via
+	// SetEvidenceSink — the same one-way DI as the QSO logger, so internal/ft8
+	// never imports the writer and the writer never imports ft8 (go-ft8 is the
+	// shared vocabulary). Fail-soft like the rest of FT8: a writer that cannot
+	// initialise or start logs and stays idle — evidence must never stop the
+	// operator decoding or logging.
+	evidenceSvc := evidence.New(evidence.Config{
+		Capture:  cfg.Evidence.Capture,
+		CapBytes: cfg.Evidence.CapBytes,
+		Path:     filepath.Join(cfgSvc.WorkingDir(), "evidence.db"),
+	}, loggerSvc)
+	if err := evidenceSvc.Initialize(); err != nil {
+		loggerSvc.ErrorWith().Err(err).Msg("evidence: init failed; capture stays idle")
+	} else if err := evidenceSvc.Start(); err != nil {
+		loggerSvc.ErrorWith().Err(err).Msg("evidence: start failed; capture stays idle")
+	} else if cfg.Evidence.Capture {
+		ft8Svc.SetEvidenceSink(func(es ft8.EvidenceSlot) {
+			start, err := time.Parse(time.RFC3339, es.Slot.StartUTC)
+			if err != nil {
+				return // a malformed slot ref cannot be archived honestly
+			}
+			evidenceSvc.CaptureSlot(evidence.SlotCapture{
+				SlotStart:   start,
+				DialMHz:     es.DialMHz,
+				DialTracked: es.DialTracked,
+				Outcome:     evidence.SlotOutcome(es.Outcome),
+				Decodes:     es.Decodes,
+			})
+		})
+	}
+
 	// PSK Reporter upload (opt-in): every FT8 decode is a "heard this station"
 	// reception report. The uploader is fed the decode stream via SetDecodeSink
 	// (same one-way DI as the QSO logger), so internal/ft8 stays free of it and
@@ -902,6 +936,7 @@ func run() error {
 
 	// ---- Start HTTP server ----
 	server := api.New(cfg, buildinfo.Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc, bridgeSvc, ft8Svc)
+	server.SetEvidence(evidenceSvc)
 	if smcloudRec != nil {
 		// On-demand reconcile (the "back up / check now" action) — same
 		// Reconciler instance as the periodic loop.
@@ -990,6 +1025,10 @@ func run() error {
 	if err := pskSvc.Stop(); err != nil {
 		loggerSvc.ErrorWith().Err(err).Msg("pskreporter: Stop error")
 	}
+	// Drain + close the evidence writer AFTER ft8Svc.Stop: the decode loop is
+	// the only producer, so by now no new slots arrive and Stop persists any
+	// accumulated loss before closing the archive.
+	evidenceSvc.Stop()
 
 	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second
 	// config.applyDefaults sets ShutdownTimeoutSec=10 today, but a

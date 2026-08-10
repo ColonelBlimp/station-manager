@@ -95,7 +95,8 @@ func newDecodeReport(slot SlotRef, dialMHz float64, msgs []goft8.DecodedMessage)
 // misses) — measured ~1.1–1.7× slower for a real weak-signal recall gain. The
 // daemon passes this from ft8.enable_osd (default true).
 func DecodeSlot(samples []int16, enableOSD bool, log logging.Logger) []goft8.DecodedMessage {
-	return newSlotDecoder(enableOSD, log).decode(samples)
+	msgs, _ := newSlotDecoder(enableOSD, log).decode(samples)
+	return msgs
 }
 
 // DecodeFile reads a WAV fixture into an int16 slot and decodes it, returning
@@ -168,15 +169,17 @@ func newSlotDecoder(enableOSD bool, log logging.Logger) *slotDecoder {
 // logging policy are exactly DecodeSlot's (see its comment): per-decode and
 // per-slot diagnostics at debug, a warn for a rejected slot or a recovered
 // panic, nil on failure. A rejected slot does not advance decoder state
-// (go-ft8 validates before advancing).
-func (d *slotDecoder) decode(samples []int16) (msgs []goft8.DecodedMessage) {
+// (go-ft8 validates before advancing). ok is false EXACTLY when the decode
+// failed (reject or panic) — the fact that lets coverage tell decoder_error
+// apart from a silent band; a clean zero-decode slot is (empty, true).
+func (d *slotDecoder) decode(samples []int16) (msgs []goft8.DecodedMessage, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			d.log.WarnWith().
 				Interface("panic", r).
 				Int("samples", len(samples)).
 				Msg("ft8 decode panicked; slot skipped")
-			msgs = nil
+			msgs, ok = nil, false
 		}
 	}()
 
@@ -193,7 +196,7 @@ func (d *slotDecoder) decode(samples []int16) (msgs []goft8.DecodedMessage) {
 			ev = ev.Str("option_field", optErr.Field).Str("option_reason", optErr.Reason)
 		}
 		ev.Msg("ft8 slot rejected; skipped")
-		return nil
+		return nil, false
 	}
 
 	// Per-decode detail is DEBUG, not INFO: it fires 12–16×/slot continuously
@@ -223,7 +226,7 @@ func (d *slotDecoder) decode(samples []int16) (msgs []goft8.DecodedMessage) {
 		Int("unique_messages", diag.UniqueMessages).
 		Msg("ft8 slot decoded")
 
-	return report.Messages
+	return report.Messages, true
 }
 
 // skip advances decoder state across a physical slot SM refuses to decode

@@ -94,6 +94,7 @@ secretly are) rig-specific.
 | `Smtp` | D (mailer) | start; `enabled`+recipient served | — | No PUT path |
 | `Bridge` | both | start (via `ActiveBridge()`); subset served | **partly** | `Serial.Port` + `Cat.Driver` are rig-specific |
 | `Ft8` | both | start (via `ActiveFt8()`); display/freqs served | **partly** | `Device` + `tx.mode` are rig-specific |
+| `Evidence` | D (evidence writer) | start | — | See EvidenceConfig below |
 | `Rigs[]` | both | per-op (`RigByID`) | **yes** | The rig catalogue (ADR 0028) |
 
 ### `BridgeConfig` (`internal/types/bridge.go`)
@@ -161,6 +162,19 @@ Cloudflare website and drops UDP). Receiver identity — callsign, grid, **and a
 (from `MY_ANTENNA`)** — comes from `LoggingStation`, not here. Read at startup → fed to `internal/pskreporter`;
 **not on `/v1/config`** (set-once, like the SMTP block — a config-SPA surface can come
 later). Detail in `docs/ft8.md`.
+
+### `EvidenceConfig` (`internal/types/evidence.go`, config key `evidence`)
+
+Local FT8 evidence capture (spot-network design §4.1) — the first of three
+**default-off consent layers** (§8). `capture` (default **false**; enabling
+creates and fills `<working-dir>/evidence.db`, disabling stops new writes and
+deletes nothing) and `cap_bytes` (default **524288000** — 500 MiB exactly, an
+exact byte count to avoid unit ambiguity; the PHYSICAL cap over evidence.db +
+WAL + shm — capture drops at a soft watermark 16 MiB below it and resumes if
+capacity returns). Validation: `cap_bytes` ≥ `types.EvidenceMinCapBytes`
+(32 MiB) when capture is enabled. The db path is not configurable this slice.
+Read at startup → `internal/evidence`; **not on `/v1/config`** (hand-edit +
+restart, like the SMTP block); observe via `GET /v1/evidence/status`.
 
 ### `MapConfig` (`internal/types/mapconfig.go`, config key `map`)
 

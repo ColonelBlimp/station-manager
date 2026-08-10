@@ -596,15 +596,16 @@ func TestSlotDecoder_HashResolvesAcrossSlots(t *testing.T) {
 
 	// Control: statelessly, the hash cannot resolve.
 	control := newSlotDecoder(true, logging.Noop())
-	if got := textsOf(control.decode(ref)); !containsText(got, hashUnresolved) {
-		t.Fatalf("fixture control: fresh decode = %v, want %q (fixture broken if absent)", got, hashUnresolved)
+	if got, _ := control.decode(ref); !containsText(textsOf(got), hashUnresolved) {
+		t.Fatalf("fixture control: fresh decode = %v, want %q (fixture broken if absent)",
+			textsOf(got), hashUnresolved)
 	}
 
 	d := newSlotDecoder(true, logging.Noop())
-	if got := textsOf(d.decode(teach)); !containsText(got, hashTeachText) {
-		t.Fatalf("teach slot decoded %v, want %q", got, hashTeachText)
+	if got, _ := d.decode(teach); !containsText(textsOf(got), hashTeachText) {
+		t.Fatalf("teach slot decoded %v, want %q", textsOf(got), hashTeachText)
 	}
-	got := d.decode(ref)
+	got, _ := d.decode(ref)
 	if !containsText(textsOf(got), hashResolved) {
 		t.Fatalf("stateful decode = %v, want %q (hash state must carry across slots)",
 			textsOf(got), hashResolved)
@@ -633,11 +634,12 @@ func TestSlotDecoder_SkipPreservesHashState(t *testing.T) {
 	// skip on a fresh decoder must be harmless.
 	d.skip()
 
-	if got := textsOf(d.decode(encodeSlotOrFatal(t, hashTeachText, 1500))); !containsText(got, hashTeachText) {
-		t.Fatalf("teach slot decoded %v, want %q", got, hashTeachText)
+	if got, _ := d.decode(encodeSlotOrFatal(t, hashTeachText, 1500)); !containsText(textsOf(got), hashTeachText) {
+		t.Fatalf("teach slot decoded %v, want %q", textsOf(got), hashTeachText)
 	}
 	d.skip() // the TX slot between them
-	got := textsOf(d.decode(encodeSlotOrFatal(t, hashRefText, 1500)))
+	msgs, _ := d.decode(encodeSlotOrFatal(t, hashRefText, 1500))
+	got := textsOf(msgs)
 	if !containsText(got, hashResolved) {
 		t.Fatalf("decode after skip = %v, want %q (skip must advance state, not destroy it)",
 			got, hashResolved)
@@ -677,6 +679,142 @@ func TestDecodeLoop_HashStateSpansTxSlots(t *testing.T) {
 	if got := last.Decodes[0].Text; got != hashResolved {
 		t.Fatalf("Band Activity rendered %q, want %q (decoder state must span the TX slot)",
 			got, hashResolved)
+	}
+}
+
+// evidenceRecorder captures every EvidenceSlot the loop emits.
+type evidenceRecorder struct {
+	mu    sync.Mutex
+	slots []EvidenceSlot
+}
+
+func (r *evidenceRecorder) record(es EvidenceSlot) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.slots = append(r.slots, es)
+}
+
+func (r *evidenceRecorder) all() []EvidenceSlot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]EvidenceSlot(nil), r.slots...)
+}
+
+// TestDecodeLoop_EvidenceSinkReceivesRichUnfiltered is design §4 prereq 2's
+// point, now executable end to end: the evidence sink receives the COMPLETE
+// decode set — our own loopback included — for the same slot whose curated
+// surfaces show only the other station. The same fixture discriminates both
+// branches at once.
+func TestDecodeLoop_EvidenceSinkReceivesRichUnfiltered(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	s, _, events, _ := newSplitHarness(t)
+	rec := &evidenceRecorder{}
+	s.SetEvidenceSink(rec.record)
+
+	if err := s.ArmTx(true); err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	if err := s.StartCallCq("K1ABC", "FN42", 1500, 14.074, "", "odd", 1); err != nil {
+		t.Fatalf("StartCallCq: %v", err)
+	}
+
+	samples := mixSlot(t, map[string]float64{
+		"CQ K1ABC FN42": 800,
+		"CQ A61DI LL64": 2200,
+	})
+	ch := make(chan Slot, 1)
+	ch <- Slot{StartUTC: recentEvenSlotStart(), Samples: samples, DialTracked: true, DialMHz: 14.074}
+	close(ch)
+	s.decodeLoop(ch)
+
+	decodes, _ := drainDecodeEvents(events)
+	if len(decodes) != 1 || len(decodes[0].Decodes) != 1 {
+		t.Fatalf("curated rows = %+v, want only the other station", decodes)
+	}
+
+	evs := rec.all()
+	if len(evs) != 1 {
+		t.Fatalf("evidence slots = %d, want 1", len(evs))
+	}
+	ev := evs[0]
+	if ev.Outcome != EvidenceDecoded || ev.DialMHz != 14.074 || !ev.DialTracked {
+		t.Fatalf("evidence slot = %+v, want decoded on 14.074 tracked", ev)
+	}
+	texts := textsOf(ev.Decodes)
+	if !containsText(texts, "CQ K1ABC FN42") || !containsText(texts, "CQ A61DI LL64") {
+		t.Fatalf("evidence decodes = %v, want BOTH stations (rich, own-TX included)", texts)
+	}
+}
+
+// TestDecodeLoop_EvidenceOutcomesPerPhysicalSlot pins the coverage vocabulary
+// at the seam: one EvidenceSlot per PHYSICAL slot with its true outcome —
+// tx and dial-moved slots included, scheduler-omitted slots surfacing as
+// capture_dropped, a rejected decode as decoder_error (distinct from a
+// silent band), and a decodable slot as decoded. Without the omitted-slot
+// rows an empty archive stretch is ambiguous, which is the §4.1 claim.
+func TestDecodeLoop_EvidenceOutcomesPerPhysicalSlot(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	s, _, _, _ := newSplitHarness(t)
+	rec := &evidenceRecorder{}
+	s.SetEvidenceSink(rec.record)
+
+	start := recentEvenSlotStart()
+	s.markTxSlot(start.Add(15 * time.Second))
+
+	ch := make(chan Slot, 5)
+	// decoded
+	ch <- Slot{StartUTC: start, Samples: encodeSlotOrFatal(t, "CQ A61DI LL64", 1500), DialTracked: true, DialMHz: 14.074}
+	// tx (decodable audio deliberately ignored)
+	ch <- Slot{StartUTC: start.Add(15 * time.Second), Samples: encodeSlotOrFatal(t, "CQ W1AW FN31", 1500), DialTracked: true, DialMHz: 14.074}
+	// dial_changed
+	ch <- Slot{StartUTC: start.Add(30 * time.Second), Samples: encodeSlotOrFatal(t, "CQ W1AW FN31", 1500), DialTracked: true, DialMHz: 0, DialChanged: true}
+	// gap: slots at +45 s and +60 s never delivered → 2× capture_dropped
+	// decoder_error: a malformed short slot is REJECTED by the checked API
+	ch <- Slot{StartUTC: start.Add(75 * time.Second), Samples: make([]int16, 1000), DialTracked: true, DialMHz: 14.074}
+	// no_decode: a full-length silent slot decodes cleanly to nothing
+	ch <- Slot{StartUTC: start.Add(90 * time.Second), Samples: make([]int16, SlotSamples), DialTracked: true, DialMHz: 14.074}
+	close(ch)
+	s.decodeLoop(ch)
+
+	want := []string{
+		EvidenceDecoded,
+		EvidenceTx,
+		EvidenceDialChanged,
+		EvidenceCaptureDropped,
+		EvidenceCaptureDropped,
+		EvidenceDecoderError,
+		EvidenceNoDecode,
+	}
+	evs := rec.all()
+	if len(evs) != len(want) {
+		got := make([]string, len(evs))
+		for i, e := range evs {
+			got[i] = e.Outcome
+		}
+		t.Fatalf("evidence slots = %v, want %v (one per PHYSICAL slot)", got, want)
+	}
+	for i, w := range want {
+		if evs[i].Outcome != w {
+			t.Errorf("slot %d outcome = %s, want %s", i, evs[i].Outcome, w)
+		}
+	}
+	if n := len(evs[0].Decodes); n != 1 {
+		t.Errorf("decoded slot carries %d decodes, want 1", n)
+	}
+	for i, e := range evs[1:] {
+		if len(e.Decodes) != 0 {
+			t.Errorf("non-decoded slot %d carries decodes: %+v", i+1, e.Decodes)
+		}
+	}
+	// The omitted slots carry their own boundary times.
+	if evs[3].Slot.StartUTC != start.Add(45*time.Second).UTC().Format(time.RFC3339) ||
+		evs[4].Slot.StartUTC != start.Add(60*time.Second).UTC().Format(time.RFC3339) {
+		t.Errorf("capture_dropped slots = %s / %s, want the two omitted boundaries",
+			evs[3].Slot.StartUTC, evs[4].Slot.StartUTC)
 	}
 }
 
