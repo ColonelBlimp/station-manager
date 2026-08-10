@@ -1409,3 +1409,23 @@ said. Plan future on-air experiments accordingly.
 - [2026-08-09] Roadmap idea (2026-08-09, operator + external reviewer agreed): opt-in WSJT-X-compatible UDP decode broadcast from SMD. Primary case: RBN FT4/FT8 spotting via the operator running RBN Aggregator (RBN's documented node model — reversebeacon.net/pages/Spotting+FT4/8+41 confirms Aggregator + CWSL_DIGI as the two approaches; wire detail in their PDFs). Secondary case: ecosystem compatibility (GridTracker/JTAlert-class consumers) — softens the WSJT-X-switcher adoption regression. Shape: internal/pskreporter-style independent non-blocking sink, injected from the decode path, never blocks decoding. BEFORE building: read "Send FT8 Spots to the RBN.pdf" to confirm the Aggregator owns the CQ-only filtering (emit-everything expected, no SM-side policy). Explicitly OUTSIDE the evidence/presence design (Draft 3).
 
 - [2026-08-10] 04:27 SM6MUY - trying to work on 80m, by the 4th attempt the decode in the Band Activity indicated that the station had been work, when the system was still try to work the callsign - bug
+  — **DIAGNOSED 2026-08-10 (fix pending, operator to pick remedy):** NOT a
+  false worked flag — a **visual collision between the stale fade and the
+  worked mute**. Timeline from smd.log + ft8-all.txt: SM6MUY decoded exactly
+  ONCE (CQ, −19 dB, 04:25:00 local); answered 04:26:12; the calling rung
+  repeated 6× into silence; at 04:28:00 the one decode row crossed the
+  3-minute decode-staleness limit and faded to 40% opacity — "by the 4th
+  attempt" is exactly that moment. Grey-out is also how worked renders
+  (`text-muted`, `Ft8BandActivity.svelte` rowClass), so the fade reads as
+  "worked". Verified NOT worked-state: zero SM6MUY rows in all 7,468 QSOs;
+  the dupe query is exact-match (`IsContestDuplicateByLogbookIDWithContext`)
+  so it cannot answer true; `markWorked` fires only on the ft8-logged sink
+  (no toast, no session row, no DB row — it never fired). Structural note:
+  the collision fires at the worst moment BY CONSTRUCTION — the station you
+  are actively working is the row most likely to cross the 3-minute fade
+  mid-session (90+ s of transmitting at them while their last decode ages).
+  **Remedy options (not built):** (a) exempt the ACTIVE session partner's
+  rows from the stale fade while the session runs (the daemon already 409s
+  stale starts, so the fade's don't-click purpose is moot for the engaged
+  call); (b) make worked unmistakable — a ✓ badge/strikethrough so grey
+  alone never means "worked"; (c) both — they fix different halves.

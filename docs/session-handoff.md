@@ -72,9 +72,10 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 - **NEXT: commit the evidence writer → push → watch CI → §4.2 profiles
   slice (before sync).** Then: on-air 0067 (Abandon-stops-queue flag still
   open) · Settings defaults dropdown · max_repeats-to-session. Dogfood
-  inbox: NEW 80m bug (SM6MUY worked-indication vs still-working, 04:27)
-  awaiting triage. CI flake watch: bridge handler test (harden its two 1s
-  waits if it recurs).
+  inbox: 80m SM6MUY bug DIAGNOSED (stale-fade vs worked-mute visual
+  collision — full timeline + remedy options in the inbox item; operator to
+  pick a remedy, nothing built). CI flake watch: bridge handler test (harden
+  its two 1s waits if it recurs).
 
 ## Current state (as of 2026-08-10)
 
