@@ -70,6 +70,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -123,6 +124,15 @@ func evCount(t *testing.T, s *Store, tid int64, kind string) int {
 	if err := s.db.QueryRowContext(context.Background(),
 		`SELECT COUNT(*) FROM evidence_records WHERE tenant_id = $1 AND kind = $2`, tid, kind).Scan(&n); err != nil {
 		t.Fatalf("count %s: %v", kind, err)
+	}
+	return n
+}
+
+func evScalar(t *testing.T, s *Store, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRowContext(context.Background(), query, args...).Scan(&n); err != nil {
+		t.Fatalf("scalar (%s): %v", query, err)
 	}
 	return n
 }
@@ -319,6 +329,168 @@ func retentionPayload(supersedes string) string {
 		return base + `,"supersedes":` + supersedes + `}`
 	}
 	return base + `}`
+}
+
+// Package review (2026-08-10): an observation whose non-null profile_uuid is
+// not a valid v7 UUID must be a PER-ROW permanent_reject, never a batch abort.
+// The raw string used to reach a Postgres UUID comparison, whose syntax error
+// rolled back the whole transaction (HTTP 500) and took valid batch-mates with
+// it; an empty string was silently treated as unprofiled; a valid non-v7 UUID
+// retried forever though such a profile can never be ingested.
+func TestEvidence_InvalidProfileRefRejectedNotAborted(t *testing.T) {
+	s := testStore(t)
+	tid, _ := seedTenantLogbook(t, s, "7Q5MLV")
+	now := time.Now()
+	// obsPayloadRef puts an explicit profile_uuid JSON value in place (so the
+	// empty-string and invalid-syntax cases are reachable — obsPayload maps ""
+	// onto JSON null).
+	obsPayloadRef := func(profileJSON string) string {
+		return fmt.Sprintf(`{"slot_start_utc":"2026-08-10T12:00:00Z","dial_mhz":14.074,"dial_tracked":true,`+
+			`"freq_hz":1204.5,"dt_sec":0.3,"snr":-8,"payload":"ECA=","parse_status":"parsed",`+
+			`"text":"CQ K1ABC FN42","prov_algorithm":"bp","decoder_build":"v0.9.0","profile_uuid":%s}`, profileJSON)
+	}
+
+	cases := []struct{ name, profileJSON string }{
+		{"invalid syntax", `"not-a-uuid"`},
+		{"empty string", `""`},
+		{"valid but non-v7", `"0197f9a0-0000-4000-8000-000000000001"`}, // version 4, never ingestable
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bad := evRec(t, evidencewire.KindObservation, utils.NewUUIDv7At(now), obsPayloadRef(c.profileJSON))
+			good := evRec(t, evidencewire.KindCoverage, utils.NewUUIDv7At(now),
+				`{"slot_start_utc":"2026-08-10T12:00:00Z","outcome":"decoded","dial_mhz":14.074,"dial_tracked":true,"decode_count":1}`)
+			out, err := s.UpsertEvidence(context.Background(), tid, []evidencewire.Record{bad, good})
+			if err != nil {
+				t.Fatalf("P1: an invalid profile ref must be a per-row reject, not a batch abort: %v", err)
+			}
+			if out[0].Outcome != evidencewire.OutcomePermanentReject || out[0].Reason != "invalid_profile_ref" {
+				t.Fatalf("P1: bad ref = %q/%q, want permanent_reject/invalid_profile_ref", out[0].Outcome, out[0].Reason)
+			}
+			if out[1].Outcome != evidencewire.OutcomeAccepted {
+				t.Fatalf("P1: valid batch-mate = %q, want accepted (not rolled back)", out[1].Outcome)
+			}
+		})
+	}
+}
+
+// Package review (2026-08-10): a summary whose insert is REJECTED (digest
+// conflict) must NOT tombstone or delete its predecessors — supersession only
+// takes effect for an accepted summary, or evidence is permanently removed
+// with no accepted replacement.
+func TestEvidence_ConflictingSummaryDoesNotSupersede(t *testing.T) {
+	s := testStore(t)
+	tid, _ := seedTenantLogbook(t, s, "7Q5MLV")
+	now := time.Now()
+
+	// R (uuid U) is already stored with content A; Q is a live predecessor.
+	rUUID := utils.NewUUIDv7At(now)
+	upsertEv(t, s, tid, evRec(t, evidencewire.KindRetention, rUUID, retentionPayload("")))
+	qUUID := utils.NewUUIDv7At(now)
+	upsertEv(t, s, tid, evRec(t, evidencewire.KindRetention, qUUID, retentionPayload("")))
+
+	// A DIFFERENT-content summary re-uses U (→ digest_conflict) and lists Q.
+	altered := retentionPayload(fmt.Sprintf(`[%q]`, qUUID))
+	altered = altered[:len(altered)-1] + `,"note":"different"}`
+	conflicting := evRec(t, evidencewire.KindRetention, rUUID, altered)
+	out := upsertEv(t, s, tid, conflicting)
+	if out[0].Outcome != evidencewire.OutcomePermanentReject || out[0].Reason != "digest_conflict" {
+		t.Fatalf("fixture: want digest_conflict, got %q/%q", out[0].Outcome, out[0].Reason)
+	}
+	// Q must SURVIVE — the rejected summary must not have superseded it.
+	if n := evScalar(t, s, `SELECT COUNT(*) FROM evidence_records WHERE uuid = $1`, qUUID); n != 1 {
+		t.Fatal("P1: a digest-conflicting summary deleted its predecessor Q")
+	}
+	if out := upsertEv(t, s, tid, evRec(t, evidencewire.KindRetention, qUUID, retentionPayload(""))); out[0].Outcome != evidencewire.OutcomeAlreadyPresent {
+		t.Fatalf("P1: Q was tombstoned by a rejected summary (re-offer = %q, want already_present)", out[0].Outcome)
+	}
+}
+
+// Package review (2026-08-10): a summary may not supersede itself (would create
+// a live record AND its own tombstone), and the supersedes list is bounded so
+// one request cannot hold a transaction across an unbounded number of round
+// trips.
+func TestEvidence_SupersedesBounds(t *testing.T) {
+	s := testStore(t)
+	tid, _ := seedTenantLogbook(t, s, "7Q5MLV")
+	now := time.Now()
+
+	selfUUID := utils.NewUUIDv7At(now)
+	self := evRec(t, evidencewire.KindRetention, selfUUID, retentionPayload(fmt.Sprintf(`[%q]`, selfUUID)))
+	if out := upsertEv(t, s, tid, self); out[0].Outcome != evidencewire.OutcomePermanentReject || out[0].Reason != "self_supersession" {
+		t.Fatalf("P2: self-supersession = %q/%q, want permanent_reject/self_supersession", out[0].Outcome, out[0].Reason)
+	}
+	if n := evScalar(t, s, `SELECT COUNT(*) FROM evidence_records WHERE uuid = $1`, selfUUID); n != 0 {
+		t.Fatal("P2: a self-superseding summary must store nothing")
+	}
+	if n := evScalar(t, s, `SELECT COUNT(*) FROM evidence_tombstones WHERE uuid = $1`, selfUUID); n != 0 {
+		t.Fatal("P2: a self-superseding summary must tombstone nothing")
+	}
+
+	// Over the per-summary cap.
+	preds := make([]string, maxSupersedesPerSummary+1)
+	for i := range preds {
+		preds[i] = fmt.Sprintf("%q", utils.NewUUIDv7At(now))
+	}
+	over := evRec(t, evidencewire.KindRetention, utils.NewUUIDv7At(now),
+		retentionPayload("["+strings.Join(preds, ",")+"]"))
+	if out := upsertEv(t, s, tid, over); out[0].Outcome != evidencewire.OutcomePermanentReject || out[0].Reason != "too_many_supersedes" {
+		t.Fatalf("P2: oversized supersedes = %q/%q, want permanent_reject/too_many_supersedes", out[0].Outcome, out[0].Reason)
+	}
+}
+
+// Package review (2026-08-10): a concurrent re-offer of a predecessor must not
+// resurrect it past a supersession. The tombstone probe and the record insert
+// touch separate tables, so under READ COMMITTED a re-offer that saw no
+// tombstone could commit its insert after another transaction tombstoned and
+// deleted that UUID. SERIALIZABLE + retry closes it: the re-offer aborts on the
+// conflict and, on retry, sees the tombstone. The hook forces the interleaving
+// deterministically.
+func TestEvidence_ConcurrentReofferCannotResurrect(t *testing.T) {
+	s := testStore(t)
+	tid, _ := seedTenantLogbook(t, s, "7Q5MLV")
+	now := time.Now()
+	pUUID := utils.NewUUIDv7At(now)
+	pRec := evRec(t, evidencewire.KindRetention, pUUID, retentionPayload(""))
+	upsertEv(t, s, tid, pRec) // P is live
+
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	afterTombstoneProbeHook = func(kind, uuid string) {
+		if kind == evidencewire.KindRetention && uuid == pUUID {
+			once.Do(func() { close(reached); <-release })
+		}
+	}
+	defer func() { afterTombstoneProbeHook = nil }()
+
+	// A: re-offer P; it probes (no tombstone), then blocks before its insert.
+	aErr := make(chan error, 1)
+	go func() {
+		_, err := s.UpsertEvidence(context.Background(), tid, []evidencewire.Record{pRec})
+		aErr <- err
+	}()
+
+	<-reached
+	// B: a summary supersedes P (tombstone + delete), committing while A waits.
+	summary := evRec(t, evidencewire.KindRetention, utils.NewUUIDv7At(now),
+		retentionPayload(fmt.Sprintf(`[%q]`, pUUID)))
+	if out := upsertEv(t, s, tid, summary); out[0].Outcome != evidencewire.OutcomeAccepted {
+		t.Fatalf("fixture: summary = %q, want accepted", out[0].Outcome)
+	}
+
+	close(release) // A resumes: inserts P, then commits (or serialization-fails + retries)
+	if err := <-aErr; err != nil {
+		t.Fatalf("A batch failed: %v", err)
+	}
+
+	// P must NOT be resurrected: it is tombstoned and NOT live.
+	if tomb := evScalar(t, s, `SELECT COUNT(*) FROM evidence_tombstones WHERE uuid = $1`, pUUID); tomb != 1 {
+		t.Fatalf("P1: P must be tombstoned by the supersession (tombstones=%d)", tomb)
+	}
+	if live := evScalar(t, s, `SELECT COUNT(*) FROM evidence_records WHERE uuid = $1`, pUUID); live != 0 {
+		t.Fatalf("P1: P was RESURRECTED — %d live record(s) exist after supersession", live)
+	}
 }
 
 func TestEvidence_RetentionKindActivates(t *testing.T) {

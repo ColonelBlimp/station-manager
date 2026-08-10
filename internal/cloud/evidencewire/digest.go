@@ -19,6 +19,14 @@ import (
 // server never re-canonicalizes — it stores the digest at first accept
 // and compares digests on re-offer (§5.2).
 func DigestV1Hex(payload json.RawMessage) (string, error) {
+	// Reject duplicate object keys FIRST (package review, 2026-08-10):
+	// decoding into a map silently keeps only the last, so `{"a":1,"a":2}`
+	// and `{"a":2}` would share a digest while their stored raw bytes differ
+	// — a content mismatch masquerading as already_present. The stream walk
+	// below catches it before any map collapses the keys.
+	if err := rejectDuplicateKeys(payload); err != nil {
+		return "", err
+	}
 	dec := json.NewDecoder(bytes.NewReader(payload))
 	dec.UseNumber()
 	var v any
@@ -41,6 +49,60 @@ func DigestV1Hex(payload json.RawMessage) (string, error) {
 func ensureEOF(dec *json.Decoder) error {
 	if _, err := dec.Token(); err != io.EOF {
 		return fmt.Errorf("evidencewire: canonicalize: trailing content after JSON document")
+	}
+	return nil
+}
+
+// rejectDuplicateKeys walks the token stream and errors if any single object
+// carries the same key twice — Go's json keeps only the last, which would
+// give two different raw payloads one digest (package review, 2026-08-10).
+func rejectDuplicateKeys(payload json.RawMessage) error {
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	dec.UseNumber()
+	return walkNoDupKeys(dec)
+}
+
+// walkNoDupKeys consumes exactly one JSON value from dec, recursing into
+// objects and arrays; within each object it fails on a repeated key.
+func walkNoDupKeys(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil // a scalar — already consumed
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for dec.More() {
+			keyTok, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyTok.(string)
+			if !ok {
+				return fmt.Errorf("evidencewire: canonicalize: non-string object key")
+			}
+			if seen[key] {
+				return fmt.Errorf("evidencewire: canonicalize: duplicate object key %q", key)
+			}
+			seen[key] = true
+			if err := walkNoDupKeys(dec); err != nil { // the value
+				return err
+			}
+		}
+		_, err = dec.Token() // consume '}'
+		return err
+	case '[':
+		for dec.More() {
+			if err := walkNoDupKeys(dec); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token() // consume ']'
+		return err
 	}
 	return nil
 }

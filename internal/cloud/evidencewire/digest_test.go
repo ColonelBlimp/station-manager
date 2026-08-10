@@ -75,3 +75,25 @@ func TestDigestV1_InvalidJSONIsAnError(t *testing.T) {
 		t.Fatal("D6: trailing garbage must error, never digest")
 	}
 }
+
+// D7 (package review, 2026-08-10): duplicate object keys must ERROR, never
+// digest — decoding into a map keeps only the last, so `{"a":1,"a":2}` and
+// `{"a":2}` would otherwise share a digest despite different stored raw bytes,
+// turning a content mismatch into already_present. The check descends into
+// nested objects and arrays.
+func TestDigestV1_DuplicateKeysAreAnError(t *testing.T) {
+	for _, p := range []string{
+		`{"a":1,"a":2}`,
+		`{"outer":{"b":1,"b":2}}`,
+		`{"list":[{"x":1,"x":2}]}`,
+		`{"a":1,"b":2,"a":3}`,
+	} {
+		if _, err := DigestV1Hex([]byte(p)); err == nil {
+			t.Errorf("D7: duplicate keys must error, digested %s", p)
+		}
+	}
+	// A non-duplicate payload with the same key name at DIFFERENT levels is fine.
+	if _, err := DigestV1Hex([]byte(`{"a":{"a":1}}`)); err != nil {
+		t.Errorf("D7: same key at different nesting levels is not a duplicate: %v", err)
+	}
+}

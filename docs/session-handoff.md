@@ -255,10 +255,36 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   3rd round on the starved-window code (fix-cluster) — the conservative
   suppression is the cluster-ending SAFE direction; if a later review
   objects it's an operator design call, not another inference.
-- **NEXT: OPERATOR commits the unverifiable-resync fix (watch auto-review;
-  sm-pg running) → push → CI → redeploy smd (evidence.db v4→v5 at start;
-  picks up ft8 fixes too) → smcloud deploy → FT8 soak.** on-air 0067 ·
-  Settings defaults dropdown · max_repeats-to-session.
+  unverifiable-resync fix `59e9aa4e` — review CLEAN, the whole internal/ft8
+  package-review arc is CLOSED (bf07a552 → dd751b28 → 59e9aa4e: 6 original
+  findings + 2 review-of-review P2s on the starved-window code, all
+  fixed/proven, final review clean). ft8 commits UNPUSHED (ahead of origin).
+- **internal/cloud (SMC evidence-sync) PACKAGE REVIEW — 4 P1 + 2 P2, all
+  CONFIRMED REAL + FIXED in tree, UNCOMMITTED (sm-pg up for the tests):**
+  - ✅P1 test-DB-erase: harnesses wiped the default-DSN DB with no opt-in →
+    `store.RefuseNonTestDatabase` sentinel (`__sm_test_db__`); refuses a
+    data-bearing DB with no marker, wired into all 3 harnesses.
+  - ✅P1 invalid profile_uuid aborted the batch: now validated in Go before
+    the PG UUID probe → per-row `invalid_profile_ref` (covers ""/non-v7),
+    batch-mates survive.
+  - ✅P1 conflicting summary still deleted predecessors: supersession now
+    runs ONLY after a fresh accept (moved after the insert).
+  - ✅P1 concurrent re-offer resurrected a superseded record: batch now
+    SERIALIZABLE + bounded retry (isSerializationFailure 40001/40P01);
+    deterministic hook test proves no resurrection.
+  - ✅P2 supersedes unbounded: reject self-supersession, cap at 128, sort
+    for consistent lock/hit order.
+  - ✅P2 duplicate JSON keys collided digests: `rejectDuplicateKeys` token
+    walk in digest v1 errors on any repeated object key (D7).
+  RED-first; 6 reversion proofs bit (incl. revert-SERIALIZABLE→resurrection,
+  neutered-guard→silent-wipe). Race/lint/gofmt clean, cloud+smcloud suites
+  green, tree -short green. NOTE: store now imports lib/pq directly (was
+  test-only) for the SQLSTATE check — fine, SMC store is PG-specific.
+- **NEXT: OPERATOR pushes BOTH stacks (ft8 `bf07a552..59e9aa4e` +
+  this cloud fix) → CI (verify `gh run list -L1` = completed success) →
+  redeploy smd (evidence.db v4→v5; picks up ft8 fixes) → redeploy smcloud
+  (picks up the ingest fixes; pg 0005/0006 already applied) → FT8 soak.**
+  on-air 0067 · Settings defaults dropdown · max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.

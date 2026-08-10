@@ -7,6 +7,7 @@ import (
 	stderr "errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,9 @@ func testStore(t *testing.T) *Store {
 		t.Skipf("smcloud store tests need a dev Postgres (task db:pg:up): ping: %v", err)
 	}
 	lockTestDatabase(t, db)
+	if err := RefuseNonTestDatabase(db); err != nil {
+		t.Fatal(err)
+	}
 	// Clean slate: downs (IF EXISTS, safe on first run) then every up in
 	// order. 0001's down drops the QSO tables, taking later migrations'
 	// constraints with them — but evidence_records (0005) references
@@ -66,6 +70,42 @@ func testStore(t *testing.T) *Store {
 		_ = db.Close()
 	})
 	return New(db)
+}
+
+// Package review (2026-08-10): RefuseNonTestDatabase must reject a database
+// that holds application data without the test sentinel, so an ordinary
+// `go test` against a real smcloud database at the default DSN cannot erase it.
+func TestRefuseNonTestDatabase(t *testing.T) {
+	s := testStore(t) // establishes the sentinel + a clean schema under the lock
+	ctx := context.Background()
+
+	// With the sentinel present (testStore stamped it), the guard allows.
+	if err := RefuseNonTestDatabase(s.db); err != nil {
+		t.Fatalf("a sentinel-marked database must be allowed: %v", err)
+	}
+
+	// Simulate a real database: drop the sentinel and seed a tenant. The guard
+	// must now REFUSE. (Restored by testStore's cleanup dropping everything.)
+	if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS `+testSentinelTable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnsureTenant(ctx, "9Z9ZZ", "real data"); err != nil {
+		t.Fatal(err)
+	}
+	err := RefuseNonTestDatabase(s.db)
+	if err == nil {
+		t.Fatal("P1: the guard must refuse a data-bearing database with no sentinel")
+	}
+	if !strings.Contains(err.Error(), "refusing to run destructive") {
+		t.Fatalf("unexpected refusal message: %v", err)
+	}
+	// The refusal did NOT stamp a sentinel (it must not silently mark a real DB).
+	var stamped bool
+	_ = s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`, testSentinelTable).Scan(&stamped)
+	if stamped {
+		t.Fatal("P1: a refused database must not have been marked as a test database")
+	}
 }
 
 // smcloudTestLockID is the advisory-lock key every smcloud test-DB user takes

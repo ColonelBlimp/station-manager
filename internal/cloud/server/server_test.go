@@ -56,6 +56,9 @@ func testServer(t *testing.T) (*httptest.Server, *store.Store, int64) {
 		t.Skipf("smcloud server tests need a dev Postgres (task db:pg:up): ping: %v", err)
 	}
 	lockTestDatabase(t, db)
+	if err := store.RefuseNonTestDatabase(db); err != nil {
+		t.Fatal(err)
+	}
 	// Clean slate via the migration files (drop then the runtime applier —
 	// which this also exercises). evidence_records (0005) references
 	// tenants, so its down runs before 0001's tenant drop.
