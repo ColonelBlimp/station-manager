@@ -259,43 +259,30 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   package-review arc is CLOSED (bf07a552 → dd751b28 → 59e9aa4e: 6 original
   findings + 2 review-of-review P2s on the starved-window code, all
   fixed/proven, final review clean). ft8 commits UNPUSHED (ahead of origin).
-- **internal/cloud (SMC evidence-sync) PACKAGE REVIEW — 4 P1 + 2 P2 all
-  fixed, COMMITTED + PUSHED `61d83228`, CI green (`31397353110`).** Round 1:
-  test-DB guard, per-row `invalid_profile_ref` (no batch abort), accept-gated
-  supersession, SERIALIZABLE batch + retry (40001/40P01) vs resurrection,
-  supersedes bounds (self-reject, cap 128, sorted), digest v1 duplicate-key
-  rejection (D7). Store now imports lib/pq directly (SQLSTATE check) — fine,
+- **internal/cloud (SMC evidence-sync) PACKAGE REVIEW — CLOSED, all
+  COMMITTED + PUSHED.** Round-1 `61d83228` (CI green `31397353110`): 4 P1 +
+  2 P2 — test-DB guard, per-row `invalid_profile_ref` (no batch abort),
+  accept-gated supersession, SERIALIZABLE batch + retry (40001/40P01) vs
+  resurrection, supersedes bounds (self-reject, cap 128, sorted), digest v1
+  duplicate-key rejection (D7). Store imports lib/pq directly (SQLSTATE) — fine,
   SMC store is PG-specific.
-- **Round-2 test-DB P1 — COMMITTED + PUSHED `8fd6c7e5` (CI `31399287481`
-  RED on a gofmt drift — a stray double blank line in server_test.go left by
-  the round-2 sed edit; the round-3 commit below carries the `gofmt -w` fix,
-  so main goes green on the NEXT push).** The round-1 persistent sentinel
-  (`__sm_test_db__`) authorized wiping a DB empty during one run and later
-  repurposed for real. Replaced with an explicit CURRENT opt-in
-  `store.ResolveTestDSN()`: an ordinary `go test` SKIPS the destructive smcloud
-  integration tests; they run only with `SMCLOUD_TEST_DSN` (a named disposable
-  DB) or `SMCLOUD_TEST_ALLOW_DEFAULT=1`. `RefuseNonTestDatabase` + sentinel
-  table removed.
-- **Round-3 P1 (codex on `8fd6c7e5`) — FIXED in tree, UNCOMMITTED.** SAME
-  defect class, new mechanism: `task test` and `scripts/ci-local.sh` were
-  auto-setting `SMCLOUD_TEST_ALLOW_DEFAULT=1`, so a routine local command
-  (on a dogfood box where localhost:5432 may be the REAL smcloud DB) would
-  silently drop its tables — the opt-in was supplied by generic tooling, not a
-  conscious operator choice. Fix: local commands NO LONGER set it (they skip
-  the destructive suites; operator opts in by hand when pointed at a disposable
-  DB). Kept ONLY in CI's two go-test steps — the GitHub service container is
-  ephemeral/disposable by construction. Config-only (ci.yml/Taskfile/ci-local.sh
-  comments spell out why); resolver unchanged so `TestResolveTestDSN` still
-  pins it; verified bare path skips + only CI sets the env; all three files
-  parse. ALSO carries the `gofmt -w server_test.go` fix for `8fd6c7e5`'s
-  CI-red (whole-tree gofmt now clean — checked with `find`, not
-  `git diff --name-only`, which lists only unstaged files and missed the
-  committed drift twice). Review doc consumed. Ready for operator commit.
-- **NEXT: OPERATOR commits the round-3 fix, then pushes BOTH stacks
-  (ft8 `bf07a552..59e9aa4e` + round-3) → CI (verify `gh run list -L1`
-  = completed success) → redeploy smd (evidence.db v4→v5; picks up ft8 fixes)
-  → redeploy smcloud (picks up the ingest fixes; pg 0005/0006 already
-  applied) → FT8 soak.**
+- **Test-DB-safety sub-arc — CLOSED at `b39d6d37` (review CLEAN; CI
+  `31406239697` in-flight at handoff, confirm green).** Three rounds, one
+  defect class (a routine action authorizing a wipe of a possibly-real DB):
+  R1 persistent `__sm_test_db__` sentinel authorized on historical emptiness →
+  R2 `8fd6c7e5` replaced it with explicit CURRENT opt-in `store.ResolveTestDSN`
+  (bare `go test` SKIPS; runs only under `SMCLOUD_TEST_DSN` or
+  `SMCLOUD_TEST_ALLOW_DEFAULT=1`; `RefuseNonTestDatabase`+sentinel removed) →
+  R3 `b39d6d37` stopped `task test`/`ci-local.sh` from auto-setting the env
+  (local commands skip; operator opts in by hand; env kept ONLY in CI's
+  ephemeral-container steps) AND fixed `8fd6c7e5`'s gofmt-drift CI-red
+  (server_test.go double blank line — my `git diff --name-only` checks missed
+  the committed file twice; memory [[gofmt-check-whole-tree]]).
+- **NEXT: OPERATOR pushes the ft8 stack (`bf07a552..59e9aa4e`) if not yet up
+  → confirm CI green (`gh run list -L1` = completed success, incl. b39d6d37's
+  run) → redeploy smd (evidence.db v4→v5; picks up ft8 fixes) → redeploy
+  smcloud (picks up the ingest fixes; pg 0005/0006 already applied) → FT8
+  soak.**
   on-air 0067 · Settings defaults dropdown · max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
