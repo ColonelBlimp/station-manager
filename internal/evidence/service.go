@@ -428,14 +428,8 @@ func (s *Service) migrateSchema(db *sql.DB) error {
 		// Refusal writes nothing and surfaces through Start's existing
 		// fail-soft: evidence idle, decoding continues, retried at the next
 		// restart once the cap or the archive has changed.
-		var dbSize int64
-		if fi, err := os.Stat(s.cfg.Path); err == nil {
-			dbSize = fi.Size()
-		}
-		if projected := s.physicalUsage() + dbSize + dbSize/16 + migrationSlackBytes; projected > s.cfg.CapBytes {
-			return errors.New(op).WithMsgf(
-				"v1→v2 migration projected peak %d B would exceed the cap %d B; evidence stays idle on the v1 archive until the cap is raised or the archive shrinks",
-				projected, s.cfg.CapBytes)
+		if err := s.migrationBackfillGate(op, "v1→v2"); err != nil {
+			return err
 		}
 		tx, err := db.Begin()
 		if err != nil {
@@ -465,10 +459,47 @@ func (s *Service) migrateSchema(db *sql.DB) error {
 		}
 		return s.migrate3to4(db)
 	case v == "3":
-		return s.migrate3to4(db)
+		// A GENUINE v3 archive can hold synced rows, so 3→4's
+		// legacy_synced backfill dirties ~every synced page — the same
+		// whole-archive WAL peak as 1→2, gated the same way. (The chained
+		// paths above need no second gate: pre-v3 rows are all synced=0,
+		// so their 3→4 backfill dirties nothing.)
+		if err := s.migrationBackfillGate(op, "v3→v4"); err != nil {
+			return err
+		}
+		if err := s.migrate3to4(db); err != nil {
+			return err
+		}
+		if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+			return errors.New(op).WithErr(err).WithMsg("truncate WAL after v3→v4 migration")
+		}
+		return nil
 	default:
 		return errors.New(op).WithMsgf("evidence.db schema version %q is newer than this build understands", v)
 	}
+}
+
+// migrationBackfillGate refuses a whole-archive backfill migration whose
+// transaction cannot fit under the cap: the backfill dirties ~every
+// affected page, so the WAL peak is of the order of the db file — far past
+// the writer's fixed headroom and unmeasurable in time (pages spill to the
+// -wal mid-transaction and rollback does not shrink it; measured
+// 2026-08-10, modernc.org/sqlite v1.48.1 — a 12.4 MB archive held 10.6 MB
+// of -wal before commit, unchanged after rollback). Projection: one WAL
+// frame per dirtied page (frame = page + 24 B, sqlite.org/walformat.html),
+// bounded by db size + ~6% + fixed slack. Refusal writes nothing and
+// surfaces through Start's fail-soft: evidence idle, decoding continues.
+func (s *Service) migrationBackfillGate(op errors.Op, label string) error {
+	var dbSize int64
+	if fi, err := os.Stat(s.cfg.Path); err == nil {
+		dbSize = fi.Size()
+	}
+	if projected := s.physicalUsage() + dbSize + dbSize/16 + migrationSlackBytes; projected > s.cfg.CapBytes {
+		return errors.New(op).WithMsgf(
+			"%s migration projected peak %d B would exceed the cap %d B; evidence stays idle until the cap is raised or the archive shrinks",
+			label, projected, s.cfg.CapBytes)
+	}
+	return nil
 }
 
 // migrate3to4 adds the retention columns + table (retention-slice rulings

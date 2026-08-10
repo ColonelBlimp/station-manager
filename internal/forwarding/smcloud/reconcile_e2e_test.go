@@ -108,7 +108,12 @@ func newCloudStack(t *testing.T) *httptest.Server {
 		_ = conn.Close()
 	})
 
-	drop := `DROP TABLE IF EXISTS qsos; DROP TABLE IF EXISTS logbooks;
+	// The evidence tables (migrations 0005/0006) reference tenants, so they
+	// drop FIRST — without them this multi-statement exec errors on the
+	// tenants drop, and the silent cleanup variant below leaves the NEXT
+	// test's clean-slate failing at its require (the 2026-08-10 CI red).
+	drop := `DROP TABLE IF EXISTS evidence_tombstones; DROP TABLE IF EXISTS evidence_records;
+DROP TABLE IF EXISTS qsos; DROP TABLE IF EXISTS logbooks;
 DROP TABLE IF EXISTS tenants; DROP TABLE IF EXISTS schema_migrations`
 	_, err = db.Exec(drop)
 	require.NoError(t, err)

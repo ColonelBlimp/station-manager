@@ -41,6 +41,12 @@ var (
 	compactionTrigger = 256
 	// compactionMaxPreds bounds a summary's DIRECT predecessors.
 	compactionMaxPreds = 64
+	// receiptReserveBytes is the metadata room a purge chunk must have
+	// BEFORE it runs, covering the receipt it will insert (codex-P2 fix
+	// 2026-08-10): checking only existing usage lets the receipt itself
+	// bust the budget by up to one row. 256 = the 128-byte logical row
+	// overhead doubled — receipts carry no supersedes text.
+	receiptReserveBytes = int64(256)
 	// slotWriteReserveBytes is the reusable room required to write through
 	// at cap pressure: ONE page. A page only reaches the freelist when
 	// entirely emptied, so even a large purge may free few pages on a small
@@ -124,9 +130,11 @@ func (s *Service) metadataBytes() int64 {
 // §4.1) the oldest unsynced class. A chunk whose receipt cannot fit the
 // metadata budget does NOT run — no invisible purge (RT6).
 func (s *Service) purgeChunk() {
-	if s.metadataBytes() >= metadataBudgetBytes {
+	// The check RESERVES the incoming receipt's estimate (codex-P2 fix):
+	// the purge may only run if its own receipt still fits the budget.
+	if s.metadataBytes()+receiptReserveBytes > metadataBudgetBytes {
 		s.compactOnce()
-		if s.metadataBytes() >= metadataBudgetBytes {
+		if s.metadataBytes()+receiptReserveBytes > metadataBudgetBytes {
 			s.setPressure(pressureMetadata)
 			return
 		}
@@ -198,7 +206,9 @@ func (p *purgeSet) dialOrZero() float64 {
 	return 0 // spans more than one dial context; unattributed is honest
 }
 
-const cloudPresent = `sync_outcome IN ('accepted', 'already_present')`
+// legacy_synced joins the class (codex-P1 fix): a v3-era synced row is
+// cloud-present by inference — see legacySyncedOutcome in schema.go.
+const cloudPresent = `sync_outcome IN ('accepted', 'already_present', 'legacy_synced')`
 
 // purgeAckedChunk deletes the oldest cloud-present observations (then
 // coverage whose slot holds no remaining observations), receipting them as

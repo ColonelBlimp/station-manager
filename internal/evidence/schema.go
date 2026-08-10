@@ -214,9 +214,22 @@ ALTER TABLE coverage ADD COLUMN sync_outcome TEXT;
 ALTER TABLE loss_intervals ADD COLUMN sync_outcome TEXT;
 ALTER TABLE loss_intervals ADD COLUMN sealed INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE loss_intervals ADD COLUMN supersedes TEXT;
+UPDATE observations SET sync_outcome = '` + legacySyncedOutcome + `' WHERE synced = 1;
+UPDATE coverage SET sync_outcome = '` + legacySyncedOutcome + `' WHERE synced = 1;
+UPDATE loss_intervals SET sync_outcome = '` + legacySyncedOutcome + `' WHERE synced = 1;
+UPDATE profiles SET sync_outcome = '` + legacySyncedOutcome + `' WHERE synced = 1;
 ` + retentionTableSQL + `
 UPDATE schema_meta SET v = '4' WHERE k = 'schema_version';
 `
+
+// legacySyncedOutcome backfills a v3 row already synced=1 (codex-P1 fix
+// 2026-08-10): the exact outcome was never recorded, but a v3 client could
+// only ever receive accepted/already_present — SMC had no tombstones until
+// migration 0006 — so CLOUD-PRESENT is a sound class inference, the
+// legacy_unprofiled precedent applied to sync. NULL would strand every
+// upgraded synced row outside both purge classes and wedge the archive in
+// drop_new at the watermark. Local-only: the wire never carries it.
+const legacySyncedOutcome = "legacy_synced"
 
 const migrateProfiles3to4SQL = `
 ALTER TABLE profiles ADD COLUMN sync_outcome TEXT;

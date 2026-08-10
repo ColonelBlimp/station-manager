@@ -83,11 +83,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/evidencewire"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -199,6 +201,125 @@ func TestRT1_CaptureOutlivesTheCapByPurgingAcked(t *testing.T) {
 	s2.Stop()
 }
 
+// buildV3SyncedArchive creates a v3-shaped archive whose observation and
+// coverage rows are all synced=1 (as a §5-era client left them): the
+// codex-P1 fixture — under a NULL backfill these rows belong to NEITHER
+// purge class and the archive wedges at the watermark.
+func buildV3SyncedArchive(t *testing.T, path string, rows int) int64 {
+	t.Helper()
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(v2SchemaForTest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`
+ALTER TABLE observations ADD COLUMN offered_at TEXT;
+ALTER TABLE observations ADD COLUMN quarantine_reason TEXT;
+ALTER TABLE coverage ADD COLUMN offered_at TEXT;
+ALTER TABLE coverage ADD COLUMN quarantine_reason TEXT;
+ALTER TABLE loss_intervals ADD COLUMN offered_at TEXT;
+ALTER TABLE loss_intervals ADD COLUMN quarantine_reason TEXT;
+ALTER TABLE profiles ADD COLUMN offered_at TEXT;
+ALTER TABLE profiles ADD COLUMN quarantine_reason TEXT;
+UPDATE schema_meta SET v = '3' WHERE k = 'schema_version';`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := raw.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < rows; i++ {
+		slot := slotAt(i * 15).UTC().Format("2006-01-02T15:04:05Z")
+		if _, err := tx.Exec(
+			`INSERT INTO observations (uuid, slot_start_utc, dial_mhz, dial_tracked, freq_hz,
+				dt_sec, snr, payload, parse_status, text, prov_algorithm,
+				metric_sync, metric_hard_sync, metric_costas_geo, metric_costas_min_block,
+				metric_blocks, metric_hard_errors, metric_dmin, decoder_build, profile_uuid, synced, offered_at)
+			 VALUES (?, ?, 14.074, 1, 1200, 0.1, -5, zeroblob(2048), 'parsed', NULL, 'bp',
+				1, 1, 1, 1, 1, 0, 1, 'v3', NULL, 1, '2026-08-10T00:00:00Z')`,
+			pad("v3obs", i), slot); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO coverage (uuid, slot_start_utc, outcome, dial_mhz, dial_tracked, decode_count, synced, offered_at)
+			 VALUES (?, ?, 'decoded', 14.074, 1, 1, 1, '2026-08-10T00:00:00Z')`,
+			pad("v3cov", i), slot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+	return statUsage(t, path)
+}
+
+// codex-P1 fix — an upgraded v3 archive full of synced rows must still
+// purge at the watermark: legacy_synced is cloud-present.
+func TestV4_LegacySyncedRowsStayPurgeable(t *testing.T) {
+	oldHeadroom := headroomBytes
+	headroomBytes = 4096
+	defer func() { headroomBytes = oldHeadroom }()
+
+	cfg := testConfig(t, true)
+	buildV3SyncedArchive(t, cfg.Path, 40)
+	// Migrate 3→4 under the roomy default cap first — the backfill is
+	// itself gated near the cap (TestV4_MigrationRefusedNearCap pins that);
+	// the purge phase then boots against the pinned watermark.
+	sm := newRunning(t, cfg)
+	sm.Stop()
+	usage := statUsage(t, cfg.Path)
+
+	cfg2 := cfg
+	cfg2.CapBytes = usage + headroomBytes/2
+	s := newRunning(t, cfg2) // v4 archive at cap pressure
+	s.CaptureSlot(richSlot(slotAt(900 * 15)))
+	drain(t, s)
+
+	db := openRaw(t, cfg.Path)
+	slotUTC := slotAt(900 * 15).UTC().Format("2006-01-02T15:04:05Z")
+	if n := countRows(t, db, `SELECT COUNT(*) FROM coverage WHERE slot_start_utc = ?`, slotUTC); n != 1 {
+		t.Fatal("P1: the cap-pressure slot dropped on an upgraded all-synced archive — legacy rows stranded outside every purge class")
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM retention_records WHERE acknowledged = 1`); n == 0 {
+		t.Fatal("P1: no acked receipt — the legacy purge must be receipted like any other")
+	}
+	s.Stop()
+}
+
+// The 3→4 backfill dirties ~every synced page, so — like 1→2 — a near-cap
+// v3 archive refuses migration on the pre-write projection rather than
+// blowing the cap.
+func TestV4_MigrationRefusedNearCap(t *testing.T) {
+	oldHeadroom := headroomBytes
+	headroomBytes = 4096
+	defer func() { headroomBytes = oldHeadroom }()
+
+	cfg := testConfig(t, true)
+	usage := buildV3SyncedArchive(t, cfg.Path, 600)
+	cfg.CapBytes = usage + usage/2
+
+	s := New(cfg, logging.Noop())
+	if err := s.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Start()
+	if err == nil {
+		s.Stop()
+		t.Fatal("P1: a near-cap v3→v4 backfill must refuse like 1→2 — its WAL peak is ~the whole archive")
+	}
+	if !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("the refusal must name the cap; got: %v", err)
+	}
+	db := openRaw(t, cfg.Path)
+	var ver string
+	if err := db.QueryRow(`SELECT v FROM schema_meta WHERE k = 'schema_version'`).Scan(&ver); err != nil || ver != "3" {
+		t.Fatalf("refused migration must leave the archive at v3 (got %q, err %v)", ver, err)
+	}
+}
+
 // RT3 — coverage never orphans backwards, exercised where it can actually
 // fail: every coverage row is cloud-present while every observation is
 // still unsynced (the server acked coverage and left observations
@@ -248,6 +369,46 @@ func TestRT3_CoverageNeverOrphansBackwards(t *testing.T) {
 			   (SELECT 1 FROM coverage c WHERE c.slot_start_utc = o.slot_start_utc)`); n != 0 {
 			t.Fatalf("RT3: %d observations lost their coverage row after chunk %d — coverage purged while its slot still held data", n, j)
 		}
+	}
+	s2.Stop()
+}
+
+// codex-P2 fix (2026-08-10) — the budget check RESERVES the incoming
+// receipt's estimate: a budget with room for existing metadata but NOT for
+// the receipt the purge would insert refuses the purge, instead of
+// committing a receipt that busts the promised bound by up to one row.
+func TestRT6_BudgetReservesTheIncomingReceipt(t *testing.T) {
+	oldHeadroom := headroomBytes
+	headroomBytes = 4096
+	defer func() { headroomBytes = oldHeadroom }()
+	oldBudget := metadataBudgetBytes
+	metadataBudgetBytes = 200 // above current usage (0), below one receipt's reserve
+	defer func() { metadataBudgetBytes = oldBudget }()
+
+	cfg := testConfig(t, true)
+	s1 := newRunning(t, cfg)
+	for i := 0; i < 15; i++ {
+		s1.CaptureSlot(richSlot(slotAt(i * 15)))
+	}
+	drain(t, s1)
+	s1.Stop()
+	usage := statUsage(t, cfg.Path)
+
+	db := openRaw(t, cfg.Path)
+	obsBefore := countRows(t, db, `SELECT COUNT(*) FROM observations`)
+
+	cfg2 := cfg
+	cfg2.CapBytes = usage + headroomBytes/2
+	s2 := newRunning(t, cfg2)
+	s2.CaptureSlot(richSlot(slotAt(700 * 15)))
+	drain(t, s2)
+
+	if n := countRows(t, db, `SELECT COUNT(*) FROM observations`); n != obsBefore {
+		t.Fatalf("P2: observations %d → %d under a budget with no room for the receipt — that purge's receipt busts the bound", obsBefore, n)
+	}
+	st := s2.Status()
+	if st.Retention == nil || st.Retention.Pressure != pressureMetadata {
+		t.Fatalf("P2: Retention = %+v, want metadata pressure — the refusal must be visible", st.Retention)
 	}
 	s2.Stop()
 }
@@ -643,10 +804,17 @@ UPDATE schema_meta SET v = '3' WHERE k = 'schema_version';`); err != nil {
 	if _, err := db.Query(v3SchemaProbe); err != nil {
 		t.Fatalf("V4: loss_intervals is missing v4 columns: %v", err)
 	}
+	// codex-P1 fix (2026-08-10): a v3 row already synced=1 backfills
+	// sync_outcome='legacy_synced' — the legacy_unprofiled precedent: the
+	// exact outcome was never recorded, but v3 clients could only ever
+	// receive accepted/already_present (SMC had no tombstones then), so
+	// the CLOUD-PRESENT class is a sound inference and the row stays
+	// purge-eligible. NULL would strand it in neither purge class and an
+	// upgraded synced archive would wedge in drop_new at the watermark.
 	if n := countRows(t, db,
 		`SELECT COUNT(*) FROM loss_intervals WHERE uuid = 'v3-loss-a' AND synced = 1
-		   AND sealed = 1 AND supersedes IS NULL AND sync_outcome IS NULL`); n != 1 {
-		t.Fatal("V4: the v3 loss row must survive SEALED (pre-migration rows are frozen by definition), un-superseded, outcome unknown")
+		   AND sealed = 1 AND supersedes IS NULL AND sync_outcome = 'legacy_synced'`); n != 1 {
+		t.Fatal("V4: the v3 synced loss row must survive SEALED with sync_outcome='legacy_synced' — NULL strands it outside every purge class")
 	}
 	for _, table := range []string{"observations", "coverage", "profiles", "retention_records"} {
 		if !hasColumn(t, db, table, "sync_outcome") {

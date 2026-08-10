@@ -115,9 +115,22 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   object · cloud doc.go · SY2 header amended (sync never deletes;
   cap purge may, as `rejected`). Old drop-new fixtures dial
   metadataBudgetBytes=0 (ruled full-§4.1 change, comments say so).
-- **NEXT: OPERATOR commits (watch auto-review; `podman start sm-pg` for
-  cloud tests) → push → CI → §6/§7 presence+page or dogfood consent** ·
-  on-air 0067 · Settings defaults dropdown · max_repeats-to-session.
+- **RETENTION committed `1bce385c` (UNPUSHED). CI on main is RED since
+  the §5 push — MY false green: `gh run watch | tail` swallowed the
+  --exit-status code (never pipe it). Cause: the smcloud e2e harness's
+  inline drop list lacked the evidence tables → tenants drop failed →
+  next test's clean-slate errored (reconcile_e2e:114). FIXED in tree.
+  1bce385c's review: P1 (v3 synced rows stranded outside both purge
+  classes → wedge) FIXED via `legacy_synced` backfill in 3→4 + joined
+  cloudPresent + the 3→4 backfill now gated near-cap like 1→2 (factored
+  migrationBackfillGate); P2 (budget check didn't reserve the incoming
+  receipt) FIXED via receiptReserveBytes=256. All RED-first, 3 more
+  proofs bit; race green evidence+cloud+smcloud; tree -short green; lint
+  0. Review doc deleted.**
+- **NEXT: OPERATOR commits the CI fix + P1/P2 fixes (one commit; watch
+  auto-review) → push → CI MUST GO GREEN (verify `gh run list -L1`
+  directly, never a piped watch) → §6/§7 or dogfood consent** · on-air
+  0067 · Settings defaults dropdown · max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.
