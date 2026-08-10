@@ -77,20 +77,20 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   state via zero-slot decode (swap for Decoder.SkipSlot() when upstream ships
   one). Spec: `internal/ft8/decodesplit_test.go` (AC1–AC7 in header; 5
   reversion probes bit). ft8 + race + tree -short green.
-- **Decoder-state review arc CLOSED (2026-08-10).** cd1757a7's P1+P2 fixed
-  and committed (`75f40264`): dial-moved slots RESET the decoder
-  (`slotDecoder.reset()`), delivery gaps ADVANCE it per omitted slot. Its
-  OWN review then found the composition hole — the scheduler can DROP the
-  slot carrying DialChanged, so a gap advance could carry the band-blind
-  hash table across an UNDELIVERED QSY — fixed in tree: a dial DIFFERENCE
-  between consecutive delivered slots resets exactly as a delivered moved
-  slot would; gap advance runs only when the dial held. AC8 amended in
-  `decodesplit_test.go` (+ TestDecodeLoop_DroppedQsySlotStillResets, the
-  reviewer's scenario verbatim); probe bit; ft8 + race green; review doc
-  triaged + deleted.
-- **NEXT: commit the dropped-QSY fix → PUSH (neither cd1757a7 nor 75f40264
-  has a CI run yet) → watch CI → evidence.db writer (§4.1).** Then: on-air
-  0067 · Settings defaults dropdown · max_repeats-to-session.
+- **Decoder-state review arc CLOSED clean (2026-08-10, three rounds).**
+  `75f40264` (dial-moved slots RESET via slotDecoder.reset(), delivery gaps
+  ADVANCE per omitted slot) + `d8c11a0a` (the composition hole: the
+  scheduler can DROP the slot carrying DialChanged, so a dial DIFFERENCE
+  between consecutive delivered slots now resets too; gap advance only when
+  the dial held). Review of d8c11a0a: **NO FINDINGS** — arc converged. CI
+  **GREEN** on the cd1757a7+75f40264 push (`31349738895`, 12m47s; the
+  flake-watch handler test passed again). Spec trail: AC6/AC8 amendments in
+  `decodesplit_test.go`.
+- **NEXT: push `d8c11a0a` (ahead 1) + watch its CI → evidence.db writer
+  (§4.1) is the next build slice.** Then: on-air 0067 · Settings defaults
+  dropdown · max_repeats-to-session. Dogfood inbox has a NEW on-air bug from
+  this morning's 80m session (SM6MUY worked-indication vs still-working,
+  04:27) awaiting triage.
 
 ## Current state (as of 2026-08-09)
 
