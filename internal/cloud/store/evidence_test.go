@@ -26,7 +26,7 @@ package store
        never retried (§5.4 amendment — legacy_unprofiled is
        indistinguishable from any other NULL here).
    E6  Row faults never block batch-mates: malformed payload, the
-       reserved/unknown kind, an invalid (non-v7) uuid, a missing digest
+       unknown kind (the retention kind is live since the retention slice), an invalid (non-v7) uuid, a missing digest
        each answer permanent_reject(reason) on THEIR row while a valid
        row in the same batch lands accepted (§5.1's quarantine contract,
        server half).
@@ -49,6 +49,20 @@ package store
        keys (harmless to digest v1) but may also reformat numeric
        LEXEMES, which ARE digest content — a normalizing column corrupts
        identity on export/replay.
+   E11 (retention slice, 2026-08-10) The reserved `retention` kind
+       activates: a retention record stores and answers accepted under
+       the unchanged contract — no kind is exempt from any rule.
+   E12 (retention slice) Supersession is tombstone-then-delete, ONE
+       transaction: a summary carrying `supersedes` deletes its DIRECT
+       predecessors' rows after inserting persistent tombstones for them,
+       so a later old-backup re-offer of a deleted predecessor answers
+       `tombstoned` (that outcome's first activation) — without the
+       tombstone, the confusable design quietly re-creates the
+       predecessor and supersession is not idempotent. Re-offering the
+       summary itself is already_present.
+   E13 (retention slice) Tombstones gate EVERY kind's upsert, checked
+       before storage — a tombstoned (tenant, kind, uuid) never re-enters
+       the store, whatever content it carries.
 */
 
 import (
@@ -235,13 +249,13 @@ func TestEvidence_RowFaultsDoNotBlockBatchmates(t *testing.T) {
 		`{"slot_start_utc":"2026-08-10T12:00:00Z","outcome":"decoded","dial_mhz":14.074,"dial_tracked":true,"decode_count":1}`)
 	malformed := evidencewire.Record{Kind: evidencewire.KindCoverage, UUID: utils.NewUUIDv7At(now),
 		DigestV: 1, Digest: good.Digest, Payload: json.RawMessage(`{"unterminated":`)}
-	reserved := evRec(t, evidencewire.KindRetention, utils.NewUUIDv7At(now), `{"anything":1}`)
+	unknown := evRec(t, "telemetry", utils.NewUUIDv7At(now), `{"anything":1}`)
 	badUUID := evRec(t, evidencewire.KindCoverage, "not-a-uuid",
 		`{"slot_start_utc":"2026-08-10T12:00:00Z","outcome":"decoded","dial_mhz":14.074,"dial_tracked":true,"decode_count":1}`)
 	noDigest := evidencewire.Record{Kind: evidencewire.KindCoverage, UUID: utils.NewUUIDv7At(now),
 		DigestV: 1, Digest: "", Payload: good.Payload}
 
-	out := upsertEv(t, s, tid, malformed, reserved, badUUID, noDigest, good)
+	out := upsertEv(t, s, tid, malformed, unknown, badUUID, noDigest, good)
 	for i, o := range out[:4] {
 		if o.Outcome != evidencewire.OutcomePermanentReject || o.Reason == "" {
 			t.Fatalf("E6: faulty record %d = %q/%q, want permanent_reject with a reason", i, o.Outcome, o.Reason)
@@ -296,6 +310,93 @@ func TestEvidence_PayloadStoredByteForByte(t *testing.T) {
 	re, err := evidencewire.DigestV1Hex([]byte(stored))
 	if err != nil || re != rec.Digest {
 		t.Fatalf("E10: stored payload no longer verifies against its digest (recomputed %q, stored %q, err %v)", re, rec.Digest, err)
+	}
+}
+
+func retentionPayload(supersedes string) string {
+	base := `{"start_utc":"2026-08-10T10:00:00Z","end_utc":"2026-08-10T11:00:00Z","observations":120,"coverage":240,"reason":"cap","acknowledged":true`
+	if supersedes != "" {
+		return base + `,"supersedes":` + supersedes + `}`
+	}
+	return base + `}`
+}
+
+func TestEvidence_RetentionKindActivates(t *testing.T) {
+	s := testStore(t)
+	tid, _ := seedTenantLogbook(t, s, "7Q5MLV")
+	rec := evRec(t, evidencewire.KindRetention, utils.NewUUIDv7At(time.Now()), retentionPayload(""))
+	if out := upsertEv(t, s, tid, rec); out[0].Outcome != evidencewire.OutcomeAccepted {
+		t.Fatalf("E11: retention record = %q (%s), want accepted — the reserved kind is live", out[0].Outcome, out[0].Reason)
+	}
+	if n := evCount(t, s, tid, "retention"); n != 1 {
+		t.Fatalf("E11: %d stored retention rows, want 1", n)
+	}
+}
+
+func TestEvidence_SupersessionTombstonesThenDeletes(t *testing.T) {
+	s := testStore(t)
+	tid, _ := seedTenantLogbook(t, s, "7Q5MLV")
+	now := time.Now()
+	predA := evRec(t, evidencewire.KindRetention, utils.NewUUIDv7At(now), retentionPayload(""))
+	predB := evRec(t, evidencewire.KindRetention, utils.NewUUIDv7At(now), retentionPayload(""))
+	upsertEv(t, s, tid, predA, predB)
+
+	summary := evRec(t, evidencewire.KindRetention, utils.NewUUIDv7At(now),
+		retentionPayload(fmt.Sprintf(`[%q,%q]`, predA.UUID, predB.UUID)))
+	if out := upsertEv(t, s, tid, summary); out[0].Outcome != evidencewire.OutcomeAccepted {
+		t.Fatalf("E12: summary = %q (%s), want accepted", out[0].Outcome, out[0].Reason)
+	}
+	if n := evCount(t, s, tid, "retention"); n != 1 {
+		t.Fatalf("E12: %d retention rows after supersession, want 1 (the summary; predecessors deleted)", n)
+	}
+	// The deleted predecessor is TOMBSTONED: an old backup's re-offer must
+	// answer tombstoned, never quietly re-create the row.
+	if out := upsertEv(t, s, tid, predA); out[0].Outcome != evidencewire.OutcomeTombstoned {
+		t.Fatalf("E12: re-offered predecessor = %q, want tombstoned — supersession must be idempotent", out[0].Outcome)
+	}
+	if n := evCount(t, s, tid, "retention"); n != 1 {
+		t.Fatalf("E12: predecessor re-offer re-created a row (%d rows)", n)
+	}
+	// The summary itself re-offers as already_present, unchanged contract.
+	if out := upsertEv(t, s, tid, summary); out[0].Outcome != evidencewire.OutcomeAlreadyPresent {
+		t.Fatalf("E12: summary re-offer = %q, want already_present", out[0].Outcome)
+	}
+
+	// Loss-interval supersession follows the identical rule.
+	lossA := evRec(t, evidencewire.KindLossInterval, utils.NewUUIDv7At(now),
+		`{"start_utc":"2026-08-10T09:00:00Z","end_utc":"2026-08-10T09:01:00Z","slots":4,"observations":9,"reason":"cap","remote_status":"never_offered","dial_mhz":14.074}`)
+	upsertEv(t, s, tid, lossA)
+	lossSummary := evRec(t, evidencewire.KindLossInterval, utils.NewUUIDv7At(now),
+		fmt.Sprintf(`{"start_utc":"2026-08-10T09:00:00Z","end_utc":"2026-08-10T09:05:00Z","slots":20,"observations":45,"reason":"cap","remote_status":"never_offered","dial_mhz":14.074,"supersedes":[%q]}`, lossA.UUID))
+	if out := upsertEv(t, s, tid, lossSummary); out[0].Outcome != evidencewire.OutcomeAccepted {
+		t.Fatalf("E12: loss summary = %q (%s), want accepted", out[0].Outcome, out[0].Reason)
+	}
+	if out := upsertEv(t, s, tid, lossA); out[0].Outcome != evidencewire.OutcomeTombstoned {
+		t.Fatalf("E12: superseded loss re-offer = %q, want tombstoned", out[0].Outcome)
+	}
+}
+
+func TestEvidence_TombstonesGateEveryKind(t *testing.T) {
+	s := testStore(t)
+	tid, _ := seedTenantLogbook(t, s, "7Q5MLV")
+	now := time.Now()
+	pred := evRec(t, evidencewire.KindRetention, utils.NewUUIDv7At(now), retentionPayload(""))
+	upsertEv(t, s, tid, pred)
+	summary := evRec(t, evidencewire.KindRetention, utils.NewUUIDv7At(now),
+		retentionPayload(fmt.Sprintf(`[%q]`, pred.UUID)))
+	upsertEv(t, s, tid, summary)
+
+	// DIFFERENT content under the tombstoned identity: still tombstoned —
+	// the gate runs before any digest/storage logic (E13).
+	altered := evRec(t, evidencewire.KindRetention, pred.UUID, retentionPayload(""))
+	altered.Payload = json.RawMessage(`{"start_utc":"2000-01-01T00:00:00Z","end_utc":"2000-01-01T01:00:00Z","observations":1,"coverage":1,"reason":"cap","acknowledged":true}`)
+	d, err := evidencewire.DigestV1Hex(altered.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	altered.Digest = d
+	if out := upsertEv(t, s, tid, altered); out[0].Outcome != evidencewire.OutcomeTombstoned {
+		t.Fatalf("E13: altered offer under a tombstoned identity = %q, want tombstoned", out[0].Outcome)
 	}
 }
 

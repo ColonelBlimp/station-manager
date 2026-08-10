@@ -320,7 +320,48 @@ per-row terminal outcomes, and the durable offered-but-unacknowledged vs
 never-offered distinction this section's three-valued loss taxonomy
 depends on — a row that has been included in a sent batch must be
 distinguishable from one never offered, even when no acknowledgement ever
-arrived. Unacknowledged deletion is not introduced anywhere.
+arrived. Unacknowledged deletion is not introduced anywhere *(scope
+clarified by the retention-slice rulings below: that clause bound the
+SYNC slice only)*.
+
+**Retention-slice rulings (operator, 2026-08-10, before RED):**
+
+- **Full §4.1 drop order.** After acknowledged rows are exhausted, CURRENT
+  capture wins over old unacknowledged observations: oldest-first drops,
+  recorded as loss intervals under the preserved `offered_at` distinction
+  (`offered_unacknowledged` vs `never_offered`). A QUARANTINED
+  (permanent_reject) observation is **known remotely absent** — its drop
+  records as `rejected`, never `offered_unacknowledged`.
+- **Constants ratified, with meanings:** 500 = **maximum** rows per purge
+  transaction; 64 MiB = **reusable-page target**, clamped to half the
+  watermark — NOT a promised file-size reduction: SQLite DELETE frees
+  pages for reuse and the file does not shrink, so purging measures
+  freelist/reusable pages and uses **bounded checkpoints**; VACUUM never
+  runs on the live path; **queued slots take priority between chunks**.
+  256 rows/kind = compaction **trigger**, not the hard bound; 64 = a
+  summary's **direct** predecessors only. A **4 MiB logical budget**
+  bounds loss + retention metadata: when compaction cannot fit within it,
+  **no invisible purge occurs** — capture enters metadata-pressure
+  drop-new and status explains why.
+- **Schema v4 persists each row's exact terminal outcome** — `synced=1`
+  alone cannot distinguish cloud-present (`accepted`/`already_present`,
+  the ONLY purge-eligible class) from `tombstoned`/`suppressed` (terminal
+  but not present remotely; no purge class this slice — none can exist
+  before §8). **Sealing:** an OPEN loss accumulator is not sync-eligible;
+  sealing freezes it, and no offered or synced UUID may subsequently
+  change content (this also closes a latent §5 defect: the open
+  accumulator's refreshed row was selectable for sync).
+- **SMC supersession = tombstones, then delete, one transaction.** The
+  summary's ingest inserts persistent supersession tombstones for its
+  predecessors BEFORE deleting them, so a later old-backup re-offer
+  answers `tombstoned` (that outcome's first activation) — without the
+  tombstone, deletion is not idempotent. A summary may itself become a
+  compaction predecessor **only after** its own `accepted` /
+  `already_present`, ensuring its earlier supersession was applied at SMC
+  before it is locally replaced.
+- **Compaction-only lifetime confirmed:** loss and retention rows are
+  never cap-purged; they disappear only through atomic replacement by an
+  exact summary.
 
 ### 4.2 Station configuration
 

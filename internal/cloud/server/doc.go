@@ -6,7 +6,9 @@
 // # Routes
 //
 //	PUT  /v1/qsos                     batch upsert-by-UUID; deleted_at set = tombstone
-//	PUT  /v1/evidence                 §5 evidence-sync batch: per-row outcomes (evidencewire)
+//	PUT  /v1/evidence                 §5 evidence-sync batch: per-row outcomes (evidencewire);
+//	                                  retention-slice supersession = tombstone-then-delete, and
+//	                                  tombstones gate every kind's upsert (re-offer → tombstoned)
 //	GET  /v1/logbooks                 the tenant's logbooks (id + name)
 //	GET  /v1/logbooks/{id}/reconcile  {count, hash} over the live rows (reconcile.Summary)
 //	GET  /v1/logbooks/{id}/manifest   the (uuid, modified_at, deleted) diff list

@@ -122,16 +122,17 @@ type SlotCapture struct {
 // Status is the local honesty surface (§4.1 amendment: usage and the
 // drop-new state are exposed; the unprofiled count is the §5.4 guardrail).
 type Status struct {
-	Enabled                bool            `json:"enabled"`
-	State                  string          `json:"state"`
-	CapBytes               int64           `json:"cap_bytes"`
-	WatermarkBytes         int64           `json:"watermark_bytes"`
-	UsageBytes             int64           `json:"usage_bytes"`
-	Observations           int64           `json:"observations"`
-	UnprofiledObservations int64           `json:"unprofiled_observations"`
-	DroppedSlots           int64           `json:"dropped_slots"`
-	Profiles               *ProfilesStatus `json:"profiles,omitempty"`
-	Sync                   *SyncStatus     `json:"sync,omitempty"`
+	Enabled                bool             `json:"enabled"`
+	State                  string           `json:"state"`
+	CapBytes               int64            `json:"cap_bytes"`
+	WatermarkBytes         int64            `json:"watermark_bytes"`
+	UsageBytes             int64            `json:"usage_bytes"`
+	Observations           int64            `json:"observations"`
+	UnprofiledObservations int64            `json:"unprofiled_observations"`
+	DroppedSlots           int64            `json:"dropped_slots"`
+	Profiles               *ProfilesStatus  `json:"profiles,omitempty"`
+	Sync                   *SyncStatus      `json:"sync,omitempty"`
+	Retention              *RetentionStatus `json:"retention,omitempty"`
 }
 
 // lossAccum is the reserved in-memory accumulator: the record of dropping
@@ -162,11 +163,12 @@ type Service struct {
 	closed  atomic.Bool
 	pending atomic.Int64 // enqueued-but-unprocessed slots; drain observability
 
-	mu      sync.Mutex
-	started bool
-	state   string
-	dropped int64
-	loss    *lossAccum
+	mu       sync.Mutex
+	started  bool
+	state    string
+	dropped  int64
+	loss     *lossAccum
+	pressure string // retention drop-new cause: "" | cap | metadata (RT9)
 
 	// §4.2 profile resolution state, written once in Start (restart-only
 	// activation) and immutable until Stop; reads happen under mu.
@@ -378,6 +380,7 @@ func (s *Service) Status() Status {
 	}
 	st.Profiles = s.profilesStatusLocked()
 	st.Sync = s.syncStatusLocked()
+	st.Retention = s.retentionStatusLocked()
 	s.mu.Unlock()
 	st.UsageBytes = s.physicalUsage()
 	_ = db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&st.Observations)
@@ -452,42 +455,64 @@ func (s *Service) migrateSchema(db *sql.DB) error {
 		if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
 			return errors.New(op).WithErr(err).WithMsg("truncate WAL after v1→v2 migration")
 		}
-		return s.migrate2to3(db)
+		if err := s.migrate2to3(db); err != nil {
+			return err
+		}
+		return s.migrate3to4(db)
 	case v == "2":
-		return s.migrate2to3(db)
+		if err := s.migrate2to3(db); err != nil {
+			return err
+		}
+		return s.migrate3to4(db)
+	case v == "3":
+		return s.migrate3to4(db)
 	default:
 		return errors.New(op).WithMsgf("evidence.db schema version %q is newer than this build understands", v)
 	}
+}
+
+// migrate3to4 adds the retention columns + table (retention-slice rulings
+// 2026-08-10). Like 2→3: ADD COLUMN is schema-page-only, far under the
+// reserved headroom, so no cap gate.
+func (s *Service) migrate3to4(db *sql.DB) error {
+	return s.applyAdditiveMigration(db, "evidence.Service.migrate3to4",
+		"sync_outcome", migrateProfiles3to4SQL, migrate3to4SQL)
 }
 
 // migrate2to3 adds the v3 sync columns. No cap gate: ADD COLUMN without a
 // non-constant default touches the schema page only — no row rewrite
 // (https://sqlite.org/lang_altertable.html, ALTER TABLE ADD COLUMN) — so
 // the growth is bounded far under the reserved headroom, unlike 1→2's
-// every-row backfill. The profiles half is conditional because a v1
-// archive's 1→2 step created that table from the CURRENT profileTablesSQL,
-// which already carries the columns.
+// every-row backfill.
 func (s *Service) migrate2to3(db *sql.DB) error {
-	const op errors.Op = "evidence.Service.migrate2to3"
+	return s.applyAdditiveMigration(db, "evidence.Service.migrate2to3",
+		"offered_at", migrateProfiles2to3SQL, migrate2to3SQL)
+}
+
+// applyAdditiveMigration runs one additive step whose profiles half is
+// CONDITIONAL: a chained archive created that table from the current DDL,
+// which already carries the newest columns, so probeColumn decides whether
+// profilesSQL applies.
+func (s *Service) applyAdditiveMigration(db *sql.DB, op errors.Op, probeColumn, profilesSQL, mainSQL string) error {
 	tx, err := db.Begin()
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("begin v2→v3 migration")
+		return errors.New(op).WithErr(err).WithMsg("begin migration")
 	}
 	defer func() { _ = tx.Rollback() }()
 	var hasCols int
 	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM pragma_table_info('profiles') WHERE name = 'offered_at'`).Scan(&hasCols); err != nil {
+		`SELECT COUNT(*) FROM pragma_table_info('profiles') WHERE name = ?`, probeColumn).Scan(&hasCols); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("probe profiles shape")
 	}
-	stmts := migrate2to3SQL
+	stmts := mainSQL
 	if hasCols == 0 {
-		stmts = migrateProfiles2to3SQL + stmts
+		stmts = profilesSQL + stmts
 	}
 	if _, err := tx.Exec(stmts); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("apply v2→v3 migration")
+		return errors.New(op).WithErr(err).WithMsg("apply migration")
 	}
 	if err := tx.Commit(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("commit v2→v3 migration")
+		return errors.New(op).WithErr(err).WithMsg("commit migration")
 	}
 	return nil
 }
@@ -521,8 +546,17 @@ func (s *Service) processSlot(sc SlotCapture) {
 	usage := s.physicalUsage()
 	watermark := s.cfg.CapBytes - headroomBytes
 
+	// Retention slice (RT1): cap pressure purges instead of dropping when
+	// something purgeable and receipt capacity exist — the slot then writes
+	// into freed pages and the file stays bounded. Drop-new remains the
+	// honest fallback, with Status.Retention.Pressure saying WHY.
+	canWrite := usage < watermark
+	if !canWrite {
+		canWrite = s.tryFreeSpace()
+	}
+
 	s.mu.Lock()
-	if usage >= watermark {
+	if !canWrite {
 		// Drop BEFORE the cap (operator amendment 2026-08-10): decoding
 		// continues, only evidence writes stop; the dropped span accumulates
 		// and its coalesced interval row is refreshed within the reserved
@@ -670,16 +704,21 @@ func (s *Service) upsertLossLocked(clear bool) {
 	if l == nil || s.db == nil {
 		return
 	}
+	// sealed tracks the accumulator's lifecycle (RT10): 0 while the row is
+	// still being refreshed in place, 1 the moment it closes — only sealed
+	// rows are sync-eligible, because an offered UUID's content must never
+	// change afterward.
 	_, err := s.db.Exec(
-		`INSERT INTO loss_intervals (uuid, start_utc, end_utc, slots, observations, reason, remote_status, dial_mhz)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO loss_intervals (uuid, start_utc, end_utc, slots, observations, reason, remote_status, dial_mhz, sealed)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(uuid) DO UPDATE SET
 			end_utc = excluded.end_utc,
 			slots = excluded.slots,
 			observations = excluded.observations,
-			dial_mhz = excluded.dial_mhz`,
+			dial_mhz = excluded.dial_mhz,
+			sealed = excluded.sealed`,
 		l.uuid, l.start.Format(time.RFC3339), l.end.Format(time.RFC3339),
-		l.slots, l.observations, l.reason, remoteNeverOffered, l.dialMHz)
+		l.slots, l.observations, l.reason, remoteNeverOffered, l.dialMHz, boolInt(clear))
 	if err != nil {
 		s.log.WarnWith().Err(err).Msg("evidence: loss interval persist failed; accumulator retained")
 		return

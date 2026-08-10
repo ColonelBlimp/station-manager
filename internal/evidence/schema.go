@@ -1,8 +1,22 @@
 package evidence
 
-// evidence.db schema, version 3. Every row kind carries a UUIDv7 primary key
-// and a synced flag (pure upload scheduling, §4.1), plus the v3 sync columns
-// (§5 sync slice, operator rulings 2026-08-10):
+// evidence.db schema, version 4. Every row kind carries a UUIDv7 primary key
+// and a synced flag (pure upload scheduling, §4.1), the v3 sync columns, and
+// the v4 retention columns (retention-slice rulings 2026-08-10):
+//
+//   - sync_outcome: the exact terminal outcome, set with synced=1 —
+//     synced alone cannot distinguish cloud-present (accepted /
+//     already_present, the ONLY purge-eligible class) from tombstoned /
+//     suppressed (terminal but NOT present remotely).
+//   - loss_intervals.sealed: RT10 — an OPEN accumulator row is refreshed
+//     in place and must never be sync-eligible; sealing freezes it, and no
+//     offered or synced UUID may subsequently change content.
+//   - supersedes (loss_intervals, retention_records): a compaction
+//     summary's DIRECT predecessor UUIDs (JSON array, ≤ 64); NULL on plain
+//     rows. retention_records are the §4.1 purge receipts — one immutable
+//     record per purge chunk, committed with its deletions.
+//
+// v3 sync columns (§5 sync slice, operator rulings 2026-08-10):
 //
 //   - offered_at: conservative durable SEND-INTENT — NULL = never offered,
 //     non-NULL = possibly offered, unacknowledged. Set with COALESCE before
@@ -32,7 +46,7 @@ package evidence
 // state (asserted only through Status) but persisted so a later boot can
 // tell a retired lineage from an unchanged one (re-add must mint), and so
 // the archive stays self-describing for sync.
-const schemaVersion = "3"
+const schemaVersion = "4"
 
 const profileTablesSQL = `
 CREATE TABLE IF NOT EXISTS profiles (
@@ -50,11 +64,30 @@ CREATE TABLE IF NOT EXISTS profiles (
 	synced            INTEGER NOT NULL DEFAULT 0,
 	offered_at        TEXT,
 	quarantine_reason TEXT,
+	sync_outcome      TEXT,
 	UNIQUE(lineage, version)
 );
 CREATE TABLE IF NOT EXISTS profile_active (
 	band         TEXT PRIMARY KEY,
 	profile_uuid TEXT NOT NULL
+);
+`
+
+// retentionTableSQL is shared by the fresh DDL and the 3→4 migration.
+const retentionTableSQL = `
+CREATE TABLE IF NOT EXISTS retention_records (
+	uuid              TEXT PRIMARY KEY,
+	start_utc         TEXT NOT NULL,
+	end_utc           TEXT NOT NULL,
+	observations      INTEGER NOT NULL,
+	coverage          INTEGER NOT NULL,
+	reason            TEXT NOT NULL,
+	acknowledged      INTEGER NOT NULL,
+	supersedes        TEXT,
+	synced            INTEGER NOT NULL DEFAULT 0,
+	offered_at        TEXT,
+	quarantine_reason TEXT,
+	sync_outcome      TEXT
 );
 `
 
@@ -66,7 +99,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 	k TEXT PRIMARY KEY,
 	v TEXT NOT NULL
 );
-INSERT INTO schema_meta (k, v) VALUES ('schema_version', '3')
+INSERT INTO schema_meta (k, v) VALUES ('schema_version', '4')
 	ON CONFLICT(k) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS observations (
@@ -95,7 +128,8 @@ CREATE TABLE IF NOT EXISTS observations (
 	unprofiled_reason       TEXT,
 	synced                  INTEGER NOT NULL DEFAULT 0,
 	offered_at              TEXT,
-	quarantine_reason       TEXT
+	quarantine_reason       TEXT,
+	sync_outcome            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_observations_slot ON observations(slot_start_utc);
 
@@ -108,7 +142,8 @@ CREATE TABLE IF NOT EXISTS coverage (
 	decode_count      INTEGER NOT NULL,
 	synced            INTEGER NOT NULL DEFAULT 0,
 	offered_at        TEXT,
-	quarantine_reason TEXT
+	quarantine_reason TEXT,
+	sync_outcome      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_coverage_slot ON coverage(slot_start_utc);
 
@@ -123,9 +158,12 @@ CREATE TABLE IF NOT EXISTS loss_intervals (
 	dial_mhz          REAL NOT NULL,
 	synced            INTEGER NOT NULL DEFAULT 0,
 	offered_at        TEXT,
-	quarantine_reason TEXT
+	quarantine_reason TEXT,
+	sync_outcome      TEXT,
+	sealed            INTEGER NOT NULL DEFAULT 1,
+	supersedes        TEXT
 );
-` + profileTablesSQL
+` + profileTablesSQL + retentionTableSQL
 
 // migrate1to2SQL adopts a v1 archive ADDITIVELY (PR9): the reason column and
 // profile tables are added, pre-existing NULL profile references backfill
@@ -163,4 +201,23 @@ UPDATE schema_meta SET v = '3' WHERE k = 'schema_version';
 const migrateProfiles2to3SQL = `
 ALTER TABLE profiles ADD COLUMN offered_at TEXT;
 ALTER TABLE profiles ADD COLUMN quarantine_reason TEXT;
+`
+
+// migrate3to4SQL adds the retention columns ADDITIVELY. Existing loss rows
+// arrive sealed=1: pre-migration rows are frozen by definition (any open
+// accumulator died with its process). The profiles half is conditional for
+// the same reason as 2→3 (chained archives create profiles from the current
+// DDL); retention_records is CREATE IF NOT EXISTS and needs no condition.
+const migrate3to4SQL = `
+ALTER TABLE observations ADD COLUMN sync_outcome TEXT;
+ALTER TABLE coverage ADD COLUMN sync_outcome TEXT;
+ALTER TABLE loss_intervals ADD COLUMN sync_outcome TEXT;
+ALTER TABLE loss_intervals ADD COLUMN sealed INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE loss_intervals ADD COLUMN supersedes TEXT;
+` + retentionTableSQL + `
+UPDATE schema_meta SET v = '4' WHERE k = 'schema_version';
+`
+
+const migrateProfiles3to4SQL = `
+ALTER TABLE profiles ADD COLUMN sync_outcome TEXT;
 `

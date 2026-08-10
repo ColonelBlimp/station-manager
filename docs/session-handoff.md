@@ -73,18 +73,51 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   SY1 known-URL wall); race green (evidence+cloud, real Postgres), tree
   -short green, lint 0 issues; config.md + api-endpoints.md + cloud
   doc.go same-change.
-- **§5 review loop CLOSED: `c8df1e9d` (slice) + `6f4486e3` (3 P1 fixes +
-  the missed main.go wiring), both UNPUSHED.** 6f4486e3's review raised 1
-  P1 (in-place 0005 edit strands v5-JSONB databases) — REFUTED on
-  deployment fact: NO database ever applied v5 in the window (c8df1e9d
-  never pushed/deployed; dev container verified bare 2026-08-10);
-  rationale now a history note IN 0005's header, in tree uncommitted
-  (docs-ish one-liner, rides any next commit). Review docs all deleted.
-- **NEXT: OPERATOR commits the 0005 history note (tiny; auto-review will
-  run — .sql is in scope) + pushes all → CI → retention slice** (dev
-  Postgres: `podman start sm-pg`; the task fails on name collision) ·
-  on-air 0067 (Abandon-stops-queue flag open) · Settings defaults
-  dropdown · max_repeats-to-session.
+- **§5 arc PUSHED through `bdb3699b`** (`c8df1e9d` slice · `6f4486e3` 3
+  P1 fixes + main.go wiring · `bdb3699b` 0005 history note — that note is
+  the REFUTATION of 6f4486e3's review P1, refuted on deployment fact: no
+  DB ever applied v5-JSONB). All four review rounds triaged, all docs
+  deleted. CI run `31376763384` was IN PROGRESS at handoff — confirm
+  green (`gh run list -L1`) before building on top.
+- **RETENTION SLICE IN FLIGHT (operator rulings TAKEN 2026-08-10, dated
+  amendment in §4.1 — read it, don't re-derive): full drop order (current
+  capture beats old unacked; quarantined drops = `rejected`, known
+  absent); constants 500-max/64 MiB-reusable-pages-clamped-half-watermark/
+  256-trigger/64-direct + 4 MiB logical metadata budget (over-budget =
+  metadata-pressure drop-new, NO invisible purge); schema v4 persists
+  per-row terminal sync_outcome (purge class = accepted|already_present
+  ONLY) + loss SEALING (open accumulator never sync-eligible — fixes a
+  latent §5 defect); SMC supersession = tombstone-then-delete one txn
+  (activates `tombstoned`), summary re-compactable only after its own
+  accept; DELETE doesn't shrink SQLite — measure freelist, bounded
+  checkpoints, no live VACUUM, queued slots take priority between
+  chunks. Criteria RT1–RT10 ruled; RED suite next.**
+- **RETENTION SLICE BUILT — in tree, UNCOMMITTED (operator commits).**
+  All RED-first: schema v4 (sync_outcome all kinds · loss
+  sealed+supersedes · retention_records · 1→2→3→4 chain, factored
+  applyAdditiveMigration) · RT10 sealing (latent §5 fix) · SMC 0006
+  (retention kind + evidence_tombstones; supersession
+  tombstone-then-delete; tombstone gates every kind; E11–E13) · client
+  retention sync (syncTables order profiles→retention→loss→obs→cov,
+  supersedes on wire) · purge engine (tryFreeSpace at watermark: ≤1 chunk
+  ≤500 rows per slot, write-through on ≥1 free page — freelist physics
+  MEASURED and cited in retention.go; cloud-present first, then unsynced
+  oldest by class never_offered/offered_unacknowledged/rejected, receipt
+  SAME txn; TRUNCATE checkpoints, no VACUUM) · compaction (adjacent-
+  agreeing runs, ≤64 direct preds, exact totals; summaries re-compact
+  only after own accept) · 4 MiB budget → metadata-pressure drop-new
+  (state + Retention.Pressure says why) · status retention object.
+  Spec RT1–RT10 in retention_test.go (+E11–E13 store side); 10 retention
+  proofs bit (incl. 2 fixture gaps the proofs caught: RT3 needed
+  cov-acked/obs-pending, RT10 needed budget-0 drops); race green
+  (evidence+cloud real PG), tree -short green, lint 0 (dupl factored),
+  evidence suite ×3 stable. Docs same-change: api-endpoints retention
+  object · cloud doc.go · SY2 header amended (sync never deletes;
+  cap purge may, as `rejected`). Old drop-new fixtures dial
+  metadataBudgetBytes=0 (ruled full-§4.1 change, comments say so).
+- **NEXT: OPERATOR commits (watch auto-review; `podman start sm-pg` for
+  cloud tests) → push → CI → §6/§7 presence+page or dogfood consent** ·
+  on-air 0067 · Settings defaults dropdown · max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.

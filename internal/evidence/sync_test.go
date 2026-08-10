@@ -16,11 +16,12 @@ package evidence
         path is unaffected (structural: SY7). The validation half (sync
         requires a configured smcloud forwarder) is pinned in
         internal/config.
-   SY2  One contract, four kinds, quarantine: a permanent_reject row is
-        quarantined locally (reason recorded, visible in status, NEVER
-        re-offered, never deleted) without blocking batch-mates —
-        distinguishable from a transient failure, which retries and never
-        quarantines.
+   SY2  One contract, quarantine: a permanent_reject row is quarantined
+        locally (reason recorded, visible in status, NEVER re-offered)
+        without blocking batch-mates — distinguishable from a transient
+        failure, which retries and never quarantines. SYNC never deletes
+        a quarantined row; the retention slice's cap purge may (2026-08-10
+        ruling), receipted as `rejected` — known remotely absent (RT4).
    SY3  already_present is terminal-benign: the row marks synced exactly
         like accepted (the restored-backup duplicate offer).
    SY4  Profile ordering self-heals BY SELECTION, not envelope order

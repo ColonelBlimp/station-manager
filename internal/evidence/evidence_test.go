@@ -325,6 +325,14 @@ func TestCap_DropsNewBeforeTheLimit(t *testing.T) {
 	oldHeadroom := headroomBytes
 	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + one slot txn of WAL growth — see headroomBytes
 	defer func() { headroomBytes = oldHeadroom }()
+	// Retention-slice amendment (2026-08-10): at cap pressure the writer now
+	// PURGES unsynced history before it ever drops (full §4.1), so this
+	// test's drop-new boundary needs purging refused — a zero metadata
+	// budget forbids the receipt, and an unreceipted purge must never
+	// happen (RT6). The cap boundary this test pins is unchanged.
+	oldBudget := metadataBudgetBytes
+	metadataBudgetBytes = 0
+	defer func() { metadataBudgetBytes = oldBudget }()
 
 	cfg := testConfig(t, true)
 	cfg.CapBytes = 256 * 1024 // watermark ≈ 252 KiB — trips via db+WAL growth within ~tens of slots

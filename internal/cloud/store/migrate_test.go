@@ -53,6 +53,7 @@ FROM tenants t JOIN logbooks l ON l.tenant_id = t.id`
 		t.Fatalf("seed version-1 data: %v", err)
 	}
 	t.Cleanup(func() {
+		execSQLFile(t, db, "migrations/0006_retention.down.sql")
 		execSQLFile(t, db, "migrations/0005_evidence.down.sql")
 		execSQLFile(t, db, "migrations/0001_init.down.sql")
 		_, _ = db.Exec(`DROP TABLE IF EXISTS schema_migrations`)
@@ -88,7 +89,7 @@ FROM tenants t JOIN logbooks l ON l.tenant_id = t.id`
 	if err := db.QueryRow(`SELECT version FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
-	if qsos != 1 || version != 5 {
-		t.Errorf("after upgrade: qsos = %d (want 1), schema version = %d (want 5)", qsos, version)
+	if qsos != 1 || version != 6 {
+		t.Errorf("after upgrade: qsos = %d (want 1), schema version = %d (want 6)", qsos, version)
 	}
 }

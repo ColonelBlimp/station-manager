@@ -59,6 +59,7 @@ func testServer(t *testing.T) (*httptest.Server, *store.Store, int64) {
 	// Clean slate via the migration files (drop then the runtime applier —
 	// which this also exercises). evidence_records (0005) references
 	// tenants, so its down runs before 0001's tenant drop.
+	execSQLFile(t, db, "../store/migrations/0006_retention.down.sql")
 	execSQLFile(t, db, "../store/migrations/0005_evidence.down.sql")
 	execSQLFile(t, db, "../store/migrations/0001_init.down.sql")
 	if _, err := db.Exec(`DROP TABLE IF EXISTS schema_migrations`); err != nil {
@@ -83,6 +84,7 @@ func testServer(t *testing.T) (*httptest.Server, *store.Store, int64) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
+		execSQLFile(t, db, "../store/migrations/0006_retention.down.sql")
 		execSQLFile(t, db, "../store/migrations/0005_evidence.down.sql")
 		execSQLFile(t, db, "../store/migrations/0001_init.down.sql")
 		_, _ = db.Exec(`DROP TABLE IF EXISTS schema_migrations`)

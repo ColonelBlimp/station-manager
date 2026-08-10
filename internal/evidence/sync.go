@@ -68,12 +68,15 @@ type SyncStatus struct {
 }
 
 // syncTables maps wire kinds onto archive tables, in SELECTION order:
-// profiles first (§5.4 selection priority), then the slot kinds.
+// profiles first (§5.4 selection priority), then the tiny metadata kinds
+// that explain gaps (retention receipts, sealed loss intervals), then the
+// bulk slot kinds. Every kind counts against the ONE batch cap (SY10).
 var syncTables = []struct{ kind, table string }{
 	{evidencewire.KindProfile, "profiles"},
+	{evidencewire.KindRetention, "retention_records"},
+	{evidencewire.KindLossInterval, "loss_intervals"},
 	{evidencewire.KindObservation, "observations"},
 	{evidencewire.KindCoverage, "coverage"},
-	{evidencewire.KindLossInterval, "loss_intervals"},
 }
 
 func tableForKind(kind string) string {
@@ -286,8 +289,14 @@ func (s *Service) selectSyncBatch() ([]syncRow, error) {
 }
 
 func (s *Service) selectKind(kind, table string, limit int) ([]syncRow, error) {
+	// RT10: an OPEN loss accumulator is refreshed in place and must never
+	// be offered — only sealed rows are sync-eligible.
+	sealedClause := ""
+	if kind == evidencewire.KindLossInterval {
+		sealedClause = ` AND sealed = 1`
+	}
 	rs, err := s.db.Query(
-		`SELECT uuid FROM `+table+` WHERE synced = 0 AND quarantine_reason IS NULL ORDER BY uuid DESC LIMIT ?`,
+		`SELECT uuid FROM `+table+` WHERE synced = 0 AND quarantine_reason IS NULL`+sealedClause+` ORDER BY uuid DESC LIMIT ?`,
 		limit)
 	if err != nil {
 		return nil, err
@@ -352,13 +361,24 @@ type coveragePayload struct {
 }
 
 type lossPayload struct {
-	StartUTC     string  `json:"start_utc"`
-	EndUTC       string  `json:"end_utc"`
-	Slots        int64   `json:"slots"`
-	Observations int64   `json:"observations"`
-	Reason       string  `json:"reason"`
-	RemoteStatus string  `json:"remote_status"`
-	DialMHz      float64 `json:"dial_mhz"`
+	StartUTC     string   `json:"start_utc"`
+	EndUTC       string   `json:"end_utc"`
+	Slots        int64    `json:"slots"`
+	Observations int64    `json:"observations"`
+	Reason       string   `json:"reason"`
+	RemoteStatus string   `json:"remote_status"`
+	DialMHz      float64  `json:"dial_mhz"`
+	Supersedes   []string `json:"supersedes,omitempty"` // compaction summaries only
+}
+
+type retentionSyncPayload struct {
+	StartUTC     string   `json:"start_utc"`
+	EndUTC       string   `json:"end_utc"`
+	Observations int64    `json:"observations"`
+	Coverage     int64    `json:"coverage"`
+	Reason       string   `json:"reason"`
+	Acknowledged bool     `json:"acknowledged"`
+	Supersedes   []string `json:"supersedes,omitempty"`
 }
 
 type profileSyncPayload struct {
@@ -413,11 +433,34 @@ func (s *Service) loadSyncRow(kind, uuid string) (syncRow, error) {
 		payload = p
 	case evidencewire.KindLossInterval:
 		var p lossPayload
+		var supersedes *string
 		if err := s.db.QueryRow(
-			`SELECT start_utc, end_utc, slots, observations, reason, remote_status, dial_mhz
+			`SELECT start_utc, end_utc, slots, observations, reason, remote_status, dial_mhz, supersedes
 			 FROM loss_intervals WHERE uuid = ?`, uuid).Scan(
-			&p.StartUTC, &p.EndUTC, &p.Slots, &p.Observations, &p.Reason, &p.RemoteStatus, &p.DialMHz); err != nil {
+			&p.StartUTC, &p.EndUTC, &p.Slots, &p.Observations, &p.Reason, &p.RemoteStatus, &p.DialMHz, &supersedes); err != nil {
 			return row, err
+		}
+		if supersedes != nil {
+			if err := json.Unmarshal([]byte(*supersedes), &p.Supersedes); err != nil {
+				return row, err
+			}
+		}
+		payload = p
+	case evidencewire.KindRetention:
+		var p retentionSyncPayload
+		var acked int
+		var supersedes *string
+		if err := s.db.QueryRow(
+			`SELECT start_utc, end_utc, observations, coverage, reason, acknowledged, supersedes
+			 FROM retention_records WHERE uuid = ?`, uuid).Scan(
+			&p.StartUTC, &p.EndUTC, &p.Observations, &p.Coverage, &p.Reason, &acked, &supersedes); err != nil {
+			return row, err
+		}
+		p.Acknowledged = acked != 0
+		if supersedes != nil {
+			if err := json.Unmarshal([]byte(*supersedes), &p.Supersedes); err != nil {
+				return row, err
+			}
 		}
 		payload = p
 	case evidencewire.KindProfile:
@@ -544,7 +587,11 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 		switch o.Outcome {
 		case evidencewire.OutcomeAccepted, evidencewire.OutcomeAlreadyPresent,
 			evidencewire.OutcomeTombstoned, evidencewire.OutcomeSuppressed:
-			if _, err := tx.Exec(`UPDATE `+table+` SET synced = 1 WHERE uuid = ?`, r.uuid); err != nil {
+			// The EXACT outcome persists beside synced=1 (schema v4): the
+			// purge-eligible class is accepted|already_present only —
+			// tombstoned/suppressed are terminal but NOT cloud-present.
+			if _, err := tx.Exec(`UPDATE `+table+` SET synced = 1, sync_outcome = ? WHERE uuid = ?`,
+				o.Outcome, r.uuid); err != nil {
 				return err
 			}
 		case evidencewire.OutcomePermanentReject:

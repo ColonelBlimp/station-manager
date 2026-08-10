@@ -141,9 +141,12 @@ func TestMigration_V2ToV3AdditivePreservation(t *testing.T) {
 	s.Stop()
 
 	db := openRaw(t, cfg.Path)
+	// The CURRENT version, not a frozen one — this test pins ADDITIVE
+	// preservation through the chain; the terminal version itself is pinned
+	// by the newest migration's own test (retention_test.go).
 	var ver string
-	if err := db.QueryRow(`SELECT v FROM schema_meta WHERE k = 'schema_version'`).Scan(&ver); err != nil || ver != "3" {
-		t.Fatalf("V3c: schema_version = %q (err %v), want \"3\"", ver, err)
+	if err := db.QueryRow(`SELECT v FROM schema_meta WHERE k = 'schema_version'`).Scan(&ver); err != nil || ver != schemaVersion {
+		t.Fatalf("V3c: schema_version = %q (err %v), want %q", ver, err, schemaVersion)
 	}
 	for _, table := range []string{"observations", "coverage", "loss_intervals", "profiles"} {
 		for _, col := range []string{"offered_at", "quarantine_reason"} {
@@ -187,8 +190,8 @@ func TestMigration_V1ChainsToV3(t *testing.T) {
 
 	db := openRaw(t, cfg.Path)
 	var ver string
-	if err := db.QueryRow(`SELECT v FROM schema_meta WHERE k = 'schema_version'`).Scan(&ver); err != nil || ver != "3" {
-		t.Fatalf("V3c: v1 archive after one Start: schema_version = %q (err %v), want \"3\" (1→2→3 chain)", ver, err)
+	if err := db.QueryRow(`SELECT v FROM schema_meta WHERE k = 'schema_version'`).Scan(&ver); err != nil || ver != schemaVersion {
+		t.Fatalf("V3c: v1 archive after one Start: schema_version = %q (err %v), want %q (the full chain)", ver, err, schemaVersion)
 	}
 	if n := countRows(t, db,
 		`SELECT COUNT(*) FROM observations WHERE uuid = 'v1-obs-chain' AND unprofiled_reason = ? AND offered_at IS NULL`,

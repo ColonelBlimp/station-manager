@@ -60,9 +60,9 @@ func upsertOneEvidence(ctx context.Context, tx *sql.Tx, tenantID int64, rec evid
 	// a batch fault — exactly what §5.1's quarantine contract forbids.
 	switch rec.Kind {
 	case evidencewire.KindObservation, evidencewire.KindCoverage,
-		evidencewire.KindLossInterval, evidencewire.KindProfile:
+		evidencewire.KindLossInterval, evidencewire.KindProfile,
+		evidencewire.KindRetention:
 	default:
-		// Includes the reserved retention kind until the retention slice.
 		return reject("unsupported_kind"), nil
 	}
 	if !utils.IsValidUUIDv7(rec.UUID) {
@@ -84,6 +84,51 @@ func upsertOneEvidence(ctx context.Context, tx *sql.Tx, tenantID int64, rec evid
 	}
 	if computed != rec.Digest {
 		return reject("digest_mismatch"), nil
+	}
+
+	// Tombstones gate EVERY kind, before any storage logic (E13): a
+	// superseded or deleted identity never re-enters the store, whatever
+	// content it carries — this is what makes supersession deletion (and
+	// §8 deletion later) idempotent against old-backup re-offers.
+	var dead bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM evidence_tombstones
+		  WHERE tenant_id = $1 AND kind = $2 AND uuid = $3)`,
+		tenantID, rec.Kind, rec.UUID).Scan(&dead); err != nil {
+		return evidencewire.RowOutcome{}, fmt.Errorf("smcloud: tombstone probe: %w", err)
+	}
+	if dead {
+		return evidencewire.RowOutcome{Outcome: evidencewire.OutcomeTombstoned}, nil
+	}
+
+	// Supersession (retention slice, 2026-08-10): a summary's ingest
+	// tombstones its DIRECT predecessors BEFORE deleting their rows, inside
+	// this same batch transaction — tombstone-then-delete is what keeps a
+	// later re-offer of the predecessor answering tombstoned.
+	if rec.Kind == evidencewire.KindLossInterval || rec.Kind == evidencewire.KindRetention {
+		var sup struct {
+			Supersedes []string `json:"supersedes"`
+		}
+		if err := json.Unmarshal(rec.Payload, &sup); err != nil {
+			return reject("malformed_payload"), nil
+		}
+		for _, pred := range sup.Supersedes {
+			if !utils.IsValidUUIDv7(pred) {
+				return reject("malformed_payload"), nil
+			}
+		}
+		for _, pred := range sup.Supersedes {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO evidence_tombstones (tenant_id, kind, uuid) VALUES ($1, $2, $3)
+				 ON CONFLICT DO NOTHING`, tenantID, rec.Kind, pred); err != nil {
+				return evidencewire.RowOutcome{}, fmt.Errorf("smcloud: supersession tombstone: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx,
+				`DELETE FROM evidence_records WHERE tenant_id = $1 AND kind = $2 AND uuid = $3`,
+				tenantID, rec.Kind, pred); err != nil {
+				return evidencewire.RowOutcome{}, fmt.Errorf("smcloud: supersession delete: %w", err)
+			}
+		}
 	}
 
 	if rec.Kind == evidencewire.KindObservation {
