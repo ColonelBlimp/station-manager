@@ -174,7 +174,7 @@ func (s *Service) reconcileProfiles(now time.Time) error {
 	// permanently degrade profiles.
 	if len(decls) > 0 {
 		usage, watermark := s.physicalUsage(), s.cfg.CapBytes-headroomBytes
-		if usage >= s.cfg.CapBytes || (usage >= watermark && s.freelistBytes() < slotWriteReserveBytes) {
+		if usage >= s.cfg.CapBytes-writeWalReserveBytes || (usage >= watermark && s.freelistBytes() < slotWriteReserveBytes) {
 			return errors.New(op).WithMsgf(
 				"physical usage %d B is at or past the activation watermark %d B (cap %d B minus reserved headroom) with no reusable pages; the declaration cannot activate without risking the hard cap",
 				usage, watermark, s.cfg.CapBytes)

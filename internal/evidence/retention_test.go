@@ -122,7 +122,7 @@ func ackedArchive(t *testing.T, cfg Config, smc *fakeSMC, slots int) int64 {
 func TestRT1_CaptureOutlivesTheCapByPurgingAcked(t *testing.T) {
 	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
 	defer func() { headroomBytes = oldHeadroom }()
 	smc := newFakeSMC(t)
 
@@ -138,7 +138,7 @@ func TestRT1_CaptureOutlivesTheCapByPurgingAcked(t *testing.T) {
 	// pressure. With cloud-present history, they must LAND, not drop.
 	cfg2 := cfg
 	cfg2.Sync, cfg2.SyncURL, cfg2.SyncToken = true, smc.ts.URL, "test-token"
-	cfg2.CapBytes = usage + 48*1024 // over the watermark (usage−16K), ceiling margin > shm+WAL
+	cfg2.CapBytes = usage + 256*1024 // over the watermark; margin−reserve hosts the working churn
 	s2 := newRunning(t, cfg2)
 	for j := 0; j < 4; j++ {
 		s2.CaptureSlot(richSlot(slotAt((500 + j) * 15)))
@@ -212,7 +212,7 @@ func TestRT1_CaptureOutlivesTheCapByPurgingAcked(t *testing.T) {
 func TestActivation_AcceptsReusablePagesAtWatermark(t *testing.T) {
 	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
 	defer func() { headroomBytes = oldHeadroom }()
 	smc := newFakeSMC(t)
 
@@ -239,7 +239,7 @@ func TestActivation_AcceptsReusablePagesAtWatermark(t *testing.T) {
 	usage := statUsage(t, cfg.Path)
 
 	cfg2 := cfg
-	cfg2.CapBytes = usage + 48*1024 // over the watermark (usage−16K), ceiling margin > shm+WAL // usage ≥ watermark by construction
+	cfg2.CapBytes = usage + 256*1024 // over the watermark; margin−reserve hosts the working churn // usage ≥ watermark by construction
 	s3 := newRunning(t, cfg2)
 	if s3.freelistBytes() < slotWriteReserveBytes {
 		s3.Stop()
@@ -647,7 +647,7 @@ UPDATE schema_meta SET v = '4' WHERE k = 'schema_version';`); err != nil {
 func TestCap_HardCeilingRefusesWritesEvenWithFreelist(t *testing.T) {
 	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
 	defer func() { headroomBytes = oldHeadroom }()
 	smc := newFakeSMC(t)
 
@@ -691,6 +691,98 @@ func TestCap_HardCeilingRefusesWritesEvenWithFreelist(t *testing.T) {
 		t.Fatalf("P1: state = %q past the hard cap, want %q", st.State, StateDropNew)
 	}
 	s.Stop()
+}
+
+// Review P1 on ab9868cc: the ceiling RESERVES one transaction's WAL
+// growth — a write authorized one byte below the cap still appends its
+// frames past it. Within the reserve of the cap, capture drops.
+func TestCap_CeilingReservesWriteGrowth(t *testing.T) {
+	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
+	oldHeadroom := headroomBytes
+	headroomBytes = 256 * 1024
+	defer func() { headroomBytes = oldHeadroom }()
+	oldBudget := metadataBudgetBytes
+	metadataBudgetBytes = 0 // purging must not dissolve the boundary
+	defer func() { metadataBudgetBytes = oldBudget }()
+	smc := newFakeSMC(t)
+
+	cfg := testConfig(t, true)
+	ackedArchive(t, cfg, smc, 100)
+	raw, err := sql.Open("sqlite", cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(
+		`DELETE FROM observations WHERE uuid IN
+		   (SELECT uuid FROM observations ORDER BY uuid ASC LIMIT 100)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+	usage := statUsage(t, cfg.Path)
+
+	cfg2 := cfg
+	// Runtime usage (db + 32 KiB shm + WAL) sits BELOW this cap but inside
+	// the write-growth reserve — the exact band the un-fixed check passed.
+	cfg2.CapBytes = usage + 64*1024
+	s := newRunning(t, cfg2)
+	if s.freelistBytes() < slotWriteReserveBytes {
+		s.Stop()
+		t.Fatal("fixture failure: no reusable pages")
+	}
+	s.CaptureSlot(richSlot(slotAt(900 * 15)))
+	drain(t, s)
+
+	db := openRaw(t, cfg.Path)
+	slotUTC := slotAt(900 * 15).UTC().Format("2006-01-02T15:04:05Z")
+	if n := countRows(t, db, `SELECT COUNT(*) FROM coverage WHERE slot_start_utc = ?`, slotUTC); n != 0 {
+		t.Fatal("P1: a slot was written INSIDE the cap's write-growth reserve — its WAL frames land past the ceiling")
+	}
+	s.Stop()
+}
+
+// Review P2 on ab9868cc: a mixed-class unsynced chunk inserts up to THREE
+// receipts; the budget gate must reserve for all of them, or a chunk
+// passing the one-receipt gate busts the bound with the other two.
+func TestRT6_BudgetReservesEveryClassReceipt(t *testing.T) {
+	oldHeadroom := headroomBytes
+	headroomBytes = 256 * 1024
+	defer func() { headroomBytes = oldHeadroom }()
+	oldBudget := metadataBudgetBytes
+	metadataBudgetBytes = 300 // fits ONE receipt's reserve, not three receipts
+	defer func() { metadataBudgetBytes = oldBudget }()
+
+	cfg := testConfig(t, true)
+	s := newRunning(t, cfg)
+	for i := 0; i < 12; i++ {
+		s.CaptureSlot(obsSlot(slotAt(i*15), 14.074, true))
+	}
+	drain(t, s)
+	db := openRaw(t, cfg.Path)
+	// All three classes present, interleaved by time.
+	for i := 1; i < 12; i += 3 {
+		if _, err := db.Exec(`UPDATE observations SET offered_at = '2026-08-10T00:00:00.000000001Z'
+			 WHERE slot_start_utc = ?`, slotAt(i*15).UTC().Format(time.RFC3339)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 2; i < 12; i += 3 {
+		if _, err := db.Exec(`UPDATE observations SET quarantine_reason = 'digest_conflict'
+			 WHERE slot_start_utc = ?`, slotAt(i*15).UTC().Format(time.RFC3339)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	obsBefore := countRows(t, db, `SELECT COUNT(*) FROM observations`)
+
+	s.purgeChunk()
+	got := s.metadataBytes()
+	s.Stop()
+
+	if got > metadataBudgetBytes {
+		t.Fatalf("P2: metadata %d B exceeds the %d B budget — the gate reserved one receipt and the chunk wrote three", got, metadataBudgetBytes)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM observations`); n != obsBefore {
+		t.Fatalf("P2: %d→%d observations purged under a budget with no room for the chunk's receipts", obsBefore, n)
+	}
 }
 
 // Package-review P1 (2026-08-10): Status must never hold s.mu across its
@@ -782,7 +874,7 @@ UPDATE schema_meta SET v = '3' WHERE k = 'schema_version';`); err != nil {
 // purge at the watermark: legacy_synced is cloud-present.
 func TestV4_LegacySyncedRowsStayPurgeable(t *testing.T) {
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
 	defer func() { headroomBytes = oldHeadroom }()
 
 	cfg := testConfig(t, true)
@@ -795,8 +887,8 @@ func TestV4_LegacySyncedRowsStayPurgeable(t *testing.T) {
 	usage := statUsage(t, cfg.Path)
 
 	cfg2 := cfg
-	cfg2.CapBytes = usage + 48*1024 // over the watermark (usage−16K), ceiling margin > shm+WAL
-	s := newRunning(t, cfg2)        // v4 archive at cap pressure
+	cfg2.CapBytes = usage + 256*1024 // over the watermark; margin−reserve hosts the working churn
+	s := newRunning(t, cfg2)         // v4 archive at cap pressure
 	s.CaptureSlot(richSlot(slotAt(900 * 15)))
 	drain(t, s)
 
@@ -816,7 +908,7 @@ func TestV4_LegacySyncedRowsStayPurgeable(t *testing.T) {
 // blowing the cap.
 func TestV4_MigrationRefusedNearCap(t *testing.T) {
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
 	defer func() { headroomBytes = oldHeadroom }()
 
 	cfg := testConfig(t, true)
@@ -852,7 +944,7 @@ func TestV4_MigrationRefusedNearCap(t *testing.T) {
 func TestRT3_CoverageNeverOrphansBackwards(t *testing.T) {
 	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
 	defer func() { headroomBytes = oldHeadroom }()
 	smc := newFakeSMC(t)
 	smc.script = func(rec evidencewire.Record) evidencewire.RowOutcome {
@@ -866,7 +958,7 @@ func TestRT3_CoverageNeverOrphansBackwards(t *testing.T) {
 	c1 := cfg
 	c1.Sync, c1.SyncURL, c1.SyncToken = true, smc.ts.URL, "test-token"
 	s1 := newRunning(t, c1)
-	for i := 0; i < 15; i++ {
+	for i := 0; i < 40; i++ {
 		s1.CaptureSlot(richSlot(slotAt(i * 15)))
 	}
 	drain(t, s1)
@@ -878,8 +970,8 @@ func TestRT3_CoverageNeverOrphansBackwards(t *testing.T) {
 	s1.Stop()
 	usage := statUsage(t, cfg.Path)
 
-	cfg2 := cfg                     // sync off: classes stand still while purging runs
-	cfg2.CapBytes = usage + 48*1024 // over the watermark (usage−16K), ceiling margin > shm+WAL
+	cfg2 := cfg                      // sync off: classes stand still while purging runs
+	cfg2.CapBytes = usage + 256*1024 // over the watermark; margin−reserve hosts the working churn
 	s2 := newRunning(t, cfg2)
 	db := openRaw(t, cfg.Path)
 	for j := 0; j < 6; j++ {
@@ -901,7 +993,7 @@ func TestRT3_CoverageNeverOrphansBackwards(t *testing.T) {
 // committing a receipt that busts the promised bound by up to one row.
 func TestRT6_BudgetReservesTheIncomingReceipt(t *testing.T) {
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
 	defer func() { headroomBytes = oldHeadroom }()
 	oldBudget := metadataBudgetBytes
 	metadataBudgetBytes = 200 // above current usage (0), below one receipt's reserve
@@ -909,7 +1001,7 @@ func TestRT6_BudgetReservesTheIncomingReceipt(t *testing.T) {
 
 	cfg := testConfig(t, true)
 	s1 := newRunning(t, cfg)
-	for i := 0; i < 15; i++ {
+	for i := 0; i < 40; i++ {
 		s1.CaptureSlot(richSlot(slotAt(i * 15)))
 	}
 	drain(t, s1)
@@ -920,7 +1012,7 @@ func TestRT6_BudgetReservesTheIncomingReceipt(t *testing.T) {
 	obsBefore := countRows(t, db, `SELECT COUNT(*) FROM observations`)
 
 	cfg2 := cfg
-	cfg2.CapBytes = usage + 48*1024 // over the watermark (usage−16K), ceiling margin > shm+WAL
+	cfg2.CapBytes = usage + 256*1024 // over the watermark; margin−reserve hosts the working churn
 	s2 := newRunning(t, cfg2)
 	s2.CaptureSlot(richSlot(slotAt(700 * 15)))
 	drain(t, s2)
@@ -941,7 +1033,7 @@ func TestRT6_BudgetReservesTheIncomingReceipt(t *testing.T) {
 // from healthy purging (state stays capturing).
 func TestRT6_MetadataPressureRefusesInvisiblePurge(t *testing.T) {
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
 	defer func() { headroomBytes = oldHeadroom }()
 	oldBudget := metadataBudgetBytes
 	metadataBudgetBytes = 0 // no receipt can ever fit
@@ -949,7 +1041,7 @@ func TestRT6_MetadataPressureRefusesInvisiblePurge(t *testing.T) {
 
 	cfg := testConfig(t, true)
 	s1 := newRunning(t, cfg)
-	for i := 0; i < 15; i++ {
+	for i := 0; i < 40; i++ {
 		s1.CaptureSlot(richSlot(slotAt(i * 15)))
 	}
 	drain(t, s1)
@@ -960,7 +1052,7 @@ func TestRT6_MetadataPressureRefusesInvisiblePurge(t *testing.T) {
 	obsBefore := countRows(t, db, `SELECT COUNT(*) FROM observations`)
 
 	cfg2 := cfg
-	cfg2.CapBytes = usage + 48*1024 // over the watermark (usage−16K), ceiling margin > shm+WAL
+	cfg2.CapBytes = usage + 256*1024 // over the watermark; margin−reserve hosts the working churn
 	s2 := newRunning(t, cfg2)
 	s2.CaptureSlot(richSlot(slotAt(700 * 15)))
 	drain(t, s2)
@@ -982,7 +1074,7 @@ func TestRT6_MetadataPressureRefusesInvisiblePurge(t *testing.T) {
 // never-offered rows (sync was off) drop as never_offered.
 func TestRT4_NeverOfferedDropsRecordHonestly(t *testing.T) {
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
 	defer func() { headroomBytes = oldHeadroom }()
 
 	cfg := testConfig(t, true) // sync OFF: rows never offered
@@ -995,7 +1087,7 @@ func TestRT4_NeverOfferedDropsRecordHonestly(t *testing.T) {
 	usage := statUsage(t, cfg.Path)
 
 	cfg2 := cfg
-	cfg2.CapBytes = usage + 48*1024 // over the watermark (usage−16K), ceiling margin > shm+WAL
+	cfg2.CapBytes = usage + 256*1024 // over the watermark; margin−reserve hosts the working churn
 	s2 := newRunning(t, cfg2)
 	for j := 0; j < 3; j++ {
 		s2.CaptureSlot(richSlot(slotAt((500 + j) * 15)))
@@ -1022,7 +1114,7 @@ func TestRT4_NeverOfferedDropsRecordHonestly(t *testing.T) {
 func TestRT4_OfferedAndRejectedClassesRecordHonestly(t *testing.T) {
 	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 30*time.Millisecond, 100*time.Millisecond)
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
 	defer func() { headroomBytes = oldHeadroom }()
 	smc := newFakeSMC(t)
 	var mu sync.Mutex
@@ -1058,8 +1150,8 @@ func TestRT4_OfferedAndRejectedClassesRecordHonestly(t *testing.T) {
 	s1.Stop()
 	usage := statUsage(t, cfg.Path)
 
-	cfg2 := cfg                     // sync OFF in boot 2: classes are already stamped
-	cfg2.CapBytes = usage + 48*1024 // over the watermark (usage−16K), ceiling margin > shm+WAL
+	cfg2 := cfg                      // sync OFF in boot 2: classes are already stamped
+	cfg2.CapBytes = usage + 256*1024 // over the watermark; margin−reserve hosts the working churn
 	s2 := newRunning(t, cfg2)
 	// Enough current slots to chew through the whole unsynced backlog.
 	j := 0
@@ -1087,7 +1179,7 @@ func TestRT4_OfferedAndRejectedClassesRecordHonestly(t *testing.T) {
 // EXACT totals and ≤ 64 direct predecessors, atomically.
 func TestRT6_CompactionPreservesExactTotals(t *testing.T) {
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
 	defer func() { headroomBytes = oldHeadroom }()
 
 	cfg := testConfig(t, true)
@@ -1122,7 +1214,7 @@ func TestRT6_CompactionPreservesExactTotals(t *testing.T) {
 	// Cap pressure drives purge chunks, whose receipt path runs compaction
 	// past the trigger.
 	cfg2 := cfg
-	cfg2.CapBytes = usage + 48*1024 // over the watermark (usage−16K), ceiling margin > shm+WAL
+	cfg2.CapBytes = usage + 256*1024 // over the watermark; margin−reserve hosts the working churn
 	s2 := newRunning(t, cfg2)
 	j := 0
 	waitFor(t, "compaction fired", func() bool {
@@ -1205,7 +1297,7 @@ func TestV4_TerminalOutcomePersisted(t *testing.T) {
 func TestRT10_OpenLossAccumulatorIsNotSyncEligible(t *testing.T) {
 	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // must absorb shm (32 KiB) + WAL churn — see headroomBytes
+	headroomBytes = 64 * 1024 // drops-only fixture: cap = usage, never the write-through band
 	defer func() { headroomBytes = oldHeadroom }()
 	// The retention engine would PURGE instead of dropping (full §4.1);
 	// this fixture needs guaranteed drops, so the zero metadata budget

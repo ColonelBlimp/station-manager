@@ -164,8 +164,18 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   (archive young, far from cap); REDEPLOY after commit (evidence.db will
   migrate v4→v5 at start). SMC deploy still pending (sync in honest 404
   backoff).**
-- **NEXT: operator commits (watch auto-review; sm-pg running) → push →
-  CI → redeploy smd → smcloud deploy → soak → §6/§7.**
+- **Package-review fixes committed `ab9868cc` (UNPUSHED); ITS auto-review
+  raised 2 more REAL findings, FIXED in tree: P1 the cap ceiling now
+  RESERVES one write's WAL growth (writeWalReserveBytes=64K — a write one
+  byte under the cap still appends frames past it; same reserve on the
+  activation gate) · P2 the metadata gate reserves for ALL up-to-three
+  per-class receipts (receiptReserveBytes=3×256). Both RED-first + proofs
+  bit. Fixture band re-tuned: headroom 320K / cap margin 256K (the
+  margin−reserve gap must host boot-2's ~60-90K working churn — measured
+  via instrumented fixtures). Race/lint/tree green; ×3 stable.**
+- **NEXT: operator commits the 2 fixes (watch auto-review; sm-pg running)
+  → push → CI → redeploy smd (evidence.db v4→v5 at start) → smcloud
+  deploy → soak → §6/§7.**
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.

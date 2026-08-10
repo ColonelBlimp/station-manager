@@ -42,11 +42,18 @@ var (
 	// compactionMaxPreds bounds a summary's DIRECT predecessors.
 	compactionMaxPreds = 64
 	// receiptReserveBytes is the metadata room a purge chunk must have
-	// BEFORE it runs, covering the receipt it will insert (codex-P2 fix
-	// 2026-08-10): checking only existing usage lets the receipt itself
-	// bust the budget by up to one row. 256 = the 128-byte logical row
-	// overhead doubled — receipts carry no supersedes text.
-	receiptReserveBytes = int64(256)
+	// BEFORE it runs, covering EVERY receipt it may insert (codex-P2 fix
+	// 2026-08-10, widened by the ab9868cc review): an unsynced chunk
+	// splits into up to three per-class loss receipts, so the reserve
+	// covers three 128-byte logical rows, doubled for margin — checking
+	// only existing usage lets the receipts themselves bust the budget.
+	receiptReserveBytes = int64(3 * 256)
+	// writeWalReserveBytes is the ceiling's margin below CapBytes: a write
+	// authorized inside this band would append its WAL frames past the cap
+	// (ab9868cc review P1). One slot transaction writes tens of KiB of WAL
+	// at most (see headroomBytes); 64 KiB is generous — and trivial against
+	// the production 16 MiB watermark band it is carved from.
+	writeWalReserveBytes = int64(64 << 10)
 	// slotWriteReserveBytes is the reusable room required to write through
 	// at cap pressure: ONE page. A page only reaches the freelist when
 	// entirely emptied, so even a large purge may free few pages on a small
@@ -98,7 +105,7 @@ func (s *Service) tryFreeSpace() bool {
 	// many pages are free inside the file. When the freelist itself was
 	// the blocker, purgeChunk already recorded the specific pressure.
 	ok := s.freelistBytes() >= slotWriteReserveBytes
-	if ok && s.physicalUsage() >= s.cfg.CapBytes {
+	if ok && s.physicalUsage() >= s.cfg.CapBytes-writeWalReserveBytes {
 		ok = false
 		s.setPressure(pressureCap)
 	}
