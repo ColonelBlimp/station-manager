@@ -185,8 +185,15 @@ func drainDecodeEvents(ch <-chan hubEvent) (decodes []DecodeReport, occupancy in
 
 // recentEvenSlotStart returns a recent UTC slot boundary with EVEN parity
 // ((unix/15)%2 == 0 ⇔ unix%30 == 0), so tests can feed slots whose parity is
-// the OPPOSITE of a session started with txParity "odd" — the sequencer
-// listens on them and never fires a rung mid-test.
+// the OPPOSITE of a session started with txParity "odd".
+//
+// It does NOT guarantee the session never keys: a Call-CQ opening fires on
+// the current TX slot by WALL-CLOCK time (fireOpening within txLateWindowSec),
+// independent of the fed slot's parity, so a run that lands in an odd
+// wall-clock slot legitimately transmits CQ. Assertions on the decode log
+// must therefore distinguish an RX decode ("<ts> <snr> <dt> <freq> ~ <msg>")
+// from a TX line ("<ts> Transmitting … FT8: <msg>") — never match a bare
+// callsign, which appears in both (package review, 2026-08-10).
 func recentEvenSlotStart() time.Time {
 	now := time.Now().UTC()
 	return time.Unix(now.Unix()-now.Unix()%30, 0).UTC()
@@ -291,13 +298,18 @@ func TestDecodeLoop_CuratedSurfaces_Frozen(t *testing.T) {
 		t.Errorf("sink reports = %+v, want exactly the curated report", reports)
 	}
 
-	// RX decode log carries one line for the other station, none for our own.
+	// RX decode log carries one DECODE line for the other station, and none
+	// for our own loopback. The check is the RX form ("~ CQ K1ABC"): a
+	// wall-clock Call-CQ opening may legitimately write a "Transmitting …
+	// FT8: CQ K1ABC" TX line, which is NOT an own-TX-into-RX leak and must
+	// not trip this assertion (package review, 2026-08-10 — the bare
+	// "K1ABC" match was wall-clock-flaky).
 	logText := readDecodeLog(t, s, logPath)
 	if !strings.Contains(logText, "~ CQ A61DI LL64") {
 		t.Errorf("decode log missing the other station's RX line:\n%s", logText)
 	}
-	if strings.Contains(logText, "K1ABC") {
-		t.Errorf("decode log carries our own loopback:\n%s", logText)
+	if strings.Contains(logText, "~ CQ K1ABC") {
+		t.Errorf("decode log carries our own loopback as an RX decode:\n%s", logText)
 	}
 }
 
@@ -348,6 +360,58 @@ func TestDecodeLoop_SkippedSlots_EmptySurfaces_Frozen(t *testing.T) {
 	}
 	if logText := readDecodeLog(t, s, logPath); strings.Contains(logText, "W1AW") {
 		t.Errorf("skipped slots must write no RX lines, got:\n%s", logText)
+	}
+}
+
+// TestDecodeLoop_StarvedSlot_SuppressedAsCaptureLoss pins the starved-window
+// rule (package review, 2026-08-10): when the capture ring received fewer than
+// minLiveWindowSamples fresh samples for a window, its Samples are mostly the
+// PRIOR slot's audio. Decoding that surfaces prior-slot messages as current and
+// drives the sequencer off them, recording a false `decoded` coverage. A
+// starved slot must be suppressed like a dial-moved slot: no decode of the
+// stale audio, no occupancy, an empty ft8-decode so the slot clock still ticks,
+// and a capture_dropped evidence outcome. The decodable audio is the
+// discriminator — a loop that decoded anyway would surface the W1AW row.
+func TestDecodeLoop_StarvedSlot_SuppressedAsCaptureLoss(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	s, sink, events, logPath := newSplitHarness(t)
+	var evOutcomes []string
+	s.SetEvidenceSink(func(e EvidenceSlot) { evOutcomes = append(evOutcomes, e.Outcome) })
+
+	audible, err := EncodeToSlot("CQ W1AW FN31", 1500, 0.5)
+	if err != nil {
+		t.Fatalf("EncodeToSlot: %v", err)
+	}
+
+	ch := make(chan Slot, 1)
+	ch <- Slot{StartUTC: recentEvenSlotStart(), Samples: audible, DialTracked: true, DialMHz: 14.074, Starved: true}
+	close(ch)
+	s.decodeLoop(ch, nil)
+
+	decodes, occupancy := drainDecodeEvents(events)
+	if len(decodes) != 1 {
+		t.Fatalf("ft8-decode events = %d, want 1 (the slot clock ticks on a starved slot)", len(decodes))
+	}
+	if len(decodes[0].Decodes) != 0 {
+		t.Errorf("starved slot published %d rows, want 0 — stale ring audio must not decode: %+v",
+			len(decodes[0].Decodes), decodes[0].Decodes)
+	}
+	if occupancy != 0 {
+		t.Errorf("occupancy events = %d, want 0 (a starved slot's audio cannot be trusted)", occupancy)
+	}
+	for i, rep := range sink.all() {
+		if len(rep.Decodes) != 0 {
+			t.Errorf("sink report %d has %d rows, want 0", i, len(rep.Decodes))
+		}
+	}
+	if logText := readDecodeLog(t, s, logPath); strings.Contains(logText, "W1AW") {
+		t.Errorf("a starved slot must write no RX line, got:\n%s", logText)
+	}
+	if len(evOutcomes) != 1 || evOutcomes[0] != EvidenceCaptureDropped {
+		t.Errorf("evidence outcomes = %v, want one %q — a starved window is capture loss, not a decode",
+			evOutcomes, EvidenceCaptureDropped)
 	}
 }
 
@@ -861,8 +925,8 @@ func TestScheduler_TracksUndeliveredRun(t *testing.T) {
 	sch.out <- Slot{}
 
 	t1 := time.Date(2026, 8, 10, 12, 0, 15, 0, time.UTC) // boundary; slot start = -15 s
-	sch.emitSlot(ring, t1, t1)
-	sch.emitSlot(ring, t1.Add(15*time.Second), t1.Add(15*time.Second))
+	sch.emitSlot(ring, t1, t1, false)
+	sch.emitSlot(ring, t1.Add(15*time.Second), t1.Add(15*time.Second), false)
 
 	start, n := sch.UndeliveredTail()
 	if n != 2 || !start.Equal(t1.Add(-15*time.Second)) {
@@ -870,7 +934,7 @@ func TestScheduler_TracksUndeliveredRun(t *testing.T) {
 	}
 
 	<-sch.out // free the channel
-	sch.emitSlot(ring, t1.Add(30*time.Second), t1.Add(30*time.Second))
+	sch.emitSlot(ring, t1.Add(30*time.Second), t1.Add(30*time.Second), false)
 	delivered := <-sch.out
 	if delivered.OmittedBefore != 2 {
 		t.Fatalf("delivered OmittedBefore = %d, want 2 (the run before it)", delivered.OmittedBefore)

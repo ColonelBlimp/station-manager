@@ -72,6 +72,27 @@ func TestInitialize_EnabledRequiresSource(t *testing.T) {
 	require.NoError(t, dis.Initialize())
 }
 
+// Package review (2026-08-10): a subscriber can connect BEFORE Start —
+// onSubscriberAdded increments subCount but returns early because !started, and
+// Start never reconciles the existing count. On a no-CAT deployment (no
+// reconcile loop) capture then stays idle forever, and later subscribers can't
+// trigger it because subCount is already > 1. Start must acquire when a
+// subscriber is already present.
+func TestStart_ReconcilesASubscriberThatConnectedBeforeStart(t *testing.T) {
+	src := newFakeSource()
+	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), src)
+	require.NoError(t, s.Initialize())
+
+	// Subscribe BEFORE Start: subCount goes 0→1 but the acquire is skipped.
+	_, unsub := s.Subscribe()
+	defer unsub()
+	require.False(t, src.wasStarted(), "capture cannot run before Start")
+
+	require.NoError(t, s.Start(context.Background()))
+	require.True(t, src.wasStarted(),
+		"Start must acquire capture when a subscriber connected before it")
+}
+
 // withShortLinger sets captureLinger to a tiny value for the duration of a
 // test so release transitions fire quickly, restoring it on cleanup.
 func withShortLinger(t *testing.T, d time.Duration) {

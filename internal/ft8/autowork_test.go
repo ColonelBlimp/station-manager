@@ -143,6 +143,34 @@ func TestAutoWork_NoIntentLeavesTheCallerAlone(t *testing.T) {
 	require.Len(t, r.sentMsgs(), before, "nothing may be transmitted to the caller")
 }
 
+// Package review (2026-08-10): the operator's one-shot "work this station
+// again" override must not leak into a LATER auto-work contact. A manual
+// work-caller with allowDuplicate authorizes exactly one station; the run then
+// works OTHER stations through commitWorkCallerLocked WITHOUT re-staging the
+// intent, and a retained override let every subsequent auto-work QSO bypass
+// storage dedup without per-station authorization. The seeding contact carries
+// the override; the next, auto-picked, station must not.
+func TestAutoWork_DuplicateOverrideDoesNotLeakToLaterContacts(t *testing.T) {
+	r := &seqRecorder{}
+	s := newTestSeq(r)
+	s.setPendingAnswerMode("auto_first")
+	s.setPendingAllowDuplicate(true) // the operator authorizes THIS repeat
+	require.NoError(t, s.StartWorkCaller("G0XYZ", "K1ABC", "FN42", -12,
+		time.Unix(0, 0).UTC().Format(time.RFC3339), 1500, 14.074, time.Unix(0, 0).UTC()))
+	driveTheir(s, 30, []goft8.DecodedMessage{dm("G0XYZ K1ABC FN42", -12)})
+	driveTheir(s, 60, []goft8.DecodedMessage{dm("G0XYZ K1ABC R-08", -11)}) // completes the seed
+	require.Len(t, r.completed, 1)
+	require.True(t, r.completed[0].AllowDuplicate, "the operator authorized the seeding repeat")
+
+	// The armed run auto-works a DIFFERENT station — never individually authorized.
+	driveTheir(s, 90, []goft8.DecodedMessage{dm("G0XYZ DL9UW JO41", -8)})
+	require.Equal(t, "DL9UW", s.caller.TheirCall, "fixture: the run picked up the next caller")
+	driveTheir(s, 120, []goft8.DecodedMessage{dm("G0XYZ DL9UW R-05", -7)}) // completes contact 2
+	require.Len(t, r.completed, 2)
+	require.False(t, r.completed[1].AllowDuplicate,
+		"the one-shot override must not leak into a later auto-work contact")
+}
+
 // W3 — it is a RUN, not a one-shot: the contact after the auto-worked one is also
 // picked up. An implementation that armed once and cleared on first use passes W1
 // and fails here.

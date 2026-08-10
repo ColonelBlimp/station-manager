@@ -144,6 +144,16 @@ linters:
       - path: internal/ft8/work_sequencer\.go
         text: onSlotWorking
         linters: [maintidx]
+      # decodeLoop crossed maintidx (MI 19 vs the 20 floor) growing with the
+      # ratified starved-window suppression (package review 2026-08-10): the
+      # per-slot capture-loss branch, mirroring DialChanged across decode /
+      # sequencer / occupancy / evidence. Same class as the pair above —
+      # a sequential slot handler, comment-dense, invariant-covered by the
+      # internal/ft8/CLAUDE.md TX+attribution rules — same refactor-backlog
+      # standing, exempted not blessed.
+      - path: internal/ft8/service\.go
+        text: decodeLoop
+        linters: [maintidx]
 
       # Reflection-driven DI container — deeply nested tag-scanning walk.
       - path: internal/iocdi/internal\.go

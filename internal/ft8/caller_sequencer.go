@@ -54,8 +54,8 @@ func (s *Sequencer) StartCallCq(ourCall, ourGrid string, offsetHz, dialFreqMHz f
 	s.mode = seqCalling
 	s.contact = contactFlags{}
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
-	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
+	s.logbookID = s.pendingLogbookID                    // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.caller = nil
 	s.stalledCalls = nil // fresh session — no abandoned answerers to exclude yet
 	s.answerers = nil    // fresh session — the previous run's pick list must not resurrect (rule 10)
@@ -489,7 +489,9 @@ func (s *Sequencer) PickAnswerer(call string, now time.Time) error {
 		c := NewCallerExchange(s.autoWork.call, a.call, a.grid, a.snr)
 		s.commitWorkCallerLocked(&c, s.autoWork.call,
 			a.period, s.autoWork.offsetHz, s.autoWork.dialMHz, now)
-		s.publish(s.statusLocked())
+		// commitWorkCallerLocked already published the ACTIVE frame under the
+		// lock (invariant 3); the re-publish here was a duplicate wire event
+		// (package review, 2026-08-10).
 		s.mu.Unlock()
 		s.log.InfoWith().Str("answerer", a.call).Str("grid", a.grid).Int("snr", a.snr).
 			Msg("ft8 seq: operator picked caller from the listing run; working them")

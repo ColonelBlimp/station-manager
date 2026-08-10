@@ -94,6 +94,17 @@ type Slot struct {
 	// unattributed slot on an untracked session can only mislead a display,
 	// while on a tracked one it could steer a transmission.
 	DialTracked bool
+
+	// Starved reports that FEWER than minLiveWindowSamples fresh samples
+	// arrived during this window, so the ring's snapshot is mostly the PRIOR
+	// slot's audio. LOAD-BEARING like DialChanged: decoding a starved
+	// snapshot surfaces prior-slot messages as current, drives the sequencer
+	// off them, and records a false `decoded` coverage — so every consumer
+	// suppresses it as capture loss (package review, 2026-08-10). The
+	// dead-source watchdog (deadsource.go) still tracks starvation
+	// SEPARATELY for its 2-strike release alarm; this per-slot flag is the
+	// immediate suppression the alarm's strike delay cannot provide.
+	Starved bool
 }
 
 // Scheduler drains a continuous audio source (typically the capture
@@ -152,6 +163,14 @@ type Scheduler struct {
 	// exactly the tail no later slot could ever report (review 68514620 P1).
 	undeliveredStart time.Time
 	undeliveredN     int
+
+	// prevBoundaryFilled is the ring's total fill count at the PREVIOUS
+	// boundary, so a boundary's delta (this window's fresh arrivals) is
+	// computable for the starvation flag. Updated every boundary; a normal
+	// window delivers ~SlotSamples, a starved one < minLiveWindowSamples.
+	// Independent of the dead-source watchdog's own lastFilled (that drives
+	// the multi-strike release alarm; this drives per-slot suppression).
+	prevBoundaryFilled int64
 }
 
 // NewScheduler constructs a Scheduler reading from source. nil logger →
@@ -316,6 +335,12 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 		case <-timer.C:
 			now := time.Now().UTC()
+			// This window's fresh-sample delta, before the watchdog consumes
+			// its own counter: a starved window (too few new samples, so the
+			// snapshot is mostly the prior slot's audio) is flagged on the
+			// emitted slot and suppressed downstream. Updated every boundary
+			// so the delta always spans exactly one window.
+			starved := s.boundaryStarved(ring.Filled())
 			// Watchdog first, independent of the lateness/emit logic: the dead
 			// cases (starved / all-zero source) mostly never fill the ring, so
 			// emitSlot's cold-start skip would hide them from any slot consumer.
@@ -339,7 +364,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 					Int64("late_ms", now.Sub(target).Milliseconds()).
 					Msg("ft8.scheduler: timer delay exceeded the lateness budget; skipping slot")
 			} else {
-				s.emitSlot(ring, target, now)
+				s.emitSlot(ring, target, now, starved)
 			}
 			// A new slot begins at this same boundary: its dial window starts
 			// clean, anchored on the reading just taken.
@@ -364,13 +389,25 @@ func slotTooLate(now, target time.Time) bool {
 	return now.Sub(target) > maxSlotLateness
 }
 
+// boundaryStarved reports whether the window ending at this boundary received
+// fewer than minLiveWindowSamples FRESH samples — its ring snapshot is then
+// mostly the prior slot's audio, and decoding it would surface prior-slot
+// messages as current (package review, 2026-08-10). Updates the per-boundary
+// baseline, so call exactly once per boundary; the delta spans exactly one
+// window. Owned by the Run goroutine.
+func (s *Scheduler) boundaryStarved(filled int64) bool {
+	starved := filled-s.prevBoundaryFilled < minLiveWindowSamples
+	s.prevBoundaryFilled = filled
+	return starved
+}
+
 // emitSlot snapshots the ring and tries to publish the slot. If the ring
 // has not yet seen a full SlotDuration of audio (cold start), the slot is
 // silently skipped — emitting a half-filled buffer would produce
 // false-decode noise. Once enough samples have accumulated, every
 // subsequent boundary fires a slot. now is the actual service time (not the
 // timer payload), so OffsetMs reflects real servicing delay (review M2).
-func (s *Scheduler) emitSlot(ring *sampleRing, target, now time.Time) {
+func (s *Scheduler) emitSlot(ring *sampleRing, target, now time.Time, starved bool) {
 	if ring.Filled() < int64(ring.Cap()) {
 		return
 	}
@@ -378,6 +415,7 @@ func (s *Scheduler) emitSlot(ring *sampleRing, target, now time.Time) {
 		StartUTC: target.Add(-SlotDuration),
 		OffsetMs: now.Sub(target).Milliseconds(),
 		Samples:  ring.Snapshot(),
+		Starved:  starved,
 	}
 	// Attribute only a slot the dial held one KNOWN frequency across. Anything
 	// else stays unattributed: an unplaceable slot is honest, a wrongly placed

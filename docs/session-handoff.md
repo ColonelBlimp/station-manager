@@ -212,11 +212,38 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   not fixed: `upsertLossLocked` writes under s.mu (pre-existing §4.1,
   bounded, same class as the checkpoint) — a deliberate s.mu-off-DB-IO
   refactor if it ever recurs, criteria-first.
-- **NEXT: OPERATOR pushes the whole evidence-fix stack (ab9868cc..340c5aac
-  ahead of origin by 6) → CI (verify `gh run list -L1` = completed
-  success) → redeploy smd (evidence.db migrates v4→v5 at start) → smcloud
-  deploy → FT8 soak → §6/§7.** on-air 0067 · Settings defaults dropdown ·
-  max_repeats-to-session.
+- **Evidence-fix stack PUSHED (origin caught up through 340c5aac); redeploy
+  smd (v4→v5 migrates at start) + smcloud deploy still pending.**
+- **internal/ft8 PACKAGE REVIEW COMPLETE (operator-run, 3 P1 + 3 P2 — all 6
+  CONFIRMED REAL + FIXED in tree, UNCOMMITTED; daemon STOPPED so no live-TX
+  risk during edits):**
+  - ✅P1-flaky-test: `decodesplit_test.go` `Contains(log,"K1ABC")` matched a
+    valid TX line (`Transmitting … CQ K1ABC`) as an RX loopback → wall-clock
+    flaky RED. Now RX-specific (`~ CQ K1ABC`); **70/70 across phases**.
+  - ✅P2-race: `onSlotIdleArmed` read `s.autoWork.selectMode` after unlock →
+    captured into a local pre-unlock (`-race` clean).
+  - ✅P2-double-publish: removed the redundant re-publish (commit already
+    published under the lock, invariant 3) at work_sequencer queued-drain +
+    caller_sequencer idlePop; ADR 0067 + publishguard structural checks cover.
+  - ✅P1-allowDuplicate-leak: `consumePendingAllowDuplicate()` one-shot clears
+    at all 7 commit sites; RED-first reversion proof bit.
+  - ✅P2-subscriber-before-Start: Start reconciles subCount (calls
+    startCaptureLocked, gate-aware, when enabled && subCount>0); RED-first
+    proof bit.
+  - ✅P1-starved-windows: `Slot.Starved` off the scheduler's per-boundary
+    delta (reused EXISTING minLiveWindowSamples — no invented threshold;
+    testable `boundaryStarved` helper); decodeLoop suppresses decode + skips
+    (keeps hash) + no sequencer drive + no occupancy + `capture_dropped`
+    evidence + empty clock tick (invariant 4). RED-first; 3 reversion proofs
+    bit. maintidx exemption for decodeLoop (MI 19, feature-growth class of
+    onSlotWorking/runPipeline).
+  **Gates: race clean, lint 0, gofmt clean, ft8 suite ×2 green, tree -short
+  green, all cmd/ build.** Fix-first (no dedicated pinning test) only on
+  P2-race (validated by -race) + P2-double-publish (structural coverage).
+- **NEXT: OPERATOR commits the ft8 review fixes (watch auto-review; sm-pg
+  running for the evidence half) → push → CI → redeploy smd (evidence.db
+  v4→v5 at start; picks up ft8 fixes too) → smcloud deploy → FT8 soak.**
+  on-air 0067 · Settings defaults dropdown · max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.

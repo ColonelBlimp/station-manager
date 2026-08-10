@@ -61,8 +61,8 @@ func (s *Sequencer) StartQsoT4(ourCall, theirCall, theirGrid string, theirSnr in
 	s.mode = seqAnsweringT4
 	s.contact = contactFlags{}
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
-	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
+	s.logbookID = s.pendingLogbookID                    // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.t4Ex = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
@@ -248,8 +248,8 @@ func (s *Sequencer) StartWorkCallerT4(ourCall, theirCall, theirGrid string, thei
 	s.mode = seqWorkingT4
 	s.contact = contactFlags{}
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
-	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
+	s.logbookID = s.pendingLogbookID                    // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.t4Work = &c
 	s.ourCall = c.OurCall
 	s.theirPeriod = SlotRefFromTime(t).Period

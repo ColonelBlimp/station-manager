@@ -350,6 +350,16 @@ func (s *Service) Start(ctx context.Context) error {
 		}, true, &s.bgWg)
 	}
 
+	// Reconcile a subscriber that connected BEFORE Start (package review,
+	// 2026-08-10): onSubscriberAdded increments subCount unconditionally but
+	// skips the acquire while !started, and a later subscriber can't trigger
+	// it either (subCount != 1). Without this, a no-CAT deployment — which
+	// has no reconcile loop to cover it — would hold the subsystem idle
+	// forever. startCaptureLocked is gate-aware: with a CAT gate not yet
+	// live it defers, and the reconcile loop above acquires once CAT comes up.
+	if s.subCount > 0 {
+		s.startCaptureLocked()
+	}
 	s.log.InfoWith().Msg("ft8: subsystem ready; capture starts on first /v1/ft8/events subscriber")
 	return nil
 }
@@ -910,6 +920,18 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 		// dial alone. This flag now governs only what we PUBLISH from this slot.
 		dialMoved := slot.DialChanged
 
+		// A STARVED window (package review, 2026-08-10): the ring received too
+		// few fresh samples, so its snapshot is mostly the PRIOR slot's audio.
+		// It is suppressed like a dial-moved slot everywhere below — never
+		// decoded (stale messages would drive the sequencer and spot at wrong
+		// times), never driven into the sequencer ("we could not hear" is not
+		// the same as "silence", the DialChanged rule), never published as
+		// occupancy — and recorded as capture loss. Unlike a QSY it is NOT a
+		// context change, so the decoder is advanced (dec.skip), not reset:
+		// the hash table built from real earlier audio survives a brief
+		// capture hiccup.
+		starved := slot.Starved
+
 		// Decoder context check. A DIAL-MOVED slot resets the decoder — the QSY
 		// replaced the receiver context, and the band-blind hash table must not
 		// cross it (see slotDecoder.reset; review cd1757a7cda2 P1). But the
@@ -964,7 +986,9 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 		switch {
 		case dialMoved:
 			// Unattributable window: nothing to decode; its reset ran above.
-		case txSlot:
+		case txSlot, starved:
+			// Our own TX bleed, or a starved window's stale ring — either way
+			// advance parity (keep the cross-slot hash) without decoding.
 			dec.skip()
 		default:
 			rich, decodeOK = dec.decode(slot.Samples)
@@ -973,7 +997,7 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 		// go-ft8 result — every parse status, own-TX included. The evidence
 		// sink taps it HERE, upstream of every curated filter, with the slot's
 		// true coverage outcome. Everything below is the curated branch.
-		s.emitSlotEvidence(ref, slot, dialMoved, txSlot, decodeOK, rich)
+		s.emitSlotEvidence(ref, slot, dialMoved, txSlot, starved, decodeOK, rich)
 		//
 		// curateDecodes = parse-status filter + own-transmission drop. The
 		// callsign is the ACTIVE session's pinned call (ADR 0055, pin-at-arm) —
@@ -1000,7 +1024,7 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 		// observed, not assumed. Unlike the session-ending rule this replaced, this
 		// is safe to apply unconditionally: skipping one slot costs a session
 		// started meanwhile nothing but that slot.
-		if !dialMoved {
+		if !dialMoved && !starved {
 			s.seq.OnSlot(ref, msgs, time.Now().UTC())
 		}
 
@@ -1041,7 +1065,7 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 		prevDial = slot.DialMHz
 
 		var rep OccupancyReport
-		if !txSlot && !unplaceable {
+		if !txSlot && !unplaceable && !starved {
 			rep = Occupancy(ref, slot.Samples, msgs, s.occCfg)
 			// Stamp the frequency the audio was actually captured on, so the
 			// report is attributable no matter how late it is consumed.
@@ -1066,10 +1090,15 @@ func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, i
 		// transmission is expected every other slot of a run, and at Info it
 		// would bury the two lines that matter. Info per the gaps doc: rate is
 		// bounded by slots. Tests: slotsuppression_test.go.
-		if (dialMoved || unplaceable) && !txSlot {
+		if (dialMoved || unplaceable || starved) && !txSlot {
 			rule, scope := "unplaceable", "occupancy"
 			if dialMoved {
 				rule, scope = "dial_moved", "decode+sequencer+occupancy"
+			}
+			if starved {
+				// Starvation shadows an unplaceable dial (0 MHz) — name the
+				// capture loss, the more actionable of the two.
+				rule, scope = "starved", "decode+sequencer+occupancy"
 			}
 			s.log.InfoWith().
 				Str("slot", ref.StartUTC).
@@ -1163,7 +1192,7 @@ func (s *Service) emitOmittedEvidence(prevSlotStart time.Time, slot Slot) (misse
 // emitSlotEvidence hands the delivered slot's rich result to the evidence
 // sink with its true coverage outcome — decoder_error is a REJECTED decode,
 // distinct from a silent band (no_decode).
-func (s *Service) emitSlotEvidence(ref SlotRef, slot Slot, dialMoved, txSlot, decodeOK bool, rich []goft8.DecodedMessage) {
+func (s *Service) emitSlotEvidence(ref SlotRef, slot Slot, dialMoved, txSlot, starved, decodeOK bool, rich []goft8.DecodedMessage) {
 	if s.evidenceSink == nil {
 		return
 	}
@@ -1171,6 +1200,10 @@ func (s *Service) emitSlotEvidence(ref SlotRef, slot Slot, dialMoved, txSlot, de
 	switch {
 	case dialMoved:
 		outcome = EvidenceDialChanged
+	case starved:
+		// The window's audio never really arrived — capture loss, not a
+		// no_decode (which would claim a clean but empty slot).
+		outcome = EvidenceCaptureDropped
 	case txSlot:
 		outcome = EvidenceTx
 	case !decodeOK:

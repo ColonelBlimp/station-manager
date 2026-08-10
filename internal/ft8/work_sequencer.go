@@ -321,8 +321,8 @@ func (s *Sequencer) StartWorkCallerFd(ourCall, ourClass, ourSection, theirCall, 
 	s.mode = seqWorkingFd
 	s.contact = contactFlags{}
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
-	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
+	s.logbookID = s.pendingLogbookID                    // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.fdWork = &c
 	s.ourCall = call
 	s.theirPeriod = SlotRefFromTime(t).Period
@@ -495,8 +495,8 @@ func (s *Sequencer) commitWorkCallerLocked(c *CallerExchange, call, theirPeriod 
 	// the pin decides what the completion records.
 	s.contact.runID = s.runID
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
-	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
+	s.logbookID = s.pendingLogbookID                    // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.caller = c
 	s.ourCall = call
 	s.theirPeriod = theirPeriod
@@ -581,8 +581,11 @@ func (s *Sequencer) onSlotIdleArmed(ref SlotRef, msgs []goft8.DecodedMessage, no
 			c := NewCallerExchange(s.autoWork.call, head.call, head.grid, head.snr)
 			s.commitWorkCallerLocked(&c, s.autoWork.call,
 				head.period, s.autoWork.offsetHz, s.autoWork.dialMHz, now)
+			// commitWorkCallerLocked already published the ACTIVE frame under
+			// the lock (invariant 3); re-publishing here is a duplicate wire
+			// event that needlessly consumes the subscriber buffer (package
+			// review, 2026-08-10).
 			theirCall := head.call
-			s.publish(s.statusLocked())
 			s.mu.Unlock()
 			s.log.InfoWith().Str("their_call", theirCall).
 				Msg("ft8 seq: drained bagged caller from the pick queue; working them")
@@ -600,9 +603,14 @@ func (s *Sequencer) onSlotIdleArmed(ref SlotRef, msgs []goft8.DecodedMessage, no
 	}
 	s.commitWorkCallerLocked(pick, s.autoWork.call, ref.Period, s.autoWork.offsetHz, s.autoWork.dialMHz, now)
 	theirCall := pick.TheirCall
+	// Capture the run's mode BEFORE the unlock: StopAutoWorkRun replaces the
+	// whole s.autoWork struct under s.mu, so reading s.autoWork.selectMode
+	// after the unlock is a data race that can log an empty mode (package
+	// review, 2026-08-10).
+	selectMode := s.autoWork.selectMode
 	s.mu.Unlock()
 
 	s.log.InfoWith().Str("their_call", theirCall).Str("heard", text).
-		Str("answer_mode", s.autoWork.selectMode).Msg("ft8 seq: auto-work run picked up a caller")
+		Str("answer_mode", selectMode).Msg("ft8 seq: auto-work run picked up a caller")
 	s.fireOpening(now)
 }

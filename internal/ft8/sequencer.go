@@ -791,8 +791,8 @@ func (s *Sequencer) StartQso(ourCall, ourGrid, theirCall, theirGrid, theirSlotUT
 	s.mode = seqAnswering
 	s.contact = contactFlags{}
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
-	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
+	s.logbookID = s.pendingLogbookID                    // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.ex = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
 	s.theirGrid = theirGrid
@@ -856,8 +856,8 @@ func (s *Sequencer) StartQsoFd(ourCall, ourClass, ourSection, theirCall, theirGr
 	s.mode = seqAnsweringFd
 	s.contact = contactFlags{}
 	s.sessionGen++
-	s.logbookID = s.pendingLogbookID           // pin the staged logbook atomically with activation
-	s.allowDuplicate = s.pendingAllowDuplicate // ...and the deliberate-repeat intent with it
+	s.logbookID = s.pendingLogbookID                    // pin the staged logbook atomically with activation
+	s.allowDuplicate = s.consumePendingAllowDuplicate() // one-shot: consumed + cleared with activation
 	s.fdEx = &ex
 	s.theirPeriod = SlotRefFromTime(t).Period
 	s.offsetHz = offsetHz
@@ -1246,6 +1246,20 @@ func (s *Sequencer) setPendingAllowDuplicate(allow bool) {
 	s.mu.Lock()
 	s.pendingAllowDuplicate = allow
 	s.mu.Unlock()
+}
+
+// consumePendingAllowDuplicate reads the staged deliberate-repeat intent and
+// CLEARS it, so it is a strict one-shot: the operator's per-contact "work
+// this station again" is consumed by the single commit it was staged for and
+// can never bleed into a later contact that did not re-stage it (package
+// review, 2026-08-10). The leak this closes: an auto-work run (ADR 0059)
+// commits callers through commitWorkCallerLocked WITHOUT re-staging, so a
+// retained override let every auto-work QSO bypass storage dedup without
+// per-station authorization. Callers hold s.mu.
+func (s *Sequencer) consumePendingAllowDuplicate() bool {
+	allow := s.pendingAllowDuplicate
+	s.pendingAllowDuplicate = false
+	return allow
 }
 
 // setPendingAnswerMode stages the SESSION's answerer-selection mode (ADR 0066)

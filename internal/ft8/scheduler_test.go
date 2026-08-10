@@ -244,7 +244,7 @@ func TestScheduler_AttributesSlotOnlyWhenDialHeldSteady(t *testing.T) {
 			ring := newSampleRing(SlotSamples)
 			ring.Append(full)
 
-			sch.emitSlot(ring, target, target)
+			sch.emitSlot(ring, target, target, false)
 
 			select {
 			case slot := <-sch.out:
@@ -258,6 +258,31 @@ func TestScheduler_AttributesSlotOnlyWhenDialHeldSteady(t *testing.T) {
 	}
 }
 
+// Package review (2026-08-10): the scheduler flags a window whose fresh-sample
+// delta fell below minLiveWindowSamples as starved, and a full window as not —
+// the per-boundary delta, not the lifetime Filled() count, is what
+// distinguishes them. The boundary before it primes the baseline.
+func TestScheduler_FlagsStarvedWindowsByDelta(t *testing.T) {
+	sch := NewScheduler(make(chan []int16), nil)
+	full := int64(SlotSamples)
+
+	// Two full windows in a row: each delta is a whole slot — never starved.
+	require.False(t, sch.boundaryStarved(full), "the first full window is not starved")
+	require.False(t, sch.boundaryStarved(2*full), "a second full window is not starved")
+
+	// A starved window: only a trickle (< minLiveWindowSamples) arrived since.
+	require.True(t, sch.boundaryStarved(2*full+minLiveWindowSamples-1),
+		"a window with fewer than minLiveWindowSamples fresh samples is starved")
+
+	// Exactly at the floor is NOT starved (the comparison is strict).
+	require.False(t, sch.boundaryStarved(2*full+2*minLiveWindowSamples),
+		"a window at the floor is not starved")
+
+	// Recovery: a full window again clears it.
+	require.False(t, sch.boundaryStarved(3*full+2*minLiveWindowSamples),
+		"a recovered full window is not starved")
+}
+
 // A slot from a session with no dial source is UNTRACKED, not merely
 // unattributed: the consumer publishes it (that deployment cannot transmit)
 // instead of skipping it.
@@ -267,7 +292,7 @@ func TestScheduler_NoDialSourceLeavesSlotUntracked(t *testing.T) {
 	ring := newSampleRing(SlotSamples)
 	ring.Append(make([]int16, SlotSamples))
 
-	sch.emitSlot(ring, time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC), time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC))
+	sch.emitSlot(ring, time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC), time.Date(2026, 7, 27, 12, 0, 15, 0, time.UTC), false)
 
 	slot := <-sch.out
 	require.False(t, slot.DialTracked)
