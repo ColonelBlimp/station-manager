@@ -173,9 +173,24 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   bit. Fixture band re-tuned: headroom 320K / cap margin 256K (the
   margin−reserve gap must host boot-2's ~60-90K working churn — measured
   via instrumented fixtures). Race/lint/tree green; ×3 stable.**
-- **NEXT: operator commits the 2 fixes (watch auto-review; sm-pg running)
-  → push → CI → redeploy smd (evidence.db v4→v5 at start) → smcloud
-  deploy → soak → §6/§7.**
+- **`8efbb2fe` (ceiling-reserve pair) committed; ITS review raised 1 more
+  REAL P1, FIXED in tree: sustained drop-new consumed the reserve — each
+  dropped slot refreshed the loss row's WAL, crossing the cap in ~13
+  drops. Fix: near the ceiling the accumulator extends IN MEMORY (§4.1's
+  documented deferral) and a bounded TRUNCATE folds the WAL; the record
+  persists with priority at Stop. RED-first + proof bit. This is the
+  4th consecutive review round on the same cap-ceiling code — the
+  [[review-fixes-need-full-scrutiny]] cluster; the physics (DELETE +
+  freelist + WAL fold on tiny archives) keeps outrunning fixtures, so
+  the manufactured-state tests now VACUUM+checkpoint before measuring and
+  the sustained-drops invariant is cap-not-exceeded (oscillation is
+  legitimate), not all-30-drop. TestCap_DropsNewBeforeTheLimit amended
+  same reason (fold may resume capture past the watermark). Race/lint/
+  tree green, ×3 stable.**
+- **NEXT: operator commits (watch auto-review; sm-pg running) → push →
+  CI → redeploy smd (evidence.db v4→v5 at start) → smcloud deploy →
+  soak → §6/§7. WATCH the next auto-review closely — 4 rounds deep on
+  this code.**
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.

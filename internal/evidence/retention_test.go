@@ -230,9 +230,17 @@ func TestActivation_AcceptsReusablePagesAtWatermark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// VACUUM first (fixture prep only — the LIVE path never runs it): boot
+	// WAL-fold slack otherwise collapses on the first in-test fold and
+	// dissolves the pinned pressure. The MIDDLE deletion then builds the
+	// freelist from pages that can never reach the file tail (post-VACUUM
+	// physical order is table order), so no commit can truncate them away.
+	if _, err := raw.Exec(`VACUUM; PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := raw.Exec(
 		`DELETE FROM observations WHERE uuid IN
-		   (SELECT uuid FROM observations ORDER BY uuid ASC LIMIT 100)`); err != nil {
+		   (SELECT uuid FROM observations ORDER BY uuid ASC LIMIT 100 OFFSET 100)`); err != nil {
 		t.Fatal(err)
 	}
 	_ = raw.Close()
@@ -647,7 +655,7 @@ UPDATE schema_meta SET v = '4' WHERE k = 'schema_version';`); err != nil {
 func TestCap_HardCeilingRefusesWritesEvenWithFreelist(t *testing.T) {
 	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
 	oldHeadroom := headroomBytes
-	headroomBytes = 320 * 1024 // hosts shm + boot-2 WAL churn + the write-growth reserve
+	headroomBytes = 48 * 1024 // real vacuumed bytes: shm-width headroom; the 64K write reserve is the cap margin
 	defer func() { headroomBytes = oldHeadroom }()
 	smc := newFakeSMC(t)
 
@@ -657,9 +665,17 @@ func TestCap_HardCeilingRefusesWritesEvenWithFreelist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// VACUUM first (fixture prep only — the LIVE path never runs it): boot
+	// WAL-fold slack otherwise collapses on the first in-test fold and
+	// dissolves the pinned pressure. The MIDDLE deletion then builds the
+	// freelist from pages that can never reach the file tail (post-VACUUM
+	// physical order is table order), so no commit can truncate them away.
+	if _, err := raw.Exec(`VACUUM; PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := raw.Exec(
 		`DELETE FROM observations WHERE uuid IN
-		   (SELECT uuid FROM observations ORDER BY uuid ASC LIMIT 100)`); err != nil {
+		   (SELECT uuid FROM observations ORDER BY uuid ASC LIMIT 100 OFFSET 100)`); err != nil {
 		t.Fatal(err)
 	}
 	_ = raw.Close()
@@ -699,7 +715,7 @@ func TestCap_HardCeilingRefusesWritesEvenWithFreelist(t *testing.T) {
 func TestCap_CeilingReservesWriteGrowth(t *testing.T) {
 	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
 	oldHeadroom := headroomBytes
-	headroomBytes = 256 * 1024
+	headroomBytes = 96 * 1024 // ≥ write reserve, so the watermark sits at/below usage and the CEILING trips
 	defer func() { headroomBytes = oldHeadroom }()
 	oldBudget := metadataBudgetBytes
 	metadataBudgetBytes = 0 // purging must not dissolve the boundary
@@ -712,9 +728,17 @@ func TestCap_CeilingReservesWriteGrowth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// VACUUM first (fixture prep only — the LIVE path never runs it): boot
+	// WAL-fold slack otherwise collapses on the first in-test fold and
+	// dissolves the pinned pressure. The MIDDLE deletion then builds the
+	// freelist from pages that can never reach the file tail (post-VACUUM
+	// physical order is table order), so no commit can truncate them away.
+	if _, err := raw.Exec(`VACUUM; PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := raw.Exec(
 		`DELETE FROM observations WHERE uuid IN
-		   (SELECT uuid FROM observations ORDER BY uuid ASC LIMIT 100)`); err != nil {
+		   (SELECT uuid FROM observations ORDER BY uuid ASC LIMIT 100 OFFSET 100)`); err != nil {
 		t.Fatal(err)
 	}
 	_ = raw.Close()
@@ -738,6 +762,79 @@ func TestCap_CeilingReservesWriteGrowth(t *testing.T) {
 		t.Fatal("P1: a slot was written INSIDE the cap's write-growth reserve — its WAL frames land past the ceiling")
 	}
 	s.Stop()
+}
+
+// Review P1 on 8efbb2fe: drop-new itself must not consume the reserve —
+// each dropped slot refreshes the loss accumulator's row, and unfolded,
+// those WAL frames cross the cap within a handful of drops. §4.1's answer
+// is already written: under pressure the accumulator extends IN MEMORY
+// (documented crash-limit) and the WAL folds; the record persists with
+// priority at recovery/Stop.
+func TestCap_SustainedDropsStayUnderTheCap(t *testing.T) {
+	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
+	oldHeadroom := headroomBytes
+	headroomBytes = 96 * 1024 // ≥ write reserve, so the watermark sits at/below usage and the ceiling trips
+	defer func() { headroomBytes = oldHeadroom }()
+	oldBudget := metadataBudgetBytes
+	metadataBudgetBytes = 0 // purging never dissolves the pressure
+	defer func() { metadataBudgetBytes = oldBudget }()
+	smc := newFakeSMC(t)
+
+	cfg := testConfig(t, true)
+	ackedArchive(t, cfg, smc, 100)
+	raw, err := sql.Open("sqlite", cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// VACUUM first (fixture prep only — the LIVE path never runs it): boot
+	// WAL-fold slack otherwise collapses on the first in-test fold and
+	// dissolves the pinned pressure. The MIDDLE deletion then builds the
+	// freelist from pages that can never reach the file tail (post-VACUUM
+	// physical order is table order), so no commit can truncate them away.
+	if _, err := raw.Exec(`VACUUM; PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(
+		`DELETE FROM observations WHERE uuid IN
+		   (SELECT uuid FROM observations ORDER BY uuid ASC LIMIT 100 OFFSET 100)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+	usage := statUsage(t, cfg.Path)
+
+	cfg2 := cfg
+	cfg2.CapBytes = usage + 40*1024 // ceiling = cap−64K sits below usage; usage in the reserve band
+	s := newRunning(t, cfg2)
+
+	// A sustained run of drops: the loss refreshes must never carry usage
+	// past the hard cap. The SOLE P1 invariant is that ceiling — capture may
+	// legitimately oscillate (an in-band WAL fold genuinely frees a slot's
+	// room, so a later slot writes, then re-drops); what it must NEVER do is
+	// exceed the cap on its own loss bookkeeping.
+	for j := 0; j < 30; j++ {
+		s.CaptureSlot(richSlot(slotAt((900 + j) * 15)))
+		drain(t, s)
+		if u := s.physicalUsage(); u > cfg2.CapBytes {
+			t.Fatalf("P1: usage %d exceeded the cap %d after %d sustained drops — the loss refreshes consumed the reserve", u, cfg2.CapBytes, j+1)
+		}
+	}
+	dropped := s.Status().DroppedSlots
+	if dropped == 0 {
+		t.Fatal("fixture: no slots dropped — the ceiling never engaged")
+	}
+	// The deferred accumulator survives to Stop, which persists it with
+	// priority: every dropped slot is counted in sealed cap loss.
+	s.Stop()
+	db := openRaw(t, cfg.Path)
+	var persisted int64
+	if err := db.QueryRow(
+		`SELECT COALESCE(SUM(slots), 0) FROM loss_intervals WHERE reason = 'cap' AND remote_status = 'never_offered' AND sealed = 1`).
+		Scan(&persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted != dropped {
+		t.Fatalf("P1: %d dropped slots but %d persisted in cap loss — the deferred accumulator must survive to Stop", dropped, persisted)
+	}
 }
 
 // Review P2 on ab9868cc: a mixed-class unsynced chunk inserts up to THREE
@@ -1297,7 +1394,7 @@ func TestV4_TerminalOutcomePersisted(t *testing.T) {
 func TestRT10_OpenLossAccumulatorIsNotSyncEligible(t *testing.T) {
 	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
 	oldHeadroom := headroomBytes
-	headroomBytes = 64 * 1024 // drops-only fixture: cap = usage, never the write-through band
+	headroomBytes = 320 * 1024 // drops persist the open row only OUTSIDE the write reserve — give the band room
 	defer func() { headroomBytes = oldHeadroom }()
 	// The retention engine would PURGE instead of dropping (full §4.1);
 	// this fixture needs guaranteed drops, so the zero metadata budget
@@ -1322,9 +1419,21 @@ func TestRT10_OpenLossAccumulatorIsNotSyncEligible(t *testing.T) {
 	s1.Stop()
 	usage := statUsage(t, cfg.Path)
 
+	// Tight bytes: no foldable slack that a mid-test checkpoint could
+	// collapse into resumed capacity.
+	rawv, err := sql.Open("sqlite", cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rawv.Exec(`VACUUM; PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = rawv.Close()
+	usage = statUsage(t, cfg.Path)
+
 	cfg2 := cfg
 	cfg2.Sync, cfg2.SyncURL, cfg2.SyncToken = true, smc.ts.URL, "test-token"
-	cfg2.CapBytes = usage // watermark = usage − headroom: permanently exceeded
+	cfg2.CapBytes = usage + 256*1024 // watermark = usage−64K: exceeded; ceiling = usage+192K: refreshes persist
 	s2 := newRunning(t, cfg2)
 	for j := 0; j < 5; j++ {
 		s2.CaptureSlot(richSlot(slotAt((100 + j) * 15))) // every one DROPS

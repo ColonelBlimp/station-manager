@@ -352,32 +352,39 @@ func TestCap_DropsNewBeforeTheLimit(t *testing.T) {
 		t.Fatal("cap never tripped — watermark not enforced")
 	}
 
-	// Everything past the watermark accumulates as never_offered loss.
-	preObs := countRows(t, openRaw(t, cfg.Path), `SELECT COUNT(*) FROM observations`)
+	// Retention amendment (2026-08-10): past the watermark, the in-band WAL
+	// fold may legitimately REVEAL capacity and resume capture (the
+	// documented resume-on-capacity), so "nothing writes after the trip" is
+	// no longer the criterion. What must hold: usage NEVER exceeds the cap,
+	// and every drop is recorded as never_offered cap loss.
 	for i := 400; i < 404; i++ {
 		s.CaptureSlot(richSlot(slotAt(15 * i)))
+		drain(t, s)
+		if u := s.physicalUsage(); u > cfg.CapBytes {
+			t.Fatalf("usage %d exceeded the cap %d past the watermark", u, cfg.CapBytes)
+		}
 	}
-	drain(t, s)
+	st := s.Status()
+	if st.DroppedSlots == 0 {
+		t.Error("the watermark trip recorded no dropped slots")
+	}
+	if st.UsageBytes == 0 || st.UsageBytes > cfg.CapBytes {
+		t.Errorf("Status usage = %d, want within the cap %d", st.UsageBytes, cfg.CapBytes)
+	}
+	s.Stop() // persists the accumulator with priority, whatever the band did
 
 	db := openRaw(t, cfg.Path)
-	if n := countRows(t, db, `SELECT COUNT(*) FROM observations`); n != preObs {
-		t.Fatalf("observations grew past the watermark: %d → %d", preObs, n)
-	}
 	var slots, obs int
 	var reason, remote string
-	if err := db.QueryRow(`SELECT slots, observations, reason, remote_status FROM loss_intervals`).
+	if err := db.QueryRow(`SELECT slots, observations, reason, remote_status FROM loss_intervals ORDER BY uuid ASC LIMIT 1`).
 		Scan(&slots, &obs, &reason, &remote); err != nil {
 		t.Fatalf("loss interval: %v", err)
 	}
-	if slots < 4 || obs < 12 {
-		t.Errorf("loss interval spans %d slots / %d observations, want ≥ the 4 dropped rich slots", slots, obs)
+	if slots < 1 || obs < 3 {
+		t.Errorf("loss interval spans %d slots / %d observations, want ≥ the tripping rich slot", slots, obs)
 	}
 	if reason != "cap" || remote != "never_offered" {
 		t.Errorf("loss = %s/%s, want cap/never_offered", reason, remote)
-	}
-	st := s.Status()
-	if st.State != StateDropNew || st.UsageBytes == 0 || st.UsageBytes > cfg.CapBytes {
-		t.Errorf("Status = %+v, want drop_new with usage within the cap", st)
 	}
 }
 

@@ -673,7 +673,19 @@ func (s *Service) processSlot(sc SlotCapture) {
 		}
 		s.dropped++
 		s.accumulateLocked(sc, lossReasonCap)
-		s.refreshLossLocked()
+		// §4.1 under pressure: once usage nears the cap, the accumulator
+		// extends IN MEMORY — persisting per drop would consume the very
+		// reserve the ceiling protects, and a sustained run of drops would
+		// cross the cap on its own loss refreshes (8efbb2fe review P1). A
+		// bounded TRUNCATE folds what WAL remains; the documented
+		// crash-limit applies, and recovery/Stop persist with priority.
+		if s.physicalUsage() < s.cfg.CapBytes-writeWalReserveBytes {
+			s.refreshLossLocked()
+		} else {
+			var busy, logFrames, checkpointed int64
+			_ = s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).
+				Scan(&busy, &logFrames, &checkpointed)
+		}
 		s.mu.Unlock()
 		return
 	}
