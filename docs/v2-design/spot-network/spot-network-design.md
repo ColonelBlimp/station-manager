@@ -330,6 +330,100 @@ Honesty note: SMD's RX level meter currently reads dBFS on an uncalibrated
 audio chain; until a calibration against the rig is done, the field carries
 a not-measured sentinel rather than a number that looks like dBm.
 
+**Slice amendment (operator rulings, 2026-08-10) — the profiles build shape.**
+Acceptance criteria PR1–PR9 live in `internal/evidence/profiles_test.go`'s
+header (with the config-validation half in
+`internal/config/validate_antennas_test.go`); this amendment records the
+rulings they encode.
+
+- **The declaration is a per-band operating statement, not a shack
+  inventory:** a short `evidence.antennas` config list — per entry `name`,
+  optional `type`, `bands` (ADIF band tokens), optional `height_m`
+  (feedpoint height above ground, metres, finite ≥ 0, **zero valid and
+  distinct from absent**, no upper bound), optional `feedline`, optional
+  `locator` (validated + canonicalized Maidenhead; **omitted pins
+  `not_declared` — no inheritance from the station grid**, which is
+  live-writable and would smuggle a changing fact into a restart-only
+  system; consequently a station-grid change never re-mints profiles).
+  **Transmit power is explicitly deferred from this slice** — a single
+  typical wattage is not honest across bands and days, and it would overlap
+  `station.default_power`. Noise floor: no config field; every version
+  carries the not-measured sentinel.
+- **Lineage identity is the trimmed, case-sensitive `name`.** Duplicate
+  names reject; a band claimed by two antennas rejects (finding names the
+  band and both antennas); a band duplicated within one antenna rejects
+  (silent normalization would conceal a typo); an empty band list rejects
+  (it declares nothing — retirement is removing the entry). List order
+  carries no identity. Rename = retire + new lineage (historical rows
+  resolve; cross-lineage analysis splits — accepted cost). Re-adding a
+  retired name resumes its lineage and **always mints the next version**,
+  even with identical facts: resumption is an event.
+- **Activation is restart-only this slice** (the `evidence` block is
+  hand-edit + restart, off `/v1/config`): activation = evidence-store
+  startup; `validFrom` = mint time; a declaration saved while capture is
+  disabled validates at load but pins nothing (capture off keeps creating
+  no evidence.db). All new versions and the active band map reconcile in
+  **one SQLite transaction before the evidence writer starts; failure
+  activates none of the candidate declaration** — and the stale prior
+  active mapping is not used either: resolution stays globally degraded and
+  new NULL rows carry `profile_error`. Reconciliation may consume bounded
+  reserved headroom but never exceeds the hard cap; a declaration that
+  cannot fit does not activate (`degraded` until capacity returns or the
+  cap is raised — effective at the **next restart**, not spontaneously).
+  Two failure classes stay distinct: reconciliation fails with a writable
+  archive → capture continues under `profile_error`; the database cannot
+  open or migrate → evidence idle, ordinary FT8 decoding and QSO logging
+  continue (existing Error-level fail-soft posture).
+- **Every observation carries the stamp or the reason** (schema v2
+  migration): non-NULL `profile_uuid` ⇔ NULL `unprofiled_reason`; reasons
+  `legacy_unprofiled` (pre-migration rows only — v1 NULLs predate the
+  feature and must not claim an operator choice) `| no_declaration |
+  band_unmapped | dial_unattributed | profile_error`, precedence
+  `profile_error → no_declaration → dial_unattributed → band_unmapped →
+  profiled`. The reason commits in the existing one-slot transaction;
+  status counters derive by GROUP BY. The stamp is resolved at
+  slot-evidence emission and travels with the record — never re-derived
+  when the asynchronous writer commits (structural under restart-only; its
+  behavioural test arrives with any future live-write surface).
+- **Profile health** on `GET /v1/evidence/status`: `profiles.state` ∈
+  `disabled | none_declared | active | degraded`; when `disabled`,
+  lineage/version counts serialize as null/omitted — unavailable, not zero
+  (the service deliberately opens nothing). Active map:
+  `band → {name, profile_uuid, version, valid_from}`. Unprofiled *data* is
+  quiet (counters only); every **transition into** `degraded` emits one
+  default-visible warning-or-error record, not repeated per observation or
+  status read.
+- **Deferred, by name:** same-band runtime override (the stamp is declared
+  intent; nothing verifies the coax) · any Settings/app UI · `my_antenna`
+  / QSO / PSK Reporter coupling · profile sync (§5.4) · calibrated noise
+  floor · transmit power (above).
+
+**Codex-review rulings (operator, 2026-08-10, after the first §4.2 build;
+criteria PR10 and the amended O5 cap-boundary paragraph in
+`internal/evidence/profiles_test.go`):**
+
+- **Bands are pinned facts.** Each profile version records the band set it
+  governed (`profiles.bands`, canonical sorted comma-joined ADIF tokens);
+  a band-membership change mints the next version, so observations before
+  and after the change resolve different versions and the governing
+  declaration of any historical row stays reconstructable. Band *order* is
+  normalized away and never mints (PR2 unchanged).
+- **The cap boundary is reserved, not measured.** A post-write check
+  cannot defend the physical cap: dirty pages spill to the `-wal` during a
+  transaction and rollback does not shrink the file (measured against
+  modernc.org/sqlite v1.48.1; numbers in `migrateSchema`'s comment).
+  Activation therefore refuses at the same **watermark** every slot write
+  observes (cap − headroom), whose reserved headroom bounds the mint
+  transaction's growth. The v1→v2 migration — whose backfill dirties
+  ~every observations page, WAL peak ≈ the whole db file — refuses on a
+  **pre-write projection** (db size + ~6% frame overhead + fixed slack),
+  leaving the archive at v1 and evidence idle (the existing fail-soft),
+  retryable at the next restart; a successful migration
+  TRUNCATE-checkpoints the WAL so the transient peak is folded back before
+  capture starts. This supersedes the mechanism wording "may consume
+  bounded reserved headroom but never exceeds the hard cap" above — the
+  guarantee is unchanged; the enforced boundary is the watermark.
+
 ---
 
 ## 5. Synchronisation (durable history)
@@ -479,6 +573,15 @@ sync does, and the sync semantics split accordingly:
 `retryable_missing_profile` applies only to a **non-null** profile UUID
 absent from SMC; a null-profile observation is accepted as **explicitly
 unprofiled**, not retried.
+
+**Amendment (operator, 2026-08-10, with the §4.2 profiles rulings):** the
+"no sync-side retry state is ever created for a null-profile observation"
+clause is *recorded here* and must be **repeated in the sync slice's
+acceptance-test header** — it is not automated acceptance for the profiles
+slice, where it would pass vacuously with no sync to exercise it. Note the
+profiles migration adds `legacy_unprofiled` as an unprofiled *reason*;
+for sync it is indistinguishable from any other NULL — accepted, never
+retried.
 
 ---
 

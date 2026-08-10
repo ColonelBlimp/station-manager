@@ -176,6 +176,37 @@ capacity returns). Validation: `cap_bytes` ≥ `types.EvidenceMinCapBytes`
 Read at startup → `internal/evidence`; **not on `/v1/config`** (hand-edit +
 restart, like the SMTP block); observe via `GET /v1/evidence/status`.
 
+**`antennas`** (§4.2 station profiles, operator rulings 2026-08-10) — the
+per-band operating declaration, a list of entries, each: `name` (required;
+the trimmed, case-sensitive lineage identity — renaming starts a new
+lineage), `bands` (required, non-empty; ADIF band tokens; one band maps to
+ONE antenna, no duplicates within or across entries), and optional `type`,
+`height_m` (feedpoint metres above ground, finite ≥ 0, **0 is valid and
+distinct from absent**, no upper bound), `feedline`, `locator` (validated
+Maidenhead, canonicalized on activation; omitted = pinned not-declared —
+NEVER inherited from the station grid). Transmit power is deliberately
+absent (overlaps `station.default_power`; not honest across bands/days).
+Validation runs whether or not `capture` is enabled; activation is
+**restart-only** — the daemon pins immutable profile versions into
+`evidence.db` at startup and stamps every observation with the active
+version for the slot's band (or an `unprofiled_reason`). **Band membership
+is a pinned fact** (codex-P1 ruling 2026-08-10): editing an entry's `bands`
+mints the next version, same as any other fact edit; reordering them does
+not. Near the size cap, activation refuses at the writer's watermark
+(`cap_bytes` − 16 MiB headroom; profiles degraded until a restart with
+capacity), and a v1 archive too large to migrate under `cap_bytes` is left
+untouched with evidence idle. Worked example:
+
+```json
+"evidence": {
+  "capture": true,
+  "antennas": [
+    { "name": "DX Commander", "type": "vertical", "bands": ["80m", "40m", "30m"], "height_m": 0 },
+    { "name": "VHQ Hex beam", "type": "hexbeam", "bands": ["20m", "17m", "15m", "12m", "10m", "6m"], "height_m": 12 }
+  ]
+}
+```
+
 ### `MapConfig` (`internal/types/mapconfig.go`, config key `map`)
 
 Contacts-map display settings. `band_colors` maps lowercase ADIF band tokens

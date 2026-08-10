@@ -48,49 +48,35 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **Spot-network arc, position 2026-08-10 evening.** Draft 3 design frozen
-  implementation-ready (9 review rounds; record in Current state). Prereq 1
-  (go-ft8 v0.8.0 evidence-grade decode) + prereq 3 (run identity, UUIDv7
-  pin-at-commit → AppSmRunID) + prereq 2 (rich-result split + one stateful
-  slotDecoder per capture session) ALL SHIPPED and PUSHED through
-  `d8c11a0a`; the decoder-state review arc closed clean in three rounds
-  (dial-moved/dial-difference RESET, gap ADVANCE per omitted slot; final
-  review NO FINDINGS; CI GREEN `31349738895`).
-- **Evidence writer (§4.1 first capture slice) BUILT 2026-08-10, in tree
-  uncommitted.** Operator rulings folded into the design doc: NULL profile
-  ref = "explicitly unprofiled" (§5.4; profiles ship BEFORE sync), drop-new
-  at a soft WATERMARK below the cap (resume when capacity returns), cap
-  default 500 MiB EXACT. New `internal/evidence` (own evidence.db, WAL,
-  bounded non-blocking writer, one-txn slot commits, coalesced
-  never_offered loss intervals, physical usage = db+WAL+shm, boundary
-  test); ft8 `SetEvidenceSink` emits one EvidenceSlot per PHYSICAL slot
-  (rich decodes + true outcome incl. capture_dropped for omitted slots and
-  decoder_error as a distinct fact); config `evidence` block (capture
-  default OFF per §8 consent) + `GET /v1/evidence/status` + smd wiring.
-  Spec EV1–EV9 in `internal/evidence/evidence_test.go`; 5 probes bit; all
-  touched packages + race + tree -short green; docs updated same-change.
-- **CI IS STILL RED on main (maintidx, run `31354256513`); the fix rides
-  `c76818a8`+`2ce7eb57` (UNPUSHED, ahead 2) + the tree's final fix. PUSH
-  PROMPTLY.** 2ce7eb57's review P2 (real): the scheduler-goroutine tail
-  emission broke the sink's single-goroutine contract AND could outrun the
-  decoder's last buffered slot. The tail's emission settled on its THIRD
-  home — the DECODE goroutine at `range slots` end (closed+drained channel
-  = after every delivered slot, on the contract's goroutine, close as the
-  happens-before) — and the tail reader rides the decodeLoop CALL, not a
-  Service field: -race caught an old decoder's loop-end read racing the
-  next session's field write under session overlap (the captureGen
-  hazard). Ordering assertion added (a thread-safe recorder hid it);
-  documented trade: a decoder panic loses the tail (§4.1 crash-limit
-  class). maintidx re-crossed and re-cleared (emitSessionTail extraction).
-  AC8 amended; probe bit; lint 0 issues, ft8 full + race green. Flake
-  watch: FT8 decode-log transient ×2 stands.
-- **NEXT: commit → push → watch CI green → §4.2 profiles slice (before
-  sync).** Then: on-air 0067 (Abandon-stops-queue flag still open) ·
-  Settings defaults dropdown · max_repeats-to-session. Dogfood
-  inbox: 80m SM6MUY bug DIAGNOSED (stale-fade vs worked-mute visual
-  collision — full timeline + remedy options in the inbox item; operator to
-  pick a remedy, nothing built). CI flake watch: bridge handler test (harden
-  its two 1s waits if it recurs).
+- **Spot-network arc, position 2026-08-10 night.** §4.1 evidence writer +
+  the slot-tracking/tail fixes PUSHED through `cbe4a2a3`; CI GREEN
+  (`31357815032`, maintidx arc closed); codex review of cbe4a2a3 clean.
+- **§4.2 STATION PROFILES BUILT + codex P1s FIXED 2026-08-10 — in tree,
+  UNCOMMITTED (the operator commits).** Criteria-first (rulings O1–O6 +
+  the two codex-P1 rulings in the §4.2 dated amendments): per-band
+  declaration `evidence.antennas`; restart-only one-txn activation;
+  per-row `unprofiled_reason` (schema v2); status `profiles` object.
+  Codex P1 rulings: **bands are pinned facts** (`profiles.bands` column,
+  membership change mints — PR10) and **cap boundary is reserved, not
+  measured** (WAL spills mid-txn + rollback doesn't shrink, MEASURED vs
+  modernc v1.48.1: activation refuses at the WATERMARK; v1→v2 migration
+  refuses on pre-write projection ≈ db size; post-migration WAL TRUNCATE —
+  the "post-write check + rollback" pick was substituted on that evidence,
+  flagged to operator). Spec PR1–PR10 + amended O5 in
+  `internal/evidence/profiles_test.go` (+`validate_antennas_test.go`);
+  RED-first; 14 reversion proofs bit; evidence+config+ft8 race green,
+  tree -short green, lint 0 issues; spot-network §4.2 + config.md
+  same-change; codex doc 63c19670 triaged + deleted. Deferred BY NAME:
+  same-band override · Settings/app UI · my_antenna/QSO/PSK coupling ·
+  profile sync · noise floor · transmit power.
+- **NEXT: OPERATOR commits (watch the auto-review) + pushes → CI → §5
+  sync slice** · on-air 0067 (Abandon-stops-queue flag open) · Settings
+  defaults dropdown · max_repeats-to-session.
+  Dogfood: enabling capture + the antennas block in the live config is an
+  OPERATOR action (consent default off; MY_ANTENNA still carries the
+  two-antenna string — coupling deferred). SM6MUY remedy pick still open.
+  Flake watch: FT8 decode-log (×2) — passed clean all runs today; bridge
+  handler 1s waits.
 
 ## Current state (as of 2026-08-10)
 

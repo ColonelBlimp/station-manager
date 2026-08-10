@@ -11,6 +11,7 @@ import (
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 	_ "modernc.org/sqlite" // pure-Go driver; works in the CGO-free build
 )
@@ -73,11 +74,21 @@ var (
 	writerDelay time.Duration
 )
 
+// migrationSlackBytes pads the v1→v2 migration's projected WAL peak beyond
+// the per-page bound: the new profile tables, schema/meta pages dirtied more
+// than once, and the 32 B WAL header. An engineering constant like
+// headroomBytes, not an operator threshold.
+const migrationSlackBytes int64 = 1 << 20
+
 // Config is the evidence block resolved from config.json.
 type Config struct {
 	Capture  bool
 	CapBytes int64
 	Path     string
+	// Antennas is the §4.2 station-profile declaration (already validated
+	// by internal/config). Restart-only by construction: it is read once at
+	// Start and reconciled into immutable profile versions.
+	Antennas []types.AntennaDecl
 }
 
 // SlotCapture is one physical slot's evidence as handed over by the decode
@@ -88,19 +99,26 @@ type SlotCapture struct {
 	DialTracked bool
 	Outcome     SlotOutcome
 	Decodes     []goft8.DecodedMessage
+
+	// The §4.2 profile stamp, resolved by CaptureSlot at emission time and
+	// carried WITH the record — the asynchronous writer never re-derives it
+	// (O4). Exactly one is set once the service has stamped the slot.
+	profileUUID      string
+	unprofiledReason string
 }
 
 // Status is the local honesty surface (§4.1 amendment: usage and the
 // drop-new state are exposed; the unprofiled count is the §5.4 guardrail).
 type Status struct {
-	Enabled                bool   `json:"enabled"`
-	State                  string `json:"state"`
-	CapBytes               int64  `json:"cap_bytes"`
-	WatermarkBytes         int64  `json:"watermark_bytes"`
-	UsageBytes             int64  `json:"usage_bytes"`
-	Observations           int64  `json:"observations"`
-	UnprofiledObservations int64  `json:"unprofiled_observations"`
-	DroppedSlots           int64  `json:"dropped_slots"`
+	Enabled                bool            `json:"enabled"`
+	State                  string          `json:"state"`
+	CapBytes               int64           `json:"cap_bytes"`
+	WatermarkBytes         int64           `json:"watermark_bytes"`
+	UsageBytes             int64           `json:"usage_bytes"`
+	Observations           int64           `json:"observations"`
+	UnprofiledObservations int64           `json:"unprofiled_observations"`
+	DroppedSlots           int64           `json:"dropped_slots"`
+	Profiles               *ProfilesStatus `json:"profiles,omitempty"`
 }
 
 // lossAccum is the reserved in-memory accumulator: the record of dropping
@@ -136,6 +154,12 @@ type Service struct {
 	state   string
 	dropped int64
 	loss    *lossAccum
+
+	// §4.2 profile resolution state, written once in Start (restart-only
+	// activation) and immutable until Stop; reads happen under mu.
+	profState  string
+	profReason string
+	profActive map[string]ProfileActive
 }
 
 func New(cfg Config, log logging.Logger) *Service {
@@ -210,12 +234,25 @@ func (s *Service) Start() error {
 			return errors.New(op).WithErr(err).WithMsgf("apply %s", pragma)
 		}
 	}
-	if _, err := db.Exec(schemaSQL); err != nil {
+	if err := s.migrateSchema(db); err != nil {
 		_ = db.Close()
-		return errors.New(op).WithErr(err).WithMsg("create evidence schema")
+		return errors.New(op).WithErr(err).WithMsg("create/migrate evidence schema")
 	}
 
 	s.db = db
+	// §4.2 activation: one transaction, before the writer goroutine exists.
+	// Failure is the O5 class-1 posture — capture continues, resolution is
+	// globally degraded (rows carry profile_error), the stale prior mapping
+	// is never used — and PR7's one default-visible record per transition
+	// into degraded is THIS line; nothing else may log the state.
+	s.profReason = ""
+	if err := s.reconcileProfiles(time.Now()); err != nil {
+		s.profState = ProfilesDegraded
+		s.profReason = err.Error()
+		s.profActive = nil
+		s.log.WarnWith().Err(err).
+			Msg("evidence: profile activation failed; profile resolution degraded (new rows carry profile_error)")
+	}
 	s.state = StateCapturing
 	s.started = true
 	s.ch = make(chan SlotCapture, writerQueueSize)
@@ -260,6 +297,11 @@ func (s *Service) CaptureSlot(sc SlotCapture) {
 	}
 	s.mu.Lock()
 	started := s.started
+	if started {
+		// Emission-time stamp (O4): resolved here on the caller's goroutine
+		// and carried in the record; the writer never re-derives it.
+		s.stampLocked(&sc)
+	}
 	s.mu.Unlock()
 	if !started {
 		return
@@ -276,8 +318,10 @@ func (s *Service) CaptureSlot(sc SlotCapture) {
 	}
 }
 
-// Status reports the capture state. Counts come from the archive itself;
-// a disabled or unstarted service reports zeros.
+// Status reports the capture state. Counts come from the archive itself; a
+// disabled or unstarted service reports zeros — and a NIL-counted profiles
+// object (O6): the store is deliberately not open, so lineage/version
+// counts are unavailable, never zero.
 func (s *Service) Status() Status {
 	s.mu.Lock()
 	st := Status{
@@ -289,15 +333,90 @@ func (s *Service) Status() Status {
 	}
 	db := s.db
 	started := s.started
-	s.mu.Unlock()
 	if !started || db == nil {
+		st.Profiles = &ProfilesStatus{State: ProfilesDisabled}
+		s.mu.Unlock()
 		return st
 	}
+	st.Profiles = s.profilesStatusLocked()
+	s.mu.Unlock()
 	st.UsageBytes = s.physicalUsage()
 	_ = db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&st.Observations)
 	_ = db.QueryRow(`SELECT COUNT(*) FROM observations WHERE profile_uuid IS NULL`).
 		Scan(&st.UnprofiledObservations)
 	return st
+}
+
+// migrateSchema brings the archive to schemaVersion: fresh archives get the
+// v2 DDL directly; a v1 archive is adopted ADDITIVELY in one transaction
+// (PR9 — pre-existing NULL references backfill legacy_unprofiled, nothing
+// else is touched). A version newer than this build is refused rather than
+// guessed at — the caller's fail-soft leaves evidence idle while decoding
+// continues.
+func (s *Service) migrateSchema(db *sql.DB) error {
+	const op errors.Op = "evidence.Service.migrateSchema"
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)`); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("ensure schema_meta")
+	}
+	var v string
+	err := db.QueryRow(`SELECT v FROM schema_meta WHERE k = 'schema_version'`).Scan(&v)
+	switch {
+	case err == sql.ErrNoRows, err == nil && v == schemaVersion:
+		_, err = db.Exec(schemaSQL)
+		if err != nil {
+			return errors.New(op).WithErr(err).WithMsg("apply v2 schema")
+		}
+		return nil
+	case err != nil:
+		return errors.New(op).WithErr(err).WithMsg("read schema version")
+	case v == "1":
+		// Cap gate BEFORE writing (codex-P1 ruling 2026-08-10): the adoption
+		// backfill dirties ~every observations page (every v1 row matches
+		// profile_uuid IS NULL), so this transaction's WAL peak is of the
+		// order of the whole db file — far past the writer's fixed headroom —
+		// and it cannot be measured in time: dirty pages spill to the -wal
+		// DURING the transaction and ROLLBACK does not shrink the file
+		// (measured 2026-08-10, modernc.org/sqlite v1.48.1, daemon pragmas:
+		// on a 12.4 MB archive the -wal held 10.6 MB before commit, 12.4 MB
+		// at peak, and was byte-identical after rollback). Never-exceed
+		// therefore needs a projection: one WAL frame per dirtied page
+		// (frame = page + 24 B header — WAL file format,
+		// https://sqlite.org/walformat.html) bounds growth by the db file
+		// size + ~6% + slack for the new tables and re-dirtied meta pages.
+		// Refusal writes nothing and surfaces through Start's existing
+		// fail-soft: evidence idle, decoding continues, retried at the next
+		// restart once the cap or the archive has changed.
+		var dbSize int64
+		if fi, err := os.Stat(s.cfg.Path); err == nil {
+			dbSize = fi.Size()
+		}
+		if projected := s.physicalUsage() + dbSize + dbSize/16 + migrationSlackBytes; projected > s.cfg.CapBytes {
+			return errors.New(op).WithMsgf(
+				"v1→v2 migration projected peak %d B would exceed the cap %d B; evidence stays idle on the v1 archive until the cap is raised or the archive shrinks",
+				projected, s.cfg.CapBytes)
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			return errors.New(op).WithErr(err).WithMsg("begin v1→v2 migration")
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.Exec(migrate1to2SQL); err != nil {
+			return errors.New(op).WithErr(err).WithMsg("apply v1→v2 migration")
+		}
+		if err := tx.Commit(); err != nil {
+			return errors.New(op).WithErr(err).WithMsg("commit v1→v2 migration")
+		}
+		// Fold the transient WAL peak back before capture starts: TRUNCATE
+		// checkpoints and zeroes the log file (an auto-checkpoint only
+		// resets it — the file keeps its high-water size), so a large
+		// adopted archive does not boot straight into drop_new.
+		if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+			return errors.New(op).WithErr(err).WithMsg("truncate WAL after v1→v2 migration")
+		}
+		return nil
+	default:
+		return errors.New(op).WithMsgf("evidence.db schema version %q is newer than this build understands", v)
+	}
 }
 
 func (s *Service) writerLoop() {
@@ -399,20 +518,28 @@ func (s *Service) writeSlot(sc SlotCapture) error {
 		if m.ParseStatus == goft8.ParseStatusParsed {
 			text = m.Text
 		}
+		// The §4.2 stamp travels with the record: exactly one of the pair is
+		// non-NULL (CaptureSlot stamped it at emission; O4/O6).
+		var pUUID, pReason any
+		if sc.profileUUID != "" {
+			pUUID = sc.profileUUID
+		} else if sc.unprofiledReason != "" {
+			pReason = sc.unprofiledReason
+		}
 		if _, err := tx.Exec(
 			`INSERT INTO observations (uuid, slot_start_utc, dial_mhz, dial_tracked,
 				freq_hz, dt_sec, snr, payload, parse_status, text,
 				prov_algorithm, prov_ap_profile, prov_ap_source,
 				metric_sync, metric_hard_sync, metric_costas_geo, metric_costas_min_block,
 				metric_blocks, metric_hard_errors, metric_dmin,
-				decoder_build, profile_uuid)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+				decoder_build, profile_uuid, unprofiled_reason)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			utils.NewUUIDv7At(sc.SlotStart), slotUTC, sc.DialMHz, boolInt(sc.DialTracked),
 			m.FreqHz, m.DTSec, m.SNR, m.Payload[:], m.ParseStatus.String(), text,
 			string(m.Provenance.Algorithm), m.Provenance.APProfile, m.Provenance.APSource,
 			m.Sync, m.HardSync, m.CostasGeo, m.CostasMinBlock,
 			m.Blocks, m.HardErrors, m.DMin,
-			s.decoderBuild); err != nil {
+			s.decoderBuild, pUUID, pReason); err != nil {
 			return err
 		}
 	}

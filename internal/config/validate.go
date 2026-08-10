@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/cat"
@@ -376,23 +377,86 @@ func validateFt8Display(d *types.Ft8DisplayConfig) []Finding {
 // types; Section is checked against go-ft8's canonical ARRL/RAC list
 // (ValidARRLFieldDaySection, which trims + upper-cases internally) — go-ft8 owns that
 // enumeration because it encodes the section into the FD frame.
-// validateEvidence checks the evidence block only when capture is enabled
-// (a disabled block is inert; its cap starts mattering at the moment of
-// consent). The floor is types.EvidenceMinCapBytes — shared with the
-// evidence package through the one place both can import, so the
-// operator-facing finding and the writer cannot drift: a cap at or below
-// the reserved headroom would leave capture nowhere to write before
-// dropping.
+// validateEvidence checks the evidence block. The cap floor fires only when
+// capture is enabled (a disabled block is inert; its cap starts mattering at
+// the moment of consent) — the floor is types.EvidenceMinCapBytes, shared
+// with the evidence package through the one place both can import, so the
+// operator-facing finding and the writer cannot drift. The antenna
+// declaration (§4.2) validates REGARDLESS of capture: it is declarative
+// data — broken is broken — and O4 has it validate at load while pinning
+// only when the evidence store opens.
 func validateEvidence(e types.EvidenceConfig) []Finding {
-	if !e.Capture || e.CapBytes >= types.EvidenceMinCapBytes {
-		return nil
+	out := validateAntennas(e.Antennas)
+	if e.Capture && e.CapBytes < types.EvidenceMinCapBytes {
+		out = append(out, Finding{
+			Field: "evidence.cap_bytes",
+			Code:  "evidence_cap_too_small",
+			Message: fmt.Sprintf("evidence cap %d bytes is below the minimum %d (reserved headroom + working floor); capture would drop immediately",
+				e.CapBytes, types.EvidenceMinCapBytes),
+		})
 	}
-	return []Finding{{
-		Field: "evidence.cap_bytes",
-		Code:  "evidence_cap_too_small",
-		Message: fmt.Sprintf("evidence cap %d bytes is below the minimum %d (reserved headroom + working floor); capture would drop immediately",
-			e.CapBytes, types.EvidenceMinCapBytes),
-	}}
+	return out
+}
+
+// validateAntennas enforces the §4.2 declaration rules (operator rulings
+// 2026-08-10; acceptance in validate_antennas_test.go). The trimmed name is
+// the lineage identity, one band maps to one antenna, and nothing is
+// silently normalized away — a duplicate band or name is a typo the
+// operator must see, not a shape validation may repair.
+func validateAntennas(antennas []types.AntennaDecl) []Finding {
+	var out []Finding
+	seenNames := map[string]int{}    // trimmed name → first declaring index
+	bandOwner := map[string]string{} // band token → owning antenna name
+	for i, a := range antennas {
+		field := func(sub string) string { return fmt.Sprintf("evidence.antennas[%d].%s", i, sub) }
+		name := strings.TrimSpace(a.Name)
+		switch {
+		case name == "":
+			out = append(out, Finding{Field: field("name"), Code: "evidence_antenna_name_empty",
+				Message: fmt.Sprintf("antenna entry %d has an empty name; the trimmed name is the lineage identity", i)})
+			name = fmt.Sprintf("antennas[%d]", i) // placeholder so later messages stay readable
+		default:
+			if j, dup := seenNames[name]; dup {
+				out = append(out, Finding{Field: field("name"), Code: "evidence_antenna_name_duplicate",
+					Message: fmt.Sprintf("antenna name %q is declared twice (entries %d and %d); the trimmed name is the lineage identity and must be unique", name, j, i)})
+			} else {
+				seenNames[name] = i
+			}
+		}
+		if len(a.Bands) == 0 {
+			out = append(out, Finding{Field: field("bands"), Code: "evidence_antenna_bands_empty",
+				Message: fmt.Sprintf("antenna %q claims no bands and so declares nothing; retire an antenna by removing its entry", name)})
+		}
+		seenBands := map[string]bool{}
+		for _, b := range a.Bands {
+			if !bands.IsValidBand(b) {
+				out = append(out, Finding{Field: field("bands"), Code: "evidence_antenna_band_unknown",
+					Message: fmt.Sprintf("antenna %q claims unknown band token %q (use ADIF band names, e.g. \"20m\")", name, b)})
+				continue
+			}
+			if seenBands[b] {
+				out = append(out, Finding{Field: field("bands"), Code: "evidence_antenna_band_repeated",
+					Message: fmt.Sprintf("antenna %q claims band %q more than once; silent de-duplication would conceal a typo", name, b)})
+				continue
+			}
+			seenBands[b] = true
+			if owner, taken := bandOwner[b]; taken {
+				out = append(out, Finding{Field: field("bands"), Code: "evidence_antenna_band_conflict",
+					Message: fmt.Sprintf("band %q is claimed by both %q and %q; one band maps to one antenna (the same-band override is a deferred feature)", b, owner, name)})
+			} else {
+				bandOwner[b] = name
+			}
+		}
+		if a.HeightM != nil && (*a.HeightM < 0 || math.IsNaN(*a.HeightM) || math.IsInf(*a.HeightM, 0)) {
+			out = append(out, Finding{Field: field("height_m"), Code: "evidence_antenna_height_invalid",
+				Message: fmt.Sprintf("antenna %q height_m %v must be a finite value ≥ 0 (feedpoint metres above ground; 0 = ground-mounted; no upper bound)", name, *a.HeightM)})
+		}
+		if l := strings.TrimSpace(a.Locator); l != "" && !utils.IsValidMaidenhead(l) {
+			out = append(out, Finding{Field: field("locator"), Code: "evidence_antenna_locator_invalid",
+				Message: fmt.Sprintf("antenna %q locator %q is not a valid Maidenhead locator", name, l)})
+		}
+	}
+	return out
 }
 
 func validateFt8FieldDay(d *types.Ft8FieldDayConfig) []Finding {

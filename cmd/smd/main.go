@@ -832,6 +832,7 @@ func run() error {
 		Capture:  cfg.Evidence.Capture,
 		CapBytes: cfg.Evidence.CapBytes,
 		Path:     filepath.Join(cfgSvc.WorkingDir(), "evidence.db"),
+		Antennas: cfg.Evidence.Antennas,
 	}, loggerSvc)
 	if err := evidenceSvc.Initialize(); err != nil {
 		loggerSvc.ErrorWith().Err(err).Msg("evidence: init failed; capture stays idle")
