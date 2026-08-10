@@ -187,10 +187,27 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   legitimate), not all-30-drop. TestCap_DropsNewBeforeTheLimit amended
   same reason (fold may resume capture past the watermark). Race/lint/
   tree green, ×3 stable.**
+- **`85f1481a` review (ROUND 5 on the cap path) raised 1 more REAL P1,
+  FIXED in tree: my own round-4 checkpoint ran UNDER s.mu → a reader
+  blocking the TRUNCATE stalls CaptureSlot up to the 2s busy_timeout
+  (same class as the P1-2 Status fix 3 rounds back). Moved the checkpoint
+  outside s.mu (decision made locked, I/O unlocked); checkpointHook seam
+  travels with it; RED-first + proof bit. All gates green.**
+- **PATTERN CALL (operator's "watch closely"): 5 consecutive review
+  rounds on the SAME cap/drop path, each fix revealing the next — the
+  textbook [[review-fixes-need-full-scrutiny]] cluster. Root cause named:
+  the §4.1 writer holds s.mu across DB I/O while CaptureSlot needs s.mu
+  to stamp. The checkpoint is now out; the LOSS UPSERT
+  (`upsertLossLocked`, service.go:839) still runs under s.mu in the
+  refresh/close paths — PRE-EXISTING §4.1 design, tiny single-row write,
+  NOT flagged by the per-commit reviews, but SAME class (could wait on
+  the sync loop's WAL write up to busy_timeout). NOT fixed reactively:
+  moving all loss persistence off s.mu is a real §4.1 refactor deserving
+  its own criteria, not a round-6 patch. Flag for a deliberate decision.**
 - **NEXT: operator commits (watch auto-review; sm-pg running) → push →
   CI → redeploy smd (evidence.db v4→v5 at start) → smcloud deploy →
-  soak → §6/§7. WATCH the next auto-review closely — 4 rounds deep on
-  this code.**
+  soak → §6/§7. If round 6 lands on this path, STOP patching and do the
+  s.mu-off-DB-IO refactor with criteria first.**
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.

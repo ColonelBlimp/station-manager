@@ -78,6 +78,11 @@ var (
 	// database aggregates — proving they run outside s.mu (a status poll
 	// must never stall CaptureSlot on the decode goroutine).
 	statusQueryDelay time.Duration
+	// checkpointHook is a test-only seam that runs WHERE the drop-path
+	// TRUNCATE checkpoint runs — proving that checkpoint holds no lock the
+	// decode path needs (a reader blocking the truncate must never stall
+	// CaptureSlot's stamp on s.mu).
+	checkpointHook func()
 )
 
 // migrationSlackBytes pads the v1→v2 migration's projected WAL peak beyond
@@ -679,14 +684,23 @@ func (s *Service) processSlot(sc SlotCapture) {
 		// cross the cap on its own loss refreshes (8efbb2fe review P1). A
 		// bounded TRUNCATE folds what WAL remains; the documented
 		// crash-limit applies, and recovery/Stop persist with priority.
-		if s.physicalUsage() < s.cfg.CapBytes-writeWalReserveBytes {
+		deferPersist := s.physicalUsage() >= s.cfg.CapBytes-writeWalReserveBytes
+		if !deferPersist {
 			s.refreshLossLocked()
-		} else {
+		}
+		s.mu.Unlock()
+		// The checkpoint runs OUTSIDE s.mu (85f1481a review P1): a reader
+		// can block a truncating checkpoint up to the 2 s busy_timeout, and
+		// CaptureSlot needs s.mu to stamp — holding it across the checkpoint
+		// would stall the decode path.
+		if deferPersist {
+			if checkpointHook != nil {
+				checkpointHook()
+			}
 			var busy, logFrames, checkpointed int64
 			_ = s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).
 				Scan(&busy, &logFrames, &checkpointed)
 		}
-		s.mu.Unlock()
 		return
 	}
 	if s.state == StateDropNew {

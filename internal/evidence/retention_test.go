@@ -764,6 +764,66 @@ func TestCap_CeilingReservesWriteGrowth(t *testing.T) {
 	s.Stop()
 }
 
+// Review P1 on 85f1481a: the drop-path checkpoint must not hold s.mu — a
+// reader can block a truncating checkpoint up to the 2 s busy_timeout, and
+// CaptureSlot needs s.mu to stamp, so a checkpoint under the lock stalls
+// the decode path (the same class as TestStatus_NeverBlocksCapture).
+func TestDropCheckpoint_NeverBlocksCapture(t *testing.T) {
+	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
+	oldHeadroom := headroomBytes
+	headroomBytes = 48 * 1024
+	defer func() { headroomBytes = oldHeadroom }()
+	oldBudget := metadataBudgetBytes
+	metadataBudgetBytes = 0 // no purge dissolves the pressure
+	defer func() { metadataBudgetBytes = oldBudget }()
+	smc := newFakeSMC(t)
+
+	cfg := testConfig(t, true)
+	ackedArchive(t, cfg, smc, 100)
+	raw, err := sql.Open("sqlite", cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`VACUUM; PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(
+		`DELETE FROM observations WHERE uuid IN
+		   (SELECT uuid FROM observations ORDER BY uuid ASC LIMIT 100 OFFSET 100)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+	usage := statUsage(t, cfg.Path)
+
+	cfg2 := cfg
+	cfg2.CapBytes = usage - usage/10 // usage past the cap → the drop path defers + checkpoints
+	s := newRunning(t, cfg2)
+
+	entered := make(chan struct{})
+	var once sync.Once
+	checkpointHook = func() {
+		once.Do(func() { close(entered) })
+		time.Sleep(300 * time.Millisecond)
+	}
+	defer func() { checkpointHook = nil }()
+
+	s.CaptureSlot(richSlot(slotAt(900 * 15))) // dropped → the writer enters the checkpoint
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the writer never reached the drop checkpoint — the fixture did not enter the deferred band")
+	}
+
+	// While the writer sits in the checkpoint, a concurrent CaptureSlot's
+	// stamp must acquire s.mu freely.
+	start := time.Now()
+	s.CaptureSlot(richSlot(slotAt(901 * 15)))
+	if elapsed := time.Since(start); elapsed > 150*time.Millisecond {
+		t.Fatalf("P1: CaptureSlot blocked %v while the drop checkpoint ran — the checkpoint holds s.mu across the decode path", elapsed)
+	}
+	s.Stop()
+}
+
 // Review P1 on 8efbb2fe: drop-new itself must not consume the reserve —
 // each dropped slot refreshes the loss accumulator's row, and unfolded,
 // those WAL frames cross the cap within a handful of drops. §4.1's answer
