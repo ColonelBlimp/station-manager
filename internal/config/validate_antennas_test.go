@@ -30,6 +30,18 @@ package config
      declaration is declarative data — broken is broken — and O4 has it
      validate at load while pinning only when the store opens. Only the
      cap floor stays enabled-only (consent-inert).
+   - Free-text fields are bounded (codex-P1 fix 2026-08-10): name, type
+     and feedline cap at 128 runes (runes, not bytes — multibyte text
+     counts characters, matching the DB's length semantics). This is an
+     engineering bound, not taste: the evidence activation gate reserves
+     16 MiB of headroom on the premise that one activation writes a few
+     KB, and with 17 valid band tokens (bands exclusive, ≥ 1 per entry ⇒
+     ≤ 17 activatable entries) and the locator ≤ 8 chars, these three
+     fields were the only unbounded inputs — uncapped, a valid config
+     could out-write the headroom and breach the physical cap (WAL spills
+     mid-transaction; evidence O5 header). An over-long value is reported
+     by its LENGTH, never echoed into the finding (a finding lands in
+     logs and PUT bodies; echoing a megabyte name would amplify it).
 
    All antenna findings carry a Field under "evidence.antennas" and are
    errors, not warnings.
@@ -108,6 +120,23 @@ func TestValidateAntennas(t *testing.T) {
 		{"declaration validates even with capture disabled (O4: validate at load, pin at store-open)",
 			antennasCfg(false, decl("DX Commander", "80m", "80m")),
 			true, nil},
+		{"field cap: a 128-rune name sits AT the cap and passes",
+			antennasCfg(true, decl(strings.Repeat("n", 128), "80m")),
+			false, nil},
+		{"field cap: 128 two-byte runes pass — the cap counts runes, not bytes",
+			antennasCfg(true, decl(strings.Repeat("ü", 128), "80m")),
+			false, nil},
+		{"field cap: a 129-rune name rejects, reporting length and limit, never echoing the value",
+			antennasCfg(true, decl(strings.Repeat("n", 129), "80m")),
+			true, []string{"129", "128"}},
+		{"field cap: an over-long type rejects",
+			antennasCfg(true, types.AntennaDecl{Name: "DX Commander",
+				Bands: []string{"80m"}, Type: strings.Repeat("t", 129)}),
+			true, []string{"type", "128", "DX Commander"}},
+		{"field cap: an over-long feedline rejects",
+			antennasCfg(true, types.AntennaDecl{Name: "DX Commander",
+				Bands: []string{"80m"}, Feedline: strings.Repeat("f", 129)}),
+			true, []string{"feedline", "128", "DX Commander"}},
 	}
 	for _, c := range cases {
 		findings := validateEvidence(c.in)
@@ -133,6 +162,21 @@ func TestValidateAntennas(t *testing.T) {
 			if !strings.Contains(all, frag) {
 				t.Errorf("%s: findings must name %q; messages were:\n%s", c.name, frag, all)
 			}
+		}
+	}
+}
+
+// An over-long value is reported by its length, never echoed: findings land
+// in logs and PUT 400 bodies, and echoing would amplify a megabyte input.
+func TestValidateAntennas_OverlongValueNotEchoed(t *testing.T) {
+	long := strings.Repeat("n", 500)
+	findings := validateEvidence(antennasCfg(true, decl(long, "80m")))
+	if len(findings) == 0 {
+		t.Fatal("want a too-long finding, got none")
+	}
+	for _, f := range findings {
+		if strings.Contains(f.Message, long) {
+			t.Fatalf("finding echoes the over-long value (%d-char message)", len(f.Message))
 		}
 	}
 }

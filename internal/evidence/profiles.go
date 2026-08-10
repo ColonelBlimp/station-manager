@@ -157,8 +157,11 @@ func (s *Service) reconcileProfiles(now time.Time) error {
 	// (measured 2026-08-10 against modernc.org/sqlite v1.48.1 — numbers in
 	// migrateSchema's comment). Exactness therefore comes from reserving
 	// room FIRST: activation refuses at the same watermark every slot write
-	// observes (cap − headroom), and headroom, far larger than the few KB
-	// an activation mints, is what bounds this transaction's growth.
+	// observes (cap − headroom), and headroom is what bounds this
+	// transaction's growth — a real bound because config validation caps
+	// the declaration itself (≤ 17 exclusive band tokens ⇒ ≤ 17 entries,
+	// free-text fields ≤ 128 runes: worst case ~30 KB against 16 MiB;
+	// internal/config validateAntennas).
 	// Effective again at the next restart once capacity returns or the cap
 	// is raised. An EMPTY declaration only shrinks (mapping delete) and is
 	// always allowed.

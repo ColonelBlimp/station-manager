@@ -184,7 +184,10 @@ ONE antenna, no duplicates within or across entries), and optional `type`,
 `height_m` (feedpoint metres above ground, finite ≥ 0, **0 is valid and
 distinct from absent**, no upper bound), `feedline`, `locator` (validated
 Maidenhead, canonicalized on activation; omitted = pinned not-declared —
-NEVER inherited from the station grid). Transmit power is deliberately
+NEVER inherited from the station grid). The free-text fields (`name`,
+`type`, `feedline`) cap at 128 characters — an engineering bound so a
+valid declaration can never out-write the evidence cap's reserved headroom
+at activation. Transmit power is deliberately
 absent (overlaps `station.default_power`; not honest across bands/days).
 Validation runs whether or not `capture` is enabled; activation is
 **restart-only** — the daemon pins immutable profile versions into

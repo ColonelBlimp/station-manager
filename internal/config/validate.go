@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/cat"
@@ -398,6 +399,16 @@ func validateEvidence(e types.EvidenceConfig) []Finding {
 	return out
 }
 
+// maxAntennaFieldRunes bounds the free-text declaration fields (name, type,
+// feedline) — an engineering constant like the evidence headroom, not an
+// operator threshold. The evidence activation gate reserves 16 MiB of
+// headroom on the premise that one activation writes a few KB; bands are
+// exclusive valid tokens (≤ 17 activatable entries) and the locator ≤ 8
+// chars, so these three fields were the only unbounded inputs. 128 runes is
+// far past any real antenna description and keeps the worst valid
+// declaration around 30 KB.
+const maxAntennaFieldRunes = 128
+
 // validateAntennas enforces the §4.2 declaration rules (operator rulings
 // 2026-08-10; acceptance in validate_antennas_test.go). The trimmed name is
 // the lineage identity, one band maps to one antenna, and nothing is
@@ -415,12 +426,30 @@ func validateAntennas(antennas []types.AntennaDecl) []Finding {
 			out = append(out, Finding{Field: field("name"), Code: "evidence_antenna_name_empty",
 				Message: fmt.Sprintf("antenna entry %d has an empty name; the trimmed name is the lineage identity", i)})
 			name = fmt.Sprintf("antennas[%d]", i) // placeholder so later messages stay readable
+		case utf8.RuneCountInString(name) > maxAntennaFieldRunes:
+			// Report the LENGTH, never the value: findings land in logs and
+			// PUT 400 bodies, and echoing would amplify a megabyte input.
+			// The placeholder also keeps every later message for this entry
+			// from embedding it.
+			out = append(out, Finding{Field: field("name"), Code: "evidence_antenna_field_too_long",
+				Message: fmt.Sprintf("antenna entry %d name is %d characters; the limit is %d",
+					i, utf8.RuneCountInString(name), maxAntennaFieldRunes)})
+			name = fmt.Sprintf("antennas[%d]", i)
 		default:
 			if j, dup := seenNames[name]; dup {
 				out = append(out, Finding{Field: field("name"), Code: "evidence_antenna_name_duplicate",
 					Message: fmt.Sprintf("antenna name %q is declared twice (entries %d and %d); the trimmed name is the lineage identity and must be unique", name, j, i)})
 			} else {
 				seenNames[name] = i
+			}
+		}
+		for _, fc := range []struct{ sub, val string }{
+			{"type", strings.TrimSpace(a.Type)}, {"feedline", strings.TrimSpace(a.Feedline)},
+		} {
+			if n := utf8.RuneCountInString(fc.val); n > maxAntennaFieldRunes {
+				out = append(out, Finding{Field: field(fc.sub), Code: "evidence_antenna_field_too_long",
+					Message: fmt.Sprintf("antenna %q %s is %d characters; the limit is %d",
+						name, fc.sub, n, maxAntennaFieldRunes)})
 			}
 		}
 		if len(a.Bands) == 0 {

@@ -51,8 +51,13 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 - **Spot-network arc, position 2026-08-10 night.** §4.1 evidence writer +
   the slot-tracking/tail fixes PUSHED through `cbe4a2a3`; CI GREEN
   (`31357815032`, maintidx arc closed); codex review of cbe4a2a3 clean.
-- **§4.2 STATION PROFILES BUILT + codex P1s FIXED 2026-08-10 — in tree,
-  UNCOMMITTED (the operator commits).** Criteria-first (rulings O1–O6 +
+- **§4.2 STATION PROFILES COMMITTED `fc945b6b` 2026-08-10 (operator-directed;
+  UNPUSHED). Its codex review found 1 P1 — free-text declaration fields
+  unbounded vs the 16 MiB activation headroom — FIXED in tree, uncommitted:
+  128-rune cap on name/type/feedline (engineering constant; length reported,
+  value never echoed), spec + reversion proof in
+  `validate_antennas_test.go`; review doc triaged + deleted.**
+  Criteria-first (rulings O1–O6 +
   the two codex-P1 rulings in the §4.2 dated amendments): per-band
   declaration `evidence.antennas`; restart-only one-txn activation;
   per-row `unprofiled_reason` (schema v2); status `profiles` object.
@@ -69,9 +74,9 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   same-change; codex doc 63c19670 triaged + deleted. Deferred BY NAME:
   same-band override · Settings/app UI · my_antenna/QSO/PSK coupling ·
   profile sync · noise floor · transmit power.
-- **NEXT: OPERATOR commits (watch the auto-review) + pushes → CI → §5
-  sync slice** · on-air 0067 (Abandon-stops-queue flag open) · Settings
-  defaults dropdown · max_repeats-to-session.
+- **NEXT: OPERATOR commits the field-cap fix (watch the auto-review) +
+  pushes both → CI → §5 sync slice** · on-air 0067 (Abandon-stops-queue
+  flag open) · Settings defaults dropdown · max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.
