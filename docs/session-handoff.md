@@ -69,20 +69,21 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   default OFF per §8 consent) + `GET /v1/evidence/status` + smd wiring.
   Spec EV1–EV9 in `internal/evidence/evidence_test.go`; 5 probes bit; all
   touched packages + race + tree -short green; docs updated same-change.
-- **CI IS STILL RED on main (maintidx, run `31354256513`) — the fix
-  (emitOmittedEvidence/emitSlotEvidence extraction, lint 0 issues) is
-  committed in `c76818a8` but UNPUSHED (ahead 1 + the new fixes in tree).
-  PUSH PROMPTLY.** c76818a8's own review found two REAL P1s in the boundary
-  fix, both FIXED red-first in tree (review doc triaged + deleted): the
-  trailing-tail emission is RE-HOMED onto the scheduler goroutine itself
-  (emits the moment Run returns — race-free, covers release/Stop/dead-
-  source/sibling-death; the release-path home missed every abnormal exit
-  because capturing=false made it early-return; curSched field deleted);
-  and a lateness STALL now counts every boundary it consumed
-  (noteLateBoundaries — one per firing under-reported a 32 s stall by 2
-  slots). AC8 amended again; 2 probes bit; lint 0 issues, ft8+race green.
-  Flake watch: the FT8 decode-log test failed transiently once here and
-  once in a clean-room review run — twice dismissed is a finding.
+- **CI IS STILL RED on main (maintidx, run `31354256513`); the fix rides
+  `c76818a8`+`2ce7eb57` (UNPUSHED, ahead 2) + the tree's final fix. PUSH
+  PROMPTLY.** 2ce7eb57's review P2 (real): the scheduler-goroutine tail
+  emission broke the sink's single-goroutine contract AND could outrun the
+  decoder's last buffered slot. The tail's emission settled on its THIRD
+  home — the DECODE goroutine at `range slots` end (closed+drained channel
+  = after every delivered slot, on the contract's goroutine, close as the
+  happens-before) — and the tail reader rides the decodeLoop CALL, not a
+  Service field: -race caught an old decoder's loop-end read racing the
+  next session's field write under session overlap (the captureGen
+  hazard). Ordering assertion added (a thread-safe recorder hid it);
+  documented trade: a decoder panic loses the tail (§4.1 crash-limit
+  class). maintidx re-crossed and re-cleared (emitSessionTail extraction).
+  AC8 amended; probe bit; lint 0 issues, ft8 full + race green. Flake
+  watch: FT8 decode-log transient ×2 stands.
 - **NEXT: commit → push → watch CI green → §4.2 profiles slice (before
   sync).** Then: on-air 0067 (Abandon-stops-queue flag still open) ·
   Settings defaults dropdown · max_repeats-to-session. Dogfood

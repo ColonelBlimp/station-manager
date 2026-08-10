@@ -574,7 +574,7 @@ func TestDecodeLoop_PublishesOccupancy(t *testing.T) {
 	ch := make(chan Slot, 1)
 	ch <- Slot{StartUTC: time.Date(2026, 6, 7, 14, 30, 0, 0, time.UTC), Samples: make([]int16, 1000)}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	rep := s.LatestOccupancy()
 	if rep == nil {
@@ -613,7 +613,7 @@ func TestDecodeLoop_StampsDialAndDropsStraddledSlots(t *testing.T) {
 		DialTracked: true,
 	}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	rep := s.LatestOccupancy()
 	if rep == nil {
@@ -644,7 +644,7 @@ func TestDecodeLoop_TrackedSlotWithNoDialIsNotPublished(t *testing.T) {
 		DialTracked: true, // CAT present, but the dial could not be read
 	}
 	close(ch)
-	tracked.decodeLoop(ch)
+	tracked.decodeLoop(ch, nil)
 	if rep := tracked.LatestOccupancy(); rep != nil {
 		t.Fatalf("published an unplaceable report from a CAT-attached session: %+v", rep)
 	}
@@ -656,7 +656,7 @@ func TestDecodeLoop_TrackedSlotWithNoDialIsNotPublished(t *testing.T) {
 		Samples:  make([]int16, 1000),
 	}
 	close(ch2)
-	untracked.decodeLoop(ch2)
+	untracked.decodeLoop(ch2, nil)
 	if untracked.LatestOccupancy() == nil {
 		t.Fatal("a no-CAT session must still publish occupancy; that panel is display-only")
 	}
@@ -696,7 +696,7 @@ func TestDecodeLoop_MovedSlotPublishesNoDecodes(t *testing.T) {
 		ch := make(chan Slot, 1)
 		ch <- slot
 		close(ch)
-		s.decodeLoop(ch)
+		s.decodeLoop(ch, nil)
 		return sunk
 	}
 
@@ -753,7 +753,7 @@ func TestDecodeLoop_ReportCarriesTheCaptureDial(t *testing.T) {
 		ch := make(chan Slot, 1)
 		ch <- slot
 		close(ch)
-		s.decodeLoop(ch)
+		s.decodeLoop(ch, nil)
 		return sunk
 	}
 

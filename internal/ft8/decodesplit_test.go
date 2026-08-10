@@ -72,14 +72,19 @@ package ft8
         an omitted slot's evidence row claims NO dial context (untracked,
         dial 0) — it was never observed, so inheriting a neighbour's
         tracking state would be an unmeasured assertion.
-        AMENDED (review c76818a8 P1×2): the trailing run is emitted by the
-        SCHEDULER GOROUTINE itself the moment Run returns — race-free on its
-        own fields and covering every exit path (release, Stop, dead source,
-        sibling death); homing it on the release path missed every abnormal
-        exit, whose capturing=false made the release early-return. And a
-        lateness STALL consumes every boundary in [target, now], not one per
-        firing — each joins the run (a 32 s stall past a 12:00:15 target
-        loses the 12:00:00, :15 and :30 slots).
+        AMENDED (reviews c76818a8 P1×2 + 2ce7eb57 P2): a lateness STALL
+        consumes every boundary in [target, now], not one per firing — each
+        joins the run (a 32 s stall past a 12:00:15 target loses the
+        12:00:00, :15 and :30 slots). The trailing run's emission settled on
+        its THIRD home, the DECODE goroutine at its loop end: the release
+        path missed every abnormal exit (capturing=false made it
+        early-return), and the scheduler goroutine broke the sink's
+        single-goroutine contract and could outrun the decoder's last
+        buffered slot. `range slots` ending = channel closed AND drained =
+        after every delivered slot, on the contract's goroutine, with the
+        close as the happens-before on the scheduler's tail fields.
+        Documented trade: a decoder panic loses the tail with everything
+        else in flight (§4.1's crash-limit class).
 
    TESTABILITY HONESTY (AC6): the parity-ALIGNMENT consequence is observable
    only through A7-assisted recovery of a signal too weak for the normal
@@ -99,7 +104,6 @@ package ft8
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -252,7 +256,7 @@ func TestDecodeLoop_CuratedSurfaces_Frozen(t *testing.T) {
 	ch := make(chan Slot, 1)
 	ch <- Slot{StartUTC: recentEvenSlotStart(), Samples: samples, DialTracked: true, DialMHz: 14.074}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	decodes, occupancy := drainDecodeEvents(events)
 	if len(decodes) != 1 {
@@ -323,7 +327,7 @@ func TestDecodeLoop_SkippedSlots_EmptySurfaces_Frozen(t *testing.T) {
 	// dial moved through (Slot doc); occupancy is then suppressed as unplaceable.
 	ch <- Slot{StartUTC: movedStart, Samples: audible, DialTracked: true, DialMHz: 0, DialChanged: true}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	decodes, occupancy := drainDecodeEvents(events)
 	if len(decodes) != 2 {
@@ -458,7 +462,7 @@ func TestDecodeLoop_SkipAdvancesDecoderOncePerSkippedSlot(t *testing.T) {
 	ch <- Slot{StartUTC: start.Add(15 * time.Second), Samples: make([]int16, 1000)}
 	ch <- Slot{StartUTC: start.Add(30 * time.Second), Samples: make([]int16, 1000), DialChanged: true, DialTracked: true}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	if got := strings.Count(buf.String(), "decoder state advanced"); got != 1 {
 		t.Fatalf("skip advances = %d, want exactly 1 (the TX slot only — a moved slot resets):\n%s",
@@ -489,7 +493,7 @@ func TestDecodeLoop_DialMoveResetsDecoderState(t *testing.T) {
 	ch <- Slot{StartUTC: start.Add(15 * time.Second), Samples: encodeSlotOrFatal(t, "CQ W1AW FN31", 1500), DialTracked: true, DialMHz: 0, DialChanged: true}
 	ch <- Slot{StartUTC: start.Add(30 * time.Second), Samples: encodeSlotOrFatal(t, hashRefText, 1500), DialTracked: true, DialMHz: 21.074}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	decodes, _ := drainDecodeEvents(events)
 	if len(decodes) != 3 {
@@ -523,7 +527,7 @@ func TestDecodeLoop_GapSlotsAdvanceDecoder(t *testing.T) {
 	ch <- Slot{StartUTC: start, Samples: make([]int16, 1000)}
 	ch <- Slot{StartUTC: start.Add(45 * time.Second), Samples: make([]int16, 1000)}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	if got := strings.Count(buf.String(), "decoder state advanced"); got != 2 {
 		t.Fatalf("gap advances = %d, want exactly 2 (two omitted physical slots):\n%s",
@@ -551,7 +555,7 @@ func TestDecodeLoop_DroppedQsySlotStillResets(t *testing.T) {
 	ch <- Slot{StartUTC: start, Samples: encodeSlotOrFatal(t, hashTeachText, 1500), DialTracked: true, DialMHz: 14.074}
 	ch <- Slot{StartUTC: start.Add(30 * time.Second), Samples: encodeSlotOrFatal(t, hashRefText, 1500), DialTracked: true, DialMHz: 21.074}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	decodes, _ := drainDecodeEvents(events)
 	if len(decodes) != 2 {
@@ -585,7 +589,7 @@ func TestDecodeLoop_GapPreservesHashState(t *testing.T) {
 	ch <- Slot{StartUTC: start, Samples: encodeSlotOrFatal(t, hashTeachText, 1500), DialTracked: true, DialMHz: 14.074}
 	ch <- Slot{StartUTC: start.Add(45 * time.Second), Samples: encodeSlotOrFatal(t, hashRefText, 1500), DialTracked: true, DialMHz: 14.074}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	decodes, _ := drainDecodeEvents(events)
 	if len(decodes) != 2 {
@@ -685,7 +689,7 @@ func TestDecodeLoop_HashStateSpansTxSlots(t *testing.T) {
 	ch <- Slot{StartUTC: txStart, Samples: encodeSlotOrFatal(t, "CQ W1AW FN31", 1500), DialTracked: true, DialMHz: 14.074}
 	ch <- Slot{StartUTC: start.Add(30 * time.Second), Samples: encodeSlotOrFatal(t, hashRefText, 1500), DialTracked: true, DialMHz: 14.074}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	decodes, _ := drainDecodeEvents(events)
 	if len(decodes) != 3 {
@@ -746,7 +750,7 @@ func TestDecodeLoop_EvidenceSinkReceivesRichUnfiltered(t *testing.T) {
 	ch := make(chan Slot, 1)
 	ch <- Slot{StartUTC: recentEvenSlotStart(), Samples: samples, DialTracked: true, DialMHz: 14.074}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	decodes, _ := drainDecodeEvents(events)
 	if len(decodes) != 1 || len(decodes[0].Decodes) != 1 {
@@ -797,7 +801,7 @@ func TestDecodeLoop_EvidenceOutcomesPerPhysicalSlot(t *testing.T) {
 	// no_decode: a full-length silent slot decodes cleanly to nothing
 	ch <- Slot{StartUTC: start.Add(90 * time.Second), Samples: make([]int16, SlotSamples), DialTracked: true, DialMHz: 14.074}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	want := []string{
 		EvidenceDecoded,
@@ -892,7 +896,7 @@ func TestDecodeLoop_FirstSlotOmittedBefore(t *testing.T) {
 	ch := make(chan Slot, 1)
 	ch <- Slot{StartUTC: start, Samples: make([]int16, 1000), OmittedBefore: 2}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	evs := rec.all()
 	if len(evs) != 3 {
@@ -910,42 +914,43 @@ func TestDecodeLoop_FirstSlotOmittedBefore(t *testing.T) {
 	}
 }
 
-// TestSchedulerSession_EmitsTailOnExit is the teardown half of review
-// 68514620 P1, re-homed by review c76818a8 P1b: the trailing undelivered
-// run — drops or skips with NO later delivery — is invisible to the loop
-// forever, and homing its emission on the RELEASE path missed every
-// abnormal exit (dead source, sibling death set capturing=false and the
-// release early-returned; the tail died with the session). The scheduler
-// GOROUTINE therefore emits its own tail the moment Run returns — its own
-// fields, quiescent, race-free — which covers every exit path with one
-// call site. This test drives the actual production session body
-// (runSchedulerSession) with a pre-cancelled context: Run returns at once
-// and the preloaded tail must reach the sink.
-func TestSchedulerSession_EmitsTailOnExit(t *testing.T) {
-	s := newService(types.Ft8Config{Enabled: true}, logging.Noop(), newFakeSource())
-	if err := s.Initialize(); err != nil {
-		t.Fatalf("Initialize: %v", err)
-	}
+// TestDecodeLoop_EmitsSessionTailAfterLastSlot is the teardown half of
+// review 68514620 P1, homed THREE times before it settled (each home found
+// wanting by the next review): the release path missed abnormal exits
+// (c76818a8 P1); the scheduler goroutine broke the sink's single-goroutine
+// contract AND could deliver the tail before the decoder finished its last
+// buffered slot (2ce7eb57 P2). The settled home is the DECODE goroutine at
+// its loop end: `range slots` ends only when the channel is closed and
+// DRAINED — strictly after every delivered slot's evidence, on the one
+// goroutine the sink contract names — and the channel close supplies the
+// happens-before on the scheduler's tail fields. The ordering assertion
+// here is the half a thread-safe recorder would otherwise hide. Documented
+// trade: a decoder PANIC loses the tail along with everything else in
+// flight — the same class as §4.1's stated crash limit.
+func TestDecodeLoop_EmitsSessionTailAfterLastSlot(t *testing.T) {
+	s, _, _, _ := newSplitHarness(t)
 	rec := &evidenceRecorder{}
 	s.SetEvidenceSink(rec.record)
 
-	tail := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	sch := NewScheduler(nil, logging.Noop())
-	sch.undeliveredStart = tail
-	sch.undeliveredN = 2
+	tail := time.Date(2026, 8, 10, 12, 0, 30, 0, time.UTC)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	s.runSchedulerSession(ctx, 0, sch)
+	start := recentEvenSlotStart()
+	ch := make(chan Slot, 1)
+	ch <- Slot{StartUTC: start, Samples: make([]int16, 1000)}
+	close(ch)
+	s.decodeLoop(ch, func() (time.Time, int) { return tail, 2 })
 
 	evs := rec.all()
-	if len(evs) != 2 {
-		t.Fatalf("evidence slots = %d, want the 2 trailing undelivered", len(evs))
+	if len(evs) != 3 {
+		t.Fatalf("evidence slots = %d, want the delivered slot THEN the 2 trailing undelivered", len(evs))
 	}
-	for i, e := range evs {
+	if evs[0].Slot.StartUTC != start.UTC().Format(time.RFC3339) {
+		t.Fatalf("first evidence = %+v, want the DELIVERED slot before any tail row", evs[0])
+	}
+	for i, e := range evs[1:] {
 		wantStart := tail.Add(time.Duration(i) * 15 * time.Second).UTC().Format(time.RFC3339)
 		if e.Outcome != EvidenceCaptureDropped || e.Slot.StartUTC != wantStart || e.DialTracked {
-			t.Errorf("evidence[%d] = %+v, want capture_dropped@%s untracked", i, e, wantStart)
+			t.Errorf("tail[%d] = %+v, want capture_dropped@%s untracked", i, e, wantStart)
 		}
 	}
 }
@@ -1000,12 +1005,12 @@ func TestDecodeLoop_FreshDecoderPerCaptureSession(t *testing.T) {
 	ch1 := make(chan Slot, 1)
 	ch1 <- Slot{StartUTC: start, Samples: encodeSlotOrFatal(t, hashTeachText, 1500), DialTracked: true, DialMHz: 14.074}
 	close(ch1)
-	s.decodeLoop(ch1)
+	s.decodeLoop(ch1, nil)
 
 	ch2 := make(chan Slot, 1)
 	ch2 <- Slot{StartUTC: start.Add(30 * time.Second), Samples: encodeSlotOrFatal(t, hashRefText, 1500), DialTracked: true, DialMHz: 14.074}
 	close(ch2)
-	s.decodeLoop(ch2)
+	s.decodeLoop(ch2, nil)
 
 	decodes, _ := drainDecodeEvents(events)
 	if len(decodes) != 2 {

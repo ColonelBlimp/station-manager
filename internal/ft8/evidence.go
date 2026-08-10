@@ -29,11 +29,12 @@ type EvidenceSlot struct {
 }
 
 // SetEvidenceSink injects the evidence observer, called once per PHYSICAL
-// slot — delivered or omitted (scheduler drops surface as capture_dropped) —
-// from the decode loop. Install before Start. The sink MUST NOT block: it is
-// called synchronously on the decode goroutine, so a slow sink would eat the
-// slot budget (the evidence writer's own queue provides the buffering).
-// nil = no observer.
+// slot — delivered or omitted (scheduler drops surface as capture_dropped,
+// the session's trailing run included, emitted at the decode loop's end).
+// Install before Start. EVERY call happens synchronously on the decode
+// goroutine, in slot order — sinks may rely on serialized delivery — and the
+// sink MUST NOT block: a slow sink would eat the slot budget (the evidence
+// writer's own queue provides the buffering). nil = no observer.
 func (s *Service) SetEvidenceSink(fn func(EvidenceSlot)) {
 	s.evidenceSink = fn
 }

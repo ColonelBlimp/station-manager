@@ -81,7 +81,7 @@ func TestSlotSuppression_DialMovedLogsQuietSlotDoesNot(t *testing.T) {
 		DialMHz:     14.074,
 	}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	lines := suppressionLines(buf)
 	if len(lines) != 1 {
@@ -114,7 +114,7 @@ func TestSlotSuppression_UnplaceableNamesItsNarrowerScope(t *testing.T) {
 		DialMHz:     0,
 	}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	lines := suppressionLines(buf)
 	if len(lines) != 1 {
@@ -140,7 +140,7 @@ func TestSlotSuppression_TxSlotStaysSilent(t *testing.T) {
 	ch := make(chan Slot, 1)
 	ch <- Slot{StartUTC: start, Samples: make([]int16, 1000), DialTracked: true, DialMHz: 14.074}
 	close(ch)
-	s.decodeLoop(ch)
+	s.decodeLoop(ch, nil)
 
 	if lines := suppressionLines(buf); len(lines) != 0 {
 		t.Fatalf("a TX slot must not log a suppression line, got:\n%s", strings.Join(lines, "\n"))

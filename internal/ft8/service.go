@@ -612,41 +612,23 @@ func (s *Service) startCaptureLocked() {
 		safego.Go(runCtx, "ft8.dialguard", s.onPanic, func() { s.onDialMoved(from, to) }, false)
 	})
 	safego.GoTracked(runCtx, "ft8.scheduler", s.onPanic, func() {
-		s.runSchedulerSession(runCtx, gen, sch)
+		defer s.onCaptureLoopExit(runCtx, gen, "ft8.scheduler")
+		_ = sch.Run(runCtx)
 	}, false, &s.wg)
 	safego.GoTracked(runCtx, "ft8.decoder", s.onPanic, func() {
 		defer s.onCaptureLoopExit(runCtx, gen, "ft8.decoder")
-		s.decodeLoop(sch.Slots())
+		// The tail reader rides the CALL, not a Service field: sessions can
+		// briefly overlap on an unexpected loop exit (captureGen exists for
+		// exactly that), and a shared field let an old decoder's loop-end read
+		// race the next session's write (data race caught by
+		// TestCapture_UnexpectedLoopExitStopsSource under -race).
+		s.decodeLoop(sch.Slots(), sch.UndeliveredTail)
 	}, false, &s.wg)
 
 	s.log.InfoWith().
 		Str("device", s.cfg.Device).
 		Bool("osd", s.osdEnabled()).
 		Msg("ft8: subscriber present; capture started, decoding live slots")
-}
-
-// runSchedulerSession is the scheduler goroutine's session body: run the
-// scheduler, then emit its trailing undelivered run as capture_dropped
-// evidence. The emission lives HERE — on the goroutine whose fields they
-// are, the moment Run returns — because it is race-free by construction and
-// covers EVERY exit path with one call site: normal release, Stop, a dead
-// source, or the sibling loop dying. Homing it on the release path missed
-// every abnormal exit (onCaptureLoopExit sets capturing=false, so the later
-// release early-returned and the tail died with the session — review
-// c76818a8 P1). The exit handler is deferred, so it runs strictly AFTER the
-// emission.
-func (s *Service) runSchedulerSession(runCtx context.Context, gen uint64, sch *Scheduler) {
-	defer s.onCaptureLoopExit(runCtx, gen, "ft8.scheduler")
-	_ = sch.Run(runCtx)
-	// No dial context on the emitted rows: the slots were never observed.
-	if start, n := sch.UndeliveredTail(); n > 0 && s.evidenceSink != nil {
-		for i := 0; i < n; i++ {
-			s.evidenceSink(EvidenceSlot{
-				Slot:    SlotRefFromTime(start.Add(time.Duration(i) * SlotDuration)),
-				Outcome: EvidenceCaptureDropped,
-			})
-		}
-	}
 }
 
 // onDeadCaptureSource handles the scheduler's dead-source verdict (deadsource.go):
@@ -870,7 +852,7 @@ func (s *Service) Enabled() bool {
 // break the loop; the safego wrapper around this loop is belt-and-braces. Occupancy
 // is cheap (one averaged FFT per slot, ~tens of ms) next to the decode, so it adds
 // negligible time to the slot budget.
-func (s *Service) decodeLoop(slots <-chan Slot) {
+func (s *Service) decodeLoop(slots <-chan Slot, sessionTail func() (time.Time, int)) {
 	// ONE stateful decoder per capture session (this loop's lifetime, one
 	// goroutine): cross-slot hash/A7 state lets "<...>" references resolve to
 	// calls heard in earlier slots, and dies with the session so no stale
@@ -1110,6 +1092,32 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 			Int("occupied", len(rep.Occupied)).
 			Int("suggested", len(rep.Suggested)).
 			Msg("ft8 slot processed")
+	}
+
+	s.emitSessionTail(sessionTail)
+}
+
+// emitSessionTail tells the coverage story of the session's trailing
+// undelivered run — omissions with NO later delivery, invisible to the gap
+// inference forever. Called by the decode goroutine after `range slots`
+// observed the closed, DRAINED channel: strictly after every delivered
+// slot's evidence (ordering) and on the one goroutine the sink contract
+// names (review 2ce7eb57 P2 — the scheduler-side home raced the decoder's
+// last buffered slot); the channel close orders the read after every
+// scheduler write (review c76818a8 P1 — the release-path home missed every
+// abnormal exit). Documented trade: a decoder PANIC loses the tail along
+// with everything else in flight, the same class as §4.1's stated crash
+// limit.
+func (s *Service) emitSessionTail(sessionTail func() (time.Time, int)) {
+	if sessionTail == nil || s.evidenceSink == nil {
+		return
+	}
+	start, n := sessionTail()
+	for i := 0; i < n; i++ {
+		s.evidenceSink(EvidenceSlot{
+			Slot:    SlotRefFromTime(start.Add(time.Duration(i) * SlotDuration)),
+			Outcome: EvidenceCaptureDropped,
+		})
 	}
 }
 
