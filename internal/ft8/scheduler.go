@@ -171,6 +171,13 @@ type Scheduler struct {
 	// Independent of the dead-source watchdog's own lastFilled (that drives
 	// the multi-strike release alarm; this drives per-slot suppression).
 	prevBoundaryFilled int64
+	// starveResync suppresses the starvation flag for exactly the next
+	// boundary after a lateness SKIP (review P2 on bf07a552): a resync jumps
+	// to the next UTC boundary, so the delta into it is a short remainder,
+	// but its ring snapshot is a full continuously-captured window — the
+	// partial delta must not flag it. boundaryStarved re-primes the baseline
+	// and returns false when set.
+	starveResync bool
 }
 
 // NewScheduler constructs a Scheduler reading from source. nil logger →
@@ -358,6 +365,10 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			// resync at the next future boundary (review follow-up M2).
 			if slotTooLate(now, target) {
 				s.noteLateBoundaries(ring, target, now)
+				// The resync jumps to the next UTC boundary; its delta will be
+				// a short remainder against a full window, so don't let it
+				// flag the next slot as starved (review P2 on bf07a552).
+				s.starveResync = true
 				s.log.WarnWith().
 					Str("missed_target", target.Format(time.RFC3339)).
 					Str("now", now.Format(time.RFC3339)).
@@ -396,6 +407,16 @@ func slotTooLate(now, target time.Time) bool {
 // baseline, so call exactly once per boundary; the delta spans exactly one
 // window. Owned by the Run goroutine.
 func (s *Scheduler) boundaryStarved(filled int64) bool {
+	// After a lateness resync the delta is a short remainder to the next UTC
+	// boundary, but the ring holds a full continuously-captured window
+	// (review P2 on bf07a552). Re-prime the baseline and clear the flag so
+	// this one boundary is not flagged and the FOLLOWING window measures
+	// normally.
+	if s.starveResync {
+		s.starveResync = false
+		s.prevBoundaryFilled = filled
+		return false
+	}
 	starved := filled-s.prevBoundaryFilled < minLiveWindowSamples
 	s.prevBoundaryFilled = filled
 	return starved

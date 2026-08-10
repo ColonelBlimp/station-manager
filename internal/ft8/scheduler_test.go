@@ -283,6 +283,35 @@ func TestScheduler_FlagsStarvedWindowsByDelta(t *testing.T) {
 		"a recovered full window is not starved")
 }
 
+// Review P2 on bf07a552: after a lateness SKIP, the timer resyncs to the next
+// UTC boundary, so the delta into that boundary covers only the short
+// remainder — yet the ring there holds a complete, continuously-captured
+// window (samples kept flowing in during the lateness). That partial delta
+// must not falsely flag the next healthy slot as starved. The lateness path
+// re-primes the baseline; the slot after a resync is never starved on the
+// remainder alone.
+func TestScheduler_ResyncAfterLatenessIsNotFalselyStarved(t *testing.T) {
+	sch := NewScheduler(make(chan []int16), nil)
+	full := int64(SlotSamples)
+
+	// Two normal windows prime the baseline.
+	require.False(t, sch.boundaryStarved(full))
+	require.False(t, sch.boundaryStarved(2*full))
+
+	// A boundary is serviced too late and skipped → the loop marks the resync.
+	sch.starveResync = true
+
+	// The next boundary's fresh delta is a short remainder (< the floor), but
+	// its ring window is a full continuous snapshot — NOT starved.
+	require.False(t, sch.boundaryStarved(2*full+minLiveWindowSamples/2),
+		"a window after a lateness resync holds a full snapshot; the partial delta must not flag it")
+
+	// And the baseline re-primed, so the FOLLOWING full window measures
+	// normally (not spuriously starved off the resync boundary's count).
+	require.False(t, sch.boundaryStarved(2*full+minLiveWindowSamples/2+full),
+		"the window after the resync window measures against the re-primed baseline")
+}
+
 // A slot from a session with no dial source is UNTRACKED, not merely
 // unattributed: the consumer publishes it (that deployment cannot transmit)
 // instead of skipping it.

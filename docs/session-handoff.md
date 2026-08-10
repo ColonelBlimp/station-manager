@@ -240,10 +240,15 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   **Gates: race clean, lint 0, gofmt clean, ft8 suite ×2 green, tree -short
   green, all cmd/ build.** Fix-first (no dedicated pinning test) only on
   P2-race (validated by -race) + P2-double-publish (structural coverage).
-- **NEXT: OPERATOR commits the ft8 review fixes (watch auto-review; sm-pg
-  running for the evidence half) → push → CI → redeploy smd (evidence.db
-  v4→v5 at start; picks up ft8 fixes too) → smcloud deploy → FT8 soak.**
-  on-air 0067 · Settings defaults dropdown · max_repeats-to-session.
+  ft8 fixes committed `bf07a552` (UNPUSHED). Its review raised 1 REAL P2 in
+  my P1-starved fix — after a lateness SKIP the resync boundary's short
+  remainder delta falsely flagged the next (full-window) slot as starved.
+  FIXED in tree: `starveResync` re-primes the baseline for exactly the
+  boundary after a skip; RED-first + reversion proof. Gates green.
+- **NEXT: OPERATOR commits the resync fix (watch auto-review; sm-pg running)
+  → push → CI → redeploy smd (evidence.db v4→v5 at start; picks up ft8
+  fixes too) → smcloud deploy → FT8 soak.** on-air 0067 · Settings defaults
+  dropdown · max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.
