@@ -204,10 +204,19 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   the sync loop's WAL write up to busy_timeout). NOT fixed reactively:
   moving all loss persistence off s.mu is a real §4.1 refactor deserving
   its own criteria, not a round-6 patch. Flag for a deliberate decision.**
-- **NEXT: operator commits (watch auto-review; sm-pg running) → push →
-  CI → redeploy smd (evidence.db v4→v5 at start) → smcloud deploy →
-  soak → §6/§7. If round 6 lands on this path, STOP patching and do the
-  s.mu-off-DB-IO refactor with criteria first.**
+- **`340c5aac` (checkpoint-outside-mu) review CLEAN — the cap/drop review
+  cluster is CLOSED at round 6 with no new regression.** The full
+  internal/evidence package-review arc (ab9868cc → 8efbb2fe → 85f1481a →
+  340c5aac, 4 fix commits over the original 7 findings + 4 follow-ons):
+  all fixed or noted, all reviews clean or triaged. STILL OPEN, flagged
+  not fixed: `upsertLossLocked` writes under s.mu (pre-existing §4.1,
+  bounded, same class as the checkpoint) — a deliberate s.mu-off-DB-IO
+  refactor if it ever recurs, criteria-first.
+- **NEXT: OPERATOR pushes the whole evidence-fix stack (ab9868cc..340c5aac
+  ahead of origin by 6) → CI (verify `gh run list -L1` = completed
+  success) → redeploy smd (evidence.db migrates v4→v5 at start) → smcloud
+  deploy → FT8 soak → §6/§7.** on-air 0067 · Settings defaults dropdown ·
+  max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.
