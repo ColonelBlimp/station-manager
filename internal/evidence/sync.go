@@ -3,7 +3,6 @@ package evidence
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -262,9 +261,13 @@ func (s *Service) noteSyncError(msg string) {
 	}
 }
 
-// selectSyncBatch reads the next batch: every offerable profile, then the
-// newest unsynced slot rows up to the batch cap. Newest-first is what makes
-// "current ahead of backlog" hold inside every batch, live or drained.
+// selectSyncBatch reads the next batch: offerable profiles first, then the
+// newest unsynced slot rows — every kind bounded by the ONE batch cap
+// (codex-P1 fix 2026-08-10: profile-first is a priority, not a cap
+// exemption; an over-cap envelope 400s at the server, consumes nothing,
+// and would retry the same oversized set forever). Leftover profiles ride
+// later rounds. Newest-first is what makes "current ahead of backlog" hold
+// inside every batch, live or drained.
 func (s *Service) selectSyncBatch() ([]syncRow, error) {
 	var rows []syncRow
 	remaining := syncBacklogBatch
@@ -277,27 +280,15 @@ func (s *Service) selectSyncBatch() ([]syncRow, error) {
 			return nil, err
 		}
 		rows = append(rows, selected...)
-		if t.kind != evidencewire.KindProfile {
-			remaining -= len(selected)
-		}
+		remaining -= len(selected)
 	}
 	return rows, nil
 }
 
 func (s *Service) selectKind(kind, table string, limit int) ([]syncRow, error) {
-	q := `SELECT uuid FROM ` + table + ` WHERE synced = 0 AND quarantine_reason IS NULL ORDER BY uuid DESC`
-	if kind != evidencewire.KindProfile {
-		q += ` LIMIT ?`
-	}
-	var (
-		rs  *sql.Rows
-		err error
-	)
-	if kind == evidencewire.KindProfile {
-		rs, err = s.db.Query(q)
-	} else {
-		rs, err = s.db.Query(q, limit)
-	}
+	rs, err := s.db.Query(
+		`SELECT uuid FROM `+table+` WHERE synced = 0 AND quarantine_reason IS NULL ORDER BY uuid DESC LIMIT ?`,
+		limit)
 	if err != nil {
 		return nil, err
 	}

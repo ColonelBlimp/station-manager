@@ -35,12 +35,27 @@ package store
        tenant A's digest.
    E8  Exactly one outcome per record, positionally, uuid echoed — the
        client treats any other shape as consuming no rows.
+   E9  (codex-P1 fix, 2026-08-10) The digest is VERIFIED, never trusted:
+       a well-formed digest that does not match the payload's canonical
+       form → permanent_reject("digest_mismatch") and nothing stored — a
+       digest-reusing client bug must not slip content past the identity
+       guarantee (the confusable design: compare claimed digests only,
+       which turns E3's loud conflict into silent dedup). An unsupported
+       digest version → permanent_reject("unsupported_digest_version"):
+       the server vouches only for identities it can compute.
+   E10 (codex-P1 fix, 2026-08-10) Payloads are stored VERBATIM,
+       byte-for-byte, so the stored digest stays verifiable against the
+       stored payload forever. The confusable store is jsonb: it reorders
+       keys (harmless to digest v1) but may also reformat numeric
+       LEXEMES, which ARE digest content — a normalizing column corrupts
+       identity on export/replay.
 */
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,7 +177,7 @@ func TestEvidence_DigestConflictRejectsAndPreserves(t *testing.T) {
 		t.Fatalf("E3: altered re-offer = %q/%q, want permanent_reject/digest_conflict", out[0].Outcome, out[0].Reason)
 	}
 	var count int
-	if err := s.db.QueryRow(`SELECT (payload->>'decode_count')::int FROM evidence_records WHERE uuid = $1`, uuid).Scan(&count); err != nil {
+	if err := s.db.QueryRow(`SELECT (payload::jsonb->>'decode_count')::int FROM evidence_records WHERE uuid = $1`, uuid).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 3 {
@@ -234,6 +249,53 @@ func TestEvidence_RowFaultsDoNotBlockBatchmates(t *testing.T) {
 	}
 	if out[4].Outcome != evidencewire.OutcomeAccepted {
 		t.Fatalf("E6: the valid batch-mate = %q, want accepted — row faults must not block it", out[4].Outcome)
+	}
+}
+
+func TestEvidence_DigestIsVerifiedNotTrusted(t *testing.T) {
+	s := testStore(t)
+	tid, _ := seedTenantLogbook(t, s, "7Q5MLV")
+	now := time.Now()
+	payload := `{"slot_start_utc":"2026-08-10T12:00:00Z","outcome":"decoded","dial_mhz":14.074,"dial_tracked":true,"decode_count":1}`
+
+	forged := evRec(t, evidencewire.KindCoverage, utils.NewUUIDv7At(now), payload)
+	forged.Digest = strings.Repeat("a", 64) // well-formed, wrong for this payload
+	out := upsertEv(t, s, tid, forged)
+	if out[0].Outcome != evidencewire.OutcomePermanentReject || out[0].Reason != "digest_mismatch" {
+		t.Fatalf("E9: forged digest = %q/%q, want permanent_reject/digest_mismatch — a claimed digest is not identity", out[0].Outcome, out[0].Reason)
+	}
+	if n := evCount(t, s, tid, "coverage"); n != 0 {
+		t.Fatalf("E9: %d rows stored under a forged digest, want 0", n)
+	}
+
+	v2 := evRec(t, evidencewire.KindCoverage, utils.NewUUIDv7At(now), payload)
+	v2.DigestV = 2
+	out = upsertEv(t, s, tid, v2)
+	if out[0].Outcome != evidencewire.OutcomePermanentReject || out[0].Reason != "unsupported_digest_version" {
+		t.Fatalf("E9: unknown digest version = %q/%q, want permanent_reject/unsupported_digest_version", out[0].Outcome, out[0].Reason)
+	}
+}
+
+func TestEvidence_PayloadStoredByteForByte(t *testing.T) {
+	s := testStore(t)
+	tid, _ := seedTenantLogbook(t, s, "7Q5MLV")
+	// Deliberately non-canonical: unsorted keys AND a trailing-zero numeric
+	// lexeme — the exact distinctions a normalizing store destroys.
+	payload := `{"slot_start_utc":"2026-08-10T12:00:00Z","outcome":"decoded","dial_mhz":14.0740,"dial_tracked":true,"decode_count":1}`
+	rec := evRec(t, evidencewire.KindCoverage, utils.NewUUIDv7At(time.Now()), payload)
+	if out := upsertEv(t, s, tid, rec); out[0].Outcome != evidencewire.OutcomeAccepted {
+		t.Fatalf("offer = %q (%s), want accepted", out[0].Outcome, out[0].Reason)
+	}
+	var stored string
+	if err := s.db.QueryRow(`SELECT payload FROM evidence_records WHERE uuid = $1`, rec.UUID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != payload {
+		t.Fatalf("E10: stored payload differs from the submitted bytes:\n got %s\nwant %s", stored, payload)
+	}
+	re, err := evidencewire.DigestV1Hex([]byte(stored))
+	if err != nil || re != rec.Digest {
+		t.Fatalf("E10: stored payload no longer verifies against its digest (recomputed %q, stored %q, err %v)", re, rec.Digest, err)
 	}
 }
 

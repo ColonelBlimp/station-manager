@@ -59,6 +59,14 @@ package evidence
         bytes leave. The retention slice's never_offered vs
         offered_unacknowledged distinction consumes exactly this column.
 
+   SY10 (codex-P1 fix, 2026-08-10) Profile-first is a PRIORITY, not a cap
+        exemption: no envelope ever exceeds the batch cap even when
+        unsynced profiles alone exceed it — leftover profiles ride later
+        rounds. The confusable design (profiles outside the cap) wedges
+        permanently once accumulated profiles pass the server's row limit:
+        every request 400s, consumes nothing, and retries the same
+        oversized set forever, taking live observations down with it.
+
    Constants under test are the ratified ones (1 s / 500 rows / 10 s /
    30 s→15 min / 30 s HTTP timeout), dialed down per test via the package
    vars (captureLinger pattern).
@@ -66,6 +74,7 @@ package evidence
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"net/http"
@@ -531,6 +540,52 @@ func TestSY9_OfferedAtIsPreservedSendIntent(t *testing.T) {
 		synced, off, _ := syncMark(t, cfg.Path, "observations", uuid)
 		return synced == 1 && off != nil && *off == first
 	})
+}
+
+// SY10 — the batch cap bounds every kind, profiles included.
+func TestSY10_BatchCapBoundsProfilesToo(t *testing.T) {
+	dialSync(t, 10*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond, time.Second)
+	oldBatch := syncBacklogBatch
+	syncBacklogBatch = 3
+	defer func() { syncBacklogBatch = oldBatch }()
+	smc := newFakeSMC(t)
+
+	// Boot 1, sync OFF: the archive accumulates more profile versions than
+	// one batch may carry (mass-injected — minting 7 real activations would
+	// be 7 boots for the same bytes).
+	cfg := testConfig(t, true)
+	s1 := newRunning(t, cfg)
+	s1.Stop()
+	db := openRaw(t, cfg.Path)
+	for i := 0; i < 7; i++ {
+		if _, err := db.Exec(
+			`INSERT INTO profiles (uuid, lineage, version, valid_from, name, bands)
+			 VALUES (?, ?, 1, '2026-08-10T00:00:00Z', ?, '80m')`,
+			// Distinct lineages so UNIQUE(lineage, version) holds.
+			fmt.Sprintf("junk-prof-%02d", i), fmt.Sprintf("L%02d", i), fmt.Sprintf("L%02d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg2 := cfg
+	cfg2.Sync, cfg2.SyncURL, cfg2.SyncToken = true, smc.ts.URL, "test-token"
+	s2 := newRunning(t, cfg2)
+	waitFor(t, "all profiles synced across bounded batches", func() bool {
+		dbw := openRaw(t, cfg.Path)
+		return countRows(t, dbw, `SELECT COUNT(*) FROM profiles WHERE synced = 1`) == 7
+	})
+	s2.Stop()
+
+	smc.mu.Lock()
+	defer smc.mu.Unlock()
+	for i, b := range smc.batches {
+		if len(b) > 3 {
+			t.Fatalf("SY10: batch %d carried %d records over the cap of 3 — an over-cap envelope 400s and wedges sync", i, len(b))
+		}
+	}
+	if len(smc.batches) < 3 {
+		t.Fatalf("SY10 fixture: %d batches for 7 profiles under cap 3 — the cap was not exercised", len(smc.batches))
+	}
 }
 
 type errorBody struct{}

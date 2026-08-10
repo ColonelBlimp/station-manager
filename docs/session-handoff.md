@@ -73,12 +73,21 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   SY1 known-URL wall); race green (evidence+cloud, real Postgres), tree
   -short green, lint 0 issues; config.md + api-endpoints.md + cloud
   doc.go same-change.
-- **NEXT: OPERATOR commits the §5 slice (watch the auto-review; the
-  dev Postgres `sm-pg` container is RUNNING for the cloud tests) + pushes
-  → CI → retention slice (purge/acked-first drop/local-retention/
-  compaction — the named next slice)** · on-air 0067 (Abandon-stops-queue
-  flag open) · Settings defaults dropdown · max_repeats-to-session ·
-  §4.2 deferred-by-name list unchanged.
+- **§5 committed `c8df1e9d` (UNPUSHED); its codex review found 3 REAL P1s,
+  ALL FIXED in tree uncommitted:** digest now VERIFIED at ingest (never
+  trusted; unknown digest versions reject — E9); profiles bounded by the
+  batch cap (priority ≠ exemption; >1000 accumulated profiles would have
+  wedged sync forever — SY10); payload column JSONB→TEXT (jsonb reformats
+  numeric LEXEMES, which are digest content — byte-verbatim now, E10).
+  Migration 0005 edited post-commit: SAFE, no deployed DB has applied it
+  (c8df1e9d never pushed/deployed). 4 reversion proofs bit. **The commit
+  also MISSED cmd/smd/main.go (the sync wiring — still staged); it rides
+  the fix commit.** Review doc triaged + deleted.
+- **NEXT: OPERATOR commits the P1 fixes + staged main.go (watch the
+  auto-review; dev Postgres `sm-pg` RUNNING — `podman start sm-pg`, the
+  task fails on name collision) + pushes both → CI → retention slice** ·
+  on-air 0067 (Abandon-stops-queue flag open) · Settings defaults
+  dropdown · max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.

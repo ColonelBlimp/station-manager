@@ -68,14 +68,22 @@ func upsertOneEvidence(ctx context.Context, tx *sql.Tx, tenantID int64, rec evid
 	if !utils.IsValidUUIDv7(rec.UUID) {
 		return reject("invalid_uuid"), nil
 	}
-	if rec.DigestV < 1 {
-		return reject("invalid_digest_version"), nil
+	// The digest is VERIFIED, never trusted (codex-P1 fix 2026-08-10): a
+	// claimed digest is not identity — a digest-reusing client bug would
+	// otherwise slip changed content past E3's conflict check as
+	// already_present, the silent dedup §5.2 forbids. Verification also
+	// pins the version boundary: the server vouches only for canonical
+	// forms it can compute, so an unknown digest version rejects rather
+	// than storing an unverifiable identity.
+	if rec.DigestV != evidencewire.DigestVersion1 {
+		return reject("unsupported_digest_version"), nil
 	}
-	if len(rec.Digest) != 64 {
-		return reject("invalid_digest"), nil
-	}
-	if !json.Valid(rec.Payload) {
+	computed, err := evidencewire.DigestV1Hex(rec.Payload)
+	if err != nil {
 		return reject("malformed_payload"), nil
+	}
+	if computed != rec.Digest {
+		return reject("digest_mismatch"), nil
 	}
 
 	if rec.Kind == evidencewire.KindObservation {

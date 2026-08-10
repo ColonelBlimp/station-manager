@@ -8,13 +8,22 @@
 -- rows. The reserved `retention` wire kind is rejected at ingest until the
 -- retention slice lands (§4.1 sequencing amendment) — a new kind is a
 -- migration event, hence the CHECK.
+--
+-- payload is TEXT, not JSONB, and that is load-bearing (codex-P1 fix
+-- 2026-08-10): the digest is computed over canonical content that
+-- preserves numeric LEXEMES, and jsonb normalizes them (plus key order and
+-- duplicate keys) — a normalizing column would store bytes that no longer
+-- verify against their own digest. TEXT keeps the submitted bytes
+-- verbatim; JSON validity and digest verification are enforced at ingest
+-- (store.UpsertEvidence), and any consumer that wants jsonb operators
+-- casts (payload::jsonb).
 CREATE TABLE evidence_records (
     tenant_id   BIGINT      NOT NULL REFERENCES tenants (id),
     kind        TEXT        NOT NULL CHECK (kind IN ('observation', 'coverage', 'loss_interval', 'profile')),
     uuid        UUID        NOT NULL,
     digest_v    INTEGER     NOT NULL CHECK (digest_v >= 1),
     digest      TEXT        NOT NULL CHECK (length(digest) = 64),
-    payload     JSONB       NOT NULL,
+    payload     TEXT        NOT NULL,
     received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- The upsert + digest-compare key AND the profile-existence probe
     -- (tenant, 'profile', uuid) — §5.4's retryable_missing_profile check.

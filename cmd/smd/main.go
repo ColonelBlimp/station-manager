@@ -828,12 +828,23 @@ func run() error {
 	// shared vocabulary). Fail-soft like the rest of FT8: a writer that cannot
 	// initialise or start logs and stays idle — evidence must never stop the
 	// operator decoding or logging.
-	evidenceSvc := evidence.New(evidence.Config{
+	evCfg := evidence.Config{
 		Capture:  cfg.Evidence.Capture,
 		CapBytes: cfg.Evidence.CapBytes,
 		Path:     filepath.Join(cfgSvc.WorkingDir(), "evidence.db"),
 		Antennas: cfg.Evidence.Antennas,
-	}, loggerSvc)
+	}
+	// §5 sync, consent layer 2: reuse the smcloud forwarder's channel —
+	// validation already refused sync without it, so a resolution failure
+	// here is a defensive log, not a reachable path.
+	if cfg.Evidence.Sync {
+		if url, token, err := config.EvidenceSyncCredentials(cfg); err != nil {
+			loggerSvc.ErrorWith().Err(err).Msg("evidence: sync enabled but credentials unresolved; sync stays off")
+		} else {
+			evCfg.Sync, evCfg.SyncURL, evCfg.SyncToken = true, url, token
+		}
+	}
+	evidenceSvc := evidence.New(evCfg, loggerSvc)
 	if err := evidenceSvc.Initialize(); err != nil {
 		loggerSvc.ErrorWith().Err(err).Msg("evidence: init failed; capture stays idle")
 	} else if err := evidenceSvc.Start(); err != nil {
