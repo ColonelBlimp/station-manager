@@ -171,12 +171,12 @@ type Scheduler struct {
 	// Independent of the dead-source watchdog's own lastFilled (that drives
 	// the multi-strike release alarm; this drives per-slot suppression).
 	prevBoundaryFilled int64
-	// starveResync suppresses the starvation flag for exactly the next
-	// boundary after a lateness SKIP (review P2 on bf07a552): a resync jumps
-	// to the next UTC boundary, so the delta into it is a short remainder,
-	// but its ring snapshot is a full continuously-captured window — the
-	// partial delta must not flag it. boundaryStarved re-primes the baseline
-	// and returns false when set.
+	// starveResync marks the one boundary after a lateness SKIP as
+	// UNVERIFIABLE: filled is sampled at service time, so neither the "full
+	// continuous window" case (review P2 on bf07a552) nor the "source
+	// stalled during the gap" case (review P2 on dd751b28) can be told
+	// apart from the boundary counts. boundaryStarved treats that single
+	// slot as capture loss and re-primes the baseline for the next window.
 	starveResync bool
 }
 
@@ -365,9 +365,10 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			// resync at the next future boundary (review follow-up M2).
 			if slotTooLate(now, target) {
 				s.noteLateBoundaries(ring, target, now)
-				// The resync jumps to the next UTC boundary; its delta will be
-				// a short remainder against a full window, so don't let it
-				// flag the next slot as starved (review P2 on bf07a552).
+				// The one boundary after the resync is unverifiable from the
+				// service-time counts, so it is recorded as capture loss
+				// rather than risk decoding a stalled window as current
+				// (review P2s on bf07a552 + dd751b28; see boundaryStarved).
 				s.starveResync = true
 				s.log.WarnWith().
 					Str("missed_target", target.Format(time.RFC3339)).
@@ -407,15 +408,22 @@ func slotTooLate(now, target time.Time) bool {
 // baseline, so call exactly once per boundary; the delta spans exactly one
 // window. Owned by the Run goroutine.
 func (s *Scheduler) boundaryStarved(filled int64) bool {
-	// After a lateness resync the delta is a short remainder to the next UTC
-	// boundary, but the ring holds a full continuously-captured window
-	// (review P2 on bf07a552). Re-prime the baseline and clear the flag so
-	// this one boundary is not flagged and the FOLLOWING window measures
-	// normally.
+	// The window after a lateness resync is UNVERIFIABLE, so it is recorded
+	// as capture loss (review P2s on bf07a552 + dd751b28). filled is sampled
+	// at boundary SERVICE time, not TARGET time, so after a >maxSlotLateness
+	// stall the delta into the resync boundary can neither confirm the window
+	// is a full continuous snapshot (it might be — samples kept flowing) nor
+	// that it is stale (the source might have stalled during the gap), and
+	// the fresh samples' POSITION in the ring is unknowable regardless.
+	// Between falsely suppressing one healthy slot and decoding a stale one
+	// as current — the P1 this machinery exists to prevent — the honest,
+	// safe answer is to suppress: after an abnormal scheduler stall the
+	// daemon cannot vouch for that single window. Re-prime so the FOLLOWING
+	// window (clean 15 s delta) measures normally.
 	if s.starveResync {
 		s.starveResync = false
 		s.prevBoundaryFilled = filled
-		return false
+		return true
 	}
 	starved := filled-s.prevBoundaryFilled < minLiveWindowSamples
 	s.prevBoundaryFilled = filled

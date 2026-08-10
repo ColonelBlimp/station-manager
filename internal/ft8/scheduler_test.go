@@ -283,33 +283,47 @@ func TestScheduler_FlagsStarvedWindowsByDelta(t *testing.T) {
 		"a recovered full window is not starved")
 }
 
-// Review P2 on bf07a552: after a lateness SKIP, the timer resyncs to the next
-// UTC boundary, so the delta into that boundary covers only the short
-// remainder — yet the ring there holds a complete, continuously-captured
-// window (samples kept flowing in during the lateness). That partial delta
-// must not falsely flag the next healthy slot as starved. The lateness path
-// re-primes the baseline; the slot after a resync is never starved on the
-// remainder alone.
-func TestScheduler_ResyncAfterLatenessIsNotFalselyStarved(t *testing.T) {
-	sch := NewScheduler(make(chan []int16), nil)
+// Review P2s on bf07a552 + dd751b28: the window after a lateness SKIP is
+// UNVERIFIABLE. filled is sampled at service time, so the delta into the
+// resync boundary can neither confirm a full continuous snapshot (samples may
+// have kept flowing) nor rule out a stalled source (the ring then holds stale
+// prior audio) — and the fresh samples' position is unknowable either way.
+// The safe answer is capture loss: suppress that one slot rather than risk
+// decoding a stalled window as current (the P1 this exists to prevent). The
+// baseline re-primes so the FOLLOWING window measures normally.
+func TestScheduler_ResyncSlotIsSuppressedAsUnverifiable(t *testing.T) {
 	full := int64(SlotSamples)
 
-	// Two normal windows prime the baseline.
-	require.False(t, sch.boundaryStarved(full))
-	require.False(t, sch.boundaryStarved(2*full))
+	t.Run("source stalled during the gap — the stale window must be suppressed", func(t *testing.T) {
+		sch := NewScheduler(make(chan []int16), nil)
+		require.False(t, sch.boundaryStarved(full))
+		require.False(t, sch.boundaryStarved(2*full))
+		sch.starveResync = true
+		// Nothing arrived across the gap — the ring is stale. Must be starved.
+		require.True(t, sch.boundaryStarved(2*full),
+			"a stalled source's stale window after a resync must be suppressed")
+	})
 
-	// A boundary is serviced too late and skipped → the loop marks the resync.
-	sch.starveResync = true
+	t.Run("source kept flowing — still suppressed, unverifiable is capture loss", func(t *testing.T) {
+		sch := NewScheduler(make(chan []int16), nil)
+		require.False(t, sch.boundaryStarved(full))
+		require.False(t, sch.boundaryStarved(2*full))
+		sch.starveResync = true
+		// A healthy short remainder is indistinguishable from a stall, so it
+		// is suppressed too — one lost slot after an abnormal stall, never a
+		// stale decode.
+		require.True(t, sch.boundaryStarved(3*full),
+			"the resync slot is suppressed regardless — the daemon cannot vouch for it")
+	})
 
-	// The next boundary's fresh delta is a short remainder (< the floor), but
-	// its ring window is a full continuous snapshot — NOT starved.
-	require.False(t, sch.boundaryStarved(2*full+minLiveWindowSamples/2),
-		"a window after a lateness resync holds a full snapshot; the partial delta must not flag it")
-
-	// And the baseline re-primed, so the FOLLOWING full window measures
-	// normally (not spuriously starved off the resync boundary's count).
-	require.False(t, sch.boundaryStarved(2*full+minLiveWindowSamples/2+full),
-		"the window after the resync window measures against the re-primed baseline")
+	t.Run("the window AFTER the resync measures normally against the re-primed baseline", func(t *testing.T) {
+		sch := NewScheduler(make(chan []int16), nil)
+		require.False(t, sch.boundaryStarved(full))
+		sch.starveResync = true
+		require.True(t, sch.boundaryStarved(2*full)) // resync slot suppressed, baseline re-primed to 2*full
+		require.False(t, sch.boundaryStarved(3*full), "a full window after the resync is healthy")
+		require.True(t, sch.boundaryStarved(3*full+minLiveWindowSamples/2), "a starved window after the resync is flagged")
+	})
 }
 
 // A slot from a session with no dial source is UNTRACKED, not merely

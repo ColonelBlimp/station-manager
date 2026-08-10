@@ -245,10 +245,20 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   remainder delta falsely flagged the next (full-window) slot as starved.
   FIXED in tree: `starveResync` re-primes the baseline for exactly the
   boundary after a skip; RED-first + reversion proof. Gates green.
-- **NEXT: OPERATOR commits the resync fix (watch auto-review; sm-pg running)
-  → push → CI → redeploy smd (evidence.db v4→v5 at start; picks up ft8
-  fixes too) → smcloud deploy → FT8 soak.** on-air 0067 · Settings defaults
-  dropdown · max_repeats-to-session.
+  resync fix `dd751b28`; ITS review raised 1 more REAL P2 — my
+  reprime-to-not-starved over-corrected (a source that STALLED during the
+  gap → stale ring → decoded as current). Resolved CONSERVATIVELY: the
+  post-lateness window is UNVERIFIABLE (filled sampled at service not target
+  time; fresh-sample position unknowable), so it's recorded as capture loss
+  — one lost slot per rare >2s stall, never a stale decode. RED-first +
+  reversion proof (return-false lets a stalled window decode); gates green.
+  3rd round on the starved-window code (fix-cluster) — the conservative
+  suppression is the cluster-ending SAFE direction; if a later review
+  objects it's an operator design call, not another inference.
+- **NEXT: OPERATOR commits the unverifiable-resync fix (watch auto-review;
+  sm-pg running) → push → CI → redeploy smd (evidence.db v4→v5 at start;
+  picks up ft8 fixes too) → smcloud deploy → FT8 soak.** on-air 0067 ·
+  Settings defaults dropdown · max_repeats-to-session.
   Dogfood: enabling capture + the antennas block in the live config is an
   OPERATOR action (consent default off; MY_ANTENNA still carries the
   two-antenna string — coupling deferred). SM6MUY remedy pick still open.
