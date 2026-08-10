@@ -1407,3 +1407,5 @@ said. Plan future on-air experiments accordingly.
   `SessionPanel.svelte.test.ts` "callsign search".
 
 - [2026-08-09] Roadmap idea (2026-08-09, operator + external reviewer agreed): opt-in WSJT-X-compatible UDP decode broadcast from SMD. Primary case: RBN FT4/FT8 spotting via the operator running RBN Aggregator (RBN's documented node model — reversebeacon.net/pages/Spotting+FT4/8+41 confirms Aggregator + CWSL_DIGI as the two approaches; wire detail in their PDFs). Secondary case: ecosystem compatibility (GridTracker/JTAlert-class consumers) — softens the WSJT-X-switcher adoption regression. Shape: internal/pskreporter-style independent non-blocking sink, injected from the decode path, never blocks decoding. BEFORE building: read "Send FT8 Spots to the RBN.pdf" to confirm the Aggregator owns the CQ-only filtering (emit-everything expected, no SM-side policy). Explicitly OUTSIDE the evidence/presence design (Draft 3).
+
+- [2026-08-10] 04:27 SM6MUY - trying to work on 80m, by the 4th attempt the decode in the Band Activity indicated that the station had been work, when the system was still try to work the callsign - bug

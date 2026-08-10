@@ -56,6 +56,12 @@ package ft8
         the hash table must survive a gap; per-slot cost after the first two
         skips is ~0.1 ms (bucket already empty), so no gap-length cap is
         needed.
+        AMENDED (review 75f40264fe2b P1): "receiver context unchanged" must
+        be CHECKED, not assumed — the DialChanged flag rides the slot that
+        spans the move and can be dropped with it, so a dial DIFFERENCE
+        between consecutive delivered slots resets the decoder exactly as a
+        delivered moved slot would; the gap advance runs only when the dial
+        held.
 
    TESTABILITY HONESTY (AC6): the parity-ALIGNMENT consequence is observable
    only through A7-assisted recovery of a signal too weak for the normal
@@ -503,6 +509,42 @@ func TestDecodeLoop_GapSlotsAdvanceDecoder(t *testing.T) {
 	if got := strings.Count(buf.String(), "decoder state advanced"); got != 2 {
 		t.Fatalf("gap advances = %d, want exactly 2 (two omitted physical slots):\n%s",
 			got, buf.String())
+	}
+}
+
+// TestDecodeLoop_DroppedQsySlotStillResets is review 75f40264fe2b P1: the
+// DialChanged flag rides the one slot that spans the move, and the scheduler
+// can DROP that slot (emitSlot's best-effort send) — the next delivered slot
+// is then cleanly attributed to the NEW band with no flag at all. The gap
+// advance must not carry the band-blind hash table across such an
+// undelivered QSY: a dial DIFFERENCE between consecutive delivered slots
+// resets the decoder exactly as a delivered moved slot would. The fixture is
+// the reviewer's scenario verbatim: teach on 14.074, omit the QSY slot
+// entirely, reference on 21.074 — the hash must NOT resolve.
+func TestDecodeLoop_DroppedQsySlotStillResets(t *testing.T) {
+	if testing.Short() {
+		t.Skip("full FT8 decode is heavy; skipped under -short")
+	}
+	s, _, events, _ := newSplitHarness(t)
+	start := recentEvenSlotStart()
+
+	ch := make(chan Slot, 2)
+	ch <- Slot{StartUTC: start, Samples: encodeSlotOrFatal(t, hashTeachText, 1500), DialTracked: true, DialMHz: 14.074}
+	ch <- Slot{StartUTC: start.Add(30 * time.Second), Samples: encodeSlotOrFatal(t, hashRefText, 1500), DialTracked: true, DialMHz: 21.074}
+	close(ch)
+	s.decodeLoop(ch)
+
+	decodes, _ := drainDecodeEvents(events)
+	if len(decodes) != 2 {
+		t.Fatalf("ft8-decode events = %d, want 2", len(decodes))
+	}
+	rows := decodes[1].Decodes
+	if len(rows) != 1 {
+		t.Fatalf("new-band rows = %d, want 1: %+v", len(rows), rows)
+	}
+	if got := rows[0].Text; got != hashUnresolved {
+		t.Fatalf("post-dropped-QSY decode rendered %q, want %q (a dial difference between delivered slots must reset)",
+			got, hashUnresolved)
 	}
 }
 

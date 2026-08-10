@@ -848,9 +848,11 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 	// context survives a release/re-acquire (see slotDecoder). Mid-session a
 	// QSY resets it (the dial-moved case below) and delivery gaps advance it.
 	dec := newSlotDecoder(s.osdEnabled(), s.log)
-	// Previous delivered slot's boundary, for the omitted-slot advance below.
-	// Zero until the session's first slot arrives.
+	// Previous delivered slot's boundary + dial, for the omitted-slot advance
+	// and the dropped-QSY context check below. Zero until the session's first
+	// slot arrives.
 	var prevSlotStart time.Time
+	var prevSlotDial float64
 	// Previously-recommended top offset, carried across slots for the
 	// clear-offset hysteresis (stickySuggested): the ★ recommendation stays put
 	// while it remains clear instead of hopping to a marginally wider gap each
@@ -897,21 +899,39 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// dial alone. This flag now governs only what we PUBLISH from this slot.
 		dialMoved := slot.DialChanged
 
-		// The scheduler's deliveries are NOT contiguous — it skips a boundary
-		// serviced over two seconds late and drops slots on a full channel
-		// (Dropped()) — and the decoder's A7 buckets are parity-indexed, so an
-		// odd-length gap would swap them for the rest of the session. Advance
-		// once per OMITTED physical slot (AC8, review cd1757a7cda2 P2);
-		// advancing rather than resetting is deliberate — the receiver context
-		// is unchanged, so the hash table must survive a lossy channel, and a
-		// skip on an already-empty bucket costs ~0.1 ms, so no cap is needed.
-		if !prevSlotStart.IsZero() {
+		// Decoder context check. A DIAL-MOVED slot resets the decoder — the QSY
+		// replaced the receiver context, and the band-blind hash table must not
+		// cross it (see slotDecoder.reset; review cd1757a7cda2 P1). But the
+		// flag rides the one slot that spans the move, and the scheduler can
+		// DROP that slot (emitSlot's best-effort send) or never emit its
+		// boundary — the next delivered slot is then cleanly attributed to the
+		// NEW band with no flag anywhere. So a dial DIFFERENCE between
+		// consecutive DELIVERED slots resets too (review 75f40264fe2b P1).
+		// Enumerated consequences: a CAT-unreadable window (A→0→A) costs two
+		// conservative resets, recall-only; a delivered QSY resets twice (the
+		// moved slot, then 0→B), harmless on already-empty state; a no-CAT
+		// rig's dial is always 0, never differs, and keeps full cross-slot
+		// state.
+		contextChanged := dialMoved ||
+			(!prevSlotStart.IsZero() && slot.DialMHz != prevSlotDial)
+		if contextChanged {
+			dec.reset()
+		} else if !prevSlotStart.IsZero() {
+			// Same context, lossy channel: the scheduler skips a boundary
+			// serviced over two seconds late and drops slots on a full channel
+			// (Dropped()), and the decoder's A7 buckets are parity-indexed, so
+			// an odd-length gap would swap them for the rest of the session.
+			// Advance once per OMITTED physical slot (AC8, review cd1757a7cda2
+			// P2); advancing rather than resetting is deliberate — the hash
+			// table must survive a lossy channel, and a skip on an
+			// already-empty bucket costs ~0.1 ms, so no cap is needed.
 			missed := int(slot.StartUTC.Sub(prevSlotStart).Round(SlotDuration)/SlotDuration) - 1
 			for i := 0; i < missed; i++ {
 				dec.skip()
 			}
 		}
 		prevSlotStart = slot.StartUTC
+		prevSlotDial = slot.DialMHz
 
 		// Skip decode + occupancy for a slot we transmitted in: the captured audio is
 		// our own TX (rig bleed). Decoding it wastes ~1 s and can surface garbled bleed
@@ -920,16 +940,13 @@ func (s *Service) decodeLoop(slots <-chan Slot) {
 		// (the occupancy sibling of the self-decode filter). WSJT-X likewise doesn't
 		// decode its own TX slot. A TX slot still ADVANCES the stateful decoder
 		// (dec.skip — a zero-slot decode whose output is nothing) so the
-		// parity-keyed A7 hint buckets stay aligned across it, while a
-		// DIAL-MOVED slot RESETS it — the QSY replaced the receiver context,
-		// and the band-blind hash table must not cross it (see slotDecoder.reset;
-		// review cd1757a7cda2 P1). Reset wins when a slot is both. Either way
-		// the slot's real reason is still what publishes below (empty report,
+		// parity-keyed A7 hint buckets stay aligned across it. Either way the
+		// slot's real reason is still what publishes below (empty report,
 		// suppression line).
 		var rich []goft8.DecodedMessage
 		switch {
 		case dialMoved:
-			dec.reset()
+			// Unattributable window: nothing to decode; its reset ran above.
 		case txSlot:
 			dec.skip()
 		default:

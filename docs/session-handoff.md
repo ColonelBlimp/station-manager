@@ -77,17 +77,20 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   state via zero-slot decode (swap for Decoder.SkipSlot() when upstream ships
   one). Spec: `internal/ft8/decodesplit_test.go` (AC1–AC7 in header; 5
   reversion probes bit). ft8 + race + tree -short green.
-- **cd1757a7's review P1+P2 FIXED red-first (2026-08-10), in tree
-  uncommitted; review doc triaged + deleted.** P1: a DIAL-MOVED slot now
-  RESETS the decoder (`slotDecoder.reset()` — the band-blind hash table must
-  not cross a QSY; TX slots keep the state-preserving skip; reset wins when
-  both). P2: the loop advances once per OMITTED physical slot (StartUTC gap
-  ÷ SlotDuration; advance not reset — hash survives a lossy channel; no cap
-  needed, empty-bucket skips are ~0.1 ms). AC6 amended + AC8 added in
-  `decodesplit_test.go`; 3 probes bit; ft8 + race green.
-- **NEXT: commit the fixes → PUSH (cd1757a7 has NO CI run yet) → watch CI →
-  evidence.db writer (§4.1).** Then: on-air 0067 · Settings defaults
-  dropdown · max_repeats-to-session.
+- **Decoder-state review arc CLOSED (2026-08-10).** cd1757a7's P1+P2 fixed
+  and committed (`75f40264`): dial-moved slots RESET the decoder
+  (`slotDecoder.reset()`), delivery gaps ADVANCE it per omitted slot. Its
+  OWN review then found the composition hole — the scheduler can DROP the
+  slot carrying DialChanged, so a gap advance could carry the band-blind
+  hash table across an UNDELIVERED QSY — fixed in tree: a dial DIFFERENCE
+  between consecutive delivered slots resets exactly as a delivered moved
+  slot would; gap advance runs only when the dial held. AC8 amended in
+  `decodesplit_test.go` (+ TestDecodeLoop_DroppedQsySlotStillResets, the
+  reviewer's scenario verbatim); probe bit; ft8 + race green; review doc
+  triaged + deleted.
+- **NEXT: commit the dropped-QSY fix → PUSH (neither cd1757a7 nor 75f40264
+  has a CI run yet) → watch CI → evidence.db writer (§4.1).** Then: on-air
+  0067 · Settings defaults dropdown · max_repeats-to-session.
 
 ## Current state (as of 2026-08-09)
 
