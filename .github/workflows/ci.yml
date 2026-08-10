@@ -48,10 +48,14 @@ jobs:
     # which is the tests' default DSN (smcloud/smcloud/smcloud). Since 2026-08-10
     # those destructive tests refuse the default DSN without an explicit opt-in
     # (store.ResolveTestDSN), so the go-test steps below set
-    # SMCLOUD_TEST_ALLOW_DEFAULT=1 — this service container IS a disposable
-    # database. Short image name resolves fine — GitHub runners use Docker, not
-    # podman (cf. Taskfile db:pg:up, which must fully-qualify it for rootless
-    # podman).
+    # SMCLOUD_TEST_ALLOW_DEFAULT=1. That is safe HERE — and ONLY here — because
+    # this service container is created fresh for the job and destroyed with it,
+    # so it is disposable by construction. The local commands (`task test`,
+    # scripts/ci-local.sh) deliberately do NOT set the opt-in: a dev box's
+    # localhost:5432 may be a real/dogfood database, so those tests skip locally
+    # unless the operator opts in by hand (codex round-3 P1 on 8fd6c7e5). Short
+    # image name resolves fine — GitHub runners use Docker, not podman (cf.
+    # Taskfile db:pg:up, which must fully-qualify it for rootless podman).
     services:
       postgres:
         image: postgres:16

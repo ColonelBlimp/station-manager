@@ -266,21 +266,33 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   supersedes bounds (self-reject, cap 128, sorted), digest v1 duplicate-key
   rejection (D7). Store now imports lib/pq directly (SQLSTATE check) — fine,
   SMC store is PG-specific.
-- **Round-2 test-DB P1 (codex auto-review of `61d83228`) — FIXED in tree,
-  UNCOMMITTED.** The round-1 persistent sentinel (`__sm_test_db__`) authorized
-  wiping a DB that was empty during one test run and later repurposed for real.
-  Replaced with an explicit CURRENT opt-in `store.ResolveTestDSN()`: an
-  ordinary `go test` SKIPS the destructive smcloud integration tests; they run
-  only with `SMCLOUD_TEST_DSN` (a named disposable DB) or
-  `SMCLOUD_TEST_ALLOW_DEFAULT=1` (the localhost default). All 3 harnesses +
-  migrate/roundtrip/reconcile e2e use it; CI (both go-test steps), Taskfile
-  `test:` and `scripts/ci-local.sh` set the env. `RefuseNonTestDatabase` +
-  sentinel table removed. RED-first (`TestResolveTestDSN`, no DB touched);
-  reversion proof bit (unsafe-default-DSN → guard test red on its own
-  assertion); gofmt/vet clean, tree -short green (real Postgres). Review doc
-  consumed. Ready for operator commit.
-- **NEXT: OPERATOR commits the round-2 test-DB fix, then pushes BOTH stacks
-  (ft8 `bf07a552..59e9aa4e` + the round-2 fix) → CI (verify `gh run list -L1`
+- **Round-2 test-DB P1 — COMMITTED + PUSHED `8fd6c7e5` (CI `31399287481`
+  RED on a gofmt drift — a stray double blank line in server_test.go left by
+  the round-2 sed edit; the round-3 commit below carries the `gofmt -w` fix,
+  so main goes green on the NEXT push).** The round-1 persistent sentinel
+  (`__sm_test_db__`) authorized wiping a DB empty during one run and later
+  repurposed for real. Replaced with an explicit CURRENT opt-in
+  `store.ResolveTestDSN()`: an ordinary `go test` SKIPS the destructive smcloud
+  integration tests; they run only with `SMCLOUD_TEST_DSN` (a named disposable
+  DB) or `SMCLOUD_TEST_ALLOW_DEFAULT=1`. `RefuseNonTestDatabase` + sentinel
+  table removed.
+- **Round-3 P1 (codex on `8fd6c7e5`) — FIXED in tree, UNCOMMITTED.** SAME
+  defect class, new mechanism: `task test` and `scripts/ci-local.sh` were
+  auto-setting `SMCLOUD_TEST_ALLOW_DEFAULT=1`, so a routine local command
+  (on a dogfood box where localhost:5432 may be the REAL smcloud DB) would
+  silently drop its tables — the opt-in was supplied by generic tooling, not a
+  conscious operator choice. Fix: local commands NO LONGER set it (they skip
+  the destructive suites; operator opts in by hand when pointed at a disposable
+  DB). Kept ONLY in CI's two go-test steps — the GitHub service container is
+  ephemeral/disposable by construction. Config-only (ci.yml/Taskfile/ci-local.sh
+  comments spell out why); resolver unchanged so `TestResolveTestDSN` still
+  pins it; verified bare path skips + only CI sets the env; all three files
+  parse. ALSO carries the `gofmt -w server_test.go` fix for `8fd6c7e5`'s
+  CI-red (whole-tree gofmt now clean — checked with `find`, not
+  `git diff --name-only`, which lists only unstaged files and missed the
+  committed drift twice). Review doc consumed. Ready for operator commit.
+- **NEXT: OPERATOR commits the round-3 fix, then pushes BOTH stacks
+  (ft8 `bf07a552..59e9aa4e` + round-3) → CI (verify `gh run list -L1`
   = completed success) → redeploy smd (evidence.db v4→v5; picks up ft8 fixes)
   → redeploy smcloud (picks up the ingest fixes; pg 0005/0006 already
   applied) → FT8 soak.**

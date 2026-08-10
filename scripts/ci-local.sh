@@ -143,12 +143,14 @@ else
     note "Install with: sudo dnf install golangci-lint  (CI pins 2.11.3)"
 fi
 
-# Opt the destructive smcloud integration tests in to the disposable localhost
-# Postgres from `task db:pg:up`. Without this they skip rather than run schema
-# teardown against whatever is at the default DSN (store.ResolveTestDSN, package
-# review 2026-08-10). This is the CI mirror, so it opts in like CI does; a bare
-# `go test ./...` outside this script still skips them.
-export SMCLOUD_TEST_ALLOW_DEFAULT=1
+# The destructive smcloud integration tests SKIP here unless the operator opts
+# in (SMCLOUD_TEST_DSN=<disposable>, or SMCLOUD_TEST_ALLOW_DEFAULT=1 against a
+# disposable `task db:pg:up`). This local mirror deliberately does NOT set that
+# itself: it runs on a dev box where localhost:5432 may be a real/dogfood
+# smcloud database, and a routine `task ci:local` must never authorize wiping it
+# (store.ResolveTestDSN; codex round-3 P1 on 8fd6c7e5). GitHub CI runs these
+# against its own ephemeral Postgres service container, so the reconcile
+# invariants stay defended there regardless.
 
 # Race detector in -short mode (matches CI): the heavy full-pipeline FT8
 # decode tests skip under -short — running a CPU-bound decode under -race
