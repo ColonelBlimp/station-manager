@@ -30,6 +30,16 @@ type fakeSerial struct {
 	// per write without hand-sequencing each reply. Nil (default) = no
 	// auto-reply, so existing tests are unaffected.
 	onWrite func(written []byte) []byte
+
+	// writeErr, when set, makes every WriteCommandBytes fail with it (the write
+	// does not land). Models a port that stops accepting writes — used to drive
+	// the no-data re-probe WRITE failure path (B9). Nil (default) = writes
+	// succeed, so existing tests are unaffected.
+	writeErr error
+	// closeErr, when set, is returned by the first Close (the port is still
+	// marked closed and its channel closed). Models a port that won't release —
+	// the cause of a busy reopen (B8). Nil (default) = clean close.
+	closeErr error
 }
 
 func newFakeSerial() *fakeSerial {
@@ -75,6 +85,9 @@ func (f *fakeSerial) WriteCommandBytes(ctx context.Context, cmd []byte) error {
 	if f.closed {
 		return serial.ErrClosed
 	}
+	if f.writeErr != nil {
+		return f.writeErr
+	}
 	f.writes = append(f.writes, append([]byte(nil), cmd...))
 	if f.onWrite != nil {
 		if reply := f.onWrite(append([]byte(nil), cmd...)); reply != nil {
@@ -116,7 +129,7 @@ func (f *fakeSerial) Close() error {
 	}
 	f.closed = true
 	close(f.lines)
-	return nil
+	return f.closeErr
 }
 
 // installFakeSerial wires a fakeSerial into a Service so the pipeline

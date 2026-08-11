@@ -328,7 +328,12 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		// operator-initiated shutdown, which keeps the ADR 0051 quiet-uncertain
 		// trade (the next connection's defensive recovery verifies).
 		s.unkeyOnTeardown(def, client, ctx.Err() == nil)
-		_ = client.Close()
+		if cerr := client.Close(); cerr != nil {
+			// A port that didn't close cleanly is why the supervisor's next
+			// reopen fails busy; without this the cause never reaches smd.log (B8).
+			s.logger.WarnWith().Err(cerr).Str("driver", def.ID).
+				Msg("bridge: serial port close failed; next reopen may fail busy")
+		}
 		// Release any active tune — the carrier is down (we just unkeyed above,
 		// or it dropped with the rig); clear state, cancel the backstop, forget
 		// the stale snapshot, and tell the SPA (ADR 0027).
@@ -694,6 +699,11 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 					}
 				}
 				if !announcedDisconnect {
+					// The SSE announce carries no strike count and no log line;
+					// without this the quiet→unreachable transition can't be joined
+					// to its later recovery in smd.log (B11).
+					s.logger.WarnWith().Str("driver", def.ID).Int32("strikes", strikes).
+						Msg("bridge: rig went quiet; no data within liveness window")
 					s.publishDisconnect(RigCodeNoData, nil)
 					announcedDisconnect = true
 				}
@@ -711,6 +721,12 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 					if ctx.Err() != nil {
 						return exitContextCancelled
 					}
+					// The sibling terminal-READ branch below logs its cause; the
+					// re-probe WRITE failure returned only an exit class, so werr
+					// reached neither log nor the SPA (which renders the code, not
+					// details.error) until now (B9).
+					s.logger.WarnWith().Err(werr).Str("driver", def.ID).
+						Msg("bridge: rig re-probe write failed; tearing down for supervisor reopen")
 					s.publishExitDisconnect(RigCodeSerialError, map[string]string{"error": errMessage(werr)})
 					return exitTransient
 				}
@@ -744,6 +760,13 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		// shape, so every complete response line remains liveness evidence.
 		fromRig := def.Protocol != cat.ProtocolIcomCIV || cat.IsCIVRigFrame(def, line)
 		if fromRig {
+			if announcedDisconnect {
+				// Recovery edge (quiet→alive): log once with the strike count
+				// reached, BEFORE it's cleared below, so the outage span is
+				// reconstructable from smd.log (B11).
+				s.logger.InfoWith().Str("driver", def.ID).Int32("strikes", s.noDataStrikes.Load()).
+					Msg("bridge: rig data resumed; liveness restored")
+			}
 			announcedDisconnect = false
 			livenessDeadline = time.Now().Add(s.livenessTimeout)
 			// Clear strikes only on genuine rig traffic so RigConnected cannot be
