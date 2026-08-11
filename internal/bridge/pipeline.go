@@ -852,6 +852,15 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 					// not per frame.
 					if !unrecognisedPublished {
 						unrecognisedPublished = true
+						// Once per instance, matching the SSE publish cadence: an
+						// unrecognised rig chatters frames, so a per-frame line would
+						// flood smd.log. Identity never confirms, so every operator
+						// write path stays blocked while state display keeps running
+						// — a degraded-but-running state that was announced on the
+						// wire only until now (B10).
+						s.logger.WarnWith().
+							Str("driver", def.ID).
+							Msg("bridge: rig identity unrecognised; operator write paths blocked")
 						s.publishBridgeError(BridgeErrCodeIdentityUnrecognised, map[string]string{"driver": def.ID})
 					}
 				case identityMismatch:
@@ -861,6 +870,18 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 					// no supervisor retry) so commands / tune can never reach the
 					// wrong rig (H2, option c). exitPermanent matches its own
 					// doc-comment's intent; the operator must fix bridge.cat.driver.
+					// Log before publishing: runSupervisor gives up on exitPermanent
+					// with a bare return, so without this line the bridge dies for the
+					// whole process lifetime with no trace in smd.log — the only
+					// permanent-halt site that didn't log, against the four in
+					// runPipeline that all ErrorWith first (B10). It fires on a wrong
+					// bridge.cat.driver, a first-run mistake on a deployment where the
+					// log-reader isn't the operator.
+					s.logger.ErrorWith().
+						Str("driver", def.ID).
+						Str("expected", def.Model).
+						Str("actual", v).
+						Msg("bridge: rig identity mismatch; pipeline halted (fix bridge.cat.driver)")
 					s.publishExitBridgeError(BridgeErrCodeIdentityMismatch, map[string]string{"driver": def.ID, "expected": def.Model, "actual": v})
 					return exitPermanent
 				case identityConfirmed:
