@@ -323,6 +323,12 @@ func (s *Service) deliverAck(accepted bool) {
 	ch := s.pendingAck
 	s.mu.Unlock()
 	if ch == nil {
+		// The accepted late-ACK race (see the doc-comment above): an ACK with no
+		// waiter is dropped. Only the drop logs — a delivered ACK is silent here
+		// — so the race's real hit-rate becomes measurable when the level is
+		// raised, without per-ACK noise (B4).
+		s.logger.DebugWith().Bool("accepted", accepted).
+			Msg("bridge: CI-V ACK dropped; no command waiting")
 		return
 	}
 	select {

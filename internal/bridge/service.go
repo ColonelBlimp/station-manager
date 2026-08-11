@@ -893,6 +893,11 @@ func (s *Service) Subscribe() (<-chan Event, func()) {
 // could be the LAST event published and stick a lone tab's multi-tab banner
 // (2026-07-19 review P3).
 func (s *Service) publishClientCount(n int) {
+	// Fan-outs are the multi-tab transitions (join at n>=2, leave at n>=1); one
+	// Info line each makes "how many tabs were attached when" recoverable from
+	// smd.log, which the SSE-only broadcast did not (B6).
+	s.logger.InfoWith().Int("clients", n).
+		Msg("bridge: rig-event subscriber count changed")
 	s.hub.publish(Event{Name: EventRigClients, Payload: RigClientsPayload{Count: n}})
 }
 
@@ -919,6 +924,11 @@ func (s *Service) TriggerBootstrap(ctx context.Context) error {
 	keyed := s.tuneActive || s.ft8TxActive
 	s.mu.Unlock()
 	if cl == nil || len(bb) == 0 {
+		// Distinguish the safe no-op (pipeline not running) from a real
+		// bootstrap: the CI-V keyed-skip cases below already log at Debug, and
+		// this was the one silent skip (B7).
+		s.logger.DebugWith().Bool("has_client", cl != nil).Bool("has_bytes", len(bb) > 0).
+			Msg("bridge: bootstrap skipped; pipeline not running")
 		return nil
 	}
 	// CI-V only: while a transmission is keyed, a multi-frame bootstrap would
