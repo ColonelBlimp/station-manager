@@ -41,254 +41,39 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-10)
+## Now (as of 2026-08-11)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **Spot-network arc, position 2026-08-10 evening.** §4.1 + §4.2 PUSHED
-  through `1100cff3`; CI GREEN (`31368590522`); all codex reviews triaged
-  clean + deleted.
-- **§5 SYNC SLICE BUILT 2026-08-10 — in tree, UNCOMMITTED (operator
-  commits).** Criteria-first; four operator rulings taken + dated
-  amendments in §4.1/§5.1/§5.3: retention/purge SPLIT OUT as the named
-  next slice (this slice deletes nothing, preserves offered-vs-never
-  metadata); occurrences/canonicalisation DEFERRED to the page slice
-  (replay-complete rows, no identity semantics); `evidence.sync` ONE
-  boolean reusing smcloud forwarder creds (validation refuses without);
-  ratified constants 1 s · 500 rows · 10 s · 30 s→15 min · 30 s HTTP.
-  Built: shared wire contract `internal/cloud/evidencewire` (6 outcomes,
-  canonical digest v1 — lexeme-preserving); SMC `PUT /v1/evidence` +
-  Postgres migration 0005 (digest identity (tenant,kind,uuid),
-  missing-profile probe, row faults never block batch-mates); evidence
-  schema v3 (offered_at send-intent COALESCE + quarantine_reason, 1→2→3
-  chain); sync engine (live/backlog lanes, live CANCELS in-flight backlog
-  without backoff advance, newest-first selection, profile re-offer heals
-  SMC restore, invalid response consumes nothing); status `sync` object.
-  Specs: SY1–SY9 (`internal/evidence/sync_test.go`) · E1–E8 (store) ·
-  H1–H4 (server) · D1–D6 (digest) · V3 (schema). RED-first; 9 reversion
-  proofs bit (2 caught real fixture gaps: RFC3339Nano offered_at,
-  SY1 known-URL wall); race green (evidence+cloud, real Postgres), tree
-  -short green, lint 0 issues; config.md + api-endpoints.md + cloud
-  doc.go same-change.
-- **§5 arc PUSHED through `bdb3699b`** (`c8df1e9d` slice · `6f4486e3` 3
-  P1 fixes + main.go wiring · `bdb3699b` 0005 history note — that note is
-  the REFUTATION of 6f4486e3's review P1, refuted on deployment fact: no
-  DB ever applied v5-JSONB). All four review rounds triaged, all docs
-  deleted. CI run `31376763384` was IN PROGRESS at handoff — confirm
-  green (`gh run list -L1`) before building on top.
-- **RETENTION SLICE IN FLIGHT (operator rulings TAKEN 2026-08-10, dated
-  amendment in §4.1 — read it, don't re-derive): full drop order (current
-  capture beats old unacked; quarantined drops = `rejected`, known
-  absent); constants 500-max/64 MiB-reusable-pages-clamped-half-watermark/
-  256-trigger/64-direct + 4 MiB logical metadata budget (over-budget =
-  metadata-pressure drop-new, NO invisible purge); schema v4 persists
-  per-row terminal sync_outcome (purge class = accepted|already_present
-  ONLY) + loss SEALING (open accumulator never sync-eligible — fixes a
-  latent §5 defect); SMC supersession = tombstone-then-delete one txn
-  (activates `tombstoned`), summary re-compactable only after its own
-  accept; DELETE doesn't shrink SQLite — measure freelist, bounded
-  checkpoints, no live VACUUM, queued slots take priority between
-  chunks. Criteria RT1–RT10 ruled; RED suite next.**
-- **RETENTION SLICE BUILT — in tree, UNCOMMITTED (operator commits).**
-  All RED-first: schema v4 (sync_outcome all kinds · loss
-  sealed+supersedes · retention_records · 1→2→3→4 chain, factored
-  applyAdditiveMigration) · RT10 sealing (latent §5 fix) · SMC 0006
-  (retention kind + evidence_tombstones; supersession
-  tombstone-then-delete; tombstone gates every kind; E11–E13) · client
-  retention sync (syncTables order profiles→retention→loss→obs→cov,
-  supersedes on wire) · purge engine (tryFreeSpace at watermark: ≤1 chunk
-  ≤500 rows per slot, write-through on ≥1 free page — freelist physics
-  MEASURED and cited in retention.go; cloud-present first, then unsynced
-  oldest by class never_offered/offered_unacknowledged/rejected, receipt
-  SAME txn; TRUNCATE checkpoints, no VACUUM) · compaction (adjacent-
-  agreeing runs, ≤64 direct preds, exact totals; summaries re-compact
-  only after own accept) · 4 MiB budget → metadata-pressure drop-new
-  (state + Retention.Pressure says why) · status retention object.
-  Spec RT1–RT10 in retention_test.go (+E11–E13 store side); 10 retention
-  proofs bit (incl. 2 fixture gaps the proofs caught: RT3 needed
-  cov-acked/obs-pending, RT10 needed budget-0 drops); race green
-  (evidence+cloud real PG), tree -short green, lint 0 (dupl factored),
-  evidence suite ×3 stable. Docs same-change: api-endpoints retention
-  object · cloud doc.go · SY2 header amended (sync never deletes;
-  cap purge may, as `rejected`). Old drop-new fixtures dial
-  metadataBudgetBytes=0 (ruled full-§4.1 change, comments say so).
-- **Retention arc LANDED: pushed through `38a2a4fa`, CI GREEN
-  (`31381987118`, `completed success` verified from output — see
-  verify-ci-verdicts-from-output memory for the piped-watch false-green
-  it corrects). Whole §4/§5 pipeline on main: capture → profiles → sync →
-  retention, every review round fixed or refuted.**
-- **DOGFOOD CONSENT APPLIED (operator-directed 2026-08-10): live
-  config.json now carries evidence {capture:true, sync:true, antennas:
-  DX Commander 80/40/30 h=0 coax · VHQ Hex beam 20/17/15/12/10/6 h=12;
-  locator OMITTED deliberately — the KG49dj fixture value was untrusted
-  vs station grid KH78an}. Backup: config.json.pre-evidence. smd was
-  STOPPED; deployed build still `1192-ga9151fea` (pre-evidence).**
-- **DEPLOYED + VERIFIED 2026-08-10 13:24 local (`1225-g38a2a4fa-dirty`):
-  capture textbook — profiles ACTIVE (2 lineages, 9 bands mapped, minted
-  11:24:03Z), retention zeros, no unprofiled rows, no drops. Sync in
-  HONEST BACKOFF: `SMC answered 404` — the production SMC
-  (192.168.1.200:8091) runs the pre-§5 server without PUT /v1/evidence;
-  2 profiles wait unsynced; one warn, no spam — exactly the SY1/SY8
-  posture.**
-- **OPERATOR-run PACKAGE review of internal/evidence (on 38a2a4fa): 4 P1
-  + 3 P2, ALL judged REAL. Fix progress (RED-first, in tree):
-  ✅P1-2 Status held s.mu through db aggregates → CaptureSlot stall
-  (snapshot-then-query restructure; statusQueryDelay seam travels with
-  queries; fillProfileCounts/fillSyncCounts/fillRetentionCounts unlocked).
-  ✅P1-1 activation gate now accepts watermark-with-freelist (post-purge
-  file never shrinks; manufactured-state fixture — organic ones dodge via
-  tail truncation). ✅P1-3 hard-cap ceiling: freelist never authorizes a
-  write at/past cap (tryFreeSpace re-check; checkpoint result inspected,
-  busy → Debug; activation gate same ceiling). Fixture sweep: dialed
-  headroom 4096→64K, cap margins 48K (shm 32K made old margins a
-  forbidden config the ceiling exposed).
-  ✅P1-4 metadata honesty: receipt end = maxSlot+15s; compaction requires
-  TEMPORAL adjacency (prev.end==next.start); retention receipts carry
-  dial_mhz — SCHEMA v5 (proper migrate4to5, conditional column; v4 was
-  deployed so no in-place edit; frozen-DDL V4→V5 test). ✅P2-1 pragmas
-  ride the DSN (_pragma params reach EVERY pooled conn — modernc
-  verified by test; the one-time Exec left pool conns at busy_timeout 0).
-  ✅P2-2 unsynced purge now GLOBAL oldest-first, selected set split into
-  per-class receipts (rejected/offered_unacked/never_offered) in one txn.
-  ✅P2-3 200-responses decode through a 1 MiB LimitReader; quarantine
-  reasons truncate at 256 runes. ALL SEVEN FIXED; 11 reversion proofs
-  bit; fixture physics lessons: tail-truncation collapses small-archive
-  pressure (manufactured states + direct-seam tests where organic
-  fixtures dissolve); dialed headroom must absorb shm 32K (sweep to 64K/
-  48K margins). Race green evidence+cloud+smcloud; tree -short green;
-  lint 0; suite ×3 stable.**
-- **Dogfood NOTE: smd RUNS the pre-fix build — all findings latent there
-  (archive young, far from cap); REDEPLOY after commit (evidence.db will
-  migrate v4→v5 at start). SMC deploy still pending (sync in honest 404
-  backoff).**
-- **Package-review fixes committed `ab9868cc` (UNPUSHED); ITS auto-review
-  raised 2 more REAL findings, FIXED in tree: P1 the cap ceiling now
-  RESERVES one write's WAL growth (writeWalReserveBytes=64K — a write one
-  byte under the cap still appends frames past it; same reserve on the
-  activation gate) · P2 the metadata gate reserves for ALL up-to-three
-  per-class receipts (receiptReserveBytes=3×256). Both RED-first + proofs
-  bit. Fixture band re-tuned: headroom 320K / cap margin 256K (the
-  margin−reserve gap must host boot-2's ~60-90K working churn — measured
-  via instrumented fixtures). Race/lint/tree green; ×3 stable.**
-- **`8efbb2fe` (ceiling-reserve pair) committed; ITS review raised 1 more
-  REAL P1, FIXED in tree: sustained drop-new consumed the reserve — each
-  dropped slot refreshed the loss row's WAL, crossing the cap in ~13
-  drops. Fix: near the ceiling the accumulator extends IN MEMORY (§4.1's
-  documented deferral) and a bounded TRUNCATE folds the WAL; the record
-  persists with priority at Stop. RED-first + proof bit. This is the
-  4th consecutive review round on the same cap-ceiling code — the
-  [[review-fixes-need-full-scrutiny]] cluster; the physics (DELETE +
-  freelist + WAL fold on tiny archives) keeps outrunning fixtures, so
-  the manufactured-state tests now VACUUM+checkpoint before measuring and
-  the sustained-drops invariant is cap-not-exceeded (oscillation is
-  legitimate), not all-30-drop. TestCap_DropsNewBeforeTheLimit amended
-  same reason (fold may resume capture past the watermark). Race/lint/
-  tree green, ×3 stable.**
-- **`85f1481a` review (ROUND 5 on the cap path) raised 1 more REAL P1,
-  FIXED in tree: my own round-4 checkpoint ran UNDER s.mu → a reader
-  blocking the TRUNCATE stalls CaptureSlot up to the 2s busy_timeout
-  (same class as the P1-2 Status fix 3 rounds back). Moved the checkpoint
-  outside s.mu (decision made locked, I/O unlocked); checkpointHook seam
-  travels with it; RED-first + proof bit. All gates green.**
-- **PATTERN CALL (operator's "watch closely"): 5 consecutive review
-  rounds on the SAME cap/drop path, each fix revealing the next — the
-  textbook [[review-fixes-need-full-scrutiny]] cluster. Root cause named:
-  the §4.1 writer holds s.mu across DB I/O while CaptureSlot needs s.mu
-  to stamp. The checkpoint is now out; the LOSS UPSERT
-  (`upsertLossLocked`, service.go:839) still runs under s.mu in the
-  refresh/close paths — PRE-EXISTING §4.1 design, tiny single-row write,
-  NOT flagged by the per-commit reviews, but SAME class (could wait on
-  the sync loop's WAL write up to busy_timeout). NOT fixed reactively:
-  moving all loss persistence off s.mu is a real §4.1 refactor deserving
-  its own criteria, not a round-6 patch. Flag for a deliberate decision.**
-- **`340c5aac` (checkpoint-outside-mu) review CLEAN — the cap/drop review
-  cluster is CLOSED at round 6 with no new regression.** The full
-  internal/evidence package-review arc (ab9868cc → 8efbb2fe → 85f1481a →
-  340c5aac, 4 fix commits over the original 7 findings + 4 follow-ons):
-  all fixed or noted, all reviews clean or triaged. STILL OPEN, flagged
-  not fixed: `upsertLossLocked` writes under s.mu (pre-existing §4.1,
-  bounded, same class as the checkpoint) — a deliberate s.mu-off-DB-IO
-  refactor if it ever recurs, criteria-first.
-- **Evidence-fix stack PUSHED (origin caught up through 340c5aac); redeploy
-  smd (v4→v5 migrates at start) + smcloud deploy still pending.**
-- **internal/ft8 PACKAGE REVIEW COMPLETE (operator-run, 3 P1 + 3 P2 — all 6
-  CONFIRMED REAL + FIXED in tree, UNCOMMITTED; daemon STOPPED so no live-TX
-  risk during edits):**
-  - ✅P1-flaky-test: `decodesplit_test.go` `Contains(log,"K1ABC")` matched a
-    valid TX line (`Transmitting … CQ K1ABC`) as an RX loopback → wall-clock
-    flaky RED. Now RX-specific (`~ CQ K1ABC`); **70/70 across phases**.
-  - ✅P2-race: `onSlotIdleArmed` read `s.autoWork.selectMode` after unlock →
-    captured into a local pre-unlock (`-race` clean).
-  - ✅P2-double-publish: removed the redundant re-publish (commit already
-    published under the lock, invariant 3) at work_sequencer queued-drain +
-    caller_sequencer idlePop; ADR 0067 + publishguard structural checks cover.
-  - ✅P1-allowDuplicate-leak: `consumePendingAllowDuplicate()` one-shot clears
-    at all 7 commit sites; RED-first reversion proof bit.
-  - ✅P2-subscriber-before-Start: Start reconciles subCount (calls
-    startCaptureLocked, gate-aware, when enabled && subCount>0); RED-first
-    proof bit.
-  - ✅P1-starved-windows: `Slot.Starved` off the scheduler's per-boundary
-    delta (reused EXISTING minLiveWindowSamples — no invented threshold;
-    testable `boundaryStarved` helper); decodeLoop suppresses decode + skips
-    (keeps hash) + no sequencer drive + no occupancy + `capture_dropped`
-    evidence + empty clock tick (invariant 4). RED-first; 3 reversion proofs
-    bit. maintidx exemption for decodeLoop (MI 19, feature-growth class of
-    onSlotWorking/runPipeline).
-  **Gates: race clean, lint 0, gofmt clean, ft8 suite ×2 green, tree -short
-  green, all cmd/ build.** Fix-first (no dedicated pinning test) only on
-  P2-race (validated by -race) + P2-double-publish (structural coverage).
-  ft8 fixes committed `bf07a552` (UNPUSHED). Its review raised 1 REAL P2 in
-  my P1-starved fix — after a lateness SKIP the resync boundary's short
-  remainder delta falsely flagged the next (full-window) slot as starved.
-  FIXED in tree: `starveResync` re-primes the baseline for exactly the
-  boundary after a skip; RED-first + reversion proof. Gates green.
-  resync fix `dd751b28`; ITS review raised 1 more REAL P2 — my
-  reprime-to-not-starved over-corrected (a source that STALLED during the
-  gap → stale ring → decoded as current). Resolved CONSERVATIVELY: the
-  post-lateness window is UNVERIFIABLE (filled sampled at service not target
-  time; fresh-sample position unknowable), so it's recorded as capture loss
-  — one lost slot per rare >2s stall, never a stale decode. RED-first +
-  reversion proof (return-false lets a stalled window decode); gates green.
-  3rd round on the starved-window code (fix-cluster) — the conservative
-  suppression is the cluster-ending SAFE direction; if a later review
-  objects it's an operator design call, not another inference.
-  unverifiable-resync fix `59e9aa4e` — review CLEAN, the whole internal/ft8
-  package-review arc is CLOSED (bf07a552 → dd751b28 → 59e9aa4e: 6 original
-  findings + 2 review-of-review P2s on the starved-window code, all
-  fixed/proven, final review clean). ft8 commits UNPUSHED (ahead of origin).
-- **internal/cloud (SMC evidence-sync) PACKAGE REVIEW — CLOSED, all
-  COMMITTED + PUSHED.** Round-1 `61d83228` (CI green `31397353110`): 4 P1 +
-  2 P2 — test-DB guard, per-row `invalid_profile_ref` (no batch abort),
-  accept-gated supersession, SERIALIZABLE batch + retry (40001/40P01) vs
-  resurrection, supersedes bounds (self-reject, cap 128, sorted), digest v1
-  duplicate-key rejection (D7). Store imports lib/pq directly (SQLSTATE) — fine,
-  SMC store is PG-specific.
-- **Test-DB-safety sub-arc — CLOSED at `b39d6d37` (review CLEAN; CI
-  `31406239697` in-flight at handoff, confirm green).** Three rounds, one
-  defect class (a routine action authorizing a wipe of a possibly-real DB):
-  R1 persistent `__sm_test_db__` sentinel authorized on historical emptiness →
-  R2 `8fd6c7e5` replaced it with explicit CURRENT opt-in `store.ResolveTestDSN`
-  (bare `go test` SKIPS; runs only under `SMCLOUD_TEST_DSN` or
-  `SMCLOUD_TEST_ALLOW_DEFAULT=1`; `RefuseNonTestDatabase`+sentinel removed) →
-  R3 `b39d6d37` stopped `task test`/`ci-local.sh` from auto-setting the env
-  (local commands skip; operator opts in by hand; env kept ONLY in CI's
-  ephemeral-container steps) AND fixed `8fd6c7e5`'s gofmt-drift CI-red
-  (server_test.go double blank line — my `git diff --name-only` checks missed
-  the committed file twice; memory [[gofmt-check-whole-tree]]).
-- **NEXT: OPERATOR pushes the ft8 stack (`bf07a552..59e9aa4e`) if not yet up
-  → confirm CI green (`gh run list -L1` = completed success, incl. b39d6d37's
-  run) → redeploy smd (evidence.db v4→v5; picks up ft8 fixes) → redeploy
-  smcloud (picks up the ingest fixes; pg 0005/0006 already applied) → FT8
-  soak.**
-  on-air 0067 · Settings defaults dropdown · max_repeats-to-session.
-  Dogfood: enabling capture + the antennas block in the live config is an
-  OPERATOR action (consent default off; MY_ANTENNA still carries the
-  two-antenna string — coupling deferred). SM6MUY remedy pick still open.
-  Flake watch: FT8 decode-log (×2) — passed clean all runs today; bridge
-  handler 1s waits.
+- **§4/§5 evidence pipeline SHIPPED + PUSHED, CI green.** capture → profiles →
+  sync → retention on main; every review arc (internal/evidence, ft8,
+  internal/cloud, test-DB-safety) closed — fixed or refuted. HEAD `980c4619`,
+  tree clean, `origin/main` in sync, CI `31456587353` success.
+- **Both daemons redeployed + verified 2026-08-11 (this session):** smcloud on
+  the box (192.168.1.200:8091) = `1238-gd9cd38ae`, pg `schema_migrations` v6,
+  `/v1/evidence` live, `/v1/health` ok — the stale `712` build was
+  RPM-installed-but-not-restarted (no scriptlets, needs a manual restart); smd
+  here = `1238-gd9cd38ae`, `evidence.db` schema v5, active. The handoff's
+  "redeploy smd v4→v5" was already done; HEAD is docs-only, no code left to ship.
+- **NEXT — FT8 soak, OPERATOR-driven (live TX, I do NOT initiate).** Exercises
+  the end-to-end path (smd capture → smcloud `PUT /v1/evidence`) — UNBLOCKED but
+  not yet exercised (smd idle since 05:50, before smcloud came current). After a
+  run, verify both ends: smd.log evidence-sync lines + smcloud evidence/reconcile.
+- **PSK Reporter (2026-08-11):** reply SENT to the collector maintainer — 7Q5MLV
+  is behind Airtel Malawi CGNAT (measured sub-30 s UDP idle timeout), so "a new
+  source port per transmission" is carrier-side, not our socket. Awaiting his
+  answer on what his protection keys on (IP:port vs payload id) — that gates the
+  new **P1 backlog item: stable IPFIX observation-domain ID across smd restarts**
+  (`pskreporter/service.go:141` mints a new one per boot).
+- **Do-not:** never initiate FT8/TX or touch the live TX path without
+  per-occasion agreement; operator commits + pushes all work.
+- **Open flag (deliberate, not fixed):** `upsertLossLocked` (`service.go:839`)
+  writes under s.mu — pre-existing §4.1, bounded; an s.mu-off-DB-IO refactor is
+  criteria-first if it recurs. Small opens: on-air ADR 0067 · Settings defaults
+  dropdown · max_repeats-to-session · SM6MUY remedy pick.
 
 ## Current state (as of 2026-08-10)
 
