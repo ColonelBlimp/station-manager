@@ -156,6 +156,30 @@ func TestNormalizeCallsign(t *testing.T) {
 	}
 }
 
+func TestValidTenantCallsign(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"7Q5MLV", true},
+		{"7Q5MLV/P", true},
+		{"4U1-ITU", true},
+		{"AB1", true},
+		{"AB", false},
+		{"MALAWI", false},
+		{"7Q5MLV!", false},
+		{"7Q5 MLV", false},
+		{"7q5mlv", false}, // callers validate the normalised form
+		{strings.Repeat("A", 32) + "1", false},
+		{"７Q5MLV", false},
+	}
+	for _, tc := range cases {
+		if got := validTenantCallsign(tc.in); got != tc.want {
+			t.Errorf("validTenantCallsign(%q) = %t, want %t", tc.in, got, tc.want)
+		}
+	}
+}
+
 // TestCollectTenantPairs pins the milestone-1 provisioning rules (ADR 0052):
 // legacy pair = tenant 1, numbered pairs from 2, and every malformed shape a
 // LOUD boot error — the failure mode this guards is a silently missing or
@@ -245,6 +269,16 @@ func TestCollectTenantPairs(t *testing.T) {
 	})
 	t.Run("empty numbered callsign", func(t *testing.T) {
 		fail(t, []string{"SMCLOUD_CALLSIGN_2=   ", "SMCLOUD_TOKEN_2=" + strongB}, "SMCLOUD_CALLSIGN_2 is empty")
+	})
+	t.Run("invalid legacy callsign", func(t *testing.T) {
+		_, err := collectTenantPairs("7Q5MLV!", strongA, noise)
+		if err == nil || !strings.Contains(err.Error(), "invalid tenant callsign") {
+			t.Fatalf("err = %v, want invalid-tenant-callsign error", err)
+		}
+	})
+	t.Run("invalid numbered callsign names its variable", func(t *testing.T) {
+		fail(t, []string{"SMCLOUD_CALLSIGN_2=MALAWI", "SMCLOUD_TOKEN_2=" + strongB},
+			"SMCLOUD_CALLSIGN_2 has invalid tenant callsign")
 	})
 	t.Run("duplicate token refused", func(t *testing.T) {
 		fail(t, []string{"SMCLOUD_CALLSIGN_2=7Q8AC", "SMCLOUD_TOKEN_2=" + strongA}, "duplicate bearer token")

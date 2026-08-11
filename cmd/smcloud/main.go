@@ -124,6 +124,42 @@ func normalizeCallsign(s string) string {
 	return strings.ToUpper(strings.TrimSpace(s))
 }
 
+const (
+	minTenantCallsignLen = 3
+	maxTenantCallsignLen = 32
+)
+
+// validTenantCallsign applies the same callsign shape used by the daemon's
+// logbook/config surfaces. Tenant callsigns are durable namespace identities,
+// so accepting punctuation or a digit-free label here would let a typo create
+// a separate tenant that a later correction no longer authenticates into.
+// The input has already been normalised by normalizeCallsign.
+func validTenantCallsign(s string) bool {
+	if len(s) < minTenantCallsignLen || len(s) > maxTenantCallsignLen {
+		return false
+	}
+	hasDigit := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		case c >= 'A' && c <= 'Z':
+		case c == '/' || c == '-':
+		default:
+			return false
+		}
+	}
+	return hasDigit
+}
+
+func validateTenantCallsign(source, callsign string) error {
+	if validTenantCallsign(callsign) {
+		return nil
+	}
+	return fmt.Errorf("%s has invalid tenant callsign %q — use 3..32 ASCII letters/digits, '/' or '-', including at least one digit", source, callsign)
+}
+
 // tenantPair is one boot-provisioned (callsign, bearer token) credential pair.
 type tenantPair struct {
 	Callsign string // normalised (trimmed + uppercased)
@@ -161,6 +197,9 @@ const maxTenantPairs = 32
 //     for one slot would drift);
 //   - each index needs BOTH halves (an orphaned callsign or token names the
 //     missing variable);
+//   - callsigns must match the daemon's canonical 3..32-character
+//     [A-Z0-9/-] shape and contain a digit, so a typo cannot become a durable
+//     backup namespace;
 //   - duplicate tokens are refused: the server's token→tenant map would
 //     silently collapse two tenants into one, authenticating writes into the
 //     wrong logbook namespace;
@@ -176,6 +215,9 @@ func collectTenantPairs(legacyCallsign, legacyToken string, environ []string) ([
 	}
 	if legacy.Callsign == "" {
 		return nil, errors.New("no tenant callsign (set -callsign or SMCLOUD_CALLSIGN)")
+	}
+	if err := validateTenantCallsign("-callsign/SMCLOUD_CALLSIGN", legacy.Callsign); err != nil {
+		return nil, err
 	}
 	if err := validateToken("SMCLOUD_TOKEN", legacy.Token); err != nil {
 		return nil, err
@@ -270,6 +312,9 @@ func collectTenantPairs(legacyCallsign, legacyToken string, environ []string) ([
 		if cs == "" {
 			return nil, fmt.Errorf("%s is empty", csVar)
 		}
+		if err := validateTenantCallsign(csVar, cs); err != nil {
+			return nil, err
+		}
 		if err := validateToken(tokVar, h.token); err != nil {
 			return nil, err
 		}
@@ -301,6 +346,13 @@ const defaultMaxConcurrent = "16"
 // overflow — an extreme value would wrap negative and panic LimitListener's
 // semaphore at boot (2026-07-19 review round 2 #3).
 const maxMaxConcurrent = 4096
+
+// tenantProvisionTimeout bounds the post-migration provisioning phase. The
+// initial PingContext proves reachability, but EnsureTenant can still wait on
+// a conflicting Postgres row/table lock. Without a deadline the Type=simple
+// systemd service would remain "active" indefinitely before it opened its
+// listener, so neither health checks nor Restart=on-failure could recover it.
+const tenantProvisionTimeout = 10 * time.Second
 
 // parseMaxConcurrent validates the in-flight request cap. Junk or an
 // out-of-range value is a boot error, not a silent fallback — a mistyped
@@ -383,15 +435,18 @@ func run() error {
 	}
 	st := store.New(db)
 	tokens := make(map[string]int64, len(pairs))
+	provisionCtx, cancelProvision := context.WithTimeout(context.Background(), tenantProvisionTimeout)
 	for _, p := range pairs {
-		tenantID, err := st.EnsureTenant(context.Background(), p.Callsign, "")
+		tenantID, err := st.EnsureTenant(provisionCtx, p.Callsign, "")
 		if err != nil {
+			cancelProvision()
 			return fmt.Errorf("ensure tenant %q: %w", p.Callsign, err)
 		}
 		tokens[p.Token] = tenantID
 		// Callsign + id only — a token must never reach the log.
 		log.Info("tenant provisioned", "callsign", p.Callsign, "tenant_id", tenantID, "source", p.Source)
 	}
+	cancelProvision()
 	log.Info("smcloud starting", "version", Version, "listen", listen,
 		"tenants", len(pairs), "max_concurrent", maxConcurrent)
 
