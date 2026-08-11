@@ -48,32 +48,40 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **§4/§5 evidence pipeline SHIPPED + PUSHED, CI green.** capture → profiles →
-  sync → retention on main; every review arc (internal/evidence, ft8,
-  internal/cloud, test-DB-safety) closed — fixed or refuted. HEAD `980c4619`,
-  tree clean, `origin/main` in sync, CI `31456587353` success.
-- **Both daemons redeployed + verified 2026-08-11 (this session):** smcloud on
-  the box (192.168.1.200:8091) = `1238-gd9cd38ae`, pg `schema_migrations` v6,
-  `/v1/evidence` live, `/v1/health` ok — the stale `712` build was
-  RPM-installed-but-not-restarted (no scriptlets, needs a manual restart); smd
-  here = `1238-gd9cd38ae`, `evidence.db` schema v5, active. The handoff's
-  "redeploy smd v4→v5" was already done; HEAD is docs-only, no code left to ship.
-- **NEXT — FT8 soak, OPERATOR-driven (live TX, I do NOT initiate).** Exercises
-  the end-to-end path (smd capture → smcloud `PUT /v1/evidence`) — UNBLOCKED but
-  not yet exercised (smd idle since 05:50, before smcloud came current). After a
-  run, verify both ends: smd.log evidence-sync lines + smcloud evidence/reconcile.
-- **PSK Reporter (2026-08-11):** reply SENT to the collector maintainer — 7Q5MLV
-  is behind Airtel Malawi CGNAT (measured sub-30 s UDP idle timeout), so "a new
-  source port per transmission" is carrier-side, not our socket. Awaiting his
-  answer on what his protection keys on (IP:port vs payload id) — that gates the
-  new **P1 backlog item: stable IPFIX observation-domain ID across smd restarts**
-  (`pskreporter/service.go:141` mints a new one per boot).
+- **SHIP GATE logging-gaps cluster — reconciled this session; bridge mostly cleared.**
+  The five 2026-08-01 package audits are BADLY STALE — a full per-package
+  DONE/OPEN reconciliation ran THIS session and found **32 of 67 findings were
+  already shipped** before it (incl. nearly every backlog "top item": api A7,
+  qsoservice Q1/Q7, ft8 1-8/11-14). Do NOT re-audit; per-finding open sets live
+  in the `reviews/*-logging-gaps.md` files (bridge's now carries a DONE/OPEN
+  table header).
+- **Bridge: now 10/14 done, ALL PUSHED** — B10 `568742ed` · B8/B9/B11 `df1db6ab`
+  · B4/B6/B7 `1408edb1`. **CI `31513405609` was IN-PROGRESS at handoff — confirm
+  the verdict** (df1db6ab's run auto-cancelled by the next push, normal); local
+  -race+vet+build+gofmt-whole-tree were green. Open: **B5** (CIV mid-batch),
+  **B13** (tune-restore encode drops), **B14** (freq/power parse) — cheap but
+  need test scaffolding (buffer-logger CIV harness for B5; free-function
+  signature change for B13/B14; B14 wants a once-per-instance flood latch, NOT a
+  guessed threshold). **B12** (what a keyed tune records) is needs-decision.
+- **Next logging picks (already reconciled, ready to build):** **api A11 is a
+  DATA-LOSS bug**, not just a gap — a corrupt stored-forwarder-creds blob is
+  silently dropped at `handler_config.go:1379` (pair with A6) · qsoservice
+  Q4/Q5/Q6/Q8/Q9/Q10 (all clean cheap) · ft8 #9/#10 · forwarding F5/F7/F8/F15/F16.
+  One cross-cutting DECISION gates several: "what does a keyed transmission
+  record" (api A10 / bridge B12 / ft8 #6 already shipped its half) · A5/A12
+  log-levels · a `forwarding.Result` disposition field (F11/F14).
+- **FT8 soak still pending — OPERATOR-driven (live TX; I do NOT initiate).** §4/§5
+  evidence pipeline shipped, both daemons deployed+verified (smcloud `1238` pg-v6
+  `/v1/evidence` live, smd `1238` evidence-v5); a run exercises smd capture →
+  smcloud `PUT /v1/evidence` — verify both ends after.
+- **PSK Reporter:** reply sent; 7Q5MLV behind Airtel CGNAT (sub-30 s UDP idle) →
+  the per-TX source-port hop is carrier-side, not our socket. Awaiting the
+  maintainer; gates the P1 stable-obs-ID item (`pskreporter/service.go:141`).
 - **Do-not:** never initiate FT8/TX or touch the live TX path without
   per-occasion agreement; operator commits + pushes all work.
-- **Open flag (deliberate, not fixed):** `upsertLossLocked` (`service.go:839`)
-  writes under s.mu — pre-existing §4.1, bounded; an s.mu-off-DB-IO refactor is
-  criteria-first if it recurs. Small opens: on-air ADR 0067 · Settings defaults
-  dropdown · max_repeats-to-session · SM6MUY remedy pick.
+- **Open flag (deliberate):** `upsertLossLocked` (`service.go:839`) writes under
+  s.mu — pre-existing §4.1, bounded. Small opens: on-air ADR 0067 · Settings
+  defaults dropdown · max_repeats-to-session · SM6MUY remedy pick.
 
 ## Current state (as of 2026-08-10)
 

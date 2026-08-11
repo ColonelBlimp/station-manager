@@ -1,5 +1,26 @@
 # URGENT TODO — `internal/bridge` logging gaps
 
+> **STATUS UPDATE 2026-08-11 — 10 of 14 SHIPPED, 3 cheap + 1 needs-decision OPEN.**
+> Verified against current code this session (line numbers in the findings below
+> are 2026-08-01 and have drifted).
+> - **DONE:** B1 (drivewatch transition machine, `drivewatch_test.go`) · B2
+>   (hub slow-reader eviction Warn, `hub_eviction_test.go`) · B3 (`how` field on
+>   `confirmTxIdle`) · **B10** (identity mismatch/unrecognised now log before
+>   halt/block — `identitylog_test.go`, commit `568742ed`) · **B8/B9/B11** (serial
+>   close error, re-probe write failure, liveness lost/restored — `livenesslog_test.go`,
+>   commit `df1db6ab`) · **B4/B6/B7** (dropped-ACK Debug, client-count Info,
+>   no-op-bootstrap Debug — `diaglog_test.go`, commit `1408edb1`).
+> - **OPEN (cheap, need test scaffolding):** **B5** (CIV mid-batch op failure —
+>   needs a buffer-logger CIV pipeline harness + per-op ACK discrimination:
+>   `set_mode`=cmd 06 vs `set_freq`=cmd 05) · **B13** (`encodeTuneRestore` +
+>   `ft8tx.go` mode restore — free-function silent `err==nil` encode drops; needs
+>   a signature change to surface which encode failed) · **B14** (`mapStatusToPayload`
+>   free-function VFOAFREQ/VFOBFREQ/TXPWR parse drops leave `CurrentDialMHz` stale
+>   not unknown; needs a flood-safe cadence — proposed once-per-pipeline-instance
+>   latch, NOT a guessed threshold).
+> - **OPEN (needs-decision):** **B12** (what a keyed tune records — shared decision
+>   with api A10 / ft8 finding 6, which already shipped its half).
+
 **Status:** open · **Raised:** 2026-08-01 · **14 findings** · **Source:** package
 logging review of `internal/bridge` (6,294 non-test lines, 13 files, **66 log call
 sites**), operator-directed, review only — no code was changed. B1-B8 from the first
