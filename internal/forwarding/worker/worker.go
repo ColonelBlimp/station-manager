@@ -330,14 +330,28 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 		return types.Qso{}, true
 	}
 
-	// QSO absent or soft-deleted. §4 semantics:
+	// QSO absent or soft-deleted. §4 semantics. These are terminal transitions but
+	// were SILENT — markFailed publishes an SSE event + writes last_error, neither
+	// durable — so "why did this QSO never reach the forwarder?" had no file answer,
+	// the same question qsoservice Q5 leaves open from the other end (F7). Warn,
+	// mirroring the terminal Warn the persistOutcome path emits.
+	failGone := func(reason string) {
+		w.logger.WarnWith().
+			Str("forwarder", w.cfg.Name).
+			Int64("upload_id", row.ID).
+			Int64("qso_id", row.QsoID).
+			Str("action", act.String()).
+			Str("reason", reason).
+			Msg("forwarding: QSO gone before forwarding — upload terminally failed")
+		_ = w.markFailed(ctx, row, reason)
+	}
 	switch act {
 	case action.Insert:
-		_ = w.markFailed(ctx, row, "qso soft-deleted before insert forwarded")
+		failGone("qso soft-deleted before insert forwarded")
 		return types.Qso{}, true
 
 	case action.Update:
-		_ = w.markFailed(ctx, row, "qso soft-deleted; delete row supersedes")
+		failGone("qso soft-deleted; delete row supersedes")
 		return types.Qso{}, true
 
 	case action.Delete:
@@ -352,7 +366,7 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 			// Not even a soft-deleted row exists. The qso_upload row points
 			// at a nonexistent QSO — ingest should never produce this, so
 			// mark terminal and move on.
-			_ = w.markFailed(ctx, row, "qso not found for delete forwarding")
+			failGone("qso not found for delete forwarding")
 			return types.Qso{}, true
 		}
 		w.markTransientInternal(ctx, row, err)
@@ -423,11 +437,16 @@ func (w *Worker) persistOutcome(
 		// three documented outcomes. Structured warn so a misbehaving
 		// forwarder (typically a bug in a new plugin) surfaces in logs
 		// rather than just in last_error text.
-		w.logger.WarnWith().
+		ev := w.logger.WarnWith().
 			Str("forwarder", w.cfg.Name).
 			Int64("upload_id", row.ID).
-			Str("outcome", string(res.Outcome)).
-			Msg("forwarder: returned unrecognised Outcome")
+			Str("outcome", string(res.Outcome))
+		if res.Err != nil {
+			// The cause is in hand and passed to markFailed one line down; omitting it
+			// from its own warning forced a last_error/SSE join to explain the line (F16).
+			ev = ev.Err(res.Err)
+		}
+		ev.Msg("forwarder: returned unrecognised Outcome")
 		cause = nonNilErr(res.Err, "forwarder reported an unrecognised outcome")
 		disp = w.markFailed(ctx, row, fmt.Sprintf("unknown outcome %q: %s", res.Outcome, errText(res.Err)))
 	}
@@ -571,14 +590,27 @@ func (w *Worker) markUnreachable(
 // a chronic internal problem doesn't keep a row cycling forever.
 func (w *Worker) markTransientInternal(ctx context.Context, row types.QsoUpload, cause error) {
 	nextAttempts := row.Attempts + 1
+	// This path never reaches Forwarder.Submit, so persistOutcome/logAttempt never
+	// runs — the internal fault (a DB fetch error, the more serious cause) left NO
+	// trace, and last_error self-erases on any later success. Mirror the forwarder-
+	// caused path's severity: Info for a scheduled retry, Warn for exhaustion (F5).
+	base := func(ev logging.LogEvent) logging.LogEvent {
+		return ev.Str("forwarder", w.cfg.Name).
+			Int64("upload_id", row.ID).
+			Int64("qso_id", row.QsoID).
+			Str("action", row.Action).
+			Str("origin", row.Origin).
+			Int64("attempts", nextAttempts).
+			Err(cause)
+	}
 	if nextAttempts >= int64(w.cfg.Retry.MaxAttempts) {
-		// Disposition discarded: this path emits no attempt record (Forwarder.Submit
-		// was never reached). Its own missing logging is forwarding F5, not this diff.
+		base(w.logger.WarnWith()).Msg("forwarding: internal transient exhausted — row failed")
 		_ = w.markFailed(ctx, row, "internal: "+errText(cause))
 		return
 	}
 	delay := computeBackoff(nextAttempts, w.cfg.Retry)
 	nextAt := time.Now().Add(delay).Unix()
+	base(w.logger.InfoWith()).Dur("retry_in", delay).Msg("forwarding: internal transient — will retry")
 	_ = w.markTransientRetry(ctx, row, nextAt, "internal: "+errText(cause))
 }
 

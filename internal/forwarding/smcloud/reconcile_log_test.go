@@ -2,6 +2,7 @@ package smcloud
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -134,4 +135,25 @@ func TestReconcileRunOnce_FailedRunLogsNoRunComplete(t *testing.T) {
 	require.NotContains(t, buf.String(), runCompleteMsg,
 		"a failed run must not claim completion — the failure is the caller's to "+
 			"report (loop warn / endpoint 500)")
+}
+
+// RC4 (F8): a run that PARTIALLY mutated the queue and then failed records the
+// mutation. A run that queued 400 upserts and then failed the delete enqueue used to
+// log identically to one that did nothing — the partial mutation is durable queue
+// state the "run failed" line alone hides. No natural manifest fixture produces the
+// upserts-committed-then-deletes-fail path, so runOnceOverride drives it.
+func TestReconcileRunOnce_PartialMutationOnFailureIsLogged(t *testing.T) {
+	rec, buf := logReconciler(t, stubCloud(t).URL)
+	rec.runOnceOverride = func() (ReconcileSummary, error) {
+		return ReconcileSummary{EnqueuedUpserts: 400}, stderrors.New("enqueue deletes: boom")
+	}
+
+	_, err := rec.RunOnce(context.Background(), TriggerManual)
+	require.Error(t, err)
+
+	out := buf.String()
+	require.Contains(t, out, "run failed after partially mutating the queue",
+		"a partial mutation must be recorded, else it looks like a run that did nothing (F8)")
+	require.Contains(t, out, `"upserts":400`, "the mutation counts are the point")
+	require.NotContains(t, out, runCompleteMsg, "a failed run must not claim completion")
 }

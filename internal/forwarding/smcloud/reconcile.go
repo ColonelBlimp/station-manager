@@ -89,6 +89,12 @@ type Reconciler struct {
 	forwarderName string // queue destination for the heal traffic
 	localLogbook  int64
 	interval      time.Duration
+
+	// runOnceOverride, when non-nil, replaces runOnce so a test can drive RunOnce's
+	// post-run logging — specifically the F8 partial-mutation branch (a run that
+	// committed queue upserts and THEN failed enqueueing deletes). No natural manifest
+	// fixture reaches that path, so this is the seam; nil in production.
+	runOnceOverride func() (ReconcileSummary, error)
 }
 
 // NewReconciler builds a Reconciler from the SAME ForwarderConfig the smcloud
@@ -176,9 +182,27 @@ func (r *Reconciler) logSummary(sum ReconcileSummary, trigger string) {
 // reporting stays the caller's (the loop's warn-and-retry; the endpoint's
 // 500, whose cause writeServerError logs).
 func (r *Reconciler) RunOnce(ctx context.Context, trigger string) (ReconcileSummary, error) {
-	sum, err := r.runOnce(ctx)
+	run := r.runOnce
+	if r.runOnceOverride != nil {
+		run = func(context.Context) (ReconcileSummary, error) { return r.runOnceOverride() }
+	}
+	sum, err := run(ctx)
 	if err == nil {
 		r.logSummary(sum, trigger)
+		return sum, nil
+	}
+	// A failed run's ERROR reporting stays the caller's (the loop warns + retries; the
+	// endpoint 500s, whose cause writeServerError logs). But a run can fail AFTER it has
+	// already committed queue upserts — enqueue-upserts succeeds, enqueue-deletes fails —
+	// and that partial mutation is durable state the "run failed" line alone hides: a run
+	// that queued 400 upserts then failed looked identical to one that did nothing (F8).
+	// Record the mutation here, once, at whichever caller.
+	if sum.EnqueuedUpserts > 0 || sum.EnqueuedDeletes > 0 {
+		r.log.WarnWith().
+			Str("trigger", trigger).
+			Int("upserts", sum.EnqueuedUpserts).
+			Int("deletes", sum.EnqueuedDeletes).
+			Msg("smcloud reconcile: run failed after partially mutating the queue")
 	}
 	return sum, err
 }

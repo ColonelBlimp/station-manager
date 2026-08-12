@@ -1459,6 +1459,12 @@ func spawnForwarderWorkers(
 			Str("type", fc.Type).
 			Int("tick_interval_sec", fc.TickIntervalSec).
 			Int("batch_size", fc.BatchSize).
+			// The effective retry policy — max attempts + backoff bounds — so later
+			// retry behaviour is reconstructable from the log alone: a type's registered
+			// DefaultRetry need not appear in config.json (F15).
+			Int("retry_max_attempts", retry.MaxAttempts).
+			Int("retry_initial_backoff_sec", retry.InitialBackoffSec).
+			Int("retry_max_backoff_sec", retry.MaxBackoffSec).
 			Msg("forwarder worker started")
 	}
 	return nil

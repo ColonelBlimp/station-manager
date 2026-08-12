@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/events"
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/stub"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -179,6 +180,44 @@ func TestForwarderBuildFailure_NotEmittedForOtherStartupFailures(t *testing.T) {
 	}
 	if rec := findBuildFailure(t, buf); rec != nil {
 		t.Errorf("a missing retry default emitted the Build-failure event: %v", rec)
+	}
+}
+
+// F15 — the worker-started record carries the EFFECTIVE retry policy (max attempts +
+// backoff bounds), so later retry behaviour is reconstructable from the log alone: a
+// type's registered DefaultRetry need not appear in config.json.
+func TestForwarderWorkerStarted_LogsRetryPolicy(t *testing.T) {
+	err, buf := spawnAndCapture(t, []types.ForwarderConfig{{
+		Name:            "stub-retry",
+		Type:            stub.Type,
+		Enabled:         true,
+		Credentials:     stubCreds(t),
+		TickIntervalSec: 1,
+		BatchSize:       1,
+		Retry:           &types.RetryConfig{MaxAttempts: 7, InitialBackoffSec: 2, MaxBackoffSec: 300},
+	}})
+	if err != nil {
+		t.Fatalf("happy-path spawn: %v", err)
+	}
+
+	var rec map[string]any
+	for _, r := range buildLogRecords(t, buf) {
+		if r["message"] == "forwarder worker started" {
+			rec = r
+			break
+		}
+	}
+	if rec == nil {
+		t.Fatalf("no 'forwarder worker started' record\n%s", buf.String())
+	}
+	for k, want := range map[string]float64{
+		"retry_max_attempts":        7,
+		"retry_initial_backoff_sec": 2,
+		"retry_max_backoff_sec":     300,
+	} {
+		if got, _ := rec[k].(float64); got != want {
+			t.Errorf("%s = %v, want %v (the retry policy must be reconstructable, F15)", k, rec[k], want)
+		}
 	}
 }
 
