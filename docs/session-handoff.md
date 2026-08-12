@@ -41,47 +41,41 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-11)
+## Now (as of 2026-08-12)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **SHIP GATE logging-gaps cluster — reconciled this session; bridge mostly cleared.**
-  The five 2026-08-01 package audits are BADLY STALE — a full per-package
-  DONE/OPEN reconciliation ran THIS session and found **32 of 67 findings were
-  already shipped** before it (incl. nearly every backlog "top item": api A7,
-  qsoservice Q1/Q7, ft8 1-8/11-14). Do NOT re-audit; per-finding open sets live
-  in the `reviews/*-logging-gaps.md` files (bridge's now carries a DONE/OPEN
-  table header).
-- **Bridge: now 10/14 done, ALL PUSHED** — B10 `568742ed` · B8/B9/B11 `df1db6ab`
-  · B4/B6/B7 `1408edb1`. **CI `31513405609` was IN-PROGRESS at handoff — confirm
-  the verdict** (df1db6ab's run auto-cancelled by the next push, normal); local
-  -race+vet+build+gofmt-whole-tree were green. Open: **B5** (CIV mid-batch),
-  **B13** (tune-restore encode drops), **B14** (freq/power parse) — cheap but
-  need test scaffolding (buffer-logger CIV harness for B5; free-function
-  signature change for B13/B14; B14 wants a once-per-instance flood latch, NOT a
-  guessed threshold). **B12** (what a keyed tune records) is needs-decision.
-- **Next logging picks (already reconciled, ready to build):** **api A11 is a
-  DATA-LOSS bug**, not just a gap — a corrupt stored-forwarder-creds blob is
-  silently dropped at `handler_config.go:1379` (pair with A6) · qsoservice
-  Q4/Q5/Q6/Q8/Q9/Q10 (all clean cheap) · ft8 #9/#10 · forwarding F5/F7/F8/F15/F16.
-  One cross-cutting DECISION gates several: "what does a keyed transmission
-  record" (api A10 / bridge B12 / ft8 #6 already shipped its half) · A5/A12
-  log-levels · a `forwarding.Result` disposition field (F11/F14).
-- **FT8 soak still pending — OPERATOR-driven (live TX; I do NOT initiate).** §4/§5
-  evidence pipeline shipped, both daemons deployed+verified (smcloud `1238` pg-v6
-  `/v1/evidence` live, smd `1238` evidence-v5); a run exercises smd capture →
-  smcloud `PUT /v1/evidence` — verify both ends after.
-- **PSK Reporter:** reply sent; 7Q5MLV behind Airtel CGNAT (sub-30 s UDP idle) →
-  the per-TX source-port hop is carrier-side, not our socket. Awaiting the
-  maintainer; gates the P1 stable-obs-ID item (`pskreporter/service.go:141`).
-- **Do-not:** never initiate FT8/TX or touch the live TX path without
-  per-occasion agreement; operator commits + pushes all work.
-- **Open flag (deliberate):** `upsertLossLocked` (`service.go:839`) writes under
-  s.mu — pre-existing §4.1, bounded. Small opens: on-air ADR 0067 · Settings
-  defaults dropdown · max_repeats-to-session · SM6MUY remedy pick.
+- **SHIP-GATE logging-gaps cluster — MOSTLY CLEARED.** The five 2026-08-01 audits
+  were badly stale (32/67 already shipped); reconciliation + fixes ran over three
+  sessions. **DONE:** bridge · api (A11/A11b/A6) · qsoservice (Q1-Q6, Q8-Q10) ·
+  **ft8 14/14**. **OPEN:** forwarding F5/F7/F8/F15/F16 (cheap) + F2/F10-F14/F17
+  (needs-decision) · **CLOUD — the NEW 6th area** (`cmd/smcloud`+`internal/cloud`,
+  never in the original sweep): C1-C6, incl. TWO High false-success bugs (C1
+  evidence rejects silent, C2 gzip false-success) → `reviews/cloud-logging-gaps.md`.
+  Trust the per-file DONE/OPEN headers + `backlog.md` RECONCILIATION bullet over
+  the stale mega-bullets; do NOT re-audit.
+- **Commits: 6 local AHEAD of origin, NOT pushed; ft8 #9/#10 uncommitted in-tree.**
+  This session's commits carry NO Claude trailer (operator directive): `2ddb2809`
+  qso Q4/Q5/Q6 · `b5059bf5` api-flush-P1 · `a4270336` bridge-de-flake · `99ec71f7`
+  qso Q8/Q9/Q10 · +2 docs. **`origin/main` (`f251b822`) is CI-RED from a FLAKY
+  bridge test; the de-flake `a4270336` is committed, so the next push goes green** —
+  verify from `gh run list` OUTPUT after push, not the exit code.
+- **NEEDS-DECISION (operator) items gate the tail:** the cross-cutting "what does a
+  keyed transmission record" (api A10 / bridge B12) · api A5/A12 log-levels ·
+  `forwarding.Result` disposition (F11/F14) · qsoservice Q7 (log the DB error — and
+  should `Restore` also REFUSE, not just write? same class as api A7).
+- **FT8 soak pending — OPERATOR-driven (live TX; I do NOT initiate).** §4/§5 evidence
+  pipeline shipped + both daemons deployed (smcloud `1238` pg-v6, smd `1238`
+  evidence-v5); a run exercises smd capture → smcloud `PUT /v1/evidence`.
+- **PSK Reporter:** awaiting the maintainer (7Q5MLV behind Airtel CGNAT, sub-30s UDP
+  idle → per-TX source-port hop is carrier-side); gates the P1 stable-obs-ID item
+  (`pskreporter/service.go:141`).
+- **Do-not:** never initiate FT8/TX or touch the live TX path (sink 66 / rig cmds /
+  power) without per-occasion agreement. Codex hook auto-reviews every commit (SLOW,
+  ~1-2 min) → triage `.codex-reviews/` + `gh run list` on resume, then delete each.
 
 ## Current state (as of 2026-08-10)
 

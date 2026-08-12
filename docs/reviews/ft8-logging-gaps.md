@@ -357,6 +357,11 @@ QSO that was never handed anywhere**.
 
 ### 9. Idle inhibition logs only its failure
 
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** The successful acquire
+> (`acquireIdleInhibit`) and the release (`takeIdleReleaseLocked`, only when something
+> was held) now each log an Info line, so the held interval T1→T2 is reconstructable.
+> Test `TestIdleInhibit_LogsHeldInterval` (Rule 8, held-interval form); reversion-proved.
+
 `internal/ft8/idleinhibit.go:60` logs the acquire failure. The successful acquire
 (`:72`) and the release (`takeIdleReleaseLocked`, `:80`) log nothing.
 
@@ -365,6 +370,14 @@ from T1 to T2" is precisely the fact needed to reconstruct one, and it is the fa
 not recorded.
 
 ### 10. Pre-key safety refusals share a message with audio failures
+
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** The generic
+> `ft8 tx: transmission failed` log (now `servicetx.go:696`) now branches on the
+> EXISTING `isDialRefusal` predicate: a dial-safety refusal logs "ft8 tx: declined to
+> key — dial safety check refused", so the guard doing its job is separable from a
+> device failure. Log-classification only — no keying/refusal logic changed. Test
+> `dialrefusallog_test.go` (refusal → distinct, audio failure → generic control);
+> reversion-proved.
 
 `preKeyDialCheck` (`servicetx.go:1188`) refuses inside the TX goroutine, so the refusal
 surfaces as the generic `ft8 tx: transmission failed` at `servicetx.go:624` — the same
