@@ -242,6 +242,31 @@ func TestIdleInhibit_ReleasedOnClose(t *testing.T) {
 	}
 }
 
+// Rule 8 — the held INTERVAL is logged. The file exists to reconstruct a suspected
+// host-sleep event mid-run, and "inhibition held from T1 to T2" is exactly that
+// fact — the fact that was not recorded, only the acquire FAILURE was (#9). Both
+// ends are needed: an acquire line with no release line cannot bound the interval.
+func TestIdleInhibit_LogsHeldInterval(t *testing.T) {
+	in := &fakeInhibitor{}
+	s := newInhibitTestService(in, &fakeKeyer{}, nil)
+	sink, logger := newLogSink()
+	s.log = logger
+
+	if err := s.ArmTx(true); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	if _, ok := sink.record(t, "desktop idle inhibited"); !ok {
+		t.Fatal("acquiring the inhibition must log the start of the held interval")
+	}
+
+	if err := s.ArmTx(false); err != nil {
+		t.Fatalf("disarm: %v", err)
+	}
+	if _, ok := sink.record(t, "releasing desktop idle inhibition"); !ok {
+		t.Fatal("releasing the inhibition must log the end of the held interval")
+	}
+}
+
 // Rule 7 — no inhibitor wired at all (headless, or any existing deployment)
 // leaves arming completely unaffected. This is the default for every other test
 // in the package, so a regression here breaks the suite broadly; it is stated

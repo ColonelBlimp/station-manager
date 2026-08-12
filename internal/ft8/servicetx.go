@@ -692,6 +692,12 @@ func (s *Service) startTransmission(
 			switch {
 			case !normal:
 				s.log.ErrorWith().Msg("ft8 tx: transmission panicked (recovered); in-flight state cleared")
+			case failed && isDialRefusal(txErr):
+				// A pre-key dial safety refusal (dial unknown / superseded) — the guard
+				// doing its job, NOT an audio or keyer fault. Distinct message so "SM
+				// declined to key for safety" is not confusable with a device failure;
+				// the sentinel is already greppable, the message was not (#10).
+				s.log.WarnWith().Err(txErr).Msg("ft8 tx: declined to key — dial safety check refused")
 			case failed:
 				s.log.WarnWith().Err(txErr).Msg("ft8 tx: transmission failed")
 			}

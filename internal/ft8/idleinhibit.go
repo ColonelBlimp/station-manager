@@ -71,6 +71,10 @@ func (s *Service) acquireIdleInhibit(in IdleInhibitor) {
 	}
 	s.idleRelease = release
 	s.txMu.Unlock()
+	// The held interval is the fact this file exists to record (the suspected
+	// host-sleep event was mid-run): this line pairs with the release line in
+	// takeIdleReleaseLocked so "inhibition held from T1 to T2" is reconstructable (#9).
+	s.log.InfoWith().Msg("ft8 tx: desktop idle inhibited while TX is armed (host held awake)")
 }
 
 // takeIdleReleaseLocked hands back the pending release func and clears it, so the
@@ -80,5 +84,11 @@ func (s *Service) acquireIdleInhibit(in IdleInhibitor) {
 func (s *Service) takeIdleReleaseLocked() func() {
 	rel := s.idleRelease
 	s.idleRelease = nil
+	if rel != nil {
+		// Pairs with the acquire line — closes the held interval (#9). Only when
+		// something was actually held, so the uniform "call this on every disarm"
+		// contract stays quiet on the paths that held nothing.
+		s.log.InfoWith().Msg("ft8 tx: releasing desktop idle inhibition (TX disarmed)")
+	}
 	return rel
 }
