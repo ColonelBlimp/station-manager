@@ -334,6 +334,13 @@ func (s *Service) deliverAck(accepted bool) {
 	select {
 	case ch <- accepted:
 	default:
+		// A waiter IS installed, but its one-slot buffer is already taken — a
+		// duplicate or second ACK for the command still in flight (the
+		// doc-comment's "duplicate" drop). Logged distinctly from the no-waiter
+		// drop above so the two causes stay tellable apart in smd.log; B4 logged
+		// only the no-waiter path (codex 1408edb1 P2).
+		s.logger.DebugWith().Bool("accepted", accepted).
+			Msg("bridge: CI-V ACK dropped; command buffer full (duplicate)")
 	}
 }
 

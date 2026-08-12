@@ -224,6 +224,14 @@ type Service struct {
 	// calls back into these paths, so ordering is clientsMu → hub lock.
 	clientsMu sync.Mutex
 
+	// lastPublishedClientCount is the count carried by the most recent
+	// EventRigClients broadcast, so publishClientCount can edge-trigger — an
+	// idempotent unsubscribe re-call or eviction-then-cleanup re-enters at an
+	// unchanged count and must not re-log/re-publish a transition that never
+	// happened (codex 1408edb1 P2). Guarded by clientsMu; reset on Stop when the
+	// hub drains to 0 so a restart doesn't suppress a genuine first broadcast.
+	lastPublishedClientCount int
+
 	// Tune-carrier state (ADR 0027), all mu-guarded. tuneActive is the
 	// single-flight gate; tuneRestoreMode/Power are the pre-tune snapshot
 	// captured at StartTune and restored on stop; tuneTimer is the hard
@@ -777,6 +785,11 @@ func (s *Service) Stop() error {
 		}
 		s.wg.Wait()
 		s.hub.close()
+		// The hub has drained to 0; clear the edge-trigger baseline so a
+		// restart's first genuine broadcast isn't suppressed as unchanged.
+		s.clientsMu.Lock()
+		s.lastPublishedClientCount = 0
+		s.clientsMu.Unlock()
 		if s.logger != nil {
 			s.logger.InfoWith().Msg("bridge: subsystem stopped")
 		}
@@ -893,6 +906,16 @@ func (s *Service) Subscribe() (<-chan Event, func()) {
 // could be the LAST event published and stick a lone tab's multi-tab banner
 // (2026-07-19 review P3).
 func (s *Service) publishClientCount(n int) {
+	// Edge-triggered: publish (and log) ONLY when the count actually moved since
+	// the last broadcast. The unsubscribe fn is idempotent and eviction can be
+	// followed by a cleanup re-call at the same count; before this each re-entry
+	// logged another "subscriber count changed" for a transition that never
+	// happened and re-emitted a redundant SSE event (codex 1408edb1 P2). Callers
+	// hold clientsMu, which also guards lastPublishedClientCount.
+	if n == s.lastPublishedClientCount {
+		return
+	}
+	s.lastPublishedClientCount = n
 	// Fan-outs are the multi-tab transitions (join at n>=2, leave at n>=1); one
 	// Info line each makes "how many tabs were attached when" recoverable from
 	// smd.log, which the SSE-only broadcast did not (B6).

@@ -92,3 +92,68 @@ func TestTriggerBootstrap_NoPipeline_LogsDebugSkip(t *testing.T) {
 		t.Errorf("level = %q, want debug", lvl)
 	}
 }
+
+// --- codex 1408edb1 review (P2 x2): the two B4/B6 paths that delivered only
+// half their stated intent. ---
+
+// TestDeliverAck_BufferFull_LogsDebugDrop pins the codex P2 fix for B4. deliverAck
+// has TWO drop paths, but B4 logged only the no-waiter one (ch == nil). The second
+// — a waiter IS installed yet its one-slot buffer is already full, so a duplicate
+// or second ACK falls to the default branch — stayed silent, indistinguishable
+// from a delivered ACK. It must now log at Debug AND be tellable apart from the
+// no-waiter drop (distinct message), so the two drop causes can be counted
+// separately in smd.log.
+func TestDeliverAck_BufferFull_LogsDebugDrop(t *testing.T) {
+	s, buf := newIdentityLogTestService(t, "yaesu-ft710")
+
+	// A waiter is installed, but its one slot is already taken: the next ACK
+	// cannot be delivered and must fall to the default branch.
+	ch := make(chan bool, 1)
+	ch <- true // occupy the single buffer slot
+	s.mu.Lock()
+	s.pendingAck = ch
+	s.mu.Unlock()
+
+	s.deliverAck(true)
+
+	recs := matching(t, buf, "command buffer full")
+	if len(recs) != 1 {
+		t.Fatalf("buffer-full drop lines = %d, want 1; log:\n%s", len(recs), buf.String())
+	}
+	if lvl, _ := recs[0]["level"].(string); lvl != "debug" {
+		t.Errorf("level = %q, want debug", lvl)
+	}
+	// The nearest confusable state: this is NOT the no-waiter drop.
+	if got := countLines(buf, "no command waiting"); got != 0 {
+		t.Fatalf("buffer-full drop reused the no-waiter message (%d lines); the two drops must differ", got)
+	}
+}
+
+// TestUnsubscribe_IdempotentRecall_NoFalseCountChange pins the codex P2 fix for B6.
+// The unsubscribe fn is idempotent, but before the fix a repeated call still ran
+// publishClientCount at the UNCHANGED count and logged another "subscriber count
+// changed" — a transition that never happened. publishClientCount is now
+// edge-triggered (fires only when the count actually moved since the last
+// broadcast), so the idempotent re-call records nothing new.
+func TestUnsubscribe_IdempotentRecall_NoFalseCountChange(t *testing.T) {
+	s, buf := newIdentityLogTestService(t, "yaesu-ft710")
+
+	_, u1 := s.Subscribe() // n=1, below the fan-out threshold
+	defer u1()
+	_, u2 := s.Subscribe() // n=2, a real transition
+	_, u3 := s.Subscribe() // n=3, a real transition
+	defer u3()
+
+	u2() // leave: count 3 -> 2, a real transition
+	base := countLines(buf, "subscriber count changed")
+	if base == 0 {
+		t.Fatalf("expected count-change lines from the join/leave transitions; got 0\n%s", buf.String())
+	}
+
+	// The SAME unsubscribe again is idempotent — the count is still 2, so nothing
+	// changed and no new record may appear.
+	u2()
+	if got := countLines(buf, "subscriber count changed"); got != base {
+		t.Fatalf("idempotent unsubscribe re-call logged a false count change: %d lines, want %d", got, base)
+	}
+}
