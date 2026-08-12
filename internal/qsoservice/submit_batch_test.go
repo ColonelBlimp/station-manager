@@ -144,3 +144,66 @@ func TestSubmitImportBatch_UUIDCollisionReportedNotFatal(t *testing.T) {
 	require.Equal(t, 1, res.Errors[0].Index, "the colliding record's input index")
 	require.Contains(t, res.Errors[0].Reason, "uuid_conflict")
 }
+
+// Q8 — WHEN A BATCH WRITE FAILS AND THE IMPORT DROPS TO PER-RECORD, THE TRIGGERING
+// ERROR IS LOGGED. The efficient batch path degrading to per-record inserts was
+// invisible: a systematic cause (a constraint, schema drift) presented as "imports
+// are slow" with no thread to pull. A UUID collision inside the batch tx forces the
+// fallback here.
+func TestSubmitImportBatch_FallbackLogsTriggeringError(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	ctx := context.Background()
+
+	const uuid = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+	rec := func(uid, call, timeOn string) adif.Record {
+		return adif.Record{
+			AppSmQsoID:       uid,
+			ContactedStation: types.ContactedStation{Call: call},
+			QsoDetails:       types.QsoDetails{Band: "20m", Mode: "SSB", Freq: "14.074", QsoDate: "20260101", TimeOn: timeOn},
+			LoggingStation:   types.LoggingStation{StationCallsign: "G0XYZ"},
+		}
+	}
+
+	_, err := s.SubmitImport(ctx, lbID, rec(uuid, "K1AAA", "1200"), false, nil)
+	require.NoError(t, err)
+
+	// Batch (size 2): a good record then a UUID collision → the batch INSERT fails
+	// and the run drops to per-record.
+	recs := []adif.Record{
+		rec("", "K2BBB", "1300"),
+		rec(uuid, "K3CCC", "1400"),
+	}
+	buf := logbuf(s)
+	res, err := s.SubmitImportBatch(ctx, lbID, recs, nil, 2, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Stored, "K2BBB stored via the fallback")
+
+	line := logLineWith(t, buf.String(), "falling back to per-record")
+	require.Contains(t, line, `"level":"warn"`, "the fallback trigger must be visible")
+	require.Contains(t, line, `"base_index":0`, "with the batch's base index")
+}
+
+// Q10 — A BULK IMPORT LEAVES A DURABLE COMPLETION SUMMARY. SubmitImportBatch returned
+// its totals to the CLI (stdout) without logging them, so smd.log could not tell a
+// completed import from an interrupted one — and for a restore that summary is the
+// record of what was recovered.
+func TestSubmitImportBatch_LogsCompletionSummary(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	buf := logbuf(s)
+
+	// Two unique + one duplicate (fanoutRec fixes band/mode/date/time, so a repeated
+	// call is a dedupe-key collision).
+	recs := []adif.Record{fanoutRec("K1AAA"), fanoutRec("K2BBB"), fanoutRec("K1AAA")}
+	res, err := s.SubmitImportBatch(context.Background(), lbID, recs, nil, 0, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, res.Stored)
+	require.Equal(t, 1, res.Duplicate)
+
+	line := logLineWith(t, buf.String(), "bulk import complete")
+	require.Contains(t, line, `"level":"info"`)
+	require.Contains(t, line, `"stored":2`)
+	require.Contains(t, line, `"duplicate":1`)
+	require.Contains(t, line, `"errored":0`)
+}

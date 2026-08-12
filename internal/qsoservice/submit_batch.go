@@ -108,6 +108,17 @@ func (s *Service) SubmitImportBatch(
 				Msg("contacted_station upsert failed (best-effort, import)")
 		}
 	}
+
+	// Durable completion summary: the CLI's terminal totals go to stdout, so without
+	// this smd.log cannot tell a completed bulk import from one interrupted mid-run —
+	// and for a restore that summary is the record of what was recovered (Q10).
+	s.Logger.InfoWith().
+		Int64("logbook_id", logbookID).
+		Int("records", len(recs)).
+		Int("stored", res.Stored).
+		Int("duplicate", res.Duplicate).
+		Int("errored", len(res.Errors)).
+		Msg("bulk import complete")
 	return res, nil
 }
 
@@ -185,6 +196,11 @@ func (s *Service) importBatch(
 			qsoID, ierr := s.DB.InsertQsoTx(ctx, tx, p.qso)
 			if ierr != nil {
 				s.rollbackTx(tx, op)
+				// Record why the efficient batch path failed before dropping to
+				// per-record inserts — otherwise a systematic cause (a constraint, a
+				// schema drift) is invisible and reads only as "imports are slow" (Q8).
+				s.Logger.WarnWith().Err(ierr).Int("base_index", baseIndex).Int("index", p.idx).
+					Msg("import batch QSO insert failed; falling back to per-record inserts")
 				return s.importBatchFallback(ctx, logbookID, batch, baseIndex, forwardTo, res)
 			}
 			for _, fwd := range forwarders {
@@ -193,6 +209,9 @@ func (s *Service) importBatch(
 				}
 				if uerr := s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type, origin.Import); uerr != nil {
 					s.rollbackTx(tx, op)
+					s.Logger.WarnWith().Err(uerr).Int("base_index", baseIndex).Int("index", p.idx).
+						Str("forwarder", fwd.Name).
+						Msg("import batch upload-queue insert failed; falling back to per-record inserts")
 					return s.importBatchFallback(ctx, logbookID, batch, baseIndex, forwardTo, res)
 				}
 			}

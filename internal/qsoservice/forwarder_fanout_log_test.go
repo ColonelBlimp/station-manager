@@ -96,3 +96,37 @@ func TestDelete_QsoSoftDeletedNamesForwarderFanOut(t *testing.T) {
 	require.Contains(t, line, "clublog")
 	require.Contains(t, line, "qrz")
 }
+
+// Q9 — A FORCED DEDUPE BYPASS AND THE SUBMISSION SOURCE ARE RECORDED ON "QSO stored".
+//
+// force skips the duplicate check entirely — a core storage invariant deliberately
+// bypassed — and the API access log cannot fill it in (RawQuery is deliberately not
+// logged, a credential-leak defence), so the flag has to ride the QSO line. Directly
+// feeds the FT8 duplicate-QSO item: force carries the operator's "this repeat is
+// deliberate" intent, and a deliberate repeat was byte-identical to a first contact.
+
+func TestSubmit_QsoStoredRecordsForcedBypass(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	buf := logbuf(s)
+
+	_, err := s.Submit(context.Background(), lbID, fanoutRec("K1AAA"), true) // force = true
+	require.NoError(t, err)
+
+	line := logLineWith(t, buf.String(), "QSO stored")
+	require.Contains(t, line, `"forced":true`, "a deliberate dedupe bypass must be recorded")
+	require.Contains(t, line, `"source":"live"`, "a live submit is tagged live")
+}
+
+func TestSubmit_QsoStoredNonForcedImportSource(t *testing.T) {
+	s := newTestService(t)
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	buf := logbuf(s)
+
+	_, err := s.SubmitImport(context.Background(), lbID, fanoutRec("K1AAA"), false, nil) // force=false, import
+	require.NoError(t, err)
+
+	line := logLineWith(t, buf.String(), "QSO stored")
+	require.Contains(t, line, `"forced":false`, "an ordinary submit records forced=false, not a missing field")
+	require.Contains(t, line, `"source":"import"`, "an import is tagged import")
+}

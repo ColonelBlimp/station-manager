@@ -497,6 +497,14 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to commit transaction")
 	}
 
+	// forced records the deliberate dedupe bypass (force skips the duplicate check
+	// entirely — a core storage invariant), and source distinguishes a live QSO from an
+	// import; neither is otherwise recoverable (the access log drops RawQuery, a
+	// credential-leak defence). Feeds the FT8 deliberate-vs-accidental duplicate item (Q9).
+	source := "live"
+	if isImport {
+		source = "import"
+	}
 	s.Logger.InfoWith().
 		Int64("qso_id", qsoID).
 		Str("uuid", qso.UUID).
@@ -508,6 +516,8 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		Str("band", qso.QsoDetails.Band).
 		Str("mode", qso.QsoDetails.Mode).
 		Strs("forwarded_to", forwardedTo).
+		Bool("forced", force).
+		Str("source", source).
 		Msg("QSO stored")
 
 	s.Hub.Publish(events.NameQsoStored, events.QsoStoredPayload{
