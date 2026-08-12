@@ -49,9 +49,14 @@ const (
 // Loss reasons and the slice's only remote status (§4.1 three-valued
 // taxonomy: everything dropped locally in this slice was never offered).
 const (
-	lossReasonCap      = "cap"
-	lossReasonWriter   = "writer_error"
-	remoteNeverOffered = "never_offered"
+	lossReasonCap    = "cap"
+	lossReasonWriter = "writer_error"
+	// lossReasonMeasurement (L2): a slot dropped because a measurement REQUIRED
+	// to authorize the write was unknown — the archive could not be measured, so
+	// fail-closed. Distinct from cap (measured, genuinely full) and writer_error
+	// (the write itself failed): the confusable state this class exists to break.
+	lossReasonMeasurement = "measurement_error"
+	remoteNeverOffered    = "never_offered"
 )
 
 const slotDuration = 15 * time.Second
