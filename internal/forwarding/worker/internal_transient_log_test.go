@@ -14,24 +14,37 @@ import (
 
 // F5 — internally-caused transients (a DB fetch fault, not the forwarder) reach
 // markTransientInternal, which NEVER runs persistOutcome/logAttempt, so they left no
-// trace at all — and last_error self-erases on any later success. Mirror the
-// forwarder-caused path's severity: Info for a scheduled retry, Warn for exhaustion.
-func TestMarkTransientInternal_LogsRetryAndExhaustion(t *testing.T) {
-	h, buf := captureHarness(t)
-	qsoID := h.seedLogbookAndQso()
-	h.enqueueUpload(qsoID, "stub", stub.Type, action.Insert)
-	row := h.fetchUpload(qsoID) // Attempts = 0
+// trace at all. The line must reflect what ACTUALLY persisted (codex 63f29f0b P2): only
+// a committed (dispPersisted) transition earns it — a claimed (in_progress) row commits;
+// an unclaimed (pending) row re-arms and must NOT be logged as retried/failed.
 
+// claimOne claims the single pending upload for the stub forwarder, returning the
+// in_progress row (so a subsequent mark* actually commits).
+func claimOne(t *testing.T, h *testHarness) types.QsoUpload {
+	t.Helper()
+	rows, err := h.db.ClaimPendingUploadsWithContext(context.Background(), "stub", 10)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("claimed %d rows, want 1", len(rows))
+	}
+	return rows[0]
+}
+
+func TestMarkTransientInternal_CommittedRetryLogsInfo(t *testing.T) {
+	h, buf := captureHarness(t)
+	q := h.seedLogbookAndQso()
+	h.enqueueUpload(q, "stub", stub.Type, action.Insert)
 	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
 	if err != nil {
 		t.Fatalf("new worker: %v", err)
 	}
 
-	// Attempts 0 → below the cap → schedules a retry → Info, carrying the cause.
-	w.markTransientInternal(context.Background(), row, stderrors.New("db fetch boom"))
+	w.markTransientInternal(context.Background(), claimOne(t, h), stderrors.New("db fetch boom"))
 	retry := withMessage(t, buf, "forwarding: internal transient — will retry")
 	if len(retry) != 1 {
-		t.Fatalf("internal-retry records = %d, want 1\n%s", len(retry), buf.String())
+		t.Fatalf("committed-retry records = %d, want 1\n%s", len(retry), buf.String())
 	}
 	if retry[0]["level"] != "info" {
 		t.Errorf("retry level = %v, want info", retry[0]["level"])
@@ -39,16 +52,46 @@ func TestMarkTransientInternal_LogsRetryAndExhaustion(t *testing.T) {
 	if e, _ := retry[0]["error"].(string); !strings.Contains(e, "boom") {
 		t.Errorf("retry line must carry the internal cause; error = %v", retry[0]["error"])
 	}
+}
 
-	// Attempts = MaxAttempts-1 → next attempt hits the cap → terminal → Warn.
-	row.Attempts = int64(defaultCfg("stub").Retry.MaxAttempts - 1)
+func TestMarkTransientInternal_CommittedExhaustionLogsWarn(t *testing.T) {
+	h, buf := captureHarness(t)
+	q := h.seedLogbookAndQso()
+	h.enqueueUpload(q, "stub", stub.Type, action.Insert)
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	row := claimOne(t, h)
+	row.Attempts = int64(defaultCfg("stub").Retry.MaxAttempts - 1) // next attempt hits the cap
 	w.markTransientInternal(context.Background(), row, stderrors.New("db still down"))
 	exh := withMessage(t, buf, "forwarding: internal transient exhausted — row failed")
 	if len(exh) != 1 {
-		t.Fatalf("internal-exhausted records = %d, want 1\n%s", len(exh), buf.String())
+		t.Fatalf("committed-exhaustion records = %d, want 1\n%s", len(exh), buf.String())
 	}
 	if exh[0]["level"] != "warn" {
 		t.Errorf("exhausted level = %v, want warn", exh[0]["level"])
+	}
+}
+
+// The P2 pin: an unclaimed (pending) row makes markTransientRetry RE-ARM — the
+// transition never commits and the row will upload again — so no "will retry" line
+// may be written. Before the fix the line was written before the persist call.
+func TestMarkTransientInternal_ReArmedTransitionIsNotLogged(t *testing.T) {
+	h, buf := captureHarness(t)
+	q := h.seedLogbookAndQso()
+	h.enqueueUpload(q, "stub", stub.Type, action.Insert)
+	w, err := New(defaultCfg("stub"), buildStub(t, stub.ModeAlwaysSuccess, 0), h.db, h.logger, h.hub)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+
+	// h.fetchUpload returns the PENDING row (never claimed), so markTransientRetry
+	// affects 0 rows and re-arms.
+	w.markTransientInternal(context.Background(), h.fetchUpload(q), stderrors.New("db boom"))
+	if got := withMessage(t, buf, "forwarding: internal transient — will retry"); len(got) != 0 {
+		t.Fatalf("a re-armed transition must NOT log a committed retry; got %d lines\n%s", len(got), buf.String())
 	}
 }
 

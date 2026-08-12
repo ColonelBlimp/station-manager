@@ -247,11 +247,16 @@ only in the terminal or the journal.
 
 ### F5. Internally-caused transients enter the retry machine silently — Tier 1
 
-> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** `markTransientInternal` now
-> mirrors the forwarder-caused path's severity: Info "internal transient — will retry"
-> (with the cause + retry_in) below the cap, Warn "internal transient exhausted — row
-> failed" at the cap. Test `TestMarkTransientInternal_LogsRetryAndExhaustion`;
-> reversion-proved.
+> ✅ **FIXED 2026-08-12** (committed `63f29f0b`; **P2 correction in the working tree**).
+> `markTransientInternal` mirrors the forwarder-caused severity: Info "internal transient
+> — will retry" below the cap, Warn "internal transient exhausted — row failed" at it.
+> **Corrected after a clean-room P2 (codex `63f29f0b`):** the line is written ONLY after a
+> committed (`dispPersisted`) transition — a re-arm leaves the row pending (it uploads
+> again) and a persist failure is logged by `markFailed`/`markTransientRetry`, so logging
+> ahead of the write durably asserted a transition that never happened (same trap
+> `persistOutcome` avoids). F7 got the identical gating. Tests:
+> `TestMarkTransientInternal_{CommittedRetryLogsInfo,CommittedExhaustionLogsWarn,ReArmedTransitionIsNotLogged}`;
+> reversion-proved (the re-armed case fails against the pre-correction commit).
 
 `markTransientInternal` (`worker.go:475-484`) has **zero log calls**. It is reached from
 the three fetch-failure sites (`:286`, `:310`, `:332`) and either schedules a retry or —

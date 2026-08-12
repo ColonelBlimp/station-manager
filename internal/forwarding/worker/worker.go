@@ -336,14 +336,19 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 	// the same question qsoservice Q5 leaves open from the other end (F7). Warn,
 	// mirroring the terminal Warn the persistOutcome path emits.
 	failGone := func(reason string) {
-		w.logger.WarnWith().
-			Str("forwarder", w.cfg.Name).
-			Int64("upload_id", row.ID).
-			Int64("qso_id", row.QsoID).
-			Str("action", act.String()).
-			Str("reason", reason).
-			Msg("forwarding: QSO gone before forwarding — upload terminally failed")
-		_ = w.markFailed(ctx, row, reason)
+		// Persist first; log only a COMMITTED terminal transition (codex 63f29f0b P2) —
+		// a persist failure is logged by markFailed, and a re-arm leaves the row pending
+		// (it will forward again), so the "terminally failed" line must not run ahead of
+		// the write that makes it true.
+		if w.markFailed(ctx, row, reason) == dispPersisted {
+			w.logger.WarnWith().
+				Str("forwarder", w.cfg.Name).
+				Int64("upload_id", row.ID).
+				Int64("qso_id", row.QsoID).
+				Str("action", act.String()).
+				Str("reason", reason).
+				Msg("forwarding: QSO gone before forwarding — upload terminally failed")
+		}
 	}
 	switch act {
 	case action.Insert:
@@ -603,15 +608,23 @@ func (w *Worker) markTransientInternal(ctx context.Context, row types.QsoUpload,
 			Int64("attempts", nextAttempts).
 			Err(cause)
 	}
+	// Persist FIRST, then log — never before (codex 63f29f0b P2). markFailed /
+	// markTransientRetry can return dispPersistFailed (already logged as an Error there)
+	// or dispRearmed (a concurrent edit re-armed the row, so it stays PENDING and will
+	// upload again). Logging "failed" / "will retry" ahead of the write would durably
+	// assert a transition that never committed — the exact trap persistOutcome/logAttempt
+	// avoids. Only a committed (dispPersisted) transition earns a line.
 	if nextAttempts >= int64(w.cfg.Retry.MaxAttempts) {
-		base(w.logger.WarnWith()).Msg("forwarding: internal transient exhausted — row failed")
-		_ = w.markFailed(ctx, row, "internal: "+errText(cause))
+		if w.markFailed(ctx, row, "internal: "+errText(cause)) == dispPersisted {
+			base(w.logger.WarnWith()).Msg("forwarding: internal transient exhausted — row failed")
+		}
 		return
 	}
 	delay := computeBackoff(nextAttempts, w.cfg.Retry)
 	nextAt := time.Now().Add(delay).Unix()
-	base(w.logger.InfoWith()).Dur("retry_in", delay).Msg("forwarding: internal transient — will retry")
-	_ = w.markTransientRetry(ctx, row, nextAt, "internal: "+errText(cause))
+	if w.markTransientRetry(ctx, row, nextAt, "internal: "+errText(cause)) == dispPersisted {
+		base(w.logger.InfoWith()).Dur("retry_in", delay).Msg("forwarding: internal transient — will retry")
+	}
 }
 
 // reArmed reports whether a completion write was a no-op because a concurrent
