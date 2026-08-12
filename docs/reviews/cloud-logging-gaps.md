@@ -76,6 +76,16 @@ the former for both.
 
 ### [Medium] C3 — Startup and migrations lack a reliable audit trail
 
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** Base logger now carries
+> `version` (every record); `run()` logs a "migrations applied" marker with duration, a
+> "smcloud listening" READY marker AFTER the bind (so a bind failure is no longer
+> confusable with a clean start), and a "smcloud stopped" clean-exit marker; `main()`'s
+> boot-failure path is now a structured, version-stamped slog Error instead of a bare
+> stderr line. Verified by build + vet + the full suite (no new dedicated test — `run()`
+> is the daemon boot loop, and a boot-path harness is disproportionate to a set of
+> logging additions; the changes are additive and low-risk).
+
+
 `cmd/smcloud/main.go:397` and around: the base logger does not carry the build
 version; startup failures are printed as **unstructured stderr** (not through the
 structured logger); migrations record **no applied-version / duration**; `"starting"`
@@ -93,12 +103,26 @@ given application error — unrecoverable.
 
 ### [Medium] C5 — Several authenticated failures lack structured tenant context
 
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** `evidence.go:46` was already
+> done by C1; `handleLogbooks` ("logbooks list failed") and the pre-stream export
+> ("export: snapshot read failed") now carry `tenant_id`. The changed handlers are
+> exercised by the existing server suite (passing); the tenant field is a one-arg
+> addition on an error path a fault-injection seam would be disproportionate to assert.
+
+
 Evidence failures omit tenant + batch size (`internal/cloud/server/evidence.go:46`);
 logbook-list failures omit tenant (`internal/cloud/server/server.go:304`); pre-stream
 export failures omit tenant (`internal/cloud/server/server.go:460`).
 **Confusable state:** which tenant a failure belongs to — not present on the line.
 
 ### [Low] C6 — Standard-library HTTP diagnostics bypass slog
+
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** `http.Server.ErrorLog` is now
+> `slog.NewLogLogger(log.Handler(), slog.LevelError)`, so net/http's transport
+> diagnostics + any escaped panic go through slog (version + structured fields) instead
+> of the default stderr logger. Build-verified (stdlib diagnostics aren't reachable from
+> a unit test).
+
 
 `cmd/smcloud/main.go:454` sets no `http.Server.ErrorLog`, so recovered panics and
 transport diagnostics go to the default unstructured stderr logger. Journald still

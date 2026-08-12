@@ -247,6 +247,12 @@ only in the terminal or the journal.
 
 ### F5. Internally-caused transients enter the retry machine silently — Tier 1
 
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** `markTransientInternal` now
+> mirrors the forwarder-caused path's severity: Info "internal transient — will retry"
+> (with the cause + retry_in) below the cap, Warn "internal transient exhausted — row
+> failed" at the cap. Test `TestMarkTransientInternal_LogsRetryAndExhaustion`;
+> reversion-proved.
+
 `markTransientInternal` (`worker.go:475-484`) has **zero log calls**. It is reached from
 the three fetch-failure sites (`:286`, `:310`, `:332`) and either schedules a retry or —
 at the attempt cap — calls `markFailed`, terminally failing the row.
@@ -305,6 +311,12 @@ looks exactly like a completed upload.
 
 ### F7. Soft-delete and missing-QSO terminal transitions are silent — Tier 2
 
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** The three terminal
+> transitions in `fetchQsoForAction` (soft-deleted-before-insert, delete-supersedes,
+> not-found-for-delete) now log a Warn ("forwarding: QSO gone before forwarding — upload
+> terminally failed") with the reason, via a local closure. Test
+> `TestFetchGone_SoftDeletedInsertLogsTerminal`; reversion-proved.
+
 `fetchQsoForAction:318` and `:322` call `markFailed` with a reason
 (`"qso soft-deleted before insert forwarded"`, `"qso soft-deleted; delete row
 supersedes"`) and **no log line**. `markFailed` reached via `persistOutcome` is preceded
@@ -315,6 +327,15 @@ this QSO never reach QRZ?" has no file answer, which is the same question
 `qsoservice-logging-gaps.md` **Q5** (unrecorded fan-out) leaves open from the other end.
 
 ### F8. A reconcile can partially mutate the queue and then log only "run failed" — Tier 2
+
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** `RunOnce` now records the
+> partial mutation on a failed run: "smcloud reconcile: run failed after partially
+> mutating the queue" (with upserts/deletes counts), so a run that queued 400 upserts
+> then failed no longer logs identically to one that did nothing. Covers both callers
+> (periodic loop + on-demand endpoint). Test
+> `TestReconcileRunOnce_PartialMutationOnFailureIsLogged` via a `runOnceOverride` seam
+> (no natural manifest fixture reaches upserts-committed-then-deletes-fail);
+> reversion-proved.
 
 `reconcile.go:213-227` enqueues upserts, then deletes. If the delete enqueue fails, the
 upserts are **already committed** and `RunOnce` returns the partial summary alongside
@@ -452,11 +473,20 @@ Same shape as **F11**, lower stakes.
 
 ### F15. Worker startup omits the effective retry policy — Tier 3
 
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** The "forwarder worker started"
+> record now carries retry_max_attempts + retry_initial_backoff_sec +
+> retry_max_backoff_sec, so a type default that never appears in config.json is still
+> reconstructable. Test `TestForwarderWorkerStarted_LogsRetryPolicy`; reversion-proved.
+
 `cmd/smd/main.go:1341` records tick and batch but not max attempts or backoff bounds.
 Type defaults come from `RegisterDefaultRetry` and need not appear in `config.json`, so
 later retry behaviour cannot be reconstructed from the log alone.
 
 ### F16. An unrecognised outcome's error is omitted from its own warning — Tier 3
+
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** The unrecognised-Outcome
+> warning now attaches `res.Err` (when present). Test
+> `TestPersistOutcome_UnrecognisedOutcomeLogsError`; reversion-proved.
 
 `worker.go:402-411` logs `outcome` but not `res.Err`, while passing `errText(res.Err)`
 into `markFailed` on the very next line. The cause survives in `last_error` and SSE, so
