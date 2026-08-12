@@ -339,6 +339,12 @@ log line records it, and the caller is told `stored`.
 
 ### Q8. The import batch fallback discards the error that triggered it — Tier 1
 
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** Both fallback triggers in
+> `importBatch` (the QSO-insert `ierr` and the upload-queue `uerr`) now log a Warn with
+> `base_index` + record index before calling `importBatchFallback`. Test
+> `TestSubmitImportBatch_FallbackLogsTriggeringError` (a UUID collision forces the
+> fallback); reversion-proved.
+
 `submit_batch.go:180` and `:188`:
 
 ```go
@@ -366,6 +372,12 @@ every batch looks, in the log, exactly like an import that never had a problem.
 
 ### Q9. A forced dedupe bypass is not recorded — Tier 2
 
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** The "QSO stored" line now
+> carries `forced` (the deliberate dedupe bypass) and `source` (live vs import). Tests
+> `TestSubmit_QsoStoredRecordsForcedBypass` + `TestSubmit_QsoStoredNonForcedImportSource`
+> (forced=true/live and forced=false/import); reversion-proved. Feeds the FT8
+> deliberate-vs-accidental duplicate item.
+
 `submit.go:373` gates the entire dedupe check on `if !force`. With `force` set, the
 duplicate lookup does not run at all — a **core storage invariant is deliberately
 bypassed** — and the `QSO stored` line at `:482` carries no `forced` flag and no
@@ -387,6 +399,11 @@ deliberately never recorded, and lands in a log line that does not mention it.
   are already parameters of `Submit`.
 
 ### Q10. Import and restore have no durable completion summary — Tier 2
+
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** `SubmitImportBatch` now logs
+> an Info "bulk import complete" summary (logbook_id, records, stored, duplicate,
+> errored) before returning. Test `TestSubmitImportBatch_LogsCompletionSummary`;
+> reversion-proved. (Restore's start/completion half was already closed by Q1.)
 
 `SubmitImportBatch` returns its totals at `submit_batch.go:104` without logging them.
 The `smd import` command logs only that it is starting; its terminal summary goes to
