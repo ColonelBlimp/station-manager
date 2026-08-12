@@ -5,9 +5,40 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+// C4 P2 (review 87dae8db) — the access line's `remote` field must not be spoofable. A
+// direct-LAN client is its own peer, so an X-Forwarded-For it supplies is UNTRUSTED and
+// must be ignored (its real RemoteAddr logged); XFF is honored ONLY when the immediate
+// peer is loopback, i.e. the reverse proxy (smcloud binds to 127.0.0.1 behind Caddy).
+// The confusable state this guards: "request came from 203.0.113.7 (a client's spoofed
+// XFF)" vs "request came from 192.168.1.50 (the real LAN peer)".
+func TestClientIP_TrustsForwardedForOnlyFromLoopbackPeer(t *testing.T) {
+	mk := func(remoteAddr, xff string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = remoteAddr
+		if xff != "" {
+			r.Header.Set("X-Forwarded-For", xff)
+		}
+		return r
+	}
+	cases := []struct {
+		name, remote, xff, want string
+	}{
+		{"loopback peer (Caddy) → first XFF hop", "127.0.0.1:5000", "203.0.113.7, 10.0.0.1", "203.0.113.7"},
+		{"ipv6 loopback peer → XFF", "[::1]:5000", "203.0.113.9", "203.0.113.9"},
+		{"direct LAN client's spoofed XFF is ignored → real peer", "192.168.1.50:44321", "1.2.3.4", "192.168.1.50"},
+		{"no XFF, non-loopback → peer host", "192.168.1.50:44321", "", "192.168.1.50"},
+	}
+	for _, c := range cases {
+		if got := clientIP(mk(c.remote, c.xff)); got != c.want {
+			t.Errorf("%s: clientIP = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
 
 // accessLine finds the parsed "http request" access record for the given path.
 func accessLine(t *testing.T, buf *bytes.Buffer, path string) map[string]any {

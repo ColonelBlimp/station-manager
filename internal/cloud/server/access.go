@@ -130,17 +130,27 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 	})
 }
 
-// clientIP returns the caller's address for the access line: the first X-Forwarded-For
-// hop when present (Caddy sets it on the VPS), else RemoteAddr with the port stripped.
+// clientIP returns the caller's address for the access line. X-Forwarded-For is honored
+// ONLY when the immediate peer is loopback — i.e. the reverse proxy (Caddy binds smcloud
+// to 127.0.0.1 and connects from loopback; see docs/smcloud-deploy.md), which sets the
+// real client hop. A direct-LAN client is its OWN peer, so trusting a client-supplied
+// X-Forwarded-For would let it spoof the logged source address and defeat the access
+// log's audit value (review 87dae8db P2). A split-host proxy (smcloud on a LAN interface,
+// Caddy elsewhere) would fall back to logging the proxy's address here — safe, not
+// spoofable, and an explicit trusted-proxy list is a config knob left for that unsupported
+// topology rather than built speculatively.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.IndexByte(xff, ','); i >= 0 {
+				return strings.TrimSpace(xff[:i])
+			}
+			return strings.TrimSpace(xff)
 		}
-		return strings.TrimSpace(xff)
 	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
+	return host
 }
