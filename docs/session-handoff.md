@@ -41,54 +41,42 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-12)
+## Now (as of 2026-08-12, evening)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **NEXT — CONTINUE the logging-gaps cluster (this is the resume task).** Remaining
-  cheap OPEN picks, in order: **forwarding** F5/F7/F8/F15/F16 (clean, same shape as the
-  qso/ft8 fixes) · **cloud C3-C6** (startup/migration audit trail · request-ID
-  correlation · tenant context on auth failures · stdlib-diags→slog) + **C1b** (client
-  quarantine log, `internal/evidence/sync.go`). Then settle the **needs-decision** items
-  WITH the operator (see that bullet). Workflow unchanged: verify each finding vs the
-  code first, TDD (behaviour → RED → code, reversion-proved), commit with NO Claude
-  trailer. FIRST on resume: push the 2 cloud commits (or confirm pushed) · triage
-  `.codex-reviews/` · `gh run list`. Do NOT re-audit from scratch — the per-file
-  DONE/OPEN headers + `backlog.md` RECONCILIATION bullet already hold the open sets.
-- **SHIP-GATE logging-gaps fixes — shipped this session.** Over three sessions the five 2026-08-01
-  audits were reconciled + fixed. **DONE:** bridge · api (A11/A11b/A6) · qsoservice
-  (Q1-Q6, Q8-Q10) · **ft8 14/14** · **cloud C1+C2** (evidence outcome breakdown + gzip
-  flush-failure log, 2026-08-12, all TDD + reversion-proved). **OPEN:** forwarding
-  F5/F7/F8/F15/F16 + F2/F10-F14/F17 (needs-decision) · cloud **C1b** (client quarantine
-  `internal/evidence/sync.go`) + **C3-C6** · needs-decision (api A5/A10/A12 · qsoservice
-  **Q7** · cross-cutting "what a keyed transmission records"). Per-file DONE/OPEN headers
-  in `reviews/*-logging-gaps.md` + the `backlog.md` RECONCILIATION bullet are current.
-- **Commits: operator PUSHED through `305c9fab` (whole session's work incl. the ft8 P2
-  fix); only the 2 cloud C1/C2 commits are unpushed** — `183d8277` fix · `c92f4292` docs.
-  All this session's commits carry NO Claude trailer (operator directive). The old
-  flaky-bridge-test CI red cleared with that push (the de-flake `a4270336` is in it);
-  confirm from `gh run list` OUTPUT, not the exit code.
-- **POWER-CUT stop 2026-08-12 — everything committed + durable.** The `sm-pg` Postgres
-  container is UP (started for the smcloud C1 tests: `podman start sm-pg` to resume,
-  `task db:pg:down` to remove). On resume: triage `.codex-reviews/` (183d8277 + c92f4292
-  reviews likely pending from the slow hook) + `gh run list`, then delete each. Then
-  continue the logging-gaps cluster (top NEXT bullet).
-- **NEEDS-DECISION (operator) items gate the tail:** the cross-cutting "what does a
-  keyed transmission record" (api A10 / bridge B12) · api A5/A12 log-levels ·
-  `forwarding.Result` disposition (F11/F14) · qsoservice Q7 (log the DB error — and
-  should `Restore` also REFUSE, not just write? same class as api A7).
-- **FT8 soak pending — OPERATOR-driven (live TX; I do NOT initiate).** §4/§5 evidence
-  pipeline shipped + both daemons deployed (smcloud `1238` pg-v6, smd `1238`
-  evidence-v5); a run exercises smd capture → smcloud `PUT /v1/evidence`.
-- **PSK Reporter:** awaiting the maintainer (7Q5MLV behind Airtel CGNAT, sub-30s UDP
-  idle → per-TX source-port hop is carrier-side); gates the P1 stable-obs-ID item
-  (`pskreporter/service.go:141`).
+- **RESUME TASK — L2 Stage 2 (evidence retention measurement, the safety-critical
+  write-gate wiring).** Full decisions + the 6-step plan are in the L2 **IN PROGRESS**
+  box in `reviews/internal-codebase-logging-gaps.md` — read it first; the operator's
+  Q1 (uniformly FAIL-CLOSED, loss class `measurement_error`, status usage UNKNOWN) and
+  Q2 (edge + 5-min write-driven heartbeat) are authoritative, do NOT re-derive. **Stage 1
+  is DONE but UNCOMMITTED WIP** in the working tree — `internal/evidence/retentionhealth.go`
+  (the degraded tracker) + `retentionhealth_test.go` (3 tests, green + reversion-proved) +
+  the `lossReasonMeasurement` const in `service.go` (M). Not committable alone (unused
+  until Stage 2). Leave it; Stage 2 + Stage 1 land as ONE commit.
+- **This session SHIPPED (committed + PUSHED through L1 `b99b7bcd`):** cloud logging cluster **COMPLETE**
+  (C1–C6 + C1b) · forwarding F5/F7/F8/F15/F16 (+ a codex P2 fix) · **L1** — logging can
+  now report failure of its own file sink (health-tracking fan-out + `/v1/healthz`
+  `logging:degraded`). The whole-`internal/` audit `reviews/internal-codebase-logging-gaps.md`
+  (L1–L13 / H1–H4, release-gate ordered) is now the AUTHORITATIVE logging list: **L1 done,
+  L2 in progress, L3 is the next P0** (audio + evidence queue-loss misclassified).
+- **All this session's commits PUSHED; `origin/main` == HEAD == `b99b7bcd` (L1), and CI run
+  `31617186294` is GREEN (conclusion=success, verified from output).** `main` is clean — no
+  CI action needed on resume; go straight to L2 Stage 2.
+- **Codex reviews:** all triaged + DELETED this session (`.codex-reviews/` empty). The
+  hook is SLOW (~1-2 min) and once got killed by a 2-min Bash timeout mid-run — if a
+  commit's review doc is missing, re-run `bash .githooks/post-commit` (reviews HEAD) in
+  the BACKGROUND. On resume: triage any `.codex-reviews/` + `gh run list` (verdict from
+  OUTPUT, not exit code), then delete each.
+- **NEEDS-DECISION (operator) items still gate the tail:** cross-cutting "what a keyed
+  transmission records" (api A10 / bridge B12) · api A5/A12 log-levels ·
+  `forwarding.Result` disposition (F11/F14) · qsoservice Q7.
 - **Do-not:** never initiate FT8/TX or touch the live TX path (sink 66 / rig cmds /
-  power) without per-occasion agreement. Codex hook auto-reviews every commit (SLOW,
-  ~1-2 min) → triage `.codex-reviews/` + `gh run list` on resume, then delete each.
+  power) without per-occasion agreement. All commits carry NO Claude trailer (operator
+  directive). `sm-pg` Postgres container is needed for smcloud tests (`podman start sm-pg`).
 
 ## Current state (as of 2026-08-10)
 

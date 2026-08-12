@@ -100,6 +100,50 @@ event reaching the later console writer.
 
 ### L2. Evidence retention and capacity decisions silently swallow SQL/filesystem failures
 
+> 🚧 **IN PROGRESS 2026-08-12 (Stage 1 done, uncommitted; Stage 2 planned).**
+> Verified in code: `freelistBytes` (retention.go:124) returns 0 on PRAGMA error
+> → fail-closed drop blamed on capacity; `metadataBytes` (138) discards errors;
+> `physicalUsage` (service.go:862) ignores Stat errors → underestimate →
+> fail-OPEN (opposite direction); `compactKind` (459–544) silent-`return`s on
+> Query/Scan/Marshal/Begin/INSERT/delete + discards the commit error.
+>
+> **Operator decisions (2026-08-12), authoritative — do not re-derive:**
+> **Q1 uniformly FAIL-CLOSED.** If ANY measurement required to authorize a slot
+> write is unknown: do not write the slot; classify the loss explicitly as
+> `measurement_error` (NOT `cap`, NOT `writer_error`); continue FT8 decoding;
+> accumulate loss in memory if the DB cannot safely record it, persist after
+> recovery; report usage/capacity as UNKNOWN in status (never zero); treat a
+> missing optional `-wal`/`-shm` as 0, but every other stat/query failure as an
+> error. **Q2 edge + 5-min WRITE-DRIVEN heartbeat** (mirrors L1): log on entering
+> degraded; re-warn only when ≥5 min elapsed on a subsequent write attempt;
+> refresh the stored last error between beats; log recovery after the FIRST
+> complete successful measurement; include outage duration, affected measurement,
+> dropped-since-last-notice and total-dropped-this-incident.
+>
+> **Stage 1 DONE (uncommitted WIP, not committable alone — unused until Stage 2):**
+> `internal/evidence/retentionhealth.go` — the degraded-state tracker
+> (`retentionHealth`: `fail`/`dropped`/`ok`/`isDegraded`, 5-min heartbeat), plus
+> `lossReasonMeasurement = "measurement_error"` in service.go. 3 unit tests
+> (`retentionhealth_test.go`), deterministic (fake clock + `logging.NewForWriter`
+> capture), green + reversion-proved.
+>
+> **Stage 2 TODO (the safety-critical wiring):** (1) `physicalUsage`/
+> `freelistBytes`/`metadataBytes` → `(int64, error)`, ENOENT on `-wal`/`-shm`
+> stays 0; add house-style test hooks (like `writerDelay`) to force each failure.
+> (2) Wire the tracker onto the Service at Start (db path + 5-min beat). (3)
+> `processSlot` gate fails closed: measurement error → drop + `accumulateLocked(sc,
+> lossReasonMeasurement)` (reuses the in-memory accumulator that already persists
+> on recovery via `closeLossLocked`) + `retHealth.dropped()` then `.fail(op,err)`;
+> decoding continues; a complete success → `.ok()`. Same for `tryFreeSpace`/
+> `purgeChunk`. (4) `Status.UsageBytes` → `*int64` (JSON `null` when unmeasurable;
+> nothing consumes it today — grepped) + retention `MetadataBytes` likewise. (5)
+> `compactKind` returns its error; `compactOnce` routes failures through the
+> tracker (`operation:"compaction"`) — closes AC4. (6) Integration tests: forced
+> measurement failure → assert slot dropped + loss row reason `measurement_error`
+> + decoding continues + status usage null + degraded Warn + recovery line.
+> ATDD header for the tracker already in `retentionhealth_test.go`.
+
+
 The evidence subsystem can silently convert measurement failures into valid-looking
 zeros:
 
