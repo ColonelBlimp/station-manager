@@ -48,8 +48,17 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **SHIP-GATE logging-gaps fixes — shipped this session (the fresh-audit note above
-  SUPERSEDES the old "do NOT re-audit").** Over three sessions the five 2026-08-01
+- **NEXT — CONTINUE the logging-gaps cluster (this is the resume task).** Remaining
+  cheap OPEN picks, in order: **forwarding** F5/F7/F8/F15/F16 (clean, same shape as the
+  qso/ft8 fixes) · **cloud C3-C6** (startup/migration audit trail · request-ID
+  correlation · tenant context on auth failures · stdlib-diags→slog) + **C1b** (client
+  quarantine log, `internal/evidence/sync.go`). Then settle the **needs-decision** items
+  WITH the operator (see that bullet). Workflow unchanged: verify each finding vs the
+  code first, TDD (behaviour → RED → code, reversion-proved), commit with NO Claude
+  trailer. FIRST on resume: push the 2 cloud commits (or confirm pushed) · triage
+  `.codex-reviews/` · `gh run list`. Do NOT re-audit from scratch — the per-file
+  DONE/OPEN headers + `backlog.md` RECONCILIATION bullet already hold the open sets.
+- **SHIP-GATE logging-gaps fixes — shipped this session.** Over three sessions the five 2026-08-01
   audits were reconciled + fixed. **DONE:** bridge · api (A11/A11b/A6) · qsoservice
   (Q1-Q6, Q8-Q10) · **ft8 14/14** · **cloud C1+C2** (evidence outcome breakdown + gzip
   flush-failure log, 2026-08-12, all TDD + reversion-proved). **OPEN:** forwarding
@@ -65,8 +74,8 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 - **POWER-CUT stop 2026-08-12 — everything committed + durable.** The `sm-pg` Postgres
   container is UP (started for the smcloud C1 tests: `podman start sm-pg` to resume,
   `task db:pg:down` to remove). On resume: triage `.codex-reviews/` (183d8277 + c92f4292
-  reviews likely pending from the slow hook) + `gh run list`, then delete each. Then the
-  operator's fresh whole-`internal/` logging audit is the next task (top bullet).
+  reviews likely pending from the slow hook) + `gh run list`, then delete each. Then
+  continue the logging-gaps cluster (top NEXT bullet).
 - **NEEDS-DECISION (operator) items gate the tail:** the cross-cutting "what does a
   keyed transmission record" (api A10 / bridge B12) · api A5/A12 log-levels ·
   `forwarding.Result` disposition (F11/F14) · qsoservice Q7 (log the DB error — and
