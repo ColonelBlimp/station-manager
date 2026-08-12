@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -99,6 +100,40 @@ func TestEvidenceHTTP_MixedBatchOutcomes(t *testing.T) {
 	}
 	if resp.Outcomes[1].Outcome != evidencewire.OutcomePermanentReject {
 		t.Fatalf("H2/H3: reserved-kind row = %+v, want per-row permanent_reject, not a request failure", resp.Outcomes[1])
+	}
+}
+
+// C1 — the per-row outcome breakdown is logged. A batch with rejects/tombstones/
+// already-present returns 200 exactly like a fully-accepted one; without this line
+// the server (and the proxy) cannot tell "all stored" from "some quarantined".
+func TestEvidenceHTTP_LogsOutcomeBreakdown(t *testing.T) {
+	var logBuf bytes.Buffer
+	ts, _, _ := testServerLogged(t, slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	now := time.Now()
+	// One accepted (coverage) + one permanent_reject (reserved "retention" kind), the
+	// same mix as the H2 outcome test.
+	body := `{"records":[` +
+		coverageRecJSON(t, utils.NewUUIDv7At(now), 1) + `,` +
+		`{"kind":"retention","uuid":"` + utils.NewUUIDv7At(now) + `","digest_v":1,"digest":"` + strings.Repeat("a", 64) + `","payload":{"x":1}}` +
+		`]}`
+	if status, respBody := putEvidence(t, ts, testToken, body); status != http.StatusOK {
+		t.Fatalf("fixture: status = %d (%s), want 200", status, respBody)
+	}
+
+	line := ""
+	for _, l := range strings.Split(logBuf.String(), "\n") {
+		if strings.Contains(l, "evidence batch stored") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatalf("no 'evidence batch stored' log line; log:\n%s", logBuf.String())
+	}
+	for _, want := range []string{`"rows":2`, `"accepted":1`, `"permanent_reject":1`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("outcome-breakdown line missing %s; line:\n%s", want, line)
+		}
 	}
 }
 

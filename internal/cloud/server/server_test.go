@@ -34,10 +34,10 @@ const (
 	testVersion = "test-version"
 )
 
-// testServer stands up a clean-schema store + two provisioned tenants and
-// returns the HTTP test server plus the primary tenant's id. Skips without a
-// reachable Postgres.
-func testServer(t *testing.T) (*httptest.Server, *store.Store, int64) {
+// testServerLogged stands up a clean-schema store + two provisioned tenants with an
+// INJECTED logger (so a test can assert on what the server writes) and returns the
+// HTTP test server plus the primary tenant's id. Skips without a reachable Postgres.
+func testServerLogged(t *testing.T, log *slog.Logger) (*httptest.Server, *store.Store, int64) {
 	t.Helper()
 	dsn, skip := store.ResolveTestDSN()
 	if skip != "" {
@@ -77,7 +77,7 @@ func testServer(t *testing.T) (*httptest.Server, *store.Store, int64) {
 		t.Fatalf("EnsureTenant(other): %v", err)
 	}
 
-	srv := New(st, db, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	srv := New(st, db, log,
 		map[string]int64{testToken: tenant, otherToken: other}, testVersion, 0)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
@@ -89,6 +89,13 @@ func testServer(t *testing.T) (*httptest.Server, *store.Store, int64) {
 		_ = db.Close()
 	})
 	return ts, st, tenant
+}
+
+// testServer is the common case: the logged variant with a quiet stderr logger, for
+// every test that does not assert on log output.
+func testServer(t *testing.T) (*httptest.Server, *store.Store, int64) {
+	t.Helper()
+	return testServerLogged(t, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
 }
 
 // smcloudTestLockID is the advisory-lock key every smcloud test-DB user takes

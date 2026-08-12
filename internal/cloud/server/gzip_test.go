@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	stderrors "errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +14,44 @@ import (
 	"testing"
 	"time"
 )
+
+// flushFailWriter is a ResponseWriter whose body Write always fails, so the deferred
+// gz.Close() (which flushes the buffer + writes the gzip footer) errors — the C2
+// truncation case.
+type flushFailWriter struct{ header http.Header }
+
+func (f *flushFailWriter) Header() http.Header {
+	if f.header == nil {
+		f.header = http.Header{}
+	}
+	return f.header
+}
+func (f *flushFailWriter) WriteHeader(int)           {}
+func (f *flushFailWriter) Write([]byte) (int, error) { return 0, stderrors.New("connection reset") }
+
+// TestGzip_FlushFailureIsLogged pins C2: a gzip flush that fails at Close means the
+// client got a TRUNCATED body, yet handlers log the response as served before this
+// deferred flush runs. The failure must be recorded, else a broken download and a
+// clean one are the same log.
+func TestGzip_FlushFailureIsLogged(t *testing.T) {
+	var logBuf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	h := gzipMiddleware(log, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":"a body that must flush through gzip.Close"}`))
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/export", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	h.ServeHTTP(&flushFailWriter{}, req)
+
+	out := logBuf.String()
+	if !strings.Contains(out, "gzip response flush failed") {
+		t.Fatalf("a failed gzip flush must be logged (C2); log:\n%s", out)
+	}
+	if !strings.Contains(out, "/v1/export") {
+		t.Errorf("the flush-failure log must name the path; log:\n%s", out)
+	}
+}
 
 // versionServer builds a Server sufficient for the /v1/version route — no
 // store or DB, so the gzip negotiation tests run without Postgres.
@@ -170,10 +210,11 @@ func TestGzip_RefusedQValueGetsIdentity(t *testing.T) {
 // WriteTimeout — truncating a slow full-logbook restore mid-JSON.
 func TestGzip_PreservesResponseController(t *testing.T) {
 	var rcErr error
-	h := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rcErr = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(time.Minute))
-		w.WriteHeader(http.StatusOK)
-	}))
+	h := gzipMiddleware(slog.New(slog.NewTextHandler(io.Discard, nil)),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rcErr = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(time.Minute))
+			w.WriteHeader(http.StatusOK)
+		}))
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

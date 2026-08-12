@@ -86,7 +86,7 @@ func (s *Server) Handler() http.Handler {
 	// gzip.go); the concurrency limiter sits OUTERMOST so a rejected request
 	// costs a 503 write and nothing else — no gzip writer, no negotiation,
 	// no handler goroutine pile-up (see limit.go).
-	return limitMiddleware(gzipMiddleware(mux), s.maxConcurrent)
+	return limitMiddleware(gzipMiddleware(s.log, mux), s.maxConcurrent)
 }
 
 // ---- transport helpers ------------------------------------------------------

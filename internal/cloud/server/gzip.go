@@ -2,6 +2,7 @@ package server
 
 import (
 	"compress/gzip"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,7 +21,7 @@ import (
 //
 // Vary: Accept-Encoding is emitted on EVERY response (compressed or not) so a
 // cache never serves one negotiation's body to the other's request.
-func gzipMiddleware(next http.Handler) http.Handler {
+func gzipMiddleware(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Accept-Encoding")
 		switch negotiateEncoding(r.Header.Get("Accept-Encoding")) {
@@ -34,7 +35,17 @@ func gzipMiddleware(next http.Handler) http.Handler {
 		case encGzip:
 			w.Header().Set("Content-Encoding", "gzip")
 			gz := gzip.NewWriter(w)
-			defer func() { _ = gz.Close() }()
+			defer func() {
+				// Close flushes the buffered data + writes the gzip footer; a failure
+				// here means the client got a TRUNCATED body — yet a handler like export
+				// logs the response as served BEFORE this deferred flush runs, so without
+				// recording the failure a broken download and a clean one produce the same
+				// log (C2). Warn correlates with the handler's success line by path + time.
+				if err := gz.Close(); err != nil {
+					log.Warn("gzip response flush failed; client received a truncated body",
+						"path", r.URL.Path, "err", err.Error())
+				}
+			}()
 			next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, gz: gz}, r)
 		default:
 			// encIdentity — and the safe fallback for any future negotiation
