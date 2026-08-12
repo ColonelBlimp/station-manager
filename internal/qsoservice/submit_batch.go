@@ -184,7 +184,7 @@ func (s *Service) importBatch(
 		for _, p := range toInsert {
 			qsoID, ierr := s.DB.InsertQsoTx(ctx, tx, p.qso)
 			if ierr != nil {
-				_ = tx.Rollback()
+				s.rollbackTx(tx, op)
 				return s.importBatchFallback(ctx, logbookID, batch, baseIndex, forwardTo, res)
 			}
 			for _, fwd := range forwarders {
@@ -192,7 +192,7 @@ func (s *Service) importBatch(
 					continue
 				}
 				if uerr := s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type, origin.Import); uerr != nil {
-					_ = tx.Rollback()
+					s.rollbackTx(tx, op)
 					return s.importBatchFallback(ctx, logbookID, batch, baseIndex, forwardTo, res)
 				}
 			}

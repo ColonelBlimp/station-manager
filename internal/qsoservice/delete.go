@@ -53,29 +53,33 @@ func (s *Service) Delete(ctx context.Context, existing types.Qso, src source.Sou
 
 	logbookID, err := s.DB.DeleteQsoByIDTx(ctx, tx, existing.ID)
 	if err != nil {
-		_ = tx.Rollback()
+		s.rollbackTx(tx, op)
 		// Pass through ErrNotFound as-is so callers (handler layer) can
 		// translate it to 404 via stderr.Is.
 		return err
 	}
 
+	// Destinations this delete was queued to — recorded on "QSO soft-deleted" for the
+	// same reason as submit's "QSO stored" (Q5). Non-nil so an empty fan-out logs [].
+	forwardedTo := make([]string, 0, len(s.Config.Forwarders()))
 	for _, fwd := range s.Config.Forwarders() {
 		if !shouldEnqueue(fwd, action.Delete) {
 			continue
 		}
 		if err = s.DB.InsertQsoUploadTx(ctx, tx, existing.ID, action.Delete, fwd.Name, fwd.Type, origin.Edit); err != nil {
-			_ = tx.Rollback()
+			s.rollbackTx(tx, op)
 			return errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
 		}
+		forwardedTo = append(forwardedTo, fwd.Name)
 	}
 
 	beforeImage, err := json.Marshal(existing)
 	if err != nil {
-		_ = tx.Rollback()
+		s.rollbackTx(tx, op)
 		return errors.New(op).WithErr(err).WithMsg("failed to marshal pre-delete snapshot")
 	}
 	if err = s.DB.InsertQsoHistoryTx(ctx, tx, existing.UUID, action.Delete, src, beforeImage); err != nil {
-		_ = tx.Rollback()
+		s.rollbackTx(tx, op)
 		return errors.New(op).WithErr(err).WithMsg("failed to insert qso_history row")
 	}
 
@@ -88,6 +92,7 @@ func (s *Service) Delete(ctx context.Context, existing types.Qso, src source.Sou
 		Str("call", existing.ContactedStation.Call).
 		Str("qso_date", existing.QsoDetails.QsoDate).
 		Str("time_on", existing.QsoDetails.TimeOn).
+		Strs("forwarded_to", forwardedTo).
 		Msg("QSO soft-deleted")
 
 	s.Hub.Publish(events.NameQsoDeleted, events.QsoDeletedPayload{

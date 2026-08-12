@@ -58,7 +58,7 @@ func (s *Service) EnqueueStampSync(ctx context.Context, qsoIDs []int64) (int, er
 	for _, fc := range targets {
 		for _, qsoID := range qsoIDs {
 			if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Update, fc.Name, fc.Type, origin.StampSync); err != nil {
-				_ = tx.Rollback()
+				s.rollbackTx(tx, op)
 				return 0, errors.New(op).WithErr(err).WithMsg("insert mirror upload-queue row")
 			}
 			n++
@@ -68,7 +68,12 @@ func (s *Service) EnqueueStampSync(ctx context.Context, qsoIDs []int64) (int, er
 		return 0, errors.New(op).WithErr(err).WithMsg("commit transaction")
 	}
 
-	s.Logger.DebugWith().
+	// Info, not Debug (Q4): this is the built half of the smcloud
+	// stamp-drift/reconcile-bandwidth item, and its failure mode is silent
+	// non-firing that returns reconcile to the expensive full-manifest path. Its
+	// volume is bounded by stamp events (a handful of rows a day), not traffic, so
+	// it belongs at the default level where "is the cheap path holding?" is answerable.
+	s.Logger.InfoWith().
 		Int("queued", n).
 		Int("qsos", len(qsoIDs)).
 		Msg("stamp sync: re-enqueued revision-bumped rows to mirror forwarder(s)")

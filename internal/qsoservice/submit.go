@@ -391,7 +391,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 
 	qsoID, err := s.DB.InsertQsoTx(ctx, tx, qso)
 	if err != nil {
-		_ = tx.Rollback()
+		s.rollbackTx(tx, op)
 
 		// The logbook was deleted between the preflight above and the insert
 		// (InsertQsoTx re-checks the parent inside the tx — 2026-07-22 sqlite
@@ -461,6 +461,12 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 	// Inside the same transaction as the QSO insert per the one-fails-all-fail
 	// invariant (see docs/v2-design/forwarding.md §1). No enabled forwarders →
 	// the loop is a no-op and only the QSO row is committed.
+	// Names of the forwarders this QSO was actually queued to — recorded on the
+	// "QSO stored" line so "why did this QSO never reach ClubLog?" is answerable:
+	// queued-and-failed, queued-and-pending, and never-queued are three different
+	// problems and were one identical log (Q5). Non-nil so an empty fan-out logs an
+	// explicit [] ("queued nowhere"), not a missing field.
+	forwardedTo := make([]string, 0, len(s.Config.Forwarders()))
 	for _, fwd := range s.Config.Forwarders() {
 		if !shouldEnqueue(fwd, action.Insert) {
 			continue
@@ -481,9 +487,10 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 			org = origin.Import
 		}
 		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type, org); err != nil {
-			_ = tx.Rollback()
+			s.rollbackTx(tx, op)
 			return SubmitResult{}, errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
 		}
+		forwardedTo = append(forwardedTo, fwd.Name)
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -500,6 +507,7 @@ func (s *Service) submit(ctx context.Context, logbookID int64, rec adif.Record, 
 		Str("freq_mhz", qso.QsoDetails.Freq).
 		Str("band", qso.QsoDetails.Band).
 		Str("mode", qso.QsoDetails.Mode).
+		Strs("forwarded_to", forwardedTo).
 		Msg("QSO stored")
 
 	s.Hub.Publish(events.NameQsoStored, events.QsoStoredPayload{

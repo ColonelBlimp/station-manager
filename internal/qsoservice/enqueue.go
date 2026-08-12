@@ -200,7 +200,7 @@ func (s *Service) EnqueueUploads(ctx context.Context, forwarderName string, uuid
 
 	for _, qsoID := range enqueueIDs {
 		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Insert, fwd.Name, fwd.Type, org); err != nil {
-			_ = tx.Rollback()
+			s.rollbackTx(tx, op)
 			return EnqueueResult{}, errors.New(op).WithErr(err).WithMsg("insert upload-queue row")
 		}
 	}
@@ -331,7 +331,7 @@ func (s *Service) EnqueueDeleteUploads(ctx context.Context, forwarderName string
 	defer cancel()
 	for _, qsoID := range enqueueIDs {
 		if err = s.DB.InsertQsoUploadTx(ctx, tx, qsoID, action.Delete, fwd.Name, fwd.Type, org); err != nil {
-			_ = tx.Rollback()
+			s.rollbackTx(tx, op)
 			return EnqueueDeleteResult{}, errors.New(op).WithErr(err).WithMsg("insert delete upload-queue row")
 		}
 	}

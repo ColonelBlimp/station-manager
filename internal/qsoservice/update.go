@@ -283,7 +283,7 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	defer cancel()
 
 	if err = s.DB.UpdateQsoTx(ctx, tx, merged); err != nil {
-		_ = tx.Rollback()
+		s.rollbackTx(tx, op)
 
 		// Race window symmetric with Submit's post-InsertQsoTx UNIQUE
 		// handler: the pre-tx dedupe-collision check above can return
@@ -324,7 +324,7 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 			continue
 		}
 		if err = s.DB.InsertQsoUploadTx(ctx, tx, merged.ID, action.Update, fwd.Name, fwd.Type, origin.Edit); err != nil {
-			_ = tx.Rollback()
+			s.rollbackTx(tx, op)
 			return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to insert upload-queue row")
 		}
 	}
@@ -335,7 +335,7 @@ func (s *Service) Update(ctx context.Context, existing types.Qso, body []byte, s
 	// not json.Marshal(merged). Replaying audit reconstructs each state the row
 	// passed through.
 	if err = s.DB.InsertQsoHistoryTx(ctx, tx, existing.UUID, action.Update, src, beforeImage); err != nil {
-		_ = tx.Rollback()
+		s.rollbackTx(tx, op)
 		return types.Qso{}, errors.New(op).WithErr(err).WithMsg("failed to insert qso_history row")
 	}
 

@@ -92,6 +92,26 @@ func TestEnqueueStampSync_EmptyIDs_NoOp(t *testing.T) {
 	require.Zero(t, n)
 }
 
+// Q4 — THE STAMP-SYNC RE-ENQUEUE LOGS AT INFO, so the fix for the smcloud
+// bandwidth-churn item is observable at the default production level. Volume is
+// bounded by stamp events (a handful a day), not traffic. Confusable state: the
+// mechanism not firing at all — both were silent below Debug.
+func TestEnqueueStampSync_LogsAtInfo(t *testing.T) {
+	s := newTestService(t, enabledMirror())
+	lbID := seedLogbook(t, s, "Main", "M0ABC")
+	_, id1 := seedStoredQso(t, s, lbID, "K1AAA", "1200")
+	buf := logbuf(s)
+
+	n, err := s.EnqueueStampSync(context.Background(), []int64{id1})
+	require.NoError(t, err)
+	require.Equal(t, 1, n, "fixture: one mirror row queued")
+
+	line := logLineWith(t, buf.String(), "stamp sync")
+	require.Contains(t, line, `"level":"info"`,
+		"the stamp-sync re-enqueue must be visible at the default level — its silent "+
+			"non-firing returns the daemon to the expensive full-manifest reconcile path")
+}
+
 func TestEnqueueStampSync_RepeatIsIdempotentReArm(t *testing.T) {
 	// Two stamps in quick succession (QRZ stamp, then the session-email
 	// stamp) must not error and must leave a single re-armed queue row —
