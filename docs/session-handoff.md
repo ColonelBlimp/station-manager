@@ -48,21 +48,25 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **SHIP-GATE logging-gaps cluster — MOSTLY CLEARED.** The five 2026-08-01 audits
-  were badly stale (32/67 already shipped); reconciliation + fixes ran over three
-  sessions. **DONE:** bridge · api (A11/A11b/A6) · qsoservice (Q1-Q6, Q8-Q10) ·
-  **ft8 14/14**. **OPEN:** forwarding F5/F7/F8/F15/F16 (cheap) + F2/F10-F14/F17
-  (needs-decision) · **CLOUD — the NEW 6th area** (`cmd/smcloud`+`internal/cloud`,
-  never in the original sweep): C1-C6, incl. TWO High false-success bugs (C1
-  evidence rejects silent, C2 gzip false-success) → `reviews/cloud-logging-gaps.md`.
-  Trust the per-file DONE/OPEN headers + `backlog.md` RECONCILIATION bullet over
-  the stale mega-bullets; do NOT re-audit.
-- **Commits: 6 local AHEAD of origin, NOT pushed; ft8 #9/#10 uncommitted in-tree.**
-  This session's commits carry NO Claude trailer (operator directive): `2ddb2809`
-  qso Q4/Q5/Q6 · `b5059bf5` api-flush-P1 · `a4270336` bridge-de-flake · `99ec71f7`
-  qso Q8/Q9/Q10 · +2 docs. **`origin/main` (`f251b822`) is CI-RED from a FLAKY
-  bridge test; the de-flake `a4270336` is committed, so the next push goes green** —
-  verify from `gh run list` OUTPUT after push, not the exit code.
+- **SHIP-GATE logging-gaps fixes — shipped this session (the fresh-audit note above
+  SUPERSEDES the old "do NOT re-audit").** Over three sessions the five 2026-08-01
+  audits were reconciled + fixed. **DONE:** bridge · api (A11/A11b/A6) · qsoservice
+  (Q1-Q6, Q8-Q10) · **ft8 14/14** · **cloud C1+C2** (evidence outcome breakdown + gzip
+  flush-failure log, 2026-08-12, all TDD + reversion-proved). **OPEN:** forwarding
+  F5/F7/F8/F15/F16 + F2/F10-F14/F17 (needs-decision) · cloud **C1b** (client quarantine
+  `internal/evidence/sync.go`) + **C3-C6** · needs-decision (api A5/A10/A12 · qsoservice
+  **Q7** · cross-cutting "what a keyed transmission records"). Per-file DONE/OPEN headers
+  in `reviews/*-logging-gaps.md` + the `backlog.md` RECONCILIATION bullet are current.
+- **Commits: operator PUSHED through `305c9fab` (whole session's work incl. the ft8 P2
+  fix); only the 2 cloud C1/C2 commits are unpushed** — `183d8277` fix · `c92f4292` docs.
+  All this session's commits carry NO Claude trailer (operator directive). The old
+  flaky-bridge-test CI red cleared with that push (the de-flake `a4270336` is in it);
+  confirm from `gh run list` OUTPUT, not the exit code.
+- **POWER-CUT stop 2026-08-12 — everything committed + durable.** The `sm-pg` Postgres
+  container is UP (started for the smcloud C1 tests: `podman start sm-pg` to resume,
+  `task db:pg:down` to remove). On resume: triage `.codex-reviews/` (183d8277 + c92f4292
+  reviews likely pending from the slow hook) + `gh run list`, then delete each. Then the
+  operator's fresh whole-`internal/` logging audit is the next task (top bullet).
 - **NEEDS-DECISION (operator) items gate the tail:** the cross-cutting "what does a
   keyed transmission record" (api A10 / bridge B12) · api A5/A12 log-levels ·
   `forwarding.Result` disposition (F11/F14) · qsoservice Q7 (log the DB error — and
