@@ -301,7 +301,7 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogbooks(w http.ResponseWriter, r *http.Request) {
 	books, err := s.store.Logbooks(r.Context(), tenantID(r))
 	if err != nil {
-		s.log.Error("logbooks list failed", "err", err)
+		s.log.Error("logbooks list failed", "tenant_id", tenantID(r), "err", err)
 		s.writeError(w, http.StatusInternalServerError, "internal_error", "logbook list failed")
 		return
 	}
@@ -457,7 +457,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if !started {
 			// Nothing written yet — a normal error response still works.
-			s.log.Error("export: snapshot read failed", "err", err)
+			s.log.Error("export: snapshot read failed", "tenant_id", tenant, "err", err)
 			s.writeError(w, http.StatusInternalServerError, "internal_error", "export failed")
 			return
 		}

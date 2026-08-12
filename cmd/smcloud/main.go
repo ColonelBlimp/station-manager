@@ -78,7 +78,11 @@ var Version = "dev"
 
 func main() {
 	if err := run(); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "smcloud: %v\n", err)
+		// Structured + version-stamped, not a bare stderr line: a boot failure (bad
+		// DSN, migrate, bind) is the message most likely to be read on a failed deploy,
+		// and journald otherwise captures it without version or consistent fields (C3).
+		slog.New(slog.NewTextHandler(os.Stderr, nil)).With("version", Version).
+			Error("smcloud failed to start", "err", err)
 		os.Exit(1)
 	}
 }
@@ -394,7 +398,9 @@ func run() error {
 		return nil
 	}
 
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// version on the base logger's context so EVERY record carries the build (C3) —
+	// "which build wrote this" is otherwise unanswerable across a redeploy.
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil)).With("version", Version)
 	// The DSN embeds the DB password, so it is env-only — no -dsn flag, argv
 	// leaks through ps/procfs (same rule as SMCLOUD_TOKEN).
 	dsn := os.Getenv("SMCLOUD_DSN")
@@ -430,9 +436,13 @@ func run() error {
 		return fmt.Errorf("ping postgres: %w", err)
 	}
 
+	migStart := time.Now()
 	if err := store.Migrate(db); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+	// A durable "migrations applied" marker with duration: a boot that ran migrations
+	// is otherwise indistinguishable from one that had nothing to apply (C3).
+	log.Info("migrations applied", "duration_ms", time.Since(migStart).Milliseconds())
 	st := store.New(db)
 	tokens := make(map[string]int64, len(pairs))
 	provisionCtx, cancelProvision := context.WithTimeout(context.Background(), tenantProvisionTimeout)
@@ -458,6 +468,10 @@ func run() error {
 		ReadTimeout:       2 * time.Minute, // a full-logbook backup batch on a slow link
 		WriteTimeout:      2 * time.Minute, // a full export on a slow link
 		IdleTimeout:       2 * time.Minute,
+		// Route net/http's own transport diagnostics + any panic escaping the handler
+		// through slog (version + structured fields) instead of the default stderr
+		// logger, which journald captures unstructured and unversioned (C6).
+		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelError),
 	}
 
 	// Accept-time connection cap: LimitListener blocks Accept past the cap,
@@ -468,6 +482,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
+	// The READY marker, logged only AFTER the bind succeeds: "smcloud starting" alone
+	// (above, before the Listen) could not be told from a start that then failed to
+	// bind and vanished (C3).
+	log.Info("smcloud listening", "addr", ln.Addr().String())
 
 	// Graceful shutdown on SIGINT/SIGTERM (systemd stop).
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -486,5 +504,6 @@ func run() error {
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}
+	log.Info("smcloud stopped") // clean-exit marker — the pair to "listening" (C3)
 	return nil
 }
