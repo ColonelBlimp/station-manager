@@ -272,6 +272,16 @@ were attached at time T" is currently unanswerable.
 
 ### A6. `recoverPanic`'s partial-response case is not distinguished
 
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** `recoverPanic` now reads the
+> shared `responseRecorder`: the panic line carries `response_committed` (true when a
+> header/body was already written), so a truncated response is distinguishable from a
+> clean 500. In the committed case it skips the doomed envelope (which would only append
+> a JSON body onto the partial bytes) and tags the access-log classification via
+> `NoteError`, so a request the access log shows as 200 is still connected to the panic.
+> Tests in `recover_panic_committed_test.go` (committed → flagged + no envelope appended
+> + access-log tagged; clean → not-committed + envelope written); reversion-proved;
+> existing `recoverPanic` tests unaffected.
+
 `middleware.go:42-48` documents that when a handler has already written a header before
 panicking, the 500 envelope "is effectively swallowed — the client sees whatever partial
 bytes made it out first."
@@ -457,15 +467,38 @@ gaps), so once again the failure paths have the evidence and the success path do
 
 ### A11. Malformed stored forwarder credentials are silently treated as absent — and can be DROPPED — Tier 3
 
+> **STATUS 2026-08-12 — BOTH halves FIXED (working tree, awaiting commit).**
+> The merge-path drop is fixed in `mergeForwarders` (`handler_config.go`, now `:1409`):
+> on a decode failure the stored bytes are **preserved verbatim** and this PUT's
+> credential edits for that forwarder are ignored until `config.json` is fixed
+> (operator decision 2026-08-12: always-preserve, the most conservative reading of
+> "refuse to erase what we cannot classify"). The handler logs one Warn at the boundary
+> naming forwarder + type + the error **type** (`%T`, never `err.Error()` or the blob).
+> Full TDD in `forwarder_creds_preserve_test.go` (A11a preserve, A11-log warn+no-leak,
+> A11c valid-control); reversion-proved — and the reverted run's own `config saved` diff
+> independently shows `credentials from:(set) to:(unset)`. **No siblings:** `mergeSmtp`
+> and `mergeLookup` work on typed structs, not an opaque `json.RawMessage`, so the
+> empty-base drop is unique to forwarder credentials.
+> **A11b — FIXED 2026-08-12:** `credentialKeysSet` now returns `([]string, error)` and
+> `buildConfigResponse` logs the corruption once per forwarder per process via
+> `Server.noteForwarderCredCorruption` (a name-keyed latch — GET is re-called freely, so
+> a bare per-GET log would flood; cf. bridge B14), carrying name + type + the error TYPE
+> only. The masked view still reports the corrupt blob as unset — the display is
+> deliberately unchanged; the fix is the log plus the A11a preservation. Tests in
+> `forwarder_creds_get_test.go` (latch across 2 GETs, masked-unset, no-leak, valid
+> control); reversion-proved.
+
 Two sites, and the second does more than hide a diagnostic:
 
 - `handler_config.go:1146` — `credentialKeysSet` returns `nil` when
   `json.Unmarshal` fails, so the masked GET view reports **"no credentials set"** for a
-  forwarder whose credentials are stored but corrupt.
+  forwarder whose credentials are stored but corrupt. **(A11b — FIXED 2026-08-12.)**
 - `handler_config.go:1234` — `_ = json.Unmarshal(ex.Credentials, &base)` on the merge
   path. A decode failure leaves `base` empty, so the merge **rebuilds the credential
   block from an empty base** — a PUT that was meant to preserve existing credentials
-  silently discards them.
+  silently discards them. **(FIXED 2026-08-12 — see status box above.)**
+
+The first bullet (`credentialKeysSet`) is **A11b, also FIXED 2026-08-12** — see the box.
 
 - **Confusable with:** a forwarder that was never configured. The operator sees an empty
   credential list, re-enters what they think is missing, and the second site quietly
