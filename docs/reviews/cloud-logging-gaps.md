@@ -37,6 +37,17 @@ Caddy config explicitly strips credentials from the access log.
 
 ### [High] C1 — Evidence outcomes are silent
 
+> ✅ **SERVER HALF FIXED 2026-08-12 (working tree, awaiting commit).** `handlePutEvidence`
+> now logs one Info "evidence batch stored" line per batch with the full outcome
+> breakdown (tenant_id, rows, accepted/already_present/tombstoned/suppressed/
+> retryable_missing_profile/permanent_reject counts), so "all stored" is distinguishable
+> from "some quarantined". Test `TestEvidenceHTTP_LogsOutcomeBreakdown` (real Postgres via
+> `testServerLogged`); reversion-proved. **OPEN — client half (C1b):** the daemon-side
+> quarantine in `internal/evidence/sync.go` (`applyOutcomes`, permanent_reject case) still
+> logs nothing; a small per-batch quarantine-count Warn there (zerolog `s.log`) gives the
+> SM operator local visibility. Different package/logger, deferred.
+
+
 `internal/cloud/server/evidence.go:44` logs **only** the batch-storage failure
 (`s.log.Error("evidence batch failed", …)`). Permanent rejects, digest conflicts,
 tombstones, and missing profiles all return **HTTP 200 with no server log**. The
@@ -47,6 +58,14 @@ rejected/tombstoned — indistinguishable at every hop. This is the load-bearing
 the whole point of the evidence pipeline is knowing what the far end did with a record.
 
 ### [High] C2 — Gzip can produce a false success log
+
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** `gzipMiddleware` now takes the
+> logger and captures `gz.Close()`'s error (was discarded); a failed flush logs a Warn
+> ("gzip response flush failed; client received a truncated body", with path), so a
+> truncated download is recorded and correlates with the handler's "served" line by
+> path+time. Test `TestGzip_FlushFailureIsLogged` (a failing ResponseWriter forces the
+> Close error); reversion-proved.
+
 
 `internal/cloud/server/gzip.go:37` defers `gz.Close()`, and `Close` is what flushes
 buffered data + writes the gzip footer. But the export is logged as success at
