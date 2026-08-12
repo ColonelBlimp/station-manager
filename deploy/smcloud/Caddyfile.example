@@ -69,6 +69,22 @@ cloud.station-manager.org {
 		}
 	}
 
+	# Request-id correlation (smcloud C4). Overwrite any client-supplied
+	# X-Request-Id with a server-generated per-request UUID
+	# ({http.request.uuid}, caddyserver/caddy#4285) at the public boundary.
+	# request_header — NOT reverse_proxy's header_up — is deliberate: it mutates
+	# the request Caddy itself logs, so the SAME id lands in BOTH this access log
+	# (under request>headers>X-Request-Id, which the log block above already
+	# records) AND the upstream request forwarded to smcloud. That one id ties a
+	# Caddy access entry to the smcloud app line + error it produced. header_up
+	# would forward the id but mutate only the upstream clone, leaving Caddy's own
+	# log without it. Overwriting (no +/- prefix = set) stops a client spoofing
+	# another request's id; smcloud treats X-Request-Id as an untrusted label
+	# regardless — it re-validates the format (16–64 [A-Za-z0-9_-]; a UUID
+	# matches) and NEVER uses it for auth — and echoes the resolved id back in the
+	# response X-Request-Id header.
+	request_header X-Request-Id "{http.request.uuid}"
+
 	# smcloud listens on loopback only (SMCLOUD_LISTEN=127.0.0.1:8091);
 	# Caddy terminates TLS and proxies. Bearer auth is smcloud's own.
 	reverse_proxy 127.0.0.1:8091

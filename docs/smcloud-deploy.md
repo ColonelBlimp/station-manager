@@ -431,6 +431,25 @@ the hourly reconcile self-heals anything a flaky link drops.
     The `Authorization` header is **deleted** from the log by an explicit
     filter, not left to Caddy's default credential redaction — smcloud's auth
     is a long-lived bearer token and an access log is a long-lived file.
+  - **Correlating a Caddy entry to an smcloud error (smcloud C4).** The Caddyfile
+    sets `request_header X-Request-Id "{http.request.uuid}"`, so every request
+    carries a server-generated UUID that appears in **both** this access log
+    (under `request>headers>X-Request-Id`) **and** every smcloud log line for the
+    same request (`request_id=…`). Caddy overwrites any client-supplied value, so
+    the id can't be spoofed; smcloud validates it as an untrusted correlation
+    label only (never an auth input) and echoes it in the response `X-Request-Id`
+    header. To trace an smcloud error back to its access entry:
+    ```bash
+    # smcloud side: find the request_id on the error line
+    journalctl -u smcloud | grep 'level=ERROR'
+    # Caddy side: the matching access entry
+    sudo jq -c 'select(.request.headers["X-Request-Id"][0] == "<id>")' \
+      /var/log/caddy/smcloud-access.log
+    ```
+    On a **direct-LAN deployment with no Caddy**, smcloud still mints its own
+    bounded id per request and logs one `http request` access line itself (the
+    C4 middleware), so method/path/status/latency/request_id are recorded even
+    without a proxy in front.
 - **Health:** `/v1/health` (unauthenticated; checks the DB ping).
 - **Back up the backup:** the local log DB remains the authority, but a VPS
   loss shouldn't cost the history either —

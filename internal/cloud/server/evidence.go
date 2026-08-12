@@ -44,7 +44,7 @@ func (s *Server) handlePutEvidence(w http.ResponseWriter, r *http.Request) {
 	tenant := tenantID(r)
 	outcomes, err := s.store.UpsertEvidence(r.Context(), tenant, req.Records)
 	if err != nil {
-		s.log.Error("evidence batch failed", "tenant_id", tenant, "rows", len(req.Records), "err", err)
+		s.log.Error("evidence batch failed", "tenant_id", tenant, "rows", len(req.Records), "request_id", requestID(r), "err", err)
 		s.writeError(w, http.StatusInternalServerError, "storage_error", "evidence batch could not be stored")
 		return
 	}

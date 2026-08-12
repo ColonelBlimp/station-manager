@@ -86,7 +86,10 @@ func (s *Server) Handler() http.Handler {
 	// gzip.go); the concurrency limiter sits OUTERMOST so a rejected request
 	// costs a 503 write and nothing else — no gzip writer, no negotiation,
 	// no handler goroutine pile-up (see limit.go).
-	return limitMiddleware(gzipMiddleware(s.log, mux), s.maxConcurrent)
+	// accessLog OUTERMOST: it assigns the correlation request-id and records every
+	// request's final status — including the 503 from limitMiddleware and the 401 from
+	// auth, which the inner middleware would otherwise swallow (C4).
+	return s.accessLog(limitMiddleware(gzipMiddleware(s.log, mux), s.maxConcurrent))
 }
 
 // ---- transport helpers ------------------------------------------------------
@@ -124,6 +127,12 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			presented := []byte(h[len(prefix):])
 			for token, tenantID := range s.tokens {
 				if subtle.ConstantTimeCompare(presented, []byte(token)) == 1 {
+					// Record the tenant on the request's correlation info so the access
+					// line carries it (survives the gzip wrapper — it rides the context,
+					// not the ResponseWriter). C4.
+					if info := reqInfoFrom(r.Context()); info != nil {
+						info.tenant = tenantID
+					}
 					ctx := context.WithValue(r.Context(), tenantKey{}, tenantID)
 					next(w, r.WithContext(ctx))
 					return
@@ -301,7 +310,7 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogbooks(w http.ResponseWriter, r *http.Request) {
 	books, err := s.store.Logbooks(r.Context(), tenantID(r))
 	if err != nil {
-		s.log.Error("logbooks list failed", "tenant_id", tenantID(r), "err", err)
+		s.log.Error("logbooks list failed", "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
 		s.writeError(w, http.StatusInternalServerError, "internal_error", "logbook list failed")
 		return
 	}
@@ -457,7 +466,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if !started {
 			// Nothing written yet — a normal error response still works.
-			s.log.Error("export: snapshot read failed", "tenant_id", tenant, "err", err)
+			s.log.Error("export: snapshot read failed", "tenant_id", tenant, "request_id", requestID(r), "err", err)
 			s.writeError(w, http.StatusInternalServerError, "internal_error", "export failed")
 			return
 		}

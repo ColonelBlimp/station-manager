@@ -42,10 +42,11 @@ Caddy config explicitly strips credentials from the access log.
 > breakdown (tenant_id, rows, accepted/already_present/tombstoned/suppressed/
 > retryable_missing_profile/permanent_reject counts), so "all stored" is distinguishable
 > from "some quarantined". Test `TestEvidenceHTTP_LogsOutcomeBreakdown` (real Postgres via
-> `testServerLogged`); reversion-proved. **OPEN — client half (C1b):** the daemon-side
-> quarantine in `internal/evidence/sync.go` (`applyOutcomes`, permanent_reject case) still
-> logs nothing; a small per-batch quarantine-count Warn there (zerolog `s.log`) gives the
-> SM operator local visibility. Different package/logger, deferred.
+> `testServerLogged`); reversion-proved. **C1b (client half) also FIXED 2026-08-12:**
+> `applyOutcomes` now logs one bounded per-batch Warn ("evidence: rows permanently
+> rejected (quarantined) by SM Cloud") with the count + a representative uuid/reason after
+> commit — the SM operator's local trace (the full detail stays in `quarantine_reason`).
+> Test `TestQuarantine_IsLoggedForTheOperator`; reversion-proved.
 
 
 `internal/cloud/server/evidence.go:44` logs **only** the batch-storage failure
@@ -94,6 +95,21 @@ then vanished); and there is no `"ready"` or `"stopped"` marker.
 **Confusable state:** "started and serving" vs "logged starting, then failed to bind".
 
 ### [Medium] C4 — Application and access logs cannot be correlated
+
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** New OUTERMOST middleware
+> `internal/cloud/server/access.go` gives every request a bounded correlation id and
+> emits one access-log line (method, path, status, duration, bytes, `request_id`,
+> `tenant_id`, `remote`). The id is an UNTRUSTED correlation label only — accepted from
+> `X-Request-Id` only in a bounded 16–64 `[A-Za-z0-9_-]` format, else a crypto-random id
+> is minted; it is never an input to auth or any security decision. It is put in the
+> request context (so `handleLogbooks`, the pre-stream export, and `handlePutEvidence`
+> error lines carry `request_id`), echoed in the response `X-Request-Id` header, and
+> carried on the access line. `/v1/health` + `/v1/version` log at Debug (frequent polls).
+> The public deploy has Caddy overwrite client-supplied `X-Request-Id` at the boundary
+> (`docs/smcloud-deploy.md`). TDD (real Postgres) + reversion-proved: 4 acceptance tests
+> in `access_test.go` (correlation carried + header match, valid incoming id honored,
+> invalid id rejected + regenerated, health at Debug).
+
 
 No request-ID / application-request middleware in `internal/cloud/server/server.go:74`.
 Caddy supplies the VPS access log but it cannot connect a specific access entry to an
