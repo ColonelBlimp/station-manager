@@ -591,6 +591,8 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	quarantined := 0
+	var sampleUUID, sampleReason string
 	for i, o := range outcomes {
 		r := rows[i]
 		table := tableForKind(r.kind)
@@ -617,6 +619,10 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 			if _, err := tx.Exec(`UPDATE `+table+` SET quarantine_reason = ? WHERE uuid = ?`, reason, r.uuid); err != nil {
 				return err
 			}
+			quarantined++
+			if sampleUUID == "" {
+				sampleUUID, sampleReason = r.uuid, reason
+			}
 		case evidencewire.OutcomeRetryableMissingProfile:
 			// Selection priority, not envelope order (operator ruling): the
 			// referenced LOCAL profile re-offers even if previously synced —
@@ -628,7 +634,21 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 			}
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// SM Cloud PERMANENTLY rejected these rows; the SM operator otherwise had only the
+	// per-row quarantine_reason column as a trace that evidence was refused (C1b). One
+	// bounded Warn per batch (count + a representative row) — a per-row line could flood
+	// a pathological batch, and the full detail stays queryable in quarantine_reason.
+	if quarantined > 0 {
+		s.log.WarnWith().
+			Int("quarantined", quarantined).
+			Str("sample_uuid", sampleUUID).
+			Str("sample_reason", sampleReason).
+			Msg("evidence: rows permanently rejected (quarantined) by SM Cloud")
+	}
+	return nil
 }
 
 // fillSyncCounts adds the database-derived halves to a Status.Sync
