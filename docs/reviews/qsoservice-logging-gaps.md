@@ -214,6 +214,10 @@ Both return paths already hold `existing.UUID` and `existing.ID`.
 
 ### Q4. The stamp-sync re-enqueue logs at Debug, so the fix for a measured bandwidth problem is unobservable in production
 
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** Promoted to Info in
+> `EnqueueStampSync`. Test `TestEnqueueStampSync_LogsAtInfo` (stamp-sync line at
+> `"level":"info"`); reversion-proved.
+
 `stamp_sync.go:69-73` logs at **Debug**.
 
 That function is the built half of the backlog's *smcloud stamp-drift → reconcile
@@ -232,6 +236,12 @@ working, and no way to notice when it stops.
   through an evening, and 94 after an email batch. That is a handful of lines a day.
 
 ### Q5. A stored QSO's forwarder fan-out is not recorded, and two silent branches decide it
+
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** Both `submit`'s "QSO stored"
+> and `Delete`'s "QSO soft-deleted" now carry `forwarded_to` — the destination names
+> collected in the fan-out loop, non-nil so queued-nowhere logs an explicit `[]`. Tests
+> in `forwarder_fanout_log_test.go` (live fan-out names both forwarders; nowhere → `[]`;
+> delete fan-out); reversion-proved.
 
 `submit.go:461-476` loops the configured forwarders and inserts an upload row per match,
 inside the QSO transaction. **Two branches skip silently:**
@@ -258,6 +268,12 @@ different problems with three different fixes.
 ## Tier 3
 
 ### Q6. Every `_ = tx.Rollback()` discards its error — 14 sites, in the package that owns one-fails-all-fail
+
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** All 14 sites now call
+> `Service.rollbackTx(tx, op)` (new `rollback.go`), which Warns on a non-nil rollback
+> error tagged with the op; a clean rollback stays silent. Tests in `rollback_log_test.go`
+> use a committed tx (Rollback → `sql.ErrTxDone`) as a real, deterministic failure — warn
+> fired + clean-rollback-silent control; reversion-proved.
 
 `enqueue.go` ×2, `update.go` ×3, `delete.go` ×4, `submit.go` ×2, `submit_batch.go` ×2,
 `stamp_sync.go` ×1.
