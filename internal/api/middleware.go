@@ -60,11 +60,13 @@ func (w *httpErrorLogWriter) Write(p []byte) (int, error) {
 //
 // Double-response caveat: if the wrapped handler has already called
 // w.WriteHeader (or implicitly via w.Write) before panicking, the
-// envelope write below is effectively swallowed — the client sees
-// whatever partial bytes made it out first. This mirrors Go stdlib
-// behaviour; recovery's primary job here is to keep the daemon
-// alive and log the incident, not to guarantee a clean response
-// shape in every case.
+// 500 envelope cannot be delivered — the client sees whatever partial
+// bytes made it out first. That case is now detected (via the shared
+// responseRecorder): the panic line records response_committed=true and
+// the doomed envelope is skipped, so a truncated response is
+// distinguishable from a clean 500 and the access-log classification is
+// tagged (A6). Recovery's primary job remains keeping the daemon alive
+// and logging the incident, not guaranteeing a clean response shape.
 func (s *Server) recoverPanic(next http.Handler) http.Handler {
 	const op errors.Op = "api.recoverPanic"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,12 +75,29 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 			if rec == nil {
 				return
 			}
+			// If the wrapped handler already committed the response (header sent,
+			// maybe a partial body), the 500 envelope cannot be delivered — writing it
+			// now only appends a JSON body onto the partial bytes (net/http drops the
+			// superfluous header). Detect that from the shared responseRecorder so the
+			// panic line can distinguish a clean 500 from a truncated response — which
+			// the access log's status alone cannot, since a mid-stream panic shows
+			// there as whatever was written first, e.g. 200 (A6).
+			rr, isRecorder := w.(*responseRecorder)
+			committed := isRecorder && rr.wroteHeader
 			s.logger.ErrorWith().
 				Interface("panic", rec).
 				Str("stack", string(debug.Stack())).
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
+				Bool("response_committed", committed).
 				Msg("panic in HTTP handler")
+			if committed {
+				// Already on the wire — don't garble it with a second envelope. Tag the
+				// access-log classification instead, so a request logged there as status
+				// 200 is still connected to this panic.
+				rr.NoteError("internal_error", "panic after response partially written", string(op))
+				return
+			}
 			// Deliberately generic message — panic values can contain
 			// sensitive internals (config paths, stack slices,
 			// unredacted inputs). The full detail lives in the log

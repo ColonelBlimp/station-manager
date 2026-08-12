@@ -96,6 +96,14 @@ type Server struct {
 	// which is consumed by the shutdownCh close on the FIRST call regardless of
 	// whether that call succeeded.
 	shutdownLogged atomic.Bool
+	// credCorruptWarned latches the A11b GET-side warning. The masked config view is
+	// rebuilt on every GET /v1/config, so a forwarder whose stored credential blob
+	// will not decode would otherwise log on every read. Each corrupt forwarder is
+	// warned once per process (keyed by name); a restart re-arms it — which is fine,
+	// because the only way to fix a corrupt blob is an out-of-band config.json edit
+	// that needs a restart to take effect anyway. credCorruptMu guards the map.
+	credCorruptMu     sync.Mutex
+	credCorruptWarned map[string]bool
 }
 
 // New constructs a Server from the resolved services and config. The

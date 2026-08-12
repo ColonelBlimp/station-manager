@@ -514,7 +514,8 @@ func firstBlockingFinding(findings []config.Finding) *config.Finding {
 // request-only field validations (caller_answer_mode, max_repeats, mode-mapping
 // driver) already passed in the handler. FT8 display is stored RAW so Validate can
 // reject a bad feed_mode; the caller resolves it AFTER validation passes.
-func overlayConfig(base *config.Config, req *ConfigResponse) {
+func overlayConfig(base *config.Config, req *ConfigResponse) []credDecodeWarning {
+	var credWarnings []credDecodeWarning
 	if req.LoggingStation != nil {
 		base.LoggingStation = *req.LoggingStation
 	}
@@ -555,7 +556,7 @@ func overlayConfig(base *config.Config, req *ConfigResponse) {
 		base.DefaultRigID = *req.DefaultRigID
 	}
 	if req.Forwarders != nil {
-		base.Forwarders = mergeForwarders(req.Forwarders, base.Forwarders)
+		base.Forwarders, credWarnings = mergeForwarders(req.Forwarders, base.Forwarders)
 	}
 	if req.Lookup != nil {
 		base.Lookup = mergeLookup(*req.Lookup, base.Lookup)
@@ -604,6 +605,7 @@ func overlayConfig(base *config.Config, req *ConfigResponse) {
 			}
 		}
 	}
+	return credWarnings
 }
 
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
@@ -750,9 +752,13 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// lost-update trap the overlay itself avoids above.
 	var before, after config.Config
 	var setupCompleted bool
+	// credWarnings carries any undecodable stored forwarder-credential blobs out of
+	// the overlay so they are logged AFTER the commit — outside the config lock, and
+	// only when the write actually persisted (A11). Same discipline as forwarderCause.
+	var credWarnings []credDecodeWarning
 	if err := s.cfg.Update(func(cfg *config.Config) error {
 		before = cfg.Clone()
-		overlayConfig(cfg, &req)
+		credWarnings = overlayConfig(cfg, &req)
 		config.Normalize(cfg)
 		if f := firstBlockingFinding(config.Validate(*cfg)); f != nil {
 			blocking = f
@@ -820,6 +826,15 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// would leave exactly that case — the one where the operator is most
 	// likely to be misled — with no record at all.
 	s.logConfigSave(before, after, setupCompleted)
+
+	// Undecodable stored credentials were PRESERVED (not dropped) by the merge; warn
+	// so the corruption in config.json is visible and the operator knows their edits to
+	// that forwarder were ignored. Logged here — post-commit, outside the config lock,
+	// and never on a rejected PUT (that path returned above). Never the blob (A11).
+	for _, cw := range credWarnings {
+		s.logger.WarnWith().Str("forwarder", cw.Name).Str("type", cw.Type).Str("error", cw.Err).
+			Msg("config: stored forwarder credentials undecodable; preserved unchanged, edits ignored (fix config.json)")
+	}
 
 	// Live-apply the FT8 repeat cap to the running sequencer — the one config field
 	// that takes effect without a restart, so the operator can dial it down mid-pile-up.
@@ -1066,13 +1081,17 @@ func (s *Server) buildConfigResponse(r *http.Request, cfg config.Config) (Config
 	if len(cfg.Forwarders) > 0 {
 		fwds := make([]ForwarderInfo, 0, len(cfg.Forwarders))
 		for _, fc := range cfg.Forwarders {
+			keys, decErr := credentialKeysSet(fc.Credentials)
+			// A corrupt stored blob shows as unset here (masked view can't enumerate
+			// it); log it once so the operator can fix config.json (A11b).
+			s.noteForwarderCredCorruption(fc.Name, fc.Type, decErr)
 			fwds = append(fwds, ForwarderInfo{
 				Name:           fc.Name,
 				Type:           fc.Type,
 				Label:          fc.Label,
 				Enabled:        fc.Enabled,
 				ActionFilter:   fc.ActionFilter,
-				CredentialsSet: credentialKeysSet(fc.Credentials),
+				CredentialsSet: keys,
 			})
 		}
 		resp.Forwarders = fwds
@@ -1267,13 +1286,18 @@ func mergeLookup(in LookupInfo, existing types.EnrichmentConfig) types.Enrichmen
 // value, sorted — the masked GET view (the values themselves never leave the
 // daemon). A non-string value is reported as set when non-null (all current
 // forwarder creds are strings, but this stays robust to a future shape).
-func credentialKeysSet(raw json.RawMessage) []string {
+//
+// A non-empty blob that will not decode returns (nil, err): the masked view can
+// enumerate no keys, so it reports none — but the caller must distinguish that from
+// a genuinely-unset forwarder and log it once (A11b). The data-loss half of the same
+// corruption is handled in mergeForwarders.
+func credentialKeysSet(raw json.RawMessage) ([]string, error) {
 	if len(raw) == 0 {
-		return nil
+		return nil, nil
 	}
 	var m map[string]any
-	if json.Unmarshal(raw, &m) != nil {
-		return nil
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
 	}
 	keys := make([]string, 0, len(m))
 	for k, v := range m {
@@ -1288,7 +1312,30 @@ func credentialKeysSet(raw json.RawMessage) []string {
 		}
 	}
 	sort.Strings(keys)
-	return keys
+	return keys, nil
+}
+
+// noteForwarderCredCorruption logs the A11b GET-side warning at most once per
+// forwarder name per process (GET /v1/config is re-called freely, so a bare per-GET
+// log would flood — cf. bridge B14). A nil decodeErr is the common case and no-ops.
+// The record carries name + type + the error TYPE only — never err.Error() or the
+// blob, because the failing bytes ARE the credential and smd.log is 0644 (A11).
+func (s *Server) noteForwarderCredCorruption(name, typ string, decodeErr error) {
+	if decodeErr == nil {
+		return
+	}
+	s.credCorruptMu.Lock()
+	defer s.credCorruptMu.Unlock()
+	if s.credCorruptWarned[name] {
+		return
+	}
+	if s.credCorruptWarned == nil {
+		s.credCorruptWarned = map[string]bool{}
+	}
+	s.credCorruptWarned[name] = true
+	s.logger.WarnWith().Str("forwarder", name).Str("type", typ).
+		Str("error", fmt.Sprintf("%T", decodeErr)).
+		Msg("config: stored forwarder credentials undecodable; masked view shows them unset (fix config.json)")
 }
 
 // clearableCredentialKeys reports which of a forwarder type's credential keys
@@ -1316,19 +1363,34 @@ func clearableCredentialKeys(typeName string) map[string]bool {
 	return nil
 }
 
+// credDecodeWarning names a forwarder whose STORED credential blob could not be
+// decoded during a merge. It is carried out of mergeForwarders → overlayConfig to
+// the handler so the warning is logged at the boundary — never under the config
+// lock, and never on the dry-run overlay. It records name + type + the error TYPE
+// only: never err.Error() (a *json.SyntaxError message can echo an offending byte)
+// and never the blob or unmarshal target, because the failing bytes ARE the
+// credential and smd.log is 0644 (A11).
+type credDecodeWarning struct {
+	Name string
+	Type string
+	Err  string
+}
+
 // mergeForwarders builds the new forwarder list from the SPA's PUT payload,
 // preserving secrets the masked-on-GET surface never exposed: credentials are
 // merged onto the stored entry (matched by name) — an omitted field always keeps
 // its stored value, and a blank one keeps it for password-kind fields — and the
 // advanced knobs (tick/batch/retry) carry over from the stored entry too. A
 // forwarder with no name match is treated as new (its supplied credentials stand
-// alone).
-func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig) []types.ForwarderConfig {
+// alone). A stored credential blob that cannot be decoded is PRESERVED verbatim
+// (never rebuilt from an empty base, which would drop it) and reported for logging.
+func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig) ([]types.ForwarderConfig, []credDecodeWarning) {
 	byName := make(map[string]types.ForwarderConfig, len(existing))
 	for _, fc := range existing {
 		byName[fc.Name] = fc
 	}
 	out := make([]types.ForwarderConfig, 0, len(incoming))
+	var warnings []credDecodeWarning
 	for _, in := range incoming {
 		fc := types.ForwarderConfig{
 			Name:         in.Name,
@@ -1376,7 +1438,24 @@ func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig)
 		clearable := clearableCredentialKeys(in.Type)
 		base := map[string]json.RawMessage{}
 		if matched && len(ex.Credentials) > 0 {
-			_ = json.Unmarshal(ex.Credentials, &base)
+			if err := json.Unmarshal(ex.Credentials, &base); err != nil {
+				// The stored credential blob is present but won't decode (corrupt or
+				// hand-edited config.json). Merging onto the empty base would REBUILD
+				// the block from nothing, so a PUT that doesn't re-enter these fields
+				// (the masked-on-GET default) would silently DROP them — the A11
+				// data-loss bug. Refusing to erase a value we cannot classify is the
+				// recoverable choice (see clearableCredentialKeys): keep the stored
+				// bytes verbatim and ignore this PUT's credential edits for this
+				// forwarder until config.json is fixed. Surface it for the caller to
+				// log OUTSIDE the config lock — see credDecodeWarning for why the
+				// warning never carries err.Error() or the blob.
+				fc.Credentials = ex.Credentials
+				warnings = append(warnings, credDecodeWarning{
+					Name: in.Name, Type: in.Type, Err: fmt.Sprintf("%T", err),
+				})
+				out = append(out, fc)
+				continue
+			}
 		}
 		for k, v := range in.Credentials {
 			if strings.TrimSpace(v) == "" {
@@ -1403,7 +1482,7 @@ func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig)
 		}
 		out = append(out, fc)
 	}
-	return out
+	return out, warnings
 }
 
 // applyCommittedFt8MaxRepeats pushes the COMMITTED ft8.tx.max_repeats value to
