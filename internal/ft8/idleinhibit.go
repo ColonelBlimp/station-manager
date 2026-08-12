@@ -70,11 +70,16 @@ func (s *Service) acquireIdleInhibit(in IdleInhibitor) {
 		return
 	}
 	s.idleRelease = release
-	s.txMu.Unlock()
-	// The held interval is the fact this file exists to record (the suspected
-	// host-sleep event was mid-run): this line pairs with the release line in
-	// takeIdleReleaseLocked so "inhibition held from T1 to T2" is reconstructable (#9).
+	// Log the START of the held interval UNDER txMu, before unlocking, so it is
+	// serialized with the release line (emitted under txMu in takeIdleReleaseLocked).
+	// Logging after the unlock let a concurrent disarm (the linger goroutine, Stop, a
+	// second request) take the release and emit "releasing" FIRST — reversing the
+	// interval, and after the inhibition was already freed (codex 7f494555 P2). This
+	// file exists to record that interval (the suspected mid-run host-sleep), so a
+	// reversed one defeats the point (#9). The log takes no lock that re-enters the
+	// Service, so it cannot violate the txMu→seq.mu order.
 	s.log.InfoWith().Msg("ft8 tx: desktop idle inhibited while TX is armed (host held awake)")
+	s.txMu.Unlock()
 }
 
 // takeIdleReleaseLocked hands back the pending release func and clears it, so the
