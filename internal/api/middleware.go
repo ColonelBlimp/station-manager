@@ -258,6 +258,12 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 
 func (r *responseRecorder) Flush() {
 	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		// A real Flush implicitly commits the response — net/http sends an implicit
+		// WriteHeader(200) before flushing if none was written — so the recorder must
+		// treat it as committed too, exactly as Write does. Without this, recoverPanic
+		// reads wroteHeader=false after a flushed SSE stream panics and appends a
+		// garbled 500 envelope onto an already-sent response (codex ad3fdf1a P1).
+		r.wroteHeader = true
 		f.Flush()
 	}
 }

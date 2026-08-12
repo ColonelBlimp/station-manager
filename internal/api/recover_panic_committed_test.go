@@ -100,3 +100,32 @@ func TestRecoverPanic_CleanPanic_FlaggedNotCommittedEnvelopeWritten(t *testing.T
 		t.Errorf("clean panic must still deliver the 500 envelope; body = %q", inner.Body.String())
 	}
 }
+
+// A6/flush — A FLUSH COMMITS THE RESPONSE (codex ad3fdf1a P1). An SSE-style handler
+// that Flush()es (implicit 200 in net/http) then panics is already on the wire, so it
+// must be classified committed and NOT get a 500 envelope appended — even though it
+// never called WriteHeader or Write. Before the fix, Flush() left wroteHeader false
+// and recoverPanic garbled the stream with a 500 envelope.
+func TestRecoverPanic_FlushedResponse_TreatedAsCommitted(t *testing.T) {
+	srv, buf := panicLogServer(t)
+
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush() // commit via flush only — no WriteHeader/Write
+		panic("boom after flush")
+	})
+	inner := httptest.NewRecorder()
+	rec := newResponseRecorder(inner)
+	srv.recoverPanic(h).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+
+	r := panicRecord(t, buf)
+	if c, _ := r["response_committed"].(bool); !c {
+		t.Errorf("response_committed = %v, want true (a flush commits the response)", r["response_committed"])
+	}
+	// No 500 envelope may be appended onto the already-flushed stream.
+	if strings.Contains(inner.Body.String(), "internal_error") {
+		t.Errorf("a 500 envelope was appended onto a flushed (committed) response: %q", inner.Body.String())
+	}
+	if rec.errCode != "internal_error" {
+		t.Errorf("recorder errCode = %q, want internal_error (connect the truncated stream to the panic)", rec.errCode)
+	}
+}
