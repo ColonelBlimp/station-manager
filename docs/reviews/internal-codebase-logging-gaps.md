@@ -55,6 +55,24 @@ only at Debug, or omitted from the fields needed to join related records.
 
 ### L1. The logging system cannot reliably report failure of its own output
 
+> ✅ **FIXED 2026-08-12 (working tree, awaiting commit).** `io.MultiWriter` is
+> replaced by a health-tracking fan-out (`internal/logging/healthwriter.go`) that
+> (a) delivers each record to every target even when one errors — a failing file
+> no longer stops delivery to the console; (b) NEVER returns an error to zerolog,
+> so a failing durable writer produces no generic per-write stderr spam and cannot
+> recurse; (c) on the healthy→failing and failing→healthy edges writes ONE JSON
+> line to a non-recursive fallback (os.Stderr → journald) carrying the failure
+> count + cause + timestamp, and re-warns every 5 min while still failing
+> (write-driven heartbeat, operator decision); (d) exposes `Degraded()` so
+> `/v1/healthz` reports `{"status":"degraded","database":"ok","logging":"degraded"}`
+> at HTTP 200 (503 stays reserved for the DB — operator decision). TDD: 6 fan-out
+> unit tests (AC1 isolation, AC2 one degraded line + cause, AC3 recovery, AC4
+> bounded under a 1000-record outage, heartbeat, AC6 accounting) + 1 healthz
+> acceptance test (AC5), all fault-injected + reversion-proved. Not built: the
+> per-writer degraded fault-injection *through* a real unwritable file at Init
+> (the fan-out is tested directly instead) and a health/status field beyond the
+> healthz `logging` key.
+
 Production constructs an `io.MultiWriter` in
 [`internal/logging/service.go:110`](../../internal/logging/service.go), with the rolling
 file writer appended before the optional console writer in

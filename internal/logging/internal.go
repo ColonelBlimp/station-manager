@@ -1,7 +1,6 @@
 package logging
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 
@@ -41,11 +40,16 @@ func probeLogFileWritable(path string) error {
 	return f.Close()
 }
 
-// initializeWriters creates the set of io.Writer targets for the logger based on configuration.
-// If both console and file logging are disabled, file logging is enabled by default for safety.
-// The method also stores the file writer on the Service for later Close().
-func (s *Service) initializeWriters(logfile string) []io.Writer {
-	var writers []io.Writer
+// buildLogTargets creates the ordered set of log sinks for the health-tracking
+// writer, tagging which failures mean durable records are being lost. If both
+// console and file logging are disabled, file logging is enabled by default for
+// safety. The method also stores the file writer on the Service for later Close().
+//
+// The rolling file is the DURABLE target: a runtime failure there loses the
+// operator's record and must trip the degraded signal. The console is
+// best-effort — a closed/failed stderr is not, by itself, a degraded daemon.
+func (s *Service) buildLogTargets(logfile string) []healthTarget {
+	var targets []healthTarget
 
 	// Create a local copy to avoid mutating shared config
 	fileLogging := s.LoggingConfig.FileLogging
@@ -57,7 +61,7 @@ func (s *Service) initializeWriters(logfile string) []io.Writer {
 	}
 	if fileLogging {
 		s.fileWriter = s.initializeRollingFileLogger(logfile)
-		writers = append(writers, s.fileWriter)
+		targets = append(targets, healthTarget{name: "file", w: s.fileWriter, durable: true})
 	}
 	if consoleLogging {
 		cw := zerolog.ConsoleWriter{Out: os.Stderr}
@@ -67,8 +71,8 @@ func (s *Service) initializeWriters(logfile string) []io.Writer {
 		if s.LoggingConfig.ConsoleTimeFormat != "" {
 			cw.TimeFormat = s.LoggingConfig.ConsoleTimeFormat
 		}
-		writers = append(writers, cw)
+		targets = append(targets, healthTarget{name: "console", w: cw, durable: false})
 	}
 
-	return writers
+	return targets
 }

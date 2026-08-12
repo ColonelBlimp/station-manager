@@ -36,12 +36,17 @@ type Server struct {
 	qso        *qsoservice.Service
 	db         *sqlite.Service
 	logger     *logging.Service
-	hub        *events.Hub
-	enrich     *lookup.Orchestrator
-	mailer     *email.Service
-	bridge     *bridge.Service
-	ft8        *ft8.Service
-	evidence   *evidence.Service
+	// logHealth reports whether the durable log writer is currently failing, for
+	// /v1/healthz. Wired from logger (the real implementer) in New; a test can
+	// override it to drive the degraded branch without a failing file. Nil is
+	// treated as healthy.
+	logHealth logHealthReporter
+	hub       *events.Hub
+	enrich    *lookup.Orchestrator
+	mailer    *email.Service
+	bridge    *bridge.Service
+	ft8       *ft8.Service
+	evidence  *evidence.Service
 	// stopTxForRetune stops any SM-owned transmission before a command that moves
 	// the rig off frequency. Injected by cmd/smd (same shape as ft8.SetTxKeyer /
 	// SetDialSource) so internal/api can compose the two subsystems without either
@@ -118,15 +123,16 @@ type Server struct {
 // default_*_id) which startup doesn't bake into Server fields.
 func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *qsoservice.Service, db *sqlite.Service, logger *logging.Service, hub *events.Hub, enrich *lookup.Orchestrator, mailer *email.Service, br *bridge.Service, ft8Svc *ft8.Service) *Server {
 	s := &Server{
-		cfg:    cfgSvc,
-		qso:    qso,
-		db:     db,
-		logger: logger,
-		hub:    hub,
-		enrich: enrich,
-		mailer: mailer,
-		bridge: br,
-		ft8:    ft8Svc,
+		cfg:       cfgSvc,
+		qso:       qso,
+		db:        db,
+		logger:    logger,
+		logHealth: logger,
+		hub:       hub,
+		enrich:    enrich,
+		mailer:    mailer,
+		bridge:    br,
+		ft8:       ft8Svc,
 		// Wire the retune stop-hook here rather than leaving it to cmd/smd: both
 		// halves of that behaviour pass in isolation whether or not they are
 		// connected, so the fewer places the wire can be forgotten the better.

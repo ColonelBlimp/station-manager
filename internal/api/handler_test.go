@@ -184,6 +184,40 @@ func TestHealthz_OK(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"status":"ok"`) {
 		t.Fatalf("body = %q, want status ok", w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), `"logging":"ok"`) {
+		t.Fatalf("body = %q, want logging ok when the log writer is healthy", w.Body.String())
+	}
+}
+
+type stubLogHealth struct{ degraded bool }
+
+func (s stubLogHealth) Degraded() bool { return s.degraded }
+
+// L1 AC5 — when the durable log writer is degraded, /v1/healthz surfaces it as an
+// operational degradation: HTTP 200 (the daemon still serves requests correctly —
+// 503 is reserved for the DB) with status+logging="degraded". The confusable state
+// this guards: DB-only health reporting "ok" while file records are silently lost.
+func TestHealthz_ReportsLoggingDegraded(t *testing.T) {
+	srv := testServer(t)
+	srv.logHealth = stubLogHealth{degraded: true}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/healthz", nil)
+	w := httptest.NewRecorder()
+	srv.handleHealthz(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a degraded log is not loss of serving capacity)", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"status":"degraded"`) {
+		t.Errorf("body = %q, want status degraded", body)
+	}
+	if !strings.Contains(body, `"logging":"degraded"`) {
+		t.Errorf("body = %q, want logging degraded", body)
+	}
+	if !strings.Contains(body, `"database":"ok"`) {
+		t.Errorf("body = %q, want database ok (DB reachable)", body)
+	}
 }
 
 // =============================================================================

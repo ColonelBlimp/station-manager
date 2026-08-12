@@ -2,7 +2,6 @@ package logging
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -35,6 +34,7 @@ type Service struct {
 	LoggingConfig *types.LoggingConfig
 	fileWriter    *lumberjack.Logger
 	logger        atomic.Pointer[zerolog.Logger]
+	hw            atomic.Pointer[healthWriter]
 	isInitialized atomic.Bool
 	initOnce      sync.Once
 	initErr       error
@@ -107,7 +107,14 @@ func (s *Service) Initialize() error {
 			return
 		}
 
-		mw := io.MultiWriter(s.initializeWriters(exeName)...)
+		// The health-tracking fan-out replaces io.MultiWriter: it delivers every
+		// record to all targets even when one errors (isolation), and turns a
+		// runtime durable-writer failure — which io.MultiWriter would swallow and
+		// zerolog would only surface as a generic per-write stderr line — into an
+		// observable degraded state on a non-recursive journald fallback + healthz
+		// (L1, internal-codebase-logging-gaps.md).
+		hw := newHealthWriter(s.buildLogTargets(exeName), os.Stderr, defaultDegradedHeartbeat, time.Now)
+		s.hw.Store(hw)
 
 		// Prove the file target is writable NOW. lumberjack opens the file lazily
 		// on first Write, so an unwritable dir/file would otherwise let Initialize
@@ -127,7 +134,7 @@ func (s *Service) Initialize() error {
 		// single carrier; "dev" when unstamped — the FIELD is always present, but
 		// "dev" says only that the build was unstamped, not WHICH build wrote the
 		// record. Exact attribution needs a stamped build.
-		logger := zerolog.New(mw).With().Str("version", buildinfo.Version).Logger()
+		logger := zerolog.New(hw).With().Str("version", buildinfo.Version).Logger()
 
 		level, levelErr := zerolog.ParseLevel(s.LoggingConfig.Level)
 		if levelErr != nil {
@@ -295,6 +302,20 @@ func (s *Service) ActiveOperations() int32 {
 		return 0
 	}
 	return s.activeOps.Load()
+}
+
+// Degraded reports whether the durable log writer is currently failing — the
+// runtime health signal /v1/healthz surfaces (L1). Nil-safe and safe on a
+// Service built via NewForWriter or the zero value (no health writer → healthy),
+// so callers need no guard.
+func (s *Service) Degraded() bool {
+	if s == nil {
+		return false
+	}
+	if hw := s.hw.Load(); hw != nil {
+		return hw.degraded()
+	}
+	return false
 }
 
 // TraceWith returns a LogEvent for structured Trace-level logging.
