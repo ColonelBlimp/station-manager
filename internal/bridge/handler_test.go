@@ -140,16 +140,12 @@ func TestHTTPHandler_StreamsPipelineEvents(t *testing.T) {
 	// in the supervisor work shifted the count, but this test was
 	// missed during that refactor (see TestHTTPHandler_ShutdownChClosesStream
 	// for the matched update).
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if len(fake.recordedWrites()) >= 3 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(fake.recordedWrites()) < 3 {
-		t.Fatal("handler did not subscribe + bootstrap within 1s")
-	}
+	// Use the shared write-count barrier with a CI-generous 3s timeout, not the old
+	// hand-rolled 1s deadline: a race-instrumented, heavily-loaded runner can take
+	// >1s to start the pipeline + subscribe + bootstrap, which flaked this test red
+	// (run 31574196491, 2026-08-12). 3s matches the suite's other cross-goroutine
+	// waits (waitForSubscribers 2s, per-client 3s).
+	waitForWriteCount(t, fake, 3, 3*time.Second)
 
 	// FT-710 ID 0800 → "FT-710" via the rigdef value-mapping.
 	fake.feedLine([]byte("ID0800"))
