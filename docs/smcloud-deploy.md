@@ -450,6 +450,31 @@ the hourly reconcile self-heals anything a flaky link drops.
     bounded id per request and logs one `http request` access line itself (the
     C4 middleware), so method/path/status/latency/request_id are recorded even
     without a proxy in front.
+  - **Trust boundary for the access line's `remote` field (smcloud C4 / review
+    70edcf2a).** smcloud honors `X-Forwarded-For` **only from a loopback peer**
+    (Caddy, which binds smcloud to loopback and connects from it); a non-loopback
+    peer's `X-Forwarded-For` is ignored and its real address logged, so a **remote
+    client cannot influence `remote`**. A loopback peer, however, does **not**
+    prove the request came from Caddy — **any same-host process reaching the
+    listener can forge `X-Forwarded-For`**. This is accepted under one explicit
+    assumption:
+    > The smcloud host has no untrusted local principals. Any process able to
+    > connect to the loopback listener is inside the deployment trust boundary.
+
+    Consequences of that boundary:
+    - `remote` is **diagnostic metadata only** — never authorization or security
+      evidence. Auth is the bearer token alone.
+    - **Direct external access to the listener (`:8091`) must remain blocked** —
+      it is a loopback bind behind Caddy; do not expose it. The bearer token and
+      Caddy's TLS are the security controls, not `remote`.
+    - **Revisit this decision** under multi-user hosting, untrusted containers, or
+      any changed host model — the single-principal assumption no longer holds
+      there.
+    - A **permissioned Unix-domain socket** between Caddy and smcloud is the
+      preferred future hardening (it makes Caddy the only possible peer by
+      filesystem perms) and deserves its own ADR. Under the current
+      single-principal host model, that transport change is disproportionate to a
+      logging fix.
 - **Health:** `/v1/health` (unauthenticated; checks the DB ping).
 - **Back up the backup:** the local log DB remains the authority, but a VPS
   loss shouldn't cost the history either —
