@@ -41,36 +41,41 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-12, evening)
+## Now (as of 2026-08-13)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **RESUME TASK — L2 Stage 2 (evidence retention measurement, the safety-critical
-  write-gate wiring).** Full decisions + the 6-step plan are in the L2 **IN PROGRESS**
-  box in `reviews/internal-codebase-logging-gaps.md` — read it first; the operator's
-  Q1 (uniformly FAIL-CLOSED, loss class `measurement_error`, status usage UNKNOWN) and
-  Q2 (edge + 5-min write-driven heartbeat) are authoritative, do NOT re-derive. **Stage 1
-  is DONE but UNCOMMITTED WIP** in the working tree — `internal/evidence/retentionhealth.go`
-  (the degraded tracker) + `retentionhealth_test.go` (3 tests, green + reversion-proved) +
-  the `lossReasonMeasurement` const in `service.go` (M). Not committable alone (unused
-  until Stage 2). Leave it; Stage 2 + Stage 1 land as ONE commit.
-- **This session SHIPPED (committed + PUSHED through L1 `b99b7bcd`):** cloud logging cluster **COMPLETE**
-  (C1–C6 + C1b) · forwarding F5/F7/F8/F15/F16 (+ a codex P2 fix) · **L1** — logging can
-  now report failure of its own file sink (health-tracking fan-out + `/v1/healthz`
-  `logging:degraded`). The whole-`internal/` audit `reviews/internal-codebase-logging-gaps.md`
-  (L1–L13 / H1–H4, release-gate ordered) is now the AUTHORITATIVE logging list: **L1 done,
-  L2 in progress, L3 is the next P0** (audio + evidence queue-loss misclassified).
-- **All this session's commits PUSHED; `origin/main` == HEAD == `b99b7bcd` (L1), and CI run
-  `31617186294` is GREEN (conclusion=success, verified from output).** `main` is clean — no
-  CI action needed on resume; go straight to L2 Stage 2.
-- **Codex reviews:** all triaged + DELETED this session (`.codex-reviews/` empty). The
-  hook is SLOW (~1-2 min) and once got killed by a 2-min Bash timeout mid-run — if a
-  commit's review doc is missing, re-run `bash .githooks/post-commit` (reviews HEAD) in
-  the BACKGROUND. On resume: triage any `.codex-reviews/` + `gh run list` (verdict from
-  OUTPUT, not exit code), then delete each.
+- **RESUME TASK — L2 Stage 2** (evidence retention measurement, the safety-critical
+  write-gate wiring). Decisions + the 6-step plan are in the L2 **IN PROGRESS** box in
+  `reviews/internal-codebase-logging-gaps.md` (operator Q1 fail-closed / Q2 edge+5-min
+  heartbeat authoritative — do NOT re-derive). Stage 1 tracker committed (`468a9ad1`); its
+  codex P2 (first-heartbeat over-count) now FIXED + committed (`71088525`). **L3** (audio +
+  evidence queue-loss misclassified) is the next P0 after.
+- **PSK Reporter incident — RESOLVED; SM cleared.** Maintainer (Philip Gladstone) confirmed
+  the pskreporter.info breakage was a server-side memory leak in his odd-IP shard (his bug,
+  fixed his end), NOT us — and our parser never emitted the "RR73 locators" he asked about
+  (proved via code + our own decode log). Client improvements shipped anyway: persistent
+  IPFIX sender id across restarts (`071bb01b`) + an RR73→no-grid regression test
+  (`de41c255`). **PSK reporting is DISABLED in config** pending his OK to re-enable. Draft
+  replies in `/home/mveary/pskreporter-reply-philip-3.txt` (reply-2 already sent).
+  Field-sanitisation hardening QUEUED (backlog P3).
+- **OPEN DECISION (operator) — codex `.codex-reviews/071bb01bc157.md` [P2]:** `pskreporter.id`
+  create is ReadFile→WriteFile, not atomic. Real, but the daemon's single listener bind
+  (`api/server.go:494`) prevents two instances on one working dir, so I recommend ACCEPT + a
+  rationale comment in `identity.go`; alt = `O_CREATE|O_EXCL`. Awaits your call, then delete the doc.
+- **Side item (operator-asked, open):** `evidence.db` sits in WorkingDir **root, 0644** while
+  the log/reference DBs live under `db/` (**0700**) — recommend moving it into `db/` + 0600 with
+  a startup migration (move, don't orphan). Backlog unless you want it now.
+- **Unpushed (operator pushes):** `071bb01b` `de41c255` `71088525` `9b04aa57` `e39e1423`
+  (+ this handoff commit). **main CI is GREEN** (`befea27f` re-run `success`); the Hugo binary
+  download now has `--retry` so a transient blip won't red the gate.
+- **Codex reviews:** triage `.codex-reviews/` after commits + on resume (verdict from OUTPUT,
+  not exit code), then delete each; hook is SLOW (~1-2 min) — if a doc is missing re-run
+  `bash .githooks/post-commit` in the BACKGROUND. Pending: the `071bb01b` [P2] above
+  (decision) + fresh reviews for `71088525`/`9b04aa57`.
 - **NEEDS-DECISION (operator) items still gate the tail:** cross-cutting "what a keyed
   transmission records" (api A10 / bridge B12) · api A5/A12 log-levels ·
   `forwarding.Result` disposition (F11/F14) · qsoservice Q7.
