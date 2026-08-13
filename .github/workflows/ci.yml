@@ -192,10 +192,14 @@ jobs:
       - name: Install Hugo
         run: |
           HUGO_VERSION=0.162.1
-          # --retry so a transient network blip on the binary fetch doesn't red
-          # the whole gate (it did once, 2026-08-12; the asset/version were fine).
-          curl --retry 3 --retry-all-errors -fsSL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz" \
-            | sudo tar -xz -C /usr/local/bin hugo
+          # Download to a file first, THEN extract: --retry can only recover a
+          # partial transfer when curl owns a rewindable output (a pipe into tar
+          # cannot be rewound, so a mid-stream failure would corrupt the stream).
+          # A transient blip on this fetch red the whole gate once (2026-08-12;
+          # the asset/version were fine).
+          curl --retry 3 --retry-all-errors -fsSL -o /tmp/hugo.tar.gz \
+            "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz"
+          sudo tar -xzf /tmp/hugo.tar.gz -C /usr/local/bin hugo
 
       - name: Manual build (produces public/ for daemon embed)
         working-directory: manual
