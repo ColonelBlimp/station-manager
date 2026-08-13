@@ -878,6 +878,10 @@ func run() error {
 			Enabled: cfg.PskReporter.Enabled,
 			Host:    cfg.PskReporter.Host,
 			Port:    cfg.PskReporter.Port,
+			// Persist the IPFIX sender identifier across restarts (pskdev.html: it
+			// "should be constant for any particular sender") so a restart storm no
+			// longer looks like a stream of distinct senders to the collector.
+			StatePath: filepath.Join(cfgSvc.WorkingDir(), "pskreporter.id"),
 		},
 		pskreporter.Receiver{
 			Call:     pskRxCall,

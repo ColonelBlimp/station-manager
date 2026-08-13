@@ -44,6 +44,11 @@ type Config struct {
 	Enabled bool
 	Host    string // "" → DefaultHost
 	Port    int    // 0 → DefaultPort
+	// StatePath is the file that persists the IPFIX observation-domain identifier
+	// across restarts (pskdev.html: it "should be constant for any particular
+	// sender"). "" keeps a fresh in-memory random id per process — used by the
+	// ft8-psk-probe CLI and tests. The daemon sets it under utils.WorkingDir().
+	StatePath string
 }
 
 // Service owns the spot buffer + UDP transport. Construct with New, then
@@ -57,7 +62,7 @@ type Service struct {
 	recv    Receiver        // us (callsign/grid/software/antenna) — settable via SetReceiver
 	buf     map[string]Spot // call → strongest spot this window (dedup)
 	seq     uint32          // cumulative count of reports sent in prior datagrams (IPFIX)
-	id      uint32          // constant per-session random identifier (header)
+	id      uint32          // sender identifier (header); persisted across restarts, see identity.go
 	sent    int             // datagrams sent (drives the first-N-templates rule)
 	lastTpl time.Time       // last time descriptors were included
 	conn    *net.UDPConn
@@ -135,10 +140,14 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("pskreporter: dial %s: %w", addr, err)
 	}
 
+	// The observation-domain identifier is persisted across restarts (pskdev.html:
+	// it "should be constant for any particular sender") — resolved before the lock
+	// because it may touch the filesystem. See identity.go.
+	id := loadOrCreateIdentifier(s.cfg.StatePath, rand.Uint32, s.log)
 	runCtx, cancel := context.WithCancel(ctx)
 	s.mu.Lock()
 	s.conn = conn
-	s.id = rand.Uint32() // constant for this session
+	s.id = id
 	s.cancel = cancel
 	s.mu.Unlock()
 

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -60,6 +61,45 @@ func TestService_FlushSendsDatagram(t *testing.T) {
 	// Dedup kept the stronger VK3ABC (SNR -5 = 0xFB), not the weaker -15.
 	if !bytes.Contains(dg, []byte{0xFB}) {
 		t.Errorf("kept VK3ABC SNR (-5 = 0xFB) not in datagram")
+	}
+}
+
+// TestService_IdentifierStableAcrossRestart is the observable acceptance test for
+// the persisted sender identifier: two separate Service lifetimes (a daemon
+// restart) sharing one StatePath must put the SAME observation-domain id in the
+// datagram header (bytes 12:16), so PSK Reporter associates them as one sender.
+// The confusable state it breaks: a restarted station vs a brand-new sender.
+func TestService_IdentifierStableAcrossRestart(t *testing.T) {
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer pc.Close()
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+	statePath := filepath.Join(t.TempDir(), "pskreporter.id")
+
+	// One daemon lifetime: start, send a datagram, read back its header id, stop.
+	readID := func() uint32 {
+		s := New(Config{Enabled: true, Host: "127.0.0.1", Port: port, StatePath: statePath},
+			Receiver{Call: "G0XYZ", Locator: "IO91"}, nil)
+		if err := s.Start(context.Background()); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		defer func() { _ = s.Stop() }()
+		s.AddSpot(Spot{Call: "K1ABC", FreqHz: 14074000, SNR: -8, Mode: "FT8", TimeUnix: 1700000000})
+		s.flush()
+		buf := make([]byte, 2048)
+		_ = pc.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, _, rerr := pc.ReadFromUDP(buf); rerr != nil {
+			t.Fatalf("read datagram: %v", rerr)
+		}
+		return binary.BigEndian.Uint32(buf[12:16]) // observation-domain identifier
+	}
+
+	id1 := readID() // first daemon lifetime
+	id2 := readID() // "restart": a new Service, same StatePath
+	if id1 != id2 {
+		t.Fatalf("sender identifier changed across restart: %d then %d (must persist)", id1, id2)
 	}
 }
 
