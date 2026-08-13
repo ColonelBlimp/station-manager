@@ -91,6 +91,12 @@ func TestRetentionHealth_EdgeBoundedHeartbeatRecovery(t *testing.T) {
 	if !strings.Contains(beats[0], `"dropped_total":102`) {
 		t.Errorf("heartbeat missing/incorrect dropped_total (want 102): %s", beats[0])
 	}
+	// "since last notice" restarts at the edge: 100 (loop) + 1 (after advance) = 101,
+	// NOT 102 — the edge-triggering drop belongs to dropped_total, not this interval
+	// (codex 468a9ad1 P2).
+	if !strings.Contains(beats[0], `"dropped_since_notice":101`) {
+		t.Errorf("dropped_since_notice must exclude the edge-triggering drop (want 101): %s", beats[0])
+	}
 
 	// Recovery: a complete success announces recovery once with the incident total.
 	h.ok()

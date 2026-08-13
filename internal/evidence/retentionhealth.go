@@ -73,6 +73,10 @@ func (h *retentionHealth) fail(op string, err error) {
 		h.degraded = true
 		h.outageStart = now
 		h.lastBeatAt = now
+		// The edge IS a notice, so "dropped since last notice" restarts here: the
+		// triggering drop is already in droppedTotal (the incident total) and must
+		// NOT also land in the first heartbeat's interval count (codex 468a9ad1 P2).
+		h.droppedSince = 0
 		h.log.WarnWith().
 			Str("operation", op).
 			Str("db_path", h.dbPath).
