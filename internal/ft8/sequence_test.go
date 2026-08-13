@@ -331,9 +331,17 @@ func TestSpotFrom(t *testing.T) {
 		{"G0XYZ K1ABC R-09", "K1ABC", "", true},     // directed R-report
 		{"G0XYZ DL9UW JO31", "DL9UW", "JO31", true}, // directed grid → sender + grid
 		{"G0XYZ K1ABC/P 73", "K1ABC/P", "", true},   // /P sender encodes/decodes (v0.3.5)
-		{"<...> K1ABC -12", "", "", false},          // hashed counterpart → no parse
-		{"CQ", "", "", false},                       // bare CQ
-		{"HELLO BRAVE NEW WORLD", "", "", false},    // free text
+		// RR73 satisfies the 4-char Maidenhead regex (^[A-R]{2}[0-9]{2}$: R,R∈A-R, 7,3
+		// digits) but is a ROGER token, not a grid — it must NEVER leak as a locator.
+		// The guard is parseMessage's RR73 case ordered before isGrid4; without it these
+		// spots would carry grid "RR73". Real lines from ft8-all.txt (PSK Reporter
+		// incident 2026-08-13: the maintainer saw RR73 locators attributed to us).
+		{"UA9SY BD8AHK RR73", "BD8AHK", "", true}, // end of QSO → sender, NO grid
+		{"W9XYZ K1ABC RRR", "K1ABC", "", true},    // bare roger → no grid
+		{"<...> OE1RDU/3 RR73", "", "", false},    // hashed to-call → not spotted at all
+		{"<...> K1ABC -12", "", "", false},        // hashed counterpart → no parse
+		{"CQ", "", "", false},                     // bare CQ
+		{"HELLO BRAVE NEW WORLD", "", "", false},  // free text
 	}
 	for _, c := range cases {
 		call, grid, ok := SpotFrom(c.text)
