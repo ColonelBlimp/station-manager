@@ -172,6 +172,12 @@ func (s *Service) checkDatabaseDir(dbFilePath string) error {
 		return errors.New(op).WithErr(err).WithMsg("utils.PathExists")
 	}
 	if exists {
+		// SM secures the db directory it CREATES (MkdirAll below, mode 0700) but
+		// deliberately does NOT chmod a PRE-EXISTING one: DatabaseConfig.Path is
+		// operator-configurable and could point at a shared or system directory (e.g.
+		// /tmp) that must not be restricted (codex 8c226f51). A pre-existing directory
+		// is the operator's to secure; SM's default layout creates db/ at 0700, and
+		// evidence.db itself is chmod 0600 (see evidence.RelocateArchive).
 		return nil
 	}
 

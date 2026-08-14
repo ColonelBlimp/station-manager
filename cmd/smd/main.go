@@ -821,17 +821,25 @@ func run() error {
 		})
 	})
 	// Evidence capture (spot-network design §4.1, default-off consent layer):
-	// the writer owns its own evidence.db beside the working directory's other
-	// state, and receives every PHYSICAL slot's rich decode set via
+	// the writer owns its own evidence.db under db/ alongside the log databases
+	// (owner-only), and receives every PHYSICAL slot's rich decode set via
 	// SetEvidenceSink — the same one-way DI as the QSO logger, so internal/ft8
 	// never imports the writer and the writer never imports ft8 (go-ft8 is the
 	// shared vocabulary). Fail-soft like the rest of FT8: a writer that cannot
 	// initialise or start logs and stays idle — evidence must never stop the
 	// operator decoding or logging.
+	//
+	// RelocateArchive moves an archive left at the legacy working-dir-root path
+	// (world-readable) into db/ once, without orphaning the operator's evidence.
+	evidencePath := evidence.RelocateArchive(
+		filepath.Join(cfgSvc.WorkingDir(), "evidence.db"),
+		filepath.Join(logDBDir, "evidence.db"),
+		loggerSvc,
+	)
 	evCfg := evidence.Config{
 		Capture:  cfg.Evidence.Capture,
 		CapBytes: cfg.Evidence.CapBytes,
-		Path:     filepath.Join(cfgSvc.WorkingDir(), "evidence.db"),
+		Path:     evidencePath,
 		Antennas: cfg.Evidence.Antennas,
 	}
 	// §5 sync, consent layer 2: reuse the smcloud forwarder's channel —
