@@ -85,6 +85,14 @@ var (
 	writerQueueSize = 64
 	// writerDelay is a test-only stall for the writer goroutine.
 	writerDelay time.Duration
+	// evidenceLossPollInterval / evidenceLossIdle drive runQueueLossMonitor (L3): how
+	// often it samples queueDropped, and the quiet window after which a backpressure
+	// episode is declared recovered. idle mirrors internal/audio/capture's
+	// audioLossIdle — operator decision (2026-08-14): 5 s, so a brief overload is not
+	// reported as permanently active and the recovery summary is not delayed. Package
+	// vars so tests can dial them.
+	evidenceLossPollInterval = 500 * time.Millisecond
+	evidenceLossIdle         = 5 * time.Second
 	// statusQueryDelay is a test-only stall that travels WITH Status's
 	// database aggregates — proving they run outside s.mu (a status poll
 	// must never stall CaptureSlot on the decode goroutine).
@@ -236,9 +244,18 @@ type Service struct {
 
 	// queueLoss (L3) logs a bounded record of writer-queue backpressure — a slot
 	// dropped in CaptureSlot because the queue was full, distinct from a write that
-	// was attempted and failed. Warned at episode totals 1/10/100/…; recovered on
-	// the next successful persist. Its own mutex; created in Start.
+	// was attempted and failed. Warned at episode totals 1/10/100/…; recovered after
+	// a 5 s quiet window with no new drops. The warn AND recovery logging are owned by
+	// runQueueLossMonitor (a ticker), NOT the producer or the write path — the SAME
+	// model as internal/audio/capture, so both queue-full paths recover identically.
+	// Its own mutex; created in Start.
 	queueLoss *logging.EpisodeLoss
+	// queueDropped is the running count of queue-full (backpressure) drops the monitor
+	// polls. The producer (CaptureSlot) only bumps this atomic — non-blocking, no log —
+	// mirroring the audio callback's dropped counter; the monitor turns it into warns.
+	queueDropped atomic.Int64
+	// lossDone is closed when runQueueLossMonitor exits (Stop waits on it).
+	lossDone chan struct{}
 
 	mu       sync.Mutex
 	started  bool
@@ -368,7 +385,12 @@ func (s *Service) Start() error {
 		"evidence: writer queue recovered",
 		lossReasonQueueFull, time.Now)
 	s.ch = make(chan SlotCapture, writerQueueSize)
+	s.lossDone = make(chan struct{})
 	go s.writerLoop()
+	// Baseline captured synchronously (still under s.mu, so queueDropped is 0) — see
+	// runQueueLossMonitor: Load()ing inside the goroutine would race a post-Start drop
+	// burst and baseline it away.
+	go s.runQueueLossMonitor(s.queueDropped.Load())
 	if s.cfg.Sync {
 		s.syncCh = make(chan struct{}, 1)
 		s.syncDone = make(chan struct{})
@@ -398,6 +420,7 @@ func (s *Service) Stop() {
 	}
 	close(s.quit)
 	<-s.done
+	<-s.lossDone
 	if s.syncDone != nil {
 		<-s.syncDone
 	}
@@ -433,15 +456,14 @@ func (s *Service) CaptureSlot(sc SlotCapture) {
 	default:
 		// Writer queue full → backpressure, NOT a write failure (L3): record it as
 		// evidence_queue_full so the durable loss record distinguishes a backed-up
-		// writer from a failing one. Non-blocking: the episode Warn (spaced at
-		// 1/10/100/…) fires outside s.mu.
+		// writer from a failing one. Non-blocking: bump the atomic the monitor polls;
+		// runQueueLossMonitor owns the spaced warn and the quiet-window recovery.
 		s.pending.Add(-1)
 		s.mu.Lock()
 		s.dropped++
 		s.accumulateLocked(sc, lossReasonQueueFull)
-		depth, capacity := len(s.ch), cap(s.ch)
 		s.mu.Unlock()
-		s.queueLoss.Add(1, depth, capacity)
+		s.queueDropped.Add(1)
 	}
 }
 
@@ -867,26 +889,11 @@ func (s *Service) processSlot(sc SlotCapture) {
 		return
 	}
 	// §5 live lane: the slot just committed — wake the sync loop (SY5).
+	// Backpressure recovery is NOT decided here: a successful persist does not mean the
+	// overload is over (the producer bursts omitted/tail slots faster than the writer
+	// drains — emitOmittedEvidence/emitSessionTail). runQueueLossMonitor owns recovery
+	// on a quiet window, so the write path stays out of it entirely.
 	s.notifyLive()
-	// L3 recovery is DRAINAGE-based: only a persist that leaves the queue EMPTY ends
-	// the backpressure episode. A successful write while slots are still queued does
-	// not mean the overload is over — under sustained pressure the writer persists
-	// slots while producers keep dropping, so recovering on any persist would reset
-	// the exponential schedule (re-warn at 1) and log spurious recoveries mid-episode.
-	// The writer is serial, so len(s.ch)==0 here means it has caught up to producers.
-	// No-op when no episode is active.
-	//
-	// The len-check and Recover are not atomic wrt a producer's Add, but the harmful
-	// TOCTOU — Recover closing an episode that swallows a JUST-recorded drop mid-
-	// overload — is unreachable: a drop requires a FULL queue (writerQueueSize=64) and
-	// this check just observed an EMPTY one, and 65 enqueues cannot occur in the few-
-	// instruction window from the single serial producer (cmd/smd's FT8 evidence sink,
-	// one slot per ~15 s period). A slot merely ENQUEUED after the check is not a drop
-	// and is processed normally. No data race (channel-len read + mutex-guarded
-	// EpisodeLoss). Revisit if a second producer or a much smaller queue is introduced.
-	if len(s.ch) == 0 {
-		s.queueLoss.Recover()
-	}
 }
 
 // writeSlot commits one slot — its coverage row and every observation — as

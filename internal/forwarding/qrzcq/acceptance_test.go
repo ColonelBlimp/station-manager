@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -110,6 +111,53 @@ func TestAcceptance_QRZCQForwarder(t *testing.T) {
 		}
 	})
 
+	t.Run("forwarders for the same account share the ninety-second gate", func(t *testing.T) {
+		var requests atomic.Int64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"status":"OK","message":"DATA_QUEUED"}`)
+		}))
+		defer srv.Close()
+
+		build := func(name, call string) forwarding.Forwarder {
+			t.Helper()
+			credentials, err := json.Marshal(map[string]string{
+				"call": call,
+				"key":  "shared-test-api-key",
+			})
+			if err != nil {
+				t.Fatalf("marshal credentials: %v", err)
+			}
+			fwd, err := forwarding.Build(types.ForwarderConfig{
+				Name:        name,
+				Type:        qrzcq.Type,
+				Credentials: credentials,
+				Endpoints:   map[string]string{action.Insert.String(): srv.URL},
+			})
+			if err != nil {
+				t.Fatalf("build %s: %v", name, err)
+			}
+			return fwd
+		}
+
+		first := build("qrzcq-primary", "7Q5PCE")
+		second := build("qrzcq-secondary", " 7q5pce ")
+		if res := first.Submit(context.Background(), sampleQSO(), action.Insert, ""); res.Outcome != forwarding.OutcomeSuccess {
+			t.Fatalf("first Submit = %+v, want immediate success", res)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		res := second.Submit(ctx, sampleQSO(), action.Insert, "")
+		if res.Outcome != forwarding.OutcomeTransient || res.Err == nil {
+			t.Fatalf("second Submit = %+v, want cancellable pacing wait", res)
+		}
+		if got := requests.Load(); got != 1 {
+			t.Fatalf("HTTP requests = %d, want 1; the shared account must remain gated", got)
+		}
+	})
+
 	t.Run("the seeded destination is insert-only and paced at ninety seconds", func(t *testing.T) {
 		cfg := config.DefaultConfig(t.TempDir())
 		var got *types.ForwarderConfig
@@ -150,7 +198,7 @@ func TestAcceptance_QRZCQForwarder(t *testing.T) {
 			Name:         "qrzcq",
 			Type:         qrzcq.Type,
 			Enabled:      true,
-			Credentials:  json.RawMessage(`{"call":"7Q5MLV","key":"test-api-key"}`),
+			Credentials:  json.RawMessage(`{"call":"7Q5WRK","key":"test-api-key"}`),
 			ActionFilter: []string{action.Insert.String()},
 			Endpoints:    map[string]string{action.Insert.String(): srv.URL},
 		}

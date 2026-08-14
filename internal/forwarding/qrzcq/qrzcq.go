@@ -54,6 +54,12 @@ const (
 // UserAgent is set from the daemon's global configured User-Agent at startup.
 var UserAgent = "station-manager/dev"
 
+// accountSubmitPacers makes the upstream cadence an account-level property,
+// not a config-entry property. Operators may legitimately give two forwarders
+// different names while reusing one QRZCQ account; those instances must not be
+// able to open independent request windows.
+var accountSubmitPacers = newSubmitPacerRegistry(DefaultSubmitInterval)
+
 // DefaultRetry bounds host-replied temporary failures. A host that cannot be
 // reached at all remains queued indefinitely under OutcomeUnreachable.
 var DefaultRetry = types.RetryConfig{
@@ -130,8 +136,10 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 	}
 
 	endpoint := forwarding.ResolveEndpoint(fc.Endpoints, DefaultEndpoint, action.Insert.String())
-	return newWithEndpoint(creds.Call, creds.Key, endpoint,
-		utils.NewHTTPClient(DefaultHTTPTimeout), DefaultSubmitInterval), nil
+	fwd := newWithEndpoint(creds.Call, creds.Key, endpoint,
+		utils.NewHTTPClient(DefaultHTTPTimeout), DefaultSubmitInterval)
+	fwd.pacer = accountSubmitPacers.ForAccount(creds.Call)
+	return fwd, nil
 }
 
 func newWithEndpoint(call, key, endpoint string, client *http.Client, interval time.Duration) *Forwarder {
@@ -256,6 +264,31 @@ func redact(value, secret string) string {
 		return value
 	}
 	return strings.ReplaceAll(value, secret, "[REDACTED]")
+}
+
+type submitPacerRegistry struct {
+	mu       sync.Mutex
+	interval time.Duration
+	byCall   map[string]*submitPacer
+}
+
+func newSubmitPacerRegistry(interval time.Duration) *submitPacerRegistry {
+	return &submitPacerRegistry{
+		interval: interval,
+		byCall:   make(map[string]*submitPacer),
+	}
+}
+
+func (r *submitPacerRegistry) ForAccount(call string) *submitPacer {
+	canonicalCall := strings.ToUpper(strings.TrimSpace(call))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if pacer, ok := r.byCall[canonicalCall]; ok {
+		return pacer
+	}
+	pacer := &submitPacer{interval: r.interval}
+	r.byCall[canonicalCall] = pacer
+	return pacer
 }
 
 // submitPacer reserves request start times at least interval apart. Reservation
