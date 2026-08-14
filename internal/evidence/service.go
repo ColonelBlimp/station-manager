@@ -3,6 +3,7 @@ package evidence
 import (
 	"context"
 	"database/sql"
+	stderrors "errors"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -88,7 +89,51 @@ var (
 	// decode path needs (a reader blocking the truncate must never stall
 	// CaptureSlot's stamp on s.mu).
 	checkpointHook func()
+	// measureFailHook is a test-only seam (L2): when set, each measurement probe
+	// calls it with its granular, stable operation name (e.g. "stat_db",
+	// "stat_wal", "pragma_freelist_count", "metadata_loss", "checkpoint_purge",
+	// "compaction_commit") and, if it returns non-nil, that probe fails with the
+	// operation attached — so a test can force fail-closed at exactly one point.
+	measureFailHook func(op string) error
 )
+
+// measureError tags a measurement/compaction failure with the granular operation
+// that produced it, so the fail-closed gate can drive the retention-health tracker
+// with a stable operation name (L2). Real probe errors and injected ones both carry
+// it; unwrap reaches the underlying cause.
+type measureError struct {
+	op  string
+	err error
+}
+
+func (e *measureError) Error() string { return e.err.Error() }
+func (e *measureError) Unwrap() error { return e.err }
+
+// measured wraps a probe error with its operation (nil stays nil).
+func measured(op string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &measureError{op: op, err: err}
+}
+
+// measureFail returns an injected failure for op (test-only), tagged with op.
+func measureFail(op string) error {
+	if measureFailHook != nil {
+		return measured(op, measureFailHook(op))
+	}
+	return nil
+}
+
+// opOf extracts the granular operation name from a measurement error, or a
+// generic label if the error is not one.
+func opOf(err error) string {
+	var me *measureError
+	if stderrors.As(err, &me) {
+		return me.op
+	}
+	return "measurement"
+}
 
 // migrationSlackBytes pads the v1→v2 migration's projected WAL peak beyond
 // the per-page bound: the new profile tables, schema/meta pages dirtied more
@@ -140,7 +185,7 @@ type Status struct {
 	State                  string           `json:"state"`
 	CapBytes               int64            `json:"cap_bytes"`
 	WatermarkBytes         int64            `json:"watermark_bytes"`
-	UsageBytes             int64            `json:"usage_bytes"`
+	UsageBytes             *int64           `json:"usage_bytes"` // null when the archive could not be measured (L2)
 	Observations           int64            `json:"observations"`
 	UnprofiledObservations int64            `json:"unprofiled_observations"`
 	DroppedSlots           int64            `json:"dropped_slots"`
@@ -176,6 +221,13 @@ type Service struct {
 	done    chan struct{}
 	closed  atomic.Bool
 	pending atomic.Int64 // enqueued-but-unprocessed slots; drain observability
+
+	// retHealth (L2) tracks whether the retention MEASUREMENT layer is failing, so
+	// a swallowed measurement/compaction error becomes an observable degraded
+	// transition instead of a slot silently blamed on capacity. Created in Start
+	// before the writer goroutine; driven ONLY by the write attempt (processSlot),
+	// never by a Status poll. Has its own mutex.
+	retHealth *retentionHealth
 
 	mu       sync.Mutex
 	started  bool
@@ -299,6 +351,7 @@ func (s *Service) Start() error {
 	}
 	s.state = StateCapturing
 	s.started = true
+	s.retHealth = newRetentionHealth(s.log, s.cfg.Path, retentionMeasurementHeartbeat, time.Now)
 	s.ch = make(chan SlotCapture, writerQueueSize)
 	go s.writerLoop()
 	if s.cfg.Sync {
@@ -421,7 +474,11 @@ func (s *Service) Status() Status {
 	if statusQueryDelay > 0 {
 		time.Sleep(statusQueryDelay)
 	}
-	st.UsageBytes = s.physicalUsage()
+	// Status poll: usage is null when unmeasurable, and it must NOT drive the
+	// write-driven tracker (recovery/heartbeat belong to write attempts only).
+	if usage, err := s.physicalUsage(); err == nil {
+		st.UsageBytes = &usage
+	}
 	s.fillProfileCounts(prof)
 	if s.cfg.Sync {
 		s.fillSyncCounts(syn)
@@ -547,7 +604,14 @@ func (s *Service) migrationBackfillGate(op errors.Op, label string) error {
 	if fi, err := os.Stat(s.cfg.Path); err == nil {
 		dbSize = fi.Size()
 	}
-	if projected := s.physicalUsage() + dbSize + dbSize/16 + migrationSlackBytes; projected > s.cfg.CapBytes {
+	usage, err := s.physicalUsage()
+	if err != nil {
+		// Fail-closed (Q1): without current usage we cannot bound the projected
+		// peak, so refuse — evidence stays idle, decoding continues (Start fail-soft).
+		return errors.New(op).WithErr(err).WithMsgf(
+			"cannot measure physical usage to bound the %s migration peak; evidence stays idle", label)
+	}
+	if projected := usage + dbSize + dbSize/16 + migrationSlackBytes; projected > s.cfg.CapBytes {
 		return errors.New(op).WithMsgf(
 			"%s migration projected peak %d B would exceed the cap %d B; evidence stays idle until the cap is raised or the archive shrinks",
 			label, projected, s.cfg.CapBytes)
@@ -650,12 +714,48 @@ func (s *Service) writerLoop() {
 	}
 }
 
+// measurementDrop fails a slot closed (L2 · Q1): a measurement REQUIRED to
+// authorize its write was unknown, so the archive could not be measured. Counts
+// the slot ONCE as measurement_error and accumulates the loss IN MEMORY — no
+// per-slot DB write, because the failure may BE the database; the accumulator
+// persists on the first recovered write (§4.1). Decoding continues. Drives the
+// tracker's bounded degraded transition, tagged with the granular operation.
+func (s *Service) measurementDrop(sc SlotCapture, err error) {
+	s.mu.Lock()
+	s.dropped++
+	s.accumulateLocked(sc, lossReasonMeasurement)
+	s.mu.Unlock()
+	s.retHealth.dropped()
+	s.retHealth.fail(opOf(err), err)
+}
+
+// checkpointTruncate folds the WAL, returning any failure tagged with op (a reader
+// blocking the truncate is not a failure — busy is not inspected here).
+func (s *Service) checkpointTruncate(op string) error {
+	if err := measureFail(op); err != nil {
+		return err
+	}
+	var busy, logFrames, checkpointed int64
+	if err := s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).
+		Scan(&busy, &logFrames, &checkpointed); err != nil {
+		return measured(op, err)
+	}
+	return nil
+}
+
 func (s *Service) processSlot(sc SlotCapture) {
 	if writerDelay > 0 {
 		time.Sleep(writerDelay)
 	}
 
-	usage := s.physicalUsage()
+	// Authorize chain (L2 · Q1 fail-closed): every measurement REQUIRED to decide
+	// write-vs-drop. Any failure → do NOT write; drop this slot ONCE as
+	// measurement_error; continue decoding; drive the tracker's bounded transition.
+	usage, err := s.physicalUsage()
+	if err != nil {
+		s.measurementDrop(sc, err)
+		return
+	}
 	watermark := s.cfg.CapBytes - headroomBytes
 
 	// Retention slice (RT1): cap pressure purges instead of dropping when
@@ -664,15 +764,21 @@ func (s *Service) processSlot(sc SlotCapture) {
 	// honest fallback, with Status.Retention.Pressure saying WHY.
 	canWrite := usage < watermark
 	if !canWrite {
-		canWrite = s.tryFreeSpace()
+		var ferr error
+		if canWrite, ferr = s.tryFreeSpace(); ferr != nil {
+			s.measurementDrop(sc, ferr)
+			return
+		}
 	}
+	// The authorize chain succeeded — the measurement layer is healthy for THIS
+	// write attempt, whether it ends in a write or a genuinely-full cap-drop.
 
 	s.mu.Lock()
 	if !canWrite {
-		// Drop BEFORE the cap (operator amendment 2026-08-10): decoding
-		// continues, only evidence writes stop; the dropped span accumulates
-		// and its coalesced interval row is refreshed within the reserved
-		// headroom — the record of dropping must not itself be dropped.
+		// Genuine cap-drop (measured): decoding continues, only evidence writes
+		// stop; the dropped span accumulates and its coalesced interval row is
+		// refreshed within the reserved headroom. Counted ONCE as cap here — a
+		// post-decision measurement/checkpoint failure below must not reclassify it.
 		if s.state != StateDropNew {
 			s.state = StateDropNew
 			s.log.InfoWith().
@@ -683,28 +789,34 @@ func (s *Service) processSlot(sc SlotCapture) {
 		}
 		s.dropped++
 		s.accumulateLocked(sc, lossReasonCap)
-		// §4.1 under pressure: once usage nears the cap, the accumulator
-		// extends IN MEMORY — persisting per drop would consume the very
-		// reserve the ceiling protects, and a sustained run of drops would
-		// cross the cap on its own loss refreshes (8efbb2fe review P1). A
-		// bounded TRUNCATE folds what WAL remains; the documented
-		// crash-limit applies, and recovery/Stop persist with priority.
-		deferPersist := s.physicalUsage() >= s.cfg.CapBytes-writeWalReserveBytes
+		// §4.1: once usage nears the cap, the accumulator extends IN MEMORY —
+		// persisting per drop would consume the very reserve the ceiling protects.
+		// The deferPersist usage read is POST-decision (the slot is already counted):
+		// if it fails, be conservative (defer) and report it via the tracker WITHOUT
+		// reclassifying the already-justified cap drop.
+		pu, postErr := s.physicalUsage()
+		deferPersist := postErr != nil || pu >= s.cfg.CapBytes-writeWalReserveBytes
 		if !deferPersist {
 			s.refreshLossLocked()
 		}
 		s.mu.Unlock()
-		// The checkpoint runs OUTSIDE s.mu (85f1481a review P1): a reader
-		// can block a truncating checkpoint up to the 2 s busy_timeout, and
-		// CaptureSlot needs s.mu to stamp — holding it across the checkpoint
-		// would stall the decode path.
+		// The checkpoint runs OUTSIDE s.mu (85f1481a review P1): a reader can block a
+		// truncating checkpoint up to the 2 s busy_timeout, and CaptureSlot needs
+		// s.mu to stamp — holding it across the checkpoint would stall the decode path.
 		if deferPersist {
 			if checkpointHook != nil {
 				checkpointHook()
 			}
-			var busy, logFrames, checkpointed int64
-			_ = s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).
-				Scan(&busy, &logFrames, &checkpointed)
+			if e := s.checkpointTruncate("checkpoint_drop"); e != nil && postErr == nil {
+				postErr = e
+			}
+		}
+		if postErr != nil {
+			// Report the post-decision measurement/checkpoint failure — the slot stays
+			// counted once as cap; only the tracker's health flips.
+			s.retHealth.fail(opOf(postErr), postErr)
+		} else {
+			s.retHealth.ok()
 		}
 		return
 	}
@@ -716,11 +828,12 @@ func (s *Service) processSlot(sc SlotCapture) {
 			Int64("watermark_bytes", watermark).
 			Msg("evidence: capture resumed (capacity available)")
 	} else if s.loss != nil {
-		// Writer-error recovery: persist the accumulated interval with
+		// Writer/measurement-error recovery: persist the accumulated interval with
 		// priority, before any new evidence (§4.1).
 		s.closeLossLocked()
 	}
 	s.mu.Unlock()
+	s.retHealth.ok() // authorize chain succeeded → measurement layer healthy
 
 	if err := s.writeSlot(sc); err != nil {
 		s.log.WarnWith().Err(err).
@@ -864,14 +977,33 @@ func (s *Service) upsertLossLocked(clear bool) {
 // physicalUsage is the §4.1 physical definition: the db file plus its WAL
 // and shared-memory siblings — a logical row target cannot bound what WAL
 // growth does to the disk.
-func (s *Service) physicalUsage() int64 {
+func (s *Service) physicalUsage() (int64, error) {
 	var total int64
-	for _, p := range []string{s.cfg.Path, s.cfg.Path + "-wal", s.cfg.Path + "-shm"} {
-		if fi, err := os.Stat(p); err == nil {
-			total += fi.Size()
-		}
+	// The main db exists once the archive is open, so ANY stat failure on it is a
+	// real measurement error (fail-closed). WAL/SHM are optional siblings: a MISSING
+	// one is a legitimate 0 (Q1), but any other stat error on them is still an error.
+	probes := []struct {
+		path, op string
+		optional bool
+	}{
+		{s.cfg.Path, "stat_db", false},
+		{s.cfg.Path + "-wal", "stat_wal", true},
+		{s.cfg.Path + "-shm", "stat_shm", true},
 	}
-	return total
+	for _, p := range probes {
+		if err := measureFail(p.op); err != nil {
+			return 0, err
+		}
+		fi, err := os.Stat(p.path)
+		if err != nil {
+			if p.optional && os.IsNotExist(err) {
+				continue
+			}
+			return 0, measured(p.op, err)
+		}
+		total += fi.Size()
+	}
+	return total, nil
 }
 
 // queueEmpty reports a fully drained writer (tests' drain helper).

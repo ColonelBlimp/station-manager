@@ -154,7 +154,7 @@ func TestRT1_CaptureOutlivesTheCapByPurgingAcked(t *testing.T) {
 	if got := s2.Status().State; got != StateCapturing {
 		t.Fatalf("RT1: state = %q under successful purge, want %q (capturing BECAUSE purging)", got, StateCapturing)
 	}
-	if u := s2.physicalUsage(); u > cfg2.CapBytes {
+	if u, _ := s2.physicalUsage(); u > cfg2.CapBytes {
 		t.Fatalf("RT1: physical usage %d exceeds the cap %d — purging must keep the file bounded", u, cfg2.CapBytes)
 	}
 	obsAfter := countRows(t, db, `SELECT COUNT(*) FROM observations`)
@@ -249,7 +249,7 @@ func TestActivation_AcceptsReusablePagesAtWatermark(t *testing.T) {
 	cfg2 := cfg
 	cfg2.CapBytes = usage + 256*1024 // over the watermark; margin−reserve hosts the working churn // usage ≥ watermark by construction
 	s3 := newRunning(t, cfg2)
-	if s3.freelistBytes() < slotWriteReserveBytes {
+	if fb, _ := s3.freelistBytes(); fb < slotWriteReserveBytes {
 		s3.Stop()
 		t.Fatal("fixture failure: no reusable pages in the manufactured state")
 	}
@@ -434,7 +434,7 @@ func TestReceipt_DialContextRecordedAndSeparated(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 5; i++ {
-		s.compactOnce() // each pass consumes one ≤64 window
+		_ = s.compactOnce() // each pass consumes one ≤64 window
 	}
 	s.Stop()
 
@@ -691,7 +691,7 @@ func TestCap_HardCeilingRefusesWritesEvenWithFreelist(t *testing.T) {
 	cfg2 := cfg
 	cfg2.CapBytes = usage - usage/10 // usage is ALREADY past the cap; freelist exists
 	s := newRunning(t, cfg2)
-	if s.freelistBytes() < slotWriteReserveBytes {
+	if fb, _ := s.freelistBytes(); fb < slotWriteReserveBytes {
 		s.Stop()
 		t.Fatal("fixture failure: no reusable pages")
 	}
@@ -749,7 +749,7 @@ func TestCap_CeilingReservesWriteGrowth(t *testing.T) {
 	// the write-growth reserve — the exact band the un-fixed check passed.
 	cfg2.CapBytes = usage + 64*1024
 	s := newRunning(t, cfg2)
-	if s.freelistBytes() < slotWriteReserveBytes {
+	if fb, _ := s.freelistBytes(); fb < slotWriteReserveBytes {
 		s.Stop()
 		t.Fatal("fixture failure: no reusable pages")
 	}
@@ -874,7 +874,7 @@ func TestCap_SustainedDropsStayUnderTheCap(t *testing.T) {
 	for j := 0; j < 30; j++ {
 		s.CaptureSlot(richSlot(slotAt((900 + j) * 15)))
 		drain(t, s)
-		if u := s.physicalUsage(); u > cfg2.CapBytes {
+		if u, _ := s.physicalUsage(); u > cfg2.CapBytes {
 			t.Fatalf("P1: usage %d exceeded the cap %d after %d sustained drops — the loss refreshes consumed the reserve", u, cfg2.CapBytes, j+1)
 		}
 	}
@@ -930,8 +930,8 @@ func TestRT6_BudgetReservesEveryClassReceipt(t *testing.T) {
 	}
 	obsBefore := countRows(t, db, `SELECT COUNT(*) FROM observations`)
 
-	s.purgeChunk()
-	got := s.metadataBytes()
+	_ = s.purgeChunk()
+	got, _ := s.metadataBytes()
 	s.Stop()
 
 	if got > metadataBudgetBytes {

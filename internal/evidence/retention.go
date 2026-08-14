@@ -81,7 +81,7 @@ type RetentionStatus struct {
 	PurgedObservations int64  `json:"purged_observations"`
 	PurgedCoverage     int64  `json:"purged_coverage"`
 	Records            int64  `json:"records"`
-	MetadataBytes      int64  `json:"metadata_bytes"`
+	MetadataBytes      *int64 `json:"metadata_bytes"` // null when the archive could not be measured (L2)
 	Pressure           string `json:"pressure,omitempty"`
 }
 
@@ -89,13 +89,19 @@ type RetentionStatus struct {
 // pressure. It runs at most ONE bounded purge chunk (RT8: queued slots take
 // priority between chunks), then answers whether reusable pages exist for
 // the write. Called without s.mu; all work is on the db handle.
-func (s *Service) tryFreeSpace() bool {
+func (s *Service) tryFreeSpace() (bool, error) {
 	target := purgeFreelistTarget
 	if half := (s.cfg.CapBytes - headroomBytes) / 2; target > half {
 		target = half
 	}
-	if s.freelistBytes() < target {
-		s.purgeChunk()
+	fb, err := s.freelistBytes()
+	if err != nil {
+		return false, err
+	}
+	if fb < target {
+		if err := s.purgeChunk(); err != nil {
+			return false, err
+		}
 	}
 	// Reusable pages authorize the write ONLY below the hard cap
 	// (package-review P1, 2026-08-10): freelist reuse keeps the db file
@@ -104,15 +110,25 @@ func (s *Service) tryFreeSpace() bool {
 	// yes. The cap is a ceiling; at or past it, capture drops, however
 	// many pages are free inside the file. When the freelist itself was
 	// the blocker, purgeChunk already recorded the specific pressure.
-	ok := s.freelistBytes() >= slotWriteReserveBytes
-	if ok && s.physicalUsage() >= s.cfg.CapBytes-writeWalReserveBytes {
-		ok = false
-		s.setPressure(pressureCap)
+	fb, err = s.freelistBytes()
+	if err != nil {
+		return false, err
+	}
+	ok := fb >= slotWriteReserveBytes
+	if ok {
+		usage, err := s.physicalUsage()
+		if err != nil {
+			return false, err
+		}
+		if usage >= s.cfg.CapBytes-writeWalReserveBytes {
+			ok = false
+			s.setPressure(pressureCap)
+		}
 	}
 	if ok {
 		s.setPressure("")
 	}
-	return ok
+	return ok, nil
 }
 
 func (s *Service) setPressure(p string) {
@@ -121,72 +137,103 @@ func (s *Service) setPressure(p string) {
 	s.mu.Unlock()
 }
 
-func (s *Service) freelistBytes() int64 {
+func (s *Service) freelistBytes() (int64, error) {
+	if err := measureFail("pragma_freelist_count"); err != nil {
+		return 0, err
+	}
 	var pages, pageSize int64
 	if err := s.db.QueryRow(`PRAGMA freelist_count`).Scan(&pages); err != nil {
-		return 0
+		return 0, measured("pragma_freelist_count", err)
+	}
+	if err := measureFail("pragma_page_size"); err != nil {
+		return 0, err
 	}
 	if err := s.db.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
-		return 0
+		return 0, measured("pragma_page_size", err)
 	}
-	return pages * pageSize
+	return pages * pageSize, nil
 }
 
 // metadataBytes is the LOGICAL loss+retention metadata estimate the 4 MiB
 // budget bounds: a fixed per-row overhead plus the supersedes text — an
 // estimate by design; the budget is a reserve, not an accounting claim.
-func (s *Service) metadataBytes() int64 {
+func (s *Service) metadataBytes() (int64, error) {
 	var loss, ret int64
-	_ = s.db.QueryRow(
-		`SELECT COALESCE(SUM(128 + COALESCE(LENGTH(supersedes), 0)), 0) FROM loss_intervals`).Scan(&loss)
-	_ = s.db.QueryRow(
-		`SELECT COALESCE(SUM(128 + COALESCE(LENGTH(supersedes), 0)), 0) FROM retention_records`).Scan(&ret)
-	return loss + ret
+	if err := measureFail("metadata_loss"); err != nil {
+		return 0, err
+	}
+	if err := s.db.QueryRow(
+		`SELECT COALESCE(SUM(128 + COALESCE(LENGTH(supersedes), 0)), 0) FROM loss_intervals`).Scan(&loss); err != nil {
+		return 0, measured("metadata_loss", err)
+	}
+	if err := measureFail("metadata_retention"); err != nil {
+		return 0, err
+	}
+	if err := s.db.QueryRow(
+		`SELECT COALESCE(SUM(128 + COALESCE(LENGTH(supersedes), 0)), 0) FROM retention_records`).Scan(&ret); err != nil {
+		return 0, measured("metadata_retention", err)
+	}
+	return loss + ret, nil
 }
 
 // purgeChunk runs one bounded purge: cloud-present rows first, then (full
 // §4.1) the oldest unsynced class. A chunk whose receipt cannot fit the
 // metadata budget does NOT run — no invisible purge (RT6).
-func (s *Service) purgeChunk() {
+func (s *Service) purgeChunk() error {
 	// The check RESERVES the incoming receipt's estimate (codex-P2 fix):
 	// the purge may only run if its own receipt still fits the budget.
-	if s.metadataBytes()+receiptReserveBytes > metadataBudgetBytes {
-		s.compactOnce()
-		if s.metadataBytes()+receiptReserveBytes > metadataBudgetBytes {
+	mb, err := s.metadataBytes()
+	if err != nil {
+		return err
+	}
+	if mb+receiptReserveBytes > metadataBudgetBytes {
+		if err := s.compactOnce(); err != nil {
+			return err
+		}
+		if mb, err = s.metadataBytes(); err != nil {
+			return err
+		}
+		if mb+receiptReserveBytes > metadataBudgetBytes {
 			s.setPressure(pressureMetadata)
-			return
+			return nil // genuine metadata pressure — not a measurement failure
 		}
 	}
+	// A purge EXECUTION failure must not be misread as capacity: it means the
+	// archive could not be operated, so it propagates (fail-closed) rather than
+	// leaving the slot to be blamed on cap. The former per-chunk Warn is dropped —
+	// the tracker's bounded degraded transition replaces "log every failed retry".
 	purged, err := s.purgeAckedChunk()
 	if err != nil {
-		s.log.WarnWith().Err(err).Msg("evidence: acked purge chunk failed")
-		return
+		return measured("purge_acked", err)
 	}
 	if !purged {
 		purged, err = s.purgeUnsyncedChunk()
 		if err != nil {
-			s.log.WarnWith().Err(err).Msg("evidence: unsynced purge chunk failed")
-			return
+			return measured("purge_unsynced", err)
 		}
 	}
 	if !purged {
 		s.setPressure(pressureCap)
-		return
+		return nil // genuine cap — nothing purgeable
 	}
 	s.setPressure("")
-	// Bounded checkpoint folds the chunk's WAL so freed pages are reusable
-	// and physical usage reflects reality — never VACUUM on the live path.
-	// The result row is INSPECTED (package-review P1): busy != 0 means a
-	// reader blocked the fold and physical usage still carries the WAL —
-	// the hard-cap re-check in tryFreeSpace is what stops writes then, but
-	// the operator deserves the trace.
+	// Bounded checkpoint folds the chunk's WAL so freed pages are reusable and
+	// physical usage reflects reality — never VACUUM on the live path. A failure
+	// means usage measurement is unreliable, so it propagates (fail-closed);
+	// busy != 0 (a reader blocked the fold) is NOT a failure, only a Debug trace.
+	if err := measureFail("checkpoint_purge"); err != nil {
+		return err
+	}
 	var busy, logFrames, checkpointed int64
 	if err := s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).
-		Scan(&busy, &logFrames, &checkpointed); err == nil && busy != 0 {
+		Scan(&busy, &logFrames, &checkpointed); err != nil {
+		return measured("checkpoint_purge", err)
+	}
+	if busy != 0 {
 		s.log.DebugWith().Int64("wal_frames", logFrames).
 			Msg("evidence: post-purge checkpoint blocked by a reader; WAL retained until it finishes")
 	}
-	s.maybeCompact()
+	return s.maybeCompact()
 }
 
 type purgeSet struct {
@@ -418,14 +465,20 @@ func deleteByUUID(tx *sql.Tx, table string, uuids []string) error {
 
 // maybeCompact runs compaction when either metadata kind passes the
 // trigger.
-func (s *Service) maybeCompact() {
+func (s *Service) maybeCompact() error {
 	for _, table := range []string{"loss_intervals", "retention_records"} {
+		if err := measureFail("compaction_count"); err != nil {
+			return err
+		}
 		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err == nil && n > compactionTrigger {
-			s.compactOnce()
-			return
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+			return measured("compaction_count", err)
+		}
+		if n > compactionTrigger {
+			return s.compactOnce()
 		}
 	}
+	return nil
 }
 
 // compactRow is one metadata row during compaction run-building.
@@ -441,14 +494,16 @@ type compactRow struct {
 // always; a SUMMARY only after its own accepted/already_present, so its
 // earlier supersession is known applied at SMC before it is replaced
 // (operator ruling 3).
-func (s *Service) compactOnce() {
-	s.compactKind("loss_intervals",
+func (s *Service) compactOnce() error {
+	if err := s.compactKind("loss_intervals",
 		`SELECT uuid, start_utc, end_utc, slots, observations,
 		        reason || '|' || remote_status || '|' || CAST(dial_mhz AS TEXT)
 		   FROM loss_intervals
 		  WHERE sealed = 1 AND (supersedes IS NULL OR `+cloudPresent+`)
-		  ORDER BY start_utc ASC, uuid ASC LIMIT 512`)
-	s.compactKind("retention_records",
+		  ORDER BY start_utc ASC, uuid ASC LIMIT 512`); err != nil {
+		return err
+	}
+	return s.compactKind("retention_records",
 		`SELECT uuid, start_utc, end_utc, observations, coverage,
 		        reason || '|' || CAST(acknowledged AS TEXT) || '|' || CAST(dial_mhz AS TEXT)
 		   FROM retention_records
@@ -456,19 +511,26 @@ func (s *Service) compactOnce() {
 		  ORDER BY start_utc ASC, uuid ASC LIMIT 512`)
 }
 
-func (s *Service) compactKind(table, query string) {
+func (s *Service) compactKind(table, query string) error {
+	if err := measureFail("compaction_query"); err != nil {
+		return err
+	}
 	rs, err := s.db.Query(query)
 	if err != nil {
-		return
+		return measured("compaction_query", err)
 	}
 	var rows []compactRow
 	for rs.Next() {
 		var r compactRow
 		if err := rs.Scan(&r.uuid, &r.start, &r.end, &r.a, &r.b, &r.key); err != nil {
 			_ = rs.Close()
-			return
+			return measured("compaction_scan", err)
 		}
 		rows = append(rows, r)
+	}
+	if err := rs.Err(); err != nil {
+		_ = rs.Close()
+		return measured("compaction_rows", err)
 	}
 	_ = rs.Close()
 
@@ -493,7 +555,7 @@ func (s *Service) compactKind(table, query string) {
 		i += n - 1
 	}
 	if runStart < 0 {
-		return
+		return nil // no adjacent-agreeing run to merge — not a failure
 	}
 
 	var sumA, sumB int64
@@ -512,12 +574,15 @@ func (s *Service) compactKind(table, query string) {
 	}
 	supersedes, err := json.Marshal(preds)
 	if err != nil {
-		return
+		return measured("compaction_marshal", err)
 	}
 
+	if err := measureFail("compaction_begin"); err != nil {
+		return err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return
+		return measured("compaction_begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	summary := utils.NewUUIDv7At(time.Now())
@@ -527,7 +592,7 @@ func (s *Service) compactKind(table, query string) {
 			`INSERT INTO loss_intervals (uuid, start_utc, end_utc, slots, observations, reason, remote_status, dial_mhz, sealed, supersedes)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
 			summary, minStart, maxEnd, sumA, sumB, parts[0], parts[1], parts[2], string(supersedes)); err != nil {
-			return
+			return measured("compaction_insert", err)
 		}
 	} else {
 		parts := splitKey(rows[0].key)
@@ -535,13 +600,19 @@ func (s *Service) compactKind(table, query string) {
 			`INSERT INTO retention_records (uuid, start_utc, end_utc, observations, coverage, reason, acknowledged, dial_mhz, supersedes)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			summary, minStart, maxEnd, sumA, sumB, parts[0], parts[1], parts[2], string(supersedes)); err != nil {
-			return
+			return measured("compaction_insert", err)
 		}
 	}
 	if err := deleteByUUID(tx, table, preds); err != nil {
-		return
+		return measured("compaction_delete", err)
 	}
-	_ = tx.Commit()
+	if err := measureFail("compaction_commit"); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return measured("compaction_commit", err)
+	}
+	return nil
 }
 
 func splitKey(key string) []string {
@@ -566,7 +637,11 @@ func (s *Service) fillRetentionCounts(rs *RetentionStatus) {
 	_ = s.db.QueryRow(
 		`SELECT COALESCE(SUM(observations), 0), COALESCE(SUM(coverage), 0), COUNT(*) FROM retention_records`).
 		Scan(&rs.PurgedObservations, &rs.PurgedCoverage, &rs.Records)
-	rs.MetadataBytes = s.metadataBytes()
+	// Status poll: report metadata bytes as null when unmeasurable, but do NOT
+	// drive the write-driven tracker — recovery/heartbeat belong to write attempts.
+	if mb, err := s.metadataBytes(); err == nil {
+		rs.MetadataBytes = &mb
+	}
 }
 
 var _ = evidencewire.KindRetention // wire kind used by sync.go's table map

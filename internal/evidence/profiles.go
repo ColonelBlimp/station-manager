@@ -173,8 +173,25 @@ func (s *Service) reconcileProfiles(now time.Time) error {
 	// write-through does, or the first restart after a purge would
 	// permanently degrade profiles.
 	if len(decls) > 0 {
-		usage, watermark := s.physicalUsage(), s.cfg.CapBytes-headroomBytes
-		if usage >= s.cfg.CapBytes-writeWalReserveBytes || (usage >= watermark && s.freelistBytes() < slotWriteReserveBytes) {
+		// Fail-closed (Q1): a measurement we cannot take must refuse activation, not
+		// silently pass a stale/zero value. Refusal is already the non-fatal posture
+		// here (Start records profile_error and capture continues).
+		usage, err := s.physicalUsage()
+		if err != nil {
+			return errors.New(op).WithErr(err).WithMsg(
+				"cannot measure physical usage to authorize profile activation")
+		}
+		watermark := s.cfg.CapBytes - headroomBytes
+		overCap := usage >= s.cfg.CapBytes-writeWalReserveBytes
+		if !overCap && usage >= watermark {
+			fb, err := s.freelistBytes()
+			if err != nil {
+				return errors.New(op).WithErr(err).WithMsg(
+					"cannot measure reusable pages to authorize profile activation")
+			}
+			overCap = fb < slotWriteReserveBytes
+		}
+		if overCap {
 			return errors.New(op).WithMsgf(
 				"physical usage %d B is at or past the activation watermark %d B (cap %d B minus reserved headroom) with no reusable pages; the declaration cannot activate without risking the hard cap",
 				usage, watermark, s.cfg.CapBytes)

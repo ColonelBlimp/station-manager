@@ -360,7 +360,7 @@ func TestCap_DropsNewBeforeTheLimit(t *testing.T) {
 	for i := 400; i < 404; i++ {
 		s.CaptureSlot(richSlot(slotAt(15 * i)))
 		drain(t, s)
-		if u := s.physicalUsage(); u > cfg.CapBytes {
+		if u, _ := s.physicalUsage(); u > cfg.CapBytes {
 			t.Fatalf("usage %d exceeded the cap %d past the watermark", u, cfg.CapBytes)
 		}
 	}
@@ -368,8 +368,8 @@ func TestCap_DropsNewBeforeTheLimit(t *testing.T) {
 	if st.DroppedSlots == 0 {
 		t.Error("the watermark trip recorded no dropped slots")
 	}
-	if st.UsageBytes == 0 || st.UsageBytes > cfg.CapBytes {
-		t.Errorf("Status usage = %d, want within the cap %d", st.UsageBytes, cfg.CapBytes)
+	if st.UsageBytes == nil || *st.UsageBytes == 0 || *st.UsageBytes > cfg.CapBytes {
+		t.Errorf("Status usage = %v, want a measured value within the cap %d", st.UsageBytes, cfg.CapBytes)
 	}
 	s.Stop() // persists the accumulator with priority, whatever the band did
 
@@ -463,7 +463,7 @@ func TestStatus_SurfacesUsageAndUnprofiledCount(t *testing.T) {
 	if !st.Enabled || st.State != StateCapturing {
 		t.Fatalf("Status = %+v, want enabled/capturing", st)
 	}
-	if st.UsageBytes == 0 {
+	if st.UsageBytes == nil || *st.UsageBytes == 0 {
 		t.Error("usage bytes = 0, want the physical file sizes")
 	}
 	if st.CapBytes != cfg.CapBytes || st.WatermarkBytes != cfg.CapBytes-headroomBytes {

@@ -629,7 +629,7 @@ func TestO5_ActivationRefusedAtCap(t *testing.T) {
 		s.CaptureSlot(richSlot(slotAt(i * 15)))
 	}
 	drain(t, s)
-	usage := s.physicalUsage()
+	usage, _ := s.physicalUsage()
 	s.Stop()
 	if usage <= headroomBytes+1 {
 		t.Fatalf("fixture failure: usage %d too small to exceed the boot-2 cap", usage)
@@ -864,7 +864,7 @@ func TestO5_MigrationFoldsTransientGrowth(t *testing.T) {
 	buildV1Archive(t, cfg.Path, 1500) // big enough that a retained WAL is unmistakable
 	s := newRunning(t, cfg)
 
-	usage := s.physicalUsage()
+	usage, _ := s.physicalUsage()
 	var dbSize int64
 	if fi, err := os.Stat(cfg.Path); err == nil {
 		dbSize = fi.Size()
