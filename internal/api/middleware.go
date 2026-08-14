@@ -215,6 +215,18 @@ type responseRecorder struct {
 	errCode    string
 	errMessage string
 	errOp      string
+
+	// opID carries a handler-generated operation-id (e.g. the rig-command op-id,
+	// L4) onto the access-log line, so the HTTP record and the durable outcome
+	// record are joinable without a second per-request log line.
+	opID string
+}
+
+// NoteOpID stamps an operation-id onto the access-log line. First call wins.
+func (r *responseRecorder) NoteOpID(id string) {
+	if r.opID == "" {
+		r.opID = id
+	}
 }
 
 func newResponseRecorder(w http.ResponseWriter) *responseRecorder {
@@ -354,6 +366,9 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 				Str("code", rec.errCode).
 				Str("error", rec.errMessage).
 				Str("op", rec.errOp)
+		}
+		if rec.opID != "" {
+			evt = evt.Str("op_id", rec.opID)
 		}
 		evt.Msg("http request")
 	})

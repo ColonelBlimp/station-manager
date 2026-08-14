@@ -166,7 +166,7 @@ func TestSendCommand_RefusesUnverifiedIdentity(t *testing.T) {
 func TestSendCommands(t *testing.T) {
 	s, fake := newCommandTestService(t)
 
-	err := s.SendCommands(context.Background(), []RigCommand{
+	_, err := s.SendCommands(context.Background(), []RigCommand{
 		{Op: "set_freq", Value: "14074000"},
 		{Op: "set_mode", Value: "DATA-U"},
 	})
@@ -187,7 +187,7 @@ func TestSendCommands(t *testing.T) {
 func TestSendCommands_RejectsWholeBatchBeforeWrite(t *testing.T) {
 	s, fake := newCommandTestService(t)
 
-	err := s.SendCommands(context.Background(), []RigCommand{
+	_, err := s.SendCommands(context.Background(), []RigCommand{
 		{Op: "set_freq", Value: "14074000"},
 		{Op: "frobnicate", Value: "x"},
 	})
@@ -201,7 +201,7 @@ func TestSendCommands_RejectsWholeBatchBeforeWrite(t *testing.T) {
 
 func TestSendCommands_Empty(t *testing.T) {
 	s, _ := newCommandTestService(t)
-	if err := s.SendCommands(context.Background(), nil); err == nil {
+	if _, err := s.SendCommands(context.Background(), nil); err == nil {
 		t.Fatal("SendCommands(nil) = nil, want error")
 	}
 }

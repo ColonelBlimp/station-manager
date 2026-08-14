@@ -4,6 +4,7 @@ import (
 	"context"
 	stderr "errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
@@ -91,15 +92,22 @@ type RigCommand struct {
 // cat.ErrCommandNotExposed / cat.ErrUnmappedValue from encoding,
 // ErrRigNotConnected when no rig is up, or a serial write error. The write
 // path stays inside internal/bridge (ADR 0013).
-func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
+// SendCommands returns a generated operation-id (echoed by the HTTP handler to
+// correlate the access record with the durable command outcome, L4) alongside the
+// error. A PRE-WRITE rejection (encode error, rig down, identity/liveness/tx gates)
+// returns the id with no outcome record — nothing reached the wire, so the returned
+// error IS the record. Once a write is attempted, the outcome (applied count, failed
+// index/op) is logged at the bridge boundary via s.cmdLog.
+func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) (string, error) {
 	const errOp errors.Op = "bridge.Service.SendCommands"
+	opID := s.nextOpID()
 
 	if len(cmds) == 0 {
-		return errors.New(errOp).WithMsg("no commands")
+		return opID, errors.New(errOp).WithMsg("no commands")
 	}
 	def, ok := cat.Lookup(s.cfg.Cat.Driver)
 	if !ok {
-		return errors.New(errOp).WithMsgf("no rig definition for driver %q", s.cfg.Cat.Driver)
+		return opID, errors.New(errOp).WithMsgf("no rig definition for driver %q", s.cfg.Cat.Driver)
 	}
 
 	// Encode every op up front (all-or-nothing): a bad op rejects the whole
@@ -108,7 +116,7 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 	for i, c := range cmds {
 		b, err := cat.EncodeCommand(def, c.Op, c.Value)
 		if err != nil {
-			return errors.New(errOp).WithErr(err).WithMsgf("encode op %q", c.Op)
+			return opID, errors.New(errOp).WithErr(err).WithMsgf("encode op %q", c.Op)
 		}
 		encoded[i] = encodedCommand{op: c.Op, value: c.Value, bytes: b}
 	}
@@ -133,18 +141,18 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 	txUnconfirmed := s.txUncertain
 	s.mu.Unlock()
 	if cl == nil {
-		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsgf("%d command(s)", len(cmds))
+		return opID, errors.New(errOp).WithErr(ErrRigNotConnected).WithMsgf("%d command(s)", len(cmds))
 	}
 	// Never drive a rig whose identity isn't confirmed as the configured
 	// driver — a wrong / unrecognised / never-identified rig must not receive
 	// commands (H2). State display is unaffected; only this write path gates.
 	if !idOK {
-		return errors.New(errOp).WithErr(ErrRigIdentityUnverified).WithMsgf("%d command(s)", len(cmds))
+		return opID, errors.New(errOp).WithErr(ErrRigIdentityUnverified).WithMsgf("%d command(s)", len(cmds))
 	}
 	// Nor a rig the liveness strikes read as non-responsive (finding 3) — the
 	// same predicate the key paths and RigConnected use.
 	if !writable {
-		return errors.New(errOp).WithErr(ErrRigNotConnected).WithMsgf("rig not responding (liveness strikes), %d command(s)", len(cmds))
+		return opID, errors.New(errOp).WithErr(ErrRigNotConnected).WithMsgf("rig not responding (liveness strikes), %d command(s)", len(cmds))
 	}
 	// Never write to a rig that is transmitting (review 2026-06-16): a tune
 	// carrier or FT8 TX owns the rig, and a generic command could retune/re-mode
@@ -152,29 +160,46 @@ func (s *Service) SendCommands(ctx context.Context, cmds []RigCommand) error {
 	// clamp. The keyed-transmission controllers are the only writers while PTT is
 	// up. Surfaced as a 409 conflict so the SPA can retry once TX ends.
 	if txBusy {
-		return errors.New(errOp).WithErr(ErrTxActive).WithMsgf("%d command(s)", len(cmds))
+		return opID, errors.New(errOp).WithErr(ErrTxActive).WithMsgf("%d command(s)", len(cmds))
 	}
 	// An UNCONFIRMED prior transmission gets the same treatment as an active
 	// one (8bd88c1b review): the active flags cleared but the PTT may still
 	// be up, and a frequency/mode/power write to a transmitting rig is the
 	// scenario the txBusy guard exists to prevent.
 	if txUnconfirmed {
-		return errors.New(errOp).WithErr(ErrTxUncertain).WithMsgf("%d command(s)", len(cmds))
+		return opID, errors.New(errOp).WithErr(ErrTxUncertain).WithMsgf("%d command(s)", len(cmds))
 	}
 
+	// From here a write is attempted, so the outcome is recorded (L4): applied is how
+	// many ops fully reached the rig, and on failure the op at that index is the one
+	// that failed.
+	var applied int
+	var err error
 	// CI-V (ADR 0034): the rig confirms each command with a bare FB/FA ACK and
 	// never broadcasts the change, so write each frame and wait for its ACK,
 	// then synthesize the state push from the commanded value. The Kenwood path
 	// stays fire-and-forget — confirmation arrives asynchronously as a rig push.
 	if def.Protocol == cat.ProtocolIcomCIV {
-		return s.sendCommandsCIV(ctx, def, cl, encoded)
+		applied, err = s.sendCommandsCIV(ctx, def, cl, encoded)
+	} else {
+		var line []byte
+		for _, c := range encoded {
+			line = append(line, c.bytes...)
+		}
+		// One CAT line, atomic on the wire: it all reached the rig or the write
+		// failed. Confirmation is the async push, so "applied" here means "written".
+		if err = cl.WriteCommandBytes(ctx, line); err == nil {
+			applied = len(encoded)
+		}
 	}
-
-	var line []byte
-	for _, c := range encoded {
-		line = append(line, c.bytes...)
+	// An unset rigdef protocol defaults to the Kenwood ASCII path (cat), so name it
+	// explicitly rather than logging an empty protocol.
+	proto := string(def.Protocol)
+	if proto == "" {
+		proto = cat.ProtocolKenwood
 	}
-	return cl.WriteCommandBytes(ctx, line)
+	s.recordCommandOutcome(opID, proto, cmds, applied, err)
+	return opID, err
 }
 
 // encodedCommand pairs a semantic op (+ its commanded value, for state
@@ -199,15 +224,16 @@ type encodedCommand struct {
 // ErrCommandNoAck. A mid-batch failure leaves earlier ops applied (CI-V can't be
 // atomic across frames) — the state already pushed for them reflects reality;
 // the error names the op that failed.
-func (s *Service) sendCommandsCIV(ctx context.Context, def cat.RigDefinition, cl serial.Client, cmds []encodedCommand) error {
-	const errOp errors.Op = "bridge.Service.SendCommands"
-
+// Returns how many ops fully applied (all frames ACKed): len(cmds) on success, or
+// the index of the first op that failed (L4 — that op is the failed one, the earlier
+// count is the applied count).
+func (s *Service) sendCommandsCIV(ctx context.Context, def cat.RigDefinition, cl serial.Client, cmds []encodedCommand) (int, error) {
 	s.cmdMu.Lock()
 	defer s.cmdMu.Unlock()
 
-	for _, c := range cmds {
+	for i, c := range cmds {
 		if err := s.writeCIVFramesAwaitAck(ctx, cl, c.bytes, fmt.Sprintf("op %q (value %q)", c.op, c.value)); err != nil {
-			return err
+			return i, err
 		}
 		// Every frame of this op ACKed (FB). The rig applied it but won't push it,
 		// so reflect the new state ourselves (ADR 0034): synthesize from the
@@ -219,7 +245,7 @@ func (s *Service) sendCommandsCIV(ctx context.Context, def cat.RigDefinition, cl
 			s.readBackAfterCommand(ctx, cl)
 		}
 	}
-	return nil
+	return len(cmds), nil
 }
 
 // writeCIVFramesAwaitAck writes each CI-V frame of b and waits for the rig's
@@ -383,7 +409,36 @@ func (s *Service) publishCommandedState(def cat.RigDefinition, op, value string)
 	s.hub.publish(Event{Name: EventRigState, Payload: payload})
 }
 
-// SendCommand is the single-op convenience over SendCommands.
+// SendCommand is the single-op convenience over SendCommands (op-id discarded).
 func (s *Service) SendCommand(ctx context.Context, op, value string) error {
-	return s.SendCommands(ctx, []RigCommand{{Op: op, Value: value}})
+	_, err := s.SendCommands(ctx, []RigCommand{{Op: op, Value: value}})
+	return err
+}
+
+// nextOpID generates the per-command operation-id for L4 correlation: a monotonic
+// per-process counter, greppable and stable within a session.
+func (s *Service) nextOpID() string {
+	return "rc" + strconv.FormatUint(s.cmdSeq.Add(1), 10)
+}
+
+// recordCommandOutcome builds the L4 outcome from an attempted send and hands it to
+// the command logger (immediate, or coalesced for freq-steps). On error, failedIdx is
+// the applied count — the op at that index is the one that failed.
+func (s *Service) recordCommandOutcome(opID, proto string, cmds []RigCommand, applied int, err error) {
+	ops := make([]string, len(cmds))
+	values := make([]string, len(cmds))
+	for i, c := range cmds {
+		ops[i], values[i] = c.Op, c.Value
+	}
+	o := commandOutcome{
+		opID: opID, protocol: proto, ops: ops, values: values,
+		batch: len(cmds), applied: applied, failedIdx: -1,
+	}
+	if err != nil {
+		o.failedIdx = applied
+		if applied < len(cmds) {
+			o.failedOp = cmds[applied].Op
+		}
+	}
+	s.cmdLog.record(o)
 }

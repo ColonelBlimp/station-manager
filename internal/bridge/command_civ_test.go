@@ -32,6 +32,20 @@ var civFreqBroadcast = []byte{0xFE, 0xFE, 0x00, 0x94, 0x00, 0x00, 0x40, 0x07, 0x
 // subscriber channel for asserting synthesized state, plus cleanup.
 func startedCIVService(t *testing.T, ackFrame []byte) (*Service, *fakeSerial, <-chan Event, func()) {
 	t.Helper()
+	return startedCIVServiceWith(t, func([]byte) []byte {
+		if ackFrame != nil {
+			return append([]byte(nil), ackFrame...)
+		}
+		return nil
+	})
+}
+
+// startedCIVServiceWith is startedCIVService with a per-write reply function so a test
+// can vary the ACK by command (e.g. OK set_freq, NAK set_mode for a mid-batch partial
+// failure). reply is called only for armed, non-tx_off writes; the tx_off + arming
+// dance is handled here.
+func startedCIVServiceWith(t *testing.T, reply func(w []byte) []byte) (*Service, *fakeSerial, <-chan Event, func()) {
+	t.Helper()
 	s, fake := newCIVPipelineTestService(t)
 	// Replies stay DISARMED through Start: the INIT/READ startup writes must
 	// not queue stale ACK frames that could later be misdelivered to a real
@@ -40,7 +54,7 @@ func startedCIVService(t *testing.T, ackFrame []byte) (*Service, *fakeSerial, <-
 	// The ADR 0051 defensive recovery sends tx_off (1C 00 00) on identity
 	// confirmation; a real rig ACKs that benign frame regardless of the
 	// behaviour a test scripts for its OWN writes — so answer it OK always,
-	// and apply the scripted ackFrame to everything else.
+	// and apply the scripted reply to everything else.
 	fake.onWrite = func(w []byte) []byte {
 		if !replyArmed.Load() {
 			return nil
@@ -48,10 +62,7 @@ func startedCIVService(t *testing.T, ackFrame []byte) (*Service, *fakeSerial, <-
 		if bytes.HasSuffix(w, []byte{0x1C, 0x00, 0x00}) {
 			return append([]byte(nil), civAckOKFrame...)
 		}
-		if ackFrame != nil {
-			return append([]byte(nil), ackFrame...)
-		}
-		return nil
+		return reply(w)
 	}
 	if err := s.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)

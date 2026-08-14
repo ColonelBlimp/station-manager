@@ -67,7 +67,13 @@ func (s *Server) handleRigCommand(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.bridge.SendCommands(r.Context(), cmds); err != nil {
+	// The bridge generates an operation-id and logs the durable command outcome
+	// (L4); echo the id onto this request's access-log line so the two records join.
+	opID, err := s.bridge.SendCommands(r.Context(), cmds)
+	if rr, ok := w.(*responseRecorder); ok {
+		rr.NoteOpID(opID)
+	}
+	if err != nil {
 		s.writeRigCommandError(w, op, err)
 		return
 	}

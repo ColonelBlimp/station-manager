@@ -200,6 +200,12 @@ type Service struct {
 	// (buffered 1): SendCommands installs it under mu before each write and the
 	// readLoop delivers the FB(true)/FA(false) to it via deliverAck. Nil when no
 	// command is in flight.
+	// cmdLog logs L4 rig-command outcomes at the durable bridge boundary (with
+	// freq-step coalescing); cmdSeq generates the per-command operation-id that
+	// SendCommands returns for the HTTP handler to echo. Both set in New.
+	cmdLog *commandLog
+	cmdSeq atomic.Uint64
+
 	cmdMu      sync.Mutex
 	pendingAck chan bool
 
@@ -562,6 +568,7 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		cfg:      cfg,
 		logger:   logger,
 		hub:      newHub(logger),
+		cmdLog:   newCommandLog(logger, commandCoalesceWindow),
 		stopDone: make(chan struct{}),
 		openClient: func(c serial.Config) (serial.Client, error) {
 			return serial.Open(c)
@@ -784,6 +791,9 @@ func (s *Service) Stop() error {
 			cancel()
 		}
 		s.wg.Wait()
+		// Flush any pending coalesced freq-step run so a trailing VFO-step summary
+		// (L4) is not lost at shutdown.
+		s.cmdLog.flush()
 		s.hub.close()
 		// The hub has drained to 0; clear the edge-trigger baseline so a
 		// restart's first genuine broadcast isn't suppressed as unchanged.
