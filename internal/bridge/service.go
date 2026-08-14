@@ -249,6 +249,7 @@ type Service struct {
 	tuneActive       bool
 	tuneRestoreMode  string
 	tuneRestorePower int
+	tuneStart        time.Time // when the carrier keyed (L4: stop-record duration)
 	tuneTimer        *time.Timer
 	// tuneGen is the tune path's TX-transition generation (mu-guarded),
 	// bumped on every key/finish/disconnect-clear. The auto-off backstop

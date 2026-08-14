@@ -159,6 +159,7 @@ func (s *Service) StartTune(ctx context.Context) error {
 	s.tuneRestoreMode = s.lastMode
 	s.tuneRestorePower = s.lastPower
 	s.tuneActive = true
+	s.tuneStart = time.Now() // L4: duration baseline for the stop record
 	// Arm the backstop together with tuneActive (atomic under mu) so the
 	// guaranteed stop exists from the instant we commit to transmitting.
 	// Bump the TX-transition generation and arm the backstop AGAINST it: the
@@ -223,6 +224,15 @@ func (s *Service) StartTune(ctx context.Context) error {
 		return errors.New(errOp).WithErr(err).WithMsg("write tune-on")
 	}
 	s.publishTuneState(true)
+	// L4 durable start record: the normal operator path published SSE only, leaving no
+	// log while the auto-off/disconnect teardowns did. reason/power/mode/auto-off match
+	// the stop record (finishTune) so the whole tune lifecycle is uniform.
+	s.logger.InfoWith().
+		Str("reason", "operator").
+		Int("power_w", s.tunePowerW).
+		Str("mode", tuneCarrierMode).
+		Int64("auto_off_seconds", int64(s.tuneMaxDuration.Seconds())).
+		Msg("bridge: tune carrier started")
 	return nil
 }
 
@@ -293,7 +303,7 @@ func (s *Service) releaseTuneChecked(ctx context.Context, reason string, wantGen
 	if cl == nil {
 		// Rig gone — the carrier dropped with it (power-off / cable yank
 		// physically unkeys). Nothing to write; just sync state.
-		s.finishTune()
+		s.finishTune(reason)
 		return nil
 	}
 
@@ -337,7 +347,7 @@ func (s *Service) releaseTuneChecked(ctx context.Context, reason string, wantGen
 		s.logger.ErrorWith().Str("reason", reason).
 			Msg("bridge: skipping tune mode/power restore — unkey unconfirmed (rig may still be keyed)")
 		s.invalidateTuneSnapshot() // rig is still at tune mode/power; the snapshot now lies
-		s.finishTune()
+		s.finishTune(reason)
 		return nil
 	}
 
@@ -363,14 +373,14 @@ func (s *Service) releaseTuneChecked(ctx context.Context, reason string, wantGen
 			s.invalidateTuneSnapshot() // same lie as the skip path above
 		}
 	}
-	s.finishTune()
+	s.finishTune(reason)
 	return nil
 }
 
 // finishTune clears active tune state, cancels the backstop, and tells
 // subscribers the carrier is down. Called on a confirmed-sent unkey, or when
 // the rig is already gone.
-func (s *Service) finishTune() {
+func (s *Service) finishTune(reason string) {
 	s.mu.Lock()
 	s.tuneActive = false
 	s.tuneGen++ // invalidate any in-flight auto-off callback (finding 6)
@@ -378,8 +388,22 @@ func (s *Service) finishTune() {
 		s.tuneTimer.Stop()
 		s.tuneTimer = nil
 	}
+	dur := time.Since(s.tuneStart)
 	s.mu.Unlock()
+	s.logTuneStopped(reason, dur)
 	s.publishTuneState(false)
+}
+
+// logTuneStopped is the L4 durable stop record, shared by every teardown path
+// (operator, auto_off, disconnect) so they read uniformly. reason names the path;
+// power/mode mirror the start record; duration is the actual keyed time.
+func (s *Service) logTuneStopped(reason string, dur time.Duration) {
+	s.logger.InfoWith().
+		Str("reason", reason).
+		Int("power_w", s.tunePowerW).
+		Str("mode", tuneCarrierMode).
+		Int64("duration_ms", dur.Milliseconds()).
+		Msg("bridge: tune carrier stopped")
 }
 
 // tuneAutoOff is the hard-backstop timer callback. It runs on a background
@@ -414,7 +438,8 @@ func (s *Service) tuneAutoOff(gen uint64) {
 		s.mu.Unlock()
 		return
 	}
-	s.logger.InfoWith().Msg("bridge: tune auto-off fired; carrier dropped")
+	// The stop record (finishTune, reason=auto-off) is the auto-off's log — no separate
+	// line, so every teardown path reads uniformly (L4).
 }
 
 // clearTuneOnDisconnect releases tune state when the pipeline exits (rig
@@ -432,10 +457,13 @@ func (s *Service) clearTuneOnDisconnect() {
 		s.tuneTimer.Stop()
 		s.tuneTimer = nil
 	}
+	dur := time.Since(s.tuneStart)
 	s.clearRigSnapshotLocked()
 	s.mu.Unlock()
 	if wasActive {
-		s.logger.WarnWith().Msg("bridge: rig disconnected during tune; tune state cleared")
+		// L4 uniform stop record (reason=disconnect) — the carrier physically dropped
+		// with the rig, so there is nothing to unkey; this is the durable teardown log.
+		s.logTuneStopped("disconnect", dur)
 		s.publishTuneState(false)
 	}
 }
