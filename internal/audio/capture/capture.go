@@ -12,6 +12,7 @@ import (
 	stderr "errors"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio"
@@ -108,6 +109,11 @@ type Capture struct {
 	// External consumers receive from it via the Samples() accessor.
 	samples   chan []float32
 	closeOnce sync.Once // ensures channel is closed only once
+
+	// lossLog records dropped-chunk episodes out of the real-time path (the
+	// callback only increments c.dropped). Driven by runLossMonitor; see
+	// lossMonitor for the warn/recover discipline.
+	lossLog *logging.EpisodeLoss
 }
 
 // New creates a new audio capture instance.
@@ -118,6 +124,9 @@ func New(cfg Config) *Capture {
 	return &Capture{
 		config:  cfg,
 		samples: make(chan []float32, SampleChannelBufferSize),
+		lossLog: logging.NewEpisodeLoss(cfg.Logger,
+			"audio: capture buffer full; chunk dropped (consumer too slow)",
+			"audio: capture buffer recovered", "audio_queue_full", time.Now),
 	}
 }
 
@@ -314,7 +323,35 @@ func (c *Capture) Start(ctx context.Context) error {
 		}
 	}()
 
+	go c.runLossMonitor(internalCtx)
+
 	return nil
+}
+
+// runLossMonitor watches the dropped-chunk counter off the real-time path and drives
+// the bounded EpisodeLoss record (see lossMonitor). It baselines at the CURRENT drop
+// count so a restart counts only drops from THIS Start (c.dropped is cumulative),
+// ticks until the capture stops, then flushes any open episode with a recovery
+// summary.
+func (c *Capture) runLossMonitor(ctx context.Context) {
+	ticker := time.NewTicker(audioLossPollInterval)
+	defer ticker.Stop()
+	m := &lossMonitor{
+		dropped:  &c.dropped,
+		depthCap: func() (int, int) { return len(c.samples), cap(c.samples) },
+		loss:     c.lossLog,
+		idle:     audioLossIdle,
+		lastSeen: c.dropped.Load(),
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			c.lossLog.Recover()
+			return
+		case t := <-ticker.C:
+			m.step(t)
+		}
+	}
 }
 
 // Stop stops audio capture without releasing the underlying audio

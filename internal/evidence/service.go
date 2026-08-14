@@ -52,6 +52,11 @@ const (
 const (
 	lossReasonCap    = "cap"
 	lossReasonWriter = "writer_error"
+	// lossReasonQueueFull (L3): a slot dropped because the WRITER QUEUE was full
+	// (backpressure) — no database write was even attempted. Distinct from
+	// writer_error (a write that was attempted and failed), the confusable state
+	// this class breaks: a slow/backed-up writer vs a failing one.
+	lossReasonQueueFull = "evidence_queue_full"
 	// lossReasonMeasurement (L2): a slot dropped because a measurement REQUIRED
 	// to authorize the write was unknown — the archive could not be measured, so
 	// fail-closed. Distinct from cap (measured, genuinely full) and writer_error
@@ -229,6 +234,12 @@ type Service struct {
 	// never by a Status poll. Has its own mutex.
 	retHealth *retentionHealth
 
+	// queueLoss (L3) logs a bounded record of writer-queue backpressure — a slot
+	// dropped in CaptureSlot because the queue was full, distinct from a write that
+	// was attempted and failed. Warned at episode totals 1/10/100/…; recovered on
+	// the next successful persist. Its own mutex; created in Start.
+	queueLoss *logging.EpisodeLoss
+
 	mu       sync.Mutex
 	started  bool
 	state    string
@@ -352,6 +363,10 @@ func (s *Service) Start() error {
 	s.state = StateCapturing
 	s.started = true
 	s.retHealth = newRetentionHealth(s.log, s.cfg.Path, retentionMeasurementHeartbeat, time.Now)
+	s.queueLoss = logging.NewEpisodeLoss(s.log,
+		"evidence: writer queue full; slot dropped (backpressure)",
+		"evidence: writer queue recovered",
+		lossReasonQueueFull, time.Now)
 	s.ch = make(chan SlotCapture, writerQueueSize)
 	go s.writerLoop()
 	if s.cfg.Sync {
@@ -416,11 +431,17 @@ func (s *Service) CaptureSlot(sc SlotCapture) {
 	select {
 	case s.ch <- sc:
 	default:
+		// Writer queue full → backpressure, NOT a write failure (L3): record it as
+		// evidence_queue_full so the durable loss record distinguishes a backed-up
+		// writer from a failing one. Non-blocking: the episode Warn (spaced at
+		// 1/10/100/…) fires outside s.mu.
 		s.pending.Add(-1)
 		s.mu.Lock()
 		s.dropped++
-		s.accumulateLocked(sc, lossReasonWriter)
+		s.accumulateLocked(sc, lossReasonQueueFull)
+		depth, capacity := len(s.ch), cap(s.ch)
 		s.mu.Unlock()
+		s.queueLoss.Add(1, depth, capacity)
 	}
 }
 
@@ -847,6 +868,9 @@ func (s *Service) processSlot(sc SlotCapture) {
 	}
 	// §5 live lane: the slot just committed — wake the sync loop (SY5).
 	s.notifyLive()
+	// A successful persist ends any writer-queue backpressure episode (L3 recovery:
+	// the next slot after the queue drained). No-op when no episode is active.
+	s.queueLoss.Recover()
 }
 
 // writeSlot commits one slot — its coverage row and every observation — as

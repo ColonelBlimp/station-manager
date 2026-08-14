@@ -148,6 +148,22 @@ database path and cause, then a recovery transition. Do not log every failed ret
 
 ### L3. Audio and evidence queue loss is silent or incorrectly classified
 
+> ✅ **FIXED (working tree, awaiting commit).** A shared bounded tracker
+> `logging.EpisodeLoss` warns at count-based exponential episode totals (1, 10,
+> 100, … — operator decision 2026-08-14) each carrying `reason` + queue
+> depth/capacity, and emits one Info recovery summary (total lost + episode
+> duration). Evidence: the queue-full drop in `CaptureSlot` is now recorded as
+> `evidence_queue_full` (never `writer_error`, since no write was attempted) and
+> the tracker recovers on the next successful persist. Audio: a `lossMonitor`
+> polls the callback's atomic drop counter OFF the real-time path (the callback
+> is unchanged — still atomic-increment only), reports new drops as
+> `audio_queue_full`, and declares recovery after 5 s with no new drops
+> (operator decision 2026-08-14); the monitor baselines at the current count each
+> Start so a restart never replays old drops. All three reasons are now distinct
+> and every producer path stays non-blocking. Tests: `episodeloss_test.go`,
+> `internal/evidence/queueloss_test.go`,
+> `internal/audio/capture/lossmonitor_test.go` (all three rules reversion-proved).
+
 The audio callback drops chunks when its channel is full and only increments an atomic
 counter at [`internal/audio/capture/capture.go:380`](../../internal/audio/capture/capture.go).
 Production code never reads `DroppedChunks`; only probe commands do.
