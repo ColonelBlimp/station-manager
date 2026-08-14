@@ -54,10 +54,13 @@ func TestSendCommands_CoalescesFreqSteps(t *testing.T) {
 	s, _ := newCommandTestService(t)
 	buf := bufCommandLog(s)
 
+	var ids []string
 	for _, v := range []string{"14074000", "14074100", "14074200"} {
-		if _, err := s.SendCommands(context.Background(), []RigCommand{{Op: "set_freq", Value: v}}); err != nil {
+		id, err := s.SendCommands(context.Background(), []RigCommand{{Op: "set_freq", Value: v}})
+		if err != nil {
 			t.Fatalf("SendCommands(set_freq %s): %v", v, err)
 		}
+		ids = append(ids, id)
 	}
 	if buf.Len() != 0 {
 		t.Fatalf("freq-steps must coalesce, not log per step: %q", buf.String())
@@ -66,6 +69,12 @@ func TestSendCommands_CoalescesFreqSteps(t *testing.T) {
 	got := clLines(buf.String(), "coalesced VFO step")
 	if len(got) != 1 || !strings.Contains(got[0], `"count":3`) || !strings.Contains(got[0], `"last_value":"14074200"`) {
 		t.Fatalf("want one coalesced summary (count 3, last 14074200): %q", buf.String())
+	}
+	// P1: every request's op-id (each also on its own access-log line) is in the summary.
+	for _, id := range ids {
+		if !strings.Contains(got[0], `"`+id+`"`) {
+			t.Errorf("coalesced summary must carry op-id %s: %s", id, got[0])
+		}
 	}
 }
 

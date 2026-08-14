@@ -415,10 +415,11 @@ func (s *Service) SendCommand(ctx context.Context, op, value string) error {
 	return err
 }
 
-// nextOpID generates the per-command operation-id for L4 correlation: a monotonic
-// per-process counter, greppable and stable within a session.
+// nextOpID generates the per-command operation-id for L4 correlation: a per-process
+// random boot-id prefix + a monotonic counter (P2), so it is greppable, ordered
+// within a session, and does not collide with a prior session's ids in durable logs.
 func (s *Service) nextOpID() string {
-	return "rc" + strconv.FormatUint(s.cmdSeq.Add(1), 10)
+	return s.bootID + "-" + strconv.FormatUint(s.cmdSeq.Add(1), 10)
 }
 
 // recordCommandOutcome builds the L4 outcome from an attempted send and hands it to

@@ -201,10 +201,12 @@ type Service struct {
 	// readLoop delivers the FB(true)/FA(false) to it via deliverAck. Nil when no
 	// command is in flight.
 	// cmdLog logs L4 rig-command outcomes at the durable bridge boundary (with
-	// freq-step coalescing); cmdSeq generates the per-command operation-id that
-	// SendCommands returns for the HTTP handler to echo. Both set in New.
+	// freq-step coalescing); cmdSeq + bootID generate the per-command operation-id
+	// that SendCommands returns for the HTTP handler to echo. bootID (a per-process
+	// random prefix) keeps op-ids unique across restarts. All set in New.
 	cmdLog *commandLog
 	cmdSeq atomic.Uint64
+	bootID string
 
 	cmdMu      sync.Mutex
 	pendingAck chan bool
@@ -569,6 +571,7 @@ func New(cfg types.BridgeConfig, logger *logging.Service) *Service {
 		logger:   logger,
 		hub:      newHub(logger),
 		cmdLog:   newCommandLog(logger, commandCoalesceWindow),
+		bootID:   newBootID(),
 		stopDone: make(chan struct{}),
 		openClient: func(c serial.Config) (serial.Client, error) {
 			return serial.Open(c)

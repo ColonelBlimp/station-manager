@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -87,8 +88,10 @@ func TestCommandLog_CoalescesFreqSteps(t *testing.T) {
 	clk := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	c := newDetCommandLog(&buf, &clk)
 
-	for i, v := range []string{"14074000", "14074100", "14074200", "14074300", "14074400"} {
-		c.record(applied("step", "icom_civ", "set_freq", v))
+	ids := []string{"b-1", "b-2", "b-3", "b-4", "b-5"}
+	vals := []string{"14074000", "14074100", "14074200", "14074300", "14074400"}
+	for i := range vals {
+		c.record(applied(ids[i], "icom_civ", "set_freq", vals[i]))
 		if buf.Len() != 0 {
 			t.Fatalf("step %d must not log until flush: %q", i, buf.String())
 		}
@@ -100,10 +103,70 @@ func TestCommandLog_CoalescesFreqSteps(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want one coalesced summary, got %d: %q", len(got), buf.String())
 	}
-	for _, want := range []string{`"op":"set_freq"`, `"count":5`, `"first_value":"14074000"`, `"last_value":"14074400"`, `"duration_ms":600`} {
+	for _, want := range []string{
+		`"op":"set_freq"`, `"count":5`, `"first_value":"14074000"`, `"last_value":"14074400"`, `"duration_ms":600`,
+		// P1: EVERY coalesced request's op-id is carried, so any one is findable.
+		`"op_ids":["b-1","b-2","b-3","b-4","b-5"]`,
+	} {
 		if !strings.Contains(got[0], want) {
 			t.Errorf("summary missing %s: %s", want, got[0])
 		}
+	}
+}
+
+// L4 review P2: a continuous freq-step stream (which never hits the quiet-window flush,
+// since the timer resets each step) must not grow the run without limit. At the cap the
+// run flushes a chunk and a fresh run opens — bounding memory + log-line size while
+// every op-id still lands in exactly one summary.
+func TestCommandLog_CapsRunLength(t *testing.T) {
+	old := commandCoalesceMaxRun
+	commandCoalesceMaxRun = 3
+	defer func() { commandCoalesceMaxRun = old }()
+
+	var buf bytes.Buffer
+	clk := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	c := newDetCommandLog(&buf, &clk)
+
+	for i := 1; i <= 7; i++ { // continuous run of 7, cap 3
+		c.record(applied(fmt.Sprintf("b-%d", i), "icom_civ", "set_freq", fmt.Sprintf("140740%02d", i)))
+	}
+	// Chunks flush automatically at 3 and 6; the 7th stays pending until flush.
+	if got := clLines(buf.String(), "coalesced VFO step"); len(got) != 2 {
+		t.Fatalf("cap 3 over 7 steps must auto-flush 2 chunks, got %d: %q", len(got), buf.String())
+	}
+	c.flush()
+	got := clLines(buf.String(), "coalesced VFO step")
+	if len(got) != 3 {
+		t.Fatalf("want 3 chunks after the final flush, got %d: %q", len(got), buf.String())
+	}
+	// Coverage + bounding: ids partition into ≤cap chunks, none lost or duplicated.
+	if !strings.Contains(got[0], `"op_ids":["b-1","b-2","b-3"]`) || !strings.Contains(got[0], `"count":3`) {
+		t.Errorf("chunk 1 must carry ids b-1..b-3: %s", got[0])
+	}
+	if !strings.Contains(got[1], `"op_ids":["b-4","b-5","b-6"]`) {
+		t.Errorf("chunk 2 must carry ids b-4..b-6: %s", got[1])
+	}
+	if !strings.Contains(got[2], `"op_ids":["b-7"]`) || !strings.Contains(got[2], `"count":1`) {
+		t.Errorf("final chunk must carry id b-7: %s", got[2])
+	}
+}
+
+// L4 P2: op-ids carry a per-boot random prefix + an incrementing counter, so they are
+// unique within a session and do not collide with a prior session's ids after a
+// restart (a bare counter would reset to 1 and reuse ids).
+func TestNextOpID_BootPrefixedAndOrdered(t *testing.T) {
+	s, _ := newCommandTestService(t)
+	a, b := s.nextOpID(), s.nextOpID()
+	if a == b {
+		t.Fatalf("op-ids must be unique within a session: %q %q", a, b)
+	}
+	pa, na, okA := strings.Cut(a, "-")
+	pb, nb, okB := strings.Cut(b, "-")
+	if !okA || !okB || pa == "" || pa != pb {
+		t.Fatalf("op-ids must carry a stable, non-empty boot prefix: %q %q", a, b)
+	}
+	if na != "1" || nb != "2" {
+		t.Fatalf("the counter must increment after the prefix: %q %q", a, b)
 	}
 }
 

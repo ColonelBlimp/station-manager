@@ -1,16 +1,38 @@
 package bridge
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 
+// newBootID is a short random per-process prefix for operation-ids (L4 P2), so an
+// op-id is unique across restarts (a bare counter resets to rc1 each boot and would
+// collide with a prior session's ids in durable logs). Degrades to a fixed literal if
+// the system RNG is unavailable — op-ids stay counter-unique within the process.
+func newBootID() string {
+	var b [3]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "boot"
+	}
+	return hex.EncodeToString(b[:])
+}
+
 // commandCoalesceWindow is the quiet window after which a run of rapid identical
 // freq-steps is summarised (operator decision 2026-08-14: 1 s). Package var so tests
 // can dial it.
 var commandCoalesceWindow = time.Second
+
+// commandCoalesceMaxRun bounds one coalesced run (operator decision 2026-08-14: 256).
+// The quiet-window timer resets on every step, so a CONTINUOUS sub-window stream (a
+// stuck key, an automated stepper) would otherwise never flush and grow opIDs without
+// limit. At the cap the run flushes a chunk (its ids get their summary) and the next
+// step opens a fresh run, so memory and the log-line size stay bounded while every
+// op-id still lands in exactly one summary. Package var so tests can dial it.
+var commandCoalesceMaxRun = 256
 
 // isCoalesceOp reports the rapid VFO-step ops whose per-command outcome is coalesced
 // into ONE summary rather than one Info line per key-repeat (operator decision
@@ -56,14 +78,16 @@ type commandLog struct {
 	timer *time.Timer
 }
 
-// coalRun is an in-progress coalesced run of one repeated freq-step op.
+// coalRun is an in-progress coalesced run of one repeated freq-step op. It keeps
+// EVERY request's op-id (P1): each coalesced request still gets its own id on the
+// access-log line, so the summary must carry them all or those requests would have no
+// findable outcome record.
 type coalRun struct {
-	opID     string
+	opIDs    []string
 	protocol string
 	op       string
 	first    string
 	last     string
-	count    int
 	start    time.Time
 }
 
@@ -93,13 +117,20 @@ func (c *commandLog) mergeLocked(o commandOutcome) {
 	op, val := o.ops[0], o.values[0]
 	if c.run != nil && c.run.op == op {
 		c.run.last = val
-		c.run.count++
+		c.run.opIDs = append(c.run.opIDs, o.opID)
 	} else {
 		c.flushLocked() // a different coalesce-op ends the previous run
 		c.run = &coalRun{
-			opID: o.opID, protocol: o.protocol, op: op,
-			first: val, last: val, count: 1, start: c.now(),
+			opIDs: []string{o.opID}, protocol: o.protocol, op: op,
+			first: val, last: val, start: c.now(),
 		}
+	}
+	// Bound the run: flush a chunk at the cap (its ids get their summary) so a
+	// continuous stream can't grow opIDs without limit; the next step opens a fresh
+	// run. flushLocked clears the run and stops the timer, so no timer is armed here.
+	if len(c.run.opIDs) >= commandCoalesceMaxRun {
+		c.flushLocked()
+		return
 	}
 	if c.timer != nil {
 		c.timer.Stop()
@@ -127,10 +158,10 @@ func (c *commandLog) flushLocked() {
 	r := c.run
 	c.run = nil
 	c.log.InfoWith().
-		Str("op_id", r.opID).
+		Strs("op_ids", r.opIDs).
 		Str("protocol", r.protocol).
 		Str("op", r.op).
-		Int("count", r.count).
+		Int("count", len(r.opIDs)).
 		Str("first_value", r.first).
 		Str("last_value", r.last).
 		Int64("duration_ms", int64(c.now().Sub(r.start)/time.Millisecond)).
