@@ -103,6 +103,51 @@ func TestIsRegistered_UnknownType(t *testing.T) {
 	}
 }
 
+// ---- RegisterWorkerDefaults / WorkerDefaultsFor ----
+
+func TestRegisterWorkerDefaults_AndLookup(t *testing.T) {
+	want := WorkerDefaults{TickIntervalSec: 90, BatchSize: 1}
+	RegisterWorkerDefaults("worker-defaults-ok", want)
+	got, ok := WorkerDefaultsFor("worker-defaults-ok")
+	if !ok || got != want {
+		t.Fatalf("WorkerDefaultsFor = %+v,%v; want %+v,true", got, ok, want)
+	}
+	if _, ok := WorkerDefaultsFor("worker-defaults-never-registered"); ok {
+		t.Fatal("WorkerDefaultsFor returned ok for unknown type")
+	}
+}
+
+func TestRegisterWorkerDefaults_PanicsOnInvalidOrDuplicate(t *testing.T) {
+	tests := []struct {
+		name string
+		fn   func()
+	}{
+		{name: "empty type", fn: func() {
+			RegisterWorkerDefaults("", WorkerDefaults{TickIntervalSec: 1, BatchSize: 1})
+		}},
+		{name: "zero tick", fn: func() {
+			RegisterWorkerDefaults("worker-defaults-zero-tick", WorkerDefaults{BatchSize: 1})
+		}},
+		{name: "zero batch", fn: func() {
+			RegisterWorkerDefaults("worker-defaults-zero-batch", WorkerDefaults{TickIntervalSec: 1})
+		}},
+		{name: "duplicate", fn: func() {
+			RegisterWorkerDefaults("worker-defaults-duplicate", WorkerDefaults{TickIntervalSec: 1, BatchSize: 1})
+			RegisterWorkerDefaults("worker-defaults-duplicate", WorkerDefaults{TickIntervalSec: 2, BatchSize: 2})
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("RegisterWorkerDefaults did not panic")
+				}
+			}()
+			tc.fn()
+		})
+	}
+}
+
 // ---- RegisterDefaultRetry / DefaultRetryFor (stage 7) ----
 
 func validRetry() types.RetryConfig {

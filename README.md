@@ -54,7 +54,7 @@ Station Manager runs as a local daemon (`smd`, written in Go) that serves a brow
 
 **Getting QSOs out**
 
-- Automatic forwarding to **QRZ.com** and **ClubLog**, per destination and configurable.
+- Automatic forwarding to **QRZ.com**, **ClubLog**, and **QRZCQ**, per destination and configurable.
 - **SM Cloud** — an optional, self-hosted off-site backup of your log, so a dead disk is not a
   lost logbook.
 - All of it is opt-in. The local database is always the authority.

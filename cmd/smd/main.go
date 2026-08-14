@@ -34,6 +34,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/clublog" // registers "clublog" forwarder + default retry via init(); main also sets clublog.UserAgent below
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"     // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
+	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrzcq"   // registers "qrzcq" forwarder + 90-second pacing via init(); main also sets qrzcq.UserAgent below
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/smcloud" // registers "smcloud" forwarder (ADR 0040 backup client) via init(); main also sets smcloud.UserAgent below
 	// The test-only "stub" forwarder is registered ONLY in dev builds (-tags dev,
 	// see forwarder_stub_dev.go) — never in a release binary, so a production
@@ -244,6 +245,7 @@ func run() error {
 	// Forwarder package vars — every forwarder POST stamps this on the
 	// User-Agent header. Set after the UA is final.
 	qrz.UserAgent = cfg.UserAgent
+	qrzcq.UserAgent = cfg.UserAgent
 	clublog.UserAgent = cfg.UserAgent
 	smcloud.UserAgent = cfg.UserAgent
 

@@ -21,6 +21,7 @@ var (
 	registryMu          sync.Mutex
 	registry            = map[string]Constructor{}
 	defaultRetryMap     = map[string]types.RetryConfig{}
+	workerDefaultsMap   = map[string]WorkerDefaults{}
 	supportedActions    = map[string][]Action{}
 	descriptors         = map[string]TypeDescriptor{}
 	defaultEndpointsMap = map[string]map[string]string{}
@@ -28,6 +29,16 @@ var (
 	rowMirrorTypes      = map[string]struct{}{}
 	noBulkBackfillTypes = map[string]struct{}{}
 )
+
+// WorkerDefaults carries a forwarder type's preferred queue-drain cadence.
+// Most destinations use config's generic 120-second / 5-row defaults. A type
+// whose upstream publishes a stricter request limit can register safer values;
+// operator config may still override them, while the concrete forwarder remains
+// responsible for enforcing any hard upstream rate limit itself.
+type WorkerDefaults struct {
+	TickIntervalSec int
+	BatchSize       int
+}
 
 // adifPrefixPattern enforces a safe shape for the ADIF upload-status field prefix
 // a type stamps (e.g. "QRZCOM" → qrzcom_qso_upload_status). It mirrors the
@@ -139,6 +150,36 @@ func DefaultRetryFor(typeName string) (types.RetryConfig, bool) {
 	defer registryMu.Unlock()
 	retry, ok := defaultRetryMap[typeName]
 	return retry, ok
+}
+
+// RegisterWorkerDefaults records type-specific queue-drain defaults. It is for
+// upstream constraints such as QRZCQ's no-more-than-one-POST-per-minute rule,
+// not for hard enforcement (which belongs in the forwarder). Panics on invalid
+// or duplicate registration because either is a binary bug.
+func RegisterWorkerDefaults(typeName string, defaults WorkerDefaults) {
+	if typeName == "" {
+		panic("forwarding.RegisterWorkerDefaults: empty type name")
+	}
+	if defaults.TickIntervalSec < 1 {
+		panic("forwarding.RegisterWorkerDefaults: TickIntervalSec must be >= 1 for " + typeName)
+	}
+	if defaults.BatchSize < 1 {
+		panic("forwarding.RegisterWorkerDefaults: BatchSize must be >= 1 for " + typeName)
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, exists := workerDefaultsMap[typeName]; exists {
+		panic("forwarding.RegisterWorkerDefaults: type already has defaults: " + typeName)
+	}
+	workerDefaultsMap[typeName] = defaults
+}
+
+// WorkerDefaultsFor returns the registered queue-drain defaults for typeName.
+func WorkerDefaultsFor(typeName string) (WorkerDefaults, bool) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	defaults, ok := workerDefaultsMap[typeName]
+	return defaults, ok
 }
 
 // RegisterSupportedActions records which QSO lifecycle actions forwarder

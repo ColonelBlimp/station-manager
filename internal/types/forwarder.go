@@ -15,9 +15,11 @@ import "encoding/json"
 // Valid values are "insert", "update", "delete". An empty filter means
 // "all actions" after applyDefaults runs.
 //
-// TickIntervalSec and BatchSize are operator-environment tunables; their
-// zero-value defaults (120 s and 5) are conservative to match a slow /
-// unreliable internet link — see docs/v2-design/forwarding.md §4.
+// TickIntervalSec and BatchSize are operator-environment tunables. Their
+// generic zero-value defaults (120 s and 5) are conservative to match a slow /
+// unreliable internet link; a forwarder type may register stricter defaults
+// when its upstream requires them (QRZCQ uses 90 s and 1). See
+// docs/v2-design/forwarding.md §4.
 //
 // Retry is optional; when nil, the forwarder package supplies its own
 // type-specific retry defaults (see §5 of the same doc).

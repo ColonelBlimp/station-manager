@@ -1209,11 +1209,17 @@ func applyDefaults(cfg *Config, baseDir string) {
 	// type-specific retry numbers.
 	for i := range cfg.Forwarders {
 		fc := &cfg.Forwarders[i]
+		tickDefault := defaultForwarderTickIntervalSec
+		batchDefault := defaultForwarderBatchSize
+		if defaults, ok := forwarding.WorkerDefaultsFor(fc.Type); ok {
+			tickDefault = defaults.TickIntervalSec
+			batchDefault = defaults.BatchSize
+		}
 		if fc.TickIntervalSec == 0 {
-			fc.TickIntervalSec = defaultForwarderTickIntervalSec
+			fc.TickIntervalSec = tickDefault
 		}
 		if fc.BatchSize == 0 {
-			fc.BatchSize = defaultForwarderBatchSize
+			fc.BatchSize = batchDefault
 		}
 		// Seed the per-type default endpoints when the operator set none, so the
 		// URLs are visible + overridable in config.json (ADR 0039). A

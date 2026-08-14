@@ -1,5 +1,5 @@
 ---
-title: Forwarding Your Log (QRZ and ClubLog)
+title: Forwarding Your Log (QRZ, ClubLog, and QRZCQ)
 weight: 80
 ---
 
@@ -9,7 +9,8 @@ never depends on the network — and then, in the background, uploads it to
 whichever destinations you have configured. If your internet is slow or
 drops out, the upload waits and retries; your logging is never blocked.
 
-Two destinations are supported today: **QRZ.com** and **Club Log**.
+Three destinations are supported today: **QRZ.com**, **Club Log**, and
+**QRZCQ**.
 (LoTW is planned but not yet available — see the end of this chapter.)
 
 ### Where forwarding is configured
@@ -37,16 +38,17 @@ Each entry in `forwarders` describes one destination:
 | Field | Meaning |
 |-------|---------|
 | `name` | A label you choose (e.g. `"qrz"`). Used in logs and status. |
-| `type` | The service: `"qrz"` or `"clublog"`. |
+| `type` | The service: `"qrz"`, `"clublog"`, or `"qrzcq"`. |
 | `enabled` | `true` to upload new QSOs to this service. `false` means *don't queue anything* for it — see "Turning a destination off" below. |
 | `credentials` | The login details for that service (differs per type — see below). |
 | `action_filter` | Which changes to send: `"insert"`, `"update"`, `"delete"`. Optional — if you leave it out, it defaults to what the service actually supports. |
-| `tick_interval_sec` | How often the uploader checks for new QSOs. Default `120` (every 2 minutes). |
-| `batch_size` | How many QSOs to send per check. Default `5`. |
+| `tick_interval_sec` | How often the uploader checks for new QSOs. Usually `120`; QRZCQ defaults to `90`. |
+| `batch_size` | How many QSOs to send per check. Usually `5`; QRZCQ defaults to `1`. |
 
 The defaults for `tick_interval_sec` and `batch_size` are deliberately
 gentle — they suit a slow or unreliable connection. You rarely need to
-change them.
+change them. Most destinations use 120 seconds and five rows; QRZCQ uses
+90 seconds and one row to respect its stricter request limit.
 
 ### QRZ.com
 
@@ -117,15 +119,47 @@ uploads until you fix the credentials and restart the daemon. So if Club
 Log uploads stop, check `email` / `password` / `api`, correct them (with
 the daemon stopped), and start it again.
 
+### QRZCQ
+
+QRZCQ's account API accepts an ADIF log wrapped in JSON. It requires the
+callsign of your QRZCQ account and that account's API key:
+
+```json
+{
+  "name": "qrzcq",
+  "type": "qrzcq",
+  "enabled": true,
+  "credentials": {
+    "call": "7Q5MLV",
+    "key": "your-qrzcq-api-key"
+  }
+}
+```
+
+QRZCQ asks clients not to post more than once per minute. Station Manager is
+deliberately gentler: the destination defaults to one QSO every **90 seconds**
+(`tick_interval_sec: 90`, `batch_size: 1`), and the forwarder enforces that
+minimum interval internally even if those worker settings are changed by hand.
+A backlog therefore drains gradually without holding up local logging.
+
+The published QRZCQ developer API documents adding log records, but documents
+no edit or delete operation. Station Manager does not invent those semantics:
+the default action filter is consequently `["insert"]`, so later edits and
+deletes remain local and are not sent to QRZCQ. QRZCQ describes this
+authenticated JSON account API as alpha, so its wire format may change
+upstream.
+
 ### How to tell a QSO was uploaded
 
-After a successful upload, Station Manager stamps the QSO with the
-service's status field — `QRZCOM_QSO_UPLOAD_STATUS` for QRZ,
-`CLUBLOG_QSO_UPLOAD_STATUS` for Club Log — set to `Y`, along with the
-date. These travel with the QSO in ADIF exports, so you can always see
-which contacts have been forwarded. This stamp — not any internal queue —
-is the lasting record that a contact reached a service, so it survives
+After a successful QRZ.com or Club Log upload, Station Manager stamps the QSO
+with the service's standard ADIF status field — `QRZCOM_QSO_UPLOAD_STATUS` for
+QRZ or `CLUBLOG_QSO_UPLOAD_STATUS` for Club Log — set to `Y`, along with the
+date. These stamps travel with the QSO in ADIF exports, so they survive
 exporting and re-importing your log.
+
+ADIF defines no equivalent QRZCQ upload-status field. A successful QRZCQ upload
+is therefore recorded in Station Manager's durable upload history, but it does
+not add a portable QRZCQ status tag to an ADIF export.
 
 <!-- DRAFT NOTE for the later manual pass — the mechanism below is built and
      working in the daemon (ADR 0038/0039); the logbook-app screens that expose
