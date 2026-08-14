@@ -41,47 +41,44 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-13)
+## Now (as of 2026-08-14)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **RESUME TASK — L2 Stage 2** (evidence retention measurement, the safety-critical
-  write-gate wiring). Decisions + the 6-step plan are in the L2 **IN PROGRESS** box in
-  `reviews/internal-codebase-logging-gaps.md` (operator Q1 fail-closed / Q2 edge+5-min
-  heartbeat authoritative — do NOT re-derive). Stage 1 tracker committed (`468a9ad1`); its
-  codex P2 (first-heartbeat over-count) now FIXED + committed (`71088525`). **L3** (audio +
-  evidence queue-loss misclassified) is the next P0 after.
-- **PSK Reporter incident — RESOLVED; SM cleared.** Maintainer (Philip Gladstone) confirmed
-  the pskreporter.info breakage was a server-side memory leak in his odd-IP shard (his bug,
-  fixed his end), NOT us — and our parser never emitted the "RR73 locators" he asked about
-  (proved via code + our own decode log). Client improvements shipped anyway: persistent
-  IPFIX sender id across restarts (`071bb01b`) + an RR73→no-grid regression test
-  (`de41c255`). **PSK reporting is DISABLED in config** pending his OK to re-enable. Draft
-  replies in `/home/mveary/pskreporter-reply-philip-3.txt` (reply-2 already sent).
-  Field-sanitisation hardening QUEUED (backlog P3).
-- **OPEN DECISION (operator) — codex `.codex-reviews/071bb01bc157.md` [P2]:** `pskreporter.id`
-  create is ReadFile→WriteFile, not atomic. Real, but the daemon's single listener bind
-  (`api/server.go:494`) prevents two instances on one working dir, so I recommend ACCEPT + a
-  rationale comment in `identity.go`; alt = `O_CREATE|O_EXCL`. Awaits your call, then delete the doc.
-- **Side item (operator-asked, open):** `evidence.db` sits in WorkingDir **root, 0644** while
-  the log/reference DBs live under `db/` (**0700**) — recommend moving it into `db/` + 0600 with
-  a startup migration (move, don't orphan). Backlog unless you want it now.
-- **Unpushed (operator pushes):** `071bb01b` `de41c255` `71088525` `9b04aa57` `e39e1423`
-  (+ this handoff commit). **main CI is GREEN** (`befea27f` re-run `success`); the Hugo binary
-  download now has `--retry` so a transient blip won't red the gate.
-- **Codex reviews:** triage `.codex-reviews/` after commits + on resume (verdict from OUTPUT,
-  not exit code), then delete each; hook is SLOW (~1-2 min) — if a doc is missing re-run
-  `bash .githooks/post-commit` in the BACKGROUND. Pending: the `071bb01b` [P2] above
-  (decision) + fresh reviews for `71088525`/`9b04aa57`.
-- **NEEDS-DECISION (operator) items still gate the tail:** cross-cutting "what a keyed
-  transmission records" (api A10 / bridge B12) · api A5/A12 log-levels ·
-  `forwarding.Result` disposition (F11/F14) · qsoservice Q7.
-- **Do-not:** never initiate FT8/TX or touch the live TX path (sink 66 / rig cmds /
-  power) without per-occasion agreement. All commits carry NO Claude trailer (operator
-  directive). `sm-pg` Postgres container is needed for smcloud tests (`podman start sm-pg`).
+- **L4 Part A DONE (command-outcome log) — committed but TANGLED.** Base `8c3b69e6`; the op-id
+  review-fixes are in `af9e78df` (P1 full op_ids list + P2 boot-id prefix + 256-id run cap) and the
+  entropy bump (96-bit boot-id) got AMENDED INTO THE OTHER CODER'S commit `86b05ab5 "test(qrzcq)"`
+  (operator said LEAVE AS-IS — my entropy fix rides in their commit; it works, just mislabeled).
+  All op-id review findings resolved + reviewed clean. **GIT LESSON (repeat):** re-check `git log -1`
+  is MY commit IN THE SAME COMMAND as any `--amend` — a 2nd coder commits to this HEAD in parallel,
+  so an earlier check goes stale; I amended their commit twice this way.
+- **RESUME TASK — L4 Part B: tune start/stop durable records** (NOT started). Add
+  reason/power/mode/duration to tune start + operator-stop (`bridge/tune.go` StartTune ~225 /
+  finishTune ~373), and ENRICH the existing auto-off (`:417`) + disconnect (`:438`) logs with the
+  same fields (operator decided: uniform). **LOGGING-ONLY: add fields, never change control
+  flow/timing on the TX path.** L4 spec: `reviews/internal-codebase-logging-gaps.md` L4 box.
+  After L4: L5–L9 (P1).
+- **L1/L2/L3 DONE + committed** (L3 = quiet-window evidence recovery, 30s window, in the tangled
+  commit `f17b03eb`). L4 Part A decisions already made w/ operator: freq-steps coalesce, 1s window,
+  op-id echoed to access log.
+- **TANGLE (operator said LEAVE AS-IS):** my evidence commits `383054d7`/`f17b03eb` absorbed the
+  OTHER coder's qrzcq work via `--amend` sweeping their staged files. Nothing pushed. LESSON:
+  `git show --stat` the result before treating an amend as clean; a 2nd coder commits here in parallel.
+- **NOT MINE — the other coder's qrzcq/lookup work.** Their reviews (`585636071a0a`, `5424d402b525`,
+  `cf4f5ae18c6f`, `f17b03eb1a15` — the last has their P1 credential leak + P2 ctx findings) are
+  theirs; LEAVE them. Their untracked `api/handler_config_lookup_priority_test.go` (refs a not-yet-
+  added `ContinueIfBlank` field) breaks the api TEST build LOCALLY — not my commit, CI won't see it.
+- **CI red on remote** (`82dc0a50`, vet `handler_evidence_test.go:69`) — fixed by UNPUSHED local
+  `974825c7`; clears on push. Operator pushes.
+- **PSK incident CLOSED:** it was "Station Master Pro 3" (different software), not us — Philip
+  confirmed. PSK reporting still DISABLED in config; re-enable is the operator's call (unasked).
+- **Do-not:** never initiate FT8/TX or touch the live TX path (sink 66 / rig cmds / power) without
+  per-occasion agreement — **L4 Part B touches tune.go (TX path) but is LOGGING-ONLY: add fields,
+  never change control flow/timing.** All commits carry NO Claude trailer. Codex hook is SLOW
+  (~1-2 min); triage `.codex-reviews/` (verdict from OUTPUT not exit code) + `gh run list -L1` on resume.
 
 ## Current state (as of 2026-08-10)
 
