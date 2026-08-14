@@ -129,6 +129,19 @@ func TestCaptureSlot_QueueFull_RecordedAsBackpressure(t *testing.T) {
 	}
 }
 
+// The quiet window MUST exceed the FT8 slot cadence (15 s): a shorter window closes
+// between normal-cadence drops during a sustained writer stall, splitting one outage
+// into repeated 1-drop episodes with false recoveries (operator decision 2026-08-14:
+// 30 s = two slot intervals). Evidence can't import ft8's SlotDuration (layering), so
+// the 15 s cadence is pinned here as a literal.
+func TestEvidenceLossIdle_ExceedsSlotCadence(t *testing.T) {
+	const ft8SlotCadence = 15 * time.Second
+	if evidenceLossIdle <= ft8SlotCadence {
+		t.Fatalf("evidence quiet window %v must exceed the %v FT8 slot cadence, or a sustained stall false-recovers between normal-cadence drops",
+			evidenceLossIdle, ft8SlotCadence)
+	}
+}
+
 // --- monitor step logic (deterministic, fake clock) ------------------------
 
 // The monitor reports newly-observed drops as bounded warns (reason + queue

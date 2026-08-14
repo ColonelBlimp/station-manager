@@ -26,8 +26,9 @@ Station Manager runs as a local daemon (`smd`, written in Go) that serves a brow
 
 **Logging**
 
-- Fast SSB/CW entry with live callsign enrichment (QRZ.com and hamnut lookups). Enrichment is
-  fail-soft by design — a lookup that fails degrades the entry, it never blocks the QSO.
+- Fast SSB/CW entry with live callsign enrichment (QRZ.com, QRZCQ and hamnut lookups). QRZCQ XML
+  is an opt-in fallback that uses a premium account session; enrichment is fail-soft by design —
+  a lookup that fails degrades the entry, it never blocks the QSO.
 - Full ADIF data model, `HH:MM:SS` time precision, multiple logbooks.
 - Session view with in-place editing, ADIF export and session email-out.
 - Contacts map — great-circle paths with a live grey-line overlay.

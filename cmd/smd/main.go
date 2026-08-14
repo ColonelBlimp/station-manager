@@ -49,6 +49,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
 	_ "github.com/ColonelBlimp/station-manager/internal/lookup/hamnut" // registers the hamnut country provider (descriptor + constructor) via init()
 	_ "github.com/ColonelBlimp/station-manager/internal/lookup/qrz"    // registers the QRZ callsign provider (descriptor + constructor) via init()
+	_ "github.com/ColonelBlimp/station-manager/internal/lookup/qrzcq"  // registers the QRZCQ callsign provider (descriptor + constructor) via init()
 	"github.com/ColonelBlimp/station-manager/internal/lookup/refresher"
 	"github.com/ColonelBlimp/station-manager/internal/pskreporter"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"

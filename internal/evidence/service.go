@@ -86,13 +86,21 @@ var (
 	// writerDelay is a test-only stall for the writer goroutine.
 	writerDelay time.Duration
 	// evidenceLossPollInterval / evidenceLossIdle drive runQueueLossMonitor (L3): how
-	// often it samples queueDropped, and the quiet window after which a backpressure
-	// episode is declared recovered. idle mirrors internal/audio/capture's
-	// audioLossIdle — operator decision (2026-08-14): 5 s, so a brief overload is not
-	// reported as permanently active and the recovery summary is not delayed. Package
-	// vars so tests can dial them.
+	// often it samples queueDropped, and the quiet window (reset on every newly-
+	// observed drop) after which a backpressure episode is declared recovered. The
+	// window is 30 s — operator decision (2026-08-14) — deliberately LONGER than
+	// audio's 5 s (audioLossIdle). The window MUST exceed the worst-case inter-drop
+	// interval of a sustained outage: audio drops arrive ~43 ms apart, but evidence
+	// slots arrive every 15 s (ft8 SlotDuration), so a window below the slot cadence
+	// would close BETWEEN normal-cadence drops during a stalled writer and split one
+	// outage into repeated 1-drop episodes with false recoveries. 30 s spans two slot
+	// intervals, tolerates scheduling jitter, and keeps a sustained stall as ONE
+	// bounded episode; the extra recovery-report delay is negligible for a condition
+	// that takes ~16 min of stall (a full 64-slot queue) to even begin. Package vars
+	// so tests can dial them; the window/cadence invariant is pinned by
+	// TestEvidenceLossIdle_ExceedsSlotCadence.
 	evidenceLossPollInterval = 500 * time.Millisecond
-	evidenceLossIdle         = 5 * time.Second
+	evidenceLossIdle         = 30 * time.Second
 	// statusQueryDelay is a test-only stall that travels WITH Status's
 	// database aggregates — proving they run outside s.mu (a status poll
 	// must never stall CaptureSlot on the decode goroutine).

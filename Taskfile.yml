@@ -283,6 +283,20 @@ tasks:
     cmds:
       - go test -v -count=1 -tags manual -run TestLive_InteractiveFlow ./internal/forwarding/qrz/...
 
+  test:qrzcq-lookup-live:
+    desc: |
+      Run one read-only QRZCQ XML lookup against the configured premium
+      account. Loads QRZCQ_PASSWORD from the root .env, keeps the provider
+      disabled in config.json, and looks up 7Q8AC by default.
+    env:
+      QRZCQ_LIVE_CONFIG: '{{.ROOT_DIR}}/build/config.json'
+      QRZCQ_LIVE_CALL: 7Q8AC
+    preconditions:
+      - sh: test -n "$QRZCQ_PASSWORD"
+        msg: QRZCQ_PASSWORD is not set in the root .env
+    cmds:
+      - go test -v -count=1 -timeout 30s -run '^TestLiveQRZCQPremiumAccount$' ./internal/lookup/qrzcq
+
   run:
     desc: Build and run the daemon using SM_WORKING_DIR from .env
     deps: [build]

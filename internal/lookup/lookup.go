@@ -17,7 +17,7 @@
 //     empty-wins, fallback through the rest on empty or error.
 //
 // Concrete providers live in subpackages: lookup/hamnut, lookup/qrz,
-// (future) lookup/hamqth, (future) lookup/qrzcq.
+// lookup/qrzcq, and (future) lookup/hamqth.
 //
 // FilterToCallsignFields enforces the ADR 0017 #2 narrowing at the
 // orchestrator's merge boundary — country / continent / CQ / ITU /
