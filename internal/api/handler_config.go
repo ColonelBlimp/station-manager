@@ -5,6 +5,7 @@ import (
 	stderr "errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
@@ -214,7 +215,8 @@ type ConfigResponse struct {
 // rather than state: never emitted on GET, so echoing a GET body back cannot
 // wipe a credential.
 type LookupProviderInfo struct {
-	Name string `json:"name"`
+	Name     string `json:"name"`
+	Priority int    `json:"priority,omitempty"`
 	// Label is READ-ONLY on this wire: served on GET so the section can display
 	// it, ignored on PUT because config.json is the only place it may be set.
 	Label         string `json:"label,omitempty"`
@@ -230,8 +232,8 @@ type LookupProviderInfo struct {
 
 // LookupInfo mirrors types.EnrichmentConfig for the wire, with each provider's
 // password masked (LookupProviderInfo). The Settings → Enrichment section (and
-// the config SPA's Enrichment tab) edits hamnut + the callsign chain (QRZ
-// today) + the cache TTLs.
+// the config SPA's Enrichment tab) edits hamnut + the prioritised callsign
+// chain + its completion policy + the cache TTLs.
 //
 // The TTLs carry types.EnrichmentConfig's pointer semantics onto the wire
 // unchanged: OMIT one to mean "use the default", send an explicit 0 to mean
@@ -240,6 +242,7 @@ type LookupProviderInfo struct {
 type LookupInfo struct {
 	Hamnut             LookupProviderInfo   `json:"hamnut"`
 	Chain              []LookupProviderInfo `json:"chain"`
+	ContinueIfBlank    []string             `json:"continue_if_blank"`
 	CountryTTLDays     *int                 `json:"country_ttl_days,omitempty"`
 	StationTTLDays     *int                 `json:"station_ttl_days,omitempty"`
 	RefreshMaxInFlight int                  `json:"refresh_max_in_flight"`
@@ -1146,6 +1149,7 @@ func lookupProviderInfoFrom(c types.LookupConfig) LookupProviderInfo {
 	return LookupProviderInfo{
 		Label:       c.Label,
 		Name:        c.Name,
+		Priority:    c.Priority,
 		Enabled:     c.Enabled,
 		URL:         c.URL,
 		Username:    c.Username,
@@ -1208,6 +1212,7 @@ func lookupInfoFrom(lc types.EnrichmentConfig) LookupInfo {
 	return LookupInfo{
 		Hamnut:             lookupProviderInfoFrom(lc.Hamnut),
 		Chain:              chain,
+		ContinueIfBlank:    slices.Clone(lc.ContinueIfBlank),
 		CountryTTLDays:     lc.CountryTTLDays,
 		StationTTLDays:     lc.StationTTLDays,
 		RefreshMaxInFlight: lc.RefreshMaxInFlight,
@@ -1245,7 +1250,8 @@ func resolveMaskedPassword(clear bool, typed, stored string) string {
 func mergeLookupProvider(in LookupProviderInfo, ex types.LookupConfig) types.LookupConfig {
 	pw := resolveMaskedPassword(in.PasswordClear, in.Password, ex.Password)
 	return types.LookupConfig{
-		Name: in.Name,
+		Name:     in.Name,
+		Priority: in.Priority,
 		// Label is config.json-only: no API surface writes it, so it is absent
 		// from every PUT and would be DELETED by this rebuild unless carried
 		// over explicitly. Same defect class as mergeForwarders' Label and
@@ -1276,6 +1282,7 @@ func mergeLookup(in LookupInfo, existing types.EnrichmentConfig) types.Enrichmen
 	return types.EnrichmentConfig{
 		Hamnut:             mergeLookupProvider(in.Hamnut, existing.Hamnut),
 		Chain:              chain,
+		ContinueIfBlank:    slices.Clone(in.ContinueIfBlank),
 		CountryTTLDays:     in.CountryTTLDays,
 		StationTTLDays:     in.StationTTLDays,
 		RefreshMaxInFlight: in.RefreshMaxInFlight,

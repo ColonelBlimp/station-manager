@@ -110,13 +110,17 @@ type Orchestrator struct {
 	// (HasQsoForDxcc / HasQsoForCountry query the qso table). Optional: nil in
 	// single-connection mode (tests, pre-split), where logCheckDB falls back to
 	// DB. new-entity is presentation, never load-bearing for logging.
-	LogDB      *sqlsvc.Service
-	Country    CountryProvider
-	Chain      []CallsignProvider
-	CountryTTL time.Duration
-	StationTTL time.Duration
-	Refresher  AsyncRefresher
-	Logger     *logging.Service
+	LogDB   *sqlsvc.Service
+	Country CountryProvider
+	Chain   []CallsignProvider
+	// ContinueIfBlank is ADR 0068's chain-wide completion gate. Empty retains
+	// ADR 0017's first-substantive-result behaviour for direct/test callers;
+	// production config normalises it to name + gridsquare.
+	ContinueIfBlank []string
+	CountryTTL      time.Duration
+	StationTTL      time.Duration
+	Refresher       AsyncRefresher
+	Logger          *logging.Service
 }
 
 // IsEmpty returns true when a callsign-class provider response had no
@@ -573,33 +577,53 @@ func (o *Orchestrator) readStation(ctx context.Context, callsign string, force b
 	return stationReadResult{data: station, source: source, coldMiss: true}
 }
 
-// runChain iterates the configured callsign-class providers in
-// priority order and returns the first non-empty result per ADR
-// 0017 #8. Empty responses and errors both advance to the next
-// provider; the chain runner does not distinguish them at the
-// dispatch layer.
+// runChain iterates configured callsign providers in ADR 0068 priority order.
+// Each response is normalised before the completion check; lower providers
+// fill blanks without overwriting higher-priority data. Empty responses and
+// errors advance, while cancellation stops the remaining chain promptly.
 //
 // Returns the provider's Name() as the source on success, or
 // SourceNone if every provider returned empty / error / nothing-to-
 // run.
 func (o *Orchestrator) runChain(ctx context.Context, callsign string) (types.ContactedStation, string) {
+	accumulated := types.ContactedStation{}
+	source := SourceNone
 	for _, p := range o.Chain {
+		if ctx.Err() != nil {
+			break
+		}
 		if p == nil {
 			continue
 		}
 		station, err := p.LookupWithContext(ctx, callsign)
 		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
 			if !stderrs.Is(err, errors.ErrNotFound) {
 				o.warn("callsign provider error: "+p.Name(), err)
 			}
 			continue
 		}
+		if ctx.Err() != nil {
+			break
+		}
+		station = o.normalizeProviderStation(callsign, station)
 		if IsEmpty(station) {
 			continue
 		}
-		return station, p.Name()
+		if source == SourceNone {
+			source = p.Name()
+		}
+		accumulated = fillCallsignBlanks(accumulated, station)
+		if !o.needsNextCallsignProvider(accumulated) {
+			return accumulated, source
+		}
 	}
-	return types.ContactedStation{}, SourceNone
+	if IsEmpty(accumulated) {
+		return types.ContactedStation{}, SourceNone
+	}
+	return accumulated, source
 }
 
 // isStale returns true when last is the zero time (NULL in DB →

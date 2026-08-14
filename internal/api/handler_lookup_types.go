@@ -6,9 +6,9 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/lookupdef"
 )
 
-// handleLookupTypes serves GET /v1/lookup-types — the data-driven descriptor
-// for every registered enrichment provider (display name, help text, which leg
-// of the pipeline it belongs to, and whether it needs credentials).
+// handleLookupTypes serves GET /v1/lookup-types — the data-driven descriptors
+// for every registered enrichment provider plus ADR 0068's completion-field
+// catalogue.
 //
 // The Settings → Enrichment section renders from this, so adding a provider in
 // Go needs zero SPA change (ADR 0062). It is the direct counterpart of
@@ -21,5 +21,8 @@ import (
 // missing here is exactly the "unrecognised" case the section renders
 // generically, which is what a config from a newer build looks like.
 func (s *Server) handleLookupTypes(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(w, http.StatusOK, map[string]any{"types": lookupdef.Descriptors()})
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"types":             lookupdef.Descriptors(),
+		"completion_fields": lookupdef.CompletionFields(),
+	})
 }

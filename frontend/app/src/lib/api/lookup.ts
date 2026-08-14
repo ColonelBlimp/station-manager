@@ -23,8 +23,8 @@
         send an explicit 0 to mean "trust this cache indefinitely". These are
         different instructions and a blank box must not send 0.
       - url / view_url / timeout_sec are taken AS SENT for every provider.
-        Normalize re-stamps them only for the two names it knows (hamnut, QRZ),
-        so anything else must be round-tripped or it is silently emptied.
+        Normalize can re-stamp registered-provider defaults, but an unrecognised
+        provider must be round-tripped intact or it is silently emptied.
       - NOTHING but `lookup` is sent.
 */
 import { safeFetch, readJsonBody, isPlainObject } from './_helpers';
@@ -36,6 +36,8 @@ export const QRZ_PROVIDER = 'qrzlookupservice';
 /** One provider as GET /v1/config reports it — password masked to a flag. */
 export interface LookupProvider {
     name: string;
+    /** Exclusive authority/order within the callsign chain; zero for hamnut. */
+    priority: number;
     /** Operator's config.json display name. '' = fall back to the built-in. */
     label: string;
     enabled: boolean;
@@ -49,6 +51,7 @@ export interface LookupProvider {
 export interface LookupEntry {
     hamnut: LookupProvider;
     chain: LookupProvider[];
+    continue_if_blank: string[];
     country_ttl_days: number;
     station_ttl_days: number;
     refresh_max_in_flight: number;
@@ -57,6 +60,7 @@ export interface LookupEntry {
 /** What a save sends per provider. `password` rides only when freshly typed. */
 export interface LookupProviderPayload {
     name: string;
+    priority?: number;
     enabled: boolean;
     url?: string;
     username?: string;
@@ -69,6 +73,7 @@ export interface LookupProviderPayload {
 export interface LookupPayload {
     hamnut: LookupProviderPayload;
     chain: LookupProviderPayload[];
+    continue_if_blank: string[];
     country_ttl_days?: number;
     station_ttl_days?: number;
     refresh_max_in_flight: number;
@@ -90,8 +95,18 @@ export interface LookupType {
     needs_credentials: boolean;
 }
 
+/** A callsign field that can decide whether the next provider is consulted. */
+export interface CompletionField {
+    name: string;
+    display_name: string;
+}
+
 export type LookupTypesOutcome =
-    { kind: 'ok'; types: LookupType[] } | { kind: 'error'; message: string };
+    | { kind: 'ok'; types: LookupType[]; completionFields: CompletionField[] }
+    | {
+          kind: 'error';
+          message: string;
+      };
 
 function toType(v: unknown): LookupType | null {
     if (!isPlainObject(v) || typeof v.name !== 'string' || typeof v.display_name !== 'string') {
@@ -106,6 +121,13 @@ function toType(v: unknown): LookupType | null {
     };
 }
 
+function toCompletionField(v: unknown): CompletionField | null {
+    if (!isPlainObject(v) || typeof v.name !== 'string' || typeof v.display_name !== 'string') {
+        return null;
+    }
+    return { name: v.name, display_name: v.display_name };
+}
+
 export async function fetchLookupTypes(signal?: AbortSignal): Promise<LookupTypesOutcome> {
     const fetched = await safeFetch('/v1/lookup-types', { signal });
     if (!fetched.ok) return { kind: 'error', message: fetched.message };
@@ -117,16 +139,27 @@ export async function fetchLookupTypes(signal?: AbortSignal): Promise<LookupType
         const parsed = toType(t);
         if (parsed) types.push(parsed);
     }
-    return { kind: 'ok', types };
+    const rawCompletion =
+        isPlainObject(body) && Array.isArray(body.completion_fields) ? body.completion_fields : [];
+    const completionFields: CompletionField[] = [];
+    for (const field of rawCompletion) {
+        const parsed = toCompletionField(field);
+        if (parsed) completionFields.push(parsed);
+    }
+    return { kind: 'ok', types, completionFields };
 }
 
 export type LookupOutcome =
     { kind: 'ok'; lookup: LookupEntry } | { kind: 'error'; message: string };
 
-function toProvider(v: unknown): LookupProvider {
+function toProvider(v: unknown, fallbackPriority = 0): LookupProvider {
     const o = isPlainObject(v) ? v : {};
     return {
         name: typeof o.name === 'string' ? o.name : '',
+        priority:
+            typeof o.priority === 'number' && Number.isInteger(o.priority)
+                ? o.priority
+                : fallbackPriority,
         label: typeof o.label === 'string' ? o.label : '',
         enabled: o.enabled === true,
         url: typeof o.url === 'string' ? o.url : '',
@@ -139,9 +172,19 @@ function toProvider(v: unknown): LookupProvider {
 
 function toEntry(v: unknown): LookupEntry {
     const o = isPlainObject(v) ? v : {};
+    const chain = Array.isArray(o.chain)
+        ? o.chain
+              .map((provider, index) => toProvider(provider, index + 1))
+              .sort((a, b) => a.priority - b.priority)
+        : [];
     return {
         hamnut: toProvider(o.hamnut),
-        chain: Array.isArray(o.chain) ? o.chain.map(toProvider) : [],
+        chain,
+        // A missing field is the pre-ADR-0068 wire shape. Preserve an explicit
+        // [] because it is the operator's legacy first-substantive escape hatch.
+        continue_if_blank: Array.isArray(o.continue_if_blank)
+            ? o.continue_if_blank.filter((field): field is string => typeof field === 'string')
+            : ['name', 'gridsquare'],
         country_ttl_days: typeof o.country_ttl_days === 'number' ? o.country_ttl_days : 0,
         station_ttl_days: typeof o.station_ttl_days === 'number' ? o.station_ttl_days : 0,
         refresh_max_in_flight:

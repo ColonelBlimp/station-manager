@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime/debug"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1543,8 +1545,10 @@ func buildEnrichment(
 		loggerSvc.InfoWith().Str("provider", svc.Name()).Msg("lookup: country provider enabled")
 	}
 
-	chain := make([]lookup.CallsignProvider, 0, len(cfg.Lookup.Chain))
-	for _, entry := range cfg.Lookup.Chain {
+	entries := slices.Clone(cfg.Lookup.Chain)
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Priority < entries[j].Priority })
+	chain := make([]lookup.CallsignProvider, 0, len(entries))
+	for _, entry := range entries {
 		if !entry.Enabled {
 			loggerSvc.InfoWith().Str("provider", entry.Name).Msg("lookup: chain entry disabled, skipping")
 			continue
@@ -1592,14 +1596,15 @@ func buildEnrichment(
 	}
 
 	orch := &lookup.Orchestrator{
-		DB:         refDbSvc, // enrichment caches live in reference.db
-		LogDB:      dbSvc,    // new-entity check queries the log DB's qso table
-		Country:    countryProvider,
-		Chain:      chain,
-		CountryTTL: cfgSvc.CountryTTL(),
-		StationTTL: cfgSvc.StationTTL(),
-		Refresher:  ref,
-		Logger:     loggerSvc,
+		DB:              refDbSvc, // enrichment caches live in reference.db
+		LogDB:           dbSvc,    // new-entity check queries the log DB's qso table
+		Country:         countryProvider,
+		Chain:           chain,
+		ContinueIfBlank: slices.Clone(cfg.Lookup.ContinueIfBlank),
+		CountryTTL:      cfgSvc.CountryTTL(),
+		StationTTL:      cfgSvc.StationTTL(),
+		Refresher:       ref,
+		Logger:          loggerSvc,
 	}
 	return orch, ref, nil
 }

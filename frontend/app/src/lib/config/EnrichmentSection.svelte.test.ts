@@ -68,6 +68,10 @@ const TYPES = {
             needs_credentials: true,
         },
     ],
+    completion_fields: [
+        { name: 'name', display_name: 'Name' },
+        { name: 'gridsquare', display_name: 'Gridsquare' },
+    ],
 };
 
 function mockConfig(passwordSet: boolean, countryTtl = 365) {
@@ -97,6 +101,7 @@ function mockConfig(passwordSet: boolean, countryTtl = 365) {
                             chain: [
                                 {
                                     name: 'qrzlookupservice',
+                                    priority: 1,
                                     enabled: true,
                                     url: 'https://xmldata.qrz.com/xml/current/',
                                     username: 'M0ABC',
@@ -109,6 +114,7 @@ function mockConfig(passwordSet: boolean, countryTtl = 365) {
                                 // preserved — see D4.
                                 {
                                     name: 'hamqth',
+                                    priority: 2,
                                     enabled: false,
                                     url: 'https://www.hamqth.com/xml.php',
                                     username: 'someone',
@@ -116,6 +122,7 @@ function mockConfig(passwordSet: boolean, countryTtl = 365) {
                                     timeout_sec: 15,
                                 },
                             ],
+                            continue_if_blank: ['name', 'gridsquare'],
                             country_ttl_days: countryTtl,
                             station_ttl_days: 90,
                             refresh_max_in_flight: 4,
@@ -504,5 +511,33 @@ describe('EnrichmentSection', () => {
         // Two providers each carry an "Enabled" toggle; [0] is QRZ's.
         await fireEvent.click(screen.getAllByLabelText(/enabled/i)[0]);
         expect(screen.getByText(/apply when the daemon restarts/i)).toBeTruthy();
+    });
+
+    it('U9: shows one exclusive priority control for each callsign provider', async () => {
+        const { container } = await renderLoadedWithContainer(true);
+        const qrzPriority = within(card(container, QRZ_CARD)).getByLabelText<HTMLSelectElement>(
+            /^priority$/i
+        );
+        const hamqthPriority = within(card(container, 'hamqth')).getByLabelText<HTMLSelectElement>(
+            /^priority$/i
+        );
+
+        expect(qrzPriority.value).toBe('1');
+        expect(hamqthPriority.value).toBe('2');
+        await fireEvent.change(hamqthPriority, { target: { value: '1' } });
+        expect(qrzPriority.value).toBe('2');
+        expect(hamqthPriority.value).toBe('1');
+    });
+
+    it('U10: exposes the chain-wide name and gridsquare completion policy', async () => {
+        await renderLoaded(true);
+        const name = screen.getByLabelText<HTMLInputElement>('Name');
+        const grid = screen.getByLabelText<HTMLInputElement>('Gridsquare');
+
+        expect(name.checked).toBe(true);
+        expect(grid.checked).toBe(true);
+        await fireEvent.click(name);
+        expect(enrichmentState.draft.continueIfBlank).toEqual(['gridsquare']);
+        expect(screen.getByText(/fills any other blank fields/i)).toBeTruthy();
     });
 });

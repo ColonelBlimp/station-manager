@@ -102,16 +102,16 @@ func diffValue(path string, before, after any, out *[]FieldChange) {
 			}
 			return
 		}
-		// ORDER IS DATA. Keying by identity compares members and silently
-		// discards their sequence, but lookup.chain is priority-ordered —
-		// runChain returns the first non-empty result (orchestrator.go:576) —
-		// so a swap changes what the daemon does. Without this the change
-		// committed to disk and diffed to nothing.
+		// Order can be data for keyed lists, so retain the established reorder
+		// record generally. lookup.chain is the exception under ADR 0068:
+		// explicit priority is authoritative and array order is only a
+		// serialisation detail. Its meaningful reorder appears as changes to the
+		// providers' priority leaves instead.
 		//
 		// Reported only when the MEMBERSHIP is unchanged: adding or removing an
 		// entry necessarily shifts the sequence, and firing then would
 		// double-report every list edit and drain the signal of meaning.
-		if sameMembers(bOrder, aOrder) && !sameSequence(bOrder, aOrder) {
+		if path != "lookup.chain" && sameMembers(bOrder, aOrder) && !sameSequence(bOrder, aOrder) {
 			emit(path, renderKeyOrder(bOrder), renderKeyOrder(aOrder), out)
 		}
 		for _, k := range unionKeys(bKeyed, aKeyed) {
@@ -290,8 +290,9 @@ func listKey(m map[string]any) (string, bool) {
 }
 
 // keyList indexes a list of objects by identity, returning both the map and
-// the keys IN LIST ORDER — order is a property of the config, not an artefact
-// of iteration, and lookup.chain's order decides which provider answers first.
+// the keys IN LIST ORDER. Some keyed config lists retain meaningful ordering;
+// lookup.chain is explicitly excluded by diffValue because ADR 0068 makes its
+// numeric priority authoritative.
 // The final return reports that the list is NOT keyable (scalars, or objects
 // with no identity field), in which case the caller compares it whole.
 func keyList(list []any) (map[string]any, []string, bool) {

@@ -106,6 +106,9 @@
                             >
                                 {on ? 'enabled' : 'disabled'}
                             </span>
+                            {#if !p.country}
+                                <span class="text-xs text-muted">priority {p.priority}</span>
+                            {/if}
                             {#if !meta}
                                 <span class="text-xs text-warning">unrecognised</span>
                             {/if}
@@ -144,6 +147,25 @@
                             />
                             Enabled
                         </label>
+
+                        {#if !p.country}
+                            <label class="flex w-40 flex-col gap-1">
+                                <span class="text-sm font-medium text-ink">Priority</span>
+                                <select
+                                    class="input"
+                                    value={p.priority}
+                                    onchange={(e) =>
+                                        enrichmentState.setPriority(
+                                            p.name,
+                                            Number(e.currentTarget.value)
+                                        )}
+                                >
+                                    {#each enrichmentState.draft.providers.filter((candidate) => !candidate.country) as _, index (index)}
+                                        <option value={index + 1}>{index + 1}</option>
+                                    {/each}
+                                </select>
+                            </label>
+                        {/if}
 
                         <!-- Hamnut is anonymous BY DESIGN, so it gets no
                              credential boxes at all rather than empty ones the
@@ -219,6 +241,41 @@
                     </div>
                 </details>
             {/each}
+
+            <section>
+                <h2 class="mb-2 text-base font-semibold text-ink">Fallback completion</h2>
+                <p class="mb-3 text-sm text-muted">
+                    A lower-priority callsign source is consulted while any selected field is blank.
+                    When that call is needed, it fills any other blank fields it knows too, without
+                    replacing data from a higher-priority source.
+                </p>
+                {#if enrichmentState.completionFields.length > 0}
+                    <div class="flex flex-wrap gap-x-5 gap-y-2">
+                        {#each enrichmentState.completionFields as field (field.name)}
+                            <label class="flex items-center gap-1.5 text-sm text-ink">
+                                <input
+                                    type="checkbox"
+                                    class="cursor-pointer"
+                                    checked={enrichmentState.draft.continueIfBlank.includes(
+                                        field.name
+                                    )}
+                                    onchange={(e) =>
+                                        enrichmentState.setCompletionField(
+                                            field.name,
+                                            e.currentTarget.checked
+                                        )}
+                                />
+                                {field.display_name}
+                            </label>
+                        {/each}
+                    </div>
+                {:else}
+                    <p class="text-xs text-warning">
+                        Completion-field controls are unavailable; the saved policy will be
+                        preserved.
+                    </p>
+                {/if}
+            </section>
 
             <section>
                 <h2 class="mb-3 text-base font-semibold text-ink">Cache freshness</h2>

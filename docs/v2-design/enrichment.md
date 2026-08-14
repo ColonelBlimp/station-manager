@@ -69,15 +69,21 @@ A small set of country fields are **derived at return time, not persisted**. The
 
 ## Provider chain semantics
 
-`runChain(ctx, callsign)` iterates `Orchestrator.Chain` (`[]CallsignProvider`) in order. The chain is operator-configured priority order; the orchestrator does not re-sort.
+`buildEnrichment` sorts configured callsign providers by their explicit numeric
+priority, then filters disabled entries into `Orchestrator.Chain`.
+`runChain(ctx, callsign)` iterates that chain sequentially and accumulates
+normalised results under ADR 0068's fill-only authority rule.
 
 For each provider:
-- **Provider returns non-empty `ContactedStation`** → return immediately with that result and the provider's `Name()` as the station source. The chain stops.
+- **Provider returns non-empty `ContactedStation`** → normalise it, strip country-owned fields, and fill only blank callsign-owned accumulator fields. The first contributing provider remains `station_source`. Stop when every field in `ContinueIfBlank` is present; otherwise advance. An explicit empty completion list stops at the first substantive result.
 - **Provider returns `(ContactedStation{}, errors.ErrNotFound)`** → advance to the next provider silently. ErrNotFound is the structured "I don't have this callsign" signal from QRZ / HamQTH / etc.
-- **Provider returns any other error (transport / parse / auth / 5xx)** → log + advance to the next provider. ADR 0017 #8 treats these the same as ErrNotFound at the dispatch layer; the per-provider log is for operator-facing debugging.
+- **Provider returns any other error (transport / parse / auth / 5xx)** → log + advance without discarding earlier contributions. Cancellation stops the remaining chain.
 - **Provider returns `IsEmpty(ContactedStation)` with no error** → advance. (Some providers' "no record" path is `(empty, nil)` rather than `(empty, ErrNotFound)`; both shapes work.)
 
-After the loop, if no provider produced data: return `(ContactedStation{}, SourceNone)`. The caller writes no row per ADR 0017 #9.
+After the loop, a partial accumulated result is returned and cached. If no
+provider produced data, return `(ContactedStation{}, SourceNone)` and write no
+row. A fresh cache hit does not run the chain merely because a completion field
+is absent; another attempt waits for staleness or an explicit refresh.
 
 `IsEmpty` deliberately excludes `Call`, `Country`, `CQZ`, `ITUZ`, `DXCC`, `Cont` from the "has data" check — `Call` is the input echoed back, the country fields are hamnut-exclusive (the chain shouldn't be deciding the chain has data based on values that get filtered out anyway).
 

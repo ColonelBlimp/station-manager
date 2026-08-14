@@ -137,3 +137,27 @@ func TestHandleLookupTypes_CarriesCredentialFacts(t *testing.T) {
 		t.Errorf("help not served: %v", got)
 	}
 }
+
+// ADR 0068 — Settings receives the completion-field catalogue from the same
+// package config validation uses, so adding a field cannot make the UI and
+// daemon disagree about the accepted JSON name.
+func TestHandleLookupTypes_CarriesCompletionFields(t *testing.T) {
+	lookupdef.ResetForTests()
+	t.Cleanup(lookupdef.ResetForTests)
+	srv := testServer(t)
+
+	fields, ok := getLookupTypes(t, srv)["completion_fields"].([]any)
+	if !ok || len(fields) != 2 {
+		t.Fatalf("completion_fields = %#v, want the two supported fields", fields)
+	}
+	want := []string{"name", "gridsquare"}
+	for i, raw := range fields {
+		field := raw.(map[string]any)
+		if got := field["name"]; got != want[i] {
+			t.Errorf("completion_fields[%d].name = %v, want %q", i, got, want[i])
+		}
+		if field["display_name"] == "" {
+			t.Errorf("completion_fields[%d] has no display_name", i)
+		}
+	}
+}

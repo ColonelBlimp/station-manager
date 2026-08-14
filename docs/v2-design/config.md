@@ -272,7 +272,7 @@ const is a *ceiling*, not a default, and must stay non-overridable.
 | (inline) datastore driver / path | `sqlite` / `${DataDir}/db/station-manager.db` | `datastore.driver` / `path` |
 | (inline) logging level / dir | `info` / `log` | `logging.level` / `rel_log_file_dir` |
 
-### (a‴) lookup sources: `label`, and what a TTL of `0` means
+### (a‴) lookup sources: labels, priority/completion policy, and TTL `0`
 
 `lookup.hamnut.label` / `lookup.chain[].label` (added 2026-08-03) is the exact
 counterpart of the forwarder `label` documented below: the operator's own
@@ -287,6 +287,26 @@ silently detaches the credentials. **`mergeLookupProvider` carries `label` over
 from the stored entry explicitly**, for exactly the reason spelled out for
 forwarders below: the rebuild keeps only what it names, so an unrelated save
 would otherwise delete it. Pinned by `internal/api/lookup_label_test.go` (M2/M3).
+
+**Callsign-chain authority is explicit (ADR 0068).** Every
+`lookup.chain[]` entry, enabled or disabled, has one positive `priority` and the
+set must be unique and contiguous from 1 through the chain length. JSON array
+order is not authoritative: normalisation sorts entries by numeric priority,
+and runtime construction sorts before filtering disabled providers. A legacy
+chain in which every priority is absent/zero migrates from its existing array
+order; mixed implicit/explicit, duplicate, zero/negative, and gapped priorities
+are rejected rather than guessed. Registry-seeded callsign providers are
+disabled and receive the next priority.
+
+`lookup.continue_if_blank` is the chain-wide completion policy, initially
+`["name", "gridsquare"]`. After each normalised provider response, the next
+enabled source runs only while a named field is blank. A fallback response
+fills every blank callsign-owned field it supplies but never overwrites a
+higher-priority value; QTH and other opportunistic fields do not themselves
+cause another call. An explicit empty list restores the legacy
+first-substantive-result behavior. Unknown or repeated field names are rejected;
+the supported catalogue is owned by `internal/lookupdef` and served by
+`GET /v1/lookup-types` for Settings.
 
 **The two cache TTLs are `*int` (changed 2026-08-03).** `nil`/absent means "use
 the default" and is filled by `config.Normalize`; an explicit **`0` means "trust

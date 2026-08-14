@@ -61,6 +61,7 @@ const CONFIG = {
         chain: [
             {
                 name: 'qrzlookupservice',
+                priority: 1,
                 enabled: true,
                 url: 'https://xmldata.qrz.com/xml/current/',
                 username: 'M0ABC',
@@ -72,6 +73,7 @@ const CONFIG = {
             // A provider this build renders no UI for. It must survive a save.
             {
                 name: 'hamqth',
+                priority: 2,
                 enabled: false,
                 url: 'https://www.hamqth.com/xml.php',
                 username: 'someone',
@@ -79,6 +81,7 @@ const CONFIG = {
                 timeout_sec: 15,
             },
         ],
+        continue_if_blank: ['name', 'gridsquare'],
         country_ttl_days: 30,
         station_ttl_days: 7,
         refresh_max_in_flight: 4,
@@ -106,9 +109,13 @@ const TYPES = {
             needs_credentials: true,
         },
     ],
+    completion_fields: [
+        { name: 'name', display_name: 'Name' },
+        { name: 'gridsquare', display_name: 'Gridsquare' },
+    ],
 };
 
-function mockDaemon(putResponse: unknown = CONFIG, putStatus = 200) {
+function mockDaemon(putResponse: unknown = CONFIG, putStatus = 200, getResponse: unknown = CONFIG) {
     const puts: Record<string, unknown>[] = [];
     vi.stubGlobal(
         'fetch',
@@ -137,7 +144,7 @@ function mockDaemon(putResponse: unknown = CONFIG, putStatus = 200) {
                 );
             }
             return Promise.resolve(
-                new Response(JSON.stringify(CONFIG), {
+                new Response(JSON.stringify(getResponse), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' },
                 })
@@ -147,8 +154,8 @@ function mockDaemon(putResponse: unknown = CONFIG, putStatus = 200) {
     return puts;
 }
 
-async function loadFresh(putResponse?: unknown, putStatus?: number) {
-    const puts = mockDaemon(putResponse, putStatus);
+async function loadFresh(putResponse?: unknown, putStatus?: number, getResponse?: unknown) {
+    const puts = mockDaemon(putResponse, putStatus, getResponse);
     await enrichmentState.load();
     return puts;
 }
@@ -413,5 +420,40 @@ describe('enrichmentState wire behaviour', () => {
         expect(qrzDraft().username).toBe('M0XYZ');
         expect(qrzDraft().password).toBe('kept-pw');
         expect(enrichmentState.dirty).toBe(true);
+    });
+
+    // ADR 0068 — priorities are explicit, exclusive and authoritative even
+    // when the daemon response happens to serialise the chain in another order.
+    it('W12: loads callsign providers in numeric priority order', async () => {
+        const reversed = structuredClone(CONFIG);
+        reversed.lookup.chain.reverse();
+        await loadFresh(undefined, undefined, reversed);
+
+        const chain = enrichmentState.draft.providers.filter((p) => !p.country);
+        expect(chain.map((p) => [p.name, p.priority])).toEqual([
+            ['qrzlookupservice', 1],
+            ['hamqth', 2],
+        ]);
+    });
+
+    it('W13: changing priority swaps the occupied value and saves one of each', async () => {
+        const puts = await loadFresh();
+        enrichmentState.setPriority('hamqth', 1);
+        await enrichmentState.save();
+
+        expect(chainOf(puts[0]).map((p) => [p.name, p.priority])).toEqual([
+            ['hamqth', 1],
+            ['qrzlookupservice', 2],
+        ]);
+    });
+
+    it('W14: completion fields round-trip and can be removed explicitly', async () => {
+        const puts = await loadFresh();
+        expect(enrichmentState.draft.continueIfBlank).toEqual(['name', 'gridsquare']);
+
+        enrichmentState.setCompletionField('name', false);
+        await enrichmentState.save();
+
+        expect(lookupOf(puts[0]).continue_if_blank).toEqual(['gridsquare']);
     });
 });

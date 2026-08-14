@@ -1,7 +1,7 @@
 ---
 number: 0068
 title: Prioritise callsign providers and fill only blank fields
-status: Accepted (operator-ratified 2026-08-14; implementation pending)
+status: Accepted (operator-ratified and implemented 2026-08-14)
 date: 2026-08-14
 ---
 

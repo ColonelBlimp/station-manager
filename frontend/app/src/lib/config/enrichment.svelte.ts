@@ -9,11 +9,9 @@
     makes the safe payload the natural one to build, rather than something the
     save has to remember to reconstruct.
 
-    Per-provider PRESENTATION is still specific (PROVIDERS below): only hamnut
-    and QRZ are implemented, and unlike Forwarding there is no descriptor
-    endpoint to drive a data-driven form from. An unrecognised provider gets the
-    generic treatment — the wire shape (LookupProviderInfo) is uniform, so its
-    username/password are editable; only the friendly name and blurb are missing.
+    Provider and completion-field presentation comes from /v1/lookup-types. An
+    unrecognised provider gets the generic treatment — the wire shape
+    (LookupProviderInfo) is uniform, so its settings are still editable.
 
     Passwords follow the same three-state contract as Email (email.svelte.ts):
     omitted = keep, typed = replace, `password_clear` = remove. TTLs are the
@@ -25,6 +23,7 @@ import {
     fetchLookup,
     fetchLookupTypes,
     saveLookup,
+    type CompletionField,
     type LookupType,
     HAMNUT_PROVIDER,
     type LookupEntry,
@@ -46,6 +45,8 @@ import { toasts } from '../ui/toasts.svelte';
 /** One lookup source as the form holds it: the masked entry plus local edits. */
 export interface ProviderDraft {
     name: string;
+    /** Exclusive callsign-chain authority. Zero for the country provider. */
+    priority: number;
     /** Operator's config.json display name; '' means use the built-in. */
     label: string;
     /** hamnut is the single country provider; the rest are the callsign chain. */
@@ -66,6 +67,8 @@ export interface ProviderDraft {
 
 export interface EnrichmentDraft {
     providers: ProviderDraft[];
+    /** Callsign fields whose absence justifies consulting the next provider. */
+    continueIfBlank: string[];
     /** Blank = use the daemon default. "0" = never goes stale. Not the same. */
     countryTtlDays: string;
     stationTtlDays: string;
@@ -75,6 +78,7 @@ export interface EnrichmentDraft {
 const BLANK: LookupEntry = {
     hamnut: {
         name: HAMNUT_PROVIDER,
+        priority: 0,
         label: '',
         enabled: false,
         url: '',
@@ -84,6 +88,7 @@ const BLANK: LookupEntry = {
         view_url: '',
     },
     chain: [],
+    continue_if_blank: ['name', 'gridsquare'],
     country_ttl_days: 0,
     station_ttl_days: 0,
     refresh_max_in_flight: 0,
@@ -92,6 +97,7 @@ const BLANK: LookupEntry = {
 function providerDraft(p: LookupProvider, country: boolean): ProviderDraft {
     return {
         name: p.name,
+        priority: p.priority,
         label: p.label,
         country,
         enabled: p.enabled,
@@ -106,9 +112,11 @@ function providerDraft(p: LookupProvider, country: boolean): ProviderDraft {
 }
 
 function draftFrom(e: LookupEntry): EnrichmentDraft {
+    const chain = [...e.chain].sort((a, b) => a.priority - b.priority);
     return {
         // hamnut first: it is the country source and the only non-chain entry.
-        providers: [providerDraft(e.hamnut, true), ...e.chain.map((p) => providerDraft(p, false))],
+        providers: [providerDraft(e.hamnut, true), ...chain.map((p) => providerDraft(p, false))],
+        continueIfBlank: [...e.continue_if_blank],
         // A stored 0 renders as "0", NOT as blank — unlike the SMTP port, where
         // 0 meant "unset". Here 0 is the operator's "never goes stale" and
         // blanking the box would misreport it as "using the default".
@@ -126,6 +134,8 @@ class EnrichmentState {
     draft = $state<EnrichmentDraft>(draftFrom(BLANK));
     /** Descriptors from the daemon. Empty until load() resolves. */
     types = $state<LookupType[]>([]);
+    /** The daemon-owned catalogue of fields valid in continue_if_blank. */
+    completionFields = $state<CompletionField[]>([]);
 
     #pristine = $state(JSON.stringify(draftFrom(BLANK)));
 
@@ -199,6 +209,7 @@ class EnrichmentState {
         // not know already gets. Mirrors forwarding.svelte.ts's handling of a
         // failed /v1/forwarder-types.
         this.types = types.kind === 'ok' ? types.types : [];
+        this.completionFields = types.kind === 'ok' ? types.completionFields : [];
         this.#apply(out.lookup);
         this.loaded = true;
     }
@@ -276,6 +287,33 @@ class EnrichmentState {
         if (p) p.passwordCleared = false;
     }
 
+    /**
+     * Move a callsign provider to an occupied priority by swapping the two.
+     * Disabled providers participate: enabling one later restores its declared
+     * authority without renumbering or colliding with another source.
+     */
+    setPriority(name: string, priority: number): void {
+        const chain = this.draft.providers.filter((p) => !p.country);
+        if (!Number.isInteger(priority) || priority < 1 || priority > chain.length) return;
+        const current = chain.find((p) => p.name === name);
+        if (!current || current.priority === priority) return;
+        const occupied = chain.find((p) => p.priority === priority);
+        if (occupied) occupied.priority = current.priority;
+        current.priority = priority;
+        chain.sort((a, b) => a.priority - b.priority);
+        this.draft.providers = [...this.draft.providers.filter((p) => p.country), ...chain];
+    }
+
+    /** Toggle one daemon-catalogued completion field in catalogue order. */
+    setCompletionField(name: string, checked: boolean): void {
+        const selected = checked
+            ? [...this.draft.continueIfBlank.filter((field) => field !== name), name]
+            : this.draft.continueIfBlank.filter((field) => field !== name);
+        this.draft.continueIfBlank = this.completionFields
+            .map((field) => field.name)
+            .filter((field) => selected.includes(field));
+    }
+
     reset(): void {
         this.draft = JSON.parse(this.#pristine) as EnrichmentDraft;
     }
@@ -288,12 +326,13 @@ class EnrichmentState {
     buildPayload(): LookupPayload {
         const d = this.draft;
         const hamnut = d.providers.find((p) => p.country);
-        const chain = d.providers.filter((p) => !p.country);
+        const chain = d.providers.filter((p) => !p.country).sort((a, b) => a.priority - b.priority);
 
         const h = hamnut ?? providerDraft(BLANK.hamnut, true);
         const payload: LookupPayload = {
             hamnut: toPayload(h, this.effectiveEnabled(h)),
             chain: chain.map((p) => toPayload(p, this.effectiveEnabled(p))),
+            continue_if_blank: [...d.continueIfBlank],
             refresh_max_in_flight: Number(d.refreshMaxInFlight) || 0,
         };
         // Omit a blank TTL — that is how the wire says "use the default". An
@@ -311,8 +350,8 @@ class EnrichmentState {
 
 /**
  * One provider on the wire. url / timeout_sec / view_url are round-tripped
- * verbatim: the daemon takes them AS SENT and re-stamps defaults only for the
- * two names Normalize knows, so anything else is silently emptied if dropped.
+ * verbatim: the daemon takes them AS SENT. Registered defaults can be restored,
+ * but an unrecognised provider is silently emptied if these fields are dropped.
  */
 function toPayload(p: ProviderDraft, enabled: boolean): LookupProviderPayload {
     const out: LookupProviderPayload = {
@@ -325,6 +364,7 @@ function toPayload(p: ProviderDraft, enabled: boolean): LookupProviderPayload {
         timeout_sec: p.timeoutSec,
         view_url: p.viewUrl,
     };
+    if (!p.country) out.priority = p.priority;
     if (p.passwordCleared) out.password_clear = true;
     else if (p.password !== '') out.password = p.password;
     return out;

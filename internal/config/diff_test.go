@@ -25,11 +25,8 @@ import (
 //     is called "insert", so it sailed past a check that looked for leaves
 //     named "url" and was then logged in full by the forwarders[ allowlist.
 //     The question has to be asked of the VALUE.
-//   - D2: a list keyed by identity compares members but discards ORDER, and
-//     lookup.chain is priority-ordered — runChain returns the first non-empty
-//     result (orchestrator.go:576-586). So swapping two providers changes what
-//     the daemon does, commits to disk, and produced an empty diff: a
-//     committed change that the audit trail silently omitted.
+//   - D2: lookup.chain authority is represented by its explicit priority
+//     leaves. JSON array order is not data for that list under ADR 0068.
 
 func diffFor(t *testing.T, before, after Config) []FieldChange {
 	t.Helper()
@@ -86,37 +83,33 @@ func TestDiff_ForwarderEndpointUrlIsReducedToOrigin(t *testing.T) {
 	}
 }
 
-// D2 — REORDERING A PRIORITY-ORDERED LIST IS A CHANGE. The members are
-// identical, so a comparison keyed purely by identity sees nothing; the daemon
-// meanwhile consults a different provider first.
-//
-// The fixture swaps two providers whose OTHER fields are untouched. If any
-// field differed the rule would pass on that difference alone and prove nothing
-// about ordering.
-func TestDiff_LookupChainReorderIsReported(t *testing.T) {
-	qrz := types.LookupConfig{Name: "qrz", Enabled: true, URL: "https://qrz.example.com"}
-	hamqth := types.LookupConfig{Name: "hamqth", Enabled: true, URL: "https://hamqth.example.com"}
+// D2 — PRIORITY, NOT ARRAY ORDER, IS THE AUTHORITY. A pure JSON reorder must
+// produce no audit noise, while swapping the two explicit priority values must
+// report both meaningful leaves.
+func TestDiff_LookupChainUsesExplicitPriority(t *testing.T) {
+	qrz := types.LookupConfig{Name: "qrz", Priority: 1, Enabled: true, URL: "https://qrz.example.com"}
+	hamqth := types.LookupConfig{Name: "hamqth", Priority: 2, Enabled: true, URL: "https://hamqth.example.com"}
 
 	before := DefaultConfig(t.TempDir())
 	before.Lookup.Chain = []types.LookupConfig{qrz, hamqth}
+	reordered := before.Clone()
+	reordered.Lookup.Chain = []types.LookupConfig{hamqth, qrz}
+
+	if changes := diffFor(t, before, reordered); len(changes) != 0 {
+		t.Fatalf("array-only reorder produced changes: %v", changes)
+	}
+
 	after := before.Clone()
-	after.Lookup.Chain = []types.LookupConfig{hamqth, qrz}
-
+	after.Lookup.Chain[0].Priority = 2
+	after.Lookup.Chain[1].Priority = 1
 	changes := diffFor(t, before, after)
-	if len(changes) == 0 {
-		t.Fatal("reordering the priority-ordered lookup chain produced NO change; " +
-			"the daemon now queries a different provider first and the log says nothing")
-	}
-
-	ch, ok := findChange(changes, "lookup.chain")
-	if !ok {
-		t.Fatalf("no change reported against lookup.chain itself: %v", changes)
-	}
-	if ch.From != "[qrz hamqth]" {
-		t.Errorf("from = %q, want the previous order", ch.From)
-	}
-	if ch.To != "[hamqth qrz]" {
-		t.Errorf("to = %q, want the new order", ch.To)
+	for _, field := range []string{
+		"lookup.chain[qrz].priority",
+		"lookup.chain[hamqth].priority",
+	} {
+		if _, ok := findChange(changes, field); !ok {
+			t.Errorf("priority change %q not reported: %v", field, changes)
+		}
 	}
 }
 

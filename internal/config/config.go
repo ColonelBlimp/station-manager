@@ -769,6 +769,7 @@ func Normalize(cfg *Config) {
 
 	normalizeLookupURLs(cfg)
 	normalizeLookupTTLs(&cfg.Lookup)
+	normalizeLookupPolicy(&cfg.Lookup)
 	normalizeSmtpDefaults(&cfg.Smtp)
 }
 
@@ -791,6 +792,42 @@ func normalizeLookupTTLs(lc *types.EnrichmentConfig) {
 		d := defaultStationTTLDays
 		lc.StationTTLDays = &d
 	}
+}
+
+// normalizeLookupPolicy gives legacy chains explicit ADR 0068 priorities and
+// makes numeric priority, rather than JSON array position, authoritative. An
+// all-zero chain is the legacy shape and migrates in-place. A mixed chain is
+// left intact so validation can reject it rather than guess the operator's
+// intended authority order.
+func normalizeLookupPolicy(lc *types.EnrichmentConfig) {
+	if lc.ContinueIfBlank == nil {
+		lc.ContinueIfBlank = lookupdef.DefaultCompletionFields()
+	}
+	if len(lc.Chain) == 0 {
+		return
+	}
+
+	allMissing := true
+	for _, p := range lc.Chain {
+		if p.Priority != 0 {
+			allMissing = false
+			break
+		}
+	}
+	if allMissing {
+		for i := range lc.Chain {
+			lc.Chain[i].Priority = i + 1
+		}
+	}
+
+	for _, p := range lc.Chain {
+		if p.Priority <= 0 {
+			return // mixed/invalid: retain original positions for a precise error
+		}
+	}
+	sort.SliceStable(lc.Chain, func(i, j int) bool {
+		return lc.Chain[i].Priority < lc.Chain[j].Priority
+	})
 }
 
 // normalizeSmtpDefaults stamps the two SMTP numbers that HAVE a sane default
@@ -867,8 +904,12 @@ func normalizeLookupURLs(cfg *Config) {
 // which cannot import a provider package, and in a build compiled without any.
 func seedRegisteredLookupProviders(lc *types.EnrichmentConfig) {
 	have := make(map[string]struct{}, len(lc.Chain))
+	nextPriority := 1
 	for _, c := range lc.Chain {
 		have[c.Name] = struct{}{}
+		if c.Priority >= nextPriority {
+			nextPriority = c.Priority + 1
+		}
 	}
 	for _, d := range lookupdef.Descriptors() {
 		seed := types.LookupConfig{
@@ -906,6 +947,8 @@ func seedRegisteredLookupProviders(lc *types.EnrichmentConfig) {
 			}
 		case lookupdef.KindCallsign:
 			if _, present := have[d.Name]; !present {
+				seed.Priority = nextPriority
+				nextPriority++
 				lc.Chain = append(lc.Chain, seed)
 				have[d.Name] = struct{}{}
 			}
@@ -1258,10 +1301,15 @@ func applyDefaults(cfg *Config, baseDir string) {
 	// accessors have to invent a meaning for it. Called here as well because
 	// DefaultConfig runs applyDefaults without Normalize.
 	normalizeLookupTTLs(&cfg.Lookup)
+	// Migrate the existing array order before registry seeding. Adding an
+	// explicitly-prioritised seed first would turn a legacy all-zero chain into
+	// a mixed configuration that must (correctly) be rejected.
+	normalizeLookupPolicy(&cfg.Lookup)
 	if cfg.Lookup.RefreshMaxInFlight == 0 {
 		cfg.Lookup.RefreshMaxInFlight = defaultRefreshMaxInFlight
 	}
 	seedRegisteredLookupProviders(&cfg.Lookup)
+	normalizeLookupPolicy(&cfg.Lookup)
 
 	// SMTP port + timeout defaults live in Normalize (normalizeSmtpDefaults) so
 	// they apply on PUT too, not just Load — a blank port saved from the Settings
@@ -1514,6 +1562,12 @@ func validateForwarders(fwds []types.ForwarderConfig) error {
 // Type-specific credential validation (QRZ wants username/password)
 // happens later when each provider is constructed at daemon startup.
 func validateLookup(lc types.EnrichmentConfig) error {
+	// Direct callers get the same legacy all-zero migration as Load/PUT. The
+	// copy is intentional: validation does not mutate its input.
+	lc.Chain = slices.Clone(lc.Chain)
+	lc.ContinueIfBlank = slices.Clone(lc.ContinueIfBlank)
+	normalizeLookupPolicy(&lc)
+
 	// nil is "use the default", not a value to range-check. An explicit 0 is a
 	// legitimate instruction ("never goes stale"); only a negative is a typo.
 	if lc.CountryTTLDays != nil && *lc.CountryTTLDays < 0 {
@@ -1530,7 +1584,19 @@ func validateLookup(lc types.EnrichmentConfig) error {
 		return err
 	}
 
+	completion := map[string]struct{}{}
+	for i, field := range lc.ContinueIfBlank {
+		if !lookupdef.IsCompletionField(field) {
+			return fmt.Errorf("continue_if_blank[%d]: unknown callsign field %q", i, field)
+		}
+		if _, dup := completion[field]; dup {
+			return fmt.Errorf("continue_if_blank[%d]: duplicate callsign field %q", i, field)
+		}
+		completion[field] = struct{}{}
+	}
+
 	names := map[string]struct{}{}
+	priorities := map[int]struct{}{}
 	for i, p := range lc.Chain {
 		if p.Name == "" {
 			return fmt.Errorf("lookup.chain[%d]: name is empty", i)
@@ -1542,8 +1608,21 @@ func validateLookup(lc types.EnrichmentConfig) error {
 			return fmt.Errorf("lookup.chain[%d]: name %q collides with hamnut", i, p.Name)
 		}
 		names[p.Name] = struct{}{}
+		if p.Priority <= 0 {
+			return fmt.Errorf("lookup.chain[%d] (%s): priority must be greater than zero", i, p.Name)
+		}
+		if _, dup := priorities[p.Priority]; dup {
+			return fmt.Errorf("lookup.chain[%d] (%s): duplicate priority %d", i, p.Name, p.Priority)
+		}
+		priorities[p.Priority] = struct{}{}
 		if err := validateLookupProvider(fmt.Sprintf("chain[%d] (%s)", i, p.Name), p); err != nil {
 			return err
+		}
+	}
+	for priority := 1; priority <= len(lc.Chain); priority++ {
+		if _, ok := priorities[priority]; !ok {
+			return fmt.Errorf("lookup.chain: priority %d is missing (priorities must be contiguous 1..%d)",
+				priority, len(lc.Chain))
 		}
 	}
 	return nil
@@ -2053,6 +2132,9 @@ func (s *Service) Enrichment() types.EnrichmentConfig {
 	out := s.Cfg.Lookup
 	if out.Chain != nil {
 		out.Chain = append([]types.LookupConfig(nil), out.Chain...)
+	}
+	if out.ContinueIfBlank != nil {
+		out.ContinueIfBlank = slices.Clone(out.ContinueIfBlank)
 	}
 	return out
 }

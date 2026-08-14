@@ -18,6 +18,9 @@ package types
 // to identify themselves differently to upstream services.
 type LookupConfig struct {
 	Name string `json:"name"`
+	// Priority is the provider's exclusive authority/order in the callsign
+	// chain (ADR 0068). It is unused on the single country-provider block.
+	Priority int `json:"priority,omitempty"`
 	// Label is the operator's own display name for this source, settable ONLY
 	// in config.json — no API surface writes it. The friendly name otherwise
 	// lives in the SPA's provider map, so changing it is a build + deploy and
@@ -44,11 +47,12 @@ type LookupConfig struct {
 //
 // Hamnut is a single block (one country provider per daemon — country
 // source-of-truth doesn't fan out). The Chain is the operator-ordered
-// list of callsign-class providers (QRZ.com, HamQTH, QRZCQ, …); the
-// orchestrator iterates in slice order and applies first-non-empty-
-// wins per ADR 0017 #8. An empty Chain is valid — it simply means no
-// callsign-class enrichment runs, and cold-station Tabs return empty
-// station data.
+// list of callsign-class providers (QRZ.com, HamQTH, QRZCQ, …). Each entry's
+// explicit Priority is authoritative; runtime sorts numerically, then filters
+// disabled providers. ADR 0068's ContinueIfBlank policy decides whether a
+// lower provider runs, and lower results fill blanks only. An empty Chain is
+// valid — it simply means no callsign-class enrichment runs, and cold-station
+// Tabs return empty station data.
 //
 // TTLs are in days (operator-friendly unit; the config Service
 // converts to time.Duration via accessors).
@@ -66,9 +70,14 @@ type LookupConfig struct {
 // to the refresher package default in BOTH the accessor and the
 // defaults pass, so it has no absent-vs-zero conflict to express.
 type EnrichmentConfig struct {
-	Hamnut             LookupConfig   `json:"hamnut"`
-	Chain              []LookupConfig `json:"chain,omitempty"`
-	CountryTTLDays     *int           `json:"country_ttl_days,omitempty"`
-	StationTTLDays     *int           `json:"station_ttl_days,omitempty"`
-	RefreshMaxInFlight int            `json:"refresh_max_in_flight"`
+	Hamnut LookupConfig   `json:"hamnut"`
+	Chain  []LookupConfig `json:"chain,omitempty"`
+	// ContinueIfBlank names the callsign fields that justify consulting the
+	// next provider. An explicit empty list retains ADR 0017's legacy
+	// first-substantive-result behaviour; nil is normalised to ADR 0068's
+	// initial name + gridsquare policy.
+	ContinueIfBlank    []string `json:"continue_if_blank"`
+	CountryTTLDays     *int     `json:"country_ttl_days,omitempty"`
+	StationTTLDays     *int     `json:"station_ttl_days,omitempty"`
+	RefreshMaxInFlight int      `json:"refresh_max_in_flight"`
 }
