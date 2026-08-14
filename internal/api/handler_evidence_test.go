@@ -66,7 +66,7 @@ func TestHandleEvidenceStatus_LiveWriter(t *testing.T) {
 	if !st.Enabled || st.State != evidence.StateCapturing {
 		t.Fatalf("status = %+v, want enabled/capturing", st)
 	}
-	if st.CapBytes != 524288000 || st.WatermarkBytes <= 0 || st.UsageBytes <= 0 {
+	if st.CapBytes != 524288000 || st.WatermarkBytes <= 0 || st.UsageBytes == nil || *st.UsageBytes <= 0 {
 		t.Fatalf("status sizes = %+v, want real cap/watermark/usage", st)
 	}
 }
