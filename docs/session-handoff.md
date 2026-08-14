@@ -48,19 +48,17 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **L4 Part A DONE (command-outcome log) — committed but TANGLED.** Base `8c3b69e6`; the op-id
-  review-fixes are in `af9e78df` (P1 full op_ids list + P2 boot-id prefix + 256-id run cap) and the
-  entropy bump (96-bit boot-id) got AMENDED INTO THE OTHER CODER'S commit `86b05ab5 "test(qrzcq)"`
-  (operator said LEAVE AS-IS — my entropy fix rides in their commit; it works, just mislabeled).
-  All op-id review findings resolved + reviewed clean. **GIT LESSON (repeat):** re-check `git log -1`
-  is MY commit IN THE SAME COMMAND as any `--amend` — a 2nd coder commits to this HEAD in parallel,
-  so an earlier check goes stale; I amended their commit twice this way.
-- **RESUME TASK — L4 Part B: tune start/stop durable records** (NOT started). Add
-  reason/power/mode/duration to tune start + operator-stop (`bridge/tune.go` StartTune ~225 /
-  finishTune ~373), and ENRICH the existing auto-off (`:417`) + disconnect (`:438`) logs with the
-  same fields (operator decided: uniform). **LOGGING-ONLY: add fields, never change control
-  flow/timing on the TX path.** L4 spec: `reviews/internal-codebase-logging-gaps.md` L4 box.
-  After L4: L5–L9 (P1).
+- **L4 DONE (both parts) — all reviews clean.** Part A command-outcome log: base `8c3b69e6`,
+  op-id fixes `af9e78df` (full op_ids list + boot-id + 256 cap), entropy bump rode into the OTHER
+  CODER'S `86b05ab5 "test(qrzcq)"` (operator said LEAVE AS-IS — mislabeled but works). Part B tune
+  records: `004acacf`. Findings doc L4 box marked FIXED. **GIT LESSON (repeat):** re-check
+  `git log -1` is MY commit IN THE SAME COMMAND as any `--amend` — a 2nd coder commits to this HEAD
+  in parallel; I amended their commit twice before catching it.
+- **RESUME TASK — L5** (P1): malformed CAT telemetry silently drops safety-relevant state.
+  `mapStatusToPayload` discards invalid VFO A/B + TX-power without a result or log
+  (`bridge/pipeline.go:~1129`). Spec: `reviews/internal-codebase-logging-gaps.md` L5 box. Then L6–L9.
+  Same discipline: ATDD criteria + operator decisions on any threshold BEFORE building; LOGGING/
+  observability only on the TX-adjacent paths — never change control flow/timing.
 - **L1/L2/L3 DONE + committed** (L3 = quiet-window evidence recovery, 30s window, in the tangled
   commit `f17b03eb`). L4 Part A decisions already made w/ operator: freq-steps coalesce, 1s window,
   op-id echoed to access log.
@@ -79,6 +77,31 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   per-occasion agreement — **L4 Part B touches tune.go (TX path) but is LOGGING-ONLY: add fields,
   never change control flow/timing.** All commits carry NO Claude trailer. Codex hook is SLOW
   (~1-2 min); triage `.codex-reviews/` (verdict from OUTPUT not exit code) + `gh run list -L1` on resume.
+
+## Current state (as of 2026-08-14)
+
+**Logging-gaps audit L1–L4 DONE.** This session (all full-TDD, reversion-proved,
+every codex review triaged clean + deleted):
+- **L3** — audio + evidence queue-loss made honest: shared `logging.EpisodeLoss`
+  (warn at 1/10/100…, one recovery summary). Evidence records `evidence_queue_full`
+  (not `writer_error`); audio's `lossMonitor` polls the callback's atomic drop counter
+  off the real-time path. Recovery is a QUIET-WINDOW monitor — **evidence 30 s**
+  (slots arrive every 15 s, so a shorter window splits a sustained stall), **audio
+  5 s**; both flush on stop and baseline the counter per Start. Commits tangled with
+  the other coder's (operator: leave-as-is).
+- **L4 Part A** (`8c3b69e6` + op-id fixes `af9e78df`, entropy in `86b05ab5`) — command
+  outcome at the bridge boundary: `SendCommands` returns an op-id + logs op/protocol/
+  batch/applied/failed-index (partial vs full distinguishable). `set_freq`/`set_freq_b`
+  coalesce (1 s window, 256-id cap, every op-id carried). Op-id = 96-bit boot prefix +
+  counter, echoed onto the `POST /v1/rig/command` access line.
+- **L4 Part B** (`004acacf`) — durable tune start + one uniform stop record
+  (operator/auto-off/disconnect) carrying reason/power/mode/duration. Logging only.
+
+**Parallel work:** a 2nd coder is building qrzcq/lookup on the same branch/HEAD;
+their commits/reviews/working-tree files are not mine. Remote CI is red on THEIR
+qrzcq acceptance-test complexity lint; their `86b05ab5` split fixes it (unpushed).
+
+---
 
 ## Current state (as of 2026-08-10)
 

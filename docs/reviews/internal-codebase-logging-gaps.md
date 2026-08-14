@@ -188,6 +188,22 @@ duration. Keep all producer paths non-blocking.
 
 ### L4. Rig mutations do not have an authoritative audit trail
 
+> ✅ **FIXED (working tree, awaiting operator's push).** Two parts.
+> **Part A — command outcome** (`8c3b69e6` + review-fixes `af9e78df`, entropy fix
+> rode into `86b05ab5`): `SendCommands` returns a generated op-id and logs one
+> structured outcome at the bridge boundary (both protocols) — op-id, protocol, op
+> names/values, batch size, applied count, and on a mid-batch CI-V failure the failed
+> index/op, so a fully-applied batch is distinguishable from a partial one and both
+> from a pre-write rejection (the returned error). Rapid `set_freq`/`set_freq_b` steps
+> coalesce into one Info summary (1 s quiet window, a different op or a failure flushes
+> immediately) carrying every request's op-id, capped at 256 ids per chunk. The op-id
+> is a 96-bit per-boot prefix + counter (unique across restarts) and is echoed onto the
+> `POST /v1/rig/command` access-log line.
+> **Part B — tune records** (`004acacf`): a durable start record (reason/power/mode/
+> auto-off) and one uniform stop record shared by every teardown path (operator/
+> auto-off/disconnect) with reason, power, mode and actual duration. Logging only — no
+> control-flow change on the TX path. All reviews clean.
+
 A CI-V batch is non-atomic: earlier operations can be ACKed and applied before a later
 operation fails. `sendCommandsCIV` returns at the first failure without logging how
 many commands applied, the failed batch index, or the operation at the durable bridge
