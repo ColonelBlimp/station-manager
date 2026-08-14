@@ -240,12 +240,15 @@ type LookupProviderInfo struct {
 // "trust this cache indefinitely". GET always populates them (Normalize has
 // resolved nil by then), so a client sees effective values rather than holes.
 type LookupInfo struct {
-	Hamnut             LookupProviderInfo   `json:"hamnut"`
-	Chain              []LookupProviderInfo `json:"chain"`
-	ContinueIfBlank    []string             `json:"continue_if_blank"`
-	CountryTTLDays     *int                 `json:"country_ttl_days,omitempty"`
-	StationTTLDays     *int                 `json:"station_ttl_days,omitempty"`
-	RefreshMaxInFlight int                  `json:"refresh_max_in_flight"`
+	Hamnut LookupProviderInfo   `json:"hamnut"`
+	Chain  []LookupProviderInfo `json:"chain"`
+	// Pointer makes PUT presence-aware: nil/omitted preserves the stored policy,
+	// while a non-nil pointer to [] explicitly selects legacy first-substantive
+	// behavior. GET always supplies a non-nil pointer.
+	ContinueIfBlank    *[]string `json:"continue_if_blank"`
+	CountryTTLDays     *int      `json:"country_ttl_days,omitempty"`
+	StationTTLDays     *int      `json:"station_ttl_days,omitempty"`
+	RefreshMaxInFlight int       `json:"refresh_max_in_flight"`
 }
 
 // ForwarderInfo is the config SPA's view of one forwarding destination. It is
@@ -1209,10 +1212,11 @@ func lookupInfoFrom(lc types.EnrichmentConfig) LookupInfo {
 	for _, c := range lc.Chain {
 		chain = append(chain, lookupProviderInfoFrom(c))
 	}
+	continueIfBlank := slices.Clone(lc.ContinueIfBlank)
 	return LookupInfo{
 		Hamnut:             lookupProviderInfoFrom(lc.Hamnut),
 		Chain:              chain,
-		ContinueIfBlank:    slices.Clone(lc.ContinueIfBlank),
+		ContinueIfBlank:    &continueIfBlank,
 		CountryTTLDays:     lc.CountryTTLDays,
 		StationTTLDays:     lc.StationTTLDays,
 		RefreshMaxInFlight: lc.RefreshMaxInFlight,
@@ -1279,10 +1283,14 @@ func mergeLookup(in LookupInfo, existing types.EnrichmentConfig) types.Enrichmen
 	for _, p := range in.Chain {
 		chain = append(chain, mergeLookupProvider(p, exByName[p.Name]))
 	}
+	continueIfBlank := slices.Clone(existing.ContinueIfBlank)
+	if in.ContinueIfBlank != nil {
+		continueIfBlank = slices.Clone(*in.ContinueIfBlank)
+	}
 	return types.EnrichmentConfig{
 		Hamnut:             mergeLookupProvider(in.Hamnut, existing.Hamnut),
 		Chain:              chain,
-		ContinueIfBlank:    slices.Clone(in.ContinueIfBlank),
+		ContinueIfBlank:    continueIfBlank,
 		CountryTTLDays:     in.CountryTTLDays,
 		StationTTLDays:     in.StationTTLDays,
 		RefreshMaxInFlight: in.RefreshMaxInFlight,
