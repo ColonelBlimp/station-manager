@@ -3,20 +3,24 @@ package bridge
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 
-// newBootID is a short random per-process prefix for operation-ids (L4 P2), so an
-// op-id is unique across restarts (a bare counter resets to rc1 each boot and would
-// collide with a prior session's ids in durable logs). Degrades to a fixed literal if
-// the system RNG is unavailable — op-ids stay counter-unique within the process.
+// newBootID is a random per-process prefix for operation-ids (L4 P2), so an op-id is
+// unique across restarts (a bare counter resets each boot and would collide with a
+// prior session's ids in durable logs). 96 bits: the birthday bound is ~2^48 boots, so
+// two sessions never share a prefix in any realistic daemon lifetime (24 bits collided
+// around 4.8k boots). On the near-unreachable RNG-failure path it falls back to the
+// boot time in nanoseconds — still boot-varying, never a fixed literal that would
+// guarantee reuse across such boots.
 func newBootID() string {
-	var b [3]byte
+	var b [12]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "boot"
+		return "t" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	}
 	return hex.EncodeToString(b[:])
 }

@@ -168,6 +168,11 @@ func TestNextOpID_BootPrefixedAndOrdered(t *testing.T) {
 	if na != "1" || nb != "2" {
 		t.Fatalf("the counter must increment after the prefix: %q %q", a, b)
 	}
+	// The prefix must carry enough entropy that two boots don't collide over a daemon's
+	// life (≥96 bits = 24 hex chars); a small prefix collides within thousands of boots.
+	if len(pa) < 24 {
+		t.Errorf("boot prefix too short for durable cross-restart uniqueness: %q (%d chars)", pa, len(pa))
+	}
 }
 
 // A different op flushes the pending run BEFORE it logs, so the coalesced summary and
