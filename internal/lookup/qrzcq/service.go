@@ -178,7 +178,7 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 	if s.client == nil {
 		return types.ContactedStation{}, errors.New(op).WithMsg("http client is not configured")
 	}
-	if err := s.ensureSessionKey(); err != nil {
+	if err := s.ensureSessionKey(ctx); err != nil {
 		return types.ContactedStation{}, errors.New(op).WithErr(err).
 			WithMsg("no QRZCQ session key (will retry)")
 	}
@@ -187,7 +187,7 @@ func (s *Service) LookupWithContext(ctx context.Context, callsign string) (types
 	station, err := s.lookupOnce(ctx, callsign)
 	if err != nil && stderr.Is(err, errSessionExpired) {
 		s.clearSessionKeyIf(keyBefore)
-		if authErr := s.ensureSessionKey(); authErr != nil {
+		if authErr := s.ensureSessionKey(ctx); authErr != nil {
 			s.LoggerService.WarnWith().Err(authErr).
 				Msg("QRZCQ session re-auth after expiry unavailable (will retry)")
 			return types.ContactedStation{}, errors.New(op).WithErr(err).
@@ -225,7 +225,7 @@ func (s *Service) clearSessionKeyIf(expected string) {
 	}
 }
 
-func (s *Service) ensureSessionKey() error {
+func (s *Service) ensureSessionKey(ctx context.Context) error {
 	if s.getSessionKey() != "" {
 		return nil
 	}
@@ -240,7 +240,12 @@ func (s *Service) ensureSessionKey() error {
 		time.Since(s.lastAuthAttempt) < sessionRetryCooldown {
 		return s.lastAuthErr
 	}
-	err := s.requestAndSetSessionKey(context.Background())
+	err := s.requestAndSetSessionKey(ctx)
+	// A caller ending its own request is not an upstream authentication
+	// failure. Do not make that cancellation suppress another caller's retry.
+	if err != nil && ctx.Err() != nil {
+		return err
+	}
 	s.lastAuthErr = err
 	s.lastAuthAttempt = time.Now()
 	return err

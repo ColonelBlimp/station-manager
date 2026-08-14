@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
@@ -139,6 +140,74 @@ func TestLookup_TransportFailureDoesNotLeakSessionKey(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "test-session-key") || strings.Contains(err.Error(), "s=") {
 		t.Fatalf("transport error leaked session query: %v", err)
+	}
+}
+
+func TestLookup_CallerCancellationStopsSessionAcquisition(t *testing.T) {
+	requestStarted := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		close(requestStarted)
+		select {
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		case <-release:
+			return nil, stderr.New("test released blocked authentication")
+		}
+	})}
+	s := initializedService(client)
+	s.setSessionKey("")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.LookupWithContext(ctx, "N0CALL")
+		done <- err
+	}()
+	<-requestStarted
+	cancel()
+
+	select {
+	case err := <-done:
+		if !stderr.Is(err, context.Canceled) {
+			t.Fatalf("LookupWithContext error = %v, want context.Canceled", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("LookupWithContext did not stop canceled session acquisition")
+	}
+	if s.lastAuthErr != nil || !s.lastAuthAttempt.IsZero() {
+		t.Fatal("caller cancellation was cached as an upstream authentication failure")
+	}
+}
+
+func TestLookup_RedactsSessionKeyUsedByInFlightRequest(t *testing.T) {
+	const requestKey = "session-key-a"
+	var s *Service
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.URL.Query().Get("s"); got != requestKey {
+			t.Errorf("lookup session key = %q, want %q", got, requestKey)
+		}
+		// Model a concurrent expired-session recovery replacing the shared key
+		// while this request is in flight.
+		s.setSessionKey("session-key-b")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body: io.NopCloser(strings.NewReader(
+				`<QRZCQDatabase><Session><Error>bad key session-key-a</Error></Session></QRZCQDatabase>`)),
+			Header: make(http.Header),
+		}, nil
+	})}
+	s = initializedService(client)
+	s.setSessionKey(requestKey)
+
+	_, err := s.lookupOnce(context.Background(), "N0CALL")
+	if err == nil {
+		t.Fatal("lookupOnce succeeded, want upstream session error")
+	}
+	if strings.Contains(err.Error(), requestKey) {
+		t.Fatalf("lookup error leaked the request session key: %v", err)
 	}
 }
 

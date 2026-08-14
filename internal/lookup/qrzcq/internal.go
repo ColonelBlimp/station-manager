@@ -98,12 +98,13 @@ func (s *Service) requestAndSetSessionKey(ctx context.Context) error {
 
 func (s *Service) lookupOnce(ctx context.Context, callsign string) (types.ContactedStation, error) {
 	const op errors.Op = "qrzcq.Service.lookupOnce"
+	sessionKey := s.getSessionKey()
 	u, err := url.Parse(s.Config.URL)
 	if err != nil {
 		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("invalid QRZCQ base URL")
 	}
 	q := u.Query()
-	q.Set("s", s.getSessionKey())
+	q.Set("s", sessionKey)
 	q.Set("callsign", callsign)
 	q.Set("agent", s.UserAgent)
 	u.RawQuery = q.Encode()
@@ -112,7 +113,7 @@ func (s *Service) lookupOnce(ctx context.Context, callsign string) (types.Contac
 	if err != nil {
 		return types.ContactedStation{}, errors.New(op).WithErr(err).WithMsg("QRZCQ lookup request failed")
 	}
-	return unmarshalResponse(body, s.getSessionKey())
+	return unmarshalResponse(body, sessionKey)
 }
 
 func (s *Service) getXML(ctx context.Context, u *url.URL) ([]byte, error) {
