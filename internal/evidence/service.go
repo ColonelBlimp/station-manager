@@ -868,9 +868,25 @@ func (s *Service) processSlot(sc SlotCapture) {
 	}
 	// §5 live lane: the slot just committed — wake the sync loop (SY5).
 	s.notifyLive()
-	// A successful persist ends any writer-queue backpressure episode (L3 recovery:
-	// the next slot after the queue drained). No-op when no episode is active.
-	s.queueLoss.Recover()
+	// L3 recovery is DRAINAGE-based: only a persist that leaves the queue EMPTY ends
+	// the backpressure episode. A successful write while slots are still queued does
+	// not mean the overload is over — under sustained pressure the writer persists
+	// slots while producers keep dropping, so recovering on any persist would reset
+	// the exponential schedule (re-warn at 1) and log spurious recoveries mid-episode.
+	// The writer is serial, so len(s.ch)==0 here means it has caught up to producers.
+	// No-op when no episode is active.
+	//
+	// The len-check and Recover are not atomic wrt a producer's Add, but the harmful
+	// TOCTOU — Recover closing an episode that swallows a JUST-recorded drop mid-
+	// overload — is unreachable: a drop requires a FULL queue (writerQueueSize=64) and
+	// this check just observed an EMPTY one, and 65 enqueues cannot occur in the few-
+	// instruction window from the single serial producer (cmd/smd's FT8 evidence sink,
+	// one slot per ~15 s period). A slot merely ENQUEUED after the check is not a drop
+	// and is processed normally. No data race (channel-len read + mutex-guarded
+	// EpisodeLoss). Revisit if a second producer or a much smaller queue is introduced.
+	if len(s.ch) == 0 {
+		s.queueLoss.Recover()
+	}
 }
 
 // writeSlot commits one slot — its coverage row and every observation — as

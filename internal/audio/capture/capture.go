@@ -303,6 +303,15 @@ func (c *Capture) Start(ctx context.Context) error {
 	c.device = device
 	c.cancelInternal = cancelInternal
 
+	// Baseline the drop monitor BEFORE the device can fire a single callback, so no
+	// drop from this session is mistaken for pre-session history. c.dropped is
+	// cumulative across Start/Stop, and capturing it inside the monitor goroutine
+	// (which is scheduled after device.Start) would leave a window whose drops get
+	// baselined away. In practice the window can't drop — the cap-64 channel starts
+	// empty and a drop needs it full — but closing it structurally keeps the record
+	// correct regardless of buffer size.
+	dropBaseline := c.dropped.Load()
+
 	if err := device.Start(); err != nil {
 		c.device.Uninit()
 		c.device = nil
@@ -323,17 +332,17 @@ func (c *Capture) Start(ctx context.Context) error {
 		}
 	}()
 
-	go c.runLossMonitor(internalCtx)
+	go c.runLossMonitor(internalCtx, dropBaseline)
 
 	return nil
 }
 
 // runLossMonitor watches the dropped-chunk counter off the real-time path and drives
-// the bounded EpisodeLoss record (see lossMonitor). It baselines at the CURRENT drop
-// count so a restart counts only drops from THIS Start (c.dropped is cumulative),
-// ticks until the capture stops, then flushes any open episode with a recovery
-// summary.
-func (c *Capture) runLossMonitor(ctx context.Context) {
+// the bounded EpisodeLoss record (see lossMonitor). baseline is the drop count as of
+// this Start (c.dropped is cumulative across Start/Stop), captured before the device
+// could fire a callback, so only drops from THIS session open an episode. It ticks
+// until the capture stops, then flushes any open episode with a recovery summary.
+func (c *Capture) runLossMonitor(ctx context.Context, baseline int64) {
 	ticker := time.NewTicker(audioLossPollInterval)
 	defer ticker.Stop()
 	m := &lossMonitor{
@@ -341,7 +350,7 @@ func (c *Capture) runLossMonitor(ctx context.Context) {
 		depthCap: func() (int, int) { return len(c.samples), cap(c.samples) },
 		loss:     c.lossLog,
 		idle:     audioLossIdle,
-		lastSeen: c.dropped.Load(),
+		lastSeen: baseline,
 	}
 	for {
 		select {

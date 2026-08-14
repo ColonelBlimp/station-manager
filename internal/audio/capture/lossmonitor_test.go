@@ -111,3 +111,26 @@ func TestLossMonitor_NewDropResetsIdleWindow(t *testing.T) {
 		t.Fatal("recovery must be declared 5 s after the last drop")
 	}
 }
+
+// c.dropped is cumulative across Start/Stop, so the monitor baselines at the count as
+// of its Start: drops that happened in a PREVIOUS session (or before the baseline)
+// must not replay as a phantom episode. Only new drops past the baseline count.
+func TestLossMonitor_BaselineExcludesPreExistingDrops(t *testing.T) {
+	var buf bytes.Buffer
+	clk := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	m, dropped := newMonitor(&buf, &clk)
+
+	dropped.Store(100) // 100 drops from a prior session, already on the cumulative counter
+	m.lastSeen = 100   // monitor baselined at Start
+
+	m.step(clk)
+	if m.loss.Active() || buf.Len() != 0 {
+		t.Fatalf("pre-baseline drops must not open an episode: active=%v log=%q", m.loss.Active(), buf.String())
+	}
+
+	dropped.Store(101) // one NEW drop this session
+	m.step(clk)
+	if !m.loss.Active() {
+		t.Fatal("a drop past the baseline must open an episode")
+	}
+}
