@@ -41,12 +41,15 @@ type Server struct {
 	// override it to drive the degraded branch without a failing file. Nil is
 	// treated as healthy.
 	logHealth logHealthReporter
-	hub       *events.Hub
-	enrich    *lookup.Orchestrator
-	mailer    *email.Service
-	bridge    *bridge.Service
-	ft8       *ft8.Service
-	evidence  *evidence.Service
+	// dbHealth logs DB-ping health as transitions only, so /v1/healthz surfaces the
+	// unhealthy cause + recovery duration without flooding under frequent polling (L10).
+	dbHealth *dbHealthLog
+	hub      *events.Hub
+	enrich   *lookup.Orchestrator
+	mailer   *email.Service
+	bridge   *bridge.Service
+	ft8      *ft8.Service
+	evidence *evidence.Service
 	// stopTxForRetune stops any SM-owned transmission before a command that moves
 	// the rig off frequency. Injected by cmd/smd (same shape as ft8.SetTxKeyer /
 	// SetDialSource) so internal/api can compose the two subsystems without either
@@ -128,6 +131,7 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 		db:        db,
 		logger:    logger,
 		logHealth: logger,
+		dbHealth:  newDBHealthLog(logger),
 		hub:       hub,
 		enrich:    enrich,
 		mailer:    mailer,
