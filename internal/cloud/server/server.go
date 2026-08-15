@@ -34,6 +34,9 @@ type Server struct {
 	tokens        map[string]int64
 	version       string
 	maxConcurrent int
+	// dbHealth logs DB-ping health as transitions only, so /v1/health doesn't flood
+	// the log at Warn under frequent monitoring (L10).
+	dbHealth *dbHealthLog
 	// exportSlots caps concurrently-running exports BELOW the DB pool size —
 	// see maxConcurrentExports.
 	exportSlots chan struct{}
@@ -67,6 +70,7 @@ func New(st *store.Store, db *sql.DB, log *slog.Logger, tokens map[string]int64,
 	return &Server{
 		store: st, db: db, log: log, tokens: tokens, version: version, maxConcurrent: maxConcurrent,
 		exportSlots: make(chan struct{}, maxConcurrentExports),
+		dbHealth:    newDBHealthLog(log),
 	}
 }
 
@@ -182,10 +186,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	if err := s.db.PingContext(ctx); err != nil {
-		s.log.Warn("health: db ping failed", "err", err)
+		s.dbHealth.fail(err) // L10: transition-only — one Warn on the unhealthy edge, not per probe
 		s.writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "degraded", "db": "unreachable"})
 		return
 	}
+	s.dbHealth.ok() // L10: one recovery Info with duration on the healthy transition
 	s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "db": "ok"})
 }
 
