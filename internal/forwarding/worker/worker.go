@@ -56,7 +56,15 @@ type Config struct {
 	// affects the upload row's own lifecycle, and a forwarder that stamps
 	// nothing (including the mirror itself) never fires it.
 	OnQsoStamped func(ctx context.Context, qsoID int64)
+
+	// SummaryInterval is the period between periodic queue-depth summaries (L11).
+	// Defaults to defaultSummaryInterval (60s) when zero; tests set it short.
+	SummaryInterval time.Duration
 }
+
+// defaultSummaryInterval is the fixed cadence of the periodic queue-depth summary
+// (operator ruling 2026-08-15).
+const defaultSummaryInterval = 60 * time.Second
 
 // Worker drains the pending qso_upload queue for one destination.
 // Safe to run under safego.Go with respawn=true. Each row is processed
@@ -71,6 +79,21 @@ type Worker struct {
 	db     *sqlite.Service
 	logger *logging.Service
 	hub    *events.Hub
+
+	// now is the wall clock, injectable for deterministic tests. It backs the
+	// queue_age_seconds field on every attempt record (L11) and, later, the
+	// oldest-row age in the periodic queue summary.
+	now func() time.Time
+
+	// reach tracks this destination's reachability and logs down/recovered as
+	// transitions, so an indefinite OutcomeUnreachable outage does not flood the
+	// log with one record per retry (L11).
+	reach *reachabilityLog
+
+	// summary decides when the periodic queue-depth summary is worth logging,
+	// suppressing steady idle so it speaks only when the queue has something to
+	// say (L11).
+	summary *queueSummaryLog
 }
 
 // New constructs a Worker from its fully resolved Config and
@@ -112,7 +135,17 @@ func New(cfg Config, fwd forwarding.Forwarder, db *sqlite.Service, logger *loggi
 		return nil, errors.New(op).WithMsg("hub is nil")
 	}
 
-	return &Worker{cfg: cfg, fwd: fwd, db: db, logger: logger, hub: hub}, nil
+	if cfg.SummaryInterval <= 0 {
+		cfg.SummaryInterval = defaultSummaryInterval
+	}
+
+	w := &Worker{cfg: cfg, fwd: fwd, db: db, logger: logger, hub: hub, now: time.Now}
+	// The trackers read the clock through w.now so there is one clock source: overriding
+	// w.now in a test moves queue_age, outage duration and oldest-row age together.
+	clock := func() time.Time { return w.now() }
+	w.reach = newReachabilityLog(logger, cfg.Name, clock)
+	w.summary = &queueSummaryLog{log: logger, name: cfg.Name, now: clock}
+	return w, nil
 }
 
 // Name returns the forwarder_name this worker is scoped to.
@@ -136,6 +169,46 @@ func (w *Worker) Run(ctx context.Context) {
 			w.tickOnce(ctx)
 		}
 	}
+}
+
+// RunSummary drives the periodic queue-depth summary until ctx is cancelled. It runs in its
+// OWN goroutine — a peer of Run, launched alongside it under safego — deliberately NOT on the
+// claim loop: a slow or hung Submit blocks Run for up to a whole batch, and folding the
+// summary in there would starve it precisely during the slow-upstream outage the summary
+// exists to surface (L11). The two share only the thread-safe DB service and the read-only
+// clock; the summary tracker's state is touched by this goroutine alone.
+func (w *Worker) RunSummary(ctx context.Context) {
+	st := time.NewTicker(w.cfg.SummaryInterval)
+	defer st.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-st.C:
+			w.summarizeOnce(ctx)
+		}
+	}
+}
+
+// summarizeOnce reads this forwarder's queue depth and lets the summary tracker decide
+// whether it is worth a log line (L11). A query failure during shutdown is suppressed —
+// like the claim path, ctx cancellation is noise, not an operational error.
+func (w *Worker) summarizeOnce(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	d, err := w.db.UploadQueueDepthWithContext(ctx, w.cfg.Name)
+	if err != nil {
+		if ctx.Err() == nil {
+			w.logger.ErrorWith().
+				Str("forwarder", w.cfg.Name).
+				Err(err).
+				Msg("forwarder: queue summary query failed")
+		}
+		return
+	}
+	w.summary.emit(d)
 }
 
 // tickOnce claims up to cfg.Batch rows and processes each one.
@@ -401,6 +474,24 @@ func (w *Worker) fetchQsoForAction(ctx context.Context, row types.QsoUpload, act
 func (w *Worker) persistOutcome(
 	ctx context.Context, row types.QsoUpload, call string, res forwarding.Result, submitDur time.Duration,
 ) {
+	// Shutdown cancelled this attempt mid-flight (L11-C4). This is not an upstream
+	// fault and must not be logged as one, nor mark the destination unreachable: the
+	// daemon is stopping, the row stays in_progress, and the next startup's orphan
+	// reset reclaims it — the same contract processRowSafely's panic path uses.
+	//
+	// Gated on BOTH the worker ctx being cancelled AND the cause being context.Canceled,
+	// so a coincident REAL upstream failure that merely races shutdown (res.Err is a real
+	// error, not Canceled) falls through and is logged + updates reachability normally. A
+	// success has a nil cause, so this never fires on an upload the upstream accepted as
+	// the ctx cancelled — that still persists below.
+	if ctx.Err() != nil && stderr.Is(res.Err, context.Canceled) {
+		w.logger.DebugWith().
+			Str("forwarder", w.cfg.Name).
+			Int64("upload_id", row.ID).
+			Msg("forwarding: attempt cancelled by shutdown")
+		return
+	}
+
 	// Both halves of the result, resolved before anything is written to the log.
 	//
 	// The ORDER is the fix: the success line used to be written BEFORE
@@ -456,6 +547,17 @@ func (w *Worker) persistOutcome(
 		disp = w.markFailed(ctx, row, fmt.Sprintf("unknown outcome %q: %s", res.Outcome, errText(res.Err)))
 	}
 
+	// Reachability transition (L11). An unreachable outcome marks the destination
+	// down (Warn on the edge only); any other outcome — success, terminal, transient —
+	// proves the host was reached and marks it recovered (Info on the edge only). This
+	// carries all default-level outage signal; the per-attempt record below is demoted
+	// to Debug for the unreachable case so an indefinite outage does not flood the log.
+	if res.Outcome == forwarding.OutcomeUnreachable {
+		w.reach.unreachable(cause)
+	} else {
+		w.reach.reachable()
+	}
+
 	w.logAttempt(row, call, outcome, disp, cause, submitDur, attempt)
 
 	// Strictly AFTER the record. The stamp bumped the QSO's revision, so the
@@ -501,8 +603,19 @@ func (w *Worker) notifyStamped(ctx context.Context, row types.QsoUpload) {
 // upstream id for success. Zero values are omitted from the record.
 type attemptFields struct {
 	upstreamID string
-	attempts   int64
 	delay      time.Duration
+}
+
+// queueAgeSeconds is how long a queue row has waited: now - queued_at, in whole
+// seconds, clamped to a non-negative value. Clock skew between the DB host and this
+// process can put queued_at slightly ahead of now; a row cannot have negative age,
+// so that reports 0 rather than a nonsensical negative (L11).
+func queueAgeSeconds(now, queuedAt time.Time) int64 {
+	d := now.Sub(queuedAt)
+	if d < 0 {
+		return 0
+	}
+	return int64(d / time.Second)
 }
 
 // disposition is what happened to the QUEUE ROW locally, independent of what the
@@ -537,6 +650,13 @@ func (w *Worker) logAttempt(
 	switch {
 	case disp == dispPersistFailed:
 		ev = w.logger.ErrorWith()
+	case outcome == string(forwarding.OutcomeUnreachable):
+		// An in-outage retry. The default-level outage signal is the reachability
+		// transition record (destination unreachable / recovered); this per-attempt
+		// record is demoted to Debug so an indefinite outage does not flood the log
+		// with one Info per retry (L11). A persist failure still wins the Error case
+		// above — a broken queue write is not routine outage noise.
+		ev = w.logger.DebugWith()
 	case outcome == outcomeExhausted || outcome == string(forwarding.OutcomeTerminal):
 		ev = w.logger.WarnWith()
 	default:
@@ -545,6 +665,7 @@ func (w *Worker) logAttempt(
 
 	ev = ev.
 		Str("forwarder", w.cfg.Name).
+		Int64("upload_id", row.ID).
 		Int64("qso_id", row.QsoID).
 		Str("action", row.Action).
 		Str("call", call).
@@ -555,14 +676,20 @@ func (w *Worker) logAttempt(
 		// backfill, a stamp-sync mirror and a reconcile repair are otherwise
 		// identical records (docs/reviews/forwarding-logging-gaps.md F1).
 		Str("origin", row.Origin).
+		// Queue context (L11). attempt is UNCONDITIONAL — row.Attempts counts the
+		// tries BEFORE this one, so this attempt is row.Attempts+1 (a first try
+		// reads 1). queued_at + queue_age_seconds tell a row wedged in the queue
+		// apart from a fresh one, and a slow queue apart from a slow upstream
+		// (submit_duration_ms). This supersedes the old conditional `attempts`
+		// field, which carried the identical value on only the retry paths.
+		Int64("attempt", row.Attempts+1).
+		Time("queued_at", row.CreatedAt).
+		Int64("queue_age_seconds", queueAgeSeconds(w.now(), row.CreatedAt)).
 		Int64("submit_duration_ms", submitDur.Milliseconds())
 
 	if extra != nil {
 		if extra.upstreamID != "" {
 			ev = ev.Str("upstream_id", extra.upstreamID)
-		}
-		if extra.attempts > 0 {
-			ev = ev.Int64("attempts", extra.attempts)
 		}
 		if extra.delay > 0 {
 			ev = ev.Dur("retry_in", extra.delay)
@@ -588,7 +715,6 @@ func (w *Worker) markTransientFromForwarder(
 	ctx context.Context, row types.QsoUpload, cause error, extra *attemptFields,
 ) (string, disposition) {
 	nextAttempts := row.Attempts + 1
-	extra.attempts = nextAttempts
 	if nextAttempts >= int64(w.cfg.Retry.MaxAttempts) {
 		return outcomeExhausted, w.markFailed(ctx, row, errText(cause))
 	}
@@ -612,7 +738,7 @@ func (w *Worker) markUnreachable(
 ) disposition {
 	nextAttempts := row.Attempts + 1
 	delay := computeBackoff(nextAttempts, w.cfg.Retry)
-	extra.attempts, extra.delay = nextAttempts, delay
+	extra.delay = delay
 	nextAt := time.Now().Add(delay).Unix()
 	return w.markTransientRetry(ctx, row, nextAt, errText(cause))
 }

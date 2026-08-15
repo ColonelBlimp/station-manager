@@ -1471,6 +1471,13 @@ func spawnForwarderWorkers(
 			workerRef.Run(ctx)
 		}, true, wg)
 
+		// The periodic queue-depth summary runs as a PEER goroutine, not on the claim
+		// loop: a slow/hung Submit must not starve it (L11). Tracked in the same WaitGroup
+		// so shutdown drains it too, and respawned independently of the claim loop.
+		safego.GoTracked(ctx, fc.Name+".summary", panicHandler, func() {
+			workerRef.RunSummary(ctx)
+		}, true, wg)
+
 		loggerSvc.InfoWith().
 			Str("forwarder", fc.Name).
 			Str("type", fc.Type).
