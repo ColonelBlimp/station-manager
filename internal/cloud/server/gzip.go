@@ -137,10 +137,26 @@ func negotiateEncoding(header string) contentEncoding {
 // Content-Length (json.Encoder streams), so no length rewriting is needed.
 type gzipResponseWriter struct {
 	http.ResponseWriter
-	gz *gzip.Writer
+	gz          *gzip.Writer
+	wroteHeader bool
 }
 
-func (g *gzipResponseWriter) Write(b []byte) (int, error) { return g.gz.Write(b) }
+func (g *gzipResponseWriter) WriteHeader(code int) {
+	g.wroteHeader = true
+	g.ResponseWriter.WriteHeader(code)
+}
+
+func (g *gzipResponseWriter) Write(b []byte) (int, error) {
+	g.wroteHeader = true
+	return g.gz.Write(b)
+}
+
+// committed reports whether the HANDLER has begun the response through this
+// writer. recoverPanic reads it to decide whether a 500 envelope is still
+// deliverable — gzip buffers, so the outer accessRecorder cannot see a handler
+// write that is still in the gzip buffer; only this wrapper can. (gzip's own
+// footer flush on Close runs after recoverPanic, so it never counts here.)
+func (g *gzipResponseWriter) committed() bool { return g.wroteHeader }
 
 // Unwrap exposes the underlying writer to http.ResponseController (2026-07-19
 // review #1): without it, handleExport's SetWriteDeadline extension fails and

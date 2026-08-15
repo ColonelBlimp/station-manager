@@ -89,7 +89,11 @@ func (s *Server) Handler() http.Handler {
 	// accessLog OUTERMOST: it assigns the correlation request-id and records every
 	// request's final status — including the 503 from limitMiddleware and the 401 from
 	// auth, which the inner middleware would otherwise swallow (C4).
-	return s.accessLog(limitMiddleware(gzipMiddleware(s.log, mux), s.maxConcurrent))
+	// recoverPanic sits just outside the mux (inside gzip, so a recovered 500 is
+	// still gzipped correctly, and inside accessLog, so the access line records the
+	// 500 and shares its request_id): an application panic surfaces structured, not
+	// as a dropped connection (L6).
+	return s.accessLog(limitMiddleware(gzipMiddleware(s.log, s.recoverPanic(mux)), s.maxConcurrent))
 }
 
 // ---- transport helpers ------------------------------------------------------

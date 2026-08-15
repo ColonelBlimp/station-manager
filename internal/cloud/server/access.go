@@ -100,6 +100,11 @@ func (a *accessRecorder) Flush() {
 
 func (a *accessRecorder) Unwrap() http.ResponseWriter { return a.ResponseWriter }
 
+// committed reports whether the handler has begun the response (header or body).
+// recoverPanic reads it to decide whether a 500 envelope can still be delivered
+// or would only garble bytes already on the wire.
+func (a *accessRecorder) committed() bool { return a.wroteHeader }
+
 // accessLog is the OUTERMOST middleware: it observes every request's final status
 // (including the 503 from limitMiddleware and the 401 from auth). /v1/health and
 // /v1/version are unauthenticated and polled frequently, so their line stays at Debug
