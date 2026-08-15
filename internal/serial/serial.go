@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"go.bug.st/serial"
 )
 
@@ -210,7 +211,12 @@ func newPort(sp SerialPort, cfg Config) *Port {
 		doneCh:       make(chan struct{}),
 	}
 
-	go po.readerLoop()
+	// Log-and-die (respawn=false): a panic in the reader is recovered + reported via
+	// cfg.PanicHandler and the goroutine exits, closing doneCh/responses so the caller
+	// sees the port end and reopens. The reader is NOT respawned here — the higher
+	// layer (bridge supervisor liveness) owns reopen, and respawning would double it
+	// (L9). ctx is unused with respawn=false (no cooldown to cancel).
+	safego.Go(context.Background(), "serial.reader", cfg.PanicHandler, po.readerLoop, false)
 
 	return po
 }

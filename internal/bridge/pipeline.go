@@ -226,6 +226,10 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	// a bridge-policy timeout, not a rigdef-derived serial parameter, so it's
 	// applied here rather than inside buildSerialConfig.
 	serialCfg.WriteTimeoutMS = int(s.writeWatchdog / time.Millisecond)
+	// Inject the bridge's panic handler so a panic in the serial reader goroutine
+	// (which has no logger of its own) is logged and attributed. The reader
+	// log-and-dies; this supervisor's liveness reopens the port (L9).
+	serialCfg.PanicHandler = s.onPanic
 
 	// On Unix the OS can't set RTS/DTR before opening the port, so a rigdef that
 	// de-asserts them (e.g. the IC-7300, to keep USB SEND from keying PTT) can

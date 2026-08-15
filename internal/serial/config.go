@@ -2,6 +2,7 @@ package serial
 
 import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/safego"
 
 	"go.bug.st/serial"
 )
@@ -65,6 +66,15 @@ type Config struct {
 	// the rig-side setting (IC-7300 USB SEND = OFF); see rigserial.OpenMayPulseLines.
 	RTS *bool `json:"rts,omitempty"`
 	DTR *bool `json:"dtr,omitempty"`
+
+	// PanicHandler, when set, receives a recovered panic from the reader goroutine
+	// (name "serial.reader", the panic value, and a stack) for structured logging.
+	// This package has no logger of its own, so the caller injects one. On a reader
+	// panic the goroutine LOGS-AND-DIES (respawn=false): the reader closes its done
+	// channel on the way out, so the higher layer sees the port end and its
+	// liveness/reopen recovers it — respawning here would race that reopen (L9).
+	// Set programmatically; excluded from config.json.
+	PanicHandler safego.PanicHandler `json:"-"`
 }
 
 // validateConfig checks the configuration for obvious issues and returns a
