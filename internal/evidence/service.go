@@ -16,6 +16,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 	_ "modernc.org/sqlite" // pure-Go driver; works in the CGO-free build
@@ -243,9 +244,17 @@ type Service struct {
 	db      *sql.DB
 	ch      chan SlotCapture
 	quit    chan struct{}
-	done    chan struct{}
 	closed  atomic.Bool
 	pending atomic.Int64 // enqueued-but-unprocessed slots; drain observability
+
+	// wg + cancel own the lifecycle of the three long-lived worker goroutines
+	// (writer, queue-loss monitor, sync loop), each launched under safego.GoTracked
+	// with respawn=true (L9): a panic is logged via onPanic and the worker respawns.
+	// wg.Done fires only when a worker PERMANENTLY exits (a clean return, never a
+	// respawn cycle), so Stop's wg.Wait means "all workers finished". cancel breaks a
+	// respawn cooldown at shutdown; the loops themselves exit on quit.
+	wg     sync.WaitGroup
+	cancel context.CancelFunc
 
 	// retHealth (L2) tracks whether the retention MEASUREMENT layer is failing, so
 	// a swallowed measurement/compaction error becomes an observable degraded
@@ -270,8 +279,6 @@ type Service struct {
 	// polls. The producer (CaptureSlot) only bumps this atomic — non-blocking, no log —
 	// mirroring the audio callback's dropped counter; the monitor turns it into warns.
 	queueDropped atomic.Int64
-	// lossDone is closed when runQueueLossMonitor exits (Stop waits on it).
-	lossDone chan struct{}
 
 	mu       sync.Mutex
 	started  bool
@@ -286,14 +293,11 @@ type Service struct {
 	profReason string
 	profActive map[string]ProfileActive
 
-	// §5 sync engine state (sync.go). syncCh/syncDone/syncClient are
-	// created in Start when sync is enabled and never change after;
-	// the remaining fields are guarded by mu. syncCancelBacklog is
-	// non-nil exactly while a BACKLOG request is in flight — notifyLive
-	// calls it (the ruling's intentional cancellation, no backoff
-	// advance).
+	// §5 sync engine state (sync.go). syncCh/syncClient are created in Start when
+	// sync is enabled and never change after; the remaining fields are guarded by mu.
+	// syncCancelBacklog is non-nil exactly while a BACKLOG request is in flight —
+	// notifyLive calls it (the ruling's intentional cancellation, no backoff advance).
 	syncCh            chan struct{}
-	syncDone          chan struct{}
 	syncClient        *http.Client
 	syncState         string
 	syncLastErr       string
@@ -312,7 +316,6 @@ func New(cfg Config, log logging.Logger) *Service {
 		decoderBuild: goft8Build(),
 		state:        StateDisabled,
 		quit:         make(chan struct{}),
-		done:         make(chan struct{}),
 	}
 }
 
@@ -402,17 +405,24 @@ func (s *Service) Start() error {
 		"evidence: writer queue recovered",
 		lossReasonQueueFull, time.Now)
 	s.ch = make(chan SlotCapture, writerQueueSize)
-	s.lossDone = make(chan struct{})
-	go s.writerLoop()
+	// runCtx cancels at Stop to break any respawn cooldown; the loops themselves exit
+	// on quit. safego.GoTracked does wg.Add(1) synchronously here — under s.mu, before
+	// Start returns — so Stop (which reads started under s.mu, then waits) can never
+	// pass wg.Wait with a zero counter (safego caller contract).
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	safego.GoTracked(runCtx, "evidence.writer", s.onPanic, s.writerLoop, true, &s.wg)
 	// Baseline captured synchronously (still under s.mu, so queueDropped is 0) — see
 	// runQueueLossMonitor: Load()ing inside the goroutine would race a post-Start drop
-	// burst and baseline it away.
-	go s.runQueueLossMonitor(s.queueDropped.Load())
+	// burst and baseline it away. Reused across respawns (a stale baseline just re-reports
+	// drops since Start, which is harmless; a fresh Load would re-introduce that race).
+	lossBaseline := s.queueDropped.Load()
+	safego.GoTracked(runCtx, "evidence.queueloss", s.onPanic,
+		func() { s.runQueueLossMonitor(lossBaseline) }, true, &s.wg)
 	if s.cfg.Sync {
 		s.syncCh = make(chan struct{}, 1)
-		s.syncDone = make(chan struct{})
 		s.syncClient = &http.Client{Timeout: syncHTTPTimeout}
-		go s.syncLoop()
+		safego.GoTracked(runCtx, "evidence.sync", s.onPanic, s.syncLoop, true, &s.wg)
 	}
 	s.log.InfoWith().
 		Str("path", s.cfg.Path).
@@ -435,12 +445,9 @@ func (s *Service) Stop() {
 	if !started {
 		return
 	}
-	close(s.quit)
-	<-s.done
-	<-s.lossDone
-	if s.syncDone != nil {
-		<-s.syncDone
-	}
+	close(s.quit) // the workers observe this and return cleanly (a clean return does
+	s.cancel()    // not respawn); cancel unblocks any worker mid respawn-cooldown.
+	s.wg.Wait()   // all three workers have PERMANENTLY exited.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closeLossLocked()
@@ -793,18 +800,15 @@ func (s *Service) applyAdditiveMigration(db *sql.DB, op errors.Op, probeColumn, 
 }
 
 func (s *Service) writerLoop() {
-	defer close(s.done)
 	for {
 		select {
 		case sc := <-s.ch:
-			s.processSlot(sc)
-			s.pending.Add(-1)
+			s.processSlot(sc) // decrements s.pending via defer (panic-safe)
 		case <-s.quit:
 			for {
 				select {
 				case sc := <-s.ch:
 					s.processSlot(sc)
-					s.pending.Add(-1)
 				default:
 					return
 				}
@@ -842,7 +846,31 @@ func (s *Service) checkpointTruncate(op string) error {
 	return nil
 }
 
+// onPanic is the safego PanicHandler for the evidence workers: it records the
+// panicking goroutine's name, value and stack so a recovered subsystem panic leaves
+// a structured trace instead of only the runtime stderr dump (L9).
+func (s *Service) onPanic(name string, panicValue any, stack []byte) {
+	s.log.ErrorWith().
+		Str("goroutine", name).
+		Interface("panic", panicValue).
+		Bytes("stack", stack).
+		Msg("evidence: subsystem goroutine panicked (recovered)")
+}
+
+// writerPanicForTest, when set, is invoked once per processSlot so a test can drive
+// the writer's panic → safego respawn path. nil (production) is a no-op — same
+// test-seam pattern as writerDelay.
+var writerPanicForTest func()
+
 func (s *Service) processSlot(sc SlotCapture) {
+	// Deferred FIRST so the slot is accounted as processed even if the write path
+	// panics: under safego respawn a panic no longer crashes the process, so a
+	// non-deferred decrement would leak `pending` and stall drain observability
+	// (safego caller contract, L9).
+	defer s.pending.Add(-1)
+	if writerPanicForTest != nil {
+		writerPanicForTest()
+	}
 	if writerDelay > 0 {
 		time.Sleep(writerDelay)
 	}

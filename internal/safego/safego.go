@@ -58,6 +58,16 @@ func init() {
 	respawnCooldown.Store(int64(5 * time.Second))
 }
 
+// SetRespawnCooldownForTest overrides the respawn cooldown and returns a restore
+// func. Exported so a subsystem's tests (in another package) can exercise their
+// panic → respawn wiring without waiting the multi-second production cooldown.
+// Test-only by intent; production never calls it.
+func SetRespawnCooldownForTest(d time.Duration) (restore func()) {
+	old := respawnCooldown.Load()
+	respawnCooldown.Store(int64(d))
+	return func() { respawnCooldown.Store(old) }
+}
+
 // Go runs fn in a new goroutine with panic recovery.
 //
 // If fn panics, onPanic is invoked with the recovered value and a

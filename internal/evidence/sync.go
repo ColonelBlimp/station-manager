@@ -137,7 +137,6 @@ const (
 
 // syncLoop is the engine goroutine. Runs only when cfg.Sync is enabled.
 func (s *Service) syncLoop() {
-	defer close(s.syncDone)
 	loopCtx, cancelLoop := context.WithCancel(context.Background())
 	defer cancelLoop()
 	go func() {

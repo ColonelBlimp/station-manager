@@ -47,8 +47,8 @@ func (m *queueLossMonitor) step(now time.Time) {
 
 // runQueueLossMonitor samples queueDropped on a ticker until Stop closes s.quit, then
 // flushes any open episode. It OWNS the L3 backpressure warn and recovery logging, so
-// the producer and write paths carry none of it. Started in Start; Stop waits on
-// s.lossDone.
+// the producer and write paths carry none of it. Started in Start under
+// safego.GoTracked; Stop waits on s.wg.
 //
 // baseline is queueDropped as of Start (captured synchronously by the caller, NOT
 // Load()ed here): Start holds s.mu for its whole body so no CaptureSlot drop can have
@@ -56,7 +56,6 @@ func (m *queueLossMonitor) step(now time.Time) {
 // goroutine's first Load and be baselined away as pre-existing — so the count is
 // pinned before the goroutine is launched.
 func (s *Service) runQueueLossMonitor(baseline int64) {
-	defer close(s.lossDone)
 	ticker := time.NewTicker(evidenceLossPollInterval)
 	defer ticker.Stop()
 	m := &queueLossMonitor{
