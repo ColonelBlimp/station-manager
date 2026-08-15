@@ -445,6 +445,26 @@ attempt records; publish destination-down/recovered transitions; periodically su
 pending depth, oldest age and exhausted/failed totals; suppress expected shutdown
 cancellation.
 
+> ✅ **FIXED (working tree, awaiting operator's push).** Store query `0c73d92c` +
+> worker discipline `b198f81f`, operator rulings 2026-08-15. Four behaviours:
+> **(1)** every `forwarding: attempt` record carries `upload_id`, an UNCONDITIONAL
+> `attempt` (= `row.Attempts+1`), `queued_at` and a non-negative `queue_age_seconds`
+> (the singular supersedes the old conditional `attempts`). **(2)** reachability is
+> logged as transitions — one Warn on the first `OutcomeUnreachable`, one Info (with
+> `unreachable_seconds`) on the first non-unreachable outcome incl. Terminal; in-outage
+> per-attempt records drop to Debug so an indefinite outage stops flooding.
+> **(3)** a fixed-60s `forwarding: queue summary` reports pending depth, `oldest_age_seconds`
+> and the durable failed DB count; emitted while backed up / on a failed-total change /
+> once on drain-to-empty, silent when idle, and run as a PEER goroutine so a slow Submit
+> can't starve it. **(4)** a shutdown-attributable cancel (`ctx.Err()!=nil` AND cause is
+> `context.Canceled`) is fully suppressed and leaves the row for the orphan reset, while a
+> coincident real failure or a racing success still logs + updates reachability. Review
+> hardening rode in: the depth query is a single atomic snapshot (epoch-based oldest),
+> `created_at` is reset on re-arm so a re-enqueued row is not a months-old backlog, and the
+> summary's zero-timestamp age is guarded. The unbounded-scan on the depth query is
+> accepted with rationale in code (a partial index is deferred — it is a migration that
+> bumps three version-pinned tests, premature for a 60s diagnostic).
+
 ### L12. SM Cloud flattens diagnostically different successful outcomes
 
 An acknowledgement with `received=1, applied=0` means the cloud already held a newer
