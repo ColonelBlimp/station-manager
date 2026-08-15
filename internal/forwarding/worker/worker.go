@@ -464,8 +464,36 @@ func (w *Worker) persistOutcome(
 	// fallible, and the upload has already persisted — so its trace is written
 	// first, and a hook that blocks or panics can no longer erase it.
 	if stamped && w.cfg.OnQsoStamped != nil {
-		w.cfg.OnQsoStamped(ctx, row.QsoID)
+		w.notifyStamped(ctx, row)
 	}
+}
+
+// notifyStamped runs the post-commit OnQsoStamped mirror-notify hook behind its OWN
+// recovery boundary. The upload has already committed (the stamp bumped the QSO
+// revision), so a hook panic must NOT reach processRowSafely's recovery — that would
+// log the pre-submit "panic processing row; resetting to retry" narrative and re-arm
+// an already-successful upload through the transient path, re-forwarding a completed
+// QSO (a duplicate). Here the panic is contained and logged as the post-commit hook
+// failure it is; the committed upload is left untouched — retrying it would be wrong
+// (L7).
+func (w *Worker) notifyStamped(ctx context.Context, row types.QsoUpload) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		w.logger.ErrorWith().
+			Str("forwarder", w.cfg.Name).
+			Str("phase", "post_commit").
+			Str("hook", "on_qso_stamped").
+			Bool("upload_committed", true).
+			Int64("upload_id", row.ID).
+			Int64("qso_id", row.QsoID).
+			Str("panic", fmt.Sprintf("%v", r)).
+			Str("stack", string(debug.Stack())).
+			Msg("forwarder: post-commit hook panicked; upload already committed, not retried")
+	}()
+	w.cfg.OnQsoStamped(ctx, row.QsoID)
 }
 
 // attemptFields carries the per-outcome extras onto the attempt record without
