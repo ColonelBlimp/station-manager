@@ -48,22 +48,21 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **logging-gaps audit L1–L10 DONE + committed** (this session: L5 malformed-telemetry, L6 A/B/C
-  HTTP request_id correlation, L7 forwarding-hook panic boundary, L8 quarantine per-kind breakdown,
-  **L9** safego panic-recovery for all 4 service-lifetime goroutines, **L10** transition-only
-  health-check logging daemon+cloud). Findings doc marked FIXED through L10. All full-TDD, every
-  codex post-commit review cleared + deleted.
-- **L9 detail (done):** evidence writer/queueloss/sync `safego.GoTracked` **respawn=true** (`1f9c53bf`
-  +3 fixes: writer_panic loss / panic-safe processSlot lock / disarm-after-classify / measurement
-  seal); bridge `runSupervisor` **respawn=true** (`dfc08999`); serial `readerLoop` **log-and-die**
-  via injected PanicHandler (`a20a5583`); ft8 `pump` **log-and-die** — respawn broken by
-  `close(m.out)` (`2d6ab84f`). `safego.SetRespawnCooldownForTest` added.
-- **RESUME TASK — L11 (P2):** forwarding queue context (`worker.go`) — add `upload_id`/`attempt`/
-  `queue_age`/`queued_at` to attempt records; destination-down/recovered transitions; a periodic
-  queue-depth/oldest-age/exhausted summary; suppress shutdown cancellation. **Multi-part → draft
-  ATDD criteria + get operator decisions (summary interval, "destination down" definition) FIRST.**
-  Then L12 (SM Cloud `cloud_newer_noop` disposition + reconcile summary), L13 (P3 oversized-serial-
-  frame counter), H1–H2+ (P3 hardening).
+- **logging-gaps audit L1–L11 DONE + committed (UNPUSHED — operator pushes).** L1–L10 as before
+  (L5–L8 + **L9** safego panic-recovery for all 4 service-lifetime goroutines + **L10** transition-only
+  health logging daemon+cloud). **L11** (forwarding queue context) shipped this session as 3 commits:
+  store query `0c73d92c` (`UploadQueueDepthWithContext` — ONE atomic snapshot, epoch oldest,
+  `created_at` reset on re-arm), worker discipline `b198f81f` (attempt records carry `upload_id`/
+  `attempt`/`queued_at`/`queue_age_seconds`; reachability down/recovered TRANSITIONS + in-outage
+  per-attempt Debug demotion; fixed-60s queue summary as a PEER goroutine — NOT on the blocking claim
+  loop; shutdown-cancel fully suppressed), docs `fbbe7414`. Findings doc marked FIXED through L11. All
+  full-TDD + reversion-proved; the store commit took a 5-round codex cycle (atomicity → re-arm age →
+  perf) before No-actionable-findings.
+- **CI on `main` (40adfd35) is RED from a FLAKY evidence `SQLITE_BUSY`** — `TestReceipt_DialContextRecordedAndSeparated`
+  opens a competing raw writer to the same DB file under -race; passes locally; NOT L11, NOT the docs
+  commit. A re-run clears it; pushing the L11 commits re-runs CI on the new HEAD anyway.
+- **RESUME TASK — L12 (P2):** SM Cloud `cloud_newer_noop` disposition + reconcile summary. Then
+  **L13** (P3 oversized-serial-frame counter), then **H1–H4** (P3 hardening).
 - **BIG NEW BACKLOG (operator: "seven more review reports have landed"):** 7 more audits in
   `docs/reviews/` (2026-08-14) beyond logging-gaps — internal-{lifecycle-concurrency, package-
   boundary, configuration-contract, persistence-transaction, api-wire-contract, security-trust-
