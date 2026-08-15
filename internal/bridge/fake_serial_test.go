@@ -79,6 +79,15 @@ func (f *fakeSerial) recordedWrites() [][]byte {
 	return out
 }
 
+// setWriteErr toggles the write-failure injection under f.mu, so a test can flip
+// it WHILE readLoop is writing (the reset-streak test) without racing the locked
+// read in WriteCommandBytes.
+func (f *fakeSerial) setWriteErr(err error) {
+	f.mu.Lock()
+	f.writeErr = err
+	f.mu.Unlock()
+}
+
 func (f *fakeSerial) WriteCommandBytes(ctx context.Context, cmd []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

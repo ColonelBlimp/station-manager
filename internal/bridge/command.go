@@ -400,7 +400,10 @@ func (s *Service) publishCommandedState(def cat.RigDefinition, op, value string)
 	if tag == "" {
 		return
 	}
-	payload, ok := mapStatusToPayload(cat.Status{tag: value})
+	// Parse errors are ignored here: `value` is a value WE commanded and the rig
+	// ACKed, not untrusted rig telemetry, so the readLoop's malformed-telemetry
+	// guard (which warns + invalidates) does not apply to this synthesized push.
+	payload, ok, _ := mapStatusToPayload(cat.Status{tag: value})
 	if !ok {
 		return
 	}

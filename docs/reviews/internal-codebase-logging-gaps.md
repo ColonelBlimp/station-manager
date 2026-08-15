@@ -229,6 +229,23 @@ while keeping the final operation outcome default-visible.
 
 ### L5. Malformed CAT telemetry can leave safety-relevant state stale silently
 
+> ✅ **FIXED (working tree, awaiting commit).** Two parts, operator rulings
+> 2026-08-15 (OPEN-1 b / OPEN-2 32 / OPEN-3 3).
+> **Part A — malformed telemetry** (`mapStatusToPayload` + `telemetryguard.go`): a
+> `VFOAFREQ`/`VFOBFREQ`/`TXPWR` value that won't parse now returns a parse diagnostic
+> instead of dropping silently. The readLoop guard warns once per episode per tag (raw
+> bounded to 32 bytes), invalidates the affected rolling snapshot so `CurrentDialMHz`/
+> `CurrentPowerW` report *unknown* rather than a retained stale value — the "unknown
+> beats wrong" doctrine `CurrentDialMHz` already documents — and logs one recovery when
+> a valid value resumes. Power invalidation respects the tune-restore freeze
+> (`!tuneActive`), so a malformed `TXPWR` during a tune cannot corrupt the pre-tune
+> snapshot `StartTune` restores to; no TX control-flow or timing changed.
+> **Part B — stranded identity re-probe** (`readLoop`): consecutive identity re-probe
+> WRITE failures (rig alive but unwritable → every operator write blocked) now promote
+> from Debug to a default-level Warn at exactly 3 consecutive, once per episode, reset by
+> any landed write. Full-TDD (RED skeleton → GREEN, reversion proofs kept incl. the
+> tune-freeze guard); `-race`, `go vet`, `gofmt` clean.
+
 `mapStatusToPayload` discards invalid VFO A, VFO B and TX-power values without a result
 or log at [`internal/bridge/pipeline.go:1129`](../../internal/bridge/pipeline.go). The
 prior frequency/power can remain apparently current. This matters because dial state is

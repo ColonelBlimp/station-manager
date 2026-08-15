@@ -87,6 +87,23 @@ const civReadGapMax = 2 * time.Second
 // confirms). Package var so tests can dial it down.
 var identityReprobeInterval = 1 * time.Second
 
+// identityReprobeFailThreshold is the number of CONSECUTIVE identity re-probe
+// write failures at which the persistently-blocked-writes condition is promoted
+// from Debug to a default-level Warn (L5 / OPEN-3, operator 2026-08-15). Below
+// it, an occasional failed re-probe is normal churn while identity settles; at
+// it, the rig has been alive-but-unwritable for this many probe intervals and
+// every operator write (set-freq, mode, tune) has been silently blocked the
+// whole time, which the operator must be able to see.
+const identityReprobeFailThreshold = 3
+
+// promoteReprobeFailure reports whether the failure bringing the consecutive
+// streak to `streak` is the one to surface at the promoted level. True exactly
+// once per episode — on the crossing — so a stranded rig warns once, not on
+// every retry; the caller resets the streak to 0 on the next successful write.
+func promoteReprobeFailure(streak int) bool {
+	return streak == identityReprobeFailThreshold
+}
+
 // civAckTimeout is the default wait for a CI-V command's FB/FA ACK after writing
 // each frame (ADR 0034 wait-for-ACK). The IC-7300 ACKs in ~20ms and never
 // broadcasts a commanded change, so the command path adopts state on FB / errors
@@ -648,6 +665,14 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 	// identityReprobeInterval). Seeded to now so the connect-time READ that
 	// runPipeline just sent gets one interval to be answered before we re-ask.
 	identityReprobeAt := time.Now()
+	// identityReprobeFails counts CONSECUTIVE identity re-probe WRITE failures so a
+	// rig left alive-but-unwritable (identity never confirms, so every operator
+	// write stays blocked) surfaces once at a default level, not only in Debug (L5).
+	identityReprobeFails := 0
+	// telemetryTracker latches malformed-value episodes per rig-state tag so a
+	// burst of garbled frames warns once and a return to valid data recovers once
+	// (L5). Per-pipeline-instance: a reconnect starts a fresh readLoop and tracker.
+	telemetryTracker := newMalformedTelemetryTracker()
 	// Keep one absolute liveness deadline across ignored frames. In particular,
 	// CI-V serial links may echo the controller's own writes; starting a fresh
 	// timeout after every echo would let the poll loop keep a powered-off rig
@@ -792,11 +817,27 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		if fromRig && !identityVerified && time.Since(identityReprobeAt) >= identityReprobeInterval {
 			identityReprobeAt = time.Now()
 			civ := def.Protocol == cat.ProtocolIcomCIV
-			if werr := s.underCmdMuCIV(civ, func() error {
+			werr := s.underCmdMuCIV(civ, func() error {
 				return s.writeSnapshotReads(ctx, client, civ, readBytes)
-			}); werr != nil && ctx.Err() == nil {
-				s.logger.DebugWith().Err(werr).Str("driver", def.ID).
-					Msg("bridge: identity re-probe READ write failed; will retry")
+			})
+			switch {
+			case werr == nil:
+				// A landed re-probe write ends the failure streak (identity may still
+				// be pending — that's fine; the block stops firing once it confirms).
+				identityReprobeFails = 0
+			case ctx.Err() == nil:
+				identityReprobeFails++
+				if promoteReprobeFailure(identityReprobeFails) {
+					// Sustained: the rig is talking but won't take writes, so identity
+					// can't confirm and every operator write stays blocked. Surface it
+					// once at the default level (L5); further retries stay Debug.
+					s.logger.WarnWith().Err(werr).Str("driver", def.ID).
+						Int("consecutive_failures", identityReprobeFails).
+						Msg("bridge: identity re-probe writes persistently failing; rig writes remain blocked")
+				} else {
+					s.logger.DebugWith().Err(werr).Str("driver", def.ID).
+						Msg("bridge: identity re-probe READ write failed; will retry")
+				}
 			}
 		}
 
@@ -934,7 +975,11 @@ func (s *Service) readLoop(ctx context.Context, client serial.Client, def cat.Ri
 		s.publishMeterAnswers(status)
 		s.observeRigData()
 
-		payload, hasFields := mapStatusToPayload(status)
+		payload, hasFields, parseErrs := mapStatusToPayload(status)
+		// L5: surface + invalidate malformed telemetry BEFORE the empty-payload
+		// short-circuit, so a frame whose only content is a garbled value is still
+		// warned and its stale snapshot cleared (not left apparently current).
+		s.observeMalformedTelemetry(&telemetryTracker, payload, parseErrs, def.ID)
 		if !hasFields {
 			continue
 		}
@@ -1118,24 +1163,29 @@ func (s *Service) clearLastPublishedExitKey() {
 // S-meter" filter from M3a.2's scope is enforced. A future rigdef
 // that emits tags we don't recognise gets them dropped, no SPA wire
 // change required.
-func mapStatusToPayload(status cat.Status) (RigStatePayload, bool) {
+func mapStatusToPayload(status cat.Status) (RigStatePayload, bool, []telemetryParseError) {
 	var p RigStatePayload
 	var populated bool
+	var parseErrs []telemetryParseError
 
 	if v, ok := status["IDENTITY"]; ok && v != "" {
 		p.RigIdentity = v
 		populated = true
 	}
-	if v, ok := status["VFOAFREQ"]; ok && v != "" {
+	if v, ok := status[tagVfoAFreq]; ok && v != "" {
 		if hz, err := parseFreqHz(v); err == nil {
 			p.VfoA = hz
 			populated = true
+		} else {
+			parseErrs = append(parseErrs, telemetryParseError{tag: tagVfoAFreq, raw: boundTelemetryRaw(v)})
 		}
 	}
-	if v, ok := status["VFOBFREQ"]; ok && v != "" {
+	if v, ok := status[tagVfoBFreq]; ok && v != "" {
 		if hz, err := parseFreqHz(v); err == nil {
 			p.VfoB = hz
 			populated = true
+		} else {
+			parseErrs = append(parseErrs, telemetryParseError{tag: tagVfoBFreq, raw: boundTelemetryRaw(v)})
 		}
 	}
 	if v, ok := status["MAINMODE"]; ok && v != "" {
@@ -1164,10 +1214,12 @@ func mapStatusToPayload(status cat.Status) (RigStatePayload, bool) {
 		p.SplitOverride = &split
 		populated = true
 	}
-	if v, ok := status["TXPWR"]; ok && v != "" {
+	if v, ok := status[tagTxPwr]; ok && v != "" {
 		if w, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
 			p.Power = w
 			populated = true
+		} else {
+			parseErrs = append(parseErrs, telemetryParseError{tag: tagTxPwr, raw: boundTelemetryRaw(v)})
 		}
 	}
 	if v, ok := status[meterSelTag]; ok && v != "" {
@@ -1180,7 +1232,7 @@ func mapStatusToPayload(status cat.Status) (RigStatePayload, bool) {
 		p.DriveMonitor = driveMonitorFor(v)
 		populated = true
 	}
-	return p, populated
+	return p, populated, parseErrs
 }
 
 // parseFreqHz converts the rigdef's VFO frequency string (typically

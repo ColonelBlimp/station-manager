@@ -426,7 +426,7 @@ func TestMapStatusToPayload_Split(t *testing.T) {
 		{"ENABLED", true}, // any future non-OFF value is "engaged"
 	}
 	for _, c := range cases {
-		p, ok := mapStatusToPayload(cat.Status{"SPLIT": c.split})
+		p, ok, _ := mapStatusToPayload(cat.Status{"SPLIT": c.split})
 		if !ok {
 			t.Errorf("SPLIT=%q: payload not populated", c.split)
 			continue

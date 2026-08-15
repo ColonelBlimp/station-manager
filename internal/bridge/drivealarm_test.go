@@ -786,7 +786,7 @@ func TestDriveAlarm_MeterSelectorGatesTheWatch(t *testing.T) {
 			w := watchEvents(t, s)
 
 			// What the operator is told, from the same frame the detector reads.
-			p, populated := mapStatusToPayload(meterFrame(t, tc.msFrame))
+			p, populated, _ := mapStatusToPayload(meterFrame(t, tc.msFrame))
 			if !populated {
 				t.Fatal("a meter-selection frame must publish rig state on its own — " +
 					"turning the rig's meter knob sends no other tag, so a frame dropped " +
@@ -1026,7 +1026,7 @@ func TestDriveMonitor_UnknownSelectionReportsNothing(t *testing.T) {
 		t.Errorf("driveMonitorFor(unknown) = %q, want empty", got)
 	}
 	// A frame with no meter selection must not carry a stale verdict either.
-	p, _ := mapStatusToPayload(meterFrame(t, "FA014074000"))
+	p, _, _ := mapStatusToPayload(meterFrame(t, "FA014074000"))
 	if p.DriveMonitor != "" {
 		t.Errorf("driveMonitor=%q on a frame with no meter selection; want empty", p.DriveMonitor)
 	}
