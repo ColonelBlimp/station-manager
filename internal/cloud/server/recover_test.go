@@ -123,7 +123,13 @@ func TestRecoverPanic_NoPanicPassesThrough(t *testing.T) {
 	}
 }
 
-func TestRecoverPanic_CommittedResponse_FlaggedAndEnvelopeSkipped(t *testing.T) {
+// A3 — a panic AFTER partial output must not hand the client a clean-looking but
+// truncated response. recoverPanic logs response_committed=true and then ABORTS
+// (re-panics http.ErrAbortHandler) so net/http tears the connection down instead
+// of finishing it cleanly (gzip footer + terminating chunk). Matters most for the
+// streaming export, whose truncated snapshot a syncing client must not mistake for
+// complete (codex a11980ae P1).
+func TestRecoverPanic_CommittedResponse_AbortsAndFlagged(t *testing.T) {
 	var buf bytes.Buffer
 	srv := panicTestServer(&buf)
 
@@ -136,18 +142,23 @@ func TestRecoverPanic_CommittedResponse_FlaggedAndEnvelopeSkipped(t *testing.T) 
 	rec := newAccessRecorder(inner) // mirror the chain: recoverPanic's writer tracks committed
 	req := withCorrelation(httptest.NewRequest(http.MethodGet, "/x", nil), "rid-committed-01", 7)
 
-	srv.recoverPanic(h).ServeHTTP(rec, req)
+	func() {
+		defer func() {
+			if got := recover(); got != http.ErrAbortHandler {
+				t.Fatalf("committed panic must re-panic http.ErrAbortHandler to abort the truncated response; got %v", got)
+			}
+		}()
+		srv.recoverPanic(h).ServeHTTP(rec, req)
+		t.Fatal("recoverPanic returned normally on a committed panic; expected it to abort")
+	}()
 
 	m := findLog(t, &buf, "panic in HTTP handler")
 	if c, _ := m["response_committed"].(bool); !c {
 		t.Errorf("response_committed = %v, want true", m["response_committed"])
 	}
-	// No second envelope appended onto the partial body.
+	// No 500 envelope appended onto the partial body before the abort.
 	if inner.Body.String() != "partial" {
-		t.Errorf("body = %q, want just \"partial\" (500 envelope must not be appended)", inner.Body.String())
-	}
-	if strings.Contains(inner.Body.String(), "internal_error") {
-		t.Errorf("500 envelope garbled the committed response: %q", inner.Body.String())
+		t.Errorf("body = %q, want just \"partial\" (no 500 envelope before abort)", inner.Body.String())
 	}
 }
 

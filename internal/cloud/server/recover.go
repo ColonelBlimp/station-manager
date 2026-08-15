@@ -54,9 +54,13 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 				"response_committed", committed,
 			)
 			if committed {
-				// Bytes already on the wire — a second envelope would only garble them.
-				// The line above (response_committed=true) keeps the incident traceable.
-				return
+				// Bytes already on the wire. Returning normally would let net/http
+				// FINISH the response (gzip footer + terminating chunk), handing the
+				// client a syntactically complete but TRUNCATED body — which a syncing
+				// client of /v1/export could mistake for a full snapshot. Abort instead
+				// so the client detects the truncation. ErrAbortHandler is net/http's
+				// silent-abort signal (we already logged the incident above).
+				panic(http.ErrAbortHandler)
 			}
 			// Generic message only: the recovered value + stack are in the log line
 			// above (operators), never the client body.
