@@ -12,6 +12,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/evidencewire"
 	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
+	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
 
 // §5 sync engine (spot-network §5.1 amendments, operator rulings
@@ -597,6 +598,7 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 	}
 	defer txutil.Rollback(tx, &err)
 	quarantined := 0
+	byKind := map[string]int{}
 	var sampleUUID, sampleReason string
 	for i, o := range outcomes {
 		r := rows[i]
@@ -625,6 +627,7 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 				return err
 			}
 			quarantined++
+			byKind[r.kind]++
 			if sampleUUID == "" {
 				sampleUUID, sampleReason = r.uuid, reason
 			}
@@ -649,6 +652,16 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 	if quarantined > 0 {
 		s.log.WarnWith().
 			Int("quarantined", quarantined).
+			// Per-kind breakdown (L8): which evidence kinds SM Cloud refused, iterated
+			// in the fixed syncTables order for a deterministic line. Only the kinds
+			// actually quarantined are emitted.
+			Dict("by_kind", func(d logging.LogEvent) {
+				for _, t := range syncTables {
+					if n := byKind[t.kind]; n > 0 {
+						d.Int(t.kind, n)
+					}
+				}
+			}).
 			Str("sample_uuid", sampleUUID).
 			Str("sample_reason", sampleReason).
 			Msg("evidence: rows permanently rejected (quarantined) by SM Cloud")
