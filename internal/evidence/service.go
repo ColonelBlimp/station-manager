@@ -829,11 +829,18 @@ func (s *Service) writerLoop() {
 // per-slot DB write, because the failure may BE the database; the accumulator
 // persists on the first recovered write (§4.1). Decoding continues. Drives the
 // tracker's bounded degraded transition, tagged with the granular operation.
-func (s *Service) measurementDrop(sc SlotCapture, err error) {
+func (s *Service) measurementDrop(sc SlotCapture, err error, accounted *bool) {
 	s.mu.Lock()
 	s.dropped++
 	s.accumulateLocked(sc, lossReasonMeasurement)
+	// Sealed the instant the accumulator is updated — BEFORE the health callbacks
+	// below, which invoke the logger and could panic: a panic there must not let
+	// runSlot record the same slot again as writer_panic (L9 review).
+	*accounted = true
 	s.mu.Unlock()
+	if measurementDropPanicForTest != nil {
+		measurementDropPanicForTest()
+	}
 	s.retHealth.dropped()
 	s.retHealth.fail(opOf(err), err)
 }
@@ -870,6 +877,7 @@ var (
 	writerPanicForTest            func()
 	writerPanicUnderLockForTest   func()
 	writerPanicAfterCommitForTest func()
+	measurementDropPanicForTest   func()
 )
 
 // runSlot processes one slot, recording EXACTLY ONE writer_panic loss if processSlot
@@ -937,8 +945,7 @@ func (s *Service) processSlot(sc SlotCapture, accounted *bool) {
 	// measurement_error; continue decoding; drive the tracker's bounded transition.
 	usage, err := s.physicalUsage()
 	if err != nil {
-		s.measurementDrop(sc, err)
-		*accounted = true // classified as measurement_error
+		s.measurementDrop(sc, err, accounted) // sets *accounted before its health callbacks
 		return
 	}
 	watermark := s.cfg.CapBytes - headroomBytes
@@ -951,8 +958,7 @@ func (s *Service) processSlot(sc SlotCapture, accounted *bool) {
 	if !canWrite {
 		var ferr error
 		if canWrite, ferr = s.tryFreeSpace(); ferr != nil {
-			s.measurementDrop(sc, ferr)
-			*accounted = true // classified as measurement_error
+			s.measurementDrop(sc, ferr, accounted)
 			return
 		}
 	}

@@ -18,6 +18,7 @@ package evidence
 
 import (
 	"bytes"
+	stderrors "errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -163,6 +164,42 @@ func TestEvidenceWorker_PanicAfterCapCount_NoDuplicateLoss(t *testing.T) {
 	}
 	if n := countRows(t, db, `SELECT COUNT(*) FROM loss_intervals WHERE reason = ?`, lossReasonWriterPanic); n != 0 {
 		t.Errorf("writer_panic rows = %d, want 0 (a cap-counted slot must not double-count)", n)
+	}
+	assertPanicLogged(t, &buf)
+}
+
+// A panic in measurementDrop's post-count health callback (after the accumulator is
+// updated) must NOT record a SECOND loss under writer_panic (codex L9 review P2).
+func TestEvidenceWorker_PanicAfterMeasurementCount_NoDuplicateLoss(t *testing.T) {
+	restore := safego.SetRespawnCooldownForTest(time.Millisecond)
+	defer restore()
+
+	measureFailHook = func(string) error { return stderrors.New("measure boom") } // force the measurement-drop path
+	defer func() { measureFailHook = nil }()
+
+	var once atomic.Bool
+	measurementDropPanicForTest = func() {
+		if once.CompareAndSwap(false, true) {
+			panic("boom: post-measurement health callback")
+		}
+	}
+	defer func() { measurementDropPanicForTest = nil }()
+
+	cfg := testConfig(t, true)
+	var buf bytes.Buffer
+	s := newRunningLogged(t, cfg, &buf)
+	s.CaptureSlot(obsSlot(slotAt(0), 14.074, true)) // measurement-dropped, THEN panics in the callback
+	s.CaptureSlot(obsSlot(slotAt(1), 14.074, true)) // respawned writer measurement-drops this
+
+	drain(t, s) // both processed → the writer survived
+	s.Stop()
+
+	db := openRaw(t, cfg.Path)
+	if n := countRows(t, db, `SELECT COUNT(*) FROM loss_intervals WHERE reason = ?`, lossReasonMeasurement); n < 1 {
+		t.Errorf("measurement_error rows = %d, want >= 1 (the slot was measurement-dropped)", n)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM loss_intervals WHERE reason = ?`, lossReasonWriterPanic); n != 0 {
+		t.Errorf("writer_panic rows = %d, want 0 (a measurement-counted slot must not double-count)", n)
 	}
 	assertPanicLogged(t, &buf)
 }
