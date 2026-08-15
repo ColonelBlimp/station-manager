@@ -86,3 +86,83 @@ func TestEvidenceWorker_WriterPanic_RecordsLossRespawnsNoWedge(t *testing.T) {
 		})
 	}
 }
+
+func assertPanicLogged(t *testing.T, buf *bytes.Buffer) {
+	t.Helper()
+	for _, l := range defaultVisibleLines(buf) {
+		if strings.Contains(l, "subsystem goroutine panicked") && strings.Contains(l, "evidence.writer") {
+			return
+		}
+	}
+	t.Fatalf("no structured panic line for evidence.writer; log:\n%s", buf.String())
+}
+
+// A panic AFTER the slot durably commits (e.g. in notifyLive) must NOT record a
+// writer_panic loss — the evidence exists (codex L9 review, case 1).
+func TestEvidenceWorker_PanicAfterCommit_NoFalseLoss(t *testing.T) {
+	restore := safego.SetRespawnCooldownForTest(time.Millisecond)
+	defer restore()
+
+	var once atomic.Bool
+	writerPanicAfterCommitForTest = func() {
+		if once.CompareAndSwap(false, true) {
+			panic("boom: post-commit")
+		}
+	}
+	defer func() { writerPanicAfterCommitForTest = nil }()
+
+	cfg := testConfig(t, true)
+	var buf bytes.Buffer
+	s := newRunningLogged(t, cfg, &buf)
+	s.CaptureSlot(obsSlot(slotAt(0), 14.074, true)) // committed, THEN panics
+	s.CaptureSlot(obsSlot(slotAt(1), 14.074, true)) // respawned writer commits this
+
+	waitFor(t, "respawned writer committed a later slot", func() bool {
+		db := openRaw(t, cfg.Path)
+		return countRows(t, db, `SELECT COUNT(*) FROM observations`) >= 1
+	})
+	s.Stop()
+
+	db := openRaw(t, cfg.Path)
+	if n := countRows(t, db, `SELECT COUNT(*) FROM loss_intervals WHERE reason = ?`, lossReasonWriterPanic); n != 0 {
+		t.Errorf("writer_panic rows = %d, want 0 (a committed slot is not lost)", n)
+	}
+	assertPanicLogged(t, &buf)
+}
+
+// A panic AFTER the cap branch counted the slot (in the checkpoint) must NOT record a
+// SECOND loss under writer_panic — that would double-count it (codex L9 review, case 2).
+func TestEvidenceWorker_PanicAfterCapCount_NoDuplicateLoss(t *testing.T) {
+	restore := safego.SetRespawnCooldownForTest(time.Millisecond)
+	defer restore()
+	oldHeadroom := headroomBytes
+	headroomBytes = 1024
+	defer func() { headroomBytes = oldHeadroom }()
+
+	var once atomic.Bool
+	checkpointHook = func() {
+		if once.CompareAndSwap(false, true) {
+			panic("boom: post-cap-count checkpoint")
+		}
+	}
+	defer func() { checkpointHook = nil }()
+
+	cfg := testConfig(t, true)
+	cfg.CapBytes = 4096 // watermark ≈ 3 KiB; a fresh DB exceeds it → cap path from slot 1
+	var buf bytes.Buffer
+	s := newRunningLogged(t, cfg, &buf)
+	s.CaptureSlot(obsSlot(slotAt(0), 14.074, true)) // cap-dropped, THEN panics in checkpoint
+	s.CaptureSlot(obsSlot(slotAt(1), 14.074, true)) // respawned writer cap-drops this
+
+	drain(t, s) // both processed → the writer survived (no wedge)
+	s.Stop()
+
+	db := openRaw(t, cfg.Path)
+	if n := countRows(t, db, `SELECT COUNT(*) FROM loss_intervals WHERE reason = ?`, lossReasonCap); n < 1 {
+		t.Errorf("cap rows = %d, want >= 1 (the slot was cap-dropped)", n)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM loss_intervals WHERE reason = ?`, lossReasonWriterPanic); n != 0 {
+		t.Errorf("writer_panic rows = %d, want 0 (a cap-counted slot must not double-count)", n)
+	}
+	assertPanicLogged(t, &buf)
+}

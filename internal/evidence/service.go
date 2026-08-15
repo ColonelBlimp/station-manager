@@ -867,8 +867,9 @@ func (s *Service) onPanic(name string, panicValue any, stack []byte) {
 // panic locations a test drives: lock-free (during the write) and while s.mu is held.
 // nil (production) is a no-op — same test-seam pattern as writerDelay.
 var (
-	writerPanicForTest          func()
-	writerPanicUnderLockForTest func()
+	writerPanicForTest            func()
+	writerPanicUnderLockForTest   func()
+	writerPanicAfterCommitForTest func()
 )
 
 // runSlot processes one slot, recording EXACTLY ONE writer_panic loss if processSlot
@@ -878,12 +879,19 @@ var (
 // processSlot's own drop paths, which count their own reason) records nothing here.
 func (s *Service) runSlot(sc SlotCapture) {
 	panicked := true
+	accounted := false
 	defer func() {
-		if panicked {
+		// Only a panic BEFORE the slot was written or classified loses it. A panic
+		// AFTER an outcome is sealed (in notifyLive, the checkpoint) must NOT record a
+		// second loss: the slot already committed or was counted under its own reason,
+		// so a writer_panic there would falsely report or double-count it (codex review).
+		// panicked guards normal returns (a missed `accounted` set can never cause a
+		// false loss on a clean return); accounted only matters on the panic path.
+		if panicked && !accounted {
 			s.recordWriterPanicLoss(sc)
 		}
 	}()
-	s.processSlot(sc)
+	s.processSlot(sc, &accounted)
 	panicked = false
 }
 
@@ -898,7 +906,11 @@ func (s *Service) recordWriterPanicLoss(sc SlotCapture) {
 	s.mu.Unlock()
 }
 
-func (s *Service) processSlot(sc SlotCapture) {
+// processSlot writes or drops one slot. It sets *accounted true the moment the slot's
+// outcome is durably committed or fully classified — BEFORE any subsequent hook or
+// notification — so runSlot's writer_panic accounting fires only for a panic that
+// loses the slot before it was accounted (L9 review).
+func (s *Service) processSlot(sc SlotCapture, accounted *bool) {
 	// Deferred FIRST so the slot is accounted as processed even if the write path
 	// panics: under safego respawn a panic no longer crashes the process, so a
 	// non-deferred decrement would leak `pending` and stall drain observability
@@ -926,6 +938,7 @@ func (s *Service) processSlot(sc SlotCapture) {
 	usage, err := s.physicalUsage()
 	if err != nil {
 		s.measurementDrop(sc, err)
+		*accounted = true // classified as measurement_error
 		return
 	}
 	watermark := s.cfg.CapBytes - headroomBytes
@@ -939,6 +952,7 @@ func (s *Service) processSlot(sc SlotCapture) {
 		var ferr error
 		if canWrite, ferr = s.tryFreeSpace(); ferr != nil {
 			s.measurementDrop(sc, ferr)
+			*accounted = true // classified as measurement_error
 			return
 		}
 	}
@@ -964,6 +978,7 @@ func (s *Service) processSlot(sc SlotCapture) {
 		}
 		s.dropped++
 		s.accumulateLocked(sc, lossReasonCap)
+		*accounted = true // classified as cap — before the checkpoint below (a panic there must not double-count)
 		// §4.1: once usage nears the cap, the accumulator extends IN MEMORY —
 		// persisting per drop would consume the very reserve the ceiling protects.
 		// The deferPersist usage read is POST-decision (the slot is already counted):
@@ -1021,7 +1036,12 @@ func (s *Service) processSlot(sc SlotCapture) {
 		s.dropped++
 		s.accumulateLocked(sc, lossReasonWriter)
 		unlock()
+		*accounted = true // classified as writer_error
 		return
+	}
+	*accounted = true // durably committed — a panic in notifyLive below must not record a loss
+	if writerPanicAfterCommitForTest != nil {
+		writerPanicAfterCommitForTest()
 	}
 	// §5 live lane: the slot just committed — wake the sync loop (SY5).
 	// Backpressure recovery is NOT decided here: a successful persist does not mean the
