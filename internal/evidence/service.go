@@ -65,6 +65,12 @@ const (
 	// fail-closed. Distinct from cap (measured, genuinely full) and writer_error
 	// (the write itself failed): the confusable state this class exists to break.
 	lossReasonMeasurement = "measurement_error"
+	// lossReasonWriterPanic (L9): a slot lost because the WRITE PATH panicked and was
+	// recovered by safego (the worker respawns). Distinct from writer_error (an
+	// attempted write that returned an error): a panic is an invariant/code failure,
+	// not an ordinary writer fault, and keeping it separate makes such a regression
+	// immediately visible rather than folded into routine write failures.
+	lossReasonWriterPanic = "writer_panic"
 	remoteNeverOffered    = "never_offered"
 )
 
@@ -803,12 +809,12 @@ func (s *Service) writerLoop() {
 	for {
 		select {
 		case sc := <-s.ch:
-			s.processSlot(sc) // decrements s.pending via defer (panic-safe)
+			s.runSlot(sc) // processSlot behind writer_panic loss accounting (L9)
 		case <-s.quit:
 			for {
 				select {
 				case sc := <-s.ch:
-					s.processSlot(sc)
+					s.runSlot(sc)
 				default:
 					return
 				}
@@ -857,10 +863,40 @@ func (s *Service) onPanic(name string, panicValue any, stack []byte) {
 		Msg("evidence: subsystem goroutine panicked (recovered)")
 }
 
-// writerPanicForTest, when set, is invoked once per processSlot so a test can drive
-// the writer's panic → safego respawn path. nil (production) is a no-op — same
-// test-seam pattern as writerDelay.
-var writerPanicForTest func()
+// writerPanicForTest / writerPanicUnderLockForTest fire once per processSlot at two
+// panic locations a test drives: lock-free (during the write) and while s.mu is held.
+// nil (production) is a no-op — same test-seam pattern as writerDelay.
+var (
+	writerPanicForTest          func()
+	writerPanicUnderLockForTest func()
+)
+
+// runSlot processes one slot, recording EXACTLY ONE writer_panic loss if processSlot
+// panics, then letting the ORIGINAL panic propagate to safego (respawn + onPanic log).
+// processSlot releases s.mu on every exit, so recordWriterPanicLoss cannot deadlock
+// and the respawned writer / CaptureSlot never wedge (L9). A normal return (including
+// processSlot's own drop paths, which count their own reason) records nothing here.
+func (s *Service) runSlot(sc SlotCapture) {
+	panicked := true
+	defer func() {
+		if panicked {
+			s.recordWriterPanicLoss(sc)
+		}
+	}()
+	s.processSlot(sc)
+	panicked = false
+}
+
+// recordWriterPanicLoss counts a slot lost to a recovered write-path panic, so the
+// gap is observable in the loss accounting (durable in loss_intervals) rather than
+// silently dropped while drain reports it processed (L9). In-memory only — no DB write
+// on this path (the write just panicked); the accumulator persists on the next write.
+func (s *Service) recordWriterPanicLoss(sc SlotCapture) {
+	s.mu.Lock()
+	s.dropped++
+	s.accumulateLocked(sc, lossReasonWriterPanic)
+	s.mu.Unlock()
+}
 
 func (s *Service) processSlot(sc SlotCapture) {
 	// Deferred FIRST so the slot is accounted as processed even if the write path
@@ -868,9 +904,18 @@ func (s *Service) processSlot(sc SlotCapture) {
 	// non-deferred decrement would leak `pending` and stall drain observability
 	// (safego caller contract, L9).
 	defer s.pending.Add(-1)
-	if writerPanicForTest != nil {
-		writerPanicForTest()
-	}
+	// held tracks the MANUAL s.mu below so any panic — including one raised while the
+	// lock is held — releases it on unwind. Under safego respawn a leaked lock would
+	// otherwise wedge the respawned writer AND every CaptureSlot (both take s.mu), and
+	// deadlock runSlot's writer_panic loss record (L9).
+	held := false
+	lock := func() { s.mu.Lock(); held = true }
+	unlock := func() { s.mu.Unlock(); held = false }
+	defer func() {
+		if held {
+			s.mu.Unlock()
+		}
+	}()
 	if writerDelay > 0 {
 		time.Sleep(writerDelay)
 	}
@@ -900,7 +945,10 @@ func (s *Service) processSlot(sc SlotCapture) {
 	// The authorize chain succeeded — the measurement layer is healthy for THIS
 	// write attempt, whether it ends in a write or a genuinely-full cap-drop.
 
-	s.mu.Lock()
+	lock()
+	if writerPanicUnderLockForTest != nil {
+		writerPanicUnderLockForTest()
+	}
 	if !canWrite {
 		// Genuine cap-drop (measured): decoding continues, only evidence writes
 		// stop; the dropped span accumulates and its coalesced interval row is
@@ -926,7 +974,7 @@ func (s *Service) processSlot(sc SlotCapture) {
 		if !deferPersist {
 			s.refreshLossLocked()
 		}
-		s.mu.Unlock()
+		unlock()
 		// The checkpoint runs OUTSIDE s.mu (85f1481a review P1): a reader can block a
 		// truncating checkpoint up to the 2 s busy_timeout, and CaptureSlot needs
 		// s.mu to stamp — holding it across the checkpoint would stall the decode path.
@@ -959,17 +1007,20 @@ func (s *Service) processSlot(sc SlotCapture) {
 		// priority, before any new evidence (§4.1).
 		s.closeLossLocked()
 	}
-	s.mu.Unlock()
+	unlock()
 	s.retHealth.ok() // authorize chain succeeded → measurement layer healthy
 
+	if writerPanicForTest != nil { // lock-free panic location: the write path
+		writerPanicForTest()
+	}
 	if err := s.writeSlot(sc); err != nil {
 		s.log.WarnWith().Err(err).
 			Str("slot", sc.SlotStart.UTC().Format(time.RFC3339)).
 			Msg("evidence: slot write failed; dropped and counted")
-		s.mu.Lock()
+		lock()
 		s.dropped++
 		s.accumulateLocked(sc, lossReasonWriter)
-		s.mu.Unlock()
+		unlock()
 		return
 	}
 	// §5 live lane: the slot just committed — wake the sync loop (SY5).
