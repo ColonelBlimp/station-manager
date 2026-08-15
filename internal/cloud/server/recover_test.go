@@ -162,6 +162,38 @@ func TestRecoverPanic_CommittedResponse_AbortsAndFlagged(t *testing.T) {
 	}
 }
 
+// A committed-response panic aborts by re-panicking ErrAbortHandler, which unwinds
+// through accessLog. Its access line must still be emitted (deferred), or the abort
+// path silently loses the request's final record (codex 14c8b809 P2).
+func TestAccessLog_EmitsLineEvenWhenHandlerPanics(t *testing.T) {
+	var buf bytes.Buffer
+	srv := panicTestServer(&buf)
+
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic(http.ErrAbortHandler) // what recoverPanic does on a committed response
+	})
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/export", nil)
+
+	func() {
+		defer func() {
+			if got := recover(); got != http.ErrAbortHandler {
+				t.Fatalf("accessLog must not swallow the handler panic; got %v", got)
+			}
+		}()
+		srv.accessLog(h).ServeHTTP(w, req)
+		t.Fatal("accessLog returned normally; the handler panic should propagate")
+	}()
+
+	m := findLog(t, &buf, "http request")
+	if p, _ := m["path"].(string); p != "/v1/export" {
+		t.Errorf("access line path = %q, want /v1/export", p)
+	}
+	if id, _ := m["request_id"].(string); id == "" {
+		t.Errorf("access line missing request_id: %v", m)
+	}
+}
+
 // A2: full chain. GET /v1/health on a nil-db server is a reliable panic source
 // (handleHealth dereferences the nil *sql.DB), so this exercises the real
 // accessLog → gzip → recoverPanic path and proves the panic line's request_id is

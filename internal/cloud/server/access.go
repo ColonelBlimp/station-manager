@@ -116,22 +116,28 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 		rec := newAccessRecorder(w)
 		start := time.Now()
 
-		next.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), reqInfoKey{}, info)))
+		// Deferred so the access line is still emitted when a handler panic unwinds
+		// through here: recoverPanic re-panics ErrAbortHandler on a committed
+		// response (to abort the truncated body), which would otherwise skip this and
+		// lose the request's final record. Runs identically on the normal return.
+		defer func() {
+			logAt := s.log.Info
+			if r.URL.Path == "/v1/health" || r.URL.Path == "/v1/version" {
+				logAt = s.log.Debug
+			}
+			logAt("http request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", rec.status,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"bytes", rec.bytes,
+				"request_id", info.id,
+				"tenant_id", info.tenant, // 0 for an unauthenticated request
+				"remote", clientIP(r),
+			)
+		}()
 
-		logAt := s.log.Info
-		if r.URL.Path == "/v1/health" || r.URL.Path == "/v1/version" {
-			logAt = s.log.Debug
-		}
-		logAt("http request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rec.status,
-			"duration_ms", time.Since(start).Milliseconds(),
-			"bytes", rec.bytes,
-			"request_id", info.id,
-			"tenant_id", info.tenant, // 0 for an unauthenticated request
-			"remote", clientIP(r),
-		)
+		next.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), reqInfoKey{}, info)))
 	})
 }
 
