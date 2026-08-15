@@ -7,6 +7,7 @@ import (
 	stderr "errors"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 )
 
@@ -180,7 +181,7 @@ RETURNING id`
 //
 // modified_at / deleted_at are truncated to canonicalPrecision so the stored
 // value matches what the reconcile hash expects (see canonicalPrecision).
-func (s *Store) Upsert(ctx context.Context, recs []Record) (int, error) {
+func (s *Store) Upsert(ctx context.Context, recs []Record) (applied int, err error) {
 	const op errors.Op = "store.Upsert"
 	if len(recs) == 0 {
 		return 0, nil
@@ -189,7 +190,7 @@ func (s *Store) Upsert(ctx context.Context, recs []Record) (int, error) {
 	if err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsg("begin")
 	}
-	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	defer txutil.Rollback(tx, &err)
 
 	const q = `
 INSERT INTO qsos (uuid, tenant_id, logbook_id, modified_at, revision, deleted_at, payload)
@@ -208,7 +209,7 @@ WHERE EXCLUDED.revision > qsos.revision
 	}
 	defer func() { _ = stmt.Close() }()
 
-	applied := 0
+	applied = 0
 	for _, r := range recs {
 		// The payload column is NOT NULL; fail here with the UUID rather than let
 		// a nil payload surface as a context-free Postgres constraint violation.
@@ -345,13 +346,15 @@ func (s *Store) Export(ctx context.Context, tenantID int64) ([]Record, error) {
 // verbatim (no wrapping — the caller distinguishes its own write errors from
 // store read errors by identity). The transaction never escapes this method.
 func (s *Store) ExportSnapshot(ctx context.Context, tenantID int64,
-	onBooks func([]LogbookInfo) error, onRecord func(Record) error) error {
+	onBooks func([]LogbookInfo) error, onRecord func(Record) error) (err error) {
 	const op errors.Op = "store.ExportSnapshot"
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("begin")
 	}
-	defer func() { _ = tx.Rollback() }() // read-only; rollback is the cheap close
+	// Read-only still has an explicit outcome: a failed rollback means the
+	// snapshot transaction's disposition is unknown and must reach the caller.
+	defer txutil.Rollback(tx, &err)
 	books, err := queryLogbooks(ctx, op, tx, tenantID)
 	if err != nil {
 		return err

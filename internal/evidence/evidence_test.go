@@ -469,8 +469,8 @@ func TestStatus_SurfacesUsageAndUnprofiledCount(t *testing.T) {
 	if st.CapBytes != cfg.CapBytes || st.WatermarkBytes != cfg.CapBytes-headroomBytes {
 		t.Errorf("cap/watermark = %d/%d", st.CapBytes, st.WatermarkBytes)
 	}
-	if st.Observations != 6 || st.UnprofiledObservations != 6 {
-		t.Errorf("observations/unprofiled = %d/%d, want 6/6 (all rows NULL-profiled this slice)",
+	if st.Observations == nil || st.UnprofiledObservations == nil || *st.Observations != 6 || *st.UnprofiledObservations != 6 {
+		t.Errorf("observations/unprofiled = %v/%v, want 6/6 (all rows NULL-profiled this slice)",
 			st.Observations, st.UnprofiledObservations)
 	}
 }

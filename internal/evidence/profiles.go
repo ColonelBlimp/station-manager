@@ -2,11 +2,13 @@ package evidence
 
 import (
 	"database/sql"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
@@ -65,14 +67,14 @@ type ProfileActive struct {
 
 // ProfilesStatus is the profile-health half of Status (§4.2 amendment).
 // Lineages/Versions are pointers because a disabled service opens nothing:
-// the counts are UNAVAILABLE, not zero, and must serialize as null/omitted.
+// the counts are UNAVAILABLE, not zero, and must serialize as null.
 type ProfilesStatus struct {
 	State      string                   `json:"state"`
 	Reason     string                   `json:"reason,omitempty"` // degraded only
-	Lineages   *int64                   `json:"lineages,omitempty"`
-	Versions   *int64                   `json:"versions,omitempty"`
-	Active     map[string]ProfileActive `json:"active,omitempty"`     // band → active version
-	Unprofiled map[string]int64         `json:"unprofiled,omitempty"` // reason → count (GROUP BY derived)
+	Lineages   *int64                   `json:"lineages"`         // null when the database-derived group is unavailable
+	Versions   *int64                   `json:"versions"`         // null when the database-derived group is unavailable
+	Active     map[string]ProfileActive `json:"active,omitempty"` // band → active version
+	Unprofiled map[string]int64         `json:"unprofiled"`       // null when this database-derived group is unavailable
 }
 
 // normDecl is a declaration entry after normalization — the identity PR2's
@@ -142,7 +144,7 @@ func nullIfEmpty(s string) any {
 // makes re-adding a retired antenna an event (PR8): without it, identical
 // facts would read as a no-op and resumption would be invisible in history.
 // Called from Start under s.mu, before the writer goroutine exists.
-func (s *Service) reconcileProfiles(now time.Time) error {
+func (s *Service) reconcileProfiles(now time.Time) (err error) {
 	const op errors.Op = "evidence.Service.reconcileProfiles"
 	if profileFaultForTest != nil {
 		return errors.New(op).WithErr(profileFaultForTest).WithMsg("injected reconcile fault")
@@ -202,7 +204,7 @@ func (s *Service) reconcileProfiles(now time.Time) error {
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("begin activation transaction")
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer txutil.Rollback(tx, &err)
 
 	// UUIDs referenced by the PRIOR active mapping: a lineage absent from it
 	// was retired, whatever its stored facts say.
@@ -218,6 +220,10 @@ func (s *Service) reconcileProfiles(now time.Time) error {
 			return errors.New(op).WithErr(err).WithMsg("scan prior active mapping")
 		}
 		activeUUIDs[u] = true
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return errors.New(op).WithErr(err).WithMsg("iterate prior active mapping")
 	}
 	if err := rows.Close(); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("close prior active mapping")
@@ -315,31 +321,44 @@ func (s *Service) stampLocked(sc *SlotCapture) {
 // fillProfileCounts adds the database-derived halves to a Status.Profiles
 // snapshot. Runs WITHOUT s.mu — Status released the lock first, because
 // these aggregates must never stall CaptureSlot (package-review P1).
-func (s *Service) fillProfileCounts(p *ProfilesStatus) {
+func (s *Service) fillProfileCounts(p *ProfilesStatus) error {
 	if s.db == nil {
-		return
+		return fmt.Errorf("profile counts: database is not open")
 	}
 	var lineages, versions int64
+	if err := statusQueryFault("profiles_total"); err != nil {
+		return fmt.Errorf("count profiles: %w", err)
+	}
 	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT lineage), COUNT(*) FROM profiles`).
-		Scan(&lineages, &versions); err == nil {
-		p.Lineages, p.Versions = &lineages, &versions
+		Scan(&lineages, &versions); err != nil {
+		return fmt.Errorf("count profiles: %w", err)
+	}
+	if err := statusQueryFault("profiles_unprofiled"); err != nil {
+		return fmt.Errorf("group unprofiled observations: %w", err)
 	}
 	rows, err := s.db.Query(
 		`SELECT unprofiled_reason, COUNT(*) FROM observations
 		 WHERE unprofiled_reason IS NOT NULL GROUP BY unprofiled_reason`)
 	if err != nil {
-		return
+		return fmt.Errorf("group unprofiled observations: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	unprofiled := map[string]int64{}
 	for rows.Next() {
 		var reason string
 		var n int64
 		if err := rows.Scan(&reason, &n); err != nil {
-			return
+			_ = rows.Close()
+			return fmt.Errorf("scan grouped unprofiled observations: %w", err)
 		}
-		if p.Unprofiled == nil {
-			p.Unprofiled = map[string]int64{}
-		}
-		p.Unprofiled[reason] = n
+		unprofiled[reason] = n
 	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate grouped unprofiled observations: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close grouped unprofiled observations: %w", err)
+	}
+	p.Lineages, p.Versions, p.Unprofiled = &lineages, &versions, unprofiled
+	return nil
 }

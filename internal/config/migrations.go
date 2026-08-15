@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 )
 
 // currentConfigVersion is the config schema version this build writes and
@@ -39,20 +40,60 @@ var migrations = []migration{
 // the global block is gone. Synthesises the id-1 rig from legacy loose fields when
 // there's no catalogue yet, so the mappings still have a home.
 func migrateV1toV2(doc map[string]any) error {
-	bridge, _ := doc["bridge"].(map[string]any)
-	if bridge == nil {
+	bridgeValue, bridgePresent := doc["bridge"]
+	if !bridgePresent {
 		return nil
 	}
-	byDriver, _ := bridge["mode_mappings"].(map[string]any)
-	if len(byDriver) == 0 {
-		delete(bridge, "mode_mappings") // drop an empty/absent block
+	bridge, ok := bridgeValue.(map[string]any)
+	if !ok {
+		return fmt.Errorf("bridge: must be an object")
+	}
+	modeMappingsValue, modeMappingsPresent := bridge["mode_mappings"]
+	if !modeMappingsPresent {
 		return nil
+	}
+	byDriver, ok := modeMappingsValue.(map[string]any)
+	if !ok {
+		return fmt.Errorf("bridge.mode_mappings: must be an object")
+	}
+	if err := validateLegacyModeMappings("bridge.mode_mappings", byDriver); err != nil {
+		return err
+	}
+
+	var rigs []any
+	if rigsValue, present := doc["rigs"]; present {
+		var ok bool
+		rigs, ok = rigsValue.([]any)
+		if !ok {
+			return fmt.Errorf("rigs: must be an array")
+		}
+		for idx, value := range rigs {
+			rig, ok := value.(map[string]any)
+			if !ok {
+				return fmt.Errorf("rigs[%d]: must be an object", idx)
+			}
+			model, ok := rig["model"]
+			if !ok {
+				return fmt.Errorf("rigs[%d].model: is required while migrating bridge.mode_mappings", idx)
+			}
+			if _, ok := model.(string); !ok {
+				return fmt.Errorf("rigs[%d].model: must be a string", idx)
+			}
+			if destination, present := rig["mode_mappings"]; present {
+				destinationMappings, ok := destination.(map[string]any)
+				if !ok {
+					return fmt.Errorf("rigs[%d].mode_mappings: must be an object", idx)
+				}
+				if err := validateModeMappingEntries(fmt.Sprintf("rigs[%d].mode_mappings", idx), destinationMappings); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	// Ensure a rigs catalogue exists. A pre-catalogue (loose) config carries its
 	// identity in bridge.cat.driver / bridge.serial.port / ft8.device — synthesise
 	// the id-1 rig from those (mirrors applyRigProfiles) so the mappings land.
-	rigs, _ := doc["rigs"].([]any)
 	if len(rigs) == 0 {
 		driver := nestedString(doc, "bridge", "cat", "driver")
 		port := nestedString(doc, "bridge", "serial", "port")
@@ -92,6 +133,46 @@ func migrateV1toV2(doc map[string]any) error {
 	return nil
 }
 
+// validateLegacyModeMappings validates the complete removed block before the
+// migration mutates either its source or any destination rig. That ordering is
+// important: BridgeConfig no longer has this field, so deleting a malformed
+// value would otherwise let typed unmarshal accept a document whose operator
+// data had silently disappeared.
+func validateLegacyModeMappings(path string, byDriver map[string]any) error {
+	for driver, value := range byDriver {
+		mappings, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s[%q]: must be an object", path, driver)
+		}
+		if err := validateModeMappingEntries(fmt.Sprintf("%s[%q]", path, driver), mappings); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateModeMappingEntries(path string, mappings map[string]any) error {
+	for literal, value := range mappings {
+		mapping, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s[%q]: must be an object", path, literal)
+		}
+		mode, present := mapping["mode"]
+		if !present {
+			return fmt.Errorf("%s[%q].mode: is required", path, literal)
+		}
+		if _, ok := mode.(string); !ok {
+			return fmt.Errorf("%s[%q].mode: must be a string", path, literal)
+		}
+		if submode, present := mapping["submode"]; present {
+			if _, ok := submode.(string); !ok {
+				return fmt.Errorf("%s[%q].submode: must be a string", path, literal)
+			}
+		}
+	}
+	return nil
+}
+
 // nestedString walks a chain of map keys and returns the string at the end, or
 // "" if any hop is missing or not the expected type.
 func nestedString(doc map[string]any, keys ...string) string {
@@ -123,7 +204,10 @@ func migrateDocument(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("parsing config document: %w", err)
 	}
 
-	from := documentVersion(doc)
+	from, err := documentVersion(doc)
+	if err != nil {
+		return nil, err
+	}
 	if from > currentConfigVersion {
 		return nil, fmt.Errorf(
 			"config version %d is newer than this Station Manager supports (max %d); "+
@@ -152,17 +236,22 @@ func migrateDocument(data []byte) ([]byte, error) {
 }
 
 // documentVersion reads the `version` field from a decoded config document. A
-// missing or non-numeric version is the pre-versioning baseline (v1). JSON
-// numbers decode to float64.
-func documentVersion(doc map[string]any) int {
+// missing version is the pre-versioning baseline (v1). A present version must
+// be an integer JSON number; treating a malformed present value as "missing"
+// could run the wrong migration and then stamp the document current.
+func documentVersion(doc map[string]any) (int, error) {
 	v, ok := doc["version"]
 	if !ok {
-		return 1
+		return 1, nil
 	}
-	if f, ok := v.(float64); ok {
-		return int(f)
+	f, ok := v.(float64)
+	if !ok {
+		return 0, fmt.Errorf("version: must be an integer JSON number")
 	}
-	return 1
+	if math.Trunc(f) != f || f < 0 || f > float64(math.MaxInt) {
+		return 0, fmt.Errorf("version: must be an integer JSON number")
+	}
+	return int(f), nil
 }
 
 func migrationFrom(v int) *migration {

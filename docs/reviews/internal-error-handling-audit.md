@@ -1,43 +1,44 @@
 # Internal error-handling audit
 
-**Status:** review complete; actions open  
+**Status:** implementation complete; internal test suite verified
 **Reviewed:** 2026-08-14  
 **Scope:** production Go under `internal/`; generated SQLBoiler models and tests excluded  
-**Code changes:** none; this document is the review deliverable
+**Code changes:** all seven action themes implemented; this document remains the
+review and resolution record
 
 ## Executive summary
 
-A strict ignored-error pass produced **120 `errcheck` diagnostics**. That is a
+A strict ignored-error pass produced **120 `errcheck` diagnostics**. That was a
 backlog count, not a defect count: most are deliberate read-side cleanup,
 best-effort diagnostic reads, HTTP response writes, or assertions made safe by a
-preceding validator. The diagnostics reduce to **seven action themes**.
+preceding validator. The diagnostics reduced to **seven action themes**, all now
+addressed.
 
-The highest-risk work is concentrated in `internal/evidence`. Some failures there
-currently become valid-looking capacity values, partial iterator results, or zero
-status counts. The existing logging audit already made the fail-closed policy for
-retention measurement authoritative; its Stage 1 tracker is committed, but its
-safety-critical Stage 2 wiring remains open.
+The highest-risk work was concentrated in `internal/evidence`. Retention health's
+fail-closed Stage 2 wiring was already present at implementation start; the
+remaining work makes iterator errors abort mutations, status read failures explicit,
+and transaction cleanup observable.
 
-Two independent P1 findings are new:
+Two independent P1 findings were new:
 
 1. the v1→v2 config migration can delete a malformed legacy field, stamp the
    document current, and let `Load` succeed; and
 2. evidence profile activation can commit a decision made from an incomplete SQL
    iterator because `Rows.Err` is never checked.
 
-No production source was changed during this audit.
+Production source and regression tests now cover every listed action.
 
 ## Findings at a glance
 
 | ID | Priority | Area | Disposition |
 |---|---:|---|---|
-| EH-1 | P0 | Evidence retention/capacity failures become measurements or silence | Existing L2; complete Stage 2 |
-| EH-2 | P1 | Evidence iterator errors can still lead to profile, purge, or sync work | New |
-| EH-3 | P1 | Config migration accepts and removes malformed versioned data | New |
-| EH-4 | P1 | Evidence status can return valid-looking zero or partial counts | New extension of L2 |
-| EH-5 | P2 | Six SQLite methods ignore `RowsAffected` errors | New |
-| EH-6 | P2 | Fourteen transaction owners discard rollback failures | New consistency gap |
-| EH-7 | P3 | A small set of stateful close/release outcomes remain unobservable | New + existing H2 |
+| EH-1 | P0 | Evidence retention/capacity failures become measurements or silence | Fixed by existing retention-health Stage 2 |
+| EH-2 | P1 | Evidence iterator errors can still lead to profile, purge, or sync work | Fixed |
+| EH-3 | P1 | Config migration accepts and removes malformed versioned data | Fixed |
+| EH-4 | P1 | Evidence status can return valid-looking zero or partial counts | Fixed |
+| EH-5 | P2 | Six SQLite methods ignore `RowsAffected` errors | Fixed |
+| EH-6 | P2 | Fourteen transaction owners discard rollback failures | Fixed |
+| EH-7 | P3 | A small set of stateful close/release outcomes remain unobservable | Fixed |
 
 Priority meanings follow the existing internal logging review: P0 is release-gate
 work, P1 should be closed before a serious release, P2 is important correctness or
@@ -80,16 +81,18 @@ The operator decisions already recorded in L2 should remain authoritative:
 
 ### Current implementation checkpoint
 
-Stage 1 is no longer uncommitted as the older review text says. The tracker landed in
-`468a9ad1`, with a heartbeat-count correction in `71088525`. The
-`retentionHealth` implementation and tests exist, but no production `Service` owns or
-calls it. Stage 2 remains the release-gate work.
+Stage 1 landed in `468a9ad1`, with a heartbeat-count correction in `71088525`.
+Stage 2 is now wired into the production `Service`; the current logging review
+records the completed fail-closed measurement policy and tests.
 
 ### Action
 
 Complete the six Stage 2 items already specified in L2, adding both WAL checkpoint
 paths and `maybeCompact` to the error-returning surface. Update the stale Stage 1
 checkpoint in the logging review when this work is actioned.
+
+**Resolution (2026-08-15):** already complete in the reconciled tree; the
+logging review now records the production wiring and fault-injection coverage.
 
 ### Required tests
 
@@ -142,6 +145,11 @@ an error is returned:
 - startup profile reconciliation enters `ProfilesDegraded`;
 - purge logs a bounded chunk failure and performs no commit; and
 - sync enters its existing transition-based backoff.
+
+**Resolution (2026-08-15):** all six loops now check `Rows.Err()` before a
+successful result is used; meaningful closes are checked. Regression tests inject
+an error after the first row and verify the profile and purge transactions do not
+mutate, while sync enters backoff without offering a row.
 
 ### Required tests
 
@@ -204,6 +212,10 @@ Make migration parsing presence-aware:
   validated and every applicable mapping has a valid destination; and
 - preserve the source file unchanged on every migration error.
 
+**Resolution (2026-08-15):** migration now validates presence and shape before
+any deletion, rejects malformed present versions, and table-tests path-specific
+errors with byte-for-byte source preservation.
+
 ### Required tests
 
 Table-test wrong version types, wrong `mode_mappings` type, wrong per-driver value,
@@ -244,6 +256,11 @@ A 200 response with explicit unknowns is preferable to replacing the entire payl
 with a 503, because capture state, dropped-slot count and the last sync error remain
 useful when aggregate reads fail.
 
+**Resolution (2026-08-15):** database-derived status groups are now atomic:
+their counts/maps are nullable as a group, top-level `degraded`/`status_error`
+identify a failed read, and a transition tracker emits one degraded and one
+recovered record.
+
 ### Required tests
 
 Force each aggregate and grouped query to fail independently. Assert no failed group
@@ -280,6 +297,10 @@ the consequences are misleading:
 Use one package-local helper that returns a wrapped count or error and replace all
 six call sites. Keep the existing zero-row semantics only after the count was
 successfully obtained.
+
+**Resolution (2026-08-15):** `checkedRowsAffected` owns all six sites; injected
+result failures preserve the caller error and cannot invoke zero-row handling or
+commit the stamped transaction.
 
 ### Required tests
 
@@ -320,6 +341,11 @@ Do not emit one false warning per successful commit: an unconditional helper mus
 recognize `sql.ErrTxDone`, or rollback should be called explicitly only on error
 branches.
 
+**Resolution (2026-08-15):** the shared `txutil.Rollback` guard covers all 14
+owners. It joins real rollback failures to a primary error and ignores only the
+expected post-commit `sql.ErrTxDone`; the read-only export path documents and uses
+the same explicit policy.
+
 ## EH-7 — selective lifecycle close/release hardening (P3)
 
 Most close errors in the 120 diagnostics are correctly subordinate to a primary
@@ -345,6 +371,10 @@ Recommended handling is narrow: return a close error at successful output bounda
 join it to a primary error on failed initialization, and use `func() error` plus a
 bounded warning for inhibition releases. Do not turn ordinary input-file close or
 HTTP response-body cleanup into warning noise.
+
+**Resolution (2026-08-15):** WAV writes check the final close, evidence shutdown
+records a failed archive close, FT8 startup joins a cleanup failure, and inhibition
+release is `func() error` with a bounded warning at the FT8 boundary.
 
 The pre-existing worktree changes in `internal/pskreporter/identity.go` also contain
 best-effort temp close/remove ignores. A failed remove can leave a mode-0600
@@ -419,13 +449,13 @@ Recommended rollout:
 
 ## Action order
 
-- [ ] EH-1: complete evidence retention-health Stage 2 and update the stale L2 checkpoint.
-- [ ] EH-2: make every evidence iterator fail before state changes on `Rows.Err`.
-- [ ] EH-3: make config migration reject malformed present fields and versions.
-- [ ] EH-4: make evidence status groups explicitly unknown/degraded on query failure.
-- [ ] EH-5: centralize checked `RowsAffected` handling.
-- [ ] EH-6: adopt a consistent rollback-failure policy outside `qsoservice`.
-- [ ] EH-7: harden the four stateful close/release boundaries.
+- [x] EH-1: complete evidence retention-health Stage 2 and update the stale L2 checkpoint.
+- [x] EH-2: make every evidence iterator fail before state changes on `Rows.Err`.
+- [x] EH-3: make config migration reject malformed present fields and versions.
+- [x] EH-4: make evidence status groups explicitly unknown/degraded on query failure.
+- [x] EH-5: centralize checked `RowsAffected` handling.
+- [x] EH-6: adopt a consistent rollback-failure policy outside `qsoservice`.
+- [x] EH-7: harden the four stateful close/release boundaries.
 - [ ] Add the staged correctness-linter gate after its corresponding debt is closed.
 
 ## Verification performed

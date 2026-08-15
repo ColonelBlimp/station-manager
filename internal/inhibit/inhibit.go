@@ -31,6 +31,7 @@ package inhibit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -47,7 +48,7 @@ import (
 // edges and the decisions live here.
 type surface interface {
 	name() string
-	inhibit(why string) (release func(), err error)
+	inhibit(why string) (release func() error, err error)
 }
 
 // Inhibitor holds an inhibition across every surface the host provides.
@@ -105,9 +106,9 @@ var surfaceTimeout = 2 * time.Second
 // logind's idle:sleep block, and a headless box gets the same. An error means the
 // host granted nothing at all, and then nothing is held — the caller is expected
 // to log it and carry on transmitting.
-func (i *Inhibitor) Inhibit(why string) (func(), error) {
+func (i *Inhibitor) Inhibit(why string) (func() error, error) {
 	var (
-		releases []func()
+		releases []func() error
 		failures []string
 	)
 	for idx, s := range i.surfaces {
@@ -133,13 +134,17 @@ func (i *Inhibitor) Inhibit(why string) (func(), error) {
 	// sync.Once, because the caller may legitimately race an acquire against a
 	// disarm and free the same handle twice. Against a real cookie a double free
 	// could cancel an inhibition a LATER arm had taken.
-	var once sync.Once
-	return func() {
+	var (
+		once       sync.Once
+		releaseErr error
+	)
+	return func() error {
 		once.Do(func() {
 			for _, rel := range releases {
-				i.releaseBounded(rel)
+				releaseErr = errors.Join(releaseErr, i.releaseBounded(rel))
 			}
 		})
+		return releaseErr
 	}, nil
 }
 
@@ -178,7 +183,7 @@ func (i *Inhibitor) unclaim(idx int) {
 	i.mu.Unlock()
 }
 
-func (i *Inhibitor) acquireBounded(idx int, s surface, why string) (func(), error) {
+func (i *Inhibitor) acquireBounded(idx int, s surface, why string) (func() error, error) {
 	// One outstanding attempt per surface. godbus's SystemBus()/SessionBus() hold
 	// a PACKAGE-GLOBAL mutex across the whole connect+auth+Hello handshake and
 	// take no context, so a bus that accepts the socket but never finishes the
@@ -193,7 +198,7 @@ func (i *Inhibitor) acquireBounded(idx int, s surface, why string) (func(), erro
 		return nil, fmt.Errorf("previous attempt has not answered yet")
 	}
 	type result struct {
-		rel func()
+		rel func() error
 		err error
 	}
 	// Buffered: the surface goroutine must always be able to complete its send,
@@ -220,7 +225,10 @@ func (i *Inhibitor) acquireBounded(idx int, s surface, why string) (func(), erro
 			if r.rel != nil {
 				i.log.DebugWith().Str("surface", s.name()).
 					Msg("inhibit: surface answered after the bound; releasing the late inhibition")
-				r.rel()
+				if err := r.rel(); err != nil {
+					i.log.WarnWith().Err(err).Str("surface", s.name()).
+						Msg("inhibit: late inhibition release failed")
+				}
 			}
 		}()
 		return nil, fmt.Errorf("no answer within %s", i.timeout)
@@ -232,19 +240,19 @@ func (i *Inhibitor) acquireBounded(idx int, s surface, why string) (func(), erro
 // finishes in its own goroutine. The caller is disarmTxLocked, which invokes this
 // BEFORE it waits for the in-flight transmission, abandons the session and closes
 // the playback device; on the closing path it is also ahead of the daemon exiting.
-func (i *Inhibitor) releaseBounded(rel func()) {
-	done := make(chan struct{})
+func (i *Inhibitor) releaseBounded(rel func() error) error {
+	done := make(chan error, 1)
 	go func() {
-		rel()
-		close(done)
+		done <- rel()
 	}()
 
 	timer := time.NewTimer(i.timeout)
 	defer timer.Stop()
 	select {
-	case <-done:
+	case err := <-done:
+		return err
 	case <-timer.C:
-		i.log.DebugWith().Msg("inhibit: release did not answer within the bound; continuing without it")
+		return fmt.Errorf("release did not answer within %s", i.timeout)
 	}
 }
 
@@ -254,7 +262,7 @@ type logindSurface struct{}
 
 func (l *logindSurface) name() string { return "logind" }
 
-func (l *logindSurface) inhibit(why string) (func(), error) {
+func (l *logindSurface) inhibit(why string) (func() error, error) {
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return nil, fmt.Errorf("system bus: %w", err)
@@ -279,7 +287,7 @@ func (l *logindSurface) inhibit(why string) (func(), error) {
 	// closing it is the only way to release. Wrapped in os.File so the descriptor
 	// is owned and closed exactly once by the Go runtime's accounting.
 	f := os.NewFile(uintptr(fd), "logind-inhibit")
-	return func() { _ = f.Close() }, nil
+	return f.Close, nil
 }
 
 // ---- org.freedesktop.ScreenSaver (session bus) ----
@@ -288,7 +296,7 @@ type screenSaverSurface struct{}
 
 func (s *screenSaverSurface) name() string { return "screensaver" }
 
-func (s *screenSaverSurface) inhibit(why string) (func(), error) {
+func (s *screenSaverSurface) inhibit(why string) (func() error, error) {
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		// The expected, unremarkable case on a headless host: no session, no
@@ -303,12 +311,11 @@ func (s *screenSaverSurface) inhibit(why string) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("ScreenSaver Inhibit: %w", err)
 	}
-	return func() {
+	return func() error {
 		// A FRESH deadline, not the acquire's: this closure runs at disarm, which
 		// may be hours later, and the acquire's context expired long ago.
 		rctx, rcancel := context.WithTimeout(context.Background(), surfaceTimeout)
 		defer rcancel()
-		// Best-effort: if the desktop went away the inhibition went with it.
-		_ = obj.CallWithContext(rctx, "org.freedesktop.ScreenSaver.UnInhibit", 0, cookie).Err
+		return obj.CallWithContext(rctx, "org.freedesktop.ScreenSaver.UnInhibit", 0, cookie).Err
 	}, nil
 }

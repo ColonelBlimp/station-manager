@@ -308,7 +308,7 @@ func TestSY2_QuarantineDoesNotBlockBatchmates(t *testing.T) {
 		t.Fatalf("SY2: quarantined row re-offered (%d → %d offers) — quarantine must be terminal locally", before, after)
 	}
 	st := s.Status()
-	if st.Sync == nil || st.Sync.Quarantined != 1 {
+	if st.Sync == nil || st.Sync.Quarantined == nil || *st.Sync.Quarantined != 1 {
 		t.Fatalf("SY2: Status.Sync.Quarantined = %+v, want 1 — the operator must see the quarantine", st.Sync)
 	}
 }

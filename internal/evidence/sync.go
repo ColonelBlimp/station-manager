@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/evidencewire"
+	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 )
 
 // §5 sync engine (spot-network §5.1 amendments, operator rulings
@@ -69,8 +70,8 @@ type SyncStatus struct {
 	State       string           `json:"state,omitempty"` // idle | backoff
 	LastSuccess string           `json:"last_success_utc,omitempty"`
 	LastError   string           `json:"last_error,omitempty"`
-	Unsynced    map[string]int64 `json:"unsynced,omitempty"` // kind → count
-	Quarantined int64            `json:"quarantined"`
+	Unsynced    map[string]int64 `json:"unsynced"`    // null when this database-derived group is unavailable
+	Quarantined *int64           `json:"quarantined"` // null when this database-derived group is unavailable
 }
 
 // syncTables maps wire kinds onto archive tables, in SELECTION order:
@@ -316,8 +317,12 @@ func (s *Service) selectKind(kind, table string, limit int) ([]syncRow, error) {
 		}
 		uuids = append(uuids, u)
 	}
+	if err := rs.Err(); err != nil {
+		_ = rs.Close()
+		return nil, fmt.Errorf("iterate %s sync selection: %w", kind, err)
+	}
 	if err := rs.Close(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("close %s sync selection: %w", kind, err)
 	}
 	out := make([]syncRow, 0, len(uuids))
 	for _, u := range uuids {
@@ -490,12 +495,12 @@ func (s *Service) loadSyncRow(kind, uuid string) (syncRow, error) {
 
 // markOffered writes the send-intent, per table, in one transaction that
 // commits BEFORE dispatch (SY9).
-func (s *Service) markOffered(rows []syncRow) error {
+func (s *Service) markOffered(rows []syncRow) (err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer txutil.Rollback(tx, &err)
 	// Nano precision: send-intents can be milliseconds apart (a re-offer
 	// under dialed-down backoff, a fast retry), and a second-granular
 	// timestamp would make consecutive intents indistinguishable — which
@@ -585,12 +590,12 @@ func (s *Service) postBatch(ctx context.Context, rows []syncRow) ([]evidencewire
 // applyOutcomes marks rows per their terminal outcomes in one transaction.
 // An unknown outcome string leaves its row untouched (re-offered later) —
 // forward-compatible and conservative.
-func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutcome) error {
+func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutcome) (err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer txutil.Rollback(tx, &err)
 	quarantined := 0
 	var sampleUUID, sampleReason string
 	for i, o := range outcomes {
@@ -654,21 +659,32 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 // fillSyncCounts adds the database-derived halves to a Status.Sync
 // snapshot. Runs WITHOUT s.mu (package-review P1: status aggregates must
 // never stall CaptureSlot).
-func (s *Service) fillSyncCounts(ss *SyncStatus) {
+func (s *Service) fillSyncCounts(ss *SyncStatus) error {
 	if s.db == nil {
-		return
+		return fmt.Errorf("sync counts: database is not open")
 	}
-	ss.Unsynced = map[string]int64{}
+	unsynced := map[string]int64{}
+	var quarantined int64
 	for _, t := range syncTables {
 		var n int64
-		if err := s.db.QueryRow(
-			`SELECT COUNT(*) FROM ` + t.table + ` WHERE synced = 0 AND quarantine_reason IS NULL`).Scan(&n); err == nil {
-			ss.Unsynced[t.kind] = n
+		if err := statusQueryFault("sync_unsynced_" + t.kind); err != nil {
+			return fmt.Errorf("count unsynced %s: %w", t.kind, err)
 		}
+		if err := s.db.QueryRow(
+			`SELECT COUNT(*) FROM ` + t.table + ` WHERE synced = 0 AND quarantine_reason IS NULL`).Scan(&n); err != nil {
+			return fmt.Errorf("count unsynced %s: %w", t.kind, err)
+		}
+		unsynced[t.kind] = n
 		var q int64
-		if err := s.db.QueryRow(
-			`SELECT COUNT(*) FROM ` + t.table + ` WHERE quarantine_reason IS NOT NULL`).Scan(&q); err == nil {
-			ss.Quarantined += q
+		if err := statusQueryFault("sync_quarantined_" + t.kind); err != nil {
+			return fmt.Errorf("count quarantined %s: %w", t.kind, err)
 		}
+		if err := s.db.QueryRow(
+			`SELECT COUNT(*) FROM ` + t.table + ` WHERE quarantine_reason IS NOT NULL`).Scan(&q); err != nil {
+			return fmt.Errorf("count quarantined %s: %w", t.kind, err)
+		}
+		quarantined += q
 	}
+	ss.Unsynced, ss.Quarantined = unsynced, &quarantined
+	return nil
 }

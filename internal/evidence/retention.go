@@ -3,9 +3,11 @@ package evidence
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/evidencewire"
+	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
@@ -78,9 +80,9 @@ const (
 
 // RetentionStatus is the retention half of the honesty surface (RT9).
 type RetentionStatus struct {
-	PurgedObservations int64  `json:"purged_observations"`
-	PurgedCoverage     int64  `json:"purged_coverage"`
-	Records            int64  `json:"records"`
+	PurgedObservations *int64 `json:"purged_observations"`
+	PurgedCoverage     *int64 `json:"purged_coverage"`
+	Records            *int64 `json:"records"`
 	MetadataBytes      *int64 `json:"metadata_bytes"` // null when the archive could not be measured (L2)
 	Pressure           string `json:"pressure,omitempty"`
 }
@@ -274,7 +276,14 @@ func scanPurgeRows(rs *sql.Rows) (*purgeSet, error) {
 		}
 		p.add(uuid, slot, dial)
 	}
-	return p, rs.Close()
+	if err := rs.Err(); err != nil {
+		_ = rs.Close()
+		return nil, fmt.Errorf("iterate purge selection: %w", err)
+	}
+	if err := rs.Close(); err != nil {
+		return nil, fmt.Errorf("close purge selection: %w", err)
+	}
+	return p, nil
 }
 
 func (p *purgeSet) dialOrZero() float64 {
@@ -293,12 +302,12 @@ const cloudPresent = `sync_outcome IN ('accepted', 'already_present', 'legacy_sy
 // ONE retention record in the same transaction (RT2). Coverage eligibility
 // is evaluated AFTER the observation deletes, so a slot fully purged in
 // this chunk releases its coverage row too — never the reverse (RT3).
-func (s *Service) purgeAckedChunk() (bool, error) {
+func (s *Service) purgeAckedChunk() (changed bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer txutil.Rollback(tx, &err)
 
 	rs, err := tx.Query(
 		`SELECT uuid, slot_start_utc, dial_mhz FROM observations
@@ -383,12 +392,12 @@ func (s *Service) purgeAckedChunk() (bool, error) {
 // into per-class receipts, each a sealed loss interval whose remote_status
 // is honest: never_offered (offered_at NULL), offered_unacknowledged
 // (offered, no ack), or rejected (quarantined — KNOWN remotely absent).
-func (s *Service) purgeUnsyncedChunk() (bool, error) {
+func (s *Service) purgeUnsyncedChunk() (changed bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer txutil.Rollback(tx, &err)
 
 	rs, err := tx.Query(
 		`SELECT uuid, slot_start_utc, dial_mhz,
@@ -422,8 +431,12 @@ func (s *Service) purgeUnsyncedChunk() (bool, error) {
 		set.add(uuid, slot, dial)
 		all = append(all, uuid)
 	}
+	if err := rs.Err(); err != nil {
+		_ = rs.Close()
+		return false, fmt.Errorf("iterate unsynced purge selection: %w", err)
+	}
 	if err := rs.Close(); err != nil {
-		return false, err
+		return false, fmt.Errorf("close unsynced purge selection: %w", err)
 	}
 	if len(all) == 0 {
 		return false, nil
@@ -511,7 +524,7 @@ func (s *Service) compactOnce() error {
 		  ORDER BY start_utc ASC, uuid ASC LIMIT 512`)
 }
 
-func (s *Service) compactKind(table, query string) error {
+func (s *Service) compactKind(table, query string) (err error) {
 	if err := measureFail("compaction_query"); err != nil {
 		return err
 	}
@@ -584,7 +597,7 @@ func (s *Service) compactKind(table, query string) error {
 	if err != nil {
 		return measured("compaction_begin", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer txutil.Rollback(tx, &err)
 	summary := utils.NewUUIDv7At(time.Now())
 	if table == "loss_intervals" {
 		parts := splitKey(rows[0].key)
@@ -630,18 +643,31 @@ func splitKey(key string) []string {
 // fillRetentionCounts adds the database-derived halves to a
 // Status.Retention snapshot. Runs WITHOUT s.mu (package-review P1: status
 // aggregates must never stall CaptureSlot).
-func (s *Service) fillRetentionCounts(rs *RetentionStatus) {
+func (s *Service) fillRetentionCounts(rs *RetentionStatus) error {
 	if s.db == nil {
-		return
+		return fmt.Errorf("retention counts: database is not open")
 	}
-	_ = s.db.QueryRow(
+	var observations, coverage, records int64
+	if err := statusQueryFault("retention_total"); err != nil {
+		return fmt.Errorf("count retention records: %w", err)
+	}
+	if err := s.db.QueryRow(
 		`SELECT COALESCE(SUM(observations), 0), COALESCE(SUM(coverage), 0), COUNT(*) FROM retention_records`).
-		Scan(&rs.PurgedObservations, &rs.PurgedCoverage, &rs.Records)
+		Scan(&observations, &coverage, &records); err != nil {
+		return fmt.Errorf("count retention records: %w", err)
+	}
 	// Status poll: report metadata bytes as null when unmeasurable, but do NOT
 	// drive the write-driven tracker — recovery/heartbeat belong to write attempts.
-	if mb, err := s.metadataBytes(); err == nil {
-		rs.MetadataBytes = &mb
+	if err := statusQueryFault("retention_metadata"); err != nil {
+		return fmt.Errorf("measure retention metadata: %w", err)
 	}
+	mb, err := s.metadataBytes()
+	if err != nil {
+		return fmt.Errorf("measure retention metadata: %w", err)
+	}
+	rs.PurgedObservations, rs.PurgedCoverage, rs.Records = &observations, &coverage, &records
+	rs.MetadataBytes = &mb
+	return nil
 }
 
 var _ = evidencewire.KindRetention // wire kind used by sync.go's table map

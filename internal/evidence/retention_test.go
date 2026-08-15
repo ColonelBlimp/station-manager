@@ -190,7 +190,7 @@ func TestRT1_CaptureOutlivesTheCapByPurgingAcked(t *testing.T) {
 	}
 	// RT9: the retention surface reports the purging.
 	st := s2.Status()
-	if st.Retention == nil || st.Retention.PurgedObservations == 0 || st.Retention.Records == 0 {
+	if st.Retention == nil || st.Retention.PurgedObservations == nil || st.Retention.Records == nil || *st.Retention.PurgedObservations == 0 || *st.Retention.Records == 0 {
 		t.Fatalf("RT9: Status.Retention = %+v, want purge stats visible", st.Retention)
 	}
 	// RT7 (client half): the receipts are first-class synced rows — boot 2's

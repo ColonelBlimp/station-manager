@@ -42,7 +42,7 @@ type fakeInhibitor struct {
 	why      string
 }
 
-func (f *fakeInhibitor) Inhibit(why string) (func(), error) {
+func (f *fakeInhibitor) Inhibit(why string) (func() error, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -50,10 +50,11 @@ func (f *fakeInhibitor) Inhibit(why string) (func(), error) {
 	}
 	f.acquires++
 	f.why = why
-	return func() {
+	return func() error {
 		f.mu.Lock()
 		f.releases++
 		f.mu.Unlock()
+		return nil
 	}, nil
 }
 

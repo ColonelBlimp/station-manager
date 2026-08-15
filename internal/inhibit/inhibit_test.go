@@ -58,7 +58,7 @@ type hangingSurface struct {
 
 func (h *hangingSurface) name() string { return h.nameStr }
 
-func (h *hangingSurface) inhibit(string) (func(), error) {
+func (h *hangingSurface) inhibit(string) (func() error, error) {
 	// Counted BEFORE the gate, unlike acquires: rule 10 is about how many times
 	// the surface was ENTERED, which is what accumulates goroutines, not how many
 	// times it completed.
@@ -71,13 +71,14 @@ func (h *hangingSurface) inhibit(string) (func(), error) {
 	h.mu.Lock()
 	h.acquires++
 	h.mu.Unlock()
-	return func() {
+	return func() error {
 		if h.hangRelease {
 			<-h.gate
 		}
 		h.mu.Lock()
 		h.releases++
 		h.mu.Unlock()
+		return nil
 	}, nil
 }
 
@@ -124,10 +125,10 @@ func mustNotBlock(t *testing.T, what string, fn func()) {
 // inhibitBounded is mustNotBlock for the rules that need Inhibit's RESULT. Same
 // reason: a rule about what survives a hang has to report as its own assertion,
 // not by deadlocking every other test in the binary.
-func inhibitBounded(t *testing.T, in *Inhibitor, why string) (func(), error) {
+func inhibitBounded(t *testing.T, in *Inhibitor, why string) (func() error, error) {
 	t.Helper()
 	type res struct {
-		rel func()
+		rel func() error
 		err error
 	}
 	ch := make(chan res, 1)
@@ -145,26 +146,28 @@ func inhibitBounded(t *testing.T, in *Inhibitor, why string) (func(), error) {
 }
 
 type fakeSurface struct {
-	mu       sync.Mutex
-	nameStr  string
-	err      error
-	acquires int
-	releases int
+	mu         sync.Mutex
+	nameStr    string
+	err        error
+	releaseErr error
+	acquires   int
+	releases   int
 }
 
 func (f *fakeSurface) name() string { return f.nameStr }
 
-func (f *fakeSurface) inhibit(why string) (func(), error) {
+func (f *fakeSurface) inhibit(why string) (func() error, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}
 	f.acquires++
-	return func() {
+	return func() error {
 		f.mu.Lock()
 		f.releases++
 		f.mu.Unlock()
+		return f.releaseErr
 	}, nil
 }
 
@@ -284,6 +287,19 @@ func TestInhibit_ReleaseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInhibit_ReleaseReportsSurfaceFailure(t *testing.T) {
+	fault := errors.New("uninhibit failed")
+	a := &fakeSurface{nameStr: "screensaver", releaseErr: fault}
+
+	rel, err := newTestInhibitor(a).Inhibit("testing")
+	if err != nil {
+		t.Fatalf("inhibit: %v", err)
+	}
+	if err := rel(); !errors.Is(err, fault) {
+		t.Fatalf("release error = %v, want surface failure", err)
+	}
+}
+
 // Rule 6 — a surface that never answers must not block the caller. Inhibit runs
 // on the ARM path with txArmed ALREADY true, so an unbounded wait leaves the
 // operator's arm request hanging on a wedged desktop service while the rig is
@@ -356,7 +372,7 @@ func TestInhibit_DoesNotBlockOnAHungRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inhibit: %v", err)
 	}
-	mustNotBlock(t, "release", rel)
+	mustNotBlock(t, "release", func() { _ = rel() })
 }
 
 // Rule 10 — a surface whose previous attempt is STILL blocked must not be

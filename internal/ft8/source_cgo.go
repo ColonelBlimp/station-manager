@@ -4,6 +4,7 @@ package ft8
 
 import (
 	"context"
+	stderrors "errors"
 
 	"github.com/ColonelBlimp/station-manager/internal/audio/capture"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -53,7 +54,10 @@ func (m *malgoSource) Start(ctx context.Context) (<-chan []int16, error) {
 		return nil, errors.New(op).WithErr(err).WithMsg("init capture")
 	}
 	if err := m.cap.Start(ctx); err != nil {
-		_ = m.cap.Close()
+		if closeErr := m.cap.Close(); closeErr != nil {
+			return nil, errors.New(op).WithErr(stderrors.Join(err, closeErr)).
+				WithMsg("start capture; releasing initialized capture also failed")
+		}
 		return nil, errors.New(op).WithErr(err).WithMsg("start capture")
 	}
 

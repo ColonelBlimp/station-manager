@@ -3,6 +3,7 @@ module github.com/ColonelBlimp/station-manager
 go 1.26.2
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.4.1
 	github.com/ColonelBlimp/go-ft8 v0.8.0
 	github.com/aarondl/null/v8 v8.1.3
 	github.com/aarondl/sqlboiler/v4 v4.19.7

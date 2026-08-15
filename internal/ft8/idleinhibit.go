@@ -28,7 +28,7 @@ type IdleInhibitor interface {
 	// returns a release func. An implementation that cannot inhibit (no session
 	// bus, headless, unsupported platform) returns an error; the caller treats
 	// that as non-fatal and transmits anyway.
-	Inhibit(why string) (release func(), err error)
+	Inhibit(why string) (release func() error, err error)
 }
 
 // SetIdleInhibitor injects the desktop idle inhibitor. Called once during daemon
@@ -66,7 +66,7 @@ func (s *Service) acquireIdleInhibit(in IdleInhibitor) {
 		// Disarmed while acquiring, or another acquisition already stored one.
 		// Free this one NOW rather than storing it over the top.
 		s.txMu.Unlock()
-		release()
+		s.releaseIdleInhibit(release)
 		return
 	}
 	s.idleRelease = release
@@ -86,7 +86,7 @@ func (s *Service) acquireIdleInhibit(in IdleInhibitor) {
 // caller can invoke it OUTSIDE txMu. Caller holds txMu. Returns nil when nothing
 // is held, which makes the disarm paths uniform: every one of them can call this
 // and then release unconditionally.
-func (s *Service) takeIdleReleaseLocked() func() {
+func (s *Service) takeIdleReleaseLocked() func() error {
 	rel := s.idleRelease
 	s.idleRelease = nil
 	if rel != nil {
@@ -96,4 +96,15 @@ func (s *Service) takeIdleReleaseLocked() func() {
 		s.log.InfoWith().Msg("ft8 tx: releasing desktop idle inhibition (TX disarmed)")
 	}
 	return rel
+}
+
+// releaseIdleInhibit is the FT8 boundary that decides the disposition of a
+// release error. Inhibition remains a courtesy—disarm continues—but an
+// immediate D-Bus/FD failure is now visible instead of looking like a clean
+// release. The implementation itself bounds calls before returning an error.
+func (s *Service) releaseIdleInhibit(release func() error) {
+	if err := release(); err != nil {
+		s.log.WarnWith().Err(err).
+			Msg("ft8 tx: desktop idle inhibition release failed; continuing disarm")
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	stderrors "errors"
+	"fmt"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
+	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -204,11 +206,13 @@ type SlotCapture struct {
 type Status struct {
 	Enabled                bool             `json:"enabled"`
 	State                  string           `json:"state"`
+	Degraded               bool             `json:"degraded"`
+	StatusError            string           `json:"status_error,omitempty"`
 	CapBytes               int64            `json:"cap_bytes"`
 	WatermarkBytes         int64            `json:"watermark_bytes"`
 	UsageBytes             *int64           `json:"usage_bytes"` // null when the archive could not be measured (L2)
-	Observations           int64            `json:"observations"`
-	UnprofiledObservations int64            `json:"unprofiled_observations"`
+	Observations           *int64           `json:"observations"`
+	UnprofiledObservations *int64           `json:"unprofiled_observations"`
 	DroppedSlots           int64            `json:"dropped_slots"`
 	Profiles               *ProfilesStatus  `json:"profiles,omitempty"`
 	Sync                   *SyncStatus      `json:"sync,omitempty"`
@@ -249,6 +253,10 @@ type Service struct {
 	// before the writer goroutine; driven ONLY by the write attempt (processSlot),
 	// never by a Status poll. Has its own mutex.
 	retHealth *retentionHealth
+	// statusHealth bounds warnings from the operator-facing status aggregates:
+	// polling a broken database repeatedly emits one degraded edge and one
+	// recovery, not one warning per request.
+	statusHealth *statusQueryHealth
 
 	// queueLoss (L3) logs a bounded record of writer-queue backpressure — a slot
 	// dropped in CaptureSlot because the queue was full, distinct from a write that
@@ -388,6 +396,7 @@ func (s *Service) Start() error {
 	s.state = StateCapturing
 	s.started = true
 	s.retHealth = newRetentionHealth(s.log, s.cfg.Path, retentionMeasurementHeartbeat, time.Now)
+	s.statusHealth = newStatusQueryHealth(s.log)
 	s.queueLoss = logging.NewEpisodeLoss(s.log,
 		"evidence: writer queue full; slot dropped (backpressure)",
 		"evidence: writer queue recovered",
@@ -435,7 +444,10 @@ func (s *Service) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closeLossLocked()
-	_ = s.db.Close()
+	if err := s.db.Close(); err != nil {
+		s.log.ErrorWith().Err(err).Str("path", s.cfg.Path).
+			Msg("evidence: archive close failed during shutdown")
+	}
 	s.state = StateDisabled
 	s.started = false
 }
@@ -527,19 +539,55 @@ func (s *Service) Status() Status {
 	}
 	// Status poll: usage is null when unmeasurable, and it must NOT drive the
 	// write-driven tracker (recovery/heartbeat belong to write attempts only).
+	var statusErr error
 	if usage, err := s.physicalUsage(); err == nil {
 		st.UsageBytes = &usage
+	} else {
+		statusErr = stderrors.Join(statusErr, fmt.Errorf("physical usage: %w", err))
 	}
-	s.fillProfileCounts(prof)
+	if err := s.fillProfileCounts(prof); err != nil {
+		statusErr = stderrors.Join(statusErr, err)
+	}
 	if s.cfg.Sync {
-		s.fillSyncCounts(syn)
+		if err := s.fillSyncCounts(syn); err != nil {
+			statusErr = stderrors.Join(statusErr, err)
+		}
 	}
-	s.fillRetentionCounts(ret)
+	if err := s.fillRetentionCounts(ret); err != nil {
+		statusErr = stderrors.Join(statusErr, err)
+	}
 	st.Profiles, st.Sync, st.Retention = prof, syn, ret
-	_ = db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&st.Observations)
-	_ = db.QueryRow(`SELECT COUNT(*) FROM observations WHERE profile_uuid IS NULL`).
-		Scan(&st.UnprofiledObservations)
+	if err := fillObservationCounts(db, &st); err != nil {
+		statusErr = stderrors.Join(statusErr, err)
+	}
+	if statusErr != nil {
+		st.Degraded = true
+		st.StatusError = statusErr.Error()
+	}
+	if s.statusHealth != nil {
+		s.statusHealth.observe(statusErr)
+	}
 	return st
+}
+
+func fillObservationCounts(db *sql.DB, st *Status) error {
+	var observations, unprofiled int64
+	if err := statusQueryFault("observations_total"); err != nil {
+		return fmt.Errorf("count observations: %w", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&observations); err != nil {
+		return fmt.Errorf("count observations: %w", err)
+	}
+	if err := statusQueryFault("observations_unprofiled"); err != nil {
+		return fmt.Errorf("count unprofiled observations: %w", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM observations WHERE profile_uuid IS NULL`).
+		Scan(&unprofiled); err != nil {
+		return fmt.Errorf("count unprofiled observations: %w", err)
+	}
+	st.Observations = &observations
+	st.UnprofiledObservations = &unprofiled
+	return nil
 }
 
 // migrateSchema brings the archive to schemaVersion: fresh archives get the
@@ -548,13 +596,13 @@ func (s *Service) Status() Status {
 // else is touched). A version newer than this build is refused rather than
 // guessed at — the caller's fail-soft leaves evidence idle while decoding
 // continues.
-func (s *Service) migrateSchema(db *sql.DB) error {
+func (s *Service) migrateSchema(db *sql.DB) (err error) {
 	const op errors.Op = "evidence.Service.migrateSchema"
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)`); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("ensure schema_meta")
 	}
 	var v string
-	err := db.QueryRow(`SELECT v FROM schema_meta WHERE k = 'schema_version'`).Scan(&v)
+	err = db.QueryRow(`SELECT v FROM schema_meta WHERE k = 'schema_version'`).Scan(&v)
 	switch {
 	case err == sql.ErrNoRows, err == nil && v == schemaVersion:
 		_, err = db.Exec(schemaSQL)
@@ -588,7 +636,7 @@ func (s *Service) migrateSchema(db *sql.DB) error {
 		if err != nil {
 			return errors.New(op).WithErr(err).WithMsg("begin v1→v2 migration")
 		}
-		defer func() { _ = tx.Rollback() }()
+		defer txutil.Rollback(tx, &err)
 		if _, err := tx.Exec(migrate1to2SQL); err != nil {
 			return errors.New(op).WithErr(err).WithMsg("apply v1→v2 migration")
 		}
@@ -673,13 +721,13 @@ func (s *Service) migrationBackfillGate(op errors.Op, label string) error {
 // migrate4to5 adds the receipts' dial context (package-review P1-4c) —
 // conditional like the profiles halves: chained archives created
 // retention_records from the current DDL.
-func (s *Service) migrate4to5(db *sql.DB) error {
+func (s *Service) migrate4to5(db *sql.DB) (err error) {
 	const op errors.Op = "evidence.Service.migrate4to5"
 	tx, err := db.Begin()
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("begin v4→v5 migration")
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer txutil.Rollback(tx, &err)
 	var hasCol int
 	if err := tx.QueryRow(
 		`SELECT COUNT(*) FROM pragma_table_info('retention_records') WHERE name = 'dial_mhz'`).Scan(&hasCol); err != nil {
@@ -720,12 +768,12 @@ func (s *Service) migrate2to3(db *sql.DB) error {
 // CONDITIONAL: a chained archive created that table from the current DDL,
 // which already carries the newest columns, so probeColumn decides whether
 // profilesSQL applies.
-func (s *Service) applyAdditiveMigration(db *sql.DB, op errors.Op, probeColumn, profilesSQL, mainSQL string) error {
+func (s *Service) applyAdditiveMigration(db *sql.DB, op errors.Op, probeColumn, profilesSQL, mainSQL string) (err error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("begin migration")
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer txutil.Rollback(tx, &err)
 	var hasCols int
 	if err := tx.QueryRow(
 		`SELECT COUNT(*) FROM pragma_table_info('profiles') WHERE name = ?`, probeColumn).Scan(&hasCols); err != nil {
@@ -907,12 +955,12 @@ func (s *Service) processSlot(sc SlotCapture) {
 // writeSlot commits one slot — its coverage row and every observation — as
 // ONE transaction (EV4): the archive never shows observations for a slot
 // without that slot's coverage row, whatever happens mid-write.
-func (s *Service) writeSlot(sc SlotCapture) error {
+func (s *Service) writeSlot(sc SlotCapture) (err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer txutil.Rollback(tx, &err)
 
 	slotUTC := sc.SlotStart.UTC().Format(time.RFC3339)
 	if _, err := tx.Exec(

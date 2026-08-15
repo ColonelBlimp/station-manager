@@ -341,7 +341,7 @@ func (s *Service) disarmTxLocked(cause string) {
 		rel := s.takeIdleReleaseLocked()
 		s.txMu.Unlock() // idle: nothing to tear down (txClosed already latched above)
 		if rel != nil {
-			rel()
+			s.releaseIdleInhibit(rel)
 		}
 		// Still abandon under the gate: a session could be active from a start
 		// that raced an earlier disarm; clear it now that armed is false.
@@ -370,7 +370,7 @@ func (s *Service) disarmTxLocked(cause string) {
 	relIdle := s.takeIdleReleaseLocked()
 	s.txMu.Unlock()
 	if relIdle != nil {
-		relIdle()
+		s.releaseIdleInhibit(relIdle)
 	}
 
 	// Wait for the in-flight transmission to return BEFORE abandoning — outside

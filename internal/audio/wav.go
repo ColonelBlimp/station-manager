@@ -254,7 +254,12 @@ func WriteWAV(path string, d *Data) error {
 	if err != nil {
 		return errors.New(op).WithErr(err)
 	}
-	defer func() { _ = f.Close() }()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = f.Close()
+		}
+	}()
 
 	w := bufio.NewWriter(f)
 
@@ -303,6 +308,11 @@ func WriteWAV(path string, d *Data) error {
 	if err := w.Flush(); err != nil {
 		return errors.New(op).WithErr(err)
 	}
+	if err := f.Close(); err != nil {
+		closed = true
+		return errors.New(op).WithErr(err).WithMsg("close completed WAV output")
+	}
+	closed = true
 	return nil
 }
 

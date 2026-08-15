@@ -144,7 +144,7 @@ type Service struct {
 	// while an inhibition is held, so it doubles as the "held" flag — one
 	// variable, so the two cannot disagree.
 	idleInhibitor IdleInhibitor
-	idleRelease   func()
+	idleRelease   func() error
 	keyer         TxKeyer
 	txArmed       bool
 	txDisarmCause string // cause of the last real teardown ("" while armed); rides TxState

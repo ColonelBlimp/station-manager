@@ -12,6 +12,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/adapters"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
+	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
@@ -2112,7 +2113,11 @@ WHERE  id = ? AND status = ?`,
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("mark upload success")
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err := checkedRowsAffected(op, res, "mark upload success")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return s.classifyZeroRowCompletion(ctx, h, id, "success")
 	}
 	return nil
@@ -2158,7 +2163,7 @@ var adifPrefixPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*$`)
 // Returns ErrNotFound if either id or qsoID points at a missing row.
 func (s *Service) MarkUploadSuccessWithAdifStampWithContext(
 	ctx context.Context, id int64, upstreamID string, qsoID int64, adifPrefix string,
-) error {
+) (err error) {
 	const op errors.Op = "sqlite.Service.MarkUploadSuccessWithAdifStampWithContext"
 	if err := checkService(op, s); err != nil {
 		return err
@@ -2186,10 +2191,7 @@ func (s *Service) MarkUploadSuccessWithAdifStampWithContext(
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("begin tx")
 	}
-	// Safe on commit — tx.Rollback returns an error after commit but we
-	// ignore it; the rollback-only-on-failure idiom keeps the control
-	// flow readable.
-	defer func() { _ = tx.Rollback() }()
+	defer txutil.Rollback(tx, &err)
 
 	// Step 1 — qso_upload: same shape as MarkUploadSuccessWithContext.
 	// Done via raw SQL (rather than sqlboiler Find+Update) to share one
@@ -2212,7 +2214,11 @@ WHERE  id = ? AND status = ?`,
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("update qso_upload")
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err := checkedRowsAffected(op, res, "update qso_upload")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		// Re-armed by a concurrent edit (or gone): skip the QSO stamp and let
 		// the deferred rollback discard the (no-op) tx — don't mark the QSO
 		// uploaded for a send whose row no longer represents the latest state.
@@ -2239,7 +2245,11 @@ WHERE  id = ?`,
 			"stamp qso row with prefix %q", adifPrefix,
 		)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err = checkedRowsAffected(op, res, "stamp qso row")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return errors.ErrNotFound
 	}
 
@@ -2322,8 +2332,7 @@ WHERE  id IN (` + strings.Join(placeholders, ", ") + `)
 	if err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsg("stamp session-emailed flag")
 	}
-	n, _ := res.RowsAffected()
-	return n, nil
+	return checkedRowsAffected(op, res, "stamp session-emailed flag")
 }
 
 // MarkUploadTransientRetryWithContext records a transient failure
@@ -2368,7 +2377,11 @@ WHERE  id = ? AND status = ?`,
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("mark upload transient retry")
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err := checkedRowsAffected(op, res, "mark upload transient retry")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return s.classifyZeroRowCompletion(ctx, h, id, "transient-retry")
 	}
 	return nil
@@ -2411,10 +2424,26 @@ WHERE  id = ? AND status = ?`,
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("mark upload failed")
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err := checkedRowsAffected(op, res, "mark upload failed")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return s.classifyZeroRowCompletion(ctx, h, id, "failed")
 	}
 	return nil
+}
+
+// checkedRowsAffected keeps result-contract failures distinct from a genuine
+// zero-row update. Treating a failed count as zero sends completion methods
+// through the concurrent-rearm classifier and makes session stamping look like
+// a successful no-op even though the driver could not report the outcome.
+func checkedRowsAffected(op errors.Op, res sql.Result, action string) (int64, error) {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("rows affected by " + action)
+	}
+	return n, nil
 }
 
 // classifyZeroRowCompletion decides what a completion that affected zero rows

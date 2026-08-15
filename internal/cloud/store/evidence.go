@@ -11,6 +11,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/ColonelBlimp/station-manager/internal/cloud/evidencewire"
+	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
 
@@ -65,17 +66,17 @@ func isSerializationFailure(err error) bool {
 	return false
 }
 
-func (s *Store) upsertEvidenceOnce(ctx context.Context, tenantID int64, recs []evidencewire.Record) ([]evidencewire.RowOutcome, error) {
+func (s *Store) upsertEvidenceOnce(ctx context.Context, tenantID int64, recs []evidencewire.Record) (outcomes []evidencewire.RowOutcome, err error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return nil, fmt.Errorf("smcloud: begin evidence batch: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer txutil.Rollback(tx, &err)
 
 	// Profile records are processed before every other kind REGARDLESS of
 	// wire order (§5.1 pins that ordering on the wire carries nothing), so a
 	// batch holding an observation before the profile it references succeeds.
-	outcomes := make([]evidencewire.RowOutcome, len(recs))
+	outcomes = make([]evidencewire.RowOutcome, len(recs))
 	for _, pass := range []func(evidencewire.Record) bool{
 		func(r evidencewire.Record) bool { return r.Kind == evidencewire.KindProfile },
 		func(r evidencewire.Record) bool { return r.Kind != evidencewire.KindProfile },
