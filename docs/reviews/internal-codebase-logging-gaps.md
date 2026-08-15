@@ -264,6 +264,26 @@ sustained identity re-probe failure transition to the default level.
 
 ### L6. HTTP request correlation is incomplete, especially on SM Cloud
 
+> ✅ **FIXED (working tree, awaiting commit).** Sliced A→B→C (operator, 2026-08-15).
+> The cloud request-ID + access-log middleware was **already built** (C4,
+> `internal/cloud/server/access.go`: bounded inbound `X-Request-Id` / crypto-random /
+> echo / one access line with `request_id` + `tenant_id`) — left untouched.
+> **A — cloud panic recovery** (`a11980ae` + review-fixes `14c8b809` abort-on-committed
+> + `32cb234b` keep-access-line-on-unwind): a handler panic surfaces one structured
+> `panic in HTTP handler` line (`request_id`/`tenant_id`/value/stack/`response_committed`)
+> and a generic 500; a committed-response panic re-panics `ErrAbortHandler` so a
+> truncated body can't read as a clean snapshot; distinct from a transport disconnect.
+> **B — cloud failure-line correlation** (`320d2a14`): `tenant_id` + `request_id` added to
+> the 8 authenticated application-failure lines that omitted them (health/unauth and the
+> generic encode helper intentionally excluded). **C — daemon `request_id`** (`ca7b9e60`):
+> `logRequests` assigns a bounded inbound / crypto-random id, echoes `X-Request-Id`, and
+> logs it on the access line; it rides the `responseRecorder` so `writeServerError` (via
+> the kit) and `recoverPanic` stamp the SAME id on the inner failure line — deterministic
+> join, no ripple to the 34 call sites. Coexists with `op_id`. Full-TDD, `-race` clean.
+> **Deferred (mechanical sweep, operator's call):** `request_id` on the ~25 direct
+> handler breadcrumb logs (`s.logger.Error/Warn`) across 8 daemon handler files — mostly
+> Warn-level, not on the 5xx/panic join paths L6 targets.
+
 The cloud handler stack has no application access log, request ID or structured
 application panic recovery
 ([`internal/cloud/server/server.go:73`](../../internal/cloud/server/server.go)). Direct
@@ -289,6 +309,16 @@ propagate a request-scoped logger; include authenticated tenant context on every
 application outcome. Never log bearer tokens or authorization headers.
 
 ### L7. A post-commit forwarding-hook panic creates a false diagnostic narrative
+
+> ✅ **FIXED (working tree, awaiting commit).** `persistOutcome`'s `OnQsoStamped`
+> mirror-notify hook now runs behind its OWN recovery boundary (`Worker.notifyStamped`):
+> a hook panic is contained there and logged as the post-commit event it is —
+> `phase=post_commit`, `hook=on_qso_stamped`, `upload_committed=true`, `upload_id`,
+> `qso_id`, panic + stack — instead of escaping to `processRowSafely`, which would log
+> the pre-submit "panic processing row; resetting to retry" narrative AND re-arm the
+> already-committed upload through the transient path (a duplicate forward). The
+> committed upload is left untouched (not retried). Full-TDD (RED showed the escaped
+> panic mislabelled + the reset; reversion-proved), `-race` clean.
 
 After the forwarding attempt and successful queue-row/stamp commit have been logged,
 `persistOutcome` invokes the fallible `OnQsoStamped` hook directly at
