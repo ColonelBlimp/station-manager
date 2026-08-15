@@ -90,9 +90,25 @@ func (t *malformedTelemetryTracker) markValid(tag string) (recovered bool) {
 	return true
 }
 
-// telemetryTagValid reports whether the payload carries a cleanly-parsed value
-// for tag this frame (the recovery signal). A zero field means "absent this
-// frame" (omitempty semantics), which is neither malformed nor a recovery.
+// telemetryTagValid reports whether the payload carries a real, cleanly-parsed
+// value for tag this frame — the recovery signal that closes a malformed episode.
+//
+// The recovery signal is deliberately keyed on a NON-ZERO parsed value, not on
+// "parsed without error". 0 is this subsystem's sentinel for "not a real value":
+// events.go states it outright ("0 is never a legitimate rig value for them"),
+// and captureDialFreq / CurrentDialMHz both treat 0 as absent/unknown. So a frame
+// that parses to 0 (e.g. VFOAFREQ "000000000") is transport-valid but
+// SEMANTICALLY ABSENT — it is neither malformed nor a recovery, and it must not
+// close an open episode: the episode ends only when a genuinely real value
+// resumes. This intentionally leaves an episode open across all-zero frames
+// (correct: nothing real recovered), where keying on parse-success instead would
+// log a false "telemetry recovered" on a meaningless 0 Hz / 0 W reading.
+//
+// Leaving the episode open is safe for the reason the recovery log is not
+// safety-critical in the first place: observeMalformedTelemetry invalidates the
+// rolling snapshot on EVERY malformed frame, independent of the tracker/episode
+// state, so snapshot freshness (the thing that stamps a logged QSO) is protected
+// regardless of whether a recovery line was emitted. Reviewed 2026-08-15.
 func telemetryTagValid(tag string, p RigStatePayload) bool {
 	switch tag {
 	case tagVfoAFreq:
