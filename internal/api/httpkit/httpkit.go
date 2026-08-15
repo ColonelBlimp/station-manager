@@ -94,8 +94,15 @@ func (k *Kit) WriteError(w http.ResponseWriter, status int, code, message string
 // code and clientMsg are the wire-visible classification; pass stable,
 // low-cardinality values ("db_error", "internal_error") so clients can switch
 // on them. The full err goes to the log line.
-func (k *Kit) WriteServerError(w http.ResponseWriter, op errors.Op, err error, code, clientMsg string) {
-	k.log.ErrorWith().Err(err).Str("op", string(op)).Str("code", code).Msg("server error")
+// requestID is the caller's per-request correlation id (empty if none); it is
+// stamped on the ERR line so it joins the access-log record and any other
+// per-request line (L6). Pass "" to omit it.
+func (k *Kit) WriteServerError(w http.ResponseWriter, op errors.Op, err error, code, clientMsg, requestID string) {
+	evt := k.log.ErrorWith().Err(err).Str("op", string(op)).Str("code", code)
+	if requestID != "" {
+		evt = evt.Str("request_id", requestID)
+	}
+	evt.Msg("server error")
 	k.WriteError(w, http.StatusInternalServerError, code, clientMsg, op)
 }
 

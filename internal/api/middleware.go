@@ -1,7 +1,10 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"net/http"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -9,6 +12,26 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
+
+// requestIDPattern bounds an accepted incoming X-Request-Id: 16–64 ASCII
+// alphanumeric / '-' / '_'. Anything else is discarded and a fresh id minted.
+// Mirrors the cloud server's access-log middleware (internal/cloud/server).
+var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
+
+// resolveRequestID returns the request's correlation id: a bounded, caller-
+// supplied X-Request-Id when present and well-formed, else a crypto-random one.
+// The id is an UNTRUSTED correlation LABEL only — never an input to auth or any
+// security decision.
+func resolveRequestID(r *http.Request) string {
+	if v := r.Header.Get("X-Request-Id"); requestIDPattern.MatchString(v) {
+		return v
+	}
+	var b [16]byte
+	// crypto/rand.Read effectively never fails on the target platforms; a zero id
+	// on the impossible error is still bounded and harmless (correlation only).
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
 
 // sseEventsPath is the daemon-firehose SSE endpoint.
 const sseEventsPath = "/v1/events"
@@ -84,11 +107,16 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 			// there as whatever was written first, e.g. 200 (A6).
 			rr, isRecorder := w.(*responseRecorder)
 			committed := isRecorder && rr.wroteHeader
+			requestID := ""
+			if isRecorder {
+				requestID = rr.requestID
+			}
 			s.logger.ErrorWith().
 				Interface("panic", rec).
 				Str("stack", string(debug.Stack())).
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
+				Str("request_id", requestID).
 				Bool("response_committed", committed).
 				Msg("panic in HTTP handler")
 			if committed {
@@ -220,6 +248,13 @@ type responseRecorder struct {
 	// L4) onto the access-log line, so the HTTP record and the durable outcome
 	// record are joinable without a second per-request log line.
 	opID string
+
+	// requestID is the per-request correlation id assigned by logRequests (L6):
+	// bounded inbound X-Request-Id or a generated one. It rides on the recorder
+	// (like opID) so writeServerError and recoverPanic — which have the recorder
+	// as their ResponseWriter but not the *http.Request — can stamp the SAME id on
+	// the inner failure line that the access line carries, making them joinable.
+	requestID string
 }
 
 // NoteOpID stamps an operation-id onto the access-log line. First call wins.
@@ -336,6 +371,11 @@ func clientIP(r *http.Request) string {
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := newResponseRecorder(w)
+		// Assign the correlation id first, so it rides the recorder into
+		// writeServerError/recoverPanic and is echoed even if the handler
+		// writes headers immediately (L6).
+		rec.requestID = resolveRequestID(r)
+		w.Header().Set("X-Request-Id", rec.requestID) // echo for client/proxy correlation
 		// Debug-level breadcrumb at handler entry. Pairs with the
 		// info-level completion line below so a debug-configured
 		// daemon shows request-in / request-out, while info-only
@@ -344,6 +384,7 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		s.logger.DebugWith().
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
+			Str("request_id", rec.requestID).
 			Str("remote", clientIP(r)).
 			Msg("http request received")
 		start := time.Now()
@@ -366,6 +407,9 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 				Str("code", rec.errCode).
 				Str("error", rec.errMessage).
 				Str("op", rec.errOp)
+		}
+		if rec.requestID != "" {
+			evt = evt.Str("request_id", rec.requestID)
 		}
 		if rec.opID != "" {
 			evt = evt.Str("op_id", rec.opID)

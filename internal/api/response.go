@@ -26,5 +26,11 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, message str
 }
 
 func (s *Server) writeServerError(w http.ResponseWriter, op errors.Op, err error, code, clientMsg string) {
-	s.kit.WriteServerError(w, op, err, code, clientMsg)
+	// request_id rides on the recorder (set by logRequests), so the ERR line joins
+	// the access record without threading r through every writeServerError caller.
+	requestID := ""
+	if rr, ok := w.(*responseRecorder); ok {
+		requestID = rr.requestID
+	}
+	s.kit.WriteServerError(w, op, err, code, clientMsg, requestID)
 }
