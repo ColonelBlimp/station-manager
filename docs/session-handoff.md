@@ -41,42 +41,41 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-14)
+## Now (as of 2026-08-15)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **L4 DONE (both parts) — all reviews clean.** Part A command-outcome log: base `8c3b69e6`,
-  op-id fixes `af9e78df` (full op_ids list + boot-id + 256 cap), entropy bump rode into the OTHER
-  CODER'S `86b05ab5 "test(qrzcq)"` (operator said LEAVE AS-IS — mislabeled but works). Part B tune
-  records: `004acacf`. Findings doc L4 box marked FIXED. **GIT LESSON (repeat):** re-check
-  `git log -1` is MY commit IN THE SAME COMMAND as any `--amend` — a 2nd coder commits to this HEAD
-  in parallel; I amended their commit twice before catching it.
-- **RESUME TASK — L5** (P1): malformed CAT telemetry silently drops safety-relevant state.
-  `mapStatusToPayload` discards invalid VFO A/B + TX-power without a result or log
-  (`bridge/pipeline.go:~1129`). Spec: `reviews/internal-codebase-logging-gaps.md` L5 box. Then L6–L9.
-  Same discipline: ATDD criteria + operator decisions on any threshold BEFORE building; LOGGING/
-  observability only on the TX-adjacent paths — never change control flow/timing.
-- **L1/L2/L3 DONE + committed** (L3 = quiet-window evidence recovery, 30s window, in the tangled
-  commit `f17b03eb`). L4 Part A decisions already made w/ operator: freq-steps coalesce, 1s window,
-  op-id echoed to access log.
-- **TANGLE (operator said LEAVE AS-IS):** my evidence commits `383054d7`/`f17b03eb` absorbed the
-  OTHER coder's qrzcq work via `--amend` sweeping their staged files. Nothing pushed. LESSON:
-  `git show --stat` the result before treating an amend as clean; a 2nd coder commits here in parallel.
-- **NOT MINE — the other coder's qrzcq/lookup work.** Their reviews (`585636071a0a`, `5424d402b525`,
-  `cf4f5ae18c6f`, `f17b03eb1a15` — the last has their P1 credential leak + P2 ctx findings) are
-  theirs; LEAVE them. Their untracked `api/handler_config_lookup_priority_test.go` (refs a not-yet-
-  added `ContinueIfBlank` field) breaks the api TEST build LOCALLY — not my commit, CI won't see it.
-- **CI red on remote** (`82dc0a50`, vet `handler_evidence_test.go:69`) — fixed by UNPUSHED local
-  `974825c7`; clears on push. Operator pushes.
-- **PSK incident CLOSED:** it was "Station Master Pro 3" (different software), not us — Philip
-  confirmed. PSK reporting still DISABLED in config; re-enable is the operator's call (unasked).
+- **logging-gaps audit L1–L10 DONE + committed** (this session: L5 malformed-telemetry, L6 A/B/C
+  HTTP request_id correlation, L7 forwarding-hook panic boundary, L8 quarantine per-kind breakdown,
+  **L9** safego panic-recovery for all 4 service-lifetime goroutines, **L10** transition-only
+  health-check logging daemon+cloud). Findings doc marked FIXED through L10. All full-TDD, every
+  codex post-commit review cleared + deleted.
+- **L9 detail (done):** evidence writer/queueloss/sync `safego.GoTracked` **respawn=true** (`1f9c53bf`
+  +3 fixes: writer_panic loss / panic-safe processSlot lock / disarm-after-classify / measurement
+  seal); bridge `runSupervisor` **respawn=true** (`dfc08999`); serial `readerLoop` **log-and-die**
+  via injected PanicHandler (`a20a5583`); ft8 `pump` **log-and-die** — respawn broken by
+  `close(m.out)` (`2d6ab84f`). `safego.SetRespawnCooldownForTest` added.
+- **RESUME TASK — L11 (P2):** forwarding queue context (`worker.go`) — add `upload_id`/`attempt`/
+  `queue_age`/`queued_at` to attempt records; destination-down/recovered transitions; a periodic
+  queue-depth/oldest-age/exhausted summary; suppress shutdown cancellation. **Multi-part → draft
+  ATDD criteria + get operator decisions (summary interval, "destination down" definition) FIRST.**
+  Then L12 (SM Cloud `cloud_newer_noop` disposition + reconcile summary), L13 (P3 oversized-serial-
+  frame counter), H1–H2+ (P3 hardening).
+- **BIG NEW BACKLOG (operator: "seven more review reports have landed"):** 7 more audits in
+  `docs/reviews/` (2026-08-14) beyond logging-gaps — internal-{lifecycle-concurrency, package-
+  boundary, configuration-contract, persistence-transaction, api-wire-contract, security-trust-
+  boundary, maintainability-test-architecture}-audit.md + frontend-app-review.md +
+  internal-error-handling-audit.md. Ship-gate work AFTER logging-gaps. Not yet triaged.
+- **2nd coder commits to this HEAD in parallel** — commit ONLY my explicit paths (never `-A`);
+  re-check `git log -1` is mine IN THE SAME command as any amend (prefer NEW commits); their
+  `.codex-reviews/` docs + working-tree/untracked files are NOT mine. Nothing pushed (operator pushes).
 - **Do-not:** never initiate FT8/TX or touch the live TX path (sink 66 / rig cmds / power) without
-  per-occasion agreement — **L4 Part B touches tune.go (TX path) but is LOGGING-ONLY: add fields,
-  never change control flow/timing.** All commits carry NO Claude trailer. Codex hook is SLOW
-  (~1-2 min); triage `.codex-reviews/` (verdict from OUTPUT not exit code) + `gh run list -L1` on resume.
+  per-occasion agreement. All commits carry NO Claude trailer. Post-commit codex review is SLOW
+  (~1-2 min — a 2-min commit TIMES OUT; use a longer Bash timeout); triage `.codex-reviews/` per
+  commit (verdict from OUTPUT, some belong to the 2nd coder), fix findings, DELETE the doc.
 
 ## Current state (as of 2026-08-14)
 

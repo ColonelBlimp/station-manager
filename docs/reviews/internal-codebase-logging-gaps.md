@@ -366,6 +366,25 @@ per record or log unrestricted remote text.
 
 ### L9. Critical long-running goroutines bypass structured panic logging
 
+> ✅ **FIXED (working tree, awaiting commit).** All four named service-lifetime
+> goroutines now run under `internal/safego` with an explicit per-worker respawn
+> decision (operator rulings 2026-08-15); each records goroutine/panic/stack via an
+> `onPanic` handler. **evidence** (`1f9c53bf` + 3 review-fixes) — writer/queue-loss/sync
+> under `safego.GoTracked` **respawn=true**; shutdown moved from three done-channels to
+> one WaitGroup; a write-path panic is counted as a distinct `writer_panic` loss
+> (panic-safe `processSlot` lock so a panic-under-mu can't wedge; accounting disarmed
+> once the slot commits/classifies). **bridge** (`dfc08999`) — `runSupervisor` (owns rig
+> control) under `safego.GoTracked` **respawn=true**; GoTracked owns the wg.Add/Done.
+> **serial** (`a20a5583`) — `readerLoop` under `safego.Go` **respawn=false (log-and-die)**
+> via an INJECTED `PanicHandler` (the package has no logger; the bridge injects
+> `s.onPanic`), because the supervisor's liveness already reopens a dead port and
+> respawning would race it. **ft8** (`2d6ab84f`) — the CGO capture `pump` under
+> `safego.Go` **respawn=false (log-and-die)**: it closes `m.out` on exit (respawn would
+> send on a closed channel) and the scheduler's dead-source restart / view re-acquire
+> owns recovery. Added `safego.SetRespawnCooldownForTest`. Full-TDD each (RED skeleton /
+> reversion proofs, incl. bare-`go`→crash for the log-and-die pair); `-race` clean; every
+> codex review cleared. That closes the logging-gaps P0/P1 tier (L1–L9).
+
 Several service-lifetime goroutines use bare `go`, including:
 
 - evidence writer and sync loops at
@@ -393,6 +412,16 @@ do not silently recover a worker that must remain live.
 ## P2 — important operability work
 
 ### L10. Health-check logging is wrong in opposite directions
+
+> ✅ **FIXED (working tree, awaiting commit).** A small concurrency-safe
+> transition-only `dbHealthLog` in each package (operator ruling 2026-08-15: one Warn on
+> the unhealthy edge with cause, repeated failures silenced at the default level via
+> Debug, one recovery Info with the elapsed unhealthy duration). **Daemon**
+> (`internal/api`): `/v1/healthz` no longer discards the ping cause — it logs it on the
+> unhealthy transition. **Cloud** (`internal/cloud/server`): the per-probe `health: db
+> ping failed` Warn flood collapses to the edge Warn + recovery Info. Two independent
+> commits (each reviewable/revertible); full-TDD (transition + concurrent-probe `-race`
+> tests, reversion-proved).
 
 The daemon discards the SQLite `Ping` cause and returns only a generic 503 at
 [`internal/api/handler_health.go:9`](../../internal/api/handler_health.go). SM Cloud
