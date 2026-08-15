@@ -600,12 +600,20 @@ func (s *Service) runPollLoop(ctx context.Context, client serial.Client, pollByt
 // publishes nothing; a retry that fails for a different reason
 // (e.g. open succeeded then INIT-write failed) publishes once. The
 // supervisor clears the key after a steady-state pipeline run.
+// supervisorPanicForTest, when set, is invoked at the top of each supervisor loop
+// so a test can drive the panic → safego respawn path. nil (production) is a no-op.
+var supervisorPanicForTest func()
+
 func (s *Service) runSupervisor(ctx context.Context) {
-	defer s.wg.Done()
+	// wg.Add/Done is owned by safego.GoTracked at the launch site (L9); do NOT call
+	// wg.Done here or the WaitGroup would go negative on a respawn.
 
 	backoff := s.supervisorInitialBackoff
 
 	for {
+		if supervisorPanicForTest != nil {
+			supervisorPanicForTest() // test seam: drive the supervisor's panic → safego respawn path
+		}
 		startTime := time.Now()
 		exit := s.runPipeline(ctx)
 

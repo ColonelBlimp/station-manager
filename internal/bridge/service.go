@@ -9,6 +9,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/serial"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -759,9 +760,24 @@ func (s *Service) Start(ctx context.Context) error {
 	// instead of running out its own bounded schedule while the port closes
 	// underneath it.
 	s.runCtx = runCtx
-	s.wg.Add(1)
-	go s.runSupervisor(runCtx)
+	// The supervisor is service-lifetime and safety-relevant (it owns rig control):
+	// run it under safego with respawn=true so a panic in the supervisor loop itself
+	// is logged and the supervisor comes back rather than crashing the daemon or
+	// silently leaving the rig uncontrolled (L9). GoTracked owns wg.Add/Done.
+	safego.GoTracked(runCtx, "bridge.supervisor", s.onPanic,
+		func() { s.runSupervisor(runCtx) }, true, &s.wg)
 	return nil
+}
+
+// onPanic is the safego PanicHandler for the bridge's service-lifetime goroutines:
+// it records the panicking goroutine's name, value and stack so a recovered panic
+// leaves a structured trace instead of only the runtime stderr dump (L9).
+func (s *Service) onPanic(name string, panicValue any, stack []byte) {
+	s.logger.ErrorWith().
+		Str("goroutine", name).
+		Interface("panic", panicValue).
+		Bytes("stack", stack).
+		Msg("bridge: subsystem goroutine panicked (recovered)")
 }
 
 // Stop cancels the parent context, waits for in-flight goroutines,
