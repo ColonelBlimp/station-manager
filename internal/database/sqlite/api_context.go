@@ -2586,6 +2586,82 @@ func (s *Service) FetchUploadsByQsoIDWithContext(ctx context.Context, qsoID int6
 	return out, nil
 }
 
+// UploadQueueDepth is a point-in-time snapshot of one forwarder's queue, for the periodic
+// queue summary (L11). Pending is the count of rows awaiting upload (status=pending);
+// OldestQueued is when the oldest pending row was enqueued (the zero value when Pending==0);
+// Failed is the DURABLE count of rows that gave up (status=failed) — a DB count, not a
+// process-lifetime counter, so it survives a restart.
+type UploadQueueDepth struct {
+	Pending      int64
+	OldestQueued time.Time
+	Failed       int64
+}
+
+// UploadQueueDepthWithContext returns the queue snapshot for one forwarder: the pending
+// count, the failed count, and the oldest pending row's enqueue time. Scoped by
+// forwarder_name, matching the claim query.
+//
+// ONE aggregate query, deliberately: all three values must describe the same instant, or a
+// consumer could see e.g. Pending>0 with a zero OldestQueued (and compute a nonsensical age
+// from it) when the queue changes between separate reads. A single statement observes one
+// SQLite snapshot, so the three fields are always mutually consistent. `oldest` is NULL when
+// nothing is pending (empty queue) → the zero-value OldestQueued, and Pending is then 0.
+func (s *Service) UploadQueueDepthWithContext(ctx context.Context, forwarderName string) (UploadQueueDepth, error) {
+	const op errors.Op = "sqlite.Service.UploadQueueDepthWithContext"
+	if err := checkService(op, s); err != nil {
+		return UploadQueueDepth{}, err
+	}
+	if forwarderName == "" {
+		return UploadQueueDepth{}, errors.New(op).WithMsg("forwarderName is empty")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return UploadQueueDepth{}, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	var row struct {
+		Pending     int64      `boil:"pending"`
+		Failed      int64      `boil:"failed"`
+		OldestEpoch null.Int64 `boil:"oldest_epoch"`
+	}
+	// strftime('%s', created_at) converts the stored datetime to a Unix epoch in SQL, so we
+	// bind a plain integer and never depend on the driver parsing a datetime STRING (raw Bind
+	// into null.Time cannot). MIN(CASE ...) is NULL when no pending row exists.
+	//
+	// PERFORMANCE, accepted: no existing index services `status IN ('pending','failed')` (the
+	// partial indexes cover pending/in_progress and uploaded), so SQLite scans qso_upload —
+	// and uploaded rows are retained indefinitely, so the scan grows with total upload history,
+	// not just the active set. The `status IN (...)` predicate only trims the RESULT, not the
+	// scan. This is accepted rather than fixed: it is a 60-second best-effort diagnostic whose
+	// scan is sub-millisecond at dogfood scale and stays well under the service timeout until
+	// the table reaches millions of rows. The correct optimisation is a partial index on
+	// (forwarder_name) WHERE status IN ('pending','failed'); it is DEFERRED because it is a
+	// schema migration that bumps the version three migration characterization tests pin to 7,
+	// and that churn is not justified for a diagnostic query until profiling shows it matters.
+	err = queries.Raw(`
+SELECT
+    COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0)                  AS pending,
+    COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0)                  AS failed,
+    MIN(CASE WHEN status = ? THEN CAST(strftime('%s', created_at) AS INTEGER) END) AS oldest_epoch
+FROM qso_upload
+WHERE forwarder_name = ? AND status IN (?, ?)`,
+		status.Pending.String(), status.Failed.String(), status.Pending.String(),
+		forwarderName, status.Pending.String(), status.Failed.String(),
+	).Bind(ctx, h, &row)
+	if err != nil {
+		return UploadQueueDepth{}, errors.New(op).WithErr(err).WithMsg("query upload queue depth")
+	}
+
+	out := UploadQueueDepth{Pending: row.Pending, Failed: row.Failed}
+	if row.OldestEpoch.Valid {
+		out.OldestQueued = time.Unix(row.OldestEpoch.Int64, 0).UTC()
+	}
+	return out, nil
+}
+
 // FetchQsoHistoryByUUIDWithContext returns every qso_history row for
 // the given QSO, ordered by `at ASC` so callers see mutations in the
 // order they happened. The QSO's UUID is the lookup key (not the
@@ -2907,6 +2983,12 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 	// upstream_id is history the QRZ delete-after-insert flow reads back; origin
 	// answers "why does this queue entry exist NOW", and after a re-enqueue the
 	// honest answer is whatever just re-armed it, not what first created it.
+	//
+	// created_at is RESET on re-arm, like next_attempt_at/attempts: it means "when
+	// this row entered its CURRENT pending state", not "first ever created". A row
+	// that uploaded months ago and is re-enqueued by an edit is new work, not a
+	// months-old backlog — the queue-depth oldest-age signal (UploadQueueDepth)
+	// reads MIN(created_at) and would otherwise report the stale original age.
 	const q = `
 		INSERT INTO qso_upload (qso_id, forwarder_name, forwarder_type, action, status, origin)
 		VALUES (?, ?, ?, ?, ?, ?)
@@ -2915,6 +2997,7 @@ func (s *Service) InsertQsoUploadTx(ctx context.Context, tx *sql.Tx, qsoId int64
 			origin          = excluded.origin,
 			status          = 'pending',
 			attempts        = 0,
+			created_at      = datetime('now'),
 			next_attempt_at = strftime('%s', 'now'),
 			last_attempt_at = NULL,
 			last_error      = NULL`
