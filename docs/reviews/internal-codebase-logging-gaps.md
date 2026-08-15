@@ -337,6 +337,20 @@ the hook failed.
 
 ### L8. Local evidence quarantine is invisible when it happens
 
+> ✅ **FIXED (working tree, awaiting commit).** The core was **already built** (C1b,
+> `TestQuarantine_IsLoggedForTheOperator`): `applyOutcomes` emits one bounded per-batch
+> Warn when `quarantined > 0`, carrying the total count + a representative
+> `sample_uuid`/`sample_reason` (reason bounded to 256 runes) — resolving the
+> invisibility / batch-accepted-vs-batch-quarantined confusable state. **L8 delta added
+> here:** a per-kind `by_kind` breakdown on that same Warn (`{observation: N, coverage:
+> M, …}`, iterated in the fixed `syncTables` order), so an operator sees WHICH evidence
+> kinds SM Cloud refused. The bounded representative reason is kept as-is: grouping by
+> truncated raw reason would bound length, not cardinality, and imply a taxonomy that
+> does not exist (operator, 2026-08-15) — if stable reason categories are later defined,
+> category counts are a separate change. Full-TDD (RED had no `by_kind`; reversion-proved
+> against a per-kind DB ground truth that catches a total mislabelled under one kind).
+> Still one line per batch, no per-row flood, no unrestricted remote text.
+
 The cloud server now logs per-batch outcome counts, but the daemon silently persists a
 `permanent_reject` quarantine reason at
 [`internal/evidence/sync.go:607`](../../internal/evidence/sync.go). The normal sync path
