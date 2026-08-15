@@ -169,7 +169,7 @@ func (s *Server) ownedLogbook(w http.ResponseWriter, r *http.Request) (store.Log
 		return store.LogbookInfo{}, false
 	}
 	if err != nil {
-		s.log.Error("logbook lookup failed", "logbook_id", id, "err", err)
+		s.log.Error("logbook lookup failed", "logbook_id", id, "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
 		s.writeError(w, http.StatusInternalServerError, "internal_error", "logbook lookup failed")
 		return store.LogbookInfo{}, false
 	}
@@ -292,7 +292,7 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 
 	logbookID, err := s.store.EnsureLogbook(r.Context(), tenant, req.Logbook)
 	if err != nil {
-		s.log.Error("ensure logbook failed", "logbook", req.Logbook, "err", err)
+		s.log.Error("ensure logbook failed", "logbook", req.Logbook, "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
 		s.writeError(w, http.StatusInternalServerError, "internal_error", "logbook provisioning failed")
 		return
 	}
@@ -302,7 +302,7 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 
 	applied, err := s.store.Upsert(r.Context(), recs)
 	if err != nil {
-		s.log.Error("upsert failed", "logbook_id", logbookID, "count", len(recs), "err", err)
+		s.log.Error("upsert failed", "logbook_id", logbookID, "count", len(recs), "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
 		s.writeError(w, http.StatusInternalServerError, "internal_error", "store write failed")
 		return
 	}
@@ -339,7 +339,7 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 	}
 	manifest, err := s.store.Manifest(r.Context(), lb.ID)
 	if err != nil {
-		s.log.Error("manifest read failed", "logbook_id", lb.ID, "err", err)
+		s.log.Error("manifest read failed", "logbook_id", lb.ID, "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
 		s.writeError(w, http.StatusInternalServerError, "internal_error", "manifest read failed")
 		return
 	}
@@ -361,7 +361,7 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	manifest, err := s.store.Manifest(r.Context(), lb.ID)
 	if err != nil {
-		s.log.Error("manifest read failed", "logbook_id", lb.ID, "err", err)
+		s.log.Error("manifest read failed", "logbook_id", lb.ID, "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
 		s.writeError(w, http.StatusInternalServerError, "internal_error", "manifest read failed")
 		return
 	}
@@ -406,7 +406,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(exportWriteDeadline)); err != nil {
 		// Fail open: an unsupported ResponseWriter keeps the server-wide
 		// deadline, which is only a problem on a link slow enough to notice.
-		s.log.Warn("export: extend write deadline failed", "err", err)
+		s.log.Warn("export: extend write deadline failed", "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
 	}
 	tenant := tenantID(r)
 	// One snapshot for both reads — a logbook + its first QSOs committing
@@ -478,12 +478,12 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		// honest signal is a truncated body — the missing "]}" terminator
 		// makes it invalid JSON, which the restore client rejects as corrupt
 		// rather than silently restoring a partial dump.
-		s.log.Error("export: aborted mid-stream", "tenant_id", tenant, "written", count, "err", err)
+		s.log.Error("export: aborted mid-stream", "tenant_id", tenant, "request_id", requestID(r), "written", count, "err", err)
 		return
 	}
 	// Trailing newline matches the pre-streaming json.Encoder framing.
 	if _, err := w.Write([]byte("]}\n")); err != nil {
-		s.log.Error("export: aborted mid-stream", "tenant_id", tenant, "written", count, "err", err)
+		s.log.Error("export: aborted mid-stream", "tenant_id", tenant, "request_id", requestID(r), "written", count, "err", err)
 		return
 	}
 	s.log.Info("export served", "tenant_id", tenant, "qsos", count)
