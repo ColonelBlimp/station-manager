@@ -1,6 +1,6 @@
 # Internal error-handling audit
 
-**Status:** implementation complete; internal test suite verified
+**Status:** Fixed — implementation complete; internal test suite verified
 **Reviewed:** 2026-08-14  
 **Scope:** production Go under `internal/`; generated SQLBoiler models and tests excluded  
 **Code changes:** all seven action themes implemented; this document remains the
