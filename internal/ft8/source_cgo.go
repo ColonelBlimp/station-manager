@@ -9,8 +9,13 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/audio/capture"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
+
+// pumpPanicForTest, when set, is invoked once per pump iteration so a test can drive
+// the pump's panic → safego log-and-die path. nil (production) is a no-op.
+var pumpPanicForTest func()
 
 // malgoSource adapts the CGO miniaudio capture layer (internal/audio/capture)
 // to the Service's captureSource seam. capture.Capture delivers float32 @
@@ -71,8 +76,29 @@ func (m *malgoSource) Start(ctx context.Context) (<-chan []int16, error) {
 	// dereferencing m.cap per iteration — Stop nils m.cap, and a pump still
 	// draining a buffered batch must not race that write (review 2026-07-20
 	// round 12 #2).
-	go m.pump(pumpCtx, m.cap.Samples())
+	m.launchPump(pumpCtx, m.cap.Samples())
 	return m.out, nil
+}
+
+// launchPump runs the pump under safego with respawn=FALSE (log-and-die). A panic in
+// the pump is recovered + reported via onPanic; the pump's deferred close of m.out
+// then lets the scheduler see the stream end. It is NOT respawned: the pump closes
+// m.out on the way out, so a respawn would send on a closed channel; recovery is
+// owned by the higher layer (the scheduler's dead-source restart / onCaptureLoopExit,
+// and re-opening the FT8 view re-acquires capture) — L9.
+func (m *malgoSource) launchPump(pumpCtx context.Context, samples <-chan []float32) {
+	safego.Go(pumpCtx, "ft8.capture.pump", m.onPanic, func() { m.pump(pumpCtx, samples) }, false)
+}
+
+// onPanic is the safego PanicHandler for the capture pump: it records the goroutine
+// name, panic value and stack so a recovered pump panic leaves a structured trace
+// instead of only the runtime stderr dump (L9).
+func (m *malgoSource) onPanic(name string, panicValue any, stack []byte) {
+	m.log.ErrorWith().
+		Str("goroutine", name).
+		Interface("panic", panicValue).
+		Bytes("stack", stack).
+		Msg("ft8: capture pump panicked (recovered)")
 }
 
 // pump converts float32 capture batches to int16 and forwards them until ctx
@@ -83,6 +109,9 @@ func (m *malgoSource) pump(ctx context.Context, samples <-chan []float32) {
 	defer close(m.out)
 	defer close(m.done)
 	for {
+		if pumpPanicForTest != nil {
+			pumpPanicForTest()
+		}
 		select {
 		case <-ctx.Done():
 			return
