@@ -387,6 +387,14 @@ func (s *Server) archiveSessionAdif(filename, body string) {
 	// dir reached via an ancestor symlink (exports -> external) returns no warning
 	// (review 88e4fc8e P2). fsperm.Contained resolves the whole path, so an escaping ancestor
 	// symlink is caught here; treat any non-contained/unresolvable result as "skip".
+	//
+	// Residual TOCTOU (review 2356359656b4, accepted): this validates dir at one instant, and
+	// the later chmod + O_EXCL open re-resolve it, so a process able to swap wd/exports
+	// between could redirect the write. That is out of the local-user threat model: the
+	// working directory is created euid-owned 0755 (utils.WorkingDir), so ONLY the operator's
+	// own uid (or root) can create/rename an entry in it — no OTHER local user can win the
+	// race. Hardening the path with openat/O_NOFOLLOW is disproportionate for a best-effort,
+	// optional archive whose read-exposure (the audit's actual finding) is already closed.
 	if contained, cerr := fsperm.Contained(wd, dir); cerr != nil || !contained {
 		s.logger.WarnWith().Str("dir", dir).
 			Msg("session email: ADIF archive dir resolves outside the working directory, skipping archive")
