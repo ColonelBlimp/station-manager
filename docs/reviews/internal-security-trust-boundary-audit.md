@@ -121,6 +121,17 @@ and opt-in pprof through the real handler. The rebound GET must be 403 before th
 runs; normal loopback and configured-specific-IP reads must continue to work. Retain
 the existing Origin tests for unsafe methods.
 
+> ✅ **FIXED (working tree, awaiting operator's push).** `4b500ad9`, operator rulings
+> 2026-08-16. `requireSameOrigin` now runs `hostAllowed` BEFORE the method switch, so the
+> DNS-rebinding destination check applies to every method (GET/HEAD/OPTIONS included) and is
+> host-first (a request that is both rebound and cross-origin is rejected on Host). The Origin
+> check stays unsafe-method-only; a foreign Host gets the same static `cross_origin` /
+> "host not allowed" 403 for any method; Unix sockets (no DNS vector) are unaffected. Tested
+> across loopback / specific-IP / wildcard binds × GET/HEAD/OPTIONS/POST × allowed/rebound
+> Host, asserting 403 AND the route handler did not run, plus a full-chain rebound-GET on
+> `/v1/config` and `/`. Collateral: full-chain GET tests that relied on the default
+> `example.com` Host now set a loopback Host.
+
 ## ST-2 — the embedded control UI is frameable (P1)
 
 The daemon serves the configuration, logbook and consolidated operator SPAs directly
