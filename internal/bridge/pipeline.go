@@ -7,10 +7,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/rigserial"
+	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/serial"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
@@ -428,18 +430,36 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 		Str("driver", def.ID).
 		Msg("bridge: pipeline started; AUTO-mode CAT data flow active")
 
+	// A PIPELINE-scoped cancel so a panicking poll worker can UNWIND this pipeline instance
+	// without cancelling the parent (LC-1). A poll panic is a TRANSIENT pipeline failure,
+	// not a shutdown: the panic policy marks the pipeline failed and cancels pipeCtx, which
+	// unwinds readLoop and the sibling poll; teardown clears activeClient so RigConnected
+	// reads false until the supervisor rebuilds a fresh instance. It never restarts the poll
+	// in place or touches TX alarm state — and normal pipeline teardown still performs its
+	// defensive unkey.
+	pipeCtx, pipeCancel := context.WithCancel(ctx)
+	defer pipeCancel()
+	var pollFailed atomic.Bool
+	pollPanicPolicy := func() {
+		pollFailed.Store(true)
+		pipeCancel()
+	}
+
 	// Start the state-mirror poll loop (ADR 0035) for a rigdef that declares
 	// POLL. It runs for this pipeline instance only; the deferred cancel + wait
 	// (registered so they run BEFORE the client.Close defer above) stop and drain
 	// it before the port closes, so no poll write can hit a closed port.
 	if len(pollBytes) > 0 {
-		pollCtx, pollCancel := context.WithCancel(ctx)
+		pollCtx, pollCancel := context.WithCancel(pipeCtx)
 		var pollWg sync.WaitGroup
 		pollWg.Add(1)
-		go func() {
-			defer pollWg.Done()
-			s.runPollLoop(pollCtx, client, pollBytes)
-		}()
+		safego.GoTrackedPreAdded("bridge.statePoll", s.onPanic,
+			func() {
+				if pollPanicForTest != nil {
+					pollPanicForTest() // test seam: drive the state-poll panic path (LC-1)
+				}
+				s.runPollLoop(pollCtx, client, pollBytes)
+			}, pollPanicPolicy, &pollWg)
 		defer pollWg.Wait()
 		defer pollCancel()
 	}
@@ -448,18 +468,23 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	// mirror loop above (cancel + drain before the port closes), different
 	// keyed-interval policy (it polls THROUGH keyed slots; see meterpoll.go).
 	if len(meterPollBytes) > 0 {
-		mpCtx, mpCancel := context.WithCancel(ctx)
+		mpCtx, mpCancel := context.WithCancel(pipeCtx)
 		var mpWg sync.WaitGroup
 		mpWg.Add(1)
-		go func() {
-			defer mpWg.Done()
-			s.runMeterPollLoop(mpCtx, client, meterPollBytes, civSnapshot)
-		}()
+		safego.GoTrackedPreAdded("bridge.meterPoll", s.onPanic,
+			func() { s.runMeterPollLoop(mpCtx, client, meterPollBytes, civSnapshot) }, pollPanicPolicy, &mpWg)
 		defer mpWg.Wait()
 		defer mpCancel()
 	}
 
-	return s.readLoop(ctx, client, def, initBytes, readBytes)
+	class := s.readLoop(pipeCtx, client, def, initBytes, readBytes)
+	// A poll panic cancelled pipeCtx (not the parent), so readLoop may report
+	// context-cancelled; reclassify as transient so the supervisor reconnects — unless the
+	// PARENT is genuinely shutting down, which stays a clean context-cancelled exit.
+	if ctx.Err() == nil && pollFailed.Load() {
+		return exitTransient
+	}
+	return class
 }
 
 // unkeyOnTeardown is the guaranteed stop for the daemon's OWN exit (F1). When
@@ -614,6 +639,10 @@ func (s *Service) runPollLoop(ctx context.Context, client serial.Client, pollByt
 // supervisorPanicForTest, when set, is invoked at the top of each supervisor loop
 // so a test can drive the panic → safego respawn path. nil (production) is a no-op.
 var supervisorPanicForTest func()
+
+// pollPanicForTest, when set, is invoked at the top of the state-poll worker so a test can
+// drive its panic path (LC-1). nil in production.
+var pollPanicForTest func()
 
 func (s *Service) runSupervisor(ctx context.Context) {
 	// wg.Add/Done is owned by safego.GoTracked at the launch site (L9); do NOT call
