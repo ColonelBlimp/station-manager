@@ -73,6 +73,14 @@ type ReconcileSummary struct {
 	CloudNewer      int    `json:"cloud_newer"`      // cloud rows newer than local (warned, untouched)
 	Truncated       bool   `json:"truncated"`        // maxEnqueuePerRun hit; next run continues
 	Hash            string `json:"local_hash"`       // the local Summary hash (diagnostics)
+
+	// Discovered/Attempted back the run-complete log accounting (L12) and are NOT served on
+	// the wire (json:"-") — L12 is a logging change, so the endpoint's response shape is
+	// unchanged. Discovered = actionable upserts+deletes found BEFORE truncation; Attempted =
+	// the per-list-capped total actually put to the enqueue calls. skipped (attempted −
+	// enqueued) and deferred (discovered − attempted) are derived in logSummary.
+	Discovered int `json:"-"`
+	Attempted  int `json:"-"`
 }
 
 // Reconciler runs the S4 loop for ONE smcloud destination + one local
@@ -150,13 +158,24 @@ func (r *Reconciler) Run(ctx context.Context) {
 }
 
 func (r *Reconciler) logSummary(sum ReconcileSummary, trigger string) {
+	// L12 accounting, an identity the operator can check: discovered = enqueued + skipped +
+	// deferred. enqueued is what was actually queued; skipped are attempted rows the enqueue
+	// absorbed idempotently (already queued); deferred are rows past the per-list cap that
+	// this run never attempted. discovered/enqueued/skipped are always logged; deferred and
+	// the limit only when truncation actually bit (they are zero/uninteresting otherwise).
+	enqueued := sum.EnqueuedUpserts + sum.EnqueuedDeletes
+	skipped := sum.Attempted - enqueued
+
 	ev := r.log.InfoWith().
 		Str("trigger", trigger).
 		Bool("in_sync", sum.InSync).
 		Int("local", sum.LocalCount).
 		Int("cloud", sum.CloudCount).
 		Int("upserts", sum.EnqueuedUpserts).
-		Int("deletes", sum.EnqueuedDeletes)
+		Int("deletes", sum.EnqueuedDeletes).
+		Int("discovered", sum.Discovered).
+		Int("enqueued", enqueued).
+		Int("skipped", skipped)
 	if sum.CloudOnly > 0 {
 		ev = ev.Int("cloud_only", sum.CloudOnly)
 	}
@@ -164,7 +183,10 @@ func (r *Reconciler) logSummary(sum ReconcileSummary, trigger string) {
 		ev = ev.Int("cloud_newer", sum.CloudNewer)
 	}
 	if sum.Truncated {
-		ev = ev.Bool("truncated", true)
+		ev = ev.
+			Bool("truncated", true).
+			Int("deferred", sum.Discovered-sum.Attempted).
+			Int("limit", maxEnqueuePerRun)
 	}
 	ev.Msg("smcloud reconcile: run complete")
 }
@@ -259,12 +281,8 @@ func (r *Reconciler) runOnce(ctx context.Context) (ReconcileSummary, error) {
 			Msg("smcloud reconcile: cloud rows NEWER than local — unexpected in single-writer P1; left untouched")
 	}
 
-	if len(upserts) > maxEnqueuePerRun {
-		upserts, sum.Truncated = upserts[:maxEnqueuePerRun], true
-	}
-	if len(deletes) > maxEnqueuePerRun {
-		deletes, sum.Truncated = deletes[:maxEnqueuePerRun], true
-	}
+	upserts, deletes, sum.Discovered, sum.Attempted, sum.Truncated =
+		truncateBatch(upserts, deletes, maxEnqueuePerRun)
 
 	if len(upserts) > 0 {
 		res, err := r.qso.EnqueueUploads(ctx, r.forwarderName, upserts, true, origin.Reconcile)
@@ -281,6 +299,25 @@ func (r *Reconciler) runOnce(ctx context.Context) (ReconcileSummary, error) {
 		sum.EnqueuedDeletes = res.Enqueued
 	}
 	return sum, nil
+}
+
+// truncateBatch applies the per-list repair cap and returns the capped slices plus the
+// L12 accounting: discovered (the pre-cap total actionable work) and attempted (the per-list
+// post-cap total handed to the enqueue calls). upserts and deletes are capped at `limit`
+// SEPARATELY — a run can therefore attempt up to 2×limit — so attempted is
+// min(len(upserts),limit)+min(len(deletes),limit), NOT min(discovered,limit). Purely
+// accounting: the capping behaviour is exactly what runOnce did inline before (L12 is a
+// logging change), factored out so discovered-before / attempted-after is unit-testable.
+func truncateBatch(upserts, deletes []string, limit int) (u, d []string, discovered, attempted int, truncated bool) {
+	discovered = len(upserts) + len(deletes)
+	if len(upserts) > limit {
+		upserts, truncated = upserts[:limit], true
+	}
+	if len(deletes) > limit {
+		deletes, truncated = deletes[:limit], true
+	}
+	attempted = len(upserts) + len(deletes)
+	return upserts, deletes, discovered, attempted, truncated
 }
 
 // cloudEntry is the cloud manifest reduced to what the diff needs.

@@ -157,3 +157,81 @@ func TestReconcileRunOnce_PartialMutationOnFailureIsLogged(t *testing.T) {
 	require.Contains(t, out, `"upserts":400`, "the mutation counts are the point")
 	require.NotContains(t, out, runCompleteMsg, "a failed run must not claim completion")
 }
+
+// L12-C2 (docs/reviews/internal-codebase-logging-gaps.md): the run-complete record must carry
+// the full accounting, not just enqueued counts + a bare truncated flag. Operator rulings
+// 2026-08-16: discovered = actionable upserts+deletes BEFORE truncation; attempted =
+// min(upserts,limit)+min(deletes,limit) (per-list caps, logging-only — behaviour unchanged);
+// skipped = attempted-enqueued (idempotently absorbed); deferred = discovered-attempted.
+// Log discovered/enqueued/skipped ALWAYS; deferred + limit only when truncated.
+
+// truncateBatch is the per-list cap + its accounting, factored out so the discovered
+// (pre-cap) vs attempted (post-cap) capture is unit-testable without a >5000-row cloud run.
+func TestTruncateBatch_PerListCapAccounting(t *testing.T) {
+	mk := func(n int) []string { return make([]string, n) }
+	cases := []struct {
+		name                          string
+		up, del, limit                int
+		wantDiscovered, wantAttempted int
+		wantTruncated                 bool
+	}{
+		{"neither over", 2, 3, 5, 5, 5, false},
+		{"upserts over", 6, 3, 5, 9, 8, true},  // 5 (capped) + 3
+		{"deletes over", 2, 8, 5, 10, 7, true}, // 2 + 5 (capped)
+		{"both over", 6, 7, 5, 13, 10, true},   // 5 + 5 — per-list, NOT min(discovered,limit)=5
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			u, d, discovered, attempted, truncated := truncateBatch(mk(tc.up), mk(tc.del), tc.limit)
+			require.Equal(t, tc.wantDiscovered, discovered, "discovered = pre-cap total")
+			require.Equal(t, tc.wantAttempted, attempted, "attempted = per-list post-cap total")
+			require.Equal(t, tc.wantTruncated, truncated)
+			require.Equal(t, min(tc.up, tc.limit), len(u), "upserts capped per-list")
+			require.Equal(t, min(tc.del, tc.limit), len(d), "deletes capped per-list")
+		})
+	}
+}
+
+// The observable: RunOnce (via the override seam, so no cloud math) logs the accounting and
+// gates deferred/limit on truncated. A truncated run has skipped>0 AND deferred>0 so both
+// paths differ from the trivial case.
+func TestReconcileRunOnce_LogsFullAccounting(t *testing.T) {
+	t.Run("truncated run carries deferred + limit", func(t *testing.T) {
+		rec, buf := logReconciler(t, stubCloud(t).URL)
+		rec.runOnceOverride = func() (ReconcileSummary, error) {
+			// discovered 8000, attempted 6000 → deferred 2000; enqueued 5800 → skipped 200.
+			return ReconcileSummary{
+				Discovered: 8000, Attempted: 6000,
+				EnqueuedUpserts: 4800, EnqueuedDeletes: 1000, Truncated: true,
+			}, nil
+		}
+		_, err := rec.RunOnce(context.Background(), TriggerManual)
+		require.NoError(t, err)
+
+		out := buf.String()
+		require.Contains(t, out, `"discovered":8000`)
+		require.Contains(t, out, `"enqueued":5800`)
+		require.Contains(t, out, `"skipped":200`, "skipped = attempted - enqueued")
+		require.Contains(t, out, `"deferred":2000`, "deferred = discovered - attempted")
+		require.Contains(t, out, fmt.Sprintf(`"limit":%d`, maxEnqueuePerRun))
+	})
+
+	t.Run("non-truncated run omits deferred + limit", func(t *testing.T) {
+		rec, buf := logReconciler(t, stubCloud(t).URL)
+		rec.runOnceOverride = func() (ReconcileSummary, error) {
+			return ReconcileSummary{
+				Discovered: 300, Attempted: 300,
+				EnqueuedUpserts: 250, EnqueuedDeletes: 50, Truncated: false,
+			}, nil
+		}
+		_, err := rec.RunOnce(context.Background(), TriggerManual)
+		require.NoError(t, err)
+
+		out := buf.String()
+		require.Contains(t, out, `"discovered":300`)
+		require.Contains(t, out, `"enqueued":300`)
+		require.Contains(t, out, `"skipped":0`, "skipped is logged even at zero")
+		require.NotContains(t, out, `"deferred"`, "deferred is only meaningful when truncated")
+		require.NotContains(t, out, `"limit"`, "the cap is only worth logging when it bit")
+	})
+}
