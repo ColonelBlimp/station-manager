@@ -380,11 +380,21 @@ func (s *Server) archiveSessionAdif(filename, body string) {
 			Msg("session email: could not create ADIF archive dir")
 		return
 	}
-	// Tighten a pre-existing dir to 0700 — but symlink-safely: a bare os.Chmod would follow
-	// a symlinked archive dir into an external/shared target (ST-6 review 52b6943a P2).
-	// fsperm never chmods through a symlink or mutates a path outside the working dir; a
-	// non-empty warning (symlink / external / foreign-owned) means the archive dir is not
-	// owner-private, so skip rather than write QSO data there.
+	// AFFIRMATIVE containment: the archive dir must resolve — symlinks and all — to a path
+	// INSIDE the working directory before any QSO data is written there. A bare os.Chmod
+	// would follow a symlinked dir into an external target (review 52b6943a P2), and "no
+	// warning" from SecureApplicationPath is NOT proof of containment — a *private* external
+	// dir reached via an ancestor symlink (exports -> external) returns no warning
+	// (review 88e4fc8e P2). fsperm.Contained resolves the whole path, so an escaping ancestor
+	// symlink is caught here; treat any non-contained/unresolvable result as "skip".
+	if contained, cerr := fsperm.Contained(wd, dir); cerr != nil || !contained {
+		s.logger.WarnWith().Str("dir", dir).
+			Msg("session email: ADIF archive dir resolves outside the working directory, skipping archive")
+		return
+	}
+	// Contained + application-owned: tighten a pre-existing dir to 0700. SecureApplicationPath
+	// re-verifies and never chmods through a symlink; a warning/error here means it could not
+	// be made owner-private, so skip.
 	if warn, err := fsperm.SecureApplicationPath(wd, dir, 0o700); err != nil || warn != "" {
 		s.logger.WarnWith().Err(err).Str("dir", dir).
 			Msg("session email: ADIF archive dir is not owner-private, skipping archive")

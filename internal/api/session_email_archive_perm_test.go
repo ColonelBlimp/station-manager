@@ -73,3 +73,28 @@ func TestArchiveSessionAdif_SkipsSymlinkedDir(t *testing.T) {
 		t.Error("wrote QSO data through a symlinked archive dir into an external target")
 	}
 }
+
+// P2 (codex 88e4fc8e): an ANCESTOR symlink (exports -> external) must also skip. The
+// external target is PRIVATE (0700), so the earlier "no warning" gate would have written
+// QSO data outside the working dir; the affirmative containment check catches it.
+func TestArchiveSessionAdif_SkipsAncestorSymlink(t *testing.T) {
+	srv := testServer(t)
+	wd := srv.cfg.WorkingDir()
+	if wd == "" {
+		t.Skip("no working dir resolved")
+	}
+	external := t.TempDir()
+	if err := os.Chmod(external, 0o700); err != nil { // private → returns no fsperm warning
+		t.Fatal(err)
+	}
+	// wd/exports is a symlink to the external tree; the archive dir is exports/sent-adif.
+	if err := os.Symlink(external, filepath.Join(wd, "exports")); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.archiveSessionAdif("s.adi", "body")
+
+	if _, err := os.Stat(filepath.Join(external, "sent-adif", "s.adi")); err == nil {
+		t.Error("wrote QSO data outside the working directory via an ancestor symlink")
+	}
+}
