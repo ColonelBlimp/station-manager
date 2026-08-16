@@ -353,9 +353,15 @@ func (s *Service) releaseFt8TxChecked(ctx context.Context, reason string, wantGe
 			// Best-effort: PTT is already down, so a failed/un-ACKed restore is
 			// logged, never surfaced (CI-V waits for the ACK; Yaesu fire-and-forget).
 			if err := s.writeKeyedLine(ctx, def, cl, m, "ft8 mode restore"); err != nil {
-				s.logger.WarnWith().Err(err).Str("reason", reason).
+				s.logger.WarnWith().Err(err).Str("reason", reason).Str("phase", "write").
 					Msg("bridge: ft8 mode restore write failed (PTT already down)")
 			}
+		} else {
+			// H1: an encode failure was previously dropped silently, so the rig is left
+			// in FT8 mode. PTT is already down, so surface it (phase=encode, distinct from
+			// a write failure) — log-only, no state or sequencing change.
+			s.logger.WarnWith().Err(err).Str("reason", reason).Str("phase", "encode").
+				Msg("bridge: ft8 mode restore encode failed (PTT already down) — rig left in FT8 mode")
 		}
 	}
 	s.finishFt8Tx()

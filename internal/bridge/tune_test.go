@@ -279,7 +279,11 @@ func TestEncodeTuneRestore(t *testing.T) {
 		{"", 0, ""},                 // nothing known to restore → empty
 	}
 	for _, c := range cases {
-		if got := string(encodeTuneRestore(def, c.mode, c.power)); got != c.want {
+		line, powerErr, modeErr := encodeTuneRestore(def, c.mode, c.power)
+		if powerErr != nil || modeErr != nil {
+			t.Errorf("encodeTuneRestore(%q,%d) unexpected errors: power=%v mode=%v", c.mode, c.power, powerErr, modeErr)
+		}
+		if got := string(line); got != c.want {
 			t.Errorf("encodeTuneRestore(%q,%d) = %q, want %q", c.mode, c.power, got, c.want)
 		}
 	}

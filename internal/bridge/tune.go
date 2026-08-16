@@ -364,11 +364,28 @@ func (s *Service) releaseTuneChecked(ctx context.Context, reason string, wantGen
 	if settle > 0 {
 		time.Sleep(settle)
 	}
-	if restore := encodeTuneRestore(def, restoreMode, restorePower); len(restore) > 0 {
+	restore, powerErr, modeErr := encodeTuneRestore(def, restoreMode, restorePower)
+	// H1: a component that couldn't be ENCODED was previously dropped silently, so the
+	// rig is left at tune power/mode for it. Surface it in ONE Warn (phase=encode, so it's
+	// distinct from a write failure), carrying only the component(s) that failed, and
+	// invalidate the snapshot — it now lies, exactly like the write-failure/skip paths.
+	// The carrier is already down; this changes internal confidence only, never sequencing.
+	if powerErr != nil || modeErr != nil {
+		ev := s.logger.WarnWith().Str("reason", reason).Str("phase", "encode")
+		if powerErr != nil {
+			ev = ev.Str("restore_power_error", powerErr.Error())
+		}
+		if modeErr != nil {
+			ev = ev.Str("restore_mode_error", modeErr.Error())
+		}
+		ev.Msg("bridge: tune restore encode failed — rig left at tune power/mode for the failed component(s)")
+		s.invalidateTuneSnapshot()
+	}
+	if len(restore) > 0 {
 		// Best-effort: the carrier is already down, so a failed/un-ACked restore is
 		// logged, never surfaced (CI-V waits for the ACK; Yaesu fire-and-forget).
 		if err := s.writeKeyedLine(context.Background(), def, cl, restore, "tune restore"); err != nil {
-			s.logger.WarnWith().Err(err).Str("reason", reason).
+			s.logger.WarnWith().Err(err).Str("reason", reason).Str("phase", "write").
 				Msg("bridge: tune mode/power restore write failed (carrier already down)")
 			s.invalidateTuneSnapshot() // same lie as the skip path above
 		}
@@ -644,24 +661,34 @@ func encodeTuneUnkey(def cat.RigDefinition) ([]byte, error) {
 // encodeTuneRestore builds the best-effort post-unkey restore line: restore
 // power, then restore mode. Sent AFTER the carrier is down and the rig has
 // settled back to RX (task #270 — the FTdx10 ignores a mode change during the
-// TX→RX transition tail). Best-effort: the values came from decoded rig pushes
-// so they encode, but a defensive miss is dropped, never surfaced — by the time
-// this runs the carrier is already down, so nothing here is safety-critical. A
-// package func with no Service state so it's trivially unit-testable. Returns
-// an empty slice when there's nothing to restore (unknown mode + power).
-func encodeTuneRestore(def cat.RigDefinition, restoreMode string, restorePower int) []byte {
-	var line []byte
+// TX→RX transition tail). By the time this runs the carrier is already down, so
+// nothing here is safety-critical. A package func with no Service state so it's
+// trivially unit-testable.
+//
+// Each component that ENCODES is appended to the line; each that FAILS to encode
+// (a defensive miss — the values came from decoded rig pushes, so they normally
+// round-trip) is returned as powerErr/modeErr so the caller can surface it once,
+// AFTER the carrier is down (H1). A failure in one component does not suppress the
+// other: the line still carries whatever encoded. Returns an empty line + nil
+// errors when there is nothing to restore (unknown mode + power).
+func encodeTuneRestore(def cat.RigDefinition, restoreMode string, restorePower int) (line []byte, powerErr, modeErr error) {
 	if restorePower > 0 {
-		if p, err := cat.EncodeCommand(def, tunePowerCommand, strconv.Itoa(restorePower)); err == nil {
+		p, err := cat.EncodeCommand(def, tunePowerCommand, strconv.Itoa(restorePower))
+		if err == nil {
 			line = append(line, p...)
+		} else {
+			powerErr = err
 		}
 	}
 	if restoreMode != "" {
-		if m, err := cat.EncodeCommand(def, tuneModeCommand, restoreMode); err == nil {
+		m, err := cat.EncodeCommand(def, tuneModeCommand, restoreMode)
+		if err == nil {
 			line = append(line, m...)
+		} else {
+			modeErr = err
 		}
 	}
-	return line
+	return line, powerErr, modeErr
 }
 
 // TuneSupported reports whether the rigdef can actually run the tune carrier.
