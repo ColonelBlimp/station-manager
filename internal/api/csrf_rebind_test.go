@@ -84,8 +84,8 @@ func TestRequireSameOrigin_HostRejectedBeforeOrigin(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/config", nil)
-	req.Host = "evil.example:8080"                          // rebound Host
-	req.Header.Set("Origin", "https://also-evil.example")   // and cross-origin
+	req.Host = "evil.example:8080"                        // rebound Host
+	req.Header.Set("Origin", "https://also-evil.example") // and cross-origin
 	w := httptest.NewRecorder()
 	srv.requireSameOrigin(next).ServeHTTP(w, req)
 
