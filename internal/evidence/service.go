@@ -17,6 +17,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 	_ "modernc.org/sqlite" // pure-Go driver; works in the CGO-free build
@@ -429,7 +430,7 @@ func (s *Service) Start() error {
 		func() { s.runQueueLossMonitor(lossBaseline) }, true, &s.wg)
 	if s.cfg.Sync {
 		s.syncCh = make(chan struct{}, 1)
-		s.syncClient = &http.Client{Timeout: syncHTTPTimeout}
+		s.syncClient = securehttp.NewClient(syncHTTPTimeout)
 		safego.GoTracked(runCtx, "evidence.sync", s.onPanic, s.syncLoop, true, &s.wg)
 	}
 	s.log.InfoWith().

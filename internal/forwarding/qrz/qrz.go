@@ -167,9 +167,7 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 		return nil, errors.New(op).WithErr(err).
 			WithMsg("endpoint must use https (http allowed only for loopback)")
 	}
-	return newWithEndpoint(creds.APIKey, endpoint, &http.Client{
-		Timeout: DefaultHTTPTimeout,
-	}), nil
+	return newWithEndpoint(creds.APIKey, endpoint, securehttp.NewClient(DefaultHTTPTimeout)), nil
 }
 
 // newWithEndpoint is the package-internal constructor that tests use
@@ -247,10 +245,11 @@ func (f *Forwarder) Submit(
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", UserAgent)
 
-	resp, err := f.client.Do(req)
+	resp, err := securehttp.Do(f.client, req)
 	if err != nil {
 		// No response came back — the host is unreachable (DNS, connection
-		// refused, TLS, timeout, no route, or ctx cancel mid-flight). The
+		// refused, TLS, timeout, no route, or ctx cancel mid-flight), or a
+		// cross-origin redirect was refused (ST-4b, URL-free error). The
 		// QSO is fine; only the link is down. Unreachable → retry forever
 		// so an outage never abandons the QSO (ADR 0038).
 		return forwarding.Result{

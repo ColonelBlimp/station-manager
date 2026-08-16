@@ -13,6 +13,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/cloud/evidencewire"
 	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 )
 
 // §5 sync engine (spot-network §5.1 amendments, operator rulings
@@ -557,7 +558,7 @@ func (s *Service) postBatch(ctx context.Context, rows []syncRow) ([]evidencewire
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+s.cfg.SyncToken)
 	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := s.syncClient.Do(httpReq)
+	resp, err := securehttp.Do(s.syncClient, httpReq)
 	if err != nil {
 		return nil, err
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
 	"github.com/ColonelBlimp/station-manager/internal/lookupdef"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -143,7 +144,7 @@ func (s *Service) Initialize(ctx context.Context) error {
 		return nil
 	}
 	if s.client == nil {
-		s.client = utils.NewHTTPClient(time.Duration(s.Config.HttpTimeoutSec) * time.Second)
+		s.client = securehttp.Harden(utils.NewHTTPClient(time.Duration(s.Config.HttpTimeoutSec) * time.Second))
 	}
 	if err := s.requestAndSetSessionKey(ctx); err != nil {
 		s.LoggerService.WarnWith().Err(err).

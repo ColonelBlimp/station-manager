@@ -46,3 +46,18 @@ func TestNew_TransportPolicy(t *testing.T) {
 		})
 	}
 }
+
+// ST-4b — New installs the same-origin redirect policy on the client it builds.
+func TestNew_InstallsRedirectPolicy(t *testing.T) {
+	creds, err := json.Marshal(map[string]string{"email": "a@b.c", "password": "p", "callsign": "M0ABC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := New(types.ForwarderConfig{Name: "cl", Type: Type, Credentials: creds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.(*Forwarder).client.CheckRedirect == nil {
+		t.Error("New did not install the same-origin redirect policy (ST-4b)")
+	}
+}

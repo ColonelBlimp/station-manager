@@ -34,6 +34,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
 	"github.com/ColonelBlimp/station-manager/internal/lookupdef"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -196,7 +197,7 @@ func (s *Service) Initialize(ctx context.Context) error {
 		}
 
 		if s.client == nil && s.Config.Enabled {
-			s.client = utils.NewHTTPClient(time.Duration(s.Config.HttpTimeoutSec) * time.Second)
+			s.client = securehttp.Harden(utils.NewHTTPClient(time.Duration(s.Config.HttpTimeoutSec) * time.Second))
 		}
 
 		if s.Config.Enabled {
@@ -340,9 +341,10 @@ func (s *Service) lookupOnce(ctx context.Context, callsign string) (types.Contac
 	req.Header.Set("User-Agent", s.UserAgent)
 	req.Header.Set("Accept", "application/xml")
 
-	resp, err := s.client.Do(req)
+	resp, err := securehttp.Do(s.client, req)
 	if err != nil {
 		// scrub: the transport *url.Error embeds the URL incl. the session key (s=).
+		// A refused cross-origin redirect is already URL-free (ST-4b).
 		return types.ContactedStation{}, errors.New(op).WithErr(scrubURLError(err)).WithMsg("failed to perform HTTP GET request")
 	}
 	defer func() { _ = resp.Body.Close() }()

@@ -10,9 +10,12 @@ package smcloud
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -94,5 +97,68 @@ func TestExport_FailsBeforeRequest(t *testing.T) {
 		t.Error("CloudLogbookName accepted an unacknowledged remote-http config")
 	} else if strings.Contains(err.Error(), leakHost) {
 		t.Errorf("A9: CloudLogbookName error leaked the URL host: %q", err.Error())
+	}
+}
+
+// ST-4b — a cross-origin redirect from the configured origin is refused: the foreign
+// sink receives ZERO requests, the token never leaves the origin, and the Result error
+// carries no URL or credential. Covers the Submit (bearer PUT) and FetchExport paths.
+func redirectPair(t *testing.T, token string) (originURL string, foreignHits *int) {
+	t.Helper()
+	hits := 0
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(foreign.Close)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, foreign.URL+r.URL.Path, http.StatusFound) // cross-port → cross-origin
+	}))
+	t.Cleanup(origin.Close)
+	return origin.URL, &hits
+}
+
+func TestSubmit_RefusesCrossOriginRedirect(t *testing.T) {
+	const token = "BEARER-SENTINEL-xyz"
+	originURL, foreignHits := redirectPair(t, token)
+	creds, err := json.Marshal(map[string]string{"url": originURL, "token": token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := New(types.ForwarderConfig{Name: "cloud", Type: Type, Credentials: creds})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	res := f.Submit(context.Background(), testQso("uuid-redir"), action.Insert, "")
+	if res.Err == nil {
+		t.Fatal("Submit followed a cross-origin redirect; want a failure")
+	}
+	if *foreignHits != 0 {
+		t.Errorf("foreign sink received %d requests, want 0", *foreignHits)
+	}
+	if s := res.Err.Error(); strings.Contains(s, token) || strings.Contains(s, "127.0.0.1") {
+		t.Errorf("Result error leaked URL/token: %q", s)
+	}
+}
+
+func TestFetchExport_RefusesCrossOriginRedirect(t *testing.T) {
+	const token = "BEARER-SENTINEL-exp"
+	originURL, foreignHits := redirectPair(t, token)
+	creds, err := json.Marshal(map[string]string{"url": originURL, "token": token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc := types.ForwarderConfig{Name: "cloud", Type: Type, Credentials: creds}
+
+	_, err = FetchExport(context.Background(), fc)
+	if err == nil {
+		t.Fatal("FetchExport followed a cross-origin redirect; want a failure")
+	}
+	if *foreignHits != 0 {
+		t.Errorf("foreign sink received %d requests, want 0", *foreignHits)
+	}
+	if s := err.Error(); strings.Contains(s, token) || strings.Contains(s, "127.0.0.1") {
+		t.Errorf("FetchExport error leaked URL/token: %q", s)
 	}
 }

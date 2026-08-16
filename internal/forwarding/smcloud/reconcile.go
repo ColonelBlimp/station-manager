@@ -15,6 +15,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -127,7 +128,7 @@ func NewReconciler(fc types.ForwarderConfig, localLogbookID int64,
 		db:            db,
 		qso:           qso,
 		log:           log,
-		client:        &http.Client{Timeout: DefaultHTTPTimeout},
+		client:        securehttp.NewClient(DefaultHTTPTimeout),
 		baseURL:       strings.TrimSuffix(fwd.putURL, "/v1/qsos"),
 		token:         fwd.token,
 		cloudLogbook:  fwd.logbook,
@@ -402,7 +403,7 @@ func (r *Reconciler) get(ctx context.Context, path string, out any) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+r.token)
 	req.Header.Set("User-Agent", UserAgent)
-	resp, err := r.client.Do(req)
+	resp, err := securehttp.Do(r.client, req)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsgf("GET %s", path)
 	}

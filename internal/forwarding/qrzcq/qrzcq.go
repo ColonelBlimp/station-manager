@@ -144,7 +144,7 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 			WithMsg("endpoint must use https (http allowed only for loopback)")
 	}
 	fwd := newWithEndpoint(creds.Call, creds.Key, endpoint,
-		utils.NewHTTPClient(DefaultHTTPTimeout), DefaultSubmitInterval)
+		securehttp.Harden(utils.NewHTTPClient(DefaultHTTPTimeout)), DefaultSubmitInterval)
 	fwd.pacer = accountSubmitPacers.ForAccount(creds.Call)
 	return fwd, nil
 }
@@ -209,7 +209,7 @@ func (f *Forwarder) Submit(
 	if err := f.pacer.Wait(ctx); err != nil {
 		return forwarding.Result{Outcome: forwarding.OutcomeTransient, Err: err}
 	}
-	resp, err := f.client.Do(req)
+	resp, err := securehttp.Do(f.client, req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return forwarding.Result{Outcome: forwarding.OutcomeTransient, Err: ctx.Err()}

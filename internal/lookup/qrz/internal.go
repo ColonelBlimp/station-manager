@@ -95,9 +95,10 @@ func (s *Service) requestAndSetSessionKey(ctx context.Context) error {
 	req.Header.Set("User-Agent", s.UserAgent)
 	req.Header.Set("Accept", "application/xml")
 
-	resp, err := s.client.Do(req)
+	resp, err := securehttp.Do(s.client, req)
 	if err != nil {
 		// scrub: the transport *url.Error embeds the full auth URL incl. the password.
+		// A refused cross-origin redirect is already URL-free (ST-4b).
 		return errors.New(op).WithErr(scrubURLError(err)).WithMsg("failed to perform HTTP GET request")
 	}
 	defer func() { _ = resp.Body.Close() }()

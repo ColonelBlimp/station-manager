@@ -169,7 +169,7 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 		putURL:  strings.TrimRight(base, "/") + "/v1/qsos",
 		token:   creds.Token,
 		logbook: logbook,
-		client:  &http.Client{Timeout: DefaultHTTPTimeout},
+		client:  securehttp.NewClient(DefaultHTTPTimeout),
 	}, nil
 }
 
@@ -299,9 +299,10 @@ func (f *Forwarder) Submit(
 	req.Header.Set("Authorization", "Bearer "+f.token)
 	req.Header.Set("User-Agent", UserAgent)
 
-	resp, err := f.client.Do(req)
+	resp, err := securehttp.Do(f.client, req)
 	if err != nil {
-		// No response at all — DNS, refused, TLS, timeout. The QSO is fine;
+		// No response at all — DNS, refused, TLS, timeout, or a refused
+		// cross-origin redirect (ST-4b, URL-free error). The QSO is fine;
 		// only the link is down. Unreachable → the worker retries forever
 		// (ADR 0038) — the whole point of a backup on a flaky link.
 		return forwarding.Result{

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -64,8 +65,8 @@ func FetchExport(ctx context.Context, fc types.ForwarderConfig) (*Export, error)
 
 	// A full export on a slow link outlasts the forwarder's per-QSO timeout;
 	// the caller's ctx is the real bound.
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
+	client := securehttp.NewClient(10 * time.Minute)
+	resp, err := securehttp.Do(client, req)
 	if err != nil {
 		return nil, errors.New(op).WithErr(err).WithMsg("GET /v1/export")
 	}

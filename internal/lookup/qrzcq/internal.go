@@ -109,7 +109,7 @@ func (s *Service) getXML(ctx context.Context, u *url.URL) ([]byte, error) {
 	}
 	req.Header.Set("User-Agent", s.UserAgent)
 	req.Header.Set("Accept", "application/xml")
-	resp, err := s.client.Do(req)
+	resp, err := securehttp.Do(s.client, req)
 	if err != nil {
 		return nil, errors.New(op).WithErr(scrubURLError(err)).WithMsg("failed to perform HTTP GET request")
 	}

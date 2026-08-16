@@ -17,9 +17,11 @@ package securehttp
 
 import (
 	"errors"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // URL-free sentinels. Callers add field/op context; tests can errors.Is on them.
@@ -58,6 +60,98 @@ func IsInsecureRemote(rawURL string) bool {
 		return false
 	}
 	return u.Scheme == "http" && !isLoopbackHost(u.Hostname())
+}
+
+// ---- redirect policy (ST-4b) ------------------------------------------------
+
+// URL-free redirect-refusal sentinels. A refused redirect must not leak the target,
+// which the standard library's *url.Error wrapper would otherwise embed (incl. its
+// query, a credential-bearing component). Callers reach these via Do, not client.Do.
+var (
+	// ErrRedirectRefused — a redirect left the original request's origin.
+	ErrRedirectRefused = errors.New("refused a cross-origin redirect")
+	// ErrTooManyRedirects — the same-origin chain exceeded the hop cap.
+	ErrTooManyRedirects = errors.New("stopped after too many redirects")
+)
+
+// maxRedirects mirrors net/http's default cap. Setting our own CheckRedirect
+// REPLACES that cap, so we re-impose it — otherwise a same-origin redirect loop
+// would spin until the client timeout.
+const maxRedirects = 10
+
+// SameOriginRedirect is an http.Client.CheckRedirect that follows a redirect ONLY
+// when its target shares the ORIGINAL request's origin — same scheme, same host
+// (case-insensitive), and same effective port (an explicit default port equals the
+// implicit one). Relative redirects resolve within that origin and so are allowed.
+// Every hop is compared against via[0] (the original request), not the preceding
+// hop, so a chain that steps origin -> origin -> foreign is refused at the foreign
+// hop. Downgrade (https->http), upgrade, cross-host, cross-port and subdomain
+// redirects are all refused. Errors are URL-free (Do replaces the *url.Error wrap).
+func SameOriginRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) == 0 {
+		return nil
+	}
+	if len(via) >= maxRedirects {
+		return ErrTooManyRedirects
+	}
+	if !sameOrigin(via[0].URL, req.URL) {
+		return ErrRedirectRefused
+	}
+	return nil
+}
+
+// Harden installs the same-origin redirect policy on c and returns it, preserving
+// its Transport, Timeout, and every other field. Use it on any client that carries
+// credentials upstream (ST-4b).
+func Harden(c *http.Client) *http.Client {
+	c.CheckRedirect = SameOriginRedirect
+	return c
+}
+
+// NewClient returns a credential-safe client: the given timeout plus the same-origin
+// redirect policy. A convenience over Harden(&http.Client{Timeout: ...}).
+func NewClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, CheckRedirect: SameOriginRedirect}
+}
+
+// Do runs client.Do(req) and, on a redirect refusal, replaces the error with a
+// URL-free sentinel. net/http wraps a CheckRedirect error in a *url.Error whose
+// message embeds the redirect target URL (including its query), so sanitizing only
+// the value returned by CheckRedirect is insufficient — the wrapper leaks it. Any
+// credentialed client MUST issue requests through Do, never client.Do directly.
+func Do(client *http.Client, req *http.Request) (*http.Response, error) {
+	resp, err := client.Do(req)
+	if err == nil {
+		return resp, nil
+	}
+	switch {
+	case errors.Is(err, ErrRedirectRefused):
+		return nil, ErrRedirectRefused
+	case errors.Is(err, ErrTooManyRedirects):
+		return nil, ErrTooManyRedirects
+	}
+	return resp, err
+}
+
+// sameOrigin compares scheme + host + effective port. Non-redirect transport errors
+// (dial/TLS/timeout) are out of ST-4b scope and pass through Do unchanged.
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
 }
 
 // isLoopbackHost matches an exact "localhost" or a loopback IP literal. netip.ParseAddr
