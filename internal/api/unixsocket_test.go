@@ -32,13 +32,14 @@ func privSocketDir(t *testing.T) string {
 
 // AC-5.1: the bound socket is mode 0600 under every umask (000/002/022/077).
 func TestBindListener_UnixSocketOwnerOnlyUnderAnyUmask(t *testing.T) {
-	skipIfNamespacedRoot(t) // positive bind test: needs a root/euid-owned ancestry
 	for _, um := range []int{0o000, 0o002, 0o022, 0o077} {
 		t.Run(fmt.Sprintf("umask_%04o", um), func(t *testing.T) {
 			old := syscall.Umask(um)
 			defer syscall.Umask(old)
 
-			sock := filepath.Join(privSocketDir(t), "s")
+			dir := privSocketDir(t)          // a 0700 euid-owned parent
+			skipIfUnbindableAncestry(t, dir) // positive bind test: needs a trusted ancestry
+			sock := filepath.Join(dir, "s")
 			s := &Server{protocol: "unix"}
 
 			ln, err := s.bindListener(sock)
@@ -157,22 +158,18 @@ func TestAncestorOwnerTrusted_StrictRootOrEuid(t *testing.T) {
 	}
 }
 
-// skipIfNamespacedRoot skips a real-filesystem POSITIVE bind/lifecycle test when "/" is
-// owned by neither root nor the daemon euid — the rootless-namespace case where host-owned
-// ancestors appear as the overflow uid and the strict ancestry check (correctly) refuses to
-// bind. The security rule keeps full coverage via the pure-policy and negative tests, which
-// are NOT skipped (operator ruling 2026-08-16).
-func skipIfNamespacedRoot(t *testing.T) {
+// skipIfUnbindableAncestry skips a real-filesystem POSITIVE bind/lifecycle test when the
+// ACTUAL socket-directory ancestry is not root/euid-owned — the rootless-namespace case
+// where a host-owned ancestor (/, /tmp, $TMPDIR, …) appears under the overflow uid and the
+// strict ancestry check correctly refuses to bind. It applies the production rule to the
+// real path rather than assuming "/" stands in for the whole chain (codex 5b86f93b P2). The
+// security rule keeps full coverage via the pure-policy and negative tests, which are NOT
+// skipped (operator ruling 2026-08-16).
+func skipIfUnbindableAncestry(t *testing.T, socketDir string) {
 	t.Helper()
-	fi, err := os.Lstat("/")
-	if err != nil {
-		t.Fatalf("lstat /: %v", err)
-	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		t.Skip("cannot determine / owner on this platform")
-	}
-	if uid := int(st.Uid); uid != 0 && uid != os.Geteuid() {
-		t.Skipf("/ is owned by uid %d (not root/euid) — a namespaced env where Unix sockets are unavailable", uid)
+	// socketDir is the (0700, euid-owned) immediate parent; validate what lies above it,
+	// mirroring prepareUnixSocketParent.
+	if err := validateSocketAncestry(filepath.Dir(socketDir)); err != nil {
+		t.Skipf("socket-directory ancestry is not root/euid-owned here (namespaced env): %v", err)
 	}
 }
