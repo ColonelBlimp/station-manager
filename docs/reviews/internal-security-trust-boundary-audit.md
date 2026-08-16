@@ -173,6 +173,16 @@ Assert the frame-denial headers on `/app/`, `/config/`, `/logbook/`, `/manual/`,
 redirects and SPA fallback routes. Test both HTML entry documents and assets so a
 future handler replacement cannot silently remove the outer boundary.
 
+> ✅ **FIXED (working tree, awaiting operator's push).** `e594cce2`, operator rulings
+> 2026-08-16. A single OUTERMOST `securityHeaders` middleware (outside `logRequests` /
+> `requireSameOrigin` / `recoverPanic`) sets, via `Header().Set` before the handler runs, on
+> EVERY response — API, SPA, redirects, ST-1 403s, recovered-panic 500s, SSE, opt-in pprof:
+> `Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options: DENY`,
+> `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`. CSP is `frame-ancestors`
+> only; a full script/style CSP is separate work. Tested across the root redirect (unfollowed),
+> a SPA document, a SPA fallback, a real static JS asset, a representative API response, and an
+> ST-1 rebound 403.
+
 ## ST-3 — non-loopback TCP is an unauthenticated, unencrypted control plane (P1)
 
 The configuration layer explicitly knows the risk. A non-loopback bind produces only
