@@ -93,6 +93,26 @@ Inject a panic into each worker and assert a named structured panic record, bala
 WaitGroup accounting, no state mutation after Stop, and the appropriate safe state.
 For unkey workers, assert `TxReady()==false` until positive idle evidence arrives.
 
+> ✅ **FIXED (committed on main).** Two commits (operator rulings 2026-08-16, reviewed
+> without the pipeline changes mixed into the TX-worker ones):
+> - **`b627ac30`** — the three RF-safety workers (defensive unkey, TX-alarm probe,
+>   stuck-TX unkey). New `safego.GoTrackedPreAdded` (caller pre-`Add`s; one attempt;
+>   `onPanic` + a per-worker safe-state policy even if the handler faults; no auto-respawn).
+>   Lock-safety refactor FIRST: the `keyMu` sections are scoped closures with deferred
+>   unlocks so a recovered panic can't deadlock teardown. Policies: defensive unkey latches
+>   `TxAlarmUnconfirmed`+`txUncertain` (`TxReady()==false`), no blind rerun; the two bounded
+>   workers retain the alarm/TX block and resume only under the same generation, service
+>   context, captured client identity and remaining budget — budget consumed UP FRONT so a
+>   deterministic panic can't loop.
+> - **`1c59822b`** — the two poll workers under a pipeline-scoped context; their panic policy
+>   marks the pipeline failed and cancels that instance (never restarting the poll in place
+>   or touching TX alarm state), so `readLoop` unwinds, `RigConnected` reads false, and the
+>   exit reclassifies to transient → the supervisor reconnects a fresh pipeline.
+>
+> Panic-injection tests per worker (named record, `TxReady()==false` + durable alarm for the
+> TX workers, budget-consumed-not-looped for the bounded ones, pipeline reconnect for the
+> poll workers, clean `Stop`); each reversion-proofed; full bridge suite `-race` green.
+
 ## LC-2 — the graceful-shutdown deadline starts too late (P2)
 
 `server.shutdown_timeout_sec` is documented as the graceful-shutdown deadline, but
