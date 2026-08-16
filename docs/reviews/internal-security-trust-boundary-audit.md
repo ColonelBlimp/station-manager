@@ -325,6 +325,30 @@ relative same-origin redirects; 301/302/303/307/308; and both body-carried crede
 and Authorization headers. A refused redirect's sink must receive no request, and no
 error/log may contain the dummy credential.
 
+> ✅ **FIXED (committed on main).** ST-4a `cf269984` + ST-4b `63322da3`, operator rulings
+> 2026-08-16. Centralized in a new **`internal/securehttp`** package, applied to all nine
+> credential-bearing clients (qrz/qrzcq/clublog/smcloud forwarders, smcloud reconcile +
+> export, evidence sync, qrz + qrzcq lookups).
+> - **ST-4a — transport:** a credentialed URL must be https, or plain http only to a
+>   loopback host (`netip`, so zoned `::1` counts); a remote-http endpoint fails
+>   construction (daemon refuses to start / PUT 400), URL-free error. The QRZ + QRZCQ
+>   lookup predicates were folded into the shared policy. SM Cloud's LAN-staging cleartext
+>   is acknowledged by a **config-file-only** `forwarders[].allow_insecure_http`, valid for
+>   the `smcloud` type only (rejected elsewhere, not ignored), not on the wire surface,
+>   preserved by `mergeForwarders`; the daemon logs a standing startup warning naming the
+>   forwarder. Docs reconciled (`config.md`, `smcloud-deploy.md`).
+> - **ST-4b — redirects:** credentialed clients follow only **same-origin** redirects
+>   (scheme+host+effective-port vs the *original* origin; relative allowed; downgrade,
+>   upgrade, cross-host, cross-port, subdomain refused; uniform across 301/302/303/307/308;
+>   refused target gets zero requests). `securehttp.Do` replaces net/http's `*url.Error`
+>   wrapper — which embeds the redirect target incl. query — with a URL-free sentinel, so a
+>   refusal never leaks the target. Reversion-proofed both wiring halves (Harden + Do).
+>
+> Scope note (operator, 2026-08-16): pre-existing runtime dial/TLS/timeout errors were
+> **deliberately out of scope** for this pass — if a later review proves an initial-request
+> runtime error can expose query credentials or userinfo, it is a **separate** sanitization
+> finding, not a gate for ST-4.
+
 ## ST-5 — Unix-socket authorization depends on ambient umask (P2)
 
 The design says filesystem permissions on the Unix socket are the entire authorization
