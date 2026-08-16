@@ -30,7 +30,9 @@ import (
 //	    still there when the old server's Shutdown runs again — the one
 //	    observable that fails while any unconditional remove exists.
 func TestShutdown_DoesNotUnlinkASuccessorsSocket(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "smd.sock")
+	// A "run" subdir the listener creates 0700 — t.TempDir's own dir is 0755, which
+	// ST-5's owner-private-parent check (correctly) refuses as a socket parent.
+	sock := filepath.Join(t.TempDir(), "run", "smd.sock")
 
 	srv := testServerWithCfg(t, func(cfg *config.Config) {
 		cfg.Server.Protocol = "unix"

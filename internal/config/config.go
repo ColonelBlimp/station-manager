@@ -1085,13 +1085,17 @@ func applyDefaults(cfg *Config, baseDir string) {
 	if cfg.SocketPath == "" {
 		// Default address for each protocol. localhost-only TCP so
 		// the SPA's Vite dev proxy ("/v1" → http://localhost:8080)
-		// reaches a daemon out of the box; the unix path is the
-		// fallback for operators who flipped Protocol back.
+		// reaches a daemon out of the box; the unix path resolves to an
+		// owner-private runtime directory (ST-5) — NOT /tmp, which is
+		// world-writable and cannot be the authorization boundary.
 		if cfg.Server.Protocol == "tcp" {
 			cfg.SocketPath = "127.0.0.1:8080"
-		} else {
-			cfg.SocketPath = filepath.Join(os.TempDir(), "smd.sock")
+		} else if p, err := defaultUnixSocketPath(); err == nil {
+			cfg.SocketPath = p
 		}
+		// On resolution failure the path is left empty; validateServer turns a
+		// unix listener with no resolvable private path into a fatal finding
+		// rather than silently falling back to a shared directory.
 	}
 	if cfg.Server.ReadHeaderTimeoutSec == 0 {
 		// Slow-headers DoS guard (review M3). Bounds the pre-handler
@@ -1492,6 +1496,27 @@ func jsonFieldsOf(t reflect.Type) map[string]reflect.Type {
 		out[name] = f.Type
 	}
 	return out
+}
+
+// defaultUnixSocketPath resolves the private default location for a Unix listener
+// socket (ST-5): $XDG_RUNTIME_DIR/station-manager/smd.sock, else
+// $XDG_STATE_HOME/station-manager/run/smd.sock, else
+// $HOME/.local/state/station-manager/run/smd.sock. It NEVER returns a path under a
+// world-writable directory like /tmp — a socket there could not be the authorization
+// boundary. Returns an error when none of the bases resolve; validateServer surfaces
+// that as a fatal finding rather than letting the daemon fall back to a shared dir.
+func defaultUnixSocketPath() (string, error) {
+	if x := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR")); x != "" {
+		return filepath.Join(x, "station-manager", "smd.sock"), nil
+	}
+	if x := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); x != "" {
+		return filepath.Join(x, "station-manager", "run", "smd.sock"), nil
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".local", "state", "station-manager", "run", "smd.sock"), nil
+	}
+	return "", fmt.Errorf("no private runtime directory available: set $XDG_RUNTIME_DIR, " +
+		"$XDG_STATE_HOME or $HOME, or set server.socket_path explicitly")
 }
 
 // isLoopbackBind reports whether the host portion of a host:port

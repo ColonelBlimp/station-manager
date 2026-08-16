@@ -65,7 +65,10 @@ Original non-consumers:
 > socket / acknowledged non-loopback) see `config.md` §5.1 and **ADR 0069**. ST-3a closed
 > the *silent* exposure (a non-loopback bind is now startup-fatal without
 > `server.allow_insecure_network`); authenticated LAN access — a real auth layer — is
-> **ST-3b**, still an open decision.
+> **ST-3b**, still an open decision. For the `protocol=unix` deployment, the
+> "permissions ARE the auth" claim below is now *enforced* rather than umask-dependent:
+> **ST-5** binds the socket `0600` under an owner-private parent (default under
+> `$XDG_RUNTIME_DIR`, never `/tmp`) and fails startup otherwise — see config.md §5.2.
 
 **HTTP over a Unix domain socket.** The daemon binds its HTTP server to a Unix domain socket at a path read from config. Filesystem permissions on the socket are the authorization mechanism — any process that can open the socket is treated as authorized. For the single-user desktop scenario this is equivalent to "authenticated as the user running the daemon," which is exactly the guarantee we need.
 

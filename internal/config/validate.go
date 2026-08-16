@@ -121,6 +121,15 @@ func validateServer(cfg Config) []Finding {
 			Message: fmt.Sprintf("server.protocol %q must be \"tcp\" or \"unix\"", s.Protocol)})
 	}
 
+	// A unix listener with no resolvable private socket path is fatal (ST-5): applyDefaults
+	// leaves SocketPath empty when it cannot resolve a private runtime directory, and the
+	// daemon must not fall back to a world-writable location like /tmp.
+	if s.Protocol == "unix" && cfg.SocketPath == "" {
+		out = append(out, Finding{Field: "socket_path", Code: "unix_socket_unresolved",
+			Message: "server.protocol=unix but no private socket_path could be resolved; set " +
+				"server.socket_path explicitly, or set $XDG_RUNTIME_DIR / $XDG_STATE_HOME / $HOME"})
+	}
+
 	// Positive-required integer knobs. Each maps a config path to its value; the
 	// loop keeps the rule list readable and the messages uniform.
 	type posRule struct {

@@ -475,31 +475,9 @@ func retuneStopper(stops ...func() error) func() error {
 func (s *Server) ListenAndServe(socketPath string) error {
 	const op errors.Op = "api.ListenAndServe"
 
-	// For Unix sockets, remove a stale socket file before binding — but only if
-	// the existing path is actually a socket. A typo'd socket_path aimed at a
-	// regular file the daemon can delete (config.json, an ADIF export, another
-	// user file) would otherwise be unlinked on startup, which is destructive
-	// since the same config can hold secrets. lstat first; refuse to start if the
-	// path exists as anything other than a socket (review 2026-06-19 H1).
-	if s.protocol == "unix" {
-		fi, statErr := os.Lstat(socketPath)
-		switch {
-		case statErr != nil && !os.IsNotExist(statErr):
-			return errors.New(op).WithErr(statErr).WithMsgf("inspecting socket path %s", socketPath)
-		case statErr == nil && fi.Mode()&os.ModeSocket == 0:
-			return errors.New(op).WithMsgf(
-				"socket_path %s exists and is not a socket (refusing to remove it); "+
-					"point socket_path at a free path or remove the file by hand", socketPath)
-		case statErr == nil:
-			if err := os.Remove(socketPath); err != nil {
-				return errors.New(op).WithErr(err).WithMsg("removing stale socket")
-			}
-		}
-	}
-
-	ln, err := net.Listen(s.protocol, socketPath)
+	ln, err := s.bindListener(socketPath)
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("binding %s listener on %s", s.protocol, socketPath)
+		return err
 	}
 	s.listenerMu.Lock()
 	s.listener = ln
@@ -514,6 +492,63 @@ func (s *Server) ListenAndServe(socketPath string) error {
 		return errors.New(op).WithErr(err)
 	}
 
+	return nil
+}
+
+// bindListener binds the network listener for s.protocol, hardening a Unix socket so
+// filesystem permissions are a real authorization boundary (ST-5). It is separated from
+// ListenAndServe (which then Serves) so the bind + permission guarantees are testable
+// without a live server. For unix it validates/creates an owner-private parent BEFORE
+// binding, removes a stale socket, binds, then chmods the socket 0600 and verifies —
+// unlinking and refusing to serve if the guarantee cannot be established.
+func (s *Server) bindListener(socketPath string) (net.Listener, error) {
+	const op errors.Op = "api.bindListener"
+
+	if s.protocol == "unix" {
+		if err := prepareUnixSocketParent(socketPath); err != nil {
+			return nil, errors.New(op).WithErr(err).WithMsgf(
+				"socket parent for %s is not owner-private", socketPath)
+		}
+		if err := s.removeStaleSocket(socketPath, op); err != nil {
+			return nil, err
+		}
+	}
+
+	ln, err := net.Listen(s.protocol, socketPath)
+	if err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsgf("binding %s listener on %s", s.protocol, socketPath)
+	}
+
+	if s.protocol == "unix" {
+		if err := secureUnixSocket(socketPath); err != nil {
+			_ = ln.Close()
+			_ = os.Remove(socketPath)
+			return nil, errors.New(op).WithErr(err).WithMsgf("securing socket %s", socketPath)
+		}
+	}
+	return ln, nil
+}
+
+// removeStaleSocket clears a leftover socket at socketPath before binding — but only
+// if the existing path is actually a socket. A typo'd socket_path aimed at a regular
+// file the daemon can delete (config.json, an ADIF export, another user file) would
+// otherwise be unlinked on startup, which is destructive since the same config can
+// hold secrets. lstat first; refuse to start if the path exists as anything other than
+// a socket (review 2026-06-19 H1).
+func (s *Server) removeStaleSocket(socketPath string, op errors.Op) error {
+	fi, statErr := os.Lstat(socketPath)
+	switch {
+	case statErr != nil && !os.IsNotExist(statErr):
+		return errors.New(op).WithErr(statErr).WithMsgf("inspecting socket path %s", socketPath)
+	case statErr == nil && fi.Mode()&os.ModeSocket == 0:
+		return errors.New(op).WithMsgf(
+			"socket_path %s exists and is not a socket (refusing to remove it); "+
+				"point socket_path at a free path or remove the file by hand", socketPath)
+	case statErr == nil:
+		if err := os.Remove(socketPath); err != nil {
+			return errors.New(op).WithErr(err).WithMsg("removing stale socket")
+		}
+	}
 	return nil
 }
 

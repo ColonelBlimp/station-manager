@@ -268,7 +268,7 @@ const is a *ceiling*, not a default, and must stay non-overridable.
 | `defaultRefreshMaxInFlight` | 4 | `lookup.refresh_max_in_flight` (plain int; `0` = package default in both the accessor and the defaults pass, so it has no absent-vs-zero conflict) |
 | `defaultLookupHTTPTimeoutSec` | 10 | `lookup.hamnut.timeout_sec`, `lookup.chain[].timeout_sec` |
 | `defaultSmtpPort` / `defaultSmtpTimeoutSec` | 587 / 30 | `smtp.port` / `smtp.timeout_sec` |
-| (inline) protocol / socket | `tcp` / `127.0.0.1:8080` (tcp) or `$TMP/smd.sock` | `server.protocol` / `socket_path` |
+| (inline) protocol / socket | `tcp` / `127.0.0.1:8080` (tcp) or an owner-private runtime path (unix — see §5.2) | `server.protocol` / `socket_path` |
 | (inline) datastore driver / path | `sqlite` / `${DataDir}/db/station-manager.db` | `datastore.driver` / `path` |
 | (inline) logging level / dir | `info` / `log` | `logging.level` / `rel_log_file_dir` |
 
@@ -535,6 +535,27 @@ the `/v1/config` wire surface (server-bind settings never were on it), so the
 acknowledgement cannot be set by a remote API client. This is the ST-3a **migration
 acknowledgement**, not the secure-remote topology — authenticated LAN access is
 **ST-3b**, an open decision (ADR 0069).
+
+### 5.2 Unix socket permissions (ST-5, 2026-08-16)
+
+For `protocol=unix`, filesystem permissions ARE the authorization, so the daemon makes
+them a real boundary rather than leaving them to the ambient umask (`net.Listen` would
+otherwise create the socket `0777 & ^umask`):
+
+- **Default path** is an owner-private runtime location, resolved in order:
+  `$XDG_RUNTIME_DIR/station-manager/smd.sock`, else
+  `$XDG_STATE_HOME/station-manager/run/smd.sock`, else
+  `$HOME/.local/state/station-manager/run/smd.sock`. It is **never** `/tmp` (world-writable
+  and useless as an authorization boundary); if none of those bases resolve and no
+  `socket_path` is set, startup is **fatal** (`unix_socket_unresolved`).
+- **Parent directory:** the socket's immediate parent must be euid-owned, a real directory
+  (not a symlink), and inaccessible to group/other (`0700`). The daemon creates a missing
+  default parent `0700`; an existing operator-supplied parent that is not owner-private is
+  **fatal** (it is never loosened or mutated). Validated *before* bind, closing the race
+  between `net.Listen` creating the socket and the subsequent chmod.
+- **Socket:** after bind and before serving, the socket is chmod'd `0600` and verified
+  (is-socket, euid-owned, mode `0600`); on any failure the socket is unlinked and startup
+  fails.
 
 ## 6. Lifecycle & dynamics
 
