@@ -400,6 +400,58 @@ func TestAttemptLogging_StampHookPanicDoesNotSuppressTheAttemptRecord(t *testing
 	}
 }
 
+// L12-C1 (docs/reviews/internal-codebase-logging-gaps.md): a forwarder can carry an
+// outcome_detail to distinguish two successes that share OutcomeSuccess — SM Cloud's `stored`
+// (applied) vs `cloud_newer_noop` (cloud already held a newer copy). The record shows the
+// detail while the outcome stays success and the row is marked uploaded; a forwarder that sets
+// no detail (QRZ, ClubLog) omits the field entirely. persistOutcome is driven directly with a
+// Result carrying the detail, on a real claimed row so the disposition is `persisted`.
+func TestAttemptLogging_OutcomeDetailFromResult(t *testing.T) {
+	cases := []struct {
+		name    string
+		detail  string
+		present bool
+	}{
+		{"stored", "stored", true},
+		{"cloud newer no-op", "cloud_newer_noop", true},
+		{"no detail omits the field", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, buf := captureHarness(t)
+			w := newReachWorker(t, h)
+			row := seedClaimedRow(t, h) // in_progress → markSuccess persists
+
+			w.persistOutcome(context.Background(), row, "G0ABC",
+				forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: "id-1", Detail: tc.detail},
+				7*time.Millisecond)
+
+			recs := withMessage(t, buf, msgAttempt)
+			if len(recs) != 1 {
+				t.Fatalf("attempt records = %d, want 1\n%s", len(recs), buf.String())
+			}
+			rec := recs[0]
+			if rec["level"] != "info" || rec["outcome"] != "success" || rec["disposition"] != wantPersisted {
+				t.Errorf("record must stay a persisted success: level=%v outcome=%v disposition=%v",
+					rec["level"], rec["outcome"], rec["disposition"])
+			}
+			got, present := rec["outcome_detail"]
+			if tc.present {
+				if got != tc.detail {
+					t.Errorf("outcome_detail = %v, want %q", got, tc.detail)
+				}
+			} else if present {
+				t.Errorf("outcome_detail present (%v) but the Result carried none — it must be omitted", got)
+			}
+
+			// C1: the row is genuinely uploaded, not retried.
+			if u := h.fetchUpload(row.QsoID); u.Status != "uploaded" {
+				t.Errorf("row status = %q, want uploaded", u.Status)
+			}
+		})
+	}
+}
+
 // Contract 1 of Diff B (docs/reviews/forwarding-logging-gaps.md F1): the attempt
 // record must name what enqueued the row, so "why is this forwarder busy?" is a
 // lookup rather than a day-bucketing exercise across two message types.

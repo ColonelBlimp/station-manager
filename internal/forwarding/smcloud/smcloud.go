@@ -41,6 +41,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -201,7 +202,11 @@ type putRequest struct {
 
 type putResponse struct {
 	Received int `json:"received"`
-	Applied  int `json:"applied"`
+	// Applied is a POINTER so an absent/null field is distinguishable from an explicit 0:
+	// 0 means "the cloud held a newer copy" (→ cloud_newer_noop), a claim we must not make
+	// for a response that simply omitted the field. A missing applied is a malformed ack,
+	// treated as transient like the other protocol-invalid 2xx cases (L12 review).
+	Applied *int `json:"applied"`
 }
 
 // Submit PUTs one QSO to the smcloud service. Insert and update are the same
@@ -314,15 +319,28 @@ func (f *Forwarder) Submit(
 	// RETRIES rather than being silently marked uploaded and dropped (review
 	// 2026-07-20 internal/forwarding #3). Transient, not terminal: a bad ack from
 	// our own cloud is a server-side blip the backup must eventually clear.
-	if out.Received != 1 || out.Applied < 0 || out.Applied > 1 {
+	if out.Received != 1 || out.Applied == nil || *out.Applied < 0 || *out.Applied > 1 {
+		applied := "missing"
+		if out.Applied != nil {
+			applied = strconv.Itoa(*out.Applied)
+		}
 		return forwarding.Result{
 			Outcome: forwarding.OutcomeTransient,
-			Err: errors.New(op).WithMsgf("smcloud ack invalid: received=%d applied=%d",
-				out.Received, out.Applied),
+			Err: errors.New(op).WithMsgf("smcloud ack invalid: received=%d applied=%s",
+				out.Received, applied),
 		}
 	}
-	// The UUID doubles as the upstream id (the store's key).
-	return forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: qso.UUID}
+	// The UUID doubles as the upstream id (the store's key). applied distinguishes
+	// two diagnostically different successes (L12): 1 = the cloud STORED this record,
+	// 0 = the stale-push guard held a newer cloud copy so it did nothing. Both are
+	// success for a backup, but the second is an unexpected single-writer observation —
+	// carry it as outcome_detail so the worker's log tells them apart. (applied is
+	// guaranteed non-nil and in {0,1} here by the guard above.)
+	detail := "stored"
+	if *out.Applied == 0 {
+		detail = "cloud_newer_noop"
+	}
+	return forwarding.Result{Outcome: forwarding.OutcomeSuccess, UpstreamID: qso.UUID, Detail: detail}
 }
 
 // classifyHTTPStatus maps a non-2xx response to a Result. Same matrix as the

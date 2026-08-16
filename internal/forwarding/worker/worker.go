@@ -503,7 +503,9 @@ func (w *Worker) persistOutcome(
 		outcome = string(res.Outcome)
 		disp    disposition
 		cause   error
-		attempt = &attemptFields{}
+		// detail rides through regardless of outcome — a forwarder may annotate
+		// any Result, though today only SM Cloud's success path sets it (L12).
+		attempt = &attemptFields{detail: res.Detail}
 		stamped bool
 	)
 
@@ -604,6 +606,9 @@ func (w *Worker) notifyStamped(ctx context.Context, row types.QsoUpload) {
 type attemptFields struct {
 	upstreamID string
 	delay      time.Duration
+	// detail is the forwarder's optional machine-readable sub-outcome
+	// (forwarding.Result.Detail), logged as outcome_detail (L12).
+	detail string
 }
 
 // queueAgeSeconds is how long a queue row has waited: now - queued_at, in whole
@@ -690,6 +695,11 @@ func (w *Worker) logAttempt(
 	if extra != nil {
 		if extra.upstreamID != "" {
 			ev = ev.Str("upstream_id", extra.upstreamID)
+		}
+		if extra.detail != "" {
+			// A finer sub-outcome that two results sharing this Outcome differ on
+			// (e.g. SM Cloud stored vs cloud_newer_noop). Omitted when unset (L12).
+			ev = ev.Str("outcome_detail", extra.detail)
 		}
 		if extra.delay > 0 {
 			ev = ev.Dur("retry_in", extra.delay)

@@ -59,10 +59,17 @@ const (
 // UpstreamID is optional and, when populated on success, is stored in
 // qso_upload.upstream_id, so the later operator UI can link out to the remote
 // record.
+//
+// Detail is an OPTIONAL machine-readable sub-outcome that distinguishes two
+// results sharing one Outcome — e.g. SM Cloud's `stored` (applied) vs
+// `cloud_newer_noop` (the cloud already held a newer copy), both Success. The
+// worker logs it as `outcome_detail` on the attempt record when set; empty means
+// "no finer detail". It never affects the row's lifecycle, only its trace.
 type Result struct {
 	Outcome    Outcome
 	Err        error
 	UpstreamID string
+	Detail     string
 }
 
 // Forwarder is the plugin boundary between the worker layer and a concrete

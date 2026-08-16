@@ -20,6 +20,8 @@ func testConfig(url string) types.ForwarderConfig {
 	return types.ForwarderConfig{Name: "smcloud", Type: Type, Credentials: creds}
 }
 
+func ip(i int) *int { return &i }
+
 func testQso(uuid string) types.Qso {
 	q := types.Qso{UUID: uuid, ModifiedAt: time.Date(2026, 7, 17, 7, 0, 0, 123456000, time.UTC)}
 	q.Call = "DL9UW"
@@ -144,7 +146,7 @@ func TestSubmit_InsertWireShape(t *testing.T) {
 		if _, has := raw.Qsos[0].Qso["modified_at"]; has {
 			t.Error("payload leaked modified_at into the qso body")
 		}
-		_ = json.NewEncoder(w).Encode(putResponse{Received: 1, Applied: 1})
+		_ = json.NewEncoder(w).Encode(putResponse{Received: 1, Applied: ip(1)})
 	}))
 	defer ts.Close()
 
@@ -182,7 +184,7 @@ func TestSubmit_DeleteSendsTombstone(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &got)
-		_ = json.NewEncoder(w).Encode(putResponse{Received: 1, Applied: 1})
+		_ = json.NewEncoder(w).Encode(putResponse{Received: 1, Applied: ip(1)})
 	}))
 	defer ts.Close()
 
@@ -199,17 +201,81 @@ func TestSubmit_DeleteSendsTombstone(t *testing.T) {
 	}
 }
 
+// L12 review fix: a 2xx ack that OMITS applied (or sends applied:null) must be TRANSIENT,
+// not silently read as applied=0 → cloud_newer_noop. An int field would default the missing
+// value to 0 and falsely record "the cloud held a newer copy"; the pointer distinguishes
+// absent from an explicit 0. Both the absent-key and explicit-null wire forms are covered.
+func TestSubmit_AppliedMissingIsTransient(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"applied key absent", `{"received":1}`},
+		{"applied null", `{"received":1,"applied":null}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer ts.Close()
+			f, _ := New(testConfig(ts.URL))
+			res := f.Submit(context.Background(), testQso("0197f9a0-0000-7000-8000-0000000000f2"), action.Insert, "")
+			if res.Outcome != forwarding.OutcomeTransient {
+				t.Fatalf("outcome = %s (%v), want Transient — a missing applied is a malformed ack, "+
+					"never a cloud_newer_noop", res.Outcome, res.Err)
+			}
+		})
+	}
+}
+
 // A stale re-push (cloud kept a newer copy → applied 0) is still success:
 // the backup already holds this QSO's future.
 func TestSubmit_StaleAppliedZeroIsSuccess(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(putResponse{Received: 1, Applied: 0})
+		_ = json.NewEncoder(w).Encode(putResponse{Received: 1, Applied: ip(0)})
 	}))
 	defer ts.Close()
 	f, _ := New(testConfig(ts.URL))
 	res := f.Submit(context.Background(), testQso("0197f9a0-0000-7000-8000-000000000003"), action.Update, "")
 	if res.Outcome != forwarding.OutcomeSuccess {
 		t.Fatalf("outcome = %s (%v)", res.Outcome, res.Err)
+	}
+}
+
+// L12-C1 — SM Cloud must not flatten two diagnostically different successes.
+// (docs/reviews/internal-codebase-logging-gaps.md L12; operator rulings 2026-08-16.)
+//
+//	When the cloud acks received=1/applied=1 the QSO was STORED; received=1/applied=0 means
+//	the cloud already held a NEWER copy and did nothing (a valid backup outcome, but an
+//	unexpected single-writer observation). Both stay OutcomeSuccess (the row is uploaded, not
+//	retried), but the Result must carry an outcome_detail so the two are tellable apart in
+//	smd.log: `stored` vs `cloud_newer_noop`. The detail rides forwarding.Result.Detail; the
+//	worker logs it (attempt_logging asserts the log field).
+func TestSubmit_OutcomeDetail(t *testing.T) {
+	cases := []struct {
+		name       string
+		applied    int
+		wantDetail string
+	}{
+		{"stored", 1, "stored"},
+		{"cloud newer no-op", 0, "cloud_newer_noop"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(putResponse{Received: 1, Applied: ip(tc.applied)})
+			}))
+			defer ts.Close()
+			f, _ := New(testConfig(ts.URL))
+			res := f.Submit(context.Background(), testQso("0197f9a0-0000-7000-8000-000000000004"), action.Update, "")
+			if res.Outcome != forwarding.OutcomeSuccess {
+				t.Fatalf("outcome = %s (%v), want success — the row must stay uploaded", res.Outcome, res.Err)
+			}
+			if res.Detail != tc.wantDetail {
+				t.Errorf("Detail = %q, want %q", res.Detail, tc.wantDetail)
+			}
+		})
 	}
 }
 
@@ -302,9 +368,9 @@ func TestSubmit_InvalidAckIsTransient(t *testing.T) {
 		name string
 		body putResponse
 	}{
-		{"received zero (e.g. {})", putResponse{Received: 0, Applied: 0}},
-		{"received two", putResponse{Received: 2, Applied: 1}},
-		{"applied out of range", putResponse{Received: 1, Applied: 2}},
+		{"received zero (e.g. {})", putResponse{Received: 0, Applied: ip(0)}},
+		{"received two", putResponse{Received: 2, Applied: ip(1)}},
+		{"applied out of range", putResponse{Received: 1, Applied: ip(2)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
