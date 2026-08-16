@@ -25,7 +25,37 @@ const (
 
 	// defaultBufSize is the reader loop's per-Read buffer size.
 	defaultBufSize = 512
+
+	// oversizeWarnInterval bounds how often the reader notifies the injected
+	// OnOversizeFrame callback while drops continue: the first drop fires
+	// immediately, then at most once per interval (L13, operator ruling 60s).
+	oversizeWarnInterval = 60 * time.Second
 )
+
+// oversizeThrottle counts dropped oversized frames and decides when the injected callback
+// may fire — first drop immediately, then at most once per interval — so a continuous noise
+// storm does not produce one notification per dropped frame. It lives on the reader goroutine
+// (no concurrency) and is created fresh per reader session, so the total resets on reopen.
+type oversizeThrottle struct {
+	now       func() time.Time
+	interval  time.Duration
+	count     int
+	fired     bool
+	lastFired time.Time
+}
+
+// record registers one dropped frame and returns the running total plus whether the callback
+// should fire now (the first drop, or the first drop at/after the interval since the last fire).
+func (o *oversizeThrottle) record() (total int, fire bool) {
+	o.count++
+	now := o.now()
+	if !o.fired || now.Sub(o.lastFired) >= o.interval {
+		o.fired = true
+		o.lastFired = now
+		return o.count, true
+	}
+	return o.count, false
+}
 
 // Client is the high-level interface for sending CAT commands and
 // receiving responses over a serial port. It is safe for concurrent use
@@ -406,6 +436,17 @@ func (p *Port) readerLoop() {
 	// spurious partial response.
 	discarding := false
 
+	// Per-session drop tracking (L13): fresh throttle each reader goroutine, so the
+	// running total resets on reopen. noteOversizeDrop is called EXACTLY ONCE per dropped
+	// frame; the throttle bounds how often the injected callback actually fires.
+	oversize := &oversizeThrottle{now: time.Now, interval: oversizeWarnInterval}
+	noteOversizeDrop := func() {
+		total, fire := oversize.record()
+		if fire && p.cfg.OnOversizeFrame != nil {
+			p.cfg.OnOversizeFrame(maxLineSize, total)
+		}
+	}
+
 	for {
 		select {
 		case <-p.closeCh:
@@ -443,35 +484,43 @@ func (p *Port) readerLoop() {
 		chunk := buf[:n]
 		for len(chunk) > 0 {
 			idx := bytes.IndexByte(chunk, p.cfg.LineDelimiter)
-			if idx == -1 {
-				if discarding {
-					// Still inside an oversized line; skip the
-					// entire chunk.
-					break
+
+			if discarding {
+				// Inside an already-counted oversized line: skip until its delimiter.
+				if idx == -1 {
+					break // the whole chunk is still part of the oversized line
 				}
+				discarding = false
+				chunk = chunk[idx+1:]
+				continue
+			}
+
+			if idx == -1 {
+				// No delimiter yet: accumulate. If the frame passes the cap here (even
+				// without a delimiter) it is oversized — drop + count it ONCE and skip
+				// the rest of the line until its delimiter arrives. Touches nothing that
+				// could hide a later terminal read error (review 2026-06-19 M1).
 				lineBuf = append(lineBuf, chunk...)
 				if len(lineBuf) > maxLineSize {
-					// Drop the overly long line and keep running (recoverable).
-					// This deliberately touches nothing that could hide a later
-					// terminal read error — it just resets the frame buffer and
-					// skips to the next delimiter (review 2026-06-19 M1).
+					noteOversizeDrop()
 					lineBuf = lineBuf[:0]
 					discarding = true
 				}
 				break
 			}
 
-			if discarding {
-				// Found the delimiter that ends the oversized line.
-				// Discard everything up to and including it, then
-				// resume normal framing.
-				discarding = false
+			// Delimiter found: the frame is lineBuf + chunk[:idx]. If that exceeds the
+			// cap, the frame is oversized even though its delimiter arrived in the same
+			// chunk — drop + count it (L13 ruling 5: uniform >maxLineSize handling),
+			// never emit. Exactly maxLineSize is valid (strictly-greater is the cap).
+			if len(lineBuf)+idx > maxLineSize {
+				noteOversizeDrop()
+				lineBuf = lineBuf[:0]
 				chunk = chunk[idx+1:]
 				continue
 			}
 
 			lineBuf = append(lineBuf, chunk[:idx]...)
-			// emit line
 			// copy to avoid retaining the entire backing array across sends
 			lineCopy := make([]byte, len(lineBuf))
 			copy(lineCopy, lineBuf)

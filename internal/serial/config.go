@@ -67,6 +67,21 @@ type Config struct {
 	RTS *bool `json:"rts,omitempty"`
 	DTR *bool `json:"dtr,omitempty"`
 
+	// OnOversizeFrame, when set, is called each time the reader drops a frame that
+	// exceeds maxLineSize (line noise, wrong baud, wrong delimiter, wrong driver). It
+	// carries ONLY the byte threshold and the running per-session total of dropped frames
+	// — never the raw frame bytes — so the caller (which owns the logger) can emit a
+	// diagnostic without this package logging or leaking noise. Invoked at a bounded
+	// cadence: immediately on the first drop, then at most once per oversizeWarnInterval
+	// while drops continue; the total resets when a new reader session starts (L13).
+	//
+	// Runs SYNCHRONOUSLY on the reader goroutine (like PanicHandler): it must be quick and
+	// non-reentrant — it MUST NOT block or call back into this Port. In particular calling
+	// Close() from here deadlocks, because Close waits for the reader goroutine to exit and
+	// the reader is blocked in this callback. Keep it to a cheap notification (a log line).
+	// Set programmatically; excluded from config.json.
+	OnOversizeFrame func(thresholdBytes, droppedTotal int) `json:"-"`
+
 	// PanicHandler, when set, receives a recovered panic from the reader goroutine
 	// (name "serial.reader", the panic value, and a stack) for structured logging.
 	// This package has no logger of its own, so the caller injects one. On a reader
