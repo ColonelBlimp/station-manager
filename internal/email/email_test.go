@@ -36,11 +36,12 @@ import (
 // Auth is accepted unconditionally — credential-validation testing
 // belongs in net/smtp, not here.
 type smtpFake struct {
-	t        *testing.T
-	listener net.Listener
-	wg       sync.WaitGroup
-	mu       sync.Mutex
-	captured []capturedMessage
+	t          *testing.T
+	listener   net.Listener
+	wg         sync.WaitGroup
+	mu         sync.Mutex
+	captured   []capturedMessage
+	rejectRcpt bool // when set, RCPT TO gets a 550 so the Rcpt error path fires (H4)
 }
 
 type capturedMessage struct {
@@ -132,6 +133,10 @@ func (f *smtpFake) handle(c net.Conn) {
 			flush("250 OK")
 		case strings.HasPrefix(upper, "RCPT TO:"):
 			to = extractAddr(line[len("RCPT TO:"):])
+			if f.rejectRcpt {
+				flush("550 mailbox unavailable")
+				continue
+			}
 			flush("250 OK")
 		case upper == "DATA":
 			flush("354 send body")

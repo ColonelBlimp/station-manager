@@ -214,6 +214,7 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 	msg := email.Message{
 		To:      req.To,
 		Subject: req.Subject,
+		Kind:    "session_email", // logged in place of the operator-supplied subject (H4)
 		Body:    sessionEmailBody(len(qsos), now),
 		Attachments: []email.Attachment{{
 			Filename:    req.Filename,
@@ -236,7 +237,8 @@ func (s *Server) handleSessionEmail(w http.ResponseWriter, r *http.Request) {
 				err.Error(), op)
 			return
 		}
-		s.logger.ErrorWith().Err(err).Str("to", req.To).Msg("session email send failed")
+		// H4: log the recipient DOMAIN only, never the raw address (smd.log is 0644).
+		s.logger.ErrorWith().Err(err).Str("to_domain", email.Domain(req.To)).Msg("session email send failed")
 		s.writeError(w, http.StatusBadGateway, "smtp_failure",
 			"SMTP send failed; check daemon logs for the cause", op)
 		return

@@ -72,10 +72,27 @@ type Attachment struct {
 // multi-recipient extension becomes To []string then if the need
 // emerges; for now, simpler is right.
 type Message struct {
-	To          string
-	Subject     string
+	To      string
+	Subject string
+	// Kind is a fixed, PII-free classifier for the message (e.g. "session_email"), logged
+	// instead of the operator-supplied Subject so smd.log never retains subject text (H4).
+	Kind        string
 	Body        string // plain text body
 	Attachments []Attachment
+}
+
+// Domain returns the domain part of an email address for safe logging — never the local part
+// or the full address. Returns "unknown" when the address has no parseable domain, so a
+// redacted log or error can never fall back to raw PII (H4).
+func Domain(addr string) string {
+	at := strings.LastIndexByte(addr, '@')
+	if at < 0 || at == len(addr)-1 {
+		return "unknown"
+	}
+	if d := strings.TrimSpace(addr[at+1:]); d != "" {
+		return d
+	}
+	return "unknown"
 }
 
 // Service is the singleton mailer. Constructed once at daemon
@@ -216,10 +233,10 @@ func (s *Service) Send(ctx context.Context, msg Message) error {
 	}
 
 	if err := client.Mail(fromAddr); err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("mail from %s", fromAddr)
+		return errors.New(op).WithErr(err).WithMsgf("smtp MAIL FROM rejected (from_domain %s)", Domain(fromAddr))
 	}
 	if err := client.Rcpt(toAddr); err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("rcpt to %s", toAddr)
+		return errors.New(op).WithErr(err).WithMsgf("smtp RCPT TO rejected (to_domain %s)", Domain(toAddr))
 	}
 
 	w, err := client.Data()
@@ -235,9 +252,11 @@ func (s *Service) Send(ctx context.Context, msg Message) error {
 	}
 
 	if s.logger != nil {
+		// H4: log the recipient DOMAIN and a fixed message kind — never the raw recipient
+		// or the operator-supplied subject (smd.log is 0644).
 		s.logger.InfoWith().
-			Str("to", msg.To).
-			Str("subject", msg.Subject).
+			Str("to_domain", Domain(msg.To)).
+			Str("kind", msg.Kind).
 			Int("attachments", len(msg.Attachments)).
 			Msg("email sent")
 	}
