@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -72,6 +73,19 @@ func TestBootstrapReferenceSplit_MigratesExistingSingleFile(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("backups = %d, want exactly 1", len(backups))
+	}
+
+	// ST-6: the backup directory + the backup database it holds contain full QSO records,
+	// so they are owner-private (0700 dir, 0600 file). Assert effective modes.
+	if fi, err := os.Lstat(backupDir); err != nil {
+		t.Fatal(err)
+	} else if fi.Mode().Perm() != 0o700 {
+		t.Errorf("backup dir mode = %04o, want 0700", fi.Mode().Perm())
+	}
+	if fi, err := os.Lstat(backups[0]); err != nil {
+		t.Fatal(err)
+	} else if fi.Mode().Perm() != 0o600 {
+		t.Errorf("backup db mode = %04o, want 0600", fi.Mode().Perm())
 	}
 
 	// reference.db carries the cache tables + their seeded rows.

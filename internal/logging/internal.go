@@ -37,6 +37,14 @@ func probeLogFileWritable(path string) error {
 	if err != nil {
 		return err
 	}
+	// OpenFile(0600) CREATES a new file 0600 but does NOT tighten an EXISTING looser one
+	// (a legacy 0644 smd.log, or one lumberjack later copies the mode from). chmod so an
+	// existing log — and, via lumberjack's mode-copy, its future rotations — is owner-only
+	// (ST-6). The probe owns the log path (under the working dir), so this is safe.
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = f.Close()
+		return err
+	}
 	return f.Close()
 }
 

@@ -71,7 +71,10 @@ func BootstrapReferenceSplit(logPath, refPath, backupDir string, log *logging.Se
 		//    Skipped when only the tracking rename is outstanding: no row moves
 		//    or gets dropped in that state, and the interrupted first attempt
 		//    already left a backup of the richer pre-split shape.
-		if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		// The backup directory + the backup database it holds contain full QSO records, so
+		// they are owner-private (ST-6): 0700 dir, 0600 file. VACUUM INTO creates the file
+		// per umask, so chmod it explicitly afterwards.
+		if err := os.MkdirAll(backupDir, 0o700); err != nil {
 			return errors.New(op).WithErr(err).WithMsg("create backup directory")
 		}
 		base := strings.TrimSuffix(filepath.Base(logPath), filepath.Ext(logPath))
@@ -79,6 +82,9 @@ func BootstrapReferenceSplit(logPath, refPath, backupDir string, log *logging.Se
 		backupPath := filepath.Join(backupDir, fmt.Sprintf("%s-presplit-%s.db", base, ts))
 		if _, err := logDB.Exec("VACUUM INTO '" + strings.ReplaceAll(backupPath, "'", "''") + "'"); err != nil {
 			return errors.New(op).WithErr(err).WithMsg("backup log database (VACUUM INTO)")
+		}
+		if err := os.Chmod(backupPath, 0o600); err != nil {
+			return errors.New(op).WithErr(err).WithMsg("secure backup database (chmod 0600)")
 		}
 		logInfo(log, "bootstrap: backed up to "+backupPath)
 

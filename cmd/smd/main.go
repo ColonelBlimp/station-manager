@@ -470,6 +470,16 @@ func run() error {
 
 	loggerSvc.InfoWith().Msg("databases open and migrated")
 
+	// ST-6: the log + reference databases hold operator/QSO data, so make their files,
+	// directory and WAL/SHM sidecars owner-private (0600/0700) when application-owned —
+	// SQLite creates them per umask, which can leave a group/other-readable database. An
+	// application-owned file that cannot be tightened is fatal; an operator-supplied path
+	// outside the working directory is warned about, not mutated.
+	if err = sqlite.SecureDataFiles(cfgSvc.WorkingDir(), loggerSvc,
+		dbSvc.DatabaseConfig.Path, refPath); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("secure database files")
+	}
+
 	// Self-heal the "config says setup-complete and points at logbook
 	// id=N, but the DB has no row at N" failure mode. Most commonly
 	// hits when an operator nukes a dev DB while keeping their

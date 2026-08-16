@@ -370,9 +370,18 @@ func (s *Server) archiveSessionAdif(filename, body string) {
 		return
 	}
 	dir := filepath.Join(wd, sessionAdifArchiveDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// The archive holds full exported QSO records and lives under the working dir (always
+	// application-owned), so it is owner-private 0700 (ST-6). MkdirAll(0700) does not
+	// tighten a pre-existing 0755 dir, so chmod it too. A permission failure skips and
+	// logs this optional archive rather than failing the request.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		s.logger.WarnWith().Err(err).Str("dir", dir).
 			Msg("session email: could not create ADIF archive dir")
+		return
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		s.logger.WarnWith().Err(err).Str("dir", dir).
+			Msg("session email: could not make ADIF archive dir owner-private, skipping archive")
 		return
 	}
 	path := filepath.Join(dir, filename)
@@ -411,7 +420,7 @@ func writeArchiveExclusive(dir, filename, body string) (string, error) {
 			name = fmt.Sprintf("%s-%d%s", stem, i, ext)
 		}
 		path := filepath.Join(dir, name)
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			if os.IsExist(err) {
 				continue // name taken — try the next suffix

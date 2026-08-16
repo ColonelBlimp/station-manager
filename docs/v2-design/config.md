@@ -557,6 +557,23 @@ otherwise create the socket `0777 & ^umask`):
   (is-socket, euid-owned, mode `0600`); on any failure the socket is unlinked and startup
   fails.
 
+### 5.3 Private-state file permissions (ST-6, 2026-08-16)
+
+Local artifacts that hold operator/QSO data are owner-private. The one policy lives in
+`internal/fsperm`:
+
+- **Application-owned** paths (laid out under the resolved working directory, symlink-aware
+  containment — never a lexical prefix — and euid-owned) are tightened to owner-only and
+  the effective mode is **verified**: `0700` directories, `0600` files. A failure to
+  establish the mode is **fatal** for the databases. Applied to the log + reference
+  databases and their `-wal`/`-shm` sidecars + directory (`sqlite.SecureDataFiles` at
+  startup), the bootstrap backup dir/db, the sent-ADIF archive dir/files, and the log file
+  (existing files chmod'd, not just created `0600`). The working-directory **root** stays
+  `0755` by design and is never tightened as a child.
+- **Operator-supplied** paths OUTSIDE the working directory are **never mutated** (a
+  deliberately-shared location is the operator's call) but a group/world-accessible one
+  earns a high-signal startup warning. A symlink is never chmod'd through.
+
 ## 6. Lifecycle & dynamics
 
 - **Read-once-at-construction (restart to change):** Server, Datastore, Logging, Bridge

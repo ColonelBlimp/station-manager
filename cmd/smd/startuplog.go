@@ -48,6 +48,10 @@ func logStartupFailure(startupErr error) {
 		return
 	}
 	defer func() { _ = f.Close() }()
+	// OpenFile(0600) does not tighten an EXISTING looser log; chmod so a legacy 0644
+	// smd.log this pre-logger writer appends to is made owner-only too (ST-6). Best-effort:
+	// a startup-failure record must still be written even if the chmod cannot run.
+	_ = os.Chmod(logPath, 0o600)
 
 	// version from the SAME carrier the logging service uses (buildinfo.Version),
 	// not a local copy: this record is written when config.json is missing or
