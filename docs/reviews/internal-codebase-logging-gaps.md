@@ -506,6 +506,19 @@ indicates line noise, a wrong delimiter, wrong baud or an incorrect driver.
 bridge and emit a rate-limited warning carrying port/driver, byte threshold and total.
 Do not log the raw frame by default.
 
+> ✅ **FIXED (working tree, awaiting operator's push).** Serial `21e0de82` + bridge
+> `f2b3b908`, operator rulings 2026-08-16. The reader now counts each dropped oversized
+> frame EXACTLY ONCE and notifies an injected `serial.Config.OnOversizeFrame` callback
+> carrying only `threshold_bytes` + a per-session `dropped_total` — never the raw bytes.
+> Rate-limited INSIDE the reader: warn immediately on the first drop, then at most once per
+> 60s while drops continue (`oversizeThrottle`); the total resets per reader session. The
+> bridge wires the callback (`pipeline.go`, beside `PanicHandler`) to a Warn adding `port` +
+> `driver`. Ruling 5 folded in: oversized handling is now UNIFORM — a frame over 4096 is
+> dropped + counted whether its delimiter spans reads or lands in-chunk (the in-chunk case
+> previously EMITTED a garbage 4 KB response); exactly 4096 stays valid. Review hardening: the
+> callback's doc states it runs on the reader goroutine and must not block or re-enter the
+> Port (a reentrant `Close()` would deadlock).
+
 ---
 
 ## P3 — useful hardening
