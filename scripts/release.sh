@@ -31,11 +31,17 @@ VERSION="$1"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Load .env (gitignored) on the HOST so the ClubLog API key (CLUBLOG_API_KEY) is
-# available to pass into the release container below (-e). The key is baked into
-# the binary via -ldflags inside the container; an absent key just leaves the
-# ClubLog forwarder inert. .env is never copied into the image.
+# PUBLIC (distributable) release (ST-7): this produces a key-free RPM. .env is still
+# loaded (it may carry other build settings) but the ClubLog key is NOT passed into the
+# container, and if the host env provides CLUBLOG_API_KEY we FAIL — a public release must
+# never bake the shared confidential key. Keyed dogfood builds are scripts/dev-rpm.sh.
 if [[ -f .env ]]; then set -a; . ./.env; set +a; fi
+if [[ -n "${CLUBLOG_API_KEY:-}" ]]; then
+  echo "error: release.sh builds a PUBLIC (distributable) RPM and must not carry a ClubLog" >&2
+  echo "       key, but CLUBLOG_API_KEY is set. Unset it (or use scripts/dev-rpm.sh for a" >&2
+  echo "       keyed dogfood build)." >&2
+  exit 1
+fi
 
 ENGINE="${SM_CONTAINER_ENGINE:-podman}"
 IMAGE="${SM_RELEASE_IMAGE:-sm-release-builder}"
@@ -93,7 +99,6 @@ fi
   -e SM_FFT=pocketfft \
   -e SM_SKIP_SPA=1 \
   -e SM_SKIP_MANUAL=1 \
-  -e CLUBLOG_API_KEY="${CLUBLOG_API_KEY:-}" \
   "$IMAGE" \
   bash -c "scripts/release-rpm.sh '$VERSION'"
 

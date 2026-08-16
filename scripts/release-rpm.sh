@@ -27,13 +27,18 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Load .env (gitignored) so build-time secrets — the ClubLog API key
-# (CLUBLOG_API_KEY, baked via -ldflags below) — are available. Covers a bare
-# run on the host AND the release container, where release.sh bind-mounts the
-# repo (including .env) at /src; release.sh also passes -e CLUBLOG_API_KEY, so
-# the key resolves either way. An unset key just bakes an empty string, leaving
-# the ClubLog forwarder inert (Submit fails Terminal; the daemon still runs).
+# PUBLIC (distributable) build path (ST-7): this bakes NO ClubLog key, so the RPM is
+# safe to publish (subject to the GPL source obligation). .env is still loaded (it may
+# carry other build settings), but if it — or the environment — provides CLUBLOG_API_KEY,
+# FAIL: a public release must never carry the shared confidential key. Keyed dogfood
+# builds are the PRIVATE path, scripts/dev-rpm.sh.
 if [[ -f .env ]]; then set -a; . ./.env; set +a; fi
+if [[ -n "${CLUBLOG_API_KEY:-}" ]]; then
+  echo "error: release-rpm.sh is the PUBLIC (distributable) build path and must not bake a" >&2
+  echo "       ClubLog key, but CLUBLOG_API_KEY is set. Unset it (or use scripts/dev-rpm.sh" >&2
+  echo "       for a keyed dogfood build)." >&2
+  exit 1
+fi
 
 if ! command -v nfpm >/dev/null 2>&1; then
   echo "error: nfpm not in PATH (try: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest)" >&2
@@ -103,11 +108,11 @@ mkdir -p build/bin
 # carrier buildinfo.Version (cmd/smd no longer declares its own)
 # which feeds both the User-Agent header on outbound HTTP and the
 # PROGRAMVERSION field on ADIF exports.
-# CLUBLOG_API_KEY (the build-injected ClubLog app key) arrives from the caller's
-# env — passed into the release container by scripts/release.sh (-e), or from the
-# shell/.env for a bare run. Empty → the ClubLog forwarder stays inert.
+# NO ClubLog key is injected here (ST-7): a public build leaves clublog.InjectedAPIKey
+# empty, so the shipped ClubLog forwarder is inert until the operator supplies runtime
+# credentials. BuildScope=public marks the binary as key-free and distributable.
 CGO_ENABLED=$CGO_VAL go build -trimpath "${TAGS_ARG[@]}" \
-    -ldflags="-s -w -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" \
+    -ldflags="-s -w -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/buildinfo.BuildScope=public" \
     -o build/bin/smd ./cmd/smd
 
 echo "── [3/3] Packaging RPM → build/release/ (RPM version: ${RPM_VERSION}) ──"

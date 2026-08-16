@@ -1,0 +1,16 @@
+PRIVATE BUILD — DO NOT DISTRIBUTE
+=================================
+
+This Station Manager package was built on the PRIVATE (keyed) build path
+(scripts/dev-rpm.sh) and has the shared ClubLog application API key baked into
+its binary. That key is extractable with `strings` and is acceptable ONLY for
+the private dogfood model (ADR 0054).
+
+Therefore this package MUST NOT be:
+  - published or uploaded as a release/CI artifact,
+  - copied into a support bundle or a shared location,
+  - installed anywhere the binary could be read by another party.
+
+Distributable, key-free packages are produced by the PUBLIC build path,
+scripts/release-rpm.sh (or scripts/release.sh). This marker never contains the
+key itself — it only records that the accompanying binary does.

@@ -305,3 +305,11 @@ jobs:
 
       - name: FT8 decode test (PocketFFT/CGO backend)
         run: CGO_ENABLED=1 go test -tags pocketfft ./internal/ft8/...
+
+      # ─── ST-7 build boundary ────────────────────────────────────
+      # The shared ClubLog application key must stay out of public/distributable
+      # artifacts: the private build path bakes it, the public path refuses to build
+      # with a key present, and the public binary carries none. This gate builds a
+      # keyed and a keyless binary with a dummy sentinel and asserts the boundary.
+      - name: Build boundary (ClubLog key stays out of public artifacts)
+        run: bash scripts/test-build-boundary.sh

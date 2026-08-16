@@ -9,7 +9,7 @@
 #      `task run:smd`); the dogfood + dev daemons can't run together.
 #   1. scripts/dev-rpm.sh  — SPA build → Go build → nfpm pack
 #   2. systemctl --user stop smd  (only if currently active)
-#   3. sudo rpm -Uvh --replacepkgs build/release/station-manager-dev.x86_64.rpm
+#   3. sudo rpm -Uvh --replacepkgs build/private/station-manager-dev.x86_64.rpm
 #      (rpm -U handles install / upgrade / downgrade; --replacepkgs
 #       allows reinstalling the same NVR — the dev version is now
 #       git-derived, so a fresh commit IS a real upgrade, but rebuilding
@@ -59,7 +59,7 @@ note() {
     printf '%s%s%s\n' "$DIM" "$1" "$RESET"
 }
 
-RPM_PATH="build/release/station-manager-dev.x86_64.rpm"
+RPM_PATH="build/private/station-manager-dev.x86_64.rpm"
 
 # Preflight: refuse to deploy into a running dev daemon. `task run:smd` holds
 # :8080 (and the audio/serial devices); the systemd smd this script starts would

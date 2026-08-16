@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+#
+# PRIVATE (keyed dogfood) RPM spec (ST-7). This mirrors nfpm.yaml — the PUBLIC
+# spec, the source of truth for the package contents — and adds ONE thing: the
+# PRIVATE-BUILD-DO-NOT-DISTRIBUTE marker. Used ONLY by scripts/dev-rpm.sh, which
+# also bakes the ClubLog key into the binary. If you change the contents list in
+# nfpm.yaml, mirror the change here.
+#
+# The two differ by exactly the marker so that a keyed package is self-identifying
+# at the package layer (the binary also stamps buildinfo.BuildScope=private). The
+# marker file never contains the key.
+
+name: station-manager
+arch: amd64
+platform: linux
+version: "${VERSION}"
+maintainer: "ColonelBlimp"
+description: "Amateur Radio QSO logger daemon (smd) — single-binary HTTP service serving an embedded browser SPA"
+homepage: "https://github.com/ColonelBlimp/station-manager"
+license: "GPL-3.0-only"
+
+contents:
+  - src: build/bin/smd
+    dst: /usr/bin/smd
+    file_info:
+      mode: 0755
+
+  - src: scripts/smctl.sh
+    dst: /usr/bin/smctl
+    file_info:
+      mode: 0755
+
+  - src: packaging/smd.service
+    dst: /usr/lib/systemd/user/smd.service
+    file_info:
+      mode: 0644
+
+  - src: manual/public/
+    dst: /usr/share/doc/station-manager/manual/
+
+  # ST-7 marker: this package carries the confidential ClubLog key in its binary
+  # and must not be distributed. Present ONLY in the private RPM.
+  - src: packaging/PRIVATE-BUILD-DO-NOT-DISTRIBUTE
+    dst: /usr/share/doc/station-manager/PRIVATE-BUILD-DO-NOT-DISTRIBUTE
+    file_info:
+      mode: 0644

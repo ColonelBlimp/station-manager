@@ -36,3 +36,25 @@ func IsDev() bool { return Env != "release" }
 // A dirty tree yields a "-dirty" suffix that must survive verbatim; it is the
 // difference between a build that matches its tag and one that does not.
 var Version = "dev"
+
+// BuildScope records whether this binary was built on the PRIVATE (keyed) or PUBLIC
+// (keyless) path (ST-7 — docs/reviews/internal-security-trust-boundary-audit.md).
+//
+//   - "public"  — the default, and what every keyless build (generic `go build`,
+//     `task build`, the public release path) reports. Carries no confidential
+//     build-injected secret and is safe to distribute (subject to the GPL source
+//     obligation).
+//   - "private" — a keyed dogfood build: the private build path stamps this via
+//     -ldflags "-X …/internal/buildinfo.BuildScope=private" alongside the ClubLog
+//     application key. The shared key is extractable with `strings`, so a
+//     private-scope binary MUST NOT be published (ADR 0054). The `PRIVATE-BUILD-
+//     DO-NOT-DISTRIBUTE` marker file inside a private RPM says the same at the
+//     package layer.
+//
+// This is the in-binary half of the ST-7 boundary: a build that bakes the key marks
+// itself so the boundary is greppable, not merely a filename convention.
+var BuildScope = "public"
+
+// IsPrivateBuild reports whether this binary carries the confidential build-injected
+// ClubLog key and therefore must not be published.
+func IsPrivateBuild() bool { return BuildScope == "private" }

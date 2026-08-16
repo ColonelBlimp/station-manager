@@ -15,7 +15,7 @@
 # Usage: scripts/dev-rpm.sh   (SM_FFT=pocketfft for the CGO backend)
 #
 # Install the result with:
-#   sudo dnf install -y build/release/station-manager-dev.x86_64.rpm
+#   sudo dnf install -y build/private/station-manager-dev.x86_64.rpm
 # Re-run after edits — nfpm overwrites the target file; rebuilding the same
 # commit dirty keeps the same NVR, so deploy-local-dev.sh uses --replacepkgs.
 
@@ -27,9 +27,21 @@ cd "$REPO_ROOT"
 # Load .env (gitignored) so build-time secrets — the ClubLog API key
 # (CLUBLOG_API_KEY, baked via -ldflags below) — are available when this script
 # is invoked DIRECTLY (e.g. by deploy-local-dev.sh, which unlike `task` does not
-# auto-load .env). Optional: an absent key just bakes an empty string, leaving
-# the ClubLog forwarder inert.
+# auto-load .env).
 if [[ -f .env ]]; then set -a; . ./.env; set +a; fi
+
+# PRIVATE (keyed dogfood) build path (ST-7). The ClubLog application key is baked
+# into the binary, so this RPM carries the shared confidential key (extractable with
+# `strings`, ADR 0054) and MUST NOT be published — its output lives under
+# build/private/ and it embeds a PRIVATE-BUILD-DO-NOT-DISTRIBUTE marker. A private
+# build therefore REQUIRES the key; a keyless, distributable RPM is the PUBLIC path,
+# scripts/release-rpm.sh.
+if [[ -z "${CLUBLOG_API_KEY:-}" ]]; then
+  echo "error: dev-rpm.sh is the PRIVATE (keyed) build path and requires a non-empty" >&2
+  echo "       CLUBLOG_API_KEY (set it in .env). For a keyless, distributable RPM use" >&2
+  echo "       scripts/release-rpm.sh." >&2
+  exit 1
+fi
 
 if ! command -v nfpm >/dev/null 2>&1; then
   echo "error: nfpm not in PATH (try: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest)" >&2
@@ -45,7 +57,7 @@ fi
 . "$(dirname "$0")/version.sh"
 VERSION=$(sm_git_version)
 RPM_VERSION=$(sm_rpm_version "$VERSION")
-OUTPUT=build/release/station-manager-dev.x86_64.rpm
+OUTPUT=build/private/station-manager-dev.x86_64.rpm
 
 echo "── [1/3] Building SPAs → frontend/{config,logbook,app}/dist/ + manual → manual/public/ ──"
 # Every embedded SPA (frontend/embed.go //go:embed all:<spa>/dist) must be rebuilt
@@ -88,12 +100,12 @@ fi
 echo "── [2/3] Building daemon → build/bin/smd (version: ${VERSION}, FFT: ${FFT_BACKEND}) ──"
 mkdir -p build/bin
 CGO_ENABLED=$CGO_VAL go build -trimpath -tags "${BUILD_TAGS}" \
-    -ldflags="-s -w -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" \
+    -ldflags="-s -w -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Version=${VERSION} -X github.com/ColonelBlimp/station-manager/internal/buildinfo.Env=release -X github.com/ColonelBlimp/station-manager/internal/buildinfo.BuildScope=private -X github.com/ColonelBlimp/station-manager/internal/forwarding/clublog.InjectedAPIKey=${CLUBLOG_API_KEY:-}" \
     -o build/bin/smd ./cmd/smd
 
 echo "── [3/3] Packaging RPM → ${OUTPUT} (RPM version: ${RPM_VERSION}) ──"
-mkdir -p build/release
-VERSION="${RPM_VERSION}" nfpm pkg -f nfpm.yaml -p rpm -t "${OUTPUT}"
+mkdir -p build/private
+VERSION="${RPM_VERSION}" nfpm pkg -f nfpm.private.yaml -p rpm -t "${OUTPUT}"
 
 echo
 echo "Built ${VERSION}:"

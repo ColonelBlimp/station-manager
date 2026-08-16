@@ -184,4 +184,7 @@ else
     note "Install gcc to exercise the opt-in CGO FFT backend locally; CI always runs it."
 fi
 
+step "Build boundary: ClubLog key stays out of public artifacts (ST-7)"
+bash scripts/test-build-boundary.sh
+
 printf '\n%sAll CI gates passed locally.%s\n' "$BOLD" "$RESET"
