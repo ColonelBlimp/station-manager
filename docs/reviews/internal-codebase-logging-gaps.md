@@ -534,6 +534,16 @@ cannot fire when encoding failed first.
 Return the failed restore components and log one Warn after PTT/carrier is confirmed
 down, including restore type and cause.
 
+> ✅ **FIXED (working tree, awaiting operator's push).** `61bb5870`, operator rulings
+> 2026-08-16. `encodeTuneRestore` returns per-component encode errors while still encoding
+> whatever succeeded; the tune caller logs ONE aggregated Warn after the carrier is down —
+> `phase=encode`, with `restore_power_error` and/or `restore_mode_error` (the successfully-
+> encoded component's field is omitted) — and invalidates the tune snapshot (it now lies),
+> still writing the components that encoded. The FT8 mode restore logs one Warn (`phase=encode`)
+> on an encode failure after PTT-down (log-only). Existing write-failure Warns gained
+> `phase=write` for the distinction. All logging is strictly downstream of confirmed
+> unkey/PTT-down; keying, power and stop sequencing are unchanged.
+
 ### H2. Evidence shutdown lacks a completion record
 
 `Stop` drains the writer and sync loop, then discards the archive close error and emits
