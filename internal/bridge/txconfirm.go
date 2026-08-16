@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
+	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/serial"
 )
 
@@ -397,6 +398,11 @@ func (s *Service) TxUncertain() bool {
 //     in-flight work outlives it (2026-07-23 review P2).
 //  4. CI-V's awaited ACK confirms directly; otherwise the status-query cycle
 //     runs — and its write failure or silence ALARMS, with TX still blocked.
+//
+// defensiveUnkeyPanicForTest, when set, is invoked at the top of the defensive-unkey
+// worker so a test can drive its panic path (LC-1). nil in production.
+var defensiveUnkeyPanicForTest func()
+
 func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Client) {
 	txOff, encErr := cat.Encode(def, tuneTxOffCommand)
 	if encErr != nil {
@@ -436,33 +442,43 @@ func (s *Service) beginDefensiveRecovery(def cat.RigDefinition, client serial.Cl
 	s.mu.Unlock()
 	s.setIdentityConfirmed(true)
 
-	go func() {
-		defer s.wg.Done()
-		s.keyMu.Lock()
-		werr := s.writeKeyedLine(context.Background(), def, client, txOff, "defensive unkey")
-		if werr != nil {
-			s.logger.ErrorWith().Err(werr).
-				Msg("bridge: defensive unkey write failed — rig may be keyed from a prior life; TX stays blocked")
-			// Apply the alarm before releasing keyMu. Pipeline teardown takes the
-			// same lock before clearing/replacing activeClient, so an old
-			// recovery goroutine cannot mutate a replacement pipeline's TX state.
-			s.raiseTxAlarm(TxAlarmUnconfirmed)
-			s.keyMu.Unlock()
-			// Keep asserting the safe command. On CI-V a later FB ACK is the
-			// positive evidence that can finally retire this alarm; the longer
-			// alarm-recovery cadence and manual RecheckTx remain after this
-			// short retry burst expires.
+	// The defensive tx_off runs under keyMu; scope it with a DEFERRED unlock so a panic in
+	// the write can't leave keyMu HELD — pipeline teardown takes keyMu and would deadlock
+	// (LC-1 lock-safety). retryUnkeyStillKeyed runs AFTER keyMu is released, as before.
+	// GoTrackedPreAdded keeps the wg.Add above (registered under s.mu) and, on a panic,
+	// records it via s.onPanic and latches the safe state: raiseTxAlarm sets
+	// txAlarmActive+txUncertain (TxReady()==false) and starts the guarded alarm-recovery
+	// probe — it never blindly reruns this defensive worker.
+	body := func() {
+		if defensiveUnkeyPanicForTest != nil {
+			defensiveUnkeyPanicForTest() // test seam: drive the defensive-unkey panic path (LC-1)
+		}
+		needRetry := func() bool {
+			s.keyMu.Lock()
+			defer s.keyMu.Unlock()
+			werr := s.writeKeyedLine(context.Background(), def, client, txOff, "defensive unkey")
+			if werr != nil {
+				s.logger.ErrorWith().Err(werr).
+					Msg("bridge: defensive unkey write failed — rig may be keyed from a prior life; TX stays blocked")
+				s.raiseTxAlarm(TxAlarmUnconfirmed)
+				return true
+			}
+			if def.Protocol == cat.ProtocolIcomCIV {
+				// writeKeyedLine awaited the ACK — positive confirmation.
+				s.confirmTxIdle("civ ack (defensive unkey)")
+				return false
+			}
+			s.logger.InfoWith().Msg("bridge: sent defensive tx_off on confirmed connection (ADR 0051)")
+			s.beginTxConfirmIfUncertain(def, client)
+			return false
+		}()
+		if needRetry {
+			// Keep asserting the safe command. On CI-V a later FB ACK is the positive
+			// evidence that can finally retire this alarm; the longer alarm-recovery
+			// cadence and manual RecheckTx remain after this short retry burst expires.
 			s.retryUnkeyStillKeyed()
-			return
 		}
-		if def.Protocol == cat.ProtocolIcomCIV {
-			// writeKeyedLine awaited the ACK — positive confirmation.
-			s.confirmTxIdle("civ ack (defensive unkey)")
-			s.keyMu.Unlock()
-			return
-		}
-		s.logger.InfoWith().Msg("bridge: sent defensive tx_off on confirmed connection (ADR 0051)")
-		s.beginTxConfirmIfUncertain(def, client)
-		s.keyMu.Unlock()
-	}()
+	}
+	safego.GoTrackedPreAdded("bridge.defensiveUnkey", s.onPanic, body,
+		func() { s.raiseTxAlarm(TxAlarmUnconfirmed) }, &s.wg)
 }

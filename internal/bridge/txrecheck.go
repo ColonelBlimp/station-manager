@@ -35,6 +35,7 @@ import (
 
 	"github.com/ColonelBlimp/station-manager/internal/cat"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/serial"
 )
 
@@ -182,6 +183,14 @@ func (s *Service) reassertCIVTxOffOn(cl serial.Client, def cat.RigDefinition, re
 // stack loops. The generation snapshot is what actually enforces that: any
 // clear (confirmTxIdle) or later raise bumps txAlarmProbeGen, and a loop whose
 // generation is stale exits at its next tick without probing.
+// alarmProbePanicForTest / stuckUnkeyPanicForTest, when set, are invoked inside the
+// respective bounded RF-safety loops so a test can drive their panic paths (LC-1). nil
+// in production.
+var (
+	alarmProbePanicForTest func()
+	stuckUnkeyPanicForTest func()
+)
+
 func (s *Service) startAlarmProbes() {
 	s.mu.Lock()
 	s.txAlarmProbeGen++
@@ -202,13 +211,19 @@ func (s *Service) startAlarmProbes() {
 	s.wg.Add(1)
 	s.mu.Unlock()
 
-	go func() {
-		defer s.wg.Done()
-
+	// attempt is captured so the budget SURVIVES a panic-restart (LC-1): each pass consumes
+	// one attempt UP FRONT, so a deterministic panic can't loop on the same attempt — it
+	// walks the budget down and stops.
+	attempt := 0
+	probe := func() {
 		timer := time.NewTimer(txAlarmProbeDelay)
 		defer timer.Stop()
 
-		for attempt := 1; attempt <= txAlarmProbeAttempts; attempt++ {
+		for attempt < txAlarmProbeAttempts {
+			attempt++
+			if alarmProbePanicForTest != nil {
+				alarmProbePanicForTest() // test seam: drive the alarm-probe panic path (LC-1)
+			}
 			select {
 			case <-ctx.Done():
 				return // Stop is waiting on the WaitGroup — exit now, not at the next tick
@@ -242,7 +257,27 @@ func (s *Service) startAlarmProbes() {
 				Msg("bridge: automatic TX-alarm recovery attempts exhausted; alarm stands — " +
 					"use the re-check action once the rig is responding")
 		}
-	}()
+	}
+	// Panic policy (LC-1): probeTxRecovery never clears the alarm/TX block without positive
+	// evidence, so both are RETAINED on a panic. Resume the probe only if the SAME alarm
+	// generation and service context are still current, the alarm still stands, the service
+	// is not stopped, and budget remains — the remaining attempts, never a fresh full run.
+	// The replacement's wg.Add happens under s.mu while the panicked worker is still counted,
+	// closing the Stop/Wait race.
+	var resumeProbe func()
+	resumeProbe = func() {
+		s.mu.Lock()
+		resume := !s.stopped && s.txAlarmActive && s.txAlarmProbeGen == gen &&
+			ctx.Err() == nil && attempt < txAlarmProbeAttempts
+		if resume {
+			s.wg.Add(1)
+		}
+		s.mu.Unlock()
+		if resume {
+			safego.GoTrackedPreAdded("bridge.txAlarmProbe", s.onPanic, probe, resumeProbe, &s.wg)
+		}
+	}
+	safego.GoTrackedPreAdded("bridge.txAlarmProbe", s.onPanic, probe, resumeProbe, &s.wg)
 }
 
 // Re-unkey cadence for a rig that reports itself STILL TRANSMITTING. Spaced far
@@ -294,12 +329,20 @@ func (s *Service) retryUnkeyStillKeyed() {
 	}
 	s.txStopRetrying = true
 	ctx := s.runCtx
+	// The alarm generation this sequence belongs to — a later clear+re-raise supersedes it,
+	// so a panic-resume that finds a newer generation does not restart a stale burst (LC-1).
+	gen := s.txAlarmProbeGen
 	// Registered under the same lock that observed s.stopped — see startAlarmProbes.
 	s.wg.Add(1)
 	s.mu.Unlock()
 
-	go func() {
-		defer s.wg.Done()
+	// attempt is captured so the budget SURVIVES a panic-restart, consumed UP FRONT so a
+	// deterministic panic can't loop on one attempt (LC-1).
+	attempt := 0
+	body := func() {
+		// Clears the single-flight on ANY exit (clean or panic). A resuming panic policy
+		// re-sets it under s.mu; a concurrent readLoop that has meanwhile started a fresh
+		// sequence owns it instead (the policy's !txStopRetrying guard yields to that).
 		defer func() {
 			s.mu.Lock()
 			s.txStopRetrying = false
@@ -315,7 +358,11 @@ func (s *Service) retryUnkeyStillKeyed() {
 			return
 		}
 
-		for attempt := 1; attempt <= txStopRetryAttempts; attempt++ {
+		for attempt < txStopRetryAttempts {
+			attempt++
+			if stuckUnkeyPanicForTest != nil {
+				stuckUnkeyPanicForTest() // test seam: drive the stuck-tx-unkey panic path (LC-1)
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -332,11 +379,6 @@ func (s *Service) retryUnkeyStillKeyed() {
 			// the supervisor's reconnect backoff can be as short as 50 ms —
 			// well inside this 400 ms retry interval — so a reconnect can
 			// complete between attempts and leave a NON-nil, different client.
-			// The old sequence would then spend its remaining budget writing to
-			// the replacement while txStopRetrying suppressed the new
-			// pipeline's own "still keyed" answers from starting a clean
-			// sequence; if the budget ran out first, no further automatic unkey
-			// happened at all and the carrier stood until the rig TOT.
 			// Identity comparison — not just nil — is what makes the sequence
 			// strictly per-connection.
 			s.mu.Lock()
@@ -346,48 +388,79 @@ func (s *Service) retryUnkeyStillKeyed() {
 				return
 			}
 
-			// keyMu: the release paths hold it across their own unkey+confirm,
-			// so taking it here keeps this write from interleaving with theirs.
-			s.keyMu.Lock()
-			// Re-check BOTH connection identity and uncertainty under keyMu.
-			// Pipeline teardown takes keyMu before replacing activeClient, so
-			// this binds the write and its result to one pipeline instance.
-			s.mu.Lock()
-			current := s.activeClient == startClient
-			uncertain := s.txUncertain
-			s.mu.Unlock()
-			if !current || !uncertain {
-				s.keyMu.Unlock()
+			// The keyMu-held write, scoped with a DEFERRED unlock so a panic in the write
+			// can't leave keyMu held (which would deadlock teardown — LC-1). Returns true
+			// when the sequence is finished (identity/uncertainty gone, or CI-V confirmed);
+			// false continues to the next attempt (write failure, or a fire-and-forget
+			// re-arm).
+			finished := func() bool {
+				// keyMu: the release paths hold it across their own unkey+confirm,
+				// so taking it here keeps this write from interleaving with theirs.
+				s.keyMu.Lock()
+				defer s.keyMu.Unlock()
+				// Re-check BOTH connection identity and uncertainty under keyMu.
+				// Pipeline teardown takes keyMu before replacing activeClient, so
+				// this binds the write and its result to one pipeline instance.
+				s.mu.Lock()
+				current := s.activeClient == startClient
+				uncertain := s.txUncertain
+				s.mu.Unlock()
+				if !current || !uncertain {
+					return true
+				}
+				werr := s.writeKeyedLine(context.Background(), def, cl, off, "stuck-tx re-unkey")
+				if werr != nil {
+					s.logger.ErrorWith().Err(werr).Int("attempt", attempt).
+						Msg("bridge: safety re-unkey write failed; rig may still be keyed")
+					return false // continue to the next attempt
+				}
+				s.logger.WarnWith().Int("attempt", attempt).
+					Msg("bridge: re-sent tx_off while TX state remained uncertain")
+				if def.Protocol == cat.ProtocolIcomCIV {
+					// writeKeyedLine awaited FB: unlike an unrelated state frame,
+					// this ACK is positive evidence that the stop applied. Confirm
+					// before releasing keyMu so an old pipeline cannot clear a
+					// replacement pipeline's defensive-recovery uncertainty.
+					s.confirmTxIdle("civ ack (stuck-tx re-unkey)")
+					return true
+				}
+				// Fire-and-forget protocols need a fresh confirmation cycle. It
+				// asks read_tx_status when available, or explicitly arms the weak
+				// post-write rig-data fallback for a no-query rigdef. Arm it before
+				// releasing keyMu for the same connection-lifetime guarantee. If an
+				// RX answer landed during the write, do not overwrite that all-clear
+				// with a fresh uncertain cycle.
+				s.beginTxConfirmIfUncertain(def, cl)
+				return false // continue to the next attempt
+			}()
+			if finished {
 				return
 			}
-			werr := s.writeKeyedLine(context.Background(), def, cl, off, "stuck-tx re-unkey")
-			if werr != nil {
-				s.keyMu.Unlock()
-				s.logger.ErrorWith().Err(werr).Int("attempt", attempt).
-					Msg("bridge: safety re-unkey write failed; rig may still be keyed")
-				continue
-			}
-			s.logger.WarnWith().Int("attempt", attempt).
-				Msg("bridge: re-sent tx_off while TX state remained uncertain")
-			if def.Protocol == cat.ProtocolIcomCIV {
-				// writeKeyedLine awaited FB: unlike an unrelated state frame,
-				// this ACK is positive evidence that the stop applied. Confirm
-				// before releasing keyMu so an old pipeline cannot clear a
-				// replacement pipeline's defensive-recovery uncertainty.
-				s.confirmTxIdle("civ ack (stuck-tx re-unkey)")
-				s.keyMu.Unlock()
-				return
-			}
-			// Fire-and-forget protocols need a fresh confirmation cycle. It
-			// asks read_tx_status when available, or explicitly arms the weak
-			// post-write rig-data fallback for a no-query rigdef. Arm it before
-			// releasing keyMu for the same connection-lifetime guarantee. If an
-			// RX answer landed during the write, do not overwrite that all-clear
-			// with a fresh uncertain cycle.
-			s.beginTxConfirmIfUncertain(def, cl)
-			s.keyMu.Unlock()
 		}
-	}()
+	}
+	// Panic policy (LC-1): a panic mid-write may have left the rig keyed, so RETAIN/RAISE
+	// the alarm + uncertainty (raiseTxAlarm is idempotent — TX stays blocked, alarm stands).
+	// Then resume the burst only if nothing else has taken over the single-flight and the
+	// captured client identity, alarm generation, service context and state are all still
+	// current, with budget remaining — the remaining attempts, never a fresh full run. The
+	// replacement's wg.Add happens under s.mu while the panicked worker is still counted.
+	var resumeBurst func()
+	resumeBurst = func() {
+		s.raiseTxAlarm(TxAlarmUnconfirmed)
+		s.mu.Lock()
+		resume := !s.stopped && !s.txStopRetrying && s.txUncertain &&
+			s.activeClient == startClient && s.txAlarmProbeGen == gen &&
+			ctx.Err() == nil && attempt < txStopRetryAttempts
+		if resume {
+			s.txStopRetrying = true
+			s.wg.Add(1)
+		}
+		s.mu.Unlock()
+		if resume {
+			safego.GoTrackedPreAdded("bridge.stuckTxUnkey", s.onPanic, body, resumeBurst, &s.wg)
+		}
+	}
+	safego.GoTrackedPreAdded("bridge.stuckTxUnkey", s.onPanic, body, resumeBurst, &s.wg)
 }
 
 // RecheckTx is the operator-initiated evidence attempt behind

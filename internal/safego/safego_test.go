@@ -296,3 +296,62 @@ func TestGo_PanickingHandler_DoesNotEscape(t *testing.T) {
 		t.Fatal("wg.Wait did not return within 1s — onPanic crash escaped runWithRespawn")
 	}
 }
+
+// LC-1 — GoTrackedPreAdded: caller pre-Adds; one tracked attempt; onPanic + per-worker
+// panicPolicy run on a panic (policy even if onPanic faults); no respawn; wg always balanced.
+func TestGoTrackedPreAdded(t *testing.T) {
+	t.Run("clean return runs no policy and balances wg", func(t *testing.T) {
+		var wg sync.WaitGroup
+		policyRan := false
+		wg.Add(1)
+		GoTrackedPreAdded("clean", nil, func() {}, func() { policyRan = true }, &wg)
+		wg.Wait() // returns iff Done was called exactly once
+		if policyRan {
+			t.Error("panicPolicy ran on a clean return")
+		}
+	})
+
+	t.Run("panic runs onPanic then policy, balances wg", func(t *testing.T) {
+		var wg sync.WaitGroup
+		var onPanicN, policyN int
+		wg.Add(1)
+		GoTrackedPreAdded("boom",
+			func(string, any, []byte) { onPanicN++ },
+			func() { panic("worker") },
+			func() { policyN++ },
+			&wg)
+		wg.Wait()
+		if onPanicN != 1 {
+			t.Errorf("onPanic ran %d times, want 1", onPanicN)
+		}
+		if policyN != 1 {
+			t.Errorf("panicPolicy ran %d times, want 1", policyN)
+		}
+	})
+
+	t.Run("policy runs even if onPanic itself panics", func(t *testing.T) {
+		var wg sync.WaitGroup
+		policyRan := false
+		wg.Add(1)
+		GoTrackedPreAdded("boom",
+			func(string, any, []byte) { panic("handler faulted") },
+			func() { panic("worker") },
+			func() { policyRan = true },
+			&wg)
+		wg.Wait() // must still return — Done called despite the handler fault
+		if !policyRan {
+			t.Error("panicPolicy did not run when onPanic panicked")
+		}
+	})
+
+	t.Run("a panic in the policy is swallowed and wg still balances", func(t *testing.T) {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		GoTrackedPreAdded("boom",
+			func(string, any, []byte) {},
+			func() { panic("worker") },
+			func() { panic("policy faulted") },
+			&wg)
+		wg.Wait() // must return — a policy fault must not bypass Done
+	})
+}

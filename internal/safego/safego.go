@@ -117,6 +117,57 @@ func GoTracked(ctx context.Context, name string, onPanic PanicHandler, fn func()
 	}()
 }
 
+// GoTrackedPreAdded runs fn ONCE in a tracked goroutine for a caller that has ALREADY
+// performed wg.Add(1) — the load-bearing pattern for workers that must be counted before
+// any concurrent Stop/Wait can observe the WaitGroup (the bridge RF-safety workers register
+// their Add under the same lock that gates Stop). Unlike GoTracked it does NOT Add (the
+// caller owns the count) and does NOT respawn (the caller's panicPolicy owns any guarded
+// rescheduling — a blind respawn of an RF-safety worker is exactly the wrong thing).
+//
+// On a panic in fn, onPanic records it AND panicPolicy runs, so a worker's safe-state
+// (latch a TX alarm, keep TX blocked, …) is applied even if the logging handler itself
+// panics — invokePanicHandler swallows an onPanic fault, and panicPolicy is run guarded so
+// a fault in the policy can't escape wg.Done either. panicPolicy is skipped on a clean
+// return; either callback may be nil.
+//
+// The caller keeps its wg.Add under its own lock, and MUST register any replacement worker
+// under that same lock after re-checking `stopped`, while the panicked worker is still
+// counted — that ordering is what closes the Stop/Wait race.
+func GoTrackedPreAdded(name string, onPanic PanicHandler, fn func(), panicPolicy func(), wg *sync.WaitGroup) {
+	go func() {
+		defer wg.Done()
+		if !runOnceRecovered(name, onPanic, fn) {
+			return // clean return — the panic policy is only for a panicking exit
+		}
+		if panicPolicy != nil {
+			// Guard the policy: a fault in the safe-state work is reported but must
+			// not escape (it would bypass wg.Done via the outer defer only, but a
+			// re-panic here would still be a second recovery site — keep it explicit).
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						invokePanicHandler(name+".panicPolicy", r, onPanic)
+					}
+				}()
+				panicPolicy()
+			}()
+		}
+	}()
+}
+
+// runOnceRecovered runs fn with panic recovery, invoking onPanic on a panic (its own fault
+// swallowed by invokePanicHandler). Returns whether fn panicked.
+func runOnceRecovered(name string, onPanic PanicHandler, fn func()) (panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			invokePanicHandler(name, r, onPanic)
+		}
+	}()
+	fn()
+	return false
+}
+
 // runWithRespawn is the shared body of Go and GoTracked. Loops
 // fn-with-recovery until either fn returns normally, fn panics with
 // respawn=false, or ctx is cancelled during the cooldown.
