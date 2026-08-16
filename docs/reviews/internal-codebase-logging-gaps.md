@@ -568,6 +568,16 @@ default-visible proof that a currently connected client exists. Emit subscriber-
 transition records from the shared SSE admission layer, not a full access record at
 both connect and disconnect for every stream.
 
+> ✅ **FIXED (working tree, awaiting operator's push).** `6e65e108`, operator rulings
+> 2026-08-16. The shared admission layer `limitEventSubscribers` (covering /v1/events,
+> /v1/rig/events, /v1/ft8/events) now emits a lightweight Info transition on every successful
+> acquire and release: `event`=connected|disconnected, `path`, `client` (normalized IP),
+> `subscribers` (new GLOBAL count). Rejected clients get 503 and no transition; the
+> end-of-stream access record is unchanged. Review hardening rode in: the count mutation and
+> its log are emitted ATOMICALLY (the log callback runs under `subscribersMu`, panic-safely
+> deferred), so concurrent connects can't be logged out of count order and a panicking log
+> write can't leave the mutex locked.
+
 ### H4. Email success logs retain full PII and operator-supplied subject text
 
 The mailer writes the complete recipient and subject at Info
