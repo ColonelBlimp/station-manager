@@ -48,21 +48,33 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **logging-gaps audit L1–L13 DONE.** L1–L11 pushed (CI green on `e954bbd8`); **L12 + L13 committed
-  UNPUSHED.** **L12** (SM Cloud flattens successes) = submit detail `0fb78caa` (`forwarding.Result.Detail`;
-  `stored`/`cloud_newer_noop`, both Success; worker logs `outcome_detail`; `applied` a `*int` so a
-  missing/null ack is transient) + reconcile summary `6e4d43ee` (discovered/enqueued/skipped always,
-  deferred/limit when truncated; `truncateBatch`; `json:"-"` so endpoint shape unchanged) + docs `d3f16f96`.
-  **L13** (oversized serial frames disappear silently) = serial `21e0de82` (`OnOversizeFrame` callback —
-  counts once, rate-limited in the reader: first drop then ≤once/60s, per-session total, carries only
-  threshold+total no raw bytes; UNIFORM >4096 handling incl. the in-chunk-delimiter case that used to
-  emit a garbage 4 KB frame; exactly 4096 valid) + bridge `f2b3b908` (Warn adds port+driver) + docs
-  `fd5ea82c`. All full-TDD + reversion-proved; each code commit reached No-actionable-findings after one
-  review-fix (L12 missing-applied guard; L13 callback-reentrancy doc).
-- **RESUME TASK — the logging-gaps L-series is DONE; next is the P3 HARDENING H-series:** **H1**
-  (restore encode failures silently skipped), **H2** (evidence shutdown lacks a completion record),
-  **H3** (long-lived SSE invisible at Info until disconnect), **H4** (email success logs retain full
-  PII + operator subject). Then the 7 `internal-*-audit.md` reports (2026-08-14), still un-triaged.
+- **🎉 logging-gaps audit COMPLETE — L1–L13 + H1–H4 all FIXED.** L1–L11 pushed (CI green on
+  `e954bbd8`); **L12, L13, H1–H4 committed UNPUSHED.** This session shipped **L12** (SM Cloud
+  outcome_detail `0fb78caa` + reconcile summary `6e4d43ee`), **L13** (serial oversized-frame counter
+  `21e0de82` + bridge warn `f2b3b908`), **H1** (tune/FT8 restore encode-failure Warn `61bb5870`),
+  **H2** (evidence shutdown-completion summary `9015b33c`), **H3** (SSE subscriber connect/disconnect
+  transitions `6e65e108`), **H4** (email PII redaction — to_domain/kind, SMTP-response-leak fix —
+  `a2aa5fe6` + `9e520a2b`), each with its own `docs: mark … fixed` commit. All full-TDD + reversion-
+  proved; each reached No-actionable-findings (several after a review-fix). **Policy from H3 on:
+  NO amends — review findings land as NEW fix-commits (commit→review→fix).**
+- **RESUME — the audit reports, in the operator's PRIORITY ORDER (given 2026-08-16). Verify-
+  before-building + draft ATDD criteria per finding:**
+  1. **`internal-security-trust-boundary-audit.md`** — 4 open P1s (default-deploy DNS rebinding +
+     clickjacking).
+  2. **`internal-lifecycle-concurrency-audit.md`** — RF-safety goroutines can panic while the rig
+     may remain KEYED.
+  3. **`internal-configuration-contract-audit.md`** — deterministic SILENT deletion of unknown
+     config fields at startup.
+  4. **`internal-persistence-transaction-audit.md`** — 2 P1 integrity defects (cloud-backup trust +
+     append-only audit history).
+  5. **`internal-api-wire-contract-audit.md`** — P2 behavioural defects, false-success responses,
+     unbounded cloud ingest.
+  6. ~~`internal-codebase-logging-gaps.md`~~ — **DONE this session (L1–L13 + H1–H4).**
+  7. **`internal-maintainability-test-architecture-audit.md`** — fix the reproduced logging_debug
+     panic FIRST, then generation + quality-gate debt.
+  8. **`internal-package-boundary-audit.md`** — mostly preventative; begin with PB-1's CI guards.
+  9. **`internal-error-handling-audit.md`** — all 7 fixed; only the deferred correctness-linter
+     ratchet remains.
 - **BIG NEW BACKLOG (operator: "seven more review reports have landed"):** 7 more audits in
   `docs/reviews/` (2026-08-14) beyond logging-gaps — internal-{lifecycle-concurrency, package-
   boundary, configuration-contract, persistence-transaction, api-wire-contract, security-trust-
