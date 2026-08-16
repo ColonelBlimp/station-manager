@@ -645,12 +645,17 @@ func run() error {
 	if err := bridgeSvc.Start(workerCtx); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("start bridge")
 	}
-	// Defer covers the error-return path between here and the explicit
-	// Stop in the happy-path shutdown sequence below. Stop is idempotent
-	// (sync.Once), so the explicit call running first turns this defer
-	// into a no-op on the happy path.
+	// gracefulDone gates the subsystem safety-net defers below (bridge, ft8, psk).
+	// They exist to stop those subsystems on an EARLY ERROR return that never reaches
+	// the happy-path gracefulShutdown. On the happy path gracefulShutdown owns the
+	// Stop — and if it ABANDONED a wedged Stop at the budget, re-calling Stop here
+	// would re-block on the same wedge and defeat the LC-2 bound. Set true after
+	// gracefulShutdown; the defers read the final value via safetyNetStop.
+	var gracefulDone bool
+	// Covers the error-return path between here and gracefulShutdown. On the happy
+	// path safetyNetStop skips it (gracefulShutdown already owns the Stop).
 	defer func() {
-		if err := bridgeSvc.Stop(); err != nil {
+		if err := safetyNetStop(gracefulDone, bridgeSvc.Stop); err != nil {
 			loggerSvc.ErrorWith().Err(err).Msg("bridge: deferred stop error")
 		}
 	}()
@@ -964,11 +969,12 @@ func run() error {
 	if err := pskSvc.Start(workerCtx); err != nil {
 		loggerSvc.WarnWith().Err(err).Msg("pskreporter: start failed; FT8 spot upload disabled")
 	}
-	defer func() { _ = pskSvc.Stop() }()
-	// Idempotent Stop (sync.Once); the explicit shutdown call below turns
-	// this into a no-op on the happy path. Covers the error-return paths.
+	defer func() { _ = safetyNetStop(gracefulDone, pskSvc.Stop) }()
+	// Error-path safety net; on the happy path safetyNetStop skips it because
+	// gracefulShutdown already owns the Stop (and re-calling a Stop it abandoned at
+	// the budget would re-block — see the gracefulDone comment above).
 	defer func() {
-		if err := ft8Svc.Stop(); err != nil {
+		if err := safetyNetStop(gracefulDone, ft8Svc.Stop); err != nil {
 			loggerSvc.ErrorWith().Err(err).Msg("ft8: deferred stop error")
 		}
 	}()
@@ -1065,6 +1071,10 @@ func run() error {
 		qsoLogWG:     &qsoLogWG,
 		closeHub:     hub.Close,
 	})
+	// gracefulShutdown owns the bridge/ft8/psk teardown (completed or abandoned at
+	// the budget). Mark it done so the safety-net defers do NOT re-call Stop — a
+	// re-call of an abandoned wedge would block run()'s return past the LC-2 budget.
+	gracefulDone = true
 
 	return runErr
 }

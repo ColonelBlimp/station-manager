@@ -328,6 +328,47 @@ func TestGracefulShutdown_Ft8HangSkipsDependentsRunsIndependents(t *testing.T) {
 	}
 }
 
+// Safety-net guard (codex P1 on d8e0eee9): once gracefulShutdown owns the teardown,
+// the error-path safety-net defers must NOT re-call Stop — a Stop gracefulShutdown
+// abandoned at the budget re-blocks on the same wedge (bridge/ft8's <-stopDone, psk's
+// WaitGroup), hanging run()'s return past the LC-2 budget. A blocking stop models the
+// wedge: with gracefulDone==true, safetyNetStop must return without invoking it.
+func TestSafetyNetStop_SkipsWedgedStopWhenGracefulTeardownOwnsIt(t *testing.T) {
+	invoked := make(chan struct{}, 1)
+	blockingStop := func() error {
+		invoked <- struct{}{}
+		select {} // never returns — models an abandoned, still-wedged Stop
+	}
+
+	done := make(chan struct{})
+	go func() {
+		_ = safetyNetStop(true, blockingStop)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("safetyNetStop re-invoked a wedged Stop after graceful teardown; run() would hang past the budget")
+	}
+	select {
+	case <-invoked:
+		t.Error("safety-net Stop was invoked though graceful teardown already owned it")
+	default:
+	}
+}
+
+// The error-path complement: an early return never reached gracefulShutdown, so the
+// safety net MUST still stop the subsystem.
+func TestSafetyNetStop_RunsStopOnErrorReturnPath(t *testing.T) {
+	var called bool
+	if err := safetyNetStop(false, func() error { called = true; return nil }); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("safety-net Stop must run when graceful teardown did not (error-return path)")
+	}
+}
+
 // AC-5: the packaged unit declares an absolute systemd TimeoutStopSec backstop (20s
 // per the LC-2 ruling) above the default 10s app budget.
 func TestSmdService_DeclaresTimeoutStopSecBackstop(t *testing.T) {

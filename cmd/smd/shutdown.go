@@ -191,3 +191,22 @@ func gracefulShutdown(d teardownDeps) {
 		sc.run("hub", d.closeHub)
 	}
 }
+
+// safetyNetStop is the error-path teardown net for a subsystem whose Stop is also
+// driven by gracefulShutdown on the happy path. It runs stop() ONLY when graceful
+// teardown did not (gracefulDone == false) — i.e. an early error return that never
+// reached gracefulShutdown.
+//
+// On the happy path gracefulShutdown already owns the Stop, so re-calling it from a
+// defer is not merely redundant: a Stop that gracefulShutdown ABANDONED at the
+// budget (bridge/ft8's sync.Once body still in-flight so <-stopDone never returns,
+// or psk's WaitGroup still draining) would re-block on that same wedged operation
+// when run() returns, re-introducing the unbounded hang LC-2 removed (codex P1 on
+// d8e0eee9). Idempotency does not save us — the second caller blocks on the shared
+// completion signal, it does not no-op.
+func safetyNetStop(gracefulDone bool, stop func() error) error {
+	if gracefulDone {
+		return nil
+	}
+	return stop()
+}
