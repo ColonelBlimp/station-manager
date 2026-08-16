@@ -48,20 +48,24 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **🎉 security-trust-boundary audit CLOSED — ST-1…ST-7 all FIXED (priority #1 done).** This
-  session shipped **ST-4a/b** (credentialed-client transport + same-origin redirects, `internal/
-  securehttp`), **ST-5** (Unix-socket permission boundary — owner-private path/ancestry + 0600
-  socket; base `e66a33ab` + 4 review-fixes), **ST-6** (private-state fs policy, `internal/fsperm`;
-  base `52b6943a` + 3 review-fixes), **ST-7** (ClubLog build-key boundary; `a81948b8`), closed by
-  `cb595d8e`. **`git log origin/main..HEAD` = 11 UNPUSHED commits — operator pushes.** All full-TDD
-  + reversion-proved; each reached No-actionable-findings (several after a review-fix).
-- **ONE open follow-up: ST-3b** — authenticated LAN access (Option 1 loopback/socket+TLS-proxy vs
-  Option 2 browser auth), the real topology remedy, **tracked in ADR 0069**. Not started.
-- **RESUME → priority #2: `internal-lifecycle-concurrency-audit.md`** — RF-safety goroutines can
-  panic while the rig may remain KEYED (has P1s). Then #3 configuration-contract (silent unknown-
-  field deletion), #4 persistence-transaction (2 P1 integrity), #5 api-wire-contract, #7
-  maintainability-test-arch (logging_debug panic FIRST), #8 package-boundary (PB-1 CI guards), #9
-  error-handling (linter ratchet only). #1 security ✅, #6 logging-gaps ✅ (both done).
+- **🎉 security-trust-boundary audit CLOSED (#1)** — ST-1…ST-7 all FIXED (ST-4a/b `internal/
+  securehttp`; ST-5 Unix-socket boundary `e66a33ab`+4 fixes; ST-6 `internal/fsperm` `52b6943a`+3
+  fixes; ST-7 build-key `a81948b8`; closed `cb595d8e`). **ONE open follow-up: ST-3b** —
+  authenticated LAN access (topology remedy), **tracked in ADR 0069**, not started.
+- **🎉 lifecycle-concurrency LC-1 (its only P1) FIXED (#2 in progress)** — RF-safety goroutine
+  panic boundary: `b627ac30` (defensive-unkey / TX-alarm-probe / stuck-TX-unkey + new
+  `safego.GoTrackedPreAdded` + keyMu lock-safety refactor) + `1c59822b` (state/meter poll workers,
+  pipeline-unwind). Per-worker post-panic policies operator-ruled 2026-08-16; panic-injection
+  tests + reversion proofs; full bridge suite `-race` green.
+- **`git log origin/main..HEAD` = 15 UNPUSHED commits — operator pushes.** All full-TDD +
+  reversion-proved; each reached No-actionable-findings.
+- **RESUME → finish priority #2 (`internal-lifecycle-concurrency-audit.md`): LC-2..LC-5 remain**
+  — LC-2 (P2) shutdown deadline starts after subsystem teardown; LC-3 (P2) evidence Stop not a
+  producer barrier; LC-4 (P2) evidence DB work uncancellable; LC-5 (P3) lifecycle state machines
+  inconsistent. THEN the operator's priority order: #3 configuration-contract (silent unknown-
+  field deletion), #4 persistence-transaction (**2 P1** integrity — highest remaining severity),
+  #5 api-wire-contract, #7 maintainability-test-arch (logging_debug panic FIRST), #8
+  package-boundary (PB-1 CI guards), #9 error-handling (linter ratchet only). #1 ✅, #6 ✅.
 - **WORKFLOW per finding (operator directive):** verify-before-building → draft ATDD criteria
   (observable, before mechanism) → operator rules judgment calls → RED → impl as ONE commit with
   reversion proofs → operator agrees each commit → mark FIXED in the audit doc. **NO amends** —
