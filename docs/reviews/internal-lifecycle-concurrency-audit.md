@@ -156,6 +156,33 @@ Use blocking seams for bridge, FT8, PSK and evidence Stop. Assert that each is n
 the timeout record, later safe cleanup still runs where possible, HTTP shutdown is
 signalled, and total graceful teardown is bounded close to the configured duration.
 
+> ✅ **FIXED (committed on main).** ONE shutdown budget now starts inside
+> `gracefulShutdown` (`cmd/smd/shutdown.go`) immediately after the accept listener
+> closes, and bounds every ordered stage (goroutine + buffered done-channel + deadline
+> select — no context-aware Stop refactor, per the 2026-08-16 rulings):
+> - **`d8e0eee9`** — the extraction. Bridge runs FIRST with the full budget, so the
+>   RF-unkey is always attempted; the stage still running at expiry is named in ONE
+>   structured record (`stage`/`stage_elapsed`/`total_elapsed`/`budget`) and later
+>   stages do not re-log a generic deadline error. Dependency preservation: evidence,
+>   the FT8 QSO-log drain and `hub.Close` are gated on their prerequisite — if ft8 did
+>   not stop they are SKIPPED (recorded, not attempted) rather than raced
+>   (archive-under-producer, `Wait`/`Add` panic, send-on-closed-channel panic);
+>   independent cleanup (HTTP shutdown, psk) still runs; the hub closes only when the
+>   budget never expired. `packaging/smd.service` gains `TimeoutStopSec=20s` as the
+>   absolute systemd cap (documented that an app budget above 20s is still cut off).
+> - **`abd48f30`** — follow-up (codex P1 on d8e0eee9). run()'s deferred safety-net Stops
+>   (bridge/ft8/psk, for early-error paths) would re-block on a Stop the budget
+>   ABANDONED — its `sync.Once`/`WaitGroup` is still in-flight, so `<-stopDone` / `Wait`
+>   never returns. A `gracefulDone` guard (via `safetyNetStop`) skips those defers on
+>   the happy path; they still fire on an early error return.
+>
+> Blocking-seam tests: each stage named in exactly one record, teardown bounded near the
+> budget, RF-unkey attempted under pressure, an ft8 hang skips the dependents (naming
+> ft8) while independents run, a clean shutdown emits no record, and the safety-net
+> guard does not re-block a wedge. Each reversion-proofed; full `cmd/smd` suite `-race`
+> green. (A pre-existing LC-1 test data race surfaced by the -race gate was fixed
+> separately in **`15445922`**.)
+
 ## LC-3 — evidence Stop is not a producer barrier (P2)
 
 Evidence capture uses an atomic `closed` flag, but the lifecycle transition is split
