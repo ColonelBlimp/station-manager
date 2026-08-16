@@ -48,19 +48,21 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **logging-gaps audit L1–L12 DONE.** L1–L11 pushed (CI green on `e954bbd8`). **L11** (forwarding
-  queue context) = store query `0c73d92c` + worker discipline `b198f81f` + docs `fbbe7414`.
-  **L12** (SM Cloud flattens successes) shipped this session, **committed UNPUSHED**, as 3 commits:
-  submit detail `0fb78caa` (`forwarding.Result.Detail`; SM Cloud `stored`/`cloud_newer_noop`, both
-  Success+uploaded; worker logs `outcome_detail`, omitted when unset; `applied` now a `*int` so a
-  missing/null ack is transient not a false noop), reconcile summary `6e4d43ee`
-  (`run complete` logs discovered/enqueued/skipped always + deferred/limit when truncated; identity
-  discovered=enqueued+skipped+deferred; per-list caps kept, `truncateBatch` factored;
-  Discovered/Attempted `json:"-"` so the endpoint shape is unchanged), docs `d3f16f96`. All
-  full-TDD + reversion-proved; each code commit reached No-actionable-findings (commit A after one
-  review-fix — the missing-applied guard).
-- **RESUME TASK — L13 (P3):** oversized serial frames disappear silently — add a counter/log. Then
-  **H1–H4** (P3 hardening), then the 7 `internal-*-audit.md` reports (2026-08-14).
+- **logging-gaps audit L1–L13 DONE.** L1–L11 pushed (CI green on `e954bbd8`); **L12 + L13 committed
+  UNPUSHED.** **L12** (SM Cloud flattens successes) = submit detail `0fb78caa` (`forwarding.Result.Detail`;
+  `stored`/`cloud_newer_noop`, both Success; worker logs `outcome_detail`; `applied` a `*int` so a
+  missing/null ack is transient) + reconcile summary `6e4d43ee` (discovered/enqueued/skipped always,
+  deferred/limit when truncated; `truncateBatch`; `json:"-"` so endpoint shape unchanged) + docs `d3f16f96`.
+  **L13** (oversized serial frames disappear silently) = serial `21e0de82` (`OnOversizeFrame` callback —
+  counts once, rate-limited in the reader: first drop then ≤once/60s, per-session total, carries only
+  threshold+total no raw bytes; UNIFORM >4096 handling incl. the in-chunk-delimiter case that used to
+  emit a garbage 4 KB frame; exactly 4096 valid) + bridge `f2b3b908` (Warn adds port+driver) + docs
+  `fd5ea82c`. All full-TDD + reversion-proved; each code commit reached No-actionable-findings after one
+  review-fix (L12 missing-applied guard; L13 callback-reentrancy doc).
+- **RESUME TASK — the logging-gaps L-series is DONE; next is the P3 HARDENING H-series:** **H1**
+  (restore encode failures silently skipped), **H2** (evidence shutdown lacks a completion record),
+  **H3** (long-lived SSE invisible at Info until disconnect), **H4** (email success logs retain full
+  PII + operator subject). Then the 7 `internal-*-audit.md` reports (2026-08-14), still un-triaged.
 - **BIG NEW BACKLOG (operator: "seven more review reports have landed"):** 7 more audits in
   `docs/reviews/` (2026-08-14) beyond logging-gaps — internal-{lifecycle-concurrency, package-
   boundary, configuration-contract, persistence-transaction, api-wire-contract, security-trust-
