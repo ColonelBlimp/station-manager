@@ -1,6 +1,6 @@
 # Internal security and trust-boundary audit
 
-**Status:** review complete; actions open  
+**Status:** ST-1..ST-7 all FIXED (2026-08-16); ST-3b (authenticated LAN access) is the one open follow-up, tracked in ADR 0069  
 **Reviewed:** 2026-08-14  
 **Scope:** network listeners, browser trust, authentication, credential transport and
 storage, filesystem authorization and permissions, tenant isolation, path containment,
@@ -393,6 +393,17 @@ always be owner-only. Cover insecure/existing parents, a non-owner/stale socket,
 to chmod/stat, normal curl access by the owner, and denial to a separate local UID in an
 integration test where CI permits it.
 
+> ✅ **FIXED (committed on main).** `e66a33ab` + review-fixes `88c94ccf` / `70573e5d` /
+> `5b86f93b` / `6f2abfb1`, operator rulings 2026-08-16. The Unix bind path is now a real
+> authorization boundary: the default socket resolves under an owner-private runtime dir
+> (`$XDG_RUNTIME_DIR` → state-home → `$HOME/.local/state`; never `/tmp`; unresolvable is a
+> fatal config finding); before bind the socket's immediate parent must be euid-owned,
+> non-symlink and `0700`, and the WHOLE ancestry up to `/` must be non-symlink, root/euid-
+> owned and not group/other-writable-without-sticky (closing an ancestor-rename race);
+> after bind the socket is chmod'd `0600` and verified, unlinking + refusing to serve on
+> failure. Strict root-or-euid ownership (no overflow-uid exception — Option A); positive
+> bind tests skip only in namespaced envs where `/` isn't root/euid-owned.
+
 ## ST-6 — local QSO-bearing artifacts are not consistently owner-private (P2)
 
 Several code paths rely on directory history or deliberately create readable files:
@@ -448,6 +459,20 @@ Under permissive umask, cover fresh and pre-existing `0755`/`0777` directories, 
 and refusal when a path is not owned by the daemon user. Assert effective modes, not
 only the mode argument passed to an open call.
 
+> ✅ **FIXED (committed on main).** `52b6943a` + review-fixes `88e4fc8e` / `23563596` /
+> `05e1e319`, operator rulings 2026-08-16. New `internal/fsperm` carries the one
+> private-state policy: application-owned paths (symlink-aware containment within the
+> working dir, euid-owned) are chmod'd to `0600`/`0700` and **verified** (fatal for the
+> databases); operator-supplied paths outside the working dir are never mutated but warned
+> when group/world-accessible; symlinks are never chmod'd through. Applied to the log +
+> reference databases (+ `-wal`/`-shm` + dir), the bootstrap backup dir/db incl. existing
+> backups, and the sent-ADIF archive — in **every** flow that opens them (daemon startup,
+> `import`, `restore`). Log files (probe + pre-logger startup writer) chmod an existing
+> file to `0600`. The sent-ADIF archive requires affirmative `Contained` before writing (an
+> ancestor-symlink can't redirect QSO data out of the working dir); the residual write-time
+> TOCTOU is documented as bounded by the euid-owned `0755` working dir. Working-dir root
+> stays `0755` by design.
+
 ## ST-7 — the ClubLog build-key boundary is documented but not enforced (P2)
 
 `internal/forwarding/clublog` declares a shared application API key populated by
@@ -491,6 +516,23 @@ Build private and public artifacts with a dummy sentinel. Assert it is present o
 the explicitly private artifact, absent from public binaries/packages, and never echoed
 by build logs. Pin release-task failure when a public build environment contains the
 key.
+
+> ✅ **FIXED (committed on main).** `a81948b8`, operator rulings 2026-08-16. The build
+> paths are split by construction: the PRIVATE path (`dev-rpm.sh`) requires
+> `CLUBLOG_API_KEY`, stamps `buildinfo.BuildScope=private`, outputs to `build/private/` and
+> marks the RPM `PRIVATE-BUILD-DO-NOT-DISTRIBUTE` (`nfpm.private.yaml`); the PUBLIC path
+> (`release-rpm.sh`/`release.sh`) injects no key and **fails** if one is present after
+> `.env` load; generic dev builds no longer consume the key. `scripts/test-build-boundary.sh`
+> (in `task ci:local` **and** CI) proves the sentinel lands only in the private binary,
+> the public binary is clean, and the public path refuses a present key without echoing
+> it. Scope: guards, artifact separation, markers and tests only — the credential
+> replacement / brokering remains ADR 0054's separate trigger.
+
+---
+
+**All ST-1..ST-7 findings are now FIXED** (ST-3 as ST-3a; **ST-3b — authenticated LAN
+access — remains the one open topology decision**, tracked in ADR 0069). The P2s ST-5/6/7
+close out this audit.
 
 ## Verified boundaries — no finding
 
