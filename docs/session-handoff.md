@@ -41,52 +41,37 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-15)
+## Now (as of 2026-08-16)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **🎉 logging-gaps audit COMPLETE — L1–L13 + H1–H4 all FIXED.** L1–L11 pushed (CI green on
-  `e954bbd8`); **L12, L13, H1–H4 committed UNPUSHED.** This session shipped **L12** (SM Cloud
-  outcome_detail `0fb78caa` + reconcile summary `6e4d43ee`), **L13** (serial oversized-frame counter
-  `21e0de82` + bridge warn `f2b3b908`), **H1** (tune/FT8 restore encode-failure Warn `61bb5870`),
-  **H2** (evidence shutdown-completion summary `9015b33c`), **H3** (SSE subscriber connect/disconnect
-  transitions `6e65e108`), **H4** (email PII redaction — to_domain/kind, SMTP-response-leak fix —
-  `a2aa5fe6` + `9e520a2b`), each with its own `docs: mark … fixed` commit. All full-TDD + reversion-
-  proved; each reached No-actionable-findings (several after a review-fix). **Policy from H3 on:
-  NO amends — review findings land as NEW fix-commits (commit→review→fix).**
-- **RESUME — the audit reports, in the operator's PRIORITY ORDER (given 2026-08-16). Verify-
-  before-building + draft ATDD criteria per finding:**
-  1. **`internal-security-trust-boundary-audit.md`** — 4 open P1s (default-deploy DNS rebinding +
-     clickjacking).
-  2. **`internal-lifecycle-concurrency-audit.md`** — RF-safety goroutines can panic while the rig
-     may remain KEYED.
-  3. **`internal-configuration-contract-audit.md`** — deterministic SILENT deletion of unknown
-     config fields at startup.
-  4. **`internal-persistence-transaction-audit.md`** — 2 P1 integrity defects (cloud-backup trust +
-     append-only audit history).
-  5. **`internal-api-wire-contract-audit.md`** — P2 behavioural defects, false-success responses,
-     unbounded cloud ingest.
-  6. ~~`internal-codebase-logging-gaps.md`~~ — **DONE this session (L1–L13 + H1–H4).**
-  7. **`internal-maintainability-test-architecture-audit.md`** — fix the reproduced logging_debug
-     panic FIRST, then generation + quality-gate debt.
-  8. **`internal-package-boundary-audit.md`** — mostly preventative; begin with PB-1's CI guards.
-  9. **`internal-error-handling-audit.md`** — all 7 fixed; only the deferred correctness-linter
-     ratchet remains.
-- **BIG NEW BACKLOG (operator: "seven more review reports have landed"):** 7 more audits in
-  `docs/reviews/` (2026-08-14) beyond logging-gaps — internal-{lifecycle-concurrency, package-
-  boundary, configuration-contract, persistence-transaction, api-wire-contract, security-trust-
-  boundary, maintainability-test-architecture}-audit.md + frontend-app-review.md +
-  internal-error-handling-audit.md. Ship-gate work AFTER logging-gaps. Not yet triaged.
+- **🎉 security-trust-boundary audit CLOSED — ST-1…ST-7 all FIXED (priority #1 done).** This
+  session shipped **ST-4a/b** (credentialed-client transport + same-origin redirects, `internal/
+  securehttp`), **ST-5** (Unix-socket permission boundary — owner-private path/ancestry + 0600
+  socket; base `e66a33ab` + 4 review-fixes), **ST-6** (private-state fs policy, `internal/fsperm`;
+  base `52b6943a` + 3 review-fixes), **ST-7** (ClubLog build-key boundary; `a81948b8`), closed by
+  `cb595d8e`. **`git log origin/main..HEAD` = 11 UNPUSHED commits — operator pushes.** All full-TDD
+  + reversion-proved; each reached No-actionable-findings (several after a review-fix).
+- **ONE open follow-up: ST-3b** — authenticated LAN access (Option 1 loopback/socket+TLS-proxy vs
+  Option 2 browser auth), the real topology remedy, **tracked in ADR 0069**. Not started.
+- **RESUME → priority #2: `internal-lifecycle-concurrency-audit.md`** — RF-safety goroutines can
+  panic while the rig may remain KEYED (has P1s). Then #3 configuration-contract (silent unknown-
+  field deletion), #4 persistence-transaction (2 P1 integrity), #5 api-wire-contract, #7
+  maintainability-test-arch (logging_debug panic FIRST), #8 package-boundary (PB-1 CI guards), #9
+  error-handling (linter ratchet only). #1 security ✅, #6 logging-gaps ✅ (both done).
+- **WORKFLOW per finding (operator directive):** verify-before-building → draft ATDD criteria
+  (observable, before mechanism) → operator rules judgment calls → RED → impl as ONE commit with
+  reversion proofs → operator agrees each commit → mark FIXED in the audit doc. **NO amends** —
+  review findings land as NEW fix-commits (commit→review→fix).
 - **2nd coder commits to this HEAD in parallel** — commit ONLY my explicit paths (never `-A`);
-  re-check `git log -1` is mine IN THE SAME command as any amend (prefer NEW commits); their
-  `.codex-reviews/` docs + working-tree/untracked files are NOT mine. Nothing pushed (operator pushes).
+  re-check `git log -1` is mine; their `.codex-reviews/` docs + untracked files are NOT mine.
 - **Do-not:** never initiate FT8/TX or touch the live TX path (sink 66 / rig cmds / power) without
   per-occasion agreement. All commits carry NO Claude trailer. Post-commit codex review is SLOW
   (~1-2 min — a 2-min commit TIMES OUT; use a longer Bash timeout); triage `.codex-reviews/` per
-  commit (verdict from OUTPUT, some belong to the 2nd coder), fix findings, DELETE the doc.
+  commit (verdict from OUTPUT), fix findings, DELETE the doc.
 
 ## Current state (as of 2026-08-14)
 
