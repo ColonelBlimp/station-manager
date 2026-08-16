@@ -190,7 +190,18 @@ func (s *Server) limitConcurrent(next http.Handler) http.Handler {
 func (s *Server) limitEventSubscribers(next http.Handler) http.Handler {
 	const op errors.Op = "api.limitEventSubscribers"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ok, release := s.limits.acquireSubscriber()
+		// H3: a lightweight transition record on connect + disconnect from this shared
+		// admission layer, so a currently-connected SSE client is default-visible instead
+		// of only appearing in the end-of-stream access line. Not a full access record. The
+		// log runs inside the limiter's lock (via the callback), so the count and its record
+		// are atomic — concurrent transitions can't be logged out of count order (review).
+		ok, release := s.limits.acquireSubscriber(func(connected bool, count int) {
+			event := "disconnected"
+			if connected {
+				event = "connected"
+			}
+			s.logSSESubscriber(r, event, count)
+		})
 		if !ok {
 			s.writeError(w, http.StatusServiceUnavailable,
 				"server_busy", "event subscriber limit reached; retry shortly", op)
@@ -199,6 +210,19 @@ func (s *Server) limitEventSubscribers(next http.Handler) http.Handler {
 		defer release()
 		next.ServeHTTP(w, r)
 	})
+}
+
+// logSSESubscriber emits one SSE subscriber-count transition (H3): event
+// (connected/disconnected), the request path, the normalized client IP, and the new
+// GLOBAL subscriber count across all SSE endpoints. Info — this is the default-visible
+// proof a client is connected.
+func (s *Server) logSSESubscriber(r *http.Request, event string, count int) {
+	s.logger.InfoWith().
+		Str("event", event).
+		Str("path", r.URL.Path).
+		Str("client", clientIP(r)).
+		Int("subscribers", count).
+		Msg("sse: subscriber " + event)
 }
 
 // limitSubmitRate applies a token-bucket rate limit to the 'submit'

@@ -65,24 +65,29 @@ func (l *loadLimiter) acquireConcurrent() (bool, func()) {
 	}
 }
 
-// acquireSubscriber tries to reserve a subscriber slot for /v1/events.
-// Returns true on success and a release func that must be called when
-// the subscriber disconnects.
-func (l *loadLimiter) acquireSubscriber() (bool, func()) {
+// acquireSubscriber tries to reserve a subscriber slot for the SSE endpoints. On success it
+// invokes onEvent(connected=true, newCount) and returns a release func that invokes
+// onEvent(connected=false, newCount) — BOTH while subscribersMu is held, so the count mutation
+// and its transition log are atomic (H3 + review): concurrent connects/disconnects can never be
+// logged out of count order. onEvent must be quick and must NOT re-enter the limiter. On the
+// cap, returns (false, nil) and onEvent is never called. The lock is only contended by other
+// (rare) SSE connects/disconnects, so holding it across the callback is cheap.
+func (l *loadLimiter) acquireSubscriber(onEvent func(connected bool, count int)) (bool, func()) {
 	l.subscribersMu.Lock()
-	defer l.subscribersMu.Unlock()
+	defer l.subscribersMu.Unlock() // panic-safe: onEvent (a log write) runs under the lock
 	if l.subscribers >= l.maxSubscribers {
 		return false, nil
 	}
 	l.subscribers++
-	return true, l.releaseSubscriber
-}
+	onEvent(true, l.subscribers)
 
-func (l *loadLimiter) releaseSubscriber() {
-	l.subscribersMu.Lock()
-	defer l.subscribersMu.Unlock()
-	if l.subscribers > 0 {
-		l.subscribers--
+	return true, func() {
+		l.subscribersMu.Lock()
+		defer l.subscribersMu.Unlock() // panic-safe, same reason
+		if l.subscribers > 0 {
+			l.subscribers--
+		}
+		onEvent(false, l.subscribers)
 	}
 }
 
