@@ -238,6 +238,27 @@ token/session redaction, CSRF behavior after authentication, logout/revocation, 
 TLS/proxy header assumptions. Include a native client that forges Host and omits Origin;
 it must not become authorized by looking browser-compatible.
 
+> ✅ **ST-3a FIXED (committed on main).** `505e0566` + review-fix `e78c7617`, operator
+> rulings + ADR **0069**, 2026-08-16. Split into **ST-3a (done)** and **ST-3b (open)**.
+> ST-3a makes a non-loopback TCP bind (specific IP, wildcard `0.0.0.0`/`::`/empty host, or
+> non-localhost hostname) **fail-closed**: startup-fatal (`Load` aborts / PUT 400, code
+> `insecure_bind_unacknowledged`) unless the operator sets `server.allow_insecure_network:
+> true`, at which point the daemon starts and logs a standing advisory enumerating the
+> **full** API + RF exposure (not just QSO submit). Wildcards require the ack too — the CSRF
+> guard's loopback-Host trust is a rebinding defence, not peer auth. The ack is
+> config-file/startup-only (absent from the `/v1/config` wire surface, so not remotely
+> writable). The pprof advisory now names in-memory disclosure and stays advisory on an
+> acknowledged bind. Docs reconciled: `config.md` §5.1 (three postures), `api.md` status
+> notes on the conflicting historical auth/TLS text, ADR 0069. Tests pin: Load-refuses per
+> non-loopback shape; acknowledged-starts + comprehensive advisory; loopback/Unix (incl.
+> zoned `::1%zone`) never insecure; ack not remotely writable. The review-fix corrects
+> `isLoopbackBind` to accept an IPv6 zone via `netip.ParseAddr`.
+>
+> ⚠️ **ST-3b REMAINS OPEN (the actual remedy).** ST-3a closes the *silent/unacknowledged*
+> exposure and the doc drift; it does **not** provide authenticated LAN access. The topology
+> decision — Option 1 (loopback/owner-socket + authenticated TLS proxy) vs Option 2 (browser
+> auth as a system) — is deferred and recorded in ADR 0069. Do not mark ST-3 wholly fixed.
+
 ## ST-4 — credentialed HTTP clients allow plaintext and permissive redirects (P1)
 
 Transport rules vary by integration:
