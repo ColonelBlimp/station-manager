@@ -134,7 +134,9 @@ func (f *smtpFake) handle(c net.Conn) {
 		case strings.HasPrefix(upper, "RCPT TO:"):
 			to = extractAddr(line[len("RCPT TO:"):])
 			if f.rejectRcpt {
-				flush("550 mailbox unavailable")
+				// Echo the address like a real MTA would, so the redaction test exercises
+				// the SMTP-response leak vector (H4 review), not just the outer message.
+				flush("550 " + to + " mailbox unavailable")
 				continue
 			}
 			flush("250 OK")

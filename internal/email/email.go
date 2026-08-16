@@ -36,6 +36,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -79,6 +80,18 @@ type Message struct {
 	Kind        string
 	Body        string // plain text body
 	Attachments []Attachment
+}
+
+// smtpRejectCode extracts the SMTP status code from a protocol rejection (a *textproto.Error).
+// The rejection's free-text message can echo the rejected mailbox, so callers log ONLY the code,
+// never the raw response (H4 review). Returns (0, false) for a non-protocol (transport) error,
+// which carries no address and is safe to wrap.
+func smtpRejectCode(err error) (int, bool) {
+	var te *textproto.Error
+	if stderrs.As(err, &te) {
+		return te.Code, true
+	}
+	return 0, false
 }
 
 // Domain returns the domain part of an email address for safe logging — never the local part
@@ -233,10 +246,18 @@ func (s *Service) Send(ctx context.Context, msg Message) error {
 	}
 
 	if err := client.Mail(fromAddr); err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("smtp MAIL FROM rejected (from_domain %s)", Domain(fromAddr))
+		if code, ok := smtpRejectCode(err); ok {
+			// A protocol rejection's free-text message can echo the address — keep the code
+			// only, never wrap the raw response (H4 review).
+			return errors.New(op).WithMsgf("smtp MAIL FROM rejected (from_domain %s, code %d)", Domain(fromAddr), code)
+		}
+		return errors.New(op).WithErr(err).WithMsgf("smtp MAIL FROM failed (from_domain %s)", Domain(fromAddr))
 	}
 	if err := client.Rcpt(toAddr); err != nil {
-		return errors.New(op).WithErr(err).WithMsgf("smtp RCPT TO rejected (to_domain %s)", Domain(toAddr))
+		if code, ok := smtpRejectCode(err); ok {
+			return errors.New(op).WithMsgf("smtp RCPT TO rejected (to_domain %s, code %d)", Domain(toAddr), code)
+		}
+		return errors.New(op).WithErr(err).WithMsgf("smtp RCPT TO failed (to_domain %s)", Domain(toAddr))
 	}
 
 	w, err := client.Data()
