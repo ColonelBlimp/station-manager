@@ -506,8 +506,12 @@ func (s *Server) bindListener(socketPath string) (net.Listener, error) {
 
 	if s.protocol == "unix" {
 		if err := prepareUnixSocketParent(socketPath); err != nil {
-			return nil, errors.New(op).WithErr(err).WithMsgf(
-				"socket parent for %s is not owner-private", socketPath)
+			// Sanitized: name the policy, never the (possibly attacker-influenced) path.
+			// Each directory from the socket up to "/" must be a non-symlink directory
+			// owned by root or this user, with no group/other write unless sticky; the
+			// immediate parent must be 0700.
+			return nil, errors.New(op).WithErr(err).WithMsg(
+				"unix socket path is not owner-private (see the socket-parent policy)")
 		}
 		if err := s.removeStaleSocket(socketPath, op); err != nil {
 			return nil, err

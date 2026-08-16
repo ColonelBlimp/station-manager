@@ -6,10 +6,13 @@ package api
 // the full read/config/RF surface. This hardens the Unix path (operator rulings 2026-08-16):
 //
 //   - The immediate parent directory must be euid-owned, a real directory (not a symlink),
-//     and inaccessible to group/other. It is created 0700 when absent and validated
-//     fatally when present — a private parent closes the race between net.Listen creating
-//     the socket and the subsequent chmod, during which the socket briefly carries the
-//     umask-derived mode. An unsafe operator-supplied parent is fatal, not advisory.
+//     and inaccessible to group/other (0700). It is created 0700 when absent and validated
+//     fatally when present. The WHOLE ancestry up to "/" is then validated too — otherwise
+//     a local user who can write an ancestor could rename the validated parent and swap in
+//     their own directory between net.Listen creating the socket and the subsequent chmod,
+//     during which the socket briefly carries the umask-derived mode (codex e66a33ab P1).
+//     This prevents replacement by another local user; it is not protection against root or
+//     the daemon's own uid. An unsafe operator-supplied path is fatal, not advisory.
 //   - After bind, the socket is chmod'd 0600 and then verified (is-socket, euid-owned,
 //     mode 0600); binding does not proceed to Serve until verification succeeds, and on
 //     any failure the socket is unlinked.
@@ -60,6 +63,66 @@ func prepareUnixSocketParent(socketPath string) error {
 	}
 	if err := ensureEuidOwned(fi); err != nil {
 		return fmt.Errorf("socket parent directory: %w", err)
+	}
+	// The immediate parent being 0700 is not enough: if any ANCESTOR is writable by
+	// another local user, they can rename the validated parent and swap in their own
+	// directory between this check and net.Listen (codex e66a33ab P1). Validate the whole
+	// chain from the grandparent up to "/".
+	if err := validateSocketAncestry(filepath.Dir(parent)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateSocketAncestry walks from dir up to "/" and refuses any component another
+// local user could tamper with — closing the rename TOCTOU that immediate-parent
+// validation alone leaves open. Each ancestor must be a non-symlink directory (symlink
+// components are rejected outright — the simpler, reliable containment) owned by root or
+// the effective uid, and either NOT group/other-writable OR world-writable WITH the
+// sticky bit. The sticky exception is load-bearing and correct: a sticky directory such
+// as /tmp (mode 01777) does NOT let a non-owner rename another user's entry, so it cannot
+// be used to swap a validated euid-owned directory; without it every ancestry rooted in
+// /tmp (i.e. essentially all of them) would be rejected while offering no real protection.
+//
+// This prevents REPLACEMENT by another local user. It is NOT protection against root or
+// the daemon's own uid, which can always tamper with the daemon's own files.
+func validateSocketAncestry(dir string) error {
+	for cur := filepath.Clean(dir); ; {
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return fmt.Errorf("inspecting the socket parent's ancestry: %w", err)
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("the socket path ancestry contains a symlink; the whole path must be real, owner-private directories")
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("the socket path ancestry contains a non-directory component")
+		}
+		if err := ensureRootOrEuidOwned(fi); err != nil {
+			return fmt.Errorf("socket path ancestry: %w", err)
+		}
+		if fi.Mode().Perm()&0o022 != 0 && fi.Mode()&os.ModeSticky == 0 {
+			return fmt.Errorf("a directory in the socket path ancestry is writable by group/other without the sticky bit; " +
+				"another local user could replace it")
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur { // reached the filesystem root
+			return nil
+		}
+		cur = parent
+	}
+}
+
+// ensureRootOrEuidOwned reports an error unless fi is owned by root or the effective uid —
+// the two principals that legitimately control the daemon's path. A directory owned by any
+// other user in the ancestry is a tampering vector.
+func ensureRootOrEuidOwned(fi os.FileInfo) error {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("cannot determine owner (unsupported platform)")
+	}
+	if uid := int(st.Uid); uid != 0 && uid != os.Geteuid() {
+		return fmt.Errorf("a directory is owned by neither root nor the daemon user")
 	}
 	return nil
 }
