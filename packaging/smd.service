@@ -36,6 +36,13 @@ Restart=on-failure
 # explicit + robust.
 RestartForceExitStatus=3
 RestartSec=5s
+# Absolute backstop on graceful shutdown. The daemon runs its own budget-bounded
+# teardown (server.shutdown_timeout_sec, default 10s — see cmd/smd gracefulShutdown,
+# LC-2) and records the stage that overran, so its OWN report fires first. This line
+# is the OS-level cap that SIGKILLs the process if the daemon itself wedges past 20s.
+# It is ABSOLUTE: a config with server.shutdown_timeout_sec ABOVE 20 will still be cut
+# off here — raise this value in lockstep if a larger app budget is ever configured.
+TimeoutStopSec=20s
 
 [Install]
 WantedBy=default.target

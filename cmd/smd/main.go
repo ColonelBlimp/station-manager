@@ -1043,97 +1043,28 @@ func run() error {
 	// Each worker finishes its current processRow then returns from Run.
 	workerCancel()
 
-	// Stop the bridge subsystem. Cancels the publisher goroutine,
-	// waits for it to exit, closes the BRIDGE subsystem's own hub (not
-	// the daemon events.Hub, which is closed later, after HTTP handlers
-	// drain) so any open rig-state SSE subscribers see a clean stream
-	// end. Order matters relative to server.Shutdown: stop publishing
-	// first, then drain readers.
-	if err := bridgeSvc.Stop(); err != nil {
-		loggerSvc.ErrorWith().Err(err).Msg("bridge: Stop error")
-	}
-
-	// Stop the FT8 subsystem alongside the bridge: cancels capture +
-	// scheduler + decode worker, releases the audio device, and waits for an
-	// in-flight decode (go-ft8 is not cancellable) to finish — bounded by one
-	// slot's decode time.
-	if err := ft8Svc.Stop(); err != nil {
-		loggerSvc.ErrorWith().Err(err).Msg("ft8: Stop error")
-	}
-	// Flush + close the PSK Reporter uploader (final best-effort send).
-	if err := pskSvc.Stop(); err != nil {
-		loggerSvc.ErrorWith().Err(err).Msg("pskreporter: Stop error")
-	}
-	// Drain + close the evidence writer AFTER ft8Svc.Stop: the decode loop is
-	// the only producer, so by now no new slots arrive and Stop persists any
-	// accumulated loss before closing the archive.
-	evidenceSvc.Stop()
-
-	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second
-	// config.applyDefaults sets ShutdownTimeoutSec=10 today, but a
-	// hand-edited config.json with the field at zero (or omitted on
-	// a future schema where applyDefaults misses it) would make
-	// ctx.Done() fire immediately and spam-log "workers did not drain
-	// within shutdown timeout" on every clean shutdown. Floor it so
-	// the drain-reporting select stays meaningful.
-	if shutdownTimeout <= 0 {
-		shutdownTimeout = 10 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-
-	if err = server.Shutdown(ctx); err != nil {
-		loggerSvc.ErrorWith().Err(err).Msg("HTTP server shutdown error")
-	}
-
-	// Wait for forwarder workers to finish draining before the
-	// deferred dbSvc.Close() fires. Bounded so a stuck worker (say,
-	// a forwarder ignoring ctx inside a long upstream call) can't
-	// wedge shutdown indefinitely.
-	drainDone := make(chan struct{})
-	go func() {
-		workerWG.Wait()
-		close(drainDone)
-	}()
-	select {
-	case <-drainDone:
-		loggerSvc.InfoWith().Msg("forwarder workers drained")
-	case <-ctx.Done():
-		loggerSvc.WarnWith().
-			Dur("timeout", shutdownTimeout).
-			Msg("forwarder workers did not drain within shutdown timeout")
-	}
-
-	// Drain in-flight FT8 completed-QSO log goroutines (M2). ft8Svc.Stop() above
-	// halted the decode loop, so no new ones launch; these are exchanges that
-	// finished on the air just as shutdown began and must still reach the DB.
-	// Bounded by the same shutdown window — a straggler beyond it is left to the
-	// deferred dbSvc.Close (its late Submit errors safely, same as any detached
-	// goroutine racing close).
-	qsoLogDone := make(chan struct{})
-	go func() {
-		qsoLogWG.Wait()
-		close(qsoLogDone)
-	}()
-	select {
-	case <-qsoLogDone:
-	case <-ctx.Done():
-		loggerSvc.WarnWith().
-			Dur("timeout", shutdownTimeout).
-			Msg("ft8 completed-QSO log goroutines did not drain within shutdown timeout")
-	}
-
-	// All publishers (workers, qsoservice via in-flight HTTP handlers, the FT8
-	// QSO loggers drained above) have stopped by here — workers drained above,
-	// handlers finished under server.Shutdown. Close the hub so any
-	// still-connected SSE subscribers see a clean channel-close and return.
-	//
-	// Deliberately untimed: hub.Close holds the hub mutex only for a
-	// brief synchronous "close every subscriber channel" loop and does
-	// not wait on subscriber goroutines. If that ever changes, wrap
-	// this in the same `select { <-done / <-ctx.Done() }` pattern
-	// used for the worker drain above.
-	hub.Close()
+	// Everything from here runs under ONE budget-bounded, dependency-preserving
+	// teardown (LC-2). The single shutdown budget starts INSIDE gracefulShutdown —
+	// right after the accept listener closed above and workerCancel signalled — so a
+	// wedged subsystem Stop can no longer block the whole sequence before the budget
+	// even begins (the pre-LC-2 bug: the deadline was built AFTER the bridge/ft8/psk/
+	// evidence Stops). Each ordered stage is bounded by that one budget; the stage
+	// that overruns it is named in a single record; dependent stages whose
+	// prerequisite did not stop are skipped rather than raced; and the bridge
+	// RF-unkey runs first, so a timeout never skips it. Ordering and the per-stage
+	// dependency reasoning live in cmd/smd/shutdown.go.
+	gracefulShutdown(teardownDeps{
+		log:          loggerSvc,
+		budget:       time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second,
+		stopBridge:   bridgeSvc.Stop,
+		stopFt8:      ft8Svc.Stop,
+		stopPsk:      pskSvc.Stop,
+		stopEvidence: evidenceSvc.Stop,
+		shutdownHTTP: server.Shutdown,
+		workerWG:     &workerWG,
+		qsoLogWG:     &qsoLogWG,
+		closeHub:     hub.Close,
+	})
 
 	return runErr
 }
