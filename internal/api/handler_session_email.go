@@ -13,6 +13,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/adif"
 	"github.com/ColonelBlimp/station-manager/internal/email"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/fsperm"
 )
 
 // sessionAdifArchiveDir is the working-dir-relative location where each
@@ -379,9 +380,14 @@ func (s *Server) archiveSessionAdif(filename, body string) {
 			Msg("session email: could not create ADIF archive dir")
 		return
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	// Tighten a pre-existing dir to 0700 — but symlink-safely: a bare os.Chmod would follow
+	// a symlinked archive dir into an external/shared target (ST-6 review 52b6943a P2).
+	// fsperm never chmods through a symlink or mutates a path outside the working dir; a
+	// non-empty warning (symlink / external / foreign-owned) means the archive dir is not
+	// owner-private, so skip rather than write QSO data there.
+	if warn, err := fsperm.SecureApplicationPath(wd, dir, 0o700); err != nil || warn != "" {
 		s.logger.WarnWith().Err(err).Str("dir", dir).
-			Msg("session email: could not make ADIF archive dir owner-private, skipping archive")
+			Msg("session email: ADIF archive dir is not owner-private, skipping archive")
 		return
 	}
 	path := filepath.Join(dir, filename)

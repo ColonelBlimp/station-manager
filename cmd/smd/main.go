@@ -475,8 +475,8 @@ func run() error {
 	// SQLite creates them per umask, which can leave a group/other-readable database. An
 	// application-owned file that cannot be tightened is fatal; an operator-supplied path
 	// outside the working directory is warned about, not mutated.
-	if err = sqlite.SecureDataFiles(cfgSvc.WorkingDir(), loggerSvc,
-		dbSvc.DatabaseConfig.Path, refPath); err != nil {
+	if err = sqlite.SecureDataFiles(cfgSvc.WorkingDir(), filepath.Join(logDBDir, "backups"),
+		loggerSvc, dbSvc.DatabaseConfig.Path, refPath); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("secure database files")
 	}
 

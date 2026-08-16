@@ -37,7 +37,7 @@ func TestSecureDataFiles_TightensAppOwned(t *testing.T) {
 	}
 
 	log := logging.NewForWriter(&bytes.Buffer{})
-	if err := SecureDataFiles(work, log, logdb); err != nil {
+	if err := SecureDataFiles(work, "", log, logdb); err != nil {
 		t.Fatalf("SecureDataFiles (app-owned): %v", err)
 	}
 	if mode(t, dir) != 0o700 {
@@ -60,7 +60,7 @@ func TestSecureDataFiles_ExternalWarnsNotFatal(t *testing.T) {
 	buf := &bytes.Buffer{}
 	log := logging.NewForWriter(buf)
 
-	if err := SecureDataFiles(work, log, ext); err != nil {
+	if err := SecureDataFiles(work, "", log, ext); err != nil {
 		t.Fatalf("external group-accessible DB must warn, not fail: %v", err)
 	}
 	if mode(t, ext) != 0o644 {
@@ -73,7 +73,34 @@ func TestSecureDataFiles_ExternalWarnsNotFatal(t *testing.T) {
 
 func TestSecureDataFiles_InMemoryAndEmptySkipped(t *testing.T) {
 	log := logging.NewForWriter(&bytes.Buffer{})
-	if err := SecureDataFiles(t.TempDir(), log, "", ":memory:", "file::memory:?cache=shared"); err != nil {
+	if err := SecureDataFiles(t.TempDir(), "", log, "", ":memory:", "file::memory:?cache=shared"); err != nil {
 		t.Fatalf("in-memory/empty paths must be skipped: %v", err)
+	}
+}
+
+// P1b (codex 52b6943a): an EXISTING backups directory and the pre-split backup databases it
+// holds (full QSO history) must be tightened too — not only the newly-created backup.
+func TestSecureDataFiles_TightensExistingBackups(t *testing.T) {
+	work := t.TempDir()
+	backupDir := filepath.Join(work, "db", "backups")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(backupDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bak := filepath.Join(backupDir, "log-presplit.db")
+	if err := os.WriteFile(bak, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	log := logging.NewForWriter(&bytes.Buffer{})
+	if err := SecureDataFiles(work, backupDir, log); err != nil {
+		t.Fatal(err)
+	}
+	if mode(t, backupDir) != 0o700 {
+		t.Errorf("backup dir mode = %04o, want 0700 (existing tightened)", mode(t, backupDir))
+	}
+	if mode(t, bak) != 0o600 {
+		t.Errorf("pre-split backup mode = %04o, want 0600 (existing tightened)", mode(t, bak))
 	}
 }

@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -17,9 +18,24 @@ import (
 //
 // A failure to establish the required mode on an application-owned file is FATAL: the
 // operator's QSO data must not be served from a group/other-readable file. In-memory and
-// empty paths are skipped. workDir is the canonical resolved working directory.
-func SecureDataFiles(workDir string, log *logging.Service, dbPaths ...string) error {
+// empty paths are skipped. backupDir (when non-empty) has its directory + every *.db it
+// holds tightened too — pre-split backups are full QSO history and are visited here rather
+// than only at creation. workDir is the canonical resolved working directory. Called by
+// EVERY flow that opens these databases (daemon startup, import, restore), not just normal
+// startup, so no command can leave a readable database behind.
+func SecureDataFiles(workDir, backupDir string, log *logging.Service, dbPaths ...string) error {
 	const op errors.Op = "sqlite.SecureDataFiles"
+
+	secure := func(path string, want os.FileMode, kind string) error {
+		warn, err := fsperm.SecureApplicationPath(workDir, path, want)
+		if err != nil {
+			return errors.New(op).WithErr(err).WithMsgf("securing %s", kind)
+		}
+		if warn != "" {
+			log.WarnWith().Str("path", path).Msg("ST-6: " + warn)
+		}
+		return nil
+	}
 
 	securedDirs := make(map[string]struct{})
 	for _, db := range dbPaths {
@@ -29,18 +45,26 @@ func SecureDataFiles(workDir string, log *logging.Service, dbPaths ...string) er
 		dir := filepath.Dir(db)
 		if _, done := securedDirs[dir]; !done {
 			securedDirs[dir] = struct{}{}
-			if warn, err := fsperm.SecureApplicationPath(workDir, dir, 0o700); err != nil {
-				return errors.New(op).WithErr(err).WithMsg("securing database directory")
-			} else if warn != "" {
-				log.WarnWith().Str("path", dir).Msg("ST-6: " + warn)
+			if err := secure(dir, 0o700, "database directory"); err != nil {
+				return err
 			}
 		}
 		// The main DB plus its WAL/SHM sidecars (present only in WAL mode after a write).
 		for _, f := range []string{db, db + "-wal", db + "-shm"} {
-			if warn, err := fsperm.SecureApplicationPath(workDir, f, 0o600); err != nil {
-				return errors.New(op).WithErr(err).WithMsg("securing database file")
-			} else if warn != "" {
-				log.WarnWith().Str("path", f).Msg("ST-6: " + warn)
+			if err := secure(f, 0o600, "database file"); err != nil {
+				return err
+			}
+		}
+	}
+
+	if backupDir != "" {
+		if err := secure(backupDir, 0o700, "backup directory"); err != nil {
+			return err
+		}
+		matches, _ := filepath.Glob(filepath.Join(backupDir, "*.db"))
+		for _, f := range matches {
+			if err := secure(f, 0o600, "backup database"); err != nil {
+				return err
 			}
 		}
 	}

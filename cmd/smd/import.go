@@ -213,6 +213,13 @@ func runImport(args []string) error {
 		return errors.New(op).WithErr(err).WithMsg("run reference migrations")
 	}
 
+	// ST-6: import opens/writes the same databases, so it must make them owner-private too
+	// (else a permissive-umask import leaves readable QSO data until a later daemon start).
+	if err := sqlite.SecureDataFiles(cfgSvc.WorkingDir(), filepath.Join(logDBDir, "backups"),
+		loggerSvc, dbSvc.DatabaseConfig.Path, refPath); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("secure database files")
+	}
+
 	// ---- Resolve target logbook.
 	if logbookID == 0 {
 		logbookID = cfg.DefaultLogbookID

@@ -213,6 +213,13 @@ func runRestore(args []string) error {
 		return errors.New(op).WithErr(err).WithMsg("run reference migrations")
 	}
 
+	// ST-6: restore opens/writes the same databases, so it must make them owner-private too
+	// (else a permissive-umask restore leaves readable QSO data until a later daemon start).
+	if err := sqlite.SecureDataFiles(cfgSvc.WorkingDir(), filepath.Join(logDBDir, "backups"),
+		loggerSvc, dbSvc.DatabaseConfig.Path, refPath); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("secure database files")
+	}
+
 	// ---- Resolve the LOCAL target logbook.
 	if logbookID == 0 {
 		logbookID = cfg.DefaultLogbookID

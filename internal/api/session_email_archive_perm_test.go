@@ -41,3 +41,35 @@ func TestArchiveSessionAdif_OwnerPrivateModes(t *testing.T) {
 		t.Errorf("archive file mode = %04o, want 0600", fi.Mode().Perm())
 	}
 }
+
+// P2 (codex 52b6943a): if the archive dir is a SYMLINK to an external directory, the daemon
+// must not chmod through it (mutating an external/shared target) nor write QSO data there —
+// it skips the archive.
+func TestArchiveSessionAdif_SkipsSymlinkedDir(t *testing.T) {
+	srv := testServer(t)
+	wd := srv.cfg.WorkingDir()
+	if wd == "" {
+		t.Skip("no working dir resolved")
+	}
+	external := t.TempDir() // outside the working dir, deliberately group-accessible
+	if err := os.Chmod(external, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Make wd/exports/sent-adif a symlink to `external`.
+	link := filepath.Join(wd, sessionAdifArchiveDir)
+	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, link); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.archiveSessionAdif("s.adi", "body")
+
+	if fi, err := os.Lstat(external); err == nil && fi.Mode().Perm() == 0o700 {
+		t.Error("chmod followed the symlink and tightened the external target")
+	}
+	if _, err := os.Stat(filepath.Join(external, "s.adi")); err == nil {
+		t.Error("wrote QSO data through a symlinked archive dir into an external target")
+	}
+}

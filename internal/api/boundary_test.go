@@ -66,9 +66,15 @@ var frozenInternalImports = map[string]struct{}{
 	"internal/errors":       {},
 	"internal/events":       {},
 	"internal/forwarding":   {},
-	"internal/ft8":          {},
-	"internal/hardware":     {},
-	"internal/logging":      {},
+	// Added 2026-08-16 with intent (ST-6). The sent-ADIF archive holds full QSO
+	// records, so its directory is tightened to 0700 via the ONE private-state
+	// policy in internal/fsperm — which resolves symlinks so a symlinked archive
+	// dir can't chmod an external target. A LEAF: it imports only the standard
+	// library, so it adds no transitive breadth to internal/api.
+	"internal/fsperm":   {},
+	"internal/ft8":      {},
+	"internal/hardware": {},
+	"internal/logging":  {},
 	// Added 2026-08-03 with intent (ADR 0062). GET /v1/lookup-types serves the
 	// enrichment-provider descriptors, exactly as GET /v1/forwarder-types serves
 	// forwarder ones from internal/forwarding — which this package has always
