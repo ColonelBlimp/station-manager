@@ -231,6 +231,13 @@ func (s *Service) runPipeline(ctx context.Context) pipelineExitClass {
 	// log-and-dies; this supervisor's liveness reopens the port (L9).
 	serialCfg.PanicHandler = s.onPanic
 
+	// Surface dropped oversized frames (L13). The serial reader counts + rate-limits (first
+	// drop immediately, then at most once per interval); the bridge adds the port + driver
+	// context and emits the warning. Only counts cross the callback — never the raw bytes.
+	serialCfg.OnOversizeFrame = func(thresholdBytes, droppedTotal int) {
+		s.warnSerialOversize(serialCfg.PortName, def.ID, thresholdBytes, droppedTotal)
+	}
+
 	// On Unix the OS can't set RTS/DTR before opening the port, so a rigdef that
 	// de-asserts them (e.g. the IC-7300, to keep USB SEND from keying PTT) can
 	// still see a brief assert pulse at open — go.bug.st/serial can't guarantee
@@ -1295,6 +1302,21 @@ func vfoLabelToTag(label string) string {
 // the H4 write watchdog (which CLOSES the port on overrun — a 20ms threshold
 // would close on any scheduling hiccup). The watchdog uses the separate,
 // generous bridge.timeouts.write_watchdog_ms instead, applied in runPipeline.
+// warnSerialOversize emits the operator-visible warning for a dropped oversized serial frame
+// (L13). Wired to serial.Config.OnOversizeFrame, which the reader invokes at a bounded cadence
+// (first drop immediately, then at most once per interval), so this line is inherently
+// rate-limited. It carries port + driver context (added by the bridge) plus the byte threshold
+// and running total — never the raw frame bytes; the callback signature carries none. A drop
+// commonly means line noise, wrong baud, wrong delimiter, or the wrong driver.
+func (s *Service) warnSerialOversize(port, driver string, thresholdBytes, droppedTotal int) {
+	s.logger.WarnWith().
+		Str("port", port).
+		Str("driver", driver).
+		Int("threshold_bytes", thresholdBytes).
+		Int("dropped_total", droppedTotal).
+		Msg("bridge: serial reader dropped oversized frame(s) — check baud rate, line delimiter, and driver")
+}
+
 func buildSerialConfig(brCfg types.BridgeSerialConfig, rigSerial cat.RigSerial) (serial.Config, error) {
 	// Per-rig serial overrides (config.md §10, B2): a non-zero/non-empty override
 	// field wins over the rigdef default; a zero field inherits. brCfg.Overrides is
