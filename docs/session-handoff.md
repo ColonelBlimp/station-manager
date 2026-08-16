@@ -52,20 +52,24 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
   securehttp`; ST-5 Unix-socket boundary `e66a33ab`+4 fixes; ST-6 `internal/fsperm` `52b6943a`+3
   fixes; ST-7 build-key `a81948b8`; closed `cb595d8e`). **ONE open follow-up: ST-3b** —
   authenticated LAN access (topology remedy), **tracked in ADR 0069**, not started.
-- **🎉 lifecycle-concurrency LC-1 (its only P1) FIXED (#2 in progress)** — RF-safety goroutine
-  panic boundary: `b627ac30` (defensive-unkey / TX-alarm-probe / stuck-TX-unkey + new
-  `safego.GoTrackedPreAdded` + keyMu lock-safety refactor) + `1c59822b` (state/meter poll workers,
-  pipeline-unwind). Per-worker post-panic policies operator-ruled 2026-08-16; panic-injection
-  tests + reversion proofs; full bridge suite `-race` green.
-- **`git log origin/main..HEAD` = 15 UNPUSHED commits — operator pushes.** All full-TDD +
-  reversion-proved; each reached No-actionable-findings.
-- **RESUME → finish priority #2 (`internal-lifecycle-concurrency-audit.md`): LC-2..LC-5 remain**
-  — LC-2 (P2) shutdown deadline starts after subsystem teardown; LC-3 (P2) evidence Stop not a
-  producer barrier; LC-4 (P2) evidence DB work uncancellable; LC-5 (P3) lifecycle state machines
-  inconsistent. THEN the operator's priority order: #3 configuration-contract (silent unknown-
-  field deletion), #4 persistence-transaction (**2 P1** integrity — highest remaining severity),
-  #5 api-wire-contract, #7 maintainability-test-arch (logging_debug panic FIRST), #8
-  package-boundary (PB-1 CI guards), #9 error-handling (linter ratchet only). #1 ✅, #6 ✅.
+- **🎉 lifecycle-concurrency LC-1 + LC-2 FIXED (#2 in progress)** — LC-1 RF-safety panic boundary
+  (`b627ac30`+`1c59822b`, prior session). LC-2 shutdown-budget (this session): `d8e0eee9` (ONE
+  budget bounds the whole teardown — named-stage record, dependency-preserving skips of
+  evidence/qso-drain/hub when ft8 hangs, `TimeoutStopSec=20s`) + `abd48f30` (codex-P1
+  `gracefulDone` guard so safety-net defers don't re-block a Stop the budget abandoned) +
+  `15445922` (LC-1 `panics`-counter data race — the cause of main's CI-red) + `43e39cf9` (audit
+  marked). All full-TDD + reversion-proofed; `cmd/smd` `-race` green.
+- **All pushed — `origin/main` = HEAD = `43e39cf9`, 0 unpushed.** ⚠️ **FIRST next session: verify
+  CI** — run `31960094575` on `43e39cf9` was in_progress at handoff (includes the race fix, so
+  expect green). `gh run list -L1`; verdict from OUTPUT not exit code. The old red on `a63523ba`
+  is superseded.
+- **RESUME → priority #2 (`internal-lifecycle-concurrency-audit.md`): LC-3..LC-5 remain** — LC-3
+  (P2) evidence Stop not a producer barrier; LC-4 (P2, overlaps EH-4) evidence DB work
+  uncancellable; LC-5 (P3) lifecycle state machines inconsistent. THEN the operator's priority
+  order: #3 configuration-contract (silent unknown-field deletion), #4 persistence-transaction
+  (**2 P1** integrity — highest remaining severity), #5 api-wire-contract, #7
+  maintainability-test-arch (logging_debug panic FIRST), #8 package-boundary (PB-1 CI guards), #9
+  error-handling (linter ratchet only). #1 ✅, #6 ✅.
 - **WORKFLOW per finding (operator directive):** verify-before-building → draft ATDD criteria
   (observable, before mechanism) → operator rules judgment calls → RED → impl as ONE commit with
   reversion proofs → operator agrees each commit → mark FIXED in the audit doc. **NO amends** —
