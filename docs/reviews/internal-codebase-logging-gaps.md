@@ -589,6 +589,17 @@ Prefer destination domain or a stable redacted/hash representation, and a fixed 
 kind instead of the raw subject. If full addresses are operationally required, document
 the reason and align log retention/access accordingly.
 
+> ✅ **FIXED (working tree, awaiting operator's push).** `a2aa5fe6` + review-fix `9e520a2b`,
+> operator rulings 2026-08-16. `email.Domain(addr)` returns the domain (or `unknown` — never
+> the raw address); a fixed `Message.Kind` replaces the operator-supplied subject. The
+> `email sent` record now carries `to_domain` + `kind` (never the raw recipient or subject),
+> the session-email handler's send-failure record carries `to_domain`, and the SMTP MAIL
+> FROM / RCPT TO error messages carry the stage + `from_domain`/`to_domain`. The review-fix
+> closed a residual leak: a protocol rejection's server response can echo the mailbox, so for
+> a `*textproto.Error` the logged error keeps ONLY the status code (never the raw response);
+> a transport error carries no address and is still wrapped. The one caller sets
+> `kind=session_email`. **This closes the logging-gaps audit — L1–L13 + H1–H4 all fixed.**
+
 ---
 
 ## Recommended release-gate order
