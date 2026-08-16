@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/mail"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1514,8 +1515,13 @@ func isLoopbackBind(socketPath string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
+	// netip.ParseAddr (unlike net.ParseIP) accepts an IPv6 zone, so a zoned loopback
+	// like ::1%lo is classified correctly and not mistaken for a network exposure that
+	// ST-3a would then refuse to start (codex P2, 505e0566). A zoned LINK-LOCAL
+	// (fe80::%zone) still classifies as non-loopback — the zone is not a blanket
+	// loopback signal.
+	if a, err := netip.ParseAddr(host); err == nil {
+		return a.IsLoopback()
 	}
 	return false
 }

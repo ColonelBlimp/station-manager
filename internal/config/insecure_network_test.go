@@ -61,8 +61,31 @@ var loopbackBinds = []struct {
 }{
 	{"loopback IPv4", "tcp", "127.0.0.1:8080"},
 	{"loopback IPv6", "tcp", "[::1]:8080"},
+	{"zoned loopback IPv6", "tcp", "[::1%lo]:8080"}, // codex P2 (505e0566): a zone must not defeat loopback classification
 	{"localhost name", "tcp", "localhost:8080"},
 	{"unix socket", "unix", "/tmp/smd.sock"},
+}
+
+// isLoopbackBind must classify a zoned IPv6 LOOPBACK (::1%zone) as loopback — net.ParseIP
+// rejects the %zone, which wrongly made ST-3a refuse a safe listener (codex P2, 505e0566).
+// It must still classify a zoned LINK-LOCAL (fe80::%zone) as non-loopback: the zone is not a
+// blanket "loopback" signal.
+func TestIsLoopbackBind_ZonedIPv6(t *testing.T) {
+	cases := []struct {
+		socket string
+		want   bool
+	}{
+		{"[::1%lo]:8080", true},
+		{"[::1%eth0]:8080", true},
+		{"[::1]:8080", true},
+		{"[fe80::1%eth0]:8080", false}, // link-local is NOT loopback, zone or not
+		{"192.168.1.10:8080", false},
+	}
+	for _, tc := range cases {
+		if got := isLoopbackBind(tc.socket); got != tc.want {
+			t.Errorf("isLoopbackBind(%q) = %v, want %v", tc.socket, got, tc.want)
+		}
+	}
 }
 
 // AC-1: an unacknowledged non-loopback TCP bind makes the daemon refuse to start —
