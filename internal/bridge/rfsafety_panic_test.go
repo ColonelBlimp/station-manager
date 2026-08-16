@@ -12,6 +12,7 @@ package bridge
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,8 +67,11 @@ func TestDefensiveUnkeyWorker_PanicRecoversAndLatchesSafeState(t *testing.T) {
 func TestAlarmProbeWorker_PanicRetainsAlarmAndConsumesBudget(t *testing.T) {
 	s, _, buf := rfSafetyTestService(t)
 
-	var panics int
-	alarmProbePanicForTest = func() { panics++; panic("boom: alarm probe") }
+	// panics is written on the probe worker goroutine (the injected seam) and read on
+	// this test goroutine — atomic, or the -race detector flags the counter (CI red on
+	// a63523ba).
+	var panics atomic.Int64
+	alarmProbePanicForTest = func() { panics.Add(1); panic("boom: alarm probe") }
 	defer func() { alarmProbePanicForTest = nil }()
 
 	// Raise an alarm → startAlarmProbes launches the probe, which panics on every attempt.
@@ -76,12 +80,12 @@ func TestAlarmProbeWorker_PanicRetainsAlarmAndConsumesBudget(t *testing.T) {
 	// AC-1 + budget: the always-panicking probe records a panic and STOPS after consuming
 	// its bounded budget (never an infinite loop). We give it well over the delay budget.
 	waitFor(t, func() bool { return countLines(buf, "bridge.txAlarmProbe") >= 1 }, "no alarm-probe panic record")
-	waitFor(t, func() bool { return panics >= txAlarmProbeAttempts }, "probe did not walk its full attempt budget")
+	waitFor(t, func() bool { return int(panics.Load()) >= txAlarmProbeAttempts }, "probe did not walk its full attempt budget")
 	// It must not exceed the budget (no fresh full run / panic loop). Give it a moment to
 	// prove it has stopped, then confirm it did not keep panicking.
 	time.Sleep(50 * time.Millisecond)
-	if panics > txAlarmProbeAttempts {
-		t.Errorf("alarm probe panicked %d times, want exactly the budget %d (no loop)", panics, txAlarmProbeAttempts)
+	if got := int(panics.Load()); got > txAlarmProbeAttempts {
+		t.Errorf("alarm probe panicked %d times, want exactly the budget %d (no loop)", got, txAlarmProbeAttempts)
 	}
 	// AC-4: the alarm is RETAINED across the panics (probeTxRecovery never cleared it).
 	if !s.alarmActiveForTest() {
@@ -100,18 +104,20 @@ func TestStuckUnkeyWorker_PanicRetainsSafeStateAndConsumesBudget(t *testing.T) {
 	s.txAlarmProbeGen = 7
 	s.mu.Unlock()
 
-	var panics int
-	stuckUnkeyPanicForTest = func() { panics++; panic("boom: stuck-tx unkey") }
+	// panics: written on the stuck-unkey worker goroutine, read here — atomic (see the
+	// alarm-probe test above; same -race cause).
+	var panics atomic.Int64
+	stuckUnkeyPanicForTest = func() { panics.Add(1); panic("boom: stuck-tx unkey") }
 	defer func() { stuckUnkeyPanicForTest = nil }()
 
 	s.retryUnkeyStillKeyed()
 
 	waitFor(t, func() bool { return countLines(buf, "bridge.stuckTxUnkey") >= 1 }, "no stuck-unkey panic record")
 	// Budget consumed up front → walks down and stops (no infinite loop).
-	waitFor(t, func() bool { return panics >= txStopRetryAttempts }, "stuck-unkey did not walk its full attempt budget")
+	waitFor(t, func() bool { return int(panics.Load()) >= txStopRetryAttempts }, "stuck-unkey did not walk its full attempt budget")
 	time.Sleep(50 * time.Millisecond)
-	if panics > txStopRetryAttempts {
-		t.Errorf("stuck-unkey panicked %d times, want exactly the budget %d (no loop)", panics, txStopRetryAttempts)
+	if got := int(panics.Load()); got > txStopRetryAttempts {
+		t.Errorf("stuck-unkey panicked %d times, want exactly the budget %d (no loop)", got, txStopRetryAttempts)
 	}
 	// AC-3/4: TX stays blocked, alarm retained.
 	if s.TxReady() {
