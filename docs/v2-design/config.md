@@ -375,7 +375,21 @@ is deleted by an unrelated save. `endpoints` had exactly that defect until
 `applyDefaults` re-seeded the registry default at the next Load, replacing an
 operator's override with the stock URL. Pinned by `internal/api/forwarder_label_test.go`
 (L2/L3). **Any future config-only field on `ForwarderConfig` belongs in that
-carry-over too.**
+carry-over too** — `allow_insecure_http` (below) is exactly such a field and is
+preserved there.
+
+**`forwarders[].allow_insecure_http` (bool, default false; ST-4a, ADR 0069).** The
+credential-transport acknowledgement. Every credential-bearing forwarder client must
+use `https`, or plain `http` only to a loopback host (so local mocks/tests work) —
+otherwise construction fails and the daemon refuses to start (`forwarder_unusable` at
+Load / 400 at PUT). `allow_insecure_http: true` permits plain `http` to a **remote**
+host, and the daemon logs a standing startup warning naming the forwarder. It is valid
+**only for the `smcloud` type** (SM Cloud's LAN-staging deploy is the one accepted
+remote-cleartext posture, `docs/smcloud-deploy.md`); setting it on `qrz`/`qrzcq`/`clublog`
+is **rejected**, not ignored. Like `label`/`endpoints` it is **config-file-only** —
+absent from the `/v1/config` wire surface and preserved by `mergeForwarders`, so it can
+never be set by a remote API client. The shared policy + redirect hardening live in
+`internal/securehttp`.
 
 `endpoints` is an **action-keyed** map (`insert`/`update`/`delete` → URL) so
 single-URL (QRZ) and per-action (ClubLog) forwarders share one shape; the value

@@ -1429,6 +1429,19 @@ func spawnForwarderWorkers(
 			return errors.New(op).WithErr(err).WithMsgf("build forwarder %q", fc.Name)
 		}
 
+		// ST-4a: a successfully-built smcloud forwarder whose URL is plain http to a
+		// remote host built ONLY because allow_insecure_http is set (construction
+		// refuses a remote-http URL otherwise). Warn on every startup — the bearer
+		// token and all QSO + enabled evidence payloads travel in cleartext, observable
+		// and modifiable in transit. Name the forwarder, never the URL (A9).
+		if smcloud.InsecureRemoteURL(fc) {
+			loggerSvc.WarnWith().
+				Str("forwarder", fc.Name).
+				Msg("smcloud forwarder uses plain http to a remote host (allow_insecure_http): " +
+					"the bearer token and all QSO and enabled evidence payloads are observable " +
+					"and modifiable in transit")
+		}
+
 		var retry types.RetryConfig
 		if fc.Retry != nil {
 			retry = *fc.Retry

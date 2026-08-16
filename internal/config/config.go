@@ -1554,6 +1554,17 @@ func validateForwarders(fwds []types.ForwarderConfig) error {
 		}
 		names[fc.Name] = struct{}{}
 
+		// allow_insecure_http is SM-Cloud-only policy (ST-4a): only SM Cloud has an
+		// accepted remote-cleartext deployment (docs/smcloud-deploy.md phase 1). Setting
+		// it on any other forwarder type is REJECTED, not silently ignored — an operator
+		// who believes they enabled cleartext for QRZ/QRZCQ/ClubLog must be told it does
+		// nothing there ("smcloud" is the registered smcloud.Type id).
+		if fc.AllowInsecureHTTP && fc.Type != "smcloud" {
+			return fmt.Errorf(
+				"forwarder %q: allow_insecure_http is only valid for the smcloud type (got %q)",
+				fc.Name, fc.Type)
+		}
+
 		for _, a := range fc.ActionFilter {
 			if _, err := action.Parse(a); err != nil {
 				return fmt.Errorf("forwarder %q: %w", fc.Name, err)

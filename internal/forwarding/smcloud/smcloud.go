@@ -40,7 +40,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +47,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -146,16 +146,17 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 	// daemon log. No part of a URL is inherently inert: url.Parse takes everything
 	// before the first ':' as the scheme, so an operator who omits "https://"
 	// turns "alice:token@host" into scheme "alice" — the username — and a pasted
-	// token becomes the scheme outright. Name the field and the requirement only.
-	// Same discipline as scrubURLError in internal/lookup/qrz.
-	u, err := url.Parse(base)
-	switch {
-	case err != nil:
-		return nil, errors.New(op).WithMsg("credentials.url is not a parseable URL")
-	case u.Scheme != "http" && u.Scheme != "https":
-		return nil, errors.New(op).WithMsg("credentials.url must start with http:// or https://")
-	case u.Host == "":
-		return nil, errors.New(op).WithMsg("credentials.url has no host")
+	// token becomes the scheme outright. The shared securehttp policy keeps its
+	// error URL-free (same discipline as scrubURLError in internal/lookup/qrz).
+	//
+	// The bearer token + full QSO/evidence data travel to this URL, so it must be
+	// https, or http only to a loopback host — UNLESS the operator sets
+	// allow_insecure_http (the SM-Cloud LAN-staging acknowledgement, ST-4a), which
+	// permits plain http to a remote host and nothing else.
+	if err := securehttp.CheckCredentialedURL(base, fc.AllowInsecureHTTP); err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsg(
+			"credentials.url must use https, or http to a loopback host; set " +
+				"allow_insecure_http to accept cleartext http to a remote host")
 	}
 	if creds.Token == "" {
 		return nil, errors.New(op).WithMsg("credentials.token is required")
@@ -170,6 +171,24 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 		logbook: logbook,
 		client:  &http.Client{Timeout: DefaultHTTPTimeout},
 	}, nil
+}
+
+// InsecureRemoteURL reports whether fc is an smcloud forwarder whose credentials
+// travel in cleartext to a non-loopback host — the posture the allow_insecure_http
+// acknowledgement exists to permit. The daemon uses it to emit the standing startup
+// warning (ST-4a). It returns false (no warning) for a non-smcloud forwarder, an
+// https URL, a loopback URL, or unparseable credentials; construction has already
+// rejected a remote-http URL that LACKS the acknowledgement, so a true result here
+// means the operator opted in.
+func InsecureRemoteURL(fc types.ForwarderConfig) bool {
+	if fc.Type != Type {
+		return false
+	}
+	var creds credentials
+	if err := json.Unmarshal(fc.Credentials, &creds); err != nil {
+		return false
+	}
+	return securehttp.IsInsecureRemote(strings.TrimSpace(creds.URL))
 }
 
 // Type returns the registry identifier for this forwarder.

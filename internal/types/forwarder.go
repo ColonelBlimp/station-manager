@@ -53,6 +53,20 @@ type ForwarderConfig struct {
 	TickIntervalSec int               `json:"tick_interval_sec,omitempty"`
 	BatchSize       int               `json:"batch_size,omitempty"`
 	Retry           *RetryConfig      `json:"retry,omitempty"`
+
+	// AllowInsecureHTTP is the SM-Cloud LAN-staging acknowledgement (ST-4a —
+	// docs/reviews/internal-security-trust-boundary-audit.md). It is SECURITY
+	// POLICY, not a credential, so it lives here at the top level, not in the
+	// opaque Credentials blob. When true it permits this forwarder's URL to carry
+	// its bearer token + QSO/evidence over plain http to a non-loopback host —
+	// otherwise a remote http endpoint is refused (fatal at construction). It is
+	// valid ONLY for the smcloud type (validateForwarders rejects it elsewhere,
+	// rather than silently ignoring it) because only SM Cloud has an accepted
+	// remote-cleartext deployment (docs/smcloud-deploy.md phase 1). Config-file-only:
+	// it is absent from the /v1/config wire surface (ForwarderInfo does not carry
+	// it) and mergeForwarders preserves the stored value across PUTs, so it cannot
+	// be set by a remote API client.
+	AllowInsecureHTTP bool `json:"allow_insecure_http,omitempty"`
 }
 
 // RetryConfig overrides the forwarder package's built-in retry defaults.

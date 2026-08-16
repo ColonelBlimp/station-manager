@@ -5,12 +5,12 @@ import (
 	"encoding/xml"
 	stderr "errors"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -24,24 +24,6 @@ const errorBodyLimit = 512
 // compromised path could otherwise return an unbounded 200 the daemon buffers
 // whole (review 2026-06-19 M1). 1 MiB is generous for QRZ's XML.
 const successBodyLimit = 1 << 20
-
-// secureOrLoopbackURL reports whether u is safe to carry QRZ credentials:
-// https to any host, or plain http only to a loopback address (so httptest /
-// local mocks work, while a real remote URL must be https). Review 2026-06-19 M2.
-func secureOrLoopbackURL(u *url.URL) bool {
-	if u.Scheme == "https" {
-		return true
-	}
-	if u.Scheme != "http" {
-		return false
-	}
-	host := u.Hostname()
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
 
 // readLimitedBody reads up to successBodyLimit bytes of a 2xx body, erroring if
 // the upstream sent more rather than buffering it unbounded. Shared by the
@@ -270,9 +252,9 @@ func (s *Service) validateConfig(op errors.Op) error {
 	}
 	// QRZ session auth puts username + password in the request URL, so refuse to
 	// send them over plain http to a remote host — https required (http allowed
-	// only for loopback, for local mocks). Review 2026-06-19 M2.
-	if !secureOrLoopbackURL(u) {
-		return errors.New(op).WithMsg("QRZ URL must use https (http allowed only for loopback) — credentials travel in the request URL")
+	// only for loopback, for local mocks). Review 2026-06-19 M2; shared policy ST-4a.
+	if err := securehttp.CheckCredentialedURL(s.Config.URL, false); err != nil {
+		return errors.New(op).WithErr(err).WithMsg("QRZ URL must use https (http allowed only for loopback) — credentials travel in the request URL")
 	}
 
 	s.UserAgent = strings.TrimSpace(s.UserAgent)

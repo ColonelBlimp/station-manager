@@ -81,6 +81,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -258,6 +259,18 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 	// (ADR 0039).
 	realtime := forwarding.ResolveEndpoint(fc.Endpoints, DefaultRealtimeEndpoint, action.Insert.String())
 	deleteURL := forwarding.ResolveEndpoint(fc.Endpoints, DefaultDeleteEndpoint, action.Delete.String())
+	// BOTH endpoints carry the account password + shared app key, so BOTH must be
+	// https (http only for a loopback mock) — a bad delete endpoint is caught even
+	// when realtime is fine (A6). allow_insecure_http is SM-Cloud-only (ST-4a).
+	for _, ep := range []struct{ field, url string }{
+		{"realtime endpoint", realtime},
+		{"delete endpoint", deleteURL},
+	} {
+		if err := securehttp.CheckCredentialedURL(ep.url, false); err != nil {
+			return nil, errors.New(op).WithErr(err).
+				WithMsgf("%s must use https (http allowed only for loopback)", ep.field)
+		}
+	}
 	return newWithEndpoints(creds, apiKey, realtime, deleteURL, &http.Client{
 		Timeout: DefaultHTTPTimeout,
 	}), nil

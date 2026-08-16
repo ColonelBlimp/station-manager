@@ -41,6 +41,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -159,6 +160,13 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 	// recompile (ADR 0039).
 	endpoint := forwarding.ResolveEndpoint(fc.Endpoints, DefaultEndpoint,
 		action.Insert.String(), action.Update.String(), action.Delete.String())
+	// The API key travels in the request URL, so the endpoint must be https (http
+	// only for a loopback mock). allow_insecure_http is SM-Cloud-only, so QRZ never
+	// bypasses this (ST-4a). URL-free error (a scheme/userinfo can be a credential).
+	if err := securehttp.CheckCredentialedURL(endpoint, false); err != nil {
+		return nil, errors.New(op).WithErr(err).
+			WithMsg("endpoint must use https (http allowed only for loopback)")
+	}
 	return newWithEndpoint(creds.APIKey, endpoint, &http.Client{
 		Timeout: DefaultHTTPTimeout,
 	}), nil

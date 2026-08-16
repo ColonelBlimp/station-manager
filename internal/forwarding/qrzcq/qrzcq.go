@@ -27,6 +27,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 	"github.com/ColonelBlimp/station-manager/internal/utils"
 )
@@ -136,6 +137,12 @@ func New(fc types.ForwarderConfig) (forwarding.Forwarder, error) {
 	}
 
 	endpoint := forwarding.ResolveEndpoint(fc.Endpoints, DefaultEndpoint, action.Insert.String())
+	// Credentials travel in the request URL, so the endpoint must be https (http
+	// only for a loopback mock). allow_insecure_http is SM-Cloud-only (ST-4a).
+	if err := securehttp.CheckCredentialedURL(endpoint, false); err != nil {
+		return nil, errors.New(op).WithErr(err).
+			WithMsg("endpoint must use https (http allowed only for loopback)")
+	}
 	fwd := newWithEndpoint(creds.Call, creds.Key, endpoint,
 		utils.NewHTTPClient(DefaultHTTPTimeout), DefaultSubmitInterval)
 	fwd.pacer = accountSubmitPacers.ForAccount(creds.Call)

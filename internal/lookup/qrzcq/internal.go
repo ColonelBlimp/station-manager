@@ -5,12 +5,12 @@ import (
 	"encoding/xml"
 	stderr "errors"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/securehttp"
 	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
@@ -18,21 +18,6 @@ const (
 	errorBodyLimit   = 512
 	successBodyLimit = 1 << 20
 )
-
-func secureOrLoopbackURL(u *url.URL) bool {
-	if u.Scheme == "https" {
-		return true
-	}
-	if u.Scheme != "http" {
-		return false
-	}
-	host := u.Hostname()
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
 
 func readLimitedBody(r io.Reader) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(r, successBodyLimit+1))
@@ -230,8 +215,8 @@ func (s *Service) validateConfig(op errors.Op) error {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return errors.New(op).WithErr(err).WithMsg("QRZCQ URL is invalid")
 	}
-	if !secureOrLoopbackURL(u) {
-		return errors.New(op).WithMsg(
+	if err := securehttp.CheckCredentialedURL(s.Config.URL, false); err != nil {
+		return errors.New(op).WithErr(err).WithMsg(
 			"QRZCQ URL must use https (http allowed only for loopback) — credentials travel in the request URL")
 	}
 	s.UserAgent = strings.TrimSpace(s.UserAgent)

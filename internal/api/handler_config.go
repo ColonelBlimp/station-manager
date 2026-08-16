@@ -1433,6 +1433,12 @@ func mergeForwarders(incoming []ForwarderInfo, existing []types.ForwarderConfig)
 			// belongs here too — this rebuild keeps only what it names.
 			fc.Label = ex.Label
 			fc.Endpoints = ex.Endpoints
+			// allow_insecure_http is config-file-only security policy (ST-4a): no
+			// wire field sets it, so it must be carried from the stored config or
+			// this rebuild would silently clear the operator's acknowledgement (and
+			// an enabled smcloud LAN forwarder would then refuse to start on the
+			// next Load). Cannot be set via PUT — only preserved.
+			fc.AllowInsecureHTTP = ex.AllowInsecureHTTP
 		}
 		// Merge credentials: stored base overlaid with supplied (typed) fields. A
 		// blank KEEPS the stored value unless the field is explicitly Clearable.

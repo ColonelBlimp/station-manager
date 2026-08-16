@@ -172,15 +172,20 @@ Unlike QRZ/ClubLog, the smcloud forwarder is **not pre-seeded** into
 `config.json` (it has no canonical URL — yours is the only instance), so
 the entry must be added, either way below. Then restart `smd`.
 
-**Via the config SPA** — Forwarding → **Add → SM Cloud backup**:
+> **⚠️ Plain-http LAN URL requires `allow_insecure_http: true` (ST-4a, ADR 0069).**
+> A plain-`http://` URL to a non-loopback host sends the bearer token + all QSO and
+> evidence data in cleartext, so the daemon **refuses to start** unless the forwarder
+> carries `"allow_insecure_http": true`. That flag is **config-file-only security
+> policy** — it is deliberately NOT on the `/v1/config` wire surface, so **the SPA
+> cannot set it**. For a plain-http LAN URL you must therefore use the **by-hand** path
+> below; adding the forwarder via the SPA with an `http://` URL will be rejected
+> (`forwarder_unusable`). (A phase-2 `https://` URL behind Caddy needs no flag.)
 
-- **Service URL** — `http://<staging-box-ip>:8091`
-- **Bearer token** — the step 1.3 value
-- **Cloud logbook name** — leave empty (`main`)
+**Via the config SPA** — Forwarding → **Add → SM Cloud backup** — works for an
+`https://` URL. For the phase-1 plain-`http://` LAN URL, use the by-hand path (the SPA
+cannot set the required `allow_insecure_http` flag; see the note above).
 
-…and enable it.
-
-**Or by hand** — add this entry to the `forwarders` array in
+**By hand** — add this entry to the `forwarders` array in
 `$SM_WORKING_DIR/config.json` (stop `smd` first; it writes the file):
 
 ```json
@@ -188,6 +193,7 @@ the entry must be added, either way below. Then restart `smd`.
   "name": "smcloud",
   "type": "smcloud",
   "enabled": true,
+  "allow_insecure_http": true,
   "credentials": {
     "url": "http://<staging-box-ip>:8091",
     "token": "<the step 1.3 token>",
@@ -196,7 +202,10 @@ the entry must be added, either way below. Then restart `smd`.
 }
 ```
 
-`logbook` may be omitted (defaults to `main`). Everything else —
+`allow_insecure_http` acknowledges the cleartext-transport risk for this LAN-staging
+posture; the daemon logs a standing startup warning while it is set. Drop it (and switch
+to an `https://` URL) in the phase-2 VPS deploy. `logbook` may be omitted (defaults to
+`main`). Everything else —
 `action_filter` (all three actions), `tick_interval_sec` (120),
 `batch_size` (5), `retry` — is filled with defaults at startup; set them
 only to override.
