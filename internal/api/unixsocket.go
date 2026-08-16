@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -98,7 +100,7 @@ func validateSocketAncestry(dir string) error {
 		if !fi.IsDir() {
 			return fmt.Errorf("the socket path ancestry contains a non-directory component")
 		}
-		if err := ensureRootOrEuidOwned(fi); err != nil {
+		if err := ensureAncestorOwner(fi); err != nil {
 			return fmt.Errorf("socket path ancestry: %w", err)
 		}
 		if fi.Mode().Perm()&0o022 != 0 && fi.Mode()&os.ModeSticky == 0 {
@@ -113,18 +115,45 @@ func validateSocketAncestry(dir string) error {
 	}
 }
 
-// ensureRootOrEuidOwned reports an error unless fi is owned by root or the effective uid —
-// the two principals that legitimately control the daemon's path. A directory owned by any
-// other user in the ancestry is a tampering vector.
-func ensureRootOrEuidOwned(fi os.FileInfo) error {
+// ensureAncestorOwner reports an error unless fi is owned by a principal that no OTHER
+// local user could act as to tamper with the daemon's path: root, the daemon's own euid,
+// or the kernel overflow uid. A directory owned by any other real, mapped user is a
+// tampering vector (that user can chmod their own directory and rename our path).
+func ensureAncestorOwner(fi os.FileInfo) error {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return fmt.Errorf("cannot determine owner (unsupported platform)")
 	}
-	if uid := int(st.Uid); uid != 0 && uid != os.Geteuid() {
-		return fmt.Errorf("a directory is owned by neither root nor the daemon user")
+	if !trustedAncestorOwner(int(st.Uid)) {
+		return fmt.Errorf("a directory is owned by another local user")
 	}
 	return nil
+}
+
+// trustedAncestorOwner reports whether uid may own a directory in the socket ancestry:
+// root (0), the daemon's euid, or the kernel overflow uid. The overflow-uid case is
+// load-bearing for user namespaces / rootless containers: host-owned directories (e.g. /
+// and /tmp) appear as the overflow uid (commonly 65534) from inside the namespace, and NO
+// local (mapped) user can act as that unmapped owner, so such a directory is not a
+// tampering vector — whereas a directory owned by another real, mapped user is. The mode
+// check (no group/other write unless sticky) still applies to every component regardless
+// of owner.
+func trustedAncestorOwner(uid int) bool {
+	return uid == 0 || uid == os.Geteuid() || uid == overflowUID()
+}
+
+// overflowUID returns the kernel's overflow uid (the id unmapped owners appear as inside a
+// user namespace). Read from /proc; falls back to the near-universal default 65534.
+func overflowUID() int {
+	const defaultOverflow = 65534
+	b, err := os.ReadFile("/proc/sys/kernel/overflowuid")
+	if err != nil {
+		return defaultOverflow
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+		return v
+	}
+	return defaultOverflow
 }
 
 // secureUnixSocket chmods the freshly bound socket to 0600 and verifies the result —

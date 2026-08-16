@@ -131,3 +131,26 @@ func TestBindListener_UnsafeAncestorIsFatal(t *testing.T) {
 		t.Errorf("a socket was created despite the unsafe ancestor")
 	}
 }
+
+// P1 (codex 88c94ccf): the ancestry owner check must accept the kernel overflow uid so a
+// user namespace (host-owned / and /tmp appear as 65534) does not reject every socket, and
+// still reject an arbitrary other local user.
+func TestTrustedAncestorOwner(t *testing.T) {
+	if !trustedAncestorOwner(0) {
+		t.Error("root (0) must be trusted")
+	}
+	if !trustedAncestorOwner(os.Geteuid()) {
+		t.Error("the daemon euid must be trusted")
+	}
+	if !trustedAncestorOwner(overflowUID()) {
+		t.Error("the kernel overflow uid must be trusted (user-namespace compatibility)")
+	}
+	// A uid that is none of the above is a tampering vector. Pick one guaranteed distinct.
+	other := os.Geteuid() + 1
+	if other == overflowUID() || other == 0 {
+		other = os.Geteuid() + 2
+	}
+	if trustedAncestorOwner(other) {
+		t.Errorf("uid %d (another local user) must not be trusted", other)
+	}
+}
