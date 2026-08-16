@@ -27,6 +27,7 @@ func testSPAFS() fs.FS {
 func TestRootRedirectsToApp(t *testing.T) {
 	srv := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "127.0.0.1:8080" // loopback: the Host allowlist now covers safe methods too (ST-1)
 	w := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(w, req)
 	if w.Code != http.StatusFound {

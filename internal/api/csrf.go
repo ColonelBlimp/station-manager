@@ -14,28 +14,35 @@ import (
 //
 // It validates the destination against a FIXED allowlist decided by our own config,
 // NOT equality with the request's own (attacker-controllable) Host — which closes
-// DNS rebinding (codex 85997b79 P1). For unsafe methods:
-//   - the request Host must be an allowed host (else 403) — the rebinding defense;
-//   - a present Origin must be loopback (any port) or — for tcp — an EXACT same
-//     host:PORT (else 403) — catches a plain cross-origin POST, incl. a different-
-//     port page on the same hostname (codex e77a573f P2);
-//   - absent Origin (curl, the CLI, server-to-server) is allowed — not a browser
-//     CSRF vector; browsers always send Origin on a cross-origin POST.
+// DNS rebinding (codex 85997b79 P1). Two independent gates:
 //
-// Loopback (localhost / 127.0.0.1 / ::1, any port) is always allowed, so the
-// same-origin SPA and the Vite dev proxy (:5173 → :8080) pass. Safe methods
-// (GET/HEAD/OPTIONS) are untouched (no state change; SSE GETs must stay open).
+//   - Host (DESTINATION) validation runs for EVERY method, before the method switch —
+//     a foreign Host must get the same static 403 whether it's a GET or a POST. This is
+//     the rebinding defense, and it must protect confidential READS too: a rebound page
+//     reading /v1/config, QSO data, SSE or pprof via GET used to slip past a safe-method
+//     early-return (ST-1). Checked FIRST, so a request that is both rebound and
+//     cross-origin is rejected on Host.
+//   - Origin (CSRF) validation applies only to UNSAFE methods: a present Origin must be
+//     loopback (any port) or — for tcp — an EXACT same host:PORT (else 403), catching a
+//     plain cross-origin POST incl. a different-port page on the same hostname (codex
+//     e77a573f P2); absent Origin (curl, the CLI, server-to-server) is allowed.
+//
+// Loopback (localhost / 127.0.0.1 / ::1, any port) is always an allowed Host, so the
+// same-origin SPA and the Vite dev proxy (:5173 → :8080) pass. A non-tcp (Unix-socket)
+// listener has no DNS-rebinding vector, so hostAllowed accepts its arbitrary Host.
 func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 	const op errors.Op = "api.requireSameOrigin"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet, http.MethodHead, http.MethodOptions:
-			next.ServeHTTP(w, r)
-			return
-		}
+		// Destination gate — every method, host-first (ST-1).
 		if !s.hostAllowed(hostOnly(r.Host)) {
 			s.logHostRefused(r)
 			s.writeError(w, http.StatusForbidden, "cross_origin", "host not allowed", op)
+			return
+		}
+		// Origin gate — unsafe methods only (safe reads are left to browser SOP).
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
 			return
 		}
 		// The Origin is compared against a TRUSTED host. For tcp, hostAllowed already

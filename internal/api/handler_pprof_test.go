@@ -14,6 +14,7 @@ import (
 func pprofProbe(t *testing.T, srv *Server, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Host = "127.0.0.1:8080" // loopback: the Host allowlist now covers safe methods too (ST-1)
 	w := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(w, req)
 	return w
