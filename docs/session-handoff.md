@@ -48,21 +48,19 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **logging-gaps audit L1–L11 DONE + committed (UNPUSHED — operator pushes).** L1–L10 as before
-  (L5–L8 + **L9** safego panic-recovery for all 4 service-lifetime goroutines + **L10** transition-only
-  health logging daemon+cloud). **L11** (forwarding queue context) shipped this session as 3 commits:
-  store query `0c73d92c` (`UploadQueueDepthWithContext` — ONE atomic snapshot, epoch oldest,
-  `created_at` reset on re-arm), worker discipline `b198f81f` (attempt records carry `upload_id`/
-  `attempt`/`queued_at`/`queue_age_seconds`; reachability down/recovered TRANSITIONS + in-outage
-  per-attempt Debug demotion; fixed-60s queue summary as a PEER goroutine — NOT on the blocking claim
-  loop; shutdown-cancel fully suppressed), docs `fbbe7414`. Findings doc marked FIXED through L11. All
-  full-TDD + reversion-proved; the store commit took a 5-round codex cycle (atomicity → re-arm age →
-  perf) before No-actionable-findings.
-- **CI on `main` (40adfd35) is RED from a FLAKY evidence `SQLITE_BUSY`** — `TestReceipt_DialContextRecordedAndSeparated`
-  opens a competing raw writer to the same DB file under -race; passes locally; NOT L11, NOT the docs
-  commit. A re-run clears it; pushing the L11 commits re-runs CI on the new HEAD anyway.
-- **RESUME TASK — L12 (P2):** SM Cloud `cloud_newer_noop` disposition + reconcile summary. Then
-  **L13** (P3 oversized-serial-frame counter), then **H1–H4** (P3 hardening).
+- **logging-gaps audit L1–L12 DONE.** L1–L11 pushed (CI green on `e954bbd8`). **L11** (forwarding
+  queue context) = store query `0c73d92c` + worker discipline `b198f81f` + docs `fbbe7414`.
+  **L12** (SM Cloud flattens successes) shipped this session, **committed UNPUSHED**, as 3 commits:
+  submit detail `0fb78caa` (`forwarding.Result.Detail`; SM Cloud `stored`/`cloud_newer_noop`, both
+  Success+uploaded; worker logs `outcome_detail`, omitted when unset; `applied` now a `*int` so a
+  missing/null ack is transient not a false noop), reconcile summary `6e4d43ee`
+  (`run complete` logs discovered/enqueued/skipped always + deferred/limit when truncated; identity
+  discovered=enqueued+skipped+deferred; per-list caps kept, `truncateBatch` factored;
+  Discovered/Attempted `json:"-"` so the endpoint shape is unchanged), docs `d3f16f96`. All
+  full-TDD + reversion-proved; each code commit reached No-actionable-findings (commit A after one
+  review-fix — the missing-applied guard).
+- **RESUME TASK — L13 (P3):** oversized serial frames disappear silently — add a counter/log. Then
+  **H1–H4** (P3 hardening), then the 7 `internal-*-audit.md` reports (2026-08-14).
 - **BIG NEW BACKLOG (operator: "seven more review reports have landed"):** 7 more audits in
   `docs/reviews/` (2026-08-14) beyond logging-gaps — internal-{lifecycle-concurrency, package-
   boundary, configuration-contract, persistence-transaction, api-wire-contract, security-trust-
