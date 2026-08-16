@@ -24,8 +24,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 )
 
@@ -115,45 +113,29 @@ func validateSocketAncestry(dir string) error {
 	}
 }
 
-// ensureAncestorOwner reports an error unless fi is owned by a principal that no OTHER
-// local user could act as to tamper with the daemon's path: root, the daemon's own euid,
-// or the kernel overflow uid. A directory owned by any other real, mapped user is a
-// tampering vector (that user can chmod their own directory and rename our path).
+// ensureAncestorOwner reports an error unless fi is owned strictly by root or the daemon's
+// effective uid — the only two principals that legitimately control the daemon's path.
 func ensureAncestorOwner(fi os.FileInfo) error {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return fmt.Errorf("cannot determine owner (unsupported platform)")
 	}
-	if !trustedAncestorOwner(int(st.Uid)) {
+	if !ancestorOwnerTrusted(int(st.Uid)) {
 		return fmt.Errorf("a directory is owned by another local user")
 	}
 	return nil
 }
 
-// trustedAncestorOwner reports whether uid may own a directory in the socket ancestry:
-// root (0), the daemon's euid, or the kernel overflow uid. The overflow-uid case is
-// load-bearing for user namespaces / rootless containers: host-owned directories (e.g. /
-// and /tmp) appear as the overflow uid (commonly 65534) from inside the namespace, and NO
-// local (mapped) user can act as that unmapped owner, so such a directory is not a
-// tampering vector — whereas a directory owned by another real, mapped user is. The mode
-// check (no group/other write unless sticky) still applies to every component regardless
-// of owner.
-func trustedAncestorOwner(uid int) bool {
-	return uid == 0 || uid == os.Geteuid() || uid == overflowUID()
-}
-
-// overflowUID returns the kernel's overflow uid (the id unmapped owners appear as inside a
-// user namespace). Read from /proc; falls back to the near-universal default 65534.
-func overflowUID() int {
-	const defaultOverflow = 65534
-	b, err := os.ReadFile("/proc/sys/kernel/overflowuid")
-	if err != nil {
-		return defaultOverflow
-	}
-	if v, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
-		return v
-	}
-	return defaultOverflow
+// ancestorOwnerTrusted reports whether uid may own a directory in the socket ancestry:
+// strictly root (0) or the daemon's own euid. There is DELIBERATELY no overflow-uid
+// exception and no /proc/self/uid_map inference (operator ruling 2026-08-16): the kernel
+// overflow uid is ambiguous — an unmapped host owner and a real process running as the
+// mapped "nobody" uid collapse to the same number — so trusting it would reopen the
+// ancestry-replacement race. In a rootless namespace where host-owned ancestors appear as
+// the overflow uid, Unix sockets are simply unavailable: use TCP (the default), or fix the
+// namespace's uid mapping.
+func ancestorOwnerTrusted(uid int) bool {
+	return uid == 0 || uid == os.Geteuid()
 }
 
 // secureUnixSocket chmods the freshly bound socket to 0600 and verifies the result —

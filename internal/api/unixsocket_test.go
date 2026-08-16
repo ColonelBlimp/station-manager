@@ -32,6 +32,7 @@ func privSocketDir(t *testing.T) string {
 
 // AC-5.1: the bound socket is mode 0600 under every umask (000/002/022/077).
 func TestBindListener_UnixSocketOwnerOnlyUnderAnyUmask(t *testing.T) {
+	skipIfNamespacedRoot(t) // positive bind test: needs a root/euid-owned ancestry
 	for _, um := range []int{0o000, 0o002, 0o022, 0o077} {
 		t.Run(fmt.Sprintf("umask_%04o", um), func(t *testing.T) {
 			old := syscall.Umask(um)
@@ -132,25 +133,46 @@ func TestBindListener_UnsafeAncestorIsFatal(t *testing.T) {
 	}
 }
 
-// P1 (codex 88c94ccf): the ancestry owner check must accept the kernel overflow uid so a
-// user namespace (host-owned / and /tmp appear as 65534) does not reject every socket, and
-// still reject an arbitrary other local user.
-func TestTrustedAncestorOwner(t *testing.T) {
-	if !trustedAncestorOwner(0) {
+// Pure-policy test (runs everywhere, no filesystem): ancestry ownership is STRICTLY root
+// or the daemon euid — no overflow-uid exception (Option A, operator ruling 2026-08-16),
+// because the overflow uid is ambiguous and trusting it would reopen the tampering race.
+func TestAncestorOwnerTrusted_StrictRootOrEuid(t *testing.T) {
+	if !ancestorOwnerTrusted(0) {
 		t.Error("root (0) must be trusted")
 	}
-	if !trustedAncestorOwner(os.Geteuid()) {
+	if !ancestorOwnerTrusted(os.Geteuid()) {
 		t.Error("the daemon euid must be trusted")
 	}
-	if !trustedAncestorOwner(overflowUID()) {
-		t.Error("the kernel overflow uid must be trusted (user-namespace compatibility)")
+	// The kernel overflow uid ("nobody", 65534) must NOT be trusted.
+	if os.Geteuid() != 65534 && ancestorOwnerTrusted(65534) {
+		t.Error("the overflow uid 65534 must not be trusted (Option A: strict root-or-euid)")
 	}
-	// A uid that is none of the above is a tampering vector. Pick one guaranteed distinct.
+	// Any other local user is a tampering vector.
 	other := os.Geteuid() + 1
-	if other == overflowUID() || other == 0 {
+	if other == 0 {
 		other = os.Geteuid() + 2
 	}
-	if trustedAncestorOwner(other) {
+	if ancestorOwnerTrusted(other) {
 		t.Errorf("uid %d (another local user) must not be trusted", other)
+	}
+}
+
+// skipIfNamespacedRoot skips a real-filesystem POSITIVE bind/lifecycle test when "/" is
+// owned by neither root nor the daemon euid — the rootless-namespace case where host-owned
+// ancestors appear as the overflow uid and the strict ancestry check (correctly) refuses to
+// bind. The security rule keeps full coverage via the pure-policy and negative tests, which
+// are NOT skipped (operator ruling 2026-08-16).
+func skipIfNamespacedRoot(t *testing.T) {
+	t.Helper()
+	fi, err := os.Lstat("/")
+	if err != nil {
+		t.Fatalf("lstat /: %v", err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skip("cannot determine / owner on this platform")
+	}
+	if uid := int(st.Uid); uid != 0 && uid != os.Geteuid() {
+		t.Skipf("/ is owned by uid %d (not root/euid) — a namespaced env where Unix sockets are unavailable", uid)
 	}
 }

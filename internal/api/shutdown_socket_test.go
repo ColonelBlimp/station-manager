@@ -30,6 +30,7 @@ import (
 //	    still there when the old server's Shutdown runs again — the one
 //	    observable that fails while any unconditional remove exists.
 func TestShutdown_DoesNotUnlinkASuccessorsSocket(t *testing.T) {
+	skipIfNamespacedRoot(t) // positive lifecycle test: needs a root/euid-owned ancestry
 	// A fresh 0700 dir with a safe ancestry and a short path (privSocketDir) — t.TempDir's
 	// own dir is 0755, which ST-5's owner-private-parent check (correctly) refuses.
 	sock := filepath.Join(privSocketDir(t), "s")
