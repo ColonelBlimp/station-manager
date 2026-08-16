@@ -155,14 +155,16 @@ func New(cfg config.Config, daemonVersion string, cfgSvc *config.Service, qso *q
 	s.registerRoutes(mux, cfg, logger, br, ft8Svc)
 
 	// Middleware chain — outermost first:
+	//   securityHeaders   — browser-trust headers on EVERY response, incl. 403/500 (ST-2)
 	//   logRequests       — access log; observes every completion (incl.
 	//                       503 from limitConcurrent and 500 from recoverPanic)
 	//   limitConcurrent   — non-SSE concurrent-request cap
 	//   recoverPanic      — panic safety net + structured panic log
+	//   requireSameOrigin — Host allowlist (all methods) + Origin (unsafe methods)
 	//   mux               — per-route handlers (with their own per-route
 	//                       middleware like limitSubmitRate / limitEventSubscribers)
 	s.httpServer = &http.Server{
-		Handler: s.logRequests(s.rejectWhenDraining(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(mux))))),
+		Handler: s.securityHeaders(s.logRequests(s.rejectWhenDraining(s.limitConcurrent(s.recoverPanic(s.requireSameOrigin(mux)))))),
 		// net/http writes its own diagnostics — accept errors, TLS handshake
 		// failures, and panics on paths recoverPanic does not wrap — through
 		// ErrorLog. Left nil it falls back to log.Default(), i.e. stderr, so those

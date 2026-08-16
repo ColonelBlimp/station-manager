@@ -183,6 +183,23 @@ func (s *Server) limitConcurrent(next http.Handler) http.Handler {
 	})
 }
 
+// securityHeaders sets browser-trust response headers on EVERY response (ST-2). It is the
+// OUTERMOST middleware — outside requireSameOrigin and recoverPanic — so even an ST-1 403 or a
+// recovered-panic 500 carries them, and it sets via Header().Set BEFORE the next handler runs so
+// the headers are present when WriteHeader flushes. frame-ancestors 'none' + X-Frame-Options:
+// DENY block clickjacking of the loopback operator UI; nosniff + a no-referrer policy harden the
+// same boundary. A full script/style CSP is deliberately out of scope here (ST-2).
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // limitEventSubscribers caps simultaneous SSE subscribers on the
 // /v1/events endpoint. When full, the handler returns 503 rather
 // than accepting the connection; a subscriber slot is released when
