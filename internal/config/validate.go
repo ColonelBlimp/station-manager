@@ -90,7 +90,9 @@ func Validate(cfg Config) []Finding {
 	out = append(out, validateFt8FieldDay(cfg.Ft8.FieldDay)...)
 	out = append(out, validateEvidence(cfg.Evidence)...)
 	out = append(out, validateEvidenceSync(cfg)...)
-	// Advisory findings (non-fatal) — currently just the non-loopback-bind notice.
+	// Advisory findings (non-fatal). Currently just the ACKNOWLEDGED non-loopback
+	// bind notice — an unacknowledged bind is fatal (validateServer above) and
+	// Warnings() returns nothing for it, so the two paths never both fire (ST-3a).
 	for _, w := range Warnings(cfg) {
 		out = append(out, Finding{Field: "socket_path", Code: "insecure_bind", Message: w, Warning: true})
 	}
@@ -157,13 +159,30 @@ func validateServer(cfg Config) []Finding {
 				s.DefaultPageLimit, s.MaxPageLimit)})
 	}
 
-	// Profiling on a non-loopback TCP bind exposes heap/goroutine/CPU forensics
-	// (and a /debug/pprof/profile DoS vector) to the LAN. Advisory, like the
-	// existing insecure-bind warning.
+	// A non-loopback TCP bind exposes the entire unauthenticated, unencrypted API +
+	// RF control to the network (ST-3a). FATAL unless the operator acknowledges the
+	// posture with server.allow_insecure_network: true, at which point Warnings()
+	// emits a standing advisory instead (wrapped as an advisory Finding by Validate).
+	// isLoopbackBind conservatively classifies wildcard (0.0.0.0 / :: / empty host)
+	// and hostname binds as non-loopback; loopback-Host trust in requireSameOrigin is
+	// a DNS-rebinding defence, not peer authentication, so a wildcard bind requires
+	// the acknowledgement too (operator ruling 2).
+	if s.Protocol == "tcp" && !isLoopbackBind(cfg.SocketPath) && !s.AllowInsecureNetwork {
+		out = append(out, Finding{Field: "server.allow_insecure_network",
+			Code: "insecure_bind_unacknowledged", Message: insecureNetworkFatalMsg(cfg.SocketPath)})
+	}
+
+	// Profiling on a non-loopback TCP bind exposes heap/goroutine/CPU forensics to
+	// the LAN. Advisory even on an acknowledged bind: allow_insecure_network=true +
+	// enable_profiling=true are already two deliberate switches, so no third override
+	// is required (ST-3a, operator ruling 6). On an unacknowledged bind the fatal
+	// finding above blocks startup regardless.
 	if s.EnableProfiling && s.Protocol == "tcp" && !isLoopbackBind(cfg.SocketPath) {
 		out = append(out, Finding{Field: "server.enable_profiling", Code: "insecure_profiling", Warning: true,
 			Message: "server.enable_profiling=true with a non-loopback TCP bind exposes /debug/pprof " +
-				"(heap/goroutine/CPU dumps + a profiling DoS vector) to any host that can reach this address"})
+				"to any host that can reach this address: heap and goroutine dumps can disclose " +
+				"in-memory data (including secrets), and CPU/trace profiling is resource-intensive " +
+				"and a DoS vector"})
 	}
 
 	return out

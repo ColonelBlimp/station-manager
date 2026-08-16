@@ -56,6 +56,17 @@ Original non-consumers:
 
 ## 2. Transport and auth
 
+> **STATUS NOTE (ST-3a, 2026-08-16).** This section is the milestone-1 design brief and
+> is preserved as written. It has since drifted from the code: the first-run default is
+> now **loopback TCP** (`127.0.0.1:8080`, for the embedded SPA), not a Unix socket, and
+> **direct non-loopback TCP is a supported (deliberately-insecure) posture**. The
+> Unix-socket-permissions auth model below applies only to the `protocol=unix`
+> deployment. For the current, reconciled bind postures (loopback / owner-private
+> socket / acknowledged non-loopback) see `config.md` §5.1 and **ADR 0069**. ST-3a closed
+> the *silent* exposure (a non-loopback bind is now startup-fatal without
+> `server.allow_insecure_network`); authenticated LAN access — a real auth layer — is
+> **ST-3b**, still an open decision.
+
 **HTTP over a Unix domain socket.** The daemon binds its HTTP server to a Unix domain socket at a path read from config. Filesystem permissions on the socket are the authorization mechanism — any process that can open the socket is treated as authorized. For the single-user desktop scenario this is equivalent to "authenticated as the user running the daemon," which is exactly the guarantee we need.
 
 **The listener type and socket path are config-driven, not hardcoded.** No `const socketPath = "/tmp/smd.sock"` buried in handlers. The socket path, HTTP timeouts (read, write, idle), request body size limits, SSE heartbeat interval, and graceful shutdown timeout all come from `internal/config.Config` or a server sub-config within it. This follows the "no magic numbers" project rule and gives future deployment flexibility for free.
@@ -320,7 +331,9 @@ These are known concerns that were raised during session 5 and deliberately not 
 - **Request ID / trace ID propagation.** If added, it would be a middleware concern and a field in the error envelope. Not needed for a single-user desktop deployment; add if a debugging need surfaces.
 - **Rate limiting, quotas, request size caps beyond a simple global body size limit.** Not a concern at personal-operator scale *from a malicious actor*. But **accidental self-DoS is a real single-user scenario**: a misbehaving local client — a cron job that submits every second without dedupe, a shell retry loop, a buggy client that reconnects to `/v1/events` in a tight loop — can exhaust sqlite connections, goroutines, or file descriptors and knock the daemon over with HTTP 500s long before any hostile actor enters the picture. The Unix-socket / single-user framing does NOT eliminate this; it just changes *who* the bad client is (yourself, by accident). **Minimal floor (recommended even in milestone 1):** (a) a global concurrent-request cap that returns 503 rather than piling up, (b) a per-endpoint request-rate cap on the submit path so a runaway loop gets 429'd instead of starving forward processing, (c) a generous SSE subscriber cap so a reconnect storm can't spawn unbounded goroutines. All three are ~20–40 LOC of middleware backed by config knobs, and they fail *loud* (429 / 503) instead of failing silent (timeouts, OOM). **Fuller hardening trigger** — per-client quotas, dynamic rate adjustment, fair-share across endpoints — still deferred until a TCP listener, non-owner clients, or a real multi-client workload exists.
 - **Authentication beyond socket permissions.** §2 already pins the milestone-1 story: filesystem permissions on the Unix socket ARE the auth. Per §2 this was always intended to be replaceable by middleware without handler changes. **Trigger to revisit:** same as rate limiting — TCP exposure, non-owner clients, multi-user daemon. Likely shape when it lands: a token / pre-shared-key middleware, not username/password; the daemon has no user model. OIDC / OAuth-style flows are firmly out of scope unless the daemon grows a web UI, which it won't.
+  > **STATUS NOTE (ST-3a, 2026-08-16).** The trigger has fired — TCP is now the default listener and non-loopback TCP is supported. No auth layer exists yet; ST-3a instead makes the insecure posture **fail-closed and explicitly acknowledged** (`server.allow_insecure_network`) rather than silent. The actual auth layer (browser session for the LAN SPA, or loopback-only + authenticated TLS proxy) is **ST-3b**, an open decision — see ADR 0069.
 - **Transport encryption (TLS).** Not applicable while the daemon speaks only over a Unix domain socket (filesystem permissions are stronger than TLS in that context). **Trigger to revisit:** any TCP listener, even loopback, if traffic could be sniffed by a non-owner process. If the daemon ever needs to serve a remote client, TLS is mandatory before that listener binds.
+  > **STATUS NOTE (ST-3a, 2026-08-16).** "TLS mandatory for any TCP listener" was not adopted for the **loopback** default (127.0.0.1 traffic is not visible to non-owner processes), which is an accepted no-TLS posture. For **non-loopback** TCP, TLS/proxy is part of the still-open ST-3b topology decision (ADR 0069); ST-3a ships only the acknowledgement gate, not TLS.
 - **The forwarder fan-out config shape.** v2's forwarder redesign (to support multi-destination fan-out, replacing v1's hardcoded QRZ) is covered in `docs/v2-design/forwarding.md` (draft 2026-04-18). The API side of it (how clients query forwarder status) is already covered in Section 5; the internal shape lives in that sibling document.
 - **Session lifecycle.** Whether v2 has sessions as a first-class concept, and what their endpoints look like, is part of the logging app design in milestone 2.
 
@@ -757,6 +770,11 @@ table didn't anticipate.
   permissions are the auth. TCP listener = currently no auth
   layer; revisit per §6 trigger when non-loopback exposure
   appears.
+  > **STATUS NOTE (ST-3a, 2026-08-16).** Non-loopback exposure has
+  > appeared and is supported. It is now **startup-fatal without
+  > `server.allow_insecure_network`** (fail-closed acknowledgement,
+  > not an auth layer). Real auth = ST-3b (open). See config.md §5.1
+  > + ADR 0069.
 
 ### Load limits and middleware (the §6 "minimal floor", shipped)
 

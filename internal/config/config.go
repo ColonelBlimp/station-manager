@@ -538,6 +538,26 @@ type ServerConfig struct {
 	// and isn't documented in api.md — it's a development affordance,
 	// not a stable contract.
 	EnableProfiling bool `json:"enable_profiling,omitempty"`
+
+	// AllowInsecureNetwork acknowledges the deliberately-insecure posture of a
+	// non-loopback TCP listener (ST-3a — docs/reviews/internal-security-trust-boundary-audit.md).
+	// A TCP bind on any address that is not recognisably loopback — a specific
+	// LAN/public IP, a wildcard (0.0.0.0 / :: / empty host), or a non-localhost
+	// hostname — exposes the ENTIRE unauthenticated, unencrypted API (read/write
+	// log data, mutate config, restart the daemon, command the rig, key TX, run
+	// FT8) to every host that can reach the port. Loopback-Host trust in the CSRF
+	// guard (requireSameOrigin) is a DNS-rebinding defence, NOT peer
+	// authentication, so a wildcard bind is exposed to native LAN clients too and
+	// requires this acknowledgement as well. Without it such a bind is FATAL at
+	// Load — the daemon refuses to start (validateServer emits a non-advisory
+	// finding); with it the daemon starts and Warnings() logs a standing advisory.
+	//
+	// Config-file/startup-only: deliberately absent from the /v1/config wire
+	// surface (ServerConfig is not part of api.ConfigResponse), so the
+	// acknowledgement can never be set by a remote API client. This is the ST-3a
+	// migration acknowledgement, NOT the final secure-remote topology — that is
+	// ST-3b, an open decision (see ADR 0069).
+	AllowInsecureNetwork bool `json:"allow_insecure_network,omitempty"`
 }
 
 // Load reads a JSON config file and returns a populated Config with defaults
@@ -1338,15 +1358,50 @@ func applyDefaults(cfg *Config, baseDir string) {
 // returns nil.
 func Warnings(cfg Config) []string {
 	out := make([]string, 0)
-	if cfg.Server.Protocol == "tcp" && !isLoopbackBind(cfg.SocketPath) {
-		out = append(out,
-			"server.protocol=tcp with non-loopback socket_path "+
-				strconv.Quote(cfg.SocketPath)+
-				" — daemon HTTP API has no auth and will accept QSO submits "+
-				"from any host that can reach this address. Trusted-LAN "+
-				"deployments only; otherwise bind 127.0.0.1 or use a Unix socket.")
+	// An ACKNOWLEDGED non-loopback TCP bind gets a standing advisory. The
+	// unacknowledged case is fatal (validateServer) and never reaches here — Load
+	// refuses to start — so Warnings only fires once the operator has opted in with
+	// server.allow_insecure_network (ST-3a).
+	if cfg.Server.Protocol == "tcp" && !isLoopbackBind(cfg.SocketPath) && cfg.Server.AllowInsecureNetwork {
+		out = append(out, insecureNetworkAdvisoryMsg(cfg.SocketPath))
 	}
 	return out
+}
+
+// insecureNetworkEffects enumerates what an unauthenticated, unencrypted
+// non-loopback TCP listener grants every host that can reach it. "including"
+// keeps it accurate as routes are added (ST-3a, operator ruling 5). Shared by the
+// fatal refusal (validateServer) and the acknowledged advisory (Warnings), so the
+// two messages can never drift out of agreement about the exposure.
+const insecureNetworkEffects = "any client that can reach this listener gets " +
+	"unauthenticated, unencrypted access to every enabled HTTP route, including: " +
+	"reading, exporting, creating, editing and deleting log/QSO data; reading and " +
+	"mutating station, SMTP, lookup, forwarder and subsystem configuration; " +
+	"restarting the daemon; commanding or retuning the rig; keying the tune carrier; " +
+	"and arming, sending and operating FT8 transmissions/automation"
+
+// insecureNetworkFatalMsg is the Load-refusal message for an UNACKNOWLEDGED
+// non-loopback TCP bind. It names the one deliberate switch that unblocks it and
+// states plainly what acknowledging grants (operator ruling 3).
+func insecureNetworkFatalMsg(socket string) string {
+	return "server.protocol=tcp is bound to non-loopback socket_path " +
+		strconv.Quote(socket) + " with server.allow_insecure_network unset — refusing " +
+		"to start: " + insecureNetworkEffects + ". To run this deliberately-insecure " +
+		"posture anyway, set server.allow_insecure_network: true (acknowledging that " +
+		"unauthenticated clients get full enabled API and RF control); otherwise bind " +
+		"127.0.0.1 or use a Unix socket. This is a migration posture, not a " +
+		"secure-remote topology (ST-3b)."
+}
+
+// insecureNetworkAdvisoryMsg is the STANDING advisory logged once at startup for an
+// ACKNOWLEDGED non-loopback bind. Retains "non-loopback socket_path" so callers that
+// key off that phrase keep working.
+func insecureNetworkAdvisoryMsg(socket string) string {
+	return "server.protocol=tcp with non-loopback socket_path " + strconv.Quote(socket) +
+		" and server.allow_insecure_network=true — running the deliberately-insecure LAN " +
+		"posture: " + insecureNetworkEffects + ". Acknowledged that unauthenticated clients " +
+		"get full enabled API and RF control. This is a migration posture, not a " +
+		"secure-remote topology (ST-3b)."
 }
 
 // UnknownKeys returns the dotted paths of JSON keys present in the raw config

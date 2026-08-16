@@ -494,8 +494,33 @@ paths** (a divergence, §7).
   function.** `validateStationPrefs` runs on BOTH paths (startup + PUT).
 - **Soft-fail** (degrade, daemon continues): QRZ session-key fetch failure at provider
   `Initialize` → provider disabled + warning (`internal/lookup/qrz`).
-- **Advisory** (`config.Warnings`, non-fatal, logged once): e.g. `protocol=tcp` with a
-  non-loopback bind (no-auth exposure warning).
+- **Advisory** (`config.Warnings`, non-fatal, logged once): an **acknowledged**
+  non-loopback TCP bind (see §5.1 — the *un*acknowledged case is startup-fatal).
+
+### 5.1 Bind posture — `server.allow_insecure_network` (ST-3a, 2026-08-16)
+
+`server.protocol=tcp` supports three honest postures (ADR 0069):
+
+- **Loopback TCP** (`127.0.0.1` / `::1` / `localhost`, the first-run default) —
+  local-only, no auth/TLS, no acknowledgement needed. `hostAllowed` is
+  rebinding-proof for these.
+- **Owner-private Unix socket** (`protocol=unix`) — filesystem permissions ARE the
+  authorization; never subject to the bind check.
+- **Direct non-loopback TCP** — a specific LAN/public IP, a wildcard (`0.0.0.0` /
+  `::` / empty host), or a non-localhost hostname. This exposes the **entire
+  unauthenticated, unencrypted API + RF control** to every host that can reach the
+  port, so it is **startup-fatal** (`insecure_bind_unacknowledged`, `Load` aborts /
+  PUT 400) **unless** the operator sets `server.allow_insecure_network: true`. With
+  the acknowledgement the daemon starts and logs a standing advisory enumerating the
+  full exposure. Wildcard binds require the ack too: loopback-Host trust in
+  `requireSameOrigin` is a DNS-rebinding defence, **not** peer authentication, so a
+  native LAN client can forge the Host.
+
+`allow_insecure_network` is **config-file/startup-only** — deliberately absent from
+the `/v1/config` wire surface (server-bind settings never were on it), so the
+acknowledgement cannot be set by a remote API client. This is the ST-3a **migration
+acknowledgement**, not the secure-remote topology — authenticated LAN access is
+**ST-3b**, an open decision (ADR 0069).
 
 ## 6. Lifecycle & dynamics
 
@@ -915,8 +940,9 @@ mode-mappings, `ft8_mode`, overrides). Disposition is the caller's:
 
 - **Load:** any error → **fatal abort** (clear message).
 - **PUT / config-SPA:** errors → **400** (field+code; SPA renders via i18n); else persist.
-- **Warnings** (advisory — e.g. non-loopback bind): logged at Load, returned in the PUT
-  response, never block.
+- **Warnings** (advisory — e.g. an *acknowledged* non-loopback bind, §5.1): logged at
+  Load, returned in the PUT response, never block. (An *un*acknowledged non-loopback
+  bind is an **error** finding, `insecure_bind_unacknowledged`, not a warning — ST-3a.)
 
 ### 12.3 Normalize separated from validate
 

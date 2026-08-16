@@ -18,6 +18,7 @@ func TestLoad_ValidFile(t *testing.T) {
 	content := `{
 		"data_dir": "/tmp/test-data",
 		"socket_path": "/tmp/test.sock",
+		"server": {"protocol": "unix"},
 		"datastore": {
 			"driver": "sqlite",
 			"path": "/tmp/test.db"
@@ -812,9 +813,11 @@ func TestLoad_Forwarders_ValidationErrors(t *testing.T) {
 	}
 }
 
-// TestWarnings_NonLoopbackTCPBind covers review m4 — operator binding
-// the daemon to a non-loopback address with no auth on the API
-// surface should produce a startup advisory, not a hard failure.
+// TestWarnings_NonLoopbackTCPBind covers review m4, updated for ST-3a — an
+// ACKNOWLEDGED non-loopback bind (server.allow_insecure_network=true) produces a
+// standing startup advisory (the unacknowledged case is now fatal, covered by the
+// insecure_network_test.go Load tests). This pins which binds are classified
+// non-loopback via the acknowledged advisory path.
 func TestWarnings_NonLoopbackTCPBind(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -838,6 +841,7 @@ func TestWarnings_NonLoopbackTCPBind(t *testing.T) {
 			cfg := Config{}
 			cfg.Server.Protocol = tc.protocol
 			cfg.SocketPath = tc.socket
+			cfg.Server.AllowInsecureNetwork = true // ST-3a: advisory is the acknowledged path
 
 			warnings := Warnings(cfg)
 
@@ -1065,7 +1069,7 @@ func TestLoad_StampsCurrentVersion(t *testing.T) {
 	cfgFile := filepath.Join(dir, "config.json")
 	// A version-less file is the pre-versioning baseline; Load stamps the current
 	// schema version so the in-memory config always carries it.
-	content := `{"data_dir": "/tmp/d", "socket_path": "/tmp/s.sock"}`
+	content := `{"data_dir": "/tmp/d", "socket_path": "/tmp/s.sock", "server": {"protocol": "unix"}}`
 	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing test config: %v", err)
 	}
@@ -1313,7 +1317,8 @@ func TestValidate_CollectsErrorsAndWarnings(t *testing.T) {
 	cfg := DefaultConfig(t.TempDir())
 	cfg.Forwarders = []types.ForwarderConfig{{Type: "qrz"}} // empty name → error finding
 	cfg.Server.Protocol = "tcp"
-	cfg.SocketPath = "0.0.0.0:8080" // non-loopback bind → warning finding
+	cfg.SocketPath = "0.0.0.0:8080"        // non-loopback bind → advisory finding when acknowledged
+	cfg.Server.AllowInsecureNetwork = true // ST-3a: acknowledged, so the bind is advisory not fatal
 
 	var gotErr, gotWarn bool
 	for _, f := range Validate(cfg) {

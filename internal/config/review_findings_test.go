@@ -138,11 +138,16 @@ func TestValidateServer_PageLimitOrdering(t *testing.T) {
 	}
 }
 
-// Profiling on a non-loopback TCP bind is an advisory warning (not fatal).
+// Profiling on a non-loopback TCP bind is an advisory warning (not fatal). ST-3a
+// (ruling 6): once the bind itself is acknowledged (allow_insecure_network=true),
+// enabling profiling stays advisory — the two flags are already two deliberate
+// switches, no third override — and the advisory now names in-memory data disclosure,
+// not just generic dumps.
 func TestValidateServer_ProfilingNonLoopbackWarns(t *testing.T) {
 	cfg := DefaultConfig(t.TempDir())
 	cfg.Server.Protocol = "tcp"
 	cfg.SocketPath = "0.0.0.0:8080"
+	cfg.Server.AllowInsecureNetwork = true // acknowledged bind — the posture ruling 6 addresses
 	cfg.Server.EnableProfiling = true
 
 	var found bool
@@ -151,6 +156,9 @@ func TestValidateServer_ProfilingNonLoopbackWarns(t *testing.T) {
 			found = true
 			if !f.Warning {
 				t.Error("profiling exposure should be advisory (Warning), not a fatal error")
+			}
+			if !strings.Contains(f.Message, "disclose") {
+				t.Errorf("profiling advisory should name in-memory data disclosure; got %q", f.Message)
 			}
 		}
 	}
