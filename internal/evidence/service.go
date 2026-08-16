@@ -286,12 +286,13 @@ type Service struct {
 	// mirroring the audio callback's dropped counter; the monitor turns it into warns.
 	queueDropped atomic.Int64
 
-	mu       sync.Mutex
-	started  bool
-	state    string
-	dropped  int64
-	loss     *lossAccum
-	pressure string // retention drop-new cause: "" | cap | metadata (RT9)
+	mu        sync.Mutex
+	started   bool
+	startedAt time.Time // set in Start; backs run_duration_seconds in the stop summary (H2)
+	state     string
+	dropped   int64
+	loss      *lossAccum
+	pressure  string // retention drop-new cause: "" | cap | metadata (RT9)
 
 	// §4.2 profile resolution state, written once in Start (restart-only
 	// activation) and immutable until Stop; reads happen under mu.
@@ -404,6 +405,7 @@ func (s *Service) Start() error {
 	}
 	s.state = StateCapturing
 	s.started = true
+	s.startedAt = time.Now()
 	s.retHealth = newRetentionHealth(s.log, s.cfg.Path, retentionMeasurementHeartbeat, time.Now)
 	s.statusHealth = newStatusQueryHealth(s.log)
 	s.queueLoss = logging.NewEpisodeLoss(s.log,
@@ -457,12 +459,34 @@ func (s *Service) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closeLossLocked()
-	if err := s.db.Close(); err != nil {
-		s.log.ErrorWith().Err(err).Str("path", s.cfg.Path).
-			Msg("evidence: archive close failed during shutdown")
+	// H2: emit ONE shutdown-completion record AFTER the workers/sync have drained and the
+	// archive close has been attempted — so a clean drain is tellable from one that dropped
+	// slots, and the close error carries context instead of being a bare separate line. The
+	// close error is folded into this record (present only on failure, which makes it Error).
+	closeErr := s.db.Close()
+	syncState := s.syncState
+	if syncState == "" {
+		syncState = syncStateIdle
 	}
+	s.logStopSummary(s.dropped, s.pending.Load(), syncState, time.Since(s.startedAt), closeErr)
 	s.state = StateDisabled
 	s.started = false
+}
+
+// logStopSummary emits the single evidence shutdown-completion record (H2). Info for a clean
+// stop, Error when the archive close failed (close_error is then present); dropped_total is
+// informational (per-slot drops are already logged as they happen).
+func (s *Service) logStopSummary(dropped, pending int64, syncState string, runDuration time.Duration, closeErr error) {
+	ev := s.log.InfoWith()
+	if closeErr != nil {
+		ev = s.log.ErrorWith().Str("close_error", closeErr.Error())
+	}
+	ev.Str("path", s.cfg.Path).
+		Int64("dropped_total", dropped).
+		Int64("pending", pending).
+		Str("sync_state", syncState).
+		Int64("run_duration_seconds", int64(runDuration.Seconds())).
+		Msg("evidence: stopped")
 }
 
 // CaptureSlot enqueues one slot's evidence. NEVER blocks: a full queue (or a
