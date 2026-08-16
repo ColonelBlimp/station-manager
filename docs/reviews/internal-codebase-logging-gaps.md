@@ -480,6 +480,21 @@ discovered, skipped and remaining work
 discovered, enqueued, skipped, deferred/remaining and the truncation limit. Keep the
 overall result successful while making the unusual disposition visible.
 
+> ✅ **FIXED (working tree, awaiting operator's push).** Submit detail `0fb78caa` +
+> reconcile summary `6e4d43ee`, operator rulings 2026-08-16. **Part 1:** `forwarding.Result`
+> gains an optional `Detail`; SM Cloud sets `stored` (applied=1) / `cloud_newer_noop`
+> (applied=0), BOTH staying `OutcomeSuccess` + uploaded, and the worker logs it as
+> `outcome_detail` on the attempt record (Info; omitted when unset, so QRZ/ClubLog are
+> untouched). The distinct field name avoids the worker's existing local `disposition`.
+> Review hardening rode in: `applied` is now a `*int`, so an ack that OMITS the field (or
+> sends null) is TRANSIENT — never a false `cloud_newer_noop`. **Part 2:** the
+> `run complete` record now logs `discovered` (actionable upserts+deletes before truncation),
+> `enqueued` and `skipped` (attempted−enqueued, idempotently absorbed) always, plus `deferred`
+> (discovered−attempted) and the per-list `limit` only when truncated — identity
+> `discovered = enqueued + skipped + deferred`. Per-list caps kept (logging-only), factored
+> into `truncateBatch`; `Discovered`/`Attempted` are `json:"-"` so the reconcile endpoint's
+> wire shape is unchanged.
+
 ### L13. Oversized serial frames disappear silently
 
 The serial reader discards a frame after it exceeds `maxLineSize`, then resumes at the
