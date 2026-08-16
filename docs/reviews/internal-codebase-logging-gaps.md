@@ -551,6 +551,15 @@ no stopped/drained summary
 ([`internal/evidence/service.go:314`](../../internal/evidence/service.go)). Record the
 final dropped count, pending count, sync/quarantine state, close error and duration.
 
+> ✅ **FIXED (working tree, awaiting operator's push).** `9015b33c`, operator rulings
+> 2026-08-16. `Stop` now emits exactly ONE shutdown-completion record — after the workers/sync
+> have drained AND the archive close has been attempted — carrying `dropped_total`, `pending`,
+> `sync_state` and `run_duration_seconds`, at **Info** for a clean stop and **Error** (with
+> `close_error`) when the archive close fails. The former separate close-error line is folded
+> in. Ruling: `sync_state` only, no shutdown-time quarantine query. A `startedAt` field set in
+> `Start` backs the duration. Tested at two levels (`logStopSummary` unit with `closeErr`
+> injected + a real `Start→Stop` integration).
+
 ### H3. Long-lived SSE requests are invisible at Info until disconnect
 
 The daemon access logger deliberately records an SSE request only when it ends
