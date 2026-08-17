@@ -98,21 +98,19 @@ func TestShutdown_PrepareStopBeforeAnyStop(t *testing.T) {
 	}
 }
 
-// AC-D2: the RFCritical fence is the sole Stop until it returns.
+// AC-D2: the RFCritical fence is the sole Stop until it RETURNS. The bridge hook blocks inside Stop
+// (still executing) until released; while it is blocked no other Stop may have begun — signalling
+// completion before return would only prove other stops start after a mid-body point (codex P1).
 func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 	rec := &hookRec{}
 	bridge, other := newProbe(rec, "bridge"), newProbe(rec, "other")
-	fenceReturned := make(chan struct{})
+	fenceEntered := make(chan struct{})
+	release := make(chan struct{})
 	ab := bridge.adapter()
-	ab.Stop = func(context.Context) error { rec.add("stop:bridge"); close(fenceReturned); return nil }
-	ao := other.adapter()
-	ao.Stop = func(context.Context) error {
-		select {
-		case <-fenceReturned:
-		default:
-			t.Error("a non-fence Stop began before the RF fence returned")
-		}
-		rec.add("stop:other")
+	ab.Stop = func(context.Context) error {
+		rec.add("stop:bridge")
+		close(fenceEntered)
+		<-release
 		return nil
 	}
 	// Register `other` FIRST so only the fence phase — not registration order — can make bridge drain
@@ -120,12 +118,18 @@ func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 	o := startedOrch(t, []iocdi.Node{
 		{Name: "other"},
 		{Name: "bridge", StopPriority: iocdi.RFCritical},
-	}, ao, ab)
-	rep := o.Shutdown(time.Second)
+	}, other.adapter(), ab)
 
-	if order := stopOrder(rec.snapshot()); len(order) < 1 || order[0] != "bridge" {
-		t.Errorf("stop order = %v, want bridge first", order)
+	done := make(chan ShutdownReport, 1)
+	go func() { done <- o.Shutdown(time.Second) }()
+
+	<-fenceEntered // fence is inside Stop, still executing
+	if stops := stopOrder(rec.snapshot()); len(stops) != 1 || stops[0] != "bridge" {
+		t.Errorf("a non-fence Stop began while the RF fence was still executing: %v", stops)
 	}
+	close(release)
+
+	rep := <-done
 	if len(rep.Outcomes) == 0 || rep.Outcomes[0].Node != "bridge" {
 		t.Errorf("Outcomes = %+v, want bridge first (fence drains first)", rep.Outcomes)
 	}

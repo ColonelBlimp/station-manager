@@ -136,32 +136,36 @@ func TestAcceptance_HappyPathPartialOrder(t *testing.T) {
 	}
 }
 
-// §5-1: the RF fence is the SOLE teardown until it returns.
+// §5-1: the RF fence is the SOLE teardown until it RETURNS. The bridge hook blocks INSIDE Stop
+// (still executing) until the test releases it; while it is blocked, no other node's Stop may have
+// begun. Signalling completion before return (codex P1) would only prove other stops start after the
+// fence reaches a mid-body point, not after its Stop returns.
 func TestAcceptance_RFFenceIsSole(t *testing.T) {
 	rec := &hookRec{}
 	m := daemonAdapters(rec)
-	fenceReturned := make(chan struct{})
-	m["bridge"].Stop = func(context.Context) error { rec.add("stop:bridge"); close(fenceReturned); return nil }
-	for _, node := range daemonGraph() {
-		if node.Name == "bridge" {
-			continue
-		}
-		n := node.Name
-		m[n].Stop = func(context.Context) error {
-			select {
-			case <-fenceReturned:
-			default:
-				t.Errorf("%s Stop began before the RF fence returned", n)
-			}
-			rec.add("stop:" + n)
-			return nil
-		}
+	fenceEntered := make(chan struct{})
+	release := make(chan struct{})
+	m["bridge"].Stop = func(context.Context) error {
+		rec.add("stop:bridge")
+		close(fenceEntered)
+		<-release // remain in Stop (executing) until released
+		return nil
 	}
 	o := startDaemonOrch(t, m)
-	rep := o.Shutdown(2 * time.Second)
+	done := make(chan ShutdownReport, 1)
+	go func() { done <- o.Shutdown(2 * time.Second) }()
+
+	<-fenceEntered // the fence is now inside Stop, still executing
+	if stops := stopOrder(rec.snapshot()); len(stops) != 1 || stops[0] != "bridge" {
+		t.Errorf("non-fence Stops began while the RF fence was still executing: %v", stops)
+	}
+	close(release) // let the fence return; the rest drains
+
+	rep := <-done
 	if len(rep.Outcomes) == 0 || rep.Outcomes[0].Node != "bridge" {
 		t.Errorf("Outcomes[0] = %+v, want bridge (fence drains first)", rep.Outcomes)
 	}
+	resultsDrained(t, rep, "bridge", "ft8", "hub", "logging")
 }
 
 // §5-5/§5-6: ft8 Failed (fast) ⇒ evidence/qso-log Skipped[ft8], hub Skipped[qso-log] (transitive),
