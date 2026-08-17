@@ -172,7 +172,7 @@ func TestService_StopFlushesLateSpot(t *testing.T) {
 		t.Errorf("final datagram missing the late spot K1ABC")
 	}
 
-	// A spot added after Stop must drop (the stopped cutoff), not buffer.
+	// A spot added after Stop must drop (the supervisor seal — Phase != Running), not buffer.
 	s.AddSpot(Spot{Call: "ZZ9ZZZ", FreqHz: 14074000, SNR: -8, Mode: "FT8", TimeUnix: 1700000000})
 	s.mu.Lock()
 	leftover := len(s.buf)

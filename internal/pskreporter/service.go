@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/lifecycle"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
 )
@@ -58,6 +59,13 @@ type Service struct {
 	cfg Config
 	log logging.Logger
 
+	// life is the ADR-0070 Supervisor — the lifecycle authority (replaces the stopped flag + cancel +
+	// wg). flushLane (Cancellable) is the flush worker: Stop cancels the supervisor context (which is
+	// DERIVED from the parent, so a parent-cancel exits the loop while the service stays Running — a
+	// late spot then rides the authoritative teardown flush) and waits the lane before teardown.
+	life      *lifecycle.Supervisor
+	flushLane *lifecycle.Lane
+
 	mu      sync.Mutex
 	recv    Receiver        // us (callsign/grid/software/antenna) — settable via SetReceiver
 	buf     map[string]Spot // call → strongest spot this window (dedup)
@@ -66,10 +74,7 @@ type Service struct {
 	sent    int             // datagrams sent (drives the first-N-templates rule)
 	lastTpl time.Time       // last time descriptors were included
 	conn    *net.UDPConn
-	stopped bool // set by Stop after its final flush — further AddSpot drops
 
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
 	flushNow chan struct{} // wakes the flush loop when the buffer fills (off the caller's goroutine)
 }
 
@@ -85,7 +90,14 @@ func New(cfg Config, recv Receiver, log logging.Logger) *Service {
 	if cfg.Port == 0 {
 		cfg.Port = DefaultPort
 	}
-	return &Service{cfg: cfg, log: log, recv: recv, buf: make(map[string]Spot), flushNow: make(chan struct{}, 1)}
+	l := lifecycle.New()
+	return &Service{
+		cfg: cfg, log: log, recv: recv,
+		buf:       make(map[string]Spot),
+		flushNow:  make(chan struct{}, 1),
+		life:      l,
+		flushLane: l.RegisterLane("flush", lifecycle.Cancellable),
+	}
 }
 
 // SetReceiver updates the receiver identity (e.g. after a config change).
@@ -106,7 +118,11 @@ func (s *Service) AddSpot(spot Spot) {
 		return
 	}
 	s.mu.Lock()
-	if s.conn == nil || s.stopped { // not live / stopped — drop (best-effort)
+	// Admission and the buffer mutation share s.mu, and teardown's final flush takes the SAME mutex,
+	// so a spot is EITHER buffered before the flush OR dropped — never buffered after it. Phase alone
+	// is not the barrier: the check must be under s.mu with the write. Not-Running (pre-Start idle, or
+	// sealed at Stop) or a closed socket ⇒ drop, best-effort.
+	if s.conn == nil || s.life.Phase() != lifecycle.Running {
 		s.mu.Unlock()
 		return
 	}
@@ -129,8 +145,14 @@ func (s *Service) AddSpot(spot Spot) {
 func (s *Service) Start(ctx context.Context) error {
 	if !s.cfg.Enabled {
 		s.log.InfoWith().Msg("pskreporter: disabled (no FT8 spots uploaded)")
-		return nil
+		return nil // disabled: do NOT start the supervisor — no socket, stays idle.
 	}
+	return s.life.Start(ctx, s.acquire, s.launch)
+}
+
+// acquire opens the UDP socket and loads the persisted sender identifier (fallible; admission still
+// closed). On failure the supervisor stays Idle and Start is retryable.
+func (s *Service) acquire(_ context.Context) error {
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port))
 	if err != nil {
 		return fmt.Errorf("pskreporter: resolve %s:%d: %w", s.cfg.Host, s.cfg.Port, err)
@@ -139,27 +161,27 @@ func (s *Service) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("pskreporter: dial %s: %w", addr, err)
 	}
-
-	// The observation-domain identifier is persisted across restarts (pskdev.html:
-	// it "should be constant for any particular sender") — resolved before the lock
-	// because it may touch the filesystem. See identity.go.
+	// The observation-domain identifier is persisted across restarts (pskdev.html: it "should be
+	// constant for any particular sender") — resolved before the lock because it may touch the
+	// filesystem. See identity.go.
 	id := loadOrCreateIdentifier(s.cfg.StatePath, rand.Uint32, s.log)
-	runCtx, cancel := context.WithCancel(ctx)
 	s.mu.Lock()
 	s.conn = conn
 	s.id = id
-	s.cancel = cancel
 	s.mu.Unlock()
-
 	s.log.InfoWith().Str("host", s.cfg.Host).Int("port", s.cfg.Port).
 		Msg("pskreporter: uploading FT8 reception spots")
-	// respawn=true: the flush loop is a long-lived worker driving off shared
-	// buffer/socket state, so a recovered panic must NOT leave spots buffering
-	// with no background flusher (review 2026-06-19 M2). Re-entering flushLoop is
-	// safe — it re-reads the same s.buf/s.conn. Stop cancels runCtx, which ends
-	// the respawn loop, so shutdown still drains.
-	safego.GoTracked(runCtx, "pskreporter.flush", s.onPanic, func() { s.flushLoop(runCtx) }, true, &s.wg)
 	return nil
+}
+
+// launch spawns the flush loop on the Cancellable flush lane, bound to the supervisor context (ctx,
+// derived from the parent passed to Start — a parent-cancel exits the loop while the service stays
+// Running). respawn=true: the loop drives shared buffer/socket state, so a recovered panic must not
+// leave spots buffering with no flusher (review 2026-06-19 M2); GoCompletion signals the lane's done
+// only on PERMANENT exit, so a panic+respawn never signals completion early.
+func (s *Service) launch(ctx context.Context, sc *lifecycle.StartScope) {
+	done := sc.Track(s.flushLane)
+	safego.GoCompletion(ctx, "pskreporter.flush", s.onPanic, func() { s.flushLoop(ctx) }, true, done)
 }
 
 // Stop cancels the flush loop, then performs the authoritative final flush and
@@ -169,20 +191,14 @@ func (s *Service) Start(ctx context.Context) error {
 // stopped here (so further AddSpot drops) and flushing once more sends it rather
 // than losing it silently (review 2026-06-19 M1).
 func (s *Service) Stop() error {
-	s.mu.Lock()
-	cancel := s.cancel
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	s.wg.Wait() // the loop has exited (and did its own best-effort ctx.Done flush)
+	return s.life.Stop(s.teardown)
+}
 
-	// Mark stopped first so any concurrent late AddSpot drops, then flush
-	// whatever was buffered up to this cutoff, then close the socket.
-	s.mu.Lock()
-	s.stopped = true
-	s.mu.Unlock()
-	s.flush()
+// teardown runs once, after the supervisor sealed admission (AddSpot now drops) and waited the flush
+// lane (the loop has exited). It sends the authoritative final flush — whatever was buffered up to the
+// seal — then closes the socket, both under s.mu (the same lock AddSpot mutates the buffer under).
+func (s *Service) teardown() error {
+	s.flush() // authoritative final flush (acquires s.mu internally)
 	s.mu.Lock()
 	if s.conn != nil {
 		_ = s.conn.Close()
