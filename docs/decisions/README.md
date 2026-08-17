@@ -54,4 +54,5 @@ Keep ADRs short — one page is the target, two pages the ceiling. If you need m
 - `docs/v1-analysis/design-decisions-log.md` — *retrospective* keep/change/delete verdicts on v1 shape decisions. The forward-looking equivalent for v2 lives here.
 - `docs/v1-analysis/invariants.md` — load-bearing rules that any decision must respect.
 - `docs/v2-design/` — design documents that ADRs may reference for the long form.
-- `docs/session-handoff.md` — current state and next-up items, not a decision log.
+- `docs/current.md` — bounded current state and next action, not a decision log.
+- `docs/session-handoff.md` — detailed recent session record, also not a decision log.

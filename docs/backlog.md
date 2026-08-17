@@ -8,9 +8,9 @@ next, and in what order" is answered.
 **How it relates to the other docs** (full map: `docs/README.md`):
 - Raw, un-triaged notes jotted mid-operation live in `docs/dogfood-inbox.md`
   and **graduate here** once triaged (or are struck there as non-issues).
-- The 1–3 items in flight **right now** live in `docs/session-handoff.md`'s
-  active-cycle list, pulled from the top of this file — that doc does NOT
-  re-rank the queue; **this file owns the ranking.**
+- The bounded current-work capsule lives in `docs/current.md`, with work pulled
+  from the top of this file — it does NOT re-rank the queue; **this file owns
+  the ranking.**
 - FT8-internal implementation mechanics live in `docs/ft8.md`; only
   *cross-cutting* FT8 work lands here.
 - Shipped / resolved / ruled-out items are **moved** to `docs/backlog-archive.md`
@@ -35,8 +35,8 @@ next, and in what order" is answered.
 > The goal is a release the external operator (7Q8AC, Malawi, offline-first) can run;
 > "stabilise & finish in-flight" is the means. Clear P0 + the P1 finish/validate items
 > — they ARE the ship gate — before opening any new P2 workstream. Theming (P2 ·
-> _UI cohesion_) is deliberately **not now**. The live active-cycle checklist is in
-> `docs/session-handoff.md`; this index is the full ranked queue.
+> _UI cohesion_) is deliberately **not now**. The current capsule is
+> `docs/current.md`; this index is the full ranked queue.
 
 **P0 — correctness / safety (do first)**
 - _None open — the TX-safety batches shipped and were swept to `backlog-archive.md` (2026-07-24). One code-complete item still needs ON-AIR validation: the reduced type-4 ladder (P2). The tx-alarm self-clear validated on air 2026-08-08 (closed entry in P1)._

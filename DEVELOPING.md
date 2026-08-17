@@ -312,5 +312,6 @@ don't care about FT8, the static build needs no gcc and no audio libraries.
 - [`docs/install.md`](docs/install.md) — end-user (operator) install, as
   opposed to this developer setup.
 - [`RELEASING.md`](RELEASING.md) — tagging and building the shipped RPM.
-- [`docs/session-handoff.md`](docs/session-handoff.md) — rolling
-  cross-session state: what's done, what's next.
+- [`docs/current.md`](docs/current.md) — bounded current-work capsule.
+- [`docs/session-handoff.md`](docs/session-handoff.md) — detailed recent
+  session record; read only when the capsule is not enough.

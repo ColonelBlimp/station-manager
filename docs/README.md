@@ -20,7 +20,7 @@ the code is a bug to fix.
 | Doc | Owns |
 |---|---|
 | [`../AGENTS.md`](../AGENTS.md) | Compact agent/contributor kernel: load-bearing **invariants**, safety rules, code/test conventions, and routing to this map. Codex reads it directly; [`CLAUDE.md`](../CLAUDE.md) imports it for Claude Code. |
-| [`session-handoff.md`](session-handoff.md) | **Rolling session state + the active cycle.** Where the repo is now + the 1–3 items in flight *right now* (pulled from the top of `backlog.md`; it does NOT re-rank the queue). Read at session start, update at session end. Keeps ~15 `### Session N` entries; older ones roll to the archive. |
+| [`current.md`](current.md) | **Bounded current-work capsule.** The present goal, state, next action, settled constraints, relevant files, and coordination notes. Injected in full at session start; limited to 2 KB and never carries copied Git status or history. |
 | [`backlog.md`](backlog.md) | **The definitive ranked worklist** — the one priority-ordered list of every triaged, not-yet-done cross-cutting item. Owns the ranking (Worklist index at the top). "What's next, and in what order" is answered here. Strike/remove when it ships. |
 | [`reviews/ft8-logging-gaps.md`](reviews/ft8-logging-gaps.md) | **TRANSIENT — delete when shipped.** The 10-finding `internal/ft8` logging audit (2026-08-01), split out at the operator's request; `backlog.md` still owns the ranking and carries a pointer line to it. A satellite of the SHIP GATE log-coverage entry, not a second worklist. **Fold into `backlog-archive.md` and delete this file once the findings ship** — two open lists is exactly the drift this map exists to prevent. |
 | [`reviews/bridge-logging-gaps.md`](reviews/bridge-logging-gaps.md) | **TRANSIENT — delete when shipped.** The 8-finding `internal/bridge` logging audit (2026-08-01); sibling of the ft8 one above, same axis, and its finding B2 is the SAME defect as that file's finding 1 (both hubs evict subscribers silently). Same rule: `backlog.md` owns the ranking, fold in and delete once shipped. |
@@ -45,8 +45,9 @@ so nothing gets lost in a document and nothing is tracked in two places at once:
 ```
 notice it → dogfood-inbox.md (raw capture)
           → triage → backlog.md (ranked — the definitive "what's next")
-                   → pull top items → session-handoff.md (active cycle: doing it now)
-                                    → ship → MOVE detail to backlog-archive.md + log in handoff
+                   → pull top items → current.md (bounded: doing it now)
+                                    → ship → MOVE detail to backlog-archive.md
+                                           + add a handoff record only when useful
   durable fact (preference/invariant/state)? → memory files (~/.claude/.../memory/)
   decision with weighed alternatives?        → decisions/ (ADR)
   FT8-internal mechanics?                     → ft8.md
@@ -65,6 +66,7 @@ them as references for "how it works now"; the code + Tier 1 are that.
 | Doc / dir | What it is |
 |---|---|
 | [`decisions/`](decisions/) | **ADRs** — append-only decision log, one numbered file each, `status` field walks Proposed→Accepted→Superseded. The *why* behind choices that get revisited. Format in `decisions/README.md`. |
+| [`session-handoff.md`](session-handoff.md) | Detailed recent session record retained for grep and selective reading; not current state and never automatic context. |
 | [`v1-analysis/`](v1-analysis/) | Pre-v2 analysis baseline (`invariants.md`, `lessons-for-v2.md`, `design-decisions-log.md`, `bug-inventory.md`, `architecture-map.md`). Frozen — it fed the v2 rewrite decision. The invariants/lessons remain the rules to apply, but the docs themselves are not edited. |
 | [`v2-design/`](v2-design/) *(except `api-endpoints.md` + `config.md`)* | **Pre/mid-build design briefs** — `structure.md`, `api.md`, `bridge.md`, `enrichment.md`, `forwarding.md`, `forwarding-implementation.md`, `frontend-spa.md`, `milestones.md`, `topology.md`, `ui-toolkit.md`, `rig-profiles.md`, `cat-serial-reuse.md`, `cat-performance.md`, `release-acceptance.md`, `sm-cloud-p1.md`. These describe *intent*; the **shipped code + ADRs are the current truth**. Each gets a one-line "historical design — current state is X" banner as it's touched (see Maintenance). |
 | [`session-handoff-archive.md`](session-handoff-archive.md) | Rolled-off `### Session N` entries (grep-able convenience; git history is authoritative). |

@@ -1,11 +1,10 @@
 # Station Manager — Session Handoff Archive
 
 **Purpose:** cold storage for older `### Session N` handoff entries rolled off
-the live [`session-handoff.md`](session-handoff.md) to keep it lean (it's read at
-every session start). These are historical record only — **current state, next
-steps, and the recent ~12 sessions live in `session-handoff.md`**. Newest-first,
-same ordering as the live doc. The authoritative long-form record remains git
-history; this file is the grep-able convenience copy.
+[`session-handoff.md`](session-handoff.md). These are historical record only;
+current state and next action live in [`current.md`](current.md). Newest-first,
+same ordering as the recent record. The authoritative long-form record remains
+Git history; this file is the grep-able convenience copy.
 
 **Rolled off 2026-06-14:** Sessions 4–158 (the live doc had grown to 197 entries
 / ~1.07 MB — ~60× its own 2–3-session window). Future roll-offs append the next

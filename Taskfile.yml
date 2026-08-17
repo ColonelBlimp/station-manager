@@ -342,7 +342,7 @@ tasks:
       - go mod tidy
 
   docs:agent-context:
-    desc: Check the root agent-instruction budget and Claude compatibility shim
+    desc: Check agent-instruction, current-capsule, and automatic-context budgets
     cmds:
       - bash scripts/check-agent-context.sh
 

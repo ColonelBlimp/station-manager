@@ -1,87 +1,35 @@
 # Station Manager — Session Handoff
 
-**Purpose:** rolling handoff document across Claude sessions. Captures what was
-done in the previous session, where the repo currently is, and **what the next
-session should pick up**. Read this first when starting a session — it exists
-precisely so we don't re-derive state or redo finished work.
+**Purpose:** detailed rolling session record. It preserves recent reasoning and
+handoff detail that would otherwise need to be re-derived. It is not automatic
+context and no longer owns the current-work summary.
 
 **How to use this document:**
 
-**Structure (reworked 2026-08-02 — orientation and the record are now separate):**
+**Structure:**
 
-- **`## Now`** — the ONLY section the SessionStart hook injects. Under ~25
-  lines: where we are, what's next, what must not be started. Read it first.
-- **`## Current state`** — the rolling detailed record, newest arc first. NOT
-  injected. Read it when `## Now` isn't enough.
-- **`## Active cycle`** — the 1–3 things in flight, newest block first.
+- **[`current.md`](current.md)** — the bounded current-work capsule and the ONLY
+  project-state document injected by the SessionStart hook. Read it first.
+- **`## Current state` and `## Active cycle`** — retained recent session
+  history. Neither is injected or authoritative for current work.
 - **[`session-handoff-archive.md`](session-handoff-archive.md)** — everything
   rolled off. Grep it; don't read it.
 
-**Why the split.** Until 2026-08-02 the hook sliced `## Current state` at a
-prose marker. The marker had been removed from the doc and nothing noticed, so
-the hook emitted the file from that heading to EOF — 231 KB. The harness caps
-injected output, so each session got `Output too large` plus a 2 KB preview, and
-the RECONCILE staleness warning printed underneath was **never delivered at
-all**. A section that grows without limit cannot be the thing that gets
-injected; `## Now` is bounded by editorial rule and is what the hook reads.
+**Why the split.** A growing record was once sliced and injected using a prose
+marker; when that marker disappeared, the hook emitted 231 KB and hid its own
+staleness warning. The later `## Now` section still grew past its editorial
+limit. A dedicated file now has a CI-enforced 2 KB boundary and is injected in
+full, while this record remains cold.
 
-- **At session end:** update **`## Now`** and bump its `(as of YYYY-MM-DD)` —
-  the staleness guard keys off that date. Add an arc to `## Current state` if the
-  session did something a future reader would otherwise have to re-derive.
-- **Rolling window (enforced 2026-08-02):** keep **3 arcs** in `## Current
-  state` and **1 block** in `## Active cycle`; roll the rest into the archive
-  (newest-first, verbatim). The previous policy said ~12 sessions and, before
-  that, 2–3; neither was enforced and the doc reached 3,005 lines / 233 KB. If
-  the hook ever prints its `TRUNCATED` notice, `## Now` has outgrown its budget
-  — trim it, don't raise the cap.
-- **Durable facts go in memory files,** not here. This document is for
-  transitory session-to-session state. If something is stable across all
-  future sessions (a project invariant, a user preference, a design rule),
-  capture it in a memory file under `~/.claude/projects/.../memory/`.
+- **At session end:** update `current.md` and its `Updated` date. Add an arc to
+  `## Current state` only if a future reader would otherwise need to re-derive
+  material context.
+- **Rolling window:** keep at most **3 arcs** here and roll older material into
+  the archive (newest-first, verbatim).
+- **Durable facts do not live here.** Put current reference material in its
+  canonical Tier 1 document and genuinely weighed decisions in an ADR.
 
 ---
-
-## Now (as of 2026-08-17)
-
-
-<!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
-     It is ORIENTATION, not the record — "where are we, what's next, what must
-     I not do". Detail belongs in Current state below, which is NOT injected. -->
-
-- **ACTIVE ARC: ADR 0070 phase 1 — unify the daemon lifecycle into ONE declarative typed graph.**
-  LC-1/2/3/4 all shipped earlier; **LC-5 was superseded by ADR 0070** (ratified `76dfd2c4`, design
-  `docs/v2-design/lifecycle.md`). Don't re-derive — the ADR + design doc are authoritative.
-- **Phase-1 shipped (all full-TDD + reversion-proved + codex-clean):** lifecycle design `e4ad1e60`;
-  Supervisor primitive `0edb6e46`; iocdi node-registry+Plan `7796a20b`(+3 review-fixes); Wire()/
-  Build() split `b161407e` (+`cc093d0e`/`a948d6af`/`9daf6af7` = durable init-owner
-  none|build|orchestrator + per-bean initDone resume + close-registration-on-wired);
-  `BeginOrchestratorInit` seam `a0433ddc`; CI timeout 15→**25m** `f9d48613` (the 15m cap was
-  cancelling ~half of runs at the tail — FT8-decode/ClubLog-boundary).
-- **Orchestrator Start half (B) DONE + codex-clean:** `internal/lifecycle/orchestrator` —
-  Milestone/Result/Adapter/Orchestrator + `Start` (plan+adapter validation → claim init ownership →
-  latch Active once → Initialize→Start topological, milestones, rollback-on-failure) `19192efa`;
-  review-fixes `bf9488cd` (split transitionMu from state mu — no lock across callbacks; bound
-  rollback teardown by ctx via `runBounded`) + `5852f1eb` (halt rollback on the first timed-out
-  teardown — reverse-order safety). `runBounded` helper is in `bounded.go`, reused by Shutdown.
-- **PUSH STATE:** `origin/main` = `f9d48613` (PUSHED, CI GREEN under the 25m cap). **3 commits
-  ahead UNPUSHED — `19192efa`,`bf9488cd`,`5852f1eb` (operator pushes).**
-- **RESUME → orchestrator Shutdown (C)** (design §4.3): PrepareStop (non-blocking, before budget) →
-  ONE budget ctx → RF completion-or-deadline **fence** → sequential topological drain (each Stop via
-  `runBounded`) → **transitive skip** (prereq result ∉ {Drained,Inactive} skips the dependent, skip
-  propagates) → return **`ShutdownReport{Outcomes []NodeOutcome (traversal order), FirstTimedOut}`**.
-  Operator RULINGS (don't re-litigate): logging-free (caller formats logs); budget<=0 = immediate
-  expiry, NO orchestrator floor (cmd/smd keeps the 10s fallback); completion wins the tie. THEN the
-  §5 acceptance test (build today's real daemon graph, assert derived partial order + skips match
-  `gracefulShutdown`). Draft AC-D criteria into the test header first.
-- **WORKFLOW:** verify-before-building → ATDD criteria (observable, before mechanism) → operator
-  rules judgment calls → RED → ONE commit + reversion proof → operator "commit it" → codex fix cycle
-  (**NO amends**; fixes are NEW commits). **Reviews CLUSTER defects** — the Start half took 2 rounds.
-- **Do-not:** never initiate FT8/TX or touch the live TX path (sink 66 / rig cmds / power) without
-  per-occasion agreement. NO Claude trailer. 2nd coder on this HEAD — commit ONLY my explicit paths
-  (never `-A`), re-check `git log -1` is mine; their `.codex-reviews/` docs + untracked
-  `docs/decisions/0071-first-class-qso-archives.md` are NOT mine. Triage `.codex-reviews/` per
-  commit (verdict from OUTPUT, ~1-2 min hook — long Bash timeout), fix, DELETE each; `gh run list
-  -L1` in the loop.
 
 ## Current state (as of 2026-08-17)
 
@@ -126,7 +74,8 @@ boundary) — bumped to 25m `f9d48613`, pushed, verified complete-GREEN from out
 **Push state:** `origin/main` = `f9d48613`; **UNPUSHED (operator pushes): `19192efa`, `bf9488cd`,
 `5852f1eb`** (the orchestrator Start half + its two review-fixes).
 
-**NEXT: orchestrator Shutdown (C)** — see the `## Now` RESUME line for the ruled design. Then the
+**NEXT at the time of this historical arc: orchestrator Shutdown (C)** — see Git history and the
+current lifecycle design for the ruled design. Then the
 §5 acceptance test (real daemon graph vs today's `gracefulShutdown` partial order + skips). Then
 phase 2 (adopt Supervisor on evidence/psk/refresher — lands LC-5), phase 3 (orchestrator owns
 ordering, adapt every subsystem incl. bridge/ft8 as MANDATORY nodes keeping their barriers).

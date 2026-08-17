@@ -8,8 +8,9 @@ rules and routing belong here; chronology, active-work detail, and subsystem exp
 - `main` is the v2 daemon codebase. The `v1` branch is frozen except for user-reported v1 fixes.
 - Start with [`docs/README.md`](docs/README.md), the authoritative documentation map. Read only the
   canonical document relevant to the task; do not load the documentation tree wholesale.
-- For current work, read only `docs/session-handoff.md`'s `## Now` section unless deeper history is
-  necessary. `docs/backlog.md` owns priority; the handoff must not re-rank it.
+- Read [`docs/current.md`](docs/current.md) for the bounded current-work capsule. Open
+  `docs/session-handoff.md` only when deeper session history is necessary; `docs/backlog.md` alone
+  owns priority.
 - Before a non-trivial design decision, consult `docs/v1-analysis/invariants.md` and
   `docs/v1-analysis/lessons-for-v2.md`. Record genuinely weighed alternatives in an ADR under
   `docs/decisions/`.
