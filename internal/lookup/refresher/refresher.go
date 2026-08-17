@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/lifecycle"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
@@ -62,33 +63,39 @@ type Service struct {
 	// via config (task #62 wires this from the operator config).
 	MaxInFlight int
 
-	parentCtx context.Context
-	cancel    context.CancelFunc
-	sem       chan struct{}
-	wg        sync.WaitGroup
+	// life is the ADR-0070 Supervisor — the lifecycle authority (replaces parentCtx/cancel + wg + the
+	// mu-guarded started/stopped flags). refreshLane (Cancellable) tracks the per-Schedule refresh
+	// goroutines: Admit does the Running check + count ATOMICALLY against Stop's seal (the old
+	// Add-vs-Wait race fix, now on the supervisor's mutex), and Stop cancels the context (in-flight
+	// refreshes notice) then waits the lane. Constructed lazily via ensureLifecycle because Service is
+	// built through a struct literal (di.inject), not New — so a pre-Start Schedule/Stop cannot hit
+	// nil supervisor fields.
+	life        *lifecycle.Supervisor
+	refreshLane *lifecycle.Lane
+	lifeOnce    sync.Once
 
-	// mu serialises Schedule's started/stopped check + the synchronous
-	// wg.Add inside safego.GoTracked against Stop's "set stopped, then
-	// wg.Wait" sequence. Without it, a Schedule that interleaves with
-	// a concurrent Stop can issue wg.Add(1) AFTER Stop has already
-	// observed counter == 0 inside wg.Wait — and sync.WaitGroup
-	// semantics require an Add-with-positive-delta-while-counter-zero
-	// to happen-before any concurrent Wait. The Go runtime detects
-	// the violation and panics with "sync: WaitGroup misuse: Add
-	// called concurrently with Wait." Holding mu across both the
-	// state check and the GoTracked-internal Add closes that window;
-	// Stop's mu.Lock then drains any in-flight Schedule before
-	// reaching wg.Wait, so the Wait sees a complete counter.
-	mu      sync.Mutex
-	started bool // protected by mu
-	stopped bool // protected by mu
+	// sem bounds concurrent refreshes; created in launch (before the Running commit) and immutable
+	// thereafter — read by Schedule (channel ops need no mutex).
+	sem chan struct{}
 
 	inFlight atomic.Int64
 	dropped  atomic.Int64
 }
 
+// ensureLifecycle lazily builds the supervisor + refresh lane exactly once. Called at the head of
+// Initialize, Start, Schedule and Stop so a caller that skips Initialize, or calls Schedule/Stop
+// before Start, never dereferences a nil supervisor. RegisterLane runs here (before any Start), so
+// the lane is always registered before the transition.
+func (s *Service) ensureLifecycle() {
+	s.lifeOnce.Do(func() {
+		s.life = lifecycle.New()
+		s.refreshLane = s.life.RegisterLane("refresh", lifecycle.Cancellable)
+	})
+}
+
 // Initialize validates dependencies and sets defaults. Idempotent.
 func (s *Service) Initialize() error {
+	s.ensureLifecycle()
 	const op errors.Op = "refresher.Service.Initialize"
 	if s.LoggerService == nil {
 		return errors.New(op).WithMsg("logger service has not been set/injected")
@@ -106,29 +113,30 @@ func (s *Service) Initialize() error {
 //
 // Idempotent — repeat calls are no-ops once started.
 func (s *Service) Start(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.started {
-		return nil
-	}
+	s.ensureLifecycle()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if s.MaxInFlight <= 0 {
-		// Defensive — Initialize sets this, but a caller skipping
-		// Initialize and going straight to Start gets the default
-		// rather than a deadlock-on-zero-cap-channel.
+		// Defensive — Initialize sets this, but a caller skipping Initialize and going straight to
+		// Start gets the default rather than a deadlock-on-zero-cap-channel.
 		s.MaxInFlight = DefaultMaxInFlight
 	}
-	s.parentCtx, s.cancel = context.WithCancel(ctx)
+	// No acquire (nothing fallible to open); launch creates the semaphore + logs. Idempotent once
+	// Running; a nil no-op once Stopped (terminal).
+	return s.life.Start(ctx, nil, s.launch)
+}
+
+// launch creates the concurrency semaphore before the Running commit (immutable thereafter) and logs
+// the start. There is no long-lived worker to Track — refresh goroutines are admitted per Schedule on
+// the refresh lane.
+func (s *Service) launch(_ context.Context, _ *lifecycle.StartScope) {
 	s.sem = make(chan struct{}, s.MaxInFlight)
-	s.started = true
 	if s.LoggerService != nil {
 		s.LoggerService.InfoWith().
 			Int("max_in_flight", s.MaxInFlight).
 			Msg("refresher: started")
 	}
-	return nil
 }
 
 // Stop cancels the parent context and waits for in-flight refreshes
@@ -142,27 +150,20 @@ func (s *Service) Start(ctx context.Context) error {
 // after timeout) doesn't compose with goroutines, and the project's
 // daemon shutdown is operator-triggered (no SLA pressure).
 //
-// Concurrency contract: Stop holds mu briefly to flip stopped and
-// snapshot cancel, then releases it before wg.Wait. The Lock-Unlock
-// pair acts as a barrier — any Schedule that beat Stop to the lock
-// has already completed its wg.Add by the time Stop's Lock returns,
-// so wg.Wait sees the full counter. Schedules arriving after Stop's
-// Unlock observe stopped=true and drop without touching the
-// WaitGroup.
+// Concurrency contract: the supervisor's seal (Stopping) closes admission under the same mutex
+// Admit reads, then Stop cancels the context and waits the refresh lane. A Schedule that beat the
+// seal has already done its lane Admit (count++) and is awaited; one arriving after the seal is
+// refused and never touches the lane counter — the Admit/seal atomicity that replaces the old
+// mu-guarded started/stopped-check + wg.Add barrier.
 func (s *Service) Stop() error {
-	s.mu.Lock()
-	if s.stopped {
-		s.mu.Unlock()
-		return nil
-	}
-	s.stopped = true
-	cancel := s.cancel
-	s.mu.Unlock()
+	s.ensureLifecycle()
+	return s.life.Stop(s.teardown)
+}
 
-	if cancel != nil {
-		cancel()
-	}
-	s.wg.Wait()
+// teardown runs once, after the supervisor sealed admission (Schedule now drops), cancelled the
+// context (in-flight refreshes notice), and waited the refresh lane (they finished). It just records
+// the stop; there is no resource to close.
+func (s *Service) teardown() error {
 	if s.LoggerService != nil {
 		s.LoggerService.InfoWith().
 			Int64("dropped_total", s.dropped.Load()).
@@ -182,21 +183,21 @@ func (s *Service) Stop() error {
 //     against the same key will trigger another refresh attempt
 //     per ADR 0017's implicit-fall-through model.
 //
-// Panic safety: fn is run under safego.GoTracked, which recovers
-// any panic and logs it via onPanic. The semaphore slot is released
-// in a deferred block so a panicking fn doesn't leak the slot.
+// Panic safety: fn is run under safego.GoCompletion, which recovers any panic and logs it via
+// onPanic. The semaphore slot is released in the completion callback so a panicking fn doesn't leak
+// the slot.
 //
-// Concurrency contract: the started/stopped check, the semaphore
-// acquire, and the synchronous wg.Add inside safego.GoTracked all
-// run under mu. Stop's matching Lock waits for any in-flight
-// Schedule to release before reaching wg.Wait, so we never call
-// wg.Add(1) after Stop has observed counter == 0 in wg.Wait — the
-// race that the Go runtime would detect as "WaitGroup misuse: Add
-// called concurrently with Wait."
+// Concurrency contract: the refresh lane's Admit does the Running check + the count in one atomic
+// step against Stop's seal (both under the supervisor's mutex), so the pre-migration race — a
+// started/stopped check passing just before Stop, then a wg.Add landing after Stop's wg.Wait saw
+// zero — cannot occur: once sealed, Admit refuses, and Stop's lane-wait sees a complete counter.
 func (s *Service) Schedule(fn func(ctx context.Context)) {
-	s.mu.Lock()
-	if !s.started || s.stopped {
-		s.mu.Unlock()
+	s.ensureLifecycle()
+	// Admit performs the Running check + the lane count ATOMICALLY against Stop's seal (the old
+	// started/stopped-check + wg.Add-under-mu race fix, now on the supervisor's mutex). Refused before
+	// Start / once sealed ⇒ drop with a warning.
+	done, ok := s.refreshLane.Admit()
+	if !ok {
 		s.dropped.Add(1)
 		if s.LoggerService != nil {
 			s.LoggerService.WarnWith().Msg("refresher: schedule rejected — service not running")
@@ -208,7 +209,7 @@ func (s *Service) Schedule(fn func(ctx context.Context)) {
 	case s.sem <- struct{}{}:
 		// got a slot
 	default:
-		s.mu.Unlock()
+		done() // release this admit — every successful Admit releases EXACTLY once (here, on capacity)
 		s.dropped.Add(1)
 		if s.LoggerService != nil {
 			s.LoggerService.WarnWith().
@@ -220,18 +221,15 @@ func (s *Service) Schedule(fn func(ctx context.Context)) {
 	}
 
 	s.inFlight.Add(1)
-	// safego.GoTracked does wg.Add(1) synchronously, then spawns
-	// the goroutine. Holding mu across this call is the load-bearing
-	// piece of the lifecycle race fix — Stop's mu.Lock can't sneak
-	// between our state check and the Add.
-	safego.GoTracked(s.parentCtx, goroutineLabel, s.onPanic, func() {
-		defer func() {
-			<-s.sem
-			s.inFlight.Add(-1)
-		}()
-		fn(s.parentCtx)
-	}, false /* respawn — refresh fns are one-shot */, &s.wg)
-	s.mu.Unlock()
+	// The refresh binds to the supervisor context (cancelled at Stop, so a well-behaved fn returns
+	// promptly). GoCompletion signals the lane's done ONCE on permanent exit — the OTHER release path
+	// for this admit — with the semaphore + in-flight release folded in.
+	ctx := s.life.Context()
+	safego.GoCompletion(ctx, goroutineLabel, s.onPanic, func() { fn(ctx) }, false /* one-shot */, func() {
+		<-s.sem
+		s.inFlight.Add(-1)
+		done()
+	})
 }
 
 // InFlight returns the current count of in-flight refreshes. Useful

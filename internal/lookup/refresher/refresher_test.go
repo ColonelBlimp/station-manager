@@ -317,16 +317,15 @@ func TestStart_Idempotent(t *testing.T) {
 
 // ---- Panic recovery ----
 
-// TestSchedule_StopRace exercises the M1 race the code-review flagged:
-// concurrent Schedule + Stop where the Schedule's started/stopped check
-// could pass just before Stop's CAS, then Schedule's wg.Add could fire
-// after Stop's wg.Wait observed counter == 0. Prior to the mu fix, the
-// Go runtime could panic with "sync: WaitGroup misuse: Add called
-// concurrently with Wait."
+// TestSchedule_StopRace exercises the M1 race the code-review flagged: concurrent Schedule + Stop
+// where a Schedule's admission could pass just before Stop, then its worker-count Add land after
+// Stop's Wait saw zero. Post-migration the refresh lane's Admit does the Running check + count in one
+// atomic step against the supervisor's seal, so once Stop seals, Admit refuses and the lane-wait sees
+// a complete counter — the WaitGroup-misuse panic cannot arise. (This test also constructs Service
+// via a struct literal, exercising the ensureLifecycle lazy-init path.)
 //
-// The test runs many iterations (each with fresh Service + interleaved
-// Schedule and Stop) and is most useful when run with -race; pre-fix,
-// at least some iterations would either race-detect or panic outright.
+// The test runs many iterations (each a fresh Service + interleaved Schedule and Stop) and is most
+// useful with -race; pre-fix, some iterations would race-detect or panic outright.
 func TestSchedule_StopRace_NoWaitGroupMisuse(t *testing.T) {
 	const iterations = 100
 	const schedulesPerIter = 16
