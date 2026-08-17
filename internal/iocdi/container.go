@@ -21,8 +21,13 @@ type Container struct {
 	buildLock sync.Mutex
 	// Protects access to registeredBeans and requiredDependency during registration/build.
 	regMu sync.RWMutex
-	// Indicates whether the container has been built/finalized.
-	built atomic.Bool
+	// Lifecycle flags (ADR 0070 Wire()/Build() split). wired = beans constructed + injected, not
+	// yet Initialized; built = wired AND all Initializers run (the compat path); initialized =
+	// SOME init path has run, the single-init-owner guardrail marker (Build claims it, and the
+	// orchestrator will too, so the two can never both initialize).
+	built       atomic.Bool
+	wired       atomic.Bool
+	initialized atomic.Bool
 
 	// requiredDependency maps bean identifiers to their corresponding reflect.Type, identifying dependencies
 	// required by registered beans. For example, if `Service` has a dependency on `Config`, then `Config` will be
@@ -169,29 +174,58 @@ func (c *Container) RegisterInstance(beanID string, instance any) error {
 	return nil
 }
 
-// Build finalizes the container by verifying all required dependencies are registered,
-// instantiating all registered beans, and injecting dependencies.
-//
-// If the container has already been built, this method is a no-op.
+// Wire constructs and injects all registered beans in dependency order but does NOT run
+// Initializer.Initialize — the orchestrator (ADR 0070) owns initialization. Idempotent: a no-op
+// once wired or built.
+func (c *Container) Wire() (err error) {
+	c.buildLock.Lock()
+	defer c.buildLock.Unlock()
+	if c.wired.Load() || c.built.Load() {
+		return nil
+	}
+	c.regMu.Lock()
+	defer func() {
+		if err == nil {
+			c.wired.Store(true)
+		}
+		c.regMu.Unlock()
+	}()
+	return c.wireLocked()
+}
+
+// Build wires the container and then runs every Initializer in dependency order — the EXPLICIT
+// initialization path for callers (import/restore) that want fully-built beans without the
+// orchestrator. Idempotent. A container uses either Build() OR orchestrator-owned initialization,
+// NEVER both (single-init-owner guardrail): Build refuses with ErrAlreadyInitialized if
+// initialization has already been claimed elsewhere.
 func (c *Container) Build() (err error) {
 	c.buildLock.Lock()
 	defer c.buildLock.Unlock()
-
-	// Idempotent: if already built, nothing to do.
 	if c.built.Load() {
 		return nil
 	}
-
-	// All map reads/writes inside Build happen under regMu for safety against concurrent registration.
 	c.regMu.Lock()
 	defer func() {
-		// Mark as built only on successful completion.
 		if err == nil {
 			c.built.Store(true)
 		}
 		c.regMu.Unlock()
 	}()
+	if !c.wired.Load() {
+		if err = c.wireLocked(); err != nil {
+			return err
+		}
+		c.wired.Store(true)
+	}
+	// Single-init-owner guardrail: claim initialization; fail if the orchestrator already did.
+	if !c.initialized.CompareAndSwap(false, true) {
+		return ErrAlreadyInitialized
+	}
+	return c.initializeAllLocked()
+}
 
+// wireLocked runs the precheck + instantiate + inject phases. Caller holds buildLock and regMu.
+func (c *Container) wireLocked() error {
 	// First, check if the required dependencies have been registered
 	// and there is type compatibility between the required dependency and the registered bean.
 	for beanID, requiredType := range c.requiredDependency {
@@ -244,14 +278,13 @@ func (c *Container) Build() (err error) {
 		}
 	}
 
-	// Inject dependencies
-	if err = c.injectDependencies(); err != nil {
-		return err
-	}
+	// Inject dependencies.
+	return c.injectDependencies()
+}
 
-	// Call Initializer on beans that implement it, after injection is complete
-	// Ensure initializers run in dependency order: a bean's dependencies are initialized before the bean itself.
-	// We perform a DFS topological traversal using the same dependency edges captured at registration time.
+// initializeAllLocked runs every Initializer in dependency order (Build's phase), via a DFS
+// topological traversal over the registration-time dependency edges. Caller holds buildLock and regMu.
+func (c *Container) initializeAllLocked() error {
 	visited := make(map[string]bool)
 	onPath := make(map[string]bool)
 	order := make([]string, 0, len(c.registeredBeans))
@@ -300,7 +333,7 @@ func (c *Container) Build() (err error) {
 		}
 	}
 
-	return err
+	return nil
 }
 
 // Resolve returns a bean instance by its ID or panics if it cannot be resolved.
@@ -313,8 +346,10 @@ func (c *Container) Resolve(beanID string) any {
 	return v
 }
 
-// ResolveSafe returns a bean instance by its ID.
-// It ensures the container is built before resolving and returns an error on failure.
+// ResolveSafe returns a bean instance by its ID. It ensures the container is WIRED (constructed +
+// injected) before resolving — NOT initialized (ADR 0070): resolution never forces Initialize, so a
+// stray resolve after the orchestrator has taken over init can't double-initialize. Callers that
+// need fully-initialized beans (import/restore) call Build() explicitly first.
 func (c *Container) ResolveSafe(beanID string) (any, error) {
 	if beanID == emptyString {
 		return nil, ErrBeanIdParamIsEmpty
@@ -322,9 +357,9 @@ func (c *Container) ResolveSafe(beanID string) (any, error) {
 
 	beanID = strings.ToLower(beanID)
 
-	// Ensure the container is built before resolving.
-	if !c.built.Load() {
-		if err := c.Build(); err != nil {
+	// Ensure the container is wired before resolving (wire-only, never Build).
+	if !c.wired.Load() && !c.built.Load() {
+		if err := c.Wire(); err != nil {
 			return nil, err
 		}
 	}

@@ -24,4 +24,8 @@ var (
 	ErrDrainCycle         = errors.New("lifecycle drain graph has a cycle")
 	ErrMultipleRFCritical = errors.New("more than one RFCritical lifecycle node")
 	ErrPlanFrozen         = errors.New("lifecycle plan already built; node registration is closed")
+
+	// ErrAlreadyInitialized enforces the single-init-owner guardrail (ADR 0070): a container uses
+	// either explicit Build() OR orchestrator-owned initialization, never both.
+	ErrAlreadyInitialized = errors.New("container initialization already claimed by another owner")
 )
