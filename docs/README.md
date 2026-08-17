@@ -68,7 +68,7 @@ them as references for "how it works now"; the code + Tier 1 are that.
 | [`v2-design/`](v2-design/) *(except `api-endpoints.md` + `config.md`)* | **Pre/mid-build design briefs** — `structure.md`, `api.md`, `bridge.md`, `enrichment.md`, `forwarding.md`, `forwarding-implementation.md`, `frontend-spa.md`, `milestones.md`, `topology.md`, `ui-toolkit.md`, `rig-profiles.md`, `cat-serial-reuse.md`, `cat-performance.md`, `release-acceptance.md`, `sm-cloud-p1.md`. These describe *intent*; the **shipped code + ADRs are the current truth**. Each gets a one-line "historical design — current state is X" banner as it's touched (see Maintenance). |
 | [`session-handoff-archive.md`](session-handoff-archive.md) | Rolled-off `### Session N` entries (grep-able convenience; git history is authoritative). |
 | [`backlog-archive.md`](backlog-archive.md) | Shipped / resolved / ruled-out `backlog.md` items, **moved** here (not struck in place) so the live backlog stays lean. Not read at session start; open it for an item's history. |
-| [`reviews/`](reviews/) + [`reviews/archive/`](reviews/archive/) | Code-review artifacts, each with a point-in-time `## Resolution` section. Archived once actioned. |
+| [`reviews/`](reviews/) + [`reviews/archive/`](reviews/archive/) | Point-in-time code-review and maintainability artifacts, including [`oss-maintainability-plan.md`](reviews/oss-maintainability-plan.md). They do not own priority: accepted work moves to `backlog.md`; artifacts are archived once actioned. |
 | [`reports/`](reports/), [`research-pipeline.md`](research-pipeline.md) | Historical reports / notes. |
 
 ## Not in this repo: agent memory
