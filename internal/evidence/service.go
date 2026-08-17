@@ -115,6 +115,14 @@ var (
 	// database aggregates — proving they run outside s.mu (a status poll
 	// must never stall CaptureSlot on the decode goroutine).
 	statusQueryDelay time.Duration
+	// statusAggregateTimeout bounds the WHOLE status snapshot (its ~17 sequential
+	// archive reads) by ONE deadline (LC-4): the per-connection busy_timeout is 2 s,
+	// so without this the aggregate worst case is ~17×2 s under lock contention, with
+	// no way for a client disconnect to cancel the remaining reads. 3 s (operator
+	// ruling 2026-08-17, internal constant not config) leaves a healthy large archive's
+	// COUNT scans ample headroom while bounding a wedged snapshot. A package var only so
+	// tests can dial it down (the tunable idiom); it is not operator-configurable.
+	statusAggregateTimeout = 3 * time.Second
 	// checkpointHook is a test-only seam that runs WHERE the drop-path
 	// TRUNCATE checkpoint runs — proving that checkpoint holds no lock the
 	// decode path needs (a reader blocking the truncate must never stall
@@ -583,7 +591,20 @@ func (s *Service) CaptureSlot(sc SlotCapture) {
 // disabled or unstarted service reports zeros — and a NIL-counted profiles
 // object (O6): the store is deliberately not open, so lineage/version
 // counts are unavailable, never zero.
+// Status is the context-free convenience form (used by tests and any caller with no
+// request to bind to); it applies the same aggregate deadline via a background context.
 func (s *Service) Status() Status {
+	return s.StatusContext(context.Background())
+}
+
+// StatusContext reports the capture state, bounding the whole archive-read snapshot by
+// ONE deadline derived from ctx (LC-4): a cancelled/disconnected request or the aggregate
+// timeout stops the remaining reads, and each unfinished group reports as unknown/degraded
+// via the EH-4 shape — never a plausible zero. The mu-guarded fields are snapshotted under
+// the lock; only the archive aggregates run against ctx.
+func (s *Service) StatusContext(ctx context.Context) Status {
+	ctx, cancel := context.WithTimeout(ctx, statusAggregateTimeout)
+	defer cancel()
 	s.mu.Lock()
 	st := Status{
 		Enabled:        s.cfg.Capture,
@@ -635,27 +656,31 @@ func (s *Service) Status() Status {
 	if statusQueryDelay > 0 {
 		time.Sleep(statusQueryDelay)
 	}
+	if statusBlockForTest != nil {
+		statusBlockForTest(ctx)
+	}
 	// Status poll: usage is null when unmeasurable, and it must NOT drive the
 	// write-driven tracker (recovery/heartbeat belong to write attempts only).
+	// physicalUsage is os.Stat only (not a DB read), so it carries no ctx.
 	var statusErr error
 	if usage, err := s.physicalUsage(); err == nil {
 		st.UsageBytes = &usage
 	} else {
 		statusErr = stderrors.Join(statusErr, fmt.Errorf("physical usage: %w", err))
 	}
-	if err := s.fillProfileCounts(prof); err != nil {
+	if err := s.fillProfileCounts(ctx, prof); err != nil {
 		statusErr = stderrors.Join(statusErr, err)
 	}
 	if s.cfg.Sync {
-		if err := s.fillSyncCounts(syn); err != nil {
+		if err := s.fillSyncCounts(ctx, syn); err != nil {
 			statusErr = stderrors.Join(statusErr, err)
 		}
 	}
-	if err := s.fillRetentionCounts(ret); err != nil {
+	if err := s.fillRetentionCounts(ctx, ret); err != nil {
 		statusErr = stderrors.Join(statusErr, err)
 	}
 	st.Profiles, st.Sync, st.Retention = prof, syn, ret
-	if err := fillObservationCounts(db, &st); err != nil {
+	if err := fillObservationCounts(ctx, db, &st); err != nil {
 		statusErr = stderrors.Join(statusErr, err)
 	}
 	if statusErr != nil {
@@ -668,18 +693,18 @@ func (s *Service) Status() Status {
 	return st
 }
 
-func fillObservationCounts(db *sql.DB, st *Status) error {
+func fillObservationCounts(ctx context.Context, db *sql.DB, st *Status) error {
 	var observations, unprofiled int64
 	if err := statusQueryFault("observations_total"); err != nil {
 		return fmt.Errorf("count observations: %w", err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&observations); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM observations`).Scan(&observations); err != nil {
 		return fmt.Errorf("count observations: %w", err)
 	}
 	if err := statusQueryFault("observations_unprofiled"); err != nil {
 		return fmt.Errorf("count unprofiled observations: %w", err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM observations WHERE profile_uuid IS NULL`).
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM observations WHERE profile_uuid IS NULL`).
 		Scan(&unprofiled); err != nil {
 		return fmt.Errorf("count unprofiled observations: %w", err)
 	}
@@ -970,6 +995,10 @@ var (
 	// teardownStallForTest fires at the top of Stop's teardown owner, so a test can hold
 	// the owner observably in teardown while concurrent Stop callers must wait (LC-3 AC-2).
 	teardownStallForTest func()
+	// statusBlockForTest fires inside StatusContext's aggregate phase with the (already
+	// deadline-bounded) ctx, so a test can model a ctx-interruptible slow archive read and
+	// prove the snapshot is bounded by statusAggregateTimeout (LC-4).
+	statusBlockForTest func(context.Context)
 )
 
 // runSlot processes one slot, recording EXACTLY ONE writer_panic loss if processSlot

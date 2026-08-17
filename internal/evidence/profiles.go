@@ -1,6 +1,7 @@
 package evidence
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sort"
@@ -321,7 +322,7 @@ func (s *Service) stampLocked(sc *SlotCapture) {
 // fillProfileCounts adds the database-derived halves to a Status.Profiles
 // snapshot. Runs WITHOUT s.mu — Status released the lock first, because
 // these aggregates must never stall CaptureSlot (package-review P1).
-func (s *Service) fillProfileCounts(p *ProfilesStatus) error {
+func (s *Service) fillProfileCounts(ctx context.Context, p *ProfilesStatus) error {
 	if s.db == nil {
 		return fmt.Errorf("profile counts: database is not open")
 	}
@@ -329,14 +330,14 @@ func (s *Service) fillProfileCounts(p *ProfilesStatus) error {
 	if err := statusQueryFault("profiles_total"); err != nil {
 		return fmt.Errorf("count profiles: %w", err)
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT lineage), COUNT(*) FROM profiles`).
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT lineage), COUNT(*) FROM profiles`).
 		Scan(&lineages, &versions); err != nil {
 		return fmt.Errorf("count profiles: %w", err)
 	}
 	if err := statusQueryFault("profiles_unprofiled"); err != nil {
 		return fmt.Errorf("group unprofiled observations: %w", err)
 	}
-	rows, err := s.db.Query(
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT unprofiled_reason, COUNT(*) FROM observations
 		 WHERE unprofiled_reason IS NOT NULL GROUP BY unprofiled_reason`)
 	if err != nil {

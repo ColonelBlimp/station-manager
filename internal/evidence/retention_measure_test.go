@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"bytes"
+	"context"
 	stderrors "errors"
 	"os"
 	"path/filepath"
@@ -138,8 +139,8 @@ func TestMeasurementProbes_PropagateGranularOps(t *testing.T) {
 	}{
 		{"pragma_freelist_count", func() error { _, e := s.freelistBytes(); return e }},
 		{"pragma_page_size", func() error { _, e := s.freelistBytes(); return e }},
-		{"metadata_loss", func() error { _, e := s.metadataBytes(); return e }},
-		{"metadata_retention", func() error { _, e := s.metadataBytes(); return e }},
+		{"metadata_loss", func() error { _, e := s.metadataBytes(context.Background()); return e }},
+		{"metadata_retention", func() error { _, e := s.metadataBytes(context.Background()); return e }},
 		{"compaction_count", func() error { return s.maybeCompact() }},
 		{"compaction_query", func() error { return s.compactOnce() }},
 		{"checkpoint_purge", func() error { return s.checkpointTruncate("checkpoint_purge") }},

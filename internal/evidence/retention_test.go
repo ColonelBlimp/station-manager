@@ -931,7 +931,7 @@ func TestRT6_BudgetReservesEveryClassReceipt(t *testing.T) {
 	obsBefore := countRows(t, db, `SELECT COUNT(*) FROM observations`)
 
 	_ = s.purgeChunk()
-	got, _ := s.metadataBytes()
+	got, _ := s.metadataBytes(context.Background())
 	s.Stop()
 
 	if got > metadataBudgetBytes {

@@ -1,6 +1,7 @@
 package evidence
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -159,19 +160,23 @@ func (s *Service) freelistBytes() (int64, error) {
 // metadataBytes is the LOGICAL loss+retention metadata estimate the 4 MiB
 // budget bounds: a fixed per-row overhead plus the supersedes text — an
 // estimate by design; the budget is a reserve, not an accounting claim.
-func (s *Service) metadataBytes() (int64, error) {
+// metadataBytes takes a ctx so the Status snapshot's aggregate deadline (LC-4) reaches its
+// two reads; the writer/retention measurement callers pass context.Background() — that path
+// is on LC-3's guaranteed-lossless drain and is deliberately non-cancellable (its shutdown
+// bound is LC-2's budget + systemd, not a per-op context).
+func (s *Service) metadataBytes(ctx context.Context) (int64, error) {
 	var loss, ret int64
 	if err := measureFail("metadata_loss"); err != nil {
 		return 0, err
 	}
-	if err := s.db.QueryRow(
+	if err := s.db.QueryRowContext(ctx,
 		`SELECT COALESCE(SUM(128 + COALESCE(LENGTH(supersedes), 0)), 0) FROM loss_intervals`).Scan(&loss); err != nil {
 		return 0, measured("metadata_loss", err)
 	}
 	if err := measureFail("metadata_retention"); err != nil {
 		return 0, err
 	}
-	if err := s.db.QueryRow(
+	if err := s.db.QueryRowContext(ctx,
 		`SELECT COALESCE(SUM(128 + COALESCE(LENGTH(supersedes), 0)), 0) FROM retention_records`).Scan(&ret); err != nil {
 		return 0, measured("metadata_retention", err)
 	}
@@ -184,7 +189,9 @@ func (s *Service) metadataBytes() (int64, error) {
 func (s *Service) purgeChunk() error {
 	// The check RESERVES the incoming receipt's estimate (codex-P2 fix):
 	// the purge may only run if its own receipt still fits the budget.
-	mb, err := s.metadataBytes()
+	// context.Background(): this runs on the writer/retention drain path, kept
+	// non-cancellable by the LC-4 decline (see metadataBytes).
+	mb, err := s.metadataBytes(context.Background())
 	if err != nil {
 		return err
 	}
@@ -192,7 +199,7 @@ func (s *Service) purgeChunk() error {
 		if err := s.compactOnce(); err != nil {
 			return err
 		}
-		if mb, err = s.metadataBytes(); err != nil {
+		if mb, err = s.metadataBytes(context.Background()); err != nil {
 			return err
 		}
 		if mb+receiptReserveBytes > metadataBudgetBytes {
@@ -643,7 +650,7 @@ func splitKey(key string) []string {
 // fillRetentionCounts adds the database-derived halves to a
 // Status.Retention snapshot. Runs WITHOUT s.mu (package-review P1: status
 // aggregates must never stall CaptureSlot).
-func (s *Service) fillRetentionCounts(rs *RetentionStatus) error {
+func (s *Service) fillRetentionCounts(ctx context.Context, rs *RetentionStatus) error {
 	if s.db == nil {
 		return fmt.Errorf("retention counts: database is not open")
 	}
@@ -651,7 +658,7 @@ func (s *Service) fillRetentionCounts(rs *RetentionStatus) error {
 	if err := statusQueryFault("retention_total"); err != nil {
 		return fmt.Errorf("count retention records: %w", err)
 	}
-	if err := s.db.QueryRow(
+	if err := s.db.QueryRowContext(ctx,
 		`SELECT COALESCE(SUM(observations), 0), COALESCE(SUM(coverage), 0), COUNT(*) FROM retention_records`).
 		Scan(&observations, &coverage, &records); err != nil {
 		return fmt.Errorf("count retention records: %w", err)
@@ -661,7 +668,7 @@ func (s *Service) fillRetentionCounts(rs *RetentionStatus) error {
 	if err := statusQueryFault("retention_metadata"); err != nil {
 		return fmt.Errorf("measure retention metadata: %w", err)
 	}
-	mb, err := s.metadataBytes()
+	mb, err := s.metadataBytes(ctx)
 	if err != nil {
 		return fmt.Errorf("measure retention metadata: %w", err)
 	}

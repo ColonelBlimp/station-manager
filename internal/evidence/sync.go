@@ -672,7 +672,7 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 // fillSyncCounts adds the database-derived halves to a Status.Sync
 // snapshot. Runs WITHOUT s.mu (package-review P1: status aggregates must
 // never stall CaptureSlot).
-func (s *Service) fillSyncCounts(ss *SyncStatus) error {
+func (s *Service) fillSyncCounts(ctx context.Context, ss *SyncStatus) error {
 	if s.db == nil {
 		return fmt.Errorf("sync counts: database is not open")
 	}
@@ -683,8 +683,8 @@ func (s *Service) fillSyncCounts(ss *SyncStatus) error {
 		if err := statusQueryFault("sync_unsynced_" + t.kind); err != nil {
 			return fmt.Errorf("count unsynced %s: %w", t.kind, err)
 		}
-		if err := s.db.QueryRow(
-			`SELECT COUNT(*) FROM ` + t.table + ` WHERE synced = 0 AND quarantine_reason IS NULL`).Scan(&n); err != nil {
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM `+t.table+` WHERE synced = 0 AND quarantine_reason IS NULL`).Scan(&n); err != nil {
 			return fmt.Errorf("count unsynced %s: %w", t.kind, err)
 		}
 		unsynced[t.kind] = n
@@ -692,8 +692,8 @@ func (s *Service) fillSyncCounts(ss *SyncStatus) error {
 		if err := statusQueryFault("sync_quarantined_" + t.kind); err != nil {
 			return fmt.Errorf("count quarantined %s: %w", t.kind, err)
 		}
-		if err := s.db.QueryRow(
-			`SELECT COUNT(*) FROM ` + t.table + ` WHERE quarantine_reason IS NOT NULL`).Scan(&q); err != nil {
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM `+t.table+` WHERE quarantine_reason IS NOT NULL`).Scan(&q); err != nil {
 			return fmt.Errorf("count quarantined %s: %w", t.kind, err)
 		}
 		quarantined += q

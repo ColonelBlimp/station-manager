@@ -19,10 +19,12 @@ func (s *Server) SetEvidence(ev *evidence.Service) {
 // (disabled / capturing / drop_new), physical usage against cap and
 // watermark, observation and unprofiled-observation counts, and dropped
 // slots. Read-only; the counts come from the archive itself.
-func (s *Server) handleEvidenceStatus(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleEvidenceStatus(w http.ResponseWriter, r *http.Request) {
 	if s.evidence == nil {
 		s.writeJSON(w, http.StatusOK, evidence.Status{State: evidence.StateDisabled})
 		return
 	}
-	s.writeJSON(w, http.StatusOK, s.evidence.Status())
+	// Bind the snapshot to the request: a client disconnect cancels the remaining
+	// archive reads, and the service applies its own aggregate deadline on top (LC-4).
+	s.writeJSON(w, http.StatusOK, s.evidence.StatusContext(r.Context()))
 }
