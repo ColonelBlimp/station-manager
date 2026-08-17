@@ -406,8 +406,16 @@ func (s *Service) acquire(_ context.Context) error {
 	// a one-time Exec reaches exactly one of them, leaving the rest at busy_timeout 0 and failing
 	// concurrent writes with SQLITE_BUSY. The modernc driver applies _pragma parameters to every
 	// connection it opens (pinned by TestPragmas_ApplyToEveryPooledConnection).
+	//
+	// _txlock=immediate makes every explicit transaction take the write lock at BEGIN. Every explicit
+	// evidence transaction is a read-then-write (purge, compaction, sync markOffered/applyOutcomes,
+	// profile activation) — a DEFERRED begin reads first, then upgrades to write, and if a concurrent
+	// connection wrote in between it fails with SQLITE_BUSY_SNAPSHOT (517), which busy_timeout does NOT
+	// retry (it only retries lock-waits, not snapshot conflicts). IMMEDIATE takes the lock upfront, so
+	// the concurrent writer waits (busy_timeout absorbs it) instead — the fix for the intermittent
+	// SQLITE_BUSY(517) flake in TestReceipt_DialContextRecordedAndSeparated.
 	db, err := sql.Open("sqlite",
-		"file:"+s.cfg.Path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(2000)&_pragma=synchronous(NORMAL)")
+		"file:"+s.cfg.Path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(2000)&_pragma=synchronous(NORMAL)&_txlock=immediate")
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("open evidence.db")
 	}
