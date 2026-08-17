@@ -98,19 +98,19 @@ func TestShutdown_PrepareStopBeforeAnyStop(t *testing.T) {
 	}
 }
 
-// AC-D2: the RFCritical fence is the sole Stop until its Stop RETURNS. Two mechanisms combine for
-// deterministic coverage (four codex rounds): the fence is HELD BLOCKED inside Stop under test control
-// (so throughout its execution bridge's outcome is un-recorded — Result stays Pending), AND the
-// non-fence Stop asserts the fence's outcome is already recorded (==Drained), which the orchestrator
-// sets only after the fence's Stop returned and before launching any non-fence Stop. So a correct
-// sequential shutdown passes, while an overlap with the still-blocked fence reads Pending and fails —
-// no snapshot race, no release-vs-return window. A bounded select on entry avoids a hang if skipped.
+// AC-D2: the RFCritical fence is the sole Stop until its Stop RETURNS. The fence is HELD BLOCKED under
+// test control (its outcome stays un-recorded throughout); the non-fence Stop SIGNALS if it runs while
+// the fence is not yet Drained, and the test rules out any overlap BEFORE releasing the fence. A
+// correct shutdown's loop is blocked on the fence (no overlap); a concurrent regression signals and
+// fails. Checking before release closes the release-vs-return window (five codex rounds); a bounded
+// select on entry avoids a hang if the fence is skipped.
 func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 	rec := &hookRec{}
 	bridge, other := newProbe(rec, "bridge"), newProbe(rec, "other")
 	var o *Orchestrator
 	fenceEntered := make(chan struct{})
 	release := make(chan struct{})
+	overlap := make(chan struct{}, 1)
 	ab := bridge.adapter()
 	ab.Stop = func(context.Context) error {
 		rec.add("stop:bridge")
@@ -120,8 +120,8 @@ func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 	}
 	ao := other.adapter()
 	ao.Stop = func(context.Context) error {
-		if got := o.Result("bridge"); got != Drained {
-			t.Errorf("other Stop ran while the RF fence was still executing (bridge result=%d)", got)
+		if o.Result("bridge") != Drained { // ran while the fence had not yet returned/recorded
+			overlap <- struct{}{}
 		}
 		rec.add("stop:other")
 		return nil
@@ -140,6 +140,13 @@ func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 		t.Fatal("Shutdown completed without entering the RF fence")
 	case <-time.After(2 * time.Second):
 		t.Fatal("RF fence was never entered")
+	}
+	// Rule out overlap BEFORE releasing (see the acceptance test): a correct shutdown's loop is
+	// blocked on the fence so `other` cannot run; a concurrent regression runs it immediately.
+	select {
+	case <-overlap:
+		t.Error("other Stop overlapped the still-executing RF fence")
+	case <-time.After(100 * time.Millisecond):
 	}
 	close(release)
 	rep := <-done
