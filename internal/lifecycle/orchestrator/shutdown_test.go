@@ -98,53 +98,32 @@ func TestShutdown_PrepareStopBeforeAnyStop(t *testing.T) {
 	}
 }
 
-// AC-D2: the RFCritical fence is the sole Stop until it RETURNS. The bridge hook blocks inside Stop
-// (still executing) until released; the non-fence Stop asserts at its run instant that `release` is
-// already closed, so an overlap with the still-blocked fence is caught deterministically rather than
-// by a raced snapshot (codex P1), and a bounded select on entry avoids a hang if the fence is skipped
-// (codex P2).
+// AC-D2: the RFCritical fence is the sole Stop until its Stop RETURNS. The non-fence Stop asserts, at
+// its run instant, that the fence's outcome is already recorded (Result("bridge")==Drained) — which
+// the orchestrator sets only after the fence's Stop returned and before launching any non-fence Stop
+// (a happens-before through o.mu). This catches an overlap deterministically, with no snapshot race
+// and no release-vs-return window (three codex rounds); no blocking wait ⇒ no hang.
 func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 	rec := &hookRec{}
 	bridge, other := newProbe(rec, "bridge"), newProbe(rec, "other")
-	fenceEntered := make(chan struct{})
-	release := make(chan struct{})
+	var o *Orchestrator
 	ab := bridge.adapter()
-	ab.Stop = func(context.Context) error {
-		rec.add("stop:bridge")
-		close(fenceEntered)
-		<-release
-		return nil
-	}
+	ab.Stop = func(context.Context) error { rec.add("stop:bridge"); return nil }
 	ao := other.adapter()
 	ao.Stop = func(context.Context) error {
-		select {
-		case <-release: // fence already returned — correct
-		default:
-			t.Error("other Stop ran while the RF fence was still executing")
+		if got := o.Result("bridge"); got != Drained {
+			t.Errorf("other Stop ran before the RF fence's Stop returned (bridge result=%d)", got)
 		}
 		rec.add("stop:other")
 		return nil
 	}
 	// Register `other` FIRST so only the fence phase — not registration order — can make bridge drain
 	// first (otherwise the test would pass by coincidence).
-	o := startedOrch(t, []iocdi.Node{
+	o = startedOrch(t, []iocdi.Node{
 		{Name: "other"},
 		{Name: "bridge", StopPriority: iocdi.RFCritical},
 	}, ao, ab)
-
-	done := make(chan ShutdownReport, 1)
-	go func() { done <- o.Shutdown(2 * time.Second) }()
-
-	select {
-	case <-fenceEntered: // fence is inside Stop, still executing
-	case <-done:
-		t.Fatal("Shutdown completed without entering the RF fence")
-	case <-time.After(2 * time.Second):
-		t.Fatal("RF fence was never entered")
-	}
-	close(release)
-
-	rep := <-done
+	rep := o.Shutdown(2 * time.Second)
 	if len(rep.Outcomes) == 0 || rep.Outcomes[0].Node != "bridge" {
 		t.Errorf("Outcomes = %+v, want bridge first (fence drains first)", rep.Outcomes)
 	}

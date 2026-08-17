@@ -136,52 +136,32 @@ func TestAcceptance_HappyPathPartialOrder(t *testing.T) {
 	}
 }
 
-// §5-1: the RF fence is the SOLE teardown until it RETURNS. The bridge hook blocks INSIDE Stop
-// (still executing) until the test releases it. Every OTHER node's Stop asserts, at the instant it
-// runs, that `release` is already closed — so a correct sequential shutdown (which runs them only
-// after the fence returned) passes, while any overlap with the still-blocked fence is caught
-// deterministically, not by a raced snapshot (codex P1). A bounded select on entry avoids hanging if
-// a regression skips the fence (codex P2).
+// §5-1: the RF fence is the SOLE teardown until its Stop RETURNS. Every OTHER node's Stop asserts,
+// at the instant it runs, that the fence's outcome is ALREADY RECORDED (Result("bridge")==Drained).
+// The orchestrator records the fence's result only AFTER its Stop returns and BEFORE it launches any
+// non-fence Stop (a happens-before through o.mu), so a correct sequential shutdown passes while any
+// overlap with the still-running fence is caught deterministically — no snapshot race and no
+// release-closed-vs-Stop-returned window (three codex rounds). No blocking wait ⇒ no hang either.
 func TestAcceptance_RFFenceIsSole(t *testing.T) {
 	rec := &hookRec{}
 	m := daemonAdapters(rec)
-	fenceEntered := make(chan struct{})
-	release := make(chan struct{})
-	m["bridge"].Stop = func(context.Context) error {
-		rec.add("stop:bridge")
-		close(fenceEntered)
-		<-release // remain in Stop (executing) until released
-		return nil
-	}
+	var o *Orchestrator
+	m["bridge"].Stop = func(context.Context) error { rec.add("stop:bridge"); return nil }
 	for _, node := range daemonGraph() {
 		if node.Name == "bridge" {
 			continue
 		}
 		n := node.Name
 		m[n].Stop = func(context.Context) error {
-			select {
-			case <-release: // fence already returned — correct
-			default:
-				t.Errorf("%s Stop ran while the RF fence was still executing", n)
+			if got := o.Result("bridge"); got != Drained {
+				t.Errorf("%s Stop ran before the RF fence's Stop returned (bridge result=%d)", n, got)
 			}
 			rec.add("stop:" + n)
 			return nil
 		}
 	}
-	o := startDaemonOrch(t, m)
-	done := make(chan ShutdownReport, 1)
-	go func() { done <- o.Shutdown(2 * time.Second) }()
-
-	select {
-	case <-fenceEntered: // the fence is now inside Stop, still executing
-	case <-done:
-		t.Fatal("Shutdown completed without entering the RF fence")
-	case <-time.After(2 * time.Second):
-		t.Fatal("RF fence was never entered")
-	}
-	close(release) // let the fence return; the rest drains, each verifying release is closed
-
-	rep := <-done
+	o = startDaemonOrch(t, m)
+	rep := o.Shutdown(2 * time.Second)
 	if len(rep.Outcomes) == 0 || rep.Outcomes[0].Node != "bridge" {
 		t.Errorf("Outcomes[0] = %+v, want bridge (fence drains first)", rep.Outcomes)
 	}
