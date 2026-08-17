@@ -197,7 +197,7 @@ suppresses occupancy the same way, also silently.
 
 - **Confusable with:** a genuinely quiet band, or a stalled decoder.
 - **Precedent — this exact failure has already cost a day.** The dial guard's
-  *session-end* half had the same problem: per `../../internal/ft8/CLAUDE.md` invariant 5,
+  *session-end* half had the same problem: per `../../internal/ft8/AGENTS.md` invariant 5,
   *"the first on-air read of a WORKING dial guard was 'moving the dial does not stop
   TX', and it took a log dive to establish that it had (dogfood 2026-07-27)."* That
   was fixed by putting `end_reason` on the terminal SSE frame. The **per-slot** half
@@ -448,7 +448,7 @@ Three things make this worse than the one-line summary:
 - **Blocks measurement, exactly like finding 5.** `txLateWindowSec = 4.5`
   (`sequencer.go:39`) is a package var with no operator-observable behaviour attached.
   How often the guard fires is the whole justification for the PocketFFT build being
-  preferred for TX (`../../internal/ft8/CLAUDE.md`), and it is currently unmeasurable on a
+  preferred for TX (`../ft8.md`), and it is currently unmeasurable on a
   live station.
 - **Record:** the deferral with `dt_s`, the rung, and which of the three rules fired.
   These sites already have `dt` in hand. Rate is bounded by slots. Note the successful

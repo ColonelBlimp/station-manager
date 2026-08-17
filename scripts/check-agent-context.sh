@@ -12,7 +12,6 @@ MAX_CURRENT_BYTES=2048
 MAX_ORDINARY_CONTEXT_BYTES=10240
 MAX_SCOPED_AGENTS_BYTES=8192
 MAX_SCOPED_CONTEXT_BYTES=20480
-MAX_LEGACY_FT8_BYTES=20480
 
 agents_bytes="$(wc -c < AGENTS.md)"
 if [ "$agents_bytes" -gt "$MAX_AGENTS_BYTES" ]; then
@@ -51,10 +50,18 @@ if [ "$(cat internal/bridge/CLAUDE.md)" != "$expected_bridge_claude" ]; then
     exit 1
 fi
 
-ft8_claude_bytes="$(wc -c < internal/ft8/CLAUDE.md)"
-if [ "$ft8_claude_bytes" -gt "$MAX_LEGACY_FT8_BYTES" ]; then
-    printf 'internal/ft8/CLAUDE.md is %s bytes; its temporary pre-migration ceiling is %s bytes.\n' \
-        "$ft8_claude_bytes" "$MAX_LEGACY_FT8_BYTES" >&2
+ft8_agents_bytes="$(wc -c < internal/ft8/AGENTS.md)"
+if [ "$ft8_agents_bytes" -gt "$MAX_SCOPED_AGENTS_BYTES" ]; then
+    printf 'internal/ft8/AGENTS.md is %s bytes; the scoped-instruction budget is %s bytes.\n' \
+        "$ft8_agents_bytes" "$MAX_SCOPED_AGENTS_BYTES" >&2
+    exit 1
+fi
+
+expected_ft8_claude="# Claude Code FT8 instructions
+
+@AGENTS.md"
+if [ "$(cat internal/ft8/CLAUDE.md)" != "$expected_ft8_claude" ]; then
+    printf 'internal/ft8/CLAUDE.md must contain only its heading and @AGENTS.md import.\n' >&2
     exit 1
 fi
 
@@ -97,8 +104,16 @@ if [ "$bridge_context_bytes" -gt "$MAX_SCOPED_CONTEXT_BYTES" ]; then
     exit 1
 fi
 
-printf 'Agent context: kernel %s/%s bytes; current %s/%s bytes; automatic %s/%s bytes; bridge-scoped %s/%s bytes; FT8 legacy %s/%s bytes.\n' \
+ft8_claude_bytes="$(wc -c < internal/ft8/CLAUDE.md)"
+ft8_context_bytes=$(( ordinary_context_bytes + ft8_agents_bytes + ft8_claude_bytes ))
+if [ "$ft8_context_bytes" -gt "$MAX_SCOPED_CONTEXT_BYTES" ]; then
+    printf 'FT8-scoped automatic context is %s bytes; the budget is %s bytes.\n' \
+        "$ft8_context_bytes" "$MAX_SCOPED_CONTEXT_BYTES" >&2
+    exit 1
+fi
+
+printf 'Agent context: kernel %s/%s bytes; current %s/%s bytes; automatic %s/%s bytes; bridge-scoped %s/%s bytes; FT8-scoped %s/%s bytes.\n' \
     "$agents_bytes" "$MAX_AGENTS_BYTES" "$current_bytes" "$MAX_CURRENT_BYTES" \
     "$ordinary_context_bytes" "$MAX_ORDINARY_CONTEXT_BYTES" \
     "$bridge_context_bytes" "$MAX_SCOPED_CONTEXT_BYTES" \
-    "$ft8_claude_bytes" "$MAX_LEGACY_FT8_BYTES"
+    "$ft8_context_bytes" "$MAX_SCOPED_CONTEXT_BYTES"

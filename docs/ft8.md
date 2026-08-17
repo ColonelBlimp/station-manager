@@ -12,7 +12,7 @@
 > layers land.
 
 > **TX + attribution invariants** (what must never break on the transmit and
-> slot-attribution paths, and why) live in **`internal/ft8/CLAUDE.md`**, so they
+> slot-attribution paths, and why) live in **`internal/ft8/AGENTS.md`**, so they
 > auto-load when working in that package — which is where they were being missed.
 > Read them before changing the TX or slot path; they are not repeated here.
 
