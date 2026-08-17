@@ -196,7 +196,11 @@ func (s *Service) syncLoop() {
 // syncOnce selects, offers, and applies one batch. It NEVER consumes a row
 // without a terminal outcome from a valid, complete response.
 func (s *Service) syncOnce(parent context.Context, live bool) syncResult {
-	rows, err := s.selectSyncBatch()
+	// parent is the Stop-cancellable sync context (loopCtx cancels when s.quit closes),
+	// threaded through the DB ops as well as the HTTP request so an in-flight SQLite
+	// statement no longer holds Stop past shutdown; a cancelled write rolls back and the
+	// row is retried next round (LC-4).
+	rows, err := s.selectSyncBatch(parent)
 	if err != nil {
 		s.noteSyncError("select batch: " + err.Error())
 		return syncTransient
@@ -211,7 +215,7 @@ func (s *Service) syncOnce(parent context.Context, live bool) syncResult {
 	// SY9: durable send-intent BEFORE dispatch. COALESCE keeps the FIRST
 	// intent timestamp — "possibly offered, unacknowledged" from the moment
 	// any attempt could have put bytes on the wire.
-	if err := s.markOffered(rows); err != nil {
+	if err := s.markOffered(parent, rows); err != nil {
 		s.noteSyncError("mark offered: " + err.Error())
 		return syncTransient
 	}
@@ -239,7 +243,7 @@ func (s *Service) syncOnce(parent context.Context, live bool) syncResult {
 		return syncTransient
 	}
 
-	if err := s.applyOutcomes(rows, outcomes); err != nil {
+	if err := s.applyOutcomes(parent, rows, outcomes); err != nil {
 		s.noteSyncError("apply outcomes: " + err.Error())
 		return syncTransient
 	}
@@ -279,14 +283,14 @@ func (s *Service) noteSyncError(msg string) {
 // and would retry the same oversized set forever). Leftover profiles ride
 // later rounds. Newest-first is what makes "current ahead of backlog" hold
 // inside every batch, live or drained.
-func (s *Service) selectSyncBatch() ([]syncRow, error) {
+func (s *Service) selectSyncBatch(ctx context.Context) ([]syncRow, error) {
 	var rows []syncRow
 	remaining := syncBacklogBatch
 	for _, t := range syncTables {
 		if remaining <= 0 {
 			break
 		}
-		selected, err := s.selectKind(t.kind, t.table, remaining)
+		selected, err := s.selectKind(ctx, t.kind, t.table, remaining)
 		if err != nil {
 			return nil, err
 		}
@@ -296,14 +300,14 @@ func (s *Service) selectSyncBatch() ([]syncRow, error) {
 	return rows, nil
 }
 
-func (s *Service) selectKind(kind, table string, limit int) ([]syncRow, error) {
+func (s *Service) selectKind(ctx context.Context, kind, table string, limit int) ([]syncRow, error) {
 	// RT10: an OPEN loss accumulator is refreshed in place and must never
 	// be offered — only sealed rows are sync-eligible.
 	sealedClause := ""
 	if kind == evidencewire.KindLossInterval {
 		sealedClause = ` AND sealed = 1`
 	}
-	rs, err := s.db.Query(
+	rs, err := s.db.QueryContext(ctx,
 		`SELECT uuid FROM `+table+` WHERE synced = 0 AND quarantine_reason IS NULL`+sealedClause+` ORDER BY uuid DESC LIMIT ?`,
 		limit)
 	if err != nil {
@@ -327,7 +331,7 @@ func (s *Service) selectKind(kind, table string, limit int) ([]syncRow, error) {
 	}
 	out := make([]syncRow, 0, len(uuids))
 	for _, u := range uuids {
-		row, err := s.loadSyncRow(kind, u)
+		row, err := s.loadSyncRow(ctx, kind, u)
 		if err != nil {
 			return nil, err
 		}
@@ -406,14 +410,14 @@ type profileSyncPayload struct {
 	NoiseFloor string   `json:"noise_floor"`
 }
 
-func (s *Service) loadSyncRow(kind, uuid string) (syncRow, error) {
+func (s *Service) loadSyncRow(ctx context.Context, kind, uuid string) (syncRow, error) {
 	row := syncRow{kind: kind, uuid: uuid}
 	var payload any
 	switch kind {
 	case evidencewire.KindObservation:
 		var p observationPayload
 		var tracked int
-		if err := s.db.QueryRow(
+		if err := s.db.QueryRowContext(ctx,
 			`SELECT slot_start_utc, dial_mhz, dial_tracked, freq_hz, dt_sec, snr, payload,
 				parse_status, text, prov_algorithm, prov_ap_profile, prov_ap_source,
 				metric_sync, metric_hard_sync, metric_costas_geo, metric_costas_min_block,
@@ -435,7 +439,7 @@ func (s *Service) loadSyncRow(kind, uuid string) (syncRow, error) {
 	case evidencewire.KindCoverage:
 		var p coveragePayload
 		var tracked int
-		if err := s.db.QueryRow(
+		if err := s.db.QueryRowContext(ctx,
 			`SELECT slot_start_utc, outcome, dial_mhz, dial_tracked, decode_count
 			 FROM coverage WHERE uuid = ?`, uuid).Scan(
 			&p.SlotStartUTC, &p.Outcome, &p.DialMHz, &tracked, &p.DecodeCount); err != nil {
@@ -446,7 +450,7 @@ func (s *Service) loadSyncRow(kind, uuid string) (syncRow, error) {
 	case evidencewire.KindLossInterval:
 		var p lossPayload
 		var supersedes *string
-		if err := s.db.QueryRow(
+		if err := s.db.QueryRowContext(ctx,
 			`SELECT start_utc, end_utc, slots, observations, reason, remote_status, dial_mhz, supersedes
 			 FROM loss_intervals WHERE uuid = ?`, uuid).Scan(
 			&p.StartUTC, &p.EndUTC, &p.Slots, &p.Observations, &p.Reason, &p.RemoteStatus, &p.DialMHz, &supersedes); err != nil {
@@ -462,7 +466,7 @@ func (s *Service) loadSyncRow(kind, uuid string) (syncRow, error) {
 		var p retentionSyncPayload
 		var acked int
 		var supersedes *string
-		if err := s.db.QueryRow(
+		if err := s.db.QueryRowContext(ctx,
 			`SELECT start_utc, end_utc, observations, coverage, reason, acknowledged, supersedes
 			 FROM retention_records WHERE uuid = ?`, uuid).Scan(
 			&p.StartUTC, &p.EndUTC, &p.Observations, &p.Coverage, &p.Reason, &acked, &supersedes); err != nil {
@@ -477,7 +481,7 @@ func (s *Service) loadSyncRow(kind, uuid string) (syncRow, error) {
 		payload = p
 	case evidencewire.KindProfile:
 		var p profileSyncPayload
-		if err := s.db.QueryRow(
+		if err := s.db.QueryRowContext(ctx,
 			`SELECT lineage, version, valid_from, name, type, height_m, feedline, locator, bands, noise_floor
 			 FROM profiles WHERE uuid = ?`, uuid).Scan(
 			&p.Lineage, &p.Version, &p.ValidFrom, &p.Name, &p.Type, &p.HeightM,
@@ -496,8 +500,8 @@ func (s *Service) loadSyncRow(kind, uuid string) (syncRow, error) {
 
 // markOffered writes the send-intent, per table, in one transaction that
 // commits BEFORE dispatch (SY9).
-func (s *Service) markOffered(rows []syncRow) (err error) {
-	tx, err := s.db.Begin()
+func (s *Service) markOffered(ctx context.Context, rows []syncRow) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -519,7 +523,7 @@ func (s *Service) markOffered(rows []syncRow) (err error) {
 		for _, u := range uuids {
 			args = append(args, u)
 		}
-		if _, err := tx.Exec(q, args...); err != nil {
+		if _, err := tx.ExecContext(ctx, q, args...); err != nil {
 			return err
 		}
 	}
@@ -591,8 +595,8 @@ func (s *Service) postBatch(ctx context.Context, rows []syncRow) ([]evidencewire
 // applyOutcomes marks rows per their terminal outcomes in one transaction.
 // An unknown outcome string leaves its row untouched (re-offered later) —
 // forward-compatible and conservative.
-func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutcome) (err error) {
-	tx, err := s.db.Begin()
+func (s *Service) applyOutcomes(ctx context.Context, rows []syncRow, outcomes []evidencewire.RowOutcome) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -609,7 +613,7 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 			// The EXACT outcome persists beside synced=1 (schema v4): the
 			// purge-eligible class is accepted|already_present only —
 			// tombstoned/suppressed are terminal but NOT cloud-present.
-			if _, err := tx.Exec(`UPDATE `+table+` SET synced = 1, sync_outcome = ? WHERE uuid = ?`,
+			if _, err := tx.ExecContext(ctx, `UPDATE `+table+` SET synced = 1, sync_outcome = ? WHERE uuid = ?`,
 				o.Outcome, r.uuid); err != nil {
 				return err
 			}
@@ -623,7 +627,7 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 			if r := []rune(reason); len(r) > quarantineReasonMaxRunes {
 				reason = string(r[:quarantineReasonMaxRunes])
 			}
-			if _, err := tx.Exec(`UPDATE `+table+` SET quarantine_reason = ? WHERE uuid = ?`, reason, r.uuid); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE `+table+` SET quarantine_reason = ? WHERE uuid = ?`, reason, r.uuid); err != nil {
 				return err
 			}
 			quarantined++
@@ -636,7 +640,7 @@ func (s *Service) applyOutcomes(rows []syncRow, outcomes []evidencewire.RowOutco
 			// referenced LOCAL profile re-offers even if previously synced —
 			// SMC restored from backup is exactly this signature.
 			if r.profileRef != "" {
-				if _, err := tx.Exec(`UPDATE profiles SET synced = 0 WHERE uuid = ?`, r.profileRef); err != nil {
+				if _, err := tx.ExecContext(ctx, `UPDATE profiles SET synced = 0 WHERE uuid = ?`, r.profileRef); err != nil {
 					return err
 				}
 			}
