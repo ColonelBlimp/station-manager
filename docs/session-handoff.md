@@ -41,45 +41,95 @@ injected; `## Now` is bounded by editorial rule and is what the hook reads.
 
 ---
 
-## Now (as of 2026-08-16)
+## Now (as of 2026-08-17)
 
 
 <!-- THE ONLY SECTION THE SessionStart HOOK INJECTS. Keep it under ~25 lines.
      It is ORIENTATION, not the record — "where are we, what's next, what must
      I not do". Detail belongs in Current state below, which is NOT injected. -->
 
-- **🎉 security-trust-boundary audit CLOSED (#1)** — ST-1…ST-7 all FIXED (ST-4a/b `internal/
-  securehttp`; ST-5 Unix-socket boundary `e66a33ab`+4 fixes; ST-6 `internal/fsperm` `52b6943a`+3
-  fixes; ST-7 build-key `a81948b8`; closed `cb595d8e`). **ONE open follow-up: ST-3b** —
-  authenticated LAN access (topology remedy), **tracked in ADR 0069**, not started.
-- **🎉 lifecycle-concurrency LC-1 + LC-2 FIXED (#2 in progress)** — LC-1 RF-safety panic boundary
-  (`b627ac30`+`1c59822b`, prior session). LC-2 shutdown-budget (this session): `d8e0eee9` (ONE
-  budget bounds the whole teardown — named-stage record, dependency-preserving skips of
-  evidence/qso-drain/hub when ft8 hangs, `TimeoutStopSec=20s`) + `abd48f30` (codex-P1
-  `gracefulDone` guard so safety-net defers don't re-block a Stop the budget abandoned) +
-  `15445922` (LC-1 `panics`-counter data race — the cause of main's CI-red) + `43e39cf9` (audit
-  marked). All full-TDD + reversion-proofed; `cmd/smd` `-race` green.
-- **All pushed — `origin/main` = HEAD = `43e39cf9`, 0 unpushed.** ⚠️ **FIRST next session: verify
-  CI** — run `31960094575` on `43e39cf9` was in_progress at handoff (includes the race fix, so
-  expect green). `gh run list -L1`; verdict from OUTPUT not exit code. The old red on `a63523ba`
-  is superseded.
-- **RESUME → priority #2 (`internal-lifecycle-concurrency-audit.md`): LC-3..LC-5 remain** — LC-3
-  (P2) evidence Stop not a producer barrier; LC-4 (P2, overlaps EH-4) evidence DB work
-  uncancellable; LC-5 (P3) lifecycle state machines inconsistent. THEN the operator's priority
-  order: #3 configuration-contract (silent unknown-field deletion), #4 persistence-transaction
-  (**2 P1** integrity — highest remaining severity), #5 api-wire-contract, #7
-  maintainability-test-arch (logging_debug panic FIRST), #8 package-boundary (PB-1 CI guards), #9
-  error-handling (linter ratchet only). #1 ✅, #6 ✅.
-- **WORKFLOW per finding (operator directive):** verify-before-building → draft ATDD criteria
-  (observable, before mechanism) → operator rules judgment calls → RED → impl as ONE commit with
-  reversion proofs → operator agrees each commit → mark FIXED in the audit doc. **NO amends** —
-  review findings land as NEW fix-commits (commit→review→fix).
-- **2nd coder commits to this HEAD in parallel** — commit ONLY my explicit paths (never `-A`);
-  re-check `git log -1` is mine; their `.codex-reviews/` docs + untracked files are NOT mine.
+- **ACTIVE ARC: ADR 0070 phase 1 — unify the daemon lifecycle into ONE declarative typed graph.**
+  LC-1/2/3/4 all shipped earlier; **LC-5 was superseded by ADR 0070** (ratified `76dfd2c4`, design
+  `docs/v2-design/lifecycle.md`). Don't re-derive — the ADR + design doc are authoritative.
+- **Phase-1 shipped (all full-TDD + reversion-proved + codex-clean):** lifecycle design `e4ad1e60`;
+  Supervisor primitive `0edb6e46`; iocdi node-registry+Plan `7796a20b`(+3 review-fixes); Wire()/
+  Build() split `b161407e` (+`cc093d0e`/`a948d6af`/`9daf6af7` = durable init-owner
+  none|build|orchestrator + per-bean initDone resume + close-registration-on-wired);
+  `BeginOrchestratorInit` seam `a0433ddc`; CI timeout 15→**25m** `f9d48613` (the 15m cap was
+  cancelling ~half of runs at the tail — FT8-decode/ClubLog-boundary).
+- **Orchestrator Start half (B) DONE + codex-clean:** `internal/lifecycle/orchestrator` —
+  Milestone/Result/Adapter/Orchestrator + `Start` (plan+adapter validation → claim init ownership →
+  latch Active once → Initialize→Start topological, milestones, rollback-on-failure) `19192efa`;
+  review-fixes `bf9488cd` (split transitionMu from state mu — no lock across callbacks; bound
+  rollback teardown by ctx via `runBounded`) + `5852f1eb` (halt rollback on the first timed-out
+  teardown — reverse-order safety). `runBounded` helper is in `bounded.go`, reused by Shutdown.
+- **PUSH STATE:** `origin/main` = `f9d48613` (PUSHED, CI GREEN under the 25m cap). **3 commits
+  ahead UNPUSHED — `19192efa`,`bf9488cd`,`5852f1eb` (operator pushes).**
+- **RESUME → orchestrator Shutdown (C)** (design §4.3): PrepareStop (non-blocking, before budget) →
+  ONE budget ctx → RF completion-or-deadline **fence** → sequential topological drain (each Stop via
+  `runBounded`) → **transitive skip** (prereq result ∉ {Drained,Inactive} skips the dependent, skip
+  propagates) → return **`ShutdownReport{Outcomes []NodeOutcome (traversal order), FirstTimedOut}`**.
+  Operator RULINGS (don't re-litigate): logging-free (caller formats logs); budget<=0 = immediate
+  expiry, NO orchestrator floor (cmd/smd keeps the 10s fallback); completion wins the tie. THEN the
+  §5 acceptance test (build today's real daemon graph, assert derived partial order + skips match
+  `gracefulShutdown`). Draft AC-D criteria into the test header first.
+- **WORKFLOW:** verify-before-building → ATDD criteria (observable, before mechanism) → operator
+  rules judgment calls → RED → ONE commit + reversion proof → operator "commit it" → codex fix cycle
+  (**NO amends**; fixes are NEW commits). **Reviews CLUSTER defects** — the Start half took 2 rounds.
 - **Do-not:** never initiate FT8/TX or touch the live TX path (sink 66 / rig cmds / power) without
-  per-occasion agreement. All commits carry NO Claude trailer. Post-commit codex review is SLOW
-  (~1-2 min — a 2-min commit TIMES OUT; use a longer Bash timeout); triage `.codex-reviews/` per
-  commit (verdict from OUTPUT), fix findings, DELETE the doc.
+  per-occasion agreement. NO Claude trailer. 2nd coder on this HEAD — commit ONLY my explicit paths
+  (never `-A`), re-check `git log -1` is mine; their `.codex-reviews/` docs + untracked
+  `docs/decisions/0071-first-class-qso-archives.md` are NOT mine. Triage `.codex-reviews/` per
+  commit (verdict from OUTPUT, ~1-2 min hook — long Bash timeout), fix, DELETE each; `gh run list
+  -L1` in the loop.
+
+## Current state (as of 2026-08-17)
+
+**ADR 0070 phase 1 (unify the daemon lifecycle into one declarative typed graph) is under way.**
+The LC-1..LC-4 concurrency fixes shipped earlier; LC-5 revealed the bigger opportunity and was
+superseded by ADR 0070 (`docs/decisions/0070-daemon-lifecycle-graph.md`, ratified over 6 operator
+rounds `76dfd2c4`; companion design `docs/v2-design/lifecycle.md`, 5 rounds `e4ad1e60`). The model:
+iocdi owns dependency metadata + topology (declarative); a new orchestrator owns runtime transitions
++ bounded reverse-order shutdown; a per-service `internal/lifecycle` Supervisor makes phase
+observable so drain skips DERIVE from results, not hardcoded prose. Six concepts: construction deps ·
+drain deps · per-lane work-disposition · activation+rollback-eligibility · state-qualified
+failure/skip (positive satisfaction — Drained/Inactive only, else propagate Skipped) · RF
+completion-or-deadline fence.
+
+**Phase-1 pieces shipped (each full-TDD + reversion-proved + every codex round to No-actionable):**
+- Supervisor primitive `internal/lifecycle/supervisor.go` `0edb6e46` (Phase/Lane/Disposition/
+  StartScope; Start's acquire+launch+commit is one transition vs Stop; transitionMu separate from the
+  phase mutex Admit reads; teardown panic folds into stopErr, no logging dep).
+- iocdi lifecycle-node registry + immutable Plan `7796a20b` (+P1/P2 `00120e03`, TOCTOU `85c94fef`,
+  phantom-dep `c729066c`) — Node(StartAfter/DrainAfter/StopPriority); Plan freezes bean+node
+  registration, validates unknown-ref/start-cycle/drain-cycle-independently/multi-RFCritical;
+  StartOrder = topo over explicit ∪ DI-derived edges (reg-order tiebreak); deep-copy accessors.
+- Wire()/Build() split `b161407e` + review-fixes `cc093d0e`/`a948d6af`/`9daf6af7`: Wire =
+  construct+inject (no Initialize); Build = Wire+Initialize; Resolve wire-only. Single-init-owner is
+  a DURABLE `initOwner` (none|build|orchestrator) set once, never reset — a failed Build keeps
+  ownerBuild (orchestrator refused forever) and a per-bean `initDone` makes a same-owner Build retry
+  RESUME at un-run beans (every Initialize runs ≤ once). Registration closes once wired/built/frozen
+  (fast-path + under-regMu recheck). `BeginOrchestratorInit` exported seam `a0433ddc`.
+- **Orchestrator Start half** `internal/lifecycle/orchestrator` `19192efa` (Milestone/Result/Adapter/
+  Orchestrator + Start: plan+adapter-coverage validation → BeginOrchestratorInit → latch Active once
+  (disabled→Inactive, pruned) → Initialize→Start per active node in topological order, milestones,
+  rollback-on-failure Running→Stop/Initialized→Rollback in reverse; nil-Start auto-promotes to
+  Running). Review-fixes: `bf9488cd` split transitionMu from state mu (no lock held across adapter
+  callbacks — deadlock fix) + bound each rollback teardown by ctx via `runBounded` (goroutine+race,
+  completion wins tie); `5852f1eb` HALT rollback on the first timed-out teardown (else a prerequisite
+  Stop overlaps a still-abandoned dependent — reverse-order violation). `runBounded` is in
+  `bounded.go`, reused by Shutdown. All synthetic-adapter tests (AC-S1..S5 + 3 hazard tests).
+
+**CI:** the 15m `timeout-minutes` cap was cancelling ~half of runs at the tail (FT8-decode/ClubLog
+boundary) — bumped to 25m `f9d48613`, pushed, verified complete-GREEN from output.
+
+**Push state:** `origin/main` = `f9d48613`; **UNPUSHED (operator pushes): `19192efa`, `bf9488cd`,
+`5852f1eb`** (the orchestrator Start half + its two review-fixes).
+
+**NEXT: orchestrator Shutdown (C)** — see the `## Now` RESUME line for the ruled design. Then the
+§5 acceptance test (real daemon graph vs today's `gracefulShutdown` partial order + skips). Then
+phase 2 (adopt Supervisor on evidence/psk/refresher — lands LC-5), phase 3 (orchestrator owns
+ordering, adapt every subsystem incl. bridge/ft8 as MANDATORY nodes keeping their barriers).
 
 ## Current state (as of 2026-08-14)
 
