@@ -32,6 +32,12 @@ type Container struct {
 	// registeredBeans stores all registered beans mapped by their unique string identifiers.
 	// This is the source of truth for all beans.
 	registeredBeans map[string]bean
+
+	// lifecycleNodes is the ADR-0070 lifecycle-node registry — independent of bean registration,
+	// in registration order (the deterministic shutdown tiebreak). planFrozen is set by Plan().
+	// Both are guarded by regMu. See lifecycle_nodes.go.
+	lifecycleNodes []Node
+	planFrozen     bool
 }
 
 func New() *Container {
