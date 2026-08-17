@@ -603,6 +603,7 @@ func (s *Service) Status() Status {
 // via the EH-4 shape — never a plausible zero. The mu-guarded fields are snapshotted under
 // the lock; only the archive aggregates run against ctx.
 func (s *Service) StatusContext(ctx context.Context) Status {
+	reqCtx := ctx // the caller's context — a client disconnect cancels this one
 	ctx, cancel := context.WithTimeout(ctx, statusAggregateTimeout)
 	defer cancel()
 	s.mu.Lock()
@@ -687,7 +688,12 @@ func (s *Service) StatusContext(ctx context.Context) Status {
 		st.Degraded = true
 		st.StatusError = statusErr.Error()
 	}
-	if s.statusHealth != nil {
+	// A CLIENT DISCONNECT (reqCtx cancelled) is not a database-health signal: it must not
+	// drive the degraded/recovered tracker or log a false "reads degraded" warning, or
+	// alternating disconnects and completions would spam the log (codex P2 on 219a7c98).
+	// The aggregate DEADLINE firing (reqCtx still live, only the derived ctx expired) DOES
+	// indicate the reads could not complete in budget, so it still drives the tracker.
+	if s.statusHealth != nil && reqCtx.Err() == nil {
 		s.statusHealth.observe(statusErr)
 	}
 	return st

@@ -27,6 +27,7 @@ package evidence
 
 import (
 	"context"
+	stderrors "errors"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,47 @@ func TestStatusContext_CancelledRequestReportsUnknownNotZero(t *testing.T) {
 	if st.State != StateCapturing {
 		t.Errorf("State = %q on a cancelled read, want %q (a non-DB field must survive)", st.State, StateCapturing)
 	}
+}
+
+// LC-4 review (codex P2 on 219a7c98): a CLIENT DISCONNECT is not a database-health signal —
+// it must not log a false "reads degraded" warning or flip the health tracker (alternating
+// disconnects/completions would otherwise spam the log). A genuine read failure with a live
+// request still must. Reversion: drop the `reqCtx.Err() == nil` guard → the cancellation case
+// logs the degraded warning.
+func TestStatusContext_ClientCancellationIsNotDatabaseDegradation(t *testing.T) {
+	const degradedMsg = "status database reads degraded"
+
+	t.Run("client disconnect does not log DB degradation", func(t *testing.T) {
+		sb := &syncBuf{}
+		s := newRunningSyncLogged(t, testConfig(t, true), sb)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		st := s.StatusContext(ctx)
+
+		// The (discarded) response is still honestly degraded/unknown...
+		if !st.Degraded {
+			t.Error("a cancelled request should still report degraded/unknown in its response")
+		}
+		// ...but the service-wide DB health tracker must not have been touched.
+		if lines := sbLines(sb, degradedMsg); len(lines) != 0 {
+			t.Errorf("client cancellation logged a false DB-degraded warning: %v", lines)
+		}
+	})
+
+	t.Run("genuine read failure still degrades health", func(t *testing.T) {
+		sb := &syncBuf{}
+		s := newRunningSyncLogged(t, testConfig(t, true), sb)
+
+		statusQueryFaultForTest = func(string) error { return stderrors.New("disk gone") }
+		defer func() { statusQueryFaultForTest = nil }()
+
+		_ = s.StatusContext(context.Background()) // live request, real read failure
+
+		if lines := sbLines(sb, degradedMsg); len(lines) == 0 {
+			t.Error("a genuine read failure did not drive the DB health tracker; the cancellation guard over-suppressed")
+		}
+	})
 }
 
 // AC-2: the whole snapshot is bounded by one aggregate deadline. The seam models a
