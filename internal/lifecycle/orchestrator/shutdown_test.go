@@ -151,6 +151,8 @@ func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 	close(release)
 	rep := <-done
 	// Re-check overlap after Shutdown returned — catches an overlap signal descheduled past the window.
+	// The invariant is guaranteed by the blocking drain(fence) call; the residual >2s-starvation window
+	// is accepted, not chased (see TestAcceptance_RFFenceIsSole; operator-accepted 2026-08-17).
 	select {
 	case <-overlap:
 		t.Error("other Stop overlapped the still-executing RF fence (late signal)")
