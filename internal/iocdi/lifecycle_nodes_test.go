@@ -180,11 +180,15 @@ func TestRegister_RechecksFreezeUnderLock(t *testing.T) {
 	}
 	defer func() { beanRegisterPreLockForTest = nil }()
 
-	if err := c.Register("late", reflect.TypeOf(diA{})); !errors.Is(err, ErrRegistrationClosed) {
+	// diB depends on "a" — a rejected registration must leave NO bean AND no phantom required-dep.
+	if err := c.Register("late", reflect.TypeOf(diB{})); !errors.Is(err, ErrRegistrationClosed) {
 		t.Errorf("Register racing Plan err = %v, want ErrRegistrationClosed (recheck under lock)", err)
 	}
 	if _, ok := c.registeredBeans["late"]; ok {
 		t.Error("a bean was inserted after Plan snapshotted the graph")
+	}
+	if _, ok := c.requiredDependency["a"]; ok {
+		t.Error("a rejected registration left a phantom required dependency (checkForDependency ran before the freeze check)")
 	}
 }
 

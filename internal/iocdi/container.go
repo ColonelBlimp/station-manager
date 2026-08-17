@@ -89,8 +89,23 @@ func (c *Container) Register(beanID string, beanType reflect.Type) error {
 		return ErrBeanTypeNotSupported
 	}
 
+	if beanRegisterPreLockForTest != nil {
+		beanRegisterPreLockForTest()
+	}
+	c.regMu.Lock()
+	defer c.regMu.Unlock()
+	// Every shared-state mutation happens AFTER the under-lock freeze recheck (codex P1 ×2): Plan()
+	// sets planFrozen AND snapshots the DI graph under this same lock, and checkForDependency mutates
+	// requiredDependency — so a rejected registration must touch NEITHER registeredBeans NOR
+	// requiredDependency, or it leaves a phantom required-dep that breaks a later Build.
+	if c.planFrozen.Load() {
+		return ErrRegistrationClosed
+	}
+	if _, dup := c.registeredBeans[beanID]; dup {
+		return ErrDuplicateBeanID
+	}
 	hasDeps, deps := c.checkForDependency(beanType)
-	b := bean{
+	c.registeredBeans[beanID] = bean{
 		id:              beanID,
 		beanType:        beanType,
 		instance:        nil, // instance will be created during Build
@@ -98,21 +113,6 @@ func (c *Container) Register(beanID string, beanType reflect.Type) error {
 		hasDependencies: hasDeps,
 		dependencies:    deps,
 	}
-	if beanRegisterPreLockForTest != nil {
-		beanRegisterPreLockForTest()
-	}
-	c.regMu.Lock()
-	defer c.regMu.Unlock()
-	// Recheck the freeze UNDER regMu (codex P1): the early planFrozen fast-path can win a race with
-	// a concurrent Plan(), which sets the flag AND snapshots the DI graph under this same lock. Only
-	// this recheck guarantees no bean is inserted after the plan's snapshot.
-	if c.planFrozen.Load() {
-		return ErrRegistrationClosed
-	}
-	if _, dup := c.registeredBeans[beanID]; dup {
-		return ErrDuplicateBeanID
-	}
-	c.registeredBeans[beanID] = b
 	return nil
 }
 
@@ -145,8 +145,20 @@ func (c *Container) RegisterInstance(beanID string, instance any) error {
 		beanType = ptr.Type()
 	}
 
+	if beanRegisterPreLockForTest != nil {
+		beanRegisterPreLockForTest()
+	}
+	c.regMu.Lock()
+	defer c.regMu.Unlock()
+	// Mutation only after the under-lock freeze recheck + dup check (codex P1 ×2) — see Register.
+	if c.planFrozen.Load() {
+		return ErrRegistrationClosed
+	}
+	if _, dup := c.registeredBeans[beanID]; dup {
+		return ErrDuplicateBeanID
+	}
 	has, deps := c.checkForDependency(beanType)
-	b := bean{
+	c.registeredBeans[beanID] = bean{
 		id:              beanID,
 		beanType:        beanType,
 		instance:        instance,
@@ -154,22 +166,6 @@ func (c *Container) RegisterInstance(beanID string, instance any) error {
 		hasDependencies: has,
 		dependencies:    deps,
 	}
-
-	if beanRegisterPreLockForTest != nil {
-		beanRegisterPreLockForTest()
-	}
-	c.regMu.Lock()
-	defer c.regMu.Unlock()
-	// Recheck the freeze UNDER regMu (codex P1): the early planFrozen fast-path can win a race with
-	// a concurrent Plan(), which sets the flag AND snapshots the DI graph under this same lock. Only
-	// this recheck guarantees no bean is inserted after the plan's snapshot.
-	if c.planFrozen.Load() {
-		return ErrRegistrationClosed
-	}
-	if _, dup := c.registeredBeans[beanID]; dup {
-		return ErrDuplicateBeanID
-	}
-	c.registeredBeans[beanID] = b
 	return nil
 }
 
