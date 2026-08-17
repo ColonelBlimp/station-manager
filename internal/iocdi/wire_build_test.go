@@ -16,6 +16,17 @@ import (
 	"testing"
 )
 
+// failFirstInit's Initialize fails on the first call and succeeds after — a transient failure.
+type failFirstInit struct{ attempts int }
+
+func (f *failFirstInit) Initialize() error {
+	f.attempts++
+	if f.attempts == 1 {
+		return errors.New("transient init failure")
+	}
+	return nil
+}
+
 // initTracker is a bean with a di.inject dependency and an Initializer that counts its calls.
 type initTracker struct {
 	Dep       *diA `di.inject:"a"`
@@ -97,6 +108,27 @@ func TestBuild_RefusesWhenInitializationAlreadyClaimed(t *testing.T) {
 	}
 	if c.built.Load() {
 		t.Error("Build marked the container built despite refusing initialization")
+	}
+}
+
+// codex P2: a transient initializer failure must stay retryable — Build rolls back its init claim
+// on failure. Reversion: drop the rollback → the retry Build returns ErrAlreadyInitialized.
+func TestBuild_RetryableAfterInitializerFailure(t *testing.T) {
+	c := New()
+	if err := c.Register("failing", reflect.TypeOf(failFirstInit{})); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := c.Build(); err == nil {
+		t.Fatal("first Build should fail (its initializer errors)")
+	}
+	if c.built.Load() {
+		t.Error("a failed Build marked the container built")
+	}
+	if err := c.Build(); err != nil {
+		t.Errorf("retry Build err = %v, want nil (a transient init failure must stay retryable)", err)
+	}
+	if !c.built.Load() {
+		t.Error("retry Build did not complete")
 	}
 }
 

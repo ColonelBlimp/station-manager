@@ -221,7 +221,14 @@ func (c *Container) Build() (err error) {
 	if !c.initialized.CompareAndSwap(false, true) {
 		return ErrAlreadyInitialized
 	}
-	return c.initializeAllLocked()
+	if err = c.initializeAllLocked(); err != nil {
+		// Roll back the claim so a TRANSIENT initializer failure stays retryable (codex P2): a
+		// failed Build leaves the container un-built AND unclaimed, exactly as before the split. A
+		// successful init keeps the claim, so the orchestrator can never then also initialize.
+		c.initialized.Store(false)
+		return err
+	}
+	return nil
 }
 
 // wireLocked runs the precheck + instantiate + inject phases. Caller holds buildLock and regMu.
