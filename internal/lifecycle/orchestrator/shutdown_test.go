@@ -98,21 +98,30 @@ func TestShutdown_PrepareStopBeforeAnyStop(t *testing.T) {
 	}
 }
 
-// AC-D2: the RFCritical fence is the sole Stop until its Stop RETURNS. The non-fence Stop asserts, at
-// its run instant, that the fence's outcome is already recorded (Result("bridge")==Drained) — which
-// the orchestrator sets only after the fence's Stop returned and before launching any non-fence Stop
-// (a happens-before through o.mu). This catches an overlap deterministically, with no snapshot race
-// and no release-vs-return window (three codex rounds); no blocking wait ⇒ no hang.
+// AC-D2: the RFCritical fence is the sole Stop until its Stop RETURNS. Two mechanisms combine for
+// deterministic coverage (four codex rounds): the fence is HELD BLOCKED inside Stop under test control
+// (so throughout its execution bridge's outcome is un-recorded — Result stays Pending), AND the
+// non-fence Stop asserts the fence's outcome is already recorded (==Drained), which the orchestrator
+// sets only after the fence's Stop returned and before launching any non-fence Stop. So a correct
+// sequential shutdown passes, while an overlap with the still-blocked fence reads Pending and fails —
+// no snapshot race, no release-vs-return window. A bounded select on entry avoids a hang if skipped.
 func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 	rec := &hookRec{}
 	bridge, other := newProbe(rec, "bridge"), newProbe(rec, "other")
 	var o *Orchestrator
+	fenceEntered := make(chan struct{})
+	release := make(chan struct{})
 	ab := bridge.adapter()
-	ab.Stop = func(context.Context) error { rec.add("stop:bridge"); return nil }
+	ab.Stop = func(context.Context) error {
+		rec.add("stop:bridge")
+		close(fenceEntered)
+		<-release
+		return nil
+	}
 	ao := other.adapter()
 	ao.Stop = func(context.Context) error {
 		if got := o.Result("bridge"); got != Drained {
-			t.Errorf("other Stop ran before the RF fence's Stop returned (bridge result=%d)", got)
+			t.Errorf("other Stop ran while the RF fence was still executing (bridge result=%d)", got)
 		}
 		rec.add("stop:other")
 		return nil
@@ -123,7 +132,17 @@ func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 		{Name: "other"},
 		{Name: "bridge", StopPriority: iocdi.RFCritical},
 	}, ao, ab)
-	rep := o.Shutdown(2 * time.Second)
+	done := make(chan ShutdownReport, 1)
+	go func() { done <- o.Shutdown(2 * time.Second) }()
+	select {
+	case <-fenceEntered:
+	case <-done:
+		t.Fatal("Shutdown completed without entering the RF fence")
+	case <-time.After(2 * time.Second):
+		t.Fatal("RF fence was never entered")
+	}
+	close(release)
+	rep := <-done
 	if len(rep.Outcomes) == 0 || rep.Outcomes[0].Node != "bridge" {
 		t.Errorf("Outcomes = %+v, want bridge first (fence drains first)", rep.Outcomes)
 	}

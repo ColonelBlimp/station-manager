@@ -136,17 +136,26 @@ func TestAcceptance_HappyPathPartialOrder(t *testing.T) {
 	}
 }
 
-// §5-1: the RF fence is the SOLE teardown until its Stop RETURNS. Every OTHER node's Stop asserts,
-// at the instant it runs, that the fence's outcome is ALREADY RECORDED (Result("bridge")==Drained).
-// The orchestrator records the fence's result only AFTER its Stop returns and BEFORE it launches any
-// non-fence Stop (a happens-before through o.mu), so a correct sequential shutdown passes while any
-// overlap with the still-running fence is caught deterministically — no snapshot race and no
-// release-closed-vs-Stop-returned window (three codex rounds). No blocking wait ⇒ no hang either.
+// §5-1: the RF fence is the SOLE teardown until its Stop RETURNS. Two mechanisms combine for
+// deterministic coverage (four codex rounds): the fence is HELD BLOCKED inside Stop under test control
+// (so throughout its execution bridge's outcome is un-recorded — Result stays Pending), AND every
+// other node's Stop asserts the fence's outcome is ALREADY RECORDED (==Drained). The orchestrator
+// records the fence result only after its Stop returns and before launching any non-fence Stop, so a
+// correct sequential shutdown passes while an impl that overlaps a non-fence Stop with the
+// still-blocked fence reads Pending and fails — no snapshot race, no release-vs-return window. A
+// bounded select on entry avoids hanging if the fence is skipped.
 func TestAcceptance_RFFenceIsSole(t *testing.T) {
 	rec := &hookRec{}
 	m := daemonAdapters(rec)
 	var o *Orchestrator
-	m["bridge"].Stop = func(context.Context) error { rec.add("stop:bridge"); return nil }
+	fenceEntered := make(chan struct{})
+	release := make(chan struct{})
+	m["bridge"].Stop = func(context.Context) error {
+		rec.add("stop:bridge")
+		close(fenceEntered)
+		<-release // held executing — bridge's result stays Pending until released
+		return nil
+	}
 	for _, node := range daemonGraph() {
 		if node.Name == "bridge" {
 			continue
@@ -154,14 +163,24 @@ func TestAcceptance_RFFenceIsSole(t *testing.T) {
 		n := node.Name
 		m[n].Stop = func(context.Context) error {
 			if got := o.Result("bridge"); got != Drained {
-				t.Errorf("%s Stop ran before the RF fence's Stop returned (bridge result=%d)", n, got)
+				t.Errorf("%s Stop ran while the RF fence was still executing (bridge result=%d)", n, got)
 			}
 			rec.add("stop:" + n)
 			return nil
 		}
 	}
 	o = startDaemonOrch(t, m)
-	rep := o.Shutdown(2 * time.Second)
+	done := make(chan ShutdownReport, 1)
+	go func() { done <- o.Shutdown(2 * time.Second) }()
+	select {
+	case <-fenceEntered:
+	case <-done:
+		t.Fatal("Shutdown completed without entering the RF fence")
+	case <-time.After(2 * time.Second):
+		t.Fatal("RF fence was never entered")
+	}
+	close(release)
+	rep := <-done
 	if len(rep.Outcomes) == 0 || rep.Outcomes[0].Node != "bridge" {
 		t.Errorf("Outcomes[0] = %+v, want bridge (fence drains first)", rep.Outcomes)
 	}
