@@ -117,20 +117,22 @@ func (s *Service) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// No acquire (nothing fallible to open); launch resolves the MaxInFlight default + creates the
+	// semaphore + logs. Idempotent once Running; a nil no-op once Stopped (terminal).
+	return s.life.Start(ctx, nil, s.launch)
+}
+
+// launch resolves the MaxInFlight default, creates the concurrency semaphore, and logs the start. It
+// runs INSIDE the supervisor's serialized start transition (once), so the default resolution can't
+// race two concurrent first Starts (codex P2 on 3cb6a9a8) — the old s.mu covered this. The sem is
+// immutable after the Running commit. There is no long-lived worker to Track — refresh goroutines are
+// admitted per Schedule on the refresh lane.
+func (s *Service) launch(_ context.Context, _ *lifecycle.StartScope) {
 	if s.MaxInFlight <= 0 {
 		// Defensive — Initialize sets this, but a caller skipping Initialize and going straight to
 		// Start gets the default rather than a deadlock-on-zero-cap-channel.
 		s.MaxInFlight = DefaultMaxInFlight
 	}
-	// No acquire (nothing fallible to open); launch creates the semaphore + logs. Idempotent once
-	// Running; a nil no-op once Stopped (terminal).
-	return s.life.Start(ctx, nil, s.launch)
-}
-
-// launch creates the concurrency semaphore before the Running commit (immutable thereafter) and logs
-// the start. There is no long-lived worker to Track — refresh goroutines are admitted per Schedule on
-// the refresh lane.
-func (s *Service) launch(_ context.Context, _ *lifecycle.StartScope) {
 	s.sem = make(chan struct{}, s.MaxInFlight)
 	if s.LoggerService != nil {
 		s.LoggerService.InfoWith().

@@ -401,3 +401,23 @@ func TestSchedule_RecoversFnPanic(t *testing.T) {
 		t.Fatal("post-panic schedule did not run — slot leak after panic")
 	}
 }
+
+// codex P2 (3cb6a9a8): the MaxInFlight default must be resolved INSIDE the supervisor's serialized
+// transition, not in Start before it — else two concurrent first Starts on a zero-valued service race
+// on the assignment. Run under -race. Reversion: resolve the default in Start (before life.Start) →
+// -race reports the concurrent write.
+func TestStart_ConcurrentFirstStartsNoDataRace(t *testing.T) {
+	s := &Service{LoggerService: &logging.Service{}} // zero MaxInFlight, no Initialize
+	t.Cleanup(func() { _ = s.Stop() })
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); <-release; _ = s.Start(context.Background()) }()
+	}
+	close(release) // both call Start simultaneously
+	wg.Wait()
+	if s.MaxInFlight != DefaultMaxInFlight {
+		t.Errorf("MaxInFlight = %d, want %d (default resolved in the serialized transition)", s.MaxInFlight, DefaultMaxInFlight)
+	}
+}
