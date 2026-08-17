@@ -334,6 +334,68 @@ func TestStart_RollbackStuckStopIsBounded(t *testing.T) {
 	}
 }
 
+// codex P1 (bf9488cd): when a rollback teardown times out (abandoned, still running), the unwind
+// must HALT — launching a prerequisite's Stop while the dependent's abandoned Stop is still using its
+// resources is a reverse-order violation (race / data loss). Chain base ← mid ← boom: boom's Start
+// fails; mid (Running) is rolled back but its Stop hangs; once the budget is cancelled, base's Stop
+// (mid's prerequisite) must NOT be LAUNCHED at all. base.Stop signals via a channel so the launch is
+// observed deterministically (not a raced counter). Reversion: drop the break-on-timeout → base.Stop
+// is launched under the still-running mid and baseStopLaunched closes.
+func TestStart_RollbackHaltsOnTimeout_PreservesReverseOrder(t *testing.T) {
+	rec := &hookRec{}
+	base, mid, boom := newProbe(rec, "base"), newProbe(rec, "mid"), newProbe(rec, "boom")
+	boom.startErr = errors.New("boom start fails")
+
+	midStarted := make(chan struct{})
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	am := mid.adapter()
+	am.Stop = func(context.Context) error { close(midStarted); <-block; return nil } // hangs, ignores ctx
+
+	baseStopLaunched := make(chan struct{})
+	ab := base.adapter()
+	ab.Stop = func(context.Context) error { close(baseStopLaunched); return nil }
+
+	c := iocdi.New()
+	for _, n := range []iocdi.Node{
+		{Name: "base"},
+		{Name: "mid", StartAfter: []string{"base"}},
+		{Name: "boom", StartAfter: []string{"mid"}},
+	} {
+		if err := c.RegisterNode(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := New(c)
+	for _, a := range []Adapter{ab, am, boom.adapter()} {
+		if err := o.Register(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- o.Start(ctx) }()
+	<-midStarted // mid's Stop is now in progress (hung)
+	cancel()     // expire the budget while mid is mid-teardown
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Start should fail (boom's Start errors)")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Start hung: rollback did not halt after a timed-out teardown")
+	}
+	// The reverse-order safety invariant: base (mid's prerequisite) must not be torn down while mid's
+	// abandoned Stop still runs. Under the bug base.Stop is launched (its goroutine closes the channel
+	// within µs); the halt fix never launches it, so the channel stays open for the full window.
+	select {
+	case <-baseStopLaunched:
+		t.Error("prerequisite base's Stop was launched after a dependent's Stop timed out (reverse-order violation)")
+	case <-time.After(time.Second):
+	}
+}
+
 // AC-S5: Start claims init ownership before any initializer — a Built container is refused with
 // nothing initialized; and after Start, Build() is refused.
 func TestStart_RefusesBuiltContainer_AndClaimsAfterwards(t *testing.T) {

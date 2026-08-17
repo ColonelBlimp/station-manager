@@ -107,16 +107,24 @@ func (o *Orchestrator) rollback(ctx context.Context, advanced []string) {
 	for i := len(advanced) - 1; i >= 0; i-- {
 		name := advanced[i]
 		a := o.adapters[name]
+		var timedOut bool
 		switch o.getMilestone(name) {
 		case MilestoneRunning:
 			if a.Stop != nil {
-				_, _ = runBounded(ctx, a.Stop)
+				_, timedOut = runBounded(ctx, a.Stop)
 			}
 		case MilestoneInitialized:
 			if a.Rollback != nil {
-				_, _ = runBounded(ctx, func(context.Context) error { return a.Rollback(MilestoneInitialized) })
+				_, timedOut = runBounded(ctx, func(context.Context) error { return a.Rollback(MilestoneInitialized) })
 			}
 		}
 		o.setMilestone(name, MilestoneNone)
+		if timedOut {
+			// The budget is spent and THIS node's teardown was abandoned (still running). Launching a
+			// PREREQUISITE's teardown now would tear down resources the abandoned dependent may still be
+			// using — a reverse-order violation. Halt the unwind; the exiting process reclaims the rest
+			// (codex P1 on bf9488cd).
+			return
+		}
 	}
 }
