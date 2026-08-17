@@ -293,6 +293,38 @@ func TestRegister_RechecksWiredUnderLock(t *testing.T) {
 	}
 }
 
+// ADR 0070 §4.0: the orchestrator claims init ownership via BeginOrchestratorInit so a single
+// container is never initialized by BOTH Build() and the orchestrator. Ownership is durable — once
+// either owns, the other is refused forever. Reversion: make BeginOrchestratorInit return nil
+// without claiming → Build after it succeeds (double-owner).
+func TestBuild_RefusedAfterBeginOrchestratorInit(t *testing.T) {
+	c := registerTracker(t)
+	if err := c.BeginOrchestratorInit(); err != nil {
+		t.Fatalf("BeginOrchestratorInit: %v", err)
+	}
+	if err := c.Build(); !errors.Is(err, ErrAlreadyInitialized) {
+		t.Errorf("Build after BeginOrchestratorInit err = %v, want ErrAlreadyInitialized", err)
+	}
+	if c.built.Load() {
+		t.Error("Build initialized a container the orchestrator owns")
+	}
+	// Idempotent for the SAME owner: a second claim by the orchestrator is fine (a retried Start).
+	if err := c.BeginOrchestratorInit(); err != nil {
+		t.Errorf("second BeginOrchestratorInit err = %v, want nil (same-owner idempotent)", err)
+	}
+}
+
+// The mirror: once Build() owns init, the orchestrator is refused. Reversion: as above.
+func TestBeginOrchestratorInit_RefusedAfterBuild(t *testing.T) {
+	c := registerTracker(t)
+	if err := c.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := c.BeginOrchestratorInit(); !errors.Is(err, ErrAlreadyInitialized) {
+		t.Errorf("BeginOrchestratorInit after Build err = %v, want ErrAlreadyInitialized", err)
+	}
+}
+
 // AC-5: Wire then Build then Build initializes exactly once.
 func TestWireThenBuild_InitializesExactlyOnce(t *testing.T) {
 	c := registerTracker(t)

@@ -82,6 +82,19 @@ func (c *Container) claimInitOwner(who initOwner) bool {
 	return c.initOwner.Load() == int32(who)
 }
 
+// BeginOrchestratorInit claims initialization ownership for the lifecycle orchestrator (ADR 0070
+// §4.0). The orchestrator MUST call it before driving any Initialize, so a single container is
+// never initialized by BOTH Build() and the orchestrator. Ownership is durable: once the
+// orchestrator owns init, Build() is refused forever (and vice versa). Idempotent for the
+// orchestrator — a same-owner re-claim (e.g. a retried Start) succeeds; returns
+// ErrAlreadyInitialized only if Build() already owns initialization.
+func (c *Container) BeginOrchestratorInit() error {
+	if !c.claimInitOwner(ownerOrchestrator) {
+		return ErrAlreadyInitialized
+	}
+	return nil
+}
+
 // registrationClosed reports whether new beans may no longer be registered: once the container is
 // wired, built, or its lifecycle plan is frozen, the DI graph is final. Checked both on the
 // fast-path and (the load-bearing one) under regMu, since Wire/Build/Plan set these flags while
