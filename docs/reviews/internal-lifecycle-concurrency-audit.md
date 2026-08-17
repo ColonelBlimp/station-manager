@@ -296,6 +296,35 @@ the service and assert prompt return, transaction rollback, no goroutine remaini
 and an honest degraded/unknown status rather than zero counts. Coordinate the result
 shape with EH-4 so the two fixes do not create competing status designs.
 
+> ✅ **FIXED (committed on main).** Split into two halves plus a scope decision
+> (operator rulings 2026-08-17):
+>
+> - **Status request-context + aggregate deadline (`219a7c98`).** `StatusContext(ctx)`
+>   threads the request context through the four `fill*` aggregates and bounds the whole
+>   snapshot by ONE deadline (`statusAggregateTimeout`, 3 s); `Status()` delegates via a
+>   background context. A cancelled/timed-out read folds into the EH-4 shape already built —
+>   DB-derived groups report unknown (nil) + `degraded`, never a plausible zero — so the two
+>   fixes share one status design. Three review fixes hardened the health-tracker edge so a
+>   client disconnect is not treated as DB degradation, a genuine failure co-occurring with a
+>   disconnect is not masked, and a cancellation-only poll does not falsely recover
+>   (`50bacd73`, `7244e2d1`, `f65961f9`).
+> - **Sync DB-op context (`ee9d2d79`).** The sync loop already held a Stop-cancellable context
+>   (`loopCtx`, cancelled when `s.quit` closes) but it reached only the HTTP request; it is now
+>   threaded through `selectKind`/`loadSyncRow`/`markOffered`/`applyOutcomes` via
+>   `QueryContext`/`BeginTx`/`ExecContext`, so Stop interrupts an in-flight sync statement and a
+>   cancelled write rolls back, leaving the row retriable. (modernc.org/sqlite v1.48.1
+>   interrupts a running statement on ctx cancel — `interruptOnDone`, sqlite.go:78.)
+> - **Writer + retention DB ops kept NON-contextual, by design.** They run on the writer
+>   goroutine that LC-3 guarantees *drains* at shutdown; a context cancelled at Stop would
+>   either interrupt that drain (dropping buffered slots — regressing LC-3's losslessness) or,
+>   cancelled after the drain, do nothing. Their shutdown bound is deliberately owned by LC-2's
+>   aggregate budget + systemd's `TimeoutStopSec=20s`, not a per-op context — recorded here and
+>   in an `evidence.metadataBytes` comment so it reads as a decision, not an omission.
+>
+> All full-TDD with reversion proofs (AC-1 cancellation→unknown, AC-2 aggregate-deadline bound,
+> Half-B rollback of markOffered/applyOutcomes/loadSyncRow); EH-4 result-shape coordination
+> preserved.
+
 ## LC-5 — lifecycle state machines should be standardized (P3)
 
 Several packages are correct under the daemon's current ordered, single-use calls but
