@@ -482,9 +482,6 @@ func (s *Service) Stop() {
 
 func (s *Service) teardown() {
 	defer close(s.stopDone)
-	if teardownStallForTest != nil {
-		teardownStallForTest()
-	}
 	// Seal admission under s.mu: past this point CaptureSlot refuses (it admits only
 	// under evRunning, taking the SAME mutex), so no new producer can be admitted.
 	s.mu.Lock()
@@ -493,6 +490,9 @@ func (s *Service) teardown() {
 	s.mu.Unlock()
 	if !running {
 		return // Stop-before-Start / never-ran: terminal, nothing was opened to drain or close.
+	}
+	if teardownStallForTest != nil {
+		teardownStallForTest()
 	}
 	// Wait for producers admitted BEFORE the seal to finish their non-blocking send, so
 	// every accepted slot is already in the buffer before the writer is told to drain.
@@ -595,6 +595,12 @@ func (s *Service) Status() Status {
 	db := s.db
 	started := s.life == evRunning
 	if !started || db == nil {
+		// Not running — idle before Start, or stopped/stopping once teardown sealed
+		// admission. The operator-visible state must flip WITH the cutoff: CaptureSlot
+		// is already refusing, so reporting the pre-seal "capturing"/"drop_new" (which
+		// s.state still holds until the drain finishes) would claim capture is active
+		// after it stopped accepting slots (LC-3 review, codex P2 on bcc5b7cf).
+		st.State = StateDisabled
 		st.Profiles = &ProfilesStatus{State: ProfilesDisabled}
 		st.Sync = &SyncStatus{Enabled: false}
 		s.mu.Unlock()

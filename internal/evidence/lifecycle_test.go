@@ -179,6 +179,31 @@ func TestStop_BeforeStartIsTerminal(t *testing.T) {
 		func() bool { return runtime.NumGoroutine() <= base })
 }
 
+// LC-3 review (codex P2 on bcc5b7cf): the operator-visible capture state must flip WITH the
+// admission cutoff. Once teardown has sealed admission (CaptureSlot refuses), Status must not
+// still report "capturing" from the stale s.state that the draining writer holds until close.
+// The seam holds teardown just past the seal, before the archive closes.
+func TestStatus_ReportsDisabledOnceAdmissionIsSealed(t *testing.T) {
+	cfg := testConfig(t, true)
+	s := newRunning(t, cfg)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	teardownStallForTest = func() { close(entered); <-release }
+	defer func() { teardownStallForTest = nil }()
+
+	stopped := make(chan struct{})
+	go func() { s.Stop(); close(stopped) }()
+	<-entered // teardown has sealed admission and is stalled before the archive closes
+
+	if st := s.Status(); st.State != StateDisabled {
+		t.Errorf("Status.State = %q while admission is sealed, want %q — capture reported active after the cutoff", st.State, StateDisabled)
+	}
+
+	close(release)
+	<-stopped
+}
+
 // AC-4: many producers racing Stop — race-free, panic-free, lossless. Run under -race (CI does).
 // The trailing synchronous Stop is the completion barrier: it blocks until the teardown owner
 // finished, so pending is read only after every accepted slot has drained.
