@@ -6,8 +6,10 @@ package evidence
 // AFTER the writer's final drain check (silently lost, pending leaked); a second concurrent
 // Stop caller returned before the first had drained and closed the archive; and a Start after
 // Stop re-opened the archive that the latched Stop would then never tear down. These tests pin
-// the fix — one mutex-guarded lifecycle (idle→running→stopped), an in-flight producer group,
-// and stopOnce/stopDone (the internal/bridge + internal/ft8 pattern).
+// the observable behaviour, now realised by the ADR-0070 Supervisor (internal/lifecycle): the
+// writer MustDrain lane (the producer cutoff — CaptureSlot's Admit/done), the supervisor's
+// completion barrier, and its terminal phase (idle→running→stopping→stopped). The executable
+// tests were preserved UNCHANGED across that migration; only these comments were updated.
 //
 // Acceptance criteria (operator-observable; drafted before the mechanism, operator rulings
 // 2026-08-17):
@@ -30,15 +32,14 @@ package evidence
 //         finding notes LC-3 uses race-free primitives, so -race alone need not flag it; the
 //         teeth here are no-panic + no-deadlock + pending == 0.)
 //
-// Reversion proofs (each reverts ONE mechanism, keeping the seams, and must go RED for its own
-// reason — verified 2026-08-17):
-//   AC-1: delete teardown's `s.producers.Wait()` → Stop completes while the admitted slot is
-//         still mid-enqueue; the window observes the early return.
-//   AC-2: replace the stopOnce/stopDone barrier with the pre-LC-3 `closed.Swap(true)` early
-//         return → non-owner callers return before the owner logs the summary; the window sees
-//         an early return.
-//   AC-3: relax Start's guard from `s.life != evIdle` back to `s.life == evRunning` → Start
-//         after Stop re-opens the archive; the file appears.
+// Reversion proofs — after the Supervisor migration the mechanisms live where the Supervisor puts
+// them (re-verified 2026-08-17):
+//   AC-1: fire CaptureSlot's writer-lane `done()` BEFORE the send (not covering it) → the
+//         supervisor's writer-lane wait completes while the admitted slot is still mid-enqueue, so
+//         Stop returns early; the window observes it.
+//   AC-2 / AC-3: the completion barrier and the terminal-phase (Start-refuses-once-Stopped) guard
+//         are now the SUPERVISOR's, reversion-proved in internal/lifecycle/supervisor_test.go;
+//         these evidence tests ride them unchanged (the migration preserved the behaviour).
 
 import (
 	"os"
@@ -98,7 +99,7 @@ func TestCaptureSlot_AdmittedSlotSurvivesConcurrentStop(t *testing.T) {
 func TestCaptureSlot_OfferedAfterStopIsCleanlyRefused(t *testing.T) {
 	cfg := testConfig(t, true)
 	s := newRunning(t, cfg)
-	s.Stop() // seals evStopped, drains, closes
+	s.Stop() // seals the writer lane (phase→Stopping), drains, closes
 
 	before := s.pending.Load()
 	s.CaptureSlot(richSlot(slotAt(0))) // must be a no-op

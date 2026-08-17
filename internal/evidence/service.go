@@ -15,6 +15,7 @@ import (
 	goft8 "github.com/ColonelBlimp/go-ft8/ft8"
 	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/lifecycle"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/securehttp"
@@ -250,20 +251,6 @@ type lossAccum struct {
 	dialMixed    bool
 }
 
-// evState is the evidence service's single mutex-guarded lifecycle state (LC-3).
-// It replaces the split started/closed flags so producer admission and the Stop
-// seal share ONE authority: CaptureSlot admits only under evRunning, Stop seals to
-// evStopped under the same mutex, and Start opens the archive only from evIdle — a
-// stopped service is terminal, so Start-after-Stop must never re-open it (which the
-// closed-latched Stop would then never tear down: a file + goroutine leak).
-type evState int
-
-const (
-	evIdle    evState = iota // constructed; Start may open the archive
-	evRunning                // Start opened the archive; producers admitted
-	evStopped                // Stop ran; terminal — producers refused, Start refused
-)
-
 // Service owns evidence.db and its single bounded writer goroutine.
 type Service struct {
 	cfg          Config
@@ -275,24 +262,26 @@ type Service struct {
 	quit    chan struct{}
 	pending atomic.Int64 // enqueued-but-unprocessed slots; drain observability
 
-	// stopOnce + stopDone give Stop the project's completion-barrier contract (LC-3):
-	// the first caller runs teardown and closes stopDone; concurrent callers block in
-	// stopOnce.Do until it finishes, so "Stop returned, therefore stopped" holds for
-	// every caller (matches internal/bridge + internal/ft8). producers counts in-flight
-	// CaptureSlot admissions so Stop can wait for every accepted send to land in the
-	// buffer BEFORE signalling the writer to drain — the atomic producer cutoff.
-	stopOnce  sync.Once
-	stopDone  chan struct{}
-	producers sync.WaitGroup
+	// life is the ADR-0070 Supervisor — the single lifecycle authority (replaces the old evState +
+	// stopOnce/stopDone barrier + producers cutoff). Its Phase drives admission and the
+	// operator-visible state; its Stop runs teardown exactly once and returns the same error to every
+	// caller (LC-3's completion barrier). Lanes:
+	//   writer   — MustDrain — tracks CaptureSlot HANDOFFS (the producer cutoff), NOT the writer
+	//     goroutine; Stop waits every admitted handoff into the buffer before teardown drains it.
+	//   syncLane — Cancellable — the sync worker; Stop cancels the supervisor context (interrupting
+	//     in-flight sync DB/HTTP, LC-4) then waits it out.
+	life     *lifecycle.Supervisor
+	writer   *lifecycle.Lane
+	syncLane *lifecycle.Lane
 
-	// wg + cancel own the lifecycle of the three long-lived worker goroutines
-	// (writer, queue-loss monitor, sync loop), each launched under safego.GoTracked
-	// with respawn=true (L9): a panic is logged via onPanic and the worker respawns.
-	// wg.Done fires only when a worker PERMANENTLY exits (a clean return, never a
-	// respawn cycle), so Stop's wg.Wait means "all workers finished". cancel breaks a
-	// respawn cooldown at shutdown; the loops themselves exit on quit.
-	wg     sync.WaitGroup
-	cancel context.CancelFunc
+	// wg owns the writer + queue-loss goroutines: they are TEARDOWN-signalled (exit on quit) and
+	// waited INSIDE teardown, not lane-tracked (a lane Stop-waits BEFORE teardown, and teardown is
+	// what closes quit — a lane would deadlock). They must keep draining until teardown, so they do
+	// NOT bind to the supervisor context (cancelled at the seal); workerCancel is a SEPARATE
+	// teardown-owned context that only breaks their respawn cooldown, cancelled in teardown after
+	// quit closes. Both run under safego with respawn=true (L9).
+	wg           sync.WaitGroup
+	workerCancel context.CancelFunc
 
 	// retHealth (L2) tracks whether the retention MEASUREMENT layer is failing, so
 	// a swallowed measurement/compaction error becomes an observable degraded
@@ -319,7 +308,6 @@ type Service struct {
 	queueDropped atomic.Int64
 
 	mu        sync.Mutex
-	life      evState   // idle → running → stopped (terminal); the single lifecycle authority (LC-3)
 	startedAt time.Time // set in Start; backs run_duration_seconds in the stop summary (H2)
 	state     string
 	dropped   int64
@@ -349,14 +337,16 @@ func New(cfg Config, log logging.Logger) *Service {
 	if log == nil {
 		log = logging.Noop()
 	}
+	l := lifecycle.New()
 	return &Service{
 		cfg:          cfg,
 		log:          log,
 		decoderBuild: goft8Build(),
 		state:        StateDisabled,
 		quit:         make(chan struct{}),
-		stopDone:     make(chan struct{}),
-		// life is the zero value evIdle: constructed, not yet started.
+		life:         l,
+		writer:       l.RegisterLane("writer", lifecycle.MustDrain),
+		syncLane:     l.RegisterLane("sync", lifecycle.Cancellable),
 	}
 }
 
@@ -395,23 +385,27 @@ func (s *Service) Initialize() error {
 // Start opens the archive and spawns the writer — only when capture is
 // enabled: a disabled service creates no file at all (EV1; §8 consent).
 func (s *Service) Start() error {
-	const op errors.Op = "evidence.Service.Start"
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Open only from evIdle: evRunning is an idempotent no-op, and evStopped is
-	// TERMINAL — a Start after Stop must open nothing (AC-3). Silent nil is the
-	// project's idempotent-lifecycle convention (operator ruling 2026-08-17).
-	if !s.cfg.Capture || s.life != evIdle {
-		return nil
+	if !s.cfg.Capture {
+		return nil // disabled: do NOT start the supervisor — a config-disabled service must never
+		// reach Running with no database (EV1; §8 consent). A no-op, never a file.
 	}
+	// The supervisor owns the transition: acquire (fallible; admission closed) → launch (spawn
+	// workers) → commit Running. Idempotent once Running; a nil no-op once Stopped (terminal —
+	// Start-after-Stop must open nothing, AC-3).
+	return s.life.Start(context.Background(), s.acquire, s.launch)
+}
 
-	// Pragmas ride the DSN (package-review P2, 2026-08-10): busy_timeout
-	// and synchronous are CONNECTION-scoped, and the writer, sync loop and
-	// status readers each draw pooled connections — a one-time Exec reaches
-	// exactly one of them, leaving the rest at busy_timeout 0 and failing
-	// concurrent writes with SQLITE_BUSY. The modernc driver applies
-	// _pragma parameters to every connection it opens (pinned by
-	// TestPragmas_ApplyToEveryPooledConnection).
+// acquire opens + migrates the archive and publishes the run's data (fallible; admission still
+// closed). On any failure it closes the half-open DB and returns — the supervisor stays Idle, Start
+// retryable. Profile activation is FAIL-SOFT (O5 class-1): a reconcile failure degrades resolution
+// (rows carry profile_error) but capture still starts.
+func (s *Service) acquire(_ context.Context) error {
+	const op errors.Op = "evidence.Service.Start"
+	// Pragmas ride the DSN (package-review P2, 2026-08-10): busy_timeout and synchronous are
+	// CONNECTION-scoped, and the writer, sync loop and status readers each draw pooled connections —
+	// a one-time Exec reaches exactly one of them, leaving the rest at busy_timeout 0 and failing
+	// concurrent writes with SQLITE_BUSY. The modernc driver applies _pragma parameters to every
+	// connection it opens (pinned by TestPragmas_ApplyToEveryPooledConnection).
 	db, err := sql.Open("sqlite",
 		"file:"+s.cfg.Path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(2000)&_pragma=synchronous(NORMAL)")
 	if err != nil {
@@ -425,13 +419,15 @@ func (s *Service) Start() error {
 		_ = db.Close()
 		return errors.New(op).WithErr(err).WithMsg("create/migrate evidence schema")
 	}
-
+	// Publish the run's mu-guarded data under s.mu (a status poll snapshots it there). Admission is
+	// still closed — phase stays Idle until the commit — so no CaptureSlot can race this.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.db = db
-	// §4.2 activation: one transaction, before the writer goroutine exists.
-	// Failure is the O5 class-1 posture — capture continues, resolution is
-	// globally degraded (rows carry profile_error), the stale prior mapping
-	// is never used — and PR7's one default-visible record per transition
-	// into degraded is THIS line; nothing else may log the state.
+	// §4.2 activation: one transaction, before the writer goroutine exists. Failure is the O5 class-1
+	// posture — capture continues, resolution is globally degraded (rows carry profile_error), the
+	// stale prior mapping is never used — and PR7's one default-visible record per transition into
+	// degraded is THIS line; nothing else may log the state.
 	s.profReason = ""
 	if err := s.reconcileProfiles(time.Now()); err != nil {
 		s.profState = ProfilesDegraded
@@ -441,7 +437,6 @@ func (s *Service) Start() error {
 			Msg("evidence: profile activation failed; profile resolution degraded (new rows carry profile_error)")
 	}
 	s.state = StateCapturing
-	s.life = evRunning
 	s.startedAt = time.Now()
 	s.retHealth = newRetentionHealth(s.log, s.cfg.Path, retentionMeasurementHeartbeat, time.Now)
 	s.statusHealth = newStatusQueryHealth(s.log)
@@ -450,24 +445,30 @@ func (s *Service) Start() error {
 		"evidence: writer queue recovered",
 		lossReasonQueueFull, time.Now)
 	s.ch = make(chan SlotCapture, writerQueueSize)
-	// runCtx cancels at Stop to break any respawn cooldown; the loops themselves exit
-	// on quit. safego.GoTracked does wg.Add(1) synchronously here — under s.mu, before
-	// Start returns — so Stop (which reads started under s.mu, then waits) can never
-	// pass wg.Wait with a zero counter (safego caller contract).
-	runCtx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-	safego.GoTracked(runCtx, "evidence.writer", s.onPanic, s.writerLoop, true, &s.wg)
-	// Baseline captured synchronously (still under s.mu, so queueDropped is 0) — see
-	// runQueueLossMonitor: Load()ing inside the goroutine would race a post-Start drop
-	// burst and baseline it away. Reused across respawns (a stale baseline just re-reports
-	// drops since Start, which is harmless; a fresh Load would re-introduce that race).
+	return nil
+}
+
+// launch spawns the workers (infallible; admission opens at the commit right after). writer +
+// queueloss are TEARDOWN-signalled (exit on quit) ⇒ service wg, waited inside teardown; they use a
+// SEPARATE teardown-owned context for their respawn cooldown, NOT the supervisor ctx — the writer
+// must keep draining until teardown and its DB writes are non-cancellable during shutdown (LC-4). The
+// sync worker is CANCELLABLE ⇒ it binds to the supervisor ctx (cancelled at the seal) and is
+// lane-tracked; its completion is signalled through the lane's done via safego.GoCompletion, which
+// surrounds the whole respawn loop so a panic+respawn never signals completion early.
+func (s *Service) launch(ctx context.Context, sc *lifecycle.StartScope) {
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	s.workerCancel = workerCancel
+	safego.GoTracked(workerCtx, "evidence.writer", s.onPanic, s.writerLoop, true, &s.wg)
+	// Baseline captured before the monitor goroutine (admission still closed, so queueDropped is 0):
+	// Load()ing inside the goroutine would race a post-commit drop burst and baseline it away.
 	lossBaseline := s.queueDropped.Load()
-	safego.GoTracked(runCtx, "evidence.queueloss", s.onPanic,
+	safego.GoTracked(workerCtx, "evidence.queueloss", s.onPanic,
 		func() { s.runQueueLossMonitor(lossBaseline) }, true, &s.wg)
 	if s.cfg.Sync {
 		s.syncCh = make(chan struct{}, 1)
 		s.syncClient = securehttp.NewClient(syncHTTPTimeout)
-		safego.GoTracked(runCtx, "evidence.sync", s.onPanic, s.syncLoop, true, &s.wg)
+		done := sc.Track(s.syncLane)
+		safego.GoCompletion(ctx, "evidence.sync", s.onPanic, func() { s.syncLoop(ctx) }, true, done)
 	}
 	s.log.InfoWith().
 		Str("path", s.cfg.Path).
@@ -475,49 +476,38 @@ func (s *Service) Start() error {
 		Int64("watermark_bytes", s.cfg.CapBytes-headroomBytes).
 		Str("decoder_build", s.decoderBuild).
 		Msg("evidence: capture started")
-	return nil
 }
 
-// Stop drains the writer, persists any accumulated loss best-effort, and closes
-// the archive. Idempotent under sequential AND concurrent calls: the first caller
-// runs the teardown; every other caller (racing or sequential) blocks in stopOnce
-// until it finishes, so "Stop returned, therefore stopped" holds for all of them
-// (LC-3 AC-2). Stop before Start is terminal and opens nothing (AC-3).
+// Stop drains the writer, persists any accumulated loss best-effort, and closes the archive.
+// Idempotent under sequential AND concurrent calls: the supervisor runs teardown exactly once and
+// returns its error to every caller, so "Stop returned, therefore stopped" holds for all of them
+// (LC-3 AC-2). Stop before Start (or after a failed Start) is terminal and tears down nothing (AC-3).
+// The teardown error (an archive-close failure) is DISCARDED: evidence.Stop() is a func() in cmd/smd's
+// teardownDeps, and the failure is already surfaced in the H2 stop summary.
 func (s *Service) Stop() {
-	s.stopOnce.Do(s.teardown)
-	<-s.stopDone
+	_ = s.life.Stop(s.teardown)
 }
 
-func (s *Service) teardown() {
-	defer close(s.stopDone)
-	// Seal admission under s.mu: past this point CaptureSlot refuses (it admits only
-	// under evRunning, taking the SAME mutex), so no new producer can be admitted.
-	s.mu.Lock()
-	running := s.life == evRunning
-	s.life = evStopped
-	s.mu.Unlock()
-	if !running {
-		return // Stop-before-Start / never-ran: terminal, nothing was opened to drain or close.
-	}
+// teardown runs once, AFTER the supervisor sealed admission (CaptureSlot now refuses), cancelled the
+// supervisor context (the sync worker interrupted and was awaited — LC-4), and waited the writer lane
+// (every producer admitted before the seal landed its send — LC-3 AC-1). It signals the
+// writer/queueloss goroutines to exit, drains them, closes the archive, and emits the single H2
+// completion record. Returns the archive-close error (folded into the summary; discarded by Stop).
+func (s *Service) teardown() error {
 	if teardownStallForTest != nil {
 		teardownStallForTest()
 	}
-	// Wait for producers admitted BEFORE the seal to finish their non-blocking send, so
-	// every accepted slot is already in the buffer before the writer is told to drain.
-	// Without this a slot admitted just before the seal could land AFTER the writer's
-	// final empty check and sit unprocessed forever, leaking pending (LC-3 AC-1). No new
-	// Add can occur after the seal, so this cannot block indefinitely.
-	s.producers.Wait()
-	close(s.quit) // the workers observe this and return cleanly (a clean return does
-	s.cancel()    // not respawn); cancel unblocks any worker mid respawn-cooldown.
-	s.wg.Wait()   // all three workers have PERMANENTLY exited.
+	close(s.quit) // writer + queueloss observe this and return cleanly (a clean return never respawns)
+	if s.workerCancel != nil {
+		s.workerCancel() // break any writer/queueloss respawn cooldown (their teardown-owned context)
+	}
+	s.wg.Wait() // writer + queueloss have PERMANENTLY exited (the writer drained s.ch first)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closeLossLocked()
-	// H2: emit ONE shutdown-completion record AFTER the workers/sync have drained and the
-	// archive close has been attempted — so a clean drain is tellable from one that dropped
-	// slots, and the close error carries context instead of being a bare separate line. The
-	// close error is folded into this record (present only on failure, which makes it Error).
+	// H2: emit ONE shutdown-completion record after the workers have drained and the close has been
+	// attempted — a clean drain is tellable from one that dropped slots, and the close error carries
+	// context instead of a bare separate line (Error only on failure).
 	closeErr := s.db.Close()
 	syncState := s.syncState
 	if syncState == "" {
@@ -525,6 +515,7 @@ func (s *Service) teardown() {
 	}
 	s.logStopSummary(s.dropped, s.pending.Load(), syncState, time.Since(s.startedAt), closeErr)
 	s.state = StateDisabled
+	return closeErr
 }
 
 // logStopSummary emits the single evidence shutdown-completion record (H2). Info for a clean
@@ -549,24 +540,23 @@ func (s *Service) logStopSummary(dropped, pending int64, syncState string, runDu
 // into the loss accumulator (backpressure). Admission is decided under s.mu, the
 // same lock Stop seals with, so a slot is never admitted-then-abandoned (LC-3).
 func (s *Service) CaptureSlot(sc SlotCapture) {
-	s.mu.Lock()
-	if s.life != evRunning {
-		// Not running (pre-Start idle, or post-Stop terminal): refuse and DON'T count —
-		// the archive is closed, there is nothing to count into. Admission and the Stop
-		// seal share s.mu, so a slot is EITHER admitted-and-drained OR refused, never
-		// admitted-then-abandoned (LC-3 AC-1).
-		s.mu.Unlock()
+	// writer.Admit is the atomic producer cutoff: ok is true only while the supervisor is Running and
+	// refuses the instant Stop seals the lane — sharing the supervisor mutex the seal takes, so a slot
+	// is EITHER admitted-and-drained OR refused, never admitted-then-abandoned (LC-3 AC-1). A
+	// not-running service (pre-Start idle, or post-Stop terminal) refuses UNCOUNTED — there is no
+	// archive to count into.
+	done, ok := s.writer.Admit()
+	if !ok {
 		return
 	}
-	// Emission-time stamp (O4): resolved here on the caller's goroutine and carried in
-	// the record; the writer never re-derives it.
+	// done covers the WHOLE handoff (stamp + send/accounting): Stop waits the writer lane out before
+	// teardown, so every admitted slot lands in the buffer before the writer is told to drain.
+	defer done()
+	// Emission-time stamp (O4): resolved here on the caller's goroutine and carried in the record; the
+	// writer never re-derives it. profActive is immutable while Running, so the stamp needs only s.mu.
+	s.mu.Lock()
 	s.stampLocked(&sc)
-	// Join the in-flight producer group under the SAME lock that decides admission, so
-	// Stop's seal excludes this add: once sealed, teardown waits out exactly the
-	// producers admitted before it and no more.
-	s.producers.Add(1)
 	s.mu.Unlock()
-	defer s.producers.Done()
 	s.pending.Add(1)
 	if captureEnqueueStallForTest != nil {
 		captureEnqueueStallForTest()
@@ -614,7 +604,11 @@ func (s *Service) StatusContext(ctx context.Context) Status {
 		DroppedSlots:   s.dropped,
 	}
 	db := s.db
-	started := s.life == evRunning
+	// Active/disabled derives from the supervisor phase (the lifecycle authority), read here under
+	// s.mu so it snapshots ATOMICALLY with the data below: once Stop seals (phase→Stopping),
+	// CaptureSlot refuses, so reporting the stale "capturing" state the draining writer still holds
+	// would claim capture is active after the cutoff (LC-3 review, codex P2 on bcc5b7cf).
+	started := s.life.Phase() == lifecycle.Running
 	if !started || db == nil {
 		// Not running — idle before Start, or stopped/stopping once teardown sealed
 		// admission. The operator-visible state must flip WITH the cutoff: CaptureSlot

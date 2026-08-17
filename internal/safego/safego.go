@@ -117,6 +117,20 @@ func GoTracked(ctx context.Context, name string, onPanic PanicHandler, fn func()
 	}()
 }
 
+// GoCompletion is GoTracked whose shutdown accounting is a `done` callback instead of a WaitGroup —
+// for a worker whose completion is tracked by a lifecycle lane (lifecycle.StartScope.Track returns
+// exactly such a done, having ALREADY registered the count synchronously). done is called EXACTLY
+// once, when the goroutine PERMANENTLY exits (normal return, panic with respawn=false, or ctx
+// cancellation during a respawn cooldown) — so, like GoTracked's wg.Done, it surrounds the whole
+// respawn loop and a panic+respawn never prematurely signals completion. The caller registers the
+// count (Track) BEFORE this call, mirroring GoTracked's synchronous wg.Add(1).
+func GoCompletion(ctx context.Context, name string, onPanic PanicHandler, fn func(), respawn bool, done func()) {
+	go func() {
+		defer done()
+		runWithRespawn(ctx, name, onPanic, fn, respawn)
+	}()
+}
+
 // GoTrackedPreAdded runs fn ONCE in a tracked goroutine for a caller that has ALREADY
 // performed wg.Add(1) — the load-bearing pattern for workers that must be counted before
 // any concurrent Stop/Wait can observe the WaitGroup (the bridge RF-safety workers register

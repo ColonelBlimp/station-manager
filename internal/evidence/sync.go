@@ -136,15 +136,11 @@ const (
 	syncInterrupted
 )
 
-// syncLoop is the engine goroutine. Runs only when cfg.Sync is enabled.
-func (s *Service) syncLoop() {
-	loopCtx, cancelLoop := context.WithCancel(context.Background())
-	defer cancelLoop()
-	go func() {
-		<-s.quit
-		cancelLoop() // Stop must not wait out a 30 s HTTP timeout
-	}()
-
+// syncLoop is the engine goroutine (the Cancellable sync lane). Runs only when cfg.Sync is enabled.
+// ctx is the SUPERVISOR context: Stop cancels it at the seal (before waiting this lane), so the loop
+// exits and any in-flight sync DB/HTTP is interrupted (LC-4). It must NOT wait on s.quit — the
+// supervisor waits this lane BEFORE teardown closes quit, so a quit-wait would deadlock.
+func (s *Service) syncLoop(ctx context.Context) {
 	var backoff time.Duration
 	var retryAt time.Time
 	ticker := time.NewTicker(syncBacklogInterval)
@@ -153,7 +149,7 @@ func (s *Service) syncLoop() {
 	for {
 		live := false
 		select {
-		case <-s.quit:
+		case <-ctx.Done():
 			return
 		case <-s.syncCh:
 			live = true
@@ -161,7 +157,7 @@ func (s *Service) syncLoop() {
 		coalesce:
 			for {
 				select {
-				case <-s.quit:
+				case <-ctx.Done():
 					debounce.Stop()
 					return
 				case <-s.syncCh: // the slot's burst folds into one batch
@@ -175,7 +171,7 @@ func (s *Service) syncLoop() {
 			continue // unhealthy channel: even the live lane waits (SY5 is the healthy-channel guarantee)
 		}
 
-		switch s.syncOnce(loopCtx, live) {
+		switch s.syncOnce(ctx, live) {
 		case syncOK, syncIdle:
 			backoff = 0
 			retryAt = time.Time{}

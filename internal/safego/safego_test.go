@@ -355,3 +355,47 @@ func TestGoTrackedPreAdded(t *testing.T) {
 		wg.Wait() // must return — a policy fault must not bypass Done
 	})
 }
+
+// GoCompletion signals PERMANENT exit through a done callback (not a WaitGroup); done fires exactly
+// once, on a clean return, even after intervening panic+respawns (never per-panic).
+func TestGoCompletion_DoneFiresOnceAfterRespawns(t *testing.T) {
+	setCooldownForTest(t, time.Millisecond)
+	var attempts, dones atomic.Int64
+	finished := make(chan struct{})
+	GoCompletion(context.Background(), "test", noopHandler, func() {
+		if attempts.Add(1) < 3 { // panic twice, then return cleanly on the 3rd attempt
+			panic("boom")
+		}
+	}, true, func() { dones.Add(1); close(finished) })
+
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("GoCompletion done never fired")
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Errorf("fn attempts = %d, want 3 (2 panics + 1 clean return)", got)
+	}
+	if got := dones.Load(); got != 1 {
+		t.Errorf("done fired %d times, want exactly 1 (permanent exit, not per-panic)", got)
+	}
+}
+
+// A ctx cancellation during a respawn cooldown is a permanent exit — done fires.
+func TestGoCompletion_DoneFiresOnCtxCancelDuringCooldown(t *testing.T) {
+	setCooldownForTest(t, time.Hour) // long cooldown so cancel, not expiry, ends it
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan struct{})
+	panicked := make(chan struct{})
+	GoCompletion(ctx, "test", func(string, any, []byte) { close(panicked) }, func() {
+		panic("boom") // panics once, then waits out the (long) cooldown
+	}, true, func() { close(finished) })
+
+	<-panicked // it has panicked and is now in the cooldown
+	cancel()   // cancel during cooldown ⇒ permanent exit
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("done did not fire after ctx cancel during cooldown")
+	}
+}
