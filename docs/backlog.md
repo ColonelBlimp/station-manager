@@ -594,7 +594,7 @@ next, and in what order" is answered.
   operator-initiated line is genuinely at issue: a watch-list match, not an
   operator click, would be the thing that STARTS a contact — which is why it sits
   differently from ADR 0059 auto-work (that continues a run the operator already
-  started). See the scope note at the end of this file, CLAUDE.md's FT8 bullet,
+  started). See the scope note at the end of this file, AGENTS.md's FT8 rule,
   and `docs/ft8.md`.
 
 - **FT8 callsign ignore list.** An operator-maintained list of callsigns to
@@ -1040,7 +1040,7 @@ next, and in what order" is answered.
   waterfall, switchable** — not one or the other. Today TX-offset selection is a
   per-slot **data** view: `Ft8OccupancyStrip` lays the passband out horizontally with
   busy bands shaded + daemon-vetted clear offsets as clickable markers (deliberately
-  *not* a render — CLAUDE.md).
+  *not* a render — `internal/ft8/CLAUDE.md`).
 
   **Why the waterfall matters (the load-bearing rationale — operator's insight):**
   SM is, as far as we know, the **only FT8 app that channelises the offset**. On the
@@ -1073,7 +1073,7 @@ next, and in what order" is answered.
      `lib/utils/ft8Spectrum.ts` (`signalProximity`/`offsetFromFraction`, tested). Both
      views write the one `selectedOffset`. The grading is **position-only** (`Ft8Band`
      has no strength — loud-vs-weak needs the waterfall's FFT magnitudes). Docs: `ft8.md`,
-     CLAUDE.md FT8 bullet.
+     `internal/ft8/CLAUDE.md` FT8 guidance.
   2. **The waterfall itself (rich — the continuous view).** Feasibility assessed
      2026-06-26: **the browser render is NOT the bottleneck** and the "JS redraw is
      slow vs C/Go" worry is misplaced *if* done right — Canvas 2D self-blit scroll
@@ -1330,7 +1330,7 @@ next, and in what order" is answered.
   FD-over-FT8 shipped + on-air-validated 2026-06-28 (ADR 0037, both directions), but the
   **Operate-tab message ladder still renders the standard exchange placeholders**
   (`<DX>`/`<GRID>`/`<RST>`), not the FD class+section exchange — so the ladder is wrong
-  for an FD QSO. This is the documented FD remainder set (CLAUDE.md + memory
+  for an FD QSO. This is the documented FD remainder set (`internal/ft8/CLAUDE.md` + memory
   `project_sm_ft8_field_day`): (1) the **FD-aware ladder render**; (2) **FD pile-up
   Ctrl-click** (enqueue an FD caller); and (3) the **config-SPA section dropdown**
   (`ft8.field_day.section`, validated by `goft8.ValidARRLFieldDaySection`). SPA-side for
@@ -1347,7 +1347,8 @@ next, and in what order" is answered.
 
 - **`actions/rigControl` — shift+ctrl freq-step key parity in FT8 (match phone/CW).**
   From dogfood-inbox 2026-07-03, graduated 2026-07-04. In phone/CW the Shift+Ctrl arrow
-  cluster tunes the rig (±100 Hz / ±10 Hz / ±5 kHz band-hop, per CLAUDE.md rig-control);
+  cluster tunes the rig (±100 Hz / ±10 Hz / ±5 kHz band-hop, per
+  `internal/ft8/CLAUDE.md` rig-control guidance);
   the operator wants the same freq-step keys live while an FT8 view is focused. Today those
   bindings are wired for the logging (phone/CW) surface only. Scope: decide whether FT8
   reuses the same `actions/rigControl` handler (routing set_freq/set_freq_b by selected VFO
@@ -1384,7 +1385,7 @@ next, and in what order" is answered.
     `AbortSignal` param exists but is unused.
   - FD callers advertise "Ctrl+click to add to pile-up" in the tooltip, but
     `enqueueCaller` parses with `parseDirectedToMe` only → silent no-op (FD
-    pile-up is listed pending in CLAUDE.md / the parked FD-UI item). Hide the
+    pile-up is listed pending in `internal/ft8/CLAUDE.md` / the parked FD-UI item). Hide the
     affordance until FD pile-up Ctrl-click actually lands.
   - `bearing.ts:105` — bearing rounds *after* normalisation, so 359.97° renders
     `360` instead of `000`. Normalise after rounding.

@@ -6,8 +6,9 @@ frozen record — never edited to reflect current state). It exists to keep the
 set of "sources of truth" small: when docs and code disagree, **the code wins**,
 and only Tier 1 below is expected to track it.
 
-`CLAUDE.md` (the Claude Code working doc — invariants, code style, project
-idioms) links here rather than duplicating this map.
+`AGENTS.md` is the compact, tool-neutral instruction kernel and links here
+rather than duplicating this map. `CLAUDE.md` imports that same file for Claude
+Code compatibility; it is not a second handwritten instruction source.
 
 ---
 
@@ -18,7 +19,7 @@ the code is a bug to fix.
 
 | Doc | Owns |
 |---|---|
-| [`../CLAUDE.md`](../CLAUDE.md) | Agent working doc: load-bearing **invariants**, code style/idioms, project conventions, and the pointer to this map. Read by Claude Code every session; humans welcome. |
+| [`../AGENTS.md`](../AGENTS.md) | Compact agent/contributor kernel: load-bearing **invariants**, safety rules, code/test conventions, and routing to this map. Codex reads it directly; [`CLAUDE.md`](../CLAUDE.md) imports it for Claude Code. |
 | [`session-handoff.md`](session-handoff.md) | **Rolling session state + the active cycle.** Where the repo is now + the 1–3 items in flight *right now* (pulled from the top of `backlog.md`; it does NOT re-rank the queue). Read at session start, update at session end. Keeps ~15 `### Session N` entries; older ones roll to the archive. |
 | [`backlog.md`](backlog.md) | **The definitive ranked worklist** — the one priority-ordered list of every triaged, not-yet-done cross-cutting item. Owns the ranking (Worklist index at the top). "What's next, and in what order" is answered here. Strike/remove when it ships. |
 | [`reviews/ft8-logging-gaps.md`](reviews/ft8-logging-gaps.md) | **TRANSIENT — delete when shipped.** The 10-finding `internal/ft8` logging audit (2026-08-01), split out at the operator's request; `backlog.md` still owns the ranking and carries a pointer line to it. A satellite of the SHIP GATE log-coverage entry, not a second worklist. **Fold into `backlog-archive.md` and delete this file once the findings ship** — two open lists is exactly the drift this map exists to prevent. |

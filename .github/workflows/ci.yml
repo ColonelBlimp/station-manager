@@ -77,6 +77,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Agent instruction context budget
+        run: bash scripts/check-agent-context.sh
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

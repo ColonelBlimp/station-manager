@@ -341,6 +341,11 @@ tasks:
     cmds:
       - go mod tidy
 
+  docs:agent-context:
+    desc: Check the root agent-instruction budget and Claude compatibility shim
+    cmds:
+      - bash scripts/check-agent-context.sh
+
   ci:lint:
     desc: |
       Static analysis of .github/workflows/*.yml via actionlint —
@@ -371,7 +376,8 @@ tasks:
       "releasability" CI job runs, for ALL THREE gated SPAs (config,
       logbook, app): lint / prettier format / type-check / test / build
       each, then the Go gate (gofmt, vet, golangci-lint metrics, race
-      tests, daemon embed-build). Answers "would CI pass right now?"
+      tests, daemon embed-build), plus the agent-context budget. Answers
+      "would CI pass right now?"
       without pushing. Set SKIP_NPM_CI=1 to reuse existing node_modules
       during tight iteration (~30s saved across the three SPAs).
     cmds:

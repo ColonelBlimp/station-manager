@@ -43,6 +43,9 @@ note() {
     printf '%s%s%s\n' "$DIM" "$1" "$RESET"
 }
 
+step "Docs: agent instruction context budget"
+bash scripts/check-agent-context.sh
+
 # ───────────────────────────────────────────────────────────────────
 # SPA gate — run before the Go gate so the daemon embed sees a fresh
 # dist/ for EVERY embedded SPA when the Go build step runs.

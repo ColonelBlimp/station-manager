@@ -6,7 +6,7 @@ This is the developer setup for the v2 daemon (`main` branch). It covers a
 The instructions are written for **Fedora** (the dogfood/development host),
 with the equivalent package names noted for Debian/Ubuntu where they differ.
 For project conventions, invariants, and the documentation map, read
-[`CLAUDE.md`](CLAUDE.md) and [`docs/README.md`](docs/README.md) first.
+[`AGENTS.md`](AGENTS.md) and [`docs/README.md`](docs/README.md) first.
 
 > Developing v1 instead? v1 (the last released Wails app, still used for
 > day-to-day operating) lives on its own branch: `git checkout v1 && cat
@@ -305,7 +305,7 @@ don't care about FT8, the static build needs no gcc and no audio libraries.
 
 ## 6. Where the durable context lives
 
-- [`CLAUDE.md`](CLAUDE.md) — conventions, idioms, load-bearing invariants.
+- [`AGENTS.md`](AGENTS.md) — conventions, idioms, load-bearing invariants.
   Read first.
 - [`docs/README.md`](docs/README.md) — the authoritative documentation map
   (which docs are live vs. historical).
