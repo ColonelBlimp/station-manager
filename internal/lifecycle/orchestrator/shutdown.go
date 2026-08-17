@@ -34,13 +34,15 @@ func (o *Orchestrator) Shutdown(budget time.Duration) ShutdownReport {
 	o.transitionMu.Lock()
 	defer o.transitionMu.Unlock()
 	if o.shutdownDone {
-		return o.report // idempotent — same settled report, no re-run
+		return cloneReport(o.report) // idempotent — a defensive copy of the settled report, no re-run
+	}
+	if !o.started {
+		// Never started, or Start failed+rolled back — an empty no-op. It must NOT latch shutdownDone
+		// (codex P1): a Shutdown racing ahead of Start would otherwise cache this empty report and every
+		// later Shutdown — after Start brought subsystems up — would return it, leaving them running.
+		return ShutdownReport{}
 	}
 	o.shutdownDone = true
-	if !o.started {
-		o.report = ShutdownReport{} // never started, or Start failed+rolled back — empty no-op
-		return o.report
-	}
 
 	nodes := o.plan.Nodes() // registration order
 	byName := make(map[string]iocdi.Node, len(nodes))
@@ -140,7 +142,24 @@ func (o *Orchestrator) Shutdown(budget time.Duration) ShutdownReport {
 	}
 
 	o.report = ShutdownReport{Outcomes: outcomes, FirstTimedOut: firstTimedOut}
-	return o.report
+	return cloneReport(o.report)
+}
+
+// cloneReport deep-copies a settled report (the Outcomes slice AND each nested BlockedBy) so a caller
+// mutating a returned report cannot corrupt the cached report or any later idempotent return (codex
+// P2). Matches the Plan's defensive-copy discipline.
+func cloneReport(r ShutdownReport) ShutdownReport {
+	out := ShutdownReport{FirstTimedOut: r.FirstTimedOut}
+	if r.Outcomes != nil {
+		out.Outcomes = make([]NodeOutcome, len(r.Outcomes))
+		for i, oc := range r.Outcomes {
+			out.Outcomes[i] = oc
+			if oc.BlockedBy != nil {
+				out.Outcomes[i].BlockedBy = append([]string(nil), oc.BlockedBy...)
+			}
+		}
+	}
+	return out
 }
 
 // prereqsSettled reports whether every DrainAfter prerequisite of n has a settled result.

@@ -328,6 +328,63 @@ func TestShutdown_ConcurrentCallsRunHooksOnce(t *testing.T) {
 	}
 }
 
+// codex P1 (32ad6113): a Shutdown before Start must NOT latch shutdownDone — otherwise a
+// shutdown-before-start (e.g. a startup/shutdown race) caches an empty report and every LATER
+// Shutdown returns it, leaving a successfully-started daemon (RF-critical included) running. Reversion:
+// latch shutdownDone before the !started check → the post-Start Shutdown returns the cached empty.
+func TestShutdown_BeforeStartDoesNotDisableLaterShutdown(t *testing.T) {
+	rec := &hookRec{}
+	a := newProbe(rec, "a")
+	c := iocdi.New()
+	if err := c.RegisterNode(iocdi.Node{Name: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	o := New(c)
+	if err := o.Register(a.adapter()); err != nil {
+		t.Fatal(err)
+	}
+	if rep := o.Shutdown(time.Second); len(rep.Outcomes) != 0 {
+		t.Fatalf("pre-start Shutdown = %+v, want empty", rep)
+	}
+	if err := o.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	rep := o.Shutdown(time.Second)
+	if len(rep.Outcomes) == 0 || a.stops != 1 {
+		t.Errorf("Shutdown after a pre-start no-op did not tear down: outcomes=%+v a.stops=%d", rep.Outcomes, a.stops)
+	}
+}
+
+// codex P2 (32ad6113): the settled report must be defensively copied, or a caller mutating a returned
+// report corrupts the cache and every later idempotent return. Reversion: return o.report directly →
+// mutating rep1 changes rep2.
+func TestShutdown_ReportIsDefensivelyCopied(t *testing.T) {
+	rec := &hookRec{}
+	a, b := newProbe(rec, "a"), newProbe(rec, "b")
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	aa := a.adapter()
+	aa.Stop = func(context.Context) error { rec.add("stop:a"); <-block; return nil }
+	o := startedOrch(t, []iocdi.Node{
+		{Name: "a"},
+		{Name: "b", DrainAfter: []string{"a"}},
+	}, aa, b.adapter())
+
+	rep1 := o.Shutdown(0) // a TimedOut, b Skipped BlockedBy [a]
+	for i := range rep1.Outcomes {
+		rep1.Outcomes[i].Node = "MUTATED"
+		rep1.Outcomes[i].Result = Drained
+		for j := range rep1.Outcomes[i].BlockedBy {
+			rep1.Outcomes[i].BlockedBy[j] = "MUTATED"
+		}
+	}
+	rep2 := o.Shutdown(0) // idempotent — must be a fresh copy, unaffected by the mutation above
+	ocB, ok := outcomeFor(rep2, "b")
+	if !ok || ocB.Result != Skipped || !reflect.DeepEqual(ocB.BlockedBy, []string{"a"}) {
+		t.Errorf("second report was corrupted by mutating the first: %+v", rep2.Outcomes)
+	}
+}
+
 // AC-D10: Shutdown before a successful Start is an empty no-op.
 func TestShutdown_BeforeStartIsEmptyNoOp(t *testing.T) {
 	// Never started.
