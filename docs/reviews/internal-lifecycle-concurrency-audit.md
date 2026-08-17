@@ -237,6 +237,23 @@ teardown completion. Cover:
 - three concurrent Stop callers, all returning after database close; and
 - Stop-before-Start remaining terminal with no file, goroutine, or open handle.
 
+> ✅ **FIXED (committed on main).** One mutex-guarded lifecycle enum
+> (`evIdle → evRunning → evStopped`) replaces the split `closed`/`started` flags:
+> `CaptureSlot` decides admission and joins an in-flight-producer `WaitGroup`
+> under the SAME lock `Stop` seals with, and `teardown` waits those producers out
+> before signalling the drain — so a slot is never admitted-then-abandoned.
+> `stopOnce` + `stopDone` (the `internal/bridge`/`internal/ft8` pattern) make every
+> concurrent `Stop` caller wait for the teardown owner, and `Start` opens only from
+> `evIdle` (Start-after-Stop is a silent terminal no-op that opens nothing). `Status`
+> derives its reported state from the lifecycle, so it never claims capture is active
+> after admission is sealed. Commits `bcc5b7cf` (cutoff + barrier + terminal, full
+> TDD with reversion proofs — AC-1 in-flight cutoff, AC-2 concurrent barrier, AC-3
+> terminal Start, AC-4 many-producers `-race`) and `becd83c5` (codex-P2:
+> Status-vs-cutoff consistency). `s.ch` is never closed, so no send-on-closed panic
+> surface is introduced. AC-1/AC-2 use a 200 ms absence window (the fix makes the
+> loss interleaving unreachable, so it cannot be forced by seam-synchronisation);
+> each is gated on the target being observably stalled before the window starts.
+
 ## LC-4 — evidence database work lacks cancellation (P2)
 
 The production-only `noctx` pass found 74 database/network calls without context; the
