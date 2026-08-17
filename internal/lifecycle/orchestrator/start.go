@@ -13,8 +13,8 @@ import (
 // nodes. Idempotent after success; terminal after a failed start (no re-Start, which would
 // double-initialize a partially-started graph).
 func (o *Orchestrator) Start(ctx context.Context) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	o.transitionMu.Lock()
+	defer o.transitionMu.Unlock()
 	if o.started {
 		return nil
 	}
@@ -57,10 +57,10 @@ func (o *Orchestrator) Start(ctx context.Context) error {
 	// 4. Latch every node's Active() exactly once; prune the inactive ones (Result = Inactive).
 	for _, n := range nodes {
 		a := o.adapters[n.Name]
-		act := a.Active == nil || a.Active()
+		act := a.Active == nil || a.Active() // Active() called OUTSIDE mu (may query orchestrator state)
 		o.active[n.Name] = act
 		if !act {
-			o.result[n.Name] = Inactive
+			o.setResult(n.Name, Inactive)
 		}
 	}
 
@@ -76,44 +76,47 @@ func (o *Orchestrator) Start(ctx context.Context) error {
 			if ierr := a.Initialize(); ierr != nil {
 				// The failing node never reached Initialized, so it is NOT in `advanced`: Initialize
 				// owns its own partial-state cleanup (matching Supervisor.Start's acquire discipline).
-				o.rollbackLocked(advanced)
+				o.rollback(ctx, advanced)
 				return fmt.Errorf("orchestrator: initialize %q: %w", name, ierr)
 			}
 		}
-		o.milestone[name] = MilestoneInitialized
+		o.setMilestone(name, MilestoneInitialized)
 		advanced = append(advanced, name) // now rollback-eligible via its own Rollback
 
 		if a.Start != nil {
 			if serr := a.Start(ctx); serr != nil {
-				o.rollbackLocked(advanced)
+				o.rollback(ctx, advanced)
 				return fmt.Errorf("orchestrator: start %q: %w", name, serr)
 			}
 		}
-		o.milestone[name] = MilestoneRunning // a real Start, or an auto-promoted nil-Start node
+		o.setMilestone(name, MilestoneRunning) // a real Start, or an auto-promoted nil-Start node
 	}
 
 	o.started = true
 	return nil
 }
 
-// rollbackLocked unwinds the advanced nodes in REVERSE order from their recorded milestone:
-// MilestoneRunning → Stop, MilestoneInitialized → Rollback(MilestoneInitialized). It runs on the
-// already-failing start path (the daemon exits next), so hook errors are best-effort — the actionable
-// error is the start failure Start returns. Caller holds o.mu.
-func (o *Orchestrator) rollbackLocked(advanced []string) {
+// rollback unwinds the advanced nodes in REVERSE order from their recorded milestone:
+// MilestoneRunning → Stop, MilestoneInitialized → Rollback(MilestoneInitialized). Each teardown is
+// bounded by the caller's ctx (runBounded), so a hook that ignores its context cannot wedge Start
+// past ctx's deadline — the abandoned teardown runs on against the exiting process (codex P1 on
+// 19192efa). It runs on the already-failing start path, so hook errors are best-effort: the
+// actionable error is the start failure Start returns. Callbacks run WITHOUT o.mu held (only the
+// short milestone read/write take it). Caller holds transitionMu.
+func (o *Orchestrator) rollback(ctx context.Context, advanced []string) {
 	for i := len(advanced) - 1; i >= 0; i-- {
 		name := advanced[i]
 		a := o.adapters[name]
-		switch o.milestone[name] {
+		switch o.getMilestone(name) {
 		case MilestoneRunning:
 			if a.Stop != nil {
-				_ = a.Stop(context.Background())
+				_, _ = runBounded(ctx, a.Stop)
 			}
 		case MilestoneInitialized:
 			if a.Rollback != nil {
-				_ = a.Rollback(MilestoneInitialized)
+				_, _ = runBounded(ctx, func(context.Context) error { return a.Rollback(MilestoneInitialized) })
 			}
 		}
-		o.milestone[name] = MilestoneNone
+		o.setMilestone(name, MilestoneNone)
 	}
 }

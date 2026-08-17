@@ -81,14 +81,22 @@ type Adapter struct {
 type Orchestrator struct {
 	c *iocdi.Container
 
-	mu             sync.Mutex
+	// transitionMu serializes the lifecycle transitions (Register, Start, Shutdown) and guards the
+	// transition-only state below. It is held for the WHOLE of a transition, including across adapter
+	// callbacks — but adapter callbacks never take it, so a callback may freely query Result/Milestone.
+	transitionMu   sync.Mutex
 	adapters       map[string]Adapter
 	plan           *iocdi.Plan
-	active         map[string]bool      // latched once at Start
-	milestone      map[string]Milestone // highest transition reached per node
-	result         map[string]Result    // shutdown verdict per node
-	startAttempted bool                 // true once Start has begun initializing (terminal — no re-Start)
-	started        bool                 // true after a fully successful Start
+	active         map[string]bool // latched once at Start
+	startAttempted bool            // true once Start has begun initializing (terminal — no re-Start)
+	started        bool            // true after a fully successful Start
+
+	// mu guards ONLY the externally-observable per-node maps. It is held for SHORT critical sections
+	// and NEVER across an adapter callback, so Result/Milestone stay responsive during a transition and
+	// a callback that queries them cannot deadlock on a re-entrant lock (codex P1 on 19192efa).
+	mu        sync.Mutex
+	milestone map[string]Milestone // highest transition reached per node
+	result    map[string]Result    // shutdown verdict per node
 }
 
 // New constructs an orchestrator bound to a container. Register adapters before Start.
@@ -110,8 +118,8 @@ func (o *Orchestrator) Register(a Adapter) error {
 	if id == "" {
 		return fmt.Errorf("orchestrator: adapter has an empty NodeID")
 	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	o.transitionMu.Lock()
+	defer o.transitionMu.Unlock()
 	if o.startAttempted {
 		return fmt.Errorf("orchestrator: Register(%q) after Start", id)
 	}
@@ -121,6 +129,26 @@ func (o *Orchestrator) Register(a Adapter) error {
 	a.NodeID = id
 	o.adapters[id] = a
 	return nil
+}
+
+// setMilestone / setResult / getMilestone are the SHORT mu-guarded accessors for the observable maps.
+// Start and rollback use these instead of holding mu across their (arbitrary) adapter callbacks.
+func (o *Orchestrator) setMilestone(name string, m Milestone) {
+	o.mu.Lock()
+	o.milestone[name] = m
+	o.mu.Unlock()
+}
+
+func (o *Orchestrator) getMilestone(name string) Milestone {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.milestone[name]
+}
+
+func (o *Orchestrator) setResult(name string, r Result) {
+	o.mu.Lock()
+	o.result[name] = r
+	o.mu.Unlock()
 }
 
 // Result returns the node's shutdown verdict (Pending before shutdown, Inactive for a config-disabled

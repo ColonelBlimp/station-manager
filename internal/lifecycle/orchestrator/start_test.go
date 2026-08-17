@@ -20,6 +20,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 )
@@ -252,6 +253,84 @@ func TestStart_InitFailureDoesNotRollBackTheFailingNode(t *testing.T) {
 	}
 	if base.stops != 1 {
 		t.Errorf("base stop=%d, want 1 (Running predecessor rolled back)", base.stops)
+	}
+}
+
+// codex P1 (19192efa): Start must NOT hold its state mutex across adapter callbacks, or a callback
+// that queries Result/Milestone (e.g. to publish lifecycle status) deadlocks on the non-reentrant
+// lock. Reversion: guard the traversal with o.mu held across callbacks → Start deadlocks and the
+// test times out.
+func TestStart_CallbackQueryingStateDoesNotDeadlock(t *testing.T) {
+	rec := &hookRec{}
+	p := newProbe(rec, "n1")
+	c := iocdi.New()
+	if err := c.RegisterNode(iocdi.Node{Name: "n1"}); err != nil {
+		t.Fatal(err)
+	}
+	o := New(c)
+	a := p.adapter()
+	inner := a.Initialize
+	a.Initialize = func() error {
+		_ = o.Result("n1") // both must return while Start is mid-traversal, not deadlock
+		_ = o.Milestone("n1")
+		return inner()
+	}
+	if err := o.Register(a); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- o.Start(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start deadlocked: a callback querying Result/Milestone blocked on the state mutex")
+	}
+}
+
+// codex P1 (19192efa): a stuck Stop in rollback (one that ignores its context) must not block Start
+// forever — rollback bounds each teardown by the caller's ctx. base's Stop blocks; mid's Start fails,
+// triggering rollback of base; with a deadline-bearing ctx, rollback abandons the stuck Stop and
+// Start returns its error. Reversion: rollback calls Stop directly with context.Background() → Start
+// hangs and the test times out.
+func TestStart_RollbackStuckStopIsBounded(t *testing.T) {
+	rec := &hookRec{}
+	base, mid := newProbe(rec, "base"), newProbe(rec, "mid")
+	mid.startErr = errors.New("mid start boom")
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) }) // release the abandoned Stop goroutine at test end
+
+	a := base.adapter()
+	a.Stop = func(context.Context) error { <-block; return nil } // ignores ctx, blocks
+
+	c := iocdi.New()
+	for _, n := range []iocdi.Node{{Name: "base"}, {Name: "mid", StartAfter: []string{"base"}}} {
+		if err := c.RegisterNode(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := New(c)
+	if err := o.Register(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Register(mid.adapter()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- o.Start(ctx) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Start should fail (mid's Start errors)")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Start hung: rollback's stuck Stop was not bounded by the caller's ctx")
 	}
 }
 
