@@ -603,7 +603,6 @@ func (s *Service) Status() Status {
 // via the EH-4 shape — never a plausible zero. The mu-guarded fields are snapshotted under
 // the lock; only the archive aggregates run against ctx.
 func (s *Service) StatusContext(ctx context.Context) Status {
-	reqCtx := ctx // the caller's context — a client disconnect cancels this one
 	ctx, cancel := context.WithTimeout(ctx, statusAggregateTimeout)
 	defer cancel()
 	s.mu.Lock()
@@ -663,38 +662,46 @@ func (s *Service) StatusContext(ctx context.Context) Status {
 	// Status poll: usage is null when unmeasurable, and it must NOT drive the
 	// write-driven tracker (recovery/heartbeat belong to write attempts only).
 	// physicalUsage is os.Stat only (not a DB read), so it carries no ctx.
-	var statusErr error
+	//
+	// statusErr collects EVERY failure for the operator-visible response; healthErr
+	// collects only those that reflect DATABASE health. A CLIENT DISCONNECT surfaces as
+	// context.Canceled and is NOT a health signal (a genuine failure or the aggregate
+	// deadline — context.DeadlineExceeded — is), so it is filtered out per-error. Filtering
+	// per error, not per request, means a real failure that co-occurs with a mid-poll
+	// disconnect still reaches the tracker (codex P2 on 219a7c98/50bacd73).
+	var statusErr, healthErr error
+	addErr := func(err error) {
+		statusErr = stderrors.Join(statusErr, err)
+		if !stderrors.Is(err, context.Canceled) {
+			healthErr = stderrors.Join(healthErr, err)
+		}
+	}
 	if usage, err := s.physicalUsage(); err == nil {
 		st.UsageBytes = &usage
 	} else {
-		statusErr = stderrors.Join(statusErr, fmt.Errorf("physical usage: %w", err))
+		addErr(fmt.Errorf("physical usage: %w", err))
 	}
 	if err := s.fillProfileCounts(ctx, prof); err != nil {
-		statusErr = stderrors.Join(statusErr, err)
+		addErr(err)
 	}
 	if s.cfg.Sync {
 		if err := s.fillSyncCounts(ctx, syn); err != nil {
-			statusErr = stderrors.Join(statusErr, err)
+			addErr(err)
 		}
 	}
 	if err := s.fillRetentionCounts(ctx, ret); err != nil {
-		statusErr = stderrors.Join(statusErr, err)
+		addErr(err)
 	}
 	st.Profiles, st.Sync, st.Retention = prof, syn, ret
 	if err := fillObservationCounts(ctx, db, &st); err != nil {
-		statusErr = stderrors.Join(statusErr, err)
+		addErr(err)
 	}
 	if statusErr != nil {
 		st.Degraded = true
 		st.StatusError = statusErr.Error()
 	}
-	// A CLIENT DISCONNECT (reqCtx cancelled) is not a database-health signal: it must not
-	// drive the degraded/recovered tracker or log a false "reads degraded" warning, or
-	// alternating disconnects and completions would spam the log (codex P2 on 219a7c98).
-	// The aggregate DEADLINE firing (reqCtx still live, only the derived ctx expired) DOES
-	// indicate the reads could not complete in budget, so it still drives the tracker.
-	if s.statusHealth != nil && reqCtx.Err() == nil {
-		s.statusHealth.observe(statusErr)
+	if s.statusHealth != nil {
+		s.statusHealth.observe(healthErr)
 	}
 	return st
 }

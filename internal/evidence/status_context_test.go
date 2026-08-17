@@ -105,6 +105,31 @@ func TestStatusContext_ClientCancellationIsNotDatabaseDegradation(t *testing.T) 
 			t.Error("a genuine read failure did not drive the DB health tracker; the cancellation guard over-suppressed")
 		}
 	})
+
+	// The masking case: a real failure on an early aggregate, then a client disconnect during a
+	// later one. The joined error carries both a genuine failure and context.Canceled — the
+	// genuine failure must STILL reach the tracker (codex P2 on 50bacd73). A per-request guard
+	// would suppress it; the per-error filter does not.
+	t.Run("genuine failure co-occurring with a mid-poll disconnect still degrades health", func(t *testing.T) {
+		sb := &syncBuf{}
+		s := newRunningSyncLogged(t, testConfig(t, true), sb)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		statusQueryFaultForTest = func(group string) error {
+			if group == "profiles_total" { // the first aggregate
+				cancel() // the client disconnects mid-poll, AFTER a genuine early failure
+				return stderrors.New("disk gone")
+			}
+			return nil // later aggregates then fail with context.Canceled
+		}
+		defer func() { statusQueryFaultForTest = nil }()
+
+		_ = s.StatusContext(ctx)
+
+		if lines := sbLines(sb, degradedMsg); len(lines) == 0 {
+			t.Error("a genuine failure co-occurring with a client disconnect was masked from the DB health tracker")
+		}
+	})
 }
 
 // AC-2: the whole snapshot is bounded by one aggregate deadline. The seam models a
