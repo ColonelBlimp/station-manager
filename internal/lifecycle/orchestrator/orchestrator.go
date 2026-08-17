@@ -90,6 +90,8 @@ type Orchestrator struct {
 	active         map[string]bool // latched once at Start
 	startAttempted bool            // true once Start has begun initializing (terminal — no re-Start)
 	started        bool            // true after a fully successful Start
+	shutdownDone   bool            // true once Shutdown has settled (idempotence)
+	report         ShutdownReport  // the settled shutdown report, returned by every later Shutdown
 
 	// mu guards ONLY the externally-observable per-node maps. It is held for SHORT critical sections
 	// and NEVER across an adapter callback, so Result/Milestone stay responsive during a transition and
@@ -149,6 +151,12 @@ func (o *Orchestrator) setResult(name string, r Result) {
 	o.mu.Lock()
 	o.result[name] = r
 	o.mu.Unlock()
+}
+
+func (o *Orchestrator) getResult(name string) Result {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.result[name]
 }
 
 // Result returns the node's shutdown verdict (Pending before shutdown, Inactive for a config-disabled

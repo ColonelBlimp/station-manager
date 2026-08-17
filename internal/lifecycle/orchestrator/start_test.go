@@ -55,6 +55,7 @@ type probe struct {
 	activePolls         int
 	inits               int
 	starts              int
+	prepares            int
 	stops               int
 	rollbacks           int
 	lastRollbackReached Milestone
@@ -72,6 +73,10 @@ func (p *probe) adapter() Adapter {
 			p.inits++
 			p.rec.add("init:" + p.name)
 			return p.initErr
+		},
+		PrepareStop: func() {
+			p.prepares++
+			p.rec.add("prepare:" + p.name)
 		},
 		Stop: func(context.Context) error {
 			p.stops++
