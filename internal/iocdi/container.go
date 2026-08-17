@@ -98,8 +98,17 @@ func (c *Container) Register(beanID string, beanType reflect.Type) error {
 		hasDependencies: hasDeps,
 		dependencies:    deps,
 	}
+	if beanRegisterPreLockForTest != nil {
+		beanRegisterPreLockForTest()
+	}
 	c.regMu.Lock()
 	defer c.regMu.Unlock()
+	// Recheck the freeze UNDER regMu (codex P1): the early planFrozen fast-path can win a race with
+	// a concurrent Plan(), which sets the flag AND snapshots the DI graph under this same lock. Only
+	// this recheck guarantees no bean is inserted after the plan's snapshot.
+	if c.planFrozen.Load() {
+		return ErrRegistrationClosed
+	}
 	if _, dup := c.registeredBeans[beanID]; dup {
 		return ErrDuplicateBeanID
 	}
@@ -146,8 +155,17 @@ func (c *Container) RegisterInstance(beanID string, instance any) error {
 		dependencies:    deps,
 	}
 
+	if beanRegisterPreLockForTest != nil {
+		beanRegisterPreLockForTest()
+	}
 	c.regMu.Lock()
 	defer c.regMu.Unlock()
+	// Recheck the freeze UNDER regMu (codex P1): the early planFrozen fast-path can win a race with
+	// a concurrent Plan(), which sets the flag AND snapshots the DI graph under this same lock. Only
+	// this recheck guarantees no bean is inserted after the plan's snapshot.
+	if c.planFrozen.Load() {
+		return ErrRegistrationClosed
+	}
 	if _, dup := c.registeredBeans[beanID]; dup {
 		return ErrDuplicateBeanID
 	}

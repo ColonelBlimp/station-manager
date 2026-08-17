@@ -162,6 +162,32 @@ func TestPlan_FreezesBeanRegistrationToo(t *testing.T) {
 	}
 }
 
+// codex P1 (recheck): the early planFrozen fast-path can lose a lock race to Plan(). The seam runs
+// Plan() between Register's fast-path and its lock; the under-regMu recheck must still refuse, so no
+// bean lands after the plan snapshotted. Reversion: drop the under-lock recheck → Register succeeds.
+func TestRegister_RechecksFreezeUnderLock(t *testing.T) {
+	c := New()
+	_ = c.RegisterNode(Node{Name: "x"})
+
+	var planned bool
+	beanRegisterPreLockForTest = func() {
+		if !planned { // Plan takes regMu, freezes + snapshots, releases — all before Register locks.
+			planned = true
+			if _, err := c.Plan(); err != nil {
+				t.Fatalf("Plan in seam: %v", err)
+			}
+		}
+	}
+	defer func() { beanRegisterPreLockForTest = nil }()
+
+	if err := c.Register("late", reflect.TypeOf(diA{})); !errors.Is(err, ErrRegistrationClosed) {
+		t.Errorf("Register racing Plan err = %v, want ErrRegistrationClosed (recheck under lock)", err)
+	}
+	if _, ok := c.registeredBeans["late"]; ok {
+		t.Error("a bean was inserted after Plan snapshotted the graph")
+	}
+}
+
 // codex P2: an explicit self-dependency is a cycle, not a valid plan. Reversion: restore the
 // `id != n.Name` self-edge drop → the self-loop vanishes and Plan wrongly succeeds.
 func TestPlan_RejectsExplicitSelfDependency(t *testing.T) {

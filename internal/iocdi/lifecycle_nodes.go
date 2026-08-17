@@ -11,6 +11,11 @@ import (
 // It lives beside bean registration but is independent of it: a lifecycle node need not be a
 // bean, and a bean need not be a node.
 
+// beanRegisterPreLockForTest fires inside Register/RegisterInstance AFTER the early planFrozen
+// fast-path but BEFORE regMu is taken, so a test can drive the Register-vs-Plan interleaving the
+// under-lock recheck defends against (codex P1). nil in production.
+var beanRegisterPreLockForTest func()
+
 // Priority marks a node's shutdown fence (ADR 0070). Exactly one RFCritical node is allowed; it is
 // the sole teardown attempted until its transition returns or the deadline fires.
 type Priority uint8
