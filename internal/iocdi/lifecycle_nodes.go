@@ -40,7 +40,7 @@ func (c *Container) RegisterNode(n Node) error {
 	}
 	c.regMu.Lock()
 	defer c.regMu.Unlock()
-	if c.planFrozen {
+	if c.planFrozen.Load() {
 		return ErrPlanFrozen
 	}
 	for _, e := range c.lifecycleNodes {
@@ -64,7 +64,7 @@ func (c *Container) RegisterNode(n Node) error {
 func (c *Container) Plan() (*Plan, error) {
 	c.regMu.Lock()
 	defer c.regMu.Unlock()
-	c.planFrozen = true
+	c.planFrozen.Store(true) // closes node AND bean registration (P1): the DI snapshot is now final
 
 	nodes := c.lifecycleNodes // already in registration order, IDs normalized
 	names := make([]string, len(nodes))
@@ -122,7 +122,10 @@ func (c *Container) mergedStartPrereqLocked(n Node, byName map[string]Node) []st
 	seen := make(map[string]bool)
 	var out []string
 	add := func(id string) {
-		if id != n.Name && !seen[id] {
+		// A self-edge (id == n.Name) is NOT dropped (codex P2): an explicit self-dependency is a
+		// cycle and must surface as ErrStartCycle, not a valid-looking plan. Beans never self-inject,
+		// so the DI-merge produces no false self-edges.
+		if !seen[id] {
 			if _, ok := byName[id]; ok { // only edges between lifecycle nodes matter
 				seen[id] = true
 				out = append(out, id)

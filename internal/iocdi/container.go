@@ -34,10 +34,13 @@ type Container struct {
 	registeredBeans map[string]bean
 
 	// lifecycleNodes is the ADR-0070 lifecycle-node registry — independent of bean registration,
-	// in registration order (the deterministic shutdown tiebreak). planFrozen is set by Plan().
-	// Both are guarded by regMu. See lifecycle_nodes.go.
+	// in registration order (the deterministic shutdown tiebreak), guarded by regMu. planFrozen is
+	// set by Plan() and CLOSES both node AND bean registration: the plan snapshots the DI graph
+	// (registeredBeans) to derive start edges, so a bean registered after Plan would leave the
+	// "immutable" plan missing an edge (codex P1). It is atomic so Register can check it cheaply.
+	// See lifecycle_nodes.go.
 	lifecycleNodes []Node
-	planFrozen     bool
+	planFrozen     atomic.Bool
 }
 
 func New() *Container {
@@ -63,7 +66,7 @@ func (c *Container) Register(beanID string, beanType reflect.Type) error {
 	if beanType == nil {
 		return ErrBeanTypeParamIsNil
 	}
-	if c.built.Load() {
+	if c.built.Load() || c.planFrozen.Load() {
 		return ErrRegistrationClosed
 	}
 
@@ -116,7 +119,7 @@ func (c *Container) RegisterInstance(beanID string, instance any) error {
 	if instance == nil {
 		return ErrBeanParamIsNil
 	}
-	if c.built.Load() {
+	if c.built.Load() || c.planFrozen.Load() {
 		return ErrRegistrationClosed
 	}
 

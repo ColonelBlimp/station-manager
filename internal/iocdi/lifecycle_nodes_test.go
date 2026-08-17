@@ -145,6 +145,33 @@ func TestPlan_MergesDIDerivedStartEdges(t *testing.T) {
 	}
 }
 
+// codex P1: Plan freezes BEAN registration too — the plan snapshots the DI graph, so a bean
+// registered afterward would leave the immutable plan missing an edge. Reversion: drop the
+// planFrozen check in Register → a post-Plan Register succeeds.
+func TestPlan_FreezesBeanRegistrationToo(t *testing.T) {
+	c := New()
+	_ = c.RegisterNode(Node{Name: "a"})
+	if _, err := c.Plan(); err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if err := c.Register("late", reflect.TypeOf(diA{})); !errors.Is(err, ErrRegistrationClosed) {
+		t.Errorf("Register after Plan err = %v, want ErrRegistrationClosed", err)
+	}
+	if err := c.RegisterInstance("late2", &diA{}); !errors.Is(err, ErrRegistrationClosed) {
+		t.Errorf("RegisterInstance after Plan err = %v, want ErrRegistrationClosed", err)
+	}
+}
+
+// codex P2: an explicit self-dependency is a cycle, not a valid plan. Reversion: restore the
+// `id != n.Name` self-edge drop → the self-loop vanishes and Plan wrongly succeeds.
+func TestPlan_RejectsExplicitSelfDependency(t *testing.T) {
+	c := New()
+	_ = c.RegisterNode(Node{Name: "a", StartAfter: []string{"a"}})
+	if _, err := c.Plan(); !errors.Is(err, ErrStartCycle) {
+		t.Errorf("Plan err = %v, want ErrStartCycle (an explicit self-dependency is a cycle)", err)
+	}
+}
+
 // AC-7: Plan freezes the registry and returns defensive deep copies.
 func TestPlan_FreezesAndReturnsDeepCopies(t *testing.T) {
 	c := New()
