@@ -700,7 +700,13 @@ func (s *Service) StatusContext(ctx context.Context) Status {
 		st.Degraded = true
 		st.StatusError = statusErr.Error()
 	}
-	if s.statusHealth != nil {
+	// Drive the tracker only on a health-relevant outcome: a genuine failure (healthErr
+	// set) degrades it; a FULLY successful poll (statusErr nil) recovers it. A
+	// cancellation-ONLY poll (statusErr set but healthErr nil — nothing but client
+	// disconnects) read nothing conclusive, so it must leave the tracker unchanged — else
+	// observe(nil) would falsely CLEAR a genuine degradation as "recovered" (codex P1 on
+	// 7244e2d1).
+	if s.statusHealth != nil && (healthErr != nil || statusErr == nil) {
 		s.statusHealth.observe(healthErr)
 	}
 	return st

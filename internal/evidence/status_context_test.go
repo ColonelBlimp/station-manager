@@ -130,6 +130,32 @@ func TestStatusContext_ClientCancellationIsNotDatabaseDegradation(t *testing.T) 
 			t.Error("a genuine failure co-occurring with a client disconnect was masked from the DB health tracker")
 		}
 	})
+
+	// A cancellation-only poll read nothing conclusive: it must NOT clear an existing degraded
+	// state as "recovered" (codex P1 on 7244e2d1). Reversion: observe(healthErr) unconditionally
+	// → the cancelled poll's nil healthErr logs a false recovery.
+	t.Run("a cancellation-only poll does not falsely recover a degraded tracker", func(t *testing.T) {
+		const recoveredMsg = "status database reads recovered"
+		sb := &syncBuf{}
+		s := newRunningSyncLogged(t, testConfig(t, true), sb)
+
+		// 1) Drive a genuine degradation with a live request.
+		statusQueryFaultForTest = func(string) error { return stderrors.New("disk gone") }
+		_ = s.StatusContext(context.Background())
+		statusQueryFaultForTest = nil
+		if len(sbLines(sb, degradedMsg)) == 0 {
+			t.Fatal("setup: a genuine failure did not degrade the tracker")
+		}
+
+		// 2) A cancelled-only poll must leave that degraded state untouched.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_ = s.StatusContext(ctx)
+
+		if lines := sbLines(sb, recoveredMsg); len(lines) != 0 {
+			t.Errorf("a cancellation-only poll falsely logged recovery of a degraded tracker: %v", lines)
+		}
+	})
 }
 
 // AC-2: the whole snapshot is bounded by one aggregate deadline. The seam models a
