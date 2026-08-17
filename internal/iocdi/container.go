@@ -22,12 +22,15 @@ type Container struct {
 	// Protects access to registeredBeans and requiredDependency during registration/build.
 	regMu sync.RWMutex
 	// Lifecycle flags (ADR 0070 Wire()/Build() split). wired = beans constructed + injected, not
-	// yet Initialized; built = wired AND all Initializers run (the compat path); initialized =
-	// SOME init path has run, the single-init-owner guardrail marker (Build claims it, and the
-	// orchestrator will too, so the two can never both initialize).
-	built       atomic.Bool
-	wired       atomic.Bool
-	initialized atomic.Bool
+	// yet Initialized; built = wired AND EVERY Initializer has completed (the compat path — a
+	// partial Build leaves it false and stays retryable). initOwner is the single-init-owner marker
+	// (none|build|orchestrator): set once and NEVER reset, even by a failed Build, so Build and the
+	// orchestrator can never both initialize. initDone records which beans' initializers have already
+	// run, so a Build retry after a partial failure resumes at the un-run beans instead of re-running.
+	built     atomic.Bool
+	wired     atomic.Bool
+	initOwner atomic.Int32
+	initDone  map[string]bool
 
 	// requiredDependency maps bean identifiers to their corresponding reflect.Type, identifying dependencies
 	// required by registered beans. For example, if `Service` has a dependency on `Config`, then `Config` will be
@@ -52,7 +55,31 @@ func New() *Container {
 	return &Container{
 		requiredDependency: make(map[string]reflect.Type),
 		registeredBeans:    make(map[string]bean),
+		initDone:           make(map[string]bool),
 	}
+}
+
+// initOwner identifies who owns this container's initialization (ADR 0070 single-init-owner). It is
+// set once — none→build or none→orchestrator — and NEVER reset, even by a FAILED Build: a partial
+// Build has already run some initializers, so the OTHER owner must never re-run them.
+type initOwner int32
+
+const (
+	ownerNone         initOwner = iota // no init attempt yet
+	ownerBuild                         // an explicit Build() owns initialization
+	ownerOrchestrator                  // the lifecycle orchestrator owns initialization
+)
+
+// claimInitOwner attempts to make `who` the initialization owner. It succeeds if initialization is
+// unclaimed (none→who) OR already owned by `who` — a same-owner retry, which is how a Build that
+// partially failed retries. It fails only when the OTHER owner already holds it. Ownership is
+// durable: nothing clears it, so once a Build attempt (even a failed one) claims ownerBuild an
+// orchestrator claim is refused forever, and vice versa.
+func (c *Container) claimInitOwner(who initOwner) bool {
+	if c.initOwner.CompareAndSwap(int32(ownerNone), int32(who)) {
+		return true
+	}
+	return c.initOwner.Load() == int32(who)
 }
 
 // registrationClosed reports whether new beans may no longer be registered: once the container is
@@ -229,15 +256,16 @@ func (c *Container) Build() (err error) {
 		}
 		c.wired.Store(true)
 	}
-	// Single-init-owner guardrail: claim initialization; fail if the orchestrator already did.
-	if !c.initialized.CompareAndSwap(false, true) {
+	// Single-init-owner guardrail (ADR 0070): claim initialization for Build. Ownership is DURABLE
+	// and never released — a failed Build keeps ownerBuild, so the orchestrator can never re-run the
+	// initializers this Build already ran. A same-owner retry is allowed and resumes at the un-run
+	// beans (initDone, below); it fails only when the orchestrator already owns initialization.
+	if !c.claimInitOwner(ownerBuild) {
 		return ErrAlreadyInitialized
 	}
+	// A partial failure leaves built=false (the defer sets built only when err==nil) and initDone
+	// populated for the beans that succeeded, so a same-owner retry resumes rather than restarts.
 	if err = c.initializeAllLocked(); err != nil {
-		// Roll back the claim so a TRANSIENT initializer failure stays retryable (codex P2): a
-		// failed Build leaves the container un-built AND unclaimed, exactly as before the split. A
-		// successful init keeps the claim, so the orchestrator can never then also initialize.
-		c.initialized.Store(false)
 		return err
 	}
 	return nil
@@ -345,11 +373,15 @@ func (c *Container) initializeAllLocked() error {
 		if bn.instance == nil {
 			continue
 		}
+		if c.initDone[id] {
+			continue // already initialized by an earlier Build attempt — never re-run (single-init)
+		}
 		if initr, ok := bn.instance.(Initializer); ok {
 			if ierr := initr.Initialize(); ierr != nil {
 				return fmt.Errorf("initializer for bean '%s' failed: %w", id, ierr)
 			}
 		}
+		c.initDone[id] = true // record success so a Build retry resumes past this bean
 	}
 
 	return nil

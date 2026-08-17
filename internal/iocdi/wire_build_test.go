@@ -35,6 +35,53 @@ type initTracker struct {
 
 func (t *initTracker) Initialize() error { t.initCount++; return nil }
 
+// The partial-init retry tests use a dependency chain base ← mid ← tail (each di.inject-depends on
+// the previous), so the initializer order is deterministic (base, mid, tail). mid fails its first
+// Initialize (transient), so a first Build initializes base then stops at mid and never reaches tail.
+type baseInit struct{ count int }
+
+func (b *baseInit) Initialize() error { b.count++; return nil }
+
+type midInit struct {
+	Base     *baseInit `di.inject:"base"`
+	attempts int
+}
+
+func (m *midInit) Initialize() error {
+	m.attempts++
+	if m.attempts == 1 {
+		return errors.New("transient mid failure")
+	}
+	return nil
+}
+
+type tailInit struct {
+	Mid   *midInit `di.inject:"mid"`
+	count int
+}
+
+func (t *tailInit) Initialize() error { t.count++; return nil }
+
+func registerChain(t *testing.T) *Container {
+	t.Helper()
+	c := New()
+	for _, id := range []string{"base", "mid", "tail"} {
+		var typ reflect.Type
+		switch id {
+		case "base":
+			typ = reflect.TypeOf(baseInit{})
+		case "mid":
+			typ = reflect.TypeOf(midInit{})
+		case "tail":
+			typ = reflect.TypeOf(tailInit{})
+		}
+		if err := c.Register(id, typ); err != nil {
+			t.Fatalf("Register %q: %v", id, err)
+		}
+	}
+	return c
+}
+
 func registerTracker(t *testing.T) *Container {
 	t.Helper()
 	c := New()
@@ -99,15 +146,75 @@ func TestResolve_IsWireOnly(t *testing.T) {
 	}
 }
 
-// AC-4: Build refuses if initialization was already claimed (the orchestrator's stand-in).
+// AC-4: Build refuses if initialization was already claimed by the OTHER owner (the orchestrator).
 func TestBuild_RefusesWhenInitializationAlreadyClaimed(t *testing.T) {
 	c := registerTracker(t)
-	c.initialized.Store(true) // simulate the orchestrator having claimed init
+	c.initOwner.Store(int32(ownerOrchestrator)) // simulate the orchestrator having claimed init
 	if err := c.Build(); !errors.Is(err, ErrAlreadyInitialized) {
 		t.Errorf("Build err = %v, want ErrAlreadyInitialized (single-init-owner guardrail)", err)
 	}
 	if c.built.Load() {
 		t.Error("Build marked the container built despite refusing initialization")
+	}
+}
+
+// codex P1 (cc093d0e): a Build retry after a PARTIAL init must resume, not restart — an initializer
+// that already succeeded is never re-run (Initializer is not required to be idempotent). With the
+// chain base ← mid ← tail and mid failing once: the first Build initializes base then fails at mid;
+// the retry must skip base (count stays 1), retry mid (succeeds), then run tail. Reversion: drop the
+// initDone skip → the retry re-runs base and base.count reaches 2.
+func TestBuild_RetryResumesWithoutReinit(t *testing.T) {
+	c := registerChain(t)
+
+	if err := c.Build(); err == nil {
+		t.Fatal("first Build should fail (mid's initializer errors on the first call)")
+	}
+	base, _ := ResolveAs[*baseInit](c, "base")
+	mid, _ := ResolveAs[*midInit](c, "mid")
+	tail, _ := ResolveAs[*tailInit](c, "tail")
+	// Partial init: base ran once, mid was attempted, tail never reached.
+	if base.count != 1 {
+		t.Errorf("after first Build base.count = %d, want 1", base.count)
+	}
+	if tail.count != 0 {
+		t.Errorf("after first Build tail.count = %d, want 0 (tail must not run before mid succeeds)", tail.count)
+	}
+	if c.built.Load() {
+		t.Error("a partial Build marked the container built")
+	}
+
+	if err := c.Build(); err != nil {
+		t.Fatalf("retry Build err = %v, want nil (resume from the failed bean)", err)
+	}
+	if base.count != 1 {
+		t.Errorf("retry re-ran a succeeded initializer: base.count = %d, want 1", base.count)
+	}
+	if mid.attempts != 2 {
+		t.Errorf("mid.attempts = %d, want 2 (the failing bean is retried)", mid.attempts)
+	}
+	if tail.count != 1 {
+		t.Errorf("tail.count = %d, want 1 (remaining beans run after the retry)", tail.count)
+	}
+	if !c.built.Load() {
+		t.Error("retry Build did not complete")
+	}
+}
+
+// codex P1 (cc093d0e): once a Build attempt begins initialization it owns it DURABLY — even a failed
+// partial Build keeps ownerBuild, so the orchestrator can never re-initialize the beans Build already
+// ran (ADR 0070 single-init-owner). Reversion: release ownership on failure (store ownerNone) → the
+// orchestrator's claim succeeds.
+func TestBuild_RefusesOrchestratorAfterPartialBuild(t *testing.T) {
+	c := registerChain(t)
+
+	if err := c.Build(); err == nil {
+		t.Fatal("first Build should fail (mid's initializer errors on the first call)")
+	}
+	if got := initOwner(c.initOwner.Load()); got != ownerBuild {
+		t.Errorf("initOwner = %d after a partial Build, want ownerBuild (ownership is durable)", got)
+	}
+	if c.claimInitOwner(ownerOrchestrator) {
+		t.Error("orchestrator claimed init after a partial Build — single-init-owner violated")
 	}
 }
 
