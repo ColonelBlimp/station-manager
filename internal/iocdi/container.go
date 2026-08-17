@@ -55,6 +55,14 @@ func New() *Container {
 	}
 }
 
+// registrationClosed reports whether new beans may no longer be registered: once the container is
+// wired, built, or its lifecycle plan is frozen, the DI graph is final. Checked both on the
+// fast-path and (the load-bearing one) under regMu, since Wire/Build/Plan set these flags while
+// holding regMu — a registration racing that completion must see the flag on its under-lock recheck.
+func (c *Container) registrationClosed() bool {
+	return c.wired.Load() || c.built.Load() || c.planFrozen.Load()
+}
+
 // Register registers a bean by its reflect.Type.
 // If the type is a struct, it will be normalized to a pointer-to-struct for consistent injection semantics.
 // The 'beanID' parameter is case-INSENSITIVE: it is lower-cased here and tags are
@@ -71,7 +79,10 @@ func (c *Container) Register(beanID string, beanType reflect.Type) error {
 	if beanType == nil {
 		return ErrBeanTypeParamIsNil
 	}
-	if c.built.Load() || c.planFrozen.Load() {
+	// Registration closes once the container is wired, built, OR the plan is frozen. wired matters
+	// because Wire() is a no-op once wired (ADR 0070): a bean registered afterward would never be
+	// constructed and would surface as "not initialized" at resolve, far from this Register call.
+	if c.registrationClosed() {
 		return ErrRegistrationClosed
 	}
 
@@ -99,11 +110,12 @@ func (c *Container) Register(beanID string, beanType reflect.Type) error {
 	}
 	c.regMu.Lock()
 	defer c.regMu.Unlock()
-	// Every shared-state mutation happens AFTER the under-lock freeze recheck (codex P1 ×2): Plan()
-	// sets planFrozen AND snapshots the DI graph under this same lock, and checkForDependency mutates
-	// requiredDependency — so a rejected registration must touch NEITHER registeredBeans NOR
-	// requiredDependency, or it leaves a phantom required-dep that breaks a later Build.
-	if c.planFrozen.Load() {
+	// Every shared-state mutation happens AFTER the under-lock closed recheck (codex P1 ×2): Wire/
+	// Build set wired/built and Plan() sets planFrozen AND snapshots the DI graph under this same
+	// lock, and checkForDependency mutates requiredDependency — so a rejected registration must touch
+	// NEITHER registeredBeans NOR requiredDependency, or it leaves a phantom required-dep that breaks
+	// a later Build.
+	if c.registrationClosed() {
 		return ErrRegistrationClosed
 	}
 	if _, dup := c.registeredBeans[beanID]; dup {
@@ -133,7 +145,7 @@ func (c *Container) RegisterInstance(beanID string, instance any) error {
 	if instance == nil {
 		return ErrBeanParamIsNil
 	}
-	if c.built.Load() || c.planFrozen.Load() {
+	if c.registrationClosed() {
 		return ErrRegistrationClosed
 	}
 
@@ -155,8 +167,8 @@ func (c *Container) RegisterInstance(beanID string, instance any) error {
 	}
 	c.regMu.Lock()
 	defer c.regMu.Unlock()
-	// Mutation only after the under-lock freeze recheck + dup check (codex P1 ×2) — see Register.
-	if c.planFrozen.Load() {
+	// Mutation only after the under-lock closed recheck + dup check (codex P1 ×2) — see Register.
+	if c.registrationClosed() {
 		return ErrRegistrationClosed
 	}
 	if _, dup := c.registeredBeans[beanID]; dup {

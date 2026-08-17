@@ -132,6 +132,60 @@ func TestBuild_RetryableAfterInitializerFailure(t *testing.T) {
 	}
 }
 
+// codex P1 (b161407): Wire() closes registration. A bean registered after Wire would never be
+// constructed (Wire is a no-op once wired) and would surface as "not initialized" at resolve, far
+// from the bad Register call. Register/RegisterInstance must refuse once wired, exactly as they do
+// once built/planFrozen. Reversion: drop the wired check → the post-Wire Register succeeds.
+func TestRegister_ClosedAfterWire(t *testing.T) {
+	c := New()
+	if err := c.Register("a", reflect.TypeOf(diA{})); err != nil {
+		t.Fatalf("Register a: %v", err)
+	}
+	if err := c.Wire(); err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+	if err := c.Register("late", reflect.TypeOf(diA{})); !errors.Is(err, ErrRegistrationClosed) {
+		t.Errorf("Register after Wire err = %v, want ErrRegistrationClosed", err)
+	}
+	if err := c.RegisterInstance("late2", &diA{}); !errors.Is(err, ErrRegistrationClosed) {
+		t.Errorf("RegisterInstance after Wire err = %v, want ErrRegistrationClosed", err)
+	}
+	if _, ok := c.registeredBeans["late"]; ok {
+		t.Error("a bean was registered after Wire")
+	}
+}
+
+// codex P1 (b161407, recheck): the early registration-closed fast-path can lose a lock race to
+// Wire(). The seam wires the container between Register's fast-path and its lock; the under-regMu
+// recheck must still refuse, so no bean lands after wiring — and (like the freeze recheck) it must
+// run BEFORE checkForDependency, or a rejected registration leaves a phantom required dependency.
+// Reversion: drop the wired check from the under-lock recheck → the racing Register succeeds.
+func TestRegister_RechecksWiredUnderLock(t *testing.T) {
+	c := New()
+
+	var wiredOnce bool
+	beanRegisterPreLockForTest = func() {
+		if !wiredOnce { // Wire takes buildLock+regMu, wires, sets wired, releases — before Register locks.
+			wiredOnce = true
+			if err := c.Wire(); err != nil {
+				t.Fatalf("Wire in seam: %v", err)
+			}
+		}
+	}
+	defer func() { beanRegisterPreLockForTest = nil }()
+
+	// diB depends on "a" — a rejected registration must leave NO bean AND no phantom required-dep.
+	if err := c.Register("late", reflect.TypeOf(diB{})); !errors.Is(err, ErrRegistrationClosed) {
+		t.Errorf("Register racing Wire err = %v, want ErrRegistrationClosed (recheck under lock)", err)
+	}
+	if _, ok := c.registeredBeans["late"]; ok {
+		t.Error("a bean was inserted after Wire completed")
+	}
+	if _, ok := c.requiredDependency["a"]; ok {
+		t.Error("a rejected registration left a phantom required dependency")
+	}
+}
+
 // AC-5: Wire then Build then Build initializes exactly once.
 func TestWireThenBuild_InitializesExactlyOnce(t *testing.T) {
 	c := registerTracker(t)
