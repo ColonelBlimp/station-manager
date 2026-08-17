@@ -137,9 +137,11 @@ func TestAcceptance_HappyPathPartialOrder(t *testing.T) {
 }
 
 // §5-1: the RF fence is the SOLE teardown until it RETURNS. The bridge hook blocks INSIDE Stop
-// (still executing) until the test releases it; while it is blocked, no other node's Stop may have
-// begun. Signalling completion before return (codex P1) would only prove other stops start after the
-// fence reaches a mid-body point, not after its Stop returns.
+// (still executing) until the test releases it. Every OTHER node's Stop asserts, at the instant it
+// runs, that `release` is already closed — so a correct sequential shutdown (which runs them only
+// after the fence returned) passes, while any overlap with the still-blocked fence is caught
+// deterministically, not by a raced snapshot (codex P1). A bounded select on entry avoids hanging if
+// a regression skips the fence (codex P2).
 func TestAcceptance_RFFenceIsSole(t *testing.T) {
 	rec := &hookRec{}
 	m := daemonAdapters(rec)
@@ -151,15 +153,33 @@ func TestAcceptance_RFFenceIsSole(t *testing.T) {
 		<-release // remain in Stop (executing) until released
 		return nil
 	}
+	for _, node := range daemonGraph() {
+		if node.Name == "bridge" {
+			continue
+		}
+		n := node.Name
+		m[n].Stop = func(context.Context) error {
+			select {
+			case <-release: // fence already returned — correct
+			default:
+				t.Errorf("%s Stop ran while the RF fence was still executing", n)
+			}
+			rec.add("stop:" + n)
+			return nil
+		}
+	}
 	o := startDaemonOrch(t, m)
 	done := make(chan ShutdownReport, 1)
 	go func() { done <- o.Shutdown(2 * time.Second) }()
 
-	<-fenceEntered // the fence is now inside Stop, still executing
-	if stops := stopOrder(rec.snapshot()); len(stops) != 1 || stops[0] != "bridge" {
-		t.Errorf("non-fence Stops began while the RF fence was still executing: %v", stops)
+	select {
+	case <-fenceEntered: // the fence is now inside Stop, still executing
+	case <-done:
+		t.Fatal("Shutdown completed without entering the RF fence")
+	case <-time.After(2 * time.Second):
+		t.Fatal("RF fence was never entered")
 	}
-	close(release) // let the fence return; the rest drains
+	close(release) // let the fence return; the rest drains, each verifying release is closed
 
 	rep := <-done
 	if len(rep.Outcomes) == 0 || rep.Outcomes[0].Node != "bridge" {

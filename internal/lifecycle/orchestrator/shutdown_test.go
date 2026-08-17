@@ -99,8 +99,10 @@ func TestShutdown_PrepareStopBeforeAnyStop(t *testing.T) {
 }
 
 // AC-D2: the RFCritical fence is the sole Stop until it RETURNS. The bridge hook blocks inside Stop
-// (still executing) until released; while it is blocked no other Stop may have begun — signalling
-// completion before return would only prove other stops start after a mid-body point (codex P1).
+// (still executing) until released; the non-fence Stop asserts at its run instant that `release` is
+// already closed, so an overlap with the still-blocked fence is caught deterministically rather than
+// by a raced snapshot (codex P1), and a bounded select on entry avoids a hang if the fence is skipped
+// (codex P2).
 func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 	rec := &hookRec{}
 	bridge, other := newProbe(rec, "bridge"), newProbe(rec, "other")
@@ -113,19 +115,32 @@ func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 		<-release
 		return nil
 	}
+	ao := other.adapter()
+	ao.Stop = func(context.Context) error {
+		select {
+		case <-release: // fence already returned — correct
+		default:
+			t.Error("other Stop ran while the RF fence was still executing")
+		}
+		rec.add("stop:other")
+		return nil
+	}
 	// Register `other` FIRST so only the fence phase — not registration order — can make bridge drain
 	// first (otherwise the test would pass by coincidence).
 	o := startedOrch(t, []iocdi.Node{
 		{Name: "other"},
 		{Name: "bridge", StopPriority: iocdi.RFCritical},
-	}, other.adapter(), ab)
+	}, ao, ab)
 
 	done := make(chan ShutdownReport, 1)
-	go func() { done <- o.Shutdown(time.Second) }()
+	go func() { done <- o.Shutdown(2 * time.Second) }()
 
-	<-fenceEntered // fence is inside Stop, still executing
-	if stops := stopOrder(rec.snapshot()); len(stops) != 1 || stops[0] != "bridge" {
-		t.Errorf("a non-fence Stop began while the RF fence was still executing: %v", stops)
+	select {
+	case <-fenceEntered: // fence is inside Stop, still executing
+	case <-done:
+		t.Fatal("Shutdown completed without entering the RF fence")
+	case <-time.After(2 * time.Second):
+		t.Fatal("RF fence was never entered")
 	}
 	close(release)
 
