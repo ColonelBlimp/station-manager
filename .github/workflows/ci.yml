@@ -36,7 +36,11 @@ jobs:
   releasability:
     name: Releasability gate
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Healthy full runs land at ~14-15m (3 SPA builds + Hugo + race tests + CGO
+    # PocketFFT build + FT8 decode test), so a 15m cap was cancelling ~half of
+    # them at the tail (FT8-decode / ClubLog-key boundary) and invalidating the
+    # gate rather than bounding a hang. 25m keeps a useful bound with headroom.
+    timeout-minutes: 25
 
     # Dev Postgres for the smcloud store integration tests
     # (internal/cloud/store). Those tests skip-gate on a reachable DB (they ping
