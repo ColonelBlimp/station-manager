@@ -242,6 +242,20 @@ type lossAccum struct {
 	dialMixed    bool
 }
 
+// evState is the evidence service's single mutex-guarded lifecycle state (LC-3).
+// It replaces the split started/closed flags so producer admission and the Stop
+// seal share ONE authority: CaptureSlot admits only under evRunning, Stop seals to
+// evStopped under the same mutex, and Start opens the archive only from evIdle — a
+// stopped service is terminal, so Start-after-Stop must never re-open it (which the
+// closed-latched Stop would then never tear down: a file + goroutine leak).
+type evState int
+
+const (
+	evIdle    evState = iota // constructed; Start may open the archive
+	evRunning                // Start opened the archive; producers admitted
+	evStopped                // Stop ran; terminal — producers refused, Start refused
+)
+
 // Service owns evidence.db and its single bounded writer goroutine.
 type Service struct {
 	cfg          Config
@@ -251,8 +265,17 @@ type Service struct {
 	db      *sql.DB
 	ch      chan SlotCapture
 	quit    chan struct{}
-	closed  atomic.Bool
 	pending atomic.Int64 // enqueued-but-unprocessed slots; drain observability
+
+	// stopOnce + stopDone give Stop the project's completion-barrier contract (LC-3):
+	// the first caller runs teardown and closes stopDone; concurrent callers block in
+	// stopOnce.Do until it finishes, so "Stop returned, therefore stopped" holds for
+	// every caller (matches internal/bridge + internal/ft8). producers counts in-flight
+	// CaptureSlot admissions so Stop can wait for every accepted send to land in the
+	// buffer BEFORE signalling the writer to drain — the atomic producer cutoff.
+	stopOnce  sync.Once
+	stopDone  chan struct{}
+	producers sync.WaitGroup
 
 	// wg + cancel own the lifecycle of the three long-lived worker goroutines
 	// (writer, queue-loss monitor, sync loop), each launched under safego.GoTracked
@@ -288,7 +311,7 @@ type Service struct {
 	queueDropped atomic.Int64
 
 	mu        sync.Mutex
-	started   bool
+	life      evState   // idle → running → stopped (terminal); the single lifecycle authority (LC-3)
 	startedAt time.Time // set in Start; backs run_duration_seconds in the stop summary (H2)
 	state     string
 	dropped   int64
@@ -324,6 +347,8 @@ func New(cfg Config, log logging.Logger) *Service {
 		decoderBuild: goft8Build(),
 		state:        StateDisabled,
 		quit:         make(chan struct{}),
+		stopDone:     make(chan struct{}),
+		// life is the zero value evIdle: constructed, not yet started.
 	}
 }
 
@@ -365,7 +390,10 @@ func (s *Service) Start() error {
 	const op errors.Op = "evidence.Service.Start"
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.cfg.Capture || s.started {
+	// Open only from evIdle: evRunning is an idempotent no-op, and evStopped is
+	// TERMINAL — a Start after Stop must open nothing (AC-3). Silent nil is the
+	// project's idempotent-lifecycle convention (operator ruling 2026-08-17).
+	if !s.cfg.Capture || s.life != evIdle {
 		return nil
 	}
 
@@ -405,7 +433,7 @@ func (s *Service) Start() error {
 			Msg("evidence: profile activation failed; profile resolution degraded (new rows carry profile_error)")
 	}
 	s.state = StateCapturing
-	s.started = true
+	s.life = evRunning
 	s.startedAt = time.Now()
 	s.retHealth = newRetentionHealth(s.log, s.cfg.Path, retentionMeasurementHeartbeat, time.Now)
 	s.statusHealth = newStatusQueryHealth(s.log)
@@ -442,18 +470,36 @@ func (s *Service) Start() error {
 	return nil
 }
 
-// Stop drains the writer, persists any accumulated loss best-effort, and
-// closes the archive. Idempotent.
+// Stop drains the writer, persists any accumulated loss best-effort, and closes
+// the archive. Idempotent under sequential AND concurrent calls: the first caller
+// runs the teardown; every other caller (racing or sequential) blocks in stopOnce
+// until it finishes, so "Stop returned, therefore stopped" holds for all of them
+// (LC-3 AC-2). Stop before Start is terminal and opens nothing (AC-3).
 func (s *Service) Stop() {
-	if s.closed.Swap(true) {
-		return
+	s.stopOnce.Do(s.teardown)
+	<-s.stopDone
+}
+
+func (s *Service) teardown() {
+	defer close(s.stopDone)
+	if teardownStallForTest != nil {
+		teardownStallForTest()
 	}
+	// Seal admission under s.mu: past this point CaptureSlot refuses (it admits only
+	// under evRunning, taking the SAME mutex), so no new producer can be admitted.
 	s.mu.Lock()
-	started := s.started
+	running := s.life == evRunning
+	s.life = evStopped
 	s.mu.Unlock()
-	if !started {
-		return
+	if !running {
+		return // Stop-before-Start / never-ran: terminal, nothing was opened to drain or close.
 	}
+	// Wait for producers admitted BEFORE the seal to finish their non-blocking send, so
+	// every accepted slot is already in the buffer before the writer is told to drain.
+	// Without this a slot admitted just before the seal could land AFTER the writer's
+	// final empty check and sit unprocessed forever, leaking pending (LC-3 AC-1). No new
+	// Add can occur after the seal, so this cannot block indefinitely.
+	s.producers.Wait()
 	close(s.quit) // the workers observe this and return cleanly (a clean return does
 	s.cancel()    // not respawn); cancel unblocks any worker mid respawn-cooldown.
 	s.wg.Wait()   // all three workers have PERMANENTLY exited.
@@ -471,7 +517,6 @@ func (s *Service) Stop() {
 	}
 	s.logStopSummary(s.dropped, s.pending.Load(), syncState, time.Since(s.startedAt), closeErr)
 	s.state = StateDisabled
-	s.started = false
 }
 
 // logStopSummary emits the single evidence shutdown-completion record (H2). Info for a clean
@@ -490,25 +535,34 @@ func (s *Service) logStopSummary(dropped, pending int64, syncState string, runDu
 		Msg("evidence: stopped")
 }
 
-// CaptureSlot enqueues one slot's evidence. NEVER blocks: a full queue (or a
-// stopped/disabled service) drops the slot, and drops under a running writer
-// are counted into the loss accumulator.
+// CaptureSlot enqueues one slot's evidence. NEVER blocks. A not-running service
+// (pre-Start idle or post-Stop terminal) REFUSES the slot uncounted — there is no
+// archive to write to; only a full queue under a RUNNING writer is a drop, counted
+// into the loss accumulator (backpressure). Admission is decided under s.mu, the
+// same lock Stop seals with, so a slot is never admitted-then-abandoned (LC-3).
 func (s *Service) CaptureSlot(sc SlotCapture) {
-	if s.closed.Load() {
-		return
-	}
 	s.mu.Lock()
-	started := s.started
-	if started {
-		// Emission-time stamp (O4): resolved here on the caller's goroutine
-		// and carried in the record; the writer never re-derives it.
-		s.stampLocked(&sc)
-	}
-	s.mu.Unlock()
-	if !started {
+	if s.life != evRunning {
+		// Not running (pre-Start idle, or post-Stop terminal): refuse and DON'T count —
+		// the archive is closed, there is nothing to count into. Admission and the Stop
+		// seal share s.mu, so a slot is EITHER admitted-and-drained OR refused, never
+		// admitted-then-abandoned (LC-3 AC-1).
+		s.mu.Unlock()
 		return
 	}
+	// Emission-time stamp (O4): resolved here on the caller's goroutine and carried in
+	// the record; the writer never re-derives it.
+	s.stampLocked(&sc)
+	// Join the in-flight producer group under the SAME lock that decides admission, so
+	// Stop's seal excludes this add: once sealed, teardown waits out exactly the
+	// producers admitted before it and no more.
+	s.producers.Add(1)
+	s.mu.Unlock()
+	defer s.producers.Done()
 	s.pending.Add(1)
+	if captureEnqueueStallForTest != nil {
+		captureEnqueueStallForTest()
+	}
 	select {
 	case s.ch <- sc:
 	default:
@@ -539,7 +593,7 @@ func (s *Service) Status() Status {
 		DroppedSlots:   s.dropped,
 	}
 	db := s.db
-	started := s.started
+	started := s.life == evRunning
 	if !started || db == nil {
 		st.Profiles = &ProfilesStatus{State: ProfilesDisabled}
 		st.Sync = &SyncStatus{Enabled: false}
@@ -903,6 +957,13 @@ var (
 	writerPanicUnderLockForTest   func()
 	writerPanicAfterCommitForTest func()
 	measurementDropPanicForTest   func()
+	// captureEnqueueStallForTest fires in CaptureSlot AFTER a slot is admitted (counted
+	// into the in-flight producer group) but BEFORE the non-blocking send, so a test can
+	// hold a producer at exactly the admission/enqueue boundary while Stop seals (LC-3 AC-1).
+	captureEnqueueStallForTest func()
+	// teardownStallForTest fires at the top of Stop's teardown owner, so a test can hold
+	// the owner observably in teardown while concurrent Stop callers must wait (LC-3 AC-2).
+	teardownStallForTest func()
 )
 
 // runSlot processes one slot, recording EXACTLY ONE writer_panic loss if processSlot
