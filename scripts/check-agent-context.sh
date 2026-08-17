@@ -10,6 +10,8 @@ MAX_AGENTS_BYTES=8192
 MAX_CLAUDE_BYTES=256
 MAX_CURRENT_BYTES=2048
 MAX_ORDINARY_CONTEXT_BYTES=10240
+MAX_SCOPED_AGENTS_BYTES=8192
+MAX_SCOPED_CONTEXT_BYTES=20480
 
 agents_bytes="$(wc -c < AGENTS.md)"
 if [ "$agents_bytes" -gt "$MAX_AGENTS_BYTES" ]; then
@@ -30,6 +32,21 @@ expected_claude="# Claude Code project instructions
 @AGENTS.md"
 if [ "$(cat CLAUDE.md)" != "$expected_claude" ]; then
     printf 'CLAUDE.md must contain only the project heading and @AGENTS.md import.\n' >&2
+    exit 1
+fi
+
+bridge_agents_bytes="$(wc -c < internal/bridge/AGENTS.md)"
+if [ "$bridge_agents_bytes" -gt "$MAX_SCOPED_AGENTS_BYTES" ]; then
+    printf 'internal/bridge/AGENTS.md is %s bytes; the scoped-instruction budget is %s bytes.\n' \
+        "$bridge_agents_bytes" "$MAX_SCOPED_AGENTS_BYTES" >&2
+    exit 1
+fi
+
+expected_bridge_claude="# Claude Code bridge instructions
+
+@AGENTS.md"
+if [ "$(cat internal/bridge/CLAUDE.md)" != "$expected_bridge_claude" ]; then
+    printf 'internal/bridge/CLAUDE.md must contain only its heading and @AGENTS.md import.\n' >&2
     exit 1
 fi
 
@@ -64,6 +81,15 @@ if [ "$ordinary_context_bytes" -gt "$MAX_ORDINARY_CONTEXT_BYTES" ]; then
     exit 1
 fi
 
-printf 'Agent context: kernel %s/%s bytes; current %s/%s bytes; automatic total %s/%s bytes.\n' \
+bridge_claude_bytes="$(wc -c < internal/bridge/CLAUDE.md)"
+bridge_context_bytes=$(( ordinary_context_bytes + bridge_agents_bytes + bridge_claude_bytes ))
+if [ "$bridge_context_bytes" -gt "$MAX_SCOPED_CONTEXT_BYTES" ]; then
+    printf 'Bridge-scoped automatic context is %s bytes; the budget is %s bytes.\n' \
+        "$bridge_context_bytes" "$MAX_SCOPED_CONTEXT_BYTES" >&2
+    exit 1
+fi
+
+printf 'Agent context: kernel %s/%s bytes; current %s/%s bytes; automatic %s/%s bytes; bridge-scoped %s/%s bytes.\n' \
     "$agents_bytes" "$MAX_AGENTS_BYTES" "$current_bytes" "$MAX_CURRENT_BYTES" \
-    "$ordinary_context_bytes" "$MAX_ORDINARY_CONTEXT_BYTES"
+    "$ordinary_context_bytes" "$MAX_ORDINARY_CONTEXT_BYTES" \
+    "$bridge_context_bytes" "$MAX_SCOPED_CONTEXT_BYTES"

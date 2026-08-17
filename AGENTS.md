@@ -18,8 +18,8 @@ rules and routing belong here; chronology, active-work detail, and subsystem exp
   as current truth; ADRs, reviews, session history, and most `docs/v2-design/` files are records.
 - `docs/v2-design/api-endpoints.md` and `docs/v2-design/config.md` are the canonical current HTTP and
   configuration references and change with their corresponding code.
-- When working in `internal/bridge` or `internal/ft8`, also read that directory's scoped
-  `CLAUDE.md` until those files complete their separate migration to generic scoped instructions.
+- Scoped `AGENTS.md` files add local rules automatically. `internal/ft8` still uses a scoped
+  `CLAUDE.md`; read it explicitly until its separate generic-instruction migration is complete.
 
 ## Safety and external claims
 
