@@ -150,6 +150,12 @@ func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 	}
 	close(release)
 	rep := <-done
+	// Re-check overlap after Shutdown returned — catches an overlap signal descheduled past the window.
+	select {
+	case <-overlap:
+		t.Error("other Stop overlapped the still-executing RF fence (late signal)")
+	default:
+	}
 	if len(rep.Outcomes) == 0 || rep.Outcomes[0].Node != "bridge" {
 		t.Errorf("Outcomes = %+v, want bridge first (fence drains first)", rep.Outcomes)
 	}

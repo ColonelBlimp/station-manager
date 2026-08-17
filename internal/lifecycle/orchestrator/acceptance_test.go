@@ -189,6 +189,13 @@ func TestAcceptance_RFFenceIsSole(t *testing.T) {
 	}
 	close(release)
 	rep := <-done
+	// Re-check overlap after Shutdown returned: every non-fence Stop has run by now (runBounded waits
+	// for each), so any signal descheduled past the window above is buffered and caught here.
+	select {
+	case n := <-overlap:
+		t.Errorf("%s Stop overlapped the still-executing RF fence (late signal)", n)
+	default:
+	}
 	if len(rep.Outcomes) == 0 || rep.Outcomes[0].Node != "bridge" {
 		t.Errorf("Outcomes[0] = %+v, want bridge (fence drains first)", rep.Outcomes)
 	}
