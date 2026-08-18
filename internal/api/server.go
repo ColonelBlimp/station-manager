@@ -471,6 +471,10 @@ func retuneStopper(stops ...func() error) func() error {
 	}
 }
 
+// Enrichment returns the lookup runtime this server composes. Test-support for the ADR 0070
+// phase-3 characterization that ft8 and http share ONE enrichment instance (not two constructions).
+func (s *Server) Enrichment() *lookup.Orchestrator { return s.enrich }
+
 // ListenAndServe binds the listener and starts serving.
 func (s *Server) ListenAndServe(socketPath string) error {
 	const op errors.Op = "api.ListenAndServe"

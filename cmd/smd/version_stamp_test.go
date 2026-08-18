@@ -187,43 +187,51 @@ func TestLogStartupFailure_StillCarriesItsExistingFields(t *testing.T) {
 // explicit call is what must be absent — and its absence is exactly what the
 // source can show.
 func TestSmdStarting_DoesNotSetVersionOnTheEvent(t *testing.T) {
-	_, f := parsePackageFile(t, "main.go")
-
+	entries, err := fs.Glob(packageSources, "*.go")
+	if err != nil {
+		t.Fatalf("glob embedded sources: %v", err)
+	}
 	var found, setsVersion bool
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+	for _, name := range entries {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Msg" || len(call.Args) != 1 {
-			return true
-		}
-		lit, ok := call.Args[0].(*ast.BasicLit)
-		if !ok || lit.Value != `"smd starting"` {
-			return true
-		}
-		found = true
-		// Walk back down the builder chain looking for Str("version", …).
-		ast.Inspect(sel.X, func(inner ast.Node) bool {
-			c, ok := inner.(*ast.CallExpr)
+		_, f := parsePackageFile(t, name)
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
-			s2, ok := c.Fun.(*ast.SelectorExpr)
-			if !ok || s2.Sel.Name != "Str" || len(c.Args) == 0 {
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Msg" || len(call.Args) != 1 {
 				return true
 			}
-			if k, ok := c.Args[0].(*ast.BasicLit); ok && k.Value == `"version"` {
-				setsVersion = true
+			lit, ok := call.Args[0].(*ast.BasicLit)
+			if !ok || lit.Value != `"smd starting"` {
+				return true
 			}
-			return true
+			found = true
+			// Walk back down the builder chain looking for Str("version", …).
+			ast.Inspect(sel.X, func(inner ast.Node) bool {
+				c, ok := inner.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				s2, ok := c.Fun.(*ast.SelectorExpr)
+				if !ok || s2.Sel.Name != "Str" || len(c.Args) == 0 {
+					return true
+				}
+				if k, ok := c.Args[0].(*ast.BasicLit); ok && k.Value == `"version"` {
+					setsVersion = true
+				}
+				return true
+			})
+			return false
 		})
-		return false
-	})
+	}
 
 	if !found {
-		t.Fatal(`no Msg("smd starting") call found in main.go`)
+		t.Fatal(`no Msg("smd starting") call found in the package sources`)
 	}
 	if setsVersion {
 		t.Error("the smd-starting statement still sets version on the event; the base " +

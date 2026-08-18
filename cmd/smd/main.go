@@ -6,7 +6,6 @@ import (
 	stderr "errors"
 	"flag"
 	"fmt"
-	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 	"runtime/debug"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,17 +20,12 @@ import (
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/adif"
-	"github.com/ColonelBlimp/station-manager/internal/api"
 	"github.com/ColonelBlimp/station-manager/internal/bridge"
 	"github.com/ColonelBlimp/station-manager/internal/buildinfo"
 	"github.com/ColonelBlimp/station-manager/internal/config"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
-	"github.com/ColonelBlimp/station-manager/internal/email"
-	"github.com/ColonelBlimp/station-manager/internal/enums/dxcc"
-	"github.com/ColonelBlimp/station-manager/internal/enums/modes"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/events"
-	"github.com/ColonelBlimp/station-manager/internal/evidence"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding"
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/clublog" // registers "clublog" forwarder + default retry via init(); main also sets clublog.UserAgent below
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/qrz"     // registers "qrz" forwarder + default retry via init(); main also sets qrz.UserAgent below
@@ -45,7 +38,6 @@ import (
 	// unregistered type as "unknown forwarder type" at startup.
 	"github.com/ColonelBlimp/station-manager/internal/forwarding/worker"
 	"github.com/ColonelBlimp/station-manager/internal/ft8"
-	"github.com/ColonelBlimp/station-manager/internal/inhibit"
 	"github.com/ColonelBlimp/station-manager/internal/iocdi"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/lookup"
@@ -53,7 +45,6 @@ import (
 	_ "github.com/ColonelBlimp/station-manager/internal/lookup/qrz"    // registers the QRZ callsign provider (descriptor + constructor) via init()
 	_ "github.com/ColonelBlimp/station-manager/internal/lookup/qrzcq"  // registers the QRZCQ callsign provider (descriptor + constructor) via init()
 	"github.com/ColonelBlimp/station-manager/internal/lookup/refresher"
-	"github.com/ColonelBlimp/station-manager/internal/pskreporter"
 	"github.com/ColonelBlimp/station-manager/internal/qsoservice"
 	"github.com/ColonelBlimp/station-manager/internal/safego"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -294,9 +285,11 @@ func run() error {
 		return nil, false, nil
 	})
 
-	// Build triggers Initialize() on all beans in dependency order.
-	if err = container.Build(); err != nil {
-		err = errors.New(op).WithErr(err).WithMsg("build container")
+	// ---- Wire the container ----
+	// ADR 0070: the orchestrator, not Build(), drives Initialize. Wire constructs + injects the beans;
+	// the lifecycle graph below drives each bean's Initialize in dependency order.
+	if err = container.Wire(); err != nil {
+		err = errors.New(op).WithErr(err).WithMsg("wire container")
 		logStartupFailure(err) // still pre-logger
 		return err
 	}
@@ -308,99 +301,9 @@ func run() error {
 		logStartupFailure(err) // the logger itself didn't come up — mirror to smd.log
 		return err
 	}
-
-	// The hub was built before the container (services inject it), so this is the
-	// first point a logger exists to give it. It reports slow-reader evictions —
-	// a subscriber dropped for not keeping up, which ends its SSE stream and is
-	// otherwise indistinguishable from the client disconnecting normally.
+	// The hub was built before the container (services inject it), so this is the first point a
+	// logger exists to give it. It reports slow-reader evictions.
 	hub.SetLogger(loggerSvc)
-
-	// Register logger cleanup first (defer-LIFO means it runs last, after
-	// dbSvc close below, so later defers can still use the logger).
-	defer func() {
-		loggerSvc.InfoWith().Msg("smd stopped")
-		if err := loggerSvc.Close(); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "smd: logger close error: %v\n", err)
-		}
-	}()
-
-	// First-run event — structured log goes to smd.log so this major
-	// startup transition is preserved alongside the rest of the
-	// operator's record. The earlier stderr line covers the case where
-	// logger init itself fails.
-	if firstRunPath != "" {
-		loggerSvc.InfoWith().
-			Str("path", firstRunPath).
-			Msg("first run: wrote default config to disk")
-	}
-	// Deferred from persistResolvedConfig above, which runs before the logger
-	// exists — same shape as the first-run line. `source` is what separates
-	// this from an operator's save; without it the two records are the same
-	// event as far as a grep is concerned, which is the confusable state this
-	// whole feature exists to break.
-	if len(startupChanges) > 0 {
-		loggerSvc.InfoWith().
-			Str("source", "startup").
-			Int("change_count", len(startupChanges)).
-			Interface("changes", startupChanges).
-			Msg("config saved")
-	}
-	// No Str("version", …) here: the base logger context carries it on every
-	// record now, and setting it again would emit the key TWICE — legal JSON that
-	// json.Unmarshal silently collapses, and two values that could drift.
-	loggerSvc.InfoWith().
-		Msg("smd starting")
-
-	// Confirmation line so an operator can verify their config.json
-	// `logging.level` setting actually took effect. Otherwise an
-	// expected-debug-but-quiet daemon looks like a logger bug; the
-	// real cause is usually "no DebugWith call in the active path"
-	// rather than the level not loading. This makes the loaded level
-	// observable.
-	loggerSvc.InfoWith().
-		Str("level", cfg.Logging.Level).
-		Msg("logging configured")
-
-	// Non-fatal config advisories (review m4). Surfaced once after the
-	// logger boots so they land in smd.log alongside the rest of
-	// startup. Currently the only check is "tcp protocol bound to a
-	// non-loopback address" — accepted for trusted-LAN setups but
-	// worth the operator seeing.
-	for _, w := range config.Warnings(cfg) {
-		loggerSvc.WarnWith().Msg(w)
-	}
-
-	// Unknown/misspelled config keys (review 2026-06-19 L1): Load silently
-	// ignores them (forward-compat), so surface them here — a typo in a
-	// hand-edited config otherwise just falls back to the default with no
-	// signal. Best-effort: a re-read failure is non-fatal (Load already
-	// succeeded on this path).
-	if raw, rerr := os.ReadFile(cfgPath); rerr == nil {
-		for _, k := range config.UnknownKeys(raw) {
-			loggerSvc.WarnWith().Str("key", k).
-				Msg("config: unrecognised key ignored (typo? — value falls back to default)")
-		}
-	}
-
-	// Optional ADIF modes override: $SM_WORKING_DIR/modes.json layered
-	// on top of the embedded baseline (`internal/enums/modes/adif-modes.json`).
-	// Missing file is a no-op; malformed file is loud-and-fatal — an
-	// operator who hand-edits this file should see the syntax error at
-	// startup rather than silent IsValidMode rejections later.
-	if err := modes.LoadOverride(cfg.DataDir); err != nil {
-		loggerSvc.ErrorWith().Err(err).Msg("modes: override load failed")
-		return errors.New(op).WithErr(err).WithMsg("load modes override")
-	}
-
-	// Optional DXCC entity override: $SM_WORKING_DIR/dxcc-entities.json layered
-	// on top of the embedded baseline (`internal/enums/dxcc/dxcc-entities.json`),
-	// used by the enrichment new-entity check (hamnut primaryDXCCPrefix → ADIF
-	// DXCC number). Same loud-and-fatal contract as modes so a hand-edited file
-	// surfaces its error at startup.
-	if err := dxcc.LoadOverride(cfg.DataDir); err != nil {
-		loggerSvc.ErrorWith().Err(err).Msg("dxcc: override load failed")
-		return errors.New(op).WithErr(err).WithMsg("load dxcc override")
-	}
 
 	dbSvc, err := iocdi.ResolveAs[*sqlite.Service](container, types.SqliteServiceName)
 	if err != nil {
@@ -410,611 +313,82 @@ func run() error {
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("resolve reference-db sqlite service")
 	}
-
 	qsoSvc, err := iocdi.ResolveAs[*qsoservice.Service](container, qsoservice.ServiceName)
 	if err != nil {
 		return errors.New(op).WithErr(err).WithMsg("resolve qso service")
 	}
-	// Pin MY_RIG attribution to the rig active AT STARTUP — the same one the bridge
-	// binds via cfg.ActiveBridge() below. A runtime "Set as default" only takes
-	// effect for the bridge on the next restart, so MY_RIG must follow the same
-	// startup rig, not the live default_rig_id, or QSOs made on the still-connected
-	// old rig would be stamped with the new rig's identity (codex e539a080 P1).
-	qsoSvc.SetActiveRig(cfg.DefaultRigID)
 
-	// ---- Open databases and run migrations (reference.db / log-db split) ----
-	// The log connection holds logbook/qso/qso_upload/qso_history; the reference
-	// connection holds the operator-global enrichment caches in reference.db,
-	// alongside the log DB in the same directory.
-	logDBDir := filepath.Dir(dbSvc.DatabaseConfig.Path)
-	refPath := filepath.Join(logDBDir, referenceDBFilename)
-
-	// One-time, backup-first migration of an existing single-file DB into the
-	// split. No-op on fresh installs and on already-split DBs. MUST run before
-	// the connections open (it re-keys the log DB's migration tracking so the
-	// log connection's migrate is a no-op rather than re-running 0002).
-	if err = sqlite.BootstrapReferenceSplit(
-		dbSvc.DatabaseConfig.Path, refPath, filepath.Join(logDBDir, "backups"), loggerSvc,
-	); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("bootstrap reference split")
-	}
-
-	dbSvc.SetMigrationSets(sqlite.MigrationSetLog)
-	if err = dbSvc.Open(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("open database")
-	}
-	// Registered AFTER Open succeeds, so that we never double-close or close a
-	// handle we didn't open.
-	defer func() {
-		if err := dbSvc.Close(); err != nil {
-			loggerSvc.ErrorWith().Err(err).Msg("database close error")
-		}
-	}()
-	if err = dbSvc.Migrate(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("run migrations")
-	}
-
-	refDbSvc.SetMigrationSets(sqlite.MigrationSetReference)
-	refDbSvc.SetDatabasePath(refPath)
-	if err = refDbSvc.Open(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("open reference database")
-	}
-	defer func() {
-		if err := refDbSvc.Close(); err != nil {
-			loggerSvc.ErrorWith().Err(err).Msg("reference database close error")
-		}
-	}()
-	if err = refDbSvc.Migrate(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("run reference migrations")
-	}
-
-	loggerSvc.InfoWith().Msg("databases open and migrated")
-
-	// ST-6: the log + reference databases hold operator/QSO data, so make their files,
-	// directory and WAL/SHM sidecars owner-private (0600/0700) when application-owned —
-	// SQLite creates them per umask, which can leave a group/other-readable database. An
-	// application-owned file that cannot be tightened is fatal; an operator-supplied path
-	// outside the working directory is warned about, not mutated.
-	if err = sqlite.SecureDataFiles(cfgSvc.WorkingDir(), filepath.Join(logDBDir, "backups"),
-		loggerSvc, dbSvc.DatabaseConfig.Path, refPath); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("secure database files")
-	}
-
-	// Self-heal the "config says setup-complete and points at logbook
-	// id=N, but the DB has no row at N" failure mode. Most commonly
-	// hits when an operator nukes a dev DB while keeping their
-	// config.json — without this, QSO submit FK-violates on the first
-	// log attempt with a blank cache. cfg is captured by value above;
-	// re-snapshot here in case ensureDefaultLogbook persists a corrected
-	// DefaultLogbookID and downstream code (server) needs the fresh value.
-	if err = ensureDefaultLogbook(context.Background(), dbSvc, cfgSvc, loggerSvc); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("ensure default logbook")
-	}
-	cfg = cfgSvc.Snapshot()
-
-	// ---- Forwarder workers ----
-	// Orphan sweep: any qso_upload row left in 'in_progress' by a
-	// previous crashed run is reset to 'pending'. This makes it
-	// reclaimable.
-	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	n, err := dbSvc.ResetOrphanedUploadsWithContext(sweepCtx)
-	sweepCancel()
-	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("reset orphaned upload rows")
-	}
-	if n > 0 {
-		loggerSvc.InfoWith().Int64("reset", n).Msg("forwarder: orphaned in_progress rows reset to pending")
-	}
-
-	// ADR 0039: `enabled` gates enqueue, so a forwarder that is now disabled
-	// must not retain a queue (the suspended state is gone). Discard its
-	// not-yet-uploaded rows at startup — keeping 'uploaded' rows for upstream_id
-	// provenance. The affected QSOs revert to "not uploaded to X" and are
-	// recoverable via the logbook SPA. Logged loudly so the discard is never
-	// silent ("disable" is now stop+drop, not pause).
-	for _, fc := range cfg.Forwarders {
-		if fc.Enabled {
-			continue
-		}
-		discardCtx, discardCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		discarded, derr := dbSvc.DiscardQueuedUploadsForForwarderWithContext(discardCtx, fc.Name)
-		discardCancel()
-		if derr != nil {
-			return errors.New(op).WithErr(derr).WithMsgf("discard queued uploads for disabled forwarder %q", fc.Name)
-		}
-		if discarded > 0 {
-			loggerSvc.WarnWith().
-				Str("forwarder", fc.Name).
-				Int64("discarded", discarded).
-				Msg("forwarder disabled; discarded queued uploads (re-upload via the logbook app)")
-		}
-	}
-
-	// workerCtx is the parent context for all forwarder workers. It is
-	// cancelled at shutdown, thus Run's select can observe it; each worker
-	// then finishes its current processRow and exits.
+	// ---- Worker context ----
+	// The forwarder workers and the FT8/bridge/psk long-lived goroutines bind here; it is cancelled
+	// at shutdown before the ordered teardown so in-flight work observes ctx.Done().
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	// Defer covers the error-return path between here and the
-	// explicit workerCancel() in the happy-path shutdown sequence
-	// below — that explicit call has to run before server.Shutdown
-	// and the WG drain (it's part of the ordered teardown), not at
-	// function return. context.CancelFunc is safe to call twice;
-	// the second call is a no-op.
 	defer workerCancel()
 
-	// workerWG tracks live forwarder workers so shutdown can wait for
-	// them to exit cleanly before the deferred dbSvc.Close() fires —
-	// otherwise an in-flight DB query (inside processRow) can race the
-	// close and surface as "database is closed" log spam on every
-	// restart.
-	var workerWG sync.WaitGroup
-
-	// qsoLogWG tracks the off-pipeline FT8 completed-QSO log goroutines (below)
-	// so shutdown can drain an in-flight log of an already-completed on-air QSO
-	// before the daemon hub / DB tear down, instead of racing it (M2).
-	var qsoLogWG sync.WaitGroup
-
-	if err = spawnForwarderWorkers(workerCtx, &workerWG, cfg.Forwarders, dbSvc, qsoSvc, loggerSvc, hub); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("spawn forwarder workers")
+	// ---- Assemble the daemon + its lifecycle graph (ADR 0070 phase 3) ----
+	d := &daemon{
+		cfg:            cfg,
+		cfgSvc:         cfgSvc,
+		cfgPath:        cfgPath,
+		firstRunPath:   firstRunPath,
+		startupChanges: startupChanges,
+		logger:         loggerSvc,
+		hub:            hub,
+		db:             dbSvc,
+		refDB:          refDbSvc,
+		qso:            qsoSvc,
+		workerCtx:      workerCtx,
+		workerCancel:   workerCancel,
+		errCh:          make(chan error, 1),
+		restartCh:      make(chan struct{}),
 	}
+	// bridge + ft8 are constructed here (not in their node Initialize) so the HTTP server keeps their
+	// handles even when they are config-disabled and pruned from the active graph.
+	d.bridge = bridge.New(cfg.ActiveBridge(), loggerSvc)
+	d.ft8 = ft8.NewService(cfg.ActiveFt8(), loggerSvc, cfgSvc.WorkingDir())
 
-	// ---- SM Cloud reconcile (ADR 0040 S4) ----
-	// One reconciler for the first enabled smcloud forwarder, guarding the
-	// default logbook: a periodic detect+heal loop under the worker context
-	// (its heal traffic rides that forwarder's queue, so it shares the
-	// workers' lifecycle + WG drain), plus the on-demand
-	// POST /v1/smcloud/reconcile wired onto the API server below.
-	var smcloudRec *smcloud.Reconciler
-	for _, fc := range cfg.Forwarders {
-		if !fc.Enabled || fc.Type != smcloud.Type {
-			continue
-		}
-		if cfg.DefaultLogbookID < 1 {
-			loggerSvc.WarnWith().Str("forwarder", fc.Name).
-				Msg("smcloud reconciler skipped: no default logbook yet (first-run setup pending)")
-			break
-		}
-		rec, rerr := smcloud.NewReconciler(fc, cfg.DefaultLogbookID, dbSvc, qsoSvc, loggerSvc)
-		if rerr != nil {
-			return errors.New(op).WithErr(rerr).WithMsgf("build smcloud reconciler for %q", fc.Name)
-		}
-		smcloudRec = rec
-		reconcilePanic := func(name string, pv any, stack []byte) {
-			loggerSvc.ErrorWith().Str("goroutine", name).Interface("panic", pv).
-				Bytes("stack", stack).Msg("smcloud reconciler panic recovered")
-		}
-		safego.GoTracked(workerCtx, fc.Name+"-reconcile", reconcilePanic, func() {
-			rec.Run(workerCtx)
-		}, true, &workerWG)
-		loggerSvc.InfoWith().Str("forwarder", fc.Name).
-			Int64("logbook_id", cfg.DefaultLogbookID).Msg("smcloud reconciler started")
-		break // single smcloud destination in P1 — first enabled wins
-	}
-
-	// ---- Build enrichment pipeline (ADR 0017) ----
-	// Constructs the lookup providers (hamnut + chain entries) from
-	// operator config, the bounded async-refresh worker, and the
-	// orchestrator that ties them together. nil orchestrator means
-	// no providers were enabled — the API handler then returns
-	// empty-result responses with source=none.
-	enrichOrchestrator, lookupRefresher, err := buildEnrichment(workerCtx, cfg, cfgSvc, dbSvc, refDbSvc, loggerSvc)
+	orch, err := d.registerLifecycle(container)
 	if err != nil {
-		return errors.New(op).WithErr(err).WithMsg("build enrichment pipeline")
-	}
-	if lookupRefresher != nil {
-		// Stop the refresher BEFORE the deferred dbSvc.Close so
-		// in-flight refresh fns (which run DB writes) finish against
-		// a still-open handle. workerCancel above already cancelled
-		// the parent context that the refresher was Started with, so
-		// in-flight fns are seeing ctx.Done() — Stop just waits for
-		// them to drain.
-		defer func() {
-			if err := lookupRefresher.Stop(); err != nil {
-				loggerSvc.ErrorWith().Err(err).Msg("lookup refresher stop error")
-			}
-		}()
+		err = errors.New(op).WithErr(err).WithMsg("register lifecycle graph")
+		logStartupFailure(err)
+		return err
 	}
 
-	// ---- Mailer ----
-	// Constructed regardless of whether SMTP is enabled; the Service
-	// itself reports Enabled() based on cfg.Smtp.Enabled. Handlers check
-	// Enabled() and return 503 mailer_disabled when disabled —
-	// no startup-time error path for the "operator hasn't enabled
-	// SMTP yet" state. (An enabled-but-incomplete block is rejected by
-	// config validation at load, so it never reaches here.)
-	mailerSvc := email.New(cfg.Smtp, loggerSvc)
+	// ---- Start the daemon through the orchestrator ----
+	// The orchestrator drives Initialize→Start across the graph in dependency order (logging opens
+	// the log file, the DBs open + migrate, the fleet + promoted infra start). On ANY failure it rolls
+	// back every advanced node and returns; run() must NOT fall through into the legacy teardown — the
+	// rollback already owns it (operator ruling, phase 3a).
+	if err = orch.Start(workerCtx); err != nil {
+		logStartupFailure(err) // rollback may have closed the logger; mirror to smd.log
+		return err
+	}
 
-	// ---- Bridge subsystem (ADR 0013 + ADR 0019) ----
-	// Always constructed; the Service reports Enabled() from
-	// cfg.Bridge.Enabled. When disabled (master smd / headless host
-	// without a rig) Start() is a no-op and the api package skips
-	// route registration. Started before the HTTP server so the
-	// event emitter is publishing by the time SSE subscribers connect;
-	// stopped BEFORE server.Shutdown in the teardown below — publishing
-	// halts first, then the HTTP shutdown drains the SSE readers.
-	//
-	// cfg.ActiveBridge() projects the active rig's driver + serial port
-	// (the rig Config.DefaultRigID selects, per ADR 0028) onto the bridge
-	// knobs. Single-rig configs are migrated into a one-entry catalogue at
-	// Load, so this resolves correctly whether or not the operator has
-	// written a `rigs` block.
-	bridgeSvc := bridge.New(cfg.ActiveBridge(), loggerSvc)
-	if err := bridgeSvc.Initialize(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("initialize bridge")
-	}
-	if err := bridgeSvc.Start(workerCtx); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("start bridge")
-	}
-	// gracefulDone gates the subsystem safety-net defers below (bridge, ft8, psk).
-	// They exist to stop those subsystems on an EARLY ERROR return that never reaches
-	// the happy-path gracefulShutdown. On the happy path gracefulShutdown owns the
-	// Stop — and if it ABANDONED a wedged Stop at the budget, re-calling Stop here
-	// would re-block on the same wedge and defeat the LC-2 bound. Set true after
-	// gracefulShutdown; the defers read the final value via safetyNetStop.
-	var gracefulDone bool
-	// Covers the error-return path between here and gracefulShutdown. On the happy
-	// path safetyNetStop skips it (gracefulShutdown already owns the Stop).
+	// Start succeeded. Arm the deferred closers for the resources gracefulShutdown does NOT own (its
+	// node Stop hooks are the start-FAILURE rollback path; on the happy path these run at return).
+	// LIFO order matches the pre-orchestrator run(): refresher → reference DB → log DB → logger
+	// (logger deferred first so it closes LAST, after the DBs a late log line might still touch).
 	defer func() {
-		if err := safetyNetStop(gracefulDone, bridgeSvc.Stop); err != nil {
-			loggerSvc.ErrorWith().Err(err).Msg("bridge: deferred stop error")
+		loggerSvc.InfoWith().Msg("smd stopped")
+		if cerr := loggerSvc.Close(); cerr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "smd: logger close error: %v\n", cerr)
 		}
 	}()
-
-	// FT8 decode subsystem (ADR 0024). Independent of the bridge — it
-	// consumes receive audio, not CAT. When disabled (the default) Start is
-	// a no-op; when enabled but capture won't start (no device, busy, or the
-	// CGO-free build) it logs and stays idle. A decode is NOT a QSO: the
-	// subsystem only logs "heard this" lines, so it never touches the
-	// log/forward path (narrow-daemon-scope holds by the import graph).
-	ft8Svc := ft8.NewService(cfg.ActiveFt8(), loggerSvc, cfgSvc.WorkingDir())
-	// Wire the bridge as the FT8 TX keyer (ADR 0030): internal/ft8 keys PTT
-	// through this adapter so it never imports internal/bridge (narrow-daemon-
-	// scope by import graph). Only meaningful when the bridge is enabled and a
-	// rig is connected; otherwise TxReady() stays false and arming is refused.
-	ft8Svc.SetTxKeyer(ft8Keyer{bridgeSvc})
-	// Ask the desktop to stay awake while TX is armed. An unattended FT8 run is
-	// exactly when the host looks idle to its session, and a session/power event
-	// mid-run is the suspected cause of the 2026-07-28 silent-transmit incident
-	// (SM kept keying for 24 minutes with no audio reaching the rig). Injected like
-	// the keyer, so internal/ft8 takes no D-Bus dependency; a host that grants no
-	// inhibition (headless, no bus) logs once and transmits regardless.
-	if types.ResolveFt8InhibitIdle(cfg.ActiveFt8().TX) {
-		ft8Svc.SetIdleInhibitor(inhibit.New(loggerSvc))
-	}
-	// Self-decode filtering (dropping SM's own TX self-decoded off residual rig
-	// TX-audio bleed) reads the ACTIVE session's pinned callsign directly from the
-	// sequencer (ADR 0055, pin-at-arm) — no per-slot DB lookup, no fallback, no
-	// timeout on the decode path. The call was resolved ONCE when the exchange was
-	// armed (the /v1/ft8/qso/* handlers) and carried on the exchange, so nothing
-	// needs to be wired here.
-	// Gate FT8 capture on the rig/CAT being live — only when the bridge is
-	// enabled (CAT configured). Without it, the daemon would grab the microphone
-	// as soon as the FT8 view opens (e.g. SPA reopens to FT8 on PC boot) even with
-	// the rig off. With no bridge (no CAT), no gate is installed and capture stays
-	// purely demand-driven, so an audio-only setup is unaffected.
-	if bridgeSvc.Enabled() {
-		ft8Svc.SetCatGate(bridgeSvc.RigConnected)
-		// Attribute each captured slot to the dial frequency it was heard on, so
-		// an occupancy report says which band it measured instead of being
-		// labelled with whatever band the rig is on when it reaches the SPA. Same
-		// injection shape as the CAT gate — internal/ft8 never imports
-		// internal/bridge. Without CAT there is nothing to attribute with, and
-		// reports simply carry no frequency.
-		ft8Svc.SetDialSource(bridgeSvc.CurrentDialMHz)
-		// ADR 0064: the bridge's continuous ALC/PO meter poll lives and dies
-		// with the FT8 capture session — this listener is the whole lifecycle
-		// signal (no windowing state machine). Same injection shape as above.
-		ft8Svc.SetCaptureListener(bridgeSvc.SetFt8CaptureLive)
-	}
-	// Wire the completed-QSO sink (ADR 0029 step e4): a finished FT8 exchange
-	// becomes a logged QSO. The assembly + submit live here (the composition
-	// root has config + qsoservice + adif), so internal/ft8 stays narrow — it
-	// just emits a CompletedQso. Best-effort: a submit failure is logged, never
-	// fatal (the QSO already happened on the air).
-	ft8LogPanic := func(name string, pv any, stack []byte) {
-		loggerSvc.ErrorWith().Str("goroutine", name).Interface("panic", pv).
-			Str("stack", string(stack)).Msg("ft8: qso-log goroutine panicked")
-	}
-	ft8Svc.SetQsoLogger(func(_ context.Context, c ft8.CompletedQso) {
-		// This callback fires on the FT8 decode loop (after the 73). Submit does
-		// DB writes and the country lookup below does network I/O — running either
-		// inline would stall slot decoding and drop slots (the scheduler buffers
-		// one slot then drops on backpressure). So the whole log+enrich runs in a
-		// one-shot safego goroutine, decoupled from the real-time pipeline; a panic
-		// here is recovered and can't take the daemon (or the decode loop) down.
-		//
-		// launchFt8QsoLog tracks the goroutine on qsoLogWG and runs the work under
-		// a fresh bounded context decoupled from the passed (decode-loop) context
-		// — see its doc for why both matter (M2). The "_" input context is
-		// deliberately unused here.
-		launchFt8QsoLog(&qsoLogWG, ft8LogPanic, func(ctx context.Context) {
-			snap := cfgSvc.Snapshot()
-			// Authoritative frequency: c.DialFreqMHz, which internal/ft8 now stamps
-			// from the dial the SESSION pinned (read from the bridge at start).
-			//
-			// This used to prefer a LIVE bridge read, because the value the SPA sends
-			// at start goes stale across a Call-CQ pile-up (logged before the IC-7300's
-			// freq poll had landed, producing wrong-band QSOs). The session pin fixes
-			// that at the source and is strictly better: a start is refused while the
-			// dial is unreadable, and a QSY during the session ends the session — so
-			// the pin is always a real reading of where the contact happened. A live
-			// read is now the WRONG answer in the one case they differ: a contact
-			// completed just before a QSY would be filed on the new band.
-			//
-			// The live read stays only as a fallback for a completion carrying no
-			// pinned dial at all (no CAT — where the read is unavailable too, so this
-			// is close to dead code, kept so an unpinned path degrades rather than
-			// logs zero).
-			c.DialFreqMHz = resolveQsoDialMHz(c.DialFreqMHz, bridgeSvc.CurrentDialMHz)
-			// Log to the logbook PINNED at arm (c.LogbookID, ADR 0055) — NOT the
-			// current default — so a mid-exchange logbook switch can't relabel or
-			// misroute the QSO. STATION_CALLSIGN is then derived by qsoservice.Submit
-			// from that logbook (Slice B). Defensive fallback to the current default if
-			// somehow unpinned (0 — shouldn't happen, a completion implies a Start).
-			logbookID := c.LogbookID
-			if logbookID < 1 {
-				logbookID = snap.DefaultLogbookID
-			}
-			q := ft8.BuildQso(c, snap.LoggingStation, logbookID, time.Now().UTC(), loggerSvc)
-			// ARRL Field Day RST_RCVD default (config ft8.field_day.default_rst_rcvd):
-			// FD exchanges class/section, not a report, so we never receive an RST.
-			// RST_SENT is the measured SNR (set by BuildQso); some OQRS systems require
-			// RST_RCVD non-empty too, so fill it from the operator's configured default
-			// for FD QSOs. Empty default / non-FD QSO → unchanged. A logging-policy
-			// default, applied here beside the QSL / TX_PWR defaults (not on-air data).
-			if q.ContestId == "ARRL-FD" && q.RstRcvd == "" && snap.Ft8.FieldDay != nil {
-				q.RstRcvd = strings.TrimSpace(snap.Ft8.FieldDay.DefaultRstRcvd)
-			}
-			// Country/DXCC enrichment for the contacted station. The SPA logging
-			// form gets this by calling /v1/enrich/callsign before it submits; the
-			// FT8 path has no form, so the daemon runs the same lookup here. Besides
-			// filling the QSO's country fields, Enrich's cold-miss path writes the
-			// country cache row — without this call an FT8 QSO logged with country
-			// "Unknown" and created no country record. Best-effort by contract:
-			// Enrich never errors (failures fold to empty fields, source=none), so
-			// the submit always runs — "enrichment never blocks logging" holds. The
-			// on-air grid stays authoritative over any cached locator.
-			if enrichOrchestrator != nil {
-				enr := enrichOrchestrator.Enrich(ctx, q.Call)
-				grid := q.Gridsquare
-				q.ContactedStation = enr.Station
-				q.Call = c.TheirCall
-				if grid != "" {
-					q.Gridsquare = grid
-				}
-				q.CountryDetails = enr.Country
-			}
-			// TX_PWR: the effective at-antenna power, mirroring the phone/CW SPA
-			// derivation (displayedState.effectivePower) — the rig's live power
-			// scaled by the linear amp when enabled, falling back to the
-			// operator's default power when CAT can't report it (rig blip / not
-			// yet read). Left unset (TX_PWR omitted) only when neither is known.
-			rawW := float64(bridgeSvc.CurrentPowerW())
-			if rawW == 0 {
-				rawW = snap.Station.DefaultPower
-			}
-			if rawW > 0 {
-				mult := 1.0
-				if snap.Station.AmpEnabled && snap.Station.AmpMultiplier > 0 {
-					mult = snap.Station.AmpMultiplier
-				}
-				q.TxPwr = strconv.Itoa(int(math.Round(rawW * mult)))
-			}
-			rec := adif.QsoToRecord(q)
-			// Standing QSL defaults (config.json `qsl`) — fill the fields the QSO
-			// leaves empty; empty defaults are skipped (omitempty drops them). FT8 has
-			// no form, so the daemon applies them here; the Phone/CW submit handler
-			// calls the same record method, so both modes log identical defaults.
-			rec.ApplyQslDefaults(snap.Qsl)
-			// force = the operator's explicit "work this station again" intent, pinned
-			// at arm time and carried on the CompletedQso. Ordinary contacts pass
-			// false and keep the duplicate protection; only a deliberate repeat
-			// bypasses the minute-granular dedupe key, which would otherwise fold the
-			// second on-air exchange into the first and store nothing.
-			res, err := qsoSvc.Submit(ctx, q.LogbookID, rec, c.AllowDuplicate)
-			if err != nil {
-				loggerSvc.ErrorWith().Err(err).Str("call", c.TheirCall).
-					Msg("ft8: failed to log completed QSO")
-				return
-			}
-			// A contact completed ON AIR but deduplicated away stores NOTHING and
-			// returns the FIRST contact's UUID, which the session sink then ignores
-			// as already-seen — so without this the operator transmits a full
-			// exchange and simply never sees a row (codex 0f9aa672 P1). The dedupe
-			// key is minute-granular (call+band+mode+freq+date+HHMM), so this needs
-			// two contacts with the same station inside one minute: unreachable on
-			// the standard ladder (~60 s minimum) but reachable on the short ones —
-			// work-a-caller and the single-rung type-4 work path. Surfacing it is
-			// the floor, not the fix; the fix is an explicit operator override
-			// reaching Submit's `force` (see docs/backlog.md, FT8 duplicate-QSO).
-			if res.Status == "duplicate" {
-				loggerSvc.WarnWith().Str("call", c.TheirCall).Str("band", q.Band).
-					Str("uuid", res.UUID).
-					Msg("ft8: completed QSO matched an existing row and was NOT stored — same station, band and minute")
-			}
-			loggerSvc.InfoWith().Str("call", c.TheirCall).Str("band", q.Band).
-				Str("country", q.Country).Msg("ft8: completed QSO logged")
-			// Surface the logged QSO to the SPA's session list (ADR 0029 step e4).
-			// The canonical UUID flows through so the SPA's email-out / edit paths
-			// work for FT8 rows; best-effort, after a confirmed store.
-			ft8Svc.PublishQsoLogged(ft8.NewLoggedQso(q, res.UUID, loggerSvc))
-		})
-	})
-	// Evidence capture (spot-network design §4.1, default-off consent layer):
-	// the writer owns its own evidence.db under db/ alongside the log databases
-	// (owner-only), and receives every PHYSICAL slot's rich decode set via
-	// SetEvidenceSink — the same one-way DI as the QSO logger, so internal/ft8
-	// never imports the writer and the writer never imports ft8 (go-ft8 is the
-	// shared vocabulary). Fail-soft like the rest of FT8: a writer that cannot
-	// initialise or start logs and stays idle — evidence must never stop the
-	// operator decoding or logging.
-	//
-	// RelocateArchive moves an archive left at the legacy working-dir-root path
-	// (world-readable) into db/ once, without orphaning the operator's evidence.
-	evidencePath := evidence.RelocateArchive(
-		filepath.Join(cfgSvc.WorkingDir(), "evidence.db"),
-		filepath.Join(logDBDir, "evidence.db"),
-		loggerSvc,
-	)
-	evCfg := evidence.Config{
-		Capture:  cfg.Evidence.Capture,
-		CapBytes: cfg.Evidence.CapBytes,
-		Path:     evidencePath,
-		Antennas: cfg.Evidence.Antennas,
-	}
-	// §5 sync, consent layer 2: reuse the smcloud forwarder's channel —
-	// validation already refused sync without it, so a resolution failure
-	// here is a defensive log, not a reachable path.
-	if cfg.Evidence.Sync {
-		if url, token, err := config.EvidenceSyncCredentials(cfg); err != nil {
-			loggerSvc.ErrorWith().Err(err).Msg("evidence: sync enabled but credentials unresolved; sync stays off")
-		} else {
-			evCfg.Sync, evCfg.SyncURL, evCfg.SyncToken = true, url, token
-		}
-	}
-	evidenceSvc := evidence.New(evCfg, loggerSvc)
-	if err := evidenceSvc.Initialize(); err != nil {
-		loggerSvc.ErrorWith().Err(err).Msg("evidence: init failed; capture stays idle")
-	} else if err := evidenceSvc.Start(); err != nil {
-		loggerSvc.ErrorWith().Err(err).Msg("evidence: start failed; capture stays idle")
-	} else if cfg.Evidence.Capture {
-		ft8Svc.SetEvidenceSink(func(es ft8.EvidenceSlot) {
-			start, err := time.Parse(time.RFC3339, es.Slot.StartUTC)
-			if err != nil {
-				return // a malformed slot ref cannot be archived honestly
-			}
-			evidenceSvc.CaptureSlot(evidence.SlotCapture{
-				SlotStart:   start,
-				DialMHz:     es.DialMHz,
-				DialTracked: es.DialTracked,
-				Outcome:     evidence.SlotOutcome(es.Outcome),
-				Decodes:     es.Decodes,
-			})
-		})
-	}
-
-	// PSK Reporter upload (opt-in): every FT8 decode is a "heard this station"
-	// reception report. The uploader is fed the decode stream via SetDecodeSink
-	// (same one-way DI as the QSO logger), so internal/ft8 stays free of it and
-	// narrow-daemon-scope holds. Best-effort: it never touches the decode timing.
-	pskRxCall := strings.TrimSpace(cfg.LoggingStation.StationCallsign)
-	if pskRxCall == "" {
-		pskRxCall = strings.TrimSpace(cfg.LoggingStation.Operator)
-	}
-	pskSvc := pskreporter.New(
-		pskreporter.Config{
-			Enabled: cfg.PskReporter.Enabled,
-			Host:    cfg.PskReporter.Host,
-			Port:    cfg.PskReporter.Port,
-			// Persist the IPFIX sender identifier across restarts (pskdev.html: it
-			// "should be constant for any particular sender") so a restart storm no
-			// longer looks like a stream of distinct senders to the collector.
-			StatePath: filepath.Join(cfgSvc.WorkingDir(), "pskreporter.id"),
-		},
-		pskreporter.Receiver{
-			Call:     pskRxCall,
-			Locator:  strings.TrimSpace(cfg.LoggingStation.MyGridsquare),
-			Software: "StationManager " + buildinfo.Version,
-			Antenna:  strings.TrimSpace(cfg.LoggingStation.MyAntenna), // ADIF MY_ANTENNA — single source
-		},
-		loggerSvc,
-	)
-	ft8Svc.SetDecodeSink(func(r ft8.DecodeReport) {
-		// Gate on a configured receiver callsign too: an empty receiver record is
-		// rejected by the server, so without a callsign we upload nothing.
-		if !cfg.PskReporter.Enabled || pskRxCall == "" {
-			return
-		}
-		// Absolute frequency = the dial the slot was CAPTURED on, stamped on the
-		// report — never a live bridge read: publication lags capture by the
-		// decode (~0.7–1.6 s), so a live read files a whole slot's spots on the
-		// wrong band when the operator QSYs in that gap (review P1, 2026-08-07;
-		// same attribution rule as occupancy). 0 = the slot was unattributable →
-		// skip rather than spot at a guessed frequency (required field).
-		dialMHz := r.DialMHz
-		if dialMHz == 0 {
-			return
-		}
-		t, err := time.Parse(time.RFC3339, r.Slot.StartUTC)
-		if err != nil {
-			return
-		}
-		dialHz := uint32(dialMHz * 1e6)
-		unix := uint32(t.Unix())
-		for _, d := range r.Decodes {
-			call, grid, ok := ft8.SpotFrom(d.Text)
-			if !ok || call == pskRxCall { // unparseable/hashed, or our own call
-				continue
-			}
-			pskSvc.AddSpot(pskreporter.Spot{
-				Call:     call,
-				Grid:     grid,
-				FreqHz:   dialHz + uint32(d.FreqHz),
-				SNR:      int8(d.SNR),
-				Mode:     "FT8",
-				TimeUnix: unix,
-			})
-		}
-	})
-
-	if err := ft8Svc.Initialize(); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("initialize ft8")
-	}
-	if err := ft8Svc.Start(workerCtx); err != nil {
-		return errors.New(op).WithErr(err).WithMsg("start ft8")
-	}
-	// Start the PSK Reporter uploader (no-op + no socket when disabled). Best-effort:
-	// a resolve/dial failure (DNS outage, typo'd host, bad port) must NOT stop the
-	// daemon for an optional reporting path — log and continue without uploads.
-	if err := pskSvc.Start(workerCtx); err != nil {
-		loggerSvc.WarnWith().Err(err).Msg("pskreporter: start failed; FT8 spot upload disabled")
-	}
-	defer func() { _ = safetyNetStop(gracefulDone, pskSvc.Stop) }()
-	// Error-path safety net; on the happy path safetyNetStop skips it because
-	// gracefulShutdown already owns the Stop (and re-calling a Stop it abandoned at
-	// the budget would re-block — see the gracefulDone comment above).
 	defer func() {
-		if err := safetyNetStop(gracefulDone, ft8Svc.Stop); err != nil {
-			loggerSvc.ErrorWith().Err(err).Msg("ft8: deferred stop error")
+		if cerr := dbSvc.Close(); cerr != nil {
+			loggerSvc.ErrorWith().Err(cerr).Msg("database close error")
 		}
 	}()
-
-	// ---- Start HTTP server ----
-	server := api.New(cfg, buildinfo.Version, cfgSvc, qsoSvc, dbSvc, loggerSvc, hub, enrichOrchestrator, mailerSvc, bridgeSvc, ft8Svc)
-	server.SetEvidence(evidenceSvc)
-	if smcloudRec != nil {
-		// On-demand reconcile (the "back up / check now" action) — same
-		// Reconciler instance as the periodic loop.
-		server.SetSmcloudReconcile(func(ctx context.Context) (any, error) {
-			return smcloudRec.RunOnce(ctx, smcloud.TriggerManual)
-		})
-	}
-
-	// Planned self-restart (POST /v1/restart): the handler signals restartCh; run()
-	// falls into the SAME graceful shutdown as a signal (the tune/FT8 carrier is
-	// released cleanly), and main() exits ExitRestart so systemd respawns. Guarded
-	// so a double POST can't close the channel twice.
-	restartCh := make(chan struct{})
-	var restartOnce sync.Once
-	// Only wire the self-restart when the managing unit EXPLICITLY declares it will
-	// respawn us — the bundled smd.service sets SM_SELF_RESTART=1 alongside
-	// Restart=on-failure + RestartForceExitStatus=3. INVOCATION_ID is NOT enough:
-	// systemd sets it for every unit, including Restart=no, which would exit
-	// ExitRestart and stay stopped (codex 088bdb84 P2). A bare ./smd / `task
-	// run:smd` (no supervisor) leaves this unset, so POST /v1/restart 503s rather
-	// than killing the daemon for good.
-	if os.Getenv("SM_SELF_RESTART") == "1" {
-		server.SetRestart(func() {
-			restartOnce.Do(func() {
-				restartRequested.Store(true)
-				close(restartCh)
-			})
-		})
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.ListenAndServe(cfg.SocketPath)
+	defer func() {
+		if cerr := refDbSvc.Close(); cerr != nil {
+			loggerSvc.ErrorWith().Err(cerr).Msg("reference database close error")
+		}
+	}()
+	defer func() {
+		if d.refresher != nil {
+			if cerr := d.refresher.Stop(); cerr != nil {
+				loggerSvc.ErrorWith().Err(cerr).Msg("lookup refresher stop error")
+			}
+		}
 	}()
 
 	// ---- Wait for shutdown signal ----
@@ -1025,56 +399,31 @@ func run() error {
 	select {
 	case sig := <-sigCh:
 		loggerSvc.InfoWith().Str("signal", sig.String()).Msg("shutdown signal received")
-	case <-restartCh:
+	case <-d.restartCh:
 		loggerSvc.InfoWith().Msg("restart requested (POST /v1/restart); graceful shutdown then exit for systemd respawn")
-	case runErr = <-errCh:
+	case runErr = <-d.errCh:
 		if runErr != nil {
 			loggerSvc.ErrorWith().Err(runErr).Msg("server exited with error")
 		}
 	}
 
 	// ---- Graceful shutdown ----
-	// Release the bound port FIRST. The subsystem teardown below (bridge, ft8 —
-	// which waits for an in-flight decode — and pskreporter) takes several seconds,
-	// and server.Shutdown (which closes the listener) runs last. Closing the
-	// listener up front frees :8080 immediately so a replacement process from a
-	// deploy/restart can bind right away instead of racing the old daemon's
-	// teardown ("address already in use" → systemd retry flap). Connections are
-	// still drained by server.Shutdown below; only the accept listener closes here.
-	server.StopAccepting()
-
-	// Cancel forwarder workers first so that any in-flight forwarder Submit() call
-	// with ctx-cancel support (e.g. HTTP POST to QRZ) aborts promptly,
-	// and no new DB work is started against the about-to-close handle.
-	// Each worker finishes its current processRow then returns from Run.
+	// Phase 3a keeps the hand-ordered gracefulShutdown (phase 3b moves it onto orch.Shutdown). Release
+	// the bound port first, cancel the workers, then run the one budget-bounded ordered teardown.
+	d.server.StopAccepting()
 	workerCancel()
-
-	// Everything from here runs under ONE budget-bounded, dependency-preserving
-	// teardown (LC-2). The single shutdown budget starts INSIDE gracefulShutdown —
-	// right after the accept listener closed above and workerCancel signalled — so a
-	// wedged subsystem Stop can no longer block the whole sequence before the budget
-	// even begins (the pre-LC-2 bug: the deadline was built AFTER the bridge/ft8/psk/
-	// evidence Stops). Each ordered stage is bounded by that one budget; the stage
-	// that overruns it is named in a single record; dependent stages whose
-	// prerequisite did not stop are skipped rather than raced; and the bridge
-	// RF-unkey runs first, so a timeout never skips it. Ordering and the per-stage
-	// dependency reasoning live in cmd/smd/shutdown.go.
 	gracefulShutdown(teardownDeps{
 		log:          loggerSvc,
 		budget:       time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second,
-		stopBridge:   bridgeSvc.Stop,
-		stopFt8:      ft8Svc.Stop,
-		stopPsk:      pskSvc.Stop,
-		stopEvidence: evidenceSvc.Stop,
-		shutdownHTTP: server.Shutdown,
-		workerWG:     &workerWG,
-		qsoLogWG:     &qsoLogWG,
+		stopBridge:   d.bridge.Stop,
+		stopFt8:      d.ft8.Stop,
+		stopPsk:      d.psk.Stop,
+		stopEvidence: d.evidence.Stop,
+		shutdownHTTP: d.server.Shutdown,
+		workerWG:     &d.workerWG,
+		qsoLogWG:     &d.qsoLogWG,
 		closeHub:     hub.Close,
 	})
-	// gracefulShutdown owns the bridge/ft8/psk teardown (completed or abandoned at
-	// the budget). Mark it done so the safety-net defers do NOT re-call Stop — a
-	// re-call of an abandoned wedge would block run()'s return past the LC-2 budget.
-	gracefulDone = true
 
 	return runErr
 }
