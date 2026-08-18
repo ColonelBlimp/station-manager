@@ -174,7 +174,7 @@
         "frontend/app/src/lib/ui/**",
         "frontend/app/src/lib/router.svelte.ts",
         "frontend/app/src/lib/api/restart.ts",
-        "frontend/app/src/lib/operate/Ft8OccupancyPanel.svelte",
+        "frontend/app/src/lib/operate/Ft8Occupancy.svelte",
         "frontend/app/src/lib/operate/Ft8OccupancyStrip.svelte",
         "frontend/app/src/lib/operate/Ft8OccupancySpectrum.svelte",
         "internal/api/handler_version.go"
