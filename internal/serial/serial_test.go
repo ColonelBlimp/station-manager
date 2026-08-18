@@ -1028,14 +1028,22 @@ func TestReaderLoopContinuesOnTimeoutError(t *testing.T) {
 		BaudRate:      9600,
 		LineDelimiter: ';',
 	}
-	c := newPort(mp, cfg)
-
-	// Inject a timeout error; the reader loop should recover.
+	// Arm the (one-shot) timeout error BEFORE newPort starts the reader, so its
+	// first Read deterministically returns it. Arming it AFTER newPort raced the
+	// reader (safego.Go): a Read that won the race blocked on readCh, then the fed
+	// "OK;" satisfied it directly — the reader never observed the timeout, so the
+	// test could pass WITHOUT exercising recovery. The `go` in newPort happens-after
+	// this write, so the reader is guaranteed to see it.
 	mp.mu.Lock()
 	mp.errToReturn = timeoutErr{}
 	mp.mu.Unlock()
 
-	// Then feed a valid line.
+	c := newPort(mp, cfg)
+
+	// Feed the follow-up line. errToReturn is one-shot (cleared after the first
+	// Read), so the reader reaches this line only on its SECOND Read — receiving
+	// "OK" therefore proves it consumed the timeout on the first Read and continued,
+	// which is the recovery this test claims.
 	mp.readCh <- []byte("OK;")
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
