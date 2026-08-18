@@ -119,6 +119,28 @@
       "summary": "W-0001 evidence, decisions, and acceptance criteria for durable operator notification history."
     },
     {
+      "id": "work.w-0002",
+      "path": "docs/work/W-0002-ft8-type4-on-air-validation.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["ft8", "on-air-validation", "type-4"],
+      "scopes": [
+        "internal/ft8/type4.go",
+        "internal/ft8/type4_sequencer.go",
+        "internal/ft8/type4_roundtrip_test.go",
+        "internal/ft8/servicetx.go",
+        "internal/ft8/qsolog.go",
+        "internal/api/handler_ft8_qso.go",
+        "frontend/app/src/lib/api/ft8qso.ts",
+        "frontend/app/src/lib/operate/Ft8BandActivity.svelte",
+        "frontend/app/src/lib/operate/Ft8Operate.svelte",
+        "frontend/app/src/lib/operate/ft8.svelte.ts",
+        "frontend/app/src/lib/operate/ft8Ladder.ts",
+        "frontend/app/src/lib/operate/ft8Ladder.test.ts"
+      ],
+      "summary": "W-0002 evidence and acceptance boundary for on-air validation of the shipped FT8 reduced type-4 ladder."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",
