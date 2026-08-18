@@ -753,3 +753,21 @@ at archive time, stamp included.
 - ~~**`internal/pskreporter` — stable IPFIX observation-domain ID across daemon restarts.**~~ **SHIPPED 2026-08-13 (`071bb01b`), ATOMIC CREATE HARDENED 2026-08-14 (`8272b105`).** The selected design is persisted-random identity: `cmd/smd` supplies a state path under the working directory; the first service lifetime mints and persists an ID, and later lifetimes reuse it even when receiver configuration changes. A missing or corrupt file self-heals; persistence failure degrades to an in-memory ID plus a warning rather than blocking PSK Reporter startup. The acceptance test asserts on the emitted IPFIX datagram header (bytes 12–15): two separate `Service` lifetimes sharing one state path emit the same observation-domain ID. Concurrent first starts publish one complete winner atomically, with regression coverage for corrupt, unreadable, and unwritable state. This resolved the client-controlled half of the 2026-08 PSK Reporter incident; carrier-side UDP source-port changes remain outside Station Manager's control.
 
 - ~~**Behavioural retest of the session-192/193 daemon batch.**~~ **CLOSED BY OPERATOR DECISION 2026-08-18.** The batch was the numeric-DXCC new-entity match (`HasQsoForDxcc` over `json_extract('$.dxcc')`), the config-SPA `ft8_decode_log` toggle, and Call-CQ `tx_parity`. All shipped 2026-06-25/26 with automated coverage. By the 2026-07-18 sweep, roughly 3.5 weeks of daily FT8 dogfooding had plausibly exercised the DXCC marker and parity paths; decode logging mattered only when explicitly enabled. The operator closed the remaining dedicated behavioral reruns on 2026-08-18. This is recorded as a waived retest, not a claim that a new explicit on-air/configuration run occurred that day.
+
+## P2 logging-audit cluster — archived by the 2026-08-18 reconciliation
+
+- ~~**Whole-codebase and package logging release gate.**~~ **CLOSED 2026-08-16; removed
+  from the live backlog 2026-08-18.** The P2 index had accumulated nine rows: an
+  interim reconciliation note, the consolidated `internal/` audit, the cloud audit,
+  one `1408edb1` clean-room follow-up, and the FT8, bridge, API, QSO-service, and
+  forwarding package audits. Their embedded status prose predated the final fix arc
+  and still described committed work as open.
+
+  [`internal-codebase-logging-gaps.md`](reviews/internal-codebase-logging-gaps.md) is
+  the final cross-package reconciliation record. It rechecked the then-open package
+  findings, regrouped them as L1–L13 and H1–H4, and closes with every finding fixed.
+  Every fix commit cited by that closure is an ancestor of the current `main`, as is
+  `70ccd828`, which resolved the two `1408edb1` review follow-ups. The original audit
+  files remain under `docs/reviews/` as cold historical records; their old “open”
+  headers are chronology, not current work. `docs/backlog.md` no longer repeats those
+  records or offers already-shipped findings for selection.
