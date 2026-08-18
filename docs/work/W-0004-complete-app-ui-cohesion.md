@@ -1,13 +1,12 @@
 # W-0004 — Complete app UI cohesion and ambient build identity
 
 **Status:** Open — palette decisions required
-**Priority:** P2 post-ship
 **Selected:** 2026-08-18
 **Outcome:** The consolidated app presents trustworthy build identity and a coherent, readable
 visual system across its supported themes and FT8 occupancy states.
 
-`W-0004` is an immutable identity. Its priority and status may change, but its ranked position
-remains in [`docs/backlog.md`](../backlog.md), the only priority owner.
+`W-0004` is an immutable identity. Its status may change, while priority and ranked position live
+only in [`docs/backlog.md`](../backlog.md).
 
 ## Verified current state
 

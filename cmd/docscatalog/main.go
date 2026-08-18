@@ -28,7 +28,7 @@ var classDescriptions = map[string]string{
 	"kernel":    "Global or scoped safety rules and project conventions. Loaded automatically where applicable.",
 	"current":   "The bounded present goal, state, decisions, and next action. Loaded automatically.",
 	"canonical": "Current reference for one subject. Read on demand for the task at hand.",
-	"work-item": "Active-work routing or selected evidence and acceptance criteria. Read only when that work is selected.",
+	"work-item": "Active-work routing plus selected work dossiers with evidence and acceptance criteria. Read a dossier only when that work is selected.",
 	"operator":  "Operator-facing guidance. Read when installing, configuring, or operating Station Manager.",
 }
 
@@ -116,7 +116,7 @@ func validateCatalog(repoRoot string, c catalog) error {
 		if err := validateTopics(doc); err != nil {
 			return err
 		}
-		if err := validateScopes(doc); err != nil {
+		if err := validateScopes(repoRoot, doc); err != nil {
 			return err
 		}
 		if strings.TrimSpace(doc.Summary) == "" || strings.ContainsAny(doc.Summary, "\r\n") {
@@ -169,12 +169,13 @@ func validateTopics(doc document) error {
 	return nil
 }
 
-func validateScopes(doc document) error {
+func validateScopes(repoRoot string, doc document) error {
 	if len(doc.Scopes) == 0 {
 		return fmt.Errorf("document %q has no applicable scopes", doc.ID)
 	}
 	seen := make(map[string]struct{}, len(doc.Scopes))
 	for _, scope := range doc.Scopes {
+		wildcard := strings.HasSuffix(scope, "/**")
 		base := strings.TrimSuffix(scope, "/**")
 		if err := validateRepoPath(base); err != nil {
 			return fmt.Errorf("document %q scope %q: %w", doc.ID, scope, err)
@@ -186,6 +187,21 @@ func validateScopes(doc document) error {
 			return fmt.Errorf("document %q repeats scope %q", doc.ID, scope)
 		}
 		seen[scope] = struct{}{}
+
+		// "repository" is the catalog's explicit whole-tree sentinel, not a
+		// filesystem path. Every other live scope must resolve now: accepting a
+		// future or misspelled path makes `docs:find` silently route the wrong
+		// work while `docs:check` claims the catalog is sound.
+		if scope == "repository" {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(base)))
+		if err != nil {
+			return fmt.Errorf("document %q scope %q: %w", doc.ID, scope, err)
+		}
+		if wildcard && !info.IsDir() {
+			return fmt.Errorf("document %q scope %q wildcard base is not a directory", doc.ID, scope)
+		}
 	}
 	return nil
 }
@@ -365,6 +381,9 @@ func documentsOfClass(c catalog, class string) []document {
 }
 
 func classTitle(class string) string {
+	if class == "work-item" {
+		return "Work Items and Dossiers"
+	}
 	parts := strings.Split(class, "-")
 	for index := range parts {
 		parts[index] = strings.ToUpper(parts[index][:1]) + parts[index][1:]

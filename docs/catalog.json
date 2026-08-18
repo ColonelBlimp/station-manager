@@ -52,7 +52,7 @@
       "class": "canonical",
       "audiences": ["operator", "contributor", "agent"],
       "topics": ["configuration"],
-      "scopes": ["internal/config/**", "frontend/config/**"],
+      "scopes": ["internal/config/**", "frontend/app/src/lib/config/**", "frontend/config/**"],
       "summary": "Canonical config.json shape, defaults, validation, migration, and persistence rules."
     },
     {
@@ -61,7 +61,28 @@
       "class": "canonical",
       "audiences": ["operator", "contributor", "agent"],
       "topics": ["ft8"],
-      "scopes": ["internal/ft8/**", "frontend/app/src/lib/ft8/**"],
+      "scopes": [
+        "internal/ft8/**",
+        "frontend/app/src/lib/api/ft8-config.ts",
+        "frontend/app/src/lib/api/ft8-sse.ts",
+        "frontend/app/src/lib/api/ft8qso.ts",
+        "frontend/app/src/lib/api/ft8tx.ts",
+        "frontend/app/src/lib/config/Ft8Section.svelte",
+        "frontend/app/src/lib/config/ft8.svelte.ts",
+        "frontend/app/src/lib/operate/Ft8BandActivity.svelte",
+        "frontend/app/src/lib/operate/Ft8BandFilter.svelte",
+        "frontend/app/src/lib/operate/Ft8Occupancy.svelte",
+        "frontend/app/src/lib/operate/Ft8OccupancySpectrum.svelte",
+        "frontend/app/src/lib/operate/Ft8OccupancyStrip.svelte",
+        "frontend/app/src/lib/operate/Ft8Operate.svelte",
+        "frontend/app/src/lib/operate/Ft8View.svelte",
+        "frontend/app/src/lib/operate/ft8.svelte.ts",
+        "frontend/app/src/lib/operate/ft8Enrich.svelte.ts",
+        "frontend/app/src/lib/operate/ft8Ladder.ts",
+        "frontend/app/src/lib/utils/ft8Message.ts",
+        "frontend/app/src/lib/utils/ft8Parity.ts",
+        "frontend/app/src/lib/utils/ft8Spectrum.ts"
+      ],
       "summary": "Current FT8 operator behavior, subsystem structure, event wire, occupancy, and transmit flow."
     },
     {

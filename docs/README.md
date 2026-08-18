@@ -50,16 +50,16 @@ Current reference for one subject. Read on demand for the task at hand.
 | ID | Topics | Applicable scope | Summary |
 |---|---|---|---|
 | [reference.api](v2-design/api-endpoints.md) | `http-api` | `internal/api/**`, `frontend/app/src/lib/api/**` | Canonical daemon HTTP routes, request and response shapes, errors, and gates. |
-| [reference.config](v2-design/config.md) | `configuration` | `internal/config/**`, `frontend/config/**` | Canonical config.json shape, defaults, validation, migration, and persistence rules. |
-| [reference.ft8](ft8.md) | `ft8` | `internal/ft8/**`, `frontend/app/src/lib/ft8/**` | Current FT8 operator behavior, subsystem structure, event wire, occupancy, and transmit flow. |
+| [reference.config](v2-design/config.md) | `configuration` | `internal/config/**`, `frontend/app/src/lib/config/**`, `frontend/config/**` | Canonical config.json shape, defaults, validation, migration, and persistence rules. |
+| [reference.ft8](ft8.md) | `ft8` | `internal/ft8/**`, `frontend/app/src/lib/api/ft8-config.ts`, `frontend/app/src/lib/api/ft8-sse.ts`, `frontend/app/src/lib/api/ft8qso.ts`, `frontend/app/src/lib/api/ft8tx.ts`, `frontend/app/src/lib/config/Ft8Section.svelte`, `frontend/app/src/lib/config/ft8.svelte.ts`, `frontend/app/src/lib/operate/Ft8BandActivity.svelte`, `frontend/app/src/lib/operate/Ft8BandFilter.svelte`, `frontend/app/src/lib/operate/Ft8Occupancy.svelte`, `frontend/app/src/lib/operate/Ft8OccupancySpectrum.svelte`, `frontend/app/src/lib/operate/Ft8OccupancyStrip.svelte`, `frontend/app/src/lib/operate/Ft8Operate.svelte`, `frontend/app/src/lib/operate/Ft8View.svelte`, `frontend/app/src/lib/operate/ft8.svelte.ts`, `frontend/app/src/lib/operate/ft8Enrich.svelte.ts`, `frontend/app/src/lib/operate/ft8Ladder.ts`, `frontend/app/src/lib/utils/ft8Message.ts`, `frontend/app/src/lib/utils/ft8Parity.ts`, `frontend/app/src/lib/utils/ft8Spectrum.ts` | Current FT8 operator behavior, subsystem structure, event wire, occupancy, and transmit flow. |
 | [reference.install](install.md) | `installation` | `deploy/**`, `scripts/release-rpm.sh`, `scripts/dev-rpm.sh` | Current RPM-based installation, first-run setup, upgrade, and removal guide. |
 | [reference.licensing](licensing.md) | `licensing` | `LICENSE`, `NOTICE`, `go.mod`, `frontend/**` | Current GPL-3.0-only policy and dependency-compatibility guidance. |
 | [reference.shortcuts](keyboard-shortcuts.md) | `keyboard-shortcuts` | `frontend/**` | Current inventory of SPA keyboard bindings, contexts, behavior, and source locations. |
 | [reference.smcloud-deploy](smcloud-deploy.md) | `sm-cloud-deployment` | `cmd/smcloud/**`, `internal/cloud/**`, `deploy/smcloud/**` | Current SM Cloud deployment, verification, operation, backup, and recovery runbook. |
 
-### Work Item
+### Work Items and Dossiers
 
-Active-work routing or selected evidence and acceptance criteria. Read only when that work is selected.
+Active-work routing plus selected work dossiers with evidence and acceptance criteria. Read a dossier only when that work is selected.
 
 | ID | Topics | Applicable scope | Summary |
 |---|---|---|---|
@@ -84,8 +84,8 @@ Each topic below has exactly one canonical live owner. A task may also require i
 
 | Topic | Canonical reference | Applicable scope |
 |---|---|---|
-| `configuration` | [reference.config](v2-design/config.md) | `internal/config/**`, `frontend/config/**` |
-| `ft8` | [reference.ft8](ft8.md) | `internal/ft8/**`, `frontend/app/src/lib/ft8/**` |
+| `configuration` | [reference.config](v2-design/config.md) | `internal/config/**`, `frontend/app/src/lib/config/**`, `frontend/config/**` |
+| `ft8` | [reference.ft8](ft8.md) | `internal/ft8/**`, `frontend/app/src/lib/api/ft8-config.ts`, `frontend/app/src/lib/api/ft8-sse.ts`, `frontend/app/src/lib/api/ft8qso.ts`, `frontend/app/src/lib/api/ft8tx.ts`, `frontend/app/src/lib/config/Ft8Section.svelte`, `frontend/app/src/lib/config/ft8.svelte.ts`, `frontend/app/src/lib/operate/Ft8BandActivity.svelte`, `frontend/app/src/lib/operate/Ft8BandFilter.svelte`, `frontend/app/src/lib/operate/Ft8Occupancy.svelte`, `frontend/app/src/lib/operate/Ft8OccupancySpectrum.svelte`, `frontend/app/src/lib/operate/Ft8OccupancyStrip.svelte`, `frontend/app/src/lib/operate/Ft8Operate.svelte`, `frontend/app/src/lib/operate/Ft8View.svelte`, `frontend/app/src/lib/operate/ft8.svelte.ts`, `frontend/app/src/lib/operate/ft8Enrich.svelte.ts`, `frontend/app/src/lib/operate/ft8Ladder.ts`, `frontend/app/src/lib/utils/ft8Message.ts`, `frontend/app/src/lib/utils/ft8Parity.ts`, `frontend/app/src/lib/utils/ft8Spectrum.ts` |
 | `http-api` | [reference.api](v2-design/api-endpoints.md) | `internal/api/**`, `frontend/app/src/lib/api/**` |
 | `installation` | [reference.install](install.md) | `deploy/**`, `scripts/release-rpm.sh`, `scripts/dev-rpm.sh` |
 | `keyboard-shortcuts` | [reference.shortcuts](keyboard-shortcuts.md) | `frontend/**` |

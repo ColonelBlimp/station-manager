@@ -13,7 +13,8 @@ next, and in what order" is answered.
   the ranking.**
 - FT8-internal implementation mechanics live in `docs/ft8.md`; only
   *cross-cutting* FT8 work lands here.
-- Shipped / resolved / ruled-out items are **moved** to `docs/backlog-archive.md`
+- Shipped / resolved / ruled-out inline items are **moved** to the
+  [`docs/backlog-archive.md`](backlog-archive.md) record
   (NOT read at session start) so this file stays lean. Open the archive only when
   you need an item's history.
 
@@ -22,9 +23,9 @@ next, and in what order" is answered.
   per item. Unmigrated detail remains further down; migrated items link to one
   dossier under `docs/work/`. A dossier gets an immutable `W-NNNN` ID that never
   encodes its mutable priority or status.
-- When an item ships, move an inline detail block to `backlog-archive.md`, or a
-  dossier to `docs/archive/work/`, and drop its index line — do NOT strike it in
-  place. A `~~struck~~` top-level item left in this file is a bug: relocate it.
+- When an item ships, move an inline detail block to [`backlog-archive.md`](backlog-archive.md), or
+  create `docs/archive/work/` when the first ID-bearing dossier closes and move it there. Drop the
+  index line — do NOT strike it in place. A `~~struck~~` top-level item left in this file is a bug: relocate it.
   (Struck *sub-bullets* inside a still-open item are fine — they show which
   sub-steps of live work are done.)
 - Tiers: **P0** correctness/safety · **P1** finish in-flight · **P2** next
@@ -33,12 +34,12 @@ next, and in what order" is answered.
 
 ## Worklist index (ranked) — the definitive "what's next"
 
-> **▶ Active cycle (set 2026-07-04): _Get to the next shippable state for 7Q8AC._**
+> **Release programme (set 2026-07-04): _Get to the next shippable state for 7Q8AC._**
 > The goal is a release the external operator (7Q8AC, Malawi, offline-first) can run;
 > "stabilise & finish in-flight" is the means. Clear P0 + the P1 finish/validate items
 > — they ARE the ship gate — before opening any new P2 workstream. Theming (P2 ·
-> _UI cohesion_) is deliberately **not now**. The current capsule is
-> `docs/current.md`; this index is the full ranked queue.
+> _UI cohesion_) is deliberately **not now**. This is programme-level priority context, not the
+> active slice: [`docs/current.md`](current.md) alone names current work.
 
 **P0 — correctness / safety (do first)**
 - _None open — the TX-safety batches shipped and were swept to `backlog-archive.md` (2026-07-24). One code-complete item still needs ON-AIR validation: the reduced type-4 ladder (P2)._

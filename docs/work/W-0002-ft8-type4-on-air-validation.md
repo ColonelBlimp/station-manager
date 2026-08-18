@@ -1,13 +1,12 @@
 # W-0002 — Validate the FT8 reduced type-4 ladder on air
 
 **Status:** Open — awaiting operator validation
-**Priority:** P2 validation gate
 **Selected:** 2026-08-18
 **Outcome:** One operator-initiated contact with a real nonstandard station completes through the
 reduced type-4 ladder and is logged without fabricated exchange data.
 
-`W-0002` is an immutable identity. Its priority and status may change, but its ranked position
-remains in [`docs/backlog.md`](../backlog.md), the only priority owner.
+`W-0002` is an immutable identity. Its status may change, while priority and ranked position live
+only in [`docs/backlog.md`](../backlog.md).
 
 ## Why this item is still open
 

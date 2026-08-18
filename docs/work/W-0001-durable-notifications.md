@@ -1,14 +1,13 @@
 # W-0001 — Durable operator notification history
 
 **Status:** Open
-**Priority:** P2 release gate
 **Selected:** 2026-08-18
 **Outcome:** Important operator notifications remain retrievable after their transient toast expires
 or the browser tab closes.
 
 This is the first stable-ID work dossier created by the OSS-maintainability programme. `W-0001` is
-an immutable identity; priority and status remain separate fields because both can change. The
-ranked position stays in [`docs/backlog.md`](../backlog.md), which remains the only priority owner.
+an immutable identity; its status may change, while priority and ranked position live only in
+[`docs/backlog.md`](../backlog.md).
 
 ## Why this item is still open
 

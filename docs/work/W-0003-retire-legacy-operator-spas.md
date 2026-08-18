@@ -1,13 +1,12 @@
 # W-0003 — Complete the app shell and retire legacy operator SPAs
 
 **Status:** Open
-**Priority:** P2 post-ship
 **Selected:** 2026-08-18
 **Outcome:** `frontend/app` is the sole embedded operator SPA, with the remaining legacy
 affordances preserved and the zero-JS manual still independent.
 
-`W-0003` is an immutable identity. Its priority and status may change, but its ranked position
-remains in [`docs/backlog.md`](../backlog.md), the only priority owner.
+`W-0003` is an immutable identity. Its status may change, while priority and ranked position live
+only in [`docs/backlog.md`](../backlog.md).
 
 ## Verified current state
 

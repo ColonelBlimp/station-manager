@@ -15,7 +15,8 @@ rules and routing belong here; chronology, active-work detail, and subsystem exp
   `docs/v1-analysis/lessons-for-v2.md`. Record genuinely weighed alternatives in an ADR under
   `docs/decisions/`.
 - Code is authoritative when it disagrees with documentation. Only Tier 1 documents are maintained
-  as current truth; ADRs, reviews, session history, and most `docs/v2-design/` files are records.
+  as current truth. In `docs/v2-design/`, the two references named below are Tier 1; the other
+  design files, ADRs, reviews, and session history are records.
 - `docs/v2-design/api-endpoints.md` and `docs/v2-design/config.md` are the canonical current HTTP and
   configuration references and change with their corresponding code.
 - Scoped `AGENTS.md` files add local rules automatically; scoped `CLAUDE.md` files are import-only
