@@ -162,6 +162,26 @@
       "summary": "W-0003 current-state evidence and acceptance boundary for completing the app shell and retiring legacy operator SPA routes, embeds, and build gates."
     },
     {
+      "id": "work.w-0004",
+      "path": "docs/work/W-0004-complete-app-ui-cohesion.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["app-shell", "build-identity", "ft8-occupancy", "themes", "ui-cohesion"],
+      "scopes": [
+        "frontend/app/index.html",
+        "frontend/app/src/App.svelte",
+        "frontend/app/src/styles/**",
+        "frontend/app/src/lib/ui/**",
+        "frontend/app/src/lib/router.svelte.ts",
+        "frontend/app/src/lib/api/restart.ts",
+        "frontend/app/src/lib/operate/Ft8OccupancyPanel.svelte",
+        "frontend/app/src/lib/operate/Ft8OccupancyStrip.svelte",
+        "frontend/app/src/lib/operate/Ft8OccupancySpectrum.svelte",
+        "internal/api/handler_version.go"
+      ],
+      "summary": "W-0004 verified remainder and acceptance boundary for consolidated-app themes, FT8 occupancy colors, and ambient daemon build identity."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",
