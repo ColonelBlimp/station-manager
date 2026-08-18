@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "documents": [
+    {
+      "id": "kernel.root",
+      "path": "AGENTS.md",
+      "class": "kernel",
+      "audiences": ["contributor", "agent"],
+      "topics": ["architecture-rules", "contributing", "safety", "testing"],
+      "scopes": ["repository"],
+      "summary": "Compact project-wide rules, invariants, verification discipline, and documentation routing."
+    },
+    {
+      "id": "kernel.bridge",
+      "path": "internal/bridge/AGENTS.md",
+      "class": "kernel",
+      "audiences": ["contributor", "agent"],
+      "topics": ["bridge-safety", "cat", "transmit-safety"],
+      "scopes": ["internal/bridge/**"],
+      "summary": "Scoped CAT pipeline, command, tune-controller, failure-recovery, and RF-safety rules."
+    },
+    {
+      "id": "kernel.ft8",
+      "path": "internal/ft8/AGENTS.md",
+      "class": "kernel",
+      "audiences": ["contributor", "agent"],
+      "topics": ["ft8-safety", "sequencing", "transmit-attribution"],
+      "scopes": ["internal/ft8/**"],
+      "summary": "Scoped FT8 transmit, attribution, and coordinated-edit rules."
+    },
+    {
+      "id": "current",
+      "path": "docs/current.md",
+      "class": "current",
+      "audiences": ["contributor", "agent"],
+      "topics": ["active-work", "coordination"],
+      "scopes": ["repository"],
+      "summary": "Bounded capsule containing the present goal, state, next action, and settled constraints."
+    },
+    {
+      "id": "reference.api",
+      "path": "docs/v2-design/api-endpoints.md",
+      "class": "canonical",
+      "audiences": ["contributor", "agent"],
+      "topics": ["http-api"],
+      "scopes": ["internal/api/**", "frontend/app/src/lib/api/**"],
+      "summary": "Canonical daemon HTTP routes, request and response shapes, errors, and gates."
+    },
+    {
+      "id": "reference.config",
+      "path": "docs/v2-design/config.md",
+      "class": "canonical",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["configuration"],
+      "scopes": ["internal/config/**", "frontend/config/**"],
+      "summary": "Canonical config.json shape, defaults, validation, migration, and persistence rules."
+    },
+    {
+      "id": "reference.ft8",
+      "path": "docs/ft8.md",
+      "class": "canonical",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["ft8"],
+      "scopes": ["internal/ft8/**", "frontend/app/src/lib/ft8/**"],
+      "summary": "Current FT8 operator behavior, subsystem structure, event wire, occupancy, and transmit flow."
+    },
+    {
+      "id": "reference.install",
+      "path": "docs/install.md",
+      "class": "canonical",
+      "audiences": ["operator", "contributor"],
+      "topics": ["installation"],
+      "scopes": ["deploy/**", "scripts/release-rpm.sh", "scripts/dev-rpm.sh"],
+      "summary": "Current RPM-based installation, first-run setup, upgrade, and removal guide."
+    },
+    {
+      "id": "reference.licensing",
+      "path": "docs/licensing.md",
+      "class": "canonical",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["licensing"],
+      "scopes": ["LICENSE", "NOTICE", "go.mod", "frontend/**"],
+      "summary": "Current GPL-3.0-only policy and dependency-compatibility guidance."
+    },
+    {
+      "id": "reference.shortcuts",
+      "path": "docs/keyboard-shortcuts.md",
+      "class": "canonical",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["keyboard-shortcuts"],
+      "scopes": ["frontend/**"],
+      "summary": "Current inventory of SPA keyboard bindings, contexts, behavior, and source locations."
+    },
+    {
+      "id": "reference.smcloud-deploy",
+      "path": "docs/smcloud-deploy.md",
+      "class": "canonical",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["sm-cloud-deployment"],
+      "scopes": ["cmd/smcloud/**", "internal/cloud/**", "deploy/smcloud/**"],
+      "summary": "Current SM Cloud deployment, verification, operation, backup, and recovery runbook."
+    },
+    {
+      "id": "work.backlog",
+      "path": "docs/backlog.md",
+      "class": "work-item",
+      "audiences": ["contributor", "agent"],
+      "topics": ["priorities", "work-tracking"],
+      "scopes": ["repository"],
+      "summary": "Definitive ranked worklist until its entries move into bounded work dossiers."
+    },
+    {
+      "id": "work.dogfood-inbox",
+      "path": "docs/dogfood-inbox.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["dogfood", "untriaged-work"],
+      "scopes": ["repository"],
+      "summary": "Raw operational observations awaiting triage into a fix, backlog item, or non-issue."
+    },
+    {
+      "id": "operator.manual",
+      "path": "manual",
+      "class": "operator",
+      "audiences": ["operator", "contributor"],
+      "topics": ["operator-manual"],
+      "scopes": ["manual/**"],
+      "summary": "Source for the embedded, self-contained operator manual served at /manual."
+    }
+  ]
+}

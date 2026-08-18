@@ -86,6 +86,9 @@ jobs:
           go-version-file: go.mod
           # actions/setup-go caches GOMODCACHE + GOCACHE automatically.
 
+      - name: Documentation catalog
+        run: go run ./cmd/docscatalog check
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:

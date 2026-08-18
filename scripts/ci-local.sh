@@ -46,6 +46,9 @@ note() {
 step "Docs: agent instruction context budget"
 bash scripts/check-agent-context.sh
 
+step "Docs: live-document catalog"
+go run ./cmd/docscatalog check
+
 # ───────────────────────────────────────────────────────────────────
 # SPA gate — run before the Go gate so the daemon embed sees a fresh
 # dist/ for EVERY embedded SPA when the Go build step runs.

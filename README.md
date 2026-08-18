@@ -101,8 +101,10 @@ one does not need a new build. Definitions and reports from other operators are 
 ## Documentation
 
 - **[Install and first run](docs/install.md)** — from a fresh machine to your first logged QSO.
-- **[Documentation map](docs/README.md)** — which documents are kept current, and which are a
-  historical record.
+- **[Documentation library](docs/README.md)** — the generated live-document map by audience,
+  class, and topic, plus routes into historical decisions and reviews.
+- **[Contributor and coding-agent guidance](AGENTS.md)** — project rules, safety constraints,
+  focused verification, and how to load only the context relevant to a change.
 - Architecture decisions live under [`docs/decisions/`](docs/decisions/).
 
 ## Licence
