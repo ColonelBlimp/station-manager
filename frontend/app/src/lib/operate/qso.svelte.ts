@@ -268,6 +268,10 @@ export async function logDraft(force = false): Promise<boolean> {
     if (!canLog() || !rigReady() || submitState.busy) return false;
     stampOff(); // QSO end = now, unless the operator entered one
     const call = draft.callsign.trim().toUpperCase();
+    // Snapshot the comment alongside the submitted {...draft}: the draft stays
+    // mutable across the await, so a mid-flight edit must not change what history
+    // records vs what was actually stored (clean-room review d0f8c25a P2).
+    const comment = draft.comment;
     submitState.busy = true;
     submitState.error = '';
     submitState.duplicate = false;
@@ -280,11 +284,11 @@ export async function logDraft(force = false): Promise<boolean> {
         submitState.busy = false;
     }
     if (res.ok) {
-        // A logged comment joins the recent-comments paste list. Recorded on the
-        // SHARED success path (before clearDraft), so a forced-duplicate "Log
-        // anyway" — DuplicateDialog → logDraft(true), which never reaches the
-        // card's log handler — records it too (clean-room review c4f7474d P2).
-        commentHistory.add(draft.comment);
+        // The logged comment (the submitted snapshot, not the live draft) joins the
+        // recent-comments paste list, on the SHARED success path so a forced-
+        // duplicate "Log anyway" — DuplicateDialog → logDraft(true), which never
+        // reaches the card's log handler — records it too (review c4f7474d P2).
+        commentHistory.add(comment);
         clearDraft(); // next QSO starts now
         toasts.info(`Logged ${call}`);
         return true;

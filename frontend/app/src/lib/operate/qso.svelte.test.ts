@@ -168,6 +168,23 @@ describe('submit outcomes: toasts for messages, card-local for the duplicate act
         expect(commentHistory.items).toContain('Tnx QSO 73');
     });
 
+    it('records the SUBMITTED comment, not a mid-flight edit made while the log is in flight', async () => {
+        fillDraft();
+        draft.comment = 'as submitted';
+        commentHistory.clear();
+        let release!: () => void;
+        const gate = new Promise<void>((r) => (release = r));
+        setSubmit(() => gate.then(() => ({ ok: true as const })));
+
+        const p = logDraft();
+        draft.comment = 'edited mid-flight'; // operator keeps typing while the PUT is in flight
+        release();
+        expect(await p).toBe(true);
+
+        expect(commentHistory.items).toContain('as submitted');
+        expect(commentHistory.items).not.toContain('edited mid-flight');
+    });
+
     it('a non-duplicate refusal is an error toast; the draft is preserved', async () => {
         fillDraft();
         setSubmit(() => Promise.resolve({ ok: false, message: 'daemon says no' }));
