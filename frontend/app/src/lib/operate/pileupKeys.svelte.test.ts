@@ -64,18 +64,22 @@
     — that is `callsignStack.svelte.test.ts`, ported verbatim from v1 along with
     the module, and it passed unchanged.
 
-    RULED MOOT (operator, 2026-08-06, closing the keyboard audit): the retired
-    SPA's F2 lookup-only "peek" — lookups run automatically as the call is
-    typed, so the peek needs no key — and Cmd/metaKey variants of the log
-    shortcut (a Linux station). Do not port either without a new ruling.
+    F2 LOOKUP-ONLY "PEEK" — RESTORED (operator, 2026-08-18, W-0003), reversing the
+    2026-08-06 "ruled moot". Enrichment auto-loads, but the worked-before panel only
+    auto-opens on a HIT, so F2 gives the operator an explicit peek: reveal prior
+    contacts (including the "checked, nothing" case) for a valid call WITHOUT starting
+    the QSO clock — Tab is the commit signal, F2 is the peek. Still ruled moot:
+    Cmd/metaKey variants of the log shortcut (a Linux station); do not port that
+    without a new ruling.
 */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render } from '@testing-library/svelte';
+import { render, screen, fireEvent } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import LoggingCard from './LoggingCard.svelte';
 import RigKeys from './RigKeys.svelte';
 import { callsignStack } from './callsignStack.svelte';
+import { commentHistory } from './commentHistory.svelte';
 import { draft, clearDraft, setSubmit, submitState, qsoClock } from './qso.svelte';
 import { rig, confirmRig, resetCatLink, setCommandSender, setRigCaps } from './rig.svelte';
 import { operate } from './state.svelte';
@@ -552,5 +556,54 @@ describe('Phone/CW pile-up keyboard', () => {
         sessionEdit.row = null;
         key({ code: 'ArrowUp', key: 'ArrowUp', ctrlKey: true, shiftKey: true });
         await vi.waitFor(() => expect(sent).toEqual(['set_freq']));
+    });
+});
+
+describe('F2 lookup-only peek + mouse stack icon (restored 2026-08-18, W-0003)', () => {
+    it('F2 reveals the worked-before panel for a valid call WITHOUT starting the QSO clock', () => {
+        render(LoggingCard);
+        hideTile('worked');
+        draft.callsign = 'G0ABC';
+        flushSync();
+
+        key({ key: 'F2' });
+
+        expect(isVisible('worked')).toBe(true); // the peek is shown
+        expect(qsoClock.started).toBe(false); // but it is NOT a commit — Tab does that
+    });
+
+    it('F2 is a silent no-op for an empty or malformed call', () => {
+        render(LoggingCard);
+        hideTile('worked');
+        draft.callsign = 'X'; // too short to be a callsign
+        flushSync();
+
+        key({ key: 'F2' });
+
+        expect(isVisible('worked')).toBe(false);
+        expect(qsoClock.started).toBe(false);
+    });
+
+    it('the ≡ stack icon stacks the typed call — the mouse equivalent of Shift+Enter', async () => {
+        render(LoggingCard);
+        workableDraft('G0ABC');
+
+        await fireEvent.click(screen.getByLabelText('Stack callsign'));
+
+        expect(callsignStack.items).toEqual(['G0ABC']);
+        expect(draft.callsign).toBe(''); // stacked and cleared, exactly like Shift+Enter
+    });
+
+    it('logging a QSO records its comment in the recent-comments list', async () => {
+        localStorage.clear();
+        commentHistory.clear();
+        render(LoggingCard);
+        workableDraft('G0ABC');
+        draft.comment = 'Tnx QSO 73';
+        flushSync();
+
+        key({ key: 'Enter', ctrlKey: true }); // Ctrl+Enter logs
+
+        await vi.waitFor(() => expect(commentHistory.items).toContain('Tnx QSO 73'));
     });
 });

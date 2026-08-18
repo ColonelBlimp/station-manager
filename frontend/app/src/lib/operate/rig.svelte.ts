@@ -20,6 +20,7 @@ import type {
     DriveAlarmPayload,
 } from '../api/rig-sse';
 import { storageSet } from '../utils/storage';
+import { disconnectMessage, bridgeErrorMessage } from './bridgeMessages';
 
 export type CatLink = 'off' | 'connected' | 'lost';
 
@@ -791,7 +792,7 @@ export const catLink = {
         cancelPendingLost(); // a blip that recovered — no flip, no flicker
     },
 
-    onRigDisconnected(_p: BridgeCodePayload): void {
+    onRigDisconnected(p: BridgeCodePayload): void {
         // Never-connected (the daemon replays rig-disconnected to late
         // subscribers) or already lost: nothing to schedule.
         if (rig.cat !== 'connected') return;
@@ -799,15 +800,20 @@ export const catLink = {
         pendingLostTimer = setTimeout(() => {
             pendingLostTimer = null;
             rig.cat = 'lost';
+            // Surface the friendly reason ONLY once we actually flip to 'lost':
+            // a blip that recovers inside the window clears via onRigState and so
+            // never flashes it. Rendered as the panel's "Bridge:" line, above the
+            // "Go manual — confirm" affordance (both show).
+            rig.linkError = disconnectMessage(p.code, p.details);
         }, FLASH_SUPPRESS_MS);
     },
 
     /** Operator-actionable bridge fault (port permission, identity mismatch…).
-     *  Shown raw (code + details) in the Rig panel — no i18n catalogue in this
-     *  SPA yet, and odd beats invisible. */
+     *  Rendered as the Rig panel's "Bridge:" line in friendly, actionable wording
+     *  (bridgeMessages, ported from the retired logging SPA per W-0003 AC3); an
+     *  unknown code still surfaces raw — odd beats invisible. */
     onBridgeError(p: BridgeCodePayload): void {
-        const details = p.details ? ` (${Object.values(p.details).join(', ')})` : '';
-        rig.linkError = `${p.code}${details}`;
+        rig.linkError = bridgeErrorMessage(p.code, p.details);
     },
 
     /** Tune-carrier state pushed by the daemon (ADR 0027). Authoritative — the

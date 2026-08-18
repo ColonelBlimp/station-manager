@@ -20,7 +20,7 @@ For project conventions, invariants, and the documentation map, read
 |------|---------|-----------------|
 | **Go** | 1.26.2 (see `go.mod`) — install **upstream**; Fedora 41's packaged 1.24.10 is too old | The daemon and all `cmd/...` tools. |
 | **gcc** + C toolchain | any recent | CGO builds — live FT8 audio capture (miniaudio) and the optional PocketFFT FFT backend. The default dev build (`task build`) is **CGO-on**. |
-| **Node.js + npm** | Node ≥ 22 | The embedded Svelte SPAs (`frontend/app`, `frontend/config`, `frontend/logbook`); the legacy `frontend/logging` was retired 2026-07-21. |
+| **Node.js + npm** | Node ≥ 22 | The embedded Svelte SPAs (`frontend/app`, `frontend/config`, `frontend/logbook`). |
 | **Hugo (extended)** | 0.126+ (Fedora 41's repo build is sufficient) | The operator manual (`manual/`), embedded into the daemon via `go:embed`. The daemon build compiles against it, so it must be built first. |
 | **Task** (go-task) | v3 | The task runner — every build/run/test entrypoint is a `task` target (`Taskfile.yml`). |
 | **nfpm** | latest | Builds the dev/release RPMs without `rpmbuild`. Only needed for `task rpm:dev` / `deploy:local:dev`. |

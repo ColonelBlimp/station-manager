@@ -37,6 +37,8 @@
     import { isValidMaidenhead } from '../validators/maidenhead';
     import { isValidCallsign } from '../validators/callsign';
     import { callsignStack } from './callsignStack.svelte';
+    import { commentHistory } from './commentHistory.svelte';
+    import CommentField from './CommentField.svelte';
     import { sessionEdit } from './sessionEdit.svelte';
 
     // Contact-details disclosure (grid / QTH / rig / RX power / notes to edit; QRZ
@@ -84,7 +86,13 @@
     let callInput: HTMLInputElement | undefined;
 
     async function logAndRefocus(): Promise<void> {
-        if (await logDraft()) callInput?.focus();
+        // Captured before logDraft, which clears the draft on success: a logged
+        // comment joins the recent-comments paste list (commentHistory) for reuse.
+        const comment = draft.comment;
+        if (await logDraft()) {
+            commentHistory.add(comment);
+            callInput?.focus();
+        }
     }
 
     function windowKeydown(e: KeyboardEvent): void {
@@ -135,24 +143,46 @@
             callInput?.focus();
             return;
         }
-        // F3 — the timer toggle (A28, ported from the retired SPA's
-        // TimerControls mirror by operator direction): freeze a running Time
-        // Off (the contact has ended; details are still being typed), or
-        // start the clock for a typed call. After a hold it is a SILENT
-        // no-op — re-ticking would overwrite an end time set by hand, the
-        // exact value holdOffTimes exists to protect. Focus-independent: F3
-        // has no text-editing meaning, so it stays live inside fields.
+        if (functionKeydown(e)) return;
+        pileupKeydown(e);
+    }
+
+    // Function-key fast path (F2 peek, F3 timer). Both are focus-independent (a
+    // function key has no text-editing meaning) and both no-op on auto-repeat —
+    // one PRESS is one action. Split out of windowKeydown to keep it readable, not
+    // to satisfy a complexity budget. Returns true when it handled the event.
+    function functionKeydown(e: KeyboardEvent): boolean {
+        // F2 — lookup-only "peek" (restored by operator direction 2026-08-18,
+        // W-0003; the 2026-08-06 "ruled moot" was reversed). Reveal the
+        // worked-before panel for the typed call WITHOUT starting the QSO timer,
+        // so the operator can scan prior contacts and station info and decide
+        // whether to commit: Tab is the commit signal, F2 is the peek. Enrichment
+        // already auto-loads (EnrichmentCard); F2 adds the contact-history reveal,
+        // which otherwise only auto-opens on a hit. Gated on a valid call.
+        if (e.key === 'F2') {
+            e.preventDefault();
+            if (e.repeat) return true;
+            const trimmed = draft.callsign.trim();
+            if (trimmed !== '' && isValidCallsign(trimmed) === null) {
+                openWorkedForQso(draft.callsign);
+            }
+            return true;
+        }
+        // F3 — the timer toggle (A28, ported from the retired SPA's TimerControls
+        // mirror by operator direction): freeze a running Time Off (the contact has
+        // ended; details are still being typed), or start the clock for a typed
+        // call. After a hold it is a SILENT no-op — re-ticking would overwrite an
+        // end time set by hand, the exact value holdOffTimes exists to protect.
         if (e.key === 'F3') {
             e.preventDefault();
-            // A held key auto-repeats, and a repeat landing after the start
-            // would freeze Time Off milliseconds later — one PRESS is one
-            // action, however long it lasts (review 6af12ca9).
-            if (e.repeat) return;
+            // A repeat landing after the start would freeze Time Off ms later — one
+            // PRESS is one action, however long it lasts (review 6af12ca9).
+            if (e.repeat) return true;
             if (qsoClock.ticking) holdOffTimes();
             else if (!qsoClock.started && draft.callsign.trim() !== '') startQso();
-            return;
+            return true;
         }
-        pileupKeydown(e);
+        return false;
     }
 
     // Pile-up capture (ported from the retired SPA's QsoPanel). Shift+Enter sets
@@ -299,18 +329,37 @@
                         <label for="lc-call" class="block text-sm font-medium text-ink"
                             >Callsign</label
                         >
-                        <input
-                            id="lc-call"
-                            class="input w-32 uppercase"
-                            class:input-error={p.callsign}
-                            autocomplete="off"
-                            spellcheck="false"
-                            placeholder="Callsign"
-                            bind:this={callInput}
-                            bind:value={draft.callsign}
-                            oninput={upperCall}
-                            onkeydown={callKeydown}
-                        />
+                        <div class="relative">
+                            <input
+                                id="lc-call"
+                                class="input w-32 pr-7 uppercase"
+                                class:input-error={p.callsign}
+                                autocomplete="off"
+                                spellcheck="false"
+                                placeholder="Callsign"
+                                bind:this={callInput}
+                                bind:value={draft.callsign}
+                                oninput={upperCall}
+                                onkeydown={callKeydown}
+                            />
+                            <!-- Mouse-accessible stack push (restored by operator
+                                 direction 2026-08-18, W-0003): the ≡ glyph stacks the
+                                 typed call, the pointer equivalent of Shift+Enter.
+                                 tabindex=-1 keeps it out of the Callsign→RST tab order
+                                 so the keyboard flow is unbroken; the title exposes
+                                 the shortcut. Same validate-or-no-op as Shift+Enter
+                                 (stackCall). -->
+                            <button
+                                type="button"
+                                tabindex={-1}
+                                title="Stack callsign (Shift+Enter)"
+                                aria-label="Stack callsign"
+                                onclick={stackCall}
+                                class="absolute inset-y-0 right-0 flex items-center px-2 leading-none text-muted hover:text-ink"
+                            >
+                                <span aria-hidden="true">≡</span>
+                            </button>
+                        </div>
                     </div>
                     <div>
                         <label for="lc-rst-s" class="block text-sm font-medium text-ink"
@@ -404,15 +453,13 @@
                     bind:value={draft.name}
                 />
             </div>
-            <div class="flex-1">
-                <label for="lc-comment" class="block text-sm font-medium text-ink">Comment</label>
-                <input
-                    id="lc-comment"
-                    class="input w-full"
-                    autocomplete="off"
-                    bind:value={draft.comment}
-                />
-            </div>
+            <CommentField
+                id="lc-comment"
+                label="Comment"
+                class="flex-1"
+                items={commentHistory.items}
+                bind:value={draft.comment}
+            />
         </div>
         <!-- Contact details: contacted-station fields kept off the fast path —
      QTH / Rig / RX power / Notes to edit, QRZ page link + looked-up email to

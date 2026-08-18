@@ -11,9 +11,10 @@
 //
 // The legacy logging SPA that once owned the root ("/") was retired
 // 2026-07-21: its embed + route are gone and "/" now redirects to the
-// app SPA at "/app/". The `frontend/logging/` source is kept for
-// reference pending a preservation tag + deletion (the ft8-snapshot
-// pattern).
+// app SPA at "/app/". Its source was deleted 2026-08-18 once its
+// operator-significant behavior was ported into the app; the tree is
+// preserved under the `legacy-logging-spa-retired` tag (see
+// docs/work/W-0003).
 //
 // See docs/v2-design/frontend-spa.md for the full design.
 package frontend

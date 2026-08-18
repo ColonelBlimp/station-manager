@@ -955,8 +955,8 @@ and no reload.
 | `hide_hashed_calls` | `false` | hide decodes with an unresolved hashed call (`<...>`); stations calling you still show |
 
 **The three `highlight_*` keys are stored but not read by anything** (operator's
-ruling, 2026-08-05). Their only consumer was the `frontend/logging` SPA, retired
-2026-07-21; the app shell's Band Activity uses a **theme-aware palette** instead
+ruling, 2026-08-05). Their only consumer was the retired logging SPA (removed
+2026-07-21); the app shell's Band Activity uses a **theme-aware palette** instead
 (`Ft8BandActivity.svelte` `rowClass`), because a single operator-picked hex cannot
 serve both light and dark — a row tint chosen for one is unreadable on the other. So
 Settings → FT8 deliberately offers **no colour pickers**: a control the app cannot
@@ -1403,19 +1403,15 @@ GFSK audio → output → PTT → timing.
 - **Dev tools:** `cmd/ft8-capture-probe` (list/validate capture + decode smoke),
   `cmd/ft8-tx-probe` (list playback devices + encode-and-play; `-key` keys the rig
   for one slot — REAL RF, gated), `cmd/ft8-decode-file` (offline WAV decode). All CGO.
-- **SPA:** `frontend/logging/src/lib/states/ft8.svelte.ts` (EventSource consumer;
-  the `ft8-logged` listener builds a session row — distance via `pathInfo`, dedup by
-  uuid — and calls `sessionQsosState.add`), `lib/ui/panels/Ft8Panel.svelte`,
-  `lib/ui/cards/LoggingCard.svelte` (mode switch). Session tab reuses
-  `lib/ui/panels/SessionPanel.svelte` + the extracted
-  `lib/ui/panels/SessionEmailControls.svelte` (recipient + send, shared with InfoPanel).
-  Per-CQ beam heading: `lib/utils/bearing.ts` (`pathInfo`).
-  Band Activity CQ enrichment: `lib/states/ft8Enrich.svelte.ts` (per-`call|band`
-  cache + fail-soft flag/worked lookups + configurable highlight colours),
-  `lib/utils/ft8Message.ts` (`parseCqCall`), `lib/utils/flag.ts` (`ccodeToFlag`),
-  `lib/api/contest-dupe.ts` (worked-before client). TX-offset picker:
-  `lib/ui/panels/Ft8OccupancyStrip.svelte` + `ft8State.selectedOffset` /
-  `selectOffset()` (inert selection, RX-safe).
+- **SPA:** the consolidated app's FT8 surface under `frontend/app/src/lib/operate/`
+  — `Ft8View.svelte` / `Ft8Operate.svelte` (the mode view), `Ft8BandActivity.svelte`
+  (decodes + per-CQ enrichment; Ctrl/Cmd+click bags a caller, ADR 0067), `ft8.svelte.ts`
+  and `session.svelte.ts` (the SSE consumer and session rows), `SessionPanel.svelte`
+  (session tab), `PileupDrawer.svelte` (the answer queue), and the TX-offset picker
+  (`Ft8OccupancyStrip.svelte` / `Ft8OccupancySpectrum.svelte`). Per-CQ beam heading:
+  `frontend/app/src/lib/utils/bearing.ts` (`pathInfo`); Band Activity CQ enrichment:
+  `operate/ft8Enrich.svelte.ts`. (The pre-consolidation structure lived in the retired
+  logging SPA; its detail is preserved under the retirement tag — see W-0003.)
 - **Decisions:** ADR 0024 (RX pipeline), ADR 0027 (guaranteed-stop TX pattern),
   ADR 0029 (transmit), ADR 0030 (step (d): PTT + slot-timing controller).
   Licensing: ADR 0023 + `docs/licensing.md`.

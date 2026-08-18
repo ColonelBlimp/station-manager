@@ -171,7 +171,6 @@
         "frontend/app/**",
         "frontend/config/**",
         "frontend/logbook/**",
-        "frontend/logging/**",
         "frontend/embed.go",
         "internal/api/server.go",
         "internal/api/spa.go",

@@ -23,13 +23,59 @@ The consolidation is nevertheless incomplete:
 - the Taskfile, release tasks, and CI still install, test, and build both legacy clients;
 - the app's ordinary upload-backfill path omits the legacy logbook's ClubLog-specific amber
   retry-only affordance and `skipped_no_history` result;
-- bridge faults are deliberately rendered as raw code plus details in the app, while the retained
-  logging source has the operator-facing English catalogue; and
+- the operator-facing disconnect / bridge-fault wording is ported into the app as of 2026-08-18
+  (`operate/bridgeMessages.ts`, shown on the Rig panel's "Bridge:" line; stuck-TX banners were
+  already in `ui/TxAlarmBanner.svelte`), resolving the raw-code rendering for known codes; and
 - Logbook and Settings are statically imported by the shell. Only Map is currently lazy-loaded,
   so ADR 0044's per-route code-splitting requirement has not been met.
 
-The old source directories remain useful parity evidence. Their presence is not the defect: live
-routes, embedded assets, and mandatory build gates are the retirement boundary.
+The `frontend/logging` source tree was DELETED on 2026-08-18 after its operator-significant behavior
+was ported and characterized (see "Logging SPA retirement" below). The `frontend/config` and
+`frontend/logbook` source trees remain as parity evidence for their still-pending retirement. Source
+presence is not itself the defect: live routes, embedded assets, and mandatory build gates are the
+retirement boundary.
+
+## Logging SPA retirement (2026-08-18)
+
+The `frontend/logging` source tree — its route + embed + build gates already gone since 2026-07-21 —
+was deleted by operator direction once its operator-significant behavior was ported into the app and
+characterized. Preservation: annotated tag **`legacy-logging-spa-retired`** on the last commit that
+still contained the tree (`565e178ff9f9387dc3ffe34b3b2bf1859a5edff4`); `git show
+legacy-logging-spa-retired` recovers the full source and its detailed structure, which is why the
+per-file archaeology is not duplicated in the live docs.
+
+**Replacement map** (retired logging surface → current app home, under `frontend/app/src/lib/`):
+
+| Retired logging surface | App home |
+|---|---|
+| QSO-entry keyboard shortcuts (`QsoPanel.handleKeydown`) | `operate/LoggingCard.svelte` (`windowKeydown` / `pileupKeydown` / `functionKeydown` / `callKeydown`) |
+| Rig-control keymap + actions (`rigControl.ts`) | `operate/RigKeys.svelte` + `operate/rig.svelte.ts` |
+| Pile-up stack (`callsignStack`, `StackingDrawer`) | `operate/callsignStack.svelte.ts` + `operate/CallsignStackPanel.svelte` / `PileupDrawer.svelte` |
+| Stuck-TX safety banners (`bridge.txalarm.*`) | `ui/TxAlarmBanner.svelte` |
+| Rig-disconnect / bridge-fault wording (`i18n/en.ts` `bridge.*`) | `operate/bridgeMessages.ts` |
+| Session tab / QSO edit (`SessionPanel`, `QsoEditOverlay`) | `operate/SessionPanel.svelte` + `logbook/EditQsoModal.svelte` |
+| FT8 view (`Ft8Panel`, `ft8.svelte.ts`) | `operate/Ft8*.svelte` + `operate/ft8.svelte.ts` (ADR 0067) |
+
+**Restored before deletion** (dropped in the consolidation; ruled selective regressions by the
+operator 2026-08-18, re-ported with characterization tests + reversion proofs):
+
+- **F2 lookup-only "peek"** — `operate/LoggingCard.svelte` (`functionKeydown`): reveal the
+  worked-before panel for a valid call WITHOUT starting the QSO timer.
+- **Recent-comments paste-list picker** — `operate/CommentField.svelte` +
+  `operate/commentHistory.svelte.ts`.
+- **Mouse-accessible stack `≡` icon** — `operate/LoggingCard.svelte` (pointer equivalent of
+  Shift+Enter).
+
+**Accepted as deliberate replacements** (documented, not restored):
+
+- The logging **Start/Stop timer buttons** and `stopQso` → the app auto-starts the clock on callsign
+  commit and uses **F3** to freeze Time Off / start the clock.
+- The VFO-input **Enter-commit / ESC-cancel** edit buffer → the app's CAT-off frequency field is a
+  **directly-bound input**, edited in place.
+
+`keyboard-shortcuts.md` now describes only current app behavior, and no live document or routing
+metadata references the deleted tree; the ADRs and archives that mention it are records and keep
+their historical text.
 
 ## Scope
 
@@ -88,7 +134,9 @@ The separate whole-log Dashboard map remains separately ranked work.
   Porting the entire historical file without enumerating live producers would preserve dead prose
   rather than behavior.
 - What preservation tag marks the last release containing the legacy source trees, and is physical
-  deletion a later work item rather than part of this retirement?
+  deletion a later work item? DECIDED for `frontend/logging` (2026-08-18): tag
+  `legacy-logging-spa-retired`; physical deletion done in this retirement (see "Logging SPA
+  retirement" above). Still open for `frontend/config` and `frontend/logbook`.
 
 ## Verification standard
 
@@ -107,7 +155,9 @@ change), and the full local release gate when the implementation is ready.
   routing, manual, theme, and first-load constraints.
 - [`docs/v2-design/api-endpoints.md`](../v2-design/api-endpoints.md) — canonical current SPA route
   contract; update with behavior.
-- [`frontend/logging/src/lib/i18n/en.ts`](../../frontend/logging/src/lib/i18n/en.ts) — retained
-  operator-facing error wording to reconcile against live event producers.
+- Operator-facing bridge error wording (was the retired logging SPA's `i18n/en.ts`) — the
+  disconnect/fault strings are ported to
+  [`operate/bridgeMessages.ts`](../../frontend/app/src/lib/operate/bridgeMessages.ts); the full
+  catalogue is preserved under the `legacy-logging-spa-retired` tag.
 - [`frontend/logbook/src/lib/ui/LogbookView.svelte`](../../frontend/logbook/src/lib/ui/LogbookView.svelte)
   — retained ClubLog retry-only behavior to characterize.

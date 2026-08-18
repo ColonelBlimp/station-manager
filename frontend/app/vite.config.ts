@@ -33,8 +33,7 @@ export default defineConfig({
                 // Stable, hash-free entry names so the (future) committed
                 // dist/index.html always references the same /assets/index.js +
                 // /assets/index.css — matches the embed convention used by the
-                // other SPAs (see frontend/logging/vite.config.ts for the full
-                // rationale). Code-split chunks + non-CSS assets keep their hash.
+                // other embedded SPAs. Code-split chunks + non-CSS assets keep their hash.
                 entryFileNames: 'assets/index.js',
                 chunkFileNames: 'assets/[name]-[hash].js',
                 assetFileNames: (info) =>

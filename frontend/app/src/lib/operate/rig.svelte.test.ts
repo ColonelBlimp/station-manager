@@ -182,6 +182,56 @@ describe('transport error', () => {
     });
 });
 
+describe('bridge wording (ported from the logging SPA, W-0003 AC3)', () => {
+    function connect(): void {
+        catLink.onRigState({ vfoA: 14_255_000, mode: 'USB' });
+    }
+
+    it('a bridge-error renders friendly, actionable text — not the raw code', () => {
+        connect();
+        catLink.onBridgeError({
+            code: 'serial_permission_denied',
+            details: { port: '/dev/ttyUSB0' },
+        });
+        expect(rig.linkError).toContain('Permission denied'); // fails on the raw code
+        expect(rig.linkError).toContain('/dev/ttyUSB0'); // detail substituted
+        expect(rig.linkError).not.toBe('serial_permission_denied (/dev/ttyUSB0)');
+    });
+
+    it('an unknown bridge-error code still surfaces raw — odd beats invisible', () => {
+        connect();
+        catLink.onBridgeError({ code: 'brand_new_fault', details: { error: 'boom' } });
+        expect(rig.linkError).toBe('brand_new_fault (boom)');
+    });
+
+    it('a genuine disconnect surfaces the friendly reason once the link is lost', () => {
+        connect();
+        catLink.onRigDisconnected({ code: 'rig_no_data' });
+        expect(rig.linkError).toBe(''); // inside the suppression window — nothing yet
+        vi.advanceTimersByTime(FLASH_SUPPRESS_MS + 1);
+        expect(rig.cat).toBe('lost');
+        expect(rig.linkError).toBe('The rig has gone quiet — is it powered on?');
+    });
+
+    it('a blip recovered inside the window never flashes the reason', () => {
+        connect();
+        catLink.onRigDisconnected({ code: 'serial_port_error' });
+        catLink.onRigState({ mode: 'USB' }); // recovered before the window elapsed
+        vi.advanceTimersByTime(FLASH_SUPPRESS_MS * 2);
+        expect(rig.cat).toBe('connected');
+        expect(rig.linkError).toBe(''); // scheduled reason cancelled by the recovery
+    });
+
+    it('a returning rig clears the reason', () => {
+        connect();
+        catLink.onRigDisconnected({ code: 'rig_no_data' });
+        vi.advanceTimersByTime(FLASH_SUPPRESS_MS + 1);
+        expect(rig.linkError).not.toBe('');
+        catLink.onRigState({ mode: 'USB' });
+        expect(rig.linkError).toBe('');
+    });
+});
+
 describe('confirm-once-per-band gate (ADR 0044)', () => {
     it('CAT-off blocks until the band is confirmed; a band change re-arms', () => {
         expect(rigGate()).toBe('unconfirmed');
@@ -229,17 +279,17 @@ describe('confirm-once-per-band gate (ADR 0044)', () => {
     });
 });
 
-describe('bridge-error', () => {
-    it('surfaces the code + details raw, and a working rig clears it', () => {
+describe('bridge-error fallback (codes without ported wording)', () => {
+    it('surfaces an unrecognised code + details raw, and a working rig clears it', () => {
         catLink.onBridgeError({ code: 'port_permission', details: { port: '/dev/ttyUSB0' } });
         expect(rig.linkError).toBe('port_permission (/dev/ttyUSB0)');
         catLink.onRigState({ mode: 'USB' });
         expect(rig.linkError).toBe('');
     });
 
-    it('renders a details-free payload as the bare code', () => {
-        catLink.onBridgeError({ code: 'unknown_driver' });
-        expect(rig.linkError).toBe('unknown_driver');
+    it('renders a details-free unrecognised payload as the bare code', () => {
+        catLink.onBridgeError({ code: 'some_future_fault' });
+        expect(rig.linkError).toBe('some_future_fault');
     });
 });
 
