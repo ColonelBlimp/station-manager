@@ -320,10 +320,9 @@ one first-run setup seeded from your callsign. To target a
 different existing logbook, pass `--logbook <id>`. The importer
 will not create a logbook for you; if `--logbook` points at a
 missing row, or no default is set and no flag is given, it fails
-loudly without writing anything. The logging SPA currently has no
-UI for creating additional logbooks (that lives in the future
-logbook app); if you need one, hit `POST /v1/logbook` directly with
-`curl`.
+loudly without writing anything. The consolidated app currently has
+no UI for creating additional logbooks; if you need one, hit
+`POST /v1/logbook` directly with `curl`.
 
 ---
 
