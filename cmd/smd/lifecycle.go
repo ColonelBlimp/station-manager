@@ -60,8 +60,13 @@ func lifecycleNodes() []iocdi.Node {
 		{Name: nodeConfig},
 		{Name: nodeHub, DrainAfter: []string{nodeHTTP, nodeWorkers, nodeQsoLog}},
 		{Name: nodeLogging},
-		{Name: nodeLogDB},
-		{Name: nodeRefDB, StartAfter: []string{nodeLogDB}},
+		// The databases must outlive every consumer that writes them during shutdown — the FT8
+		// completed-QSO loggers (qso.Submit), HTTP handlers and forwarder workers (all drained before
+		// the hub), plus the enrichment refresher — so they DrainAfter {hub, enrichment}. If a consumer
+		// does not drain (e.g. a hung ft8), the hub is Skipped and the DB is Skipped too: left open for
+		// process reclamation rather than closed under a live writer (safer than the old deferred close).
+		{Name: nodeLogDB, DrainAfter: []string{nodeHub, nodeEnrichment}},
+		{Name: nodeRefDB, StartAfter: []string{nodeLogDB}, DrainAfter: []string{nodeHub, nodeEnrichment}},
 		{Name: nodeQso},
 
 		// The RF fence. Needs the logger + config; keys TX exclusively at shutdown.
@@ -75,7 +80,9 @@ func lifecycleNodes() []iocdi.Node {
 		// Fleet. evidence is ft8's sink (started + constructed before ft8 wires it); its archive path
 		// derives from the log-DB's resolved path, so it also waits on log-db. psk is independent.
 		{Name: nodeEvidence, StartAfter: []string{nodeLogging, nodeConfig, nodeLogDB}, DrainAfter: []string{nodeFt8}},
-		{Name: nodePsk, StartAfter: []string{nodeLogging}},
+		// PSK Reporter drains AFTER ft8: the decode loop calls psk.AddSpot until ft8.Stop completes, so
+		// psk must seal + do its final flush only once ft8 has stopped, or the last reception reports drop.
+		{Name: nodePsk, StartAfter: []string{nodeLogging}, DrainAfter: []string{nodeFt8}},
 		{Name: nodeFt8, StartAfter: []string{nodeBridge, nodeEnrichment, nodeEvidence, nodePsk}},
 
 		// Forwarder workers (need db + qso + hub). qso-log rides ft8's decode loop; it drains after ft8.

@@ -212,6 +212,17 @@ func TestLifecycleGraph_DrainEdgesAreSafetyOnly(t *testing.T) {
 	if !has(nodeQsoLog, nodeFt8) {
 		t.Errorf("qso-log must DrainAfter ft8 (ft8's decode loop launches it); got %v", drainAfter[nodeQsoLog])
 	}
+	// The databases outlive their shutdown-time writers (drained before the hub) + the enrichment
+	// refresher, so they DrainAfter {hub, enrichment}.
+	for _, db := range []string{nodeLogDB, nodeRefDB} {
+		if !has(db, nodeHub) || !has(db, nodeEnrichment) {
+			t.Errorf("%s must DrainAfter {hub, enrichment} (consumers write it during shutdown); got %v", db, drainAfter[db])
+		}
+	}
+	// PSK drains after ft8 (ft8's decode loop feeds AddSpot until ft8 stops).
+	if !has(nodePsk, nodeFt8) {
+		t.Errorf("psk must DrainAfter ft8 (or last decodes drop); got %v", drainAfter[nodePsk])
+	}
 
 	// logging drains after EVERY other node — the logger-safety edge: it records the shutdown, so it
 	// closes only once nothing else can log through it (a non-drained node ⇒ logging Skipped).

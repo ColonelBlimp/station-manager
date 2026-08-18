@@ -94,7 +94,7 @@ func TestLifecycleShutdown_RealGraphHappyPartialOrder(t *testing.T) {
 
 	for _, n := range []string{
 		nodeBridge, nodeFt8, nodeEvidence, nodeQsoLog, nodeHub, nodeHTTP,
-		nodeWorkers, nodePsk, nodeEnrichment, nodeMailer, nodeLogging,
+		nodeWorkers, nodePsk, nodeEnrichment, nodeMailer, nodeLogDB, nodeRefDB, nodeLogging,
 	} {
 		if oc := outcomeOf(rep, n); oc.Result != orchestrator.Drained {
 			t.Errorf("%s outcome = %+v, want Drained", n, oc)
@@ -111,9 +111,15 @@ func TestLifecycleShutdown_RealGraphHappyPartialOrder(t *testing.T) {
 	}
 	before(nodeFt8, nodeEvidence)
 	before(nodeFt8, nodeQsoLog)
+	before(nodeFt8, nodePsk) // psk flushes after ft8's decode loop stops
 	before(nodeHTTP, nodeHub)
 	before(nodeWorkers, nodeHub)
 	before(nodeQsoLog, nodeHub)
+	// The databases outlive every shutdown-time writer.
+	for _, w := range []string{nodeFt8, nodeQsoLog, nodeHTTP, nodeWorkers, nodeHub, nodeEnrichment} {
+		before(w, nodeLogDB)
+		before(w, nodeRefDB)
+	}
 	if order[len(order)-1] != nodeLogging {
 		t.Errorf("stop order = %v, want logging LAST (logger outlives every other Stop)", order)
 	}
@@ -139,6 +145,19 @@ func TestLifecycleShutdown_RealGraphFt8FailSkipsDependentsAndLogging(t *testing.
 	}
 	if oc := outcomeOf(rep, nodeHub); oc.Result != orchestrator.Skipped {
 		t.Errorf("hub outcome = %+v, want Skipped (transitive)", oc)
+	}
+	if oc := outcomeOf(rep, nodePsk); oc.Result != orchestrator.Skipped {
+		t.Errorf("psk outcome = %+v, want Skipped (ft8 did not drain)", oc)
+	}
+	// The databases are Skipped and left OPEN — a consumer (qso-log) did not drain, so closing them
+	// under a possibly-live writer is exactly the hazard the drain-skip avoids.
+	for _, db := range []string{nodeLogDB, nodeRefDB} {
+		if oc := outcomeOf(rep, db); oc.Result != orchestrator.Skipped {
+			t.Errorf("%s outcome = %+v, want Skipped (left open — a writer did not drain)", db, oc)
+		}
+		if indexIn(rec.snapshot(), db) >= 0 {
+			t.Errorf("%s Stop ran though it was Skipped; the DB must be left open under a live writer", db)
+		}
 	}
 	if oc := outcomeOf(rep, nodeLogging); oc.Result != orchestrator.Skipped {
 		t.Errorf("logging outcome = %+v, want Skipped (a prerequisite did not drain)", oc)
