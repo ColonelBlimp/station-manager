@@ -110,6 +110,15 @@
       "summary": "Definitive ranked worklist until its entries move into bounded work dossiers."
     },
     {
+      "id": "work.w-0001",
+      "path": "docs/work/W-0001-durable-notifications.md",
+      "class": "work-item",
+      "audiences": ["contributor", "agent"],
+      "topics": ["notification-history", "operator-events"],
+      "scopes": ["frontend/app/src/lib/ui/**", "frontend/app/src/lib/operate/ExportDialog.svelte"],
+      "summary": "W-0001 evidence, decisions, and acceptance criteria for durable operator notification history."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",

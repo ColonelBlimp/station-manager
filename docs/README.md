@@ -20,8 +20,8 @@ task docs:find QUERY=internal/ft8
 | Audience | Live documents |
 |---|---|
 | Operators | [reference.config](v2-design/config.md) · [reference.ft8](ft8.md) · [reference.install](install.md) · [reference.licensing](licensing.md) · [reference.shortcuts](keyboard-shortcuts.md) · [reference.smcloud-deploy](smcloud-deploy.md) · [work.dogfood-inbox](dogfood-inbox.md) · [operator.manual](../manual) |
-| Contributors | [kernel.root](../AGENTS.md) · [kernel.bridge](../internal/bridge/AGENTS.md) · [kernel.ft8](../internal/ft8/AGENTS.md) · [current](current.md) · [reference.api](v2-design/api-endpoints.md) · [reference.config](v2-design/config.md) · [reference.ft8](ft8.md) · [reference.install](install.md) · [reference.licensing](licensing.md) · [reference.shortcuts](keyboard-shortcuts.md) · [reference.smcloud-deploy](smcloud-deploy.md) · [work.backlog](backlog.md) · [work.dogfood-inbox](dogfood-inbox.md) · [operator.manual](../manual) |
-| Coding agents | [kernel.root](../AGENTS.md) · [kernel.bridge](../internal/bridge/AGENTS.md) · [kernel.ft8](../internal/ft8/AGENTS.md) · [current](current.md) · [reference.api](v2-design/api-endpoints.md) · [reference.config](v2-design/config.md) · [reference.ft8](ft8.md) · [reference.licensing](licensing.md) · [reference.shortcuts](keyboard-shortcuts.md) · [reference.smcloud-deploy](smcloud-deploy.md) · [work.backlog](backlog.md) · [work.dogfood-inbox](dogfood-inbox.md) |
+| Contributors | [kernel.root](../AGENTS.md) · [kernel.bridge](../internal/bridge/AGENTS.md) · [kernel.ft8](../internal/ft8/AGENTS.md) · [current](current.md) · [reference.api](v2-design/api-endpoints.md) · [reference.config](v2-design/config.md) · [reference.ft8](ft8.md) · [reference.install](install.md) · [reference.licensing](licensing.md) · [reference.shortcuts](keyboard-shortcuts.md) · [reference.smcloud-deploy](smcloud-deploy.md) · [work.backlog](backlog.md) · [work.w-0001](work/W-0001-durable-notifications.md) · [work.dogfood-inbox](dogfood-inbox.md) · [operator.manual](../manual) |
+| Coding agents | [kernel.root](../AGENTS.md) · [kernel.bridge](../internal/bridge/AGENTS.md) · [kernel.ft8](../internal/ft8/AGENTS.md) · [current](current.md) · [reference.api](v2-design/api-endpoints.md) · [reference.config](v2-design/config.md) · [reference.ft8](ft8.md) · [reference.licensing](licensing.md) · [reference.shortcuts](keyboard-shortcuts.md) · [reference.smcloud-deploy](smcloud-deploy.md) · [work.backlog](backlog.md) · [work.w-0001](work/W-0001-durable-notifications.md) · [work.dogfood-inbox](dogfood-inbox.md) |
 
 ## Live documents by class
 
@@ -65,6 +65,7 @@ Active-work routing or selected evidence and acceptance criteria. Read only when
 |---|---|---|---|
 | [work.backlog](backlog.md) | `priorities`, `work-tracking` | `repository` | Definitive ranked worklist until its entries move into bounded work dossiers. |
 | [work.dogfood-inbox](dogfood-inbox.md) | `dogfood`, `untriaged-work` | `repository` | Raw operational observations awaiting triage into a fix, backlog item, or non-issue. |
+| [work.w-0001](work/W-0001-durable-notifications.md) | `notification-history`, `operator-events` | `frontend/app/src/lib/ui/**`, `frontend/app/src/lib/operate/ExportDialog.svelte` | W-0001 evidence, decisions, and acceptance criteria for durable operator notification history. |
 
 ### Operator
 
