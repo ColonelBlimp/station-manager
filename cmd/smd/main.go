@@ -363,33 +363,10 @@ func run() error {
 		return err
 	}
 
-	// Start succeeded. Arm the deferred closers for the resources gracefulShutdown does NOT own (its
-	// node Stop hooks are the start-FAILURE rollback path; on the happy path these run at return).
-	// LIFO order matches the pre-orchestrator run(): refresher → reference DB → log DB → logger
-	// (logger deferred first so it closes LAST, after the DBs a late log line might still touch).
-	defer func() {
-		loggerSvc.InfoWith().Msg("smd stopped")
-		if cerr := loggerSvc.Close(); cerr != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "smd: logger close error: %v\n", cerr)
-		}
-	}()
-	defer func() {
-		if cerr := dbSvc.Close(); cerr != nil {
-			loggerSvc.ErrorWith().Err(cerr).Msg("database close error")
-		}
-	}()
-	defer func() {
-		if cerr := refDbSvc.Close(); cerr != nil {
-			loggerSvc.ErrorWith().Err(cerr).Msg("reference database close error")
-		}
-	}()
-	defer func() {
-		if d.refresher != nil {
-			if cerr := d.refresher.Stop(); cerr != nil {
-				loggerSvc.ErrorWith().Err(cerr).Msg("lookup refresher stop error")
-			}
-		}
-	}()
+	// Start succeeded. The orchestrator now owns the ENTIRE teardown — orchestrator.Shutdown below
+	// drives every node's Stop in the derived drain order (the RF fence first; the DBs, logger,
+	// refresher and hub included) — so run() installs NO deferred closers: they would double-close
+	// what Shutdown closes. The deferred workerCancel above stays as a belt for the error/panic paths.
 
 	// ---- Wait for shutdown signal ----
 	sigCh := make(chan os.Signal, 1)
@@ -407,23 +384,19 @@ func run() error {
 		}
 	}
 
-	// ---- Graceful shutdown ----
-	// Phase 3a keeps the hand-ordered gracefulShutdown (phase 3b moves it onto orch.Shutdown). Release
-	// the bound port first, cancel the workers, then run the one budget-bounded ordered teardown.
-	d.server.StopAccepting()
-	workerCancel()
-	gracefulShutdown(teardownDeps{
-		log:          loggerSvc,
-		budget:       time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second,
-		stopBridge:   d.bridge.Stop,
-		stopFt8:      d.ft8.Stop,
-		stopPsk:      d.psk.Stop,
-		stopEvidence: d.evidence.Stop,
-		shutdownHTTP: d.server.Shutdown,
-		workerWG:     &d.workerWG,
-		qsoLogWG:     &d.qsoLogWG,
-		closeHub:     hub.Close,
-	})
+	// ---- Graceful shutdown (ADR 0070 phase 3b) ----
+	// The orchestrator drives the budgeted, dependency-ordered drain: PrepareStop (HTTP StopAccepting +
+	// worker-cancel) → the RF fence (bridge, sole) → the topological drain, with logging draining LAST
+	// so the logger records the whole teardown. cleanShutdown makes the logging node emit "smd stopped"
+	// immediately before it closes. The observer logs the exceptional records live while the logger is
+	// open; reportLoggingOutcome handles the logging node's own outcome afterward.
+	budget := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second
+	if budget <= 0 {
+		budget = 10 * time.Second // match config.applyDefaults / gracefulShutdown's floor
+	}
+	d.cleanShutdown = true
+	report := orch.Shutdown(budget, d.shutdownObserver())
+	d.reportLoggingOutcome(report)
 
 	return runErr
 }

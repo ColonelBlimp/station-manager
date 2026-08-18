@@ -47,8 +47,13 @@ const (
 // lifecycleNodes declares the daemon graph. Registration order is the deterministic shutdown
 // tiebreak among otherwise-unconstrained nodes (ADR 0070) and is kept roughly start-dependency
 // ordered; the topological StartOrder is what actually sequences startup.
+//
+// The logging node's DrainAfter is set to EVERY other node below (not hard-coded — derived, so it
+// cannot drift as nodes change): the logger records the shutdown itself, so it must close only after
+// nothing else can still log through it. If any node ends non-drained, logging is Skipped and the
+// logger is left open for process reclamation rather than closed beneath a possibly-live user.
 func lifecycleNodes() []iocdi.Node {
-	return []iocdi.Node{
+	nodes := []iocdi.Node{
 		// Bean spine. Start edges come from di.inject (config → logging → {log-db, ref-db} → qso);
 		// ref-db additionally waits on log-db so BootstrapReferenceSplit re-keys both before either
 		// connection opens. The hub is a publisher sink: it closes only after its publishers drain.
@@ -83,6 +88,20 @@ func lifecycleNodes() []iocdi.Node {
 			nodeQso, nodeLogDB, nodeHub, nodeLogging,
 		}},
 	}
+
+	// logging drains strictly after every other node (see the doc comment above).
+	var others []string
+	for _, n := range nodes {
+		if n.Name != nodeLogging {
+			others = append(others, n.Name)
+		}
+	}
+	for i := range nodes {
+		if nodes[i].Name == nodeLogging {
+			nodes[i].DrainAfter = others
+		}
+	}
+	return nodes
 }
 
 // registerLifecycleNodes registers every lifecycle node on the container, preserving declaration

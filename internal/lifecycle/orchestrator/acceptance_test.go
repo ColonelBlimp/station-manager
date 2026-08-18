@@ -117,7 +117,7 @@ func mustPrecede(t *testing.T, order []string, a, b string) {
 func TestAcceptance_HappyPathPartialOrder(t *testing.T) {
 	rec := &hookRec{}
 	o := startDaemonOrch(t, daemonAdapters(rec))
-	rep := o.Shutdown(2 * time.Second)
+	rep := o.Shutdown(2*time.Second, nil)
 
 	resultsDrained(t, rep, "bridge", "ft8", "psk", "evidence", "http", "workers", "qso-log", "hub", "logging")
 	order := stopOrder(rec.snapshot())
@@ -133,6 +133,25 @@ func TestAcceptance_HappyPathPartialOrder(t *testing.T) {
 	// §5-9: the construction-only logging node reached Drained via auto-promotion.
 	if got := o.Milestone("logging"); got != MilestoneRunning {
 		t.Errorf("logging Milestone = %d, want MilestoneRunning (nil Start auto-promote)", got)
+	}
+}
+
+// The observer receives every settled outcome in traversal order — the same order and values as the
+// returned report. This is the logging-agnostic seam cmd/smd uses to emit its per-outcome records
+// live, while the logger is still open.
+func TestAcceptance_ObserverSeesEveryOutcomeInTraversalOrder(t *testing.T) {
+	rec := &hookRec{}
+	o := startDaemonOrch(t, daemonAdapters(rec))
+	var seen []NodeOutcome
+	rep := o.Shutdown(2*time.Second, func(oc NodeOutcome) { seen = append(seen, oc) })
+	if len(seen) == 0 || len(seen) != len(rep.Outcomes) {
+		t.Fatalf("observer saw %d outcomes, report has %d", len(seen), len(rep.Outcomes))
+	}
+	for i := range seen {
+		if seen[i].Node != rep.Outcomes[i].Node || seen[i].Result != rep.Outcomes[i].Result {
+			t.Errorf("outcome %d: observed {%s %v}, report {%s %v}",
+				i, seen[i].Node, seen[i].Result, rep.Outcomes[i].Node, rep.Outcomes[i].Result)
+		}
 	}
 }
 
@@ -171,7 +190,7 @@ func TestAcceptance_RFFenceIsSole(t *testing.T) {
 	}
 	o = startDaemonOrch(t, m)
 	done := make(chan ShutdownReport, 1)
-	go func() { done <- o.Shutdown(2 * time.Second) }()
+	go func() { done <- o.Shutdown(2*time.Second, nil) }()
 	select {
 	case <-fenceEntered:
 	case <-done:
@@ -217,7 +236,7 @@ func TestAcceptance_Ft8FailSkipsProducersAndHub(t *testing.T) {
 	m := daemonAdapters(rec)
 	m["ft8"].Stop = func(context.Context) error { rec.add("stop:ft8"); return errors.New("ft8 stop failed") }
 	o := startDaemonOrch(t, m)
-	rep := o.Shutdown(2 * time.Second) // generous — nothing times out
+	rep := o.Shutdown(2*time.Second, nil) // generous — nothing times out
 
 	if rep.FirstTimedOut != "" {
 		t.Errorf("FirstTimedOut = %q, want empty (a fast failure, no timeout)", rep.FirstTimedOut)
@@ -248,7 +267,7 @@ func TestAcceptance_Ft8TimeoutStillSkipsProducers(t *testing.T) {
 	t.Cleanup(func() { close(block) })
 	m["ft8"].Stop = func(context.Context) error { rec.add("stop:ft8"); <-block; return nil }
 	o := startDaemonOrch(t, m)
-	rep := o.Shutdown(120 * time.Millisecond)
+	rep := o.Shutdown(120*time.Millisecond, nil)
 
 	if oc, _ := outcomeFor(rep, "ft8"); oc.Result != TimedOut {
 		t.Errorf("ft8 result = %d, want TimedOut", oc.Result)
@@ -272,7 +291,7 @@ func TestAcceptance_HttpFailSkipsHubWithoutTimeout(t *testing.T) {
 	errHTTP := errors.New("http shutdown failed")
 	m["http"].Stop = func(context.Context) error { rec.add("stop:http"); return errHTTP }
 	o := startDaemonOrch(t, m)
-	rep := o.Shutdown(2 * time.Second) // generous — nothing times out
+	rep := o.Shutdown(2*time.Second, nil) // generous — nothing times out
 
 	if rep.FirstTimedOut != "" {
 		t.Errorf("FirstTimedOut = %q, want empty (nothing timed out)", rep.FirstTimedOut)
@@ -295,7 +314,7 @@ func TestAcceptance_DisabledPublisherLetsHubClose(t *testing.T) {
 	m["ft8"].Active = func() bool { return false }
 	m["qso-log"].Active = func() bool { return false }
 	o := startDaemonOrch(t, m)
-	rep := o.Shutdown(2 * time.Second)
+	rep := o.Shutdown(2*time.Second, nil)
 
 	// hub closes and evidence drains despite the disabled FT8 producer/publisher.
 	resultsDrained(t, rep, "hub", "evidence", "http", "workers", "bridge", "psk", "logging")

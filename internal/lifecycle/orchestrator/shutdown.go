@@ -19,18 +19,22 @@ type NodeOutcome struct {
 // ShutdownReport is the ordered snapshot Shutdown returns. Outcomes are in traversal order (the RF
 // fence first, then the topological drain); Inactive nodes are pruned from traversal and do NOT
 // appear (they stay observable via Result(node) == Inactive). FirstTimedOut names the first node
-// whose Stop the deadline interrupted (empty if none). The caller (cmd/smd) formats the per-failure,
-// per-skip, and single-deadline log lines from this — the orchestrator stays logging-free.
+// whose Stop the deadline interrupted (empty if none). The caller (cmd/smd) formats log lines from
+// the live `observe` callback and/or this returned report — the orchestrator stays logging-free.
 type ShutdownReport struct {
 	Outcomes      []NodeOutcome
 	FirstTimedOut string
 }
 
 // Shutdown drives the budgeted, dependency-ordered teardown (design §4.3) and returns the settled
-// ShutdownReport. It is idempotent: a second or concurrent call reruns no hook and returns the same
-// report. Before a successful Start (never started, or Start failed and rolled back) it is an empty
-// no-op that touches nothing.
-func (o *Orchestrator) Shutdown(budget time.Duration) ShutdownReport {
+// ShutdownReport. `observe` (nil ⇒ ignored) is called with each NodeOutcome the moment it settles, in
+// traversal order — the logging-agnostic seam through which cmd/smd emits its per-outcome log records
+// WHILE the logger is still open (a node whose Stop closes the logger drains last, so its own outcome
+// is observed after; the caller must not require the logger for that one). The orchestrator itself
+// imports no logging package. It is idempotent: a second or concurrent call reruns no hook, does NOT
+// re-invoke observe, and returns the same report. Before a successful Start (never started, or Start
+// failed and rolled back) it is an empty no-op that touches nothing.
+func (o *Orchestrator) Shutdown(budget time.Duration, observe func(NodeOutcome)) ShutdownReport {
 	o.transitionMu.Lock()
 	defer o.transitionMu.Unlock()
 	if o.shutdownDone {
@@ -68,9 +72,13 @@ func (o *Orchestrator) Shutdown(budget time.Duration) ShutdownReport {
 	firstTimedOut := ""
 	record := func(name string, r Result, err error, blockedBy []string) {
 		o.setResult(name, r)
-		outcomes = append(outcomes, NodeOutcome{Node: name, Result: r, Err: err, BlockedBy: blockedBy})
+		oc := NodeOutcome{Node: name, Result: r, Err: err, BlockedBy: blockedBy}
+		outcomes = append(outcomes, oc)
 		if r == TimedOut && firstTimedOut == "" {
 			firstTimedOut = name
+		}
+		if observe != nil {
+			observe(oc)
 		}
 	}
 	drain := func(name string) {

@@ -213,6 +213,18 @@ func TestLifecycleGraph_DrainEdgesAreSafetyOnly(t *testing.T) {
 		t.Errorf("qso-log must DrainAfter ft8 (ft8's decode loop launches it); got %v", drainAfter[nodeQsoLog])
 	}
 
+	// logging drains after EVERY other node — the logger-safety edge: it records the shutdown, so it
+	// closes only once nothing else can log through it (a non-drained node ⇒ logging Skipped).
+	others := 0
+	for _, n := range lifecycleNodes() {
+		if n.Name != nodeLogging {
+			others++
+		}
+	}
+	if got := len(drainAfter[nodeLogging]); got != others {
+		t.Errorf("logging must DrainAfter every other node (%d edges), got %d: %v", others, got, drainAfter[nodeLogging])
+	}
+
 	// Absent: start deps must NOT be mechanically mirrored as drain edges.
 	if len(drainAfter[nodeHTTP]) != 0 {
 		t.Errorf("http must have NO DrainAfter (it is a publisher, not a drain prerequisite holder); got %v", drainAfter[nodeHTTP])

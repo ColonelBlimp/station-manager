@@ -104,6 +104,11 @@ type daemon struct {
 	errCh       chan error
 	restartCh   chan struct{}
 	restartOnce sync.Once
+
+	// cleanShutdown is set by run() immediately before orchestrator.Shutdown, so the logging node's
+	// Stop emits "smd stopped" only on a real shutdown — never on a start-failure rollback that also
+	// unwinds a Running logging node through the same Stop hook.
+	cleanShutdown bool
 }
 
 // registerLifecycle registers the plan nodes + one adapter per node and returns the orchestrator.
@@ -135,7 +140,7 @@ func (d *daemon) registerLifecycle(c *iocdi.Container) (*orchestrator.Orchestrat
 		{NodeID: nodeConfig, Initialize: d.cfgSvc.Initialize},
 		{NodeID: nodeHub, Stop: stopVoid(d.hub.Close)},
 		{NodeID: nodeLogging, Initialize: d.logger.Initialize, Start: d.startLogging,
-			Stop: stopErr(d.logger.Close), Rollback: rollbackVia(d.logger.Close)},
+			Stop: stopErr(d.stopLogging), Rollback: rollbackVia(d.logger.Close)},
 		{NodeID: nodeLogDB, Initialize: d.db.Initialize, Start: d.startLogDB,
 			Stop: stopErr(d.db.Close), Rollback: rollbackVia(d.db.Close)},
 		{NodeID: nodeRefDB, Initialize: d.refDB.Initialize, Start: d.startRefDB,
@@ -151,8 +156,8 @@ func (d *daemon) registerLifecycle(c *iocdi.Container) (*orchestrator.Orchestrat
 		{NodeID: nodeEvidence, Initialize: d.initEvidence, Start: d.startEvidence, Stop: stopVoid(d.stopEvidenceSvc)},
 		{NodeID: nodePsk, Initialize: d.initPsk, Start: d.startPsk, Stop: stopErr(d.stopPskSvc)},
 		{NodeID: nodeFt8, Active: d.ft8.Enabled, Initialize: d.initFt8, Start: d.ft8.Start, Stop: stopErr(d.ft8.Stop)},
-		{NodeID: nodeWorkers, Start: d.startWorkers, Stop: stopVoid(d.workerWG.Wait),
-			Rollback: rollbackVia(d.drainWorkers)},
+		{NodeID: nodeWorkers, Start: d.startWorkers, PrepareStop: d.workerPrepareStop,
+			Stop: stopVoid(d.workerWG.Wait), Rollback: rollbackVia(d.drainWorkers)},
 		{NodeID: nodeQsoLog, Stop: stopVoid(d.qsoLogWG.Wait)},
 		{NodeID: nodeHTTP, Initialize: d.initHTTP, Start: d.startHTTP,
 			PrepareStop: d.httpStopAccepting, Stop: d.stopHTTP},
@@ -199,6 +204,18 @@ func (d *daemon) startLogging(context.Context) error {
 		return errors.New(op).WithErr(err).WithMsg("load dxcc override")
 	}
 	return nil
+}
+
+// stopLogging is the logging node's Stop. Because logging DrainAfter every other node, by the time
+// this runs a clean shutdown has drained everything else — so it emits the final "smd stopped" line
+// immediately before closing the logger. On a start-failure rollback (cleanShutdown==false) it just
+// closes, with no misleading "smd stopped". If any node was non-drained, logging is Skipped and this
+// never runs (the logger is left open for process reclamation).
+func (d *daemon) stopLogging() error {
+	if d.cleanShutdown {
+		d.logger.InfoWith().Msg("smd stopped")
+	}
+	return d.logger.Close()
 }
 
 // ---- databases ----
@@ -583,6 +600,14 @@ func (d *daemon) drainWorkers() error {
 	}
 	d.workerWG.Wait()
 	return nil
+}
+
+// workerPrepareStop is the workers node's non-blocking PrepareStop: it cancels the forwarder child
+// context so the workers begin exiting before the drain reaches workers.Stop (which Wait()s them).
+func (d *daemon) workerPrepareStop() {
+	if d.forwarderCancel != nil {
+		d.forwarderCancel()
+	}
 }
 
 func (d *daemon) startReconciler(ctx context.Context) {

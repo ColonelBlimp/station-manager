@@ -124,7 +124,7 @@ func newOrchestratedDaemon(t *testing.T, mut func(*config.Config)) (*daemon, *or
 	}
 	t.Cleanup(func() {
 		workerCancel()
-		orch.Shutdown(2 * time.Second) // clean teardown when started; a no-op before a successful Start
+		orch.Shutdown(2*time.Second, nil) // clean teardown when started; a no-op before a successful Start
 		_ = db.Close()
 		_ = refDB.Close()
 		_ = logger.Close()

@@ -77,7 +77,7 @@ func TestShutdown_PrepareStopBeforeAnyStop(t *testing.T) {
 	rec := &hookRec{}
 	a, b := newProbe(rec, "a"), newProbe(rec, "b")
 	o := startedOrch(t, []iocdi.Node{{Name: "a"}, {Name: "b"}}, a.adapter(), b.adapter())
-	o.Shutdown(time.Second)
+	o.Shutdown(time.Second, nil)
 
 	seq := rec.snapshot()
 	firstStop := len(seq)
@@ -133,7 +133,7 @@ func TestShutdown_RFFenceIsSoleUntilItReturns(t *testing.T) {
 		{Name: "bridge", StopPriority: iocdi.RFCritical},
 	}, ao, ab)
 	done := make(chan ShutdownReport, 1)
-	go func() { done <- o.Shutdown(2 * time.Second) }()
+	go func() { done <- o.Shutdown(2*time.Second, nil) }()
 	select {
 	case <-fenceEntered:
 	case <-done:
@@ -171,7 +171,7 @@ func TestShutdown_DrainsPrerequisitesFirst(t *testing.T) {
 		{Name: "evidence", DrainAfter: []string{"ft8"}},
 		{Name: "ft8"},
 	}, evidence.adapter(), ft8.adapter())
-	rep := o.Shutdown(time.Second)
+	rep := o.Shutdown(time.Second, nil)
 
 	order := stopOrder(rec.snapshot())
 	if indexOf(order, "ft8") < 0 || indexOf(order, "evidence") < 0 || indexOf(order, "ft8") > indexOf(order, "evidence") {
@@ -196,7 +196,7 @@ func TestShutdown_ClassifiesResults(t *testing.T) {
 	aHang.Stop = func(context.Context) error { rec.add("stop:hang"); <-block; return nil }
 
 	o := startedOrch(t, []iocdi.Node{{Name: "ok"}, {Name: "boom"}, {Name: "hang"}}, aOk, aBoom, aHang)
-	rep := o.Shutdown(150 * time.Millisecond)
+	rep := o.Shutdown(150*time.Millisecond, nil)
 
 	if oc, _ := outcomeFor(rep, "ok"); oc.Result != Drained {
 		t.Errorf("ok result = %d, want Drained", oc.Result)
@@ -226,7 +226,7 @@ func TestShutdown_TransitiveSkip(t *testing.T) {
 		{Name: "b", DrainAfter: []string{"a"}},
 		{Name: "c", DrainAfter: []string{"b"}},
 	}, aa, b.adapter(), cc.adapter())
-	rep := o.Shutdown(120 * time.Millisecond)
+	rep := o.Shutdown(120*time.Millisecond, nil)
 
 	ocB, _ := outcomeFor(rep, "b")
 	if ocB.Result != Skipped || !reflect.DeepEqual(ocB.BlockedBy, []string{"a"}) {
@@ -250,7 +250,7 @@ func TestShutdown_InactivePrerequisiteSatisfies(t *testing.T) {
 		{Name: "off"},
 		{Name: "b", DrainAfter: []string{"off"}},
 	}, off.adapter(), b.adapter())
-	rep := o.Shutdown(time.Second)
+	rep := o.Shutdown(time.Second, nil)
 
 	if oc, _ := outcomeFor(rep, "b"); oc.Result != Drained {
 		t.Errorf("b result = %d, want Drained (Inactive prereq satisfies)", oc.Result)
@@ -278,7 +278,7 @@ func TestShutdown_BlockedByInDeclaredOrder(t *testing.T) {
 		{Name: "p1"},
 		{Name: "dep", DrainAfter: []string{"p1", "p2"}},
 	}, a2, a1, dep.adapter())
-	rep := o.Shutdown(120 * time.Millisecond)
+	rep := o.Shutdown(120*time.Millisecond, nil)
 
 	oc, _ := outcomeFor(rep, "dep")
 	if oc.Result != Skipped || !reflect.DeepEqual(oc.BlockedBy, []string{"p1", "p2"}) {
@@ -298,7 +298,7 @@ func TestShutdown_BudgetZeroImmediateExpiry(t *testing.T) {
 		{Name: "a"},
 		{Name: "b", DrainAfter: []string{"a"}},
 	}, aa, b.adapter())
-	rep := o.Shutdown(0)
+	rep := o.Shutdown(0, nil)
 
 	if oc, _ := outcomeFor(rep, "a"); oc.Result != TimedOut {
 		t.Errorf("a result = %d, want TimedOut (budget<=0 immediate expiry)", oc.Result)
@@ -314,9 +314,9 @@ func TestShutdown_Idempotent(t *testing.T) {
 	a, b := newProbe(rec, "a"), newProbe(rec, "b")
 	o := startedOrch(t, []iocdi.Node{{Name: "a"}, {Name: "b"}}, a.adapter(), b.adapter())
 
-	rep1 := o.Shutdown(time.Second)
+	rep1 := o.Shutdown(time.Second, nil)
 	seqAfter1 := rec.snapshot()
-	rep2 := o.Shutdown(time.Second)
+	rep2 := o.Shutdown(time.Second, nil)
 	seqAfter2 := rec.snapshot()
 
 	if !reflect.DeepEqual(seqAfter1, seqAfter2) {
@@ -340,7 +340,7 @@ func TestShutdown_ConcurrentCallsRunHooksOnce(t *testing.T) {
 	reps := make([]ShutdownReport, 2)
 	for i := range reps {
 		wg.Add(1)
-		go func(i int) { defer wg.Done(); reps[i] = o.Shutdown(time.Second) }(i)
+		go func(i int) { defer wg.Done(); reps[i] = o.Shutdown(time.Second, nil) }(i)
 	}
 	wg.Wait()
 	if !reflect.DeepEqual(reps[0], reps[1]) {
@@ -375,13 +375,13 @@ func TestShutdown_BeforeStartDoesNotDisableLaterShutdown(t *testing.T) {
 	if err := o.Register(a.adapter()); err != nil {
 		t.Fatal(err)
 	}
-	if rep := o.Shutdown(time.Second); len(rep.Outcomes) != 0 {
+	if rep := o.Shutdown(time.Second, nil); len(rep.Outcomes) != 0 {
 		t.Fatalf("pre-start Shutdown = %+v, want empty", rep)
 	}
 	if err := o.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	rep := o.Shutdown(time.Second)
+	rep := o.Shutdown(time.Second, nil)
 	if len(rep.Outcomes) == 0 || a.stops != 1 {
 		t.Errorf("Shutdown after a pre-start no-op did not tear down: outcomes=%+v a.stops=%d", rep.Outcomes, a.stops)
 	}
@@ -402,7 +402,7 @@ func TestShutdown_ReportIsDefensivelyCopied(t *testing.T) {
 		{Name: "b", DrainAfter: []string{"a"}},
 	}, aa, b.adapter())
 
-	rep1 := o.Shutdown(0) // a TimedOut, b Skipped BlockedBy [a]
+	rep1 := o.Shutdown(0, nil) // a TimedOut, b Skipped BlockedBy [a]
 	for i := range rep1.Outcomes {
 		rep1.Outcomes[i].Node = "MUTATED"
 		rep1.Outcomes[i].Result = Drained
@@ -410,7 +410,7 @@ func TestShutdown_ReportIsDefensivelyCopied(t *testing.T) {
 			rep1.Outcomes[i].BlockedBy[j] = "MUTATED"
 		}
 	}
-	rep2 := o.Shutdown(0) // idempotent — must be a fresh copy, unaffected by the mutation above
+	rep2 := o.Shutdown(0, nil) // idempotent — must be a fresh copy, unaffected by the mutation above
 	ocB, ok := outcomeFor(rep2, "b")
 	if !ok || ocB.Result != Skipped || !reflect.DeepEqual(ocB.BlockedBy, []string{"a"}) {
 		t.Errorf("second report was corrupted by mutating the first: %+v", rep2.Outcomes)
@@ -430,7 +430,7 @@ func TestShutdown_BeforeStartIsEmptyNoOp(t *testing.T) {
 	if err := o.Register(a.adapter()); err != nil {
 		t.Fatal(err)
 	}
-	rep := o.Shutdown(time.Second)
+	rep := o.Shutdown(time.Second, nil)
 	if len(rep.Outcomes) != 0 || rep.FirstTimedOut != "" {
 		t.Errorf("Shutdown before Start = %+v, want empty report", rep)
 	}
@@ -459,7 +459,7 @@ func TestShutdown_BeforeStartIsEmptyNoOp(t *testing.T) {
 		t.Fatal("Start should fail")
 	}
 	base.prepares, base.stops = 0, 0 // ignore rollback's Stop of base; count only Shutdown's hooks
-	rep2 := o2.Shutdown(time.Second)
+	rep2 := o2.Shutdown(time.Second, nil)
 	if len(rep2.Outcomes) != 0 {
 		t.Errorf("Shutdown after a failed Start = %+v, want empty report", rep2)
 	}
