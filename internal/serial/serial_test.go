@@ -1060,12 +1060,19 @@ func TestReaderLoopSurfacesNonTimeoutReadError(t *testing.T) {
 		BaudRate:      9600,
 		LineDelimiter: ';',
 	}
-	c := newPort(mp, cfg)
-
+	// Arm the terminal read error BEFORE newPort starts the reader goroutine, so
+	// its first Read deterministically returns it. Arming it AFTER newPort raced
+	// the reader (safego.Go): if its Read ran first, the mock blocked on readCh —
+	// it never re-checks errToReturn once blocked, and nothing is fed here — so the
+	// loop never surfaced the cause and ReadResponseBytes returned a ctx-deadline
+	// error instead of the injected one (flaky under CI's -race scheduling). The
+	// `go` in newPort happens-after this write, so the reader is guaranteed to see it.
 	injectedErr := stderr.New("device removed")
 	mp.mu.Lock()
 	mp.errToReturn = injectedErr
 	mp.mu.Unlock()
+
+	c := newPort(mp, cfg)
 
 	// The reader's first Read returns errToReturn, so it records the terminal
 	// cause and exits (closing responses); ReadResponseBytes then returns that
