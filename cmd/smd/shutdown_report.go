@@ -5,7 +5,7 @@ package main
 // orchestrator.Shutdown is logging-free: it calls an observer with each NodeOutcome as it settles and
 // returns the ordered ShutdownReport. cmd/smd supplies the observer (shutdownObserver) that emits the
 // per-outcome records WHILE the logger is still open — the exceptional records only, preserved
-// verbatim from the pre-orchestrator gracefulShutdown so operator log parsing / alerts are unchanged.
+// verbatim from the pre-orchestrator shutdown so operator log parsing / alerts are unchanged.
 //
 // The logging node drains LAST (DrainAfter every other node) and its Stop closes the logger, so its
 // OWN outcome is handled separately, AFTER Shutdown returns (reportLoggingOutcome): a Failed/TimedOut
@@ -21,7 +21,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/lifecycle/orchestrator"
 )
 
-// The shutdown log record messages, preserved verbatim from gracefulShutdown so existing operator
+// The shutdown log record messages, preserved verbatim from the pre-orchestrator shutdown so existing operator
 // monitoring keys off the same strings across the cutover.
 const (
 	msgShutdownExceededRecord = "graceful shutdown exceeded budget; remaining dependent teardown abandoned"
@@ -31,7 +31,7 @@ const (
 // shutdownObserver returns the orchestrator outcome observer. It logs the exceptional records — a
 // Failed node's Stop error, the ONE first-timeout budget warning, and each Skipped node naming its
 // unmet prerequisites — the moment each settles, while the logger is still open. A Drained node logs
-// nothing (matching gracefulShutdown's clean-run silence). It skips the logging node: that node's
+// nothing (matching the pre-orchestrator shutdown's clean-run silence). It skips the logging node: that node's
 // Stop is closing the logger, so its own outcome is reported by reportLoggingOutcome instead.
 func (d *daemon) shutdownObserver() func(orchestrator.NodeOutcome) {
 	budget := time.Duration(d.cfg.Server.ShutdownTimeoutSec) * time.Second

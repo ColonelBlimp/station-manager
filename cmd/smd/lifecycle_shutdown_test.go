@@ -5,6 +5,7 @@ package main
 // lifecycleNodes() with fake recording adapters (no services, no hardware) and drive orch.Shutdown.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -19,6 +20,25 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/lifecycle/orchestrator"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 )
+
+// syncBuffer is a concurrency-safe log sink: the logging service may write from more than one
+// goroutine, so a plain bytes.Buffer would race under -race. Used by the observer / report tests.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 type stopRec struct {
 	mu    sync.Mutex

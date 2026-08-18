@@ -392,7 +392,7 @@ func run() error {
 	// open; reportLoggingOutcome handles the logging node's own outcome afterward.
 	budget := time.Duration(cfg.Server.ShutdownTimeoutSec) * time.Second
 	if budget <= 0 {
-		budget = 10 * time.Second // match config.applyDefaults / gracefulShutdown's floor
+		budget = 10 * time.Second // match config.applyDefaults' 10s floor
 	}
 	d.cleanShutdown = true
 	report := orch.Shutdown(budget, d.shutdownObserver())

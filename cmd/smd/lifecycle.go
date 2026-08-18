@@ -5,7 +5,7 @@ package main
 // This file holds the SHAPE of the graph (the nodes, their start/drain edges, and the RF fence);
 // the adapters that bind each node to real service transitions live alongside it. Registering the
 // graph + driving it through internal/lifecycle/orchestrator replaces run()'s hand-wired
-// Initialize/Start sequence and (phase 3b) cmd/smd/shutdown.go's hand-ordered gracefulShutdown.
+// Initialize/Start sequence and the former hand-ordered graceful shutdown.
 //
 // Node identity: bean nodes reuse their bean ID (case-insensitive), so the plan derives their start
 // edges from the di.inject graph automatically (mergedStartPrereqLocked). Non-bean nodes — the
