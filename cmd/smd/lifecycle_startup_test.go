@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -193,6 +194,45 @@ func TestLifecycle_InfraInitFailurePreventsDependentsAndIsAttributed(t *testing.
 	}
 	if got := orch.Milestone(nodeHTTP); got != orchestrator.MilestoneNone {
 		t.Errorf("http milestone = %v, want None — a dependent must not start after infra init fails", got)
+	}
+}
+
+// C5 (codex 3a850604 P2): when a node's OWN Start fails after Initialize (its milestone is stuck at
+// Initialized, not Running), the orchestrator drives its Rollback — so a resource opened in
+// Initialize or partway through Start is released, not leaked until process exit. A dirty
+// migration-tracking row makes the log DB Open() cleanly then fail Migrate(); the connection must be
+// closed by the log-DB node's Rollback.
+func TestLifecycle_FailedStartRollsBackAndReleasesResources(t *testing.T) {
+	d, orch := newOrchestratedDaemon(t, nil)
+
+	// Poison the log DB: a valid SQLite file whose golang-migrate tracking table is marked dirty, so
+	// Open() succeeds (isOpen=true) but Migrate() returns ErrDirty — a Start failure AFTER the
+	// connection opened.
+	raw, err := sql.Open("sqlite", d.cfg.Datastore.Path)
+	if err != nil {
+		t.Fatalf("open poison db: %v", err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE schema_migrations_log (version uint64, dirty bool)`); err != nil {
+		t.Fatalf("create tracking table: %v", err)
+	}
+	if _, err := raw.Exec(`INSERT INTO schema_migrations_log (version, dirty) VALUES (1, 1)`); err != nil {
+		t.Fatalf("seed dirty row: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close poison db: %v", err)
+	}
+
+	if err := orch.Start(d.workerCtx); err == nil {
+		t.Fatal("orchestrated start succeeded though the log DB migration must fail (dirty)")
+	} else if !strings.Contains(err.Error(), nodeLogDB) {
+		t.Errorf("start error does not attribute the failure to the %q node: %v", nodeLogDB, err)
+	}
+	if got := orch.Milestone(nodeLogDB); got != orchestrator.MilestoneNone {
+		t.Errorf("log-db milestone = %v, want None (rolled back)", got)
+	}
+	// The connection Open() acquired must be released by the node's Rollback — Ping fails when closed.
+	if err := d.db.Ping(); err == nil {
+		t.Error("log DB connection is still open after a failed Start; Rollback did not release it")
 	}
 }
 

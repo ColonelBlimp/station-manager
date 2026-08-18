@@ -117,25 +117,38 @@ func (d *daemon) registerLifecycle(c *iocdi.Container) (*orchestrator.Orchestrat
 	stopVoid := func(f func()) func(context.Context) error {
 		return func(context.Context) error { f(); return nil }
 	}
+	// rollbackVia adapts a resource closer to the Rollback hook. The orchestrator drives Rollback —
+	// NOT Stop — for a node whose OWN Start returned an error (its milestone is still Initialized, not
+	// Running). A node that opened a resource in Initialize or partway through Start (the log file,
+	// an open DB connection, the refresher) must release it on that path too, or the handle leaks
+	// until process exit. The cleanup is the same closer Stop uses (codex 3a850604 P2).
+	rollbackVia := func(f func() error) func(orchestrator.Milestone) error {
+		return func(orchestrator.Milestone) error { return f() }
+	}
 
 	adapters := []orchestrator.Adapter{
 		// --- Beans ---
 		{NodeID: nodeConfig, Initialize: d.cfgSvc.Initialize},
 		{NodeID: nodeHub, Stop: stopVoid(d.hub.Close)},
-		{NodeID: nodeLogging, Initialize: d.logger.Initialize, Start: d.startLogging, Stop: stopErr(d.logger.Close)},
-		{NodeID: nodeLogDB, Initialize: d.db.Initialize, Start: d.startLogDB, Stop: stopErr(d.db.Close)},
-		{NodeID: nodeRefDB, Initialize: d.refDB.Initialize, Start: d.startRefDB, Stop: stopErr(d.refDB.Close)},
+		{NodeID: nodeLogging, Initialize: d.logger.Initialize, Start: d.startLogging,
+			Stop: stopErr(d.logger.Close), Rollback: rollbackVia(d.logger.Close)},
+		{NodeID: nodeLogDB, Initialize: d.db.Initialize, Start: d.startLogDB,
+			Stop: stopErr(d.db.Close), Rollback: rollbackVia(d.db.Close)},
+		{NodeID: nodeRefDB, Initialize: d.refDB.Initialize, Start: d.startRefDB,
+			Stop: stopErr(d.refDB.Close), Rollback: rollbackVia(d.refDB.Close)},
 		{NodeID: nodeQso, Initialize: d.initQso, Start: d.startQso},
 
 		// --- Fleet + promoted infra ---
 		{NodeID: nodeBridge, Active: d.bridge.Enabled, Initialize: d.bridge.Initialize,
-			Start: d.bridge.Start, Stop: stopErr(d.bridge.Stop)},
-		{NodeID: nodeEnrichment, Initialize: d.initEnrichment, Start: d.startEnrichment, Stop: d.stopEnrichment},
+			Start: d.bridge.Start, Stop: stopErr(d.bridge.Stop), Rollback: rollbackVia(d.bridge.Stop)},
+		{NodeID: nodeEnrichment, Initialize: d.initEnrichment, Start: d.startEnrichment,
+			Stop: d.stopEnrichment, Rollback: rollbackVia(d.closeEnrichment)},
 		{NodeID: nodeMailer, Initialize: d.initMailer},
 		{NodeID: nodeEvidence, Initialize: d.initEvidence, Start: d.startEvidence, Stop: stopVoid(d.stopEvidenceSvc)},
 		{NodeID: nodePsk, Initialize: d.initPsk, Start: d.startPsk, Stop: stopErr(d.stopPskSvc)},
 		{NodeID: nodeFt8, Active: d.ft8.Enabled, Initialize: d.initFt8, Start: d.ft8.Start, Stop: stopErr(d.ft8.Stop)},
-		{NodeID: nodeWorkers, Start: d.startWorkers, Stop: stopVoid(d.workerWG.Wait)},
+		{NodeID: nodeWorkers, Start: d.startWorkers, Stop: stopVoid(d.workerWG.Wait),
+			Rollback: rollbackVia(d.drainWorkers)},
 		{NodeID: nodeQsoLog, Stop: stopVoid(d.qsoLogWG.Wait)},
 		{NodeID: nodeHTTP, Initialize: d.initHTTP, Start: d.startHTTP,
 			PrepareStop: d.httpStopAccepting, Stop: d.stopHTTP},
@@ -274,12 +287,14 @@ func (d *daemon) startEnrichment(ctx context.Context) error {
 	return d.refresher.Start(ctx)
 }
 
-func (d *daemon) stopEnrichment(context.Context) error {
+func (d *daemon) closeEnrichment() error {
 	if d.refresher == nil {
 		return nil
 	}
 	return d.refresher.Stop()
 }
+
+func (d *daemon) stopEnrichment(context.Context) error { return d.closeEnrichment() }
 
 // ---- mailer (promoted node) ----
 
@@ -544,6 +559,15 @@ func (d *daemon) startWorkers(ctx context.Context) error {
 	}
 
 	d.startReconciler(ctx)
+	return nil
+}
+
+// drainWorkers cancels the (partially-spawned) forwarder workers then waits them out. It is the
+// workers node's Rollback: on a startWorkers failure the workers are not yet cancelled (run()'s
+// deferred workerCancel fires only after run returns), so rollback must cancel before waiting.
+func (d *daemon) drainWorkers() error {
+	d.workerCancel()
+	d.workerWG.Wait()
 	return nil
 }
 
