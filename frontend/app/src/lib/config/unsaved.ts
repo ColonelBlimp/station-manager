@@ -38,6 +38,7 @@ import { emailState } from './email.svelte';
 import { enrichmentState } from './enrichment.svelte';
 import { forwardingState } from './forwarding.svelte';
 import { ft8SettingsState } from './ft8.svelte';
+import { generalState } from './general.svelte';
 import { rigsState } from './rigs.svelte';
 import { stationState } from './station.svelte';
 
@@ -91,6 +92,12 @@ const SECTIONS: Section[] = [
         dirty: () => enrichmentState.dirty,
         saving: () => enrichmentState.saving,
         discard: () => enrichmentState.reset(),
+    },
+    {
+        label: 'General',
+        dirty: () => generalState.dirty,
+        saving: () => generalState.saving,
+        discard: () => generalState.reset(),
     },
 ];
 

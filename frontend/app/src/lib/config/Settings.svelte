@@ -11,6 +11,7 @@
     import ForwardingSection from './ForwardingSection.svelte';
     import EmailSection from './EmailSection.svelte';
     import EnrichmentSection from './EnrichmentSection.svelte';
+    import GeneralSection from './GeneralSection.svelte';
     import { restartDaemon, waitForDaemonBack, fetchDaemonInstance } from '../api/restart';
     import { toasts } from '../ui/toasts.svelte';
 
@@ -18,7 +19,7 @@
     // ahead of the outside services it talks to (Forwarding, Email,
     // Enrichment). unsaved.ts walks the same order, so the leave prompt reads
     // as a walk across the tabs — keep the two in step.
-    type SectionId = 'station' | 'rigs' | 'ft8' | 'forwarding' | 'email' | 'enrichment';
+    type SectionId = 'station' | 'rigs' | 'ft8' | 'forwarding' | 'email' | 'enrichment' | 'general';
     const sections: { id: SectionId; label: string }[] = [
         { id: 'station', label: 'Station' },
         { id: 'rigs', label: 'Rigs' },
@@ -26,6 +27,9 @@
         { id: 'forwarding', label: 'Forwarding' },
         { id: 'email', label: 'Email' },
         { id: 'enrichment', label: 'Enrichment' },
+        // General (cross-cutting prefs + About) lands last — it isn't a station-or-service
+        // domain like the others.
+        { id: 'general', label: 'General' },
     ];
     let active = $state<SectionId>('station');
 
@@ -134,5 +138,8 @@
     </div>
     <div class:hidden={active !== 'enrichment'}>
         <EnrichmentSection />
+    </div>
+    <div class:hidden={active !== 'general'}>
+        <GeneralSection />
     </div>
 </div>
