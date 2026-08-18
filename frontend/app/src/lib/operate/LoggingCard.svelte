@@ -86,13 +86,9 @@
     let callInput: HTMLInputElement | undefined;
 
     async function logAndRefocus(): Promise<void> {
-        // Captured before logDraft, which clears the draft on success: a logged
-        // comment joins the recent-comments paste list (commentHistory) for reuse.
-        const comment = draft.comment;
-        if (await logDraft()) {
-            commentHistory.add(comment);
-            callInput?.focus();
-        }
+        // Comment-history recording lives in logDraft's shared success path (so a
+        // forced-duplicate "Log anyway" records it too); this only refocuses.
+        if (await logDraft()) callInput?.focus();
     }
 
     function windowKeydown(e: KeyboardEvent): void {

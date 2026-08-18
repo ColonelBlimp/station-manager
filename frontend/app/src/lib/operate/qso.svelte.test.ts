@@ -21,6 +21,7 @@ import {
     type QsoDraft,
 } from './qso.svelte';
 import { rig, confirmRig } from './rig.svelte';
+import { commentHistory } from './commentHistory.svelte';
 import { toastsState, _resetForTests as resetToasts } from '../ui/toasts.svelte';
 
 // A loggable draft, minus the report fields under test. Times are set
@@ -154,6 +155,17 @@ describe('submit outcomes: toasts for messages, card-local for the duplicate act
         expect(toastsState.items).toHaveLength(1);
         expect(toastsState.items[0]).toMatchObject({ level: 'info', message: 'Logged DL3YA' });
         expect(draft.callsign).toBe(''); // next QSO starts clean
+    });
+
+    it('records the comment in the recent-comments history on the shared path — a forced "Log anyway" records it too', async () => {
+        fillDraft();
+        draft.comment = 'Tnx QSO 73';
+        commentHistory.clear();
+        setSubmit(() => Promise.resolve({ ok: true }));
+        // force=true is the DuplicateDialog "Log anyway" path; it bypasses the
+        // card's log handler, so recording must live in logDraft (review c4f7474d P2).
+        expect(await logDraft(true)).toBe(true);
+        expect(commentHistory.items).toContain('Tnx QSO 73');
     });
 
     it('a non-duplicate refusal is an error toast; the draft is preserved', async () => {

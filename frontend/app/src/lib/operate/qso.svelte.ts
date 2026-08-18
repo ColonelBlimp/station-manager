@@ -10,6 +10,7 @@ import { isValidRs, isValidRst, isValidSignalReport } from '../validators/rst';
 import { usesSignalReport } from '../utils/mode';
 import { rig, rigReady } from './rig.svelte';
 import { toasts } from '../ui/toasts.svelte';
+import { commentHistory } from './commentHistory.svelte';
 
 export interface QsoDraft {
     callsign: string;
@@ -279,6 +280,11 @@ export async function logDraft(force = false): Promise<boolean> {
         submitState.busy = false;
     }
     if (res.ok) {
+        // A logged comment joins the recent-comments paste list. Recorded on the
+        // SHARED success path (before clearDraft), so a forced-duplicate "Log
+        // anyway" — DuplicateDialog → logDraft(true), which never reaches the
+        // card's log handler — records it too (clean-room review c4f7474d P2).
+        commentHistory.add(draft.comment);
         clearDraft(); // next QSO starts now
         toasts.info(`Logged ${call}`);
         return true;
