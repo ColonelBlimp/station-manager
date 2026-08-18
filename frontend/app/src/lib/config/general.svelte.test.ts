@@ -123,4 +123,106 @@ describe('generalState', () => {
             schema: { version: 6, dirty: false },
         });
     });
+
+    it('an edit made WHILE the PUT is in flight is preserved, not overwritten by the response', async () => {
+        // Hold the PUT response until an in-flight edit has been made. The daemon
+        // echoes exactly what was sent (no normalisation), so a save must adopt only
+        // the BASELINE from the echo and keep the live form — otherwise the newer
+        // edit is silently lost and the form marked pristine (review 16cb3ea3 P1).
+        let releasePut!: () => void;
+        const gate = new Promise<void>((r) => (releasePut = r));
+        const ok = (b: string) =>
+            new Response(b, { status: 200, headers: { 'Content-Type': 'application/json' } });
+        const spy = vi.fn((url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            if (init?.method === 'PUT') return gate.then(() => ok((init.body as string) ?? '{}'));
+            return Promise.resolve(ok(JSON.stringify(configBody())));
+        });
+        vi.stubGlobal('fetch', spy);
+
+        await generalState.load();
+        generalState.form.restoreRigOnModeSwitch = false; // dirty ⇒ save proceeds
+        const saving = generalState.save();
+        // Operator toggles a DIFFERENT field after clicking Save, before the response.
+        generalState.setBandColor('80m', '#123456', '#dc2626');
+        releasePut();
+        await saving;
+
+        expect(generalState.form.bandColors['80m']).toBe('#123456'); // the edit survived
+        expect(generalState.dirty).toBe(true); // still unsaved work
+    });
+
+    it('a timed-out save re-reads, keeps the operator edit, and does NOT revert a concurrent change to another band', async () => {
+        // GET #1 loads; the PUT times out; GET #2 (the reconcile re-read) shows a
+        // SECOND writer has added 40m and moved the opaque map centre, while the
+        // operator's own 20m edit is not (yet) stored.
+        let gets = 0;
+        const spy = vi.fn((url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            if (init?.method === 'PUT') {
+                const e = new Error('timed out');
+                e.name = 'TimeoutError';
+                return Promise.reject(e);
+            }
+            gets += 1;
+            const body =
+                gets === 1
+                    ? configBody({ map: { band_colors: { '20m': '#111111' }, center: 'JJ00' } })
+                    : configBody({
+                          map: {
+                              band_colors: { '20m': '#111111', '40m': '#0000ff' },
+                              center: 'KK11',
+                          },
+                      });
+            return Promise.resolve(
+                new Response(JSON.stringify(body), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            );
+        });
+        vi.stubGlobal('fetch', spy);
+
+        await generalState.load();
+        generalState.setBandColor('20m', '#222222', '#22c55e'); // operator changes 20m
+        await generalState.save(); // PUT times out ⇒ reconcile
+
+        expect(generalState.form.bandColors['20m']).toBe('#222222'); // operator edit kept
+        expect(generalState.form.bandColors['40m']).toBe('#0000ff'); // concurrent add adopted
+        expect(generalState.dirty).toBe(true); // 20m still differs from stored
+
+        // The resend carries the FRESH map centre (KK11) and BOTH bands — the
+        // whole-block PUT reverts neither the concurrent 40m nor the moved centre.
+        const spy2 = mockDaemon(configBody());
+        await generalState.save();
+        const { body } = putCall(spy2);
+        const map = body.map as Record<string, unknown>;
+        expect(map.center).toBe('KK11');
+        expect(map.band_colors).toEqual({ '20m': '#222222', '40m': '#0000ff' });
+    });
+
+    it('a timed-out save whose re-read also fails keeps the typed form', async () => {
+        let gets = 0;
+        const spy = vi.fn((url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            if (init?.method === 'PUT') {
+                const e = new Error('timed out');
+                e.name = 'TimeoutError';
+                return Promise.reject(e);
+            }
+            gets += 1;
+            if (gets >= 2) return Promise.reject(new Error('network down')); // reconcile GET fails
+            return Promise.resolve(
+                new Response(JSON.stringify(configBody()), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            );
+        });
+        vi.stubGlobal('fetch', spy);
+
+        await generalState.load();
+        generalState.setBandColor('30m', '#654321', '#f97316');
+        await generalState.save(); // PUT times out, re-read fails
+
+        expect(generalState.form.bandColors['30m']).toBe('#654321'); // nothing discarded
+        expect(generalState.dirty).toBe(true);
+    });
 });

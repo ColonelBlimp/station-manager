@@ -24,7 +24,12 @@ export interface GeneralConfig {
 }
 
 export type GeneralOutcome =
-    { kind: 'ok'; config: GeneralConfig } | { kind: 'error'; message: string };
+    | { kind: 'ok'; config: GeneralConfig }
+    // `timedOut` marks the AMBIGUOUS write: the PUT reached the daemon and its
+    // response was lost, so it MAY already have committed. The caller must re-read
+    // rather than report a plain failure — a blind retry resends the whole `map`
+    // block and can revert a change made in between (mirrors saveFt8Settings).
+    | { kind: 'error'; message: string; timedOut?: boolean };
 
 function toColorMap(v: unknown): Record<string, string> {
     const out: Record<string, string> = {};
@@ -72,7 +77,13 @@ export async function saveGeneral(
         body: JSON.stringify(body),
         signal,
     });
-    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    if (!fetched.ok) {
+        return {
+            kind: 'error',
+            message: fetched.message,
+            timedOut: fetched.kind === 'network' && fetched.timedOut === true,
+        };
+    }
     const resBody = await readJsonBody(fetched.response);
     if (!fetched.response.ok) {
         const err = isPlainObject(resBody) ? (resBody as { message?: string }) : null;
