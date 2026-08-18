@@ -236,6 +236,30 @@ func TestLifecycle_FailedStartRollsBackAndReleasesResources(t *testing.T) {
 	}
 }
 
+// C6 (codex 1fbbd41d P2): the workers node's Rollback must drain the forwarder workers WITHOUT
+// cancelling the orchestrator's rollback context — otherwise runBounded sees rollback as timed out
+// and halts the unwind, leaving the predecessor DBs (and logger) open. A bad forwarder type fails
+// startWorkers after the DBs opened; rollback must still reach and close them.
+func TestLifecycle_WorkerStartFailureStillRollsBackPredecessors(t *testing.T) {
+	d, orch := newOrchestratedDaemon(t, func(c *config.Config) {
+		c.Forwarders = []types.ForwarderConfig{
+			{Name: "bad", Type: "definitely-not-a-registered-forwarder", Enabled: true},
+		}
+	})
+	if err := orch.Start(d.workerCtx); err == nil {
+		t.Fatal("orchestrated start succeeded though the forwarder build must fail")
+	} else if !strings.Contains(err.Error(), nodeWorkers) {
+		t.Errorf("start error does not attribute the failure to the %q node: %v", nodeWorkers, err)
+	}
+	// The DB nodes are unwound after the workers node; their Stop must still run.
+	if err := d.db.Ping(); err == nil {
+		t.Error("log DB is still open after a worker-start failure; the worker Rollback halted the unwind")
+	}
+	if err := d.refDB.Ping(); err == nil {
+		t.Error("reference DB is still open after a worker-start failure; the worker Rollback halted the unwind")
+	}
+}
+
 // C4: the promoted-infra consumers exist only after the orchestrator ran — nothing hand-constructs
 // or hand-starts them through a hidden closure before orch.Start.
 func TestLifecycle_ConsumersInitializedOnlyByTheOrchestrator(t *testing.T) {

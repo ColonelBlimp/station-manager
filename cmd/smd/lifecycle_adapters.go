@@ -93,8 +93,12 @@ type daemon struct {
 	// Worker context + drains (owned by run(); the fleet binds long-lived work to workerCtx).
 	workerCtx    context.Context
 	workerCancel context.CancelFunc
-	workerWG     sync.WaitGroup
-	qsoLogWG     sync.WaitGroup
+	// forwarderCancel cancels ONLY the forwarder workers + reconciler (a child of workerCtx set in
+	// startWorkers), so their Rollback can drain them without cancelling the orchestrator's rollback
+	// context. run()'s workerCancel still cascades to it.
+	forwarderCancel context.CancelFunc
+	workerWG        sync.WaitGroup
+	qsoLogWG        sync.WaitGroup
 
 	// HTTP serving + planned self-restart.
 	errCh       chan error
@@ -529,6 +533,13 @@ func (d *daemon) ft8QsoLogger() func(context.Context, ft8.CompletedQso) {
 func (d *daemon) startWorkers(ctx context.Context) error {
 	const op errors.Op = "smd.startWorkers"
 
+	// The workers + reconciler run on their OWN cancelable child of ctx so drainWorkers (the node's
+	// Rollback) can drain them WITHOUT cancelling ctx — which is also the orchestrator's Start/rollback
+	// context; cancelling it would make runBounded see rollback as timed out and halt the rest of the
+	// unwind (codex 1fbbd41d P2). run()'s workerCancel cancels ctx's parent, which still cascades here.
+	fctx, fcancel := context.WithCancel(ctx)
+	d.forwarderCancel = fcancel
+
 	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	n, err := d.db.ResetOrphanedUploadsWithContext(sweepCtx)
 	sweepCancel()
@@ -554,19 +565,22 @@ func (d *daemon) startWorkers(ctx context.Context) error {
 		}
 	}
 
-	if err := spawnForwarderWorkers(ctx, &d.workerWG, d.cfg.Forwarders, d.db, d.qso, d.logger, d.hub); err != nil {
+	if err := spawnForwarderWorkers(fctx, &d.workerWG, d.cfg.Forwarders, d.db, d.qso, d.logger, d.hub); err != nil {
 		return errors.New(op).WithErr(err).WithMsg("spawn forwarder workers")
 	}
 
-	d.startReconciler(ctx)
+	d.startReconciler(fctx)
 	return nil
 }
 
 // drainWorkers cancels the (partially-spawned) forwarder workers then waits them out. It is the
 // workers node's Rollback: on a startWorkers failure the workers are not yet cancelled (run()'s
-// deferred workerCancel fires only after run returns), so rollback must cancel before waiting.
+// deferred workerCancel fires only after run returns). It cancels ONLY the forwarder child context,
+// never ctx/workerCtx, so it cannot halt the orchestrator's rollback of the remaining nodes.
 func (d *daemon) drainWorkers() error {
-	d.workerCancel()
+	if d.forwarderCancel != nil {
+		d.forwarderCancel()
+	}
 	d.workerWG.Wait()
 	return nil
 }
