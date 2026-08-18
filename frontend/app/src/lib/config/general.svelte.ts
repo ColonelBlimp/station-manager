@@ -170,6 +170,17 @@ class GeneralState {
     async #reconcileAfterTimeout(before: GeneralForm, sent: GeneralForm): Promise<void> {
         const res = await fetchGeneral();
         if (res.kind === 'error') {
+            // Re-read failed too — the whole-block state can't be refreshed here, so
+            // Save stays enabled and dirty. A retry is the next chance to reconcile:
+            // a later timed-out PUT re-reads and merges, and one that lands is a
+            // deliberate whole-block write. The only residual is the inherent
+            // whole-block hazard (a retry that lands cleanly drops a concurrent change
+            // to an UNTOUCHED band), which every save shares and which matches the FT8
+            // section's identical branch; the map carries no opaque fields beyond
+            // band_colors (types.MapConfig), so nothing else can be reverted. Blocking
+            // Save until a reload was weighed and rejected — the reload discards the
+            // operator's draft under the daemon-authoritative design, a worse cost for
+            // this rare double-fault. Clean-room review 69ed99d9 P1 (accepted).
             toasts.error(
                 'Save timed out and the daemon could not be re-read — it is unknown whether your General settings were stored.'
             );
