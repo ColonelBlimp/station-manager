@@ -63,26 +63,8 @@ tasks:
       - sqlboiler psql
 
   frontend:install:
-    desc: Install dependencies for every embedded SPA (config + logbook + app)
-    deps: [frontend:config:install, frontend:logbook:install, frontend:app:install]
-
-  frontend:config:install:
-    desc: Install config-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
-    dir: frontend/config
-    cmds:
-      - sh -c 'if [ -f package-lock.json ]; then npm ci; else npm install; fi'
-
-  frontend:config:dev:
-    desc: Run the config SPA Vite dev server with HMR on :5174 (proxies /v1/* to daemon on :8080; runs alongside frontend:app:dev)
-    dir: frontend/config
-    cmds:
-      - npm run dev
-
-  frontend:config:build:
-    desc: Production build of the config SPA (consumed by go:embed)
-    dir: frontend/config
-    cmds:
-      - npm run build
+    desc: Install dependencies for every embedded SPA (logbook + app)
+    deps: [frontend:logbook:install, frontend:app:install]
 
   frontend:logbook:install:
     desc: Install logbook-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
@@ -127,8 +109,8 @@ tasks:
       - npm run check
 
   frontend:build:all:
-    desc: Build every embedded SPA (config + logbook + app). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
-    deps: [frontend:config:build, frontend:logbook:build, frontend:app:build]
+    desc: Build every embedded SPA (logbook + app). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
+    deps: [frontend:logbook:build, frontend:app:build]
 
   manual:build:
     desc: Build the operator manual (Hugo → manual/public/) for the daemon's go:embed. Single self-contained zero-JS page (ADR 0036).

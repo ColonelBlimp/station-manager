@@ -9,6 +9,7 @@ import (
 	"testing/fstest"
 
 	"github.com/ColonelBlimp/station-manager/frontend"
+	"github.com/ColonelBlimp/station-manager/internal/config"
 )
 
 // testSPAFS is a synthetic SPA filesystem: an index.html plus a real assets/
@@ -35,6 +36,47 @@ func TestRootRedirectsToApp(t *testing.T) {
 	}
 	if loc := w.Header().Get("Location"); loc != "/app/" {
 		t.Fatalf("GET /: Location = %q, want /app/", loc)
+	}
+}
+
+// TestConfigRedirectsToApp confirms the retired config SPA's paths — the bare
+// /config and the /config/ subtree (any old deep link) — 307-redirect to the
+// app's Settings route at /app/config (the standalone config SPA was retired
+// 2026-08-19; W-0003). Driven through the full server handler so the route
+// registration itself is covered.
+func TestConfigRedirectsToApp(t *testing.T) {
+	srv := testServer(t)
+	for _, path := range []string{"/config", "/config/"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Host = "127.0.0.1:8080" // loopback: satisfies the Host allowlist (ST-1)
+			w := httptest.NewRecorder()
+			srv.httpServer.Handler.ServeHTTP(w, req)
+			if w.Code != http.StatusTemporaryRedirect {
+				t.Fatalf("GET %s: status = %d, want 307 (%s)", path, w.Code, w.Body.String())
+			}
+			if loc := w.Header().Get("Location"); loc != "/app/config" {
+				t.Fatalf("GET %s: Location = %q, want /app/config", path, loc)
+			}
+		})
+	}
+}
+
+// TestConfigRedirectAbsentWhenSPADisabled confirms the /config compatibility
+// redirect is registered ONLY inside the SPA-serving block: with ServeSPA off (a
+// headless Unix-socket deployment with no browser), /config is a plain 404, not a
+// redirect — the redirect is a browser convenience, not an API contract.
+func TestConfigRedirectAbsentWhenSPADisabled(t *testing.T) {
+	srv := testServerWithCfg(t, func(cfg *config.Config) {
+		serve := false
+		cfg.Server.ServeSPA = &serve
+	})
+	req := httptest.NewRequest(http.MethodGet, "/config", nil)
+	req.Host = "127.0.0.1:8080"
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GET /config with ServeSPA off: status = %d, want 404 (no redirect registered)", w.Code)
 	}
 }
 

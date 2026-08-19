@@ -95,7 +95,6 @@ jobs:
           node-version-file: frontend/app/package.json
           cache: npm
           cache-dependency-path: |
-            frontend/config/package-lock.json
             frontend/logbook/package-lock.json
             frontend/app/package-lock.json
 
@@ -103,41 +102,9 @@ jobs:
       # Run SPA-side checks BEFORE the Go build so the daemon embed
       # picks up a fresh, verified dist/ for each client. Fast-fail
       # order per SPA: lint and type-check are cheapest, then tests,
-      # then build. (The logging SPA was retired 2026-07-21; its embed
-      # + route are gone, so it is no longer gated here.)
-
-      # ─── Config SPA gate ────────────────────────────────────────
-      # The config client (frontend/config/) is a separate embedded SPA
-      # served at /config/. Same lint → type-check → test → build order.
-
-      - name: Config SPA install
-        working-directory: frontend/config
-        run: npm ci
-
-      - name: Config SPA lint
-        working-directory: frontend/config
-        run: npm run lint
-
-      # Prettier as a CHECK, alongside lint. Formatting was advisory until
-      # 2026-07-31 and drift reached main unnoticed (mapData.svelte.ts +
-      # mapData.test.ts, introduced in 4c122764 and found only when a
-      # maintainability pass happened to run format:check). All three SPAs
-      # were clean when this was added, so it is green on arrival.
-      - name: Config SPA format check
-        working-directory: frontend/config
-        run: npm run format:check
-
-      - name: Config SPA type-check
-        working-directory: frontend/config
-        run: npx svelte-check --fail-on-warnings
-
-      - name: Config SPA tests
-        working-directory: frontend/config
-        run: npx vitest run
-
-      - name: Config SPA build (produces dist/ for daemon embed)
-        working-directory: frontend/config
-        run: npm run build
+      # then build. (The logging SPA was retired 2026-07-21 and the config
+      # SPA 2026-08-19; their embeds + routes are gone, so neither is gated
+      # here — the app SPA owns station settings now. See W-0003.)
 
       # ─── Logbook SPA gate ───────────────────────────────────────
       # The logbook client (frontend/logbook/) is a separate embedded SPA

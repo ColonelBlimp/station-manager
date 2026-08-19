@@ -1,5 +1,5 @@
 // Package frontend embeds the built Station Manager SPAs into the
-// daemon binary. Each SPA's Vite output (app/dist, config/dist, …) is
+// daemon binary. Each SPA's Vite output (app/dist, logbook/dist, …) is
 // compiled in via //go:embed; the daemon serves them at the
 // appropriate URL prefixes.
 //
@@ -33,13 +33,6 @@ import (
 //go:embed all:app/dist
 var appSPA embed.FS
 
-// configSPA holds the built config SPA's static assets — the
-// station-configuration client, served under the /config/ sub-path.
-// Same `all:` rationale as appSPA.
-//
-//go:embed all:config/dist
-var configSPA embed.FS
-
 // logbookSPA holds the built logbook SPA's static assets — the
 // logbook-management client (QSL-awaiting view, edit-history viewer,
 // logbook search), served under the /logbook/ sub-path. Same `all:`
@@ -62,17 +55,6 @@ func AppFS() fs.FS {
 		// is well-formed. Panicking here would only fire for a programmer
 		// error in the embed directive, which we want surfaced loudly.
 		panic("frontend: fs.Sub on embedded appSPA failed: " + err.Error())
-	}
-	return sub
-}
-
-// ConfigFS returns the config SPA's filesystem rooted at its dist/
-// directory. Same infallible-at-runtime contract as AppFS — the embed
-// directive guarantees the path at compile time.
-func ConfigFS() fs.FS {
-	sub, err := fs.Sub(configSPA, "config/dist")
-	if err != nil {
-		panic("frontend: fs.Sub on embedded configSPA failed: " + err.Error())
 	}
 	return sub
 }

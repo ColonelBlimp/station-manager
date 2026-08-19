@@ -53,23 +53,24 @@ go run ./cmd/docscatalog check
 # SPA gate — run before the Go gate so the daemon embed sees a fresh
 # dist/ for EVERY embedded SPA when the Go build step runs.
 #
-# ALL THREE SPAs CI gates, in the same order, with the same per-SPA step
+# The embedded SPAs' CI gates, in the same order, with the same per-SPA step
 # sequence (install → lint → format → type-check → test → build). Until
 # 2026-07-31 this mirror ran frontend/app ALONE, so a lint, format, type,
-# test or build regression in config or logbook passed locally and failed
+# test or build regression in another SPA passed locally and failed
 # on push — precisely the surprise this script exists to prevent, and a
 # gap its own "local mirror" header did not admit to.
 #
 # It also makes the Go embed-build below honest: that step compiles the
-# daemon against all three dist/ trees, and previously two of them could
+# daemon against every dist/ tree, and previously the others could
 # be arbitrarily stale.
 #
-# frontend/logging was retired 2026-07-21 (embed + route removed) and is
-# deliberately not gated. config and logbook retire once app is feature
-# complete (backlog.md, ADR 0044) — drop them from this list then.
+# frontend/logging was retired 2026-07-21 and frontend/config 2026-08-19
+# (embed + route removed each time) — neither is gated. logbook retires once
+# its remaining behavior is ported into app (backlog.md, ADR 0044, W-0003) —
+# drop it from this list then.
 # ───────────────────────────────────────────────────────────────────
 
-for spa in config logbook app; do
+for spa in logbook app; do
     if [ "${SKIP_NPM_CI:-}" = "1" ]; then
         step "SPA/$spa: skipping npm ci (SKIP_NPM_CI=1)"
         note "Using existing node_modules — re-run 'task frontend:install' if package.json changed."

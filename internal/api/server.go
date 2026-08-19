@@ -392,20 +392,27 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// can only reach TCP listeners). See docs/v2-design/frontend-spa.md
 	// and docs/v2-design/topology.md.
 	if cfg.Server.Protocol == "tcp" && cfg.Server.ServeSPA != nil && *cfg.Server.ServeSPA {
-		// Config SPA at the /config/ sub-path. StripPrefix turns
-		// "/config/assets/index.js" into "/assets/index.js" so the shared
-		// spaHandler resolves it (and unknown sub-routes) against the
-		// config dist/. Registered as a subtree pattern, so ServeMux
-		// 301-redirects a bare "/config" to "/config/". This more-specific
-		// pattern takes priority over the "/" catch-all below.
-		mux.Handle("GET /config/", http.StripPrefix("/config", spaHandler(frontend.ConfigFS())))
-		// Logbook SPA at the /logbook/ sub-path — same StripPrefix +
-		// subtree-redirect rationale as the config SPA above.
+		// The standalone config SPA was retired 2026-08-19 (W-0003); the app SPA
+		// owns station configuration now (Settings at /app/config). Its former
+		// paths — the bare "/config" and the "/config/" subtree (any old deep
+		// link) — 307-redirect to that Settings route. Registered only inside
+		// this SPA-serving block, so a headless Unix-socket deployment (no
+		// browser) 404s "/config" rather than redirecting. TEMPORARY (307): drop
+		// this compatibility route when the app moves to the canonical root and
+		// "/config" becomes the shell route itself.
+		mux.Handle("GET /config", http.RedirectHandler("/app/config", http.StatusTemporaryRedirect))
+		mux.Handle("GET /config/", http.RedirectHandler("/app/config", http.StatusTemporaryRedirect))
+		// Logbook SPA at the /logbook/ sub-path. StripPrefix turns
+		// "/logbook/assets/index.js" into "/assets/index.js" so the shared
+		// spaHandler resolves it (and unknown sub-routes) against the logbook
+		// dist/. Registered as a subtree pattern, so ServeMux 301-redirects a
+		// bare "/logbook" to "/logbook/". This more-specific pattern takes
+		// priority over the "/" catch-all below.
 		mux.Handle("GET /logbook/", http.StripPrefix("/logbook", spaHandler(frontend.LogbookFS())))
 		// Consolidated app SPA (ADR 0044) at the /app/ sub-path — the
-		// full-replacement operator client, dogfoodable on the embedded daemon
-		// alongside the shipping SPAs during the consolidation. Same StripPrefix
-		// + subtree-redirect rationale as the config SPA above.
+		// full-replacement operator client and the target of the /config and
+		// root redirects. Same StripPrefix + subtree-redirect rationale as the
+		// logbook SPA above.
 		mux.Handle("GET /app/", http.StripPrefix("/app", spaHandler(frontend.AppFS())))
 		// Operator manual at /manual/ — a static, zero-JS Hugo page (ADR 0036),
 		// NOT an SPA, so it uses manualHandler (plain file server, real 404s) not

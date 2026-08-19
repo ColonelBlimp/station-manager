@@ -17,10 +17,13 @@ Settings, and Map views. Settings is no longer a blocker; only Dashboard remains
 
 The consolidation is nevertheless incomplete:
 
-- [`frontend/embed.go`](../../frontend/embed.go) still embeds the config and logbook builds, and
-  [`internal/api/server.go`](../../internal/api/server.go) still serves them at `/config/` and
-  `/logbook/` alongside `/app/`;
-- the Taskfile, release tasks, and CI still install, test, and build both legacy clients;
+- the config SPA's embed and route were retired 2026-08-19 (see "Config SPA retirement" below);
+  `/config` and `/config/` now 307-redirect to the app's Settings at `/app/config`.
+  [`frontend/embed.go`](../../frontend/embed.go) still embeds the logbook build, and
+  [`internal/api/server.go`](../../internal/api/server.go) still serves it at `/logbook/`
+  alongside `/app/`;
+- the Taskfile, release tasks, and CI still install, test, and build the logbook client; the
+  config-client gates were removed with its retirement;
 - the app's ordinary upload-backfill path omits the legacy logbook's ClubLog-specific amber
   retry-only affordance and `skipped_no_history` result;
 - the operator-facing disconnect / bridge-fault wording is ported into the app as of 2026-08-18
@@ -30,8 +33,10 @@ The consolidation is nevertheless incomplete:
   so ADR 0044's per-route code-splitting requirement has not been met.
 
 The `frontend/logging` source tree was DELETED on 2026-08-18 after its operator-significant behavior
-was ported and characterized (see "Logging SPA retirement" below). The `frontend/config` and
-`frontend/logbook` source trees remain as parity evidence for their still-pending retirement. Source
+was ported and characterized (see "Logging SPA retirement" below). The `frontend/config` route,
+embed, and build gates were retired 2026-08-19 once its parity gaps were restored (see "Config SPA
+retirement" below); its source tree deletion + preservation tag follow in the same retirement. The
+`frontend/logbook` source tree remains as parity evidence for its still-pending retirement. Source
 presence is not itself the defect: live routes, embedded assets, and mandatory build gates are the
 retirement boundary.
 
@@ -77,6 +82,41 @@ operator 2026-08-18, re-ported with characterization tests + reversion proofs):
 metadata references the deleted tree; the ADRs and archives that mention it are records and keep
 their historical text.
 
+## Config SPA retirement (2026-08-19)
+
+The `frontend/config` client was retired once its parity gaps were restored. Unlike logging, the
+config SPA was still fully live (route + embed + build gates), so this is the full boundary removal.
+
+**Parity restoration first** (the field-level audit found three affordances the app had dropped;
+all restored on `main`, each TDD + reversion-proved, every clean-room review resolved):
+
+| Restored parity gap | App home (`frontend/app/src/lib/`) |
+|---|---|
+| QSL defaults editor (`qsl_via` / `qslmsg` / `qsl_sent_via`) | `config/StationSection.svelte` + `config/station.svelte.ts` (presence-aware per-block save) |
+| CAT master switch (`bridge_enabled`) | `config/RigsSection.svelte` + `config/bridgeEnabled.svelte.ts` (save-on-toggle, timeout reconcile, restart-pending note) |
+| Rig model / FT8-mode / MY_RIG editing | `config/RigsSection.svelte` + `config/rigs.svelte.ts` (MY_RIG resolved live per QSO; all else restart) |
+| Rig add / delete | `config/rigs.svelte.ts` `addRig`/`deleteRig` (immediate structural writes: id = max+1, first-rig-active, delete repoints the active default in-PUT, disabled at ≤1, timeout reconcile on add) |
+
+**Accepted as deliberate (not restored):** the config SPA's FT8 decode highlight colours (operator
+ruling 2026-08-05) and its explicit-`""` ft8_mode/my_rig state (the config SPA's own `canonRig`
+collapses `""` to inherit identically — the app matches that parity limitation).
+
+**Route ruling (2026-08-19):** `/config` and `/config/` **307-redirect** to `/app/config`,
+registered **only inside** the `Protocol == "tcp" && *ServeSPA` block (a headless daemon 404s
+`/config`); no `ConfigFS` is retained. The redirect is a TEMPORARY compatibility route — removed
+when the app moves to the canonical root and `/config` becomes the shell route itself.
+
+**Boundary removed in this retirement:** the `/config/` StripPrefix route → the 307 redirect
+(`internal/api/server.go`, with Go route tests for both paths and for redirect-absence when
+`ServeSPA` is off); the `configSPA` embed + `ConfigFS()` (`frontend/embed.go`); the
+`frontend:config:*` Taskfile tasks + deps; the CI "Config SPA gate"; and the `config` entries in the
+release/dev/local-CI SPA loops. The canonical HTTP reference
+([`api-endpoints.md`](../v2-design/api-endpoints.md)) changed in the same commit.
+
+**Preservation + deletion:** annotated tag **`legacy-config-spa-retired`** on the last commit still
+containing the tree; `git show legacy-config-spa-retired` recovers the full source. Physical deletion
+of `frontend/config` + the docs/catalog scrub follow in the same retirement.
+
 ## Scope
 
 This work item owns completion of the ADR 0044 outcome:
@@ -84,8 +124,11 @@ This work item owns completion of the ADR 0044 outcome:
 - port and characterize operator-significant behavior still unique to the retained clients;
 - move the consolidated app from the `/app/` transition mount to the canonical root with working
   in-shell `/config`, `/logbook`, and Operate deep links;
-- remove the config and logbook routes and embeds together, then remove their release and CI build
-  gates;
+- remove the config and logbook routes and embeds and their release and CI build gates — STAGED,
+  not together: config was retired first (2026-08-19, route → a temporary `/config`→`/app/config`
+  redirect) because its parity is complete, while logbook waits on its unported ClubLog retry-only
+  behavior (AC2); logbook's route/embed/gates and the config redirect's own removal (once the app
+  moves to the canonical root) follow;
 - preserve the manual as an independently served zero-JS site; and
 - finish the shell acceptance requirements that prevent consolidation from degrading first-load
   behavior, including route-level lazy loading.
@@ -101,9 +144,13 @@ The separate whole-log Dashboard map remains separately ranked work.
 ## Operator-observable acceptance criteria
 
 1. `/`, `/operate`, `/logbook`, and `/config` open the consolidated shell, including after a direct
-   deep-link reload. `/config/` and `/logbook/` no longer load independent legacy bundles. The
-   nearest confusable outcome—redirecting the visible entry points while still embedding and
-   shipping the old assets—must fail the test.
+   deep-link reload. INTERMEDIATE BOUNDARY (config retired, logbook pending): `/config` and
+   `/config/` no longer load an independent legacy bundle — they 307-redirect to `/app/config`, and
+   the config assets are no longer embedded or gated (the nearest confusable outcome — redirecting
+   the visible entry point while still embedding/shipping the old config bundle — must fail the
+   test); `/logbook/` still loads its independent legacy bundle until its own retirement. When the
+   app reaches the canonical root, the `/config` redirect is itself removed and `/config` becomes
+   the shell route.
 2. A ClubLog-type destination presents a visually distinct retry-only action, explains that only
    failed live uploads can be retried, and reports `skipped_no_history` rows as requiring ADIF
    export. Tests key the rule on forwarder type rather than a configured destination name.
@@ -135,8 +182,10 @@ The separate whole-log Dashboard map remains separately ranked work.
   rather than behavior.
 - What preservation tag marks the last release containing the legacy source trees, and is physical
   deletion a later work item? DECIDED for `frontend/logging` (2026-08-18): tag
-  `legacy-logging-spa-retired`; physical deletion done in this retirement (see "Logging SPA
-  retirement" above). Still open for `frontend/config` and `frontend/logbook`.
+  `legacy-logging-spa-retired`; physical deletion done in that retirement (see "Logging SPA
+  retirement" above). DECIDED for `frontend/config` (2026-08-19): tag `legacy-config-spa-retired` on
+  the last commit still containing the tree; physical deletion done in this retirement (see "Config
+  SPA retirement" below). Still open for `frontend/logbook`.
 
 ## Verification standard
 
