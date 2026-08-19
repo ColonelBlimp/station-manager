@@ -176,7 +176,7 @@ describe('stationState QSL defaults (config qsl block, ported from the config SP
         expect(stationState.dirty).toBe(false);
     });
 
-    it('save PUTs the whole qsl block folded in with logging_station', async () => {
+    it('a QSL-only edit sends only the whole qsl block — not logging_station', async () => {
         const spy = mockJSON(200, configBody());
         await stationState.load();
         stationState.qslForm.qsl_via = 'LoTW';
@@ -186,10 +186,24 @@ describe('stationState QSL defaults (config qsl block, ported from the config SP
         const put = spy.mock.calls.find((c) => c[1]?.method === 'PUT');
         expect(put, 'a PUT was issued').toBeTruthy();
         const sent = JSON.parse((put![1] as RequestInit).body as string) as Record<string, unknown>;
-        // qsl travels WHOLE (all three fields), folded with logging_station.
         expect(sent.qsl).toEqual({ qsl_via: 'LoTW', qslmsg: '', qsl_sent_via: 'E' });
-        expect(sent.logging_station).toBeTruthy();
+        // logging_station is NOT resent — the identity was untouched, so a stale
+        // copy must not clobber a concurrent change (clean-room review 17bb2ffa P1).
+        expect('logging_station' in sent).toBe(false);
         expect(stationState.dirty).toBe(false);
+    });
+
+    it('a station-only edit sends only logging_station — not the qsl block', async () => {
+        const spy = mockJSON(200, configBody());
+        await stationState.load();
+        stationState.form.operator = 'CHANGED';
+        await stationState.save();
+
+        const put = spy.mock.calls.find((c) => c[1]?.method === 'PUT');
+        expect(put, 'a PUT was issued').toBeTruthy();
+        const sent = JSON.parse((put![1] as RequestInit).body as string) as Record<string, unknown>;
+        expect((sent.logging_station as Record<string, string>).operator).toBe('CHANGED');
+        expect('qsl' in sent).toBe(false);
     });
 });
 

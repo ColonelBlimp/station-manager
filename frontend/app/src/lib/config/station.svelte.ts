@@ -17,12 +17,6 @@ import { toasts } from '../ui/toasts.svelte';
 
 const EMPTY_QSL: QslFields = { qsl_via: '', qslmsg: '', qsl_sent_via: '' };
 
-// Canonical JSON of both edited blocks, for the dirty compare. Both forms are
-// rebuilt by #apply in a stable key order, so a string compare is a valid check.
-function canon(station: StationFields, qsl: QslFields): string {
-    return JSON.stringify({ station, qsl });
-}
-
 // Injected by main.ts (per ADR 0045 DI — this module never imports the app
 // bootstrap): push the just-saved identity into the app's shared station
 // context so the operate/QSO path picks up a changed operator/grid with no page
@@ -66,15 +60,20 @@ class StationState {
     loaded = $state(false);
     error = $state('');
     form = $state<StationFields>({});
-    // The standing QSL defaults block, edited in the same section and saved with
-    // logging_station (folded in, as the retired config SPA's Station tab did).
+    // The standing QSL defaults block, edited in the same section but tracked and
+    // sent INDEPENDENTLY of logging_station (config SPA parity), so a save touches
+    // only the block(s) actually changed — never resending a stale sibling block.
     qslForm = $state<QslFields>({ ...EMPTY_QSL });
 
-    // Canonical JSON of the last loaded/saved state (both blocks), for the dirty
-    // compare. Seeded from the empty defaults so a never-loaded state reads clean.
-    #pristine = $state(canon({}, EMPTY_QSL));
+    // Per-block dirty snapshots, seeded from the empty defaults so a never-loaded
+    // state reads clean. Kept separate (not one combined snapshot) so save() can
+    // send only the block that changed.
+    #pristineStation = $state('{}');
+    #pristineQsl = $state(JSON.stringify(EMPTY_QSL));
 
-    dirty = $derived(canon(this.form, this.qslForm) !== this.#pristine);
+    stationDirty = $derived(JSON.stringify(this.form) !== this.#pristineStation);
+    qslDirty = $derived(JSON.stringify(this.qslForm) !== this.#pristineQsl);
+    dirty = $derived(this.stationDirty || this.qslDirty);
 
     async load(): Promise<void> {
         if (this.loading) return;
@@ -109,10 +108,12 @@ class StationState {
         // completion could apply a stale operator/grid to the shared context
         // (review 2026-07-20 round 2 #2). The latch serialises them.
         try {
-            const res = await saveStation({
-                station: { ...this.form },
-                qsl: { ...this.qslForm },
-            });
+            // Send ONLY the changed block(s) — a station-only edit must not resend
+            // a stale qsl (and vice versa), or it would clobber a concurrent change.
+            const patch: Partial<StationConfig> = {};
+            if (this.stationDirty) patch.station = { ...this.form };
+            if (this.qslDirty) patch.qsl = { ...this.qslForm };
+            const res = await saveStation(patch);
             if (res.kind === 'error') {
                 toasts.error(`Save failed: ${res.message}`);
                 return;
@@ -131,9 +132,8 @@ class StationState {
 
     // Revert edits to the last loaded/saved snapshot (both blocks).
     reset(): void {
-        const p = JSON.parse(this.#pristine) as { station: StationFields; qsl: QslFields };
-        this.form = p.station;
-        this.qslForm = p.qsl;
+        this.form = JSON.parse(this.#pristineStation) as StationFields;
+        this.qslForm = JSON.parse(this.#pristineQsl) as QslFields;
     }
 
     #apply(cfg: StationConfig): void {
@@ -143,7 +143,8 @@ class StationState {
         }
         this.form = f;
         this.qslForm = { ...cfg.qsl };
-        this.#pristine = canon(f, this.qslForm);
+        this.#pristineStation = JSON.stringify(f);
+        this.#pristineQsl = JSON.stringify(this.qslForm);
     }
 }
 

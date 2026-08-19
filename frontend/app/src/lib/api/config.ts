@@ -80,17 +80,23 @@ export async function fetchStation(signal?: AbortSignal): Promise<StationOutcome
 }
 
 export async function saveStation(
-    cfg: StationConfig,
+    cfg: Partial<StationConfig>,
     signal?: AbortSignal
 ): Promise<StationOutcome> {
-    // logging_station + the qsl defaults block (both edited by the Station
-    // section). NEVER the operational `station` block (see the data-safety note
-    // above). The daemon leaves omitted blocks untouched; each block present is
-    // replaced whole (qsl has exactly three fields, all round-tripped).
+    // Presence-aware: send ONLY the blocks this save changed. The daemon replaces
+    // each present block WHOLE and leaves omitted blocks untouched, so resending an
+    // UNEDITED block would clobber a concurrent change to it — the same reason the
+    // operational `station` block is never sent. logging_station (identity) and qsl
+    // (QSL defaults) are independently editable here, so a station-only edit must
+    // not resend a stale qsl, and vice versa (clean-room review 17bb2ffa P1). Each
+    // block present still travels WHOLE (unrendered fields preserved).
+    const patch: Record<string, unknown> = {};
+    if (cfg.station !== undefined) patch.logging_station = cfg.station;
+    if (cfg.qsl !== undefined) patch.qsl = cfg.qsl;
     const fetched = await safeFetch('/v1/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logging_station: cfg.station, qsl: cfg.qsl }),
+        body: JSON.stringify(patch),
         signal,
     });
     if (!fetched.ok) return { kind: 'error', message: fetched.message };

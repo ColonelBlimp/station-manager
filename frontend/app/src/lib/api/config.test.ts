@@ -65,32 +65,42 @@ describe('saveStation — data safety', () => {
         // omitted field would be zeroed (the config-wipe this guards against).
         const cfg = loaded.config;
         cfg.station.station_callsign = '7Q8AC';
-        await saveStation(cfg);
+        // A station-only edit: send ONLY logging_station.
+        await saveStation({ station: cfg.station });
 
         const put = spy.mock.calls.find((c) => c[1]?.method === 'PUT');
         expect(put, 'a PUT was issued').toBeTruthy();
         const sent = JSON.parse(put![1]!.body as string) as {
             logging_station: Record<string, string>;
-            qsl?: Record<string, string>;
+            qsl?: unknown;
             station?: unknown;
         };
         expect(sent.logging_station.station_callsign).toBe('7Q8AC');
         expect(sent.logging_station.my_lat).toBe('S011 26.250');
         expect(sent.logging_station.my_lon).toBe('E034 02.500');
-        // The qsl defaults block is folded in and travels WHOLE (three fields);
-        // the loaded config had none, so it rides back as blanks, not omitted.
-        expect(sent.qsl).toEqual({ qsl_via: '', qslmsg: '', qsl_sent_via: '' });
-        // The operational block is intentionally absent — echoing a stale copy
-        // would clobber a concurrent amp/power/band change (review #3).
+        // qsl is NOT sent for a station-only edit — resending a stale qsl would
+        // clobber a concurrent change to it (clean-room review 17bb2ffa P1).
+        expect('qsl' in sent).toBe(false);
+        // The operational block is likewise absent — echoing a stale copy would
+        // clobber a concurrent amp/power/band change (review #3).
+        expect('station' in sent).toBe(false);
+    });
+
+    it('sends ONLY the qsl block for a QSL-only edit (logging_station untouched)', async () => {
+        const spy = mockJSON(200, configBody());
+        await saveStation({ qsl: { qsl_via: 'LoTW', qslmsg: '', qsl_sent_via: 'E' } });
+
+        const put = spy.mock.calls.find((c) => c[1]?.method === 'PUT');
+        expect(put, 'a PUT was issued').toBeTruthy();
+        const sent = JSON.parse(put![1]!.body as string) as Record<string, unknown>;
+        expect(sent.qsl).toEqual({ qsl_via: 'LoTW', qslmsg: '', qsl_sent_via: 'E' });
+        expect('logging_station' in sent).toBe(false);
         expect('station' in sent).toBe(false);
     });
 
     it('errors (never throws) on a non-2xx PUT', async () => {
         mockJSON(400, { message: 'invalid' });
-        const res = await saveStation({
-            station: { station_callsign: 'X' },
-            qsl: { qsl_via: '', qslmsg: '', qsl_sent_via: '' },
-        });
+        const res = await saveStation({ station: { station_callsign: 'X' } });
         expect(res.kind).toBe('error');
     });
 });
