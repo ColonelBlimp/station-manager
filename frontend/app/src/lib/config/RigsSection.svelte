@@ -3,8 +3,9 @@
     // master-detail: the rig list on the left, a details panel on the right. The
     // model, per-rig FT8-mode / MY_RIG overrides, and the CONNECTION (serial port +
     // audio RX/TX via /v1/hardware pickers) are editable, saved via a whole-catalogue
-    // PUT (see rigs.svelte.ts data-safety note). Add is an immediate structural write
-    // (creates a blank rig to configure); delete lands in a follow-up increment.
+    // PUT (see rigs.svelte.ts data-safety note). Add and Delete are immediate
+    // structural writes (Add creates a blank rig to configure; Delete is confirmed
+    // and removes it, repointing the active default when needed).
     import { onMount } from 'svelte';
     import { rigsState } from './rigs.svelte';
     import { bridgeEnabledState } from './bridgeEnabled.svelte';
@@ -34,6 +35,22 @@
             }
         }
         await rigsState.addRig(model);
+    }
+
+    // Delete a rig — an immediate structural write with NO undo (unlike the config
+    // SPA's pending-draft delete that a Cancel could discard), so confirm first. The
+    // button is disabled for the only rig; deleteRig also refuses it.
+    async function onDeleteRig(id: number) {
+        const rig = rigsState.rigs.find((r) => r.id === id);
+        const name = rig ? rigsState.nameFor(rig) : 'this rig';
+        if (
+            !window.confirm(
+                `Delete "${name}"? This removes its connection settings and can't be undone.`
+            )
+        ) {
+            return;
+        }
+        await rigsState.deleteRig(id);
     }
 </script>
 
@@ -188,8 +205,8 @@
             </div>
 
             <!-- Detail: model + per-rig FT8-mode/MY_RIG + the CONNECTION (port +
-                 audio, via /v1/hardware pickers) are editable. Delete lands in a
-                 follow-up increment. -->
+                 audio, via /v1/hardware pickers) are editable; Delete (immediate,
+                 confirmed) sits in the header. -->
             <div class="min-w-0 flex-1">
                 {#if rigsState.selected && rigsState.draft}
                     {@const rig = rigsState.selected}
@@ -227,6 +244,20 @@
                                 {rigsState.settingDefault ? 'Setting…' : 'Set as default'}
                             </button>
                         {/if}
+                        <!-- Delete — immediate + confirmed. Disabled for the only rig
+                             (deleteRig refuses it too); ml-auto pushes it to the right. -->
+                        <button
+                            class="ml-auto rounded-md px-2 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-transparent dark:text-red-400 dark:hover:bg-red-500/10"
+                            disabled={rigsState.rigs.length <= 1 ||
+                                rigsState.saving ||
+                                rigsState.settingDefault}
+                            title={rigsState.rigs.length <= 1
+                                ? 'Cannot delete the only rig'
+                                : 'Delete this rig'}
+                            onclick={() => onDeleteRig(rig.id)}
+                        >
+                            Delete
+                        </button>
                     </div>
                     {#if def?.manufacturer || def?.model}
                         <p class="mt-0.5 text-sm text-muted">

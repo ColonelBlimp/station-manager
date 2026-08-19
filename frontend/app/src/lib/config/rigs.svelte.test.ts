@@ -1028,6 +1028,140 @@ describe('rigsState', () => {
         expect(err.mock.calls[0][0]).toMatch(/reload/i); // reload, NOT a blind retry
     });
 
+    it('deleteRig removes a non-default rig and PUTs the reduced list (omits default_rig_id)', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [
+                { id: 1, model: 'ic7300', port: '/dev/a' },
+                { id: 2, model: 'ftdx10', port: '/dev/b' },
+            ],
+            catalogue: [
+                { id: 'ic7300', name: 'IC-7300' },
+                { id: 'ftdx10', name: 'FTdx10' },
+            ],
+        });
+        await rigsState.load();
+        await rigsState.deleteRig(2); // rig 2 is NOT the default
+
+        const sent = JSON.parse(puts[0]) as {
+            rigs: Array<{ id: number }>;
+            default_rig_id?: number;
+        };
+        expect(sent.rigs.map((r) => r.id)).toEqual([1]); // rig 2 gone
+        expect('default_rig_id' in sent).toBe(false); // default (rig 1) still resolves ⇒ untouched
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]);
+    });
+
+    it('deleting the DEFAULT rig repoints default_rig_id to a survivor in the same PUT', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [
+                { id: 1, model: 'ic7300', port: '/dev/a' },
+                { id: 2, model: 'ftdx10', port: '/dev/b' },
+            ],
+            catalogue: [],
+        });
+        await rigsState.load();
+        await rigsState.deleteRig(1); // rig 1 IS the default
+
+        const sent = JSON.parse(puts[0]) as {
+            rigs: Array<{ id: number }>;
+            default_rig_id?: number;
+        };
+        expect(sent.rigs.map((r) => r.id)).toEqual([2]);
+        expect(sent.default_rig_id).toBe(2); // repointed — the daemon 400s on an unresolvable default
+        expect(rigsState.defaultRigId).toBe(2);
+    });
+
+    it('deleteRig removes from the FRESH list, preserving a concurrent edit on another rig', async () => {
+        let get = 0;
+        const puts = mockCluster(() => {
+            get++;
+            return {
+                default_rig_id: 1,
+                rigs: [
+                    { id: 1, model: 'ic7300', port: get === 1 ? '/dev/a' : '/dev/CONCURRENT' },
+                    { id: 2, model: 'ftdx10', port: '/dev/b' },
+                ],
+                catalogue: [],
+            };
+        });
+        await rigsState.load();
+        await rigsState.deleteRig(2);
+
+        const sent = JSON.parse(puts[0]) as { rigs: Array<{ id: number; port: string }> };
+        expect(sent.rigs.map((r) => r.id)).toEqual([1]);
+        expect(sent.rigs.find((r) => r.id === 1)?.port).toBe('/dev/CONCURRENT'); // fresh, not stale
+    });
+
+    it('deleteRig is refused for the only rig (no PUT)', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+            catalogue: [],
+        });
+        await rigsState.load();
+        await rigsState.deleteRig(1);
+        expect(puts).toHaveLength(0);
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]);
+    });
+
+    it('deleteRig on a rig already removed concurrently is a safe no-op (no PUT)', async () => {
+        let get = 0;
+        const puts = mockCluster(() => {
+            get++;
+            // load sees [1,2]; the delete re-fetch sees [1] (rig 2 already gone)
+            const rigs =
+                get === 1
+                    ? [
+                          { id: 1, model: 'ic7300', port: '/dev/a' },
+                          { id: 2, model: 'ftdx10', port: '/dev/b' },
+                      ]
+                    : [{ id: 1, model: 'ic7300', port: '/dev/a' }];
+            return { default_rig_id: 1, rigs, catalogue: [] };
+        });
+        await rigsState.load();
+        await rigsState.deleteRig(2); // already gone on the fresh re-fetch
+
+        expect(puts).toHaveLength(0); // nothing to write
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]); // adopts the fresh list
+    });
+
+    it('deleting the selected rig reconciles the selection to a survivor', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [
+                { id: 1, model: 'ic7300', port: '/dev/a' },
+                { id: 2, model: 'ftdx10', port: '/dev/b' },
+            ],
+            catalogue: [],
+        });
+        await rigsState.load();
+        rigsState.select(2);
+        expect(rigsState.selectedId).toBe(2);
+        await rigsState.deleteRig(2);
+        expect(rigsState.selectedId).toBe(1); // not stranded on the deleted rig
+        expect(rigsState.selected?.id).toBe(1);
+    });
+
+    it('deleting a rig with unsaved edits drops its draft (anyDirty does not linger)', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [
+                { id: 1, model: 'ic7300', port: '/dev/a' },
+                { id: 2, model: 'ftdx10', port: '/dev/b' },
+            ],
+            catalogue: [],
+        });
+        await rigsState.load();
+        rigsState.select(2);
+        rigsState.setDraftPort('/dev/UNSAVED'); // rig 2 now has an unsaved edit
+        expect(rigsState.anyDirty).toBe(true);
+        await rigsState.deleteRig(2);
+        expect(rigsState.anyDirty).toBe(false); // the deleted rig's dirty draft is gone
+        expect(rigsState.drafts[2]).toBeUndefined();
+    });
+
     // A failed RELOAD marks the section unloaded, not just errored. Settings is
     // mounted behind a router branch (App.svelte:100), so leaving unmounts it
     // while this module — a singleton — survives; returning re-fires onMount →

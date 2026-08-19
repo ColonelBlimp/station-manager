@@ -537,6 +537,63 @@ class RigsState {
         }
     }
 
+    // Delete a rig — an IMMEDIATE structural write, the mirror of addRig (operator
+    // ruling 2026-08-19). RE-FETCH first and remove from the FRESH list so a
+    // concurrent edit to another rig survives the whole-replace. Never deletes the
+    // only rig (the button is disabled too, matching the config SPA). Unlike Add,
+    // delete is IDEMPOTENT on retry (removing an already-gone rig is a no-op), so a
+    // timed-out delete needs no reconcile — a retry is safe.
+    async deleteRig(id: number): Promise<void> {
+        if (this.saving || this.settingDefault || !this.loaded) return;
+        if (this.rigs.length <= 1) return; // never delete the only rig
+        this.saving = true;
+        const fresh = await fetchRigs();
+        if (fresh.kind === 'error') {
+            this.saving = false;
+            toasts.error(`Couldn't delete the rig: refreshing the list failed (${fresh.message}).`);
+            return;
+        }
+        // A concurrent delete may already have removed it, or left a single rig.
+        if (!fresh.data.rigs.some((r) => r.id === id)) {
+            this.saving = false;
+            this.#applyFetched(fresh.data);
+            toasts.info('That rig was already removed.');
+            return;
+        }
+        if (fresh.data.rigs.length <= 1) {
+            this.saving = false;
+            this.#applyFetched(fresh.data);
+            toasts.error("Can't delete the only rig.");
+            return;
+        }
+        const nextRigs = fresh.data.rigs.filter((r) => r.id !== id);
+        // Repoint the active default ONLY when deleting it: the daemon 400s on an
+        // unresolvable default_rig_id, and omitting it would keep the stale
+        // (now-deleted) one. Deleting a non-default rig leaves the default resolving
+        // → OMIT default_rig_id so a concurrent active-rig change isn't clobbered
+        // (presence-aware, like save()). delete is disabled at ≤1 rig, so nextRigs is
+        // non-empty here and nextRigs[0] always exists when repointing.
+        const deletingDefault = fresh.data.defaultRigId === id;
+        const nextDefault = deletingDefault ? (nextRigs[0]?.id ?? 0) : undefined;
+        const outcome = await saveRigs(nextRigs, nextDefault);
+        this.saving = false;
+        if (outcome.kind === 'error') {
+            toasts.error(`Couldn't delete the rig: ${outcome.message}`);
+            return;
+        }
+        // Drop the deleted rig's draft + baseline so a lingering (possibly dirty)
+        // entry can't keep anyDirty true for a rig that no longer exists.
+        delete this.drafts[id];
+        delete this.baselines[id];
+        // #applyFetched reconciles the selection if the deleted rig was selected.
+        this.#applyFetched({
+            rigs: nextRigs,
+            defaultRigId: nextDefault ?? fresh.data.defaultRigId,
+            catalogue: fresh.data.catalogue,
+        });
+        toasts.info('Rig deleted.');
+    }
+
     // Apply a fetched rigs payload + reconcile the selection against the list.
     #applyFetched(data: {
         rigs: RigConfig[];
