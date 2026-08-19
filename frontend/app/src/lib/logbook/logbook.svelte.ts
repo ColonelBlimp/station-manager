@@ -28,6 +28,13 @@ import { forwarderLabel, hasUploadStamp, type ForwarderInfo } from './uploadStat
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
+// Forwarder TYPES whose upstream forbids manual bulk backfill (catch-up batches
+// on the realtime endpoint). Mirrors the daemon's forwarding.RegisterNoBulkBackfill
+// registrations — the daemon refuses these server-side too and returns
+// skipped_no_history, so this set is UX-only (drives destinationRetryOnly). Ported
+// from the retiring logbook SPA (W-0003 AC2).
+const NO_BULK_BACKFILL_TYPES = new Set(['clublog']);
+
 class LogbookState {
     /** All logbooks (the selector). */
     logbooks: Logbook[] = $state([]);
@@ -172,6 +179,20 @@ class LogbookState {
     get destinationTracksUploads(): boolean {
         const f = this.forwarders.find((x) => x.name === this.selectedDestination);
         return f !== undefined && hasUploadStamp(f.type);
+    }
+
+    /** True when the selected destination is a no-bulk-backfill type (ClubLog):
+     *  its upstream forbids catch-up batches (that anti-pattern gets SM's API key
+     *  blocked; history goes via an ADIF upload on the destination's site), but
+     *  RETRYING a previously-attempted live upload (a failed 403-era row after a
+     *  credential fix) is legitimate. The daemon enqueues only rows with prior
+     *  queue history and reports the rest as skipped_no_history; this flips the
+     *  Upload button to its "Retry" flavour so the operator knows what it can and
+     *  cannot do. The "Not on X" gap-browse stays available — it's exactly how the
+     *  operator assembles the ADIF export set. */
+    get destinationRetryOnly(): boolean {
+        const f = this.forwarders.find((x) => x.name === this.selectedDestination);
+        return f !== undefined && NO_BULK_BACKFILL_TYPES.has(f.type);
     }
 
     /** Rows to display. The server already filters emailed rows out of the page
@@ -424,6 +445,9 @@ class LogbookState {
         if (skippedDeleted > 0) bits.push(`${skippedDeleted} deleted (skipped)`);
         const notFound = r.not_found?.length ?? 0;
         if (notFound > 0) bits.push(`${notFound} not found`);
+        const noHistory = r.skipped_no_history?.length ?? 0;
+        if (noHistory > 0)
+            bits.push(`${noHistory} skipped — never uploaded live; use an ADIF export for those`);
         this.notice = bits.join(' · ') + '.';
         this.clearSelection();
         await Promise.all([this.#loadCount(), this.#loadPage(this.pageIndex)]);

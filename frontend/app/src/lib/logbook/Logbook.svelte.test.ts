@@ -203,6 +203,30 @@ describe('Logbook page', () => {
         expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument();
     });
 
+    it('a ClubLog destination shows the amber retry-only button, not the generic Upload', async () => {
+        // W-0003 AC2 (ported from the retiring logbook SPA): a no-bulk-backfill
+        // destination must present a visually distinct retry-only action whose
+        // tooltip points the operator at an ADIF export — not a generic Upload.
+        render(Logbook);
+        await flush();
+        await flush();
+        flushSync();
+
+        screen.getByLabelText('Select all rows on this page').click();
+        logbookState.forwarders = [
+            { name: 'clublog', label: 'ClubLog', type: 'clublog', enabled: true },
+        ];
+        logbookState.selectedDestination = 'clublog';
+        flushSync();
+
+        const retry = screen.getByRole('button', { name: /Retry failed uploads to ClubLog/ });
+        expect(retry).toBeInTheDocument();
+        expect(retry.className).toContain('amber'); // visually distinct from the green btn
+        expect(retry.getAttribute('title')).toMatch(/ADIF/); // explains the remedy
+        // …and the generic "Upload N to …" button is NOT rendered for this type.
+        expect(screen.queryByRole('button', { name: /^Upload \d/ })).toBeNull();
+    });
+
     it('toggling "Not emailed only" reloads count + page with the server-side filter', async () => {
         const fetchMock = vi.mocked(globalThis.fetch);
         render(Logbook);

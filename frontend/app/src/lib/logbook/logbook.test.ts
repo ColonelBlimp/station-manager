@@ -438,4 +438,53 @@ describe('selected destination labelling', () => {
         expect(calls.some((u) => u.includes('/v1/forwarder/qrz/uploads'))).toBe(true);
         vi.restoreAllMocks();
     });
+
+    // L7 — ClubLog / no-bulk-backfill retry-only workflow, ported from the retiring
+    // logbook SPA (W-0003 AC2). ClubLog forbids catch-up batches on its realtime
+    // endpoint, so the daemon enqueues only rows with prior queue history and reports
+    // the rest as skipped_no_history; the UI flips the Upload button to a retry
+    // flavour and the notice tells the operator to ADIF-export the skipped rows.
+    it('L7: destinationRetryOnly is true only for a no-bulk-backfill type (ClubLog)', () => {
+        logbookState.forwarders = [
+            { name: 'qrz', label: 'QRZ (club account)', type: 'qrz', enabled: true },
+            { name: 'clublog', label: 'ClubLog', type: 'clublog', enabled: true },
+        ];
+        logbookState.selectedDestination = 'qrz';
+        expect(logbookState.destinationRetryOnly).toBe(false); // qrz accepts bulk backfill
+        logbookState.selectedDestination = 'clublog';
+        expect(logbookState.destinationRetryOnly).toBe(true); // ClubLog: retry-only
+        logbookState.selectedDestination = '';
+        expect(logbookState.destinationRetryOnly).toBe(false); // no destination selected
+    });
+
+    it('L7b: a ClubLog upload reports skipped_no_history rows as needing an ADIF export', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() =>
+                Promise.resolve(
+                    new Response(
+                        JSON.stringify({
+                            enqueued: 0,
+                            skipped_uploaded: 0,
+                            skipped_no_history: ['u-1', 'u-2'],
+                        }),
+                        { status: 200 }
+                    )
+                )
+            )
+        );
+        logbookState.forwarders = [
+            { name: 'clublog', label: 'ClubLog', type: 'clublog', enabled: true },
+        ];
+        logbookState.selectedDestination = 'clublog';
+        logbookState.rows = [qso(1, 'u-1')];
+        logbookState.toggleRow(logbookState.rows[0]);
+
+        await logbookState.uploadSelected();
+
+        expect(logbookState.notice).toContain('2 skipped'); // the count surfaces…
+        expect(logbookState.notice).toMatch(/never uploaded live/i); // …with the reason…
+        expect(logbookState.notice).toMatch(/ADIF export/i); // …and the remedy.
+        vi.restoreAllMocks();
+    });
 });

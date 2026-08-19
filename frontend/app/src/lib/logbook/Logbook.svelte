@@ -146,15 +146,37 @@
                     >{logbookState.selectedCount.toLocaleString()} selected</span
                 >
                 {#if logbookState.hasDestination}
-                    <button
-                        type="button"
-                        class="btn text-xs"
-                        disabled={logbookState.uploading}
-                        onclick={() => logbookState.uploadSelected()}
-                        >{logbookState.uploading
-                            ? 'Uploading…'
-                            : `Upload ${logbookState.selectedCount} to ${logbookState.selectedDestinationLabel}`}</button
-                    >
+                    {#if logbookState.destinationRetryOnly}
+                        <!-- ClubLog (and any no-bulk-backfill type) forbids catch-up
+                             batches on its realtime endpoint, but RETRYING a
+                             previously-attempted live upload (a failed row after a
+                             credential fix) is legitimate. The daemon re-arms only rows
+                             with prior queue history and reports the rest as
+                             skipped_no_history; this amber label + tooltip set that
+                             expectation, and the "Not on X" gap-browse stays available
+                             for assembling the ADIF set. Ported from the retiring
+                             logbook SPA (W-0003 AC2). -->
+                        <button
+                            type="button"
+                            class="rounded-md border border-amber-400 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-700 dark:bg-amber-500/10 dark:text-amber-300"
+                            disabled={logbookState.uploading}
+                            title="Retries only QSOs whose live upload to this destination previously failed. QSOs never uploaded live are skipped — export those as ADIF and upload the file on the destination's website."
+                            onclick={() => logbookState.uploadSelected()}
+                            >{logbookState.uploading
+                                ? 'Retrying…'
+                                : `Retry failed uploads to ${logbookState.selectedDestinationLabel}`}</button
+                        >
+                    {:else}
+                        <button
+                            type="button"
+                            class="btn text-xs"
+                            disabled={logbookState.uploading}
+                            onclick={() => logbookState.uploadSelected()}
+                            >{logbookState.uploading
+                                ? 'Uploading…'
+                                : `Upload ${logbookState.selectedCount} to ${logbookState.selectedDestinationLabel}`}</button
+                        >
+                    {/if}
                 {/if}
                 <button
                     type="button"

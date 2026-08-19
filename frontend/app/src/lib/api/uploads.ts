@@ -12,6 +12,10 @@ export interface EnqueueResult {
     skipped_uploaded: number;
     skipped_deleted?: string[];
     not_found?: string[];
+    /** UUIDs refused because the destination accepts retries of previously
+     *  queued live uploads only (ClubLog — realtime.php forbids catch-up
+     *  batches); these need an ADIF export uploaded on the destination's site. */
+    skipped_no_history?: string[];
 }
 
 export type EnqueueOutcome =
@@ -54,6 +58,9 @@ export async function enqueueUploads(
                 ? (body.skipped_deleted as string[])
                 : undefined,
             not_found: Array.isArray(body.not_found) ? (body.not_found as string[]) : undefined,
+            skipped_no_history: Array.isArray(body.skipped_no_history)
+                ? (body.skipped_no_history as string[])
+                : undefined,
         },
     };
 }
