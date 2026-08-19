@@ -980,6 +980,54 @@ describe('rigsState', () => {
         expect(rigsState.saving).toBe(false);
     });
 
+    it('addRig with a timed-out PUT AND an unreadable reconcile keeps state + reports unknown', async () => {
+        // The formal residual (a delayed PUT + a failed reconcile) must NOT invite a
+        // blind retry: local state is preserved, saving clears, and the message tells
+        // the operator to reload rather than retry (clean-room review 0c3abf9f P1,
+        // accept + harden). The reconcile GET failing is the safe fallback for a
+        // genuinely stuck daemon.
+        const err = vi.spyOn(toasts, 'error');
+        let get = 0;
+        const ok = (body: unknown) =>
+            Promise.resolve(
+                new Response(JSON.stringify(body), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            );
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((url: string, init?: RequestInit) => {
+                if (init?.method === 'PUT') {
+                    const e = new Error('timed out');
+                    e.name = 'TimeoutError';
+                    return Promise.reject(e);
+                }
+                if (url.includes('/v1/hardware')) {
+                    return ok({ serial_ports: [], audio: { available: false } });
+                }
+                get++;
+                // GET 1 = load, GET 2 = the add's fresh re-fetch → ok [1];
+                // GET 3 = the reconcile re-read → FAILS (daemon unreadable).
+                if (get >= 3) return Promise.resolve(new Response('{}', { status: 503 }));
+                return ok({
+                    default_rig_id: 1,
+                    rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+                    catalogue: [{ id: 'ic7300', name: 'IC-7300' }],
+                });
+            })
+        );
+        await rigsState.load();
+        await rigsState.addRig('ic7300'); // PUT times out; reconcile GET fails ⇒ unknown
+
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]); // local state preserved (no phantom)
+        expect(rigsState.saving).toBe(false); // not stuck saving
+        expect(rigsState.loaded).toBe(true); // still the last good load — not torn down
+        expect(err).toHaveBeenCalledTimes(1);
+        expect(err.mock.calls[0][0]).toMatch(/state unknown/i); // "unknown", not "did not commit"
+        expect(err.mock.calls[0][0]).toMatch(/reload/i); // reload, NOT a blind retry
+    });
+
     // A failed RELOAD marks the section unloaded, not just errored. Settings is
     // mounted behind a router branch (App.svelte:100), so leaving unmounts it
     // while this module — a singleton — survives; returning re-fires onMount →

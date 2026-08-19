@@ -494,17 +494,35 @@ class RigsState {
         toasts.info('Rig added — set its connection, then Save.');
     }
 
-    // Settle an add whose PUT timed out: re-read the daemon's authoritative list.
-    // If our rig (the id we assigned + our model) landed, adopt it — the add
-    // committed; otherwise report that it didn't take effect, so the operator can
-    // retry safely without double-adding. Either way we never leave a stale list on
-    // screen that a blind retry would append a second same-model rig to.
+    // Settle an add whose PUT timed out by re-reading the rig list. If our rig (the
+    // id we assigned + our model) landed, adopt it; if not, report that it didn't
+    // take effect. This is trustworthy — though NOT claimed infallible — because of
+    // the daemon's lock ordering: the PUT persists INSIDE config.Service.Update,
+    // which holds the config WRITE lock (config.go:2079) across both the disk write
+    // and the in-memory swap, and only then does the handler write its 200
+    // (handler_config.go handlePutConfig). The reconcile GET reads via Snapshot's
+    // RLock (config.go:2029), and Go's sync.RWMutex blocks NEW readers once a writer
+    // is waiting — so a reconcile RLock issued after the timeout cannot overtake a
+    // PUT that is committing OR already queued behind another reader: it reads the
+    // committed list or blocks behind the writer. A genuinely stuck daemon makes
+    // THIS GET time out too → the reread-error branch below (state unknown), never a
+    // false "did not commit".
+    //
+    // FORMAL RESIDUAL (accepted — same family as the non-atomic re-fetch→PUT note
+    // above): a PUT handler stalled for longer than the client timeout BEFORE it
+    // enters Update (before the write lock is even queued — e.g. a multi-second
+    // stall in request read/validation) could let this reread observe pre-commit
+    // state and report "did not take effect" for an add that later commits, so a
+    // retry would double-add. Finite polling can't close it (it can't prove
+    // non-commit); the complete fix is server-side idempotency, disproportionate for
+    // a local single-operator config editor (operator ruling 2026-08-19).
     async #reconcileAfterAdd(id: number, model: string): Promise<void> {
         const reread = await fetchRigs();
         this.saving = false;
         if (reread.kind === 'error') {
             toasts.error(
-                'Add timed out and the rig list could not be re-read — reload Settings to check.'
+                'Add timed out and the rig list could not be re-read — state unknown. ' +
+                    'Reload Settings before trying again.'
             );
             return;
         }
