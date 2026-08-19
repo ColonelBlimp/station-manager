@@ -7,11 +7,15 @@
     // add / delete land in follow-up increments.
     import { onMount } from 'svelte';
     import { rigsState } from './rigs.svelte';
+    import { bridgeEnabledState } from './bridgeEnabled.svelte';
     import ModeMappingsEditor from './ModeMappingsEditor.svelte';
     import SerialOverridesEditor from './SerialOverridesEditor.svelte';
     import type { AudioDevice } from '../api/hardware';
 
-    onMount(() => void rigsState.load());
+    onMount(() => {
+        void rigsState.load();
+        void bridgeEnabledState.load();
+    });
 </script>
 
 {#snippet row(label: string, value: string, mono = false)}
@@ -50,6 +54,32 @@
      master-detail layout still fits — the list is w-64 and the detail sections
      are already capped at max-w-md, so 3xl is not a squeeze. -->
 <div class="mx-auto max-w-3xl">
+    <!-- CAT master switch (bridge.enabled) — ported from the config SPA. Off ⇒ the
+         daemon never opens the serial port, so the rig stays disconnected regardless
+         of the profile. Save-on-toggle (presence-aware bridge_enabled PUT, never a
+         whole-block bridge replace); the bridge binds at startup, so a change needs a
+         daemon restart. Enabling is refused if the active rig has no port/driver. -->
+    {#if bridgeEnabledState.loaded}
+        <div class="mb-5">
+            <label class="flex items-center gap-2 text-sm font-medium text-ink">
+                <input
+                    type="checkbox"
+                    class="cursor-pointer disabled:cursor-not-allowed"
+                    checked={bridgeEnabledState.enabled}
+                    disabled={bridgeEnabledState.saving}
+                    onchange={(e) => bridgeEnabledState.setEnabled(e.currentTarget.checked)}
+                />
+                Enable rig connection (CAT)
+                <span class="font-normal text-muted">
+                    — connect Station Manager to the active rig's serial port
+                </span>
+            </label>
+            {#if bridgeEnabledState.restartPending}
+                <p class="mt-1 text-xs text-muted">Restart the daemon to apply the CAT change.</p>
+            {/if}
+        </div>
+    {/if}
+
     {#if !rigsState.loaded && rigsState.loading}
         <p class="text-sm text-muted">Loading…</p>
     {:else if !rigsState.loaded && rigsState.error}

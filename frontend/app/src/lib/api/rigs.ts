@@ -231,3 +231,45 @@ export async function fetchRigs(signal?: AbortSignal): Promise<RigsOutcome> {
         },
     };
 }
+
+// ---- CAT master switch (bridge.enabled) ----
+// Read+write via the daemon's presence-aware top-level `bridge_enabled` *bool
+// (handler_config.go) — NOT a whole-block replace of `bridge`, so toggling it never
+// disturbs the rig CAT config (driver / serial / mode_mappings). Twin of
+// ft8_enabled. The bridge binds at startup, so a change needs a daemon restart.
+
+export type BridgeEnabledOutcome =
+    { kind: 'ok'; enabled: boolean } | { kind: 'error'; message: string };
+
+export async function fetchBridgeEnabled(signal?: AbortSignal): Promise<BridgeEnabledOutcome> {
+    const fetched = await safeFetch('/v1/config', { signal });
+    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    if (!fetched.response.ok) return { kind: 'error', message: `HTTP ${fetched.response.status}` };
+    const body = await readJsonBody(fetched.response);
+    if (!isPlainObject(body)) return { kind: 'error', message: 'malformed /v1/config response' };
+    return { kind: 'ok', enabled: body.bridge_enabled === true };
+}
+
+export type BridgeEnabledSaveOutcome = { kind: 'ok' } | { kind: 'error'; message: string };
+
+export async function saveBridgeEnabled(
+    enabled: boolean,
+    signal?: AbortSignal
+): Promise<BridgeEnabledSaveOutcome> {
+    // ONLY bridge_enabled — presence-aware, so the rest of the config (including the
+    // rig CAT / serial config) is left untouched. Enabling can 400 when the active
+    // rig has no port/driver (the daemon's validateBridge); surface that message.
+    const fetched = await safeFetch('/v1/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bridge_enabled: enabled }),
+        signal,
+    });
+    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    const body = await readJsonBody(fetched.response);
+    if (!fetched.response.ok) {
+        const err = isPlainObject(body) ? (body as { message?: string }) : null;
+        return { kind: 'error', message: err?.message ?? `HTTP ${fetched.response.status}` };
+    }
+    return { kind: 'ok' };
+}
