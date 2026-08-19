@@ -78,6 +78,15 @@
                 <p class="mt-1 text-xs text-muted">Restart the daemon to apply the CAT change.</p>
             {/if}
         </div>
+    {:else if bridgeEnabledState.error}
+        <!-- A failed CAT-state load must not silently hide the control; surface it
+             with a retry, like the rigs/other sections do. -->
+        <div class="mb-5">
+            <p class="text-sm text-ink">
+                Couldn’t load the CAT switch: {bridgeEnabledState.error}
+            </p>
+            <button class="btn mt-2" onclick={() => bridgeEnabledState.load()}>Retry</button>
+        </div>
     {/if}
 
     {#if !rigsState.loaded && rigsState.loading}

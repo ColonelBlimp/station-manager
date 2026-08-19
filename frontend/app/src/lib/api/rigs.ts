@@ -250,7 +250,12 @@ export async function fetchBridgeEnabled(signal?: AbortSignal): Promise<BridgeEn
     return { kind: 'ok', enabled: body.bridge_enabled === true };
 }
 
-export type BridgeEnabledSaveOutcome = { kind: 'ok' } | { kind: 'error'; message: string };
+export type BridgeEnabledSaveOutcome =
+    | { kind: 'ok' }
+    // `timedOut` marks the AMBIGUOUS write: the PUT reached the daemon and its
+    // response was lost, so it MAY already have committed — the caller must
+    // re-read rather than blindly revert the toggle (mirrors saveFt8Settings).
+    | { kind: 'error'; message: string; timedOut?: boolean };
 
 export async function saveBridgeEnabled(
     enabled: boolean,
@@ -265,7 +270,13 @@ export async function saveBridgeEnabled(
         body: JSON.stringify({ bridge_enabled: enabled }),
         signal,
     });
-    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    if (!fetched.ok) {
+        return {
+            kind: 'error',
+            message: fetched.message,
+            timedOut: fetched.kind === 'network' && fetched.timedOut === true,
+        };
+    }
     const body = await readJsonBody(fetched.response);
     if (!fetched.response.ok) {
         const err = isPlainObject(body) ? (body as { message?: string }) : null;

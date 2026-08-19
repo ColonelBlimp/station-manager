@@ -64,4 +64,42 @@ describe('bridgeEnabledState (CAT master switch)', () => {
         await bridgeEnabledState.setEnabled(true); // same value
         expect(spy.mock.calls.length).toBe(before); // no PUT issued
     });
+
+    it('a timed-out toggle re-reads the daemon instead of blindly reverting', async () => {
+        let gets = 0;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((_url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+                if (init?.method === 'PUT') {
+                    const e = new Error('timed out');
+                    e.name = 'TimeoutError';
+                    return Promise.reject(e);
+                }
+                gets += 1;
+                // load GET → false; the reconcile GET → true (the change DID land).
+                const enabled = gets >= 2;
+                return Promise.resolve(
+                    new Response(JSON.stringify({ bridge_enabled: enabled }), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            })
+        );
+        await bridgeEnabledState.load(); // enabled = false
+        await bridgeEnabledState.setEnabled(true); // PUT times out ⇒ reconcile re-reads → true
+
+        expect(bridgeEnabledState.enabled).toBe(true); // adopted the re-read, NOT reverted to false
+        expect(bridgeEnabledState.restartPending).toBe(true); // it changed ⇒ restart owed
+    });
+
+    it('a failed CAT-state load records the error and stays unloaded (control shows a retry)', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(new Response('{}', { status: 503 })))
+        );
+        await bridgeEnabledState.load();
+        expect(bridgeEnabledState.loaded).toBe(false);
+        expect(bridgeEnabledState.error).not.toBe('');
+    });
 });

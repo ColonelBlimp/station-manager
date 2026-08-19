@@ -44,15 +44,47 @@ class BridgeEnabledState {
         const prev = this.enabled;
         this.enabled = next; // optimistic — the checkbox reflects the intent
         const res = await saveBridgeEnabled(next);
-        this.saving = false;
         if (res.kind === 'error') {
+            if (res.timedOut) {
+                // Ambiguous: the PUT may already have committed. Re-read the
+                // authoritative value instead of blindly reverting — reverting a
+                // change that actually landed would misreport the CAT state and
+                // could prompt the operator to undo a successful change
+                // (clean-room review 3e892067 P2).
+                await this.#reconcileAfterTimeout(prev);
+                return;
+            }
+            this.saving = false;
             this.enabled = prev; // the daemon refused (e.g. active rig has no port/driver)
             this.error = res.message;
             toasts.error(`Couldn't ${next ? 'enable' : 'disable'} CAT: ${res.message}`);
             return;
         }
+        this.saving = false;
         this.restartPending = true;
         toasts.info(`CAT ${next ? 'enabled' : 'disabled'} — restart the daemon to apply.`);
+    }
+
+    // Settle a toggle whose PUT timed out: re-read the daemon's authoritative value
+    // rather than assuming success or failure. If it changed, a restart is owed.
+    async #reconcileAfterTimeout(prev: boolean): Promise<void> {
+        const reread = await fetchBridgeEnabled();
+        this.saving = false;
+        if (reread.kind === 'error') {
+            this.enabled = prev; // can't tell — fall back to the pre-toggle value
+            this.error = reread.message;
+            toasts.error(
+                'CAT change timed out and the daemon could not be re-read — its state is unknown.'
+            );
+            return;
+        }
+        this.enabled = reread.enabled;
+        if (reread.enabled !== prev) this.restartPending = true; // it did change ⇒ restart owed
+        toasts.warn(
+            `CAT change timed out — re-read the daemon: CAT is now ${
+                reread.enabled ? 'enabled' : 'disabled'
+            }.${reread.enabled !== prev ? ' Restart to apply.' : ''}`
+        );
     }
 }
 
