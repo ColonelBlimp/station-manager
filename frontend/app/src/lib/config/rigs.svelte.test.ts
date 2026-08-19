@@ -1071,6 +1071,11 @@ describe('rigsState', () => {
         expect(sent.rigs.map((r) => r.id)).toEqual([2]);
         expect(sent.default_rig_id).toBe(2); // repointed — the daemon 400s on an unresolvable default
         expect(rigsState.defaultRigId).toBe(2);
+        // The deleted rig was the selected one and the ONLY drafted one (load drafts
+        // only the selection). The survivor must get both the selection AND a draft,
+        // or RigsSection hides the whole editor until it's re-clicked (clean-room 1e3a7bed P2).
+        expect(rigsState.selectedId).toBe(2);
+        expect(rigsState.draft).not.toBeNull();
     });
 
     it('deleteRig removes from the FRESH list, preserving a concurrent edit on another rig', async () => {

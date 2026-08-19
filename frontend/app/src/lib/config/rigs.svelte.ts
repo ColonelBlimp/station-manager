@@ -591,6 +591,11 @@ class RigsState {
             defaultRigId: nextDefault ?? fresh.data.defaultRigId,
             catalogue: fresh.data.catalogue,
         });
+        // Ensure the survivor the selection fell back to has a draft: on load only
+        // the SELECTED rig is drafted, so deleting the selected default would leave
+        // `selected` set but `draft` null, hiding the whole editor until it's
+        // re-clicked (clean-room review 1e3a7bed P2).
+        this.#ensureDraft();
         toasts.info('Rig deleted.');
     }
 
