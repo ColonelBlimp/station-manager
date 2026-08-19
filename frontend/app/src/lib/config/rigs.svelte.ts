@@ -53,6 +53,22 @@ function normalizedAudio(audio: RigConfig['audio']): RigConfig['audio'] | undefi
     return out.rx || out.tx ? out : undefined;
 }
 
+// Mirror an optional string override (ft8_mode / my_rig) from the draft onto the
+// patched fresh rig, but only when it CHANGED vs the baseline: set when present,
+// delete when the operator cleared it. The setters delete the key on clear, so an
+// absent field means "inherit the rigdef default" and round-trips not-dirty.
+function patchOptional(
+    patched: RigConfig,
+    base: RigConfig,
+    draft: RigConfig,
+    key: 'ft8_mode' | 'my_rig'
+): void {
+    if (base[key] === draft[key]) return;
+    const v = draft[key];
+    if (v === undefined || v === null) delete patched[key];
+    else patched[key] = v;
+}
+
 class RigsState {
     loading = $state(false);
     loaded = $state(false);
@@ -206,6 +222,36 @@ class RigsState {
         this.draft.audio[which] = name;
     }
 
+    // Change the rig's model (a rigdef id from the catalogue). REPLACES the draft
+    // OBJECT (not just the field) so the {#key draft} Advanced sub-editors remount
+    // and re-read the new rigdef's defaults. The operator's other edits carry over;
+    // mode_mappings/overrides are NOT auto-cleared on a model swap (matching the
+    // config SPA — they stay the operator's to adjust).
+    setDraftModel(model: string): void {
+        const id = this.selectedId;
+        const d = this.draft;
+        if (id === null || !d) return;
+        this.drafts[id] = { ...cloneRig(d), model };
+    }
+
+    // ft8_mode / my_rig — optional per-rig overrides. Empty ⇒ DELETE the key
+    // (inherit the rigdef default), never store '' or null: the dirty compare is
+    // raw JSON, so a cleared override must match the loaded-absent form (no spurious
+    // dirty). Inherit-only, matching the config SPA — the explicit-"" "leave current
+    // mode" state stays a config.json hand-edit (see ft8ModeFor).
+    setDraftFt8Mode(v: string): void {
+        const d = this.draft;
+        if (!d) return;
+        if (v === '') delete d.ft8_mode;
+        else d.ft8_mode = v;
+    }
+    setDraftMyRig(v: string): void {
+        const d = this.draft;
+        if (!d) return;
+        if (v === '') delete d.my_rig;
+        else d.my_rig = v;
+    }
+
     // BASELINE DEBT 2026-07-31 (complexity 38) — validation across the whole rig-def
     // surface before a write.
     // eslint-disable-next-line complexity
@@ -289,6 +335,15 @@ class RigsState {
                 delete patched.overrides;
             }
         }
+
+        // model — a rigdef id, always present. Changed ⇒ the operator's choice
+        // wins. ft8_mode / my_rig — optional overrides, mirrored by presence (set
+        // when present, delete when cleared). Same field-independent, diff-vs-baseline
+        // discipline as the rest, so an untouched field keeps the fresh server value.
+        if (d.model !== base.model) patched.model = d.model;
+        patchOptional(patched, base, d, 'ft8_mode');
+        patchOptional(patched, base, d, 'my_rig');
+
         const next = fresh.data.rigs.map((r) => (r.id === id ? patched : r));
 
         const outcome = await saveRigs(next); // no default_rig_id — active rig untouched

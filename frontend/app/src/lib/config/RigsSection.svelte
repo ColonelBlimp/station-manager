@@ -1,10 +1,10 @@
 <script lang="ts">
     // Rigs section — the configured rig profiles (app Settings, ADR 0044), as a
     // master-detail: the rig list on the left, a details panel on the right. The
-    // identity is read-only; the CONNECTION (serial port + audio RX/TX) is
-    // editable via pickers populated from /v1/hardware, saved via a whole-
-    // catalogue PUT (see rigs.svelte.ts data-safety note). Model / ft8_mode /
-    // add / delete land in follow-up increments.
+    // model, per-rig FT8-mode / MY_RIG overrides, and the CONNECTION (serial port +
+    // audio RX/TX via /v1/hardware pickers) are editable, saved via a whole-catalogue
+    // PUT (see rigs.svelte.ts data-safety note). Add / delete land in a follow-up
+    // increment.
     import { onMount } from 'svelte';
     import { rigsState } from './rigs.svelte';
     import { bridgeEnabledState } from './bridgeEnabled.svelte';
@@ -143,16 +143,19 @@
                 {/each}
             </ul>
 
-            <!-- Detail: identity read-only; the CONNECTION (port + audio) is editable
-                 via pickers from /v1/hardware. Model / ft8_mode / add / delete land in
-                 follow-up increments. -->
+            <!-- Detail: model + per-rig FT8-mode/MY_RIG + the CONNECTION (port +
+                 audio, via /v1/hardware pickers) are editable. Add / delete land in a
+                 follow-up increment. -->
             <div class="min-w-0 flex-1">
                 {#if rigsState.selected && rigsState.draft}
                     {@const rig = rigsState.selected}
                     {@const draft = rigsState.draft}
-                    {@const def = rigsState.defFor(rig)}
+                    <!-- def / name follow the DRAFT's model (not the pristine rig) so a
+                         model change updates the heading, subtitle, inherit-placeholders,
+                         and the {#key draft} sub-editors' rigdef. -->
+                    {@const def = rigsState.defFor(draft)}
                     <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-                        <h2 class="text-lg font-semibold text-ink">{rigsState.nameFor(rig)}</h2>
+                        <h2 class="text-lg font-semibold text-ink">{rigsState.nameFor(draft)}</h2>
                         {#if rig.id === rigsState.defaultRigId}
                             <!-- "default", NOT "active" — this branch tests
                                  default_rig_id, which is the rig the daemon will
@@ -186,6 +189,55 @@
                             {[def?.manufacturer, def?.model].filter(Boolean).join(' · ')}
                         </p>
                     {/if}
+
+                    <!-- Rig (editable): model + per-rig FT8-mode and MY_RIG overrides.
+                         Ported from the config SPA's Rigs tab. Model is a rigdef id;
+                         changing it replaces the draft so the Advanced sub-editors
+                         re-read the new rigdef. FT8 mode / MY_RIG blank ⇒ inherit. -->
+                    <section class="mt-5 max-w-md space-y-3">
+                        <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">
+                            Rig
+                        </h3>
+                        <label class="flex flex-col gap-1">
+                            <span class="text-sm font-medium text-ink">Model</span>
+                            <select
+                                class="input"
+                                value={draft.model}
+                                disabled={rigsState.saving}
+                                onchange={(e) => rigsState.setDraftModel(e.currentTarget.value)}
+                            >
+                                <!-- keep the stored model even if it's not in the catalogue -->
+                                {#if !rigsState.catalogue[draft.model]}
+                                    <option value={draft.model}>{draft.model} (unknown)</option>
+                                {/if}
+                                {#each Object.entries(rigsState.catalogue) as [id, d] (id)}
+                                    <option value={id}>{d.name}</option>
+                                {/each}
+                            </select>
+                        </label>
+                        <label class="flex flex-col gap-1">
+                            <span class="text-sm font-medium text-ink">FT8 mode</span>
+                            <input
+                                class="input"
+                                value={draft.ft8_mode ?? ''}
+                                placeholder={def?.ft8_mode || 'inherit'}
+                                title="Rig mode literal used for FT8 (e.g. DATA-U). Blank inherits the rigdef default."
+                                disabled={rigsState.saving}
+                                oninput={(e) => rigsState.setDraftFt8Mode(e.currentTarget.value)}
+                            />
+                        </label>
+                        <label class="flex flex-col gap-1">
+                            <span class="text-sm font-medium text-ink">MY_RIG (ADIF)</span>
+                            <input
+                                class="input"
+                                value={draft.my_rig ?? ''}
+                                placeholder={def?.name || 'inherit'}
+                                title="ADIF MY_RIG stamped on logged QSOs. Blank derives from the rig name."
+                                disabled={rigsState.saving}
+                                oninput={(e) => rigsState.setDraftMyRig(e.currentTarget.value)}
+                            />
+                        </label>
+                    </section>
 
                     <!-- Connection (editable) -->
                     <section class="mt-5 max-w-md space-y-3">

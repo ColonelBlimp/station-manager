@@ -272,6 +272,103 @@ describe('rigsState', () => {
         expect(rigsState.dirty).toBe(false);
     });
 
+    it('changing the model REPLACES the draft object and PUTs the new model', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+            catalogue: [
+                { id: 'ic7300', name: 'IC-7300' },
+                { id: 'ftdx10', name: 'FTdx10' },
+            ],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        const before = rigsState.draft;
+        rigsState.setDraftModel('ftdx10');
+        expect(rigsState.draft).not.toBe(before); // object replaced ⇒ {#key draft} sub-editors remount
+        expect(rigsState.draft?.model).toBe('ftdx10');
+        expect(rigsState.dirty).toBe(true);
+
+        await rigsState.save();
+        const sent = JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> };
+        expect(sent.rigs.find((r) => r.id === 1)?.model).toBe('ftdx10');
+        expect(rigsState.dirty).toBe(false);
+    });
+
+    it('editing ft8_mode and MY_RIG PUTs them as per-rig overrides', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }], // no overrides ⇒ inherit
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10', ft8_mode: 'DATA-U' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftFt8Mode('DATA-U');
+        rigsState.setDraftMyRig('FTDX10 #2');
+        await rigsState.save();
+
+        const s1 = (JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> }).rigs.find(
+            (r) => r.id === 1
+        );
+        expect(s1?.ft8_mode).toBe('DATA-U');
+        expect(s1?.my_rig).toBe('FTDX10 #2');
+    });
+
+    it('typing then clearing an inherited override returns to not-dirty (delete-key)', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }], // ft8_mode absent (inherit)
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftFt8Mode('X');
+        expect(rigsState.dirty).toBe(true);
+        rigsState.setDraftFt8Mode(''); // cleared back to inherit
+        expect(rigsState.dirty).toBe(false); // matches the loaded-absent form — no spurious dirty
+    });
+
+    it('clearing a SET override drops the key on save (inherit) and is not blank/null', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a', ft8_mode: 'DATA-U' }], // SET
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10', ft8_mode: 'DATA-U' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftFt8Mode('');
+        expect(rigsState.dirty).toBe(true); // clearing a SET value IS a change
+        await rigsState.save();
+
+        const s1 =
+            (JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> }).rigs.find(
+                (r) => r.id === 1
+            ) ?? {};
+        expect('ft8_mode' in s1).toBe(false); // dropped ⇒ inherit (not '' or null)
+    });
+
+    it('editing only ft8_mode preserves a concurrent port change on the same rig', async () => {
+        let get = 0;
+        const puts = mockCluster(() => {
+            get++;
+            return {
+                default_rig_id: 1,
+                rigs: [{ id: 1, model: 'ftdx10', port: get === 1 ? '/dev/a' : '/dev/CONCURRENT' }],
+                catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+            };
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftFt8Mode('DATA-U'); // ONLY ft8_mode
+        await rigsState.save();
+
+        const s1 = (JSON.parse(puts[0]) as { rigs: Array<Record<string, unknown>> }).rigs.find(
+            (r) => r.id === 1
+        );
+        expect(s1?.ft8_mode).toBe('DATA-U'); // our edit
+        expect(s1?.port).toBe('/dev/CONCURRENT'); // concurrent change preserved, not clobbered
+    });
+
     it('editing only the port preserves a concurrent audio change on the SAME rig', async () => {
         // review Rigs-editor #1: the merge is FIELD-level. The operator changes
         // only the port; between load and the save re-fetch, another writer sets
