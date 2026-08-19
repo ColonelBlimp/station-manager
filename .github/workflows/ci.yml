@@ -95,44 +95,14 @@ jobs:
           node-version-file: frontend/app/package.json
           cache: npm
           cache-dependency-path: |
-            frontend/logbook/package-lock.json
             frontend/app/package-lock.json
 
-      # ─── SPA gates ──────────────────────────────────────────────
-      # Run SPA-side checks BEFORE the Go build so the daemon embed
-      # picks up a fresh, verified dist/ for each client. Fast-fail
-      # order per SPA: lint and type-check are cheapest, then tests,
-      # then build. (The logging SPA was retired 2026-07-21 and the config
-      # SPA 2026-08-19; their embeds + routes are gone, so neither is gated
-      # here — the app SPA owns station settings now. See W-0003.)
-
-      # ─── Logbook SPA gate ───────────────────────────────────────
-      # The logbook client (frontend/logbook/) is a separate embedded SPA
-      # served at /logbook/. Same lint → type-check → test → build order.
-
-      - name: Logbook SPA install
-        working-directory: frontend/logbook
-        run: npm ci
-
-      - name: Logbook SPA lint
-        working-directory: frontend/logbook
-        run: npm run lint
-
-      - name: Logbook SPA format check
-        working-directory: frontend/logbook
-        run: npm run format:check
-
-      - name: Logbook SPA type-check
-        working-directory: frontend/logbook
-        run: npx svelte-check --fail-on-warnings
-
-      - name: Logbook SPA tests
-        working-directory: frontend/logbook
-        run: npx vitest run
-
-      - name: Logbook SPA build (produces dist/ for daemon embed)
-        working-directory: frontend/logbook
-        run: npm run build
+      # ─── SPA gate ───────────────────────────────────────────────
+      # Run the SPA-side checks BEFORE the Go build so the daemon embed picks
+      # up a fresh, verified dist/. Fast-fail order: lint and type-check are
+      # cheapest, then tests, then build. The app SPA is the SOLE embedded
+      # operator client — the logging (2026-07-21), config, and logbook
+      # (2026-08-19) SPAs were retired (embeds + routes gone). See W-0003.
 
       # ─── App SPA gate ───────────────────────────────────────────
       # The consolidated app client (frontend/app/, ADR 0044) is a separate

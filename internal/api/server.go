@@ -402,17 +402,18 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 		// "/config" becomes the shell route itself.
 		mux.Handle("GET /config", http.RedirectHandler("/app/config", http.StatusTemporaryRedirect))
 		mux.Handle("GET /config/", http.RedirectHandler("/app/config", http.StatusTemporaryRedirect))
-		// Logbook SPA at the /logbook/ sub-path. StripPrefix turns
-		// "/logbook/assets/index.js" into "/assets/index.js" so the shared
-		// spaHandler resolves it (and unknown sub-routes) against the logbook
-		// dist/. Registered as a subtree pattern, so ServeMux 301-redirects a
-		// bare "/logbook" to "/logbook/". This more-specific pattern takes
-		// priority over the "/" catch-all below.
-		mux.Handle("GET /logbook/", http.StripPrefix("/logbook", spaHandler(frontend.LogbookFS())))
+		// The standalone logbook SPA was retired 2026-08-19 (W-0003); the app SPA
+		// owns the logbook now (/app/logbook). Its former paths — the bare
+		// "/logbook" and the "/logbook/" subtree (any old deep link) — 307-redirect
+		// there, registered only inside this SPA-serving block (a headless daemon
+		// 404s them). TEMPORARY (307): drop when the app moves to the canonical root
+		// and "/logbook" becomes the shell route itself.
+		mux.Handle("GET /logbook", http.RedirectHandler("/app/logbook", http.StatusTemporaryRedirect))
+		mux.Handle("GET /logbook/", http.RedirectHandler("/app/logbook", http.StatusTemporaryRedirect))
 		// Consolidated app SPA (ADR 0044) at the /app/ sub-path — the
-		// full-replacement operator client and the target of the /config and
-		// root redirects. Same StripPrefix + subtree-redirect rationale as the
-		// logbook SPA above.
+		// full-replacement operator client, now the SOLE embedded operator SPA
+		// (logging/config/logbook all retired), and the target of the /config,
+		// /logbook, and root redirects.
 		mux.Handle("GET /app/", http.StripPrefix("/app", spaHandler(frontend.AppFS())))
 		// Operator manual at /manual/ — a static, zero-JS Hugo page (ADR 0036),
 		// NOT an SPA, so it uses manualHandler (plain file server, real 404s) not

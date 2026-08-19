@@ -63,26 +63,8 @@ tasks:
       - sqlboiler psql
 
   frontend:install:
-    desc: Install dependencies for every embedded SPA (logbook + app)
-    deps: [frontend:logbook:install, frontend:app:install]
-
-  frontend:logbook:install:
-    desc: Install logbook-SPA dependencies; uses `npm ci` if a lockfile is present, else `npm install` (first run generates the lockfile)
-    dir: frontend/logbook
-    cmds:
-      - sh -c 'if [ -f package-lock.json ]; then npm ci; else npm install; fi'
-
-  frontend:logbook:dev:
-    desc: Run the logbook SPA Vite dev server with HMR on :5175 (proxies /v1/* to daemon on :8080; runs alongside frontend:app:dev)
-    dir: frontend/logbook
-    cmds:
-      - npm run dev
-
-  frontend:logbook:build:
-    desc: Production build of the logbook SPA (consumed by go:embed)
-    dir: frontend/logbook
-    cmds:
-      - npm run build
+    desc: Install dependencies for the embedded app SPA
+    deps: [frontend:app:install]
 
   frontend:app:install:
     desc: Install app-SPA dependencies (the consolidated shell, ADR 0044); `npm ci` if a lockfile is present, else `npm install`
@@ -109,8 +91,8 @@ tasks:
       - npm run check
 
   frontend:build:all:
-    desc: Build every embedded SPA (logbook + app). The build:smd* tasks depend on this so the daemon embeds fresh bundles for all clients.
-    deps: [frontend:logbook:build, frontend:app:build]
+    desc: Build the embedded app SPA (the sole operator client). The build:smd* tasks depend on this so the daemon embeds a fresh bundle.
+    deps: [frontend:app:build]
 
   manual:build:
     desc: Build the operator manual (Hugo → manual/public/) for the daemon's go:embed. Single self-contained zero-JS page (ADR 0036).
@@ -374,9 +356,9 @@ tasks:
   ci:local:
     desc: |
       Local mirror of .github/workflows/ci.yml — runs every gate the
-      "releasability" CI job runs, for ALL THREE gated SPAs (config,
-      logbook, app): lint / prettier format / type-check / test / build
-      each, then the Go gate (gofmt, vet, golangci-lint metrics, race
+      "releasability" CI job runs, for the app SPA (the sole embedded
+      operator client): lint / prettier format / type-check / test / build,
+      then the Go gate (gofmt, vet, golangci-lint metrics, race
       tests, daemon embed-build), plus the documentation catalog and
       agent-context budgets. Answers
       "would CI pass right now?"

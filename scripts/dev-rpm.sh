@@ -59,13 +59,13 @@ VERSION=$(sm_git_version)
 RPM_VERSION=$(sm_rpm_version "$VERSION")
 OUTPUT=build/private/station-manager-dev.x86_64.rpm
 
-echo "── [1/3] Building SPAs → frontend/{logbook,app}/dist/ + manual → manual/public/ ──"
+echo "── [1/3] Building the app SPA → frontend/app/dist/ + manual → manual/public/ ──"
 # Every embedded SPA (frontend/embed.go //go:embed all:<spa>/dist) must be rebuilt
 # here — the Go build embeds whatever is already in each dist/, so skipping one
-# silently ships a STALE bundle for that client (e.g. logbook-SPA edits missing).
+# silently ships a STALE app bundle.
 # `app` (ADR 0044) was missed when it was embedded (2026-07-11) — a day of /app/
 # dogfood deploys silently shipped whatever dist/ last held (found 2026-07-13).
-for spa in logbook app; do
+for spa in app; do
   # Keep the advertised one-command deploy usable on a fresh checkout (and
   # after node_modules has been cleaned) without paying for `npm ci` on every
   # dogfood rebuild. All SPAs commit package-lock.json, but retain the fallback

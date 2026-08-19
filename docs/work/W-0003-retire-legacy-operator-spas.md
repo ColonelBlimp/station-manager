@@ -17,27 +17,31 @@ Settings, and Map views. Settings is no longer a blocker; only Dashboard remains
 
 The consolidation is nevertheless incomplete:
 
-- the config SPA's embed and route were retired 2026-08-19 (see "Config SPA retirement" below);
-  `/config` and `/config/` now 307-redirect to the app's Settings at `/app/config`.
-  [`frontend/embed.go`](../../frontend/embed.go) still embeds the logbook build, and
-  [`internal/api/server.go`](../../internal/api/server.go) still serves it at `/logbook/`
-  alongside `/app/`;
-- the Taskfile, release tasks, and CI still install, test, and build the logbook client; the
-  config-client gates were removed with its retirement;
-- the app's ordinary upload-backfill path omits the legacy logbook's ClubLog-specific amber
-  retry-only affordance and `skipped_no_history` result;
+- the config and logbook SPAs' embeds and routes were both retired 2026-08-19 (see the two
+  retirement sections below). [`frontend/embed.go`](../../frontend/embed.go) now embeds ONLY the app
+  build (`appSPA`/`AppFS`), and [`internal/api/server.go`](../../internal/api/server.go) serves only
+  `/app/`; `/config`,`/config/` → `/app/config` and `/logbook`,`/logbook/` → `/app/logbook`
+  307-redirect (temporary compatibility routes). The **app is now the sole embedded operator SPA**
+  (AC4 met);
+- the Taskfile, release tasks, and CI gate only the app client now — the config and logbook build
+  gates were removed with their retirements;
+- the app's upload path presents the legacy logbook's ClubLog-specific retry-only affordance +
+  `skipped_no_history` result as of 2026-08-19 (`logbook/logbook.svelte.ts` `destinationRetryOnly`
+  + the amber Retry button in `logbook/Logbook.svelte`), so AC2's app-side requirement is met;
 - the operator-facing disconnect / bridge-fault wording is ported into the app as of 2026-08-18
   (`operate/bridgeMessages.ts`, shown on the Rig panel's "Bridge:" line; stuck-TX banners were
   already in `ui/TxAlarmBanner.svelte`), resolving the raw-code rendering for known codes; and
 - Logbook and Settings are statically imported by the shell. Only Map is currently lazy-loaded,
-  so ADR 0044's per-route code-splitting requirement has not been met.
+  so ADR 0044's per-route code-splitting requirement (AC6) has not been met.
 
 The `frontend/logging` source tree was DELETED on 2026-08-18 after its operator-significant behavior
 was ported and characterized (see "Logging SPA retirement" below). The `frontend/config` route,
 embed, and build gates were retired 2026-08-19 once its parity gaps were restored, and its source
 tree was then DELETED (see "Config SPA retirement" below), preserved under the
-`legacy-config-spa-retired` tag. The `frontend/logbook` source tree remains as parity evidence for
-its still-pending retirement. Source
+`legacy-config-spa-retired` tag. The `frontend/logbook` route, embed, and build gates were likewise
+retired 2026-08-19 once its last gap (the ClubLog retry-only workflow) was ported (see "Logbook SPA
+retirement" below), preserved under the `legacy-logbook-spa-retired` tag. With that, NO legacy
+operator SPA remains. Source
 presence is not itself the defect: live routes, embedded assets, and mandatory build gates are the
 retirement boundary.
 
@@ -121,6 +125,39 @@ recovers the full source, which is why the per-file archaeology is not duplicate
 The `docs/catalog.json` and `docs/README.md` `frontend/config/**` scopes were dropped (the app config
 code at `frontend/app/src/lib/config/**` remains scoped), and the live design docs were scrubbed.
 
+## Logbook SPA retirement (2026-08-19)
+
+The `frontend/logbook` client was retired once its last operator-significant gap was ported. This is
+the FINAL legacy-SPA retirement: with it, `frontend/app` is the sole embedded operator SPA (AC4).
+
+**Parity restoration first (AC2).** A field-level audit confirmed the app's logbook is a superset of
+the logbook SPA in every dimension EXCEPT the ClubLog / no-bulk-backfill **retry-only** workflow —
+the one gap AC2 names. (The earlier-assumed "QSL-awaiting view / edit-history viewer / search" were
+never built in the logbook SPA — only aspirational comments — so there was nothing to port there.)
+The gap closed (TDD + reversion-proved, clean-room review clean), daemon-backed by the EXISTING
+`POST /v1/forwarder/{name}/uploads` response, no new endpoint:
+
+| Restored gap (AC2) | App home (`frontend/app/src/lib/`) |
+|---|---|
+| `skipped_no_history` parse | `api/uploads.ts` (`EnqueueResult`) |
+| No-bulk-backfill detection + notice | `logbook/logbook.svelte.ts` (`NO_BULK_BACKFILL_TYPES = {'clublog'}`, `destinationRetryOnly`; the "N skipped — never uploaded live; use an ADIF export" notice) |
+| Visually-distinct retry action | `logbook/Logbook.svelte` (amber "Retry failed uploads to {label}" button + ADIF tooltip when `destinationRetryOnly`) |
+
+**Route ruling (2026-08-19, mirrors config):** `/logbook` and `/logbook/` **307-redirect** to
+`/app/logbook`, registered only inside the `Protocol == "tcp" && *ServeSPA` block; no `LogbookFS` is
+retained. TEMPORARY — removed when the app moves to the canonical root.
+
+**Boundary removed in this retirement:** the `/logbook/` StripPrefix route → the 307 redirect
+(`internal/api/server.go`, with Go route tests for both paths + redirect-absence when `ServeSPA` is
+off); the `logbookSPA` embed + `LogbookFS()` (`frontend/embed.go`, removing the now-obsolete
+`TestSpaHandler_ServesLogbookIndex`); the `frontend:logbook:*` Taskfile tasks + deps; the CI "Logbook
+SPA gate"; and the `logbook` entries in the release/dev/local-CI SPA loops. The canonical HTTP
+reference ([`api-endpoints.md`](../v2-design/api-endpoints.md)) changed in the same commit.
+
+**Preservation + deletion:** annotated tag **`legacy-logbook-spa-retired`** on the last commit still
+containing the tree; `git show legacy-logbook-spa-retired` recovers the full source. Physical
+deletion of `frontend/logbook` + the docs/catalog scrub follow in the same retirement.
+
 ## Scope
 
 This work item owns completion of the ADR 0044 outcome:
@@ -128,11 +165,11 @@ This work item owns completion of the ADR 0044 outcome:
 - port and characterize operator-significant behavior still unique to the retained clients;
 - move the consolidated app from the `/app/` transition mount to the canonical root with working
   in-shell `/config`, `/logbook`, and Operate deep links;
-- remove the config and logbook routes and embeds and their release and CI build gates — STAGED,
-  not together: config was retired first (2026-08-19, route → a temporary `/config`→`/app/config`
-  redirect) because its parity is complete, while logbook waits on its unported ClubLog retry-only
-  behavior (AC2); logbook's route/embed/gates and the config redirect's own removal (once the app
-  moves to the canonical root) follow;
+- remove the config and logbook routes and embeds and their release and CI build gates — DONE,
+  staged not together: config first (2026-08-19), then logbook (2026-08-19) once its ClubLog
+  retry-only gap was ported (AC2). Each route became a temporary redirect (`/config`→`/app/config`,
+  `/logbook`→`/app/logbook`); those redirects' own removal follows when the app moves to the
+  canonical root;
 - preserve the manual as an independently served zero-JS site; and
 - finish the shell acceptance requirements that prevent consolidation from degrading first-load
   behavior, including route-level lazy loading.
@@ -148,13 +185,12 @@ The separate whole-log Dashboard map remains separately ranked work.
 ## Operator-observable acceptance criteria
 
 1. `/`, `/operate`, `/logbook`, and `/config` open the consolidated shell, including after a direct
-   deep-link reload. INTERMEDIATE BOUNDARY (config retired, logbook pending): `/config` and
-   `/config/` no longer load an independent legacy bundle — they 307-redirect to `/app/config`, and
-   the config assets are no longer embedded or gated (the nearest confusable outcome — redirecting
-   the visible entry point while still embedding/shipping the old config bundle — must fail the
-   test); `/logbook/` still loads its independent legacy bundle until its own retirement. When the
-   app reaches the canonical root, the `/config` redirect is itself removed and `/config` becomes
-   the shell route.
+   deep-link reload. MET (config + logbook both retired 2026-08-19): `/config`,`/config/` and
+   `/logbook`,`/logbook/` no longer load an independent legacy bundle — they 307-redirect to
+   `/app/config` and `/app/logbook`, and neither the config nor the logbook assets are embedded or
+   gated (the nearest confusable outcome — redirecting a visible entry point while still
+   embedding/shipping its old bundle — must fail the test). When the app reaches the canonical root,
+   these redirects are themselves removed and `/config`/`/logbook` become shell routes.
 2. A ClubLog-type destination presents a visually distinct retry-only action, explains that only
    failed live uploads can be retried, and reports `skipped_no_history` rows as requiring ADIF
    export. Tests key the rule on forwarder type rather than a configured destination name.
@@ -188,8 +224,10 @@ The separate whole-log Dashboard map remains separately ranked work.
   deletion a later work item? DECIDED for `frontend/logging` (2026-08-18): tag
   `legacy-logging-spa-retired`; physical deletion done in that retirement (see "Logging SPA
   retirement" above). DECIDED for `frontend/config` (2026-08-19): tag `legacy-config-spa-retired` on
-  the last commit still containing the tree; physical deletion done in this retirement (see "Config
-  SPA retirement" below). Still open for `frontend/logbook`.
+  the last commit still containing the tree; physical deletion done in that retirement (see "Config
+  SPA retirement" above). DECIDED for `frontend/logbook` (2026-08-19): tag `legacy-logbook-spa-retired`
+  on the last commit still containing the tree; physical deletion done in this retirement (see
+  "Logbook SPA retirement" above). No legacy source trees remain.
 
 ## Verification standard
 
@@ -212,5 +250,7 @@ change), and the full local release gate when the implementation is ready.
   disconnect/fault strings are ported to
   [`operate/bridgeMessages.ts`](../../frontend/app/src/lib/operate/bridgeMessages.ts); the full
   catalogue is preserved under the `legacy-logging-spa-retired` tag.
-- [`frontend/logbook/src/lib/ui/LogbookView.svelte`](../../frontend/logbook/src/lib/ui/LogbookView.svelte)
-  — retained ClubLog retry-only behavior to characterize.
+- ClubLog retry-only behavior (was the retired logbook SPA's `LogbookView.svelte`) — ported to
+  [`logbook/Logbook.svelte`](../../frontend/app/src/lib/logbook/Logbook.svelte) +
+  [`logbook/logbook.svelte.ts`](../../frontend/app/src/lib/logbook/logbook.svelte.ts); the full
+  source is preserved under the `legacy-logbook-spa-retired` tag.

@@ -80,6 +80,45 @@ func TestConfigRedirectAbsentWhenSPADisabled(t *testing.T) {
 	}
 }
 
+// TestLogbookRedirectsToApp confirms the retired logbook SPA's paths — the bare
+// /logbook and the /logbook/ subtree — 307-redirect to the app's logbook route at
+// /app/logbook (the standalone logbook SPA was retired 2026-08-19; W-0003). Driven
+// through the full server handler so the route registration is covered.
+func TestLogbookRedirectsToApp(t *testing.T) {
+	srv := testServer(t)
+	for _, path := range []string{"/logbook", "/logbook/"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Host = "127.0.0.1:8080" // loopback: satisfies the Host allowlist (ST-1)
+			w := httptest.NewRecorder()
+			srv.httpServer.Handler.ServeHTTP(w, req)
+			if w.Code != http.StatusTemporaryRedirect {
+				t.Fatalf("GET %s: status = %d, want 307 (%s)", path, w.Code, w.Body.String())
+			}
+			if loc := w.Header().Get("Location"); loc != "/app/logbook" {
+				t.Fatalf("GET %s: Location = %q, want /app/logbook", path, loc)
+			}
+		})
+	}
+}
+
+// TestLogbookRedirectAbsentWhenSPADisabled confirms the /logbook compatibility
+// redirect is registered ONLY inside the SPA-serving block: with ServeSPA off, it's
+// a plain 404, not a redirect.
+func TestLogbookRedirectAbsentWhenSPADisabled(t *testing.T) {
+	srv := testServerWithCfg(t, func(cfg *config.Config) {
+		serve := false
+		cfg.Server.ServeSPA = &serve
+	})
+	req := httptest.NewRequest(http.MethodGet, "/logbook", nil)
+	req.Host = "127.0.0.1:8080"
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GET /logbook with ServeSPA off: status = %d, want 404 (no redirect registered)", w.Code)
+	}
+}
+
 // TestSpaHandler_ServesIndexAtRoot confirms a GET / returns the
 // embedded SPA's index.html. This catches regressions in the embed
 // directive (e.g. dist/ stripped from git, package path renamed) and
@@ -98,26 +137,6 @@ func TestSpaHandler_ServesIndexAtRoot(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "Station Manager") {
 		t.Fatalf("body missing expected SPA marker; got: %s", body)
-	}
-}
-
-// TestSpaHandler_ServesLogbookIndex confirms the logbook SPA's embedded
-// index.html is reachable through its filesystem. Guards the committed
-// dist/index.html placeholder against being stripped from git (which
-// would break the //go:embed all:logbook/dist directive at build time
-// and 404 the SPA at runtime).
-func TestSpaHandler_ServesLogbookIndex(t *testing.T) {
-	h := spaHandler(frontend.LogbookFS())
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "Logbook") {
-		t.Fatalf("body missing expected logbook SPA marker; got: %s", rec.Body.String())
 	}
 }
 

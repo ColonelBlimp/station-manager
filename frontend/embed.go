@@ -1,7 +1,6 @@
 // Package frontend embeds the built Station Manager SPAs into the
-// daemon binary. Each SPA's Vite output (app/dist, logbook/dist, …) is
-// compiled in via //go:embed; the daemon serves them at the
-// appropriate URL prefixes.
+// daemon binary. The app SPA's Vite output (app/dist) is compiled in via
+// //go:embed; the daemon serves it at /app/.
 //
 // Build pipeline: `task frontend:build:all` runs `npm run build` in each
 // SPA project to populate its dist/ before `go build` reaches the
@@ -36,14 +35,6 @@ import (
 //go:embed all:app/dist
 var appSPA embed.FS
 
-// logbookSPA holds the built logbook SPA's static assets — the
-// logbook-management client (QSL-awaiting view, edit-history viewer,
-// logbook search), served under the /logbook/ sub-path. Same `all:`
-// rationale as appSPA.
-//
-//go:embed all:logbook/dist
-var logbookSPA embed.FS
-
 // AppFS returns the consolidated app SPA's filesystem rooted at the dist/
 // directory so http.FileServer treats index.html as the root document.
 //
@@ -58,17 +49,6 @@ func AppFS() fs.FS {
 		// is well-formed. Panicking here would only fire for a programmer
 		// error in the embed directive, which we want surfaced loudly.
 		panic("frontend: fs.Sub on embedded appSPA failed: " + err.Error())
-	}
-	return sub
-}
-
-// LogbookFS returns the logbook SPA's filesystem rooted at its dist/
-// directory. Same infallible-at-runtime contract as AppFS — the embed
-// directive guarantees the path at compile time.
-func LogbookFS() fs.FS {
-	sub, err := fs.Sub(logbookSPA, "logbook/dist")
-	if err != nil {
-		panic("frontend: fs.Sub on embedded logbookSPA failed: " + err.Error())
 	}
 	return sub
 }
