@@ -6,8 +6,22 @@
     snapshot. The operational `station` block is held opaque and echoed on save
     (see api/config.ts) so a Station save never disturbs amp/power/bands.
 */
-import { fetchStation, saveStation, type StationFields, type StationConfig } from '../api/config';
+import {
+    fetchStation,
+    saveStation,
+    type StationFields,
+    type StationConfig,
+    type QslFields,
+} from '../api/config';
 import { toasts } from '../ui/toasts.svelte';
+
+const EMPTY_QSL: QslFields = { qsl_via: '', qslmsg: '', qsl_sent_via: '' };
+
+// Canonical JSON of both edited blocks, for the dirty compare. Both forms are
+// rebuilt by #apply in a stable key order, so a string compare is a valid check.
+function canon(station: StationFields, qsl: QslFields): string {
+    return JSON.stringify({ station, qsl });
+}
 
 // Injected by main.ts (per ADR 0045 DI — this module never imports the app
 // bootstrap): push the just-saved identity into the app's shared station
@@ -52,13 +66,15 @@ class StationState {
     loaded = $state(false);
     error = $state('');
     form = $state<StationFields>({});
+    // The standing QSL defaults block, edited in the same section and saved with
+    // logging_station (folded in, as the retired config SPA's Station tab did).
+    qslForm = $state<QslFields>({ ...EMPTY_QSL });
 
-    // JSON of the last loaded/saved form, for the dirty compare. Key order is
-    // stable (the form is always rebuilt by #apply in the same order), so a
-    // string compare is a valid change check.
-    #pristine = $state('{}');
+    // Canonical JSON of the last loaded/saved state (both blocks), for the dirty
+    // compare. Seeded from the empty defaults so a never-loaded state reads clean.
+    #pristine = $state(canon({}, EMPTY_QSL));
 
-    dirty = $derived(JSON.stringify(this.form) !== this.#pristine);
+    dirty = $derived(canon(this.form, this.qslForm) !== this.#pristine);
 
     async load(): Promise<void> {
         if (this.loading) return;
@@ -93,7 +109,10 @@ class StationState {
         // completion could apply a stale operator/grid to the shared context
         // (review 2026-07-20 round 2 #2). The latch serialises them.
         try {
-            const res = await saveStation({ station: { ...this.form } });
+            const res = await saveStation({
+                station: { ...this.form },
+                qsl: { ...this.qslForm },
+            });
             if (res.kind === 'error') {
                 toasts.error(`Save failed: ${res.message}`);
                 return;
@@ -110,9 +129,11 @@ class StationState {
         }
     }
 
-    // Revert edits to the last loaded/saved snapshot.
+    // Revert edits to the last loaded/saved snapshot (both blocks).
     reset(): void {
-        this.form = JSON.parse(this.#pristine) as StationFields;
+        const p = JSON.parse(this.#pristine) as { station: StationFields; qsl: QslFields };
+        this.form = p.station;
+        this.qslForm = p.qsl;
     }
 
     #apply(cfg: StationConfig): void {
@@ -121,7 +142,8 @@ class StationState {
             if (!(k in f)) f[k] = '';
         }
         this.form = f;
-        this.#pristine = JSON.stringify(f);
+        this.qslForm = { ...cfg.qsl };
+        this.#pristine = canon(f, this.qslForm);
     }
 }
 

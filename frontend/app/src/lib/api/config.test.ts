@@ -71,11 +71,15 @@ describe('saveStation — data safety', () => {
         expect(put, 'a PUT was issued').toBeTruthy();
         const sent = JSON.parse(put![1]!.body as string) as {
             logging_station: Record<string, string>;
+            qsl?: Record<string, string>;
             station?: unknown;
         };
         expect(sent.logging_station.station_callsign).toBe('7Q8AC');
         expect(sent.logging_station.my_lat).toBe('S011 26.250');
         expect(sent.logging_station.my_lon).toBe('E034 02.500');
+        // The qsl defaults block is folded in and travels WHOLE (three fields);
+        // the loaded config had none, so it rides back as blanks, not omitted.
+        expect(sent.qsl).toEqual({ qsl_via: '', qslmsg: '', qsl_sent_via: '' });
         // The operational block is intentionally absent — echoing a stale copy
         // would clobber a concurrent amp/power/band change (review #3).
         expect('station' in sent).toBe(false);
@@ -83,7 +87,10 @@ describe('saveStation — data safety', () => {
 
     it('errors (never throws) on a non-2xx PUT', async () => {
         mockJSON(400, { message: 'invalid' });
-        const res = await saveStation({ station: { station_callsign: 'X' } });
+        const res = await saveStation({
+            station: { station_callsign: 'X' },
+            qsl: { qsl_via: '', qslmsg: '', qsl_sent_via: '' },
+        });
         expect(res.kind).toBe('error');
     });
 });

@@ -112,6 +112,38 @@
             </section>
 
             <section>
+                <h2 class="mb-1 text-base font-semibold text-ink">QSL defaults</h2>
+                <p class="mt-0.5 mb-3 text-sm text-muted">
+                    Standing outgoing-QSL info stamped on logged QSOs (ADIF QSL_VIA / QSLMSG /
+                    QSL_SENT_VIA).
+                </p>
+                <div class="flex flex-wrap gap-x-4 gap-y-3">
+                    <label class="flex w-64 flex-col gap-1">
+                        <span class="text-sm font-medium text-ink">QSL via (route / manager)</span>
+                        <input
+                            class="input"
+                            title="e.g. a manager callsign, or LoTW."
+                            bind:value={stationState.qslForm.qsl_via}
+                        />
+                    </label>
+                    <label class="flex w-full max-w-[38rem] flex-col gap-1">
+                        <span class="text-sm font-medium text-ink">QSL message</span>
+                        <input class="input" bind:value={stationState.qslForm.qslmsg} />
+                    </label>
+                    <label class="flex w-56 flex-col gap-1">
+                        <span class="text-sm font-medium text-ink">Default send method</span>
+                        <select class="input" bind:value={stationState.qslForm.qsl_sent_via}>
+                            <option value="">— none —</option>
+                            <option value="B">Bureau</option>
+                            <option value="D">Direct</option>
+                            <option value="E">Electronic</option>
+                            <option value="M">Manager</option>
+                        </select>
+                    </label>
+                </div>
+            </section>
+
+            <section>
                 <h2 class="mb-3 text-base font-semibold text-ink">Equipment</h2>
                 <div class="flex flex-wrap gap-x-4 gap-y-3">
                     {@render field('Antenna', 'my_antenna', undefined, 'w-full max-w-[38rem]')}

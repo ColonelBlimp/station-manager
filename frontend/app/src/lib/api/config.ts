@@ -22,9 +22,22 @@ import { safeFetch, readJsonBody, isPlainObject } from './_helpers';
 // both types the known fields and preserves any the form doesn't render.
 export type StationFields = Record<string, string>;
 
+// The standing outgoing-QSL defaults (config `qsl` block = types.QslDefaults,
+// exactly these three fields — ADIF QSL_VIA / QSLMSG / QSL_SENT_VIA). Saved WITH
+// the Station section, like the retired config SPA folded them into its Station
+// tab. Whole-block replace is safe because the block has no other fields.
+export interface QslFields {
+    qsl_via: string;
+    qslmsg: string;
+    /** ADIF QSL_SENT_VIA: default send method — B/D/E/M or blank. */
+    qsl_sent_via: string;
+}
+
 export interface StationConfig {
     /** The full logging_station block (round-tripped losslessly). */
     station: StationFields;
+    /** The standing QSL defaults block. */
+    qsl: QslFields;
 }
 
 export type StationOutcome =
@@ -46,9 +59,15 @@ function toStringMap(v: unknown): StationFields {
     return out;
 }
 
+function parseQsl(v: unknown): QslFields {
+    const q = isPlainObject(v) ? v : {};
+    const str = (x: unknown): string => (typeof x === 'string' ? x : '');
+    return { qsl_via: str(q.qsl_via), qslmsg: str(q.qslmsg), qsl_sent_via: str(q.qsl_sent_via) };
+}
+
 function parseConfig(body: unknown): StationConfig | null {
     if (!isPlainObject(body)) return null;
-    return { station: toStringMap(body.logging_station) };
+    return { station: toStringMap(body.logging_station), qsl: parseQsl(body.qsl) };
 }
 
 export async function fetchStation(signal?: AbortSignal): Promise<StationOutcome> {
@@ -64,12 +83,14 @@ export async function saveStation(
     cfg: StationConfig,
     signal?: AbortSignal
 ): Promise<StationOutcome> {
-    // Only logging_station — never the operational `station` block (see the
-    // data-safety note above). The daemon leaves omitted blocks untouched.
+    // logging_station + the qsl defaults block (both edited by the Station
+    // section). NEVER the operational `station` block (see the data-safety note
+    // above). The daemon leaves omitted blocks untouched; each block present is
+    // replaced whole (qsl has exactly three fields, all round-tripped).
     const fetched = await safeFetch('/v1/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logging_station: cfg.station }),
+        body: JSON.stringify({ logging_station: cfg.station, qsl: cfg.qsl }),
         signal,
     });
     if (!fetched.ok) return { kind: 'error', message: fetched.message };

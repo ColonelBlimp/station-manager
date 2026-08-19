@@ -144,6 +144,55 @@ describe('stationState', () => {
     });
 });
 
+describe('stationState QSL defaults (config qsl block, ported from the config SPA)', () => {
+    it('loads the QSL defaults from the qsl block', async () => {
+        mockJSON(200, {
+            ...configBody(),
+            qsl: { qsl_via: 'via M0XXX', qslmsg: 'Tnx QSO 73', qsl_sent_via: 'B' },
+        });
+        await stationState.load();
+        expect(stationState.qslForm).toEqual({
+            qsl_via: 'via M0XXX',
+            qslmsg: 'Tnx QSO 73',
+            qsl_sent_via: 'B',
+        });
+        expect(stationState.dirty).toBe(false);
+    });
+
+    it('a config with no qsl block loads blank defaults and is not dirty', async () => {
+        mockJSON(200, configBody()); // no qsl block
+        await stationState.load();
+        expect(stationState.qslForm).toEqual({ qsl_via: '', qslmsg: '', qsl_sent_via: '' });
+        expect(stationState.dirty).toBe(false);
+    });
+
+    it('editing a QSL default flips dirty; reset reverts it', async () => {
+        mockJSON(200, configBody());
+        await stationState.load();
+        stationState.qslForm.qsl_sent_via = 'D';
+        expect(stationState.dirty).toBe(true);
+        stationState.reset();
+        expect(stationState.qslForm.qsl_sent_via).toBe('');
+        expect(stationState.dirty).toBe(false);
+    });
+
+    it('save PUTs the whole qsl block folded in with logging_station', async () => {
+        const spy = mockJSON(200, configBody());
+        await stationState.load();
+        stationState.qslForm.qsl_via = 'LoTW';
+        stationState.qslForm.qsl_sent_via = 'E';
+        await stationState.save();
+
+        const put = spy.mock.calls.find((c) => c[1]?.method === 'PUT');
+        expect(put, 'a PUT was issued').toBeTruthy();
+        const sent = JSON.parse((put![1] as RequestInit).body as string) as Record<string, unknown>;
+        // qsl travels WHOLE (all three fields), folded with logging_station.
+        expect(sent.qsl).toEqual({ qsl_via: 'LoTW', qslmsg: '', qsl_sent_via: 'E' });
+        expect(sent.logging_station).toBeTruthy();
+        expect(stationState.dirty).toBe(false);
+    });
+});
+
 // A failed RELOAD must mark the section unloaded, not just record an error.
 // Settings is mounted behind a router branch (App.svelte:100), so navigating
 // away unmounts it while this module — a singleton — survives; returning
