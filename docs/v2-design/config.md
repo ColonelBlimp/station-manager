@@ -151,7 +151,8 @@ never adds an empty ADIF tag. A single record-level stamp point — `adif.Record
 — is called by **both** daemon logging paths (the Phone/CW submit handler and the FT8
 e4 sink, after `QsoToRecord`); ADIF **import** is deliberately left alone. No SPA
 involvement (it's pure config the daemon owns). Writable via `PUT /v1/config`
-(presence-aware). A config-SPA editor is future work; set it by hand for now.
+(presence-aware) and edited in the app's **Settings → Station** (the QSL defaults
+subsection: `qsl_via` / `qslmsg` / `qsl_sent_via`).
 
 ### `PskReporterConfig` (`internal/types/pskreporter.go`, config key `psk_reporter`)
 
@@ -861,7 +862,18 @@ global `ft8.device`/`ft8.tx.device` operator knobs are **dropped**. Only the dev
 (MY_RIG derived) — remove it when the per-rig editor lands. `bridge.tune` `{}` is a *legitimate* defaults block (tune knobs are code-constant
 ceilings, ADR 0027), not vestigial — kept.
 
-### 10.6 Editing surface — dedicated config SPA (direction; separate workstream)
+### 10.6 Editing surface — the app's Settings (was: a dedicated config SPA)
+
+> **SUPERSEDED 2026-08-19.** The set-once editing surface is the **consolidated app SPA's
+> Settings** (ADR 0044), reached at `/app/config` (the retired `/config` 307-redirects there).
+> The standalone config SPA this section directed WAS built, then RETIRED once its editing
+> surface — Station identity + QSL defaults, the Rigs master-detail editor (model / FT8-mode /
+> MY_RIG / connection / per-rig mode-mappings + serial overrides, plus add / edit / delete), the
+> CAT master switch, and the FT8 / Forwarding / Email / Enrichment / General sections — was ported
+> into the app (W-0003; source preserved under the `legacy-config-spa-retired` tag). Throughout
+> this document, **"config SPA" now means the app's Settings**, and where the text below defers an
+> editor to "the config-SPA workstream" that editor has since shipped in the app. The dated
+> direction below is the historical record of how config editing arrived at the app.
 
 Operator direction (2026-06-13): **set-once config moves to a dedicated config SPA, separate
 from the logging SPA.** Things configured once and rarely/never changed are UI *noise* in the
