@@ -169,7 +169,6 @@
       "topics": ["app-shell", "frontend-consolidation", "legacy-spa-retirement"],
       "scopes": [
         "frontend/app/**",
-        "frontend/logbook/**",
         "frontend/embed.go",
         "internal/api/server.go",
         "internal/api/spa.go",

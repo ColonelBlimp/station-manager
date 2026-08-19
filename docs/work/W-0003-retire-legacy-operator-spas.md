@@ -154,9 +154,13 @@ off); the `logbookSPA` embed + `LogbookFS()` (`frontend/embed.go`, removing the 
 SPA gate"; and the `logbook` entries in the release/dev/local-CI SPA loops. The canonical HTTP
 reference ([`api-endpoints.md`](../v2-design/api-endpoints.md)) changed in the same commit.
 
-**Preservation + deletion:** annotated tag **`legacy-logbook-spa-retired`** on the last commit still
-containing the tree; `git show legacy-logbook-spa-retired` recovers the full source. Physical
-deletion of `frontend/logbook` + the docs/catalog scrub follow in the same retirement.
+**Preservation + deletion:** the `frontend/logbook` source tree was DELETED after the boundary
+removal. Preservation: annotated tag **`legacy-logbook-spa-retired`** on the last commit that still
+contained the tree (`56a34f1f7903cd1e2b0c9203e8c5287045ffa836`); `git show legacy-logbook-spa-retired`
+recovers the full source. The `docs/catalog.json` / `docs/README.md` `frontend/logbook/**` scope was
+dropped, `frontend/embed.go`'s package doc records all three retirements, and `.gitignore` +
+`DEVELOPING.md` were scrubbed. `frontend/app` is now the only entry anywhere in the SPA embed/gate/
+ignore surfaces.
 
 ## Scope
 
