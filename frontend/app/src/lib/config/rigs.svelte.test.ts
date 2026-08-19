@@ -896,6 +896,90 @@ describe('rigsState', () => {
         expect(puts).toHaveLength(0);
     });
 
+    // The immediate add is NON-idempotent (each call assigns a new id), so an
+    // AMBIGUOUS timeout — the PUT committed but its response was lost — must NOT be
+    // treated as a plain failure: a blind retry would append a SECOND rig of the
+    // same model. addRig re-reads and reconciles, mirroring the CAT switch's
+    // #reconcileAfterTimeout (clean-room review 7b5ed1d2 P2).
+    it('addRig adopts a timed-out PUT that COMMITTED (reconcile, no double-add)', async () => {
+        let get = 0;
+        const ok = (body: unknown) =>
+            Promise.resolve(
+                new Response(JSON.stringify(body), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            );
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((url: string, init?: RequestInit) => {
+                if (init?.method === 'PUT') {
+                    const e = new Error('timed out');
+                    e.name = 'TimeoutError';
+                    return Promise.reject(e);
+                }
+                if (url.includes('/v1/hardware')) {
+                    return ok({ serial_ports: [], audio: { available: false } });
+                }
+                get++;
+                // GET 1 = load, GET 2 = the add's fresh re-fetch → both [1];
+                // GET 3 = the reconcile re-read → [1,2] (the add DID commit).
+                const rigs =
+                    get <= 2
+                        ? [{ id: 1, model: 'ic7300', port: '/dev/a' }]
+                        : [
+                              { id: 1, model: 'ic7300', port: '/dev/a' },
+                              { id: 2, model: 'ic7300', port: '' },
+                          ];
+                return ok({
+                    default_rig_id: 1,
+                    rigs,
+                    catalogue: [{ id: 'ic7300', name: 'IC-7300' }],
+                });
+            })
+        );
+        await rigsState.load();
+        await rigsState.addRig('ic7300'); // PUT times out; reconcile sees rig 2 landed
+
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1, 2]); // adopted the committed rig
+        expect(rigsState.selectedId).toBe(2); // focused for configuration
+        expect(rigsState.saving).toBe(false);
+    });
+
+    it('addRig reports a timed-out PUT that did NOT commit (state unchanged, safe retry)', async () => {
+        const ok = (body: unknown) =>
+            Promise.resolve(
+                new Response(JSON.stringify(body), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            );
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((url: string, init?: RequestInit) => {
+                if (init?.method === 'PUT') {
+                    const e = new Error('timed out');
+                    e.name = 'TimeoutError';
+                    return Promise.reject(e);
+                }
+                if (url.includes('/v1/hardware')) {
+                    return ok({ serial_ports: [], audio: { available: false } });
+                }
+                // Every GET returns [1] — the add never landed.
+                return ok({
+                    default_rig_id: 1,
+                    rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+                    catalogue: [{ id: 'ic7300', name: 'IC-7300' }],
+                });
+            })
+        );
+        await rigsState.load();
+        await rigsState.addRig('ic7300'); // times out; reconcile shows no new rig
+
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]); // no phantom rig appended
+        expect(rigsState.saving).toBe(false);
+    });
+
     // A failed RELOAD marks the section unloaded, not just errored. Settings is
     // mounted behind a router branch (App.svelte:100), so leaving unmounts it
     // while this module — a singleton — survives; returning re-fires onMount →

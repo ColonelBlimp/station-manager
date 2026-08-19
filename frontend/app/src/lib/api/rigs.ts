@@ -154,7 +154,14 @@ function catalogueById(catalogue: unknown): Record<string, RigDef> {
     return out;
 }
 
-export type RigsSaveOutcome = { kind: 'ok' } | { kind: 'error'; message: string };
+export type RigsSaveOutcome =
+    | { kind: 'ok' }
+    // `timedOut` marks the AMBIGUOUS write: the PUT reached the daemon and its
+    // response was lost, so it MAY already have committed. The field-merge save()
+    // ignores it (a retry re-applies the same field idempotently), but the
+    // NON-idempotent addRig (each call assigns a new id) must re-read and reconcile
+    // rather than let a blind retry double-add (clean-room review 7b5ed1d2 P2).
+    | { kind: 'error'; message: string; timedOut?: boolean };
 
 /**
  * Save the rig catalogue via PUT /v1/config. The daemon WHOLE-REPLACES base.Rigs
@@ -183,7 +190,13 @@ export async function saveRigs(
         body: JSON.stringify(patch),
         signal,
     });
-    if (!fetched.ok) return { kind: 'error', message: fetched.message };
+    if (!fetched.ok) {
+        return {
+            kind: 'error',
+            message: fetched.message,
+            timedOut: fetched.kind === 'network' && fetched.timedOut === true,
+        };
+    }
     const body = await readJsonBody(fetched.response);
     if (!fetched.response.ok) {
         const err = isPlainObject(body) ? (body as { message?: string }) : null;

@@ -469,11 +469,21 @@ class RigsState {
         const defaultResolves = fresh.data.rigs.some((r) => r.id === fresh.data.defaultRigId);
         const nextDefault = defaultResolves ? undefined : id;
         const outcome = await saveRigs(nextRigs, nextDefault);
-        this.saving = false;
         if (outcome.kind === 'error') {
+            if (outcome.timedOut) {
+                // Ambiguous: the PUT may already have committed. The immediate add
+                // is NON-idempotent (a retry assigns a NEW id and appends a second
+                // rig), so re-read the authoritative list and reconcile instead of
+                // leaving stale state a blind retry would double-add against
+                // (clean-room review 7b5ed1d2 P2; mirrors #reconcileAfterTimeout).
+                await this.#reconcileAfterAdd(id, model);
+                return;
+            }
+            this.saving = false;
             toasts.error(`Couldn't add a rig: ${outcome.message}`);
             return;
         }
+        this.saving = false;
         this.#applyFetched({
             rigs: nextRigs,
             defaultRigId: nextDefault ?? fresh.data.defaultRigId,
@@ -482,6 +492,31 @@ class RigsState {
         this.selectedId = id; // focus the new rig so the operator can configure it
         this.#ensureDraft();
         toasts.info('Rig added — set its connection, then Save.');
+    }
+
+    // Settle an add whose PUT timed out: re-read the daemon's authoritative list.
+    // If our rig (the id we assigned + our model) landed, adopt it — the add
+    // committed; otherwise report that it didn't take effect, so the operator can
+    // retry safely without double-adding. Either way we never leave a stale list on
+    // screen that a blind retry would append a second same-model rig to.
+    async #reconcileAfterAdd(id: number, model: string): Promise<void> {
+        const reread = await fetchRigs();
+        this.saving = false;
+        if (reread.kind === 'error') {
+            toasts.error(
+                'Add timed out and the rig list could not be re-read — reload Settings to check.'
+            );
+            return;
+        }
+        this.#applyFetched(reread.data);
+        const landed = reread.data.rigs.some((r) => r.id === id && r.model === model);
+        if (landed) {
+            this.selectedId = id;
+            this.#ensureDraft();
+            toasts.warn('Add timed out, but the rig was created — set its connection, then Save.');
+        } else {
+            toasts.warn('Add timed out and did not take effect — try again.');
+        }
     }
 
     // Apply a fetched rigs payload + reconcile the selection against the list.
