@@ -30,11 +30,6 @@ frontend/logging/dist/*
 frontend/app/node_modules/
 frontend/app/dist/*
 !frontend/app/dist/index.html
-# Config SPA — same rule as logging: node_modules untracked, dist/ built by
-# Vite, dist/index.html committed so `//go:embed all:config/dist` compiles.
-frontend/config/node_modules/
-frontend/config/dist/*
-!frontend/config/dist/index.html
 # Logbook SPA — same rule as logging: node_modules untracked, dist/ built by
 # Vite, dist/index.html committed so `//go:embed all:logbook/dist` compiles.
 frontend/logbook/node_modules/

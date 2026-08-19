@@ -9,12 +9,15 @@
 // (except for a placeholder index.html that ships with the scaffold so
 // the embed compiles before the first npm build runs locally).
 //
-// The legacy logging SPA that once owned the root ("/") was retired
-// 2026-07-21: its embed + route are gone and "/" now redirects to the
-// app SPA at "/app/". Its source was deleted 2026-08-18 once its
-// operator-significant behavior was ported into the app; the tree is
-// preserved under the `legacy-logging-spa-retired` tag (see
-// docs/work/W-0003).
+// Two former SPAs are gone. The legacy logging SPA that once owned the
+// root ("/") was retired 2026-07-21: its embed + route are gone and "/"
+// now redirects to the app SPA at "/app/". The standalone config SPA
+// (once served under "/config/") was retired 2026-08-19: its embed +
+// route are gone and "/config" now redirects to the app's Settings at
+// "/app/config". Both source trees were deleted once their
+// operator-significant behavior was ported into the app, and are
+// preserved under the `legacy-logging-spa-retired` and
+// `legacy-config-spa-retired` tags (see docs/work/W-0003).
 //
 // See docs/v2-design/frontend-spa.md for the full design.
 package frontend

@@ -34,9 +34,10 @@ The consolidation is nevertheless incomplete:
 
 The `frontend/logging` source tree was DELETED on 2026-08-18 after its operator-significant behavior
 was ported and characterized (see "Logging SPA retirement" below). The `frontend/config` route,
-embed, and build gates were retired 2026-08-19 once its parity gaps were restored (see "Config SPA
-retirement" below); its source tree deletion + preservation tag follow in the same retirement. The
-`frontend/logbook` source tree remains as parity evidence for its still-pending retirement. Source
+embed, and build gates were retired 2026-08-19 once its parity gaps were restored, and its source
+tree was then DELETED (see "Config SPA retirement" below), preserved under the
+`legacy-config-spa-retired` tag. The `frontend/logbook` source tree remains as parity evidence for
+its still-pending retirement. Source
 presence is not itself the defect: live routes, embedded assets, and mandatory build gates are the
 retirement boundary.
 
@@ -113,9 +114,12 @@ when the app moves to the canonical root and `/config` becomes the shell route i
 release/dev/local-CI SPA loops. The canonical HTTP reference
 ([`api-endpoints.md`](../v2-design/api-endpoints.md)) changed in the same commit.
 
-**Preservation + deletion:** annotated tag **`legacy-config-spa-retired`** on the last commit still
-containing the tree; `git show legacy-config-spa-retired` recovers the full source. Physical deletion
-of `frontend/config` + the docs/catalog scrub follow in the same retirement.
+**Preservation + deletion:** the `frontend/config` source tree was DELETED after the boundary
+removal. Preservation: annotated tag **`legacy-config-spa-retired`** on the last commit that still
+contained the tree (`feccc67eff39aacee48eb8f141418ad6b03b0e7f`); `git show legacy-config-spa-retired`
+recovers the full source, which is why the per-file archaeology is not duplicated in the live docs.
+The `docs/catalog.json` and `docs/README.md` `frontend/config/**` scopes were dropped (the app config
+code at `frontend/app/src/lib/config/**` remains scoped), and the live design docs were scrubbed.
 
 ## Scope
 
