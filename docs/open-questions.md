@@ -9,3 +9,9 @@ The evidence database is implemented, but how do we use and view the data contai
 ## What is the status of the other rigdef and code capabilities in relation to the FTdx10
 
 I suspect that the other codex (CIV) and rigdefs are out of sync
+
+## Not a question: Antenna list
+
+Should Sm have an Antenna list by which an antenna could be referenced for MY_ANT, and
+the evidence band mappings?
+
