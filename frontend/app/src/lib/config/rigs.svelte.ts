@@ -585,21 +585,23 @@ class RigsState {
         // entry can't keep anyDirty true for a rig that no longer exists.
         delete this.drafts[id];
         delete this.baselines[id];
-        // #applyFetched reconciles the selection if the deleted rig was selected.
+        // #applyFetched reconciles the selection if the deleted rig was selected AND
+        // drafts the survivor (so the editor stays visible — see its note).
         this.#applyFetched({
             rigs: nextRigs,
             defaultRigId: nextDefault ?? fresh.data.defaultRigId,
             catalogue: fresh.data.catalogue,
         });
-        // Ensure the survivor the selection fell back to has a draft: on load only
-        // the SELECTED rig is drafted, so deleting the selected default would leave
-        // `selected` set but `draft` null, hiding the whole editor until it's
-        // re-clicked (clean-room review 1e3a7bed P2).
-        this.#ensureDraft();
         toasts.info('Rig deleted.');
     }
 
-    // Apply a fetched rigs payload + reconcile the selection against the list.
+    // Apply a fetched rigs payload, reconcile the selection against the list, and
+    // ensure that selection has a draft. Folding #ensureDraft in makes EVERY caller
+    // that can move the selection — save, add, delete (all its branches), the add
+    // reconcile — leave a usable draft: on load only the selected rig is drafted, so
+    // any path that reselects a survivor must draft it or RigsSection's
+    // `{#if selected && draft}` hides the whole editor (clean-room review 825983c2
+    // P2; the hand-copied #ensureDraft it replaced missed the already-removed branch).
     #applyFetched(data: {
         rigs: RigConfig[];
         defaultRigId: number;
@@ -631,6 +633,9 @@ class RigsState {
                 ? this.defaultRigId
                 : (this.rigs[0]?.id ?? null);
         }
+        // A reconciled survivor may have no draft yet — give it one so the editor
+        // stays visible (a no-op when a draft already exists).
+        this.#ensureDraft();
     }
 
     // Ensure the current selection has a draft (lazy clone; preserves an existing

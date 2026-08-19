@@ -1132,6 +1132,32 @@ describe('rigsState', () => {
         expect(rigsState.rigs.map((r) => r.id)).toEqual([1]); // adopts the fresh list
     });
 
+    it('deleting the SELECTED rig that was concurrently removed drafts the survivor', async () => {
+        // The reviewer's already-removed-while-selected case (clean-room 825983c2 P2):
+        // rig 1 is the default → selected + the only drafted rig on load. If it's gone
+        // on the fresh re-fetch, the early-return branch reconciles the selection to a
+        // survivor, which must be freshly drafted or the editor hides.
+        let get = 0;
+        const puts = mockCluster(() => {
+            get++;
+            const rigs =
+                get === 1
+                    ? [
+                          { id: 1, model: 'ic7300', port: '/dev/a' },
+                          { id: 2, model: 'ftdx10', port: '/dev/b' },
+                      ]
+                    : [{ id: 2, model: 'ftdx10', port: '/dev/b' }]; // rig 1 removed concurrently
+            return { default_rig_id: get === 1 ? 1 : 2, rigs, catalogue: [] };
+        });
+        await rigsState.load();
+        expect(rigsState.selectedId).toBe(1); // default pre-selected + drafted
+        await rigsState.deleteRig(1); // rig 1 already gone on the fresh fetch
+
+        expect(puts).toHaveLength(0); // nothing to write (already removed)
+        expect(rigsState.selectedId).toBe(2); // reselected to the survivor
+        expect(rigsState.draft).not.toBeNull(); // …and drafted, so the editor stays visible
+    });
+
     it('deleting the selected rig reconciles the selection to a survivor', async () => {
         mockCluster({
             default_rig_id: 1,
