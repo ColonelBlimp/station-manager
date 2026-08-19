@@ -162,6 +162,19 @@ class RigsState {
         return this.catalogue[rig.model]?.name ?? rig.model;
     }
 
+    // The model a newly-added rig should default to: the first catalogue rigdef
+    // not already configured (so Add doesn't silently clone a model), falling back
+    // to the first catalogue entry when every model is in use, or '' when the
+    // catalogue is empty (Add is then disabled). The Rigs section confirms before
+    // adding when this returns an in-use model. Mirrors the config SPA's
+    // nextRigModel; "used" is the committed list (unsaved model edits are transient
+    // and the add re-fetches anyway).
+    nextRigModel(): string {
+        const used = new Set(this.rigs.map((r) => r.model));
+        const keys = Object.keys(this.catalogue);
+        return keys.find((k) => !used.has(k)) ?? keys[0] ?? '';
+    }
+
     // The effective FT8-mode label. Ft8Mode is *string daemon-side with THREE
     // states (types.RigConfig): nil/absent → inherit the rigdef default; an
     // EXPLICIT "" → "leave the rig's current mode" (no switch); any other value
@@ -423,6 +436,52 @@ class RigsState {
         }
         this.defaultRigId = id;
         toasts.info('Default rig set — restart to connect to it.');
+    }
+
+    // Add a rig — an IMMEDIATE structural write (operator ruling 2026-08-19: the
+    // app's per-rig field-merge model has no section Save, and Set-default already
+    // writes immediately, so Add follows that pattern rather than a pending draft).
+    // Creates a blank rig; the operator then configures its connection and Saves via
+    // the normal per-rig editor. `model` comes from nextRigModel via the section's
+    // duplicate-confirm handler.
+    //
+    // Data safety: RE-FETCH first and append onto the FRESH list (never the mount
+    // snapshot), exactly like save(), so a concurrent add/edit to another rig
+    // survives the whole-replace. The re-fetch→PUT is not atomic — same accepted
+    // last-writer-wins window as save() (a second client in the millisecond gap).
+    async addRig(model: string): Promise<void> {
+        if (this.saving || this.settingDefault || !this.loaded || model === '') return;
+        this.saving = true;
+        const fresh = await fetchRigs();
+        if (fresh.kind === 'error') {
+            this.saving = false;
+            toasts.error(`Couldn't add a rig: refreshing the list failed (${fresh.message}).`);
+            return;
+        }
+        // Client-assigned id: max over the FRESH list + 1 (ids are >0 and unique).
+        const id = fresh.data.rigs.reduce((m, r) => Math.max(m, r.id), 0) + 1;
+        const newRig: RigConfig = { id, model, port: '' };
+        const nextRigs = [...fresh.data.rigs, newRig];
+        // First rig becomes the active default: the daemon 400s on an unresolvable
+        // default_rig_id, so when the fresh default doesn't resolve (empty list, or
+        // a dangling id) point it at the new rig. Otherwise OMIT default_rig_id so a
+        // concurrent active-rig change isn't clobbered (presence-aware, like save()).
+        const defaultResolves = fresh.data.rigs.some((r) => r.id === fresh.data.defaultRigId);
+        const nextDefault = defaultResolves ? undefined : id;
+        const outcome = await saveRigs(nextRigs, nextDefault);
+        this.saving = false;
+        if (outcome.kind === 'error') {
+            toasts.error(`Couldn't add a rig: ${outcome.message}`);
+            return;
+        }
+        this.#applyFetched({
+            rigs: nextRigs,
+            defaultRigId: nextDefault ?? fresh.data.defaultRigId,
+            catalogue: fresh.data.catalogue,
+        });
+        this.selectedId = id; // focus the new rig so the operator can configure it
+        this.#ensureDraft();
+        toasts.info('Rig added — set its connection, then Save.');
     }
 
     // Apply a fetched rigs payload + reconcile the selection against the list.

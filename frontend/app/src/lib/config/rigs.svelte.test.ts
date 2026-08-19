@@ -763,6 +763,139 @@ describe('rigsState', () => {
         expect(puts.length).toBe(0); // save refused — no overlapping connection PUT
     });
 
+    it('nextRigModel picks the first unused catalogue model, falling back to the first', async () => {
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+            catalogue: [
+                { id: 'ic7300', name: 'IC-7300' },
+                { id: 'ftdx10', name: 'FTdx10' },
+            ],
+        });
+        await rigsState.load();
+        expect(rigsState.nextRigModel()).toBe('ftdx10'); // ic7300 in use ⇒ first unused
+
+        // every model in use ⇒ fall back to the first catalogue entry
+        rigsState.rigs = [
+            { id: 1, model: 'ic7300', port: '/dev/a' },
+            { id: 2, model: 'ftdx10', port: '/dev/b' },
+        ];
+        expect(rigsState.nextRigModel()).toBe('ic7300');
+    });
+
+    it('addRig appends a rig with id = max(fresh)+1, blank port, and PUTs the whole list', async () => {
+        const puts = mockCluster({
+            default_rig_id: 1,
+            rigs: [
+                { id: 1, model: 'ic7300', port: '/dev/a' },
+                { id: 3, model: 'ftdx10', port: '/dev/b' }, // sparse ids — max is 3, not length
+            ],
+            catalogue: [
+                { id: 'ic7300', name: 'IC-7300' },
+                { id: 'ftdx10', name: 'FTdx10' },
+            ],
+        });
+        await rigsState.load();
+        await rigsState.addRig('ic7300');
+
+        expect(puts).toHaveLength(1);
+        const sent = JSON.parse(puts[0]) as {
+            rigs: Array<Record<string, unknown>>;
+            default_rig_id?: number;
+        };
+        expect(sent.rigs.map((r) => r.id)).toEqual([1, 3, 4]); // max(1,3)+1 = 4
+        expect(sent.rigs.find((r) => r.id === 4)).toEqual({ id: 4, model: 'ic7300', port: '' });
+        expect('default_rig_id' in sent).toBe(false); // existing default resolves ⇒ untouched
+        expect(rigsState.selectedId).toBe(4); // new rig focused for configuration
+        expect(rigsState.dirty).toBe(false); // fresh draft == baseline (not spuriously dirty)
+    });
+
+    it('adding the FIRST rig makes it the active default (default_rig_id sent)', async () => {
+        const puts = mockCluster({
+            default_rig_id: 0,
+            rigs: [],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        expect(rigsState.rigs).toHaveLength(0);
+        await rigsState.addRig('ftdx10');
+
+        const sent = JSON.parse(puts[0]) as {
+            rigs: Array<{ id: number }>;
+            default_rig_id?: number;
+        };
+        expect(sent.rigs.map((r) => r.id)).toEqual([1]);
+        expect(sent.default_rig_id).toBe(1); // daemon 400s on an unresolvable default_rig_id
+        expect(rigsState.defaultRigId).toBe(1);
+    });
+
+    it('addRig appends onto the FRESH list, preserving a concurrent add', async () => {
+        let get = 0;
+        const puts = mockCluster(() => {
+            get++;
+            const rigs: Array<Record<string, unknown>> = [
+                { id: 1, model: 'ic7300', port: '/dev/a' },
+            ];
+            // between load (get 1) and the add re-fetch (get 2) another client added rig 5
+            if (get >= 2) rigs.push({ id: 5, model: 'ftdx10', port: '/dev/CONCURRENT' });
+            return {
+                default_rig_id: 1,
+                rigs,
+                catalogue: [
+                    { id: 'ic7300', name: 'IC-7300' },
+                    { id: 'ftdx10', name: 'FTdx10' },
+                ],
+            };
+        });
+        await rigsState.load();
+        await rigsState.addRig('ic7300');
+
+        const sent = JSON.parse(puts[0]) as { rigs: Array<{ id: number; port?: string }> };
+        // the concurrent rig 5 survives, and the new id is max(1,5)+1 = 6
+        expect(sent.rigs.map((r) => r.id)).toEqual([1, 5, 6]);
+        expect(sent.rigs.find((r) => r.id === 5)?.port).toBe('/dev/CONCURRENT');
+    });
+
+    it('addRig surfaces a daemon rejection and does not add the rig locally', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn((url: string, init?: RequestInit) => {
+                if (init?.method === 'PUT') {
+                    return Promise.resolve(
+                        new Response(JSON.stringify({ message: 'rig invalid' }), {
+                            status: 400,
+                            headers: { 'Content-Type': 'application/json' },
+                        })
+                    );
+                }
+                const body = url.includes('/v1/hardware')
+                    ? { serial_ports: [], audio: { available: false } }
+                    : {
+                          default_rig_id: 1,
+                          rigs: [{ id: 1, model: 'ic7300', port: '/dev/a' }],
+                          catalogue: [{ id: 'ic7300', name: 'IC-7300' }],
+                      };
+                return Promise.resolve(
+                    new Response(JSON.stringify(body), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+            })
+        );
+        await rigsState.load();
+        await rigsState.addRig('ic7300');
+        expect(rigsState.rigs.map((r) => r.id)).toEqual([1]); // unchanged — the add was rejected
+        expect(rigsState.saving).toBe(false); // and the section isn't stuck saving
+    });
+
+    it('addRig is a no-op when there is no model to add (empty catalogue)', async () => {
+        const puts = mockCluster({ default_rig_id: 0, rigs: [], catalogue: [] });
+        await rigsState.load();
+        await rigsState.addRig(rigsState.nextRigModel()); // '' ⇒ no-op
+        expect(puts).toHaveLength(0);
+    });
+
     // A failed RELOAD marks the section unloaded, not just errored. Settings is
     // mounted behind a router branch (App.svelte:100), so leaving unmounts it
     // while this module — a singleton — survives; returning re-fires onMount →

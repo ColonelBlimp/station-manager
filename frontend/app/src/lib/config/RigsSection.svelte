@@ -3,8 +3,8 @@
     // master-detail: the rig list on the left, a details panel on the right. The
     // model, per-rig FT8-mode / MY_RIG overrides, and the CONNECTION (serial port +
     // audio RX/TX via /v1/hardware pickers) are editable, saved via a whole-catalogue
-    // PUT (see rigs.svelte.ts data-safety note). Add / delete land in a follow-up
-    // increment.
+    // PUT (see rigs.svelte.ts data-safety note). Add is an immediate structural write
+    // (creates a blank rig to configure); delete lands in a follow-up increment.
     import { onMount } from 'svelte';
     import { rigsState } from './rigs.svelte';
     import { bridgeEnabledState } from './bridgeEnabled.svelte';
@@ -16,6 +16,25 @@
         void rigsState.load();
         void bridgeEnabledState.load();
     });
+
+    // Add a rig — an immediate structural write (rigsState.addRig re-fetches + PUTs
+    // a blank rig, then the operator configures + Saves it). nextRigModel picks an
+    // unused catalogue model; if only in-use models remain, confirm before adding a
+    // same-model clone (matches the config SPA's onAddRig). The confirm lives here,
+    // not in the state module, so the state stays free of DOM globals.
+    async function onAddRig() {
+        const model = rigsState.nextRigModel();
+        if (!model) return; // empty catalogue — nothing to add (the button is disabled too)
+        if (rigsState.rigs.some((r) => r.model === model)) {
+            const name = rigsState.catalogue[model]?.name ?? model;
+            if (
+                !window.confirm(`A "${name}" is already configured. Add another of the same model?`)
+            ) {
+                return;
+            }
+        }
+        await rigsState.addRig(model);
+    }
 </script>
 
 {#snippet row(label: string, value: string, mono = false)}
@@ -100,51 +119,76 @@
         <div
             class="grid min-h-[40vh] place-items-center rounded-xl border border-dashed border-line"
         >
-            <p class="text-sm text-muted">No rigs configured.</p>
+            <div class="text-center">
+                <p class="text-sm text-muted">No rigs configured.</p>
+                <!-- Add the FIRST rig: addRig makes it the active default (the daemon
+                     400s on an unresolvable default_rig_id). Disabled with no catalogue
+                     (nextRigModel would return '' and addRig would no-op). -->
+                <button
+                    class="btn btn-primary mt-3"
+                    disabled={rigsState.saving || Object.keys(rigsState.catalogue).length === 0}
+                    onclick={onAddRig}
+                >
+                    {rigsState.saving ? 'Adding…' : 'Add rig'}
+                </button>
+            </div>
         </div>
     {:else}
         <div class="flex gap-6">
-            <!-- Master: rig list -->
-            <ul class="w-64 shrink-0 space-y-1">
-                {#each rigsState.rigs as rig (rig.id)}
-                    <li>
-                        <button
-                            class="w-full rounded-md border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 {rigsState.selectedId ===
-                            rig.id
-                                ? 'border-focus bg-surface-muted'
-                                : 'border-line hover:bg-surface-muted'}"
-                            disabled={rigsState.saving}
-                            onclick={() => rigsState.select(rig.id)}
-                        >
-                            <div class="flex items-center gap-2">
-                                <span class="font-medium text-ink">{rigsState.nameFor(rig)}</span>
-                                {#if rig.id === rigsState.defaultRigId}
-                                    <span
-                                        class="ml-auto inline-flex items-center gap-0.5 rounded border border-green-500/40 bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-green-700 uppercase dark:bg-green-500/10 dark:text-green-400"
+            <!-- Master: rig list + Add -->
+            <div class="w-64 shrink-0">
+                <ul class="space-y-1">
+                    {#each rigsState.rigs as rig (rig.id)}
+                        <li>
+                            <button
+                                class="w-full rounded-md border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 {rigsState.selectedId ===
+                                rig.id
+                                    ? 'border-focus bg-surface-muted'
+                                    : 'border-line hover:bg-surface-muted'}"
+                                disabled={rigsState.saving}
+                                onclick={() => rigsState.select(rig.id)}
+                            >
+                                <div class="flex items-center gap-2">
+                                    <span class="font-medium text-ink"
+                                        >{rigsState.nameFor(rig)}</span
                                     >
-                                        <svg
-                                            viewBox="0 0 20 20"
-                                            fill="currentColor"
-                                            aria-hidden="true"
-                                            class="size-3"
+                                    {#if rig.id === rigsState.defaultRigId}
+                                        <span
+                                            class="ml-auto inline-flex items-center gap-0.5 rounded border border-green-500/40 bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-green-700 uppercase dark:bg-green-500/10 dark:text-green-400"
                                         >
-                                            <path
-                                                fill-rule="evenodd"
-                                                d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
-                                                clip-rule="evenodd"
-                                            />
-                                        </svg>
-                                        default
-                                    </span>
-                                {/if}
-                            </div>
-                        </button>
-                    </li>
-                {/each}
-            </ul>
+                                            <svg
+                                                viewBox="0 0 20 20"
+                                                fill="currentColor"
+                                                aria-hidden="true"
+                                                class="size-3"
+                                            >
+                                                <path
+                                                    fill-rule="evenodd"
+                                                    d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
+                                                    clip-rule="evenodd"
+                                                />
+                                            </svg>
+                                            default
+                                        </span>
+                                    {/if}
+                                </div>
+                            </button>
+                        </li>
+                    {/each}
+                </ul>
+                <!-- + Add rig — immediate write (onAddRig). Sits under the list like
+                     the config SPA; disabled while a save/add is in flight. -->
+                <button
+                    class="mt-2 w-full rounded-md border border-dashed border-line px-3 py-2 text-sm font-medium text-muted hover:border-focus hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={rigsState.saving}
+                    onclick={onAddRig}
+                >
+                    {rigsState.saving ? 'Adding…' : '+ Add rig'}
+                </button>
+            </div>
 
             <!-- Detail: model + per-rig FT8-mode/MY_RIG + the CONNECTION (port +
-                 audio, via /v1/hardware pickers) are editable. Add / delete land in a
+                 audio, via /v1/hardware pickers) are editable. Delete lands in a
                  follow-up increment. -->
             <div class="min-w-0 flex-1">
                 {#if rigsState.selected && rigsState.draft}
