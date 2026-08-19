@@ -69,6 +69,21 @@ function patchOptional(
     else patched[key] = v;
 }
 
+// A rig's restart-relevant canonical string: every field EXCEPT my_rig. The
+// bridge binds model/port/audio/serial overrides at startup and the FT8
+// subsystem reads ft8_mode there, so a change to any of them needs a daemon
+// restart to take effect. MY_RIG alone is resolved LIVE, per QSO, at submit
+// (qsoservice ResolveMyRigFor), so a MY_RIG-only edit applies without a restart.
+// Mirrors the config SPA's restartRelevant (canonRig sans my_rig), the parity
+// source, so the app doesn't mis-report a pure MY_RIG change as restart-only
+// (clean-room review 8c42755e P3). Order-sensitive raw JSON, consistent with the
+// `dirty` compare (the app deliberately has no canonicalisation layer).
+function restartRelevant(rig: RigConfig): string {
+    const rest: Record<string, unknown> = { ...rig };
+    delete rest.my_rig;
+    return JSON.stringify(rest);
+}
+
 class RigsState {
     loading = $state(false);
     loaded = $state(false);
@@ -128,6 +143,16 @@ class RigsState {
             const b = this.baselines[id];
             return b !== undefined && JSON.stringify(this.drafts[id]) !== JSON.stringify(b);
         })
+    );
+
+    // Of the SELECTED rig's unsaved edits, do any require a daemon restart? True
+    // when the draft differs from its baseline in a field OTHER than my_rig (see
+    // restartRelevant). Gates the "restart to apply" note + save toast so a pure
+    // MY_RIG edit — resolved live per QSO — doesn't prompt a needless restart.
+    restartDirty = $derived(
+        this.draft && this.selectedId !== null && this.baselines[this.selectedId]
+            ? restartRelevant(this.draft) !== restartRelevant(this.baselines[this.selectedId])
+            : false
     );
 
     defFor(rig: RigConfig): RigDef | undefined {
@@ -237,8 +262,19 @@ class RigsState {
     // ft8_mode / my_rig — optional per-rig overrides. Empty ⇒ DELETE the key
     // (inherit the rigdef default), never store '' or null: the dirty compare is
     // raw JSON, so a cleared override must match the loaded-absent form (no spurious
-    // dirty). Inherit-only, matching the config SPA — the explicit-"" "leave current
-    // mode" state stays a config.json hand-edit (see ft8ModeFor).
+    // dirty). Inherit-only, matching the config SPA — the explicit-"" state
+    // (ft8_mode "" = "leave the rig's current mode"; my_rig "" = suppress MY_RIG)
+    // stays a config.json hand-edit that neither editor can author (see ft8ModeFor).
+    //
+    // ACCEPTED (clean-room review 8c42755e P2, config-SPA parity): this two-states-
+    // to-the-UI mapping is the SAME limitation the config SPA has — its canonRig
+    // treats ft8_mode "" as identical to absent, so it can neither represent nor
+    // preserve an explicit "" across an edit either. A rig loaded WITH an explicit
+    // "" that the operator never touches is preserved regardless, because
+    // patchOptional is change-gated (base "" === draft "" ⇒ no-op ⇒ the fresh
+    // server value, still "", is kept). Only actively editing-then-clearing the
+    // field converts "" → inherit — exactly the config SPA's behaviour. Faithful
+    // parity is the retirement goal; representing the tri-state would exceed it.
     setDraftFt8Mode(v: string): void {
         const d = this.draft;
         if (!d) return;
@@ -344,6 +380,10 @@ class RigsState {
         patchOptional(patched, base, d, 'ft8_mode');
         patchOptional(patched, base, d, 'my_rig');
 
+        // Did the operator change anything that binds at startup? If only MY_RIG
+        // moved, the daemon picks it up live per QSO — don't tell them to restart.
+        const restartNeeded = restartRelevant(base) !== restartRelevant(d);
+
         const next = fresh.data.rigs.map((r) => (r.id === id ? patched : r));
 
         const outcome = await saveRigs(next); // no default_rig_id — active rig untouched
@@ -357,7 +397,14 @@ class RigsState {
         this.#applyFetched({ ...fresh.data, rigs: next });
         this.baselines[id] = cloneRig(patched);
         this.drafts[id] = cloneRig(patched);
-        toasts.info('Rig connection saved — restart the daemon to reconnect.');
+        toasts.info(
+            restartNeeded
+                ? 'Rig saved — restart the daemon to apply.'
+                : // MY_RIG is resolved live per QSO, so no restart instruction here.
+                  // Not "applies to the next QSO": the daemon stamps only the ACTIVE
+                  // rig's MY_RIG, and the SPA can't tell which rig is truly active.
+                  'MY_RIG saved.'
+        );
     }
 
     // Set the active/default rig. Sends ONLY default_rig_id (a single-field PUT),

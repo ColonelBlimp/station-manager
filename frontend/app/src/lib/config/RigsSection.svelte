@@ -320,8 +320,10 @@
 
                     <!-- Shared action footer — rigsState.dirty spans the WHOLE draft,
                          so this Save/Cancel covers both the connection edits and the
-                         mode-mapping overrides. -->
-                    {#if rigsState.dirty}
+                         mode-mapping overrides. The restart note is gated on
+                         restartDirty (not dirty): a pure MY_RIG edit is resolved live
+                         per QSO, so it needs no restart and must not claim one. -->
+                    {#if rigsState.restartDirty}
                         <p class="mt-4 max-w-md text-xs text-muted">
                             Changes take effect after a daemon restart.
                         </p>

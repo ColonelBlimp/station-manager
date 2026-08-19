@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rigsState } from './rigs.svelte';
+import { toasts } from '../ui/toasts.svelte';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -312,6 +313,58 @@ describe('rigsState', () => {
         );
         expect(s1?.ft8_mode).toBe('DATA-U');
         expect(s1?.my_rig).toBe('FTDX10 #2');
+    });
+
+    it('a pure MY_RIG edit is NOT restart-relevant (resolved live); other fields are', async () => {
+        // MY_RIG is resolved per QSO at submit (qsoservice ResolveMyRigFor), so a
+        // MY_RIG-only change applies live — no daemon restart. Everything else
+        // (model / port / audio / ft8_mode / serial) binds at startup. Mirrors the
+        // config SPA's restartRelevant (canonRig sans my_rig). (clean-room 8c42755e P3)
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+
+        rigsState.setDraftMyRig('FTDX10 #2');
+        expect(rigsState.dirty).toBe(true); // it IS an unsaved change…
+        expect(rigsState.restartDirty).toBe(false); // …but no restart is owed
+
+        rigsState.setDraftFt8Mode('DATA-U'); // ft8_mode binds at startup
+        expect(rigsState.restartDirty).toBe(true);
+    });
+
+    it('a MY_RIG-only save reports a live change, not a daemon restart', async () => {
+        const info = vi.spyOn(toasts, 'info');
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftMyRig('FTDX10 #2'); // the ONLY edit
+        await rigsState.save();
+
+        expect(info).toHaveBeenCalledTimes(1);
+        expect(info.mock.calls[0][0]).not.toMatch(/restart/i); // MY_RIG applies per QSO
+    });
+
+    it('a connection/ft8_mode save reports that a daemon restart is needed', async () => {
+        const info = vi.spyOn(toasts, 'info');
+        mockCluster({
+            default_rig_id: 1,
+            rigs: [{ id: 1, model: 'ftdx10', port: '/dev/a' }],
+            catalogue: [{ id: 'ftdx10', name: 'FTdx10', ft8_mode: 'DATA-U' }],
+        });
+        await rigsState.load();
+        rigsState.select(1);
+        rigsState.setDraftFt8Mode('RTTY-U'); // binds at startup ⇒ restart owed
+        await rigsState.save();
+
+        expect(info.mock.calls[0][0]).toMatch(/restart/i);
     });
 
     it('typing then clearing an inherited override returns to not-dirty (delete-key)', async () => {
