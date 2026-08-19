@@ -102,4 +102,18 @@ describe('bridgeEnabledState (CAT master switch)', () => {
         expect(bridgeEnabledState.loaded).toBe(false);
         expect(bridgeEnabledState.error).not.toBe('');
     });
+
+    it('a failed RELOAD after a successful one clears loaded (error+retry not shadowed)', async () => {
+        mockDaemon(true);
+        await bridgeEnabledState.load();
+        expect(bridgeEnabledState.loaded).toBe(true);
+
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.resolve(new Response('{}', { status: 503 })))
+        );
+        await bridgeEnabledState.load();
+        expect(bridgeEnabledState.loaded).toBe(false); // invalidated ⇒ error branch reachable
+        expect(bridgeEnabledState.error).not.toBe('');
+    });
 });

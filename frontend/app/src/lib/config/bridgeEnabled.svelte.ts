@@ -26,6 +26,12 @@ class BridgeEnabledState {
     async load(): Promise<void> {
         if (this.loading) return;
         this.loading = true;
+        // Invalidate before awaiting: a pending or FAILED reload must not leave the
+        // last-loaded value on screen as though current. Without this, a failed
+        // remount reload keeps `loaded` true, so RigsSection's error+Retry branch is
+        // shadowed and a stale, interactive toggle stays on screen (clean-room review
+        // 7f7ef966 P2 — same rule stationState/etc. follow).
+        this.loaded = false;
         this.error = '';
         const res = await fetchBridgeEnabled();
         this.loading = false;
