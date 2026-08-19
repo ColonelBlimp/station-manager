@@ -1,1272 +1,614 @@
-# Config System — review + redesign
+# Configuration contract
 
-> **Status:** review complete; redesign **decided across §9–15** (2026-06-13);
-> **implementation in progress.** §1–8 are the current-state review; §9–15 are the redesign
-> decisions. Implementation so far: **§13 version/migration scaffold + §10 per-rig moves 2a–2d
-> SHIPPED**, plus loose-block removal (`bridge.serial`/`cat` → `*omitempty`) + a canonicalising
-> `Normalize` that drops rig overrides equal to the rigdef default (see §10.5; §10's 2e audio is
-> deferred to the config-SPA workstream). **§12 validation
-> unification SHIPPED** (§12a consolidation + §12b rig/field rules + the `Validate`/`Normalize` PUT
-> rewire — see §12 status). **§13 versioning/migration scaffold SHIPPED** (§13.6). **§15 persistence
-> shape SETTLED** — sparse-on-disk rejected; filled-on-disk kept, default-value drift handled by a
-> §13 migration with the equals-old-default guard (no code — §15.2/§15.4). **§11 reload — decided,
-> general OnChange/Reload mechanism GATED on the config-SPA write path** (see §11.5); one field,
-> `ft8_max_repeats`, is live-applied today via a targeted setter (2026-07-03), not the general mechanism. **§14 defaults — §14a consolidation shipped; §14b `*T` fold stays
-> deferred** (sparse was its only justification — see §14.5 / §15.2); §14's defaults-fill
-> consolidation is the only remaining optional code item. Multi-rig / N-writer parked (§8).
->
-> **Method:** the **Go code is the source of truth** for everything below. On-disk
-> `config.json` files (dev `build/config.json`, dogfood `~/.local/share/station-manager/config.json`)
-> drift from the code and from each other and are **not** authoritative — that drift is
-> itself a finding (§7). Every entry traces to a symbol in the cited file.
->
-> This is the consolidation point the config system never had: prior decisions are
-> scattered across ADR 0002 (SPA config shape), 0003 (daemon-only source), 0004
-> (daemon/SPA split), 0028 (rig profiles) and `rig-profiles.md`, with no single owner.
+**Status:** Canonical current reference
+**Authority:** The Go types and behavior under `internal/config`, plus the
+configuration handlers under `internal/api`, are authoritative when this document
+disagrees with code.
+**Scope:** `config.json` shape, ownership, defaults, validation, migration,
+persistence, and runtime application. HTTP route detail belongs in
+[`api-endpoints.md`](api-endpoints.md); subsystem detail belongs in its own canonical
+reference.
 
-## 1. Scope & method
+## 1. File location and authority
 
-- **Authority = code.** Structs, `applyDefaults`, `Resolve*`, `validate*`, and the
-  subsystem reads define the system; config.json is just one (often stale) serialization.
-- **Rigdefs are an immutable substrate.** `internal/cat/rigs/*.json` are `//go:embed`-ed
-  at build time (`internal/cat/rigdb.go`); the operator cannot edit them (external-dir
-  loading is an unimplemented stub). They are **in scope as a truth/defaults source**
-  (CAT command/state tables, serial defaults, mode-mapping defaults that config.json
-  *overrides*) but **out of scope as a mutable-config target**.
-- **In scope:** `internal/config/config.go`, the `types.*Config` structs, the
-  `GET/PUT /v1/config` handler, the SPA config mirror, and how each subsystem reads config.
-- **Out of scope (this phase):** any redesign decision (§8) and any code change.
+`smd` uses one JSON configuration file. `--config` selects it explicitly; otherwise
+the daemon resolves `config.json` under `utils.WorkingDir()` (`$SM_WORKING_DIR`, the
+platform data directory, or the executable directory according to the startup path).
+Runtime data paths derive from that same working-directory decision.
 
-## 2. Source-of-truth map
+The file is daemon-owned while `smd` is running. A successful configuration PUT
+rewrites the whole document from the daemon's in-memory snapshot, so do not hand-edit
+the file concurrently with the daemon. Stop the daemon for direct edits.
 
-Where authority *actually* lives in code, per category. "config.json" below means the
-in-memory `config.Config` loaded from it — not the file as found on disk.
+Configuration owns operator intent and selectors. It does not duplicate:
 
-| Category | Authority | Where (code) | Notes |
-|---|---|---|---|
-| Server / HTTP tunables | config.json | `config.go` `ServerConfig` + `applyDefaults` | All overridable; consts are fallbacks |
-| Datastore (sqlite path, pool) | config.json | `types.DatastoreConfig` + `applyDefaults` | Read once at startup |
-| Logging | config.json | `types.LoggingConfig` + `DefaultConfig`/`applyDefaults` | |
-| Operator identity (ADIF `MY_*`) | config.json | `Config.LoggingStation` (`types.LoggingStation`) | `MyLat`/`MyLon` daemon-derived from `MyGridsquare` on PUT |
-| Station prefs (amp, default power) | config.json | `Config.Station` (`types.StationConfig`) | |
-| Enrichment providers + TTLs | config.json | `Config.Lookup` (`types.EnrichmentConfig`) | |
-| Forwarder destinations | config.json | `Config.Forwarders` | `enabled` gates enqueue (ADR 0039); non-sparse (seeded per registered type); per-action `endpoints` |
-| SMTP / mailer | config.json | `Config.Smtp` (`types.SmtpConfig`) | No PUT path; file-only |
-| **Rig capability** (CAT cmds/states, serial defaults, **mode-mapping defaults**) | **rigdefs (immutable)** | `internal/cat/rigs/*.json` via `cat.rigDB` | Operator overrides layer on top in config.json |
-| Rig identity/selection (model, port, audio) | config.json | `Config.Rigs[]` (`types.RigConfig`) + `DefaultRigID` | Catalogue is authoritative; **no DB rows for rigs** |
-| Mode-mapping **overrides** | config.json | `Config.Bridge.ModeMappings`; merged with rigdef at GET (`bridgeInfoFor`) | Merged view is authoritative; only operator deltas persist |
-| **Logbook metadata** (name, per-logbook callsign, description) | **Database** | `logbook` table; `Config.DefaultLogbookID` is only a selector | DB owns the rows; GET joins them |
-| **Enrichment cache** (country, contacted_station) | **Database** (derived) | `country` / `contacted_station` tables; config TTLs decide staleness | Split: DB owns `last_refreshed_at`, config owns the TTL |
-| **Forwarding queue** | **Database** (ephemeral) | `qso_upload` table; config lists destinations | Split: DB owns per-row state, config owns which destinations exist |
-| Working directory | env → config → exe dir | `utils.WorkingDir(cfg.DataDir)`; `SM_WORKING_DIR` wins | |
-| Runtime config (what subsystems actually run with) | in-memory resolved `Config` | `config.Service.Cfg` via `Snapshot()`; `ActiveBridge()`/`ActiveFt8()` projections | The real runtime authority once loaded |
+- logbook or QSO rows, which are database-owned;
+- CAT commands, parsers, and protocol defaults, which are rig-definition-owned;
+- browser-session state such as the current page or transient FT8 run; or
+- derived runtime objects such as an opened serial port or constructed forwarder.
 
-**Headline:** authority is genuinely split — config.json (operator intent), the DB
-(logbook metadata + caches + queue), rigdefs (rig capability + defaults), and the
-in-memory resolved `Config` (runtime). Treating config.json as *the* source of truth is
-the framing error this review corrects.
+## 2. Load and service model
 
-## 3. Field inventory
+`config.Load` applies one ordered pipeline:
 
-Consumer = who reads it (**D** = a daemon subsystem, **SPA** = served via `/v1/config`
-and mirrored in `configState`, **both**). Lifecycle: **start** = snapshot at
-construction/`Start`; **per-op** = read live each operation (via `Snapshot()`/accessors);
-**served** = sent to the SPA and read reactively. Rig? flags values that are (or
-secretly are) rig-specific.
+1. read the JSON bytes;
+2. migrate the raw document to the supported schema version;
+3. unmarshal into `config.Config`;
+4. apply unambiguous defaults and registered provider/forwarder seeds;
+5. fold compatible legacy rig fields into the rig catalogue;
+6. normalize canonical values and remove redundant overrides; and
+7. run the single `config.Validate` entry point.
 
-### Top-level `Config` (`internal/config/config.go`)
+Any non-warning finding aborts startup. Warning findings are advisory and are logged
+after logging is available. A file from a newer schema version is rejected rather
+than guessed at.
 
-| Field | Consumer | Lifecycle | Rig? | Notes |
-|---|---|---|---|---|
-| `DataDir` | D (datastore, logging) | start | — | Resolved via `utils.WorkingDir` |
-| `UserAgent` | D (forwarders, lookups) | start | — | First-run filled `station-manager/<version>` |
-| `SocketPath` | D (api listener) | start | — | |
-| `Server` | D (api) | start (+ per-op page/rate limits) | — | See ServerConfig |
-| `Datastore` | D (sqlite) | start | — | |
-| `Logging` | D (logger) | start | — | |
-| `Forwarders[]` | D (forwarder workers) | start | — | One worker per **enabled** entry; disabled queues nothing (ADR 0039) |
-| `LoggingStation` | both | per-op + served; PUT-writable | — | ADIF `MY_*`; daemon derives lat/lon |
-| `SetupComplete` | both | served; server-managed | — | Handler flips false→true on first callsign |
-| `DefaultLogbookID` | both | per-op | — | Selector; row metadata in DB |
-| `DefaultRigID` | both | per-op | — | Selects active rig in `Active*()` |
-| `Station` | both | per-op + served; PUT-writable | — | Amp + CAT-off default power |
-| `Lookup` | D (enrichment) | start (TTLs via per-op accessors) | — | |
-| `Smtp` | D (mailer) | start; `enabled`+recipient served | — | No PUT path |
-| `Bridge` | both | start (via `ActiveBridge()`); subset served | **partly** | `Serial.Port` + `Cat.Driver` are rig-specific |
-| `Ft8` | both | start (via `ActiveFt8()`); display/freqs served | **partly** | `Device` + `tx.mode` are rig-specific |
-| `Evidence` | D (evidence writer) | start | — | See EvidenceConfig below |
-| `Rigs[]` | both | per-op (`RigByID`) | **yes** | The rig catalogue (ADR 0028) |
+`config.Service` is the synchronized runtime owner:
 
-### `BridgeConfig` (`internal/types/bridge.go`)
+- `Snapshot` takes the read lock and returns a shallow, read-only value; callers
+  must `Clone` it before mutating nested slices, maps, or pointers;
+- `Update` takes the write lock, deep-clones the value, applies the mutation, writes
+  the file, and only then replaces memory;
+- a mutation error or disk-write error leaves both live memory and the existing file
+  unchanged; and
+- `UpdateInMemoryThenPersist` is the named exception for startup self-healing where
+  this run must use the corrected value even if best-effort persistence fails. It is
+  not the ordinary update path.
 
-| Field | Consumer | Lifecycle | Rig? | Notes |
-|---|---|---|---|---|
-| `Enabled` | both | start | — | Gates the whole subsystem |
-| `Serial.Port` | D + served | start | **yes** | Loose field; **authoritative source is `RigConfig.Port`**, projected by `ActiveBridge()` |
-| `Cat.Driver` | D + served | start | **yes** | Loose field; **authoritative source is `RigConfig.Model`** |
-| `Timeouts.*` (liveness/backoff×2/steady/write-watchdog) | D | start | global (could be rig-specific) | Same thresholds for every rig today |
-| `Tune.*` (power/duration/restore-settle) | D | start | global | Clamped at construction (see §4 ceilings) |
-| `ModeMappings` | served | per-op (merged with rigdef at GET) | **yes** (keyed by driver + rig literal) | Operator overrides only; correct by design |
+The lock covers the disk write and memory swap. A GET that races an update therefore
+observes either the prior snapshot or the committed one, never a partially-mutated
+configuration.
 
-### `Ft8Config` (`internal/types/ft8.go`)
+## 3. Current top-level shape
 
-| Field | Consumer | Lifecycle | Rig? | Notes |
-|---|---|---|---|---|
-| `Enabled` | both | start | — | Gates the subsystem |
-| `Device` (capture) | D | start | **yes** | Resolved view; authoritative source `RigConfig.Audio.RX` (name), projected by `ActiveFt8()` |
-| `EnableOSD` (`*bool`) | D | start | — | nil→true |
-| `TX.Device` (playback) | D | start | **yes** (not yet projected) | Should follow `RigConfig.Audio` like capture |
-| `TX.Mode` | D | start (read at arm via `txMode()`) | **YES — rig-specific but GLOBAL** | `"DATA-U"` is Yaesu vocabulary; the trigger for this review |
-| `TX.CallerAnswerMode` | D | GET-serve (seed only, ADR 0066) | — | The SESSION selector's default; the run obeys the request's `answer_mode`. Default **operator_pick** since 2026-08-08 (automation = explicit opt-in) |
-| `TX.Occupancy.*` | D | start (per-slot read of snapshot) | — | Occupancy detector tuning |
-| `FieldDay.{Class,Section}` | D (TX) | served; PUT-writable (presence-aware) | — | Operator's ARRL Field Day exchange — consumed by both FD paths (answer a CQ FD + work a caller in FD; ADR 0037, shipped). Empty = unset. Class strict (`^[1-9][0-9]?[A-F]$`, in `types`); Section checked against go-ft8's canonical ARRL/RAC list (`ValidARRLFieldDaySection`, in `internal/config` — `types` stays stdlib-only). Stored upper-cased |
-| `FieldDay.DefaultRstRcvd` | D (TX) | served; PUT-writable (presence-aware) | — | RST_RCVD logged for an FD QSO (FD exchanges no report; some OQRS require it non-empty). Operator string (`59`/`599`/`-15`); empty = blank. Trimmed, NOT upper-cased. Applied in the `cmd/smd` e4 sink; RST_SENT is the measured SNR via `BuildQso` |
-| `Display.*` (history/feed/colours) | SPA | served; PUT-writable (presence-aware) | — | Daemon stores, ignores; pure SPA prefs |
-| `Frequencies` (band→Hz) | SPA | served (resolved) | — | Main-Freq buttons; PUT not yet wired |
-| `DecodeLog.{Enabled,Path}` | D | start (read at capture acquire) | — | JTDX ALL.TXT decode log (RX + our TX); off by default; `Path` default `$SM_WORKING_DIR/log/ft8-all.txt`. Independent of log level. Detail in `docs/ft8.md` |
+`internal/config.Config` is the on-disk schema. Nested definitions are canonical
+`internal/types` values unless noted.
 
-### `RigConfig` (`internal/types/rig.go`)
-
-`ID`, `Model`, `Port`, `Audio.Device` (all per-rig), and `Overrides` (per-rig serial
-params: `baud_rate`, `data_bits`, `stop_bits`, `parity`, `line_delimiter`,
-`read_timeout_ms`, plus the **tri-state `rts`/`dtr`** added 2026-07-23 — `*bool`, so an
-explicit `false` is a real setting and is NOT read as "unset"; omitted inherits the
-rigdef, and every shipping rigdef now de-asserts both. These lines are a PTT source on
-rigs that map one to them (Icom USB SEND, Yaesu PSK/DATA `RPTT SELECT`), so asserting one
-on such a rig keys the transmitter for the life of the connection — see ADR 0057 and the
-CAT chapter of the manual). The active rig's fields ARE projected at runtime: `ActiveBridge()` overlays
-`Model`→`cat.driver`, `Port`, and `Overrides` onto the bridge serial/cat config, and
-`ActiveFt8()` projects the active rig's `Audio.Device` (both pinned by tests). `Model` is
-validated against the embedded `cat.Lookup` catalogue at Load/PUT (review 2026-06-19 M2),
-so an unknown driver id is rejected at the config boundary, not at bridge startup.
-
-### `QslDefaults` (`internal/types/qsl.go`, config key `qsl`)
-
-Operator's standing outgoing-QSL defaults: `qsl_via` (QSL route/manager), `qslmsg`
-(standing card/upload message), `qsl_sent_via` (default send method B/D/E/M). A SUBSET
-of `types.Qsl` — the per-QSO confirmation status fields are deliberately excluded
-(per-contact, not config). Stamped onto a logged QSO **only when the field is empty**
-(per-QSO value wins) and **only when the default is non-empty**, so an unset default
-never adds an empty ADIF tag. A single record-level stamp point — `adif.Record.ApplyQslDefaults`
-— is called by **both** daemon logging paths (the Phone/CW submit handler and the FT8
-e4 sink, after `QsoToRecord`); ADIF **import** is deliberately left alone. No SPA
-involvement (it's pure config the daemon owns). Writable via `PUT /v1/config`
-(presence-aware) and edited in the app's **Settings → Station** (the QSL defaults
-subsection: `qsl_via` / `qslmsg` / `qsl_sent_via`).
-
-### `PskReporterConfig` (`internal/types/pskreporter.go`, config key `psk_reporter`)
-
-FT8 reception-report upload to PSK Reporter. `enabled` (default **false** — opt-in,
-publishes RX to a public service), `host`/`port` (default `report.pskreporter.info:4739`;
-port `14739` on the same host is the test server — NOT `pskreporter.info`, which is the
-Cloudflare website and drops UDP). Receiver identity — callsign, grid, **and antenna
-(from `MY_ANTENNA`)** — comes from `LoggingStation`, not here. Read at startup → fed to `internal/pskreporter`;
-**not on `/v1/config`** (set-once, like the SMTP block — a config-SPA surface can come
-later). Detail in `docs/ft8.md`.
-
-### `EvidenceConfig` (`internal/types/evidence.go`, config key `evidence`)
-
-Local FT8 evidence capture (spot-network design §4.1) — the first of three
-**default-off consent layers** (§8). `capture` (default **false**; enabling
-creates and fills `<working-dir>/evidence.db`, disabling stops new writes and
-deletes nothing) and `cap_bytes` (default **524288000** — 500 MiB exactly, an
-exact byte count to avoid unit ambiguity; the PHYSICAL cap over evidence.db +
-WAL + shm — capture drops at a soft watermark 16 MiB below it and resumes if
-capacity returns). Validation: `cap_bytes` ≥ `types.EvidenceMinCapBytes`
-(32 MiB) when capture is enabled. The db path is not configurable this slice.
-Read at startup → `internal/evidence`; **not on `/v1/config`** (hand-edit +
-restart, like the SMTP block); observe via `GET /v1/evidence/status`.
-
-**`sync`** (§5 sync slice, operator rulings 2026-08-10) — consent layer 2,
-one boolean, default **false**: the archive synchronises to SM Cloud over
-the **enabled smcloud forwarder's** existing `{url, token}` credentials —
-deliberately no second account/URL/token surface. Validation refuses
-`sync: true` without that forwarder configured (absent, disabled, or
-credential-less → error finding `evidence_sync_needs_smcloud`). Disabling
-sync stops offering; it deletes and un-syncs nothing. Cadence and batch
-sizing are internal engineering constants, not configuration.
-
-**`antennas`** (§4.2 station profiles, operator rulings 2026-08-10) — the
-per-band operating declaration, a list of entries, each: `name` (required;
-the trimmed, case-sensitive lineage identity — renaming starts a new
-lineage), `bands` (required, non-empty; ADIF band tokens; one band maps to
-ONE antenna, no duplicates within or across entries), and optional `type`,
-`height_m` (feedpoint metres above ground, finite ≥ 0, **0 is valid and
-distinct from absent**, no upper bound), `feedline`, `locator` (validated
-Maidenhead, canonicalized on activation; omitted = pinned not-declared —
-NEVER inherited from the station grid). The free-text fields (`name`,
-`type`, `feedline`) cap at 128 characters — an engineering bound so a
-valid declaration can never out-write the evidence cap's reserved headroom
-at activation. Transmit power is deliberately
-absent (overlaps `station.default_power`; not honest across bands/days).
-Validation runs whether or not `capture` is enabled; activation is
-**restart-only** — the daemon pins immutable profile versions into
-`evidence.db` at startup and stamps every observation with the active
-version for the slot's band (or an `unprofiled_reason`). **Band membership
-is a pinned fact** (codex-P1 ruling 2026-08-10): editing an entry's `bands`
-mints the next version, same as any other fact edit; reordering them does
-not. Near the size cap, activation refuses at the writer's watermark
-(`cap_bytes` − 16 MiB headroom; profiles degraded until a restart with
-capacity), and a v1 archive too large to migrate under `cap_bytes` is left
-untouched with evidence idle. Worked example:
-
-```json
-"evidence": {
-  "capture": true,
-  "antennas": [
-    { "name": "DX Commander", "type": "vertical", "bands": ["80m", "40m", "30m"], "height_m": 0 },
-    { "name": "VHQ Hex beam", "type": "hexbeam", "bands": ["20m", "17m", "15m", "12m", "10m", "6m"], "height_m": 12 }
-  ]
-}
-```
-
-### `MapConfig` (`internal/types/mapconfig.go`, config key `map`)
-
-Contacts-map display settings. `band_colors` maps lowercase ADIF band tokens
-(`"20m"`, `"70cm"`) to `#rrggbb` arc colours, layered over the SPA's built-in
-palette (`frontend/app/src/lib/map/bandColors.ts`). **Sparse:** an absent/empty
-block (or band) means the default palette — defaults are never materialised into
-config.json. Validated by `validateMap` (band-token key, 6-digit hex value).
-Served RAW on `GET /v1/config` (no secrets), presence-aware on PUT (omit →
-untouched; carry → replace the whole block). Applied client-side — a change
-needs a map-page reload, not a daemon restart.
-
-### Other blocks (all global, config.json-authoritative, read at start)
-
-`StationConfig`, `LoggingStation` (ADIF `MY_*`), `ForwarderConfig` (+`RetryConfig`),
-`EnrichmentConfig`/`LookupConfig`, `SmtpConfig`, `DatastoreConfig`, `LoggingConfig`,
-`ServerConfig` — fields enumerated in their respective `internal/types/*.go`.
-
-## 4. Default-const ↔ knob catalog
-
-Every code constant that a config knob overrides, by flavor. **The "no magic numbers"
-rule holds for flavors (a)–(c): consts are fallbacks.** Flavor (d) is different — the
-const is a *ceiling*, not a default, and must stay non-overridable.
-
-### (a) default-fill — `applyDefaults` replaces a zero value (`internal/config/config.go`, const block ~L462)
-
-| Const | Value | Knob |
+| JSON key | Go shape | Ownership and purpose |
 |---|---|---|
-| `defaultReadHeaderTimeoutSec` | 5 | `server.read_header_timeout_sec` |
-| `defaultReadTimeoutSec` | 10 | `server.read_timeout_sec` |
-| `defaultWriteTimeoutSec` | 30 | `server.write_timeout_sec` |
-| `defaultIdleTimeoutSec` | 120 | `server.idle_timeout_sec` |
-| `defaultShutdownTimeoutSec` | 10 | `server.shutdown_timeout_sec` |
-| `defaultMaxBodyBytes` | 1 MiB | `server.max_body_bytes` |
-| `defaultPageLimit` / `defaultMaxPageLimit` | 50 / 500 | `server.default_page_limit` / `max_page_limit` |
-| `defaultMaxConcurrentRequests` | 128 | `server.max_concurrent_requests` |
-| `defaultMaxEventSubscribers` | 16 | `server.max_event_subscribers` |
-| `defaultSubmitRatePerSec` / `defaultSubmitRateBurst` | 20 / 40 | `server.submit_rate_per_sec` / `submit_rate_burst` |
-| `defaultMaxContactHistoryResults` | 100 | `server.max_contact_history_results` |
-| `defaultMaxOpenConns` / `defaultMaxIdleConns` | 8 / 8 | `datastore.max_open_conns` / `max_idle_conns` |
-| `defaultContextTimeoutSec` / `defaultTxContextTimeoutSec` | 10 / 10 | `datastore.context_timeout` / `transaction_context_timeout` |
-| `defaultLogFileMaxSizeMB` / `MaxBackups` / `MaxAgeDays` | 100 / 5 / 30 | `logging.log_file_*` |
-| `defaultAmpMultiplier` | 1.0 | `station.amp_multiplier` |
-| `defaultLogbookID` / `defaultRigID` | 1 / 1 | `default_logbook_id` / `default_rig_id` |
-| `defaultForwarderTickIntervalSec` / `BatchSize` | 120 / 5 | `forwarders[].tick_interval_sec` / `batch_size` |
-| (per-type, registry-seeded) `endpoints` / `action_filter` / `retry` | each forwarder package registers its defaults (`RegisterDefaultEndpoints` / `RegisterSupportedActions` / `RegisterDefaultRetry`) | `forwarders[].endpoints` (action-keyed URLs) / `action_filter` / `retry` (ADR 0039) |
-| `defaultCountryTTLDays` / `StationTTLDays` | 365 / 90 | `lookup.country_ttl_days` / `station_ttl_days` — **`*int`: absent = default, explicit `0` = "never goes stale"** (see below) |
-| `defaultRefreshMaxInFlight` | 4 | `lookup.refresh_max_in_flight` (plain int; `0` = package default in both the accessor and the defaults pass, so it has no absent-vs-zero conflict) |
-| `defaultLookupHTTPTimeoutSec` | 10 | `lookup.hamnut.timeout_sec`, `lookup.chain[].timeout_sec` |
-| `defaultSmtpPort` / `defaultSmtpTimeoutSec` | 587 / 30 | `smtp.port` / `smtp.timeout_sec` |
-| (inline) protocol / socket | `tcp` / `127.0.0.1:8080` (tcp) or an owner-private runtime path (unix — see §5.2) | `server.protocol` / `socket_path` |
-| (inline) datastore driver / path | `sqlite` / `${DataDir}/db/station-manager.db` | `datastore.driver` / `path` |
-| (inline) logging level / dir | `info` / `log` | `logging.level` / `rel_log_file_dir` |
+| `version` | `int` | Schema version; currently `2`. |
+| `data_dir` | `string` | Root for database, logs, caches, and other daemon state. |
+| `useragent` | `string` | Shared outbound HTTP User-Agent; first-run startup supplies `station-manager/<build-version>` when absent. |
+| `socket_path` | `string` | TCP address or Unix-socket path selected by `server.protocol`. |
+| `server` | `ServerConfig` | Listener, HTTP limits/timeouts, embedded-SPA, profiling, and insecure-network acknowledgement. |
+| `datastore` | `types.DatastoreConfig` | SQLite path, options, pool, and context timeouts. |
+| `logging` | `types.LoggingConfig` | Daemon logging and rotation. |
+| `forwarders` | `[]types.ForwarderConfig` | Durable destination instances, filters, cadence, retry, endpoints, and opaque credentials. |
+| `logging_station` | `types.LoggingStation` | ADIF `MY_*` station identity used when emitting QSOs. |
+| `operators` / `default_operator` | `[]types.Operator` / `string` | Operator roster and default roster selector. |
+| `setup_complete` | `bool` | Server-managed first-run completion flag. |
+| `default_logbook_id` | `int64` | Selector for a database-owned logbook row. |
+| `default_rig_id` | `int64` | Selector for one entry in `rigs`; `0` is valid only when no rigs exist. |
+| `restore_rig_on_mode_switch` | `*bool` | SPA behavior; absent means enabled. |
+| `station` | `types.StationConfig` | Non-ADIF operating preferences: amplifier, fallback power, and operating bands. |
+| `qsl` | `types.QslDefaults` | Standing outgoing QSL defaults, stamped only into otherwise-empty QSO fields. |
+| `psk_reporter` | `types.PskReporterConfig` | Opt-in FT8 reception-report publisher. |
+| `map` | `types.MapConfig` | Sparse per-band contact-map arc colors. |
+| `lookup` | `types.EnrichmentConfig` | Country source, prioritized callsign chain, completion policy, cache TTLs, and refresh concurrency. |
+| `smtp` | `types.SmtpConfig` | Session-email delivery and credentials. |
+| `bridge` | `types.BridgeConfig` | Bridge enablement, timeouts, and tune policy; active rig identity is projected from `rigs`. |
+| `ft8` | `types.Ft8Config` | FT8 enablement, decoding/transmit policy, display, frequency, audio/meter, decode-log, and Field Day settings. |
+| `evidence` | `types.EvidenceConfig` | Explicit capture/sync consent, physical cap, and restart-pinned antenna declarations. |
+| `rigs` | `[]types.RigConfig` | Installed-rig catalogue and operator-specific per-rig overrides. |
 
-### (a‴) lookup sources: labels, priority/completion policy, and TTL `0`
+Unknown JSON fields are ignored by typed unmarshal. Do not rely on that as an
+extension mechanism: a later daemon rewrite will drop fields it does not own.
 
-`lookup.hamnut.label` / `lookup.chain[].label` (added 2026-08-03) is the exact
-counterpart of the forwarder `label` documented below: the operator's own
-display name for a source, settable **only by hand in config.json**, empty
-meaning "use the name this build knows". It matters slightly more here, because
-a source the build does not recognise has **no** built-in name and otherwise
-displays its raw service id (`hamqth`); a label is the only way to give it a
-readable one without shipping a new binary. Deliberately **not** `name` — that
-is the key `mergeLookup` matches on to carry a provider's stored password across
-a save, and the key `LookupServiceConfig` resolves at startup, so renaming it
-silently detaches the credentials. **`mergeLookupProvider` carries `label` over
-from the stored entry explicitly**, for exactly the reason spelled out for
-forwarders below: the rebuild keeps only what it names, so an unrelated save
-would otherwise delete it. Pinned by `internal/api/lookup_label_test.go` (M2/M3).
+### 3.1 Server shape
 
-**Callsign-chain authority is explicit (ADR 0068).** Every
-`lookup.chain[]` entry, enabled or disabled, has one positive `priority` and the
-set must be unique and contiguous from 1 through the chain length. JSON array
-order is not authoritative: normalisation sorts entries by numeric priority,
-and runtime construction sorts before filtering disabled providers. A legacy
-chain in which every priority is absent/zero migrates from its existing array
-order; mixed implicit/explicit, duplicate, zero/negative, and gapped priorities
-are rejected rather than guessed. Registry-seeded callsign providers are
-disabled and receive the next priority.
+`server` contains:
 
-`lookup.continue_if_blank` is the chain-wide completion policy, initially
-`["name", "gridsquare"]`. After each normalised provider response, the next
-enabled source runs only while a named field is blank. A fallback response
-fills every blank callsign-owned field it supplies but never overwrites a
-higher-priority value; QTH and other opportunistic fields do not themselves
-cause another call. An explicit empty list restores the legacy
-first-substantive-result behavior. Unknown or repeated field names are rejected;
-the supported catalogue is owned by `internal/lookupdef` and served by
-`GET /v1/lookup-types` for Settings.
+- `protocol`: `tcp` or `unix`;
+- `read_header_timeout_sec`, `read_timeout_sec`, `write_timeout_sec`,
+  `idle_timeout_sec`, and `shutdown_timeout_sec`;
+- `max_body_bytes`, `default_page_limit`, `max_page_limit`,
+  `max_contact_history_results`, `max_concurrent_requests`, and
+  `max_event_subscribers`;
+- `submit_rate_per_sec` and `submit_rate_burst`;
+- `serve_spa`, whose absent default is true for TCP and false for Unix sockets;
+- `enable_profiling`, default false; and
+- `allow_insecure_network`, a file-only acknowledgement described in §5.1.
 
-**The two cache TTLs are `*int` (changed 2026-08-03).** `nil`/absent means "use
-the default" and is filled by `config.Normalize`; an explicit **`0` means "trust
-this cache indefinitely"** — the reading `lookup.Orchestrator.isStale` has always
-applied to a non-positive TTL. Before the change the field was a plain `int` and
-`applyDefaults` stamped 365/90 over any zero, so an operator who set `0` got what
-they asked for until the next restart and then silently got a year. The defaults
-live in `Normalize` rather than `applyDefaults` so they apply on **PUT** as well
-as Load (the same reason `normalizeLookupURLs` and `normalizeSmtpDefaults` are
-there). A negative is still a validation error.
+### 3.2 Identity, station, and QSL blocks
 
-**An ENABLED source that needs credentials must have usable ones**, enforced at
-save time by `validateLookupProvider`. Without that gate a PUT emptying or
-shortening them returned 200 and the daemon then failed to **start** at the next
-restart (`buildEnrichment`'s error aborts `run()`), hours later and with nothing
-linking the two.
+`logging_station` uses ADIF `MY_*` JSON names. Its callsign, owner, operator,
+locator, coordinates, zones, address, rig, antenna, and Morse fields are
+operator data. `station` separately stores `amp_enabled`, `amp_multiplier`,
+`default_power`, and `operating_bands`; those affect application derivations but
+are not themselves copied wholesale into ADIF.
 
-**Where a provider's facts come from: its own registration (ADR 0062).** Each
-provider package's `init()` registers a descriptor in `internal/lookupdef` — a
-true leaf — carrying its display name, help text, credential requirements and
-endpoint defaults, plus a constructor in `internal/lookup`. `config` reads the
-descriptors for URL/timeout defaulting and the credential rule; `cmd/smd`
-blank-imports the provider packages to trigger registration and wires whatever is
-registered. Adding a provider is a package and an import line, not an edit to
-`buildEnrichment`, config's defaults, config's validator and the SPA.
+`operators` is a roster of `{callsign, name?}` entries. `default_operator` names
+one roster callsign. An empty legacy roster is seeded from
+`logging_station.operator`, falling back to `station_callsign`, and then points
+the default at its first entry.
 
-Two consequences to know when reading config code:
+`qsl` contains the outgoing defaults `qsl_via`, `qslmsg`, and `qsl_sent_via`.
+They are defaults, not retroactive edits: a QSO's explicit value wins.
 
-- **An UNREGISTERED provider is left alone**, never defaulted to empty and never
-  refused: the operator may be running config from a newer build, and refusing to
-  load it would strand them on a daemon that will not start.
-- **`internal/config`'s own unit tests see an EMPTY registry**, because they
-  cannot import a provider package (`internal/lookup/qrz` imports
-  `internal/config`). They register the descriptors they assume — which is why
-  each test now states its providers instead of inheriting them from a hardcoded
-  list.
+### 3.3 Forwarders, lookup, SMTP, map, and PSK Reporter
 
-### (a″) forwarders are non-sparse + config-driven (ADR 0039)
+Forwarder details and retry semantics live in the forwarding reference. The
+configuration contract is:
 
-`applyDefaults` does an **add-missing-by-type** merge: for every registered
-forwarder type (`forwarding.DefaultForwarderConfigs()`) the operator hasn't
-configured, it appends a **disabled** seed entry (name = type, supported-action
-`action_filter`, default `endpoints`). So the config is non-sparse — the operator
-flips `enabled` + supplies credentials rather than hand-adding an entry. It runs
-*after* the operator-file overlay (a JSON array replaces, not merges, so a base
-seed wouldn't survive) and is a no-op when the registry is empty (config unit
-tests that don't import the forwarder packages). `cfg.Forwarders = nil` stays the
-base default.
+- `name` is the stable instance key used by durable upload rows; changing it is
+  not a cosmetic rename;
+- `type` must name a registered implementation;
+- `label` is an optional file-only display label;
+- `credentials` is type-owned opaque JSON and may contain secrets;
+- `action_filter` accepts supported `insert`, `update`, and `delete` actions;
+- `tick_interval_sec`, `batch_size`, `retry`, and `endpoints` are persisted
+  operator overrides; and
+- `allow_insecure_http` is valid only for the `smcloud` type and is file-only.
 
-`label` (added 2026-08-02) is the operator's own display name for a destination,
-settable **only by hand in config.json** — no API surface writes it and the
-Settings tab has no control for it. Empty means "use the type's built-in
-`DisplayName`". It exists because that built-in is a string in the binary
-(`smcloud.go`'s `"SM Cloud backup"`), so renaming it is a build + deploy the
-operator cannot perform, and names date as a service grows. It is deliberately
-**not** `name`: `name` is the durable key behind `qso_upload`'s
-`UNIQUE (qso_id, forwarder_name, action)`, so renaming *that* would make the
-daemon forget which QSOs had already been sent and re-upload them upstream.
-Nothing joins on `label`.
+`lookup.hamnut` is the country/prefix source. `lookup.chain` is the callsign
+provider chain. Provider `priority`, not JSON array position, is authoritative;
+normalization sorts the chain and validation requires positive, unique,
+contiguous priorities, including for disabled entries.
 
-**`label` and `endpoints` are both config-only, so `mergeForwarders` must carry
-them over explicitly** (`handler_config.go`): a PUT rebuilds each entry from the
-SPA payload and keeps only the fields it names, so anything absent from the wire
-is deleted by an unrelated save. `endpoints` had exactly that defect until
-2026-08-02 and it was silent — the save wrote the map out empty and
-`applyDefaults` re-seeded the registry default at the next Load, replacing an
-operator's override with the stock URL. Pinned by `internal/api/forwarder_label_test.go`
-(L2/L3). **Any future config-only field on `ForwarderConfig` belongs in that
-carry-over too** — `allow_insecure_http` (below) is exactly such a field and is
-preserved there.
+#### Lookup sources, labels, completion policy, and TTL (`§(a‴)` compatibility)
 
-**`forwarders[].allow_insecure_http` (bool, default false; ST-4a, ADR 0069).** The
-credential-transport acknowledgement. Every credential-bearing forwarder client must
-use `https`, or plain `http` only to a loopback host (so local mocks/tests work) —
-otherwise construction fails and the daemon refuses to start (`forwarder_unusable` at
-Load / 400 at PUT). `allow_insecure_http: true` permits plain `http` to a **remote**
-host, and the daemon logs a standing startup warning naming the forwarder. It is valid
-**only for the `smcloud` type** (SM Cloud's LAN-staging deploy is the one accepted
-remote-cleartext posture, `docs/smcloud-deploy.md`); setting it on `qrz`/`qrzcq`/`clublog`
-is **rejected**, not ignored. Like `label`/`endpoints` it is **config-file-only** —
-absent from the `/v1/config` wire surface and preserved by `mergeForwarders`, so it can
-never be set by a remote API client. The shared policy + redirect hardening live in
-`internal/securehttp`.
+Each provider has a stable `name`, optional file-only `label`, `enabled`, URL,
+credentials, timeout, and view URL. Registered providers are seeded disabled so
+newly compiled capabilities are discoverable without silently activating a
+network dependency.
 
-`endpoints` is an **action-keyed** map (`insert`/`update`/`delete` → URL) so
-single-URL (QRZ) and per-action (ClubLog) forwarders share one shape; the value
-lives in config (overridable without a recompile) with the package
-`DefaultEndpoint` const as the fallback for any key left unset. `enabled` now
-**gates enqueue** (disabled = don't queue; startup discards a disabled
-forwarder's pending/failed rows) — superseding ADR 0022's presence-gating; see
-ADR 0039.
+`continue_if_blank` lists the fields whose absence permits consulting the next
+callsign provider. Absent legacy policy normalizes to `name` and `gridsquare`.
+An explicit empty list retains first-substantive-result behavior.
 
-The **ClubLog application API key is NOT a config credential** (ADR 0054). It is
-build-injected — stamped into the binary via `-ldflags` from the gitignored
-`.env` (`CLUBLOG_API_KEY`), never stored in `config.json`. A ClubLog forwarder's
-`credentials` therefore hold only `email`/`password`/`callsign`; a legacy `api`
-left in an existing config is **scrubbed from disk at startup**, but only when
-the running build actually has a baked key to replace it (a keyless build must
-not delete the operator's only usable key).
+`country_ttl_days` and `station_ttl_days` are pointer-valued because absence and
+zero differ: absent means use defaults `365` and `90`; explicit `0` means trust
+the cache indefinitely. Negative values are invalid. `refresh_max_in_flight`
+defaults to `4`.
 
-### (a′) first-run seed defaults — set in `DefaultConfig`, NOT `applyDefaults`
+SMTP stores `enabled`, host, port, username, password, sender, default recipient,
+STARTTLS, and timeout. `map` stores sparse band-color overrides. `psk_reporter`
+stores its enable flag and collector override; receiver identity comes from the
+station configuration.
 
-Booleans where `false` is a legitimate operator choice, so they're seeded once at
-first-run rather than re-applied every load (which would silently flip an explicit
-`false`): `logging.with_timestamp`, `logging.file_logging`, `logging.log_file_compress`,
-`smtp.starttls` (all default **true**). Also the disabled-but-prepopulated hamnut + QRZ
-provider templates. **A known wart:** this split exists only because these fields aren't
-`*bool` (the code comments flag converting them to pointers, mirroring `ServeSPA`).
+### 3.4 Evidence
 
-### (b) serve/read-time resolve (`internal/types/ft8.go`)
+Evidence capture and synchronization are separately opt-in and default off.
+`cap_bytes` is the physical cap across the evidence database and its WAL/SHM
+siblings. `sync` reuses an enabled `smcloud` forwarder's URL and token; no second
+evidence credential surface exists.
 
-| Resolver | Defaults |
+Each antenna declaration contains a lineage `name`, optional type/feedline/
+height/locator, and one or more bands. Antenna declarations are activated and
+pinned when the evidence store opens, so edits require restart. Disabling capture
+or sync stops new work; it does not delete prior data.
+
+## 4. Defaults, resolved values, and ceilings
+
+`internal/config/defaults.go` is the discoverability index for defaults. A value
+may reach runtime through four distinct mechanisms; do not collapse their
+semantics when adding a field.
+
+| Mechanism | Meaning | Representative fields |
+|---|---|---|
+| Load-time fill | Zero is unambiguously unset and is replaced by a constant; registered provider/forwarder entries may also be added missing and disabled. | HTTP limits/timeouts, datastore pool, log rotation, forwarder cadence, SMTP port/timeout, evidence cap. |
+| First-run seed | Applied only to a new `Config`, because false/empty is a legitimate persisted choice. | timestamp/file/compressed logging and SMTP STARTTLS. |
+| Read/serve resolver | Keep the file sparse; calculate an effective value for consumers and API responses. | FT8 display, dial frequencies, caller-answer mode, max repeats, audio/meter thresholds, bridge timeouts/tune. |
+| Pointer default | `nil` means unset while explicit `false` or `0` remains meaningful. | `server.serve_spa`, `ft8.enable_osd`, occupancy guard, lookup TTLs, restore-on-mode-switch. |
+
+### 4.1 Load-time fallback values
+
+| Area | Defaults |
 |---|---|
-| `ResolveFt8Display` | history_max 100 (clamp [10,2000]), feed_mode `accumulate`, highlight_unworked `#15803d`, highlight_worked `#9ca3af`, highlight_calling `#b45309` (the three `highlight_*` are **vestigial** as of 2026-08-05 — resolved and round-tripped, read by nothing; see `docs/ft8.md`) |
-| `ResolveFt8Frequencies` | `DefaultFt8Frequencies()` per band, operator overrides where `>0` |
-| `ResolveFt8CallerAnswerMode` | `operator_pick` (2026-08-08, was `auto_first` — absent/invalid fail toward the non-automatic mode; licensing posture, ADR 0065 dated note) |
+| Server | header/read/write/idle/shutdown `5/10/30/120/10 s`; body `1 MiB`; pages `50/500`; history `100`; concurrent requests `128`; event subscribers `16`; submit rate/burst `20/40`. |
+| Datastore | SQLite at `<data_dir>/db/station-manager.db`; open/idle connections `8/8`; ordinary/transaction context timeouts `10/10 s`. |
+| Logging | level `info`, relative directory `log`, file output on when neither output is selected; maximum size/backups/age `100 MiB / 5 / 30 days`. A fresh config also enables timestamps and compression. |
+| Station/selectors | amplifier multiplier `1.0`; default logbook `1`; default rig `1` only when a rig catalogue exists. |
+| Forwarders | tick `120 s`; batch `5`, unless the registered type supplies stricter defaults. |
+| Lookup | country/station TTL `365/90 days`; refresh concurrency `4`; provider HTTP timeout `10 s`. |
+| SMTP | port `587`; timeout `30 s`. |
+| Evidence | cap `524,288,000` bytes. |
 
-These differ from (a): defaults are applied at **GET-serve / read time**, not at load.
+The first-run listener is TCP at `127.0.0.1:8080`, with the embedded SPA served.
+Unix-socket mode resolves a private socket path and defaults to headless. FT8,
+PSK Reporter, evidence capture, and evidence synchronization remain opt-in.
 
-### (c) nil-pointer-means-default (distinguishes "unset" from explicit `false`/`0`)
+### 4.2 Sparse resolved settings
 
-| Field | nil → | Knob |
+- FT8 display: `history_max=100` clamped to `[10,2000]`,
+  `feed_mode="accumulate"`; its three old color fields remain round-tripped for
+  compatibility but have no current app consumer (resolved values
+  `#15803d/#9ca3af/#b45309`).
+- FT8 dial frequencies in hertz: `160m 1840000`, `80m 3573000`, `60m 5357000`,
+  `40m 7074000`, `30m 10136000`, `20m 14074000`, `17m 18100000`,
+  `15m 21074000`, `12m 24915000`, `10m 28074000`, and `6m 50313000`;
+  positive per-band overrides replace or extend the map.
+- FT8 RX audio window: `-60` to `-10 dBFS`.
+- FT8 transmit-meter amber threshold: raw ALC value `30`.
+- FT8 caller-answer mode: `operator_pick`.
+- FT8 maximum repeats: `6`, clamped to `[1,10]`.
+- FT8 occupancy idle-inhibit: true; OSD fallback decoding: true unless explicitly
+  disabled.
+- FT8 occupancy: passband `200..3000 Hz`, threshold factor `4.0`, ranking weights
+  margin/edge/center `0.5/0.2/0.3`, and guard margin `10 Hz` (explicit guard `0`
+  disables it).
+- Restore-on-mode-switch: true when absent.
+- SMTP zero port/timeout normalize to `587/30` before validation.
+- PSK Reporter empty collector resolves to `report.pskreporter.info:4739`.
+- Bridge timeout defaults in milliseconds: liveness `5000`, reconnect backoff
+  initial/max `1000/30000`, steady-state threshold `10000`, write watchdog `500`,
+  CI-V read gap/ACK `50/500`, CI-V poll interval/quiet `1000/250`, and FT8 meter
+  poll interval/timeout `250/100`.
+- Bridge tune defaults: `20 W`, `15000 ms` maximum carrier, and `150 ms` restore
+  settle. Sparse zero values select these subsystem-owned defaults.
+
+### 4.3 Non-overridable safety ceilings
+
+Safety ceilings are not defaults and do not become larger through configuration:
+
+- tune power at most `40 W`, tune duration at most `30 s`, and restore settle at
+  most `2 s`;
+- FT8 transmit hard auto-off at `18 s`;
+- FT8 unanswered-rung repeat cap at most `10`; and
+- bridge timeout overrides must remain within the validator's sane range of
+  `50 ms` to `1 h`, with the CI-V read gap additionally clamped to `2 s`.
+
+## 5. Validation and security posture
+
+Every loaded or API-mutated candidate is normalized, then passed to
+`config.Validate`. The complete rule implementation is in
+`internal/config/validate.go`; important operator-facing groups are:
+
+- listener protocol, positive HTTP limits, page-limit ordering, and network
+  posture;
+- unique positive rig IDs, known rig models, a resolving `default_rig_id`, and
+  valid ADIF mode mappings;
+- registered and usable forwarders, lookup ordering/policy, SMTP, PSK Reporter,
+  map, bridge, and evidence dependencies;
+- unique valid operator callsigns and a resolving default operator;
+- station callsigns, Maidenhead locator, coordinate/locator consistency, zones,
+  DXCC, amplifier multiplier, fallback power, and operating bands;
+- FT8 display, audio, occupancy, and Field Day values; and
+- evidence cap, antenna declarations, and the evidence-sync dependency on an
+  enabled, credentialed SM Cloud forwarder.
+
+Warnings are advisory findings. All other findings block Load and cause a config
+PUT to fail without changing disk or memory. A PUT that carries forwarders also
+constructs each enabled candidate with the same registry used at startup; an
+unusable destination is rejected before persistence.
+
+### 5.1 Bind posture — `server.allow_insecure_network`
+
+The API has no network authentication or transport encryption. A TCP address that
+is not recognizably loopback—including wildcard binds, LAN/public addresses, and
+non-localhost hostnames—therefore exposes data, configuration, daemon control, rig
+commands, and transmit-capable surfaces to every reachable client.
+
+Such a bind is fatal unless the operator sets the file-only
+`server.allow_insecure_network: true`. The acknowledgement permits startup but
+retains a standing warning; it does not add authentication. Profiling on the same
+bind adds a separate advisory because `/debug/pprof` can disclose process data and
+consume substantial resources.
+
+The acknowledgement is deliberately absent from `/v1/config`, so an API client
+cannot grant itself broader network exposure.
+
+### 5.2 Unix socket permissions
+
+Unix mode resolves its default socket only under an owner-private runtime or state
+directory. It never falls back to `/tmp`. If no private path can be resolved and no
+explicit `socket_path` is configured, validation fails startup. Directory and socket
+permissions form the access boundary for this mode.
+
+### 5.3 Private configuration-file permissions
+
+`config.json` contains plaintext SMTP passwords, provider credentials, and
+forwarder tokens. `WriteJSON` creates the replacement at owner-only `0600`, preserves
+an existing stricter owner-only mode such as `0400`, and tightens a wider legacy
+mode on the next write. Secrets must never be committed.
+
+## 6. HTTP edit surface
+
+`GET /v1/config`, `PUT /v1/config`, `GET /v1/rigs`, and the capability catalogues
+are specified in [`api-endpoints.md`](api-endpoints.md). The essential persistence
+rules are:
+
+- GET returns a deliberately projected view, not the complete file;
+- PUT is presence-aware: omitting a writable block preserves it, while carrying a
+  whole-block field generally replaces that block;
+- `rigs` and `default_rig_id` are write-only on `/v1/config`; their full read view
+  is `/v1/rigs`;
+- server, datastore, logging, evidence, advanced bridge/FT8 knobs, and security
+  acknowledgements remain file-only unless explicitly projected;
+- server-managed joins and flags such as `setup_complete`, `default_logbook`, the
+  narrow `default_rig`, and `mailer` cannot be overwritten by echoing a GET;
+- forwarder, lookup, and SMTP passwords are masked on GET and merged on PUT; and
+- a successful response is built from the committed configuration.
+
+The first setup PUT with a non-empty station callsign seeds the default logbook and
+sets `setup_complete`. Until per-logbook operating identity is implemented, a later
+callsign change that conflicts with the default logbook is rejected with `409`
+rather than storing a configuration that would make subsequent QSO submissions
+fail.
+
+## 7. Secret-preserving merge rules
+
+The API never echoes password or token values. It reports whether a secret is set.
+
+- SMTP and lookup: blank password means keep the stored value;
+  `password_clear=true` explicitly removes it, and clear wins if both are sent.
+- Forwarders: credentials are merged by stable forwarder `name`. Omitted or blank
+  fields keep stored secrets, except registry-declared clearable non-secret options
+  where blank intentionally restores the constructor default.
+- Replacing or removing a forwarder/provider entry removes the configuration owned
+  by that entry. Lookup's callsign chain is replaced as a whole, not merged by
+  missing provider name.
+
+Advanced forwarder values and file-only labels/security acknowledgements are carried
+forward when an API edit cannot represent them.
+
+## 8. Ownership scopes
+
+Use the narrowest real owner for a new value:
+
+1. Database facts: logbooks, QSOs, upload queue, durable history.
+2. Embedded rig-definition facts: commands, parsers, protocol defaults,
+   manufacturer/model capabilities.
+3. Per-rig operator facts: device binding and genuine rig-specific overrides.
+4. Station/operator facts: identities, station preferences, QSL defaults, roster.
+5. Subsystem policy: server, datastore, forwarding, lookup, SMTP, bridge, FT8,
+   evidence.
+6. Session state: current page, current operator selection, transient run state.
+7. Derived runtime state: active projections, opened resources, connection state.
+
+Do not store a derived value beside its inputs. Do not move a rig-definition fact
+into every installed-rig profile merely because the editor can display it. A small
+amount of boundary-specific projection is preferable to parallel source-of-truth
+structs.
+
+## 9. Placement and inheritance rules
+
+### 9.1 Installed-instance facts
+
+For operator-installed hardware, the rig catalogue stores instance identity and
+environment-specific binding.
+
+### 9.2 Embedded model facts
+
+The embedded catalogue stores model behavior: CAT vocabulary, parsers, capabilities,
+and protocol defaults. Those values are displayed to the editor but are not copied
+into each installed instance.
+
+### 9.3 Resolution order
+
+Resolution is always:
+
+1. explicit per-rig override, when present;
+2. embedded rig-definition default; then
+3. subsystem fallback only where that field defines one.
+
+Zero-valued `RigOverrides` fields mean inherit. Pointer-valued `ft8_mode` and
+`my_rig` distinguish inheritance from an explicit empty override.
+
+### 9.4 Multiple rigs of one model
+
+Multiple rigs of the same model are independent instances. They may have different
+ports, audio devices, and overrides; coincident override values are valid and do not
+make one profile the owner of another.
+
+## 10. Rig profiles and active projections
+
+`rigs` is the authoritative installed-rig catalogue. Each `types.RigConfig` holds:
+
+- positive stable `id`;
+- `model`, a key into the embedded CAT rig definitions;
+- operator-specific serial `port`;
+- optional serial `overrides` for baud, data/stop bits, parity, delimiter, read
+  timeout, RTS, and DTR;
+- name-based `audio.rx` and `audio.tx` device selections;
+- optional `ft8_mode` override;
+- per-rig rig-literal to ADIF `mode_mappings`; and
+- optional `my_rig` override.
+
+`default_rig_id` selects the active instance. `Config.ActiveBridge()` projects its
+model, port, and serial overrides into a runtime bridge configuration.
+`Config.ActiveFt8()` projects its RX/TX audio names and resolved FT8 mode into the
+runtime FT8 configuration. Stored `bridge.serial`, `bridge.cat`, `ft8.device`, and
+`ft8.tx.device/mode` are compatibility/projection targets, not parallel current
+owners.
+
+Mode mappings merge the selected rig definition's defaults with that instance's
+operator overrides. Only deviations from the definition should persist. Live QSO
+submission resolves `MY_RIG` from the explicit per-rig pointer; absent derives the
+rig definition's display name, while explicit empty suppresses the field.
+
+### 10.1 Catalogue validity
+
+IDs must be positive and unique, models must be known, and `default_rig_id` must
+resolve. The only rig-less state is an empty catalogue with selector `0`. Per-rig
+mapping modes and submodes must be valid ADIF values.
+
+### 10.2 Inheritance
+
+Serial overrides use zero as inherit. `ft8_mode: null` inherits the rig-definition
+default; `ft8_mode: ""` deliberately leaves the rig's current mode unchanged.
+`my_rig: null` derives from the definition name; `my_rig: ""` suppresses ADIF
+`MY_RIG`.
+
+### 10.3 Legacy fold
+
+A pre-catalogue configuration with loose bridge driver/port can synthesize rig `1`.
+The legacy global FT8 mode and `logging_station.my_rig` are folded into the active
+rig when the typed compatibility rules can preserve their meaning. Legacy numeric
+audio indices are not guessed into stable names.
+
+### 10.4 Per-rig audio identification
+
+#### 1. Name-based, per-direction devices (`§10.4 #1` compatibility)
+
+Audio is a per-rig resource and is selected separately for receive and transmit by
+device name. Indices are not stable across reboot/replug and capture/playback
+enumerations can assign different indices to the same codec. At acquisition time,
+the audio layer resolves each name against the corresponding live enumeration.
+
+An empty name means the system default for that direction. A configured name that
+cannot be found is treated as unavailable; the FT8 subsystem must not silently grab
+an unrelated device. `GET /v1/hardware` exposes the same enumeration used by the
+editor and acquisition path.
+
+### 10.5 Runtime selection
+
+Changing `default_rig_id` changes persisted intent. The running bridge, FT8 device
+bindings, and other startup-captured consumers continue to use their constructed
+active-rig state until restart; there is no rig hot-swap path.
+
+### 10.6 Editing surface
+
+The consolidated app edits whole rig-catalogue drafts. It reads installed rigs and
+the embedded definition summaries from `GET /v1/rigs`, enumerates hardware through
+`GET /v1/hardware`, and writes presence-aware `rigs` plus `default_rig_id` through
+`PUT /v1/config`. The PUT response deliberately does not widen its narrow active-rig
+projection into a second full catalogue surface.
+
+## 11. Runtime application and restart boundaries
+
+### 11.1 General model
+
+There is no general configuration watcher or subsystem rebuild after a PUT.
+Persistence success means the new intent is durable and visible through snapshots;
+it does not imply every already-constructed service has been replaced.
+
+### 11.2 Application classes
+
+| Class | Examples | When change applies |
 |---|---|---|
-| `Server.ServeSPA` (`*bool`) | `protocol=="tcp"` | `server.serve_spa` |
-| `Ft8.EnableOSD` (`*bool`) | `true` | `ft8.enable_osd` |
-| `Ft8.TX.Occupancy.GuardMarginHz` (`*int`) | guard on (default Hz); explicit `0` = guard off | `ft8.tx.occupancy.guard_margin_hz` |
+| Read at use | station/QSL/operator data and per-rig `MY_RIG` for the already-active rig | The next operation that explicitly reads a config snapshot. |
+| Explicit live side effect | `ft8.tx.max_repeats` | The PUT also calls the running sequencer's setter. This is the sole current `/v1/config` live side effect. |
+| Client-owned | FT8 display/map and restore-on-mode-switch preferences | When the app adopts/refetches the saved value; no daemon rebuild. |
+| Restart-required | listener/server, datastore, logging, user agent, forwarder and lookup/refresher construction, SMTP service, active-rig selection, bridge hardware/timeouts/tune, FT8 device/decoder/decode-log/PSK Reporter, evidence activation | After daemon restart. |
 
-`Ft8.TX.InhibitIdle` (`*bool`, `ft8.tx.inhibit_idle`, nil → `true`) is a
-**resolver**, not an `applyDefaults` entry — `ActiveFt8()` leaves the whole `TX`
-block nil when there is no `ft8.tx`, no `ft8.tx.mode` and no rig TX-audio device,
-and a default cannot be written into a block that does not exist. Readers go
-through `types.ResolveFt8InhibitIdle`, which treats an absent BLOCK and an absent
-FIELD alike. Same reason `ft8.tx.max_repeats` resolves rather than defaults.
+The configuration diff/restart hint may classify changes for the UI, but it does not
+make restart-only fields live. Rig hot-swap is not implemented.
 
-**`ft8.audio` (`Ft8AudioConfig`, both fields `*float64`, resolver
-`types.ResolveFt8Audio`, added 2026-08-06):** the RX audio-level meter's
-classification window in dBFS — `low_dbfs` (default −60; below = too quiet to
-decode reliably) and `high_dbfs` (default −10; above = running hot). Served
-RESOLVED on GET as `ft8_audio`; **read-only over `/v1/config`** (like
-`ft8_frequencies` — a PUT never carries it, calibration is a config.json edit +
-restart). Validation checks the RESOLVED pair (a lone override can invert the
-window against a default): both within [−120, 0], low strictly below high.
-Defaults are WSJT-X-convention starting points awaiting hardware calibration
-against the operator's PCM2903C. The daemon publishes raw measurements
-(`ft8-audio-level` on `/v1/ft8/events`, ~4 Hz, peak+RMS dBFS); the SPA
-classifies. Clipping is pinned SPA-side at a fixed near-0 dBFS peak check, not
-configured here.
+### 11.5 Current live-applied field
 
-**`ft8.meter` (`Ft8MeterConfig`, one `*int` field, resolver
-`types.ResolveFt8Meter`, added 2026-08-07; red folded into amber 2026-08-08):**
-the TX-drive (ALC) readout's colour threshold on the rig's raw 0–255 scale
-(ADR 0064). `alc_amber` (default 30, **operator-RATIFIED 2026-08-07** — green
-is the HEALTHY band: live FT8 TX measured ALC 15–18 with PO flat, never zero
-while keyed, so a zero-only green could never show during a correct
-transmission) is where green ends and amber begins, and amber is the TERMINAL
-"reduce the audio level" state (**ratified 2026-08-08**: the §4
-deliberate-overdrive run measured the RM ALC answer saturating at ~30 of 255
-while the front panel sat +20 dB over the zone — no ALC-only threshold above
-~30 can ever fire, so the provisional `alc_red` was removed; a legacy
-`alc_red` key in an older config.json is ignored). Clamps to 1–255. Served
-RESOLVED on GET as `ft8_meter` (`{"alc_amber":N}`); read-only over
-`/v1/config` (calibration is a config.json edit + restart, like `ft8.audio`).
+`ft8.tx.max_repeats` is the one field with a server-side live application path. A
+successful PUT first persists the candidate and then pushes the committed resolved
+value into the running sequencer. A rejected or failed write therefore cannot alter
+the live attempt limit, and a concurrent save cannot leave runtime ahead of the
+last committed value.
 
-### (d) safety-ceiling — const is a non-overridable MAX, not a default ⚠️
+## 12. Normalize and validate
 
-These must survive any redesign as ceilings; flattening them into ordinary defaults
-would let config create an unsafe state.
+Normalization is a deterministic transform shared by Load and PUT. It currently:
 
-| Ceiling | Where | Rule |
-|---|---|---|
-| Tune power ≤ 40 W | clamped at `bridge.Service` construction (`internal/bridge`) | const 20 W default, config `bridge.tune.power_w` clamped ≤ 40 |
-| Tune duration ≤ 30 s | `bridge.Service` construction | const 15 s default, clamped ≤ 30 |
-| Tune restore-settle ≤ 2 s | `bridge.Service` construction | const 150 ms default, clamped ≤ 2 s |
-| FT8 TX hard auto-off (`ft8TxMaxDuration`) | `internal/bridge/ft8tx.go` | 18 s, not operator-overridable |
-| FT8 sequencer repeat cap ≤ 10 (`Ft8MaxRepeatsCeiling`) | `types.ResolveFt8MaxRepeats` | const 6 default, config `ft8.tx.max_repeats` clamped ≤ 10; surfaced on `/v1/config` as `ft8_max_repeats` (logging FT8 Settings tab) + **applied live** via `Service.SetMaxRepeats` (§11.5) |
-| Band-activity `history_max` clamp [10, 2000] | `ResolveFt8Display` | both a default *and* a clamp |
-| Bridge timeout sane range [50 ms, 1 h] | `validateBridge` | rejects out-of-range as a typo guard |
+- trims and uppercases callsign identities and operator-roster keys;
+- canonicalizes Maidenhead locators, converts legacy ADIF-form coordinates to
+  decimal degrees, and derives coordinates from a locator only when both are empty;
+- trims zone/DXCC values;
+- normalizes provider URLs, lookup TTL/policy/order, and SMTP defaults (the API
+  overlay separately canonicalizes Field Day input);
+- removes per-rig overrides equal to embedded defaults; and
+- drops empty legacy bridge serial/CAT projection blocks.
 
-## 5. Validation map
+Normalization does not silently repair contradictions. For example, explicit
+coordinates outside the declared locator are rejected, not moved to the locator's
+center.
 
-Three+1 distinct mechanisms — **and startup vs PUT validate through different code
-paths** (a divergence, §7).
+`Validate(Config) []Finding` is pure. Each finding has a field, stable code,
+message, and warning severity. Load makes error findings fatal; PUT maps them to
+client errors. Both callers validate the whole normalized candidate, so a value
+accepted through the API must also survive the next startup.
 
-- **Startup-fatal** (`config.Load` aborts the daemon): JSON parse; `applyRigProfiles`
-  (rig id > 0, unique, non-empty model, `default_rig_id` resolves); `validateForwarders`
-  (name/type non-empty, unique names, action-filter enum, non-negative tick/batch, retry
-  bounds); `validateLookup` (non-negative TTLs; per-enabled-provider URL + positive
-  timeout; unique chain names; no collision with hamnut); `validateSmtp` (when enabled:
-  host, from, port 1–65535, positive timeout); `validateBridge` (mode-mappings valid
-  ADIF; timeout ranges; non-negative tune knobs; when enabled: port + driver). Then in
-  `cmd/smd`: `Service.Initialize()` checks (bridge logger; ft8 logger + capture source).
-- **PUT-400** (`internal/api/handler_config.go`, runtime, non-fatal): callsign (3–32 +
-  digit), maidenhead (4/6/8 + lat/lon derivation), CQ zone [1–40], ITU zone [1–90], DXCC
-  [0–522], amp multiplier [0–1000], default power [0–2000], `station.operating_bands`
-  (each a known band per `enums/bands`, no duplicates; empty = "all bands" — the SPA
-  defaults its band selector to HF..6m), bridge mode-mappings (driver known, valid ADIF,
-  diffed to overrides), ft8_display feed-mode enum. **This is a separate validator from
-  the startup ones — overlapping fields are checked in two places with no shared
-  function.** `validateStationPrefs` runs on BOTH paths (startup + PUT).
-- **Soft-fail** (degrade, daemon continues): QRZ session-key fetch failure at provider
-  `Initialize` → provider disabled + warning (`internal/lookup/qrz`).
-- **Advisory** (`config.Warnings`, non-fatal, logged once): an **acknowledged**
-  non-loopback TCP bind (see §5.1 — the *un*acknowledged case is startup-fatal).
+## 13. Versioning and migration
 
-### 5.1 Bind posture — `server.allow_insecure_network` (ST-3a, 2026-08-16)
+### 13.1 Version field and ordered registry
 
-`server.protocol=tcp` supports three honest postures (ADR 0069):
+The current schema version is `2`. A missing version is the version-`1` baseline.
+Migrations are registered and applied one version at a time.
 
-- **Loopback TCP** (`127.0.0.1` / `::1` / `localhost`, the first-run default) —
-  local-only, no auth/TLS, no acknowledgement needed. `hostAllowed` is
-  rebinding-proof for these.
-- **Owner-private Unix socket** (`protocol=unix`) — filesystem permissions ARE the
-  authorization; never subject to the bind check.
-- **Direct non-loopback TCP** — a specific LAN/public IP, a wildcard (`0.0.0.0` /
-  `::` / empty host), or a non-localhost hostname. This exposes the **entire
-  unauthenticated, unencrypted API + RF control** to every host that can reach the
-  port, so it is **startup-fatal** (`insecure_bind_unacknowledged`, `Load` aborts /
-  PUT 400) **unless** the operator sets `server.allow_insecure_network: true`. With
-  the acknowledgement the daemon starts and logs a standing advisory enumerating the
-  full exposure. Wildcard binds require the ack too: loopback-Host trust in
-  `requireSameOrigin` is a DNS-rebinding defence, **not** peer authentication, so a
-  native LAN client can forge the Host.
+### 13.2 Raw-document migrations
 
-`allow_insecure_network` is **config-file/startup-only** — deliberately absent from
-the `/v1/config` wire surface (server-bind settings never were on it), so the
-acknowledgement cannot be set by a remote API client. This is the ST-3a **migration
-acknowledgement**, not the secure-remote topology — authenticated LAN access is
-**ST-3b**, an open decision (ADR 0069).
+Raw-document migrations run before typed unmarshal so they can read fields removed
+from the current structs. They must preserve or explicitly reject malformed operator
+data.
 
-### 5.2 Unix socket permissions (ST-5, 2026-08-16)
-
-For `protocol=unix`, filesystem permissions ARE the authorization, so the daemon makes
-them a real boundary rather than leaving them to the ambient umask (`net.Listen` would
-otherwise create the socket `0777 & ^umask`):
-
-- **Default path** is an owner-private runtime location, resolved in order:
-  `$XDG_RUNTIME_DIR/station-manager/smd.sock`, else
-  `$XDG_STATE_HOME/station-manager/run/smd.sock`, else
-  `$HOME/.local/state/station-manager/run/smd.sock`. It is **never** `/tmp` (world-writable
-  and useless as an authorization boundary); if none of those bases resolve and no
-  `socket_path` is set, startup is **fatal** (`unix_socket_unresolved`).
-- **Parent directory:** the socket's immediate parent must be euid-owned, a real directory
-  (not a symlink), and inaccessible to group/other (`0700`). The daemon creates a missing
-  default parent `0700`; an existing operator-supplied parent that is not owner-private is
-  **fatal** (it is never loosened or mutated). Validated *before* bind, closing the race
-  between `net.Listen` creating the socket and the subsequent chmod.
-- **Socket:** after bind and before serving, the socket is chmod'd `0600` and verified
-  (is-socket, euid-owned, mode `0600`); on any failure the socket is unlinked and startup
-  fails.
-
-### 5.3 Private-state file permissions (ST-6, 2026-08-16)
-
-Local artifacts that hold operator/QSO data are owner-private. The one policy lives in
-`internal/fsperm`:
-
-- **Application-owned** paths (laid out under the resolved working directory, symlink-aware
-  containment — never a lexical prefix — and euid-owned) are tightened to owner-only and
-  the effective mode is **verified**: `0700` directories, `0600` files. A failure to
-  establish the mode is **fatal** for the databases. Applied to the log + reference
-  databases and their `-wal`/`-shm` sidecars + directory (`sqlite.SecureDataFiles` at
-  startup), the bootstrap backup dir/db, the sent-ADIF archive dir/files, and the log file
-  (existing files chmod'd, not just created `0600`). The working-directory **root** stays
-  `0755` by design and is never tightened as a child.
-- **Operator-supplied** paths OUTSIDE the working directory are **never mutated** (a
-  deliberately-shared location is the operator's call) but a group/world-accessible one
-  earns a high-signal startup warning. A symlink is never chmod'd through.
-
-## 6. Lifecycle & dynamics
-
-- **Read-once-at-construction (restart to change):** Server, Datastore, Logging, Bridge
-  (`bridge.New(cfg.ActiveBridge())`), FT8 (`ft8.NewService(cfg.ActiveFt8())`), Forwarders,
-  Enrichment providers, Mailer. Both `internal/bridge` and `internal/ft8` carry explicit
-  comments: *"Config is read once and snapshotted; runtime PUT changes don't reach an
-  existing Service. Operator restart picks up edits."*
-- **Per-op (live):** `LoggingStation`, `Station`, `DefaultLogbookID`, `DefaultRigID`,
-  `Bridge.ModeMappings`, enrichment TTL accessors — read via `Snapshot()` each request.
-- **Effectively dynamic (no restart):** only SPA-consumed settings — `ft8_display`,
-  `ft8_frequencies`, `station`, `logging_station` — because the SPA re-reads `configState`
-  on every PUT response. This is dynamic *by accident of who consumes them*, not by design.
-- **No reload mechanism exists.** `config.Service.Update` rewrites the whole file
-  (atomic temp+rename via `WriteJSON`) and swaps the in-memory `Cfg`, but **notifies no
-  subsystem**. There is no config-change event, watch, or re-read hook anywhere.
-- **Service surface:** `Load`, `Snapshot` (value copy under RLock), `Update`
-  (disk-then-memory), `UpdateInMemoryThenPersist` (memory-then-best-effort-disk),
-  `Initialize`, `WriteJSON`, `Warnings`, `Active{Bridge,Ft8}`, `RigByID`.
-
-## 7. Findings / divergences (observations only — no fixes here)
-
-1. **Profile half-migration (ADR 0028).** Only `Model`/`Port`/`Audio.Device` were moved
-   per-rig. Rig-specific fields keep landing in global blocks — `ft8.tx.mode` (`DATA-U`)
-   is the live example; `ft8.tx.device` and arguably `bridge.timeouts`/`bridge.tune` are
-   candidates. **There is no rule for where a new field goes**, so drift is the default.
-2. **Loose-block + projection is transitional.** `bridge.serial.port`, `bridge.cat.driver`,
-   `ft8.device` are dead-but-present on disk; `Active*()` always projects the active rig
-   over them. They linger with no deprecation/removal plan, and `RigConfig.Overrides` is
-   declared but unwired.
-3. **`ft8.tx.mode` is rig-specific but global** — breaks the moment a non-Yaesu rig
-   (the incoming IC-7300) is the active rig.
-4. **Startup vs PUT validation divergence.** Overlapping fields (e.g. mode-mappings) are
-   validated by two separate code paths with no shared validator — they can drift.
-5. **No config version / migration story.** The only migration is the ad-hoc
-   `applyRigProfiles` fold, re-run every load. No `version` field; no path for future
-   schema moves (e.g. relocating a field per-rig) without bespoke code.
-6. **config.json drifts from code.** Dev and dogfood files diverge from each other and
-   lag the code; nothing keeps them in sync, and the whole-file-rewrite-on-PUT reorders
-   fields and clobbers hand edits (hence the "don't edit config.json while the daemon
-   runs" operating rule).
-7. **Defaults are spread across four mechanisms** (`applyDefaults`, `DefaultConfig`,
-   `Resolve*`, nil-pointer) plus safety-clamps — no single place answers "what's the
-   default for X, and is it overridable?"
-8. **Restart-only is the norm.** Every daemon-consumed setting needs a restart; only
-   SPA-consumed ones are live, and only incidentally.
-
-## 8. Inputs to the redesign (parked — undecided)
-
-To be resolved in the redesign phase, not here:
-
-- **Ownership taxonomy + the rule for a *new* field** — ✅ **DECIDED 2026-06-13; see §9.**
-- **Finish the per-rig move**: which fields move into `RigConfig` (starting with
-  `ft8.tx.mode`); projection-overlay vs the active rig fully owning its sub-config;
-  whether/how to delete the loose blocks; wire `RigConfig.Overrides`.
-- **rigdef-derived defaults**: how much rig-specific config should *default from the
-  rigdef* (operator stores only overrides), shrinking config.json.
-- **Dynamic reload**: which settings hot-reload vs stay restart-only; the one
-  notify→re-read mechanism that would make live ones live.
-- **Validation unification**: one validator shared by startup and PUT; fatal-vs-degrade
-  policy.
-- **Defaults model**: one home for defaults; keep the safety-ceiling distinction explicit
-  and non-overridable.
-- **Versioning/migration**: a `version` field + a real migration path.
-- **Persistence shape**: single file vs split; the whole-file-rewrite friction; whether
-  any config truth should move to the DB.
-- **Multi-rig / N-writer future** (`topology.md`): does the single-active `DefaultRigID`
-  assumption hold. ⏸ **PARKED 2026-06-13** — no current driver; only becomes real with
-  two-radios-at-once (SO2R) or multi-station contesting. §9–15 deliberately assume single-active
-  (one operator, one active rig, one daemon). Revisit if that changes.
-
-**Guardrail for the redesign:** *build specific, not generic* — a clean, explicit shape,
-not a generic settings framework (the v1 `adapters/` cautionary tale).
-
-## 9. Redesign — ownership taxonomy (decided 2026-06-13)
-
-The drift-killer: a fixed set of scopes **plus a placement rule** applied to every config
-value, new or existing. Resolves §7 finding #1 ("no rule for where a new field goes").
-
-### 9.1 The seven scopes
-
-| Scope | What it is | Authority / home | Mutable? |
-|---|---|---|---|
-| **A — rig capability** | what a rig *model* can do + its per-model defaults | rigdef `internal/cat/rigs/*.json` | immutable (embedded) |
-| **B — per-rig config** | operator config that varies with the active rig | `RigConfig` (catalogue), per instance | operator |
-| **C — global daemon config** | one value per daemon, rig-independent | config.json top-level | operator |
-| **D — operator/station identity** | who the operator/station is | config.json `logging_station` / `station` | operator |
-| **E — SPA presentation prefs** | daemon stores, never reads | config.json (served to the SPA) | operator (via SPA) |
-| **F — session/operating state** | ephemeral runtime state | in-memory / localStorage — **never config.json** | n/a |
-| **G — entity / derived data** | rows + caches | the **DB** — **never config.json** | per-feature |
-
-### 9.2 Inside B — split by *default source*, not storage
-
-Everything in B is stored **per rig instance, inside that rig's `RigConfig` block** —
-self-contained, no per-model side tables (see 9.4). The B1/B2 split is only about whether
-a sensible default exists:
-
-- **B1 — per-instance, must-set** (no default; hardware/cabling-specific): serial **port**,
-  **audio device(s)** (capture + TX playback).
-- **B2 — per-model, rigdef-default + optional override**: FT8 **data-mode literal**, serial
-  **param overrides**, **mode-mappings**. Resolution: `rig.Model` → rigdef per-model default
-  → apply this rig's override; the **merged** value is authoritative.
-
-**`mode_mappings` is the reference implementation of B2 today** (config SPA Rigs tab →
-Mode Mappings; rigdef ships defaults; only operator deltas persist; merged at `/v1/config` GET).
-`ft8.tx.mode` and the serial overrides simply adopt the same pattern.
-
-### 9.3 The placement rule (apply to any field; first match wins)
-
-1. *What the rig model can do* → **A** (rigdef; not operator config).
-2. *Describes the rig model* (e.g. `MY_RIG`) → **derive from the rigdef at log time; don't store.**
-3. *Value depends on the active rig* → **B** — no sensible default (hardware) → **B1**;
-   the rigdef can default it per model → **B2**.
-4. *Who the operator/station is* → **D**.
-5. *Daemon reads it to change behaviour, one value daemon-wide* → **C**.
-6. *Only the SPA reads it* → **E**.
-7. *Ephemeral operating state* → **F** (never config.json).
-8. *Row / derived data* → **G** (the DB).
-
-**Drift-killer:** if the value would differ on a different rig, it is **B** — never a
-global block.
-
-### 9.4 Principles
-
-- **Independently-varying equipment is its own axis, not per-rig.** Rig↔antenna is **N:M**
-  (e.g. 2 rigs, 1 shared antenna; one-to-many / many-to-one / many-to-many / one-to-one all
-  occur). So **`MY_ANTENNA` is NOT per-rig** — it's a plain operator-set free-text identity
-  field (**D**), commonly **blank** (operators often exchange equipment verbally and note it
-  in the comment field, not `MY_ANTENNA`); **never required, never derived.** A future
-  multi-antenna + switch setup would add its own "active antenna" selector (mirroring rigs),
-  orthogonal to the rig — deferred (operator has one antenna).
-- **Don't normalize config across rigs to avoid repeated values.** Two same-model rigs are
-  just two rigs; coinciding params are coincidence, not shared state. No per-model side
-  tables — each `RigConfig` is self-contained.
-- **Derive what the rigdef knows — as an overridable default.** `MY_RIG` *defaults* to the
-  active rig's rigdef `name` (follows the QSO's rig automatically), but the operator can
-  override it **per rig** (`RigConfig.MyRig *string`: nil = derive the name, `""` = suppress /
-  don't publish the rig, a value = publish it verbatim). It's just another **B2** field, not a
-  special derive-only case. **General rule:** the single submit-time injection point (§10.4 #2)
-  stamps *derived defaults*, never forced values — every such field stays operator-overridable,
-  with explicit-blank meaning "suppress."
-
-### 9.5 Implications (consequences of the taxonomy — sequenced in the "finish the per-rig move" + "versioning/migration" topics, NOT actioned here)
-
-- `ft8.tx.mode` → **B2** inside `RigConfig`; the rigdef declares the per-model data-mode
-  default (a new rigdef field). Fixes the `DATA-U`-is-global bug + the incoming IC-7300.
-- `bridge.mode_mappings` → fold into `RigConfig` (per instance); drop the top-level
-  driver-keyed block.
-- `RigConfig.Overrides` (serial) → **B2**; wire it (declared-but-unused today).
-- `ft8.tx.device` → **B1** (per instance), resolved like the capture device.
-- Loose `bridge.serial` / `bridge.cat` + `ft8.device` → removed once the fields fully live
-  in `RigConfig` (ends the transitional projection).
-- `MY_RIG` → per-rig `RigConfig.MyRig *string` override over a rigdef-`Name` default (B2),
-  stamped at the single submit-time injection point; drop `logging_station.MyRig`.
-
-## 10. Redesign — finish the per-rig move (design — decided 2026-06-13; implementation pending)
-
-The mechanism for the §9.5 implications: how each B-scope field physically moves into
-`RigConfig`, how it resolves (rigdef default ← per-rig override), and how existing config
-migrates. All four §10.4 sub-decisions are now decided (2026-06-13); implementation pending.
-
-### 10.1 Resolution model (unchanged shape, new source)
-
-The single resolution point stays `Config.ActiveBridge()` / `Config.ActiveFt8()` (plus
-`cat.Lookup(model)` for rigdef defaults): **rigdef(model) defaults ← active `RigConfig`
-overrides → projected `BridgeConfig` / `Ft8Config`.** Every subsystem keeps reading the
-projected config exactly as today (`bridge.New(cfg.ActiveBridge())`,
-`ft8.NewService(cfg.ActiveFt8())`, the TX controller's `txMode()`); only the *source* of the
-projected values changes. Rigdefs stay the immutable defaults layer (A); `RigConfig` holds only
-B1 (must-set) + B2 (overrides).
-
-### 10.2 What moves (per B-scope field)
-
-| Field | Today | New home | Resolution |
-|---|---|---|---|
-| FT8 data-mode (`ft8.tx.mode`) | global `Ft8TXConfig.Mode` | new rigdef `RigDefinition.Ft8Mode` default + optional `RigConfig.Ft8Mode` | `ActiveFt8()`: `rc.Ft8Mode → else rigdef(rc.Model).Ft8Mode` → projected onto `Ft8Config.TX.Mode` |
-| mode-mappings | global `bridge.ModeMappings[driver][lit]` | `RigConfig.ModeMappings[lit]` (driver key dropped — the rig knows its model) | `bridgeInfoFor`: `rigdef(rc.Model).ModeMappings` ← `rc.ModeMappings` (same merge, new source) |
-| serial overrides | `RigConfig.Overrides` (declared, **unwired**) | wire it | `buildSerialConfig`: `rigdef.Serial` ← `rc.Overrides` (zero field = rigdef default) |
-| FT8 audio (capture + TX playback) | capture `RigConfig.Audio.Device` (index) + global TX `Ft8TXConfig.Device` | **per-direction name-based** `RigConfig.Audio.{rx, tx}` (rev. 2026-06-16) | `ActiveFt8()` projects `audio.rx → Ft8Config.Device` (capture) + `audio.tx → Ft8Config.TX.Device` (playback); the audio layer resolves each name → live index at acquire time |
-| `MY_RIG` | stored `logging_station.MyRig` | per-rig `RigConfig.MyRig *string` override over a rigdef-`Name` default (B2) | stamped at submit (single injection point): `rc.MyRig != nil ? *rc.MyRig : rigdef(rc.Model).Name` — nil=derive, `""`=suppress |
-
-Once these live in `RigConfig`, the transitional loose globals are removed: `bridge.serial` /
-`bridge.cat`, `ft8.device`, `ft8.tx.mode`, `bridge.mode_mappings`. `Active*()` then resolve
-purely from the active `RigConfig` + rigdef. The rigdef already maps `DATA-U`/`DATA-L` →
-`{mode: FT8}`; `Ft8Mode` just names *which* literal is the default FT8 operating mode (a flat
-add to `cat.RigDefinition` + the `rigs/*.json` files).
-
-### 10.3 Migration
-
-Extend `applyRigProfiles` (already folds loose `bridge`/`ft8` identity into the id-1 rig) to
-also fold: global `ft8.tx.mode` → that rig's `Ft8Mode`; global `bridge.mode_mappings[driver]` →
-the matching rig's `ModeMappings` (by model); drop `logging_station.MyRig` (now derived).
-In-memory, idempotent. (config.json isn't authoritative and the operator reloads the DB from a
-QRZ export, so this is low-stakes — but it keeps existing config.json files loading cleanly.)
-
-### 10.4 Open sub-decisions (pending operator confirmation)
-
-1. **Audio device identification** — ✅ **DECIDED 2026-06-13: name-based** (device names, not
-   indices, because an index drifts across replug/reboot and differs between a codec's capture and
-   playback enumerations). ✏️ **REVISED 2026-06-16: per-direction, two fields**
-   `RigConfig.Audio.{rx, tx}` (each a device **name**), superseding the original single
-   `RigConfig.Audio.Device`. *Why the revision:* the single-field model assumed one name resolves to
-   both endpoints — true when the same codec enumerates under an identical name in both lists, but
-   not guaranteed (a rig may use genuinely different devices for RX and TX, or differing names), and
-   the single field was never wired for playback. Per-direction is explicit, robust, and only costs
-   the operator a second pick (the config-SPA can auto-fill both from one choice for the common
-   single-codec case). The borrowed IC-7300 motivated it: its USB codec `"PCM2901 Audio Codec Analog
-   Stereo"` is capture index **4** / playback index **2** — same name, two indices — which is
-   exactly why names beat indices, and why each direction resolves independently.
-   - **Resolution:** `Config.ActiveFt8()` projects `audio.rx → Ft8Config.Device` (capture) and
-     `audio.tx → Ft8Config.TX.Device` (playback); the audio layer (`internal/audio/{capture,
-     playback}`, via a `DeviceName` config field) matches the name against the live enumeration at
-     **acquire time** (survives replug) and fails soft — no match → that direction goes idle rather
-     than grabbing the wrong system default. An integer-string value is still honoured as a raw
-     index for any un-migrated config.
-   - **The global `ft8.device` / `ft8.tx.device` are dropped as operator knobs** — device selection
-     is now purely a per-rig property, so switching `default_rig_id` re-binds audio along with the
-     CAT port + driver. `Ft8Config.Device` / `Ft8Config.TX.Device` survive only as resolved
-     runtime-view fields `ActiveFt8()` fills (the FT8 subsystem keeps consuming a plain
-     `Ft8Config` — it never imports the rig catalogue), mirroring `ActiveBridge()`.
-   - **No index→name auto-migration** (the loader can't safely enumerate devices), so an existing
-     index config's `ft8.device`/`ft8.tx.device` are simply dropped and each rig's `audio.rx`/`tx`
-     are set once by name. Trivial here (single dev/dogfood host).
-   - **The earlier interim `ActiveFt8()` clobber bug** (it overwrote a loose `ft8.device` with the
-     active rig's *empty* audio device, zeroing it to the system default) was fixed 2026-06-15.
-   - ✅ **Daemon side SHIPPED + live-validated 2026-06-16** (`RigAudioConfig.{RX,TX}`, `ActiveFt8`
-     per-direction projection, `capture.Config`/`playback.Config` `DeviceName` name resolution).
-     Live RX decode confirmed on dev: the daemon matched `"PCM2901 Audio Codec Analog Stereo"` →
-     IC-7300 capture device and decodes landed. ⏸ **The device-by-name picker UI is still DEFERRED to the config-SPA workstream** —
-     its rightful home — but the operator no longer hand-edits indices: they hand-edit *names* now,
-     and the SPA will replace that with a pick-list off `GET /v1/hardware`.
-2. **`MY_RIG` derivation point** — ✅ **DECIDED 2026-06-13: daemon-side at QSO submit**, a
-   single injection point both the phone/CW (handler) and FT8 (sink) submit paths flow through
-   (via an injected resolver, so `qsoservice` stays decoupled from `cat`/`config`). It stamps a
-   *derived default* (rigdef `Name`) that the per-rig `RigConfig.MyRig *string` override can
-   replace or suppress (§9.4). The principle generalises to any future derived-but-overridable
-   identity field.
-3. **Rigdef field name** — ✅ **DECIDED 2026-06-13: `ft8_mode`** (`RigDefinition.Ft8Mode`,
-   `json:"ft8_mode"`). Specific to its FT8 consumers and unambiguous vs other data literals;
-   generalise only if a future FT4/RTTY feature actually reuses it (build specific, not generic).
-4. **mode-mappings key** — ✅ **DECIDED 2026-06-13: key by rig literal, drop the driver key.**
-   `RigConfig.ModeMappings map[string]types.ModeMapping`; the rig's `Model` already *is* the
-   driver. Merge becomes `rigdef(rc.Model).ModeMappings` ← `rc.ModeMappings`.
-
-### 10.5 Implementation status (2026-06-13)
-
-**SHIPPED** (behind the §13 version/migration scaffold), one slice each:
-- **2a** — rigdef `Ft8Mode` + per-rig `RigConfig.Ft8Mode` override + `ActiveFt8` projection onto
-  `Ft8Config.TX.Mode`; legacy global `ft8.tx.mode` folded typed (`migrateGlobalFt8Mode`).
-- **2b** — `RigConfig.ModeMappings` (keyed by rig literal); **global `bridge.ModeMappings`
-  removed**; first **raw `v1→v2` migration**; per-rig ADIF validation; `bridgeInfoFor` + the
-  PUT handler retargeted to the active rig. (+ an api round-trip test plugging the prior gap.)
-- **2c** — `RigConfig.Overrides` wired into `buildSerialConfig` via an `ActiveBridge` projection.
-- **2d** — `RigConfig.MyRig` + `Config.ResolveMyRig` + submit-time stamp in `qsoservice.Submit`
-  (reuses the existing `Config` dependency — no separate injected resolver; `SubmitImport`
-  preserves imported `MY_RIG`); legacy `logging_station.my_rig` folded typed.
-
-**SHIPPED — loose-block removal + canonicalising Normalize (2026-06-13):**
-- **`bridge.serial` / `bridge.cat` dropped.** `BridgeConfig.Serial`/`Cat` are now
-  `*pointer,omitempty`: the **stored** config carries `nil` (so empty `"serial": {}` / `"cat": {}`
-  no longer persist), and `ActiveBridge()` builds a fresh, always-non-nil runtime projection of the
-  active rig (no aliasing of stored state; callers deref freely). The legacy-synthesis fold reads
-  them nil-guarded.
-- **`Normalize` now canonicalises to "only what differs":** it nils any per-rig `Ft8Mode`/`MyRig`
-  override that merely restates the rigdef default (`normalizeRigOverrides`, via `cat.Lookup`) and
-  nils empty loose `serial`/`cat` blocks (a non-nil pointer to a zero struct would re-serialize as
-  `{}`). Runs on **every** Load + PUT, so configs stay clean, not just at migration.
-- **`migrateGlobalMyRig` no longer misattributes a stock name:** the legacy global `my_rig` is
-  folded onto the active rig **only when it's a genuinely custom string**. If it equals the rigdef
-  name of *any* catalogue rig (`rigNamed`), it's just stock identity that derives per-rig — so it's
-  dropped rather than stamped onto the active rig, which may be a different model. (Caught when a
-  v1 copy with `default_rig_id` pointing at one model carried a global `my_rig` naming another:
-  e.g. active = FTdx10 but `my_rig: "Yaesu FT-710"` was folding "Yaesu FT-710" onto the FTdx10.)
-  `normalizeRigOverrides` only strips a rig's *own*-name match; the cross-catalogue case needs this
-  fold-level guard. Verified end
-  to end on the dev `build/config.json`: both rigs reduce to `{id, model, port}` while
-  `ResolveMyRig` / `ActiveFt8().TX.Mode` still derive correctly, and `bridge` reduces to
-  `{enabled, timeouts, tune}`.
-
-**SHIPPED 2026-06-16 — 2e name-based audio device (§10.4 #1), daemon side:** per-direction
-`RigConfig.Audio.{rx,tx}` (names) replace the single index field; `ActiveFt8()` projects both
-directions; `internal/audio/{capture,playback}` resolve name→index at acquire (fail-soft); the
-global `ft8.device`/`ft8.tx.device` operator knobs are **dropped**. Only the device-by-name
-**picker UI** remains deferred to the config-SPA workstream (until then the operator hand-edits
-`audio.rx`/`audio.tx` names directly). The logging SPA's My Station **"Rig" field is inert**
-(MY_RIG derived) — remove it when the per-rig editor lands. `bridge.tune` `{}` is a *legitimate* defaults block (tune knobs are code-constant
-ceilings, ADR 0027), not vestigial — kept.
-
-### 10.6 Editing surface — the app's Settings (was: a dedicated config SPA)
-
-> **SUPERSEDED 2026-08-19.** The set-once editing surface is the **consolidated app SPA's
-> Settings** (ADR 0044), reached at `/app/config` (the retired `/config` 307-redirects there).
-> The standalone config SPA this section directed WAS built, then RETIRED once its editing
-> surface — Station identity + QSL defaults, the Rigs master-detail editor (model / FT8-mode /
-> MY_RIG / connection / per-rig mode-mappings + serial overrides, plus add / edit / delete), the
-> CAT master switch, and the FT8 / Forwarding / Email / Enrichment / General sections — was ported
-> into the app (W-0003; source preserved under the `legacy-config-spa-retired` tag). Throughout
-> this document, **"config SPA" now means the app's Settings**, and where the text below defers an
-> editor to "the config-SPA workstream" that editor has since shipped in the app. The dated
-> direction below is the historical record of how config editing arrived at the app.
-
-Operator direction (2026-06-13): **set-once config moves to a dedicated config SPA, separate
-from the logging SPA.** Things configured once and rarely/never changed are UI *noise* in the
-live logging client — examples called out: **per-rig mode-mappings** (moved to the config SPA's
-Rigs tab 2026-06-25; removed from the logging SPA) and the **FT8 Band Activity colour-coding /
-display prefs** (`ft8_display`: highlight
-colours, row cap, feed mode). These belong in the config SPA; the logging SPA keeps only what's
-needed *during* logging (QSO form, live rig state, session, operationally-relevant identity).
-
-Consistent with ADR 0001 (three clients: logging / logbook / config) and the
-logging-vs-logbook scope rule. The config SPA itself is a **separate design/build workstream**
-(`frontend-spa.md` / a future ADR), **not** part of this config *data-model* redesign — but the
-redesign assumes config editing lands there, so the per-rig mode-mappings editor and the FT8
-display-prefs editor target the **config SPA**, not the logging SPA.
-
-**Status (2026-06-24):** the config SPA is now a **category-tab shell** —
-`Station · Rigs · FT8 · Forwarding · Email · Enrichment`. The shell + the
-**Station tab** (the set-once `LoggingStation` MY_* fields — zones/DXCC/country,
-postal address, altitude, antenna, CW) shipped; the rest are placeholders. Full
-design (shell, the operational-vs-set-once Station split, the Rigs master-detail
-editor + its recommended write path) lives in
-[`frontend-spa.md`](frontend-spa.md) → "Config SPA — design". The logging-side
-removal of the moved Station fields is **Phase 2**, deferred until the config SPA
-is live.
-
-## 11. Redesign — dynamic reload (decided 2026-06-13)
-
-Resolves the §8 "dynamic reload" input + the operator's no-restart-friction concern. Three
-active reload classes + one mechanism; rig-hot-swap parked.
-
-### 11.1 Reload classes
-
-| Class | Goes live by | Examples |
-|---|---|---|
-| **Live value** (stateless / per-request) | already live — read `Snapshot()` at use | identity, station, default IDs, TTLs |
-| **SPA-consumed** | already live — SPA re-reads `configState` on the PUT response | mode-mappings, ft8 display / frequencies |
-| **Hot-reloadable** (lightweight, no hardware) | injected `OnChange` → subsystem `Reload(snapshot)` | ft8 value (`ft8_mode` / occupancy / `enable_osd`), enrichment providers, forwarder workers, mailer creds |
-| **Restart-only** | restart; PUT persists + surfaces a "restart required" hint | infrastructure (HTTP listener, DB handle, log sink) **+ rig-hardware bindings** (serial port/driver, audio device, `DefaultRigID` / rig-swap) |
-
-**Rule:** hot-reload a value unless it's bound to a process-level *or* rig-hardware resource
-acquired at boot — those are restart-only (the rig-hardware ones until rig-hot-swap is
-unparked, §11.4).
-
-### 11.2 Mechanism
-
-`config.Service` gains an injected `OnChange(func(old, new Config))` hook (set by `cmd/smd`,
-the `SetQsoLogger` DI pattern), fired after a successful `Update` / `UpdateInMemoryThenPersist`
-— covering PUT, startup self-heal, and future config-SPA edits, since all writers go through
-those. The composition root dispatches the new snapshot to each hot-reloadable subsystem's
-**idempotent `Reload(snapshot)`**:
-
-- **ft8** — refresh cached cfg; `ft8_mode` (next arm), occupancy (next slot), `enable_osd`
-  (next decode) pick up the new values. **No device re-acquire** (parked).
-- **enrichment** — rebuild provider clients/sessions when creds / URL / enable changed.
-- **forwarders** — start / stop / restart workers for the changed set.
-- **mailer** — refresh SMTP creds.
-
-`Reload` with an unchanged relevant slice is a no-op. **Not** a generic config-event bus —
-explicit DI wiring in the composition root (build specific; `events.Hub` stays for SSE client
-fan-out, not internal control flow).
-
-### 11.3 Fail-soft + "restart required"
-
-Reload runs *after* the config is validated + persisted. A reload that can't apply logs +
-degrades — it never crashes the daemon or rolls back the saved config (same spirit as
-"enrichment never blocks logging"). For **restart-only** fields the daemon persists the change
-but does not apply it live; it surfaces a **"restart required"** hint (a flag on the
-`/v1/config` response / a toast) so the operator knows the PUT took but won't take effect until
-restart.
-
-### 11.4 Parked — rig-hot-swap
-
-Changing the active rig at runtime — a `DefaultRigID` swap plus the rig-hardware re-acquire it
-implies (close+reopen the serial pipeline, release+re-acquire the audio device, re-resolve
-`Active*()`) — is **parked**: a "could be nice," not a current need. Until unparked, switching
-rigs or editing the active rig's port / driver / audio device is **restart-only**. When it
-lands it reuses the bridge supervisor's close+reopen (ADR 0020) + ft8's demand-driven
-acquire/release, and closes ADR 0028's deferred "runtime hot-swap" item.
-
-### 11.5 Status
-
-Design decided; **implementation gated on the config-SPA write path (deferred 2026-06-13).**
-
-When the implementation was scoped, every runtime config-write path was traced: `PUT /v1/config`
-writes only `LoggingStation` / `Station` / `ft8_display` / active-rig `mode_mappings` (all
-**already-live** classes 1–2 — read-at-use or SPA-re-read-on-response, needing no reload), and the
-two `cmd/smd` startup writes (`UserAgent`, default-logbook self-heal) fire before subsystems exist.
-**Almost no runtime writer touches a class-3 (hot-reloadable) field** — forwarder config, SMTP creds,
-enrichment/lookup, `ft8.enabled`/`device`/`ft8_mode` are all edited the "stop → edit config.json →
-restart" way. So building `OnChange` + the four `Reload`s now would be the mechanism *ahead of its
-trigger*: the hook would fire on every My Station save and every subsystem `Reload` would no-op,
-and it couldn't be tested end-to-end (no runtime writer to exercise it).
-
-**The one exception (2026-07-03): `ft8_max_repeats`** — the FT8 sequencer's unanswered-rung repeat
-cap — is applied live by a **targeted `s.ft8.SetMaxRepeats` call in the `PUT /v1/config` handler**
-(the sequencer's own `mu` makes the write safe mid-contact), NOT via the general `OnChange`/`Reload`
-mechanism, which stays deferred. It's a bespoke live field because the operator needs to dial the
-cap down *mid-pile-up* to stop wasting slots on a dead contact — a per-QSO operating adjustment that
-doesn't justify standing up the whole reload machinery. If a second such field appears, that's the
-signal to revisit the general mechanism.
-
-The trigger is the **config-SPA** (§10.6, separate workstream): that's what makes
-forwarder/mailer/enrichment/rig-hardware editable at runtime. §11 lands *with* it — editor and
-reload-on-edit built and tested as one unit, with `Reload` semantics informed by the real editor.
-Until then those fields stay restart-only (the "restart required" hint, §11.3, is likewise moot:
-no PUT-writable field is restart-only today). The design above stands; only the build is deferred.
-
-## 12. Redesign — validation unification (decided 2026-06-13)
-
-Resolves the §8 "validation unification" input + the §5 / finding #4 startup-vs-PUT divergence.
-
-### 12.1 The problem
-
-Validation is fragmented three ways: **load-only** (fatal — forwarders, lookup, smtp, bridge,
-rig catalogue); **PUT-only** (400 — callsign, grid, zones, amp, power, ft8_display — *not*
-checked at Load, so a hand-edited bad value loads silently but a PUT of it is rejected); and
-**both via separate code** (bridge mode-mappings — validated in `validateBridge` *and* the
-handler, two impls that can drift).
-
-### 12.2 One validator, caller decides disposition
-
-A single **`config.Validate(cfg Config) []Finding`** in `internal/config` — the one source of
-truth for all config rules, consolidating `validateForwarders/Lookup/Smtp/Bridge` + the
-handler's field checks. **Pure** (no mutation). Run by **Load**, **PUT**, and future
-**config-SPA** writes. Each `Finding` is `{field, code, message}` (ADR 0010 code+i18n pattern),
-severity **error | warning**. Post-§10 it also covers the per-rig shape (each `RigConfig`'s
-mode-mappings, `ft8_mode`, overrides). Disposition is the caller's:
-
-- **Load:** any error → **fatal abort** (clear message).
-- **PUT / config-SPA:** errors → **400** (field+code; SPA renders via i18n); else persist.
-- **Warnings** (advisory — e.g. an *acknowledged* non-loopback bind, §5.1): logged at
-  Load, returned in the PUT response, never block. (An *un*acknowledged non-loopback
-  bind is an **error** finding, `insecure_bind_unacknowledged`, not a warning — ST-3a.)
-
-### 12.3 Normalize separated from validate
-
-The transforms — `applyDefaults`, callsign-uppercase, maidenhead→lat/lon derivation,
-mode-mapping diff-to-overrides — are a distinct `normalize` step that runs **before**
-`Validate`, shared by both paths. Pipeline: **parse → normalize → validate → persist**,
-identical at startup and runtime. Side-effecting bits (the setup-complete→seed-logbook
-transition, `DefaultLogbookID` resolution) stay in the handler — they aren't validation.
-
-### 12.4 Behavioral change (confirmed)
-
-Load now enforces the field rules that today only PUT enforces → a hand-edited malformed
-callsign / zone / power becomes a **fatal startup error** (clear, names the field) instead of
-loading silently. This just extends today's already-fatal *structural* validation to the
-*field* rules, and kills "daemon runs with config a PUT would reject" (no silent bad data).
-Pre-setup empties stay valid (fresh installs unaffected); fits the "edit config.json while
-stopped, restart" workflow — a bad edit fails the restart with a clear message.
-
-### 12.5 Ordering with reload (§11)
-
-`validate → Update (persist) → OnChange → Reload` — a subsystem never sees unvalidated config.
-
-### 12.6 Status
-
-**SHIPPED (2026-06-13).** Landed in slices:
-
-- **§12a** — `config.Validate(cfg) []Finding` consolidating the four standalone validators
-  (forwarders, lookup, smtp, bridge) + the non-loopback-bind advisory; `Finding{Field, Code,
-  Message, Warning}`; `Load` routes through it (errors → fatal). `internal/config/validate.go`.
-- **§12b-1** — rig-catalogue + per-rig mode-mapping validation moved out of `applyRigProfiles`
-  (now fold-only) into `validateRigs`.
-- **§12b-2** — the operator-identity field rules (callsign, grid, zones, amp/power, ft8_display
-  feed-mode) folded into `Validate`; an exported `config.Normalize` (uppercase callsign,
-  maidenhead→lat/lon derive, trim zones) run before `Validate` by both paths; the PUT handler
-  rewired to **build a candidate → `Normalize` → `Validate` (whole-config) → 400 on first error
-  finding → persist via `*cfg = candidate`**, dropping all its inline checks/transforms. The
-  config callsign rule is reimplemented in `internal/config` (can't import `qsoservice` — cycle;
-  api keeps its own `isValidCallsign` for the QSO/logbook surfaces); `api.isValidZone` retired
-  (config-only) and the api bounds-const block removed.
-
-Two behavioral consequences confirmed and accepted: an **invalid `ft8_display.feed_mode` is a
-400** (the candidate stores the *raw* feed_mode so `Validate` rejects it; `ResolveFt8Display`
-runs only after validation passes — option A); and **PUT validates the whole candidate**, so a
-PUT that touches one field is rejected if the config carries an unrelated invalid bridge (an
-enabled-but-portless bridge couldn't `Load` anyway). The clamp-with-warning ceiling enforcement
-(§14.2) is the one piece of `Normalize` not yet wired — it lands with §14.
-
-## 13. Redesign — versioning & migration (decided 2026-06-13)
-
-Resolves the §8 "versioning/migration" input. It's the partner to §10: the per-rig field moves
-*are* a schema migration, and config.json persists operator **intent** (callsign, rig catalogue,
-provider creds, SMTP) that is **not** in the DB and **not** reconstructable from a QRZ export —
-so it must survive schema changes. Today there's no `version` field; the only migration is the
-ad-hoc `applyRigProfiles` shape-detect fold, which gets fragile as migrations stack.
-
-### 13.1 Version field + ordered migrations
-
-- **`Config.Version int`** (`json:"version"`) + a `currentConfigVersion` const in
-  `internal/config`.
-- **Ordered migration registry** — each step `vN → vN+1`, run from the file's version up to
-  current. A version-less file = **v0** (baseline). The current `applyRigProfiles` loose→catalogue
-  fold becomes the **v0→v1** migration; §10's field moves become the next one. Plain ordered
-  `[]migration`, each a small explicit transform — **not** a generic schema-diff engine
-  (build specific).
-
-### 13.2 Raw-document migrations (decided)
-
-Migrations operate on the **raw JSON document** (map / `json.RawMessage`), **not** the typed
-`Config` struct. A migration reads old keys (`ft8.tx.mode`, `bridge.mode_mappings`, `MyRig`,
-loose `bridge.serial`/`ft8.device`) directly from the document *before* they're gone, so the
-typed `Config` can **cleanly drop** those fields — this is what makes §10's removals real. Cost:
-migrations are written against maps (a bit more verbose, less type-safe) — accepted.
+Version `1 -> 2` moves removed global `bridge.mode_mappings[driver]` entries into
+each matching rig's `mode_mappings`, synthesizing the legacy rig first when needed,
+then removes the old key. Typed, idempotent folds handle retained compatibility
+fields such as the old global FT8 mode and `logging_station.my_rig`.
 
 ### 13.3 Pipeline placement
 
-**parse → migrate → normalize → validate → persist** — migrate is the new first step, ahead of
-§12's normalize + validate. A migration brings an old document to the current shape; then the
-existing normalize + validate run as usual.
+Raw migration precedes typed unmarshal; typed compatibility folds follow defaulting
+and rig-catalogue synthesis; normalization and validation run last. This ordering
+keeps removed data visible long enough to migrate and validates only the canonical
+current candidate.
 
-### 13.4 Rewrite-on-migration (best-effort) + downgrade guard
+### 13.4 Persistence and downgrade guard
 
-- Migrate **in-memory** = authoritative. If the file was an older version, **best-effort rewrite**
-  it to the current shape (atomic, logged) so the upgrade persists once and dead keys are cleaned.
-  Best-effort: a read-only config dir doesn't block startup (memory wins, like
-  `UpdateInMemoryThenPersist`); the next PUT persists anyway.
-- **Downgrade guard:** file `version` **>** `currentConfigVersion` → **fatal**, clear message
-  ("config is from a newer Station Manager; downgrade not supported"). Don't risk misreading
-  newer fields.
+Load does not immediately rewrite a migrated file. The in-memory value is current
+and carries version `2`; the next successful daemon-owned write persists the current
+shape. A version greater than the daemon supports is a fatal downgrade guard.
 
-### 13.5 Default-value changes — the equals-old-default guard
+Any future shape change must bump the version, add the next ordered migration, and
+test old shape, current shape, malformed input, idempotence, and downgrade refusal.
 
-When a future release **changes the value of an existing default** (not adds a field — additions
-auto-materialise on the next write via `applyDefaults`), filled-on-disk would otherwise freeze the
-old value (§15.2). The fix is a migration step that rewrites the stale value **only when the
-operator never customised it**:
+## 14. Defaults ownership
 
-```
-if doc["smtp"]["port"] == oldDefault { doc["smtp"]["port"] = newDefault }
-```
+Declare config fallback constants in `internal/config/defaults.go` and apply them
+through the matching mechanism in §4. A subsystem may own a resolver or safety
+ceiling when only it can interpret the value, but `defaults.go` must index that
+location so the answer remains discoverable.
 
-An untouched default propagates; a deliberately-customised value is left alone. This keeps
-default-drift a **deliberate, reviewed, per-change** act (the release that changes the default
-writes the migration) rather than an always-on silent re-resolution — and it's why sparse-on-disk
-was unnecessary (§15.2). Rare in practice; default *value* changes are infrequent.
+Adding a default requires deciding whether zero is a valid operator choice. If it
+is, use a pointer, a first-run seed, or a resolver; do not overwrite explicit zero or
+false during every Load. Keep fill, clamp, and reject distinct:
 
-### 13.6 Status
+- fill supplies an absent fallback;
+- clamp enforces a runtime safety ceiling where the resource is owned; and
+- reject reports invalid operator input at the shared validation boundary.
 
-**Scaffold + first migrations SHIPPED (2026-06-13).** `Config.Version` + `currentConfigVersion`
-(now **2**) + the ordered raw-document registry + downgrade guard live in
-`internal/config/migrations.go`; `Load` runs `migrateDocument` as the first pipeline step. The
-loose→catalogue fold became the v0→v1 step (in-memory typed folds) and §10 2b's global
-`bridge.mode_mappings` removal landed as the **v1→v2** raw migration. The equals-old-default guard
-(§13.5) is a documented pattern with no current instance — the first default-value change will add
-one.
+## 15. Persistence shape
 
-## 14. Redesign — defaults home (decided 2026-06-13)
+### 15.1 One document
 
-Resolves the §8 "defaults home" input + §7 finding (defaults sprawl across four mechanisms, no
-single answer to "what's the default for X, and is it overridable?") + the `(a)/(a′)` wart
-(some defaults live in `DefaultConfig`, not `applyDefaults`, only because the field can't tell
-"unset" from "explicit false/0").
+There is one `config.json`. Do not add per-subsystem config files or a second mutable
+configuration source. Database-owned records and immutable embedded catalogues remain
+outside it.
 
-### 14.1 Single declaration site
+### 15.2 Filled and sparse fields
 
-**`internal/config/defaults.go`** holds every default value as a named const/var — consolidating
-today's `applyDefaults` const block, the `DefaultConfig` seed values (logging booleans,
-`smtp.starttls`), and the ft8 `Resolve*` default values — **plus a clearly separated
-"safety ceilings (non-overridable)" section.** One file answers "what's the default / ceiling
-for X."
+The stored shape intentionally mixes two policies:
 
-### 14.2 One fallback-application pass (kills the wart)
+- operational daemon fields whose zero is not meaningful are filled, making the
+  effective startup values visible in the file; and
+- optional/operator-invisible defaults remain sparse and are served or consumed
+  through canonical resolvers.
 
-A single `applyDefaults` / `resolve` fills every unset field from the central defaults, using
-**`*T`** for the fields where zero/false is a legitimate operator value (the code already flags
-"convert to `*bool`, mirror `ServeSPA`"). This removes the `DefaultConfig`-seed special case —
-no more `(a)/(a′)` split. The ft8 `Resolve*` defaults fold into the same central values (the GET
-handler still serves the SPA a resolved view, but reads from the one defaults home — no ft8-only
-default copies).
-
-### 14.3 Three separated roles: fill / clamp / reject
-
-- **Defaults fill** — unset → central default (§14.2), in `normalize`.
-- **Safety ceilings clamp** — the RF/safety limits (tune power ≤40W, duration ≤30s,
-  restore-settle ≤2s, `ft8TxMaxDuration` 18s) live in the labelled ceilings section,
-  **non-overridable**, applied as **clamps in §12's `normalize`** (one place) and emit a §12
-  **warning** when they bite ("100 W capped to 40 W") — safe *and* visible, never refuses to
-  start over an RF value.
-- **Sanity/typo ranges reject** — timeout range, amp/power/zone bounds → **validation** rejects
-  (§12 *error*); a 100-hour timeout is an error worth refusing.
-
-### 14.4 Persistence interaction (settled by §15)
-
-Whether filled defaults materialize to config.json or it stays sparse was a **persistence-shape**
-question, **settled in §15: filled-on-disk** (sparse rejected). Defaults-home unifies *declaration*
-+ *resolution* + the ceiling distinction only; the on-disk shape stays filled, with default-value
-drift handled by a §13 migration (§13.5 / §15.2).
-
-### 14.5 Implementation status (2026-06-13)
-
-**SHIPPED — §14a consolidation/index:** `internal/config/defaults.go` is the single
-discoverability point (the four-flavor model + the relocated numeric const block + the index of
-subsystem-enforced safety ceilings, which stay in `bridge`/`ft8`/`types` to avoid coupling).
-
-**DEFERRED — §14b `*T` wart fix:** converting the `(a′)` `DefaultConfig`-seed booleans
-(`logging.with_timestamp`/`file_logging`/`log_file_compress`, `smtp.starttls`) to `*T` would
-fold the two default-application mechanisms into one, but it churns the shared
-`types.LoggingConfig`/`SmtpConfig` consumed by the logging + email subsystems (and reddens their
-tests) for a cosmetic gain. The `DefaultConfig`-seed is the standard Go idiom for a default-true
-bool. Accepted as-is. **§15 makes the deferral permanent:** sparse-on-disk (the only thing that
-would have made `*T` load-bearing — to tell "operator set false" from "unset") was rejected, so
-there's no remaining reason to revisit this.
-
-**Clamp-with-warning in `normalize`** is the one piece of §12's normalize not yet wired (§12.6);
-ceilings stay clamped in their owning subsystems (`bridge`/`ft8`) until §14's resolve pass lands.
-
-## 15. Redesign — persistence shape (decided 2026-06-13)
-
-Resolves the §8 "persistence shape" input + the §14 filled-vs-sparse deferral. Confirms the
-single-file invariant and settles how config is written.
-
-### 15.1 Single `config.json` — confirmed
-
-Not split, not DB. The §9 taxonomy maps to storage:
-
-| Scope | Stored in |
-|---|---|
-| C global · D identity · B per-rig overrides · E SPA prefs | **config.json** |
-| A rig capability | embedded rigdefs (immutable) |
-| F session / operating state | memory / localStorage — never config.json |
-| G entities, caches, queue | the **DB** — never config.json |
-
-Rule: **config in the one file; entities & derived state in the DB.** DB-for-config stays
-rejected; the single-file invariant holds.
-
-### 15.2 Filled on disk; default-drift handled by a §13 migration (decided 2026-06-13)
-
-**Sparse-on-disk was considered and rejected** in favour of keeping the current **filled-on-disk**
-shape (`applyDefaults` materialises in memory at Load; `WriteJSON` writes the resolved struct).
-
-Sparse existed to fix **one** real problem: filled-on-disk *freezes* an old default into the file
-(it writes `smtp.port: 587`), so a future change to that default silently never reaches an operator
-whose config.json already materialised the old value. The other sparse benefits — "reads as pure
-operator intent," smaller diffs — are cosmetic on a single-operator, config-isn't-authoritative
-project. And full sparse is invasive: it requires moving `applyDefaults` from a Load-time mutation
-to resolve-on-read (auditing every direct `.Cfg` read that bypasses `Snapshot()`), reworking the
-§12b-2 PUT candidate pattern (which round-trips through the *resolved* snapshot and would re-fill a
-sparse `s.Cfg`), and un-deferring §14b (the `*T`/omitempty fields — the only thing that makes
-"operator set 0/false" distinguishable from "unset"). Large, breakage-heavy, for a modest gain.
-
-Instead, the freeze is solved **where it actually occurs** — at a default *value* change — using the
-already-shipped §13 migration mechanism. When a future release changes a default's value, it bumps
-`currentConfigVersion` and adds a migration step that rewrites the stale value **only if the operator
-never customised it** (the equals-old-default guard, §13.5). Propagation becomes a deliberate,
-reviewed act per change, not an always-on silent re-resolution that can shift a working setup out
-from under the operator on upgrade. New *fields* (vs changed default *values*) still auto-materialise
-on the next write via `applyDefaults`, so additions need no migration — only value changes do, and
-those are rare.
-
-Consequence: **§14b stays deferred** (sparse was the only thing that made `*T` load-bearing;
-without it, §14b is the cosmetic refactor it always was), and the config redesign's only remaining
-open code item is §14's optional defaults-fill consolidation — no longer blocking anything.
+Do not infer a repository-wide sparse or fully-materialized policy. Preserve the
+field's established zero semantics.
 
 ### 15.3 Deterministic, atomic, daemon-owned writes
 
-- `json.MarshalIndent` is **deterministic** (stable struct-field order; Go sorts map keys) →
-  re-saving an unchanged config yields an *identical* file, no churn. (Addresses the "rewrite
-  reorders fields" worry — it doesn't, beyond the deterministic shape; sparse means even fewer
-  keys move.)
-- **Atomic** temp-file + rename (`WriteJSON`) — kept.
-- **The daemon owns the file while running.** Hand-edits happen while stopped (the existing
-  "stop → edit → restart" rule stays); **no file-watch / auto-reload** — it would fight
-  daemon-owns-writes for little gain.
-- JSON has **no comments** — accepted; not switching format.
+`WriteJSON` uses indented JSON, a sibling `.tmp` file, explicit private permissions,
+and rename. A partial write cannot leave a half-formed primary file. Go's JSON
+encoder gives deterministic map-key ordering for the owned typed shape.
 
-### 15.4 Status
+`Service.Update` writes disk before swapping memory and holds the write lock through
+both. The update callback receives a deep clone, so failed validation or persistence
+cannot leak nested slice/map/pointer mutations into the live snapshot.
 
-**SETTLED (2026-06-13) — no code required.** The single-file invariant (§15.1) and the
-deterministic / atomic / daemon-owned write discipline (§15.3) are already how `WriteJSON` behaves;
-sparse-on-disk was rejected (§15.2) in favour of keeping filled-on-disk and handling default-value
-drift via a §13 migration when (rarely) a default changes. Nothing to build now — this section
-records the decision. The only remaining redesign code item is §14's optional defaults-fill
-consolidation (and §11, gated on the config-SPA write path — §11.5).
+### 15.4 API writes
 
-### 15.5 Sparse-but-served for operator-invisible defaults (2026-06-23)
+PUT overlays represented fields onto the latest locked configuration, normalizes,
+validates, probes carried enabled forwarders, writes the whole file, swaps memory,
+then builds the response. Unrepresented file-only fields survive because the overlay
+starts from the current value.
 
-§15.2 rejected *full* sparse (the wholesale move of `applyDefaults` to resolve-on-read). It did
-**not** preclude a narrower, per-block pattern that some blocks already use and that resolves the
-"the operator can't see this default" problem without materialising it on disk:
+The read-before-write API workflow is not optimistic concurrency control. Two
+independent clients can still produce last-writer-wins results across separate PUTs;
+closing that requires an explicit server-side revision/precondition contract.
 
-- The block stays **sparse on disk** (zero = "use the built-in default," applied at point-of-use in
-  the consuming package).
-- `/v1/config` **GET serves the RESOLVED view** via a dedicated `Resolve*` helper, so the SPA reads
-  effective values even though config.json never freezes them. No migration needed (nothing frozen
-  on disk), and the consuming package stays the single owner of its defaults (no drift).
+### 15.5 Sparse-but-served values
 
-Blocks on this pattern: `ft8.display` / `ft8.frequencies` (`types.ResolveFt8Display` /
-`ResolveFt8Frequencies`), `psk_reporter` (zero-resolves at use), and — added 2026-06-23 —
-`bridge.timeouts` / `bridge.tune` (`bridge.ResolveTimeouts` / `ResolveTune`, the same resolution
-`Service.New` applies, so served == runtime; tune ceilings stay non-overridable in `internal/bridge`).
-This is why a fresh `config.json` legitimately shows `bridge.timeouts: {}` while the GET reports
-`bridge_timeouts.liveness_ms: 5000` — sparse file, resolved API. Genuinely filled-on-disk blocks
-(`server`/`datastore`/`logging`/`smtp`/`lookup`) keep their §15.2 treatment; the distinction is
-whether the operator has another way to see the effective value (resolved GET) or not.
+FT8 display/frequency/audio/meter defaults and bridge timeout/tune defaults are the
+main sparse-but-served cases. `GET /v1/config` returns their resolved effective
+values without materializing them into `config.json`. Map and PSK Reporter collector
+overrides remain raw sparse blocks where the app can render its own placeholders or
+the subsystem owns resolution.
