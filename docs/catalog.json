@@ -200,6 +200,20 @@
       "summary": "W-0004 verified remainder and acceptance boundary for consolidated-app themes, FT8 occupancy colors, and ambient daemon build identity."
     },
     {
+      "id": "work.w-0005",
+      "path": "docs/work/W-0005-operator-triggered-forwarder-queue-clearing.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["forwarding", "upload-queue"],
+      "scopes": [
+        "internal/database/sqlite/api_context.go",
+        "internal/qsoservice/enqueue.go",
+        "cmd/smd/lifecycle_adapters.go",
+        "frontend/app/src/lib/config/**"
+      ],
+      "summary": "W-0005 verified current state and acceptance boundary for an operator-triggered, history-preserving forwarder queue clear, including the enabled-forwarder in-flight coordination policy."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",
