@@ -214,6 +214,19 @@
       "summary": "W-0005 verified current state and acceptance boundary for an operator-triggered, history-preserving forwarder queue clear, including the enabled-forwarder in-flight coordination policy."
     },
     {
+      "id": "work.w-0006",
+      "path": "docs/work/W-0006-reject-unknown-config-keys.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["configuration"],
+      "scopes": [
+        "internal/config/config.go",
+        "cmd/smd/main.go",
+        "cmd/smd/lifecycle_adapters.go"
+      ],
+      "summary": "W-0006 verified current state and acceptance criteria for rejecting unknown config keys before any write (ADR 0074): the CC-1 reject gate plus CC-2 struct-slice detection, no-op-write and explicit persistence-reason handling, with EH-3 guarantees as a preserved prerequisite."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",
