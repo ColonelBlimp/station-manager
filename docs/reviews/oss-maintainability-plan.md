@@ -1,6 +1,6 @@
 # Project tidy-up and OSS maintainability plan
 
-**Status:** Proposed  
+**Status:** Accepted — Phase 1 in progress (tickets 1–3 delivered; ticket 4 next) as of 2026-08-20\
 **Date:** 2026-08-17  
 **Documentation tier:** Tier 2 — point-in-time review and proposed plan
 
@@ -356,14 +356,20 @@ Exit criteria:
 
 Once the operator accepts and ranks this programme, split its initial work into bounded tickets:
 
-1. **Agent-context kernel:** distil the root and scoped agent instructions, establish `AGENTS.md` as
-   canonical, preserve tested Claude compatibility, and add byte-budget checks.
-2. **Current capsule:** replace the mixed rolling handoff with bounded `docs/current.md` injection
-   and Git-derived repository state.
-3. **Documentation routing:** define the five classes, add the live-document catalog, and generate
-   the compact library index.
-4. **Living-work decomposition:** turn backlog and dogfood inbox into bounded indexes plus routed
-   dossiers; summarize and retire the giant session archive.
+1. **Agent-context kernel** — ✅ **DELIVERED** (`AGENTS.md` is the canonical ≤8 KB kernel,
+   `CLAUDE.md` and scoped `CLAUDE.md` are import-only shims, byte-budget checks in CI): distil the
+   root and scoped agent instructions, establish `AGENTS.md` as canonical, preserve tested Claude
+   compatibility, and add byte-budget checks.
+2. **Current capsule** — ✅ **DELIVERED** (`docs/current.md`, ≤2 KB, injected whole by the
+   SessionStart hook with Git-derived state): replace the mixed rolling handoff with bounded
+   `docs/current.md` injection and Git-derived repository state.
+3. **Documentation routing** — ✅ **DELIVERED** (`docs/catalog.json` plus the generated
+   `docs/README.md`; the five document classes are live): define the five classes, add the
+   live-document catalog, and generate the compact library index.
+4. **Living-work decomposition** — ⏳ **IN PROGRESS — NEXT (Phase 1.4)** (W-dossiers exist under
+   `docs/work/`, but `docs/backlog.md` (~164 KB) and `docs/dogfood-inbox.md` (~193 KB) are not yet
+   bounded indexes and the giant session archive is not yet summarized): turn backlog and dogfood
+   inbox into bounded indexes plus routed dossiers; summarize and retire the giant session archive.
 5. **Contributor gateway:** `CONTRIBUTING.md`, `SECURITY.md`, `task doctor`, and a clean-workstation
    acceptance exercise.
 6. **Current architecture map:** `docs/architecture.md`, Tier-1 registration, internal-link check,
