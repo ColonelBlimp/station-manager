@@ -1,6 +1,7 @@
 # Internal error-handling audit
 
 **Status:** Fixed — implementation complete; internal test suite verified
+**Re-verified 2026-08-20 (code-authoritative audit reconciliation):** EH-1..EH-7 all confirmed resolved against current source; no residual finding entered the backlog. This closes the cross-dependencies the persistence/config audits cited — EH-3 (config-migration), EH-5 (`checkedRowsAffected`), EH-6 (`txutil.Rollback`) are all fixed, so those PT/CC dependencies are stale.
 **Reviewed:** 2026-08-14  
 **Scope:** production Go under `internal/`; generated SQLBoiler models and tests excluded  
 **Code changes:** all seven action themes implemented; this document remains the

@@ -22,6 +22,9 @@ Three narrower outcomes remain:
 - [`Sidebar.svelte`](../../frontend/app/src/lib/ui/Sidebar.svelte) displays the literal
   `v2.0.0-alpha.1`, while the running daemon's authoritative build string and environment are
   already available from `GET /v1/version`. The browser title remains the static “Station Manager”.
+  (The 2026-08-20 audit reconciliation routes the build-identity half of frontend-app review **F-09**
+  here — corroborated: `Sidebar.svelte:223` hard-codes the version, `package.json` says `0.0.0`; the
+  stale scaffold/route-doc half is W-0003 consolidation cleanup.)
 - The canonical HTTP reference says a development daemon is marked with a DEV pill and tab-title
   prefix. The retained legacy clients implement that behavior, but the primary app does not.
 - The FT8 Channels and Spectrum views still use their first-pass literal red/green/amber/orange

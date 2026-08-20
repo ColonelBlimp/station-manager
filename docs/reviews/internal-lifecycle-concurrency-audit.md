@@ -1,6 +1,7 @@
 # Internal lifecycle and concurrency audit
 
 **Status:** review complete; actions open  
+**Verified 2026-08-20 (code-authoritative audit reconciliation):** LC-1..LC-4 FIXED — LC-1 via the safego panic boundaries, LC-2/LC-3 folded into ADR 0070's orchestrator/lifecycle refactor (which preserves and strengthens the audited property), LC-4 via request-ctx + aggregate deadline. LC-5 PARTIAL: its PSK-Reporter and lookup-refresher sub-items are superseded by ADR 0070's `lifecycle.Supervisor`; the SQLite `Open/Close` lock-free `!isOpen` fast-path race (`service.go:180`) remains and is surfaced to `docs/backlog.md` as a P3 needs-trigger (latent — never exercised concurrently today).\
 **Reviewed:** 2026-08-14  
 **Scope:** production Go under `internal/`, plus `cmd/smd` shutdown ordering; generated
 SQLite models and test-only diagnostics excluded  

@@ -1,6 +1,7 @@
 # Internal security and trust-boundary audit
 
 **Status:** ST-1..ST-7 all FIXED (2026-08-16); ST-3b (authenticated LAN access) is the one open follow-up, tracked in ADR 0069  
+**Re-verified 2026-08-20 (code-authoritative audit reconciliation):** ST-1/2/4/5/6/7 and ST-3a confirmed resolved against current source. ST-3b remains deferred/gated (config-file-only `allow_insecure_network`, ADR 0069) and is surfaced to `docs/backlog.md` as a needs-trigger item, NOT an active P2.\
 **Reviewed:** 2026-08-14  
 **Scope:** network listeners, browser trust, authentication, credential transport and
 storage, filesystem authorization and permissions, tenant isolation, path containment,

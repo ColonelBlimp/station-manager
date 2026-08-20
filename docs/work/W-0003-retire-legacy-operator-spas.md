@@ -217,7 +217,14 @@ The separate whole-log Dashboard map remains separately ranked work.
 
 - Does the lean status Dashboard and its `startup_view` preference block ADR 0044 closure, or move
   to a separate ranked dossier once the retirement boundary is complete? Dashboard must not absorb
-  the separately backlogged whole-log map by accident.
+  the separately backlogged whole-log map by accident. (Frontend-app review **F-06** routes here:
+  the default route and the first sidebar item both land on an empty Dashboard placeholder
+  — `router.svelte.ts:36`, `App.svelte:112` — so the canonical-root/default-route decision owns
+  what `/` opens; deciding it must not authorize building the whole-log Dashboard.)
+- Consolidation cleanup carried by this item: stale scaffold/route documentation left by the
+  retirement — `frontend/app/vite.config.ts`'s "logging SPA still owns the root" comment (now false;
+  all legacy SPAs retired) and the app README's "scaffold" status (frontend-app review **F-09**, the
+  non-build-identity half; the build-identity half belongs to W-0004).
 - Should old `/app/*` URLs redirect permanently into their root equivalents for saved bookmarks,
   or remain a temporary compatibility alias? The answer determines when the `/app/` embed mount can
   disappear completely.
