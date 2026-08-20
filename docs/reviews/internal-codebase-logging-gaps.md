@@ -1,9 +1,49 @@
-# URGENT TODO — whole `internal/` logging-gap review
+# Whole `internal/` logging-gap review — CLOSED 2026-08-20
 
-**Status:** open · **Raised:** 2026-08-12 · **Scope:** all production Go code under
+**Status:** CLOSED — verified against `main` 2026-08-20 (L1–L13 + H1–H4 all shipped) ·
+**Raised:** 2026-08-12 · **Scope:** all production Go code under
 `internal/` · **Reviewed:** 287 files / approximately 68,000 lines · **Review type:**
 operator-directed, source-level logging audit. No production code was changed by this
 review.
+
+---
+
+## Closure — verified 2026-08-20
+
+Every finding in this review shipped. All L1–L13 and H1–H4 fixes were re-verified against
+`main` on 2026-08-20: each closing commit named in the finding boxes below is an ancestor
+of `main`, and the artifacts of the items originally boxed "working tree, awaiting commit"
+(L1 `healthwriter.go`, L2 `retention_measure_test.go`, L3 `episodeloss.go`, L5
+`telemetryguard.go`, L7 `post_commit_hook_test.go`, L8, L10 `dbHealthLog`, and the
+api / qsoservice / forwarding items) are present in the committed tree.
+
+The six per-package reviews this document reconciled — api, bridge, cloud, forwarding, ft8,
+qsoservice — were folded in here and deleted the same day; their content survives in this
+record and in Git history. (Test-file comments still cite the old per-package filenames by
+name — that is provenance attribution, deliberately left unchanged.)
+
+### Residual disposition
+
+Four low-value residuals were not covered by any L/H finding; all are tracked in
+[`docs/backlog.md`](../backlog.md), which owns their priority:
+
+- **F14** — QRZ/ClubLog accepted-upstream dispositions still collapse to generic success.
+  The `Result.Detail` mechanism now exists (L12, smcloud only); extending it to QRZ/ClubLog
+  is P3 adjacent-code polish.
+- **L6 handler breadcrumbs** — `request_id` on the ~25 direct handler `Warn`/`Error` logs
+  across 8 daemon handler files. P3 adjacent API-work sweep; the 5xx/panic join paths
+  already carry it (`ca7b9e60`). Not a standalone edit.
+- **F13** — an optional boot-time Warn for a keyless ClubLog build. Needs-trigger only: the
+  first-outage warning is already bounded and explanatory (L11).
+- **FT8-11** — `fireOpening` publishes no SSE frame on a deferral. Not a logging item: it is
+  a wire/UI behaviour change, folded into the parked fireOpening/clean-next-slot backlog
+  entry. The daemon-side deferral logging shipped 2026-08-07.
+
+**Q7** (qsoservice restore existence-probe treating a DB fault as absence) needs no routing:
+it is already fixed in code — `restore.go` propagates a probe fault instead of inserting on
+an unproven premise.
+
+---
 
 This document consolidates the current release-relevant logging gaps across the whole
 `internal/` tree. It cross-checks the older package reviews rather than copying their

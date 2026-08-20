@@ -767,7 +767,7 @@ at archive time, stamp included.
   the final cross-package reconciliation record. It rechecked the then-open package
   findings, regrouped them as L1–L13 and H1–H4, and closes with every finding fixed.
   Every fix commit cited by that closure is an ancestor of the current `main`, as is
-  `70ccd828`, which resolved the two `1408edb1` review follow-ups. The original audit
-  files remain under `docs/reviews/` as cold historical records; their old “open”
-  headers are chronology, not current work. `docs/backlog.md` no longer repeats those
+  `70ccd828`, which resolved the two `1408edb1` review follow-ups. The six per-package
+  audit files were folded into that record and deleted 2026-08-20; their content survives
+  in the reconciliation and in Git history. `docs/backlog.md` no longer repeats those
   records or offers already-shipped findings for selection.

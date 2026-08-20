@@ -307,8 +307,9 @@ for _, fwd := range s.Config.Forwarders() {
 ```
 
 > **Amended 2026-08-01 — `origin`, and there are now more than three producers.**
-> This section predates migration 0007 and the F1 provenance work
-> (`docs/reviews/forwarding-logging-gaps.md`); it is a Tier-2 historical brief
+> This section predates migration 0007 and the F1 provenance work (the forwarding
+> logging-gaps review, folded into `docs/reviews/internal-codebase-logging-gaps.md` and
+> deleted 2026-08-20); it is a Tier-2 historical brief
 > (`docs/README.md`), so the original text stands and the current shape is
 > recorded here rather than rewritten above.
 >

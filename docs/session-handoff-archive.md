@@ -403,7 +403,9 @@ to the endpoint instead of another inference** — operator's call, not started.
 > 5 of 14 findings closed, 9 to go. STOPPED MID-FINDING-4 at the operator's
 > instruction; nothing is half-written, the tree is clean at `4665b5a9`.**
 >
-> - **Read `docs/reviews/ft8-logging-gaps.md`, not this summary.** It now carries
+> - **Read `docs/reviews/ft8-logging-gaps.md`, not this summary.** [All 14 shipped by
+>   2026-08-07; the file was folded into `internal-codebase-logging-gaps.md` and deleted
+>   2026-08-20 — read that record instead.] It now carries
 >   a ✅ note per closed finding (what shipped, in which commit, and where the
 >   review's own suggestion was WRONG) plus a Progress block naming what is left
 >   and where to resume. **Do not delete the file until all 14 ship** — it is the
