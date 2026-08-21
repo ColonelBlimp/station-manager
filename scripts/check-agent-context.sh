@@ -27,10 +27,13 @@ if [ "$claude_bytes" -gt "$MAX_CLAUDE_BYTES" ]; then
     exit 1
 fi
 
+# Compare byte-for-byte: "$(cat …)" strips trailing newlines, so it would pass a
+# shim padded with blank lines. printf reattaches the single expected trailing
+# newline and cmp -s checks every byte, including it.
 expected_claude="# Claude Code project instructions
 
 @AGENTS.md"
-if [ "$(cat CLAUDE.md)" != "$expected_claude" ]; then
+if ! printf '%s\n' "$expected_claude" | cmp -s - CLAUDE.md; then
     printf 'CLAUDE.md must contain only the project heading and @AGENTS.md import.\n' >&2
     exit 1
 fi
@@ -45,7 +48,7 @@ fi
 expected_bridge_claude="# Claude Code bridge instructions
 
 @AGENTS.md"
-if [ "$(cat internal/bridge/CLAUDE.md)" != "$expected_bridge_claude" ]; then
+if ! printf '%s\n' "$expected_bridge_claude" | cmp -s - internal/bridge/CLAUDE.md; then
     printf 'internal/bridge/CLAUDE.md must contain only its heading and @AGENTS.md import.\n' >&2
     exit 1
 fi
@@ -60,7 +63,7 @@ fi
 expected_ft8_claude="# Claude Code FT8 instructions
 
 @AGENTS.md"
-if [ "$(cat internal/ft8/CLAUDE.md)" != "$expected_ft8_claude" ]; then
+if ! printf '%s\n' "$expected_ft8_claude" | cmp -s - internal/ft8/CLAUDE.md; then
     printf 'internal/ft8/CLAUDE.md must contain only its heading and @AGENTS.md import.\n' >&2
     exit 1
 fi

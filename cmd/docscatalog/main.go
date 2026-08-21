@@ -286,6 +286,13 @@ func documentMatchScore(doc document, query string) int {
 	return score
 }
 
+// scopeMatches is exact-or-directory-prefix by design. A colocated test sibling
+// (Foo.svelte.test.ts next to a scoped Foo.svelte) is deliberately NOT treated
+// as matching the impl's scope: enumerating every test file beside its impl —
+// or teaching the matcher to strip .test.ts suffixes — would trade a small,
+// auditable catalog for open-ended churn. A test is routed by a wildcard scope
+// over its directory, or read alongside the impl it exercises; the catalog need
+// not list it explicitly.
 func scopeMatches(scope, query string) bool {
 	scope = strings.ToLower(strings.TrimSuffix(scope, "/**"))
 	if !strings.Contains(query, "/") {
@@ -330,7 +337,7 @@ func renderREADME(c catalog) ([]byte, error) {
 		out.WriteString("| ID | Topics | Applicable scope | Summary |\n|---|---|---|---|\n")
 		for _, doc := range docs {
 			fmt.Fprintf(&out, "| %s | %s | %s | %s |\n",
-				documentLink(doc), codeList(doc.Topics), codeList(doc.Scopes), doc.Summary)
+				documentLink(doc), codeList(doc.Topics), codeList(doc.Scopes), tableCell(doc.Summary))
 		}
 		out.WriteString("\n")
 	}
@@ -400,6 +407,16 @@ func readmeRelativePath(repoPath string) string {
 		return strings.TrimPrefix(repoPath, "docs/")
 	}
 	return "../" + repoPath
+}
+
+// tableCell escapes free-text that is rendered raw into a GitHub Markdown table
+// cell. A summary may legitimately contain "|" (validation forbids only line
+// breaks); left unescaped it would open an extra column that docs:check cannot
+// catch, because the check compares this renderer's output against itself. Only
+// the summary needs this: ids and topics are slugs and scopes are stat-verified
+// repository paths, none of which can contain a pipe.
+func tableCell(s string) string {
+	return strings.ReplaceAll(s, "|", "\\|")
 }
 
 func codeList(values []string) string {

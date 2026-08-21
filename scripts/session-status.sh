@@ -35,6 +35,11 @@ else
         warning="⚠  ORIENTATION TOO LARGE — ${CURRENT} is ${current_bytes} bytes; limit ${MAX_CURRENT_BYTES}."
     elif [ -z "$updated" ]; then
         warning="⚠  ORIENTATION FORMAT PROBLEM — ${CURRENT} has no 'Updated: YYYY-MM-DD' line."
+    # Strict ">" is deliberate: both values are date-only (YYYY-MM-DD), so a
+    # same-day commit — including the very commit that refreshes this capsule —
+    # is not stale. ">=" would fire on every capsule update, training the reader
+    # to ignore the warning. Intra-day staleness is not representable here and is
+    # accepted as out of scope.
     elif [ -n "$last_commit_date" ] && [[ "$last_commit_date" > "$updated" ]]; then
         warning="⚠  RECONCILE BEFORE ACTING — ${CURRENT} was updated ${updated}; newest commit is ${last_commit_date}."
     fi

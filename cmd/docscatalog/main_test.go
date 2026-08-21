@@ -164,6 +164,56 @@ func TestRenderREADMEExposesAudienceClassTopicAndRecordRoutes(t *testing.T) {
 	}
 }
 
+func TestRenderREADMEEscapesPipeInSummary(t *testing.T) {
+	c := catalog{Version: 1, Documents: []document{
+		{
+			ID:        "pipe-doc",
+			Path:      "docs/pipe.md",
+			Class:     "canonical",
+			Audiences: []string{"agent"},
+			Topics:    []string{"piping"},
+			Scopes:    []string{"repository"},
+			Summary:   "Config keys are rejected | startup halts.",
+		},
+	}}
+
+	gotBytes, err := renderREADME(c)
+	if err != nil {
+		t.Fatalf("renderREADME: %v", err)
+	}
+	got := string(gotBytes)
+
+	// The class table row for this document must keep its four columns: a raw
+	// pipe in the summary would open a fifth. Locate the row and count the
+	// GitHub table cell separators (unescaped pipes).
+	var row string
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "|") && strings.Contains(line, "[pipe-doc]") && strings.Contains(line, "startup halts") {
+			row = line
+			break
+		}
+	}
+	if row == "" {
+		t.Fatal("generated README has no class-table row for pipe-doc")
+	}
+	if separators := unescapedPipeCount(row); separators != 5 {
+		t.Fatalf("class-table row has %d cell separators, want 5 (four columns): %q", separators, row)
+	}
+	if !strings.Contains(row, `rejected \| startup`) {
+		t.Fatalf("summary pipe was not escaped in row: %q", row)
+	}
+}
+
+func unescapedPipeCount(s string) int {
+	count := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '|' && (i == 0 || s[i-1] != '\\') {
+			count++
+		}
+	}
+	return count
+}
+
 func TestRepositoryCatalogRoutesLiveFrontendScopes(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	c, err := loadCatalog(filepath.Join(repoRoot, "docs", "catalog.json"))
