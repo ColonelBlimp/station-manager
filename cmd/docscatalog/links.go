@@ -95,7 +95,7 @@ func markdownTargets(filename string) ([]markdownTarget, error) {
 			continue
 		}
 
-		line = withoutHTMLComments(line, &inComment)
+		line = withoutNonRenderedMarkdown(line, &inComment)
 		marker, length := markdownFence(line)
 		if marker != 0 {
 			fenceMarker = marker
@@ -103,7 +103,6 @@ func markdownTargets(filename string) ([]markdownTarget, error) {
 			continue
 		}
 
-		line = withoutInlineCode(line)
 		if match := referenceLink.FindStringSubmatch(line); match != nil {
 			if target := markdownDestination(match[1]); target != "" {
 				targets = append(targets, markdownTarget{line: lineNumber, target: target})
@@ -131,7 +130,11 @@ func markdownTargets(filename string) ([]markdownTarget, error) {
 	return targets, nil
 }
 
-func withoutHTMLComments(line string, inComment *bool) string {
+// withoutNonRenderedMarkdown masks HTML comments and inline code in one
+// left-to-right pass. Their ordering matters: a comment opener inside a code
+// span is literal, while backticks inside an HTML comment have no Markdown
+// meaning. The byte-for-byte mask preserves link error line positions.
+func withoutNonRenderedMarkdown(line string, inComment *bool) string {
 	masked := []byte(line)
 	for offset := 0; offset < len(line); {
 		if *inComment {
@@ -147,20 +150,33 @@ func withoutHTMLComments(line string, inComment *bool) string {
 			continue
 		}
 
-		opening := strings.Index(line[offset:], "<!--")
-		if opening < 0 {
-			break
+		if strings.HasPrefix(line[offset:], "<!--") {
+			closing := strings.Index(line[offset+len("<!--"):], "-->")
+			if closing < 0 {
+				blankBytes(masked, offset, len(masked))
+				*inComment = true
+				return string(masked)
+			}
+			end := offset + len("<!--") + closing + len("-->")
+			blankBytes(masked, offset, end)
+			offset = end
+			continue
 		}
-		start := offset + opening
-		closing := strings.Index(line[start+len("<!--"):], "-->")
-		if closing < 0 {
-			blankBytes(masked, start, len(masked))
-			*inComment = true
-			return string(masked)
+
+		if line[offset] == '`' {
+			run := 1
+			for offset+run < len(line) && line[offset+run] == '`' {
+				run++
+			}
+			closing := strings.Index(line[offset+run:], strings.Repeat("`", run))
+			if closing >= 0 {
+				end := offset + run + closing + run
+				blankBytes(masked, offset, end)
+				offset = end
+				continue
+			}
 		}
-		end := start + len("<!--") + closing + len("-->")
-		blankBytes(masked, start, end)
-		offset = end
+		offset++
 	}
 	return string(masked)
 }
@@ -246,30 +262,6 @@ func closesMarkdownFence(line string, markerLength int) bool {
 	return strings.TrimSpace(trimmed[markerLength:]) == ""
 }
 
-func withoutInlineCode(line string) string {
-	masked := []byte(line)
-	for start := 0; start < len(line); {
-		if line[start] != '`' {
-			start++
-			continue
-		}
-		run := 1
-		for start+run < len(line) && line[start+run] == '`' {
-			run++
-		}
-		closing := strings.Index(line[start+run:], strings.Repeat("`", run))
-		if closing < 0 {
-			break
-		}
-		end := start + run + closing + run
-		for i := start; i < end; i++ {
-			masked[i] = ' '
-		}
-		start = end
-	}
-	return string(masked)
-}
-
 func markdownDestination(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -277,14 +269,30 @@ func markdownDestination(raw string) string {
 	}
 	if raw[0] == '<' {
 		if end := strings.IndexByte(raw[1:], '>'); end >= 0 {
-			return raw[1 : end+1]
+			return unescapeMarkdownPunctuation(raw[1 : end+1])
 		}
 		return raw
 	}
 	if end := strings.IndexAny(raw, " \t"); end >= 0 {
-		return raw[:end]
+		return unescapeMarkdownPunctuation(raw[:end])
 	}
-	return raw
+	return unescapeMarkdownPunctuation(raw)
+}
+
+func unescapeMarkdownPunctuation(value string) string {
+	const punctuation = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+	if !strings.Contains(value, "\\") {
+		return value
+	}
+	var out strings.Builder
+	out.Grow(len(value))
+	for index := 0; index < len(value); index++ {
+		if value[index] == '\\' && index+1 < len(value) && strings.ContainsRune(punctuation, rune(value[index+1])) {
+			index++
+		}
+		out.WriteByte(value[index])
+	}
+	return out.String()
 }
 
 func localMarkdownTarget(raw string) (string, bool) {

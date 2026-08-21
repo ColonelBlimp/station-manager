@@ -27,7 +27,7 @@ func TestValidateMarkdownLinksRejectsMissingTargetInLiveDocument(t *testing.T) {
 
 func TestValidateMarkdownLinksAcceptsBalancedParenthesesInDestination(t *testing.T) {
 	root := t.TempDir()
-	writeMarkdownFile(t, root, "docs/live.md", "# Live\n\n[guide](guide(v2).md)\n")
+	writeMarkdownFile(t, root, "docs/live.md", "# Live\n\n[guide](guide(v2).md)\n[escaped](guide\\(v2\\).md)\n")
 	writeMarkdownFile(t, root, "docs/guide(v2).md", "# Guide\n")
 	c := catalog{Version: 1, Documents: []document{
 		testDocument("live", "docs/live.md", "canonical", "architecture"),
@@ -55,6 +55,19 @@ func TestValidateMarkdownLinksIgnoresHTMLComments(t *testing.T) {
 
 	if err := validateMarkdownLinks(root, c); err != nil {
 		t.Fatalf("validateMarkdownLinks treated an HTML comment as rendered Markdown: %v", err)
+	}
+}
+
+func TestValidateMarkdownLinksDoesNotOpenHTMLCommentInsideCodeSpan(t *testing.T) {
+	root := t.TempDir()
+	writeMarkdownFile(t, root, "docs/live.md", "# Live\n\n`<!--`\n\n[missing](missing.md)\n")
+	c := catalog{Version: 1, Documents: []document{
+		testDocument("live", "docs/live.md", "canonical", "architecture"),
+	}}
+
+	err := validateMarkdownLinks(root, c)
+	if err == nil || !strings.Contains(err.Error(), "missing.md") {
+		t.Fatalf("validateMarkdownLinks error = %v, want visible missing link after literal comment opener", err)
 	}
 }
 
