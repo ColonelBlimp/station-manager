@@ -136,9 +136,12 @@ go vet $PKGS
 if command -v golangci-lint >/dev/null 2>&1; then
     step "Go: golangci-lint (maintainability metrics)"
     golangci-lint run ./cmd/... ./internal/...
+
+    step "Go/frontend: maintainability observatory"
+    bash scripts/maintainability-metrics.sh
 else
     step "Go: golangci-lint — SKIPPED (not installed)"
-    note "Install with: sudo dnf install golangci-lint  (CI pins 2.11.3)"
+    note "Install the version named in .golangci-lint-version (CI uses the same pin)."
 fi
 
 # The destructive smcloud integration tests SKIP here unless the operator opts

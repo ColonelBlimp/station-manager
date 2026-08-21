@@ -353,12 +353,21 @@ tasks:
     cmds:
       - golangci-lint run ./cmd/... ./internal/...
 
+  metrics:maintainability:
+    desc: |
+      Report Go/frontend complexity, maintainability index, duplication, and
+      baseline-debt trends; fail only on a new or unratcheted regression.
+      Outputs Markdown and normalized JSON under /tmp/station-manager-maintainability
+      unless MAINTAINABILITY_OUTPUT_DIR selects another directory.
+    cmds:
+      - bash scripts/maintainability-metrics.sh
+
   ci:local:
     desc: |
       Local mirror of .github/workflows/ci.yml — runs every gate the
       "releasability" CI job runs, for the app SPA (the sole embedded
       operator client): lint / prettier format / type-check / test / build,
-      then the Go gate (gofmt, vet, golangci-lint metrics, race
+      then the Go gate (gofmt, vet, maintainability gate/report, race
       tests, daemon embed-build), plus the documentation catalog and
       agent-context budgets. Answers
       "would CI pass right now?"

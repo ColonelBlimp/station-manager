@@ -1,0 +1,31 @@
+version: "2"
+
+# Diagnostic companion to .golangci.yml. The normal configuration remains the
+# fast regression gate; this one deliberately reports the complete metric
+# distribution, including baseline debt suppressed by the normal gate.
+linters:
+  default: none
+  enable:
+    - dupl
+    - gocognit
+    - gocyclo
+    - maintidx
+  settings:
+    dupl:
+      threshold: 150
+    gocognit:
+      min-complexity: 1
+    gocyclo:
+      min-complexity: 1
+    maintidx:
+      under: 100
+  exclusions:
+    generated: strict
+    paths:
+      - internal/database/sqlite/models
+      - frontend/.*/node_modules
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false

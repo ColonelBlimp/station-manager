@@ -1,0 +1,572 @@
+{
+  "version": 1,
+  "thresholds": [
+    {
+      "language": "frontend",
+      "metric": "cyclomatic-complexity",
+      "direction": "maximum",
+      "value": 20,
+      "includeTests": true
+    },
+    {
+      "language": "frontend",
+      "metric": "function-lines",
+      "direction": "maximum",
+      "value": 100
+    },
+    {
+      "language": "frontend",
+      "metric": "nesting-depth",
+      "direction": "maximum",
+      "value": 3,
+      "includeTests": true
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "direction": "maximum",
+      "value": 60,
+      "includeTests": true
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "direction": "maximum",
+      "value": 50,
+      "includeTests": true
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "direction": "minimum",
+      "value": 20,
+      "includeTests": true
+    }
+  ],
+  "limits": [
+    {
+      "language": "frontend",
+      "metric": "cyclomatic-complexity",
+      "path": "frontend/app/src/lib/api/seams.ts",
+      "function": "apiEnrich",
+      "direction": "maximum",
+      "value": 27
+    },
+    {
+      "language": "frontend",
+      "metric": "cyclomatic-complexity",
+      "path": "frontend/app/src/lib/config/rigs.svelte.ts",
+      "function": "save",
+      "direction": "maximum",
+      "value": 41
+    },
+    {
+      "language": "frontend",
+      "metric": "cyclomatic-complexity",
+      "path": "frontend/app/src/lib/logbook/EditQsoModal.svelte",
+      "function": "reEnrich",
+      "direction": "maximum",
+      "value": 29
+    },
+    {
+      "language": "frontend",
+      "metric": "cyclomatic-complexity",
+      "path": "frontend/app/src/lib/logbook/logbook.svelte.ts",
+      "function": "reEnrichSelected",
+      "direction": "maximum",
+      "value": 36
+    },
+    {
+      "language": "frontend",
+      "metric": "cyclomatic-complexity",
+      "path": "frontend/app/src/lib/operate/ft8.svelte.ts",
+      "function": "onQso",
+      "direction": "maximum",
+      "value": 41
+    },
+    {
+      "language": "frontend",
+      "metric": "cyclomatic-complexity",
+      "path": "frontend/app/src/lib/operate/ft8Ladder.ts",
+      "function": "buildLadder",
+      "direction": "maximum",
+      "value": 37
+    },
+    {
+      "language": "frontend",
+      "metric": "cyclomatic-complexity",
+      "path": "frontend/app/src/lib/utils/adif.ts",
+      "function": "formatAdifRecord",
+      "direction": "maximum",
+      "value": 79
+    },
+    {
+      "language": "frontend",
+      "metric": "cyclomatic-complexity",
+      "path": "frontend/app/src/main.ts",
+      "function": "line@453",
+      "direction": "maximum",
+      "value": 39
+    },
+    {
+      "language": "frontend",
+      "metric": "function-lines",
+      "path": "frontend/app/src/lib/utils/adif.ts",
+      "function": "formatAdifRecord",
+      "direction": "maximum",
+      "value": 133
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "cmd/loadgen/main.go",
+      "function": "main",
+      "direction": "maximum",
+      "value": 63
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "cmd/smd/import.go",
+      "function": "runImport",
+      "direction": "maximum",
+      "value": 62
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "cmd/smd/main.go",
+      "function": "run",
+      "direction": "maximum",
+      "value": 25
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "cmd/smd/restore.go",
+      "function": "runRestore",
+      "direction": "maximum",
+      "value": 72
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "internal/api/handler_config.go",
+      "function": "(*Server).handlePutConfig",
+      "direction": "maximum",
+      "value": 64
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "internal/api/stress_test.go",
+      "function": "TestStress_20Clients_50QSOs",
+      "direction": "maximum",
+      "value": 65
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "internal/audio/wav.go",
+      "function": "ReadWAV",
+      "direction": "maximum",
+      "value": 65
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "internal/bridge/pipeline.go",
+      "function": "(*Service).readLoop",
+      "direction": "maximum",
+      "value": 83
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "internal/config/config.go",
+      "function": "applyDefaults",
+      "direction": "maximum",
+      "value": 63
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "internal/ft8/caller_sequencer.go",
+      "function": "(*Sequencer).onSlotCalling",
+      "direction": "maximum",
+      "value": 79
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "internal/ft8/publishguard_test.go",
+      "function": "TestSource_NoStatusPublishedAfterUnlock",
+      "direction": "maximum",
+      "value": 99
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "internal/ft8/sessionend_test.go",
+      "function": "TestSource_SessionsEndOnlyThroughThePrimitive",
+      "direction": "maximum",
+      "value": 105
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "internal/iocdi/internal.go",
+      "function": "(*Container).injectDependencies",
+      "direction": "maximum",
+      "value": 68
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "internal/qsoservice/submit.go",
+      "function": "(*Service).prepareQso",
+      "direction": "maximum",
+      "value": 60
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "path": "internal/qsoservice/update.go",
+      "function": "(*Service).Update",
+      "direction": "maximum",
+      "value": 54
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "cmd/loadgen/main.go",
+      "function": "main",
+      "direction": "maximum",
+      "value": 37
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "cmd/smd/import.go",
+      "function": "runImport",
+      "direction": "maximum",
+      "value": 47
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "cmd/smd/main.go",
+      "function": "run",
+      "direction": "maximum",
+      "value": 26
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "cmd/smd/restore.go",
+      "function": "runRestore",
+      "direction": "maximum",
+      "value": 54
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "internal/api/handler_config.go",
+      "function": "(*Server).handlePutConfig",
+      "direction": "maximum",
+      "value": 40
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "internal/api/stress_test.go",
+      "function": "TestStress_20Clients_50QSOs",
+      "direction": "maximum",
+      "value": 27
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "internal/audio/wav.go",
+      "function": "ReadWAV",
+      "direction": "maximum",
+      "value": 32
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "internal/bridge/pipeline.go",
+      "function": "(*Service).readLoop",
+      "direction": "maximum",
+      "value": 36
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "internal/config/config.go",
+      "function": "applyDefaults",
+      "direction": "maximum",
+      "value": 52
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "internal/ft8/caller_sequencer.go",
+      "function": "(*Sequencer).onSlotCalling",
+      "direction": "maximum",
+      "value": 51
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "internal/ft8/publishguard_test.go",
+      "function": "TestSource_NoStatusPublishedAfterUnlock",
+      "direction": "maximum",
+      "value": 41
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "internal/ft8/sessionend_test.go",
+      "function": "TestSource_SessionsEndOnlyThroughThePrimitive",
+      "direction": "maximum",
+      "value": 36
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "internal/iocdi/internal.go",
+      "function": "(*Container).injectDependencies",
+      "direction": "maximum",
+      "value": 23
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "internal/qsoservice/submit.go",
+      "function": "(*Service).prepareQso",
+      "direction": "maximum",
+      "value": 44
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "path": "internal/qsoservice/update.go",
+      "function": "(*Service).Update",
+      "direction": "maximum",
+      "value": 47
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "cmd/loadgen/main.go",
+      "function": "main",
+      "direction": "minimum",
+      "value": 14
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "cmd/smd/import.go",
+      "function": "runImport",
+      "direction": "minimum",
+      "value": 12
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "cmd/smd/main.go",
+      "function": "run",
+      "direction": "minimum",
+      "value": 18
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "cmd/smd/restore.go",
+      "function": "runRestore",
+      "direction": "minimum",
+      "value": 12
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/api/handler_config.go",
+      "function": "(*Server).handlePutConfig",
+      "direction": "minimum",
+      "value": 16
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/api/stress_test.go",
+      "function": "TestStress_20Clients_50QSOs",
+      "direction": "minimum",
+      "value": 17
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/audio/wav.go",
+      "function": "ReadWAV",
+      "direction": "minimum",
+      "value": 23
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/bridge/pipeline.go",
+      "function": "(*Service).readLoop",
+      "direction": "minimum",
+      "value": 14
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/bridge/pipeline.go",
+      "function": "(*Service).runPipeline",
+      "direction": "minimum",
+      "value": 17
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/config/config.go",
+      "function": "applyDefaults",
+      "direction": "minimum",
+      "value": 13
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/ft8/caller_sequencer.go",
+      "function": "(*Sequencer).onSlotCalling",
+      "direction": "minimum",
+      "value": 13
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/ft8/publishguard_test.go",
+      "function": "TestSource_NoStatusPublishedAfterUnlock",
+      "direction": "minimum",
+      "value": 22
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/ft8/service.go",
+      "function": "(*Service).decodeLoop",
+      "direction": "minimum",
+      "value": 19
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/ft8/sessionend_test.go",
+      "function": "TestSource_SessionsEndOnlyThroughThePrimitive",
+      "direction": "minimum",
+      "value": 23
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/ft8/work_sequencer.go",
+      "function": "(*Sequencer).onSlotWorking",
+      "direction": "minimum",
+      "value": 19
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/iocdi/internal.go",
+      "function": "(*Container).injectDependencies",
+      "direction": "minimum",
+      "value": 28
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/qsoservice/submit.go",
+      "function": "(*Service).prepareQso",
+      "direction": "minimum",
+      "value": 15
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "path": "internal/qsoservice/update.go",
+      "function": "(*Service).Update",
+      "direction": "minimum",
+      "value": 11
+    }
+  ],
+  "allowedDuplications": [
+    "internal/database/sqlite/api_context.go::(*Service).FetchCountryByNameWithContext <-> internal/database/sqlite/api_context.go::(*Service).FetchCountryByPrefixWithContext",
+    "internal/database/sqlite/api_context.go::(*Service).FetchLogbookByIDWithContext <-> internal/database/sqlite/api_context.go::(*Service).FetchQsoByIdWithContext",
+    "internal/database/sqlite/api_context.go::(*Service).MarkUploadFailedWithContext <-> internal/database/sqlite/api_context.go::(*Service).MarkUploadSuccessWithContext",
+    "internal/forwarding/qrz/response.go::classifyInsert <-> internal/forwarding/qrz/response.go::classifyUpdate"
+  ],
+  "referenceSummaries": [
+    {
+      "language": "frontend",
+      "metric": "cyclomatic-complexity",
+      "production": {
+        "count": 1319,
+        "median": 1,
+        "p90": 6,
+        "worst": 79
+      }
+    },
+    {
+      "language": "frontend",
+      "metric": "function-lines",
+      "production": {
+        "count": 1178,
+        "median": 4,
+        "p90": 18,
+        "worst": 133
+      }
+    },
+    {
+      "language": "frontend",
+      "metric": "nesting-depth",
+      "production": {
+        "count": 1052,
+        "median": 1,
+        "p90": 2,
+        "worst": 3
+      }
+    },
+    {
+      "language": "go",
+      "metric": "cognitive-complexity",
+      "production": {
+        "count": 1079,
+        "median": 5,
+        "p90": 19,
+        "worst": 83
+      }
+    },
+    {
+      "language": "go",
+      "metric": "cyclomatic-complexity",
+      "production": {
+        "count": 1488,
+        "median": 4,
+        "p90": 12,
+        "worst": 54
+      }
+    },
+    {
+      "language": "go",
+      "metric": "maintainability-index",
+      "production": {
+        "count": 1954,
+        "median": 59,
+        "p90": 76,
+        "worst": 11
+      }
+    }
+  ]
+}

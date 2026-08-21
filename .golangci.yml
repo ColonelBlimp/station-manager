@@ -43,8 +43,9 @@ version: "2"
 # The three metrics AGREE: maintidx's 11 are almost exactly the gocognit/gocyclo
 # worst offenders, so the exemption list below is one shared set rather than three.
 #
-# KEEP LOCAL AND CI IN STEP: baselined with 2.11.3, and .github/workflows/ci.yml
-# pins the same. Bump both together or the gate and your desk will disagree.
+# KEEP LOCAL AND CI IN STEP: baselined with the version in .golangci-lint-version;
+# CI and the full observatory read that same file, and the local observatory rejects
+# a mismatched binary. Rebaseline metrics deliberately when changing the version.
 
 linters:
   default: none
@@ -100,8 +101,10 @@ linters:
       # same functions; one entry per function keeps the blast radius as small as
       # the tool allows.
       #
-      # Known weakness, stated now rather than discovered later: an exempted
-      # function can get WORSE without the gate noticing.
+      # These suppressions keep the ordinary lint output focused. The full
+      # maintainability observatory runs without them and compares every hotspot
+      # against quality/maintainability-baseline.json, so an exempted function
+      # cannot get worse silently.
       # ---------------------------------------------------------------------
 
       # Daemon wiring and one-shot commands. `run` is the worst function in the
@@ -202,7 +205,8 @@ linters:
 
       # Duplication in production, all in two files. api_context.go carries three
       # copy-paste pairs inside one 2,897-line file — the largest in the tree and a
-      # genuine refactor candidate, not a false positive.
+      # genuine refactor candidate, not a false positive. The observatory scans
+      # these files and permits only the four named baseline pairs.
       - path: internal/database/sqlite/api_context\.go
         linters: [dupl]
       - path: internal/forwarding/qrz/response\.go

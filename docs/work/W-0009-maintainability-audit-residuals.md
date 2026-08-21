@@ -10,10 +10,10 @@ focused guards without creating speculative frameworks or broad cleanup commits.
 - **Package boundaries (PB-1..4):** add missing stdlib-only, FT8-direction, and cloud-independence
   guards; reduce lookup/smcloud leaf ownership only when a concrete change opens the boundary; drop
   the dead exported `utils.DXCCFromISO2` when its package is next touched.
-- **Maintainability/testing (MT-1..7):** fix the opt-in `logging_debug` nil panic; make complexity and
-  duplication gates able to ratchet exemptions; retire context-free SQLite wrappers and test-only
-  production machinery incrementally; make model generation reproducible; add missing focused
-  `httpkit` and hardware leaf tests.
+- **Maintainability/testing (MT-1, MT-3..7):** fix the opt-in `logging_debug` nil panic; retire the
+  four production duplicate pairs now held by the exact CI ratchet; retire context-free SQLite
+  wrappers and test-only production machinery incrementally; make model generation reproducible;
+  add missing focused `httpkit` and hardware leaf tests.
 - **Browser proof (F-05/F-07):** make modals own focus, keyboard, and Escape behavior and establish
   the first browser/a11y layer. RF shortcuts must remain stood down while a modal owns input.
 - **Frontend hydration (F-08):** validate session members, not only the outer array.

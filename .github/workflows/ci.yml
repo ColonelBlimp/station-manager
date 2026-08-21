@@ -192,11 +192,35 @@ jobs:
       #
       # Scope matches the baseline: ./cmd/... ./internal/... — the config's own
       # path rules drop generated sqlboiler models and npm-vendored Go.
-      - name: golangci-lint (maintainability metrics)
+      - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.11.3
-          args: ./cmd/... ./internal/...
+          version-file: .golangci-lint-version
+          install-only: true
+
+      - name: golangci-lint (maintainability gate)
+        run: >-
+          golangci-lint run --max-issues-per-linter=0 --max-same-issues=0
+          --uniq-by-line=false ./cmd/... ./internal/...
+
+      # The ordinary gate above catches new extreme outliers. This full diagnostic
+      # pass also measures suppressed debt, publishes distribution/trend visibility,
+      # and rejects growth behind an existing function or whole-file exemption.
+      - name: Maintainability observatory
+        env:
+          MAINTAINABILITY_OUTPUT_DIR: /tmp/station-manager-maintainability
+        run: bash scripts/maintainability-metrics.sh
+
+      - name: Upload maintainability report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maintainability-${{ github.sha }}
+          path: |
+            /tmp/station-manager-maintainability/report.json
+            /tmp/station-manager-maintainability/summary.md
+          retention-days: 30
+          if-no-files-found: ignore
 
       # Race detector run in -short mode: catches data races in the
       # concurrency-bearing code (scheduler, ring, capture, services,
