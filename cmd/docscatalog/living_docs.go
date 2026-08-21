@@ -59,19 +59,22 @@ func firstResolvedLivingLine(markdown, section string) string {
 		structural := line[indent:]
 
 		if fenceByte != 0 {
-			if indent <= 3 && closesMarkdownFence(structural, fenceByte, fenceWidth) {
+			if closesMarkdownFence(structural, fenceByte, fenceWidth) {
 				fenceByte = 0
 				fenceWidth = 0
 			}
 			continue
 		}
 
+		// Treat matching delimiters as the explicit example escape hatch at
+		// any indentation, including fences nested beneath list guidance.
+		if marker, width, ok := opensMarkdownFence(structural); ok {
+			fenceByte = marker
+			fenceWidth = width
+			continue
+		}
+
 		if indent <= 3 {
-			if marker, width, ok := opensMarkdownFence(structural); ok {
-				fenceByte = marker
-				fenceWidth = width
-				continue
-			}
 			if strings.HasPrefix(structural, "## ") {
 				inSection = section == "" || strings.TrimSpace(strings.TrimPrefix(structural, "## ")) == section
 				continue

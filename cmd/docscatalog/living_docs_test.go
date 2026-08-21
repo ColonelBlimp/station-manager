@@ -86,6 +86,17 @@ func TestValidateLivingDocsAllowsResolvedSyntaxInFencedExample(t *testing.T) {
 	}
 }
 
+func TestValidateLivingDocsAllowsResolvedSyntaxInNestedFencedExample(t *testing.T) {
+	root := livingDocsFixture(t,
+		"# Backlog\n\n- Guidance:\n\n    ```text\n    - ~~example~~ **DONE.**\n    ```\n",
+		emptyInbox,
+	)
+
+	if err := validateLivingDocs(root); err != nil {
+		t.Fatalf("validateLivingDocs rejected nested fenced example text: %v", err)
+	}
+}
+
 func TestValidateLivingDocsRejectsResolvedCaptureInInbox(t *testing.T) {
 	root := livingDocsFixture(t, "# Backlog\n", "# Dogfood inbox\n\n## Inbox\n\n   - ~~[2026-08-21] symptom~~ **FIXED.**\n")
 
