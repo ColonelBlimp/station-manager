@@ -142,10 +142,13 @@ func TestReadResponseTimeout(t *testing.T) {
 
 	c := newPort(mp, cfg)
 
+	// Anchor start before the context so the measured window is never shorter
+	// than the deadline: capturing it after WithTimeout would subtract the setup
+	// gap and let a return at the deadline read as "too early" on a loaded runner.
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	start := time.Now()
 	_, err := c.ReadResponseBytes(ctx)
 	if err == nil {
 		t.Fatalf("expected timeout error, got nil")
@@ -677,10 +680,13 @@ func TestReadResponseBytesContextTimeoutWhileWaiting(t *testing.T) {
 
 	c := newPort(mp, cfg)
 
+	// Anchor start before the context so the measured window is never shorter
+	// than the deadline: capturing it after WithTimeout would subtract the setup
+	// gap and let a return at the deadline read as "too early" on a loaded runner.
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	start := time.Now()
 	_, err := c.ReadResponseBytes(ctx)
 	if err == nil {
 		t.Fatalf("expected timeout error from ReadResponseBytes, got nil")
