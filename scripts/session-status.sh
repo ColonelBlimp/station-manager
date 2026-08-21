@@ -62,7 +62,7 @@ recent="$(git log -3 --format='  %h %s' 2>/dev/null | cut -c 1-100)"
 repo_state="$(printf 'Repository facts (live):\n- branch: %s\n- worktree: %s changed path(s)\n- upstream: %s\n- recent commits:\n%s' \
     "$branch" "$dirty_count" "$upstream_state" "$recent")"
 
-pointers="$(printf 'More context on demand: %s · docs/session-handoff-archive.md · docs/README.md' "$HANDOFF")"
+pointers="$(printf 'More context on demand: %s · docs/README.md' "$HANDOFF")"
 
 payload="$header"
 [ -n "$warning" ] && payload="${payload}

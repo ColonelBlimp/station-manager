@@ -313,5 +313,5 @@ don't care about FT8, the static build needs no gcc and no audio libraries.
   opposed to this developer setup.
 - [`RELEASING.md`](RELEASING.md) — tagging and building the shipped RPM.
 - [`docs/current.md`](docs/current.md) — bounded current-work capsule.
-- [`docs/session-handoff.md`](docs/session-handoff.md) — detailed recent
-  session record; read only when the capsule is not enough.
+- [`docs/session-handoff.md`](docs/session-handoff.md) — compatibility route to
+  retired session history; use only when current code, references, and ADRs are insufficient.

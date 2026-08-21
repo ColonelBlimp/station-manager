@@ -1,11 +1,11 @@
 # Current work
 
-Updated: 2026-08-20
+Updated: 2026-08-21
 
-- **Goal:** Keep documentation navigable and agent context bounded, and clear the ranked config-contract P1s, without mixing either into ADR 0070 lifecycle work.
-- **State:** Documentation routing is live; the whole-tree logging-gaps audit is closed and its six package reviews deleted. OSS tidy-up tickets 1–3 (kernel, capsule, routing) are delivered; ticket 4 (Phase 1.4 living-work decomposition) is next. CC-1's reject-unknown-keys ruling is ratified — [ADR 0074](decisions/0074-reject-unknown-config-keys-before-any-write.md), dossier [W-0006](work/W-0006-reject-unknown-config-keys.md); implementation not started.
-- **Next:** Implement CC-1 (W-0006) — reject unknown config keys before any write, absorbing CC-2; `config.md` + code + TDD in one commit. Then OSS Phase 1.4: decompose the ~164 KB backlog / ~193 KB inbox into bounded indexes + dossiers (routing, not a bulk rewrite).
+- **Goal:** Finish the OSS documentation-maintainability sweep without mixing it into config or ADR 0070 lifecycle work.
+- **State:** Documentation-library tickets 1–4 are delivered. The backlog is a 5.5 KB stable-ID index, the inbox is empty and routed, W-0007..W-0016 hold the remaining workstreams, the 1.61 MB session archive is retired to Git with a summary record, and `docs:check` prevents regrowth. CC-1 is ratified in [ADR 0074](decisions/0074-reject-unknown-config-keys-before-any-write.md) / [W-0006](work/W-0006-reject-unknown-config-keys.md), but implementation is deliberately paused.
+- **Next:** Continue the OSS contributor-gateway ticket: a thin `CONTRIBUTING.md`, `SECURITY.md`, read-only `task doctor`, and clean-workstation acceptance path. Keep it separate from CC-1.
 - **Decisions not to revisit:** `AGENTS.md` is the <=8 KB kernel; `CLAUDE.md` is import-only; this file is <=2 KB; `docs/README.md` is generated; records stay cold; `docs/backlog.md` alone owns priority.
-- **Do not:** mix documentation or config work into lifecycle commits, bulk-rewrite the backlog/inbox/archive, touch `config.md` before the CC-1 code lands, initiate RF or hardware actions, amend commits, or add agent taglines.
-- **Relevant files:** [`backlog`](backlog.md), [`catalog.json`](catalog.json), [`config reference`](v2-design/config.md), [W-0006](work/W-0006-reject-unknown-config-keys.md), [`OSS plan`](reviews/oss-maintainability-plan.md), [`docscatalog`](../cmd/docscatalog).
-- **Coordination:** Keep W-0003's remaining app-shell work separate from documentation/config slices. Derive Git facts from Git, commit only intended paths, and leave pushing to the operator.
+- **Do not:** mix documentation, config, or lifecycle commits; revive rolling histories; touch `config.md`; initiate RF/hardware actions; amend commits; or add agent taglines.
+- **Relevant files:** [`backlog`](backlog.md), [`dogfood inbox`](dogfood-inbox.md), [`catalog.json`](catalog.json), [`work dossiers`](work/), [`session-history record`](reports/session-history-retirement.md), [`OSS plan`](reviews/oss-maintainability-plan.md).
+- **Coordination:** Preserve the concurrent F2/F4 tooling edits already in the tree; commit only intended paths and leave pushing to the operator.

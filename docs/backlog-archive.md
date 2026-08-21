@@ -5,13 +5,12 @@ that have **shipped, been resolved, or been ruled out** — moved here (not stru
 in place) so the live backlog stays lean and cheap to load. Open it only when you
 need the history of a specific item ("when/how did X ship?").
 
-- **Authoritative record is git history + the ADRs + the memory files** — this is
-  the grep-able convenience copy, same role `session-handoff-archive.md` plays for
-  session entries.
+- **Authoritative record is Git history plus the ADRs and canonical references** — this is
+  only a grep-able convenience copy.
 - Items keep their original section grouping and their SHIPPED/FIXED/RESOLVED
   stamp. Newest work tends toward the bottom of each section (append on archive).
-- A struck item in the *live* backlog is a bug — it should be **moved here**
-  instead. See `backlog.md`'s conventions.
+- A struck item in the *live* backlog is a bug. ID-bearing work now moves to
+  `docs/archive/work/`; older inline history may remain here.
 
 <!-- Archived detail blocks follow, grouped by their original backlog section. -->
 

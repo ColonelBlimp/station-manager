@@ -55,4 +55,4 @@ Keep ADRs short — one page is the target, two pages the ceiling. If you need m
 - `docs/v1-analysis/invariants.md` — load-bearing rules that any decision must respect.
 - `docs/v2-design/` — design documents that ADRs may reference for the long form.
 - `docs/current.md` — bounded current state and next action, not a decision log.
-- `docs/session-handoff.md` — detailed recent session record, also not a decision log.
+- `docs/session-handoff.md` — route to retired session history, not a decision log.

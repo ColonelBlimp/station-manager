@@ -3,8 +3,8 @@
 Drives the daemon's hot-path endpoints under load so pprof captures
 have something to sample. Built to find the kind of bottleneck that
 only shows up at concurrency, not in unit tests. The 2026-05-09
-profiling expedition used it to find 5 bugs (full chain documented in
-`docs/session-handoff.md` under "Profiling expedition").
+profiling expedition used it to find five bugs; the full historical chain is
+recoverable through `docs/session-handoff.md`'s retirement route.
 
 ## When to use it
 

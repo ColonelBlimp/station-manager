@@ -1,6 +1,6 @@
 # Project tidy-up and OSS maintainability plan
 
-**Status:** Accepted — Phase 1 in progress (tickets 1–3 delivered; ticket 4 next) as of 2026-08-20\
+**Status:** Accepted — documentation-library tickets 1–4 delivered; contributor gateway next as of 2026-08-21\
 **Date:** 2026-08-17  
 **Documentation tier:** Tier 2 — point-in-time review and proposed plan
 
@@ -366,10 +366,11 @@ Once the operator accepts and ranks this programme, split its initial work into 
 3. **Documentation routing** — ✅ **DELIVERED** (`docs/catalog.json` plus the generated
    `docs/README.md`; the five document classes are live): define the five classes, add the
    live-document catalog, and generate the compact library index.
-4. **Living-work decomposition** — ⏳ **IN PROGRESS — NEXT (Phase 1.4)** (W-dossiers exist under
-   `docs/work/`, but `docs/backlog.md` (~164 KB) and `docs/dogfood-inbox.md` (~193 KB) are not yet
-   bounded indexes and the giant session archive is not yet summarized): turn backlog and dogfood
-   inbox into bounded indexes plus routed dossiers; summarize and retire the giant session archive.
+4. **Living-work decomposition** — ✅ **DELIVERED** (`docs/backlog.md` is a 5.5 KB ranked stable-ID
+   index; the dogfood inbox contains only unresolved captures and is empty at delivery; W-0007
+   through W-0016 route the remaining workstreams; the 1.61 MB session archive is retired to Git
+   behind `docs/reports/session-history-retirement.md`; `docs:check` prevents backlog regrowth,
+   resolved inbox entries, and archive resurrection).
 5. **Contributor gateway:** `CONTRIBUTING.md`, `SECURITY.md`, `task doctor`, and a clean-workstation
    acceptance exercise.
 6. **Current architecture map:** `docs/architecture.md`, Tier-1 registration, internal-link check,

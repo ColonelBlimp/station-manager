@@ -128,7 +128,7 @@
       "audiences": ["contributor", "agent"],
       "topics": ["priorities", "work-tracking"],
       "scopes": ["repository"],
-      "summary": "Definitive ranked worklist until its entries move into bounded work dossiers."
+      "summary": "Definitive compact ranking of stable-ID work dossiers; priorities and statuses live here, while evidence stays in each dossier."
     },
     {
       "id": "work.w-0001",
@@ -225,6 +225,124 @@
         "cmd/smd/lifecycle_adapters.go"
       ],
       "summary": "W-0006 verified current state and acceptance criteria for rejecting unknown config keys before any write (ADR 0074): the CC-1 reject gate plus CC-2 struct-slice detection, no-op-write and explicit persistence-reason handling, with EH-3 guarantees as a preserved prerequisite."
+    },
+    {
+      "id": "work.w-0007",
+      "path": "docs/work/W-0007-close-verified-p1-correctness-findings.md",
+      "class": "work-item",
+      "audiences": ["contributor", "agent"],
+      "topics": ["correctness", "data-integrity", "p1"],
+      "scopes": [
+        "internal/cloud/store/**",
+        "internal/cloud/reconcile/**",
+        "internal/qsoservice/delete.go",
+        "frontend/app/src/lib/config/**",
+        "frontend/app/src/lib/logbook/**"
+      ],
+      "summary": "W-0007 ordered P1 closure dossier for equal-version cloud conflicts, partial station baselines, concurrent QSO deletion, and re-enrichment generation races."
+    },
+    {
+      "id": "work.w-0008",
+      "path": "docs/work/W-0008-harden-audited-contract-boundaries.md",
+      "class": "work-item",
+      "audiences": ["contributor", "agent"],
+      "topics": ["api-contract", "configuration", "persistence", "wire-validation"],
+      "scopes": [
+        "internal/api/**",
+        "internal/cloud/**",
+        "internal/config/**",
+        "internal/database/sqlite/**",
+        "frontend/app/src/lib/api/**"
+      ],
+      "summary": "W-0008 ordered P2 contract-hardening dossier for verified persistence, configuration, API-wire, and frontend-wire findings."
+    },
+    {
+      "id": "work.w-0009",
+      "path": "docs/work/W-0009-maintainability-audit-residuals.md",
+      "class": "work-item",
+      "audiences": ["contributor", "agent"],
+      "topics": ["maintainability", "package-boundaries", "testing"],
+      "scopes": ["internal/**", "frontend/app/**", ".golangci.yml"],
+      "summary": "W-0009 adjacent-work routing for verified package-boundary, build, test-architecture, browser, and hydration residuals."
+    },
+    {
+      "id": "work.w-0010",
+      "path": "docs/work/W-0010-forwarding-data-and-sync-reliability.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["data-integrity", "forwarding", "sm-cloud", "synchronization"],
+      "scopes": [
+        "internal/cloud/**",
+        "internal/database/sqlite/**",
+        "internal/forwarding/**",
+        "internal/qsoservice/**",
+        "frontend/app/src/lib/logbook/**"
+      ],
+      "summary": "W-0010 staged outcomes for upload recovery, duplicate resolution, legal bulk backfill, idempotent outcomes, and bounded synchronization."
+    },
+    {
+      "id": "work.w-0011",
+      "path": "docs/work/W-0011-ft8-and-rig-refinements.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["ft8", "rig-control", "transmit-safety"],
+      "scopes": [
+        "internal/bridge/**",
+        "internal/ft8/**",
+        "frontend/app/src/lib/operate/**"
+      ],
+      "summary": "W-0011 deferred inventory of concrete FT8 and rig refinements, with operator-selection, evidence, and TX-safety gates."
+    },
+    {
+      "id": "work.w-0012",
+      "path": "docs/work/W-0012-operator-experience-followups.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["diagnostics", "maps", "onboarding", "operator-ui"],
+      "scopes": ["frontend/app/**", "docs/install.md", "internal/api/**"],
+      "summary": "W-0012 routing for operator UI, map, onboarding, and diagnostic outcomes not owned by the app-shell, notification, or cohesion dossiers."
+    },
+    {
+      "id": "work.w-0013",
+      "path": "docs/work/W-0013-infrastructure-and-integration-followups.md",
+      "class": "work-item",
+      "audiences": ["contributor", "agent"],
+      "topics": ["infrastructure", "integration", "sm-cloud"],
+      "scopes": [
+        "internal/cloud/**",
+        "internal/config/**",
+        "internal/hardware/**",
+        "internal/iocdi/**",
+        "frontend/app/**"
+      ],
+      "summary": "W-0013 trigger-bound infrastructure and integration seams including SSE, hardware discovery, IoC, UDP compatibility, and multi-instance migration."
+    },
+    {
+      "id": "work.w-0014",
+      "path": "docs/work/W-0014-deferred-product-workstreams.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["future-work", "product-workstreams"],
+      "scopes": ["repository"],
+      "summary": "W-0014 parked discovery inventory for product workstreams that require a future go-ahead and separate design before implementation."
+    },
+    {
+      "id": "work.w-0015",
+      "path": "docs/work/W-0015-logging-observability-residuals.md",
+      "class": "work-item",
+      "audiences": ["contributor", "agent"],
+      "topics": ["logging", "observability"],
+      "scopes": ["cmd/smd/**", "internal/api/**", "internal/forwarding/**"],
+      "summary": "W-0015 adjacent-work routing for the three low-urgency residuals left by the closed whole-tree logging audit."
+    },
+    {
+      "id": "work.w-0016",
+      "path": "docs/work/W-0016-sanitize-pskreporter-string-fields.md",
+      "class": "work-item",
+      "audiences": ["operator", "contributor", "agent"],
+      "topics": ["ipfix", "psk-reporter", "sanitization"],
+      "scopes": ["internal/pskreporter/**"],
+      "summary": "W-0016 trigger-bound acceptance criteria for removing control bytes from outbound PSK Reporter string fields."
     },
     {
       "id": "work.dogfood-inbox",

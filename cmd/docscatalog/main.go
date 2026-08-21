@@ -369,10 +369,10 @@ func renderREADME(c catalog) ([]byte, error) {
 	out.WriteString("- [`decisions/`](decisions/) contains ADRs and their weighed alternatives.\n")
 	out.WriteString("- [`reviews/`](reviews/) and [`reports/`](reports/) contain point-in-time audits and reports.\n")
 	out.WriteString("- [`v1-analysis/`](v1-analysis/) and most of [`v2-design/`](v2-design/) preserve analysis and design history; the live exceptions are cataloged above.\n")
-	out.WriteString("- `session-handoff*.md`, `backlog-archive.md`, and `research-pipeline.md` are retained history, not current-state references.\n\n")
+	out.WriteString("- `session-handoff.md` routes to Git-retired session history; `backlog-archive.md` and `research-pipeline.md` are retained records, not current-state references.\n\n")
 
 	out.WriteString("## Maintaining the library\n\n")
-	out.WriteString("Edit `docs/catalog.json`, then run `task docs:generate` and `task docs:check`. The check rejects missing paths, duplicate IDs, ambiguous canonical topic ownership, and a stale generated README. New records follow the directory conventions above and do not get live-catalog entries.\n")
+	out.WriteString("Edit `docs/catalog.json`, then run `task docs:generate` and `task docs:check`. The check rejects missing paths, duplicate IDs, ambiguous canonical topic ownership, a stale generated README, backlog-budget violations, resolved living-work entries, and resurrection of the retired session archive. New records follow the directory conventions above and do not get live-catalog entries.\n")
 	return []byte(out.String()), nil
 }
 
@@ -451,6 +451,9 @@ func run(args []string, stdout, _ io.Writer) error {
 		fmt.Fprintf(stdout, "Generated %s from %s.\n", defaultREADMEPath, defaultCatalogPath)
 		return nil
 	case "check":
+		if err := validateLivingDocs("."); err != nil {
+			return err
+		}
 		want, err := renderREADME(c)
 		if err != nil {
 			return err

@@ -165,7 +165,7 @@ Compute optimisations don't change which signals decode — only how fast we get
 
 ## References
 
-- `docs/session-handoff.md` — full session-by-session history
+- `docs/session-handoff.md` — route to the retired session-by-session Git snapshot
 - Memory files for per-stage detail (see top of this doc)
 - QEX paper 2020 (Franke/Somerville/Taylor) — spec source
 - QEX ref [14] tarball at `references/ft4_ft8_public/` — public-domain encoding tables

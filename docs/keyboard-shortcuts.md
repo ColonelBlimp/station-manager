@@ -13,8 +13,7 @@ code so the user-facing manual can draw from one source. Each row pins:
 
 When a new shortcut is added, append it here and reference this doc in
 the user manual update. When one is removed or rebound, update the row
-in the same commit as the code change. Treat this doc the same as
-`docs/session-handoff.md` — stale rows are worse than no rows.
+in the same commit as the code change. Stale rows are worse than no rows.
 
 ---
 
