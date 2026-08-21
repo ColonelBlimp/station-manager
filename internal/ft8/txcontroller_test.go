@@ -464,7 +464,12 @@ func TestTransmit_RejectsLateDeviceStartOnAnUntruncatedRung(t *testing.T) {
 	go p.finishPlayback()
 	err := c.transmit(context.Background(), wave, time.Now().UTC(), nil)
 	require.Error(t, err, "an on-time rung whose device started late is still off its timebase")
-	require.Equal(t, len(wave), len(p.played), "nothing was truncated — the head check could not have caught this")
+	// A sub-sample gap between building nominal and transmit's time.Since(nominal)
+	// read can floor to one dropped head sample (1 sample = 1/12000 s ≈ 83 µs), so
+	// tolerate ≤1: head loss stays far below the decodable-skip floor, leaving the
+	// device-start check as the only thing that could have rejected this rung.
+	require.LessOrEqual(t, len(wave)-len(p.played), 1,
+		"at most one sample of head was truncated — the head check could not have caught this")
 	require.Equal(t, 1, p.stops())
 }
 
