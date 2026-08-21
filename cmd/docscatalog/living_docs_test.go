@@ -28,7 +28,7 @@ func TestValidateLivingDocsRejectsOversizedBacklog(t *testing.T) {
 }
 
 func TestValidateLivingDocsRejectsResolvedTopLevelBacklogItem(t *testing.T) {
-	root := livingDocsFixture(t, "# Backlog\n\n- ~~W-0001~~ **DONE.**\n", emptyInbox)
+	root := livingDocsFixture(t, "# Backlog\n\n   - ~~W-0001~~ **DONE.**\n", emptyInbox)
 
 	err := validateLivingDocs(root)
 	if err == nil || !strings.Contains(err.Error(), "resolved or struck top-level") {
@@ -37,7 +37,7 @@ func TestValidateLivingDocsRejectsResolvedTopLevelBacklogItem(t *testing.T) {
 }
 
 func TestValidateLivingDocsRejectsResolvedCaptureInInbox(t *testing.T) {
-	root := livingDocsFixture(t, "# Backlog\n", "# Dogfood inbox\n\n## Inbox\n\n- ~~[2026-08-21] symptom~~ **FIXED.**\n")
+	root := livingDocsFixture(t, "# Backlog\n", "# Dogfood inbox\n\n## Inbox\n\n   - ~~[2026-08-21] symptom~~ **FIXED.**\n")
 
 	err := validateLivingDocs(root)
 	if err == nil || !strings.Contains(err.Error(), "resolved or struck") {

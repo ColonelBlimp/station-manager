@@ -48,12 +48,16 @@ func validateLivingDocs(repoRoot string) error {
 func firstStruckTopLevel(markdown, section string) string {
 	inSection := section == ""
 	for _, line := range strings.Split(markdown, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(line, "## ") {
-			inSection = section == "" || strings.TrimSpace(strings.TrimPrefix(line, "## ")) == section
+		structural := strings.TrimLeft(line, " ")
+		if len(line)-len(structural) > 3 {
+			continue // four spaces start an indented code block, not a list or heading
+		}
+		trimmed := strings.TrimSpace(structural)
+		if strings.HasPrefix(structural, "## ") {
+			inSection = section == "" || strings.TrimSpace(strings.TrimPrefix(structural, "## ")) == section
 			continue
 		}
-		if !inSection || !strings.HasPrefix(line, "- ") {
+		if !inSection || !strings.HasPrefix(structural, "- ") {
 			continue
 		}
 		upper := strings.ToUpper(trimmed)
