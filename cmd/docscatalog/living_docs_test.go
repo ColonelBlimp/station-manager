@@ -36,6 +36,26 @@ func TestValidateLivingDocsRejectsResolvedTopLevelBacklogItem(t *testing.T) {
 	}
 }
 
+func TestValidateLivingDocsAllowsResolvedNestedBacklogSubtask(t *testing.T) {
+	root := livingDocsFixture(t,
+		"# Backlog\n\n- **W-0001 · OPEN** — parent.\n  - ~~completed subtask~~ **DONE.**\n",
+		emptyInbox,
+	)
+
+	if err := validateLivingDocs(root); err != nil {
+		t.Fatalf("validateLivingDocs rejected a resolved nested subtask: %v", err)
+	}
+}
+
+func TestValidateLivingDocsRejectsResolvedNumberedBacklogItem(t *testing.T) {
+	root := livingDocsFixture(t, "# Backlog\n\n1. ~~W-0001~~ **DONE.**\n", emptyInbox)
+
+	err := validateLivingDocs(root)
+	if err == nil || !strings.Contains(err.Error(), "resolved or struck top-level") {
+		t.Fatalf("validateLivingDocs error = %v, want resolved numbered-backlog-item error", err)
+	}
+}
+
 func TestValidateLivingDocsRejectsResolvedCaptureInInbox(t *testing.T) {
 	root := livingDocsFixture(t, "# Backlog\n", "# Dogfood inbox\n\n## Inbox\n\n   - ~~[2026-08-21] symptom~~ **FIXED.**\n")
 
