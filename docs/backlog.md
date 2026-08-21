@@ -54,8 +54,8 @@ Open one workstream per active focus.
 
 ## Maintenance rules
 
-- No struck or resolved top-level items remain here; move them to `archive/work/` or rely on the
-  preserved Git record once their durable outcome exists elsewhere.
+- No struck or resolved items remain here, including nested substeps; remove completed substeps once
+  their durable outcome exists in a dossier, `archive/work/`, or the preserved Git record.
 - Do not add evidence, alternatives, acceptance criteria, incident chronology, or implementation
   diaries to this index. Put them in the linked dossier, an ADR, or a cold record.
 - Keep this file at or below 10 KiB. New open work gets the next immutable `W-NNNN` and one terse
