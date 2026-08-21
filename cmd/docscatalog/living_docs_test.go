@@ -75,25 +75,39 @@ func TestValidateLivingDocsRejectsResolvedItemAfterThematicBreak(t *testing.T) {
 	}
 }
 
-func TestValidateLivingDocsAllowsResolvedSyntaxInFencedExample(t *testing.T) {
+func TestValidateLivingDocsRejectsResolvedSyntaxInFencedExample(t *testing.T) {
 	root := livingDocsFixture(t,
 		"# Backlog\n\n```text\n- ~~example~~ **DONE.**\n```\n",
 		emptyInbox,
 	)
 
-	if err := validateLivingDocs(root); err != nil {
-		t.Fatalf("validateLivingDocs rejected fenced example text: %v", err)
+	err := validateLivingDocs(root)
+	if err == nil || !strings.Contains(err.Error(), "resolved or struck") {
+		t.Fatalf("validateLivingDocs error = %v, want fenced resolved-text error", err)
 	}
 }
 
-func TestValidateLivingDocsAllowsResolvedSyntaxInNestedFencedExample(t *testing.T) {
+func TestValidateLivingDocsRejectsResolvedSyntaxInNestedFencedExample(t *testing.T) {
 	root := livingDocsFixture(t,
 		"# Backlog\n\n- Guidance:\n\n    ```text\n    - ~~example~~ **DONE.**\n    ```\n",
 		emptyInbox,
 	)
 
-	if err := validateLivingDocs(root); err != nil {
-		t.Fatalf("validateLivingDocs rejected nested fenced example text: %v", err)
+	err := validateLivingDocs(root)
+	if err == nil || !strings.Contains(err.Error(), "resolved or struck") {
+		t.Fatalf("validateLivingDocs error = %v, want nested fenced resolved-text error", err)
+	}
+}
+
+func TestValidateLivingDocsRejectsResolvedTextAfterUnmatchedIndentedFence(t *testing.T) {
+	root := livingDocsFixture(t,
+		"# Backlog\n\n    ```text\n- ~~W-0001~~ **DONE.**\n",
+		emptyInbox,
+	)
+
+	err := validateLivingDocs(root)
+	if err == nil || !strings.Contains(err.Error(), "resolved or struck") {
+		t.Fatalf("validateLivingDocs error = %v, want post-fence resolved-text error", err)
 	}
 }
 
