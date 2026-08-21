@@ -38,6 +38,15 @@
       "summary": "Bounded capsule containing the present goal, state, next action, and settled constraints."
     },
     {
+      "id": "reference.architecture",
+      "path": "docs/architecture.md",
+      "class": "canonical",
+      "audiences": ["contributor", "agent"],
+      "topics": ["architecture"],
+      "scopes": ["repository"],
+      "summary": "Current runtime topology, ownership boundaries, principal flows, safety boundaries, and change routing."
+    },
+    {
       "id": "reference.api",
       "path": "docs/v2-design/api-endpoints.md",
       "class": "canonical",

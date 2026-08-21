@@ -154,6 +154,7 @@ func TestRenderREADMEExposesAudienceClassTopicAndRecordRoutes(t *testing.T) {
 		"### Work Items and Dossiers",
 		"## Canonical topic routing",
 		"## Records and history",
+		"unresolved live-document links",
 		"[root-kernel](../AGENTS.md)",
 		"[ft8-guide](ft8.md)",
 		"`task docs:find QUERY=internal/ft8`",
@@ -235,6 +236,19 @@ func TestRepositoryCatalogRoutesLiveFrontendScopes(t *testing.T) {
 				t.Fatalf("findDocuments(%q) omitted %q; got %v", tt.query, tt.want, documentIDs(got))
 			}
 		})
+	}
+}
+
+func TestRepositoryCatalogRoutesCurrentArchitecture(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	c, err := loadCatalog(filepath.Join(repoRoot, "docs", "catalog.json"))
+	if err != nil {
+		t.Fatalf("load repository catalog: %v", err)
+	}
+
+	got := findDocuments(c, "architecture")
+	if !containsDocument(got, "reference.architecture") {
+		t.Fatalf("findDocuments(architecture) omitted reference.architecture; got %v", documentIDs(got))
 	}
 }
 

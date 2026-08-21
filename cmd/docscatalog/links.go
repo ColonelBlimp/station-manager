@@ -1,0 +1,204 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+var (
+	inlineMarkdownLink = regexp.MustCompile(`!?\[[^]\n]*\]\(([^)\n]*)\)`)
+	referenceLink      = regexp.MustCompile(`^[ \t]{0,3}\[[^]\n]+\]:[ \t]*(.*)$`)
+)
+
+type markdownTarget struct {
+	line   int
+	target string
+}
+
+// validateMarkdownLinks checks filesystem targets in every live Markdown
+// document and both public documentation indexes. Historical records stay out
+// of this check: they preserve their point-in-time references and are not
+// represented in the live catalog.
+func validateMarkdownLinks(repoRoot string, c catalog) error {
+	sources := make(map[string]struct{}, len(c.Documents)+2)
+	for _, doc := range c.Documents {
+		if strings.EqualFold(filepath.Ext(doc.Path), ".md") {
+			sources[doc.Path] = struct{}{}
+		}
+	}
+	for _, index := range []string{"README.md", "docs/README.md"} {
+		if info, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(index))); err == nil && !info.IsDir() {
+			sources[index] = struct{}{}
+		}
+	}
+
+	ordered := make([]string, 0, len(sources))
+	for source := range sources {
+		ordered = append(ordered, source)
+	}
+	sort.Strings(ordered)
+
+	for _, source := range ordered {
+		filename := filepath.Join(repoRoot, filepath.FromSlash(source))
+		targets, err := markdownTargets(filename)
+		if err != nil {
+			return fmt.Errorf("read Markdown links in %s: %w", source, err)
+		}
+		for _, link := range targets {
+			target, local := localMarkdownTarget(link.target)
+			if !local {
+				continue
+			}
+			resolved := filepath.Clean(filepath.Join(filepath.Dir(filename), filepath.FromSlash(target)))
+			rel, err := filepath.Rel(repoRoot, resolved)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("%s:%d: link target %q escapes the repository", source, link.line, link.target)
+			}
+			if _, err := os.Stat(resolved); err != nil {
+				return fmt.Errorf("%s:%d: link target %q: %w", source, link.line, link.target, err)
+			}
+		}
+	}
+	return nil
+}
+
+func markdownTargets(filename string) ([]markdownTarget, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var (
+		targets     []markdownTarget
+		lineNumber  int
+		fenceMarker byte
+		fenceLength int
+	)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		lineNumber++
+		line := scanner.Text()
+		marker, length := markdownFence(line)
+		if fenceMarker != 0 {
+			if marker == fenceMarker && length >= fenceLength && closesMarkdownFence(line, length) {
+				fenceMarker = 0
+				fenceLength = 0
+			}
+			continue
+		}
+		if marker != 0 {
+			fenceMarker = marker
+			fenceLength = length
+			continue
+		}
+
+		line = withoutInlineCode(line)
+		if match := referenceLink.FindStringSubmatch(line); match != nil {
+			if target := markdownDestination(match[1]); target != "" {
+				targets = append(targets, markdownTarget{line: lineNumber, target: target})
+			}
+		}
+		for _, match := range inlineMarkdownLink.FindAllStringSubmatch(line, -1) {
+			if target := markdownDestination(match[1]); target != "" {
+				targets = append(targets, markdownTarget{line: lineNumber, target: target})
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+func markdownFence(line string) (byte, int) {
+	trimmed := strings.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 || len(trimmed) < 3 {
+		return 0, 0
+	}
+	marker := trimmed[0]
+	if marker != '`' && marker != '~' {
+		return 0, 0
+	}
+	length := 0
+	for length < len(trimmed) && trimmed[length] == marker {
+		length++
+	}
+	if length < 3 {
+		return 0, 0
+	}
+	return marker, length
+}
+
+func closesMarkdownFence(line string, markerLength int) bool {
+	trimmed := strings.TrimLeft(line, " ")
+	return strings.TrimSpace(trimmed[markerLength:]) == ""
+}
+
+func withoutInlineCode(line string) string {
+	masked := []byte(line)
+	for start := 0; start < len(line); {
+		if line[start] != '`' {
+			start++
+			continue
+		}
+		run := 1
+		for start+run < len(line) && line[start+run] == '`' {
+			run++
+		}
+		closing := strings.Index(line[start+run:], strings.Repeat("`", run))
+		if closing < 0 {
+			break
+		}
+		end := start + run + closing + run
+		for i := start; i < end; i++ {
+			masked[i] = ' '
+		}
+		start = end
+	}
+	return string(masked)
+}
+
+func markdownDestination(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if raw[0] == '<' {
+		if end := strings.IndexByte(raw[1:], '>'); end >= 0 {
+			return raw[1 : end+1]
+		}
+		return raw
+	}
+	if end := strings.IndexAny(raw, " \t"); end >= 0 {
+		return raw[:end]
+	}
+	return raw
+}
+
+func localMarkdownTarget(raw string) (string, bool) {
+	target := strings.TrimSpace(raw)
+	if target == "" || strings.HasPrefix(target, "#") || strings.HasPrefix(target, "/") {
+		return "", false
+	}
+	parsed, err := url.Parse(target)
+	if err == nil && parsed.Scheme != "" {
+		return "", false
+	}
+	if cut := strings.IndexAny(target, "?#"); cut >= 0 {
+		target = target[:cut]
+	}
+	if target == "" {
+		return "", false
+	}
+	if decoded, err := url.PathUnescape(target); err == nil {
+		target = decoded
+	}
+	return target, true
+}

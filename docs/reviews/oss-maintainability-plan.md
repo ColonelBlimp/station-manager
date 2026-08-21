@@ -1,6 +1,6 @@
 # Project tidy-up and OSS maintainability plan
 
-**Status:** Accepted — documentation-library tickets 1–4 delivered; architecture map next and
+**Status:** Accepted — documentation-library tickets 1–4 and the architecture map delivered;
 contributor onboarding deferred as of 2026-08-21\
 **Date:** 2026-08-17  
 **Documentation tier:** Tier 2 — point-in-time review and proposed plan
@@ -377,9 +377,10 @@ Once the operator accepts and ranks this programme, split its initial work into 
    resolved inbox entries, and archive resurrection).
 5. **Contributor onboarding — DEFERRED / TRIGGER-BOUND:** when actual contributor demand exists,
    add `CONTRIBUTING.md`, `SECURITY.md`, `task doctor`, and a clean-workstation acceptance exercise.
-6. **Current architecture map — NEXT:** `docs/architecture.md`, Tier-1 registration, internal-link
-   check, and live-document reconciliation.
-7. **Test ergonomics:** explicit test-lane tasks, contributor guidance, and a source-guard inventory.
+6. **Current architecture map — ✅ DELIVERED:** `docs/architecture.md` is registered as Tier 1;
+   `docs:check` validates live-document links, and stale links in the API reference were reconciled.
+7. **Test ergonomics — DEFERRED / ADJACENT-WORK:** explicit test-lane and source-guard residuals
+   are routed through W-0009 rather than ranked here.
 
 The complexity ratchet starts only when lifecycle production migration naturally opens
 `cmd/smd.run`; it should not be pulled ahead of the active lifecycle or release-gate work.

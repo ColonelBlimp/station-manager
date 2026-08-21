@@ -435,5 +435,5 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 
 - [api.md](api.md) — the API design brief (rationale, cross-cutting decisions, the decision trail).
 - [frontend-spa.md](frontend-spa.md) — SPA embed/serving (the `/` and `/config/` routes).
-- [decisions/0036-operator-manual-embedded-zero-js-site.md](decisions/0036-operator-manual-embedded-zero-js-site.md) — the operator manual at `/manual/` (Hugo, zero-JS, embedded + on-disk).
-- ADRs: [0010](../decisions/0010-rig-sse-wire-shape.md) (SSE/error shape), [0013](../decisions/0013-bridge-as-daemon-subsystem.md), [0017](../decisions/0017-enrichment-pipeline-domain-table-cache.md), [0026](../decisions/0026-inbound-rig-command-path.md), [0027](../decisions/0027-tune-carrier-tx.md), [0028](../decisions/0028-rig-profiles.md), [0029](../decisions/0029-ft8-transmit.md)/0030/0031/0033 (FT8).
+- [decisions/0036-operator-manual-embedded-zero-js-site.md](../decisions/0036-operator-manual-embedded-zero-js-site.md) — the operator manual at `/manual/` (Hugo, zero-JS, embedded + on-disk).
+- ADRs: [0010](../decisions/0010-rig-sse-wire-shape.md) (SSE/error shape), [0013](../decisions/0013-daemon-owns-bridge-as-subsystem.md), [0017](../decisions/0017-enrichment-pipeline-domain-table-cache.md), [0026](../decisions/0026-rig-command-path-freq-mode.md), [0027](../decisions/0027-tune-carrier-control.md), [0028](../decisions/0028-rig-profiles-single-active-hotswap.md), [0029](../decisions/0029-ft8-transmit-manual-sequencing.md)/0030/0031/0033 (FT8).

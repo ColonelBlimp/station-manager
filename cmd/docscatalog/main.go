@@ -372,7 +372,7 @@ func renderREADME(c catalog) ([]byte, error) {
 	out.WriteString("- `session-handoff.md` routes to Git-retired session history; `backlog-archive.md` and `research-pipeline.md` are retained records, not current-state references.\n\n")
 
 	out.WriteString("## Maintaining the library\n\n")
-	out.WriteString("Edit `docs/catalog.json`, then run `task docs:generate` and `task docs:check`. The check rejects missing paths, duplicate IDs, ambiguous canonical topic ownership, a stale generated README, backlog-budget violations, resolved living-work entries, and resurrection of the retired session archive. New records follow the directory conventions above and do not get live-catalog entries.\n")
+	out.WriteString("Edit `docs/catalog.json`, then run `task docs:generate` and `task docs:check`. The check rejects missing paths, duplicate IDs, ambiguous canonical topic ownership, unresolved live-document links, a stale generated README, backlog-budget violations, resolved living-work entries, and resurrection of the retired session archive. New records follow the directory conventions above and do not get live-catalog entries.\n")
 	return []byte(out.String()), nil
 }
 
@@ -452,6 +452,9 @@ func run(args []string, stdout, _ io.Writer) error {
 		return nil
 	case "check":
 		if err := validateLivingDocs("."); err != nil {
+			return err
+		}
+		if err := validateMarkdownLinks(".", c); err != nil {
 			return err
 		}
 		want, err := renderREADME(c)
