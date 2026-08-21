@@ -1,6 +1,7 @@
 # Project tidy-up and OSS maintainability plan
 
-**Status:** Accepted — documentation-library tickets 1–4 delivered; contributor gateway next as of 2026-08-21\
+**Status:** Accepted — documentation-library tickets 1–4 delivered; architecture map next and
+contributor onboarding deferred as of 2026-08-21\
 **Date:** 2026-08-17  
 **Documentation tier:** Tier 2 — point-in-time review and proposed plan
 
@@ -211,9 +212,11 @@ Exit criteria:
 - `docs/backlog.md` and `docs/dogfood-inbox.md` are usable indexes/inboxes rather than archives.
 - Documentation budgets, catalog integrity, and internal links are CI-enforced.
 
-## Phase 2 — create a thin contributor front door
+## Phase 2 — create a thin contributor front door when demand exists
 
-**Estimated effort:** 1–2 focused days.
+**Timing:** trigger-bound. Revisit when an external contributor asks to participate or the operator
+selects a real onboarding exercise. Do not schedule this phase merely to complete the programme
+while the project has one maintainer and no contributor demand.
 
 Add a concise root `CONTRIBUTING.md` that points to the existing detailed material instead of
 copying it. It should answer:
@@ -330,7 +333,8 @@ Exit criteria:
 
 ## Phase 6 — validate OSS sustainability
 
-**Estimated effort:** 1–2 focused days plus a real onboarding exercise.
+**Timing:** trigger-bound until another contributor is available. Allow 1–2 focused days plus a real
+onboarding exercise once triggered.
 
 Add only the useful community surface:
 
@@ -371,10 +375,10 @@ Once the operator accepts and ranks this programme, split its initial work into 
    through W-0016 route the remaining workstreams; the 1.61 MB session archive is retired to Git
    behind `docs/reports/session-history-retirement.md`; `docs:check` prevents backlog regrowth,
    resolved inbox entries, and archive resurrection).
-5. **Contributor gateway:** `CONTRIBUTING.md`, `SECURITY.md`, `task doctor`, and a clean-workstation
-   acceptance exercise.
-6. **Current architecture map:** `docs/architecture.md`, Tier-1 registration, internal-link check,
-   and live-document reconciliation.
+5. **Contributor onboarding — DEFERRED / TRIGGER-BOUND:** when actual contributor demand exists,
+   add `CONTRIBUTING.md`, `SECURITY.md`, `task doctor`, and a clean-workstation acceptance exercise.
+6. **Current architecture map — NEXT:** `docs/architecture.md`, Tier-1 registration, internal-link
+   check, and live-document reconciliation.
 7. **Test ergonomics:** explicit test-lane tasks, contributor guidance, and a source-guard inventory.
 
 The complexity ratchet starts only when lifecycle production migration naturally opens
@@ -382,8 +386,9 @@ The complexity ratchet starts only when lifecycle production migration naturally
 
 ## Measures of success
 
-Review these measures after the documentation-library tickets, after the contributor/architecture
-tickets, and again after the first complexity slice:
+Review these measures after the documentation-library tickets, after the architecture and test
+ergonomics tickets, after contributor onboarding if it is triggered, and again after the first
+complexity slice:
 
 | Measure | Target |
 |---|---|
@@ -392,13 +397,13 @@ tickets, and again after the first complexity slice:
 | Normal / scoped automatic context | ≤ 10 KB / ≤ 20 KB |
 | Live-document routing | one canonical owner per topic |
 | Ranked backlog index | preferably ≤ 10 KB |
-| Clean clone to first focused test | ≤ 15 minutes |
+| Clean clone to first focused test | ≤ 15 minutes when contributor onboarding is triggered |
 | Focused package feedback | < 15 seconds for the documented examples |
 | Fast repository feedback | approximately ≤ 90 seconds on the reference machine |
 | Unexplained source-shape guards | zero |
 | Tier-1 link/map failures | CI-detected |
 | Complexity exemptions | monotonically decreasing after the baseline |
-| Cold onboarding | one independent, test-backed contribution completed |
+| Cold onboarding | when triggered, one independent, test-backed contribution completed |
 
 ## Non-goals
 
