@@ -25,6 +25,39 @@ func TestValidateMarkdownLinksRejectsMissingTargetInLiveDocument(t *testing.T) {
 	}
 }
 
+func TestValidateMarkdownLinksAcceptsBalancedParenthesesInDestination(t *testing.T) {
+	root := t.TempDir()
+	writeMarkdownFile(t, root, "docs/live.md", "# Live\n\n[guide](guide(v2).md)\n")
+	writeMarkdownFile(t, root, "docs/guide(v2).md", "# Guide\n")
+	c := catalog{Version: 1, Documents: []document{
+		testDocument("live", "docs/live.md", "canonical", "architecture"),
+	}}
+
+	if err := validateMarkdownLinks(root, c); err != nil {
+		t.Fatalf("validateMarkdownLinks rejected a balanced-parentheses destination: %v", err)
+	}
+}
+
+func TestValidateMarkdownLinksIgnoresHTMLComments(t *testing.T) {
+	root := t.TempDir()
+	writeMarkdownFile(t, root, "docs/live.md", strings.Join([]string{
+		"# Live",
+		"",
+		"<!-- [retired](removed-inline.md) -->",
+		"<!--",
+		"[retired](removed-block.md)",
+		"-->",
+		"",
+	}, "\n"))
+	c := catalog{Version: 1, Documents: []document{
+		testDocument("live", "docs/live.md", "canonical", "architecture"),
+	}}
+
+	if err := validateMarkdownLinks(root, c); err != nil {
+		t.Fatalf("validateMarkdownLinks treated an HTML comment as rendered Markdown: %v", err)
+	}
+}
+
 func TestValidateMarkdownLinksAcceptsExistingTargetsAndNonFilesystemLinks(t *testing.T) {
 	root := t.TempDir()
 	writeMarkdownFile(t, root, "README.md", "# Public index\n\n[docs](docs/live.md)\n")

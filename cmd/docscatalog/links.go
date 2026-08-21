@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	inlineMarkdownLink = regexp.MustCompile(`!?\[[^]\n]*\]\(([^)\n]*)\)`)
-	referenceLink      = regexp.MustCompile(`^[ \t]{0,3}\[[^]\n]+\]:[ \t]*(.*)$`)
+	inlineMarkdownLinkStart = regexp.MustCompile(`!?\[[^]\n]*\]\(`)
+	referenceLink           = regexp.MustCompile(`^[ \t]{0,3}\[[^]\n]+\]:[ \t]*(.*)$`)
 )
 
 type markdownTarget struct {
@@ -80,19 +80,23 @@ func markdownTargets(filename string) ([]markdownTarget, error) {
 		lineNumber  int
 		fenceMarker byte
 		fenceLength int
+		inComment   bool
 	)
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		lineNumber++
 		line := scanner.Text()
-		marker, length := markdownFence(line)
 		if fenceMarker != 0 {
+			marker, length := markdownFence(line)
 			if marker == fenceMarker && length >= fenceLength && closesMarkdownFence(line, length) {
 				fenceMarker = 0
 				fenceLength = 0
 			}
 			continue
 		}
+
+		line = withoutHTMLComments(line, &inComment)
+		marker, length := markdownFence(line)
 		if marker != 0 {
 			fenceMarker = marker
 			fenceLength = length
@@ -105,16 +109,117 @@ func markdownTargets(filename string) ([]markdownTarget, error) {
 				targets = append(targets, markdownTarget{line: lineNumber, target: target})
 			}
 		}
-		for _, match := range inlineMarkdownLink.FindAllStringSubmatch(line, -1) {
-			if target := markdownDestination(match[1]); target != "" {
+		for offset := 0; offset < len(line); {
+			match := inlineMarkdownLinkStart.FindStringIndex(line[offset:])
+			if match == nil {
+				break
+			}
+			start := offset + match[1]
+			raw, next, ok := balancedMarkdownDestination(line, start)
+			if !ok {
+				break
+			}
+			if target := markdownDestination(raw); target != "" {
 				targets = append(targets, markdownTarget{line: lineNumber, target: target})
 			}
+			offset = next
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return targets, nil
+}
+
+func withoutHTMLComments(line string, inComment *bool) string {
+	masked := []byte(line)
+	for offset := 0; offset < len(line); {
+		if *inComment {
+			closing := strings.Index(line[offset:], "-->")
+			if closing < 0 {
+				blankBytes(masked, offset, len(masked))
+				return string(masked)
+			}
+			end := offset + closing + len("-->")
+			blankBytes(masked, offset, end)
+			*inComment = false
+			offset = end
+			continue
+		}
+
+		opening := strings.Index(line[offset:], "<!--")
+		if opening < 0 {
+			break
+		}
+		start := offset + opening
+		closing := strings.Index(line[start+len("<!--"):], "-->")
+		if closing < 0 {
+			blankBytes(masked, start, len(masked))
+			*inComment = true
+			return string(masked)
+		}
+		end := start + len("<!--") + closing + len("-->")
+		blankBytes(masked, start, end)
+		offset = end
+	}
+	return string(masked)
+}
+
+func blankBytes(value []byte, start, end int) {
+	for index := start; index < end; index++ {
+		value[index] = ' '
+	}
+}
+
+// balancedMarkdownDestination returns the contents of an inline link's outer
+// parentheses. Parentheses may appear in a destination when balanced; quoted
+// titles and angle-bracket destinations do not affect that balance.
+func balancedMarkdownDestination(line string, start int) (string, int, bool) {
+	depth := 1
+	var quote byte
+	inAngle := false
+	afterDestination := false
+	for i := start; i < len(line); i++ {
+		c := line[i]
+		if c == '\\' && i+1 < len(line) {
+			i++
+			continue
+		}
+		if inAngle {
+			if c == '>' {
+				inAngle = false
+			}
+			continue
+		}
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if depth == 1 && (c == ' ' || c == '\t') {
+			afterDestination = true
+			continue
+		}
+		if depth == 1 && afterDestination && (c == '\'' || c == '"') {
+			quote = c
+			continue
+		}
+		switch c {
+		case '<':
+			if depth == 1 {
+				inAngle = true
+			}
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return line[start:i], i + 1, true
+			}
+		}
+	}
+	return "", len(line), false
 }
 
 func markdownFence(line string) (byte, int) {
