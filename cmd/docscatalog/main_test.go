@@ -164,7 +164,7 @@ func TestRenderREADMEExposesAudienceClassTopicAndRecordRoutes(t *testing.T) {
 	}
 }
 
-func TestRenderREADMEEscapesPipeInSummary(t *testing.T) {
+func TestRenderREADMEEscapesMarkdownTableSyntaxInSummary(t *testing.T) {
 	c := catalog{Version: 1, Documents: []document{
 		{
 			ID:        "pipe-doc",
@@ -173,7 +173,7 @@ func TestRenderREADMEEscapesPipeInSummary(t *testing.T) {
 			Audiences: []string{"agent"},
 			Topics:    []string{"piping"},
 			Scopes:    []string{"repository"},
-			Summary:   "Config keys are rejected | startup halts.",
+			Summary:   `Config path left\|right | startup halts.`,
 		},
 	}}
 
@@ -199,8 +199,8 @@ func TestRenderREADMEEscapesPipeInSummary(t *testing.T) {
 	if separators := unescapedPipeCount(row); separators != 5 {
 		t.Fatalf("class-table row has %d cell separators, want 5 (four columns): %q", separators, row)
 	}
-	if !strings.Contains(row, `rejected \| startup`) {
-		t.Fatalf("summary pipe was not escaped in row: %q", row)
+	if !strings.Contains(row, `left&#92;&#124;right &#124; startup`) {
+		t.Fatalf("summary backslash and pipes were not safely encoded in row: %q", row)
 	}
 }
 

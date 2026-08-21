@@ -409,14 +409,14 @@ func readmeRelativePath(repoPath string) string {
 	return "../" + repoPath
 }
 
-// tableCell escapes free-text that is rendered raw into a GitHub Markdown table
-// cell. A summary may legitimately contain "|" (validation forbids only line
-// breaks); left unescaped it would open an extra column that docs:check cannot
-// catch, because the check compares this renderer's output against itself. Only
-// the summary needs this: ids and topics are slugs and scopes are stat-verified
-// repository paths, none of which can contain a pipe.
+// tableCell encodes Markdown table syntax in free-text summaries. Encoding both
+// backslashes and pipes avoids the parity trap where an existing backslash plus
+// an inserted "\|" becomes "\\|": Markdown consumes the paired backslashes and
+// treats the pipe as a column delimiter. Numeric entities preserve the rendered
+// characters without relying on Markdown backslash escaping. Only summaries
+// need this: ids and topics are slugs and scopes are stat-verified paths.
 func tableCell(s string) string {
-	return strings.ReplaceAll(s, "|", "\\|")
+	return strings.NewReplacer("\\", "&#92;", "|", "&#124;").Replace(s)
 }
 
 func codeList(values []string) string {
