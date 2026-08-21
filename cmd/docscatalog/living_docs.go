@@ -48,7 +48,8 @@ func validateLivingDocs(repoRoot string) error {
 // firstResolvedLivingLine deliberately rejects resolved status text anywhere in
 // the live section, including nested substeps. Completed detail belongs in its
 // dossier or Git history, so the guard need not partially reimplement Markdown
-// list nesting. Fenced and four-space-indented code examples remain available.
+// list nesting. Fenced examples remain available; indented examples do not get
+// an exception because the same indentation is also valid for nested list work.
 func firstResolvedLivingLine(markdown, section string) string {
 	inSection := section == ""
 	var fenceByte byte
@@ -77,7 +78,7 @@ func firstResolvedLivingLine(markdown, section string) string {
 			}
 		}
 
-		if !inSection || indent >= 4 {
+		if !inSection {
 			continue
 		}
 		trimmed := strings.TrimSpace(structural)

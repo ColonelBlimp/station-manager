@@ -38,13 +38,22 @@ func TestValidateLivingDocsRejectsResolvedTopLevelBacklogItem(t *testing.T) {
 
 func TestValidateLivingDocsRejectsResolvedNestedBacklogSubtask(t *testing.T) {
 	root := livingDocsFixture(t,
-		"# Backlog\n\n- **W-0001 · OPEN** — parent.\n  - ~~completed subtask~~ **DONE.**\n",
+		"# Backlog\n\n- **W-0001 · OPEN** — parent.\n    - ~~completed subtask~~ **DONE.**\n",
 		emptyInbox,
 	)
 
 	err := validateLivingDocs(root)
 	if err == nil || !strings.Contains(err.Error(), "resolved or struck") {
 		t.Fatalf("validateLivingDocs error = %v, want resolved nested-subtask error", err)
+	}
+}
+
+func TestValidateLivingDocsRejectsResolvedSyntaxInIndentedCode(t *testing.T) {
+	root := livingDocsFixture(t, "# Backlog\n\n    - ~~example~~ **DONE.**\n", emptyInbox)
+
+	err := validateLivingDocs(root)
+	if err == nil || !strings.Contains(err.Error(), "resolved or struck") {
+		t.Fatalf("validateLivingDocs error = %v, want non-fenced resolved-text error", err)
 	}
 }
 
