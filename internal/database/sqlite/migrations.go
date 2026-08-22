@@ -34,7 +34,7 @@ const (
 // damaged schema (a missing table) must fail startup, not surface later as a
 // runtime query error.
 var coreTablesBySet = map[string][]string{
-	MigrationSetLog:       {"logbook", "qso", "qso_upload", "qso_history"},
+	MigrationSetLog:       {"logbook", "qso", "qso_upload", "qso_history", "operator_event"},
 	MigrationSetReference: {"contacted_station", "country"},
 }
 

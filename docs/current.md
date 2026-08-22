@@ -2,10 +2,10 @@
 
 Updated: 2026-08-22
 
-- **Goal:** W-0007 is closed; return work selection to the ranked backlog and take whatever it owns next.
-- **State:** **W-0007 complete** — all four verified P1 correctness findings closed: PT-1 equal-version SM Cloud conflicts (`8bc0d9b3`); F-01 partial station baseline (`961a7055`); PT-2 concurrent QSO delete (`e4cdfbfe`, caller follow-up `0363ae0c`); F-02 re-enrichment generation race (`dc15e188`, codex follow-ups `88916515`/`11c4c94a`). Nothing pushed.
-- **Next:** Select further work only from [`backlog.md`](backlog.md), which alone owns priority. The last P1 is cleared; ranked next are the P0 on-air validation gate (W-0002, operator-initiated RF) and the P2 release gates — W-0001 durable notifications, W-0002 FT8 type-4 on-air validation.
-- **Decisions not to revisit:** each finding shipped as its own TDD slice/commit; `docs/backlog.md` alone owns priority; W-0007's rationale lives in its dossier and the persistence/frontend audits.
-- **Do not:** re-rank priority in this file; initiate RF/hardware actions without per-occasion operator agreement; amend commits; push without operator direction.
-- **Relevant files:** [`W-0007`](work/W-0007-close-verified-p1-correctness-findings.md), [`backlog`](backlog.md), [`persistence audit`](reviews/internal-persistence-transaction-audit.md), [`frontend review`](reviews/frontend-app-review.md).
-- **Coordination:** Leave committing and pushing to the operator; SM Cloud integration tests need a disposable Postgres (`task db:pg:up`, `SMCLOUD_TEST_ALLOW_DEFAULT=1`).
+- **Goal:** Implement W-0001 (durable operator notification history) under [`ADR 0076`](decisions/0076-notification-history-pilot-operator-event-store.md) — the notification-first pilot of ADR 0061's local `operator_event` store.
+- **State:** Policy settled (ADR 0076; ADR 0061 partially superseded for the local-store shape + pilot order). **`operator_event` schema slice complete** — migration 0008 (categorised; closed category/kind/severity CHECKs; NOT-NULL no-default `build`; JSON `detail`; immutable-but-prunable), verified core table, sqlboiler model regenerated, TDD proofs green (incl. `-race` + mutation proof). Nothing pushed.
+- **Next:** Persistence plus **atomic last-500-per-category insert/prune, oldest-first, outside every QSO transaction**. The producing-boundary writers follow (browser `export.adif_failed`, daemon terminal `forward.failed`).
+- **Decisions not to revisit:** ADR 0076 settles the pilot policy (two durable kinds, typed bounded metadata, daemon-stamped severity/time/build, no ack); `docs/backlog.md` alone owns priority; recording is per-boundary, not hub- or toast-driven.
+- **Do not:** persist `Reason` or any raw provider text; add a generic hub subscriber or toast-level recorder; add acknowledgement (`acknowledged_at`/mark-read/unread); stage `.idea/sqldialects.xml`; re-rank priority here; initiate RF/hardware without per-occasion agreement; amend or push without operator direction.
+- **Relevant files:** [`W-0001`](work/W-0001-durable-notifications.md), [`ADR 0076`](decisions/0076-notification-history-pilot-operator-event-store.md), [`ADR 0061`](decisions/0061-consolidated-operator-event-log.md), [`backlog`](backlog.md).
+- **Coordination:** Leave committing and pushing to the operator; every non-Markdown commit draws a codex clean-room review to triage.
