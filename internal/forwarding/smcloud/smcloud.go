@@ -381,6 +381,16 @@ func classifyHTTPStatus(status int, body []byte) (forwarding.Result, bool) {
 			Outcome: forwarding.OutcomeTransient,
 			Err:     errors.New(op).WithMsgf("smcloud returned HTTP %d (body: %s)", status, snippet),
 		}, true
+	case status == http.StatusConflict:
+		// version_conflict (PT-1): the cloud holds a DIFFERENT payload at this
+		// record's version — an equal-version divergence, not a stale push. It is
+		// NOT a successful backup, and retrying the identical push cannot resolve
+		// it, so it is terminal (surfaced with the body, which names the UUID)
+		// rather than transient or a silent success.
+		return forwarding.Result{
+			Outcome: forwarding.OutcomeTerminal,
+			Err:     errors.New(op).WithMsgf("smcloud version conflict (HTTP 409): %s", snippet),
+		}, true
 	default:
 		return forwarding.Result{
 			Outcome: forwarding.OutcomeTerminal,

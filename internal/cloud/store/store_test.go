@@ -203,13 +203,17 @@ func TestUpsert_StaleGuard(t *testing.T) {
 		t.Errorf("payload v after stale push = %d, want 1 (original preserved)", got)
 	}
 
-	// Equal push: applies (>= is inclusive so a re-push is idempotent-but-writes).
-	applied, err = s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{"v":3}`)})
+	// Exact replay (same version, same payload): an idempotent NO-OP — nothing is
+	// written, so applied is 0 (PT-1; the guard was >=, which rewrote redundantly).
+	applied, err = s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{"v":1}`)})
 	if err != nil {
-		t.Fatalf("equal push: %v", err)
+		t.Fatalf("exact replay: %v", err)
 	}
-	if applied != 1 {
-		t.Errorf("equal push applied = %d, want 1 (equal modified_at must apply)", applied)
+	if applied != 0 {
+		t.Errorf("exact replay applied = %d, want 0 (an identical re-push writes nothing)", applied)
+	}
+	if got := payloadV(t, mustGet(t, s, tid, uuidA)); got != 1 {
+		t.Errorf("payload v after exact replay = %d, want 1 (unchanged)", got)
 	}
 
 	// Newer push: applies.
@@ -333,8 +337,9 @@ func TestUpsert_RevisionGuard(t *testing.T) {
 		t.Errorf("payload v after clock-step push = %d, want 3", got)
 	}
 
-	// Revision TIE falls back to modified_at: older is rejected, equal applies
-	// (idempotent re-push) — exactly the legacy semantics.
+	// Revision TIE falls back to modified_at: a strictly older timestamp is
+	// rejected, and an EXACT (revision, modified_at) tie with the SAME payload is
+	// an idempotent no-op (applied 0), not a redundant rewrite (PT-1).
 	applied, err = s.Upsert(ctx, []Record{recAt(3, baseTime.Add(-2*time.Hour), `{"v":4}`)})
 	if err != nil {
 		t.Fatalf("tie-older push: %v", err)
@@ -342,12 +347,139 @@ func TestUpsert_RevisionGuard(t *testing.T) {
 	if applied != 0 {
 		t.Errorf("revision-tie older-timestamp push applied = %d, want 0", applied)
 	}
-	applied, err = s.Upsert(ctx, []Record{recAt(3, baseTime.Add(-time.Hour), `{"v":5}`)})
+	applied, err = s.Upsert(ctx, []Record{recAt(3, baseTime.Add(-time.Hour), `{"v":3}`)})
 	if err != nil {
-		t.Fatalf("tie-equal push: %v", err)
+		t.Fatalf("tie-equal identical re-push: %v", err)
 	}
-	if applied != 1 {
-		t.Errorf("revision-tie equal-timestamp re-push applied = %d, want 1 (idempotent)", applied)
+	if applied != 0 {
+		t.Errorf("revision-tie identical re-push applied = %d, want 0 (idempotent no-op)", applied)
+	}
+	if got := payloadV(t, mustGet(t, s, tid, uuidA)); got != 3 {
+		t.Errorf("payload v after identical re-push = %d, want 3 (unchanged)", got)
+	}
+}
+
+// TestUpsert_ReorderedJSONIsNoOp: an EXACT (revision, modified_at) tie whose
+// payload is logically equal but REORDERED is an idempotent no-op — JSONB
+// equality ignores input key order and whitespace, so this is not a conflict.
+func TestUpsert_ReorderedJSONIsNoOp(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+
+	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{"a":1,"b":2}`)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	applied, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{ "b": 2, "a": 1 }`)})
+	if err != nil {
+		t.Fatalf("reordered-equal re-push must not conflict: %v", err)
+	}
+	if applied != 0 {
+		t.Errorf("reordered-equal re-push applied = %d, want 0 (idempotent no-op)", applied)
+	}
+}
+
+// TestUpsert_DivergentPayloadConflicts: an exact version tie with a DIFFERENT
+// payload is a version_conflict — the stored row is preserved, the UUID is
+// named, and nothing is applied (PT-1).
+func TestUpsert_DivergentPayloadConflicts(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+
+	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{"v":1}`)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	applied, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{"v":2}`)})
+	if applied != 0 {
+		t.Errorf("divergent-tie applied = %d, want 0", applied)
+	}
+	var vce *VersionConflictError
+	if !stderr.As(err, &vce) {
+		t.Fatalf("divergent tie error = %v, want *VersionConflictError", err)
+	}
+	if vce.UUID != uuidA {
+		t.Errorf("conflict UUID = %q, want %q", vce.UUID, uuidA)
+	}
+	if got := payloadV(t, mustGet(t, s, tid, uuidA)); got != 1 {
+		t.Errorf("payload v after conflict = %d, want 1 (stored row preserved)", got)
+	}
+}
+
+// TestUpsert_LiveTombstoneConflicts: a live row and a tombstone at the same
+// version disagree — conflict, and the stored row is NOT tombstoned.
+func TestUpsert_LiveTombstoneConflicts(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+
+	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{"v":1}`)}); err != nil {
+		t.Fatalf("insert live: %v", err)
+	}
+	del := baseTime
+	_, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, &del, `{"v":1}`)})
+	var vce *VersionConflictError
+	if !stderr.As(err, &vce) {
+		t.Fatalf("live/tombstone tie error = %v, want *VersionConflictError", err)
+	}
+	if got := mustGet(t, s, tid, uuidA); got.DeletedAt != nil {
+		t.Error("stored row was tombstoned by a conflicting same-version push")
+	}
+}
+
+// TestUpsert_TombstoneMetadataConflicts: two tombstones at the same version with
+// different deleted_at metadata disagree — conflict.
+func TestUpsert_TombstoneMetadataConflicts(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+
+	del1 := baseTime
+	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, &del1, `{"v":1}`)}); err != nil {
+		t.Fatalf("insert tombstone: %v", err)
+	}
+	del2 := baseTime.Add(time.Hour)
+	_, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, &del2, `{"v":1}`)})
+	var vce *VersionConflictError
+	if !stderr.As(err, &vce) {
+		t.Fatalf("tombstone-metadata tie error = %v, want *VersionConflictError", err)
+	}
+}
+
+// TestUpsert_ConflictMidBatchRollsBack: a conflict anywhere in a multi-row batch
+// rolls the WHOLE batch back — no batch-mate is committed and every prior row is
+// preserved (QSO-batch atomicity + PT-1).
+func TestUpsert_ConflictMidBatchRollsBack(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tid, lid := seedTenantLogbook(t, s, "7Q8AC")
+
+	if _, err := s.Upsert(ctx, []Record{rec(uuidA, tid, lid, baseTime, nil, `{"v":1}`)}); err != nil {
+		t.Fatalf("seed A: %v", err)
+	}
+	// Insert C (new), then conflict on A (same version, divergent payload), then B
+	// (never reached). The conflict must undo C and leave A untouched.
+	batch := []Record{
+		rec(uuidC, tid, lid, baseTime, nil, `{"v":9}`),
+		rec(uuidA, tid, lid, baseTime, nil, `{"v":2}`),
+		rec(uuidB, tid, lid, baseTime, nil, `{"v":9}`),
+	}
+	applied, err := s.Upsert(ctx, batch)
+	var vce *VersionConflictError
+	if !stderr.As(err, &vce) || vce.UUID != uuidA {
+		t.Fatalf("batch error = %v, want *VersionConflictError on %s", err, uuidA)
+	}
+	if applied != 0 {
+		t.Errorf("applied = %d on a conflicting batch, want 0", applied)
+	}
+	if _, err := s.Get(ctx, tid, uuidC); !stderr.Is(err, ErrNotFound) {
+		t.Errorf("uuidC leaked despite rollback: err = %v", err)
+	}
+	if _, err := s.Get(ctx, tid, uuidB); !stderr.Is(err, ErrNotFound) {
+		t.Errorf("uuidB leaked despite rollback: err = %v", err)
+	}
+	if got := payloadV(t, mustGet(t, s, tid, uuidA)); got != 1 {
+		t.Errorf("uuidA payload = %d after rollback, want 1 (untouched)", got)
 	}
 }
 

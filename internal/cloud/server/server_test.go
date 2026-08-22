@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -351,6 +352,36 @@ func TestPutQsos_StalePushNotApplied(t *testing.T) {
 	out := putQsos(t, ts, testToken, "main", []QsoUpload{{ModifiedAt: at.Add(-time.Hour), Qso: p}})
 	if out.Received != 1 || out.Applied != 0 {
 		t.Fatalf("stale push outcome = %+v, want received 1 / applied 0", out)
+	}
+}
+
+// PT-1 — an equal-version push with a DIFFERENT payload is a 409 version_conflict
+// at the HTTP boundary, naming the UUID, so the forwarder does not record it as a
+// successful backup. The store test proves the row itself is preserved.
+func TestPutQsos_VersionConflictReturns409(t *testing.T) {
+	ts, _, _ := testServer(t)
+	at := time.Date(2026, 7, 17, 6, 0, 0, 0, time.UTC)
+	const uuid = "0197f9a0-0000-7000-8000-000000000042"
+
+	q1 := fixtureQso(uuid)
+	p1, _ := json.Marshal(q1)
+	putQsos(t, ts, testToken, "main", []QsoUpload{{ModifiedAt: at, Qso: p1}})
+
+	// Same uuid + same modified_at + same revision, DIFFERENT payload.
+	q2 := fixtureQso(uuid)
+	q2.Name = "Divergent"
+	p2, _ := json.Marshal(q2)
+	var errBody errorResponse
+	resp := do(t, http.MethodPut, ts.URL+"/v1/qsos", testToken,
+		PutQsosRequest{Logbook: "main", Qsos: []QsoUpload{{ModifiedAt: at, Qso: p2}}}, &errBody)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("divergent same-version PUT status = %d, want 409", resp.StatusCode)
+	}
+	if errBody.Code != "version_conflict" {
+		t.Errorf("error code = %q, want version_conflict", errBody.Code)
+	}
+	if !strings.Contains(errBody.Message, uuid) {
+		t.Errorf("conflict message %q does not name the offending uuid", errBody.Message)
 	}
 }
 

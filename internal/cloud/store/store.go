@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	stderr "errors"
+	"fmt"
 	"time"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
@@ -19,6 +20,24 @@ var ErrNotFound = stderr.New("smcloud: qso not found")
 // The payload column is NOT NULL, so catching it here yields a UUID-tagged
 // error rather than a bare Postgres constraint violation. errors.Is-matchable.
 var ErrEmptyPayload = stderr.New("smcloud: record has empty payload")
+
+// VersionConflictError is returned by Upsert when an incoming record ties the
+// stored (revision, modified_at) but carries divergent authoritative state —
+// a different payload, a live/tombstone disagreement, different tombstone
+// metadata, or a different backup logbook. ADR 0050 introduced revisions
+// precisely because equal-version divergence makes the backup silently
+// untrustworthy, so a tie-divergence is a protocol invariant violation, not a
+// state to resolve by arrival order (PT-1): the whole batch is rolled back, the
+// offending UUID is named, and the stored row is left untouched.
+type VersionConflictError struct {
+	UUID string
+}
+
+func (e *VersionConflictError) Error() string {
+	return fmt.Sprintf(
+		"smcloud: version conflict on uuid %s: equal (revision, modified_at) with divergent payload/tombstone state",
+		e.UUID)
+}
 
 // canonicalPrecision is the timestamp resolution the reconcile protocol pins
 // modified_at / deleted_at to. Postgres TIMESTAMPTZ stores microseconds while Go
@@ -160,9 +179,12 @@ RETURNING id`
 //
 // Guards on the ON CONFLICT WHERE:
 //   - revision, then modified_at (ADR 0050): an incoming record overwrites a
-//     stored one when its revision is strictly higher; on a revision TIE the
-//     modified_at comparison decides (>=, so an identical re-push is
-//     idempotent). Revision is the primary order because local modified_at is
+//     stored one when its revision is strictly higher; on a revision TIE a
+//     strictly later modified_at still wins. An EXACT (revision, modified_at)
+//     tie is an idempotent no-op when the authoritative state matches, and a
+//     VersionConflictError when the payload/tombstone/logbook diverges — a
+//     single writer must never emit two states at one version (PT-1). Revision
+//     is the primary order because local modified_at is
 //     second-precision wall clock — it cannot order two edits within one
 //     second, and a reconcile-goroutine push racing the serial worker could
 //     regress the payload invisibly on such a tie. All-legacy rows (both
@@ -192,7 +214,12 @@ func (s *Store) Upsert(ctx context.Context, recs []Record) (applied int, err err
 	}
 	defer txutil.Rollback(tx, &err)
 
-	const q = `
+	// The upsert applies a STRICTLY newer record: a higher revision, or the same
+	// revision with a strictly later modified_at (a legitimate later legacy write
+	// at revision 0 — ADR 0050). An exact (revision, modified_at) tie no longer
+	// auto-applies here (the guard was `>=`); it is resolved below, because
+	// equality of the version fields does not prove equality of the state (PT-1).
+	const upsertQ = `
 INSERT INTO qsos (uuid, tenant_id, logbook_id, modified_at, revision, deleted_at, payload)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (tenant_id, uuid) DO UPDATE SET
@@ -202,12 +229,33 @@ ON CONFLICT (tenant_id, uuid) DO UPDATE SET
     deleted_at  = EXCLUDED.deleted_at,
     payload     = EXCLUDED.payload
 WHERE EXCLUDED.revision > qsos.revision
-   OR (EXCLUDED.revision = qsos.revision AND EXCLUDED.modified_at >= qsos.modified_at)`
-	stmt, err := tx.PrepareContext(ctx, q)
+   OR (EXCLUDED.revision = qsos.revision AND EXCLUDED.modified_at > qsos.modified_at)`
+	upsertStmt, err := tx.PrepareContext(ctx, upsertQ)
 	if err != nil {
-		return 0, errors.New(op).WithErr(err).WithMsg("prepare")
+		return 0, errors.New(op).WithErr(err).WithMsg("prepare upsert")
 	}
-	defer func() { _ = stmt.Close() }()
+	defer func() { _ = upsertStmt.Close() }()
+
+	// tieConflictQ inspects the stored row — locked for this transaction by the
+	// ON CONFLICT attempt above — when the upsert applied nothing. It reports TRUE
+	// only for an exact (revision, modified_at) TIE whose authoritative state
+	// differs: payload (compared as JSONB, so input key order and whitespace do
+	// not matter), tombstone (deleted_at, NULL-aware), or backup logbook. A stale
+	// older row, or a tie whose state matches, reports FALSE — an idempotent no-op.
+	// Parameters mirror the upsert's, so one argument list drives both.
+	const tieConflictQ = `
+SELECT revision = $5 AND modified_at = $4
+   AND NOT (
+       payload = $7::jsonb
+       AND deleted_at IS NOT DISTINCT FROM $6
+       AND logbook_id = $3
+   )
+FROM qsos WHERE tenant_id = $2 AND uuid = $1`
+	tieStmt, err := tx.PrepareContext(ctx, tieConflictQ)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("prepare tie check")
+	}
+	defer func() { _ = tieStmt.Close() }()
 
 	applied = 0
 	for _, r := range recs {
@@ -221,8 +269,10 @@ WHERE EXCLUDED.revision > qsos.revision
 			d := canonicalTime(*r.DeletedAt)
 			deletedAt = &d
 		}
-		res, err := stmt.ExecContext(ctx, r.UUID, r.TenantID, r.LogbookID,
-			canonicalTime(r.ModifiedAt), r.Revision, deletedAt, []byte(r.Payload))
+		args := []any{r.UUID, r.TenantID, r.LogbookID,
+			canonicalTime(r.ModifiedAt), r.Revision, deletedAt, []byte(r.Payload)}
+
+		res, err := upsertStmt.ExecContext(ctx, args...)
 		if err != nil {
 			return 0, errors.New(op).WithErr(err).WithMsgf("uuid %s", r.UUID)
 		}
@@ -230,7 +280,23 @@ WHERE EXCLUDED.revision > qsos.revision
 		if err != nil {
 			return 0, errors.New(op).WithErr(err).WithMsgf("uuid %s: rows affected", r.UUID)
 		}
-		applied += int(n)
+		if n > 0 {
+			applied += int(n)
+			continue
+		}
+
+		// Nothing applied: either a stale older push (fine) or an exact-version tie.
+		// A tie whose stored state DIVERGES is a conflict — roll the whole batch
+		// back (the deferred Rollback) with the offending UUID named, so no
+		// batch-mate is committed and the stored row is left untouched (PT-1).
+		var conflict bool
+		if err := tieStmt.QueryRowContext(ctx, args...).Scan(&conflict); err != nil {
+			return 0, errors.New(op).WithErr(err).WithMsgf("uuid %s: tie check", r.UUID)
+		}
+		if conflict {
+			return 0, errors.New(op).WithErr(&VersionConflictError{UUID: r.UUID})
+		}
+		// A matching tie or a stale older row is an idempotent no-op: not applied.
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, errors.New(op).WithErr(err).WithMsg("commit")

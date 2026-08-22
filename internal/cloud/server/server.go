@@ -307,6 +307,16 @@ func (s *Server) handlePutQsos(w http.ResponseWriter, r *http.Request) {
 
 	applied, err := s.store.Upsert(r.Context(), recs)
 	if err != nil {
+		// An equal-version divergence is a client/protocol conflict, not a server
+		// fault: the whole batch was rolled back and nothing changed. Surface it as
+		// a bounded 409 naming the UUID (client-generated, non-secret) so the
+		// forwarder does NOT record it as a successful backup (PT-1).
+		var vce *store.VersionConflictError
+		if stderr.As(err, &vce) {
+			s.log.Warn("qso upsert version conflict", "logbook_id", logbookID, "uuid", vce.UUID, "tenant_id", tenantID(r), "request_id", requestID(r))
+			s.writeError(w, http.StatusConflict, "version_conflict", "equal-version divergent state for uuid "+vce.UUID)
+			return
+		}
 		s.log.Error("upsert failed", "logbook_id", logbookID, "count", len(recs), "tenant_id", tenantID(r), "request_id", requestID(r), "err", err)
 		s.writeError(w, http.StatusInternalServerError, "internal_error", "store write failed")
 		return

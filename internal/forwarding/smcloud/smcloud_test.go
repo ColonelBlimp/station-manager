@@ -243,6 +243,26 @@ func TestSubmit_StaleAppliedZeroIsSuccess(t *testing.T) {
 	}
 }
 
+// PT-1 — a 409 version_conflict is NOT a successful backup. The cloud holds a
+// DIFFERENT payload at this record's version — an equal-version divergence the
+// backup must never record as uploaded. Terminal (retrying the identical push
+// cannot resolve it), never OutcomeSuccess.
+func TestSubmit_VersionConflictIsNotBackupSuccess(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"version_conflict","message":"equal-version divergent state for uuid 0197f9a0-0000-7000-8000-000000000409"}`))
+	}))
+	defer ts.Close()
+	f, _ := New(testConfig(ts.URL))
+	res := f.Submit(context.Background(), testQso("0197f9a0-0000-7000-8000-000000000409"), action.Update, "")
+	if res.Outcome == forwarding.OutcomeSuccess {
+		t.Fatalf("a version_conflict was recorded as a successful backup: %+v", res)
+	}
+	if res.Outcome != forwarding.OutcomeTerminal {
+		t.Fatalf("outcome = %s (%v), want Terminal", res.Outcome, res.Err)
+	}
+}
+
 // L12-C1 — SM Cloud must not flatten two diagnostically different successes.
 // (docs/reviews/internal-codebase-logging-gaps.md L12; operator rulings 2026-08-16.)
 //
