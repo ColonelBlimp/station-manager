@@ -2897,39 +2897,78 @@ func (s *Service) UpdateQsoTx(ctx context.Context, tx *sql.Tx, qso types.Qso) er
 	return updateActiveQsoAtRevision(ctx, tx, model, qso.Revision)
 }
 
-// DeleteQsoByIDTx soft-deletes a QSO within the caller-supplied tx by
-// setting its deleted_at column (sqlboiler's generated Delete
-// honours the add-soft-deletes flag). Returns the QSO's logbook_id
-// on success so the caller can emit an accurately-scoped
-// qso.deleted event without a second round-trip, or ErrNotFound if
-// the QSO does not exist or is already soft-deleted.
+// DeleteQsoByIDTx soft-deletes the QSO id ONLY while it still holds expectedRev —
+// the same optimistic-concurrency guard (revision CAS, ADR 0050) the edit path
+// uses — and returns the authoritative pre-delete image read inside this
+// transaction, so the append-only audit history records the true last-live state
+// rather than a caller snapshot a concurrent edit may have superseded (PT-2).
+// Only deleted_at is set; the 0005 trigger bumps the revision.
 //
-// Used by qsoservice.Delete to bundle the soft-delete with
-// qso_upload(delete) inserts under the same one-fails-all-fail tx.
-func (s *Service) DeleteQsoByIDTx(ctx context.Context, tx *sql.Tx, id int64) (int64, error) {
+// A still-live row at a DIFFERENT revision is ErrStaleRevision — the handler's
+// 409 delete_conflict, parallel to the edit path's edit_conflict. A missing or
+// already-tombstoned row is ErrNotFound (404). The returned logbook_id lets the
+// caller emit an accurately-scoped qso.deleted event without a second round-trip.
+//
+// Used by qsoservice.Delete to bundle the soft-delete with qso_upload(delete)
+// inserts and the qso_history row under the same one-fails-all-fail tx.
+func (s *Service) DeleteQsoByIDTx(ctx context.Context, tx *sql.Tx, id, expectedRev int64) (types.Qso, int64, error) {
 	const op errors.Op = "sqlite.Service.DeleteQsoByIDTx"
 	if err := checkService(op, s); err != nil {
-		return 0, err
+		return types.Qso{}, 0, err
 	}
 	if tx == nil {
-		return 0, errors.New(op).WithMsg("tx is nil")
+		return types.Qso{}, 0, errors.New(op).WithMsg("tx is nil")
 	}
 	if id < 1 {
-		return 0, errors.New(op).WithMsg(errMsgInvalidId)
+		return types.Qso{}, 0, errors.New(op).WithMsg(errMsgInvalidId)
 	}
 
-	qso, err := models.FindQso(ctx, tx, id)
+	// Write FIRST (mirrors updateActiveQsoAtRevision and the InsertQsoTx ordering
+	// note): the revision-guarded soft-delete takes the write lock immediately, so a
+	// read-then-write can't strand this transaction with SQLITE_BUSY_SNAPSHOT.
+	deletedAt := null.TimeFrom(time.Now().In(boil.GetLocation()))
+	n, err := models.Qsos(
+		models.QsoWhere.ID.EQ(id),
+		models.QsoWhere.DeletedAt.IsNull(),
+		models.QsoWhere.Revision.EQ(expectedRev),
+	).UpdateAll(ctx, tx, models.M{models.QsoColumns.DeletedAt: deletedAt})
 	if err != nil {
-		if stderr.Is(err, sql.ErrNoRows) {
-			return 0, errors.ErrNotFound
+		return types.Qso{}, 0, errors.New(op).WithErr(err).WithMsg("revision-guarded soft-delete")
+	}
+	if n == 0 {
+		// Same-executor probe: a still-live row means the revision moved (a
+		// conflict); an absent one means the row is gone / already tombstoned.
+		exists, eerr := models.Qsos(
+			models.QsoWhere.ID.EQ(id),
+			models.QsoWhere.DeletedAt.IsNull(),
+		).Exists(ctx, tx)
+		if eerr != nil {
+			return types.Qso{}, 0, errors.New(op).WithErr(eerr).WithMsg("disambiguating zero-row revision-guarded delete")
 		}
-		return 0, errors.New(op).WithErr(err)
+		if exists {
+			return types.Qso{}, 0, errors.New(op).WithErr(errors.ErrStaleRevision).
+				WithMsgf("QSO %d changed since revision %d was fetched", id, expectedRev)
+		}
+		return types.Qso{}, 0, errors.New(op).WithErr(errors.ErrNotFound).WithMsgf("no active QSO with id %d", id)
 	}
 
-	if _, err = qso.Delete(ctx, tx, false); err != nil {
-		return 0, errors.New(op).WithErr(err).WithMsg("failed to delete QSO")
+	// The authoritative pre-delete image: the soft-delete changed only deleted_at
+	// (and, via the trigger, revision), so the row we just tombstoned still carries
+	// the last live CONTENT. Read it here, inside the tx — WithDeleted, since it is
+	// now soft-deleted — and present it as the live state it was immediately before
+	// deletion (deleted_at cleared, revision at the value the guard matched) for the
+	// history before_image.
+	model, err := models.Qsos(qm.WithDeleted(), models.QsoWhere.ID.EQ(id)).One(ctx, tx)
+	if err != nil {
+		return types.Qso{}, 0, errors.New(op).WithErr(err).WithMsg("reading pre-delete image")
 	}
-	return qso.LogbookID, nil
+	preimage, err := adapters.QsoModelToType(model)
+	if err != nil {
+		return types.Qso{}, 0, errors.New(op).WithErr(err).WithMsg("converting pre-delete image")
+	}
+	preimage.DeletedAt = time.Time{}
+	preimage.Revision = expectedRev
+	return preimage, model.LogbookID, nil
 }
 
 // InsertQsoUploadTx enqueues one qso_upload row within the caller-supplied tx.

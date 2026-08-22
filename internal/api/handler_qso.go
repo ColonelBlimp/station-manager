@@ -63,6 +63,13 @@ func (s *Server) handleDeleteQso(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "not_found", "QSO not found", op)
 			return
 		}
+		// A still-live revision mismatch is a 409 delete_conflict: the QSO changed
+		// since this request fetched it — re-fetch and retry (PT-2, parallel to the
+		// edit path's edit_conflict). A missing/tombstoned row stays 404 above.
+		if se := qsoservice.IsSubmitError(err); se != nil && se.Code == "delete_conflict" {
+			s.writeError(w, http.StatusConflict, se.Code, se.Message, op)
+			return
+		}
 		s.writeServerError(w, op, err, "db_error", "database operation failed")
 		return
 	}

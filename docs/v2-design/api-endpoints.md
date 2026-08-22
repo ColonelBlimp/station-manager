@@ -75,8 +75,8 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 - **Gating:** Always-on.
 - **Request:** Path `{uuid}`.
 - **Response:** **204**.
-- **Errors:** 400 `invalid_uuid`; 404 `not_found`; 500 `db_error`.
-- **Notes:** Soft-delete + upload-queue delete row, atomic.
+- **Errors:** 400 `invalid_uuid`; 404 `not_found` (missing or already soft-deleted); **409 `delete_conflict`** (the QSO changed since this request fetched it — revision CAS, parallel to `edit_conflict`; re-fetch and retry); 500 `db_error`.
+- **Notes:** Soft-delete + upload-queue delete row + audit-history row, all atomic. The delete is revision-guarded (ADR 0050): it removes only the row still at the fetched revision, and the audit `before_image` is the authoritative pre-delete state read inside the transaction. A stale delete racing a concurrent edit is refused (`delete_conflict`), never applied with a stale history preimage (PT-2).
 
 ### `GET /v1/qso/{uuid}/uploads`
 - **Purpose:** Per-forwarder upload-status snapshot for one QSO (pull counterpart to the `forward.*` SSE events).

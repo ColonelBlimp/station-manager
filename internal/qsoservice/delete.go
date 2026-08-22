@@ -3,6 +3,7 @@ package qsoservice
 import (
 	"context"
 	"encoding/json"
+	stderr "errors"
 
 	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
@@ -24,17 +25,20 @@ import (
 // a delete row queued AND the audit row is appended, or none of it
 // persists.
 //
-// existing is the pre-delete snapshot — already fetched by the
-// handler to resolve UUID→ID and verify the row exists. Reusing it
-// here avoids a second round-trip and guarantees the audit row's
-// before_image matches what the operator was looking at when they
-// triggered the delete.
+// existing is the snapshot the handler already fetched to resolve
+// UUID→ID; its revision is the optimistic-concurrency expectation
+// (revision CAS, PT-2). The audit row's before_image is NOT this
+// snapshot but the authoritative pre-delete image DeleteQsoByIDTx
+// reads inside the transaction, so a concurrent edit committed after
+// this fetch can never leave a stale before_image in the append-only
+// chain.
 //
 // src identifies which subsystem of the daemon initiated the delete
 // (recorded on the audit row).
 //
-// Returns errors.ErrNotFound if the QSO does not exist or is
-// already soft-deleted by the time the tx runs.
+// Returns errors.ErrNotFound if the QSO is missing or already
+// soft-deleted, and a *SubmitError{Code:"delete_conflict"} if the row
+// is still live at a different revision (the handler maps it to 409).
 func (s *Service) Delete(ctx context.Context, existing types.Qso, src source.Source) error {
 	const op errors.Op = "qsoservice.Delete"
 
@@ -51,11 +55,20 @@ func (s *Service) Delete(ctx context.Context, existing types.Qso, src source.Sou
 	}
 	defer cancel()
 
-	logbookID, err := s.DB.DeleteQsoByIDTx(ctx, tx, existing.ID)
+	preimage, logbookID, err := s.DB.DeleteQsoByIDTx(ctx, tx, existing.ID, existing.Revision)
 	if err != nil {
 		s.rollbackTx(tx, op)
-		// Pass through ErrNotFound as-is so callers (handler layer) can
-		// translate it to 404 via stderr.Is.
+		// A still-live revision mismatch is a caller-facing conflict, parallel to
+		// the edit path's edit_conflict: the QSO changed after this request fetched
+		// it, so the delete refuses rather than removing a newer state and appending
+		// a stale before-image to the audit chain (PT-2). ErrNotFound passes through
+		// for the handler's 404 (missing / already-tombstoned).
+		if stderr.Is(err, errors.ErrStaleRevision) {
+			return &SubmitError{
+				Code:    "delete_conflict",
+				Message: "the QSO changed while this delete was in flight — reload it and retry",
+			}
+		}
 		return err
 	}
 
@@ -73,10 +86,13 @@ func (s *Service) Delete(ctx context.Context, existing types.Qso, src source.Sou
 		forwardedTo = append(forwardedTo, fwd.Name)
 	}
 
-	beforeImage, err := json.Marshal(existing)
+	// The before_image is the AUTHORITATIVE in-transaction pre-delete image, not
+	// the caller's snapshot — the last live state, guaranteed current by the
+	// revision guard above (PT-2).
+	beforeImage, err := json.Marshal(preimage)
 	if err != nil {
 		s.rollbackTx(tx, op)
-		return errors.New(op).WithErr(err).WithMsg("failed to marshal pre-delete snapshot")
+		return errors.New(op).WithErr(err).WithMsg("failed to marshal pre-delete image")
 	}
 	if err = s.DB.InsertQsoHistoryTx(ctx, tx, existing.UUID, action.Delete, src, beforeImage); err != nil {
 		s.rollbackTx(tx, op)

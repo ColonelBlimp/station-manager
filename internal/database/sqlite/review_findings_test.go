@@ -37,12 +37,17 @@ func TestUpdateQso_RejectsSoftDeletedAndMissing(t *testing.T) {
 		t.Fatalf("active update should succeed: %v", err)
 	}
 
-	// Soft-delete the QSO.
+	// Soft-delete the QSO (revision-guarded — read the current revision to satisfy
+	// the CAS, PT-2).
+	cur, err := svc.FetchQsoByIdWithContext(ctx, id)
+	if err != nil {
+		t.Fatalf("fetch for revision: %v", err)
+	}
 	tx, cancel, err := svc.BeginTxContext(ctx)
 	if err != nil {
 		t.Fatalf("begin tx: %v", err)
 	}
-	if _, err := svc.DeleteQsoByIDTx(ctx, tx, id); err != nil {
+	if _, _, err := svc.DeleteQsoByIDTx(ctx, tx, id, cur.Revision); err != nil {
 		_ = tx.Rollback()
 		cancel()
 		t.Fatalf("soft delete: %v", err)
@@ -263,11 +268,15 @@ func TestDeleteLogbook_ConditionalOutcomes(t *testing.T) {
 	// Once that QSO is soft-deleted the logbook is deletable again — the
 	// pre-fix .Exists() check counted live rows only, and so must the
 	// NOT EXISTS that replaced it.
+	dcur, err := svc.FetchQsoByIdWithContext(ctx, qsoID)
+	if err != nil {
+		t.Fatalf("fetch for revision: %v", err)
+	}
 	dtx, dcancel, err := svc.BeginTxContext(ctx)
 	if err != nil {
 		t.Fatalf("begin tx: %v", err)
 	}
-	if _, err := svc.DeleteQsoByIDTx(ctx, dtx, qsoID); err != nil {
+	if _, _, err := svc.DeleteQsoByIDTx(ctx, dtx, qsoID, dcur.Revision); err != nil {
 		_ = dtx.Rollback()
 		dcancel()
 		t.Fatalf("soft delete qso: %v", err)
