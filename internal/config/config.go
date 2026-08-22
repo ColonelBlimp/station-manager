@@ -1570,8 +1570,32 @@ func collectUnknownKeys(prefix string, raw map[string]json.RawMessage, t reflect
 					collectUnknownKeys(fmt.Sprintf("%s%s[%d].", prefix, k, i), child, elem, out)
 				}
 			}
+		case reflect.Map:
+			// A map's KEYS are operator data (rig mode literals, band names, endpoint
+			// names) and are never schema. But a map whose VALUE type is a STRUCT
+			// carries schema in each value (rigs[].mode_mappings: map[string]ModeMapping),
+			// so descend each value with the arbitrary key in the path. A scalar-valued
+			// map (endpoints, frequencies, band_colors, options) has no nested schema and
+			// stays a leaf (config.md §5.4).
+			elem := ft.Elem()
+			for elem.Kind() == reflect.Ptr {
+				elem = elem.Elem()
+			}
+			if elem.Kind() != reflect.Struct {
+				continue
+			}
+			var entries map[string]json.RawMessage
+			if json.Unmarshal(v, &entries) != nil {
+				continue // not a JSON object (or null) — leave alone
+			}
+			for mk, mv := range entries {
+				var child map[string]json.RawMessage
+				if json.Unmarshal(mv, &child) == nil {
+					collectUnknownKeys(fmt.Sprintf("%s%s[%s].", prefix, k, mk), child, elem, out)
+				}
+			}
 		default:
-			// scalars and maps are leaves for this check
+			// scalars are leaves for this check
 		}
 	}
 }

@@ -313,11 +313,15 @@ path — indexed for struct-slice elements, e.g. `rigs[0].typo`, `forwarders[1].
 `config.json` does not.
 
 The gate is deliberately strict but narrow. It runs on the migrated document, so a
-key a migration consumes is gone before the check (§13); arbitrary keys inside a
-map or a `json.RawMessage` (forwarder `endpoints`, `credentials`) are operator data,
-not schema, and are never reported. A malformed document, a newer-than-supported
-version, and an unknown key are three distinct diagnostics; none is reported as
-another. `smd config-check [--config <path>]` runs the same evaluation read-only —
+key a migration consumes is gone before the check (§13). A map's KEYS are always
+operator data, never schema: a scalar-valued map (forwarder `endpoints`, band
+colors, FT8 frequencies) and a `json.RawMessage` (forwarder `credentials`) are
+opaque and never reported. But a map whose value TYPE is a struct — a rig's
+`mode_mappings` (`map[string]ModeMapping`) — has each VALUE checked against that
+struct, so a typo inside a mapping (`rigs[0].mode_mappings[DATA-U].submdoe`) is
+rejected while its mode-literal key is not. A malformed document, a
+newer-than-supported version, and an unknown key are three distinct diagnostics;
+none is reported as another. `smd config-check [--config <path>]` runs the same evaluation read-only —
 without starting the daemon — so a would-be startup refusal is diagnosable ahead of
 a deploy, reporting the same paths with values omitted.
 

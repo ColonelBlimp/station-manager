@@ -354,6 +354,27 @@ func TestPreflightUnknownKeys(t *testing.T) {
 	})
 }
 
+// [P1] (codex 3c45fc48) — a map whose VALUE type is a struct carries schema in
+// each value (rigs[].mode_mappings: map[string]ModeMapping). A typo inside a value
+// must be rejected, while the arbitrary map KEY stays operator data and a
+// scalar-valued map (endpoints) never false-flags.
+func TestUnknownKeys_RecursesStructValuedMaps(t *testing.T) {
+	t.Run("value typo detected with the map key in the path", func(t *testing.T) {
+		doc := []byte(`{"rigs":[{"mode_mappings":{"DATA-U":{"mode":"USB","submdoe":"FT8"}}}]}`)
+		got := UnknownKeys(doc)
+		if !containsPath(got, "rigs[0].mode_mappings[DATA-U].submdoe") {
+			t.Fatalf("mode-mapping value typo not detected; got %v", got)
+		}
+	})
+	t.Run("valid mapping and a scalar-valued map stay clean", func(t *testing.T) {
+		doc := []byte(`{"rigs":[{"mode_mappings":{"DATA-U":{"mode":"USB","submode":"FT8"}}}],` +
+			`"forwarders":[{"endpoints":{"whatever-key":"http://x"}}]}`)
+		if got := UnknownKeys(doc); len(got) != 0 {
+			t.Fatalf("valid struct-valued map or scalar-valued map false-flagged: %v", got)
+		}
+	})
+}
+
 func containsPath(paths []string, want string) bool {
 	for _, p := range paths {
 		if p == want {
