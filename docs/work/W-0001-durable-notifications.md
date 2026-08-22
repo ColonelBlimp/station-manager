@@ -1,6 +1,6 @@
 # W-0001 — Durable operator notification history
 
-**Status:** Open
+**Status:** Open — policy settled ([ADR 0076](../decisions/0076-notification-history-pilot-operator-event-store.md), 2026-08-22); implementation next
 **Selected:** 2026-08-18
 **Outcome:** Important operator notifications remain retrievable after their transient toast expires
 or the browser tab closes.
@@ -28,9 +28,12 @@ reloading the tab erases that evidence. There is no notification-history persist
 surface in the current daemon or SPA.
 
 [`ADR 0061`](../decisions/0061-consolidated-operator-event-log.md) records the proposed larger event
-store. It is not implementation authority yet: its status is Proposed, it chooses alarms as its
-pilot, and it explicitly treats missing notification events as a prerequisite rather than silently
-deriving them from `smd.log`.
+store. It remains Proposed for its alarm, daemon-diagnostics, and SM Cloud decisions, and it
+*originally* chose alarms as its pilot;
+[`ADR 0076`](../decisions/0076-notification-history-pilot-operator-event-store.md) supersedes that
+pilot order — **notification** ships first — and is the accepted authority for this work's
+local-store shape. ADR 0061 still treats missing notification events as a prerequisite rather than
+silently deriving them from `smd.log`.
 
 ## Scope
 
@@ -61,17 +64,24 @@ remain governed by ADR 0061, ADR 0060, and the SM Cloud security work.
 6. Volume and retention are bounded by an explicit operator decision, and the tests distinguish a
    deliberate expiry from accidental disappearance.
 
-## Decisions required before implementation
+## Decisions settled ([ADR 0076](../decisions/0076-notification-history-pilot-operator-event-store.md), 2026-08-22)
 
-- Which toast/event kinds are durable, and which remain deliberately transient UI feedback?
-- Does the first implementation include both canonical event production and the local store/API,
-  or land those as two separately releasable slices?
-- What retention rule and acknowledgement semantics apply locally?
-- Does the proposed event table reuse the full build-version string already established for logs?
-- Does `notification` share ADR 0061's event table with `daemon`, or remain a distinct category?
+- **Two durable kinds first:** `export.adif_failed` (browser-originated) and a terminal
+  `forward.failed` (daemon-originated). Bridge/CAT/enrichment kinds come later, one boundary at a time.
+- **Typed, bounded metadata only.** `forward.failed` persists QSO ID, forwarder, action, attempts —
+  never `Reason`. The browser endpoint takes an allowlisted typed request per kind, not an arbitrary
+  `{kind, severity, detail}`; the daemon stamps severity, time, and build.
+- **One local `operator_event` table in ADR 0061's categorised shape, `notification` category wired
+  now.** Recording is explicit at each producing boundary — no generic hub subscriber, no toast-level
+  recorder; the hubs stay ephemeral.
+- **Retention: last 500 rows per category, oldest-first**, with insert/prune outside every QSO
+  transaction. No acknowledgement in this pilot (no `acknowledged_at`, mark-read, or unread workflow).
+- **Build attribution:** the canonical full build-version string, stamped daemon-side for both sources.
+- **One thin end-to-end pilot:** schema, production, persistence, retrieval, and history UI may be
+  separate TDD commits, but no partial release counts as W-0001.
 
-The SM Cloud exposure and retention questions are intentionally outside this local pilot; ADR 0061
-and the ADR 0040 security assessment gate that later surface.
+The SM Cloud exposure/retention, alarm acknowledgement, and `daemon` diagnostics stay outside this
+local pilot; ADR 0061 and the ADR 0040 security assessment gate those later surfaces.
 
 ## Verification standard
 

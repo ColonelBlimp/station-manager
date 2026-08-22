@@ -1,11 +1,18 @@
 ---
 number: 0061
 title: A categorised operator event store fed from published events, with smd.log retained as the diagnostic sink; alarms ship first
-status: Proposed
+status: Proposed; partially superseded by ADR 0076 (2026-08-22) for the local-store shape and pilot order
 date: 2026-07-31
 ---
 
 # 0061 — Consolidated operator logging: an event store, not a log mirror
+
+> **Partially superseded (2026-08-22).** [ADR 0076](0076-notification-history-pilot-operator-event-store.md)
+> ratifies this ADR's **local-store shape** (one categorised `operator_event` table in
+> `station-manager.db`) and **changes the pilot order**: the first category shipped is
+> **`notification`** (W-0001), not alarms. Everything else here — the alarm pilot's acknowledgement
+> semantics, `daemon` diagnostics, and the SM Cloud tenant store / admin surface — remains Proposed
+> and unsettled.
 
 ## Context
 
