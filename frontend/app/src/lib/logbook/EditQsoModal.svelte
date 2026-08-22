@@ -18,6 +18,7 @@
     import { untrack } from 'svelte';
     import { formatQsoDate, formatTime } from './format';
     import { enrichCallsign } from '../api/enrichment';
+    import type { EnrichmentStation, EnrichmentCountry } from '../api/enrichment';
     import type { LogbookQso } from '../api/logbooks';
     import type { QsoPatch } from '../api/qso-patch';
 
@@ -74,41 +75,144 @@
     // locator (the FT8-sink rule); it fills only when empty.
     let enriching = $state(false);
     let enrichNote: string | null = $state(null);
-    let enrichExtras: Pick<QsoPatch, 'dxcc' | 'cqz' | 'ituz' | 'cont'> | null = $state(null);
+    // enrichExtras is TAGGED with the callsign that produced it (provenance), so
+    // buildPatch can independently refuse to ride A's hidden dxcc/zones out under a
+    // callsign that has since changed to B (F-02).
+    let enrichExtras: (Pick<QsoPatch, 'dxcc' | 'cqz' | 'ituz' | 'cont'> & { call: string }) | null =
+        $state(null);
 
-    // BASELINE DEBT 2026-07-31 (complexity 29) — mirrors reEnrichSelected's per-field
-    // merge rules for the single-QSO edit path.
-    // eslint-disable-next-line complexity
-    async function reEnrich(): Promise<void> {
-        const call = form.call.trim();
-        if (call === '' || enriching) return;
-        enriching = true;
-        enrichNote = null;
-        const out = await enrichCallsign(call, undefined, { refresh: true });
-        enriching = false;
-        if (out.kind !== 'ok') {
-            enrichNote = `Lookup failed: ${out.message}`;
-            return;
+    // Re-enrichment concurrency discipline, mirrored from operate/enrich.svelte.ts:
+    // a monotonic generation token plus an AbortController. A newer lookup — or a
+    // callsign change, or unmount — invalidates any in-flight resolution, so a slow
+    // lookup for the previous callsign can never modify the form, its hidden extras,
+    // or the loading state after the operator has moved on. The generation AND the
+    // current normalized callsign are checked INDEPENDENTLY: aborting is not enough,
+    // because the fetch may already have completed or a test double may ignore it.
+    let seq = 0;
+    let inflight: AbortController | null = null;
+    // The normalized callsign the in-flight / applied enrichment belongs to.
+    let activeCall = '';
+    // What the last lookup WROTE into each visible field, paired with the value it
+    // replaced. An invalidation restores the pre-lookup value — but only while the
+    // field still holds exactly what the lookup wrote, so an operator edit survives.
+    let wrote: Record<'country' | 'name' | 'gridsquare', { written: string; prev: string } | null> =
+        {
+            country: null,
+            name: null,
+            gridsquare: null,
+        };
+
+    function retractWrites(): void {
+        for (const f of ['country', 'name', 'gridsquare'] as const) {
+            const w = wrote[f];
+            if (w !== null && form[f] === w.written) form[f] = w.prev;
         }
-        const st = out.result.station ?? {};
-        const co = out.result.country;
+        wrote = { country: null, name: null, gridsquare: null };
+    }
+
+    // Record what a lookup writes into a visible field, alongside the value it
+    // replaced, so retractWrites can restore it on invalidation.
+    function writeField(field: 'country' | 'name' | 'gridsquare', value: string): void {
+        if (value === '') return;
+        wrote[field] = { written: value, prev: form[field] };
+        form[field] = value;
+    }
+
+    // Apply a fresh lookup to the form: overwrite country/name, fill grid only when
+    // empty (the on-air grid is authoritative), and stash the numeric/zone extras
+    // tagged with the callsign that produced them. Returns false when the lookup
+    // carried nothing usable. Split out of reEnrich to keep each function's
+    // branching low.
+    function applyEnrichment(
+        st: EnrichmentStation,
+        co: EnrichmentCountry | undefined,
+        call: string
+    ): boolean {
+        retractWrites();
         const country = st.country ?? co?.name ?? '';
-        if (country === '' && (st.name ?? '') === '') {
-            enrichNote = 'No enrichment data found for this callsign.';
-            return;
-        }
-        if (country !== '') form.country = country;
-        if ((st.name ?? '') !== '') form.name = st.name ?? '';
-        if (form.gridsquare.trim() === '' && (st.gridsquare ?? '') !== '') {
-            form.gridsquare = st.gridsquare ?? '';
-        }
+        const name = st.name ?? '';
+        if (country === '' && name === '') return false;
+        writeField('country', country);
+        writeField('name', name);
+        if (form.gridsquare.trim() === '') writeField('gridsquare', st.gridsquare ?? '');
         enrichExtras = {
+            call,
             dxcc: st.dxcc ?? '',
             cqz: st.cqz ?? co?.cq_zone ?? '',
             ituz: st.ituz ?? co?.itu_zone ?? '',
             cont: st.cont ?? co?.continent ?? '',
         };
-        enrichNote = 'Fields updated from a fresh lookup — review, then Save.';
+        return true;
+    }
+
+    function invalidate(): void {
+        seq++;
+        inflight?.abort();
+        inflight = null;
+        retractWrites();
+        enrichExtras = null;
+        enriching = false;
+        enrichNote = null;
+        activeCall = '';
+    }
+
+    // Abort + invalidate when the normalized callsign moves away from the one the
+    // current lookup/result belongs to. Guarded so the initial mount (nothing in
+    // flight, no extras) never fires it.
+    $effect(() => {
+        const norm = form.call.trim().toUpperCase();
+        untrack(() => {
+            if ((enriching || inflight !== null || enrichExtras !== null) && norm !== activeCall) {
+                invalidate();
+            }
+        });
+    });
+
+    // Teardown: abort the in-flight request and bump the generation so a response
+    // arriving after the modal closes is discarded rather than touching a destroyed
+    // form (F-02: closing invalidates the lookup).
+    $effect(() => () => {
+        seq++;
+        inflight?.abort();
+        inflight = null;
+    });
+
+    async function reEnrich(): Promise<void> {
+        const call = form.call.trim().toUpperCase();
+        if (call === '' || enriching) return;
+        const mine = ++seq;
+        inflight?.abort();
+        inflight = new AbortController();
+        activeCall = call;
+        enriching = true;
+        enrichNote = null;
+
+        let out;
+        try {
+            out = await enrichCallsign(call, inflight.signal, { refresh: true });
+        } catch {
+            if (seq === mine) {
+                enriching = false;
+                inflight = null;
+                enrichNote = 'Lookup failed.';
+            }
+            return;
+        }
+        // Discard a stale result: the generation moved on, OR the form's callsign is
+        // no longer the one this lookup was for. Either check alone suffices; both
+        // are kept because an abort can be too late or ignored (F-02).
+        if (seq !== mine || form.call.trim().toUpperCase() !== call) return;
+        enriching = false;
+        inflight = null;
+
+        if (out.kind !== 'ok') {
+            enrichNote = `Lookup failed: ${out.message}`;
+            return;
+        }
+        const applied = applyEnrichment(out.result.station ?? {}, out.result.country, call);
+        enrichNote = applied
+            ? 'Fields updated from a fresh lookup — review, then Save.'
+            : 'No enrichment data found for this callsign.';
     }
 
     function buildPatch(): QsoPatch {
@@ -129,9 +233,11 @@
             gridsquare: form.gridsquare.trim(),
             comment: form.comment.trim(),
         };
-        // Enrichment extras ride along only when a Re-enrich ran (only
-        // non-empty values — never blank an existing stored field).
-        if (enrichExtras !== null) {
+        // Enrichment extras ride along only when a Re-enrich ran AND its provenance
+        // callsign still matches the form — an independent recheck of the generation
+        // guard, so A's hidden dxcc/zones can never be saved under B (F-02). Only
+        // non-empty values, never blanking an existing stored field.
+        if (enrichExtras !== null && enrichExtras.call === form.call.trim().toUpperCase()) {
             for (const k of ['dxcc', 'cqz', 'ituz', 'cont'] as const) {
                 const v = enrichExtras[k];
                 if (v) patch[k] = v;
