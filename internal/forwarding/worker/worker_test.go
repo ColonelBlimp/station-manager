@@ -188,13 +188,19 @@ func (h *testHarness) softDeleteQso(qsoID int64) {
 	h.t.Helper()
 	ctx := context.Background()
 
+	// Read the current revision to satisfy the delete's optimistic-concurrency
+	// guard (revision CAS, PT-2).
+	cur, err := h.db.FetchQsoByIdWithContext(ctx, qsoID)
+	if err != nil {
+		h.t.Fatalf("fetch for revision: %v", err)
+	}
 	tx, cancel, err := h.db.BeginTxContext(ctx)
 	if err != nil {
 		h.t.Fatalf("begin tx: %v", err)
 	}
 	defer cancel()
 
-	if _, err = h.db.DeleteQsoByIDTx(ctx, tx, qsoID); err != nil {
+	if _, _, err = h.db.DeleteQsoByIDTx(ctx, tx, qsoID, cur.Revision); err != nil {
 		_ = tx.Rollback()
 		h.t.Fatalf("soft-delete qso: %v", err)
 	}
