@@ -1,6 +1,6 @@
 # W-0007 — Close the remaining verified P1 correctness findings
 
-**Status:** In progress — PT-1, F-01 done; PT-2 next
+**Status:** In progress — PT-1, F-01, PT-2 done; F-02 next (final)
 **Selected:** 2026-08-22
 **Outcome:** Four independently observable data-loss or data-corruption paths identified by the
 2026-08-20 audit reconciliation are closed in the fixed order below.
@@ -27,8 +27,12 @@ combine the fixes into one commit.
    `setup_complete`), so a semantically-invalid GET stays a load error and the section unloaded — the
    existing `!loaded` save guard then makes a blanking PUT unreachable, and a malformed 2xx save
    response leaves the form, shared context, and baseline untouched.
-3. **PT-2 — concurrent QSO delete.** Delete must not remove a newer concurrent revision or record
-   the handler's stale snapshot as the append-only history preimage.
+3. **PT-2 — concurrent QSO delete.** ✅ **DONE (commit `e4cdfbfe`, 2026-08-22).** Delete must not
+   remove a newer concurrent revision or record the handler's stale snapshot as the append-only
+   history preimage. *Resolved:* `DeleteQsoByIDTx` is revision-guarded (write-first soft-delete at
+   the expected revision, mirroring the edit path's CAS) and returns the authoritative pre-delete
+   image read inside the transaction; a still-live revision mismatch is `409 delete_conflict` (404
+   stays for missing/tombstoned), and the audit `before_image` is the true last-live state.
 4. **F-02 — re-enrichment generation.** Enrichment for callsign A must never be persisted or
    forwarded onto callsign B after the editable callsign changes while the lookup is in flight.
 
