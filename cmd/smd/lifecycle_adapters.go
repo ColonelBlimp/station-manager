@@ -189,12 +189,9 @@ func (d *daemon) startLogging(context.Context) error {
 	for _, w := range config.Warnings(d.cfg) {
 		d.logger.WarnWith().Msg(w)
 	}
-	if raw, rerr := os.ReadFile(d.cfgPath); rerr == nil {
-		for _, k := range config.UnknownKeys(raw) {
-			d.logger.WarnWith().Str("key", k).
-				Msg("config: unrecognised key ignored (typo? — value falls back to default)")
-		}
-	}
+	// Unknown config keys are now REJECTED by config.Load before the daemon starts
+	// (ADR 0074 / W-0006), so a startup that reaches here has none to warn about —
+	// the old advisory scan was dead the moment the reject gate landed.
 	if err := modes.LoadOverride(d.cfg.DataDir); err != nil {
 		d.logger.ErrorWith().Err(err).Msg("modes: override load failed")
 		return errors.New(op).WithErr(err).WithMsg("load modes override")

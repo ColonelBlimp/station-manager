@@ -11,7 +11,12 @@ import (
 // change alters the config shape. A config file with no `version` field is the
 // pre-versioning baseline — the catalogue-era shape, treated as v1. See
 // docs/v2-design/config.md §13.
-const currentConfigVersion = 2
+const currentConfigVersion = 3
+
+// CurrentSchemaVersion is the config schema version this build writes and
+// migrates up to — the public view of currentConfigVersion for callers (e.g.
+// startup) that must compare it against an on-disk document's version.
+func CurrentSchemaVersion() int { return currentConfigVersion }
 
 // migration upgrades a raw config JSON document from version `from` to `from+1`.
 // Migrations operate on the decoded document (a map), NOT the typed Config, so a
@@ -30,8 +35,17 @@ type migration struct {
 //
 // (The other §10 moves whose struct fields are RETAINED — ft8.tx.mode → the
 // projection-target Ft8TXConfig.Mode — are folded typed in config.go, not here.)
+//
+//   - v2→v3 (ADR 0075): consume the version-2 keys whose struct fields were
+//     removed, so they don't trip the ADR 0074 unknown-key gate on an upgrade
+//     while ADR 0067's "boots over the legacy key" promise still holds. Deletes
+//     ft8.tx.auto_work_callers (ADR 0067) and ft8.meter.alc_red (ADR 0064); folds
+//     rigs[].audio.device into audio.rx/audio.tx (when absent) then deletes it;
+//     moves psk_reporter.antenna into logging_station.my_antenna (only when the
+//     canonical field is absent — otherwise it wins) then deletes it.
 var migrations = []migration{
 	{from: 1, apply: migrateV1toV2},
+	{from: 2, apply: migrateV2toV3},
 }
 
 // migrateV1toV2 folds the global bridge.mode_mappings[driver] block (removed from
@@ -130,6 +144,148 @@ func migrateV1toV2(doc map[string]any) error {
 	}
 
 	delete(bridge, "mode_mappings")
+	return nil
+}
+
+// validateV2toV3RetiredKeys checks every value the migration will consume before
+// any of them is deleted or moved. Removed fields no longer have a typed decoder
+// behind them, so accepting a wrong legacy type here would erase malformed
+// operator data and recreate EH-3. JSON null remains valid wherever encoding/json
+// accepted it for the retired Go field; it carries no value to fold.
+func validateV2toV3RetiredKeys(doc map[string]any) error {
+	if ft8, ok := doc["ft8"].(map[string]any); ok {
+		if tx, ok := ft8["tx"].(map[string]any); ok {
+			if value, present := tx["auto_work_callers"]; present && value != nil {
+				if _, ok := value.(bool); !ok {
+					return fmt.Errorf("ft8.tx.auto_work_callers: must be a boolean")
+				}
+			}
+		}
+		if meter, ok := ft8["meter"].(map[string]any); ok {
+			if value, present := meter["alc_red"]; present && value != nil {
+				f, ok := value.(float64)
+				if !ok || math.Trunc(f) != f || f < float64(math.MinInt) || f > float64(math.MaxInt) {
+					return fmt.Errorf("ft8.meter.alc_red: must be an integer JSON number")
+				}
+			}
+		}
+	}
+
+	if rigs, ok := doc["rigs"].([]any); ok {
+		for i, value := range rigs {
+			rig, ok := value.(map[string]any)
+			if !ok {
+				continue // typed unmarshal will diagnose the non-object element
+			}
+			audio, ok := rig["audio"].(map[string]any)
+			if !ok {
+				continue // typed unmarshal will diagnose the non-object block
+			}
+			if device, present := audio["device"]; present && device != nil {
+				if _, ok := device.(string); !ok {
+					return fmt.Errorf("rigs[%d].audio.device: must be a string", i)
+				}
+			}
+		}
+	}
+
+	psk, ok := doc["psk_reporter"].(map[string]any)
+	if !ok {
+		return nil // no consumable retired antenna; typed unmarshal owns the block
+	}
+	antenna, present := psk["antenna"]
+	if !present {
+		return nil
+	}
+	if antenna != nil {
+		if _, ok := antenna.(string); !ok {
+			return fmt.Errorf("psk_reporter.antenna: must be a string")
+		}
+	}
+
+	lsValue, present := doc["logging_station"]
+	if !present || lsValue == nil {
+		return nil
+	}
+	ls, ok := lsValue.(map[string]any)
+	if !ok {
+		return fmt.Errorf("logging_station: must be an object")
+	}
+	if canonical, present := ls["my_antenna"]; present && canonical != nil {
+		if _, ok := canonical.(string); !ok {
+			return fmt.Errorf("logging_station.my_antenna: must be a string")
+		}
+	}
+	return nil
+}
+
+// migrateV2toV3 consumes the version-2 keys whose typed struct fields were
+// removed, so an upgraded install boots (ADR 0067's promise) while the ADR 0074
+// gate still rejects genuine typos — only keys STILL unknown after this run are
+// refused (ADR 0075). It operates on the raw document because the fields are gone
+// from the typed Config. Idempotent: once each retired key is consumed, a second
+// pass finds nothing to move and deletes nothing.
+func migrateV2toV3(doc map[string]any) error {
+	if err := validateV2toV3RetiredKeys(doc); err != nil {
+		return err
+	}
+
+	// ft8.tx.auto_work_callers (ADR 0067) and ft8.meter.alc_red (ADR 0064): pure
+	// removals — the behaviour they toggled is gone, so drop the keys.
+	if ft8, ok := doc["ft8"].(map[string]any); ok {
+		if tx, ok := ft8["tx"].(map[string]any); ok {
+			delete(tx, "auto_work_callers")
+		}
+		if meter, ok := ft8["meter"].(map[string]any); ok {
+			delete(meter, "alc_red")
+		}
+	}
+
+	// rigs[].audio.device → audio.rx / audio.tx. The single legacy device string
+	// named both directions; fill each only when absent so an operator who already
+	// split rx/tx is never overwritten. Then delete the retired key. (The v1→v2
+	// step can SYNTHESISE audio.device from loose fields, so the v1→v2→v3 chain
+	// consumes it here — migrations.go:94 stays untouched.)
+	if rigs, ok := doc["rigs"].([]any); ok {
+		for _, r := range rigs {
+			rig, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			audio, ok := rig["audio"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if device, ok := audio["device"].(string); ok && device != "" {
+				if _, has := audio["rx"]; !has {
+					audio["rx"] = device
+				}
+				if _, has := audio["tx"]; !has {
+					audio["tx"] = device
+				}
+			}
+			delete(audio, "device")
+		}
+	}
+
+	// psk_reporter.antenna → logging_station.my_antenna, but only when the
+	// canonical field is absent; otherwise the canonical value wins. Either way the
+	// retired key is deleted.
+	if psk, ok := doc["psk_reporter"].(map[string]any); ok {
+		if _, present := psk["antenna"]; present {
+			if antenna, ok := psk["antenna"].(string); ok && antenna != "" {
+				ls, ok := doc["logging_station"].(map[string]any)
+				if !ok {
+					ls = map[string]any{}
+					doc["logging_station"] = ls
+				}
+				if _, present := ls["my_antenna"]; !present {
+					ls["my_antenna"] = antenna
+				}
+			}
+			delete(psk, "antenna")
+		}
+	}
 	return nil
 }
 

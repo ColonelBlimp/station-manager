@@ -105,6 +105,7 @@ func main() {
 	//   smd --config <path>              → daemon with flag (run())
 	//   smd import [flags] <file.adi>    → one-shot import (runImport())
 	//   smd restore [flags]              → SM Cloud restore (runRestore())
+	//   smd config-check [--config p]    → read-only unknown-key preflight (runConfigCheck())
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "import":
@@ -115,6 +116,12 @@ func main() {
 			return
 		case "restore":
 			if err := runRestore(os.Args[2:]); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
+				os.Exit(ExitError)
+			}
+			return
+		case "config-check":
+			if err := runConfigCheck(os.Args[2:]); err != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "smd: %v\n", err)
 				os.Exit(ExitError)
 			}
@@ -556,21 +563,30 @@ func ensureDefaultLogbook(
 // config.json (ADR 0054). A blob that is empty, not a JSON object, or lacks the
 // key is returned unchanged with false, so a normal config is never rewritten.
 // persistResolvedConfig writes the startup-resolved values back to config.json
-// and reports what it changed, for the save record emitted once the logger is
-// up (SHIP GATE (a), site B).
+// ONLY when something actually changed, and reports what it changed for the save
+// record emitted once the logger is up (SHIP GATE (a), site B).
 //
-// This runs on EVERY start and config.Service.Update writes unconditionally, so
-// the file's mtime moves each boot whether or not anything moved with it. That
-// is precisely why the record has to be delta-driven: an unconditional line
-// here would be one noise entry per start, and mtime alone can never tell an
-// operator's save from this one.
+// It writes for exactly three named reasons and stays silent otherwise, so a
+// quiet log means a quiet file (ruling 5): a schema MIGRATION (the on-disk
+// document was an older version — Load migrated it in memory and the migrated
+// shape must reach disk once, ADR 0075); a UserAgent fill; or a legacy ClubLog
+// key scrub. A boot that resolves to exactly what is already on disk leaves the
+// file's content and mtime untouched — only a legacy wide-mode file is still
+// tightened to 0600, as an explicit permission action (M1).
 //
 // Soft-failure is the caller's business — a read-only working dir is degraded,
 // not fatal, and the daemon still serves with the in-memory values.
 func persistResolvedConfig(cfgSvc *config.Service, userAgent string) ([]config.FieldChange, error) {
-	var before, after config.Config
-	err := cfgSvc.Update(func(c *config.Config) error {
-		before = c.Clone()
+	// Did Load migrate the on-disk document up a schema version? If so the migrated
+	// shape must be persisted once even when the UA/scrub below is a no-op. Soft and
+	// read-only: an unreadable version just means "assume current", so a genuine
+	// no-op still writes nothing.
+	migrated := false
+	if v, verr := config.FileSchemaVersion(cfgSvc.Path); verr == nil {
+		migrated = v < config.CurrentSchemaVersion()
+	}
+
+	changes, err := cfgSvc.UpdateIfChanged(migrated, func(c *config.Config) error {
 		c.UserAgent = userAgent
 		// Scrub any legacy ClubLog application API key left in config
 		// credentials. The key is build-injected now (ADR 0054); an older config
@@ -591,14 +607,27 @@ func persistResolvedConfig(cfgSvc *config.Service, userAgent string) ([]config.F
 				}
 			}
 		}
-		after = c.Clone()
 		return nil
 	})
 	if err != nil {
 		// Nothing reached disk, so there is nothing to report as saved.
 		return nil, err
 	}
-	return config.Diff(before, after), nil
+
+	if migrated {
+		// Name the migration as its own persistence reason. Only the path is logged;
+		// no config value is attached (ADR 0074 §diag / ADR 0075).
+		changes = append([]config.FieldChange{{
+			Field: "schema_version",
+		}}, changes...)
+	} else if len(changes) == 0 {
+		// Semantic no-op: nothing was written, so mtime is untouched. Tighten a
+		// legacy wide-mode file to 0600 as an explicit permission action anyway.
+		if terr := config.TightenFileMode(cfgSvc.Path); terr != nil {
+			return nil, fmt.Errorf("tightening config permissions: %w", terr)
+		}
+	}
+	return changes, nil
 }
 
 func stripCredentialKey(raw json.RawMessage, key string) (json.RawMessage, bool) {

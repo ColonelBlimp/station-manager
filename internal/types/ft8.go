@@ -344,8 +344,9 @@ type Ft8TXConfig struct {
 
 	// The auto_work_callers key (ADR 0059's run gate, then ADR 0066's toggle
 	// seed) retired with ADR 0067: the session's Answer mode alone decides run
-	// behaviour, so there is no toggle left to seed. A legacy key in an older
-	// config.json is silently ignored by decode (the alc_red precedent).
+	// behaviour, so there is no toggle left to seed. The config v2→v3 migration
+	// consumes a legacy key before the strict unknown-key gate (ADR 0075); a
+	// current-version document carrying it is rejected.
 
 	// Occupancy tunes the per-slot occupancy detector and clear-offset ranking
 	// (ADR 0029 step a). Pointer-typed for the same inert-block reason as TX.
@@ -480,8 +481,9 @@ type Ft8OccupancyConfig struct {
 // Ft8MeterConfig is the stored (sparse) form of the TX-drive display
 // threshold (ADR 0064), raw rig 0-255 ALC scale: alc_amber is where green
 // (healthy drive) ends and amber begins. ONE threshold: the red band was
-// folded into amber 2026-08-08 (see DefaultFt8AlcAmber); a legacy alc_red
-// key in an older config.json is silently ignored by decode.
+// folded into amber 2026-08-08 (see DefaultFt8AlcAmber). The config v2→v3
+// migration consumes a legacy alc_red before the strict unknown-key gate; a
+// current-version document carrying it is rejected (ADR 0075).
 type Ft8MeterConfig struct {
 	AlcAmber *int `json:"alc_amber,omitempty"`
 }

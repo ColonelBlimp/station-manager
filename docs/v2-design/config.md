@@ -302,6 +302,25 @@ forwarder tokens. `WriteJSON` creates the replacement at owner-only `0600`, pres
 an existing stricter owner-only mode such as `0400`, and tightens a wider legacy
 mode on the next write. Secrets must never be committed.
 
+### 5.4 Unknown-key rejection (ADR 0074 / ADR 0075)
+
+A supported-version `config.json` that carries a key the schema does not recognize
+is refused at `Load`, before the daemon starts, migrates in place, tightens
+permissions, or otherwise writes — so an operator's typo can never be silently
+dropped while startup reports success. The refusal names every offending dotted
+path — indexed for struct-slice elements, e.g. `rigs[0].typo`, `forwarders[1].nope`
+— and never a value, because the message reaches stderr and `smd.log` while
+`config.json` does not.
+
+The gate is deliberately strict but narrow. It runs on the migrated document, so a
+key a migration consumes is gone before the check (§13); arbitrary keys inside a
+map or a `json.RawMessage` (forwarder `endpoints`, `credentials`) are operator data,
+not schema, and are never reported. A malformed document, a newer-than-supported
+version, and an unknown key are three distinct diagnostics; none is reported as
+another. `smd config-check [--config <path>]` runs the same evaluation read-only —
+without starting the daemon — so a would-be startup refusal is diagnosable ahead of
+a deploy, reporting the same paths with values omitted.
+
 ## 6. HTTP edit surface
 
 `GET /v1/config`, `PUT /v1/config`, `GET /v1/rigs`, and the capability catalogues
@@ -519,7 +538,7 @@ accepted through the API must also survive the next startup.
 
 ### 13.1 Version field and ordered registry
 
-The current schema version is `2`. A missing version is the version-`1` baseline.
+The current schema version is `3`. A missing version is the version-`1` baseline.
 Migrations are registered and applied one version at a time.
 
 ### 13.2 Raw-document migrations
@@ -533,21 +552,42 @@ each matching rig's `mode_mappings`, synthesizing the legacy rig first when need
 then removes the old key. Typed, idempotent folds handle retained compatibility
 fields such as the old global FT8 mode and `logging_station.my_rig`.
 
+Version `2 -> 3` (ADR 0075) consumes the version-2 keys whose typed struct fields
+were removed, so an upgraded install still boots (ADR 0067) while the unknown-key
+gate below stays strict. It deletes `ft8.tx.auto_work_callers` and
+`ft8.meter.alc_red`; folds each `rigs[].audio.device` into the rig's `audio.rx` and
+`audio.tx` when those are absent (never overwriting an operator's split values),
+then deletes `device`; and moves `psk_reporter.antenna` into
+`logging_station.my_antenna` only when the canonical field is absent — otherwise the
+canonical value wins — then deletes the retired key. The step is idempotent, and it
+also consumes an `audio.device` that the `1 -> 2` step may have synthesized.
+
 ### 13.3 Pipeline placement
 
-Raw migration precedes typed unmarshal; typed compatibility folds follow defaulting
-and rig-catalogue synthesis; normalization and validation run last. This ordering
-keeps removed data visible long enough to migrate and validates only the canonical
-current candidate.
+Raw migration precedes typed unmarshal; the unknown-key gate (§5.4) runs between
+them, on the migrated document; typed compatibility folds follow defaulting and
+rig-catalogue synthesis; normalization and validation run last. This ordering keeps
+removed data visible long enough to migrate, rejects a genuine typo before any
+write, and validates only the canonical current candidate.
 
 ### 13.4 Persistence and downgrade guard
 
-Load does not immediately rewrite a migrated file. The in-memory value is current
-and carries version `2`; the next successful daemon-owned write persists the current
-shape. A version greater than the daemon supports is a fatal downgrade guard.
+`Load` itself never writes. The in-memory value is current and carries version `3`.
+When the on-disk document was an older version, startup persists the migrated shape
+exactly once, under an explicit `schema_version` persistence reason (names the
+version, never a value); the next boot reads a current file and writes nothing. A
+version greater than the daemon supports is a fatal downgrade guard, kept distinct
+from both a malformed document and an unknown-key refusal.
+
+Startup persistence is otherwise delta-driven: a boot that resolves to exactly what
+is on disk leaves the file's content and mtime untouched, so a quiet log means a
+quiet file. A legacy wider-than-`0600` file is still tightened as an explicit
+permission action even on such a no-op (§5.3).
 
 Any future shape change must bump the version, add the next ordered migration, and
 test old shape, current shape, malformed input, idempotence, and downgrade refusal.
+A key removed from the structs but still written by older installs must be consumed
+by a migration (not merely ignored), so the unknown-key gate stays strict (ADR 0075).
 
 ## 14. Defaults ownership
 

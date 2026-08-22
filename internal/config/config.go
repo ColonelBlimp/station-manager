@@ -589,6 +589,16 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("migrating config: %w", err)
 	}
 
+	// Reject unknown keys AFTER migrations (which consume renamed/removed legacy
+	// keys) and BEFORE the lenient unmarshal that would silently drop them — so no
+	// write, mtime change, or permission tightening can happen on a typo'd file
+	// (ADR 0074 / W-0006, config.md §5/§13). The newer-than-supported VERSION guard
+	// in migrateDocument already covers forward-compatibility; an unknown key at a
+	// supported version is a typo, not a field from a newer daemon.
+	if unknown := unknownKeysInMigrated(data); len(unknown) > 0 {
+		return cfg, &UnknownKeysError{Path: path, Keys: unknown}
+	}
+
 	if err = json.Unmarshal(data, &cfg); err != nil {
 		if d := describeJSONError(path, data, bytes.Equal(data, raw), err); d != nil {
 			return cfg, d
@@ -712,6 +722,62 @@ func WriteJSON(path string, cfg Config) error {
 		return fmt.Errorf("renaming temp config to %s: %w", path, err)
 	}
 	return nil
+}
+
+// TightenFileMode narrows a config file wider than 0600 down to 0600 as an
+// EXPLICIT permission action, leaving content and mtime untouched (chmod moves
+// ctime, not mtime). A mode already 0600-or-stricter is left alone. config.json
+// holds plaintext secrets (M1), so a legacy 0644 must not survive even a startup
+// that changes no content. Kept separate from WriteJSON so a semantic no-op boot
+// can tighten permissions without rewriting the file.
+func TightenFileMode(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	perm := fi.Mode().Perm()
+	if perm != 0 && perm&^0o600 == 0 {
+		return nil // already 0600 or stricter — nothing to tighten
+	}
+	return os.Chmod(path, 0o600)
+}
+
+// FileSchemaVersion reads ONLY the schema version of the config document at path
+// without migrating, defaulting, validating, or writing. A missing version field
+// is the pre-versioning baseline (v1). Startup uses it to tell whether Load
+// migrated the on-disk document, so the migrated shape is persisted exactly once.
+func FileSchemaVersion(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return 0, fmt.Errorf("reading config schema version: %w", err)
+	}
+	return documentVersion(doc)
+}
+
+// PreflightUnknownKeys evaluates the config document at path against the current
+// schema WITHOUT starting the daemon — no defaulting, validation, or writing. It
+// migrates the document first (so migration-consumed keys don't show), then
+// returns the unrecognised dotted paths, values omitted. A malformed document or
+// a newer-than-supported version is returned as the error — the same distinct
+// diagnostics Load gives — so a deploy preflight can tell the three apart and a
+// would-be startup refusal is diagnosable ahead of time (W-0006 AC8).
+func PreflightUnknownKeys(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	migrated, err := migrateDocument(data)
+	if err != nil {
+		if d := describeJSONError(path, data, true, err); d != nil {
+			return nil, d
+		}
+		return nil, err
+	}
+	return unknownKeysInMigrated(migrated), nil
 }
 
 // Normalize applies the operator-identity transforms shared by Load and the PUT
@@ -1410,23 +1476,27 @@ func insecureNetworkAdvisoryMsg(socket string) string {
 }
 
 // UnknownKeys returns the dotted paths of JSON keys present in the raw config
-// document but NOT recognised by the Config schema (review 2026-06-19 L1). Load
-// deliberately ignores unknown keys (forward-compatibility — an old daemon must
-// still load a config a newer one wrote), but that means a hand-editing
-// operator's typo — "bridge.enable", "smtp.timeot_sec", "server.max_body_byte"
-// — silently falls back to the default. The daemon logs these at startup so the
-// mistake is visible without making one typo fatal. Advisory only.
+// document but NOT recognised by the Config schema (ADR 0074 / W-0006). Load
+// rejects those paths; this helper remains the read-only detection surface for
+// tests and preflight callers.
 //
 // It runs the same migrateDocument as Load first, so a key a migration renames
 // or removes isn't falsely flagged. Recursion descends struct / *struct blocks
-// (where the review's nested examples live); slice elements and map values are
-// treated as opaque (a map's keys are data, not schema). Returns nil for a
-// document that doesn't parse as a JSON object — Load surfaces real parse errors.
+// and slices of structs; map values and json.RawMessage remain opaque operator
+// data. Returns nil for a document that doesn't parse as a JSON object — Load and
+// PreflightUnknownKeys surface the actual parse or migration error.
 func UnknownKeys(data []byte) []string {
 	migrated, err := migrateDocument(data)
 	if err != nil {
 		return nil
 	}
+	return unknownKeysInMigrated(migrated)
+}
+
+// unknownKeysInMigrated walks an ALREADY-migrated document for unrecognised keys.
+// Load calls it directly on the bytes migrateDocument returned, so the reject
+// gate never re-runs the migration; UnknownKeys migrates first and then defers here.
+func unknownKeysInMigrated(migrated []byte) []string {
 	var raw map[string]json.RawMessage
 	if json.Unmarshal(migrated, &raw) != nil {
 		return nil
@@ -1435,6 +1505,24 @@ func UnknownKeys(data []byte) []string {
 	collectUnknownKeys("", raw, reflect.TypeOf(Config{}), &out)
 	sort.Strings(out)
 	return out
+}
+
+// UnknownKeysError is returned by Load when a supported-version config.json
+// contains keys the schema does not recognise (ADR 0074 / W-0006). It names every
+// offending dotted path — indexed for struct-slice elements (rigs[0].typo) — and
+// deliberately never the value, so the refusal can reach stderr and smd.log
+// without disclosing a credential (config.md §5). Malformed JSON and a
+// newer-than-supported version stay distinct diagnostics (§13).
+type UnknownKeysError struct {
+	Path string
+	Keys []string
+}
+
+func (e *UnknownKeysError) Error() string {
+	return fmt.Sprintf(
+		"%s has %d unrecognised configuration key(s); fix the typo or remove the key "+
+			"(a supported-version file with an unknown key is refused so the value is never silently dropped):\n  %s",
+		e.Path, len(e.Keys), strings.Join(e.Keys, "\n  "))
 }
 
 // collectUnknownKeys diffs the raw JSON object against the json-tagged fields of
@@ -1451,14 +1539,39 @@ func collectUnknownKeys(prefix string, raw map[string]json.RawMessage, t reflect
 		for ft.Kind() == reflect.Ptr {
 			ft = ft.Elem()
 		}
-		if ft.Kind() != reflect.Struct {
-			continue // scalars, slices, and maps are leaves for this check
-		}
-		var child map[string]json.RawMessage
-		if json.Unmarshal(v, &child) == nil {
-			// Value is a JSON object → descend. A non-object value (e.g. a
-			// time.Time serialised as a string) fails this and is left alone.
-			collectUnknownKeys(prefix+k+".", child, ft, out)
+		switch ft.Kind() {
+		case reflect.Struct:
+			var child map[string]json.RawMessage
+			if json.Unmarshal(v, &child) == nil {
+				// Value is a JSON object → descend. A non-object value (e.g. a
+				// time.Time serialised as a string) fails this and is left alone.
+				collectUnknownKeys(prefix+k+".", child, ft, out)
+			}
+		case reflect.Slice:
+			// A slice OF STRUCTS carries schema in every element (rigs[], forwarders[],
+			// lookup.chain[], operators[], evidence.antennas[]); descend each element
+			// with an indexed path. A []string or []byte (json.RawMessage credentials)
+			// has no nested schema and is a leaf, as are maps — their keys are operator
+			// data, not schema (config.md §5).
+			elem := ft.Elem()
+			for elem.Kind() == reflect.Ptr {
+				elem = elem.Elem()
+			}
+			if elem.Kind() != reflect.Struct {
+				continue
+			}
+			var items []json.RawMessage
+			if json.Unmarshal(v, &items) != nil {
+				continue // not a JSON array (or null) — leave alone
+			}
+			for i, item := range items {
+				var child map[string]json.RawMessage
+				if json.Unmarshal(item, &child) == nil {
+					collectUnknownKeys(fmt.Sprintf("%s%s[%d].", prefix, k, i), child, elem, out)
+				}
+			}
+		default:
+			// scalars and maps are leaves for this check
 		}
 	}
 }
@@ -2095,6 +2208,43 @@ func (s *Service) Update(fn func(cfg *Config) error) error {
 
 	s.Cfg = next
 	return nil
+}
+
+// UpdateIfChanged applies fn to a clone and persists ONLY when the typed result
+// differs from the live config, OR forceWrite is set. It returns the field-level
+// changes (values withheld for secrets, as Diff does). A semantic no-op with
+// forceWrite=false leaves the file — content and mtime — untouched, so an
+// ordinary boot that resolves to exactly what is already on disk writes nothing.
+//
+// forceWrite exists for the persistence reasons that carry no typed delta but
+// must still reach disk: a schema migration re-shapes the RAW document (retired
+// keys removed), which the typed before/after cannot see because both sides are
+// already the migrated Config. The caller names that reason.
+func (s *Service) UpdateIfChanged(forceWrite bool, fn func(cfg *Config) error) ([]FieldChange, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Path == "" {
+		return nil, fmt.Errorf("config.Service.UpdateIfChanged: no on-disk path set; cannot persist update")
+	}
+
+	before := s.Cfg.Clone()
+	next := s.Cfg.Clone()
+	if err := fn(&next); err != nil {
+		return nil, err
+	}
+
+	changes := Diff(before, next)
+	if len(changes) == 0 && !forceWrite {
+		return nil, nil // semantic no-op — do not touch the file
+	}
+
+	if err := WriteJSON(s.Path, next); err != nil {
+		return nil, fmt.Errorf("config.Service.UpdateIfChanged: writing config: %w", err)
+	}
+
+	s.Cfg = next
+	return changes, nil
 }
 
 // UpdateInMemoryThenPersist applies fn and commits the result to the in-memory

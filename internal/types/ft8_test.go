@@ -295,10 +295,10 @@ func TestResolveFt8Meter_ServedShapeHasNoRed(t *testing.T) {
 	}
 }
 
-// A config.json written before the fold may still hold ft8.meter.alc_red.
-// It must be IGNORED — tolerated by decode (no strict field check) and
-// absent from resolution — not an error that stops the daemon loading its
-// own previous config.
+// The value-layer decoder remains schema-agnostic: alc_red is absent from
+// resolution even if raw JSON supplied directly to this type carries it. The
+// daemon config boundary owns the version-aware policy: v2 migrates the key and
+// v3 rejects it (ADR 0075).
 func TestResolveFt8Meter_LegacyRedKeyIgnored(t *testing.T) {
 	var c Ft8MeterConfig
 	if err := json.Unmarshal([]byte(`{"alc_amber":40,"alc_red":50}`), &c); err != nil {

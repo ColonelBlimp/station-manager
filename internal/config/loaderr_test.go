@@ -68,7 +68,11 @@ func TestLoad_MalformedConfigIsActionable(t *testing.T) {
 	})
 
 	t.Run("wrong type names the field in JSON terms", func(t *testing.T) {
-		got := loadErrText(t, "{\n  \"version\": 2,\n  \"logging_station\": { \"station_callsign\": 123 }\n}\n")
+		// Version 3 (current) so migrateDocument returns the bytes unchanged and the
+		// line/column snippet still points at the file the operator is looking at. A
+		// below-current file is re-marshalled by migration, which correctly suppresses
+		// offsets (they'd point at bytes the operator can't see).
+		got := loadErrText(t, "{\n  \"version\": 3,\n  \"logging_station\": { \"station_callsign\": 123 }\n}\n")
 		for _, want := range []string{"logging_station.station_callsign", "a string (in quotes)", "got number", "line 3"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("message missing %q:\n%s", want, got)
@@ -374,10 +378,10 @@ func TestStringStateAt(t *testing.T) {
 
 // ADR 0067 (slice D): ft8.tx.auto_work_callers retired with the one-shot
 // toggle it seeded. A config.json written by an older build still carries the
-// key, and an upgrade must not refuse to boot over it — lenient decode
-// ignores it, exactly as the retired alc_red key is ignored. Green before AND
-// after the field's removal by design: this is a tolerance pin for upgraded
-// installs, not a red-first behaviour change.
+// key, and an upgrade must not refuse to boot over it. ADR 0075 now makes that
+// tolerance explicit: the v2→v3 migration consumes it before the strict
+// unknown-key gate. This remains a tolerance pin for upgraded installs, not a
+// current-version exception.
 func TestLoad_LegacyAutoWorkCallersKeyTolerated(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.json")
 	legacy := `{"version":2,"logging_station":{"station_callsign":"7Q5MLV"},` +

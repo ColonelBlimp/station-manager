@@ -21,8 +21,7 @@ on-air validation gate in W-0002.
 
 ## P1 — verified correctness, in order
 
-1. **W-0006 · OPEN — [Reject unknown config keys before any write](work/W-0006-reject-unknown-config-keys.md).** Ratified by ADR 0074; implement CC-1 plus struct-slice detection, no-op-write handling, and explicit persistence reasons.
-2. **W-0007 · OPEN — [Close the remaining verified P1 correctness findings](work/W-0007-close-verified-p1-correctness-findings.md).** In order: equal-version SM Cloud conflict, partial station baseline, concurrent QSO delete, and re-enrichment generation race.
+1. **W-0007 · OPEN — [Close the remaining verified P1 correctness findings](work/W-0007-close-verified-p1-correctness-findings.md).** In order: equal-version SM Cloud conflict, partial station baseline, concurrent QSO delete, and re-enrichment generation race.
 
 ## P2 — next workstreams
 

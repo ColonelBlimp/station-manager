@@ -93,6 +93,6 @@ contract removed.
   migration rejects malformed present fields/versions and preserves the original bytes on
   failure. Those guarantees are a **preserved prerequisite** of this decision, not open
   scope.
-- **Work item:** [`W-0006`](../work/W-0006-reject-unknown-config-keys.md). The
+- **Work item:** [`W-0006`](../archive/work/W-0006-reject-unknown-config-keys.md). The
   `docs/v2-design/config.md` reflection, the code, its TDD/reversion proof, and the audit
   closure land with the implementation, not this record.

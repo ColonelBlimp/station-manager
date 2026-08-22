@@ -40,6 +40,20 @@ func TestWorkingDir_CreatesDir(t *testing.T) {
 	}
 }
 
+func TestResolveWorkingDir_DoesNotCreateDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "read-only-resolution")
+	got, err := ResolveWorkingDir(dir)
+	if err != nil {
+		t.Fatalf("ResolveWorkingDir(newdir) error: %v", err)
+	}
+	if got != dir {
+		t.Fatalf("ResolveWorkingDir(newdir) = %q; want %q", got, dir)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("ResolveWorkingDir created %q; stat error = %v", dir, err)
+	}
+}
+
 func TestWorkingDir_Default(t *testing.T) {
 	// Ensure no env var is set so the fallback uses the executable directory.
 	os.Unsetenv(EnvSmWorkingDir)

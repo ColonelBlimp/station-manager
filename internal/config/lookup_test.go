@@ -304,7 +304,6 @@ func TestLoad_ValidLookupBlock(t *testing.T) {
 			"hamnut": {
 				"enabled": true,
 				"url": "https://api.hamnut.example/v1/call-signs/prefixes",
-				"useragent": "smd/test",
 				"timeout_sec": 5
 			},
 			"chain": [
@@ -312,7 +311,6 @@ func TestLoad_ValidLookupBlock(t *testing.T) {
 					"name": "qrzlookupservice",
 					"enabled": true,
 					"url": "https://xmldata.qrz.com/xml/current",
-					"useragent": "smd/test",
 					"timeout_sec": 5,
 					"username": "tester",
 					"password": "secret"

@@ -126,8 +126,9 @@ on any PUT):
   CHOSE an auto mode must not auto-work anyone — a clean install lists callers
   and stays fully manual until an auto mode is explicitly selected. (The former
   `ft8.tx.auto_work_callers` gate and its one-shot SPA toggle retired with ADR
-  0067; a legacy key in an older config.json is ignored by decode, like
-  `alc_red`.) A park (Next / the repeat cap) under pick never auto-picks a
+  0067; ADR 0075's v2→v3 migration consumes that key and the retired `alc_red`
+  before the strict unknown-key gate, while a current-version document carrying
+  either is rejected.) A park (Next / the repeat cap) under pick never auto-picks a
   replacement; Stop on a pick run PAUSES the drain (queue kept — Resume
   continues), on an auto run stops it outright. Specs:
   `internal/ft8/adr0067_test.go` (A/B rules) + `adr0066_test.go` (R-rules,

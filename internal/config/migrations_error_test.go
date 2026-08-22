@@ -59,6 +59,36 @@ func TestLoad_RejectsMalformedMigrationInputsWithoutRewritingSource(t *testing.T
 			body: `{"rigs":[{"id":1,"model":17}],"bridge":{"mode_mappings":{}}}`,
 			path: "rigs[0].model",
 		},
+		{
+			name: "retired auto-work flag is not boolean",
+			body: `{"version":2,"ft8":{"tx":{"auto_work_callers":"yes"}}}`,
+			path: "ft8.tx.auto_work_callers",
+		},
+		{
+			name: "retired ALC threshold is not integer",
+			body: `{"version":2,"ft8":{"meter":{"alc_red":12.5}}}`,
+			path: "ft8.meter.alc_red",
+		},
+		{
+			name: "retired audio device is not string",
+			body: `{"version":2,"rigs":[{"id":1,"model":"yaesu-ftdx10","audio":{"device":7}}],"default_rig_id":1}`,
+			path: "rigs[0].audio.device",
+		},
+		{
+			name: "retired PSK Reporter antenna is not string",
+			body: `{"version":2,"psk_reporter":{"antenna":7}}`,
+			path: "psk_reporter.antenna",
+		},
+		{
+			name: "canonical logging station is not object",
+			body: `{"version":2,"psk_reporter":{"antenna":"legacy"},"logging_station":"malformed"}`,
+			path: "logging_station",
+		},
+		{
+			name: "canonical antenna is not string",
+			body: `{"version":2,"psk_reporter":{"antenna":"legacy"},"logging_station":{"my_antenna":7}}`,
+			path: "logging_station.my_antenna",
+		},
 	}
 
 	for _, tt := range tests {

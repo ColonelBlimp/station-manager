@@ -1,6 +1,6 @@
 # W-0006 — Reject unknown config keys before any write
 
-**Status:** Open — ruling ratified 2026-08-20 ([ADR 0074](../decisions/0074-reject-unknown-config-keys-before-any-write.md)); implementation not started
+**Status:** Completed 2026-08-22 — [ADR 0074](../../decisions/0074-reject-unknown-config-keys-before-any-write.md) and [ADR 0075](../../decisions/0075-migrate-retired-keys-before-unknown-key-rejection.md) implemented and verified
 **Selected:** 2026-08-20
 **Outcome:** A supported-version `config.json` containing an unrecognised schema key is
 refused at startup — naming every offending path and no value — before the daemon writes,
@@ -8,9 +8,9 @@ migrates-in-place, or tightens permissions, so an operator's typo can never be s
 dropped while startup reports success.
 
 `W-0006` is an immutable identity. Its status may change; priority and ranked position live
-only in [`docs/backlog.md`](../backlog.md).
+only in [`docs/backlog.md`](../../backlog.md).
 
-## Verified current state (code-authoritative, 2026-08-20)
+## Verified pre-implementation state (code-authoritative, 2026-08-20)
 
 - `config.Load` (`internal/config/config.go:566`) migrates the raw document
   (`migrateDocument`, `config.go:582`) then decodes **leniently** — unknown members are
@@ -52,9 +52,8 @@ Owns, as one raw-document safety change:
   side effect of an unrelated update.
 
 Does **not** own: EH-3 (done), CC-3/CC-4 (validator coverage / normalize-validate
-enforcement), CC-5 (`WriteJSON` hardening), the `docs/v2-design/config.md` reflection, or any
-change to the opaque-container data model. Permission hardening of a legacy wide-mode file
-stays an explicit independent action.
+enforcement), CC-5 (`WriteJSON` hardening), or any change to the opaque-container data
+model. Permission hardening of a legacy wide-mode file stays an explicit independent action.
 
 ## Operator-observable acceptance criteria
 
@@ -93,13 +92,32 @@ and file state (content + mtime + mode), not on walker internals. Focused loop:
 `go test ./internal/config ./cmd/smd`. No RF, audio, CAT, live-credential, or destructive-DB
 action is involved.
 
+## Completion evidence (2026-08-22)
+
+- `config.Load` now rejects every unknown top-level, nested, and struct-slice path after
+  migration and before typed decode or any write. The refusal and `smd config-check`
+  preflight list paths only; file content, mtime, and mode remain unchanged.
+- The version-3 migration consumes all four retired version-2 paths, preserves canonical
+  split-audio and antenna values, rejects malformed retired values without rewriting the
+  source, and persists a migrated document once under a path-only `schema_version` reason.
+- Semantic no-op startup writes nothing; the independent permission action still narrows a
+  legacy wide mode to `0600`. Focused `internal/config` and `cmd/smd` suites are green, with
+  reversion proofs reaching the intended reject, migration, precedence, persistence, and
+  no-value assertions.
+- The final repository-wide `task ci:local` gate passed completely, including the short
+  race suite and `internal/evidence`. An earlier reported
+  `TestReceipt_DialContextRecordedAndSeparated` `SQLITE_BUSY` race-load flake passed three
+  isolated retries and did not recur in two final full-gate runs. No RF, CAT, audio,
+  hardware, live-credential, or destructive-database action was used.
+
 ## References
 
-- [ADR 0074](../decisions/0074-reject-unknown-config-keys-before-any-write.md) — the ruling.
-- [`internal-configuration-contract-audit.md`](../reviews/internal-configuration-contract-audit.md)
+- [ADR 0074](../../decisions/0074-reject-unknown-config-keys-before-any-write.md) — the ruling.
+- [ADR 0075](../../decisions/0075-migrate-retired-keys-before-unknown-key-rejection.md) — retired-key migration and persistence reconciliation.
+- [`internal-configuration-contract-audit.md`](../../reviews/internal-configuration-contract-audit.md)
   — CC-1 (P1) and CC-2 (P2).
-- [`internal-error-handling-audit.md`](../reviews/internal-error-handling-audit.md) — EH-3
+- [`internal-error-handling-audit.md`](../../reviews/internal-error-handling-audit.md) — EH-3
   (fixed prerequisite).
-- [`docs/v2-design/config.md`](../v2-design/config.md) — canonical config reference; §5/§13
+- [`docs/v2-design/config.md`](../../v2-design/config.md) — canonical config reference; §5/§13
   update lands with the implementation, not this dossier.
-- [`docs/backlog.md`](../backlog.md) — authoritative ranking.
+- [`docs/backlog.md`](../../backlog.md) — authoritative ranking.

@@ -294,9 +294,9 @@ func TestConfig_Ft8Display_InvalidFeedMode400(t *testing.T) {
 // longer exists would read as live config surface to anyone building a
 // client. Asserted on the RAW body (not the typed response) so the rule
 // compiles on both sides of the removal and red means "still served".
-// The legacy ft8.tx.auto_work_callers key on disk stays tolerated-ignored
-// (lenient decode — the alc_red precedent); the pin for that is
-// TestConfig_LegacyAutoWorkCallersKeyTolerated below.
+// A version-2 ft8.tx.auto_work_callers key on disk stays upgrade-tolerated via
+// the v2→v3 migration; the config-boundary pin is
+// config.TestLoad_LegacyAutoWorkCallersKeyTolerated.
 func TestConfig_Ft8AutoWorkCallersSeed_Retired(t *testing.T) {
 	srv := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/config", nil)

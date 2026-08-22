@@ -22,15 +22,17 @@ const (
 // falls back to the XDG data directory instead.
 var systemPrefixes = []string{"/usr/bin", "/usr/local/bin", "/usr/sbin"}
 
-// WorkingDir determines the working directory path, prioritizing function argument, environment variable, or executable location.
-// It validates the directory exists and returns an absolute path or an error if validation fails.
+// ResolveWorkingDir determines the working directory path without creating it,
+// prioritizing a function argument, environment variable, or executable location.
+// Read-only tools use this so they share the daemon's exact path rules without
+// acquiring WorkingDir's first-run directory-creation side effect.
 //
 // Resolution order:
 //  1. Explicit argument
 //  2. SM_WORKING_DIR environment variable
 //  3. XDG data directory ($XDG_DATA_HOME/station-manager) when the binary is in a system path
 //  4. Executable's own directory (development / portable use)
-func WorkingDir(workingDir ...string) (string, error) {
+func ResolveWorkingDir(workingDir ...string) (string, error) {
 	var err error
 	var workDir string
 
@@ -48,6 +50,16 @@ func WorkingDir(workingDir ...string) (string, error) {
 
 	if workDir, err = filepath.Abs(workDir); err != nil {
 		return emptyString, fmt.Errorf("failed to determine absolute path of working directory: %w", err)
+	}
+	return workDir, nil
+}
+
+// WorkingDir resolves the canonical working directory and creates it when
+// missing, covering first-run daemon and packaged-install setup.
+func WorkingDir(workingDir ...string) (string, error) {
+	workDir, err := ResolveWorkingDir(workingDir...)
+	if err != nil {
+		return emptyString, err
 	}
 
 	// Create the directory if it doesn't exist (covers first-run after package install).
