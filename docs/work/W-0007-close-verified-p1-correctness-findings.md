@@ -1,6 +1,6 @@
 # W-0007 — Close the remaining verified P1 correctness findings
 
-**Status:** In progress — PT-1 done; F-01 next
+**Status:** In progress — PT-1, F-01 done; PT-2 next
 **Selected:** 2026-08-22
 **Outcome:** Four independently observable data-loss or data-corruption paths identified by the
 2026-08-20 audit reconciliation are closed in the fixed order below.
@@ -20,9 +20,13 @@ combine the fixes into one commit.
    `409 version_conflict` naming the UUID, and the forwarder classifies that as a terminal
    non-success, never an uploaded backup. Discovering *already-stored* divergence (a full-export
    diagnostic the manifest hash cannot do) is a deliberate non-goal of this slice.
-2. **F-01 — partial station baseline.** A malformed or partial successful station-config response
-   must not become an authoritative whole-block baseline that erases omitted sibling fields on
-   Save.
+2. **F-01 — partial station baseline.** ✅ **DONE (commit `961a7055`, 2026-08-22).** A malformed or
+   partial successful station-config response must not become an authoritative whole-block baseline
+   that erases omitted sibling fields on Save. *Resolved:* the `api/config.ts` decoder now rejects a
+   missing/null/array/non-string `logging_station` (and requires a non-empty `station_callsign` once
+   `setup_complete`), so a semantically-invalid GET stays a load error and the section unloaded — the
+   existing `!loaded` save guard then makes a blanking PUT unreachable, and a malformed 2xx save
+   response leaves the form, shared context, and baseline untouched.
 3. **PT-2 — concurrent QSO delete.** Delete must not remove a newer concurrent revision or record
    the handler's stale snapshot as the append-only history preimage.
 4. **F-02 — re-enrichment generation.** Enrichment for callsign A must never be persisted or
