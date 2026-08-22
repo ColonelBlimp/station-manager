@@ -43,19 +43,23 @@ export interface StationConfig {
 export type StationOutcome =
     { kind: 'ok'; config: StationConfig } | { kind: 'error'; message: string };
 
-// toStringMap normalises the received block to a string map. logging_station is
-// all-string by the daemon's types.LoggingStation, so this is defensive rather
-// than lossy — a stray non-string coerces to its string form for the text form.
-function toStringMap(v: unknown): StationFields {
+// strictStationFields decodes the REQUIRED logging_station block, returning null
+// (a rejection) rather than a silently-empty map when the read is semantically
+// invalid (F-01). logging_station is a whole-block round-trip, so a permissive
+// parse that turned a missing/null/array block — or one with a non-string member
+// — into `{}` would mark the section "loaded" and let a later PUT send blanks over
+// the operator's identity, including the read-only station_callsign. It is
+// therefore rejected unless it is a plain object of all-string members. Once setup
+// is complete, station_callsign must additionally be a non-empty string (the
+// identity invariant); a pre-setup config legitimately carries an empty block.
+function strictStationFields(v: unknown, setupComplete: boolean): StationFields | null {
+    if (!isPlainObject(v)) return null; // missing / null / array / non-object
     const out: StationFields = {};
-    if (isPlainObject(v)) {
-        for (const [k, val] of Object.entries(v)) {
-            if (typeof val === 'string') out[k] = val;
-            else if (typeof val === 'number' || typeof val === 'boolean') out[k] = String(val);
-            // objects/arrays/null are dropped — logging_station is all-string, so
-            // this can't happen; a text-form string map can't represent them anyway.
-        }
+    for (const [k, val] of Object.entries(v)) {
+        if (typeof val !== 'string') return null; // logging_station is all-string
+        out[k] = val;
     }
+    if (setupComplete && (out.station_callsign ?? '').trim() === '') return null;
     return out;
 }
 
@@ -67,7 +71,10 @@ function parseQsl(v: unknown): QslFields {
 
 function parseConfig(body: unknown): StationConfig | null {
     if (!isPlainObject(body)) return null;
-    return { station: toStringMap(body.logging_station), qsl: parseQsl(body.qsl) };
+    if (typeof body.setup_complete !== 'boolean') return null;
+    const station = strictStationFields(body.logging_station, body.setup_complete);
+    if (station === null) return null;
+    return { station, qsl: parseQsl(body.qsl) };
 }
 
 export async function fetchStation(signal?: AbortSignal): Promise<StationOutcome> {

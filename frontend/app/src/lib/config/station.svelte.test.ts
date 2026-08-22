@@ -22,6 +22,7 @@ function mockJSON(status: number, body: unknown) {
 
 function configBody(overrides: Record<string, string> = {}) {
     return {
+        setup_complete: true,
         logging_station: {
             station_callsign: '7Q5MLV',
             my_lat: 'S011 26.250',
@@ -268,5 +269,49 @@ describe('stationState stale-reload guard', () => {
         await stationState.save();
 
         expect(spy.mock.calls).toHaveLength(calls);
+    });
+});
+
+// F-01 — the logging_station baseline is a data-safety precondition. An invalid
+// GET must leave the section unloaded, so a whole-block PUT can never be reached
+// from it; and a malformed successful PUT response must not clear the form, push
+// the shared station context, or move the pristine baseline (frontend-app-review
+// F-01; the strict decoder lives in api/config.ts).
+describe('stationState — F-01 baseline safety', () => {
+    it('an invalid GET baseline leaves the section unloaded and unreachable by save', async () => {
+        const spy = mockJSON(200, { setup_complete: true, logging_station: [] }); // syntactically ok, semantically invalid
+        await stationState.load();
+        expect(stationState.loaded).toBe(false);
+        expect(stationState.error).not.toBe('');
+
+        const afterLoad = spy.mock.calls.length;
+        await stationState.save(); // must be a no-op: the section is not loaded
+        expect(spy.mock.calls).toHaveLength(afterLoad); // no PUT was issued
+    });
+
+    it('a malformed 2xx save response cannot alter the form, shared context, or baseline', async () => {
+        mockJSON(200, configBody());
+        await stationState.load();
+        expect(stationState.loaded).toBe(true);
+
+        stationState.form.my_name = 'Marc'; // an edit → dirty and saveable
+        expect(stationState.dirty).toBe(true);
+        const formBefore = JSON.stringify(stationState.form);
+
+        let contextPushed = false;
+        setStationSaved(() => {
+            contextPushed = true;
+        });
+
+        mockJSON(200, { setup_complete: true, qsl: {} }); // 2xx, but no authoritative logging_station
+        await stationState.save();
+
+        // The malformed response did not land: the form keeps the operator's edit
+        // (never cleared to blanks), the shared context was never pushed, and the
+        // baseline is unchanged — still dirty against the loaded snapshot, still loaded.
+        expect(JSON.stringify(stationState.form)).toBe(formBefore);
+        expect(contextPushed).toBe(false);
+        expect(stationState.dirty).toBe(true);
+        expect(stationState.loaded).toBe(true);
     });
 });

@@ -23,6 +23,7 @@ function mockJSON(status: number, body: unknown) {
 // operational `station` block the section never edits.
 function configBody() {
     return {
+        setup_complete: true,
         logging_station: {
             station_callsign: '7Q5MLV',
             operator: '7Q5MLV',
@@ -101,6 +102,65 @@ describe('saveStation — data safety', () => {
     it('errors (never throws) on a non-2xx PUT', async () => {
         mockJSON(400, { message: 'invalid' });
         const res = await saveStation({ station: { station_callsign: 'X' } });
+        expect(res.kind).toBe('error');
+    });
+});
+
+// F-01 — logging_station is a REQUIRED, all-string plain-object block. A
+// syntactically-successful but semantically-invalid read (missing/null/array/
+// non-string members, or a blank callsign once setup is complete) must surface as
+// an ERROR, not a silently-empty "loaded" block that a whole-block PUT could send
+// back as blanks (frontend-app-review.md F-01).
+describe('fetchStation — F-01 strict logging_station', () => {
+    it.each([
+        ['missing', { setup_complete: true }],
+        ['null', { setup_complete: true, logging_station: null }],
+        ['array', { setup_complete: true, logging_station: [] }],
+        ['string', { setup_complete: true, logging_station: 'nope' }],
+    ])('rejects a %s logging_station as a load error', async (_label, body) => {
+        mockJSON(200, body);
+        expect((await fetchStation()).kind).toBe('error');
+    });
+
+    it('rejects a non-string logging_station member', async () => {
+        mockJSON(200, {
+            setup_complete: true,
+            logging_station: { station_callsign: '7Q5MLV', my_dxcc: 492 },
+        });
+        expect((await fetchStation()).kind).toBe('error');
+    });
+
+    it.each([
+        ['missing', { logging_station: {} }],
+        ['null', { setup_complete: null, logging_station: {} }],
+        ['string', { setup_complete: 'false', logging_station: {} }],
+    ])('rejects a %s setup_complete discriminator', async (_label, body) => {
+        mockJSON(200, body);
+        expect((await fetchStation()).kind).toBe('error');
+    });
+
+    it('requires a non-empty station_callsign once setup is complete', async () => {
+        mockJSON(200, { setup_complete: true, logging_station: { station_callsign: '   ' } });
+        expect((await fetchStation()).kind).toBe('error');
+        mockJSON(200, { setup_complete: true, logging_station: {} });
+        expect((await fetchStation()).kind).toBe('error');
+        mockJSON(200, { setup_complete: true, logging_station: { station_callsign: '7Q5MLV' } });
+        expect((await fetchStation()).kind).toBe('ok');
+    });
+
+    it('preserves the pre-setup case: setup_complete false with an empty logging_station', async () => {
+        mockJSON(200, { setup_complete: false, logging_station: {} });
+        const res = await fetchStation();
+        expect(res.kind).toBe('ok');
+        if (res.kind !== 'ok') return;
+        expect(res.config.station).toEqual({});
+    });
+});
+
+describe('saveStation — F-01 strict response', () => {
+    it('rejects a malformed 2xx save response (missing logging_station)', async () => {
+        mockJSON(200, { setup_complete: true, qsl: {} }); // 2xx, but no authoritative logging_station
+        const res = await saveStation({ station: { station_callsign: '7Q5MLV' } });
         expect(res.kind).toBe('error');
     });
 });
