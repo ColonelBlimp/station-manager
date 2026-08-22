@@ -193,23 +193,30 @@ describe('EditQsoModal re-enrichment generation safety (F-02)', () => {
     // second lookup for the SAME callsign that returns partial data must UPDATE the
     // fields it carries and LEAVE the rest — never retract a field the first lookup
     // already filled (the retract belongs to invalidation, not re-apply).
-    it('a partial second lookup for the same callsign keeps the first lookup other fields', async () => {
+    it('a partial second lookup for the same callsign keeps the first lookup other fields (visible and hidden)', async () => {
         const d1 = deferred<EnrichOutcome>();
         const d2 = deferred<EnrichOutcome>();
         mockEnrich.mockReturnValueOnce(d1.promise).mockReturnValueOnce(d2.promise);
-        render(EditQsoModal, { props: baseProps('A1AA') });
+        const onSave = vi.fn();
+        render(EditQsoModal, { props: baseProps('A1AA', {}, onSave) });
 
         await fireEvent.click(reEnrichBtn());
-        d1.resolve(ok({ country: 'CountryA', name: 'NameA' }));
+        d1.resolve(ok({ country: 'CountryA', name: 'NameA', dxcc: '291', cqz: '5' }));
         await flush();
         expect(input('Country').value).toBe('CountryA');
-        expect(input('Name').value).toBe('NameA');
 
-        // Second re-enrich, SAME callsign, returns only a name.
+        // Second re-enrich, SAME callsign, returns only a name (no country, no extras).
         await fireEvent.click(reEnrichBtn());
         d2.resolve(ok({ name: 'NameA2' }));
         await flush();
-        expect(input('Country').value).toBe('CountryA'); // NOT erased by the partial response
-        expect(input('Name').value).toBe('NameA2'); // the field it carried is updated
+        expect(input('Country').value).toBe('CountryA'); // visible field NOT erased
+        expect(input('Name').value).toBe('NameA2'); // the field it carried IS updated
+
+        // The first lookup's hidden DXCC/zone corrections still ride along on Save —
+        // the partial response must not drop them (codex 88916515 [P2]).
+        await fireEvent.click(saveBtn());
+        const patch = onSave.mock.calls[0][0] as QsoPatch;
+        expect(patch.dxcc).toBe('291');
+        expect(patch.cqz).toBe('5');
     });
 });

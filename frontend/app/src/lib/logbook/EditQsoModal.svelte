@@ -122,6 +122,25 @@
         form[field] = value;
     }
 
+    // Merge fresh DXCC/zone extras over the prior lookup's for the SAME callsign,
+    // keeping a prior non-empty value when this response omits it — so a partial
+    // same-callsign re-enrich never drops a correction an earlier lookup made
+    // (codex 88916515 [P2], mirroring the visible-field behaviour). enrichExtras is
+    // cleared on any callsign change, so a non-null prior is always this callsign's.
+    function mergeExtras(
+        fresh: Pick<QsoPatch, 'dxcc' | 'cqz' | 'ituz' | 'cont'>,
+        call: string
+    ): void {
+        const prior = enrichExtras?.call === call ? enrichExtras : null;
+        enrichExtras = {
+            call,
+            dxcc: fresh.dxcc || prior?.dxcc || '',
+            cqz: fresh.cqz || prior?.cqz || '',
+            ituz: fresh.ituz || prior?.ituz || '',
+            cont: fresh.cont || prior?.cont || '',
+        };
+    }
+
     // Apply a fresh lookup to the form: overwrite country/name, fill grid only when
     // empty (the on-air grid is authoritative), and stash the numeric/zone extras
     // tagged with the callsign that produced them. Returns false when the lookup
@@ -143,13 +162,15 @@
         writeField('country', country);
         writeField('name', name);
         if (form.gridsquare.trim() === '') writeField('gridsquare', st.gridsquare ?? '');
-        enrichExtras = {
-            call,
-            dxcc: st.dxcc ?? '',
-            cqz: st.cqz ?? co?.cq_zone ?? '',
-            ituz: st.ituz ?? co?.itu_zone ?? '',
-            cont: st.cont ?? co?.continent ?? '',
-        };
+        mergeExtras(
+            {
+                dxcc: st.dxcc ?? '',
+                cqz: st.cqz ?? co?.cq_zone ?? '',
+                ituz: st.ituz ?? co?.itu_zone ?? '',
+                cont: st.cont ?? co?.continent ?? '',
+            },
+            call
+        );
         return true;
     }
 
