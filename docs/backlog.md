@@ -21,7 +21,8 @@ on-air validation gate in W-0002.
 
 ## P1 — verified correctness, in order
 
-1. **W-0007 · OPEN — [Close the remaining verified P1 correctness findings](work/W-0007-close-verified-p1-correctness-findings.md).** In order: equal-version SM Cloud conflict, partial station baseline, concurrent QSO delete, and re-enrichment generation race.
+None open. W-0007's four findings (equal-version SM Cloud conflict, partial station baseline,
+concurrent QSO delete, re-enrichment generation race) are all closed (2026-08-22).
 
 ## P2 — next workstreams
 
