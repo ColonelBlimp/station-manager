@@ -114,7 +114,11 @@
     // replaced, so retractWrites can restore it on invalidation.
     function writeField(field: 'country' | 'name' | 'gridsquare', value: string): void {
         if (value === '') return;
-        wrote[field] = { written: value, prev: form[field] };
+        // Keep the ORIGINAL pre-enrichment value across successive same-callsign
+        // writes, so an eventual invalidation restores what was there before ANY
+        // lookup — not an intermediate lookup's value.
+        const prev = wrote[field] !== null ? wrote[field].prev : form[field];
+        wrote[field] = { written: value, prev };
         form[field] = value;
     }
 
@@ -128,7 +132,11 @@
         co: EnrichmentCountry | undefined,
         call: string
     ): boolean {
-        retractWrites();
+        // No retractWrites here: a re-apply for the SAME callsign must update only
+        // the fields the response carries and leave the rest (writeField skips an
+        // empty value), so a partial or empty subsequent response never erases a
+        // field the previous lookup filled. The retract belongs to invalidation
+        // (callsign change / unmount), not re-apply (codex dc15e188 [P2]).
         const country = st.country ?? co?.name ?? '';
         const name = st.name ?? '';
         if (country === '' && name === '') return false;

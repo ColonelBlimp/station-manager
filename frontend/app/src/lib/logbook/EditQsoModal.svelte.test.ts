@@ -188,4 +188,28 @@ describe('EditQsoModal re-enrichment generation safety (F-02)', () => {
         expect(input('Country').value).toBe('OrigCountry');
         expect(input('Name').value).toBe('OperatorName');
     });
+
+    // codex dc15e188 [P2]: re-enrich is only invalidated by a CALLSIGN change. A
+    // second lookup for the SAME callsign that returns partial data must UPDATE the
+    // fields it carries and LEAVE the rest — never retract a field the first lookup
+    // already filled (the retract belongs to invalidation, not re-apply).
+    it('a partial second lookup for the same callsign keeps the first lookup other fields', async () => {
+        const d1 = deferred<EnrichOutcome>();
+        const d2 = deferred<EnrichOutcome>();
+        mockEnrich.mockReturnValueOnce(d1.promise).mockReturnValueOnce(d2.promise);
+        render(EditQsoModal, { props: baseProps('A1AA') });
+
+        await fireEvent.click(reEnrichBtn());
+        d1.resolve(ok({ country: 'CountryA', name: 'NameA' }));
+        await flush();
+        expect(input('Country').value).toBe('CountryA');
+        expect(input('Name').value).toBe('NameA');
+
+        // Second re-enrich, SAME callsign, returns only a name.
+        await fireEvent.click(reEnrichBtn());
+        d2.resolve(ok({ name: 'NameA2' }));
+        await flush();
+        expect(input('Country').value).toBe('CountryA'); // NOT erased by the partial response
+        expect(input('Name').value).toBe('NameA2'); // the field it carried is updated
+    });
 });
