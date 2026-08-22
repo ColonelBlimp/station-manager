@@ -1,6 +1,6 @@
 # W-0007 — Close the remaining verified P1 correctness findings
 
-**Status:** In progress — PT-1, F-01, PT-2 done; F-02 next (final)
+**Status:** COMPLETE — all four findings closed 2026-08-22
 **Selected:** 2026-08-22
 **Outcome:** Four independently observable data-loss or data-corruption paths identified by the
 2026-08-20 audit reconciliation are closed in the fixed order below.
@@ -33,8 +33,14 @@ combine the fixes into one commit.
    the expected revision, mirroring the edit path's CAS) and returns the authoritative pre-delete
    image read inside the transaction; a still-live revision mismatch is `409 delete_conflict` (404
    stays for missing/tombstoned), and the audit `before_image` is the true last-live state.
-4. **F-02 — re-enrichment generation.** Enrichment for callsign A must never be persisted or
-   forwarded onto callsign B after the editable callsign changes while the lookup is in flight.
+4. **F-02 — re-enrichment generation.** ✅ **DONE (commit `dc15e188`, codex follow-ups `88916515`
+   + `11c4c94a`, 2026-08-22).** Enrichment for callsign A must never be persisted or forwarded onto
+   callsign B after the editable callsign changes while the lookup is in flight. *Resolved:*
+   `EditQsoModal.svelte`'s lookup now mirrors `operate/enrich.svelte.ts` — normalized identities, a
+   monotonic generation plus `AbortController`, independent generation-and-callsign checks before
+   applying, `enrichExtras` tagged with its callsign and re-checked in `buildPatch`, per-field write
+   provenance for retract/restore, and abort/invalidate on callsign change and unmount; a partial
+   same-callsign re-enrich keeps a prior lookup's visible and hidden values.
 
 ## Verification boundary
 

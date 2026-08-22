@@ -2,10 +2,10 @@
 
 Updated: 2026-08-22
 
-- **Goal:** Close the [W-0007](work/W-0007-close-verified-p1-correctness-findings.md) verified P1 correctness findings in the fixed order, each as its own TDD slice and commit.
-- **State:** W-0006 done. W-0007 nearly closed, three of four findings done: **PT-1** equal-version SM Cloud conflicts → idempotent no-op or `version_conflict` (`8bc0d9b3`); **F-01** partial station baseline → strict `logging_station` decoder (`961a7055`); **PT-2** concurrent QSO delete → revision-guarded delete with an in-tx authoritative preimage, a stale delete racing a concurrent edit returns `409 delete_conflict` (404 stays for missing/tombstoned) (`e4cdfbfe`).
-- **Next:** **F-02 — re-enrichment generation** (frontend, final W-0007 slice): give `EditQsoModal.svelte`'s lookup the generation + AbortController discipline of `operate/enrich.svelte.ts`, so a slow lookup for callsign A can never modify a form (or its save patch / hidden dxcc/zones) after it changes to B; check both generation and normalized callsign before applying, and tag `enrichExtras` with the callsign that produced them.
-- **Decisions not to revisit:** each W-0007 finding is a separate slice/commit; SM Cloud equal-version divergence is a conflict, not arrival-order; `docs/backlog.md` alone owns priority.
-- **Do not:** combine the four findings into one commit; weaken QSO/upload atomicity or the enrichment-never-blocks-logging rule; initiate RF/hardware actions; amend or push without operator direction.
-- **Relevant files:** [`W-0007`](work/W-0007-close-verified-p1-correctness-findings.md), [`persistence audit`](reviews/internal-persistence-transaction-audit.md), [`frontend review`](reviews/frontend-app-review.md), [`backlog`](backlog.md).
-- **Coordination:** SM Cloud integration tests need a disposable Postgres (`task db:pg:up`, `SMCLOUD_TEST_ALLOW_DEFAULT=1`); leave committing and pushing to the operator.
+- **Goal:** W-0007 is closed; return work selection to the ranked backlog and take whatever it owns next.
+- **State:** **W-0007 complete** — all four verified P1 correctness findings closed: PT-1 equal-version SM Cloud conflicts (`8bc0d9b3`); F-01 partial station baseline (`961a7055`); PT-2 concurrent QSO delete (`e4cdfbfe`, caller follow-up `0363ae0c`); F-02 re-enrichment generation race (`dc15e188`, codex follow-ups `88916515`/`11c4c94a`). Nothing pushed.
+- **Next:** Select further work only from [`backlog.md`](backlog.md), which alone owns priority. The last P1 is cleared; ranked next are the P0 on-air validation gate (W-0002, operator-initiated RF) and the P2 release gates — W-0001 durable notifications, W-0002 FT8 type-4 on-air validation.
+- **Decisions not to revisit:** each finding shipped as its own TDD slice/commit; `docs/backlog.md` alone owns priority; W-0007's rationale lives in its dossier and the persistence/frontend audits.
+- **Do not:** re-rank priority in this file; initiate RF/hardware actions without per-occasion operator agreement; amend commits; push without operator direction.
+- **Relevant files:** [`W-0007`](work/W-0007-close-verified-p1-correctness-findings.md), [`backlog`](backlog.md), [`persistence audit`](reviews/internal-persistence-transaction-audit.md), [`frontend review`](reviews/frontend-app-review.md).
+- **Coordination:** Leave committing and pushing to the operator; SM Cloud integration tests need a disposable Postgres (`task db:pg:up`, `SMCLOUD_TEST_ALLOW_DEFAULT=1`).
