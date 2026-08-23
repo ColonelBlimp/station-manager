@@ -2639,7 +2639,7 @@ func (s *Service) UploadQueueDepthWithContext(ctx context.Context, forwarderName
 	// scan is sub-millisecond at dogfood scale and stays well under the service timeout until
 	// the table reaches millions of rows. The correct optimisation is a partial index on
 	// (forwarder_name) WHERE status IN ('pending','failed'); it is DEFERRED because it is a
-	// schema migration that bumps the version three migration characterization tests pin to 7,
+	// schema migration that bumps the schema head the migration characterization tests pin to,
 	// and that churn is not justified for a diagnostic query until profiling shows it matters.
 	err = queries.Raw(`
 SELECT
