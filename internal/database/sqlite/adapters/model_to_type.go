@@ -153,6 +153,26 @@ func QsoHistoryModelToType(model *models.QsoHistory) (types.QsoHistory, error) {
 	}, nil
 }
 
+// OperatorEventModelToType converts a sqlite operator_event row to
+// types.OperatorEvent (ADR 0076, the W-0001 notification pilot). Detail is the
+// raw stored JSON (json_valid-checked on write), returned verbatim as
+// json.RawMessage.
+func OperatorEventModelToType(model *models.OperatorEvent) (types.OperatorEvent, error) {
+	const op errors.Op = "sqlite.adapters.OperatorEventModelToType"
+	if model == nil {
+		return types.OperatorEvent{}, errors.New(op).WithMsg(errMsgNilModel)
+	}
+	return types.OperatorEvent{
+		ID:         model.ID,
+		Category:   model.Category,
+		Kind:       model.Kind,
+		Severity:   model.Severity,
+		OccurredAt: model.OccurredAt,
+		Build:      model.Build,
+		Detail:     json.RawMessage(model.Detail),
+	}, nil
+}
+
 // QsoUploadModelToType converts a sqlite row to types.QsoUpload.
 //
 // The model has several nullable columns (created_at, modified_at,

@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/adapters"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite/models"
 	"github.com/ColonelBlimp/station-manager/internal/database/txutil"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 
 	"github.com/aarondl/sqlboiler/v4/boil"
+	"github.com/aarondl/sqlboiler/v4/queries/qm"
 	boiltypes "github.com/aarondl/sqlboiler/v4/types"
 )
 
@@ -104,4 +107,53 @@ WHERE  category = ?
 		return errors.New(op).WithErr(err).WithMsg("commit operator_event")
 	}
 	return nil
+}
+
+// FetchOperatorEventsByCategoryWithContext returns the newest `limit`
+// operator_event rows for a category, newest first (by id, the monotonic
+// arrival order). Read half of the W-0001 notification-history surface; it
+// performs no writes.
+//
+// limit must be in [1, operatorEventRetentionPerCategory]. A limit outside that
+// range is an operation-tagged error, never a silent clamp: a caller asking for
+// more than the ring can ever hold has a bug, and quietly returning fewer would
+// hide it.
+func (s *Service) FetchOperatorEventsByCategoryWithContext(ctx context.Context, category string, limit int) ([]types.OperatorEvent, error) {
+	const op errors.Op = "sqlite.Service.FetchOperatorEventsByCategoryWithContext"
+	if err := checkService(op, s); err != nil {
+		return nil, err
+	}
+	if category == "" {
+		return nil, errors.New(op).WithMsg("category is empty")
+	}
+	if limit < 1 || limit > operatorEventRetentionPerCategory {
+		return nil, errors.New(op).WithMsgf(
+			"limit %d out of range [1, %d]", limit, operatorEventRetentionPerCategory)
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	rows, err := models.OperatorEvents(
+		models.OperatorEventWhere.Category.EQ(category),
+		qm.OrderBy("id DESC"),
+		qm.Limit(limit),
+	).All(ctx, h)
+	if err != nil {
+		return nil, errors.New(op).WithErr(err).WithMsg("fetch operator_event by category")
+	}
+
+	out := make([]types.OperatorEvent, 0, len(rows))
+	for _, r := range rows {
+		ev, er := adapters.OperatorEventModelToType(r)
+		if er != nil {
+			return nil, errors.New(op).WithErr(er)
+		}
+		out = append(out, ev)
+	}
+	return out, nil
 }
