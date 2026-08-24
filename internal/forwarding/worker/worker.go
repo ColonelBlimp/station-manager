@@ -15,6 +15,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/ColonelBlimp/station-manager/internal/buildinfo"
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
@@ -846,6 +847,26 @@ func (w *Worker) markFailed(ctx context.Context, row types.QsoUpload, lastErr st
 		Attempts:      int(row.Attempts) + 1,
 		Reason:        lastErr,
 	})
+
+	// Durable operator-facing record of the terminal failure (W-0001 / ADR 0076).
+	// Explicit per-boundary write — never via a hub subscriber. Best-effort: it
+	// runs in its own store transaction (outside the QSO/upload writes) and a
+	// failure here must not change the disposition or suppress the hub event
+	// above, so the error is logged and swallowed. The typed detail carries only
+	// qso_id/forwarder/action/attempts — never the provider Reason in lastErr.
+	if recErr := w.db.RecordOperatorEvent(ctx, sqlite.OperatorEventInput{
+		Category: "notification",
+		Kind:     "forward.failed",
+		Severity: "warn",
+		Build:    buildinfo.Version,
+		Detail:   forwardFailedDetail(row, w.cfg.Name),
+	}); recErr != nil {
+		w.logger.ErrorWith().
+			Str("forwarder", w.cfg.Name).
+			Int64("upload_id", row.ID).
+			Err(recErr).
+			Msg("forwarder: record forward.failed notification failed (best-effort)")
+	}
 	return dispPersisted
 }
 
