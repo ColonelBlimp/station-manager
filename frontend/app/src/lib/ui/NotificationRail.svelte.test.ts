@@ -59,6 +59,32 @@ function stubNotifications(items: unknown[]): { calls: () => number } {
     return { calls: () => calls };
 }
 
+// deferredNotifications hands back a manual resolver per GET call, so a test can
+// choose the completion ORDER of concurrent requests — reproducing two opens
+// whose responses land out of order.
+function deferredNotifications(): { resolvers: Array<(items: unknown[]) => void> } {
+    const resolvers: Array<(items: unknown[]) => void> = [];
+    vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL) => {
+            if (urlOf(input).startsWith('/v1/notifications')) {
+                return new Promise<Response>((resolve) => {
+                    resolvers.push((items) =>
+                        resolve(
+                            new Response(JSON.stringify({ items }), {
+                                status: 200,
+                                headers: { 'Content-Type': 'application/json' },
+                            })
+                        )
+                    );
+                });
+            }
+            return Promise.reject(new Error(`unexpected fetch: ${urlOf(input)}`));
+        })
+    );
+    return { resolvers };
+}
+
 beforeEach(() => {
     resetToasts();
     closeNotifications();
@@ -176,5 +202,40 @@ describe('NotificationRail', () => {
         expect(screen.getByText('ADIF export failed')).toBeInTheDocument();
         // The content came from the durable GET, not from any toast.
         expect(toastsState.items).toHaveLength(0);
+    });
+
+    // A stale (older) open must never overwrite fresher history. If the operator
+    // opens, closes, and reopens before the first request lands, and the two
+    // requests finish out of order, only the LATEST open may write state —
+    // otherwise a just-recorded notification would vanish until the next reload.
+    it('a superseded (older) open cannot overwrite the latest history', async () => {
+        const { resolvers } = deferredNotifications();
+
+        // Open → first request dispatched, left pending.
+        ui.notificationsOpen = true;
+        render(NotificationRail);
+        await settle();
+        expect(resolvers).toHaveLength(1);
+
+        // Close then reopen before the first lands → a second request dispatched.
+        closeNotifications();
+        flushSync();
+        ui.notificationsOpen = true;
+        await settle();
+        expect(resolvers).toHaveLength(2);
+
+        // The LATEST open resolves first, with the newer two-event history.
+        resolvers[1]([daemonEvent, browserEvent]);
+        await settle();
+        expect(screen.getByText('Upload failed')).toBeInTheDocument();
+
+        // Then the superseded FIRST open lands late with a staler single-event set.
+        resolvers[0]([browserEvent]);
+        await settle();
+
+        // The stale response must not have clobbered the latest: the daemon event
+        // (absent from the stale set) is still shown.
+        expect(screen.getByText('Upload failed')).toBeInTheDocument();
+        expect(screen.getByText('ADIF export failed')).toBeInTheDocument();
     });
 });

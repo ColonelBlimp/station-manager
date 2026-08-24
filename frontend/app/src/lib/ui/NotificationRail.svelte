@@ -17,10 +17,19 @@
     let items = $state<NotificationEvent[]>([]);
     let closeButton = $state<HTMLButtonElement | null>(null);
 
+    // Guards against an out-of-order finish: closing and reopening before an
+    // earlier request lands leaves two requests in flight. Each open takes the
+    // next generation, and only the latest may write state — a stale (older)
+    // response can no longer clobber fresher history (which would hide a
+    // just-recorded notification until the next reload).
+    let loadGen = 0;
+
     async function load(): Promise<void> {
+        const gen = ++loadGen;
         loading = true;
         error = '';
         const outcome = await fetchNotifications(50);
+        if (gen !== loadGen) return; // superseded by a newer open
         if (outcome.kind === 'ok') {
             items = outcome.items;
         } else {
