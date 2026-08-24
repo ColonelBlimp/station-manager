@@ -176,6 +176,14 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 - **Errors:** 400 `invalid_json`/`missing_required_field`/`invalid_field_value`/`no_qsos`; 500 `fetch_failed`/`adif_compose_failed`.
 - **Notes:** Daemon rebuilds via `adif.ComposeToAdifString(FetchQsoByUUID…)` and archives a backup under `<workingDir>/exports/sent-adif/` (best-effort, same dir as email — backup-on-export, exclusive-create with a `-N` collision suffix). Unknown UUIDs are skipped with a warning. `uuids` is capped at 10000 per request (`invalid_field_value` 400). Does **not** stamp rows (only an email marks "forwarded"). Fetch loop shared with `email` via `Server.fetchSessionQsos`.
 
+### `POST /v1/notifications`
+- **Purpose:** Record a durable, browser-originated operator notification that must survive its transient toast and a page reload (W-0001 / ADR 0076). The only wired kind is a failed ADIF export (Export dialog).
+- **Gating:** Always-on route; same-origin/CSRF protected by the mux-wide gate like every unsafe method.
+- **Request:** Body `{"kind": "export.adif_failed" (req, allowlisted), "count": int (req, ≥1 — the UUIDs the browser actually submitted), "outcome": "no_qsos"|"invalid"|"server"|"network" (req)}`. Decoded **strictly** (`DisallowUnknownFields`): unknown keys (e.g. `message`, `reason`, `code`), non-integral/overflowing/non-positive counts, and any other kind/outcome are rejected. The client never supplies severity, time, or build.
+- **Response:** **204** No Content.
+- **Errors:** 400 `invalid_json`/`invalid_field_value`; 413 `body_too_large`; 500 `record_failed`.
+- **Notes:** The daemon stamps category `notification`, severity `error`, occurrence time, and the build version, and builds the canonical stored `detail` (`{count, outcome}`) server-side — the client's bytes are never persisted and the free-text export `message` is deliberately dropped. `count` is **not** capped at the export endpoint's 10000 (a 10001-QSO request may be exactly the invalid export being reported). Persisted via `RecordOperatorEvent` into the `operator_event` store (last 500 per category, oldest-first), outside any QSO transaction. The daemon-originated `forward.failed` kind is written directly at the forwarding boundary, not through this endpoint.
+
 ---
 
 ## Config & hardware

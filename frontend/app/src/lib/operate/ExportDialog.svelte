@@ -14,6 +14,7 @@
     import { mailer } from './mailer.svelte';
     import { sendSessionEmail } from '../api/session-email';
     import { exportSessionAdif, downloadTextFile } from '../api/session-export';
+    import { recordExportFailed } from '../api/notifications';
     import { toasts } from '../ui/toasts.svelte';
 
     let recipient = $state('');
@@ -78,6 +79,12 @@
                 closeExport();
             } else if (outcome.kind !== 'aborted') {
                 toasts.error(`Export failed: ${outcome.message}`);
+                // Durably record the failure so it survives the toast (W-0001).
+                // Fire-and-forget: recordExportFailed is best-effort and never
+                // throws, so a post failure cannot suppress the toast above. The
+                // count is the UUIDs actually submitted for export. A cancel
+                // ('aborted') is excluded — it is not a failure.
+                void recordExportFailed(uuids.length, outcome.kind);
             }
         } finally {
             downloading = false;
