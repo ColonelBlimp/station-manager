@@ -44,6 +44,7 @@ Open one workstream per active focus.
 3. **W-0009 · ADJACENT-WORK — [Maintainability audit residuals](work/W-0009-maintainability-audit-residuals.md).** Tighten verified package, build, test, and browser gaps without a broad sweep.
 4. **W-0015 · ADJACENT-WORK — [Logging observability residuals](work/W-0015-logging-observability-residuals.md).** Three low-urgency items remain after the logging audit closed.
 5. **W-0016 · TRIGGER-BOUND — [Sanitize PSK Reporter string fields](work/W-0016-sanitize-pskreporter-string-fields.md).** Await adjacent work or demonstrated harm, plus the operator's strip-versus-space decision.
+6. **W-0017 · ADJACENT-WORK — [De-flake CI-observed environment-sensitive tests](work/W-0017-deflake-bridge-sse-streaming-test.md).** Two sub-items of one flake class: the bridge streaming-startup barrier and the evidence concurrent-SQLite lock. Fix each deterministically (observable barrier; busy handling/retry), not with bigger timeouts.
 
 ## Designed or parked — not queued
 

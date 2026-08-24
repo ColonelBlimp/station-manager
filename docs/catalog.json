@@ -341,6 +341,15 @@
       "summary": "W-0016 trigger-bound acceptance criteria for removing control bytes from outbound PSK Reporter string fields."
     },
     {
+      "id": "work.w-0017",
+      "path": "docs/work/W-0017-deflake-bridge-sse-streaming-test.md",
+      "class": "work-item",
+      "audiences": ["contributor", "agent"],
+      "topics": ["testing", "flaky-test", "bridge", "evidence", "sqlite"],
+      "scopes": ["internal/bridge/**", "internal/evidence/**"],
+      "summary": "W-0017 de-flakes two CI-observed environment-sensitive tests — the bridge streaming-startup barrier and the evidence concurrent-SQLite lock — with a deterministic barrier and busy handling/retry rather than larger timeouts."
+    },
+    {
       "id": "work.dogfood-inbox",
       "path": "docs/dogfood-inbox.md",
       "class": "work-item",
