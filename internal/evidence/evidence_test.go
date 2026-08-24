@@ -80,7 +80,14 @@ func newRunning(t *testing.T, cfg Config) *Service {
 // openRaw opens a read-only second connection to the archive for assertions.
 func openRaw(t *testing.T, path string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", path)
+	// Match the production store's busy handling (see service.go): a bare
+	// connection has busy_timeout 0, so a write that contends with the running
+	// service for evidence.db's single WAL write lock fails immediately with
+	// SQLITE_BUSY instead of waiting. busy_timeout makes the contended write wait
+	// for the lock — the fix for the intermittent SQLITE_BUSY(5) flake in
+	// TestReceipt_DialContextRecordedAndSeparated (W-0017 sub-item B). Bounded
+	// busy handling, not an enlarged test deadline.
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(2000)")
 	if err != nil {
 		t.Fatalf("open raw: %v", err)
 	}
