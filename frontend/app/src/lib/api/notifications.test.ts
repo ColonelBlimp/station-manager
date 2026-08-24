@@ -1,5 +1,19 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { recordExportFailed } from './notifications';
+import { recordExportFailed, fetchNotifications } from './notifications';
+
+function stubJson(status: number, body: unknown): void {
+    vi.stubGlobal(
+        'fetch',
+        vi.fn(() =>
+            Promise.resolve(
+                new Response(JSON.stringify(body), {
+                    status,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            )
+        )
+    );
+}
 
 afterEach(() => {
     vi.unstubAllGlobals();
@@ -38,5 +52,50 @@ describe('recordExportFailed', () => {
         );
         // Must resolve, not reject — a post failure cannot suppress the caller's toast.
         await expect(recordExportFailed(1, 'network')).resolves.toBeUndefined();
+    });
+});
+
+describe('fetchNotifications', () => {
+    it('returns the items on a 200 envelope', async () => {
+        stubJson(200, {
+            items: [
+                {
+                    id: 2,
+                    category: 'notification',
+                    kind: 'forward.failed',
+                    severity: 'warn',
+                    occurred_at: '2026-08-24T06:00:00Z',
+                    build: 'v-test',
+                    detail: { qso_id: 7, forwarder: 'qrz', action: 'insert', attempts: 2 },
+                },
+            ],
+        });
+        const out = await fetchNotifications(50);
+        expect(out.kind).toBe('ok');
+        if (out.kind === 'ok') {
+            expect(out.items).toHaveLength(1);
+            expect(out.items[0].kind).toBe('forward.failed');
+        }
+    });
+
+    it('maps a transport failure to an error outcome', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => Promise.reject(new Error('connection refused')))
+        );
+        const out = await fetchNotifications();
+        expect(out.kind).toBe('error');
+    });
+
+    it('maps a daemon error status to an error outcome', async () => {
+        stubJson(500, { code: 'db_error', message: 'boom' });
+        const out = await fetchNotifications();
+        expect(out.kind).toBe('error');
+    });
+
+    it('rejects an unexpected (non-envelope) body', async () => {
+        stubJson(200, [{ id: 1 }]); // bare array, not {items:[]}
+        const out = await fetchNotifications();
+        expect(out.kind).toBe('error');
     });
 });

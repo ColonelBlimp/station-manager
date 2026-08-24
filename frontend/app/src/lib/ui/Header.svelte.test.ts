@@ -10,6 +10,7 @@ import { setStationInfo, setLogbookCount, _resetStationForTests } from '../opera
 import { rig } from '../operate/rig.svelte';
 import { router } from '../router.svelte';
 import { isVisible, toggleTile } from '../operate/layout.svelte';
+import { ui, closeNotifications } from './state.svelte';
 
 beforeEach(() => {
     _resetStationForTests();
@@ -87,8 +88,10 @@ describe('Header CAT chip vs FT8', () => {
 // can't see).
 describe('Header CAT chip → Rig Control panel', () => {
     async function clickChip(): Promise<void> {
-        // On Operate the chip is the only button in the header.
-        await fireEvent.click(screen.getByRole('button'));
+        // The header now carries a second control (the notification-history
+        // button), so target the chip by its unique hover title rather than the
+        // sole-button proxy.
+        await fireEvent.click(screen.getByTitle('Waiting for confirmation'));
         flushSync();
     }
 
@@ -167,11 +170,14 @@ describe('Header CAT chip → Rig Control panel', () => {
         expect(isVisible('rig')).toBe(true);
     });
 
-    // H2 — off Operate it must not present itself as a control at all.
+    // H2 — off Operate it must not present itself as a control at all. Asserted
+    // on the chip element itself (a plain readout div here): the header's
+    // notification-history button is a separate, always-present control, so a
+    // blanket "no button in the header" check would no longer pin the chip.
     it('from another view: the chip is not a button', () => {
         router.view = 'logbook';
         render(Header);
-        expect(screen.queryByRole('button')).toBeNull();
+        expect(screen.getByTitle('Waiting for confirmation').tagName).not.toBe('BUTTON');
     });
 
     // H2b — and on Operate it still is one, so H2 cannot be satisfied by
@@ -179,6 +185,27 @@ describe('Header CAT chip → Rig Control panel', () => {
     it('on Operate: the chip is still a button', () => {
         router.view = 'operate';
         render(Header);
-        expect(screen.getByRole('button')).toBeInTheDocument();
+        expect(screen.getByTitle('Waiting for confirmation').tagName).toBe('BUTTON');
+    });
+});
+
+// The notification-history rail (W-0001) is opened from a plain header button —
+// present in every view, no unread badge. This pins the wiring from the header
+// affordance to the shell-level open state the rail reads.
+describe('Header notification-history button', () => {
+    beforeEach(() => {
+        closeNotifications();
+    });
+
+    it('exposes a notification-history control that opens the rail', async () => {
+        router.view = 'operate';
+        render(Header);
+        expect(ui.notificationsOpen).toBe(false);
+
+        // aria-label gives it a stable accessible name, distinct from the rig
+        // chip button (whose name is its freq/mode/band content).
+        await fireEvent.click(screen.getByRole('button', { name: 'Notification history' }));
+        flushSync();
+        expect(ui.notificationsOpen).toBe(true);
     });
 });

@@ -6,9 +6,11 @@ import (
 	stderrs "errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
+	"github.com/ColonelBlimp/station-manager/internal/types"
 )
 
 // recordNotificationRequest is the browser's allowlisted, typed body for a
@@ -86,4 +88,37 @@ func (s *Server) handleRecordNotification(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleListNotifications returns the newest notification-category operator
+// events, newest first — the durable history the SPA rail reads so a failure
+// survives its transient toast and a page reload (W-0001 / ADR 0076).
+//
+// ?limit=N (default 50) bounds the window and must be within the storage
+// layer's [1,500] per-category retention ceiling.
+func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request) {
+	const op errors.Op = "api.handleListNotifications"
+
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 500 {
+			s.writeError(w, http.StatusBadRequest, "invalid_field_value",
+				"limit must be an integer in [1, 500]", op)
+			return
+		}
+		limit = n
+	}
+
+	events, err := s.db.FetchOperatorEventsByCategoryWithContext(r.Context(), "notification", limit)
+	if err != nil {
+		s.writeServerError(w, op, err, "db_error", "database operation failed")
+		return
+	}
+	if events == nil {
+		events = []types.OperatorEvent{}
+	}
+	s.writeJSON(w, http.StatusOK, struct {
+		Items []types.OperatorEvent `json:"items"`
+	}{Items: events})
 }

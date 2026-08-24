@@ -31,7 +31,18 @@ export const ui = $state({
     theme: initialTheme(),
     navMode: initialNav(),
     utilMode: initialUtil(),
+    // The notification-history slide-over. Not persisted — it's an ambient
+    // glance surface, opened on demand and re-fetched fresh each time (W-0001).
+    notificationsOpen: false,
 });
+
+export function toggleNotifications(): void {
+    ui.notificationsOpen = !ui.notificationsOpen;
+}
+
+export function closeNotifications(): void {
+    ui.notificationsOpen = false;
+}
 
 export function toggleTheme(): void {
     ui.theme = ui.theme === 'dark' ? 'light' : 'dark';

@@ -5,6 +5,7 @@
     import DriveAlarmBanner from './lib/ui/DriveAlarmBanner.svelte';
     import DriveMonitorNotice from './lib/ui/DriveMonitorNotice.svelte';
     import Toasts from './lib/ui/Toasts.svelte';
+    import NotificationRail from './lib/ui/NotificationRail.svelte';
     import SetupCard from './lib/ui/SetupCard.svelte';
     import { setup } from './lib/setup.svelte';
     import Operate from './lib/operate/Operate.svelte';
@@ -92,6 +93,10 @@
     <!-- System messages (info/warn/error) — single mount, fixed overlay, never
          reflows the working surface. Pushed via lib/ui/toasts.svelte.ts. -->
     <Toasts />
+
+    <!-- Durable notification history (W-0001) — a global slide-over opened from
+         the header; overlays the shell, below the toast layer. -->
+    <NotificationRail />
 
     <div class="content-wrap flex h-screen flex-col pl-[var(--sidebar-w)]">
         <Header />

@@ -250,6 +250,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux, cfg config.Config, logger *l
 	// an allowlisted, typed failure event that must survive toast expiry. Any
 	// POST here is same-origin/CSRF protected by the mux-wide gate.
 	mux.HandleFunc("POST /v1/notifications", s.handleRecordNotification)
+	mux.HandleFunc("GET /v1/notifications", s.handleListNotifications)
 
 	// Event stream (SSE firehose — see docs/v2-design/api.md §4.5).
 	// Wrapped with its own subscriber cap (NOT counted against the

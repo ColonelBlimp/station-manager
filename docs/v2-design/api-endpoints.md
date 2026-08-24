@@ -176,6 +176,14 @@ unregistered, the path is a **404** (there is no root SPA catch-all as of 2026-0
 - **Errors:** 400 `invalid_json`/`missing_required_field`/`invalid_field_value`/`no_qsos`; 500 `fetch_failed`/`adif_compose_failed`.
 - **Notes:** Daemon rebuilds via `adif.ComposeToAdifString(FetchQsoByUUID…)` and archives a backup under `<workingDir>/exports/sent-adif/` (best-effort, same dir as email — backup-on-export, exclusive-create with a `-N` collision suffix). Unknown UUIDs are skipped with a warning. `uuids` is capped at 10000 per request (`invalid_field_value` 400). Does **not** stamp rows (only an email marks "forwarded"). Fetch loop shared with `email` via `Server.fetchSessionQsos`.
 
+### `GET /v1/notifications`
+- **Purpose:** Read the durable operator notification history — the newest events the SPA rail shows so a failure survives its transient toast and a page reload (W-0001 / ADR 0076).
+- **Gating:** Always-on.
+- **Request:** Query `?limit=N` (optional; default 50) — must be an integer in `[1,500]` (the per-category retention ceiling).
+- **Response:** **200** `{"items": [OperatorEvent…]}`, newest first. Each `OperatorEvent` = `{id, category, kind, severity, occurred_at (RFC3339), build, detail (embedded JSON object)}`. Empty history is `{"items": []}` (never null).
+- **Errors:** 400 `invalid_field_value` (limit non-integral or out of range); 500 `db_error`.
+- **Notes:** Reads the `notification` category via `FetchOperatorEventsByCategoryWithContext`; `detail` is the stored typed metadata verbatim (never raw provider text). Only the `notification` category is exposed today.
+
 ### `POST /v1/notifications`
 - **Purpose:** Record a durable, browser-originated operator notification that must survive its transient toast and a page reload (W-0001 / ADR 0076). The only wired kind is a failed ADIF export (Export dialog).
 - **Gating:** Always-on route; same-origin/CSRF protected by the mux-wide gate like every unsafe method.

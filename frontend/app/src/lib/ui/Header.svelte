@@ -14,6 +14,7 @@
     import { station } from '../operate/station.svelte';
     import { toggleTile } from '../operate/layout.svelte';
     import { router } from '../router.svelte';
+    import { toggleNotifications } from './state.svelte';
     import SessionTimer from './SessionTimer.svelte';
 
     // Thousands-grouped QSO count (e.g. "1,234") beside the logbook name.
@@ -140,4 +141,28 @@
             {@render chipBody()}
         </div>
     {/if}
+
+    <!-- Notification history — durable counterpart to the transient toasts
+         (W-0001). Plain icon, no unread badge. -->
+    <button
+        class="flex cursor-pointer items-center rounded-md p-1.5 text-muted hover:bg-surface-muted hover:text-ink"
+        title="Notification history"
+        aria-label="Notification history"
+        onclick={toggleNotifications}
+    >
+        <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            aria-hidden="true"
+            class="size-5"
+        >
+            <path
+                d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM3.75 12h.007v.008H3.75V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm-.375 5.25h.007v.008H3.75v-.008Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            />
+        </svg>
+    </button>
 </header>
