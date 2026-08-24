@@ -78,6 +78,9 @@ func TestRecordNotification_StrictRejectionWritesNothing(t *testing.T) {
 		{"count non-integral", `{"kind":"export.adif_failed","count":2.5,"outcome":"server"}`},
 		{"count overflow", `{"kind":"export.adif_failed","count":99999999999999999999,"outcome":"server"}`},
 		{"malformed json", `{"kind":`},
+		{"trailing bracket", `{"kind":"export.adif_failed","count":5,"outcome":"server"}]`},
+		{"trailing object", `{"kind":"export.adif_failed","count":5,"outcome":"server"}{"x":1}`},
+		{"trailing garbage", `{"kind":"export.adif_failed","count":5,"outcome":"server"} nope`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

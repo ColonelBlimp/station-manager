@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	stderrs "errors"
+	"io"
 	"net/http"
 
 	"github.com/ColonelBlimp/station-manager/internal/database/sqlite"
@@ -45,7 +47,10 @@ func (s *Server) handleRecordNotification(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusBadRequest, "invalid_json", "failed to parse request body", op)
 		return
 	}
-	if dec.More() {
+	// Reject any trailing tokens. dec.More() only reports another array/object
+	// ELEMENT, so a stray delimiter (e.g. a trailing ']') slips past it; a second
+	// decode that must reach io.EOF rejects every trailing byte instead.
+	if err := dec.Decode(new(json.RawMessage)); !stderrs.Is(err, io.EOF) {
 		s.writeError(w, http.StatusBadRequest, "invalid_json", "unexpected trailing data after JSON body", op)
 		return
 	}
