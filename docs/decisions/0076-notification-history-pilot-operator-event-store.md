@@ -9,7 +9,7 @@ date: 2026-08-22
 
 ## Context
 
-[W-0001](../work/W-0001-durable-notifications.md) closes the one remaining ship-gate
+[W-0001](../archive/work/W-0001-durable-notifications.md) closes the one remaining ship-gate
 notification-coverage gap: a toast (`frontend/app/src/lib/ui/toasts.svelte.ts` — five deep, TTL
 4/6/8 s, drop-oldest) that fires while the operator is looking at the rig is gone with no trace
 anywhere — including browser-only failures like ADIF export.
@@ -108,6 +108,6 @@ Ratified 2026-08-22.
   transient toast surface this makes durable).
 - **Out of scope**, per ADR 0061 and [ADR 0040](0040-sm-cloud-p1-backup-restore.md): the SM Cloud
   tenant-scoped store and any internet-/WireGuard-facing admin log surface.
-- **Work item:** [`W-0001`](../work/W-0001-durable-notifications.md). The `operator_event` schema,
+- **Work item:** [`W-0001`](../archive/work/W-0001-durable-notifications.md). The `operator_event` schema,
   the browser ingestion endpoint, the daemon-boundary producers, the retrieval route + SPA rail, and
   their TDD land under it; this ADR records only the settled policy.

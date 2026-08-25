@@ -28,14 +28,13 @@ concurrent QSO delete, re-enrichment generation race) are all closed (2026-08-22
 
 Open one workstream per active focus.
 
-1. **W-0001 · release gate · OPEN — [Durable operator notification history](work/W-0001-durable-notifications.md).** Preserve selected structured operator facts after toast expiry and page reload without mirroring `smd.log`.
-2. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
-3. **W-0005 · OPEN — [Operator-triggered forwarder queue clearing](work/W-0005-operator-triggered-forwarder-queue-clearing.md).** Add the API/UI and settle enabled-forwarder in-flight coordination around the shipped discard primitive.
-4. **W-0003 · post-ship · OPEN — [Complete the app shell](work/W-0003-retire-legacy-operator-spas.md).** Finish canonical root/deep-link ownership and route-level lazy loading after legacy SPA retirement.
-5. **W-0004 · post-ship · OPEN — [Complete app UI cohesion](work/W-0004-complete-app-ui-cohesion.md).** Replace stale build identity and settle the remaining occupancy/palette decisions.
-6. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
-7. **W-0010 · OPEN — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation.
-8. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0001/W-0003/W-0004.
+1. **W-0002 · validation gate · OPEN — [Validate the reduced FT8 type-4 ladder on air](work/W-0002-ft8-type4-on-air-validation.md).** Confirm one operator-initiated completed exchange with a real nonstandard station; RF action always requires agreement for that occasion.
+2. **W-0005 · OPEN — [Operator-triggered forwarder queue clearing](work/W-0005-operator-triggered-forwarder-queue-clearing.md).** Add the API/UI and settle enabled-forwarder in-flight coordination around the shipped discard primitive.
+3. **W-0003 · post-ship · OPEN — [Complete the app shell](work/W-0003-retire-legacy-operator-spas.md).** Finish canonical root/deep-link ownership and route-level lazy loading after legacy SPA retirement.
+4. **W-0004 · post-ship · OPEN — [Complete app UI cohesion](work/W-0004-complete-app-ui-cohesion.md).** Replace stale build identity and settle the remaining occupancy/palette decisions.
+5. **W-0008 · OPEN — [Harden audited contract boundaries](work/W-0008-harden-audited-contract-boundaries.md).** Ordered persistence, configuration, API-wire, and frontend-wire correctness slices.
+6. **W-0010 · OPEN — [Improve forwarding, data, and synchronization reliability](work/W-0010-forwarding-data-and-sync-reliability.md).** Token rotation, duplicate-QSO resolution, legal bulk backfill, idempotent outcomes, and bounded reconciliation.
+7. **W-0012 · OPEN — [Complete routed operator-experience follow-ups](work/W-0012-operator-experience-followups.md).** UI, map, onboarding, and diagnostic improvements not owned by W-0003/W-0004.
 
 ## P3 — deferred or trigger-bound
 

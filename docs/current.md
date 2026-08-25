@@ -1,11 +1,11 @@
 # Current work
 
-Updated: 2026-08-24
+Updated: 2026-08-25
 
-- **Goal:** Implement W-0001 (durable operator notification history) under [`ADR 0076`](decisions/0076-notification-history-pilot-operator-event-store.md) — the notification-first pilot of ADR 0061's local `operator_event` store.
-- **State:** W-0001 implementation complete; producing boundaries, durable store, retrieval endpoint, reachable rail, and reload/fresh-mount proofs are done. Pushed & CI-green baseline `06326bdb` (schema, persistence, retrieval, producers A+B); the retrieval-endpoint + rail closure slice is LOCAL. Lesson: a schema-head bump also breaks `handler_version_test` — run whole-tree tests.
-- **Next:** Commit, clean-room review, and CI; then closure sign-off.
-- **Decisions not to revisit:** ADR 0076 settles the pilot policy (two durable kinds, typed bounded metadata, daemon-stamped severity/time/build, no ack); `docs/backlog.md` alone owns priority; recording is per-boundary, not hub- or toast-driven.
-- **Do not:** archive W-0001 or drop it from `docs/backlog.md` before closure sign-off (only after this commit passes review + CI); persist `Reason` or any raw provider text; add a generic hub subscriber or toast-level recorder; add acknowledgement (`acknowledged_at`/mark-read/unread); stage `.idea/sqldialects.xml`; re-rank priority here; initiate RF/hardware without per-occasion agreement; amend or push without operator direction.
-- **Relevant files:** [`W-0001`](work/W-0001-durable-notifications.md), [`ADR 0076`](decisions/0076-notification-history-pilot-operator-event-store.md), [`ADR 0061`](decisions/0061-consolidated-operator-event-log.md), [`backlog`](backlog.md).
+- **Goal:** No workstream selected. W-0001 (durable operator notification history) closed 2026-08-25 and archived to [`archive/work/`](archive/work/W-0001-durable-notifications.md). Pick the next item from [`docs/backlog.md`](backlog.md); the operator owns priority.
+- **State:** W-0001 shipped and CI-green on `main` (`e7237b3a`): both durable kinds, the `operator_event` store, `GET /v1/notifications`, and the header notification-history rail, with reload/fresh-mount proofs. Follow-up `dc0f7184` (race-free evidence-flake test) pushed; its CI run is the last confirmation.
+- **Next:** Operator selects the next workstream. Backlog top is W-0002 (FT8 type-4 on-air validation — operator-initiated RF), then W-0005 (forwarder queue clearing). [`W-0017`](work/W-0017-deflake-bridge-sse-streaming-test.md) stays open: evidence `SQLITE_BUSY` fixed, but **bridge sub-item A (streaming-startup barrier) is unfixed and latent** — fix on next recurrence or when touching `internal/bridge`.
+- **Decisions not to revisit:** ADR 0076 settles the notification pilot (two durable kinds, typed bounded metadata, daemon-stamped severity/time/build, no ack); `docs/backlog.md` alone owns priority.
+- **Do not:** re-open W-0001 to add acknowledgement/unread or new kinds without a fresh dossier; raise a CI flake's timeout instead of making it deterministic (W-0017); initiate RF/hardware without per-occasion agreement; amend or push without operator direction.
+- **Relevant files:** [`backlog`](backlog.md), [`W-0017`](work/W-0017-deflake-bridge-sse-streaming-test.md), [`W-0001` archived](archive/work/W-0001-durable-notifications.md).
 - **Coordination:** Leave committing and pushing to the operator; every non-Markdown commit draws a codex clean-room review to triage.

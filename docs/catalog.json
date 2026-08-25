@@ -140,15 +140,6 @@
       "summary": "Definitive compact ranking of stable-ID work dossiers; priorities and statuses live here, while evidence stays in each dossier."
     },
     {
-      "id": "work.w-0001",
-      "path": "docs/work/W-0001-durable-notifications.md",
-      "class": "work-item",
-      "audiences": ["contributor", "agent"],
-      "topics": ["notification-history", "operator-events"],
-      "scopes": ["frontend/app/src/lib/ui/**", "frontend/app/src/lib/operate/ExportDialog.svelte"],
-      "summary": "W-0001 evidence, decisions, and acceptance criteria for durable operator notification history."
-    },
-    {
       "id": "work.w-0002",
       "path": "docs/work/W-0002-ft8-type4-on-air-validation.md",
       "class": "work-item",

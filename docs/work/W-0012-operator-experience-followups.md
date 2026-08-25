@@ -7,7 +7,7 @@ not compete with the app-shell, notification-history, or UI-cohesion dossiers.
 
 ## Routed outcomes
 
-- [W-0001](W-0001-durable-notifications.md) owns durable notification history; ADR 0060 owns alert
+- [W-0001](../archive/work/W-0001-durable-notifications.md) owns durable notification history; ADR 0060 owns alert
   placement and ADR 0061 the proposed structured event store. Never expose `smd.log` as the event
   history.
 - [W-0003](W-0003-retire-legacy-operator-spas.md) owns canonical app routing and remaining shell
