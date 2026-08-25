@@ -2548,6 +2548,48 @@ func (s *Service) DiscardQueuedUploadsForForwarderWithContext(ctx context.Contex
 	return n, nil
 }
 
+// DiscardClearableUploadsForForwarderWithContext deletes a single forwarder's
+// operator-clearable backlog — its `pending` and `failed` rows only — and leaves
+// `in_progress` and `uploaded` rows untouched. It is the operator-triggered
+// "drop the remaining backlog, finish the currently claimed batch" clear
+// (W-0005), distinct from DiscardQueuedUploadsForForwarderWithContext (the
+// startup disabled-forwarder discard, which also removes `in_progress`).
+//
+// Excluding `in_progress` makes the clear race-free against a live worker with no
+// coordination: ClaimPendingUploads moves a whole batch pending→in_progress in one
+// atomic UPDATE, so `in_progress` is exactly the batch the worker is processing;
+// leaving it alone lets those rows complete normally while the not-yet-claimed
+// backlog is dropped. `uploaded` rows are preserved because they carry the remote
+// upstream_id. Returns the number of rows discarded.
+func (s *Service) DiscardClearableUploadsForForwarderWithContext(ctx context.Context, forwarderName string) (int64, error) {
+	const op errors.Op = "sqlite.Service.DiscardClearableUploadsForForwarderWithContext"
+	if err := checkService(op, s); err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(forwarderName) == "" {
+		return 0, errors.New(op).WithMsg("forwarderName is empty")
+	}
+
+	h, err := s.getOpenHandle(op)
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := s.ensureCtxTimeout(ctx)
+	defer cancel()
+
+	n, err := models.QsoUploads(
+		models.QsoUploadWhere.ForwarderName.EQ(forwarderName),
+		models.QsoUploadWhere.Status.IN([]string{
+			status.Pending.String(),
+			status.Failed.String(),
+		}),
+	).DeleteAll(ctx, h)
+	if err != nil {
+		return 0, errors.New(op).WithErr(err).WithMsg("discard clearable uploads for forwarder")
+	}
+	return n, nil
+}
+
 // FetchUploadsByQsoIDWithContext returns every qso_upload row for the
 // given QSO, ordered by (forwarder_name, action), so the output is
 // stable across calls. Drives the GET /v1/qso/:id/uploads endpoint.

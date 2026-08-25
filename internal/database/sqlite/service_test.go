@@ -13,6 +13,7 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/enums/source"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/action"
 	"github.com/ColonelBlimp/station-manager/internal/enums/upload/origin"
+	"github.com/ColonelBlimp/station-manager/internal/enums/upload/status"
 	"github.com/ColonelBlimp/station-manager/internal/errors"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
@@ -1777,6 +1778,119 @@ func TestDiscardQueuedUploadsForForwarder(t *testing.T) {
 	}
 	if rows, _ := svc.FetchUploadsByQsoIDWithContext(ctx, qOther); len(rows) != 1 {
 		t.Errorf("clublog row should be untouched, got %d rows", len(rows))
+	}
+}
+
+// uploadStatus returns the number of qso_upload rows for a QSO and the first
+// row's status, so a test can assert both "gone" and "survived as X" cheaply.
+func uploadStatus(t *testing.T, svc *Service, qsoID int64) (int, string) {
+	t.Helper()
+	rows, err := svc.FetchUploadsByQsoIDWithContext(context.Background(), qsoID)
+	if err != nil {
+		t.Fatalf("fetch uploads for qso %d: %v", qsoID, err)
+	}
+	if len(rows) == 0 {
+		return 0, ""
+	}
+	return len(rows), rows[0].Status
+}
+
+// seedUploadInState enqueues an upload for a fresh QSO on forwarder `fwd` and
+// drives it to `st`, returning the QSO id. For any non-pending state it claims
+// exactly one pending row (Pending→InProgress) and then marks it — so a
+// forwarder's pending rows MUST be seeded LAST, else the claim grabs more than
+// one and the helper fails loudly.
+func seedUploadInState(t *testing.T, svc *Service, lbID int64, fwd, call, tm string, st status.Status) int64 {
+	t.Helper()
+	q, err := svc.InsertQso(validTestQso(lbID, call, "20m", "SSB", "20250508", tm))
+	if err != nil {
+		t.Fatalf("insert qso %s: %v", call, err)
+	}
+	enqueueUpload(t, svc, q, fwd, fwd, action.Insert)
+	if st == status.Pending {
+		return q
+	}
+	claimed, err := svc.ClaimPendingUploadsWithContext(context.Background(), fwd, 10)
+	if err != nil {
+		t.Fatalf("claim %s/%s: %v", fwd, call, err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claim %s/%s: got %d rows, want 1 — seed a forwarder's pending rows LAST", fwd, call, len(claimed))
+	}
+	switch st {
+	case status.InProgress:
+		// leave the claimed row in_progress, unmarked (the in-flight batch)
+	case status.Failed:
+		if err := svc.MarkUploadFailedWithContext(context.Background(), claimed[0].ID, "seed failure"); err != nil {
+			t.Fatalf("mark failed: %v", err)
+		}
+	case status.Uploaded:
+		if err := svc.MarkUploadSuccessWithContext(context.Background(), claimed[0].ID, "logid-"+call); err != nil {
+			t.Fatalf("mark uploaded: %v", err)
+		}
+	default:
+		t.Fatalf("seedUploadInState: unsupported state %q", st)
+	}
+	return q
+}
+
+// TestDiscardClearableUploadsForForwarder proves the operator-triggered clear
+// (W-0005) removes only a NAMED forwarder's clearable backlog (pending + failed)
+// and preserves both its in-flight batch (in_progress) and its upload history
+// (uploaded), and touches no other forwarder. Each nearest-confusable outcome —
+// deleting the in-flight batch, losing upload history, or clearing every
+// forwarder when one was named — fails a distinct assertion below.
+func TestDiscardClearableUploadsForForwarder(t *testing.T) {
+	svc := testService(t)
+	lbID, _ := svc.InsertLogbook(types.Logbook{Name: "L", Callsign: "G4ABC"})
+	ctx := context.Background()
+
+	// qrz: one row in each state. Pending seeded LAST (a claim grabs all pending).
+	qU := seedUploadInState(t, svc, lbID, "qrz", "G3XYZ", "0900", status.Uploaded)
+	qF := seedUploadInState(t, svc, lbID, "qrz", "EA1B", "0930", status.Failed)
+	qI := seedUploadInState(t, svc, lbID, "qrz", "M0ABC", "0945", status.InProgress)
+	qP := seedUploadInState(t, svc, lbID, "qrz", "M0CMC", "0845", status.Pending)
+
+	// clublog: the same four; a qrz clear must touch none of them.
+	cU := seedUploadInState(t, svc, lbID, "clublog", "F5ABC", "0915", status.Uploaded)
+	cF := seedUploadInState(t, svc, lbID, "clublog", "DL1X", "0920", status.Failed)
+	cI := seedUploadInState(t, svc, lbID, "clublog", "PA3Y", "0925", status.InProgress)
+	cP := seedUploadInState(t, svc, lbID, "clublog", "ON4Z", "0935", status.Pending)
+
+	discarded, err := svc.DiscardClearableUploadsForForwarderWithContext(ctx, "qrz")
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if discarded != 2 {
+		t.Fatalf("discarded = %d, want 2 (qrz pending + failed only)", discarded)
+	}
+
+	// qrz clearable rows are gone.
+	if n, _ := uploadStatus(t, svc, qP); n != 0 {
+		t.Errorf("qrz pending not discarded: %d row(s) remain", n)
+	}
+	if n, _ := uploadStatus(t, svc, qF); n != 0 {
+		t.Errorf("qrz failed not discarded: %d row(s) remain", n)
+	}
+	// qrz in-flight + history survive — the load-bearing new guarantee.
+	if n, s := uploadStatus(t, svc, qI); n != 1 || s != "in_progress" {
+		t.Errorf("qrz in-flight row must survive the clear: got %d row(s) status %q, want 1 in_progress", n, s)
+	}
+	if n, s := uploadStatus(t, svc, qU); n != 1 || s != "uploaded" {
+		t.Errorf("qrz upload history must survive: got %d row(s) status %q, want 1 uploaded", n, s)
+	}
+	// clublog is entirely untouched, including its clearable rows.
+	if n, s := uploadStatus(t, svc, cP); n != 1 || s != "pending" {
+		t.Errorf("clublog pending must be untouched: got %d/%q", n, s)
+	}
+	if n, s := uploadStatus(t, svc, cF); n != 1 || s != "failed" {
+		t.Errorf("clublog failed must be untouched: got %d/%q", n, s)
+	}
+	if n, s := uploadStatus(t, svc, cI); n != 1 || s != "in_progress" {
+		t.Errorf("clublog in-flight must be untouched: got %d/%q", n, s)
+	}
+	if n, s := uploadStatus(t, svc, cU); n != 1 || s != "uploaded" {
+		t.Errorf("clublog history must be untouched: got %d/%q", n, s)
 	}
 }
 
