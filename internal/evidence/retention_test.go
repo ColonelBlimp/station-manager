@@ -83,10 +83,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -95,6 +95,8 @@ import (
 	"github.com/ColonelBlimp/station-manager/internal/cloud/evidencewire"
 	"github.com/ColonelBlimp/station-manager/internal/logging"
 	"github.com/ColonelBlimp/station-manager/internal/types"
+	moderncsqlite "modernc.org/sqlite"
+	moderncsqlitelib "modernc.org/sqlite/lib"
 )
 
 // ackedArchive builds an archive whose rows are all CLOUD-PRESENT: boot 1
@@ -529,16 +531,36 @@ func TestPragmas_ApplyToEveryPooledConnection(t *testing.T) {
 	}
 }
 
-// TestOpenRawWrite_WaitsOutHeldWriteLock is the deterministic core of the CI
-// flake in TestReceipt_DialContextRecordedAndSeparated (W-0017 sub-item B): while
-// one connection holds evidence.db's single WAL write lock, a raw connection with
-// no busy handling fails immediately with SQLITE_BUSY, whereas one with a
-// busy_timeout waits the lock out and succeeds once it is released. The contention
-// is created deterministically — BEGIN IMMEDIATE takes the write lock up front, so
-// it is provably held before the contended write is attempted — and the wait is
-// bounded by ctx, with no sleep and no enlarged deadline standing in for the
-// synchronization. Reverting openRaw's busy handling turns the contended write
-// back into an immediate SQLITE_BUSY and reddens this test.
+// isSQLiteBusy reports whether err is a SQLite busy/locked failure — the immediate
+// "database is locked (5) (SQLITE_BUSY)" a connection without busy handling
+// returns under write-lock contention. Mirrors the typed-first, string-fallback
+// pattern in internal/database/sqlite (the daemon's registered driver is
+// modernc.org/sqlite, so that is the type errors unwrap to).
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	var se *moderncsqlite.Error
+	if errors.As(err, &se) {
+		return se.Code() == moderncsqlitelib.SQLITE_BUSY ||
+			se.Code() == moderncsqlitelib.SQLITE_BUSY_SNAPSHOT
+	}
+	return strings.Contains(err.Error(), "SQLITE_BUSY")
+}
+
+// TestOpenRawWrite_WaitsOutHeldWriteLock is the deterministic core of the CI flake
+// in TestReceipt_DialContextRecordedAndSeparated (W-0017 sub-item B): while one
+// connection holds evidence.db's single WAL write lock, a raw connection with no
+// busy handling fails IMMEDIATELY with SQLITE_BUSY, whereas one with a busy_timeout
+// waits the lock out.
+//
+// The test is fully synchronous, so the contention is guaranteed by construction —
+// BEGIN IMMEDIATE takes the write lock up front and nothing releases it before the
+// contended write is attempted, so there is no goroutine scheduling to race. The
+// two behaviours are told apart by the ERROR ALONE: with busy handling the write
+// blocks and is bounded (ctx fires before busy_timeout does) so it returns a
+// deadline error, never SQLITE_BUSY; without it the very same write fails fast with
+// SQLITE_BUSY. Reverting openRaw's busy handling reddens this test.
 func TestOpenRawWrite_WaitsOutHeldWriteLock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "evidence.db")
 
@@ -550,9 +572,9 @@ func TestOpenRawWrite_WaitsOutHeldWriteLock(t *testing.T) {
 		t.Fatalf("create table: %v", err)
 	}
 
-	// Hold the single WAL write lock on a dedicated connection until we release
-	// it. BEGIN IMMEDIATE acquires the write lock up front (no read-then-upgrade),
-	// so the contention below is guaranteed, not timing-dependent.
+	// Hold the single WAL write lock on a dedicated connection. BEGIN IMMEDIATE
+	// acquires the write lock up front (no read-then-upgrade), so the contention
+	// below is guaranteed rather than timing-dependent.
 	holder, err := seed.Conn(context.Background())
 	if err != nil {
 		t.Fatalf("holder conn: %v", err)
@@ -562,44 +584,32 @@ func TestOpenRawWrite_WaitsOutHeldWriteLock(t *testing.T) {
 		t.Fatalf("acquire write lock: %v", err)
 	}
 
-	// A generous bound so a genuinely wedged wait fails the test instead of
-	// hanging — the synchronization is the lock release below, not this deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	writer := openRaw(t, path) // busy handling after the fix; a bare connection before it
-	// Pin and pre-open the writer's single connection so the contended write below
-	// hits the lock immediately, instead of paying lazy connection setup first and
-	// losing the race to the release — that setup cost is what makes a naive
-	// version pass even without busy handling.
-	writer.SetMaxOpenConns(1)
-	if err := writer.PingContext(context.Background()); err != nil {
-		t.Fatalf("open writer conn: %v", err)
+
+	// A contended write while the lock is held. ctx is shorter than openRaw's
+	// busy_timeout, so a busy-handling writer blocks on the lock and returns a
+	// bounded deadline error (NOT SQLITE_BUSY); a bare writer fails fast with
+	// SQLITE_BUSY well before the deadline. No sleep, no enlarged timeout — the
+	// bound is the cancellation itself.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err = writer.ExecContext(ctx, `INSERT INTO t (id) VALUES (2)`)
+	if isSQLiteBusy(err) {
+		t.Fatalf("contended write failed immediately with SQLITE_BUSY instead of waiting out the lock: %v", err)
 	}
-	entered := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		close(entered) // about to attempt the contended write on the warm connection
-		_, err := writer.ExecContext(ctx, `INSERT INTO t (id) VALUES (2)`)
-		done <- err
-	}()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("contended write: err = %v, want a bounded deadline error (the write must WAIT on the held lock)", err)
+	}
 
-	// Let the writer reach its lock acquisition before releasing, so a
-	// no-busy-handling writer has provably contended (and failed fast) first.
-	<-entered
-	runtime.Gosched()
-
-	// Release the contention: a waiting busy-handling writer now proceeds; a bare
-	// writer has already returned SQLITE_BUSY.
+	// Once the lock is released, the busy-handling write succeeds.
 	if _, err := holder.ExecContext(context.Background(), `ROLLBACK`); err != nil {
 		t.Fatalf("release write lock: %v", err)
 	}
-
-	if err := <-done; err != nil {
-		t.Fatalf("contended write failed instead of waiting out the lock: %v", err)
+	if _, err := writer.ExecContext(context.Background(), `INSERT INTO t (id) VALUES (2)`); err != nil {
+		t.Fatalf("write after release failed: %v", err)
 	}
 	if n := countRows(t, seed, `SELECT COUNT(*) FROM t`); n != 1 {
-		t.Fatalf("rows = %d, want 1 — the writer's insert must land after the lock releases", n)
+		t.Fatalf("rows = %d, want 1 — the write must land once the lock is free", n)
 	}
 }
 
